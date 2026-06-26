@@ -1860,6 +1860,13 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 		return nil, fmt.Errorf("failed to load targets: %w", err)
 	}
 
+	// Reject opaque resolvables embedded in string fields before translation.
+	// Must run pre-translation because translation drops $visibility from $res
+	// envelopes, making a post-translation check unable to see the opaque flag.
+	if err := validateNoOpaqueEmbed(forma); err != nil {
+		return nil, err
+	}
+
 	// Translate $res triplet references to $ref KSUID URIs in both resource
 	// properties and target configs. Must happen before GenerateTargetUpdates
 	// so that target config resolvables can be extracted.
@@ -2132,4 +2139,78 @@ func rewriteEmbedSpans(tmpl string, fn func(map[string]any) map[string]any) stri
 		tmpl = tmpl[:span.Start] + framed + tmpl[span.End:]
 	}
 	return tmpl
+}
+
+// validateNoOpaqueEmbed rejects any forma whose resource properties or target
+// configs contain a $embed field whose $template carries a framed span for a
+// $res envelope with $visibility == "Opaque".
+//
+// v1 limitation: once an opaque resolvable is assembled into a string the
+// structured span needed for redaction is lost, so we hard-reject it at plan
+// time rather than silently leaking secrets.
+//
+// This MUST run before translation (doTranslate) because translation replaces
+// $res envelopes with {"$ref":…} and drops $visibility.
+func validateNoOpaqueEmbed(forma *pkgmodel.Forma) error {
+	for i := range forma.Resources {
+		r := &forma.Resources[i]
+		if err := validateNoOpaqueEmbedInJSON(r.Properties, r.Label); err != nil {
+			return err
+		}
+	}
+	for i := range forma.Targets {
+		t := &forma.Targets[i]
+		if err := validateNoOpaqueEmbedInJSON(t.Config, t.Label); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateNoOpaqueEmbedInJSON walks all JSON objects in raw looking for
+// {"$embed":true, "$template":"…"} nodes, scans each template for framed
+// spans, and returns an error if any span envelope carries "$visibility":"Opaque".
+func validateNoOpaqueEmbedInJSON(raw json.RawMessage, label string) error {
+	if len(raw) == 0 {
+		return nil
+	}
+	result := gjson.ParseBytes(raw)
+	return walkForOpaqueEmbed(result, label, "")
+}
+
+func walkForOpaqueEmbed(val gjson.Result, label, path string) error {
+	if !val.IsObject() {
+		return nil
+	}
+	// Check if this object is an embed node.
+	embedFlag := val.Get("$embed")
+	if embedFlag.Type == gjson.True {
+		tmpl := val.Get("$template")
+		if tmpl.Type == gjson.String {
+			spans, err := pkgmodel.ScanEmbedSpans(tmpl.String())
+			if err != nil {
+				return fmt.Errorf("corrupt embed template in field %q on %q: %w", path, label, err)
+			}
+			for _, span := range spans {
+				visibility := gjson.Get(span.EnvelopeJSON, "$visibility")
+				if visibility.String() == pkgmodel.VisibilityOpaque {
+					return fmt.Errorf("opaque resolvables cannot be embedded in string fields (field %q on %q); v1 limitation", path, label)
+				}
+			}
+		}
+	}
+	// Recurse into all child values.
+	var childErr error
+	val.ForEach(func(key, child gjson.Result) bool {
+		childPath := key.String()
+		if path != "" {
+			childPath = path + "." + childPath
+		}
+		if err := walkForOpaqueEmbed(child, label, childPath); err != nil {
+			childErr = err
+			return false
+		}
+		return true
+	})
+	return childErr
 }
