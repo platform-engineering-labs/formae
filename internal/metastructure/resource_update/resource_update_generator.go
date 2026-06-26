@@ -2156,6 +2156,24 @@ func translateEmbedSpansAtPath(basePath string, value gjson.Result, jsonStr stri
 	return jsonStr, nil
 }
 
+// uniqueKsuidByLabelAndType resolves a (label, type) pair to a KSUID when exactly
+// one resource in the forma matches it regardless of stack. It mirrors forma.pkl's
+// getResource(label, type) lookup and is used to default the stack of a bare embed
+// reference whose $stack was omitted at PKL render time. It returns false when the
+// match is absent or ambiguous, so the caller can surface the incomplete-triplet
+// error and the user disambiguates with an explicit stack.
+func uniqueKsuidByLabelAndType(tripletToKsuid map[pkgmodel.TripletKey]string, label, resourceType string) (string, bool) {
+	var ksuid string
+	count := 0
+	for tk, ks := range tripletToKsuid {
+		if tk.Label == label && tk.Type == resourceType {
+			ksuid = ks
+			count++
+		}
+	}
+	return ksuid, count == 1
+}
+
 // translateEmbedSpansInTemplate rewrites every framed $res envelope in a $template
 // string to its $ref+KSUID equivalent using the same lookup logic as the flat pass.
 func translateEmbedSpansInTemplate(tmpl string, tripletToKsuid map[pkgmodel.TripletKey]string, ds ResourceDataLookup, externalLabels map[string]string) (string, error) {
@@ -2181,6 +2199,18 @@ func translateEmbedSpansInTemplate(tmpl string, tripletToKsuid map[pkgmodel.Trip
 
 		var formaeURI pkgmodel.FormaeURI
 		ksuid, ok := tripletToKsuid[resolvable.ToTripletKey()]
+		if !ok && resolvable.Stack == "" && resolvable.Label != "" && resolvable.Type != "" {
+			// A bare embed reference omits $stack: Resolvable.toString() renders
+			// the envelope at interpolation time, before forma.pkl applies
+			// single-stack defaulting, and the JSON renderer drops the null
+			// $stack key. The whole-value path is fixed up by forma.pkl's
+			// [formae.Resolvable] converter via getResource(label, type); mirror
+			// that here by resolving on (label, type) when it is unambiguous
+			// across the forma.
+			if k, found := uniqueKsuidByLabelAndType(tripletToKsuid, resolvable.Label, resolvable.Type); found {
+				ksuid, ok = k, true
+			}
+		}
 		if ok {
 			formaeURI = resolvable.ToFormaeURI(ksuid)
 		} else {

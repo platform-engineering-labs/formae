@@ -284,6 +284,10 @@ jobs:
         env:
           AWS_PROFILE: e2e-test
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          # Unique per run+attempt so fixtures can name globally-scoped cloud
+          # resources (e.g. CloudFront KeyValueStore/Function, which aws-nuke
+          # does not clean) without colliding across reruns or concurrent jobs.
+          FORMAE_TEST_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
           # Point setup_pkl.sh at whichever tree has plugins. system_plugins
           # land in dist/e2e/formae/plugins (orbital's SystemPluginDir);
           # user_plugins land in /home/runner/.pel/formae/plugins (make

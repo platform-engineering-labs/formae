@@ -47,8 +47,11 @@ func TestEmbedResolvable(t *testing.T) {
 	RequireResource(t, resources, "e2e-embed-kvs")
 	RequireResource(t, resources, "e2e-embed-fn")
 
-	// Step 2: Extract — the regenerated PKL must carry the embed as
-	// formae.embed("…\(kvStore.res.id)…"), with no raw envelope leaking.
+	// Step 2: Extract — the regenerated PKL must carry the embed as a
+	// formae.embed("…\(<resolvable>.id)…") interpolation, not a raw envelope or
+	// a baked literal. Extract reconstructs the reference in full resolvable
+	// form (the original `.res` shorthand isn't recoverable), e.g.
+	// `\((keyvaluestore.KeyValueStoreResolvable) { … label = "e2e-embed-kvs" }.id)`.
 	// --schema-location local: the AWS plugin is user-installed (built from
 	// source), so the extracted PKL must reference the on-disk plugin schema
 	// for the reapply below to resolve.
@@ -59,7 +62,7 @@ func TestEmbedResolvable(t *testing.T) {
 		t.Fatalf("failed to read extracted PKL: %v", err)
 	}
 	src := string(body)
-	for _, want := range []string{"formae.embed(", ".res.id", `\(`} {
+	for _, want := range []string{"formae.embed(", `\(`, "e2e-embed-kvs", ".id)"} {
 		if !strings.Contains(src, want) {
 			t.Fatalf("extracted PKL missing %q; got:\n%s", want, src)
 		}
