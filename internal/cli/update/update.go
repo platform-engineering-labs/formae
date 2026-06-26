@@ -127,7 +127,7 @@ func UpdateCmd() *cobra.Command {
 	command.AddCommand(UpdateListCmd())
 
 	command.Flags().String("channel", "", "Override update channel")
-	command.Flags().String("config", "", "Path to config file")
+	clicmd.AddConfigFlags(command)
 
 	return command
 }
@@ -198,7 +198,7 @@ func UpdateListCmd() *cobra.Command {
 
 	command.SetUsageTemplate(clicmd.SimpleCmdUsageTemplate)
 	command.Flags().String("channel", "", "Override update channel")
-	command.Flags().String("config", "", "Path to config file")
+	clicmd.AddConfigFlags(command)
 
 	return command
 }

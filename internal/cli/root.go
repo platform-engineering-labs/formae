@@ -26,6 +26,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/extract"
 	"github.com/platform-engineering-labs/formae/internal/cli/inventory"
 	"github.com/platform-engineering-labs/formae/internal/cli/plugin"
+	"github.com/platform-engineering-labs/formae/internal/cli/profile"
 	"github.com/platform-engineering-labs/formae/internal/cli/project"
 	"github.com/platform-engineering-labs/formae/internal/cli/status"
 	"github.com/platform-engineering-labs/formae/internal/cli/update"
@@ -220,6 +221,7 @@ func init() {
 	rootCmd.AddCommand(eval.EvalCmd())
 	rootCmd.AddCommand(agent.AgentCmd())
 	rootCmd.AddCommand(plugin.PluginCmd())
+	rootCmd.AddCommand(profile.ProfileCmd())
 	rootCmd.AddCommand(project.ProjectCmd())
 	rootCmd.AddCommand(destroy.DestroyCmd())
 	rootCmd.AddCommand(status.StatusCmd())

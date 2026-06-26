@@ -23,11 +23,11 @@ func newCurrentCmd() *cobra.Command {
 				return err
 			}
 			active, err := s.Active()
-			if errors.Is(err, store.ErrNotInitialized) {
-				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "no active profile yet")
-				return nil
-			}
 			if err != nil {
+				if errors.Is(err, store.ErrNotInitialized) {
+					_, _ = fmt.Fprintln(cmd.OutOrStdout(), "no active profile yet")
+					return nil
+				}
 				return err
 			}
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), active)

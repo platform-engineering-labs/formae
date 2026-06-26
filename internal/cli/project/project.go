@@ -86,7 +86,7 @@ func ProjectInitCmd() *cobra.Command {
 	command.Flags().StringArray("include", []string{}, "Packages to include (use @local suffix for local plugins, e.g. myplugin@local)")
 	command.Flags().BoolP("yes", "y", false, "Skip confirmation prompts")
 	command.Flags().String("plugin-dir", "~/.pel/formae/plugins", "Directory to scan for @local plugin schemas")
-	command.Flags().String("config", "", "Path to config file")
+	cmd.AddConfigFlags(command)
 
 	return command
 }
