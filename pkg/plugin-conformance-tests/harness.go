@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -33,8 +34,8 @@ import (
 	"github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
-	plugindiscovery "github.com/platform-engineering-labs/formae/pkg/plugin/discovery"
 	"github.com/platform-engineering-labs/formae/pkg/plugin-conformance-tests/testutil"
+	plugindiscovery "github.com/platform-engineering-labs/formae/pkg/plugin/discovery"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
 
@@ -57,21 +58,21 @@ type resolvablePath struct {
 
 // TestHarness manages the lifecycle of formae agent and CLI commands for testing
 type TestHarness struct {
-	t             *testing.T
-	formaeBinary  string
-	agentCmd      *exec.Cmd
-	agentCtx      context.Context
-	agentCancel   context.CancelFunc
-	cleanupFuncs  []func()
-	agentStarted  bool
-	tempDir       string
-	configFile    string
-	logFile       string
-	networkCookie string // Network cookie for distributed plugin communication
-	testRunID     string // Unique ID for this test run, used by PKL files for resource naming
-	agentPort     int    // Random port for agent API
-	ergoPort      int    // Random port for Ergo actor framework (enables parallel test execution)
-	registrarPort int    // Random port for Ergo registrar (isolates parallel agents)
+	t                       *testing.T
+	formaeBinary            string
+	agentCmd                *exec.Cmd
+	agentCtx                context.Context
+	agentCancel             context.CancelFunc
+	cleanupFuncs            []func()
+	agentStarted            bool
+	tempDir                 string
+	configFile              string
+	logFile                 string
+	networkCookie           string // Network cookie for distributed plugin communication
+	testRunID               string // Unique ID for this test run, used by PKL files for resource naming
+	agentPort               int    // Random port for agent API
+	ergoPort                int    // Random port for Ergo actor framework (enables parallel test execution)
+	registrarPort           int    // Random port for Ergo registrar (isolates parallel agents)
 	externalResourcePlugins []plugin.ResourcePluginInfo
 
 	// Ergo actor system for direct plugin communication (discovery tests)
@@ -1171,6 +1172,144 @@ func (h *TestHarness) WaitForResourceInInventory(resourceType, nativeID string, 
 	return fmt.Errorf("timeout waiting for resource %s (type: %s) to appear in inventory after %v", nativeID, resourceType, timeout)
 }
 
+// clock abstracts the passage of time for the discovery wait loop so unit tests
+// can drive it deterministically (no real sleeps, no wall-clock assertions).
+type clock interface {
+	Now() time.Time
+	Sleep(d time.Duration)
+}
+
+// realClock is the production clock backed by the standard library.
+type realClock struct{}
+
+func (realClock) Now() time.Time        { return time.Now() }
+func (realClock) Sleep(d time.Duration) { time.Sleep(d) }
+
+// backoffConfig configures the capped exponential backoff between discovery
+// re-triggers in the discovery wait loop.
+type backoffConfig struct {
+	initial time.Duration // interval before the first re-trigger
+	max     time.Duration // ceiling the interval grows toward
+}
+
+// waitForResource drives the discovery wait loop. It triggers a discovery scan
+// at t=0, then polls check on pollInterval, re-triggering discovery on a capped
+// exponential backoff schedule, until check reports the resource is present or
+// the outer timeout elapses. Re-triggering keeps the cloud scan fresh so a
+// resource that propagates into CloudControl's list index after the first scan
+// is still found, instead of polling one frozen scan until timeout.
+//
+// The clock is injected so callers in tests can advance time deterministically.
+// A failing trigger is non-fatal — it is logged and the loop continues, since a
+// transient admin-endpoint hiccup must not abort the wait — but it is tracked:
+// if every trigger attempt fails the returned error is trigger-specific rather
+// than a misleading not-found timeout. No re-trigger is issued once the time
+// remaining before the deadline drops below the poll interval (the scan grace),
+// since a scan started that late has almost no chance of completing in time.
+func waitForResource(
+	clk clock,
+	logf func(format string, args ...any),
+	timeout time.Duration,
+	backoff backoffConfig,
+	pollInterval time.Duration,
+	trigger func() error,
+	check func() (bool, error),
+) error {
+	start := clk.Now()
+	deadline := start.Add(timeout)
+
+	var (
+		attempts       int   // discovery triggers issued
+		successes      int   // triggers that returned without error
+		lastTriggerErr error // last non-nil trigger error, for diagnostics
+	)
+
+	interval := backoff.initial
+	nextTriggerAt := start // fire the first trigger immediately
+
+	for {
+		now := clk.Now()
+		if !now.Before(deadline) {
+			break
+		}
+
+		if !now.Before(nextTriggerAt) {
+			// Always issue the first trigger; apply the near-deadline guard only
+			// to re-triggers (a re-scan started that late can't finish in time).
+			if attempts == 0 || deadline.Sub(now) >= pollInterval {
+				attempts++
+				if err := trigger(); err != nil {
+					lastTriggerErr = err
+					logf("discovery trigger attempt %d failed (continuing): %v", attempts, err)
+				} else {
+					successes++
+				}
+				nextTriggerAt = now.Add(interval)
+				if interval *= 2; interval > backoff.max {
+					interval = backoff.max
+				}
+			} else {
+				// Inside the near-deadline guard: stop scheduling re-triggers
+				// and just keep polling for the remaining window.
+				nextTriggerAt = deadline
+			}
+		}
+
+		found, err := check()
+		if err != nil {
+			logf("discovery inventory check failed (will retry): %v", err)
+		} else if found {
+			logf("resource discovered after %d trigger attempt(s) in %v", attempts, clk.Now().Sub(start))
+			return nil
+		}
+
+		clk.Sleep(pollInterval)
+	}
+
+	if attempts > 0 && successes == 0 {
+		return fmt.Errorf("could not trigger discovery: all %d trigger attempt(s) failed; last error: %v", attempts, lastTriggerErr)
+	}
+	msg := fmt.Sprintf("timeout after %v: resource did not appear in inventory (%d discovery trigger attempt(s))", timeout, attempts)
+	if lastTriggerErr != nil {
+		msg += fmt.Sprintf("; last trigger error: %v", lastTriggerErr)
+	}
+	return errors.New(msg)
+}
+
+// WaitForResourceDiscovered waits for an out-of-band resource to be discovered:
+// it re-triggers discovery on a backoff schedule while polling the inventory for
+// the given type + nativeID (managed=false), until found or the timeout elapses.
+// Unlike WaitForResourceInInventory, this re-scans the cloud across the window so
+// CloudControl eventual-consistency lag on a freshly created resource is
+// tolerated rather than being fatal.
+func (h *TestHarness) WaitForResourceDiscovered(resourceType, nativeID string, timeout time.Duration) error {
+	backoff := getDiscoveryRetriggerBackoff()
+	h.t.Logf("Waiting for resource to be discovered: type=%s, nativeID=%s (timeout=%v, base re-trigger=%v)", resourceType, nativeID, timeout, backoff.initial)
+
+	return waitForResource(
+		realClock{},
+		h.t.Logf,
+		timeout,
+		backoff,
+		discoveryPollInterval,
+		h.TriggerDiscovery,
+		func() (bool, error) {
+			inventory, err := h.Inventory(fmt.Sprintf("type: %s managed: false", resourceType))
+			if err != nil {
+				return false, err
+			}
+			for _, res := range inventory.Resources {
+				if resNativeID, ok := res["NativeID"].(string); ok && resNativeID == nativeID {
+					h.t.Logf("Resource found in inventory: NativeID=%s", nativeID)
+					return true, nil
+				}
+			}
+			h.t.Logf("Resource not yet in inventory (found %d resources of type %s), polling...", len(inventory.Resources), resourceType)
+			return false, nil
+		},
+	)
+}
+
 // CreateUnmanagedResource creates unmanaged resources using the external plugin directly,
 // bypassing formae's validation and database storage. This method handles multi-resource
 // formas by creating all cloud resources in dependency order and resolving references
@@ -1885,7 +2024,6 @@ func (h *TestHarness) submitForma(formaJSON []byte, filename string) (string, er
 
 	return submitResponse.CommandID, nil
 }
-
 
 // GetResourceDescriptorFromCoordinator returns the ResourceDescriptor for a given resource type
 // by querying the TestPluginCoordinator. This requires the Ergo node to be started and the

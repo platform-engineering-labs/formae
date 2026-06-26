@@ -212,6 +212,44 @@ func getDiscoveryTimeout() time.Duration {
 	return 2 * time.Minute // Default timeout
 }
 
+const (
+	// discoveryPollInterval is how often the discovery wait loop reads the local
+	// inventory while waiting for a scan to surface the resource.
+	discoveryPollInterval = 2 * time.Second
+	// discoveryRetriggerDefault is the default interval before the first
+	// discovery re-trigger; it then backs off exponentially toward the cap.
+	discoveryRetriggerDefault = 10 * time.Second
+	// discoveryRetriggerCap is the ceiling for the re-trigger interval.
+	discoveryRetriggerCap = 60 * time.Second
+	// discoveryRetriggerFloor is the minimum re-trigger interval. The conformance
+	// matrix runs ~100 jobs against one shared AWS account and CloudControl rate
+	// limiter, so the floor caps re-trigger pressure and cannot be configured away.
+	discoveryRetriggerFloor = 5 * time.Second
+)
+
+// getDiscoveryRetriggerBackoff returns the capped exponential backoff schedule
+// for re-triggering discovery in the discovery wait loop. The base interval is
+// read from FORMAE_TEST_DISCOVERY_RETRIGGER_INTERVAL (in seconds); empty,
+// non-numeric, or non-positive values fall back to the default, and the value is
+// clamped into [floor, cap] — up to the floor so the rate-limit guarantee holds,
+// and down to the cap so an oversized base interval can't push the first
+// re-trigger past the timeout and suppress retries entirely.
+func getDiscoveryRetriggerBackoff() backoffConfig {
+	initial := discoveryRetriggerDefault
+	if val := os.Getenv("FORMAE_TEST_DISCOVERY_RETRIGGER_INTERVAL"); val != "" {
+		if secs, err := strconv.Atoi(val); err == nil && secs > 0 {
+			initial = time.Duration(secs) * time.Second
+			if initial < discoveryRetriggerFloor {
+				initial = discoveryRetriggerFloor
+			}
+			if initial > discoveryRetriggerCap {
+				initial = discoveryRetriggerCap
+			}
+		}
+	}
+	return backoffConfig{initial: initial, max: discoveryRetriggerCap}
+}
+
 // getOOBDeleteTimeout returns the timeout duration for the OOB-delete phase's
 // wait-for-inventory-removal step (sync must tombstone the out-of-band
 // deletion). It reads from FORMAE_TEST_OOB_DELETE_TIMEOUT (in minutes).
@@ -1845,21 +1883,17 @@ func runDiscoveryTest(t *testing.T, tc TestCase, rc *ResultCollector) {
 		t.Skipf("Skipping discovery test: resource type %s has discoverable=false", resourceType)
 	}
 
-	// Step 5: Trigger discovery
-	t.Log("Step 5: Triggering discovery...")
-	if err := harness.TriggerDiscovery(); err != nil {
-		rc.DiscoveryFatalf(t, idx, PhaseDiscover, "failed to trigger discovery: %v", err)
-	}
-
-	// Step 6: Wait for resource to appear in inventory
-	t.Log("Step 6: Waiting for resource in inventory...")
-	if err := harness.WaitForResourceInInventory(resourceType, nativeID, false, getDiscoveryTimeout()); err != nil {
+	// Step 5: Re-trigger discovery across the timeout while polling inventory.
+	// The wait loop triggers the first scan itself, so there is no separate
+	// standalone trigger here — re-scanning tolerates CloudControl propagation lag.
+	t.Log("Step 5: Discovering resource (re-trigger + poll)...")
+	if err := harness.WaitForResourceDiscovered(resourceType, nativeID, getDiscoveryTimeout()); err != nil {
 		rc.DiscoveryFatalf(t, idx, PhaseDiscover, "resource not discovered: %v", err)
 	}
 	rc.SetDiscoveryPhase(idx, PhaseDiscover, StepPassed)
 
-	// Step 7: Verify the discovered resource
-	t.Log("Step 7: Verifying discovered resource...")
+	// Step 6: Verify the discovered resource
+	t.Log("Step 6: Verifying discovered resource...")
 	inventory, err := harness.Inventory(fmt.Sprintf("type: %s managed: false", resourceType))
 	if err != nil {
 		rc.DiscoveryFatalf(t, idx, PhaseDiscoveryVerify, "failed to query inventory: %v", err)
