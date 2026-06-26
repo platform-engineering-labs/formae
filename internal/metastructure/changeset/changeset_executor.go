@@ -392,13 +392,7 @@ func targetUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, mess
 				proc.Log().Error("Failed to convert target config to plugin format target=%s: %v", tu.Target.Label, err)
 				pluginConfig = message.ResolvedConfig
 			}
-			for _, n := range data.changeset.DAG.Nodes {
-				if ru, ok := n.Update.(*resource_update.ResourceUpdate); ok {
-					if ru.DesiredState.Target == tu.Target.Label {
-						ru.ResourceTarget.Config = pluginConfig
-					}
-				}
-			}
+			data.changeset.DAG.propagateResolvedTargetConfig(tu.Target.Label, pluginConfig)
 		}
 	}
 
