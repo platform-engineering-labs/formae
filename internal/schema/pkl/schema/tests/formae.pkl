@@ -633,6 +633,28 @@ facts {
         let (hint = noParentRefsHint())
         hint.parentRefs == null
     }
+
+    local embedResolvable = new formae.Resolvable {
+        label = "kvs"; type = "AWS::CloudFront::KeyValueStore"; stack = "default"; property = "id"
+    }
+    local embedded = formae.embed("cf.kvs('\(embedResolvable)')")
+
+    ["embed() sets $embed = true"] {
+        embedded.$embed == true
+    }
+    ["embed() template wraps the resolvable in RS<base64>US"] {
+        // RS then base64 chars then US, inside the literal
+        embedded.$template.matches(Regex("cf\\.kvs\\('\\u001e[A-Za-z0-9+/=]+\\u001f'\\)"))
+    }
+    ["framed base64 decodes to the $res envelope"] {
+        let (b64 = embedded.$template.split("\u{1e}")[1].split("\u{1f}")[0])
+        let (json = b64.base64Decoded)
+        json.contains(#""$res":true"#) && json.contains(#""$label":"kvs""#)
+        && json.contains(#""$property":"id""#)
+    }
+    ["whole-value rendering is unchanged (still the envelope object)"] {
+        embedResolvable.$res == true && embedResolvable.$label == "kvs"
+    }
 }
 
 local function singleParentRefHint(): formae.ResourceHint = new formae.ResourceHint {

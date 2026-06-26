@@ -495,7 +495,16 @@ func (m *propertyMerger) mergeObject(path string, userVal, pluginVal gjson.Resul
 		return
 	}
 
-	// Not a $ref object - recursively merge each field
+	// Check if this is a $embed object — preserve the user's envelope wholesale.
+	// The plugin value is always the assembled result of the template; we never
+	// let the plugin overwrite the user's $embed declaration.
+	if userVal.Get("$embed").Bool() {
+		cleanPath := m.cleanPath(path)
+		*m.result, _ = sjson.SetRaw(*m.result, cleanPath, userVal.Raw)
+		return
+	}
+
+	// Not a $ref or $embed object - recursively merge each field
 	userVal.ForEach(func(key, val gjson.Result) bool {
 		childPath := m.buildChildPath(path, key.String())
 		pluginChildVal := pluginVal.Get(key.String())

@@ -125,6 +125,7 @@ const (
 	typeReference propertyType = iota // Object with $ref (with or without $value)
 	typeValue                         // Object with only $value (no $ref)
 	typePlain                         // Regular property (no $ref or $value)
+	typeEmbed                         // Object with $embed: true — template with framed spans
 )
 
 func (pp *propertyParser) Parse(result gjson.Result) propertyType {
@@ -137,6 +138,10 @@ func (pp *propertyParser) Parse(result gjson.Result) propertyType {
 			pp.Value = result.Get("$value").Value()
 		}
 		return typeReference
+	}
+
+	if result.Get("$embed").Bool() {
+		return typeEmbed
 	}
 
 	if pp.HasValue {
@@ -259,6 +264,34 @@ func (pr *propertyResolver) extractFromJson(result gjson.Result, currentPath str
 			value := parser.CreateValue(result)
 			pr.values[currentPath] = *value
 			return
+		case typeEmbed:
+			tmpl := result.Get("$template").String()
+			if tmpl == "" {
+				slog.Debug("embed: $template absent or empty, skipping extraction", "path", currentPath)
+				return
+			}
+			spans, err := pkgmodel.ScanEmbedSpans(tmpl)
+			if err != nil {
+				slog.Warn("embed: failed to scan spans in $template, skipping extraction",
+					"path", currentPath,
+					"error", err)
+				return
+			}
+			for _, sp := range spans {
+				env := gjson.Parse(sp.EnvelopeJSON)
+				spanParser := &propertyParser{}
+				spanParser.Parse(env)
+				if !spanParser.HasRef {
+					slog.Debug("embed: span has no $ref, skipping", "path", currentPath)
+					continue
+				}
+				ref := spanParser.CreateRef(currentPath, env)
+				ref.Embedded = true
+				ref.EmbedFieldPath = currentPath
+				uri := pkgmodel.FormaeURI(ref.PropertyURI)
+				pr.refs[uri] = append(pr.refs[uri], ref)
+			}
+			return
 		case typePlain:
 			result.ForEach(func(key, val gjson.Result) bool {
 				pr.extractFromJson(val, buildPath(currentPath, key.String()))
@@ -329,8 +362,123 @@ func (pr *propertyResolver) resolveReferences(properties json.RawMessage) (json.
 	return result, nil
 }
 
+// assembleEmbedTemplate iterates over every framed span in tmpl, calling
+// valueForEnvelope(envelopeJSON) to obtain the replacement string for that span.
+// It returns the assembled string (every span replaced) and whether ALL spans
+// had a value. Processing is done in reverse byte order so earlier offsets remain
+// valid after later splices.
+func assembleEmbedTemplate(tmpl string, valueForEnvelope func(envJSON string) (string, bool)) (string, bool) {
+	spans, err := pkgmodel.ScanEmbedSpans(tmpl)
+	if err != nil || len(spans) == 0 {
+		return tmpl, len(spans) == 0 && err == nil
+	}
+
+	// Verify all spans are resolved before doing any work; short-circuit on the
+	// first unresolved span so no partial string is produced.
+	vals := make([]string, len(spans))
+	for i, sp := range spans {
+		val, ok := valueForEnvelope(sp.EnvelopeJSON)
+		if !ok {
+			return "", false
+		}
+		vals[i] = val
+	}
+	// All spans resolved — splice in reverse order so earlier offsets stay valid.
+	result := tmpl
+	for i := len(spans) - 1; i >= 0; i-- {
+		sp := spans[i]
+		result = result[:sp.Start] + vals[i] + result[sp.End:]
+	}
+	return result, true
+}
+
+// resolveEmbedRef writes the resolved $value for ref inside the matching span
+// envelope(s) within the $embed field's $template. The $embed field remains
+// structured (still {$embed, $template}); only the span envelopes are updated.
+func (pr *propertyResolver) resolveEmbedRef(properties json.RawMessage, ref pkgmodel.Ref) (json.RawMessage, error) {
+	fieldPath := ref.EmbedFieldPath
+	parsed := gjson.Parse(string(properties))
+	embedObj := parsed.Get(fieldPath)
+	if !embedObj.Exists() {
+		slog.Debug("embed: field not found", "path", fieldPath)
+		return properties, nil
+	}
+
+	tmpl := embedObj.Get("$template").String()
+	if tmpl == "" {
+		return properties, nil
+	}
+
+	valueToSet := pr.extractResolvedValue(ref)
+	valueStr, ok := valueToSet.(string)
+	if !ok || valueStr == "" {
+		if valueToSet != nil {
+			valueStr = fmt.Sprintf("%v", valueToSet)
+			ok = true
+		}
+	}
+	if !ok {
+		return properties, nil
+	}
+
+	// For each span whose envelope URI matches this ref's PropertyURI, encode the
+	// envelope with $value added, then splice back (reverse order).
+	spans, err := pkgmodel.ScanEmbedSpans(tmpl)
+	if err != nil {
+		return properties, fmt.Errorf("embed: scan spans for %s: %w", fieldPath, err)
+	}
+
+	updatedTmpl := tmpl
+	for i := len(spans) - 1; i >= 0; i-- {
+		sp := spans[i]
+		env := gjson.Parse(sp.EnvelopeJSON)
+		if env.Get("$ref").String() != ref.PropertyURI {
+			continue
+		}
+		// Build updated envelope with $value.
+		envMap := make(map[string]any)
+		env.ForEach(func(k, v gjson.Result) bool {
+			envMap[k.String()] = v.Value()
+			return true
+		})
+		envMap["$value"] = valueStr
+		envJSON, err := json.Marshal(envMap)
+		if err != nil {
+			return properties, fmt.Errorf("embed: marshal updated envelope: %w", err)
+		}
+		framed := pkgmodel.FrameEnvelope(string(envJSON))
+		updatedTmpl = updatedTmpl[:sp.Start] + framed + updatedTmpl[sp.End:]
+	}
+
+	if updatedTmpl == tmpl {
+		// No span matched — nothing to update.
+		return properties, nil
+	}
+
+	// Write the updated $embed object back (preserving $embed:true and updated $template).
+	embedMap := map[string]any{
+		"$embed":    true,
+		"$template": updatedTmpl,
+	}
+	embedJSON, err := json.Marshal(embedMap)
+	if err != nil {
+		return properties, fmt.Errorf("embed: marshal updated embed object: %w", err)
+	}
+	updatedJSON, err := sjson.SetRaw(string(properties), fieldPath, string(embedJSON))
+	if err != nil {
+		return properties, fmt.Errorf("embed: set embed field %s: %w", fieldPath, err)
+	}
+	return json.RawMessage(updatedJSON), nil
+}
+
 // resolveReference resolves a single reference in the properties
 func (pr *propertyResolver) resolveReference(properties json.RawMessage, ref pkgmodel.Ref) (json.RawMessage, error) {
+	// Embedded refs live inside a $embed field's $template; update the span envelope
+	// in place rather than replacing the whole field with a scalar.
+	if ref.Embedded {
+		return pr.resolveEmbedRef(properties, ref)
+	}
+
 	parsed := gjson.Parse(string(properties))
 	targetObj := parsed.Get(ref.TargetPath)
 	if !targetObj.Exists() {
@@ -442,8 +590,34 @@ func (pr *propertyResolver) toPluginFormat(originalProperties json.RawMessage) (
 	outputJsonString := string(originalProperties)
 	var err error
 
+	// Track embed field paths that have been assembled so we process each once.
+	assembledEmbedFields := make(map[string]bool)
+
 	for _, refs := range pr.refs {
 		for _, ref := range refs {
+			if ref.Embedded {
+				// Embed fields are assembled from the $template, not from a single ref value.
+				// Process each embed field path exactly once.
+				if assembledEmbedFields[ref.EmbedFieldPath] {
+					continue
+				}
+				assembledEmbedFields[ref.EmbedFieldPath] = true
+
+				assembled, ok := pr.assembleEmbedField(outputJsonString, ref.EmbedFieldPath)
+				if !ok {
+					// Not all spans resolved; leave the field structured.
+					continue
+				}
+				outputJsonString, err = sjson.Set(outputJsonString, ref.EmbedFieldPath, assembled)
+				if err != nil {
+					slog.Error("ToPluginFormat: failed to set assembled embed field",
+						"path", ref.EmbedFieldPath,
+						"error", err)
+					return nil, err
+				}
+				continue
+			}
+
 			if ref.ResolvedValue.Value == nil {
 				continue
 			}
@@ -480,6 +654,31 @@ func (pr *propertyResolver) toPluginFormat(originalProperties json.RawMessage) (
 	}
 
 	return json.RawMessage(outputJsonString), nil
+}
+
+// assembleEmbedField reads the $embed field at fieldPath from the JSON string,
+// scans its $template for framed spans, and assembles the plain string if every
+// span carries a $value. Returns the assembled string and true when all spans are
+// resolved; returns "", false otherwise (including parse errors).
+func (pr *propertyResolver) assembleEmbedField(jsonStr string, fieldPath string) (string, bool) {
+	embedObj := gjson.Get(jsonStr, fieldPath)
+	if !embedObj.Exists() {
+		return "", false
+	}
+	tmpl := embedObj.Get("$template").String()
+	if tmpl == "" {
+		return "", false
+	}
+
+	assembled, allResolved := assembleEmbedTemplate(tmpl, func(envJSON string) (string, bool) {
+		env := gjson.Parse(envJSON)
+		val := env.Get("$value")
+		if !val.Exists() {
+			return "", false
+		}
+		return val.String(), true
+	})
+	return assembled, allResolved
 }
 
 func (pr *propertyResolver) getResolvableURIs() []pkgmodel.FormaeURI {

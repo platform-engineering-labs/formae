@@ -6,13 +6,16 @@ package metastructure
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"ergo.services/ergo/gen"
 	_ "github.com/platform-engineering-labs/formae/internal/datastore/all"
-	"github.com/platform-engineering-labs/formae/pkg/model"
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func TestReplaceKSUIDs_NestedRefInArrays(t *testing.T) {
@@ -24,7 +27,7 @@ func TestReplaceKSUIDs_NestedRefInArrays(t *testing.T) {
 	tests := []struct {
 		name           string
 		inputJSON      string
-		ksuidToTriplet map[string]model.TripletKey
+		ksuidToTriplet map[string]pkgmodel.TripletKey
 		wantContains   []string
 		wantNotContain []string
 	}{
@@ -36,7 +39,7 @@ func TestReplaceKSUIDs_NestedRefInArrays(t *testing.T) {
 					"$value": "https://example.com/network"
 				}
 			}`,
-			ksuidToTriplet: map[string]model.TripletKey{
+			ksuidToTriplet: map[string]pkgmodel.TripletKey{
 				"abc123": {Stack: "my-stack", Label: "my-network", Type: "GCP::Compute::Network"},
 			},
 			wantContains:   []string{`"$res":true`, `"$label":"my-network"`, `"$stack":"my-stack"`, `"$type":"GCP::Compute::Network"`, `"$property":"selfLink"`},
@@ -55,7 +58,7 @@ func TestReplaceKSUIDs_NestedRefInArrays(t *testing.T) {
 					}
 				]
 			}`,
-			ksuidToTriplet: map[string]model.TripletKey{
+			ksuidToTriplet: map[string]pkgmodel.TripletKey{
 				"disk123": {Stack: "my-stack", Label: "my-disk", Type: "GCP::Compute::Disk"},
 			},
 			wantContains:   []string{`"$res":true`, `"$label":"my-disk"`, `"$stack":"my-stack"`, `"$type":"GCP::Compute::Disk"`, `"$property":"selfLink"`},
@@ -78,7 +81,7 @@ func TestReplaceKSUIDs_NestedRefInArrays(t *testing.T) {
 					}
 				]
 			}`,
-			ksuidToTriplet: map[string]model.TripletKey{
+			ksuidToTriplet: map[string]pkgmodel.TripletKey{
 				"net123":    {Stack: "my-stack", Label: "my-network", Type: "GCP::Compute::Network"},
 				"subnet123": {Stack: "my-stack", Label: "my-subnet", Type: "GCP::Compute::Subnetwork"},
 			},
@@ -101,7 +104,7 @@ func TestReplaceKSUIDs_NestedRefInArrays(t *testing.T) {
 					}
 				]
 			}`,
-			ksuidToTriplet: map[string]model.TripletKey{
+			ksuidToTriplet: map[string]pkgmodel.TripletKey{
 				"deep123": {Stack: "deep-stack", Label: "deep-label", Type: "Deep::Type"},
 			},
 			wantContains:   []string{`"$res":true`, `"$label":"deep-label"`, `"$stack":"deep-stack"`},
@@ -123,7 +126,7 @@ func TestReplaceKSUIDs_NestedRefInArrays(t *testing.T) {
 					}
 				]
 			}`,
-			ksuidToTriplet: map[string]model.TripletKey{
+			ksuidToTriplet: map[string]pkgmodel.TripletKey{
 				"top123": {Stack: "stack1", Label: "label1", Type: "Type1"},
 				"arr123": {Stack: "stack2", Label: "label2", Type: "Type2"},
 			},
@@ -239,9 +242,9 @@ func TestExtractKSUIDs_NestedRefInArrays(t *testing.T) {
 }
 
 func TestMetastructure_NetworkingEnabled(t *testing.T) {
-	cfg := &model.Config{
-		Agent: model.AgentConfig{
-			Server: model.ServerConfig{
+	cfg := &pkgmodel.Config{
+		Agent: pkgmodel.AgentConfig{
+			Server: pkgmodel.ServerConfig{
 				Nodename: "test-agent",
 				Hostname: "localhost",
 				Secret:   "secret",
@@ -262,4 +265,95 @@ func TestMetastructure_NetworkingEnabled(t *testing.T) {
 	// Verify cookie is set from config
 	assert.Equal(t, "secret", m.options.Network.Cookie,
 		"Network cookie should match config secret")
+}
+
+func TestReplaceKSUIDs_RewritesEmbeddedSpan(t *testing.T) {
+	ksuid := "abc123"
+	refEnv := `{"$ref":"formae://` + ksuid + `#/id","$value":"v1"}`
+	tmpl := "cf.kvs('" + pkgmodel.FrameEnvelope(refEnv) + "')"
+
+	in, err := json.Marshal(map[string]any{
+		"functionCode": map[string]any{"$embed": true, "$template": tmpl},
+	})
+	require.NoError(t, err)
+
+	out := replaceKSUIDs(string(in), map[string]pkgmodel.TripletKey{
+		ksuid: {Stack: "default", Label: "kvs", Type: "AWS::CloudFront::KeyValueStore"},
+	})
+
+	tmplOut := gjson.Get(out, "functionCode.$template").String()
+	spans, err := pkgmodel.ScanEmbedSpans(tmplOut)
+	require.NoError(t, err)
+	require.Len(t, spans, 1, "expected exactly one span in $template output")
+
+	assert.True(t, strings.Contains(spans[0].EnvelopeJSON, `"$res":true`),
+		"span should contain $res:true, got: %s", spans[0].EnvelopeJSON)
+	assert.True(t, strings.Contains(spans[0].EnvelopeJSON, `"$label":"kvs"`),
+		"span should contain $label:kvs, got: %s", spans[0].EnvelopeJSON)
+}
+
+func TestReplaceKSUIDs_RewritesEmbeddedSpan_Idempotent(t *testing.T) {
+	ksuid := "abc123"
+	refEnv := `{"$ref":"formae://` + ksuid + `#/id","$value":"v1"}`
+	tmpl := "cf.kvs('" + pkgmodel.FrameEnvelope(refEnv) + "')"
+
+	in, err := json.Marshal(map[string]any{
+		"functionCode": map[string]any{"$embed": true, "$template": tmpl},
+	})
+	require.NoError(t, err)
+
+	ksuidToTriplet := map[string]pkgmodel.TripletKey{
+		ksuid: {Stack: "default", Label: "kvs", Type: "AWS::CloudFront::KeyValueStore"},
+	}
+
+	out1 := replaceKSUIDs(string(in), ksuidToTriplet)
+	out2 := replaceKSUIDs(out1, ksuidToTriplet)
+	assert.Equal(t, out1, out2, "replaceKSUIDs should be idempotent")
+}
+
+func TestReplaceKSUIDs_RewritesMultipleEmbeddedSpans(t *testing.T) {
+	// Two distinct KSUIDs appear as framed $ref spans inside a single $template.
+	// Literal text separates and surrounds the spans.
+	// After replaceKSUIDs both spans must be rewritten to $res+triplet form
+	// and all surrounding/between literal text must be intact and in order.
+	ksuid1 := "aaaa1111"
+	ksuid2 := "bbbb2222"
+
+	refEnv1 := `{"$ref":"formae://` + ksuid1 + `#/arn","$value":"v1"}`
+	refEnv2 := `{"$ref":"formae://` + ksuid2 + `#/id","$value":"v2"}`
+
+	tmpl := "prefix(" + pkgmodel.FrameEnvelope(refEnv1) + ",between," + pkgmodel.FrameEnvelope(refEnv2) + ")suffix"
+
+	in, err := json.Marshal(map[string]any{
+		"code": map[string]any{"$embed": true, "$template": tmpl},
+	})
+	require.NoError(t, err)
+
+	out := replaceKSUIDs(string(in), map[string]pkgmodel.TripletKey{
+		ksuid1: {Stack: "default", Label: "bucket", Type: "AWS::S3::Bucket"},
+		ksuid2: {Stack: "default", Label: "queue", Type: "AWS::SQS::Queue"},
+	})
+
+	tmplOut := gjson.Get(out, "code.$template").String()
+	spans, err := pkgmodel.ScanEmbedSpans(tmplOut)
+	require.NoError(t, err)
+	require.Len(t, spans, 2, "expected exactly two spans in $template output")
+
+	// Both spans must have been rewritten to $res form.
+	assert.True(t, strings.Contains(spans[0].EnvelopeJSON, `"$res":true`),
+		"first span should contain $res:true, got: %s", spans[0].EnvelopeJSON)
+	assert.True(t, strings.Contains(spans[0].EnvelopeJSON, `"$label":"bucket"`),
+		"first span should contain $label:bucket, got: %s", spans[0].EnvelopeJSON)
+	assert.True(t, strings.Contains(spans[1].EnvelopeJSON, `"$res":true`),
+		"second span should contain $res:true, got: %s", spans[1].EnvelopeJSON)
+	assert.True(t, strings.Contains(spans[1].EnvelopeJSON, `"$label":"queue"`),
+		"second span should contain $label:queue, got: %s", spans[1].EnvelopeJSON)
+
+	// Surrounding and between literal text must be intact.
+	assert.True(t, strings.HasPrefix(tmplOut, "prefix("),
+		"template should start with 'prefix(', got: %s", tmplOut)
+	assert.True(t, strings.HasSuffix(tmplOut, ")suffix"),
+		"template should end with ')suffix', got: %s", tmplOut)
+	assert.True(t, strings.Contains(tmplOut, ",between,"),
+		"template should contain ',between,' between spans, got: %s", tmplOut)
 }

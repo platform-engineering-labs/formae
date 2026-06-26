@@ -1409,6 +1409,51 @@ func TestConvertToPluginFormat_TargetConfig(t *testing.T) {
 	})
 }
 
+func TestExtractResolvableRefs_EmbedField(t *testing.T) {
+	// Build a $embed field whose $template contains one framed span.
+	// The span envelope is a post-translation $ref (KSUID-based) so
+	// ExtractResolvableRefs can construct the URI exactly as for whole-value refs.
+	kvsKsuid := util.NewID()
+	envJSON := fmt.Sprintf(`{"$ref":"formae://%s#/id"}`, kvsKsuid)
+	tmpl := "cf.kvs('" + pkgmodel.FrameEnvelope(envJSON) + "')"
+	props, _ := json.Marshal(map[string]any{
+		"functionCode": map[string]any{"$embed": true, "$template": tmpl},
+	})
+	res := pkgmodel.Resource{Properties: props}
+
+	refs := ExtractResolvableRefs(res)
+
+	if len(refs) != 1 {
+		t.Fatalf("want 1 embedded ref, got %d", len(refs))
+	}
+	if refs[0].TargetPath != "functionCode" {
+		t.Errorf("TargetPath: got %q want functionCode", refs[0].TargetPath)
+	}
+
+	// Assert the Embedded flag and EmbedFieldPath are set on the internal Ref —
+	// these are the primary output of Task 3 and must survive refactoring.
+	pr := newPropertyResolverFromResource(res)
+	var embedRef pkgmodel.Ref
+	found := false
+	for _, bucket := range pr.refs {
+		for _, r := range bucket {
+			if r.Embedded {
+				embedRef = r
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no Ref with Embedded==true found in propertyResolver.refs")
+	}
+	if !embedRef.Embedded {
+		t.Errorf("Ref.Embedded: got false, want true")
+	}
+	if embedRef.EmbedFieldPath != "functionCode" {
+		t.Errorf("Ref.EmbedFieldPath: got %q, want functionCode", embedRef.EmbedFieldPath)
+	}
+}
+
 // newTestRef creates a test reference with a real KSUID for the given property
 func newTestRef(property string) string {
 	ksuid := util.NewID()
@@ -1438,4 +1483,98 @@ func TestExtractPropertyValue_EscapedDotInKey(t *testing.T) {
 	result := gjson.GetBytes(properties, `config.host\.name`)
 	require.True(t, result.Exists())
 	assert.Equal(t, "example.com", result.String())
+}
+
+// embedProps is a helper that builds a JSON props object with a single $embed field.
+// It uses json.Marshal so the control characters in the template are properly
+// encoded as / (valid JSON escapes) rather than \x1e/\x1f (Go-only).
+func embedProps(fieldName, tmpl string) json.RawMessage {
+	tmplJSON, err := json.Marshal(tmpl)
+	if err != nil {
+		panic(fmt.Sprintf("embedProps: json.Marshal failed: %v", err))
+	}
+	fieldJSON, err := json.Marshal(fieldName)
+	if err != nil {
+		panic(fmt.Sprintf("embedProps: json.Marshal fieldName failed: %v", err))
+	}
+	return json.RawMessage(`{` + string(fieldJSON) + `:{"$embed":true,"$template":` + string(tmplJSON) + `}}`)
+}
+
+func TestEmbed_ResolveThenPluginFormat(t *testing.T) {
+	ksuid := "abc123"
+	refEnv := `{"$ref":"formae://` + ksuid + `#/id"}`
+	tmpl := "cf.kvs('" + pkgmodel.FrameEnvelope(refEnv) + "')"
+	props := embedProps("functionCode", tmpl)
+
+	resolver := newPropertyResolver(props)
+	require.NoError(t, resolver.setRefValue(pkgmodel.FormaeURI("formae://"+ksuid+"#/id"), "KV-7H9X"))
+
+	// Persisted form: still a $embed envelope, span now carries the value.
+	resolved, err := resolver.resolveReferences(props)
+	require.NoError(t, err)
+	assert.True(t, gjson.GetBytes(resolved, "functionCode.$embed").Bool())
+
+	// Plugin form: assembled plain string.
+	plugin, err := resolver.toPluginFormat(resolved)
+	require.NoError(t, err)
+	assert.Equal(t, "cf.kvs('KV-7H9X')", gjson.GetBytes(plugin, "functionCode").String())
+}
+
+func TestEmbed_MultiResolvable(t *testing.T) {
+	ksuid1 := util.NewID()
+	ksuid2 := util.NewID()
+	refEnv1 := fmt.Sprintf(`{"$ref":"formae://%s#/id"}`, ksuid1)
+	refEnv2 := fmt.Sprintf(`{"$ref":"formae://%s#/name"}`, ksuid2)
+	// Two distinct spans in one template.
+	tmpl := "cf.kvs('" + pkgmodel.FrameEnvelope(refEnv1) + "', '" + pkgmodel.FrameEnvelope(refEnv2) + "')"
+	props := embedProps("functionCode", tmpl)
+
+	resolver := newPropertyResolver(props)
+	require.NoError(t, resolver.setRefValue(pkgmodel.FormaeURI("formae://"+ksuid1+"#/id"), "KV-7H9X"))
+	require.NoError(t, resolver.setRefValue(pkgmodel.FormaeURI("formae://"+ksuid2+"#/name"), "my-store"))
+
+	resolved, err := resolver.resolveReferences(props)
+	require.NoError(t, err)
+	// Still structured after resolution.
+	assert.True(t, gjson.GetBytes(resolved, "functionCode.$embed").Bool())
+
+	// Assembled plain string in plugin format.
+	plugin, err := resolver.toPluginFormat(resolved)
+	require.NoError(t, err)
+	assert.Equal(t, "cf.kvs('KV-7H9X', 'my-store')", gjson.GetBytes(plugin, "functionCode").String())
+}
+
+func TestEmbed_DuplicateIdenticalSpans(t *testing.T) {
+	// Same envelope (same URI) appearing twice: both spans get the same resolved value.
+	ksuid := util.NewID()
+	refEnv := fmt.Sprintf(`{"$ref":"formae://%s#/id"}`, ksuid)
+	span := pkgmodel.FrameEnvelope(refEnv)
+	tmpl := "cf.fn('" + span + "', '" + span + "')"
+	props := embedProps("code", tmpl)
+
+	resolver := newPropertyResolver(props)
+	require.NoError(t, resolver.setRefValue(pkgmodel.FormaeURI("formae://"+ksuid+"#/id"), "VAL-42"))
+
+	resolved, err := resolver.resolveReferences(props)
+	require.NoError(t, err)
+	assert.True(t, gjson.GetBytes(resolved, "code.$embed").Bool())
+
+	// After resolve, BOTH span envelopes in the $template must carry $value="VAL-42".
+	// A regression that only updated one span would leave the other without $value.
+	resolvedTmpl := gjson.GetBytes(resolved, "code.$template").String()
+	resolvedSpans, scanErr := pkgmodel.ScanEmbedSpans(resolvedTmpl)
+	require.NoError(t, scanErr)
+	require.Len(t, resolvedSpans, 2, "expected two span sites in resolved $template")
+	resolvedCount := 0
+	for _, sp := range resolvedSpans {
+		if gjson.Get(sp.EnvelopeJSON, "$value").String() == "VAL-42" {
+			resolvedCount++
+		}
+	}
+	assert.Equal(t, 2, resolvedCount,
+		"expected $value='VAL-42' to appear in both span envelopes of the resolved $template")
+
+	plugin, err := resolver.toPluginFormat(resolved)
+	require.NoError(t, err)
+	assert.Equal(t, "cf.fn('VAL-42', 'VAL-42')", gjson.GetBytes(plugin, "code").String())
 }

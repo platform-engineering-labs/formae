@@ -2495,3 +2495,15 @@ func TestGeneratePatch_AtomicNestedArrayProducesReplace(t *testing.T) {
 	assert.Equal(t, "/FirewallPolicy/StatefulDefaultActions", patches[0].Path)
 	assert.Equal(t, []any{"aws:drop_established"}, patches[0].Value)
 }
+
+func TestFlattenRefs_AssemblesEmbed(t *testing.T) {
+	ksuid := "abc"
+	span := pkgmodel.FrameEnvelope(`{"$ref":"formae://` + ksuid + `#/id","$value":"KV-7H9X"}`)
+	m := map[string]any{
+		"functionCode": map[string]any{"$embed": true, "$template": "cf.kvs('" + span + "')"},
+	}
+	flattenRefs(m)
+	if got := m["functionCode"]; got != "cf.kvs('KV-7H9X')" {
+		t.Errorf("flattenRefs embed: got %v want assembled string", got)
+	}
+}

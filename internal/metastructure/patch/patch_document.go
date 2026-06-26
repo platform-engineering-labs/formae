@@ -852,11 +852,49 @@ func resolveRefs(current, mod map[string]any, resolvableProperties resolver.Reso
 	return nil
 }
 
+// assembleEmbedTemplate replaces each framed span in tmpl with the $value
+// from its envelope JSON. Spans without a $value are replaced with "".
+func assembleEmbedTemplate(tmpl string) (string, error) {
+	spans, err := pkgmodel.ScanEmbedSpans(tmpl)
+	if err != nil {
+		return "", err
+	}
+	// Replace spans in reverse order so earlier offsets stay valid.
+	result := tmpl
+	for i := len(spans) - 1; i >= 0; i-- {
+		span := spans[i]
+		replacement := ""
+		var envelope map[string]any
+		if json.Unmarshal([]byte(span.EnvelopeJSON), &envelope) == nil {
+			if val, ok := envelope["$value"]; ok {
+				if s, ok := val.(string); ok {
+					replacement = s
+				}
+			}
+		}
+		result = result[:span.Start] + replacement + result[span.End:]
+	}
+	return result, nil
+}
+
 // flattenRefs recursively flattens $ref / $value pairs
 func flattenRefs(m map[string]any) {
 	for k, v := range m {
 		switch vv := v.(type) {
 		case map[string]any:
+			if embedVal, hasEmbed := vv["$embed"]; hasEmbed {
+				if embedBool, ok := embedVal.(bool); ok && embedBool {
+					if tmpl, hasTmpl := vv["$template"]; hasTmpl {
+						if tmplStr, ok := tmpl.(string); ok {
+							if assembled, err := assembleEmbedTemplate(tmplStr); err == nil {
+								m[k] = assembled
+							}
+							// on scan error: leave node as-is; flattenRefs has no error path (corrupt templates are rejected at plan time)
+							continue
+						}
+					}
+				}
+			}
 			if _, hasRef := vv["$ref"]; hasRef {
 				if val, hasVal := vv["$value"]; hasVal {
 					m[k] = val

@@ -117,6 +117,14 @@ jobs:
             system_plugins: aws
           - test: TestExtractAndReapply
             system_plugins: aws
+          # Embedded resolvable inside a String field (CloudFront
+          # Function.functionCode). Builds the AWS plugin from its main branch
+          # (user-install) so it carries the widened functionCode
+          # (String|formae.Embedded) without depending on a published release.
+          # TEMPORARY: move back to `system_plugins: aws` (stable channel) once
+          # an AWS plugin release ships embed support.
+          - test: TestEmbedResolvable
+            user_plugins: aws
           - test: TestEvalDefault
             system_plugins: aws
           - test: TestEvalSchemaLocationLocal

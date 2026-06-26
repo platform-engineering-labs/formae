@@ -18,6 +18,111 @@ import (
 	"github.com/platform-engineering-labs/formae/pkg/model"
 )
 
+// --- preprocessFormaEmbeds tests ---
+
+// TestPreprocessFormaEmbeds_SingleSpan verifies that a resource property
+// containing a $embed field whose $template has one framed span is split into
+// the correct $templateParts: [literal-before, $res-map, literal-after].
+func TestPreprocessFormaEmbeds_SingleSpan(t *testing.T) {
+	resEnv := `{"$res":true,"$label":"kvs","$type":"AWS::CloudFront::KeyValueStore","$stack":"default","$property":"id"}`
+	framed := model.FrameEnvelope(resEnv)
+	template := "cf.kvs('" + framed + "')"
+
+	embedObj := map[string]any{
+		"$embed":     true,
+		"$template":  template,
+	}
+	propsBytes, err := json.Marshal(map[string]any{"functionCode": embedObj})
+	require.NoError(t, err)
+
+	forma := &model.Forma{
+		Resources: []model.Resource{
+			{
+				Label:      "my-fn",
+				Type:       "AWS::Lambda::Function",
+				Stack:      "default",
+				Properties: propsBytes,
+			},
+		},
+	}
+
+	result, err := preprocessFormaEmbeds(forma)
+	require.NoError(t, err)
+
+	// Unmarshal the processed properties
+	var props map[string]any
+	require.NoError(t, json.Unmarshal(result.Resources[0].Properties, &props))
+
+	fc, ok := props["functionCode"].(map[string]any)
+	require.True(t, ok, "functionCode must be a map")
+
+	assert.Equal(t, true, fc["$embed"], "$embed must remain true")
+	assert.Nil(t, fc["$template"], "$template must be replaced by $templateParts")
+
+	parts, ok := fc["$templateParts"].([]any)
+	require.True(t, ok, "$templateParts must be a list")
+	require.Len(t, parts, 3, "expected [literal, $res-map, literal]")
+
+	// Part 0: literal before the span
+	assert.Equal(t, "cf.kvs('", parts[0], "first part must be the literal prefix")
+
+	// Part 1: the $res envelope map
+	resMap, ok := parts[1].(map[string]any)
+	require.True(t, ok, "second part must be a map (the $res envelope)")
+	assert.Equal(t, true, resMap["$res"], "$res must be true")
+	assert.Equal(t, "kvs", resMap["$label"])
+	assert.Equal(t, "default", resMap["$stack"])
+	assert.Equal(t, "id", resMap["$property"])
+
+	// Part 2: literal after the span
+	assert.Equal(t, "')", parts[2], "third part must be the literal suffix")
+}
+
+// TestPreprocessFormaEmbeds_NilFormaIsNoop verifies nil input is handled safely.
+func TestPreprocessFormaEmbeds_NilFormaIsNoop(t *testing.T) {
+	result, err := preprocessFormaEmbeds(nil)
+	require.NoError(t, err)
+	assert.Nil(t, result)
+}
+
+// TestPreprocessFormaEmbeds_NoEmbedFieldsUnchanged verifies that resources
+// without $embed fields are passed through without modification.
+func TestPreprocessFormaEmbeds_NoEmbedFieldsUnchanged(t *testing.T) {
+	propsBytes := json.RawMessage(`{"bucketName":"my-bucket"}`)
+	forma := &model.Forma{
+		Resources: []model.Resource{
+			{Label: "b", Type: "AWS::S3::Bucket", Stack: "default", Properties: propsBytes},
+		},
+	}
+	result, err := preprocessFormaEmbeds(forma)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"bucketName":"my-bucket"}`, string(result.Resources[0].Properties))
+}
+
+// TestSplitEmbedTemplate_TwoSpans verifies that two spans produce five parts:
+// [literal, $res, literal, $res, literal].
+func TestSplitEmbedTemplate_TwoSpans(t *testing.T) {
+	a := model.FrameEnvelope(`{"$res":true,"$label":"a","$stack":"s","$property":"p"}`)
+	b := model.FrameEnvelope(`{"$res":true,"$label":"b","$stack":"s","$property":"q"}`)
+	tmpl := "prefix" + a + "middle" + b + "suffix"
+
+	parts, err := splitEmbedTemplate(tmpl)
+	require.NoError(t, err)
+	require.Len(t, parts, 5)
+
+	assert.Equal(t, "prefix", parts[0])
+	mapA, ok := parts[1].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "a", mapA["$label"])
+
+	assert.Equal(t, "middle", parts[2])
+	mapB, ok := parts[3].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "b", mapB["$label"])
+
+	assert.Equal(t, "suffix", parts[4])
+}
+
 func TestResolveIncludes_PreResolvedDepsTakePrecedence(t *testing.T) {
 	forma := &model.Forma{Resources: []model.Resource{{Type: "AWS::S3::Bucket"}}}
 	options := &schema.SerializeOptions{

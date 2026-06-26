@@ -259,6 +259,13 @@ class FakeResolvable extends formae.Resolvable {
   FakeProperty: String
 }
 
+/// Carrier for a pre-processed $embed field.
+/// FakeParts is a List whose elements are alternately String (literal segment)
+/// and Map (decoded $res envelope — same shape FakeResolvable already handles).
+class FakeEmbed {
+  FakeParts: List
+}
+
 function applyPropertyWithMapping(valueAsMap: Map, prop: reflect.Property, reverseMapping: Mapping<String, String>) =
     // First try the direct property name
     if (valueAsMap.containsKey(prop.name))
@@ -382,6 +389,16 @@ local function applyDynamicOrMapping(type: reflect.Class, value: Dynamic|Mapping
             FakeVisibility = visibility
             FakeStrategy = strategy
         }
+    else if (valueAsMap.containsKey("$embed") && valueAsMap.containsKey("$templateParts"))
+        // $templateParts arrives as a Listing when parsed from JSON (the real
+        // extract flow), but may be a List/Dynamic in other construction paths.
+        let (rawParts = valueAsMap["$templateParts"])
+        new FakeEmbed {
+            FakeParts =
+                if (rawParts is Listing) rawParts.toList()
+                else if (rawParts is List) rawParts
+                else (rawParts as Dynamic).toList()
+        }
     else
         // Get the reverse mapping for this class
         let (reverseMapping =
@@ -502,6 +519,11 @@ local function parseValueEnhanced(value: Any): Any =
   else if (value is Typed)
     let (m = value.toMap())
     let (typeName = getTypeName(value))
+    // FakeEmbed: preserve parts as-is (each part is either a String literal
+    // or a Dynamic/$res map — formatValueWithTypes handles the rendering).
+    if (typeName == "FakeEmbed")
+      Map("__type__", "FakeEmbed", "FakeParts", (value as FakeEmbed).FakeParts)
+    else
     let (importInfo = getImportInfoForType(value.getClass(), typeName, value))
     let (defaultMap =
       if (typeName == "FakeResolvable")
@@ -612,8 +634,61 @@ local function escapeString(str: String): String =
     .replaceAll("\r", "\\r")     // Escape carriage returns
     .replaceAll("\t", "\\t")     // Escape tabs
 
+// toCamelCase mirrors pklGenerator.toCamelCase (cannot import it — pklGenerator
+// imports this module). Used to reference the generated stack local by name.
+local function embedToCamelCase(input: String): String =
+  if (input == "$unmanaged")
+    "myStack"
+  else
+    let (parts = input.split("-"))
+    if (parts.length == 1)
+      input
+    else
+      parts.first + parts.drop(1).map((part) ->
+        if (part.isEmpty) "" else part.substring(0, 1).toUpperCase() + part.substring(1, part.length)
+      ).join("")
+
+local function renderEmbedRefPart(resMap: Map<String, Any>, indent: String): String =
+  let (s = resMap.getOrNull("$stack") as String?)
+  let (l = resMap.getOrNull("$label") as String?)
+  let (refType = resMap.getOrNull("$type") as String?)
+  let (property = resMap.getOrNull("$property") as String?)
+  let (resolvableMapping = getResolvablePropertyMapping(refType))
+  let (mappedProperty =
+    if (property == null)
+      null
+    else if (resolvableMapping.containsKey(property))
+      resolvableMapping[property]
+    else if (property.contains("."))
+      let (segments = splitGjsonPath(property))
+      let (base = segments[0])
+      let (rest = segments.drop(1))
+      let (mappedBase = if (resolvableMapping.containsKey(base)) resolvableMapping[base] else base)
+      mappedBase + rest.fold("", (a, seg) -> a + "." + seg)
+    else
+      property
+  )
+  let (resInfo = resolvables.MapResolvableResourceUri().getOrNull(refType))
+  if (resInfo == null || s == "$unmanaged")
+    // No resolvable mapping (or unmanaged source): there is no reference
+    // expression to interpolate, so bake the resolved value as literal text.
+    escapeString(resMap.getOrNull("$value") as String? ?? "")
+  else
+    // Single-line interpolation so the enclosing single-line embed string stays
+    // valid. The class must be parenthesized — `(X) { .. }` — because an amends
+    // expression in expression context (inside \(…)) requires it. The stack is
+    // emitted already in its localized String form (<stackLocal>.res.label) so
+    // the post-processing localization (which would otherwise rewrite a bare
+    // `stack = ".."` to a StackResolvable, mismatching Resolvable.stack: String?)
+    // leaves it alone; this is the same value the //resolvable marker yields on
+    // the whole-value path.
+    "\\((\(resInfo.importName).\(resInfo.clazz.simpleName)) { stack = \(embedToCamelCase(s ?? "")).res.label; label = \"\(l)\" }.\(renderResolvableProperty(mappedProperty)))"
+
 local function formatValueWithTypes(value: Any, indent: String): String =
-  if (value is Map)
+  if (value is Dynamic)
+    // JSON-deserialized objects arrive as Dynamic; normalize to Map and recurse.
+    formatValueWithTypes(value.toMap(), indent)
+  else if (value is Map)
     // Check if this map represents a typed object (has a special type key)
     if (value.containsKey("__type__"))
       let (typeName = value["__type__"])
@@ -659,6 +734,27 @@ local function formatValueWithTypes(value: Any, indent: String): String =
           let (withVisibility = if (visibility == "Opaque") base + ".opaque" else base)
           let (withStrategy = if (strategy == "SetOnce") withVisibility + ".setOnce" else withVisibility)
             withStrategy
+        else if (typeName == "FakeEmbed")
+          // Render as formae.embed("""...\(<resolvable-ref>)...""").
+          // FakeParts is a List alternating String literals and $res maps.
+          // Each $res map is rendered using the existing FakeResolvable path
+          // (via applyDynamicOrMapping) and wrapped in \(...).
+          let (parts = value.getOrNull("FakeParts") as List)
+          let (innerContent = parts.foldIndexed("", (idx: Int, acc: String, part: Any) ->
+            if (part is String)
+              // Literal template segment — escape for a single-line PKL string.
+              acc + escapeString(part)
+            else if (part is Map)
+              acc + renderEmbedRefPart(part as Map<String, Any>, indent)
+            else if (part is Dynamic)
+              // JSON-deserialized $res envelope objects arrive as Dynamic, not Map.
+              acc + renderEmbedRefPart(part.toMap(), indent)
+            else
+              acc
+          ))
+          // Single-line string: valid regardless of newlines in the literal text
+          // (escaped to \n above) and free of multi-line-indentation pitfalls.
+          "formae.embed(\"\(innerContent)\")"
         else
           typeDeclaration + " {\n" +
           formatNestedContentWithTypes(value, indent + "  ") +

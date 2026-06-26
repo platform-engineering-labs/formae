@@ -304,6 +304,50 @@ facts {
         gen.getPackageName(deploymentconfig.DeploymentConfig) == "testprovider"
     }
 
+    // --- FakeEmbed rendering tests ---
+
+    ["FakeEmbed: genMapToPklStringWithTypes renders formae.embed"] {
+        // A resource map containing a FakeEmbed value in one of its fields.
+        // We construct the map that parseValueEnhanced would produce for a FakeEmbed
+        // and verify that genMapToPklStringWithTypes emits formae.embed(""".
+        // The FakeParts list alternates String literals and $res maps.
+        // Use Dynamic (not Map) to match JSON-deserialized production type.
+        let (resMap = new Dynamic {
+            ["$res"] = true
+            ["$label"] = "kvs"
+            ["$type"] = "TestProvider::EC2::VPC"
+            ["$stack"] = "default"
+            ["$property"] = "VpcId"
+        })
+        let (fakeEmbedMap = new Dynamic {
+            ["__type__"] = "FakeEmbed"
+            ["FakeParts"] = List("cf.kvs('", resMap, "')")
+        })
+        let (resourceMap = Map("functionCode", fakeEmbedMap))
+        let (rendered = gen.genMapToPklStringWithTypes("TestResource", resourceMap, "test"))
+        // Single-line form. The old multi-line """ rendering produced invalid PKL
+        // (content on the same line as """) and broke extract re-eval — see PLA-68.
+        rendered.contains("formae.embed(\"") && !rendered.contains("formae.embed(\"\"\"")
+    }
+
+    ["FakeEmbed: rendered output contains PKL interpolation marker"] {
+        // Use Dynamic (not Map) to match JSON-deserialized production type.
+        let (resMap = new Dynamic {
+            ["$res"] = true
+            ["$label"] = "kvs"
+            ["$type"] = "TestProvider::EC2::VPC"
+            ["$stack"] = "default"
+            ["$property"] = "VpcId"
+        })
+        let (fakeEmbedMap = new Dynamic {
+            ["__type__"] = "FakeEmbed"
+            ["FakeParts"] = List("prefix", resMap, "suffix")
+        })
+        let (resourceMap = Map("code", fakeEmbedMap))
+        let (rendered = gen.genMapToPklStringWithTypes("TestResource", resourceMap, "test"))
+        rendered.contains("\\(")
+    }
+
     ["duplicate Typed values produce single import after dedup"] {
         // Two SubResource instances in the same resource should not
         // produce duplicate __import_statement__ entries after dedup.
