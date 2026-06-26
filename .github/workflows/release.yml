@@ -124,6 +124,11 @@ jobs:
         run: echo "/opt/pel/bin" >> $GITHUB_PATH
 
       - name: Configure AWS Credentials
+        # Fail fast instead of hanging: a stalled STS AssumeRoleWithWebIdentity
+        # has been seen retrying for 40+ min on a flaky runner (no timeout), so
+        # cap it — a healthy creds exchange takes seconds, and a fast failure is
+        # re-runnable rather than holding the job to the 6h job ceiling.
+        timeout-minutes: 5
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: us-west-2
