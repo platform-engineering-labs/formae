@@ -18,6 +18,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
 	"github.com/platform-engineering-labs/formae/internal/cli/config"
 	"github.com/platform-engineering-labs/formae/internal/cli/display"
+	"github.com/platform-engineering-labs/formae/internal/cli/profile/store"
 	"github.com/platform-engineering-labs/formae/internal/schema"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
@@ -62,6 +63,47 @@ var PropertyCommands = []string{
 	"apply",
 	"destroy",
 	"eval",
+}
+
+// AddConfigFlags registers --config and --profile on a command and marks them
+// mutually exclusive. Call from every command that connects to the agent.
+func AddConfigFlags(c *cobra.Command) {
+	c.Flags().String("config", "", "Path to config file")
+	c.Flags().String("profile", "", "Named profile to use (see `formae profile list`)")
+	c.MarkFlagsMutuallyExclusive("config", "profile")
+}
+
+// ResolveConfigPath turns the --config / --profile flags into a concrete config
+// file path. Exactly one of config/profile may be non-empty (cobra enforces the
+// mutual exclusion). With neither, it resolves the active profile (running
+// migration/bootstrap).
+func ResolveConfigPath(configFlag, profileFlag string) (string, error) {
+	if profileFlag != "" {
+		if err := store.ValidateName(profileFlag); err != nil {
+			return "", err // path-traversal / malformed name guard.
+		}
+		dir, err := store.ResolveConfigDir()
+		if err != nil {
+			return "", err
+		}
+		s := store.New(dir)
+		path := s.ProfilePath(profileFlag)
+		if _, err := os.Stat(path); err != nil {
+			if os.IsNotExist(err) {
+				return "", fmt.Errorf("%w: %s", store.ErrNotFound, profileFlag)
+			}
+			return "", err
+		}
+		return path, nil
+	}
+	if configFlag != "" {
+		return configFlag, nil
+	}
+	dir, err := store.ResolveConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return store.New(dir).Resolve()
 }
 
 func AppFromContext(ctx context.Context, configFilePath, endpoint string, cmd *cobra.Command) (*app.App, error) {
