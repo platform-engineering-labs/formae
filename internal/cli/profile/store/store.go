@@ -41,10 +41,6 @@ var (
 	ErrIsActive       = errors.New("profile is active")
 )
 
-// StubTemplate is the minimal PKL content written by Create.
-// Task 4 moves this to template.go and replaces it with the full stub.
-const StubTemplate = "amends \"formae:/Config.pkl\"\n"
-
 var nameRE = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
 // ValidateName checks that name is a permissible profile name.
