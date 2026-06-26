@@ -29,7 +29,6 @@ clean:
 	rm -rf .out/
 	rm -rf dist/
 	rm -rf formae
-	rm -rf fcfg
 	rm -rf pkl-reader-helm
 	rm -rf version.semver
 
@@ -38,7 +37,6 @@ clean-pel:
 
 build: helm-reader
 	go build -ldflags="-X 'github.com/platform-engineering-labs/formae.Version=${VERSION}'" -o formae cmd/formae/main.go
-	go build -o fcfg cmd/formae-config/main.go
 
 ## helm-reader: Download the pinned pkl-reader-helm binary into the
 ## repo root so `build` ships it next to the formae binary and
@@ -63,13 +61,11 @@ install-gremlins:
 
 build-debug:
 	go build ${DEBUG_GOFLAGS} -o formae cmd/formae/main.go
-	go build ${DEBUG_GOFLAGS} -o fcfg cmd/formae-config/main.go
 
 pkg-bin: clean build
 	echo '${VERSION}' > ./version.semver
 	mkdir -p ./dist/pel/bin
 	cp -Rp ./formae ./dist/pel/bin
-	cp -Rp ./fcfg ./dist/pel/bin
 	cp -Rp ./pkl-reader-helm ./dist/pel/bin
 
 gen-pkl:
