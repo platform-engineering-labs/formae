@@ -21,9 +21,14 @@ import "@aws/cloudfront/keyvaluestore.pkl" as kvsmod
 
 local stackName = "e2e-embed-resolvable-aws"
 
+// Unique suffix for globally-scoped CloudFront resource names — aws-nuke does
+// not clean KeyValueStore/Function, so reused static names collide across reruns
+// and concurrent jobs. Labels and the stack stay static for test assertions.
+local testRunID = read("env:FORMAE_TEST_RUN_ID")
+
 local kvStore = new kvsmod.KeyValueStore {
   label = "e2e-embed-kvs"
-  name = "formae-e2e-embed-kvs"
+  name = "formae-e2e-embed-kvs-\(testRunID)"
   comment = "e2e embedded-resolvable test KVS"
 }
 
@@ -44,7 +49,7 @@ forma {
 
   new cffn.Function {
     label = "e2e-embed-fn"
-    name = "formae-e2e-embed-fn"
+    name = "formae-e2e-embed-fn-\(testRunID)"
     autoPublish = true
     // The embedded resolvable: the KVS short Id is substituted into the JS
     // literal at resolve time, so this ships as a plain String to CloudFront.
