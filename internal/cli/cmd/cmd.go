@@ -8,7 +8,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 
@@ -16,7 +15,6 @@ import (
 
 	"github.com/platform-engineering-labs/formae/internal/api"
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
-	"github.com/platform-engineering-labs/formae/internal/cli/config"
 	"github.com/platform-engineering-labs/formae/internal/cli/display"
 	"github.com/platform-engineering-labs/formae/internal/cli/profile/store"
 	"github.com/platform-engineering-labs/formae/internal/schema"
@@ -108,14 +106,17 @@ func ResolveConfigPath(configFlag, profileFlag string) (string, error) {
 
 func AppFromContext(ctx context.Context, configFilePath, endpoint string, cmd *cobra.Command) (*app.App, error) {
 	if ctx.Value("app") != nil {
-		app := ctx.Value("app").(*app.App)
+		application := ctx.Value("app").(*app.App)
 
-		err := app.LoadConfig(configFilePath, filepath.Join(config.Config.ConfigDirectory(), config.ConfigFileNamePrefix))
+		profileFlag, _ := cmd.Flags().GetString("profile") // "" if the flag is absent
+		path, err := ResolveConfigPath(configFilePath, profileFlag)
 		if err != nil {
 			return nil, fmt.Errorf("%w\n\n%s %s", err, display.Gold("Configuration docs:"), display.DocRoot+"/configuration")
 		}
-
-		return app, nil
+		if err := application.LoadConfig(path, ""); err != nil {
+			return nil, fmt.Errorf("%w\n\n%s %s", err, display.Gold("Configuration docs:"), display.DocRoot+"/configuration")
+		}
+		return application, nil
 	}
 
 	return nil, api.AppNotFoundError{}
