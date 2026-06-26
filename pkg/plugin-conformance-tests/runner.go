@@ -335,6 +335,64 @@ func isResolvable(value any) bool {
 	return ok && resBool
 }
 
+// isEmbed reports whether value is a {$embed: true, $template: "..."} field
+// (an embedded resolvable inside a String-typed field — PLA-68).
+func isEmbed(value any) bool {
+	m, ok := value.(map[string]any)
+	if !ok {
+		return false
+	}
+	embed, ok := m["$embed"].(bool)
+	return ok && embed
+}
+
+// normalizeEmbedTemplate canonicalizes a $embed $template for comparison: each
+// framed span's envelope is stripped of $value/$visibility/$strategy and
+// re-encoded with sorted keys. An authored template (pre-resolution, no $value,
+// PKL insertion-order keys) and a stored template (resolved $value, Go
+// sorted-key) then compare equal when they reference the same resolvable.
+// Literal segments are preserved verbatim. Mirrors normalizeResolvables.
+func normalizeEmbedTemplate(tmpl string) string {
+	spans, err := pkgmodel.ScanEmbedSpans(tmpl)
+	if err != nil {
+		return tmpl
+	}
+	out := tmpl
+	for i := len(spans) - 1; i >= 0; i-- {
+		var env map[string]any
+		if err := json.Unmarshal([]byte(spans[i].EnvelopeJSON), &env); err != nil {
+			continue
+		}
+		delete(env, "$value")
+		delete(env, "$visibility")
+		delete(env, "$strategy")
+		canonical, err := json.Marshal(env) // map keys marshal in sorted order
+		if err != nil {
+			continue
+		}
+		out = out[:spans[i].Start] + pkgmodel.FrameEnvelope(string(canonical)) + out[spans[i].End:]
+	}
+	return out
+}
+
+// compareEmbed compares two $embed fields by normalizing their $template spans.
+func compareEmbed(r testReporter, name string, expected, actual any) bool {
+	expMap, ok1 := expected.(map[string]any)
+	actMap, ok2 := actual.(map[string]any)
+	if !ok1 || !ok2 {
+		r.Errorf("Embed field %s: expected and actual must both be $embed objects", name)
+		return false
+	}
+	expTmpl, _ := expMap["$template"].(string)
+	actTmpl, _ := actMap["$template"].(string)
+	if normalizeEmbedTemplate(expTmpl) != normalizeEmbedTemplate(actTmpl) {
+		r.Errorf("Embed field %s.$template should match expected (normalized): expected %q, got %q",
+			name, expTmpl, actTmpl)
+		return false
+	}
+	return true
+}
+
 // normalizeEscaping removes common backslash escape sequences from a string
 // to allow comparison of values that may have been escaped differently during
 // JSON/PKL round-trips (e.g. `"` vs `\"`).
@@ -890,6 +948,12 @@ func compareMap(r testReporter, name string, expected, actual map[string]any, co
 			ok = false
 			continue
 		}
+		if isEmbed(expectedValue) {
+			if !compareEmbed(r, name+"."+key, expectedValue, actualValue) {
+				ok = false
+			}
+			continue
+		}
 		if isResolvable(expectedValue) {
 			if !compareResolvable(r, name+"."+key, expectedValue, actualValue, context) {
 				ok = false
@@ -980,6 +1044,17 @@ func compareProperties(r testReporter, expectedProperties map[string]any, actual
 			}
 			r.Errorf("Property %s should exist in actual resource (%s)", key, context)
 			hasErrors = true
+			continue
+		}
+
+		// Validate embedded-resolvable fields ($embed) by normalizing their
+		// $template spans — the stored form carries the resolved $value and
+		// sorted keys, the authored form does not (PLA-68).
+		if isEmbed(expectedValue) {
+			r.Logf("Validating embedded-resolvable property %s (resolved at runtime)", key)
+			if !compareEmbed(r, key, expectedValue, actualValue) {
+				hasErrors = true
+			}
 			continue
 		}
 

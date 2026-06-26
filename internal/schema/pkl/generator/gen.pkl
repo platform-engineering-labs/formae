@@ -390,8 +390,14 @@ local function applyDynamicOrMapping(type: reflect.Class, value: Dynamic|Mapping
             FakeStrategy = strategy
         }
     else if (valueAsMap.containsKey("$embed") && valueAsMap.containsKey("$templateParts"))
+        // $templateParts arrives as a Listing when parsed from JSON (the real
+        // extract flow), but may be a List/Dynamic in other construction paths.
+        let (rawParts = valueAsMap["$templateParts"])
         new FakeEmbed {
-            FakeParts = (valueAsMap["$templateParts"] as Dynamic).toList()
+            FakeParts =
+                if (rawParts is Listing) rawParts.toList()
+                else if (rawParts is List) rawParts
+                else (rawParts as Dynamic).toList()
         }
     else
         // Get the reverse mapping for this class
@@ -649,13 +655,14 @@ local function renderEmbedRefPart(resMap: Map<String, Any>, indent: String): Str
       property
   )
   let (resInfo = resolvables.MapResolvableResourceUri().getOrNull(refType))
-  let (refExpr =
-    if (resInfo == null || s == "$unmanaged")
-      resMap.getOrNull("$value") as String? ?? "null"
-    else
-      "\(resInfo.importName).\(resInfo.clazz.simpleName) { stack = \"\(s)\" //resolvable\n\(indent)  label = \"\(l)\"\n\(indent)}.\(renderResolvableProperty(mappedProperty))"
-  )
-  "\\(" + refExpr + ")"
+  if (resInfo == null || s == "$unmanaged")
+    // No resolvable mapping (or unmanaged source): there is no reference
+    // expression to interpolate, so bake the resolved value as literal text.
+    escapeString(resMap.getOrNull("$value") as String? ?? "")
+  else
+    // Single-line interpolation so the enclosing single-line embed string stays
+    // valid: \(<Module>.<Resolvable> { stack = ".."; label = ".." }.<prop>)
+    "\\(\(resInfo.importName).\(resInfo.clazz.simpleName) { stack = \"\(s)\"; label = \"\(l)\" }.\(renderResolvableProperty(mappedProperty)))"
 
 local function formatValueWithTypes(value: Any, indent: String): String =
   if (value is Dynamic)
@@ -715,7 +722,8 @@ local function formatValueWithTypes(value: Any, indent: String): String =
           let (parts = value.getOrNull("FakeParts") as List)
           let (innerContent = parts.foldIndexed("", (idx: Int, acc: String, part: Any) ->
             if (part is String)
-              acc + part
+              // Literal template segment — escape for a single-line PKL string.
+              acc + escapeString(part)
             else if (part is Map)
               acc + renderEmbedRefPart(part as Map<String, Any>, indent)
             else if (part is Dynamic)
@@ -724,7 +732,9 @@ local function formatValueWithTypes(value: Any, indent: String): String =
             else
               acc
           ))
-          "formae.embed(\"\"\"\(innerContent)\"\"\")"
+          // Single-line string: valid regardless of newlines in the literal text
+          // (escaped to \n above) and free of multi-line-indentation pitfalls.
+          "formae.embed(\"\(innerContent)\")"
         else
           typeDeclaration + " {\n" +
           formatNestedContentWithTypes(value, indent + "  ") +

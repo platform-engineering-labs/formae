@@ -325,7 +325,9 @@ facts {
         })
         let (resourceMap = Map("functionCode", fakeEmbedMap))
         let (rendered = gen.genMapToPklStringWithTypes("TestResource", resourceMap, "test"))
-        rendered.contains("formae.embed(\"\"\"")
+        // Single-line form. The old multi-line """ rendering produced invalid PKL
+        // (content on the same line as """) and broke extract re-eval — see PLA-68.
+        rendered.contains("formae.embed(\"") && !rendered.contains("formae.embed(\"\"\"")
     }
 
     ["FakeEmbed: rendered output contains PKL interpolation marker"] {

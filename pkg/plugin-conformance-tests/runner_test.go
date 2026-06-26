@@ -7,6 +7,8 @@ package conformance
 import (
 	"os"
 	"testing"
+
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
 func TestFilterTestCases(t *testing.T) {
@@ -471,6 +473,54 @@ func TestCompareProperties_NestedResolvable(t *testing.T) {
 		t.Errorf("compareProperties should pass when SubResource contains a nested Resolvable with resolved $value")
 	}
 }
+
+// Reproduces the PLA-68 conformance Verify failure: a $embed field's stored
+// $template carries the resolved $value and Go sorted-key envelope encoding,
+// while the authored expected $template has neither. They must compare equal.
+func TestCompareProperties_Embed(t *testing.T) {
+	// Expected (from Pkl eval): $res span, insertion-order keys, no $value.
+	expectedSpan := pkgmodel.FrameEnvelope(
+		`{"$res":true,"$label":"kvs","$type":"AWS::CloudFront::KeyValueStore","$stack":"s","$property":"Id","$visibility":"Clear"}`)
+	expectedProperties := map[string]any{
+		"FunctionCode": map[string]any{
+			"$embed":    true,
+			"$template": "const kvsId = '" + expectedSpan + "';",
+		},
+	}
+
+	// Actual (from inventory after resolution): same span with sorted keys + $value.
+	actualSpan := pkgmodel.FrameEnvelope(
+		`{"$label":"kvs","$property":"Id","$res":true,"$stack":"s","$type":"AWS::CloudFront::KeyValueStore","$value":"21775858-76bb"}`)
+	actualResource := map[string]any{
+		"Properties": map[string]any{
+			"FunctionCode": map[string]any{
+				"$embed":    true,
+				"$template": "const kvsId = '" + actualSpan + "';",
+			},
+		},
+	}
+
+	if !compareProperties(t, expectedProperties, actualResource, "after create", map[string]providerDefault{}) {
+		t.Errorf("compareProperties should pass for an embedded resolvable whose stored $template carries the resolved $value and sorted-key encoding")
+	}
+}
+
+// A literal segment difference in a $embed $template MUST be detected (negative).
+func TestCompareEmbed_DifferentLiteralFails(t *testing.T) {
+	span := pkgmodel.FrameEnvelope(`{"$res":true,"$label":"kvs","$type":"T","$stack":"s","$property":"Id"}`)
+	expected := map[string]any{"$embed": true, "$template": "A-" + span + "-B"}
+	actual := map[string]any{"$embed": true, "$template": "A-" + span + "-DIFFERENT"}
+	rec := &recordingReporter{}
+	if compareEmbed(rec, "FunctionCode", expected, actual) {
+		t.Errorf("compareEmbed should fail when the literal template text differs")
+	}
+}
+
+// recordingReporter captures errors without failing the test (for negative cases).
+type recordingReporter struct{ errors int }
+
+func (r *recordingReporter) Errorf(string, ...any) { r.errors++ }
+func (r *recordingReporter) Logf(string, ...any)   {}
 
 func TestCompareMap(t *testing.T) {
 	t.Run("nested resolvable passes", func(t *testing.T) {
