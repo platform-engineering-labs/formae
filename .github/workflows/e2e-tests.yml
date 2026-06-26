@@ -121,9 +121,14 @@ jobs:
           # Function.functionCode). Needs the dev-channel AWS plugin whose
           # functionCode is widened to String|formae.Embedded (0.1.13-dev.0+);
           # channel: dev routes the orbital install to community#dev.
+          # formae_version pins the built binary to the plugin's minFormaeVersion
+          # floor: this branch carries the 0.87.0 schema work but git-describe
+          # still reports 0.86.2 (no 0.87.0 tag yet), so without the override the
+          # orbital solver rejects aws@dev. Drop once formae 0.87.0 is released.
           - test: TestEmbedResolvable
             system_plugins: aws
             channel: dev
+            formae_version: "0.87.0"
           - test: TestEvalDefault
             system_plugins: aws
           - test: TestEvalSchemaLocationLocal
@@ -205,7 +210,14 @@ jobs:
           # installs plugins through the same orbital tree the test agents
           # will later read from (via the SystemPluginDir scan added in
           # the multi-source plugin discovery refactor).
-          make build
+          # matrix.formae_version (when set) overrides the git-derived VERSION
+          # so the orbital solver sees a binary that satisfies a plugin's
+          # minFormaeVersion floor before that formae version is tagged. The
+          # same override is written to version.semver so setup_pkl.sh resolves
+          # the fixture's @formae schema at that (hub-published) version, which
+          # carries the new schema symbols (e.g. formae.embed).
+          make build ${{ matrix.formae_version && format('VERSION={0}', matrix.formae_version) || '' }}
+          ${{ matrix.formae_version && format('echo {0} > version.semver', matrix.formae_version) || 'true' }}
           mkdir -p dist/e2e/bin dist/e2e/.ops
           cp formae dist/e2e/bin/formae
 
@@ -296,6 +308,7 @@ jobs:
                 || format('{0}/dist/e2e/formae/plugins', github.workspace) }}
         run: >-
           make test-e2e
+          ${{ matrix.formae_version && format('VERSION={0}', matrix.formae_version) || '' }}
           E2E_RUN_FLAGS="-run ${{ matrix.test }}"
 
   cleanup:
