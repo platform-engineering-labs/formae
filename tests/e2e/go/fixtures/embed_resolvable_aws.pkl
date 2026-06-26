@@ -1,0 +1,69 @@
+/*
+ * © 2026 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+// E2E fixture for PLA-68: an embedded resolvable inside a String-typed field.
+// The Function's functionCode is a cf-js-2.0 literal that references the
+// KeyValueStore's CloudFront-generated short Id, embedded into the source via
+// formae.embed(...). Applying this in one pass resolves the Id and ships a
+// plain String to CloudFront; pre-PLA-68 this required a two-apply manual
+// substitution.
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+import "@aws/aws.pkl"
+
+import "@aws/cloudfront/cffunction.pkl" as cffn
+import "@aws/cloudfront/keyvaluestore.pkl" as kvsmod
+
+local stackName = "e2e-embed-resolvable-aws"
+
+local kvStore = new kvsmod.KeyValueStore {
+  label = "e2e-embed-kvs"
+  name = "formae-e2e-embed-kvs"
+  comment = "e2e embedded-resolvable test KVS"
+}
+
+forma {
+  new formae.Stack {
+    label = stackName
+    description = "E2E embedded-resolvable test (CloudFront Function functionCode)"
+  }
+
+  new formae.Target {
+    label = "e2e-aws-target"
+    config = new aws.Config {
+      region = "us-east-1"
+    }
+  }
+
+  kvStore
+
+  new cffn.Function {
+    label = "e2e-embed-fn"
+    name = "formae-e2e-embed-fn"
+    autoPublish = true
+    // The embedded resolvable: the KVS short Id is substituted into the JS
+    // literal at resolve time, so this ships as a plain String to CloudFront.
+    functionCode = formae.embed("""
+      import cf from 'cloudfront';
+      const kvsId = '\(kvStore.res.id)';
+      async function handler(event) {
+        const kvs = cf.kvs(kvsId);
+        return event.request;
+      }
+      """)
+    functionConfig = new cffn.FunctionConfig {
+      runtime = "cloudfront-js-2.0"
+      comment = "e2e embedded-resolvable Function"
+      keyValueStoreAssociations = new Listing {
+        new cffn.KeyValueStoreAssociation {
+          keyValueStoreARN = kvStore.res.arn
+        }
+      }
+    }
+  }
+}

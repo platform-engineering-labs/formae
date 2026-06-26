@@ -117,6 +117,13 @@ jobs:
             system_plugins: aws
           - test: TestExtractAndReapply
             system_plugins: aws
+          # Embedded resolvable inside a String field (CloudFront
+          # Function.functionCode). Needs the dev-channel AWS plugin whose
+          # functionCode is widened to String|formae.Embedded (0.1.13-dev.0+);
+          # channel: dev routes the orbital install to community#dev.
+          - test: TestEmbedResolvable
+            system_plugins: aws
+            channel: dev
           - test: TestEvalDefault
             system_plugins: aws
           - test: TestEvalSchemaLocationLocal
@@ -246,8 +253,10 @@ jobs:
 
           # Install only the plugins this test needs. The agent refreshes
           # orbital's repository cache at startup, so the install candidate
-          # solver has fresh metadata to work with.
-          dist/e2e/bin/formae plugin install ${{ matrix.system_plugins }} --channel stable
+          # solver has fresh metadata to work with. matrix.channel defaults to
+          # stable; an entry sets it to dev to pull a dev-tagged plugin
+          # (--channel rewrites every repo's #fragment, e.g. community#dev).
+          dist/e2e/bin/formae plugin install ${{ matrix.system_plugins }} --channel ${{ matrix.channel || 'stable' }}
 
           # Stop the bootstrap agent so the test harness can spawn its own.
           kill -TERM "$AGENT_PID" || true
