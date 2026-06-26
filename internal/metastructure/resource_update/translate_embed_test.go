@@ -113,3 +113,86 @@ func TestTranslatePropertiesJSON_RewritesEmbeddedSpan_Idempotent(t *testing.T) {
 
 	assert.Equal(t, string(result1), string(result2), "translatePropertiesJSON should be idempotent for embed spans")
 }
+
+// TestTranslatePropertiesJSON_EmbeddedSpan_BareStack verifies that an embed span
+// whose $stack was omitted resolves via (label, type). A bare resource (no
+// explicit stack) renders its embed envelope before forma.pkl's single-stack
+// defaulting runs, so the null $stack key is dropped — yet the resource is keyed
+// in tripletToKsuid under its defaulted stack. This mirrors how the whole-value
+// [formae.Resolvable] converter resolves via getResource(label, type).
+func TestTranslatePropertiesJSON_EmbeddedSpan_BareStack(t *testing.T) {
+	ds, _ := GetDeps(t)
+
+	// Resource is keyed under its DEFAULTED stack, not "".
+	triplet := pkgmodel.TripletKey{Stack: "default", Label: "kvs", Type: "AWS::CloudFront::KeyValueStore"}
+	ksuid := "testembedbare"
+
+	_, err := ds.StoreResource(&pkgmodel.Resource{
+		Ksuid: ksuid,
+		Label: triplet.Label,
+		Type:  triplet.Type,
+		Stack: triplet.Stack,
+	}, "cmd-bare")
+	require.NoError(t, err)
+
+	// Envelope WITHOUT $stack — what the JSON renderer emits for a bare ref.
+	resEnvJSON, _ := json.Marshal(map[string]any{
+		"$res":      true,
+		"$label":    triplet.Label,
+		"$type":     triplet.Type,
+		"$property": "id",
+	})
+	tmpl := "cf.kvs('" + pkgmodel.FrameEnvelope(string(resEnvJSON)) + "')"
+
+	properties, err := json.Marshal(map[string]any{
+		"functionCode": map[string]any{
+			"$embed":    true,
+			"$template": tmpl,
+		},
+	})
+	require.NoError(t, err)
+
+	tripletToKsuid := map[pkgmodel.TripletKey]string{triplet: ksuid}
+
+	result, _, err := translatePropertiesJSON(json.RawMessage(properties), tripletToKsuid, ds)
+	require.NoError(t, err, "bare-stack embed span should resolve via (label, type)")
+
+	tmplOut := gjson.Get(string(result), "functionCode.$template").String()
+	spans, scanErr := pkgmodel.ScanEmbedSpans(tmplOut)
+	require.NoError(t, scanErr)
+	require.Len(t, spans, 1)
+	assert.Contains(t, spans[0].EnvelopeJSON, `"$ref"`)
+	assert.Contains(t, spans[0].EnvelopeJSON, ksuid)
+}
+
+// TestTranslatePropertiesJSON_EmbeddedSpan_BareStackAmbiguous verifies that a
+// bare embed reference whose (label, type) matches more than one resource across
+// stacks is rejected, so the user disambiguates with an explicit stack.
+func TestTranslatePropertiesJSON_EmbeddedSpan_BareStackAmbiguous(t *testing.T) {
+	ds, _ := GetDeps(t)
+
+	a := pkgmodel.TripletKey{Stack: "stack-a", Label: "kvs", Type: "AWS::CloudFront::KeyValueStore"}
+	b := pkgmodel.TripletKey{Stack: "stack-b", Label: "kvs", Type: "AWS::CloudFront::KeyValueStore"}
+
+	resEnvJSON, _ := json.Marshal(map[string]any{
+		"$res":      true,
+		"$label":    "kvs",
+		"$type":     "AWS::CloudFront::KeyValueStore",
+		"$property": "id",
+	})
+	tmpl := "cf.kvs('" + pkgmodel.FrameEnvelope(string(resEnvJSON)) + "')"
+
+	properties, err := json.Marshal(map[string]any{
+		"functionCode": map[string]any{
+			"$embed":    true,
+			"$template": tmpl,
+		},
+	})
+	require.NoError(t, err)
+
+	tripletToKsuid := map[pkgmodel.TripletKey]string{a: "ksuidA", b: "ksuidB"}
+
+	_, _, err = translatePropertiesJSON(json.RawMessage(properties), tripletToKsuid, ds)
+	require.Error(t, err, "ambiguous bare-stack embed should error")
+	assert.Contains(t, err.Error(), "incomplete triplet")
+}
