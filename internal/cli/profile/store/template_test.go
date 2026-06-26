@@ -30,3 +30,22 @@ func TestStubTemplate_ParsesWithEmptyPluginDir(t *testing.T) {
 	assert.Equal(t, "http://localhost", cfg.Cli.API.URL)
 	assert.Equal(t, 49684, cfg.Cli.API.Port)
 }
+
+// A minimal config that only `amends` the schema — materializing no cli/agent
+// values — must still evaluate to a complete, working localhost setup purely
+// from schema defaults. This is what lets the clean-install stub stay minimal
+// (no materialized snapshot to drift from the schema): cli.api must carry a
+// default of its own, not be a required property the user has to fill in.
+func TestSchemaDefaults_BareAmendsYieldsLocalhost(t *testing.T) {
+	t.Setenv("FORMAE_PLUGIN_DIR", t.TempDir()) // empty: no plugin wrappers
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bare.pkl")
+	require.NoError(t, os.WriteFile(path, []byte("amends \"formae:/Config.pkl\"\n"), 0o644))
+
+	cfg, err := pkl.PKL{}.FormaeConfig(path)
+	require.NoError(t, err, "a bare amends must evaluate from schema defaults alone")
+	assert.Equal(t, "http://localhost", cfg.Cli.API.URL)
+	assert.Equal(t, 49684, cfg.Cli.API.Port)
+	assert.Equal(t, "localhost", cfg.Agent.Server.Hostname)
+	assert.Equal(t, 49684, cfg.Agent.Server.Port)
+}
