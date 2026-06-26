@@ -31,6 +31,10 @@ jobs:
           aws-nuke version
 
       - name: Configure AWS Credentials
+        # Fail fast instead of hanging: a stalled STS AssumeRoleWithWebIdentity
+        # has been seen retrying for tens of minutes on a flaky runner with no
+        # timeout — cap it so the job fails quickly and is re-runnable.
+        timeout-minutes: 5
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: us-west-2
@@ -167,6 +171,8 @@ jobs:
           go-version: '1.26.2'
 
       - name: Configure AWS Credentials
+        # Fail fast instead of hanging on a stalled STS call (see above).
+        timeout-minutes: 5
         id: creds
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -319,6 +325,10 @@ jobs:
           aws-nuke version
 
       - name: Configure AWS Credentials
+        # Fail fast instead of hanging: a stalled STS AssumeRoleWithWebIdentity
+        # has been seen retrying for tens of minutes on a flaky runner with no
+        # timeout — cap it so the job fails quickly and is re-runnable.
+        timeout-minutes: 5
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: us-west-2
