@@ -143,7 +143,8 @@ func (s *Store) Use(name string) error {
 	if err := ValidateName(name); err != nil {
 		return err
 	}
-	if err := s.ensureInitialized(); err != nil && !errors.Is(err, ErrNotInitialized) {
+	if err := s.ensureInitialized(); err != nil &&
+		!errors.Is(err, ErrNotInitialized) && !errors.Is(err, ErrInvalidName) {
 		return err
 	}
 	if _, err := os.Stat(s.ProfilePath(name)); err != nil {
@@ -155,14 +156,25 @@ func (s *Store) Use(name string) error {
 	return s.writeActive(name)
 }
 
-// writeActive atomically writes the active pointer file.
+// writeActive atomically writes the active pointer file using a unique temp
+// file so concurrent calls cannot clobber each other's temp before rename.
 func (s *Store) writeActive(name string) error {
 	if err := os.MkdirAll(s.root, 0o755); err != nil {
 		return fmt.Errorf("mkdir config dir: %w", err)
 	}
-	tmp := s.activePath() + ".tmp"
-	if err := os.WriteFile(tmp, []byte(name+"\n"), 0o644); err != nil {
+	f, err := os.CreateTemp(s.root, "active-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp active: %w", err)
+	}
+	tmp := f.Name()
+	if _, err := f.WriteString(name + "\n"); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
 		return fmt.Errorf("write temp active: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("close temp active: %w", err)
 	}
 	if err := os.Rename(tmp, s.activePath()); err != nil {
 		_ = os.Remove(tmp)
@@ -192,6 +204,11 @@ func (s *Store) Save(name string, force bool) error {
 		if !force {
 			return fmt.Errorf("%w: %s", ErrAlreadyExists, name)
 		}
+		// force: drop any existing entry (incl. a symlink) so copyFile writes a
+		// fresh regular file inside profiles/ rather than following a link outside it.
+		if err := os.Remove(dst); err != nil {
+			return fmt.Errorf("remove existing profile: %w", err)
+		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("stat target: %w", err)
 	}
@@ -205,13 +222,19 @@ func (s *Store) Create(name string, force bool) error {
 	if err := ValidateName(name); err != nil {
 		return err
 	}
-	if err := s.ensureInitialized(); err != nil && !errors.Is(err, ErrNotInitialized) {
+	if err := s.ensureInitialized(); err != nil &&
+		!errors.Is(err, ErrNotInitialized) && !errors.Is(err, ErrInvalidName) {
 		return err
 	}
 	dst := s.ProfilePath(name)
 	if _, err := os.Lstat(dst); err == nil {
 		if !force {
 			return fmt.Errorf("%w: %s", ErrAlreadyExists, name)
+		}
+		// force: drop any existing entry (incl. a symlink) so we write a fresh
+		// regular file inside profiles/ rather than following a link outside it.
+		if err := os.Remove(dst); err != nil {
+			return fmt.Errorf("remove existing profile: %w", err)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("stat target: %w", err)

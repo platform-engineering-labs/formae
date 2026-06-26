@@ -379,3 +379,178 @@ func TestEnsure_Idempotent(t *testing.T) {
 		t.Errorf("not idempotent: default changed between runs")
 	}
 }
+
+// Fix 1: malformed active pointer must not wedge Use or Create.
+
+func TestUse_ToleratesMalformedActivePointer(t *testing.T) {
+	root := t.TempDir()
+	// Write a malformed active pointer (invalid name).
+	writeFile(t, root, "active", "../escape")
+	// Write a valid profile that we want to switch to.
+	writeFile(t, root, filepath.Join("profiles", "default.pkl"), "default-content")
+
+	s := store.New(root)
+	if err := s.Use("default"); err != nil {
+		t.Fatalf("Use with malformed active: %v, want nil", err)
+	}
+	// Store must be healed: Active() now returns "default".
+	got, err := s.Active()
+	if err != nil {
+		t.Fatalf("Active after healing: %v", err)
+	}
+	if got != "default" {
+		t.Errorf("Active = %q after Use, want default", got)
+	}
+}
+
+func TestCreate_ToleratesMalformedActivePointer(t *testing.T) {
+	root := t.TempDir()
+	// Write a malformed active pointer.
+	writeFile(t, root, "active", "../escape")
+
+	s := store.New(root)
+	if err := s.Create("foo", false); err != nil {
+		t.Fatalf("Create with malformed active: %v, want nil", err)
+	}
+	if _, err := os.Stat(s.ProfilePath("foo")); err != nil {
+		t.Errorf("foo profile not created: %v", err)
+	}
+}
+
+// Fix 2: writeActive leaves no leftover active-*.tmp files.
+
+func TestWriteActive_NoLeftoverTempFiles(t *testing.T) {
+	root := t.TempDir()
+	writeActive(t, root, "default", "default-content")
+	writeFile(t, root, filepath.Join("profiles", "prod.pkl"), "prod-content")
+
+	s := store.New(root)
+	if err := s.Use("prod"); err != nil {
+		t.Fatalf("Use: %v", err)
+	}
+	// Glob for any leftover active-*.tmp files.
+	matches, err := filepath.Glob(filepath.Join(root, "active-*.tmp"))
+	if err != nil {
+		t.Fatalf("glob: %v", err)
+	}
+	if len(matches) != 0 {
+		t.Errorf("leftover temp files after Use: %v", matches)
+	}
+	// Verify the active pointer is correct.
+	got, _ := s.Active()
+	if got != "prod" {
+		t.Errorf("Active = %q, want prod", got)
+	}
+}
+
+// Fix 3: Create --force does not follow symlinks outside profiles/.
+
+func TestCreate_ForceDoesNotFollowSymlink(t *testing.T) {
+	root := t.TempDir()
+	outsideDir := t.TempDir()
+	outsideFile := filepath.Join(outsideDir, "sensitive.txt")
+	outsideContent := "sensitive-content"
+	if err := os.WriteFile(outsideFile, []byte(outsideContent), 0o644); err != nil {
+		t.Fatalf("write outside file: %v", err)
+	}
+
+	// Set up profiles/ dir with a symlink pointing outside.
+	if err := os.MkdirAll(filepath.Join(root, "profiles"), 0o755); err != nil {
+		t.Fatalf("mkdir profiles: %v", err)
+	}
+	symlinkPath := filepath.Join(root, "profiles", "target.pkl")
+	if err := os.Symlink(outsideFile, symlinkPath); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	// Also set up a valid active profile so Create can proceed.
+	writeActive(t, root, "default", "default-content")
+
+	s := store.New(root)
+	if err := s.Create("target", true); err != nil {
+		t.Fatalf("Create force over symlink: %v", err)
+	}
+
+	// (a) The outside file must be unchanged.
+	got, err := os.ReadFile(outsideFile)
+	if err != nil {
+		t.Fatalf("read outside file: %v", err)
+	}
+	if string(got) != outsideContent {
+		t.Errorf("outside file modified: got %q, want %q", string(got), outsideContent)
+	}
+
+	// (b) profiles/target.pkl must now be a regular file (not a symlink).
+	info, err := os.Lstat(symlinkPath)
+	if err != nil {
+		t.Fatalf("lstat target: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Errorf("profiles/target.pkl is still a symlink after Create --force")
+	}
+	if !info.Mode().IsRegular() {
+		t.Errorf("profiles/target.pkl is not a regular file: mode=%v", info.Mode())
+	}
+	// Content must be the stub template.
+	data, err := os.ReadFile(symlinkPath)
+	if err != nil {
+		t.Fatalf("read target profile: %v", err)
+	}
+	if !strings.Contains(string(data), `amends "formae:/Config.pkl"`) {
+		t.Errorf("target profile not from stub template: %q", string(data))
+	}
+}
+
+// Fix 4: Save --force does not follow symlinks outside profiles/.
+
+func TestSave_ForceDoesNotFollowSymlink(t *testing.T) {
+	root := t.TempDir()
+	outsideDir := t.TempDir()
+	outsideFile := filepath.Join(outsideDir, "sensitive.txt")
+	outsideContent := "sensitive-content"
+	if err := os.WriteFile(outsideFile, []byte(outsideContent), 0o644); err != nil {
+		t.Fatalf("write outside file: %v", err)
+	}
+
+	// Set up an active profile with known content.
+	activeContent := "active-profile-content"
+	writeActive(t, root, "default", activeContent)
+
+	// Set up a symlink in profiles/ pointing outside.
+	symlinkPath := filepath.Join(root, "profiles", "snap.pkl")
+	if err := os.Symlink(outsideFile, symlinkPath); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	s := store.New(root)
+	if err := s.Save("snap", true); err != nil {
+		t.Fatalf("Save force over symlink: %v", err)
+	}
+
+	// (a) The outside file must be unchanged.
+	got, err := os.ReadFile(outsideFile)
+	if err != nil {
+		t.Fatalf("read outside file: %v", err)
+	}
+	if string(got) != outsideContent {
+		t.Errorf("outside file modified: got %q, want %q", string(got), outsideContent)
+	}
+
+	// (b) profiles/snap.pkl must now be a regular file (not a symlink) with the active profile's content.
+	info, err := os.Lstat(symlinkPath)
+	if err != nil {
+		t.Fatalf("lstat snap: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Errorf("profiles/snap.pkl is still a symlink after Save --force")
+	}
+	if !info.Mode().IsRegular() {
+		t.Errorf("profiles/snap.pkl is not a regular file: mode=%v", info.Mode())
+	}
+	data, err := os.ReadFile(symlinkPath)
+	if err != nil {
+		t.Fatalf("read snap profile: %v", err)
+	}
+	if string(data) != activeContent {
+		t.Errorf("snap content = %q, want %q", string(data), activeContent)
+	}
+}
