@@ -2179,12 +2179,28 @@ func validateNoOpaqueEmbedInJSON(raw json.RawMessage, label string) error {
 }
 
 func walkForOpaqueEmbed(val gjson.Result, label, path string) error {
+	if val.IsArray() {
+		// Recurse into each array element; mirror how the resolver's extractFromJson
+		// handles IsArray() so that embedded opaques nested in arrays are caught.
+		var childErr error
+		val.ForEach(func(key, child gjson.Result) bool {
+			childPath := key.String()
+			if path != "" {
+				childPath = path + "." + childPath
+			}
+			if err := walkForOpaqueEmbed(child, label, childPath); err != nil {
+				childErr = err
+				return false
+			}
+			return true
+		})
+		return childErr
+	}
 	if !val.IsObject() {
 		return nil
 	}
 	// Check if this object is an embed node.
-	embedFlag := val.Get("$embed")
-	if embedFlag.Type == gjson.True {
+	if val.Get("$embed").Bool() {
 		tmpl := val.Get("$template")
 		if tmpl.Type == gjson.String {
 			spans, err := pkgmodel.ScanEmbedSpans(tmpl.String())

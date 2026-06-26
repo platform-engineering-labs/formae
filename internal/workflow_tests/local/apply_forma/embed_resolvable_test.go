@@ -78,3 +78,67 @@ func TestMetastructure_RejectsOpaqueEmbed(t *testing.T) {
 		assert.Empty(t, resources, "no resource row should be persisted on opaque-embed rejection")
 	})
 }
+
+func TestMetastructure_RejectsOpaqueEmbed_InArray(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		// Rejection must happen even when the $embed node is nested inside an array
+		// of objects (the validator previously only walked object values, so an
+		// opaque embed inside an array would slip through — security leak).
+		m, def, err := test_helpers.NewTestMetastructure(t, &plugin.ResourcePluginOverrides{})
+		defer def()
+		require.NoError(t, err)
+
+		// Build a $res envelope with $visibility:"Opaque", framed for embed.
+		opaqueEnvelope := `{"$res":true,"$label":"some-host","$type":"FakeAWS::S3::Host","$stack":"test-stack","$property":"SecretKey","$visibility":"Opaque"}`
+		framedSpan := pkgmodel.FrameEnvelope(opaqueEnvelope)
+
+		embedField := map[string]any{
+			"$embed":    true,
+			"$template": "prefix-" + framedSpan + "-suffix",
+		}
+
+		// Place the embed node inside an array of objects — one innocent entry and
+		// one that carries the opaque embed. The validator must descend into the
+		// array to find it.
+		propsJSON, err := json.Marshal(map[string]any{
+			"Name": "consumer-resource",
+			"statements": []any{
+				map[string]any{"action": "s3:GetObject"},
+				map[string]any{"document": embedField},
+			},
+		})
+		require.NoError(t, err)
+
+		forma := &pkgmodel.Forma{
+			Stacks: []pkgmodel.Stack{{Label: "test-stack"}},
+			Resources: []pkgmodel.Resource{{
+				Label:      "consumer",
+				Type:       "FakeAWS::S3::Bucket",
+				Stack:      "test-stack",
+				Target:     "test-target",
+				Properties: json.RawMessage(propsJSON),
+			}},
+			Targets: []pkgmodel.Target{{
+				Label:     "test-target",
+				Namespace: "test-namespace",
+			}},
+		}
+
+		_, err = m.ApplyForma(forma, &config.FormaCommandConfig{
+			Mode: pkgmodel.FormaApplyModeReconcile,
+		}, "test-client-id")
+
+		require.Error(t, err, "apply should be rejected when an opaque resolvable is embedded inside an array element")
+		assert.Contains(t, err.Error(), "opaque")
+		assert.Contains(t, err.Error(), "embed")
+
+		// No FormaCommand or resource row should have been persisted.
+		fas, dsErr := m.Datastore.LoadFormaCommands()
+		require.NoError(t, dsErr)
+		assert.Empty(t, fas, "no FormaCommand should be persisted on opaque-embed-in-array rejection")
+
+		resources, dsErr := m.Datastore.LoadAllResources()
+		require.NoError(t, dsErr)
+		assert.Empty(t, resources, "no resource row should be persisted on opaque-embed-in-array rejection")
+	})
+}
