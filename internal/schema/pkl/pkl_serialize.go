@@ -24,7 +24,12 @@ import (
 
 // serializeWithPKL is a generic helper function that can serialize any data structure
 func (p PKL) serializeWithPKL(data *model.Forma, options *schema.SerializeOptions) (string, error) {
-	input, err := json.Marshal(data)
+	preprocessed, err := preprocessFormaEmbeds(data)
+	if err != nil {
+		return "", fmt.Errorf("error pre-processing embed fields: %w", err)
+	}
+
+	input, err := json.Marshal(preprocessed)
 	if err != nil {
 		return "", fmt.Errorf("error marshalling JSON: %w", err)
 	}
@@ -456,4 +461,127 @@ func (p PKL) generatePklFileWithProps(generatorDir, generatorName, outputName st
 	}
 
 	return nil
+}
+
+// preprocessFormaEmbeds returns a shallow copy of forma with every resource's
+// Properties pre-processed: any {"$embed":true,"$template":"..."} object whose
+// template contains framed RS+base64+US spans is replaced with
+// {"$embed":true,"$templateParts":[...]} where the parts array interleaves
+// literal string segments (as JSON strings) with decoded $res envelope maps
+// (as JSON objects). This avoids the PKL generator having to parse base64 or
+// binary control characters inside PKL string literals.
+func preprocessFormaEmbeds(f *model.Forma) (*model.Forma, error) {
+	if f == nil {
+		return nil, nil
+	}
+	out := *f // shallow copy
+	out.Resources = make([]model.Resource, len(f.Resources))
+	for i, r := range f.Resources {
+		nr := r
+		if len(r.Properties) > 0 {
+			processed, err := preprocessEmbedInJSON(r.Properties)
+			if err != nil {
+				return nil, fmt.Errorf("resource %q: %w", r.Label, err)
+			}
+			nr.Properties = processed
+		}
+		out.Resources[i] = nr
+	}
+	return &out, nil
+}
+
+// preprocessEmbedInJSON walks arbitrary JSON and rewrites every
+// {"$embed":true,"$template":"..."} object, replacing "$template" with
+// "$templateParts" — a JSON array of alternating literal strings and $res maps.
+func preprocessEmbedInJSON(raw json.RawMessage) (json.RawMessage, error) {
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return raw, nil // not parseable — leave unchanged
+	}
+	out, err := rewriteEmbedValue(v)
+	if err != nil {
+		return nil, err
+	}
+	result, err := json.Marshal(out)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// rewriteEmbedValue recurses into arbitrary JSON values and rewrites embed objects.
+func rewriteEmbedValue(v any) (any, error) {
+	switch val := v.(type) {
+	case map[string]any:
+		// Check for an embed node: {"$embed": true, "$template": "..."}
+		if embedFlag, ok := val["$embed"].(bool); ok && embedFlag {
+			if tmpl, ok := val["$template"].(string); ok {
+				parts, err := splitEmbedTemplate(tmpl)
+				if err != nil {
+					// Template is malformed — leave the node unchanged so
+					// downstream can surface the error rather than silently
+					// dropping embed fields.
+					return val, nil
+				}
+				result := map[string]any{
+					"$embed":         true,
+					"$templateParts": parts,
+				}
+				return result, nil
+			}
+		}
+		// Recurse into all keys
+		out := make(map[string]any, len(val))
+		for k, child := range val {
+			rewritten, err := rewriteEmbedValue(child)
+			if err != nil {
+				return nil, err
+			}
+			out[k] = rewritten
+		}
+		return out, nil
+	case []any:
+		out := make([]any, len(val))
+		for i, item := range val {
+			rewritten, err := rewriteEmbedValue(item)
+			if err != nil {
+				return nil, err
+			}
+			out[i] = rewritten
+		}
+		return out, nil
+	default:
+		return v, nil
+	}
+}
+
+// splitEmbedTemplate scans a $embed.$template string for framed RS+base64+US
+// spans and returns an ordered slice of parts. Each part is either a plain
+// string (a literal segment between/around spans) or a map[string]any (the
+// decoded $res envelope for a span). Empty literal strings between adjacent
+// spans are included so that the PKL renderer can join them faithfully.
+func splitEmbedTemplate(tmpl string) ([]any, error) {
+	spans, err := model.ScanEmbedSpans(tmpl)
+	if err != nil {
+		return nil, err
+	}
+
+	var parts []any
+	cursor := 0
+	for _, span := range spans {
+		// Literal segment before this span
+		literal := tmpl[cursor:span.Start]
+		parts = append(parts, literal)
+
+		// Decode the envelope JSON to a map
+		var env map[string]any
+		if jsonErr := json.Unmarshal([]byte(span.EnvelopeJSON), &env); jsonErr != nil {
+			return nil, fmt.Errorf("embed: span envelope is not valid JSON: %w", jsonErr)
+		}
+		parts = append(parts, env)
+		cursor = span.End
+	}
+	// Trailing literal after the last span
+	parts = append(parts, tmpl[cursor:])
+	return parts, nil
 }

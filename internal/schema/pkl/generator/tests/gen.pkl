@@ -304,6 +304,46 @@ facts {
         gen.getPackageName(deploymentconfig.DeploymentConfig) == "testprovider"
     }
 
+    // --- FakeEmbed rendering tests ---
+
+    ["FakeEmbed: genMapToPklStringWithTypes renders formae.embed"] {
+        // A resource map containing a FakeEmbed value in one of its fields.
+        // We construct the map that parseValueEnhanced would produce for a FakeEmbed
+        // and verify that genMapToPklStringWithTypes emits formae.embed(""".
+        // The FakeParts list alternates String literals and $res maps.
+        let (resMap = Map(
+            "$res", true,
+            "$label", "kvs",
+            "$type", "TestProvider::EC2::VPC",
+            "$stack", "default",
+            "$property", "VpcId"
+        ))
+        let (fakeEmbedMap = Map(
+            "__type__", "FakeEmbed",
+            "FakeParts", List("cf.kvs('", resMap, "')")
+        ))
+        let (resourceMap = Map("functionCode", fakeEmbedMap))
+        let (rendered = gen.genMapToPklStringWithTypes("TestResource", resourceMap, "test"))
+        rendered.contains("formae.embed(\"\"\"")
+    }
+
+    ["FakeEmbed: rendered output contains PKL interpolation marker"] {
+        let (resMap = Map(
+            "$res", true,
+            "$label", "kvs",
+            "$type", "TestProvider::EC2::VPC",
+            "$stack", "default",
+            "$property", "VpcId"
+        ))
+        let (fakeEmbedMap = Map(
+            "__type__", "FakeEmbed",
+            "FakeParts", List("prefix", resMap, "suffix")
+        ))
+        let (resourceMap = Map("code", fakeEmbedMap))
+        let (rendered = gen.genMapToPklStringWithTypes("TestResource", resourceMap, "test"))
+        rendered.contains("\\(")
+    }
+
     ["duplicate Typed values produce single import after dedup"] {
         // Two SubResource instances in the same resource should not
         // produce duplicate __import_statement__ entries after dedup.

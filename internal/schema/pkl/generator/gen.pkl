@@ -259,6 +259,13 @@ class FakeResolvable extends formae.Resolvable {
   FakeProperty: String
 }
 
+/// Carrier for a pre-processed $embed field.
+/// FakeParts is a List whose elements are alternately String (literal segment)
+/// and Map (decoded $res envelope — same shape FakeResolvable already handles).
+class FakeEmbed {
+  FakeParts: List
+}
+
 function applyPropertyWithMapping(valueAsMap: Map, prop: reflect.Property, reverseMapping: Mapping<String, String>) =
     // First try the direct property name
     if (valueAsMap.containsKey(prop.name))
@@ -382,6 +389,10 @@ local function applyDynamicOrMapping(type: reflect.Class, value: Dynamic|Mapping
             FakeVisibility = visibility
             FakeStrategy = strategy
         }
+    else if (valueAsMap.containsKey("$embed") && valueAsMap.containsKey("$templateParts"))
+        new FakeEmbed {
+            FakeParts = (valueAsMap["$templateParts"] as Dynamic).toList()
+        }
     else
         // Get the reverse mapping for this class
         let (reverseMapping =
@@ -502,6 +513,11 @@ local function parseValueEnhanced(value: Any): Any =
   else if (value is Typed)
     let (m = value.toMap())
     let (typeName = getTypeName(value))
+    // FakeEmbed: preserve parts as-is (each part is either a String literal
+    // or a Dynamic/$res map — formatValueWithTypes handles the rendering).
+    if (typeName == "FakeEmbed")
+      Map("__type__", "FakeEmbed", "FakeParts", (value as FakeEmbed).FakeParts)
+    else
     let (importInfo = getImportInfoForType(value.getClass(), typeName, value))
     let (defaultMap =
       if (typeName == "FakeResolvable")
@@ -659,6 +675,52 @@ local function formatValueWithTypes(value: Any, indent: String): String =
           let (withVisibility = if (visibility == "Opaque") base + ".opaque" else base)
           let (withStrategy = if (strategy == "SetOnce") withVisibility + ".setOnce" else withVisibility)
             withStrategy
+        else if (typeName == "FakeEmbed")
+          // Render as formae.embed("""...\(<resolvable-ref>)...""").
+          // FakeParts is a List alternating String literals and $res maps.
+          // Each $res map is rendered using the existing FakeResolvable path
+          // (via applyDynamicOrMapping) and wrapped in \(...).
+          let (parts = value.getOrNull("FakeParts") as List)
+          let (innerContent = parts.foldIndexed("", (idx: Int, acc: String, part: Any) ->
+            if (part is String)
+              acc + part
+            else if (part is Map)
+              // Render the $res map as a FakeResolvable using applyDynamicOrMapping,
+              // then format it and wrap in PKL string interpolation \(...).
+              let (resMap = part as Map<String, Any>)
+              let (s = resMap.getOrNull("$stack") as String?)
+              let (l = resMap.getOrNull("$label") as String?)
+              let (refType = resMap.getOrNull("$type") as String?)
+              let (property = resMap.getOrNull("$property") as String?)
+              let (resolvableMapping = getResolvablePropertyMapping(refType))
+              let (mappedProperty =
+                if (property == null)
+                  null
+                else if (resolvableMapping.containsKey(property))
+                  resolvableMapping[property]
+                else if (property.contains("."))
+                  let (segments = splitGjsonPath(property))
+                  let (base = segments[0])
+                  let (rest = segments.drop(1))
+                  let (mappedBase = if (resolvableMapping.containsKey(base)) resolvableMapping[base] else base)
+                  mappedBase + rest.fold("", (a, seg) -> a + "." + seg)
+                else
+                  property
+              )
+              // Build the inline resolvable reference expression
+              let (resInfo = resolvables.MapResolvableResourceUri().getOrNull(refType))
+              let (refExpr =
+                if (resInfo == null || s == "$unmanaged")
+                  // Unresolvable — emit the raw value or a placeholder
+                  resMap.getOrNull("$value") as String? ?? "null"
+                else
+                  "\(resInfo.importName).\(resInfo.clazz.simpleName) { stack = \"\(s)\" //resolvable\n\(indent)  label = \"\(l)\"\n\(indent)}.\(renderResolvableProperty(mappedProperty))"
+              )
+              acc + "\\(" + refExpr + ")"
+            else
+              acc
+          ))
+          "formae.embed(\"\"\"\(innerContent)\"\"\")"
         else
           typeDeclaration + " {\n" +
           formatNestedContentWithTypes(value, indent + "  ") +
