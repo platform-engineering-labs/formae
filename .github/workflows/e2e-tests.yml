@@ -113,6 +113,8 @@ jobs:
             system_plugins: compose grafana
           - test: TestProjectInit
             system_plugins: aws azure
+          - test: TestProfileRouting_E2E
+            system_plugins: aws
           - test: TestSimulateApply
             system_plugins: aws
           - test: TestExtractAndReapply
