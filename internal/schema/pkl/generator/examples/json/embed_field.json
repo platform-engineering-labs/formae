@@ -11,6 +11,13 @@
   ],
   "Resources": [
     {
+      "Label": "my-vpc",
+      "Type": "TestProvider::EC2::VPC",
+      "Stack": "compute-stack",
+      "Target": "testprovider-target",
+      "Properties": { "CidrBlock": "10.0.0.0/16" }
+    },
+    {
       "Label": "web-server",
       "Type": "TestProvider::Compute::Server",
       "Stack": "compute-stack",
@@ -21,16 +28,16 @@
         "UserData": {
           "$embed": true,
           "$templateParts": [
-            "echo prefix-",
+            "echo vpc=",
             {
               "$res": true,
-              "$label": "web-server",
-              "$type": "TestProvider::Compute::Server",
+              "$label": "my-vpc",
+              "$type": "TestProvider::EC2::VPC",
               "$stack": "compute-stack",
-              "$property": "ServerId",
-              "$value": "srv-abc123"
+              "$property": "VpcId",
+              "$value": "vpc-abc123"
             },
-            "-suffix"
+            " done"
           ]
         }
       }

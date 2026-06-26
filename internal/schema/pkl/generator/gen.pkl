@@ -634,6 +634,20 @@ local function escapeString(str: String): String =
     .replaceAll("\r", "\\r")     // Escape carriage returns
     .replaceAll("\t", "\\t")     // Escape tabs
 
+// toCamelCase mirrors pklGenerator.toCamelCase (cannot import it — pklGenerator
+// imports this module). Used to reference the generated stack local by name.
+local function embedToCamelCase(input: String): String =
+  if (input == "$unmanaged")
+    "myStack"
+  else
+    let (parts = input.split("-"))
+    if (parts.length == 1)
+      input
+    else
+      parts.first + parts.drop(1).map((part) ->
+        if (part.isEmpty) "" else part.substring(0, 1).toUpperCase() + part.substring(1, part.length)
+      ).join("")
+
 local function renderEmbedRefPart(resMap: Map<String, Any>, indent: String): String =
   let (s = resMap.getOrNull("$stack") as String?)
   let (l = resMap.getOrNull("$label") as String?)
@@ -661,8 +675,14 @@ local function renderEmbedRefPart(resMap: Map<String, Any>, indent: String): Str
     escapeString(resMap.getOrNull("$value") as String? ?? "")
   else
     // Single-line interpolation so the enclosing single-line embed string stays
-    // valid: \(<Module>.<Resolvable> { stack = ".."; label = ".." }.<prop>)
-    "\\(\(resInfo.importName).\(resInfo.clazz.simpleName) { stack = \"\(s)\"; label = \"\(l)\" }.\(renderResolvableProperty(mappedProperty)))"
+    // valid. The class must be parenthesized — `(X) { .. }` — because an amends
+    // expression in expression context (inside \(…)) requires it. The stack is
+    // emitted already in its localized String form (<stackLocal>.res.label) so
+    // the post-processing localization (which would otherwise rewrite a bare
+    // `stack = ".."` to a StackResolvable, mismatching Resolvable.stack: String?)
+    // leaves it alone; this is the same value the //resolvable marker yields on
+    // the whole-value path.
+    "\\((\(resInfo.importName).\(resInfo.clazz.simpleName)) { stack = \(embedToCamelCase(s ?? "")).res.label; label = \"\(l)\" }.\(renderResolvableProperty(mappedProperty)))"
 
 local function formatValueWithTypes(value: Any, indent: String): String =
   if (value is Dynamic)
