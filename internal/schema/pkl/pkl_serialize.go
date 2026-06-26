@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -518,9 +519,7 @@ func rewriteEmbedValue(v any) (any, error) {
 			if tmpl, ok := val["$template"].(string); ok {
 				parts, err := splitEmbedTemplate(tmpl)
 				if err != nil {
-					// Template is malformed — leave the node unchanged so
-					// downstream can surface the error rather than silently
-					// dropping embed fields.
+					slog.Warn("embed: malformed $embed template, passing through unchanged", "error", err)
 					return val, nil
 				}
 				result := map[string]any{

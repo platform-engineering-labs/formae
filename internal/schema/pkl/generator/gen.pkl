@@ -628,8 +628,40 @@ local function escapeString(str: String): String =
     .replaceAll("\r", "\\r")     // Escape carriage returns
     .replaceAll("\t", "\\t")     // Escape tabs
 
+local function renderEmbedRefPart(resMap: Map<String, Any>, indent: String): String =
+  let (s = resMap.getOrNull("$stack") as String?)
+  let (l = resMap.getOrNull("$label") as String?)
+  let (refType = resMap.getOrNull("$type") as String?)
+  let (property = resMap.getOrNull("$property") as String?)
+  let (resolvableMapping = getResolvablePropertyMapping(refType))
+  let (mappedProperty =
+    if (property == null)
+      null
+    else if (resolvableMapping.containsKey(property))
+      resolvableMapping[property]
+    else if (property.contains("."))
+      let (segments = splitGjsonPath(property))
+      let (base = segments[0])
+      let (rest = segments.drop(1))
+      let (mappedBase = if (resolvableMapping.containsKey(base)) resolvableMapping[base] else base)
+      mappedBase + rest.fold("", (a, seg) -> a + "." + seg)
+    else
+      property
+  )
+  let (resInfo = resolvables.MapResolvableResourceUri().getOrNull(refType))
+  let (refExpr =
+    if (resInfo == null || s == "$unmanaged")
+      resMap.getOrNull("$value") as String? ?? "null"
+    else
+      "\(resInfo.importName).\(resInfo.clazz.simpleName) { stack = \"\(s)\" //resolvable\n\(indent)  label = \"\(l)\"\n\(indent)}.\(renderResolvableProperty(mappedProperty))"
+  )
+  "\\(" + refExpr + ")"
+
 local function formatValueWithTypes(value: Any, indent: String): String =
-  if (value is Map)
+  if (value is Dynamic)
+    // JSON-deserialized objects arrive as Dynamic; normalize to Map and recurse.
+    formatValueWithTypes(value.toMap(), indent)
+  else if (value is Map)
     // Check if this map represents a typed object (has a special type key)
     if (value.containsKey("__type__"))
       let (typeName = value["__type__"])
@@ -685,38 +717,10 @@ local function formatValueWithTypes(value: Any, indent: String): String =
             if (part is String)
               acc + part
             else if (part is Map)
-              // Render the $res map as a FakeResolvable using applyDynamicOrMapping,
-              // then format it and wrap in PKL string interpolation \(...).
-              let (resMap = part as Map<String, Any>)
-              let (s = resMap.getOrNull("$stack") as String?)
-              let (l = resMap.getOrNull("$label") as String?)
-              let (refType = resMap.getOrNull("$type") as String?)
-              let (property = resMap.getOrNull("$property") as String?)
-              let (resolvableMapping = getResolvablePropertyMapping(refType))
-              let (mappedProperty =
-                if (property == null)
-                  null
-                else if (resolvableMapping.containsKey(property))
-                  resolvableMapping[property]
-                else if (property.contains("."))
-                  let (segments = splitGjsonPath(property))
-                  let (base = segments[0])
-                  let (rest = segments.drop(1))
-                  let (mappedBase = if (resolvableMapping.containsKey(base)) resolvableMapping[base] else base)
-                  mappedBase + rest.fold("", (a, seg) -> a + "." + seg)
-                else
-                  property
-              )
-              // Build the inline resolvable reference expression
-              let (resInfo = resolvables.MapResolvableResourceUri().getOrNull(refType))
-              let (refExpr =
-                if (resInfo == null || s == "$unmanaged")
-                  // Unresolvable — emit the raw value or a placeholder
-                  resMap.getOrNull("$value") as String? ?? "null"
-                else
-                  "\(resInfo.importName).\(resInfo.clazz.simpleName) { stack = \"\(s)\" //resolvable\n\(indent)  label = \"\(l)\"\n\(indent)}.\(renderResolvableProperty(mappedProperty))"
-              )
-              acc + "\\(" + refExpr + ")"
+              acc + renderEmbedRefPart(part as Map<String, Any>, indent)
+            else if (part is Dynamic)
+              // JSON-deserialized $res envelope objects arrive as Dynamic, not Map.
+              acc + renderEmbedRefPart(part.toMap(), indent)
             else
               acc
           ))
