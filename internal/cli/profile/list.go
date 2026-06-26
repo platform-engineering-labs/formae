@@ -5,21 +5,30 @@
 package profile
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 
+	"github.com/platform-engineering-labs/formae/internal/cli/printer"
 	"github.com/platform-engineering-labs/formae/internal/cli/profile/store"
 	"github.com/spf13/cobra"
 )
 
+// listOutput is the machine-readable shape of `profile list`.
+type listOutput struct {
+	Active   *string  `json:"active" yaml:"active"`
+	Profiles []string `json:"profiles" yaml:"profiles"`
+}
+
 func newListCmd() *cobra.Command {
-	var asJSON bool
 	c := &cobra.Command{
 		Use:   "list",
 		Short: "List all profiles, marking the active one with *",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cc *cobra.Command, args []string) error {
+			consumer, schema, err := resolveOutput(cc)
+			if err != nil {
+				return err
+			}
 			s, err := openStore()
 			if err != nil {
 				return err
@@ -32,27 +41,26 @@ func newListCmd() *cobra.Command {
 			if err != nil && !errors.Is(err, store.ErrNotInitialized) {
 				return err
 			}
-			if asJSON {
-				out := struct {
-					Active   *string  `json:"active"`
-					Profiles []string `json:"profiles"`
-				}{Profiles: names}
+
+			if consumer == printer.ConsumerMachine {
+				out := listOutput{Profiles: names}
 				if active != "" {
 					out.Active = &active
 				}
-				enc := json.NewEncoder(cmd.OutOrStdout())
-				return enc.Encode(out)
+				p := printer.NewMachineReadablePrinter[listOutput](cc.OutOrStdout(), schema)
+				return p.Print(&out)
 			}
+
 			for _, n := range names {
 				marker := "  "
 				if n == active {
 					marker = "* "
 				}
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s%s\n", marker, n)
+				_, _ = fmt.Fprintf(cc.OutOrStdout(), "%s%s\n", marker, n)
 			}
 			return nil
 		},
 	}
-	c.Flags().BoolVar(&asJSON, "json", false, "emit JSON instead of human-readable output")
+	addOutputFlags(c)
 	return c
 }

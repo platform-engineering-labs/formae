@@ -71,9 +71,9 @@ func TestProfileLifecycle(t *testing.T) {
 	if _, _, code = run(t, bin, cfgDir, "profile", "create", "staging"); code != 0 {
 		t.Fatalf("create staging: code=%d", code)
 	}
-	jsonOut, _, code := run(t, bin, cfgDir, "profile", "list", "--json")
+	jsonOut, _, code := run(t, bin, cfgDir, "profile", "list", "--output-consumer", "machine")
 	if code != 0 {
-		t.Fatalf("list --json: code=%d", code)
+		t.Fatalf("list --output-consumer machine: code=%d", code)
 	}
 	var listed struct {
 		Active   *string  `json:"active"`
@@ -89,6 +89,11 @@ func TestProfileLifecycle(t *testing.T) {
 		t.Errorf("profiles after create = %v", listed.Profiles)
 	}
 
+	// Invalid output-consumer is rejected.
+	if _, _, code = run(t, bin, cfgDir, "profile", "list", "--output-consumer", "bogus"); code == 0 {
+		t.Errorf("list --output-consumer bogus: expected nonzero exit")
+	}
+
 	// `use staging`, confirm `current`.
 	if _, _, code = run(t, bin, cfgDir, "profile", "use", "staging"); code != 0 {
 		t.Fatalf("use staging: code=%d", code)
@@ -96,6 +101,21 @@ func TestProfileLifecycle(t *testing.T) {
 	out, _, _ = run(t, bin, cfgDir, "profile", "current")
 	if strings.TrimSpace(out) != "staging" {
 		t.Errorf("current after use = %q", out)
+	}
+
+	// `current --output-consumer machine` emits the active profile as JSON.
+	curJSON, _, code := run(t, bin, cfgDir, "profile", "current", "--output-consumer", "machine")
+	if code != 0 {
+		t.Fatalf("current --output-consumer machine: code=%d", code)
+	}
+	var cur struct {
+		Active *string `json:"active"`
+	}
+	if err := json.Unmarshal([]byte(curJSON), &cur); err != nil {
+		t.Fatalf("decode current: %v\n%s", err, curJSON)
+	}
+	if cur.Active == nil || *cur.Active != "staging" {
+		t.Errorf("current machine active = %v, want staging", cur.Active)
 	}
 
 	// `use` unknown -> nonzero.
