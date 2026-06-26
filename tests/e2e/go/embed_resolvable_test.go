@@ -49,8 +49,11 @@ func TestEmbedResolvable(t *testing.T) {
 
 	// Step 2: Extract — the regenerated PKL must carry the embed as
 	// formae.embed("…\(kvStore.res.id)…"), with no raw envelope leaking.
+	// --schema-location local: the AWS plugin is user-installed (built from
+	// source), so the extracted PKL must reference the on-disk plugin schema
+	// for the reapply below to resolve.
 	extracted := filepath.Join(t.TempDir(), "extracted.pkl")
-	cli.ExtractToFile(t, stackQuery, extracted)
+	cli.ExtractToFile(t, stackQuery, extracted, "--schema-location", "local")
 	body, err := os.ReadFile(extracted)
 	if err != nil {
 		t.Fatalf("failed to read extracted PKL: %v", err)
@@ -83,7 +86,7 @@ func TestEmbedResolvable(t *testing.T) {
 	// embed survived a read-back from the cloud (envelope kept structured).
 	cli.ForceSync(t)
 	reextracted := filepath.Join(t.TempDir(), "extracted2.pkl")
-	cli.ExtractToFile(t, stackQuery, reextracted)
+	cli.ExtractToFile(t, stackQuery, reextracted, "--schema-location", "local")
 	body2, err := os.ReadFile(reextracted)
 	if err != nil {
 		t.Fatalf("failed to read re-extracted PKL: %v", err)
