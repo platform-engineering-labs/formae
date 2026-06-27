@@ -559,8 +559,12 @@ func (m *propertyMerger) mergeArray(path string, userVal, pluginVal gjson.Result
 	userArray := userVal.Array()
 	pluginArray := pluginVal.Array()
 
-	// Get the field name from the path (e.g., "networks" from "networks" or "networks.0.uuid")
-	fieldName := m.getFieldNameFromPath(path)
+	// Resolve this array's own hint by its index-less full path (e.g.
+	// "ContainerDefinitions.0.Environment" -> "ContainerDefinitions.Environment"),
+	// mirroring the diff-calculator's hint-key convention. A nested array must resolve
+	// its own hint rather than inherit its top-level field's, or e.g. the ECS env
+	// sub-array would inherit ContainerDefinitions' EntitySet hint.
+	fieldName := stripArrayIndicesForHintLookup(path)
 	hint := m.schema.Hints[fieldName]
 
 	// Track which user elements have been matched (to avoid double-matching)
@@ -588,36 +592,18 @@ func (m *propertyMerger) mergeArray(path string, userVal, pluginVal gjson.Result
 		}
 	}
 
-	// Phase 2: For unmatched plugin elements, try to pair with user elements that have $ref-without-$value
-	// These couldn't be matched in phase 1 because they don't have a concrete value yet
+	// Phase 2: For unmatched plugin elements, pair with user elements that have $ref-without-$value
+	// These couldn't be matched in phase 1 because they don't have a concrete value yet.
 	for _, pending := range unmatchedPluginElements {
 		childPath := fmt.Sprintf("%s.%d", path, pending.pluginIdx)
 
-		// Look for unmatched user element with $ref but no $value
-		matchedUserElem := m.findUserElementWithUnresolvedRef(userArray, matchedUserIndices)
+		matchedUserElem := m.findUnresolvedRefMatch(userArray, pending.pluginElem, pending.pluginIdx, hint, matchedUserIndices)
 		if matchedUserElem.matchedIdx >= 0 {
 			matchedUserIndices[matchedUserElem.matchedIdx] = true
 		}
 
 		m.mergeValue(childPath, matchedUserElem.elem, pending.pluginElem)
 	}
-}
-
-// getFieldNameFromPath extracts the top-level field name from a JSON path
-// e.g., "networks" -> "networks", "networks.0.uuid" -> "networks"
-func (m *propertyMerger) getFieldNameFromPath(path string) string {
-	// Remove leading dot if present
-	if path != "" && path[0] == '.' {
-		path = path[1:]
-	}
-
-	// Find the first dot or bracket
-	for i, c := range path {
-		if c == '.' || c == '[' {
-			return path[:i]
-		}
-	}
-	return path
 }
 
 // findMatchingUserElementWithIndex finds a user array element that matches the plugin element,
@@ -675,18 +661,65 @@ type unresolvedRefMatch struct {
 	matchedIdx int
 }
 
-// findUserElementWithUnresolvedRef finds the first unmatched user element that contains
-// a $ref without a $value (unresolved reference). These elements couldn't be matched
-// by value comparison because their value isn't known yet.
-func (m *propertyMerger) findUserElementWithUnresolvedRef(userArray []gjson.Result, excludeIndices map[int]bool) unresolvedRefMatch {
+// findUnresolvedRefMatch pairs a leftover plugin element with an unmatched user element that
+// carries an unresolved $ref (no $value yet) — these couldn't be matched by value in phase 1.
+//
+//   - Ordered arrays (UpdateMethodArray) pair strictly by index position, so a literal at one
+//     index never inherits the $ref of an unresolved-$ref element at another index.
+//   - For default/Set object arrays the pairing is structural: a candidate is grafted only when
+//     its concrete (non-unresolved-$ref) field(s) uniquely identify the plugin element. So a
+//     literal element can never inherit a sibling's $ref; if no candidate's concrete identity
+//     matches, the plugin's plain value is rendered instead.
+//   - Pure-$ref candidates (no concrete identity field on any of them, e.g. networkInterfaces
+//     whose fields are all $refs) fall back to positional pairing so refs are not lost.
+func (m *propertyMerger) findUnresolvedRefMatch(userArray []gjson.Result, pluginElem gjson.Result, pluginIdx int, hint pkgmodel.FieldHint, excludeIndices map[int]bool) unresolvedRefMatch {
+	if hint.UpdateMethod == pkgmodel.FieldUpdateMethodArray {
+		if pluginIdx < len(userArray) && !excludeIndices[pluginIdx] {
+			return unresolvedRefMatch{elem: userArray[pluginIdx], matchedIdx: pluginIdx}
+		}
+		return unresolvedRefMatch{elem: gjson.Result{Type: gjson.Null}, matchedIdx: -1}
+	}
+
+	var candidates []unresolvedRefMatch
+	anyConcrete := false
 	for i, userElem := range userArray {
 		if excludeIndices[i] {
 			continue
 		}
-		if m.hasUnresolvedRef(userElem) {
-			return unresolvedRefMatch{elem: userElem, matchedIdx: i}
+		if !m.hasUnresolvedRef(userElem) {
+			continue
+		}
+		candidates = append(candidates, unresolvedRefMatch{elem: userElem, matchedIdx: i})
+		if m.hasConcreteField(userElem) {
+			anyConcrete = true
 		}
 	}
+
+	if len(candidates) == 0 {
+		return unresolvedRefMatch{elem: gjson.Result{Type: gjson.Null}, matchedIdx: -1}
+	}
+
+	// No candidate carries a concrete identity field: keep positional pairing so refs survive.
+	if !anyConcrete {
+		return candidates[0]
+	}
+
+	// Graft only on a unique concrete-identity match.
+	match := unresolvedRefMatch{elem: gjson.Result{Type: gjson.Null}, matchedIdx: -1}
+	matchCount := 0
+	for _, c := range candidates {
+		if !m.hasConcreteField(c.elem) {
+			continue
+		}
+		if m.concreteFieldsMatchPlugin(c.elem, pluginElem) {
+			match = c
+			matchCount++
+		}
+	}
+	if matchCount == 1 {
+		return match
+	}
+	// Concrete identity exists but no/ambiguous match → render the plain plugin value.
 	return unresolvedRefMatch{elem: gjson.Result{Type: gjson.Null}, matchedIdx: -1}
 }
 
@@ -699,13 +732,57 @@ func (m *propertyMerger) hasUnresolvedRef(elem gjson.Result) bool {
 
 	hasUnresolved := false
 	elem.ForEach(func(key, val gjson.Result) bool {
-		if val.IsObject() && val.Get("$ref").Exists() && !val.Get("$value").Exists() {
+		if m.isUnresolvedRef(val) {
 			hasUnresolved = true
 			return false // stop iteration
 		}
 		return true
 	})
 	return hasUnresolved
+}
+
+// isUnresolvedRef reports whether val is a $ref object that has no $value yet.
+func (m *propertyMerger) isUnresolvedRef(val gjson.Result) bool {
+	return val.IsObject() && val.Get("$ref").Exists() && !val.Get("$value").Exists()
+}
+
+// hasConcreteField reports whether elem has at least one direct field that is not an
+// unresolved $ref (a literal or a resolved $ref) — i.e. a field usable as a structural identity.
+func (m *propertyMerger) hasConcreteField(elem gjson.Result) bool {
+	if !elem.IsObject() {
+		return false
+	}
+	found := false
+	elem.ForEach(func(_, val gjson.Result) bool {
+		if m.isUnresolvedRef(val) {
+			return true // skip unresolved-$ref fields
+		}
+		found = true
+		return false // stop iteration
+	})
+	return found
+}
+
+// concreteFieldsMatchPlugin reports whether every concrete (non-unresolved-$ref) direct field of
+// userElem equals the corresponding field of pluginElem. Unresolved-$ref fields are ignored
+// because their value isn't known yet.
+func (m *propertyMerger) concreteFieldsMatchPlugin(userElem, pluginElem gjson.Result) bool {
+	if !userElem.IsObject() || !pluginElem.IsObject() {
+		return false
+	}
+	allMatch := true
+	userElem.ForEach(func(key, userVal gjson.Result) bool {
+		if m.isUnresolvedRef(userVal) {
+			return true // ignore unresolved-$ref fields
+		}
+		pluginVal := pluginElem.Get(key.String())
+		if !pluginVal.Exists() || !m.valuesMatch(userVal, pluginVal) {
+			allMatch = false
+			return false
+		}
+		return true
+	})
+	return allMatch
 }
 
 // flattenRefValue extracts the actual value from a potential $ref object
