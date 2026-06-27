@@ -495,6 +495,216 @@ func TestGeneratePatch_ShouldResolveRefs(t *testing.T) {
 	assert.ElementsMatch(t, []string{"replace", "add", "add"}, []string{patches[0].Operation, patches[1].Operation, patches[2].Operation})
 }
 
+// A RecordSet's ResourceRecords sourced from a list-valued resolvable (an ACM
+// Certificate's ValidationRecords[0].Values) must reconcile to a no-op once the
+// live value matches. The live side is a native array (ConvertToPluginFormat
+// already unwrapped the recorded resolvable); the desired side keeps its $ref
+// envelope because its $value was not cached, so the value is resolved from
+// ResolvableProperties — which stores every value as a string, i.e. raw JSON
+// text for a list. Left as a string it would diff against the native array on
+// every reconcile.
+func TestGeneratePatch_ListResolvableMatchingLiveValue_NoPatch(t *testing.T) {
+	resourceKsuid := util.NewID()
+
+	document := []byte(`{"ResourceRecords": ["_7a296.acm-validations.aws"]}`)
+
+	patch := fmt.Appendf(nil, `{
+		"ResourceRecords": {
+			"$ref": "formae://%s#/ValidationRecords.0.Values"
+		}
+	}`, resourceKsuid)
+
+	schema := pkgmodel.Schema{Fields: []string{"ResourceRecords"}}
+
+	props := resolver.NewResolvableProperties()
+	props.Add(resourceKsuid, "ValidationRecords.0.Values", `["_7a296.acm-validations.aws"]`)
+
+	patchDoc, createOnlyPatch, err := generatePatch(document, patch, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Empty(t, createOnlyPatch)
+	assert.Nil(t, patchDoc, "an unchanged list-valued resolvable must reconcile to a no-op")
+}
+
+// A multi-element list-valued resolvable whose live value matches (same order)
+// reconciles to a no-op.
+func TestGeneratePatch_MultiValueListResolvableMatchingLiveValue_NoPatch(t *testing.T) {
+	resourceKsuid := util.NewID()
+
+	document := []byte(`{"ResourceRecords": ["10.0.0.1", "10.0.0.2"]}`)
+
+	patch := fmt.Appendf(nil, `{
+		"ResourceRecords": {
+			"$ref": "formae://%s#/Values"
+		}
+	}`, resourceKsuid)
+
+	schema := pkgmodel.Schema{Fields: []string{"ResourceRecords"}}
+
+	props := resolver.NewResolvableProperties()
+	props.Add(resourceKsuid, "Values", `["10.0.0.1","10.0.0.2"]`)
+
+	patchDoc, createOnlyPatch, err := generatePatch(document, patch, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Empty(t, createOnlyPatch)
+	assert.Nil(t, patchDoc)
+}
+
+// A list-valued resolvable whose resolved value genuinely differs from the live
+// value still emits a replace op — the normalization must not mask real changes.
+func TestGeneratePatch_ListResolvableGenuineChange_EmitsReplace(t *testing.T) {
+	resourceKsuid := util.NewID()
+
+	document := []byte(`{"ResourceRecords": ["old.acm-validations.aws"]}`)
+
+	patch := fmt.Appendf(nil, `{
+		"ResourceRecords": {
+			"$ref": "formae://%s#/ValidationRecords.0.Values"
+		}
+	}`, resourceKsuid)
+
+	schema := pkgmodel.Schema{Fields: []string{"ResourceRecords"}}
+
+	props := resolver.NewResolvableProperties()
+	props.Add(resourceKsuid, "ValidationRecords.0.Values", `["new.acm-validations.aws"]`)
+
+	patchDoc, _, err := generatePatch(document, patch, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	require.NotNil(t, patchDoc, "a genuine list change must still emit a patch")
+
+	var patches []jsonpatch.JsonPatchOperation
+	require.NoError(t, json.Unmarshal(patchDoc, &patches))
+	require.NotEmpty(t, patches)
+	for _, p := range patches {
+		assert.Contains(t, p.Path, "/ResourceRecords")
+	}
+	assert.Contains(t, string(patchDoc), "new.acm-validations.aws")
+}
+
+// An object-valued resolvable whose live value matches reconciles to a no-op,
+// including nested list / null / number / bool values.
+func TestGeneratePatch_ObjectResolvableMatchingLiveValue_NoPatch(t *testing.T) {
+	resourceKsuid := util.NewID()
+
+	document := []byte(`{"Endpoints": {"host": "db.internal", "port": 5432, "tls": true, "aliases": ["a", "b"], "fallback": null}}`)
+
+	patch := fmt.Appendf(nil, `{
+		"Endpoints": {
+			"$ref": "formae://%s#/Endpoints"
+		}
+	}`, resourceKsuid)
+
+	schema := pkgmodel.Schema{Fields: []string{"Endpoints"}}
+
+	props := resolver.NewResolvableProperties()
+	props.Add(resourceKsuid, "Endpoints", `{"host":"db.internal","port":5432,"tls":true,"aliases":["a","b"],"fallback":null}`)
+
+	patchDoc, createOnlyPatch, err := generatePatch(document, patch, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Empty(t, createOnlyPatch)
+	assert.Nil(t, patchDoc)
+}
+
+// Regression guard: a String field whose legitimate value is JSON text (e.g. an
+// IAM policy document) sourced from a resolvable reads back as a string on the
+// live side, so the desired side must stay a string — a blind "parse anything
+// that looks like JSON" would turn this into perpetual drift.
+func TestGeneratePatch_JsonStringScalarResolvable_StaysString_NoPatch(t *testing.T) {
+	resourceKsuid := util.NewID()
+
+	document := []byte(`{"PolicyDocument": "{\"Version\":\"2012-10-17\"}"}`)
+
+	patch := fmt.Appendf(nil, `{
+		"PolicyDocument": {
+			"$ref": "formae://%s#/PolicyDocument"
+		}
+	}`, resourceKsuid)
+
+	schema := pkgmodel.Schema{Fields: []string{"PolicyDocument"}}
+
+	props := resolver.NewResolvableProperties()
+	props.Add(resourceKsuid, "PolicyDocument", `{"Version":"2012-10-17"}`)
+
+	patchDoc, createOnlyPatch, err := generatePatch(document, patch, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Empty(t, createOnlyPatch)
+	assert.Nil(t, patchDoc, "a JSON-string scalar must not be reparsed into a native structure")
+}
+
+// An array whose elements are themselves object-valued resolvables must
+// normalize each element against the live element at the same index, not just
+// top-level fields. Otherwise an unchanged list of resolved objects diffs
+// forever.
+func TestGeneratePatch_ArrayElementObjectResolvableMatchingLiveValue_NoPatch(t *testing.T) {
+	resourceKsuid := util.NewID()
+
+	document := []byte(`{"Items": [{"host": "db.internal", "port": 5432}]}`)
+
+	patch := fmt.Appendf(nil, `{
+		"Items": [
+			{"$ref": "formae://%s#/Endpoints.0"}
+		]
+	}`, resourceKsuid)
+
+	schema := pkgmodel.Schema{Fields: []string{"Items"}}
+
+	props := resolver.NewResolvableProperties()
+	props.Add(resourceKsuid, "Endpoints.0", `{"host":"db.internal","port":5432}`)
+
+	patchDoc, createOnlyPatch, err := generatePatch(document, patch, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Empty(t, createOnlyPatch)
+	assert.Nil(t, patchDoc, "an unchanged array of object-valued resolvables must reconcile to a no-op")
+}
+
+// The literal string "null" unmarshals into []any/map[string]any as a nil value.
+// For a polymorphic field whose live value is an array/object but whose resolved
+// desired value is the string "null", normalization must keep it a string (a
+// genuine type change) rather than silently rewrite it to JSON null.
+func TestGeneratePatch_StringNullResolvableAgainstArray_StaysString(t *testing.T) {
+	resourceKsuid := util.NewID()
+
+	document := []byte(`{"Field": ["existing"]}`)
+
+	patch := fmt.Appendf(nil, `{
+		"Field": {
+			"$ref": "formae://%s#/Polymorphic"
+		}
+	}`, resourceKsuid)
+
+	schema := pkgmodel.Schema{Fields: []string{"Field"}}
+
+	props := resolver.NewResolvableProperties()
+	props.Add(resourceKsuid, "Polymorphic", "null")
+
+	patchDoc, _, err := generatePatch(document, patch, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	require.NotNil(t, patchDoc)
+	assert.Contains(t, string(patchDoc), `"value":"null"`, "the literal string \"null\" must not be rewritten to JSON null")
+}
+
+// The representation normalization must never touch an unresolved forward
+// reference: a $ref with no entry in ResolvableProperties (a forward reference
+// to a not-yet-created resource) must keep its envelope and gain no $value, so
+// it is resolved at execution time.
+func TestResolveRefs_UnresolvedForwardRefLeftIntact(t *testing.T) {
+	resourceKsuid := util.NewID()
+	uri := fmt.Sprintf("formae://%s#/ValidationRecords.0.Values", resourceKsuid)
+
+	current := map[string]any{"ResourceRecords": []any{"live.acm-validations.aws"}}
+	mod := map[string]any{
+		"ResourceRecords": map[string]any{"$ref": uri},
+	}
+
+	err := resolveRefs(current, mod, resolver.NewResolvableProperties())
+	require.NoError(t, err)
+
+	ref, ok := mod["ResourceRecords"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, uri, ref["$ref"])
+	_, hasValue := ref["$value"]
+	assert.False(t, hasValue, "an unresolved forward ref must not gain a $value")
+}
+
 func TestRemoveNonSchemaFields_ThreeFieldsTotalTwoSchemaFields_RemovesNonSchemaField(t *testing.T) {
 	document := []byte(`{"a": "a", "b": "b", "c": "c"}`)
 	schemaFields := []string{"a", "c"}
