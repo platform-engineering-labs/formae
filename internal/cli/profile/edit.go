@@ -2,16 +2,28 @@
 //
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
-package cli
+package profile
 
 import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 
-	"github.com/platform-engineering-labs/formae/cmd/formae-config/internal/profiles"
+	"github.com/platform-engineering-labs/formae/internal/cli/profile/store"
 	"github.com/spf13/cobra"
 )
+
+// editorCommand splits the EDITOR env-var into a command name and its
+// arguments, then appends path as the final argument. If editor is empty or
+// all-whitespace it falls back to "vi".
+func editorCommand(editor, path string) (name string, args []string) {
+	fields := strings.Fields(editor)
+	if len(fields) == 0 {
+		fields = []string{"vi"}
+	}
+	return fields[0], append(fields[1:], path)
+}
 
 func newEditCmd() *cobra.Command {
 	return &cobra.Command{
@@ -25,14 +37,14 @@ func newEditCmd() *cobra.Command {
 			}
 			var path string
 			if len(args) == 1 {
-				if err := profiles.ValidateName(args[0]); err != nil {
+				if err := store.ValidateName(args[0]); err != nil {
 					return err
 				}
 				path = s.ProfilePath(args[0])
 				// Confirm the profile exists; fail with ErrNotFound otherwise.
 				if _, err := os.Stat(path); err != nil {
 					if os.IsNotExist(err) {
-						return fmt.Errorf("%w: %s", profiles.ErrNotFound, args[0])
+						return fmt.Errorf("%w: %s", store.ErrNotFound, args[0])
 					}
 					return err
 				}
@@ -43,11 +55,8 @@ func newEditCmd() *cobra.Command {
 				}
 				path = s.ProfilePath(active)
 			}
-			editor := os.Getenv("EDITOR")
-			if editor == "" {
-				editor = "vi"
-			}
-			c := exec.Command(editor, path)
+			name, args := editorCommand(os.Getenv("EDITOR"), path)
+			c := exec.Command(name, args...)
 			c.Stdin, c.Stdout, c.Stderr = os.Stdin, cmd.OutOrStdout(), cmd.ErrOrStderr()
 			return c.Run()
 		},

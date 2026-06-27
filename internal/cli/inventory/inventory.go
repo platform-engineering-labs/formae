@@ -79,7 +79,7 @@ func resourcesCmd() *cobra.Command {
 	command.Flags().String("output-consumer", string(printer.ConsumerHuman), "Consumer of the command output (human | machine)")
 	command.Flags().String("output-schema", "json", "The schema to use for the machine output (json | yaml)")
 	command.Flags().Int("max-results", 10, "Maximum number of resources to display in the table (0 = unlimited)")
-	command.Flags().String("config", "", "Path to config file")
+	cmd.AddConfigFlags(command)
 
 	return command
 }
@@ -186,7 +186,7 @@ func targetsCmd() *cobra.Command {
 	command.Flags().String("output-consumer", string(printer.ConsumerHuman), "Consumer of the command output (human | machine)")
 	command.Flags().String("output-schema", "json", "The schema to use for the machine output (json | yaml)")
 	command.Flags().Int("max-results", 10, "Maximum number of targets to display in the table (0 = unlimited)")
-	command.Flags().String("config", "", "Path to config file")
+	cmd.AddConfigFlags(command)
 
 	return command
 }
@@ -256,7 +256,7 @@ func stacksCmd() *cobra.Command {
 	command.Flags().String("output-consumer", string(printer.ConsumerHuman), "Consumer of the command output (human | machine)")
 	command.Flags().String("output-schema", "json", "The schema to use for the machine output (json | yaml)")
 	command.Flags().Int("max-results", 10, "Maximum number of stacks to display in the table (0 = unlimited)")
-	command.Flags().String("config", "", "Path to config file")
+	cmd.AddConfigFlags(command)
 
 	return command
 }
@@ -304,7 +304,7 @@ func policiesCmd() *cobra.Command {
 	command.Flags().String("output-consumer", string(printer.ConsumerHuman), "Consumer of the command output (human | machine)")
 	command.Flags().String("output-schema", "json", "The schema to use for the machine output (json | yaml)")
 	command.Flags().Int("max-results", 10, "Maximum number of policies to display in the table (0 = unlimited)")
-	command.Flags().String("config", "", "Path to config file")
+	cmd.AddConfigFlags(command)
 
 	return command
 }

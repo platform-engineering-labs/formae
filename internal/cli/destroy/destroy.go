@@ -99,7 +99,7 @@ func DestroyCmd() *cobra.Command {
 	command.Flags().String("status-output-layout", string(status.StatusOutputSummary), fmt.Sprintf("What to print as status output (%s | %s)", status.StatusOutputSummary, status.StatusOutputDetailed))
 	command.Flags().Bool("yes", false, "Allow the command to run without any confirmations")
 	command.Flags().String("on-dependents", "abort", "Behavior when resources depend on those being deleted (abort | cascade)")
-	command.Flags().String("config", "", "Path to config file")
+	cmd.AddConfigFlags(command)
 
 	return command
 }

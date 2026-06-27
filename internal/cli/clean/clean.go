@@ -60,7 +60,7 @@ func CleanCmd() *cobra.Command {
 
 	command.SetUsageTemplate(clicmd.SimpleCmdUsageTemplate)
 	command.Flags().Bool("all", false, "Also remove update metadata")
-	command.Flags().String("config", "", "Path to config file")
+	clicmd.AddConfigFlags(command)
 
 	return command
 }

@@ -64,7 +64,7 @@ func startCmd() *cobra.Command {
 		SilenceErrors: true,
 	}
 
-	command.Flags().String("config", "", "Path to config file")
+	cmd.AddConfigFlags(command)
 
 	return command
 }

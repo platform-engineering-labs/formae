@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
-package cli
+package profile
 
 import (
 	"fmt"
@@ -12,7 +12,7 @@ import (
 
 func newSaveCmd() *cobra.Command {
 	var force bool
-	cmd := &cobra.Command{
+	c := &cobra.Command{
 		Use:   "save <name>",
 		Short: "Snapshot the active profile under a new name (does not switch)",
 		Args:  cobra.ExactArgs(1),
@@ -28,6 +28,6 @@ func newSaveCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&force, "force", false, "overwrite an existing profile")
-	return cmd
+	c.Flags().BoolVar(&force, "force", false, "overwrite an existing profile")
+	return c
 }

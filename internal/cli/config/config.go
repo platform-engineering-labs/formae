@@ -11,12 +11,12 @@ import (
 	"strings"
 
 	"github.com/segmentio/ksuid"
+
+	"github.com/platform-engineering-labs/formae/internal/cli/profile/store"
 )
 
 const (
-	ConfigFileNamePrefix = "formae.conf"
-	ConfigDirectory      = ".config/formae"
-	DataDirectory        = ".pel/formae"
+	DataDirectory = ".pel/formae"
 )
 
 var Config = cliconfig{}
@@ -24,12 +24,11 @@ var Config = cliconfig{}
 type cliconfig struct{}
 
 func (cliconfig) ConfigDirectory() string {
-	homePath, err := os.UserHomeDir()
+	dir, err := store.ResolveConfigDir()
 	if err != nil {
 		return ""
 	}
-
-	return filepath.Join(homePath, ConfigDirectory)
+	return dir
 }
 
 func (cliconfig) DataDirectory() string {

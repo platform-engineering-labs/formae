@@ -97,7 +97,7 @@ func EvalCmd() *cobra.Command {
 	command.Flags().Bool("colorize", true, "colorize output (human consumer only)")
 	command.Flags().String("output-consumer", string(printer.ConsumerHuman), "Consumer of the command result (human | machine)")
 	command.Flags().String("schema-location", "remote", "How plugin PKL schemas are referenced when serializing the evaluated forma. 'remote' (default) emits package:// URIs that PKL fetches from the hub. 'local' emits local file imports against the agent's on-disk PklProject paths; requires CLI and agent to share a filesystem.")
-	command.Flags().String("config", "", "Path to config file")
+	cmd.AddConfigFlags(command)
 
 	return command
 }

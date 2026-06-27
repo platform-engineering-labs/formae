@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
-package cli
+package profile
 
 import (
 	"errors"
@@ -10,7 +10,7 @@ import (
 	"os"
 	"os/exec"
 
-	"github.com/platform-engineering-labs/formae/cmd/formae-config/internal/profiles"
+	"github.com/platform-engineering-labs/formae/internal/cli/profile/store"
 	"github.com/spf13/cobra"
 )
 
@@ -25,13 +25,13 @@ func newDiffCmd() *cobra.Command {
 				return err
 			}
 			a := args[0]
-			if err := profiles.ValidateName(a); err != nil {
+			if err := store.ValidateName(a); err != nil {
 				return err
 			}
 			pathA := s.ProfilePath(a)
 			var b, pathB string
 			if len(args) == 2 {
-				if err := profiles.ValidateName(args[1]); err != nil {
+				if err := store.ValidateName(args[1]); err != nil {
 					return err
 				}
 				b = args[1]
@@ -50,7 +50,7 @@ func newDiffCmd() *cobra.Command {
 			}{{a, pathA}, {b, pathB}} {
 				if _, err := os.Stat(pair.path); err != nil {
 					if os.IsNotExist(err) {
-						return fmt.Errorf("%w: %s", profiles.ErrNotFound, pair.name)
+						return fmt.Errorf("%w: %s", store.ErrNotFound, pair.name)
 					}
 					return err
 				}

@@ -76,6 +76,7 @@ before transitioning to 'Canceled' state to avoid orphaned resources.`,
 	command.Flags().String("status-output-layout", string(status.StatusOutputSummary), fmt.Sprintf("What to print as status output (%s | %s)", status.StatusOutputSummary, status.StatusOutputDetailed))
 	command.Flags().String("output-consumer", string(printer.ConsumerHuman), "Consumer of the command result (human | machine)")
 	command.Flags().String("output-schema", "yaml", "The schema to use for the result output (json | yaml)")
+	cmd.AddConfigFlags(command)
 
 	return command
 }

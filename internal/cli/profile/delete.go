@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
-package cli
+package profile
 
 import (
 	"fmt"
@@ -10,21 +10,20 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newCurrentCmd() *cobra.Command {
+func newDeleteCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "current",
-		Short: "Print the active profile name",
-		Args:  cobra.NoArgs,
+		Use:   "delete <name>",
+		Short: "Delete a profile (cannot be the active one)",
+		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, err := openStore()
 			if err != nil {
 				return err
 			}
-			active, err := s.Active()
-			if err != nil {
+			if err := s.Delete(args[0]); err != nil {
 				return err
 			}
-			_, _ = fmt.Fprintln(cmd.OutOrStdout(), active)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "deleted %s\n", args[0])
 			return nil
 		},
 	}
