@@ -796,6 +796,43 @@ func cleanPath(path string) string {
 	return path
 }
 
+// normalizeResolvedValue reconciles the representation of a resolved value with
+// the JSON kind of the corresponding current (live) value at the same path.
+//
+// ResolvableProperties stores every value as a string (resolvable_properties.go),
+// so a list- or object-valued resolvable arrives here as raw JSON text (e.g.
+// `["host"]`), while the live side — already unwrapped to its native shape by
+// resolver.ConvertToPluginFormat — is a []any/map[string]any. Left as a string
+// the desired side would diff against the native value on every reconcile,
+// producing a perpetual no-op update. Scalars never reach this path with that
+// mismatch because their cached $value is unwrapped natively on both sides.
+//
+// The normalization is shape-driven, not syntax-driven: it only parses the
+// resolved string when the current value is itself a native array or object and
+// the string is valid JSON of that same kind. A String field whose legitimate
+// value is JSON text (e.g. an IAM policy document) reads back as a string on the
+// current side, so it is left untouched — a blind parse would regress it into
+// perpetual drift. Aligned with resolver.extractResolvedValue's structured
+// detection so the two resolution paths agree.
+func normalizeResolvedValue(resolved string, current any) any {
+	switch current.(type) {
+	case []any:
+		var parsed []any
+		// parsed stays nil for the literal string "null", which unmarshals
+		// without error; keep such a value a string rather than rewriting it
+		// to JSON null.
+		if json.Unmarshal([]byte(resolved), &parsed) == nil && parsed != nil {
+			return parsed
+		}
+	case map[string]any:
+		var parsed map[string]any
+		if json.Unmarshal([]byte(resolved), &parsed) == nil && parsed != nil {
+			return parsed
+		}
+	}
+	return resolved
+}
+
 // resolveRefs uses properties to resolve references in the patch document
 func resolveRefs(current, mod map[string]any, resolvableProperties resolver.ResolvableProperties) error {
 	for k, v := range mod {
@@ -808,7 +845,7 @@ func resolveRefs(current, mod map[string]any, resolvableProperties resolver.Reso
 
 				val, found := resolvableProperties.Get(ksuid, property)
 				if found {
-					modVal["$value"] = val
+					modVal["$value"] = normalizeResolvedValue(val, current[k])
 				}
 				// If not found, keep the $ref as-is for late-binding resolution
 				// at execution time (forward references to new resources).
@@ -833,13 +870,15 @@ func resolveRefs(current, mod map[string]any, resolvableProperties resolver.Reso
 					currElem = currArr[i]
 				}
 				if elemMap, ok := elem.(map[string]any); ok {
-					var currElemMap map[string]any
-					if currElem != nil {
-						currElemMap, _ = currElem.(map[string]any)
-					}
-					// Preserve the key to resolve references
+					// Preserve the key to resolve references. Wrap the current
+					// element under the same key so the recursion's current[k]
+					// is the live element at this index — representation
+					// normalization needs the live value's JSON kind, and an
+					// array-element ref resolving to a list/object would
+					// otherwise normalize against a nil current and diff forever.
 					wrappedElem := map[string]any{k: elemMap}
-					if err := resolveRefs(currElemMap, wrappedElem, resolvableProperties); err != nil {
+					wrappedCurrent := map[string]any{k: currElem}
+					if err := resolveRefs(wrappedCurrent, wrappedElem, resolvableProperties); err != nil {
 						return err
 					}
 					if resolvedElem, ok := wrappedElem[k].(map[string]any); ok {
