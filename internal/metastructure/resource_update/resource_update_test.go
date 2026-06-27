@@ -808,6 +808,163 @@ func TestRecordProgress_MergeArrays_UserHasMoreElementsThanPlugin(t *testing.T) 
 	assert.JSONEq(t, expectedProps, string(resourceUpdate.DesiredState.Properties))
 }
 
+// envByName unmarshals merged task-def properties and returns the first container's
+// Environment entries keyed by their Name, for per-entry assertions.
+func envByName(t *testing.T, merged json.RawMessage) map[string]any {
+	t.Helper()
+	var props map[string]any
+	require.NoError(t, json.Unmarshal(merged, &props))
+	containers := props["ContainerDefinitions"].([]any)
+	env := containers[0].(map[string]any)["Environment"].([]any)
+	byName := make(map[string]any, len(env))
+	for _, e := range env {
+		entry := e.(map[string]any)
+		byName[entry["Name"].(string)] = entry["Value"]
+	}
+	return byName
+}
+
+// A literal KeyValuePair nested in ContainerDefinitions[0].Environment must not inherit a
+// sibling's $ref. The nested Environment array must resolve its own (default/Set) hint by its
+// index-less full path, not inherit ContainerDefinitions' EntitySet/indexField="name" hint —
+// which would match env entries purely positionally (the index key is "" for every PascalCase
+// element) and, on a reordered plugin read, graft the cluster ref onto the literal.
+func Test_mergeRefsPreservingUserRefs_ECSEnvLiteralDoesNotInheritSiblingRef(t *testing.T) {
+	clusterKsuid := util.NewID()
+	clusterArn := "arn:aws:ecs:eu-west-1:174245935421:cluster/clanker"
+	repoMap := `{\"formae-hub\":\"clanker-runtask-hub\"}`
+
+	// Recorded (user) state: ECS_CLUSTER carries its own resolved cluster-Arn $ref;
+	// RUNTASK_DEF_BY_REPO is a plain literal.
+	userProps := fmt.Appendf(nil, `{
+		"Family": "clanker-bridge",
+		"ContainerDefinitions": [
+			{
+				"Name": "bridge",
+				"Environment": [
+					{"Name": "ECS_CLUSTER", "Value": {"$ref": "formae://%s#/Arn", "$value": "%s"}},
+					{"Name": "RUNTASK_DEF_BY_REPO", "Value": "%s"}
+				]
+			}
+		]
+	}`, clusterKsuid, clusterArn, repoMap)
+
+	// Plugin (AWS Read) returns both env entries as plain strings, in REVERSED order.
+	pluginProps := fmt.Appendf(nil, `{
+		"Family": "clanker-bridge",
+		"ContainerDefinitions": [
+			{
+				"Name": "bridge",
+				"Environment": [
+					{"Name": "RUNTASK_DEF_BY_REPO", "Value": "%s"},
+					{"Name": "ECS_CLUSTER", "Value": "%s"}
+				]
+			}
+		]
+	}`, repoMap, clusterArn)
+
+	// ContainerDefinitions carries the real ECS hint (EntitySet, indexField "name");
+	// the nested Environment array must NOT inherit it.
+	schema := pkgmodel.Schema{
+		Hints: map[string]pkgmodel.FieldHint{
+			"ContainerDefinitions": {UpdateMethod: pkgmodel.FieldUpdateMethodEntitySet, IndexField: "name"},
+		},
+	}
+
+	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, schema)
+	require.NoError(t, err)
+	byName := envByName(t, merged)
+
+	// The literal stays a plain string — never carrying a $ref.
+	assert.Equal(t, `{"formae-hub":"clanker-runtask-hub"}`, byName["RUNTASK_DEF_BY_REPO"],
+		"literal RUNTASK_DEF_BY_REPO must not inherit a sibling's $ref")
+
+	// ECS_CLUSTER keeps its OWN cluster-Arn ref.
+	cluster := byName["ECS_CLUSTER"].(map[string]any)
+	assert.Equal(t, fmt.Sprintf("formae://%s#/Arn", clusterKsuid), cluster["$ref"])
+	assert.Equal(t, clusterArn, cluster["$value"])
+}
+
+// On the default/Set path, a literal plugin element that misses phase-1 value matching must not
+// grab an unrelated sibling's unresolved $ref in phase 2. Phase-2 pairing is structural: a $ref
+// candidate is grafted only when its concrete identity field(s) uniquely match the plugin element.
+func Test_mergeRefsPreservingUserRefs_Phase2DoesNotGraftSiblingRefOntoLiteral(t *testing.T) {
+	clusterKsuid := util.NewID()
+
+	// User: ECS_CLUSTER as an UNRESOLVED $ref (no $value yet) + RUNTASK as a literal.
+	userProps := fmt.Appendf(nil, `{
+		"Environment": [
+			{"Name": "ECS_CLUSTER", "Value": {"$ref": "formae://%s#/Arn"}},
+			{"Name": "RUNTASK", "Value": "old-value"}
+		]
+	}`, clusterKsuid)
+
+	// Plugin returns only RUNTASK, with a CHANGED value so it misses phase-1 matching.
+	// ECS_CLUSTER is absent from this read.
+	pluginProps := json.RawMessage(`{
+		"Environment": [
+			{"Name": "RUNTASK", "Value": "new-value"}
+		]
+	}`)
+
+	// No hint on Environment → default/Set path.
+	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{})
+	require.NoError(t, err)
+
+	var props map[string]any
+	require.NoError(t, json.Unmarshal(merged, &props))
+	env := props["Environment"].([]any)
+	require.Len(t, env, 1)
+	runtask := env[0].(map[string]any)
+	assert.Equal(t, "RUNTASK", runtask["Name"])
+	// The literal must keep the plugin's plain value — it must NOT inherit ECS_CLUSTER's $ref.
+	assert.Equal(t, "new-value", runtask["Value"],
+		"literal RUNTASK must render plain, not graft the ECS_CLUSTER $ref")
+}
+
+// An ordered (UpdateMethodArray) array must pair plugin and user elements strictly by index, so
+// a literal at one position never inherits the $ref of an unresolved-$ref element at another
+// position. (Phase 1 never matches Array elements by value, so all pairing happens in phase 2.)
+func Test_mergeRefsPreservingUserRefs_OrderedArrayPairsByIndex(t *testing.T) {
+	refKsuid := util.NewID()
+
+	// index 0: literal; index 1: unresolved $ref.
+	userProps := fmt.Appendf(nil, `{
+		"Items": [
+			"literal-0",
+			{"$ref": "formae://%s#/Id"}
+		]
+	}`, refKsuid)
+
+	pluginProps := json.RawMessage(`{
+		"Items": [
+			"literal-0",
+			"resolved-1"
+		]
+	}`)
+
+	schema := pkgmodel.Schema{
+		Hints: map[string]pkgmodel.FieldHint{
+			"Items": {UpdateMethod: pkgmodel.FieldUpdateMethodArray},
+		},
+	}
+
+	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, schema)
+	require.NoError(t, err)
+
+	var props map[string]any
+	require.NoError(t, json.Unmarshal(merged, &props))
+	items := props["Items"].([]any)
+	require.Len(t, items, 2)
+
+	// index 0 stays the plain literal — it must NOT inherit index 1's $ref.
+	assert.Equal(t, "literal-0", items[0])
+	// index 1 keeps its own $ref, resolved against the plugin value.
+	ref := items[1].(map[string]any)
+	assert.Equal(t, fmt.Sprintf("formae://%s#/Id", refKsuid), ref["$ref"])
+	assert.Equal(t, "resolved-1", ref["$value"])
+}
+
 // TestRecordProgress_MergeArrays_PluginReturnsReorderedElements tests that when plugin returns
 // array elements in a different order than user provided, the correct $ref structures are
 // matched and preserved based on value matching, not index position.
