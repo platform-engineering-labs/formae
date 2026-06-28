@@ -49,6 +49,7 @@ type FieldHint struct {
 
 	IndexField   string            `json:"IndexField" pkl:"IndexField"`
 	UpdateMethod FieldUpdateMethod `json:"UpdateMethod" pkl:"UpdateMethod"`
+	Format       string            `json:"Format" pkl:"Format"` // "" = opaque String; "json" = serialized JSON document (PLA-196)
 }
 
 // UnmarshalJSON normalizes the deprecated AttachesTo alias into EdgeKind so
@@ -107,4 +108,16 @@ func (s Schema) WriteOnly() []string {
 
 func (s Schema) HasProviderDefault() []string {
 	return filterFields(s, func(h FieldHint) bool { return h.HasProviderDefault }, true)
+}
+
+// FormatHints returns field→format for every field whose FieldHint declares a
+// non-empty Format (e.g. {"configJson": "json"}). Empty result when none.
+func (s Schema) FormatHints() map[string]string {
+	out := map[string]string{}
+	for field, h := range s.Hints {
+		if h.Format != "" {
+			out[field] = h.Format
+		}
+	}
+	return out
 }

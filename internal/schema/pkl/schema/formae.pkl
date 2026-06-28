@@ -218,6 +218,7 @@ open class FieldHint extends Annotation {
     hidden edgeKind: EdgeKind = "default"        // NEW
     hidden indexField: String?
     hidden updateMethod: FieldUpdateMethod?
+    hidden format: String = ""                   // NEW: serialized-content format (e.g. "json"); PLA-196
 
     hidden outputField: String?
     hidden outputTransformation: ((Any) -> Any)?
@@ -233,6 +234,7 @@ open class FieldHint extends Annotation {
     fixed EdgeKind: String = edgeKind
     fixed UpdateMethod: String = updateMethod ?? ""
     fixed IndexField: String = indexField ?? ""
+    fixed Format: String = format                // NEW
 }
 
 /// Annotation for target config fields to declare mutability.
