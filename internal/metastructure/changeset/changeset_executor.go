@@ -581,18 +581,19 @@ func startResourceUpdate(ru *resource_update.ResourceUpdate, commandID string, p
 	// in the changeset are excluded from sync for the full duration, with a clean
 	// unregister when the changeset reaches a terminal state.
 
-	_, err := proc.Call(gen.ProcessID{Name: actornames.ResourceUpdaterSupervisor, Node: proc.Node().Name()},
-		resource_update.EnsureResourceUpdater{
-			ResourceURI: ru.URI(),
-			Operation:   string(ru.Operation),
-			CommandID:   commandID,
-		})
-	if err != nil {
-		proc.Log().Error("Failed to ensure resource updater: %v", err)
+	// Spawn the ResourceUpdater as a direct child of this ChangesetExecutor with
+	// LinkParent so that when the executor terminates (for any reason) the child
+	// receives an exit signal and terminates too. The link is unidirectional:
+	// a crashing RU sends a message back to the executor (ResourceUpdateFinished)
+	// but does NOT cascade back to kill the executor itself.
+	name := actornames.ResourceUpdater(ru.URI(), string(ru.Operation), commandID)
+	_, err := proc.SpawnRegister(name, resource_update.NewResourceUpdater, gen.ProcessOptions{LinkParent: true}, proc.PID())
+	if err != nil && err != gen.ErrTaken {
+		proc.Log().Error("Failed to spawn resource updater: %v", err)
 		return err
 	}
 
-	err = proc.Send(gen.ProcessID{Name: actornames.ResourceUpdater(ru.URI(), string(ru.Operation), commandID), Node: proc.Node().Name()},
+	err = proc.Send(gen.ProcessID{Name: name, Node: proc.Node().Name()},
 		resource_update.StartResourceUpdate{
 			ResourceUpdate: *ru,
 			CommandID:      commandID,
