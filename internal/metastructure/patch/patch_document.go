@@ -664,6 +664,12 @@ func dropCanonicallyEqualHintedOps(ops []jsonpatch.JsonPatchOperation, document,
 		field := cleanPath(op.Path)
 		format, hinted := formats[field]
 		if hinted && isTopLevelPath(op.Path) {
+			// The hint key is used as a gjson path (dot = nesting). v1 targets
+			// top-level fields whose names contain no gjson-special chars
+			// (`.`/`*`/`?`); the grafana `configJson` consumer satisfies this. A
+			// top-level field literally named with a `.` would not be matched
+			// (canonicalization silently skipped — safe-direction, never drops a
+			// real change).
 			oldVal := gjson.GetBytes(document, field)
 			newVal := gjson.GetBytes(patch, field)
 			if oldVal.Type == gjson.String && newVal.Type == gjson.String {

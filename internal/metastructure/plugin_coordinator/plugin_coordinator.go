@@ -205,16 +205,6 @@ func (c *PluginCoordinator) HandleMessage(from gen.PID, message any) error {
 
 		c.Log().Debug("Received capabilities for namespace %s: %d resources, %d schemas", msg.Namespace, len(caps.SupportedResources), len(caps.ResourceSchemas))
 
-		// Reject registration if any cached schema declares an unknown
-		// FieldHint.Format, so a typo'd/unsupported format fails fast rather than
-		// silently not canonicalizing at reconcile time (PLA-196).
-		for resourceType, schema := range caps.ResourceSchemas {
-			if err := canonicalize.ValidateSchemaFormats(resourceType, schema); err != nil {
-				c.Log().Error("Rejecting plugin registration: invalid schema format for namespace %s: %v", msg.Namespace, err)
-				return fmt.Errorf("plugin %s: %w", msg.Name, err)
-			}
-		}
-
 		announced := RegisteredPlugin{
 			Name:                 msg.Name,
 			Namespace:            msg.Namespace,
@@ -231,6 +221,16 @@ func (c *PluginCoordinator) HandleMessage(from gen.PID, message any) error {
 		merged, enabled := c.mergePluginConfig(msg.Name, msg.Namespace, announced)
 		if !enabled {
 			return nil
+		}
+
+		// Reject this plugin if any schema declares an unknown FieldHint.Format
+		// (typo/unsupported). Log and skip — a non-nil HandleMessage return would
+		// terminate the coordinator actor, taking down every registered plugin (PLA-196).
+		for resourceType, schema := range merged.ResourceSchemas {
+			if err := canonicalize.ValidateSchemaFormats(resourceType, schema); err != nil {
+				c.Log().Error("Rejecting plugin %s registration: invalid schema format for namespace %s: %v", msg.Name, msg.Namespace, err)
+				return nil
+			}
 		}
 
 		c.plugins[msg.Namespace] = &merged

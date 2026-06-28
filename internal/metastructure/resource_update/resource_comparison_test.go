@@ -459,3 +459,34 @@ func TestGate_HintedResolvableLeaf_SkippedNoPanic(t *testing.T) {
 		t.Fatalf("must not panic/error on a resolvable leaf: %v", err)
 	}
 }
+
+// TestGate_HintedResolvableLeaf_SameContent_NoChange asserts that when a hinted
+// field is a resolvable ENVELOPE (object, not a plain string) the canonicalize
+// skip (val.Type != gjson.String) leaves comparison to the raw/structural
+// compare — which sees identical envelopes and reports no change.
+func TestGate_HintedResolvableLeaf_SameContent_NoChange(t *testing.T) {
+	schema := pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{"configJson": {Format: "json"}}}
+	existing := &pkgmodel.Resource{Properties: json.RawMessage(`{"configJson":{"$ref":"formae://x","$value":"{\"a\":1}"}}`)}
+	newRes := &pkgmodel.Resource{Properties: json.RawMessage(`{"configJson":{"$ref":"formae://x","$value":"{\"a\":1}"}}`)}
+
+	hasChanges, _, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, newRes, schema)
+	require.NoError(t, err)
+	assert.False(t, hasChanges, "identical resolvable envelopes must not be a change")
+}
+
+// TestGate_HintedResolvableLeaf_DifferentContent_IsChange is the behavioural
+// counterpart to the skip guard. The hinted field is a resolvable ENVELOPE whose
+// $value differs between the two sides. Because the field is an object (not a
+// gjson.String), canonicalization is skipped and the raw/structural compare must
+// still detect the genuine difference. Deleting or inverting the
+// `val.Type != gjson.String` guard (canonicalizing the envelope object instead)
+// would let this real change slip through — this test catches that.
+func TestGate_HintedResolvableLeaf_DifferentContent_IsChange(t *testing.T) {
+	schema := pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{"configJson": {Format: "json"}}}
+	existing := &pkgmodel.Resource{Properties: json.RawMessage(`{"configJson":{"$ref":"formae://x","$value":"{\"a\":1}"}}`)}
+	newRes := &pkgmodel.Resource{Properties: json.RawMessage(`{"configJson":{"$ref":"formae://x","$value":"{\"a\":2}"}}`)}
+
+	hasChanges, _, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, newRes, schema)
+	require.NoError(t, err)
+	assert.True(t, hasChanges, "differing resolvable envelope $value must be detected as a change")
+}

@@ -59,6 +59,12 @@ func canonicalizeHintedFields(props json.RawMessage, schema pkgmodel.Schema) jso
 	}
 	out := string(props)
 	for field, format := range formats {
+		// The hint key is used as a gjson path (dot = nesting). v1 targets
+		// top-level fields whose names contain no gjson-special chars
+		// (`.`/`*`/`?`); the grafana `configJson` consumer satisfies this. A
+		// top-level field literally named with a `.` would not be matched
+		// (canonicalization silently skipped — safe-direction, never drops a
+		// real change).
 		val := gjson.Get(out, field)
 		if !val.Exists() || val.Type != gjson.String {
 			continue // absent, or not a plain JSON string (e.g. a resolvable envelope)
