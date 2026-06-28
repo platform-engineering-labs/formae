@@ -13,6 +13,7 @@ import (
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 
+	"github.com/platform-engineering-labs/formae/internal/metastructure/canonicalize"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/transformations"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -20,7 +21,7 @@ import (
 
 // EnforceSetOnceAndCompareResourceForUpdate prepares resources for update by applying transformations,
 // normalization, and SetOnce filtering, then compares them to detect meaningful changes
-func EnforceSetOnceAndCompareResourceForUpdate(existing, new *pkgmodel.Resource) (bool, json.RawMessage, error) {
+func EnforceSetOnceAndCompareResourceForUpdate(existing, new *pkgmodel.Resource, schema pkgmodel.Schema) (bool, json.RawMessage, error) {
 	filteredRawProps, err := filterSetOnceProps(existing.Properties, new.Properties, new.Label)
 	if err != nil {
 		return false, nil, err
@@ -34,11 +35,47 @@ func EnforceSetOnceAndCompareResourceForUpdate(existing, new *pkgmodel.Resource)
 		return false, nil, err
 	}
 
-	equal, err := util.JsonEqualIgnoreArrayOrder(existing.Properties, hashedForComparison.Properties)
+	// Canonicalize Format-hinted serialized fields on BOTH sides, for comparison
+	// only — never feeds the returned filteredRawProps (PLA-196).
+	existingForCompare := canonicalizeHintedFields(existing.Properties, schema)
+	newForCompare := canonicalizeHintedFields(hashedForComparison.Properties, schema)
+
+	equal, err := util.JsonEqualIgnoreArrayOrder(existingForCompare, newForCompare)
 	if err != nil {
 		return false, nil, fmt.Errorf("failed to compare properties: %w", err)
 	}
 	return !equal, filteredRawProps, nil
+}
+
+// canonicalizeHintedFields returns a copy of props in which each Format-hinted
+// plain-String field is replaced by its canonical form, for comparison only. On
+// any per-field error the field is left raw, so the comparison can only ever
+// over-report a change, never under-report one. Uses string-returning sjson.Set
+// so the input json.RawMessage is never mutated.
+func canonicalizeHintedFields(props json.RawMessage, schema pkgmodel.Schema) json.RawMessage {
+	formats := schema.FormatHints()
+	if len(formats) == 0 || len(props) == 0 {
+		return props
+	}
+	out := string(props)
+	for field, format := range formats {
+		val := gjson.Get(out, field)
+		if !val.Exists() || val.Type != gjson.String {
+			continue // absent, or not a plain JSON string (e.g. a resolvable envelope)
+		}
+		canon, err := canonicalize.Canonicalize(format, val.String())
+		if err != nil {
+			slog.Warn("skipping canonicalization of hinted field", "field", field, "format", format, "error", err)
+			continue
+		}
+		updated, err := sjson.Set(out, field, canon)
+		if err != nil {
+			slog.Warn("failed to write canonicalized hinted field", "field", field, "error", err)
+			continue
+		}
+		out = updated
+	}
+	return json.RawMessage(out)
 }
 
 // SuppressUnchangedOpaqueValues removes opaque leaf properties whose desired

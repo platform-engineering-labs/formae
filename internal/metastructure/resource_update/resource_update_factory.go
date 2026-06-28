@@ -47,7 +47,7 @@ func NewResourceUpdateForExisting(
 	// the properties might be identical
 	stackChanged := existingResource.Stack != newResource.Stack
 
-	hasChanges, filteredProps, err := EnforceSetOnceAndCompareResourceForUpdate(&existingResource, &newResource)
+	hasChanges, filteredProps, err := EnforceSetOnceAndCompareResourceForUpdate(&existingResource, &newResource, newResource.Schema)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compare resources: %w", err)
 	}
