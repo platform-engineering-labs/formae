@@ -1,6 +1,10 @@
 package canonicalize
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/platform-engineering-labs/formae/pkg/model"
+)
 
 func TestCanonicalizeJSON_EqualUnderReorderWhitespaceEscape(t *testing.T) {
 	cases := []struct{ name, a, b string }{
@@ -110,5 +114,20 @@ func TestIsRegistered(t *testing.T) {
 	}
 	if IsRegistered("js") {
 		t.Fatal("js must not be registered")
+	}
+}
+
+func TestValidateSchemaFormats(t *testing.T) {
+	ok := model.Schema{Hints: map[string]model.FieldHint{"configJson": {Format: "json"}}}
+	if err := ValidateSchemaFormats("X", ok); err != nil {
+		t.Fatalf("registered format must validate: %v", err)
+	}
+	bad := model.Schema{Hints: map[string]model.FieldHint{"code": {Format: "js"}}}
+	if err := ValidateSchemaFormats("X", bad); err == nil {
+		t.Fatal("unregistered format must fail validation")
+	}
+	none := model.Schema{Hints: map[string]model.FieldHint{"name": {CreateOnly: true}}}
+	if err := ValidateSchemaFormats("X", none); err != nil {
+		t.Fatalf("no Format hints must validate: %v", err)
 	}
 }

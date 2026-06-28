@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+
+	"github.com/platform-engineering-labs/formae/pkg/model"
 )
 
 // Canonicalizer maps a raw serialized value to a stable canonical form.
@@ -33,6 +35,19 @@ func Canonicalize(format, raw string) (string, error) {
 		return "", fmt.Errorf("canonicalize: no canonicalizer registered for format %q", format)
 	}
 	return c(raw)
+}
+
+// ValidateSchemaFormats returns an error if any field in s declares a
+// FieldHint.Format with no registered canonicalizer. Called at plugin
+// registration so an unsupported/typo'd format fails fast rather than silently
+// not canonicalizing at reconcile time.
+func ValidateSchemaFormats(resourceType string, s model.Schema) error {
+	for field, h := range s.Hints {
+		if h.Format != "" && !IsRegistered(h.Format) {
+			return fmt.Errorf("resource %s field %s declares unknown canonicalization format %q", resourceType, field, h.Format)
+		}
+	}
+	return nil
 }
 
 // canonicalizeJSON parses raw as a single JSON document and re-serializes it to

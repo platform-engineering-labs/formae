@@ -14,6 +14,7 @@ import (
 	"ergo.services/ergo/gen"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/canonicalize"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/changeset"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/pkg/model"
@@ -203,6 +204,16 @@ func (c *PluginCoordinator) HandleMessage(from gen.PID, message any) error {
 		caps := msg.Capabilities
 
 		c.Log().Debug("Received capabilities for namespace %s: %d resources, %d schemas", msg.Namespace, len(caps.SupportedResources), len(caps.ResourceSchemas))
+
+		// Reject registration if any cached schema declares an unknown
+		// FieldHint.Format, so a typo'd/unsupported format fails fast rather than
+		// silently not canonicalizing at reconcile time (PLA-196).
+		for resourceType, schema := range caps.ResourceSchemas {
+			if err := canonicalize.ValidateSchemaFormats(resourceType, schema); err != nil {
+				c.Log().Error("Rejecting plugin registration: invalid schema format for namespace %s: %v", msg.Namespace, err)
+				return fmt.Errorf("plugin %s: %w", msg.Name, err)
+			}
+		}
 
 		announced := RegisteredPlugin{
 			Name:                 msg.Name,
