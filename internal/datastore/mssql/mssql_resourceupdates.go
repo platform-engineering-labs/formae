@@ -9,6 +9,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	json "github.com/goccy/go-json"
@@ -423,7 +424,8 @@ func (d *DatastoreMSSQL) UpdateResourceUpdateState(commandID string, ksuid strin
 	query := `
 		UPDATE resource_updates
 		SET state = @p1, modified_ts = @p2
-		WHERE command_id = @p3 AND ksuid = @p4 AND operation = @p5`
+		WHERE command_id = @p3 AND ksuid = @p4 AND operation = @p5
+		  AND state NOT IN ('Success','Failed','Rejected','Canceled')`
 
 	result, err := d.conn.ExecContext(ctx, query, string(state), modifiedTs.UTC(), commandID, ksuid, string(operation))
 	if err != nil {
@@ -434,7 +436,8 @@ func (d *DatastoreMSSQL) UpdateResourceUpdateState(commandID string, ksuid strin
 		return fmt.Errorf("failed to get rows affected: %w", err)
 	}
 	if affected == 0 {
-		return fmt.Errorf("resource update not found: command_id=%s, ksuid=%s, operation=%s", commandID, ksuid, operation)
+		slog.Debug("UpdateResourceUpdateState: row already in terminal state or not found, no-op", "commandID", commandID, "ksuid", ksuid)
+		return nil
 	}
 	return nil
 }
@@ -513,7 +516,8 @@ func (d *DatastoreMSSQL) BatchUpdateResourceUpdateState(commandID string, refs [
 	const query = `
 		UPDATE resource_updates
 		SET state = @p1, modified_ts = @p2
-		WHERE command_id = @p3 AND ksuid = @p4 AND operation = @p5`
+		WHERE command_id = @p3 AND ksuid = @p4 AND operation = @p5
+		  AND state NOT IN ('Success','Failed','Rejected','Canceled')`
 
 	for _, ref := range refs {
 		if _, err = tx.ExecContext(ctx, query, string(state), modifiedTs.UTC(), commandID, ref.KSUID, string(ref.Operation)); err != nil {
