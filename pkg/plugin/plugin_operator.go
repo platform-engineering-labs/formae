@@ -471,9 +471,9 @@ func shutdown(from gen.PID, state gen.Atom, data PluginUpdateData, shutdown Plug
 }
 
 // linkRequester establishes a unidirectional link from this operator to its
-// requesting ResourceUpdater (RU). Because the link is unidirectional in the
-// pinned ergo fork (see TestLinkPIDDirectionality), the RU's termination
-// terminates the operator, while an operator crash leaves the RU untouched.
+// requesting ResourceUpdater (RU). Because ergo links are unidirectional, the
+// RU's termination terminates the operator, while an operator crash leaves the
+// RU untouched.
 // This lets the executor's LinkParent cascade tear down in-flight remote
 // operators when their RU dies, without an operator failure reaching back to
 // the RU (that path stays handled by the existing timeout logic).
