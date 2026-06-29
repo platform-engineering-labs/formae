@@ -8,12 +8,14 @@ package workflow_tests_local
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
 	"ergo.services/ergo/gen"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/testutil"
 	"github.com/platform-engineering-labs/formae/internal/workflow_tests/test_helpers"
@@ -193,5 +195,149 @@ func TestExecutorTerminationCascadesToResourceUpdaters(t *testing.T) {
 			return !isProcessAlive(m.Node, ruNameA)
 		}, 5*time.Second, 100*time.Millisecond,
 			"ResourceUpdater must terminate after its parent ChangesetExecutor was killed (LinkParent cascade)")
+	})
+}
+
+// TestExecutorTerminationCascadesToTargetUpdaters verifies two properties of the
+// ChangesetExecutor → TargetUpdater supervision link:
+//
+//  1. Cascade (parent → child): terminating the ChangesetExecutor causes its
+//     TargetUpdater children to terminate within a few seconds.
+//
+//  2. Unidirectional (child → parent): killing a TargetUpdater directly does NOT
+//     terminate the ChangesetExecutor.
+//
+// To keep the TargetUpdater observably in-flight, the target config contains a $ref
+// to a pre-seeded resource. The plugin's Read override blocks indefinitely, so the
+// ResolveCache never responds and the TargetUpdater stays in StateResolving.
+func TestExecutorTerminationCascadesToTargetUpdaters(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		// deterministic ksuid for the pre-seeded cluster resource.
+		const clusterKsuid = "2MiD2rA1SJbLMGZgTL0hCxjkjjr"
+
+		// Block channel: Read blocks until the test is done, keeping the
+		// TargetUpdater in StateResolving so we can observe the cascade.
+		blockRead := make(chan struct{})
+		defer close(blockRead)
+
+		overrides := &plugin.ResourcePluginOverrides{
+			Create: func(req *resource.CreateRequest) (*resource.CreateResult, error) {
+				return &resource.CreateResult{ProgressResult: &resource.ProgressResult{
+					Operation:          resource.OperationCreate,
+					OperationStatus:    resource.OperationStatusSuccess,
+					RequestID:          "req-" + req.Label,
+					NativeID:           "native-" + req.Label,
+					ResourceProperties: json.RawMessage(`{"CidrBlock":"10.0.0.0/16"}`),
+				}}, nil
+			},
+			Read: func(req *resource.ReadRequest) (*resource.ReadResult, error) {
+				// Block until the test channel is closed so the ResolveCache
+				// never returns and the TargetUpdater stays in StateResolving.
+				<-blockRead
+				return &resource.ReadResult{
+					ResourceType: req.ResourceType,
+					Properties:   `{"CidrBlock":"10.0.0.0/16"}`,
+				}, nil
+			},
+		}
+
+		m, def, err := test_helpers.NewTestMetastructure(t, overrides)
+		defer def()
+		require.NoError(t, err)
+
+		// ── Step 1: pre-seed the cluster resource so the ResolveCache can load it. ──
+		seedForma := &pkgmodel.Forma{
+			Stacks: []pkgmodel.Stack{{Label: "infra"}},
+			Resources: []pkgmodel.Resource{{
+				Label:      "cluster",
+				Type:       "FakeAWS::EC2::VPC",
+				Stack:      "infra",
+				Target:     "provider",
+				Managed:    true,
+				Ksuid:      clusterKsuid,
+				Properties: json.RawMessage(`{"CidrBlock":"10.0.0.0/16"}`),
+			}},
+			Targets: []pkgmodel.Target{
+				{Label: "provider", Namespace: "FakeAWS"},
+			},
+		}
+
+		seedResp, err := m.ApplyForma(seedForma,
+			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
+			"test-client")
+		require.NoError(t, err)
+
+		// Wait for the seed command to complete successfully.
+		assert.Eventually(t, func() bool {
+			cmds, _ := m.Datastore.LoadFormaCommands()
+			for _, cmd := range cmds {
+				if cmd.ID == seedResp.CommandID {
+					return cmd.State == forma_command.CommandStateSuccess
+				}
+			}
+			return false
+		}, 15*time.Second, 100*time.Millisecond, "seed command must complete")
+
+		// ── Step 2: apply a forma whose target config has a $ref to the cluster. ──
+		// The TargetUpdater will enter StateResolving and block on the Read override.
+		consumerConfig := json.RawMessage(fmt.Sprintf(
+			`{"endpoint":{"$ref":"formae://%s#/CidrBlock"}}`, clusterKsuid))
+
+		// ── Assertion B (unidirectional, child → parent): kill TU, executor must stay. ──
+		respB, err := m.ApplyForma(
+			&pkgmodel.Forma{
+				Targets: []pkgmodel.Target{{Label: "consumer-b", Namespace: "FakeAWS", Config: consumerConfig}},
+			},
+			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
+			"test-client",
+		)
+		require.NoError(t, err)
+		commandIDB := respB.CommandID
+
+		tuNameB := actornames.TargetUpdater("consumer-b", "create", commandIDB)
+		assert.Eventually(t, func() bool {
+			return isProcessAlive(m.Node, tuNameB)
+		}, 10*time.Second, 100*time.Millisecond, "stack-B TargetUpdater should become alive")
+		t.Logf("Assertion B: TargetUpdater=%s", tuNameB)
+
+		ceuxNameB := actornames.ChangesetExecutor(commandIDB)
+		require.True(t, isProcessAlive(m.Node, ceuxNameB), "stack-B ChangesetExecutor must be alive before TU kill")
+
+		// Kill the TargetUpdater directly.
+		require.NoError(t, killProcessByName(m.Node, tuNameB))
+
+		// Give the executor a window to react — it must NOT die.
+		time.Sleep(500 * time.Millisecond)
+		assert.True(t, isProcessAlive(m.Node, ceuxNameB),
+			"ChangesetExecutor must stay alive after its TargetUpdater was killed (unidirectional link)")
+
+		// ── Assertion A (cascade, parent → child): kill executor, TU must die. ──
+		respA, err := m.ApplyForma(
+			&pkgmodel.Forma{
+				Targets: []pkgmodel.Target{{Label: "consumer-a", Namespace: "FakeAWS", Config: consumerConfig}},
+			},
+			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
+			"test-client",
+		)
+		require.NoError(t, err)
+		commandIDA := respA.CommandID
+
+		tuNameA := actornames.TargetUpdater("consumer-a", "create", commandIDA)
+		assert.Eventually(t, func() bool {
+			return isProcessAlive(m.Node, tuNameA)
+		}, 10*time.Second, 100*time.Millisecond, "stack-A TargetUpdater should become alive")
+		t.Logf("Assertion A: TargetUpdater=%s", tuNameA)
+
+		ceuxNameA := actornames.ChangesetExecutor(commandIDA)
+		require.True(t, isProcessAlive(m.Node, ceuxNameA), "stack-A ChangesetExecutor must be alive before executor kill")
+
+		// Kill the ChangesetExecutor.
+		require.NoError(t, killProcessByName(m.Node, ceuxNameA))
+
+		// The TargetUpdater must cascade-terminate within a few seconds via LinkParent.
+		assert.Eventually(t, func() bool {
+			return !isProcessAlive(m.Node, tuNameA)
+		}, 5*time.Second, 100*time.Millisecond,
+			"TargetUpdater must terminate after its parent ChangesetExecutor was killed (LinkParent cascade)")
 	})
 }

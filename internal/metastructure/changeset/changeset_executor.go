@@ -612,26 +612,23 @@ func startTargetUpdate(tu *target_update.TargetUpdate, commandID string, proc ge
 
 	proc.Log().Debug("Starting target updater label=%s operation=%s", label, operation)
 
-	_, err := proc.Call(
-		gen.ProcessID{Name: actornames.TargetUpdaterSupervisor, Node: proc.Node().Name()},
-		target_update.EnsureTargetUpdater{
-			Label:     label,
-			Operation: operation,
-			CommandID: commandID,
-		},
-	)
-	if err != nil {
-		proc.Log().Error("Failed to ensure target updater: %v", err)
+	// Spawn the TargetUpdater as a direct child of this ChangesetExecutor with
+	// LinkParent so that when the executor terminates (for any reason) the child
+	// receives an exit signal and terminates too. The link is unidirectional:
+	// a crashing TU sends a message back to the executor (TargetUpdateFinished)
+	// but does NOT cascade back to kill the executor itself.
+	name := actornames.TargetUpdater(label, operation, commandID)
+	_, err := proc.SpawnRegister(name, target_update.NewTargetUpdater, gen.ProcessOptions{LinkParent: true}, proc.PID())
+	if err != nil && err != gen.ErrTaken {
+		proc.Log().Error("Failed to spawn target updater: %v", err)
 		return err
 	}
 
-	err = proc.Send(
-		gen.ProcessID{Name: actornames.TargetUpdater(label, operation, commandID), Node: proc.Node().Name()},
+	err = proc.Send(gen.ProcessID{Name: name, Node: proc.Node().Name()},
 		target_update.StartTargetUpdate{
 			TargetUpdate: *tu,
 			CommandID:    commandID,
-		},
-	)
+		})
 	if err != nil {
 		proc.Log().Error("Failed to send start message to target updater: %v", err)
 		return err
