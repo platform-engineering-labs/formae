@@ -205,7 +205,6 @@ type Listing struct {
 	Error          string               `json:"Error"`
 }
 
-
 type PluginOperatorCheckStatus struct {
 	Namespace         string
 	RequestID         string
@@ -437,6 +436,20 @@ func (o *PluginOperator) Init(args ...any) (statemachine.StateMachineSpec[Plugin
 	}
 	data.config = cfg.(model.RetryConfig)
 
+	// RequestedBy: the requesting ResourceUpdater's PID, threaded in via Env so
+	// we can establish the operator→RU link asynchronously (off the operation
+	// critical path). Linking here in Init would block, so we defer it via a
+	// self-message handled once the operator is Running (mirrors PluginActor's
+	// deferred setupMonitoring).
+	if v, ok := o.Env("RequestedBy"); ok {
+		if pid, ok := v.(gen.PID); ok && pid != (gen.PID{}) {
+			data.requestedBy = pid
+			if err := o.Send(o.PID(), establishLinkRequester{}); err != nil {
+				o.Log().Error("PluginOperator: failed to schedule requester link: %v", err)
+			}
+		}
+	}
+
 	// Initialize OTel metrics
 	if err := setupPluginOperatorMetrics(&data); err != nil {
 		o.Log().Error("Failed to setup plugin operator metrics: %v", err)
@@ -459,6 +472,9 @@ func (o *PluginOperator) Init(args ...any) (statemachine.StateMachineSpec[Plugin
 		statemachine.WithStateCallHandler(StateRetrying, delete),
 
 		statemachine.WithStateMessageHandler(StateNotStarted, list),
+		statemachine.WithStateMessageHandler(StateNotStarted, establishLink),
+		statemachine.WithStateMessageHandler(StateWaitingForResource, establishLink),
+		statemachine.WithStateMessageHandler(StateRetrying, establishLink),
 		statemachine.WithStateMessageHandler(StateWaitingForResource, status),
 		statemachine.WithStateMessageHandler(StateRetrying, retry),
 		statemachine.WithStateMessageHandler(StateFinishedSuccessfully, shutdown),
@@ -470,7 +486,13 @@ func shutdown(from gen.PID, state gen.Atom, data PluginUpdateData, shutdown Plug
 	return state, data, nil, gen.TerminateReasonNormal
 }
 
-// linkRequester establishes a unidirectional link from this operator to its
+// establishLinkRequester is sent to self after Init to defer establishing the
+// operator→ResourceUpdater link until the operator is Running (linking in Init
+// would block on a synchronous cross-node link RPC, stalling the spawn and the
+// requesting RU). Mirrors PluginActor's deferred setupMonitoring.
+type establishLinkRequester struct{}
+
+// establishLink creates a unidirectional link from this operator to its
 // requesting ResourceUpdater (RU). Because ergo links are unidirectional, the
 // RU's termination terminates the operator, while an operator crash leaves the
 // RU untouched.
@@ -481,22 +503,16 @@ func shutdown(from gen.PID, state gen.Atom, data PluginUpdateData, shutdown Plug
 // The PluginOperator (a StateMachine) does not trap exits, so the link
 // auto-terminates it when the RU dies; no MessageExit* handler is needed.
 //
-// requestedBy is only set once (on the initial operation); we link the first
-// time we capture it so continuation handlers (status/retry/resume) don't
-// re-link the same PID.
-func linkRequester(data *PluginUpdateData, from gen.PID, proc gen.Process) {
-	if data.requestedBy == from {
-		// Already linked to this requester (e.g. a continuation handler).
-		return
+// A failed link is not fatal: the operator can still complete its operation; it
+// just won't auto-terminate if the RU dies. The most common cause is the RU
+// already being gone, in which case nothing in flight matters anyway.
+func establishLink(from gen.PID, state gen.Atom, data PluginUpdateData, msg establishLinkRequester, proc gen.Process) (gen.Atom, PluginUpdateData, []statemachine.Action, error) {
+	if data.requestedBy != (gen.PID{}) {
+		if err := proc.LinkPID(data.requestedBy); err != nil {
+			proc.Log().Error("PluginOperator: failed to link requester %v: %v", data.requestedBy, err)
+		}
 	}
-	data.requestedBy = from
-	if err := proc.LinkPID(from); err != nil {
-		// A failed link is not fatal: the operator can still complete its
-		// operation; it just won't auto-terminate if the RU dies. Log so we
-		// can spot lingering operators. The most common cause is the RU
-		// already being gone, in which case nothing in flight matters anyway.
-		proc.Log().Error("PluginOperator: failed to link requester %v: %v", from, err)
-	}
+	return state, data, nil, nil
 }
 
 func onStateChange(oldState gen.Atom, newState gen.Atom, data PluginUpdateData, proc gen.Process) (gen.Atom, PluginUpdateData, error) {
@@ -521,7 +537,7 @@ func validateNamespace(data PluginUpdateData, namespace string, proc gen.Process
 }
 
 func read(from gen.PID, state gen.Atom, data PluginUpdateData, operation ReadResource, proc gen.Process) (gen.Atom, PluginUpdateData, TrackedProgress, []statemachine.Action, error) {
-	linkRequester(&data, from, proc)
+	data.requestedBy = from
 	data.operationStartTime = time.Now() // Start timing
 	if !validateNamespace(data, operation.Namespace, proc) {
 		return StateFinishedWithError, data, data.newNamespaceMismatchError(), nil, nil
@@ -560,7 +576,7 @@ func read(from gen.PID, state gen.Atom, data PluginUpdateData, operation ReadRes
 }
 
 func create(from gen.PID, state gen.Atom, data PluginUpdateData, operation CreateResource, proc gen.Process) (gen.Atom, PluginUpdateData, TrackedProgress, []statemachine.Action, error) {
-	linkRequester(&data, from, proc)
+	data.requestedBy = from
 	data.operationStartTime = time.Now() // Start timing
 	if !validateNamespace(data, operation.Namespace, proc) {
 		return StateFinishedWithError, data, data.newNamespaceMismatchError(), nil, nil
@@ -586,7 +602,7 @@ func create(from gen.PID, state gen.Atom, data PluginUpdateData, operation Creat
 }
 
 func update(from gen.PID, state gen.Atom, data PluginUpdateData, operation UpdateResource, proc gen.Process) (gen.Atom, PluginUpdateData, TrackedProgress, []statemachine.Action, error) {
-	linkRequester(&data, from, proc)
+	data.requestedBy = from
 	data.operationStartTime = time.Now() // Start timing
 	if !validateNamespace(data, operation.Namespace, proc) {
 		return StateFinishedWithError, data, data.newNamespaceMismatchError(), nil, nil
@@ -612,7 +628,7 @@ func update(from gen.PID, state gen.Atom, data PluginUpdateData, operation Updat
 }
 
 func delete(from gen.PID, state gen.Atom, data PluginUpdateData, operation DeleteResource, proc gen.Process) (gen.Atom, PluginUpdateData, TrackedProgress, []statemachine.Action, error) {
-	linkRequester(&data, from, proc)
+	data.requestedBy = from
 	data.operationStartTime = time.Now() // Start timing
 	if !validateNamespace(data, operation.Namespace, proc) {
 		return StateFinishedWithError, data, data.newNamespaceMismatchError(), nil, nil
@@ -694,7 +710,7 @@ func retry(from gen.PID, state gen.Atom, data PluginUpdateData, operation Plugin
 }
 
 func resume(from gen.PID, state gen.Atom, data PluginUpdateData, operation ResumeWaitingForResource, proc gen.Process) (gen.Atom, PluginUpdateData, TrackedProgress, []statemachine.Action, error) {
-	linkRequester(&data, from, proc)
+	data.requestedBy = from
 	if !validateNamespace(data, operation.Namespace, proc) {
 		return StateFinishedWithError, data, data.newNamespaceMismatchError(), nil, nil
 	}
@@ -833,7 +849,7 @@ func handlePluginResult(data PluginUpdateData, operation StatusCheck, proc gen.P
 }
 
 func list(from gen.PID, state gen.Atom, data PluginUpdateData, operation ListResources, proc gen.Process) (gen.Atom, PluginUpdateData, []statemachine.Action, error) {
-	linkRequester(&data, from, proc)
+	data.requestedBy = from
 	if !validateNamespace(data, operation.Namespace, proc) {
 		return StateFinishedWithError, data, nil, nil
 	}
