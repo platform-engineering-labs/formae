@@ -237,6 +237,9 @@ func (m *mockExtractDatastore) UpdateFormaCommandProgress(_ string, _ forma_comm
 func (m *mockExtractDatastore) UpdateFormaCommandTargetUpdates(_ string, _ json.RawMessage, _ forma_command.CommandState, _ time.Time) error {
 	panic("not implemented")
 }
+func (m *mockExtractDatastore) ForceCancelResourceUpdates(_ string, _ []datastore.ForceCancelRow, _ []datastore.ResourceUpdateRef, _ time.Time) (datastore.ForceCancelResult, error) {
+	panic("not implemented")
+}
 
 func TestExtractResources_ManagedAndUnmanagedStacks(t *testing.T) {
 	managedStack := &pkgmodel.Stack{

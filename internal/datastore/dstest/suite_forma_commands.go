@@ -787,6 +787,128 @@ func RunMonotonicTerminalityTest(t *testing.T, newDS func(t *testing.T) TestData
 	})
 }
 
+// RunForceCancelResourceUpdatesTest verifies ForceCancelResourceUpdates:
+//   - transitions InProgress+NotStarted rows to Canceled
+//   - writes force-cancel progress for the InProgress row
+//   - leaves already-terminal rows untouched and reports them in Skipped
+//   - is idempotent: a second call makes zero further changes
+func RunForceCancelResourceUpdatesTest(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("ForceCancelResourceUpdates", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		inProgressKsuid := util.NewID()
+		notStartedKsuid := util.NewID()
+		successKsuid := util.NewID()
+
+		cmd := &forma_command.FormaCommand{
+			ID:          util.NewID(),
+			Command:     pkgmodel.CommandApply,
+			State:       forma_command.CommandStateInProgress,
+			Description: pkgmodel.Description{},
+			ResourceUpdates: []resource_update.ResourceUpdate{
+				{
+					DesiredState:   pkgmodel.Resource{Ksuid: inProgressKsuid, Properties: json.RawMessage("{}")},
+					ResourceTarget: pkgmodel.Target{Label: "t", Namespace: "default", Config: json.RawMessage("{}")},
+					Operation:      resource_update.OperationCreate,
+					State:          resource_update.ResourceUpdateStateInProgress,
+				},
+				{
+					DesiredState:   pkgmodel.Resource{Ksuid: notStartedKsuid, Properties: json.RawMessage("{}")},
+					ResourceTarget: pkgmodel.Target{Label: "t", Namespace: "default", Config: json.RawMessage("{}")},
+					Operation:      resource_update.OperationCreate,
+					State:          resource_update.ResourceUpdateStateNotStarted,
+				},
+				{
+					DesiredState:   pkgmodel.Resource{Ksuid: successKsuid, Properties: json.RawMessage("{}")},
+					ResourceTarget: pkgmodel.Target{Label: "t", Namespace: "default", Config: json.RawMessage("{}")},
+					Operation:      resource_update.OperationCreate,
+					State:          resource_update.ResourceUpdateStateSuccess,
+				},
+			},
+		}
+		err := ds.StoreFormaCommand(cmd, cmd.ID)
+		assert.NoError(t, err)
+
+		// Build the force-cancel progress JSON for the InProgress row.
+		forceCancelProgress := plugin.TrackedProgress{
+			ProgressResult: pkgresource.ProgressResult{
+				StatusMessage: "force-canceled",
+			},
+		}
+		progressList := []plugin.TrackedProgress{forceCancelProgress}
+		progressJSON, err := json.Marshal(progressList)
+		assert.NoError(t, err)
+		mostRecentJSON, err := json.Marshal(forceCancelProgress)
+		assert.NoError(t, err)
+
+		inProgressRow := datastore.ForceCancelRow{
+			KSUID:                  inProgressKsuid,
+			Operation:              resource_update.OperationCreate,
+			ProgressJSON:           progressJSON,
+			MostRecentProgressJSON: mostRecentJSON,
+		}
+		notStartedRef := datastore.ResourceUpdateRef{
+			KSUID:      notStartedKsuid,
+			Operation:  resource_update.OperationCreate,
+		}
+		successRef := datastore.ResourceUpdateRef{
+			KSUID:      successKsuid,
+			Operation:  resource_update.OperationCreate,
+		}
+
+		now := time.Now()
+		result, err := ds.ForceCancelResourceUpdates(
+			cmd.ID,
+			[]datastore.ForceCancelRow{inProgressRow},
+			[]datastore.ResourceUpdateRef{notStartedRef, successRef},
+			now,
+		)
+		assert.NoError(t, err)
+
+		// Verify result split: inProgress → CanceledInProgress, notStarted → CanceledNotStarted, success → Skipped
+		assert.Len(t, result.CanceledInProgress, 1)
+		assert.Equal(t, inProgressKsuid, result.CanceledInProgress[0].KSUID)
+		assert.Len(t, result.CanceledNotStarted, 1)
+		assert.Equal(t, notStartedKsuid, result.CanceledNotStarted[0].KSUID)
+		assert.Len(t, result.Skipped, 1)
+		assert.Equal(t, successKsuid, result.Skipped[0].KSUID)
+
+		// Verify the DB reflects the state changes
+		updates, err := ds.LoadResourceUpdates(cmd.ID)
+		assert.NoError(t, err)
+		assert.Len(t, updates, 3)
+
+		byKsuid := make(map[string]resource_update.ResourceUpdate)
+		for _, u := range updates {
+			byKsuid[u.DesiredState.Ksuid] = u
+		}
+
+		assert.Equal(t, resource_update.ResourceUpdateStateCanceled, byKsuid[inProgressKsuid].State)
+		assert.Equal(t, resource_update.ResourceUpdateStateCanceled, byKsuid[notStartedKsuid].State)
+		assert.Equal(t, resource_update.ResourceUpdateStateSuccess, byKsuid[successKsuid].State, "already-terminal row must not be modified")
+
+		// Verify the InProgress row now has the force-cancel progress entry
+		assert.Equal(t, "force-canceled", byKsuid[inProgressKsuid].MostRecentProgressResult.ProgressResult.StatusMessage)
+		assert.Len(t, byKsuid[inProgressKsuid].ProgressResult, 1)
+		assert.Equal(t, "force-canceled", byKsuid[inProgressKsuid].ProgressResult[0].ProgressResult.StatusMessage)
+
+		// --- Idempotency: call again; all three rows are now terminal ---
+		result2, err := ds.ForceCancelResourceUpdates(
+			cmd.ID,
+			[]datastore.ForceCancelRow{inProgressRow},
+			[]datastore.ResourceUpdateRef{notStartedRef, successRef},
+			now,
+		)
+		assert.NoError(t, err)
+
+		assert.Empty(t, result2.CanceledInProgress, "retry must not re-cancel already-Canceled rows")
+		assert.Empty(t, result2.CanceledNotStarted, "retry must not re-cancel already-Canceled rows")
+		assert.Len(t, result2.Skipped, 3, "all rows must be reported as Skipped on retry")
+	})
+}
+
 // RunMonotonicTerminalityRaceTest fires two concurrent UpdateResourceUpdateState calls
 // on the same ResourceUpdate — one writing Success, one writing Failed. First write wins.
 // Within the agent these are serialized by the FormaCommandPersister actor; this test

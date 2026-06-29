@@ -41,6 +41,7 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunTerminalStatesLiteralsTest(t, newDS)
 	RunMonotonicTerminalityTest(t, newDS)
 	RunMonotonicTerminalityRaceTest(t, newDS)
+	RunForceCancelResourceUpdatesTest(t, newDS)
 
 	RunStoreResource(t, newDS)
 	RunUpdateResource(t, newDS)

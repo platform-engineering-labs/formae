@@ -527,3 +527,71 @@ func (d *DatastoreMSSQL) BatchUpdateResourceUpdateState(commandID string, refs [
 	committed = true
 	return nil
 }
+
+// ForceCancelResourceUpdates CAS-terminalizes in-flight resource updates to Canceled in one
+// transaction. For InProgress rows it also writes force-cancel progress. Returns the rows
+// transitioned (split by prior state) and those already terminal (Skipped). Idempotent.
+func (d *DatastoreMSSQL) ForceCancelResourceUpdates(commandID string, inProgress []datastore.ForceCancelRow, notStarted []datastore.ResourceUpdateRef, modifiedTs time.Time) (datastore.ForceCancelResult, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "ForceCancelResourceUpdates")
+	defer span.End()
+
+	var result datastore.ForceCancelResult
+
+	if len(inProgress) == 0 && len(notStarted) == 0 {
+		return result, nil
+	}
+
+	tx, err := d.conn.BeginTx(ctx, nil)
+	if err != nil {
+		return result, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	modifiedTsUTC := modifiedTs.UTC()
+
+	for _, row := range inProgress {
+		ref := datastore.ResourceUpdateRef{KSUID: row.KSUID, Operation: row.Operation}
+		res, execErr := tx.ExecContext(ctx, `
+			UPDATE resource_updates
+			SET state = 'Canceled', modified_ts = @p1, progress_result = @p2, most_recent_progress = @p3
+			WHERE command_id = @p4 AND ksuid = @p5 AND operation = @p6 AND state = 'InProgress'
+		`, modifiedTsUTC, string(row.ProgressJSON), string(row.MostRecentProgressJSON), commandID, row.KSUID, string(row.Operation))
+		if execErr != nil {
+			return result, fmt.Errorf("failed to force-cancel InProgress row %s: %w", row.KSUID, execErr)
+		}
+		n, _ := res.RowsAffected()
+		if n > 0 {
+			result.CanceledInProgress = append(result.CanceledInProgress, ref)
+		} else {
+			result.Skipped = append(result.Skipped, ref)
+		}
+	}
+
+	for _, ref := range notStarted {
+		res, execErr := tx.ExecContext(ctx, `
+			UPDATE resource_updates
+			SET state = 'Canceled', modified_ts = @p1
+			WHERE command_id = @p2 AND ksuid = @p3 AND operation = @p4 AND state = 'NotStarted'
+		`, modifiedTsUTC, commandID, ref.KSUID, string(ref.Operation))
+		if execErr != nil {
+			return result, fmt.Errorf("failed to force-cancel NotStarted row %s: %w", ref.KSUID, execErr)
+		}
+		n, _ := res.RowsAffected()
+		if n > 0 {
+			result.CanceledNotStarted = append(result.CanceledNotStarted, ref)
+		} else {
+			result.Skipped = append(result.Skipped, ref)
+		}
+	}
+
+	if err = tx.Commit(); err != nil {
+		return result, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+	committed = true
+	return result, nil
+}
