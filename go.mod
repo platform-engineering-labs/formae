@@ -271,6 +271,6 @@ require (
 	gvisor.dev/gvisor v0.0.0-20250205023644-9414b50a5633 // indirect
 )
 
-replace ergo.services/ergo => github.com/JeroenSoeters/ergo v1.999.320-pel.2
+replace ergo.services/ergo => github.com/JeroenSoeters/ergo v1.999.320-pel.4
 
 replace github.com/apple/pkl-go => github.com/JeroenSoeters/pkl-go v0.12.1-pel.1
