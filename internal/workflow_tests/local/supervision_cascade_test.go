@@ -9,6 +9,7 @@ package workflow_tests_local
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -73,6 +74,33 @@ func alivePluginOperators(t *testing.T, node gen.Node) int {
 		}
 	}
 	return count
+}
+
+// findPluginOperatorForResource returns the PID of any alive PluginOperator
+// whose registered name contains resourceURIFragment (a substring of the
+// FormaeURI for that resource, e.g. the KSUID portion).  Returns gen.PID{} and
+// false if none is found.
+func findPluginOperatorForResource(node gen.Node, resourceURIFragment string) (gen.PID, bool) {
+	pids, err := node.ProcessList()
+	if err != nil {
+		return gen.PID{}, false
+	}
+	for _, pid := range pids {
+		info, err := node.ProcessInfo(pid)
+		if err != nil {
+			continue
+		}
+		if info.Behavior != pluginOperatorBehavior {
+			continue
+		}
+		if info.State == gen.ProcessStateTerminated || info.State == gen.ProcessStateZombee {
+			continue
+		}
+		if strings.Contains(string(info.Name), resourceURIFragment) {
+			return pid, true
+		}
+	}
+	return gen.PID{}, false
 }
 
 // formaWithOneResource builds a minimal Forma with a single resource in a named stack.
@@ -540,5 +568,228 @@ func TestResourceUpdaterTerminationCascadesToPluginOperator(t *testing.T) {
 			return alivePluginOperators(t, m.Node) == 0
 		}, 5*time.Second, 100*time.Millisecond,
 			"PluginOperator must terminate after its requesting ResourceUpdater died (LinkPID cascade)")
+	})
+}
+
+// TestPluginOperatorCrashConvergesViaTimeout is the Phase-1 regression guard for
+// the PLA-202 supervision-tree restructure.
+//
+// It verifies three properties that must hold after Tasks 2–6 removed the
+// global updater supervisors and switched to unidirectional LinkParent links:
+//
+//  1. Timeout convergence: when a PluginOperator for one resource is forcefully
+//     killed after having responded InProgress, the watching ResourceUpdater
+//     detects the silence via its PluginOperatorMissingInAction timer and
+//     converges that resource update to terminal Failed — no infinite hang.
+//
+//  2. Command convergence: the FormaCommand itself reaches a terminal (Failed)
+//     state within a bounded wall-clock window. The ChangesetExecutor self-
+//     terminates normally once the command settles; it is NOT killed by the
+//     crash.
+//
+//  3. Sibling survival: a second, independent resource update in the same
+//     command is NOT affected by the single PluginOperator crash.  Because
+//     the link from PluginOperator → ResourceUpdater is unidirectional
+//     (operator crash does not propagate up), the sibling ResourceUpdater and
+//     the ChangesetExecutor stay alive and the sibling's update completes
+//     successfully.
+//
+// Failure injection: the vpc PluginOperator receives Create → returns InProgress
+// (the operator parks in StateWaitingForResource) and then is force-killed.
+// The ResourceUpdater is left waiting; after 2 × StatusCheckInterval it fires
+// PluginOperatorMissingInAction → StateFinishedWithError → CommandStateFailed.
+// The bucket PluginOperator is not killed and its Create returns Success.
+func TestPluginOperatorCrashConvergesViaTimeout(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		// vpc Create: returns InProgress so the PluginOperator parks in
+		// StateWaitingForResource.  Once we kill the operator the RU times out.
+		// bucket Create: returns Success immediately so the sibling succeeds
+		// independently of the crash.
+		// Status is never called for bucket (op finishes synchronously), and
+		// is never called for vpc because the operator is killed first.
+		overrides := &plugin.ResourcePluginOverrides{
+			Create: func(req *resource.CreateRequest) (*resource.CreateResult, error) {
+				if req.Label == "vpc" {
+					return &resource.CreateResult{
+						ProgressResult: &resource.ProgressResult{
+							Operation:       resource.OperationCreate,
+							OperationStatus: resource.OperationStatusInProgress,
+							RequestID:       "request-vpc",
+							NativeID:        "native-vpc",
+						},
+					}, nil
+				}
+				// bucket: finish synchronously
+				return &resource.CreateResult{
+					ProgressResult: &resource.ProgressResult{
+						Operation:          resource.OperationCreate,
+						OperationStatus:    resource.OperationStatusSuccess,
+						RequestID:          "request-" + req.Label,
+						NativeID:           "native-" + req.Label,
+						ResourceProperties: json.RawMessage(`{"BucketName":"crash-test-bucket"}`),
+					},
+				}, nil
+			},
+		}
+
+		// Use a short StatusCheckInterval so the PluginOperatorMissingInAction
+		// timeout (2 × interval) fires quickly in the test.
+		cfg := test_helpers.NewTestMetastructureConfig()
+		cfg.Agent.Retry.StatusCheckInterval = 1 * time.Second
+
+		m, def, err := test_helpers.NewTestMetastructureWithConfig(t, overrides, cfg)
+		defer def()
+		require.NoError(t, err)
+
+		// Forma with two independent resources in the same stack.
+		// No dependency between them so both ResourceUpdaters start in parallel.
+		forma := &pkgmodel.Forma{
+			Stacks: []pkgmodel.Stack{{Label: "crash-test"}},
+			Resources: []pkgmodel.Resource{
+				{
+					Label: "vpc",
+					Type:  "FakeAWS::EC2::VPC",
+					Properties: json.RawMessage(`{"CidrBlock":"10.0.0.0/16"}`),
+					Stack:   "crash-test",
+					Target:  "test-target",
+					Managed: true,
+				},
+				{
+					Label: "bucket",
+					Type:  "FakeAWS::S3::Bucket",
+					Properties: json.RawMessage(`{"BucketName":"crash-test-bucket"}`),
+					Stack:   "crash-test",
+					Target:  "test-target",
+					Managed: true,
+				},
+			},
+			Targets: []pkgmodel.Target{{Label: "test-target"}},
+		}
+
+		resp, err := m.ApplyForma(forma, &config.FormaCommandConfig{
+			Mode: pkgmodel.FormaApplyModeReconcile,
+		}, "test-client")
+		require.NoError(t, err)
+		commandID := resp.CommandID
+
+		// ── Step 1: wait until the vpc ResourceUpdater is in progress (InProgress
+		//   in the datastore) and its PluginOperator has been spawned. ──
+		var vpcURI pkgmodel.FormaeURI
+		assert.Eventually(t, func() bool {
+			cmds, err := m.Datastore.LoadFormaCommands()
+			if err != nil {
+				return false
+			}
+			for _, cmd := range cmds {
+				if cmd.ID != commandID {
+					continue
+				}
+				for _, ru := range cmd.ResourceUpdates {
+					if ru.DesiredState.Label == "vpc" &&
+						ru.State == resource_update.ResourceUpdateStateInProgress {
+						vpcURI = ru.DesiredState.URI()
+						return true
+					}
+				}
+			}
+			return false
+		}, 10*time.Second, 100*time.Millisecond,
+			"vpc ResourceUpdater must reach InProgress state")
+
+		// The vpc PluginOperator name contains the vpc's KSUID (from its FormaeURI).
+		// We search alive PluginOperator processes for that substring.
+		vpcKsuid := vpcURI.KSUID()
+		var vpcOpPID gen.PID
+		assert.Eventually(t, func() bool {
+			pid, found := findPluginOperatorForResource(m.Node, vpcKsuid)
+			if found {
+				vpcOpPID = pid
+			}
+			return found
+		}, 10*time.Second, 100*time.Millisecond,
+			"vpc PluginOperator must be spawned and alive")
+		t.Logf("vpc PluginOperator PID=%v", vpcOpPID)
+
+		// ── Step 2: confirm the executor is alive before we inject the crash ──
+		ceuxName := actornames.ChangesetExecutor(commandID)
+		require.True(t, isProcessAlive(m.Node, ceuxName),
+			"ChangesetExecutor must be alive before PluginOperator crash")
+
+		// ── Step 3: kill the vpc PluginOperator (crash injection) ──
+		require.NoError(t, m.Node.Kill(vpcOpPID),
+			"force-kill the vpc PluginOperator to inject the crash")
+		t.Log("vpc PluginOperator killed — waiting for convergence via PluginOperatorMissingInAction timeout")
+
+		// ── Step 4: the ChangesetExecutor must stay alive immediately after the
+		//   crash (unidirectional link: crash does not cascade upward). ──
+		// Give ergo a moment to propagate the kill signal.
+		time.Sleep(200 * time.Millisecond)
+		assert.True(t, isProcessAlive(m.Node, ceuxName),
+			"ChangesetExecutor must NOT be killed by the PluginOperator crash (unidirectional link)")
+
+		// ── Step 5: the sibling (bucket) resource update must reach Success. ──
+		// The bucket PluginOperator was never killed, so it should finish quickly.
+		assert.Eventually(t, func() bool {
+			cmds, err := m.Datastore.LoadFormaCommands()
+			if err != nil {
+				return false
+			}
+			for _, cmd := range cmds {
+				if cmd.ID != commandID {
+					continue
+				}
+				for _, ru := range cmd.ResourceUpdates {
+					if ru.DesiredState.Label == "bucket" {
+						return ru.State == resource_update.ResourceUpdateStateSuccess
+					}
+				}
+			}
+			return false
+		}, 15*time.Second, 100*time.Millisecond,
+			"sibling (bucket) resource update must complete successfully (crash must not kill siblings)")
+
+		// ── Step 6: the vpc resource update must reach Failed via the
+		//   PluginOperatorMissingInAction timeout (2 × 1 s = 2 s). ──
+		assert.Eventually(t, func() bool {
+			cmds, err := m.Datastore.LoadFormaCommands()
+			if err != nil {
+				return false
+			}
+			for _, cmd := range cmds {
+				if cmd.ID != commandID {
+					continue
+				}
+				for _, ru := range cmd.ResourceUpdates {
+					if ru.DesiredState.Label == "vpc" {
+						return ru.State == resource_update.ResourceUpdateStateFailed
+					}
+				}
+			}
+			return false
+		}, 15*time.Second, 100*time.Millisecond,
+			"vpc resource update must converge to Failed via PluginOperatorMissingInAction timeout")
+
+		// ── Step 7: the FormaCommand must reach a terminal state (Failed) without
+		//   hanging forever. ──
+		assert.Eventually(t, func() bool {
+			cmds, err := m.Datastore.LoadFormaCommands()
+			if err != nil {
+				return false
+			}
+			for _, cmd := range cmds {
+				if cmd.ID == commandID {
+					return cmd.State == forma_command.CommandStateFailed
+				}
+			}
+			return false
+		}, 20*time.Second, 100*time.Millisecond,
+			"FormaCommand must reach terminal Failed state — no hang after PluginOperator crash")
+
+		// ── Step 8: the ChangesetExecutor must self-terminate after the command
+		//   settles (it terminates normally, not due to the crash). ──
+		assert.Eventually(t, func() bool {
+			return !isProcessAlive(m.Node, ceuxName)
+		}, 5*time.Second, 100*time.Millisecond,
+			"ChangesetExecutor must self-terminate after command reaches terminal state")
 	})
 }
