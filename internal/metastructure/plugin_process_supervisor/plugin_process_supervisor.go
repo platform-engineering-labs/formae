@@ -396,6 +396,7 @@ func (p *PluginProcessSupervisor) spawnResourcePlugin(namespace string, pluginIn
 		Env:         env,
 		Tag:         namespace,
 		Process:     gen.Atom("PluginProcessSupervisor"), // Send messages to the PluginProcessSupervisor actor
+		SysProcAttr: pluginSysProcAttr(),                 // Kill the plugin if the agent dies abruptly (Linux Pdeathsig)
 	}
 
 	// Create meta.Port
@@ -435,6 +436,7 @@ func (p *PluginProcessSupervisor) spawnAuthPluginProcess(tag string, entry *auth
 		Tag:         tag,
 		Process:     gen.Atom("PluginProcessSupervisor"),
 		Binary:      meta.PortBinaryOptions{Enable: true, ReadBufferSize: 4096},
+		SysProcAttr: pluginSysProcAttr(), // Kill the auth plugin if the agent dies abruptly (Linux Pdeathsig)
 	}
 
 	metaport, err := meta.CreatePort(portOptions)
