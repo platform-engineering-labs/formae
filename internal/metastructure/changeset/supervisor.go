@@ -24,10 +24,6 @@ type EnsureChangesetExecutor struct {
 	CommandID string
 }
 
-type EnsureResolveCache struct {
-	CommandID string
-}
-
 func (s *ChangesetSupervisor) Init(args ...any) (act.SupervisorSpec, error) {
 	var spec act.SupervisorSpec
 	spec.Type = act.SupervisorTypeOneForOne
@@ -75,14 +71,6 @@ func (s *ChangesetSupervisor) HandleCall(from gen.PID, ref gen.Ref, request any)
 		s.Log().Debug("ChangesetSupervisor ensured ChangesetExecutor for %s", req.CommandID)
 		return true, nil
 
-	case EnsureResolveCache:
-		err := s.ensureResolveCache(from, req)
-		if err != nil {
-			return nil, fmt.Errorf("failed to ensure ResolveCache for %s: %w", req.CommandID, err)
-		}
-		s.Log().Debug("ChangesetSupervisor ensured ResolveCache for %s", req.CommandID)
-		return true, nil
-
 	default:
 		return nil, fmt.Errorf("changesetSupervisor received unknown request type %T", request)
 	}
@@ -103,17 +91,3 @@ func (s *ChangesetSupervisor) ensureChangesetExecutor(from gen.PID, req EnsureCh
 	return nil
 }
 
-func (s *ChangesetSupervisor) ensureResolveCache(from gen.PID, req EnsureResolveCache) error {
-	s.Log().Debug("ensuring ResolveCache for command %s", req.CommandID)
-
-	err := s.AddChild(act.SupervisorChildSpec{
-		Name:    actornames.ResolveCache(req.CommandID),
-		Factory: NewResolveCache,
-		Args:    []any{from},
-	})
-	if err != nil && err != act.ErrSupervisorChildDuplicate {
-		return fmt.Errorf("failed to add ResolveCache for command %s: %w", req.CommandID, err)
-	}
-
-	return nil
-}

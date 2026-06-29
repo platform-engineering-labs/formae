@@ -198,6 +198,74 @@ func TestExecutorTerminationCascadesToResourceUpdaters(t *testing.T) {
 	})
 }
 
+// TestExecutorTerminationCascadesToResolveCache verifies the cascade property of
+// the ChangesetExecutor → ResolveCache supervision link:
+//
+//  1. Cascade (parent → child): terminating the ChangesetExecutor causes its
+//     ResolveCache child to terminate within a few seconds.
+//
+// The ResolveCache is spawned by the executor for every changeset. To keep the
+// executor in-flight long enough to observe the cascade, the plugin returns
+// InProgress forever so the ResourceUpdater (and thus the executor) never finish.
+func TestExecutorTerminationCascadesToResolveCache(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		// Plugin returns InProgress forever so the executor stays alive indefinitely.
+		overrides := &plugin.ResourcePluginOverrides{
+			Create: func(req *resource.CreateRequest) (*resource.CreateResult, error) {
+				return &resource.CreateResult{
+					ProgressResult: &resource.ProgressResult{
+						Operation:       resource.OperationCreate,
+						OperationStatus: resource.OperationStatusInProgress,
+						RequestID:       "request-" + req.Label,
+						NativeID:        "native-" + req.Label,
+					},
+				}, nil
+			},
+			Status: func(req *resource.StatusRequest) (*resource.StatusResult, error) {
+				return &resource.StatusResult{
+					ProgressResult: &resource.ProgressResult{
+						Operation:       resource.OperationCreate,
+						OperationStatus: resource.OperationStatusInProgress,
+						RequestID:       req.RequestID,
+					},
+				}, nil
+			},
+		}
+
+		m, def, err := test_helpers.NewTestMetastructure(t, overrides)
+		defer def()
+		require.NoError(t, err)
+
+		// Apply a forma to trigger a changeset (and thus spawn a ResolveCache).
+		resp, err := m.ApplyForma(
+			formaWithOneResource("stack-rc", "rc-vpc"),
+			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
+			"test-client",
+		)
+		require.NoError(t, err)
+		commandID := resp.CommandID
+
+		// Wait for the ResolveCache to be alive.
+		rcName := actornames.ResolveCache(commandID)
+		assert.Eventually(t, func() bool {
+			return isProcessAlive(m.Node, rcName)
+		}, 10*time.Second, 100*time.Millisecond, "ResolveCache should become alive")
+		t.Logf("ResolveCache=%s", rcName)
+
+		ceuxName := actornames.ChangesetExecutor(commandID)
+		require.True(t, isProcessAlive(m.Node, ceuxName), "ChangesetExecutor must be alive before executor kill")
+
+		// Kill the ChangesetExecutor.
+		require.NoError(t, killProcessByName(m.Node, ceuxName))
+
+		// The ResolveCache must cascade-terminate within a few seconds via LinkParent.
+		assert.Eventually(t, func() bool {
+			return !isProcessAlive(m.Node, rcName)
+		}, 5*time.Second, 100*time.Millisecond,
+			"ResolveCache must terminate after its parent ChangesetExecutor was killed (LinkParent cascade)")
+	})
+}
+
 // TestExecutorTerminationCascadesToTargetUpdaters verifies two properties of the
 // ChangesetExecutor → TargetUpdater supervision link:
 //

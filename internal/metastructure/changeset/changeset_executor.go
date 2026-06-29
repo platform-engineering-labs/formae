@@ -166,20 +166,10 @@ func onStateChange(oldState gen.Atom, newState gen.Atom, data ChangesetData, pro
 			unregisterAllResourcesFromSynchronizer(data.syncExcludedResourceURIs, proc)
 		}
 
-		// Shutdown resolve cache
-		err := proc.Send(
-			gen.ProcessID{Node: proc.Node().Name(), Name: actornames.ResolveCache(data.changeset.CommandID)},
-			Shutdown{},
-		)
-		if err != nil {
-			proc.Log().Error("Failed to shutdown resolve cache commandID=%s: %v", data.changeset.CommandID, err)
-		}
-
 		// Send ourselves a shutdown message to terminate the process
 		proc.Log().Debug("ChangesetExecutor: sending shutdown message to self state=%s", newState)
-		err = proc.Send(proc.PID(), Shutdown{})
-		if err != nil {
-			proc.Log().Error("ChangesetExecutor: failed to send terminate message: %v", err)
+		if sendErr := proc.Send(proc.PID(), Shutdown{}); sendErr != nil {
+			proc.Log().Error("ChangesetExecutor: failed to send terminate message: %v", sendErr)
 		}
 
 		// Only send completion notification if the requester asked for it
@@ -194,9 +184,8 @@ func onStateChange(oldState gen.Atom, newState gen.Atom, data ChangesetData, pro
 				CommandID: data.changeset.CommandID,
 				State:     changesetState,
 			}
-			err = proc.Send(data.requestedBy, completed)
-			if err != nil {
-				proc.Log().Debug("Failed to send ChangesetCompleted event to requester: %v", err)
+			if sendErr := proc.Send(data.requestedBy, completed); sendErr != nil {
+				proc.Log().Debug("Failed to send ChangesetCompleted event to requester: %v", sendErr)
 			}
 		}
 	}
@@ -211,14 +200,14 @@ func start(from gen.PID, state gen.Atom, data ChangesetData, message Start, proc
 	// Capture stacks with delete operations NOW, before the DAG is modified during execution
 	data.stacksWithDeletes = collectStacksWithDeletes(data.changeset.DAG)
 
-	// Ensure the resolve cache is started
-	_, err := proc.Call(
-		gen.ProcessID{Node: proc.Node().Name(), Name: actornames.ChangesetSupervisor},
-		EnsureResolveCache{
-			CommandID: data.changeset.CommandID,
-		})
-	if err != nil {
-		proc.Log().Error("Failed to ensure resource updater: %v", err)
+	// Spawn the ResolveCache as a direct child of this ChangesetExecutor with
+	// LinkParent so that when the executor terminates (for any reason) the child
+	// receives an exit signal and terminates too. The link is unidirectional:
+	// a crashing ResolveCache sends no cascade back to kill the executor itself.
+	rcName := actornames.ResolveCache(data.changeset.CommandID)
+	_, err := proc.SpawnRegister(rcName, NewResolveCache, gen.ProcessOptions{LinkParent: true})
+	if err != nil && err != gen.ErrTaken {
+		proc.Log().Error("Failed to spawn resolve cache: %v", err)
 		return StateFinishedWithError, data, nil, nil
 	}
 
