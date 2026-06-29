@@ -48,6 +48,33 @@ func killProcessByName(node gen.Node, name gen.Atom) error {
 	return node.Kill(pid)
 }
 
+// pluginOperatorBehavior is the behavior type name reported by ergo's
+// ProcessShortInfo for a PluginOperator state machine.
+const pluginOperatorBehavior = "plugin.PluginOperator"
+
+// alivePluginOperators counts the non-terminated PluginOperator processes on the node.
+func alivePluginOperators(t *testing.T, node gen.Node) int {
+	t.Helper()
+	pids, err := node.ProcessList()
+	if err != nil {
+		return 0
+	}
+	count := 0
+	for _, pid := range pids {
+		info, err := node.ProcessInfo(pid)
+		if err != nil {
+			continue
+		}
+		if info.Behavior != pluginOperatorBehavior {
+			continue
+		}
+		if info.State != gen.ProcessStateTerminated && info.State != gen.ProcessStateZombee {
+			count++
+		}
+	}
+	return count
+}
+
 // formaWithOneResource builds a minimal Forma with a single resource in a named stack.
 func formaWithOneResource(stack, label string) *pkgmodel.Forma {
 	return &pkgmodel.Forma{
@@ -407,5 +434,111 @@ func TestExecutorTerminationCascadesToTargetUpdaters(t *testing.T) {
 			return !isProcessAlive(m.Node, tuNameA)
 		}, 5*time.Second, 100*time.Millisecond,
 			"TargetUpdater must terminate after its parent ChangesetExecutor was killed (LinkParent cascade)")
+	})
+}
+
+// TestResourceUpdaterTerminationCascadesToPluginOperator verifies that an in-flight
+// PluginOperator is torn down when its requesting ResourceUpdater terminates.
+//
+// The PluginOperator establishes a unidirectional link to its requester RU (see
+// PluginOperator.linkRequester and TestLinkPIDDirectionality). When the executor is
+// killed, its LinkParent cascade terminates the RU, and the RU's death must propagate
+// across the link to terminate the in-flight operator.
+//
+// Create returns InProgress, so the operator parks in StateWaitingForResource and
+// schedules its next Status poll far in the future (a long StatusCheckInterval). It
+// therefore stays idle: it does NOT poll again and does NOT try to send to the RU
+// within the test window. The only way it can terminate in that window is the link
+// to its RU. This isolates the link from the operator's own "next poll's send to a
+// dead RU fails" shutdown path (which would otherwise mask the link).
+func TestResourceUpdaterTerminationCascadesToPluginOperator(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		overrides := &plugin.ResourcePluginOverrides{
+			Create: func(req *resource.CreateRequest) (*resource.CreateResult, error) {
+				return &resource.CreateResult{
+					ProgressResult: &resource.ProgressResult{
+						Operation:       resource.OperationCreate,
+						OperationStatus: resource.OperationStatusInProgress,
+						RequestID:       "request-" + req.Label,
+						NativeID:        "native-" + req.Label,
+					},
+				}, nil
+			},
+			Status: func(req *resource.StatusRequest) (*resource.StatusResult, error) {
+				return &resource.StatusResult{
+					ProgressResult: &resource.ProgressResult{
+						Operation:       resource.OperationCreate,
+						OperationStatus: resource.OperationStatusInProgress,
+						RequestID:       req.RequestID,
+					},
+				}, nil
+			},
+		}
+
+		// Long StatusCheckInterval: the operator parks idle after Create and won't
+		// re-poll (and thus won't discover the dead RU on its own) during the test.
+		cfg := test_helpers.NewTestMetastructureConfig()
+		cfg.Agent.Retry.StatusCheckInterval = 60 * time.Second
+
+		m, def, err := test_helpers.NewTestMetastructureWithConfig(t, overrides, cfg)
+		defer def()
+		require.NoError(t, err)
+
+		resp, err := m.ApplyForma(
+			formaWithOneResource("stack-op", "op-vpc"),
+			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
+			"test-client",
+		)
+		require.NoError(t, err)
+		commandID := resp.CommandID
+
+		// Wait for the ResourceUpdater to be in-flight.
+		var ruName gen.Atom
+		assert.Eventually(t, func() bool {
+			commands, err := m.Datastore.LoadFormaCommands()
+			if err != nil {
+				return false
+			}
+			for _, cmd := range commands {
+				if cmd.ID != commandID {
+					continue
+				}
+				for _, ru := range cmd.ResourceUpdates {
+					if ru.State == resource_update.ResourceUpdateStateInProgress {
+						ruName = actornames.ResourceUpdater(
+							ru.DesiredState.URI(), string(ru.Operation), commandID)
+						return isProcessAlive(m.Node, ruName)
+					}
+				}
+			}
+			return false
+		}, 10*time.Second, 100*time.Millisecond, "ResourceUpdater should become alive")
+		t.Logf("ResourceUpdater=%s", ruName)
+
+		// Wait for a PluginOperator to be spawned and in-flight.
+		assert.Eventually(t, func() bool {
+			return alivePluginOperators(t, m.Node) >= 1
+		}, 10*time.Second, 100*time.Millisecond, "a PluginOperator should be spawned and alive")
+		require.GreaterOrEqual(t, alivePluginOperators(t, m.Node), 1,
+			"PluginOperator must be alive before RU termination")
+
+		// Kill the ChangesetExecutor. Its LinkParent cascade terminates the RU,
+		// whose death must propagate across the link to the PluginOperator.
+		ceuxName := actornames.ChangesetExecutor(commandID)
+		require.True(t, isProcessAlive(m.Node, ceuxName), "ChangesetExecutor must be alive before kill")
+		require.NoError(t, killProcessByName(m.Node, ceuxName))
+
+		// The RU must terminate via the LinkParent cascade (Tasks 2-5).
+		assert.Eventually(t, func() bool {
+			return !isProcessAlive(m.Node, ruName)
+		}, 5*time.Second, 100*time.Millisecond,
+			"ResourceUpdater must terminate after its parent ChangesetExecutor was killed")
+
+		// The in-flight PluginOperator must terminate shortly after its RU dies,
+		// via the unidirectional link established in linkRequester.
+		assert.Eventually(t, func() bool {
+			return alivePluginOperators(t, m.Node) == 0
+		}, 5*time.Second, 100*time.Millisecond,
+			"PluginOperator must terminate after its requesting ResourceUpdater died (LinkPID cascade)")
 	})
 }

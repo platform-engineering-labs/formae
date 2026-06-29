@@ -470,6 +470,35 @@ func shutdown(from gen.PID, state gen.Atom, data PluginUpdateData, shutdown Plug
 	return state, data, nil, gen.TerminateReasonNormal
 }
 
+// linkRequester establishes a unidirectional link from this operator to its
+// requesting ResourceUpdater (RU). Because the link is unidirectional in the
+// pinned ergo fork (see TestLinkPIDDirectionality), the RU's termination
+// terminates the operator, while an operator crash leaves the RU untouched.
+// This lets the executor's LinkParent cascade tear down in-flight remote
+// operators when their RU dies, without an operator failure reaching back to
+// the RU (that path stays handled by the existing timeout logic).
+//
+// The PluginOperator (a StateMachine) does not trap exits, so the link
+// auto-terminates it when the RU dies; no MessageExit* handler is needed.
+//
+// requestedBy is only set once (on the initial operation); we link the first
+// time we capture it so continuation handlers (status/retry/resume) don't
+// re-link the same PID.
+func linkRequester(data *PluginUpdateData, from gen.PID, proc gen.Process) {
+	if data.requestedBy == from {
+		// Already linked to this requester (e.g. a continuation handler).
+		return
+	}
+	data.requestedBy = from
+	if err := proc.LinkPID(from); err != nil {
+		// A failed link is not fatal: the operator can still complete its
+		// operation; it just won't auto-terminate if the RU dies. Log so we
+		// can spot lingering operators. The most common cause is the RU
+		// already being gone, in which case nothing in flight matters anyway.
+		proc.Log().Error("PluginOperator: failed to link requester %v: %v", from, err)
+	}
+}
+
 func onStateChange(oldState gen.Atom, newState gen.Atom, data PluginUpdateData, proc gen.Process) (gen.Atom, PluginUpdateData, error) {
 	if newState == StateFinishedSuccessfully || newState == StateFinishedWithError {
 		err := proc.Send(proc.PID(), PluginOperatorShutdown{})
@@ -492,7 +521,7 @@ func validateNamespace(data PluginUpdateData, namespace string, proc gen.Process
 }
 
 func read(from gen.PID, state gen.Atom, data PluginUpdateData, operation ReadResource, proc gen.Process) (gen.Atom, PluginUpdateData, TrackedProgress, []statemachine.Action, error) {
-	data.requestedBy = from
+	linkRequester(&data, from, proc)
 	data.operationStartTime = time.Now() // Start timing
 	if !validateNamespace(data, operation.Namespace, proc) {
 		return StateFinishedWithError, data, data.newNamespaceMismatchError(), nil, nil
@@ -531,7 +560,7 @@ func read(from gen.PID, state gen.Atom, data PluginUpdateData, operation ReadRes
 }
 
 func create(from gen.PID, state gen.Atom, data PluginUpdateData, operation CreateResource, proc gen.Process) (gen.Atom, PluginUpdateData, TrackedProgress, []statemachine.Action, error) {
-	data.requestedBy = from
+	linkRequester(&data, from, proc)
 	data.operationStartTime = time.Now() // Start timing
 	if !validateNamespace(data, operation.Namespace, proc) {
 		return StateFinishedWithError, data, data.newNamespaceMismatchError(), nil, nil
@@ -557,7 +586,7 @@ func create(from gen.PID, state gen.Atom, data PluginUpdateData, operation Creat
 }
 
 func update(from gen.PID, state gen.Atom, data PluginUpdateData, operation UpdateResource, proc gen.Process) (gen.Atom, PluginUpdateData, TrackedProgress, []statemachine.Action, error) {
-	data.requestedBy = from
+	linkRequester(&data, from, proc)
 	data.operationStartTime = time.Now() // Start timing
 	if !validateNamespace(data, operation.Namespace, proc) {
 		return StateFinishedWithError, data, data.newNamespaceMismatchError(), nil, nil
@@ -583,7 +612,7 @@ func update(from gen.PID, state gen.Atom, data PluginUpdateData, operation Updat
 }
 
 func delete(from gen.PID, state gen.Atom, data PluginUpdateData, operation DeleteResource, proc gen.Process) (gen.Atom, PluginUpdateData, TrackedProgress, []statemachine.Action, error) {
-	data.requestedBy = from
+	linkRequester(&data, from, proc)
 	data.operationStartTime = time.Now() // Start timing
 	if !validateNamespace(data, operation.Namespace, proc) {
 		return StateFinishedWithError, data, data.newNamespaceMismatchError(), nil, nil
@@ -665,7 +694,7 @@ func retry(from gen.PID, state gen.Atom, data PluginUpdateData, operation Plugin
 }
 
 func resume(from gen.PID, state gen.Atom, data PluginUpdateData, operation ResumeWaitingForResource, proc gen.Process) (gen.Atom, PluginUpdateData, TrackedProgress, []statemachine.Action, error) {
-	data.requestedBy = from
+	linkRequester(&data, from, proc)
 	if !validateNamespace(data, operation.Namespace, proc) {
 		return StateFinishedWithError, data, data.newNamespaceMismatchError(), nil, nil
 	}
@@ -804,7 +833,7 @@ func handlePluginResult(data PluginUpdateData, operation StatusCheck, proc gen.P
 }
 
 func list(from gen.PID, state gen.Atom, data PluginUpdateData, operation ListResources, proc gen.Process) (gen.Atom, PluginUpdateData, []statemachine.Action, error) {
-	data.requestedBy = from
+	linkRequester(&data, from, proc)
 	if !validateNamespace(data, operation.Namespace, proc) {
 		return StateFinishedWithError, data, nil, nil
 	}
