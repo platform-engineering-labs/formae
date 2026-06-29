@@ -24,6 +24,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
+	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
 
 type FormaCommandPersister struct {
@@ -262,6 +263,20 @@ type TargetUpdateRef struct {
 	Operation types.OperationType
 }
 
+// BulkForceCancel terminalizes all still-in-flight resource and target updates for a command
+// in one persister turn. Used by the force-cancel flow.
+type BulkForceCancel struct {
+	CommandID string
+	Resources []ResourceUpdateRef
+	Targets   []TargetUpdateRef
+}
+
+// BulkForceCancelResponse reports the outcome of a BulkForceCancel.
+type BulkForceCancelResponse struct {
+	Skipped                 []ResourceUpdateRef // rows that were already terminal (no-op)
+	ForceCanceledInProgress []ResourceUpdateRef // rows that were InProgress (got force-cancel progress entries)
+}
+
 // MarkTargetsAsFailed is sent by the changeset executor when target updates
 // are cascade-failed due to a dependency failure in the DAG.
 type MarkTargetsAsFailed struct {
@@ -304,6 +319,8 @@ func (f *FormaCommandPersister) HandleCall(from gen.PID, ref gen.Ref, message an
 		return f.markTargetsAsFailed(&msg)
 	case MarkResourcesAsCanceled:
 		return f.markResourcesAsCanceled(&msg)
+	case BulkForceCancel:
+		return f.bulkForceCancel(&msg)
 	case messages.MarkResourceUpdateAsComplete:
 		return f.markResourceUpdateAsComplete(&msg)
 	case FinalizeIncompleteCommand:
@@ -683,6 +700,133 @@ func (f *FormaCommandPersister) markTargetsAsFailed(msg *MarkTargetsAsFailed) (b
 
 func (f *FormaCommandPersister) markResourcesAsCanceled(msg *MarkResourcesAsCanceled) (bool, error) {
 	return f.bulkUpdateResourceState(msg.CommandID, msg.Resources, types.ResourceUpdateStateCanceled, util.TimeNow())
+}
+
+func (f *FormaCommandPersister) bulkForceCancel(msg *BulkForceCancel) (BulkForceCancelResponse, error) {
+	ts := util.TimeNow()
+	resp := BulkForceCancelResponse{}
+
+	cached, err := f.getOrLoadCommand(msg.CommandID)
+	if err != nil {
+		return resp, fmt.Errorf("failed to load command for BulkForceCancel: %w", err)
+	}
+	command := cached.command
+
+	var inProgressRows []datastore.ForceCancelRow
+	var notStartedRefs []datastore.ResourceUpdateRef
+
+	for _, ref := range msg.Resources {
+		idx := cached.findResourceUpdateIndex(ref.URI.KSUID(), ref.Operation)
+		if idx == -1 {
+			continue
+		}
+		res := &command.ResourceUpdates[idx]
+
+		if isResourceInFinalState(res.State) {
+			resp.Skipped = append(resp.Skipped, ref)
+			continue
+		}
+
+		forceCancelProgress := plugin.TrackedProgress{
+			ProgressResult: resource.ProgressResult{
+				Operation:       resource.Operation(res.Operation),
+				OperationStatus: resource.OperationStatusCanceled,
+				StatusMessage:   "force-canceled",
+			},
+		}
+
+		if res.State == types.ResourceUpdateStateInProgress {
+			// Build the progress list: copy existing + append force-cancel entry
+			newProgressList := append(append([]plugin.TrackedProgress{}, res.ProgressResult...), forceCancelProgress)
+			progressJSON, merr := json.Marshal(newProgressList)
+			if merr != nil {
+				return resp, fmt.Errorf("failed to marshal progress for BulkForceCancel: %w", merr)
+			}
+			mostRecentJSON, merr := json.Marshal(forceCancelProgress)
+			if merr != nil {
+				return resp, fmt.Errorf("failed to marshal most-recent progress for BulkForceCancel: %w", merr)
+			}
+			inProgressRows = append(inProgressRows, datastore.ForceCancelRow{
+				KSUID:                  res.DesiredState.Ksuid,
+				Operation:              ref.Operation,
+				ProgressJSON:           progressJSON,
+				MostRecentProgressJSON: mostRecentJSON,
+			})
+			resp.ForceCanceledInProgress = append(resp.ForceCanceledInProgress, ref)
+
+			// Update in-memory progress
+			res.ProgressResult = append(res.ProgressResult, forceCancelProgress)
+			res.MostRecentProgressResult = forceCancelProgress
+		} else {
+			// NotStarted or any other non-final state
+			notStartedRefs = append(notStartedRefs, datastore.ResourceUpdateRef{
+				KSUID:     res.DesiredState.Ksuid,
+				Operation: ref.Operation,
+			})
+		}
+
+		// Terminalize in-memory + counter (mirror bulkUpdateResourceState exactly)
+		res.State = types.ResourceUpdateStateCanceled
+		res.ModifiedTs = ts
+		cached.pendingCompletions--
+		if cached.pendingCompletions < 0 {
+			return resp, fmt.Errorf("BulkForceCancel: pendingCompletions went below zero for command %s, this indicates a programming error", msg.CommandID)
+		}
+		key := resourceUpdateKey(ref.URI.KSUID(), ref.Operation)
+		if cached.terminalizedByBulk == nil {
+			cached.terminalizedByBulk = make(map[string]bool)
+		}
+		cached.terminalizedByBulk[key] = true
+	}
+
+	// Call datastore to CAS-terminalize the rows
+	result, err := f.datastore.ForceCancelResourceUpdates(msg.CommandID, inProgressRows, notStartedRefs, ts)
+	if err != nil {
+		return resp, fmt.Errorf("ForceCancelResourceUpdates failed for command %s: %w", msg.CommandID, err)
+	}
+	// Merge DB-reported skipped (already-terminal) into response
+	for _, r := range result.Skipped {
+		resp.Skipped = append(resp.Skipped, ResourceUpdateRef{
+			URI:       pkgmodel.NewFormaeURI(r.KSUID, ""),
+			Operation: r.Operation,
+		})
+	}
+
+	// Terminalize in-flight targets in-memory
+	for _, ref := range msg.Targets {
+		for i := range command.TargetUpdates {
+			tu := &command.TargetUpdates[i]
+			if tu.Target.Label != ref.Label || tu.Operation != ref.Operation {
+				continue
+			}
+			if isTargetInFinalState(tu.State) {
+				break
+			}
+			tu.State = types.TargetUpdateStateCanceled
+			tu.ModifiedTs = ts
+			break
+		}
+	}
+
+	// Persist target updates blob
+	if len(msg.Targets) > 0 {
+		targetUpdatesJSON, merr := json.Marshal(command.TargetUpdates)
+		if merr != nil {
+			return resp, fmt.Errorf("failed to marshal target updates for BulkForceCancel: %w", merr)
+		}
+		if merr := f.datastore.UpdateFormaCommandTargetUpdates(command.ID, targetUpdatesJSON, command.State, ts); merr != nil {
+			return resp, fmt.Errorf("failed to persist target updates for BulkForceCancel: %w", merr)
+		}
+	}
+
+	command.ModifiedTs = ts
+	command.State = overallCommandState(command)
+
+	if err := f.finalizeAndPersist(cached); err != nil {
+		return resp, err
+	}
+
+	return resp, nil
 }
 
 func (f *FormaCommandPersister) markResourceUpdateAsComplete(msg *messages.MarkResourceUpdateAsComplete) (bool, error) {

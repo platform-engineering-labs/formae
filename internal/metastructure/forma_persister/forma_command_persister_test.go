@@ -1129,6 +1129,176 @@ func newFormaCommandPersisterForTest(t *testing.T) (*unit.TestActor, gen.PID, er
 	return newFormaCommandPersisterWithDatastore(t, ds)
 }
 
+// TestFormaCommandPersister_BulkForceCancel_TerminalizesInFlightWork verifies that
+// BulkForceCancel terminalizes all in-flight resource and target updates to Canceled in one
+// persister turn, writes force-cancel progress for InProgress rows, leaves already-terminal
+// rows untouched (Skipped), and correctly accounts for pendingCompletions so that a late
+// MarkResourceUpdateAsComplete is a no-op.
+func TestFormaCommandPersister_BulkForceCancel_TerminalizesInFlightWork(t *testing.T) {
+	ksuid1 := util.NewID()
+	ksuid2 := util.NewID()
+	ksuid3 := util.NewID() // already Success (terminal)
+
+	formaCommand := &forma_command.FormaCommand{
+		ID:      "test-bulk-force-cancel",
+		State:   forma_command.CommandStateInProgress,
+		Command: pkgmodel.CommandApply,
+		Config: config.FormaCommandConfig{
+			Mode:     pkgmodel.FormaApplyModeReconcile,
+			Simulate: false,
+		},
+		StartTs: util.TimeNow().Add(-1 * time.Hour),
+		TargetUpdates: []target_update.TargetUpdate{
+			{
+				Target: pkgmodel.Target{
+					Label:     "test-target",
+					Namespace: "test-namespace",
+				},
+				Operation: target_update.TargetOperationCreate,
+				State:     target_update.TargetUpdateStateNotStarted,
+			},
+		},
+		ResourceUpdates: []resource_update.ResourceUpdate{
+			{
+				DesiredState: pkgmodel.Resource{
+					Label:      "resource1",
+					Type:       "test-type",
+					Stack:      "test-stack",
+					Properties: json.RawMessage(`{"a":"1"}`),
+					Ksuid:      ksuid1,
+				},
+				Operation:      resource_update.OperationCreate,
+				State:          resource_update.ResourceUpdateStateNotStarted,
+				ProgressResult: []plugin.TrackedProgress{},
+			},
+			{
+				DesiredState: pkgmodel.Resource{
+					Label:      "resource2",
+					Type:       "test-type",
+					Stack:      "test-stack",
+					Properties: json.RawMessage(`{"b":"2"}`),
+					Ksuid:      ksuid2,
+				},
+				Operation:      resource_update.OperationCreate,
+				State:          resource_update.ResourceUpdateStateNotStarted,
+				ProgressResult: []plugin.TrackedProgress{},
+			},
+			{
+				DesiredState: pkgmodel.Resource{
+					Label:      "resource3",
+					Type:       "test-type",
+					Stack:      "test-stack",
+					Properties: json.RawMessage(`{"c":"3"}`),
+					Ksuid:      ksuid3,
+				},
+				Operation: resource_update.OperationCreate,
+				State:     resource_update.ResourceUpdateStateSuccess, // already terminal
+			},
+		},
+	}
+
+	formaPersister, sender, err := newFormaCommandPersisterForTest(t)
+	assert.NoError(t, err)
+
+	// Store: pendingCompletions=3 (all 3 RUs, incl. ksuid3 which is Success — stored as-is)
+	// Note: storeNewFormaCommand sets pendingCompletions = len(ResourceUpdates) = 3
+	storeResult := formaPersister.Call(sender, StoreNewFormaCommand{Command: *formaCommand})
+	assert.NoError(t, storeResult.Error)
+	assert.True(t, storeResult.Response.(bool))
+
+	// Advance ksuid1 and ksuid2 to InProgress via UpdateResourceProgress
+	now := util.TimeNow()
+	for _, ksuid := range []string{ksuid1, ksuid2} {
+		progress := messages.UpdateResourceProgress{
+			CommandID:          formaCommand.ID,
+			ResourceURI:        pkgmodel.NewFormaeURI(ksuid, ""),
+			Operation:          resource_update.OperationCreate,
+			ResourceStartTs:    now,
+			ResourceModifiedTs: now,
+			ResourceState:      resource_update.ResourceUpdateStateInProgress,
+			Progress: plugin.TrackedProgress{
+				ProgressResult: resource.ProgressResult{
+					Operation:       resource.OperationCreate,
+					OperationStatus: resource.OperationStatusInProgress,
+					RequestID:       "req-" + ksuid,
+				},
+			},
+		}
+		res := formaPersister.Call(sender, progress)
+		assert.NoError(t, res.Error)
+	}
+
+	// BulkForceCancel: include all 3 resources + the target
+	bulkCancel := BulkForceCancel{
+		CommandID: formaCommand.ID,
+		Resources: []ResourceUpdateRef{
+			{URI: pkgmodel.NewFormaeURI(ksuid1, ""), Operation: resource_update.OperationCreate},
+			{URI: pkgmodel.NewFormaeURI(ksuid2, ""), Operation: resource_update.OperationCreate},
+			{URI: pkgmodel.NewFormaeURI(ksuid3, ""), Operation: resource_update.OperationCreate},
+		},
+		Targets: []TargetUpdateRef{
+			{Label: "test-target", Operation: target_update.TargetOperationCreate},
+		},
+	}
+	cancelResult := formaPersister.Call(sender, bulkCancel)
+	assert.NoError(t, cancelResult.Error)
+
+	resp, ok := cancelResult.Response.(BulkForceCancelResponse)
+	assert.True(t, ok, "response must be BulkForceCancelResponse")
+
+	// ksuid3 (Success) must appear in Skipped
+	assert.Len(t, resp.Skipped, 1)
+	assert.Equal(t, ksuid3, resp.Skipped[0].URI.KSUID())
+
+	// ksuid1 and ksuid2 (InProgress) must appear in ForceCanceledInProgress
+	assert.Len(t, resp.ForceCanceledInProgress, 2)
+	forceCanceledKsuids := []string{
+		resp.ForceCanceledInProgress[0].URI.KSUID(),
+		resp.ForceCanceledInProgress[1].URI.KSUID(),
+	}
+	assert.Contains(t, forceCanceledKsuids, ksuid1)
+	assert.Contains(t, forceCanceledKsuids, ksuid2)
+
+	// Reload from DB (command was finalized and evicted from cache)
+	loadResult := formaPersister.Call(sender, LoadFormaCommand{CommandID: formaCommand.ID})
+	assert.NoError(t, loadResult.Error)
+	loaded := loadResult.Response.(*forma_command.FormaCommand)
+
+	// Build lookup by ksuid
+	ruByKsuid := make(map[string]*resource_update.ResourceUpdate)
+	for i := range loaded.ResourceUpdates {
+		ru := &loaded.ResourceUpdates[i]
+		ruByKsuid[ru.DesiredState.Ksuid] = ru
+	}
+
+	assert.Equal(t, resource_update.ResourceUpdateStateCanceled, ruByKsuid[ksuid1].State, "ksuid1 must be Canceled")
+	assert.Equal(t, resource_update.ResourceUpdateStateCanceled, ruByKsuid[ksuid2].State, "ksuid2 must be Canceled")
+	assert.Equal(t, resource_update.ResourceUpdateStateSuccess, ruByKsuid[ksuid3].State, "ksuid3 must remain Success")
+
+	assert.Equal(t, types.TargetUpdateStateCanceled, loaded.TargetUpdates[0].State, "target must be Canceled")
+	assert.Equal(t, forma_command.CommandStateCanceled, loaded.State, "command must be Canceled")
+
+	// Late MarkResourceUpdateAsComplete for ksuid1 (already Canceled) must be a no-op.
+	// The terminalizedByBulk guard fires, pendingCompletions must NOT underflow.
+	lateComplete := messages.MarkResourceUpdateAsComplete{
+		CommandID:          formaCommand.ID,
+		ResourceURI:        pkgmodel.NewFormaeURI(ksuid1, ""),
+		Operation:          resource_update.OperationCreate,
+		FinalState:         resource_update.ResourceUpdateStateSuccess,
+		ResourceStartTs:    now,
+		ResourceModifiedTs: now,
+	}
+	lateRes := formaPersister.Call(sender, lateComplete)
+	assert.NoError(t, lateRes.Error, "late completion for already-terminal resource must be a no-op")
+	assert.True(t, lateRes.Response.(bool))
+
+	// State must still be Canceled after the late no-op
+	finalLoad := formaPersister.Call(sender, LoadFormaCommand{CommandID: formaCommand.ID})
+	assert.NoError(t, finalLoad.Error)
+	finalCmd := finalLoad.Response.(*forma_command.FormaCommand)
+	assert.Equal(t, forma_command.CommandStateCanceled, finalCmd.State)
+}
+
 func newFormaCommandPersisterWithDatastore(t *testing.T, ds datastore.Datastore) (*unit.TestActor, gen.PID, error) {
 	env := map[gen.Env]any{
 		"Datastore": ds,
