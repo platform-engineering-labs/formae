@@ -39,8 +39,9 @@ type FormaCommandPersister struct {
 // cachedCommand holds an in-memory FormaCommand with optimized lookup structures.
 type cachedCommand struct {
 	command            *forma_command.FormaCommand
-	ksuidOpToIndex     map[string]int // O(1) lookup: "ksuid:operation" -> ResourceUpdates index
-	pendingCompletions int            // Number of MarkResourceUpdateAsComplete messages expected
+	ksuidOpToIndex     map[string]int  // O(1) lookup: "ksuid:operation" -> ResourceUpdates index
+	pendingCompletions int             // Number of MarkResourceUpdateAsComplete messages expected
+	terminalizedByBulk map[string]bool // Resources terminalized by bulkUpdateResourceState (counter already decremented)
 }
 
 // resourceUpdateKey creates a composite key for looking up a ResourceUpdate by ksuid and operation.
@@ -85,12 +86,33 @@ func countNonFinalResources(cmd *forma_command.FormaCommand) int {
 	return count
 }
 
+// buildTerminalizedByBulkIndex builds a set of resource update keys that are already
+// in a terminal state when loading from the database. This ensures that any late
+// MarkResourceUpdateAsComplete messages for these resources are treated as no-ops,
+// guarding against pendingCompletions underflow.
+func buildTerminalizedByBulkIndex(cmd *forma_command.FormaCommand) map[string]bool {
+	m := make(map[string]bool)
+	for _, ru := range cmd.ResourceUpdates {
+		if isResourceInFinalState(ru.State) {
+			m[resourceUpdateKey(ru.DesiredState.Ksuid, types.OperationType(ru.Operation))] = true
+		}
+	}
+	return m
+}
+
 // isResourceInFinalState checks if a resource update is in a final state.
 func isResourceInFinalState(state types.ResourceUpdateState) bool {
 	return state == types.ResourceUpdateStateSuccess ||
 		state == types.ResourceUpdateStateFailed ||
 		state == types.ResourceUpdateStateRejected ||
 		state == types.ResourceUpdateStateCanceled
+}
+
+// isTargetInFinalState checks if a target update is in a final state.
+func isTargetInFinalState(state types.TargetUpdateState) bool {
+	return state == types.TargetUpdateStateSuccess ||
+		state == types.TargetUpdateStateFailed ||
+		state == types.TargetUpdateStateCanceled
 }
 
 // findResourceUpdateIndex returns the index of the ResourceUpdate with the given ksuid and operation.
@@ -140,6 +162,7 @@ func (f *FormaCommandPersister) getOrLoadCommand(commandID string) (*cachedComma
 		command:            cmd,
 		ksuidOpToIndex:     buildResourceUpdateIndex(cmd),
 		pendingCompletions: countNonFinalResources(cmd),
+		terminalizedByBulk: buildTerminalizedByBulkIndex(cmd),
 	}
 	f.activeCommands[commandID] = cached
 
@@ -307,6 +330,7 @@ func (f *FormaCommandPersister) storeNewFormaCommand(command *forma_command.Form
 		command:            command,
 		ksuidOpToIndex:     buildResourceUpdateIndex(command),
 		pendingCompletions: len(command.ResourceUpdates),
+		terminalizedByBulk: make(map[string]bool),
 	}
 
 	f.Log().Debug("Stored and cached new Forma command commandID=%s", command.ID)
@@ -342,6 +366,15 @@ func (f *FormaCommandPersister) updateCommandFromProgress(progress *messages.Upd
 	idx := cached.findResourceUpdateIndex(progress.ResourceURI.KSUID(), progress.Operation)
 	if idx != -1 {
 		res := &command.ResourceUpdates[idx]
+
+		// Monotonic terminality guard: once a resource update is in a final state it must
+		// not be overwritten by a late progress message from a still-running actor.
+		if isResourceInFinalState(res.State) {
+			f.Log().Debug("Ignoring late progress update for already-terminal resource commandID=%s ksuid=%s operation=%s currentState=%s incomingState=%s",
+				progress.CommandID, progress.ResourceURI.KSUID(), progress.Operation, res.State, progress.ResourceState)
+			return true, nil
+		}
+
 		res.State = progress.ResourceState
 		res.StartTs = progress.ResourceStartTs
 		res.ModifiedTs = progress.ResourceModifiedTs
@@ -430,7 +463,44 @@ func (f *FormaCommandPersister) updateTargetStates(msg *target_update.UpdateTarg
 	}
 
 	command := cached.command
-	command.TargetUpdates = msg.TargetUpdates
+
+	// Merge incoming target updates with the cached state, preserving any target that has
+	// already reached a terminal state. A late UpdateTargetStates (e.g. from a TargetUpdater
+	// that raced with a cancel) must not clobber a Canceled/Failed/Success target.
+	if len(command.TargetUpdates) == 0 {
+		// No existing targets in cache — safe to replace wholesale.
+		command.TargetUpdates = msg.TargetUpdates
+	} else {
+		// Build a label+operation index into the existing (cached) slice for O(1) lookup.
+		type tuKey struct {
+			label     string
+			operation types.OperationType
+		}
+		existingIdx := make(map[tuKey]int, len(command.TargetUpdates))
+		for i, tu := range command.TargetUpdates {
+			existingIdx[tuKey{tu.Target.Label, tu.Operation}] = i
+		}
+
+		for _, incoming := range msg.TargetUpdates {
+			key := tuKey{incoming.Target.Label, incoming.Operation}
+			if idx, ok := existingIdx[key]; ok {
+				existing := &command.TargetUpdates[idx]
+				if isTargetInFinalState(existing.State) {
+					// Terminal state wins — drop the incoming non-terminal update.
+					f.Log().Debug("Ignoring late UpdateTargetStates for already-terminal target commandID=%s targetLabel=%s operation=%s currentState=%s incomingState=%s",
+						msg.CommandID, incoming.Target.Label, incoming.Operation, existing.State, incoming.State)
+					continue
+				}
+				// Non-terminal existing state: accept the incoming update.
+				*existing = incoming
+			} else {
+				// New target not previously seen — append it.
+				command.TargetUpdates = append(command.TargetUpdates, incoming)
+				existingIdx[key] = len(command.TargetUpdates) - 1
+			}
+		}
+	}
+
 	command.State = overallCommandState(command)
 
 	if err := f.persistCommand(cached); err != nil {
@@ -456,6 +526,14 @@ func (f *FormaCommandPersister) markTargetUpdateAsComplete(msg *messages.MarkTar
 		tu := &command.TargetUpdates[i]
 		if tu.Target.Label != msg.TargetLabel {
 			continue
+		}
+
+		// Monotonic terminality guard: once a target update is in a final state it must
+		// not be overwritten by a late completion message.
+		if isTargetInFinalState(tu.State) {
+			f.Log().Debug("Ignoring late MarkTargetUpdateAsComplete for already-terminal target commandID=%s targetLabel=%s operation=%s currentState=%s incomingFinalState=%s",
+				msg.CommandID, msg.TargetLabel, msg.TargetOperation, tu.State, msg.FinalState)
+			return true, nil
 		}
 
 		if string(tu.Operation) == msg.TargetOperation {
@@ -573,6 +651,12 @@ func (f *FormaCommandPersister) markTargetsAsFailed(msg *MarkTargetsAsFailed) (b
 		for i := range command.TargetUpdates {
 			tu := &command.TargetUpdates[i]
 			if tu.Target.Label == ref.Label && tu.Operation == ref.Operation {
+				// Monotonic terminality guard: never overwrite a target already in final state.
+				if isTargetInFinalState(tu.State) {
+					f.Log().Debug("Ignoring cascade failure for already-terminal target commandID=%s targetLabel=%s operation=%s currentState=%s",
+						msg.CommandID, ref.Label, ref.Operation, tu.State)
+					break
+				}
 				tu.State = types.TargetUpdateStateFailed
 				tu.ModifiedTs = msg.TargetModifiedTs
 				break
@@ -614,6 +698,25 @@ func (f *FormaCommandPersister) markResourceUpdateAsComplete(msg *messages.MarkR
 	idx := cached.findResourceUpdateIndex(msg.ResourceURI.KSUID(), msg.Operation)
 	if idx != -1 {
 		res := &cmd.ResourceUpdates[idx]
+
+		// Monotonic terminality guard: if this resource was already finalized via
+		// bulkUpdateResourceState (e.g. markResourcesAsCanceled ran before the
+		// ResourceUpdater's completion arrived), or if it was already terminal when the
+		// command was loaded from the database, the late completion message must be
+		// silently dropped. We must NOT decrement pendingCompletions here — the counter
+		// was already decremented when the terminal state was first assigned.
+		//
+		// Note: we intentionally do NOT guard solely on res.State here, because
+		// updateCommandFromProgress can set state to a terminal value (e.g. Success)
+		// without decrementing pendingCompletions. In that case markResourceUpdateAsComplete
+		// must still run to close out the resource and decrement the counter.
+		key := resourceUpdateKey(msg.ResourceURI.KSUID(), msg.Operation)
+		if cached.terminalizedByBulk[key] {
+			f.Log().Debug("Ignoring late MarkResourceUpdateAsComplete for already-terminalized resource commandID=%s ksuid=%s operation=%s currentState=%s incomingFinalState=%s",
+				msg.CommandID, msg.ResourceURI.KSUID(), msg.Operation, res.State, msg.FinalState)
+			return true, nil
+		}
+
 		res.State = msg.FinalState
 		res.StartTs = msg.ResourceStartTs
 		res.ModifiedTs = msg.ResourceModifiedTs
@@ -746,12 +849,28 @@ func (f *FormaCommandPersister) bulkUpdateResourceState(
 		if idx != -1 {
 			res := &command.ResourceUpdates[idx]
 
-			// If transitioning to final state, decrement counter
-			if !isResourceInFinalState(res.State) && isResourceInFinalState(state) {
+			// Monotonic terminality guard: never reassign a resource update that is already
+			// in a final state. This prevents double-decrement of pendingCompletions and
+			// state regression (e.g. re-canceling a resource that already succeeded).
+			if isResourceInFinalState(res.State) {
+				f.Log().Debug("Ignoring bulk state update for already-terminal resource commandID=%s ksuid=%s operation=%s currentState=%s incomingState=%s",
+					commandID, ref.URI.KSUID(), ref.Operation, res.State, state)
+				continue
+			}
+
+			// If transitioning to final state, decrement counter and record in the
+			// terminalizedByBulk set so that a late MarkResourceUpdateAsComplete for
+			// this resource can be detected and ignored without underflowing the counter.
+			if isResourceInFinalState(state) {
 				cached.pendingCompletions--
 				if cached.pendingCompletions < 0 {
 					return false, fmt.Errorf("unexpected state transition for command %s: pendingCompletions went below zero, this indicates a programming error", commandID)
 				}
+				key := resourceUpdateKey(ref.URI.KSUID(), ref.Operation)
+				if cached.terminalizedByBulk == nil {
+					cached.terminalizedByBulk = make(map[string]bool)
+				}
+				cached.terminalizedByBulk[key] = true
 			}
 
 			res.State = state
@@ -808,6 +927,8 @@ func overallCommandState(command *forma_command.FormaCommand) forma_command.Comm
 			return forma_command.CommandStateInProgress
 		case types.TargetUpdateStateFailed:
 			states = append(states, types.ResourceUpdateStateFailed)
+		case types.TargetUpdateStateCanceled:
+			states = append(states, types.ResourceUpdateStateCanceled)
 		}
 		// Success targets don't affect overall state
 	}

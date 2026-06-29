@@ -62,6 +62,7 @@ const (
 	TargetUpdateStateInProgress TargetUpdateState = "InProgress"
 	TargetUpdateStateSuccess    TargetUpdateState = "Success"
 	TargetUpdateStateFailed     TargetUpdateState = "Failed"
+	TargetUpdateStateCanceled   TargetUpdateState = "Canceled"
 )
 
 // StackUpdateState represents the state of a stack update
