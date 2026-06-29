@@ -3666,6 +3666,7 @@ func (d DatastorePostgres) UpdateResourceUpdateState(commandID string, ksuid str
 		UPDATE resource_updates
 		SET state = $1, modified_ts = $2
 		WHERE command_id = $3 AND ksuid = $4 AND operation = $5
+		  AND state NOT IN ('Success','Failed','Rejected','Canceled')
 	`
 
 	result, err := d.pool.Exec(ctx, query, string(state), modifiedTs.UTC(), commandID, ksuid, string(operation))
@@ -3674,7 +3675,8 @@ func (d DatastorePostgres) UpdateResourceUpdateState(commandID string, ksuid str
 	}
 
 	if result.RowsAffected() == 0 {
-		return fmt.Errorf("resource update not found: command_id=%s, ksuid=%s, operation=%s", commandID, ksuid, operation)
+		slog.Debug("UpdateResourceUpdateState: row already in terminal state or not found, no-op", "commandID", commandID, "ksuid", ksuid)
+		return nil
 	}
 
 	return nil
@@ -3756,6 +3758,7 @@ func (d DatastorePostgres) BatchUpdateResourceUpdateState(commandID string, refs
 			UPDATE resource_updates
 			SET state = $1, modified_ts = $2
 			WHERE command_id = $3 AND ksuid = $4 AND operation = $5
+			  AND state NOT IN ('Success','Failed','Rejected','Canceled')
 		`, string(state), modifiedTs.UTC(), commandID, ref.KSUID, string(ref.Operation))
 		if err != nil {
 			return fmt.Errorf("failed to update resource update: %w", err)

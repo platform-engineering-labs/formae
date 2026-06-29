@@ -44,6 +44,16 @@ const (
 	ResourceUpdateStateRejected   ResourceUpdateState = "Rejected"
 )
 
+// TerminalStates is the authoritative set of ResourceUpdateState values from which
+// no further state transitions are permitted. Used by datastore backends to
+// implement monotonic terminality (CAS guard).
+var TerminalStates = []ResourceUpdateState{
+	ResourceUpdateStateSuccess,
+	ResourceUpdateStateFailed,
+	ResourceUpdateStateRejected,
+	ResourceUpdateStateCanceled,
+}
+
 // TargetUpdateState represents the state of a target update
 type TargetUpdateState string
 

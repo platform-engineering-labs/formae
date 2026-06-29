@@ -3063,6 +3063,7 @@ func (d *DatastoreAuroraDataAPI) UpdateResourceUpdateState(commandID string, ksu
 	UPDATE resource_updates
 	SET state = :state, modified_ts = :modified_ts::timestamp
 	WHERE command_id = :command_id AND ksuid = :ksuid AND operation = :operation
+	  AND state NOT IN ('Success','Failed','Rejected','Canceled')
 	`
 	params := []types.SqlParameter{
 		{Name: aws.String("state"), Value: &types.FieldMemberStringValue{Value: string(state)}},
@@ -3078,7 +3079,8 @@ func (d *DatastoreAuroraDataAPI) UpdateResourceUpdateState(commandID string, ksu
 	}
 
 	if output.NumberOfRecordsUpdated == 0 {
-		return fmt.Errorf("resource update not found: command_id=%s, ksuid=%s, operation=%s", commandID, ksuid, operation)
+		slog.Debug("UpdateResourceUpdateState: row already in terminal state or not found, no-op", "commandID", commandID, "ksuid", ksuid)
+		return nil
 	}
 
 	return nil
@@ -3166,6 +3168,7 @@ func (d *DatastoreAuroraDataAPI) BatchUpdateResourceUpdateState(commandID string
 		UPDATE resource_updates
 		SET state = :state, modified_ts = :modified_ts::timestamp
 		WHERE command_id = :command_id AND ksuid = :ksuid AND operation = :operation
+		  AND state NOT IN ('Success','Failed','Rejected','Canceled')
 		`
 		params := []types.SqlParameter{
 			{Name: aws.String("state"), Value: &types.FieldMemberStringValue{Value: string(state)}},

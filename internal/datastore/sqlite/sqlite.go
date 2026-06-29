@@ -3819,6 +3819,7 @@ func (d DatastoreSQLite) UpdateResourceUpdateState(commandID string, ksuid strin
 		UPDATE resource_updates
 		SET state = ?, modified_ts = ?
 		WHERE command_id = ? AND ksuid = ? AND operation = ?
+		  AND state NOT IN ('Success','Failed','Rejected','Canceled')
 	`
 
 	// Normalize timestamp to UTC for consistent TEXT-based sorting in SQLite
@@ -3833,7 +3834,8 @@ func (d DatastoreSQLite) UpdateResourceUpdateState(commandID string, ksuid strin
 	}
 
 	if rowsAffected == 0 {
-		return fmt.Errorf("resource update not found: command_id=%s, ksuid=%s, operation=%s", commandID, ksuid, operation)
+		slog.Debug("UpdateResourceUpdateState: row already in terminal state or not found, no-op", "commandID", commandID, "ksuid", ksuid)
+		return nil
 	}
 
 	return nil
@@ -3932,6 +3934,7 @@ func (d DatastoreSQLite) BatchUpdateResourceUpdateState(commandID string, refs [
 		UPDATE resource_updates
 		SET state = ?, modified_ts = ?
 		WHERE command_id = ? AND ksuid = ? AND operation = ?
+		  AND state NOT IN ('Success','Failed','Rejected','Canceled')
 	`)
 	if err != nil {
 		return fmt.Errorf("failed to prepare statement: %w", err)
