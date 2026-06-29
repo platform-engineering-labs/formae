@@ -93,7 +93,7 @@ func generatePatch(document []byte, patch []byte, properties resolver.Resolvable
 		}
 	}
 
-	patchOps, err := createPatchDocument(flattenedDocument, flattenedPatch, schema.Fields, schema.WriteOnly(), schema.HasProviderDefault(), entitySetProviderDefaultsFromHints(schema.Hints), collectionSemanticsFromFieldHints(schema.Hints), defaultIgnoredFields, strategy)
+	patchOps, err := createPatchDocument(flattenedDocument, flattenedPatch, schema.Fields, schema.RequiredOnUpdate(), schema.HasProviderDefault(), entitySetProviderDefaultsFromHints(schema.Hints), collectionSemanticsFromFieldHints(schema.Hints), defaultIgnoredFields, strategy)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create patch document: %w", err)
 	}
@@ -146,18 +146,23 @@ func generatePatch(document []byte, patch []byte, properties resolver.Resolvable
 	return json.RawMessage(patchJson), createOnlyJson, nil
 }
 
-func createPatchDocument(document []byte, patch []byte, schemaFields []string, writeOnlyFields []string, hasProviderDefaultFields []string, entitySetProviderDefaults map[string]string, collections jsonpatch.Collections, ignoredFields []jsonpatch.Path, strategy jsonpatch.PatchStrategy) ([]jsonpatch.JsonPatchOperation, error) {
+func createPatchDocument(document []byte, patch []byte, schemaFields []string, requiredOnUpdateFields []string, hasProviderDefaultFields []string, entitySetProviderDefaults map[string]string, collections jsonpatch.Collections, ignoredFields []jsonpatch.Path, strategy jsonpatch.PatchStrategy) ([]jsonpatch.JsonPatchOperation, error) {
 	patchWithSchemaFieldsOnly, err := removeNonSchemaFields(patch, schemaFields)
 	if err != nil {
 		return nil, err
 	}
 
-	// Remove writeOnly fields from the document (existing state).
-	// WriteOnly fields (like passwords) are never returned by the cloud provider's Read operation,
-	// but Formae stores them. By removing them from the document before comparison,
-	// jsonpatch will generate an "add" operation for these fields, ensuring they're always
-	// included in the patch sent to the cloud provider.
-	documentWithoutWriteOnly, err := removeWriteOnlyFields(document, writeOnlyFields)
+	// Force-resend requiredOnUpdate fields by stripping them from the document
+	// (existing state) before the diff. These are fields the provider mandates
+	// in every update payload (e.g. passwords) even when unchanged. Formae
+	// stores them, so removing them from the document makes jsonpatch emit an
+	// "add" op, guaranteeing they're in the patch sent to the provider.
+	//
+	// This is keyed off requiredOnUpdate, NOT writeOnly: a field can be writeOnly
+	// (excluded from drift detection because Read never returns it) without
+	// being requiredOnUpdate, in which case an unchanged value must produce no
+	// op rather than a phantom re-send.
+	documentForceResent, err := removeWriteOnlyFields(document, requiredOnUpdateFields)
 	if err != nil {
 		return nil, err
 	}
@@ -172,7 +177,7 @@ func createPatchDocument(document []byte, patch []byte, schemaFields []string, w
 	// invisible to the diff regardless of their value, which is the behavior we
 	// want for a hasProviderDefault annotation on a sub-field of a list
 	// element. See removeProviderDefaultFields for details.
-	patchWithSchemaFieldsOnly, documentWithoutProviderDefaults, err := removeProviderDefaultFieldsBoth(documentWithoutWriteOnly, patchWithSchemaFieldsOnly, hasProviderDefaultFields)
+	patchWithSchemaFieldsOnly, documentWithoutProviderDefaults, err := removeProviderDefaultFieldsBoth(documentForceResent, patchWithSchemaFieldsOnly, hasProviderDefaultFields)
 	if err != nil {
 		return nil, err
 	}

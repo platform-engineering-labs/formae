@@ -851,12 +851,13 @@ func TestCollectionSemanticsFromFieldHints(t *testing.T) {
 	assert.Equal(t, expectedCollections, collections)
 }
 
-func TestGeneratePatch_WriteOnlyFieldsGenerateAddOperation(t *testing.T) {
+func TestGeneratePatch_RequiredOnUpdateFieldsGenerateAddOperation(t *testing.T) {
 	// This simulates an AWS CloudControl scenario where:
-	// - Password is a writeOnly field (AWS never returns it)
+	// - Password is writeOnly (AWS never returns it) AND requiredOnUpdate
+	//   (AWS mandates it in every update payload)
 	// - Formae stores the password in its own state
-	// - When generating a patch, we need to always include writeOnly fields
-	//   even if they haven't changed, because AWS doesn't have them
+	// - When generating a patch, requiredOnUpdate fields must be re-added
+	//   even if they haven't changed, because AWS requires them on every update
 
 	// Existing state (what Formae has stored - includes Password)
 	document := []byte(`{
@@ -881,7 +882,8 @@ func TestGeneratePatch_WriteOnlyFieldsGenerateAddOperation(t *testing.T) {
 		Fields: []string{"LoginProfile", "UserName", "Tags"},
 		Hints: map[string]pkgmodel.FieldHint{
 			"LoginProfile.Password": {
-				WriteOnly: true,
+				WriteOnly:        true,
+				RequiredOnUpdate: true,
 			},
 		},
 	}
@@ -897,9 +899,9 @@ func TestGeneratePatch_WriteOnlyFieldsGenerateAddOperation(t *testing.T) {
 
 	// We expect:
 	// 1. An "add" operation for Tags
-	// 2. An "add" operation for LoginProfile/Password (because it's writeOnly and
-	//    must be re-added since AWS CloudControl won't have it in current state)
-	require.Len(t, patches, 2, "Expected 2 operations: one for Tags, one for writeOnly Password")
+	// 2. An "add" operation for LoginProfile/Password (because it's requiredOnUpdate
+	//    and must be re-added since AWS CloudControl won't have it in current state)
+	require.Len(t, patches, 2, "Expected 2 operations: one for Tags, one for requiredOnUpdate Password")
 
 	// Find the operations by path
 	var tagsOp, passwordOp *jsonpatch.JsonPatchOperation
@@ -915,8 +917,8 @@ func TestGeneratePatch_WriteOnlyFieldsGenerateAddOperation(t *testing.T) {
 	assert.NotNil(t, tagsOp, "Should have an operation for Tags")
 	assert.Equal(t, "add", tagsOp.Operation)
 
-	assert.NotNil(t, passwordOp, "Should have an add operation for writeOnly Password")
-	assert.Equal(t, "add", passwordOp.Operation, "WriteOnly fields should use 'add' operation")
+	assert.NotNil(t, passwordOp, "Should have an add operation for requiredOnUpdate Password")
+	assert.Equal(t, "add", passwordOp.Operation, "requiredOnUpdate fields should use 'add' operation")
 	assert.Equal(t, "secret123", passwordOp.Value, "Password value should be preserved")
 }
 
@@ -959,6 +961,46 @@ func TestGeneratePatch_WriteOnlyCreateOnlyFieldsNoPhantomReplacement(t *testing.
 	require.NoError(t, err)
 	assert.Empty(t, createOnlyPatch, "writeOnly+createOnly field should NOT trigger replacement")
 	assert.Nil(t, patchDoc, "No patch should be generated when only writeOnly+createOnly fields differ")
+}
+
+func TestGeneratePatch_WriteOnlyFieldUnchanged_NoAddOperation(t *testing.T) {
+	// A field that is writeOnly but NOT requiredOnUpdate is excluded from drift
+	// detection (the provider's Read never returns it) yet must not be
+	// force-resent on every update. Formae stores the last-applied value, so
+	// when the stored state and the desired state carry the same value there is
+	// no real change and no patch op should be generated.
+
+	// Existing state (what Formae has stored — includes the writeOnly source).
+	document := []byte(`{
+		"Code": {
+			"S3Bucket": "artifacts",
+			"S3Key": "app.jar"
+		},
+		"FunctionName": "my-func"
+	}`)
+
+	// Desired state (from PKL — same source location, nothing changed).
+	patch := []byte(`{
+		"Code": {
+			"S3Bucket": "artifacts",
+			"S3Key": "app.jar"
+		},
+		"FunctionName": "my-func"
+	}`)
+
+	schema := pkgmodel.Schema{
+		Fields: []string{"Code", "FunctionName"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"Code.S3Bucket": {WriteOnly: true},
+			"Code.S3Key":    {WriteOnly: true},
+		},
+	}
+	props := resolver.NewResolvableProperties()
+
+	patchDoc, createOnlyPatch, err := generatePatch(document, patch, props, schema, pkgmodel.FormaApplyModePatch)
+	require.NoError(t, err)
+	assert.Empty(t, createOnlyPatch)
+	assert.Nil(t, patchDoc, "writeOnly-only field unchanged should not force an add op")
 }
 
 func TestGeneratePatch_AddTagsWhileRetainingExisting(t *testing.T) {

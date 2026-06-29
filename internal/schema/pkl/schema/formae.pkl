@@ -213,6 +213,11 @@ open class FieldHint extends Annotation {
     hidden writeOnly: Boolean = false
     hidden required: Boolean = false
     hidden requiredOnCreate: Boolean = false
+    /// The provider mandates this field in every update payload. When set, the
+    /// patch engine force-resends the field on each update even when its value
+    /// is unchanged (e.g. password-class fields). Distinct from writeOnly,
+    /// which only excludes a field from drift detection.
+    hidden requiredOnUpdate: Boolean = false
     hidden hasProviderDefault: Boolean = false
     hidden attachesTo: Boolean = false           // DEPRECATED; use edgeKind instead
     hidden edgeKind: EdgeKind = "default"        // NEW
@@ -228,6 +233,7 @@ open class FieldHint extends Annotation {
     fixed WriteOnly: Boolean = writeOnly
     fixed Required: Boolean = required
     fixed RequiredOnCreate: Boolean = requiredOnCreate
+    fixed RequiredOnUpdate: Boolean = requiredOnUpdate
     fixed HasProviderDefault: Boolean = hasProviderDefault
     fixed AttachesTo: Boolean = attachesTo
     fixed EdgeKind: String = edgeKind
