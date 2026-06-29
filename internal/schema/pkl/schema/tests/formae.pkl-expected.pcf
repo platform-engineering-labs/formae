@@ -89,6 +89,7 @@ examples {
         WriteOnly = false
         Required = true
         RequiredOnCreate = false
+        RequiredOnUpdate = false
         HasProviderDefault = false
         AttachesTo = false
         EdgeKind = "default"
@@ -100,6 +101,7 @@ examples {
         WriteOnly = false
         Required = false
         RequiredOnCreate = false
+        RequiredOnUpdate = false
         HasProviderDefault = false
         AttachesTo = false
         EdgeKind = "default"
@@ -111,6 +113,7 @@ examples {
         WriteOnly = false
         Required = false
         RequiredOnCreate = false
+        RequiredOnUpdate = false
         HasProviderDefault = false
         AttachesTo = false
         EdgeKind = "default"
@@ -133,6 +136,7 @@ examples {
           WriteOnly = false
           Required = true
           RequiredOnCreate = false
+          RequiredOnUpdate = false
           HasProviderDefault = false
           AttachesTo = false
           EdgeKind = "default"
@@ -144,6 +148,7 @@ examples {
           WriteOnly = false
           Required = false
           RequiredOnCreate = false
+          RequiredOnUpdate = false
           HasProviderDefault = false
           AttachesTo = false
           EdgeKind = "default"
@@ -155,6 +160,7 @@ examples {
           WriteOnly = false
           Required = false
           RequiredOnCreate = false
+          RequiredOnUpdate = false
           HasProviderDefault = false
           AttachesTo = false
           EdgeKind = "default"
@@ -208,6 +214,7 @@ examples {
             WriteOnly = false
             Required = true
             RequiredOnCreate = false
+            RequiredOnUpdate = false
             HasProviderDefault = false
             AttachesTo = false
             EdgeKind = "default"
@@ -219,6 +226,7 @@ examples {
             WriteOnly = false
             Required = false
             RequiredOnCreate = false
+            RequiredOnUpdate = false
             HasProviderDefault = false
             AttachesTo = false
             EdgeKind = "default"
@@ -230,6 +238,7 @@ examples {
             WriteOnly = false
             Required = false
             RequiredOnCreate = false
+            RequiredOnUpdate = false
             HasProviderDefault = false
             AttachesTo = false
             EdgeKind = "default"
@@ -291,6 +300,7 @@ examples {
             WriteOnly = false
             Required = true
             RequiredOnCreate = false
+            RequiredOnUpdate = false
             HasProviderDefault = false
             AttachesTo = false
             EdgeKind = "default"
@@ -302,6 +312,7 @@ examples {
             WriteOnly = false
             Required = false
             RequiredOnCreate = false
+            RequiredOnUpdate = false
             HasProviderDefault = false
             AttachesTo = false
             EdgeKind = "default"
@@ -313,6 +324,7 @@ examples {
             WriteOnly = false
             Required = false
             RequiredOnCreate = false
+            RequiredOnUpdate = false
             HasProviderDefault = false
             AttachesTo = false
             EdgeKind = "default"
@@ -358,6 +370,7 @@ examples {
             WriteOnly = false
             Required = true
             RequiredOnCreate = false
+            RequiredOnUpdate = false
             HasProviderDefault = false
             AttachesTo = false
             EdgeKind = "default"
@@ -369,6 +382,7 @@ examples {
             WriteOnly = false
             Required = true
             RequiredOnCreate = false
+            RequiredOnUpdate = false
             HasProviderDefault = false
             AttachesTo = false
             EdgeKind = "default"
@@ -380,6 +394,7 @@ examples {
             WriteOnly = true
             Required = true
             RequiredOnCreate = false
+            RequiredOnUpdate = false
             HasProviderDefault = false
             AttachesTo = false
             EdgeKind = "default"
@@ -391,6 +406,7 @@ examples {
             WriteOnly = false
             Required = true
             RequiredOnCreate = false
+            RequiredOnUpdate = false
             HasProviderDefault = false
             AttachesTo = false
             EdgeKind = "default"
@@ -402,6 +418,7 @@ examples {
             WriteOnly = false
             Required = true
             RequiredOnCreate = false
+            RequiredOnUpdate = false
             HasProviderDefault = false
             AttachesTo = false
             EdgeKind = "default"
@@ -413,6 +430,7 @@ examples {
             WriteOnly = true
             Required = true
             RequiredOnCreate = false
+            RequiredOnUpdate = false
             HasProviderDefault = false
             AttachesTo = false
             EdgeKind = "default"
@@ -424,6 +442,7 @@ examples {
             WriteOnly = false
             Required = true
             RequiredOnCreate = false
+            RequiredOnUpdate = false
             HasProviderDefault = false
             AttachesTo = false
             EdgeKind = "default"
@@ -464,6 +483,7 @@ examples {
         WriteOnly = false
         Required = true
         RequiredOnCreate = false
+        RequiredOnUpdate = false
         HasProviderDefault = false
         AttachesTo = false
         EdgeKind = "default"
@@ -475,6 +495,7 @@ examples {
         WriteOnly = false
         Required = false
         RequiredOnCreate = false
+        RequiredOnUpdate = false
         HasProviderDefault = false
         AttachesTo = false
         EdgeKind = "default"
@@ -486,6 +507,7 @@ examples {
         WriteOnly = false
         Required = false
         RequiredOnCreate = false
+        RequiredOnUpdate = false
         HasProviderDefault = false
         AttachesTo = false
         EdgeKind = "default"
@@ -508,6 +530,7 @@ examples {
           WriteOnly = false
           Required = true
           RequiredOnCreate = false
+          RequiredOnUpdate = false
           HasProviderDefault = false
           AttachesTo = false
           EdgeKind = "default"
@@ -519,6 +542,7 @@ examples {
           WriteOnly = false
           Required = false
           RequiredOnCreate = false
+          RequiredOnUpdate = false
           HasProviderDefault = false
           AttachesTo = false
           EdgeKind = "default"
@@ -530,6 +554,7 @@ examples {
           WriteOnly = false
           Required = false
           RequiredOnCreate = false
+          RequiredOnUpdate = false
           HasProviderDefault = false
           AttachesTo = false
           EdgeKind = "default"
