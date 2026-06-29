@@ -8,8 +8,6 @@ import (
 	"ergo.services/ergo/gen"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/changeset"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 )
 
 func CreateApplication() gen.ApplicationBehavior {
@@ -25,14 +23,6 @@ func (app *Application) Load(node gen.Node, args ...any) (gen.ApplicationSpec, e
 		Description: "Orchestrator application",
 		Mode:        gen.ApplicationModePermanent,
 		Group: []gen.ApplicationMemberSpec{
-			{
-				Name:    "ResourceUpdaterSupervisor",
-				Factory: resource_update.NewResourceUpdaterSupervisor,
-			},
-			{
-				Name:    "TargetUpdaterSupervisor",
-				Factory: target_update.NewTargetUpdaterSupervisor,
-			},
 			{
 				Name:    "ChangesetSupervisor",
 				Factory: changeset.NewChangesetSupervisor,
