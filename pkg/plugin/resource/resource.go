@@ -138,6 +138,7 @@ const (
 	OperationStatusFailure    OperationStatus = "Failure"
 	OperationStatusInProgress OperationStatus = "InProgress"
 	OperationStatusPending    OperationStatus = "Pending"
+	OperationStatusCanceled   OperationStatus = "Canceled"
 )
 
 type OperationErrorCode string
