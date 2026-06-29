@@ -43,6 +43,7 @@ type FieldHint struct {
 	WriteOnly          bool `json:"WriteOnly" pkl:"WriteOnly"`
 	Required           bool `json:"Required" pkl:"Required"`
 	RequiredOnCreate   bool `json:"RequiredOnCreate" pkl:"RequiredOnCreate"`
+	RequiredOnUpdate   bool `json:"RequiredOnUpdate" pkl:"RequiredOnUpdate"`
 	HasProviderDefault bool `json:"HasProviderDefault" pkl:"HasProviderDefault"`
 	AttachesTo         bool     `json:"AttachesTo" pkl:"AttachesTo"` // DEPRECATED: kept for one release; engine derives EdgeKind from this when set.
 	EdgeKind           EdgeKind `json:"EdgeKind" pkl:"EdgeKind"`    // NEW
@@ -103,6 +104,10 @@ func (s Schema) RequiredOnCreate() []string {
 
 func (s Schema) WriteOnly() []string {
 	return filterFields(s, func(h FieldHint) bool { return h.WriteOnly }, true)
+}
+
+func (s Schema) RequiredOnUpdate() []string {
+	return filterFields(s, func(h FieldHint) bool { return h.RequiredOnUpdate }, true)
 }
 
 func (s Schema) HasProviderDefault() []string {

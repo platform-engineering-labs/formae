@@ -53,6 +53,36 @@ func TestFieldHintAttachesToDefaultsFalse(t *testing.T) {
 	assert.False(t, decoded.AttachesTo, "AttachesTo should default false for pre-existing stored schemas")
 }
 
+func TestFieldHint_RequiredOnUpdate_JSONRoundTrip(t *testing.T) {
+	original := FieldHint{WriteOnly: true, RequiredOnUpdate: true}
+
+	data, err := json.Marshal(original)
+	require.NoError(t, err)
+
+	var decoded FieldHint
+	require.NoError(t, json.Unmarshal(data, &decoded))
+	assert.True(t, decoded.RequiredOnUpdate, "RequiredOnUpdate should round-trip through JSON (raw=%s)", string(data))
+}
+
+func TestFieldHint_RequiredOnUpdate_DefaultsFalseForLegacyJSON(t *testing.T) {
+	// Schemas published before RequiredOnUpdate existed carry only WriteOnly;
+	// they must default RequiredOnUpdate to false so writeOnly fields stop
+	// force-resending rather than silently inheriting the old behavior.
+	var decoded FieldHint
+	require.NoError(t, json.Unmarshal([]byte(`{"WriteOnly":true}`), &decoded))
+	assert.False(t, decoded.RequiredOnUpdate, "RequiredOnUpdate should default false for pre-existing stored schemas")
+}
+
+func TestSchema_RequiredOnUpdate_CollectsTaggedFields(t *testing.T) {
+	s := Schema{
+		Hints: map[string]FieldHint{
+			"LoginProfile.Password": {WriteOnly: true, RequiredOnUpdate: true},
+			"Code.S3Bucket":         {WriteOnly: true},
+		},
+	}
+	assert.ElementsMatch(t, []string{"LoginProfile.Password"}, s.RequiredOnUpdate())
+}
+
 func TestSchema_ParentMappings_Unmarshal(t *testing.T) {
 	var s Schema
 	raw := `{
