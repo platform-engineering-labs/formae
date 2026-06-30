@@ -1468,7 +1468,7 @@ func (h *TestHarness) executeCancel(t *testing.T, op *Operation, model *StateMod
 	// Cancel the most recent command (matches API behavior with no query).
 	target := model.AcceptedCommands[len(model.AcceptedCommands)-1]
 
-	resp, err := h.client.CancelCommands("", clientID)
+	resp, err := h.client.CancelCommands("", false, clientID)
 	if err != nil {
 		t.Logf("[op %d] Cancel command %s → error: %v", op.SequenceNum, target.CommandID, err)
 		return
