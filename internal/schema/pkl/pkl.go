@@ -245,8 +245,9 @@ func translateConfig(config *pklmodel.Config) *pkgmodel.Config {
 		Artifacts: translateArtifactConfig(&config.Artifacts),
 		Cli: pkgmodel.CliConfig{
 			API: pkgmodel.APIConfig{
-				URL:  config.Cli.API.URL,
-				Port: int(config.Cli.API.Port),
+				URL:                config.Cli.API.URL,
+				Port:               int(config.Cli.API.Port),
+				InsecureSkipVerify: config.Cli.API.InsecureSkipVerify,
 			},
 			DisableUsageReporting: config.Cli.DisableUsageReporting,
 			Auth:                  translateAuthConfig(&config.Cli.Auth),

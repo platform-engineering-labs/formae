@@ -6,6 +6,7 @@ package api
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,6 +31,13 @@ func NewClient(cfg pkgmodel.APIConfig, auth http.Header, net *http.Client) *Clie
 
 	if net != nil {
 		client = resty.NewWithClient(net)
+	}
+
+	if cfg.InsecureSkipVerify {
+		// Opt-in (off by default): lets the CLI reach an agent fronted by a
+		// self-signed cert, e.g. the bootstrap ALB, whose AWS-generated FQDN
+		// no certificate SAN can match ahead of time.
+		client.SetTLSClientConfig(&tls.Config{InsecureSkipVerify: true}) //nolint:gosec // opt-in, off by default
 	}
 
 	if auth != nil {

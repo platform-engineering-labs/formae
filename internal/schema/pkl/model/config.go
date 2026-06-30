@@ -186,8 +186,9 @@ type AgentConfig struct {
 }
 
 type APIConfig struct {
-	URL  string `pkl:"url"`
-	Port int32  `pkl:"port"`
+	URL                string `pkl:"url"`
+	Port               int32  `pkl:"port"`
+	InsecureSkipVerify bool   `pkl:"insecureSkipVerify"`
 }
 
 type Repository struct {
