@@ -91,6 +91,26 @@ type ResourceUpdateRef struct {
 	Operation types.OperationType
 }
 
+// ForceCancelRow is an in-progress resource update that should be force-canceled.
+// It carries the progress JSON to append to the row's progress_result, and the
+// serialized most-recent-progress entry to store as most_recent_progress.
+type ForceCancelRow struct {
+	KSUID                  string
+	Operation              types.OperationType
+	ProgressJSON           json.RawMessage // full serialized []plugin.TrackedProgress to write as progress_result
+	MostRecentProgressJSON json.RawMessage // serialized plugin.TrackedProgress to write as most_recent_progress
+}
+
+// ForceCancelResult reports the outcome of a ForceCancelResourceUpdates call.
+type ForceCancelResult struct {
+	// CanceledInProgress are rows whose prior state was InProgress and are now Canceled.
+	CanceledInProgress []ResourceUpdateRef
+	// CanceledNotStarted are rows whose prior state was NotStarted and are now Canceled.
+	CanceledNotStarted []ResourceUpdateRef
+	// Skipped are rows that were already in a terminal state (CAS no-op).
+	Skipped []ResourceUpdateRef
+}
+
 // ExpiredStackInfo contains information about a stack whose TTL policy has expired.
 type ExpiredStackInfo struct {
 	StackLabel   string
@@ -298,4 +318,11 @@ type Datastore interface {
 	// (state, modified_ts) without re-writing ResourceUpdates. Used by markTargetUpdateAsComplete
 	// to persist target state changes that would otherwise only live in the in-memory cache.
 	UpdateFormaCommandTargetUpdates(commandID string, targetUpdatesJSON json.RawMessage, state forma_command.CommandState, modifiedTs time.Time) error
+
+	// ForceCancelResourceUpdates CAS-terminalizes in-flight resource updates to Canceled in one
+	// transaction. For rows whose prior state was InProgress it also writes the provided progress
+	// JSON (force-cancel marker) and most_recent_progress. Returns the rows actually transitioned
+	// (split by prior state) and the intended rows that were already terminal (Skipped). Idempotent:
+	// a retry affects zero rows and returns the same Skipped set.
+	ForceCancelResourceUpdates(commandID string, inProgress []ForceCancelRow, notStarted []ResourceUpdateRef, modifiedTs time.Time) (ForceCancelResult, error)
 }

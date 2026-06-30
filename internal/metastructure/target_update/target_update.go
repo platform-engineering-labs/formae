@@ -29,6 +29,7 @@ const (
 	TargetUpdateStateInProgress = types.TargetUpdateStateInProgress
 	TargetUpdateStateSuccess    = types.TargetUpdateStateSuccess
 	TargetUpdateStateFailed     = types.TargetUpdateStateFailed
+	TargetUpdateStateCanceled   = types.TargetUpdateStateCanceled
 )
 
 // TargetUpdate represents an update to a target in the system

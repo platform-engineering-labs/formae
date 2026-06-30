@@ -163,3 +163,6 @@ func (m *mockDatastore) UpdateFormaCommandProgress(_ string, _ forma_command.Com
 func (m *mockDatastore) UpdateFormaCommandTargetUpdates(_ string, _ json.RawMessage, _ forma_command.CommandState, _ time.Time) error {
 	return nil
 }
+func (m *mockDatastore) ForceCancelResourceUpdates(_ string, _ []ForceCancelRow, _ []ResourceUpdateRef, _ time.Time) (ForceCancelResult, error) {
+	return ForceCancelResult{}, nil
+}

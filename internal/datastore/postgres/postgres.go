@@ -3666,6 +3666,7 @@ func (d DatastorePostgres) UpdateResourceUpdateState(commandID string, ksuid str
 		UPDATE resource_updates
 		SET state = $1, modified_ts = $2
 		WHERE command_id = $3 AND ksuid = $4 AND operation = $5
+		  AND state NOT IN ('Success','Failed','Rejected','Canceled')
 	`
 
 	result, err := d.pool.Exec(ctx, query, string(state), modifiedTs.UTC(), commandID, ksuid, string(operation))
@@ -3674,7 +3675,8 @@ func (d DatastorePostgres) UpdateResourceUpdateState(commandID string, ksuid str
 	}
 
 	if result.RowsAffected() == 0 {
-		return fmt.Errorf("resource update not found: command_id=%s, ksuid=%s, operation=%s", commandID, ksuid, operation)
+		slog.Debug("UpdateResourceUpdateState: row already in terminal state or not found, no-op", "commandID", commandID, "ksuid", ksuid)
+		return nil
 	}
 
 	return nil
@@ -3756,6 +3758,7 @@ func (d DatastorePostgres) BatchUpdateResourceUpdateState(commandID string, refs
 			UPDATE resource_updates
 			SET state = $1, modified_ts = $2
 			WHERE command_id = $3 AND ksuid = $4 AND operation = $5
+			  AND state NOT IN ('Success','Failed','Rejected','Canceled')
 		`, string(state), modifiedTs.UTC(), commandID, ref.KSUID, string(ref.Operation))
 		if err != nil {
 			return fmt.Errorf("failed to update resource update: %w", err)
@@ -3831,4 +3834,71 @@ func (d DatastorePostgres) CleanUp() error {
 	}
 
 	return nil
+}
+
+// ForceCancelResourceUpdates CAS-terminalizes in-flight resource updates to Canceled in one
+// transaction. For InProgress rows it also writes force-cancel progress. Returns the rows
+// transitioned (split by prior state) and those already terminal (Skipped). Idempotent.
+func (d DatastorePostgres) ForceCancelResourceUpdates(commandID string, inProgress []datastore.ForceCancelRow, notStarted []datastore.ResourceUpdateRef, modifiedTs time.Time) (datastore.ForceCancelResult, error) {
+	ctx, span := tracer.Start(context.Background(), "ForceCancelResourceUpdates")
+	defer span.End()
+
+	var result datastore.ForceCancelResult
+
+	if len(inProgress) == 0 && len(notStarted) == 0 {
+		return result, nil
+	}
+
+	tx, err := d.pool.Begin(ctx)
+	if err != nil {
+		return result, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+
+	modifiedTsUTC := modifiedTs.UTC()
+
+	for _, row := range inProgress {
+		ref := datastore.ResourceUpdateRef{KSUID: row.KSUID, Operation: row.Operation}
+		res, execErr := tx.Exec(ctx, `
+			UPDATE resource_updates
+			SET state = 'Canceled', modified_ts = $1, progress_result = $2, most_recent_progress = $3
+			WHERE command_id = $4 AND ksuid = $5 AND operation = $6 AND state = 'InProgress'
+		`, modifiedTsUTC, []byte(row.ProgressJSON), []byte(row.MostRecentProgressJSON), commandID, row.KSUID, string(row.Operation))
+		if execErr != nil {
+			err = execErr
+			return result, fmt.Errorf("failed to force-cancel InProgress row %s: %w", row.KSUID, err)
+		}
+		if res.RowsAffected() > 0 {
+			result.CanceledInProgress = append(result.CanceledInProgress, ref)
+		} else {
+			result.Skipped = append(result.Skipped, ref)
+		}
+	}
+
+	for _, ref := range notStarted {
+		res, execErr := tx.Exec(ctx, `
+			UPDATE resource_updates
+			SET state = 'Canceled', modified_ts = $1
+			WHERE command_id = $2 AND ksuid = $3 AND operation = $4 AND state = 'NotStarted'
+		`, modifiedTsUTC, commandID, ref.KSUID, string(ref.Operation))
+		if execErr != nil {
+			err = execErr
+			return result, fmt.Errorf("failed to force-cancel NotStarted row %s: %w", ref.KSUID, err)
+		}
+		if res.RowsAffected() > 0 {
+			result.CanceledNotStarted = append(result.CanceledNotStarted, ref)
+		} else {
+			result.Skipped = append(result.Skipped, ref)
+		}
+	}
+
+	if err = tx.Commit(ctx); err != nil {
+		return result, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return result, nil
 }

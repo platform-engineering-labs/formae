@@ -762,6 +762,7 @@ func mapError(c echo.Context, err error) error {
 // @Produce json
 // @Param Client-ID header string true "Unique identifier for the client."
 // @Param query query string false "Optional query string to select commands to cancel. If not provided, cancels the most recent command."
+// @Param force query boolean false "If true, abandon in-progress work and drive the command to a terminal 'Canceled' state immediately instead of waiting for in-progress resources to finish. Defaults to false."
 // @Success 202 {object} apimodel.CancelCommandResponse "Accepted: Commands are being canceled."
 // @Success 404 {string} string "Not Found: No in-progress commands found to cancel."
 // @Failure 400 {string} string "Bad Request: Invalid query or missing Client-ID."
@@ -774,8 +775,9 @@ func (s *Server) CancelCommands(c echo.Context) error {
 	}
 
 	query := c.QueryParam("query")
+	force := c.QueryParam("force") == "true"
 
-	result, err := s.metastructure.CancelCommandsByQuery(query, clientID)
+	result, err := s.metastructure.CancelCommandsByQuery(query, force, clientID)
 	if err != nil {
 		return mapError(c, err)
 	}

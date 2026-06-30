@@ -52,25 +52,34 @@ type CommandID struct {
 type CancelCommandResponse struct {
 	CommandIDs           []string                       `json:"CommandIds"`
 	ResourceUpdateStates map[string]CancelResourceState `json:"ResourceUpdateStates,omitempty"`
+	// Forced is true when the cancellation was requested with --force. The CLI
+	// uses this to surface the force-cancel warning and the list of resources
+	// that were abandoned mid-operation.
+	Forced bool `json:"Forced,omitempty"`
 }
 
 // CancelResourceState represents the state of a resource update at cancel time.
 type CancelResourceState struct {
 	State string `json:"State"` // "Canceled", "InProgress", "Success", "Failed"
+	// ForceCanceled is true when this resource update was force-canceled while an
+	// operation was actually in progress (it carries an OperationStatusCanceled
+	// progress entry). These are the resources whose cloud-side state may be
+	// orphaned and need manual verification.
+	ForceCanceled bool `json:"ForceCanceled,omitempty"`
 }
 
 type ResourceUpdate struct {
-	ResourceID      string            `json:"ResourceId"`
-	ResourceType    string            `json:"ResourceType"`
-	ResourceLabel   string            `json:"ResourceLabel,omitempty"`
+	ResourceID    string `json:"ResourceId"`
+	ResourceType  string `json:"ResourceType"`
+	ResourceLabel string `json:"ResourceLabel,omitempty"`
 	// OldLabel is the resource's previous label. Populated only when a
 	// label rename is part of this update (RFC-0041 alias path); empty
 	// otherwise. The renderer uses it to surface the rename to the user.
-	OldLabel        string            `json:"OldLabel,omitempty"`
-	StackName       string            `json:"StackName,omitempty"`
-	OldStackName    string            `json:"OldStackName,omitempty"`
-	Operation       string            `json:"Operation"`
-	PatchDocument   json.RawMessage   `json:"PatchDocument,omitempty"`
+	OldLabel      string          `json:"OldLabel,omitempty"`
+	StackName     string          `json:"StackName,omitempty"`
+	OldStackName  string          `json:"OldStackName,omitempty"`
+	Operation     string          `json:"Operation"`
+	PatchDocument json.RawMessage `json:"PatchDocument,omitempty"`
 	// CreateOnlyPatch is a JSON-patch document (same format as PatchDocument)
 	// listing only the ops against createOnly fields that triggered a
 	// resource replacement. Populated on the delete half of a replace pair
@@ -113,18 +122,18 @@ const (
 )
 
 type TargetUpdate struct {
-	TargetLabel    string              `json:"TargetLabel"`
-	Operation      string              `json:"Operation"`
-	State          string              `json:"State"`
-	Duration       int64               `json:"Duration,omitempty"` // milliseconds
-	ErrorMessage   string              `json:"ErrorMessage,omitempty"`
-	Discoverable   bool                `json:"Discoverable"`
-	ExistingConfig json.RawMessage     `json:"ExistingConfig,omitempty"`
-	DesiredConfig  json.RawMessage     `json:"DesiredConfig,omitempty"`
-	StartTs        time.Time           `json:"StartTs,omitempty"`
-	ModifiedTs     time.Time           `json:"ModifiedTs,omitempty"`
-	IsCascade      bool                `json:"IsCascade,omitempty"`
-	CascadeSource  string              `json:"CascadeSource,omitempty"`
+	TargetLabel    string          `json:"TargetLabel"`
+	Operation      string          `json:"Operation"`
+	State          string          `json:"State"`
+	Duration       int64           `json:"Duration,omitempty"` // milliseconds
+	ErrorMessage   string          `json:"ErrorMessage,omitempty"`
+	Discoverable   bool            `json:"Discoverable"`
+	ExistingConfig json.RawMessage `json:"ExistingConfig,omitempty"`
+	DesiredConfig  json.RawMessage `json:"DesiredConfig,omitempty"`
+	StartTs        time.Time       `json:"StartTs,omitempty"`
+	ModifiedTs     time.Time       `json:"ModifiedTs,omitempty"`
+	IsCascade      bool            `json:"IsCascade,omitempty"`
+	CascadeSource  string          `json:"CascadeSource,omitempty"`
 }
 
 type StackUpdate struct {
@@ -146,8 +155,8 @@ type PolicyUpdate struct {
 	State             string          `json:"State"`
 	Duration          int64           `json:"Duration,omitempty"` // milliseconds
 	ErrorMessage      string          `json:"ErrorMessage,omitempty"`
-	PolicyConfig      json.RawMessage `json:"PolicyConfig,omitempty"`    // Current policy configuration
-	OldPolicyConfig   json.RawMessage `json:"OldPolicyConfig,omitempty"` // Previous policy configuration (for updates)
+	PolicyConfig      json.RawMessage `json:"PolicyConfig,omitempty"`      // Current policy configuration
+	OldPolicyConfig   json.RawMessage `json:"OldPolicyConfig,omitempty"`   // Previous policy configuration (for updates)
 	ReferencingStacks []string        `json:"ReferencingStacks,omitempty"` // For skip operations - stacks still referencing this policy
 	StartTs           time.Time       `json:"StartTs,omitempty"`
 	ModifiedTs        time.Time       `json:"ModifiedTs,omitempty"`
@@ -179,15 +188,15 @@ type Stats struct {
 // PluginInfo represents information about a registered plugin
 // including the merged config (plugin defaults + user overrides).
 type PluginInfo struct {
-	Namespace               string           `json:"Namespace"`
-	Version                 string           `json:"Version"`
-	NodeName                string           `json:"NodeName"`
-	MaxRequestsPerSecond    int              `json:"MaxRequestsPerSecond"`
-	ResourceCount           int              `json:"ResourceCount"`
-	ResourceTypesToDiscover []string         `json:"ResourceTypesToDiscover,omitempty"`
-	RetryConfig             *pkgmodel.RetryConfig    `json:"RetryConfig,omitempty"`
-	LabelConfig             *pkgmodel.LabelConfig    `json:"LabelConfig,omitempty"`
-	DiscoveryFilters        []pkgmodel.MatchFilter   `json:"DiscoveryFilters,omitempty"`
+	Namespace               string                 `json:"Namespace"`
+	Version                 string                 `json:"Version"`
+	NodeName                string                 `json:"NodeName"`
+	MaxRequestsPerSecond    int                    `json:"MaxRequestsPerSecond"`
+	ResourceCount           int                    `json:"ResourceCount"`
+	ResourceTypesToDiscover []string               `json:"ResourceTypesToDiscover,omitempty"`
+	RetryConfig             *pkgmodel.RetryConfig  `json:"RetryConfig,omitempty"`
+	LabelConfig             *pkgmodel.LabelConfig  `json:"LabelConfig,omitempty"`
+	DiscoveryFilters        []pkgmodel.MatchFilter `json:"DiscoveryFilters,omitempty"`
 }
 
 type ForceReconcileResponse struct {
@@ -202,17 +211,17 @@ type ForceCheckTTLResponse struct {
 
 // Plugin describes a single plugin, used by the list and info endpoints.
 type Plugin struct {
-	Name              string                       `json:"name"`
-	Kind              string                       `json:"kind,omitempty"`
-	Type              string                       `json:"type"`
-	Namespace         string                       `json:"namespace,omitempty"`
-	Category          string                       `json:"category,omitempty"`
-	Summary           string                       `json:"summary,omitempty"`
-	Description       string                       `json:"description,omitempty"`
-	Publisher         string                       `json:"publisher,omitempty"`
-	License           string                       `json:"license,omitempty"`
-	InstalledVersion  string                       `json:"installedVersion,omitempty"`
-	AvailableVersions []string                     `json:"availableVersions,omitempty"`
+	Name              string   `json:"name"`
+	Kind              string   `json:"kind,omitempty"`
+	Type              string   `json:"type"`
+	Namespace         string   `json:"namespace,omitempty"`
+	Category          string   `json:"category,omitempty"`
+	Summary           string   `json:"summary,omitempty"`
+	Description       string   `json:"description,omitempty"`
+	Publisher         string   `json:"publisher,omitempty"`
+	License           string   `json:"license,omitempty"`
+	InstalledVersion  string   `json:"installedVersion,omitempty"`
+	AvailableVersions []string `json:"availableVersions,omitempty"`
 	// LocalPath is the absolute path on the agent's filesystem to the
 	// plugin's PklProject file (containing the plugin's PKL schema).
 	// Populated by the discovery scan when the plugin is installed
@@ -220,13 +229,13 @@ type Plugin struct {
 	// --schema-location local flow to import schemas via PklProject.deps
 	// rather than fetching from the hub. Same-box only — the path is
 	// only meaningful when the CLI shares a filesystem with the agent.
-	LocalPath string                       `json:"localPath,omitempty"`
+	LocalPath string `json:"localPath,omitempty"`
 
-	Channel           string                       `json:"channel,omitempty"`
-	Frozen            bool                         `json:"frozen,omitempty"`
-	ManagedBy         string                       `json:"managedBy,omitempty"`
-	LoadStatus        string                       `json:"loadStatus,omitempty"`
-	Metadata          map[string]map[string]string `json:"metadata,omitempty"`
+	Channel    string                       `json:"channel,omitempty"`
+	Frozen     bool                         `json:"frozen,omitempty"`
+	ManagedBy  string                       `json:"managedBy,omitempty"`
+	LoadStatus string                       `json:"loadStatus,omitempty"`
+	Metadata   map[string]map[string]string `json:"metadata,omitempty"`
 }
 
 // PluginOperation describes a single operation performed on a plugin.

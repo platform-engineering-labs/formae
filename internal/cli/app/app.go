@@ -276,7 +276,7 @@ func (a *App) Destroy(path string, query string, props map[string]string, simula
 	return resp, nags, nil
 }
 
-func (a *App) CancelCommand(query string) (*apimodel.CancelCommandResponse, error) {
+func (a *App) CancelCommand(query string, force bool) (*apimodel.CancelCommandResponse, error) {
 	auth, net, err := a.getAuthAndNetHandlers()
 	if err != nil {
 		return nil, err
@@ -293,7 +293,7 @@ func (a *App) CancelCommand(query string) (*apimodel.CancelCommandResponse, erro
 		return nil, err
 	}
 
-	res, err := client.CancelCommands(query, clientID)
+	res, err := client.CancelCommands(query, force, clientID)
 	if err != nil {
 		return nil, err
 	}

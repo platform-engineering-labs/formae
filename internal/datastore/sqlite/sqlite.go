@@ -3819,6 +3819,7 @@ func (d DatastoreSQLite) UpdateResourceUpdateState(commandID string, ksuid strin
 		UPDATE resource_updates
 		SET state = ?, modified_ts = ?
 		WHERE command_id = ? AND ksuid = ? AND operation = ?
+		  AND state NOT IN ('Success','Failed','Rejected','Canceled')
 	`
 
 	// Normalize timestamp to UTC for consistent TEXT-based sorting in SQLite
@@ -3833,7 +3834,8 @@ func (d DatastoreSQLite) UpdateResourceUpdateState(commandID string, ksuid strin
 	}
 
 	if rowsAffected == 0 {
-		return fmt.Errorf("resource update not found: command_id=%s, ksuid=%s, operation=%s", commandID, ksuid, operation)
+		slog.Debug("UpdateResourceUpdateState: row already in terminal state or not found, no-op", "commandID", commandID, "ksuid", ksuid)
+		return nil
 	}
 
 	return nil
@@ -3932,6 +3934,7 @@ func (d DatastoreSQLite) BatchUpdateResourceUpdateState(commandID string, refs [
 		UPDATE resource_updates
 		SET state = ?, modified_ts = ?
 		WHERE command_id = ? AND ksuid = ? AND operation = ?
+		  AND state NOT IN ('Success','Failed','Rejected','Canceled')
 	`)
 	if err != nil {
 		return fmt.Errorf("failed to prepare statement: %w", err)
@@ -4017,6 +4020,95 @@ func (d DatastoreSQLite) UpdateFormaCommandTargetUpdates(commandID string, targe
 	}
 
 	return nil
+}
+
+// ForceCancelResourceUpdates CAS-terminalizes in-flight resource updates to Canceled in one
+// transaction. For InProgress rows it also writes force-cancel progress. Returns the rows
+// transitioned (split by prior state) and those already terminal (Skipped). Idempotent.
+func (d DatastoreSQLite) ForceCancelResourceUpdates(commandID string, inProgress []datastore.ForceCancelRow, notStarted []datastore.ResourceUpdateRef, modifiedTs time.Time) (datastore.ForceCancelResult, error) {
+	slog.Debug("SQLite START", "method", "ForceCancelResourceUpdates", "commandID", commandID, "inProgressCount", len(inProgress), "notStartedCount", len(notStarted))
+	start := time.Now()
+	defer func() {
+		slog.Debug("SQLite END", "method", "ForceCancelResourceUpdates", "commandID", commandID, "duration", time.Since(start))
+	}()
+	_, span := sqliteTracer.Start(context.Background(), "ForceCancelResourceUpdates")
+	defer span.End()
+
+	var result datastore.ForceCancelResult
+
+	if len(inProgress) == 0 && len(notStarted) == 0 {
+		return result, nil
+	}
+
+	var err error
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return result, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	modifiedTsUTC := modifiedTs.UTC()
+
+	// InProgress rows: update state + progress columns, but only if still InProgress.
+	inProgressStmt, err := tx.Prepare(`
+		UPDATE resource_updates
+		SET state = 'Canceled', modified_ts = ?, progress_result = ?, most_recent_progress = ?
+		WHERE command_id = ? AND ksuid = ? AND operation = ? AND state = 'InProgress'
+	`)
+	if err != nil {
+		return result, fmt.Errorf("failed to prepare inProgress statement: %w", err)
+	}
+	defer func() { _ = inProgressStmt.Close() }()
+
+	for _, row := range inProgress {
+		ref := datastore.ResourceUpdateRef{KSUID: row.KSUID, Operation: row.Operation}
+		res, execErr := inProgressStmt.Exec(modifiedTsUTC, []byte(row.ProgressJSON), []byte(row.MostRecentProgressJSON), commandID, row.KSUID, string(row.Operation))
+		if execErr != nil {
+			err = execErr
+			return result, fmt.Errorf("failed to force-cancel InProgress row %s: %w", row.KSUID, err)
+		}
+		n, _ := res.RowsAffected()
+		if n > 0 {
+			result.CanceledInProgress = append(result.CanceledInProgress, ref)
+		} else {
+			result.Skipped = append(result.Skipped, ref)
+		}
+	}
+
+	// NotStarted rows: update state only, but only if still NotStarted.
+	notStartedStmt, err := tx.Prepare(`
+		UPDATE resource_updates
+		SET state = 'Canceled', modified_ts = ?
+		WHERE command_id = ? AND ksuid = ? AND operation = ? AND state = 'NotStarted'
+	`)
+	if err != nil {
+		return result, fmt.Errorf("failed to prepare notStarted statement: %w", err)
+	}
+	defer func() { _ = notStartedStmt.Close() }()
+
+	for _, ref := range notStarted {
+		res, execErr := notStartedStmt.Exec(modifiedTsUTC, commandID, ref.KSUID, string(ref.Operation))
+		if execErr != nil {
+			err = execErr
+			return result, fmt.Errorf("failed to force-cancel NotStarted row %s: %w", ref.KSUID, err)
+		}
+		n, _ := res.RowsAffected()
+		if n > 0 {
+			result.CanceledNotStarted = append(result.CanceledNotStarted, ref)
+		} else {
+			result.Skipped = append(result.Skipped, ref)
+		}
+	}
+
+	if err = tx.Commit(); err != nil {
+		return result, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return result, nil
 }
 
 func (d DatastoreSQLite) CleanUp() error {

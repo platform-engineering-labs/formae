@@ -38,6 +38,10 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunGetMostRecentNonReconcileFormaCommandsByStack(t, newDS)
 	RunQueryFormaCommands(t, newDS)
 	RunQueryFormaCommands_StackWildcardEscape(t, newDS)
+	RunTerminalStatesLiteralsTest(t, newDS)
+	RunMonotonicTerminalityTest(t, newDS)
+	RunMonotonicTerminalityRaceTest(t, newDS)
+	RunForceCancelResourceUpdatesTest(t, newDS)
 
 	RunStoreResource(t, newDS)
 	RunUpdateResource(t, newDS)

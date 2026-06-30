@@ -1584,9 +1584,37 @@ func RenderCancelCommandResponse(response *apimodel.CancelCommandResponse) (stri
 		return display.Gold("No commands to cancel.\n"), nil
 	}
 
-	buf.WriteString(display.Gold("Commands are being canceled:\n\n"))
+	if response.Forced {
+		buf.WriteString(display.Gold("Commands have been force-canceled:\n\n"))
+	} else {
+		buf.WriteString(display.Gold("Commands are being canceled:\n\n"))
+	}
 	for _, cmdID := range response.CommandIDs {
 		fmt.Fprintf(&buf, "  %s %s\n", display.Green("•"), cmdID)
+	}
+
+	if response.Forced {
+		// Collect the resources that were abandoned mid-operation. These are the
+		// ones whose cloud-side state may now be orphaned.
+		var forceCanceled []string
+		for uri, rs := range response.ResourceUpdateStates {
+			if rs.ForceCanceled {
+				forceCanceled = append(forceCanceled, uri)
+			}
+		}
+		sort.Strings(forceCanceled)
+
+		if len(forceCanceled) > 0 {
+			fmt.Fprintf(&buf, "\n%s\n", display.Gold("The following resources were abandoned mid-operation and may exist in your cloud provider:"))
+			for _, uri := range forceCanceled {
+				fmt.Fprintf(&buf, "  %s %s\n", display.Gold("⚠"), uri)
+			}
+		}
+
+		fmt.Fprintf(&buf, "\n%s\n", display.Grey("Force-cancel abandons in-progress work; cloud-side operations may still be running."))
+		fmt.Fprintf(&buf, "%s\n", display.Grey("Update/Delete operations are reconciled by the synchronizer on its next cycle."))
+		fmt.Fprintf(&buf, "%s\n", display.Grey("A still-running Create may orphan a resource: verify the resources above in your"))
+		fmt.Fprintf(&buf, "%s\n", display.Grey("cloud provider and clean up manually, or let discovery pick them up."))
 	}
 
 	fmt.Fprintf(&buf, "\n%s\n", display.Grey("Use 'formae status' to check the cancellation progress."))

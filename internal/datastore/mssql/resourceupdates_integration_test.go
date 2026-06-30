@@ -176,12 +176,16 @@ func TestMSSQLResourceUpdatesStateLifecycle(t *testing.T) {
 		t.Errorf("k-b state = %q, want still NotStarted", loaded[1].State)
 	}
 
-	// UpdateResourceUpdateState on a missing row returns an error.
-	if err := ds.UpdateResourceUpdateState(commandID, "missing", types.OperationCreate, resource_update.ResourceUpdateStateSuccess, later); err == nil {
-		t.Errorf("expected error for missing ksuid, got nil")
+	// UpdateResourceUpdateState on a missing row is a no-op (affected == 0), not an error.
+	// The monotonic-CAS write filter cannot distinguish an absent row from a terminal one,
+	// and both are treated as a no-op, consistent across backends.
+	if err := ds.UpdateResourceUpdateState(commandID, "missing", types.OperationCreate, resource_update.ResourceUpdateStateSuccess, later); err != nil {
+		t.Errorf("missing ksuid should be a no-op, got error: %v", err)
 	}
 
-	// BatchUpdateResourceUpdateState flips both rows to Failed.
+	// BatchUpdateResourceUpdateState advances non-terminal rows toward the target state,
+	// but the monotonic CAS leaves already-terminal rows untouched. k-a is Success
+	// (terminal) so it is preserved; k-b is NotStarted so it flips to Failed.
 	refs := []datastore.ResourceUpdateRef{
 		{KSUID: "k-a", Operation: types.OperationCreate},
 		{KSUID: "k-b", Operation: types.OperationCreate},
@@ -191,8 +195,15 @@ func TestMSSQLResourceUpdatesStateLifecycle(t *testing.T) {
 	}
 	loaded, _ = ds.LoadResourceUpdates(commandID)
 	for _, ru := range loaded {
-		if ru.State != resource_update.ResourceUpdateStateFailed {
-			t.Errorf("%s state = %q, want Failed", ru.DesiredState.Ksuid, ru.State)
+		switch ru.DesiredState.Ksuid {
+		case "k-a":
+			if ru.State != resource_update.ResourceUpdateStateSuccess {
+				t.Errorf("k-a state = %q, want Success preserved (terminal, not overwritten by Failed)", ru.State)
+			}
+		case "k-b":
+			if ru.State != resource_update.ResourceUpdateStateFailed {
+				t.Errorf("k-b state = %q, want Failed", ru.State)
+			}
 		}
 	}
 

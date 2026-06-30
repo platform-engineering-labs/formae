@@ -9,6 +9,7 @@ package dstest
 import (
 	"encoding/json"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/types"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
@@ -719,6 +721,250 @@ func RunQueryFormaCommands_StackWildcardEscape(t *testing.T, newDS func(t *testi
 		assert.Len(t, results, 1)
 		if len(results) == 1 {
 			assert.Equal(t, "client-a", results[0].ClientID)
+		}
+	})
+}
+
+// RunTerminalStatesLiteralsTest asserts that the SQL IN-list literals used by the
+// datastore backends exactly match types.TerminalStates.
+func RunTerminalStatesLiteralsTest(t *testing.T, _ func(t *testing.T) TestDatastore) {
+	t.Run("TerminalStatesLiterals", func(t *testing.T) {
+		sqlLiterals := []string{"Success", "Failed", "Rejected", "Canceled"}
+		var typeStrings []string
+		for _, s := range types.TerminalStates {
+			typeStrings = append(typeStrings, string(s))
+		}
+		assert.ElementsMatch(t, sqlLiterals, typeStrings,
+			"SQL IN-list literals must match types.TerminalStates exactly")
+	})
+}
+
+// RunMonotonicTerminalityTest verifies that once a ResourceUpdate reaches a terminal
+// state, subsequent state writes are no-ops (not errors) and the state is preserved.
+// Within the agent, state writes are serialized by the FormaCommandPersister actor;
+// this DB-level test proves the fence holds independently.
+func RunMonotonicTerminalityTest(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("MonotonicTerminality", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		resourceKsuid := util.NewID()
+		cmd := &forma_command.FormaCommand{
+			ID:          util.NewID(),
+			Command:     pkgmodel.CommandApply,
+			State:       forma_command.CommandStateInProgress,
+			Description: pkgmodel.Description{},
+			ResourceUpdates: []resource_update.ResourceUpdate{
+				{
+					DesiredState:   pkgmodel.Resource{Ksuid: resourceKsuid, Properties: json.RawMessage("{}")},
+					ResourceTarget: pkgmodel.Target{Label: "t", Namespace: "default", Config: json.RawMessage("{}")},
+					Operation:      resource_update.OperationCreate,
+					State:          resource_update.ResourceUpdateStateInProgress,
+				},
+			},
+		}
+		err := ds.StoreFormaCommand(cmd, cmd.ID)
+		assert.NoError(t, err)
+
+		now := time.Now()
+
+		// First write: InProgress → Success (should succeed)
+		err = ds.UpdateResourceUpdateState(cmd.ID, resourceKsuid, resource_update.OperationCreate, resource_update.ResourceUpdateStateSuccess, now)
+		assert.NoError(t, err, "transition to Success should succeed")
+
+		// Second write: try to overwrite Success with Failed (should be a no-op, not an error)
+		err = ds.UpdateResourceUpdateState(cmd.ID, resourceKsuid, resource_update.OperationCreate, resource_update.ResourceUpdateStateFailed, now)
+		assert.NoError(t, err, "attempt to overwrite terminal state should be a no-op, not an error")
+
+		// Reload and assert state is still Success
+		loaded, err := ds.GetFormaCommandByCommandID(cmd.ID)
+		assert.NoError(t, err)
+		if assert.Len(t, loaded.ResourceUpdates, 1) {
+			assert.Equal(t, resource_update.ResourceUpdateStateSuccess, loaded.ResourceUpdates[0].State,
+				"terminal state Success must not be overwritten by Failed")
+		}
+	})
+}
+
+// RunForceCancelResourceUpdatesTest verifies ForceCancelResourceUpdates:
+//   - transitions InProgress+NotStarted rows to Canceled
+//   - writes force-cancel progress for the InProgress row
+//   - leaves already-terminal rows untouched and reports them in Skipped
+//   - is idempotent: a second call makes zero further changes
+func RunForceCancelResourceUpdatesTest(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("ForceCancelResourceUpdates", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		inProgressKsuid := util.NewID()
+		notStartedKsuid := util.NewID()
+		successKsuid := util.NewID()
+
+		cmd := &forma_command.FormaCommand{
+			ID:          util.NewID(),
+			Command:     pkgmodel.CommandApply,
+			State:       forma_command.CommandStateInProgress,
+			Description: pkgmodel.Description{},
+			ResourceUpdates: []resource_update.ResourceUpdate{
+				{
+					DesiredState:   pkgmodel.Resource{Ksuid: inProgressKsuid, Properties: json.RawMessage("{}")},
+					ResourceTarget: pkgmodel.Target{Label: "t", Namespace: "default", Config: json.RawMessage("{}")},
+					Operation:      resource_update.OperationCreate,
+					State:          resource_update.ResourceUpdateStateInProgress,
+				},
+				{
+					DesiredState:   pkgmodel.Resource{Ksuid: notStartedKsuid, Properties: json.RawMessage("{}")},
+					ResourceTarget: pkgmodel.Target{Label: "t", Namespace: "default", Config: json.RawMessage("{}")},
+					Operation:      resource_update.OperationCreate,
+					State:          resource_update.ResourceUpdateStateNotStarted,
+				},
+				{
+					DesiredState:   pkgmodel.Resource{Ksuid: successKsuid, Properties: json.RawMessage("{}")},
+					ResourceTarget: pkgmodel.Target{Label: "t", Namespace: "default", Config: json.RawMessage("{}")},
+					Operation:      resource_update.OperationCreate,
+					State:          resource_update.ResourceUpdateStateSuccess,
+				},
+			},
+		}
+		err := ds.StoreFormaCommand(cmd, cmd.ID)
+		assert.NoError(t, err)
+
+		// Build the force-cancel progress JSON for the InProgress row.
+		forceCancelProgress := plugin.TrackedProgress{
+			ProgressResult: pkgresource.ProgressResult{
+				StatusMessage: "force-canceled",
+			},
+		}
+		progressList := []plugin.TrackedProgress{forceCancelProgress}
+		progressJSON, err := json.Marshal(progressList)
+		assert.NoError(t, err)
+		mostRecentJSON, err := json.Marshal(forceCancelProgress)
+		assert.NoError(t, err)
+
+		inProgressRow := datastore.ForceCancelRow{
+			KSUID:                  inProgressKsuid,
+			Operation:              resource_update.OperationCreate,
+			ProgressJSON:           progressJSON,
+			MostRecentProgressJSON: mostRecentJSON,
+		}
+		notStartedRef := datastore.ResourceUpdateRef{
+			KSUID:      notStartedKsuid,
+			Operation:  resource_update.OperationCreate,
+		}
+		successRef := datastore.ResourceUpdateRef{
+			KSUID:      successKsuid,
+			Operation:  resource_update.OperationCreate,
+		}
+
+		now := time.Now()
+		result, err := ds.ForceCancelResourceUpdates(
+			cmd.ID,
+			[]datastore.ForceCancelRow{inProgressRow},
+			[]datastore.ResourceUpdateRef{notStartedRef, successRef},
+			now,
+		)
+		assert.NoError(t, err)
+
+		// Verify result split: inProgress → CanceledInProgress, notStarted → CanceledNotStarted, success → Skipped
+		assert.Len(t, result.CanceledInProgress, 1)
+		assert.Equal(t, inProgressKsuid, result.CanceledInProgress[0].KSUID)
+		assert.Len(t, result.CanceledNotStarted, 1)
+		assert.Equal(t, notStartedKsuid, result.CanceledNotStarted[0].KSUID)
+		assert.Len(t, result.Skipped, 1)
+		assert.Equal(t, successKsuid, result.Skipped[0].KSUID)
+
+		// Verify the DB reflects the state changes
+		updates, err := ds.LoadResourceUpdates(cmd.ID)
+		assert.NoError(t, err)
+		assert.Len(t, updates, 3)
+
+		byKsuid := make(map[string]resource_update.ResourceUpdate)
+		for _, u := range updates {
+			byKsuid[u.DesiredState.Ksuid] = u
+		}
+
+		assert.Equal(t, resource_update.ResourceUpdateStateCanceled, byKsuid[inProgressKsuid].State)
+		assert.Equal(t, resource_update.ResourceUpdateStateCanceled, byKsuid[notStartedKsuid].State)
+		assert.Equal(t, resource_update.ResourceUpdateStateSuccess, byKsuid[successKsuid].State, "already-terminal row must not be modified")
+
+		// Verify the InProgress row now has the force-cancel progress entry
+		assert.Equal(t, "force-canceled", byKsuid[inProgressKsuid].MostRecentProgressResult.ProgressResult.StatusMessage)
+		assert.Len(t, byKsuid[inProgressKsuid].ProgressResult, 1)
+		assert.Equal(t, "force-canceled", byKsuid[inProgressKsuid].ProgressResult[0].ProgressResult.StatusMessage)
+
+		// --- Idempotency: call again; all three rows are now terminal ---
+		result2, err := ds.ForceCancelResourceUpdates(
+			cmd.ID,
+			[]datastore.ForceCancelRow{inProgressRow},
+			[]datastore.ResourceUpdateRef{notStartedRef, successRef},
+			now,
+		)
+		assert.NoError(t, err)
+
+		assert.Empty(t, result2.CanceledInProgress, "retry must not re-cancel already-Canceled rows")
+		assert.Empty(t, result2.CanceledNotStarted, "retry must not re-cancel already-Canceled rows")
+		assert.Len(t, result2.Skipped, 3, "all rows must be reported as Skipped on retry")
+	})
+}
+
+// RunMonotonicTerminalityRaceTest fires two concurrent UpdateResourceUpdateState calls
+// on the same ResourceUpdate — one writing Success, one writing Failed. First write wins.
+// Within the agent these are serialized by the FormaCommandPersister actor; this test
+// proves the DB fence holds independently of that serialization.
+func RunMonotonicTerminalityRaceTest(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("MonotonicTerminalityRace", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		resourceKsuid := util.NewID()
+		cmd := &forma_command.FormaCommand{
+			ID:          util.NewID(),
+			Command:     pkgmodel.CommandApply,
+			State:       forma_command.CommandStateInProgress,
+			Description: pkgmodel.Description{},
+			ResourceUpdates: []resource_update.ResourceUpdate{
+				{
+					DesiredState:   pkgmodel.Resource{Ksuid: resourceKsuid, Properties: json.RawMessage("{}")},
+					ResourceTarget: pkgmodel.Target{Label: "t", Namespace: "default", Config: json.RawMessage("{}")},
+					Operation:      resource_update.OperationCreate,
+					State:          resource_update.ResourceUpdateStateInProgress,
+				},
+			},
+		}
+		err := ds.StoreFormaCommand(cmd, cmd.ID)
+		assert.NoError(t, err)
+
+		now := time.Now()
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+
+		var err1, err2 error
+		go func() {
+			defer wg.Done()
+			err1 = ds.UpdateResourceUpdateState(cmd.ID, resourceKsuid, resource_update.OperationCreate, resource_update.ResourceUpdateStateSuccess, now)
+		}()
+		go func() {
+			defer wg.Done()
+			err2 = ds.UpdateResourceUpdateState(cmd.ID, resourceKsuid, resource_update.OperationCreate, resource_update.ResourceUpdateStateFailed, now)
+		}()
+		wg.Wait()
+
+		// Both calls must return nil (one transitions, the other is a no-op)
+		assert.NoError(t, err1)
+		assert.NoError(t, err2)
+
+		// Final state must be one of the two terminal states and must be stable
+		loaded, err := ds.GetFormaCommandByCommandID(cmd.ID)
+		assert.NoError(t, err)
+		if assert.Len(t, loaded.ResourceUpdates, 1) {
+			finalState := loaded.ResourceUpdates[0].State
+			assert.True(t,
+				finalState == resource_update.ResourceUpdateStateSuccess || finalState == resource_update.ResourceUpdateStateFailed,
+				"final state must be either Success or Failed, got: %s", finalState)
 		}
 	})
 }

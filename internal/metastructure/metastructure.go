@@ -50,8 +50,8 @@ type MetastructureAPI interface {
 	ApplyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error)
 	DestroyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error)
 	DestroyByQuery(query string, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error)
-	CancelCommand(commandID string, clientID string) (*changeset.CancelResponse, error)
-	CancelCommandsByQuery(query string, clientID string) (*apimodel.CancelCommandResponse, error)
+	CancelCommand(commandID string, force bool, clientID string) (*changeset.CancelResponse, error)
+	CancelCommandsByQuery(query string, force bool, clientID string) (*apimodel.CancelCommandResponse, error)
 	ListFormaCommandStatus(query string, clientID string, n int) (*apimodel.ListCommandStatusResponse, error)
 	ExtractResources(query string) (*pkgmodel.Forma, error)
 	ExtractTargets(query string) ([]*pkgmodel.Target, error)
@@ -824,8 +824,8 @@ func (m *Metastructure) DestroyByQuery(query string, config *config.FormaCommand
 	return m.DestroyForma(forma, config, clientID)
 }
 
-func (m *Metastructure) CancelCommand(commandID string, clientID string) (*changeset.CancelResponse, error) {
-	slog.Info("Canceling command", "commandID", commandID, "clientID", clientID)
+func (m *Metastructure) CancelCommand(commandID string, force bool, clientID string) (*changeset.CancelResponse, error) {
+	slog.Info("Canceling command", "commandID", commandID, "force", force, "clientID", clientID)
 
 	changesetExecutorPID := gen.ProcessID{
 		Name: actornames.ChangesetExecutor(commandID),
@@ -834,6 +834,7 @@ func (m *Metastructure) CancelCommand(commandID string, clientID string) (*chang
 
 	result, err := m.callActor(changesetExecutorPID, changeset.Cancel{
 		CommandID: commandID,
+		Force:     force,
 	})
 	if err != nil {
 		slog.Error("Failed to cancel command", "commandID", commandID, "error", err)
@@ -845,10 +846,17 @@ func (m *Metastructure) CancelCommand(commandID string, clientID string) (*chang
 		return nil, fmt.Errorf("unexpected response type from changeset executor: %T", result)
 	}
 
+	// A --force cancel that failed to persist carries its error in-band (the executor
+	// stayed alive and terminated no actors). Surface it as a returned error.
+	if cancelResp.ErrorMessage != "" {
+		slog.Error("Force-cancel failed to persist", "commandID", commandID, "error", cancelResp.ErrorMessage)
+		return nil, fmt.Errorf("failed to force-cancel command: %s", cancelResp.ErrorMessage)
+	}
+
 	return &cancelResp, nil
 }
 
-func (m *Metastructure) CancelCommandsByQuery(query string, clientID string) (*apimodel.CancelCommandResponse, error) {
+func (m *Metastructure) CancelCommandsByQuery(query string, force bool, clientID string) (*apimodel.CancelCommandResponse, error) {
 	var commandsToCancel []*forma_command.FormaCommand
 	var err error
 
@@ -872,27 +880,48 @@ func (m *Metastructure) CancelCommandsByQuery(query string, clientID string) (*a
 
 	// Filter to only InProgress commands
 	var canceledCommandIDs []string
+	var forceCancelFailures []string
 	allResourceStates := make(map[string]apimodel.CancelResourceState)
 	for _, cmd := range commandsToCancel {
 		if cmd.State == forma_command.CommandStateInProgress {
-			cancelResp, err := m.CancelCommand(cmd.ID, clientID)
+			cancelResp, err := m.CancelCommand(cmd.ID, force, clientID)
 			if err != nil {
 				slog.Warn("Failed to cancel command", "commandID", cmd.ID, "error", err)
-				// Continue with other commands even if one fails
+				// A --force cancel that fails left the command running: the executor
+				// terminated no actors and the command is still non-terminal. Record it
+				// so the caller is told to retry rather than seeing a success with the
+				// command silently dropped. A graceful (non-force) cancel of a command
+				// that has since vanished is benign, so keep skipping those.
+				if force {
+					forceCancelFailures = append(forceCancelFailures, fmt.Sprintf("%s: %v", cmd.ID, err))
+				}
 				continue
 			}
 			canceledCommandIDs = append(canceledCommandIDs, cmd.ID)
 			if cancelResp != nil {
+				forceCanceled := make(map[string]bool, len(cancelResp.ForceCanceledInProgress))
+				for _, uri := range cancelResp.ForceCanceledInProgress {
+					forceCanceled[uri] = true
+				}
 				for uri, state := range cancelResp.ResourceStates {
-					allResourceStates[uri] = apimodel.CancelResourceState{State: state}
+					allResourceStates[uri] = apimodel.CancelResourceState{
+						State:         state,
+						ForceCanceled: forceCanceled[uri],
+					}
 				}
 			}
 		}
 	}
 
+	if len(forceCancelFailures) > 0 {
+		return nil, fmt.Errorf("force-cancel failed for %d command(s): %s",
+			len(forceCancelFailures), strings.Join(forceCancelFailures, "; "))
+	}
+
 	return &apimodel.CancelCommandResponse{
 		CommandIDs:           canceledCommandIDs,
 		ResourceUpdateStates: allResourceStates,
+		Forced:               force,
 	}, nil
 }
 

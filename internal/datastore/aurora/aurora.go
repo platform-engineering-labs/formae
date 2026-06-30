@@ -3063,6 +3063,7 @@ func (d *DatastoreAuroraDataAPI) UpdateResourceUpdateState(commandID string, ksu
 	UPDATE resource_updates
 	SET state = :state, modified_ts = :modified_ts::timestamp
 	WHERE command_id = :command_id AND ksuid = :ksuid AND operation = :operation
+	  AND state NOT IN ('Success','Failed','Rejected','Canceled')
 	`
 	params := []types.SqlParameter{
 		{Name: aws.String("state"), Value: &types.FieldMemberStringValue{Value: string(state)}},
@@ -3078,7 +3079,8 @@ func (d *DatastoreAuroraDataAPI) UpdateResourceUpdateState(commandID string, ksu
 	}
 
 	if output.NumberOfRecordsUpdated == 0 {
-		return fmt.Errorf("resource update not found: command_id=%s, ksuid=%s, operation=%s", commandID, ksuid, operation)
+		slog.Debug("UpdateResourceUpdateState: row already in terminal state or not found, no-op", "commandID", commandID, "ksuid", ksuid)
+		return nil
 	}
 
 	return nil
@@ -3166,6 +3168,7 @@ func (d *DatastoreAuroraDataAPI) BatchUpdateResourceUpdateState(commandID string
 		UPDATE resource_updates
 		SET state = :state, modified_ts = :modified_ts::timestamp
 		WHERE command_id = :command_id AND ksuid = :ksuid AND operation = :operation
+		  AND state NOT IN ('Success','Failed','Rejected','Canceled')
 		`
 		params := []types.SqlParameter{
 			{Name: aws.String("state"), Value: &types.FieldMemberStringValue{Value: string(state)}},
@@ -4654,4 +4657,83 @@ func (d *DatastoreAuroraDataAPI) CleanUp() error {
 	}
 
 	return nil
+}
+
+// ForceCancelResourceUpdates CAS-terminalizes in-flight resource updates to Canceled in one
+// transaction. For InProgress rows it also writes force-cancel progress. Returns the rows
+// transitioned (split by prior state) and those already terminal (Skipped). Idempotent.
+// On an ambiguous commit error the method returns an error so the caller can retry.
+func (d *DatastoreAuroraDataAPI) ForceCancelResourceUpdates(commandID string, inProgress []datastore.ForceCancelRow, notStarted []datastore.ResourceUpdateRef, modifiedTs time.Time) (datastore.ForceCancelResult, error) {
+	ctx := context.Background()
+	var result datastore.ForceCancelResult
+
+	if len(inProgress) == 0 && len(notStarted) == 0 {
+		return result, nil
+	}
+
+	txID, err := d.beginTransaction(ctx)
+	if err != nil {
+		return result, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+
+	modifiedTsStr := modifiedTs.UTC().Format(time.RFC3339Nano)
+
+	for _, row := range inProgress {
+		ref := datastore.ResourceUpdateRef{KSUID: row.KSUID, Operation: row.Operation}
+		query := `
+		UPDATE resource_updates
+		SET state = 'Canceled', modified_ts = :modified_ts::timestamp,
+		    progress_result = :progress_result, most_recent_progress = :most_recent_progress
+		WHERE command_id = :command_id AND ksuid = :ksuid AND operation = :operation AND state = 'InProgress'
+		`
+		params := []types.SqlParameter{
+			{Name: aws.String("modified_ts"), Value: &types.FieldMemberStringValue{Value: modifiedTsStr}},
+			{Name: aws.String("progress_result"), Value: &types.FieldMemberStringValue{Value: string(row.ProgressJSON)}},
+			{Name: aws.String("most_recent_progress"), Value: &types.FieldMemberStringValue{Value: string(row.MostRecentProgressJSON)}},
+			{Name: aws.String("command_id"), Value: &types.FieldMemberStringValue{Value: commandID}},
+			{Name: aws.String("ksuid"), Value: &types.FieldMemberStringValue{Value: row.KSUID}},
+			{Name: aws.String("operation"), Value: &types.FieldMemberStringValue{Value: string(row.Operation)}},
+		}
+		out, execErr := d.executeStatementInTransaction(ctx, txID, query, params)
+		if execErr != nil {
+			_ = d.rollbackTransaction(ctx, txID)
+			return result, fmt.Errorf("failed to force-cancel InProgress row %s: %w", row.KSUID, execErr)
+		}
+		if out.NumberOfRecordsUpdated > 0 {
+			result.CanceledInProgress = append(result.CanceledInProgress, ref)
+		} else {
+			result.Skipped = append(result.Skipped, ref)
+		}
+	}
+
+	for _, ref := range notStarted {
+		query := `
+		UPDATE resource_updates
+		SET state = 'Canceled', modified_ts = :modified_ts::timestamp
+		WHERE command_id = :command_id AND ksuid = :ksuid AND operation = :operation AND state = 'NotStarted'
+		`
+		params := []types.SqlParameter{
+			{Name: aws.String("modified_ts"), Value: &types.FieldMemberStringValue{Value: modifiedTsStr}},
+			{Name: aws.String("command_id"), Value: &types.FieldMemberStringValue{Value: commandID}},
+			{Name: aws.String("ksuid"), Value: &types.FieldMemberStringValue{Value: ref.KSUID}},
+			{Name: aws.String("operation"), Value: &types.FieldMemberStringValue{Value: string(ref.Operation)}},
+		}
+		out, execErr := d.executeStatementInTransaction(ctx, txID, query, params)
+		if execErr != nil {
+			_ = d.rollbackTransaction(ctx, txID)
+			return result, fmt.Errorf("failed to force-cancel NotStarted row %s: %w", ref.KSUID, execErr)
+		}
+		if out.NumberOfRecordsUpdated > 0 {
+			result.CanceledNotStarted = append(result.CanceledNotStarted, ref)
+		} else {
+			result.Skipped = append(result.Skipped, ref)
+		}
+	}
+
+	if err := d.commitTransaction(ctx, txID); err != nil {
+		// Ambiguous commit: return error so caller can retry.
+		return result, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return result, nil
 }
