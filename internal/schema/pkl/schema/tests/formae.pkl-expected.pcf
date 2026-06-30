@@ -94,6 +94,7 @@ examples {
         EdgeKind = "default"
         UpdateMethod = ""
         IndexField = ""
+        Format = ""
       }
       ["Region"] {
         CreateOnly = true
@@ -105,6 +106,7 @@ examples {
         EdgeKind = "default"
         UpdateMethod = ""
         IndexField = ""
+        Format = ""
       }
       ["Tags"] {
         CreateOnly = false
@@ -116,6 +118,7 @@ examples {
         EdgeKind = "default"
         UpdateMethod = ""
         IndexField = ""
+        Format = ""
       }
     }
   }
@@ -138,6 +141,7 @@ examples {
           EdgeKind = "default"
           UpdateMethod = ""
           IndexField = ""
+          Format = ""
         }
         ["Region"] {
           CreateOnly = true
@@ -149,6 +153,7 @@ examples {
           EdgeKind = "default"
           UpdateMethod = ""
           IndexField = ""
+          Format = ""
         }
         ["Tags"] {
           CreateOnly = false
@@ -160,6 +165,7 @@ examples {
           EdgeKind = "default"
           UpdateMethod = ""
           IndexField = ""
+          Format = ""
         }
       }
       Discoverable = true
@@ -213,6 +219,7 @@ examples {
             EdgeKind = "default"
             UpdateMethod = ""
             IndexField = ""
+            Format = ""
           }
           ["Region"] {
             CreateOnly = true
@@ -224,6 +231,7 @@ examples {
             EdgeKind = "default"
             UpdateMethod = ""
             IndexField = ""
+            Format = ""
           }
           ["Tags"] {
             CreateOnly = false
@@ -235,6 +243,7 @@ examples {
             EdgeKind = "default"
             UpdateMethod = ""
             IndexField = ""
+            Format = ""
           }
         }
         Discoverable = true
@@ -296,6 +305,7 @@ examples {
             EdgeKind = "default"
             UpdateMethod = ""
             IndexField = ""
+            Format = ""
           }
           ["Region"] {
             CreateOnly = true
@@ -307,6 +317,7 @@ examples {
             EdgeKind = "default"
             UpdateMethod = ""
             IndexField = ""
+            Format = ""
           }
           ["Tags"] {
             CreateOnly = false
@@ -318,6 +329,7 @@ examples {
             EdgeKind = "default"
             UpdateMethod = ""
             IndexField = ""
+            Format = ""
           }
         }
         Discoverable = true
@@ -363,6 +375,7 @@ examples {
             EdgeKind = "default"
             UpdateMethod = ""
             IndexField = ""
+            Format = ""
           }
           ["nested"] {
             CreateOnly = false
@@ -374,6 +387,7 @@ examples {
             EdgeKind = "default"
             UpdateMethod = ""
             IndexField = ""
+            Format = ""
           }
           ["nested.configName"] {
             CreateOnly = false
@@ -385,6 +399,7 @@ examples {
             EdgeKind = "default"
             UpdateMethod = ""
             IndexField = ""
+            Format = ""
           }
           ["nested.TestConfigValue"] {
             CreateOnly = false
@@ -396,6 +411,7 @@ examples {
             EdgeKind = "default"
             UpdateMethod = ""
             IndexField = ""
+            Format = ""
           }
           ["nested.setting"] {
             CreateOnly = false
@@ -407,6 +423,7 @@ examples {
             EdgeKind = "default"
             UpdateMethod = ""
             IndexField = ""
+            Format = ""
           }
           ["nested.setting.setting1"] {
             CreateOnly = false
@@ -418,6 +435,7 @@ examples {
             EdgeKind = "default"
             UpdateMethod = ""
             IndexField = ""
+            Format = ""
           }
           ["nested.setting.SettingTwo"] {
             CreateOnly = false
@@ -429,6 +447,7 @@ examples {
             EdgeKind = "default"
             UpdateMethod = ""
             IndexField = ""
+            Format = ""
           }
         }
         Discoverable = true
@@ -469,6 +488,7 @@ examples {
         EdgeKind = "default"
         UpdateMethod = ""
         IndexField = ""
+        Format = ""
       }
       ["Region"] {
         CreateOnly = true
@@ -480,6 +500,7 @@ examples {
         EdgeKind = "default"
         UpdateMethod = ""
         IndexField = ""
+        Format = ""
       }
       ["Tags"] {
         CreateOnly = false
@@ -491,6 +512,7 @@ examples {
         EdgeKind = "default"
         UpdateMethod = ""
         IndexField = ""
+        Format = ""
       }
     }
   }
@@ -513,6 +535,7 @@ examples {
           EdgeKind = "default"
           UpdateMethod = ""
           IndexField = ""
+          Format = ""
         }
         ["Region"] {
           CreateOnly = true
@@ -524,6 +547,7 @@ examples {
           EdgeKind = "default"
           UpdateMethod = ""
           IndexField = ""
+          Format = ""
         }
         ["Tags"] {
           CreateOnly = false
@@ -535,6 +559,7 @@ examples {
           EdgeKind = "default"
           UpdateMethod = ""
           IndexField = ""
+          Format = ""
         }
       }
       Discoverable = true
