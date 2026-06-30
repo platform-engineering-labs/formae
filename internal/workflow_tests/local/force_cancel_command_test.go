@@ -236,20 +236,19 @@ func TestMetastructure_ForceCancelCommand_ConvergesWhereNonForceHangs(t *testing
 }
 
 // faultInjectingDatastore wraps a Datastore and can fail the two distinct durable
-// writes a BulkForceCancel performs: the early resource-row CAS
-// (ForceCancelResourceUpdates) and the late authoritative command-blob write
-// (StoreFormaCommand, via finalizeAndPersist). Each is independently configurable so
-// tests can exercise both the early-failure and late-failure branches of the
-// persist-before-terminate contract.
+// writes a BulkForceCancel gates on: the early resource-row CAS
+// (ForceCancelResourceUpdates) and the authoritative atomic command-row write
+// (UpdateFormaCommandTargetUpdates). Each is independently configurable so tests can
+// exercise both branches of the persist-before-terminate contract.
 type faultInjectingDatastore struct {
 	datastore.Datastore
 	failuresRemaining atomic.Int32
-	// finalizeFailuresRemaining fails the next StoreFormaCommand, but only once a CAS
-	// has succeeded (i.e. we are inside a force-cancel turn past the row CAS). This
-	// targets the finalizeAndPersist write specifically without disturbing the
-	// StoreFormaCommand calls made during normal apply.
-	finalizeFailuresRemaining atomic.Int32
-	finalizeFailArmed         atomic.Bool
+	// commandWriteFailuresRemaining fails the next UpdateFormaCommandTargetUpdates, but
+	// only once a CAS has succeeded (i.e. we are inside a force-cancel turn past the row
+	// CAS). This targets the atomic command-row write specifically, without disturbing
+	// any command writes made during normal apply.
+	commandWriteFailuresRemaining atomic.Int32
+	commandWriteFailArmed         atomic.Bool
 }
 
 func (d *faultInjectingDatastore) ForceCancelResourceUpdates(commandID string, inProgress []datastore.ForceCancelRow, notStarted []datastore.ResourceUpdateRef, modifiedTs time.Time) (datastore.ForceCancelResult, error) {
@@ -257,21 +256,21 @@ func (d *faultInjectingDatastore) ForceCancelResourceUpdates(commandID string, i
 		d.failuresRemaining.Add(-1)
 		return datastore.ForceCancelResult{}, fmt.Errorf("injected ForceCancelResourceUpdates failure")
 	}
-	// The row CAS is about to succeed; arm the next StoreFormaCommand to fail so the
-	// failure lands on the finalizeAndPersist write that follows in this same turn.
-	if d.finalizeFailuresRemaining.Load() > 0 {
-		d.finalizeFailArmed.Store(true)
+	// The row CAS is about to succeed; arm the next command-row write to fail so the
+	// failure lands on the atomic terminality write that follows in this same turn.
+	if d.commandWriteFailuresRemaining.Load() > 0 {
+		d.commandWriteFailArmed.Store(true)
 	}
 	return d.Datastore.ForceCancelResourceUpdates(commandID, inProgress, notStarted, modifiedTs)
 }
 
-func (d *faultInjectingDatastore) StoreFormaCommand(command *forma_command.FormaCommand, commandID string) error {
-	if d.finalizeFailArmed.Load() && d.finalizeFailuresRemaining.Load() > 0 {
-		d.finalizeFailArmed.Store(false)
-		d.finalizeFailuresRemaining.Add(-1)
-		return fmt.Errorf("injected StoreFormaCommand failure")
+func (d *faultInjectingDatastore) UpdateFormaCommandTargetUpdates(commandID string, targetUpdatesJSON json.RawMessage, state forma_command.CommandState, modifiedTs time.Time) error {
+	if d.commandWriteFailArmed.Load() && d.commandWriteFailuresRemaining.Load() > 0 {
+		d.commandWriteFailArmed.Store(false)
+		d.commandWriteFailuresRemaining.Add(-1)
+		return fmt.Errorf("injected UpdateFormaCommandTargetUpdates failure")
 	}
-	return d.Datastore.StoreFormaCommand(command, commandID)
+	return d.Datastore.UpdateFormaCommandTargetUpdates(commandID, targetUpdatesJSON, state, modifiedTs)
 }
 
 // TestMetastructure_ForceCancelCommand_PersisterFailureTerminatesNoActors verifies the
@@ -331,20 +330,21 @@ func TestMetastructure_ForceCancelCommand_PersisterFailureTerminatesNoActors(t *
 	})
 }
 
-// TestMetastructure_ForceCancelCommand_FinalizePersistFailureSurfaces covers the late
-// branch of the persist-before-terminate contract: the resource-row CAS succeeds but the
-// authoritative command-blob write (finalizeAndPersist/StoreFormaCommand) then fails.
-// That write is the only durable home of the overall command state and the target
-// updates, so its failure must surface in-band — the force-cancel reports an error,
-// terminates no actors, and the command stays InProgress until a retry converges it.
-func TestMetastructure_ForceCancelCommand_FinalizePersistFailureSurfaces(t *testing.T) {
+// TestMetastructure_ForceCancelCommand_CommandWritePersistFailureSurfaces covers the
+// late branch of the persist-before-terminate contract: the resource-row CAS succeeds
+// but the authoritative atomic command-row write (UpdateFormaCommandTargetUpdates) then
+// fails. That single-statement write is the only durable home of the overall command
+// state and the target updates, so its failure must surface in-band — the force-cancel
+// reports an error, terminates no actors, and the command stays InProgress (the atomic
+// write committed nothing) until a retry converges it.
+func TestMetastructure_ForceCancelCommand_CommandWritePersistFailureSurfaces(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		cfg := test_helpers.NewTestMetastructureConfig()
 		base, err := dssqlite.NewDatastoreSQLite(context.Background(), &cfg.Agent.Datastore, "test")
 		require.NoError(t, err)
 
 		ds := &faultInjectingDatastore{Datastore: base}
-		ds.finalizeFailuresRemaining.Store(1) // CAS succeeds, the following finalize write fails once
+		ds.commandWriteFailuresRemaining.Store(1) // CAS succeeds, the following command-row write fails once
 
 		m, def, err := test_helpers.NewTestMetastructureWithEverything(t, neverReturningOverrides(), ds, cfg)
 		defer def()

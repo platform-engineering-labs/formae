@@ -850,29 +850,42 @@ func (f *FormaCommandPersister) bulkForceCancel(msg *BulkForceCancel) (BulkForce
 		}
 	}
 
-	// The terminalized targets live in memory on command.TargetUpdates; do NOT persist
-	// them here in a separate write. finalizeAndPersist (StoreFormaCommand) below is the
-	// single authoritative durable write — it persists the whole command, including the
-	// target updates and the overall state, in one shot. A separate earlier write would
-	// commit a terminal command state before that final store; if the store then failed
-	// we would surface a retryable error while the command already read terminal, and the
-	// retry path (CancelCommandsByQuery, which filters to InProgress) would skip it,
-	// stranding a live actor tree against a durably-terminal command.
 	command.ModifiedTs = ts
 	command.State = overallCommandState(command)
 
+	// Authoritative durable terminality write. The resource rows were already durably
+	// terminalized by the CAS above, so the only durable state left to advance is the
+	// command row: its overall state and the terminalized target updates (which live
+	// only in the command blob). Use the single-statement update so this is ATOMIC — it
+	// either commits the terminal state or leaves the row untouched. Gating retryability
+	// on an atomic write is what makes "surface error → retry" safe: a failure here
+	// cannot partially advance the command, so the retry still sees InProgress (and
+	// CancelCommandsByQuery finds it), re-runs the CAS (resources report Skipped), and
+	// converges. We deliberately do NOT gate on StoreFormaCommand: it advances the
+	// command row and re-stores the resource rows in separate, non-atomic writes, so a
+	// mid-failure could leave the command durably terminal while we report a retryable
+	// error — stranding the still-live actor tree against a terminal command.
+	targetUpdatesJSON, merr := json.Marshal(command.TargetUpdates)
+	if merr != nil {
+		f.Log().Error("Failed to marshal target updates for BulkForceCancel commandID=%s: %v", msg.CommandID, merr)
+		resp.ErrorMessage = fmt.Sprintf("force-cancel: failed to encode terminal command state: %v", merr)
+		return resp, nil
+	}
+	if merr := f.datastore.UpdateFormaCommandTargetUpdates(command.ID, targetUpdatesJSON, command.State, ts); merr != nil {
+		f.Log().Error("Failed to persist terminal command state for BulkForceCancel commandID=%s: %v", msg.CommandID, merr)
+		resp.ErrorMessage = fmt.Sprintf("force-cancel: failed to persist terminal command state: %v", merr)
+		return resp, nil
+	}
+
+	// Durable terminality is now committed (resource rows via the CAS, command row +
+	// target updates via the atomic write above). The remaining finalize work —
+	// sensitive-data hashing, a full-command re-store, and cache eviction — is
+	// best-effort local bookkeeping that does NOT affect durable terminality. Its
+	// StoreFormaCommand is non-atomic, so it must NOT gate retryability: the command is
+	// already durably Canceled, so on failure we log and still let the executor tear down
+	// the actors rather than falsely telling the caller to retry a terminal command.
 	if err := f.finalizeAndPersist(cached); err != nil {
-		// finalizeAndPersist (StoreFormaCommand) is the authoritative durable write of
-		// the command: it persists the overall command state AND the target updates,
-		// which live only in the command blob and cannot be reconstructed from the
-		// resource rows. If it fails we have NOT confirmed durable terminality, so we
-		// must not report success: surface the failure in-band. The executor leaves all
-		// actors running and the caller is told to retry, rather than tearing down a
-		// command that durably still reads InProgress (with non-terminal targets). No
-		// earlier write advanced the durable state, so the retry sees InProgress and
-		// converges.
-		f.Log().Error("Failed to finalize command meta after BulkForceCancel commandID=%s: %v", msg.CommandID, err)
-		resp.ErrorMessage = fmt.Sprintf("force-cancel: failed to persist terminal command state: %v", err)
+		f.Log().Error("Best-effort finalize after BulkForceCancel failed (durable terminal state already committed) commandID=%s: %v", msg.CommandID, err)
 	}
 
 	return resp, nil
