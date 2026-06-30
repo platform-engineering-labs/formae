@@ -348,6 +348,38 @@ facts {
         rendered.contains("\\(")
     }
 
+    // --- String escaping (roundtrip) tests ---
+
+    ["String type conversion preserves quotes (escaping is a serialization concern)"] {
+        // Type conversion must NOT escape quotes; escaping belongs only to the
+        // serialization stage (escapeString). If it escapes here too, the value
+        // gets double-escaped: " -> \" -> \\\" and the extract->apply roundtrip
+        // sees phantom drift.
+        gen.apply(SimpleFoo, new Dynamic { x = 1; name = "a\"b"; label = "q" }).name == "a\"b"
+    }
+
+    ["String serialization escapes quotes exactly once (no double-escape)"] {
+        let (applied = gen.apply(SimpleFoo, new Dynamic { x = 1; name = "a\"b"; label = "q" }))
+        let (pklMap = gen.genPklToMap(applied.toDynamic()))
+        let (rendered = gen.genMapToPklStringWithTypes("SimpleFoo", pklMap, "test"))
+        // Correct output contains: name = "a\"b" (single backslash before the quote).
+        // The double-escape bug would render a\\\"b, which does not contain a\"b.
+        rendered.contains("name = \"a\\\"b\"")
+    }
+
+    ["EdgeFunction code body roundtrips with single escaping"] {
+        // Real-world repro: a Supabase EdgeFunction inline body containing
+        // double-quotes. Extract must escape each quote exactly once so the
+        // generated forma parses back to the original source (no phantom drift).
+        let (body = "Deno.serve(() => new Response(\"Hello from formae!\"))")
+        let (applied = gen.apply(SimpleFoo, new Dynamic { x = 1; name = body; label = "fn" }))
+        let (rendered = gen.genMapToPklStringWithTypes("SimpleFoo", gen.genPklToMap(applied.toDynamic()), "test"))
+        // type conversion preserves the body verbatim ...
+        applied.name == body &&
+        // ... and serialization renders it single-escaped.
+        rendered.contains("name = \"Deno.serve(() => new Response(\\\"Hello from formae!\\\"))\"")
+    }
+
     ["duplicate Typed values produce single import after dedup"] {
         // Two SubResource instances in the same resource should not
         // produce duplicate __import_statement__ entries after dedup.
