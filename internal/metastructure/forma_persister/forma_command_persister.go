@@ -850,20 +850,14 @@ func (f *FormaCommandPersister) bulkForceCancel(msg *BulkForceCancel) (BulkForce
 		}
 	}
 
-	// Persist target updates blob (derived from the fenced in-memory state). A failure
-	// here is a best-effort durability miss: the resource rows are already durably
-	// terminal Canceled and recovery's finalizeIncompleteCommand backstop converges the
-	// command meta. We log and continue rather than crash the persister.
-	if len(msg.Targets) > 0 {
-		command.State = overallCommandState(command)
-		targetUpdatesJSON, merr := json.Marshal(command.TargetUpdates)
-		if merr != nil {
-			f.Log().Error("Failed to marshal target updates for BulkForceCancel commandID=%s: %v", msg.CommandID, merr)
-		} else if merr := f.datastore.UpdateFormaCommandTargetUpdates(command.ID, targetUpdatesJSON, command.State, ts); merr != nil {
-			f.Log().Error("Failed to persist target updates for BulkForceCancel commandID=%s: %v", msg.CommandID, merr)
-		}
-	}
-
+	// The terminalized targets live in memory on command.TargetUpdates; do NOT persist
+	// them here in a separate write. finalizeAndPersist (StoreFormaCommand) below is the
+	// single authoritative durable write — it persists the whole command, including the
+	// target updates and the overall state, in one shot. A separate earlier write would
+	// commit a terminal command state before that final store; if the store then failed
+	// we would surface a retryable error while the command already read terminal, and the
+	// retry path (CancelCommandsByQuery, which filters to InProgress) would skip it,
+	// stranding a live actor tree against a durably-terminal command.
 	command.ModifiedTs = ts
 	command.State = overallCommandState(command)
 
@@ -874,7 +868,9 @@ func (f *FormaCommandPersister) bulkForceCancel(msg *BulkForceCancel) (BulkForce
 		// resource rows. If it fails we have NOT confirmed durable terminality, so we
 		// must not report success: surface the failure in-band. The executor leaves all
 		// actors running and the caller is told to retry, rather than tearing down a
-		// command that durably still reads InProgress (with non-terminal targets).
+		// command that durably still reads InProgress (with non-terminal targets). No
+		// earlier write advanced the durable state, so the retry sees InProgress and
+		// converges.
 		f.Log().Error("Failed to finalize command meta after BulkForceCancel commandID=%s: %v", msg.CommandID, err)
 		resp.ErrorMessage = fmt.Sprintf("force-cancel: failed to persist terminal command state: %v", err)
 	}
