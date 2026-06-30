@@ -438,7 +438,11 @@ func formatSimulatedResourceUpdate(root *gtree.Node, rc apimodel.ResourceUpdate)
 	// `change property` style. This keeps the diff body the single place
 	// the operator scans for what's actually changing.
 	renamed := rc.OldLabel != "" && rc.OldLabel != rc.ResourceLabel
-	hasPatch := rc.Operation == apimodel.OperationUpdate && len(rc.PatchDocument) > 0
+	// A patch counts only if it would render at least one line. A patch whose
+	// sole op is a suppressed NoOp (an unchanged force-resent field) renders
+	// nothing, so it must not open an empty `by doing the following:` block.
+	hasPatch := rc.Operation == apimodel.OperationUpdate && len(rc.PatchDocument) > 0 &&
+		HasVisibleChanges(rc.PatchDocument, rc.Properties, rc.OldProperties, rc.ReferenceLabels)
 	isBringingUnderManagement := rc.OldStackName == constants.UnmanagedStack && rc.StackName != constants.UnmanagedStack
 
 	// RFC-0041: where the `change label from "<old>" to "<new>"` line lives

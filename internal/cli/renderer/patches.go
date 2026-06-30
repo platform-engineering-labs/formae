@@ -40,6 +40,12 @@ type PropertyChange struct {
 	IsOpaque         bool
 	ExistsInPrevious bool
 
+	// NoOp marks a change the renderer should suppress entirely: a field that
+	// is force-resent on every update (requiredOnUpdate) but whose value did
+	// not change. The plugin still receives it; the user shouldn't see it as a
+	// "change" on an otherwise-clean reconcile.
+	NoOp bool
+
 	// IsCascadeResolvable signals a cascade-update synthetic op where the
 	// new value isn't knowable at plan time (e.g. provider-assigned
 	// identifiers like AWS ARNs). The renderer prints a friendly
@@ -72,6 +78,35 @@ func FormatPatchDocument(node *gtree.Node, patchDoc json.RawMessage, properties 
 	for _, patch := range patches {
 		formatSinglePatch(node, patch, props, previousProperties, refLabels)
 	}
+}
+
+// HasVisibleChanges reports whether formatting the patch document would emit at
+// least one change line. A patch whose only op is a suppressed NoOp (a
+// force-resent requiredOnUpdate field whose value is unchanged) renders
+// nothing, and the caller must not open an empty "by doing the following:"
+// block for it.
+func HasVisibleChanges(patchDoc json.RawMessage, properties json.RawMessage, previousProperties json.RawMessage, refLabels map[string]string) bool {
+	var rawPatches []map[string]any
+	if err := json.Unmarshal(patchDoc, &rawPatches); err != nil {
+		return true // a malformed patch document surfaces as a visible error line
+	}
+	var props map[string]any
+	if err := json.Unmarshal(properties, &props); err != nil {
+		return true // a parse error surfaces as a visible error line
+	}
+
+	discard := gtree.NewRoot("")
+	patches := parsePatchOperations(patchDoc, discard)
+	for _, patch := range patches {
+		if strings.Contains(patch.Path, "/Tags/") {
+			return true // tag changes always render
+		}
+		change, err := extractPropertyChange(patch, props, previousProperties, refLabels)
+		if err != nil || !change.NoOp {
+			return true
+		}
+	}
+	return false
 }
 
 func parsePatchOperations(patchDoc json.RawMessage, node *gtree.Node) []patchOperation {
@@ -117,7 +152,9 @@ func formatSinglePatch(node *gtree.Node, patch patchOperation, props map[string]
 
 	if change, err := extractPropertyChange(patch, props, previousProperties, refLabels); err != nil {
 		node.Add(display.Red(fmt.Sprintf("Error processing property patch: %v", err)))
-	} else {
+	} else if !change.NoOp {
+		// NoOp = a force-resent (requiredOnUpdate) field whose value didn't
+		// change; suppress it from the plan so a clean reconcile stays clean.
 		node.Add(formatPropertyChange(change))
 	}
 }
@@ -250,7 +287,61 @@ func extractPropertyChange(patch patchOperation, props map[string]any, previousP
 		}
 	}
 
+	// A force-resent field surfaces as an "add" whose path already exists in
+	// the previous state (a requiredOnUpdate field stripped before the diff).
+	// Carry its previous value so it renders as a change, and mark it a no-op
+	// when the value is unchanged so the caller can suppress it — the plugin
+	// still receives the re-send, but the user shouldn't see a "change" that
+	// isn't one.
+	//
+	// The no-op test compares JSON-canonical values, not rendered strings: a
+	// rendered compare would collapse distinct JSON types (the string "1" vs
+	// the number 1) into the same text and wrongly suppress a real change, and
+	// would never match an opaque re-send (whose rendered form is the
+	// "(opaque value)" placeholder) against its unchanged underlying secret.
+	if patch.Op == "add" && change.ExistsInPrevious {
+		if prev, ok := previousRawValue(previousProperties, patch.Path); ok {
+			change.OldValue = formatValueForDisplay(prev.Value())
+			change.HasOld = true
+			change.NoOp = canonicalValue(patch.Value) == canonicalValue(prev.Value())
+		}
+	}
+
 	return change, nil
+}
+
+// previousRawValue looks up the raw (un-rendered) previous value at a JSON
+// Pointer path, returning whether the path exists.
+func previousRawValue(oldProps json.RawMessage, path string) (gjson.Result, bool) {
+	if len(oldProps) == 0 {
+		return gjson.Result{}, false
+	}
+	jsonPath := strings.ReplaceAll(strings.TrimPrefix(path, "/"), "/", ".")
+	result := gjson.GetBytes(oldProps, jsonPath)
+	return result, result.Exists()
+}
+
+// canonicalValue normalizes a value for change detection. It unwraps Formae's
+// Value wrapper so an opaque re-send compares against its underlying secret
+// ($value), then serializes to JSON so that distinct JSON types never collapse
+// to the same text. Falls back to a best-effort string on marshal failure.
+func canonicalValue(v any) string {
+	v = unwrapFormaeValue(v)
+	if bytes, err := json.Marshal(v); err == nil {
+		return string(bytes)
+	}
+	return fmt.Sprintf("%v", v)
+}
+
+// unwrapFormaeValue returns the inner $value of a Formae Value wrapper, or the
+// value unchanged when it isn't a wrapper.
+func unwrapFormaeValue(v any) any {
+	if valueMap, ok := v.(map[string]any); ok {
+		if inner, ok := valueMap["$value"]; ok {
+			return inner
+		}
+	}
+	return v
 }
 
 // formatPropertyChange formats a PropertyChange for display
@@ -273,7 +364,7 @@ func formatPropertyChange(change PropertyChange) string {
 	case "add":
 		if change.IsOpaque {
 			if change.ExistsInPrevious {
-				return display.Gold(fmt.Sprintf(`set property "%s" (opaque value)`, displayPath))
+				return display.Gold(fmt.Sprintf(`change property "%s" (opaque value changed)`, displayPath))
 			}
 			if isArrayProperty(change.Path) {
 				return display.Green(fmt.Sprintf(`add new entry to "%s" (opaque value)`, displayPath))
@@ -282,9 +373,13 @@ func formatPropertyChange(change PropertyChange) string {
 		}
 		if change.ExistsInPrevious {
 			if isArrayProperty(change.Path) {
-				return display.Gold(fmt.Sprintf(`set entry "%s" in "%s" (write-only)`, change.Value, displayPath))
+				return display.Gold(fmt.Sprintf(`change entry "%s" in "%s"`, change.Value, displayPath))
 			}
-			return display.Gold(fmt.Sprintf(`set property "%s" to "%s" (write-only)`, displayPath, change.Value))
+			// Force-resent (writeOnly/requiredOnUpdate) field: it surfaces as an
+			// "add" because it was stripped before the diff. Show only the new
+			// value — the previous value is a secret we must not leak, and it
+			// exists here solely for the no-op suppression test.
+			return display.Gold(fmt.Sprintf(`change property "%s" to "%s"`, displayPath, change.Value))
 		}
 		if isArrayProperty(change.Path) {
 			return display.Green(fmt.Sprintf(`add new entry "%s" to "%s"`, change.Value, displayPath))
