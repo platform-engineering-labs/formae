@@ -75,11 +75,24 @@ type Resume struct{}
 
 type Cancel struct {
 	CommandID string
+	// Force abandons in-progress work and drives the command to a terminal
+	// Canceled state immediately, instead of waiting for in-progress resources
+	// to finish.
+	Force bool
 }
 
 // CancelResponse contains per-resource-update states at cancel time.
 type CancelResponse struct {
 	ResourceStates map[string]string // URI → state ("Canceled", "InProgress", "Success", "Failed")
+	// ForceCanceledInProgress lists the URIs of resource updates that were
+	// force-canceled while an operation was actually in progress (--force only).
+	// These are the resources whose cloud-side state may be orphaned.
+	ForceCanceledInProgress []string
+	// ErrorMessage is non-empty when a --force cancel failed to persist. It is
+	// carried in-band (rather than as a Go error from the call handler) so the
+	// executor stays alive and terminates no actors on a persist failure. The
+	// metastructure translates a non-empty ErrorMessage into a returned error.
+	ErrorMessage string
 }
 
 type ChangesetState string
@@ -117,6 +130,7 @@ func (s *ChangesetExecutor) Init(args ...any) (statemachine.StateMachineSpec[Cha
 		statemachine.WithStateMessageHandler(StateProcessing, targetUpdateFinished),
 		statemachine.WithStateMessageHandler(StateProcessing, resume),
 		statemachine.WithStateCallHandler(StateProcessing, cancel),
+		statemachine.WithStateCallHandler(StateCanceling, cancelWhileCanceling),
 		statemachine.WithStateMessageHandler(StateCanceling, resourceUpdateFinished),
 		statemachine.WithStateMessageHandler(StateCanceling, targetUpdateFinished),
 		statemachine.WithStateMessageHandler(StateFinishedWithError, shutdown),
@@ -627,7 +641,11 @@ func startTargetUpdate(tu *target_update.TargetUpdate, commandID string, proc ge
 }
 
 func cancel(from gen.PID, state gen.Atom, data ChangesetData, message Cancel, proc gen.Process) (gen.Atom, ChangesetData, CancelResponse, []statemachine.Action, error) {
-	proc.Log().Debug("ChangesetExecutor received cancel request commandID=%s", message.CommandID)
+	proc.Log().Debug("ChangesetExecutor received cancel request commandID=%s force=%t", message.CommandID, message.Force)
+
+	if message.Force {
+		return forceCancel(state, data, message, proc)
+	}
 
 	// Collect resources by state
 	var resourcesToCancel []forma_persister.ResourceUpdateRef
@@ -693,6 +711,149 @@ func cancel(from gen.PID, state gen.Atom, data ChangesetData, message Cancel, pr
 	}
 
 	return nextState, data, cancelResp, nil, nil
+}
+
+// forceCancel implements the --force escape hatch. It terminalizes ALL still-in-flight
+// resource and target updates (NotStarted + InProgress) to Canceled in a single durable
+// persister turn (BulkForceCancel) BEFORE terminating any actors.
+//
+// Persist-before-terminate is load-bearing: if the persister call fails we return the
+// error to the caller and terminate NO actors, so we never leave the durable DB state
+// non-terminal while the in-process actor tree has already been torn down (that would
+// re-introduce the split-brain class). On success the command's derived state is already
+// terminal Canceled; we then transition to StateCanceled, whose state-enter callback sends
+// Shutdown to self and lets Ticket A's LinkParent cascade best-effort terminate the
+// children (and, through them, the remote plugin operators).
+func forceCancel(state gen.Atom, data ChangesetData, message Cancel, proc gen.Process) (gen.Atom, ChangesetData, CancelResponse, []statemachine.Action, error) {
+	var resourcesToCancel []forma_persister.ResourceUpdateRef
+	var targetsToCancel []forma_persister.TargetUpdateRef
+	resourceStates := make(map[string]string)
+
+	for _, node := range data.changeset.DAG.Nodes {
+		switch u := node.Update.(type) {
+		case *resource_update.ResourceUpdate:
+			uri := string(u.URI())
+			switch u.State {
+			case resource_update.ResourceUpdateStateNotStarted, resource_update.ResourceUpdateStateInProgress:
+				// All still-in-flight work is force-canceled.
+				resourceStates[uri] = "Canceled"
+				resourcesToCancel = append(resourcesToCancel, forma_persister.ResourceUpdateRef{
+					URI:       u.URI(),
+					Operation: u.Operation,
+				})
+			case resource_update.ResourceUpdateStateSuccess:
+				resourceStates[uri] = "Success"
+			case resource_update.ResourceUpdateStateFailed:
+				resourceStates[uri] = "Failed"
+			case resource_update.ResourceUpdateStateCanceled:
+				resourceStates[uri] = "Canceled"
+			default:
+				resourceStates[uri] = string(u.State)
+			}
+		case *target_update.TargetUpdate:
+			// Targets carry no per-URI display state today, but in-flight ones must be
+			// terminalized so recovery's "all updates terminal" criterion converges.
+			// The persister's in-memory target fence drops any that are already terminal.
+			switch u.State {
+			case target_update.TargetUpdateStateNotStarted, target_update.TargetUpdateStateInProgress:
+				targetsToCancel = append(targetsToCancel, forma_persister.TargetUpdateRef{
+					Label:     u.Target.Label,
+					Operation: u.Operation,
+				})
+			}
+		}
+	}
+
+	// Persist FIRST. BulkForceCancel terminalizes all in-flight resource and target
+	// updates and recomputes the command's derived state to terminal Canceled at commit.
+	result, err := proc.Call(
+		gen.ProcessID{Node: proc.Node().Name(), Name: gen.Atom("FormaCommandPersister")},
+		forma_persister.BulkForceCancel{
+			CommandID: data.changeset.CommandID,
+			Resources: resourcesToCancel,
+			Targets:   targetsToCancel,
+		},
+	)
+	if err != nil {
+		// Persist-before-terminate: on persister error, terminate NO actors and stay
+		// in the current state. The durable DB state is still non-terminal; the user
+		// retries (or the agent-restart escape hatch remains). We carry the error in
+		// the CancelResponse (NOT as a Go error from this handler) because returning a
+		// non-nil error from a state call handler terminates the executor — exactly the
+		// teardown we must avoid here.
+		proc.Log().Error("BulkForceCancel failed, terminating no actors commandID=%s: %v", data.changeset.CommandID, err)
+		return state, data, CancelResponse{ErrorMessage: fmt.Sprintf("force-cancel persist failed: %v", err)}, nil, nil
+	}
+
+	resp, ok := result.(forma_persister.BulkForceCancelResponse)
+	if !ok {
+		proc.Log().Error("BulkForceCancel returned unexpected response type commandID=%s type=%T", data.changeset.CommandID, result)
+		return state, data, CancelResponse{ErrorMessage: fmt.Sprintf("force-cancel: unexpected persister response type %T", result)}, nil, nil
+	}
+
+	// The persister reports a persistence failure in-band (so it stays alive). Treat it
+	// exactly like a Call error: terminate no actors, stay in the current state, surface
+	// the error to the caller.
+	if resp.ErrorMessage != "" {
+		proc.Log().Error("BulkForceCancel reported persist failure, terminating no actors commandID=%s: %s", data.changeset.CommandID, resp.ErrorMessage)
+		return state, data, CancelResponse{ErrorMessage: resp.ErrorMessage}, nil, nil
+	}
+
+	// The resources that were force-canceled mid-operation (had an InProgress op) are
+	// the ones whose cloud-side state may now be orphaned.
+	var forceCanceledInProgress []string
+	for _, ref := range resp.ForceCanceledInProgress {
+		forceCanceledInProgress = append(forceCanceledInProgress, string(ref.URI))
+	}
+
+	proc.Log().Debug("Force-canceled command commandID=%s canceledCount=%d forceCanceledInProgress=%d targets=%d",
+		message.CommandID, len(resourcesToCancel), len(forceCanceledInProgress), len(targetsToCancel))
+
+	cancelResp := CancelResponse{
+		ResourceStates:          resourceStates,
+		ForceCanceledInProgress: forceCanceledInProgress,
+	}
+
+	// Durable terminal Canceled reached. Transition to StateCanceled; the state-enter
+	// callback tears down children (best-effort cascade) via Shutdown.
+	return StateCanceled, data, cancelResp, nil, nil
+}
+
+// cancelWhileCanceling handles a cancel request that arrives while the executor is
+// already in the waiting StateCanceling (a previously-issued non-force cancel is still
+// waiting for in-progress resources). A --force request here escalates: it terminalizes
+// the still-in-flight work immediately. A non-force request is an idempotent no-op — we
+// stay in StateCanceling and keep waiting.
+func cancelWhileCanceling(from gen.PID, state gen.Atom, data ChangesetData, message Cancel, proc gen.Process) (gen.Atom, ChangesetData, CancelResponse, []statemachine.Action, error) {
+	proc.Log().Debug("ChangesetExecutor received cancel request while canceling commandID=%s force=%t", message.CommandID, message.Force)
+
+	if message.Force {
+		return forceCancel(state, data, message, proc)
+	}
+
+	// Non-force cancel while already canceling: report current per-resource states and
+	// keep waiting. We do not re-issue MarkResourcesAsCanceled (the NotStarted resources
+	// were already terminalized when the first cancel ran).
+	resourceStates := make(map[string]string)
+	for _, node := range data.changeset.DAG.Nodes {
+		ru, ok := node.Update.(*resource_update.ResourceUpdate)
+		if !ok {
+			continue
+		}
+		uri := string(ru.URI())
+		switch ru.State {
+		case resource_update.ResourceUpdateStateInProgress:
+			resourceStates[uri] = "InProgress"
+		case resource_update.ResourceUpdateStateSuccess:
+			resourceStates[uri] = "Success"
+		case resource_update.ResourceUpdateStateFailed:
+			resourceStates[uri] = "Failed"
+		default:
+			resourceStates[uri] = "Canceled"
+		}
+	}
+
+	return StateCanceling, data, CancelResponse{ResourceStates: resourceStates}, nil, nil
 }
 
 func shutdown(from gen.PID, state gen.Atom, data ChangesetData, shutdown Shutdown, proc gen.Process) (gen.Atom, ChangesetData, []statemachine.Action, error) {

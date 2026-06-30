@@ -272,9 +272,16 @@ type BulkForceCancel struct {
 }
 
 // BulkForceCancelResponse reports the outcome of a BulkForceCancel.
+//
+// A persistence failure is reported in-band via ErrorMessage rather than as a Go error
+// from HandleCall: returning a non-nil error from a persister HandleCall terminates the
+// persister actor and leaves the caller timing out. The force-cancel contract is
+// persist-before-terminate — the caller must learn the persist failed (and terminate no
+// actors) without crashing the persister. An empty ErrorMessage means success.
 type BulkForceCancelResponse struct {
 	Skipped                 []ResourceUpdateRef // rows that were already terminal (no-op)
 	ForceCanceledInProgress []ResourceUpdateRef // rows that were InProgress (got force-cancel progress entries)
+	ErrorMessage            string              // non-empty if the force-cancel persist failed
 }
 
 // MarkTargetsAsFailed is sent by the changeset executor when target updates
@@ -702,19 +709,36 @@ func (f *FormaCommandPersister) markResourcesAsCanceled(msg *MarkResourcesAsCanc
 	return f.bulkUpdateResourceState(msg.CommandID, msg.Resources, types.ResourceUpdateStateCanceled, util.TimeNow())
 }
 
+// plannedForceCancel describes one in-memory resource-update mutation to apply ONLY
+// after the durable resource-row CAS has succeeded. We compute the plan first, persist,
+// and apply in-memory afterward so that a persistence failure leaves the in-memory cache
+// (which is authoritative) untouched — no split-brain, terminate-no-actors holds.
+type plannedForceCancel struct {
+	idx           int
+	ref           ResourceUpdateRef
+	wasInProgress bool
+	progress      plugin.TrackedProgress
+}
+
 func (f *FormaCommandPersister) bulkForceCancel(msg *BulkForceCancel) (BulkForceCancelResponse, error) {
 	ts := util.TimeNow()
 	resp := BulkForceCancelResponse{}
 
 	cached, err := f.getOrLoadCommand(msg.CommandID)
 	if err != nil {
-		return resp, fmt.Errorf("failed to load command for BulkForceCancel: %w", err)
+		// A load failure means we never touched in-memory state; report it in-band so
+		// the persister stays alive and the caller terminates no actors.
+		resp.ErrorMessage = fmt.Sprintf("failed to load command for BulkForceCancel: %v", err)
+		return resp, nil
 	}
 	command := cached.command
 
 	var inProgressRows []datastore.ForceCancelRow
 	var notStartedRefs []datastore.ResourceUpdateRef
+	var plan []plannedForceCancel
 
+	// Pass 1: plan only — build the DB CAS args and the in-memory mutation plan WITHOUT
+	// mutating the authoritative in-memory cache yet.
 	for _, ref := range msg.Resources {
 		idx := cached.findResourceUpdateIndex(ref.URI.KSUID(), ref.Operation)
 		if idx == -1 {
@@ -735,16 +759,21 @@ func (f *FormaCommandPersister) bulkForceCancel(msg *BulkForceCancel) (BulkForce
 			},
 		}
 
+		p := plannedForceCancel{idx: idx, ref: ref, progress: forceCancelProgress}
+
 		if res.State == types.ResourceUpdateStateInProgress {
+			p.wasInProgress = true
 			// Build the progress list: copy existing + append force-cancel entry
 			newProgressList := append(append([]plugin.TrackedProgress{}, res.ProgressResult...), forceCancelProgress)
 			progressJSON, merr := json.Marshal(newProgressList)
 			if merr != nil {
-				return resp, fmt.Errorf("failed to marshal progress for BulkForceCancel: %w", merr)
+				resp.ErrorMessage = fmt.Sprintf("failed to marshal progress for BulkForceCancel: %v", merr)
+				return resp, nil
 			}
 			mostRecentJSON, merr := json.Marshal(forceCancelProgress)
 			if merr != nil {
-				return resp, fmt.Errorf("failed to marshal most-recent progress for BulkForceCancel: %w", merr)
+				resp.ErrorMessage = fmt.Sprintf("failed to marshal most-recent progress for BulkForceCancel: %v", merr)
+				return resp, nil
 			}
 			inProgressRows = append(inProgressRows, datastore.ForceCancelRow{
 				KSUID:                  res.DesiredState.Ksuid,
@@ -753,10 +782,6 @@ func (f *FormaCommandPersister) bulkForceCancel(msg *BulkForceCancel) (BulkForce
 				MostRecentProgressJSON: mostRecentJSON,
 			})
 			resp.ForceCanceledInProgress = append(resp.ForceCanceledInProgress, ref)
-
-			// Update in-memory progress
-			res.ProgressResult = append(res.ProgressResult, forceCancelProgress)
-			res.MostRecentProgressResult = forceCancelProgress
 		} else {
 			// NotStarted or any other non-final state
 			notStartedRefs = append(notStartedRefs, datastore.ResourceUpdateRef{
@@ -765,25 +790,42 @@ func (f *FormaCommandPersister) bulkForceCancel(msg *BulkForceCancel) (BulkForce
 			})
 		}
 
-		// Terminalize in-memory + counter (mirror bulkUpdateResourceState exactly)
+		plan = append(plan, p)
+	}
+
+	// Persist FIRST. The resource-row CAS is the durable terminal write. If it fails we
+	// have NOT mutated the in-memory cache, so the command stays non-terminal and the
+	// caller (the changeset executor) terminates no actors.
+	result, err := f.datastore.ForceCancelResourceUpdates(msg.CommandID, inProgressRows, notStartedRefs, ts)
+	if err != nil {
+		resp.ErrorMessage = fmt.Sprintf("ForceCancelResourceUpdates failed for command %s: %v", msg.CommandID, err)
+		// Clear the partially-built response lists: nothing was actually canceled.
+		resp.ForceCanceledInProgress = nil
+		resp.Skipped = nil
+		return resp, nil
+	}
+
+	// Pass 2: the durable resource CAS succeeded. Now apply the in-memory mutations.
+	for _, p := range plan {
+		res := &command.ResourceUpdates[p.idx]
+		if p.wasInProgress {
+			res.ProgressResult = append(res.ProgressResult, p.progress)
+			res.MostRecentProgressResult = p.progress
+		}
 		res.State = types.ResourceUpdateStateCanceled
 		res.ModifiedTs = ts
 		cached.pendingCompletions--
 		if cached.pendingCompletions < 0 {
-			return resp, fmt.Errorf("BulkForceCancel: pendingCompletions went below zero for command %s, this indicates a programming error", msg.CommandID)
+			cached.pendingCompletions = 0
+			f.Log().Error("BulkForceCancel: pendingCompletions went below zero for command %s, clamped to zero", msg.CommandID)
 		}
-		key := resourceUpdateKey(ref.URI.KSUID(), ref.Operation)
+		key := resourceUpdateKey(p.ref.URI.KSUID(), p.ref.Operation)
 		if cached.terminalizedByBulk == nil {
 			cached.terminalizedByBulk = make(map[string]bool)
 		}
 		cached.terminalizedByBulk[key] = true
 	}
 
-	// Call datastore to CAS-terminalize the rows
-	result, err := f.datastore.ForceCancelResourceUpdates(msg.CommandID, inProgressRows, notStartedRefs, ts)
-	if err != nil {
-		return resp, fmt.Errorf("ForceCancelResourceUpdates failed for command %s: %w", msg.CommandID, err)
-	}
 	// Merge DB-reported skipped (already-terminal) into response
 	for _, r := range result.Skipped {
 		resp.Skipped = append(resp.Skipped, ResourceUpdateRef{
@@ -808,14 +850,17 @@ func (f *FormaCommandPersister) bulkForceCancel(msg *BulkForceCancel) (BulkForce
 		}
 	}
 
-	// Persist target updates blob
+	// Persist target updates blob (derived from the fenced in-memory state). A failure
+	// here is a best-effort durability miss: the resource rows are already durably
+	// terminal Canceled and recovery's finalizeIncompleteCommand backstop converges the
+	// command meta. We log and continue rather than crash the persister.
 	if len(msg.Targets) > 0 {
+		command.State = overallCommandState(command)
 		targetUpdatesJSON, merr := json.Marshal(command.TargetUpdates)
 		if merr != nil {
-			return resp, fmt.Errorf("failed to marshal target updates for BulkForceCancel: %w", merr)
-		}
-		if merr := f.datastore.UpdateFormaCommandTargetUpdates(command.ID, targetUpdatesJSON, command.State, ts); merr != nil {
-			return resp, fmt.Errorf("failed to persist target updates for BulkForceCancel: %w", merr)
+			f.Log().Error("Failed to marshal target updates for BulkForceCancel commandID=%s: %v", msg.CommandID, merr)
+		} else if merr := f.datastore.UpdateFormaCommandTargetUpdates(command.ID, targetUpdatesJSON, command.State, ts); merr != nil {
+			f.Log().Error("Failed to persist target updates for BulkForceCancel commandID=%s: %v", msg.CommandID, merr)
 		}
 	}
 
@@ -823,7 +868,10 @@ func (f *FormaCommandPersister) bulkForceCancel(msg *BulkForceCancel) (BulkForce
 	command.State = overallCommandState(command)
 
 	if err := f.finalizeAndPersist(cached); err != nil {
-		return resp, err
+		// The resource rows are durably terminal; the command-meta finalize is a
+		// best-effort durability write covered by the recovery backstop. Log, do not
+		// crash the persister, and report success so the caller proceeds with teardown.
+		f.Log().Error("Failed to finalize command meta after BulkForceCancel commandID=%s: %v", msg.CommandID, err)
 	}
 
 	return resp, nil
