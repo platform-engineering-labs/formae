@@ -874,6 +874,17 @@ func (f *FormaCommandPersister) bulkForceCancel(msg *BulkForceCancel) (BulkForce
 	if merr := f.datastore.UpdateFormaCommandTargetUpdates(command.ID, targetUpdatesJSON, command.State, ts); merr != nil {
 		f.Log().Error("Failed to persist terminal command state for BulkForceCancel commandID=%s: %v", msg.CommandID, merr)
 		resp.ErrorMessage = fmt.Sprintf("force-cancel: failed to persist terminal command state: %v", merr)
+		// Pass 2 above has already advanced the in-memory cache, but that is safe and the
+		// command still converges. The resource mutations (state, pendingCompletions,
+		// terminalizedByBulk) mirror the resource-row CAS, which DID commit durably — so
+		// the cache matches the durable resource rows, and dropping a late completion for
+		// a durably-Canceled resource is the intended write-fence, not lost work. Only the
+		// command row stayed InProgress (this atomic write committed nothing). A retry is
+		// idempotent: the now-final in-memory resources report Skipped, so pendingCompletions
+		// is not decremented again, and the retry's atomic write persists the terminal state.
+		// If the agent crashes before a retry, the recovery backstop converges the command
+		// because the resource rows are already durably terminal. So we do not roll the cache
+		// back here — doing so would break retry idempotency for no gain.
 		return resp, nil
 	}
 
