@@ -125,3 +125,25 @@ func TestSchema_ParentFields_DefaultsForLegacyJSON(t *testing.T) {
 	require.Equal(t, "", s.Parent)
 	require.Nil(t, s.ParentMappings)
 }
+
+func TestFieldHintFormatRoundTripsThroughJSON(t *testing.T) {
+	raw := `{"Identifier":"X","Fields":["configJson"],"Hints":{"configJson":{"Format":"json"}}}`
+	var s Schema
+	if err := json.Unmarshal([]byte(raw), &s); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Hints["configJson"].Format; got != "json" {
+		t.Fatalf("Format = %q, want json", got)
+	}
+}
+
+func TestSchemaFormatHints(t *testing.T) {
+	s := Schema{Hints: map[string]FieldHint{
+		"configJson": {Format: "json"},
+		"name":       {CreateOnly: true},
+	}}
+	fh := s.FormatHints()
+	if len(fh) != 1 || fh["configJson"] != "json" {
+		t.Fatalf("FormatHints = %v, want {configJson: json}", fh)
+	}
+}

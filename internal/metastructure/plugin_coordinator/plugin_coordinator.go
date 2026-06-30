@@ -14,6 +14,7 @@ import (
 	"ergo.services/ergo/gen"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/canonicalize"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/changeset"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/pkg/model"
@@ -220,6 +221,16 @@ func (c *PluginCoordinator) HandleMessage(from gen.PID, message any) error {
 		merged, enabled := c.mergePluginConfig(msg.Name, msg.Namespace, announced)
 		if !enabled {
 			return nil
+		}
+
+		// Reject this plugin if any schema declares an unknown FieldHint.Format
+		// (typo/unsupported). Log and skip — a non-nil HandleMessage return would
+		// terminate the coordinator actor, taking down every registered plugin (PLA-196).
+		for resourceType, schema := range merged.ResourceSchemas {
+			if err := canonicalize.ValidateSchemaFormats(resourceType, schema); err != nil {
+				c.Log().Error("Rejecting plugin %s registration: invalid schema format for namespace %s: %v", msg.Name, msg.Namespace, err)
+				return nil
+			}
 		}
 
 		c.plugins[msg.Namespace] = &merged

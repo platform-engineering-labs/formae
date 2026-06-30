@@ -7,6 +7,7 @@ package patch
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
@@ -2757,5 +2758,84 @@ func TestFlattenRefs_AssemblesEmbed(t *testing.T) {
 	flattenRefs(m)
 	if got := m["functionCode"]; got != "cf.kvs('KV-7H9X')" {
 		t.Errorf("flattenRefs embed: got %v want assembled string", got)
+	}
+}
+
+func TestGeneratePatch_BundledUpdate_DropsSerializationOnlyHintedOp(t *testing.T) {
+	schema := pkgmodel.Schema{
+		Fields: []string{"folderUid", "configJson"},
+		Hints:  map[string]pkgmodel.FieldHint{"configJson": {Format: "json"}},
+	}
+	document := []byte(`{"folderUid":"a","configJson":"{\"x\":1,\"y\":2}"}`)
+	patch := []byte(`{"folderUid":"b","configJson":"{\n  \"y\": 2,\n  \"x\": 1\n}"}`)
+
+	mutable, _, err := GeneratePatch(document, patch, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModeReconcile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(mutable)
+	if !strings.Contains(s, "folderUid") {
+		t.Fatalf("expected the real folderUid op, got %s", s)
+	}
+	if strings.Contains(s, "configJson") {
+		t.Fatalf("serialization-only configJson op must be dropped, got %s", s)
+	}
+}
+
+func TestGeneratePatch_GenuineHintedChange_KeepsOp(t *testing.T) {
+	schema := pkgmodel.Schema{Fields: []string{"configJson"}, Hints: map[string]pkgmodel.FieldHint{"configJson": {Format: "json"}}}
+	document := []byte(`{"configJson":"{\"x\":1}"}`)
+	patch := []byte(`{"configJson":"{\"x\":2}"}`)
+
+	mutable, _, err := GeneratePatch(document, patch, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModeReconcile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(mutable), "configJson") {
+		t.Fatalf("genuine content change must keep the op, got %s", string(mutable))
+	}
+}
+
+func TestGeneratePatch_FallbackKeepsOpOnInvalidJSON(t *testing.T) {
+	schema := pkgmodel.Schema{Fields: []string{"configJson"}, Hints: map[string]pkgmodel.FieldHint{"configJson": {Format: "json"}}}
+	document := []byte(`{"configJson":"{\"x\":1}"}`)
+	patch := []byte(`{"configJson":"not json"}`)
+
+	mutable, _, err := GeneratePatch(document, patch, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModeReconcile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(mutable), "configJson") {
+		t.Fatalf("uncanonicalizable change must keep the op, got %s", string(mutable))
+	}
+}
+
+func TestGeneratePatch_CreateOnlyHinted_SerializationOnly_NoReplacement(t *testing.T) {
+	schema := pkgmodel.Schema{Fields: []string{"configJson"}, Hints: map[string]pkgmodel.FieldHint{"configJson": {Format: "json", CreateOnly: true}}}
+	document := []byte(`{"configJson":"{\"x\":1,\"y\":2}"}`)
+	patch := []byte(`{"configJson":"{\"y\":2,\"x\":1}"}`)
+	mutable, createOnly, err := GeneratePatch(document, patch, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModeReconcile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(createOnly) != 0 {
+		t.Fatalf("serialization-only createOnly hinted field must not trigger replacement, got %s", string(createOnly))
+	}
+	if strings.Contains(string(mutable), "configJson") {
+		t.Fatalf("op must be dropped, got %s", string(mutable))
+	}
+}
+
+func TestGeneratePatch_ArrayPathNeverDropped(t *testing.T) {
+	// A same-named hint must not drop an array-index op.
+	schema := pkgmodel.Schema{Fields: []string{"tags"}, Hints: map[string]pkgmodel.FieldHint{"tags": {Format: "json"}}}
+	document := []byte(`{"tags":["a","b"]}`)
+	patch := []byte(`{"tags":["a","c"]}`)
+	mutable, _, err := GeneratePatch(document, patch, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModeReconcile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(mutable), "tags") {
+		t.Fatalf("array-element change must survive, got %s", string(mutable))
 	}
 }

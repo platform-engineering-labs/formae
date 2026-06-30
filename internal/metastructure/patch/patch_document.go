@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/platform-engineering-labs/formae/internal/metastructure/canonicalize"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/jsonpatch"
+	"github.com/tidwall/gjson"
 )
 
 var defaultIgnoredFields = []jsonpatch.Path{}
@@ -111,6 +113,11 @@ func generatePatch(document []byte, patch []byte, properties resolver.Resolvable
 	// EntitySet array elements may not match their actual counterparts and
 	// produce "array items are not unique" errors.
 	patchOps = stripEmptyCollectionsFromOps(patchOps)
+
+	// Drop serialization-only ops on Format-hinted fields before the createOnly
+	// split, so a cosmetic diff on a (possibly createOnly) hinted field neither
+	// reaches the plugin nor triggers a replacement (PLA-196).
+	patchOps = dropCanonicallyEqualHintedOps(patchOps, flattenedDocument, flattenedPatch, schema)
 
 	if len(patchOps) == 0 {
 		return nil, nil, nil
@@ -638,6 +645,49 @@ func filterSpuriousEmptyAdds(patchOps []jsonpatch.JsonPatchOperation) []jsonpatc
 		filtered = append(filtered, op)
 	}
 	return filtered
+}
+
+// isTopLevelPath reports whether a JSON Pointer addresses a single top-level
+// field (e.g. "/configJson"), not a nested or array-index path.
+func isTopLevelPath(p string) bool {
+	trimmed := strings.TrimPrefix(p, "/")
+	return trimmed != "" && !strings.Contains(trimmed, "/")
+}
+
+// dropCanonicallyEqualHintedOps removes patch ops targeting a top-level
+// Format-hinted field whose old/new values are canonically equal (a
+// serialization-only diff). On any canonicalizer error, a non-string value, or a
+// nested/array path, the op is KEPT — suppression can only ever drop a cosmetic
+// op, never a real change (PLA-196).
+func dropCanonicallyEqualHintedOps(ops []jsonpatch.JsonPatchOperation, document, patch []byte, schema pkgmodel.Schema) []jsonpatch.JsonPatchOperation {
+	formats := schema.FormatHints()
+	if len(formats) == 0 {
+		return ops
+	}
+	kept := make([]jsonpatch.JsonPatchOperation, 0, len(ops))
+	for _, op := range ops {
+		field := cleanPath(op.Path)
+		format, hinted := formats[field]
+		if hinted && isTopLevelPath(op.Path) {
+			// The hint key is used as a gjson path (dot = nesting). v1 targets
+			// top-level fields whose names contain no gjson-special chars
+			// (`.`/`*`/`?`); the grafana `configJson` consumer satisfies this. A
+			// top-level field literally named with a `.` would not be matched
+			// (canonicalization silently skipped — safe-direction, never drops a
+			// real change).
+			oldVal := gjson.GetBytes(document, field)
+			newVal := gjson.GetBytes(patch, field)
+			if oldVal.Type == gjson.String && newVal.Type == gjson.String {
+				oc, oerr := canonicalize.Canonicalize(format, oldVal.String())
+				nc, nerr := canonicalize.Canonicalize(format, newVal.String())
+				if oerr == nil && nerr == nil && oc == nc {
+					continue // serialization-only diff → drop
+				}
+			}
+		}
+		kept = append(kept, op)
+	}
+	return kept
 }
 
 // stripEmptyCollectionsFromOps recursively removes empty arrays and maps from

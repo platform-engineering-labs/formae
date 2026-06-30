@@ -22,7 +22,7 @@ func TestPrepareAndCompareResourceForUpdate(t *testing.T) {
 			Properties: json.RawMessage(`{"prop": "value"}`),
 		}
 
-		hasChanges, filteredProps, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(resource, resource)
+		hasChanges, filteredProps, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(resource, resource, pkgmodel.Schema{})
 
 		require.NoError(t, err)
 		assert.False(t, hasChanges)
@@ -43,7 +43,7 @@ func TestPrepareAndCompareResourceForUpdate(t *testing.T) {
 			}`),
 		}
 
-		hasChanges, filteredProps, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, new)
+		hasChanges, filteredProps, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, new, pkgmodel.Schema{})
 
 		require.NoError(t, err)
 		assert.False(t, hasChanges)
@@ -62,7 +62,7 @@ func TestPrepareAndCompareResourceForUpdate(t *testing.T) {
 			}`),
 		}
 
-		hasChanges, filteredProps, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, new)
+		hasChanges, filteredProps, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, new, pkgmodel.Schema{})
 
 		require.NoError(t, err)
 		assert.True(t, hasChanges)
@@ -83,7 +83,7 @@ func TestPrepareAndCompareResourceForUpdate(t *testing.T) {
 			}`),
 		}
 
-		hasChanges, filteredProps, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, new)
+		hasChanges, filteredProps, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, new, pkgmodel.Schema{})
 
 		require.NoError(t, err)
 		assert.True(t, hasChanges)
@@ -106,7 +106,7 @@ func TestPrepareAndCompareResourceForUpdate(t *testing.T) {
 			}`),
 		}
 
-		hasChanges, filteredProps, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, new)
+		hasChanges, filteredProps, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, new, pkgmodel.Schema{})
 
 		require.NoError(t, err)
 		assert.True(t, hasChanges)
@@ -133,7 +133,7 @@ func TestPrepareAndCompareResourceForUpdate(t *testing.T) {
 			}`),
 		}
 
-		hasChanges, filteredProps, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, new)
+		hasChanges, filteredProps, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, new, pkgmodel.Schema{})
 
 		require.NoError(t, err)
 		assert.True(t, hasChanges)
@@ -152,7 +152,7 @@ func TestPrepareAndCompareResourceForUpdate(t *testing.T) {
 			Properties: json.RawMessage(`{"prop": "new-value"}`),
 		}
 
-		hasChanges, filteredProps, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, new)
+		hasChanges, filteredProps, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, new, pkgmodel.Schema{})
 
 		require.NoError(t, err)
 		assert.True(t, hasChanges)
@@ -167,7 +167,7 @@ func TestPrepareAndCompareResourceForUpdate(t *testing.T) {
 			Properties: json.RawMessage(`{"prop": "value", "emptyArray": []}`),
 		}
 
-		hasChanges, filteredProps, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, new)
+		hasChanges, filteredProps, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, new, pkgmodel.Schema{})
 
 		require.NoError(t, err)
 		assert.False(t, hasChanges)
@@ -182,7 +182,7 @@ func TestPrepareAndCompareResourceForUpdate(t *testing.T) {
 			Properties: json.RawMessage(`{"prop": "value", "Tags": null}`),
 		}
 
-		hasChanges, filteredProps, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, new)
+		hasChanges, filteredProps, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, new, pkgmodel.Schema{})
 
 		require.NoError(t, err)
 		assert.False(t, hasChanges)
@@ -197,7 +197,7 @@ func TestPrepareAndCompareResourceForUpdate(t *testing.T) {
 			Properties: json.RawMessage(`{"Tags": null}`),
 		}
 
-		hasChanges, filteredProps, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, new)
+		hasChanges, filteredProps, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, new, pkgmodel.Schema{})
 
 		require.NoError(t, err)
 		assert.True(t, hasChanges)
@@ -226,7 +226,7 @@ func TestPrepareAndCompareResourceForUpdate(t *testing.T) {
 			}`),
 		}
 
-		hasChanges, filteredProps, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, new)
+		hasChanges, filteredProps, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, new, pkgmodel.Schema{})
 
 		require.NoError(t, err)
 		assert.False(t, hasChanges)
@@ -261,7 +261,7 @@ func TestPrepareAndCompareResourceForUpdate(t *testing.T) {
 			}`),
 		}
 
-		hasChanges, filteredProps, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, newRes)
+		hasChanges, filteredProps, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, newRes, pkgmodel.Schema{})
 
 		require.NoError(t, err)
 		assert.False(t, hasChanges)
@@ -292,7 +292,7 @@ func TestPrepareAndCompareResourceForUpdate(t *testing.T) {
 			}`),
 		}
 
-		hasChanges, filteredProps, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, newRes)
+		hasChanges, filteredProps, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, newRes, pkgmodel.Schema{})
 
 		require.NoError(t, err)
 		assert.False(t, hasChanges)
@@ -318,7 +318,7 @@ func TestPrepareAndCompareResourceForUpdate(t *testing.T) {
 			}`),
 		}
 
-		hasChanges, filteredProps, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, newRes)
+		hasChanges, filteredProps, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, newRes, pkgmodel.Schema{})
 
 		require.NoError(t, err)
 		assert.True(t, hasChanges)
@@ -346,7 +346,7 @@ func TestPrepareAndCompareResourceForUpdate(t *testing.T) {
 			}`),
 		}
 
-		hasChanges, filteredProps, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, newRes)
+		hasChanges, filteredProps, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, newRes, pkgmodel.Schema{})
 
 		require.NoError(t, err)
 		assert.True(t, hasChanges)
@@ -373,7 +373,7 @@ func TestPrepareAndCompareResourceForUpdate(t *testing.T) {
 			}`),
 		}
 
-		hasChanges, filteredProps, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, newRes)
+		hasChanges, filteredProps, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, newRes, pkgmodel.Schema{})
 
 		require.NoError(t, err)
 		assert.True(t, hasChanges)
@@ -398,10 +398,95 @@ func TestPrepareAndCompareResourceForUpdate(t *testing.T) {
 			}`),
 		}
 
-		hasChanges, filteredProps, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, newRes)
+		hasChanges, filteredProps, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, newRes, pkgmodel.Schema{})
 
 		require.NoError(t, err)
 		assert.True(t, hasChanges)
 		assert.Contains(t, string(filteredProps), "new-name")
 	})
+}
+
+func TestGate_SerializationOnlyConfigJson_NoChange(t *testing.T) {
+	schema := pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{"configJson": {Format: "json"}}}
+	existing := &pkgmodel.Resource{Properties: json.RawMessage(`{"configJson":"{\"a\":1,\"b\":2}"}`)}
+	// same content, different serialization (pretty + reordered keys)
+	newRes := &pkgmodel.Resource{Properties: json.RawMessage(`{"configJson":"{\n  \"b\": 2,\n  \"a\": 1\n}"}`)}
+
+	hasChanges, _, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, newRes, schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasChanges {
+		t.Fatal("serialization-only difference must not be a change")
+	}
+}
+
+func TestGate_GenuineConfigJsonChange_IsChange(t *testing.T) {
+	schema := pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{"configJson": {Format: "json"}}}
+	existing := &pkgmodel.Resource{Properties: json.RawMessage(`{"configJson":"{\"a\":1}"}`)}
+	newRes := &pkgmodel.Resource{Properties: json.RawMessage(`{"configJson":"{\"a\":2}"}`)}
+
+	hasChanges, _, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, newRes, schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasChanges {
+		t.Fatal("genuine content change must be a change")
+	}
+}
+
+func TestGate_NoHint_UnchangedBehavior(t *testing.T) {
+	schema := pkgmodel.Schema{} // no Format hint
+	existing := &pkgmodel.Resource{Properties: json.RawMessage(`{"configJson":"{\"a\":1}"}`)}
+	newRes := &pkgmodel.Resource{Properties: json.RawMessage(`{"configJson":"{ \"a\": 1 }"}`)}
+
+	hasChanges, _, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, newRes, schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasChanges {
+		t.Fatal("without a Format hint, a serialization difference is still a raw string change")
+	}
+}
+
+func TestGate_HintedResolvableLeaf_SkippedNoPanic(t *testing.T) {
+	schema := pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{"configJson": {Format: "json"}}}
+	// configJson is itself a resolvable envelope (object), not a plain string.
+	props := json.RawMessage(`{"configJson":{"$ref":"formae://x","$value":"{\"a\":1}"}}`)
+	existing := &pkgmodel.Resource{Properties: props}
+	newRes := &pkgmodel.Resource{Properties: props}
+	if _, _, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, newRes, schema); err != nil {
+		t.Fatalf("must not panic/error on a resolvable leaf: %v", err)
+	}
+}
+
+// TestGate_HintedResolvableLeaf_SameContent_NoChange asserts that when a hinted
+// field is a resolvable ENVELOPE (object, not a plain string) the canonicalize
+// skip (val.Type != gjson.String) leaves comparison to the raw/structural
+// compare — which sees identical envelopes and reports no change.
+func TestGate_HintedResolvableLeaf_SameContent_NoChange(t *testing.T) {
+	schema := pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{"configJson": {Format: "json"}}}
+	existing := &pkgmodel.Resource{Properties: json.RawMessage(`{"configJson":{"$ref":"formae://x","$value":"{\"a\":1}"}}`)}
+	newRes := &pkgmodel.Resource{Properties: json.RawMessage(`{"configJson":{"$ref":"formae://x","$value":"{\"a\":1}"}}`)}
+
+	hasChanges, _, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, newRes, schema)
+	require.NoError(t, err)
+	assert.False(t, hasChanges, "identical resolvable envelopes must not be a change")
+}
+
+// TestGate_HintedResolvableLeaf_DifferentContent_IsChange is the behavioural
+// counterpart to the skip guard. The hinted field is a resolvable ENVELOPE whose
+// $value differs between the two sides. Because the field is an object (not a
+// gjson.String), canonicalization is skipped and the raw/structural compare must
+// still detect the genuine difference. Deleting or inverting the
+// `val.Type != gjson.String` guard (canonicalizing the envelope object instead)
+// would let this real change slip through — this test catches that.
+func TestGate_HintedResolvableLeaf_DifferentContent_IsChange(t *testing.T) {
+	schema := pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{"configJson": {Format: "json"}}}
+	existing := &pkgmodel.Resource{Properties: json.RawMessage(`{"configJson":{"$ref":"formae://x","$value":"{\"a\":1}"}}`)}
+	newRes := &pkgmodel.Resource{Properties: json.RawMessage(`{"configJson":{"$ref":"formae://x","$value":"{\"a\":2}"}}`)}
+
+	hasChanges, _, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, newRes, schema)
+	require.NoError(t, err)
+	assert.True(t, hasChanges, "differing resolvable envelope $value must be detected as a change")
 }
