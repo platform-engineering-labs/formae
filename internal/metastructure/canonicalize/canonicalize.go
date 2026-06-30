@@ -1,3 +1,7 @@
+// © 2025 Platform Engineering Labs Inc.
+//
+// SPDX-License-Identifier: FSL-1.1-ALv2
+
 // Package canonicalize provides format-keyed canonicalizers for serialized
 // structured String fields (JSON first), so core can compare a field's content
 // rather than its byte serialization. See PLA-196.
