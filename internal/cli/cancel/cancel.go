@@ -16,6 +16,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/config"
 	"github.com/platform-engineering-labs/formae/internal/cli/display"
 	"github.com/platform-engineering-labs/formae/internal/cli/printer"
+	"github.com/platform-engineering-labs/formae/internal/cli/prompter"
 	"github.com/platform-engineering-labs/formae/internal/cli/renderer"
 	"github.com/platform-engineering-labs/formae/internal/cli/status"
 	"github.com/platform-engineering-labs/formae/internal/logging"
@@ -25,6 +26,7 @@ import (
 type CancelOptions struct {
 	Query          string
 	Force          bool
+	Yes            bool
 	Watch          bool
 	StatusOutput   status.StatusOutput
 	OutputConsumer printer.Consumer
@@ -62,6 +64,7 @@ plugin stuck in an unbounded poll loop). With --force:
 			query, _ := command.Flags().GetString("query")
 			opts.Query = strings.TrimSpace(query)
 			opts.Force, _ = command.Flags().GetBool("force")
+			opts.Yes, _ = command.Flags().GetBool("yes")
 			opts.Watch, _ = command.Flags().GetBool("watch")
 			statusOutput, _ := command.Flags().GetString("status-output-layout")
 			opts.StatusOutput = status.StatusOutput(statusOutput)
@@ -86,6 +89,7 @@ plugin stuck in an unbounded poll loop). With --force:
 
 	command.Flags().String("query", "", "Query to select commands to cancel. If not provided, cancels the most recent command. Use * as a wildcard anywhere (e.g. foo*, *foo, *foo*, foo*bar). ? and regex are not yet supported.")
 	command.Flags().Bool("force", false, "Abandon in-progress work and drive the command to a terminal 'Canceled' state immediately, instead of waiting for in-progress resources to finish. Cloud-side operations may continue: Update/Delete are reconciled by the synchronizer, but a still-running Create may orphan a resource that needs manual cleanup.")
+	command.Flags().Bool("yes", false, "Allow the command to run without any confirmations")
 	command.Flags().BoolP("watch", "w", false, "Watch the status of canceled commands until they complete")
 	command.Flags().String("status-output-layout", string(status.StatusOutputSummary), fmt.Sprintf("What to print as status output (%s | %s)", status.StatusOutputSummary, status.StatusOutputDetailed))
 	command.Flags().String("output-consumer", string(printer.ConsumerHuman), "Consumer of the command result (human | machine)")
@@ -121,6 +125,33 @@ func runCancel(app *app.App, opts *CancelOptions) error {
 
 func runCancelForHumans(app *app.App, opts *CancelOptions) error {
 	app.PrintBanner()
+
+	// A plain cancel is safe (it waits for in-progress resources to finish). A
+	// --force cancel is a destructive escape hatch: it abandons in-progress work,
+	// can leave cloud-side operations running, and may orphan resources. Confirm
+	// before proceeding unless --yes was given.
+	if opts.Force && !opts.Yes {
+		target := "the most recent in-progress command"
+		if opts.Query != "" {
+			target = fmt.Sprintf("all in-progress commands matching %q", opts.Query)
+		}
+		prompt := fmt.Sprintf(
+			"%s\n\n"+
+				"This abandons in-progress work and drives %s straight to 'Canceled' "+
+				"without waiting for running resources to finish.\n\n"+
+				"  • Cloud-side operations already in flight may keep running.\n"+
+				"  • A still-running Create can orphan a resource formae cannot track — manual cleanup may be needed.\n"+
+				"  • Update/Delete operations are reconciled by the synchronizer on its next cycle.\n\n"+
+				"Only use this for operations that will not complete on their own.\n\n"+
+				"Force-cancel anyway?",
+			display.Gold("Warning: --force is a destructive escape hatch."),
+			target,
+		)
+		if !prompter.NewBasicPrompter().Confirm(prompt, false) {
+			fmt.Print(display.Red("\nCommand aborted\n"))
+			return nil
+		}
+	}
 
 	res, err := app.CancelCommand(opts.Query, opts.Force)
 	if err != nil {
