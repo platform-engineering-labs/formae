@@ -12,7 +12,7 @@ replace github.com/platform-engineering-labs/formae/tests/testcontrol => ../test
 // ergo/statemachine, otherwise its targetManager holds the node-global lock
 // across remote Link/Monitor and the operator->requester link starves the
 // plugin node under load.
-replace ergo.services/ergo => github.com/JeroenSoeters/ergo v1.999.320-pel.5
+replace ergo.services/ergo => github.com/JeroenSoeters/ergo v1.999.320-pel.6
 
 replace ergo.services/actor/statemachine => github.com/JeroenSoeters/actor/statemachine v0.0.0-20260205190926-8b1b2eaf30f4
 
