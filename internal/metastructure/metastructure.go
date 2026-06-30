@@ -880,13 +880,21 @@ func (m *Metastructure) CancelCommandsByQuery(query string, force bool, clientID
 
 	// Filter to only InProgress commands
 	var canceledCommandIDs []string
+	var forceCancelFailures []string
 	allResourceStates := make(map[string]apimodel.CancelResourceState)
 	for _, cmd := range commandsToCancel {
 		if cmd.State == forma_command.CommandStateInProgress {
 			cancelResp, err := m.CancelCommand(cmd.ID, force, clientID)
 			if err != nil {
 				slog.Warn("Failed to cancel command", "commandID", cmd.ID, "error", err)
-				// Continue with other commands even if one fails
+				// A --force cancel that fails left the command running: the executor
+				// terminated no actors and the command is still non-terminal. Record it
+				// so the caller is told to retry rather than seeing a success with the
+				// command silently dropped. A graceful (non-force) cancel of a command
+				// that has since vanished is benign, so keep skipping those.
+				if force {
+					forceCancelFailures = append(forceCancelFailures, fmt.Sprintf("%s: %v", cmd.ID, err))
+				}
 				continue
 			}
 			canceledCommandIDs = append(canceledCommandIDs, cmd.ID)
@@ -903,6 +911,11 @@ func (m *Metastructure) CancelCommandsByQuery(query string, force bool, clientID
 				}
 			}
 		}
+	}
+
+	if len(forceCancelFailures) > 0 {
+		return nil, fmt.Errorf("force-cancel failed for %d command(s): %s",
+			len(forceCancelFailures), strings.Join(forceCancelFailures, "; "))
 	}
 
 	return &apimodel.CancelCommandResponse{

@@ -868,10 +868,15 @@ func (f *FormaCommandPersister) bulkForceCancel(msg *BulkForceCancel) (BulkForce
 	command.State = overallCommandState(command)
 
 	if err := f.finalizeAndPersist(cached); err != nil {
-		// The resource rows are durably terminal; the command-meta finalize is a
-		// best-effort durability write covered by the recovery backstop. Log, do not
-		// crash the persister, and report success so the caller proceeds with teardown.
+		// finalizeAndPersist (StoreFormaCommand) is the authoritative durable write of
+		// the command: it persists the overall command state AND the target updates,
+		// which live only in the command blob and cannot be reconstructed from the
+		// resource rows. If it fails we have NOT confirmed durable terminality, so we
+		// must not report success: surface the failure in-band. The executor leaves all
+		// actors running and the caller is told to retry, rather than tearing down a
+		// command that durably still reads InProgress (with non-terminal targets).
 		f.Log().Error("Failed to finalize command meta after BulkForceCancel commandID=%s: %v", msg.CommandID, err)
+		resp.ErrorMessage = fmt.Sprintf("force-cancel: failed to persist terminal command state: %v", err)
 	}
 
 	return resp, nil
