@@ -1,0 +1,795 @@
+// © 2025 Platform Engineering Labs Inc.
+//
+// SPDX-License-Identifier: FSL-1.1-ALv2
+
+//go:build integration
+
+package workflow_tests_local
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"ergo.services/ergo/gen"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/testutil"
+	"github.com/platform-engineering-labs/formae/internal/workflow_tests/test_helpers"
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
+	"github.com/platform-engineering-labs/formae/pkg/plugin"
+	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// isProcessAlive returns true if the process registered under name is alive on the node.
+func isProcessAlive(node gen.Node, name gen.Atom) bool {
+	pid, err := node.ProcessPID(name)
+	if err != nil {
+		return false
+	}
+	state, err := node.ProcessState(pid)
+	if err != nil {
+		return false
+	}
+	return state != gen.ProcessStateTerminated && state != gen.ProcessStateZombee
+}
+
+// killProcessByName forcefully kills the process registered under name.
+func killProcessByName(node gen.Node, name gen.Atom) error {
+	pid, err := node.ProcessPID(name)
+	if err != nil {
+		return err
+	}
+	return node.Kill(pid)
+}
+
+// pluginOperatorBehavior is the behavior type name reported by ergo's
+// ProcessShortInfo for a PluginOperator state machine.
+const pluginOperatorBehavior = "plugin.PluginOperator"
+
+// alivePluginOperators counts the non-terminated PluginOperator processes on the node.
+func alivePluginOperators(t *testing.T, node gen.Node) int {
+	t.Helper()
+	pids, err := node.ProcessList()
+	if err != nil {
+		return 0
+	}
+	count := 0
+	for _, pid := range pids {
+		info, err := node.ProcessInfo(pid)
+		if err != nil {
+			continue
+		}
+		if info.Behavior != pluginOperatorBehavior {
+			continue
+		}
+		if info.State != gen.ProcessStateTerminated && info.State != gen.ProcessStateZombee {
+			count++
+		}
+	}
+	return count
+}
+
+// findPluginOperatorForResource returns the PID of any alive PluginOperator
+// whose registered name contains resourceURIFragment (a substring of the
+// FormaeURI for that resource, e.g. the KSUID portion).  Returns gen.PID{} and
+// false if none is found.
+func findPluginOperatorForResource(node gen.Node, resourceURIFragment string) (gen.PID, bool) {
+	pids, err := node.ProcessList()
+	if err != nil {
+		return gen.PID{}, false
+	}
+	for _, pid := range pids {
+		info, err := node.ProcessInfo(pid)
+		if err != nil {
+			continue
+		}
+		if info.Behavior != pluginOperatorBehavior {
+			continue
+		}
+		if info.State == gen.ProcessStateTerminated || info.State == gen.ProcessStateZombee {
+			continue
+		}
+		if strings.Contains(string(info.Name), resourceURIFragment) {
+			return pid, true
+		}
+	}
+	return gen.PID{}, false
+}
+
+// formaWithOneResource builds a minimal Forma with a single resource in a named stack.
+func formaWithOneResource(stack, label string) *pkgmodel.Forma {
+	return &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{
+			{Label: stack},
+		},
+		Resources: []pkgmodel.Resource{
+			{
+				Label: label,
+				Type:  "FakeAWS::EC2::VPC",
+				Properties: json.RawMessage(`{
+					"CidrBlock": "10.0.0.0/16"
+				}`),
+				Stack:   stack,
+				Target:  "test-target",
+				Managed: true,
+			},
+		},
+		Targets: []pkgmodel.Target{
+			{Label: "test-target"},
+		},
+	}
+}
+
+// TestExecutorTerminationCascadesToResourceUpdaters verifies two properties of the
+// ChangesetExecutor → ResourceUpdater supervision link:
+//
+//  1. Cascade (parent → child): terminating the ChangesetExecutor causes its
+//     ResourceUpdater children to terminate within a few seconds.
+//
+//  2. Unidirectional (child → parent): killing a ResourceUpdater directly does NOT
+//     terminate the ChangesetExecutor.
+func TestExecutorTerminationCascadesToResourceUpdaters(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		// Plugin returns InProgress forever so ResourceUpdaters stay alive indefinitely.
+		overrides := &plugin.ResourcePluginOverrides{
+			Create: func(req *resource.CreateRequest) (*resource.CreateResult, error) {
+				return &resource.CreateResult{
+					ProgressResult: &resource.ProgressResult{
+						Operation:       resource.OperationCreate,
+						OperationStatus: resource.OperationStatusInProgress,
+						RequestID:       "request-" + req.Label,
+						NativeID:        "native-" + req.Label,
+					},
+				}, nil
+			},
+			Status: func(req *resource.StatusRequest) (*resource.StatusResult, error) {
+				return &resource.StatusResult{
+					ProgressResult: &resource.ProgressResult{
+						Operation:       resource.OperationCreate,
+						OperationStatus: resource.OperationStatusInProgress,
+						RequestID:       req.RequestID,
+					},
+				}, nil
+			},
+		}
+
+		m, def, err := test_helpers.NewTestMetastructure(t, overrides)
+		defer def()
+		require.NoError(t, err)
+
+		// ── Assertion B (unidirectional, child → parent): kill RU, executor must stay. ──
+		// Stack-b runs independently of stack-a so there are no conflicting commands.
+		respB, err := m.ApplyForma(
+			formaWithOneResource("stack-b", "b-vpc"),
+			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
+			"test-client",
+		)
+		require.NoError(t, err)
+		commandIDB := respB.CommandID
+
+		var ruNameB gen.Atom
+		assert.Eventually(t, func() bool {
+			commands, err := m.Datastore.LoadFormaCommands()
+			if err != nil {
+				return false
+			}
+			for _, cmd := range commands {
+				if cmd.ID != commandIDB {
+					continue
+				}
+				for _, ru := range cmd.ResourceUpdates {
+					if ru.State == resource_update.ResourceUpdateStateInProgress {
+						ruNameB = actornames.ResourceUpdater(
+							ru.DesiredState.URI(), string(ru.Operation), commandIDB)
+						return isProcessAlive(m.Node, ruNameB)
+					}
+				}
+			}
+			return false
+		}, 10*time.Second, 100*time.Millisecond, "stack-B ResourceUpdater should become alive")
+		t.Logf("Assertion B: ResourceUpdater=%s", ruNameB)
+
+		ceuxNameB := actornames.ChangesetExecutor(commandIDB)
+		require.True(t, isProcessAlive(m.Node, ceuxNameB), "stack-B ChangesetExecutor must be alive before RU kill")
+
+		// Kill the ResourceUpdater directly.
+		require.NoError(t, killProcessByName(m.Node, ruNameB))
+
+		// Give the executor a window to react — it must NOT die.
+		time.Sleep(500 * time.Millisecond)
+		assert.True(t, isProcessAlive(m.Node, ceuxNameB),
+			"ChangesetExecutor must stay alive after its ResourceUpdater was killed (unidirectional link)")
+
+		// ── Assertion A (cascade, parent → child): kill executor, RU must die. ──
+		// Stack-a is independent so there is no conflicting command with stack-b.
+		respA, err := m.ApplyForma(
+			formaWithOneResource("stack-a", "a-vpc"),
+			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
+			"test-client",
+		)
+		require.NoError(t, err)
+		commandIDA := respA.CommandID
+
+		var ruNameA gen.Atom
+		assert.Eventually(t, func() bool {
+			commands, err := m.Datastore.LoadFormaCommands()
+			if err != nil {
+				return false
+			}
+			for _, cmd := range commands {
+				if cmd.ID != commandIDA {
+					continue
+				}
+				for _, ru := range cmd.ResourceUpdates {
+					if ru.State == resource_update.ResourceUpdateStateInProgress {
+						ruNameA = actornames.ResourceUpdater(
+							ru.DesiredState.URI(), string(ru.Operation), commandIDA)
+						return isProcessAlive(m.Node, ruNameA)
+					}
+				}
+			}
+			return false
+		}, 10*time.Second, 100*time.Millisecond, "stack-A ResourceUpdater should become alive")
+		t.Logf("Assertion A: ResourceUpdater=%s", ruNameA)
+
+		ceuxNameA := actornames.ChangesetExecutor(commandIDA)
+		require.True(t, isProcessAlive(m.Node, ceuxNameA), "stack-A ChangesetExecutor must be alive before executor kill")
+
+		// Kill the ChangesetExecutor.
+		require.NoError(t, killProcessByName(m.Node, ceuxNameA))
+
+		// The ResourceUpdater must cascade-terminate within a few seconds via LinkParent.
+		assert.Eventually(t, func() bool {
+			return !isProcessAlive(m.Node, ruNameA)
+		}, 5*time.Second, 100*time.Millisecond,
+			"ResourceUpdater must terminate after its parent ChangesetExecutor was killed (LinkParent cascade)")
+	})
+}
+
+// TestExecutorTerminationCascadesToResolveCache verifies the cascade property of
+// the ChangesetExecutor → ResolveCache supervision link:
+//
+//  1. Cascade (parent → child): terminating the ChangesetExecutor causes its
+//     ResolveCache child to terminate within a few seconds.
+//
+// The ResolveCache is spawned by the executor for every changeset. To keep the
+// executor in-flight long enough to observe the cascade, the plugin returns
+// InProgress forever so the ResourceUpdater (and thus the executor) never finish.
+func TestExecutorTerminationCascadesToResolveCache(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		// Plugin returns InProgress forever so the executor stays alive indefinitely.
+		overrides := &plugin.ResourcePluginOverrides{
+			Create: func(req *resource.CreateRequest) (*resource.CreateResult, error) {
+				return &resource.CreateResult{
+					ProgressResult: &resource.ProgressResult{
+						Operation:       resource.OperationCreate,
+						OperationStatus: resource.OperationStatusInProgress,
+						RequestID:       "request-" + req.Label,
+						NativeID:        "native-" + req.Label,
+					},
+				}, nil
+			},
+			Status: func(req *resource.StatusRequest) (*resource.StatusResult, error) {
+				return &resource.StatusResult{
+					ProgressResult: &resource.ProgressResult{
+						Operation:       resource.OperationCreate,
+						OperationStatus: resource.OperationStatusInProgress,
+						RequestID:       req.RequestID,
+					},
+				}, nil
+			},
+		}
+
+		m, def, err := test_helpers.NewTestMetastructure(t, overrides)
+		defer def()
+		require.NoError(t, err)
+
+		// Apply a forma to trigger a changeset (and thus spawn a ResolveCache).
+		resp, err := m.ApplyForma(
+			formaWithOneResource("stack-rc", "rc-vpc"),
+			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
+			"test-client",
+		)
+		require.NoError(t, err)
+		commandID := resp.CommandID
+
+		// Wait for the ResolveCache to be alive.
+		rcName := actornames.ResolveCache(commandID)
+		assert.Eventually(t, func() bool {
+			return isProcessAlive(m.Node, rcName)
+		}, 10*time.Second, 100*time.Millisecond, "ResolveCache should become alive")
+		t.Logf("ResolveCache=%s", rcName)
+
+		ceuxName := actornames.ChangesetExecutor(commandID)
+		require.True(t, isProcessAlive(m.Node, ceuxName), "ChangesetExecutor must be alive before executor kill")
+
+		// Kill the ChangesetExecutor.
+		require.NoError(t, killProcessByName(m.Node, ceuxName))
+
+		// The ResolveCache must cascade-terminate within a few seconds via LinkParent.
+		assert.Eventually(t, func() bool {
+			return !isProcessAlive(m.Node, rcName)
+		}, 5*time.Second, 100*time.Millisecond,
+			"ResolveCache must terminate after its parent ChangesetExecutor was killed (LinkParent cascade)")
+	})
+}
+
+// TestExecutorTerminationCascadesToTargetUpdaters verifies two properties of the
+// ChangesetExecutor → TargetUpdater supervision link:
+//
+//  1. Cascade (parent → child): terminating the ChangesetExecutor causes its
+//     TargetUpdater children to terminate within a few seconds.
+//
+//  2. Unidirectional (child → parent): killing a TargetUpdater directly does NOT
+//     terminate the ChangesetExecutor.
+//
+// To keep the TargetUpdater observably in-flight, the target config contains a $ref
+// to a pre-seeded resource. The plugin's Read override blocks indefinitely, so the
+// ResolveCache never responds and the TargetUpdater stays in StateResolving.
+func TestExecutorTerminationCascadesToTargetUpdaters(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		// deterministic ksuid for the pre-seeded cluster resource.
+		const clusterKsuid = "2MiD2rA1SJbLMGZgTL0hCxjkjjr"
+
+		// Block channel: Read blocks until the test is done, keeping the
+		// TargetUpdater in StateResolving so we can observe the cascade.
+		blockRead := make(chan struct{})
+		defer close(blockRead)
+
+		overrides := &plugin.ResourcePluginOverrides{
+			Create: func(req *resource.CreateRequest) (*resource.CreateResult, error) {
+				return &resource.CreateResult{ProgressResult: &resource.ProgressResult{
+					Operation:          resource.OperationCreate,
+					OperationStatus:    resource.OperationStatusSuccess,
+					RequestID:          "req-" + req.Label,
+					NativeID:           "native-" + req.Label,
+					ResourceProperties: json.RawMessage(`{"CidrBlock":"10.0.0.0/16"}`),
+				}}, nil
+			},
+			Read: func(req *resource.ReadRequest) (*resource.ReadResult, error) {
+				// Block until the test channel is closed so the ResolveCache
+				// never returns and the TargetUpdater stays in StateResolving.
+				<-blockRead
+				return &resource.ReadResult{
+					ResourceType: req.ResourceType,
+					Properties:   `{"CidrBlock":"10.0.0.0/16"}`,
+				}, nil
+			},
+		}
+
+		m, def, err := test_helpers.NewTestMetastructure(t, overrides)
+		defer def()
+		require.NoError(t, err)
+
+		// ── Step 1: pre-seed the cluster resource so the ResolveCache can load it. ──
+		seedForma := &pkgmodel.Forma{
+			Stacks: []pkgmodel.Stack{{Label: "infra"}},
+			Resources: []pkgmodel.Resource{{
+				Label:      "cluster",
+				Type:       "FakeAWS::EC2::VPC",
+				Stack:      "infra",
+				Target:     "provider",
+				Managed:    true,
+				Ksuid:      clusterKsuid,
+				Properties: json.RawMessage(`{"CidrBlock":"10.0.0.0/16"}`),
+			}},
+			Targets: []pkgmodel.Target{
+				{Label: "provider", Namespace: "FakeAWS"},
+			},
+		}
+
+		seedResp, err := m.ApplyForma(seedForma,
+			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
+			"test-client")
+		require.NoError(t, err)
+
+		// Wait for the seed command to complete successfully.
+		assert.Eventually(t, func() bool {
+			cmds, _ := m.Datastore.LoadFormaCommands()
+			for _, cmd := range cmds {
+				if cmd.ID == seedResp.CommandID {
+					return cmd.State == forma_command.CommandStateSuccess
+				}
+			}
+			return false
+		}, 15*time.Second, 100*time.Millisecond, "seed command must complete")
+
+		// ── Step 2: apply a forma whose target config has a $ref to the cluster. ──
+		// The TargetUpdater will enter StateResolving and block on the Read override.
+		consumerConfig := json.RawMessage(fmt.Sprintf(
+			`{"endpoint":{"$ref":"formae://%s#/CidrBlock"}}`, clusterKsuid))
+
+		// ── Assertion B (unidirectional, child → parent): kill TU, executor must stay. ──
+		respB, err := m.ApplyForma(
+			&pkgmodel.Forma{
+				Targets: []pkgmodel.Target{{Label: "consumer-b", Namespace: "FakeAWS", Config: consumerConfig}},
+			},
+			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
+			"test-client",
+		)
+		require.NoError(t, err)
+		commandIDB := respB.CommandID
+
+		tuNameB := actornames.TargetUpdater("consumer-b", "create", commandIDB)
+		assert.Eventually(t, func() bool {
+			return isProcessAlive(m.Node, tuNameB)
+		}, 10*time.Second, 100*time.Millisecond, "stack-B TargetUpdater should become alive")
+		t.Logf("Assertion B: TargetUpdater=%s", tuNameB)
+
+		ceuxNameB := actornames.ChangesetExecutor(commandIDB)
+		require.True(t, isProcessAlive(m.Node, ceuxNameB), "stack-B ChangesetExecutor must be alive before TU kill")
+
+		// Kill the TargetUpdater directly.
+		require.NoError(t, killProcessByName(m.Node, tuNameB))
+
+		// Give the executor a window to react — it must NOT die.
+		time.Sleep(500 * time.Millisecond)
+		assert.True(t, isProcessAlive(m.Node, ceuxNameB),
+			"ChangesetExecutor must stay alive after its TargetUpdater was killed (unidirectional link)")
+
+		// ── Assertion A (cascade, parent → child): kill executor, TU must die. ──
+		respA, err := m.ApplyForma(
+			&pkgmodel.Forma{
+				Targets: []pkgmodel.Target{{Label: "consumer-a", Namespace: "FakeAWS", Config: consumerConfig}},
+			},
+			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
+			"test-client",
+		)
+		require.NoError(t, err)
+		commandIDA := respA.CommandID
+
+		tuNameA := actornames.TargetUpdater("consumer-a", "create", commandIDA)
+		assert.Eventually(t, func() bool {
+			return isProcessAlive(m.Node, tuNameA)
+		}, 10*time.Second, 100*time.Millisecond, "stack-A TargetUpdater should become alive")
+		t.Logf("Assertion A: TargetUpdater=%s", tuNameA)
+
+		ceuxNameA := actornames.ChangesetExecutor(commandIDA)
+		require.True(t, isProcessAlive(m.Node, ceuxNameA), "stack-A ChangesetExecutor must be alive before executor kill")
+
+		// Kill the ChangesetExecutor.
+		require.NoError(t, killProcessByName(m.Node, ceuxNameA))
+
+		// The TargetUpdater must cascade-terminate within a few seconds via LinkParent.
+		assert.Eventually(t, func() bool {
+			return !isProcessAlive(m.Node, tuNameA)
+		}, 5*time.Second, 100*time.Millisecond,
+			"TargetUpdater must terminate after its parent ChangesetExecutor was killed (LinkParent cascade)")
+	})
+}
+
+// TestResourceUpdaterTerminationCascadesToPluginOperator verifies that an in-flight
+// PluginOperator is torn down when its requesting ResourceUpdater terminates.
+//
+// The PluginOperator establishes a unidirectional link to its requester RU (see
+// PluginOperator.linkRequester and TestLinkPIDDirectionality). When the executor is
+// killed, its LinkParent cascade terminates the RU, and the RU's death must propagate
+// across the link to terminate the in-flight operator.
+//
+// Create returns InProgress, so the operator parks in StateWaitingForResource and
+// schedules its next Status poll far in the future (a long StatusCheckInterval). It
+// therefore stays idle: it does NOT poll again and does NOT try to send to the RU
+// within the test window. The only way it can terminate in that window is the link
+// to its RU. This isolates the link from the operator's own "next poll's send to a
+// dead RU fails" shutdown path (which would otherwise mask the link).
+func TestResourceUpdaterTerminationCascadesToPluginOperator(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		overrides := &plugin.ResourcePluginOverrides{
+			Create: func(req *resource.CreateRequest) (*resource.CreateResult, error) {
+				return &resource.CreateResult{
+					ProgressResult: &resource.ProgressResult{
+						Operation:       resource.OperationCreate,
+						OperationStatus: resource.OperationStatusInProgress,
+						RequestID:       "request-" + req.Label,
+						NativeID:        "native-" + req.Label,
+					},
+				}, nil
+			},
+			Status: func(req *resource.StatusRequest) (*resource.StatusResult, error) {
+				return &resource.StatusResult{
+					ProgressResult: &resource.ProgressResult{
+						Operation:       resource.OperationCreate,
+						OperationStatus: resource.OperationStatusInProgress,
+						RequestID:       req.RequestID,
+					},
+				}, nil
+			},
+		}
+
+		// Long StatusCheckInterval: the operator parks idle after Create and won't
+		// re-poll (and thus won't discover the dead RU on its own) during the test.
+		cfg := test_helpers.NewTestMetastructureConfig()
+		cfg.Agent.Retry.StatusCheckInterval = 60 * time.Second
+
+		m, def, err := test_helpers.NewTestMetastructureWithConfig(t, overrides, cfg)
+		defer def()
+		require.NoError(t, err)
+
+		resp, err := m.ApplyForma(
+			formaWithOneResource("stack-op", "op-vpc"),
+			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
+			"test-client",
+		)
+		require.NoError(t, err)
+		commandID := resp.CommandID
+
+		// Wait for the ResourceUpdater to be in-flight.
+		var ruName gen.Atom
+		assert.Eventually(t, func() bool {
+			commands, err := m.Datastore.LoadFormaCommands()
+			if err != nil {
+				return false
+			}
+			for _, cmd := range commands {
+				if cmd.ID != commandID {
+					continue
+				}
+				for _, ru := range cmd.ResourceUpdates {
+					if ru.State == resource_update.ResourceUpdateStateInProgress {
+						ruName = actornames.ResourceUpdater(
+							ru.DesiredState.URI(), string(ru.Operation), commandID)
+						return isProcessAlive(m.Node, ruName)
+					}
+				}
+			}
+			return false
+		}, 10*time.Second, 100*time.Millisecond, "ResourceUpdater should become alive")
+		t.Logf("ResourceUpdater=%s", ruName)
+
+		// Wait for a PluginOperator to be spawned and in-flight.
+		assert.Eventually(t, func() bool {
+			return alivePluginOperators(t, m.Node) >= 1
+		}, 10*time.Second, 100*time.Millisecond, "a PluginOperator should be spawned and alive")
+		require.GreaterOrEqual(t, alivePluginOperators(t, m.Node), 1,
+			"PluginOperator must be alive before RU termination")
+
+		// Kill the ChangesetExecutor. Its LinkParent cascade terminates the RU,
+		// whose death must propagate across the link to the PluginOperator.
+		ceuxName := actornames.ChangesetExecutor(commandID)
+		require.True(t, isProcessAlive(m.Node, ceuxName), "ChangesetExecutor must be alive before kill")
+		require.NoError(t, killProcessByName(m.Node, ceuxName))
+
+		// The RU must terminate via the LinkParent cascade (Tasks 2-5).
+		assert.Eventually(t, func() bool {
+			return !isProcessAlive(m.Node, ruName)
+		}, 5*time.Second, 100*time.Millisecond,
+			"ResourceUpdater must terminate after its parent ChangesetExecutor was killed")
+
+		// The in-flight PluginOperator must terminate shortly after its RU dies,
+		// via the unidirectional link established in linkRequester.
+		assert.Eventually(t, func() bool {
+			return alivePluginOperators(t, m.Node) == 0
+		}, 5*time.Second, 100*time.Millisecond,
+			"PluginOperator must terminate after its requesting ResourceUpdater died (LinkPID cascade)")
+	})
+}
+
+// TestPluginOperatorCrashConvergesViaTimeout is the Phase-1 regression guard for
+// the PLA-202 supervision-tree restructure.
+//
+// It verifies three properties that must hold after Tasks 2–6 removed the
+// global updater supervisors and switched to unidirectional LinkParent links:
+//
+//  1. Timeout convergence: when a PluginOperator for one resource is forcefully
+//     killed after having responded InProgress, the watching ResourceUpdater
+//     detects the silence via its PluginOperatorMissingInAction timer and
+//     converges that resource update to terminal Failed — no infinite hang.
+//
+//  2. Command convergence: the FormaCommand itself reaches a terminal (Failed)
+//     state within a bounded wall-clock window. The ChangesetExecutor self-
+//     terminates normally once the command settles; it is NOT killed by the
+//     crash.
+//
+//  3. Sibling survival: a second, independent resource update in the same
+//     command is NOT affected by the single PluginOperator crash.  Because
+//     the link from PluginOperator → ResourceUpdater is unidirectional
+//     (operator crash does not propagate up), the sibling ResourceUpdater and
+//     the ChangesetExecutor stay alive and the sibling's update completes
+//     successfully.
+//
+// Failure injection: the vpc PluginOperator receives Create → returns InProgress
+// (the operator parks in StateWaitingForResource) and then is force-killed.
+// The ResourceUpdater is left waiting; after 2 × StatusCheckInterval it fires
+// PluginOperatorMissingInAction → StateFinishedWithError → CommandStateFailed.
+// The bucket PluginOperator is not killed and its Create returns Success.
+func TestPluginOperatorCrashConvergesViaTimeout(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		// vpc Create: returns InProgress so the PluginOperator parks in
+		// StateWaitingForResource.  Once we kill the operator the RU times out.
+		// bucket Create: returns Success immediately so the sibling succeeds
+		// independently of the crash.
+		// Status is never called for bucket (op finishes synchronously), and
+		// is never called for vpc because the operator is killed first.
+		overrides := &plugin.ResourcePluginOverrides{
+			Create: func(req *resource.CreateRequest) (*resource.CreateResult, error) {
+				if req.Label == "vpc" {
+					return &resource.CreateResult{
+						ProgressResult: &resource.ProgressResult{
+							Operation:       resource.OperationCreate,
+							OperationStatus: resource.OperationStatusInProgress,
+							RequestID:       "request-vpc",
+							NativeID:        "native-vpc",
+						},
+					}, nil
+				}
+				// bucket: finish synchronously
+				return &resource.CreateResult{
+					ProgressResult: &resource.ProgressResult{
+						Operation:          resource.OperationCreate,
+						OperationStatus:    resource.OperationStatusSuccess,
+						RequestID:          "request-" + req.Label,
+						NativeID:           "native-" + req.Label,
+						ResourceProperties: json.RawMessage(`{"BucketName":"crash-test-bucket"}`),
+					},
+				}, nil
+			},
+		}
+
+		// Use a short StatusCheckInterval so the PluginOperatorMissingInAction
+		// timeout (2 × interval) fires quickly in the test.
+		cfg := test_helpers.NewTestMetastructureConfig()
+		cfg.Agent.Retry.StatusCheckInterval = 1 * time.Second
+
+		m, def, err := test_helpers.NewTestMetastructureWithConfig(t, overrides, cfg)
+		defer def()
+		require.NoError(t, err)
+
+		// Forma with two independent resources in the same stack.
+		// No dependency between them so both ResourceUpdaters start in parallel.
+		forma := &pkgmodel.Forma{
+			Stacks: []pkgmodel.Stack{{Label: "crash-test"}},
+			Resources: []pkgmodel.Resource{
+				{
+					Label:      "vpc",
+					Type:       "FakeAWS::EC2::VPC",
+					Properties: json.RawMessage(`{"CidrBlock":"10.0.0.0/16"}`),
+					Stack:      "crash-test",
+					Target:     "test-target",
+					Managed:    true,
+				},
+				{
+					Label:      "bucket",
+					Type:       "FakeAWS::S3::Bucket",
+					Properties: json.RawMessage(`{"BucketName":"crash-test-bucket"}`),
+					Stack:      "crash-test",
+					Target:     "test-target",
+					Managed:    true,
+				},
+			},
+			Targets: []pkgmodel.Target{{Label: "test-target"}},
+		}
+
+		resp, err := m.ApplyForma(forma, &config.FormaCommandConfig{
+			Mode: pkgmodel.FormaApplyModeReconcile,
+		}, "test-client")
+		require.NoError(t, err)
+		commandID := resp.CommandID
+
+		// ── Step 1: wait until the vpc ResourceUpdater is in progress (InProgress
+		//   in the datastore) and its PluginOperator has been spawned. ──
+		var vpcURI pkgmodel.FormaeURI
+		assert.Eventually(t, func() bool {
+			cmds, err := m.Datastore.LoadFormaCommands()
+			if err != nil {
+				return false
+			}
+			for _, cmd := range cmds {
+				if cmd.ID != commandID {
+					continue
+				}
+				for _, ru := range cmd.ResourceUpdates {
+					if ru.DesiredState.Label == "vpc" &&
+						ru.State == resource_update.ResourceUpdateStateInProgress {
+						vpcURI = ru.DesiredState.URI()
+						return true
+					}
+				}
+			}
+			return false
+		}, 10*time.Second, 100*time.Millisecond,
+			"vpc ResourceUpdater must reach InProgress state")
+
+		// The vpc PluginOperator name contains the vpc's KSUID (from its FormaeURI).
+		// We search alive PluginOperator processes for that substring.
+		vpcKsuid := vpcURI.KSUID()
+		var vpcOpPID gen.PID
+		assert.Eventually(t, func() bool {
+			pid, found := findPluginOperatorForResource(m.Node, vpcKsuid)
+			if found {
+				vpcOpPID = pid
+			}
+			return found
+		}, 10*time.Second, 100*time.Millisecond,
+			"vpc PluginOperator must be spawned and alive")
+		t.Logf("vpc PluginOperator PID=%v", vpcOpPID)
+
+		// ── Step 2: confirm the executor is alive before we inject the crash ──
+		ceuxName := actornames.ChangesetExecutor(commandID)
+		require.True(t, isProcessAlive(m.Node, ceuxName),
+			"ChangesetExecutor must be alive before PluginOperator crash")
+
+		// ── Step 3: kill the vpc PluginOperator (crash injection) ──
+		require.NoError(t, m.Node.Kill(vpcOpPID),
+			"force-kill the vpc PluginOperator to inject the crash")
+		t.Log("vpc PluginOperator killed — waiting for convergence via PluginOperatorMissingInAction timeout")
+
+		// ── Step 4: the ChangesetExecutor must stay alive immediately after the
+		//   crash (unidirectional link: crash does not cascade upward). ──
+		// Give ergo a moment to propagate the kill signal.
+		time.Sleep(200 * time.Millisecond)
+		assert.True(t, isProcessAlive(m.Node, ceuxName),
+			"ChangesetExecutor must NOT be killed by the PluginOperator crash (unidirectional link)")
+
+		// ── Step 5: the sibling (bucket) resource update must reach Success. ──
+		// The bucket PluginOperator was never killed, so it should finish quickly.
+		assert.Eventually(t, func() bool {
+			cmds, err := m.Datastore.LoadFormaCommands()
+			if err != nil {
+				return false
+			}
+			for _, cmd := range cmds {
+				if cmd.ID != commandID {
+					continue
+				}
+				for _, ru := range cmd.ResourceUpdates {
+					if ru.DesiredState.Label == "bucket" {
+						return ru.State == resource_update.ResourceUpdateStateSuccess
+					}
+				}
+			}
+			return false
+		}, 15*time.Second, 100*time.Millisecond,
+			"sibling (bucket) resource update must complete successfully (crash must not kill siblings)")
+
+		// ── Step 6: the vpc resource update must reach Failed via the
+		//   PluginOperatorMissingInAction timeout (2 × 1 s = 2 s). ──
+		assert.Eventually(t, func() bool {
+			cmds, err := m.Datastore.LoadFormaCommands()
+			if err != nil {
+				return false
+			}
+			for _, cmd := range cmds {
+				if cmd.ID != commandID {
+					continue
+				}
+				for _, ru := range cmd.ResourceUpdates {
+					if ru.DesiredState.Label == "vpc" {
+						return ru.State == resource_update.ResourceUpdateStateFailed
+					}
+				}
+			}
+			return false
+		}, 15*time.Second, 100*time.Millisecond,
+			"vpc resource update must converge to Failed via PluginOperatorMissingInAction timeout")
+
+		// ── Step 7: the FormaCommand must reach a terminal state (Failed) without
+		//   hanging forever. ──
+		assert.Eventually(t, func() bool {
+			cmds, err := m.Datastore.LoadFormaCommands()
+			if err != nil {
+				return false
+			}
+			for _, cmd := range cmds {
+				if cmd.ID == commandID {
+					return cmd.State == forma_command.CommandStateFailed
+				}
+			}
+			return false
+		}, 20*time.Second, 100*time.Millisecond,
+			"FormaCommand must reach terminal Failed state — no hang after PluginOperator crash")
+
+		// ── Step 8: the ChangesetExecutor must self-terminate after the command
+		//   settles (it terminates normally, not due to the crash). ──
+		assert.Eventually(t, func() bool {
+			return !isProcessAlive(m.Node, ceuxName)
+		}, 5*time.Second, 100*time.Millisecond,
+			"ChangesetExecutor must self-terminate after command reaches terminal state")
+	})
+}

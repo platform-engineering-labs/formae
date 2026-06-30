@@ -8,6 +8,14 @@ replace github.com/platform-engineering-labs/formae/pkg/model => ../../pkg/model
 
 replace github.com/platform-engineering-labs/formae/tests/testcontrol => ../testcontrol
 
+// Match the SDK (pkg/plugin) and agent: the test plugin must run the forked
+// ergo/statemachine, otherwise its targetManager holds the node-global lock
+// across remote Link/Monitor and the operator->requester link starves the
+// plugin node under load.
+replace ergo.services/ergo => github.com/JeroenSoeters/ergo v1.999.320-pel.6
+
+replace ergo.services/actor/statemachine => github.com/JeroenSoeters/actor/statemachine v0.0.0-20260205190926-8b1b2eaf30f4
+
 require (
 	ergo.services/ergo v1.999.320
 	github.com/masterminds/semver v1.5.0

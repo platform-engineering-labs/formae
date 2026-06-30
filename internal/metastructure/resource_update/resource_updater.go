@@ -112,6 +112,12 @@ func newResourceUpdater() gen.ProcessBehavior {
 	return &ResourceUpdater{}
 }
 
+// NewResourceUpdater is the exported factory for spawning a ResourceUpdater process.
+// It is used by ChangesetExecutor to spawn child ResourceUpdaters with LinkParent.
+func NewResourceUpdater() gen.ProcessBehavior {
+	return newResourceUpdater()
+}
+
 type ResourceUpdateFinished struct {
 	Uri   pkgmodel.FormaeURI
 	State ResourceUpdateState

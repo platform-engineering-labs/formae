@@ -205,7 +205,6 @@ type Listing struct {
 	Error          string               `json:"Error"`
 }
 
-
 type PluginOperatorCheckStatus struct {
 	Namespace         string
 	RequestID         string
@@ -437,6 +436,20 @@ func (o *PluginOperator) Init(args ...any) (statemachine.StateMachineSpec[Plugin
 	}
 	data.config = cfg.(model.RetryConfig)
 
+	// RequestedBy: the requesting ResourceUpdater's PID, threaded in via Env so
+	// we can establish the operator→RU link asynchronously (off the operation
+	// critical path). Linking here in Init would block, so we defer it via a
+	// self-message handled once the operator is Running (mirrors PluginActor's
+	// deferred setupMonitoring).
+	if v, ok := o.Env("RequestedBy"); ok {
+		if pid, ok := v.(gen.PID); ok && pid != (gen.PID{}) {
+			data.requestedBy = pid
+			if err := o.Send(o.PID(), establishLinkRequester{}); err != nil {
+				o.Log().Error("PluginOperator: failed to schedule requester link: %v", err)
+			}
+		}
+	}
+
 	// Initialize OTel metrics
 	if err := setupPluginOperatorMetrics(&data); err != nil {
 		o.Log().Error("Failed to setup plugin operator metrics: %v", err)
@@ -459,6 +472,9 @@ func (o *PluginOperator) Init(args ...any) (statemachine.StateMachineSpec[Plugin
 		statemachine.WithStateCallHandler(StateRetrying, delete),
 
 		statemachine.WithStateMessageHandler(StateNotStarted, list),
+		statemachine.WithStateMessageHandler(StateNotStarted, establishLink),
+		statemachine.WithStateMessageHandler(StateWaitingForResource, establishLink),
+		statemachine.WithStateMessageHandler(StateRetrying, establishLink),
 		statemachine.WithStateMessageHandler(StateWaitingForResource, status),
 		statemachine.WithStateMessageHandler(StateRetrying, retry),
 		statemachine.WithStateMessageHandler(StateFinishedSuccessfully, shutdown),
@@ -468,6 +484,35 @@ func (o *PluginOperator) Init(args ...any) (statemachine.StateMachineSpec[Plugin
 
 func shutdown(from gen.PID, state gen.Atom, data PluginUpdateData, shutdown PluginOperatorShutdown, proc gen.Process) (gen.Atom, PluginUpdateData, []statemachine.Action, error) {
 	return state, data, nil, gen.TerminateReasonNormal
+}
+
+// establishLinkRequester is sent to self after Init to defer establishing the
+// operator→ResourceUpdater link until the operator is Running (linking in Init
+// would block on a synchronous cross-node link RPC, stalling the spawn and the
+// requesting RU). Mirrors PluginActor's deferred setupMonitoring.
+type establishLinkRequester struct{}
+
+// establishLink creates a unidirectional link from this operator to its
+// requesting ResourceUpdater (RU). Because ergo links are unidirectional, the
+// RU's termination terminates the operator, while an operator crash leaves the
+// RU untouched.
+// This lets the executor's LinkParent cascade tear down in-flight remote
+// operators when their RU dies, without an operator failure reaching back to
+// the RU (that path stays handled by the existing timeout logic).
+//
+// The PluginOperator (a StateMachine) does not trap exits, so the link
+// auto-terminates it when the RU dies; no MessageExit* handler is needed.
+//
+// A failed link is not fatal: the operator can still complete its operation; it
+// just won't auto-terminate if the RU dies. The most common cause is the RU
+// already being gone, in which case nothing in flight matters anyway.
+func establishLink(from gen.PID, state gen.Atom, data PluginUpdateData, msg establishLinkRequester, proc gen.Process) (gen.Atom, PluginUpdateData, []statemachine.Action, error) {
+	if data.requestedBy != (gen.PID{}) {
+		if err := proc.LinkPID(data.requestedBy); err != nil {
+			proc.Log().Error("PluginOperator: failed to link requester %v: %v", data.requestedBy, err)
+		}
+	}
+	return state, data, nil, nil
 }
 
 func onStateChange(oldState gen.Atom, newState gen.Atom, data PluginUpdateData, proc gen.Process) (gen.Atom, PluginUpdateData, error) {

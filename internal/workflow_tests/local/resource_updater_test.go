@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
+	"ergo.services/ergo/gen"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/changeset"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_persister"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
@@ -70,7 +70,8 @@ func TestResourceUpdater_HandlesThrottlingDuringSynchronization(t *testing.T) {
 		}
 
 		messages := make(chan any, 1)
-		_, err = testutil.StartTestHelperActor(m.Node, messages)
+		var helperPID gen.PID
+		helperPID, err = testutil.StartTestHelperActor(m.Node, messages)
 		assert.NoError(t, err)
 
 		initialResource := successfullyFinishedResourceUpdateCreatingS3Bucket()
@@ -102,11 +103,8 @@ func TestResourceUpdater_HandlesThrottlingDuringSynchronization(t *testing.T) {
 		})
 
 		updateResource := resourceUpdateModifyingS3Bucket(initialResource.DesiredState.Ksuid)
-		_, err = testutil.Call(m.Node, "ResourceUpdaterSupervisor", resource_update.EnsureResourceUpdater{
-			ResourceURI: initialResource.DesiredState.URI(),
-			CommandID:   "test-throttle-sync",
-			Operation:   string(updateResource.Operation),
-		})
+		err = spawnResourceUpdater(t, m.Node, helperPID,
+			initialResource.DesiredState.URI(), string(updateResource.Operation), "test-throttle-sync")
 		assert.NoError(t, err)
 
 		testutil.Send(m.Node, actornames.ResourceUpdater(initialResource.DesiredState.URI(), string(updateResource.Operation), "test-throttle-sync"), resource_update.StartResourceUpdate{
@@ -157,7 +155,7 @@ func TestResourceUpdater_RejectsUpdateWhenTheResourceIsOutOfSync(t *testing.T) {
 
 		// start test helper actor to interact with the actors in the metastructure
 		messages := make(chan any, 1)
-		_, err = testutil.StartTestHelperActor(m.Node, messages)
+		helperPID, err := testutil.StartTestHelperActor(m.Node, messages)
 		assert.NoError(t, err)
 
 		// store a forma command in the database - USE THE SAME KSUID
@@ -197,11 +195,8 @@ func TestResourceUpdater_RejectsUpdateWhenTheResourceIsOutOfSync(t *testing.T) {
 
 		// start the resource updater
 		updateResource := resourceUpdateModifyingS3Bucket(initialResource.DesiredState.Ksuid)
-		_, err = testutil.Call(m.Node, "ResourceUpdaterSupervisor", resource_update.EnsureResourceUpdater{
-			ResourceURI: initialResource.DesiredState.URI(),
-			Operation:   string(updateResource.Operation),
-			CommandID:   "test-forma-command",
-		})
+		err = spawnResourceUpdater(t, m.Node, helperPID,
+			initialResource.DesiredState.URI(), string(updateResource.Operation), "test-forma-command")
 		assert.NoError(t, err)
 
 		// send any update to the resource updater, which should be rejected
@@ -256,7 +251,7 @@ func TestResourceUpdater_SuccessfullySynchronizesAResource(t *testing.T) {
 		}
 
 		messages := make(chan any, 1)
-		_, err = testutil.StartTestHelperActor(m.Node, messages)
+		helperPID, err := testutil.StartTestHelperActor(m.Node, messages)
 		assert.NoError(t, err)
 
 		initialResource := successfullyFinishedResourceUpdateCreatingS3Bucket()
@@ -289,11 +284,8 @@ func TestResourceUpdater_SuccessfullySynchronizesAResource(t *testing.T) {
 
 		// start the resource update
 		syncResource := resourceUpdateReadingS3Bucket(initialResource.DesiredState.Ksuid)
-		_, err = testutil.Call(m.Node, "ResourceUpdaterSupervisor", resource_update.EnsureResourceUpdater{
-			ResourceURI: initialResource.DesiredState.URI(),
-			CommandID:   "test-forma-command-sync",
-			Operation:   string(syncResource.Operation),
-		})
+		err = spawnResourceUpdater(t, m.Node, helperPID,
+			initialResource.DesiredState.URI(), string(syncResource.Operation), "test-forma-command-sync")
 		assert.NoError(t, err)
 
 		// send the sync operation to the resource updater
@@ -373,7 +365,7 @@ func TestResourceUpdater_SuccessfullyDeletesAResource(t *testing.T) {
 
 		// start test helper actor to interact with the actors in the metastructure
 		messages := make(chan any, 1)
-		_, err = testutil.StartTestHelperActor(m.Node, messages)
+		helperPID, err := testutil.StartTestHelperActor(m.Node, messages)
 		assert.NoError(t, err)
 
 		// store the forma command in the database
@@ -407,11 +399,8 @@ func TestResourceUpdater_SuccessfullyDeletesAResource(t *testing.T) {
 
 		// start the resource updater
 		updateResource := resourceUpdateDeletingS3Bucket(initialResource.DesiredState.Ksuid)
-		_, err = testutil.Call(m.Node, "ResourceUpdaterSupervisor", resource_update.EnsureResourceUpdater{
-			ResourceURI: initialResource.DesiredState.URI(),
-			CommandID:   "test-forma-command-delete",
-			Operation:   string(updateResource.Operation),
-		})
+		err = spawnResourceUpdater(t, m.Node, helperPID,
+			initialResource.DesiredState.URI(), string(updateResource.Operation), "test-forma-command-delete")
 		assert.NoError(t, err)
 
 		// send the delete operation to the resource updater
@@ -478,7 +467,7 @@ func TestResourceUpdater_DeleteOperationFailsWhenPluginCrashes(t *testing.T) {
 		}
 
 		messages := make(chan any, 1)
-		_, err = testutil.StartTestHelperActor(m.Node, messages)
+		helperPID, err := testutil.StartTestHelperActor(m.Node, messages)
 		assert.NoError(t, err)
 
 		initialResource := successfullyFinishedResourceUpdateCreatingS3Bucket()
@@ -509,11 +498,8 @@ func TestResourceUpdater_DeleteOperationFailsWhenPluginCrashes(t *testing.T) {
 		assert.NotEmpty(t, hash)
 
 		updateResource := resourceUpdateDeletingS3Bucket(initialResource.DesiredState.Ksuid)
-		_, err = testutil.Call(m.Node, "ResourceUpdaterSupervisor", resource_update.EnsureResourceUpdater{
-			ResourceURI: initialResource.DesiredState.URI(),
-			CommandID:   "test-forma-command-delete-crash",
-			Operation:   string(updateResource.Operation),
-		})
+		err = spawnResourceUpdater(t, m.Node, helperPID,
+			initialResource.DesiredState.URI(), string(updateResource.Operation), "test-forma-command-delete-crash")
 		assert.NoError(t, err)
 
 		testutil.Send(m.Node, actornames.ResourceUpdater(initialResource.DesiredState.URI(), string(updateResource.Operation), "test-forma-command-delete-crash"), resource_update.StartResourceUpdate{
@@ -568,7 +554,7 @@ func TestResourceUpdater_PreservesPluginErrorMessageOnDeleteFailure(t *testing.T
 		}
 
 		messages := make(chan any, 1)
-		_, err = testutil.StartTestHelperActor(m.Node, messages)
+		helperPID, err := testutil.StartTestHelperActor(m.Node, messages)
 		assert.NoError(t, err)
 
 		initialResource := successfullyFinishedResourceUpdateCreatingS3Bucket()
@@ -599,11 +585,8 @@ func TestResourceUpdater_PreservesPluginErrorMessageOnDeleteFailure(t *testing.T
 		assert.NotEmpty(t, hash)
 
 		deleteResource := resourceUpdateDeletingS3Bucket(initialResource.DesiredState.Ksuid)
-		_, err = testutil.Call(m.Node, "ResourceUpdaterSupervisor", resource_update.EnsureResourceUpdater{
-			ResourceURI: initialResource.DesiredState.URI(),
-			CommandID:   "test-forma-command-delete-error-message",
-			Operation:   string(deleteResource.Operation),
-		})
+		err = spawnResourceUpdater(t, m.Node, helperPID,
+			initialResource.DesiredState.URI(), string(deleteResource.Operation), "test-forma-command-delete-error-message")
 		assert.NoError(t, err)
 
 		testutil.Send(m.Node, actornames.ResourceUpdater(initialResource.DesiredState.URI(), string(deleteResource.Operation), "test-forma-command-delete-error-message"), resource_update.StartResourceUpdate{
@@ -668,14 +651,11 @@ func TestResourceUpdater_SuccessfullyCreatesAResource(t *testing.T) {
 		}
 
 		received := make(chan any, 1)
-		_, err = testutil.StartTestHelperActor(m.Node, received)
+		helperPID, err := testutil.StartTestHelperActor(m.Node, received)
 		assert.NoError(t, err)
 
 		// ensure the resolve cache is started
-		_, err = testutil.Call(m.Node, "ChangesetSupervisor",
-			changeset.EnsureResolveCache{
-				CommandID: "test-forma-command-create"},
-		)
+		err = spawnResolveCache(t, m.Node, "test-forma-command-create")
 		assert.NoError(t, err)
 
 		vpcKsuid := util.NewID()
@@ -763,11 +743,8 @@ func TestResourceUpdater_SuccessfullyCreatesAResource(t *testing.T) {
 		// start the resource update
 		newResourceUri := command.ResourceUpdates[0].DesiredState.URI()
 		createResource := resourceUpdateCreatingS3Bucket(bucketKsuid, vpcKsuid)
-		_, err = testutil.Call(m.Node, "ResourceUpdaterSupervisor", resource_update.EnsureResourceUpdater{
-			ResourceURI: createResource.DesiredState.URI(),
-			CommandID:   "test-forma-command-create",
-			Operation:   string(createResource.Operation),
-		})
+		err = spawnResourceUpdater(t, m.Node, helperPID,
+			createResource.DesiredState.URI(), string(createResource.Operation), "test-forma-command-create")
 		assert.NoError(t, err)
 
 		// send the create operation to the resource updater
@@ -848,7 +825,7 @@ func TestResourceUpdater_SuccessfullyUpdatesAResource(t *testing.T) {
 		}
 
 		messages := make(chan any, 1)
-		_, err = testutil.StartTestHelperActor(m.Node, messages)
+		helperPID, err := testutil.StartTestHelperActor(m.Node, messages)
 		assert.NoError(t, err)
 
 		initialResource := successfullyFinishedResourceUpdateCreatingS3Bucket()
@@ -881,11 +858,8 @@ func TestResourceUpdater_SuccessfullyUpdatesAResource(t *testing.T) {
 
 		// start the resource update
 		updateResource := resourceUpdateModifyingS3Bucket(initialResource.DesiredState.Ksuid)
-		_, err = testutil.Call(m.Node, "ResourceUpdaterSupervisor", resource_update.EnsureResourceUpdater{
-			ResourceURI: initialResource.DesiredState.URI(),
-			CommandID:   "test-forma-command-update",
-			Operation:   string(updateResource.Operation),
-		})
+		err = spawnResourceUpdater(t, m.Node, helperPID,
+			initialResource.DesiredState.URI(), string(updateResource.Operation), "test-forma-command-update")
 		assert.NoError(t, err)
 
 		// send the create operation to the resource updater
@@ -950,7 +924,7 @@ func TestResourceUpdater_PreservesPluginErrorMessageOnUpdateFailure(t *testing.T
 		}
 
 		messages := make(chan any, 1)
-		_, err = testutil.StartTestHelperActor(m.Node, messages)
+		helperPID, err := testutil.StartTestHelperActor(m.Node, messages)
 		assert.NoError(t, err)
 
 		initialResource := successfullyFinishedResourceUpdateCreatingS3Bucket()
@@ -981,11 +955,8 @@ func TestResourceUpdater_PreservesPluginErrorMessageOnUpdateFailure(t *testing.T
 		})
 
 		updateResource := resourceUpdateModifyingS3Bucket(initialResource.DesiredState.Ksuid)
-		_, err = testutil.Call(m.Node, "ResourceUpdaterSupervisor", resource_update.EnsureResourceUpdater{
-			ResourceURI: initialResource.DesiredState.URI(),
-			CommandID:   "test-forma-command-update-error-message",
-			Operation:   string(updateResource.Operation),
-		})
+		err = spawnResourceUpdater(t, m.Node, helperPID,
+			initialResource.DesiredState.URI(), string(updateResource.Operation), "test-forma-command-update-error-message")
 		assert.NoError(t, err)
 
 		testutil.Send(m.Node, actornames.ResourceUpdater(initialResource.DesiredState.URI(), string(updateResource.Operation), "test-forma-command-update-error-message"), resource_update.StartResourceUpdate{
@@ -1040,7 +1011,7 @@ func TestResourceUpdater_SuccessfullyRecoversFromADeleteOperationLeftInInProgres
 		}
 
 		messages := make(chan any, 1)
-		_, err = testutil.StartTestHelperActor(m.Node, messages)
+		helperPID, err := testutil.StartTestHelperActor(m.Node, messages)
 		assert.NoError(t, err)
 
 		initialResource := successfullyFinishedResourceUpdateCreatingS3Bucket()
@@ -1093,11 +1064,8 @@ func TestResourceUpdater_SuccessfullyRecoversFromADeleteOperationLeftInInProgres
 
 		// start the resource update
 		updateResource := partiallyCompletedResourceUpdateDeletingS3Bucket(initialResource.DesiredState.Ksuid)
-		_, err = testutil.Call(m.Node, "ResourceUpdaterSupervisor", resource_update.EnsureResourceUpdater{
-			ResourceURI: initialResource.DesiredState.URI(),
-			CommandID:   "test-forma-command-recover-delete",
-			Operation:   string(updateResource.Operation),
-		})
+		err = spawnResourceUpdater(t, m.Node, helperPID,
+			initialResource.DesiredState.URI(), string(updateResource.Operation), "test-forma-command-recover-delete")
 		assert.NoError(t, err)
 
 		// send the delete operation to the resource updater
@@ -1173,7 +1141,7 @@ func TestResourceUpdater_SuccessfullyRecoversFromACreateOperationLeftInInProgres
 		}
 
 		messages := make(chan any, 1)
-		_, err = testutil.StartTestHelperActor(m.Node, messages)
+		helperPID, err := testutil.StartTestHelperActor(m.Node, messages)
 		assert.NoError(t, err)
 
 		// store the forma command in the database
@@ -1216,11 +1184,8 @@ func TestResourceUpdater_SuccessfullyRecoversFromACreateOperationLeftInInProgres
 
 		// start the resource update
 		resourceURI := command.Command.ResourceUpdates[0].DesiredState.URI()
-		_, err = testutil.Call(m.Node, "ResourceUpdaterSupervisor", resource_update.EnsureResourceUpdater{
-			ResourceURI: resourceURI,
-			Operation:   string(updateResource.Operation),
-			CommandID:   "test-forma-command-recover-create",
-		})
+		err = spawnResourceUpdater(t, m.Node, helperPID,
+			resourceURI, string(updateResource.Operation), "test-forma-command-recover-create")
 		assert.NoError(t, err)
 
 		// send the create operation to the resource updater
@@ -1311,7 +1276,7 @@ func TestResourceUpdater_SuccessfullyRecoversFromAnUpdateOperationLeftInInFailed
 		}
 
 		messages := make(chan any, 1)
-		_, err = testutil.StartTestHelperActor(m.Node, messages)
+		helperPID, err := testutil.StartTestHelperActor(m.Node, messages)
 		assert.NoError(t, err)
 
 		initialResource := successfullyFinishedResourceUpdateCreatingS3Bucket()
@@ -1366,11 +1331,8 @@ func TestResourceUpdater_SuccessfullyRecoversFromAnUpdateOperationLeftInInFailed
 		})
 
 		// start the resource update
-		_, err = testutil.Call(m.Node, "ResourceUpdaterSupervisor", resource_update.EnsureResourceUpdater{
-			ResourceURI: initialResource.DesiredState.URI(),
-			Operation:   string(updateResource.Operation),
-			CommandID:   "test-forma-command-recover-update",
-		})
+		err = spawnResourceUpdater(t, m.Node, helperPID,
+			initialResource.DesiredState.URI(), string(updateResource.Operation), "test-forma-command-recover-update")
 		assert.NoError(t, err)
 
 		// send the update operation to the resource updater
@@ -1442,7 +1404,7 @@ func TestResourceUpdater_DeleteTransitionsToFailedWhenPluginOperationErrors(t *t
 
 		// start test helper actor to interact with the actors in the metastructure
 		messages := make(chan any, 1)
-		_, err = testutil.StartTestHelperActor(m.Node, messages)
+		helperPID, err := testutil.StartTestHelperActor(m.Node, messages)
 		assert.NoError(t, err)
 
 		// store the forma command in the database
@@ -1476,11 +1438,8 @@ func TestResourceUpdater_DeleteTransitionsToFailedWhenPluginOperationErrors(t *t
 
 		// start the resource updater
 		updateResource := resourceUpdateDeletingS3Bucket(initialResource.DesiredState.Ksuid)
-		_, err = testutil.Call(m.Node, "ResourceUpdaterSupervisor", resource_update.EnsureResourceUpdater{
-			ResourceURI: initialResource.DesiredState.URI(),
-			CommandID:   "test-forma-command-delete-fail",
-			Operation:   string(updateResource.Operation),
-		})
+		err = spawnResourceUpdater(t, m.Node, helperPID,
+			initialResource.DesiredState.URI(), string(updateResource.Operation), "test-forma-command-delete-fail")
 		assert.NoError(t, err)
 
 		// send the delete operation to the resource updater

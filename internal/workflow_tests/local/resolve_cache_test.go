@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/changeset"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
@@ -110,9 +109,7 @@ func TestResolveCache(t *testing.T) {
 		assert.NotEmpty(t, hash)
 
 		// ensure the resolve cache exists
-		_, err = testutil.Call(m.Node, "ChangesetSupervisor", changeset.EnsureResolveCache{
-			CommandID: "test-command-1",
-		})
+		err = spawnResolveCache(t, m.Node, "test-command-1")
 
 		uri := pkgmodel.NewFormaeURI(resourceUpdate.DesiredState.Ksuid, "name")
 
@@ -243,9 +240,7 @@ func TestResolveCache_MissingPropertyReportsReason(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NotEmpty(t, hash)
 
-		_, err = testutil.Call(m.Node, "ChangesetSupervisor", changeset.EnsureResolveCache{
-			CommandID: "test-command-1",
-		})
+		err = spawnResolveCache(t, m.Node, "test-command-1")
 		assert.NoError(t, err)
 
 		// "arn" is not a property of the read result — this resolves terminally.
