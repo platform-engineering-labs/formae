@@ -24,6 +24,7 @@ import (
 
 type CancelOptions struct {
 	Query          string
+	Force          bool
 	Watch          bool
 	StatusOutput   status.StatusOutput
 	OutputConsumer printer.Consumer
@@ -41,7 +42,18 @@ If a query is provided, cancels all in-progress commands matching the query.
 
 Note: Only commands in 'InProgress' state can be canceled.
 Commands that are already executing resources will complete those resources
-before transitioning to 'Canceled' state to avoid orphaned resources.`,
+before transitioning to 'Canceled' state to avoid orphaned resources.
+
+Use --force to abandon in-progress work and drive the command to a terminal
+'Canceled' state immediately, instead of waiting for in-progress resources to
+finish. This is an escape hatch for operations that will not complete (e.g. a
+plugin stuck in an unbounded poll loop). With --force:
+  - Cloud-side operations may keep running after the command is canceled.
+  - Update/Delete operations are self-healing: the synchronizer reconciles
+    formae's state against actual cloud state on its next cycle.
+  - A still-running Create may orphan a cloud resource that formae cannot track
+    (it has no native id yet). You may need to clean it up manually, or let
+    discovery pick it up.`,
 		PreRun: func(cmd *cobra.Command, args []string) {
 			logging.SetupClientLogging(fmt.Sprintf("%s/log/client.log", config.Config.DataDirectory()))
 		},
@@ -49,6 +61,7 @@ before transitioning to 'Canceled' state to avoid orphaned resources.`,
 			opts := &CancelOptions{}
 			query, _ := command.Flags().GetString("query")
 			opts.Query = strings.TrimSpace(query)
+			opts.Force, _ = command.Flags().GetBool("force")
 			opts.Watch, _ = command.Flags().GetBool("watch")
 			statusOutput, _ := command.Flags().GetString("status-output-layout")
 			opts.StatusOutput = status.StatusOutput(statusOutput)
@@ -72,6 +85,7 @@ before transitioning to 'Canceled' state to avoid orphaned resources.`,
 	command.SetUsageTemplate(cmd.SimpleCmdUsageTemplate)
 
 	command.Flags().String("query", "", "Query to select commands to cancel. If not provided, cancels the most recent command. Use * as a wildcard anywhere (e.g. foo*, *foo, *foo*, foo*bar). ? and regex are not yet supported.")
+	command.Flags().Bool("force", false, "Abandon in-progress work and drive the command to a terminal 'Canceled' state immediately, instead of waiting for in-progress resources to finish. Cloud-side operations may continue: Update/Delete are reconciled by the synchronizer, but a still-running Create may orphan a resource that needs manual cleanup.")
 	command.Flags().BoolP("watch", "w", false, "Watch the status of canceled commands until they complete")
 	command.Flags().String("status-output-layout", string(status.StatusOutputSummary), fmt.Sprintf("What to print as status output (%s | %s)", status.StatusOutputSummary, status.StatusOutputDetailed))
 	command.Flags().String("output-consumer", string(printer.ConsumerHuman), "Consumer of the command result (human | machine)")
@@ -108,7 +122,7 @@ func runCancel(app *app.App, opts *CancelOptions) error {
 func runCancelForHumans(app *app.App, opts *CancelOptions) error {
 	app.PrintBanner()
 
-	res, err := app.CancelCommand(opts.Query)
+	res, err := app.CancelCommand(opts.Query, opts.Force)
 	if err != nil {
 		msg, renderErr := renderer.RenderErrorMessage(err)
 		if renderErr != nil {
@@ -160,7 +174,7 @@ func runCancelForHumans(app *app.App, opts *CancelOptions) error {
 }
 
 func runCancelForMachines(app *app.App, opts *CancelOptions) error {
-	res, err := app.CancelCommand(opts.Query)
+	res, err := app.CancelCommand(opts.Query, opts.Force)
 	if err != nil {
 		return fmt.Errorf("error canceling commands: %v", err)
 	}

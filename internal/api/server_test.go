@@ -98,11 +98,11 @@ func (m *FakeMetastructure) DestroyByQuery(query string, config *config.FormaCom
 	return nextResponse.SubmitCommandResponse, nextResponse.Error
 }
 
-func (m *FakeMetastructure) CancelCommand(commandID string, clientID string) (*changeset.CancelResponse, error) {
+func (m *FakeMetastructure) CancelCommand(commandID string, force bool, clientID string) (*changeset.CancelResponse, error) {
 	return nil, nil
 }
 
-func (m *FakeMetastructure) CancelCommandsByQuery(query string, clientID string) (*apimodel.CancelCommandResponse, error) {
+func (m *FakeMetastructure) CancelCommandsByQuery(query string, force bool, clientID string) (*apimodel.CancelCommandResponse, error) {
 	nextResponse := m.cancelResponses[0]
 	m.cancelResponses = m.cancelResponses[1:]
 

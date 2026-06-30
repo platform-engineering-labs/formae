@@ -210,7 +210,7 @@ func (c *Client) DestroyByQuery(query string, simulate bool, clientID string) (*
 	}
 }
 
-func (c *Client) CancelCommands(query string, clientID string) (*apimodel.CancelCommandResponse, error) {
+func (c *Client) CancelCommands(query string, force bool, clientID string) (*apimodel.CancelCommandResponse, error) {
 	var result apimodel.CancelCommandResponse
 
 	req := c.resty.R().
@@ -219,6 +219,9 @@ func (c *Client) CancelCommands(query string, clientID string) (*apimodel.Cancel
 
 	if query != "" {
 		req.SetQueryParam("query", query)
+	}
+	if force {
+		req.SetQueryParam("force", "true")
 	}
 
 	resp, err := req.Post(c.endpoint + "/api/v1/commands/cancel")
