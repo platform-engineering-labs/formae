@@ -219,6 +219,43 @@ func TestRenderSimulation_Replacement_ShowsReason(t *testing.T) {
 	// TestFormatHumanReadableStatus_Replacement which does not carry the field.
 }
 
+func TestRenderSimulation_AllNoOpPatch_NoEmptyBlock(t *testing.T) {
+	// The only patch op is a force-resent (requiredOnUpdate) field whose value
+	// is unchanged. The renderer suppresses it, so there is nothing to put
+	// inside a "by doing the following:" block — and the block must not appear
+	// empty.
+	patchDoc := json.RawMessage(`[{"op":"add","path":"/LoginProfile/Password","value":"samepass"}]`)
+	props := json.RawMessage(`{"LoginProfile":{"Password":"samepass"}}`)
+
+	simulation := apimodel.Simulation{
+		ChangesRequired: true,
+		Command: apimodel.Command{
+			CommandID: "test-noop-block",
+			Command:   "apply",
+			ResourceUpdates: []apimodel.ResourceUpdate{
+				{
+					ResourceID:    util.NewID(),
+					ResourceType:  "FakeAWS::IAM::User",
+					ResourceLabel: "my-user",
+					StackName:     "test-stack",
+					Operation:     "update",
+					State:         "NotStarted",
+					Properties:    props,
+					OldProperties: props,
+					PatchDocument: patchDoc,
+				},
+			},
+		},
+	}
+
+	result, err := RenderSimulation(&simulation)
+	assert.NoError(t, err)
+	result = stripAnsiCodes(t, result)
+
+	assert.Contains(t, result, "update resource my-user")
+	assert.NotContains(t, result, "by doing the following:")
+}
+
 func TestFormatHumanReadableStatus_UnmanagedMigration(t *testing.T) {
 	status := apimodel.Command{
 		CommandID: "test-unmanaged-id",

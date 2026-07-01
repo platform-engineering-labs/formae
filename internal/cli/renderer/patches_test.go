@@ -165,7 +165,7 @@ func TestFormatPropertyChange_OpaqueAdd(t *testing.T) {
 
 		result := formatPropertyChange(change)
 
-		assert.Contains(t, result, `set property "SecretString" (opaque value)`)
+		assert.Contains(t, result, `change property "SecretString" (opaque value changed)`)
 		assert.NotContains(t, result, "L4clqcm50IFl")
 	})
 
@@ -198,8 +198,26 @@ func TestFormatPropertyChange_OpaqueAdd(t *testing.T) {
 	})
 }
 
-func TestFormatPropertyChange_WriteOnlyAdd(t *testing.T) {
-	t.Run("write-only add on existing resource shows set with write-only", func(t *testing.T) {
+func TestFormatPropertyChange_ForceResentField(t *testing.T) {
+	t.Run("changed force-resent scalar shows the new value only, never the old secret", func(t *testing.T) {
+		change := PropertyChange{
+			Path:             "LoginProfile.Password",
+			Value:            "newpass",
+			OldValue:         "oldpass",
+			HasOld:           true,
+			Operation:        "add",
+			ExistsInPrevious: true,
+		}
+
+		result := formatPropertyChange(change)
+
+		assert.Contains(t, result, `change property "LoginProfile.Password" to "newpass"`)
+		assert.NotContains(t, result, "oldpass")
+		assert.NotContains(t, result, "write-only")
+		assert.NotContains(t, result, "add new property")
+	})
+
+	t.Run("force-resent scalar with no known previous renders as a plain change", func(t *testing.T) {
 		change := PropertyChange{
 			Path:             "LoginProfile.Password",
 			Value:            "newpass",
@@ -209,11 +227,11 @@ func TestFormatPropertyChange_WriteOnlyAdd(t *testing.T) {
 
 		result := formatPropertyChange(change)
 
-		assert.Contains(t, result, `set property "LoginProfile.Password" to "newpass" (write-only)`)
-		assert.NotContains(t, result, "add new property")
+		assert.Contains(t, result, `change property "LoginProfile.Password" to "newpass"`)
+		assert.NotContains(t, result, "write-only")
 	})
 
-	t.Run("write-only add array entry on existing resource shows set with write-only", func(t *testing.T) {
+	t.Run("force-resent array entry renders as a change, no write-only jargon", func(t *testing.T) {
 		change := PropertyChange{
 			Path:             "Tokens[0]",
 			Value:            "tok-123",
@@ -223,7 +241,87 @@ func TestFormatPropertyChange_WriteOnlyAdd(t *testing.T) {
 
 		result := formatPropertyChange(change)
 
-		assert.Contains(t, result, `set entry "tok-123" in "Tokens" (write-only)`)
+		assert.Contains(t, result, `change entry "tok-123" in "Tokens"`)
+		assert.NotContains(t, result, "write-only")
+	})
+}
+
+func TestExtractPropertyChange_ForceResentNoOp(t *testing.T) {
+	prev := json.RawMessage(`{"LoginProfile":{"Password":"samepass"}}`)
+
+	t.Run("unchanged force-resend is marked NoOp", func(t *testing.T) {
+		patch := patchOperation{Op: "add", Path: "/LoginProfile/Password", Value: "samepass"}
+		change, err := extractPropertyChange(patch, map[string]any{}, prev, nil)
+		assert.NoError(t, err)
+		assert.True(t, change.NoOp, "an add whose value equals the previous value is a no-op force-resend")
+	})
+
+	t.Run("changed force-resend is not NoOp and carries the previous value", func(t *testing.T) {
+		patch := patchOperation{Op: "add", Path: "/LoginProfile/Password", Value: "newpass"}
+		change, err := extractPropertyChange(patch, map[string]any{}, prev, nil)
+		assert.NoError(t, err)
+		assert.False(t, change.NoOp)
+		assert.True(t, change.HasOld)
+	})
+
+	t.Run("type-changing re-send is not a NoOp (string vs number)", func(t *testing.T) {
+		// A rendered-string compare collapses the string "8080" and the number
+		// 8080 to the same text and would wrongly suppress this real change.
+		typed := json.RawMessage(`{"Port":"8080"}`)
+		patch := patchOperation{Op: "add", Path: "/Port", Value: float64(8080)}
+		change, err := extractPropertyChange(patch, map[string]any{}, typed, nil)
+		assert.NoError(t, err)
+		assert.False(t, change.NoOp, "a string->number re-send is a real change, not a no-op")
+	})
+
+	t.Run("unchanged opaque re-send is a NoOp (unwrap $value)", func(t *testing.T) {
+		opaque := json.RawMessage(`{"SecretString":{"$value":"sekret","$visibility":"Opaque"}}`)
+		patch := patchOperation{Op: "add", Path: "/SecretString", Value: "sekret"}
+		change, err := extractPropertyChange(patch, map[string]any{}, opaque, nil)
+		assert.NoError(t, err)
+		assert.True(t, change.NoOp, "an opaque re-send whose underlying value is unchanged is a no-op")
+	})
+
+	t.Run("changed opaque re-send is not a NoOp", func(t *testing.T) {
+		opaque := json.RawMessage(`{"SecretString":{"$value":"old","$visibility":"Opaque"}}`)
+		patch := patchOperation{Op: "add", Path: "/SecretString", Value: "new"}
+		change, err := extractPropertyChange(patch, map[string]any{}, opaque, nil)
+		assert.NoError(t, err)
+		assert.False(t, change.NoOp)
+	})
+}
+
+func TestHasVisibleChanges(t *testing.T) {
+	refLabels := map[string]string{}
+
+	t.Run("all-NoOp force-resend patch has no visible changes", func(t *testing.T) {
+		patchDoc := json.RawMessage(`[{"op":"add","path":"/LoginProfile/Password","value":"samepass"}]`)
+		prev := json.RawMessage(`{"LoginProfile":{"Password":"samepass"}}`)
+		assert.False(t, HasVisibleChanges(patchDoc, json.RawMessage("{}"), prev, refLabels))
+	})
+
+	t.Run("a real property change is visible", func(t *testing.T) {
+		patchDoc := json.RawMessage(`[{"op":"add","path":"/LoginProfile/Password","value":"newpass"}]`)
+		prev := json.RawMessage(`{"LoginProfile":{"Password":"oldpass"}}`)
+		assert.True(t, HasVisibleChanges(patchDoc, json.RawMessage("{}"), prev, refLabels))
+	})
+
+	t.Run("a tag change is visible", func(t *testing.T) {
+		patchDoc := json.RawMessage(`[{"op":"add","path":"/Tags/0","value":{"Key":"k","Value":"v"}}]`)
+		assert.True(t, HasVisibleChanges(patchDoc, json.RawMessage("{}"), json.RawMessage("{}"), refLabels))
+	})
+
+	t.Run("empty patch has no visible changes", func(t *testing.T) {
+		assert.False(t, HasVisibleChanges(json.RawMessage("[]"), json.RawMessage("{}"), json.RawMessage("{}"), refLabels))
+	})
+
+	t.Run("a NoOp re-send alongside a real change is still visible", func(t *testing.T) {
+		patchDoc := json.RawMessage(`[
+			{"op":"add","path":"/LoginProfile/Password","value":"samepass"},
+			{"op":"replace","path":"/Description","value":"new"}
+		]`)
+		prev := json.RawMessage(`{"LoginProfile":{"Password":"samepass"},"Description":"old"}`)
+		assert.True(t, HasVisibleChanges(patchDoc, json.RawMessage("{}"), prev, refLabels))
 	})
 }
 
@@ -276,8 +374,8 @@ func TestFormatPatchDocument_OpaqueWriteOnlyField(t *testing.T) {
 		assert.NoError(t, err)
 
 		assert.Len(t, nodes, 2)
-		assert.Contains(t, nodes[1].Name(), "opaque value")
-		assert.Contains(t, nodes[1].Name(), `set property "SecretString"`)
+		assert.Contains(t, nodes[1].Name(), "opaque value changed")
+		assert.Contains(t, nodes[1].Name(), `change property "SecretString"`)
 		assert.NotContains(t, nodes[1].Name(), "L4clqcm50IFl")
 	})
 }
