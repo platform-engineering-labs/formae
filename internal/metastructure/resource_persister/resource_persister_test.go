@@ -1101,6 +1101,113 @@ func TestResourcePersister_ReadPreservesCurrentStack(t *testing.T) {
 	assert.Empty(t, unmanagedResources, "Resource should not appear in $unmanaged stack")
 }
 
+// TestResourcePersister_ReadDoesNotResurrectResourceWhoseTargetIsGone covers the
+// resurrection race: a sync/discovery Read snapshotted before a target was deleted
+// can land at the persister afterwards with live properties. Because the target's
+// unmanaged resources are tombstoned when the target is deleted, the current row is
+// absent — and the persister must not re-create it against a target that no longer
+// exists. Here the target was never created (stands in for "already deleted"), so
+// the successful Read must be dropped and the $unmanaged stack must stay empty.
+func TestResourcePersister_ReadDoesNotResurrectResourceWhoseTargetIsGone(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+
+	syncUpdate := resource_update.ResourceUpdate{
+		DesiredState: pkgmodel.Resource{
+			Label:      "orphan-bucket",
+			Type:       "FakeAWS::S3::Bucket",
+			Properties: json.RawMessage(`{"BucketName":"orphan-bucket"}`),
+			Stack:      "$unmanaged",
+			Target:     "gone-target",
+			Ksuid:      util.NewID(),
+			NativeID:   "native-orphan",
+			Managed:    false,
+		},
+		ResourceTarget: pkgmodel.Target{Label: "gone-target", Namespace: "aws"},
+		State:          resource_update.ResourceUpdateStateSuccess,
+		StackLabel:     "$unmanaged",
+		ProgressResult: []plugin.TrackedProgress{
+			{
+				ProgressResult: resource.ProgressResult{
+					Operation:          resource.OperationRead,
+					OperationStatus:    resource.OperationStatusSuccess,
+					NativeID:           "native-orphan",
+					ResourceProperties: json.RawMessage(`{"BucketName":"orphan-bucket"}`),
+				},
+				ResourceType: "FakeAWS::S3::Bucket",
+				StartTs:      util.TimeNow(),
+				ModifiedTs:   util.TimeNow(),
+			},
+		},
+	}
+
+	readResult := persister.Call(sender, resource_update.PersistResourceUpdate{
+		CommandID:         "sync-cmd",
+		ResourceOperation: resource_update.OperationRead,
+		PluginOperation:   resource.OperationRead,
+		ResourceUpdate:    syncUpdate,
+	})
+	require.NoError(t, readResult.Error)
+
+	unmanaged, err := ds.LoadResourcesByStack("$unmanaged")
+	require.NoError(t, err)
+	assert.Empty(t, unmanaged, "a read must not resurrect an unmanaged resource whose target has been deleted")
+}
+
+// TestResourcePersister_ReadCreatesNewlyDiscoveredResourceWhenTargetExists is the
+// companion to the guard above: when the target still exists, a Read with no current
+// row is a legitimate newly-discovered resource and must be stored. This ensures the
+// target-existence guard does not suppress ordinary discovery.
+func TestResourcePersister_ReadCreatesNewlyDiscoveredResourceWhenTargetExists(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+
+	_, err = ds.CreateTarget(&pkgmodel.Target{Label: "live-target", Namespace: "aws"})
+	require.NoError(t, err)
+
+	syncUpdate := resource_update.ResourceUpdate{
+		DesiredState: pkgmodel.Resource{
+			Label:      "discovered-bucket",
+			Type:       "FakeAWS::S3::Bucket",
+			Properties: json.RawMessage(`{"BucketName":"discovered-bucket"}`),
+			Stack:      "$unmanaged",
+			Target:     "live-target",
+			Ksuid:      util.NewID(),
+			NativeID:   "native-discovered",
+			Managed:    false,
+		},
+		ResourceTarget: pkgmodel.Target{Label: "live-target", Namespace: "aws"},
+		State:          resource_update.ResourceUpdateStateSuccess,
+		StackLabel:     "$unmanaged",
+		ProgressResult: []plugin.TrackedProgress{
+			{
+				ProgressResult: resource.ProgressResult{
+					Operation:          resource.OperationRead,
+					OperationStatus:    resource.OperationStatusSuccess,
+					NativeID:           "native-discovered",
+					ResourceProperties: json.RawMessage(`{"BucketName":"discovered-bucket"}`),
+				},
+				ResourceType: "FakeAWS::S3::Bucket",
+				StartTs:      util.TimeNow(),
+				ModifiedTs:   util.TimeNow(),
+			},
+		},
+	}
+
+	readResult := persister.Call(sender, resource_update.PersistResourceUpdate{
+		CommandID:         "sync-cmd",
+		ResourceOperation: resource_update.OperationRead,
+		PluginOperation:   resource.OperationRead,
+		ResourceUpdate:    syncUpdate,
+	})
+	require.NoError(t, readResult.Error)
+
+	unmanaged, err := ds.LoadResourcesByStack("$unmanaged")
+	require.NoError(t, err)
+	require.Len(t, unmanaged, 1, "a newly-discovered resource on an existing target should be stored")
+	assert.Equal(t, "discovered-bucket", unmanaged[0].Label)
+}
+
 func TestResourcePersister_CleanupEmptyStacks(t *testing.T) {
 	persister, sender, ds, err := newResourcePersisterForTest(t)
 	assert.NoError(t, err)
