@@ -235,8 +235,9 @@ type AgentConfig struct {
 }
 
 type APIConfig struct {
-	URL  string
-	Port int
+	URL                string
+	Port               int
+	InsecureSkipVerify bool
 }
 
 // RepositoryType discriminates orbital repositories by purpose.

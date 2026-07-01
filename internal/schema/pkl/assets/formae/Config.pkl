@@ -262,6 +262,11 @@ class ApiConfig {
     url: String = "http://localhost"
 
     port: Port = 49684
+
+    /// Skip TLS certificate verification when talking to the agent. Opt-in and off
+    /// by default. Use only for an agent fronted by a self-signed certificate whose
+    /// SAN cannot be matched ahead of time (e.g. a load balancer's generated FQDN).
+    insecureSkipVerify: Boolean = false
 }
 
 class Repository {
