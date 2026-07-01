@@ -73,11 +73,10 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           PLUGINS=(
-            "platform-engineering-labs/formae-plugin-azure"
             "platform-engineering-labs/formae-plugin-aws"
+            "platform-engineering-labs/formae-plugin-azure"
             "platform-engineering-labs/formae-plugin-gcp"
-            "platform-engineering-labs/formae-plugin-oci"
-            "platform-engineering-labs/formae-plugin-ovh"
+            "platform-engineering-labs/formae-plugin-kubernetes"
           )
           echo "Checking last nightly run for each plugin..."
           FAILED=""
