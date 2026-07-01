@@ -13,6 +13,7 @@ import (
 	"ergo.services/ergo/act"
 	"ergo.services/ergo/gen"
 
+	"github.com/platform-engineering-labs/formae/internal/constants"
 	"github.com/platform-engineering-labs/formae/internal/datastore"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/discovery"
@@ -378,6 +379,33 @@ func (rp *ResourcePersister) processResourceUpdate(commandID string, rc resource
 			}
 
 			if currentResource == nil {
+				// A successful Read with no current row would (re)create the resource.
+				// Guard against resurrecting a resource whose target has since been
+				// deleted: a target delete tombstones the target's unmanaged resources
+				// (see forgetUnmanagedResourcesOnTarget), but a sync/discovery Read
+				// snapshotted before that delete can land here afterwards with live
+				// properties. Storing it would orphan an $unmanaged row pointing at a
+				// target that no longer exists. If the target is gone, the absent row is
+				// the intended end state — leave it tombstoned. When the target still
+				// exists this is a legitimate newly-discovered resource, so store it.
+				// (LoadTarget and any DeleteTarget are serialized through this actor's
+				// mailbox, so there is no check-then-act race here.)
+				target, targetErr := rp.datastore.LoadTarget(rc.DesiredState.Target)
+				if targetErr != nil {
+					slog.Error("Failed to load target while persisting read resource",
+						"resourceLabel", rc.DesiredState.Label,
+						"target", rc.DesiredState.Target,
+						"error", targetErr)
+					return "", fmt.Errorf("failed to load target %s for resource %s: %w", rc.DesiredState.Target, rc.DesiredState.Label, targetErr)
+				}
+				if target == nil {
+					slog.Debug("Skipping read persist for resource whose target no longer exists",
+						"resourceLabel", rc.DesiredState.Label,
+						"target", rc.DesiredState.Target,
+						"stackLabel", stackLabel)
+					return "", nil
+				}
+
 				slog.Debug("Resource not found, creating new one",
 					"resourceLabel", rc.DesiredState.Label,
 					"stackLabel", stackLabel)
@@ -467,7 +495,7 @@ func (rp *ResourcePersister) persistTargetUpdates(updates []target_update.Target
 	versions := make([]string, 0, len(updates))
 	for i := range updates {
 		rp.Log().Debug("Persisting target update index=%d label=%s", i, updates[i].Target.Label)
-		if err := rp.persistTargetUpdate(&updates[i]); err != nil {
+		if err := rp.persistTargetUpdate(&updates[i], commandID); err != nil {
 			rp.Log().Error("Failed to persist target update index=%d label=%s: %v", i, updates[i].Target.Label, err)
 			return nil, fmt.Errorf("failed to persist target update for %s: %w", updates[i].Target.Label, err)
 		}
@@ -479,7 +507,7 @@ func (rp *ResourcePersister) persistTargetUpdates(updates []target_update.Target
 	return versions, nil
 }
 
-func (rp *ResourcePersister) persistTargetUpdate(update *target_update.TargetUpdate) error {
+func (rp *ResourcePersister) persistTargetUpdate(update *target_update.TargetUpdate, commandID string) error {
 	var version string
 	var err error
 
@@ -502,7 +530,23 @@ func (rp *ResourcePersister) persistTargetUpdate(update *target_update.TargetUpd
 	case target_update.TargetOperationUpdate:
 		version, err = rp.datastore.UpdateTarget(&update.Target)
 	case target_update.TargetOperationDelete:
-		version, err = rp.datastore.DeleteTarget(update.Target.Label)
+		// Managed resources on this target are removed through the changeset
+		// cascade (ordered resource deletes that call the plugin). Unmanaged
+		// (discovered) resources are never part of a changeset, so deleting the
+		// target row would orphan them in the DB until a later sync tick tombstones
+		// them — and permanently if synchronization is disabled. Forget them here,
+		// before the target row is gone, so cleanup is immediate and independent of
+		// sync.
+		//
+		// Cleanup is not atomic with the target delete: a failure partway through
+		// leaves some unmanaged rows already tombstoned and the target still present
+		// (DeleteTarget only runs once cleanup returns nil). The error propagates so
+		// the target update is marked failed and retried, and the retry is safe —
+		// tombstoning is idempotent and the re-query only returns rows not yet
+		// tombstoned — so a retry converges rather than double-deleting.
+		if err = rp.forgetUnmanagedResourcesOnTarget(update.Target.Label, commandID); err == nil {
+			version, err = rp.datastore.DeleteTarget(update.Target.Label)
+		}
 	default:
 		err = fmt.Errorf("unknown target operation: %s", update.Operation)
 	}
@@ -541,6 +585,32 @@ func (rp *ResourcePersister) persistTargetUpdate(update *target_update.TargetUpd
 		}
 	}
 
+	return nil
+}
+
+// forgetUnmanagedResourcesOnTarget tombstones the unmanaged (discovered)
+// resources that belong to targetLabel. It is a DB-only forget: unmanaged
+// resources were only ever discovered, never managed by formae, so removing the
+// record never touches the cloud (mirroring the sync "NotFound" path). The query
+// is scoped strictly to the $unmanaged stack AND managed=false so a managed
+// resource is never DB-deleted here (managed resources go through the proper
+// cloud-delete cascade). DeleteResource appends a tombstone version, so a double
+// tombstone (e.g. if sync already ran) is a harmless no-op at the visible level.
+func (rp *ResourcePersister) forgetUnmanagedResourcesOnTarget(targetLabel, commandID string) error {
+	unmanaged, err := rp.datastore.QueryResources(&datastore.ResourceQuery{
+		Stack:   &datastore.QueryItem[string]{Item: constants.UnmanagedStack, Constraint: datastore.Required},
+		Managed: &datastore.QueryItem[bool]{Item: false, Constraint: datastore.Required},
+		Target:  &datastore.QueryItem[string]{Item: targetLabel, Constraint: datastore.Required},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to query unmanaged resources for deleted target %s: %w", targetLabel, err)
+	}
+
+	for _, res := range unmanaged {
+		if _, err := rp.datastore.DeleteResource(res, commandID); err != nil {
+			return fmt.Errorf("failed to forget unmanaged resource %s on deleted target %s: %w", res.Ksuid, targetLabel, err)
+		}
+	}
 	return nil
 }
 
