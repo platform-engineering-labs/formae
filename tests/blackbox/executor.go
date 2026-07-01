@@ -397,7 +397,7 @@ func (h *TestHarness) AssertAllInvariants(t *testing.T, model ...*StateModel) {
 	if len(model) > 0 && model[0] != nil {
 		ignoreManagedDriftNativeIDs = model[0].ManagedDriftNativeIDs()
 	}
-	resourceViolations := h.checkResourceInvariantsWithRetry(t, ignoreNativeIDs, ignoreManagedDriftNativeIDs)
+	resourceViolations := h.checkResourceInvariantsWithRetry(t, ignoreNativeIDs, ignoreManagedDriftNativeIDs, model...)
 	violations = append(violations, resourceViolations...)
 	if opLog, err := h.TryGetOperationLog(); err == nil {
 		violations = append(violations, CheckOperationLogInvariants(opLog)...)
@@ -414,19 +414,29 @@ func (h *TestHarness) AssertAllInvariants(t *testing.T, model ...*StateModel) {
 		if err == nil {
 			inventory = managedInventory
 		}
-		modelViolations := CheckModelVsInventory(model[0], inventory)
-		modelViolations = append(modelViolations, CheckUnmanagedModelVsInventory(model[0], unmanagedInventory)...)
-		modelViolations = append(modelViolations, CheckManagedDriftVsInventory(model[0], inventory)...)
-		if len(modelViolations) > 0 {
-			t.Logf("MODEL MISMATCH DEBUG: inventory has %d resources", len(inventory))
-			for _, res := range inventory {
-				t.Logf("  inventory: stack=%s label=%s type=%s nativeID=%s", res.Stack, res.Label, res.Type, res.NativeID)
+		// When IdentityOnlyInvariants is set the test is willing to live
+		// with the harness's State/Properties prediction drifting under
+		// chaos and only cares about rename-identity guarantees. Skip
+		// CheckModelVsInventory and the unmanaged + managed-drift checks
+		// that all depend on the same prediction; CheckInvariants
+		// (duplicate-NativeID) and CheckRenameInvariants (no-old-label-
+		// still-present + per-NativeID label drift) already fired in
+		// Phase 3 above.
+		if !model[0].IdentityOnlyInvariants {
+			modelViolations := CheckModelVsInventory(model[0], inventory)
+			modelViolations = append(modelViolations, CheckUnmanagedModelVsInventory(model[0], unmanagedInventory)...)
+			modelViolations = append(modelViolations, CheckManagedDriftVsInventory(model[0], inventory)...)
+			if len(modelViolations) > 0 {
+				t.Logf("MODEL MISMATCH DEBUG: inventory has %d resources", len(inventory))
+				for _, res := range inventory {
+					t.Logf("  inventory: stack=%s label=%s type=%s nativeID=%s", res.Stack, res.Label, res.Type, res.NativeID)
+				}
+				for _, v := range modelViolations {
+					t.Logf("  violation: %s", v.Message)
+				}
 			}
-			for _, v := range modelViolations {
-				t.Logf("  violation: %s", v.Message)
-			}
+			violations = append(violations, modelViolations...)
 		}
-		violations = append(violations, modelViolations...)
 	}
 
 	for _, v := range violations {
@@ -440,7 +450,7 @@ func (h *TestHarness) AssertAllInvariants(t *testing.T, model ...*StateModel) {
 // prior rapid iterations can create cloud resources after ResetAgentState;
 // these resolve themselves once the stale operations complete and the cloud
 // entries are cleaned. Genuine invariant bugs persist across retries.
-func (h *TestHarness) checkResourceInvariantsWithRetry(t *testing.T, ignoreNativeIDs map[string]bool, ignoreManagedDriftNativeIDs map[string]bool) []Violation {
+func (h *TestHarness) checkResourceInvariantsWithRetry(t *testing.T, ignoreNativeIDs map[string]bool, ignoreManagedDriftNativeIDs map[string]bool, model ...*StateModel) []Violation {
 	t.Helper()
 
 	const maxRetries = 3
@@ -464,6 +474,12 @@ func (h *TestHarness) checkResourceInvariantsWithRetry(t *testing.T, ignoreNativ
 			continue
 		}
 		resourceViolations := CheckInvariants(inventory, cloudState, ignoreNativeIDs, ignoreManagedDriftNativeIDs)
+		// RFC-0041: also assert rename invariants whenever the model has
+		// recorded a rename. The check is a no-op when no PreviousLabel is
+		// set anywhere; cheap to run unconditionally.
+		if len(model) > 0 && model[0] != nil {
+			resourceViolations = append(resourceViolations, CheckRenameInvariants(model[0], inventory)...)
+		}
 
 		if len(resourceViolations) == 0 {
 			return nil
@@ -766,15 +782,14 @@ func resolveResourceUpdateSlot(model *StateModel, pool *ResourcePool, ru apimode
 		return -1, -1
 	}
 
+	// Use LabelForResource so a slot renamed via OpRename matches against the
+	// resource update's current label rather than the slot's index-derived
+	// default. Without this a post-rename outcome (destroy of renamed-X,
+	// update on renamed-X, etc.) never finds its slot and the model fails to
+	// transition.
 	slotIdx := -1
 	for idx := range model.Stack(stackIdx).Resources {
-		var label string
-		if pool != nil {
-			label = pool.LabelForStack(model.Stack(stackIdx).Label, idx)
-		} else {
-			label = resourceLabelForStack(model.Stack(stackIdx).Label, idx)
-		}
-		if label == ru.ResourceLabel {
+		if model.LabelForResource(stackIdx, idx) == ru.ResourceLabel {
 			slotIdx = idx
 			break
 		}
@@ -961,11 +976,32 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 			}
 			if snap, ok := snapBySlot[key]; ok {
 				res := model.Resource(stackIdx, slotIdx)
-				if res != nil && (res.State != snap.State || res.Properties != snap.Properties) {
+				if res != nil && (res.State != snap.State || res.Properties != snap.Properties || res.CurrentLabel != snap.CurrentLabel || res.PreviousLabel != snap.PreviousLabel) {
 					t.Logf("correctModelFromCommandOutcome: reverting stack=%s slot=%d from %v to %v (ru.State=%s, op=%s)",
 						model.Stack(stackIdx).Label, slotIdx, res.State, snap.State, ru.State, ru.Operation)
 					res.State = snap.State
 					res.Properties = snap.Properties
+					res.CurrentLabel = snap.CurrentLabel
+					res.PreviousLabel = snap.PreviousLabel
+				}
+				// Drift overlay on the revert: the snapshot captured the slot's
+				// state at command-submit time, but OOB cloud operations
+				// (CloudDelete / CloudModify) may have changed cloud reality
+				// in the meantime. ManagedDriftedResources is keyed by
+				// NativeID; if there's a pending-sync entry showing the cloud
+				// row gone, the slot must land on NotExist on revert so the
+				// later sync-from-cloud doesn't leave model.expected stuck at
+				// Exists for a row inventory will eventually drop.
+				if res != nil && res.State == StateExists {
+					if nativeID := model.GetNativeID(stackIdx, slotIdx); nativeID != "" {
+						if drift, ok := model.ManagedDriftedResources[nativeID]; ok && drift.PendingSync && !drift.PresentInCloud {
+							t.Logf("correctModelFromCommandOutcome: forcing stack=%s slot=%d → NotExist after OOB-delete drift (nativeID=%s, ru.State=%s, op=%s)",
+								model.Stack(stackIdx).Label, slotIdx, nativeID, ru.State, ru.Operation)
+							res.State = StateNotExist
+							res.Properties = ""
+							model.ClearNativeID(stackIdx, slotIdx)
+						}
+					}
 				}
 			} else {
 				// No snapshot — derive from operation semantics.
@@ -1089,12 +1125,42 @@ func (h *TestHarness) executeApply(t *testing.T, op *Operation, model *StateMode
 	}
 
 	stackLabel := model.Stack(op.StackIndex).Label
+	overrides := model.LabelOverrides(op.StackIndex)
 	var forma *pkgmodel.Forma
 	if model.Pool != nil {
-		forma = FormaFromPoolResources(model.Pool, stackLabel, model.ProviderStackLabel, op.ResourceIDs, op.Properties, op.ChildProperties)
+		forma = FormaFromPoolResources(model.Pool, stackLabel, model.ProviderStackLabel, op.ResourceIDs, op.Properties, op.ChildProperties, overrides)
 	} else {
-		forma = FormaFromStackResources(stackLabel, op.ResourceIDs, op.Properties)
+		forma = FormaFromStackResources(stackLabel, op.ResourceIDs, overrides, op.Properties)
 	}
+
+	// RFC-0041: optional rename overlay. The generator sets RenameSlotIndex
+	// when this apply should also rename one slot. Honoured only if the
+	// slot is currently StateExists — for a not-yet-existing slot a rename
+	// is meaningless (the apply will create it, no alias needed). When
+	// honoured, the forma resource at that slot has its Label flipped to
+	// RenameNewLabel and Alias set to the slot's current label; everything
+	// downstream (RecordRename on success, snapshot revert on failure)
+	// flows through the standard apply path so an Update can model
+	// label-only, property-only, or both depending on whether the
+	// Properties template also changed.
+	performRename := false
+	var renameOldLabel string
+	if op.RenameSlotIndex >= 0 && op.RenameNewLabel != "" {
+		if res := model.Resource(op.StackIndex, op.RenameSlotIndex); res != nil && res.State == StateExists {
+			renameOldLabel = model.LabelForSlot(op.StackIndex, op.RenameSlotIndex)
+			if renameOldLabel != "" && renameOldLabel != op.RenameNewLabel {
+				for i := range forma.Resources {
+					if forma.Resources[i].Stack == stackLabel && forma.Resources[i].Label == renameOldLabel {
+						forma.Resources[i].Label = op.RenameNewLabel
+						forma.Resources[i].Alias = renameOldLabel
+						performRename = true
+						break
+					}
+				}
+			}
+		}
+	}
+
 	// Program response sequences before submitting the command.
 	var programmedSeqs []testcontrol.PluginOpSequence
 	if op.DrawnOutcomes != nil {
@@ -1173,7 +1239,13 @@ func (h *TestHarness) executeApply(t *testing.T, op *Operation, model *StateMode
 		model.SaveLastReconcile(op.StackIndex, op.ResourceIDs, resolvedProps)
 	}
 	model.TrackAcceptedCommand(commandID, snapshots, requestedSlotRefs(op.StackIndex, op.ResourceIDs), h.currentOperationLogSize(t), mode == pkgmodel.FormaApplyModeReconcile)
-	t.Logf("[op %d] Apply (%s) stack=%s resources %v → accepted, model updated (success=%v)", op.SequenceNum, op.ApplyMode, stackLabel, op.ResourceIDs, successIDs)
+	if performRename {
+		model.RecordRename(op.StackIndex, op.RenameSlotIndex, op.RenameNewLabel)
+		t.Logf("[op %d] Apply (%s) stack=%s resources %v → accepted, model updated (success=%v) + rename slot=%d %q → %q",
+			op.SequenceNum, op.ApplyMode, stackLabel, op.ResourceIDs, successIDs, op.RenameSlotIndex, renameOldLabel, op.RenameNewLabel)
+	} else {
+		t.Logf("[op %d] Apply (%s) stack=%s resources %v → accepted, model updated (success=%v)", op.SequenceNum, op.ApplyMode, stackLabel, op.ResourceIDs, successIDs)
+	}
 }
 
 func (h *TestHarness) executeDestroy(t *testing.T, op *Operation, model *StateModel) {
@@ -1209,7 +1281,7 @@ func (h *TestHarness) executeDestroy(t *testing.T, op *Operation, model *StateMo
 func (h *TestHarness) executeDestroyDefault(t *testing.T, op *Operation, model *StateModel, stackLabel string, existingIDs []int) {
 	t.Helper()
 
-	forma := FormaFromStackResources(stackLabel, existingIDs)
+	forma := FormaFromStackResources(stackLabel, existingIDs, model.LabelOverrides(op.StackIndex))
 
 	// Program response sequences before submitting the command.
 	var programmedSeqs []testcontrol.PluginOpSequence
@@ -1269,7 +1341,7 @@ func (h *TestHarness) executeDestroyAbort(t *testing.T, op *Operation, model *St
 		}
 	}
 
-	forma := FormaFromPoolResources(model.Pool, stackLabel, model.ProviderStackLabel, existingIDs, defaultDestroyParentProps, defaultDestroyChildProps)
+	forma := FormaFromPoolResources(model.Pool, stackLabel, model.ProviderStackLabel, existingIDs, defaultDestroyParentProps, defaultDestroyChildProps, model.LabelOverrides(op.StackIndex))
 
 	if hasDependents {
 		// Simulate to check whether the agent would create cascade deletes.
@@ -1342,7 +1414,7 @@ func (h *TestHarness) executeDestroyAbort(t *testing.T, op *Operation, model *St
 func (h *TestHarness) executeDestroyCascade(t *testing.T, op *Operation, model *StateModel, stackLabel string, existingIDs []int) {
 	t.Helper()
 
-	forma := FormaFromPoolResources(model.Pool, stackLabel, model.ProviderStackLabel, existingIDs, defaultDestroyParentProps, defaultDestroyChildProps)
+	forma := FormaFromPoolResources(model.Pool, stackLabel, model.ProviderStackLabel, existingIDs, defaultDestroyParentProps, defaultDestroyChildProps, model.LabelOverrides(op.StackIndex))
 
 	// Program response sequences before submitting the command.
 	var programmedSeqs []testcontrol.PluginOpSequence
@@ -2076,7 +2148,7 @@ func (h *TestHarness) SetupStacks(t *testing.T, model *StateModel, config Proper
 		stackLabel := model.Stack(stackIdx).Label
 		ids := []int{0} // just the first resource
 
-		forma := FormaFromStackResources(stackLabel, ids)
+		forma := FormaFromStackResources(stackLabel, ids, nil)
 		resp, err := h.client.ApplyForma(forma, pkgmodel.FormaApplyModeReconcile, false, clientID, false)
 		if err != nil {
 			t.Logf("SetupStacks: stack %s apply rejected: %v", stackLabel, err)
@@ -2344,13 +2416,19 @@ func (h *TestHarness) dumpRawResourceRows(t *testing.T, resources []pkgmodel.Res
 // FormaFromResourceIDs builds a forma containing the resources at the given
 // pool indices on the default stack. Used by smoke tests and ResetAgentState.
 func FormaFromResourceIDs(ids []int) *pkgmodel.Forma {
-	return FormaFromStackResources("default", ids)
+	return FormaFromStackResources("default", ids, nil)
 }
 
 // FormaFromStackResources builds a forma containing the resources at the given
 // pool indices on the specified stack, using the given properties template.
 // The "NAME" placeholder in propsTemplate is replaced with each resource's label.
-func FormaFromStackResources(stackLabel string, ids []int, propsTemplate ...string) *pkgmodel.Forma {
+// FormaFromStackResources builds a forma containing the resources at the given
+// slot indices. labelOverrides, if non-nil, maps slot index -> custom label;
+// for slots present in the map, the override is used instead of the default
+// index-derived label. Used to support OpRename: after a rename, the slot's
+// label override flows into subsequent applies so the renamed resource is
+// addressed by its new label.
+func FormaFromStackResources(stackLabel string, ids []int, labelOverrides map[int]string, propsTemplate ...string) *pkgmodel.Forma {
 	template := `{"Name":"NAME","Value":"v1","SetTags":[],"EntityTags":[],"OrderedItems":[]}`
 	if len(propsTemplate) > 0 && propsTemplate[0] != "" {
 		template = propsTemplate[0]
@@ -2359,6 +2437,9 @@ func FormaFromStackResources(stackLabel string, ids []int, propsTemplate ...stri
 	resources := make([]pkgmodel.Resource, len(ids))
 	for i, id := range ids {
 		name := resourceLabelForStack(stackLabel, id)
+		if override, ok := labelOverrides[id]; ok && override != "" {
+			name = override
+		}
 		props := strings.Replace(template, `"NAME"`, `"`+name+`"`, 1)
 		resources[i] = pkgmodel.Resource{
 			Label:      name,
@@ -2389,14 +2470,19 @@ func FormaFromStackResources(stackLabel string, ids []int, propsTemplate ...stri
 // types, schemas, and resolvable ParentId references for child/grandchild slots.
 // parentProps is the properties template for Test::Generic::Resource (with "NAME" placeholder).
 // childProps is the properties template for child/grandchild types (with "NAME" and "PARENT_ID" placeholders).
+// labelOverrides, if non-nil, maps slot index -> custom label and takes priority
+// over the pool's default LabelForStack derivation. Used by OpRename.
 func FormaFromPoolResources(pool *ResourcePool, stackLabel string, providerStackLabel string, ids []int,
-	parentProps string, childProps string) *pkgmodel.Forma {
+	parentProps string, childProps string, labelOverrides map[int]string) *pkgmodel.Forma {
 
 	resources := make([]pkgmodel.Resource, 0, len(ids))
 
 	for _, idx := range ids {
 		slot := pool.Slots[idx]
 		label := pool.LabelForStack(stackLabel, idx)
+		if override, ok := labelOverrides[idx]; ok && override != "" {
+			label = override
+		}
 
 		switch {
 		case pool.IsParent(idx):
@@ -2743,11 +2829,12 @@ func (h *TestHarness) executeSetTTLPolicy(t *testing.T, op *Operation, model *St
 	policy := json.RawMessage(fmt.Sprintf(`{"Type":"ttl","TTLSeconds":%d,"OnDependents":"cascade"}`, ttlSeconds))
 
 	var forma *pkgmodel.Forma
+	overrides := model.LabelOverrides(model.StackIndexByLabel(stackLabel))
 	if model.Pool != nil {
 		forma = FormaFromPoolResources(model.Pool, stackLabel, model.ProviderStackLabel, existingIDs,
-			resourceProperties(stackLabel, existingIDs), defaultDestroyChildProps)
+			resourceProperties(stackLabel, existingIDs), defaultDestroyChildProps, overrides)
 	} else {
-		forma = FormaFromStackResources(stackLabel, existingIDs, resourceProperties(stackLabel, existingIDs))
+		forma = FormaFromStackResources(stackLabel, existingIDs, overrides, resourceProperties(stackLabel, existingIDs))
 	}
 	for i := range forma.Stacks {
 		if forma.Stacks[i].Label == stackLabel {
@@ -2852,3 +2939,4 @@ func (h *TestHarness) executeCheckTTL(t *testing.T, op *Operation, model *StateM
 		t.Logf("[op %d] CheckTTL stack=%s command %s → accepted, model updated (destroyed all)", op.SequenceNum, expiredLabel, commandID)
 	}
 }
+
