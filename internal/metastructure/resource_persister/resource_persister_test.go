@@ -1383,3 +1383,343 @@ func newTestDatastore() (datastore.Datastore, error) {
 
 	return ds, nil
 }
+
+// syncReadUpdate constructs a ResourceUpdate for a OperationRead/OperationRead call,
+// seeding DesiredState with the supplied properties and readOnly properties.
+func syncReadUpdate(ksuid string, props, readOnlyProps json.RawMessage, matchFilters []pkgmodel.MatchFilter) resource_update.ResourceUpdate {
+	return resource_update.ResourceUpdate{
+		DesiredState: pkgmodel.Resource{
+			Label:              "discovered-resource",
+			Type:               "FakeAWS::EC2::Instance",
+			NativeID:           "i-abc123",
+			Properties:         props,
+			ReadOnlyProperties: readOnlyProps,
+			Stack:              "$unmanaged",
+			Target:             "test-target",
+			Ksuid:              ksuid,
+			Managed:            false,
+		},
+		ResourceTarget: pkgmodel.Target{
+			Label:     "test-target",
+			Namespace: "aws",
+		},
+		State:        resource_update.ResourceUpdateStateSuccess,
+		StackLabel:   "$unmanaged",
+		MatchFilters: matchFilters,
+		ProgressResult: []plugin.TrackedProgress{
+			{
+				ProgressResult: resource.ProgressResult{
+					Operation:          resource.OperationRead,
+					OperationStatus:    resource.OperationStatusSuccess,
+					NativeID:           "i-abc123",
+					ResourceProperties: props,
+				},
+				ResourceType: "FakeAWS::EC2::Instance",
+				StartTs:      util.TimeNow(),
+				ModifiedTs:   util.TimeNow(),
+			},
+		},
+	}
+}
+
+// seedUnmanagedRow stores an unmanaged resource row directly into the datastore, bypassing the actor.
+// It is used to set up the "existing row" that processResourceUpdate will load before deciding
+// whether to evict or persist.
+func seedUnmanagedRow(t *testing.T, ds datastore.Datastore, ksuid string, props json.RawMessage, managed bool) {
+	t.Helper()
+	_, err := ds.StoreResource(&pkgmodel.Resource{
+		Label:    "discovered-resource",
+		Type:     "FakeAWS::EC2::Instance",
+		NativeID: "i-abc123",
+		Properties: props,
+		Stack:    "$unmanaged",
+		Target:   "test-target",
+		Ksuid:    ksuid,
+		Managed:  managed,
+	}, "seed-cmd")
+	require.NoError(t, err)
+}
+
+// TestResourcePersister_SyncRead_EvictsUnmanagedRowMatchingFilter covers the primary
+// eviction path: an existing unmanaged row whose freshly-read cloud state matches a
+// discovery filter is tombstoned (DB-only, no cloud mutation).
+func TestResourcePersister_SyncRead_EvictsUnmanagedRowMatchingFilter(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+
+	_, err = ds.CreateTarget(&pkgmodel.Target{Label: "test-target", Namespace: "aws"})
+	require.NoError(t, err)
+
+	ksuid := util.NewID()
+	props := json.RawMessage(`{"Name":"filtered-instance","SkipMe":"yes"}`)
+	seedUnmanagedRow(t, ds, ksuid, props, false /* unmanaged */)
+
+	filter := pkgmodel.MatchFilter{
+		ResourceTypes: []string{"FakeAWS::EC2::Instance"},
+		Conditions: []pkgmodel.FilterCondition{
+			{PropertyPath: "$.SkipMe", PropertyValue: "yes"},
+		},
+	}
+	ru := syncReadUpdate(ksuid, props, nil, []pkgmodel.MatchFilter{filter})
+
+	result := persister.Call(sender, resource_update.PersistResourceUpdate{
+		CommandID:         "evict-cmd",
+		ResourceOperation: resource_update.OperationRead,
+		PluginOperation:   resource.OperationRead,
+		ResourceUpdate:    ru,
+	})
+	require.NoError(t, result.Error)
+
+	// Row must have been tombstoned (DeleteResource appends a delete version).
+	// LoadResourcesByStack filters out tombstoned URIs, making it the reliable
+	// way to confirm a row has been evicted.
+	remaining, loadErr := ds.LoadResourcesByStack("$unmanaged")
+	require.NoError(t, loadErr)
+	assert.Empty(t, remaining, "unmanaged row matching a filter must be evicted")
+}
+
+// TestResourcePersister_SyncRead_DoesNotEvictManagedRowMatchingFilter ensures that
+// a managed resource is never evicted by the filter check, even when its properties
+// match a discovery filter.
+func TestResourcePersister_SyncRead_DoesNotEvictManagedRowMatchingFilter(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+
+	_, err = ds.CreateTarget(&pkgmodel.Target{Label: "test-target", Namespace: "aws"})
+	require.NoError(t, err)
+
+	ksuid := util.NewID()
+	props := json.RawMessage(`{"SkipMe":"yes"}`)
+	seedUnmanagedRow(t, ds, ksuid, props, true /* managed */)
+
+	filter := pkgmodel.MatchFilter{
+		ResourceTypes: []string{"FakeAWS::EC2::Instance"},
+		Conditions: []pkgmodel.FilterCondition{
+			{PropertyPath: "$.SkipMe", PropertyValue: "yes"},
+		},
+	}
+	ru := syncReadUpdate(ksuid, props, nil, []pkgmodel.MatchFilter{filter})
+
+	result := persister.Call(sender, resource_update.PersistResourceUpdate{
+		CommandID:         "managed-cmd",
+		ResourceOperation: resource_update.OperationRead,
+		PluginOperation:   resource.OperationRead,
+		ResourceUpdate:    ru,
+	})
+	require.NoError(t, result.Error)
+
+	// Managed row must survive.
+	loaded, loadErr := ds.LoadResource(ru.DesiredState.URI())
+	require.NoError(t, loadErr)
+	assert.NotNil(t, loaded, "managed row must not be evicted even when properties match a filter")
+}
+
+// TestResourcePersister_SyncRead_DoesNotEvictNonMatchingUnmanagedRow verifies that an
+// unmanaged row whose properties do NOT match any filter falls through to the normal
+// persist path and is retained.
+func TestResourcePersister_SyncRead_DoesNotEvictNonMatchingUnmanagedRow(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+
+	_, err = ds.CreateTarget(&pkgmodel.Target{Label: "test-target", Namespace: "aws"})
+	require.NoError(t, err)
+
+	ksuid := util.NewID()
+	// Seed with old props; read returns new props that do NOT match the filter.
+	oldProps := json.RawMessage(`{"Name":"keeper"}`)
+	newProps := json.RawMessage(`{"Name":"keeper","Extra":"data"}`)
+	seedUnmanagedRow(t, ds, ksuid, oldProps, false /* unmanaged */)
+
+	filter := pkgmodel.MatchFilter{
+		ResourceTypes: []string{"FakeAWS::EC2::Instance"},
+		Conditions: []pkgmodel.FilterCondition{
+			{PropertyPath: "$.SkipMe", PropertyValue: "yes"},
+		},
+	}
+	ru := syncReadUpdate(ksuid, newProps, nil, []pkgmodel.MatchFilter{filter})
+
+	result := persister.Call(sender, resource_update.PersistResourceUpdate{
+		CommandID:         "keep-cmd",
+		ResourceOperation: resource_update.OperationRead,
+		PluginOperation:   resource.OperationRead,
+		ResourceUpdate:    ru,
+	})
+	require.NoError(t, result.Error)
+
+	// Row must still exist (updated or unchanged).
+	loaded, loadErr := ds.LoadResource(ru.DesiredState.URI())
+	require.NoError(t, loadErr)
+	assert.NotNil(t, loaded, "non-matching unmanaged row must not be evicted")
+}
+
+// TestResourcePersister_SyncRead_EvictsWhenPropsUnchangedButMatchFilter proves that the
+// filter eviction check runs BEFORE the JsonEqualRaw early-return: even when the
+// freshly-read properties are identical to the seeded row, the filter still fires and
+// the row is deleted.
+func TestResourcePersister_SyncRead_EvictsWhenPropsUnchangedButMatchFilter(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+
+	_, err = ds.CreateTarget(&pkgmodel.Target{Label: "test-target", Namespace: "aws"})
+	require.NoError(t, err)
+
+	ksuid := util.NewID()
+	// Seed and read with identical properties — JsonEqualRaw would normally skip persist.
+	props := json.RawMessage(`{"SkipMe":"yes"}`)
+	seedUnmanagedRow(t, ds, ksuid, props, false /* unmanaged */)
+
+	filter := pkgmodel.MatchFilter{
+		ResourceTypes: []string{"FakeAWS::EC2::Instance"},
+		Conditions: []pkgmodel.FilterCondition{
+			{PropertyPath: "$.SkipMe", PropertyValue: "yes"},
+		},
+	}
+	// Read returns the same props — no diff, but the filter still matches.
+	ru := syncReadUpdate(ksuid, props, nil, []pkgmodel.MatchFilter{filter})
+
+	result := persister.Call(sender, resource_update.PersistResourceUpdate{
+		CommandID:         "unchanged-evict-cmd",
+		ResourceOperation: resource_update.OperationRead,
+		PluginOperation:   resource.OperationRead,
+		ResourceUpdate:    ru,
+	})
+	require.NoError(t, result.Error)
+
+	remaining, loadErr := ds.LoadResourcesByStack("$unmanaged")
+	require.NoError(t, loadErr)
+	assert.Empty(t, remaining, "unmanaged row must be evicted even when properties are unchanged")
+}
+
+// TestResourcePersister_SyncRead_EvictsWhenFilterMatchesReadOnlyProperties verifies that
+// the filter evaluates against the MERGED cloud state (Properties + ReadOnlyProperties),
+// not just Properties. A resource whose sole filter-matching field lives in
+// ReadOnlyProperties must still be evicted.
+func TestResourcePersister_SyncRead_EvictsWhenFilterMatchesReadOnlyProperties(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+
+	_, err = ds.CreateTarget(&pkgmodel.Target{Label: "test-target", Namespace: "aws"})
+	require.NoError(t, err)
+
+	ksuid := util.NewID()
+	baseProps := json.RawMessage(`{"Name":"instance"}`)
+	// Matching field lives exclusively in ReadOnlyProperties.
+	readOnlyProps := json.RawMessage(`{"ManagedByEks":"true"}`)
+	seedUnmanagedRow(t, ds, ksuid, baseProps, false /* unmanaged */)
+
+	filter := pkgmodel.MatchFilter{
+		ResourceTypes: []string{"FakeAWS::EC2::Instance"},
+		Conditions: []pkgmodel.FilterCondition{
+			{PropertyPath: "$.ManagedByEks", PropertyValue: "true"},
+		},
+	}
+	ru := syncReadUpdate(ksuid, baseProps, readOnlyProps, []pkgmodel.MatchFilter{filter})
+
+	result := persister.Call(sender, resource_update.PersistResourceUpdate{
+		CommandID:         "readonly-evict-cmd",
+		ResourceOperation: resource_update.OperationRead,
+		PluginOperation:   resource.OperationRead,
+		ResourceUpdate:    ru,
+	})
+	require.NoError(t, result.Error)
+
+	remaining, loadErr := ds.LoadResourcesByStack("$unmanaged")
+	require.NoError(t, loadErr)
+	assert.Empty(t, remaining, "row must be evicted when filter matches a ReadOnly field")
+}
+
+// TestResourcePersister_SyncRead_EvictsWhenFilterMatchesPropertiesReadOnlyNil verifies that when
+// ReadOnlyProperties is nil (absent), matching against Properties alone still evicts.
+func TestResourcePersister_SyncRead_EvictsWhenFilterMatchesPropertiesReadOnlyNil(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+
+	_, err = ds.CreateTarget(&pkgmodel.Target{Label: "test-target", Namespace: "aws"})
+	require.NoError(t, err)
+
+	ksuid := util.NewID()
+	props := json.RawMessage(`{"SkipMe":"yes"}`)
+	seedUnmanagedRow(t, ds, ksuid, props, false /* unmanaged */)
+
+	filter := pkgmodel.MatchFilter{
+		ResourceTypes: []string{"FakeAWS::EC2::Instance"},
+		Conditions: []pkgmodel.FilterCondition{
+			// Matches a field in Properties; ReadOnlyProperties is nil.
+			{PropertyPath: "$.SkipMe", PropertyValue: "yes"},
+		},
+	}
+	// No ReadOnlyProperties supplied.
+	ru := syncReadUpdate(ksuid, props, nil, []pkgmodel.MatchFilter{filter})
+
+	result := persister.Call(sender, resource_update.PersistResourceUpdate{
+		CommandID:         "no-readonly-cmd",
+		ResourceOperation: resource_update.OperationRead,
+		PluginOperation:   resource.OperationRead,
+		ResourceUpdate:    ru,
+	})
+	require.NoError(t, result.Error)
+
+	remaining, loadErr := ds.LoadResourcesByStack("$unmanaged")
+	require.NoError(t, loadErr)
+	assert.Empty(t, remaining, "row must be evicted when Properties match and ReadOnlyProperties is nil")
+}
+
+// TestResourcePersister_SyncRead_NoEvictionWithEmptyMatchFilters confirms that an
+// unmanaged row is never evicted when MatchFilters is nil (empty slice).
+func TestResourcePersister_SyncRead_NoEvictionWithEmptyMatchFilters(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+
+	_, err = ds.CreateTarget(&pkgmodel.Target{Label: "test-target", Namespace: "aws"})
+	require.NoError(t, err)
+
+	ksuid := util.NewID()
+	props := json.RawMessage(`{"SkipMe":"yes"}`)
+	seedUnmanagedRow(t, ds, ksuid, props, false /* unmanaged */)
+
+	// No MatchFilters at all.
+	ru := syncReadUpdate(ksuid, props, nil, nil)
+
+	result := persister.Call(sender, resource_update.PersistResourceUpdate{
+		CommandID:         "no-filter-cmd",
+		ResourceOperation: resource_update.OperationRead,
+		PluginOperation:   resource.OperationRead,
+		ResourceUpdate:    ru,
+	})
+	require.NoError(t, result.Error)
+
+	// Row must survive (normal persist path).
+	loaded, loadErr := ds.LoadResource(ru.DesiredState.URI())
+	require.NoError(t, loadErr)
+	assert.NotNil(t, loaded, "unmanaged row must not be evicted when MatchFilters is empty")
+}
+
+// TestResourcePersister_SyncRead_NoEvictionWithEmptyConditions confirms that an
+// unmanaged row is never evicted when a filter has no conditions (empty Conditions slice).
+func TestResourcePersister_SyncRead_NoEvictionWithEmptyConditions(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+
+	_, err = ds.CreateTarget(&pkgmodel.Target{Label: "test-target", Namespace: "aws"})
+	require.NoError(t, err)
+
+	ksuid := util.NewID()
+	props := json.RawMessage(`{"SkipMe":"yes"}`)
+	seedUnmanagedRow(t, ds, ksuid, props, false /* unmanaged */)
+
+	ru := syncReadUpdate(ksuid, props, nil, []pkgmodel.MatchFilter{
+		{ResourceTypes: []string{"FakeAWS::EC2::Instance"}, Conditions: nil},
+	})
+
+	result := persister.Call(sender, resource_update.PersistResourceUpdate{
+		CommandID:         "empty-cond-cmd",
+		ResourceOperation: resource_update.OperationRead,
+		PluginOperation:   resource.OperationRead,
+		ResourceUpdate:    ru,
+	})
+	require.NoError(t, result.Error)
+
+	loaded, loadErr := ds.LoadResource(ru.DesiredState.URI())
+	require.NoError(t, loadErr)
+	assert.NotNil(t, loaded, "unmanaged row must not be evicted when filter has no conditions")
+}
