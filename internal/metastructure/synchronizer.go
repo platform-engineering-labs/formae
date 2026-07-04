@@ -6,6 +6,7 @@ package metastructure
 
 import (
 	"fmt"
+	"slices"
 	"time"
 
 	"ergo.services/actor/statemachine"
@@ -189,8 +190,9 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 	}
 
 	type pluginCache struct {
-		available bool
-		schemas   map[string]pkgmodel.Schema
+		available    bool
+		schemas      map[string]pkgmodel.Schema
+		matchFilters []pkgmodel.MatchFilter
 	}
 	pluginInfoByNamespace := make(map[string]pluginCache)
 	for namespace := range namespaceSeen {
@@ -214,8 +216,9 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 		}
 
 		pluginInfoByNamespace[namespace] = pluginCache{
-			available: true,
-			schemas:   pluginInfo.ResourceSchemas,
+			available:    true,
+			schemas:      pluginInfo.ResourceSchemas,
+			matchFilters: pluginInfo.MatchFilters,
 		}
 	}
 
@@ -279,6 +282,20 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 		availableResourceUpdates = append(availableResourceUpdates, update)
 	}
 	allResourceUpdates = availableResourceUpdates
+
+	// Attach per-namespace, per-type discovery filters to each update so the
+	// ResourcePersister can evict unmanaged rows whose freshly-read cloud state
+	// matches a filter. Scoped strictly to the update's own namespace cache to
+	// prevent filter bleed across namespaces.
+	for i := range allResourceUpdates {
+		namespace := allResourceUpdates[i].DesiredState.Namespace()
+		if cache, ok := pluginInfoByNamespace[namespace]; ok && cache.available {
+			filters := findMatchFiltersForType(cache.matchFilters, allResourceUpdates[i].DesiredState.Type)
+			if len(filters) > 0 {
+				allResourceUpdates[i].MatchFilters = filters
+			}
+		}
+	}
 
 	if len(allResourceUpdates) == 0 {
 		proc.Log().Debug("Synchronizer: no resources found to synchronize")
@@ -359,4 +376,16 @@ func unregisterInProgressResource(from gen.PID, state gen.Atom, data Synchronize
 	delete(data.excludedResources, message.ResourceURI)
 	proc.Log().Debug("Resource unregistered from in-progress, can be synced resourceURI=%s", message.ResourceURI)
 	return state, data, nil, nil
+}
+
+// findMatchFiltersForType returns the subset of filters whose ResourceTypes list
+// includes the given resourceType. Mirrors the same helper in the discovery package.
+func findMatchFiltersForType(filters []pkgmodel.MatchFilter, resourceType string) []pkgmodel.MatchFilter {
+	var result []pkgmodel.MatchFilter
+	for i := range filters {
+		if slices.Contains(filters[i].ResourceTypes, resourceType) {
+			result = append(result, filters[i])
+		}
+	}
+	return result
 }
