@@ -22,13 +22,15 @@ import (
 )
 
 const (
-	defaultLogoPath = "/mnt/c/Users/wfhso/Downloads/Formae_Logo_dark.png"
+	defaultLogoPath = "$HOME/Downloads/Formae_Logo_dark.png"
 
-	// Crop region for the flower icon (right side of the 2134x556 image)
-	cropX = 1550
-	cropY = 0
-	cropW = 584
-	cropH = 556
+	// Crop region for the flower icon (right side of the 2134x556 image).
+	// Tight bbox of the flower mark — starting any further left catches
+	// the tail of the wordmark's last letter.
+	cropX = 1642
+	cropY = 64
+	cropW = 430
+	cropH = 429
 )
 
 func main() {
@@ -173,7 +175,7 @@ func getLogoPath() string {
 			return arg
 		}
 	}
-	return defaultLogoPath
+	return os.ExpandEnv(defaultLogoPath)
 }
 
 func loadAndCropFlower() (image.Image, error) {
@@ -262,7 +264,9 @@ func encodeBrailleCell(img *image.RGBA, px, py int) rune {
 				continue
 			}
 			_, _, _, a := img.At(x, y).RGBA()
-			if a < 0x8000 {
+			// Bilinear downscaling encodes stroke coverage in alpha; a 50%
+			// cutoff eats thin strokes at small sizes, so accept ~30%.
+			if a < 0x5000 {
 				continue // transparent pixel
 			}
 			r, g, b, _ := img.At(x, y).RGBA()
