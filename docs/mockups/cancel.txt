@@ -1,11 +1,13 @@
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║                      CANCEL — TUI MOCKUPS                                   ║
 ║                                                                              ║
-║  formae cancel --query='...' [--watch]                                       ║
+║  formae cancel --query='...' [--watch] [--force]                             ║
 ║                                                                              ║
 ║  Submits cancellation, then either shows a summary (no --watch) or           ║
 ║  enters the status/watch TUI to track cancellation progress.                 ║
 ║  With --watch, reuses the status/watch component.                            ║
+║  With --force, abandons in-progress work after a destructive-action          ║
+║  warning + confirmation (skipped by --yes).                                  ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 
 
@@ -58,6 +60,64 @@ VIEW 2: Cancel submitted — multiple commands, without --watch
   Notes:
   - Compact summary per command
   - Same expectation-setting for each command
+
+
+================================================================================
+VIEW 2b: Force cancel — warning + confirmation
+================================================================================
+
+  formae cancel --query='id:cmd-abc123' --force
+
+  ╭─ Force Cancel ─────────────────────────────────────────────────────────────╮
+  │                                                                            │
+  │  --force is a destructive escape hatch. It abandons in-progress work      │
+  │  and drives the command to a terminal 'Canceled' state immediately,       │
+  │  instead of waiting for in-progress resources to finish.                   │
+  │                                                                            │
+  │  Cloud-side operations may continue:                                       │
+  │    ·  in-flight Update/Delete operations are reconciled by the             │
+  │       synchronizer on its next pass                                        │
+  │    ·  a still-running Create may orphan a resource that needs              │
+  │       manual cleanup                                                       │
+  │                                                                            │
+  ╰────────────────────────────────────────────────────────────────────────────╯
+
+  Force-canceling 1 command:
+
+    cmd-abc123  apply reconcile  ████████░░ 12/15  00:42
+      · 8 completed · 2 in progress (will be abandoned) · 5 pending (will cancel)
+
+  Force-cancel anyway? [y/N]
+
+  Notes:
+  - Warning panel uses the warning style (gold border), not the error
+    style — this is a legitimate action, styled to demand attention
+  - Expectation line differs from normal cancel: in-progress updates are
+    "abandoned", not "will finish"
+  - huh confirmation, default No
+  - --yes skips the confirmation (non-interactive force cancel)
+  - Use case: commands stuck on a plugin in an unbounded poll loop
+
+
+================================================================================
+VIEW 2c: Force cancel — states in the watch view
+================================================================================
+
+With --force --watch, the watch view uses force-specific terminology for
+in-progress updates:
+
+  │  8 done · 2 abandoned · 5 canceled                                          │
+  │  ...                                                                        │
+  │    update  primary (AWS::RDS::DBInstance)                        Abandoned  │
+  │    create  cdn (AWS::CloudFront::Distribution)                   Abandoned  │
+
+  Notes:
+  - "Abandoned" (gold/warning) instead of "finishing" — work was left
+    running cloud-side, formae stopped tracking the attempt
+  - Command reaches terminal "Canceled" immediately; no "finishing" phase
+  - Footer of the final view reminds about possible orphaned Creates:
+    "2 in-progress updates were abandoned. Check the synchronizer or the
+    cloud console for orphaned resources."
 
 
 ================================================================================

@@ -152,6 +152,119 @@ VIEW 9: Generic / unexpected error
 
 
 ================================================================================
+VIEW 10: Reconcile rejected (non-interactive fallback)
+================================================================================
+
+Interactive handling of ReconcileRejected is its own flow — see
+drift-resolution.txt. This panel is the non-interactive fallback
+(--yes / non-TTY):
+
+  ╭─ Reconcile Rejected ──────────────────────────────────────────────────────╮
+  │                                                                            │
+  │  These stacks were modified since the last reconcile:                      │
+  │                                                                            │
+  │    production                                                              │
+  │      changed  primary (AWS::RDS::DBInstance)                               │
+  │      deleted  old-cache (AWS::ElastiCache::Cluster)                        │
+  │                                                                            │
+  │  Absorb the out-of-band changes into your forma:                           │
+  │    formae extract changes.pkl --query='stack:production type:AWS::RDS…'    │
+  │                                                                            │
+  │  Deleted resources cannot be extracted — remove them from your forma.      │
+  │                                                                            │
+  │  Or overwrite everything with your forma as written:                       │
+  │    formae apply --force                                                    │
+  │                                                                            │
+  ╰────────────────────────────────────────────────────────────────────────────╯
+
+
+================================================================================
+VIEW 11: Stack / target reference not found
+================================================================================
+
+  ╭─ Stack Not Found ─────────────────────────────────────────────────────────╮
+  │                                                                            │
+  │  The forma references stack 'staging', which does not exist.               │
+  │                                                                            │
+  │  Use an existing stack or define it in the forma.                          │
+  │                                                                            │
+  ╰────────────────────────────────────────────────────────────────────────────╯
+
+  ╭─ Target Not Found ────────────────────────────────────────────────────────╮
+  │                                                                            │
+  │  The forma references target 'aws-eu-central-1', which does not exist.     │
+  │                                                                            │
+  │  Use an existing target or define it in the forma.                         │
+  │                                                                            │
+  ╰────────────────────────────────────────────────────────────────────────────╯
+
+
+================================================================================
+VIEW 12: Stack deleted during apply
+================================================================================
+
+  ╭─ Stack Deleted ───────────────────────────────────────────────────────────╮
+  │                                                                            │
+  │  The stack 'staging' was deleted by another command while this apply       │
+  │  was being prepared.                                                       │
+  │                                                                            │
+  │  Retry the apply.                                                          │
+  │                                                                            │
+  ╰────────────────────────────────────────────────────────────────────────────╯
+
+
+================================================================================
+VIEW 13: Non-portable resources (target replace)
+================================================================================
+
+  ╭─ Non-Portable Resources ──────────────────────────────────────────────────╮
+  │                                                                            │
+  │  The target 'aws-us-east-1' cannot be replaced. These resources are        │
+  │  bound to its current configuration:                                       │
+  │                                                                            │
+  │    production/AWS::EC2::Instance/web-1                                     │
+  │    production/AWS::RDS::DBInstance/primary                                 │
+  │                                                                            │
+  │  Destroy these resources first, then re-apply with the new target          │
+  │  configuration.                                                            │
+  │                                                                            │
+  ╰────────────────────────────────────────────────────────────────────────────╯
+
+
+================================================================================
+VIEW 14: Plugin errors
+================================================================================
+
+  ╭─ Plugin Not Found ────────────────────────────────────────────────────────╮
+  │                                                                            │
+  │  Plugin 'cloudflare' was not found.                                        │
+  │                                                                            │
+  │  Search available plugins:                                                 │
+  │    formae plugin search cloudflare                                         │
+  │                                                                            │
+  ╰────────────────────────────────────────────────────────────────────────────╯
+
+  ╭─ Plugin Dependency Conflict ──────────────────────────────────────────────╮
+  │                                                                            │
+  │  aws@2.1.0 requires formae SDK >= 0.90, but this agent runs SDK 0.82.      │
+  │                                                                            │
+  │  Update formae first, or install a compatible plugin version:              │
+  │    formae plugin install aws@2.0.3                                         │
+  │                                                                            │
+  ╰────────────────────────────────────────────────────────────────────────────╯
+
+  Notes:
+  - PluginVersionNotFound, PluginRepositoryUnreachable and
+    PluginSignatureInvalid exist as API error consts but have no error
+    struct or renderer yet — panel designs follow the same shape as
+    Plugin Not Found (name/version in accent, one actionable suggestion);
+    wire them up when the structs land
+  - TargetHasResourcesError exists as a struct but is not surfaced through
+    the API error path today; if/when it is, render like Non-Portable
+    Resources
+
+
+================================================================================
 DESIGN NOTES
 ================================================================================
 

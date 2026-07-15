@@ -80,12 +80,15 @@ VIEW 1: Simulation preview — fits in viewport (expanded)
   │    update  web-config (AWS::SSM::Parameter)                                 │
   │      └ set  Value: "v1.2.3" → "v1.3.0"                                     │
   │    replace  web-server (AWS::EC2::Instance)                                 │
+  │      ├ immutable  ImageId: "ami-0a1b2c" → "ami-0d4e5f"                      │
+  │      └ set  InstanceType: "t3.small" → "t3.medium"                          │
   │    create  cdn (AWS::CloudFront::Distribution)                              │
   │                                                                             │
   ├─────────────────────────────────────────────────────────────────────────────┤
-  │  This operation will create 1 target(s), replace 1 target(s), create 1     │
-  │  stack(s), create 1 policy(ies), update 1 policy(ies), create 3            │
-  │  resource(s), update 2 resource(s) and replace 1 resource(s).              │
+  │  This operation will replace 1 target(s), replace 1 resource(s),           │
+  │  create 1 target(s), create 1 stack(s), create 1 policy(ies), create 3     │
+  │  resource(s), update 1 target(s), update 1 policy(ies) and update 2        │
+  │  resource(s).                                                               │
   │                                                                             │
   │  Do you want to continue? [y/N]                                             │
   └─────────────────────────────────────────────────────────────────────────────┘
@@ -97,6 +100,14 @@ VIEW 1: Simulation preview — fits in viewport (expanded)
   - Resources/Policies: label (type) format, same as status summary
   - Update operations show property changes inline with ├/└ tree connectors
   - Patch format: set/add/remove + property path + old → new value
+  - Replace shows WHY: "immutable" lines are the properties that forced the
+    replace (rendered in warning/gold), followed by carried mutable changes
+    as regular "set" lines — mirrors the current renderer's two blocks
+    ("because these immutable properties changed:" / "and by doing the
+    following:") in compact form
+  - Summary sentence lists destructive operations first (deletes, replaces
+    in red), then creates (green), then updates (gold) — matches current
+    renderer ordering
   - References rendered using labels not ksuids
   - Confirmation prompt at bottom with operation summary
   - If --simulate: show "simulation only" message instead of prompt
@@ -108,11 +119,72 @@ VIEW 1b: Simulation — resource being brought under management
 
   │  Resources                                                                  │
   │    update  discovered-bucket (AWS::S3::Bucket)                              │
-  │      └ put resource under management                                        │
+  │      ├ put resource under management (unmanaged → production)               │
+  │      └ set  VersioningConfiguration.Status: "Suspended" → "Enabled"         │
 
   Notes:
   - When OldStackName is "$unmanaged", show "put resource under management"
-  - Matches current behavior from FormatPatchDocument
+    with the stack migration (unmanaged → <stack>) inline
+  - Management line renders FIRST in the change list, before renames and
+    property changes (current renderer behavior per RFC-0041)
+  - RFC-0041 removed the redundant management message from inside the patch
+    document — the parent sub-line covers the transition
+
+
+================================================================================
+VIEW 1b2: Simulation — label rename (RFC-0041)
+================================================================================
+
+Pure rename (alias points at a resource whose label changed in code):
+
+  │  Resources                                                                  │
+  │    update  app-server (AWS::EC2::Instance)                                  │
+  │      └ rename  web-server → app-server                                      │
+
+Rename combined with property changes:
+
+  │  Resources                                                                  │
+  │    update  app-server (AWS::EC2::Instance)                                  │
+  │      ├ rename  web-server → app-server                                      │
+  │      └ set  InstanceType: "t3.small" → "t3.medium"                          │
+
+Rename coinciding with a replace (e.g. import + immutable change):
+
+  │  Resources                                                                  │
+  │    replace  managed-vpc (AWS::EC2::VPC)                                     │
+  │      ├ rename  vpc-008eef40942ac586b → managed-vpc                          │
+  │      └ immutable  CidrBlock: "172.31.0.0/16" → "172.32.0.0/16"              │
+
+  Notes:
+  - Display name is always the NEW label (current renderer behavior)
+  - Rename renders as its own change line: "rename  old → new"
+  - On updates, the rename line comes before property changes (after the
+    management line if importing)
+  - On replaces, the rename is NOT one of the immutable causes, so it
+    renders as a regular change line alongside the immutable lines —
+    mirrors the current renderer putting it in the "and by doing the
+    following:" block, not the cause block
+  - A rename on its own never destroys/recreates the cloud object
+
+
+================================================================================
+VIEW 1b3: Simulation — cascade-resolvable property update
+================================================================================
+
+When a dependency is replaced and a dependent's property points at the
+provider-assigned ID of the new instance (value unknown at plan time):
+
+  │  Resources                                                                  │
+  │    replace  task-def (AWS::ECS::TaskDefinition)                             │
+  │      └ immutable  ContainerDefinitions[0].Image: "app:1" → "app:2"          │
+  │    update  api-service (AWS::ECS::Service)                                  │
+  │      └ set  TaskDefinition → new task-def (current: "arn:aws:ecs:…:task…")  │
+
+  Notes:
+  - "→ new <label>" marks a value that will resolve after the dependency
+    is created; the current value shown for context, truncated to fit
+  - Matches current renderer: change property X "to point at the new
+    <source-label> (current: <value>)"
 
 
 ================================================================================
@@ -255,12 +327,18 @@ DATA FIELDS COVERAGE (simulation-specific)
 ResourceUpdate fields shown in simulation:
   - Operation ("create"/"update"/"delete"/"replace")
   - ResourceLabel, ResourceType (parenthetical)
-  - PatchDocument: rendered as property change tree (set/add/remove)
+  - OldLabel: rename rendered as "rename  old → new" change line
+    (display name always uses the new label) — RFC-0041
+  - PatchDocument: rendered as property change tree (set/add/remove);
+    only genuinely-changed properties appear (no echo of unchanged
+    values); composite values render as JSON
   - Properties/OldProperties: used for patch rendering context
   - ReferenceLabels: references rendered as labels not ksuids
-  - OldStackName: "$unmanaged" triggers "put resource under management"
+  - OldStackName: "$unmanaged" triggers "put resource under management
+    (unmanaged → <stack>)" as the first change line
   - IsCascade/CascadeSource: "(cascade)" label + "depends on" sub-item
-  - GroupID: grouped delete+create shown as single "replace" line
+  - GroupID: grouped delete+create shown as single "replace" line with
+    "immutable" cause lines + carried mutable "set" lines
 
 TargetUpdate fields shown in simulation:
   - Operation ("create"/"update"/"replace"/"delete")

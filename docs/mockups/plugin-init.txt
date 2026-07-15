@@ -5,10 +5,14 @@
 ║  Uses huh for structured multi-field form with validation.                   ║
 ║                                                                              ║
 ║  Current CLI:                                                                ║
-║    Flags: --name, --namespace, --description, --author, --module-path,       ║
-║           --license, --output-dir, --no-input                                ║
+║    Flags: --name, --namespace, --description, --category, --author,          ║
+║           --module-path, --license, --output-dir, --no-input,                ║
+║           --hub, --no-availability-check, --allow-conflict                   ║
 ║    Interactive mode prompts for each field sequentially via BasicPrompter.   ║
-║    --no-input requires all flags and skips prompts.                          ║
+║    --no-input requires all flags and skips prompts (category defaults to     ║
+║    'other', license to Apache-2.0).                                          ║
+║    The plugin name is checked for availability against the formae Hub        ║
+║    before scaffolding.                                                       ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 
 
@@ -27,13 +31,16 @@ VIEW 1: Plugin init — interactive form
   ├─────────────────────────────────────────────────────────────────────────────┤
   │                                                                             │
   │  Plugin name:                                                               │
-  │  > cloudflare█                                                              │
+  │  > cloudflare█                                              ✓ available     │
   │                                                                             │
   │  Namespace (e.g. AWS, GCP, OCI):                                            │
   │  > CLOUDFLARE█                                                              │
   │                                                                             │
   │  Description:                                                               │
   │  > Cloudflare resource plugin for Formae█                                   │
+  │                                                                             │
+  │  Category:                                                                  │
+  │  > network  ▾                                                               │
   │                                                                             │
   │  Author:                                                                    │
   │  > Acme Corp█                                                               │
@@ -55,40 +62,105 @@ VIEW 1: Plugin init — interactive form
   - huh form with all fields on one page (scrollable if needed)
   - Text inputs for: name, namespace, description, author, module path,
     target directory
-  - Select/dropdown for license (Apache-2.0, MIT, GPL-3.0-only,
-    BSD-3-Clause, MPL-2.0, AGPL-3.0-only, FSL-1.1-ALv2, Other)
-  - If "Other" selected: additional text input for custom license ID
+  - Select/dropdown for category (Hub closed enum) and license
   - Target directory defaults to ./<name> (updates as name changes)
   - Inline validation:
-    - Name: required, valid identifier
-    - Namespace: required, uppercase
+    - Name: required, must start lowercase, only lowercase/digits/hyphens;
+      Hub availability checked async on blur (see VIEW 2b)
+    - Namespace: required, letter start, alphanumeric; normalized to
+      uppercase with an inline note when changed ("normalized to X for
+      resource type IDs")
     - Description: required
-    - Author: required
+    - Author: required (used for license copyright)
     - Module path: required, valid Go module path
   - Any flags provided on CLI pre-fill the form fields
   - tab/↑↓ navigates between fields
 
 
 ================================================================================
-VIEW 2: License selection expanded
+VIEW 2: Category and license selection expanded
 ================================================================================
+
+  │  Category:                                                                  │
+  │  ┌──────────────────┐                                                       │
+  │  │  cloud           │                                                       │
+  │  │  auth            │                                                       │
+  │  │  config          │                                                       │
+  │  │  observability   │                                                       │
+  │  │  cicd            │                                                       │
+  │  │  network         │                                                       │
+  │  │  data            │                                                       │
+  │  │  security        │                                                       │
+  │  │  containers      │                                                       │
+  │  │  other           │                                                       │
+  │  └──────────────────┘
 
   │  License:                                                                   │
   │  ┌──────────────────┐                                                       │
   │  │  Apache-2.0      │                                                       │
-  │  │  MIT             │                                                       │
-  │  │  GPL-3.0-only    │                                                       │
   │  │  BSD-3-Clause    │                                                       │
+  │  │  MIT             │                                                       │
   │  │  MPL-2.0         │                                                       │
-  │  │  AGPL-3.0-only   │                                                       │
-  │  │  FSL-1.1-ALv2    │                                                       │
   │  │  Other           │                                                       │
-  │  └──────────────────┘                                                       │
+  │  └──────────────────┘
+
+  │  License help text (shown with the selector):                               │
+  │    The formae Hub only accepts plugins under one of these licenses.         │
+  │    Pick 'Other' to use a different license — your plugin will still         │
+  │    build and run locally, but will not be publishable to the Hub.           │
 
   Notes:
-  - huh select component
-  - ↑↓ to navigate, enter to select
-  - "Other" opens a text input for custom SPDX identifier
+  - huh select components; ↑↓ to navigate, enter to select
+  - Category is the formae Hub's closed enum (mirrors the Hub-side Zod
+    enum); default "other"
+  - License list is the Hub-verifiable allowlist; default Apache-2.0
+  - "Other" license opens a text input for a custom SPDX identifier and
+    shows a persistent warning under the field:
+    ⚠ 'FSL-1.1-ALv2' is not on the formae Hub's allowlist; this plugin
+      will not be publishable to hub.platform.engineering.
+      To publish later, switch to Apache-2.0, BSD-3-Clause, MIT, or MPL-2.0.
+
+
+================================================================================
+VIEW 2b: Hub name-availability check (async validation on the name field)
+================================================================================
+
+While checking (debounced on blur/change):
+
+  │  Plugin name:                                                               │
+  │  > cloudflare█                                              ⠋ checking…     │
+
+Name available:
+
+  │  Plugin name:                                                               │
+  │  > cloudflare█                                              ✓ available     │
+
+Name taken:
+
+  │  Plugin name:                                                               │
+  │  > cloudflare█                                              ✗ taken         │
+  │    ✗ 'cloudflare' is already registered by                                  │
+  │      github.com/other-org/formae-plugin-cloudflare                          │
+  │      Pick a different name (or pass --allow-conflict to scaffold anyway)    │
+
+Hub unreachable / transient error (default hub URL):
+
+  │  Plugin name:                                                               │
+  │  > cloudflare█                                              ○ unchecked     │
+  │    ⚠ Hub availability check skipped: <reason>.                              │
+  │      The Hub will re-validate at registration time.                         │
+
+  Notes:
+  - Availability state renders inline at the right edge of the name field:
+    spinner while checking, ✓ available (bright), ✗ taken (red),
+    ○ unchecked (subtle) when the check was skipped
+  - Taken name blocks form submission unless --allow-conflict was passed;
+    with --allow-conflict the taken state renders as a warning instead:
+    ⚠ already registered — continuing; registration will fail at confirm time
+  - Transient errors (timeout, 408/429/5xx) never block: warn + continue
+  - With an explicit --hub URL, an unreachable hub is a hard error
+    (rendered as an error panel, see error-panels.txt)
+  - --no-availability-check skips the check entirely (field shows ○)
 
 
 ================================================================================
@@ -131,7 +203,8 @@ VIEW 5: Non-interactive (--no-input with all flags)
 ================================================================================
 
   formae plugin init --no-input --name cloudflare --namespace CLOUDFLARE \
-    --description "Cloudflare resource plugin" --author "Acme Corp" \
+    --description "Cloudflare resource plugin" --category network \
+    --author "Acme Corp" \
     --module-path github.com/acme/formae-plugin-cloudflare
 
   Downloading template from GitHub...
@@ -146,3 +219,6 @@ VIEW 5: Non-interactive (--no-input with all flags)
   Notes:
   - No form shown, straight to progress + success
   - Errors if required flags are missing
+  - Category defaults to 'other', license to Apache-2.0 when omitted
+  - Availability check still runs (unless --no-availability-check);
+    a taken name is a hard error unless --allow-conflict

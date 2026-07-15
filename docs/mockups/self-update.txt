@@ -1,0 +1,71 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                    SELF-UPDATE — TUI MOCKUPS                                ║
+║                                                                              ║
+║  formae update [<version>]  |  formae update list                            ║
+║                                                                              ║
+║  Replaces the old `formae upgrade` command (which the original RFC-3         ║
+║  listed as "unchanged"). Improved formatting + huh confirmation.             ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+
+================================================================================
+VIEW 1: formae update list
+================================================================================
+
+  formae update list
+
+  Installed: 0.82.2  (2026-07-01)
+
+  Available versions:
+
+    0.83.0   newer
+  ● 0.82.2   installed
+    0.82.1
+    0.82.0
+
+  Notes:
+  - Installed line up top with install date (date only — today prints the
+    full Go time.Time string; trim it)
+  - Version list: installed version gets the ● marker (Done-bright);
+    versions newer than installed annotated "newer" in accent, older
+    ones unannotated (today's "Older (timestamp)" per-line noise dropped)
+  - Empty/network-error states render as error panels
+
+
+================================================================================
+VIEW 2: formae update (interactive)
+================================================================================
+
+  formae update
+
+  Installed: 0.82.2 — newest available: 0.83.0
+
+  Updating stops the local formae agent while the new version installs.
+
+  Update to 0.83.0? [y/N]
+
+    ✓ stopped formae agent
+    ⠋ installing formae 0.83.0…
+    ✓ installed formae 0.83.0
+
+    ! restart the agent when ready: formae agent start
+
+  Done. Release notes: https://github.com/platform-engineering-labs/formae/releases/tag/0.83.0
+
+  Notes:
+  - huh confirmation with explicit version and the agent-stop consequence
+    stated BEFORE the prompt (today it stops the agent silently)
+  - Step lines with ✓/spinner, same vocabulary as plugin install
+  - --yes skips the prompt; `formae update 0.82.1` (explicit version)
+    skips the "newest available" resolution but keeps the confirmation
+  - "no updates available" when already newest (TextSecondary)
+  - Init prompt (no managed root yet) becomes a proper huh confirm:
+    "No managed installation root at <path>. Initialize? [y/N]"
+
+
+================================================================================
+CLASSIFICATION
+================================================================================
+
+  update list      improved formatting (print-and-exit)
+  update           improved formatting + huh confirmation + step lines
