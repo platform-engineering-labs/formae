@@ -108,7 +108,7 @@ VIEW 4: formae plugin install / uninstall / update
   - Install shows the resolved version; update shows old → new per plugin
     (improvement over today's version-less "Updated <name>")
   - "already up to date" lines in TextSubtle with a · marker
-  - Agent-restart hint keeps the gold ! marker
+  - Agent-restart hint keeps the ! marker (Warning style)
   - Uninstall mirrors install with "Removed <name>"
   - Failures render as error panels (see error-panels.txt: Plugin Not
     Found, Plugin Dependency Conflict) after the per-plugin lines

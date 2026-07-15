@@ -90,8 +90,8 @@ VIEW 2b: Force cancel — warning + confirmation
   Force-cancel anyway? [y/N]
 
   Notes:
-  - Warning panel uses the warning style (gold border), not the error
-    style — this is a legitimate action, styled to demand attention
+  - Warning panel uses the theme Warning style for its border, not the
+    Error style — this is a legitimate action, styled to demand attention
   - Expectation line differs from normal cancel: in-progress updates are
     "abandoned", not "will finish"
   - huh confirmation, default No
@@ -112,7 +112,7 @@ in-progress updates:
   │    create  cdn (AWS::CloudFront::Distribution)                   Abandoned  │
 
   Notes:
-  - "Abandoned" (gold/warning) instead of "finishing" — work was left
+  - "Abandoned" (Warning style) instead of "finishing" — work was left
     running cloud-side, formae stopped tracking the attempt
   - Command reaches terminal "Canceled" immediately; no "finishing" phase
   - Footer of the final view reminds about possible orphaned Creates:

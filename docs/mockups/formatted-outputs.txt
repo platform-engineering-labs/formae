@@ -136,7 +136,8 @@ VIEW 3: Status agent output
     Successes in green (classic) or bright white (formae theme)
     Failures in red
     In Progress in gray
-    Managed/Unmanaged % colored by threshold (0% green, ≤75% gold, >75% red)
+    Managed/Unmanaged % by threshold (0% Done-bright, ≤75% Warning,
+    >75% Error) — no green in the formae theme
   - Responsive: on narrow terminals, tables stack vertically instead of
     side-by-side
   - Data from Stats struct: Version, AgentID, Clients, Commands, States,

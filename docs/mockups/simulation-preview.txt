@@ -101,13 +101,13 @@ VIEW 1: Simulation preview — fits in viewport (expanded)
   - Update operations show property changes inline with ├/└ tree connectors
   - Patch format: set/add/remove + property path + old → new value
   - Replace shows WHY: "immutable" lines are the properties that forced the
-    replace (rendered in warning/gold), followed by carried mutable changes
-    as regular "set" lines — mirrors the current renderer's two blocks
-    ("because these immutable properties changed:" / "and by doing the
-    following:") in compact form
-  - Summary sentence lists destructive operations first (deletes, replaces
-    in red), then creates (green), then updates (gold) — matches current
-    renderer ordering
+    replace (rendered in the Warning style), followed by carried mutable
+    changes as regular "set" lines — mirrors the current renderer's two
+    blocks ("because these immutable properties changed:" / "and by
+    doing the following:") in compact form
+  - Summary sentence lists destructive operations first (deletes,
+    replaces — Error style), then creates, then updates (Warning style)
+    — ordering matches the current renderer
   - References rendered using labels not ksuids
   - Confirmation prompt at bottom with operation summary
   - If --simulate: show "simulation only" message instead of prompt
@@ -199,7 +199,7 @@ VIEW 1c: Simulation — cascade deletes (destroy only)
   │      └ depends on web-server                                                │
 
   Notes:
-  - IsCascade resources marked with "(cascade)" in gold/warning
+  - IsCascade resources marked with "(cascade)" in the Warning style
   - CascadeSource shown as "depends on" sub-item
   - This is the destroy simulation only (apply doesn't have cascades)
 
