@@ -122,10 +122,10 @@ func (m model) View() string {
 	status := lipgloss.NewStyle().Foreground(p.TextPrimary)
 
 	for _, ns := range m.spinners {
-		b.WriteString(fmt.Sprintf("  %s %s %s\n",
+		fmt.Fprintf(&b, "  %s %s %s\n",
 			label.Render(ns.name),
 			ns.spinner.View(),
-			status.Render("creating resource...")))
+			status.Render("creating resource..."))
 	}
 
 	b.WriteString("\n")
@@ -177,10 +177,10 @@ func (m model) View() string {
 	wave := m.renderWave(3)
 	b.WriteString(done.Render("    create  my-bucket (AWS::S3::Bucket)                        Done"))
 	b.WriteString("\n")
-	b.WriteString(fmt.Sprintf("%s  %s %s",
+	fmt.Fprintf(&b, "%s  %s %s",
 		inProgress.Render("    update  primary (AWS::RDS::DBInstance)"),
 		wave,
-		accent.Render("00:12")))
+		accent.Render("00:12"))
 	b.WriteString("\n")
 	b.WriteString(pending.Render("    create  cdn (AWS::CloudFront::Distribution)                  · "))
 	b.WriteString("\n")

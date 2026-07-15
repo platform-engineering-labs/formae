@@ -41,7 +41,7 @@ func TestIsTerminal_WithFile(t *testing.T) {
 	if err != nil {
 		t.Skip("cannot open /dev/null")
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	assert.False(t, IsTerminal(f))
 }

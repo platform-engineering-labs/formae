@@ -15,9 +15,9 @@ import (
 )
 
 type barStyle struct {
-	name      string
-	filled    string
-	empty     string
+	name   string
+	filled string
+	empty  string
 }
 
 func main() {

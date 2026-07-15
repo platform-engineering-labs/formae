@@ -165,7 +165,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.cursor++
 				}
 			} else {
-				m.vp.LineDown(1)
+				m.vp.ScrollDown(1)
 			}
 			return m, nil
 
@@ -175,19 +175,19 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.cursor--
 				}
 			} else {
-				m.vp.LineUp(1)
+				m.vp.ScrollUp(1)
 			}
 			return m, nil
 
 		case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+d", "pgdown"))):
 			if m.view == viewSingleCommand {
-				m.vp.HalfViewDown()
+				m.vp.HalfPageDown()
 			}
 			return m, nil
 
 		case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+u", "pgup"))):
 			if m.view == viewSingleCommand {
-				m.vp.HalfViewUp()
+				m.vp.HalfPageUp()
 			}
 			return m, nil
 		}
@@ -602,15 +602,6 @@ func (m *model) renderFooter(w int, hints []keyHint, scrollInfo string) string {
 }
 
 // -- Helpers --
-
-// fixedWidth pads or truncates a string (ANSI-aware) to exactly w visible chars.
-func fixedWidth(s string, w int) string {
-	visible := lipgloss.Width(s)
-	if visible >= w {
-		return s
-	}
-	return s + strings.Repeat(" ", w-visible)
-}
 
 func padBetween(totalWidth int, left, right string) string {
 	space := totalWidth - lipgloss.Width(left) - lipgloss.Width(right)

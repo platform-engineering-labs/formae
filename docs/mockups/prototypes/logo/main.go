@@ -184,7 +184,7 @@ func loadAndCropFlower() (image.Image, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	img, _, err := image.Decode(f)
 	if err != nil {
@@ -253,7 +253,7 @@ var dotBits = [4][2]rune{
 }
 
 func encodeBrailleCell(img *image.RGBA, px, py int) rune {
-	var ch rune = '\u2800'
+	ch := '\u2800'
 	bounds := img.Bounds()
 
 	for row := 0; row < 4; row++ {
