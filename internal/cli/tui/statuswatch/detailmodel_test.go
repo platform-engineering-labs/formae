@@ -6,11 +6,14 @@ package statuswatch
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	tui "github.com/platform-engineering-labs/formae/internal/cli/tui"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
@@ -338,4 +341,143 @@ func TestDetailModel_Golden(t *testing.T) {
 	dm, _ = dm.Update(tea.KeyMsg{Type: tea.KeyEnter}, keys)
 
 	tuitest.RequireGolden(t, []byte(dm.View(30)))
+}
+
+// runeWidth returns the number of Unicode code points in s (suitable for
+// plain/ANSI-stripped strings where each code point is one terminal column).
+func runeWidth(s string) int { return len([]rune(s)) }
+
+// TestDetailModel_RenderingIntegrity checks three layout-integrity properties:
+//
+//  1. No ANSI fragment garbage survives in the plain output.
+//  2. Every rendered line's rune width (after ANSI strip) is <= viewport width.
+//  3. Summary-row plain text is exactly w runes wide, with full "00:0x" Time field.
+//
+// These tests are written BEFORE the fix and must fail on the broken rendering.
+func TestDetailModel_RenderingIntegrity(t *testing.T) {
+	const w = 100
+	th := theme.New("formae")
+	dm := newDetailModel(th, w, 30)
+	c := makeTerminalCmd()
+	r := makeTerminalRow()
+	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
+	dm = dm.SetCommand(c, r, "◉", now)
+
+	raw := dm.View(30)
+	plainView := plain(raw)
+
+	t.Run("no_ansi_fragment_garbage", func(t *testing.T) {
+		// After stripping well-formed ANSI sequences, there must be NO leftover
+		// bracket-digit sequences like "[1;38Label" or "[38;2;136;1Time".
+		// Such fragments are produced when pad() slices through escape codes.
+		lines := strings.Split(plainView, "\n")
+		for i, line := range lines {
+			assert.NotRegexp(t, `\[[0-9;]+[A-Za-z]`, line,
+				"line %d contains ANSI fragment garbage: %q", i+1, line)
+		}
+	})
+
+	t.Run("no_line_overflows_viewport_width", func(t *testing.T) {
+		lines := strings.Split(plainView, "\n")
+		for i, line := range lines {
+			lw := lipgloss.Width(line) // strips ANSI itself; but line is already plain
+			_ = lw
+			rw := runeWidth(line)
+			assert.LessOrEqual(t, rw, w,
+				"line %d overflows viewport (width %d): %q", i+1, rw, line)
+		}
+	})
+
+	t.Run("summary_rows_full_width_with_intact_time", func(t *testing.T) {
+		// Each non-cursor summary row for targets/stacks/resources should be
+		// exactly w rune-columns wide (the rendering pads out to full width
+		// only for cursor rows, but the content columns must exactly fill w
+		// without overflow — i.e. the time field "00:0x" must not be clipped).
+		//
+		// We test by asserting:
+		//   (a) the plain line ending with "00:0x" is not truncated to "00:0"
+		//   (b) no summary row's plain width exceeds w
+		lines := strings.Split(plainView, "\n")
+		for i, line := range lines {
+			trimmed := strings.TrimRight(line, " ")
+			// Find lines that look like summary rows (contain operation + time)
+			if strings.Contains(trimmed, "create") || strings.Contains(trimmed, "update") || strings.Contains(trimmed, "delete") {
+				// The time column should show full "00:0x" not truncated "00:0"
+				assert.NotRegexp(t, `\b00:0\s*$`, trimmed,
+					"line %d Time field is clipped to '00:0' — full value expected: %q", i+1, trimmed)
+				rw := runeWidth(line)
+				assert.LessOrEqual(t, rw, w,
+					"line %d summary row overflows viewport: %q", i+1, line)
+			}
+		}
+	})
+}
+
+// TestDetailModel_ColHeaderAlignment checks that group column headers are
+// aligned with their data rows: the "Label" text in the header must start at
+// the same rune offset as the label text in the first data row, at widths 100
+// and 70. This catches the missing sp2 indent in renderGroupColHeader.
+func TestDetailModel_ColHeaderAlignment(t *testing.T) {
+	for _, w := range []int{100, 70} {
+		t.Run(fmt.Sprintf("width_%d", w), func(t *testing.T) {
+			th := theme.New("formae")
+			dm := newDetailModel(th, w, 30)
+			c := makeTerminalCmd()
+			r := makeTerminalRow()
+			now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
+			dm = dm.SetCommand(c, r, "◉", now)
+
+			raw := dm.View(30)
+			plainView := plain(raw)
+			lines := strings.Split(plainView, "\n")
+
+			// For each group, locate its column-header line and the first data
+			// row that follows, and assert "Label" (header) starts at the same
+			// offset as the label content (data).
+			type groupSpec struct {
+				sectionTitle string // text appearing in the "▌ X" section header
+				dataLabel    string // text expected in the first data row label field
+			}
+			groups := []groupSpec{
+				{"Targets", "aws-us-east-1"},
+				{"Stacks", "production"},
+				{"Resources", "my-bucket"},
+			}
+
+			for _, gs := range groups {
+				// Find the section header line index
+				sectionIdx := -1
+				for i, line := range lines {
+					if strings.Contains(line, gs.sectionTitle) {
+						sectionIdx = i
+						break
+					}
+				}
+				require.GreaterOrEqual(t, sectionIdx, 0, "section %q not found at width %d", gs.sectionTitle, w)
+
+				// The col-header line is right after the section header
+				colHdrIdx := sectionIdx + 1
+				require.Less(t, colHdrIdx, len(lines), "no col-header line after section %q", gs.sectionTitle)
+
+				// The first data row follows the col-header
+				dataRowIdx := colHdrIdx + 1
+				require.Less(t, dataRowIdx, len(lines), "no data row after col-header in %q", gs.sectionTitle)
+
+				colHdr := lines[colHdrIdx]
+				dataRow := lines[dataRowIdx]
+
+				// "Label" must appear in the header
+				labelOffset := strings.Index(colHdr, "Label")
+				require.GreaterOrEqual(t, labelOffset, 0, "\"Label\" not found in col-header for %q at width %d: %q", gs.sectionTitle, w, colHdr)
+
+				// The label text (e.g. "aws-us-east-1") must start at the same offset in the data row
+				dataOffset := strings.Index(dataRow, gs.dataLabel)
+				require.GreaterOrEqual(t, dataOffset, 0, "data label %q not found in data row for %q at width %d: %q", gs.dataLabel, gs.sectionTitle, w, dataRow)
+
+				assert.Equal(t, labelOffset, dataOffset,
+					"col-header \"Label\" at offset %d but data label %q at offset %d in group %q at width %d\n  hdr:  %q\n  data: %q",
+					labelOffset, gs.dataLabel, dataOffset, gs.sectionTitle, w, colHdr, dataRow)
+			}
+		})
+	}
 }

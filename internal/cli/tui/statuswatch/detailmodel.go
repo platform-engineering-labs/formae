@@ -242,9 +242,10 @@ func (d detailModel) Update(msg tea.KeyMsg, keys tui.KeyMap) (detailModel, bool)
 }
 
 // groupLayout returns label/type/stack column widths for a group at total width w.
-// Fixed budget: status 6 + operation 12 + time 6 = 24.
+// Fixed budget: indent 2 + status 6 + operation 12 + time 5 = 25; we subtract
+// 26 to keep one spare and ensure rows never overflow the viewport by 1.
 func groupLayout(kind updateKind, w int) (labelW, typeW, stackW int) {
-	rem := w - 24
+	rem := w - 26
 	switch kind {
 	case kindPolicy:
 		labelW = max(rem*2/5, 12)
@@ -403,6 +404,10 @@ func (d detailModel) findShowMoreNavIndex(nav []navigableLine, kind updateKind) 
 }
 
 // renderGroupColHeader renders the column header row for a group.
+// It uses the same sp2 indent and identical cell widths as renderSummaryRow so
+// headers and data rows are always in sync. Padding is applied to the PLAIN
+// label text before the lipgloss style is wrapped around it — never the other
+// way around — to prevent escape-sequence fragments from being sliced off.
 func (d detailModel) renderGroupColHeader(kind updateKind, labelW, typeW, stackW int) string {
 	p := d.th.Palette
 	dimStyle := lipgloss.NewStyle().Foreground(p.TextSecondary)
@@ -413,7 +418,35 @@ func (d detailModel) renderGroupColHeader(kind updateKind, labelW, typeW, stackW
 	grpAct := d.sortCol[kind]
 	grpDir := d.sortDir[kind]
 
-	renderColHdr := func(name string, col int) string {
+	// renderColHdrPadded pads the PLAIN text to w columns first, then wraps
+	// the padded plain string in the appropriate lipgloss style. This ensures
+	// that pad() (which uses utf8.RuneCountInString) never slices through an
+	// escape sequence — a bug that produced "[1;38Label" fragments.
+	renderColHdrPadded := func(name string, col int, w int) string {
+		isHL := col == grpHi
+		isAct := col == grpAct
+		arrow := ""
+		if isAct {
+			if grpDir == components.SortDesc {
+				arrow = " ▼"
+			} else {
+				arrow = " ▲"
+			}
+		}
+		text := name + arrow
+		// Pad the plain text to the desired width, then apply the style.
+		paddedText := pad(text, w)
+		switch {
+		case isHL:
+			return hiStyle.Render(paddedText)
+		case isAct:
+			return accentStyle.Render(paddedText)
+		default:
+			return dimStyle.Render(paddedText)
+		}
+	}
+	// renderColHdrLast renders the last (un-padded) column header cell.
+	renderColHdrLast := func(name string, col int) string {
 		isHL := col == grpHi
 		isAct := col == grpAct
 		arrow := ""
@@ -435,26 +468,29 @@ func (d detailModel) renderGroupColHeader(kind updateKind, labelW, typeW, stackW
 		}
 	}
 
-	statusHdr := renderColHdr("", detailColStatus)
 	var sb strings.Builder
-	sb.WriteString(pad(statusHdr, 6))
+	// 2-space indent mirrors the sp2 in renderSummaryRow so header columns
+	// are pixel-aligned with data cell content.
+	sb.WriteString("  ")
+	// Status glyph cell: 6 wide, no label.
+	sb.WriteString(renderColHdrPadded("", detailColStatus, 6))
 
 	switch kind {
 	case kindPolicy:
-		sb.WriteString(pad(renderColHdr("Label", detailColLabel), labelW))
-		sb.WriteString(pad(renderColHdr("Type", detailColType), typeW))
-		sb.WriteString(pad(renderColHdr("Stack", detailColStack), stackW))
-		sb.WriteString(pad(renderColHdr("Operation", detailColOperation), 12))
-		sb.WriteString(renderColHdr("Time", detailColTime))
+		sb.WriteString(renderColHdrPadded("Label", detailColLabel, labelW))
+		sb.WriteString(renderColHdrPadded("Type", detailColType, typeW))
+		sb.WriteString(renderColHdrPadded("Stack", detailColStack, stackW))
+		sb.WriteString(renderColHdrPadded("Operation", detailColOperation, 12))
+		sb.WriteString(renderColHdrLast("Time", detailColTime))
 	case kindResource:
-		sb.WriteString(pad(renderColHdr("Label", detailColLabel), labelW))
-		sb.WriteString(pad(renderColHdr("Type", detailColType), typeW))
-		sb.WriteString(pad(renderColHdr("Operation", detailColOperation), 12))
-		sb.WriteString(renderColHdr("Time", detailColTime))
+		sb.WriteString(renderColHdrPadded("Label", detailColLabel, labelW))
+		sb.WriteString(renderColHdrPadded("Type", detailColType, typeW))
+		sb.WriteString(renderColHdrPadded("Operation", detailColOperation, 12))
+		sb.WriteString(renderColHdrLast("Time", detailColTime))
 	default: // targets, stacks
-		sb.WriteString(pad(renderColHdr("Label", detailColLabel), labelW))
-		sb.WriteString(pad(renderColHdr("Operation", detailColOperation), 12))
-		sb.WriteString(renderColHdr("Time", detailColTime))
+		sb.WriteString(renderColHdrPadded("Label", detailColLabel, labelW))
+		sb.WriteString(renderColHdrPadded("Operation", detailColOperation, 12))
+		sb.WriteString(renderColHdrLast("Time", detailColTime))
 	}
 	return sb.String()
 }
