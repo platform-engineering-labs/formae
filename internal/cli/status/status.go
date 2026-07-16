@@ -18,9 +18,18 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/nag"
 	"github.com/platform-engineering-labs/formae/internal/cli/printer"
 	"github.com/platform-engineering-labs/formae/internal/cli/renderer"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/statuswatch"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	"github.com/spf13/cobra"
+)
+
+// isTerminal and launchTUI are package-level vars so tests can stub them.
+var (
+	isTerminal = tui.IsTerminal
+	launchTUI  = launchStatusTUI
 )
 
 type StatusOutput string
@@ -55,11 +64,8 @@ func CommandCmd() *cobra.Command {
 			maxResults, _ := command.Flags().GetInt("max-results")
 			opts.Query = strings.TrimSpace(query)
 
-			if opts.Query == "" || opts.OutputConsumer == printer.ConsumerMachine {
-				opts.MaxResults = 1
-			} else {
-				opts.MaxResults = maxResults
-			}
+			humanTTY := opts.OutputConsumer == printer.ConsumerHuman && isTerminal(os.Stdout)
+			opts.MaxResults = resolveMaxResults(opts.Query, maxResults, humanTTY)
 
 			opts.Watch, _ = command.Flags().GetBool("watch")
 			outputLayout, _ := command.Flags().GetString("output-layout")
@@ -122,10 +128,45 @@ func validateStatusOptions(options *StatusOptions) error {
 	return nil
 }
 
-func runStatusForHumans(app *app.App, opts *StatusOptions) error {
-	app.PrintBanner()
+// resolveMaxResults returns the correct page-size for the given context.
+// When the caller is a human with a TTY (humanTTY == true), or when a query
+// string is provided, the full flagValue is used so the multi-command view is
+// populated. Otherwise (non-TTY or machine consumer) we collapse to 1 to
+// preserve the pre-TUI behaviour of showing only the most-recent command.
+func resolveMaxResults(query string, flagValue int, humanTTY bool) int {
+	if humanTTY || strings.TrimSpace(query) != "" {
+		return flagValue
+	}
+	return 1
+}
 
-	status, nags, err := app.GetCommandsStatus(opts.Query, opts.MaxResults, false)
+// launchStatusTUI starts the interactive status/watch TUI.
+// The theme name comes from the CLI profile configuration (Config.Cli.Theme);
+// unknown names fall back to "formae" inside theme.New.
+func launchStatusTUI(a *app.App, opts *StatusOptions) error {
+	themeName := ""
+	if a != nil && a.Config != nil {
+		themeName = a.Config.Cli.Theme
+	}
+	th := theme.New(themeName)
+	model := statuswatch.New(th, a, statuswatch.Options{
+		Query:      opts.Query,
+		MaxResults: opts.MaxResults,
+	})
+	_, err := tui.Run(model, tui.DefaultRunOptions())
+	return err
+}
+
+func runStatusForHumans(a *app.App, opts *StatusOptions) error {
+	// Human + TTY → interactive TUI (owns the whole screen; banner suppressed).
+	if isTerminal(os.Stdout) {
+		return launchTUI(a, opts)
+	}
+
+	// Human + non-TTY → existing print-and-exit path, completely unchanged.
+	a.PrintBanner()
+
+	status, nags, err := a.GetCommandsStatus(opts.Query, opts.MaxResults, false)
 	if err != nil {
 		msg, renderErr := renderer.RenderErrorMessage(err)
 		if renderErr != nil {
@@ -149,7 +190,7 @@ func runStatusForHumans(app *app.App, opts *StatusOptions) error {
 	nag.MaybePrintNags(nags)
 
 	if opts.Watch {
-		return WatchCommandsStatus(app, opts.Query, opts.MaxResults, opts.OutputLayout)
+		return WatchCommandsStatus(a, opts.Query, opts.MaxResults, opts.OutputLayout)
 	}
 
 	return nil
