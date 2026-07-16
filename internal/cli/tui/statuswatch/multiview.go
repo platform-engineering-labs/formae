@@ -119,9 +119,7 @@ func barWidth(termWidth int, vis map[int]bool) int {
 }
 
 // sortableColumns returns the column indexes that support sorting.
-// Consumed by Tasks 8/9 for sort navigation.
-//
-//nolint:unused
+// Consumed by the root model for sort-column navigation (Left/Right keys).
 func sortableColumns() []int {
 	cols := make([]int, 0, colCount)
 	for c := 0; c < colCount; c++ {

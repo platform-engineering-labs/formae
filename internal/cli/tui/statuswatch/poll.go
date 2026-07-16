@@ -16,14 +16,14 @@ type Client interface {
 	GetCommandsStatus(query string, n int, fromWatch bool) (*apimodel.ListCommandStatusResponse, []string, error)
 }
 
-type commandsMsg struct { //nolint:unused
+type commandsMsg struct {
 	commands []apimodel.Command
 	err      error
 }
 
-type tickMsg struct{} //nolint:unused
+type tickMsg struct{}
 
-func fetchCommands(c Client, query string, max int) tea.Cmd { //nolint:unused
+func fetchCommands(c Client, query string, max int) tea.Cmd {
 	return func() tea.Msg {
 		resp, _, err := c.GetCommandsStatus(query, max, true)
 		if err != nil {
@@ -36,6 +36,6 @@ func fetchCommands(c Client, query string, max int) tea.Cmd { //nolint:unused
 	}
 }
 
-func tick(interval time.Duration) tea.Cmd { //nolint:unused
+func tick(interval time.Duration) tea.Cmd {
 	return tea.Tick(interval, func(time.Time) tea.Msg { return tickMsg{} })
 }
