@@ -5,14 +5,29 @@
 package statuswatch
 
 import (
+	"fmt"
+	"os"
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/tuitest"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 )
+
+func TestMain(m *testing.M) {
+	tuitest.PinRendering()
+	os.Exit(m.Run())
+}
+
+var ansiRe = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+func plain(s string) string { return ansiRe.ReplaceAllString(s, "") }
 
 func cmdFix(id, cmdType, state string, started time.Time, failed int) apimodel.Command {
 	c := apimodel.Command{CommandID: id, Command: cmdType, State: state, StartTs: started}
@@ -73,4 +88,89 @@ func TestBarWidth_ElasticWithFloor(t *testing.T) {
 	assert.GreaterOrEqual(t, barWidth(120, vis), 10)
 	assert.Greater(t, barWidth(160, vis), barWidth(120, vis))
 	assert.Equal(t, 10, barWidth(40, visibleColumns(40))) // floor
+}
+
+func TestMultiView_RowContent(t *testing.T) {
+	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
+	c := apimodel.Command{
+		CommandID: "cmd-abc123", Command: "apply", Mode: "reconcile",
+		State: "Success", StartTs: now.Add(-10 * time.Minute), EndTs: now.Add(-10*time.Minute + 42*time.Second),
+		ResourceUpdates: []apimodel.ResourceUpdate{{State: "Success"}, {State: "Success"}},
+	}
+	v := multiView{th: theme.New("formae"), rows: buildRows([]apimodel.Command{c}), width: 110, now: now}
+	out := plain(strings.Join(v.renderRows(10), "\n"))
+
+	assert.Contains(t, out, "cmd-abc123")
+	assert.Contains(t, out, "apply")
+	assert.Contains(t, out, "reconcile")
+	assert.Contains(t, out, "completed 2/2") // terminal command: text, not bar
+	assert.Contains(t, out, "00:42")         // duration MM:SS
+	assert.Contains(t, out, "10m")           // age
+	assert.Contains(t, out, "✓")
+}
+
+func TestMultiView_RunningCommandShowsSegmentedBar(t *testing.T) {
+	now := time.Now()
+	c := apimodel.Command{
+		CommandID: "cmd-run1", Command: "apply", Mode: "reconcile",
+		State: "InProgress", StartTs: now.Add(-30 * time.Second),
+		ResourceUpdates: []apimodel.ResourceUpdate{
+			{State: "Success"}, {State: "Failed"}, {State: "InProgress"}, {State: "Pending"},
+		},
+	}
+	v := multiView{th: theme.New("formae"), rows: buildRows([]apimodel.Command{c}), width: 110, now: now, spinView: "◉"}
+	out := plain(strings.Join(v.renderRows(10), "\n"))
+	for _, seg := range []string{"█", "▒", "░", "⋅"} {
+		assert.Contains(t, out, seg)
+	}
+	assert.Contains(t, out, "1/4") // done/total alongside the bar
+}
+
+func TestMultiView_HeaderShowsSortIndicator(t *testing.T) {
+	v := multiView{th: theme.New("formae"), width: 110, sortCol: colAge, sortDir: components.SortDesc, sortHi: colAge}
+	h := plain(v.headerRow())
+	assert.Contains(t, h, "Age ▼")
+}
+
+func TestMultiView_ScrollWindowFollowsCursor(t *testing.T) {
+	now := time.Now()
+	var cmds []apimodel.Command
+	for i := 0; i < 30; i++ {
+		cmds = append(cmds, cmdFix(fmt.Sprintf("cmd-%02d", i), "apply", "Success", now, 0))
+	}
+	v := multiView{th: theme.New("formae"), rows: buildRows(cmds), width: 110, now: now, cursor: 25}
+	out := plain(strings.Join(v.renderRows(10), "\n"))
+	assert.Contains(t, out, "cmd-25")
+	assert.NotContains(t, out, "cmd-00")
+}
+
+func TestMultiView_Golden(t *testing.T) {
+	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
+	cmds := []apimodel.Command{
+		// terminal fixtures only — spinner frames are not golden-stable
+		cmdFix("cmd-ok1", "apply", "Success", now.Add(-3*time.Hour), 0),
+		cmdFix("cmd-fail1", "apply", "Failed", now.Add(-10*time.Minute), 1),
+	}
+	v := multiView{th: theme.New("formae"), rows: buildRows(cmds), width: 100, now: now}
+	tuitest.RequireGolden(t, []byte(v.headerRow()+"\n"+strings.Join(v.renderRows(10), "\n")))
+}
+
+func TestMultiView_RowWidthMatchesSpec(t *testing.T) {
+	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
+	termWidth := 110
+	c := apimodel.Command{
+		CommandID: "cmd-width1", Command: "apply", Mode: "reconcile",
+		State: "Success", StartTs: now.Add(-5 * time.Minute), EndTs: now.Add(-4 * time.Minute),
+		ResourceUpdates: []apimodel.ResourceUpdate{{State: "Success"}},
+	}
+	v := multiView{th: theme.New("formae"), rows: buildRows([]apimodel.Command{c}), width: termWidth, now: now}
+	rendered := v.renderRows(1)
+	if len(rendered) == 0 {
+		t.Fatal("expected at least one row")
+	}
+	stripped := plain(rendered[0])
+	vis := visibleColumns(termWidth)
+	bw := barWidth(termWidth, vis)
+	fw := fixedWidth(vis)
+	assert.Equal(t, fw+bw, len([]rune(stripped)), "rendered row visible width must equal fixedWidth+barWidth")
 }

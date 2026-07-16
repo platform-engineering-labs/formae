@@ -5,10 +5,16 @@
 package statuswatch
 
 import (
+	"fmt"
 	"sort"
+	"strings"
 	"time"
+	"unicode/utf8"
+
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 )
 
@@ -156,4 +162,260 @@ func sortRows(rows []row, col int, dir components.SortDirection, now time.Time) 
 		}
 		return lessRows(rows[i], rows[j], col, now)
 	})
+}
+
+// multiView is the rendering model for the multi-command summary table (VIEW 1).
+// It is a pure value type — no pointer receivers — so callers can copy it freely.
+type multiView struct {
+	th       *theme.Theme
+	rows     []row
+	cursor   int
+	sortCol  int
+	sortDir  components.SortDirection
+	sortHi   int // column highlighted by →← navigation
+	width    int
+	spinView string // current spinner frame, injected by the root model
+	now      time.Time
+}
+
+// rowStyles returns the id and text lipgloss styles for a row based on its
+// health and cursor state. Implements the mockup's row-coloring table:
+// problems get color, done gets brightness, finished rows fade, the cursor
+// brightens everything one tier.
+func (v multiView) rowStyles(h health, cursor bool) (id, text lipgloss.Style) {
+	p := v.th.Palette
+	var idc, txt lipgloss.AdaptiveColor
+	switch h {
+	case healthRunningFailing:
+		idc, txt = p.Error, p.Error
+	case healthFinishedFailed:
+		idc, txt = p.ErrorSubtle, p.ErrorSubtle
+		if cursor {
+			idc, txt = p.ErrorBright, p.ErrorBright
+		}
+	case healthFinishedOK:
+		idc, txt = p.TextSubtle, p.TextSubtle
+		if cursor {
+			idc, txt = p.TextSecondary, p.TextSecondary
+		}
+	default: // healthRunning
+		idc, txt = p.PrimaryAccent, p.TextPrimary
+	}
+	id = lipgloss.NewStyle().Foreground(idc)
+	text = lipgloss.NewStyle().Foreground(txt)
+	if cursor {
+		id = id.Background(p.Selection)
+		text = text.Background(p.Selection)
+	}
+	return id, text
+}
+
+// pad right-pads or truncates s to exactly w visible rune columns.
+// Uses utf8.RuneCountInString for measurement on plain (ANSI-free) strings,
+// which is appropriate for all cell content we build before styling.
+func pad(s string, w int) string {
+	n := utf8.RuneCountInString(s)
+	if n >= w {
+		runes := []rune(s)
+		return string(runes[:w])
+	}
+	return s + strings.Repeat(" ", w-n)
+}
+
+// headerRow renders the column header line with sort indicators and sort-hi
+// background highlight. All layout derives from multiCols[c].width.
+func (v multiView) headerRow() string {
+	p := v.th.Palette
+	vis := visibleColumns(v.width)
+	bw := barWidth(v.width, vis)
+
+	headerStyle := lipgloss.NewStyle().
+		Foreground(p.TextSecondary).
+		Bold(true)
+	hiStyle := headerStyle.Background(p.Selection)
+
+	var sb strings.Builder
+	for c := 0; c < colCount; c++ {
+		if !vis[c] {
+			continue
+		}
+		spec := multiCols[c]
+		w := spec.width
+		if c == colProgress {
+			w = bw
+		}
+
+		title := spec.title
+		if v.sortCol == c {
+			switch v.sortDir {
+			case components.SortAsc:
+				title += " ▲"
+			case components.SortDesc:
+				title += " ▼"
+			}
+		}
+
+		cell := pad(title, w)
+		st := headerStyle
+		if v.sortHi == c {
+			st = hiStyle
+		}
+		sb.WriteString(st.Render(cell))
+	}
+	return sb.String()
+}
+
+// scrollOffset computes the scroll offset so the cursor row stays visible in
+// a window of visible rows.
+func scrollOffset(cursor, total, visible int) int {
+	off := 0
+	if cursor >= visible {
+		off = cursor - visible + 1
+	}
+	if max := total - visible; off > max {
+		off = max
+	}
+	if off < 0 {
+		off = 0
+	}
+	return off
+}
+
+// renderRows renders up to maxRows data rows windowed around the cursor.
+// Each rendered string has exactly fixedWidth(vis)+barWidth(width,vis) visible
+// rune columns so the table stays aligned.
+func (v multiView) renderRows(maxRows int) []string {
+	if len(v.rows) == 0 {
+		return nil
+	}
+	vis := visibleColumns(v.width)
+	bw := barWidth(v.width, vis)
+	p := v.th.Palette
+
+	off := scrollOffset(v.cursor, len(v.rows), maxRows)
+	end := off + maxRows
+	if end > len(v.rows) {
+		end = len(v.rows)
+	}
+
+	result := make([]string, 0, end-off)
+	for ri := off; ri < end; ri++ {
+		r := v.rows[ri]
+		isCursor := ri == v.cursor
+		idStyle, textStyle := v.rowStyles(r.health, isCursor)
+		terminal := isTerminalCommand(r.cmd.State)
+
+		// status glyph
+		var glyphStr string
+		switch {
+		case r.cmd.State == "Canceled":
+			glyphStr = textStyle.Render(pad("⊘", multiCols[colStatus].width))
+		case terminal && r.health == healthFinishedOK:
+			glyphStr = textStyle.Render(pad("✓", multiCols[colStatus].width))
+		case terminal && (r.health == healthFinishedFailed):
+			errSt := lipgloss.NewStyle().Foreground(p.ErrorSubtle)
+			if isCursor {
+				errSt = errSt.Background(p.Selection).Foreground(p.ErrorBright)
+			}
+			glyphStr = errSt.Render(pad("✗", multiCols[colStatus].width))
+		default:
+			// running — spinner
+			spinSt := lipgloss.NewStyle().Foreground(p.InProgress)
+			if r.health == healthRunningFailing {
+				spinSt = lipgloss.NewStyle().Foreground(p.Error)
+			}
+			if isCursor {
+				spinSt = spinSt.Background(p.Selection)
+			}
+			glyphStr = spinSt.Render(pad(v.spinView, multiCols[colStatus].width))
+		}
+
+		done, total := doneOf(r.counts)
+		dur := commandDuration(r.cmd, v.now)
+
+		// build cells per column
+		var sb strings.Builder
+		for c := 0; c < colCount; c++ {
+			if !vis[c] {
+				continue
+			}
+			spec := multiCols[c]
+			w := spec.width
+			if c == colProgress {
+				w = bw
+			}
+
+			switch c {
+			case colStatus:
+				sb.WriteString(glyphStr)
+			case colID:
+				sb.WriteString(idStyle.Render(pad(r.cmd.CommandID, w)))
+			case colCommand:
+				sb.WriteString(textStyle.Render(pad(r.cmd.Command, w)))
+			case colMode:
+				sb.WriteString(textStyle.Render(pad(r.cmd.Mode, w)))
+			case colProgress:
+				if terminal {
+					cell := pad(fmt.Sprintf("completed %d/%d", done, total), w)
+					sb.WriteString(textStyle.Render(cell))
+				} else {
+					// segmented bar + count; bar is bw-8 wide, count is right-aligned remainder
+					countStr := fmt.Sprintf(" %d/%d", done, total)
+					barW := w - utf8.RuneCountInString(countStr)
+					if barW < 1 {
+						barW = 1
+					}
+					bar := components.ProgressBar(v.th, barW, r.counts)
+					cell := bar + textStyle.Render(pad(countStr, w-barW))
+					sb.WriteString(cell)
+				}
+			case colDone:
+				n := r.counts[components.StateDone]
+				st := lipgloss.NewStyle().Foreground(p.Done)
+				if n == 0 || terminal {
+					st = textStyle
+				}
+				if isCursor {
+					st = st.Background(p.Selection)
+				}
+				sb.WriteString(st.Render(pad(fmt.Sprintf("%d", n), w)))
+			case colFailed:
+				n := r.counts[components.StateFailed]
+				st := lipgloss.NewStyle().Foreground(p.Error)
+				if n == 0 || terminal {
+					st = textStyle
+				}
+				if isCursor {
+					st = st.Background(p.Selection)
+				}
+				sb.WriteString(st.Render(pad(fmt.Sprintf("%d", n), w)))
+			case colInProg:
+				n := r.counts[components.StateInProgress]
+				st := lipgloss.NewStyle().Foreground(p.InProgress)
+				if n == 0 || terminal {
+					st = textStyle
+				}
+				if isCursor {
+					st = st.Background(p.Selection)
+				}
+				sb.WriteString(st.Render(pad(fmt.Sprintf("%d", n), w)))
+			case colPending:
+				n := r.counts[components.StatePending]
+				st := lipgloss.NewStyle().Foreground(p.Pending)
+				if n == 0 || terminal {
+					st = textStyle
+				}
+				if isCursor {
+					st = st.Background(p.Selection)
+				}
+				sb.WriteString(st.Render(pad(fmt.Sprintf("%d", n), w)))
+			case colTime:
+				sb.WriteString(textStyle.Render(pad(components.FormatDuration(dur), w)))
+			case colAge:
+				sb.WriteString(textStyle.Render(pad(components.FormatAge(r.cmd.StartTs, v.now), w)))
+			}
+		}
+		result = append(result, sb.String())
+	}
+	return result
 }
