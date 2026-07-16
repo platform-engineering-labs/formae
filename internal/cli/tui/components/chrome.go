@@ -34,6 +34,36 @@ func FormatDuration(d time.Duration) string {
 	return fmt.Sprintf("%02d:%02d", s/60, s%60)
 }
 
+// FormatAge renders how long ago start was as a compact relative time of at
+// most four characters: 42s, 5m, 3h, 12d, >3mo, >2y. The display is
+// approximate for old timestamps — callers must sort on the real time, not
+// on this string. A zero time renders "—".
+func FormatAge(start, now time.Time) string {
+	if start.IsZero() {
+		return "—"
+	}
+	d := now.Sub(start)
+	day := 24 * time.Hour
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < day:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	case d < 30*day:
+		return fmt.Sprintf("%dd", int(d/day))
+	case d < 300*day: // 1–9 months
+		return fmt.Sprintf(">%dmo", int(d/(30*day)))
+	default: // 10+ months reads as years
+		y := int(d / (365 * day))
+		if y < 1 {
+			y = 1
+		}
+		return fmt.Sprintf(">%dy", y)
+	}
+}
+
 // HeaderBar renders the top bar: bold left text, right-aligned status
 // (e.g. "↻ live"), with a bottom border across the full width.
 func HeaderBar(th *theme.Theme, left, right string, width int) string {

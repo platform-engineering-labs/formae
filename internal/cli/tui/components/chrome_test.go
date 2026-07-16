@@ -69,6 +69,30 @@ func TestFooterBar_Layout(t *testing.T) {
 	assert.Equal(t, 80, lipgloss.Width(out))
 }
 
+func TestFormatAge(t *testing.T) {
+	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name  string
+		start time.Time
+		want  string
+	}{
+		{"zero time", time.Time{}, "—"},
+		{"seconds", now.Add(-42 * time.Second), "42s"},
+		{"minutes", now.Add(-2 * time.Minute), "2m"},
+		{"hours", now.Add(-3 * time.Hour), "3h"},
+		{"days", now.Add(-10 * 24 * time.Hour), "10d"},
+		{"months", now.Add(-45 * 24 * time.Hour), ">1mo"},
+		{"nine months", now.Add(-9*30*24*time.Hour - 24*time.Hour), ">9mo"},
+		{"ten months rounds to a year", now.Add(-10 * 30 * 24 * time.Hour), ">1y"},
+		{"years", now.Add(-800 * 24 * time.Hour), ">2y"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, FormatAge(tc.start, now))
+		})
+	}
+}
+
 func TestChrome_Golden(t *testing.T) {
 	th := theme.New("formae")
 	out := HeaderBar(th, "← esc", "↻ live", 80) + "\n" +
