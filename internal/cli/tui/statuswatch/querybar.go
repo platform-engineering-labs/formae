@@ -51,8 +51,6 @@ func (q queryBar) Update(msg tea.KeyMsg) (queryBar, bool) {
 		q.edit = ""
 	case tea.KeyRunes:
 		q.edit += string(msg.Runes)
-	case tea.KeySpace:
-		q.edit += " "
 	}
 	return q, false
 }
