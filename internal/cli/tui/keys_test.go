@@ -7,6 +7,8 @@ package tui
 import (
 	"testing"
 
+	"github.com/charmbracelet/bubbles/key"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -34,4 +36,13 @@ func TestDefaultKeyMap_HelpText(t *testing.T) {
 	help := km.Quit.Help()
 	assert.Equal(t, "q", help.Key)
 	assert.Equal(t, "quit", help.Desc)
+}
+
+func TestDefaultKeyMap_SortNavigation(t *testing.T) {
+	km := DefaultKeyMap()
+	assert.True(t, key.Matches(tea.KeyMsg{Type: tea.KeyLeft}, km.Left))
+	assert.True(t, key.Matches(tea.KeyMsg{Type: tea.KeyRight}, km.Right))
+	assert.True(t, key.Matches(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}}, km.Left))
+	assert.True(t, key.Matches(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}}, km.Right))
+	assert.True(t, key.Matches(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}}, km.Sort))
 }

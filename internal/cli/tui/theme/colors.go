@@ -24,8 +24,10 @@ type Palette struct {
 	SecondaryAccent lipgloss.AdaptiveColor // orange — brand, progress, callouts
 
 	// Semantic colors
-	Error   lipgloss.AdaptiveColor // red — failures
-	Warning lipgloss.AdaptiveColor // yellow/gold — drift, warnings
+	Error       lipgloss.AdaptiveColor // red — failures
+	ErrorSubtle lipgloss.AdaptiveColor // dimmed red — finished-failed rows
+	ErrorBright lipgloss.AdaptiveColor // bright red — cursor on failed rows
+	Warning     lipgloss.AdaptiveColor // yellow/gold — drift, warnings
 
 	// State colors (brightness-based, not hue-based)
 	Done       lipgloss.AdaptiveColor // bright white
@@ -47,6 +49,8 @@ func FormaePalette() Palette {
 		PrimaryAccent:   lipgloss.AdaptiveColor{Light: "#2563EB", Dark: "#60A5FA"},
 		SecondaryAccent: lipgloss.AdaptiveColor{Light: "#FF6B00", Dark: "#FF8533"},
 		Error:           lipgloss.AdaptiveColor{Light: "#DC2626", Dark: "#F87171"},
+		ErrorSubtle:     lipgloss.AdaptiveColor{Light: "#B45454", Dark: "#9B4444"},
+		ErrorBright:     lipgloss.AdaptiveColor{Light: "#B91C1C", Dark: "#FCA5A5"},
 		// Decision (PLA-280): keep the classic gold #B5B55B for Warning rather
 		// than the RFC's brighter yellow — it fits the muted grayscale
 		// aesthetic; warnings still read as "colored" against the gray states.
@@ -71,6 +75,8 @@ func ClassicPalette() Palette {
 		PrimaryAccent:   lipgloss.AdaptiveColor{Light: "#5B9BD5", Dark: "#ADD8E6"}, // LightBlue
 		SecondaryAccent: lipgloss.AdaptiveColor{Light: "#B5B55B", Dark: "#B5B55B"}, // Gold
 		Error:           lipgloss.AdaptiveColor{Light: "#FF0000", Dark: "#FF6666"}, // Red
+		ErrorSubtle:     lipgloss.AdaptiveColor{Light: "#A94442", Dark: "#994444"}, // dimmed red
+		ErrorBright:     lipgloss.AdaptiveColor{Light: "#CC0000", Dark: "#FF9999"}, // bright red
 		Warning:         lipgloss.AdaptiveColor{Light: "#B5B55B", Dark: "#B5B55B"}, // Gold
 		Done:            lipgloss.AdaptiveColor{Light: "#008000", Dark: "#00FF00"}, // Green
 		InProgress:      lipgloss.AdaptiveColor{Light: "#5B9BD5", Dark: "#ADD8E6"}, // LightBlue

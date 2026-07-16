@@ -66,3 +66,10 @@ func TestPaletteByName(t *testing.T) {
 		})
 	}
 }
+
+func TestPalettes_HaveErrorTiers(t *testing.T) {
+	for _, p := range []Palette{FormaePalette(), ClassicPalette()} {
+		assert.NotEmpty(t, p.ErrorSubtle.Dark)
+		assert.NotEmpty(t, p.ErrorBright.Dark)
+	}
+}

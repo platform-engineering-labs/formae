@@ -12,6 +12,9 @@ type KeyMap struct {
 	Down         key.Binding
 	PageUp       key.Binding
 	PageDown     key.Binding
+	Left         key.Binding
+	Right        key.Binding
+	Sort         key.Binding
 	Search       key.Binding
 	ToggleDetail key.Binding
 	Filter       key.Binding
@@ -40,6 +43,17 @@ func DefaultKeyMap() KeyMap {
 		PageDown: key.NewBinding(
 			key.WithKeys("ctrl+d", "pgdown"),
 			key.WithHelp("ctrl+d", "page down"),
+		),
+		Left: key.NewBinding(
+			key.WithKeys("left", "h"),
+			key.WithHelp("→←", "column"),
+		),
+		Right: key.NewBinding(
+			key.WithKeys("right", "l"),
+		),
+		Sort: key.NewBinding(
+			key.WithKeys("s"),
+			key.WithHelp("s", "toggle sort"),
 		),
 		Search: key.NewBinding(
 			key.WithKeys("/"),
