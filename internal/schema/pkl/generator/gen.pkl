@@ -235,15 +235,6 @@ local function applyTyped(type: reflect.Class, value: Any): Typed|GenerationFail
 
 hidden keyTransform: Function1<reflect.Property, String>?
 
-function applyProperty(valueAsMap: Map, prop: reflect.Property) =
-  //let (propName = keyTransform?.ifNonNull((it) -> (it as Function1<reflect.Property, String>).apply(prop)) ?? "nico \(prop.name)")
-  //  if (valueAsMap.containsKey(propName)) applyType(prop.type, valueAsMap[propName])
-  //  else if (!(prop.type is reflect.NullableType) && prop.defaultValue != null) (prop.defaultValue)
-  //  else null
-  if (valueAsMap.containsKey(prop.name)) applyType(prop.type, valueAsMap[prop.name])
-  else if (prop.defaultValue != null) prop.defaultValue
-  else null
-
 
 class FakeValue extends formae.Value {
   FakeValue: String = value
@@ -287,7 +278,10 @@ function applyPropertyWithMapping(valueAsMap: Map, prop: reflect.Property, rever
         ))
         if (matchingEntry != null && valueAsMap.containsKey(matchingEntry))
             applyType(prop.type, valueAsMap[matchingEntry])
-        else if (prop.defaultValue != null)
+        // An absent nullable property is represented as null; its schema default
+        // must not be evaluated, since some nullable types carry a constraint
+        // over sibling properties that a bare default (all-null) violates.
+        else if (!(prop.type is reflect.NullableType) && prop.defaultValue != null)
             prop.defaultValue
         else
             null

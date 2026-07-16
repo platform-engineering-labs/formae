@@ -54,6 +54,35 @@ local class TestResource extends formae.Resource {
     bucketName: String
 }
 
+/// Mutual-exclusivity check: exactly one of the two candidate values is non-null.
+const local function isExclusive(a: Any, b: Any): Boolean = (a == null) != (b == null)
+
+/// A nested type carrying a mutual-exclusivity constraint on two optional
+/// fields (exactly one of `run`/`uses` may be set).
+local class XorStep {
+    run: String?(isExclusive(this, uses))
+    uses: String?
+}
+
+@formae.ResourceHint
+local class WorkflowResource extends formae.Resource {
+    type = "FakePlugin::Actions::Workflow"
+
+    @formae.FieldHint
+    steps: Listing<XorStep>
+}
+
+@formae.ResourceHint
+local class DefaultsResource extends formae.Resource {
+    type = "FakePlugin::Defaults::Resource"
+
+    @formae.FieldHint
+    retries: Int = 3
+
+    @formae.FieldHint
+    mode: String? = "auto"
+}
+
 // Test data
 local simpleProperties: Dynamic = new Dynamic {
    x = 42
@@ -92,6 +121,19 @@ local resourceProperties: Dynamic = new Dynamic {
         }
     }
     label = "my-bucket"
+}
+
+local workflowProperties: Dynamic = new Dynamic {
+    // `run` is absent (only `uses` is set) — the sibling that actually
+    // carries the mutual-exclusivity constraint is the one being defaulted.
+    steps = new Listing {
+        new Dynamic { uses = "actions/checkout@v4" }
+    }
+    label = "wf"
+}
+
+local defaultsProperties: Dynamic = new Dynamic {
+    label = "defaults"
 }
 
 examples {
@@ -399,6 +441,39 @@ facts {
         // collectImports may return duplicates but the caller (pklGenerator) dedups
         // Here we verify the imports are at least present
         imports.contains("@testprovider/dns/zone.pkl")
+    }
+
+    // --- Absent property vs. schema default ---
+
+    ["Nested mutually-exclusive fields apply successfully when exactly one is set"] {
+        // XorStep.run carries a constraint referencing its sibling `uses`.
+        // Extraction must not evaluate that constraint against an absent field's
+        // schema default; it should only see the actually-extracted value.
+        let (result = gen.apply(WorkflowResource, workflowProperties))
+        let (step = result.steps.toList()[0])
+        step.run == null && step.uses == "actions/checkout@v4"
+    }
+
+    ["Absent non-nullable property with a default still injects that default"] {
+        let (result = gen.apply(DefaultsResource, defaultsProperties))
+        result.retries == 3
+    }
+
+    ["Absent nullable property with an explicit default is emitted as null, not the default"] {
+        let (result = gen.apply(DefaultsResource, defaultsProperties))
+        result.mode == null
+    }
+
+    ["Round-trip stays a no-op: the absent nullable field is dropped on render and its default re-applies on reconstruction"] {
+        // Extraction represents the absent nullable field as null, so rendering
+        // the resource drops it from the emitted output entirely...
+        let (extracted = gen.apply(DefaultsResource, defaultsProperties))
+        let (rendered = gen.genPklToMapWithTypes(new Dynamic { res = extracted }) as Map)
+        let (renderedRes = rendered["res"] as Map)
+        // ...and reconstructing the resource without that field restores the
+        // schema default, so extract -> reapply does not change the value.
+        let (reapplied = new DefaultsResource { label = "roundtrip" })
+        !renderedRes.containsKey("mode") && renderedRes["retries"] == 3 && reapplied.mode == "auto"
     }
 
 }
