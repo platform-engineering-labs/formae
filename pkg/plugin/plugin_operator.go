@@ -554,6 +554,7 @@ func read(from gen.PID, state gen.Atom, data PluginUpdateData, operation ReadRes
 		ResourceType:    operation.ResourceType,
 		TargetConfig:    operation.TargetConfig,
 		RedactSensitive: operation.RedactSensitive,
+		PriorProperties: operation.ExistingResource.Properties,
 	})
 	if err != nil {
 		proc.Log().Debug("PluginOperator: failed to read resource: %v", err)

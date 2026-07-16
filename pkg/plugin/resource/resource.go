@@ -61,6 +61,31 @@ type ReadRequest struct {
 
 	// RedactSensitive declares intent to remove sensitive properties
 	RedactSensitive bool
+
+	// PriorProperties carries the caller's last-known model for this resource
+	// (the stored row), as an OPTIONAL hint. It is never required to satisfy a
+	// Read: a plugin may ignore it entirely, and most should. A Read still
+	// reports actual cloud state — this is not an input the read is computed
+	// from.
+	//
+	// Its purpose is disambiguation, not data. Some resources have an ambiguous
+	// boundary: an IAM role's inline policies, for example, are a separate,
+	// queryable sub-resource, so "read the role" can legitimately mean with or
+	// without them embedded. Which projection is correct depends on how the
+	// caller models the resource — inline, versus as standalone child resources
+	// — and only the caller's model knows that. A plugin may consult
+	// PriorProperties to report the projection the caller manages, so a caller
+	// that manages a child as a standalone resource is not shown phantom drift
+	// (or driven to destroy it on a reconcile).
+	//
+	// Trade-off: this couples Read to the caller's model, which is a small leak
+	// in an otherwise pure operation. Prefer designing resource types with an
+	// unambiguous boundary so the hint is unnecessary; reach for it only where
+	// the cloud API genuinely conflates a resource with its children.
+	//
+	// Empty when the caller has no prior state (create/status read-back,
+	// discovery). Treat empty as "unknown" and fall back to default behaviour.
+	PriorProperties json.RawMessage
 }
 
 type ReadResult struct {
