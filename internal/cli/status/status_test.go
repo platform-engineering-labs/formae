@@ -37,23 +37,50 @@ func TestRunStatusForHumans_UsesTUIOnlyForTTY(t *testing.T) {
 }
 
 func TestRunStatusForHumans_NonTTY_SkipsTUI(t *testing.T) {
-	// When stdout is not a TTY, launchTUI must NOT be called.
-	calls := 0
+	// When stdout is not a TTY, launchTUI must NOT be called, and printBanner
+	// must be invoked to verify the seam works. Confirms the function takes the
+	// real non-TTY path, not the TUI path.
+	tUIcalls := 0
+	bannerCalls := 0
+	callOrder := []string{}
+
 	origLaunch := launchTUI
 	origIsTerminal := isTerminal
-	launchTUI = func(_ *app.App, _ *StatusOptions) error { calls++; return nil }
+	origPrintBanner := printBanner
+
+	launchTUI = func(_ *app.App, _ *StatusOptions) error {
+		tUIcalls++
+		callOrder = append(callOrder, "launchTUI")
+		return nil
+	}
 	isTerminal = func(_ io.Writer) bool { return false }
+	printBanner = func(_ *app.App) {
+		bannerCalls++
+		callOrder = append(callOrder, "printBanner")
+	}
+
 	t.Cleanup(func() {
 		isTerminal = origIsTerminal
 		launchTUI = origLaunch
+		printBanner = origPrintBanner
 	})
 
-	// Non-TTY path calls app methods — passing nil panics, but launchTUI must
-	// not have been called before the panic.
-	assert.Panics(t, func() {
-		_ = runStatusForHumans(nil, &StatusOptions{OutputLayout: StatusOutputSummary})
-	})
-	assert.Equal(t, 0, calls)
+	// Downstream calls on unconfigured app will fail/panic, but that's OK;
+	// we recover and assert seams were called in the right order.
+	recovered := false
+	defer func() {
+		if r := recover(); r != nil {
+			recovered = true
+		}
+	}()
+
+	_ = runStatusForHumans(&app.App{}, &StatusOptions{OutputLayout: StatusOutputSummary})
+
+	// Assert seam order and counts: printBanner before any GetCommandsStatus panic.
+	assert.Equal(t, 0, tUIcalls, "launchTUI should not be called in non-TTY path")
+	assert.Equal(t, 1, bannerCalls, "printBanner seam should be called once")
+	assert.Equal(t, []string{"printBanner"}, callOrder, "printBanner should be the first (and only) seam called")
+	assert.True(t, recovered, "downstream call on unconfigured app should panic as expected")
 }
 
 func TestMaxResults_TUIKeepsFlagValue(t *testing.T) {

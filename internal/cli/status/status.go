@@ -26,10 +26,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// isTerminal and launchTUI are package-level vars so tests can stub them.
+// isTerminal, launchTUI, and printBanner are package-level vars so tests can stub them.
 var (
-	isTerminal = tui.IsTerminal
-	launchTUI  = launchStatusTUI
+	isTerminal  = tui.IsTerminal
+	launchTUI   = launchStatusTUI
+	printBanner = func(a *app.App) { a.PrintBanner() }
 )
 
 type StatusOutput string
@@ -164,7 +165,7 @@ func runStatusForHumans(a *app.App, opts *StatusOptions) error {
 	}
 
 	// Human + non-TTY → existing print-and-exit path, completely unchanged.
-	a.PrintBanner()
+	printBanner(a)
 
 	status, nags, err := a.GetCommandsStatus(opts.Query, opts.MaxResults, false)
 	if err != nil {
