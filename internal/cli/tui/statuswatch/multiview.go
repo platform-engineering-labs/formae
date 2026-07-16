@@ -174,6 +174,17 @@ type multiView struct {
 	width    int
 	spinView string // current spinner frame, injected by the root model
 	now      time.Time
+	hideAge  bool // detail view's pinned row omits Age (mockup VIEW 2)
+}
+
+// visibleCols returns the responsive column set, additionally dropping Age
+// when hideAge is set.
+func (v multiView) visibleCols() map[int]bool {
+	vis := visibleColumns(v.width)
+	if v.hideAge {
+		vis[colAge] = false
+	}
+	return vis
 }
 
 // rowStyles returns the id and text lipgloss styles for a row based on its
@@ -224,7 +235,7 @@ func pad(s string, w int) string {
 // background highlight. All layout derives from multiCols[c].width.
 func (v multiView) headerRow() string {
 	p := v.th.Palette
-	vis := visibleColumns(v.width)
+	vis := v.visibleCols()
 	bw := barWidth(v.width, vis)
 
 	headerStyle := lipgloss.NewStyle().
@@ -286,7 +297,7 @@ func (v multiView) renderRows(maxRows int) []string {
 	if len(v.rows) == 0 {
 		return nil
 	}
-	vis := visibleColumns(v.width)
+	vis := v.visibleCols()
 	bw := barWidth(v.width, vis)
 	p := v.th.Palette
 

@@ -24,7 +24,7 @@ const (
 
 type updateRow struct {
 	kind       updateKind
-	key        string // stable identity: kind prefix + label — survives poll refreshes
+	key        string // stable identity: kind/stack/label for resources & policies — survives poll refreshes
 	label      string
 	typeName   string // resources: ResourceType; policies: PolicyType
 	stack      string

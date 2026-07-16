@@ -37,22 +37,33 @@ type Options struct {
 	ExitWhenDone bool
 }
 
+// viewMode controls which TUI panel is active.
+type viewMode int
+
+const (
+	viewMulti  viewMode = iota // multi-command summary list
+	viewDetail                 // single-command drill-in
+)
+
 // Model is the root bubbletea model for the status/watch TUI.
 // It wires together polling (poll.go), the query bar (querybar.go), and the
 // multi-command table view (multiview.go).
-// Task 11 will add a viewMode field and detail view switch.
 type Model struct {
 	th      *theme.Theme
 	client  Client
 	opts    Options
 	keys    tui.KeyMap
 	multi   multiView
+	detail  detailModel
+	view    viewMode
 	query   queryBar
 	spinner spinner.Model
 	err     error
 	width   int
 	height  int
 	ready   bool
+	// focusHandled tracks whether FocusCommandID has been used to drill in yet.
+	focusHandled bool
 }
 
 // New constructs a Model with sensible defaults applied to opts.
@@ -72,6 +83,7 @@ func New(th *theme.Theme, client Client, opts Options) Model {
 		opts:    opts,
 		keys:    tui.DefaultKeyMap(),
 		multi:   multiView{th: th, sortCol: colStatus, sortDir: components.SortAsc},
+		detail:  newDetailModel(th, 80, 24), // placeholder; resized on WindowSizeMsg
 		query:   newQueryBar(th, opts.Query),
 		spinner: components.NewSpinner(th),
 	}
@@ -94,6 +106,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.multi.width = msg.Width
+		m.detail.width = msg.Width
+		vpH := max(msg.Height-chromeLines-2, 1)
+		m.detail.vp.Width = msg.Width
+		m.detail.vp.Height = vpH
 		m.ready = true
 		return m, nil
 
@@ -117,6 +133,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Re-anchor cursor to the same command ID (fall back to clamped index).
 		m.multi.cursor = reanchorCursor(m.multi.rows, anchorID, m.multi.cursor)
+
+		// FocusCommandID: on first successful poll, if the command is present, drill in.
+		if m.opts.FocusCommandID != "" && !m.focusHandled {
+			for _, r := range m.multi.rows {
+				if r.cmd.CommandID == m.opts.FocusCommandID {
+					m.focusHandled = true
+					m.detail = m.detail.SetCommand(r.cmd, r, m.spinner.View(), m.opts.Now())
+					m.view = viewDetail
+					break
+				}
+			}
+		}
+
+		// If we are in detail view, refresh the detail model with the fresh data.
+		if m.view == viewDetail {
+			found := false
+			for _, r := range m.multi.rows {
+				if r.cmd.CommandID == m.detail.cmdID {
+					found = true
+					m.detail = m.detail.SetCommand(r.cmd, r, m.spinner.View(), m.opts.Now())
+					break
+				}
+			}
+			if !found {
+				// Command vanished from results — fall back to multi view.
+				m.view = viewMulti
+			}
+		}
 
 		// ExitWhenDone: quit when all visible commands are terminal (and there
 		// is at least one row — avoid quitting immediately on empty responses).
@@ -160,6 +204,27 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, fetchCommands(m.client, m.query.Query(), m.opts.MaxResults)
 		}
 		return m, nil
+	}
+
+	// In detail view, route keys to detail model (except '/', 'q', '?').
+	if m.view == viewDetail {
+		switch {
+		case key.Matches(msg, m.keys.Quit):
+			return m, tea.Quit
+		case key.Matches(msg, m.keys.Search):
+			m.query = m.query.Focus()
+			return m, nil
+		case key.Matches(msg, m.keys.Help):
+			// No-op until Task 12 wires in the help overlay.
+			return m, nil
+		default:
+			var back bool
+			m.detail, back = m.detail.Update(msg, m.keys)
+			if back {
+				m.view = viewMulti
+			}
+			return m, nil
+		}
 	}
 
 	visible := m.height - chromeLines
@@ -245,7 +310,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case key.Matches(msg, m.keys.Enter):
-		// No-op until Task 11 wires in the detail view.
+		if m.multi.cursor >= 0 && m.multi.cursor < len(m.multi.rows) {
+			r := m.multi.rows[m.multi.cursor]
+			m.detail = newDetailModel(m.th, m.width, m.height)
+			m.detail = m.detail.SetCommand(r.cmd, r, m.spinner.View(), m.opts.Now())
+			m.view = viewDetail
+		}
 		return m, nil
 
 	case key.Matches(msg, m.keys.Help):
@@ -276,6 +346,26 @@ func (m Model) View() string {
 			Foreground(m.th.Palette.Error).
 			Render("⚠ " + m.err.Error())
 	}
+
+	if m.view == viewDetail {
+		header := components.HeaderBar(m.th, "← esc/backspace", right, m.width)
+		detailContent := m.detail.View(m.height)
+		queryView := m.query.View(m.width)
+		// Detail view: header + detail (incl. pinned cmd row + sep + vp + footer)
+		// We need to count lines to match height exactly
+		parts := header + "\n" + detailContent
+		lines := strings.Split(parts, "\n")
+		// Pad to height
+		for len(lines) < m.height {
+			lines = append(lines, "")
+		}
+		if len(lines) > m.height {
+			lines = lines[:m.height]
+		}
+		_ = queryView
+		return strings.Join(lines, "\n")
+	}
+
 	header := components.HeaderBar(m.th, "formae status command", right, m.width)
 
 	visible := m.height - chromeLines
