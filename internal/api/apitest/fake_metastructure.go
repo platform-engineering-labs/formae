@@ -103,8 +103,18 @@ func (m *FakeMetastructure) CancelCommandsByQuery(query string, force bool, clie
 }
 
 func (m *FakeMetastructure) ListFormaCommandStatus(commandID string, clientID string, n int) (*apimodel.ListCommandStatusResponse, error) {
+	// Handle empty queue: return nil response + nil error (safe zero behavior).
+	if len(m.ListResponses) == 0 {
+		return nil, nil
+	}
+
 	nextResponse := m.ListResponses[0]
-	m.ListResponses = m.ListResponses[1:]
+
+	// Pop the response if there's more than one in the queue (FIFO for multi-response tests).
+	// If this is the last one, keep it (sticky tail) so subsequent polls don't panic.
+	if len(m.ListResponses) > 1 {
+		m.ListResponses = m.ListResponses[1:]
+	}
 
 	return nextResponse.ListCommandStatusResponse, nextResponse.Error
 }
