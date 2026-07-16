@@ -17,6 +17,7 @@ type Palette struct {
 	TextSecondary lipgloss.AdaptiveColor // medium gray — labels, metadata
 	TextSubtle    lipgloss.AdaptiveColor // dark gray — hints, disabled
 	Border        lipgloss.AdaptiveColor // panel borders
+	Selection     lipgloss.AdaptiveColor // cursor-row highlight background
 
 	// Accent colors
 	PrimaryAccent   lipgloss.AdaptiveColor // blue — IDs, links, interactive
@@ -42,6 +43,7 @@ func FormaePalette() Palette {
 		TextSecondary:   lipgloss.AdaptiveColor{Light: "#666666", Dark: "#888888"},
 		TextSubtle:      lipgloss.AdaptiveColor{Light: "#999999", Dark: "#555555"},
 		Border:          lipgloss.AdaptiveColor{Light: "#DDDDDD", Dark: "#333355"},
+		Selection:       lipgloss.AdaptiveColor{Light: "#DDDDDD", Dark: "#3A3A3A"},
 		PrimaryAccent:   lipgloss.AdaptiveColor{Light: "#2563EB", Dark: "#60A5FA"},
 		SecondaryAccent: lipgloss.AdaptiveColor{Light: "#FF6B00", Dark: "#FF8533"},
 		Error:           lipgloss.AdaptiveColor{Light: "#DC2626", Dark: "#F87171"},
@@ -62,6 +64,7 @@ func ClassicPalette() Palette {
 		TextSecondary:   lipgloss.AdaptiveColor{Light: "#666666", Dark: "#808080"},
 		TextSubtle:      lipgloss.AdaptiveColor{Light: "#999999", Dark: "#555555"},
 		Border:          lipgloss.AdaptiveColor{Light: "#CCCCCC", Dark: "#444444"},
+		Selection:       lipgloss.AdaptiveColor{Light: "#DDDDDD", Dark: "#3A3A3A"},
 		PrimaryAccent:   lipgloss.AdaptiveColor{Light: "#5B9BD5", Dark: "#ADD8E6"}, // LightBlue
 		SecondaryAccent: lipgloss.AdaptiveColor{Light: "#B5B55B", Dark: "#B5B55B"}, // Gold
 		Error:           lipgloss.AdaptiveColor{Light: "#FF0000", Dark: "#FF6666"}, // Red

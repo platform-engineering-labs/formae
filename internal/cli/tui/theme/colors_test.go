@@ -26,6 +26,8 @@ func TestFormaePalette(t *testing.T) {
 	assert.NotEmpty(t, string(p.TextPrimary.Dark))
 	assert.NotEmpty(t, string(p.TextSecondary.Dark))
 	assert.NotEmpty(t, string(p.TextSubtle.Dark))
+	// Selection highlight for cursor rows
+	assert.NotEmpty(t, string(p.Selection.Dark))
 }
 
 func TestClassicPalette(t *testing.T) {
@@ -36,6 +38,7 @@ func TestClassicPalette(t *testing.T) {
 	assert.NotEmpty(t, string(p.SecondaryAccent.Dark))
 	assert.NotEmpty(t, string(p.Error.Dark))
 	assert.NotEmpty(t, string(p.Warning.Dark))
+	assert.NotEmpty(t, string(p.Selection.Dark))
 }
 
 func TestClassicPalette_PreservesExistingColors(t *testing.T) {
