@@ -155,3 +155,20 @@ func TestModel_CtrlCQuitsEvenWhileQueryFocused(t *testing.T) {
 	require.NotNil(t, cmd, "ctrl+c should return a quit command even when query bar is focused")
 	assert.Equal(t, tea.Quit(), cmd())
 }
+
+func TestModel_HelpOverlay(t *testing.T) {
+	m, _ := newTestModel(t, nil)
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	mm, _ = mm.Update(commandsMsg{commands: respFix("cmd-one").Commands})
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+
+	out := plain(mm.(Model).View())
+	assert.Contains(t, out, "Keybindings")
+	assert.Contains(t, out, "j/k")
+	assert.Contains(t, out, "toggle sort")
+
+	// any key closes
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	assert.NotContains(t, plain(mm.(Model).View()), "Keybindings")
+}

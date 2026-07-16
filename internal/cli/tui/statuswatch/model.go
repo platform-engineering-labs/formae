@@ -64,6 +64,8 @@ type Model struct {
 	ready   bool
 	// focusHandled tracks whether FocusCommandID has been used to drill in yet.
 	focusHandled bool
+	// helpOpen tracks whether the help overlay is currently displayed.
+	helpOpen bool
 }
 
 // New constructs a Model with sensible defaults applied to opts.
@@ -195,6 +197,17 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 
+	// Help overlay: any key closes it, except q/ctrl+c which also quit.
+	if m.helpOpen {
+		switch {
+		case key.Matches(msg, m.keys.Quit):
+			return m, tea.Quit
+		default:
+			m.helpOpen = false
+			return m, nil
+		}
+	}
+
 	// Query bar has priority when it is focused.
 	if m.query.Focused() {
 		var applied bool
@@ -215,7 +228,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.query = m.query.Focus()
 			return m, nil
 		case key.Matches(msg, m.keys.Help):
-			// No-op until Task 12 wires in the help overlay.
+			m.helpOpen = true
 			return m, nil
 		default:
 			var back bool
@@ -319,7 +332,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case key.Matches(msg, m.keys.Help):
-		// No-op until Task 12 wires in the help overlay.
+		m.helpOpen = true
 		return m, nil
 	}
 
@@ -345,6 +358,28 @@ func (m Model) View() string {
 		right = lipgloss.NewStyle().
 			Foreground(m.th.Palette.Error).
 			Render("⚠ " + m.err.Error())
+	}
+
+	// Help overlay: render the help panel instead of the body between header and footer
+	if m.helpOpen {
+		header := components.HeaderBar(m.th, "formae status command", right, m.width)
+		bodyHeight := m.height - chromeLines
+		if bodyHeight < 1 {
+			bodyHeight = 1
+		}
+		helpPanel := renderHelpOverlay(m.th, m.width, bodyHeight)
+		footer := components.FooterBar(m.th, m.width, multiFooterHints(), "")
+
+		parts := header + "\n" + helpPanel + "\n" + m.query.View(m.width) + "\n" + footer
+		lines := strings.Split(parts, "\n")
+		// Pad to height
+		for len(lines) < m.height {
+			lines = append(lines, "")
+		}
+		if len(lines) > m.height {
+			lines = lines[:m.height]
+		}
+		return strings.Join(lines, "\n")
 	}
 
 	if m.view == viewDetail {
