@@ -7,7 +7,13 @@ package components
 import (
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/platform-engineering-labs/formae/internal/cli/tui"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/tuitest"
 )
 
 // mockup view 4 shape: Targets/Stacks collapse, Resources expands because
@@ -86,4 +92,65 @@ func TestAutoLayout_UserOverrideWins(t *testing.T) {
 	AutoLayout(roots, 24)         // e.g. after a data refresh at same size
 	assert.True(t, roots[0].Expanded(), "user-expanded stays expanded")
 	assert.False(t, roots[2].Children[2].Expanded(), "user-collapsed stays collapsed")
+}
+
+func newTestGroupList(height int) GroupList {
+	th := theme.New("formae")
+	g := NewGroupList(th, tui.DefaultKeyMap())
+	g = g.SetSize(80, height)
+	return g.SetNodes(mockupTree())
+}
+
+func keyMsg(s string) tea.KeyMsg {
+	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
+}
+
+func TestGroupList_ViewShowsCollapsedHeadersWithCounts(t *testing.T) {
+	view := ansi.Strip(newTestGroupList(24).View())
+	assert.Contains(t, view, "▸ Targets (2)")
+	assert.Contains(t, view, "2/2 Done")
+	assert.Contains(t, view, "▾ Resources (192)")
+	assert.Contains(t, view, "▸ Creates (150)")
+	assert.Contains(t, view, "▾ Deletes (7)")
+	assert.Contains(t, view, "✗ delete old-data")
+	assert.NotContains(t, view, "▸ line") // leaf lines are not headers
+}
+
+func TestGroupList_EnterTogglesHeaderUnderCursor(t *testing.T) {
+	g := newTestGroupList(24)
+	// cursor starts on "Targets" header
+	assert.Equal(t, "Targets", g.CursorNode().Title)
+	g, _ = g.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	assert.Contains(t, ansi.Strip(g.View()), "▾ Targets (2)")
+	g, _ = g.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	assert.Contains(t, ansi.Strip(g.View()), "▸ Targets (2)")
+}
+
+func TestGroupList_CursorMovesAcrossVisibleItems(t *testing.T) {
+	g := newTestGroupList(24)
+	g, _ = g.Update(keyMsg("j"))
+	assert.Equal(t, "Stacks", g.CursorNode().Title)
+	g, _ = g.Update(keyMsg("j"))
+	assert.Equal(t, "Resources", g.CursorNode().Title)
+	g, _ = g.Update(keyMsg("j"))
+	assert.Equal(t, "Creates", g.CursorNode().Title)
+	g, _ = g.Update(keyMsg("k"))
+	assert.Equal(t, "Resources", g.CursorNode().Title)
+}
+
+func TestGroupList_CursorNodeNilOnLeafLines(t *testing.T) {
+	g := newTestGroupList(24)
+	// j×5: Stacks, Resources, Creates, Updates, Deletes; j×6 = first leaf of Deletes
+	for range 6 {
+		g, _ = g.Update(keyMsg("j"))
+	}
+	assert.Nil(t, g.CursorNode())
+	// enter on a leaf is a no-op
+	before := ansi.Strip(g.View())
+	g, _ = g.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	assert.Equal(t, before, ansi.Strip(g.View()))
+}
+
+func TestGroupList_Golden(t *testing.T) {
+	tuitest.RequireGolden(t, []byte(newTestGroupList(24).View()))
 }
