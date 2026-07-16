@@ -197,3 +197,49 @@ func TestModel_HelpOverlayGolden(t *testing.T) {
 	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
 	tuitest.RequireGolden(t, []byte(mm.(Model).View()))
 }
+
+// TestModel_DetailView_QueryBarVisible verifies that the query bar is rendered
+// in the detail view after pressing '/'. The user must be able to see and edit
+// their query text — pressing '/' and typing chars must produce visible output.
+func TestModel_DetailView_QueryBarVisible(t *testing.T) {
+	m, _ := newTestModel(t, nil)
+	var mm tea.Model = m
+	const height = 24
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: height})
+	mm, _ = mm.Update(commandsMsg{commands: []apimodel.Command{makeTerminalCmd()}})
+
+	// Drill into detail view
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	require.Equal(t, viewDetail, mm.(Model).view, "must be in detail view")
+
+	// Focus the query bar with '/'
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	require.True(t, mm.(Model).query.Focused(), "query bar must be focused after '/'")
+
+	// Type "abc"
+	for _, ch := range "abc" {
+		mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
+	}
+
+	view := mm.(Model).View()
+	out := plain(view)
+	lines := strings.Split(view, "\n")
+
+	// The query bar edit text and cursor must be visible in the rendered output.
+	assert.Contains(t, out, "/ abc", "query bar edit text must be visible in detail view")
+	assert.Contains(t, view, "█", "cursor block must be visible in detail view")
+
+	// The view must still fill exactly height lines.
+	assert.Equal(t, height, len(lines), "detail view with query bar must fill exactly height lines")
+
+	// The footer content must appear on the last 2 lines.
+	footerText := "esc"
+	foundFooter := false
+	for i := len(lines) - 1; i >= len(lines)-2 && i >= 0; i-- {
+		if strings.Contains(plain(lines[i]), footerText) {
+			foundFooter = true
+			break
+		}
+	}
+	assert.True(t, foundFooter, "detail footer ('esc') must appear on the last 2 lines")
+}

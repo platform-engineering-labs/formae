@@ -392,11 +392,13 @@ func (m Model) View() string {
 
 	if m.view == viewDetail {
 		header := components.HeaderBar(m.th, "← esc/backspace", right, m.width)
+		// detail.View returns: pinnedHeader + pinnedRow + sep + vp (no footer).
+		// We append the query bar (2 lines) and footer (2 lines) here so the
+		// query bar is always visible when focused and the footer is bottom-anchored.
 		detailContent := m.detail.View(m.height)
 		queryView := m.query.View(m.width)
-		// Detail view: header + detail (incl. pinned cmd row + sep + vp + footer)
-		// We need to count lines to match height exactly
-		parts := header + "\n" + detailContent
+		footer := components.FooterBar(m.th, m.width, detailFooterHints(), "")
+		parts := header + "\n" + detailContent + "\n" + queryView + "\n" + footer
 		lines := strings.Split(parts, "\n")
 		// Pad to height
 		for len(lines) < m.height {
@@ -405,7 +407,6 @@ func (m Model) View() string {
 		if len(lines) > m.height {
 			lines = lines[:m.height]
 		}
-		_ = queryView
 		return strings.Join(lines, "\n")
 	}
 

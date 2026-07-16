@@ -278,9 +278,7 @@ func (d detailModel) View(height int) string {
 		lim := d.visible[g.kind]
 		shown, remaining := visibleRows(g, lim)
 
-		labelW, typeW, _ := groupLayout(g.kind, w)
-		var stackW int
-		_, _, stackW = groupLayout(g.kind, w)
+		labelW, typeW, stackW := groupLayout(g.kind, w)
 
 		// Section header
 		headerStr := "\n  " + lipgloss.NewStyle().
@@ -294,9 +292,6 @@ func (d detailModel) View(height int) string {
 		colHeader := d.renderGroupColHeader(g.kind, labelW, typeW, stackW)
 		body.WriteString(colHeader + "\n")
 		lineCount++
-
-		isActiveGroup := g.kind == d.cursorGroupKind()
-		_ = isActiveGroup
 
 		// Rows
 		for i, r := range shown {
@@ -364,14 +359,10 @@ func (d detailModel) View(height int) string {
 		d.vp.YOffset = cursorLine - vpHeight + 1
 	}
 
-	// Footer hints in detail view
-	footer := components.FooterBar(d.th, w, detailFooterHints(), "")
-
 	return d.pinnedHeader + "\n" +
 		d.pinnedRow + "\n" +
 		sep + "\n" +
-		d.vp.View() + "\n" +
-		footer
+		d.vp.View()
 }
 
 func detailFooterHints() []components.KeyHint {
