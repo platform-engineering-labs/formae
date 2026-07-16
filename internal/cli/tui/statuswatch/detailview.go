@@ -121,7 +121,7 @@ func buildGroups(c apimodel.Command) []group {
 		for _, u := range c.PolicyUpdates {
 			r := updateRow{
 				kind:              kindPolicy,
-				key:               fmt.Sprintf("policy/%s", u.PolicyLabel),
+				key:               fmt.Sprintf("policy/%s/%s", u.StackLabel, u.PolicyLabel),
 				label:             u.PolicyLabel,
 				typeName:          u.PolicyType,
 				stack:             u.StackLabel,
@@ -147,7 +147,7 @@ func buildGroups(c apimodel.Command) []group {
 		for _, u := range c.ResourceUpdates {
 			r := updateRow{
 				kind:       kindResource,
-				key:        fmt.Sprintf("resource/%s", u.ResourceLabel),
+				key:        fmt.Sprintf("resource/%s/%s", u.StackName, u.ResourceLabel),
 				label:      u.ResourceLabel,
 				typeName:   u.ResourceType,
 				stack:      u.StackName,

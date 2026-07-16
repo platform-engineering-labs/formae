@@ -65,6 +65,18 @@ func TestBuildGroups_StableKeys(t *testing.T) {
 	assert.Contains(t, k1, "web-1")
 }
 
+func TestBuildGroups_KeysDistinguishSameLabelAcrossStacks(t *testing.T) {
+	c := apimodel.Command{ResourceUpdates: []apimodel.ResourceUpdate{
+		{ResourceLabel: "web", StackName: "production", State: "Success"},
+		{ResourceLabel: "web", StackName: "staging", State: "Success"},
+	}}
+	rows := buildGroups(c)[0].rows
+	require.Len(t, rows, 2)
+	assert.NotEqual(t, rows[0].key, rows[1].key)
+	assert.Contains(t, rows[0].key, "web")
+	assert.Contains(t, rows[1].key, "web")
+}
+
 func TestVisibleRows_Pagination(t *testing.T) {
 	g := group{kind: kindResource, title: "Resources"}
 	for i := 0; i < 25; i++ {
