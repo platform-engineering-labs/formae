@@ -40,7 +40,7 @@ func TestRunStatusForHumans_NonTTY_SkipsTUI(t *testing.T) {
 	// When stdout is not a TTY, launchTUI must NOT be called, and printBanner
 	// must be invoked to verify the seam works. Confirms the function takes the
 	// real non-TTY path, not the TUI path.
-	tUIcalls := 0
+	tuiCalls := 0
 	bannerCalls := 0
 	callOrder := []string{}
 
@@ -49,7 +49,7 @@ func TestRunStatusForHumans_NonTTY_SkipsTUI(t *testing.T) {
 	origPrintBanner := printBanner
 
 	launchTUI = func(_ *app.App, _ *StatusOptions) error {
-		tUIcalls++
+		tuiCalls++
 		callOrder = append(callOrder, "launchTUI")
 		return nil
 	}
@@ -65,22 +65,15 @@ func TestRunStatusForHumans_NonTTY_SkipsTUI(t *testing.T) {
 		printBanner = origPrintBanner
 	})
 
-	// Downstream calls on unconfigured app will fail/panic, but that's OK;
-	// we recover and assert seams were called in the right order.
-	recovered := false
-	defer func() {
-		if r := recover(); r != nil {
-			recovered = true
-		}
-	}()
-
-	_ = runStatusForHumans(&app.App{}, &StatusOptions{OutputLayout: StatusOutputSummary})
-
-	// Assert seam order and counts: printBanner before any GetCommandsStatus panic.
-	assert.Equal(t, 0, tUIcalls, "launchTUI should not be called in non-TTY path")
+	// The panic is the downstream GetCommandsStatus dereferencing the unconfigured
+	// app's nil Config — out of scope. bannerCalls==1 proves the non-TTY path was
+	// entered and progressed past the banner.
+	assert.Panics(t, func() {
+		_ = runStatusForHumans(&app.App{}, &StatusOptions{OutputLayout: StatusOutputSummary})
+	})
+	assert.Equal(t, 0, tuiCalls, "launchTUI should not be called in non-TTY path")
 	assert.Equal(t, 1, bannerCalls, "printBanner seam should be called once")
-	assert.Equal(t, []string{"printBanner"}, callOrder, "printBanner should be the first (and only) seam called")
-	assert.True(t, recovered, "downstream call on unconfigured app should panic as expected")
+	assert.Equal(t, []string{"printBanner"}, callOrder)
 }
 
 func TestMaxResults_TUIKeepsFlagValue(t *testing.T) {
