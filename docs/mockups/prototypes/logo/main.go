@@ -24,8 +24,8 @@ import (
 const (
 	defaultLogoPath = "$HOME/Downloads/Formae_Logo_dark.png"
 
-	// Crop region for the flower icon (right side of the 2134x556 image).
-	// Tight bbox of the flower mark — starting any further left catches
+	// Crop region for the propeller icon (right side of the 2134x556 image).
+	// Tight bbox of the propeller mark — starting any further left catches
 	// the tail of the wordmark's last letter.
 	cropX = 1642
 	cropY = 64
@@ -37,7 +37,7 @@ func main() {
 	th := theme.New("formae")
 	p := th.Palette
 
-	img, err := loadAndCropFlower()
+	img, err := loadAndCropPropeller()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error loading image: %v\n", err)
 		os.Exit(1)
@@ -178,7 +178,7 @@ func getLogoPath() string {
 	return os.ExpandEnv(defaultLogoPath)
 }
 
-func loadAndCropFlower() (image.Image, error) {
+func loadAndCropPropeller() (image.Image, error) {
 	path := getLogoPath()
 	f, err := os.Open(path)
 	if err != nil {

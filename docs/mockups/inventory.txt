@@ -32,7 +32,7 @@ VIEW 1: Resources tab (default)
   │  i-0abc123def456790         production   AWS::EC2::Instance      web-2      │
   │  arn:aws:rds:us-east-1:...  production   AWS::RDS::DBInstance    primary    │
   │  d-1234567890abcdef         production   AWS::CloudFront::Dist…  cdn        │
-  │  arn:aws:s3:::logs          unmanaged    AWS::S3::Bucket         logs       │
+  │  arn:aws:s3:::logs          ⚠ unmanaged  AWS::S3::Bucket         logs       │
   │  arn:aws:s3:::staging-app   staging      AWS::S3::Bucket         app        │
   │                                                                             │
   │                                                                             │
@@ -50,7 +50,7 @@ VIEW 1: Resources tab (default)
   - Switch tabs with 1/2/3/4 or tab key
   - Columns resize based on terminal width
   - Long values truncated with … (e.g., CloudFront::Dist…)
-  - "unmanaged" stack shown in red
+  - "unmanaged" stack shown with ⚠ prefix in red (symbol + color for colorblind)
   - Status bar shows total count
   - Scrollable with ↑↓/j/k, page with ctrl-d/ctrl-u
 
@@ -70,7 +70,7 @@ VIEW 2: Resources — with search active
   │  NativeID                   Stack        Type                    Label      │
   │  ─────────────────────────────────────────────────────────────────────────  │
   │  arn:aws:s3:::my-bucket     production   AWS::S3::Bucket         my-bucket  │
-  │  arn:aws:s3:::logs          unmanaged    AWS::S3::Bucket         logs       │
+  │  arn:aws:s3:::logs          ⚠ unmanaged  AWS::S3::Bucket         logs       │
   │  arn:aws:s3:::staging-app   staging      AWS::S3::Bucket         app        │
   │                                                                             │
   │                                                                             │
@@ -283,7 +283,7 @@ On a narrow terminal (< 100 chars), lower-priority columns are hidden:
   │  production   AWS::S3::Bucket         my-bucket        │
   │  production   AWS::EC2::Instance      web-1            │
   │  production   AWS::EC2::Instance      web-2            │
-  │  unmanaged    AWS::S3::Bucket         logs             │
+  │  ⚠ unmanaged  AWS::S3::Bucket         logs             │
   │                                                        │
   ├───────────────────────────────────────────────────────┤
   │  Showing 4 of 7 · ↑↓ enter / s q                      │
