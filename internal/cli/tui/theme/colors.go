@@ -47,10 +47,13 @@ func FormaePalette() Palette {
 		PrimaryAccent:   lipgloss.AdaptiveColor{Light: "#2563EB", Dark: "#60A5FA"},
 		SecondaryAccent: lipgloss.AdaptiveColor{Light: "#FF6B00", Dark: "#FF8533"},
 		Error:           lipgloss.AdaptiveColor{Light: "#DC2626", Dark: "#F87171"},
-		Warning:         lipgloss.AdaptiveColor{Light: "#B5B55B", Dark: "#B5B55B"},
-		Done:            lipgloss.AdaptiveColor{Light: "#1A1A1A", Dark: "#E8E8E8"},
-		InProgress:      lipgloss.AdaptiveColor{Light: "#444444", Dark: "#AAAAAA"},
-		Pending:         lipgloss.AdaptiveColor{Light: "#999999", Dark: "#555555"},
+		// Decision (PLA-280): keep the classic gold #B5B55B for Warning rather
+		// than the RFC's brighter yellow — it fits the muted grayscale
+		// aesthetic; warnings still read as "colored" against the gray states.
+		Warning:    lipgloss.AdaptiveColor{Light: "#B5B55B", Dark: "#B5B55B"},
+		Done:       lipgloss.AdaptiveColor{Light: "#1A1A1A", Dark: "#E8E8E8"},
+		InProgress: lipgloss.AdaptiveColor{Light: "#444444", Dark: "#AAAAAA"},
+		Pending:    lipgloss.AdaptiveColor{Light: "#999999", Dark: "#555555"},
 	}
 }
 
