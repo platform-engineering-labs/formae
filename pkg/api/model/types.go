@@ -35,6 +35,7 @@ type ListCommandStatusResponse struct {
 type Command struct {
 	CommandID       string           `json:"CommandId"`
 	Command         string           `json:"Command"`
+	Mode            string           `json:"Mode,omitempty"` // "reconcile" | "patch"
 	State           string           `json:"State"`
 	StartTs         time.Time        `json:"StartTs,omitempty"`
 	EndTs           time.Time        `json:"EndTs,omitempty"`

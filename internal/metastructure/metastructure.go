@@ -551,6 +551,7 @@ func translateToAPICommand(fa *forma_command.FormaCommand) apimodel.Command {
 	apiCommand := apimodel.Command{
 		CommandID: fa.ID,
 		Command:   string(fa.Command),
+		Mode:      string(fa.Config.Mode),
 		State:     string(fa.State),
 		StartTs:   fa.StartTs,
 		EndTs:     fa.ModifiedTs,
