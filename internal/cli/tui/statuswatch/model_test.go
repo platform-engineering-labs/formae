@@ -134,3 +134,24 @@ func TestModel_GoldenMultiView(t *testing.T) {
 	mm, _ = mm.Update(commandsMsg{commands: respFix("cmd-one", "cmd-two").Commands})
 	tuitest.RequireGolden(t, []byte(mm.(Model).View()))
 }
+
+func TestModel_CtrlCQuitsUnfocused(t *testing.T) {
+	m, _ := newTestModel(t, respFix("cmd-one"))
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	_, cmd := mm.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	require.NotNil(t, cmd, "ctrl+c should return a quit command")
+	assert.Equal(t, tea.Quit(), cmd())
+}
+
+func TestModel_CtrlCQuitsEvenWhileQueryFocused(t *testing.T) {
+	m, _ := newTestModel(t, respFix("cmd-one"))
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	// Focus the query bar by pressing '/'
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	// Now send ctrl+c while focused
+	_, cmd := mm.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	require.NotNil(t, cmd, "ctrl+c should return a quit command even when query bar is focused")
+	assert.Equal(t, tea.Quit(), cmd())
+}

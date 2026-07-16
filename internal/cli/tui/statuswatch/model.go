@@ -146,6 +146,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // handleKey routes keyboard input.
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Handle ctrl+c before query bar routing: quit on ctrl+c even while editing query.
+	if msg.Type == tea.KeyCtrlC {
+		return m, tea.Quit
+	}
+
 	// Query bar has priority when it is focused.
 	if m.query.Focused() {
 		var applied bool
