@@ -370,7 +370,7 @@ func (m Model) View() string {
 		helpPanel := renderHelpOverlay(m.th, m.width, bodyHeight)
 		footer := components.FooterBar(m.th, m.width, multiFooterHints(), "")
 
-		parts := header + "\n" + helpPanel + "\n" + m.query.View(m.width) + "\n" + footer
+		parts := header + "\n" + helpPanel + "\n" + "\n" + footer
 		lines := strings.Split(parts, "\n")
 		// Pad to height
 		for len(lines) < m.height {

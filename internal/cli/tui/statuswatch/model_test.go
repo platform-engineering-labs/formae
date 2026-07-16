@@ -172,3 +172,12 @@ func TestModel_HelpOverlay(t *testing.T) {
 	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
 	assert.NotContains(t, plain(mm.(Model).View()), "Keybindings")
 }
+
+func TestModel_HelpOverlayGolden(t *testing.T) {
+	m, _ := newTestModel(t, nil)
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	mm, _ = mm.Update(commandsMsg{commands: respFix("cmd-one").Commands})
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	tuitest.RequireGolden(t, []byte(mm.(Model).View()))
+}
