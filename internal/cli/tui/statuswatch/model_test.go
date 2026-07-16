@@ -159,14 +159,30 @@ func TestModel_CtrlCQuitsEvenWhileQueryFocused(t *testing.T) {
 func TestModel_HelpOverlay(t *testing.T) {
 	m, _ := newTestModel(t, nil)
 	var mm tea.Model = m
-	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	height := 24
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: height})
 	mm, _ = mm.Update(commandsMsg{commands: respFix("cmd-one").Commands})
 	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
 
-	out := plain(mm.(Model).View())
+	view := mm.(Model).View()
+	lines := strings.Split(view, "\n")
+
+	out := plain(view)
 	assert.Contains(t, out, "Keybindings")
 	assert.Contains(t, out, "j/k")
 	assert.Contains(t, out, "toggle sort")
+
+	// Footer must be at the bottom: footer occupies 2 lines (rows height-2 and height-1 in split form)
+	// The footer line with "?: help" content should be on one of the last 2 non-empty lines
+	footerText := "help"
+	foundFooter := false
+	for i := len(lines) - 1; i >= len(lines)-2 && i >= 0; i-- {
+		if strings.Contains(lines[i], footerText) {
+			foundFooter = true
+			break
+		}
+	}
+	assert.True(t, foundFooter, "footer with '?: help' must be on last 2 lines of split view")
 
 	// any key closes
 	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})

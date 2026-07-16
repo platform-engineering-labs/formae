@@ -363,21 +363,29 @@ func (m Model) View() string {
 	// Help overlay: render the help panel instead of the body between header and footer
 	if m.helpOpen {
 		header := components.HeaderBar(m.th, "formae status command", right, m.width)
-		bodyHeight := m.height - chromeLines
+		footer := components.FooterBar(m.th, m.width, multiFooterHints(), "")
+
+		// Calculate body height: total height - header (2) - footer (2)
+		bodyHeight := m.height - 4
 		if bodyHeight < 1 {
 			bodyHeight = 1
 		}
-		helpPanel := renderHelpOverlay(m.th, m.width, bodyHeight)
-		footer := components.FooterBar(m.th, m.width, multiFooterHints(), "")
 
-		parts := header + "\n" + helpPanel + "\n" + "\n" + footer
+		// Render help panel centered in the body area
+		helpPanel := renderHelpOverlay(m.th, m.width, bodyHeight)
+
+		// Assemble exactly: header + body (with centered panel) + footer
+		// No interstitial blank lines, no post-padding needed
+		parts := header + "\n" + helpPanel + "\n" + footer
 		lines := strings.Split(parts, "\n")
-		// Pad to height
-		for len(lines) < m.height {
-			lines = append(lines, "")
-		}
+
+		// Trim or pad to exact height
 		if len(lines) > m.height {
 			lines = lines[:m.height]
+		} else {
+			for len(lines) < m.height {
+				lines = append(lines, "")
+			}
 		}
 		return strings.Join(lines, "\n")
 	}
