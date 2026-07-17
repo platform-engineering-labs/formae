@@ -17,10 +17,11 @@ import (
 // test fixtures in this package.
 func TestExtractChanges(t *testing.T) {
 	t.Run("basic replace lands in Properties", func(t *testing.T) {
-		// The brief specifies this test verbatim. Note: formatPatchValue returns
-		// string values unquoted (the quoting is done by formatPropertyChange in
-		// the display layer), so Value/OldValue store the raw string without JSON
-		// quotes.
+		// The brief's verbatim expectation used JSON-quoted scalar values (e.g.
+		// `"db.t3.large"` with surrounding quotes), but PropertyChange.Value has
+		// always stored scalars unquoted — quoting is applied at render time by
+		// formatPropertyChange. The expected values below were deliberately
+		// adjusted to match the actual (unquoted) storage format.
 		patch := json.RawMessage(`[{"op":"replace","path":"/InstanceClass","value":"db.t3.large"}]`)
 		props := json.RawMessage(`{"InstanceClass":"db.t3.large"}`)
 		prev := json.RawMessage(`{"InstanceClass":"db.t3.medium"}`)

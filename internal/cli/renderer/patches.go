@@ -62,22 +62,13 @@ type ChangeSet struct {
 	Tags       []TagChange
 }
 
-// ExtractChanges parses a JSON Patch document into structured changes without
-// rendering. Same semantics as FormatPatchDocument: NoOp suppression markers,
-// cascade-resolvable synthesis, references resolved to labels.
-func ExtractChanges(patchDoc, properties, previousProperties json.RawMessage, refLabels map[string]string) (ChangeSet, error) {
-	patches, err := decodePatchOperations(patchDoc)
-	if err != nil {
-		return ChangeSet{}, err
-	}
-
-	var props map[string]any
-	if err := json.Unmarshal(properties, &props); err != nil {
-		return ChangeSet{}, fmt.Errorf("error parsing properties document: %w", err)
-	}
-
+// extractFromOperations is the single semantics home for the per-operation
+// classification loop: a Tags path goes to extractTagChange; everything else
+// goes to extractPropertyChange. Both ExtractChanges and MutableChangesForReplace
+// delegate here so the logic lives in exactly one place.
+func extractFromOperations(ops []patchOperation, props map[string]any, previousProperties json.RawMessage, refLabels map[string]string) (ChangeSet, error) {
 	var cs ChangeSet
-	for _, patch := range patches {
+	for _, patch := range ops {
 		if strings.Contains(patch.Path, "/Tags/") {
 			change, err := extractTagChange(patch, previousProperties)
 			if err != nil {
@@ -93,6 +84,23 @@ func ExtractChanges(patchDoc, properties, previousProperties json.RawMessage, re
 		cs.Properties = append(cs.Properties, change)
 	}
 	return cs, nil
+}
+
+// ExtractChanges parses a JSON Patch document into structured changes without
+// rendering. Same semantics as FormatPatchDocument: NoOp suppression markers,
+// cascade-resolvable synthesis, references resolved to labels.
+func ExtractChanges(patchDoc, properties, previousProperties json.RawMessage, refLabels map[string]string) (ChangeSet, error) {
+	patches, err := decodePatchOperations(patchDoc)
+	if err != nil {
+		return ChangeSet{}, err
+	}
+
+	var props map[string]any
+	if err := json.Unmarshal(properties, &props); err != nil {
+		return ChangeSet{}, fmt.Errorf("error parsing properties document: %w", err)
+	}
+
+	return extractFromOperations(patches, props, previousProperties, refLabels)
 }
 
 // MutableChangesForReplace returns the changes of patchDoc minus the paths in
@@ -120,26 +128,14 @@ func MutableChangesForReplace(patchDoc, createOnlyPatch, properties, previousPro
 		return ChangeSet{}, fmt.Errorf("error parsing properties document: %w", err)
 	}
 
-	var cs ChangeSet
+	var filtered []patchOperation
 	for _, patch := range patches {
-		if immutablePaths[patch.Path] {
-			continue
+		if !immutablePaths[patch.Path] {
+			filtered = append(filtered, patch)
 		}
-		if strings.Contains(patch.Path, "/Tags/") {
-			change, err := extractTagChange(patch, previousProperties)
-			if err != nil {
-				return ChangeSet{}, fmt.Errorf("error processing tag patch: %w", err)
-			}
-			cs.Tags = append(cs.Tags, change)
-			continue
-		}
-		change, err := extractPropertyChange(patch, props, previousProperties, refLabels)
-		if err != nil {
-			return ChangeSet{}, fmt.Errorf("error processing property patch: %w", err)
-		}
-		cs.Properties = append(cs.Properties, change)
 	}
-	return cs, nil
+
+	return extractFromOperations(filtered, props, previousProperties, refLabels)
 }
 
 // FormatPatchDocument formats JSON Patch operations for cli display.
