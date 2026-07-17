@@ -16,6 +16,63 @@ import (
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 )
 
+// preCancelCounts holds the pre-cancel resource state counts derived from a
+// Command's ResourceUpdates, used to build expectation bullets before the user
+// consents to a force-cancel.
+type preCancelCounts struct {
+	Completed  int // Success → already done
+	InProgress int // InProgress → will be abandoned (force) or will finish (normal)
+	Pending    int // Pending/NotStarted → will cancel
+	Failed     int // Failed → already done
+}
+
+// bucketPreCancel buckets a Command's ResourceUpdates into preCancelCounts.
+// This mirrors how renderCancelSummary builds its progress-bar counts, but
+// returns plain integers for use in pre-consent expectation bullets.
+func bucketPreCancel(c apimodel.Command) preCancelCounts {
+	var counts preCancelCounts
+	for _, ru := range c.ResourceUpdates {
+		switch ru.State {
+		case "Success":
+			counts.Completed++
+		case "Failed":
+			counts.Failed++
+		case "InProgress":
+			counts.InProgress++
+		default: // "Pending", "NotStarted", or empty
+			counts.Pending++
+		}
+	}
+	return counts
+}
+
+// renderPreCancelExpectationLine returns the compact expectation bullet line
+// for a single command shown in the force-cancel confirmation panel.
+// Example: "  · 8 completed · 2 in progress (will be abandoned) · 5 pending (will cancel)"
+func renderPreCancelExpectationLine(th *theme.Theme, counts preCancelCounts) string {
+	p := th.Palette
+	subtle := lipgloss.NewStyle().Foreground(p.TextSecondary)
+	sep := subtle.Render(" · ")
+
+	var parts []string
+	if counts.Completed > 0 {
+		parts = append(parts, subtle.Render(fmt.Sprintf("%d completed", counts.Completed)))
+	}
+	if counts.Failed > 0 {
+		parts = append(parts, lipgloss.NewStyle().Foreground(p.Error).Render(fmt.Sprintf("%d failed", counts.Failed)))
+	}
+	if counts.InProgress > 0 {
+		parts = append(parts, subtle.Render(fmt.Sprintf("%d in progress (will be abandoned)", counts.InProgress)))
+	}
+	if counts.Pending > 0 {
+		parts = append(parts, subtle.Render(fmt.Sprintf("%d pending (will cancel)", counts.Pending)))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "    " + strings.Join(parts, sep)
+}
+
 // ksuidFromURI normalizes a formae URI to just the ksuid portion.
 // "formae://2abc#"     → "2abc"
 // "formae://x#/prop"  → "x"

@@ -215,6 +215,73 @@ func TestCancelForHumans_NonTTY_LegacyPath(t *testing.T) {
 	assert.Equal(t, "stack:test", cancelQueries[0], "legacy path uses the original query")
 }
 
+// TestForceCancelSummary_ExpectationBullets verifies that the summary string passed to
+// confirmForceCancel includes per-command expectation bullets derived from
+// ResourceUpdates[].State (8 Success + 2 InProgress + 5 Pending → completed/abandoned/pending).
+func TestForceCancelSummary_ExpectationBullets(t *testing.T) {
+	origGetStatus := getCommandsStatusFn
+	origCancel := cancelCommandFn
+	origIsTerminal := isTerminal
+	origConfirm := confirmForceCancel
+	t.Cleanup(func() {
+		getCommandsStatusFn = origGetStatus
+		cancelCommandFn = origCancel
+		isTerminal = origIsTerminal
+		confirmForceCancel = origConfirm
+	})
+
+	isTerminal = func(w io.Writer) bool { return true }
+
+	// Pre-fetched command: 8 Success + 2 InProgress + 5 Pending ResourceUpdates.
+	getCommandsStatusFn = func(a *app.App, query string, n int, fromWatch bool) (*apimodel.ListCommandStatusResponse, []string, error) {
+		return &apimodel.ListCommandStatusResponse{
+			Commands: []apimodel.Command{
+				{
+					CommandID:       "cmd-abc123",
+					Command:         "apply",
+					Mode:            "reconcile",
+					State:           "InProgress",
+					StartTs:         time.Now().Add(-42 * time.Second),
+					ResourceUpdates: makeUpdates(8, "Success", 2, "InProgress", 5, "Pending"),
+				},
+			},
+		}, nil, nil
+	}
+
+	cancelCommandFn = func(a *app.App, query string, force bool) (*apimodel.CancelCommandResponse, error) {
+		return &apimodel.CancelCommandResponse{CommandIDs: []string{"cmd-abc123"}}, nil
+	}
+
+	var capturedSummary string
+	confirmForceCancel = func(th *theme.Theme, summary string) (bool, error) {
+		capturedSummary = summary
+		return false, nil // decline so no cancel call is made
+	}
+
+	opts := &CancelOptions{
+		Query:          "id:cmd-abc123",
+		Force:          true,
+		Yes:            false, // trigger confirmation
+		Watch:          false,
+		OutputConsumer: printer.ConsumerHuman,
+	}
+
+	err := runCancelForHumans(newCancelTestApp(), opts)
+	require.NoError(t, err)
+
+	plain := stripANSI(capturedSummary)
+
+	// Must contain the command header line.
+	assert.Contains(t, plain, "cmd-abc123", "summary must contain the command ID")
+	assert.Contains(t, plain, "apply", "summary must contain the command name")
+	assert.Contains(t, plain, "reconcile", "summary must contain the mode")
+
+	// Must contain the expectation bullet with "(will be abandoned)" for the 2 InProgress.
+	assert.Contains(t, plain, "8 completed", "summary must show completed count")
+	assert.Contains(t, plain, "2 in progress (will be abandoned)", "summary must show in-progress-will-be-abandoned count")
+	assert.Contains(t, plain, "5 pending (will cancel)", "summary must show pending-will-cancel count")
+}
+
 // TestCancelForHumans_TerminalFiltered verifies that terminal commands (Success, Failed, Canceled)
 // in pre-fetch are skipped; only InProgress gets canceled.
 func TestCancelForHumans_TerminalFiltered(t *testing.T) {

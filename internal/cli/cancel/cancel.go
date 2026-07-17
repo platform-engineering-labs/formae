@@ -6,7 +6,6 @@ package cancel
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"sort"
 	"strings"
@@ -14,7 +13,6 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
-	"golang.org/x/term"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
 	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
@@ -24,16 +22,14 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/prompter"
 	"github.com/platform-engineering-labs/formae/internal/cli/renderer"
 	"github.com/platform-engineering-labs/formae/internal/cli/status"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 )
 
-// isTerminal returns true when the writer is a real terminal.
-var isTerminal = func(w io.Writer) bool {
-	f, ok := w.(*os.File)
-	return ok && term.IsTerminal(int(f.Fd()))
-}
+// isTerminal returns true when the writer is a real terminal (includes Cygwin).
+var isTerminal = tui.IsTerminal
 
 // getCommandsStatusFn is a seam so tests can stub the pre-fetch call.
 var getCommandsStatusFn = func(a *app.App, query string, n int, fromWatch bool) (*apimodel.ListCommandStatusResponse, []string, error) {
@@ -199,11 +195,17 @@ func runCancelInteractive(a *app.App, opts *CancelOptions) error {
 
 	// Step 2: --force && !--yes → show warning panel and ask for confirmation.
 	if opts.Force && !opts.Yes {
-		// Build a lightweight summary for the confirmation panel (force=true phrasing).
-		// We don't have resource states yet at pre-fetch time, so show command IDs only.
+		// Build the pre-consent summary for the confirmation panel. Each command shows
+		// a header line (ID + command + mode) followed by an expectation bullet derived
+		// from its pre-fetched ResourceUpdates (per mockup VIEW 2b).
+		thForSummary := themeFor(a)
 		var summaryLines []string
 		for _, c := range activeCmds {
 			summaryLines = append(summaryLines, fmt.Sprintf("  %s  %s %s", c.CommandID, c.Command, c.Mode))
+			counts := bucketPreCancel(c)
+			if line := renderPreCancelExpectationLine(thForSummary, counts); line != "" {
+				summaryLines = append(summaryLines, line)
+			}
 		}
 		summary := strings.Join(summaryLines, "\n")
 
