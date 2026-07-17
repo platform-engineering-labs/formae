@@ -265,24 +265,87 @@ func TestSimView_ViewLineCountMatchesHeight(t *testing.T) {
 // TestSimView_RenderingIntegrity checks no ANSI fragments and no line overflows.
 func TestSimView_RenderingIntegrity(t *testing.T) {
 	const w = 100
-	m := makeModel(w, 32)
-	raw := m.View()
-	plainView := plain(raw)
 
-	t.Run("no_ansi_fragment_garbage", func(t *testing.T) {
-		lines := strings.Split(plainView, "\n")
-		for i, line := range lines {
-			assert.NotRegexp(t, `\[[0-9;]+[A-Za-z]`, line,
-				"line %d contains ANSI fragment garbage: %q", i+1, line)
-		}
+	t.Run("collapsed", func(t *testing.T) {
+		m := makeModel(w, 40)
+		raw := m.View()
+		plainView := plain(raw)
+
+		t.Run("no_ansi_fragment_garbage", func(t *testing.T) {
+			lines := strings.Split(plainView, "\n")
+			for i, line := range lines {
+				assert.NotRegexp(t, `\[[0-9;]+[A-Za-z]`, line,
+					"line %d contains ANSI fragment garbage: %q", i+1, line)
+			}
+		})
+
+		t.Run("no_line_overflows_viewport_width", func(t *testing.T) {
+			lines := strings.Split(plainView, "\n")
+			for i, line := range lines {
+				rw := lipgloss.Width(line)
+				assert.LessOrEqual(t, rw, w,
+					"line %d overflows viewport (width %d): %q", i+1, rw, line)
+			}
+		})
 	})
 
-	t.Run("no_line_overflows_viewport_width", func(t *testing.T) {
-		lines := strings.Split(plainView, "\n")
-		for i, line := range lines {
-			rw := lipgloss.Width(line)
-			assert.LessOrEqual(t, rw, w,
-				"line %d overflows viewport (width %d): %q", i+1, rw, line)
+	t.Run("expanded_card", func(t *testing.T) {
+		// Build a model with a resource with patch data, expand it, check integrity.
+		cmd := makeFixtureCmd()
+		for i := range cmd.ResourceUpdates {
+			if cmd.ResourceUpdates[i].ResourceLabel == "primary" {
+				cmd.ResourceUpdates[i].PatchDocument = []byte(`[{"op":"replace","path":"/InstanceClass","value":"db.t3.large"}]`)
+				cmd.ResourceUpdates[i].Properties = []byte(`{"InstanceClass":"db.t3.large"}`)
+				cmd.ResourceUpdates[i].OldProperties = []byte(`{"InstanceClass":"db.t3.medium"}`)
+			}
 		}
+
+		th := theme.New("formae")
+		sim := &apimodel.Simulation{ChangesRequired: true, Command: cmd}
+		opts := Options{Kind: KindApply, Mode: "reconcile"}
+		m := New(th, sim, opts)
+		var mm tea.Model = m
+		mm, _ = mm.Update(tea.WindowSizeMsg{Width: w, Height: 50})
+		m = mm.(Model)
+
+		// Navigate to "primary" and expand
+		nav := m.navLines()
+		for i, n := range nav {
+			if n.kind == navRow && n.rowKind == kindResource && n.rowKey == "resource/production/primary" {
+				for m.cursor < i {
+					var mm2 tea.Model
+					mm2, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+					m = mm2.(Model)
+				}
+				break
+			}
+		}
+		mm, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace})
+		m = mm.(Model)
+
+		raw := m.View()
+		plainView := plain(raw)
+
+		t.Run("no_ansi_fragment_garbage", func(t *testing.T) {
+			lines := strings.Split(plainView, "\n")
+			for i, line := range lines {
+				assert.NotRegexp(t, `\[[0-9;]+[A-Za-z]`, line,
+					"line %d contains ANSI fragment garbage: %q", i+1, line)
+			}
+		})
+
+		t.Run("no_line_overflows_viewport_width", func(t *testing.T) {
+			lines := strings.Split(plainView, "\n")
+			for i, line := range lines {
+				rw := lipgloss.Width(line)
+				assert.LessOrEqual(t, rw, w,
+					"line %d overflows viewport (width %d): %q", i+1, rw, line)
+			}
+		})
+
+		t.Run("card_visible_in_view", func(t *testing.T) {
+			assert.Contains(t, plainView, "Operation:", "expanded card should be visible in view")
+			assert.Contains(t, plainView, "InstanceClass", "card changes should be visible in view")
+		})
 	})
 }

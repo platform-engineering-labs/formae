@@ -75,15 +75,16 @@ const (
 
 // Model is the bubbletea model for the interactive simulation preview table.
 type Model struct {
-	th      *theme.Theme
-	opts    Options
-	groups  []simGroup
-	cursor  int
-	visible map[rowKind]int
-	sortHi  map[rowKind]int
-	sortCol map[rowKind]int
-	sortDir map[rowKind]components.SortDirection
-	keys    tui.KeyMap
+	th       *theme.Theme
+	opts     Options
+	groups   []simGroup
+	cursor   int
+	visible  map[rowKind]int
+	sortHi   map[rowKind]int
+	sortCol  map[rowKind]int
+	sortDir  map[rowKind]components.SortDirection
+	keys     tui.KeyMap
+	expanded map[string]bool // keyed by simRow.key
 
 	decision Decision
 	vp       viewport.Model
@@ -127,6 +128,7 @@ func New(th *theme.Theme, sim *apimodel.Simulation, opts Options) Model {
 		keys:     tui.DefaultKeyMap(),
 		decision: DecisionAborted,
 		vp:       vp,
+		expanded: make(map[string]bool),
 	}
 }
 
@@ -233,8 +235,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				line := nav[m.cursor]
 				if line.kind == navShowMore {
 					m.visible[line.rowKind] += 10
+				} else if line.kind == navRow {
+					// Toggle card expansion by row key.
+					if m.expanded[line.rowKey] {
+						delete(m.expanded, line.rowKey)
+					} else {
+						m.expanded[line.rowKey] = true
+					}
 				}
-				// Card expansion is Task 10 — no-op for row rows.
 			}
 		}
 	}

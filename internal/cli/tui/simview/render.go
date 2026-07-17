@@ -86,6 +86,15 @@ func (m Model) renderBody() (string, int) {
 			rowStr := m.renderRow(r, g.kind, opW, labelW, typeW, stackW, isCursor)
 			body.WriteString(rowStr)
 			lineCount += strings.Count(rowStr, "\n")
+
+			// Inline card expansion: render card below the row when expanded.
+			if m.expanded[r.key] {
+				cardLines := renderCard(m.th, r, m.width)
+				for _, cl := range cardLines {
+					body.WriteString(cl + "\n")
+					lineCount++
+				}
+			}
 		}
 
 		// Show-more row
