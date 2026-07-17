@@ -70,19 +70,19 @@ type WrappedPolicyResponse struct {
 }
 
 type FakeMetastructure struct {
-	ApplyResponses          []WrappedCommandResponse
-	DestroyResponses        []WrappedCommandResponse
-	ExtractResponses        []WrappedExtractResponse
-	TargetResponses         []WrappedTargetResponse
-	ListResponses           []WrappedListResponse
-	CancelResponses         []WrappedCancelResponse
-	DriftResponses          []WrappedDriftResponse
-	ReconcileResponses      []WrappedReconcileResponse
-	CheckTTLResponses       []WrappedCheckTTLResponse
-	StackResponses          []WrappedStackResponse
-	PolicyResponses         []WrappedPolicyResponse
-	RecordedCancelQueries   []string
-	RecordedExtractQueries  []string
+	ApplyResponses         []WrappedCommandResponse
+	DestroyResponses       []WrappedCommandResponse
+	ExtractResponses       []WrappedExtractResponse
+	TargetResponses        []WrappedTargetResponse
+	ListResponses          []WrappedListResponse
+	CancelResponses        []WrappedCancelResponse
+	DriftResponses         []WrappedDriftResponse
+	ReconcileResponses     []WrappedReconcileResponse
+	CheckTTLResponses      []WrappedCheckTTLResponse
+	StackResponses         []WrappedStackResponse
+	PolicyResponses        []WrappedPolicyResponse
+	RecordedCancelQueries  []string
+	RecordedExtractQueries []string
 }
 
 func (m *FakeMetastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error) {
