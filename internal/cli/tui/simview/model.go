@@ -6,6 +6,7 @@ package simview
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -13,11 +14,15 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/platform-engineering-labs/formae/internal/cli/renderer"
 	tui "github.com/platform-engineering-labs/formae/internal/cli/tui"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 )
+
+// ansiEscape matches ANSI SGR escape sequences for stripping display colors.
+var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 // Kind identifies the command kind for the simulation preview.
 type Kind int
@@ -87,6 +92,7 @@ const (
 type Model struct {
 	th       *theme.Theme
 	opts     Options
+	cmd      apimodel.Command // stored for footer delegation to renderer.PromptForOperations
 	groups   []simGroup
 	cursor   int
 	visible  map[rowKind]int
@@ -117,6 +123,7 @@ func New(th *theme.Theme, sim *apimodel.Simulation, opts Options) Model {
 	return Model{
 		th:     th,
 		opts:   opts,
+		cmd:    sim.Command,
 		groups: groups,
 		cursor: 0,
 		visible: map[rowKind]int{
@@ -515,27 +522,22 @@ func (m Model) renderFooter() string {
 		}
 	}
 
-	// Non-cascade confirm: derive summary from opCounts.
-	counts := opCounts(m.groups)
-	var parts []string
-	if n := counts[opDelete]; n > 0 {
-		parts = append(parts, fmt.Sprintf("delete %d resource(s)", n))
-	}
-	if n := counts[opReplace]; n > 0 {
-		parts = append(parts, fmt.Sprintf("replace %d resource(s)", n))
-	}
-	if n := counts[opCreate]; n > 0 {
-		parts = append(parts, fmt.Sprintf("create %d resource(s)", n))
-	}
-	if n := counts[opUpdate]; n > 0 {
-		parts = append(parts, fmt.Sprintf("update %d resource(s)", n))
-	}
+	// Non-cascade confirm: delegate to renderer.PromptForOperations so that
+	// targets, stacks, and policies are labelled correctly (not all "resource(s)"),
+	// and the final separator is "and" instead of comma-only.
+	raw := renderer.PromptForOperations(&m.cmd)
 	var confirmMsg string
-	if len(parts) == 0 {
-		confirmMsg = ""
-	} else {
-		summary := strings.Join(parts, ", ")
-		confirmMsg = "This operation will " + summary + ".  Do you want to continue? (y/N)"
+	if raw != "" {
+		// PromptForOperations returns ANSI-colored text with a trailing
+		// "\n\nDo you want to continue?" framing.  Strip ANSI codes (the simview
+		// uses theme roles, not display-package colors) then extract just the
+		// one-line summary.
+		stripped := ansiEscape.ReplaceAllString(raw, "")
+		// Split on the double-newline separator and take the first part.
+		summary := strings.SplitN(stripped, "\n\n", 2)[0]
+		// Defensively collapse any remaining newlines (e.g. very long commands).
+		summary = strings.ReplaceAll(summary, "\n", " ")
+		confirmMsg = summary + "  Do you want to continue? (y/N)"
 	}
 	return components.FooterBar(m.th, m.width, footerHints(), confirmMsg)
 }

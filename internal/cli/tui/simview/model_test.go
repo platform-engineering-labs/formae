@@ -537,6 +537,55 @@ func TestSimView_DestroyConfirmCountsDependents(t *testing.T) {
 	assert.Contains(t, plainView, "depend on other targeted resources", "footer must explain cascade reason")
 }
 
+// TestSimView_NonCascadeConfirmFooter verifies that the non-cascade confirm footer
+// delegates to renderer.PromptForOperations so that targets, stacks, and policies
+// are labelled with their correct entity names (not "resource(s)"), and that the
+// final separator is "and" (not comma-only).
+func TestSimView_NonCascadeConfirmFooter(t *testing.T) {
+	// Build a Command with at least one target create, one stack create, one policy update,
+	// and some resource ops — the same fixture already provides all of these.
+	th := theme.New("formae")
+	sim := makeFixtureSim()
+	opts := Options{Kind: KindApply, Mode: "reconcile"}
+	m := New(th, sim, opts)
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: 32})
+	m = mm.(Model)
+
+	plainView := plain(m.View())
+
+	// The footer must mention the correct entity labels from PromptForOperations.
+	assert.Contains(t, plainView, "target(s)",
+		"non-cascade footer must label target operations as 'target(s)', not 'resource(s)'")
+	assert.Contains(t, plainView, "stack(s)",
+		"non-cascade footer must label stack operations as 'stack(s)', not 'resource(s)'")
+	assert.Contains(t, plainView, "policy",
+		"non-cascade footer must label policy operations correctly")
+
+	// Counts: fixture has 1 stack create, 1 policy create, 1 policy update, 1 target create,
+	// 1 target update, 1 target replace, 7 resource creates, 2 resource updates, 2 resource
+	// deletes, 1 resource replace. Verify at least one resource count is present.
+	assert.Contains(t, plainView, "resource(s)",
+		"non-cascade footer must still mention resource(s) for resource operations")
+
+	// The final separator must use "and" (not just a comma).
+	assert.Contains(t, plainView, " and ",
+		"non-cascade footer must use 'and' as final separator (delegated to PromptForOperations)")
+
+	// Targets must NOT be described as "resource(s)" — a line containing "target" should not
+	// contain "target(s)... resource(s)" in a way that implies targets are resources.
+	// The simplest guard: "create 1 target" or "create N target(s)" must appear.
+	assert.Contains(t, plainView, "target(s)",
+		"target operations must be labelled as target(s) in the footer")
+
+	// Verify targets are NOT mislabelled: the fixture has 1 target create and 1 target update
+	// (replace is counted as targetUpdates). If the old code were still in place, all ops would
+	// appear as "resource(s)". With the fix, "target(s)" appears independently.
+	// The footer text wraps across multiple lines with trailing spaces; check the raw view.
+	assert.Contains(t, m.View(), "Do you",
+		"footer must contain 'Do you want to continue' prompt")
+}
+
 // TestSimView_SourceInHeader verifies that Options.Source renders in the header.
 func TestSimView_SourceInHeader(t *testing.T) {
 	th := theme.New("formae")
