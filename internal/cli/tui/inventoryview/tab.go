@@ -30,13 +30,13 @@ type tabModel struct {
 	spec    tabSpec
 	state   tabState
 	allRows []row
-	err     error //nolint:unused // set by later tasks (tabFailed path)
+	err     error
 	filter  string
 	sortCol int // -1 = server order
 	sortDir components.SortDirection
 	table   components.Table
-	width   int //nolint:unused // set by later tasks (SetSize path)
-	height  int //nolint:unused // set by later tasks (SetSize path)
+	width   int
+	height  int
 }
 
 // newTabModel creates a tabModel with sane defaults: sortCol -1 (server order),
