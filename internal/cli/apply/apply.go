@@ -188,7 +188,9 @@ func runApplyInteractive(a *app.App, opts *ApplyOptions) error {
 
 	res, _, err := applyFn(a, opts, true)
 	if err != nil {
-		// TODO(Task15): replace FormaReconcileRejectedError branch with driftview.
+		if reconcileErr, ok := err.(*apimodel.ErrorResponse[apimodel.FormaReconcileRejectedError]); ok {
+			return runDriftFlow(a, th, opts, reconcileErr.Data)
+		}
 		msg, renderErr := renderer.RenderErrorMessage(err)
 		if renderErr != nil {
 			return fmt.Errorf("error rendering error message: %v", renderErr)
