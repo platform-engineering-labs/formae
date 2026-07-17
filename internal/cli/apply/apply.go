@@ -7,6 +7,8 @@ package apply
 import (
 	"fmt"
 	"os"
+	"regexp"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -18,9 +20,56 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/prompter"
 	"github.com/platform-engineering-labs/formae/internal/cli/renderer"
 	"github.com/platform-engineering-labs/formae/internal/cli/status"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/simview"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/statuswatch"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
+
+// ansiEscape matches ANSI SGR escape sequences for stripping display colors.
+var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+// isTerminal, launchSimView, launchWatch, and applyFn are package-level vars so tests can stub them.
+var (
+	isTerminal = tui.IsTerminal
+
+	launchSimView = func(th *theme.Theme, sim *apimodel.Simulation, opts simview.Options) (simview.Decision, error) {
+		model := simview.New(th, sim, opts)
+		final, err := tui.Run(model, tui.DefaultRunOptions())
+		if err != nil {
+			return simview.DecisionAborted, err
+		}
+		return final.(simview.Model).Decision(), nil
+	}
+
+	launchWatch = func(a *app.App, commandID string) error {
+		th := themeFor(a)
+		model := statuswatch.New(th, a, statuswatch.Options{
+			Query:          "id:" + commandID,
+			FocusCommandID: commandID,
+			ExitWhenDone:   true,
+		})
+		_, err := tui.Run(model, tui.DefaultRunOptions())
+		return err
+	}
+
+	applyFn = func(a *app.App, opts *ApplyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
+		return a.Apply(opts.FormaFile, opts.Properties, opts.Mode, simulate, opts.Force)
+	}
+)
+
+// themeFor resolves the active theme from the app config.
+// The name falls back to "formae" for nil configs (theme.New nil-guards internally).
+func themeFor(a *app.App) *theme.Theme {
+	name := ""
+	if a != nil && a.Config != nil {
+		name = a.Config.Cli.Theme
+	}
+	return theme.New(name)
+}
 
 type ApplyCommand struct {
 	FormaFile string
@@ -123,11 +172,99 @@ func validateApplyOptions(opts *ApplyOptions) error {
 	return nil
 }
 
-func runApplyForHumans(app *app.App, opts *ApplyOptions) error {
-	app.PrintBanner()
+func runApplyForHumans(a *app.App, opts *ApplyOptions) error {
+	a.PrintBanner()
 
+	// Interactive path: human + TTY + no --yes flag.
+	if !opts.Yes && isTerminal(os.Stdout) {
+		return runApplyInteractive(a, opts)
+	}
+	return runApplyLegacy(a, opts)
+}
+
+// runApplyInteractive implements the new TTY apply flow: simview preview → watch.
+func runApplyInteractive(a *app.App, opts *ApplyOptions) error {
+	th := themeFor(a)
+
+	res, _, err := applyFn(a, opts, true)
+	if err != nil {
+		// TODO(Task15): replace FormaReconcileRejectedError branch with driftview.
+		msg, renderErr := renderer.RenderErrorMessage(err)
+		if renderErr != nil {
+			return fmt.Errorf("error rendering error message: %v", renderErr)
+		}
+		return fmt.Errorf("%s", msg)
+	}
+
+	if !res.Simulation.ChangesRequired {
+		panel := components.Panel(th, th.Palette.Border, "formae apply", []string{
+			"No changes needed",
+			"",
+			"The specified forma resources are up to date.",
+		}, 80)
+		fmt.Println(panel)
+		return nil
+	}
+
+	decision, err := launchSimView(th, &res.Simulation, simview.Options{
+		Kind:         simview.KindApply,
+		Mode:         string(opts.Mode),
+		Source:       opts.FormaFile,
+		SimulateOnly: opts.Simulate,
+		Description:  res.Description,
+	})
+	if err != nil {
+		return err
+	}
+
+	if opts.Simulate {
+		return nil
+	}
+
+	if decision == simview.DecisionAborted {
+		fmt.Print(display.Grey("Apply aborted.") + "\n")
+		return nil
+	}
+
+	// Confirmed: run the real apply.
+	realRes, nags, err := applyFn(a, opts, false)
+	if err != nil {
+		msg, renderErr := renderer.RenderErrorMessage(err)
+		if renderErr != nil {
+			return fmt.Errorf("error rendering error message: %v", renderErr)
+		}
+		return fmt.Errorf("%s", msg)
+	}
+
+	// Print one-line scrollback record.
+	raw := renderer.PromptForOperations(&res.Simulation.Command)
+	summary := ""
+	if raw != "" {
+		stripped := ansiEscape.ReplaceAllString(raw, "")
+		summary = strings.SplitN(stripped, "\n\n", 2)[0]
+		summary = strings.ReplaceAll(summary, "\n", " ")
+	}
+	fmt.Printf("Confirmed: %s — command %s submitted\n", summary, realRes.CommandID)
+
+	// Watch the command to completion (D4: watch-by-default on TTY path).
+	if err := launchWatch(a, realRes.CommandID); err != nil {
+		return err
+	}
+
+	// Hint for users who detached with q before the command finished.
+	fmt.Printf("\nRun the following command to check status:\n\n  formae status command --query='id:%s' --watch\n", realRes.CommandID)
+
+	nag.MaybePrintNags(nags)
+
+	return nil
+}
+
+// runApplyLegacy is the pre-existing human apply flow (non-TTY / --yes / legacy).
+// Byte-identical to the old runApplyForHumans minus the banner (which is now in
+// runApplyForHumans).
+func runApplyLegacy(a *app.App, opts *ApplyOptions) error {
 	// always simulate first for humans
-	res, _, err := app.Apply(opts.FormaFile, opts.Properties, opts.Mode, true, opts.Force)
+	res, _, err := applyFn(a, opts, true)
 	if err != nil {
 		msg, renderErr := renderer.RenderErrorMessage(err)
 		if renderErr != nil {
@@ -168,7 +305,7 @@ func runApplyForHumans(app *app.App, opts *ApplyOptions) error {
 	}
 
 	var nags []string
-	res, nags, err = app.Apply(opts.FormaFile, opts.Properties, opts.Mode, false, opts.Force)
+	res, nags, err = applyFn(a, opts, false)
 	if err != nil {
 		msg, renderErr := renderer.RenderErrorMessage(err)
 		if renderErr != nil {
@@ -181,7 +318,7 @@ func runApplyForHumans(app *app.App, opts *ApplyOptions) error {
 
 	if opts.Watch {
 		query := fmt.Sprintf("id:%s", res.CommandID)
-		return status.WatchCommandsStatus(app, query, 1, opts.StatusOutput)
+		return status.WatchCommandsStatus(a, query, 1, opts.StatusOutput)
 	}
 
 	fmt.Printf("\nRun the following command to check the status of this command:\n\n  %s%s%s\n",
@@ -194,7 +331,7 @@ func runApplyForHumans(app *app.App, opts *ApplyOptions) error {
 
 func runApplyForMachines(app *app.App, opts *ApplyOptions) error {
 	if opts.Simulate {
-		res, _, err := app.Apply(opts.FormaFile, opts.Properties, opts.Mode, true, opts.Force)
+		res, _, err := applyFn(app, opts, true)
 		if err != nil {
 			return fmt.Errorf("error simlating apply command: %v", err)
 		}
@@ -202,7 +339,7 @@ func runApplyForMachines(app *app.App, opts *ApplyOptions) error {
 
 		return printer.Print(&res.Simulation)
 	}
-	res, _, err := app.Apply(opts.FormaFile, opts.Properties, opts.Mode, false, opts.Force)
+	res, _, err := applyFn(app, opts, false)
 	if err != nil {
 		return fmt.Errorf("error applying forma: %v", err)
 	}
