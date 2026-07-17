@@ -21,7 +21,7 @@ func renderHelpOverlay(th *theme.Theme, width, bodyHeight int) string {
 		desc string
 	}{
 		{"↑↓ / j/k", "navigate"},
-		{"ctrl-d / ctrl-u", "half page"},
+		{"ctrl-d / ctrl-u", "scroll detail"},
 		{"enter", "detail"},
 		{"esc", "back"},
 		{"/", "search"},

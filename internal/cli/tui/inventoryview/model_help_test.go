@@ -246,12 +246,15 @@ func TestNarrow_FooterSwitches_At80Boundary(t *testing.T) {
 		return mm.(Model).View()
 	}
 
-	// At width 79: narrow status line contains "·" separator and compact glyphs.
+	// At width 79: narrow path — combined footer line contains "·" and compact
+	// glyphs; entity noun is absent; body is one line taller than at width 80.
 	view79 := buildAt(79)
-	assert.Contains(t, view79, "·", "width 79 must show narrow status line with · separator")
-	assert.NotContains(t, view79, "resources", "width 79 must drop entity noun from status line")
+	assert.Contains(t, view79, "·", "width 79 must show combined narrow footer with · separator")
+	assert.NotContains(t, view79, "resources", "width 79 must drop entity noun (short count only)")
+	lines79 := strings.Split(view79, "\n")
+	assert.Equal(t, 24, len(lines79), "width 79 must still fill exactly 24 lines")
 
-	// At width 80: full status line contains entity noun "resources".
+	// At width 80: full path — separate status line carries entity noun "resources".
 	view80 := buildAt(80)
 	assert.Contains(t, view80, "resources", "width 80 must show full status line with entity noun")
 	assert.NotContains(t, view80, "·", "width 80 must not show narrow · separator")

@@ -81,6 +81,29 @@ func HeaderBar(th *theme.Theme, left, right string, width int) string {
 		Render(content)
 }
 
+// FooterBarNarrow renders the bottom bar for narrow terminals: a single
+// dim-styled content string with a top border and no "?: help" suffix.
+// The content is rendered using the KeybindingDesc (TextSubtle) role.
+func FooterBarNarrow(th *theme.Theme, width int, content string) string {
+	p := th.Palette
+	s := th.Styles
+
+	dimContent := s.KeybindingDesc.Render(content)
+	left := "  " + dimContent
+	// Pad to full width.
+	leftW := lipgloss.Width(left)
+	if leftW < width {
+		left += strings.Repeat(" ", width-leftW)
+	}
+
+	return lipgloss.NewStyle().
+		Width(width).
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderTop(true).
+		BorderForeground(p.Border).
+		Render(left)
+}
+
 // FooterBar renders the bottom bar: key hints on the left, optional extra
 // info plus the standing "?: help" hint on the right, with a top border.
 func FooterBar(th *theme.Theme, width int, hints []KeyHint, right string) string {

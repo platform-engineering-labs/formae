@@ -212,6 +212,30 @@ func TestSortSelector_KeysBlockedWhenOpen(t *testing.T) {
 // Test 7: Exact-fill while selector open
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Test: ? while sort selector open does NOT open help overlay
+// ---------------------------------------------------------------------------
+
+// TestSortSelector_QuestionMarkBlockedWhenOpen: pressing ? while the sort
+// selector is open must be swallowed — helpOpen stays false and sortOpen
+// stays true.
+func TestSortSelector_QuestionMarkBlockedWhenOpen(t *testing.T) {
+	rows := buildFixtureResources(3)
+	m := buildSortTestModel(t, rows, 0)
+
+	var mm tea.Model = m
+	// Open selector.
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	require.True(t, mm.(Model).sortOpen, "sortOpen must be true after pressing 's'")
+
+	// Press ? — must NOT open help overlay.
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+
+	result := mm.(Model)
+	assert.False(t, result.helpOpen, "? must not open help while sort selector is open")
+	assert.True(t, result.sortOpen, "sortOpen must remain true after pressing ?")
+}
+
 func TestSortSelector_ExactFillWhileOpen(t *testing.T) {
 	fc := buildFixtureClientFull()
 	opts := Options{

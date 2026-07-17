@@ -507,15 +507,27 @@ func (m Model) delegateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// chromeLines is the number of lines consumed by fixed chrome:
+// chromeLines is the number of lines consumed by fixed chrome at full width (≥80):
 //
 //	HeaderBar (2) + tab bar (1) + status line (1) + FooterBar (2) = 6.
 const chromeLines = 6
 
+// narrowChromeLines is the chrome line count at narrow width (< narrowFooterThreshold):
+//
+//	HeaderBar (2) + tab bar (1) + FooterBar (2) = 5.
+//
+// The standalone status line is dropped; its content is folded into the
+// FooterBar hint line as a single combined dim string.
+const narrowChromeLines = 5
+
 // bodyHeight returns the number of lines available for the tab body region
 // (excluding any filter bar lines — those are sliced from the body budget).
 func (m Model) bodyHeight() int {
-	h := m.height - chromeLines
+	budget := chromeLines
+	if m.width < narrowFooterThreshold {
+		budget = narrowChromeLines
+	}
+	h := m.height - budget
 	if h < 1 {
 		h = 1
 	}
@@ -624,13 +636,17 @@ func (m Model) View() string {
 	header := components.HeaderBar(m.th, "formae inventory", "", m.width)
 	tabBar := m.renderTabBar()
 
+	narrow := m.width < narrowFooterThreshold
 	var footer string
 	if m.sortOpen {
 		footer = m.renderSortSelector()
 	} else if m.filterFocused {
 		footer = m.renderFilterFooter()
-	} else if m.width < narrowFooterThreshold {
-		footer = components.FooterBar(m.th, m.width, inventoryFooterHintsNarrow(), "")
+	} else if narrow {
+		// Narrow: combined dim line — "Showing X of Y · ↑↓ enter / s q".
+		// No "?: help" at narrow widths (mockup View 9 shows none).
+		combined := m.tabs[m.active].statusLineNarrow(m.opts.MaxRows)
+		footer = components.FooterBarNarrow(m.th, m.width, combined)
 	} else {
 		footer = components.FooterBar(m.th, m.width, inventoryFooterHints(), "")
 	}
@@ -670,20 +686,23 @@ func (m Model) View() string {
 		bodyLines = bodyLines[:bodyH]
 	}
 
-	// Status line: abbreviated when narrow, then truncated to fit width.
-	var statusLine string
-	if m.width < narrowFooterThreshold {
-		statusLine = m.tabs[m.active].statusLineNarrow(m.opts.MaxRows)
+	// Status line: omitted at narrow widths (content folded into footer).
+	var parts []string
+	if narrow {
+		// Assemble: header (2 lines) + tab bar (1 line) + body (bodyH lines) + footer (2 lines)
+		// = narrowChromeLines + bodyH = m.height total lines.
+		parts = []string{header, tabBar}
+		parts = append(parts, bodyLines...)
+		parts = append(parts, footer)
 	} else {
-		statusLine = m.tabs[m.active].statusLine(m.opts.MaxRows)
+		statusLine := m.tabs[m.active].statusLine(m.opts.MaxRows)
+		statusLine = components.Truncate(statusLine, m.width)
+		// Assemble: header (2 lines) + tab bar (1 line) + body (bodyH lines) + status (1 line) + footer (2 lines)
+		// = chromeLines + bodyH = m.height total lines.
+		parts = []string{header, tabBar}
+		parts = append(parts, bodyLines...)
+		parts = append(parts, statusLine, footer)
 	}
-	statusLine = components.Truncate(statusLine, m.width)
-
-	// Assemble: header (2 lines) + tab bar (1 line) + body (bodyH lines) + status (1 line) + footer (2 lines)
-	// = chromeLines + bodyH = m.height total lines.
-	parts := []string{header, tabBar}
-	parts = append(parts, bodyLines...)
-	parts = append(parts, statusLine, footer)
 
 	result := strings.Join(parts, "\n")
 
@@ -844,11 +863,4 @@ func inventoryFooterHints() []components.KeyHint {
 		{Key: "1-4", Desc: "tab"},
 		{Key: "q", Desc: "quit"},
 	}
-}
-
-// inventoryFooterHintsNarrow returns an empty hint list for narrow terminals
-// (width < narrowFooterThreshold). The compact key glyphs are shown in the
-// status line instead (statusLineNarrow), so the footer just shows "?: help".
-func inventoryFooterHintsNarrow() []components.KeyHint {
-	return nil
 }
