@@ -968,3 +968,36 @@ func RunMonotonicTerminalityRaceTest(t *testing.T, newDS func(t *testing.T) Test
 		}
 	})
 }
+
+// RunCommandSourceRoundTrip verifies that the command-level Source field survives a
+// store → load cycle.  This guards against the regression where StoreFormaCommand
+// omitted the source column, causing every command read back from the datastore to
+// have an empty Source and allowing internal commands to appear in user-facing views.
+func RunCommandSourceRoundTrip(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("CommandSource_RoundTrip", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		cmd := &forma_command.FormaCommand{
+			ID:      util.NewID(),
+			Command: pkgmodel.CommandApply,
+			State:   forma_command.CommandStateInProgress,
+			Source:  forma_command.SourceAutoReconciler,
+			ResourceUpdates: []resource_update.ResourceUpdate{
+				{
+					DesiredState:   pkgmodel.Resource{Properties: json.RawMessage("{}")},
+					ResourceTarget: pkgmodel.Target{Label: "t", Namespace: "default", Config: json.RawMessage("{}")},
+					State:          resource_update.ResourceUpdateStateNotStarted,
+				},
+			},
+		}
+		err := ds.StoreFormaCommand(cmd, cmd.ID)
+		assert.NoError(t, err)
+
+		loaded, err := ds.GetFormaCommandByCommandID(cmd.ID)
+		assert.NoError(t, err)
+		assert.Equal(t, forma_command.SourceAutoReconciler, loaded.Source,
+			"Source must survive a store/load round-trip")
+	})
+}
