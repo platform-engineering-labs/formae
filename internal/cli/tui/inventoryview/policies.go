@@ -21,6 +21,7 @@ func policyRow(p apimodel.PolicyInventoryItem) row {
 	}
 	return row{
 		cells: []string{p.Label, p.Type, compactKV(p.Config), attached},
+		title: fmt.Sprintf("%s (policy)", p.Label),
 		detail: func(width int) []string {
 			return policyDetail(p, width)
 		},

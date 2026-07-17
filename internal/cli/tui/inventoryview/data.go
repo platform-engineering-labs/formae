@@ -50,6 +50,7 @@ type Options struct {
 // row is a render-ready table row with an optional detail expander.
 type row struct {
 	cells  []string
+	title  string // display title used in the detail screen header
 	detail func(width int) []string
 }
 

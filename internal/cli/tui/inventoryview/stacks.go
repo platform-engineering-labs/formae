@@ -20,6 +20,7 @@ func stackRow(s *pkgmodel.Stack, now time.Time) row {
 	summary := policySummary(s.Policies, s.CreatedAt, now)
 	return row{
 		cells: []string{s.Label, s.Description, summary},
+		title: fmt.Sprintf("%s (stack)", s.Label),
 		detail: func(width int) []string {
 			return stackDetail(s, now, width)
 		},

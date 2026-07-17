@@ -22,6 +22,7 @@ func resourceRow(r pkgmodel.Resource) row {
 
 	return row{
 		cells: []string{r.NativeID, stackCell, r.Type, r.Label},
+		title: fmt.Sprintf("%s (%s)", r.Label, r.Type),
 		detail: func(width int) []string {
 			return resourceDetail(r, width)
 		},

@@ -9,6 +9,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -39,6 +40,11 @@ type Model struct {
 	sortCursor    int       // index into specs[active].columns of selector cursor
 	filterBar     filterBar // lightweight textinput for live client-side filter
 	filterFocused bool      // true while the filter bar has keyboard focus
+	// detail screen state
+	detailOpen     bool
+	detailTitle    string         // captured at open time
+	detailBody     []string       // captured at open time (row.detail(width))
+	detailViewport viewport.Model // scrollable content area for the detail screen
 }
 
 // New constructs a Model with the four tab specs and sane defaults.
@@ -109,6 +115,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.tabs[i] = m.tabs[i].setSize(m.width, tabH)
 			m.tabs[i] = m.tabs[i].sync(m.opts.MaxRows)
 		}
+		// Resize detail viewport if the detail screen is open.
+		if m.detailOpen {
+			vpH := m.height - 9
+			if vpH < 1 {
+				vpH = 1
+			}
+			m.detailViewport.Width = m.width
+			m.detailViewport.Height = vpH
+		}
 		m.ready = true
 		return m, nil
 
@@ -161,6 +176,11 @@ func (m Model) handleTabLoaded(msg tabLoadedMsg) (tea.Model, tea.Cmd) {
 
 // handleKey routes keyboard input.
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// When detail screen is open, route to detail key handler.
+	if m.detailOpen {
+		return m.handleDetailKey(msg)
+	}
+
 	// When the sort selector is open, only a small set of keys are routed;
 	// all others are silently swallowed.
 	if m.sortOpen {
@@ -201,11 +221,80 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.openFilterBar()
 		}
 
+	case msg.Type == tea.KeyEnter:
+		if m.tabs[m.active].state == tabLoaded {
+			return m.openDetail()
+		}
+
 	case key.Matches(msg, m.keys.Up), key.Matches(msg, m.keys.Down),
 		key.Matches(msg, m.keys.PageUp), key.Matches(msg, m.keys.PageDown):
 		return m.delegateNav(msg)
 	}
 
+	return m, nil
+}
+
+// openDetail opens the full-screen detail view for the currently selected row.
+func (m Model) openDetail() (tea.Model, tea.Cmd) {
+	tab := m.tabs[m.active]
+	vis, _ := tab.visible(m.opts.MaxRows)
+	cursor := tab.table.Cursor()
+	if len(vis) == 0 || cursor >= len(vis) {
+		return m, nil
+	}
+
+	r := vis[cursor]
+	m.detailTitle = r.title
+	if r.detail != nil {
+		m.detailBody = r.detail(m.width)
+	} else {
+		m.detailBody = nil
+	}
+
+	vpH := m.height - 9
+	if vpH < 1 {
+		vpH = 1
+	}
+	vp := viewport.New(m.width, vpH)
+	// Build content: truncate each line to m.width.
+	contentLines := make([]string, len(m.detailBody))
+	for i, line := range m.detailBody {
+		contentLines[i] = components.Truncate(line, m.width)
+	}
+	vp.SetContent(strings.Join(contentLines, "\n"))
+	m.detailViewport = vp
+	m.detailOpen = true
+	return m, nil
+}
+
+// handleDetailKey handles key events while the detail screen is open.
+func (m Model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case msg.Type == tea.KeyCtrlC:
+		return m, tea.Quit
+
+	case msg.Type == tea.KeyEsc:
+		m.detailOpen = false
+		return m, nil
+
+	case msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 'q':
+		// Swallowed — q does not quit from detail screen.
+		return m, nil
+
+	case msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 'j',
+		msg.Type == tea.KeyDown:
+		m.detailViewport.ScrollDown(1)
+
+	case msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 'k',
+		msg.Type == tea.KeyUp:
+		m.detailViewport.ScrollUp(1)
+
+	case msg.Type == tea.KeyCtrlD:
+		m.detailViewport.HalfPageDown()
+
+	case msg.Type == tea.KeyCtrlU:
+		m.detailViewport.HalfPageUp()
+	}
 	return m, nil
 }
 
@@ -418,11 +507,86 @@ func (m Model) filterBarVisible() bool {
 	return m.filterFocused || m.tabs[m.active].filter != ""
 }
 
+// viewDetail renders the full-screen detail view.
+//
+// Layout (m.height lines total):
+//
+//	HeaderBar           (2 lines)
+//	blank               (1 line)
+//	"  ← esc"           (1 line)
+//	blank               (1 line)
+//	"  <title>"         (1 line)
+//	rule                (1 line)
+//	viewport            (vpHeight = m.height - 9 lines)
+//	FooterBar           (2 lines)
+func (m Model) viewDetail() string {
+	p := m.th.Palette
+
+	header := components.HeaderBar(m.th, "formae inventory", "", m.width)
+
+	escLine := "  ← esc"
+	escW := lipgloss.Width(escLine)
+	if escW < m.width {
+		escLine += strings.Repeat(" ", m.width-escW)
+	}
+
+	titleLine := "  " + m.detailTitle
+	titleW := lipgloss.Width(titleLine)
+	if titleW < m.width {
+		titleLine += strings.Repeat(" ", m.width-titleW)
+	}
+
+	rule := "  " + lipgloss.NewStyle().Foreground(p.Border).Render(strings.Repeat("─", m.width-2))
+	ruleW := lipgloss.Width(rule)
+	if ruleW < m.width {
+		rule += strings.Repeat(" ", m.width-ruleW)
+	}
+
+	footer := components.FooterBar(m.th, m.width, []components.KeyHint{{Key: "esc", Desc: "back to list"}}, "")
+
+	vpH := m.height - 9
+	if vpH < 1 {
+		vpH = 1
+	}
+	// Ensure viewport dimensions are current.
+	m.detailViewport.Width = m.width
+	m.detailViewport.Height = vpH
+
+	vpContent := m.detailViewport.View()
+
+	parts := []string{
+		header,
+		"",
+		escLine,
+		"",
+		titleLine,
+		rule,
+		vpContent,
+		footer,
+	}
+
+	result := strings.Join(parts, "\n")
+
+	// Clamp to exactly m.height lines (defensive).
+	lines := strings.Split(result, "\n")
+	for len(lines) < m.height {
+		lines = append(lines, "")
+	}
+	if len(lines) > m.height {
+		lines = lines[:m.height]
+	}
+	return strings.Join(lines, "\n")
+}
+
 // View composes the full terminal screen. Returns "" until the first
 // WindowSizeMsg is received (statuswatch convention).
 func (m Model) View() string {
 	if !m.ready {
 		return ""
+	}
+
+	if m.detailOpen {
+		return m.viewDetail()
 	}
 
 	header := components.HeaderBar(m.th, "formae inventory", "", m.width)

@@ -24,6 +24,7 @@ func discoverableStr(v bool) string {
 func targetRow(t *pkgmodel.Target) row {
 	return row{
 		cells: []string{t.Label, t.Namespace, discoverableStr(t.Discoverable), compactKV(t.Config)},
+		title: fmt.Sprintf("%s (target)", t.Label),
 		detail: func(width int) []string {
 			return targetDetail(t, width)
 		},
