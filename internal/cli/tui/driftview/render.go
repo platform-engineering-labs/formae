@@ -315,24 +315,55 @@ func (m Model) viewFilePrompt() string {
 	pathSt := lipgloss.NewStyle().Foreground(p.TextPrimary)
 	cursorSt := lipgloss.NewStyle().Foreground(p.PrimaryAccent)
 	typeSt := lipgloss.NewStyle().Foreground(p.TextSubtle)
+	subtleSt := lipgloss.NewStyle().Foreground(p.TextSubtle)
 
 	rows := m.selectedRows()
 
+	// Build the fixed bottom section (prompt + keybindings): always 3 lines.
+	promptLine := "  " + labelSt.Render("Extract to: ") + pathSt.Render(m.fileInput) + cursorSt.Render("█")
+	keybindLine := "  " + s.KeybindingKey.Render("enter") + s.KeybindingDesc.Render(": confirm") +
+		"  " + s.KeybindingKey.Render("esc") + s.KeybindingDesc.Render(": cancel")
+	// bottom = blank + prompt + blank + keybindings = 4 lines
+	const bottomLines = 4
+
+	// Fixed top section: header (2) + blank + count line = 4 lines
+	countLine := "  " + textSt.Render(fmt.Sprintf("Extracting %d %s as code:", len(rows), pluralize(len(rows), "resource", "resources")))
+	const topLines = 4 // header(2) + "\n" + count
+
+	// Lines available for the resource list.
+	listBudget := m.height - topLines - bottomLines
+	if listBudget < 1 {
+		listBudget = 1
+	}
+
+	// Collect resource list lines, truncating with "… and N more" if needed.
+	var listLines []string
+	for _, r := range rows {
+		opSt := lipgloss.NewStyle().Foreground(m.opColorForClass(r.class))
+		listLines = append(listLines, "    "+opSt.Render(r.classWord())+
+			textSt.Render("  "+r.mod.Label)+
+			typeSt.Render(" ("+r.mod.Type+")"))
+	}
+	if len(listLines) > listBudget {
+		hidden := len(listLines) - (listBudget - 1) // reserve 1 for the "… and N more" line
+		if hidden > 0 {
+			listLines = listLines[:listBudget-1]
+			listLines = append(listLines, "    "+subtleSt.Render(fmt.Sprintf("… and %d more", hidden)))
+		}
+	}
+
+	// Assemble the frame.
 	var sb strings.Builder
 	sb.WriteString(header)
 	sb.WriteString("\n\n")
-	sb.WriteString("  " + textSt.Render(fmt.Sprintf("Extracting %d %s as code:", len(rows), pluralize(len(rows), "resource", "resources"))) + "\n")
-	for _, r := range rows {
-		opSt := lipgloss.NewStyle().Foreground(m.opColorForClass(r.class))
-		sb.WriteString("    " + opSt.Render(r.classWord()) +
-			textSt.Render("  "+r.mod.Label) +
-			typeSt.Render(" ("+r.mod.Type+")") + "\n")
+	sb.WriteString(countLine + "\n")
+	for _, l := range listLines {
+		sb.WriteString(l + "\n")
 	}
 	sb.WriteString("\n")
-	sb.WriteString("  " + labelSt.Render("Extract to: ") + pathSt.Render(m.fileInput) + cursorSt.Render("█") + "\n")
+	sb.WriteString(promptLine + "\n")
 	sb.WriteString("\n")
-	sb.WriteString("  " + s.KeybindingKey.Render("enter") + s.KeybindingDesc.Render(": confirm") +
-		"  " + s.KeybindingKey.Render("esc") + s.KeybindingDesc.Render(": cancel"))
+	sb.WriteString(keybindLine)
 
 	return m.padToHeight(sb.String())
 }
@@ -346,6 +377,7 @@ func (m Model) viewRevertConfirm() string {
 	warnSt := lipgloss.NewStyle().Foreground(p.Warning)
 	typeSt := lipgloss.NewStyle().Foreground(p.TextSubtle)
 	consSt := lipgloss.NewStyle().Foreground(p.TextSubtle)
+	subtleSt := lipgloss.NewStyle().Foreground(p.TextSubtle)
 
 	rows := m.navigableRows()
 
@@ -358,20 +390,50 @@ func (m Model) viewRevertConfirm() string {
 	}
 	consCol := maxLeft + 6
 
+	// Build all resource list lines upfront.
+	allResourceLines := make([]string, len(rows))
+	for i, r := range rows {
+		pad := strings.Repeat(" ", consCol-len([]rune(lefts[i])))
+		allResourceLines[i] = "    " + warnSt.Render("revert") +
+			textSt.Render("  "+r.mod.Label) +
+			typeSt.Render(" ("+r.mod.Type+")") +
+			pad + consSt.Render(m.revertConsequence(r))
+	}
+
+	// Fixed bottom section: blank + confirm line = 2 lines.
+	confirmLine := "  " + textSt.Render("Are you sure? This cannot be undone. ") + warnSt.Render("[y/N]")
+	const bottomLines = 2
+
+	// Fixed top section: header(2) + blank + intro + blank = 5 lines.
+	const topLines = 5
+
+	// Lines available for the resource list.
+	listBudget := m.height - topLines - bottomLines
+	if listBudget < 1 {
+		listBudget = 1
+	}
+
+	// Truncate the resource list with "… and N more" if needed.
+	resourceLines := allResourceLines
+	if len(resourceLines) > listBudget {
+		hidden := len(resourceLines) - (listBudget - 1)
+		if hidden > 0 {
+			resourceLines = resourceLines[:listBudget-1]
+			resourceLines = append(resourceLines, "    "+subtleSt.Render(fmt.Sprintf("… and %d more", hidden)))
+		}
+	}
+
+	// Assemble the frame.
 	var sb strings.Builder
 	sb.WriteString(header)
 	sb.WriteString("\n\n")
 	sb.WriteString("  " + textSt.Render("This will revert ALL out-of-band changes by re-applying with --force:") + "\n")
 	sb.WriteString("\n")
-	for i, r := range rows {
-		pad := strings.Repeat(" ", consCol-len([]rune(lefts[i])))
-		sb.WriteString("    " + warnSt.Render("revert") +
-			textSt.Render("  "+r.mod.Label) +
-			typeSt.Render(" ("+r.mod.Type+")") +
-			pad + consSt.Render(m.revertConsequence(r)) + "\n")
+	for _, l := range resourceLines {
+		sb.WriteString(l + "\n")
 	}
 	sb.WriteString("\n")
-	sb.WriteString("  " + textSt.Render("Are you sure? This cannot be undone. ") + warnSt.Render("[y/N]"))
+	sb.WriteString(confirmLine)
 
 	return m.padToHeight(sb.String())
 }

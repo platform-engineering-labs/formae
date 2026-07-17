@@ -5,6 +5,7 @@
 package driftview
 
 import (
+	"fmt"
 	"os"
 	"regexp"
 	"strings"
@@ -249,4 +250,87 @@ func TestDriftView_RenderingIntegrity(t *testing.T) {
 		assert.False(t, garbage.MatchString(stripped), "line %d has escape garbage: %q", i, stripped)
 		assert.LessOrEqual(t, lipgloss.Width(line), 100, "line %d exceeds width", i)
 	}
+}
+
+// makeLargeFixtureError builds a rejection with ~30 update resources across one
+// stack, which is tall enough to overflow a small terminal (e.g. height=14).
+func makeLargeFixtureError(n int) *apimodel.FormaReconcileRejectedError {
+	resources := make([]apimodel.ResourceModification, n)
+	for i := range n {
+		resources[i] = apimodel.ResourceModification{
+			Stack:         "production",
+			Type:          "AWS::SSM::Parameter",
+			Label:         fmt.Sprintf("param-%02d", i),
+			Operation:     "update",
+			PatchDocument: []byte(`[{"op":"replace","path":"/Value","value":"new"}]`),
+			Properties:    []byte(`{"Value":"new"}`),
+			OldProperties: []byte(`{"Value":"old"}`),
+		}
+	}
+	return &apimodel.FormaReconcileRejectedError{
+		ModifiedStacks: map[string]apimodel.ModifiedStack{
+			"production": {ModifiedResources: resources},
+		},
+	}
+}
+
+// TestDriftView_FilePromptActionLineVisibleOnOverflow verifies that on a small
+// terminal (100x14) with 30 resources — which would push the "Extract to:"
+// input line below the fold under bottom-truncation — the prompt line is still
+// visible in the rendered frame.
+func TestDriftView_FilePromptActionLineVisibleOnOverflow(t *testing.T) {
+	const (
+		width  = 100
+		height = 14
+	)
+	th := theme.New("formae")
+	rejected := makeLargeFixtureError(30)
+	m := New(th, rejected, Options{})
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: width, Height: height})
+	m = mm.(Model)
+
+	// Open the file prompt screen.
+	m = press(t, m, "e")
+	require.Equal(t, screenFilePrompt, m.screen)
+
+	view := m.View()
+	lines := strings.Split(view, "\n")
+
+	// Exact-fill contract: frame must be exactly height lines.
+	assert.Equal(t, height, len(lines), "frame must be exactly %d lines", height)
+
+	// The action line ("Extract to:") must appear somewhere in the rendered frame.
+	p := plain(view)
+	assert.Contains(t, p, "Extract to:", "Extract to: prompt must be visible even with 30 resources")
+}
+
+// TestDriftView_RevertConfirmActionLineVisibleOnOverflow verifies that on a
+// small terminal (100x14) with 30 resources — which would push the
+// "Are you sure?" prompt below the fold — the confirm line is still visible.
+func TestDriftView_RevertConfirmActionLineVisibleOnOverflow(t *testing.T) {
+	const (
+		width  = 100
+		height = 14
+	)
+	th := theme.New("formae")
+	rejected := makeLargeFixtureError(30)
+	m := New(th, rejected, Options{})
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: width, Height: height})
+	m = mm.(Model)
+
+	// Open the revert confirm screen.
+	m = press(t, m, "r")
+	require.Equal(t, screenRevertConfirm, m.screen)
+
+	view := m.View()
+	lines := strings.Split(view, "\n")
+
+	// Exact-fill contract: frame must be exactly height lines.
+	assert.Equal(t, height, len(lines), "frame must be exactly %d lines", height)
+
+	// The confirm line must appear somewhere in the rendered frame.
+	p := plain(view)
+	assert.Contains(t, p, "Are you sure?", "Are you sure? prompt must be visible even with 30 resources")
 }
