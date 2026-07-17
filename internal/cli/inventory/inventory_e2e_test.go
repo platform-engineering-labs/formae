@@ -311,13 +311,18 @@ func captureStdout(t *testing.T, fn func()) []byte {
 
 	origStdout := os.Stdout
 	os.Stdout = w
+	closed := false
 	defer func() {
+		if !closed {
+			w.Close()
+		}
 		os.Stdout = origStdout
 	}()
 
 	fn()
 
 	w.Close()
+	closed = true
 	var buf bytes.Buffer
 	_, err = io.Copy(&buf, r)
 	require.NoError(t, err)
