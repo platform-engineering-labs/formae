@@ -909,6 +909,7 @@ func (m *Metastructure) CancelCommandsByQuery(query string, force bool, clientID
 					allResourceStates[uri] = apimodel.CancelResourceState{
 						State:         state,
 						ForceCanceled: forceCanceled[uri],
+						CommandID:     cmd.ID,
 					}
 				}
 			}

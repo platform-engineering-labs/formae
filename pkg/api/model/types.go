@@ -68,6 +68,9 @@ type CancelResourceState struct {
 	// progress entry). These are the resources whose cloud-side state may be
 	// orphaned and need manual verification.
 	ForceCanceled bool `json:"ForceCanceled,omitempty"`
+	// CommandID attributes this update to the canceled command it belongs to;
+	// the ResourceUpdateStates map is flat across all canceled commands.
+	CommandID string `json:"CommandId,omitempty"`
 }
 
 type ResourceUpdate struct {
