@@ -230,8 +230,18 @@ func (m Model) handleFilterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Unfocus but keep filter applied.
 		m.filterFocused = false
 		m.filterBar = m.filterBar.blur()
-		// Restore full body budget.
-		m.tabs[m.active] = m.tabs[m.active].setSize(m.width, m.bodyHeight())
+		// Size the active tab correctly: if the filter is non-empty the bar
+		// remains visible (filterBarVisible depends on filter, not focus), so
+		// we must use the reduced body budget; only an empty filter earns the
+		// full budget.
+		tabH := m.bodyHeight()
+		if m.tabs[m.active].filter != "" {
+			tabH -= filterBarLines
+		}
+		if tabH < 1 {
+			tabH = 1
+		}
+		m.tabs[m.active] = m.tabs[m.active].setSize(m.width, tabH)
 		m.tabs[m.active] = m.tabs[m.active].sync(m.opts.MaxRows)
 		return m, nil
 
@@ -326,6 +336,22 @@ func (m Model) handleSortKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // switchTab switches to tab t, triggering a fetch if the tab is not yet loaded.
 func (m Model) switchTab(t Tab) (tea.Model, tea.Cmd) {
 	m.active = t
+	// Re-size the newly-active tab for its correct body budget. Visibility of
+	// the filter bar after the switch depends on the NEW active tab's filter
+	// (focus is always false during a switch). We always re-size here so that
+	// stale sizes from any previous active state are corrected in both
+	// directions: filtered → full budget (bar gone) or unfiltered → full
+	// budget, filtered → reduced budget (bar still visible).
+	tabH := m.bodyHeight()
+	if m.tabs[t].filter != "" {
+		tabH -= filterBarLines
+	}
+	if tabH < 1 {
+		tabH = 1
+	}
+	m.tabs[t] = m.tabs[t].setSize(m.width, tabH)
+	m.tabs[t] = m.tabs[t].sync(m.opts.MaxRows)
+
 	tab := &m.tabs[t]
 	if tab.state == tabNotLoaded || tab.state == tabFailed {
 		tab.state = tabLoading

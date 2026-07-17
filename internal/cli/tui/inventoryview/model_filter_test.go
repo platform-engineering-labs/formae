@@ -374,3 +374,123 @@ func TestGolden_FilterUnfocusedApplied(t *testing.T) {
 
 	tuitest.RequireGolden(t, []byte(mm.(Model).View()))
 }
+
+// ---------------------------------------------------------------------------
+// Bug fix tests — viewport sizing on Enter-confirm and tab switch.
+// The bugs: Enter gives the table the FULL body budget even when the filter
+// bar is still visible; switchTab never re-sizes the new active tab for bar
+// visibility. Both cause scroll/page state to be wrong (masked by View()'s
+// clip, but the engine's stored height is wrong).
+// ---------------------------------------------------------------------------
+
+// TestFilter_EnterConfirmSizesForBar verifies that after "/" + type + enter:
+//   - the active tab's stored height equals bodyHeight()-filterBarLines (bar still visible)
+//   - the View() still fills exactly m.height lines (no layout regression)
+func TestFilter_EnterConfirmSizesForBar(t *testing.T) {
+	const termHeight = 24
+	// At termHeight=24: bodyHeight = 24-chromeLines(6) = 18
+	// bar-reduced: 18-filterBarLines(2) = 16
+	wantTabH := termHeight - chromeLines - filterBarLines
+
+	_, mm := loadFilterFixture(t)
+
+	// Open filter, type something, confirm with enter.
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	mm = typeIntoFilter(mm, "S3")
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	m := mm.(Model)
+
+	// Filter must still be non-empty → bar still visible.
+	require.Equal(t, "S3", m.tabs[TabResources].filter, "filter must survive enter")
+	require.True(t, m.filterBarVisible(), "filter bar must be visible after enter with non-empty filter")
+
+	// The active tab's stored height must be bar-reduced, not full body budget.
+	gotTabH := m.tabs[TabResources].height
+	assert.Equal(t, wantTabH, gotTabH,
+		"after enter with filter applied, tab height must be bodyHeight()-filterBarLines (%d), got %d",
+		wantTabH, gotTabH)
+
+	// View must still fill the terminal exactly.
+	view := m.View()
+	lines := strings.Split(view, "\n")
+	assert.Equal(t, termHeight, len(lines), "View must fill exactly %d lines after enter-confirm", termHeight)
+}
+
+// TestFilter_SwitchBackToFilteredTabSizesForBar covers:
+//
+//	filter tab A → enter (keep filter) → switch to B → switch back to A
+//	→ A's stored height must be bar-reduced (its filter is still set).
+func TestFilter_SwitchBackToFilteredTabSizesForBar(t *testing.T) {
+	const termHeight = 24
+	wantFilteredTabH := termHeight - chromeLines - filterBarLines // 16
+
+	_, mm := loadFilterFixture(t)
+
+	// Filter Resources (tab A), confirm with enter.
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	mm = typeIntoFilter(mm, "S3")
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	// Switch to Targets (tab B — no filter).
+	var cmd tea.Cmd
+	mm, cmd = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	if cmd != nil {
+		msg := cmd()
+		mm, _ = mm.Update(msg)
+	}
+	// While on Targets, its stored height must be FULL body budget.
+	wantFullTabH := termHeight - chromeLines // 18
+	gotTargetsH := mm.(Model).tabs[TabTargets].height
+	assert.Equal(t, wantFullTabH, gotTargetsH,
+		"Targets (no filter) must have full body budget (%d) after switch, got %d",
+		wantFullTabH, gotTargetsH)
+
+	// Switch back to Resources (tab A — filter still "S3").
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
+	m := mm.(Model)
+
+	require.Equal(t, "S3", m.tabs[TabResources].filter, "Resources filter must survive round-trip")
+	gotResourcesH := m.tabs[TabResources].height
+	assert.Equal(t, wantFilteredTabH, gotResourcesH,
+		"Resources (filter 'S3') must have bar-reduced height (%d) after switch back, got %d",
+		wantFilteredTabH, gotResourcesH)
+}
+
+// TestFilter_SwitchAwayFromFilteredTabGivesNewTabFullBudget covers:
+//
+//	filter tab A (Resources) → switch to B (Targets, no filter)
+//	→ B's stored height must be the FULL body budget.
+func TestFilter_SwitchAwayFromFilteredTabGivesNewTabFullBudget(t *testing.T) {
+	const termHeight = 24
+	wantFullTabH := termHeight - chromeLines // 18
+
+	_, mm := loadFilterFixture(t)
+
+	// Filter Resources and keep the bar visible (stay focused so bar is visible
+	// while switching — though focus is cleared on switch, the point is the NEW
+	// tab should get the full budget regardless of what the old tab had).
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	mm = typeIntoFilter(mm, "S3")
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEnter}) // keep filter, unfocus
+
+	// Resources tab now has a non-empty filter → bar visible on Resources.
+	require.True(t, mm.(Model).filterBarVisible(), "filter bar must be visible on Resources")
+
+	// Switch to Targets.
+	var cmd tea.Cmd
+	mm, cmd = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	if cmd != nil {
+		msg := cmd()
+		mm, _ = mm.Update(msg)
+	}
+
+	m := mm.(Model)
+	assert.Equal(t, TabTargets, m.active, "must be on Targets tab")
+
+	// Targets has no filter → bar not visible → full body budget.
+	gotTargetsH := m.tabs[TabTargets].height
+	assert.Equal(t, wantFullTabH, gotTargetsH,
+		"Targets (no filter) must have full body budget (%d) after switch from filtered Resources, got %d",
+		wantFullTabH, gotTargetsH)
+}
