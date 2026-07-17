@@ -45,6 +45,8 @@ type Model struct {
 	detailTitle    string         // captured at open time
 	detailBody     []string       // captured at open time (row.detail(width))
 	detailViewport viewport.Model // scrollable content area for the detail screen
+	// helpOpen tracks whether the help overlay is currently displayed.
+	helpOpen bool
 }
 
 // New constructs a Model with the four tab specs and sane defaults.
@@ -176,6 +178,20 @@ func (m Model) handleTabLoaded(msg tabLoadedMsg) (tea.Model, tea.Cmd) {
 
 // handleKey routes keyboard input.
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// ctrl+c always quits, even over the help overlay.
+	if msg.Type == tea.KeyCtrlC {
+		return m, tea.Quit
+	}
+
+	// Help overlay: ? or esc closes; all other keys (except ctrl+c) are swallowed.
+	if m.helpOpen {
+		if msg.Type == tea.KeyEsc ||
+			(msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == '?') {
+			m.helpOpen = false
+		}
+		return m, nil
+	}
+
 	// When detail screen is open, route to detail key handler.
 	if m.detailOpen {
 		return m.handleDetailKey(msg)
@@ -229,6 +245,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, m.keys.Up), key.Matches(msg, m.keys.Down),
 		key.Matches(msg, m.keys.PageUp), key.Matches(msg, m.keys.PageDown):
 		return m.delegateNav(msg)
+
+	case msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == '?':
+		m.helpOpen = true
+		return m, nil
 	}
 
 	return m, nil
@@ -270,15 +290,16 @@ func (m Model) openDetail() (tea.Model, tea.Cmd) {
 // handleDetailKey handles key events while the detail screen is open.
 func (m Model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
-	case msg.Type == tea.KeyCtrlC:
-		return m, tea.Quit
-
 	case msg.Type == tea.KeyEsc:
 		m.detailOpen = false
 		return m, nil
 
 	case msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 'q':
 		// Swallowed — q does not quit from detail screen.
+		return m, nil
+
+	case msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == '?':
+		m.helpOpen = true
 		return m, nil
 
 	case msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 'j',
@@ -578,11 +599,22 @@ func (m Model) viewDetail() string {
 	return strings.Join(lines, "\n")
 }
 
+// narrowFooterThreshold is the terminal width below which the footer hint line
+// and status bar switch to abbreviated forms. Matches the PLA-282 statuswatch
+// convention (no analogous constant exists in statuswatch — it uses full hints
+// at all widths; the threshold here is spec-defined at 80).
+const narrowFooterThreshold = 80
+
 // View composes the full terminal screen. Returns "" until the first
 // WindowSizeMsg is received (statuswatch convention).
 func (m Model) View() string {
 	if !m.ready {
 		return ""
+	}
+
+	// Help overlay: render over whatever the current screen is.
+	if m.helpOpen {
+		return m.viewHelp()
 	}
 
 	if m.detailOpen {
@@ -597,6 +629,8 @@ func (m Model) View() string {
 		footer = m.renderSortSelector()
 	} else if m.filterFocused {
 		footer = m.renderFilterFooter()
+	} else if m.width < narrowFooterThreshold {
+		footer = components.FooterBar(m.th, m.width, inventoryFooterHintsNarrow(), "")
 	} else {
 		footer = components.FooterBar(m.th, m.width, inventoryFooterHints(), "")
 	}
@@ -636,7 +670,14 @@ func (m Model) View() string {
 		bodyLines = bodyLines[:bodyH]
 	}
 
-	statusLine := m.tabs[m.active].statusLine(m.opts.MaxRows)
+	// Status line: abbreviated when narrow, then truncated to fit width.
+	var statusLine string
+	if m.width < narrowFooterThreshold {
+		statusLine = m.tabs[m.active].statusLineNarrow(m.opts.MaxRows)
+	} else {
+		statusLine = m.tabs[m.active].statusLine(m.opts.MaxRows)
+	}
+	statusLine = components.Truncate(statusLine, m.width)
 
 	// Assemble: header (2 lines) + tab bar (1 line) + body (bodyH lines) + status (1 line) + footer (2 lines)
 	// = chromeLines + bodyH = m.height total lines.
@@ -648,6 +689,31 @@ func (m Model) View() string {
 
 	// Clamp to exactly m.height lines (defensive).
 	lines := strings.Split(result, "\n")
+	for len(lines) < m.height {
+		lines = append(lines, "")
+	}
+	if len(lines) > m.height {
+		lines = lines[:m.height]
+	}
+	return strings.Join(lines, "\n")
+}
+
+// viewHelp renders the help overlay centered on the screen, over the header
+// and footer (statuswatch pattern: panel borders, key/desc columns, theme roles).
+func (m Model) viewHelp() string {
+	header := components.HeaderBar(m.th, "formae inventory", "", m.width)
+	footer := components.FooterBar(m.th, m.width, inventoryFooterHints(), "")
+
+	// Body area: total height − header (2) − footer (2).
+	bodyH := m.height - 4
+	if bodyH < 1 {
+		bodyH = 1
+	}
+
+	helpPanel := renderHelpOverlay(m.th, m.width, bodyH)
+
+	parts := header + "\n" + helpPanel + "\n" + footer
+	lines := strings.Split(parts, "\n")
 	for len(lines) < m.height {
 		lines = append(lines, "")
 	}
@@ -756,16 +822,18 @@ func (m Model) renderTabBar() string {
 		}
 	}
 
-	// Pad the tab bar line to full width.
+	// Pad or truncate the tab bar line to full width.
 	line := sb.String()
 	lineW := lipgloss.Width(line)
 	if lineW < m.width {
 		line += strings.Repeat(" ", m.width-lineW)
+	} else if lineW > m.width {
+		line = components.Truncate(line, m.width)
 	}
 	return line
 }
 
-// inventoryFooterHints returns the key hints shown in the inventory footer.
+// inventoryFooterHints returns the key hints shown in the inventory footer (full width ≥80).
 func inventoryFooterHints() []components.KeyHint {
 	return []components.KeyHint{
 		{Key: "↑↓/j/k", Desc: "navigate"},
@@ -776,4 +844,11 @@ func inventoryFooterHints() []components.KeyHint {
 		{Key: "1-4", Desc: "tab"},
 		{Key: "q", Desc: "quit"},
 	}
+}
+
+// inventoryFooterHintsNarrow returns an empty hint list for narrow terminals
+// (width < narrowFooterThreshold). The compact key glyphs are shown in the
+// status line instead (statusLineNarrow), so the footer just shows "?: help".
+func inventoryFooterHintsNarrow() []components.KeyHint {
+	return nil
 }

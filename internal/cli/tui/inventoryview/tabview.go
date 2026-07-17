@@ -452,6 +452,18 @@ func (t tabModel) statusLine(maxRows int) string {
 	return base
 }
 
+// statusLineNarrow returns an abbreviated status line for narrow terminals
+// (width < narrowFooterThreshold). It drops the entity noun and appends compact
+// key glyphs: "Showing N of M · ↑↓ enter / s q".
+func (t tabModel) statusLineNarrow(maxRows int) string {
+	_, total := t.visible(maxRows)
+	shown := total
+	if maxRows > 0 && shown > maxRows {
+		shown = maxRows
+	}
+	return fmt.Sprintf("Showing %d of %d · ↑↓ enter / s q", shown, total)
+}
+
 // centerText centers plain text within the given width by prepending spaces.
 func centerText(s string, width int) string {
 	msgWidth := lipgloss.Width(s)
