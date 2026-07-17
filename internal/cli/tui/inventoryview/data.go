@@ -9,11 +9,13 @@
 package inventoryview
 
 import (
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
@@ -53,10 +55,11 @@ type row struct {
 
 // tabSpec describes one inventory tab declaratively.
 type tabSpec struct {
-	title   string // "Resources"
-	entity  string // "resources" — status bar noun
-	columns []components.Column
-	fetch   func(c Client, query string, fromTUI bool) ([]row, []string, error)
+	title     string // "Resources"
+	entity    string // "resources" — status bar noun
+	columns   []components.Column
+	fetch     func(c Client, query string, fromTUI bool) ([]row, []string, error)
+	styleCell func(th *theme.Theme, col int, cell string) string // nil = plain
 }
 
 // tabLoadedMsg is the bubbletea message delivered when a tab fetch completes.
@@ -78,6 +81,14 @@ func newSpecs(now func() time.Time) [4]tabSpec {
 				{Title: "Stack", Width: 14, Priority: 2},
 				{Title: "Type", Width: 24, Priority: 1},
 				{Title: "Label", Width: 20, Priority: 0},
+			},
+			// col 1 = Stack: cells starting with "⚠ " are rendered with the
+			// error/red role (StatusFailed) to highlight unmanaged resources.
+			styleCell: func(th *theme.Theme, col int, cell string) string {
+				if col == 1 && th != nil && strings.HasPrefix(cell, "⚠ ") {
+					return th.Styles.StatusFailed.Render(cell)
+				}
+				return cell
 			},
 			fetch: func(c Client, query string, fromTUI bool) ([]row, []string, error) {
 				forma, nags, err := c.ExtractResources(query, fromTUI)
@@ -102,6 +113,13 @@ func newSpecs(now func() time.Time) [4]tabSpec {
 				{Title: "Namespace", Width: 20, Priority: 1},
 				{Title: "Discoverable", Width: 14, Priority: 2},
 				{Title: "Config", Width: 40, Priority: 3},
+			},
+			// col 2 = Discoverable: "yes" gets the blue accent role.
+			styleCell: func(th *theme.Theme, col int, cell string) string {
+				if col == 2 && th != nil && cell == "yes" {
+					return th.Styles.Accent.Render(cell)
+				}
+				return cell
 			},
 			fetch: func(c Client, query string, fromTUI bool) ([]row, []string, error) {
 				targets, nags, err := c.ExtractTargets(query, fromTUI)

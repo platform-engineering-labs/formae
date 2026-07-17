@@ -68,13 +68,19 @@ func (t tabModel) setSize(width, height int) tabModel {
 			cols[i].Width = newW
 		}
 		t.spec = tabSpec{
-			title:   t.spec.title,
-			entity:  t.spec.entity,
-			columns: cols,
-			fetch:   t.spec.fetch,
+			title:     t.spec.title,
+			entity:    t.spec.entity,
+			columns:   cols,
+			fetch:     t.spec.fetch,
+			styleCell: t.spec.styleCell,
 		}
 		t.table = components.NewTable(t.th, cols)
 	}
+
+	// Record the final (possibly-shrunk) column widths so sync can use them
+	// for truncation before styling.
+	t.effectiveCols = make([]components.Column, len(t.spec.columns))
+	copy(t.effectiveCols, t.spec.columns)
 
 	t.table = t.table.SetSize(width, height)
 	return t
@@ -192,6 +198,44 @@ func (t tabModel) emptyView(th *theme.Theme) []string {
 	return lines
 }
 
+// applyCellStyles replaces plain cell text with styled equivalents in a slice
+// of ANSI-encoded table lines. bubbles/table uses runewidth.Truncate (not
+// ANSI-aware) so styled strings cannot be passed directly to SetRows — instead
+// sync records the intended plain→styled replacements (t.styledCells) and this
+// function applies them after tbl.View() produces the rendered output.
+//
+// The replacement is a simple strings.ReplaceAll on each line: for each cell
+// where the styled form differs from the plain, we replace the first occurrence
+// of the plain text with the styled form. This works because:
+//   - cell values are truncated to colWidth and unique enough in context;
+//   - bubbles renders cells in a fixed layout where the plain value appears
+//     verbatim in the ANSI output (surrounded by cell-style escapes).
+//
+// Lines before the first data line (header + separator = 2 lines) are skipped.
+func applyCellStyles(lines []string, cells [][]styledCell) []string {
+	if len(cells) == 0 {
+		return lines
+	}
+	out := make([]string, len(lines))
+	copy(out, lines)
+	const headerLines = 2 // header + separator
+	dataStart := headerLines
+	for row, styledRow := range cells {
+		lineIdx := dataStart + row
+		if lineIdx >= len(out) {
+			break
+		}
+		line := out[lineIdx]
+		for _, sc := range styledRow {
+			if sc.styled != sc.plain && sc.plain != "" {
+				line = strings.Replace(line, sc.plain, sc.styled, 1)
+			}
+		}
+		out[lineIdx] = line
+	}
+	return out
+}
+
 // loadedView renders the table and optional truncation marker.
 func (t tabModel) loadedView(th *theme.Theme, maxRows int) []string {
 	_, total := t.visible(maxRows)
@@ -217,6 +261,10 @@ func (t tabModel) loadedView(th *theme.Theme, maxRows int) []string {
 
 	tableOut := tbl.View()
 	tableLines := strings.Split(tableOut, "\n")
+
+	// Apply per-cell styling replacements (post-render, since bubbles/table
+	// uses runewidth.Truncate which corrupts ANSI-escaped cell values).
+	tableLines = applyCellStyles(tableLines, t.styledCells)
 
 	// Remove trailing empty lines that bubbles/table may append.
 	for len(tableLines) > 0 && tableLines[len(tableLines)-1] == "" {

@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/tuitest"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -302,7 +303,7 @@ func TestSetSize_StoresDimensions(t *testing.T) {
 // rendered line must be ≤ width printable columns (R8 overflow guard).
 // ---------------------------------------------------------------------------
 
-func TestNarrowTerminal_NoParicAndFitsWidth(t *testing.T) {
+func TestNarrowTerminal_NoPanicAndFitsWidth(t *testing.T) {
 	// narrowWidth must be < 22 (= Label col width 20 + 2 padding) to trigger
 	// the overflow guard in setSize, which rebuilds the table via NewTable.
 	const narrowWidth = 15
@@ -326,5 +327,175 @@ func TestNarrowTerminal_NoParicAndFitsWidth(t *testing.T) {
 		w := lipgloss.Width(line)
 		assert.LessOrEqualf(t, w, narrowWidth,
 			"line %d is %d cols wide (limit %d): %q", i, w, narrowWidth, line)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// styleCell hook: per-entity rendering
+// ---------------------------------------------------------------------------
+
+// buildResourcesTabLoaded returns a loaded tabModel for the resources spec with
+// the given rows, sized at 100×24.
+func buildResourcesTabLoaded(th *theme.Theme, rows []row) tabModel {
+	specs := newSpecs(nil)
+	tm := newTabModel(th, specs[TabResources])
+	tm.state = tabLoaded
+	tm.allRows = rows
+	tm = tm.setSize(100, 24)
+	tm = tm.sync(0)
+	return tm
+}
+
+// buildTargetsTabLoaded returns a loaded tabModel for the targets spec with
+// the given rows, sized at 100×24.
+func buildTargetsTabLoaded(th *theme.Theme, rows []row) tabModel {
+	specs := newSpecs(nil)
+	tm := newTabModel(th, specs[TabTargets])
+	tm.state = tabLoaded
+	tm.allRows = rows
+	tm = tm.setSize(100, 24)
+	tm = tm.sync(0)
+	return tm
+}
+
+// TestStyleCell_Resources_UnmanagedHasErrorAnsi verifies that after sync the
+// rendered view contains the StatusFailed ANSI sequence around "⚠ unmanaged".
+func TestStyleCell_Resources_UnmanagedHasErrorAnsi(t *testing.T) {
+	th := theme.New("formae")
+	rows := []row{resourceRow(pkgmodel.Resource{
+		NativeID: "arn:aws:s3:::old-logs",
+		Stack:    "unmanaged",
+		Type:     "AWS::S3::Bucket",
+		Label:    "old-logs",
+	})}
+
+	tm := buildResourcesTabLoaded(th, rows)
+	rendered := tm.view(th, 0, "⠋")
+	joined := strings.Join(rendered, "\n")
+
+	// Render the expected fragment using the same style, then check it appears
+	// in the table output.
+	expected := th.Styles.StatusFailed.Render("⚠ unmanaged")
+	require.Contains(t, joined, expected,
+		"rendered table must contain StatusFailed-styled '⚠ unmanaged'")
+}
+
+// TestStyleCell_Resources_ManagedStackNoAnsi verifies that a managed (non-⚠)
+// Stack cell is NOT wrapped in the error style.
+func TestStyleCell_Resources_ManagedStackNoAnsi(t *testing.T) {
+	th := theme.New("formae")
+	rows := []row{resourceRow(pkgmodel.Resource{
+		NativeID: "arn:aws:s3:::bucket",
+		Stack:    "production",
+		Type:     "AWS::S3::Bucket",
+		Label:    "bucket",
+	})}
+
+	tm := buildResourcesTabLoaded(th, rows)
+	rendered := tm.view(th, 0, "⠋")
+	joined := strings.Join(rendered, "\n")
+
+	// The error style must NOT wrap "production".
+	errorStyled := th.Styles.StatusFailed.Render("production")
+	require.NotContains(t, joined, errorStyled,
+		"managed stack cell must not be wrapped in error style")
+}
+
+// TestStyleCell_Targets_YesHasAccentAnsi verifies that a discoverable "yes"
+// cell is rendered with the Accent style.
+func TestStyleCell_Targets_YesHasAccentAnsi(t *testing.T) {
+	th := theme.New("formae")
+	tgt := &pkgmodel.Target{
+		Label:        "aws-prod",
+		Namespace:    "AWS",
+		Discoverable: true,
+	}
+	rows := []row{targetRow(tgt)}
+
+	tm := buildTargetsTabLoaded(th, rows)
+	rendered := tm.view(th, 0, "⠋")
+	joined := strings.Join(rendered, "\n")
+
+	expected := th.Styles.Accent.Render("yes")
+	require.Contains(t, joined, expected,
+		"discoverable 'yes' cell must be rendered with Accent style")
+}
+
+// TestStyleCell_Targets_NoPlain verifies that "no" for Discoverable is NOT
+// wrapped in the accent style.
+func TestStyleCell_Targets_NoPlain(t *testing.T) {
+	th := theme.New("formae")
+	tgt := &pkgmodel.Target{
+		Label:        "dev",
+		Namespace:    "AWS",
+		Discoverable: false,
+	}
+	rows := []row{targetRow(tgt)}
+
+	tm := buildTargetsTabLoaded(th, rows)
+	rendered := tm.view(th, 0, "⠋")
+	joined := strings.Join(rendered, "\n")
+
+	accentNo := th.Styles.Accent.Render("no")
+	require.NotContains(t, joined, accentNo,
+		"non-discoverable 'no' must not be accent-styled")
+}
+
+// TestStyleCell_TruncateBeforeStyle verifies the truncate-then-style contract:
+// a cell longer than the column width must be truncated BEFORE styling, so the
+// rendered output contains the truncated-then-styled text (not the full text
+// styled), and every output line fits within the terminal width.
+func TestStyleCell_TruncateBeforeStyle(t *testing.T) {
+	th := theme.New("formae")
+	// Build a spec with a narrow column (width 8) and a styleCell that wraps with
+	// the accent style. The cell value is 20 characters — longer than 8.
+	const colWidth = 8
+	const termWidth = 40
+
+	styleApplied := false
+	spec := tabSpec{
+		title:  "Test",
+		entity: "tests",
+		columns: []components.Column{
+			{Title: "Name", Width: colWidth, Priority: 0},
+		},
+		styleCell: func(th *theme.Theme, col int, cell string) string {
+			styleApplied = true
+			return th.Styles.Accent.Render(cell)
+		},
+	}
+
+	longCell := "verylongcellvalue!!" // 19 chars, exceeds colWidth=8
+	r := row{cells: []string{longCell}}
+
+	tm := newTabModel(th, spec)
+	tm.state = tabLoaded
+	tm.allRows = []row{r}
+	tm = tm.setSize(termWidth, 10)
+	tm = tm.sync(0)
+
+	// styleCell must have been invoked.
+	require.True(t, styleApplied, "styleCell must be called during sync")
+
+	// The rendered text must contain the truncated-then-styled fragment, not the full cell.
+	truncated := components.Truncate(longCell, colWidth)
+	require.NotEqual(t, longCell, truncated, "fixture: cell must be longer than colWidth")
+	expectedStyled := th.Styles.Accent.Render(truncated)
+
+	rendered := tm.view(th, 0, "⠋")
+	joined := strings.Join(rendered, "\n")
+	require.Contains(t, joined, expectedStyled,
+		"rendered output must contain the truncated-then-styled text")
+
+	// Full-cell styled must NOT appear (styling was applied after truncation).
+	fullStyled := th.Styles.Accent.Render(longCell)
+	require.NotContains(t, joined, fullStyled,
+		"full (un-truncated) styled text must not appear")
+
+	// Every output line must fit within the terminal width.
+	for i, line := range rendered {
+		w := lipgloss.Width(line)
+		assert.LessOrEqualf(t, w, termWidth,
+			"line %d is %d cols wide (limit %d)", i, w, termWidth)
 	}
 }

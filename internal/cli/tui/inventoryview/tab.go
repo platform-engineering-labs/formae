@@ -27,17 +27,19 @@ const (
 // cells to the table for display. components.Table is a display/navigation
 // shell only — the engine never calls SortBy on it (R1).
 type tabModel struct {
-	spec    tabSpec
-	th      *theme.Theme
-	state   tabState
-	allRows []row
-	err     error
-	filter  string
-	sortCol int // -1 = server order
-	sortDir components.SortDirection
-	table   components.Table
-	width   int
-	height  int
+	spec          tabSpec
+	th            *theme.Theme
+	state         tabState
+	allRows       []row
+	err           error
+	filter        string
+	sortCol       int // -1 = server order
+	sortDir       components.SortDirection
+	table         components.Table
+	width         int
+	height        int
+	effectiveCols []components.Column // post-shrink column widths from setSize
+	styledCells   [][]styledCell      // per-row per-col plain→styled replacements from sync
 }
 
 // newTabModel creates a tabModel with sane defaults: sortCol -1 (server order),
@@ -118,17 +120,64 @@ func rowMatchesFilter(r row, needle string) bool {
 	return false
 }
 
+// styledCell records a plain-to-styled replacement for post-render processing.
+// bubbles/table uses runewidth.Truncate (not ANSI-aware) on every cell value,
+// so pre-styled strings passed to SetRows are always mangled. Instead, sync
+// pushes PLAIN truncated text into the table and records the intended styled
+// replacements. loadedView applies them after tbl.View() produces ANSI output.
+type styledCell struct {
+	plain  string // the plain text we pushed into the table
+	styled string // the styled replacement (styled != plain means replace)
+}
+
 // sync pushes the visible() cells into the table and sets the sort indicator.
 // It never calls table.SortBy — the engine owns row ordering (R1).
 // sync does not touch state or err — pipeline only.
+//
+// For each cell: plain text is first truncated to the column's effective width
+// (post-shrink, as computed by setSize), then a styleCell application is
+// RECORDED for post-render replacement in loadedView. The table always receives
+// plain truncated text so that bubbles/table's runewidth-based internal
+// truncation does not corrupt ANSI escape sequences.
 func (t tabModel) sync(maxRows int) tabModel {
 	vis, _ := t.visible(maxRows)
 
+	// Resolve the effective column widths. effectiveCols is set by setSize;
+	// fall back to spec.columns if setSize has not been called yet.
+	effCols := t.effectiveCols
+	if len(effCols) == 0 {
+		effCols = t.spec.columns
+	}
+
 	cells := make([][]string, len(vis))
+	styledCells := make([][]styledCell, len(vis))
 	for i, r := range vis {
-		cells[i] = r.cells
+		row := make([]string, len(r.cells))
+		styledRow := make([]styledCell, len(r.cells))
+		for col, cell := range r.cells {
+			// Step 1: truncate plain text to the column's final width.
+			colWidth := 0
+			if col < len(effCols) {
+				colWidth = effCols[col].Width
+			}
+			plain := cell
+			if colWidth > 0 {
+				plain = components.Truncate(cell, colWidth)
+			}
+			row[col] = plain
+
+			// Step 2: record the intended styled replacement when styleCell applies.
+			styledRow[col] = styledCell{plain: plain, styled: plain}
+			if t.spec.styleCell != nil {
+				styled := t.spec.styleCell(t.th, col, plain)
+				styledRow[col] = styledCell{plain: plain, styled: styled}
+			}
+		}
+		cells[i] = row
+		styledCells[i] = styledRow
 	}
 
 	t.table = t.table.SetRows(cells).SetSortState(t.sortCol, t.sortDir)
+	t.styledCells = styledCells
 	return t
 }
