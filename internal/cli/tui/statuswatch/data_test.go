@@ -91,3 +91,19 @@ func TestStateLabel_CancelStates(t *testing.T) {
 	assert.Equal(t, "", stateLabel("InProgress", "InProgress"))
 	assert.Equal(t, "", stateLabel("Canceling", "Success"))
 }
+
+func TestFilterUserCommands(t *testing.T) {
+	cmds := []apimodel.Command{
+		{CommandID: "a", Command: "apply", Mode: "reconcile"}, // user (pre-Source rows)
+		{CommandID: "b", Command: "sync", Mode: "none"},       // internal by type
+		{CommandID: "c", Command: "apply", Mode: "reconcile", Source: "auto-reconciler"},
+		{CommandID: "d", Command: "destroy", Mode: "patch", Source: "stack-expirer"},
+		{CommandID: "e", Command: "destroy", Mode: "patch", Source: "user"},
+	}
+	got := filterUserCommands(cmds)
+	ids := make([]string, 0, len(got))
+	for _, c := range got {
+		ids = append(ids, c.CommandID)
+	}
+	assert.Equal(t, []string{"a", "e"}, ids)
+}

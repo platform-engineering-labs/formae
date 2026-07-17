@@ -198,6 +198,28 @@ func TestModel_HelpOverlayGolden(t *testing.T) {
 	tuitest.RequireGolden(t, []byte(mm.(Model).View()))
 }
 
+func TestModel_HidesInternalCommands(t *testing.T) {
+	syncCmd := apimodel.Command{
+		CommandID: "sync-cmd-id", Command: "sync", Mode: "none", State: "Success",
+		StartTs: time.Date(2026, 7, 16, 11, 0, 0, 0, time.UTC),
+		EndTs:   time.Date(2026, 7, 16, 11, 0, 30, 0, time.UTC),
+	}
+	applyCmd := apimodel.Command{
+		CommandID: "apply-cmd-id", Command: "apply", Mode: "reconcile", State: "Success",
+		StartTs:         time.Date(2026, 7, 16, 11, 1, 0, 0, time.UTC),
+		EndTs:           time.Date(2026, 7, 16, 11, 2, 0, 0, time.UTC),
+		ResourceUpdates: []apimodel.ResourceUpdate{{State: "Success", ResourceLabel: "bucket", ResourceType: "AWS::S3::Bucket", Operation: "create"}},
+	}
+	m, _ := newTestModel(t, nil)
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	mm, _ = mm.Update(commandsMsg{commands: []apimodel.Command{syncCmd, applyCmd}})
+
+	view := plain(mm.(Model).View())
+	assert.NotContains(t, view, "sync-cmd-id", "sync command must be hidden from the view")
+	assert.Contains(t, view, "apply-cmd-id", "user apply command must remain visible")
+}
+
 // TestModel_DetailView_QueryBarVisible verifies that the query bar is rendered
 // in the detail view after pressing '/'. The user must be able to see and edit
 // their query text — pressing '/' and typing chars must produce visible output.

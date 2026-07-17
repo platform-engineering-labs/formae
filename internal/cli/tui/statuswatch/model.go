@@ -130,7 +130,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		m.multi.now = m.opts.Now()
-		m.multi.rows = buildRows(msg.commands)
+		m.multi.rows = buildRows(filterUserCommands(msg.commands))
 		sortRows(m.multi.rows, m.multi.sortCol, m.multi.sortDir, m.multi.now)
 
 		// Re-anchor cursor to the same command ID (fall back to clamped index).

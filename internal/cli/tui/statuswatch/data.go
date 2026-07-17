@@ -109,6 +109,24 @@ func commandDuration(c apimodel.Command, now time.Time) time.Duration {
 	return now.Sub(c.StartTs)
 }
 
+// filterUserCommands drops internal agent commands (sync, and anything whose
+// recorded source is not the user) — users cannot obtain their IDs and they
+// are bookkeeping noise in a status list. Old rows predate Source and pass
+// through unless they are syncs.
+func filterUserCommands(cmds []apimodel.Command) []apimodel.Command {
+	out := make([]apimodel.Command, 0, len(cmds))
+	for _, c := range cmds {
+		if c.Command == "sync" {
+			continue
+		}
+		if c.Source != "" && c.Source != "user" {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
 // stateLabel returns a cancel-flow display override for an update's state:
 // in-progress updates of a canceling command are "finishing" (they complete
 // before the command stops), canceled updates are "canceled" (they will
