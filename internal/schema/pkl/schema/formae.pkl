@@ -465,6 +465,10 @@ function fillProps(clazz: Class): Typed =
 /// so manifest and resources cannot disagree.
 function renderProperties(opts: Any?): Any? =
     if (opts == null) new Mapping {}
+    // LEGACY: a Dynamic `properties {}` block (amends-based formae) passes
+    // through unchanged, preserving today's wire output byte for byte.
+    // Remove together with forma.pkl's `is Typed` discriminator when the
+    // legacy block is dropped after the deprecation window.
     else if (!(opts is Typed)) opts
     else
         let (inst = opts.toDynamic().toMap())

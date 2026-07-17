@@ -36,6 +36,12 @@ hidden injected: Boolean = false
 // NOTE: a lot of this would be uneeded if bugs or unfinished implementation issues were resolved in PKL
 output {
     value =
+        // `properties is Typed` = the new extends shape (typed Props class).
+        // LEGACY: amends-based formae assign a Dynamic `properties {}` block,
+        // fail this check, and skip injection entirely - their Prop members
+        // self-read `prop:` values as before. Remove this discriminator (and
+        // the legacy passthrough in formae.renderProperties) when the legacy
+        // block is dropped after the deprecation window.
         if (!injected && properties != null && properties is Typed)
             let (m = module)
             ((m) { injected = true; properties = m.fill(m.properties.getClass()) }).output.value
