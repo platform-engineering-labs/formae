@@ -1,0 +1,31 @@
+[1;38;2;232;232;232m  formae apply — reconcile rejected                                                mode: reconcile  [0m
+[38;2;51;51;85m────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+
+  [38;2;232;232;232mExtracting 3 resources as code:[0m
+    [38;2;96;165;250mupdate[0m[38;2;232;232;232m  web-config[0m[38;2;85;85;85m (AWS::SSM::Parameter)[0m
+    [38;2;232;232;232mcreate[0m[38;2;232;232;232m  monitoring-bucket[0m[38;2;85;85;85m (AWS::S3::Bucket)[0m
+    [38;2;96;165;250mupdate[0m[38;2;232;232;232m  api-gateway[0m[38;2;85;85;85m (AWS::ApiGateway::RestApi)[0m
+
+  [38;2;85;85;85mExtract to: [0m[38;2;232;232;232m./extracted-drift.pkl[0m[38;2;96;165;250m█[0m
+
+  [1;38;2;96;165;250menter[0m[38;2;85;85;85m: confirm[0m  [1;38;2;96;165;250mesc[0m[38;2;85;85;85m: cancel[0m
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

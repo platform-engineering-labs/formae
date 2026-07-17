@@ -6,12 +6,12 @@ package simview
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/renderer"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 )
 
@@ -177,7 +177,7 @@ func collectChangeLines(th *theme.Theme, r simRow, doneSt, warnSt, subtleSt lipg
 //
 // For replace cards: immutable property lines first (Warning), then mutable set lines.
 // For all others: all changes from PatchDocument, tags preceding properties.
-func buildPropertyChangeLines(th *theme.Theme, r simRow, doneSt, warnSt, subtleSt lipgloss.Style) []string {
+func buildPropertyChangeLines(_ *theme.Theme, r simRow, doneSt, warnSt, subtleSt lipgloss.Style) []string {
 	if r.res == nil {
 		return nil
 	}
@@ -216,13 +216,13 @@ func buildPropertyChangeLines(th *theme.Theme, r simRow, doneSt, warnSt, subtleS
 		if err == nil {
 			// Tags first (mirrors renderer order)
 			for _, tch := range cs.Tags {
-				lines = append(lines, formatSimTagChange(tch, doneSt, warnSt, subtleSt))
+				lines = append(lines, components.FormatTagChange(tch, doneSt, warnSt, subtleSt))
 			}
 			for _, ch := range cs.Properties {
 				if ch.NoOp {
 					continue
 				}
-				lines = append(lines, formatSimPropertyChange(ch, "immutable", doneSt, warnSt, subtleSt))
+				lines = append(lines, components.FormatPropertyChange(ch, "immutable", doneSt, warnSt, subtleSt))
 			}
 		}
 
@@ -231,13 +231,13 @@ func buildPropertyChangeLines(th *theme.Theme, r simRow, doneSt, warnSt, subtleS
 		if err == nil {
 			// Tags first (mirrors renderer order)
 			for _, tch := range mcs.Tags {
-				lines = append(lines, formatSimTagChange(tch, doneSt, warnSt, subtleSt))
+				lines = append(lines, components.FormatTagChange(tch, doneSt, warnSt, subtleSt))
 			}
 			for _, ch := range mcs.Properties {
 				if ch.NoOp {
 					continue
 				}
-				lines = append(lines, formatSimPropertyChange(ch, "set", doneSt, warnSt, subtleSt))
+				lines = append(lines, components.FormatPropertyChange(ch, "set", doneSt, warnSt, subtleSt))
 			}
 		}
 	} else {
@@ -246,204 +246,18 @@ func buildPropertyChangeLines(th *theme.Theme, r simRow, doneSt, warnSt, subtleS
 		if err == nil {
 			// Tags first (mirrors FormatPatchDocument order: cs.Tags then cs.Properties)
 			for _, tch := range cs.Tags {
-				lines = append(lines, formatSimTagChange(tch, doneSt, warnSt, subtleSt))
+				lines = append(lines, components.FormatTagChange(tch, doneSt, warnSt, subtleSt))
 			}
 			for _, ch := range cs.Properties {
 				if ch.NoOp {
 					continue
 				}
-				lines = append(lines, formatSimPropertyChange(ch, "", doneSt, warnSt, subtleSt))
+				lines = append(lines, components.FormatPropertyChange(ch, "", doneSt, warnSt, subtleSt))
 			}
 		}
 	}
 
 	return lines
-}
-
-// formatSimTagChange formats a single TagChange into a card line.
-// Mirrors the mockup format from docs/mockups/simulation-preview.txt:
-//
-//	add  Tags[key]: "value"     — Done style for keyword and value
-//	remove  Tags[key]           — Warning style for keyword and key (no value)
-//	set  Tags[key]: "old" → "new" — TextSubtle old, Done new (replace operation)
-func formatSimTagChange(tch renderer.TagChange, doneSt, warnSt, subtleSt lipgloss.Style) string {
-	path := "Tags[" + tch.Key + "]"
-
-	switch tch.Operation {
-	case "add":
-		kw := doneSt.Render("add")
-		pathStr := subtleSt.Render(path)
-		val := quoteCardValue(tch.Value)
-		return kw + "  " + pathStr + ": " + doneSt.Render(val)
-
-	case "remove":
-		kw := warnSt.Render("remove")
-		pathStr := warnSt.Render(path)
-		return kw + "  " + pathStr
-
-	case "replace":
-		kw := subtleSt.Render("set")
-		pathStr := subtleSt.Render(path)
-		if tch.HasOld {
-			oldVal := quoteCardValue(tch.OldValue)
-			newVal := quoteCardValue(tch.Value)
-			return kw + "  " + pathStr + ": " + subtleSt.Render(oldVal) + " → " + doneSt.Render(newVal)
-		}
-		newVal := quoteCardValue(tch.Value)
-		return kw + "  " + pathStr + ": " + doneSt.Render(newVal)
-
-	default:
-		return subtleSt.Render(tch.Operation) + "  " + subtleSt.Render(path)
-	}
-}
-
-// formatSimPropertyChange formats a single PropertyChange into a card line.
-// verb overrides the keyword ("immutable" for replace causes). If verb is "",
-// the keyword is derived from the operation (add/set/remove).
-func formatSimPropertyChange(ch renderer.PropertyChange, verb string, doneSt, warnSt, subtleSt lipgloss.Style) string {
-	path := stripCardArrayIndices(ch.Path)
-
-	// Cascade-resolvable: "set  Path → new <label> (current: "value")"
-	if ch.IsCascadeResolvable {
-		keyword := "set"
-		if verb != "" {
-			keyword = verb
-		}
-		kw := warnSt.Render(keyword)
-		if keyword == "set" {
-			kw = subtleSt.Render(keyword)
-		}
-		suffix := "new " + ch.CascadeSourceLabel
-		if ch.CascadeCurrentValue != "" {
-			truncated := truncateCascadeValue(ch.CascadeCurrentValue, 40)
-			suffix += ` (current: "` + truncated + `")`
-		}
-		return kw + "  " + subtleSt.Render(path) + " → " + doneSt.Render(suffix)
-	}
-
-	// Determine keyword
-	keyword := verb
-	if keyword == "" {
-		switch ch.Operation {
-		case "add":
-			if ch.ExistsInPrevious {
-				keyword = "set"
-			} else {
-				keyword = "add"
-			}
-		case "replace":
-			keyword = "set"
-		case "remove":
-			keyword = "remove"
-		default:
-			keyword = ch.Operation
-		}
-	}
-
-	switch keyword {
-	case "set":
-		kw := subtleSt.Render("set")
-		pathStr := subtleSt.Render(path)
-		if ch.HasOld {
-			oldVal := quoteCardValue(ch.OldValue)
-			newVal := quoteCardValue(ch.Value)
-			return kw + "  " + pathStr + ": " + subtleSt.Render(oldVal) + " → " + doneSt.Render(newVal)
-		}
-		newVal := quoteCardValue(ch.Value)
-		return kw + "  " + pathStr + ": " + doneSt.Render(newVal)
-
-	case "add":
-		kw := doneSt.Render("add")
-		pathStr := subtleSt.Render(path)
-		val := quoteCardValue(ch.Value)
-		return kw + "  " + pathStr + ": " + doneSt.Render(val)
-
-	case "remove":
-		kw := warnSt.Render("remove")
-		pathStr := warnSt.Render(path)
-		return kw + "  " + pathStr
-
-	case "immutable":
-		kw := warnSt.Render("immutable")
-		pathStr := warnSt.Render(path)
-		if ch.HasOld {
-			oldVal := quoteCardValue(ch.OldValue)
-			newVal := quoteCardValue(ch.Value)
-			return kw + "  " + pathStr + ": " + warnSt.Render(oldVal) + " → " + warnSt.Render(newVal)
-		}
-		val := quoteCardValue(ch.Value)
-		return kw + "  " + pathStr + ": " + warnSt.Render(val)
-
-	default:
-		return subtleSt.Render(keyword) + "  " + subtleSt.Render(path)
-	}
-}
-
-// quoteCardValue mirrors how the old renderer's formatPropertyChange decides quoting:
-// string scalars get quoted, everything else renders as-is (compact JSON for composites,
-// numbers/bools unquoted).
-//
-// The renderer's extractPropertyChange stores:
-//   - string scalars: formatPatchValue returns the raw string (unquoted)
-//   - composites: formatPatchValue returns compact JSON
-//   - references: formatReferenceValue returns "label.property"
-//
-// So if Value looks like it came back as a plain string that isn't a composite,
-// we quote it. We detect composites by a leading '{' or '['.
-func quoteCardValue(v string) string {
-	if v == "" || v == "(opaque value)" || v == "null" {
-		return v
-	}
-	// Already a composite (JSON object or array)
-	if strings.HasPrefix(v, "{") || strings.HasPrefix(v, "[") {
-		return v
-	}
-	// Already quoted
-	if strings.HasPrefix(v, `"`) {
-		return v
-	}
-	// Boolean literals
-	if v == "true" || v == "false" {
-		return v
-	}
-	// Number check (numeric values shouldn't be quoted)
-	if isNumericString(v) {
-		return v
-	}
-	// String scalar — quote it (includes reference labels like "label.property")
-	return fmt.Sprintf("%q", v)
-}
-
-// isNumericString returns true if s is a valid JSON number.
-func isNumericString(s string) bool {
-	var n json.Number
-	return json.Unmarshal([]byte(s), &n) == nil
-}
-
-// stripCardArrayIndices removes array index suffixes like [0] from property paths
-// for cleaner display — mirrors the renderer's stripArrayIndices.
-func stripCardArrayIndices(path string) string {
-	parts := strings.Split(path, "[")
-	if len(parts) == 1 {
-		return path
-	}
-	result := parts[0]
-	for i := 1; i < len(parts); i++ {
-		if bracketEnd := strings.Index(parts[i], "]"); bracketEnd != -1 {
-			result += parts[i][bracketEnd+1:]
-		}
-	}
-	return result
-}
-
-// truncateCascadeValue truncates the cascade current value to maxLen runes,
-// appending "…" if truncated.
-func truncateCascadeValue(v string, maxLen int) string {
-	runes := []rune(v)
-	if len(runes) <= maxLen {
-		return v
-	}
-	return string(runes[:maxLen-1]) + "…"
 }
 
 // buildPolicyChangeLines renders a minimal policy config diff for policy rows.
@@ -485,14 +299,14 @@ func buildPolicyChangeLines(_ *theme.Theme, r simRow, doneSt, warnSt, subtleSt l
 		switch {
 		case cok && ook:
 			if string(cv) != string(ov) {
-				oldStr := quoteCardValue(string(ov))
-				newStr := quoteCardValue(string(cv))
+				oldStr := components.QuoteCardValue(string(ov))
+				newStr := components.QuoteCardValue(string(cv))
 				kw := subtleSt.Render("set")
 				lines = append(lines, kw+"  "+subtleSt.Render(k)+": "+subtleSt.Render(oldStr)+" → "+doneSt.Render(newStr))
 			}
 		case cok:
 			kw := doneSt.Render("add")
-			lines = append(lines, kw+"  "+subtleSt.Render(k)+": "+doneSt.Render(quoteCardValue(string(cv))))
+			lines = append(lines, kw+"  "+subtleSt.Render(k)+": "+doneSt.Render(components.QuoteCardValue(string(cv))))
 		case ook:
 			kw := warnSt.Render("remove")
 			lines = append(lines, kw+"  "+warnSt.Render(k))

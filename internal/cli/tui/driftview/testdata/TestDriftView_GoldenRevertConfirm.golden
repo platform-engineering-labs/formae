@@ -1,0 +1,31 @@
+[1;38;2;232;232;232m  formae apply — reconcile rejected                                                mode: reconcile  [0m
+[38;2;51;51;85m────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+
+  [38;2;232;232;232mThis will revert ALL out-of-band changes by re-applying with --force:[0m
+
+    [38;2;181;181;91mrevert[0m[38;2;232;232;232m  web-config[0m[38;2;85;85;85m (AWS::SSM::Parameter)[0m            [38;2;85;85;85mValue → "/api/v1"[0m
+    [38;2;181;181;91mrevert[0m[38;2;232;232;232m  monitoring-bucket[0m[38;2;85;85;85m (AWS::S3::Bucket)[0m         [38;2;85;85;85mwill be removed[0m
+    [38;2;181;181;91mrevert[0m[38;2;232;232;232m  old-cache[0m[38;2;85;85;85m (AWS::ElastiCache::Cluster)[0m       [38;2;85;85;85mwill be re-created[0m
+    [38;2;181;181;91mrevert[0m[38;2;232;232;232m  api-gateway[0m[38;2;85;85;85m (AWS::ApiGateway::RestApi)[0m      [38;2;85;85;85mStageName → "v1"[0m
+
+  [38;2;232;232;232mAre you sure? This cannot be undone. [0m[38;2;181;181;91m[y/N][0m
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
