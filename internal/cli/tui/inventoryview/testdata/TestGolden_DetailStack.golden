@@ -10,8 +10,8 @@ Description: test stack
 CreatedAt:   2026-01-01T00:00:00Z                                                                   
                                                                                                     
 Policies:                                                                                           
- $label: shared-retention                                                                           
- $ref: formae://abc                                                                                 
+  → policy: shared-retention                                                                        
+                                                                                                    
                                                                                                     
                                                                                                     
                                                                                                     

@@ -156,8 +156,8 @@ func TestDetail_CtrlCQuitsFromDetail(t *testing.T) {
 }
 
 // TestDetail_R1DesyncPin verifies that cursor resolution uses vis[cursor] not SelectedRow().
-// Sort col 3 (Label) desc → rows appear Z→A. Move cursor to row 1 (second visible).
-// The detail title must start with the second row's Label.
+// Sort col 3 (Label) desc → rows appear Z→A. The detail title must match the first visible row.
+// This tests at cursor 0 where sorted order (web-sg) diverges from server order (my-bucket).
 func TestDetail_R1DesyncPin(t *testing.T) {
 	// Use rows where sorted desc order differs from server order:
 	// server order: my-bucket, web-1, web-sg
@@ -176,10 +176,7 @@ func TestDetail_R1DesyncPin(t *testing.T) {
 	model.tabs[TabResources] = model.tabs[TabResources].sync(model.opts.MaxRows)
 	mm = model
 
-	// Move cursor down to row 1 (second visible = "web-1" in desc sorted order).
-	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyDown})
-
-	// Verify: sorted desc: web-sg(0), web-1(1), my-bucket(2). Cursor=1 → web-1.
+	// Verify: sorted desc: web-sg(0), web-1(1), my-bucket(2). Cursor at 0 (no movement after sort).
 	vis, _ := mm.(Model).tabs[TabResources].visible(0)
 	cursor := mm.(Model).tabs[TabResources].table.Cursor()
 	require.Less(t, cursor, len(vis), "cursor must be within visible range")
@@ -189,8 +186,8 @@ func TestDetail_R1DesyncPin(t *testing.T) {
 
 	assert.Equal(t, expectedLabel, mm.(Model).detailTitle,
 		"detail title must match the row under the cursor in sorted order")
-	assert.True(t, strings.HasPrefix(mm.(Model).detailTitle, "web-1"),
-		"title must start with 'web-1' (second row in desc-sorted order)")
+	assert.True(t, strings.HasPrefix(mm.(Model).detailTitle, "web-sg"),
+		"title must start with 'web-sg' (first row in desc-sorted order; diverges from server order where my-bucket is first)")
 }
 
 // TestDetail_FilteredDetail verifies filter narrowing → enter opens correct entity.
@@ -322,7 +319,7 @@ func TestGolden_DetailStack(t *testing.T) {
 		Label:       "my-stack",
 		Description: "test stack",
 		CreatedAt:   time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
-		Policies:    []json.RawMessage{json.RawMessage(`{"$ref":"formae://abc","$label":"shared-retention"}`)},
+		Policies:    []json.RawMessage{json.RawMessage(`{"$ref":"policy://shared-retention"}`)},
 	}
 
 	now := func() time.Time { return time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC) }
