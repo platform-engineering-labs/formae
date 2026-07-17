@@ -189,6 +189,14 @@ func (t Table) reproject() Table {
 	return t
 }
 
+// VisibleColumnIndexes returns the original column indexes that are currently
+// visible (i.e. not dropped by responsive hiding). The order matches the
+// rendered column order. This is used by applyCellStyles in inventoryview to
+// compute each column's byte-offset slice in the rendered output.
+func (t Table) VisibleColumnIndexes() []int {
+	return visibleColumns(t.cols, t.width)
+}
+
 // visibleColumns returns indexes of the columns that fit in width, dropping
 // the highest-Priority columns first (rightmost on ties). Priority 0
 // columns are never dropped.

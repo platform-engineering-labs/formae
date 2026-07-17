@@ -7,8 +7,10 @@ package inventoryview
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
@@ -204,21 +206,52 @@ func (t tabModel) emptyView(th *theme.Theme) []string {
 // sync records the intended plain→styled replacements (t.styledCells) and this
 // function applies them after tbl.View() produces the rendered output.
 //
-// The replacement is a simple strings.ReplaceAll on each line: for each cell
-// where the styled form differs from the plain, we replace the first occurrence
-// of the plain text with the styled form. This works because:
-//   - cell values are truncated to colWidth and unique enough in context;
-//   - bubbles renders cells in a fixed layout where the plain value appears
-//     verbatim in the ANSI output (surrounded by cell-style escapes).
+// The replacement is bounded to each column's visual-character slice in the
+// rendered line to prevent a cell value substring from matching an earlier
+// column. For example, a Label "yes-prod" must not swallow the styled
+// replacement meant for the Discoverable "yes" two columns to the right.
 //
-// Lines before the first data line (header + separator = 2 lines) are skipped.
-func applyCellStyles(lines []string, cells [][]styledCell) []string {
+// Column layout (bubbles/table): each visible column occupies Width+2 visual
+// chars (1-space padding on each side). We compute visual start offsets from
+// visibleCols/effCols widths, strip ANSI from the line to find the plain text
+// within the column's visual slice, then replace in the original ANSI line by
+// walking it to map visual positions back to byte positions.
+//
+// headerLines = 2 is a coupling to bubbles/table's header rendering (one header
+// row + one separator row). If bubbles changes its layout this constant needs updating.
+func applyCellStyles(lines []string, cells [][]styledCell, tbl components.Table, effCols []components.Column) []string {
 	if len(cells) == 0 {
 		return lines
 	}
 	out := make([]string, len(lines))
 	copy(out, lines)
-	const headerLines = 2 // header + separator
+
+	visIdx := tbl.VisibleColumnIndexes() // original col indexes that appear in the rendered line
+
+	// Build a map from original col index → position within visible cols (0-based).
+	colPos := make(map[int]int, len(visIdx))
+	for pos, origIdx := range visIdx {
+		colPos[origIdx] = pos
+	}
+
+	// Compute each visible column's visual start offset and content width.
+	// bubbles renders each cell padded to exactly Width visual chars with no
+	// inter-column spacing; the "+2" in visibleColumns is for the internal
+	// fit-check accounting only (not rendered padding).
+	colVisStart := make([]int, len(visIdx)) // visual start of each column's content area
+	colVisWidth := make([]int, len(visIdx)) // visual width of each column's content area
+	vOffset := 0
+	for pos, origIdx := range visIdx {
+		w := 0
+		if origIdx < len(effCols) {
+			w = effCols[origIdx].Width
+		}
+		colVisStart[pos] = vOffset
+		colVisWidth[pos] = w
+		vOffset += w // columns are packed adjacently without inter-column spacing
+	}
+
+	const headerLines = 2 // bubbles header row + separator row
 	dataStart := headerLines
 	for row, styledRow := range cells {
 		lineIdx := dataStart + row
@@ -226,14 +259,114 @@ func applyCellStyles(lines []string, cells [][]styledCell) []string {
 			break
 		}
 		line := out[lineIdx]
+		strippedRunes := []rune(ansi.Strip(line))
+
 		for _, sc := range styledRow {
-			if sc.styled != sc.plain && sc.plain != "" {
-				line = strings.Replace(line, sc.plain, sc.styled, 1)
+			if sc.styled == sc.plain || sc.plain == "" {
+				continue
 			}
+			pos, ok := colPos[sc.col]
+			if !ok {
+				continue // column not visible
+			}
+			vStart := colVisStart[pos]
+			vEnd := vStart + colVisWidth[pos]
+			if vStart >= len(strippedRunes) {
+				continue
+			}
+			if vEnd > len(strippedRunes) {
+				vEnd = len(strippedRunes)
+			}
+
+			// Find the plain text within the column's visual slice of the stripped line.
+			// Use rune-based slicing so multi-byte chars (e.g. "…") are not split.
+			sliceRunes := strippedRunes[vStart:vEnd]
+			plainRunes := []rune(sc.plain)
+			idx := runeIndex(sliceRunes, plainRunes)
+			if idx < 0 {
+				continue // plain text not found within this column's slice
+			}
+
+			// The plain text starts at visual position vStart+idx in the stripped line.
+			// Walk the ANSI line to find the byte offset of that visual position,
+			// then replace the plain text runes with the styled string.
+			plainVisStart := vStart + idx
+			plainVisEnd := plainVisStart + len(plainRunes)
+			line = replaceInAnsiLine(line, plainVisStart, plainVisEnd, sc.styled)
+			// Re-strip after replacement for any subsequent cells in this row.
+			strippedRunes = []rune(ansi.Strip(line))
 		}
 		out[lineIdx] = line
 	}
 	return out
+}
+
+// replaceInAnsiLine replaces the runes at visual positions [visStart, visEnd)
+// in an ANSI-encoded line with the styled string. It walks the line rune by
+// rune, skipping ANSI escape sequences (which consume no visual columns), to
+// find the byte offsets corresponding to the visual range.
+// visStart and visEnd are rune (visual character) counts, not byte offsets.
+func replaceInAnsiLine(line string, visStart, visEnd int, styled string) string {
+	byteStart := -1
+	byteEnd := -1
+	vis := 0
+	i := 0
+	for i < len(line) {
+		if vis == visStart {
+			byteStart = i
+		}
+		if vis == visEnd {
+			byteEnd = i
+			break
+		}
+		if line[i] == '\x1b' {
+			// Skip the entire CSI escape sequence (ESC [ ... m).
+			j := i + 1
+			if j < len(line) && line[j] == '[' {
+				j++
+				for j < len(line) && line[j] != 'm' {
+					j++
+				}
+				if j < len(line) {
+					j++ // consume 'm'
+				}
+			}
+			i = j
+			continue
+		}
+		// Decode one rune (handles multi-byte UTF-8 chars like "…").
+		_, runeSize := utf8.DecodeRuneInString(line[i:])
+		vis++
+		i += runeSize
+	}
+	if byteEnd == -1 {
+		byteEnd = i
+	}
+	if byteStart == -1 || byteStart > len(line) || byteEnd > len(line) || byteStart > byteEnd {
+		return line
+	}
+	return line[:byteStart] + styled + line[byteEnd:]
+}
+
+// runeIndex finds the first occurrence of needle in haystack (both []rune).
+// Returns the rune index (visual position), or -1 if not found.
+func runeIndex(haystack, needle []rune) int {
+	if len(needle) == 0 {
+		return 0
+	}
+	for i := 0; i <= len(haystack)-len(needle); i++ {
+		match := true
+		for j, r := range needle {
+			if haystack[i+j] != r {
+				match = false
+				break
+			}
+		}
+		if match {
+			return i
+		}
+	}
+	return -1
 }
 
 // loadedView renders the table and optional truncation marker.
@@ -264,7 +397,13 @@ func (t tabModel) loadedView(th *theme.Theme, maxRows int) []string {
 
 	// Apply per-cell styling replacements (post-render, since bubbles/table
 	// uses runewidth.Truncate which corrupts ANSI-escaped cell values).
-	tableLines = applyCellStyles(tableLines, t.styledCells)
+	// Pass tbl (post-resize) and effectiveCols so applyCellStyles can bound
+	// each replacement to its column's byte slice.
+	effCols := t.effectiveCols
+	if len(effCols) == 0 {
+		effCols = t.spec.columns
+	}
+	tableLines = applyCellStyles(tableLines, t.styledCells, tbl, effCols)
 
 	// Remove trailing empty lines that bubbles/table may append.
 	for len(tableLines) > 0 && tableLines[len(tableLines)-1] == "" {

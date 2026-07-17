@@ -106,3 +106,27 @@ func TestTable_SetSortState_ClearedBySortNone(t *testing.T) {
 	tbl = tbl.SetSortState(-1, SortNone)
 	assert.NotContains(t, tbl.View(), "▼")
 }
+
+// TestVisibleColumnIndexes_WideAllVisible verifies all columns are visible at wide width.
+func TestVisibleColumnIndexes_WideAllVisible(t *testing.T) {
+	th := theme.New("formae")
+	cols := testColumns() // Label(20,0), Type(24,1), Stack(14,2), State(10,3)
+	tbl := NewTable(th, cols).SetSize(200, 10)
+	got := tbl.VisibleColumnIndexes()
+	assert.Equal(t, []int{0, 1, 2, 3}, got)
+}
+
+// TestVisibleColumnIndexes_NarrowDropsLowPriority verifies high-priority columns
+// are dropped first when width is narrow.
+func TestVisibleColumnIndexes_NarrowDropsLowPriority(t *testing.T) {
+	th := theme.New("formae")
+	// testColumns: Label(20,p0), Type(24,p1), Stack(14,p2), State(10,p3)
+	// At width=40: total = (20+2)+(24+2)+(14+2)+(10+2) = 76 > 40
+	// Drop State(p3)=12 → 64 > 40
+	// Drop Stack(p2)=16 → 48 > 40
+	// Drop Type(p1)=26 → 22 ≤ 40 → only Label visible
+	tbl := NewTable(th, testColumns()).SetSize(40, 10)
+	got := tbl.VisibleColumnIndexes()
+	// Only Priority 0 column (Label at index 0) should remain.
+	assert.Equal(t, []int{0}, got)
+}

@@ -125,7 +125,12 @@ func rowMatchesFilter(r row, needle string) bool {
 // so pre-styled strings passed to SetRows are always mangled. Instead, sync
 // pushes PLAIN truncated text into the table and records the intended styled
 // replacements. loadedView applies them after tbl.View() produces ANSI output.
+//
+// col is the original column index (0-based in the full column set, before
+// responsive dropping). applyCellStyles uses it to bound the replacement to
+// the correct column's byte slice in the rendered line.
 type styledCell struct {
+	col    int    // original column index in the full column set
 	plain  string // the plain text we pushed into the table
 	styled string // the styled replacement (styled != plain means replace)
 }
@@ -167,10 +172,10 @@ func (t tabModel) sync(maxRows int) tabModel {
 			row[col] = plain
 
 			// Step 2: record the intended styled replacement when styleCell applies.
-			styledRow[col] = styledCell{plain: plain, styled: plain}
+			styledRow[col] = styledCell{col: col, plain: plain, styled: plain}
 			if t.spec.styleCell != nil {
 				styled := t.spec.styleCell(t.th, col, plain)
-				styledRow[col] = styledCell{plain: plain, styled: styled}
+				styledRow[col] = styledCell{col: col, plain: plain, styled: styled}
 			}
 		}
 		cells[i] = row

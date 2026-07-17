@@ -441,6 +441,132 @@ func TestStyleCell_Targets_NoPlain(t *testing.T) {
 		"non-discoverable 'no' must not be accent-styled")
 }
 
+// ---------------------------------------------------------------------------
+// Fix wave 3: column-bounded cell styling regression tests
+// ---------------------------------------------------------------------------
+
+// TestStyleCell_YesProdLabel_LabelCellNotCorrupted verifies that a target
+// labeled "yes-prod" does not get accent ANSI injected into the Label cell.
+// The "yes" substring in the label must not be confused with the Discoverable
+// "yes" cell in col 2. (a)
+func TestStyleCell_YesProdLabel_LabelCellNotCorrupted(t *testing.T) {
+	th := theme.New("formae")
+	tgt := &pkgmodel.Target{
+		Label:        "yes-prod",
+		Namespace:    "AWS",
+		Discoverable: true,
+	}
+	rows := []row{targetRow(tgt)}
+
+	tm := buildTargetsTabLoaded(th, rows)
+	rendered := tm.view(th, 0, "⠋")
+	joined := strings.Join(rendered, "\n")
+
+	// The accent-styled "yes" must appear exactly for the Discoverable col, not
+	// injected into "yes-prod" in the Label col. Check that "yes-prod" appears
+	// in the output WITHOUT any ANSI escape injection within it.
+	accentYes := th.Styles.Accent.Render("yes")
+
+	// The rendered output must contain accent-styled "yes" (Discoverable col).
+	require.Contains(t, joined, accentYes,
+		"Discoverable 'yes' must be accent-styled")
+
+	// "yes-prod" must appear plain (no accent codes embedded in the label).
+	// We check that the accent prefix (ESC code) does not appear immediately
+	// before "yes-prod" by verifying no ANSI-prefixed "yes-prod" substring.
+	// The accent style wraps as "<ESC>...<m>yes<ESC>[0m" — so
+	// accentYes + "-prod" would indicate corruption.
+	require.NotContains(t, joined, accentYes+"-prod",
+		"Label cell 'yes-prod' must not have accent ANSI injected into it")
+}
+
+// TestStyleCell_MultiRowBothDiscoverable verifies two rows both discoverable
+// both get styled. (b)
+func TestStyleCell_MultiRowBothDiscoverable(t *testing.T) {
+	th := theme.New("formae")
+	rows := []row{
+		targetRow(&pkgmodel.Target{Label: "aws-prod", Namespace: "AWS", Discoverable: true}),
+		targetRow(&pkgmodel.Target{Label: "azure-dev", Namespace: "Azure", Discoverable: true}),
+	}
+
+	tm := buildTargetsTabLoaded(th, rows)
+	rendered := tm.view(th, 0, "⠋")
+	joined := strings.Join(rendered, "\n")
+
+	accentYes := th.Styles.Accent.Render("yes")
+	count := strings.Count(joined, accentYes)
+	assert.Equal(t, 2, count, "both rows must have accent-styled 'yes'")
+}
+
+// TestStyleCell_AlignmentPreserved verifies that applying cell styles does not
+// change the visual width of any rendered line. (c)
+func TestStyleCell_AlignmentPreserved(t *testing.T) {
+	th := theme.New("formae")
+	rows := []row{
+		targetRow(&pkgmodel.Target{Label: "yes-prod", Namespace: "AWS", Discoverable: true}),
+		targetRow(&pkgmodel.Target{Label: "no-env", Namespace: "Azure", Discoverable: false}),
+	}
+
+	// Build a version with styling applied.
+	tm := buildTargetsTabLoaded(th, rows)
+	styledLines := tm.view(th, 0, "⠋")
+
+	// Build a version without styling: empty styleCell so replacements are identity.
+	specs := newSpecs(nil)
+	spec := specs[TabTargets]
+	spec.styleCell = nil
+	tmPlain := newTabModel(th, spec)
+	tmPlain.state = tabLoaded
+	tmPlain.allRows = rows
+	tmPlain = tmPlain.setSize(100, 24)
+	tmPlain = tmPlain.sync(0)
+	plainLines := tmPlain.view(th, 0, "⠋")
+
+	require.Equal(t, len(plainLines), len(styledLines), "line count must match")
+	for i := range plainLines {
+		pw := lipgloss.Width(plainLines[i])
+		sw := lipgloss.Width(styledLines[i])
+		assert.Equalf(t, pw, sw, "line %d visual width changed: plain=%d styled=%d", i, pw, sw)
+	}
+}
+
+// TestStyleCell_CursorOnStyledRow_NoCorruption verifies that when the cursor
+// sits on a row with a styled cell (⚠ unmanaged), the output lines have
+// unchanged visual widths. (d)
+func TestStyleCell_CursorOnStyledRow_NoCorruption(t *testing.T) {
+	th := theme.New("formae")
+	// Use the resources tab which styles the Stack col for unmanaged resources.
+	rows := []row{resourceRow(pkgmodel.Resource{
+		NativeID: "arn:aws:s3:::old-logs",
+		Stack:    "unmanaged",
+		Type:     "AWS::S3::Bucket",
+		Label:    "old-logs",
+	})}
+
+	// Plain version (no styleCell) for width reference.
+	specs := newSpecs(nil)
+	spec := specs[TabResources]
+	spec.styleCell = nil
+	tmPlain := newTabModel(th, spec)
+	tmPlain.state = tabLoaded
+	tmPlain.allRows = rows
+	tmPlain = tmPlain.setSize(100, 24)
+	tmPlain = tmPlain.sync(0)
+	plainLines := tmPlain.view(th, 0, "⠋")
+
+	// Styled version (cursor on row 0 by default).
+	tm := buildResourcesTabLoaded(th, rows)
+	styledLines := tm.view(th, 0, "⠋")
+
+	require.Equal(t, len(plainLines), len(styledLines))
+	for i := range plainLines {
+		pw := lipgloss.Width(plainLines[i])
+		sw := lipgloss.Width(styledLines[i])
+		assert.Equalf(t, pw, sw,
+			"line %d visual width changed (cursor row styling corruption): plain=%d styled=%d", i, pw, sw)
+	}
+}
+
 // TestStyleCell_TruncateBeforeStyle verifies the truncate-then-style contract:
 // a cell longer than the column width must be truncated BEFORE styling, so the
 // rendered output contains the truncated-then-styled text (not the full text
