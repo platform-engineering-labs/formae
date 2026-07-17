@@ -53,6 +53,27 @@ dependencies {
 	}, deps)
 }
 
+func TestParsePklProjectDeps_LocalCore(t *testing.T) {
+	// --schema-location local renders the formae core dep as an import() too;
+	// it must round-trip back to a local: spec with the "formae" name.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "PklProject")
+	require.NoError(t, os.WriteFile(path, []byte(`amends "pkl:Project"
+
+dependencies {
+  ["formae"] = import("/home/me/.pel/formae/schema/0.87.0/PklProject")
+  ["aws"] = import("/home/me/.pel/formae/plugins/aws/v0.1.5/schema/pkl/PklProject")
+}
+`), 0644))
+
+	deps, err := parsePklProjectDeps(path)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{
+		"local:formae:/home/me/.pel/formae/schema/0.87.0/PklProject",
+		"local:aws:/home/me/.pel/formae/plugins/aws/v0.1.5/schema/pkl/PklProject",
+	}, deps)
+}
+
 func TestParsePklProjectDeps_Mixed(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "PklProject")

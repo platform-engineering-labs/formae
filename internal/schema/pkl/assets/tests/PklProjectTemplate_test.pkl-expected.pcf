@@ -22,6 +22,9 @@ examples {
   ["generating local dependency line"] {
     #"  ["aws"] = import("/path/to/aws/PklProject")"#
   }
+  ["generating local dependency line for formae core"] {
+    #"  ["formae"] = import("/home/me/.pel/formae/schema/0.87.0/PklProject")"#
+  }
   ["classifying mixed packages"] {
     new {
       ["remote"] = List("pkl.formae@1.0.0", "gcp.gcp@1.0.0")

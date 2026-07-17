@@ -160,8 +160,8 @@ func testDiscoveryAWS(t *testing.T, cli *FormaeCLI) {
 	extractDir := t.TempDir()
 	rolesFile := filepath.Join(extractDir, "roles.pkl")
 	policiesFile := filepath.Join(extractDir, "policies.pkl")
-	cli.ExtractToFile(t, "type:AWS::IAM::Role managed:false stack:$unmanaged", rolesFile)
-	cli.ExtractToFile(t, "type:AWS::IAM::RolePolicy managed:false stack:$unmanaged", policiesFile)
+	cli.ExtractToFile(t, "type:AWS::IAM::Role managed:false stack:$unmanaged", rolesFile, "--schema-location", "local")
+	cli.ExtractToFile(t, "type:AWS::IAM::RolePolicy managed:false stack:$unmanaged", policiesFile, "--schema-location", "local")
 
 	// Step 9: Filter extracted files to keep only test resources.
 	// The roles extract includes pre-existing AWS service-linked roles

@@ -23,6 +23,7 @@ import (
 	_ "github.com/platform-engineering-labs/formae/internal/network/all"
 	"github.com/platform-engineering-labs/formae/internal/schema"
 	_ "github.com/platform-engineering-labs/formae/internal/schema/all"
+	"github.com/platform-engineering-labs/formae/internal/schema/pkl"
 	"github.com/platform-engineering-labs/formae/internal/usage"
 	"github.com/platform-engineering-labs/formae/internal/util"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
@@ -722,8 +723,15 @@ func (a *App) buildDependencyStrings(forma *pkgmodel.Forma, location schema.Sche
 	}
 
 	var deps []string
-	if formae.Version != "0.0.0" {
-		deps = append(deps, "pkl.formae@"+formae.Version)
+	// Formae core: remote emits pkl.formae@<version> (hub-resolved); local
+	// materializes the binary's embedded schema and emits local:formae:<path>
+	// so extract output resolves @formae/... against this exact binary.
+	coreDep, err := pkl.CoreSchemaDep(location, formae.Version)
+	if err != nil {
+		return nil, err
+	}
+	if coreDep != "" {
+		deps = append(deps, coreDep)
 	}
 
 	seen := make(map[string]bool)

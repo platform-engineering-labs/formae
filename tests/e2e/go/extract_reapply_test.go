@@ -42,7 +42,7 @@ func TestExtractAndReapply(t *testing.T) {
 
 	// Step 3: Extract the stack to a PKL file.
 	extractedPath := filepath.Join(t.TempDir(), "extracted.pkl")
-	cli.ExtractToFile(t, "stack:e2e-extract-reapply-aws", extractedPath)
+	cli.ExtractToFile(t, "stack:e2e-extract-reapply-aws", extractedPath, "--schema-location", "local")
 
 	// Step 3b: Verify the extracted PKL contains a Resolvable reference for
 	// the RolePolicy's roleName, not a plain string.

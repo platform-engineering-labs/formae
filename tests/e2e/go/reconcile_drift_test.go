@@ -59,7 +59,7 @@ func testSoftReconcileAWS(t *testing.T, cli *FormaeCLI) {
 
 	// Step 6: Extract the current state to absorb the OOB change into IaC.
 	extractedPath := filepath.Join(t.TempDir(), "extracted.pkl")
-	cli.ExtractToFile(t, "stack:e2e-soft-reconcile-aws", extractedPath)
+	cli.ExtractToFile(t, "stack:e2e-soft-reconcile-aws", extractedPath, "--schema-location", "local")
 
 	// Step 7: Apply the extracted PKL (which reflects the current cloud state
 	// including the OOB tag) — this updates formae's desired state to match reality.

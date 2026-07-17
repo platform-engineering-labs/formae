@@ -35,6 +35,15 @@ var assets embed.FS
 //go:embed generator/*
 var generator embed.FS
 
+// coreSchema holds the formae core schema (forma.pkl, formae.pkl, ext/) plus
+// its PklProject template. It is materialized to disk for --schema-location
+// local so extract output resolves @formae/... against the running binary's
+// own schema instead of a hub-published package. Dev-only tests/ and debug/
+// are deliberately excluded.
+//
+//go:embed schema/forma.pkl schema/formae.pkl schema/ext schema/PklProject
+var coreSchema embed.FS
+
 // Compile time check to satisfy protocol
 var _ schema.SchemaPlugin = PKL{}
 
