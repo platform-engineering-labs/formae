@@ -260,6 +260,36 @@ func TestSimView_ViewLineCountMatchesHeight(t *testing.T) {
 				sz.h, sz.w, sz.h, len(lines))
 		})
 	}
+
+	// Ack screen exact-fill
+	for _, sz := range sizes {
+		t.Run("ack_screen", func(t *testing.T) {
+			m := makeDescriptionAckModel(sz.w, sz.h)
+			v := m.View()
+			lines := strings.Split(v, "\n")
+			assert.Equal(t, sz.h, len(lines),
+				"ack View() must produce exactly %d lines at %dx%d, got %d",
+				sz.h, sz.w, sz.h, len(lines))
+		})
+	}
+
+	// Destroy cascade multi-line footer exact-fill
+	for _, sz := range sizes {
+		t.Run("destroy_cascade", func(t *testing.T) {
+			th := theme.New("formae")
+			sim := makeDestroyWithCascades()
+			opts := Options{Kind: KindDestroy}
+			m := New(th, sim, opts)
+			var mm tea.Model = m
+			mm, _ = mm.Update(tea.WindowSizeMsg{Width: sz.w, Height: sz.h})
+			m = mm.(Model)
+			v := m.View()
+			lines := strings.Split(v, "\n")
+			assert.Equal(t, sz.h, len(lines),
+				"cascade destroy View() must produce exactly %d lines at %dx%d, got %d",
+				sz.h, sz.w, sz.h, len(lines))
+		})
+	}
 }
 
 // TestSimView_RenderingIntegrity checks no ANSI fragments and no line overflows.
@@ -348,4 +378,181 @@ func TestSimView_RenderingIntegrity(t *testing.T) {
 			assert.Contains(t, plainView, "InstanceClass", "card changes should be visible in view")
 		})
 	})
+}
+
+// makeDescriptionAckSim returns a sim with Description.Confirm=true.
+func makeDescriptionAckSim() *apimodel.Simulation {
+	cmd := makeFixtureCmd()
+	return &apimodel.Simulation{
+		ChangesRequired: true,
+		Command:         cmd,
+	}
+}
+
+// makeDescriptionAckOpts returns Options with Description.Confirm=true.
+func makeDescriptionAckOpts() Options {
+	return Options{
+		Kind: KindApply,
+		Mode: "reconcile",
+		Description: apimodel.Description{
+			Text:    "This forma deploys the production database cluster. Applying this will cause a brief connectivity interruption during the RDS failover.",
+			Confirm: true,
+		},
+	}
+}
+
+// makeDescriptionAckModel builds a model with Confirm description at given size.
+func makeDescriptionAckModel(width, height int) Model {
+	th := theme.New("formae")
+	sim := makeDescriptionAckSim()
+	opts := makeDescriptionAckOpts()
+	m := New(th, sim, opts)
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: width, Height: height})
+	return mm.(Model)
+}
+
+// TestSimView_GoldenDescriptionAck checks the ack screen golden at 100x32.
+func TestSimView_GoldenDescriptionAck(t *testing.T) {
+	m := makeDescriptionAckModel(100, 32)
+	tuitest.RequireGolden(t, []byte(m.View()))
+}
+
+// TestSimView_AckEnterProceeds verifies enter on ack screen shows preview screen.
+func TestSimView_AckEnterProceeds(t *testing.T) {
+	m := makeDescriptionAckModel(100, 32)
+	// Initially on ack screen
+	plainAck := plain(m.View())
+	assert.Contains(t, plainAck, "Press enter to continue", "ack screen must show enter prompt")
+
+	// Press enter — should transition to preview screen
+	var mm tea.Model
+	mm, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = mm.(Model)
+	plainPreview := plain(m.View())
+	assert.NotContains(t, plainPreview, "Press enter to continue", "preview screen must not show ack text")
+	// preview should show the simulation content
+	assert.Contains(t, plainPreview, "create", "preview screen must show simulation content")
+}
+
+// TestSimView_GoldenSimulateOnlyFooter checks the simulate-only footer golden at 100x32.
+func TestSimView_GoldenSimulateOnlyFooter(t *testing.T) {
+	th := theme.New("formae")
+	sim := makeFixtureSim()
+	opts := Options{
+		Kind:         KindApply,
+		Mode:         "reconcile",
+		SimulateOnly: true,
+	}
+	m := New(th, sim, opts)
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: 32})
+	m = mm.(Model)
+	tuitest.RequireGolden(t, []byte(m.View()))
+}
+
+// TestSimView_SimulateOnlyIgnoresY verifies that y does NOT quit when SimulateOnly=true,
+// and that the default decision remains DecisionAborted.
+func TestSimView_SimulateOnlyIgnoresY(t *testing.T) {
+	th := theme.New("formae")
+	sim := makeFixtureSim()
+	opts := Options{
+		Kind:         KindApply,
+		Mode:         "reconcile",
+		SimulateOnly: true,
+	}
+	m := New(th, sim, opts)
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: 32})
+	m = mm.(Model)
+
+	// Default decision is aborted
+	assert.Equal(t, DecisionAborted, m.Decision(), "initial decision must be DecisionAborted")
+
+	// Press y — must be a no-op (no quit, decision stays default)
+	var cmd tea.Cmd
+	mm, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	m = mm.(Model)
+	assert.Nil(t, cmd, "y must NOT return a quit cmd when SimulateOnly=true")
+	assert.Equal(t, DecisionAborted, m.Decision(), "y must NOT change decision when SimulateOnly=true")
+
+	// q should still quit
+	mm, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	assert.NotNil(t, cmd, "q must still return a quit cmd when SimulateOnly=true")
+	assert.Equal(t, DecisionAborted, mm.(Model).Decision(), "q leaves decision as DecisionAborted")
+}
+
+// makeDestroyWithCascades builds a Simulation for a destroy with cascade resources.
+func makeDestroyWithCascades() *apimodel.Simulation {
+	return &apimodel.Simulation{
+		ChangesRequired: true,
+		Command: apimodel.Command{
+			CommandID: "cmd-destroy-cascade",
+			Command:   "destroy",
+			Mode:      "reconcile",
+			ResourceUpdates: []apimodel.ResourceUpdate{
+				{ResourceID: "r-db", ResourceLabel: "primary-db", ResourceType: "AWS::RDS::DBInstance", StackName: "production", Operation: "delete"},
+				{ResourceID: "r-ws", ResourceLabel: "web-server", ResourceType: "AWS::EC2::Instance", StackName: "production", Operation: "delete", IsCascade: true, CascadeSource: "primary-db"},
+				{ResourceID: "r-lg", ResourceLabel: "log-group", ResourceType: "AWS::CloudWatch::LogGroup", StackName: "production", Operation: "delete", IsCascade: true, CascadeSource: "web-server"},
+				{ResourceID: "r-ah", ResourceLabel: "api-handler", ResourceType: "AWS::Lambda::Function", StackName: "production", Operation: "delete"},
+			},
+		},
+	}
+}
+
+// TestSimView_GoldenDestroyCascadeBanner checks the destroy cascade banner golden at 100x32.
+func TestSimView_GoldenDestroyCascadeBanner(t *testing.T) {
+	th := theme.New("formae")
+	sim := makeDestroyWithCascades()
+	opts := Options{
+		Kind:   KindDestroy,
+		Source: "query: stack:staging",
+	}
+	m := New(th, sim, opts)
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: 32})
+	m = mm.(Model)
+	tuitest.RequireGolden(t, []byte(m.View()))
+}
+
+// TestSimView_DestroyConfirmCountsDependents verifies the destroy cascade footer
+// distinguishes direct vs cascade deletes.
+func TestSimView_DestroyConfirmCountsDependents(t *testing.T) {
+	th := theme.New("formae")
+	sim := makeDestroyWithCascades()
+	opts := Options{
+		Kind:   KindDestroy,
+		Source: "query: stack:staging",
+	}
+	m := New(th, sim, opts)
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: 32})
+	m = mm.(Model)
+	plainView := plain(m.View())
+
+	// Should mention total resource count (4) and cascade count (2)
+	assert.Contains(t, plainView, "4 resource(s)", "footer must mention total resource count")
+	// cascade count and dependency reason must appear (may be split across lines)
+	assert.Contains(t, plainView, "2 will be deleted", "footer must mention cascade delete count")
+	assert.Contains(t, plainView, "depend on other targeted resources", "footer must explain cascade reason")
+}
+
+// TestSimView_SourceInHeader verifies that Options.Source renders in the header.
+func TestSimView_SourceInHeader(t *testing.T) {
+	th := theme.New("formae")
+	sim := makeFixtureSim()
+	opts := Options{
+		Kind:   KindApply,
+		Mode:   "reconcile",
+		Source: "query: stack:production",
+	}
+	m := New(th, sim, opts)
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: 32})
+	m = mm.(Model)
+	plainView := plain(m.View())
+	// Source must appear in the header line (first or second line)
+	headerLines := strings.Split(plainView, "\n")[:3]
+	headerText := strings.Join(headerLines, "\n")
+	assert.Contains(t, headerText, "query: stack:production", "Options.Source must appear in header")
 }

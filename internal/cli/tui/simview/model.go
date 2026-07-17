@@ -5,11 +5,13 @@
 package simview
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	tui "github.com/platform-engineering-labs/formae/internal/cli/tui"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
@@ -41,6 +43,14 @@ type Options struct {
 	SimulateOnly bool
 	Description  apimodel.Description
 }
+
+// screenKind identifies which screen is currently displayed.
+type screenKind int
+
+const (
+	screenAck     screenKind = iota // description acknowledgment screen
+	screenPreview screenKind = iota // main simulation preview
+)
 
 // navLineKind classifies a navigable line.
 type navLineKind int
@@ -86,6 +96,7 @@ type Model struct {
 	keys     tui.KeyMap
 	expanded map[string]bool // keyed by simRow.key
 
+	screen   screenKind
 	decision Decision
 	vp       viewport.Model
 	width    int
@@ -96,6 +107,13 @@ type Model struct {
 func New(th *theme.Theme, sim *apimodel.Simulation, opts Options) Model {
 	groups := buildSimGroups(&sim.Command)
 	vp := viewport.New(80, 20)
+
+	// Start on ack screen if the description requires confirmation.
+	initialScreen := screenPreview
+	if opts.Description.Confirm && opts.Description.Text != "" {
+		initialScreen = screenAck
+	}
+
 	return Model{
 		th:     th,
 		opts:   opts,
@@ -126,6 +144,7 @@ func New(th *theme.Theme, sim *apimodel.Simulation, opts Options) Model {
 			kindResource: components.SortAsc,
 		},
 		keys:     tui.DefaultKeyMap(),
+		screen:   initialScreen,
 		decision: DecisionAborted,
 		vp:       vp,
 		expanded: make(map[string]bool),
@@ -153,14 +172,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		// Quit keys
-		if msg.String() == "y" {
-			m.decision = DecisionConfirmed
-			return m, tea.Quit
+		// Ack screen: only enter (proceed) and q/esc/ctrl-c (abort).
+		if m.screen == screenAck {
+			if msg.Type == tea.KeyEnter {
+				m.screen = screenPreview
+				return m, nil
+			}
+			if msg.String() == "q" || msg.Type == tea.KeyEsc || msg.Type == tea.KeyCtrlC {
+				m.decision = DecisionAborted
+				return m, tea.Quit
+			}
+			// All other keys ignored on ack screen.
+			return m, nil
 		}
+
+		// Preview screen quit keys.
 		if msg.String() == "q" || msg.Type == tea.KeyEsc || msg.Type == tea.KeyCtrlC {
 			m.decision = DecisionAborted
 			return m, tea.Quit
+		}
+		// y confirms — unless SimulateOnly (then y is a no-op).
+		if msg.String() == "y" {
+			if !m.opts.SimulateOnly {
+				m.decision = DecisionConfirmed
+				return m, tea.Quit
+			}
+			// SimulateOnly: y is silently ignored.
+			return m, nil
 		}
 
 		nav := m.navLines()
@@ -256,11 +294,83 @@ func (m Model) View() string {
 		return ""
 	}
 
+	if m.screen == screenAck {
+		return m.viewAck()
+	}
+	return m.viewPreview()
+}
+
+// viewAck renders the description acknowledgment screen (exactly m.height lines).
+func (m Model) viewAck() string {
+	header := components.HeaderBar(m.th, m.headerLeft(), m.headerRight(), m.width)
+	footer := components.FooterBar(m.th, m.width, ackFooterHints(), "")
+
+	// The viewport body contains the description panel + enter prompt.
+	vpH := max(m.height-simviewChromeLines, 1)
+	m.vp.Width = m.width
+	m.vp.Height = vpH
+
+	p := m.th.Palette
+	enterStyle := lipgloss.NewStyle().Foreground(p.TextPrimary)
+	subtleStyle := lipgloss.NewStyle().Foreground(p.TextSubtle)
+
+	// Word-wrap description text to panel inner width.
+	// Panel: 2 outer indent + NormalBorder(1 left +1 right) + 1 padding each side = 6 total.
+	innerW := m.width - 6
+	if innerW < 20 {
+		innerW = 20
+	}
+	wrapped := wrapText(m.opts.Description.Text, innerW)
+	panelContent := wrapped
+	panelW := m.width - 4 // total width minus 2 indent on each side
+	if panelW < 24 {
+		panelW = 24
+	}
+	panel := lipgloss.NewStyle().
+		Foreground(p.Border).
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(p.Border).
+		Padding(0, 1).
+		Width(panelW - 2). // -2 for borders
+		Render(panelContent)
+
+	var bodyBuf strings.Builder
+	bodyBuf.WriteString("\n")
+	// Indent panel by 2 spaces
+	for _, pl := range strings.Split(panel, "\n") {
+		bodyBuf.WriteString("  " + pl + "\n")
+	}
+	bodyBuf.WriteString("\n")
+	bodyBuf.WriteString("  " + enterStyle.Render("Press enter to continue...") + "\n")
+	bodyBuf.WriteString("\n")
+	bodyBuf.WriteString("  " + subtleStyle.Render("(simulation output follows after acknowledgment)") + "\n")
+
+	m.vp.SetContent(bodyBuf.String())
+
+	// Use an empty string for the summary placeholder line to match chrome.
+	summaryLine := ""
+
+	parts := header + "\n" + summaryLine + "\n" + m.vp.View() + "\n" + footer
+	lines := strings.Split(parts, "\n")
+	for len(lines) < m.height {
+		lines = append(lines, "")
+	}
+	if len(lines) > m.height {
+		lines = lines[:m.height]
+	}
+	return strings.Join(lines, "\n")
+}
+
+// viewPreview renders the main simulation preview (exactly m.height lines).
+func (m Model) viewPreview() string {
 	header := components.HeaderBar(m.th, m.headerLeft(), m.headerRight(), m.width)
 	summaryLine := "  " + m.renderSummaryCounts()
-	footer := components.FooterBar(m.th, m.width, footerHints(), "")
+	footer := m.renderFooter()
 
-	vpH := max(m.height-simviewChromeLines, 1)
+	// Compute chrome line count dynamically: header(2) + summary(1) + footer(variable).
+	footerLines := strings.Count(footer, "\n") + 1
+	chromeLines := 3 + footerLines // header(2) + summary(1) + footer
+	vpH := max(m.height-chromeLines, 1)
 	m.vp.Width = m.width
 	m.vp.Height = vpH
 
@@ -296,7 +406,11 @@ func (m Model) headerLeft() string {
 }
 
 // headerRight returns the header's right-side text.
+// Shows Source if set, otherwise mode.
 func (m Model) headerRight() string {
+	if m.opts.Source != "" {
+		return m.opts.Source
+	}
 	if m.opts.Mode != "" {
 		return "mode: " + m.opts.Mode
 	}
@@ -346,7 +460,7 @@ func (m Model) cursorRowKind() rowKind {
 	return kindResource
 }
 
-// footerHints returns the key hints for the footer bar.
+// footerHints returns the key hints for the preview footer bar (with y confirm).
 func footerHints() []components.KeyHint {
 	return []components.KeyHint{
 		{Key: "↑↓", Desc: "select"},
@@ -356,6 +470,123 @@ func footerHints() []components.KeyHint {
 		{Key: "y", Desc: "confirm"},
 		{Key: "q", Desc: "abort"},
 	}
+}
+
+// ackFooterHints returns key hints for the ack screen.
+func ackFooterHints() []components.KeyHint {
+	return []components.KeyHint{
+		{Key: "enter", Desc: "continue"},
+		{Key: "q", Desc: "abort"},
+	}
+}
+
+// renderFooter renders the footer with variant text based on Options.
+// SimulateOnly → single-line footer: "Command will not continue — simulation only"
+// KindDestroy with cascades → multi-line footer with cascade counts
+// Otherwise → single-line footer with PromptForOperations-style confirm
+func (m Model) renderFooter() string {
+	p := m.th.Palette
+
+	if m.opts.SimulateOnly {
+		msg := lipgloss.NewStyle().Foreground(p.TextSubtle).Render("  Command will not continue — simulation only")
+		return lipgloss.NewStyle().
+			Width(m.width).
+			BorderStyle(lipgloss.NormalBorder()).
+			BorderTop(true).
+			BorderForeground(p.Border).
+			Render(msg)
+	}
+
+	// Destroy with cascades: multi-line footer.
+	if m.opts.Kind == KindDestroy {
+		totalDeletes, cascadeDeletes := countDestroyResources(m.groups)
+		if cascadeDeletes > 0 {
+			line1 := fmt.Sprintf("  This operation will delete %d resource(s), of which %d will be deleted", totalDeletes, cascadeDeletes)
+			line2 := "  because they depend on other targeted resources."
+			line3 := ""
+			line4 := "  Do you want to continue? (y/N)"
+			content := line1 + "\n" + line2 + "\n" + line3 + "\n" + line4
+			return lipgloss.NewStyle().
+				Width(m.width).
+				BorderStyle(lipgloss.NormalBorder()).
+				BorderTop(true).
+				BorderForeground(p.Border).
+				Render(content)
+		}
+	}
+
+	// Non-cascade confirm: derive summary from opCounts.
+	counts := opCounts(m.groups)
+	var parts []string
+	if n := counts[opDelete]; n > 0 {
+		parts = append(parts, fmt.Sprintf("delete %d resource(s)", n))
+	}
+	if n := counts[opReplace]; n > 0 {
+		parts = append(parts, fmt.Sprintf("replace %d resource(s)", n))
+	}
+	if n := counts[opCreate]; n > 0 {
+		parts = append(parts, fmt.Sprintf("create %d resource(s)", n))
+	}
+	if n := counts[opUpdate]; n > 0 {
+		parts = append(parts, fmt.Sprintf("update %d resource(s)", n))
+	}
+	var confirmMsg string
+	if len(parts) == 0 {
+		confirmMsg = ""
+	} else {
+		summary := strings.Join(parts, ", ")
+		confirmMsg = "This operation will " + summary + ".  Do you want to continue? (y/N)"
+	}
+	return components.FooterBar(m.th, m.width, footerHints(), confirmMsg)
+}
+
+// countDestroyResources returns total delete count and cascade delete count
+// across all resource groups.
+func countDestroyResources(groups []simGroup) (total, cascades int) {
+	for _, g := range groups {
+		if g.kind != kindResource {
+			continue
+		}
+		for _, r := range g.rows {
+			if r.op == opDelete {
+				total++
+				if r.cascade {
+					cascades++
+				}
+			}
+		}
+	}
+	return
+}
+
+// wrapText wraps plain text to maxWidth runes per line, breaking at spaces.
+func wrapText(text string, maxWidth int) string {
+	if maxWidth <= 0 {
+		return text
+	}
+	words := strings.Fields(text)
+	if len(words) == 0 {
+		return text
+	}
+	var lines []string
+	line := ""
+	for _, w := range words {
+		if line == "" {
+			line = w
+			continue
+		}
+		candidate := line + " " + w
+		if len([]rune(candidate)) <= maxWidth {
+			line = candidate
+		} else {
+			lines = append(lines, line)
+			line = w
+		}
+	}
+	if line != "" {
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // simVisibleRows returns the visible slice and remaining count for a group.

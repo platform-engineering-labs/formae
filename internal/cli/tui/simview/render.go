@@ -61,6 +61,34 @@ func (m Model) renderBody() (string, int) {
 	cursorLine := 0
 	lineCount := 0
 
+	// Destroy cascade warning banner: shown at the top of the viewport when
+	// KindDestroy and any resource row has cascade=true.
+	if m.opts.Kind == KindDestroy {
+		_, cascades := countDestroyResources(m.groups)
+		if cascades > 0 {
+			bannerText := "Destroying these resources will also delete other resources that depend on them."
+			innerW := m.width - 8 // 2 indent + border 2 + padding 2 + 2 margin
+			if innerW < 20 {
+				innerW = 20
+			}
+			wrapped := wrapText(bannerText, innerW)
+			panelLines := strings.Split(wrapped, "\n")
+			panelW := m.width - 4
+			if panelW < 24 {
+				panelW = 24
+			}
+			panel := components.Panel(m.th, m.th.Palette.Warning, "Warning", panelLines, panelW)
+			body.WriteString("\n")
+			lineCount++
+			for _, pl := range strings.Split(panel, "\n") {
+				body.WriteString("  " + pl + "\n")
+				lineCount++
+			}
+			body.WriteString("\n")
+			lineCount++
+		}
+	}
+
 	for _, g := range m.groups {
 		lim := m.visible[g.kind]
 		shown, remaining := simVisibleRows(g, lim)
