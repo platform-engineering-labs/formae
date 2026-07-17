@@ -59,15 +59,16 @@ type WrappedCheckTTLResponse struct {
 }
 
 type FakeMetastructure struct {
-	ApplyResponses     []WrappedCommandResponse
-	DestroyResponses   []WrappedCommandResponse
-	ExtractResponses   []WrappedExtractResponse
-	TargetResponses    []WrappedTargetResponse
-	ListResponses      []WrappedListResponse
-	CancelResponses    []WrappedCancelResponse
-	DriftResponses     []WrappedDriftResponse
-	ReconcileResponses []WrappedReconcileResponse
-	CheckTTLResponses  []WrappedCheckTTLResponse
+	ApplyResponses        []WrappedCommandResponse
+	DestroyResponses      []WrappedCommandResponse
+	ExtractResponses      []WrappedExtractResponse
+	TargetResponses       []WrappedTargetResponse
+	ListResponses         []WrappedListResponse
+	CancelResponses       []WrappedCancelResponse
+	DriftResponses        []WrappedDriftResponse
+	ReconcileResponses    []WrappedReconcileResponse
+	CheckTTLResponses     []WrappedCheckTTLResponse
+	RecordedCancelQueries []string
 }
 
 func (m *FakeMetastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error) {
@@ -96,6 +97,7 @@ func (m *FakeMetastructure) CancelCommand(commandID string, force bool, clientID
 }
 
 func (m *FakeMetastructure) CancelCommandsByQuery(query string, force bool, clientID string) (*apimodel.CancelCommandResponse, error) {
+	m.RecordedCancelQueries = append(m.RecordedCancelQueries, query)
 	nextResponse := m.CancelResponses[0]
 	m.CancelResponses = m.CancelResponses[1:]
 
