@@ -7,6 +7,7 @@
 package apitest
 
 import (
+	formae "github.com/platform-engineering-labs/formae"
 	"github.com/platform-engineering-labs/formae/internal/metastructure"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/changeset"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
@@ -69,18 +70,19 @@ type WrappedPolicyResponse struct {
 }
 
 type FakeMetastructure struct {
-	ApplyResponses        []WrappedCommandResponse
-	DestroyResponses      []WrappedCommandResponse
-	ExtractResponses      []WrappedExtractResponse
-	TargetResponses       []WrappedTargetResponse
-	ListResponses         []WrappedListResponse
-	CancelResponses       []WrappedCancelResponse
-	DriftResponses        []WrappedDriftResponse
-	ReconcileResponses    []WrappedReconcileResponse
-	CheckTTLResponses     []WrappedCheckTTLResponse
-	StackResponses        []WrappedStackResponse
-	PolicyResponses       []WrappedPolicyResponse
-	RecordedCancelQueries []string
+	ApplyResponses          []WrappedCommandResponse
+	DestroyResponses        []WrappedCommandResponse
+	ExtractResponses        []WrappedExtractResponse
+	TargetResponses         []WrappedTargetResponse
+	ListResponses           []WrappedListResponse
+	CancelResponses         []WrappedCancelResponse
+	DriftResponses          []WrappedDriftResponse
+	ReconcileResponses      []WrappedReconcileResponse
+	CheckTTLResponses       []WrappedCheckTTLResponse
+	StackResponses          []WrappedStackResponse
+	PolicyResponses         []WrappedPolicyResponse
+	RecordedCancelQueries   []string
+	RecordedExtractQueries  []string
 }
 
 func (m *FakeMetastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error) {
@@ -134,6 +136,7 @@ func (m *FakeMetastructure) ListFormaCommandStatus(commandID string, clientID st
 }
 
 func (m *FakeMetastructure) ExtractResources(query string) (*pkgmodel.Forma, error) {
+	m.RecordedExtractQueries = append(m.RecordedExtractQueries, query)
 	if len(m.ExtractResponses) == 0 {
 		return &pkgmodel.Forma{}, nil
 	}
@@ -207,7 +210,7 @@ func (m *FakeMetastructure) ListDrift(stack string) (*apimodel.ModifiedStack, er
 
 func (m *FakeMetastructure) Stats() (*apimodel.Stats, error) {
 	return &apimodel.Stats{
-		Version: "1.0.0",
+		Version: formae.Version,
 		AgentID: "test-agent",
 	}, nil
 }
