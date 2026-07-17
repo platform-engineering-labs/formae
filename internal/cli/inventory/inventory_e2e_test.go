@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
@@ -70,17 +69,20 @@ func newE2EApp(baseURL string) *app.App {
 //   - Targets: two targets
 //   - Stacks: two stacks; "stack-with-ttl" carries an inline TTL policy
 //   - Policies: two standalone policies with attached stacks
-func seedFake() *apitest.FakeMetastructure {
-	ttlPolicy, _ := json.Marshal(map[string]any{
+func seedFake(t *testing.T) *apitest.FakeMetastructure {
+	t.Helper()
+	ttlPolicy, err := json.Marshal(map[string]any{
 		"Type":       "ttl",
 		"Label":      "my-ttl",
 		"TTLSeconds": float64(7200), // 2 h
 	})
-	autoPolicy, _ := json.Marshal(map[string]any{
+	require.NoError(t, err)
+	autoPolicy, err := json.Marshal(map[string]any{
 		"Type":            "auto-reconcile",
 		"Label":          "my-recon",
 		"IntervalSeconds": float64(3600), // 1 h
 	})
+	require.NoError(t, err)
 
 	return &apitest.FakeMetastructure{
 		ExtractResponses: []apitest.WrappedExtractResponse{
@@ -150,7 +152,7 @@ func seedFake() *apitest.FakeMetastructure {
 // WaitForContains assertions. Timing-dependent strings are intentionally
 // excluded from assertions.
 func TestInventoryE2E_FourTabBrowse(t *testing.T) {
-	fake := seedFake()
+	fake := seedFake(t)
 
 	srv := api.NewServer(t.Context(), fake, nil, nil, nil, nil)
 	baseURL := apitest.NewTestServer(t, srv.Handler())
@@ -196,8 +198,9 @@ func TestInventoryE2E_FourTabBrowse(t *testing.T) {
 	tm.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t', 't', 'l'}})
 	waitForAll(t, tm, "/: ", "filtered")
 
-	// Quit.
-	tm.Send(tea.KeyMsg{Type: tea.KeyCtrlC})
+	// Exit filter mode, then exercise quit key binding (q).
+	tm.Send(tea.KeyMsg{Type: tea.KeyEsc})
+	tm.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
 	tm.WaitFinished(t, teatest.WithFinalTimeout(5*time.Second))
 }
 
@@ -308,12 +311,13 @@ func captureStdout(t *testing.T, fn func()) []byte {
 
 	origStdout := os.Stdout
 	os.Stdout = w
+	defer func() {
+		os.Stdout = origStdout
+	}()
 
 	fn()
 
 	w.Close()
-	os.Stdout = origStdout
-
 	var buf bytes.Buffer
 	_, err = io.Copy(&buf, r)
 	require.NoError(t, err)
@@ -416,6 +420,6 @@ func TestInventoryE2E_MachinePath(t *testing.T) {
 	var parsed map[string]any
 	require.NoError(t, json.Unmarshal(output, &parsed), "machine output must be valid JSON")
 	raw, _ := json.Marshal(parsed)
-	assert.True(t, strings.Contains(string(raw), "json-bucket"),
-		"JSON output must include seeded label 'json-bucket', got: %s", string(raw))
+	assert.Contains(t, string(raw), "json-bucket",
+		"JSON output must include seeded label 'json-bucket'")
 }
