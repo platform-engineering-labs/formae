@@ -59,7 +59,11 @@ const (
 	detailColTime
 )
 
-func buildGroups(c apimodel.Command) []group {
+// buildGroups constructs the update groups for a command's detail view.
+// abandonedIDs is the set of resource IDs (bare ksuids) that were force-canceled;
+// resource rows whose ID is in the set and whose state is Canceled get the
+// stateLabel "Abandoned" instead of the usual "canceled".
+func buildGroups(c apimodel.Command, abandonedIDs map[string]bool) []group {
 	groups := []group{}
 
 	// Targets
@@ -145,6 +149,10 @@ func buildGroups(c apimodel.Command) []group {
 			rows:  []updateRow{},
 		}
 		for _, u := range c.ResourceUpdates {
+			lbl := stateLabel(c.State, u.State)
+			if abandonedIDs[u.ResourceID] && u.State == "Canceled" {
+				lbl = "Abandoned"
+			}
 			r := updateRow{
 				kind:       kindResource,
 				key:        fmt.Sprintf("resource/%s/%s", u.StackName, u.ResourceLabel),
@@ -153,7 +161,7 @@ func buildGroups(c apimodel.Command) []group {
 				stack:      u.StackName,
 				operation:  u.Operation,
 				state:      mapUpdateState(u.State),
-				stateLabel: stateLabel(c.State, u.State),
+				stateLabel: lbl,
 				duration:   time.Duration(u.Duration) * time.Millisecond,
 				errMsg:     u.ErrorMessage,
 				statusMsg:  u.StatusMessage,

@@ -86,7 +86,7 @@ func TestDetailModel_SummaryRowsAndSecondLines(t *testing.T) {
 	}
 	r := row{cmd: c, counts: commandCounts(c), health: commandHealth(c, commandCounts(c))}
 	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
-	dm = dm.SetCommand(c, r, "◉", now)
+	dm = dm.SetCommand(c, r, "◉", now, nil)
 
 	v := plain(dm.View(30))
 	assert.Contains(t, v, "▌ Resources", "section header")
@@ -113,7 +113,7 @@ func TestDetailModel_ShowMoreRow(t *testing.T) {
 	}
 	r := row{cmd: c, counts: commandCounts(c), health: commandHealth(c, commandCounts(c))}
 	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
-	dm = dm.SetCommand(c, r, "◉", now)
+	dm = dm.SetCommand(c, r, "◉", now, nil)
 
 	v := plain(dm.View(40))
 	assert.Contains(t, v, "show 10 more (15 remaining)")
@@ -143,7 +143,7 @@ func TestDetailModel_ExpandCardByKey(t *testing.T) {
 	}
 	r := row{cmd: c, counts: commandCounts(c), health: commandHealth(c, commandCounts(c))}
 	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
-	dm = dm.SetCommand(c, r, "◉", now)
+	dm = dm.SetCommand(c, r, "◉", now, nil)
 
 	keys := defaultKeyMap()
 	// Expand first resource row (cursor=0)
@@ -153,7 +153,7 @@ func TestDetailModel_ExpandCardByKey(t *testing.T) {
 	assert.Contains(t, v, "AWS::S3::Bucket", "expanded card shows type")
 
 	// Rebuild with same command (simulating a poll refresh)
-	dm = dm.SetCommand(c, r, "◉", now)
+	dm = dm.SetCommand(c, r, "◉", now, nil)
 
 	// Expansion must survive SetCommand - the key is "resource/production/my-bucket"
 	v2 := plain(dm.View(40))
@@ -166,7 +166,7 @@ func TestDetailModel_DetailModeToggle(t *testing.T) {
 	c := makeTerminalCmd()
 	r := makeTerminalRow()
 	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
-	dm = dm.SetCommand(c, r, "◉", now)
+	dm = dm.SetCommand(c, r, "◉", now, nil)
 
 	assert.False(t, dm.detailMode)
 	keys := defaultKeyMap()
@@ -192,7 +192,7 @@ func TestDetailModel_CancelStateLabels(t *testing.T) {
 	}
 	r := row{cmd: c, counts: commandCounts(c), health: commandHealth(c, commandCounts(c))}
 	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
-	dm = dm.SetCommand(c, r, "◉", now)
+	dm = dm.SetCommand(c, r, "◉", now, nil)
 
 	v := plain(dm.View(40))
 	assert.Contains(t, v, "finishing", "in-progress row on canceling command shows 'finishing'")
@@ -298,7 +298,7 @@ func TestDetailModel_PinnedRowUsesInjectedNow(t *testing.T) {
 		},
 	}
 	r := row{cmd: c, counts: commandCounts(c), health: commandHealth(c, commandCounts(c))}
-	dm = dm.SetCommand(c, r, "◉", now)
+	dm = dm.SetCommand(c, r, "◉", now, nil)
 
 	pinnedRow := plain(dm.pinnedRow)
 	assert.Contains(t, pinnedRow, "00:42", "pinned Time column derives from injected now")
@@ -313,7 +313,7 @@ func TestDetailModel_PinnedHeaderNoAgeAndAligned(t *testing.T) {
 
 	for _, w := range []int{100, 70} {
 		dm := newDetailModel(th, w, 30)
-		dm = dm.SetCommand(c, r, "◉", now)
+		dm = dm.SetCommand(c, r, "◉", now, nil)
 
 		header := plain(dm.pinnedHeader)
 		rowStr := plain(dm.pinnedRow)
@@ -329,7 +329,7 @@ func TestDetailModel_Golden(t *testing.T) {
 	c := makeTerminalCmd()
 	r := makeTerminalRow()
 	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
-	dm = dm.SetCommand(c, r, "◉", now)
+	dm = dm.SetCommand(c, r, "◉", now, nil)
 
 	// Expand first resource card
 	keys := defaultKeyMap()
@@ -363,7 +363,7 @@ func TestSetCommand_ClampsCursorWhenListShrinks(t *testing.T) {
 	}
 	r12 := row{cmd: c12, counts: commandCounts(c12), health: commandHealth(c12, commandCounts(c12))}
 	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
-	dm = dm.SetCommand(c12, r12, "◉", now)
+	dm = dm.SetCommand(c12, r12, "◉", now, nil)
 
 	// Navigate cursor to the last navigable line (show-more row, index 10).
 	nav12 := dm.navLines()
@@ -381,7 +381,7 @@ func TestSetCommand_ClampsCursorWhenListShrinks(t *testing.T) {
 		},
 	}
 	r2 := row{cmd: c2, counts: commandCounts(c2), health: commandHealth(c2, commandCounts(c2))}
-	dm = dm.SetCommand(c2, r2, "◉", now)
+	dm = dm.SetCommand(c2, r2, "◉", now, nil)
 
 	nav2 := dm.navLines()
 	require.Equal(t, 2, len(nav2), "shrunken command has exactly 2 nav entries")
@@ -405,7 +405,7 @@ func TestSetCommand_ClampsCursorWhenListShrinks(t *testing.T) {
 			},
 		}
 		rWithRows := row{cmd: cWithRows, counts: commandCounts(cWithRows), health: commandHealth(cWithRows, commandCounts(cWithRows))}
-		dmNeg = dmNeg.SetCommand(cWithRows, rWithRows, "◉", now)
+		dmNeg = dmNeg.SetCommand(cWithRows, rWithRows, "◉", now, nil)
 
 		// After SetCommand, negative cursor must be clamped to 0
 		assert.Equal(t, 0, dmNeg.cursor, "negative cursor must be clamped to 0")
@@ -430,7 +430,7 @@ func TestDetailModel_RenderingIntegrity(t *testing.T) {
 	c := makeTerminalCmd()
 	r := makeTerminalRow()
 	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
-	dm = dm.SetCommand(c, r, "◉", now)
+	dm = dm.SetCommand(c, r, "◉", now, nil)
 
 	raw := dm.View(30)
 	plainView := plain(raw)
@@ -494,7 +494,7 @@ func TestDetailModel_ColHeaderAlignment(t *testing.T) {
 			c := makeTerminalCmd()
 			r := makeTerminalRow()
 			now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
-			dm = dm.SetCommand(c, r, "◉", now)
+			dm = dm.SetCommand(c, r, "◉", now, nil)
 
 			raw := dm.View(30)
 			plainView := plain(raw)

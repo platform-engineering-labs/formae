@@ -27,7 +27,7 @@ func TestBuildGroups_OrderAndMapping(t *testing.T) {
 			Operation: "create", State: "InProgress", CurrentAttempt: 1, MaxAttempts: 9, StatusMessage: "Creating resource...",
 		}},
 	}
-	groups := buildGroups(c)
+	groups := buildGroups(c, nil)
 	require.Len(t, groups, 4)
 	assert.Equal(t, []string{"Targets", "Stacks", "Policies", "Resources"},
 		[]string{groups[0].title, groups[1].title, groups[2].title, groups[3].title})
@@ -51,7 +51,7 @@ func TestBuildGroups_OmitsEmptyGroupsAndSetsCancelLabels(t *testing.T) {
 			{ResourceLabel: "b", State: "Canceled"},
 		},
 	}
-	groups := buildGroups(c)
+	groups := buildGroups(c, nil)
 	require.Len(t, groups, 1)
 	assert.Equal(t, "finishing", groups[0].rows[0].stateLabel)
 	assert.Equal(t, "canceled", groups[0].rows[1].stateLabel)
@@ -59,8 +59,8 @@ func TestBuildGroups_OmitsEmptyGroupsAndSetsCancelLabels(t *testing.T) {
 
 func TestBuildGroups_StableKeys(t *testing.T) {
 	c := apimodel.Command{ResourceUpdates: []apimodel.ResourceUpdate{{ResourceLabel: "web-1", State: "Success"}}}
-	k1 := buildGroups(c)[0].rows[0].key
-	k2 := buildGroups(c)[0].rows[0].key
+	k1 := buildGroups(c, nil)[0].rows[0].key
+	k2 := buildGroups(c, nil)[0].rows[0].key
 	assert.Equal(t, k1, k2)
 	assert.Contains(t, k1, "web-1")
 }
@@ -70,7 +70,7 @@ func TestBuildGroups_KeysDistinguishSameLabelAcrossStacks(t *testing.T) {
 		{ResourceLabel: "web", StackName: "production", State: "Success"},
 		{ResourceLabel: "web", StackName: "staging", State: "Success"},
 	}}
-	rows := buildGroups(c)[0].rows
+	rows := buildGroups(c, nil)[0].rows
 	require.Len(t, rows, 2)
 	assert.NotEqual(t, rows[0].key, rows[1].key)
 	assert.Contains(t, rows[0].key, "web")

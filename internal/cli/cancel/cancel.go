@@ -23,6 +23,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/renderer"
 	"github.com/platform-engineering-labs/formae/internal/cli/status"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/statuswatch"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
@@ -39,6 +40,13 @@ var getCommandsStatusFn = func(a *app.App, query string, n int, fromWatch bool) 
 // cancelCommandFn is a seam so tests can stub the cancel call.
 var cancelCommandFn = func(a *app.App, query string, force bool) (*apimodel.CancelCommandResponse, error) {
 	return a.CancelCommand(query, force)
+}
+
+// launchCancelWatch is a seam so tests can stub the statuswatch TUI launch after cancel.
+var launchCancelWatch = func(a *app.App, th *theme.Theme, opts statuswatch.Options) error {
+	model := statuswatch.New(th, a, opts)
+	_, err := tui.Run(model, tui.DefaultRunOptions())
+	return err
 }
 
 // themeFor resolves the active theme from the app config.
@@ -256,14 +264,34 @@ func runCancelInteractive(a *app.App, opts *CancelOptions) error {
 
 	// Step 4/5: --watch vs. no-watch.
 	if opts.Watch {
-		// TODO(Task17): replace with styled watch view.
 		fmt.Println(renderCancelSummary(th, activeCmds, exps, opts.Force, now))
 
-		if len(merged.CommandIDs) == 1 {
-			query := fmt.Sprintf("id:%s", merged.CommandIDs[0])
-			return status.WatchCommandsStatus(a, query, 1, opts.StatusOutput)
+		// Build the set of force-abandoned resource ksuids (P3 normalization at call site).
+		var abandonedKsuids []string
+		for uri, rs := range merged.ResourceUpdateStates {
+			if rs.ForceCanceled {
+				abandonedKsuids = append(abandonedKsuids, ksuidFromURI(uri))
+			}
 		}
-		return status.WatchCommandsStatus(a, "", len(merged.CommandIDs), opts.StatusOutput)
+		sort.Strings(abandonedKsuids)
+
+		if len(merged.CommandIDs) == 1 {
+			return launchCancelWatch(a, th, statuswatch.Options{
+				Query:              fmt.Sprintf("id:%s", merged.CommandIDs[0]),
+				FocusCommandID:     merged.CommandIDs[0],
+				ExitWhenDone:       true,
+				AbandonedResources: abandonedKsuids,
+			})
+		}
+		idTerms := make([]string, len(merged.CommandIDs))
+		for i, id := range merged.CommandIDs {
+			idTerms[i] = "id:" + id
+		}
+		return launchCancelWatch(a, th, statuswatch.Options{
+			Query:              strings.Join(idTerms, " "),
+			ExitWhenDone:       true,
+			AbandonedResources: abandonedKsuids,
+		})
 	}
 
 	// No --watch: print styled summary.

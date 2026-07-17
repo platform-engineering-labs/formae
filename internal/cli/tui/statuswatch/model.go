@@ -35,6 +35,12 @@ type Options struct {
 	// ExitWhenDone causes the TUI to quit automatically when all visible
 	// commands reach a terminal state.
 	ExitWhenDone bool
+	// AbandonedResources is the set of resource IDs (bare ksuids) that were
+	// force-canceled. Detail rows whose ResourceUpdate.ResourceID is in this
+	// set and whose state is Canceled render the label "Abandoned" in Warning
+	// color. When ≥1 such row exists and the command is terminal, a reminder
+	// footer is shown in the detail view.
+	AbandonedResources []string
 }
 
 // viewMode controls which TUI panel is active.
@@ -49,19 +55,20 @@ const (
 // It wires together polling (poll.go), the query bar (querybar.go), and the
 // multi-command table view (multiview.go).
 type Model struct {
-	th      *theme.Theme
-	client  Client
-	opts    Options
-	keys    tui.KeyMap
-	multi   multiView
-	detail  detailModel
-	view    viewMode
-	query   queryBar
-	spinner spinner.Model
-	err     error
-	width   int
-	height  int
-	ready   bool
+	th           *theme.Theme
+	client       Client
+	opts         Options
+	keys         tui.KeyMap
+	multi        multiView
+	detail       detailModel
+	view         viewMode
+	query        queryBar
+	spinner      spinner.Model
+	err          error
+	width        int
+	height       int
+	ready        bool
+	abandonedSet map[string]bool
 	// focusHandled tracks whether FocusCommandID has been used to drill in yet.
 	focusHandled bool
 	// helpOpen tracks whether the help overlay is currently displayed.
@@ -79,15 +86,20 @@ func New(th *theme.Theme, client Client, opts Options) Model {
 	if opts.MaxResults <= 0 {
 		opts.MaxResults = 10
 	}
+	abandonedSet := make(map[string]bool, len(opts.AbandonedResources))
+	for _, id := range opts.AbandonedResources {
+		abandonedSet[id] = true
+	}
 	return Model{
-		th:      th,
-		client:  client,
-		opts:    opts,
-		keys:    tui.DefaultKeyMap(),
-		multi:   multiView{th: th, sortCol: colStatus, sortDir: components.SortAsc},
-		detail:  newDetailModel(th, 80, 24), // placeholder; resized on WindowSizeMsg
-		query:   newQueryBar(th, opts.Query),
-		spinner: components.NewSpinner(th),
+		th:           th,
+		client:       client,
+		opts:         opts,
+		keys:         tui.DefaultKeyMap(),
+		multi:        multiView{th: th, sortCol: colStatus, sortDir: components.SortAsc},
+		detail:       newDetailModel(th, 80, 24), // placeholder; resized on WindowSizeMsg
+		query:        newQueryBar(th, opts.Query),
+		spinner:      components.NewSpinner(th),
+		abandonedSet: abandonedSet,
 	}
 }
 
@@ -141,7 +153,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			for _, r := range m.multi.rows {
 				if r.cmd.CommandID == m.opts.FocusCommandID {
 					m.focusHandled = true
-					m.detail = m.detail.SetCommand(r.cmd, r, m.spinner.View(), m.opts.Now())
+					m.detail = m.detail.SetCommand(r.cmd, r, m.spinner.View(), m.opts.Now(), m.abandonedSet)
 					m.view = viewDetail
 					break
 				}
@@ -154,7 +166,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			for _, r := range m.multi.rows {
 				if r.cmd.CommandID == m.detail.cmdID {
 					found = true
-					m.detail = m.detail.SetCommand(r.cmd, r, m.spinner.View(), m.opts.Now())
+					m.detail = m.detail.SetCommand(r.cmd, r, m.spinner.View(), m.opts.Now(), m.abandonedSet)
 					break
 				}
 			}
@@ -326,7 +338,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.multi.cursor >= 0 && m.multi.cursor < len(m.multi.rows) {
 			r := m.multi.rows[m.multi.cursor]
 			m.detail = newDetailModel(m.th, m.width, m.height)
-			m.detail = m.detail.SetCommand(r.cmd, r, m.spinner.View(), m.opts.Now())
+			m.detail = m.detail.SetCommand(r.cmd, r, m.spinner.View(), m.opts.Now(), m.abandonedSet)
 			m.view = viewDetail
 		}
 		return m, nil

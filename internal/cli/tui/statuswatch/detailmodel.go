@@ -39,6 +39,7 @@ type navigableLine struct {
 type detailModel struct {
 	th         *theme.Theme
 	cmdID      string
+	cmdState   string // command state, used for the abandoned footer reminder
 	groups     []group
 	cursor     int                // index into the flat navigable lines list
 	expanded   map[string]bool    // keyed by updateRow.key
@@ -54,6 +55,10 @@ type detailModel struct {
 	pinnedRow    string
 	// spinner view injected from outside
 	spinView string
+	// abandonedSet is the set of resource IDs that were force-canceled; rows in
+	// this set with Canceled state render "Abandoned" in Warning color.
+	abandonedSet   map[string]bool
+	abandonedCount int // count of rows with stateLabel "Abandoned"
 }
 
 func newDetailModel(th *theme.Theme, width, height int) detailModel {
@@ -76,17 +81,31 @@ func newDetailModel(th *theme.Theme, width, height int) detailModel {
 }
 
 // SetCommand rebuilds the groups from the command data, preserving expanded/pagination/sort state.
-func (d detailModel) SetCommand(c apimodel.Command, r row, spinView string, now time.Time) detailModel {
+// abandonedIDs is the set of resource IDs (bare ksuids) that were force-canceled; may be nil.
+func (d detailModel) SetCommand(c apimodel.Command, r row, spinView string, now time.Time, abandonedIDs map[string]bool) detailModel {
 	d.cmdID = c.CommandID
+	d.cmdState = c.State
 	d.spinView = spinView
+	d.abandonedSet = abandonedIDs
 
 	// Rebuild groups, preserving sort state
-	newGroups := buildGroups(c)
+	newGroups := buildGroups(c, abandonedIDs)
 	for i := range newGroups {
 		k := newGroups[i].kind
 		sortGroup(newGroups[i].rows, d.sortCol[k], d.sortDir[k])
 	}
 	d.groups = newGroups
+
+	// Count rows with "Abandoned" label for the footer reminder.
+	count := 0
+	for _, g := range d.groups {
+		for _, row := range g.rows {
+			if row.stateLabel == "Abandoned" {
+				count++
+			}
+		}
+	}
+	d.abandonedCount = count
 
 	// Clamp cursor against the new nav list so a shrinking command never leaves
 	// the cursor pointing past the end of the navigable lines.
@@ -350,6 +369,12 @@ func (d detailModel) View(height int) string {
 		}
 	}
 
+	// Footer reminder: show when command is terminal and there are abandoned rows.
+	if d.abandonedCount > 0 && isTerminalCommand(d.cmdState) {
+		reminderText := fmt.Sprintf("\n  ⚠ %d in-progress updates were abandoned. Check the synchronizer or the cloud console for orphaned resources.", d.abandonedCount)
+		body.WriteString(lipgloss.NewStyle().Foreground(p.Warning).Render(reminderText) + "\n")
+	}
+
 	// Viewport scrolls to keep cursor in view
 	vpHeight := height - chromeLines - 2 // subtract pinned header row + separator
 	if vpHeight < 1 {
@@ -564,9 +589,12 @@ func (d detailModel) renderSummaryRow(r updateRow, kind updateKind, labelW, type
 
 	timeStr := formatDetailDuration(r)
 
-	// State label suffix (for finishing/canceled)
+	// State label suffix (for finishing/canceled/Abandoned)
 	glyphCell := " " + glyphStr + " "
-	if r.stateLabel != "" {
+	if r.stateLabel == "Abandoned" {
+		warnSt := withBg(lipgloss.NewStyle().Foreground(p.Warning))
+		glyphCell = " " + glyphStr + " " + warnSt.Render(r.stateLabel)
+	} else if r.stateLabel != "" {
 		glyphCell = " " + glyphStr + " " + dimSt.Render(r.stateLabel)
 	}
 
