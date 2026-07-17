@@ -7,6 +7,7 @@ package destroy
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -20,9 +21,56 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/prompter"
 	"github.com/platform-engineering-labs/formae/internal/cli/renderer"
 	"github.com/platform-engineering-labs/formae/internal/cli/status"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/simview"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/statuswatch"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 )
+
+// ansiEscape matches ANSI SGR escape sequences for stripping display colors.
+var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+// isTerminal, launchSimView, launchWatch, and destroyFn are package-level vars so tests can stub them.
+var (
+	isTerminal = tui.IsTerminal
+
+	launchSimView = func(th *theme.Theme, sim *apimodel.Simulation, opts simview.Options) (simview.Decision, error) {
+		model := simview.New(th, sim, opts)
+		final, err := tui.Run(model, tui.DefaultRunOptions())
+		if err != nil {
+			return simview.DecisionAborted, err
+		}
+		return final.(simview.Model).Decision(), nil
+	}
+
+	launchWatch = func(a *app.App, commandID string) error {
+		th := themeFor(a)
+		model := statuswatch.New(th, a, statuswatch.Options{
+			Query:          "id:" + commandID,
+			FocusCommandID: commandID,
+			ExitWhenDone:   true,
+		})
+		_, err := tui.Run(model, tui.DefaultRunOptions())
+		return err
+	}
+
+	destroyFn = func(a *app.App, opts *DestroyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
+		return a.Destroy(opts.FormaFile, opts.Query, opts.Properties, simulate)
+	}
+)
+
+// themeFor resolves the active theme from the app config.
+// The name falls back to "formae" for nil configs (theme.New nil-guards internally).
+func themeFor(a *app.App) *theme.Theme {
+	name := ""
+	if a != nil && a.Config != nil {
+		name = a.Config.Cli.Theme
+	}
+	return theme.New(name)
+}
 
 // OnDependents defines the behavior when resources depend on those being deleted.
 type OnDependents string
@@ -140,13 +188,112 @@ func runDestroy(app *app.App, opts *DestroyOptions) error {
 func runDestroyForHumans(app *app.App, opts *DestroyOptions) error {
 	app.PrintBanner()
 
+	// Interactive path: human + TTY + no --yes flag.
+	if !opts.Yes && isTerminal(os.Stdout) {
+		return runDestroyInteractive(app, opts)
+	}
+	return runDestroyLegacy(app, opts)
+}
+
+// runDestroyInteractive implements the new TTY destroy flow: simview preview → watch.
+// Unlike apply there is no drift phase; the simview renders the cascade warning
+// banner and the direct-vs-dependent confirm footer when cascade rows exist, and
+// the interactive confirmation substitutes for --on-dependents=cascade.
+func runDestroyInteractive(a *app.App, opts *DestroyOptions) error {
+	th := themeFor(a)
+
+	res, _, err := destroyFn(a, opts, true)
+	if err != nil {
+		msg, renderErr := renderer.RenderErrorMessage(err)
+		if renderErr != nil {
+			return fmt.Errorf("error rendering error message: %v", renderErr)
+		}
+		return fmt.Errorf("%s", msg)
+	}
+
+	if !res.Simulation.ChangesRequired {
+		msg := "The specified forma does not have any resources that need to be destroyed."
+		if opts.FormaFile == "" {
+			msg = "The specified query does not match any resources that can be destroyed."
+		}
+		panel := components.Panel(th, th.Palette.Border, "formae destroy", []string{
+			"No resources to destroy",
+			"",
+			msg,
+		}, 80)
+		fmt.Println(panel)
+		return nil
+	}
+
+	source := opts.FormaFile
+	if source == "" {
+		source = "query: " + opts.Query
+	}
+
+	decision, err := launchSimView(th, &res.Simulation, simview.Options{
+		Kind:         simview.KindDestroy,
+		Source:       source,
+		SimulateOnly: opts.Simulate,
+		Description:  res.Description,
+	})
+	if err != nil {
+		return err
+	}
+
+	if opts.Simulate {
+		return nil
+	}
+
+	if decision == simview.DecisionAborted {
+		fmt.Print(display.Grey("Destroy aborted.") + "\n")
+		return nil
+	}
+
+	// Confirmed: run the real destroy.
+	realRes, nags, err := destroyFn(a, opts, false)
+	if err != nil {
+		msg, renderErr := renderer.RenderErrorMessage(err)
+		if renderErr != nil {
+			return fmt.Errorf("error rendering error message: %v", renderErr)
+		}
+		return fmt.Errorf("%s", msg)
+	}
+
+	// Print one-line scrollback record.
+	raw := renderer.PromptForOperations(&res.Simulation.Command)
+	summary := ""
+	if raw != "" {
+		stripped := ansiEscape.ReplaceAllString(raw, "")
+		summary = strings.SplitN(stripped, "\n\n", 2)[0]
+		summary = strings.ReplaceAll(summary, "\n", " ")
+	}
+	fmt.Printf("Confirmed: %s — command %s submitted\n", summary, realRes.CommandID)
+
+	// Watch the command to completion (D4: watch-by-default on TTY path).
+	if err := launchWatch(a, realRes.CommandID); err != nil {
+		return err
+	}
+
+	// Hint for users who detached with q before the command finished.
+	fmt.Printf("\nRun the following command to check status:\n\n  formae status command --query='id:%s' --watch\n", realRes.CommandID)
+
+	nag.MaybePrintNags(nags)
+
+	return nil
+}
+
+// runDestroyLegacy is the pre-existing human destroy flow (non-TTY / --yes / legacy).
+// Byte-identical to the old runDestroyForHumans minus the banner (which is now in
+// runDestroyForHumans), except the cascade abort block which renders a styled
+// panel (the issue-mandated D5 exception to the legacy-paths-unchanged rule).
+func runDestroyLegacy(app *app.App, opts *DestroyOptions) error {
 	if opts.FormaFile != "" {
 		fmt.Print(display.Gold("Destroying resources defined by forma:\n ") + display.Green("File: ") + fmt.Sprintf("%s\n\n", opts.FormaFile))
 	} else {
 		fmt.Print(display.Gold("Destroying resources defined by query:\n ") + display.Green("Query: ") + fmt.Sprintf("%s\n\n", opts.Query))
 	}
 
-	res, _, err := app.Destroy(opts.FormaFile, opts.Query, opts.Properties, true)
+	res, _, err := destroyFn(app, opts, true)
 	if err != nil {
 		msg, renderErr := renderer.RenderErrorMessage(err)
 		if renderErr != nil {
@@ -172,40 +319,28 @@ func runDestroyForHumans(app *app.App, opts *DestroyOptions) error {
 	// Check for cascade deletes
 	hasCascades := hasCascadeDeletes(&res.Simulation.Command)
 
-	// If --yes is specified with --on-dependents=abort and there are cascades, abort
+	// If --yes is specified with --on-dependents=abort and there are cascades, abort.
+	// The styled panel renders even on the --yes path — the issue-mandated D5
+	// exception to the legacy-paths-unchanged rule (destroy-cascade mockup VIEW 2).
 	if opts.Yes && hasCascades && opts.OnDependents == OnDependentsAbort {
-		fmt.Printf("\n%s\n\n", display.Red("Error: This operation would cascade delete additional resources."))
-		fmt.Printf("%s\n\n", display.Grey("The following resources depend on resources being deleted and would also be deleted:"))
+		th := themeFor(app)
 
+		var lines []string
 		for _, ru := range res.Simulation.Command.ResourceUpdates {
 			if ru.IsCascade {
-				fmt.Printf("  %s %s (depends on %s)\n",
-					display.Red("•"),
-					display.LightBlue(ru.ResourceLabel),
-					display.Grey(ru.CascadeSource))
+				lines = append(lines, fmt.Sprintf("%s (%s)", ru.ResourceLabel, ru.ResourceType))
+				lines = append(lines, fmt.Sprintf("  will be deleted because it depends on %s", ru.CascadeSource))
 			}
 		}
-
-		hasCascadeTargets := false
 		for _, tu := range res.Simulation.Command.TargetUpdates {
 			if tu.IsCascade {
-				hasCascadeTargets = true
-				break
+				lines = append(lines, fmt.Sprintf("%s (target)", tu.TargetLabel))
+				lines = append(lines, fmt.Sprintf("  will be deleted because it depends on %s", tu.CascadeSource))
 			}
 		}
-		if hasCascadeTargets {
-			fmt.Printf("\n%s\n\n", display.Grey("The following targets will be cascade-deleted:"))
-			for _, tu := range res.Simulation.Command.TargetUpdates {
-				if tu.IsCascade {
-					fmt.Printf("  %s %s (depends on %s)\n",
-						display.Red("•"),
-						display.LightBlue(tu.TargetLabel),
-						display.Grey(tu.CascadeSource))
-				}
-			}
-		}
+		lines = append(lines, "", "To proceed, use --on-dependents=cascade")
 
-		fmt.Printf("\n%s\n", display.Grey("To proceed with cascade deletes, use --on-dependents=cascade"))
+		fmt.Println(components.Panel(th, th.Palette.Warning, "Command Aborted", lines, 80))
 		return fmt.Errorf("cascade deletes detected, aborting (use --on-dependents=cascade to proceed)")
 	}
 
@@ -237,7 +372,7 @@ func runDestroyForHumans(app *app.App, opts *DestroyOptions) error {
 	}
 
 	var nags []string
-	res, nags, err = app.Destroy(opts.FormaFile, opts.Query, opts.Properties, false)
+	res, nags, err = destroyFn(app, opts, false)
 	if err != nil {
 		msg, renderErr := renderer.RenderErrorMessage(err)
 		if renderErr != nil {
@@ -263,7 +398,7 @@ func runDestroyForHumans(app *app.App, opts *DestroyOptions) error {
 
 func runDestroyForMachines(app *app.App, opts *DestroyOptions) error {
 	if opts.Simulate {
-		res, _, err := app.Destroy(opts.FormaFile, opts.Query, opts.Properties, true)
+		res, _, err := destroyFn(app, opts, true)
 		if err != nil {
 			return fmt.Errorf("error simlating destroy command: %v", err)
 		}
@@ -271,7 +406,7 @@ func runDestroyForMachines(app *app.App, opts *DestroyOptions) error {
 
 		return printer.Print(&res.Simulation)
 	}
-	res, _, err := app.Destroy(opts.FormaFile, opts.Query, opts.Properties, false)
+	res, _, err := destroyFn(app, opts, false)
 	if err != nil {
 		return fmt.Errorf("error destroying forma: %v", err)
 	}
