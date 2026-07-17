@@ -291,15 +291,7 @@ jobs:
           # Install only the plugins this test needs. The agent refreshes
           # orbital's repository cache at startup, so the install candidate
           # solver has fresh metadata to work with.
-          # Bridge: pin aws to 0.1.12. aws 0.1.13's Role read embeds
-          # sibling-managed inline policies, so the drift guard rejects the
-          # patch (TestPatchApply/AWS). Remove the pin once aws 0.1.14 ships.
-          plugins=""
-          for p in ${{ matrix.system_plugins }}; do
-            if [ "$p" = "aws" ]; then p="aws@0.1.12"; fi
-            plugins="$plugins $p"
-          done
-          dist/e2e/bin/formae plugin install $plugins --channel stable
+          dist/e2e/bin/formae plugin install ${{ matrix.system_plugins }} --channel stable
 
           # Stop the bootstrap agent so the test harness can spawn its own.
           kill -TERM "$AGENT_PID" || true
