@@ -90,6 +90,9 @@ func TestUnwrapRefValue(t *testing.T) {
 func TestCompactKV_SortedAndUnwrapped(t *testing.T) {
 	raw := json.RawMessage(`{"Region":{"$ref":"formae://x","$value":"eu-west-1"},"Account":"123"}`)
 	assert.Equal(t, "Account: 123, Region: eu-west-1", compactKV(raw))
+
+	raw2 := json.RawMessage(`{"Zone":"z","Account":"a"}`)
+	assert.Equal(t, "Account: a, Zone: z", compactKV(raw2))
 }
 
 // ---------------------------------------------------------------------------
@@ -99,6 +102,9 @@ func TestCompactKV_SortedAndUnwrapped(t *testing.T) {
 func TestJSONTree_NestedSorted(t *testing.T) {
 	raw := json.RawMessage(`{"Tags":{"Env":"prod"},"BucketName":"b"}`)
 	assert.Equal(t, []string{"BucketName: b", "Tags:", "  Env: prod"}, jsonTree(raw, 0))
+
+	rawArr := json.RawMessage(`{"Subnets":["a","b"]}`)
+	assert.Equal(t, []string{"Subnets:", "  - a", "  - b"}, jsonTree(rawArr, 0))
 }
 
 // ---------------------------------------------------------------------------
@@ -131,4 +137,5 @@ func TestFetchCmd_DeliversLoadedMsg(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, TabStacks, loaded.tab)
 	assert.True(t, c.stacksFromTUI, "fromTUI must be threaded")
+	assert.Len(t, loaded.rows, 1)
 }
