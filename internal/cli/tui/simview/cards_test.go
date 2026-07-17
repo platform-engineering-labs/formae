@@ -5,6 +5,7 @@
 package simview
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -919,6 +920,67 @@ func TestSimView_GoldenRenameAndManagementCard(t *testing.T) {
 	m = mm.(Model)
 
 	tuitest.RequireGolden(t, []byte(m.View()))
+}
+
+// ---------------------------------------------------------------------------
+// Policy config determinism tests (Fix 1)
+// ---------------------------------------------------------------------------
+
+// ansiStripRe strips ANSI escape codes for plain-text comparisons in this package.
+var ansiStripRe = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+func stripAnsi(s string) string { return ansiStripRe.ReplaceAllString(s, "") }
+
+// TestRenderCard_PolicyConfigChangesDeterministicOrder verifies that a policy
+// card whose PolicyConfig and OldPolicyConfig differ in ≥3 keys always renders
+// the change lines in sorted key order, not randomized map-iteration order.
+//
+// The test asserts the exact sequence of key names that must appear in the
+// rendered card (sorted: "interval" < "mode" < "ttl").  Without the sort fix
+// the map iteration produces a random permutation, so -count=20 will expose
+// the nondeterminism, but even a single run is deterministically failing once
+// the expected order is asserted as exact.
+func TestRenderCard_PolicyConfigChangesDeterministicOrder(t *testing.T) {
+	th := makeCardTheme()
+
+	// Three config keys with differing values so all three generate change lines.
+	// Keys chosen to have a clear sorted order: "interval" < "mode" < "ttl".
+	policy := &apimodel.PolicyUpdate{
+		PolicyLabel: "prod-reconcile",
+		PolicyType:  "auto-reconcile",
+		StackLabel:  "production",
+		Operation:   "update",
+		// New config: all three keys present with new values.
+		PolicyConfig: []byte(`{"interval":"30m","mode":"full","ttl":"7d"}`),
+		// Old config: all three keys present with old values → all three render as "set".
+		OldPolicyConfig: []byte(`{"interval":"15m","mode":"partial","ttl":"3d"}`),
+	}
+
+	row := simRow{
+		key:    "policy/production/prod-reconcile",
+		op:     opUpdate,
+		label:  "prod-reconcile",
+		typ:    "auto-reconcile",
+		stack:  "production",
+		policy: policy,
+	}
+
+	// Render the card and strip ANSI.
+	lines := renderCard(th, row, 100)
+	card := stripAnsi(strings.Join(lines, "\n"))
+
+	// Locate each key's position in the rendered output.
+	idxInterval := strings.Index(card, "interval")
+	idxMode := strings.Index(card, "mode")
+	idxTTL := strings.Index(card, "ttl")
+
+	require.Greater(t, idxInterval, -1, `"interval" key must appear in the rendered card`)
+	require.Greater(t, idxMode, -1, `"mode" key must appear in the rendered card`)
+	require.Greater(t, idxTTL, -1, `"ttl" key must appear in the rendered card`)
+
+	// Sorted order: "interval" < "mode" < "ttl".
+	assert.Less(t, idxInterval, idxMode, `"interval" must appear before "mode" (sorted key order)`)
+	assert.Less(t, idxMode, idxTTL, `"mode" must appear before "ttl" (sorted key order)`)
 }
 
 // TestSimView_GoldenCascadeResolvableCard: update with cascade-resolvable property.

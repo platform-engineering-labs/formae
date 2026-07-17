@@ -6,6 +6,7 @@ package simview
 
 import (
 	"encoding/json"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -283,17 +284,22 @@ func buildPolicyChangeLines(_ *theme.Theme, r simRow, doneSt, warnSt, subtleSt l
 		return nil
 	}
 
-	// Collect all keys
-	allKeys := map[string]struct{}{}
+	// Collect all keys into a sorted slice for deterministic output order.
+	allKeysSet := map[string]struct{}{}
 	for k := range curr {
-		allKeys[k] = struct{}{}
+		allKeysSet[k] = struct{}{}
 	}
 	for k := range old {
-		allKeys[k] = struct{}{}
+		allKeysSet[k] = struct{}{}
 	}
+	allKeys := make([]string, 0, len(allKeysSet))
+	for k := range allKeysSet {
+		allKeys = append(allKeys, k)
+	}
+	sort.Strings(allKeys)
 
 	var lines []string
-	for k := range allKeys {
+	for _, k := range allKeys {
 		cv, cok := curr[k]
 		ov, ook := old[k]
 		switch {
