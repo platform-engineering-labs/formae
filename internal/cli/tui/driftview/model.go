@@ -48,6 +48,10 @@ type Options struct {
 	// Notice is an optional one-line warning rendered under the header
 	// (e.g. "Drift changed while you were reviewing.").
 	Notice string
+	// SimulateOnly suppresses the revert-all action (a mutating cloud
+	// operation) when the parent apply is running in --simulate mode.
+	// Extract-as-code remains available because it only writes local files.
+	SimulateOnly bool
 }
 
 // screenKind identifies which screen is currently displayed.
@@ -302,7 +306,9 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "r":
-		m.screen = screenRevertConfirm
+		if !m.opts.SimulateOnly {
+			m.screen = screenRevertConfirm
+		}
 
 	case "?":
 		m.showHelp = !m.showHelp

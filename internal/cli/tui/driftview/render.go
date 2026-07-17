@@ -269,21 +269,31 @@ func (m Model) renderFooter() string {
 	countSt := lipgloss.NewStyle().Foreground(p.TextSecondary)
 	countLine := "  " + countSt.Render(fmt.Sprintf("%d selected", count))
 
+	// Under SimulateOnly, the revert action is a cloud mutation and must be
+	// suppressed. Extract remains available (local file write only).
 	hints := []components.KeyHint{
 		{Key: "e", Desc: "extract selected"},
 		{Key: "r", Desc: "revert all (--force)"},
 		{Key: "q", Desc: "abort"},
 	}
+	simulateHints := []components.KeyHint{
+		{Key: "e", Desc: "extract selected"},
+		{Key: "q", Desc: "abort"},
+	}
+	activeHints := hints
+	if m.opts.SimulateOnly {
+		activeHints = simulateHints
+	}
 
 	var bar string
 	if count > 0 {
-		bar = components.FooterBar(m.th, m.width, hints, "")
+		bar = components.FooterBar(m.th, m.width, activeHints, "")
 	} else {
 		// Same layout as components.FooterBar, but the extract hint is dimmed
 		// because there is nothing to extract.
 		dimSt := lipgloss.NewStyle().Foreground(p.TextSubtle)
-		parts := make([]string, 0, len(hints))
-		for i, h := range hints {
+		parts := make([]string, 0, len(activeHints))
+		for i, h := range activeHints {
 			if i == 0 {
 				parts = append(parts, dimSt.Render(h.Key+": "+h.Desc))
 				continue

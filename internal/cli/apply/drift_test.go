@@ -154,6 +154,83 @@ func makeRejected() apimodel.FormaReconcileRejectedError {
 	}
 }
 
+// TestRunDriftFlow_SimulateNeverCallsForcedApply asserts that when opts.Simulate=true
+// and the user chooses DecisionRevertAll with identical drift, forcedApplyFn is
+// NEVER invoked. This is the core regression guard for the P1 bug where
+// --simulate could trigger a real forced apply through the drift flow.
+func TestRunDriftFlow_SimulateNeverCallsForcedApply(t *testing.T) {
+	stubDriftSeams(t)
+
+	rejected := makeRejected()
+	launchDriftView = func(th *theme.Theme, r *apimodel.FormaReconcileRejectedError, opts driftview.Options) (driftview.Decision, error) {
+		return driftview.DecisionRevertAll{}, nil
+	}
+
+	// Second simulate returns same rejection (identical drift) — the path that
+	// previously called submitForcedApply directly.
+	applyFn = func(a *app.App, opts *ApplyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
+		return nil, nil, &apimodel.ErrorResponse[apimodel.FormaReconcileRejectedError]{
+			ErrorType: apimodel.ReconcileRejected,
+			Data:      rejected,
+		}
+	}
+
+	forcedApplyFn = func(a *app.App, opts *ApplyOptions) (*apimodel.SubmitCommandResponse, []string, error) {
+		t.Fatal("forcedApplyFn MUST NOT be called when opts.Simulate=true")
+		return nil, nil, nil
+	}
+
+	a := newTestApp()
+	opts := &ApplyOptions{
+		OutputConsumer: printer.ConsumerHuman,
+		FormaFile:      "forma.pkl",
+		Mode:           pkgmodel.FormaApplyModeReconcile,
+		Simulate:       true,
+	}
+	th := theme.New("formae")
+	err := runDriftFlow(a, th, opts, rejected)
+	// Must return cleanly (not an error) — simulate just shows what would happen.
+	require.NoError(t, err)
+}
+
+// TestRunDriftFlow_NonSimulateRevertIdenticalDoesForcedApply is the companion
+// regression pin: without --simulate the forced apply IS invoked.
+func TestRunDriftFlow_NonSimulateRevertIdenticalDoesForcedApply(t *testing.T) {
+	stubDriftSeams(t)
+
+	rejected := makeRejected()
+	launchDriftView = func(th *theme.Theme, r *apimodel.FormaReconcileRejectedError, opts driftview.Options) (driftview.Decision, error) {
+		return driftview.DecisionRevertAll{}, nil
+	}
+
+	applyFn = func(a *app.App, opts *ApplyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
+		return nil, nil, &apimodel.ErrorResponse[apimodel.FormaReconcileRejectedError]{
+			ErrorType: apimodel.ReconcileRejected,
+			Data:      rejected,
+		}
+	}
+
+	forcedApplyCalled := false
+	forcedApplyFn = func(a *app.App, opts *ApplyOptions) (*apimodel.SubmitCommandResponse, []string, error) {
+		forcedApplyCalled = true
+		return &apimodel.SubmitCommandResponse{CommandID: "force-123"}, nil, nil
+	}
+
+	launchWatch = func(a *app.App, commandID string) error { return nil }
+
+	a := newTestApp()
+	opts := &ApplyOptions{
+		OutputConsumer: printer.ConsumerHuman,
+		FormaFile:      "forma.pkl",
+		Mode:           pkgmodel.FormaApplyModeReconcile,
+		Simulate:       false, // NOT simulating — forced apply must fire
+	}
+	th := theme.New("formae")
+	err := runDriftFlow(a, th, opts, rejected)
+	require.NoError(t, err)
+	assert.True(t, forcedApplyCalled, "forcedApplyFn must be called when Simulate=false on identical drift revert")
+}
+
 func TestRunDriftFlow_Abort(t *testing.T) {
 	stubDriftSeams(t)
 

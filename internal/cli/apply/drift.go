@@ -57,7 +57,7 @@ var generateSourceCodeFn = func(a *app.App, forma *pkgmodel.Forma, path string) 
 // runDriftFlow drives the reconcile-rejected loop; returns nil when handled
 // (extracted or self-resolved) and submits+watches on a validated revert.
 func runDriftFlow(a *app.App, th *theme.Theme, opts *ApplyOptions, rejected apimodel.FormaReconcileRejectedError) error {
-	driftOpts := driftview.Options{}
+	driftOpts := driftview.Options{SimulateOnly: opts.Simulate}
 	for {
 		decision, err := launchDriftView(th, &rejected, driftOpts)
 		if err != nil {
@@ -79,6 +79,13 @@ func runDriftFlow(a *app.App, th *theme.Theme, opts *ApplyOptions, rejected apim
 			return handleExtract(a, th, d)
 
 		case driftview.DecisionRevertAll:
+			// Hard guard: under --simulate, never perform a real cloud mutation.
+			// The UI already hides the revert action (SimulateOnly on driftOpts),
+			// but defend in depth here in case the model is bypassed.
+			if opts.Simulate {
+				fmt.Print(display.Grey("Command will not continue — simulation only\n"))
+				return nil
+			}
 			newRes, _, simErr := applyFn(a, opts, true)
 			if simErr != nil {
 				if reconcileErr, ok := simErr.(*apimodel.ErrorResponse[apimodel.FormaReconcileRejectedError]); ok {
@@ -88,7 +95,8 @@ func runDriftFlow(a *app.App, th *theme.Theme, opts *ApplyOptions, rejected apim
 					}
 					rejected = newRejected
 					driftOpts = driftview.Options{
-						Notice: "Drift changed while you were reviewing — re-confirm against the current changes.",
+						Notice:       "Drift changed while you were reviewing — re-confirm against the current changes.",
+						SimulateOnly: opts.Simulate,
 					}
 					continue
 				}

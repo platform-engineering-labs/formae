@@ -229,6 +229,33 @@ func TestDriftView_NoticeRendered(t *testing.T) {
 	assert.Contains(t, plain(m.View()), notice)
 }
 
+// TestDriftView_SimulateOnly_RevertKeyAbsent checks that when SimulateOnly=true
+// the footer does not contain the "r: revert all" action (it's a mutating
+// operation that must be suppressed under --simulate).
+func TestDriftView_SimulateOnly_RevertKeyAbsent(t *testing.T) {
+	th := theme.New("formae")
+	m := New(th, makeFixtureError(), Options{SimulateOnly: true})
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: 32})
+	m = mm.(Model)
+
+	p := plain(m.View())
+	assert.NotContains(t, p, "r: revert all", "revert action must be hidden under SimulateOnly")
+}
+
+// TestDriftView_SimulateOnly_RKeyIsNoOp checks that pressing "r" when
+// SimulateOnly=true does not navigate to the revert confirmation screen.
+func TestDriftView_SimulateOnly_RKeyIsNoOp(t *testing.T) {
+	th := theme.New("formae")
+	m := New(th, makeFixtureError(), Options{SimulateOnly: true})
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: 32})
+	m = mm.(Model)
+
+	m = press(t, m, "r")
+	assert.Equal(t, screenList, m.screen, "r must not open revert confirm screen when SimulateOnly=true")
+}
+
 // TestDriftView_ViewLineCountMatchesHeight asserts the exact-fill contract at
 // several terminal sizes.
 func TestDriftView_ViewLineCountMatchesHeight(t *testing.T) {
