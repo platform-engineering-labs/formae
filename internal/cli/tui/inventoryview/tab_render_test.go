@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -294,4 +295,36 @@ func TestSetSize_StoresDimensions(t *testing.T) {
 	tm2 := tm.setSize(80, 20)
 	assert.Equal(t, 80, tm2.width)
 	assert.Equal(t, 20, tm2.height)
+}
+
+// ---------------------------------------------------------------------------
+// Narrow-terminal regression: setSize at <30 cols must not panic and every
+// rendered line must be ≤ width printable columns (R8 overflow guard).
+// ---------------------------------------------------------------------------
+
+func TestNarrowTerminal_NoParicAndFitsWidth(t *testing.T) {
+	// narrowWidth must be < 22 (= Label col width 20 + 2 padding) to trigger
+	// the overflow guard in setSize, which rebuilds the table via NewTable.
+	const narrowWidth = 15
+	const narrowHeight = 20
+
+	th := theme.New("formae")
+	rows := buildFixtureResources(5)
+	tm := makeTab(th, rows)
+
+	// This exercises the overflow guard in setSize which rebuilds the table.
+	// Before the fix, components.NewTable(nil, cols) panics here.
+	require.NotPanics(t, func() {
+		tm = tm.setSize(narrowWidth, narrowHeight)
+		tm = tm.sync(0)
+	}, "setSize/sync must not panic on very narrow terminals")
+
+	lines := tm.view(th, 0, "⠋")
+	assert.Len(t, lines, narrowHeight, "view must return exactly height lines")
+
+	for i, line := range lines {
+		w := lipgloss.Width(line)
+		assert.LessOrEqualf(t, w, narrowWidth,
+			"line %d is %d cols wide (limit %d): %q", i, w, narrowWidth, line)
+	}
 }

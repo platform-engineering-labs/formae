@@ -28,6 +28,7 @@ const (
 // shell only — the engine never calls SortBy on it (R1).
 type tabModel struct {
 	spec    tabSpec
+	th      *theme.Theme
 	state   tabState
 	allRows []row
 	err     error
@@ -44,6 +45,7 @@ type tabModel struct {
 func newTabModel(th *theme.Theme, spec tabSpec) tabModel {
 	return tabModel{
 		spec:    spec,
+		th:      th,
 		state:   tabNotLoaded,
 		sortCol: -1,
 		sortDir: components.SortNone,

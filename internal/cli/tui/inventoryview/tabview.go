@@ -73,7 +73,7 @@ func (t tabModel) setSize(width, height int) tabModel {
 			columns: cols,
 			fetch:   t.spec.fetch,
 		}
-		t.table = components.NewTable(nil, cols)
+		t.table = components.NewTable(t.th, cols)
 	}
 
 	t.table = t.table.SetSize(width, height)
