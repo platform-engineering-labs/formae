@@ -67,9 +67,8 @@ type tabLoadedMsg struct {
 	err  error
 }
 
-// newSpecs returns the four tab specifications. Specs for tabs not yet fully
-// built return placeholder cell sets; Tasks 5-6 replace the cell builders.
-func newSpecs(_ func() time.Time) [4]tabSpec {
+// newSpecs returns the four tab specifications.
+func newSpecs(now func() time.Time) [4]tabSpec {
 	return [4]tabSpec{
 		TabResources: {
 			title:  "Resources",
@@ -129,11 +128,13 @@ func newSpecs(_ func() time.Time) [4]tabSpec {
 				if err != nil {
 					return nil, nags, err
 				}
+				clockNow := time.Now()
+				if now != nil {
+					clockNow = now()
+				}
 				rows := make([]row, 0, len(stacks))
 				for _, s := range stacks {
-					rows = append(rows, row{
-						cells: []string{s.Label, s.Description, ""},
-					})
+					rows = append(rows, stackRow(s, clockNow))
 				}
 				return rows, nags, nil
 			},
@@ -154,9 +155,7 @@ func newSpecs(_ func() time.Time) [4]tabSpec {
 				}
 				rows := make([]row, 0, len(policies))
 				for _, p := range policies {
-					rows = append(rows, row{
-						cells: []string{p.Label, p.Type, "", ""},
-					})
+					rows = append(rows, policyRow(p))
 				}
 				return rows, nags, nil
 			},
