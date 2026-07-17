@@ -100,6 +100,17 @@ func (t Table) SortBy(col int, dir SortDirection) Table {
 	return t.applySort().reproject()
 }
 
+// SetSortState marks the header sort indicator without reordering rows.
+// Use this when the caller owns row ordering; SortBy both sorts and marks.
+func (t Table) SetSortState(col int, dir SortDirection) Table {
+	if col < 0 || col >= len(t.cols) || dir == SortNone {
+		t.sortCol, t.sortDir = -1, SortNone
+		return t.reproject()
+	}
+	t.sortCol, t.sortDir = col, dir
+	return t.reproject()
+}
+
 // Update handles navigation key messages.
 func (t Table) Update(msg tea.Msg) (Table, tea.Cmd) {
 	var cmd tea.Cmd

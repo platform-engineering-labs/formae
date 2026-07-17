@@ -85,3 +85,24 @@ func TestTable_CursorNavigation(t *testing.T) {
 func TestTable_Golden(t *testing.T) {
 	tuitest.RequireGolden(t, []byte(newTestTable(80).View()))
 }
+
+func TestTable_SetSortState_IndicatorWithoutReorder(t *testing.T) {
+	th := theme.New("formae")
+	tbl := NewTable(th, []Column{{Title: "A", Width: 5}, {Title: "B", Width: 5}})
+	tbl = tbl.SetRows([][]string{{"zz", "1"}, {"aa", "2"}}).SetSize(40, 10)
+
+	tbl = tbl.SetSortState(0, SortAsc)
+
+	view := tbl.View()
+	assert.Contains(t, view, "A ▲")
+	// Row order must be untouched (SortBy would have moved "aa" first).
+	assert.Equal(t, []string{"zz", "1"}, tbl.SelectedRow())
+}
+
+func TestTable_SetSortState_ClearedBySortNone(t *testing.T) {
+	th := theme.New("formae")
+	tbl := NewTable(th, []Column{{Title: "A", Width: 5}})
+	tbl = tbl.SetRows([][]string{{"x"}}).SetSize(40, 10).SetSortState(0, SortDesc)
+	tbl = tbl.SetSortState(-1, SortNone)
+	assert.NotContains(t, tbl.View(), "▼")
+}
