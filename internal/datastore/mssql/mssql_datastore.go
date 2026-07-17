@@ -609,7 +609,7 @@ func (d *DatastoreMSSQL) GetResourceModificationsSinceLastReconcile(stack string
 
 	query := fmt.Sprintf(`
 SELECT DISTINCT
-  T2.type, T2.label, T2.operation
+  T2.type, T2.label, T2.operation, T2.ksuid
 FROM %[1]s AS T1
 JOIN resources AS T2 ON T1.command_id = T2.command_id
 WHERE EXISTS (
@@ -629,25 +629,103 @@ WHERE EXISTS (
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
 
-	seen := make(map[datastore.ResourceModification]struct{})
+	// Phase 1: fully drain and close rows before issuing secondary queries.
+	type rawRow struct {
+		resourceType string
+		label        string
+		operation    string
+		ksuid        string
+	}
+	var raw []rawRow
 	for rows.Next() {
-		var resourceType, label, operation string
-		if err := rows.Scan(&resourceType, &label, &operation); err != nil {
+		var r rawRow
+		if err := rows.Scan(&r.resourceType, &r.label, &r.operation, &r.ksuid); err != nil {
+			_ = rows.Close()
 			return nil, err
 		}
-		seen[datastore.ResourceModification{Stack: stack, Type: resourceType, Label: label, Operation: operation}] = struct{}{}
+		raw = append(raw, r)
 	}
 	if err := rows.Err(); err != nil {
+		_ = rows.Close()
 		return nil, err
 	}
+	_ = rows.Close()
 
-	out := make([]datastore.ResourceModification, 0, len(seen))
-	for m := range seen {
-		out = append(out, m)
+	// Phase 2: for update ops, fetch the current and at-last-reconcile properties.
+	var out []datastore.ResourceModification
+	for _, r := range raw {
+		mod := datastore.ResourceModification{Stack: stack, Type: r.resourceType, Label: r.label, Operation: r.operation}
+		if r.operation == "update" {
+			curProps, propErr := d.fetchCurrentProperties(ctx, r.ksuid)
+			if propErr != nil {
+				return nil, fmt.Errorf("failed to fetch current properties for %s: %w", r.ksuid, propErr)
+			}
+			oldProps, propErr := d.fetchReconcileProperties(ctx, r.ksuid, stack)
+			if propErr != nil {
+				return nil, fmt.Errorf("failed to fetch reconcile properties for %s: %w", r.ksuid, propErr)
+			}
+			mod.Properties = curProps
+			mod.OldProperties = oldProps
+		}
+		out = append(out, mod)
 	}
+
 	return out, nil
+}
+
+// fetchCurrentProperties returns the Properties JSON from the latest resource
+// version for the given ksuid.
+func (d *DatastoreMSSQL) fetchCurrentProperties(ctx context.Context, ksuid string) (json.RawMessage, error) {
+	query := fmt.Sprintf(`
+SELECT TOP (1) JSON_QUERY(data, '$.Properties')
+FROM resources
+WHERE ksuid = @p1
+ORDER BY version %s DESC`, binColl)
+
+	var props sql.NullString
+	if err := d.conn.QueryRowContext(ctx, query, ksuid).Scan(&props); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if !props.Valid || props.String == "" {
+		return nil, nil
+	}
+	return json.RawMessage(props.String), nil
+}
+
+// fetchReconcileProperties returns the Properties JSON of the resource version
+// that was current as of the most recent reconcile command for the given stack:
+// the latest version whose owning command does not postdate that reconcile.
+// A resource untouched by the last reconcile (no new version row) still
+// resolves to the version it had when that reconcile ran.
+func (d *DatastoreMSSQL) fetchReconcileProperties(ctx context.Context, ksuid, stack string) (json.RawMessage, error) {
+	query := fmt.Sprintf(`
+SELECT TOP (1) JSON_QUERY(r.data, '$.Properties')
+FROM resources r
+JOIN forma_commands fc_r ON fc_r.command_id = r.command_id
+WHERE r.ksuid = @p1
+  AND fc_r.timestamp <= (
+    SELECT TOP (1) fc.timestamp FROM forma_commands fc
+    WHERE fc.config_mode = 'reconcile'
+      AND EXISTS (SELECT 1 FROM resources rr WHERE rr.command_id = fc.command_id AND rr.stack = @p2)
+    ORDER BY fc.timestamp DESC
+  )
+ORDER BY r.version %s DESC`, binColl)
+
+	var props sql.NullString
+	if err := d.conn.QueryRowContext(ctx, query, ksuid, stack).Scan(&props); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if !props.Valid || props.String == "" {
+		return nil, nil
+	}
+	return json.RawMessage(props.String), nil
 }
 
 func (d *DatastoreMSSQL) QueryFormaCommands(query *datastore.StatusQuery) ([]*forma_command.FormaCommand, error) {

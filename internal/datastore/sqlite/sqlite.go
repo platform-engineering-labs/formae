@@ -9,8 +9,6 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
-	"maps"
-	"slices"
 	"strings"
 	"time"
 
@@ -567,7 +565,8 @@ func (d DatastoreSQLite) GetResourceModificationsSinceLastReconcile(stack string
 SELECT DISTINCT
   T2.type,
   T2.label,
-  T2.operation
+  T2.operation,
+  T2.ksuid
 FROM %s AS T1
 JOIN resources AS T2
   ON T1.command_id = T2.command_id
@@ -605,20 +604,118 @@ WHERE
 	if err != nil {
 		return nil, err
 	}
-	defer closeRows(rows)
 
-	modifications := make(map[datastore.ResourceModification]struct{})
+	// Phase 1: collect rows. We must fully drain and close rows before opening
+	// secondary queries, because SQLite uses a single connection and a concurrent
+	// QueryRow while rows is open will deadlock waiting for that connection.
+	type rawRow struct {
+		resourceType string
+		label        string
+		operation    string
+		ksuid        string
+	}
+	var raw []rawRow
 	for rows.Next() {
-		var resourceType string
-		var label string
-		var operation string
-		if err := rows.Scan(&resourceType, &label, &operation); err != nil {
+		var r rawRow
+		if err := rows.Scan(&r.resourceType, &r.label, &r.operation, &r.ksuid); err != nil {
+			closeRows(rows)
 			return nil, err
 		}
-		modifications[datastore.ResourceModification{Stack: stack, Type: resourceType, Label: label, Operation: operation}] = struct{}{}
+		raw = append(raw, r)
+	}
+	if err := rows.Err(); err != nil {
+		closeRows(rows)
+		return nil, err
+	}
+	closeRows(rows)
+
+	// Phase 2: for update ops, fetch properties via secondary queries (rows is now closed).
+	var modifications []datastore.ResourceModification
+	for _, r := range raw {
+		mod := datastore.ResourceModification{
+			Stack:     stack,
+			Type:      r.resourceType,
+			Label:     r.label,
+			Operation: r.operation,
+		}
+		if r.operation == "update" {
+			curProps, propErr := d.fetchCurrentProperties(r.ksuid)
+			if propErr != nil {
+				return nil, fmt.Errorf("failed to fetch current properties for %s: %w", r.ksuid, propErr)
+			}
+			oldProps, propErr := d.fetchReconcileProperties(r.ksuid, stack)
+			if propErr != nil {
+				return nil, fmt.Errorf("failed to fetch reconcile properties for %s: %w", r.ksuid, propErr)
+			}
+			mod.Properties = curProps
+			mod.OldProperties = oldProps
+		}
+		modifications = append(modifications, mod)
 	}
 
-	return slices.Collect(maps.Keys(modifications)), nil
+	return modifications, nil
+}
+
+// fetchCurrentProperties returns the Properties JSON from the latest resource version for the given ksuid.
+func (d DatastoreSQLite) fetchCurrentProperties(ksuid string) (json.RawMessage, error) {
+	query := `
+SELECT json_extract(data, '$.Properties')
+FROM resources
+WHERE ksuid = ?
+ORDER BY version DESC
+LIMIT 1
+`
+	var props sql.NullString
+	if err := d.conn.QueryRow(query, ksuid).Scan(&props); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if !props.Valid || props.String == "" {
+		return nil, nil
+	}
+	return json.RawMessage(props.String), nil
+}
+
+// fetchReconcileProperties returns the Properties JSON of the resource version
+// that was current as of the most recent reconcile command for the given stack:
+// the latest version whose owning command does not postdate that reconcile.
+// A resource untouched by the last reconcile (no new version row) still
+// resolves to the version it had when that reconcile ran.
+func (d DatastoreSQLite) fetchReconcileProperties(ksuid, stack string) (json.RawMessage, error) {
+	query := `
+SELECT json_extract(r.data, '$.Properties')
+FROM resources r
+JOIN forma_commands fc_r
+  ON fc_r.command_id = r.command_id
+WHERE r.ksuid = ?
+  AND fc_r.timestamp <= (
+    SELECT fc.timestamp
+    FROM forma_commands fc
+    WHERE fc.config_mode = 'reconcile'
+      AND EXISTS (
+        SELECT 1 FROM resources rr
+        WHERE rr.command_id = fc.command_id
+          AND rr.stack = ?
+      )
+    ORDER BY fc.timestamp DESC
+    LIMIT 1
+  )
+ORDER BY r.version DESC
+LIMIT 1
+`
+	var props sql.NullString
+	if err := d.conn.QueryRow(query, ksuid, stack).Scan(&props); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if !props.Valid || props.String == "" {
+		return nil, nil
+	}
+	return json.RawMessage(props.String), nil
 }
 
 func (d DatastoreSQLite) Close() {

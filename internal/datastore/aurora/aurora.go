@@ -958,7 +958,8 @@ func (d *DatastoreAuroraDataAPI) GetResourceModificationsSinceLastReconcile(stac
 	SELECT DISTINCT
 	T2.type,
 	T2.label,
-	T2.operation
+	T2.operation,
+	T2.ksuid
 	FROM forma_commands AS T1
 	JOIN resources AS T2
 	ON T1.command_id = T2.command_id
@@ -999,23 +1000,107 @@ func (d *DatastoreAuroraDataAPI) GetResourceModificationsSinceLastReconcile(stac
 		return nil, err
 	}
 
-	modifications := make(map[datastore.ResourceModification]struct{})
+	var result []datastore.ResourceModification
 	for _, record := range output.Records {
-		if len(record) < 3 {
+		if len(record) < 4 {
 			continue
 		}
 		resourceType, _ := getStringField(record[0])
 		label, _ := getStringField(record[1])
 		operation, _ := getStringField(record[2])
-		modifications[datastore.ResourceModification{Stack: stack, Type: resourceType, Label: label, Operation: operation}] = struct{}{}
-	}
-
-	result := make([]datastore.ResourceModification, 0, len(modifications))
-	for mod := range modifications {
+		ksuid, _ := getStringField(record[3])
+		mod := datastore.ResourceModification{Stack: stack, Type: resourceType, Label: label, Operation: operation}
+		if operation == "update" {
+			curProps, propErr := d.fetchCurrentProperties(ctx, ksuid)
+			if propErr != nil {
+				return nil, fmt.Errorf("failed to fetch current properties for %s: %w", ksuid, propErr)
+			}
+			oldProps, propErr := d.fetchReconcileProperties(ctx, ksuid, stack)
+			if propErr != nil {
+				return nil, fmt.Errorf("failed to fetch reconcile properties for %s: %w", ksuid, propErr)
+			}
+			mod.Properties = curProps
+			mod.OldProperties = oldProps
+		}
 		result = append(result, mod)
 	}
 
 	return result, nil
+}
+
+// fetchCurrentProperties returns the Properties JSON from the latest resource
+// version for the given ksuid.
+func (d *DatastoreAuroraDataAPI) fetchCurrentProperties(ctx context.Context, ksuid string) (json.RawMessage, error) {
+	query := `
+	SELECT data->>'Properties'
+	FROM resources
+	WHERE ksuid = :ksuid
+	ORDER BY version COLLATE "C" DESC
+	LIMIT 1
+	`
+	params := []types.SqlParameter{
+		{Name: aws.String("ksuid"), Value: &types.FieldMemberStringValue{Value: ksuid}},
+	}
+
+	output, err := d.executeStatement(ctx, query, params)
+	if err != nil {
+		return nil, err
+	}
+	if len(output.Records) == 0 || len(output.Records[0]) == 0 {
+		return nil, nil
+	}
+	props, err := getStringField(output.Records[0][0])
+	if err != nil || props == "" {
+		return nil, err
+	}
+	return json.RawMessage(props), nil
+}
+
+// fetchReconcileProperties returns the Properties JSON of the resource version
+// that was current as of the most recent reconcile command for the given stack:
+// the latest version whose owning command does not postdate that reconcile.
+// A resource untouched by the last reconcile (no new version row) still
+// resolves to the version it had when that reconcile ran.
+func (d *DatastoreAuroraDataAPI) fetchReconcileProperties(ctx context.Context, ksuid, stack string) (json.RawMessage, error) {
+	query := `
+	SELECT r.data->>'Properties'
+	FROM resources r
+	JOIN forma_commands fc_r
+	ON fc_r.command_id = r.command_id
+	WHERE r.ksuid = :ksuid
+	AND fc_r.timestamp <= (
+		SELECT fc.timestamp
+		FROM forma_commands fc
+		WHERE fc.config_mode = 'reconcile'
+		AND EXISTS (
+			SELECT 1
+			FROM resources rr
+			WHERE rr.command_id = fc.command_id
+			AND rr.stack = :stack
+		)
+		ORDER BY fc.timestamp DESC
+		LIMIT 1
+	)
+	ORDER BY r.version COLLATE "C" DESC
+	LIMIT 1
+	`
+	params := []types.SqlParameter{
+		{Name: aws.String("ksuid"), Value: &types.FieldMemberStringValue{Value: ksuid}},
+		{Name: aws.String("stack"), Value: &types.FieldMemberStringValue{Value: stack}},
+	}
+
+	output, err := d.executeStatement(ctx, query, params)
+	if err != nil {
+		return nil, err
+	}
+	if len(output.Records) == 0 || len(output.Records[0]) == 0 {
+		return nil, nil
+	}
+	props, err := getStringField(output.Records[0][0])
+	if err != nil || props == "" {
+		return nil, err
+	}
+	return json.RawMessage(props), nil
 }
 
 func (d *DatastoreAuroraDataAPI) QueryFormaCommands(statusQuery *datastore.StatusQuery) ([]*forma_command.FormaCommand, error) {

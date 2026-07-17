@@ -890,6 +890,222 @@ func RunGetResourceModificationsSinceLastReconcile(t *testing.T, newDS func(t *t
 		assert.True(t, labels["bucket-2"], "Should include first patch")
 		assert.True(t, labels["bucket-3"], "Should include second patch")
 	})
+
+	t.Run("GetResourceModificationsSinceLastReconcile_UpdateOpHasProperties", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		// 1. Store a reconcile command that creates a resource with props {"foo":"v1"}
+		reconcileCmd := &forma_command.FormaCommand{
+			ID:              "props-reconcile-id",
+			Command:         pkgmodel.CommandApply,
+			Config:          config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
+			StartTs:         util.TimeNow().Add(-10 * time.Minute),
+			ResourceUpdates: []resource_update.ResourceUpdate{{StackLabel: "test-stack"}},
+		}
+		resourceKsuid := util.NewID()
+		_, err := ds.StoreResource(&pkgmodel.Resource{
+			Ksuid:      resourceKsuid,
+			NativeID:   "res-update-1",
+			Stack:      "test-stack",
+			Type:       "AWS::S3::Bucket",
+			Label:      "update-bucket",
+			Target:     "default-target",
+			Properties: json.RawMessage(`{"foo":"v1"}`),
+			Managed:    true,
+		}, reconcileCmd.ID)
+		assert.NoError(t, err)
+		err = ds.StoreFormaCommand(reconcileCmd, reconcileCmd.ID)
+		assert.NoError(t, err)
+
+		// 2. Store a patch command (update op) with new props {"foo":"v2"}
+		// Use the same ksuid so StoreResource creates a new version for the same resource.
+		patchCmd := &forma_command.FormaCommand{
+			ID:              "props-patch-id",
+			Command:         pkgmodel.CommandApply,
+			Config:          config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModePatch},
+			StartTs:         util.TimeNow().Add(-5 * time.Minute),
+			ResourceUpdates: []resource_update.ResourceUpdate{{StackLabel: "test-stack"}},
+		}
+		_, err = ds.StoreResource(&pkgmodel.Resource{
+			Ksuid:      resourceKsuid,
+			NativeID:   "res-update-1",
+			Stack:      "test-stack",
+			Type:       "AWS::S3::Bucket",
+			Label:      "update-bucket",
+			Target:     "default-target",
+			Properties: json.RawMessage(`{"foo":"v2"}`),
+			Managed:    true,
+		}, patchCmd.ID)
+		assert.NoError(t, err)
+		err = ds.StoreFormaCommand(patchCmd, patchCmd.ID)
+		assert.NoError(t, err)
+
+		// 3. The patch command also brings a brand-new resource under management
+		// (created out-of-band since the last reconcile — no version existed at
+		// reconcile time) and deletes another pre-existing resource.
+		_, err = ds.StoreResource(&pkgmodel.Resource{
+			Ksuid:      util.NewID(),
+			NativeID:   "res-created-1",
+			Stack:      "test-stack",
+			Type:       "AWS::S3::Bucket",
+			Label:      "created-bucket",
+			Target:     "default-target",
+			Properties: json.RawMessage(`{"foo":"new"}`),
+			Managed:    true,
+		}, patchCmd.ID)
+		assert.NoError(t, err)
+		_, err = ds.DeleteResource(&pkgmodel.Resource{
+			Ksuid:    util.NewID(),
+			NativeID: "res-deleted-1",
+			Stack:    "test-stack",
+			Type:     "AWS::S3::Bucket",
+			Label:    "deleted-bucket",
+			Target:   "default-target",
+			Managed:  true,
+		}, patchCmd.ID)
+		assert.NoError(t, err)
+
+		// 4. Call GetResourceModificationsSinceLastReconcile
+		modifications, err := ds.GetResourceModificationsSinceLastReconcile("test-stack")
+		assert.NoError(t, err)
+		assert.Len(t, modifications, 3)
+
+		byLabel := make(map[string]datastore.ResourceModification, len(modifications))
+		for _, m := range modifications {
+			byLabel[m.Label] = m
+		}
+
+		// 5. The update op carries both property documents:
+		// OldProperties is the at-last-reconcile state, Properties the current one.
+		mod, ok := byLabel["update-bucket"]
+		if !ok {
+			t.Fatal("update-bucket modification not returned")
+		}
+		assert.Equal(t, "update", mod.Operation)
+		assert.NotEmpty(t, mod.Properties, "Properties (current) should be populated for update ops")
+		assert.NotEmpty(t, mod.OldProperties, "OldProperties should be populated for update ops")
+		assert.JSONEq(t, `{"foo":"v1"}`, string(mod.OldProperties))
+		assert.JSONEq(t, `{"foo":"v2"}`, string(mod.Properties))
+
+		// 6. A resource with no version at the last reconcile carries only the
+		// current properties; OldProperties stays empty so no patch can (or
+		// should) be computed for it.
+		created, ok := byLabel["created-bucket"]
+		if !ok {
+			t.Fatal("created-bucket modification not returned")
+		}
+		assert.NotEmpty(t, created.Properties, "current properties should be populated")
+		assert.Empty(t, created.OldProperties, "no at-reconcile version exists — OldProperties must stay empty")
+
+		// 7. Delete ops stay label-only.
+		deleted, ok := byLabel["deleted-bucket"]
+		if !ok {
+			t.Fatal("deleted-bucket modification not returned")
+		}
+		assert.Equal(t, "delete", deleted.Operation)
+		assert.Empty(t, deleted.Properties, "delete ops must not carry Properties")
+		assert.Empty(t, deleted.OldProperties, "delete ops must not carry OldProperties")
+	})
+
+	t.Run("GetResourceModificationsSinceLastReconcile_OldPropertiesPredateLastReconcile", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		// Reconcile #1 creates two resources.
+		reconcile1 := &forma_command.FormaCommand{
+			ID:              "predates-reconcile-1",
+			Command:         pkgmodel.CommandApply,
+			Config:          config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
+			StartTs:         util.TimeNow().Add(-20 * time.Minute),
+			ResourceUpdates: []resource_update.ResourceUpdate{{StackLabel: "test-stack"}},
+		}
+		driftKsuid := util.NewID()
+		otherKsuid := util.NewID()
+		_, err := ds.StoreResource(&pkgmodel.Resource{
+			Ksuid:      driftKsuid,
+			NativeID:   "res-drift",
+			Stack:      "test-stack",
+			Type:       "AWS::S3::Bucket",
+			Label:      "drift-bucket",
+			Target:     "default-target",
+			Properties: json.RawMessage(`{"foo":"v1"}`),
+			Managed:    true,
+		}, reconcile1.ID)
+		assert.NoError(t, err)
+		_, err = ds.StoreResource(&pkgmodel.Resource{
+			Ksuid:      otherKsuid,
+			NativeID:   "res-other",
+			Stack:      "test-stack",
+			Type:       "AWS::S3::Bucket",
+			Label:      "other-bucket",
+			Target:     "default-target",
+			Properties: json.RawMessage(`{"bar":"b1"}`),
+			Managed:    true,
+		}, reconcile1.ID)
+		assert.NoError(t, err)
+		assert.NoError(t, ds.StoreFormaCommand(reconcile1, reconcile1.ID))
+
+		// Reconcile #2 only touches the other resource — the drifting resource
+		// gets no new version row from it. This is the common case: a reconcile
+		// only writes rows for resources it actually changed.
+		reconcile2 := &forma_command.FormaCommand{
+			ID:              "predates-reconcile-2",
+			Command:         pkgmodel.CommandApply,
+			Config:          config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
+			StartTs:         util.TimeNow().Add(-10 * time.Minute),
+			ResourceUpdates: []resource_update.ResourceUpdate{{StackLabel: "test-stack"}},
+		}
+		_, err = ds.StoreResource(&pkgmodel.Resource{
+			Ksuid:      otherKsuid,
+			NativeID:   "res-other",
+			Stack:      "test-stack",
+			Type:       "AWS::S3::Bucket",
+			Label:      "other-bucket",
+			Target:     "default-target",
+			Properties: json.RawMessage(`{"bar":"b2"}`),
+			Managed:    true,
+		}, reconcile2.ID)
+		assert.NoError(t, err)
+		assert.NoError(t, ds.StoreFormaCommand(reconcile2, reconcile2.ID))
+
+		// An out-of-band patch updates the drifting resource after reconcile #2.
+		patchCmd := &forma_command.FormaCommand{
+			ID:              "predates-patch-id",
+			Command:         pkgmodel.CommandApply,
+			Config:          config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModePatch},
+			StartTs:         util.TimeNow().Add(-5 * time.Minute),
+			ResourceUpdates: []resource_update.ResourceUpdate{{StackLabel: "test-stack"}},
+		}
+		_, err = ds.StoreResource(&pkgmodel.Resource{
+			Ksuid:      driftKsuid,
+			NativeID:   "res-drift",
+			Stack:      "test-stack",
+			Type:       "AWS::S3::Bucket",
+			Label:      "drift-bucket",
+			Target:     "default-target",
+			Properties: json.RawMessage(`{"foo":"v2"}`),
+			Managed:    true,
+		}, patchCmd.ID)
+		assert.NoError(t, err)
+		assert.NoError(t, ds.StoreFormaCommand(patchCmd, patchCmd.ID))
+
+		modifications, err := ds.GetResourceModificationsSinceLastReconcile("test-stack")
+		assert.NoError(t, err)
+		assert.Len(t, modifications, 1)
+		if len(modifications) == 0 {
+			t.Fatal("no modifications returned, cannot proceed")
+		}
+		mod := modifications[0]
+		assert.Equal(t, "drift-bucket", mod.Label)
+		assert.Equal(t, "update", mod.Operation)
+		// The drifting resource's version at the last reconcile predates that
+		// reconcile (it was written by reconcile #1) — it must still resolve.
+		assert.JSONEq(t, `{"foo":"v1"}`, string(mod.OldProperties))
+		assert.JSONEq(t, `{"foo":"v2"}`, string(mod.Properties))
+	})
 }
 
 // RunStoreResourceAfterDeleteWithSameNativeID verifies that when a resource is deleted
