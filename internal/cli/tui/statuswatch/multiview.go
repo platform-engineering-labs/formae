@@ -223,12 +223,7 @@ func (v multiView) rowStyles(h health, cursor bool) (id, text lipgloss.Style) {
 // Uses utf8.RuneCountInString for measurement on plain (ANSI-free) strings,
 // which is appropriate for all cell content we build before styling.
 func pad(s string, w int) string {
-	n := utf8.RuneCountInString(s)
-	if n >= w {
-		runes := []rune(s)
-		return string(runes[:w])
-	}
-	return s + strings.Repeat(" ", w-n)
+	return components.Pad(s, w)
 }
 
 // headerRow renders the column header line with sort indicators and sort-hi

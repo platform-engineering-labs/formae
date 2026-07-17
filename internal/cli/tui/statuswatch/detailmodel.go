@@ -292,10 +292,7 @@ func (d detailModel) View(height int) string {
 		labelW, typeW, stackW := groupLayout(g.kind, w)
 
 		// Section header
-		headerStr := "\n  " + lipgloss.NewStyle().
-			Foreground(p.SecondaryAccent).
-			Bold(true).
-			Render("▌ "+g.title) + "\n"
+		headerStr := "\n  " + components.SectionHeader(d.th, g.title) + "\n"
 		body.WriteString(headerStr)
 		lineCount += 2 // blank + header line
 
@@ -560,11 +557,9 @@ func (d detailModel) renderSummaryRow(r updateRow, kind updateKind, labelW, type
 		if maxW < 4 {
 			maxW = 4
 		}
-		runes := []rune(s)
-		if len(runes) > maxW-1 {
-			return string(runes[:maxW-2]) + "…"
-		}
-		return s
+		// Delegate to components.Truncate. The local convention is "give maxW-1
+		// visible runes when cut"; Truncate(s, w) gives exactly w, so we pass maxW-1.
+		return components.Truncate(s, maxW-1)
 	}
 
 	timeStr := formatDetailDuration(r)
