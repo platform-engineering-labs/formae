@@ -170,10 +170,13 @@ func buildGroups(c apimodel.Command) []group {
 }
 
 func visibleRows(g group, limit int) ([]updateRow, int) {
-	if limit >= len(g.rows) {
-		return g.rows, 0
+	n := len(g.rows)
+	if limit > n {
+		limit = n
 	}
-	return g.rows[:limit], len(g.rows) - limit
+	rows := make([]updateRow, limit)
+	copy(rows, g.rows[:limit])
+	return rows, n - limit
 }
 
 func validSortCols(kind updateKind) []int {

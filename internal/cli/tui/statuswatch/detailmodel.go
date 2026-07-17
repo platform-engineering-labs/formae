@@ -88,6 +88,15 @@ func (d detailModel) SetCommand(c apimodel.Command, r row, spinView string, now 
 	}
 	d.groups = newGroups
 
+	// Clamp cursor against the new nav list so a shrinking command never leaves
+	// the cursor pointing past the end of the navigable lines.
+	nav := d.navLines()
+	if len(nav) == 0 {
+		d.cursor = 0
+	} else if d.cursor >= len(nav) {
+		d.cursor = len(nav) - 1
+	}
+
 	// Pinned header + row reuse the multi view's renderers so they share the
 	// responsive column drops and stay aligned; Age is omitted per mockup
 	// VIEW 2, and sortHi -1 suppresses the sort-navigation highlight.

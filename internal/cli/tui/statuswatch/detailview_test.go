@@ -112,3 +112,11 @@ func TestValidSortCols_PerKind(t *testing.T) {
 	assert.Contains(t, validSortCols(kindResource), detailColType)
 	assert.Contains(t, validSortCols(kindPolicy), detailColStack)
 }
+
+func TestVisibleRows_ReturnsCopy(t *testing.T) {
+	g := group{rows: []updateRow{{key: "a"}, {key: "b"}, {key: "c"}}}
+	rows, remaining := visibleRows(g, 2)
+	assert.Equal(t, 1, remaining)
+	rows[0].key = "mutated"
+	assert.Equal(t, "a", g.rows[0].key, "returned slice must not alias the group's backing array")
+}

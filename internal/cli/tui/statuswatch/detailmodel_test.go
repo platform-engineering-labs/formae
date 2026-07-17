@@ -343,6 +343,54 @@ func TestDetailModel_Golden(t *testing.T) {
 	tuitest.RequireGolden(t, []byte(dm.View(30)))
 }
 
+func TestSetCommand_ClampsCursorWhenListShrinks(t *testing.T) {
+	th := theme.New("formae")
+	dm := newDetailModel(th, 100, 40)
+
+	// Build a command with 12 resource updates so visibleRows returns 10 + show-more.
+	c12 := apimodel.Command{
+		CommandID: "cmd-shrink",
+		State:     "InProgress",
+	}
+	for i := 0; i < 12; i++ {
+		c12.ResourceUpdates = append(c12.ResourceUpdates, apimodel.ResourceUpdate{
+			ResourceLabel: fmt.Sprintf("res-%02d", i),
+			ResourceType:  "AWS::S3::Bucket",
+			StackName:     "production",
+			Operation:     "create",
+			State:         "Pending",
+		})
+	}
+	r12 := row{cmd: c12, counts: commandCounts(c12), health: commandHealth(c12, commandCounts(c12))}
+	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
+	dm = dm.SetCommand(c12, r12, "◉", now)
+
+	// Navigate cursor to the last navigable line (show-more row, index 10).
+	nav12 := dm.navLines()
+	dm.cursor = len(nav12) - 1
+	require.Equal(t, 11, len(nav12), "expect 10 rows + 1 show-more = 11 nav entries")
+	require.Equal(t, 10, dm.cursor)
+
+	// Now refresh with a 2-resource command — list shrinks drastically.
+	c2 := apimodel.Command{
+		CommandID: "cmd-shrink",
+		State:     "InProgress",
+		ResourceUpdates: []apimodel.ResourceUpdate{
+			{ResourceLabel: "res-00", ResourceType: "AWS::S3::Bucket", StackName: "production", Operation: "create", State: "Pending"},
+			{ResourceLabel: "res-01", ResourceType: "AWS::S3::Bucket", StackName: "production", Operation: "create", State: "Pending"},
+		},
+	}
+	r2 := row{cmd: c2, counts: commandCounts(c2), health: commandHealth(c2, commandCounts(c2))}
+	dm = dm.SetCommand(c2, r2, "◉", now)
+
+	nav2 := dm.navLines()
+	require.Equal(t, 2, len(nav2), "shrunken command has exactly 2 nav entries")
+
+	// Cursor must be clamped to a valid index — 0 <= cursor < len(nav2).
+	assert.GreaterOrEqual(t, dm.cursor, 0, "cursor must not be negative after shrink")
+	assert.Less(t, dm.cursor, len(nav2), "cursor must be within the new nav list after shrink")
+}
+
 // runeWidth returns the number of Unicode code points in s (suitable for
 // plain/ANSI-stripped strings where each code point is one terminal column).
 func runeWidth(s string) int { return len([]rune(s)) }
