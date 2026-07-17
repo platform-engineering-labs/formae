@@ -21,22 +21,24 @@ import (
 // It wires together the four tab models (Resources, Targets, Stacks, Policies)
 // with lazy per-tab fetching, a shared spinner, and exact-fill rendering.
 type Model struct {
-	th         *theme.Theme
-	keys       tui.KeyMap
-	client     Client
-	opts       Options
-	specs      [4]tabSpec
-	tabs       [4]tabModel
-	active     Tab
-	width      int
-	height     int
-	spinner    spinner.Model
-	nags       []string
-	nagSeen    map[string]struct{}
-	statsSent  bool
-	ready      bool
-	sortOpen   bool // sort selector is visible (replaces footer)
-	sortCursor int  // index into specs[active].columns of selector cursor
+	th            *theme.Theme
+	keys          tui.KeyMap
+	client        Client
+	opts          Options
+	specs         [4]tabSpec
+	tabs          [4]tabModel
+	active        Tab
+	width         int
+	height        int
+	spinner       spinner.Model
+	nags          []string
+	nagSeen       map[string]struct{}
+	statsSent     bool
+	ready         bool
+	sortOpen      bool      // sort selector is visible (replaces footer)
+	sortCursor    int       // index into specs[active].columns of selector cursor
+	filterBar     filterBar // lightweight textinput for live client-side filter
+	filterFocused bool      // true while the filter bar has keyboard focus
 }
 
 // New constructs a Model with the four tab specs and sane defaults.
@@ -49,15 +51,16 @@ func New(th *theme.Theme, client Client, opts Options) Model {
 		TabPolicies:  newTabModel(th, specs[TabPolicies]),
 	}
 	return Model{
-		th:      th,
-		keys:    tui.DefaultKeyMap(),
-		client:  client,
-		opts:    opts,
-		specs:   specs,
-		tabs:    tabs,
-		active:  opts.FocusTab,
-		spinner: components.NewSpinner(th),
-		nagSeen: make(map[string]struct{}),
+		th:        th,
+		keys:      tui.DefaultKeyMap(),
+		client:    client,
+		opts:      opts,
+		specs:     specs,
+		tabs:      tabs,
+		active:    opts.FocusTab,
+		spinner:   components.NewSpinner(th),
+		nagSeen:   make(map[string]struct{}),
+		filterBar: newFilterBar(),
 	}
 }
 
@@ -92,9 +95,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		// setSize + sync ALL tabs so they render correctly when switched to.
+		// The active tab gets the reduced body budget when the filter bar is visible;
+		// inactive tabs always get the full body budget (they don't show the bar).
 		bodyH := m.bodyHeight()
 		for i := range m.tabs {
-			m.tabs[i] = m.tabs[i].setSize(m.width, bodyH)
+			tabH := bodyH
+			if Tab(i) == m.active && m.filterBarVisible() {
+				tabH = bodyH - filterBarLines
+			}
+			if tabH < 1 {
+				tabH = 1
+			}
+			m.tabs[i] = m.tabs[i].setSize(m.width, tabH)
 			m.tabs[i] = m.tabs[i].sync(m.opts.MaxRows)
 		}
 		m.ready = true
@@ -155,6 +167,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleSortKey(msg)
 	}
 
+	// When the filter bar is focused, route all keys to it except ctrl+c.
+	if m.filterFocused {
+		return m.handleFilterKey(msg)
+	}
+
 	switch {
 	case msg.Type == tea.KeyCtrlC:
 		return m, tea.Quit
@@ -179,12 +196,67 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.openSortSelector()
 		}
 
+	case msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == '/':
+		if m.tabs[m.active].state == tabLoaded {
+			return m.openFilterBar()
+		}
+
 	case key.Matches(msg, m.keys.Up), key.Matches(msg, m.keys.Down),
 		key.Matches(msg, m.keys.PageUp), key.Matches(msg, m.keys.PageDown):
 		return m.delegateNav(msg)
 	}
 
 	return m, nil
+}
+
+// openFilterBar focuses the filter bar on the active tab.
+func (m Model) openFilterBar() (tea.Model, tea.Cmd) {
+	m.filterFocused = true
+	m.filterBar = m.filterBar.focus(m.tabs[m.active].filter)
+	// Resize the active tab to the reduced body budget.
+	m.tabs[m.active] = m.tabs[m.active].setSize(m.width, m.bodyHeight()-filterBarLines)
+	m.tabs[m.active] = m.tabs[m.active].sync(m.opts.MaxRows)
+	return m, nil
+}
+
+// handleFilterKey handles key events while the filter bar is focused.
+// Only ctrl+c, enter, esc, and all textinput keys are processed here.
+func (m Model) handleFilterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyCtrlC:
+		return m, tea.Quit
+
+	case tea.KeyEnter:
+		// Unfocus but keep filter applied.
+		m.filterFocused = false
+		m.filterBar = m.filterBar.blur()
+		// Restore full body budget.
+		m.tabs[m.active] = m.tabs[m.active].setSize(m.width, m.bodyHeight())
+		m.tabs[m.active] = m.tabs[m.active].sync(m.opts.MaxRows)
+		return m, nil
+
+	case tea.KeyEsc:
+		// Clear filter and unfocus.
+		m.filterFocused = false
+		m.filterBar = m.filterBar.blur()
+		m.filterBar = m.filterBar.setValue("")
+		m.tabs[m.active].filter = ""
+		// Restore full body budget.
+		m.tabs[m.active] = m.tabs[m.active].setSize(m.width, m.bodyHeight())
+		m.tabs[m.active] = m.tabs[m.active].sync(m.opts.MaxRows)
+		return m, nil
+
+	default:
+		// Route to textinput. The textinput.Update call returns a new model
+		// and possibly a blink cmd. We update the filter value live.
+		var cmd tea.Cmd
+		newTI, tiCmd := m.filterBar.ti.Update(msg)
+		m.filterBar.ti = newTI
+		m.tabs[m.active].filter = m.filterBar.value()
+		m.tabs[m.active] = m.tabs[m.active].sync(m.opts.MaxRows)
+		cmd = tiCmd
+		return m, cmd
+	}
 }
 
 // openSortSelector opens the inline sort selector on the active tab.
@@ -304,13 +376,20 @@ func (m Model) delegateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 //	HeaderBar (2) + tab bar (1) + status line (1) + FooterBar (2) = 6.
 const chromeLines = 6
 
-// bodyHeight returns the number of lines available for the tab body region.
+// bodyHeight returns the number of lines available for the tab body region
+// (excluding any filter bar lines — those are sliced from the body budget).
 func (m Model) bodyHeight() int {
 	h := m.height - chromeLines
 	if h < 1 {
 		h = 1
 	}
 	return h
+}
+
+// filterBarVisible reports whether the filter bar should be rendered.
+// The bar is visible when focused OR when the active tab has a non-empty filter.
+func (m Model) filterBarVisible() bool {
+	return m.filterFocused || m.tabs[m.active].filter != ""
 }
 
 // View composes the full terminal screen. Returns "" until the first
@@ -326,16 +405,40 @@ func (m Model) View() string {
 	var footer string
 	if m.sortOpen {
 		footer = m.renderSortSelector()
+	} else if m.filterFocused {
+		footer = m.renderFilterFooter()
 	} else {
 		footer = components.FooterBar(m.th, m.width, inventoryFooterHints(), "")
 	}
 
-	// Active tab body: view() returns exactly bodyHeight() lines.
+	// Body region: bodyH total lines = filter bar lines (if visible) + table lines.
 	bodyH := m.bodyHeight()
-	bodyLines := m.tabs[m.active].view(m.th, m.opts.MaxRows, m.spinner.View())
 
-	// Pad body to exactly bodyH lines (view() should already guarantee this,
-	// but we defend here for safety).
+	// Collect filter bar lines (2) when visible, then table lines filling the remainder.
+	var bodyLines []string
+	if m.filterBarVisible() {
+		barLines := m.filterBar.renderLines(m.th, m.width)
+		bodyLines = append(bodyLines, barLines...)
+		// Table gets bodyH - filterBarLines.
+		tableH := bodyH - filterBarLines
+		if tableH < 1 {
+			tableH = 1
+		}
+		tableLines := m.tabs[m.active].view(m.th, m.opts.MaxRows, m.spinner.View())
+		// Pad/trim table to exactly tableH.
+		for len(tableLines) < tableH {
+			tableLines = append(tableLines, "")
+		}
+		if len(tableLines) > tableH {
+			tableLines = tableLines[:tableH]
+		}
+		bodyLines = append(bodyLines, tableLines...)
+	} else {
+		// No filter bar: table fills all of bodyH.
+		bodyLines = m.tabs[m.active].view(m.th, m.opts.MaxRows, m.spinner.View())
+	}
+
+	// Pad body to exactly bodyH lines (defensive).
 	for len(bodyLines) < bodyH {
 		bodyLines = append(bodyLines, "")
 	}
@@ -362,6 +465,17 @@ func (m Model) View() string {
 		lines = lines[:m.height]
 	}
 	return strings.Join(lines, "\n")
+}
+
+// renderFilterFooter renders the 2-line footer used while the filter bar is focused.
+// Line 1 (hint): "  enter: confirm search  esc: clear search" + right-aligned "?: help"
+// Line 2 (separator): same border line as FooterBar.
+func (m Model) renderFilterFooter() string {
+	hints := []components.KeyHint{
+		{Key: "enter", Desc: "confirm search"},
+		{Key: "esc", Desc: "clear search"},
+	}
+	return components.FooterBar(m.th, m.width, hints, "")
 }
 
 // renderSortSelector renders the 2-line sort selector that replaces the footer
