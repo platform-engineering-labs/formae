@@ -81,8 +81,8 @@ func TestStackRow_Cells_TTLPolicy_Expired(t *testing.T) {
 		Policies:  []json.RawMessage{ttlJSON},
 	}
 	got := stackRow(s, stacksNow)
-	// no ANSI in TUI — plain "expired"
-	assert.Equal(t, "TTL: 1d, expires expired", got.cells[2])
+	// expired TTL renders as "TTL: <dur> (expired)"
+	assert.Equal(t, "TTL: 1d (expired)", got.cells[2])
 }
 
 func TestStackRow_Cells_TTLPolicy_NoCreatedAt(t *testing.T) {

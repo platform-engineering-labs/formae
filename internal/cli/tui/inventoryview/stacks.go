@@ -64,7 +64,14 @@ func policySummary(policies []json.RawMessage, createdAt time.Time, now time.Tim
 				expiryStr = formatExpiryTimeInj(expiresAt, now)
 			}
 
-			if label != "" && expiryStr != "" {
+			if expiryStr == "expired" {
+				// Expired: render as "TTL: <dur> (expired)" with optional label
+				if label != "" {
+					parts = append(parts, fmt.Sprintf("TTL: %s (expired) (%s)", formatTTLDur(duration), label))
+				} else {
+					parts = append(parts, fmt.Sprintf("TTL: %s (expired)", formatTTLDur(duration)))
+				}
+			} else if label != "" && expiryStr != "" {
 				parts = append(parts, fmt.Sprintf("TTL: %s, expires %s (%s)", formatTTLDur(duration), expiryStr, label))
 			} else if expiryStr != "" {
 				parts = append(parts, fmt.Sprintf("TTL: %s, expires %s", formatTTLDur(duration), expiryStr))
