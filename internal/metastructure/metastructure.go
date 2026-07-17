@@ -552,6 +552,7 @@ func translateToAPICommand(fa *forma_command.FormaCommand) apimodel.Command {
 		CommandID: fa.ID,
 		Command:   string(fa.Command),
 		Mode:      string(fa.Config.Mode),
+		Source:    string(fa.Source),
 		State:     string(fa.State),
 		StartTs:   fa.StartTs,
 		EndTs:     fa.ModifiedTs,
@@ -1976,6 +1977,7 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 		stackUpdates,
 		policyUpdates,
 		clientID,
+		forma_command.SourceUser,
 	), nil
 }
 

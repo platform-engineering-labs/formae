@@ -26,3 +26,13 @@ func TestTranslateToAPICommand_IncludesMode(t *testing.T) {
 
 	assert.Equal(t, "patch", apiCmd.Mode)
 }
+
+func TestTranslateToAPICommand_Source(t *testing.T) {
+	fa := forma_command.NewFormaCommand(
+		&pkgmodel.Forma{}, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModePatch},
+		pkgmodel.CommandSync, nil, nil, nil, nil, "",
+		forma_command.SourceSynchronizer,
+	)
+	api := translateToAPICommand(fa)
+	assert.Equal(t, "synchronizer", api.Source)
+}

@@ -692,6 +692,7 @@ func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Ta
 		nil, // No stack updates on discovery
 		nil, // No policy updates on discovery
 		"discovery",
+		forma_command.SourceDiscovery,
 	)
 
 	// store the forma command

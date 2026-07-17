@@ -36,6 +36,7 @@ type Command struct {
 	CommandID       string           `json:"CommandId"`
 	Command         string           `json:"Command"`
 	Mode            string           `json:"Mode,omitempty"` // "reconcile" | "patch"
+	Source          string           `json:"Source,omitempty"`
 	State           string           `json:"State"`
 	StartTs         time.Time        `json:"StartTs,omitempty"`
 	EndTs           time.Time        `json:"EndTs,omitempty"`

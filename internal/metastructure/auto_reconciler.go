@@ -359,6 +359,7 @@ func prepareReconcile(ds datastore.Datastore, stackLabel string, clientID string
 		nil, // No stack updates
 		nil, // No policy updates
 		clientID,
+		forma_command.SourceAutoReconciler,
 	)
 
 	// Create changeset

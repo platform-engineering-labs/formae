@@ -29,6 +29,18 @@ const (
 	CommandStateCanceled   CommandState = "Canceled"
 )
 
+// Source identifies who initiated a FormaCommand. User-facing surfaces hide
+// commands whose source is not user (internal agent bookkeeping).
+type Source string
+
+const (
+	SourceUser           Source = "user"
+	SourceSynchronizer   Source = "synchronizer"
+	SourceDiscovery      Source = "discovery"
+	SourceAutoReconciler Source = "auto-reconciler"
+	SourceStackExpirer   Source = "stack-expirer"
+)
+
 type FormaCommand struct {
 	ID              string                           `json:"ID"`
 	Description     pkgmodel.Description             `json:"Description"`
@@ -42,6 +54,7 @@ type FormaCommand struct {
 	Config          config.FormaCommandConfig        `json:"Config"`
 	Command         pkgmodel.Command                 `json:"Command"`
 	ClientID        string                           `json:"ClientId,omitempty"`
+	Source          Source                           `json:"Source,omitempty"`
 }
 
 type FormaCommandResult struct {
@@ -62,6 +75,7 @@ func NewFormaCommand(
 	stackUpdates []stack_update.StackUpdate,
 	policyUpdates []policy_update.PolicyUpdate,
 	clientID string,
+	source Source,
 ) *FormaCommand {
 	return &FormaCommand{
 		ID:              util.NewID(),
@@ -76,6 +90,7 @@ func NewFormaCommand(
 		Description:     forma.Description,
 		State:           CommandStateNotStarted,
 		ClientID:        clientID,
+		Source:          source,
 	}
 }
 
