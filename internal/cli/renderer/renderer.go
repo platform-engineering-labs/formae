@@ -498,33 +498,40 @@ func formatSimulatedResourceUpdate(root *gtree.Node, rc apimodel.ResourceUpdate)
 	// flow: what immutable property forced the replace → and by the way,
 	// here's everything else that's also changing as part of the same apply.
 	if rc.Operation == apimodel.OperationReplace {
-		mutablePatch := mutablePatchForReplace(rc.OldProperties, rc.Properties, rc.CreateOnlyPatch)
-		if renamed || len(mutablePatch) > 0 {
+		fullPatch := computeFullPatch(rc.OldProperties, rc.Properties)
+		refLabels := rc.ReferenceLabels
+		if refLabels == nil {
+			refLabels = make(map[string]string)
+		}
+		var mutableCS ChangeSet
+		if len(fullPatch) > 0 {
+			// Silent fallback: if extraction fails, treat as empty (no mutable changes).
+			mutableCS, _ = MutableChangesForReplace(fullPatch, rc.CreateOnlyPatch, rc.Properties, rc.OldProperties, refLabels)
+		}
+		hasMutableChanges := len(mutableCS.Properties) > 0 || len(mutableCS.Tags) > 0
+		if renamed || hasMutableChanges {
 			block := node.Add(display.Grey("and by doing the following:"))
 			if renamed {
 				block.Add(display.Gold(fmt.Sprintf(`change label from "%s" to "%s"`, rc.OldLabel, rc.ResourceLabel)))
 			}
-			if len(mutablePatch) > 0 {
-				refLabels := rc.ReferenceLabels
-				if refLabels == nil {
-					refLabels = make(map[string]string)
+			if hasMutableChanges {
+				for _, change := range mutableCS.Tags {
+					block.Add(formatTagChange(change))
 				}
-				FormatPatchDocument(block, mutablePatch, rc.Properties, rc.OldProperties, refLabels)
+				for _, change := range mutableCS.Properties {
+					if !change.NoOp {
+						block.Add(formatPropertyChange(change))
+					}
+				}
 			}
 		}
 	}
 }
 
-// mutablePatchForReplace returns the JSON-patch document describing changes
-// between oldProperties and newProperties that are NOT already covered by
-// createOnlyPatch. On a replace the engine has split the diff so the
-// CreateOnlyPatch carries the immutable-property change(s) that forced the
-// recreate; everything else in the diff (mutable property edits) is silent
-// in the rendered output unless this helper surfaces it.
-//
-// Returns nil on any diff failure — silent fallback is preferable to a noisy
-// error in the CLI rendering path.
-func mutablePatchForReplace(oldProperties, newProperties, createOnlyPatch json.RawMessage) json.RawMessage {
+// computeFullPatch computes the full JSON Patch document between oldProperties
+// and newProperties. Returns nil on any diff failure — silent fallback is
+// preferable to a noisy error in the CLI rendering path.
+func computeFullPatch(oldProperties, newProperties json.RawMessage) json.RawMessage {
 	if len(oldProperties) == 0 || len(newProperties) == 0 {
 		return nil
 	}
@@ -532,28 +539,7 @@ func mutablePatchForReplace(oldProperties, newProperties, createOnlyPatch json.R
 	if err != nil || len(full) == 0 {
 		return nil
 	}
-	immutablePaths := make(map[string]bool)
-	if len(createOnlyPatch) > 0 {
-		var ops []struct {
-			Path string `json:"path"`
-		}
-		if err := json.Unmarshal(createOnlyPatch, &ops); err == nil {
-			for _, op := range ops {
-				immutablePaths[op.Path] = true
-			}
-		}
-	}
-	mutable := make([]jsonpatch.JsonPatchOperation, 0, len(full))
-	for _, op := range full {
-		if immutablePaths[string(op.Path)] {
-			continue
-		}
-		mutable = append(mutable, op)
-	}
-	if len(mutable) == 0 {
-		return nil
-	}
-	out, err := json.Marshal(mutable)
+	out, err := json.Marshal(full)
 	if err != nil {
 		return nil
 	}

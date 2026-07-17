@@ -56,6 +56,92 @@ type PropertyChange struct {
 	CascadeCurrentValue string
 }
 
+// ChangeSet is the structured form of a patch document's visible changes.
+type ChangeSet struct {
+	Properties []PropertyChange
+	Tags       []TagChange
+}
+
+// ExtractChanges parses a JSON Patch document into structured changes without
+// rendering. Same semantics as FormatPatchDocument: NoOp suppression markers,
+// cascade-resolvable synthesis, references resolved to labels.
+func ExtractChanges(patchDoc, properties, previousProperties json.RawMessage, refLabels map[string]string) (ChangeSet, error) {
+	patches, err := decodePatchOperations(patchDoc)
+	if err != nil {
+		return ChangeSet{}, err
+	}
+
+	var props map[string]any
+	if err := json.Unmarshal(properties, &props); err != nil {
+		return ChangeSet{}, fmt.Errorf("error parsing properties document: %w", err)
+	}
+
+	var cs ChangeSet
+	for _, patch := range patches {
+		if strings.Contains(patch.Path, "/Tags/") {
+			change, err := extractTagChange(patch, previousProperties)
+			if err != nil {
+				return ChangeSet{}, fmt.Errorf("error processing tag patch: %w", err)
+			}
+			cs.Tags = append(cs.Tags, change)
+			continue
+		}
+		change, err := extractPropertyChange(patch, props, previousProperties, refLabels)
+		if err != nil {
+			return ChangeSet{}, fmt.Errorf("error processing property patch: %w", err)
+		}
+		cs.Properties = append(cs.Properties, change)
+	}
+	return cs, nil
+}
+
+// MutableChangesForReplace returns the changes of patchDoc minus the paths in
+// createOnlyPatch — the carried mutable changes shown alongside a replace cause.
+func MutableChangesForReplace(patchDoc, createOnlyPatch, properties, previousProperties json.RawMessage, refLabels map[string]string) (ChangeSet, error) {
+	immutablePaths := make(map[string]bool)
+	if len(createOnlyPatch) > 0 {
+		var ops []struct {
+			Path string `json:"path"`
+		}
+		if err := json.Unmarshal(createOnlyPatch, &ops); err == nil {
+			for _, op := range ops {
+				immutablePaths[op.Path] = true
+			}
+		}
+	}
+
+	patches, err := decodePatchOperations(patchDoc)
+	if err != nil {
+		return ChangeSet{}, err
+	}
+
+	var props map[string]any
+	if err := json.Unmarshal(properties, &props); err != nil {
+		return ChangeSet{}, fmt.Errorf("error parsing properties document: %w", err)
+	}
+
+	var cs ChangeSet
+	for _, patch := range patches {
+		if immutablePaths[patch.Path] {
+			continue
+		}
+		if strings.Contains(patch.Path, "/Tags/") {
+			change, err := extractTagChange(patch, previousProperties)
+			if err != nil {
+				return ChangeSet{}, fmt.Errorf("error processing tag patch: %w", err)
+			}
+			cs.Tags = append(cs.Tags, change)
+			continue
+		}
+		change, err := extractPropertyChange(patch, props, previousProperties, refLabels)
+		if err != nil {
+			return ChangeSet{}, fmt.Errorf("error processing property patch: %w", err)
+		}
+		cs.Properties = append(cs.Properties, change)
+	}
+	return cs, nil
+}
+
 // FormatPatchDocument formats JSON Patch operations for cli display.
 //
 // RFC-0041: the "put resource under management" sub-line was removed.
@@ -65,18 +151,19 @@ type PropertyChange struct {
 // is redundant noise. With an empty patch this function emits nothing — the
 // parent's sub-lines convey the transition.
 func FormatPatchDocument(node *gtree.Node, patchDoc json.RawMessage, properties json.RawMessage, previousProperties json.RawMessage, refLabels map[string]string) {
-	patches := parsePatchOperations(patchDoc, node)
-	if patches == nil {
+	cs, err := ExtractChanges(patchDoc, properties, previousProperties, refLabels)
+	if err != nil {
+		node.Add(display.Red("Error processing patch document: " + err.Error()))
 		return
 	}
 
-	props := parseProperties(properties, node)
-	if props == nil {
-		return
+	for _, change := range cs.Tags {
+		node.Add(formatTagChange(change))
 	}
-
-	for _, patch := range patches {
-		formatSinglePatch(node, patch, props, previousProperties, refLabels)
+	for _, change := range cs.Properties {
+		if !change.NoOp {
+			node.Add(formatPropertyChange(change))
+		}
 	}
 }
 
@@ -86,34 +173,27 @@ func FormatPatchDocument(node *gtree.Node, patchDoc json.RawMessage, properties 
 // nothing, and the caller must not open an empty "by doing the following:"
 // block for it.
 func HasVisibleChanges(patchDoc json.RawMessage, properties json.RawMessage, previousProperties json.RawMessage, refLabels map[string]string) bool {
-	var rawPatches []map[string]any
-	if err := json.Unmarshal(patchDoc, &rawPatches); err != nil {
+	cs, err := ExtractChanges(patchDoc, properties, previousProperties, refLabels)
+	if err != nil {
 		return true // a malformed patch document surfaces as a visible error line
 	}
-	var props map[string]any
-	if err := json.Unmarshal(properties, &props); err != nil {
-		return true // a parse error surfaces as a visible error line
+	if len(cs.Tags) > 0 {
+		return true // tag changes always render
 	}
-
-	discard := gtree.NewRoot("")
-	patches := parsePatchOperations(patchDoc, discard)
-	for _, patch := range patches {
-		if strings.Contains(patch.Path, "/Tags/") {
-			return true // tag changes always render
-		}
-		change, err := extractPropertyChange(patch, props, previousProperties, refLabels)
-		if err != nil || !change.NoOp {
+	for _, change := range cs.Properties {
+		if !change.NoOp {
 			return true
 		}
 	}
 	return false
 }
 
-func parsePatchOperations(patchDoc json.RawMessage, node *gtree.Node) []patchOperation {
+// decodePatchOperations parses a JSON Patch document into patchOperation
+// structs without any gtree/rendering side-effects.
+func decodePatchOperations(patchDoc json.RawMessage) ([]patchOperation, error) {
 	var patches []map[string]any
 	if err := json.Unmarshal(patchDoc, &patches); err != nil {
-		node.Add(display.Red("Error parsing patch document: " + err.Error()))
-		return nil
+		return nil, fmt.Errorf("error parsing patch document: %w", err)
 	}
 
 	var operations []patchOperation
@@ -128,35 +208,7 @@ func parsePatchOperations(patchDoc json.RawMessage, node *gtree.Node) []patchOpe
 			})
 		}
 	}
-	return operations
-}
-
-func parseProperties(properties json.RawMessage, node *gtree.Node) map[string]any {
-	var props map[string]any
-	if err := json.Unmarshal(properties, &props); err != nil {
-		node.Add(display.Red("Error parsing properties document: " + err.Error()))
-		return nil
-	}
-	return props
-}
-
-func formatSinglePatch(node *gtree.Node, patch patchOperation, props map[string]any, previousProperties json.RawMessage, refLabels map[string]string) {
-	if strings.Contains(patch.Path, "/Tags/") {
-		if change, err := extractTagChange(patch, previousProperties); err != nil {
-			node.Add(display.Red(fmt.Sprintf("Error processing tag patch: %v", err)))
-		} else {
-			node.Add(formatTagChange(change))
-		}
-		return
-	}
-
-	if change, err := extractPropertyChange(patch, props, previousProperties, refLabels); err != nil {
-		node.Add(display.Red(fmt.Sprintf("Error processing property patch: %v", err)))
-	} else if !change.NoOp {
-		// NoOp = a force-resent (requiredOnUpdate) field whose value didn't
-		// change; suppress it from the plan so a clean reconcile stays clean.
-		node.Add(formatPropertyChange(change))
-	}
+	return operations, nil
 }
 
 // extractTagChange extracts tag information from a patch operation
