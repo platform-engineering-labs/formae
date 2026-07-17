@@ -90,10 +90,7 @@ func newSpecs(_ func() time.Time) [4]tabSpec {
 				}
 				rows := make([]row, 0, len(forma.Resources))
 				for i := range forma.Resources {
-					r := &forma.Resources[i]
-					rows = append(rows, row{
-						cells: []string{r.NativeID, r.Stack, r.Type, r.Label},
-					})
+					rows = append(rows, resourceRow(forma.Resources[i]))
 				}
 				return rows, nags, nil
 			},
@@ -114,9 +111,7 @@ func newSpecs(_ func() time.Time) [4]tabSpec {
 				}
 				rows := make([]row, 0, len(targets))
 				for _, t := range targets {
-					rows = append(rows, row{
-						cells: []string{t.Label, t.Namespace, "", ""},
-					})
+					rows = append(rows, targetRow(t))
 				}
 				return rows, nags, nil
 			},
