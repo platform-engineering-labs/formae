@@ -389,6 +389,27 @@ func TestSetCommand_ClampsCursorWhenListShrinks(t *testing.T) {
 	// Cursor must be clamped to a valid index — 0 <= cursor < len(nav2).
 	assert.GreaterOrEqual(t, dm.cursor, 0, "cursor must not be negative after shrink")
 	assert.Less(t, dm.cursor, len(nav2), "cursor must be within the new nav list after shrink")
+
+	t.Run("clamp_negative_cursor", func(t *testing.T) {
+		// Reset to a fresh detailModel and set cursor to a negative value
+		dmNeg := newDetailModel(th, 100, 40)
+		dmNeg.cursor = -1
+		require.Equal(t, -1, dmNeg.cursor, "precondition: cursor is negative")
+
+		// Call SetCommand with a command that has nav entries
+		cWithRows := apimodel.Command{
+			CommandID: "cmd-with-rows",
+			State:     "InProgress",
+			ResourceUpdates: []apimodel.ResourceUpdate{
+				{ResourceLabel: "res-1", ResourceType: "AWS::S3::Bucket", StackName: "prod", Operation: "create", State: "Pending"},
+			},
+		}
+		rWithRows := row{cmd: cWithRows, counts: commandCounts(cWithRows), health: commandHealth(cWithRows, commandCounts(cWithRows))}
+		dmNeg = dmNeg.SetCommand(cWithRows, rWithRows, "◉", now)
+
+		// After SetCommand, negative cursor must be clamped to 0
+		assert.Equal(t, 0, dmNeg.cursor, "negative cursor must be clamped to 0")
+	})
 }
 
 // runeWidth returns the number of Unicode code points in s (suitable for

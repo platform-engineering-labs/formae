@@ -93,6 +93,8 @@ func (d detailModel) SetCommand(c apimodel.Command, r row, spinView string, now 
 	nav := d.navLines()
 	if len(nav) == 0 {
 		d.cursor = 0
+	} else if d.cursor < 0 {
+		d.cursor = 0
 	} else if d.cursor >= len(nav) {
 		d.cursor = len(nav) - 1
 	}
