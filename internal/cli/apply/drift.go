@@ -45,7 +45,7 @@ var forcedApplyFn = func(a *app.App, opts *ApplyOptions) (*apimodel.SubmitComman
 
 // extractResourcesFn is seamed so tests and E2E can stub or intercept it.
 var extractResourcesFn = func(a *app.App, query string) (*pkgmodel.Forma, []string, error) {
-	return a.ExtractResources(query)
+	return a.ExtractResources(query, false)
 }
 
 // generateSourceCodeFn is seamed so tests can bypass file generation.

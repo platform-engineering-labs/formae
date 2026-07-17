@@ -101,7 +101,7 @@ type inventory struct {
 }
 
 func runResourcesForMachines(app *app.App, opts *InventoryOptions) error {
-	forma, _, err := app.ExtractResources(opts.Query)
+	forma, _, err := app.ExtractResources(opts.Query, false)
 	if err != nil {
 		return err
 	}
@@ -117,7 +117,7 @@ func runResourcesForMachines(app *app.App, opts *InventoryOptions) error {
 func runResourcesForHumans(app *app.App, opts *InventoryOptions) error {
 	app.PrintBanner()
 
-	forma, _, err := app.ExtractResources(opts.Query)
+	forma, _, err := app.ExtractResources(opts.Query, false)
 	if err != nil {
 		return err
 	}
@@ -203,7 +203,7 @@ func runTargets(app *app.App, opts *InventoryOptions) error {
 }
 
 func runTargetsForMachines(app *app.App, opts *InventoryOptions) error {
-	targets, _, err := app.ExtractTargets(opts.Query)
+	targets, _, err := app.ExtractTargets(opts.Query, false)
 	if err != nil {
 		return err
 	}
@@ -215,7 +215,7 @@ func runTargetsForMachines(app *app.App, opts *InventoryOptions) error {
 func runTargetsForHumans(app *app.App, opts *InventoryOptions) error {
 	app.PrintBanner()
 
-	targets, _, err := app.ExtractTargets(opts.Query)
+	targets, _, err := app.ExtractTargets(opts.Query, false)
 	if err != nil {
 		return err
 	}
@@ -321,7 +321,7 @@ func runPolicies(app *app.App, opts *InventoryOptions) error {
 }
 
 func runPoliciesForMachines(app *app.App, opts *InventoryOptions) error {
-	policies, _, err := app.ExtractPolicies()
+	policies, _, err := app.ExtractPolicies(false)
 	if err != nil {
 		return err
 	}
@@ -333,7 +333,7 @@ func runPoliciesForMachines(app *app.App, opts *InventoryOptions) error {
 func runPoliciesForHumans(app *app.App, opts *InventoryOptions) error {
 	app.PrintBanner()
 
-	policies, _, err := app.ExtractPolicies()
+	policies, _, err := app.ExtractPolicies(false)
 	if err != nil {
 		return err
 	}
@@ -343,7 +343,7 @@ func runPoliciesForHumans(app *app.App, opts *InventoryOptions) error {
 }
 
 func runStacksForMachines(app *app.App, opts *InventoryOptions) error {
-	stacks, _, err := app.ExtractStacks()
+	stacks, _, err := app.ExtractStacks(false)
 	if err != nil {
 		return err
 	}
@@ -355,7 +355,7 @@ func runStacksForMachines(app *app.App, opts *InventoryOptions) error {
 func runStacksForHumans(app *app.App, opts *InventoryOptions) error {
 	app.PrintBanner()
 
-	stacks, _, err := app.ExtractStacks()
+	stacks, _, err := app.ExtractStacks(false)
 	if err != nil {
 		return err
 	}

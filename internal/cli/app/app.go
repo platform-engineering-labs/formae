@@ -332,14 +332,14 @@ func (a *App) GetCommandsStatus(query string, n int, fromWatch bool) (*apimodel.
 	return res, nags, nil
 }
 
-func (a *App) ExtractResources(query string) (*pkgmodel.Forma, []string, error) {
+func (a *App) ExtractResources(query string, fromTUI bool) (*pkgmodel.Forma, []string, error) {
 	auth, net, err := a.getAuthAndNetHandlers()
 	if err != nil {
 		return nil, nil, err
 	}
 	client := api.NewClient(a.Config.Cli.API, auth, net)
 
-	compatible, _, nags, err := a.runBeforeCommand(client, true)
+	compatible, _, nags, err := a.runBeforeCommand(client, !fromTUI)
 	if !compatible {
 		return nil, nil, err
 	}
@@ -756,14 +756,14 @@ func (a *App) buildDependencyStrings(forma *pkgmodel.Forma, location schema.Sche
 	return deps, nil
 }
 
-func (a *App) ExtractTargets(query string) ([]*pkgmodel.Target, []string, error) {
+func (a *App) ExtractTargets(query string, fromTUI bool) ([]*pkgmodel.Target, []string, error) {
 	auth, net, err := a.getAuthAndNetHandlers()
 	if err != nil {
 		return nil, nil, err
 	}
 	client := api.NewClient(a.Config.Cli.API, auth, net)
 
-	compatible, _, nags, err := a.runBeforeCommand(client, true)
+	compatible, _, nags, err := a.runBeforeCommand(client, !fromTUI)
 	if !compatible {
 		return nil, nil, err
 	}
@@ -780,14 +780,14 @@ func (a *App) ExtractTargets(query string) ([]*pkgmodel.Target, []string, error)
 	return targets, nags, nil
 }
 
-func (a *App) ExtractStacks() ([]*pkgmodel.Stack, []string, error) {
+func (a *App) ExtractStacks(fromTUI bool) ([]*pkgmodel.Stack, []string, error) {
 	auth, net, err := a.getAuthAndNetHandlers()
 	if err != nil {
 		return nil, nil, err
 	}
 	client := api.NewClient(a.Config.Cli.API, auth, net)
 
-	compatible, _, nags, err := a.runBeforeCommand(client, true)
+	compatible, _, nags, err := a.runBeforeCommand(client, !fromTUI)
 	if !compatible {
 		return nil, nil, err
 	}
@@ -804,14 +804,14 @@ func (a *App) ExtractStacks() ([]*pkgmodel.Stack, []string, error) {
 	return stacks, nags, nil
 }
 
-func (a *App) ExtractPolicies() ([]apimodel.PolicyInventoryItem, []string, error) {
+func (a *App) ExtractPolicies(fromTUI bool) ([]apimodel.PolicyInventoryItem, []string, error) {
 	auth, net, err := a.getAuthAndNetHandlers()
 	if err != nil {
 		return nil, nil, err
 	}
 	client := api.NewClient(a.Config.Cli.API, auth, net)
 
-	compatible, _, nags, err := a.runBeforeCommand(client, true)
+	compatible, _, nags, err := a.runBeforeCommand(client, !fromTUI)
 	if !compatible {
 		return nil, nil, err
 	}

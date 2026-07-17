@@ -105,7 +105,7 @@ func runExtract(app *app.App, opts *ExtractOptions) error {
 		return fmt.Errorf("unsupported output schema '%s', supported schemas are: %v", opts.OutputSchema, app.SupportedOutputSchemas())
 	}
 
-	forma, nags, err := app.ExtractResources(opts.Query)
+	forma, nags, err := app.ExtractResources(opts.Query, false)
 	if err != nil {
 		msg, renderErr := renderer.RenderErrorMessage(err)
 		if renderErr != nil {
