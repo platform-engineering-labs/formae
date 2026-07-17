@@ -58,6 +58,16 @@ type WrappedCheckTTLResponse struct {
 	Error    error
 }
 
+type WrappedStackResponse struct {
+	Stacks []*pkgmodel.Stack
+	Error  error
+}
+
+type WrappedPolicyResponse struct {
+	Policies []apimodel.PolicyInventoryItem
+	Error    error
+}
+
 type FakeMetastructure struct {
 	ApplyResponses        []WrappedCommandResponse
 	DestroyResponses      []WrappedCommandResponse
@@ -68,6 +78,8 @@ type FakeMetastructure struct {
 	DriftResponses        []WrappedDriftResponse
 	ReconcileResponses    []WrappedReconcileResponse
 	CheckTTLResponses     []WrappedCheckTTLResponse
+	StackResponses        []WrappedStackResponse
+	PolicyResponses       []WrappedPolicyResponse
 	RecordedCancelQueries []string
 }
 
@@ -122,27 +134,47 @@ func (m *FakeMetastructure) ListFormaCommandStatus(commandID string, clientID st
 }
 
 func (m *FakeMetastructure) ExtractResources(query string) (*pkgmodel.Forma, error) {
-	nextResponse := m.ExtractResponses[0]
-	m.ExtractResponses = m.ExtractResponses[1:]
-
-	return nextResponse.Forma, nextResponse.Error
+	if len(m.ExtractResponses) == 0 {
+		return &pkgmodel.Forma{}, nil
+	}
+	next := m.ExtractResponses[0]
+	if len(m.ExtractResponses) > 1 {
+		m.ExtractResponses = m.ExtractResponses[1:]
+	}
+	return next.Forma, next.Error
 }
 
 func (m *FakeMetastructure) ExtractTargets(query string) ([]*pkgmodel.Target, error) {
 	if len(m.TargetResponses) == 0 {
 		return []*pkgmodel.Target{}, nil
 	}
-	nextResponse := m.TargetResponses[0]
-	m.TargetResponses = m.TargetResponses[1:]
-	return nextResponse.Targets, nextResponse.Error
+	next := m.TargetResponses[0]
+	if len(m.TargetResponses) > 1 {
+		m.TargetResponses = m.TargetResponses[1:]
+	}
+	return next.Targets, next.Error
 }
 
 func (m *FakeMetastructure) ExtractStacks() ([]*pkgmodel.Stack, error) {
-	return []*pkgmodel.Stack{}, nil
+	if len(m.StackResponses) == 0 {
+		return []*pkgmodel.Stack{}, nil
+	}
+	next := m.StackResponses[0]
+	if len(m.StackResponses) > 1 {
+		m.StackResponses = m.StackResponses[1:]
+	}
+	return next.Stacks, next.Error
 }
 
 func (m *FakeMetastructure) ExtractPolicies() ([]apimodel.PolicyInventoryItem, error) {
-	return []apimodel.PolicyInventoryItem{}, nil
+	if len(m.PolicyResponses) == 0 {
+		return []apimodel.PolicyInventoryItem{}, nil
+	}
+	next := m.PolicyResponses[0]
+	if len(m.PolicyResponses) > 1 {
+		m.PolicyResponses = m.PolicyResponses[1:]
+	}
+	return next.Policies, next.Error
 }
 
 func (m *FakeMetastructure) ForceSync() error {

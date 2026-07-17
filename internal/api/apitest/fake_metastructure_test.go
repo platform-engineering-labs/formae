@@ -9,7 +9,10 @@ package apitest
 import (
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
 // TestFakeMetastructure_ListResponsesStickyTail verifies that when the response
@@ -72,6 +75,35 @@ func TestFakeMetastructure_ListResponsesStickyTail(t *testing.T) {
 	if resp4 == nil || (len(resp4.Commands) > 0 && resp4.Commands[0].CommandID != "cmd-2") {
 		t.Fatalf("call 4: expected cmd-2 (sticky), got %v", resp4)
 	}
+}
+
+func TestFake_ExtractUnseeded_EmptySuccess(t *testing.T) {
+	m := &FakeMetastructure{}
+	f, err := m.ExtractResources("")
+	require.NoError(t, err)
+	assert.Empty(t, f.Resources)
+	targets, err := m.ExtractTargets("")
+	require.NoError(t, err)
+	assert.Empty(t, targets)
+	stacks, err := m.ExtractStacks()
+	require.NoError(t, err)
+	assert.Empty(t, stacks)
+	policies, err := m.ExtractPolicies()
+	require.NoError(t, err)
+	assert.Empty(t, policies)
+}
+
+func TestFake_ExtractStacks_FIFOWithStickyTail(t *testing.T) {
+	m := &FakeMetastructure{StackResponses: []WrappedStackResponse{
+		{Stacks: []*pkgmodel.Stack{{Label: "one"}}},
+		{Stacks: []*pkgmodel.Stack{{Label: "two"}}},
+	}}
+	s1, _ := m.ExtractStacks()
+	s2, _ := m.ExtractStacks()
+	s3, _ := m.ExtractStacks() // sticky tail repeats
+	assert.Equal(t, "one", s1[0].Label)
+	assert.Equal(t, "two", s2[0].Label)
+	assert.Equal(t, "two", s3[0].Label)
 }
 
 // TestFakeMetastructure_ListResponsesEmpty verifies that an empty response queue
