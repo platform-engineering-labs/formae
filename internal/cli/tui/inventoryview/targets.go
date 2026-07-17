@@ -10,17 +10,20 @@ import (
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
+// discoverableStr converts a bool to "yes" or "no".
+func discoverableStr(v bool) string {
+	if v {
+		return "yes"
+	}
+	return "no"
+}
+
 // targetRow converts a *pkgmodel.Target into a render-ready row.
 // Cells: [Label, Namespace, Discoverable, Config].
 // Discoverable is rendered as "yes"/"no"; Config is compacted via compactKV.
 func targetRow(t *pkgmodel.Target) row {
-	discoverable := "no"
-	if t.Discoverable {
-		discoverable = "yes"
-	}
-
 	return row{
-		cells: []string{t.Label, t.Namespace, discoverable, compactKV(t.Config)},
+		cells: []string{t.Label, t.Namespace, discoverableStr(t.Discoverable), compactKV(t.Config)},
 		detail: func(width int) []string {
 			return targetDetail(t, width)
 		},
@@ -30,10 +33,7 @@ func targetRow(t *pkgmodel.Target) row {
 // targetDetail renders the detail panel for a target.
 // Identity lines for Label, Namespace, Discoverable, Version; then Config tree.
 func targetDetail(t *pkgmodel.Target, _ int) []string {
-	discoverable := "no"
-	if t.Discoverable {
-		discoverable = "yes"
-	}
+	discoverable := discoverableStr(t.Discoverable)
 
 	// Keys: Label(5), Namespace(9), Discoverable(12), Version(7).
 	// Longest = "Discoverable" (12). Format: "%-13s" (key + ":" = 13 chars).

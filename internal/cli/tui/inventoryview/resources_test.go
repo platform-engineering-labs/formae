@@ -58,12 +58,15 @@ func TestResourceRow_Detail_IdentityLines(t *testing.T) {
 	require.NotNil(t, got.detail)
 	lines := got.detail(80)
 
-	assert.Contains(t, lines, "Label:    logs")
-	assert.Contains(t, lines, "Type:     AWS::S3::Bucket")
-	assert.Contains(t, lines, "Stack:    default")
-	assert.Contains(t, lines, "Target:   aws-prod")
-	assert.Contains(t, lines, "NativeID: arn:aws:s3:::logs")
-	assert.Contains(t, lines, "Managed:  yes")
+	expected := []string{
+		"Label:    logs",
+		"Type:     AWS::S3::Bucket",
+		"Stack:    default",
+		"Target:   aws-prod",
+		"NativeID: arn:aws:s3:::logs",
+		"Managed:  yes",
+	}
+	assert.Equal(t, expected, lines[:6])
 }
 
 func TestResourceRow_Detail_ManagedFalse(t *testing.T) {

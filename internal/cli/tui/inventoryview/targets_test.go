@@ -69,10 +69,13 @@ func TestTargetRow_Detail_IdentityLines(t *testing.T) {
 	require.NotNil(t, got.detail)
 	lines := got.detail(80)
 
-	assert.Contains(t, lines, "Label:        aws-prod")
-	assert.Contains(t, lines, "Namespace:    AWS")
-	assert.Contains(t, lines, "Discoverable: yes")
-	assert.Contains(t, lines, "Version:      3")
+	expected := []string{
+		"Label:        aws-prod",
+		"Namespace:    AWS",
+		"Discoverable: yes",
+		"Version:      3",
+	}
+	assert.Equal(t, expected, lines[:4])
 }
 
 func TestTargetRow_Detail_ConfigTree(t *testing.T) {
