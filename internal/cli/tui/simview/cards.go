@@ -171,9 +171,12 @@ func collectChangeLines(th *theme.Theme, r simRow, doneSt, warnSt, subtleSt lipg
 	return lines
 }
 
-// buildPropertyChangeLines extracts and formats property changes for resource rows.
-// For replace cards: immutable first (Warning), then mutable set lines.
-// For all others: all changes from PatchDocument.
+// buildPropertyChangeLines extracts and formats property and tag changes for
+// resource rows. Order mirrors FormatPatchDocument in internal/cli/renderer/patches.go:
+// tag lines first, then property lines.
+//
+// For replace cards: immutable property lines first (Warning), then mutable set lines.
+// For all others: all changes from PatchDocument, tags preceding properties.
 func buildPropertyChangeLines(th *theme.Theme, r simRow, doneSt, warnSt, subtleSt lipgloss.Style) []string {
 	if r.res == nil {
 		return nil
@@ -211,6 +214,10 @@ func buildPropertyChangeLines(th *theme.Theme, r simRow, doneSt, warnSt, subtleS
 		}
 		cs, err := renderer.ExtractChanges(delPatch, delProps, delOldProps, refLabels)
 		if err == nil {
+			// Tags first (mirrors renderer order)
+			for _, tch := range cs.Tags {
+				lines = append(lines, formatSimTagChange(tch, doneSt, warnSt, subtleSt))
+			}
 			for _, ch := range cs.Properties {
 				if ch.NoOp {
 					continue
@@ -222,6 +229,10 @@ func buildPropertyChangeLines(th *theme.Theme, r simRow, doneSt, warnSt, subtleS
 		// Mutable carried changes via MutableChangesForReplace
 		mcs, err := renderer.MutableChangesForReplace(patchDoc, r.delRes.CreateOnlyPatch, properties, oldProperties, refLabels)
 		if err == nil {
+			// Tags first (mirrors renderer order)
+			for _, tch := range mcs.Tags {
+				lines = append(lines, formatSimTagChange(tch, doneSt, warnSt, subtleSt))
+			}
 			for _, ch := range mcs.Properties {
 				if ch.NoOp {
 					continue
@@ -233,6 +244,10 @@ func buildPropertyChangeLines(th *theme.Theme, r simRow, doneSt, warnSt, subtleS
 		// Regular update/create/delete card
 		cs, err := renderer.ExtractChanges(patchDoc, properties, oldProperties, refLabels)
 		if err == nil {
+			// Tags first (mirrors FormatPatchDocument order: cs.Tags then cs.Properties)
+			for _, tch := range cs.Tags {
+				lines = append(lines, formatSimTagChange(tch, doneSt, warnSt, subtleSt))
+			}
 			for _, ch := range cs.Properties {
 				if ch.NoOp {
 					continue
@@ -243,6 +258,43 @@ func buildPropertyChangeLines(th *theme.Theme, r simRow, doneSt, warnSt, subtleS
 	}
 
 	return lines
+}
+
+// formatSimTagChange formats a single TagChange into a card line.
+// Mirrors the mockup format from docs/mockups/simulation-preview.txt:
+//
+//	add  Tags[key]: "value"     — Done style for keyword and value
+//	remove  Tags[key]           — Warning style for keyword and key (no value)
+//	set  Tags[key]: "old" → "new" — TextSubtle old, Done new (replace operation)
+func formatSimTagChange(tch renderer.TagChange, doneSt, warnSt, subtleSt lipgloss.Style) string {
+	path := "Tags[" + tch.Key + "]"
+
+	switch tch.Operation {
+	case "add":
+		kw := doneSt.Render("add")
+		pathStr := subtleSt.Render(path)
+		val := quoteCardValue(tch.Value)
+		return kw + "  " + pathStr + ": " + doneSt.Render(val)
+
+	case "remove":
+		kw := warnSt.Render("remove")
+		pathStr := warnSt.Render(path)
+		return kw + "  " + pathStr
+
+	case "replace":
+		kw := subtleSt.Render("set")
+		pathStr := subtleSt.Render(path)
+		if tch.HasOld {
+			oldVal := quoteCardValue(tch.OldValue)
+			newVal := quoteCardValue(tch.Value)
+			return kw + "  " + pathStr + ": " + subtleSt.Render(oldVal) + " → " + doneSt.Render(newVal)
+		}
+		newVal := quoteCardValue(tch.Value)
+		return kw + "  " + pathStr + ": " + doneSt.Render(newVal)
+
+	default:
+		return subtleSt.Render(tch.Operation) + "  " + subtleSt.Render(path)
+	}
 }
 
 // formatSimPropertyChange formats a single PropertyChange into a card line.

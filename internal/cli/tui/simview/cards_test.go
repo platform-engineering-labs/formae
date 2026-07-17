@@ -492,6 +492,190 @@ func TestRenderCard_StructureIntegrity(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Tag change rendering tests
+// ---------------------------------------------------------------------------
+
+// TestRenderCard_TagAdd verifies a tag add renders:
+//
+//	add  Tags[backup]: "daily"
+//
+// with Done style for keyword and value.
+func TestRenderCard_TagAdd(t *testing.T) {
+	th := makeCardTheme()
+	res := &apimodel.ResourceUpdate{
+		ResourceID:    "r-tag-add",
+		ResourceLabel: "app-bucket",
+		ResourceType:  "AWS::S3::Bucket",
+		StackName:     "production",
+		Operation:     apimodel.OperationUpdate,
+		// /Tags/0 is a new complete tag object {Key:"backup", Value:"daily"}
+		PatchDocument: []byte(`[
+			{"op":"add","path":"/Tags/0","value":{"Key":"backup","Value":"daily"}}
+		]`),
+		Properties:    []byte(`{"Tags":[{"Key":"backup","Value":"daily"}]}`),
+		OldProperties: []byte(`{}`),
+	}
+
+	row := simRow{
+		key:   "resource/production/app-bucket",
+		op:    opUpdate,
+		label: "app-bucket",
+		typ:   "AWS::S3::Bucket",
+		stack: "production",
+		res:   res,
+	}
+
+	lines := renderCard(th, row, 100)
+	card := strings.Join(lines, "\n")
+	p := plain(card)
+
+	// Must contain add keyword
+	assert.Contains(t, p, "add", "should have add keyword for tag add")
+	// Must contain the tag key in Tags[backup] form
+	assert.Contains(t, p, "Tags[backup]", `should show Tags[backup] path`)
+	// Value must be quoted
+	assert.Contains(t, p, `"daily"`, `tag value should be quoted`)
+}
+
+// TestRenderCard_TagRemove verifies a tag remove renders:
+//
+//	remove  Tags[temporary]
+//
+// with Warning style (key only, no value).
+func TestRenderCard_TagRemove(t *testing.T) {
+	th := makeCardTheme()
+	res := &apimodel.ResourceUpdate{
+		ResourceID:    "r-tag-remove",
+		ResourceLabel: "app-bucket",
+		ResourceType:  "AWS::S3::Bucket",
+		StackName:     "production",
+		Operation:     apimodel.OperationUpdate,
+		// /Tags/0 is a remove of an existing tag
+		PatchDocument: []byte(`[
+			{"op":"remove","path":"/Tags/0"}
+		]`),
+		Properties:    []byte(`{}`),
+		OldProperties: []byte(`{"Tags":[{"Key":"temporary","Value":"yes"}]}`),
+	}
+
+	row := simRow{
+		key:   "resource/production/app-bucket",
+		op:    opUpdate,
+		label: "app-bucket",
+		typ:   "AWS::S3::Bucket",
+		stack: "production",
+		res:   res,
+	}
+
+	lines := renderCard(th, row, 100)
+	card := strings.Join(lines, "\n")
+	p := plain(card)
+
+	// Must contain remove keyword
+	assert.Contains(t, p, "remove", "should have remove keyword for tag remove")
+	// Must contain the tag key
+	assert.Contains(t, p, "Tags[temporary]", `should show Tags[temporary] path`)
+}
+
+// TestRenderCard_TagReplace verifies a tag replace (set with old value) renders:
+//
+//	set  Tags[env]: "staging" → "prod"
+//
+// with old value in TextSubtle and new value in Done style.
+func TestRenderCard_TagReplace(t *testing.T) {
+	th := makeCardTheme()
+	res := &apimodel.ResourceUpdate{
+		ResourceID:    "r-tag-replace",
+		ResourceLabel: "app-bucket",
+		ResourceType:  "AWS::S3::Bucket",
+		StackName:     "production",
+		Operation:     apimodel.OperationUpdate,
+		// Replace the Value of an existing tag /Tags/0/Value
+		PatchDocument: []byte(`[
+			{"op":"replace","path":"/Tags/0/Value","value":"prod"}
+		]`),
+		Properties:    []byte(`{"Tags":[{"Key":"env","Value":"prod"}]}`),
+		OldProperties: []byte(`{"Tags":[{"Key":"env","Value":"staging"}]}`),
+	}
+
+	row := simRow{
+		key:   "resource/production/app-bucket",
+		op:    opUpdate,
+		label: "app-bucket",
+		typ:   "AWS::S3::Bucket",
+		stack: "production",
+		res:   res,
+	}
+
+	lines := renderCard(th, row, 100)
+	card := strings.Join(lines, "\n")
+	p := plain(card)
+
+	// Must contain set keyword
+	assert.Contains(t, p, "set", "should have set keyword for tag replace")
+	// Must show Tags[env]
+	assert.Contains(t, p, "Tags[env]", `should show Tags[env] path`)
+	// Old and new values both quoted
+	assert.Contains(t, p, `"staging"`, `old tag value should be quoted`)
+	assert.Contains(t, p, `"prod"`, `new tag value should be quoted`)
+	// Arrow separator
+	assert.Contains(t, p, "→", "should have → separator between old and new")
+}
+
+// TestRenderCard_MixedPropertyAndTagChanges verifies that a patch with both
+// property changes and tag changes renders tags FIRST then properties (mirroring
+// FormatPatchDocument in internal/cli/renderer/patches.go which iterates cs.Tags
+// before cs.Properties), and that ├/└ connectors are correct across the combined list.
+func TestRenderCard_MixedPropertyAndTagChanges(t *testing.T) {
+	th := makeCardTheme()
+	res := &apimodel.ResourceUpdate{
+		ResourceID:    "r-mixed",
+		ResourceLabel: "app-bucket",
+		ResourceType:  "AWS::S3::Bucket",
+		StackName:     "production",
+		Operation:     apimodel.OperationUpdate,
+		PatchDocument: []byte(`[
+			{"op":"add","path":"/Tags/0","value":{"Key":"backup","Value":"daily"}},
+			{"op":"replace","path":"/VersioningConfiguration/Status","value":"Enabled"}
+		]`),
+		Properties:    []byte(`{"Tags":[{"Key":"backup","Value":"daily"}],"VersioningConfiguration":{"Status":"Enabled"}}`),
+		OldProperties: []byte(`{"VersioningConfiguration":{"Status":"Suspended"}}`),
+	}
+
+	row := simRow{
+		key:   "resource/production/app-bucket",
+		op:    opUpdate,
+		label: "app-bucket",
+		typ:   "AWS::S3::Bucket",
+		stack: "production",
+		res:   res,
+	}
+
+	lines := renderCard(th, row, 100)
+	card := strings.Join(lines, "\n")
+	p := plain(card)
+
+	// Both changes must appear
+	assert.Contains(t, p, "Tags[backup]", "tag change must appear")
+	assert.Contains(t, p, "VersioningConfiguration", "property change must appear")
+
+	// Tags come FIRST (mirrors renderer order: cs.Tags then cs.Properties)
+	tagIdx := strings.Index(p, "Tags[backup]")
+	propIdx := strings.Index(p, "VersioningConfiguration")
+	assert.Less(t, tagIdx, propIdx, "tag lines must come before property lines (mirrors renderer order)")
+
+	// └ must be the last change connector — it sits at the start of the property line.
+	// Verify: last ├ appears before the last └, and the last └ comes before the end of the
+	// property path text (i.e. the property line uses └, not ├).
+	lastPipe := strings.LastIndex(p, "├")
+	lastCorner := strings.LastIndex(p, "└")
+	assert.Greater(t, lastCorner, -1, "└ connector must appear")
+	assert.Greater(t, lastCorner, lastPipe, "└ connector must come after the last ├ connector")
+	// The └ connector is the start of the last change line; VersioningConfiguration follows it
+	assert.Greater(t, propIdx, lastCorner, "VersioningConfiguration path must follow its └ connector")
+}
+
+// ---------------------------------------------------------------------------
 // Expansion wiring tests
 // ---------------------------------------------------------------------------
 
