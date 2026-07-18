@@ -253,8 +253,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	rows := m.navigableRows()
 
+	// ctrl+c is always an escape hatch — quit even while help overlay is open.
+	if msg.Type == tea.KeyCtrlC {
+		m.decision = DecisionAbort{}
+		return m, tea.Quit
+	}
+
+	// Help overlay is modal: only ? (toggle) and esc (close) act; all other keys
+	// are swallowed so they do not act on the underlying list.
+	if m.showHelp {
+		switch {
+		case msg.Type == tea.KeyEsc:
+			m.showHelp = false
+		case msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == '?':
+			m.showHelp = false
+		}
+		return m, nil
+	}
+
 	switch msg.String() {
-	case "q", "esc", "ctrl+c":
+	case "q", "esc":
 		m.decision = DecisionAbort{}
 		return m, tea.Quit
 

@@ -67,14 +67,20 @@ func (m Model) viewList() string {
 	m.vp.Width = m.width
 	m.vp.Height = vpH
 
+	if m.showHelp {
+		// Render the help overlay centered in the remaining body + footer area.
+		overlayHeight := m.height - lipgloss.Height(sb.String())
+		if overlayHeight < 1 {
+			overlayHeight = 1
+		}
+		overlay := components.HelpOverlay(m.th, m.width, overlayHeight, driftHelpGroups())
+		sb.WriteString(overlay)
+		return m.padToHeight(sb.String())
+	}
+
 	var body string
 	var cursorLine int
-	if m.showHelp {
-		body = m.renderHelp()
-		cursorLine = 0
-	} else {
-		body, cursorLine = m.renderBody()
-	}
+	body, cursorLine = m.renderBody()
 	m.vp.SetContent(body)
 
 	// Scroll to keep the cursor row in view.
@@ -233,30 +239,33 @@ func (m Model) renderRow(r driftRow, isCursor bool) string {
 	return line
 }
 
-// renderHelp renders the help overlay shown in place of the list body.
-func (m Model) renderHelp() string {
-	p := m.th.Palette
-	keySt := m.th.Styles.KeybindingKey
-	descSt := lipgloss.NewStyle().Foreground(p.TextSecondary)
-	headSt := lipgloss.NewStyle().Foreground(p.TextPrimary).Bold(true)
-
-	entries := []struct{ key, desc string }{
-		{"↑/k, ↓/j", "move cursor"},
-		{"space", "toggle select"},
-		{"enter", "expand/collapse change details"},
-		{"a / n", "select all / none"},
-		{"e", "extract selected as code"},
-		{"r", "revert all out-of-band changes (--force)"},
-		{"q / esc", "abort"},
-		{"?", "close help"},
+// driftHelpGroups returns the grouped keybinding hints for the driftview help overlay.
+func driftHelpGroups() []components.HelpGroup {
+	return []components.HelpGroup{
+		{
+			Title: "Navigate",
+			Hints: []components.KeyHint{
+				{Key: "↑↓ / j k", Desc: "move cursor"},
+			},
+		},
+		{
+			Title: "Actions",
+			Hints: []components.KeyHint{
+				{Key: "space", Desc: "toggle select"},
+				{Key: "enter", Desc: "expand details"},
+				{Key: "a / n", Desc: "select all / none"},
+				{Key: "e", Desc: "extract selected"},
+				{Key: "r", Desc: "revert (--force)"},
+			},
+		},
+		{
+			Title: "General",
+			Hints: []components.KeyHint{
+				{Key: "esc / q", Desc: "abort"},
+				{Key: "?", Desc: "close help"},
+			},
+		},
 	}
-
-	var sb strings.Builder
-	sb.WriteString("\n  " + headSt.Render("Keys") + "\n\n")
-	for _, e := range entries {
-		sb.WriteString("    " + keySt.Render(components.Pad(e.key, 12)) + descSt.Render(e.desc) + "\n")
-	}
-	return sb.String()
 }
 
 // renderFooter renders the selected-count line plus the key-hint bar.
