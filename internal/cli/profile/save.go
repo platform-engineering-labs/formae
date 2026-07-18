@@ -27,7 +27,7 @@ func newSaveCmd() *cobra.Command {
 			}
 			w := cmd.OutOrStdout()
 			if isTerminal(w) {
-				th := theme.New("")
+				th := theme.New("formae")
 				_, _ = fmt.Fprintln(w, renderAck(th, "saved "+args[0]))
 			} else {
 				_, _ = fmt.Fprintf(w, "saved %s\n", args[0])

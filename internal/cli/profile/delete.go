@@ -26,7 +26,7 @@ func newDeleteCmd() *cobra.Command {
 			}
 			w := cmd.OutOrStdout()
 			if isTerminal(w) {
-				th := theme.New("")
+				th := theme.New("formae")
 				_, _ = fmt.Fprintln(w, renderAck(th, "deleted "+args[0]))
 			} else {
 				_, _ = fmt.Fprintf(w, "deleted %s\n", args[0])

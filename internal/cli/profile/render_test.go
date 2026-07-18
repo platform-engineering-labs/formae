@@ -7,6 +7,7 @@
 package profile
 
 import (
+	"bytes"
 	"io"
 	"os"
 	"strings"
@@ -44,26 +45,69 @@ func TestRenderProfileList_ActiveMarker(t *testing.T) {
 	assert.True(t, strings.Count(out, "●") == 1, "only one profile should be marked active")
 }
 
-// TestCurrentBare verifies that when isTerminal is false the human path
-// prints just the bare profile name (scripts depend on this).
+// TestCurrentBare_PipedOutput verifies that when isTerminal is false the human path
+// prints just the bare profile name (scripts depend on this). This test drives
+// the actual current command so that the isTerminal seam is exercised, not dead.
 func TestCurrentBare_PipedOutput(t *testing.T) {
-	// stub isTerminal to false (piped)
+	// Point the store at a temp dir that has an active pointer.
+	cfgDir := t.TempDir()
+	// Write an active pointer file so Active() returns "staging".
+	if err := os.WriteFile(cfgDir+"/active", []byte("staging\n"), 0o600); err != nil {
+		t.Fatalf("write active: %v", err)
+	}
+	t.Setenv("FORMAE_CONFIG_DIR", cfgDir)
+
+	// Stub isTerminal to false — this is what current.go consults.
 	orig := isTerminal
 	isTerminal = func(_ io.Writer) bool { return false }
 	t.Cleanup(func() { isTerminal = orig })
 
-	th := theme.New("formae")
-	out := renderCurrentHuman(th, "staging", false)
-	// must be exactly the name — no ANSI, no newline in the returned string
-	assert.Equal(t, "staging", out)
+	var buf bytes.Buffer
+	cmd := newCurrentCmd()
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("current cmd: %v", err)
+	}
+	// Must be exactly the bare name with a trailing newline (from Fprintln) — no ANSI.
+	assert.Equal(t, "staging\n", buf.String())
 }
 
-// TestCurrentUnset verifies the hint text when no profile is active.
+// TestCurrentBare_UnsetPiped verifies that the unset+piped path returns plain
+// text with no ANSI — exercises Finding 1 fix via the isTerminal seam.
+func TestCurrentBare_UnsetPiped(t *testing.T) {
+	// Empty temp dir → Active() returns ErrNotInitialized → active == "".
+	cfgDir := t.TempDir()
+	t.Setenv("FORMAE_CONFIG_DIR", cfgDir)
+
+	// Stub isTerminal to false (piped).
+	orig := isTerminal
+	isTerminal = func(_ io.Writer) bool { return false }
+	t.Cleanup(func() { isTerminal = orig })
+
+	var buf bytes.Buffer
+	cmd := newCurrentCmd()
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("current cmd: %v", err)
+	}
+	out := buf.String()
+	// Must contain hint text.
+	assert.Contains(t, out, "no active profile yet")
+	assert.Contains(t, out, "formae profile use <name>")
+	// Must NOT contain any ANSI escape sequences.
+	assert.NotContains(t, out, "\x1b[", "output must have no ANSI escape sequences when piped")
+}
+
+// TestCurrentUnset verifies the hint text when no profile is active (render-level).
 func TestCurrentUnset_HintText(t *testing.T) {
 	th := theme.New("formae")
 	out := renderCurrentHuman(th, "", false)
 	assert.Contains(t, out, "no active profile yet")
 	assert.Contains(t, out, "formae profile use <name>")
+	// Unset + piped must have no ANSI.
+	assert.NotContains(t, out, "\x1b[", "plain output must have no ANSI when tty=false")
 }
 
 // TestRenderAck verifies that renderAck produces a checkmark line.

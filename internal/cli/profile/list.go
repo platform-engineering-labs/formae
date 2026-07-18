@@ -54,7 +54,7 @@ func newListCmd() *cobra.Command {
 
 			w := cc.OutOrStdout()
 			if isTerminal(w) {
-				th := theme.New("")
+				th := theme.New("formae")
 				_, _ = fmt.Fprintln(w, renderProfileList(th, names, active))
 			} else {
 				for _, n := range names {

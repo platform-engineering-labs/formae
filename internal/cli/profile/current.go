@@ -48,7 +48,7 @@ func newCurrentCmd() *cobra.Command {
 			}
 
 			w := cc.OutOrStdout()
-			th := theme.New("")
+			th := theme.New("formae")
 			tty := isTerminal(w)
 			_, _ = fmt.Fprintln(w, renderCurrentHuman(th, active, tty))
 			return nil

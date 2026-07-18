@@ -27,7 +27,7 @@ func newCreateCmd() *cobra.Command {
 			}
 			w := cmd.OutOrStdout()
 			if isTerminal(w) {
-				th := theme.New("")
+				th := theme.New("formae")
 				_, _ = fmt.Fprintln(w, renderAck(th, "created "+args[0]))
 			} else {
 				_, _ = fmt.Fprintf(w, "created %s\n", args[0])

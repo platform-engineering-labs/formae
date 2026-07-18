@@ -26,7 +26,7 @@ func newUseCmd() *cobra.Command {
 			}
 			w := cmd.OutOrStdout()
 			if isTerminal(w) {
-				th := theme.New("")
+				th := theme.New("formae")
 				_, _ = fmt.Fprintln(w, renderAck(th, "switched to "+args[0]))
 			} else {
 				_, _ = fmt.Fprintf(w, "switched to %s\n", args[0])

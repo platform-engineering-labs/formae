@@ -40,10 +40,13 @@ func renderProfileList(th *theme.Theme, names []string, active string) string {
 
 // renderCurrentHuman renders the current-profile output for a human reader.
 // When tty is false (piped) it returns just the bare name — scripts depend on
-// this. When the profile is unset it returns the unset-state hint regardless
-// of tty.
+// this. When the profile is unset and piped it returns a plain two-line hint;
+// when unset and on a TTY it returns the styled hint.
 func renderCurrentHuman(th *theme.Theme, active string, tty bool) string {
 	if active == "" {
+		if !tty {
+			return "no active profile yet\nactivate one: formae profile use <name>"
+		}
 		secondary := lipgloss.NewStyle().Foreground(th.Palette.TextSecondary)
 		subtle := lipgloss.NewStyle().Foreground(th.Palette.TextSubtle)
 		return secondary.Render("no active profile yet") + "\n" + subtle.Render("activate one: formae profile use <name>")
