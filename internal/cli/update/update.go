@@ -10,8 +10,10 @@ import (
 	"strings"
 
 	"github.com/platform-engineering-labs/formae/internal/agent"
+	"github.com/platform-engineering-labs/formae/internal/cli/app"
 	clicmd "github.com/platform-engineering-labs/formae/internal/cli/cmd"
 	"github.com/platform-engineering-labs/formae/internal/cli/config"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	"github.com/platform-engineering-labs/formae/internal/opsmgr"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -20,6 +22,16 @@ import (
 	"github.com/platform-engineering-labs/orbital/ops"
 	"github.com/spf13/cobra"
 )
+
+// themeFor resolves the active theme from the app config.
+// The name falls back to "formae" for nil configs (theme.New nil-guards internally).
+func themeFor(a *app.App) *theme.Theme {
+	name := ""
+	if a != nil && a.Config != nil {
+		name = a.Config.Cli.Theme
+	}
+	return theme.New(name)
+}
 
 func UpdateCmd() *cobra.Command {
 	command := &cobra.Command{
@@ -174,23 +186,17 @@ func UpdateListCmd() *cobra.Command {
 				return err
 			}
 
-			if available.Installed != nil {
-				fmt.Printf("installed: %s (%s)\n\n", available.Installed.Version.Short(), available.Installed.Version.Timestamp.String())
+			if available.Installed == nil {
+				return fmt.Errorf("no installed version found")
 			}
 
-			fmt.Print("available versions:\n\n")
+			versions := make([]string, 0, len(available.Available))
 			for _, entry := range available.Available {
-				if entry.Version.Semver().EQ(available.Installed.Version.Semver()) {
-					age := "Newer"
-					if entry.Version.LT(available.Installed.Version) {
-						age = "Older"
-					}
-
-					fmt.Printf("  %s %s: (%s)\n", entry.Version.Short(), age, entry.Version.Timestamp.String())
-				} else {
-					fmt.Printf("  %s\n", entry.Version.Short())
-				}
+				versions = append(versions, entry.Version.Short())
 			}
+
+			th := themeFor(app)
+			fmt.Print(renderVersionList(th, available.Installed.Version.Short(), available.Installed.Version.Timestamp, versions))
 
 			return nil
 		},
