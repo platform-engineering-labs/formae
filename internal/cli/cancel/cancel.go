@@ -19,14 +19,20 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/config"
 	"github.com/platform-engineering-labs/formae/internal/cli/display"
 	"github.com/platform-engineering-labs/formae/internal/cli/printer"
-	"github.com/platform-engineering-labs/formae/internal/cli/prompter"
 	"github.com/platform-engineering-labs/formae/internal/cli/status"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/errfmt"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/statuswatch"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
+)
+
+// Package-level seams — replaced in tests to avoid TTY / network calls.
+var (
+	isInteractive = tui.IsInteractive
+	runConfirm    = components.RunConfirm
 )
 
 // isTerminal returns true when the writer is a real terminal (includes Cygwin).
@@ -385,7 +391,14 @@ func runCancelLegacy(a *app.App, opts *CancelOptions) error {
 			display.Gold("Warning: --force is a destructive escape hatch."),
 			target,
 		)
-		if !prompter.NewBasicPrompter().Confirm(prompt, false) {
+		if !isInteractive() {
+			return fmt.Errorf("interactive input requires a TTY — pass --yes")
+		}
+		ok, confirmErr := runConfirm(themeFor(a), prompt, "")
+		if confirmErr != nil {
+			return confirmErr
+		}
+		if !ok {
 			fmt.Print(display.Red("\nCommand aborted\n"))
 			return nil
 		}

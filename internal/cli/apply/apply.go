@@ -34,6 +34,12 @@ import (
 // ansiEscape matches ANSI SGR escape sequences for stripping display colors.
 var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
+// Package-level seams — replaced in tests to avoid TTY / network calls.
+var (
+	isInteractive = tui.IsInteractive
+	runConfirm    = components.RunConfirm
+)
+
 // isTerminal, launchSimView, launchWatch, and applyFn are package-level vars so tests can stub them.
 var (
 	isTerminal = tui.IsTerminal
@@ -313,11 +319,19 @@ func runApplyLegacy(a *app.App, opts *ApplyOptions) error {
 	}
 
 	// confirm with the user before proceeding (unless --yes is specified)
-	prompter := prompter.NewBasicPrompter()
-	prompt := components.PromptForOperations(&res.Simulation.Command)
-	if !opts.Yes && !prompter.Confirm(prompt, false) {
-		fmt.Print(display.Red("\nCommand aborted\n"))
-		return nil
+	if !opts.Yes {
+		if !isInteractive() {
+			return fmt.Errorf("interactive input requires a TTY — pass --yes")
+		}
+		prompt := components.PromptForOperations(&res.Simulation.Command)
+		ok, err := runConfirm(themeFor(a), prompt, "")
+		if err != nil {
+			return err
+		}
+		if !ok {
+			fmt.Print(display.Red("\nCommand aborted\n"))
+			return nil
+		}
 	}
 
 	var nags []string

@@ -260,7 +260,7 @@ func TestApply_Yes_OnTTY(t *testing.T) {
 	assert.False(t, simViewCalled, "launchSimView must NOT be called when --yes is set")
 }
 
-func TestApply_NonTTY(t *testing.T) {
+func TestApply_NonTTY_WithYes(t *testing.T) {
 	origApplyFn := applyFn
 	origIsTerminal := isTerminal
 	origLaunchSimView := launchSimView
@@ -301,7 +301,7 @@ func TestApply_NonTTY(t *testing.T) {
 		OutputConsumer: printer.ConsumerHuman,
 		FormaFile:      "forma.pkl",
 		Mode:           pkgmodel.FormaApplyModeReconcile,
-		Yes:            false,
+		Yes:            true, // --yes bypasses the D8 gate
 	}
 
 	err := runApplyForHumans(a, opts)
