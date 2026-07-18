@@ -20,7 +20,7 @@ var pluginIsTerminal = tui.IsTerminal
 // lipgloss styling; when piped it writes plain text so output stays ANSI-free.
 func ackLine(w io.Writer, tty bool, th *theme.Theme, m components.AckMarker, text string) {
 	if tty {
-		fmt.Fprintln(w, components.AckLine(th, m, text))
+		_, _ = fmt.Fprintln(w, components.AckLine(th, m, text))
 		return
 	}
 	glyph := map[components.AckMarker]string{
@@ -29,5 +29,5 @@ func ackLine(w io.Writer, tty bool, th *theme.Theme, m components.AckMarker, tex
 		components.AckWarn: "!",
 		components.AckFail: "✗",
 	}[m]
-	fmt.Fprintf(w, "%s %s\n", glyph, text)
+	_, _ = fmt.Fprintf(w, "%s %s\n", glyph, text)
 }

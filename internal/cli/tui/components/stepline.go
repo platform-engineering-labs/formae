@@ -61,7 +61,7 @@ func StartStep(w io.Writer, th *theme.Theme, text string) *Step {
 	width := stepTermWidth(w)
 	// Write the first frame synchronously before spawning the goroutine to
 	// keep output deterministic in tests (avoids ticker-first-frame race).
-	fmt.Fprint(s.w, "\r\x1b[K"+stepFrameLine(s.th, stepFrames[0], text, width))
+	_, _ = fmt.Fprint(s.w, "\r\x1b[K"+stepFrameLine(s.th, stepFrames[0], text, width))
 	go func() {
 		defer close(s.stopped)
 		t := time.NewTicker(100 * time.Millisecond)
@@ -73,7 +73,7 @@ func StartStep(w io.Writer, th *theme.Theme, text string) *Step {
 				return
 			case <-t.C:
 				i = (i + 1) % len(stepFrames)
-				fmt.Fprint(s.w, "\r\x1b[K"+stepFrameLine(s.th, stepFrames[i], text, width))
+				_, _ = fmt.Fprint(s.w, "\r\x1b[K"+stepFrameLine(s.th, stepFrames[i], text, width))
 			}
 		}
 	}()
@@ -108,10 +108,10 @@ func (s *Step) finish(m AckMarker, text string) {
 	if s.tty {
 		close(s.stop)
 		<-s.stopped
-		fmt.Fprint(s.w, "\r\x1b[K"+AckLine(s.th, m, text)+"\n")
+		_, _ = fmt.Fprint(s.w, "\r\x1b[K"+AckLine(s.th, m, text)+"\n")
 		return
 	}
 	// Piped: plain result line, no ANSI.
 	glyph := map[AckMarker]string{AckDone: "✓", AckSkip: "·", AckWarn: "!", AckFail: "✗"}[m]
-	fmt.Fprintf(s.w, "%s %s\n", glyph, text)
+	_, _ = fmt.Fprintf(s.w, "%s %s\n", glyph, text)
 }
