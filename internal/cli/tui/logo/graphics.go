@@ -15,11 +15,13 @@ import (
 )
 
 // encodeKitty returns the Kitty APC graphics-protocol escape sequence for the
-// embedded logo (dark or light variant) sized to cellCols character columns.
+// embedded logo (dark or light variant) scaled to a fixed cellCols×cellRows
+// character cell grid. The c=<cols>,r=<rows> parameters instruct Kitty to
+// render the image into exactly that many cells, giving a known footprint.
 // The PNG is base64-encoded and split into 4096-byte chunks within APC payloads
 // per the Kitty protocol specification (a=T f=100 m=more).
 // Returns the complete escape sequence as a string; does NOT write to stdout.
-func encodeKitty(dark bool, cellCols int) string {
+func encodeKitty(dark bool, cellCols, cellRows int) string {
 	img, err := loadAndScaleForGraphics(dark, cellCols)
 	if err != nil {
 		return ""
@@ -50,8 +52,9 @@ func encodeKitty(dark bool, cellCols int) string {
 		}
 
 		if i == 0 {
-			// First chunk: a=T (transmit+display), f=100 (PNG format), m=more
-			fmt.Fprintf(&seq, "\033_Ga=T,f=100,m=%d;%s\033\\", more, chunk)
+			// First chunk: a=T (transmit+display), f=100 (PNG format),
+			// c=<cols>,r=<rows> fixes the cell footprint, m=more.
+			fmt.Fprintf(&seq, "\033_Ga=T,f=100,c=%d,r=%d,m=%d;%s\033\\", cellCols, cellRows, more, chunk)
 		} else {
 			// Continuation chunks
 			fmt.Fprintf(&seq, "\033_Gm=%d;%s\033\\", more, chunk)
@@ -62,12 +65,14 @@ func encodeKitty(dark bool, cellCols int) string {
 }
 
 // encodeITerm2 returns the iTerm2 inline-image escape sequence for the embedded
-// logo (dark or light variant) sized to cellCols character columns.
+// logo (dark or light variant) scaled to a fixed cellCols×cellRows character
+// cell grid. width=<cols>;height=<rows> (no px/% suffix = cell units) with
+// preserveAspectRatio=0 instructs iTerm2 to fill exactly that grid.
 // The entire PNG is base64-encoded and wrapped in a single atomic OSC 1337
 // escape sequence — fragmented writes can cause terminals to misparse the
 // sequence (prototype fix from commit 0e057261).
 // Returns the complete escape sequence as a string; does NOT write to stdout.
-func encodeITerm2(dark bool, cellCols int) string {
+func encodeITerm2(dark bool, cellCols, cellRows int) string {
 	img, err := loadAndScaleForGraphics(dark, cellCols)
 	if err != nil {
 		return ""
@@ -83,8 +88,11 @@ func encodeITerm2(dark bool, cellCols int) string {
 
 	// Build the complete escape sequence in a buffer to ensure atomic write.
 	// Fragmented writes can cause terminals to misparse the sequence.
+	// width/height without units = cell count; preserveAspectRatio=0 fills grid.
 	var seq bytes.Buffer
-	fmt.Fprintf(&seq, "\033]1337;File=inline=1;size=%d:%s\a", len(rawBytes), encoded)
+	fmt.Fprintf(&seq,
+		"\033]1337;File=inline=1;size=%d;width=%d;height=%d;preserveAspectRatio=0:%s\a",
+		len(rawBytes), cellCols, cellRows, encoded)
 
 	return seq.String()
 }

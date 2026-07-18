@@ -14,12 +14,12 @@ import (
 
 func TestEncodeKitty_Golden(t *testing.T) {
 	t.Parallel()
-	out := encodeKitty(true, 10)
+	out := encodeKitty(true, graphicsCols, graphicsRows)
 	tuitest.RequireGolden(t, []byte(out))
 }
 
 func TestEncodeITerm2_Golden(t *testing.T) {
 	t.Parallel()
-	out := encodeITerm2(true, 10)
+	out := encodeITerm2(true, graphicsCols, graphicsRows)
 	tuitest.RequireGolden(t, []byte(out))
 }

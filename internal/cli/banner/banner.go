@@ -59,11 +59,9 @@ func ClearScreen() {
 // never reads stdin.
 //
 // For CapText the art is already "formae v{version}" — just print it.
-// For braille/graphics, rows is exact (braille) or an approximation (graphics).
-// Graphics vertical spacing is a live-tuning item (D2): the 8 px/cell
-// approximation in graphicsRowCount likely undercounts real terminal rows
-// (cells are ~16–24 px). We add a conservative newline gap after graphics art
-// so subsequent output does not overlap the image.
+// For braille/graphics, rows is exact (countRows for braille; graphicsRows for
+// graphics). The composeGraphicsWordmark helper uses DEC cursor positioning so
+// the cursor is left below the image — one blank line after is sufficient.
 func PrintBanner() {
 	// Suppression gate: never print a banner when stdout is not a TTY.
 	if !isTerminal(os.Stdout) {
@@ -75,16 +73,11 @@ func PrintBanner() {
 
 	switch cap {
 	case logo.CapKitty, logo.CapITerm2:
-		// Graphics art: rows is an approximation (8 px/cell underestimates real
-		// cell height of ~16–24 px). Print the art then add a conservative
-		// newline gap so subsequent output does not overlap the image.
-		// TODO(D2): tune the exact vertical gap once live-terminal verification
-		// is run across Kitty/iTerm2/WezTerm/Ghostty — this is a required
-		// user-run follow-up step.
+		// Graphics art: rows is now the exact graphicsRows cell count.
+		// composeGraphicsWordmark leaves the cursor below the image via a final
+		// cursor-down, so one blank line separates the logo from subsequent output.
 		_, _ = fmt.Print(art)
-		for range max(1, rows/3) {
-			_, _ = fmt.Println()
-		}
+		_, _ = fmt.Println()
 	default:
 		// CapText and CapBraille: rows is exact; print the art then one blank line.
 		_, _ = fmt.Println(art)
