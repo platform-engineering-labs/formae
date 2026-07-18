@@ -241,6 +241,13 @@ func TestSimView_ConfirmAndAbortKeys(t *testing.T) {
 		assert.Equal(t, DecisionAborted, mm.(Model).decision, "esc keeps DecisionAborted")
 		assert.NotNil(t, cmd, "esc returns a tea.Cmd (quit)")
 	})
+
+	t.Run("abort_n", func(t *testing.T) {
+		m := makeModel(100, 32)
+		mm, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+		assert.Equal(t, DecisionAborted, mm.(Model).decision, "n sets DecisionAborted")
+		assert.NotNil(t, cmd, "n returns a tea.Cmd (quit)")
+	})
 }
 
 // TestSimView_ViewLineCountMatchesHeight checks exact-fill at multiple sizes.

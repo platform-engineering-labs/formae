@@ -221,6 +221,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.decision = DecisionAborted
 			return m, tea.Quit
 		}
+		// n aborts — the other half of the y/n confirm pattern.
+		if msg.String() == "n" {
+			m.decision = DecisionAborted
+			return m, tea.Quit
+		}
 		// y confirms — unless SimulateOnly (then y is a no-op).
 		if msg.String() == "y" {
 			if !m.opts.SimulateOnly {

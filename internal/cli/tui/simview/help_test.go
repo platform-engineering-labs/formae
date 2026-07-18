@@ -122,6 +122,14 @@ func TestSimView_HelpModal_SwallowsKeys(t *testing.T) {
 	assert.Equal(t, cursorBefore, mAfterDown.cursor, "Down must be swallowed: cursor unchanged")
 	assert.Equal(t, showHelpBefore, mAfterDown.showHelp, "Down must not close overlay")
 	assert.Nil(t, cmd, "Down must return no cmd")
+
+	// Press 'n' (abort) — must be swallowed while overlay is open, no quit, decision unchanged.
+	m = mAfterDown
+	mm, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	mAfterN := mm.(Model)
+	assert.Equal(t, decisionBefore, mAfterN.decision, "n must be swallowed: decision unchanged")
+	assert.Equal(t, showHelpBefore, mAfterN.showHelp, "n must not close overlay")
+	assert.Nil(t, cmd, "n must return no cmd while overlay is open")
 }
 
 // TestSimView_HelpModal_CtrlCStillQuits verifies ctrl+c quits even with overlay open.
