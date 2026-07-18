@@ -59,9 +59,12 @@ func ClearScreen() {
 // never reads stdin.
 //
 // For CapText the art is already "formae v{version}" — just print it.
-// For braille/graphics, rows is exact (countRows for braille; graphicsRows for
-// graphics). The composeGraphicsWordmark helper uses DEC cursor positioning so
-// the cursor is left below the image — one blank line after is sufficient.
+// For braille/graphics, rows is a countRows estimate. Graphics art includes the
+// wordmark as plain newline-separated lines below the image — no cursor escapes.
+// One blank line after the art separates it from subsequent output.
+//
+// TODO(D2): exact graphics spacing needs live tuning once real Kitty/iTerm2
+// row heights are measured.
 func PrintBanner() {
 	// Suppression gate: never print a banner when stdout is not a TTY.
 	if !isTerminal(os.Stdout) {
@@ -73,9 +76,8 @@ func PrintBanner() {
 
 	switch cap {
 	case logo.CapKitty, logo.CapITerm2:
-		// Graphics art: rows is now the exact graphicsRows cell count.
-		// composeGraphicsWordmark leaves the cursor below the image via a final
-		// cursor-down, so one blank line separates the logo from subsequent output.
+		// Graphics art: image + wordmark lines below, separated by newlines.
+		// Print then add one blank line to separate from subsequent output.
 		_, _ = fmt.Print(art)
 		_, _ = fmt.Println()
 	default:
