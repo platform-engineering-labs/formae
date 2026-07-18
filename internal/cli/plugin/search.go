@@ -100,7 +100,11 @@ func runSearchForHumans(app *app.App, opts *SearchOptions) error {
 	if err != nil {
 		return err
 	}
-	fmt.Print(renderPluginSearch(plugins))
+	fmt.Print(renderPluginSearch(themeFor(app), plugins, SearchRenderOpts{
+		Query:    opts.Query,
+		Category: opts.Category,
+		Type:     opts.Type,
+	}))
 	return nil
 }
 

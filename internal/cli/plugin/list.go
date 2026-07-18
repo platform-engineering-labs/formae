@@ -79,7 +79,7 @@ func runListForHumans(app *app.App, opts *ListOptions) error {
 	if err != nil {
 		return err
 	}
-	fmt.Print(renderPluginList(plugins))
+	fmt.Print(renderPluginList(themeFor(app), plugins))
 	return nil
 }
 
