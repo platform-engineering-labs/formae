@@ -538,7 +538,7 @@ func TestSimView_DestroyConfirmCountsDependents(t *testing.T) {
 }
 
 // TestSimView_NonCascadeConfirmFooter verifies that the non-cascade confirm footer
-// delegates to renderer.PromptForOperations so that targets, stacks, and policies
+// delegates to components.PromptForOperations so that targets, stacks, and policies
 // are labelled with their correct entity names (not "resource(s)"), and that the
 // final separator is "and" (not comma-only).
 func TestSimView_NonCascadeConfirmFooter(t *testing.T) {
@@ -554,7 +554,7 @@ func TestSimView_NonCascadeConfirmFooter(t *testing.T) {
 
 	plainView := plain(m.View())
 
-	// The footer must mention the correct entity labels from PromptForOperations.
+	// The footer must mention the correct entity labels from components.PromptForOperations.
 	assert.Contains(t, plainView, "target(s)",
 		"non-cascade footer must label target operations as 'target(s)', not 'resource(s)'")
 	assert.Contains(t, plainView, "stack(s)",
@@ -570,7 +570,7 @@ func TestSimView_NonCascadeConfirmFooter(t *testing.T) {
 
 	// The final separator must use "and" (not just a comma).
 	assert.Contains(t, plainView, " and ",
-		"non-cascade footer must use 'and' as final separator (delegated to PromptForOperations)")
+		"non-cascade footer must use 'and' as final separator (delegated to components.PromptForOperations)")
 
 	// Targets must NOT be described as "resource(s)" — a line containing "target" should not
 	// contain "target(s)... resource(s)" in a way that implies targets are resources.

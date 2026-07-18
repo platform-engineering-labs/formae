@@ -14,7 +14,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/platform-engineering-labs/formae/internal/cli/renderer"
 	tui "github.com/platform-engineering-labs/formae/internal/cli/tui"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
@@ -92,7 +91,7 @@ const (
 type Model struct {
 	th       *theme.Theme
 	opts     Options
-	cmd      apimodel.Command // stored for footer delegation to renderer.PromptForOperations
+	cmd      apimodel.Command // stored for footer delegation to components.PromptForOperations
 	groups   []simGroup
 	cursor   int
 	visible  map[rowKind]int
@@ -522,10 +521,10 @@ func (m Model) renderFooter() string {
 		}
 	}
 
-	// Non-cascade confirm: delegate to renderer.PromptForOperations so that
+	// Non-cascade confirm: delegate to components.PromptForOperations so that
 	// targets, stacks, and policies are labelled correctly (not all "resource(s)"),
 	// and the final separator is "and" instead of comma-only.
-	raw := renderer.PromptForOperations(&m.cmd)
+	raw := components.PromptForOperations(&m.cmd)
 	var confirmMsg string
 	if raw != "" {
 		// PromptForOperations returns ANSI-colored text with a trailing

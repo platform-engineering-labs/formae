@@ -12,7 +12,6 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
 	"github.com/platform-engineering-labs/formae/internal/cli/display"
 	"github.com/platform-engineering-labs/formae/internal/cli/nag"
-	"github.com/platform-engineering-labs/formae/internal/cli/renderer"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/driftview"
@@ -257,7 +256,7 @@ func handleSelfResolvedDrift(a *app.App, th *theme.Theme, opts *ApplyOptions, re
 		return fmt.Errorf("%s", msg)
 	}
 
-	raw := renderer.PromptForOperations(&res.Simulation.Command)
+	raw := components.PromptForOperations(&res.Simulation.Command)
 	summary := ""
 	if raw != "" {
 		stripped := ansiEscape.ReplaceAllString(raw, "")

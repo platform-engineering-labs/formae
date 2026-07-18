@@ -19,7 +19,6 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/nag"
 	"github.com/platform-engineering-labs/formae/internal/cli/printer"
 	"github.com/platform-engineering-labs/formae/internal/cli/prompter"
-	"github.com/platform-engineering-labs/formae/internal/cli/renderer"
 	"github.com/platform-engineering-labs/formae/internal/cli/status"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
@@ -261,7 +260,7 @@ func runDestroyInteractive(a *app.App, opts *DestroyOptions) error {
 	}
 
 	// Print one-line scrollback record.
-	raw := renderer.PromptForOperations(&res.Simulation.Command)
+	raw := components.PromptForOperations(&res.Simulation.Command)
 	summary := ""
 	if raw != "" {
 		stripped := ansiEscape.ReplaceAllString(raw, "")
@@ -366,7 +365,7 @@ func runDestroyLegacy(app *app.App, opts *DestroyOptions) error {
 
 	// confirm with the user before proceeding (unless --yes is specified)
 	prompter := prompter.NewBasicPrompter()
-	prompt := renderer.PromptForOperations(&res.Simulation.Command)
+	prompt := components.PromptForOperations(&res.Simulation.Command)
 	if !opts.Yes && !prompter.Confirm(prompt, false) {
 		fmt.Print(display.Red("\nCommand aborted\n"))
 		return nil
