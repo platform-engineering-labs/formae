@@ -193,6 +193,27 @@ func TestModel_HelpOverlay(t *testing.T) {
 	assert.False(t, mm.(Model).helpOpen, "? must close overlay when already open")
 }
 
+// TestModel_HelpOverlay_QSwallowed verifies that pressing q while the help overlay
+// is open does NOT quit: the overlay must stay open and no tea.Quit cmd is returned.
+// This mirrors the same invariant tested in inventoryview/driftview/simview.
+func TestModel_HelpOverlay_QSwallowed(t *testing.T) {
+	m, _ := newTestModel(t, nil)
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	mm, _ = mm.Update(commandsMsg{commands: respFix("cmd-one").Commands})
+
+	// Open the help overlay.
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	require.True(t, mm.(Model).helpOpen, "overlay must be open before the swallow test")
+
+	// Press q while overlay is open — must be swallowed.
+	var cmd tea.Cmd
+	mm, cmd = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+
+	assert.True(t, mm.(Model).helpOpen, "q must not close the overlay")
+	assert.Nil(t, cmd, "q must not produce a quit cmd while overlay is open")
+}
+
 func TestModel_HelpOverlayGolden(t *testing.T) {
 	m, _ := newTestModel(t, nil)
 	var mm tea.Model = m

@@ -550,20 +550,17 @@ func ackFooterHints() []components.KeyHint {
 }
 
 // renderFooter renders the footer with variant text based on Options.
-// SimulateOnly → single-line footer: "Command will not continue — simulation only"
-// KindDestroy with cascades → multi-line footer with cascade counts
-// Otherwise → single-line footer with PromptForOperations-style confirm
+// SimulateOnly → FooterBar with no action hints + "simulation only" right label (?: help present).
+// KindDestroy with cascades → multi-line warning + confirm paragraph (border, no hint bar).
+// Otherwise → FooterBar with action hints + PromptForOperations-style confirm right label.
 func (m Model) renderFooter() string {
 	p := m.th.Palette
 
 	if m.opts.SimulateOnly {
-		msg := lipgloss.NewStyle().Foreground(p.TextSubtle).Render("  Command will not continue — simulation only")
-		return lipgloss.NewStyle().
-			Width(m.width).
-			BorderStyle(lipgloss.NormalBorder()).
-			BorderTop(true).
-			BorderForeground(p.Border).
-			Render(msg)
+		// Use FooterBar with no action hints so the standard "?: help" teaser
+		// appears on the right, consistent with every other view's footer.
+		simOnlyMsg := lipgloss.NewStyle().Foreground(p.TextSubtle).Render("simulation only — command will not continue")
+		return components.FooterBar(m.th, m.width, nil, simOnlyMsg)
 	}
 
 	// Destroy with cascades: multi-line footer.
