@@ -16,6 +16,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/tui"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/driftview"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/errfmt"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/simview"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/platform-engineering-labs/formae/internal/schema"
@@ -66,7 +67,7 @@ func runDriftFlow(a *app.App, th *theme.Theme, opts *ApplyOptions, rejected apim
 
 		switch d := decision.(type) {
 		case driftview.DecisionAbort:
-			msg, renderErr := renderer.RenderErrorMessage(&apimodel.ErrorResponse[apimodel.FormaReconcileRejectedError]{
+			msg, renderErr := errfmt.Render(&apimodel.ErrorResponse[apimodel.FormaReconcileRejectedError]{
 				ErrorType: apimodel.ReconcileRejected,
 				Data:      rejected,
 			})
@@ -100,7 +101,7 @@ func runDriftFlow(a *app.App, th *theme.Theme, opts *ApplyOptions, rejected apim
 					}
 					continue
 				}
-				msg, renderErr := renderer.RenderErrorMessage(simErr)
+				msg, renderErr := errfmt.Render(simErr)
 				if renderErr != nil {
 					return fmt.Errorf("error rendering error message: %v", renderErr)
 				}
@@ -197,7 +198,7 @@ func buildExtractPanel(d driftview.DecisionExtract, merged *pkgmodel.Forma) []st
 func submitForcedApply(a *app.App, th *theme.Theme, opts *ApplyOptions) error {
 	realRes, nags, err := forcedApplyFn(a, opts)
 	if err != nil {
-		msg, renderErr := renderer.RenderErrorMessage(err)
+		msg, renderErr := errfmt.Render(err)
 		if renderErr != nil {
 			return fmt.Errorf("error rendering error message: %v", renderErr)
 		}
@@ -249,7 +250,7 @@ func handleSelfResolvedDrift(a *app.App, th *theme.Theme, opts *ApplyOptions, re
 
 	realRes, nags, err := applyFn(a, opts, false)
 	if err != nil {
-		msg, renderErr := renderer.RenderErrorMessage(err)
+		msg, renderErr := errfmt.Render(err)
 		if renderErr != nil {
 			return fmt.Errorf("error rendering error message: %v", renderErr)
 		}

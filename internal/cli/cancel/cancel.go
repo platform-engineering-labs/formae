@@ -20,9 +20,9 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/display"
 	"github.com/platform-engineering-labs/formae/internal/cli/printer"
 	"github.com/platform-engineering-labs/formae/internal/cli/prompter"
-	"github.com/platform-engineering-labs/formae/internal/cli/renderer"
 	"github.com/platform-engineering-labs/formae/internal/cli/status"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/errfmt"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/statuswatch"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/platform-engineering-labs/formae/internal/logging"
@@ -179,7 +179,7 @@ func runCancelInteractive(a *app.App, opts *CancelOptions) error {
 	// Step 1: Pre-fetch non-terminal commands matching the query (D6 frozen set).
 	preFetch, _, err := getCommandsStatusFn(a, opts.Query, 50, false)
 	if err != nil {
-		msg, renderErr := renderer.RenderErrorMessage(err)
+		msg, renderErr := errfmt.Render(err)
 		if renderErr != nil {
 			return fmt.Errorf("error rendering error message: %v", renderErr)
 		}
@@ -236,7 +236,7 @@ func runCancelInteractive(a *app.App, opts *CancelOptions) error {
 		idQuery := fmt.Sprintf("id:%s", c.CommandID)
 		res, cancelErr := cancelCommandFn(a, idQuery, opts.Force)
 		if cancelErr != nil {
-			msg, renderErr := renderer.RenderErrorMessage(cancelErr)
+			msg, renderErr := errfmt.Render(cancelErr)
 			if renderErr != nil {
 				return fmt.Errorf("error rendering error message: %v", renderErr)
 			}
@@ -393,7 +393,7 @@ func runCancelLegacy(a *app.App, opts *CancelOptions) error {
 
 	res, err := cancelCommandFn(a, opts.Query, opts.Force)
 	if err != nil {
-		msg, renderErr := renderer.RenderErrorMessage(err)
+		msg, renderErr := errfmt.Render(err)
 		if renderErr != nil {
 			return fmt.Errorf("error rendering error message: %v", renderErr)
 		}

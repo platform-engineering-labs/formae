@@ -23,6 +23,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/status"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/errfmt"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/simview"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/statuswatch"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
@@ -204,7 +205,7 @@ func runDestroyInteractive(a *app.App, opts *DestroyOptions) error {
 
 	res, _, err := destroyFn(a, opts, true)
 	if err != nil {
-		msg, renderErr := renderer.RenderErrorMessage(err)
+		msg, renderErr := errfmt.Render(err)
 		if renderErr != nil {
 			return fmt.Errorf("error rendering error message: %v", renderErr)
 		}
@@ -252,7 +253,7 @@ func runDestroyInteractive(a *app.App, opts *DestroyOptions) error {
 	// Confirmed: run the real destroy.
 	realRes, nags, err := destroyFn(a, opts, false)
 	if err != nil {
-		msg, renderErr := renderer.RenderErrorMessage(err)
+		msg, renderErr := errfmt.Render(err)
 		if renderErr != nil {
 			return fmt.Errorf("error rendering error message: %v", renderErr)
 		}
@@ -295,7 +296,7 @@ func runDestroyLegacy(app *app.App, opts *DestroyOptions) error {
 
 	res, _, err := destroyFn(app, opts, true)
 	if err != nil {
-		msg, renderErr := renderer.RenderErrorMessage(err)
+		msg, renderErr := errfmt.Render(err)
 		if renderErr != nil {
 			return fmt.Errorf("error rendering error message: %v", renderErr)
 		}
@@ -374,7 +375,7 @@ func runDestroyLegacy(app *app.App, opts *DestroyOptions) error {
 	var nags []string
 	res, nags, err = destroyFn(app, opts, false)
 	if err != nil {
-		msg, renderErr := renderer.RenderErrorMessage(err)
+		msg, renderErr := errfmt.Render(err)
 		if renderErr != nil {
 			return fmt.Errorf("error rendering error message: %v", renderErr)
 		}

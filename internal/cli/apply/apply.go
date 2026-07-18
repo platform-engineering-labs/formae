@@ -22,6 +22,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/status"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/errfmt"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/simview"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/statuswatch"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
@@ -191,7 +192,7 @@ func runApplyInteractive(a *app.App, opts *ApplyOptions) error {
 		if reconcileErr, ok := err.(*apimodel.ErrorResponse[apimodel.FormaReconcileRejectedError]); ok {
 			return runDriftFlow(a, th, opts, reconcileErr.Data)
 		}
-		msg, renderErr := renderer.RenderErrorMessage(err)
+		msg, renderErr := errfmt.Render(err)
 		if renderErr != nil {
 			return fmt.Errorf("error rendering error message: %v", renderErr)
 		}
@@ -231,7 +232,7 @@ func runApplyInteractive(a *app.App, opts *ApplyOptions) error {
 	// Confirmed: run the real apply.
 	realRes, nags, err := applyFn(a, opts, false)
 	if err != nil {
-		msg, renderErr := renderer.RenderErrorMessage(err)
+		msg, renderErr := errfmt.Render(err)
 		if renderErr != nil {
 			return fmt.Errorf("error rendering error message: %v", renderErr)
 		}
@@ -268,7 +269,7 @@ func runApplyLegacy(a *app.App, opts *ApplyOptions) error {
 	// always simulate first for humans
 	res, _, err := applyFn(a, opts, true)
 	if err != nil {
-		msg, renderErr := renderer.RenderErrorMessage(err)
+		msg, renderErr := errfmt.Render(err)
 		if renderErr != nil {
 			return fmt.Errorf("error rendering error message: %v", renderErr)
 		}
@@ -309,7 +310,7 @@ func runApplyLegacy(a *app.App, opts *ApplyOptions) error {
 	var nags []string
 	res, nags, err = applyFn(a, opts, false)
 	if err != nil {
-		msg, renderErr := renderer.RenderErrorMessage(err)
+		msg, renderErr := errfmt.Render(err)
 		if renderErr != nil {
 			return fmt.Errorf("error rendering error message: %v", renderErr)
 		}
