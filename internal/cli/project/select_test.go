@@ -80,6 +80,35 @@ func TestPluginChoices_AgentReturnsPlugins(t *testing.T) {
 	assert.ElementsMatch(t, []string{"aws", "azure"}, names)
 }
 
+// Regression (Codex adversarial review, 2026-07-18): a nil app must NOT panic.
+// project init passes a best-effort app that is nil when AppFromContext fails;
+// the real defaultInstalledPlugins must return an error so the local-scan
+// fallback runs (D10), not dereference nil.
+func TestDefaultInstalledPlugins_NilApp_ReturnsError(t *testing.T) {
+	_, err := defaultInstalledPlugins(nil)
+	require.Error(t, err, "nil app must error, not panic")
+}
+
+// The real defaultInstalledPlugins wired through pluginChoices with a nil app
+// and local plugins present must fall back to the local scan.
+func TestPluginChoices_NilApp_FallsBackToLocalScan(t *testing.T) {
+	restore := withSeams(
+		defaultInstalledPlugins, // the REAL agent-source fn, not a stub
+		fakeLocalScan(map[string]string{"aws": "", "grafana": ""}),
+	)
+	defer restore()
+
+	choices, fromLocalScan, err := pluginChoices(nil, "~/.pel/formae/plugins")
+	require.NoError(t, err, "nil app must fall back to local scan, not panic or error")
+	assert.True(t, fromLocalScan, "must report local-scan source")
+	names := make([]string, len(choices))
+	for i, c := range choices {
+		names[i] = c.Name
+		assert.True(t, c.Local, "local-scan choices must have Local=true (→ @local suffix)")
+	}
+	assert.ElementsMatch(t, []string{"aws", "grafana"}, names)
+}
+
 // D10-B: agent errors + local scan has plugins → Local=true, fromLocalScan=true
 func TestPluginChoices_AgentErrorLocalFallback(t *testing.T) {
 	restore := withSeams(

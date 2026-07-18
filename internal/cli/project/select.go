@@ -42,6 +42,13 @@ var (
 // defaultInstalledPlugins queries the agent for installed resource plugins.
 // Returns (name→description) keyed by namespace (or name).
 func defaultInstalledPlugins(a *app.App) (map[string]string, error) {
+	// project init is typically run before the agent/config exists, so the
+	// caller passes a best-effort app that may be nil. Treat a nil app as the
+	// agent being unavailable so pluginChoices falls back to the local scan
+	// (D10) instead of dereferencing nil.
+	if a == nil {
+		return nil, fmt.Errorf("agent context unavailable")
+	}
 	plugins, err := a.InstalledResourcePlugins()
 	if err != nil {
 		return nil, err
