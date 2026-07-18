@@ -400,11 +400,7 @@ func runCancelLegacy(a *app.App, opts *CancelOptions) error {
 		return fmt.Errorf("%s", msg)
 	}
 
-	p := printer.NewHumanReadablePrinter[apimodel.CancelCommandResponse](os.Stdout)
-	err = p.Print(res, printer.PrintOptions{})
-	if err != nil {
-		return err
-	}
+	_, _ = fmt.Print(renderCancelResult(themeFor(a), res, cancelTermWidth(os.Stdout)))
 
 	// If no commands were canceled, nothing to watch
 	if res == nil || len(res.CommandIDs) == 0 {
@@ -423,20 +419,6 @@ func runCancelLegacy(a *app.App, opts *CancelOptions) error {
 		// For multiple commands, watch without filter to see all recent commands
 		// (which will include all the canceling/canceled commands)
 		return status.WatchCommandsStatus(a, "", len(res.CommandIDs), opts.StatusOutput)
-	}
-
-	// Show how query the status of the canceled commands
-	if len(res.CommandIDs) == 1 {
-		query := fmt.Sprintf("id:%s", res.CommandIDs[0])
-		fmt.Printf("\nRun the following command to check the status of this command:\n\n  %s%s%s\n",
-			display.Grey("formae status command --query='"), display.LightBlue(query), display.Grey("'"))
-	} else {
-		// For multiple commands, list individual command IDs
-		fmt.Printf("\nRun the following commands to check the status of each canceled command:\n\n")
-		for _, cmdID := range res.CommandIDs {
-			fmt.Printf("  %s%s%s\n",
-				display.Grey("formae status command --query='id:"), display.LightBlue(cmdID), display.Grey("'"))
-		}
 	}
 
 	return nil
