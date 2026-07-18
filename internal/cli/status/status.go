@@ -183,7 +183,7 @@ func runStatusForHumans(a *app.App, opts *StatusOptions) error {
 	}
 
 	// Render summary or detailed layout via the lipgloss print function.
-	_, _ = fmt.Println(renderStatusList(themeFor(a), status, opts.OutputLayout == StatusOutputDetailed, termWidth(os.Stdout)))
+	_, _ = fmt.Print(renderStatusList(themeFor(a), status, opts.OutputLayout == StatusOutputDetailed, termWidth(os.Stdout)))
 
 	// print nags
 	nag.MaybePrintNags(themeFor(a), nags)

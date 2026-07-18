@@ -311,7 +311,7 @@ func runApplyLegacy(a *app.App, opts *ApplyOptions) error {
 
 	// don't show anything if --yes is specified
 	if !opts.Yes {
-		if err := maybePrintDescription(themeFor(a), res.Description, opts.Yes); err != nil {
+		if err := maybePrintDescription(themeFor(a), res.Description); err != nil {
 			if errors.Is(err, errDescriptionAborted) {
 				fmt.Print(lipgloss.NewStyle().Foreground(themeFor(a).Palette.Error).Render("\nCommand aborted") + "\n")
 				return nil
@@ -395,7 +395,7 @@ func runApplyForMachines(app *app.App, opts *ApplyOptions) error {
 // description.Confirm is set, requires an explicit user acknowledgment before
 // the operation confirm. This is the R3 safety gate: it must remain a DISTINCT
 // step that runs BEFORE the operation confirm.
-func maybePrintDescription(th *theme.Theme, description apimodel.Description, yes bool) error {
+func maybePrintDescription(th *theme.Theme, description apimodel.Description) error {
 	if description.Text == "" {
 		return nil
 	}
@@ -408,10 +408,7 @@ func maybePrintDescription(th *theme.Theme, description apimodel.Description, ye
 	}
 
 	// Confirm==true: require an explicit acknowledgment.
-	if yes {
-		// --yes intentionally skips the ack (documented behaviour).
-		return nil
-	}
+	// Note: --yes skips this entire function via the outer !opts.Yes guard.
 	if !isInteractive() {
 		return fmt.Errorf("interactive input requires a TTY — pass --yes")
 	}

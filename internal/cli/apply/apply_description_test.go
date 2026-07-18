@@ -151,9 +151,11 @@ func TestDescriptionAck_NonTTY_NoYes_D8Error(t *testing.T) {
 	assert.Contains(t, err.Error(), "--yes")
 }
 
-// TestDescriptionAck_NonTTY_WithYes_Proceeds verifies that non-TTY WITH --yes
-// skips the ack and proceeds to real apply.
-func TestDescriptionAck_NonTTY_WithYes_Proceeds(t *testing.T) {
+// TestDescriptionAck_WithYes_Proceeds verifies that --yes skips the entire
+// description-ack block (via the outer !opts.Yes guard in runApplyLegacy) and
+// proceeds directly to real apply. maybePrintDescription is never called when
+// opts.Yes is true, so isInteractive and runConfirm are irrelevant here.
+func TestDescriptionAck_WithYes_Proceeds(t *testing.T) {
 	stubDescriptionSeams(t)
 
 	sim := applySimulationWithDescription("Requires acknowledgment.", true)
@@ -166,6 +168,8 @@ func TestDescriptionAck_NonTTY_WithYes_Proceeds(t *testing.T) {
 		return &apimodel.SubmitCommandResponse{CommandID: "real-cmd"}, nil, nil
 	}
 
+	// maybePrintDescription is never reached with --yes, so these seams are not
+	// exercised — but we keep the panic stubs to catch regressions.
 	isInteractive = func() bool { return false }
 	runConfirm = func(_ *theme.Theme, _, _ string) (bool, error) {
 		panic("runConfirm must not be called when --yes is set")
