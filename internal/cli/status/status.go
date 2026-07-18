@@ -182,16 +182,8 @@ func runStatusForHumans(a *app.App, opts *StatusOptions) error {
 		return fmt.Errorf("%s", msg)
 	}
 
-	// printer for summary or detailed
-	p := printer.NewHumanReadablePrinter[apimodel.ListCommandStatusResponse](os.Stdout)
-	if opts.OutputLayout == StatusOutputDetailed {
-		err = p.Print(status, printer.PrintOptions{Summary: false})
-	} else {
-		err = p.Print(status, printer.PrintOptions{Summary: true})
-	}
-	if err != nil {
-		return err
-	}
+	// Render summary or detailed layout via the lipgloss print function.
+	_, _ = fmt.Println(renderStatusList(themeFor(a), status, opts.OutputLayout == StatusOutputDetailed, termWidth(os.Stdout)))
 
 	// print nags
 	nag.MaybePrintNags(themeFor(a), nags)
@@ -290,18 +282,8 @@ func AgentCmd() *cobra.Command {
 	return command
 }
 
-func renderCommandsStatus(status *apimodel.ListCommandStatusResponse, outputLayout StatusOutput) error {
-	p := printer.NewHumanReadablePrinter[apimodel.ListCommandStatusResponse](os.Stdout)
-	var err error
-	if outputLayout == StatusOutputDetailed {
-		err = p.Print(status, printer.PrintOptions{Summary: false})
-	} else {
-		err = p.Print(status, printer.PrintOptions{Summary: true})
-	}
-	if err != nil {
-		return err
-	}
-
+func renderCommandsStatus(a *app.App, status *apimodel.ListCommandStatusResponse, outputLayout StatusOutput) error {
+	_, _ = fmt.Println(renderStatusList(themeFor(a), status, outputLayout == StatusOutputDetailed, termWidth(os.Stdout)))
 	return nil
 }
 
@@ -325,7 +307,7 @@ func WatchCommandsStatus(app *app.App, query string, n int, outputLayout StatusO
 		}
 
 		// render detailed or summary
-		err = renderCommandsStatus(status, outputLayout)
+		err = renderCommandsStatus(app, status, outputLayout)
 		if err != nil {
 			return err
 		}
