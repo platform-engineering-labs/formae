@@ -162,7 +162,7 @@ func runResourcesForHumans(app *app.App, opts *InventoryOptions) error {
 		return launchInventoryTUI(app, inventoryview.TabResources, opts)
 	}
 
-	// Human + non-TTY → existing print-and-exit path, completely unchanged.
+	// Human + non-TTY → lipgloss print-and-exit path.
 	app.PrintBanner()
 
 	forma, _, err := app.ExtractResources(opts.Query, false)
@@ -174,8 +174,9 @@ func runResourcesForHumans(app *app.App, opts *InventoryOptions) error {
 	if !opts.MaxResultsSet {
 		maxResults = 10
 	}
-	p := printer.NewHumanReadablePrinter[pkgmodel.Forma](os.Stdout)
-	return p.Print(forma, printer.PrintOptions{MaxResults: maxResults})
+	th := themeForInventory(app)
+	_, _ = fmt.Println(renderInventoryResources(th, forma, maxResults, inventoryTermWidth(os.Stdout)))
+	return nil
 }
 
 func InventoryCmd() *cobra.Command {
@@ -300,7 +301,7 @@ func runTargetsForHumans(app *app.App, opts *InventoryOptions) error {
 		return launchInventoryTUI(app, inventoryview.TabTargets, opts)
 	}
 
-	// Human + non-TTY → existing print-and-exit path, completely unchanged.
+	// Human + non-TTY → lipgloss print-and-exit path.
 	app.PrintBanner()
 
 	targets, _, err := app.ExtractTargets(opts.Query, false)
@@ -312,8 +313,9 @@ func runTargetsForHumans(app *app.App, opts *InventoryOptions) error {
 	if !opts.MaxResultsSet {
 		maxResults = 10
 	}
-	p := printer.NewHumanReadablePrinter[[]*pkgmodel.Target](os.Stdout)
-	return p.Print(&targets, printer.PrintOptions{MaxResults: maxResults})
+	th := themeForInventory(app)
+	_, _ = fmt.Println(renderInventoryTargets(th, targets, maxResults, inventoryTermWidth(os.Stdout)))
+	return nil
 }
 
 func stacksCmd() *cobra.Command {
@@ -430,7 +432,7 @@ func runPoliciesForHumans(app *app.App, opts *InventoryOptions) error {
 		return launchInventoryTUI(app, inventoryview.TabPolicies, opts)
 	}
 
-	// Human + non-TTY → existing print-and-exit path, completely unchanged.
+	// Human + non-TTY → lipgloss print-and-exit path.
 	app.PrintBanner()
 
 	policies, _, err := app.ExtractPolicies(false)
@@ -442,8 +444,9 @@ func runPoliciesForHumans(app *app.App, opts *InventoryOptions) error {
 	if !opts.MaxResultsSet {
 		maxResults = 10
 	}
-	p := printer.NewHumanReadablePrinter[[]apimodel.PolicyInventoryItem](os.Stdout)
-	return p.Print(&policies, printer.PrintOptions{MaxResults: maxResults})
+	th := themeForInventory(app)
+	_, _ = fmt.Println(renderInventoryPolicies(th, policies, maxResults, inventoryTermWidth(os.Stdout)))
+	return nil
 }
 
 func runStacksForMachines(app *app.App, opts *InventoryOptions) error {
@@ -462,7 +465,7 @@ func runStacksForHumans(app *app.App, opts *InventoryOptions) error {
 		return launchInventoryTUI(app, inventoryview.TabStacks, opts)
 	}
 
-	// Human + non-TTY → existing print-and-exit path, completely unchanged.
+	// Human + non-TTY → lipgloss print-and-exit path.
 	app.PrintBanner()
 
 	stacks, _, err := app.ExtractStacks(false)
@@ -474,6 +477,7 @@ func runStacksForHumans(app *app.App, opts *InventoryOptions) error {
 	if !opts.MaxResultsSet {
 		maxResults = 10
 	}
-	p := printer.NewHumanReadablePrinter[[]*pkgmodel.Stack](os.Stdout)
-	return p.Print(&stacks, printer.PrintOptions{MaxResults: maxResults})
+	th := themeForInventory(app)
+	_, _ = fmt.Println(renderInventoryStacks(th, stacks, time.Now(), maxResults, inventoryTermWidth(os.Stdout)))
+	return nil
 }
