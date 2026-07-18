@@ -1017,7 +1017,7 @@ func (m *Metastructure) ExtractResources(query string) (*pkgmodel.Forma, error) 
 				// Stack not found in datastore (e.g., $unmanaged) - create a synthetic entry
 				forma.Stacks = append(forma.Stacks, pkgmodel.Stack{
 					Label:       label,
-					Description: "Unmanaged resources",
+					Description: "Resources imported with formae extract",
 				})
 			}
 		}
