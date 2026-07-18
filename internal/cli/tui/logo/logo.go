@@ -100,10 +100,15 @@ func logoBytes(dark bool) []byte {
 //
 // Fixed colors are used (no AdaptiveColor) to avoid OSC terminal queries that
 // leak as literal text in multiplexed sessions (tmux/screen/ssh).
+//
+// The two lines are joined with JoinVertical so that a MarginLeft applied to
+// the outer block shifts BOTH lines equally — string concatenation with "\n"
+// only pads the first line when used as a JoinHorizontal argument.
 func wordmarkStyle(version string) string {
 	nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF"))
 	versionStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(brandOrange))
-	return nameStyle.Render("formae") + "\n" + versionStyle.Render("v"+version)
+	block := lipgloss.JoinVertical(lipgloss.Left, nameStyle.Render("formae"), versionStyle.Render("v"+version))
+	return lipgloss.NewStyle().MarginLeft(2).Render(block)
 }
 
 // Render produces the logo art string and the number of terminal rows it
@@ -163,7 +168,7 @@ func Render(cap Capability, size Size, version string) (art string, rows int) {
 		// Fall through to braille on encoder failure.
 		art = renderBraille(dark, brailleWidthFull)
 		if art != "" {
-			composed := lipgloss.JoinHorizontal(lipgloss.Center, art, "  "+wordmark)
+			composed := lipgloss.JoinHorizontal(lipgloss.Center, art, wordmark)
 			art = lipgloss.NewStyle().MarginTop(1).MarginLeft(3).Render(composed)
 			rows = countRows(art)
 			return art, rows
@@ -181,7 +186,7 @@ func Render(cap Capability, size Size, version string) (art string, rows int) {
 		// Fall through to braille on encoder failure.
 		art = renderBraille(dark, brailleWidthFull)
 		if art != "" {
-			composed := lipgloss.JoinHorizontal(lipgloss.Center, art, "  "+wordmark)
+			composed := lipgloss.JoinHorizontal(lipgloss.Center, art, wordmark)
 			art = lipgloss.NewStyle().MarginTop(1).MarginLeft(3).Render(composed)
 			rows = countRows(art)
 			return art, rows
@@ -189,7 +194,7 @@ func Render(cap Capability, size Size, version string) (art string, rows int) {
 		return "formae v" + version, 1
 	default: // CapBraille
 		art = renderBraille(dark, brailleWidthFull)
-		composed := lipgloss.JoinHorizontal(lipgloss.Center, art, "  "+wordmark)
+		composed := lipgloss.JoinHorizontal(lipgloss.Center, art, wordmark)
 		art = lipgloss.NewStyle().MarginTop(1).MarginLeft(3).Render(composed)
 		rows = countRows(art)
 		return art, rows
