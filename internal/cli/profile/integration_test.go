@@ -54,9 +54,11 @@ func TestProfileLifecycle(t *testing.T) {
 	bin := buildFormae(t)
 	cfgDir := t.TempDir()
 
-	// `current` on a truly clean dir: pure read, no bootstrap, reports no active profile.
+	// `current` on a truly clean dir: pure read, no bootstrap, reports no active
+	// profile plus the activation hint (piped output is plain, no styling).
+	wantCurrent := "no active profile yet\nactivate one: formae profile use <name>"
 	out, _, code := run(t, bin, cfgDir, "profile", "current")
-	if code != 0 || strings.TrimSpace(out) != "no active profile yet" {
+	if code != 0 || strings.TrimSpace(out) != wantCurrent {
 		t.Fatalf("current on clean dir: code=%d out=%q", code, out)
 	}
 
