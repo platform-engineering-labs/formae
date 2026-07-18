@@ -256,7 +256,7 @@ func runApplyInteractive(a *app.App, opts *ApplyOptions) error {
 	// Hint for users who detached with q before the command finished.
 	fmt.Printf("\nRun the following command to check status:\n\n  formae status command --query='id:%s' --watch\n", realRes.CommandID)
 
-	nag.MaybePrintNags(nags)
+	nag.MaybePrintNags(themeFor(a), nags)
 
 	return nil
 }
@@ -326,7 +326,7 @@ func runApplyLegacy(a *app.App, opts *ApplyOptions) error {
 	fmt.Printf("\nRun the following command to check the status of this command:\n\n  %s%s%s\n",
 		display.Grey("formae status command --query='id:"), display.LightBlue(res.CommandID), display.Grey("'"))
 
-	nag.MaybePrintNags(nags)
+	nag.MaybePrintNags(themeFor(a), nags)
 
 	return nil
 }

@@ -17,10 +17,21 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/nag"
 	"github.com/platform-engineering-labs/formae/internal/cli/prompter"
 	"github.com/platform-engineering-labs/formae/internal/cli/renderer"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	"github.com/platform-engineering-labs/formae/internal/schema"
 	"github.com/spf13/cobra"
 )
+
+// themeFor resolves the active theme from the app config.
+// The name falls back to "formae" for nil configs (theme.New nil-guards internally).
+func themeFor(a *app.App) *theme.Theme {
+	name := ""
+	if a != nil && a.Config != nil {
+		name = a.Config.Cli.Theme
+	}
+	return theme.New(name)
+}
 
 type ExtractOptions struct {
 	TargetPath     string
@@ -149,7 +160,7 @@ func runExtract(app *app.App, opts *ExtractOptions) error {
 	}
 	display.Success(fmt.Sprintf("Successfully extracted %d resource(s) as Pkl to '%s'\n", res.ResourceCount, res.TargetPath))
 
-	nag.MaybePrintNags(nags)
+	nag.MaybePrintNags(themeFor(app), nags)
 
 	return nil
 }

@@ -110,25 +110,25 @@ func TestSameDrift_DifferentStacks(t *testing.T) {
 func stubDriftSeams(t *testing.T) {
 	t.Helper()
 	orig := struct {
-		launchDriftView   func(*theme.Theme, *apimodel.FormaReconcileRejectedError, driftview.Options) (driftview.Decision, error)
-		applyFn           func(*app.App, *ApplyOptions, bool) (*apimodel.SubmitCommandResponse, []string, error)
-		forcedApplyFn     func(*app.App, *ApplyOptions) (*apimodel.SubmitCommandResponse, []string, error)
-		launchWatch       func(*app.App, string) error
-		launchSimView     func(*theme.Theme, *apimodel.Simulation, simview.Options) (simview.Decision, error)
-		confirmOverwriteFn func(*theme.Theme, string) (bool, error)
-		extractResourcesFn func(*app.App, string) (*pkgmodel.Forma, []string, error)
+		launchDriftView      func(*theme.Theme, *apimodel.FormaReconcileRejectedError, driftview.Options) (driftview.Decision, error)
+		applyFn              func(*app.App, *ApplyOptions, bool) (*apimodel.SubmitCommandResponse, []string, error)
+		forcedApplyFn        func(*app.App, *ApplyOptions) (*apimodel.SubmitCommandResponse, []string, error)
+		launchWatch          func(*app.App, string) error
+		launchSimView        func(*theme.Theme, *apimodel.Simulation, simview.Options) (simview.Decision, error)
+		confirmOverwriteFn   func(*theme.Theme, string) (bool, error)
+		extractResourcesFn   func(*app.App, string) (*pkgmodel.Forma, []string, error)
 		generateSourceCodeFn func(*app.App, *pkgmodel.Forma, string) error
-		isTerminal        func(io.Writer) bool
+		isTerminal           func(io.Writer) bool
 	}{
-		launchDriftView:   launchDriftView,
-		applyFn:           applyFn,
-		forcedApplyFn:     forcedApplyFn,
-		launchWatch:       launchWatch,
-		launchSimView:     launchSimView,
-		confirmOverwriteFn: confirmOverwriteFn,
-		extractResourcesFn: extractResourcesFn,
+		launchDriftView:      launchDriftView,
+		applyFn:              applyFn,
+		forcedApplyFn:        forcedApplyFn,
+		launchWatch:          launchWatch,
+		launchSimView:        launchSimView,
+		confirmOverwriteFn:   confirmOverwriteFn,
+		extractResourcesFn:   extractResourcesFn,
 		generateSourceCodeFn: generateSourceCodeFn,
-		isTerminal:        isTerminal,
+		isTerminal:           isTerminal,
 	}
 	t.Cleanup(func() {
 		launchDriftView = orig.launchDriftView

@@ -277,7 +277,7 @@ func runDestroyInteractive(a *app.App, opts *DestroyOptions) error {
 	// Hint for users who detached with q before the command finished.
 	fmt.Printf("\nRun the following command to check status:\n\n  formae status command --query='id:%s' --watch\n", realRes.CommandID)
 
-	nag.MaybePrintNags(nags)
+	nag.MaybePrintNags(th, nags)
 
 	return nil
 }
@@ -391,7 +391,7 @@ func runDestroyLegacy(app *app.App, opts *DestroyOptions) error {
 	fmt.Printf("\nRun the following command to check the status of this command:\n\n  %s%s%s\n",
 		display.Grey("formae status command --query='id:"), display.LightBlue(res.CommandID), display.Grey("'"))
 
-	nag.MaybePrintNags(nags)
+	nag.MaybePrintNags(themeFor(app), nags)
 
 	return nil
 }

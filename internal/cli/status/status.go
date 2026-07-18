@@ -141,15 +141,21 @@ func resolveMaxResults(query string, flagValue int, humanTTY bool) int {
 	return 1
 }
 
+// themeFor resolves the active theme from the app config.
+// The name falls back to "formae" for nil configs (theme.New nil-guards internally).
+func themeFor(a *app.App) *theme.Theme {
+	name := ""
+	if a != nil && a.Config != nil {
+		name = a.Config.Cli.Theme
+	}
+	return theme.New(name)
+}
+
 // launchStatusTUI starts the interactive status/watch TUI.
 // The theme name comes from the CLI profile configuration (Config.Cli.Theme);
 // unknown names fall back to "formae" inside theme.New.
 func launchStatusTUI(a *app.App, opts *StatusOptions) error {
-	themeName := ""
-	if a != nil && a.Config != nil {
-		themeName = a.Config.Cli.Theme
-	}
-	th := theme.New(themeName)
+	th := themeFor(a)
 	model := statuswatch.New(th, a, statuswatch.Options{
 		Query:      opts.Query,
 		MaxResults: opts.MaxResults,
@@ -188,7 +194,7 @@ func runStatusForHumans(a *app.App, opts *StatusOptions) error {
 	}
 
 	// print nags
-	nag.MaybePrintNags(nags)
+	nag.MaybePrintNags(themeFor(a), nags)
 
 	if opts.Watch {
 		return WatchCommandsStatus(a, opts.Query, opts.MaxResults, opts.OutputLayout)
@@ -263,11 +269,11 @@ func AgentCmd() *cobra.Command {
 			}
 
 			if consumer != printer.ConsumerMachine && !watch {
-				nag.MaybePrintNags(nags)
+				nag.MaybePrintNags(themeFor(app), nags)
 			}
 
 			if watch && consumer == printer.ConsumerHuman { // machine consumer can't watch
-				nag.MaybePrintNags(nags)
+				nag.MaybePrintNags(themeFor(app), nags)
 				return watchStats(app)
 			}
 
@@ -350,7 +356,7 @@ func WatchCommandsStatus(app *app.App, query string, n int, outputLayout StatusO
 		}
 	}
 
-	nag.MaybePrintNags(nags)
+	nag.MaybePrintNags(themeFor(app), nags)
 
 	return nil
 }

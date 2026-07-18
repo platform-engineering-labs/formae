@@ -209,7 +209,7 @@ func submitForcedApply(a *app.App, th *theme.Theme, opts *ApplyOptions) error {
 		return err
 	}
 	fmt.Printf("\nRun the following command to check status:\n\n  formae status command --query='id:%s' --watch\n", realRes.CommandID)
-	nag.MaybePrintNags(nags)
+	nag.MaybePrintNags(th, nags)
 
 	return nil
 }
@@ -270,7 +270,7 @@ func handleSelfResolvedDrift(a *app.App, th *theme.Theme, opts *ApplyOptions, re
 	}
 
 	fmt.Printf("\nRun the following command to check status:\n\n  formae status command --query='id:%s' --watch\n", realRes.CommandID)
-	nag.MaybePrintNags(nags)
+	nag.MaybePrintNags(th, nags)
 
 	return nil
 }
