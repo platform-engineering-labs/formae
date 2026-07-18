@@ -50,3 +50,10 @@ func TestIsTerminal_WithBuffer(t *testing.T) {
 	var buf bytes.Buffer
 	assert.False(t, IsTerminal(&buf))
 }
+
+// TestIsInteractive documents that IsInteractive checks both stdin and stdout.
+// In the test runner neither is a TTY, so it must return false.
+func TestIsInteractive(t *testing.T) {
+	// Under go test, stdin/stdout are not terminals — result must be false.
+	assert.False(t, IsInteractive())
+}

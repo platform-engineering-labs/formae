@@ -8,7 +8,6 @@ package update
 
 import (
 	"bytes"
-	"io"
 	"strings"
 	"testing"
 
@@ -51,9 +50,9 @@ func (c *captureWriter) lower() string {
 	return strings.ToLower(c.Buffer.String())
 }
 
-func seamsFor(stub *stubInstaller, tty bool, confirmResult bool) updateSeams {
+func seamsFor(stub *stubInstaller, interactive bool, confirmResult bool) updateSeams {
 	return updateSeams{
-		isTerminalFn: func(_ io.Writer) bool { return tty },
+		isInteractiveFn: func() bool { return interactive },
 		runConfirmFn: func(_ *theme.Theme, _, _ string) (bool, error) {
 			return confirmResult, nil
 		},
@@ -112,7 +111,7 @@ func TestUpdateFlow_ConsequenceBeforeConfirm(t *testing.T) {
 	cw := &captureWriter{}
 
 	seams := updateSeams{
-		isTerminalFn: func(_ io.Writer) bool { return true },
+		isInteractiveFn: func() bool { return true },
 		runConfirmFn: func(_ *theme.Theme, _, _ string) (bool, error) {
 			// Snapshot output at the moment confirm fires.
 			outputBeforeConfirm = strings.ToLower(cw.Buffer.String())
@@ -149,7 +148,7 @@ func TestInitConfirm_NonTTY_WithYes(t *testing.T) {
 	var confirmCalled bool
 
 	seams := updateSeams{
-		isTerminalFn: func(_ io.Writer) bool { return false },
+		isInteractiveFn: func() bool { return false },
 		runConfirmFn: func(_ *theme.Theme, _, _ string) (bool, error) {
 			confirmCalled = true
 			return true, nil

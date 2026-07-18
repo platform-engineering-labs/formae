@@ -29,8 +29,8 @@ import (
 
 // Package seams — replaced in tests to avoid TTY / network / process calls.
 var (
-	isTerminal = tui.IsTerminal
-	runConfirm = components.RunConfirm
+	isInteractive = tui.IsInteractive
+	runConfirm    = components.RunConfirm
 )
 
 // themeFor resolves the active theme from the app config.
@@ -46,18 +46,18 @@ func themeFor(a *app.App) *theme.Theme {
 // updateSeams bundles injectable dependencies for the interactive update flow.
 // Production code uses the package-level vars; tests supply stubs.
 type updateSeams struct {
-	isTerminalFn func(io.Writer) bool
-	runConfirmFn func(*theme.Theme, string, string) (bool, error)
-	stopAgentFn  func() error
-	installFn    func(pkg string) error
+	isInteractiveFn func() bool
+	runConfirmFn    func(*theme.Theme, string, string) (bool, error)
+	stopAgentFn     func() error
+	installFn       func(pkg string) error
 }
 
 // defaultSeams returns the production wiring for updateSeams given an orbital manager
 // and a resolved candidate package.
 func defaultSeams(orb *mgr.Manager, candidate *records.Package) updateSeams {
 	return updateSeams{
-		isTerminalFn: isTerminal,
-		runConfirmFn: runConfirm,
+		isInteractiveFn: isInteractive,
+		runConfirmFn:    runConfirm,
 		stopAgentFn: func() error {
 			ag := agent.Agent{}
 			err := ag.Stop()
@@ -97,7 +97,7 @@ func runInitConfirmDecision(w io.Writer, th *theme.Theme, s updateSeams, path st
 	if yes {
 		return true, nil
 	}
-	if !s.isTerminalFn(w) {
+	if !s.isInteractiveFn() {
 		return false, fmt.Errorf("interactive input requires a TTY — pass --yes to proceed non-interactively")
 	}
 	title := fmt.Sprintf("No managed installation root at %s. Initialize?", path)
@@ -113,10 +113,11 @@ func runInitConfirmDecision(w io.Writer, th *theme.Theme, s updateSeams, path st
 // D8 policy: non-TTY without --yes → error; non-TTY with --yes → proceed.
 // Consequence sentence is printed BEFORE the confirm prompt (D-order).
 func runUpdateFlow(w io.Writer, th *theme.Theme, s updateSeams, version, candidateID string, yes bool) error {
-	tty := s.isTerminalFn(w)
+	// tty is used for output styling only (ackLine, StepLine rendering).
+	tty := tui.IsTerminal(w)
 
 	if !yes {
-		if !tty {
+		if !s.isInteractiveFn() {
 			return fmt.Errorf("interactive input requires a TTY — pass --yes to proceed non-interactively")
 		}
 		// Print the consequence sentence BEFORE the confirm.
@@ -194,10 +195,9 @@ func UpdateCmd() *cobra.Command {
 			// Init root if needed — D8 gated confirm.
 			if !orb.Ready() {
 				seams := updateSeams{
-					isTerminalFn: isTerminal,
-					runConfirmFn: runConfirm,
-					stopAgentFn:  nil, // not used in init path
-					installFn:    nil, // not used in init path
+					isInteractiveFn: isInteractive,
+					runConfirmFn:    runConfirm,
+					// stopAgentFn and installFn are not used in the init path.
 				}
 				proceed, err := runInitConfirmDecision(os.Stdout, th, seams, orb.Path, yes)
 				if err != nil {

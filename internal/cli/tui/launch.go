@@ -41,6 +41,12 @@ func IsTerminal(w io.Writer) bool {
 	return isatty.IsTerminal(f.Fd()) || isatty.IsCygwinTerminal(f.Fd())
 }
 
+// IsInteractive reports whether an interactive prompt (which reads stdin and
+// draws to stdout) can run — both os.Stdin and os.Stdout must be terminals.
+func IsInteractive() bool {
+	return IsTerminal(os.Stdin) && IsTerminal(os.Stdout)
+}
+
 // buildProgramOptions converts RunOptions into tea.ProgramOption slice.
 func buildProgramOptions(opts RunOptions) []tea.ProgramOption {
 	var progOpts []tea.ProgramOption
