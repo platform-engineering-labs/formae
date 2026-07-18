@@ -158,7 +158,7 @@ var probe = func(env envInfo) probeResult {
 	if terr != nil {
 		return probeResult{}
 	}
-	defer tty.Close()
+	defer func() { _ = tty.Close() }()
 
 	type readResult struct {
 		buf []byte
