@@ -106,6 +106,7 @@ type Model struct {
 	vp       viewport.Model
 	width    int
 	height   int
+	showHelp bool
 }
 
 // New builds a simview Model from a Simulation and Options.
@@ -178,13 +179,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		// Ack screen: only enter (proceed) and q/esc/ctrl-c (abort).
+		// ctrl+c is a global escape hatch — quits in all states.
+		if msg.Type == tea.KeyCtrlC {
+			m.decision = DecisionAborted
+			return m, tea.Quit
+		}
+
+		// Ack screen: only enter (proceed) and q/esc (abort).
 		if m.screen == screenAck {
 			if msg.Type == tea.KeyEnter {
 				m.screen = screenPreview
 				return m, nil
 			}
-			if msg.String() == "q" || msg.Type == tea.KeyEsc || msg.Type == tea.KeyCtrlC {
+			if msg.String() == "q" || msg.Type == tea.KeyEsc {
 				m.decision = DecisionAborted
 				return m, tea.Quit
 			}
@@ -192,8 +199,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		// Help overlay is modal: esc closes it, ? toggles it, all other keys are
+		// swallowed (except ctrl+c handled above).
+		if m.showHelp {
+			if msg.Type == tea.KeyEsc || (msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == '?') {
+				m.showHelp = false
+			}
+			// Swallow every key while overlay is open (including the close keys —
+			// they only close the overlay, they do not act on the underlying view).
+			return m, nil
+		}
+
+		// ? opens the help overlay.
+		if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == '?' {
+			m.showHelp = true
+			return m, nil
+		}
+
 		// Preview screen quit keys.
-		if msg.String() == "q" || msg.Type == tea.KeyEsc || msg.Type == tea.KeyCtrlC {
+		if msg.String() == "q" || msg.Type == tea.KeyEsc {
 			m.decision = DecisionAborted
 			return m, tea.Quit
 		}
@@ -302,6 +326,9 @@ func (m Model) View() string {
 
 	if m.screen == screenAck {
 		return m.viewAck()
+	}
+	if m.showHelp {
+		return components.HelpOverlay(m.th, m.width, m.height, simHelpGroups())
 	}
 	return m.viewPreview()
 }
@@ -464,6 +491,37 @@ func (m Model) cursorRowKind() rowKind {
 		return nav[m.cursor].rowKind
 	}
 	return kindResource
+}
+
+// simHelpGroups returns the per-view binding table for the HelpOverlay.
+// Bindings reflect simview's actual key handling per the PLA-290 design spec.
+func simHelpGroups() []components.HelpGroup {
+	return []components.HelpGroup{
+		{
+			Title: "Navigate",
+			Hints: []components.KeyHint{
+				{Key: "↑↓", Desc: "select"},
+				{Key: "→ ←", Desc: "column"},
+				{Key: "PgUp/PgDn", Desc: "page"},
+			},
+		},
+		{
+			Title: "Actions",
+			Hints: []components.KeyHint{
+				{Key: "space", Desc: "expand"},
+				{Key: "s", Desc: "sort"},
+				{Key: "y", Desc: "confirm"},
+				{Key: "n", Desc: "abort"},
+			},
+		},
+		{
+			Title: "General",
+			Hints: []components.KeyHint{
+				{Key: "q", Desc: "abort"},
+				{Key: "?", Desc: "close help"},
+			},
+		},
+	}
 }
 
 // footerHints returns the key hints for the preview footer bar (with y confirm).

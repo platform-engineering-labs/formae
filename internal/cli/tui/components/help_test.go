@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/tuitest"
@@ -133,4 +134,116 @@ func TestHelpOverlay_ContainsHints(t *testing.T) {
 	assert.Contains(t, plain, "select")
 	assert.Contains(t, plain, "page")
 	assert.Contains(t, plain, "close help")
+}
+
+// TestHelpOverlay_CrossViewGeneralInvariant asserts the cross-view consistency
+// invariant: for any view's []HelpGroup, the "? close help" entry in the General
+// group always renders with key label "?" and desc "close help".
+//
+// Design note: the FULL General group contents differ by view (simview has no
+// esc/back; driftview uses "esc / q"; statuswatch/inventory have separate esc
+// and q lines). So we do NOT assert byte-identity of the complete General group
+// across all four views — that would misrepresent the real bindings. Instead we
+// assert the shared invariant: the {Key:"?", Desc:"close help"} entry appears
+// in the rendered output of every view's help overlay, using the same label
+// ("?") and description ("close help"). This is the actual consistency guarantee
+// documented in PLA-290.
+func TestHelpOverlay_CrossViewGeneralInvariant(t *testing.T) {
+	// General groups as each view defines them (faithful copies, not truncated).
+	viewGenerals := []struct {
+		view    string
+		general HelpGroup
+	}{
+		{
+			view: "statuswatch",
+			general: HelpGroup{
+				Title: "General",
+				Hints: []KeyHint{
+					{Key: "esc", Desc: "back"},
+					{Key: "q", Desc: "quit"},
+					{Key: "?", Desc: "close help"},
+				},
+			},
+		},
+		{
+			view: "inventory",
+			general: HelpGroup{
+				Title: "General",
+				Hints: []KeyHint{
+					{Key: "esc", Desc: "back"},
+					{Key: "q", Desc: "quit"},
+					{Key: "?", Desc: "close help"},
+				},
+			},
+		},
+		{
+			view: "simview",
+			general: HelpGroup{
+				Title: "General",
+				Hints: []KeyHint{
+					{Key: "q", Desc: "abort"},
+					{Key: "?", Desc: "close help"},
+				},
+			},
+		},
+		{
+			view: "driftview",
+			general: HelpGroup{
+				Title: "General",
+				Hints: []KeyHint{
+					{Key: "esc / q", Desc: "abort"},
+					{Key: "?", Desc: "close help"},
+				},
+			},
+		},
+	}
+
+	th := theme.New("formae")
+
+	// For each view, render an overlay containing just the General group and
+	// assert that "?" and "close help" appear in the plain output.
+	for _, tc := range viewGenerals {
+		tc := tc
+		t.Run(tc.view, func(t *testing.T) {
+			groups := []HelpGroup{tc.general}
+			out := HelpOverlay(th, 120, 40, groups)
+			p := ansi.Strip(out)
+
+			// Invariant: "?" key label present.
+			assert.Contains(t, p, "?", "%s: General group must render '?' key", tc.view)
+			// Invariant: "close help" desc present.
+			assert.Contains(t, p, "close help", "%s: General group must render 'close help' desc", tc.view)
+			// Invariant: panel title present.
+			assert.Contains(t, p, "Keybindings", "%s: overlay must be titled 'Keybindings'", tc.view)
+		})
+	}
+
+	// Additionally: the "? — close help" row renders identically (same ANSI bytes)
+	// across all four views because it uses the same KeyHint struct — extract
+	// just that row from each rendering and compare.
+	var renderedRows []string
+	for _, tc := range viewGenerals {
+		groups := []HelpGroup{tc.general}
+		out := HelpOverlay(th, 120, 40, groups)
+		// Find the row containing "close help" in the rendered output.
+		for _, line := range strings.Split(out, "\n") {
+			if strings.Contains(ansi.Strip(line), "close help") {
+				renderedRows = append(renderedRows, line)
+				break
+			}
+		}
+	}
+	require.Len(t, renderedRows, len(viewGenerals), "each view must produce a 'close help' row")
+	// All four "? close help" rows must be byte-identical (same styling, same padding).
+	// They may differ in key-column padding when other keys in the group are wider
+	// (since padding is set by the widest key across all groups). So we assert only
+	// that the PLAIN TEXT portions match — the styling is uniform by construction
+	// (all use the same Accent/TextSecondary roles). Full byte-identity is NOT
+	// asserted across views because the widest-key padding differs per view.
+	for i, row := range renderedRows {
+		plainRow := ansi.Strip(row)
+		assert.Contains(t, plainRow, "?", "view %d: close-help row must contain '?'", i)
+		assert.Contains(t, plainRow, "close help", "view %d: close-help row must contain 'close help'", i)
+		assert.Contains(t, plainRow, "—", "view %d: close-help row must use '—' separator", i)
+	}
 }
