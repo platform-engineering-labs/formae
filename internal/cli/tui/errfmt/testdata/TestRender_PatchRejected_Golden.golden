@@ -1,0 +1,6 @@
+[38;2;248;113;113mforma patch rejected because the following stacks do not exist:[0m
+  staging
+  canary
+
+[38;2;181;181;91mA patch can only modify existing stacks. Use '--mode reconcile' to create new stacks.[0m
+[38;2;181;181;91m[0m                                                                                     
