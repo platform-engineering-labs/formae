@@ -6,11 +6,13 @@ package destroy
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"regexp"
 	"strings"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
 	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
@@ -70,6 +72,20 @@ func themeFor(a *app.App) *theme.Theme {
 		name = a.Config.Cli.Theme
 	}
 	return theme.New(name)
+}
+
+// legacyWidth is a package-level var so tests can stub it. Returns 100 for
+// non-TTY output (piped/redirected) or the real terminal width for TTY.
+var legacyWidth = func(w io.Writer) int {
+	if !isTerminal(w) {
+		return 100
+	}
+	if f, ok := w.(*os.File); ok {
+		if width, _, err := term.GetSize(int(f.Fd())); err == nil && width > 0 {
+			return width
+		}
+	}
+	return 100
 }
 
 // OnDependents defines the behavior when resources depend on those being deleted.
@@ -351,11 +367,9 @@ func runDestroyLegacy(app *app.App, opts *DestroyOptions) error {
 			fmt.Printf("%s\n\n", display.Gold("Warning: This operation will cascade delete additional resources."))
 		}
 
-		p := printer.NewHumanReadablePrinter[apimodel.Simulation](os.Stdout)
-		err = p.Print(&res.Simulation, printer.PrintOptions{})
-		if err != nil {
-			return fmt.Errorf("error printing simulation: %v", err)
-		}
+		th := themeFor(app)
+		width := legacyWidth(os.Stdout)
+		_, _ = fmt.Println(simview.RenderSimulationPlain(th, &res.Simulation, width))
 	}
 
 	if opts.Simulate {
