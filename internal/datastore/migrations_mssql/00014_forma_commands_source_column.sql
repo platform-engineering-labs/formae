@@ -7,6 +7,7 @@
 -- initiated commands from internal bookkeeping (auto-reconciler, stack-expirer,
 -- synchronizer).  Rows written before this migration get an empty string;
 -- the application treats '' the same as 'user' for display purposes.
+-- +goose StatementBegin
 IF NOT EXISTS (
     SELECT 1 FROM sys.columns
     WHERE object_id = OBJECT_ID('forma_commands') AND name = 'source'
@@ -14,8 +15,10 @@ IF NOT EXISTS (
 BEGIN
     ALTER TABLE forma_commands ADD source nvarchar(450) NOT NULL DEFAULT '';
 END;
+-- +goose StatementEnd
 
 -- +goose Down
+-- +goose StatementBegin
 IF EXISTS (
     SELECT 1 FROM sys.columns
     WHERE object_id = OBJECT_ID('forma_commands') AND name = 'source'
@@ -23,3 +26,4 @@ IF EXISTS (
 BEGIN
     ALTER TABLE forma_commands DROP COLUMN source;
 END;
+-- +goose StatementEnd
