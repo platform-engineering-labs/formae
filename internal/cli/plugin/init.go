@@ -255,6 +255,14 @@ func getTemplateTarballURL(version string) string {
 // t.Cleanup.
 var runPluginInitFn = runPluginInit
 
+// runFormFn is the seam used by runPluginInitInteractive to build and run the
+// init form for one loop iteration. Tests can replace it to drive the loop
+// without a real TTY; the stub receives v so it can simulate user input by
+// mutating fields (e.g. changing Name between re-open iterations).
+var runFormFn = func(th *theme.Theme, v *initFormValues, nameErr string) error {
+	return buildInitForm(th, v, nameErr).Run()
+}
+
 func PluginInitCmd() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "init",
@@ -331,13 +339,10 @@ type availabilityCheckResult struct {
 // Parameters:
 //   - noCheck: when true, the hub is not called and the result is unchecked.
 //   - explicitHub: when true, an unreachable hub is a hard error.
-//   - allowConflict: when true, a taken name does NOT cause a nameErr in the
-//     loop; the caller is responsible for emitting the ⚠ warning.
 func classifyAvailability(
 	ctx context.Context,
 	client HubClient,
 	name string,
-	allowConflict bool,
 	noCheck bool,
 	explicitHub bool,
 	w io.Writer,
@@ -392,13 +397,12 @@ func runOneAvailabilityIteration(
 	allowConflict bool,
 	noCheck bool,
 	explicitHub bool,
+	th *theme.Theme,
 	w io.Writer,
 ) (nameErr string, hardErr error) {
-	th := theme.New("formae")
-
 	step := components.StartStep(w, th, "checking name availability…")
 
-	res := classifyAvailability(ctx, client, name, allowConflict, noCheck, explicitHub, w)
+	res := classifyAvailability(ctx, client, name, noCheck, explicitHub, w)
 
 	switch {
 	case res.err != nil:
@@ -538,8 +542,7 @@ func runPluginInitInteractive(ctx context.Context, opts *PluginInitOptions) erro
 	var nameErr string
 
 	for {
-		form := buildInitForm(th, &v, nameErr)
-		if err := form.Run(); err != nil {
+		if err := runFormFn(th, &v, nameErr); err != nil {
 			// esc / ctrl-c → non-zero exit (D8).
 			return err
 		}
@@ -556,6 +559,7 @@ func runPluginInitInteractive(ctx context.Context, opts *PluginInitOptions) erro
 			opts.AllowConflict,
 			opts.NoAvailabilityCheck,
 			explicitHub,
+			th,
 			w,
 		)
 		if hardErr != nil {

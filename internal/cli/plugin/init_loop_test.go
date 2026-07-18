@@ -15,6 +15,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 )
 
 // ---------------------------------------------------------------------------
@@ -50,7 +52,7 @@ func loopOpts(name string, hubClient HubClient, dl TemplateDownloader, overrides
 func TestHubCheckResult_Available(t *testing.T) {
 	fc := &fakeHubClient{res: AvailabilityResult{Available: true}}
 	var buf bytes.Buffer
-	res := classifyAvailability(context.Background(), fc, "foo", false /*allowConflict*/, false /*noCheck*/, false /*explicitHub*/, &buf)
+	res := classifyAvailability(context.Background(), fc, "foo", false /*noCheck*/, false /*explicitHub*/, &buf)
 	assert.False(t, res.taken)
 	assert.False(t, res.unchecked)
 	assert.NoError(t, res.err)
@@ -60,7 +62,7 @@ func TestHubCheckResult_Available(t *testing.T) {
 func TestHubCheckResult_Taken(t *testing.T) {
 	fc := &fakeHubClient{res: AvailabilityResult{Available: false, GitHubRepoURL: "https://github.com/x/y"}}
 	var buf bytes.Buffer
-	res := classifyAvailability(context.Background(), fc, "foo", false, false, false, &buf)
+	res := classifyAvailability(context.Background(), fc, "foo", false, false, &buf)
 	assert.True(t, res.taken)
 	assert.False(t, res.unchecked)
 	assert.Equal(t, "https://github.com/x/y", res.registrant)
@@ -68,10 +70,13 @@ func TestHubCheckResult_Taken(t *testing.T) {
 }
 
 func TestHubCheckResult_TakenAllowConflict(t *testing.T) {
+	// allowConflict is handled by the caller (runOneAvailabilityIteration's switch);
+	// classifyAvailability always returns taken=true when the name is registered,
+	// regardless of the caller's allow-conflict intent.
 	fc := &fakeHubClient{res: AvailabilityResult{Available: false, GitHubRepoURL: "https://github.com/x/y"}}
 	var buf bytes.Buffer
-	res := classifyAvailability(context.Background(), fc, "foo", true /*allowConflict*/, false, false, &buf)
-	// allowConflict=true: taken is still returned so caller can emit the warning
+	res := classifyAvailability(context.Background(), fc, "foo", false /*noCheck*/, false /*explicitHub*/, &buf)
+	// taken is returned so the caller can decide whether to warn-and-proceed or re-open.
 	assert.True(t, res.taken)
 	assert.NoError(t, res.err)
 }
@@ -79,7 +84,7 @@ func TestHubCheckResult_TakenAllowConflict(t *testing.T) {
 func TestHubCheckResult_Transient_Unchecked(t *testing.T) {
 	fc := &fakeHubClient{err: &HubTransientError{Cause: errors.New("hub returned HTTP 503")}}
 	var buf bytes.Buffer
-	res := classifyAvailability(context.Background(), fc, "foo", false, false, false, &buf)
+	res := classifyAvailability(context.Background(), fc, "foo", false /*noCheck*/, false /*explicitHub*/, &buf)
 	assert.True(t, res.unchecked)
 	assert.False(t, res.taken)
 	assert.NoError(t, res.err)
@@ -88,7 +93,7 @@ func TestHubCheckResult_Transient_Unchecked(t *testing.T) {
 func TestHubCheckResult_Unreachable_DefaultHub_Unchecked(t *testing.T) {
 	fc := &fakeHubClient{err: &HubUnreachableError{Cause: errors.New("connection refused")}}
 	var buf bytes.Buffer
-	res := classifyAvailability(context.Background(), fc, "foo", false, false, false /*explicitHub=false*/, &buf)
+	res := classifyAvailability(context.Background(), fc, "foo", false /*noCheck*/, false /*explicitHub=false*/, &buf)
 	assert.True(t, res.unchecked)
 	assert.NoError(t, res.err)
 }
@@ -96,7 +101,7 @@ func TestHubCheckResult_Unreachable_DefaultHub_Unchecked(t *testing.T) {
 func TestHubCheckResult_Unreachable_ExplicitHub_HardError(t *testing.T) {
 	fc := &fakeHubClient{err: &HubUnreachableError{Cause: errors.New("connection refused")}}
 	var buf bytes.Buffer
-	res := classifyAvailability(context.Background(), fc, "foo", false, false, true /*explicitHub*/, &buf)
+	res := classifyAvailability(context.Background(), fc, "foo", false /*noCheck*/, true /*explicitHub*/, &buf)
 	assert.False(t, res.unchecked)
 	assert.False(t, res.taken)
 	require.Error(t, res.err)
@@ -104,19 +109,14 @@ func TestHubCheckResult_Unreachable_ExplicitHub_HardError(t *testing.T) {
 }
 
 func TestHubCheckResult_NoCheck_Unchecked(t *testing.T) {
-	// No hub client needed — classifyAvailability with a nil client should not be called,
-	// but the "no-availability-check" path bypasses it entirely; test the loop gate.
-	// Verify that opts.NoAvailabilityCheck causes the loop to skip the hub call.
-	hubCalled := false
-	fc := &fakeHubClient{}
-	origCheck := fc.calls
-	_ = origCheck
-
-	// We test this via the loop's "no-availability-check" path below in TestInteractiveLoop_*.
-	// Here just verify the sentinel: when NoAvailabilityCheck=true, hubClient is never called.
-	// (The real assertion is in TestInteractiveLoop_NoAvailabilityCheck.)
-	_ = fc
-	_ = hubCalled
+	// When noCheck=true, classifyAvailability must return unchecked=true without
+	// calling the hub client at all.
+	fc := &panicHubClient{} // panics if CheckPluginAvailability is called
+	var buf bytes.Buffer
+	res := classifyAvailability(context.Background(), fc, "any-name", true /*noCheck*/, false /*explicitHub*/, &buf)
+	assert.True(t, res.unchecked, "noCheck=true must set unchecked")
+	assert.False(t, res.taken, "noCheck must not report taken")
+	assert.NoError(t, res.err, "noCheck must not return a hard error")
 }
 
 // ---------------------------------------------------------------------------
@@ -153,7 +153,7 @@ func TestInteractiveLoop_NonTTY_ReturnsD8Error(t *testing.T) {
 func TestAvailabilityLoop_Available_Proceeds(t *testing.T) {
 	fc := &fakeHubClient{res: AvailabilityResult{Available: true}}
 	var buf bytes.Buffer
-	nameErr, hardErr := runOneAvailabilityIteration(context.Background(), fc, "foo", false, false, false, &buf)
+	nameErr, hardErr := runOneAvailabilityIteration(context.Background(), fc, "foo", false, false, false, theme.New("formae"), &buf)
 	assert.Equal(t, "", nameErr, "no nameErr on available name")
 	assert.NoError(t, hardErr)
 }
@@ -164,7 +164,7 @@ func TestAvailabilityLoop_Available_Proceeds(t *testing.T) {
 func TestAvailabilityLoop_Taken_ReturnsNameErr(t *testing.T) {
 	fc := &fakeHubClient{res: AvailabilityResult{Available: false, GitHubRepoURL: "https://github.com/x/y"}}
 	var buf bytes.Buffer
-	nameErr, hardErr := runOneAvailabilityIteration(context.Background(), fc, "taken-name", false, false, false, &buf)
+	nameErr, hardErr := runOneAvailabilityIteration(context.Background(), fc, "taken-name", false, false, false, theme.New("formae"), &buf)
 	require.NotEmpty(t, nameErr, "taken name must set nameErr for form re-open")
 	assert.Contains(t, nameErr, "taken-name")
 	assert.Contains(t, nameErr, "https://github.com/x/y")
@@ -177,7 +177,7 @@ func TestAvailabilityLoop_Taken_ReturnsNameErr(t *testing.T) {
 func TestAvailabilityLoop_Taken_AllowConflict_ProceedsWithWarning(t *testing.T) {
 	fc := &fakeHubClient{res: AvailabilityResult{Available: false, GitHubRepoURL: "https://github.com/x/y"}}
 	var buf bytes.Buffer
-	nameErr, hardErr := runOneAvailabilityIteration(context.Background(), fc, "taken-name", true /*allowConflict*/, false, false, &buf)
+	nameErr, hardErr := runOneAvailabilityIteration(context.Background(), fc, "taken-name", true /*allowConflict*/, false, false, theme.New("formae"), &buf)
 	assert.Equal(t, "", nameErr, "allow-conflict must NOT re-open the form")
 	assert.NoError(t, hardErr)
 	// The warning must have been written.
@@ -190,7 +190,7 @@ func TestAvailabilityLoop_Taken_AllowConflict_ProceedsWithWarning(t *testing.T) 
 func TestAvailabilityLoop_Transient_Unchecked(t *testing.T) {
 	fc := &fakeHubClient{err: &HubTransientError{Cause: errors.New("hub returned HTTP 503")}}
 	var buf bytes.Buffer
-	nameErr, hardErr := runOneAvailabilityIteration(context.Background(), fc, "foo", false, false, false, &buf)
+	nameErr, hardErr := runOneAvailabilityIteration(context.Background(), fc, "foo", false, false, false, theme.New("formae"), &buf)
 	assert.Equal(t, "", nameErr, "transient error must NOT re-open the form")
 	assert.NoError(t, hardErr)
 	assert.Contains(t, buf.String(), "unchecked",
@@ -204,7 +204,7 @@ func TestAvailabilityLoop_NoAvailabilityCheck_SkipsHubCall(t *testing.T) {
 	// Pass a client that panics if called.
 	fc := &panicHubClient{}
 	var buf bytes.Buffer
-	nameErr, hardErr := runOneAvailabilityIteration(context.Background(), fc, "foo", false, true /*noCheck*/, false, &buf)
+	nameErr, hardErr := runOneAvailabilityIteration(context.Background(), fc, "foo", false, true /*noCheck*/, false, theme.New("formae"), &buf)
 	assert.Equal(t, "", nameErr)
 	assert.NoError(t, hardErr)
 }
@@ -214,60 +214,81 @@ func TestAvailabilityLoop_NoAvailabilityCheck_SkipsHubCall(t *testing.T) {
 func TestAvailabilityLoop_ExplicitHub_Unreachable_HardError(t *testing.T) {
 	fc := &fakeHubClient{err: &HubUnreachableError{Cause: errors.New("connection refused")}}
 	var buf bytes.Buffer
-	nameErr, hardErr := runOneAvailabilityIteration(context.Background(), fc, "foo", false, false, true /*explicit*/, &buf)
+	nameErr, hardErr := runOneAvailabilityIteration(context.Background(), fc, "foo", false, false, true /*explicit*/, theme.New("formae"), &buf)
 	assert.Equal(t, "", nameErr)
 	require.Error(t, hardErr)
 	assert.Contains(t, hardErr.Error(), "hub availability check failed")
 }
 
-// TestAvailabilityLoop_FieldsPreservedAcrossReopen verifies R5:
-// non-name fields survive the re-open loop iteration.
-// We simulate two iterations: first with a taken name, second with an
-// available name. The non-name values in the shared initFormValues must
-// be unchanged between iterations.
+// TestAvailabilityLoop_FieldsPreservedAcrossReopen verifies R5 via the runFormFn
+// seam: runPluginInitInteractive's loop reuses the SAME v across iterations so
+// non-name fields (Namespace, Description, Author, etc.) survive the re-open.
+//
+// Seam contract (runFormFn receives *initFormValues):
+//   - iteration 1: v comes pre-filled from opts; form stub changes only Name to
+//     the taken value (simulating user leaving other fields unchanged). Hub returns taken.
+//   - iteration 2: form stub asserts non-name fields are still set, then switches
+//     Name to a free name so the loop exits.
 func TestAvailabilityLoop_FieldsPreservedAcrossReopen(t *testing.T) {
-	// Iteration 1: "taken-name" is taken → nameErr set, loop continues.
-	// Iteration 2: "new-name" is available → proceed.
-	// The Description, Author, etc. must survive across iterations because
-	// they are stored in the shared v *initFormValues.
+	// Hub: taken on first call, available on second.
+	hubCalls := 0
+	fc := &fakeHubClientFn{fn: func(_ context.Context, _ string) (AvailabilityResult, error) {
+		hubCalls++
+		if hubCalls == 1 {
+			return AvailabilityResult{Available: false, GitHubRepoURL: "https://github.com/x/y"}, nil
+		}
+		return AvailabilityResult{Available: true}, nil
+	}}
 
-	v := &initFormValues{
-		Name:        "taken-name",
-		Namespace:   "MYPLUGIN",
-		Description: "my important description",
-		Category:    "cloud",
-		Author:      "Acme Corp",
-		ModulePath:  "github.com/acme/formae-plugin-myplugin",
-		License:     "MIT",
-		OutputDir:   "./taken-name",
+	formCalls := 0
+	orig := runFormFn
+	t.Cleanup(func() { runFormFn = orig })
+	runFormFn = func(_ *theme.Theme, v *initFormValues, _ string) error {
+		formCalls++
+		switch formCalls {
+		case 1:
+			// Iteration 1: opts pre-filled all non-name fields; just confirm name and leave it.
+			// (v.Name == "taken-name" from opts; hub will return taken.)
+		case 2:
+			// Iteration 2: v is the SAME struct — non-name fields must be unchanged.
+			assert.Equal(t, "MYPLUGIN", v.Namespace, "Namespace must survive re-open")
+			assert.Equal(t, "my important description", v.Description, "Description must survive re-open")
+			assert.Equal(t, "cloud", v.Category, "Category must survive re-open")
+			assert.Equal(t, "Acme Corp", v.Author, "Author must survive re-open")
+			assert.Equal(t, "github.com/acme/formae-plugin-myplugin", v.ModulePath, "ModulePath must survive re-open")
+			assert.Equal(t, "MIT", v.License, "License must survive re-open")
+			// Simulate user picking a free name.
+			v.Name = "new-name"
+		}
+		return nil
 	}
 
-	// Simulate iteration 1: name is taken
-	fc1 := &fakeHubClient{res: AvailabilityResult{Available: false, GitHubRepoURL: "https://github.com/x/y"}}
-	var buf1 bytes.Buffer
-	nameErr, hardErr := runOneAvailabilityIteration(context.Background(), fc1, v.Name, false, false, false, &buf1)
-	require.NotEmpty(t, nameErr)
-	require.NoError(t, hardErr)
+	dl := &spyDownloader{}
+	opts := &PluginInitOptions{
+		Name:                "taken-name",
+		Namespace:           "MYPLUGIN",
+		Description:         "my important description",
+		Category:            "cloud",
+		Author:              "Acme Corp",
+		ModulePath:          "github.com/acme/formae-plugin-myplugin",
+		License:             "MIT",
+		NoInput:             false,
+		NoAvailabilityCheck: false,
+		HubClient:           fc,
+		TemplateDownloader:  dl,
+	}
 
-	// Caller would update v.Name here (user edits the field in the form);
-	// all other fields remain unchanged in v.
-	v.Name = "new-name"
+	// Drive the interactive loop directly (bypasses the TTY gate in runPluginInit).
+	err := runPluginInitInteractive(context.Background(), opts)
 
-	// Verify that non-name fields are still intact (they live in v which is
-	// passed by pointer to buildInitForm in the real loop).
-	assert.Equal(t, "MYPLUGIN", v.Namespace)
-	assert.Equal(t, "my important description", v.Description)
-	assert.Equal(t, "cloud", v.Category)
-	assert.Equal(t, "Acme Corp", v.Author)
-	assert.Equal(t, "github.com/acme/formae-plugin-myplugin", v.ModulePath)
-	assert.Equal(t, "MIT", v.License)
+	assert.Equal(t, 2, formCalls, "form seam must be called twice (re-open after taken)")
+	assert.Equal(t, 2, hubCalls, "hub must be called once per iteration")
 
-	// Simulate iteration 2: new-name is available → no nameErr, no hardErr.
-	fc2 := &fakeHubClient{res: AvailabilityResult{Available: true}}
-	var buf2 bytes.Buffer
-	nameErr2, hardErr2 := runOneAvailabilityIteration(context.Background(), fc2, v.Name, false, false, false, &buf2)
-	assert.Equal(t, "", nameErr2)
-	assert.NoError(t, hardErr2)
+	// Accept nil or a scaffolding error; the loop must NOT return an availability error.
+	if err != nil {
+		assert.NotContains(t, err.Error(), "hub availability",
+			"loop must not surface availability error after successful name resolution")
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -278,7 +299,7 @@ func TestAvailabilityLoop_FieldsPreservedAcrossReopen(t *testing.T) {
 func TestAvailabilityLoop_Available_StepOutput(t *testing.T) {
 	fc := &fakeHubClient{res: AvailabilityResult{Available: true}}
 	var buf bytes.Buffer
-	_, _ = runOneAvailabilityIteration(context.Background(), fc, "myplugin", false, false, false, &buf)
+	_, _ = runOneAvailabilityIteration(context.Background(), fc, "myplugin", false, false, false, theme.New("formae"), &buf)
 	out := buf.String()
 	// Should contain the "available" or "✓" marker.
 	assert.True(t, strings.Contains(out, "available") || strings.Contains(out, "✓"),
@@ -288,7 +309,7 @@ func TestAvailabilityLoop_Available_StepOutput(t *testing.T) {
 func TestAvailabilityLoop_Taken_StepOutput(t *testing.T) {
 	fc := &fakeHubClient{res: AvailabilityResult{Available: false, GitHubRepoURL: "https://github.com/x/y"}}
 	var buf bytes.Buffer
-	_, _ = runOneAvailabilityIteration(context.Background(), fc, "taken-name", false, false, false, &buf)
+	_, _ = runOneAvailabilityIteration(context.Background(), fc, "taken-name", false, false, false, theme.New("formae"), &buf)
 	out := buf.String()
 	// Should contain a taken/✗ marker.
 	assert.True(t, strings.Contains(out, "taken") || strings.Contains(out, "✗"),
@@ -298,7 +319,7 @@ func TestAvailabilityLoop_Taken_StepOutput(t *testing.T) {
 func TestAvailabilityLoop_NoCheck_StepOutput(t *testing.T) {
 	fc := &panicHubClient{}
 	var buf bytes.Buffer
-	_, _ = runOneAvailabilityIteration(context.Background(), fc, "foo", false, true, false, &buf)
+	_, _ = runOneAvailabilityIteration(context.Background(), fc, "foo", false, true, false, theme.New("formae"), &buf)
 	out := buf.String()
 	assert.True(t, strings.Contains(out, "unchecked") || strings.Contains(out, "○") || strings.Contains(out, "·"),
 		"no-check step must render an unchecked marker; got: %q", out)
@@ -313,4 +334,14 @@ type panicHubClient struct{}
 
 func (p *panicHubClient) CheckPluginAvailability(_ context.Context, name string) (AvailabilityResult, error) {
 	panic("panicHubClient: CheckPluginAvailability must not be called for name=" + name)
+}
+
+// fakeHubClientFn is a HubClient backed by an arbitrary function, used when
+// the response must vary across calls (e.g., taken on first call, available on second).
+type fakeHubClientFn struct {
+	fn func(context.Context, string) (AvailabilityResult, error)
+}
+
+func (f *fakeHubClientFn) CheckPluginAvailability(ctx context.Context, name string) (AvailabilityResult, error) {
+	return f.fn(ctx, name)
 }
