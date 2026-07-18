@@ -513,11 +513,6 @@ func formatReferenceValue(ref string, refLabels map[string]string) string {
 	return fmt.Sprintf("%s.%s", ksuid, property)
 }
 
-// isArrayProperty checks if a path contains array indices.
-func isArrayProperty(path string) bool {
-	return strings.Contains(path, "[") && strings.Contains(path, "]")
-}
-
 // formatValueForDisplay handles both regular values and Formae Value structures.
 func formatValueForDisplay(value any) string {
 	if valueMap, ok := value.(map[string]any); ok {
