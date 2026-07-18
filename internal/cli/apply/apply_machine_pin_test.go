@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/printer"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/tuitest"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 )
 
@@ -44,10 +45,6 @@ func TestMachinePinApplySimulate_JSON(t *testing.T) {
 	var roundtrip apimodel.Simulation
 	require.NoError(t, json.Unmarshal(got, &roundtrip), "machine output must be valid JSON")
 
-	// Pin exact bytes by re-marshaling the fixture and comparing
-	want, err := json.Marshal(&machineSimFixture)
-	require.NoError(t, err)
-	want = append(want, '\n')
-
-	require.Equal(t, string(want), string(got), "machine JSON output must be byte-identical to marshaled fixture")
+	// Pin exact bytes against a frozen golden file (not recomputed from fixture).
+	tuitest.RequireGolden(t, got)
 }

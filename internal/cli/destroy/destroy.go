@@ -369,7 +369,7 @@ func runDestroyLegacy(app *app.App, opts *DestroyOptions) error {
 
 		th := themeFor(app)
 		width := legacyWidth(os.Stdout)
-		_, _ = fmt.Println(simview.RenderSimulationPlain(th, &res.Simulation, width))
+		_, _ = fmt.Print(simview.RenderSimulationPlain(th, &res.Simulation, width))
 	}
 
 	if opts.Simulate {

@@ -304,7 +304,7 @@ func runApplyLegacy(a *app.App, opts *ApplyOptions) error {
 
 		th := themeFor(a)
 		width := legacyWidth(os.Stdout)
-		_, _ = fmt.Println(simview.RenderSimulationPlain(th, &res.Simulation, width))
+		_, _ = fmt.Print(simview.RenderSimulationPlain(th, &res.Simulation, width))
 	}
 
 	if opts.Simulate {
