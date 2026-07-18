@@ -9,6 +9,7 @@ package plugin
 import (
 	"bytes"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -166,6 +167,7 @@ func TestUpdateHuman_PipedLines_All(t *testing.T) {
 	out := buf.String()
 
 	assert.Contains(t, out, "✓ Updated all installed plugins")
+	assert.Equal(t, 1, strings.Count(out, "✓ Updated all installed plugins"), "result line must appear exactly once")
 	assert.Contains(t, out, "!")
 	assert.Contains(t, out, "restart")
 }

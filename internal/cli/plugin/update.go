@@ -131,7 +131,6 @@ func runUpdateForHumansWithSeams(app *app.App, opts *UpdateOptions, w io.Writer,
 
 	if len(opts.Packages) == 0 {
 		step.Done("Updated all installed plugins")
-		ackLine(w, tty, th, components.AckDone, "Updated all installed plugins")
 	} else {
 		names := pluginNamesFromArgs(opts.Packages)
 		noun := "plugin"
