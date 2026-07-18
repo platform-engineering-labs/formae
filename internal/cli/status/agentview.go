@@ -47,16 +47,6 @@ func panelRow(width int, panels ...string) string {
 	if len(panels) == 0 {
 		return ""
 	}
-	combined := 0
-	for _, p := range panels {
-		lines := strings.Split(p, "\n")
-		for _, l := range lines {
-			w := lipgloss.Width(l)
-			if w > combined {
-				combined = w
-			}
-		}
-	}
 	// Sum up total width of all panels
 	totalW := 0
 	for _, p := range panels {
@@ -232,8 +222,13 @@ func buildResourceTypesPanel(th *theme.Theme, stats apimodel.Stats, width int) s
 }
 
 func buildPluginsPanel(th *theme.Theme, stats apimodel.Stats, width int) string {
+	plugins := make([]apimodel.PluginInfo, len(stats.Plugins))
+	copy(plugins, stats.Plugins)
+	sort.Slice(plugins, func(i, j int) bool {
+		return plugins[i].Namespace < plugins[j].Namespace
+	})
 	lines := []string{}
-	for _, plugin := range stats.Plugins {
+	for _, plugin := range plugins {
 		lines = append(lines, fieldLine(th, plugin.Namespace, plugin.Version))
 	}
 	return components.Panel(th, th.Palette.Border, "Plugins", lines, width)
