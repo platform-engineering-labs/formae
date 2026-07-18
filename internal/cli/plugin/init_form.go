@@ -86,6 +86,10 @@ func isCustomLicenseGroupHidden(v *initFormValues) bool {
 // nameError, when non-empty, pre-marks the name field invalid so that
 // Task 14's check-on-submit loop can display the Hub rejection message
 // without running a separate validation step.
+// customLicenseWarning is shown under the custom-SPDX input when the user
+// picks the "Other" license — the plugin will not be publishable to the Hub.
+const customLicenseWarning = "⚠ Not publishable to hub.platform.engineering. Switch to Apache-2.0, BSD-3-Clause, MIT, or MPL-2.0 to publish."
+
 func buildInitForm(th *theme.Theme, v *initFormValues, nameError string) *huh.Form {
 	// Capture the name at form-build time so we can detect whether the user
 	// has changed it (used to gate the pre-seeded nameError, Task 14).
@@ -210,7 +214,7 @@ func buildInitForm(th *theme.Theme, v *initFormValues, nameError string) *huh.Fo
 	customLicenseGroup := huh.NewGroup(
 		huh.NewInput().
 			Title("Custom license identifier (SPDX)").
-			Description("⚠ Not publishable to hub.platform.engineering. Switch to Apache-2.0, BSD-3-Clause, MIT, or MPL-2.0 to publish.").
+			Description(customLicenseWarning).
 			Value(&v.CustomLicense),
 	).WithHideFunc(func() bool { return isCustomLicenseGroupHidden(v) })
 

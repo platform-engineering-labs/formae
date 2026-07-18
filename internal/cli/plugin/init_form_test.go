@@ -29,6 +29,8 @@ func TestBuildInitForm_FlagsPrefill(t *testing.T) {
 	assert.Equal(t, "cloudflare", v.Name)
 	assert.Equal(t, "network", v.Category)
 	assert.Equal(t, "CLOUDFLARE", v.Namespace)
+	// OutputDir is auto-derived from Name at build time when left empty.
+	assert.Equal(t, "./cloudflare", v.OutputDir)
 }
 
 func TestInitFormValidators_NameCharset(t *testing.T) {
@@ -100,6 +102,8 @@ func TestBuildInitForm_LicenseOther_GroupShown(t *testing.T) {
 	buildInitForm(th, v, "")
 	// When license is "Other", the custom-license group is NOT hidden.
 	assert.False(t, isCustomLicenseGroupHidden(v))
+	// The not-publishable warning copy is present for the custom-SPDX field.
+	assert.Contains(t, customLicenseWarning, "Not publishable to hub.platform.engineering")
 }
 
 func TestBuildInitForm_OutputDir_LiveFollow(t *testing.T) {
