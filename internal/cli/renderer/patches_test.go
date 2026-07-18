@@ -13,65 +13,13 @@ import (
 	"github.com/ddddddO/gtree"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
 )
-
-func TestExtractTagChange(t *testing.T) {
-	t.Run("complete tag object for add operation", func(t *testing.T) {
-		patch := patchOperation{
-			Op:    "add",
-			Path:  "/Tags/0",
-			Value: map[string]any{"Key": "Environment", "Value": "production"},
-		}
-
-		change, err := extractTagChange(patch, nil)
-
-		assert.NoError(t, err)
-		assert.Equal(t, "Environment", change.Key)
-		assert.Equal(t, "production", change.Value)
-		assert.Equal(t, "add", change.Operation)
-	})
-
-	t.Run("partial tag value update", func(t *testing.T) {
-		oldProps := `{"Tags":[{"Key":"Environment","Value":"dev"}]}`
-		patch := patchOperation{
-			Op:    "replace",
-			Path:  "/Tags/0/Value",
-			Value: "production",
-		}
-
-		change, err := extractTagChange(patch, json.RawMessage(oldProps))
-
-		assert.NoError(t, err)
-		assert.Equal(t, "Environment", change.Key)
-		assert.Equal(t, "production", change.Value)
-		assert.Equal(t, "dev", change.OldValue)
-		assert.True(t, change.HasOld)
-	})
-
-	t.Run("returns error for add op with nil value", func(t *testing.T) {
-		patch := patchOperation{Op: "add", Path: "/Tags/0", Value: nil}
-
-		_, err := extractTagChange(patch, nil)
-
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "nil value")
-	})
-
-	t.Run("tag removal", func(t *testing.T) {
-		oldProps := `{"Tags":[{"Key":"Environment","Value":"dev"}]}`
-		patch := patchOperation{Op: "remove", Path: "/Tags/0", Value: nil}
-
-		change, err := extractTagChange(patch, json.RawMessage(oldProps))
-
-		assert.NoError(t, err)
-		assert.Equal(t, "Environment", change.Key)
-		assert.Equal(t, "remove", change.Operation)
-	})
-}
 
 func TestFormatTagChange(t *testing.T) {
 	t.Run("formats add operation", func(t *testing.T) {
-		change := TagChange{Operation: "add", Key: "Environment", Value: "prod"}
+		change := components.TagChange{Operation: "add", Key: "Environment", Value: "prod"}
 
 		result := formatTagChange(change)
 
@@ -79,7 +27,7 @@ func TestFormatTagChange(t *testing.T) {
 	})
 
 	t.Run("formats replace with old value", func(t *testing.T) {
-		change := TagChange{
+		change := components.TagChange{
 			Operation: "replace",
 			Key:       "Environment",
 			Value:     "prod",
@@ -93,69 +41,9 @@ func TestFormatTagChange(t *testing.T) {
 	})
 }
 
-func TestFormatValueForDisplay(t *testing.T) {
-	t.Run("opaque value detection", func(t *testing.T) {
-		value := map[string]any{
-			"$visibility": "Opaque",
-			"$value":      "secret",
-		}
-
-		got := formatValueForDisplay(value)
-		want := "(opaque value)"
-
-		assert.Equal(t, want, got)
-	})
-
-	t.Run("value extraction", func(t *testing.T) {
-		value := map[string]any{
-			"$value": "extracted_value",
-		}
-
-		got := formatValueForDisplay(value)
-		want := "extracted_value"
-
-		assert.Equal(t, want, got)
-	})
-
-	t.Run("regular value fallback", func(t *testing.T) {
-		value := "regular_string"
-
-		got := formatValueForDisplay(value)
-		want := "regular_string"
-
-		assert.Equal(t, want, got)
-	})
-}
-
-func TestIsOpaqueProperty(t *testing.T) {
-	t.Run("is opaque", func(t *testing.T) {
-		properties := json.RawMessage(`{"prop": {"$visibility": "Opaque"}}`)
-
-		got := isOpaqueProperty("prop", properties)
-
-		assert.True(t, got)
-	})
-
-	t.Run("is not opaque", func(t *testing.T) {
-		properties := json.RawMessage(`{"prop": {"$value": "test"}}`)
-
-		got := isOpaqueProperty("prop", properties)
-
-		assert.False(t, got)
-	})
-
-	t.Run("property doesn't exist", func(t *testing.T) {
-		properties := json.RawMessage(`{}`)
-
-		got := isOpaqueProperty("missing", properties)
-
-		assert.False(t, got)
-	})
-}
-
 func TestFormatPropertyChange_OpaqueAdd(t *testing.T) {
 	t.Run("opaque add on existing resource shows set with opaque value", func(t *testing.T) {
-		change := PropertyChange{
+		change := components.PropertyChange{
 			Path:             "SecretString",
 			Value:            "L4clqcm50IFl",
 			Operation:        "add",
@@ -170,7 +58,7 @@ func TestFormatPropertyChange_OpaqueAdd(t *testing.T) {
 	})
 
 	t.Run("opaque add on new resource shows add with opaque value", func(t *testing.T) {
-		change := PropertyChange{
+		change := components.PropertyChange{
 			Path:      "SecretString",
 			Value:     "L4clqcm50IFl",
 			Operation: "add",
@@ -184,7 +72,7 @@ func TestFormatPropertyChange_OpaqueAdd(t *testing.T) {
 	})
 
 	t.Run("opaque add array entry shows opaque value", func(t *testing.T) {
-		change := PropertyChange{
+		change := components.PropertyChange{
 			Path:      "Secrets[0]",
 			Value:     "secret123",
 			Operation: "add",
@@ -200,7 +88,7 @@ func TestFormatPropertyChange_OpaqueAdd(t *testing.T) {
 
 func TestFormatPropertyChange_ForceResentField(t *testing.T) {
 	t.Run("changed force-resent scalar shows the new value only, never the old secret", func(t *testing.T) {
-		change := PropertyChange{
+		change := components.PropertyChange{
 			Path:             "LoginProfile.Password",
 			Value:            "newpass",
 			OldValue:         "oldpass",
@@ -218,7 +106,7 @@ func TestFormatPropertyChange_ForceResentField(t *testing.T) {
 	})
 
 	t.Run("force-resent scalar with no known previous renders as a plain change", func(t *testing.T) {
-		change := PropertyChange{
+		change := components.PropertyChange{
 			Path:             "LoginProfile.Password",
 			Value:            "newpass",
 			Operation:        "add",
@@ -232,7 +120,7 @@ func TestFormatPropertyChange_ForceResentField(t *testing.T) {
 	})
 
 	t.Run("force-resent array entry renders as a change, no write-only jargon", func(t *testing.T) {
-		change := PropertyChange{
+		change := components.PropertyChange{
 			Path:             "Tokens[0]",
 			Value:            "tok-123",
 			Operation:        "add",
@@ -243,51 +131,6 @@ func TestFormatPropertyChange_ForceResentField(t *testing.T) {
 
 		assert.Contains(t, result, `change entry "tok-123" in "Tokens"`)
 		assert.NotContains(t, result, "write-only")
-	})
-}
-
-func TestExtractPropertyChange_ForceResentNoOp(t *testing.T) {
-	prev := json.RawMessage(`{"LoginProfile":{"Password":"samepass"}}`)
-
-	t.Run("unchanged force-resend is marked NoOp", func(t *testing.T) {
-		patch := patchOperation{Op: "add", Path: "/LoginProfile/Password", Value: "samepass"}
-		change, err := extractPropertyChange(patch, map[string]any{}, prev, nil)
-		assert.NoError(t, err)
-		assert.True(t, change.NoOp, "an add whose value equals the previous value is a no-op force-resend")
-	})
-
-	t.Run("changed force-resend is not NoOp and carries the previous value", func(t *testing.T) {
-		patch := patchOperation{Op: "add", Path: "/LoginProfile/Password", Value: "newpass"}
-		change, err := extractPropertyChange(patch, map[string]any{}, prev, nil)
-		assert.NoError(t, err)
-		assert.False(t, change.NoOp)
-		assert.True(t, change.HasOld)
-	})
-
-	t.Run("type-changing re-send is not a NoOp (string vs number)", func(t *testing.T) {
-		// A rendered-string compare collapses the string "8080" and the number
-		// 8080 to the same text and would wrongly suppress this real change.
-		typed := json.RawMessage(`{"Port":"8080"}`)
-		patch := patchOperation{Op: "add", Path: "/Port", Value: float64(8080)}
-		change, err := extractPropertyChange(patch, map[string]any{}, typed, nil)
-		assert.NoError(t, err)
-		assert.False(t, change.NoOp, "a string->number re-send is a real change, not a no-op")
-	})
-
-	t.Run("unchanged opaque re-send is a NoOp (unwrap $value)", func(t *testing.T) {
-		opaque := json.RawMessage(`{"SecretString":{"$value":"sekret","$visibility":"Opaque"}}`)
-		patch := patchOperation{Op: "add", Path: "/SecretString", Value: "sekret"}
-		change, err := extractPropertyChange(patch, map[string]any{}, opaque, nil)
-		assert.NoError(t, err)
-		assert.True(t, change.NoOp, "an opaque re-send whose underlying value is unchanged is a no-op")
-	})
-
-	t.Run("changed opaque re-send is not a NoOp", func(t *testing.T) {
-		opaque := json.RawMessage(`{"SecretString":{"$value":"old","$visibility":"Opaque"}}`)
-		patch := patchOperation{Op: "add", Path: "/SecretString", Value: "new"}
-		change, err := extractPropertyChange(patch, map[string]any{}, opaque, nil)
-		assert.NoError(t, err)
-		assert.False(t, change.NoOp)
 	})
 }
 
@@ -322,30 +165,6 @@ func TestHasVisibleChanges(t *testing.T) {
 		]`)
 		prev := json.RawMessage(`{"LoginProfile":{"Password":"samepass"},"Description":"old"}`)
 		assert.True(t, HasVisibleChanges(patchDoc, json.RawMessage("{}"), prev, refLabels))
-	})
-}
-
-func TestPropertyExistsInPrevious(t *testing.T) {
-	t.Run("property exists", func(t *testing.T) {
-		prev := json.RawMessage(`{"SecretString": {"$value": "hash", "$visibility": "Opaque"}}`)
-
-		assert.True(t, propertyExistsInPrevious("SecretString", prev))
-	})
-
-	t.Run("property does not exist", func(t *testing.T) {
-		prev := json.RawMessage(`{"OtherProp": "value"}`)
-
-		assert.False(t, propertyExistsInPrevious("SecretString", prev))
-	})
-
-	t.Run("nested property exists", func(t *testing.T) {
-		prev := json.RawMessage(`{"LoginProfile": {"Password": "hash"}}`)
-
-		assert.True(t, propertyExistsInPrevious("LoginProfile/Password", prev))
-	})
-
-	t.Run("empty previous properties", func(t *testing.T) {
-		assert.False(t, propertyExistsInPrevious("SecretString", nil))
 	})
 }
 
@@ -419,99 +238,6 @@ func TestFormatPatchDocument_RemoveArrayObject_RendersAsJSON(t *testing.T) {
 		"remove entry should render the removed object as JSON, not Go map syntax")
 	assert.NotContains(t, removeLine, "map[metadata:",
 		"remove entry must not leak Go's default map formatter")
-}
-
-func TestFormatValueForDisplay_CompositeValuesAsJSON(t *testing.T) {
-	t.Run("map renders as JSON", func(t *testing.T) {
-		v := map[string]any{"k": "v", "n": float64(1)}
-		got := formatValueForDisplay(v)
-		// json.Marshal sorts map keys alphabetically, so output is deterministic.
-		assert.Equal(t, `{"k":"v","n":1}`, got)
-	})
-
-	t.Run("slice renders as JSON", func(t *testing.T) {
-		v := []any{"a", float64(2), map[string]any{"k": "v"}}
-		got := formatValueForDisplay(v)
-		assert.Equal(t, `["a",2,{"k":"v"}]`, got)
-	})
-
-	t.Run("scalar still uses %v", func(t *testing.T) {
-		assert.Equal(t, "42", formatValueForDisplay(42))
-		assert.Equal(t, "hello", formatValueForDisplay("hello"))
-	})
-
-	t.Run("opaque Value wrapper still returns opaque marker", func(t *testing.T) {
-		v := map[string]any{"$visibility": "Opaque", "$value": "secret"}
-		assert.Equal(t, "(opaque value)", formatValueForDisplay(v))
-	})
-}
-
-func TestFormatReferenceValue(t *testing.T) {
-	t.Run("formats KSUID reference with label mapping", func(t *testing.T) {
-		ref := "formae://ksuid-12345#/SubnetId"
-		refLabels := map[string]string{
-			"ksuid-12345": "my-subnet",
-		}
-
-		result := formatReferenceValue(ref, refLabels)
-
-		assert.Equal(t, "my-subnet.SubnetId", result)
-	})
-
-	t.Run("formats KSUID reference without label mapping", func(t *testing.T) {
-		ref := "formae://ksuid-12345#/VpcId"
-		refLabels := map[string]string{}
-
-		result := formatReferenceValue(ref, refLabels)
-
-		assert.Equal(t, "ksuid-12345.VpcId", result)
-	})
-
-	t.Run("handles malformed reference", func(t *testing.T) {
-		ref := "invalid-reference"
-		refLabels := map[string]string{}
-
-		result := formatReferenceValue(ref, refLabels)
-
-		assert.Equal(t, "$ref:invalid-reference", result)
-	})
-}
-
-func TestCleanPatchPath(t *testing.T) {
-	t.Run("simple path without indices", func(t *testing.T) {
-		assert.Equal(t, "spec.replicas", cleanPatchPath("/spec/replicas"))
-	})
-
-	t.Run("single array index", func(t *testing.T) {
-		assert.Equal(t, "Tags[3].Value", cleanPatchPath("/Tags/3/Value"))
-	})
-
-	t.Run("multiple array indices", func(t *testing.T) {
-		assert.Equal(t,
-			"spec.template.spec.containers[0].args[0]",
-			cleanPatchPath("/spec/template/spec/containers/0/args/0"),
-		)
-	})
-
-	t.Run("consecutive array indices", func(t *testing.T) {
-		assert.Equal(t, "matrix[1][2]", cleanPatchPath("/matrix/1/2"))
-	})
-
-	t.Run("path without leading slash", func(t *testing.T) {
-		assert.Equal(t, "metadata.name", cleanPatchPath("metadata/name"))
-	})
-
-	t.Run("single segment", func(t *testing.T) {
-		assert.Equal(t, "name", cleanPatchPath("/name"))
-	})
-
-	t.Run("empty path", func(t *testing.T) {
-		assert.Equal(t, "", cleanPatchPath(""))
-	})
-
-	t.Run("index at end of path", func(t *testing.T) {
-		assert.Equal(t, "items[0]", cleanPatchPath("/items/0"))
-	})
 }
 
 // RFC-0041: the "put resource under management" patch-document subnode is
@@ -735,12 +461,7 @@ func TestFormatPatchDocument_EmptyPatch_NoChildEntries(t *testing.T) {
 }
 
 // TestFormatPatchDocument_CascadeResolvableMarker covers simulate-time
-// UX for cascade-updates: the planner synthesizes a `$cascade-resolvable`
-// marker op when a cascade-update's resolvable target is provider-
-// assigned (e.g. ECS Service.TaskDefinition → AWS-assigned
-// TaskDefinitionArn). The renderer must surface "to point at the new
-// <source> (current: <value>)" rather than attempt the usual `from X to Y`
-// formatting that would print the marker JSON.
+// UX for cascade-updates.
 func TestFormatPatchDocument_CascadeResolvableMarker(t *testing.T) {
 	node := gtree.NewRoot("")
 	patchDoc := json.RawMessage(`[

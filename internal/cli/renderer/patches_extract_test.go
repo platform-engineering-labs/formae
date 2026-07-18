@@ -10,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
 )
 
 // TestExtractChanges is the primary TDD entry point for the pure extraction API.
@@ -25,7 +27,7 @@ func TestExtractChanges(t *testing.T) {
 		patch := json.RawMessage(`[{"op":"replace","path":"/InstanceClass","value":"db.t3.large"}]`)
 		props := json.RawMessage(`{"InstanceClass":"db.t3.large"}`)
 		prev := json.RawMessage(`{"InstanceClass":"db.t3.medium"}`)
-		cs, err := ExtractChanges(patch, props, prev, nil)
+		cs, err := components.ExtractChanges(patch, props, prev, nil)
 		require.NoError(t, err)
 		require.Len(t, cs.Properties, 1)
 		c := cs.Properties[0]
@@ -38,7 +40,7 @@ func TestExtractChanges(t *testing.T) {
 
 	t.Run("tag op lands in Tags not Properties", func(t *testing.T) {
 		patch := json.RawMessage(`[{"op":"add","path":"/Tags/0","value":{"Key":"Env","Value":"prod"}}]`)
-		cs, err := ExtractChanges(patch, json.RawMessage(`{}`), json.RawMessage(`{}`), nil)
+		cs, err := components.ExtractChanges(patch, json.RawMessage(`{}`), json.RawMessage(`{}`), nil)
 		require.NoError(t, err)
 		assert.Len(t, cs.Properties, 0)
 		require.Len(t, cs.Tags, 1)
@@ -51,7 +53,7 @@ func TestExtractChanges(t *testing.T) {
 		// Unchanged requiredOnUpdate field: value matches previous → NoOp.
 		patch := json.RawMessage(`[{"op":"add","path":"/LoginProfile/Password","value":"samepass"}]`)
 		prev := json.RawMessage(`{"LoginProfile":{"Password":"samepass"}}`)
-		cs, err := ExtractChanges(patch, json.RawMessage(`{}`), prev, nil)
+		cs, err := components.ExtractChanges(patch, json.RawMessage(`{}`), prev, nil)
 		require.NoError(t, err)
 		require.Len(t, cs.Properties, 1)
 		assert.True(t, cs.Properties[0].NoOp)
@@ -59,7 +61,7 @@ func TestExtractChanges(t *testing.T) {
 
 	t.Run("composite object value renders as compact JSON", func(t *testing.T) {
 		patch := json.RawMessage(`[{"op":"replace","path":"/Config","value":{"key":"val","num":1}}]`)
-		cs, err := ExtractChanges(patch, json.RawMessage(`{"Config":{"key":"val","num":1}}`), json.RawMessage(`{}`), nil)
+		cs, err := components.ExtractChanges(patch, json.RawMessage(`{"Config":{"key":"val","num":1}}`), json.RawMessage(`{}`), nil)
 		require.NoError(t, err)
 		require.Len(t, cs.Properties, 1)
 		// formatPatchValue serializes maps to JSON (keys sorted alphabetically by json.Marshal)
@@ -67,19 +69,19 @@ func TestExtractChanges(t *testing.T) {
 	})
 
 	t.Run("malformed patch returns error", func(t *testing.T) {
-		_, err := ExtractChanges(json.RawMessage(`not json`), json.RawMessage(`{}`), json.RawMessage(`{}`), nil)
+		_, err := components.ExtractChanges(json.RawMessage(`not json`), json.RawMessage(`{}`), json.RawMessage(`{}`), nil)
 		require.Error(t, err)
 	})
 
 	t.Run("malformed properties returns error", func(t *testing.T) {
-		_, err := ExtractChanges(json.RawMessage(`[]`), json.RawMessage(`not json`), json.RawMessage(`{}`), nil)
+		_, err := components.ExtractChanges(json.RawMessage(`[]`), json.RawMessage(`not json`), json.RawMessage(`{}`), nil)
 		require.Error(t, err)
 	})
 
 	t.Run("reference values resolve to labels", func(t *testing.T) {
 		patch := json.RawMessage(`[{"op":"add","path":"/VpcId","value":{"$ref":"formae://ksuid-vpc-123#/VpcId"}}]`)
 		refLabels := map[string]string{"ksuid-vpc-123": "my-vpc"}
-		cs, err := ExtractChanges(patch, json.RawMessage(`{"VpcId":{"$ref":"formae://ksuid-vpc-123#/VpcId"}}`), json.RawMessage(`{}`), refLabels)
+		cs, err := components.ExtractChanges(patch, json.RawMessage(`{"VpcId":{"$ref":"formae://ksuid-vpc-123#/VpcId"}}`), json.RawMessage(`{}`), refLabels)
 		require.NoError(t, err)
 		require.Len(t, cs.Properties, 1)
 		assert.Equal(t, "my-vpc.VpcId", cs.Properties[0].Value)
@@ -87,7 +89,7 @@ func TestExtractChanges(t *testing.T) {
 	})
 
 	t.Run("empty patch returns empty ChangeSet", func(t *testing.T) {
-		cs, err := ExtractChanges(json.RawMessage(`[]`), json.RawMessage(`{}`), json.RawMessage(`{}`), nil)
+		cs, err := components.ExtractChanges(json.RawMessage(`[]`), json.RawMessage(`{}`), json.RawMessage(`{}`), nil)
 		require.NoError(t, err)
 		assert.Len(t, cs.Properties, 0)
 		assert.Len(t, cs.Tags, 0)
@@ -109,7 +111,7 @@ func TestMutableChangesForReplace(t *testing.T) {
 		props := json.RawMessage(`{"ImmutableField":"new-immutable","MutableField":"new-mutable"}`)
 		prev := json.RawMessage(`{"ImmutableField":"old-immutable","MutableField":"old-mutable"}`)
 
-		cs, err := MutableChangesForReplace(fullPatch, createOnlyPatch, props, prev, nil)
+		cs, err := components.MutableChangesForReplace(fullPatch, createOnlyPatch, props, prev, nil)
 		require.NoError(t, err)
 		require.Len(t, cs.Properties, 1)
 		assert.Equal(t, "MutableField", cs.Properties[0].Path)
@@ -120,7 +122,7 @@ func TestMutableChangesForReplace(t *testing.T) {
 		createOnlyPatch := json.RawMessage(`[{"op":"replace","path":"/Immutable","value":"v"}]`)
 		props := json.RawMessage(`{"Immutable":"v"}`)
 
-		cs, err := MutableChangesForReplace(patch, createOnlyPatch, props, json.RawMessage(`{}`), nil)
+		cs, err := components.MutableChangesForReplace(patch, createOnlyPatch, props, json.RawMessage(`{}`), nil)
 		require.NoError(t, err)
 		assert.Len(t, cs.Properties, 0)
 		assert.Len(t, cs.Tags, 0)
@@ -131,7 +133,7 @@ func TestMutableChangesForReplace(t *testing.T) {
 		props := json.RawMessage(`{"Field":"v"}`)
 		prev := json.RawMessage(`{"Field":"old"}`)
 
-		cs, err := MutableChangesForReplace(patch, nil, props, prev, nil)
+		cs, err := components.MutableChangesForReplace(patch, nil, props, prev, nil)
 		require.NoError(t, err)
 		require.Len(t, cs.Properties, 1)
 		assert.Equal(t, "Field", cs.Properties[0].Path)

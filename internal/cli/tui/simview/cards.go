@@ -11,7 +11,6 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/platform-engineering-labs/formae/internal/cli/renderer"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 )
@@ -213,7 +212,7 @@ func buildPropertyChangeLines(_ *theme.Theme, r simRow, doneSt, warnSt, subtleSt
 		if len(delOldProps) == 0 {
 			delOldProps = oldProperties
 		}
-		cs, err := renderer.ExtractChanges(delPatch, delProps, delOldProps, refLabels)
+		cs, err := components.ExtractChanges(delPatch, delProps, delOldProps, refLabels)
 		if err == nil {
 			// Tags first (mirrors renderer order)
 			for _, tch := range cs.Tags {
@@ -228,7 +227,7 @@ func buildPropertyChangeLines(_ *theme.Theme, r simRow, doneSt, warnSt, subtleSt
 		}
 
 		// Mutable carried changes via MutableChangesForReplace
-		mcs, err := renderer.MutableChangesForReplace(patchDoc, r.delRes.CreateOnlyPatch, properties, oldProperties, refLabels)
+		mcs, err := components.MutableChangesForReplace(patchDoc, r.delRes.CreateOnlyPatch, properties, oldProperties, refLabels)
 		if err == nil {
 			// Tags first (mirrors renderer order)
 			for _, tch := range mcs.Tags {
@@ -243,7 +242,7 @@ func buildPropertyChangeLines(_ *theme.Theme, r simRow, doneSt, warnSt, subtleSt
 		}
 	} else {
 		// Regular update/create/delete card
-		cs, err := renderer.ExtractChanges(patchDoc, properties, oldProperties, refLabels)
+		cs, err := components.ExtractChanges(patchDoc, properties, oldProperties, refLabels)
 		if err == nil {
 			// Tags first (mirrors FormatPatchDocument order: cs.Tags then cs.Properties)
 			for _, tch := range cs.Tags {

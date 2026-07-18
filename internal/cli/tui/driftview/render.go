@@ -10,7 +10,6 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/platform-engineering-labs/formae/internal/cli/renderer"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
 )
 
@@ -491,7 +490,7 @@ func (m Model) revertConsequence(r driftRow) string {
 	if len(oldProperties) == 0 {
 		oldProperties = []byte("{}")
 	}
-	cs, err := renderer.ExtractChanges(r.mod.PatchDocument, properties, oldProperties, nil)
+	cs, err := components.ExtractChanges(r.mod.PatchDocument, properties, oldProperties, nil)
 	if err != nil {
 		return ""
 	}

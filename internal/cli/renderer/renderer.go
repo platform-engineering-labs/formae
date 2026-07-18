@@ -18,6 +18,7 @@ import (
 	"github.com/platform-engineering-labs/jsonpatch"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/display"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
 	"github.com/platform-engineering-labs/formae/internal/constants"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -503,10 +504,10 @@ func formatSimulatedResourceUpdate(root *gtree.Node, rc apimodel.ResourceUpdate)
 		if refLabels == nil {
 			refLabels = make(map[string]string)
 		}
-		var mutableCS ChangeSet
+		var mutableCS components.ChangeSet
 		if len(fullPatch) > 0 {
 			// Silent fallback: if extraction fails, treat as empty (no mutable changes).
-			mutableCS, _ = MutableChangesForReplace(fullPatch, rc.CreateOnlyPatch, rc.Properties, rc.OldProperties, refLabels)
+			mutableCS, _ = components.MutableChangesForReplace(fullPatch, rc.CreateOnlyPatch, rc.Properties, rc.OldProperties, refLabels)
 		}
 		hasMutableChanges := len(mutableCS.Properties) > 0 || len(mutableCS.Tags) > 0
 		if renamed || hasMutableChanges {

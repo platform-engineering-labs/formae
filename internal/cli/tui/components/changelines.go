@@ -11,7 +11,6 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/platform-engineering-labs/formae/internal/cli/renderer"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 )
 
@@ -36,7 +35,7 @@ func RenderChangeLinesFromPatch(th *theme.Theme, patchDoc, properties, oldProper
 		_ = json.Unmarshal(refLabels, &refs)
 	}
 
-	cs, err := renderer.ExtractChanges(patchDoc, properties, oldProperties, refs)
+	cs, err := ExtractChanges(patchDoc, properties, oldProperties, refs)
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +64,7 @@ func RenderChangeLinesFromPatch(th *theme.Theme, patchDoc, properties, oldProper
 //	add  Tags[key]: "value"     — Done style for keyword and value
 //	remove  Tags[key]           — Warning style for keyword and key (no value)
 //	set  Tags[key]: "old" → "new" — TextSubtle old, Done new (replace operation)
-func FormatTagChange(tch renderer.TagChange, doneSt, warnSt, subtleSt lipgloss.Style) string {
+func FormatTagChange(tch TagChange, doneSt, warnSt, subtleSt lipgloss.Style) string {
 	path := "Tags[" + tch.Key + "]"
 
 	switch tch.Operation {
@@ -99,7 +98,7 @@ func FormatTagChange(tch renderer.TagChange, doneSt, warnSt, subtleSt lipgloss.S
 // FormatPropertyChange formats a single PropertyChange into a card line.
 // verb overrides the keyword ("immutable" for replace causes). If verb is "",
 // the keyword is derived from the operation (add/set/remove).
-func FormatPropertyChange(ch renderer.PropertyChange, verb string, doneSt, warnSt, subtleSt lipgloss.Style) string {
+func FormatPropertyChange(ch PropertyChange, verb string, doneSt, warnSt, subtleSt lipgloss.Style) string {
 	path := StripCardArrayIndices(ch.Path)
 
 	// Cascade-resolvable: "set  Path → new <label> (current: "value")"
