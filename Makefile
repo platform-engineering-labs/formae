@@ -67,6 +67,20 @@ pkg-bin: clean build
 	mkdir -p ./dist/pel/bin
 	cp -Rp ./formae ./dist/pel/bin
 	cp -Rp ./pkl-reader-helm ./dist/pel/bin
+	$(MAKE) bundle-examples
+
+## bundle-examples: Fetch standard-bundle members' examples at their release
+## tags, version-rewrite + resolve their pins, and stage them into the dist so
+## they ship in the formae opkg at /opt/pel/formae/examples/<plugin>/. Requires
+## pkl on PATH and network access to GitHub + the Hub. The formae pin is THIS
+## build's version ($(VERSION)) - the examples ship in this binary.
+bundle-examples:
+	go run ./cmd/bundle-examples --dist ./dist/pel/formae/examples --manifest ./.out/examples-manifest.json --formae-version $(VERSION)
+
+## verify-examples-opkg: assert the built opkg records every required member's
+## examples. Run after `just pkg` (which produces *.opkg). Requires orbital ops.
+verify-examples-opkg:
+	go run ./cmd/bundle-examples --skip-stage --manifest ./.out/examples-manifest.json --opkg './*.opkg'
 
 gen-pkl:
 	echo '${VERSION}' > ./version.semver
@@ -288,4 +302,4 @@ add-license:
 
 all: clean build gen-pkl api-docs
 
-.PHONY: api-docs clean build install-gremlins build-debug pkg-bin publish-bin gen-pkl pkg-pkl publish-pkl run tidy-all test-build test-all test-unit test-unit-postgres test-unit-auroradataapi test-unit-summary test-integration test-e2e test-property mutation-test test-descriptors-pkl verify-schema-fakeaws version full-e2e lint lint-reuse add-license postgres-up postgres-down mssql-up mssql-down local-data-api-up local-data-api-down all
+.PHONY: api-docs clean build install-gremlins build-debug pkg-bin bundle-examples verify-examples-opkg publish-bin gen-pkl pkg-pkl publish-pkl run tidy-all test-build test-all test-unit test-unit-postgres test-unit-auroradataapi test-unit-summary test-integration test-e2e test-property mutation-test test-descriptors-pkl verify-schema-fakeaws version full-e2e lint lint-reuse add-license postgres-up postgres-down mssql-up mssql-down local-data-api-up local-data-api-down all

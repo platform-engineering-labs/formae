@@ -31,6 +31,7 @@ setup:
 
 pkg: clean build setup
     ops opkg build --secure --target-path dist/pel
+    make verify-examples-opkg
 
 publish: pkg
     ops publish --repo pel --channel {{ CHANNEL }} *.opkg
