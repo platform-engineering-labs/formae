@@ -165,28 +165,32 @@ func TestModel_HelpOverlay(t *testing.T) {
 	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
 
 	view := mm.(Model).View()
-	lines := strings.Split(view, "\n")
 
 	out := plain(view)
 	assert.Contains(t, out, "Keybindings")
-	assert.Contains(t, out, "j/k")
+	assert.Contains(t, out, "j k")
 	assert.Contains(t, out, "toggle sort")
+	assert.Contains(t, out, "Navigate")
+	assert.Contains(t, out, "Actions")
+	assert.Contains(t, out, "General")
+	assert.Contains(t, out, "close help")
 
-	// Footer must be at the bottom: footer occupies 2 lines (rows height-2 and height-1 in split form)
-	// The footer line with "?: help" content should be on one of the last 2 non-empty lines
-	footerText := "help"
-	foundFooter := false
-	for i := len(lines) - 1; i >= len(lines)-2 && i >= 0; i-- {
-		if strings.Contains(lines[i], footerText) {
-			foundFooter = true
-			break
-		}
-	}
-	assert.True(t, foundFooter, "footer with '?: help' must be on last 2 lines of split view")
-
-	// any key closes
+	// Modal: non-?/esc key is swallowed — overlay stays open, view unchanged.
+	viewOverlay := mm.(Model).View()
 	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	assert.True(t, mm.(Model).helpOpen, "non-?/esc key must not close overlay (modal)")
+	assert.Equal(t, viewOverlay, mm.(Model).View(), "view must be unchanged after swallowed key")
+
+	// esc closes the overlay.
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	assert.False(t, mm.(Model).helpOpen, "esc must close the overlay")
 	assert.NotContains(t, plain(mm.(Model).View()), "Keybindings")
+
+	// ? toggles: re-open then close.
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	assert.True(t, mm.(Model).helpOpen, "? must re-open overlay")
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	assert.False(t, mm.(Model).helpOpen, "? must close overlay when already open")
 }
 
 func TestModel_HelpOverlayGolden(t *testing.T) {

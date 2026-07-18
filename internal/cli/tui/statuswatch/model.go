@@ -209,13 +209,17 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 
-	// Help overlay: any key closes it, except q/ctrl+c which also quit.
+	// Help overlay is modal: only ? (toggle) and esc (close) act; all other keys are swallowed.
 	if m.helpOpen {
 		switch {
-		case key.Matches(msg, m.keys.Quit):
-			return m, tea.Quit
-		default:
+		case msg.Type == tea.KeyEsc:
 			m.helpOpen = false
+			return m, nil
+		case msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == '?':
+			m.helpOpen = false
+			return m, nil
+		default:
+			// Swallow — do not let the key act on the underlying view.
 			return m, nil
 		}
 	}
@@ -384,7 +388,7 @@ func (m Model) View() string {
 		}
 
 		// Render help panel centered in the body area
-		helpPanel := renderHelpOverlay(m.th, m.width, bodyHeight)
+		helpPanel := components.HelpOverlay(m.th, m.width, bodyHeight, statuswatchHelpGroups())
 
 		// Assemble exactly: header + body (with centered panel) + footer
 		// No interstitial blank lines, no post-padding needed
@@ -439,6 +443,38 @@ func (m Model) View() string {
 	footer := components.FooterBar(m.th, m.width, multiFooterHints(), "")
 
 	return header + "\n" + body + "\n" + m.query.View(m.width) + "\n" + footer
+}
+
+// statuswatchHelpGroups returns the grouped keybinding hints for the help overlay.
+func statuswatchHelpGroups() []components.HelpGroup {
+	return []components.HelpGroup{
+		{
+			Title: "Navigate",
+			Hints: []components.KeyHint{
+				{Key: "↑↓ / j k", Desc: "select"},
+				{Key: "PgUp/PgDn", Desc: "page"},
+				{Key: "→ ← / h l", Desc: "column"},
+			},
+		},
+		{
+			Title: "Actions",
+			Hints: []components.KeyHint{
+				{Key: "enter", Desc: "details"},
+				{Key: "space", Desc: "expand"},
+				{Key: "d", Desc: "detail cards"},
+				{Key: "s", Desc: "toggle sort"},
+				{Key: "/", Desc: "query"},
+			},
+		},
+		{
+			Title: "General",
+			Hints: []components.KeyHint{
+				{Key: "esc", Desc: "back"},
+				{Key: "q", Desc: "quit"},
+				{Key: "?", Desc: "close help"},
+			},
+		},
+	}
 }
 
 // multiFooterHints returns the key hints shown in the footer bar.

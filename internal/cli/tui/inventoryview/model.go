@@ -729,7 +729,7 @@ func (m Model) viewHelp() string {
 		bodyH = 1
 	}
 
-	helpPanel := renderHelpOverlay(m.th, m.width, bodyH)
+	helpPanel := components.HelpOverlay(m.th, m.width, bodyH, inventoryHelpGroups())
 
 	parts := header + "\n" + helpPanel + "\n" + footer
 	lines := strings.Split(parts, "\n")
@@ -850,6 +850,37 @@ func (m Model) renderTabBar() string {
 		line = components.Truncate(line, m.width)
 	}
 	return line
+}
+
+// inventoryHelpGroups returns the grouped keybinding hints for the help overlay.
+func inventoryHelpGroups() []components.HelpGroup {
+	return []components.HelpGroup{
+		{
+			Title: "Navigate",
+			Hints: []components.KeyHint{
+				{Key: "↑↓ / j k", Desc: "navigate"},
+				{Key: "ctrl-d / ctrl-u", Desc: "scroll detail"},
+				{Key: "1-4 / tab", Desc: "switch tab"},
+			},
+		},
+		{
+			Title: "Actions",
+			Hints: []components.KeyHint{
+				{Key: "enter", Desc: "detail"},
+				{Key: "/", Desc: "search"},
+				{Key: "s", Desc: "sort"},
+				{Key: "r", Desc: "refresh"},
+			},
+		},
+		{
+			Title: "General",
+			Hints: []components.KeyHint{
+				{Key: "esc", Desc: "back"},
+				{Key: "q", Desc: "quit"},
+				{Key: "?", Desc: "close help"},
+			},
+		},
+	}
 }
 
 // inventoryFooterHints returns the key hints shown in the inventory footer (full width ≥80).
