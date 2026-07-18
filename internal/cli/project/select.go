@@ -7,6 +7,7 @@ package project
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/huh"
@@ -82,9 +83,9 @@ func defaultLocalScan(pluginsDir string) (map[string]string, error) {
 // Returns the ordered choices, whether they came from the local scan, and any
 // hard error (both sources failed or returned nothing is not a hard error).
 func pluginChoices(a *app.App, pluginsDir string) (choices []pluginChoice, fromLocalScan bool, err error) {
-	// Agent-first.
+	// Agent-first: use agent result unconditionally when no error (even if empty).
 	agentPlugins, agentErr := installedPluginsFn(a)
-	if agentErr == nil && len(agentPlugins) > 0 {
+	if agentErr == nil {
 		for ns, desc := range agentPlugins {
 			choices = append(choices, pluginChoice{Name: ns, Description: desc})
 		}
@@ -92,14 +93,10 @@ func pluginChoices(a *app.App, pluginsDir string) (choices []pluginChoice, fromL
 		return choices, false, nil
 	}
 
-	// Fall back to local scan.
+	// Fall back to local scan only on agent error.
 	localPlugins, localErr := localScanFn(pluginsDir)
 	if localErr != nil {
-		// Return a combined error only when the agent also failed.
-		if agentErr != nil {
-			return nil, false, fmt.Errorf("agent unavailable (%v); local scan also failed: %w", agentErr, localErr)
-		}
-		return nil, false, localErr
+		return nil, false, fmt.Errorf("agent unavailable (%v); local scan also failed: %w", agentErr, localErr)
 	}
 
 	for ns, desc := range localPlugins {
@@ -111,11 +108,9 @@ func pluginChoices(a *app.App, pluginsDir string) (choices []pluginChoice, fromL
 
 // sortChoices sorts choices alphabetically by Name for stable display.
 func sortChoices(choices []pluginChoice) {
-	for i := 1; i < len(choices); i++ {
-		for j := i; j > 0 && choices[j].Name < choices[j-1].Name; j-- {
-			choices[j], choices[j-1] = choices[j-1], choices[j]
-		}
-	}
+	sort.Slice(choices, func(i, j int) bool {
+		return choices[i].Name < choices[j].Name
+	})
 }
 
 // choiceLabel returns the display string for a pluginChoice in the multi-select.
@@ -159,9 +154,9 @@ func defaultRunMultiSelect(th *theme.Theme, choices []pluginChoice, fromLocalSca
 //  3. Otherwise: run multi-select; if nothing selected, show consequence confirm.
 //
 // Returns the include values to pass to projects.Init (may be empty).
-// Returns (nil, nil) when the user confirms "continue with no plugins".
+// Returns ([]string{}, nil) when the user confirms "continue with no plugins".
 // Returns a non-nil error when the user aborts or a hard error occurs.
-func runPluginSelect(th *theme.Theme, a *app.App, pluginsDir string) ([]string, error) {
+func runPluginSelect(th *theme.Theme, a *app.App, pluginsDir string, schema string) ([]string, error) {
 	choices, fromLocalScan, err := pluginChoices(a, pluginsDir)
 	if err != nil {
 		return nil, err
@@ -185,7 +180,7 @@ func runPluginSelect(th *theme.Theme, a *app.App, pluginsDir string) ([]string, 
 	}
 
 	// Run multi-select.
-	selected, err := runMultiSelect(th, choices, fromLocalScan, "")
+	selected, err := runMultiSelect(th, choices, fromLocalScan, schema)
 	if err != nil {
 		return nil, err
 	}

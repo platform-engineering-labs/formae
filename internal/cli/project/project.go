@@ -65,7 +65,7 @@ func ProjectInitCmd() *cobra.Command {
 					appCtx = appCtx2
 				}
 
-				selectedIncludes, err := runPluginSelect(th, appCtx, pluginDir)
+				selectedIncludes, err := runPluginSelect(th, appCtx, pluginDir, schema)
 				if err != nil {
 					return err
 				}

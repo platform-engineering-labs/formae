@@ -114,6 +114,24 @@ func TestPluginChoices_BothEmpty(t *testing.T) {
 	assert.Empty(t, choices)
 }
 
+// D10-E: agent returns empty map with NO error, local scan is non-empty →
+// must return agent result (empty choices, fromLocalScan=false), not fall to local scan.
+func TestPluginChoices_AgentEmptyNoError_DoesNotFallToLocalScan(t *testing.T) {
+	restore := withSeams(
+		fakeInstalledPlugins(map[string]string{}),
+		fakeLocalScan(map[string]string{"aws": "", "myplugin": ""}),
+	)
+	defer restore()
+
+	choices, fromLocalScan, err := pluginChoices(nil, "~/.pel/formae/plugins")
+	require.NoError(t, err)
+	assert.False(t, fromLocalScan, "fromLocalScan must be false when agent responds without error")
+	assert.Empty(t, choices, "choices must be empty when agent returns empty (must not fall to local scan)")
+	for _, c := range choices {
+		assert.False(t, c.Local, "no choice should have Local=true when agent responded")
+	}
+}
+
 // D10-D: agent errors and local scan also errors → hard error
 func TestPluginChoices_BothFail(t *testing.T) {
 	restore := withSeams(
@@ -149,7 +167,7 @@ func TestRunPluginSelect_LocalSelectionsGetAtLocalSuffix(t *testing.T) {
 	defer func() { runMultiSelect = origMultiSelect }()
 
 	th := theme.New("formae")
-	includes, err := runPluginSelect(th, nil, "~/.pel/formae/plugins")
+	includes, err := runPluginSelect(th, nil, "~/.pel/formae/plugins", "pkl")
 	require.NoError(t, err)
 	require.Len(t, includes, 1)
 	assert.Equal(t, "aws@local", includes[0], "local selection must carry @local suffix")
@@ -174,7 +192,7 @@ func TestRunPluginSelect_AgentSelectionsNoAtLocal(t *testing.T) {
 	defer func() { runMultiSelect = origMultiSelect }()
 
 	th := theme.New("formae")
-	includes, err := runPluginSelect(th, nil, "~/.pel/formae/plugins")
+	includes, err := runPluginSelect(th, nil, "~/.pel/formae/plugins", "pkl")
 	require.NoError(t, err)
 	require.Len(t, includes, 1)
 	assert.Equal(t, "aws", includes[0], "agent selection must NOT carry @local suffix")
@@ -212,7 +230,7 @@ func TestRunPluginSelect_EmptyList_DistinctConfirmCopy(t *testing.T) {
 	defer func() { runMultiSelect = origMultiSelect }()
 
 	th := theme.New("formae")
-	_, _ = runPluginSelect(th, nil, "~/.pel/formae/plugins")
+	_, _ = runPluginSelect(th, nil, "~/.pel/formae/plugins", "pkl")
 
 	assert.False(t, multiSelectCalled, "multi-select must not run when plugin list is empty")
 	// Assert the empty-list copy is distinct from the selected-none copy.
@@ -250,7 +268,7 @@ func TestRunPluginSelect_NothingSelected_ConsequenceConfirmCopy(t *testing.T) {
 	defer func() { runConfirm = origRunConfirm }()
 
 	th := theme.New("formae")
-	_, _ = runPluginSelect(th, nil, "~/.pel/formae/plugins")
+	_, _ = runPluginSelect(th, nil, "~/.pel/formae/plugins", "pkl")
 
 	assert.Contains(t, capturedTitle, "No plugins selected",
 		"selected-none confirm title must say 'No plugins selected'")
@@ -293,8 +311,36 @@ func TestRunPluginSelect_LocalScanTitleNote(t *testing.T) {
 	defer func() { runMultiSelect = origMultiSelect }()
 
 	th := theme.New("formae")
-	_, _ = runPluginSelect(th, nil, "~/.pel/formae/plugins")
+	_, _ = runPluginSelect(th, nil, "~/.pel/formae/plugins", "pkl")
 
 	assert.True(t, capturedFromLocalScan,
 		"fromLocalScan=true must be passed to runMultiSelect when source is local scan")
+}
+
+// ── schema is threaded through to multi-select (Finding 3) ───────────────────
+
+// D10 / View 1: the schema value from the call site must reach runMultiSelect.
+func TestRunPluginSelect_SchemaThreadedToMultiSelect(t *testing.T) {
+	restore := withSeams(
+		fakeInstalledPlugins(map[string]string{"aws": ""}),
+		fakeLocalScan(map[string]string{}),
+	)
+	defer restore()
+
+	origInteractive := isInteractive
+	isInteractive = func() bool { return true }
+	defer func() { isInteractive = origInteractive }()
+
+	var capturedSchema string
+	origMultiSelect := runMultiSelect
+	runMultiSelect = func(_ *theme.Theme, _ []pluginChoice, _ bool, schema string) ([]string, error) {
+		capturedSchema = schema
+		return []string{"aws"}, nil
+	}
+	defer func() { runMultiSelect = origMultiSelect }()
+
+	th := theme.New("formae")
+	_, _ = runPluginSelect(th, nil, "~/.pel/formae/plugins", "pkl")
+
+	assert.Equal(t, "pkl", capturedSchema, "schema passed to runPluginSelect must reach runMultiSelect")
 }
