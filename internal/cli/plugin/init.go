@@ -22,7 +22,9 @@ import (
 
 	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
 	"github.com/platform-engineering-labs/formae/internal/cli/display"
-	"github.com/platform-engineering-labs/formae/internal/cli/prompter"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 )
 
 // pluginCategories is the closed set the formae Hub accepts for the
@@ -310,41 +312,167 @@ Template repository: github.com/platform-engineering-labs/formae-plugin-template
 	return command
 }
 
-func runPluginInit(ctx context.Context, opts *PluginInitOptions) error {
-	p := prompter.NewBasicPrompter()
+// availabilityCheckResult carries the structured outcome of a single Hub
+// availability check call. This allows the interactive loop to make
+// distinct decisions (re-open form vs warn-and-proceed vs hard-fail)
+// without re-interpreting errors.
+type availabilityCheckResult struct {
+	taken      bool   // name is registered by someone else
+	registrant string // registrant URL when taken
+	unchecked  bool   // check was skipped (transient/unreachable default hub / --no-availability-check)
+	err        error  // hard error (explicit-hub unreachable, TLS/protocol, cancellation)
+}
 
-	// In non-interactive mode, all values are already set and validated
-	if !opts.NoInput {
-		fmt.Println(display.Gold("Formae Plugin Initialization"))
-		fmt.Println()
-		fmt.Println("Plugin initialization requires several parameters that will appear in the")
-		fmt.Println("plugin's manifest file (formae-plugin.pkl). You can change them at any time later.")
-		fmt.Println()
-		fmt.Println("Please provide the following information:")
-		fmt.Println()
+// classifyAvailability runs a single Hub availability check and returns a
+// structured availabilityCheckResult. Progress and warning messages are written
+// to w. This function is the unit-testable core of the interactive loop's
+// availability step.
+//
+// Parameters:
+//   - noCheck: when true, the hub is not called and the result is unchecked.
+//   - explicitHub: when true, an unreachable hub is a hard error.
+//   - allowConflict: when true, a taken name does NOT cause a nameErr in the
+//     loop; the caller is responsible for emitting the ⚠ warning.
+func classifyAvailability(
+	ctx context.Context,
+	client HubClient,
+	name string,
+	allowConflict bool,
+	noCheck bool,
+	explicitHub bool,
+	w io.Writer,
+) availabilityCheckResult {
+	if noCheck {
+		return availabilityCheckResult{unchecked: true}
 	}
 
-	// Collect plugin configuration, prompting only for missing values
-	config := &PluginConfig{}
+	res, err := client.CheckPluginAvailability(ctx, name)
+	if err != nil {
+		// Caller-driven cancellation: propagate as-is.
+		if ctx.Err() != nil {
+			return availabilityCheckResult{err: ctx.Err()}
+		}
+		// HubTransientError: always unchecked+continue.
+		var transient *HubTransientError
+		if errors.As(err, &transient) {
+			return availabilityCheckResult{unchecked: true}
+		}
+		// HubUnreachableError: hard-fail only when hub was explicitly configured.
+		var unreachable *HubUnreachableError
+		if errors.As(err, &unreachable) {
+			if explicitHub {
+				return availabilityCheckResult{err: fmt.Errorf("hub availability check failed: %w", err)}
+			}
+			return availabilityCheckResult{unchecked: true}
+		}
+		// Any other error (TLS, protocol mismatch, unexpected HTTP code): hard-fail.
+		return availabilityCheckResult{err: fmt.Errorf("hub availability check failed: %w", err)}
+	}
 
-	// Plugin name (required)
+	if !res.Available {
+		return availabilityCheckResult{taken: true, registrant: res.GitHubRepoURL}
+	}
+
+	return availabilityCheckResult{}
+}
+
+// runOneAvailabilityIteration runs the Hub availability check for a single
+// loop iteration and renders the step line to w. It returns (nameErr, hardErr):
+//   - nameErr non-empty: the name is taken (without --allow-conflict); caller
+//     should re-open the form with nameErr pre-marked.
+//   - hardErr non-nil: a fatal error; caller should surface it and abort.
+//   - both empty/nil: proceed to scaffolding.
+//
+// This function is extracted for unit-testability — the calling loop
+// (runPluginInitInteractive) calls it after each form.Run().
+func runOneAvailabilityIteration(
+	ctx context.Context,
+	client HubClient,
+	name string,
+	allowConflict bool,
+	noCheck bool,
+	explicitHub bool,
+	w io.Writer,
+) (nameErr string, hardErr error) {
+	th := theme.New("formae")
+
+	step := components.StartStep(w, th, "checking name availability…")
+
+	res := classifyAvailability(ctx, client, name, allowConflict, noCheck, explicitHub, w)
+
+	switch {
+	case res.err != nil:
+		step.Fail("availability check failed")
+		return "", res.err
+
+	case res.unchecked:
+		step.Skip("○ unchecked — Hub will re-validate at registration time")
+		return "", nil
+
+	case res.taken && allowConflict:
+		step.Warn(fmt.Sprintf("! '%s' already registered — continuing (--allow-conflict)", name))
+		_, _ = fmt.Fprintln(w, "  ⚠ already registered — continuing; registration will fail at confirm time")
+		return "", nil
+
+	case res.taken:
+		step.Fail(fmt.Sprintf("✗ '%s' taken — registered by %s", name, res.registrant))
+		return fmt.Sprintf("'%s' is already registered by %s. Pick a different name (or pass --allow-conflict to scaffold anyway)",
+			name, res.registrant), nil
+
+	default:
+		step.Done(fmt.Sprintf("✓ '%s' available", name))
+		return "", nil
+	}
+}
+
+// runPluginInit is the main entry point for the plugin init command.
+// When NoInput is false, it runs the interactive huh form loop (D6).
+// When NoInput is true, all values come from flags (unchanged path).
+func runPluginInit(ctx context.Context, opts *PluginInitOptions) error {
+	if opts.NoInput {
+		return runPluginInitNoInput(ctx, opts)
+	}
+
+	// Validate a flag-supplied name before the TTY check so the user gets
+	// a clear FlagError regardless of whether a TTY is present.
 	if opts.Name != "" {
 		if err := validatePluginName(opts.Name); err != nil {
 			return cmd.FlagErrorf("invalid plugin name: %s", err.Error())
 		}
-		config.Name = opts.Name
-	} else {
-		name, err := p.PromptString("Plugin name")
-		if err != nil {
-			return err
-		}
-		if err := validatePluginName(name); err != nil {
-			return err
-		}
-		config.Name = name
 	}
 
-	// Hub availability check (runs immediately after name is resolved, before further prompts)
+	// D8: interactive form requires a TTY on both stdin and stdout.
+	if !tui.IsInteractive() {
+		return fmt.Errorf("interactive mode requires a TTY; use --no-input with all required flags for non-interactive use")
+	}
+
+	return runPluginInitInteractive(ctx, opts)
+}
+
+// runPluginInitNoInput runs the non-interactive path (--no-input). All values
+// are already validated and set. This function is UNCHANGED from the original
+// behavior so existing tests keep passing.
+func runPluginInitNoInput(ctx context.Context, opts *PluginInitOptions) error {
+	config := &PluginConfig{
+		Name:        opts.Name,
+		Namespace:   opts.Namespace,
+		Description: opts.Description,
+		Category:    opts.Category,
+		Author:      opts.Author,
+		ModulePath:  opts.ModulePath,
+		License:     opts.License,
+		OutputDir:   expandTilde(opts.OutputDir),
+	}
+
+	// Normalize namespace.
+	if normalized, changed := normalizeNamespace(config.Namespace); changed {
+		fmt.Fprintf(os.Stderr, "Note: namespace %q normalized to %q for resource type IDs.\n", config.Namespace, normalized)
+		config.Namespace = normalized
+	} else {
+		config.Namespace = normalized
+	}
+
+	// Hub availability check.
 	if !opts.NoAvailabilityCheck {
 		hubURL, explicit, err := resolveHubURL(opts)
 		if err != nil {
@@ -359,165 +487,151 @@ func runPluginInit(ctx context.Context, opts *PluginInitOptions) error {
 		}
 	}
 
-	// Namespace (required)
-	if opts.Namespace != "" {
-		config.Namespace = opts.Namespace
-	} else {
-		namespace, err := p.PromptString("Namespace that uniquely identifies the target technology (e.g. AWS, GCP, OCI)")
-		if err != nil {
-			return err
-		}
-		if err := validateNamespace(namespace); err != nil {
-			return err
-		}
-		config.Namespace = namespace
-	}
-
-	if normalized, changed := normalizeNamespace(config.Namespace); changed {
-		fmt.Fprintf(os.Stderr, "Note: namespace %q normalized to %q for resource type IDs.\n", config.Namespace, normalized)
-		config.Namespace = normalized
-	} else {
-		config.Namespace = normalized
-	}
-
-	// Description (required)
-	if opts.Description != "" {
-		config.Description = opts.Description
-	} else {
-		description, err := p.PromptString("Plugin description")
-		if err != nil {
-			return err
-		}
-		config.Description = description
-	}
-
-	// Category — picked from the formae Hub's closed enum so the
-	// scaffolded manifest is publishable without a follow-up edit.
-	if opts.Category != "" {
-		config.Category = opts.Category
-	} else {
-		defaultIndex := len(pluginCategories) - 1 // "other"
-		category, err := p.PromptChoice("Plugin category", pluginCategories, defaultIndex)
-		if err != nil {
-			return err
-		}
-		config.Category = category
-	}
-
-	// Author (required, for license copyright)
-	if opts.Author != "" {
-		config.Author = opts.Author
-	} else {
-		author, err := p.PromptString("Plugin author")
-		if err != nil {
-			return err
-		}
-		config.Author = author
-	}
-
-	// Module path (required)
-	if opts.ModulePath != "" {
-		config.ModulePath = opts.ModulePath
-	} else {
-		modulePath, err := p.PromptString("Go module path (e.g. github.com/your-org/formae-plugin-name) - used in go.mod and imports")
-		if err != nil {
-			return err
-		}
-		config.ModulePath = modulePath
-	}
-
-	// License (optional, default: Apache-2.0)
-	//
-	// The formae Hub only accepts plugins under one of four SPDX
-	// licenses (Apache-2.0, BSD-3-Clause, MIT, MPL-2.0). We surface
-	// those four as the prompt options plus an "Other" escape hatch,
-	// and warn explicitly when the user picks Other so they don't
-	// learn at registration time that their plugin can't publish.
-	if opts.License != "" {
-		config.License = opts.License
-	} else {
-		fmt.Println()
-		fmt.Println(display.Grey("The formae Hub only accepts plugins under one of these four"))
-		fmt.Println(display.Grey("licenses. Pick 'Other' to use a different license — your plugin"))
-		fmt.Println(display.Grey("will still build and run locally, but will not be publishable to"))
-		fmt.Println(display.Grey("the Hub."))
-		fmt.Println()
-		licenseOptions := []string{
-			"Apache-2.0",
-			"BSD-3-Clause",
-			"MIT",
-			"MPL-2.0",
-			"Other",
-		}
-		license, err := p.PromptChoice("Plugin license", licenseOptions, 0)
-		if err != nil {
-			return err
-		}
-		if license == "Other" {
-			license, err = p.PromptString("Enter license identifier")
-			if err != nil {
-				return err
-			}
-			fmt.Println()
-			display.Warning(fmt.Sprintf(
-				"'%s' is not on the formae Hub's allowlist; this plugin will not be publishable to hub.platform.engineering.",
-				license,
-			))
-			fmt.Println(display.Grey("  To publish later, switch to Apache-2.0, BSD-3-Clause, MIT, or MPL-2.0."))
-			fmt.Println()
-		}
-		config.License = license
-	}
-
-	// Target directory (optional, default: ./<name>)
-	if opts.OutputDir != "" {
-		config.OutputDir = expandTilde(opts.OutputDir)
-	} else {
-		defaultDir := "./" + config.Name
-		outputDir, err := p.PromptStringWithDefault("Target directory", defaultDir)
-		if err != nil {
-			return err
-		}
-		config.OutputDir = expandTilde(outputDir)
-	}
-
-	if !opts.NoInput {
-		fmt.Println()
-	}
-
-	// Validate output directory (allows empty directories, including ".")
+	// Validate output directory.
 	if err := validateOutputDir(config.OutputDir); err != nil {
 		return err
 	}
 
-	// Download and extract the template
-	fmt.Printf("%s\n", display.Grey("Downloading template from GitHub..."))
+	return runScaffold(ctx, opts, config, os.Stdout)
+}
+
+// runPluginInitInteractive runs the interactive huh form loop (D6).
+// The loop:
+//  1. Builds the form from &v (pre-filled from CLI flags).
+//  2. Runs form.Run().
+//  3. Checks Hub availability via runOneAvailabilityIteration.
+//  4. On taken+!allowConflict: sets nameErr and continues (re-opens form with
+//     nameErr pre-marked; all other fields in v are preserved — R5).
+//  5. On any other outcome: breaks and proceeds to scaffolding.
+func runPluginInitInteractive(ctx context.Context, opts *PluginInitOptions) error {
+	th := theme.New("formae")
+	w := os.Stdout
+
+	// Pre-fill form values from CLI flags.
+	v := initFormValues{
+		Name:        opts.Name,
+		Namespace:   opts.Namespace,
+		Description: opts.Description,
+		Category:    opts.Category,
+		Author:      opts.Author,
+		ModulePath:  opts.ModulePath,
+		License:     opts.License,
+		OutputDir:   opts.OutputDir,
+	}
+
+	// Resolve Hub client once (so tests can inject via opts.HubClient).
+	var hubClient HubClient
+	var explicitHub bool
+	if !opts.NoAvailabilityCheck {
+		hubURL, expl, err := resolveHubURL(opts)
+		if err != nil {
+			return err
+		}
+		explicitHub = expl
+		if opts.HubClient != nil {
+			hubClient = opts.HubClient
+		} else {
+			hubClient = NewHubClient(hubURL)
+		}
+	}
+
+	var nameErr string
+
+	for {
+		form := buildInitForm(th, &v, nameErr)
+		if err := form.Run(); err != nil {
+			// esc / ctrl-c → non-zero exit (D8).
+			return err
+		}
+
+		// Normalize namespace in place (the form validator uppercases it
+		// during validation; ensure it's normalized before checking).
+		if normalized, _ := normalizeNamespace(v.Namespace); normalized != v.Namespace {
+			v.Namespace = normalized
+		}
+
+		// Run availability check for this iteration.
+		iterNameErr, hardErr := runOneAvailabilityIteration(
+			ctx, hubClient, v.Name,
+			opts.AllowConflict,
+			opts.NoAvailabilityCheck,
+			explicitHub,
+			w,
+		)
+		if hardErr != nil {
+			return hardErr
+		}
+		if iterNameErr != "" {
+			// Name is taken and --allow-conflict not set: re-open form.
+			nameErr = iterNameErr
+			continue
+		}
+		break
+	}
+
+	// Resolve final license: use CustomLicense when "Other" was chosen.
+	finalLicense := v.License
+	if v.License == "Other" && v.CustomLicense != "" {
+		finalLicense = v.CustomLicense
+	}
+
+	config := &PluginConfig{
+		Name:        v.Name,
+		Namespace:   v.Namespace,
+		Description: v.Description,
+		Category:    v.Category,
+		Author:      v.Author,
+		ModulePath:  v.ModulePath,
+		License:     finalLicense,
+		OutputDir:   expandTilde(v.OutputDir),
+	}
+
+	// Validate output directory.
+	if err := validateOutputDir(config.OutputDir); err != nil {
+		return err
+	}
+
+	fmt.Println()
+	return runScaffold(ctx, opts, config, w)
+}
+
+// runScaffold downloads the template, transforms files, finalizes the license,
+// and prints the "Done! Next steps:" block. Used by both the interactive and
+// --no-input paths.
+func runScaffold(ctx context.Context, opts *PluginInitOptions, config *PluginConfig, w io.Writer) error {
+	th := theme.New("formae")
+
+	// Download template.
+	dlStep := components.StartStep(w, th, "Downloading template from GitHub…")
 	downloader := opts.TemplateDownloader
 	if downloader == nil {
 		downloader = httpTemplateDownloader{}
 	}
 	if err := downloader.Download(ctx, config.OutputDir); err != nil {
+		dlStep.Fail("download failed")
 		return fmt.Errorf("failed to download template: %w", err)
 	}
+	dlStep.Done("Downloading template from GitHub…")
 
-	// Transform template files
-	fmt.Printf("%s\n", display.Grey(fmt.Sprintf("Initializing plugin '%s' from template...", config.Name)))
+	// Transform template.
+	initStep := components.StartStep(w, th, fmt.Sprintf("Initializing plugin '%s' from template…", config.Name))
 	if err := transformTemplateFiles(config); err != nil {
+		initStep.Fail("initialization failed")
 		return fmt.Errorf("failed to customize template: %w", err)
 	}
-
-	// Set up the LICENSE file and clean up
 	if err := finalizeLicense(config); err != nil {
+		initStep.Fail("license finalization failed")
 		return fmt.Errorf("failed to finalize license: %w", err)
 	}
+	initStep.Done(fmt.Sprintf("Initializing plugin '%s' from template…", config.Name))
 
-	// Print success message with next steps
-	fmt.Println()
-	fmt.Println(display.Green("Done!") + " Next steps:")
-	fmt.Printf(display.Grey("  1. cd %s\n"), config.OutputDir)
-	fmt.Println(display.Grey("  2. Define your resources in schema/pkl/"))
-	fmt.Printf(display.Grey("  3. Implement ResourcePlugin interface in %s.go\n"), config.Name)
-	fmt.Println(display.Grey("  4. Run 'make build' to build the plugin"))
+	// Done! Next steps.
+	_, _ = fmt.Fprintln(w)
+	_, _ = fmt.Fprintln(w, components.SectionHeader(th, "Done! Next steps:"))
+	_, _ = fmt.Fprintf(w, "  1. cd %s\n", config.OutputDir)
+	_, _ = fmt.Fprintln(w, "  2. Define your resources in schema/pkl/")
+	_, _ = fmt.Fprintf(w, "  3. Implement ResourcePlugin interface in %s.go\n", config.Name)
+	_, _ = fmt.Fprintln(w, "  4. Run 'make build' to build the plugin")
 
 	return nil
 }
