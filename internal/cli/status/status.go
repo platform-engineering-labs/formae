@@ -263,10 +263,7 @@ func AgentCmd() *cobra.Command {
 				return nil
 			}
 
-			err = renderStats(stats)
-			if err != nil {
-				return err
-			}
+			fmt.Println(renderAgentStats(themeFor(app), *stats, termWidth(os.Stdout)))
 
 			if consumer != printer.ConsumerMachine && !watch {
 				nag.MaybePrintNags(themeFor(app), nags)
@@ -301,16 +298,6 @@ func renderCommandsStatus(status *apimodel.ListCommandStatusResponse, outputLayo
 	} else {
 		err = p.Print(status, printer.PrintOptions{Summary: true})
 	}
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func renderStats(stats *apimodel.Stats) error {
-	p := printer.NewHumanReadablePrinter[apimodel.Stats](os.Stdout)
-	err := p.Print(stats, printer.PrintOptions{})
 	if err != nil {
 		return err
 	}
@@ -371,10 +358,7 @@ func watchStats(app *app.App) error {
 			return err
 		}
 
-		err = renderStats(stats)
-		if err != nil {
-			return err
-		}
+		fmt.Println(renderAgentStats(themeFor(app), *stats, termWidth(os.Stdout)))
 	}
 }
 
