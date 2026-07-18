@@ -62,9 +62,9 @@ func renderVersionList(th *theme.Theme, installed string, installedDate time.Tim
 		isNewer := installedIdx >= 0 && i < installedIdx
 
 		if isInstalled {
-			// "● <version>   installed" — ● and "installed" in Done role
+			// "● <version>   installed" — marker, version, and "installed" all in Done role
 			marker := doneStyle.Render("●")
-			ver := valueStyle.Render(v)
+			ver := doneStyle.Render(v)
 			annotation := doneStyle.Render("installed")
 			sb.WriteString("  " + marker + " " + ver + "   " + annotation)
 		} else if isNewer {
