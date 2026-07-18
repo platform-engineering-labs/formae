@@ -25,20 +25,22 @@ const (
 func AckLine(th *theme.Theme, m AckMarker, text string) string {
 	var glyph string
 	var role lipgloss.AdaptiveColor
+	var bodyRole lipgloss.AdaptiveColor
 	switch m {
 	case AckDone:
 		glyph, role = "✓", th.Palette.Done
+		bodyRole = th.Palette.TextPrimary
 	case AckSkip:
 		glyph, role = "·", th.Palette.TextSubtle
+		bodyRole = th.Palette.TextSubtle
 	case AckWarn:
 		glyph, role = "!", th.Palette.Warning
+		bodyRole = th.Palette.TextPrimary
 	default:
 		glyph, role = "✗", th.Palette.Error
+		bodyRole = th.Palette.TextPrimary
 	}
 	marker := lipgloss.NewStyle().Foreground(role).Render(glyph)
-	body := lipgloss.NewStyle().Foreground(th.Palette.TextPrimary).Render(text)
-	if m == AckSkip {
-		body = lipgloss.NewStyle().Foreground(th.Palette.TextSubtle).Render(text)
-	}
+	body := lipgloss.NewStyle().Foreground(bodyRole).Render(text)
 	return marker + " " + body
 }

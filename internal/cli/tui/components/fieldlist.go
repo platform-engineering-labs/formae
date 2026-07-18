@@ -6,6 +6,7 @@ package components
 
 import (
 	"strings"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
 
@@ -18,8 +19,8 @@ import (
 func FieldList(th *theme.Theme, pairs [][2]string) string {
 	maxLabel := 0
 	for _, p := range pairs {
-		if len(p[0]) > maxLabel {
-			maxLabel = len(p[0])
+		if utf8.RuneCountInString(p[0]) > maxLabel {
+			maxLabel = utf8.RuneCountInString(p[0])
 		}
 	}
 	labelStyle := lipgloss.NewStyle().Foreground(th.Palette.TextSecondary)
