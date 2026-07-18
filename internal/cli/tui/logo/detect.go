@@ -131,6 +131,14 @@ var probe = func(env envInfo) probeResult {
 	}
 	defer func() { _ = term.Restore(fd, old) }()
 
+	// Open /dev/tty for reading BEFORE sending the query to stdout so the
+	// read channel is ready before the terminal's reply can arrive.
+	tty, terr := os.Open("/dev/tty")
+	if terr != nil {
+		return probeResult{}
+	}
+	defer func() { _ = tty.Close() }()
+
 	// Send the Kitty APC graphics query followed by a Primary Device
 	// Attributes (DA1) request.  A Kitty-capable terminal answers the APC
 	// query (ESC _ G i=31;OK ESC \) BEFORE the DA1 reply (ESC [ ? … c).
@@ -154,11 +162,6 @@ var probe = func(env envInfo) probeResult {
 	// tty and the select races against time.After.  A possibly-blocked reader
 	// goroutine at one-time startup is acceptable — it unblocks at program exit
 	// or when the terminal eventually sends the DA1 reply.
-	tty, terr := os.Open("/dev/tty")
-	if terr != nil {
-		return probeResult{}
-	}
-	defer func() { _ = tty.Close() }()
 
 	type readResult struct {
 		buf []byte
@@ -202,11 +205,27 @@ var (
 	detectCached Capability
 )
 
+// isHardDisqualified reports whether env contains a hard disqualifier that
+// makes CapText the only possible result.  This mirrors the first check in
+// decide() and is used in Detect() to skip the probe entirely when the
+// outcome is already determined.
+func isHardDisqualified(env envInfo) bool {
+	return !env.IsTTY || env.Dumb || env.CI || !env.Unicode
+}
+
 // Detect gathers environment signals, runs the probe seam, calls decide, and
 // returns the result — computing it only once (cached via sync.Once).
+//
+// Hard disqualifiers (non-TTY, dumb, CI, no-Unicode) are checked BEFORE
+// calling probe() so that no escape-sequence traffic is ever sent to
+// disqualified terminals.
 func Detect() Capability {
 	detectOnce.Do(func() {
 		env := gatherEnv()
+		if isHardDisqualified(env) {
+			detectCached = CapText
+			return
+		}
 		pr := probe(env)
 		detectCached = decide(env, pr)
 	})

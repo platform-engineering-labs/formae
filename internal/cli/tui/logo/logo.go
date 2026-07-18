@@ -58,6 +58,15 @@ var hasDarkBackground = func() bool {
 	return termenv.HasDarkBackground()
 }
 
+// encodeKittyFn and encodeITerm2Fn are seams for the graphics encoders so
+// tests can force the empty-return (error) path and verify the fallback chain.
+//
+//nolint:gochecknoglobals
+var encodeKittyFn = encodeKitty
+
+//nolint:gochecknoglobals
+var encodeITerm2Fn = encodeITerm2
+
 //go:embed assets/Formae_Logo_dark.png
 var logoDark []byte
 
@@ -108,16 +117,35 @@ func Render(cap Capability, size Size, version string) (art string, rows int) {
 	}
 
 	// SizeFull: use the native renderer for the capability.
+	// Graphics encoders return "" on image decode/encode error; in that case
+	// we degrade gracefully: graphics → braille → text (never an empty string).
 	switch cap {
 	case CapKitty:
-		art = encodeKitty(dark, graphicsFullCols)
-		// Row count: pixel height / pixelsPerCell.
-		rows = graphicsRowCount(graphicsFullCols)
-		return art, rows
+		art = encodeKittyFn(dark, graphicsFullCols)
+		if art != "" {
+			rows = graphicsRowCount(graphicsFullCols)
+			return art, rows
+		}
+		// Fall through to braille on encoder failure.
+		art = renderBraille(dark, brailleWidthFull)
+		if art != "" {
+			rows = countRows(art)
+			return art, rows
+		}
+		return "formae v" + version, 1
 	case CapITerm2:
-		art = encodeITerm2(dark, graphicsFullCols)
-		rows = graphicsRowCount(graphicsFullCols)
-		return art, rows
+		art = encodeITerm2Fn(dark, graphicsFullCols)
+		if art != "" {
+			rows = graphicsRowCount(graphicsFullCols)
+			return art, rows
+		}
+		// Fall through to braille on encoder failure.
+		art = renderBraille(dark, brailleWidthFull)
+		if art != "" {
+			rows = countRows(art)
+			return art, rows
+		}
+		return "formae v" + version, 1
 	default: // CapBraille
 		art = renderBraille(dark, brailleWidthFull)
 		rows = countRows(art)
