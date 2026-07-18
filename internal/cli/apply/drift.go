@@ -9,8 +9,8 @@ import (
 	"os"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
-	"github.com/platform-engineering-labs/formae/internal/cli/display"
 	"github.com/platform-engineering-labs/formae/internal/cli/nag"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
@@ -83,7 +83,7 @@ func runDriftFlow(a *app.App, th *theme.Theme, opts *ApplyOptions, rejected apim
 			// The UI already hides the revert action (SimulateOnly on driftOpts),
 			// but defend in depth here in case the model is bypassed.
 			if opts.Simulate {
-				fmt.Print(display.Grey("Command will not continue — simulation only\n"))
+				fmt.Print(lipgloss.NewStyle().Foreground(themeFor(a).Palette.TextSubtle).Render("Command will not continue — simulation only") + "\n")
 				return nil
 			}
 			newRes, _, simErr := applyFn(a, opts, true)
@@ -243,7 +243,7 @@ func handleSelfResolvedDrift(a *app.App, th *theme.Theme, opts *ApplyOptions, re
 	}
 
 	if decision == simview.DecisionAborted {
-		fmt.Print(display.Grey("Apply aborted.") + "\n")
+		fmt.Print(lipgloss.NewStyle().Foreground(themeFor(a).Palette.TextSubtle).Render("Apply aborted.") + "\n")
 		return nil
 	}
 

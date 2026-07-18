@@ -15,9 +15,9 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
 	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
-	"github.com/platform-engineering-labs/formae/internal/cli/display"
 	"github.com/platform-engineering-labs/formae/internal/cli/nag"
 	"github.com/platform-engineering-labs/formae/internal/cli/printer"
 	"github.com/platform-engineering-labs/formae/internal/cli/status"
@@ -251,7 +251,7 @@ func runApplyInteractive(a *app.App, opts *ApplyOptions) error {
 	}
 
 	if decision == simview.DecisionAborted {
-		fmt.Print(display.Grey("Apply aborted.") + "\n")
+		fmt.Print(lipgloss.NewStyle().Foreground(themeFor(a).Palette.TextSubtle).Render("Apply aborted.") + "\n")
 		return nil
 	}
 
@@ -304,8 +304,8 @@ func runApplyLegacy(a *app.App, opts *ApplyOptions) error {
 
 	if !res.Simulation.ChangesRequired {
 		fmt.Printf("%s\n\n%s\n\n",
-			display.Gold("No changes needed:"),
-			display.Grey("The specified forma resources are up to date."))
+			lipgloss.NewStyle().Foreground(themeFor(a).Palette.Warning).Render("No changes needed:"),
+			lipgloss.NewStyle().Foreground(themeFor(a).Palette.TextSubtle).Render("The specified forma resources are up to date."))
 		return nil
 	}
 
@@ -313,7 +313,7 @@ func runApplyLegacy(a *app.App, opts *ApplyOptions) error {
 	if !opts.Yes {
 		if err := maybePrintDescription(themeFor(a), res.Description, opts.Yes); err != nil {
 			if errors.Is(err, errDescriptionAborted) {
-				fmt.Print(display.Red("\nCommand aborted\n"))
+				fmt.Print(lipgloss.NewStyle().Foreground(themeFor(a).Palette.Error).Render("\nCommand aborted") + "\n")
 				return nil
 			}
 			return err
@@ -325,7 +325,7 @@ func runApplyLegacy(a *app.App, opts *ApplyOptions) error {
 	}
 
 	if opts.Simulate {
-		fmt.Print(display.Grey("Command will not continue - simulation only\n"))
+		fmt.Print(lipgloss.NewStyle().Foreground(themeFor(a).Palette.TextSubtle).Render("Command will not continue - simulation only") + "\n")
 		return nil
 	}
 
@@ -340,7 +340,7 @@ func runApplyLegacy(a *app.App, opts *ApplyOptions) error {
 			return err
 		}
 		if !ok {
-			fmt.Print(display.Red("\nCommand aborted\n"))
+			fmt.Print(lipgloss.NewStyle().Foreground(themeFor(a).Palette.Error).Render("\nCommand aborted") + "\n")
 			return nil
 		}
 	}
@@ -355,7 +355,7 @@ func runApplyLegacy(a *app.App, opts *ApplyOptions) error {
 		return fmt.Errorf("%s", msg)
 	}
 
-	fmt.Printf("\n%s\n", display.Gold("The asynchronous command has started on the formae agent."))
+	fmt.Printf("\n%s\n", lipgloss.NewStyle().Foreground(themeFor(a).Palette.Warning).Render("The asynchronous command has started on the formae agent."))
 
 	if opts.Watch {
 		query := fmt.Sprintf("id:%s", res.CommandID)
@@ -363,7 +363,9 @@ func runApplyLegacy(a *app.App, opts *ApplyOptions) error {
 	}
 
 	fmt.Printf("\nRun the following command to check the status of this command:\n\n  %s%s%s\n",
-		display.Grey("formae status command --query='id:"), display.LightBlue(res.CommandID), display.Grey("'"))
+		lipgloss.NewStyle().Foreground(themeFor(a).Palette.TextSubtle).Render("formae status command --query='id:"),
+		lipgloss.NewStyle().Foreground(themeFor(a).Palette.PrimaryAccent).Render(res.CommandID),
+		lipgloss.NewStyle().Foreground(themeFor(a).Palette.TextSubtle).Render("'"))
 
 	nag.MaybePrintNags(themeFor(a), nags)
 

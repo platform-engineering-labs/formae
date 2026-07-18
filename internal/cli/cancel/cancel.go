@@ -17,7 +17,6 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
 	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
 	"github.com/platform-engineering-labs/formae/internal/cli/config"
-	"github.com/platform-engineering-labs/formae/internal/cli/display"
 	"github.com/platform-engineering-labs/formae/internal/cli/printer"
 	"github.com/platform-engineering-labs/formae/internal/cli/status"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui"
@@ -388,7 +387,7 @@ func runCancelLegacy(a *app.App, opts *CancelOptions) error {
 				"  • Update/Delete operations are reconciled by the synchronizer on its next cycle.\n\n"+
 				"Only use this for operations that will not complete on their own.\n\n"+
 				"Force-cancel anyway?",
-			display.Gold("Warning: --force is a destructive escape hatch."),
+			lipgloss.NewStyle().Foreground(themeFor(a).Palette.Warning).Render("Warning: --force is a destructive escape hatch."),
 			target,
 		)
 		if !isInteractive() {
@@ -399,7 +398,7 @@ func runCancelLegacy(a *app.App, opts *CancelOptions) error {
 			return confirmErr
 		}
 		if !ok {
-			fmt.Print(display.Red("\nCommand aborted\n"))
+			fmt.Print(lipgloss.NewStyle().Foreground(themeFor(a).Palette.Error).Render("\nCommand aborted") + "\n")
 			return nil
 		}
 	}

@@ -14,10 +14,10 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
 	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
 	"github.com/platform-engineering-labs/formae/internal/cli/config"
-	"github.com/platform-engineering-labs/formae/internal/cli/display"
 	"github.com/platform-engineering-labs/formae/internal/cli/nag"
 	"github.com/platform-engineering-labs/formae/internal/cli/printer"
 	"github.com/platform-engineering-labs/formae/internal/cli/status"
@@ -266,7 +266,8 @@ func runDestroyInteractive(a *app.App, opts *DestroyOptions) error {
 	}
 
 	if decision == simview.DecisionAborted {
-		fmt.Print(display.Grey("Destroy aborted.") + "\n")
+		th := themeFor(a)
+		fmt.Print(lipgloss.NewStyle().Foreground(th.Palette.TextSubtle).Render("Destroy aborted.") + "\n")
 		return nil
 	}
 
@@ -308,10 +309,15 @@ func runDestroyInteractive(a *app.App, opts *DestroyOptions) error {
 // runDestroyForHumans), except the cascade abort block which renders a styled
 // panel (the issue-mandated D5 exception to the legacy-paths-unchanged rule).
 func runDestroyLegacy(app *app.App, opts *DestroyOptions) error {
-	if opts.FormaFile != "" {
-		fmt.Print(display.Gold("Destroying resources defined by forma:\n ") + display.Green("File: ") + fmt.Sprintf("%s\n\n", opts.FormaFile))
-	} else {
-		fmt.Print(display.Gold("Destroying resources defined by query:\n ") + display.Green("Query: ") + fmt.Sprintf("%s\n\n", opts.Query))
+	{
+		th := themeFor(app)
+		goldStyle := lipgloss.NewStyle().Foreground(th.Palette.Warning)
+		doneStyle := lipgloss.NewStyle().Foreground(th.Palette.Done)
+		if opts.FormaFile != "" {
+			fmt.Print(goldStyle.Render("Destroying resources defined by forma:\n ") + doneStyle.Render("File: ") + fmt.Sprintf("%s\n\n", opts.FormaFile))
+		} else {
+			fmt.Print(goldStyle.Render("Destroying resources defined by query:\n ") + doneStyle.Render("Query: ") + fmt.Sprintf("%s\n\n", opts.Query))
+		}
 	}
 
 	res, _, err := destroyFn(app, opts, true)
@@ -324,15 +330,18 @@ func runDestroyLegacy(app *app.App, opts *DestroyOptions) error {
 	}
 
 	if !res.Simulation.ChangesRequired {
+		th := themeFor(app)
+		goldStyle := lipgloss.NewStyle().Foreground(th.Palette.Warning)
+		subtleStyle := lipgloss.NewStyle().Foreground(th.Palette.TextSubtle)
 		var msg string
 		if opts.FormaFile != "" {
-			msg = display.Grey("The specified forma does not have any resources that need to be destroyed.")
+			msg = subtleStyle.Render("The specified forma does not have any resources that need to be destroyed.")
 		} else {
-			msg = display.Grey("The specified query does not match any resources that can be destroyed.")
+			msg = subtleStyle.Render("The specified query does not match any resources that can be destroyed.")
 		}
 
 		fmt.Printf("%s\n\n%s\n\n",
-			display.Gold("No resources to destroy:"),
+			goldStyle.Render("No resources to destroy:"),
 			msg)
 		return nil
 	}
@@ -369,7 +378,8 @@ func runDestroyLegacy(app *app.App, opts *DestroyOptions) error {
 	if !opts.Yes {
 		// Show warning about cascades before simulation output
 		if hasCascades {
-			fmt.Printf("%s\n\n", display.Gold("Warning: This operation will cascade delete additional resources."))
+			th := themeFor(app)
+			fmt.Printf("%s\n\n", lipgloss.NewStyle().Foreground(th.Palette.Warning).Render("Warning: This operation will cascade delete additional resources."))
 		}
 
 		th := themeFor(app)
@@ -378,7 +388,8 @@ func runDestroyLegacy(app *app.App, opts *DestroyOptions) error {
 	}
 
 	if opts.Simulate {
-		fmt.Print(display.Grey("Command will not continue - simulation only\n"))
+		th := themeFor(app)
+		fmt.Print(lipgloss.NewStyle().Foreground(th.Palette.TextSubtle).Render("Command will not continue - simulation only") + "\n")
 		return nil
 	}
 
@@ -393,7 +404,8 @@ func runDestroyLegacy(app *app.App, opts *DestroyOptions) error {
 			return err
 		}
 		if !ok {
-			fmt.Print(display.Red("\nCommand aborted\n"))
+			th := themeFor(app)
+			fmt.Print(lipgloss.NewStyle().Foreground(th.Palette.Error).Render("\nCommand aborted") + "\n")
 			return nil
 		}
 	}
@@ -408,15 +420,23 @@ func runDestroyLegacy(app *app.App, opts *DestroyOptions) error {
 		return fmt.Errorf("%s", msg)
 	}
 
-	fmt.Printf("\n%s\n", display.Gold("The asynchronous command has started on the formae agent."))
+	{
+		th := themeFor(app)
+		fmt.Printf("\n%s\n", lipgloss.NewStyle().Foreground(th.Palette.Warning).Render("The asynchronous command has started on the formae agent."))
+	}
 
 	if opts.Watch {
 		query := fmt.Sprintf("id:%s", res.CommandID)
 		return status.WatchCommandsStatus(app, query, 1, opts.StatusOutput)
 	}
 
-	fmt.Printf("\nRun the following command to check the status of this command:\n\n  %s%s%s\n",
-		display.Grey("formae status command --query='id:"), display.LightBlue(res.CommandID), display.Grey("'"))
+	{
+		th := themeFor(app)
+		subtleStyle := lipgloss.NewStyle().Foreground(th.Palette.TextSubtle)
+		accentStyle := lipgloss.NewStyle().Foreground(th.Palette.PrimaryAccent)
+		fmt.Printf("\nRun the following command to check the status of this command:\n\n  %s%s%s\n",
+			subtleStyle.Render("formae status command --query='id:"), accentStyle.Render(res.CommandID), subtleStyle.Render("'"))
+	}
 
 	nag.MaybePrintNags(themeFor(app), nags)
 

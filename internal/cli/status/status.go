@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
+	"github.com/platform-engineering-labs/formae/internal/cli/banner"
 	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
 	"github.com/platform-engineering-labs/formae/internal/cli/config"
-	"github.com/platform-engineering-labs/formae/internal/cli/display"
 	"github.com/platform-engineering-labs/formae/internal/cli/nag"
 	"github.com/platform-engineering-labs/formae/internal/cli/printer"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui"
@@ -288,8 +288,8 @@ func renderCommandsStatus(a *app.App, status *apimodel.ListCommandStatusResponse
 }
 
 func prepareScreen(what string) {
-	display.ClearScreen()
-	display.PrintBanner()
+	banner.ClearScreen()
+	banner.PrintBanner()
 	fmt.Printf("Watching %s (refreshing every 2s)...\n\n", what)
 }
 

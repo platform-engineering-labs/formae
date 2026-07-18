@@ -18,10 +18,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
-	"github.com/platform-engineering-labs/formae/internal/cli/display"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
@@ -739,7 +739,8 @@ func runAvailabilityCheck(
 		// Always warn-and-continue regardless of whether the hub was explicit.
 		var transient *HubTransientError
 		if errors.As(err, &transient) {
-			fmt.Fprintln(os.Stderr, display.Grey(fmt.Sprintf(
+			th := theme.New("formae")
+			_, _ = fmt.Fprintln(os.Stderr, lipgloss.NewStyle().Foreground(th.Palette.TextSubtle).Render(fmt.Sprintf(
 				"Hub availability check skipped: %s. Hub will re-validate at registration time.",
 				transient.Cause)))
 			return nil
@@ -753,7 +754,8 @@ func runAvailabilityCheck(
 			if explicitHub {
 				return fmt.Errorf("hub availability check failed: %w", err)
 			}
-			fmt.Fprintln(os.Stderr, display.Grey(fmt.Sprintf(
+			th := theme.New("formae")
+			_, _ = fmt.Fprintln(os.Stderr, lipgloss.NewStyle().Foreground(th.Palette.TextSubtle).Render(fmt.Sprintf(
 				"Hub availability check skipped: %s. Hub will re-validate at registration time.",
 				unreachable.Cause)))
 			return nil
@@ -762,7 +764,8 @@ func runAvailabilityCheck(
 	}
 	if !res.Available {
 		if allowConflict {
-			fmt.Fprintln(os.Stderr, display.Grey(fmt.Sprintf(
+			th := theme.New("formae")
+			_, _ = fmt.Fprintln(os.Stderr, lipgloss.NewStyle().Foreground(th.Palette.TextSubtle).Render(fmt.Sprintf(
 				"Warning: plugin name %q is already registered by %s. Continuing because --allow-conflict was set; registration will fail at confirm time.",
 				name, res.GitHubRepoURL)))
 			return nil
