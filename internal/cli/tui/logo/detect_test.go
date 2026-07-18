@@ -126,6 +126,61 @@ func TestDecide(t *testing.T) {
 	}
 }
 
+// TestParseKittyProbe covers the pure parser for Kitty APC graphics responses.
+// The function returns true only when the buffer contains an APC graphics
+// response (\x1b_G...;OK...\x1b\\). DA1-only, error, or empty responses → false.
+func TestParseKittyProbe(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		resp []byte
+		want bool
+	}{
+		{
+			name: "real Kitty OK followed by DA1 → true",
+			resp: []byte("\x1b_Gi=31;OK\x1b\\\x1b[?62;c"),
+			want: true,
+		},
+		{
+			name: "DA1-only response (non-Kitty terminal) → false",
+			resp: []byte("\x1b[?62;c"),
+			want: false,
+		},
+		{
+			name: "empty buffer → false",
+			resp: []byte{},
+			want: false,
+		},
+		{
+			name: "Kitty error response → false",
+			resp: []byte("\x1b_Gi=31;ENOTSUPPORTED:no graphics\x1b\\\x1b[?62;c"),
+			want: false,
+		},
+		{
+			name: "Kitty OK without ST terminator still true → true",
+			resp: []byte("\x1b_Gi=31;OK"),
+			want: true,
+		},
+		{
+			name: "APC prefix but no OK → false",
+			resp: []byte("\x1b_Gi=31;ERR\x1b\\"),
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := parseKittyProbe(tt.resp)
+			if got != tt.want {
+				t.Errorf("parseKittyProbe(%q) = %v; want %v", tt.resp, got, tt.want)
+			}
+		})
+	}
+}
+
 // TestDetect_Stable checks that Detect() is idempotent (sync.Once caching).
 // We swap the probe seam to avoid real terminal I/O.
 func TestDetect_Stable(t *testing.T) {

@@ -5,6 +5,7 @@
 package logo
 
 import (
+	"bytes"
 	"os"
 	"strings"
 	"sync"
@@ -70,9 +71,45 @@ func decide(env envInfo, probe probeResult) Capability {
 	return CapBraille
 }
 
+// parseKittyProbe is a pure function that reports whether buf contains a
+// Kitty APC graphics OK response.  A response is positive iff the buffer
+// contains the APC introducer \x1b_G followed by ";OK" anywhere in the
+// payload.  A DA1-only response, an error payload, or an empty buffer all
+// return false.
+//
+// Fail-safe invariant: any ambiguity returns false — decide() then lands on
+// braille/text.  The parser only ever *adds* graphics on a clear positive.
+func parseKittyProbe(resp []byte) bool {
+	// An APC Kitty graphics response starts with ESC _ G (0x1b 0x5f 0x47).
+	// The payload contains key=value pairs separated by semicolons.
+	// A successful response contains ";OK" (or starts with "OK" for i=1 queries).
+	apcPrefix := []byte("\x1b_G")
+	idx := bytes.Index(resp, apcPrefix)
+	if idx < 0 {
+		return false
+	}
+	// The APC payload runs from after the prefix until the String Terminator
+	// \x1b\\ (or end of buffer if ST is missing / not yet received).
+	payload := resp[idx+len(apcPrefix):]
+	st := []byte("\x1b\\")
+	if end := bytes.Index(payload, st); end >= 0 {
+		payload = payload[:end]
+	}
+	// The response fields are semicolon-delimited key=value pairs.
+	// The status field is the last segment after the final semicolon.
+	// Accept ";OK" anywhere in the payload (covers both "i=31;OK" and plain
+	// "OK" for minimal responses).
+	return bytes.Contains(payload, []byte(";OK")) ||
+		bytes.HasPrefix(payload, []byte("OK"))
+}
+
 // probe is the seam for raw-mode escape-sequence queries. It is a var so
 // tests can replace it without performing real terminal I/O.
 // Under tmux/ssh the seam returns an empty probeResult immediately.
+//
+// Fail-safe invariant: any error, timeout, or uncertainty leaves all fields
+// false — decide() then lands on braille/text.  The probe only ever *adds*
+// graphics capability on a clear positive signal.
 //
 //nolint:gochecknoglobals
 var probe = func(env envInfo) probeResult {
@@ -94,35 +131,64 @@ var probe = func(env envInfo) probeResult {
 	}
 	defer func() { _ = term.Restore(fd, old) }()
 
-	// Send Kitty APC graphics query and read back with a very short timeout.
-	// If we get a valid response, the terminal supports the Kitty protocol.
-	var result probeResult
-
-	// Write the Kitty terminal capability query (XTGETTCAP "Kitty" feature).
-	// We use the simpler XTVERSION / DA2 approach: send a DA2 request and
-	// inspect the response. For production, a real Kitty query would use the
-	// APC protocol, but a simpler approach is to check TERM_PROGRAM / env
-	// hints that were set by a confidently-identified terminal.
+	// Send the Kitty APC graphics query followed by a Primary Device
+	// Attributes (DA1) request.  A Kitty-capable terminal answers the APC
+	// query (ESC _ G i=31;OK ESC \) BEFORE the DA1 reply (ESC [ ? … c).
+	// A non-Kitty terminal silently ignores the APC and replies only to DA1.
 	//
-	// In practice the raw-mode I/O probe is complex and terminal-specific.
-	// For headless safety we implement a minimal version: just check whether
-	// we can read a response within the timeout.
-	_ = os.Stdout.SetDeadline(time.Now().Add(100 * time.Millisecond))
-	defer func() { _ = os.Stdout.SetDeadline(time.Time{}) }()
-
-	// Kitty: check TERM or TERM_PROGRAM that can only be set by Kitty itself.
-	// In real use, Kitty sets TERM=xterm-kitty and KITTY_WINDOW_ID.
-	// Since the probe seam is meant to be replaced in tests, the production
-	// implementation here falls back to env-based detection as a best-effort.
-	if env.KittyWindowID || env.Term == "xterm-kitty" {
-		result.Kitty = true
-		return result
+	// Query breakdown:
+	//   \x1b_G          — APC introducer + 'G' (Kitty graphics)
+	//   i=31,s=1,v=1,   — image id 31, size 1×1
+	//   a=q,t=d,f=24;   — action=query, transmission=direct, format=24bpp
+	//   AAAAAAAA        — minimal base64 payload (3 zero bytes)
+	//   \x1b\\          — String Terminator
+	//   \x1b[c          — DA1 request (forces a reply from any VT100+ terminal)
+	const kittyQuery = "\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAAAAAA\x1b\\\x1b[c"
+	if _, werr := os.Stdout.WriteString(kittyQuery); werr != nil {
+		return probeResult{}
 	}
 
-	// iTerm2: TERM_PROGRAM=iTerm.app is set only by iTerm2.
-	if env.TermProgram == "iTerm.app" {
+	// Read the response with a hard timeout using a goroutine + select so the
+	// main flow can NEVER block.  os.Stdout.SetDeadline does not work on
+	// *os.File — do NOT rely on it.  Instead, the goroutine reads from the
+	// tty and the select races against time.After.  A possibly-blocked reader
+	// goroutine at one-time startup is acceptable — it unblocks at program exit
+	// or when the terminal eventually sends the DA1 reply.
+	tty, terr := os.Open("/dev/tty")
+	if terr != nil {
+		return probeResult{}
+	}
+	defer tty.Close()
+
+	type readResult struct {
+		buf []byte
+		err error
+	}
+	ch := make(chan readResult, 1)
+	go func() {
+		buf := make([]byte, 256)
+		n, err := tty.Read(buf)
+		ch <- readResult{buf: buf[:n], err: err}
+	}()
+
+	var result probeResult
+	select {
+	case rr := <-ch:
+		if rr.err == nil {
+			result.Kitty = parseKittyProbe(rr.buf)
+		}
+		// On read error → result.Kitty stays false (fail-safe).
+	case <-time.After(150 * time.Millisecond):
+		// Timeout → treat as no graphics support (fail-safe).
+	}
+
+	// iTerm2: there is NO escape-sequence query for iTerm2 inline images —
+	// this is a documented exception.  TERM_PROGRAM=iTerm.app is set
+	// exclusively by iTerm2 itself (not inherited like KITTY_WINDOW_ID), so
+	// it is a strong enough signal to use without a protocol probe.
+	// We only set ITerm2 when Kitty was not confirmed, to avoid double-enable.
+	if !result.Kitty && env.TermProgram == "iTerm.app" {
 		result.ITerm2 = true
-		return result
 	}
 
 	return result
