@@ -1,0 +1,4 @@
+[38;2;232;232;232mExtracted 2 resources to ./extracted.pkl[0m
+
+  [38;2;96;165;250mmy-bucket[0m ([38;2;136;136;136mAWS::S3::Bucket[0m) on stack [38;2;232;232;232mproduction[0m
+  [38;2;96;165;250mlogs[0m ([38;2;136;136;136mAWS::S3::Bucket[0m) on stack [38;2;232;232;232mproduction[0m
