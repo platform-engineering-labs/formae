@@ -7,6 +7,7 @@ package profile
 import (
 	"fmt"
 
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/spf13/cobra"
 )
 
@@ -24,7 +25,13 @@ func newCreateCmd() *cobra.Command {
 			if err := s.Create(args[0], force); err != nil {
 				return err
 			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "created %s\n", args[0])
+			w := cmd.OutOrStdout()
+			if isTerminal(w) {
+				th := theme.New("")
+				_, _ = fmt.Fprintln(w, renderAck(th, "created "+args[0]))
+			} else {
+				_, _ = fmt.Fprintf(w, "created %s\n", args[0])
+			}
 			return nil
 		},
 	}

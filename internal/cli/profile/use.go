@@ -7,6 +7,7 @@ package profile
 import (
 	"fmt"
 
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/spf13/cobra"
 )
 
@@ -23,7 +24,13 @@ func newUseCmd() *cobra.Command {
 			if err := s.Use(args[0]); err != nil {
 				return err
 			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "switched to %s\n", args[0])
+			w := cmd.OutOrStdout()
+			if isTerminal(w) {
+				th := theme.New("")
+				_, _ = fmt.Fprintln(w, renderAck(th, "switched to "+args[0]))
+			} else {
+				_, _ = fmt.Fprintf(w, "switched to %s\n", args[0])
+			}
 			return nil
 		},
 	}

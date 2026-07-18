@@ -10,6 +10,7 @@ import (
 
 	"github.com/platform-engineering-labs/formae/internal/cli/printer"
 	"github.com/platform-engineering-labs/formae/internal/cli/profile/store"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/spf13/cobra"
 )
 
@@ -51,12 +52,18 @@ func newListCmd() *cobra.Command {
 				return p.Print(&out)
 			}
 
-			for _, n := range names {
-				marker := "  "
-				if n == active {
-					marker = "* "
+			w := cc.OutOrStdout()
+			if isTerminal(w) {
+				th := theme.New("")
+				_, _ = fmt.Fprintln(w, renderProfileList(th, names, active))
+			} else {
+				for _, n := range names {
+					marker := "  "
+					if n == active {
+						marker = "* "
+					}
+					_, _ = fmt.Fprintf(w, "%s%s\n", marker, n)
 				}
-				_, _ = fmt.Fprintf(cc.OutOrStdout(), "%s%s\n", marker, n)
 			}
 			return nil
 		},
