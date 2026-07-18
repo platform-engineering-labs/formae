@@ -6,15 +6,17 @@ package plugin
 
 import (
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
 	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
-	"github.com/platform-engineering-labs/formae/internal/cli/display"
 	"github.com/platform-engineering-labs/formae/internal/cli/printer"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 )
 
@@ -84,36 +86,83 @@ func validateUpdateOptions(opts *UpdateOptions) error {
 }
 
 func runUpdateForHumans(app *app.App, opts *UpdateOptions) error {
-	mgr, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, opts.Channel)
-	if err != nil {
-		return err
-	}
+	return runUpdateForHumansWithSeams(app, opts, os.Stdout, nil)
+}
+
+// runUpdateForHumansWithSeams is the testable inner implementation. mgr may
+// be non-nil to inject a stub; when nil a real CLIPluginManager is created.
+func runUpdateForHumansWithSeams(app *app.App, opts *UpdateOptions, w io.Writer, mgr localUpdater) error {
 	if mgr == nil {
-		return fmt.Errorf("no artifact repositories configured; set artifacts.repositories in your formae config")
+		real, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, opts.Channel)
+		if err != nil {
+			return err
+		}
+		if real == nil {
+			return fmt.Errorf("no artifact repositories configured; set artifacts.repositories in your formae config")
+		}
+		mgr = real
 	}
 
+	th := themeFor(app)
+	tty := pluginIsTerminal(w)
+
+	var label string
+	if len(opts.Packages) == 0 {
+		label = "Updating all installed plugins…"
+	} else {
+		n := len(opts.Packages)
+		noun := "plugin"
+		if n != 1 {
+			noun = "plugins"
+		}
+		label = fmt.Sprintf("Updating %d %s…", n, noun)
+	}
+	step := components.StartStep(w, th, label)
+
 	if err := mgr.LocalUpdate(opts.Packages); err != nil {
+		names := pluginNamesFromArgs(opts.Packages)
+		if len(names) == 0 {
+			step.Fail("Failed to update plugins")
+		} else {
+			step.Fail(fmt.Sprintf("Failed to update %s", strings.Join(names, ", ")))
+		}
 		return err
 	}
 
 	if len(opts.Packages) == 0 {
-		fmt.Printf("  %s Updated all installed plugins\n", display.Green("✓"))
+		step.Done("Updated all installed plugins")
+		ackLine(w, tty, th, components.AckDone, "Updated all installed plugins")
 	} else {
-		for _, name := range pluginNamesFromArgs(opts.Packages) {
-			fmt.Printf("  %s Updated %s\n", display.Green("✓"), name)
+		names := pluginNamesFromArgs(opts.Packages)
+		noun := "plugin"
+		if len(names) != 1 {
+			noun = "plugins"
+		}
+		step.Done(fmt.Sprintf("Updated %d %s", len(names), noun))
+		for _, name := range names {
+			ackLine(w, tty, th, components.AckDone, fmt.Sprintf("Updated %s", name))
 		}
 	}
-	fmt.Printf("\n  %s If this host runs the formae agent, restart it to load the updated plugins: formae agent restart\n", display.Gold("!"))
+	ackLine(w, tty, th, components.AckWarn, "If this host runs the formae agent, restart it to load the updated plugins: formae agent restart")
 	return nil
 }
 
 func runUpdateForMachines(app *app.App, opts *UpdateOptions) error {
-	mgr, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, opts.Channel)
-	if err != nil {
-		return err
-	}
+	return runUpdateForMachinesWithSeams(app, opts, os.Stdout, nil)
+}
+
+// runUpdateForMachinesWithSeams is the testable inner implementation for the
+// machine path. mgr may be non-nil to inject a stub.
+func runUpdateForMachinesWithSeams(app *app.App, opts *UpdateOptions, w io.Writer, mgr localUpdater) error {
 	if mgr == nil {
-		return fmt.Errorf("no artifact repositories configured; set artifacts.repositories in your formae config")
+		real, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, opts.Channel)
+		if err != nil {
+			return err
+		}
+		if real == nil {
+			return fmt.Errorf("no artifact repositories configured; set artifacts.repositories in your formae config")
+		}
+		mgr = real
 	}
 
 	if err := mgr.LocalUpdate(opts.Packages); err != nil {
@@ -124,6 +173,6 @@ func runUpdateForMachines(app *app.App, opts *UpdateOptions) error {
 		Operations:      operationsFromPackages(opts.Packages, "update"),
 		RequiresRestart: true,
 	}
-	p := printer.NewMachineReadablePrinter[apimodel.UpdatePluginsResponse](os.Stdout, opts.OutputSchema)
+	p := printer.NewMachineReadablePrinter[apimodel.UpdatePluginsResponse](w, opts.OutputSchema)
 	return p.Print(resp)
 }
