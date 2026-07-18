@@ -7,6 +7,7 @@
 package eval
 
 import (
+	"os"
 	"testing"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/tuitest"
@@ -14,5 +15,5 @@ import (
 
 func TestMain(m *testing.M) {
 	tuitest.PinRendering()
-	m.Run()
+	os.Exit(m.Run())
 }
