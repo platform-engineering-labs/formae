@@ -90,15 +90,18 @@ func TestCancelForHumans_ForceDeclined_NoCalls(t *testing.T) {
 	origGetStatus := getCommandsStatusFn
 	origCancel := cancelCommandFn
 	origIsTerminal := isTerminal
+	origIsInteractive := isInteractive
 	origConfirm := confirmForceCancel
 	t.Cleanup(func() {
 		getCommandsStatusFn = origGetStatus
 		cancelCommandFn = origCancel
 		isTerminal = origIsTerminal
+		isInteractive = origIsInteractive
 		confirmForceCancel = origConfirm
 	})
 
 	isTerminal = func(w io.Writer) bool { return true }
+	isInteractive = func() bool { return true } // H1: must be interactive to reach confirmForceCancel
 
 	getCommandsStatusFn = func(a *app.App, query string, n int, fromWatch bool) (*apimodel.ListCommandStatusResponse, []string, error) {
 		return &apimodel.ListCommandStatusResponse{
@@ -222,15 +225,18 @@ func TestForceCancelSummary_ExpectationBullets(t *testing.T) {
 	origGetStatus := getCommandsStatusFn
 	origCancel := cancelCommandFn
 	origIsTerminal := isTerminal
+	origIsInteractive := isInteractive
 	origConfirm := confirmForceCancel
 	t.Cleanup(func() {
 		getCommandsStatusFn = origGetStatus
 		cancelCommandFn = origCancel
 		isTerminal = origIsTerminal
+		isInteractive = origIsInteractive
 		confirmForceCancel = origConfirm
 	})
 
 	isTerminal = func(w io.Writer) bool { return true }
+	isInteractive = func() bool { return true } // H1: must be interactive to reach confirmForceCancel
 
 	// Pre-fetched command: 8 Success + 2 InProgress + 5 Pending ResourceUpdates.
 	getCommandsStatusFn = func(a *app.App, query string, n int, fromWatch bool) (*apimodel.ListCommandStatusResponse, []string, error) {

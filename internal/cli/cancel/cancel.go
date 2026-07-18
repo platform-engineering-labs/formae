@@ -34,6 +34,9 @@ var (
 	runConfirm    = components.RunConfirm
 )
 
+// printBanner is a seam so tests can assert the banner is/isn't called.
+var printBanner = func(a *app.App) { a.PrintBanner() }
+
 // isTerminal returns true when the writer is a real terminal (includes Cygwin).
 var isTerminal = tui.IsTerminal
 
@@ -164,13 +167,18 @@ func runCancel(app *app.App, opts *CancelOptions) error {
 }
 
 func runCancelForHumans(a *app.App, opts *CancelOptions) error {
-	a.PrintBanner()
-
 	// TTY: the styled D6 frozen-set flow (--yes only skips the force confirm).
 	// Non-TTY: the legacy flow, unchanged.
 	if isTerminal(os.Stdout) {
+		// Suppress banner when the huh confirmForceCancel prompt will be shown
+		// (graphics cannot precede an alt-screen UI). All other interactive paths
+		// are styled text output, so the banner is safe there.
+		if !opts.Force || opts.Yes {
+			printBanner(a)
+		}
 		return runCancelInteractive(a, opts)
 	}
+	printBanner(a)
 	return runCancelLegacy(a, opts)
 }
 
@@ -208,6 +216,9 @@ func runCancelInteractive(a *app.App, opts *CancelOptions) error {
 
 	// Step 2: --force && !--yes → show warning panel and ask for confirmation.
 	if opts.Force && !opts.Yes {
+		if !isInteractive() {
+			return fmt.Errorf("interactive input requires a TTY — pass --yes")
+		}
 		// Build the pre-consent summary for the confirmation panel. Each command shows
 		// a header line (ID + command + mode) followed by an expectation bullet derived
 		// from its pre-fetched ResourceUpdates (per mockup VIEW 2b).

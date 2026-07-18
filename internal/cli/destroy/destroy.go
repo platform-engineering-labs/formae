@@ -40,6 +40,9 @@ var (
 	runConfirm    = components.RunConfirm
 )
 
+// printBanner is a seam so tests can assert the banner is/isn't called.
+var printBanner = func(a *app.App) { a.PrintBanner() }
+
 // isTerminal, launchSimView, launchWatch, and destroyFn are package-level vars so tests can stub them.
 var (
 	isTerminal = tui.IsTerminal
@@ -207,12 +210,11 @@ func runDestroy(app *app.App, opts *DestroyOptions) error {
 }
 
 func runDestroyForHumans(app *app.App, opts *DestroyOptions) error {
-	app.PrintBanner()
-
-	// Interactive path: human + TTY + no --yes flag.
+	// Interactive path: human + TTY + no --yes flag → alt-screen TUI; suppress banner.
 	if !opts.Yes && isTerminal(os.Stdout) {
 		return runDestroyInteractive(app, opts)
 	}
+	printBanner(app)
 	return runDestroyLegacy(app, opts)
 }
 

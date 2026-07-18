@@ -45,6 +45,9 @@ var (
 // clean nil return (matching the operation-confirm decline behaviour).
 var errDescriptionAborted = errors.New("description acknowledgment declined")
 
+// printBanner is a seam so tests can assert the banner is/isn't called.
+var printBanner = func(a *app.App) { a.PrintBanner() }
+
 // isTerminal, launchSimView, launchWatch, and applyFn are package-level vars so tests can stub them.
 var (
 	isTerminal = tui.IsTerminal
@@ -200,12 +203,11 @@ func validateApplyOptions(opts *ApplyOptions) error {
 }
 
 func runApplyForHumans(a *app.App, opts *ApplyOptions) error {
-	a.PrintBanner()
-
-	// Interactive path: human + TTY + no --yes flag.
+	// Interactive path: human + TTY + no --yes flag → alt-screen TUI; suppress banner.
 	if !opts.Yes && isTerminal(os.Stdout) {
 		return runApplyInteractive(a, opts)
 	}
+	printBanner(a)
 	return runApplyLegacy(a, opts)
 }
 
