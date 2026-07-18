@@ -93,15 +93,17 @@ func logoBytes(dark bool) []byte {
 	return logoLight
 }
 
-// wordmarkStyle builds a styled "formae v{version}" string.
-// "formae" is rendered in brand navy (light) / blue (dark); "v{version}" is dim.
+// wordmarkStyle builds a two-line styled wordmark block:
+//
+//	formae      (white)
+//	v{version}  (brand orange)
+//
+// Fixed colors are used (no AdaptiveColor) to avoid OSC terminal queries that
+// leak as literal text in multiplexed sessions (tmux/screen/ssh).
 func wordmarkStyle(version string) string {
-	nameStyle := lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{
-		Light: "#02024B",
-		Dark:  "#60A5FA",
-	})
-	versionStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#888888"))
-	return nameStyle.Render("formae") + versionStyle.Render(" v"+version)
+	nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF"))
+	versionStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(brandOrange))
+	return nameStyle.Render("formae") + "\n" + versionStyle.Render("v"+version)
 }
 
 // Render produces the logo art string and the number of terminal rows it
@@ -144,6 +146,10 @@ func Render(cap Capability, size Size, version string) (art string, rows int) {
 	// SizeFull: use the native renderer for the capability.
 	// Graphics encoders return "" on image decode/encode error; in that case
 	// we degrade gracefully: graphics → braille → text (never an empty string).
+	//
+	// Offset note: the 1-line top margin + 3-space left indent below are
+	// user-tunable D2 live items. For graphics, the exact pixel offset
+	// (~10 px right / ~1 line down) is also a D2 live-tune.
 	switch cap {
 	case CapKitty:
 		art = encodeKittyFn(dark, graphicsFullCols)
@@ -157,7 +163,8 @@ func Render(cap Capability, size Size, version string) (art string, rows int) {
 		// Fall through to braille on encoder failure.
 		art = renderBraille(dark, brailleWidthFull)
 		if art != "" {
-			art = lipgloss.JoinHorizontal(lipgloss.Top, art, "  "+wordmark)
+			composed := lipgloss.JoinHorizontal(lipgloss.Center, art, "  "+wordmark)
+			art = lipgloss.NewStyle().MarginTop(1).MarginLeft(3).Render(composed)
 			rows = countRows(art)
 			return art, rows
 		}
@@ -174,14 +181,16 @@ func Render(cap Capability, size Size, version string) (art string, rows int) {
 		// Fall through to braille on encoder failure.
 		art = renderBraille(dark, brailleWidthFull)
 		if art != "" {
-			art = lipgloss.JoinHorizontal(lipgloss.Top, art, "  "+wordmark)
+			composed := lipgloss.JoinHorizontal(lipgloss.Center, art, "  "+wordmark)
+			art = lipgloss.NewStyle().MarginTop(1).MarginLeft(3).Render(composed)
 			rows = countRows(art)
 			return art, rows
 		}
 		return "formae v" + version, 1
 	default: // CapBraille
 		art = renderBraille(dark, brailleWidthFull)
-		art = lipgloss.JoinHorizontal(lipgloss.Top, art, "  "+wordmark)
+		composed := lipgloss.JoinHorizontal(lipgloss.Center, art, "  "+wordmark)
+		art = lipgloss.NewStyle().MarginTop(1).MarginLeft(3).Render(composed)
 		rows = countRows(art)
 		return art, rows
 	}
