@@ -53,7 +53,8 @@ func TestStepLine_TTYFrameLineTruncatesAndClears(t *testing.T) {
 	// The animated frame line never exceeds the terminal width.
 	frame := stepFrameLine(th, "⠋", "Installing github.com/acme/formae-plugin-cloudflare…", 20)
 	assert.LessOrEqual(t, visibleWidth(frame), 20)
-	assert.True(t, strings.HasSuffix(out, "Installed cloudflare 1.2.3\n"))
+	assert.Contains(t, out, "Installed cloudflare 1.2.3")
+	assert.True(t, strings.HasSuffix(out, "\n"))
 }
 
 // Sequential contract: finishing twice panics loudly rather than corrupting output.

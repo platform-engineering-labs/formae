@@ -108,30 +108,10 @@ func (s *Step) finish(m AckMarker, text string) {
 	if s.tty {
 		close(s.stop)
 		<-s.stopped
-		// Use AckLine for the styled marker glyph, but write the body as plain
-		// text so the line ends with "text\n" (no trailing ANSI reset after body).
-		marker := ackMarker(s.th, m)
-		fmt.Fprintf(s.w, "\r\x1b[K%s %s\n", marker, text)
+		fmt.Fprint(s.w, "\r\x1b[K"+AckLine(s.th, m, text)+"\n")
 		return
 	}
 	// Piped: plain result line, no ANSI.
 	glyph := map[AckMarker]string{AckDone: "✓", AckSkip: "·", AckWarn: "!", AckFail: "✗"}[m]
 	fmt.Fprintf(s.w, "%s %s\n", glyph, text)
-}
-
-// ackMarker returns just the styled glyph for a given AckMarker (no body text).
-func ackMarker(th *theme.Theme, m AckMarker) string {
-	var glyph string
-	var role lipgloss.AdaptiveColor
-	switch m {
-	case AckDone:
-		glyph, role = "✓", th.Palette.Done
-	case AckSkip:
-		glyph, role = "·", th.Palette.TextSubtle
-	case AckWarn:
-		glyph, role = "!", th.Palette.Warning
-	default:
-		glyph, role = "✗", th.Palette.Error
-	}
-	return lipgloss.NewStyle().Foreground(role).Render(glyph)
 }
