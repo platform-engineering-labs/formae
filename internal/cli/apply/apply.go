@@ -5,6 +5,7 @@
 package apply
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -19,7 +20,6 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/display"
 	"github.com/platform-engineering-labs/formae/internal/cli/nag"
 	"github.com/platform-engineering-labs/formae/internal/cli/printer"
-	"github.com/platform-engineering-labs/formae/internal/cli/prompter"
 	"github.com/platform-engineering-labs/formae/internal/cli/status"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
@@ -39,6 +39,11 @@ var (
 	isInteractive = tui.IsInteractive
 	runConfirm    = components.RunConfirm
 )
+
+// errDescriptionAborted is a sentinel returned by maybePrintDescription when
+// the user declines the R3 acknowledgment. The call site converts this to a
+// clean nil return (matching the operation-confirm decline behaviour).
+var errDescriptionAborted = errors.New("description acknowledgment declined")
 
 // isTerminal, launchSimView, launchWatch, and applyFn are package-level vars so tests can stub them.
 var (
@@ -306,7 +311,13 @@ func runApplyLegacy(a *app.App, opts *ApplyOptions) error {
 
 	// don't show anything if --yes is specified
 	if !opts.Yes {
-		_ = maybePrintDescription(res.Description)
+		if err := maybePrintDescription(themeFor(a), res.Description, opts.Yes); err != nil {
+			if errors.Is(err, errDescriptionAborted) {
+				fmt.Print(display.Red("\nCommand aborted\n"))
+				return nil
+			}
+			return err
+		}
 
 		th := themeFor(a)
 		width := legacyWidth(os.Stdout)
@@ -378,13 +389,36 @@ func runApplyForMachines(app *app.App, opts *ApplyOptions) error {
 	return printer.Print(&apimodel.CommandID{CommandID: res.CommandID})
 }
 
-func maybePrintDescription(description apimodel.Description) error {
-	if description.Confirm && description.Text != "" {
-		prompter := prompter.NewBasicPrompter()
-		err := prompter.PressEnterToContinue(description.Text)
-		if err != nil {
-			return fmt.Errorf("error prompting the user to continue: %v", err)
-		}
+// maybePrintDescription prints description.Text (when non-empty) and, when
+// description.Confirm is set, requires an explicit user acknowledgment before
+// the operation confirm. This is the R3 safety gate: it must remain a DISTINCT
+// step that runs BEFORE the operation confirm.
+func maybePrintDescription(th *theme.Theme, description apimodel.Description, yes bool) error {
+	if description.Text == "" {
+		return nil
+	}
+
+	// Print the description text styled via the theme's body role.
+	_, _ = fmt.Println(th.Styles.Body.Render(description.Text))
+
+	if !description.Confirm {
+		return nil
+	}
+
+	// Confirm==true: require an explicit acknowledgment.
+	if yes {
+		// --yes intentionally skips the ack (documented behaviour).
+		return nil
+	}
+	if !isInteractive() {
+		return fmt.Errorf("interactive input requires a TTY — pass --yes")
+	}
+	ok, err := runConfirm(th, "Acknowledge and continue?", description.Text)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return errDescriptionAborted
 	}
 	return nil
 }
