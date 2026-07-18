@@ -60,6 +60,12 @@ func TestDecide(t *testing.T) {
 			probe: probeResult{ITerm2: true},
 			want:  CapITerm2,
 		},
+		{
+			name:  "both probe.Kitty and probe.ITerm2 → CapKitty (Kitty wins)",
+			env:   envInfo{IsTTY: true, Unicode: true},
+			probe: probeResult{Kitty: true, ITerm2: true},
+			want:  CapKitty,
+		},
 		// ── Probes UNTRUSTED under tmux ───────────────────────────────────────
 		{
 			name:  "probe.Kitty but Tmux → CapBraille (probe ignored)",

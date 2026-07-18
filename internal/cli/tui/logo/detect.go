@@ -140,10 +140,10 @@ var probe = func(env envInfo) probeResult {
 	//   \x1b_G          — APC introducer + 'G' (Kitty graphics)
 	//   i=31,s=1,v=1,   — image id 31, size 1×1
 	//   a=q,t=d,f=24;   — action=query, transmission=direct, format=24bpp
-	//   AAAAAAAA        — minimal base64 payload (3 zero bytes)
+	//   AAAA            — minimal base64 payload (3 zero bytes)
 	//   \x1b\\          — String Terminator
 	//   \x1b[c          — DA1 request (forces a reply from any VT100+ terminal)
-	const kittyQuery = "\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAAAAAA\x1b\\\x1b[c"
+	const kittyQuery = "\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\\x1b[c"
 	if _, werr := os.Stdout.WriteString(kittyQuery); werr != nil {
 		return probeResult{}
 	}
