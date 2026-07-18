@@ -111,6 +111,33 @@ func TestRenderAgentStats_TopNTruncation(t *testing.T) {
 	assert.Equal(t, 10, typeRows, "exactly 10 resource type rows expected")
 }
 
+func TestRenderAgentStats_ErrorsPanelCapsAtTen(t *testing.T) {
+	th := theme.New("formae")
+	stats := makeFullStats()
+	// Build 13 resource error entries
+	errs := map[string]int{}
+	for i := range 13 {
+		errs[fmt.Sprintf("AWS::Type%02d::Error", i)] = i + 1
+	}
+	stats.ResourceErrors = errs
+
+	out := renderAgentStats(th, stats, 120)
+	plain := stripANSIAgent(out)
+
+	// Should contain "and 3 more errors"
+	assert.Contains(t, plain, "and 3 more errors", "truncation footer expected for errors panel")
+
+	// Count error type rows (lines containing "AWS::Type" inside errors panel)
+	lines := strings.Split(plain, "\n")
+	typeRows := 0
+	for _, l := range lines {
+		if strings.Contains(l, "AWS::Type") && strings.Contains(l, "Error") {
+			typeRows++
+		}
+	}
+	assert.Equal(t, 10, typeRows, "exactly 10 error rows expected")
+}
+
 func TestRenderAgentStats_NoErrorsPanelElided(t *testing.T) {
 	th := theme.New("formae")
 	stats := makeFullStats()

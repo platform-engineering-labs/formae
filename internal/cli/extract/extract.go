@@ -11,11 +11,11 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/huh"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
 	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
 	"github.com/platform-engineering-labs/formae/internal/cli/config"
-	"github.com/platform-engineering-labs/formae/internal/cli/display"
 	"github.com/platform-engineering-labs/formae/internal/cli/nag"
 	"github.com/platform-engineering-labs/formae/internal/cli/renderer"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui"
@@ -222,11 +222,12 @@ func runExtractCore(a *app.App, opts *ExtractOptions) error {
 		return fmt.Errorf("error generating source code: %v", err)
 	}
 
+	warnStyle := lipgloss.NewStyle().Foreground(th.Palette.Warning)
 	if res.InitializedNewProject {
-		display.Gold(fmt.Sprintf("Initialzed %s project at '%s'\n", opts.OutputSchema, res.ProjectPath))
+		fmt.Println(warnStyle.Render(fmt.Sprintf("Initialized %s project at '%s'", opts.OutputSchema, res.ProjectPath)))
 	}
 	for _, warning := range res.Warnings {
-		display.Warning(warning)
+		fmt.Println(warnStyle.Render(warning))
 	}
 
 	// Build per-resource list from the forma that was extracted.

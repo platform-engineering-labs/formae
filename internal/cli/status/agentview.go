@@ -227,9 +227,22 @@ func buildPluginsPanel(th *theme.Theme, stats apimodel.Stats, width int) string 
 	sort.Slice(plugins, func(i, j int) bool {
 		return plugins[i].Namespace < plugins[j].Namespace
 	})
+
+	const maxRows = 10
+	shown := plugins
+	overflow := 0
+	if len(plugins) > maxRows {
+		overflow = len(plugins) - maxRows
+		shown = plugins[:maxRows]
+	}
+
 	lines := []string{}
-	for _, plugin := range plugins {
+	for _, plugin := range shown {
 		lines = append(lines, fieldLine(th, plugin.Namespace, plugin.Version))
+	}
+	if overflow > 0 {
+		moreStyle := lipgloss.NewStyle().Foreground(th.Palette.TextSubtle)
+		lines = append(lines, moreStyle.Render(fmt.Sprintf("… and %d more plugins", overflow)))
 	}
 	return components.Panel(th, th.Palette.Border, "Plugins", lines, width)
 }
@@ -250,12 +263,24 @@ func buildResourceErrorsPanel(th *theme.Theme, stats apimodel.Stats, width int) 
 		return errs[i].name < errs[j].name
 	})
 
+	const maxRows = 10
+	shown := errs
+	overflow := 0
+	if len(errs) > maxRows {
+		overflow = len(errs) - maxRows
+		shown = errs[:maxRows]
+	}
+
 	totalErrors := sumMap(stats.ResourceErrors)
 	lines := []string{
 		fieldLine(th, "Total Errors", fmt.Sprintf("%d", totalErrors)),
 	}
-	for _, ec := range errs {
+	for _, ec := range shown {
 		lines = append(lines, fieldLine(th, ec.name, fmt.Sprintf("%d", ec.count)))
+	}
+	if overflow > 0 {
+		moreStyle := lipgloss.NewStyle().Foreground(th.Palette.TextSubtle)
+		lines = append(lines, moreStyle.Render(fmt.Sprintf("… and %d more errors", overflow)))
 	}
 	return components.Panel(th, th.Palette.Error, "Resource Errors", lines, width)
 }

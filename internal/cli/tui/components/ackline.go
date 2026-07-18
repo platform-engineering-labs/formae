@@ -20,6 +20,25 @@ const (
 	AckFail                  // ✗ — failed action
 )
 
+// ackGlyphs maps AckMarker values to their plain-text glyphs.
+// Used by both AckLine (styled) and AckLinePlain (unstyled) to keep them consistent.
+var ackGlyphs = map[AckMarker]string{
+	AckDone: "✓",
+	AckSkip: "·",
+	AckWarn: "!",
+	AckFail: "✗",
+}
+
+// AckLinePlain returns a plain-text acknowledgment line with no ANSI codes —
+// suitable for piped / non-TTY output. Format: "<glyph> <text>".
+func AckLinePlain(m AckMarker, text string) string {
+	glyph := ackGlyphs[m]
+	if glyph == "" {
+		glyph = "✗"
+	}
+	return glyph + " " + text
+}
+
 // AckLine renders a single marker line like "✓ switched to staging".
 // Symbol + color together carry the semantics (colorblind-safe, no green).
 func AckLine(th *theme.Theme, m AckMarker, text string) string {

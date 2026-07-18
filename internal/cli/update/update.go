@@ -79,13 +79,7 @@ func ackLine(w io.Writer, tty bool, th *theme.Theme, m components.AckMarker, tex
 		_, _ = fmt.Fprintln(w, components.AckLine(th, m, text))
 		return
 	}
-	glyph := map[components.AckMarker]string{
-		components.AckDone: "✓",
-		components.AckSkip: "·",
-		components.AckWarn: "!",
-		components.AckFail: "✗",
-	}[m]
-	_, _ = fmt.Fprintf(w, "%s %s\n", glyph, text)
+	_, _ = fmt.Fprintln(w, components.AckLinePlain(m, text))
 }
 
 // runInitConfirmDecision asks the user whether to initialize the managed root

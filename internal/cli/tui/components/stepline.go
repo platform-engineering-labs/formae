@@ -112,6 +112,5 @@ func (s *Step) finish(m AckMarker, text string) {
 		return
 	}
 	// Piped: plain result line, no ANSI.
-	glyph := map[AckMarker]string{AckDone: "✓", AckSkip: "·", AckWarn: "!", AckFail: "✗"}[m]
-	_, _ = fmt.Fprintf(s.w, "%s %s\n", glyph, text)
+	_, _ = fmt.Fprintln(s.w, AckLinePlain(m, text))
 }
