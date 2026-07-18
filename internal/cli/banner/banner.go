@@ -82,12 +82,13 @@ func PrintBanner() {
 		// is run across Kitty/iTerm2/WezTerm/Ghostty — this is a required
 		// user-run follow-up step.
 		_, _ = fmt.Print(art)
-		for range max(1, rows/2) {
+		for range max(1, rows/3) {
 			_, _ = fmt.Println()
 		}
 	default:
-		// CapText and CapBraille: rows is exact; just print the art.
+		// CapText and CapBraille: rows is exact; print the art then one blank line.
 		_, _ = fmt.Println(art)
+		_, _ = fmt.Println()
 	}
 	_ = rows
 }

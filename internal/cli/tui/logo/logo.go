@@ -8,8 +8,10 @@ package logo
 
 import (
 	_ "embed"
+	"os"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 )
 
@@ -51,10 +53,20 @@ const (
 
 // hasDarkBackground is a seam for tests: it wraps termenv.HasDarkBackground
 // so test code can override it and make Render deterministic in headless
-// environments.  The default implementation calls termenv directly.
+// environments.  The default implementation is safe to call in any context.
 //
 //nolint:gochecknoglobals
 var hasDarkBackground = func() bool {
+	// termenv.HasDarkBackground() emits an OSC terminal query to detect the
+	// background color. Under tmux/screen/ssh the reply is not passed through
+	// and instead leaks as literal text to the shell after the program exits.
+	// Skip the query in those environments and assume dark (the safer default).
+	if os.Getenv("TMUX") != "" ||
+		strings.HasPrefix(os.Getenv("TERM"), "screen") ||
+		os.Getenv("SSH_TTY") != "" ||
+		os.Getenv("SSH_CONNECTION") != "" {
+		return true
+	}
 	return termenv.HasDarkBackground()
 }
 
@@ -79,6 +91,17 @@ func logoBytes(dark bool) []byte {
 		return logoDark
 	}
 	return logoLight
+}
+
+// wordmarkStyle builds a styled "formae v{version}" string.
+// "formae" is rendered in brand navy (light) / blue (dark); "v{version}" is dim.
+func wordmarkStyle(version string) string {
+	nameStyle := lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{
+		Light: "#02024B",
+		Dark:  "#60A5FA",
+	})
+	versionStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#888888"))
+	return nameStyle.Render("formae") + versionStyle.Render(" v"+version)
 }
 
 // Render produces the logo art string and the number of terminal rows it
@@ -116,6 +139,8 @@ func Render(cap Capability, size Size, version string) (art string, rows int) {
 		return art, rows
 	}
 
+	wordmark := wordmarkStyle(version)
+
 	// SizeFull: use the native renderer for the capability.
 	// Graphics encoders return "" on image decode/encode error; in that case
 	// we degrade gracefully: graphics → braille → text (never an empty string).
@@ -123,12 +148,16 @@ func Render(cap Capability, size Size, version string) (art string, rows int) {
 	case CapKitty:
 		art = encodeKittyFn(dark, graphicsFullCols)
 		if art != "" {
-			rows = graphicsRowCount(graphicsFullCols)
+			// TODO(D2): right-of-image wordmark placement is unreliable with
+			// graphics escapes; append below for now. Revisit after live-tuning.
+			art = art + "\n" + wordmark
+			rows = graphicsRowCount(graphicsFullCols) + 1
 			return art, rows
 		}
 		// Fall through to braille on encoder failure.
 		art = renderBraille(dark, brailleWidthFull)
 		if art != "" {
+			art = lipgloss.JoinHorizontal(lipgloss.Top, art, "  "+wordmark)
 			rows = countRows(art)
 			return art, rows
 		}
@@ -136,18 +165,23 @@ func Render(cap Capability, size Size, version string) (art string, rows int) {
 	case CapITerm2:
 		art = encodeITerm2Fn(dark, graphicsFullCols)
 		if art != "" {
-			rows = graphicsRowCount(graphicsFullCols)
+			// TODO(D2): right-of-image wordmark placement is unreliable with
+			// graphics escapes; append below for now. Revisit after live-tuning.
+			art = art + "\n" + wordmark
+			rows = graphicsRowCount(graphicsFullCols) + 1
 			return art, rows
 		}
 		// Fall through to braille on encoder failure.
 		art = renderBraille(dark, brailleWidthFull)
 		if art != "" {
+			art = lipgloss.JoinHorizontal(lipgloss.Top, art, "  "+wordmark)
 			rows = countRows(art)
 			return art, rows
 		}
 		return "formae v" + version, 1
 	default: // CapBraille
 		art = renderBraille(dark, brailleWidthFull)
+		art = lipgloss.JoinHorizontal(lipgloss.Top, art, "  "+wordmark)
 		rows = countRows(art)
 		return art, rows
 	}

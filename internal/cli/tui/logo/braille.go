@@ -73,22 +73,34 @@ func encodeBrailleArt(img image.Image, widthChars int) string {
 
 	style := lipgloss.NewStyle().Foreground(lipgloss.Color(brandOrange))
 
-	var sb strings.Builder
+	rows := make([]string, 0, heightChars)
 	for cy := 0; cy < heightChars; cy++ {
+		var row strings.Builder
 		for cx := 0; cx < widthChars; cx++ {
 			ch := encodeBrailleCell(resized, cx*2, cy*4)
 			if ch == '⠀' {
-				sb.WriteRune(' ')
+				row.WriteRune(' ')
 			} else {
-				sb.WriteString(style.Render(string(ch)))
+				row.WriteString(style.Render(string(ch)))
 			}
 		}
-		if cy < heightChars-1 {
-			sb.WriteRune('\n')
+		rows = append(rows, row.String())
+	}
+
+	// Strip trailing all-blank rows (cells that rendered as spaces only).
+	for len(rows) > 0 {
+		last := rows[len(rows)-1]
+		trimmed := strings.TrimSpace(last)
+		// Also trim any ANSI-styled blank braille (the style.Render of '⠀' is
+		// replaced by a space above, so plain TrimSpace is sufficient).
+		if trimmed == "" {
+			rows = rows[:len(rows)-1]
+		} else {
+			break
 		}
 	}
 
-	return sb.String()
+	return strings.Join(rows, "\n")
 }
 
 // Braille dot bit positions:

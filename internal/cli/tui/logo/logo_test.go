@@ -112,3 +112,48 @@ func TestRender_FullBrailleRows(t *testing.T) {
 		t.Errorf("rows mismatch: art has %d newlines so expected rows=%d, got %d", newlines, expected, rows)
 	}
 }
+
+// TestRender_FullBrailleWordmark asserts that SizeFull with CapBraille includes
+// the wordmark ("formae" and "v1.2.3") alongside braille runes.
+func TestRender_FullBrailleWordmark(t *testing.T) {
+	t.Parallel()
+	art, _ := Render(CapBraille, SizeFull, "1.2.3")
+	if art == "" {
+		t.Fatal("expected non-empty art for SizeFull CapBraille")
+	}
+	if !strings.Contains(art, "formae") {
+		t.Errorf("SizeFull CapBraille art missing wordmark 'formae'; got %q", art[:min(len(art), 200)])
+	}
+	if !strings.Contains(art, "v1.2.3") {
+		t.Errorf("SizeFull CapBraille art missing version 'v1.2.3'; got %q", art[:min(len(art), 200)])
+	}
+	if !hasBrailleRune(art) {
+		t.Errorf("SizeFull CapBraille art contains no braille runes; got %q", art[:min(len(art), 200)])
+	}
+}
+
+// TestRender_CompactNoWordmark asserts that SizeCompact does NOT include the
+// wordmark (it is a compact icon only).
+func TestRender_CompactNoWordmark(t *testing.T) {
+	t.Parallel()
+	art, _ := Render(CapBraille, SizeCompact, "1.2.3")
+	if strings.Contains(art, "formae") {
+		t.Errorf("SizeCompact art must NOT contain wordmark 'formae'; got %q", art)
+	}
+	if strings.Contains(art, "v1.2.3") {
+		t.Errorf("SizeCompact art must NOT contain version 'v1.2.3'; got %q", art)
+	}
+}
+
+// TestHasDarkBackground_Tmux asserts that hasDarkBackground returns true under
+// tmux without querying the terminal.
+func TestHasDarkBackground_Tmux(t *testing.T) {
+	t.Setenv("TMUX", "/tmp/tmux-1000/default,12345,0")
+	// Clear other env vars that might interfere.
+	t.Setenv("SSH_TTY", "")
+	t.Setenv("SSH_CONNECTION", "")
+
+	if !hasDarkBackground() {
+		t.Error("hasDarkBackground() should return true under TMUX without querying")
+	}
+}
