@@ -68,17 +68,16 @@ func TestRender_ITerm2FallbackToBraille(t *testing.T) {
 }
 
 // TestRender_KittyGraphicsWordmarkRight asserts that Render(CapKitty, SizeFull, …)
-// places the wordmark to the RIGHT of the image via DEC cursor positioning — not
-// just appended below. We verify: DEC save (ESC 7) is present, a cursor-forward
-// sequence (ESC[nC) is present, and both "formae" and "v{version}" appear in the
-// output.
+// places the wordmark to the RIGHT of the image via C=1 + cursor-forward
+// sequences (no DEC save/restore). We verify: cursor-forward (ESC[nC) is
+// present, DEC save (ESC 7) is NOT present, and both wordmark lines appear.
 func TestRender_KittyGraphicsWordmarkRight(t *testing.T) {
 	t.Parallel()
 
 	// Stub the encoder to return a deterministic non-empty string so the
 	// real PNG encode path is skipped and the test remains fast + hermetic.
 	origKitty := encodeKittyFn
-	encodeKittyFn = func(_ bool, _, _ int) string { return "\x1b_Ga=T,f=100,c=12,r=6,m=0;AAAA\x1b\\" }
+	encodeKittyFn = func(_ bool, _, _ int) string { return "\x1b_Ga=T,f=100,C=1,c=8,r=4,m=0;AAAA\x1b\\" }
 	t.Cleanup(func() { encodeKittyFn = origKitty })
 
 	art, rows := Render(CapKitty, SizeFull, "1.2.3")
@@ -87,13 +86,17 @@ func TestRender_KittyGraphicsWordmarkRight(t *testing.T) {
 		t.Fatal("Render(CapKitty, SizeFull) returned empty string")
 	}
 
-	// DEC save cursor must be present (wordmark is positioned via save/restore).
+	// DEC save/restore must NOT be present — Kitty uses C=1 for deterministic placement.
 	const decSave = "\x1b7"
-	if !strings.Contains(art, decSave) {
-		t.Errorf("graphics art missing DEC save cursor (ESC 7); wordmark is not positioned right-of-image")
+	if strings.Contains(art, decSave) {
+		t.Error("Kitty graphics art contains DEC save cursor (ESC 7) — should use C=1 instead")
+	}
+	const decRestore = "\x1b8"
+	if strings.Contains(art, decRestore) {
+		t.Error("Kitty graphics art contains DEC restore cursor (ESC 8) — should use C=1 instead")
 	}
 
-	// Cursor-forward sequence (ESC[nC) must be present.
+	// Cursor-forward sequence (ESC[nC) must be present for right-of-image placement.
 	if !strings.Contains(art, "\x1b[") {
 		t.Errorf("graphics art missing cursor-movement sequences (ESC[); wordmark is not positioned right-of-image")
 	}
@@ -112,35 +115,50 @@ func TestRender_KittyGraphicsWordmarkRight(t *testing.T) {
 	}
 }
 
-// TestRender_ITerm2GraphicsWordmarkRight is the iTerm2 equivalent of the above.
-func TestRender_ITerm2GraphicsWordmarkRight(t *testing.T) {
+// TestRender_ITerm2GraphicsWordmarkBelow asserts that Render(CapITerm2, SizeFull, …)
+// places the wordmark BELOW the image (not right-of-image) — iTerm2 has no C=1
+// equivalent so safe newline placement is used. DEC save/restore must NOT appear.
+func TestRender_ITerm2GraphicsWordmarkBelow(t *testing.T) {
 	t.Parallel()
 
 	origITerm2 := encodeITerm2Fn
 	encodeITerm2Fn = func(_ bool, _, _ int) string {
-		return "\x1b]1337;File=inline=1;size=4;width=12;height=6;preserveAspectRatio=0:AAAA\a"
+		return "\x1b]1337;File=inline=1;size=4;width=8;height=4;preserveAspectRatio=0:AAAA\a"
 	}
 	t.Cleanup(func() { encodeITerm2Fn = origITerm2 })
 
-	art, rows := Render(CapITerm2, SizeFull, "2.0.0")
+	art, _ := Render(CapITerm2, SizeFull, "2.0.0")
 
 	if art == "" {
 		t.Fatal("Render(CapITerm2, SizeFull) returned empty string")
 	}
 
+	// DEC save/restore must NOT be present for iTerm2.
 	const decSave = "\x1b7"
-	if !strings.Contains(art, decSave) {
-		t.Errorf("graphics art missing DEC save cursor (ESC 7); wordmark is not positioned right-of-image")
+	if strings.Contains(art, decSave) {
+		t.Error("iTerm2 graphics art contains DEC save cursor (ESC 7) — unexpected")
 	}
 
-	if !strings.Contains(art, "formae") {
+	// Wordmark must appear below: the image escape comes first, then newline(s), then text.
+	imgSeq := "\x1b]1337;"
+	imgIdx := strings.Index(art, imgSeq)
+	formaeIdx := strings.Index(art, "formae")
+	verIdx := strings.Index(art, "v2.0.0")
+
+	if formaeIdx < 0 {
 		t.Errorf("graphics art missing 'formae' wordmark")
 	}
-	if !strings.Contains(art, "v2.0.0") {
+	if verIdx < 0 {
 		t.Errorf("graphics art missing 'v2.0.0' version")
 	}
+	if imgIdx >= 0 && formaeIdx > 0 && formaeIdx < imgIdx {
+		t.Error("'formae' appears BEFORE the image escape — expected below the image")
+	}
 
-	if rows != graphicsRows {
-		t.Errorf("rows = %d; want graphicsRows = %d", rows, graphicsRows)
+	// The wordmark section (after the image) must contain a newline between
+	// the image escape and the wordmark text (below, not inline).
+	afterImg := art[imgIdx+len(imgSeq):]
+	if !strings.Contains(afterImg, "\n") {
+		t.Error("no newline between iTerm2 image escape and wordmark — expected wordmark below image")
 	}
 }

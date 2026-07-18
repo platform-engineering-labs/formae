@@ -53,8 +53,10 @@ func encodeKitty(dark bool, cellCols, cellRows int) string {
 
 		if i == 0 {
 			// First chunk: a=T (transmit+display), f=100 (PNG format),
-			// c=<cols>,r=<rows> fixes the cell footprint, m=more.
-			fmt.Fprintf(&seq, "\033_Ga=T,f=100,c=%d,r=%d,m=%d;%s\033\\", cellCols, cellRows, more, chunk)
+			// C=1 (do not move cursor after display — keeps cursor at origin for
+			// deterministic wordmark placement), c=<cols>,r=<rows> fixes the cell
+			// footprint, m=more.
+			fmt.Fprintf(&seq, "\033_Ga=T,f=100,C=1,c=%d,r=%d,m=%d;%s\033\\", cellCols, cellRows, more, chunk)
 		} else {
 			// Continuation chunks
 			fmt.Fprintf(&seq, "\033_Gm=%d;%s\033\\", more, chunk)

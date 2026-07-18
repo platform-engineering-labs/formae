@@ -52,18 +52,18 @@ const (
 // These control the image cell grid and wordmark placement for Kitty/iTerm2.
 // Adjust these values to tune the layout on your specific graphics terminal.
 //
-//	graphicsCols          — image width in character cells (e.g. 12).
-//	graphicsRows          — image height in character cells (e.g. 6).
+//	graphicsCols          — image width in character cells (e.g. 8).
+//	graphicsRows          — image height in character cells (e.g. 4).
 //	                        Terminal cells are ~2:1 tall:wide, so for a square
 //	                        logo graphicsCols ≈ 2*graphicsRows is a good start.
 //	graphicsWordmarkGap   — blank columns between the right edge of the image
-//	                        and the left edge of the wordmark text.
+//	                        and the left edge of the wordmark text (Kitty only).
 //
 // ─────────────────────────────────────────────────────────────────────────────
 const (
-	graphicsCols        = 12 // image width in cells (tune for graphics terminals)
-	graphicsRows        = 6  // image height in cells (tune for graphics terminals)
-	graphicsWordmarkGap = 2  // gap columns between image and wordmark (tune)
+	graphicsCols        = 8 // image width in cells (tune for graphics terminals)
+	graphicsRows        = 4 // image height in cells (tune for graphics terminals)
+	graphicsWordmarkGap = 2 // gap columns between image and wordmark (tune; Kitty only)
 )
 
 // hasDarkBackground is a seam for tests: it wraps termenv.HasDarkBackground
@@ -189,7 +189,9 @@ func Render(cap Capability, size Size, version string) (art string, rows int) {
 	case CapKitty:
 		art = encodeKittyFn(dark, graphicsCols, graphicsRows)
 		if art != "" {
-			art = composeGraphicsWordmark(art, graphicsCols, graphicsRows, version)
+			// Kitty: C=1 keeps the cursor at the image origin after display,
+			// enabling deterministic right-of-image wordmark placement.
+			art = composeKittyWordmark(art, graphicsCols, graphicsRows, version)
 			rows = graphicsRows
 			return art, rows
 		}
@@ -205,8 +207,11 @@ func Render(cap Capability, size Size, version string) (art string, rows int) {
 	case CapITerm2:
 		art = encodeITerm2Fn(dark, graphicsCols, graphicsRows)
 		if art != "" {
-			art = composeGraphicsWordmark(art, graphicsCols, graphicsRows, version)
-			rows = graphicsRows
+			// iTerm2 has no C=1 equivalent and moves the cursor unpredictably
+			// after inline images. Place the wordmark BELOW the image instead.
+			// Right-of-image for iTerm2 is a separate live-tune if needed.
+			art = composeITerm2Wordmark(art, version)
+			rows = graphicsRows + 2 // image rows + 2 wordmark lines below
 			return art, rows
 		}
 		// Fall through to braille on encoder failure.
@@ -236,52 +241,67 @@ func countRows(art string) int {
 	return strings.Count(art, "\n") + 1
 }
 
-// composeGraphicsWordmark places the wordmark to the RIGHT of a graphics image
-// using DEC save/restore cursor (ESC 7 / ESC 8) and cursor-movement sequences.
+// composeKittyWordmark places the wordmark to the RIGHT of a Kitty graphics
+// image using the C=1 (cursor-does-not-move) parameter. Because C=1 keeps the
+// cursor at the image's top-left origin after display, every subsequent move is
+// deterministic — no DEC save/restore needed.
 //
-// The image escape (img) leaves the cursor at an unknown position after display.
-// Save before emitting the image, then restore and use cursor-down + cursor-right
-// to position each wordmark line alongside the image's vertical midpoint.
-// A final restore+cursor-down moves the cursor below the full image so
-// subsequent terminal output appears beneath the logo.
+// Layout (cursor starts at origin = top-left of image cell):
 //
-//	ESC 7     — DEC save cursor (DECSC)
-//	img       — image escape sequence (Kitty APC or iTerm2 OSC)
-//	ESC 8     — DEC restore cursor (DECRC) — back to origin
-//	ESC[nB    — cursor down n rows  (CUD)
-//	ESC[nC    — cursor forward n cols (CUF)
-//	<text>    — styled wordmark line
-//	(repeat for both lines)
-//	ESC 8     — restore to origin
-//	ESC[nB    — cursor down past the full image height
-func composeGraphicsWordmark(img string, gCols, gRows int, version string) string {
+//	img (C=1)     — emitted; cursor stays at origin
+//	↓ mid rows    — CUD to the vertical midpoint
+//	→ gCols+gap   — CUF past image + gap
+//	"formae"      — name line; then back UP to origin row, CR
+//	↓ mid+1 rows  — CUD to version row
+//	→ gCols+gap   — CUF past image + gap
+//	"v{version}"  — version line; then back UP to origin row, CR
+//	↓ gRows rows  — CUD past the full image height
+//
+// Guard: \x1b[0A and \x1b[0B are treated by terminals as \x1b[1A / \x1b[1B,
+// which would be wrong. When mid==0 the up/down moves are omitted entirely.
+func composeKittyWordmark(img string, gCols, gRows int, version string) string {
 	nameLine, verLine := wordmarkLines(version)
-
-	const (
-		save    = "\x1b7" // DEC save cursor (DECSC)
-		restore = "\x1b8" // DEC restore cursor (DECRC)
-	)
 
 	// Vertical middle of the image: place name on row mid, version on mid+1.
 	mid := gRows / 2
 
 	var b strings.Builder
-	b.WriteString(save)
+	// Kitty C=1: cursor stays at origin (top-left) after image display.
 	b.WriteString(img)
 
-	// Line 1: "formae" — move to vertical midpoint, then right past image + gap.
-	b.WriteString(restore)
-	fmt.Fprintf(&b, "\x1b[%dB\x1b[%dC", mid, gCols+graphicsWordmarkGap)
+	// Line 1: "formae" — go down to mid row, right past image+gap, print,
+	// then return up to origin row + carriage return.
+	if mid > 0 {
+		fmt.Fprintf(&b, "\x1b[%dB", mid)
+	}
+	fmt.Fprintf(&b, "\x1b[%dC", gCols+graphicsWordmarkGap)
 	b.WriteString(nameLine)
+	if mid > 0 {
+		fmt.Fprintf(&b, "\x1b[%dA", mid)
+	}
+	b.WriteByte('\r')
 
-	// Line 2: "v{version}" — one row below "formae".
-	b.WriteString(restore)
-	fmt.Fprintf(&b, "\x1b[%dB\x1b[%dC", mid+1, gCols+graphicsWordmarkGap)
+	// Line 2: "v{version}" — go down to mid+1 row, right past image+gap, print,
+	// then return up to origin row + carriage return.
+	midPlus1 := mid + 1
+	fmt.Fprintf(&b, "\x1b[%dB", midPlus1)
+	fmt.Fprintf(&b, "\x1b[%dC", gCols+graphicsWordmarkGap)
 	b.WriteString(verLine)
+	fmt.Fprintf(&b, "\x1b[%dA", midPlus1)
+	b.WriteByte('\r')
 
 	// Move cursor below the full image so subsequent output is below the logo.
-	b.WriteString(restore)
 	fmt.Fprintf(&b, "\x1b[%dB", gRows)
 
 	return b.String()
+}
+
+// composeITerm2Wordmark places the wordmark BELOW the iTerm2 inline image.
+// iTerm2 has no equivalent of Kitty's C=1 parameter; after displaying an inline
+// image it moves the cursor to an unpredictable position. Placing the wordmark
+// below (on newlines) is safe and reliable. Right-of-image positioning for
+// iTerm2 can be revisited as a separate live-tune if needed.
+func composeITerm2Wordmark(img, version string) string {
+	nameLine, verLine := wordmarkLines(version)
+	return img + "\n" + nameLine + "\n" + verLine
 }
