@@ -57,6 +57,7 @@ func fixturePluginInfoFull() *apimodel.Plugin {
 		Summary:           "Cloudflare DNS and network resources",
 		Publisher:         "Acme Corp",
 		License:           "Apache-2.0",
+		Channel:           "stable",
 		InstalledVersion:  "1.2.3",
 		AvailableVersions: []string{"1.2.3", "1.2.2", "1.1.0"},
 		ManagedBy:         "homelab-bundle",

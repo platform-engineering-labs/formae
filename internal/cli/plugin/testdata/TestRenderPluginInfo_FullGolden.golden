@@ -6,5 +6,6 @@
   [38;2;136;136;136mSummary:  [0m  [38;2;232;232;232mCloudflare DNS and network resources[0m
   [38;2;136;136;136mPublisher:[0m  [38;2;232;232;232mAcme Corp[0m
   [38;2;136;136;136mLicense:  [0m  [38;2;232;232;232mApache-2.0[0m
+  [38;2;136;136;136mChannel:  [0m  [38;2;232;232;232mstable[0m
   [38;2;136;136;136mAvailable:[0m  [38;2;232;232;232m[38;2;232;232;232m1.2.3[0m, 1.2.2, 1.1.0[0m
   [38;2;136;136;136mPart of:  [0m  [38;2;232;232;232mhomelab-bundle[0m

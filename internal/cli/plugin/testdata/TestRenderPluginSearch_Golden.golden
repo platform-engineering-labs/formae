@@ -1,4 +1,4 @@
   [38;2;96;165;250mcloudflare    [0m  Cloudflare DNS and network resources  [38;2;232;232;232m✓ installed[0m
   [38;2;96;165;250mroute53       [0m  Amazon Route53 DNS management
   [38;2;96;165;250mgandi         [0m  Gandi domain and DNS records
-[38;2;136;136;136m3 plugins · install with: formae plugin install <name>[0m
+  [38;2;136;136;136m3 plugins · install with: formae plugin install <name>[0m

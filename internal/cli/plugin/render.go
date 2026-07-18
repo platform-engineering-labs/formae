@@ -12,14 +12,10 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
-	"github.com/platform-engineering-labs/formae/internal/cli/tui"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 )
-
-// isTerminal and themeFor are package-level vars so tests can stub them.
-var isTerminal = tui.IsTerminal
 
 // themeFor resolves the active theme from the app config.
 // The name falls back to "formae" for nil configs (theme.New nil-guards internally).
@@ -158,7 +154,7 @@ func renderPluginSearch(th *theme.Theme, plugins []apimodel.Plugin, opts SearchR
 		footerParts = append(footerParts, "type: "+opts.Type)
 	}
 	footer := strings.Join(footerParts, " · ")
-	sb.WriteString(secondaryStyle.Render(footer) + "\n")
+	sb.WriteString("  " + secondaryStyle.Render(footer) + "\n")
 
 	return sb.String()
 }
@@ -173,8 +169,6 @@ func renderPluginInfo(th *theme.Theme, p *apimodel.Plugin) string {
 	header := accentStyle.Render(p.Name)
 	if p.InstalledVersion != "" {
 		header += " " + p.InstalledVersion + "  " + doneStyle.Render("✓ installed")
-	} else {
-		header += " " + p.InstalledVersion
 	}
 	fmt.Fprintf(&sb, "%s\n\n", header)
 
