@@ -44,7 +44,7 @@ func FormaePalette() Palette {
 		TextPrimary:     lipgloss.AdaptiveColor{Light: "#1A1A1A", Dark: "#E8E8E8"},
 		TextSecondary:   lipgloss.AdaptiveColor{Light: "#666666", Dark: "#888888"},
 		TextSubtle:      lipgloss.AdaptiveColor{Light: "#999999", Dark: "#555555"},
-		Border:          lipgloss.AdaptiveColor{Light: "#DDDDDD", Dark: "#333355"},
+		Border:          lipgloss.AdaptiveColor{Light: "#DDDDDD", Dark: "#555566"},
 		Selection:       lipgloss.AdaptiveColor{Light: "#DDDDDD", Dark: "#3A3A3A"},
 		PrimaryAccent:   lipgloss.AdaptiveColor{Light: "#2563EB", Dark: "#60A5FA"},
 		SecondaryAccent: lipgloss.AdaptiveColor{Light: "#FF6B00", Dark: "#FF8533"},

@@ -175,6 +175,7 @@ type multiView struct {
 	spinView string // current spinner frame, injected by the root model
 	now      time.Time
 	hideAge  bool // detail view's pinned row omits Age (mockup VIEW 2)
+	pinned   bool // detail view's pinned command row: render full-brightness (it is the subject, not a de-emphasized finished list row)
 }
 
 // visibleCols returns the responsive column set, additionally dropping Age
@@ -193,6 +194,13 @@ func (v multiView) visibleCols() map[int]bool {
 // brightens everything one tier.
 func (v multiView) rowStyles(h health, cursor bool) (id, text lipgloss.Style) {
 	p := v.th.Palette
+	// The detail view's pinned command row is the subject being viewed, so it
+	// renders at full brightness regardless of terminal state — the state is
+	// already conveyed by the status glyph (✓/✗/⊘/spinner).
+	if v.pinned {
+		return lipgloss.NewStyle().Foreground(p.PrimaryAccent),
+			lipgloss.NewStyle().Foreground(p.TextPrimary)
+	}
 	var idc, txt lipgloss.AdaptiveColor
 	switch h {
 	case healthRunningFailing:
@@ -353,14 +361,23 @@ func (v multiView) renderRows(maxRows int) []string {
 			case colStatus:
 				sb.WriteString(glyphStr)
 			case colID:
-				sb.WriteString(idStyle.Render(pad(r.cmd.CommandID, w)))
+				// Truncate to w-1 so an over-long ksuid always leaves a trailing
+				// gap before the next column (pad alone would fill the full width).
+				sb.WriteString(idStyle.Render(pad(components.Truncate(r.cmd.CommandID, w-1), w)))
 			case colCommand:
 				sb.WriteString(textStyle.Render(pad(r.cmd.Command, w)))
 			case colMode:
 				sb.WriteString(textStyle.Render(pad(r.cmd.Mode, w)))
 			case colProgress:
 				if terminal {
-					cell := pad(fmt.Sprintf("completed %d/%d", done, total), w)
+					verb := "completed"
+					switch {
+					case r.cmd.State == "Canceled":
+						verb = "canceled"
+					case r.health == healthFinishedFailed:
+						verb = "failed"
+					}
+					cell := pad(fmt.Sprintf("%s %d/%d", verb, done, total), w)
 					sb.WriteString(textStyle.Render(cell))
 				} else {
 					// segmented bar + count; bar is bw-8 wide, count is right-aligned remainder

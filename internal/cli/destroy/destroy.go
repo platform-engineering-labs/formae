@@ -62,6 +62,7 @@ var (
 			Query:          "id:" + commandID,
 			FocusCommandID: commandID,
 			ExitWhenDone:   true,
+			SingleCommand:  true, // destroy --watch is scoped to one command: no back-to-list nav
 		})
 		_, err := tui.Run(model, tui.DefaultRunOptions())
 		return err

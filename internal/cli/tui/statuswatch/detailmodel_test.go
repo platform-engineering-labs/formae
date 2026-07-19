@@ -88,7 +88,7 @@ func TestDetailModel_SummaryRowsAndSecondLines(t *testing.T) {
 	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
 	dm = dm.SetCommand(c, r, "◉", now, nil)
 
-	v := plain(dm.View(30))
+	v := plain(dm.View(30, false))
 	assert.Contains(t, v, "▌ Resources", "section header")
 	assert.Contains(t, v, "BucketNotEmpty", "error message second line")
 	assert.Contains(t, v, "depends on legacy-2", "cascade second line")
@@ -115,7 +115,7 @@ func TestDetailModel_ShowMoreRow(t *testing.T) {
 	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
 	dm = dm.SetCommand(c, r, "◉", now, nil)
 
-	v := plain(dm.View(40))
+	v := plain(dm.View(40, false))
 	assert.Contains(t, v, "show 10 more (15 remaining)")
 
 	// cursor to show-more row (row index 10, after 10 visible rows)
@@ -149,14 +149,14 @@ func TestDetailModel_ExpandCardByKey(t *testing.T) {
 	// Expand first resource row (cursor=0)
 	dm, _ = dm.Update(tea.KeyMsg{Type: tea.KeyEnter}, keys)
 
-	v := plain(dm.View(40))
+	v := plain(dm.View(40, false))
 	assert.Contains(t, v, "AWS::S3::Bucket", "expanded card shows type")
 
 	// Rebuild with same command (simulating a poll refresh)
 	dm = dm.SetCommand(c, r, "◉", now, nil)
 
 	// Expansion must survive SetCommand - the key is "resource/production/my-bucket"
-	v2 := plain(dm.View(40))
+	v2 := plain(dm.View(40, false))
 	assert.Contains(t, v2, "AWS::S3::Bucket", "expansion survives SetCommand via key")
 }
 
@@ -174,7 +174,7 @@ func TestDetailModel_DetailModeToggle(t *testing.T) {
 	assert.True(t, dm.detailMode, "'d' sets detailMode to true")
 
 	// In detail mode all resource rows should render as cards (bordered)
-	v := plain(dm.View(40))
+	v := plain(dm.View(40, false))
 	assert.Contains(t, v, "╭", "detail mode shows bordered cards")
 }
 
@@ -194,7 +194,7 @@ func TestDetailModel_CancelStateLabels(t *testing.T) {
 	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
 	dm = dm.SetCommand(c, r, "◉", now, nil)
 
-	v := plain(dm.View(40))
+	v := plain(dm.View(40, false))
 	assert.Contains(t, v, "finishing", "in-progress row on canceling command shows 'finishing'")
 	assert.Contains(t, v, "canceled", "canceled row shows 'canceled'")
 }
@@ -340,7 +340,7 @@ func TestDetailModel_Golden(t *testing.T) {
 	}
 	dm, _ = dm.Update(tea.KeyMsg{Type: tea.KeyEnter}, keys)
 
-	tuitest.RequireGolden(t, []byte(dm.View(30)))
+	tuitest.RequireGolden(t, []byte(dm.View(30, false)))
 }
 
 func TestSetCommand_ClampsCursorWhenListShrinks(t *testing.T) {
@@ -432,7 +432,7 @@ func TestDetailModel_RenderingIntegrity(t *testing.T) {
 	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
 	dm = dm.SetCommand(c, r, "◉", now, nil)
 
-	raw := dm.View(30)
+	raw := dm.View(30, false)
 	plainView := plain(raw)
 
 	t.Run("no_ansi_fragment_garbage", func(t *testing.T) {
@@ -496,7 +496,7 @@ func TestDetailModel_ColHeaderAlignment(t *testing.T) {
 			now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
 			dm = dm.SetCommand(c, r, "◉", now, nil)
 
-			raw := dm.View(30)
+			raw := dm.View(30, false)
 			plainView := plain(raw)
 			lines := strings.Split(plainView, "\n")
 

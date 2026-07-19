@@ -35,6 +35,13 @@ type Options struct {
 	// ExitWhenDone causes the TUI to quit automatically when all visible
 	// commands reach a terminal state.
 	ExitWhenDone bool
+	// SingleCommand indicates the TUI is scoped to one command (e.g. the
+	// apply/destroy --watch flow drills straight into the detail view). In this
+	// mode the "back to command list" navigation is suppressed: esc quits instead
+	// of returning to the multi list, the detail header omits the "← esc/backspace"
+	// hint, and the detail footer omits "esc back". In the standalone `formae
+	// status` TUI (SingleCommand false) the list↔detail navigation is preserved.
+	SingleCommand bool
 	// AbandonedResources is the set of resource IDs (bare ksuids) that were
 	// force-canceled. Detail rows whose ResourceUpdate.ResourceID is in this
 	// set and whose state is Canceled render the label "Abandoned" in Warning
@@ -235,14 +242,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// In detail view, route keys to detail model (except '/', 'q', '?').
+	// In detail view, route keys to detail model (except 'q', '?'). The query bar
+	// is not shown in the detail view, so '/' is not handled here — filtering
+	// lives in the list view.
 	if m.view == viewDetail {
 		switch {
 		case key.Matches(msg, m.keys.Quit):
 			return m, tea.Quit
-		case key.Matches(msg, m.keys.Search):
-			m.query = m.query.Focus()
-			return m, nil
 		case key.Matches(msg, m.keys.Help):
 			m.helpOpen = true
 			return m, nil
@@ -250,6 +256,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			var back bool
 			m.detail, back = m.detail.Update(msg, m.keys)
 			if back {
+				if m.opts.SingleCommand {
+					// No command list to return to — leaving detail means quitting.
+					return m, tea.Quit
+				}
 				m.view = viewMulti
 			}
 			return m, nil
@@ -407,14 +417,21 @@ func (m Model) View() string {
 	}
 
 	if m.view == viewDetail {
-		header := components.HeaderBar(m.th, "← esc/backspace", right, m.width)
+		// Single-command mode (apply/destroy --watch): no back-to-list nav, so the
+		// header shows the command title instead of the "← esc/backspace" hint.
+		detailLeft := "← esc/backspace"
+		if m.opts.SingleCommand {
+			detailLeft = "formae status command"
+		}
+		header := components.HeaderBar(m.th, detailLeft, right, m.width)
 		// detail.View returns: pinnedHeader + pinnedRow + sep + vp (no footer).
-		// We append the query bar (2 lines) and footer (2 lines) here so the
-		// query bar is always visible when focused and the footer is bottom-anchored.
-		detailContent := m.detail.View(m.height)
-		queryView := m.query.View(m.width)
-		footer := components.FooterBar(m.th, m.width, detailFooterHints(), "")
-		parts := header + "\n" + detailContent + "\n" + queryView + "\n" + footer
+		// The query bar is NOT shown in the detail view — you're focused on a
+		// single command, so filtering belongs to the list view (this also avoids
+		// echoing the command ID in both the pinned row and the query bar). The
+		// footer is appended here and bottom-anchored by the height padding below.
+		detailContent := m.detail.View(m.height, false)
+		footer := components.FooterBar(m.th, m.width, detailFooterHints(m.opts.SingleCommand), "")
+		parts := header + "\n" + detailContent + "\n" + footer
 		lines := strings.Split(parts, "\n")
 		// Pad to height
 		for len(lines) < m.height {

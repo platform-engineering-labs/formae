@@ -54,7 +54,9 @@ func TestBuildGroups_OmitsEmptyGroupsAndSetsCancelLabels(t *testing.T) {
 	groups := buildGroups(c, nil)
 	require.Len(t, groups, 1)
 	assert.Equal(t, "finishing", groups[0].rows[0].stateLabel)
-	assert.Equal(t, "canceled", groups[0].rows[1].stateLabel)
+	// Canceled rows carry no text label — the ⊘ glyph already conveys the state
+	// (only additive labels like "finishing"/"Abandoned" are set).
+	assert.Equal(t, "", groups[0].rows[1].stateLabel)
 }
 
 func TestBuildGroups_StableKeys(t *testing.T) {

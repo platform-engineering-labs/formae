@@ -86,8 +86,9 @@ func TestCommandDuration(t *testing.T) {
 
 func TestStateLabel_CancelStates(t *testing.T) {
 	assert.Equal(t, "finishing", stateLabel("Canceling", "InProgress"))
-	assert.Equal(t, "canceled", stateLabel("Canceling", "Canceled"))
-	assert.Equal(t, "canceled", stateLabel("Canceled", "Canceled"))
+	// Canceled rows carry no text label — the ⊘ glyph conveys the state.
+	assert.Equal(t, "", stateLabel("Canceling", "Canceled"))
+	assert.Equal(t, "", stateLabel("Canceled", "Canceled"))
 	assert.Equal(t, "", stateLabel("InProgress", "InProgress"))
 	assert.Equal(t, "", stateLabel("Canceling", "Success"))
 }

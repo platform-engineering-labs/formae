@@ -156,12 +156,29 @@ func themeFor(a *app.App) *theme.Theme {
 // unknown names fall back to "formae" inside theme.New.
 func launchStatusTUI(a *app.App, opts *StatusOptions) error {
 	th := themeFor(a)
-	model := statuswatch.New(th, a, statuswatch.Options{
+	swOpts := statuswatch.Options{
 		Query:      opts.Query,
 		MaxResults: opts.MaxResults,
-	})
+	}
+	// If the query targets a single command by exact id (e.g. `status command
+	// --query 'id:<ksuid>'`), drill straight into its detail view instead of
+	// dropping the user in a one-row list they must "enter" into.
+	if id := bareCommandID(opts.Query); id != "" {
+		swOpts.FocusCommandID = id
+	}
+	model := statuswatch.New(th, a, swOpts)
 	_, err := tui.Run(model, tui.DefaultRunOptions())
 	return err
+}
+
+// bareCommandID returns the command id when query is exactly "id:<value>" with
+// no wildcards or additional terms; otherwise it returns "".
+func bareCommandID(query string) string {
+	rest, ok := strings.CutPrefix(strings.TrimSpace(query), "id:")
+	if !ok || rest == "" || strings.ContainsAny(rest, " *?") {
+		return ""
+	}
+	return rest
 }
 
 func runStatusForHumans(a *app.App, opts *StatusOptions) error {

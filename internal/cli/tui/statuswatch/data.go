@@ -132,9 +132,9 @@ func filterUserCommands(cmds []apimodel.Command) []apimodel.Command {
 // before the command stops), canceled updates are "canceled" (they will
 // never run). Empty string means render the mapped state normally.
 func stateLabel(cmdState, updState string) string {
-	if updState == apimodel.ResourceUpdateStateCanceled {
-		return "canceled"
-	}
+	// Canceled/skipped is already conveyed by the ⊘ glyph — no redundant text
+	// label. Only genuinely additive states get a label ("finishing" here;
+	// "Abandoned" is set separately for force-canceled rows).
 	if cmdState == "Canceling" && updState == apimodel.ResourceUpdateStateInProgress {
 		return "finishing"
 	}

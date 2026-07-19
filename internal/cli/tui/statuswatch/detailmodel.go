@@ -121,7 +121,7 @@ func (d detailModel) SetCommand(c apimodel.Command, r row, spinView string, now 
 	// Pinned header + row reuse the multi view's renderers so they share the
 	// responsive column drops and stay aligned; Age is omitted per mockup
 	// VIEW 2, and sortHi -1 suppresses the sort-navigation highlight.
-	mv := multiView{th: d.th, rows: []row{r}, cursor: -1, sortHi: -1, width: d.width, spinView: spinView, now: now, hideAge: true}
+	mv := multiView{th: d.th, rows: []row{r}, cursor: -1, sortHi: -1, width: d.width, spinView: spinView, now: now, hideAge: true, pinned: true}
 	d.pinnedHeader = mv.headerRow()
 	rows := mv.renderRows(1)
 	if len(rows) > 0 {
@@ -291,7 +291,7 @@ func groupLayout(kind updateKind, w int) (labelW, typeW, stackW int) {
 }
 
 // View renders the full detail view for the given terminal height.
-func (d detailModel) View(height int) string {
+func (d detailModel) View(height int, showQueryBar bool) string {
 	p := d.th.Palette
 	w := d.width
 
@@ -377,6 +377,9 @@ func (d detailModel) View(height int) string {
 
 	// Viewport scrolls to keep cursor in view
 	vpHeight := height - chromeLines - 2 // subtract pinned header row + separator
+	if !showQueryBar {
+		vpHeight += 2 // query bar is hidden in the detail view — reclaim its 2 lines
+	}
 	if vpHeight < 1 {
 		vpHeight = 1
 	}
@@ -398,13 +401,17 @@ func (d detailModel) View(height int) string {
 		d.vp.View()
 }
 
-func detailFooterHints() []components.KeyHint {
-	return []components.KeyHint{
+func detailFooterHints(singleCommand bool) []components.KeyHint {
+	hints := []components.KeyHint{
 		{Key: "space", Desc: "expand"},
 		{Key: "d", Desc: "details"},
-		{Key: "/", Desc: "query"},
-		{Key: "esc", Desc: "back"},
 	}
+	// In single-command mode (apply/destroy --watch) there is no command list to
+	// go back to, so omit the "esc back" hint; esc quits.
+	if !singleCommand {
+		hints = append(hints, components.KeyHint{Key: "esc", Desc: "back"})
+	}
+	return append(hints, components.KeyHint{Key: "q", Desc: "quit"})
 }
 
 // findNavIndex finds the nav cursor index for a specific row in a group.
@@ -589,13 +596,17 @@ func (d detailModel) renderSummaryRow(r updateRow, kind updateKind, labelW, type
 
 	timeStr := formatDetailDuration(r)
 
-	// State label suffix (for finishing/canceled/Abandoned)
+	// State label ("finishing"/"Abandoned") placed just after the glyph. These are
+	// rare, additive annotations — canceled/done/etc rows carry NO label (the
+	// glyph conveys the state), so they keep the fixed 6-wide glyph column and
+	// stay aligned with the header; only the rare labeled rows widen this prefix.
+	// A trailing space guarantees a gap before the label (no "Abandonedlabel").
 	glyphCell := " " + glyphStr + " "
 	if r.stateLabel == "Abandoned" {
 		warnSt := withBg(lipgloss.NewStyle().Foreground(p.Warning))
-		glyphCell = " " + glyphStr + " " + warnSt.Render(r.stateLabel)
+		glyphCell = " " + glyphStr + " " + warnSt.Render(r.stateLabel) + " "
 	} else if r.stateLabel != "" {
-		glyphCell = " " + glyphStr + " " + dimSt.Render(r.stateLabel)
+		glyphCell = " " + glyphStr + " " + dimSt.Render(r.stateLabel) + " "
 	}
 
 	sp2 := "  "

@@ -165,8 +165,10 @@ func TestDestroyTUI_EndToEnd(t *testing.T) {
 			PollInterval:   50 * time.Millisecond,
 		})
 		tm := tuitest.Run(t, m, 100, 30)
-		// The real HTTP polls must surface the command before it finishes.
-		tuitest.WaitForContains(t, tm, "cmd-e2e-destroy")
+		// The real HTTP polls must surface the command before it finishes. The ID
+		// column truncates to its content width (real ksuids are longer), so match
+		// a truncation-safe prefix rather than the full 15-char test ID.
+		tuitest.WaitForContains(t, tm, "cmd-e2e-dest")
 		// ExitWhenDone quits automatically once the poll reports Success.
 		tm.WaitFinished(t, teatest.WithFinalTimeout(5*time.Second))
 		return nil

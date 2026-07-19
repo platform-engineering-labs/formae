@@ -365,9 +365,9 @@ func (m Model) viewAck() string {
 		panelW = 24
 	}
 	panel := lipgloss.NewStyle().
-		Foreground(p.Border).
+		Foreground(p.TextPrimary). // description text: readable body color, not the border color
 		Border(lipgloss.NormalBorder()).
-		BorderForeground(p.Border).
+		BorderForeground(p.Border). // Border role (bumped to a visible shade in the palette)
 		Padding(0, 1).
 		Width(panelW - 2). // -2 for borders
 		Render(panelContent)

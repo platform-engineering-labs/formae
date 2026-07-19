@@ -55,11 +55,12 @@ func TestBuildGroups_AbandonedLabel(t *testing.T) {
 	}
 
 	assert.Equal(t, "Abandoned", aaaRow.stateLabel, "resource in abandoned set + Canceled state must get 'Abandoned' label")
-	assert.Equal(t, "canceled", bbbRow.stateLabel, "resource NOT in abandoned set + Canceled state must get 'canceled' label")
+	assert.Equal(t, "", bbbRow.stateLabel, "resource NOT in abandoned set gets no text label — the ⊘ glyph conveys canceled")
 }
 
 // TestBuildGroups_NonAbandonedCanceledLabel verifies that a Canceled resource
-// update with ResourceID NOT in the abandoned set still gets "canceled" label.
+// update with ResourceID NOT in the abandoned set gets NO text label — the ⊘
+// glyph conveys canceled; only force-canceled rows get the "Abandoned" label.
 func TestBuildGroups_NonAbandonedCanceledLabel(t *testing.T) {
 	c := apimodel.Command{
 		CommandID: "cmd-x",
@@ -79,7 +80,7 @@ func TestBuildGroups_NonAbandonedCanceledLabel(t *testing.T) {
 	if resGroup == nil {
 		t.Fatal("expected resource group")
 	}
-	assert.Equal(t, "canceled", resGroup.rows[0].stateLabel)
+	assert.Equal(t, "", resGroup.rows[0].stateLabel)
 }
 
 // TestBuildGroups_EmptyAbandonedSet verifies zero behavior change when set is empty.
@@ -128,9 +129,9 @@ func TestDetailModel_AbandonedLabel(t *testing.T) {
 	abandoned := map[string]bool{"ksuid-111": true}
 	dm = dm.SetCommand(c, r, "◉", now, abandoned)
 
-	v := plain(dm.View(40))
+	v := plain(dm.View(40, false))
 	assert.Contains(t, v, "Abandoned", "view must contain 'Abandoned' label for abandoned resource")
-	assert.Contains(t, v, "canceled", "view must also contain 'canceled' label for non-abandoned resource")
+	assert.Contains(t, v, "res-222", "non-abandoned canceled resource must still render (⊘ glyph, no text label)")
 }
 
 // TestDetailModel_FooterReminderWhenTerminalAbandoned verifies the reminder
@@ -152,7 +153,7 @@ func TestDetailModel_FooterReminderWhenTerminalAbandoned(t *testing.T) {
 	abandoned := map[string]bool{"ksuid-aaa": true, "ksuid-bbb": true}
 	dm = dm.SetCommand(c, r, "◉", now, abandoned)
 
-	v := plain(dm.View(40))
+	v := plain(dm.View(40, false))
 	assert.Contains(t, v, "in-progress updates were abandoned", "footer reminder must appear when terminal and abandoned rows exist")
 	assert.Contains(t, v, "Check the synchronizer", "footer reminder must contain synchronizer note")
 }
@@ -175,7 +176,7 @@ func TestDetailModel_FooterReminderAbsentWhenNotTerminal(t *testing.T) {
 	abandoned := map[string]bool{"ksuid-aaa": true}
 	dm = dm.SetCommand(c, r, "◉", now, abandoned)
 
-	v := plain(dm.View(40))
+	v := plain(dm.View(40, false))
 	assert.NotContains(t, v, "in-progress updates were abandoned", "footer reminder must NOT appear for non-terminal command")
 }
 
@@ -190,7 +191,7 @@ func TestDetailModel_FooterReminderAbsentWhenNoAbandoned(t *testing.T) {
 	now := time.Date(2026, 7, 17, 10, 0, 0, 0, time.UTC)
 	dm = dm.SetCommand(c, r, "◉", now, nil)
 
-	v := plain(dm.View(30))
+	v := plain(dm.View(30, false))
 	assert.NotContains(t, v, "in-progress updates were abandoned", "no footer reminder when abandoned set is empty")
 }
 
@@ -258,7 +259,7 @@ func TestDetailModel_GoldenAbandoned(t *testing.T) {
 	abandoned := map[string]bool{"ab-001": true, "ab-002": true}
 	dm = dm.SetCommand(c, r, "◉", now, abandoned)
 
-	tuitest.RequireGolden(t, []byte(dm.View(32)))
+	tuitest.RequireGolden(t, []byte(dm.View(32, false)))
 }
 
 // TestDetailModel_CancelStateLabelsPreserved verifies that the existing
@@ -279,7 +280,7 @@ func TestDetailModel_CancelStateLabelsPreserved(t *testing.T) {
 	now := time.Date(2026, 7, 17, 10, 0, 0, 0, time.UTC)
 	dm = dm.SetCommand(c, r, "◉", now, nil)
 
-	v := plain(dm.View(40))
+	v := plain(dm.View(40, false))
 	assert.Contains(t, v, "finishing", "in-progress row on canceling command must still show 'finishing'")
 	assert.Contains(t, v, "canceled", "canceled row must still show 'canceled'")
 	assert.NotContains(t, v, "Abandoned", "no Abandoned label without abandoned set")
@@ -304,7 +305,7 @@ func TestDetailModel_AbandonedCountInFooter(t *testing.T) {
 	abandoned := map[string]bool{"ab-1": true, "ab-2": true}
 	dm = dm.SetCommand(c, r, "◉", now, abandoned)
 
-	v := plain(dm.View(40))
+	v := plain(dm.View(40, false))
 	assert.Contains(t, v, "2 in-progress updates were abandoned", "count must be exact")
 }
 
@@ -318,7 +319,7 @@ func TestDetailModel_NilAbandonedSet(t *testing.T) {
 	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
 	// Must not panic
 	dm = dm.SetCommand(c, r, "◉", now, nil)
-	v := plain(dm.View(30))
+	v := plain(dm.View(30, false))
 	assert.Contains(t, v, "my-bucket")
 }
 

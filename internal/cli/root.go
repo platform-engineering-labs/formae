@@ -30,6 +30,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/profile"
 	"github.com/platform-engineering-labs/formae/internal/cli/project"
 	"github.com/platform-engineering-labs/formae/internal/cli/status"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/logo"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/platform-engineering-labs/formae/internal/cli/update"
 	"github.com/spf13/cobra"
@@ -252,6 +253,13 @@ func init() {
 }
 
 func Start() {
+	// Seed lipgloss's global background ONCE so AdaptiveColor resolves
+	// consistently without a per-render OSC-11 query. That query is flaky (it
+	// mis-detects as light after the banner's graphics probe, turning body text
+	// unreadable on dark backgrounds) and leaks escape codes into the shell.
+	// COLORFGBG when the terminal exports it, otherwise assume dark.
+	lipgloss.SetHasDarkBackground(logo.HasDarkBackground())
+
 	err := config.Config.EnsureConfigDirectory()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, lipgloss.NewStyle().Foreground(theme.New("formae").Palette.Error).Render("Error: "+err.Error()))

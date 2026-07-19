@@ -61,19 +61,20 @@ const (
 // so test code can override it and make Render deterministic in headless
 // environments.  The default implementation is safe to call in any context.
 //
-//nolint:gochecknoglobals
-var hasDarkBackground = func() bool {
-	// We deliberately do NOT call termenv.HasDarkBackground(): it emits an OSC 11
-	// background-color query plus a cursor-position (CPR) sentinel, and the reply
-	// is not reliably drained — the leftover bytes leak into the shell as literal
-	// text after the program exits (e.g. "…2c2c/3434;1R"). This happens under
-	// tmux/screen/ssh AND in some terminals (e.g. Kitty) directly.
-	//
-	// Instead, honor COLORFGBG when the terminal exports it (no query needed):
-	// it is "fg;bg" where the trailing field is the background color index; 7 and
-	// 15 are light. Everything else assumes dark (the safe, common default; the
-	// dark logo's white letters would vanish on a light background, but that only
-	// affects light terminals that don't export COLORFGBG).
+// HasDarkBackground reports whether the terminal background is dark WITHOUT
+// emitting a terminal query. termenv.HasDarkBackground() sends an OSC 11
+// background-color query plus a cursor-position (CPR) sentinel whose reply is
+// not reliably drained: the leftover bytes leak into the shell as literal text
+// (e.g. "…2c2c/3434;1R"), and the query also mis-detects — defaulting to LIGHT —
+// once the graphics probe has disturbed the terminal, which renders AdaptiveColor
+// body text unreadable (dark-on-dark).
+//
+// Instead we honor COLORFGBG when the terminal exports it ("fg;bg"; a trailing
+// field of 7 or 15 means a light background) and otherwise assume dark (the safe,
+// common default). Exported so the CLI can seed lipgloss's global AdaptiveColor
+// resolution once at startup (lipgloss.SetHasDarkBackground) rather than let it
+// run the flaky per-render OSC query.
+func HasDarkBackground() bool {
 	if fgbg := os.Getenv("COLORFGBG"); fgbg != "" {
 		parts := strings.Split(fgbg, ";")
 		if bg := parts[len(parts)-1]; bg == "7" || bg == "15" {
@@ -82,6 +83,12 @@ var hasDarkBackground = func() bool {
 	}
 	return true
 }
+
+// hasDarkBackground is a seam for tests; it defaults to HasDarkBackground so
+// test code can override background detection deterministically.
+//
+//nolint:gochecknoglobals
+var hasDarkBackground = HasDarkBackground
 
 // encodeKittyFn and encodeITerm2Fn are seams for the graphics encoders so
 // tests can force the empty-return (error) path and verify the fallback chain.

@@ -245,10 +245,12 @@ func TestModel_HidesInternalCommands(t *testing.T) {
 	assert.Contains(t, view, "apply-cmd-id", "user apply command must remain visible")
 }
 
-// TestModel_DetailView_QueryBarVisible verifies that the query bar is rendered
-// in the detail view after pressing '/'. The user must be able to see and edit
-// their query text — pressing '/' and typing chars must produce visible output.
-func TestModel_DetailView_QueryBarVisible(t *testing.T) {
+// TestModel_DetailView_NoQueryBar verifies that the query bar is NOT shown in
+// the detail view: the user is focused on a single command, so filtering lives
+// in the list view. '/' is inert in detail (it must not focus the query bar),
+// and the query bar / "edit query" chrome is absent, while the view still fills
+// the terminal and anchors its footer.
+func TestModel_DetailView_NoQueryBar(t *testing.T) {
 	m, _ := newTestModel(t, nil)
 	var mm tea.Model = m
 	const height = 24
@@ -259,25 +261,19 @@ func TestModel_DetailView_QueryBarVisible(t *testing.T) {
 	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	require.Equal(t, viewDetail, mm.(Model).view, "must be in detail view")
 
-	// Focus the query bar with '/'
+	// '/' must NOT focus the query bar in the detail view (filtering is list-only).
 	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
-	require.True(t, mm.(Model).query.Focused(), "query bar must be focused after '/'")
-
-	// Type "abc"
-	for _, ch := range "abc" {
-		mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
-	}
+	require.False(t, mm.(Model).query.Focused(), "query bar must not be focused by '/' in detail view")
 
 	view := mm.(Model).View()
 	out := plain(view)
 	lines := strings.Split(view, "\n")
 
-	// The query bar edit text and cursor must be visible in the rendered output.
-	assert.Contains(t, out, "/ abc", "query bar edit text must be visible in detail view")
-	assert.Contains(t, view, "█", "cursor block must be visible in detail view")
+	// The query bar's "edit query" hint must not appear in the detail view.
+	assert.NotContains(t, out, "edit query", "query bar must be hidden in the detail view")
 
 	// The view must still fill exactly height lines.
-	assert.Equal(t, height, len(lines), "detail view with query bar must fill exactly height lines")
+	assert.Equal(t, height, len(lines), "detail view must fill exactly height lines")
 
 	// The footer content must appear on the last 2 lines.
 	footerText := "esc"
