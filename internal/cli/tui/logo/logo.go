@@ -8,6 +8,7 @@ package logo
 
 import (
 	_ "embed"
+	"fmt"
 	"os"
 	"strings"
 
@@ -70,13 +71,13 @@ var hasDarkBackground = func() bool {
 // tests can force the empty-return (error) path and verify the fallback chain.
 //
 //nolint:gochecknoglobals
-var encodeKittyFn = func(dark bool, version string) string {
-	return encodeKitty(dark, version)
+var encodeKittyFn = func(dark bool, cols int) string {
+	return encodeKitty(dark, cols)
 }
 
 //nolint:gochecknoglobals
-var encodeITerm2Fn = func(dark bool, version string) string {
-	return encodeITerm2(dark, version)
+var encodeITerm2Fn = func(dark bool, cols int) string {
+	return encodeITerm2(dark, cols)
 }
 
 //go:embed assets/Formae_Logo_dark.png
@@ -111,6 +112,16 @@ func wordmarkStyle(version string) string {
 	return lipgloss.NewStyle().MarginLeft(2).Render(block)
 }
 
+// wordmarkLines returns the two raw ANSI-styled lines used for graphics
+// text-right composition: nameLine ("formae" in white) and verLine
+// ("v{version}" in brand orange). These are plain strings with ANSI color
+// codes, suitable for direct terminal output via CHA positioning.
+func wordmarkLines(version string) (nameLine, verLine string) {
+	nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF"))
+	versionStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(brandOrange))
+	return nameStyle.Render("formae"), versionStyle.Render("v" + version)
+}
+
 // Render produces the logo art string and the number of terminal rows it
 // occupies, based on the detected terminal capability and the requested size.
 //
@@ -120,12 +131,13 @@ func wordmarkStyle(version string) string {
 //   - SizeCompact → braille ALWAYS, even for CapKitty/CapITerm2.
 //     Graphics protocols do not survive bubbletea alt-screen repaints;
 //     the compact in-TUI header must use braille only (coexistence rule).
-//   - SizeFull + CapKitty → Kitty APC graphics escape.
-//   - SizeFull + CapITerm2 → iTerm2 inline-image escape.
+//   - SizeFull + CapKitty → Kitty APC graphics escape (C=1) + selectable
+//     terminal text to the right, positioned with CHA (\x1b[<N>G).
+//   - SizeFull + CapITerm2 → iTerm2 inline-image escape + wordmark below.
 //   - SizeFull + CapBraille → braille art at full width.
 //
 // rows counts terminal lines consumed: braille = newlines+1; text = 1;
-// graphics = the pixel height divided by pixelsPerCell (see graphics.go).
+// graphics = graphicsImageRows (calibrated constant).
 func Render(cap Capability, size Size, version string) (art string, rows int) {
 	// SizeNone: suppress unconditionally.
 	if size == SizeNone {
@@ -153,11 +165,20 @@ func Render(cap Capability, size Size, version string) (art string, rows int) {
 	// we degrade gracefully: graphics → braille → text (never an empty string).
 	switch cap {
 	case CapKitty:
-		// Wordmark is composited INTO the image — no terminal-text wordmark appended.
-		art = encodeKittyFn(dark, version)
-		if art != "" {
-			rows = logoPx/16 + 1
-			return art, rows
+		// Kitty path: C=1 keeps cursor at image top-left; we then write
+		// selectable terminal text to the right using CHA (\x1b[<N>G).
+		img := encodeKittyFn(dark, graphicsFullCols)
+		if img != "" {
+			nameLine, verLine := wordmarkLines(version)
+			var b strings.Builder
+			b.WriteString(img)
+			// "formae" on the image's top row at absolute column graphicsTextCol (1-based CHA).
+			fmt.Fprintf(&b, "\x1b[%dG%s", graphicsTextCol, nameLine)
+			// version one row down, same column.
+			fmt.Fprintf(&b, "\r\x1b[1B\x1b[%dG%s", graphicsTextCol, verLine)
+			// Move cursor below the image so following output doesn't overlap it.
+			fmt.Fprintf(&b, "\r\x1b[%dB", graphicsImageRows-1)
+			return b.String(), graphicsImageRows
 		}
 		// Fall through to braille on encoder failure.
 		art = renderBraille(dark, brailleWidthFull)
@@ -169,11 +190,13 @@ func Render(cap Capability, size Size, version string) (art string, rows int) {
 		}
 		return "formae v" + version, 1
 	case CapITerm2:
-		// Wordmark is composited INTO the image — no terminal-text wordmark appended.
-		art = encodeITerm2Fn(dark, version)
-		if art != "" {
-			rows = logoPx/16 + 1
-			return art, rows
+		// iTerm2 does not support C=1; wordmark is placed BELOW the image.
+		// (Text-right composition for iTerm2 is a separate tuning effort.)
+		img := encodeITerm2Fn(dark, graphicsFullCols)
+		if img != "" {
+			nameLine, verLine := wordmarkLines(version)
+			art = img + "\n" + nameLine + "\n" + verLine
+			return art, graphicsImageRows
 		}
 		// Fall through to braille on encoder failure.
 		art = renderBraille(dark, brailleWidthFull)

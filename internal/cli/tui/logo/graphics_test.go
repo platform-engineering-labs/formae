@@ -16,82 +16,98 @@ import (
 
 func TestEncodeKitty_Golden(t *testing.T) {
 	t.Parallel()
-	out := encodeKitty(true, "0.87.0")
+	out := encodeKitty(true, graphicsFullCols)
 	tuitest.RequireGolden(t, []byte(out))
 }
 
 func TestEncodeITerm2_Golden(t *testing.T) {
 	t.Parallel()
-	out := encodeITerm2(true, "0.87.0")
+	out := encodeITerm2(true, graphicsFullCols)
 	tuitest.RequireGolden(t, []byte(out))
 }
 
-// TestBuildBannerImage asserts that the composite image is wider than the
-// propeller alone (proving text was appended) and at least logoPx tall.
-func TestBuildBannerImage(t *testing.T) {
+// TestRender_KittyTextRight asserts that SizeFull + CapKitty output:
+//   - contains the C=1 Kitty graphics escape
+//   - contains CHA positioning (\x1b[<N>G) for "formae"
+//   - contains a relative row-down move (\x1b[1B) for the version line
+//   - contains a trailing cursor-below move (\x1b[<n>B)
+//   - does NOT composite text into an image (no buildBannerImage)
+func TestRender_KittyTextRight(t *testing.T) {
 	t.Parallel()
 
-	img, err := buildBannerImage(true, "0.87.0")
-	if err != nil {
-		t.Fatalf("buildBannerImage: %v", err)
+	// Override hasDarkBackground for determinism.
+	orig := hasDarkBackground
+	hasDarkBackground = func() bool { return true }
+	defer func() { hasDarkBackground = orig }()
+
+	art, rows := Render(CapKitty, SizeFull, "1.2.3")
+
+	// Must contain the Kitty APC escape with C=1.
+	if !strings.Contains(art, "\033_G") {
+		t.Error("expected Kitty APC escape in output")
 	}
-	if img == nil {
-		t.Fatal("buildBannerImage returned nil image")
+	if !strings.Contains(art, "C=1") {
+		t.Error("expected C=1 in Kitty escape (cursor-no-advance)")
 	}
 
-	bounds := img.Bounds()
-	if bounds.Dy() < logoPx {
-		t.Errorf("image height %d < logoPx %d", bounds.Dy(), logoPx)
+	// Must contain CHA positioning for "formae" text.
+	chaCol := "\x1b[8G"
+	if !strings.Contains(art, chaCol) {
+		t.Errorf("expected CHA escape %q (col %d) in output; got: %q", chaCol, graphicsTextCol, art[:min(len(art), 300)])
 	}
 
-	// Propeller-only width: scale cropW to logoPx height (match buildBannerImage math).
-	// Use a runtime variable to avoid constant-expression truncation error.
-	logoH := logoPx
-	propW := int(float64(logoH) * float64(cropW) / float64(cropH))
-	if bounds.Dx() <= propW {
-		t.Errorf("image width %d <= propeller-only width %d; text was not appended", bounds.Dx(), propW)
+	// Must contain "formae" as selectable terminal text.
+	if !strings.Contains(art, "formae") {
+		t.Error("expected 'formae' as selectable text in Kitty output")
+	}
+
+	// Must contain "v1.2.3" as selectable terminal text.
+	if !strings.Contains(art, "v1.2.3") {
+		t.Error("expected 'v1.2.3' as selectable text in Kitty output")
+	}
+
+	// Must contain relative row-down escape for version line.
+	if !strings.Contains(art, "\x1b[1B") {
+		t.Error("expected row-down escape \\x1b[1B in Kitty output")
+	}
+
+	// Must contain trailing cursor-below move (graphicsImageRows-1 rows down).
+	trailingMove := "\x1b[2B" // graphicsImageRows-1 = 3-1 = 2
+	if !strings.Contains(art, trailingMove) {
+		t.Errorf("expected trailing cursor-below escape %q in Kitty output", trailingMove)
+	}
+
+	// rows must equal graphicsImageRows.
+	if rows != graphicsImageRows {
+		t.Errorf("expected rows=%d (graphicsImageRows), got %d", graphicsImageRows, rows)
 	}
 }
 
-// TestRender_GraphicsNoTerminalWordmark asserts that Kitty and iTerm2 outputs
-// are single graphics escapes with NO trailing terminal-text wordmark.
-func TestRender_GraphicsNoTerminalWordmark(t *testing.T) {
+// TestRender_ITerm2TextBelowIntegration asserts that SizeFull + CapITerm2 output
+// (with the real encoder) contains the iTerm2 inline-image escape and
+// "formae" / "v{version}" as terminal text AFTER the image escape.
+func TestRender_ITerm2TextBelowIntegration(t *testing.T) {
 	t.Parallel()
 
-	for _, tc := range []struct {
-		name string
-		cap  Capability
-		esc  string
-	}{
-		{"Kitty", CapKitty, "\x1b_G"},
-		{"ITerm2", CapITerm2, "\x1b]1337"},
-	} {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			art, _ := Render(tc.cap, SizeFull, "1.2.3")
+	orig := hasDarkBackground
+	hasDarkBackground = func() bool { return true }
+	defer func() { hasDarkBackground = orig }()
 
-			// Must contain the graphics escape.
-			if !strings.Contains(art, tc.esc) {
-				t.Errorf("expected %s escape in output, not found", tc.name)
-			}
+	art, _ := Render(CapITerm2, SizeFull, "1.2.3")
 
-			// Must NOT contain terminal ANSI color for "formae" or "v1.2.3" as text.
-			const whiteAnsi = "\x1b[38;2;255;255;255m"
-			if strings.Contains(art, whiteAnsi+"formae") {
-				t.Errorf("%s output contains terminal-text 'formae' with ANSI color (wordmark must be in image, not terminal text)", tc.name)
-			}
-			// Also check the raw text (without ANSI) does not appear after the escape sequence.
-			// The image escape ends at \a or \\; text after that would be terminal wordmark.
-			afterEsc := art
-			if idx := strings.LastIndex(art, "\033\\"); idx >= 0 {
-				afterEsc = art[idx+2:]
-			} else if idx := strings.LastIndex(art, "\a"); idx >= 0 {
-				afterEsc = art[idx+1:]
-			}
-			if strings.Contains(afterEsc, "formae") {
-				t.Errorf("%s output has terminal-text 'formae' after the image escape; expected wordmark composited into image only", tc.name)
-			}
-		})
+	if !strings.Contains(art, "\x1b]1337") {
+		t.Error("expected iTerm2 OSC 1337 escape in output")
+	}
+
+	// Text should appear after the image escape (text-below for iTerm2).
+	afterEsc := art
+	if idx := strings.LastIndex(art, "\a"); idx >= 0 {
+		afterEsc = art[idx+1:]
+	}
+	if !strings.Contains(afterEsc, "formae") {
+		t.Error("expected 'formae' as terminal text below the iTerm2 image")
+	}
+	if !strings.Contains(afterEsc, "v1.2.3") {
+		t.Error("expected 'v1.2.3' as terminal text below the iTerm2 image")
 	}
 }

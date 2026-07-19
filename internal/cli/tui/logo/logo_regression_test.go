@@ -28,7 +28,7 @@ func hasBrailleRune(s string) bool {
 // Note: NOT parallel — mutates the package-level encodeKittyFn seam.
 func TestRender_KittyFallbackToBraille(t *testing.T) {
 	origKitty := encodeKittyFn
-	encodeKittyFn = func(_ bool, _ string) string { return "" }
+	encodeKittyFn = func(_ bool, _ int) string { return "" }
 	t.Cleanup(func() { encodeKittyFn = origKitty })
 
 	art, rows := Render(CapKitty, SizeFull, "1.2.3")
@@ -49,7 +49,7 @@ func TestRender_KittyFallbackToBraille(t *testing.T) {
 // Note: NOT parallel — mutates the package-level encodeITerm2Fn seam.
 func TestRender_ITerm2FallbackToBraille(t *testing.T) {
 	origITerm2 := encodeITerm2Fn
-	encodeITerm2Fn = func(_ bool, _ string) string { return "" }
+	encodeITerm2Fn = func(_ bool, _ int) string { return "" }
 	t.Cleanup(func() { encodeITerm2Fn = origITerm2 })
 
 	art, rows := Render(CapITerm2, SizeFull, "1.2.3")
@@ -65,13 +65,13 @@ func TestRender_ITerm2FallbackToBraille(t *testing.T) {
 	}
 }
 
-// TestRender_KittyGraphicsNoTerminalWordmark asserts that Render(CapKitty, SizeFull, …)
-// returns ONLY the image escape — no trailing terminal-text wordmark — because the
-// wordmark is now composited into the image itself.
+// TestRender_KittyTextRightComposition stubs encodeKittyFn to return a
+// synthetic image escape and asserts that Render(CapKitty, SizeFull, …)
+// composes selectable terminal text to the right using CHA positioning.
 // Note: NOT parallel — mutates the package-level encodeKittyFn seam.
-func TestRender_KittyGraphicsNoTerminalWordmark(t *testing.T) {
+func TestRender_KittyTextRightComposition(t *testing.T) {
 	origKitty := encodeKittyFn
-	encodeKittyFn = func(_ bool, _ string) string { return "\x1b_Ga=T,f=100,m=0;AAAA\x1b\\" }
+	encodeKittyFn = func(_ bool, _ int) string { return "\x1b_Ga=T,f=100,C=1,m=0;AAAA\x1b\\" }
 	t.Cleanup(func() { encodeKittyFn = origKitty })
 
 	art, rows := Render(CapKitty, SizeFull, "1.2.3")
@@ -80,35 +80,37 @@ func TestRender_KittyGraphicsNoTerminalWordmark(t *testing.T) {
 		t.Fatal("Render(CapKitty, SizeFull) returned empty string")
 	}
 
-	// The output must be exactly the image escape — no terminal-text wordmark.
-	if strings.Contains(art, "formae") {
-		t.Error("Kitty graphics art contains terminal-text 'formae' — wordmark must be composited into image, not terminal text")
-	}
-	if strings.Contains(art, "v1.2.3") {
-		t.Error("Kitty graphics art contains terminal-text 'v1.2.3' — wordmark must be composited into image, not terminal text")
+	// Must contain the C=1 image escape.
+	if !strings.Contains(art, "C=1") {
+		t.Error("Kitty output missing C=1 in image escape")
 	}
 
-	// No cursor-positioning escapes must be present.
-	if strings.Contains(art, "\x1b7") {
-		t.Error("Kitty graphics art contains DEC save cursor (ESC 7) — must not use cursor escapes")
-	}
-	if strings.Contains(art, "\x1b8") {
-		t.Error("Kitty graphics art contains DEC restore cursor (ESC 8) — must not use cursor escapes")
+	// Must contain CHA positioning for wordmark.
+	if !strings.Contains(art, "\x1b[8G") {
+		t.Errorf("Kitty output missing CHA positioning \\x1b[8G (graphicsTextCol=%d)", graphicsTextCol)
 	}
 
-	// rows must be positive.
-	if rows <= 0 {
-		t.Errorf("expected rows>0, got %d", rows)
+	// Must contain selectable terminal text for "formae" and "v1.2.3".
+	if !strings.Contains(art, "formae") {
+		t.Error("Kitty output missing selectable 'formae' text")
+	}
+	if !strings.Contains(art, "v1.2.3") {
+		t.Error("Kitty output missing selectable 'v1.2.3' text")
+	}
+
+	// rows must equal graphicsImageRows.
+	if rows != graphicsImageRows {
+		t.Errorf("expected rows=%d, got %d", graphicsImageRows, rows)
 	}
 }
 
-// TestRender_ITerm2GraphicsNoTerminalWordmark asserts that Render(CapITerm2, SizeFull, …)
-// returns ONLY the image escape — no trailing terminal-text wordmark — because the
-// wordmark is now composited into the image itself.
+// TestRender_ITerm2TextBelow stubs encodeITerm2Fn to return a synthetic
+// image escape and asserts that Render(CapITerm2, SizeFull, …) places
+// selectable terminal text BELOW the image (iTerm2 has no C=1).
 // Note: NOT parallel — mutates the package-level encodeITerm2Fn seam.
-func TestRender_ITerm2GraphicsNoTerminalWordmark(t *testing.T) {
+func TestRender_ITerm2TextBelow(t *testing.T) {
 	origITerm2 := encodeITerm2Fn
-	encodeITerm2Fn = func(_ bool, _ string) string {
+	encodeITerm2Fn = func(_ bool, _ int) string {
 		return "\x1b]1337;File=inline=1;size=4:AAAA\a"
 	}
 	t.Cleanup(func() { encodeITerm2Fn = origITerm2 })
@@ -119,17 +121,16 @@ func TestRender_ITerm2GraphicsNoTerminalWordmark(t *testing.T) {
 		t.Fatal("Render(CapITerm2, SizeFull) returned empty string")
 	}
 
-	// The output must be exactly the image escape — no terminal-text wordmark.
-	if strings.Contains(art, "formae") {
-		t.Error("iTerm2 graphics art contains terminal-text 'formae' — wordmark must be composited into image, not terminal text")
+	// Text should appear after the image escape (below the image).
+	afterEsc := art
+	if idx := strings.LastIndex(art, "\a"); idx >= 0 {
+		afterEsc = art[idx+1:]
 	}
-	if strings.Contains(art, "v2.0.0") {
-		t.Error("iTerm2 graphics art contains terminal-text 'v2.0.0' — wordmark must be composited into image, not terminal text")
+	if !strings.Contains(afterEsc, "formae") {
+		t.Error("iTerm2 output missing selectable 'formae' text below image")
 	}
-
-	// DEC save/restore must NOT be present for iTerm2.
-	if strings.Contains(art, "\x1b7") {
-		t.Error("iTerm2 graphics art contains DEC save cursor (ESC 7) — unexpected")
+	if !strings.Contains(afterEsc, "v2.0.0") {
+		t.Error("iTerm2 output missing selectable 'v2.0.0' text below image")
 	}
 
 	if rows <= 0 {
