@@ -420,16 +420,16 @@ func (m Model) delegateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // chromeLines is the number of lines consumed by fixed chrome at full width (≥80):
 //
-//	HeaderBar (2) + tab bar (2) + status line (1) + query bar (2) + FooterBar (2) = 9.
-const chromeLines = 9
+//	HeaderBar (2) + tab bar (3) + blank (1) + status line (1) + query bar (2) + FooterBar (2) = 11.
+const chromeLines = 11
 
 // narrowChromeLines is the chrome line count at narrow width (< narrowFooterThreshold):
 //
-//	HeaderBar (2) + tab bar (2) + query bar (2) + FooterBar (2) = 8.
+//	HeaderBar (2) + tab bar (3) + blank (1) + query bar (2) + FooterBar (2) = 10.
 //
 // The standalone status line is dropped; its content is folded into the
 // FooterBar hint line as a single combined dim string.
-const narrowChromeLines = 8
+const narrowChromeLines = 10
 
 // bodyHeight returns the number of lines available for the tab body region
 // (the table). The query bar is fixed chrome, not part of the body budget.
@@ -569,7 +569,8 @@ func (m Model) View() string {
 	// Assemble bottom chrome. Wide: status line + query bar + footer. Narrow:
 	// query bar + footer (the count is folded into the narrow footer).
 	var parts []string
-	parts = append(parts, header, tabBar)
+	// Blank line between the tab bar and the table for breathing room.
+	parts = append(parts, header, tabBar, "")
 	parts = append(parts, bodyLines...)
 	if !narrow {
 		statusLine := components.Truncate(m.tabs[m.active].statusLine(m.opts.MaxRows), m.width)
@@ -615,60 +616,80 @@ func (m Model) viewHelp() string {
 	return strings.Join(lines, "\n")
 }
 
-// tabBarLines is the height of the tab bar: a top-border row plus the label row
-// (the active tab is drawn as an open-bottom box, so its top border floats above
-// the labels).
-const tabBarLines = 2
-
 // renderTabBar renders the tab-selection bar as numbered tabs, e.g.
 // " 1 Resources   2 Targets   3 Stacks   4 Policies". The active tab is drawn as
-// an open-bottom box (top + side borders in the accent color) so it reads as an
-// actual tab; inactive tabs are dim labels. The leading numbers double as the
-// 1-4 switch hints. Returns exactly tabBarLines lines, each padded to width.
+// an open-bottom box (top + side borders in the accent color); the third row is
+// an accent baseline that spans the full width with a gap under the active box,
+// so the line continues to the right edge beneath the inactive tabs. The leading
+// numbers double as the 1-4 switch hints. Returns exactly three lines.
 func (m Model) renderTabBar() string {
 	titles := [4]string{"Resources", "Targets", "Stacks", "Policies"}
 
-	cells := make([]string, len(titles))
+	borderSt := lipgloss.NewStyle()
+	activeSt := lipgloss.NewStyle()
+	dimSt := lipgloss.NewStyle()
+	if m.th != nil {
+		borderSt = lipgloss.NewStyle().Foreground(m.th.Palette.PrimaryAccent)
+		activeSt = lipgloss.NewStyle().Foreground(m.th.Palette.PrimaryAccent).Bold(true)
+		dimSt = lipgloss.NewStyle().Foreground(m.th.Palette.TextSecondary)
+	}
+
+	var top, mid strings.Builder
+	col := 0
+	aStart, aWidth := -1, 0 // active box span (incl. side borders), in visual columns
+
+	top.WriteString(" ")
+	mid.WriteString(" ")
+	col++
 	for i, title := range titles {
+		if i > 0 {
+			top.WriteString("  ")
+			mid.WriteString("  ")
+			col += 2
+		}
 		label := " " + string(rune('1'+i)) + " " + title + " "
+		lw := len([]rune(label))
+		if Tab(i) == m.active {
+			aStart, aWidth = col, lw+2
+			top.WriteString(borderSt.Render("╭" + strings.Repeat("─", lw) + "╮"))
+			mid.WriteString(borderSt.Render("│") + activeSt.Render(label) + borderSt.Render("│"))
+			col += aWidth
+		} else {
+			top.WriteString(strings.Repeat(" ", lw))
+			mid.WriteString(dimSt.Render(label))
+			col += lw
+		}
+	}
+
+	// Baseline: accent rule across the full width. Under the active box it curves
+	// up into the box's side borders (╯ … ╰) with an open gap between, so the tab
+	// sits on the line and the rule continues to the right edge under the others.
+	leftCol, rightCol := aStart, aStart+aWidth-1
+	var base strings.Builder
+	for c := 0; c < m.width; c++ {
 		switch {
-		case m.th == nil:
-			cells[i] = "\n" + label // keep two rows so JoinHorizontal aligns
-		case Tab(i) == m.active:
-			// Open-bottom box: top + left + right borders, no bottom.
-			cells[i] = lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder(), true, true, false, true).
-				BorderForeground(m.th.Palette.PrimaryAccent).
-				Foreground(m.th.Palette.PrimaryAccent).
-				Bold(true).
-				Render(label)
+		case aStart < 0:
+			base.WriteString("─")
+		case c == leftCol:
+			base.WriteString("╯")
+		case c == rightCol:
+			base.WriteString("╰")
+		case c > leftCol && c < rightCol:
+			base.WriteString(" ")
 		default:
-			// Plain label on the lower row (blank border row above) so it lines up
-			// with the active tab's label row.
-			cells[i] = "\n" + lipgloss.NewStyle().
-				Foreground(m.th.Palette.TextSecondary).
-				Render(" "+label+" ")
+			base.WriteString("─")
 		}
 	}
 
-	bar := lipgloss.JoinHorizontal(lipgloss.Bottom, cells...)
-
-	// Pad each of the two rows to full width (ANSI-aware truncation for narrow
-	// terminals so a styled/bordered cell can't leak a broken escape).
-	rows := strings.Split(bar, "\n")
-	for len(rows) < tabBarLines {
-		rows = append([]string{""}, rows...)
-	}
-	for i, r := range rows {
-		w := lipgloss.Width(r)
-		switch {
-		case w < m.width:
-			rows[i] = r + strings.Repeat(" ", m.width-w)
-		case w > m.width:
-			rows[i] = ansi.Truncate(r, m.width, "")
+	pad := func(s string) string {
+		if w := lipgloss.Width(s); w < m.width {
+			return s + strings.Repeat(" ", m.width-w)
+		} else if w > m.width {
+			return ansi.Truncate(s, m.width, "")
 		}
+		return s
 	}
-	return strings.Join(rows[:tabBarLines], "\n")
+	return pad(top.String()) + "\n" + pad(mid.String()) + "\n" + borderSt.Render(base.String())
 }
 
 // inventoryHelpGroups returns the grouped keybinding hints for the help overlay.
