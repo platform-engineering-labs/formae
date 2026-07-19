@@ -69,12 +69,22 @@ const (
 // once the graphics probe has disturbed the terminal, which renders AdaptiveColor
 // body text unreadable (dark-on-dark).
 //
-// Instead we honor COLORFGBG when the terminal exports it ("fg;bg"; a trailing
-// field of 7 or 15 means a light background) and otherwise assume dark (the safe,
-// common default). Exported so the CLI can seed lipgloss's global AdaptiveColor
-// resolution once at startup (lipgloss.SetHasDarkBackground) rather than let it
-// run the flaky per-render OSC query.
+// Detection order (all leak-free — no terminal query):
+//  1. FORMAE_APPEARANCE=light|dark — explicit user override (escape hatch).
+//  2. COLORFGBG when the terminal exports it ("fg;bg"; a trailing field of 7 or
+//     15 means a light background).
+//  3. Otherwise assume dark (the safe, common default).
+//
+// Exported so the CLI can seed lipgloss's global AdaptiveColor resolution once at
+// startup (lipgloss.SetHasDarkBackground) rather than let it run the flaky
+// per-render OSC query.
 func HasDarkBackground() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("FORMAE_APPEARANCE"))) {
+	case "light":
+		return false
+	case "dark":
+		return true
+	}
 	if fgbg := os.Getenv("COLORFGBG"); fgbg != "" {
 		parts := strings.Split(fgbg, ";")
 		if bg := parts[len(parts)-1]; bg == "7" || bg == "15" {
@@ -89,6 +99,20 @@ func HasDarkBackground() bool {
 //
 //nolint:gochecknoglobals
 var hasDarkBackground = HasDarkBackground
+
+// MiniPropellerWidth is the braille-column width of the compact header icon.
+const MiniPropellerWidth = 4
+
+// MiniPropeller returns the formae propeller as a compact two-row braille icon
+// (brand orange) for embedding in a header/title bar. Always returns exactly two
+// rows, each MiniPropellerWidth braille columns wide.
+func MiniPropeller() []string {
+	rows := strings.Split(renderBraille(hasDarkBackground(), MiniPropellerWidth), "\n")
+	for len(rows) < 2 {
+		rows = append(rows, strings.Repeat(" ", MiniPropellerWidth))
+	}
+	return rows[:2]
+}
 
 // encodeKittyFn and encodeITerm2Fn are seams for the graphics encoders so
 // tests can force the empty-return (error) path and verify the fallback chain.

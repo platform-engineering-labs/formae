@@ -81,6 +81,44 @@ func HeaderBar(th *theme.Theme, left, right string, width int) string {
 		Render(content)
 }
 
+// VersionLabel formats a version string for header display: "" stays empty,
+// otherwise it is prefixed with "v" (unless already prefixed).
+func VersionLabel(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" || strings.HasPrefix(v, "v") {
+		return v
+	}
+	return "v" + v
+}
+
+// HeaderBarWithLogo renders the top bar with a two-row brand icon on the left.
+// Row 1 carries the icon's top, the bold title, and the right-aligned status;
+// row 2 carries the icon's bottom, the dim version, and the bottom border filling
+// the remaining width. logoRow1/logoRow2 are pre-styled and assumed equal width.
+func HeaderBarWithLogo(th *theme.Theme, left, right, version string, width int, logoRow1, logoRow2 string) string {
+	p := th.Palette
+	title := lipgloss.NewStyle().Foreground(p.TextPrimary).Bold(true).Render(left)
+
+	l1 := logoRow1 + " " + title
+	r1 := ""
+	if right != "" {
+		r1 = right + "  "
+	}
+	line1 := l1 + PadBetween(width, l1, r1) + r1
+
+	l2 := logoRow2 + " "
+	if version != "" {
+		l2 += lipgloss.NewStyle().Foreground(p.TextSubtle).Render(version) + " "
+	}
+	borderLen := width - lipgloss.Width(l2)
+	if borderLen < 0 {
+		borderLen = 0
+	}
+	line2 := l2 + lipgloss.NewStyle().Foreground(p.Border).Render(strings.Repeat("─", borderLen))
+
+	return line1 + "\n" + line2
+}
+
 // FooterBarNarrow renders the bottom bar for narrow terminals: a single
 // dim-styled content string with a top border and no "?: help" suffix.
 // The content is rendered using the KeybindingDesc (TextSubtle) role.

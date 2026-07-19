@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/platform-engineering-labs/formae"
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
 	"github.com/platform-engineering-labs/formae/internal/cli/banner"
 	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
@@ -159,6 +160,7 @@ func launchStatusTUI(a *app.App, opts *StatusOptions) error {
 	swOpts := statuswatch.Options{
 		Query:      opts.Query,
 		MaxResults: opts.MaxResults,
+		Version:    formae.Version,
 	}
 	// If the query targets a single command by exact id (e.g. `status command
 	// --query 'id:<ksuid>'`), drill straight into its detail view instead of

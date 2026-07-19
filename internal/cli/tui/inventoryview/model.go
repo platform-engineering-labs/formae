@@ -16,6 +16,7 @@ import (
 
 	tui "github.com/platform-engineering-labs/formae/internal/cli/tui"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/logo"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 )
 
@@ -205,6 +206,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case key.Matches(msg, m.keys.Quit):
+		return m, tea.Quit
+
+	// The inventory list is the top level, so esc quits (in the detail screen
+	// esc goes back to the list). Consistent with the other TUIs.
+	case msg.Type == tea.KeyEsc:
 		return m, tea.Quit
 
 	case msg.Type == tea.KeyTab:
@@ -563,7 +569,8 @@ func (m Model) View() string {
 		return m.viewDetail()
 	}
 
-	header := components.HeaderBar(m.th, "formae inventory", "", m.width)
+	prop := logo.MiniPropeller()
+	header := components.HeaderBarWithLogo(m.th, "formae inventory", "", components.VersionLabel(m.opts.Version), m.width, prop[0], prop[1])
 	tabBar := m.renderTabBar()
 
 	narrow := m.width < narrowFooterThreshold

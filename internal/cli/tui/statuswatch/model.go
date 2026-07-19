@@ -15,6 +15,7 @@ import (
 
 	tui "github.com/platform-engineering-labs/formae/internal/cli/tui"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/logo"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 )
 
@@ -25,6 +26,8 @@ type Options struct {
 	Query string
 	// MaxResults is the page size passed to the API.
 	MaxResults int
+	// Version is the formae version shown in the header banner.
+	Version string
 	// PollInterval controls how often the API is polled; default 2s.
 	PollInterval time.Duration
 	// Now is an injectable clock used for duration/age rendering; default time.Now.
@@ -307,6 +310,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, m.keys.Quit):
 		return m, tea.Quit
 
+	// The command list is the top level, so esc quits (in the detail view esc
+	// goes back to the list). Consistent with the other TUIs.
+	case msg.Type == tea.KeyEsc:
+		return m, tea.Quit
+
 	case key.Matches(msg, m.keys.Search):
 		m.query = m.query.Focus()
 		return m, nil
@@ -482,7 +490,8 @@ func (m Model) View() string {
 		return strings.Join(lines, "\n")
 	}
 
-	header := components.HeaderBar(m.th, "formae status command", right, m.width)
+	prop := logo.MiniPropeller()
+	header := components.HeaderBarWithLogo(m.th, "formae status command", right, components.VersionLabel(m.opts.Version), m.width, prop[0], prop[1])
 
 	visible := m.height - chromeLines
 	if visible < 0 {

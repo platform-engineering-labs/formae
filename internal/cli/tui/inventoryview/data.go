@@ -43,6 +43,7 @@ type Client interface {
 type Options struct {
 	FocusTab Tab
 	Query    string // server-side; applies to FocusTab only (D3)
+	Version  string // formae version shown in the header banner
 	MaxRows  int    // display cap after filtering (D5/D8); 0 = unlimited
 	Now      func() time.Time
 }

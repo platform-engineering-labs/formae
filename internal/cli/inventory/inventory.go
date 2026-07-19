@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/platform-engineering-labs/formae"
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
 	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
 	"github.com/platform-engineering-labs/formae/internal/cli/config"
@@ -44,6 +45,7 @@ var (
 			Query:    opts.Query,
 			MaxRows:  maxRows,
 			Now:      time.Now,
+			Version:  formae.Version,
 		})
 		finalModel, err := tui.Run(model, tui.DefaultRunOptions())
 		if err != nil {

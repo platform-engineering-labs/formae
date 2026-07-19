@@ -99,3 +99,18 @@ func TestChrome_Golden(t *testing.T) {
 		FooterBar(th, 80, []KeyHint{{"d", "detail"}, {"/", "search"}}, "")
 	tuitest.RequireGolden(t, []byte(out))
 }
+
+func TestHeaderBarWithLogo_ShowsTitleAndVersion(t *testing.T) {
+	th := theme.New("formae")
+	out := HeaderBarWithLogo(th, "formae inventory", "", "v1.2.3", 80, "AA", "BB")
+	assert.Contains(t, out, "formae inventory", "header must show the title")
+	assert.Contains(t, out, "v1.2.3", "header must show the version")
+	assert.Contains(t, out, "AA", "header must include logo row 1")
+	assert.Contains(t, out, "BB", "header must include logo row 2")
+}
+
+func TestVersionLabel(t *testing.T) {
+	assert.Equal(t, "", VersionLabel(""))
+	assert.Equal(t, "v1.2.3", VersionLabel("1.2.3"))
+	assert.Equal(t, "v1.2.3", VersionLabel("v1.2.3"))
+}

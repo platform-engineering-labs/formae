@@ -223,10 +223,10 @@ func (v multiView) rowStyles(h health, cursor bool) (id, text lipgloss.Style) {
 			idc, txt = p.ErrorBright, p.ErrorBright
 		}
 	case healthFinishedOK:
-		idc, txt = p.TextSubtle, p.TextSubtle
-		if cursor {
-			idc, txt = p.TextSecondary, p.TextSecondary
-		}
+		// Bright rows (like the inventory list) rather than faded grey, so the
+		// settled command list doesn't read as bland. Failed stays red and
+		// running stays accent for contrast.
+		idc, txt = p.TextPrimary, p.TextPrimary
 	default: // healthRunning
 		idc, txt = p.PrimaryAccent, p.TextPrimary
 	}
