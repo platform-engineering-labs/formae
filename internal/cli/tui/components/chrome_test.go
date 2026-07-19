@@ -102,11 +102,11 @@ func TestChrome_Golden(t *testing.T) {
 
 func TestHeaderBarWithLogo_ShowsTitleAndVersion(t *testing.T) {
 	th := theme.New("formae")
-	out := HeaderBarWithLogo(th, "formae inventory", "", "v1.2.3", 80, "AA", "BB")
+	out := HeaderBarWithLogo(th, "formae inventory", "", "v1.2.3", 80, []string{"AA", "BB", "CC"})
 	assert.Contains(t, out, "formae inventory", "header must show the title")
 	assert.Contains(t, out, "v1.2.3", "header must show the version")
 	assert.Contains(t, out, "AA", "header must include logo row 1")
-	assert.Contains(t, out, "BB", "header must include logo row 2")
+	assert.Contains(t, out, "CC", "header must include logo row 3")
 }
 
 func TestVersionLabel(t *testing.T) {

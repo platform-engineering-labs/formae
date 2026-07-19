@@ -101,17 +101,25 @@ func HasDarkBackground() bool {
 var hasDarkBackground = HasDarkBackground
 
 // MiniPropellerWidth is the braille-column width of the compact header icon.
-const MiniPropellerWidth = 4
+// Six columns render as three rows, which keeps the propeller recognizable
+// (fewer rows squash it into a near-square blob). Braille — not the Kitty
+// graphics protocol — is used in the live TUI header because an alt-screen model
+// repaints every frame; an inline graphics image would flicker and leave
+// artifacts. The one-shot startup banner uses Kitty graphics instead.
+const MiniPropellerWidth = 6
 
-// MiniPropeller returns the formae propeller as a compact two-row braille icon
-// (brand orange) for embedding in a header/title bar. Always returns exactly two
-// rows, each MiniPropellerWidth braille columns wide.
+// MiniPropellerRows is the rendered height of the header icon.
+const MiniPropellerRows = 3
+
+// MiniPropeller returns the formae propeller as a compact braille icon (brand
+// orange) for embedding in a header/title bar. Always returns exactly
+// MiniPropellerRows rows, each MiniPropellerWidth braille columns wide.
 func MiniPropeller() []string {
 	rows := strings.Split(renderBraille(hasDarkBackground(), MiniPropellerWidth), "\n")
-	for len(rows) < 2 {
+	for len(rows) < MiniPropellerRows {
 		rows = append(rows, strings.Repeat(" ", MiniPropellerWidth))
 	}
-	return rows[:2]
+	return rows[:MiniPropellerRows]
 }
 
 // encodeKittyFn and encodeITerm2Fn are seams for the graphics encoders so

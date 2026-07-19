@@ -172,7 +172,7 @@ func TestModel_HelpOverlay(t *testing.T) {
 	view := mm.(Model).View()
 
 	out := plain(view)
-	assert.Contains(t, out, "Keybindings")
+	assert.Contains(t, out, "Help")
 	assert.Contains(t, out, "j k")
 	assert.Contains(t, out, "toggle sort")
 	assert.Contains(t, out, "Navigate")
@@ -189,7 +189,7 @@ func TestModel_HelpOverlay(t *testing.T) {
 	// esc closes the overlay.
 	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	assert.False(t, mm.(Model).helpOpen, "esc must close the overlay")
-	assert.NotContains(t, plain(mm.(Model).View()), "Keybindings")
+	assert.NotContains(t, plain(mm.(Model).View()), "Help")
 
 	// ? toggles: re-open then close.
 	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})

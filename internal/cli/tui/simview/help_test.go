@@ -42,7 +42,7 @@ func TestSimView_HelpOverlay_ContainsGroups(t *testing.T) {
 	assert.Contains(t, out, "Navigate", "overlay must contain Navigate group")
 	assert.Contains(t, out, "Actions", "overlay must contain Actions group")
 	assert.Contains(t, out, "General", "overlay must contain General group")
-	assert.Contains(t, out, "Keybindings", "overlay must contain Keybindings title")
+	assert.Contains(t, out, "Help", "overlay must contain Keybindings title")
 	assert.Contains(t, out, "select", "overlay must contain select hint")
 	assert.Contains(t, out, "expand", "overlay must contain expand hint")
 	assert.Contains(t, out, "confirm", "overlay must contain confirm hint")

@@ -407,10 +407,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // chromeLines is the number of lines consumed by fixed UI chrome:
 //
-//	HeaderBar (2) + column header (1) + query bar (2) + footer bar (2) = 7.
+//	header banner (3) + column header (1) + query bar (2) + footer bar (2) = 8.
 //
-// The data rows area receives height - chromeLines lines.
-const chromeLines = 7
+// The data rows area receives height - chromeLines lines. (The detail view uses
+// a plain two-line header, so it simply gains one padded line — no truncation.)
+const chromeLines = 8
 
 // View composes the full terminal screen.
 func (m Model) View() string {
@@ -490,8 +491,7 @@ func (m Model) View() string {
 		return strings.Join(lines, "\n")
 	}
 
-	prop := logo.MiniPropeller()
-	header := components.HeaderBarWithLogo(m.th, "formae status command", right, components.VersionLabel(m.opts.Version), m.width, prop[0], prop[1])
+	header := components.HeaderBarWithLogo(m.th, "formae status command", right, components.VersionLabel(m.opts.Version), m.width, logo.MiniPropeller())
 
 	visible := m.height - chromeLines
 	if visible < 0 {
@@ -540,7 +540,8 @@ func statuswatchHelpGroups() []components.HelpGroup {
 			},
 		},
 		{
-			Title: "Status",
+			Title:  "Status",
+			Legend: true,
 			Hints: []components.KeyHint{
 				{Key: "✓", Desc: "succeeded"},
 				{Key: "✗", Desc: "failed"},

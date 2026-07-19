@@ -462,16 +462,16 @@ func (m Model) delegateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // chromeLines is the number of lines consumed by fixed chrome at full width (≥80):
 //
-//	HeaderBar (2) + tab bar (3) + blank (1) + status line (1) + query bar (2) + FooterBar (2) = 11.
-const chromeLines = 11
+//	header banner (3) + tab bar (3) + blank (1) + status line (1) + query bar (2) + FooterBar (2) = 12.
+const chromeLines = 12
 
 // narrowChromeLines is the chrome line count at narrow width (< narrowFooterThreshold):
 //
-//	HeaderBar (2) + tab bar (3) + blank (1) + query bar (2) + FooterBar (2) = 10.
+//	header banner (3) + tab bar (3) + blank (1) + query bar (2) + FooterBar (2) = 11.
 //
 // The standalone status line is dropped; its content is folded into the
 // FooterBar hint line as a single combined dim string.
-const narrowChromeLines = 10
+const narrowChromeLines = 11
 
 // bodyHeight returns the number of lines available for the tab body region
 // (the table). The query bar is fixed chrome, not part of the body budget.
@@ -569,8 +569,7 @@ func (m Model) View() string {
 		return m.viewDetail()
 	}
 
-	prop := logo.MiniPropeller()
-	header := components.HeaderBarWithLogo(m.th, "formae inventory", "", components.VersionLabel(m.opts.Version), m.width, prop[0], prop[1])
+	header := components.HeaderBarWithLogo(m.th, "formae inventory", "", components.VersionLabel(m.opts.Version), m.width, logo.MiniPropeller())
 	tabBar := m.renderTabBar()
 
 	narrow := m.width < narrowFooterThreshold

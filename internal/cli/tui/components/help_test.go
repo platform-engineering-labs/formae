@@ -123,7 +123,7 @@ func TestHelpOverlay_ContainsGroupTitles(t *testing.T) {
 	assert.Contains(t, plain, "Navigate")
 	assert.Contains(t, plain, "Actions")
 	assert.Contains(t, plain, "General")
-	assert.Contains(t, plain, "Keybindings")
+	assert.Contains(t, plain, "Help")
 }
 
 func TestHelpOverlay_ContainsHints(t *testing.T) {
@@ -214,7 +214,7 @@ func TestHelpOverlay_CrossViewGeneralInvariant(t *testing.T) {
 			// Invariant: "close help" desc present.
 			assert.Contains(t, p, "close help", "%s: General group must render 'close help' desc", tc.view)
 			// Invariant: panel title present.
-			assert.Contains(t, p, "Keybindings", "%s: overlay must be titled 'Keybindings'", tc.view)
+			assert.Contains(t, p, "Help", "%s: overlay must be titled 'Help'", tc.view)
 		})
 	}
 

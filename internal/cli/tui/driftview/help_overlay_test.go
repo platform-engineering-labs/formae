@@ -34,12 +34,12 @@ func TestDriftView_HelpOverlayGolden(t *testing.T) {
 }
 
 // TestDriftView_HelpOverlayContainsKeybindings checks the overlay renders
-// the "Keybindings" panel title and expected group/key content.
+// the "Help" panel title and expected group/key content.
 func TestDriftView_HelpOverlayContainsKeybindings(t *testing.T) {
 	m := makeHelpModel(t)
 	plain := ansi.Strip(m.View())
 
-	assert.Contains(t, plain, "Keybindings")
+	assert.Contains(t, plain, "Help")
 	assert.Contains(t, plain, "Navigate")
 	assert.Contains(t, plain, "Actions")
 	assert.Contains(t, plain, "General")
