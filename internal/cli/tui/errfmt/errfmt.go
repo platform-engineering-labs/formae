@@ -21,7 +21,10 @@ import (
 
 // Render formats err into a human-readable string using lipgloss styling.
 // It is behaviorally equivalent to renderer.RenderErrorMessage.
-// Returns ("", err) when err is not a known typed API error (fall-through).
+// When err is not a known typed API error, it falls back to the error's plain
+// message (err.Error(), nil) so callers surface the actual error rather than a
+// double-wrapped "error rendering error message" string. A non-nil error is
+// returned only when rendering a recognized error type genuinely fails.
 func Render(err error) (string, error) {
 	th := theme.New("formae")
 	r := &renderer{th: th}
@@ -154,7 +157,11 @@ func (r *renderer) render(err error) (string, error) {
 	}
 
 	if msg == "" {
-		return "", err
+		// Unrecognized error type: fall back to plain rendering so callers
+		// surface the actual error instead of double-wrapping it as
+		// "error rendering error message: ...". Start() applies the "Error: "
+		// prefix and error styling to the returned string.
+		return err.Error(), nil
 	}
 
 	return msg, nil

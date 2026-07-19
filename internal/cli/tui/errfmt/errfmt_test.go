@@ -291,11 +291,14 @@ func TestRender_PluginDependencyConflict_Golden(t *testing.T) {
 
 // ── 16. Plain error fall-through ──────────────────────────────────────────────
 
+// An unrecognized error type must fall back to plain rendering: Render returns
+// the error's message and a nil error, so callers surface the actual error
+// instead of double-wrapping it as "error rendering error message: ...".
 func TestRender_PlainError_FallThrough(t *testing.T) {
 	plain := errors.New("something went wrong")
 	out, rerr := Render(plain)
-	require.Equal(t, "", out)
-	require.Equal(t, plain, rerr)
+	require.NoError(t, rerr)
+	require.Equal(t, plain.Error(), out)
 }
 
 // ── 17. TargetAlreadyExists — nil/empty config sub-cases ─────────────────────
