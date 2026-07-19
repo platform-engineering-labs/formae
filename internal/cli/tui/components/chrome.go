@@ -92,11 +92,11 @@ func VersionLabel(v string) string {
 }
 
 // HeaderBarWithLogo renders a four-line header banner with a brand icon on the
-// left. The icon occupies three rows; the title + version + right-aligned status
-// sit on the icon's centre row (row 2, vertically aligned with the icon), and a
-// full-width bottom border runs on the fourth line beneath the whole banner.
+// left. The icon occupies three rows, with the wordmark stacked alongside it:
+// "formae" (accent) on row 1 with the right-aligned status, the command (bright)
+// on row 2, and the version (dim) on row 3; a full-width border runs beneath.
 // logoRows are pre-styled and assumed equal width; missing rows are blank.
-func HeaderBarWithLogo(th *theme.Theme, left, right, version string, width int, logoRows []string) string {
+func HeaderBarWithLogo(th *theme.Theme, command, right, version string, width int, logoRows []string) string {
 	p := th.Palette
 	iconW := 0
 	for _, r := range logoRows {
@@ -117,20 +117,25 @@ func HeaderBarWithLogo(th *theme.Theme, left, right, version string, width int, 
 		return s
 	}
 
-	title := lipgloss.NewStyle().Foreground(p.TextPrimary).Bold(true).Render(left)
-	mid := row(1) + " " + title
-	if version != "" {
-		mid += "  " + lipgloss.NewStyle().Foreground(p.TextSubtle).Render(version)
-	}
+	brand := lipgloss.NewStyle().Foreground(p.PrimaryAccent).Bold(true).Render("formae")
+	l0 := row(0) + " " + brand
 	rt := ""
 	if right != "" {
 		rt = right + "  "
 	}
-	midLine := mid + PadBetween(width, mid, rt) + rt
+	line0 := l0 + PadBetween(width, l0, rt) + rt
+
+	line1 := pad(row(1) + " " + lipgloss.NewStyle().Foreground(p.TextPrimary).Bold(true).Render(command))
+
+	l2 := row(2) + " "
+	if version != "" {
+		l2 += lipgloss.NewStyle().Foreground(p.TextSubtle).Render(version)
+	}
+	line2 := pad(l2)
 
 	border := lipgloss.NewStyle().Foreground(p.Border).Render(strings.Repeat("─", width))
 
-	return pad(row(0)) + "\n" + midLine + "\n" + pad(row(2)) + "\n" + border
+	return line0 + "\n" + line1 + "\n" + line2 + "\n" + border
 }
 
 // FooterBarNarrow renders the bottom bar for narrow terminals: a single

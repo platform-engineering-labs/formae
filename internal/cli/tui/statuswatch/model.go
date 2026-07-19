@@ -420,7 +420,8 @@ func (m Model) View() string {
 	}
 
 	// Header: error banner replaces the "↻ live" status when last poll failed.
-	right := "↻ live"
+	// The live indicator is accent-blue (it's polling); errors show in red.
+	right := lipgloss.NewStyle().Foreground(m.th.Palette.PrimaryAccent).Render("↻ live")
 	if m.err != nil {
 		right = lipgloss.NewStyle().
 			Foreground(m.th.Palette.Error).
@@ -491,7 +492,7 @@ func (m Model) View() string {
 		return strings.Join(lines, "\n")
 	}
 
-	header := components.HeaderBarWithLogo(m.th, "formae status command", right, components.VersionLabel(m.opts.Version), m.width, logo.MiniPropeller())
+	header := components.HeaderBarWithLogo(m.th, "status command", right, components.VersionLabel(m.opts.Version), m.width, logo.MiniPropeller())
 
 	visible := m.height - chromeLines
 	if visible < 0 {

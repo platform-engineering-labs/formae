@@ -569,7 +569,7 @@ func (m Model) View() string {
 		return m.viewDetail()
 	}
 
-	header := components.HeaderBarWithLogo(m.th, "formae inventory", "", components.VersionLabel(m.opts.Version), m.width, logo.MiniPropeller())
+	header := components.HeaderBarWithLogo(m.th, "inventory", "", components.VersionLabel(m.opts.Version), m.width, logo.MiniPropeller())
 	tabBar := m.renderTabBar()
 
 	narrow := m.width < narrowFooterThreshold
