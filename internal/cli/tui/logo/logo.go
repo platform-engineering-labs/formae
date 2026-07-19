@@ -44,8 +44,8 @@ const (
 
 // Fixed widths (in braille character columns) for each size tier.
 const (
-	brailleWidthFull    = 10 // ~10 braille cols for SizeFull
-	brailleWidthCompact = 3  // ~3 braille cols for SizeCompact
+	brailleWidthFull    = 6 // ~6 braille cols for SizeFull (shrunk to match ~5-col graphics logo)
+	brailleWidthCompact = 3 // ~3 braille cols for SizeCompact
 )
 
 // hasDarkBackground is a seam for tests: it wraps termenv.HasDarkBackground

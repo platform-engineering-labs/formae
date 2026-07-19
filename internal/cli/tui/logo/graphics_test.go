@@ -7,6 +7,7 @@
 package logo
 
 import (
+	"fmt"
 	_ "image/png"
 	"strings"
 	"testing"
@@ -51,7 +52,7 @@ func TestRender_KittyTextRight(t *testing.T) {
 	}
 
 	// Must contain CHA positioning for "formae" text.
-	chaCol := "\x1b[8G"
+	chaCol := fmt.Sprintf("\x1b[%dG", graphicsTextCol)
 	if !strings.Contains(art, chaCol) {
 		t.Errorf("expected CHA escape %q (col %d) in output; got: %q", chaCol, graphicsTextCol, art[:min(len(art), 300)])
 	}

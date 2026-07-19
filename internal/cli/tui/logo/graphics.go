@@ -18,8 +18,8 @@ const (
 	// graphicsFullCols is the image natural width in terminal cells (Kitty cell estimate).
 	graphicsFullCols = 10
 	// graphicsTextCol is the 1-based absolute column (CHA escape) where the wordmark
-	// text begins — propeller ~6 cols + ~1 gap = col 8.
-	graphicsTextCol = 8
+	// text begins — propeller ~5 cols + ~2 gap = col 7 (measured live in Kitty).
+	graphicsTextCol = 7
 	// graphicsImageRows is the image height in terminal rows — used to move the
 	// cursor below the image after text composition.
 	graphicsImageRows = 3

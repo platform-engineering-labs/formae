@@ -7,6 +7,7 @@
 package logo
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -86,8 +87,9 @@ func TestRender_KittyTextRightComposition(t *testing.T) {
 	}
 
 	// Must contain CHA positioning for wordmark.
-	if !strings.Contains(art, "\x1b[8G") {
-		t.Errorf("Kitty output missing CHA positioning \\x1b[8G (graphicsTextCol=%d)", graphicsTextCol)
+	cha := fmt.Sprintf("\x1b[%dG", graphicsTextCol)
+	if !strings.Contains(art, cha) {
+		t.Errorf("Kitty output missing CHA positioning %q (graphicsTextCol=%d)", cha, graphicsTextCol)
 	}
 
 	// Must contain selectable terminal text for "formae" and "v1.2.3".
