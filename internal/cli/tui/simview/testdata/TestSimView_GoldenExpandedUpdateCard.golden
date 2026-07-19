@@ -1,32 +1,32 @@
 [1;38;2;232;232;232m  formae apply — simulation                                                        mode: reconcile  [0m
 [38;2;85;85;102m────────────────────────────────────────────────────────────────────────────────────────────────────[0m
   [38;2;232;232;232m+[0m 10 [38;2;232;232;232mcreate[0m  [38;2;232;232;232m~[0m 4 [38;2;232;232;232mupdate[0m  [38;2;232;232;232m-[0m 2 [38;2;232;232;232mdelete[0m  [38;2;232;232;232m↻[0m 2 [38;2;232;232;232mreplace[0m  [38;2;232;232;232m⊘[0m 1 [38;2;232;232;232mdetach[0m  [38;2;232;232;232m=[0m 1 [38;2;232;232;232mkeep[0m
-  [38;2;170;170;170m↻ replace     [0m[38;2;96;165;250maws-ap-south-1[0m                                                                      
-  [38;2;170;170;170m~ update      [0m[38;2;96;165;250maws-eu-west-1[0m                                                                       
-      [38;2;85;85;85mto discoverable[0m                                                                               
-  [38;2;170;170;170m+ create      [0m[38;2;96;165;250maws-us-east-1[0m                                                                       
+  [38;2;170;170;170m↻ replace     [0m[38;2;129;209;219maws-ap-south-1[0m                                                                      
+  [38;2;170;170;170m~ update      [0m[38;2;129;209;219maws-eu-west-1[0m                                                                       
+      [38;2;153;153;153mto discoverable[0m                                                                               
+  [38;2;170;170;170m+ create      [0m[38;2;129;209;219maws-us-east-1[0m                                                                       
                                                                                                     
   [1;38;2;255;133;51m▌ Stacks[0m                                                                                          
   [1;38;2;232;232;232;48;2;58;58;58mOperation ▲   [0m[38;2;170;170;170mLabel[0m                                                                               
-  [38;2;170;170;170m+ create      [0m[38;2;96;165;250mproduction[0m                                                                          
+  [38;2;170;170;170m+ create      [0m[38;2;129;209;219mproduction[0m                                                                          
                                                                                                     
   [1;38;2;255;133;51m▌ Policies[0m                                                                                        
   [1;38;2;232;232;232;48;2;58;58;58mOperation ▲   [0m[38;2;170;170;170mLabel                            [0m[38;2;170;170;170mType            [0m[38;2;170;170;170mStack[0m                              
-  [38;2;170;170;170m~ update      [0m[38;2;96;165;250mstaging-reconcile                [0m[38;2;170;170;170mauto-reconcile  [0m[38;2;170;170;170mstaging[0m                            
-  [38;2;170;170;170m⊘ detach      [0m[38;2;96;165;250mold-policy                       [0m[38;2;170;170;170mttl             [0m[38;2;170;170;170mstaging[0m                            
-  [38;2;170;170;170m+ create      [0m[38;2;96;165;250mauto-reconcile                   [0m[38;2;170;170;170mttl             [0m[38;2;170;170;170mproduction[0m                         
-  [38;2;170;170;170m= keep        [0m[38;2;96;165;250mshared-policy                    [0m[38;2;170;170;170mttl             [0m[38;2;170;170;170mshared[0m                             
-      [38;2;85;85;85mstill referenced by: production, development[0m                                                  
+  [38;2;170;170;170m~ update      [0m[38;2;129;209;219mstaging-reconcile                [0m[38;2;170;170;170mauto-reconcile  [0m[38;2;170;170;170mstaging[0m                            
+  [38;2;170;170;170m⊘ detach      [0m[38;2;129;209;219mold-policy                       [0m[38;2;170;170;170mttl             [0m[38;2;170;170;170mstaging[0m                            
+  [38;2;170;170;170m+ create      [0m[38;2;129;209;219mauto-reconcile                   [0m[38;2;170;170;170mttl             [0m[38;2;170;170;170mproduction[0m                         
+  [38;2;170;170;170m= keep        [0m[38;2;129;209;219mshared-policy                    [0m[38;2;170;170;170mttl             [0m[38;2;170;170;170mshared[0m                             
+      [38;2;153;153;153mstill referenced by: production, development[0m                                                  
                                                                                                     
   [1;38;2;255;133;51m▌ Resources[0m                                                                                       
   [1;38;2;232;232;232;48;2;58;58;58mOperation ▲   [0m[38;2;170;170;170mLabel                                              [0m[38;2;170;170;170mType[0m                             
-  [38;2;170;170;170m- delete      [0m[38;2;96;165;250mold-cache                                          [0m[38;2;170;170;170mAWS::ElastiCache::CacheCluster[0m   
-  [38;2;170;170;170m- delete      [0m[38;2;96;165;250mlegacy-queue                                       [0m[38;2;170;170;170mAWS::SQS::Queue[0m                  
-      [38;2;85;85;85mdepends on: old-cache[0m                                                                         
-  [38;2;170;170;170m↻ replace     [0m[38;2;96;165;250mweb-server                                         [0m[38;2;170;170;170mAWS::EC2::Instance[0m               
+  [38;2;170;170;170m- delete      [0m[38;2;129;209;219mold-cache                                          [0m[38;2;170;170;170mAWS::ElastiCache::CacheCluster[0m   
+  [38;2;170;170;170m- delete      [0m[38;2;129;209;219mlegacy-queue                                       [0m[38;2;170;170;170mAWS::SQS::Queue[0m                  
+      [38;2;153;153;153mdepends on: old-cache[0m                                                                         
+  [38;2;170;170;170m↻ replace     [0m[38;2;129;209;219mweb-server                                         [0m[38;2;170;170;170mAWS::EC2::Instance[0m               
 [48;2;58;58;58m  [0m[38;2;232;232;232;48;2;58;58;58m~ update      [0m[38;2;232;232;232;48;2;58;58;58mprimary                                            [0m[38;2;232;232;232;48;2;58;58;58mAWS::RDS::DBInstance[0m[48;2;58;58;58m             [0m
 [38;2;85;85;102m────────────────────────────────────────────────────────────────────────────────────────────────────[0m
-  [1;38;2;96;165;250m↑↓[0m[38;2;85;85;85m: select[0m  [1;38;2;96;165;250mspace[0m[38;2;85;85;85m: expand[0m  [1;38;2;96;165;250m→←[0m[38;2;85;85;85m: column[0m  [1;38;2;96;165;250ms[0m[38;2;85;85;85m: sort[0m  [1;38;2;96;165;250my[0m[38;2;85;85;85m: confirm[0m  [1;38;2;96;165;250mq[0m[38;2;85;85;85m: abort[0m This operation will delete 2 
+  [1;38;2;129;209;219m↑↓[0m[38;2;153;153;153m: select[0m  [1;38;2;129;209;219mspace[0m[38;2;153;153;153m: expand[0m  [1;38;2;129;209;219m→←[0m[38;2;153;153;153m: column[0m  [1;38;2;129;209;219ms[0m[38;2;153;153;153m: sort[0m  [1;38;2;129;209;219my[0m[38;2;153;153;153m: confirm[0m  [1;38;2;129;209;219mq[0m[38;2;153;153;153m: abort[0m This operation will delete 2 
 resource(s), replace 1 resource(s), create 1 stack(s), create 1 policy(ies), create 1 target(s),    
 create 7 resource(s), update 1 policy(ies), update 1 target(s) and update 2 resource(s).  Do you    
-want to continue? (y/N)  [1;38;2;96;165;250m?[0m[38;2;85;85;85m: help[0m                                                                    
+want to continue? (y/N)  [1;38;2;129;209;219m?[0m[38;2;153;153;153m: help[0m                                                                    

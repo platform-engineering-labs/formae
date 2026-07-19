@@ -1,15 +1,15 @@
 
   [1;38;2;232;232;232mCommands have been force-canceled:[0m
 
-    [38;2;170;170;170m•[0m [38;2;96;165;250mcmd-abc123[0m
-    [38;2;170;170;170m•[0m [38;2;96;165;250mcmd-def456[0m
+    [38;2;170;170;170m•[0m [38;2;129;209;219mcmd-abc123[0m
+    [38;2;170;170;170m•[0m [38;2;129;209;219mcmd-def456[0m
 
   [38;2;181;181;91mThe following resources were abandoned mid-operation and may exist in your cloud provider:[0m
     [38;2;181;181;91m⚠[0m formae://res-bbb#
 
-  [38;2;85;85;85mForce-cancel abandons in-progress work; cloud-side operations may still be running.[0m
-  [38;2;85;85;85mUpdate/Delete operations are reconciled by the synchronizer on its next cycle.[0m
-  [38;2;85;85;85mA still-running Create may orphan a resource: verify the resources above in your[0m
-  [38;2;85;85;85mcloud provider and clean up manually, or let discovery pick them up.[0m
+  [38;2;153;153;153mForce-cancel abandons in-progress work; cloud-side operations may still be running.[0m
+  [38;2;153;153;153mUpdate/Delete operations are reconciled by the synchronizer on its next cycle.[0m
+  [38;2;153;153;153mA still-running Create may orphan a resource: verify the resources above in your[0m
+  [38;2;153;153;153mcloud provider and clean up manually, or let discovery pick them up.[0m
 
-  [38;2;85;85;85mUse 'formae status' to check the cancellation progress.[0m
+  [38;2;153;153;153mUse 'formae status' to check the cancellation progress.[0m

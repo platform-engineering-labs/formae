@@ -1,4 +1,4 @@
 [38;2;232;232;232m✓[0m [38;2;232;232;232mswitched to staging[0m
-[38;2;85;85;85m·[0m [38;2;85;85;85mcloudflare already up to date[0m
+[38;2;153;153;153m·[0m [38;2;153;153;153mcloudflare already up to date[0m
 [38;2;181;181;91m![0m [38;2;232;232;232mrestart the agent when ready: formae agent start[0m
 [38;2;248;113;113m✗[0m [38;2;232;232;232mfailed to install grafana[0m
