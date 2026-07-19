@@ -86,11 +86,11 @@ func TestRenderCancelSummary_SingleCommand(t *testing.T) {
 
 	cmds := []apimodel.Command{
 		{
-			CommandID: "cmd-abc123",
-			Command:   "apply",
-			Mode:      "reconcile",
-			State:     "InProgress",
-			StartTs:   start,
+			CommandID:       "cmd-abc123",
+			Command:         "apply",
+			Mode:            "reconcile",
+			State:           "InProgress",
+			StartTs:         start,
 			ResourceUpdates: makeUpdates(8, "Success", 2, "InProgress", 5, "Pending"),
 		},
 	}

@@ -174,10 +174,13 @@ func Render(cap Capability, size Size, version string) (art string, rows int) {
 			b.WriteString(img)
 			// "formae" on the image's top row at absolute column graphicsTextCol (1-based CHA).
 			fmt.Fprintf(&b, "\x1b[%dG%s", graphicsTextCol, nameLine)
-			// version one row down, same column.
-			fmt.Fprintf(&b, "\r\x1b[1B\x1b[%dG%s", graphicsTextCol, verLine)
-			// Move cursor below the image so following output doesn't overlap it.
-			fmt.Fprintf(&b, "\r\x1b[%dB", graphicsImageRows-1)
+			// version one row down, same column. Use a real newline (\n) to advance
+			// the row — the \x1b[1B (CUD) escape proved unreliable in Kitty after a
+			// C=1 image (it did not move down, so version overwrote "formae").
+			fmt.Fprintf(&b, "\n\x1b[%dG%s", graphicsTextCol, verLine)
+			// Move the cursor below the image (version sits on image row 1 of a
+			// graphicsImageRows-tall image) using newlines.
+			b.WriteString(strings.Repeat("\n", graphicsImageRows-1))
 			return b.String(), graphicsImageRows
 		}
 		// Fall through to braille on encoder failure.

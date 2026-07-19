@@ -76,9 +76,10 @@ func PrintBanner() {
 
 	switch cap {
 	case logo.CapKitty, logo.CapITerm2:
-		// Graphics art: image + wordmark lines below, separated by newlines.
-		// Print then add one blank line to separate from subsequent output.
+		// Graphics art: image + wordmark. Print then add two blank lines to
+		// clearly separate the logo from subsequent output.
 		_, _ = fmt.Print(art)
+		_, _ = fmt.Println()
 		_, _ = fmt.Println()
 	default:
 		// CapText and CapBraille: rows is exact; print the art then one blank line.

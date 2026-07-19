@@ -79,7 +79,7 @@ func seedFake(t *testing.T) *apitest.FakeMetastructure {
 	require.NoError(t, err)
 	autoPolicy, err := json.Marshal(map[string]any{
 		"Type":            "auto-reconcile",
-		"Label":          "my-recon",
+		"Label":           "my-recon",
 		"IntervalSeconds": float64(3600), // 1 h
 	})
 	require.NoError(t, err)
