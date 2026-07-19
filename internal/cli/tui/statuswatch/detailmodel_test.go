@@ -536,12 +536,19 @@ func TestDetailModel_ColHeaderAlignment(t *testing.T) {
 				dataRow := lines[dataRowIdx]
 
 				// "Label" must appear in the header
-				labelOffset := strings.Index(colHdr, "Label")
-				require.GreaterOrEqual(t, labelOffset, 0, "\"Label\" not found in col-header for %q at width %d: %q", gs.sectionTitle, w, colHdr)
+				labelByte := strings.Index(colHdr, "Label")
+				require.GreaterOrEqual(t, labelByte, 0, "\"Label\" not found in col-header for %q at width %d: %q", gs.sectionTitle, w, colHdr)
 
-				// The label text (e.g. "aws-us-east-1") must start at the same offset in the data row
-				dataOffset := strings.Index(dataRow, gs.dataLabel)
-				require.GreaterOrEqual(t, dataOffset, 0, "data label %q not found in data row for %q at width %d: %q", gs.dataLabel, gs.sectionTitle, w, dataRow)
+				// The label text (e.g. "aws-us-east-1") must start in the data row
+				dataByte := strings.Index(dataRow, gs.dataLabel)
+				require.GreaterOrEqual(t, dataByte, 0, "data label %q not found in data row for %q at width %d: %q", gs.dataLabel, gs.sectionTitle, w, dataRow)
+
+				// Compare DISPLAY-column offsets, not byte offsets: multi-byte glyphs
+				// (✓/spinner in the data status column, plain spaces in the header
+				// once the sort arrow is suppressed there) make byte offsets diverge
+				// even when the columns are visually aligned.
+				labelOffset := lipgloss.Width(colHdr[:labelByte])
+				dataOffset := lipgloss.Width(dataRow[:dataByte])
 
 				assert.Equal(t, labelOffset, dataOffset,
 					"col-header \"Label\" at offset %d but data label %q at offset %d in group %q at width %d\n  hdr:  %q\n  data: %q",

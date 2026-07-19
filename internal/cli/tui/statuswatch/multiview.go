@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
@@ -339,7 +340,10 @@ func (v multiView) renderRows(maxRows int) []string {
 			if isCursor {
 				spinSt = spinSt.Background(p.Selection)
 			}
-			glyphStr = spinSt.Render(pad(v.spinView, multiCols[colStatus].width))
+			// v.spinView is ANSI-styled by the bubbletea spinner; strip it to the
+			// raw glyph before pad() (which counts escape-code runes and would
+			// slice the sequence, collapsing the status column) and re-style here.
+			glyphStr = spinSt.Render(pad(ansi.Strip(v.spinView), multiCols[colStatus].width))
 		}
 
 		done, total := doneOf(r.counts)

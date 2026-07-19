@@ -457,7 +457,9 @@ func (d detailModel) renderGroupColHeader(kind updateKind, labelW, typeW, stackW
 		isHL := col == grpHi
 		isAct := col == grpAct
 		arrow := ""
-		if isAct {
+		// Never draw the sort arrow on the empty status column — a lone ▲/▼ there
+		// reads as a collapse/expand toggle rather than a column sort indicator.
+		if isAct && col != detailColStatus {
 			if grpDir == components.SortDesc {
 				arrow = " ▼"
 			} else {
