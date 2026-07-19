@@ -558,3 +558,37 @@ func TestDetailModel_ColHeaderAlignment(t *testing.T) {
 		})
 	}
 }
+
+// TestDetailModel_SortKeepsFocusOnRow verifies that toggling the sort keeps the
+// cursor on the same row instead of jumping back to the top.
+func TestDetailModel_SortKeepsFocusOnRow(t *testing.T) {
+	th := theme.New("formae")
+	dm := newDetailModel(th, 100, 40)
+	c := apimodel.Command{
+		CommandID: "cmd-test",
+		State:     "Success",
+		ResourceUpdates: []apimodel.ResourceUpdate{
+			{ResourceLabel: "aaa", ResourceType: "AWS::S3::Bucket", StackName: "prod", Operation: "create", State: "Success", Duration: 1000},
+			{ResourceLabel: "bbb", ResourceType: "AWS::S3::Bucket", StackName: "prod", Operation: "create", State: "Success", Duration: 2000},
+			{ResourceLabel: "ccc", ResourceType: "AWS::S3::Bucket", StackName: "prod", Operation: "create", State: "Success", Duration: 3000},
+		},
+	}
+	r := row{cmd: c, counts: commandCounts(c), health: commandHealth(c, commandCounts(c))}
+	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
+	dm = dm.SetCommand(c, r, "◉", now, nil)
+	keys := defaultKeyMap()
+
+	// Cursor starts on the first row (default sort asc by Label → "aaa" on top).
+	navBefore := dm.navLines()
+	require.Greater(t, len(navBefore), dm.cursor)
+	wantKey := navBefore[dm.cursor].rowKey
+
+	// Toggle the sort (asc→desc) — the order reverses, so "aaa" moves down.
+	dm, _ = dm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}}, keys)
+
+	navAfter := dm.navLines()
+	require.Greater(t, len(navAfter), dm.cursor)
+	assert.Equal(t, wantKey, navAfter[dm.cursor].rowKey,
+		"focus must stay on the same row after toggling sort, not jump to the top")
+	assert.NotEqual(t, 0, dm.cursor, "the focused row actually changed position under the reverse sort")
+}

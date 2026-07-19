@@ -174,3 +174,12 @@ func TestMultiView_RowWidthMatchesSpec(t *testing.T) {
 	fw := fixedWidth(vis)
 	assert.Equal(t, fw+bw, len([]rune(stripped)), "rendered row visible width must equal fixedWidth+barWidth")
 }
+
+// TestModeLabel verifies destroy commands render "-" (they have no mode) while
+// apply commands render their actual mode.
+func TestModeLabel(t *testing.T) {
+	assert.Equal(t, "-", modeLabel(apimodel.Command{Command: "destroy", Mode: "patch"}),
+		"destroy has no mode → -")
+	assert.Equal(t, "reconcile", modeLabel(apimodel.Command{Command: "apply", Mode: "reconcile"}))
+	assert.Equal(t, "patch", modeLabel(apimodel.Command{Command: "apply", Mode: "patch"}))
+}

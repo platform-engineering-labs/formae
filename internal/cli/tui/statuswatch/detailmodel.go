@@ -232,6 +232,12 @@ func (d detailModel) Update(msg tea.KeyMsg, keys tui.KeyMap) (detailModel, bool)
 
 	case key.Matches(msg, keys.Sort):
 		grpKind := d.cursorGroupKind()
+		// Capture the focused row so we can keep focus on it after the re-sort
+		// instead of jumping back to the top.
+		anchorKey, anchored := "", false
+		if d.cursor >= 0 && d.cursor < len(nav) && nav[d.cursor].kind == navRow {
+			anchorKey, anchored = nav[d.cursor].rowKey, true
+		}
 		hi := d.sortHi[grpKind]
 		act := d.sortCol[grpKind]
 		dir := d.sortDir[grpKind]
@@ -250,10 +256,24 @@ func (d detailModel) Update(msg tea.KeyMsg, keys tui.KeyMap) (detailModel, bool)
 		if g != nil {
 			sortGroup(g.rows, d.sortCol[grpKind], d.sortDir[grpKind])
 		}
-		// Reset pagination for this group
-		d.visible[grpKind] = detailPageSize
-		// Reset cursor to top
-		d.cursor = 0
+		// Keep focus on the same row after the re-sort; fall back to clamping if
+		// it is no longer present.
+		if anchored {
+			newNav := d.navLines()
+			found := -1
+			for i, n := range newNav {
+				if n.kind == navRow && n.groupKind == grpKind && n.rowKey == anchorKey {
+					found = i
+					break
+				}
+			}
+			switch {
+			case found >= 0:
+				d.cursor = found
+			case d.cursor >= len(newNav):
+				d.cursor = len(newNav) - 1
+			}
+		}
 
 	case key.Matches(msg, keys.Enter) || msg.Type == tea.KeySpace:
 		if d.cursor >= 0 && d.cursor < total {

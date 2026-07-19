@@ -133,6 +133,15 @@ func sortableColumns() []int {
 	return cols
 }
 
+// modeLabel returns the mode string to display. Destroy commands have no mode
+// (the server defaults them to "patch"), so they render as "-".
+func modeLabel(c apimodel.Command) string {
+	if c.Command == "destroy" {
+		return "-"
+	}
+	return c.Mode
+}
+
 // lessRows compares two rows for a given column. Returns true if row a
 // should sort before row b.
 func lessRows(a, b row, col int, now time.Time) bool {
@@ -373,7 +382,7 @@ func (v multiView) renderRows(maxRows int) []string {
 			case colCommand:
 				sb.WriteString(textStyle.Render(pad(r.cmd.Command, w)))
 			case colMode:
-				sb.WriteString(textStyle.Render(pad(r.cmd.Mode, w)))
+				sb.WriteString(textStyle.Render(pad(modeLabel(r.cmd), w)))
 			case colProgress:
 				if terminal {
 					verb := "completed"
