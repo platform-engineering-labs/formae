@@ -8,21 +8,16 @@ import (
 	"bytes"
 	"encoding/base64"
 	"fmt"
-	"image"
 	"image/png"
-
-	"golang.org/x/image/draw"
 )
 
 // encodeKitty returns the Kitty APC graphics-protocol escape sequence for the
-// embedded logo (dark or light variant) scaled to graphicsFullCols character
-// columns wide. The image is placed at its natural scaled size — no c=/r= cell
-// grid is forced, so Kitty preserves the aspect ratio correctly.
+// composite banner image (propeller + wordmark) for the given theme and version.
 // The PNG is base64-encoded and split into 4096-byte chunks within APC payloads
 // per the Kitty protocol specification (a=T f=100 m=more).
 // Returns the complete escape sequence as a string; does NOT write to stdout.
-func encodeKitty(dark bool, cellCols int) string {
-	img, err := loadAndScaleForGraphics(dark, cellCols)
+func encodeKitty(dark bool, version string) string {
+	img, err := buildBannerImage(dark, version)
 	if err != nil {
 		return ""
 	}
@@ -64,16 +59,14 @@ func encodeKitty(dark bool, cellCols int) string {
 	return seq.String()
 }
 
-// encodeITerm2 returns the iTerm2 inline-image escape sequence for the embedded
-// logo (dark or light variant) scaled to graphicsFullCols character columns wide.
-// The image is placed at its natural inline size — no forced width/height cell
-// grid or preserveAspectRatio=0, so the image renders correctly.
+// encodeITerm2 returns the iTerm2 inline-image escape sequence for the composite
+// banner image (propeller + wordmark) for the given theme and version.
 // The entire PNG is base64-encoded and wrapped in a single atomic OSC 1337
 // escape sequence — fragmented writes can cause terminals to misparse the
 // sequence (prototype fix from commit 0e057261).
 // Returns the complete escape sequence as a string; does NOT write to stdout.
-func encodeITerm2(dark bool, cellCols int) string {
-	img, err := loadAndScaleForGraphics(dark, cellCols)
+func encodeITerm2(dark bool, version string) string {
+	img, err := buildBannerImage(dark, version)
 	if err != nil {
 		return ""
 	}
@@ -95,28 +88,4 @@ func encodeITerm2(dark bool, cellCols int) string {
 		len(rawBytes), encoded)
 
 	return seq.String()
-}
-
-// loadAndScaleForGraphics decodes the embedded logo PNG (dark or light variant),
-// crops the propeller icon, and scales it to fit cellCols character columns.
-// Assumes each character cell is approximately pixelsPerCell wide.
-func loadAndScaleForGraphics(dark bool, cellCols int) (image.Image, error) {
-	img, err := loadAndCropPropeller(dark)
-	if err != nil {
-		return nil, err
-	}
-
-	bounds := img.Bounds()
-	srcW := bounds.Dx()
-	srcH := bounds.Dy()
-
-	// Approximate pixel width from character columns (typical cell ~8px wide).
-	const pixelsPerCell = 8
-	widthPx := cellCols * pixelsPerCell
-	heightPx := int(float64(widthPx) * float64(srcH) / float64(srcW))
-
-	resized := image.NewRGBA(image.Rect(0, 0, widthPx, heightPx))
-	draw.BiLinear.Scale(resized, resized.Bounds(), img, bounds, draw.Over, nil)
-
-	return resized, nil
 }

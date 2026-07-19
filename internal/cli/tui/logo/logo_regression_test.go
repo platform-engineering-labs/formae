@@ -28,7 +28,7 @@ func hasBrailleRune(s string) bool {
 // Note: NOT parallel — mutates the package-level encodeKittyFn seam.
 func TestRender_KittyFallbackToBraille(t *testing.T) {
 	origKitty := encodeKittyFn
-	encodeKittyFn = func(_ bool, _ int) string { return "" }
+	encodeKittyFn = func(_ bool, _ string) string { return "" }
 	t.Cleanup(func() { encodeKittyFn = origKitty })
 
 	art, rows := Render(CapKitty, SizeFull, "1.2.3")
@@ -49,7 +49,7 @@ func TestRender_KittyFallbackToBraille(t *testing.T) {
 // Note: NOT parallel — mutates the package-level encodeITerm2Fn seam.
 func TestRender_ITerm2FallbackToBraille(t *testing.T) {
 	origITerm2 := encodeITerm2Fn
-	encodeITerm2Fn = func(_ bool, _ int) string { return "" }
+	encodeITerm2Fn = func(_ bool, _ string) string { return "" }
 	t.Cleanup(func() { encodeITerm2Fn = origITerm2 })
 
 	art, rows := Render(CapITerm2, SizeFull, "1.2.3")
@@ -65,15 +65,13 @@ func TestRender_ITerm2FallbackToBraille(t *testing.T) {
 	}
 }
 
-// TestRender_KittyGraphicsWordmarkBelow asserts that Render(CapKitty, SizeFull, …)
-// places the wordmark BELOW the image via newlines — no cursor escapes (no ESC7,
-// ESC8, or ESC[nC). Both wordmark lines must appear after the image sequence.
+// TestRender_KittyGraphicsNoTerminalWordmark asserts that Render(CapKitty, SizeFull, …)
+// returns ONLY the image escape — no trailing terminal-text wordmark — because the
+// wordmark is now composited into the image itself.
 // Note: NOT parallel — mutates the package-level encodeKittyFn seam.
-func TestRender_KittyGraphicsWordmarkBelow(t *testing.T) {
-	// Stub the encoder to return a deterministic non-empty string so the
-	// real PNG encode path is skipped and the test remains fast + hermetic.
+func TestRender_KittyGraphicsNoTerminalWordmark(t *testing.T) {
 	origKitty := encodeKittyFn
-	encodeKittyFn = func(_ bool, _ int) string { return "\x1b_Ga=T,f=100,m=0;AAAA\x1b\\" }
+	encodeKittyFn = func(_ bool, _ string) string { return "\x1b_Ga=T,f=100,m=0;AAAA\x1b\\" }
 	t.Cleanup(func() { encodeKittyFn = origKitty })
 
 	art, rows := Render(CapKitty, SizeFull, "1.2.3")
@@ -82,89 +80,59 @@ func TestRender_KittyGraphicsWordmarkBelow(t *testing.T) {
 		t.Fatal("Render(CapKitty, SizeFull) returned empty string")
 	}
 
-	// No cursor-positioning escapes must be present — wordmark is below via newlines.
-	const decSave = "\x1b7"
-	if strings.Contains(art, decSave) {
+	// The output must be exactly the image escape — no terminal-text wordmark.
+	if strings.Contains(art, "formae") {
+		t.Error("Kitty graphics art contains terminal-text 'formae' — wordmark must be composited into image, not terminal text")
+	}
+	if strings.Contains(art, "v1.2.3") {
+		t.Error("Kitty graphics art contains terminal-text 'v1.2.3' — wordmark must be composited into image, not terminal text")
+	}
+
+	// No cursor-positioning escapes must be present.
+	if strings.Contains(art, "\x1b7") {
 		t.Error("Kitty graphics art contains DEC save cursor (ESC 7) — must not use cursor escapes")
 	}
-	const decRestore = "\x1b8"
-	if strings.Contains(art, decRestore) {
+	if strings.Contains(art, "\x1b8") {
 		t.Error("Kitty graphics art contains DEC restore cursor (ESC 8) — must not use cursor escapes")
 	}
 
-	// Both wordmark lines must appear after the image sequence.
-	imgSeq := "\x1b_G"
-	imgIdx := strings.Index(art, imgSeq)
-	formaeIdx := strings.Index(art, "formae")
-	verIdx := strings.Index(art, "v1.2.3")
-
-	if formaeIdx < 0 {
-		t.Errorf("graphics art missing 'formae' wordmark")
-	}
-	if verIdx < 0 {
-		t.Errorf("graphics art missing 'v1.2.3' version")
-	}
-
-	// Wordmark must appear after the image escape (below, not inline).
-	if imgIdx >= 0 && formaeIdx > 0 && formaeIdx < imgIdx {
-		t.Error("'formae' appears BEFORE the image escape — expected below the image")
-	}
-
-	// There must be a newline between the image and the wordmark.
-	afterImg := art[imgIdx+len(imgSeq):]
-	if !strings.Contains(afterImg, "\n") {
-		t.Error("no newline between Kitty image escape and wordmark — expected wordmark below image")
-	}
-
-	// rows must be positive (image height + 2 wordmark lines).
+	// rows must be positive.
 	if rows <= 0 {
 		t.Errorf("expected rows>0, got %d", rows)
 	}
 }
 
-// TestRender_ITerm2GraphicsWordmarkBelow asserts that Render(CapITerm2, SizeFull, …)
-// places the wordmark BELOW the image (not right-of-image) — iTerm2 moves the
-// cursor unpredictably after inline images; newlines are safe. No cursor escapes.
+// TestRender_ITerm2GraphicsNoTerminalWordmark asserts that Render(CapITerm2, SizeFull, …)
+// returns ONLY the image escape — no trailing terminal-text wordmark — because the
+// wordmark is now composited into the image itself.
 // Note: NOT parallel — mutates the package-level encodeITerm2Fn seam.
-func TestRender_ITerm2GraphicsWordmarkBelow(t *testing.T) {
+func TestRender_ITerm2GraphicsNoTerminalWordmark(t *testing.T) {
 	origITerm2 := encodeITerm2Fn
-	encodeITerm2Fn = func(_ bool, _ int) string {
+	encodeITerm2Fn = func(_ bool, _ string) string {
 		return "\x1b]1337;File=inline=1;size=4:AAAA\a"
 	}
 	t.Cleanup(func() { encodeITerm2Fn = origITerm2 })
 
-	art, _ := Render(CapITerm2, SizeFull, "2.0.0")
+	art, rows := Render(CapITerm2, SizeFull, "2.0.0")
 
 	if art == "" {
 		t.Fatal("Render(CapITerm2, SizeFull) returned empty string")
 	}
 
+	// The output must be exactly the image escape — no terminal-text wordmark.
+	if strings.Contains(art, "formae") {
+		t.Error("iTerm2 graphics art contains terminal-text 'formae' — wordmark must be composited into image, not terminal text")
+	}
+	if strings.Contains(art, "v2.0.0") {
+		t.Error("iTerm2 graphics art contains terminal-text 'v2.0.0' — wordmark must be composited into image, not terminal text")
+	}
+
 	// DEC save/restore must NOT be present for iTerm2.
-	const decSave = "\x1b7"
-	if strings.Contains(art, decSave) {
+	if strings.Contains(art, "\x1b7") {
 		t.Error("iTerm2 graphics art contains DEC save cursor (ESC 7) — unexpected")
 	}
 
-	// Wordmark must appear below: the image escape comes first, then newline(s), then text.
-	imgSeq := "\x1b]1337;"
-	imgIdx := strings.Index(art, imgSeq)
-	formaeIdx := strings.Index(art, "formae")
-	verIdx := strings.Index(art, "v2.0.0")
-
-	if formaeIdx < 0 {
-		t.Errorf("graphics art missing 'formae' wordmark")
-	}
-	if verIdx < 0 {
-		t.Errorf("graphics art missing 'v2.0.0' version")
-	}
-	if imgIdx >= 0 && formaeIdx > 0 && formaeIdx < imgIdx {
-		t.Error("'formae' appears BEFORE the image escape — expected below the image")
-	}
-
-	// The wordmark section (after the image) must contain a newline between
-	// the image escape and the wordmark text (below, not inline).
-	afterImg := art[imgIdx+len(imgSeq):]
-	if !strings.Contains(afterImg, "\n") {
-		t.Error("no newline between iTerm2 image escape and wordmark — expected wordmark below image")
+	if rows <= 0 {
+		t.Errorf("expected rows>0, got %d", rows)
 	}
 }

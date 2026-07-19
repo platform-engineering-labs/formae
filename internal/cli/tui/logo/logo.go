@@ -47,19 +47,6 @@ const (
 	brailleWidthCompact = 3  // ~3 braille cols for SizeCompact
 )
 
-// ── Graphics-terminal tuning constants ────────────────────────────────────────
-// graphicsFullCols controls the image width in character cells for Kitty/iTerm2.
-// The image is placed at natural scaled size (no forced cell grid), so the
-// terminal preserves the aspect ratio correctly. Adjust to tune appearance.
-//
-// TODO(D2): exact graphics spacing needs live tuning; add a trailing newline
-// count after the wordmark block once we measure real Kitty/iTerm2 row height.
-//
-// ─────────────────────────────────────────────────────────────────────────────
-const (
-	graphicsFullCols = 10 // image width in cells (tune for graphics terminals)
-)
-
 // hasDarkBackground is a seam for tests: it wraps termenv.HasDarkBackground
 // so test code can override it and make Render deterministic in headless
 // environments.  The default implementation is safe to call in any context.
@@ -83,13 +70,13 @@ var hasDarkBackground = func() bool {
 // tests can force the empty-return (error) path and verify the fallback chain.
 //
 //nolint:gochecknoglobals
-var encodeKittyFn = func(dark bool, cols int) string {
-	return encodeKitty(dark, cols)
+var encodeKittyFn = func(dark bool, version string) string {
+	return encodeKitty(dark, version)
 }
 
 //nolint:gochecknoglobals
-var encodeITerm2Fn = func(dark bool, cols int) string {
-	return encodeITerm2(dark, cols)
+var encodeITerm2Fn = func(dark bool, version string) string {
+	return encodeITerm2(dark, version)
 }
 
 //go:embed assets/Formae_Logo_dark.png
@@ -122,18 +109,6 @@ func wordmarkStyle(version string) string {
 	versionStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(brandOrange))
 	block := lipgloss.JoinVertical(lipgloss.Left, nameStyle.Render("formae"), versionStyle.Render("v"+version))
 	return lipgloss.NewStyle().MarginLeft(2).Render(block)
-}
-
-// wordmarkLines returns the two styled wordmark lines as separate strings
-// (no margin, no join) so callers can position them individually via cursor
-// escape sequences.
-//
-//	line0 → "formae" in white (#FFFFFF)
-//	line1 → "v{version}" in brand orange (#FF8201)
-func wordmarkLines(version string) (nameLine, verLine string) {
-	nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF"))
-	versionStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(brandOrange))
-	return nameStyle.Render("formae"), versionStyle.Render("v" + version)
 }
 
 // Render produces the logo art string and the number of terminal rows it
@@ -176,19 +151,12 @@ func Render(cap Capability, size Size, version string) (art string, rows int) {
 	// SizeFull: use the native renderer for the capability.
 	// Graphics encoders return "" on image decode/encode error; in that case
 	// we degrade gracefully: graphics → braille → text (never an empty string).
-	//
-	// Offset note: the 1-line top margin + 3-space left indent below are
-	// user-tunable D2 live items.
 	switch cap {
 	case CapKitty:
-		art = encodeKittyFn(dark, graphicsFullCols)
+		// Wordmark is composited INTO the image — no terminal-text wordmark appended.
+		art = encodeKittyFn(dark, version)
 		if art != "" {
-			// Natural-size image with wordmark BELOW (robust: no cursor positioning).
-			// The image height is unknown (terminal preserves aspect), so we compose
-			// a simple newline-separated block: image + wordmark.
-			nameLine, verLine := wordmarkLines(version)
-			art = art + "\n" + nameLine + "\n" + verLine
-			rows = countRows(art)
+			rows = logoPx/16 + 1
 			return art, rows
 		}
 		// Fall through to braille on encoder failure.
@@ -201,13 +169,10 @@ func Render(cap Capability, size Size, version string) (art string, rows int) {
 		}
 		return "formae v" + version, 1
 	case CapITerm2:
-		art = encodeITerm2Fn(dark, graphicsFullCols)
+		// Wordmark is composited INTO the image — no terminal-text wordmark appended.
+		art = encodeITerm2Fn(dark, version)
 		if art != "" {
-			// Natural-size image with wordmark BELOW (robust: no cursor positioning).
-			// iTerm2 moves the cursor unpredictably after inline images; newlines are safe.
-			nameLine, verLine := wordmarkLines(version)
-			art = art + "\n" + nameLine + "\n" + verLine
-			rows = countRows(art)
+			rows = logoPx/16 + 1
 			return art, rows
 		}
 		// Fall through to braille on encoder failure.
