@@ -8,8 +8,33 @@ import (
 	"bytes"
 	"encoding/base64"
 	"fmt"
+	"image"
 	"image/png"
+
+	xdraw "golang.org/x/image/draw"
 )
+
+// graphicsPxPerCell approximates a terminal cell's pixel width; the propeller
+// is scaled to cols*graphicsPxPerCell px so the Kitty/iTerm2 image occupies
+// roughly `cols` columns instead of its full ~430px crop size.
+const graphicsPxPerCell = 8
+
+// scalePropeller downscales the cropped propeller to targetW px wide,
+// preserving aspect ratio. Without this the full ~430px crop renders as a
+// huge (>25-row) image in the terminal.
+func scalePropeller(img image.Image, targetW int) image.Image {
+	b := img.Bounds()
+	if b.Dx() == 0 {
+		return img
+	}
+	targetH := int(float64(b.Dy()) * float64(targetW) / float64(b.Dx()))
+	if targetH < 1 {
+		targetH = 1
+	}
+	out := image.NewRGBA(image.Rect(0, 0, targetW, targetH))
+	xdraw.CatmullRom.Scale(out, out.Bounds(), img, b, xdraw.Over, nil)
+	return out
+}
 
 // Calibrated layout constants for Kitty graphics rendering.
 // These values were measured in a live Kitty terminal using the natural-size
@@ -37,6 +62,7 @@ func encodeKitty(dark bool, cols int) string {
 	if err != nil {
 		return ""
 	}
+	img = scalePropeller(img, cols*graphicsPxPerCell)
 
 	var imgBuf bytes.Buffer
 	if err := png.Encode(&imgBuf, img); err != nil {
@@ -87,6 +113,7 @@ func encodeITerm2(dark bool, cols int) string {
 	if err != nil {
 		return ""
 	}
+	img = scalePropeller(img, cols*graphicsPxPerCell)
 
 	var imgBuf bytes.Buffer
 	if err := png.Encode(&imgBuf, img); err != nil {
