@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
-package statuswatch
+package components
 
 import (
 	"testing"
@@ -14,7 +14,7 @@ import (
 )
 
 func TestQueryBar_EditingLifecycle(t *testing.T) {
-	q := newQueryBar(theme.New("formae"), "state:InProgress")
+	q := NewQueryBar(theme.New("formae"), "state:InProgress")
 	assert.Equal(t, "state:InProgress", q.Query())
 	assert.False(t, q.Focused())
 
@@ -32,7 +32,7 @@ func TestQueryBar_EditingLifecycle(t *testing.T) {
 }
 
 func TestQueryBar_EscReverts(t *testing.T) {
-	q := newQueryBar(theme.New("formae"), "a")
+	q := NewQueryBar(theme.New("formae"), "a")
 	q = q.Focus()
 	q, _ = q.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
 	q, applied := q.Update(tea.KeyMsg{Type: tea.KeyEsc})
@@ -42,7 +42,7 @@ func TestQueryBar_EscReverts(t *testing.T) {
 }
 
 func TestQueryBar_BackspaceAndClear(t *testing.T) {
-	q := newQueryBar(theme.New("formae"), "ab")
+	q := NewQueryBar(theme.New("formae"), "ab")
 	q = q.Focus()
 	q, _ = q.Update(tea.KeyMsg{Type: tea.KeyBackspace})
 	q, applied := q.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -57,12 +57,15 @@ func TestQueryBar_BackspaceAndClear(t *testing.T) {
 
 func TestQueryBar_ViewStates(t *testing.T) {
 	th := theme.New("formae")
-	empty := newQueryBar(th, "")
+	empty := NewQueryBar(th, "")
 	assert.Contains(t, empty.View(80), "/: query")
 
-	active := newQueryBar(th, "state:InProgress")
+	active := NewQueryBar(th, "state:InProgress")
 	v := active.View(80)
-	assert.Contains(t, v, "●")
+	// The applied state is marked with the accent "/" prefix (not a dot) and
+	// shows the query text plus the edit hint.
+	assert.Contains(t, v, "/")
+	assert.NotContains(t, v, "●")
 	assert.Contains(t, v, "state:InProgress")
 	assert.Contains(t, v, "/: edit query")
 

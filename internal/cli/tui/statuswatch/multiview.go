@@ -51,12 +51,14 @@ type colSpec struct {
 }
 
 // multiCols defines the column specifications.
-// Widths follow the prototype's fixed layout (sym 4 + gap, ID 14, Command 9,
+// Widths follow the prototype's fixed layout (sym 4 + gap, Command 9,
 // Mode 11, counts 4 each, Time 7, Age 5); Progress is elastic with a floor
-// of 10 cells.
+// of 10 cells. ID is wide enough to show a full 27-char command ksuid plus a
+// trailing gap so the identifier is never truncated (users copy it for
+// `status command --query 'id:…'` and `cancel`).
 var multiCols = [colCount]colSpec{
 	colStatus:   {"", 5, 0, true},
-	colID:       {"ID", 15, 0, true},
+	colID:       {"ID", 28, 0, true},
 	colCommand:  {"Command", 10, 1, true},
 	colMode:     {"Mode", 12, 2, true},
 	colProgress: {"Progress", 0, 0, true},
@@ -381,7 +383,10 @@ func (v multiView) renderRows(maxRows int) []string {
 					case r.health == healthFinishedFailed:
 						verb = "failed"
 					}
-					cell := pad(fmt.Sprintf("%s %d/%d", verb, done, total), w)
+					// Truncate to w-1 so a squeezed progress column always leaves a
+					// trailing gap before the ✓ column (pad alone fills the full
+					// width and the count would abut — e.g. "completed 1" + "1").
+					cell := pad(components.Truncate(fmt.Sprintf("%s %d/%d", verb, done, total), w-1), w)
 					sb.WriteString(textStyle.Render(cell))
 				} else {
 					// segmented bar + count; bar is bw-8 wide, count is right-aligned remainder.

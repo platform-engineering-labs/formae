@@ -291,3 +291,39 @@ func TestModel_DetailView_NoQueryBar(t *testing.T) {
 	}
 	assert.True(t, foundFooter, "detail footer ('esc') must appear on the last 2 lines")
 }
+
+// A single command drills straight into its detail view instead of dropping
+// the user in a one-row list they must "enter" into.
+func TestModel_SingleCommandAutoDrillsToDetail(t *testing.T) {
+	m, _ := newTestModel(t, nil)
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	mm, _ = mm.Update(commandsMsg{commands: respFix("cmd-one").Commands})
+
+	got := mm.(Model)
+	assert.Equal(t, viewDetail, got.view, "a single command must auto-drill into its detail view")
+	assert.Equal(t, "cmd-one", got.detail.cmdID)
+}
+
+// Multiple commands keep the user in the list view (no auto-drill).
+func TestModel_MultipleCommandsStayInList(t *testing.T) {
+	m, _ := newTestModel(t, nil)
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	mm, _ = mm.Update(commandsMsg{commands: respFix("cmd-one", "cmd-two").Commands})
+
+	assert.Equal(t, viewMulti, mm.(Model).view, "multiple commands must stay in the list view")
+}
+
+// The detail-view footer advertises the column/sort keybindings (they are wired
+// in the detail model but were previously undiscoverable).
+func TestModel_DetailFooter_HasSortHints(t *testing.T) {
+	m, _ := newTestModel(t, nil)
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
+	mm, _ = mm.Update(commandsMsg{commands: respFix("cmd-one").Commands})
+
+	out := plain(mm.(Model).View())
+	assert.Contains(t, out, "toggle sort", "detail footer must advertise the sort key")
+	assert.Contains(t, out, "column", "detail footer must advertise the column-nav keys")
+}
