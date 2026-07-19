@@ -11,7 +11,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
-	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 )
 
 // renderSummaryCounts returns the styled op-count summary line.
@@ -21,23 +20,9 @@ func (m Model) renderSummaryCounts() string {
 	counts := opCounts(groups)
 	p := m.th.Palette
 
-	opColor := func(o opKind) lipgloss.AdaptiveColor {
-		switch o {
-		case opCreate:
-			return p.Done
-		case opUpdate:
-			return p.PrimaryAccent
-		case opDelete:
-			return p.Warning
-		case opReplace:
-			return p.SecondaryAccent
-		case opDetach:
-			return p.TextSecondary
-		case opKeep:
-			return p.TextSubtle
-		}
-		return p.TextPrimary
-	}
+	// Operations are not color-coded by type (consistent with the rest of the
+	// CLI); the symbol and word distinguish them.
+	st := lipgloss.NewStyle().Foreground(p.TextPrimary)
 
 	ordered := []opKind{opCreate, opUpdate, opDelete, opReplace, opDetach, opKeep}
 	var parts []string
@@ -46,7 +31,6 @@ func (m Model) renderSummaryCounts() string {
 		if n == 0 {
 			continue
 		}
-		st := lipgloss.NewStyle().Foreground(opColor(op))
 		token := st.Render(op.symbol()) + " " + fmt.Sprintf("%d", n) + " " + st.Render(op.word())
 		parts = append(parts, token)
 	}
@@ -250,7 +234,6 @@ func (m Model) renderGroupColHeader(kind rowKind, opW, labelW, typeW, stackW int
 // Returns the line string including trailing newline(s) for sub-lines.
 func (m Model) renderRow(r simRow, kind rowKind, opW, labelW, typeW, stackW int, isCursor bool) string {
 	p := m.th.Palette
-	isDelete := r.op == opDelete
 
 	// The cursor background uses the .Dark value explicitly (same documented
 	// compromise as statuswatch's detailmodel) so the bg-filled trailing spaces
@@ -261,25 +244,22 @@ func (m Model) renderRow(r simRow, kind rowKind, opW, labelW, typeW, stackW int,
 		bg = lipgloss.Color(p.Selection.Dark)
 	}
 
-	// Determine base foreground color
+	// Determine base foreground color. Operations are NOT color-coded by type
+	// (create/update/delete/replace all render alike, consistent with the rest of
+	// the CLI); the op word + glyph carry the meaning, so delete rows use the
+	// same treatment as any other row.
 	var fgColor lipgloss.AdaptiveColor
-	switch {
-	case isDelete && !isCursor:
-		fgColor = p.Warning
-	case isCursor:
+	if isCursor {
 		fgColor = p.TextPrimary
-	default:
+	} else {
 		fgColor = p.TextSecondary
 	}
 
 	// Label color (more prominent than other fields)
 	var labelColor lipgloss.AdaptiveColor
-	switch {
-	case isDelete && !isCursor:
-		labelColor = p.Warning
-	case isCursor:
+	if isCursor {
 		labelColor = p.TextPrimary
-	default:
+	} else {
 		labelColor = p.PrimaryAccent
 	}
 
@@ -290,12 +270,8 @@ func (m Model) renderRow(r simRow, kind rowKind, opW, labelW, typeW, stackW int,
 		labelSt = labelSt.Background(bg)
 	}
 
-	// Operation color (always per-op role, even on delete rows)
-	opColor := opStyleColor(m.th, r.op, isCursor, bg)
-	opSt := lipgloss.NewStyle().Foreground(opColor)
-	if isCursor {
-		opSt = opSt.Background(bg)
-	}
+	// Operation text is not color-coded by type — it uses the base row color.
+	opSt := baseSt
 
 	// Build op plain string and pad
 	opPlain := r.op.symbol() + " " + r.op.word()
@@ -357,30 +333,6 @@ func (m Model) renderRow(r simRow, kind rowKind, opW, labelW, typeW, stackW int,
 	}
 
 	return result
-}
-
-// opStyleColor returns the foreground color for an operation symbol/word.
-// On cursor rows, all text uses TextPrimary (the bg handles highlighting).
-func opStyleColor(th *theme.Theme, op opKind, isCursor bool, _ lipgloss.Color) lipgloss.AdaptiveColor {
-	p := th.Palette
-	if isCursor {
-		return p.TextPrimary
-	}
-	switch op {
-	case opCreate:
-		return p.Done
-	case opUpdate:
-		return p.PrimaryAccent
-	case opDelete:
-		return p.Warning
-	case opReplace:
-		return p.SecondaryAccent
-	case opDetach:
-		return p.TextSecondary
-	case opKeep:
-		return p.TextSubtle
-	}
-	return p.TextSecondary
 }
 
 // findNavIndex returns the nav list index for a specific row in a group.

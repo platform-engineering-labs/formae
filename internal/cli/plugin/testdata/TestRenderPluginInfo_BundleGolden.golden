@@ -1,6 +1,6 @@
 [1;38;2;96;165;250mhomelab-bundle[0m 3.0.1  [38;2;232;232;232m✓ installed[0m
 
-  [38;2;136;136;136mType:       [0m  [38;2;232;232;232mbundle[0m
-  [38;2;136;136;136mSummary:    [0m  [38;2;232;232;232mCurated homelab stack[0m
-  [38;2;136;136;136mDescription:[0m  [38;2;232;232;232mA full homelab bundle including tailscale, aws, and more[0m
-  [38;2;136;136;136mAvailable:  [0m  [38;2;232;232;232m[38;2;232;232;232m3.0.1[0m, 3.0.0[0m
+  [38;2;170;170;170mType:       [0m  [38;2;232;232;232mbundle[0m
+  [38;2;170;170;170mSummary:    [0m  [38;2;232;232;232mCurated homelab stack[0m
+  [38;2;170;170;170mDescription:[0m  [38;2;232;232;232mA full homelab bundle including tailscale, aws, and more[0m
+  [38;2;170;170;170mAvailable:  [0m  [38;2;232;232;232m[38;2;232;232;232m3.0.1[0m, 3.0.0[0m

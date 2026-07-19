@@ -103,9 +103,14 @@ func TestModel_ExitWhenDone(t *testing.T) {
 		Now: func() time.Time { return time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC) }})
 	var mm tea.Model = m
 	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
-	_, cmd := mm.Update(commandsMsg{commands: fc.resp.Commands})
-	require.NotNil(t, cmd, "all commands terminal + ExitWhenDone → quit")
-	assert.Equal(t, tea.Quit(), cmd())
+	// All commands terminal → schedule a DEFERRED quit (grace period) so the
+	// completed progress bar stays visible for a beat, rather than quitting
+	// instantly. The grace-period message (exitNowMsg) triggers the real quit.
+	mm, cmd := mm.Update(commandsMsg{commands: fc.resp.Commands})
+	require.NotNil(t, cmd, "all commands terminal + ExitWhenDone → deferred quit scheduled")
+	_, quitCmd := mm.Update(exitNowMsg{})
+	require.NotNil(t, quitCmd, "exitNowMsg → quit")
+	assert.Equal(t, tea.Quit(), quitCmd())
 }
 
 func TestModel_ErrorBanner(t *testing.T) {

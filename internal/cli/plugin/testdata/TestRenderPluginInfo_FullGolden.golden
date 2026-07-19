@@ -1,11 +1,11 @@
 [1;38;2;96;165;250mcloudflare[0m 1.2.3  [38;2;232;232;232m✓ installed[0m
 
-  [38;2;136;136;136mType:     [0m  [38;2;232;232;232mresource[0m
-  [38;2;136;136;136mNamespace:[0m  [38;2;232;232;232mCLOUDFLARE[0m
-  [38;2;136;136;136mCategory: [0m  [38;2;232;232;232mnetwork[0m
-  [38;2;136;136;136mSummary:  [0m  [38;2;232;232;232mCloudflare DNS and network resources[0m
-  [38;2;136;136;136mPublisher:[0m  [38;2;232;232;232mAcme Corp[0m
-  [38;2;136;136;136mLicense:  [0m  [38;2;232;232;232mApache-2.0[0m
-  [38;2;136;136;136mChannel:  [0m  [38;2;232;232;232mstable[0m
-  [38;2;136;136;136mAvailable:[0m  [38;2;232;232;232m[38;2;232;232;232m1.2.3[0m, 1.2.2, 1.1.0[0m
-  [38;2;136;136;136mPart of:  [0m  [38;2;232;232;232mhomelab-bundle[0m
+  [38;2;170;170;170mType:     [0m  [38;2;232;232;232mresource[0m
+  [38;2;170;170;170mNamespace:[0m  [38;2;232;232;232mCLOUDFLARE[0m
+  [38;2;170;170;170mCategory: [0m  [38;2;232;232;232mnetwork[0m
+  [38;2;170;170;170mSummary:  [0m  [38;2;232;232;232mCloudflare DNS and network resources[0m
+  [38;2;170;170;170mPublisher:[0m  [38;2;232;232;232mAcme Corp[0m
+  [38;2;170;170;170mLicense:  [0m  [38;2;232;232;232mApache-2.0[0m
+  [38;2;170;170;170mChannel:  [0m  [38;2;232;232;232mstable[0m
+  [38;2;170;170;170mAvailable:[0m  [38;2;232;232;232m[38;2;232;232;232m1.2.3[0m, 1.2.2, 1.1.0[0m
+  [38;2;170;170;170mPart of:  [0m  [38;2;232;232;232mhomelab-bundle[0m

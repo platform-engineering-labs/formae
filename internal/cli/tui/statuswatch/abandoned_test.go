@@ -349,9 +349,12 @@ func TestModel_ExitWhenDoneWithAbandoned(t *testing.T) {
 
 	var mm tea.Model = m
 	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
-	_, quitCmd := mm.Update(commandsMsg{commands: []apimodel.Command{cmd}})
-	assert.NotNil(t, quitCmd, "ExitWhenDone + all terminal + abandoned → quit")
+	// All terminal + ExitWhenDone schedules a DEFERRED quit (grace period so the
+	// completed bar is visible); the exitNowMsg then triggers the real quit.
+	mm, schedCmd := mm.Update(commandsMsg{commands: []apimodel.Command{cmd}})
+	assert.NotNil(t, schedCmd, "ExitWhenDone + all terminal + abandoned → deferred quit scheduled")
 
-	result := quitCmd()
-	assert.Equal(t, tea.Quit(), result)
+	_, quitCmd := mm.Update(exitNowMsg{})
+	assert.NotNil(t, quitCmd, "exitNowMsg → quit")
+	assert.Equal(t, tea.Quit(), quitCmd())
 }

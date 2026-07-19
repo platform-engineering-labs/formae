@@ -80,7 +80,17 @@ type Model struct {
 	focusHandled bool
 	// helpOpen tracks whether the help overlay is currently displayed.
 	helpOpen bool
+	// exitScheduled guards the one-shot grace delay before ExitWhenDone quits, so
+	// the completed progress bar is visible for a beat before the TUI exits.
+	exitScheduled bool
 }
+
+// exitGracePeriod is how long the watch holds on the completed frame (full
+// progress bar) before auto-exiting when ExitWhenDone is set.
+const exitGracePeriod = 1500 * time.Millisecond
+
+// exitNowMsg is delivered after exitGracePeriod to trigger the deferred quit.
+type exitNowMsg struct{}
 
 // New constructs a Model with sensible defaults applied to opts.
 func New(th *theme.Theme, client Client, opts Options) Model {
@@ -185,10 +195,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// ExitWhenDone: quit when all visible commands are terminal (and there
 		// is at least one row — avoid quitting immediately on empty responses).
+		// Hold briefly first so the completed (100%) progress bar is actually
+		// visible before the TUI exits, instead of vanishing the instant the
+		// command finishes.
 		if m.opts.ExitWhenDone && len(m.multi.rows) > 0 && allTerminal(m.multi.rows) {
-			return m, tea.Quit
+			if !m.exitScheduled {
+				m.exitScheduled = true
+				return m, tea.Tick(exitGracePeriod, func(time.Time) tea.Msg { return exitNowMsg{} })
+			}
+			return m, nil
 		}
 		return m, nil
+
+	case exitNowMsg:
+		return m, tea.Quit
 
 	case tickMsg:
 		return m, tea.Batch(
