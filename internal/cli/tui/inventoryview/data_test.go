@@ -6,6 +6,7 @@ package inventoryview
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -54,7 +55,21 @@ type fakeClient struct {
 func (f *fakeClient) ExtractResources(query string, fromTUI bool) (*pkgmodel.Forma, []string, error) {
 	f.resourcesQuery = query
 	f.resourcesFromTUI = fromTUI
-	return f.forma, f.formaNags, f.formaErr
+	if f.formaErr != nil || f.forma == nil || query == "" {
+		return f.forma, f.formaNags, f.formaErr
+	}
+	// Simulate server-side filtering: keep resources whose fields contain the
+	// query as a case-insensitive substring (the real server honours a richer
+	// syntax; this is enough to exercise the serverQuery re-fetch path).
+	needle := strings.ToLower(query)
+	filtered := make([]pkgmodel.Resource, 0, len(f.forma.Resources))
+	for _, r := range f.forma.Resources {
+		hay := strings.ToLower(r.NativeID + " " + r.Stack + " " + r.Type + " " + r.Label)
+		if strings.Contains(hay, needle) {
+			filtered = append(filtered, r)
+		}
+	}
+	return &pkgmodel.Forma{Resources: filtered}, f.formaNags, f.formaErr
 }
 
 func (f *fakeClient) ExtractTargets(query string, fromTUI bool) ([]*pkgmodel.Target, []string, error) {

@@ -196,9 +196,18 @@ func TestDetail_FilteredDetail(t *testing.T) {
 	rows := buildFixtureResources(5) // has "my-bucket", "web-1", "web-sg", "primary", "old-logs"
 	mm := buildDetailTestModel(t, rows)
 
-	// Apply a filter that narrows to only "old-logs" row.
+	// Resources is a serverQuery tab, so narrowing happens server-side. Simulate
+	// a server-filtered result set containing only the "old-logs" row.
+	var oldLogs row
+	for _, r := range rows {
+		if r.cells[3] == "old-logs" {
+			oldLogs = r
+			break
+		}
+	}
 	model := mm.(Model)
-	model.tabs[TabResources].filter = "old-logs"
+	model.tabs[TabResources].query = "label:old-logs"
+	model.tabs[TabResources].allRows = []row{oldLogs}
 	model.tabs[TabResources] = model.tabs[TabResources].sync(model.opts.MaxRows)
 	mm = model
 

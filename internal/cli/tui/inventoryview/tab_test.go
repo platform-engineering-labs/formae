@@ -62,7 +62,7 @@ func TestVisible_FilterMatchesAcrossColumns(t *testing.T) {
 		makeRow("ALPHA", "other"), // match in col 0, uppercase
 	}
 	tm := newTestTabModel(rows)
-	tm.filter = "foo"
+	tm.query = "foo"
 
 	vis, total := tm.visible(0)
 
@@ -82,13 +82,13 @@ func TestVisible_FilterCaseInsensitiveBothDirections(t *testing.T) {
 	tm := newTestTabModel(rows)
 
 	// Uppercase filter against lowercase data
-	tm.filter = "WIDGET"
+	tm.query = "WIDGET"
 	vis, _ := tm.visible(0)
 	require.Len(t, vis, 1)
 	assert.Equal(t, "Widget", vis[0].cells[0])
 
 	// Lowercase filter against uppercase data
-	tm.filter = "staging"
+	tm.query = "staging"
 	vis, _ = tm.visible(0)
 	require.Len(t, vis, 1)
 	assert.Equal(t, "gadget", vis[0].cells[0])
@@ -97,7 +97,7 @@ func TestVisible_FilterCaseInsensitiveBothDirections(t *testing.T) {
 func TestVisible_EmptyFilterMatchesAll(t *testing.T) {
 	rows := makeRows("a", "1", "b", "2", "c", "3")
 	tm := newTestTabModel(rows)
-	tm.filter = ""
+	tm.query = ""
 
 	vis, total := tm.visible(0)
 	assert.Len(t, vis, 3)
@@ -162,7 +162,7 @@ func TestVisible_TotalIsPostFilterPreCap(t *testing.T) {
 		makeRow("eggplant", "veggie"),
 	}
 	tm := newTestTabModel(rows)
-	tm.filter = "fruit" // matches col 1: apple, banana, date → 3 rows
+	tm.query = "fruit" // matches col 1: apple, banana, date → 3 rows
 
 	vis, total := tm.visible(2)
 
@@ -233,5 +233,5 @@ func TestNewTabModel_InitialState(t *testing.T) {
 	assert.Equal(t, -1, tm.sortCol, "sortCol must be -1 (server order)")
 	assert.Equal(t, components.SortNone, tm.sortDir)
 	assert.Empty(t, tm.allRows)
-	assert.Empty(t, tm.filter)
+	assert.Empty(t, tm.query)
 }

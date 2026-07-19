@@ -60,11 +60,17 @@ func typeIntoQuery(mm tea.Model, s string) tea.Model {
 	return mm
 }
 
-// applyQuery focuses the query bar, types s, and confirms with enter.
+// applyQuery focuses the query bar, types s, and confirms with enter. On a
+// serverQuery tab enter returns a re-fetch cmd; we pump it and feed the
+// resulting tabLoadedMsg back so the view reflects the new results.
 func applyQuery(mm tea.Model, s string) tea.Model {
 	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
 	mm = typeIntoQuery(mm, s)
-	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	var cmd tea.Cmd
+	mm, cmd = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		mm, _ = mm.Update(cmd())
+	}
 	return mm
 }
 
@@ -93,10 +99,14 @@ func TestFilter_AppliesOnEnter(t *testing.T) {
 	before, _ := mm.(Model).tabs[TabResources].visible(0)
 	assert.Len(t, before, 7, "typing must not filter live — all 7 rows still shown before enter")
 
-	// Enter applies the query.
-	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	// Enter applies the query (Resources is a serverQuery tab → re-fetch).
+	var cmd tea.Cmd
+	mm, cmd = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		mm, _ = mm.Update(cmd())
+	}
 	m := mm.(Model)
-	assert.Equal(t, "S3", m.tabs[TabResources].filter, "enter must apply the typed query")
+	assert.Equal(t, "S3", m.tabs[TabResources].query, "enter must apply the typed query")
 	vis, _ := m.tabs[TabResources].visible(0)
 	assert.Len(t, vis, 3, "applying 'S3' must narrow from 7 to 3 rows")
 }
@@ -128,7 +138,7 @@ func TestFilter_EnterKeepsQueryAndUnfocuses(t *testing.T) {
 
 	m := mm.(Model)
 	assert.False(t, m.query.Focused(), "enter must unfocus the query bar")
-	assert.Equal(t, "S3", m.tabs[TabResources].filter, "query must be preserved after enter")
+	assert.Equal(t, "S3", m.tabs[TabResources].query, "query must be preserved after enter")
 
 	// After unfocus, 'q' should quit (not go into the query).
 	_, cmd := mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
@@ -153,7 +163,7 @@ func TestFilter_EscCancelsEditKeepsApplied(t *testing.T) {
 
 	m := mm.(Model)
 	assert.False(t, m.query.Focused(), "esc must unfocus the query bar")
-	assert.Equal(t, "S3", m.tabs[TabResources].filter, "esc must keep the previously-applied query")
+	assert.Equal(t, "S3", m.tabs[TabResources].query, "esc must keep the previously-applied query")
 	vis, _ := m.tabs[TabResources].visible(0)
 	assert.Len(t, vis, 3, "the applied 'S3' query must still narrow to 3 rows")
 }
@@ -166,13 +176,17 @@ func TestFilter_EmptyQueryRestoresAll(t *testing.T) {
 	_, mm := loadFilterFixture(t)
 
 	mm = applyQuery(mm, "S3")
-	// Re-focus, clear the edit (ctrl+u), apply empty.
+	// Re-focus, clear the edit (ctrl+u), apply empty — pump the re-fetch cmd.
 	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
 	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
-	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	var cmd tea.Cmd
+	mm, cmd = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		mm, _ = mm.Update(cmd())
+	}
 
 	m := mm.(Model)
-	assert.Equal(t, "", m.tabs[TabResources].filter, "an empty query must clear the filter")
+	assert.Equal(t, "", m.tabs[TabResources].query, "an empty query must clear the filter")
 	vis, _ := m.tabs[TabResources].visible(0)
 	assert.Len(t, vis, 7, "clearing the query must restore the full row set (7 rows)")
 }
@@ -201,7 +215,7 @@ func TestFilter_FocusedTypingGoesIntoQuery(t *testing.T) {
 	// Type 's' and 'r' — must go into the query, not sort/refresh. Apply and check.
 	mm = typeIntoQuery(mm, "sr")
 	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	assert.Equal(t, "q2sr", mm.(Model).tabs[TabResources].filter,
+	assert.Equal(t, "q2sr", mm.(Model).tabs[TabResources].query,
 		"keys typed while focused must accumulate in the query")
 }
 
@@ -221,12 +235,12 @@ func TestFilter_PerTabIsolation(t *testing.T) {
 	if cmd != nil {
 		mm, _ = mm.Update(cmd())
 	}
-	assert.Equal(t, "", mm.(Model).tabs[TabTargets].filter, "Targets tab must have its own (empty) filter")
+	assert.Equal(t, "", mm.(Model).tabs[TabTargets].query, "Targets tab must have its own (empty) filter")
 	assert.Equal(t, "", mm.(Model).query.Query(), "query bar must reflect the (empty) Targets filter")
 
 	// Switch back to Resources — filter still "S3", and the bar reflects it.
 	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
-	assert.Equal(t, "S3", mm.(Model).tabs[TabResources].filter,
+	assert.Equal(t, "S3", mm.(Model).tabs[TabResources].query,
 		"Resources filter must be preserved after switching away and back")
 	assert.Equal(t, "S3", mm.(Model).query.Query(), "query bar must be reseeded with the Resources filter")
 }
@@ -325,4 +339,26 @@ func TestGolden_FilterUnfocusedApplied(t *testing.T) {
 	mm = applyQuery(mm, "S3")
 
 	tuitest.RequireGolden(t, []byte(mm.(Model).View()))
+}
+
+// TestFilter_ResourcesThreadsServerQuery verifies that on the serverQuery
+// Resources tab the query is sent to the server (fetch), not applied as a
+// client-side substring filter.
+func TestFilter_ResourcesThreadsServerQuery(t *testing.T) {
+	fc := buildFilterFixtureClient()
+	opts := Options{
+		FocusTab: TabResources,
+		Now:      func() time.Time { return time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC) },
+	}
+	m := newTestInventoryModel(t, fc, opts)
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	mm, _ = runInit(mm)
+
+	mm = applyQuery(mm, "type:AWS::S3::Bucket*")
+
+	assert.Equal(t, "type:AWS::S3::Bucket*", fc.resourcesQuery,
+		"the applied query must be threaded to ExtractResources (server-side)")
+	assert.Equal(t, "type:AWS::S3::Bucket*", mm.(Model).query.Query(),
+		"the bar must show the applied server query")
 }

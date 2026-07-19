@@ -32,8 +32,8 @@ type tabModel struct {
 	state         tabState
 	allRows       []row
 	err           error
-	filter        string
-	sortCol       int // -1 = server order
+	query         string // applied query-bar text: server query (serverQuery tabs) or client substring
+	sortCol       int    // -1 = server order
 	sortDir       components.SortDirection
 	sortHi        int // column highlighted by →← (the s-key sort target)
 	table         components.Table
@@ -71,10 +71,11 @@ func newTabModel(th *theme.Theme, spec tabSpec) tabModel {
 //
 // visible is PURE (no mutation, no table interaction).
 func (t tabModel) visible(maxRows int) (vis []row, total int) {
-	// Step 1: filter
+	// Step 1: filter. serverQuery tabs are already filtered by the fetch, so the
+	// client-side substring filter only applies to the non-serverQuery tabs.
 	filtered := t.allRows
-	if t.filter != "" {
-		needle := strings.ToLower(t.filter)
+	if !t.spec.serverQuery && t.query != "" {
+		needle := strings.ToLower(t.query)
 		filtered = make([]row, 0, len(t.allRows))
 		for _, r := range t.allRows {
 			if rowMatchesFilter(r, needle) {

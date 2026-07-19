@@ -190,7 +190,7 @@ func TestStatusLine_Filtered(t *testing.T) {
 	th := theme.New("formae")
 	rows := buildFixtureResources(5)
 	tm := makeTab(th, rows)
-	tm.filter = "production"
+	tm.query = "production"
 	tm = tm.setSize(100, 24)
 	tm = tm.sync(0)
 

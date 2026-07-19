@@ -56,11 +56,17 @@ type row struct {
 
 // tabSpec describes one inventory tab declaratively.
 type tabSpec struct {
-	title     string // "Resources"
-	entity    string // "resources" — status bar noun
-	columns   []components.Column
-	fetch     func(c Client, query string, fromTUI bool) ([]row, []string, error)
-	styleCell func(th *theme.Theme, col int, cell string) string // nil = plain
+	title   string // "Resources"
+	entity  string // "resources" — status bar noun
+	columns []components.Column
+	fetch   func(c Client, query string, fromTUI bool) ([]row, []string, error)
+	// serverQuery is true when the tab's fetch honours a server-side query
+	// (Resources, Targets). For those tabs the query bar drives a real server
+	// query (re-fetched on enter, full syntax with wildcards) and no client-side
+	// filter is applied. For serverQuery=false tabs (Stacks, Policies — whose
+	// fetch takes no query) the query bar drives a client-side substring filter.
+	serverQuery bool
+	styleCell   func(th *theme.Theme, col int, cell string) string // nil = plain
 }
 
 // tabLoadedMsg is the bubbletea message delivered when a tab fetch completes.
@@ -75,8 +81,9 @@ type tabLoadedMsg struct {
 func newSpecs(now func() time.Time) [4]tabSpec {
 	return [4]tabSpec{
 		TabResources: {
-			title:  "Resources",
-			entity: "resources",
+			title:       "Resources",
+			entity:      "resources",
+			serverQuery: true,
 			columns: []components.Column{
 				{Title: "NativeID", Width: 28, Priority: 3},
 				{Title: "Stack", Width: 14, Priority: 2},
@@ -107,8 +114,9 @@ func newSpecs(now func() time.Time) [4]tabSpec {
 			},
 		},
 		TabTargets: {
-			title:  "Targets",
-			entity: "targets",
+			title:       "Targets",
+			entity:      "targets",
+			serverQuery: true,
 			columns: []components.Column{
 				{Title: "Label", Width: 20, Priority: 0},
 				{Title: "Namespace", Width: 20, Priority: 1},

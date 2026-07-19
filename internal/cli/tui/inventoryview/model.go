@@ -59,9 +59,10 @@ func New(th *theme.Theme, client Client, opts Options) Model {
 		TabStacks:    newTabModel(th, specs[TabStacks]),
 		TabPolicies:  newTabModel(th, specs[TabPolicies]),
 	}
-	// The query bar drives the client-side per-tab filter and starts empty.
-	// opts.Query is a separate server-side extract query threaded to the focus
-	// tab's fetch (D3) via Init/refresh — it is not the client filter.
+	// opts.Query is the initial query for the focus tab (D3). Seed both the tab's
+	// applied query and the shared query bar with it so it is threaded to the
+	// fetch and shown in the bar, mirroring the status-command TUI.
+	tabs[opts.FocusTab].query = opts.Query
 	return Model{
 		th:      th,
 		keys:    tui.DefaultKeyMap(),
@@ -72,7 +73,7 @@ func New(th *theme.Theme, client Client, opts Options) Model {
 		active:  opts.FocusTab,
 		spinner: components.NewSpinner(th),
 		nagSeen: make(map[string]struct{}),
-		query:   components.NewQueryBar(th, ""),
+		query:   components.NewQueryBar(th, opts.Query),
 	}
 }
 
@@ -92,10 +93,10 @@ func (m Model) Nags() []string {
 // The active tab's state is already tabNotLoaded at construction; the
 // tabLoading transition happens in Update when the first fetch fires.
 func (m Model) Init() tea.Cmd {
-	query := m.opts.Query // only for FocusTab (D3)
+	// The focus tab's query was seeded from opts.Query in New (D3).
 	return tea.Batch(
 		m.spinner.Tick,
-		fetchCmd(m.client, m.specs, m.active, query, false),
+		fetchCmd(m.client, m.specs, m.active, m.tabs[m.active].query, false),
 	)
 }
 
@@ -318,18 +319,27 @@ func (m Model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // handleQueryKey handles key events while the query bar is focused. On enter
-// the query is applied to the active tab's client-side filter; esc cancels the
-// edit and keeps the previously-applied query. Mirrors the status-command TUI.
+// the query is applied to the active tab; esc cancels the edit and keeps the
+// previously-applied query. For serverQuery tabs (Resources, Targets) enter
+// re-fetches from the server with the query; for the others it re-syncs the
+// client-side substring filter. Mirrors the status-command TUI.
 func (m Model) handleQueryKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.Type == tea.KeyCtrlC {
 		return m, tea.Quit
 	}
 	var applied bool
 	m.query, applied = m.query.Update(msg)
-	if applied {
-		m.tabs[m.active].filter = m.query.Query()
-		m.tabs[m.active] = m.tabs[m.active].sync(m.opts.MaxRows)
+	if !applied {
+		return m, nil
 	}
+	m.tabs[m.active].query = m.query.Query()
+	if m.specs[m.active].serverQuery {
+		// Re-fetch from the server with the new query.
+		m.tabs[m.active].state = tabLoading
+		m.statsSent = true
+		return m, fetchCmd(m.client, m.specs, m.active, m.tabs[m.active].query, true)
+	}
+	m.tabs[m.active] = m.tabs[m.active].sync(m.opts.MaxRows)
 	return m, nil
 }
 
@@ -368,7 +378,7 @@ func (m Model) switchTab(t Tab) (tea.Model, tea.Cmd) {
 	m.active = t
 	// Reseed the shared query bar with the new tab's applied filter so the bar
 	// always reflects the active tab's query.
-	m.query = components.NewQueryBar(m.th, m.tabs[t].filter)
+	m.query = components.NewQueryBar(m.th, m.tabs[t].query)
 	// Re-size the newly-active tab for the body budget (the query bar is fixed
 	// chrome, so the budget is the same for all tabs).
 	m.tabs[t] = m.tabs[t].setSize(m.width, m.bodyHeight())
@@ -377,10 +387,9 @@ func (m Model) switchTab(t Tab) (tea.Model, tea.Cmd) {
 	tab := &m.tabs[t]
 	if tab.state == tabNotLoaded || tab.state == tabFailed {
 		tab.state = tabLoading
-		query := "" // non-focus tabs always use empty query (D3)
-		// Init always fires the session's first fetch (fromTUI=false), so any
-		// fetch issued from Update passes fromTUI=true (R7).
-		cmd := fetchCmd(m.client, m.specs, t, query, true)
+		// Fetch with the tab's applied query (empty for a fresh tab). Init fires
+		// the session's first fetch (fromTUI=false); Update fetches use true (R7).
+		cmd := fetchCmd(m.client, m.specs, t, tab.query, true)
 		m.statsSent = true
 		return m, cmd
 	}
@@ -390,22 +399,12 @@ func (m Model) switchTab(t Tab) (tea.Model, tea.Cmd) {
 // refreshActive refetches the active tab, preserving filter/sortCol/sortDir.
 func (m Model) refreshActive() (tea.Model, tea.Cmd) {
 	t := m.active
-	// Preserve pipeline state.
-	filter := m.tabs[t].filter
-	sortCol := m.tabs[t].sortCol
-	sortDir := m.tabs[t].sortDir
-
+	// Pipeline state (query/sortCol/sortDir) is preserved on the tabModel across
+	// the reload; the tabLoadedMsg only replaces allRows.
 	m.tabs[t].state = tabLoading
-	m.tabs[t].filter = filter
-	m.tabs[t].sortCol = sortCol
-	m.tabs[t].sortDir = sortDir
-
-	query := ""
-	if t == m.opts.FocusTab {
-		query = m.opts.Query
-	}
-	// Refresh is never the session's first fetch — always fromTUI=true (R7).
-	cmd := fetchCmd(m.client, m.specs, t, query, true)
+	// Re-fetch with the tab's applied query so a server-side query survives a
+	// manual refresh (it is ignored by non-serverQuery tabs' fetch).
+	cmd := fetchCmd(m.client, m.specs, t, m.tabs[t].query, true)
 	m.statsSent = true
 	return m, cmd
 }
@@ -421,16 +420,16 @@ func (m Model) delegateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // chromeLines is the number of lines consumed by fixed chrome at full width (≥80):
 //
-//	HeaderBar (2) + tab bar (1) + status line (1) + query bar (2) + FooterBar (2) = 8.
-const chromeLines = 8
+//	HeaderBar (2) + tab bar (2) + status line (1) + query bar (2) + FooterBar (2) = 9.
+const chromeLines = 9
 
 // narrowChromeLines is the chrome line count at narrow width (< narrowFooterThreshold):
 //
-//	HeaderBar (2) + tab bar (1) + query bar (2) + FooterBar (2) = 7.
+//	HeaderBar (2) + tab bar (2) + query bar (2) + FooterBar (2) = 8.
 //
 // The standalone status line is dropped; its content is folded into the
 // FooterBar hint line as a single combined dim string.
-const narrowChromeLines = 7
+const narrowChromeLines = 8
 
 // bodyHeight returns the number of lines available for the tab body region
 // (the table). The query bar is fixed chrome, not part of the body budget.
@@ -616,47 +615,60 @@ func (m Model) viewHelp() string {
 	return strings.Join(lines, "\n")
 }
 
-// renderTabBar renders the tab-selection bar as numbered pills, e.g.
-// " 1 Resources  2 Targets  3 Stacks  4 Policies". The active tab is a filled
-// pill (Selection background, accent foreground, bold) so it reads clearly as a
-// selected tab; inactive tabs are dim. The leading numbers double as the 1-4
-// switch hints.
+// tabBarLines is the height of the tab bar: a top-border row plus the label row
+// (the active tab is drawn as an open-bottom box, so its top border floats above
+// the labels).
+const tabBarLines = 2
+
+// renderTabBar renders the tab-selection bar as numbered tabs, e.g.
+// " 1 Resources   2 Targets   3 Stacks   4 Policies". The active tab is drawn as
+// an open-bottom box (top + side borders in the accent color) so it reads as an
+// actual tab; inactive tabs are dim labels. The leading numbers double as the
+// 1-4 switch hints. Returns exactly tabBarLines lines, each padded to width.
 func (m Model) renderTabBar() string {
 	titles := [4]string{"Resources", "Targets", "Stacks", "Policies"}
 
-	var sb strings.Builder
-	sb.WriteString(" ")
+	cells := make([]string, len(titles))
 	for i, title := range titles {
-		// " n Title " — surrounding spaces give the active pill breathing room.
 		label := " " + string(rune('1'+i)) + " " + title + " "
 		switch {
 		case m.th == nil:
-			sb.WriteString(label)
+			cells[i] = "\n" + label // keep two rows so JoinHorizontal aligns
 		case Tab(i) == m.active:
-			sb.WriteString(lipgloss.NewStyle().
+			// Open-bottom box: top + left + right borders, no bottom.
+			cells[i] = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder(), true, true, false, true).
+				BorderForeground(m.th.Palette.PrimaryAccent).
 				Foreground(m.th.Palette.PrimaryAccent).
-				Background(m.th.Palette.Selection).
 				Bold(true).
-				Render(label))
+				Render(label)
 		default:
-			sb.WriteString(lipgloss.NewStyle().
+			// Plain label on the lower row (blank border row above) so it lines up
+			// with the active tab's label row.
+			cells[i] = "\n" + lipgloss.NewStyle().
 				Foreground(m.th.Palette.TextSecondary).
-				Render(label))
+				Render(" "+label+" ")
 		}
-		sb.WriteString(" ")
 	}
 
-	// Pad or truncate the tab bar line to full width. The pills carry ANSI
-	// escapes, so truncation must be ANSI-aware (ansi.Truncate closes any open
-	// sequence) — a plain rune slice would leak a broken escape at narrow widths.
-	line := sb.String()
-	lineW := lipgloss.Width(line)
-	if lineW < m.width {
-		line += strings.Repeat(" ", m.width-lineW)
-	} else if lineW > m.width {
-		line = ansi.Truncate(line, m.width, "")
+	bar := lipgloss.JoinHorizontal(lipgloss.Bottom, cells...)
+
+	// Pad each of the two rows to full width (ANSI-aware truncation for narrow
+	// terminals so a styled/bordered cell can't leak a broken escape).
+	rows := strings.Split(bar, "\n")
+	for len(rows) < tabBarLines {
+		rows = append([]string{""}, rows...)
 	}
-	return line
+	for i, r := range rows {
+		w := lipgloss.Width(r)
+		switch {
+		case w < m.width:
+			rows[i] = r + strings.Repeat(" ", m.width-w)
+		case w > m.width:
+			rows[i] = ansi.Truncate(r, m.width, "")
+		}
+	}
+	return strings.Join(rows[:tabBarLines], "\n")
 }
 
 // inventoryHelpGroups returns the grouped keybinding hints for the help overlay.

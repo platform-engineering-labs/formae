@@ -70,11 +70,12 @@ func (t tabModel) setSize(width, height int) tabModel {
 			cols[i].Width = newW
 		}
 		t.spec = tabSpec{
-			title:     t.spec.title,
-			entity:    t.spec.entity,
-			columns:   cols,
-			fetch:     t.spec.fetch,
-			styleCell: t.spec.styleCell,
+			title:       t.spec.title,
+			entity:      t.spec.entity,
+			columns:     cols,
+			fetch:       t.spec.fetch,
+			serverQuery: t.spec.serverQuery,
+			styleCell:   t.spec.styleCell,
 		}
 		t.table = components.NewTable(t.th, cols)
 	}
@@ -108,11 +109,12 @@ func (t tabModel) setSize(width, height int) tabModel {
 			// the budget is filled exactly and deterministically.
 			cols[0].Width += surplus - distributed
 			t.spec = tabSpec{
-				title:     t.spec.title,
-				entity:    t.spec.entity,
-				columns:   cols,
-				fetch:     t.spec.fetch,
-				styleCell: t.spec.styleCell,
+				title:       t.spec.title,
+				entity:      t.spec.entity,
+				columns:     cols,
+				fetch:       t.spec.fetch,
+				serverQuery: t.spec.serverQuery,
+				styleCell:   t.spec.styleCell,
 			}
 			t.table = components.NewTable(t.th, cols)
 		}
@@ -534,7 +536,7 @@ func (t tabModel) statusLine(maxRows int) string {
 
 	base := fmt.Sprintf("Showing %d of %d %s", shown, total, t.spec.entity)
 
-	if t.filter != "" {
+	if t.query != "" {
 		return base + " (filtered)"
 	}
 	if maxRows > 0 && total > maxRows {

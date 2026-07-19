@@ -245,7 +245,7 @@ func TestModel_RefreshPreservesSortAndFilter(t *testing.T) {
 
 	// Set filter and sort directly on the active tab (package-internal).
 	model := mm.(Model)
-	model.tabs[TabResources].filter = "production"
+	model.tabs[TabResources].query = "production"
 	model.tabs[TabResources].sortCol = 1
 	model.tabs[TabResources].sortDir = components.SortDesc
 	mm = model
@@ -256,7 +256,7 @@ func TestModel_RefreshPreservesSortAndFilter(t *testing.T) {
 	require.Equal(t, tabLoading, mm.(Model).tabs[TabResources].state,
 		"after 'r', active tab state must be tabLoading")
 	// Filter and sort must still be present during loading.
-	assert.Equal(t, "production", mm.(Model).tabs[TabResources].filter)
+	assert.Equal(t, "production", mm.(Model).tabs[TabResources].query)
 	assert.Equal(t, 1, mm.(Model).tabs[TabResources].sortCol)
 	assert.Equal(t, components.SortDesc, mm.(Model).tabs[TabResources].sortDir)
 
@@ -269,7 +269,7 @@ func TestModel_RefreshPreservesSortAndFilter(t *testing.T) {
 	// Filter and sort must be preserved after reload.
 	loaded := mm.(Model)
 	assert.Equal(t, tabLoaded, loaded.tabs[TabResources].state)
-	assert.Equal(t, "production", loaded.tabs[TabResources].filter,
+	assert.Equal(t, "production", loaded.tabs[TabResources].query,
 		"filter must be preserved after refresh")
 	assert.Equal(t, 1, loaded.tabs[TabResources].sortCol,
 		"sortCol must be preserved after refresh")
