@@ -27,8 +27,8 @@ const (
 )
 
 var (
-	th        = theme.New("formae")
-	goldStyle = lipgloss.NewStyle().Foreground(th.Palette.Warning)
+	th          = theme.New("formae")
+	accentStyle = lipgloss.NewStyle().Foreground(th.Palette.SecondaryAccent)
 )
 
 // detect is a seam for tests: it wraps logo.Detect so tests can stub capability
@@ -76,10 +76,10 @@ func PrintBanner() {
 
 	switch cap {
 	case logo.CapKitty, logo.CapITerm2:
-		// Graphics art: image + wordmark. Print then add two blank lines to
-		// clearly separate the logo from subsequent output.
+		// Graphics art: image + wordmark. The art already advances the cursor
+		// below the image; add a single blank line to separate the logo from
+		// subsequent output.
 		_, _ = fmt.Print(art)
-		_, _ = fmt.Println()
 		_, _ = fmt.Println()
 	default:
 		// CapText and CapBraille: rows is exact; print the art then one blank line.
@@ -91,7 +91,7 @@ func PrintBanner() {
 
 // DefaultLinks returns the formatted links block used in help templates.
 func DefaultLinks() string {
-	return "\n" + goldStyle.Render("Code: ") + "https://github.com/platform-engineering-labs/formae" +
-		"\n" + goldStyle.Render("Docs: ") + DocRoot +
-		"\n" + goldStyle.Render("Bugs: ") + "https://github.com/platform-engineering-labs/formae/issues"
+	return "\n" + accentStyle.Render("Code: ") + "https://github.com/platform-engineering-labs/formae" +
+		"\n" + accentStyle.Render("Docs: ") + DocRoot +
+		"\n" + accentStyle.Render("Bugs: ") + "https://github.com/platform-engineering-labs/formae/issues"
 }

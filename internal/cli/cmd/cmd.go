@@ -31,20 +31,20 @@ var SimpleCmdUsageTemplate string
 func init() {
 	th := theme.New("formae")
 	grey := func(s string) string { return lipgloss.NewStyle().Foreground(th.Palette.TextSubtle).Render(s) }
-	gold := func(s string) string { return lipgloss.NewStyle().Foreground(th.Palette.Warning).Render(s) }
+	accent := func(s string) string { return lipgloss.NewStyle().Foreground(th.Palette.SecondaryAccent).Render(s) }
 	done := func(s string) string { return lipgloss.NewStyle().Foreground(th.Palette.Done).Render(s) }
 
 	RootCmdUsageTemplate = grey("Usage: ") + done("{{.CommandPath}} [OPTIONS]{{if .HasAvailableSubCommands}} [COMMAND]{{end}}\n") +
-		"{{if .HasAvailableSubCommands}}\n" + gold("Commands:") + "{{$types := typeMap .Commands}}" +
+		"{{if .HasAvailableSubCommands}}\n" + accent("Commands:") + "{{$types := typeMap .Commands}}" +
 		"{{$first := true}}{{range $type, $cmds := $types}}" +
-		"{{if $first}}{{$first = false}}{{else}}\n{{end}}\n  " + gold("{{$type}}:") +
+		"{{if $first}}{{$first = false}}{{else}}\n{{end}}\n  " + accent("{{$type}}:") +
 		"{{range $cmd := $cmds}}\n    " + done("{{rpad $cmd.Name $cmd.NamePadding}}") + "     {{$cmd.Short}}" +
 		"{{if (index $cmd.Annotations \"examples\")}}\n                   " +
 		grey("  {{formatExamples (index $cmd.Annotations \"examples\") $cmd}}") + "{{end}}" +
 		"{{if (index $cmd.Annotations \"doc\")}}\n" +
 		grey("{{formatDoc (index $cmd.Annotations \"doc\") $cmd}}\n") + "{{end}}" +
 		"{{end}}{{end}}\n{{end}}" +
-		"{{if .HasAvailableLocalFlags}}\n" + gold("Options:\n") +
+		"{{if .HasAvailableLocalFlags}}\n" + accent("Options:\n") +
 		"{{range .LocalFlags | optionsUsage}}{{.}}\n{{end}}" +
 		"{{end}}" +
 		banner.DefaultLinks() +
@@ -52,19 +52,19 @@ func init() {
 
 	SimpleCmdUsageTemplate = grey("Usage: ") + done("{{.CommandPath}}{{if .HasAvailableLocalFlags}} [OPTIONS]{{end}}{{if .HasAvailableSubCommands}} [COMMAND]{{end}}") +
 		done("{{if index .Annotations \"args\"}} {{index .Annotations \"args\"}}{{end}}") + "\n" +
-		"{{if index .Annotations \"examples\"}}\n" + gold("Examples:") + "\n  " +
+		"{{if index .Annotations \"examples\"}}\n" + accent("Examples:") + "\n  " +
 		grey("{{formatExamplesMultiline (index .Annotations \"examples\") .}}") + "\n{{end}}" +
-		"{{if .HasAvailableSubCommands}}\n" + gold("Commands:") +
+		"{{if .HasAvailableSubCommands}}\n" + accent("Commands:") +
 		"{{range $cmd := .Commands}}\n  " + done("{{rpad $cmd.Name $cmd.NamePadding}}") + "       {{$cmd.Short}}" +
 		"{{if (index $cmd.Annotations \"examples\")}}\n                   " +
 		grey("  {{formatExamples (index $cmd.Annotations \"examples\") $cmd}}") + "{{end}}" +
 		"{{if (index $cmd.Annotations \"doc\")}}\n" +
 		grey("{{formatDoc (index $cmd.Annotations \"doc\") $cmd}}\n") + "{{end}}" +
 		"{{end}}\n{{end}}" +
-		"{{if .HasAvailableLocalFlags}}\n" + gold("Options:\n") +
+		"{{if .HasAvailableLocalFlags}}\n" + accent("Options:\n") +
 		"{{range .LocalFlags | optionsUsage}}{{.}}\n{{end}}" +
 		"{{end}}\n" +
-		"{{if .LocalFlags | hasPropertyFlags}}\n" + gold("Properties:\n") +
+		"{{if .LocalFlags | hasPropertyFlags}}\n" + accent("Properties:\n") +
 		"{{range .LocalFlags | propertyUsage}}{{.}}\n{{end}}" +
 		"{{end}}" +
 		banner.DefaultLinks() +
@@ -126,13 +126,13 @@ func AppFromContext(ctx context.Context, configFilePath, endpoint string, cmd *c
 		path, err := ResolveConfigPath(configFilePath, profileFlag)
 		if err != nil {
 			th := theme.New("formae")
-			goldStyle := lipgloss.NewStyle().Foreground(th.Palette.Warning)
-			return nil, fmt.Errorf("%w\n\n%s %s", err, goldStyle.Render("Configuration docs:"), banner.DocRoot+"/configuration")
+			accentStyle := lipgloss.NewStyle().Foreground(th.Palette.SecondaryAccent)
+			return nil, fmt.Errorf("%w\n\n%s %s", err, accentStyle.Render("Configuration docs:"), banner.DocRoot+"/configuration")
 		}
 		if err := application.LoadConfig(path, ""); err != nil {
 			th := theme.New("formae")
-			goldStyle := lipgloss.NewStyle().Foreground(th.Palette.Warning)
-			return nil, fmt.Errorf("%w\n\n%s %s", err, goldStyle.Render("Configuration docs:"), banner.DocRoot+"/configuration")
+			accentStyle := lipgloss.NewStyle().Foreground(th.Palette.SecondaryAccent)
+			return nil, fmt.Errorf("%w\n\n%s %s", err, accentStyle.Render("Configuration docs:"), banner.DocRoot+"/configuration")
 		}
 		return application, nil
 	}

@@ -66,11 +66,12 @@ func TestRender_ITerm2FallbackToBraille(t *testing.T) {
 	}
 }
 
-// TestRender_KittyTextRightComposition stubs encodeKittyFn to return a
-// synthetic image escape and asserts that Render(CapKitty, SizeFull, …)
-// composes selectable terminal text to the right using CHA positioning.
+// TestRender_KittyFullLogoComposition stubs encodeKittyFn to return a synthetic
+// image escape and asserts that Render(CapKitty, SizeFull, …) composes the
+// version to the right of the full-wordmark image using CHA positioning. The
+// "formae" letters live in the image, so only the version is terminal text.
 // Note: NOT parallel — mutates the package-level encodeKittyFn seam.
-func TestRender_KittyTextRightComposition(t *testing.T) {
+func TestRender_KittyFullLogoComposition(t *testing.T) {
 	origKitty := encodeKittyFn
 	encodeKittyFn = func(_ bool, _ int) string { return "\x1b_Ga=T,f=100,C=1,m=0;AAAA\x1b\\" }
 	t.Cleanup(func() { encodeKittyFn = origKitty })
@@ -86,23 +87,20 @@ func TestRender_KittyTextRightComposition(t *testing.T) {
 		t.Error("Kitty output missing C=1 in image escape")
 	}
 
-	// Must contain CHA positioning for wordmark.
-	cha := fmt.Sprintf("\x1b[%dG", graphicsTextCol)
+	// Must contain CHA positioning for the version.
+	cha := fmt.Sprintf("\x1b[%dG", graphicsFullLogoTextCol)
 	if !strings.Contains(art, cha) {
-		t.Errorf("Kitty output missing CHA positioning %q (graphicsTextCol=%d)", cha, graphicsTextCol)
+		t.Errorf("Kitty output missing CHA positioning %q (graphicsFullLogoTextCol=%d)", cha, graphicsFullLogoTextCol)
 	}
 
-	// Must contain selectable terminal text for "formae" and "v1.2.3".
-	if !strings.Contains(art, "formae") {
-		t.Error("Kitty output missing selectable 'formae' text")
-	}
+	// Must contain selectable terminal text for "v1.2.3".
 	if !strings.Contains(art, "v1.2.3") {
 		t.Error("Kitty output missing selectable 'v1.2.3' text")
 	}
 
-	// rows must equal graphicsImageRows.
-	if rows != graphicsImageRows {
-		t.Errorf("expected rows=%d, got %d", graphicsImageRows, rows)
+	// rows must equal graphicsFullLogoImageRows.
+	if rows != graphicsFullLogoImageRows {
+		t.Errorf("expected rows=%d, got %d", graphicsFullLogoImageRows, rows)
 	}
 }
 

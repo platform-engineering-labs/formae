@@ -162,25 +162,38 @@ var probe = func(env envInfo) probeResult {
 	// tty and the select races against time.After.  A possibly-blocked reader
 	// goroutine at one-time startup is acceptable — it unblocks at program exit
 	// or when the terminal eventually sends the DA1 reply.
-
-	type readResult struct {
-		buf []byte
-		err error
-	}
-	ch := make(chan readResult, 1)
+	//
+	// The goroutine reads in a LOOP until the DA1 terminator ('c') arrives. The
+	// terminal answers the APC graphics query and the DA1 request as separate
+	// bursts a few ms apart; the DA1 request (\x1b[c) is sent AFTER the graphics
+	// query, so a reply containing 'c' means both bursts have been drained.
+	// Reading through the 'c' consumes everything the terminal sent, leaving
+	// nothing in its input queue to leak into the shell (e.g. "62;22;52c") after
+	// we restore and exit. A single Read would grab only the first burst and let
+	// the DA1 burst leak.
+	ch := make(chan []byte, 1)
 	go func() {
+		var acc []byte
 		buf := make([]byte, 256)
-		n, err := tty.Read(buf)
-		ch <- readResult{buf: buf[:n], err: err}
+		for {
+			n, rerr := tty.Read(buf)
+			if n > 0 {
+				acc = append(acc, buf[:n]...)
+				if bytes.IndexByte(acc, 'c') >= 0 {
+					break
+				}
+			}
+			if rerr != nil {
+				break
+			}
+		}
+		ch <- acc
 	}()
 
 	var result probeResult
 	select {
-	case rr := <-ch:
-		if rr.err == nil {
-			result.Kitty = parseKittyProbe(rr.buf)
-		}
-		// On read error → result.Kitty stays false (fail-safe).
+	case acc := <-ch:
+		result.Kitty = parseKittyProbe(acc)
 	case <-time.After(150 * time.Millisecond):
 		// Timeout → treat as no graphics support (fail-safe).
 	}

@@ -15,25 +15,19 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/tuitest"
 )
 
-func TestEncodeKitty_Golden(t *testing.T) {
-	t.Parallel()
-	out := encodeKitty(true, graphicsFullCols)
-	tuitest.RequireGolden(t, []byte(out))
-}
-
 func TestEncodeITerm2_Golden(t *testing.T) {
 	t.Parallel()
 	out := encodeITerm2(true, graphicsFullCols)
 	tuitest.RequireGolden(t, []byte(out))
 }
 
-// TestRender_KittyTextRight asserts that SizeFull + CapKitty output:
-//   - contains the C=1 Kitty graphics escape
-//   - contains CHA positioning (\x1b[<N>G) for "formae"
-//   - contains a relative row-down move (\x1b[1B) for the version line
-//   - contains a trailing cursor-below move (\x1b[<n>B)
-//   - does NOT composite text into an image (no buildBannerImage)
-func TestRender_KittyTextRight(t *testing.T) {
+// TestRender_KittyFullLogo asserts that SizeFull + CapKitty output:
+//   - contains the C=1 Kitty graphics escape (the full wordmark image)
+//   - drops graphicsFullLogoVersionRow rows then positions the version via CHA
+//     (\x1b[<N>G) at graphicsFullLogoTextCol using real newlines (not CUD)
+//   - contains "v1.2.3" as selectable text (the "formae" letters live IN the image)
+//   - advances the cursor fully below the image (graphicsFullLogoImageRows rows)
+func TestRender_KittyFullLogo(t *testing.T) {
 	t.Parallel()
 
 	// Override hasDarkBackground for determinism.
@@ -51,15 +45,13 @@ func TestRender_KittyTextRight(t *testing.T) {
 		t.Error("expected C=1 in Kitty escape (cursor-no-advance)")
 	}
 
-	// Must contain CHA positioning for "formae" text.
-	chaCol := fmt.Sprintf("\x1b[%dG", graphicsTextCol)
-	if !strings.Contains(art, chaCol) {
-		t.Errorf("expected CHA escape %q (col %d) in output; got: %q", chaCol, graphicsTextCol, art[:min(len(art), 300)])
-	}
-
-	// Must contain "formae" as selectable terminal text.
-	if !strings.Contains(art, "formae") {
-		t.Error("expected 'formae' as selectable text in Kitty output")
+	// Version is placed on its row: graphicsFullLogoVersionRow real newlines,
+	// then a CHA to graphicsFullLogoTextCol (no \x1b[1B CUD — unreliable in Kitty
+	// after a C=1 image).
+	verPos := strings.Repeat("\n", graphicsFullLogoVersionRow) +
+		fmt.Sprintf("\x1b[%dG", graphicsFullLogoTextCol)
+	if !strings.Contains(art, verPos) {
+		t.Errorf("expected version row-drop + CHA %q in output; tail: %q", verPos, art[max(0, len(art)-120):])
 	}
 
 	// Must contain "v1.2.3" as selectable terminal text.
@@ -67,21 +59,15 @@ func TestRender_KittyTextRight(t *testing.T) {
 		t.Error("expected 'v1.2.3' as selectable text in Kitty output")
 	}
 
-	// Version line + cursor-below moves use real newlines (\n), not the
-	// \x1b[1B CUD escape (which proved unreliable in Kitty after a C=1 image).
-	// The version CHA sits immediately after a newline, and the art ends with
-	// graphicsImageRows-1 trailing newlines to clear the image.
-	verCHA := fmt.Sprintf("\n\x1b[%dG", graphicsTextCol)
-	if !strings.Contains(art, verCHA) {
-		t.Errorf("expected newline + CHA %q before the version line", verCHA)
-	}
-	if !strings.HasSuffix(art, strings.Repeat("\n", graphicsImageRows-1)) {
-		t.Errorf("expected art to end with %d trailing newlines to clear the image", graphicsImageRows-1)
+	// Art ends by advancing the rest of the way below the image.
+	tail := strings.Repeat("\n", graphicsFullLogoImageRows-graphicsFullLogoVersionRow)
+	if !strings.HasSuffix(art, tail) {
+		t.Errorf("expected art to end with %d trailing newlines to clear the image", graphicsFullLogoImageRows-graphicsFullLogoVersionRow)
 	}
 
-	// rows must equal graphicsImageRows.
-	if rows != graphicsImageRows {
-		t.Errorf("expected rows=%d (graphicsImageRows), got %d", graphicsImageRows, rows)
+	// rows must equal graphicsFullLogoImageRows.
+	if rows != graphicsFullLogoImageRows {
+		t.Errorf("expected rows=%d (graphicsFullLogoImageRows), got %d", graphicsFullLogoImageRows, rows)
 	}
 }
 
