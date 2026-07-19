@@ -407,11 +407,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // chromeLines is the number of lines consumed by fixed UI chrome:
 //
-//	header banner (3) + column header (1) + query bar (2) + footer bar (2) = 8.
+//	header banner (4) + column header (1) + query bar (2) + footer bar (2) = 9.
 //
 // The data rows area receives height - chromeLines lines. (The detail view uses
-// a plain two-line header, so it simply gains one padded line — no truncation.)
-const chromeLines = 8
+// a plain two-line header, so it simply gains padded lines — no truncation.)
+const chromeLines = 9
 
 // View composes the full terminal screen.
 func (m Model) View() string {

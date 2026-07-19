@@ -43,15 +43,17 @@ type tabModel struct {
 	styledCells   [][]styledCell      // per-row per-col plain→styled replacements from sync
 }
 
-// newTabModel creates a tabModel with sane defaults: sortCol -1 (server order),
-// state tabNotLoaded, empty rows.
+// newTabModel creates a tabModel with sane defaults: state tabNotLoaded, empty
+// rows, and a default ascending sort on the Label column (column 0) so the sort
+// arrow is always visible and the list has a stable, readable default order.
 func newTabModel(th *theme.Theme, spec tabSpec) tabModel {
 	return tabModel{
 		spec:    spec,
 		th:      th,
 		state:   tabNotLoaded,
-		sortCol: -1,
-		sortDir: components.SortNone,
+		sortCol: 0, // Label column (leftmost) across all tabs
+		sortDir: components.SortAsc,
+		sortHi:  0,
 		table:   components.NewTable(th, spec.columns),
 	}
 }

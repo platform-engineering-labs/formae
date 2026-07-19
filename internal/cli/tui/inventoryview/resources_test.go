@@ -26,7 +26,7 @@ func TestResourceRow_Cells_Unmanaged(t *testing.T) {
 		Label:    "logs",
 	}
 	got := resourceRow(r)
-	assert.Equal(t, []string{"arn:aws:s3:::logs", "⚠ unmanaged", "AWS::S3::Bucket", "logs"}, got.cells)
+	assert.Equal(t, []string{"logs", "⚠ unmanaged", "AWS::S3::Bucket", "arn:aws:s3:::logs"}, got.cells)
 }
 
 func TestResourceRow_Cells_ManagedStack(t *testing.T) {
@@ -37,7 +37,7 @@ func TestResourceRow_Cells_ManagedStack(t *testing.T) {
 		Label:    "mybucket",
 	}
 	got := resourceRow(r)
-	assert.Equal(t, []string{"arn:aws:s3:::mybucket", "production", "AWS::S3::Bucket", "mybucket"}, got.cells)
+	assert.Equal(t, []string{"mybucket", "production", "AWS::S3::Bucket", "arn:aws:s3:::mybucket"}, got.cells)
 }
 
 // ---------------------------------------------------------------------------
@@ -172,8 +172,8 @@ func TestResourcesSpec_FetchDelegates(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, nags)
 	require.Len(t, rows, 2)
-	assert.Equal(t, []string{"arn:x", "⚠ unmanaged", "AWS::S3::Bucket", "x"}, rows[0].cells)
-	assert.Equal(t, []string{"arn:y", "prod", "AWS::S3::Bucket", "y"}, rows[1].cells)
+	assert.Equal(t, []string{"x", "⚠ unmanaged", "AWS::S3::Bucket", "arn:x"}, rows[0].cells)
+	assert.Equal(t, []string{"y", "prod", "AWS::S3::Bucket", "arn:y"}, rows[1].cells)
 	assert.NotNil(t, rows[0].detail)
 	assert.NotNil(t, rows[1].detail)
 }

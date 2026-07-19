@@ -6,6 +6,7 @@ package components
 
 import (
 	"sort"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/table"
@@ -141,11 +142,14 @@ func (t Table) applySort() Table {
 	col, asc := t.sortCol, t.sortDir == SortAsc
 	sorted := make([][]string, len(t.rows))
 	copy(sorted, t.rows)
+	// Case-insensitive to match the inventory engine's own sort, so re-applying
+	// this on every SetRows is idempotent and never reshuffles the rendered rows.
 	sort.SliceStable(sorted, func(a, b int) bool {
+		av, bv := strings.ToLower(sorted[a][col]), strings.ToLower(sorted[b][col])
 		if asc {
-			return sorted[a][col] < sorted[b][col]
+			return av < bv
 		}
-		return sorted[a][col] > sorted[b][col]
+		return av > bv
 	})
 	t.rows = sorted
 	return t

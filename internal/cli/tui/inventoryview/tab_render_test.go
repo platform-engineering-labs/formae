@@ -363,14 +363,14 @@ func TestWideTerminal_ColumnsGrowToFill(t *testing.T) {
 	assert.Greater(t, effSum, naturalSum, "columns must grow to use the wide terminal")
 	assert.Equal(t, wideWidth-2*4, effSum, "grown columns must exactly fill the width budget")
 
-	// Growth is proportional to declared width: NativeID (widest at 28) stays
-	// wider than Label (20) and every column grows.
+	// Growth is proportional to declared width: NativeID (widest at 28, now the
+	// rightmost column) stays wider than Label, and every column grows.
 	natural := resourceSpec().columns
 	for i, c := range tm.effectiveCols {
 		assert.Greaterf(t, c.Width, natural[i].Width, "column %d must grow", i)
 	}
-	assert.Greater(t, tm.effectiveCols[0].Width, tm.effectiveCols[3].Width,
-		"proportional growth keeps NativeID wider than Label")
+	assert.Greater(t, tm.effectiveCols[3].Width, tm.effectiveCols[0].Width,
+		"proportional growth keeps NativeID (col 3) wider than Label (col 0)")
 
 	// No rendered line may exceed the terminal width.
 	lines := tm.view(th, 0, "⠋")

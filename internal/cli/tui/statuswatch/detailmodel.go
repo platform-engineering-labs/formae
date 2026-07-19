@@ -32,6 +32,12 @@ const (
 // row, and how many each activation reveals.
 const detailPageSize = 20
 
+// detailChromeLines is the detail view's non-viewport height: a plain two-line
+// header + the pinned command row + separator + the two-line footer. It is
+// deliberately independent of the multi view's chromeLines (which includes the
+// taller header banner).
+const detailChromeLines = 7
+
 // navigableLine tracks one navigable cursor position.
 type navigableLine struct {
 	kind      navigableLineKind
@@ -66,7 +72,7 @@ type detailModel struct {
 }
 
 func newDetailModel(th *theme.Theme, width, height int) detailModel {
-	vp := viewport.New(width, max(height-chromeLines-2, 1)) // -2 for pinned cmd row + separator
+	vp := viewport.New(width, max(height-detailChromeLines, 1)) // placeholder; resized on SetCommand/View
 	return detailModel{
 		th:      th,
 		visible: map[updateKind]int{kindTarget: detailPageSize, kindStack: detailPageSize, kindPolicy: detailPageSize, kindResource: detailPageSize},
@@ -401,10 +407,12 @@ func (d detailModel) View(height int, showQueryBar bool) string {
 		body.WriteString(lipgloss.NewStyle().Foreground(p.Warning).Render(reminderText) + "\n")
 	}
 
-	// Viewport scrolls to keep cursor in view
-	vpHeight := height - chromeLines - 2 // subtract pinned header row + separator
-	if !showQueryBar {
-		vpHeight += 2 // query bar is hidden in the detail view — reclaim its 2 lines
+	// Viewport height from the detail view's own chrome (a plain two-line header,
+	// the pinned command row + separator, and the footer) — independent of the
+	// multi view's chromeLines, which now includes a taller header banner.
+	vpHeight := height - detailChromeLines
+	if showQueryBar {
+		vpHeight -= 2
 	}
 	if vpHeight < 1 {
 		vpHeight = 1

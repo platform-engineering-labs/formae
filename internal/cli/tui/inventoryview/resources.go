@@ -13,7 +13,7 @@ import (
 )
 
 // resourceRow converts a pkgmodel.Resource into a render-ready row.
-// Cells: [NativeID, Stack, Type, Label].
+// Cells: [Label, Stack, Type, NativeID].
 // Unmanaged resources live on the "$unmanaged" sentinel stack; display it as a
 // plain "⚠ unmanaged" (no "$") so it reads as a distinct, non-managed grouping.
 func resourceRow(r pkgmodel.Resource) row {
@@ -23,7 +23,7 @@ func resourceRow(r pkgmodel.Resource) row {
 	}
 
 	return row{
-		cells: []string{r.NativeID, stackCell, r.Type, r.Label},
+		cells: []string{r.Label, stackCell, r.Type, r.NativeID},
 		title: fmt.Sprintf("%s (%s)", r.Label, r.Type),
 		detail: func(width int) []string {
 			return resourceDetail(r, width)

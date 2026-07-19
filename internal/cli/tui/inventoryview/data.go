@@ -86,10 +86,10 @@ func newSpecs(now func() time.Time) [4]tabSpec {
 			entity:      "resources",
 			serverQuery: true,
 			columns: []components.Column{
-				{Title: "NativeID", Width: 28, Priority: 3},
+				{Title: "Label", Width: 20, Priority: 0},
 				{Title: "Stack", Width: 14, Priority: 2},
 				{Title: "Type", Width: 24, Priority: 1},
-				{Title: "Label", Width: 20, Priority: 0},
+				{Title: "NativeID", Width: 28, Priority: 3},
 			},
 			// col 1 = Stack: cells starting with "⚠ " are rendered with the
 			// error/red role (StatusFailed) to highlight unmanaged resources.

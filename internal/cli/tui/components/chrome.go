@@ -91,25 +91,25 @@ func VersionLabel(v string) string {
 	return "v" + v
 }
 
-// HeaderBarWithLogo renders a three-line header banner with a brand icon on the
-// left. The icon rows carry, respectively: the bold title + right-aligned status
-// (row 1), the dim version (row 2), and the bottom border filling the remaining
-// width (row 3). logoRows are pre-styled and assumed equal width; missing rows
-// are treated as blank.
+// HeaderBarWithLogo renders a four-line header banner with a brand icon on the
+// left. The icon occupies three rows; the title + version + right-aligned status
+// sit on the icon's centre row (row 2, vertically aligned with the icon), and a
+// full-width bottom border runs on the fourth line beneath the whole banner.
+// logoRows are pre-styled and assumed equal width; missing rows are blank.
 func HeaderBarWithLogo(th *theme.Theme, left, right, version string, width int, logoRows []string) string {
 	p := th.Palette
 	iconW := 0
+	for _, r := range logoRows {
+		if w := lipgloss.Width(r); w > iconW {
+			iconW = w
+		}
+	}
 	row := func(i int) string {
 		if i < len(logoRows) {
-			if w := lipgloss.Width(logoRows[i]); w > iconW {
-				iconW = w
-			}
 			return logoRows[i]
 		}
 		return strings.Repeat(" ", iconW)
 	}
-	r0, r1, r2 := row(0), row(1), row(2)
-
 	pad := func(s string) string {
 		if w := lipgloss.Width(s); w < width {
 			return s + strings.Repeat(" ", width-w)
@@ -118,27 +118,19 @@ func HeaderBarWithLogo(th *theme.Theme, left, right, version string, width int, 
 	}
 
 	title := lipgloss.NewStyle().Foreground(p.TextPrimary).Bold(true).Render(left)
-	l0 := r0 + " " + title
+	mid := row(1) + " " + title
+	if version != "" {
+		mid += "  " + lipgloss.NewStyle().Foreground(p.TextSubtle).Render(version)
+	}
 	rt := ""
 	if right != "" {
 		rt = right + "  "
 	}
-	line0 := l0 + PadBetween(width, l0, rt) + rt
+	midLine := mid + PadBetween(width, mid, rt) + rt
 
-	l1 := r1 + " "
-	if version != "" {
-		l1 += lipgloss.NewStyle().Foreground(p.TextSubtle).Render(version)
-	}
-	line1 := pad(l1)
+	border := lipgloss.NewStyle().Foreground(p.Border).Render(strings.Repeat("─", width))
 
-	l2 := r2 + " "
-	borderLen := width - lipgloss.Width(l2)
-	if borderLen < 0 {
-		borderLen = 0
-	}
-	line2 := l2 + lipgloss.NewStyle().Foreground(p.Border).Render(strings.Repeat("─", borderLen))
-
-	return line0 + "\n" + line1 + "\n" + line2
+	return pad(row(0)) + "\n" + midLine + "\n" + pad(row(2)) + "\n" + border
 }
 
 // FooterBarNarrow renders the bottom bar for narrow terminals: a single

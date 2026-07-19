@@ -230,8 +230,8 @@ func TestNewTabModel_InitialState(t *testing.T) {
 	tm := newTabModel(th, spec)
 
 	assert.Equal(t, tabNotLoaded, tm.state)
-	assert.Equal(t, -1, tm.sortCol, "sortCol must be -1 (server order)")
-	assert.Equal(t, components.SortNone, tm.sortDir)
+	assert.Equal(t, 0, tm.sortCol, "sortCol defaults to Label (0)")
+	assert.Equal(t, components.SortAsc, tm.sortDir)
 	assert.Empty(t, tm.allRows)
 	assert.Empty(t, tm.query)
 }

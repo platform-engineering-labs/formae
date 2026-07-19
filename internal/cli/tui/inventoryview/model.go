@@ -462,16 +462,16 @@ func (m Model) delegateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // chromeLines is the number of lines consumed by fixed chrome at full width (≥80):
 //
-//	header banner (3) + tab bar (3) + blank (1) + status line (1) + query bar (2) + FooterBar (2) = 12.
-const chromeLines = 12
+//	header banner (4) + tab bar (3) + blank (1) + status line (1) + query bar (2) + FooterBar (2) = 13.
+const chromeLines = 13
 
 // narrowChromeLines is the chrome line count at narrow width (< narrowFooterThreshold):
 //
-//	header banner (3) + tab bar (3) + blank (1) + query bar (2) + FooterBar (2) = 11.
+//	header banner (4) + tab bar (3) + blank (1) + query bar (2) + FooterBar (2) = 12.
 //
 // The standalone status line is dropped; its content is folded into the
 // FooterBar hint line as a single combined dim string.
-const narrowChromeLines = 11
+const narrowChromeLines = 12
 
 // bodyHeight returns the number of lines available for the tab body region
 // (the table). The query bar is fixed chrome, not part of the body budget.

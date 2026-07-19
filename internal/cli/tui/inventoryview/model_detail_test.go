@@ -196,7 +196,7 @@ func TestDetail_FilteredDetail(t *testing.T) {
 	// a server-filtered result set containing only the "old-logs" row.
 	var oldLogs row
 	for _, r := range rows {
-		if r.cells[3] == "old-logs" {
+		if r.cells[0] == "old-logs" {
 			oldLogs = r
 			break
 		}
@@ -210,7 +210,7 @@ func TestDetail_FilteredDetail(t *testing.T) {
 	// Cursor is at 0 — the only visible row should be "old-logs".
 	vis, _ := mm.(Model).tabs[TabResources].visible(0)
 	require.Len(t, vis, 1, "filter 'old-logs' must narrow to exactly 1 row")
-	require.Equal(t, "old-logs", vis[0].cells[3], "visible row must be old-logs (Label col 3)")
+	require.Equal(t, "old-logs", vis[0].cells[0], "visible row must be old-logs (Label col 0)")
 
 	mm = openDetailOnFirstRow(t, mm)
 

@@ -146,8 +146,8 @@ func TestHelp_KeysSwallowedWhileOpen(t *testing.T) {
 
 	// s does not apply a sort while the overlay is open.
 	mm = pressKey(mm, 's')
-	assert.Equal(t, -1, mm.(Model).tabs[mm.(Model).active].sortCol,
-		"sort must not apply while overlay is open")
+	assert.Equal(t, 0, mm.(Model).tabs[mm.(Model).active].sortCol,
+		"sort must not change while overlay is open (stays at the Label default)")
 	assert.True(t, mm.(Model).helpOpen)
 
 	// / does not focus the query bar while the overlay is open.

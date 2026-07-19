@@ -183,7 +183,10 @@ func TestInventoryE2E_FourTabBrowse(t *testing.T) {
 	tm.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
 	waitForAll(t, tm, "global-ttl", "ttl", "global-recon")
 
-	// Enter on policies tab → detail screen shows config + attached stacks.
+	// Enter on policies tab → detail screen shows config + attached stacks. Rows
+	// default-sort by Label ascending (global-recon, then global-ttl), so move
+	// down to global-ttl, which is attached to the "prod" stack.
+	tm.Send(tea.KeyMsg{Type: tea.KeyDown})
 	tm.Send(tea.KeyMsg{Type: tea.KeyEnter})
 	waitForAll(t, tm, "Attached stacks:", "prod")
 
