@@ -35,6 +35,7 @@ type tabModel struct {
 	filter        string
 	sortCol       int // -1 = server order
 	sortDir       components.SortDirection
+	sortHi        int // column highlighted by →← (the s-key sort target)
 	table         components.Table
 	width         int
 	height        int

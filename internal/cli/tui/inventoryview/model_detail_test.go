@@ -94,21 +94,22 @@ func TestDetail_EnterNoOpOnLoadingTab(t *testing.T) {
 	assert.False(t, mm.(Model).detailOpen, "detail screen must not open when tab is loading")
 }
 
-// TestDetail_EnterNoOpWhenFilterFocused verifies enter with filter focused does not open detail.
-func TestDetail_EnterNoOpWhenFilterFocused(t *testing.T) {
+// TestDetail_EnterNoOpWhenQueryFocused verifies enter with the query bar focused
+// applies the query rather than opening the detail screen.
+func TestDetail_EnterNoOpWhenQueryFocused(t *testing.T) {
 	rows := buildFixtureResources(3)
 	mm := buildDetailTestModel(t, rows)
 
-	// Open the filter bar.
+	// Focus the query bar.
 	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
-	require.True(t, mm.(Model).filterFocused, "filter must be focused")
+	require.True(t, mm.(Model).query.Focused(), "query must be focused")
 
-	// Enter while filter is focused should confirm the filter, not open detail.
+	// Enter while the query is focused confirms the query, not opens detail.
 	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
 
 	m := mm.(Model)
-	assert.False(t, m.detailOpen, "detail screen must not open when filter is focused (enter confirms filter)")
-	assert.False(t, m.filterFocused, "filter focus must be cleared after enter")
+	assert.False(t, m.detailOpen, "detail screen must not open when query is focused (enter applies query)")
+	assert.False(t, m.query.Focused(), "query focus must be cleared after enter")
 }
 
 // TestDetail_EscClosesDetail verifies esc from detail closes and returns to list.

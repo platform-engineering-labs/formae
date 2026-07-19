@@ -51,132 +51,146 @@ func loadFilterFixture(t *testing.T) (Model, tea.Model) {
 	return mm.(Model), mm
 }
 
-// typeIntoFilter sends individual rune key messages to simulate typing.
-func typeIntoFilter(mm tea.Model, s string) tea.Model {
+// typeIntoQuery sends individual rune key messages to simulate typing into the
+// query bar.
+func typeIntoQuery(mm tea.Model, s string) tea.Model {
 	for _, r := range s {
 		mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 	}
 	return mm
 }
 
-// ---------------------------------------------------------------------------
-// Contract: "/" focuses filter bar on loaded tab
-// ---------------------------------------------------------------------------
-
-func TestFilter_SlashFocusesBar(t *testing.T) {
-	_, mm := loadFilterFixture(t)
-
+// applyQuery focuses the query bar, types s, and confirms with enter.
+func applyQuery(mm tea.Model, s string) tea.Model {
 	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
-
-	m := mm.(Model)
-	assert.True(t, m.filterFocused, "pressing '/' must focus the filter bar")
-}
-
-// ---------------------------------------------------------------------------
-// Contract: while focused, typing updates tabs[active].filter live
-// ---------------------------------------------------------------------------
-
-func TestFilter_TypingNarrowsLive(t *testing.T) {
-	_, mm := loadFilterFixture(t)
-
-	// Focus the bar.
-	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
-
-	// Type "S3" — should narrow to S3 resources.
-	mm = typeIntoFilter(mm, "S3")
-
-	m := mm.(Model)
-	assert.Equal(t, "S3", m.tabs[TabResources].filter,
-		"filter must be updated live as user types")
-
-	// Visible rows should be 3 (only S3 buckets).
-	vis, _ := m.tabs[TabResources].visible(0)
-	assert.Len(t, vis, 3, "typing 'S3' must narrow from 7 to 3 rows")
-}
-
-// ---------------------------------------------------------------------------
-// Contract: single char narrows, more chars narrow further
-// ---------------------------------------------------------------------------
-
-func TestFilter_PartialVsFullTermNarrows(t *testing.T) {
-	_, mm := loadFilterFixture(t)
-	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
-
-	// Type "S" — matches S3 and SecurityGroup (AWS::EC2::Security**G**roup has no S match...
-	// actually "subnet" also has S. Let's check: "S" matches: bucket (s3), web-sg (sg has S),
-	// subnet-1 (subnet has S), rt-main (no)... and "production" (no P... wait "s" in "staging").
-	// Use a more targeted partial filter: "bucket" (partial = "buck").
-	mm = typeIntoFilter(mm, "buck")
-	m := mm.(Model)
-	vis1, _ := m.tabs[TabResources].visible(0)
-	count1 := len(vis1)
-
-	// Type more: "bucket-1" (exact label) — narrows further.
-	mm = typeIntoFilter(mm, "et-1")
-	m = mm.(Model)
-	vis2, _ := m.tabs[TabResources].visible(0)
-	count2 := len(vis2)
-
-	assert.Greater(t, count1, count2, "more typed chars must narrow the result set further")
-}
-
-// ---------------------------------------------------------------------------
-// Contract: enter keeps filter applied and unfocuses
-// ---------------------------------------------------------------------------
-
-func TestFilter_EnterKeepsFilterAndUnfocuses(t *testing.T) {
-	_, mm := loadFilterFixture(t)
-
-	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
-	mm = typeIntoFilter(mm, "S3")
+	mm = typeIntoQuery(mm, s)
 	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	return mm
+}
+
+// ---------------------------------------------------------------------------
+// Contract: "/" focuses the query bar
+// ---------------------------------------------------------------------------
+
+func TestFilter_SlashFocusesQueryBar(t *testing.T) {
+	_, mm := loadFilterFixture(t)
+
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+
+	assert.True(t, mm.(Model).query.Focused(), "pressing '/' must focus the query bar")
+}
+
+// ---------------------------------------------------------------------------
+// Contract: the query applies on enter (not live), then narrows
+// ---------------------------------------------------------------------------
+
+func TestFilter_AppliesOnEnter(t *testing.T) {
+	_, mm := loadFilterFixture(t)
+
+	// Focus and type "S3" — must NOT narrow until enter is pressed.
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	mm = typeIntoQuery(mm, "S3")
+	before, _ := mm.(Model).tabs[TabResources].visible(0)
+	assert.Len(t, before, 7, "typing must not filter live — all 7 rows still shown before enter")
+
+	// Enter applies the query.
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m := mm.(Model)
+	assert.Equal(t, "S3", m.tabs[TabResources].filter, "enter must apply the typed query")
+	vis, _ := m.tabs[TabResources].visible(0)
+	assert.Len(t, vis, 3, "applying 'S3' must narrow from 7 to 3 rows")
+}
+
+// ---------------------------------------------------------------------------
+// Contract: a longer query narrows further
+// ---------------------------------------------------------------------------
+
+func TestFilter_LongerQueryNarrowsFurther(t *testing.T) {
+	_, mm := loadFilterFixture(t)
+
+	mm = applyQuery(mm, "buck")
+	vis1, _ := mm.(Model).tabs[TabResources].visible(0)
+
+	mm = applyQuery(mm, "bucket-1")
+	vis2, _ := mm.(Model).tabs[TabResources].visible(0)
+
+	assert.Greater(t, len(vis1), len(vis2), "a longer query must narrow the result set further")
+}
+
+// ---------------------------------------------------------------------------
+// Contract: enter keeps the query applied and unfocuses
+// ---------------------------------------------------------------------------
+
+func TestFilter_EnterKeepsQueryAndUnfocuses(t *testing.T) {
+	_, mm := loadFilterFixture(t)
+
+	mm = applyQuery(mm, "S3")
 
 	m := mm.(Model)
-	assert.False(t, m.filterFocused, "enter must unfocus the filter bar")
-	assert.Equal(t, "S3", m.tabs[TabResources].filter, "filter must be preserved after enter")
+	assert.False(t, m.query.Focused(), "enter must unfocus the query bar")
+	assert.Equal(t, "S3", m.tabs[TabResources].filter, "query must be preserved after enter")
 
-	// After unfocus, 'q' should quit (not go into the filter).
+	// After unfocus, 'q' should quit (not go into the query).
 	_, cmd := mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
 	require.NotNil(t, cmd, "after unfocus, 'q' must produce a quit command")
 	assert.Equal(t, tea.Quit(), cmd())
 }
 
 // ---------------------------------------------------------------------------
-// Contract: esc clears filter and unfocuses
+// Contract: esc cancels the edit and keeps the previously-applied query
 // ---------------------------------------------------------------------------
 
-func TestFilter_EscClearsAndUnfocuses(t *testing.T) {
+func TestFilter_EscCancelsEditKeepsApplied(t *testing.T) {
 	_, mm := loadFilterFixture(t)
 
+	// Apply "S3" first.
+	mm = applyQuery(mm, "S3")
+
+	// Re-focus, type more, then esc — the edit is discarded, "S3" stays applied.
 	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
-	mm = typeIntoFilter(mm, "S3")
+	mm = typeIntoQuery(mm, "-extra")
 	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEsc})
 
 	m := mm.(Model)
-	assert.False(t, m.filterFocused, "esc must unfocus the filter bar")
-	assert.Equal(t, "", m.tabs[TabResources].filter, "esc must clear the filter")
-
-	// Full row set restored.
+	assert.False(t, m.query.Focused(), "esc must unfocus the query bar")
+	assert.Equal(t, "S3", m.tabs[TabResources].filter, "esc must keep the previously-applied query")
 	vis, _ := m.tabs[TabResources].visible(0)
-	assert.Len(t, vis, 7, "esc must restore the full row set (7 rows)")
+	assert.Len(t, vis, 3, "the applied 'S3' query must still narrow to 3 rows")
 }
 
 // ---------------------------------------------------------------------------
-// Contract: while focused, typed 'q', '2', 's', 'r' go INTO input (not handled as global keys)
+// Contract: clearing the query (empty + enter) restores the full row set
 // ---------------------------------------------------------------------------
 
-func TestFilter_FocusedTypingGoesIntoInput(t *testing.T) {
+func TestFilter_EmptyQueryRestoresAll(t *testing.T) {
+	_, mm := loadFilterFixture(t)
+
+	mm = applyQuery(mm, "S3")
+	// Re-focus, clear the edit (ctrl+u), apply empty.
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	m := mm.(Model)
+	assert.Equal(t, "", m.tabs[TabResources].filter, "an empty query must clear the filter")
+	vis, _ := m.tabs[TabResources].visible(0)
+	assert.Len(t, vis, 7, "clearing the query must restore the full row set (7 rows)")
+}
+
+// ---------------------------------------------------------------------------
+// Contract: while focused, typed q/2/s/r go INTO the query (not global keys)
+// ---------------------------------------------------------------------------
+
+func TestFilter_FocusedTypingGoesIntoQuery(t *testing.T) {
 	_, mm := loadFilterFixture(t)
 
 	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
 
-	// Type 'q' — must NOT quit.
+	// Type 'q' — must NOT quit and must NOT switch tabs.
 	var cmd tea.Cmd
 	mm, cmd = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
 	if cmd != nil {
-		// If cmd is quit, that's a bug.
-		result := cmd()
-		assert.NotEqual(t, tea.Quit(), result, "'q' while filter focused must NOT quit")
+		assert.NotEqual(t, tea.Quit(), cmd(), "'q' while query focused must NOT quit")
 	}
 	assert.Equal(t, TabResources, mm.(Model).active, "'q' while focused must NOT switch tabs")
 
@@ -184,45 +198,37 @@ func TestFilter_FocusedTypingGoesIntoInput(t *testing.T) {
 	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
 	assert.Equal(t, TabResources, mm.(Model).active, "'2' while focused must NOT switch tabs")
 
-	// Type 's' — must NOT open sort selector.
-	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
-	assert.False(t, mm.(Model).sortOpen, "'s' while focused must NOT open sort selector")
-
-	// Type 'r' — must NOT trigger a refresh.
-	initialFilter := mm.(Model).tabs[TabResources].filter
-	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
-	assert.Equal(t, initialFilter+"r", mm.(Model).tabs[TabResources].filter,
-		"'r' while focused must go into the filter, not trigger a refresh")
+	// Type 's' and 'r' — must go into the query, not sort/refresh. Apply and check.
+	mm = typeIntoQuery(mm, "sr")
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	assert.Equal(t, "q2sr", mm.(Model).tabs[TabResources].filter,
+		"keys typed while focused must accumulate in the query")
 }
 
 // ---------------------------------------------------------------------------
-// Contract: filter state is per-tab (D5)
+// Contract: query state is per-tab (D5) — reseeded into the bar on tab switch
 // ---------------------------------------------------------------------------
 
 func TestFilter_PerTabIsolation(t *testing.T) {
 	_, mm := loadFilterFixture(t)
 
-	// Focus filter bar on Resources and type "S3".
-	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
-	mm = typeIntoFilter(mm, "S3")
-	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEnter}) // unfocus but keep filter
+	// Apply "S3" on Resources.
+	mm = applyQuery(mm, "S3")
 
 	// Switch to Targets tab.
 	var cmd tea.Cmd
 	mm, cmd = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
 	if cmd != nil {
-		msg := cmd()
-		mm, _ = mm.Update(msg)
+		mm, _ = mm.Update(cmd())
 	}
+	assert.Equal(t, "", mm.(Model).tabs[TabTargets].filter, "Targets tab must have its own (empty) filter")
+	assert.Equal(t, "", mm.(Model).query.Query(), "query bar must reflect the (empty) Targets filter")
 
-	// Targets tab should have empty filter.
-	assert.Equal(t, "", mm.(Model).tabs[TabTargets].filter,
-		"Targets tab must have its own (empty) filter")
-
-	// Switch back to Resources — filter should still be "S3".
+	// Switch back to Resources — filter still "S3", and the bar reflects it.
 	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
 	assert.Equal(t, "S3", mm.(Model).tabs[TabResources].filter,
 		"Resources filter must be preserved after switching away and back")
+	assert.Equal(t, "S3", mm.(Model).query.Query(), "query bar must be reseeded with the Resources filter")
 }
 
 // ---------------------------------------------------------------------------
@@ -241,97 +247,46 @@ func TestFilter_FilterPlusCap(t *testing.T) {
 	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
 	mm, _ = runInit(mm)
 
-	// Focus and type a filter that matches 5 rows (e.g., "aws" matches all S3 arns and EC2 arns).
-	// "arn" matches: bucket-1, bucket-2, bucket-3, web-1 (i-0..., no), web-sg (sg-..., no),
-	// subnet-1 (subnet-..., no), rt-main (rtb-..., no).
-	// Actually "arn:aws" matches exactly: bucket-1, bucket-2, bucket-3 = 3 rows.
-	// Let's use "production" which matches: bucket-1, web-1, web-sg = 3 rows in stack col.
-	// Use "aws" which is in NativeID for all S3 (arn:aws:s3) and EC2 (i-..no, sg-..no,
-	// subnet-..no, rtb-..no). Actually let's count: bucket-1 (arn:aws:s3→yes), bucket-2 (yes),
-	// bucket-3 (yes), web-1 (i-0abc, type AWS::EC2::Instance→yes "aws" in type!),
-	// web-sg (AWS::EC2→yes), subnet-1 (AWS::EC2→yes), rt-main (AWS::EC2→yes).
-	// That's 7 rows all matching "aws". Let's use "S3" to get 3 rows, cap=3 → status shows "3 of 3".
-	// We need filter matches 5, cap 3 → use "bucket" which matches 3, or use "EC2" which matches 4.
-	// "EC2": web-1 (AWS::EC2::Instance), web-sg (AWS::EC2::SecurityGroup), subnet-1 (AWS::EC2::Subnet),
-	// rt-main (AWS::EC2::RouteTable) = 4 rows. Still not 5.
-	// Use "network" (stack): bucket-3 (network), subnet-1 (network), rt-main (network) = 3.
-	// Let's use "arn" which matches: bucket-1, bucket-2, bucket-3 = 3 rows.
-	// For "filter matches 5, cap 3" test, use "aws" which matches all 7, cap 3 → "3 of 7".
-	// OR use a filter matching exactly 5. "a" matches all (all have 'a' somewhere). Let's just
-	// use "" filter with 7 rows, cap 3 → status "3 of 7 resources — refine query to see more".
-	// For this test we want FILTERED status, so we need a non-empty filter that matches >cap.
-	// Use "aws" (case-insensitive): all 7 rows have "aws" in type or NativeID. Cap 3 → "3 of 7 (filtered)".
+	// All 7 rows match "aws" (in NativeID or Type); cap is 3 → "3 of 7 (filtered)".
+	mm = applyQuery(mm, "aws")
 
-	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
-	mm = typeIntoFilter(mm, "aws")
-
-	m = mm.(Model)
-	sl := m.tabs[TabResources].statusLine(opts.MaxRows)
-
-	// Should show "Showing 3 of 7 resources (filtered)" since all 7 match "aws" but cap is 3.
+	sl := mm.(Model).tabs[TabResources].statusLine(opts.MaxRows)
 	assert.Contains(t, sl, "3 of 7", "status must show shown=cap=3, total=7")
 	assert.Contains(t, sl, "(filtered)", "status must show (filtered) suffix")
 }
 
 // ---------------------------------------------------------------------------
-// Contract: exact-fill in all 4 bar states
+// Contract: exact-fill in each query-bar state
 // ---------------------------------------------------------------------------
 
 func TestFilter_ExactFillAllBarStates(t *testing.T) {
 	const height = 24
 
 	cases := []struct {
-		name          string
-		filterFocused bool
-		filter        string
+		name    string
+		setup   func(mm tea.Model) tea.Model
+		wantLen int
 	}{
-		{name: "unfocused-empty", filterFocused: false, filter: ""},
-		{name: "unfocused-applied", filterFocused: false, filter: "S3"},
-		{name: "focused-empty", filterFocused: true, filter: ""},
-		{name: "focused-applied", filterFocused: true, filter: "S3"},
+		{name: "empty", setup: func(mm tea.Model) tea.Model { return mm }},
+		{name: "editing", setup: func(mm tea.Model) tea.Model {
+			mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+			return typeIntoQuery(mm, "S3")
+		}},
+		{name: "applied", setup: func(mm tea.Model) tea.Model { return applyQuery(mm, "S3") }},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			_, mm := loadFilterFixture(t)
-
-			if tc.filter != "" || tc.filterFocused {
-				mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
-				if tc.filter != "" {
-					mm = typeIntoFilter(mm, tc.filter)
-				}
-				if !tc.filterFocused {
-					mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
-				}
-			}
-
-			view := mm.(Model).View()
-			lines := strings.Split(view, "\n")
-			assert.Equal(t, height, len(lines),
-				"View must fill exactly %d lines in state %s", height, tc.name)
+			mm = tc.setup(mm)
+			lines := strings.Split(mm.(Model).View(), "\n")
+			assert.Equal(t, height, len(lines), "View must fill exactly %d lines in state %s", height, tc.name)
 		})
 	}
 }
 
 // ---------------------------------------------------------------------------
-// Contract: "/" while sort selector open is swallowed by the selector
-// ---------------------------------------------------------------------------
-
-func TestFilter_SlashSwallowedWhenSortOpen(t *testing.T) {
-	_, mm := loadFilterFixture(t)
-
-	// Open sort selector.
-	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
-	require.True(t, mm.(Model).sortOpen, "sort selector must be open")
-
-	// Press '/' — must be swallowed by sort selector, not open filter bar.
-	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
-	assert.False(t, mm.(Model).filterFocused,
-		"'/' while sort selector open must not focus filter bar")
-}
-
-// ---------------------------------------------------------------------------
-// Golden: filter focused with value narrowing rows
+// Golden: query bar focused while editing
 // ---------------------------------------------------------------------------
 
 func TestGolden_FilterFocused(t *testing.T) {
@@ -345,15 +300,15 @@ func TestGolden_FilterFocused(t *testing.T) {
 	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
 	mm, _ = runInit(mm)
 
-	// Focus filter and type "S3".
+	// Focus the query bar and type "S3" (not yet applied).
 	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
-	mm = typeIntoFilter(mm, "S3")
+	mm = typeIntoQuery(mm, "S3")
 
 	tuitest.RequireGolden(t, []byte(mm.(Model).View()))
 }
 
 // ---------------------------------------------------------------------------
-// Golden: unfocused-but-applied filter
+// Golden: applied (unfocused) query
 // ---------------------------------------------------------------------------
 
 func TestGolden_FilterUnfocusedApplied(t *testing.T) {
@@ -367,130 +322,7 @@ func TestGolden_FilterUnfocusedApplied(t *testing.T) {
 	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
 	mm, _ = runInit(mm)
 
-	// Focus, type "S3", then unfocus with enter.
-	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
-	mm = typeIntoFilter(mm, "S3")
-	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	mm = applyQuery(mm, "S3")
 
 	tuitest.RequireGolden(t, []byte(mm.(Model).View()))
-}
-
-// ---------------------------------------------------------------------------
-// Bug fix tests — viewport sizing on Enter-confirm and tab switch.
-// The bugs: Enter gives the table the FULL body budget even when the filter
-// bar is still visible; switchTab never re-sizes the new active tab for bar
-// visibility. Both cause scroll/page state to be wrong (masked by View()'s
-// clip, but the engine's stored height is wrong).
-// ---------------------------------------------------------------------------
-
-// TestFilter_EnterConfirmSizesForBar verifies that after "/" + type + enter:
-//   - the active tab's stored height equals bodyHeight()-filterBarLines (bar still visible)
-//   - the View() still fills exactly m.height lines (no layout regression)
-func TestFilter_EnterConfirmSizesForBar(t *testing.T) {
-	const termHeight = 24
-	// At termHeight=24: bodyHeight = 24-chromeLines(6) = 18
-	// bar-reduced: 18-filterBarLines(2) = 16
-	wantTabH := termHeight - chromeLines - filterBarLines
-
-	_, mm := loadFilterFixture(t)
-
-	// Open filter, type something, confirm with enter.
-	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
-	mm = typeIntoFilter(mm, "S3")
-	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
-
-	m := mm.(Model)
-
-	// Filter must still be non-empty → bar still visible.
-	require.Equal(t, "S3", m.tabs[TabResources].filter, "filter must survive enter")
-	require.True(t, m.filterBarVisible(), "filter bar must be visible after enter with non-empty filter")
-
-	// The active tab's stored height must be bar-reduced, not full body budget.
-	gotTabH := m.tabs[TabResources].height
-	assert.Equal(t, wantTabH, gotTabH,
-		"after enter with filter applied, tab height must be bodyHeight()-filterBarLines (%d), got %d",
-		wantTabH, gotTabH)
-
-	// View must still fill the terminal exactly.
-	view := m.View()
-	lines := strings.Split(view, "\n")
-	assert.Equal(t, termHeight, len(lines), "View must fill exactly %d lines after enter-confirm", termHeight)
-}
-
-// TestFilter_SwitchBackToFilteredTabSizesForBar covers:
-//
-//	filter tab A → enter (keep filter) → switch to B → switch back to A
-//	→ A's stored height must be bar-reduced (its filter is still set).
-func TestFilter_SwitchBackToFilteredTabSizesForBar(t *testing.T) {
-	const termHeight = 24
-	wantFilteredTabH := termHeight - chromeLines - filterBarLines // 16
-
-	_, mm := loadFilterFixture(t)
-
-	// Filter Resources (tab A), confirm with enter.
-	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
-	mm = typeIntoFilter(mm, "S3")
-	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
-
-	// Switch to Targets (tab B — no filter).
-	var cmd tea.Cmd
-	mm, cmd = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
-	if cmd != nil {
-		msg := cmd()
-		mm, _ = mm.Update(msg)
-	}
-	// While on Targets, its stored height must be FULL body budget.
-	wantFullTabH := termHeight - chromeLines // 18
-	gotTargetsH := mm.(Model).tabs[TabTargets].height
-	assert.Equal(t, wantFullTabH, gotTargetsH,
-		"Targets (no filter) must have full body budget (%d) after switch, got %d",
-		wantFullTabH, gotTargetsH)
-
-	// Switch back to Resources (tab A — filter still "S3").
-	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
-	m := mm.(Model)
-
-	require.Equal(t, "S3", m.tabs[TabResources].filter, "Resources filter must survive round-trip")
-	gotResourcesH := m.tabs[TabResources].height
-	assert.Equal(t, wantFilteredTabH, gotResourcesH,
-		"Resources (filter 'S3') must have bar-reduced height (%d) after switch back, got %d",
-		wantFilteredTabH, gotResourcesH)
-}
-
-// TestFilter_SwitchAwayFromFilteredTabGivesNewTabFullBudget covers:
-//
-//	filter tab A (Resources) → switch to B (Targets, no filter)
-//	→ B's stored height must be the FULL body budget.
-func TestFilter_SwitchAwayFromFilteredTabGivesNewTabFullBudget(t *testing.T) {
-	const termHeight = 24
-	wantFullTabH := termHeight - chromeLines // 18
-
-	_, mm := loadFilterFixture(t)
-
-	// Filter Resources and keep the bar visible (stay focused so bar is visible
-	// while switching — though focus is cleared on switch, the point is the NEW
-	// tab should get the full budget regardless of what the old tab had).
-	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
-	mm = typeIntoFilter(mm, "S3")
-	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEnter}) // keep filter, unfocus
-
-	// Resources tab now has a non-empty filter → bar visible on Resources.
-	require.True(t, mm.(Model).filterBarVisible(), "filter bar must be visible on Resources")
-
-	// Switch to Targets.
-	var cmd tea.Cmd
-	mm, cmd = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
-	if cmd != nil {
-		msg := cmd()
-		mm, _ = mm.Update(msg)
-	}
-
-	m := mm.(Model)
-	assert.Equal(t, TabTargets, m.active, "must be on Targets tab")
-
-	// Targets has no filter → bar not visible → full body budget.
-	gotTargetsH := m.tabs[TabTargets].height
-	assert.Equal(t, wantFullTabH, gotTargetsH,
-		"Targets (no filter) must have full body budget (%d) after switch from filtered Resources, got %d",
-		wantFullTabH, gotTargetsH)
 }

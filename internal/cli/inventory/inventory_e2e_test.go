@@ -190,16 +190,16 @@ func TestInventoryE2E_FourTabBrowse(t *testing.T) {
 	// Esc back to list.
 	tm.Send(tea.KeyMsg{Type: tea.KeyEsc})
 
-	// Filter: '/' opens the filter bar (shows "/: " prompt); type narrows results.
-	// The status line "Showing N of M policies (filtered)" confirms the filter works.
-	// We use a single waitForAll call after all key presses so we get the final
-	// rendered state including both the filter prompt and the filtered count.
+	// Search: '/' focuses the query bar; typing then enter applies the query.
+	// The status line "Showing N of M policies (filtered)" and the applied-query
+	// "edit query" hint confirm the filter took effect. A single waitForAll after
+	// all key presses captures the final rendered frame.
 	tm.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
 	tm.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t', 't', 'l'}})
-	waitForAll(t, tm, "/: ", "filtered")
+	tm.Send(tea.KeyMsg{Type: tea.KeyEnter})
+	waitForAll(t, tm, "edit query", "filtered")
 
-	// Exit filter mode, then exercise quit key binding (q).
-	tm.Send(tea.KeyMsg{Type: tea.KeyEsc})
+	// Quit key binding (q).
 	tm.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
 	tm.WaitFinished(t, teatest.WithFinalTimeout(5*time.Second))
 }

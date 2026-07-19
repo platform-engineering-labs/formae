@@ -144,14 +144,15 @@ func TestHelp_KeysSwallowedWhileOpen(t *testing.T) {
 	assert.Equal(t, activeBefore, mm.(Model).active, "tab must not switch while overlay open")
 	assert.True(t, mm.(Model).helpOpen, "overlay must remain open after pressing 2")
 
-	// s does not open sort selector.
+	// s does not apply a sort while the overlay is open.
 	mm = pressKey(mm, 's')
-	assert.False(t, mm.(Model).sortOpen, "sort must not open while overlay is open")
+	assert.Equal(t, -1, mm.(Model).tabs[mm.(Model).active].sortCol,
+		"sort must not apply while overlay is open")
 	assert.True(t, mm.(Model).helpOpen)
 
-	// / does not open filter bar.
+	// / does not focus the query bar while the overlay is open.
 	mm = pressKey(mm, '/')
-	assert.False(t, mm.(Model).filterFocused, "filter must not open while overlay is open")
+	assert.False(t, mm.(Model).query.Focused(), "query must not focus while overlay is open")
 	assert.True(t, mm.(Model).helpOpen)
 
 	// q does not quit (returns no tea.Quit cmd).
@@ -206,18 +207,18 @@ func TestHelp_ExactFillWithOverlayFromDetail(t *testing.T) {
 // TestHelp_QuestionNotRoutedInFilterBar
 // ---------------------------------------------------------------------------
 
-// TestHelp_QuestionNotRoutedInFilterBar: pressing ? while filter bar is focused
-// inserts ? into the filter (does not open overlay).
-func TestHelp_QuestionNotRoutedInFilterBar(t *testing.T) {
+// TestHelp_QuestionNotRoutedInQueryBar: pressing ? while the query bar is
+// focused inserts ? into the query (does not open the overlay).
+func TestHelp_QuestionNotRoutedInQueryBar(t *testing.T) {
 	mm := buildHelpTestModel(t)
 
-	// Open filter bar.
+	// Focus the query bar.
 	mm = pressKey(mm, '/')
-	require.True(t, mm.(Model).filterFocused, "filter must be focused after /")
+	require.True(t, mm.(Model).query.Focused(), "query must be focused after /")
 
-	// Press ? — must go to the textinput, not open overlay.
+	// Press ? — must go to the query, not open overlay.
 	mm = pressKey(mm, '?')
-	assert.False(t, mm.(Model).helpOpen, "? must not open overlay while filter bar is focused")
+	assert.False(t, mm.(Model).helpOpen, "? must not open overlay while the query bar is focused")
 }
 
 // ---------------------------------------------------------------------------

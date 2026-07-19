@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	tui "github.com/platform-engineering-labs/formae/internal/cli/tui"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
@@ -22,24 +23,24 @@ import (
 // It wires together the four tab models (Resources, Targets, Stacks, Policies)
 // with lazy per-tab fetching, a shared spinner, and exact-fill rendering.
 type Model struct {
-	th            *theme.Theme
-	keys          tui.KeyMap
-	client        Client
-	opts          Options
-	specs         [4]tabSpec
-	tabs          [4]tabModel
-	active        Tab
-	width         int
-	height        int
-	spinner       spinner.Model
-	nags          []string
-	nagSeen       map[string]struct{}
-	statsSent     bool
-	ready         bool
-	sortOpen      bool      // sort selector is visible (replaces footer)
-	sortCursor    int       // index into specs[active].columns of selector cursor
-	filterBar     filterBar // lightweight textinput for live client-side filter
-	filterFocused bool      // true while the filter bar has keyboard focus
+	th        *theme.Theme
+	keys      tui.KeyMap
+	client    Client
+	opts      Options
+	specs     [4]tabSpec
+	tabs      [4]tabModel
+	active    Tab
+	width     int
+	height    int
+	spinner   spinner.Model
+	nags      []string
+	nagSeen   map[string]struct{}
+	statsSent bool
+	ready     bool
+	// query is the shared editable query bar (bottom, always visible) that
+	// drives the active tab's client-side filter — mirrors the status-command
+	// TUI so the two views offer an identical "edit the query" interaction.
+	query components.QueryBar
 	// detail screen state
 	detailOpen     bool
 	detailTitle    string         // captured at open time
@@ -58,17 +59,20 @@ func New(th *theme.Theme, client Client, opts Options) Model {
 		TabStacks:    newTabModel(th, specs[TabStacks]),
 		TabPolicies:  newTabModel(th, specs[TabPolicies]),
 	}
+	// The query bar drives the client-side per-tab filter and starts empty.
+	// opts.Query is a separate server-side extract query threaded to the focus
+	// tab's fetch (D3) via Init/refresh — it is not the client filter.
 	return Model{
-		th:        th,
-		keys:      tui.DefaultKeyMap(),
-		client:    client,
-		opts:      opts,
-		specs:     specs,
-		tabs:      tabs,
-		active:    opts.FocusTab,
-		spinner:   components.NewSpinner(th),
-		nagSeen:   make(map[string]struct{}),
-		filterBar: newFilterBar(),
+		th:      th,
+		keys:    tui.DefaultKeyMap(),
+		client:  client,
+		opts:    opts,
+		specs:   specs,
+		tabs:    tabs,
+		active:  opts.FocusTab,
+		spinner: components.NewSpinner(th),
+		nagSeen: make(map[string]struct{}),
+		query:   components.NewQueryBar(th, ""),
 	}
 }
 
@@ -103,18 +107,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		// setSize + sync ALL tabs so they render correctly when switched to.
-		// The active tab gets the reduced body budget when the filter bar is visible;
-		// inactive tabs always get the full body budget (they don't show the bar).
+		// The query bar is fixed chrome (always visible), so every tab gets the
+		// same body budget.
 		bodyH := m.bodyHeight()
 		for i := range m.tabs {
-			tabH := bodyH
-			if Tab(i) == m.active && m.filterBarVisible() {
-				tabH = bodyH - filterBarLines
-			}
-			if tabH < 1 {
-				tabH = 1
-			}
-			m.tabs[i] = m.tabs[i].setSize(m.width, tabH)
+			m.tabs[i] = m.tabs[i].setSize(m.width, bodyH)
 			m.tabs[i] = m.tabs[i].sync(m.opts.MaxRows)
 		}
 		// Resize detail viewport if the detail screen is open.
@@ -197,15 +194,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleDetailKey(msg)
 	}
 
-	// When the sort selector is open, only a small set of keys are routed;
-	// all others are silently swallowed.
-	if m.sortOpen {
-		return m.handleSortKey(msg)
-	}
-
-	// When the filter bar is focused, route all keys to it except ctrl+c.
-	if m.filterFocused {
-		return m.handleFilterKey(msg)
+	// When the query bar is focused, route all keys (except ctrl+c) to it.
+	if m.query.Focused() {
+		return m.handleQueryKey(msg)
 	}
 
 	switch {
@@ -227,15 +218,22 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 'r':
 		return m.refreshActive()
 
+	// →← move the sort-column highlight; s toggles sort on the highlighted
+	// column — mirrors the status-command TUI (no modal selector).
+	case key.Matches(msg, m.keys.Left):
+		return m.moveSortHi(-1)
+
+	case key.Matches(msg, m.keys.Right):
+		return m.moveSortHi(1)
+
 	case msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 's':
 		if m.tabs[m.active].state == tabLoaded {
-			return m.openSortSelector()
+			return m.toggleSort()
 		}
 
 	case msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == '/':
-		if m.tabs[m.active].state == tabLoaded {
-			return m.openFilterBar()
-		}
+		m.query = m.query.Focus()
+		return m, nil
 
 	case msg.Type == tea.KeyEnter:
 		if m.tabs[m.active].state == tabLoaded {
@@ -319,147 +317,61 @@ func (m Model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// openFilterBar focuses the filter bar on the active tab.
-func (m Model) openFilterBar() (tea.Model, tea.Cmd) {
-	m.filterFocused = true
-	m.filterBar = m.filterBar.focus(m.tabs[m.active].filter)
-	// Resize the active tab to the reduced body budget.
-	m.tabs[m.active] = m.tabs[m.active].setSize(m.width, m.bodyHeight()-filterBarLines)
-	m.tabs[m.active] = m.tabs[m.active].sync(m.opts.MaxRows)
+// handleQueryKey handles key events while the query bar is focused. On enter
+// the query is applied to the active tab's client-side filter; esc cancels the
+// edit and keeps the previously-applied query. Mirrors the status-command TUI.
+func (m Model) handleQueryKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if msg.Type == tea.KeyCtrlC {
+		return m, tea.Quit
+	}
+	var applied bool
+	m.query, applied = m.query.Update(msg)
+	if applied {
+		m.tabs[m.active].filter = m.query.Query()
+		m.tabs[m.active] = m.tabs[m.active].sync(m.opts.MaxRows)
+	}
 	return m, nil
 }
 
-// handleFilterKey handles key events while the filter bar is focused.
-// Only ctrl+c, enter, esc, and all textinput keys are processed here.
-func (m Model) handleFilterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
-	case tea.KeyCtrlC:
-		return m, tea.Quit
-
-	case tea.KeyEnter:
-		// Unfocus but keep filter applied.
-		m.filterFocused = false
-		m.filterBar = m.filterBar.blur()
-		// Size the active tab correctly: if the filter is non-empty the bar
-		// remains visible (filterBarVisible depends on filter, not focus), so
-		// we must use the reduced body budget; only an empty filter earns the
-		// full budget.
-		tabH := m.bodyHeight()
-		if m.tabs[m.active].filter != "" {
-			tabH -= filterBarLines
-		}
-		if tabH < 1 {
-			tabH = 1
-		}
-		m.tabs[m.active] = m.tabs[m.active].setSize(m.width, tabH)
-		m.tabs[m.active] = m.tabs[m.active].sync(m.opts.MaxRows)
+// moveSortHi moves the sort-column highlight on the active tab by delta,
+// wrapping around the column set. It does not re-sort — s (toggleSort) commits.
+func (m Model) moveSortHi(delta int) (tea.Model, tea.Cmd) {
+	n := len(m.specs[m.active].columns)
+	if n == 0 {
 		return m, nil
-
-	case tea.KeyEsc:
-		// Clear filter and unfocus.
-		m.filterFocused = false
-		m.filterBar = m.filterBar.blur()
-		m.filterBar = m.filterBar.setValue("")
-		m.tabs[m.active].filter = ""
-		// Restore full body budget.
-		m.tabs[m.active] = m.tabs[m.active].setSize(m.width, m.bodyHeight())
-		m.tabs[m.active] = m.tabs[m.active].sync(m.opts.MaxRows)
-		return m, nil
-
-	default:
-		// Route to textinput. The textinput.Update call returns a new model
-		// and possibly a blink cmd. We update the filter value live.
-		var cmd tea.Cmd
-		newTI, tiCmd := m.filterBar.ti.Update(msg)
-		m.filterBar.ti = newTI
-		m.tabs[m.active].filter = m.filterBar.value()
-		m.tabs[m.active] = m.tabs[m.active].sync(m.opts.MaxRows)
-		cmd = tiCmd
-		return m, cmd
 	}
-}
-
-// openSortSelector opens the inline sort selector on the active tab.
-// sortCursor starts on the currently-applied sortCol; if sortCol==-1, start on 0.
-func (m Model) openSortSelector() (tea.Model, tea.Cmd) {
-	m.sortOpen = true
-	col := m.tabs[m.active].sortCol
-	if col < 0 {
-		col = 0
-	}
-	m.sortCursor = col
+	m.tabs[m.active].sortHi = (m.tabs[m.active].sortHi + delta%n + n) % n
 	return m, nil
 }
 
-// handleSortKey handles key events while the sort selector is open.
-// Only ctrl+c, left/right/up/down (and h/l/j/k), enter and esc are routed;
-// all other keys are silently swallowed.
-func (m Model) handleSortKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	numCols := len(m.specs[m.active].columns)
-
-	switch {
-	case msg.Type == tea.KeyCtrlC:
-		return m, tea.Quit
-
-	case msg.Type == tea.KeyLeft,
-		msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && (msg.Runes[0] == 'h'):
-		m.sortCursor = (m.sortCursor - 1 + numCols) % numCols
-
-	case msg.Type == tea.KeyRight,
-		msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && (msg.Runes[0] == 'l'):
-		m.sortCursor = (m.sortCursor + 1) % numCols
-
-	case msg.Type == tea.KeyUp,
-		msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && (msg.Runes[0] == 'k'):
-		m.sortCursor = (m.sortCursor - 1 + numCols) % numCols
-
-	case msg.Type == tea.KeyDown,
-		msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && (msg.Runes[0] == 'j'):
-		m.sortCursor = (m.sortCursor + 1) % numCols
-
-	case msg.Type == tea.KeyEnter:
-		t := m.active
-		if m.sortCursor == m.tabs[t].sortCol {
-			// Toggle direction: Asc → Desc → Asc.
-			if m.tabs[t].sortDir == components.SortAsc {
-				m.tabs[t].sortDir = components.SortDesc
-			} else {
-				m.tabs[t].sortDir = components.SortAsc
-			}
+// toggleSort sorts the active tab by the highlighted column. Pressing s on the
+// already-active column flips its direction; on a new column it sorts ascending.
+func (m Model) toggleSort() (tea.Model, tea.Cmd) {
+	t := m.active
+	hi := m.tabs[t].sortHi
+	if hi == m.tabs[t].sortCol {
+		if m.tabs[t].sortDir == components.SortAsc {
+			m.tabs[t].sortDir = components.SortDesc
 		} else {
-			m.tabs[t].sortCol = m.sortCursor
 			m.tabs[t].sortDir = components.SortAsc
 		}
-		m.tabs[t] = m.tabs[t].sync(m.opts.MaxRows)
-		m.sortOpen = false
-
-	case msg.Type == tea.KeyEsc:
-		m.sortOpen = false
-
-	default:
-		// Swallow all other keys silently.
+	} else {
+		m.tabs[t].sortCol = hi
+		m.tabs[t].sortDir = components.SortAsc
 	}
-
+	m.tabs[t] = m.tabs[t].sync(m.opts.MaxRows)
 	return m, nil
 }
 
 // switchTab switches to tab t, triggering a fetch if the tab is not yet loaded.
 func (m Model) switchTab(t Tab) (tea.Model, tea.Cmd) {
 	m.active = t
-	// Re-size the newly-active tab for its correct body budget. Visibility of
-	// the filter bar after the switch depends on the NEW active tab's filter
-	// (focus is always false during a switch). We always re-size here so that
-	// stale sizes from any previous active state are corrected in both
-	// directions: filtered → full budget (bar gone) or unfiltered → full
-	// budget, filtered → reduced budget (bar still visible).
-	tabH := m.bodyHeight()
-	if m.tabs[t].filter != "" {
-		tabH -= filterBarLines
-	}
-	if tabH < 1 {
-		tabH = 1
-	}
-	m.tabs[t] = m.tabs[t].setSize(m.width, tabH)
+	// Reseed the shared query bar with the new tab's applied filter so the bar
+	// always reflects the active tab's query.
+	m.query = components.NewQueryBar(m.th, m.tabs[t].filter)
+	// Re-size the newly-active tab for the body budget (the query bar is fixed
+	// chrome, so the budget is the same for all tabs).
+	m.tabs[t] = m.tabs[t].setSize(m.width, m.bodyHeight())
 	m.tabs[t] = m.tabs[t].sync(m.opts.MaxRows)
 
 	tab := &m.tabs[t]
@@ -509,19 +421,19 @@ func (m Model) delegateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // chromeLines is the number of lines consumed by fixed chrome at full width (≥80):
 //
-//	HeaderBar (2) + tab bar (1) + status line (1) + FooterBar (2) = 6.
-const chromeLines = 6
+//	HeaderBar (2) + tab bar (1) + status line (1) + query bar (2) + FooterBar (2) = 8.
+const chromeLines = 8
 
 // narrowChromeLines is the chrome line count at narrow width (< narrowFooterThreshold):
 //
-//	HeaderBar (2) + tab bar (1) + FooterBar (2) = 5.
+//	HeaderBar (2) + tab bar (1) + query bar (2) + FooterBar (2) = 7.
 //
 // The standalone status line is dropped; its content is folded into the
 // FooterBar hint line as a single combined dim string.
-const narrowChromeLines = 5
+const narrowChromeLines = 7
 
 // bodyHeight returns the number of lines available for the tab body region
-// (excluding any filter bar lines — those are sliced from the body budget).
+// (the table). The query bar is fixed chrome, not part of the body budget.
 func (m Model) bodyHeight() int {
 	budget := chromeLines
 	if m.width < narrowFooterThreshold {
@@ -532,12 +444,6 @@ func (m Model) bodyHeight() int {
 		h = 1
 	}
 	return h
-}
-
-// filterBarVisible reports whether the filter bar should be rendered.
-// The bar is visible when focused OR when the active tab has a non-empty filter.
-func (m Model) filterBarVisible() bool {
-	return m.filterFocused || m.tabs[m.active].filter != ""
 }
 
 // viewDetail renders the full-screen detail view.
@@ -638,11 +544,7 @@ func (m Model) View() string {
 
 	narrow := m.width < narrowFooterThreshold
 	var footer string
-	if m.sortOpen {
-		footer = m.renderSortSelector()
-	} else if m.filterFocused {
-		footer = m.renderFilterFooter()
-	} else if narrow {
+	if narrow {
 		// Narrow: combined dim line — "Showing X of Y · ↑↓ enter / s q".
 		// No "?: help" at narrow widths (mockup View 9 shows none).
 		combined := m.tabs[m.active].statusLineNarrow(m.opts.MaxRows)
@@ -651,34 +553,13 @@ func (m Model) View() string {
 		footer = components.FooterBar(m.th, m.width, inventoryFooterHints(), "")
 	}
 
-	// Body region: bodyH total lines = filter bar lines (if visible) + table lines.
+	// The query bar is fixed chrome: always visible just above the footer,
+	// mirroring the status-command TUI.
+	queryBar := m.query.View(m.width)
+
+	// Body region: the table fills the whole body budget.
 	bodyH := m.bodyHeight()
-
-	// Collect filter bar lines (2) when visible, then table lines filling the remainder.
-	var bodyLines []string
-	if m.filterBarVisible() {
-		barLines := m.filterBar.renderLines(m.th, m.width)
-		bodyLines = append(bodyLines, barLines...)
-		// Table gets bodyH - filterBarLines.
-		tableH := bodyH - filterBarLines
-		if tableH < 1 {
-			tableH = 1
-		}
-		tableLines := m.tabs[m.active].view(m.th, m.opts.MaxRows, m.spinner.View())
-		// Pad/trim table to exactly tableH.
-		for len(tableLines) < tableH {
-			tableLines = append(tableLines, "")
-		}
-		if len(tableLines) > tableH {
-			tableLines = tableLines[:tableH]
-		}
-		bodyLines = append(bodyLines, tableLines...)
-	} else {
-		// No filter bar: table fills all of bodyH.
-		bodyLines = m.tabs[m.active].view(m.th, m.opts.MaxRows, m.spinner.View())
-	}
-
-	// Pad body to exactly bodyH lines (defensive).
+	bodyLines := m.tabs[m.active].view(m.th, m.opts.MaxRows, m.spinner.View())
 	for len(bodyLines) < bodyH {
 		bodyLines = append(bodyLines, "")
 	}
@@ -686,23 +567,16 @@ func (m Model) View() string {
 		bodyLines = bodyLines[:bodyH]
 	}
 
-	// Status line: omitted at narrow widths (content folded into footer).
+	// Assemble bottom chrome. Wide: status line + query bar + footer. Narrow:
+	// query bar + footer (the count is folded into the narrow footer).
 	var parts []string
-	if narrow {
-		// Assemble: header (2 lines) + tab bar (1 line) + body (bodyH lines) + footer (2 lines)
-		// = narrowChromeLines + bodyH = m.height total lines.
-		parts = []string{header, tabBar}
-		parts = append(parts, bodyLines...)
-		parts = append(parts, footer)
-	} else {
-		statusLine := m.tabs[m.active].statusLine(m.opts.MaxRows)
-		statusLine = components.Truncate(statusLine, m.width)
-		// Assemble: header (2 lines) + tab bar (1 line) + body (bodyH lines) + status (1 line) + footer (2 lines)
-		// = chromeLines + bodyH = m.height total lines.
-		parts = []string{header, tabBar}
-		parts = append(parts, bodyLines...)
-		parts = append(parts, statusLine, footer)
+	parts = append(parts, header, tabBar)
+	parts = append(parts, bodyLines...)
+	if !narrow {
+		statusLine := components.Truncate(m.tabs[m.active].statusLine(m.opts.MaxRows), m.width)
+		parts = append(parts, statusLine)
 	}
+	parts = append(parts, queryBar, footer)
 
 	result := strings.Join(parts, "\n")
 
@@ -742,112 +616,45 @@ func (m Model) viewHelp() string {
 	return strings.Join(lines, "\n")
 }
 
-// renderFilterFooter renders the 2-line footer used while the filter bar is focused.
-// Line 1 (hint): "  enter: confirm search  esc: clear search" + right-aligned "?: help"
-// Line 2 (separator): same border line as FooterBar.
-func (m Model) renderFilterFooter() string {
-	hints := []components.KeyHint{
-		{Key: "enter", Desc: "confirm search"},
-		{Key: "esc", Desc: "clear search"},
-	}
-	return components.FooterBar(m.th, m.width, hints, "")
-}
-
-// renderSortSelector renders the 2-line sort selector that replaces the footer
-// when sortOpen is true.
-//
-// Line 1 (selector): "  Sort by:  ●NativeID  ▸Stack  ▸Type  ▸Label"
-//   - ● marks the column the sortCursor is on (accent-styled)
-//   - ▸ marks all other columns (plain)
-//   - The currently-applied sort column shows ▲ or ▼ suffix after its title
-//
-// Line 2 (hint): "  ↑↓/j/k or ←/→: select  enter: confirm  esc: cancel"
-//
-// Both lines together are joined with "\n" to produce a 2-line replacement for
-// the FooterBar (which also renders as 2 lines: border + content).
-func (m Model) renderSortSelector() string {
-	cols := m.specs[m.active].columns
-	applied := m.tabs[m.active].sortCol
-	dir := m.tabs[m.active].sortDir
-
-	var sb strings.Builder
-	sb.WriteString("  Sort by:  ")
-
-	for i, col := range cols {
-		if i > 0 {
-			sb.WriteString("  ")
-		}
-		// Build entry text: marker + title + optional direction suffix.
-		title := col.Title
-		if i == applied {
-			if dir == components.SortAsc {
-				title += " ▲"
-			} else if dir == components.SortDesc {
-				title += " ▼"
-			}
-		}
-
-		if i == m.sortCursor {
-			entry := "●" + title
-			if m.th != nil {
-				sb.WriteString(m.th.Styles.Accent.Render(entry))
-			} else {
-				sb.WriteString(entry)
-			}
-		} else {
-			sb.WriteString("▸" + title)
-		}
-	}
-
-	selectorLine := sb.String()
-	// Pad to m.width.
-	selectorVisW := lipgloss.Width(selectorLine)
-	if selectorVisW < m.width {
-		selectorLine += strings.Repeat(" ", m.width-selectorVisW)
-	}
-
-	hintLine := "  ↑↓/j/k or ←/→: select  enter: confirm  esc: cancel"
-	hintVisW := lipgloss.Width(hintLine)
-	if hintVisW < m.width {
-		hintLine += strings.Repeat(" ", m.width-hintVisW)
-	}
-
-	return selectorLine + "\n" + hintLine
-}
-
-// renderTabBar renders the tab-selection bar.
-// Format: "  [Resources]  Targets  Stacks  Policies"
-// Active tab is bracketed and accent-styled; inactive tabs are plain.
+// renderTabBar renders the tab-selection bar as numbered pills, e.g.
+// " 1 Resources  2 Targets  3 Stacks  4 Policies". The active tab is a filled
+// pill (Selection background, accent foreground, bold) so it reads clearly as a
+// selected tab; inactive tabs are dim. The leading numbers double as the 1-4
+// switch hints.
 func (m Model) renderTabBar() string {
 	titles := [4]string{"Resources", "Targets", "Stacks", "Policies"}
 
 	var sb strings.Builder
-	sb.WriteString("  ")
+	sb.WriteString(" ")
 	for i, title := range titles {
-		if i > 0 {
-			sb.WriteString("  ")
+		// " n Title " — surrounding spaces give the active pill breathing room.
+		label := " " + string(rune('1'+i)) + " " + title + " "
+		switch {
+		case m.th == nil:
+			sb.WriteString(label)
+		case Tab(i) == m.active:
+			sb.WriteString(lipgloss.NewStyle().
+				Foreground(m.th.Palette.PrimaryAccent).
+				Background(m.th.Palette.Selection).
+				Bold(true).
+				Render(label))
+		default:
+			sb.WriteString(lipgloss.NewStyle().
+				Foreground(m.th.Palette.TextSecondary).
+				Render(label))
 		}
-		if Tab(i) == m.active {
-			bracketed := "[" + title + "]"
-			if m.th != nil {
-				sb.WriteString(m.th.Styles.Accent.Render(bracketed))
-			} else {
-				sb.WriteString(bracketed)
-			}
-		} else {
-			// Pad to same visual width as bracketed version (title + 2 for brackets).
-			padded := " " + title + " "
-			sb.WriteString(padded)
-		}
+		sb.WriteString(" ")
 	}
 
-	// Pad or truncate the tab bar line to full width.
+	// Pad or truncate the tab bar line to full width. The pills carry ANSI
+	// escapes, so truncation must be ANSI-aware (ansi.Truncate closes any open
+	// sequence) — a plain rune slice would leak a broken escape at narrow widths.
 	line := sb.String()
 	lineW := lipgloss.Width(line)
 	if lineW < m.width {
 		line += strings.Repeat(" ", m.width-lineW)
 	} else if lineW > m.width {
-		line = components.Truncate(line, m.width)
+		line = ansi.Truncate(line, m.width, "")
 	}
 	return line
 }

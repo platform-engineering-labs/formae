@@ -38,205 +38,128 @@ func buildSortTestModel(t *testing.T, rows []row, maxRows int) Model {
 }
 
 // ---------------------------------------------------------------------------
-// Test 1: Golden — selector open on Resources tab
+// s sorts by the highlighted column (sortHi), which defaults to column 0.
+// Mirrors the status-command TUI: no modal selector.
 // ---------------------------------------------------------------------------
 
-func TestGolden_SortSelectorOpen(t *testing.T) {
-	fc := buildFixtureClientFull()
-	opts := Options{
-		FocusTab: TabResources,
-		Now:      func() time.Time { return time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC) },
-	}
-	m := newTestInventoryModel(t, fc, opts)
-	var mm tea.Model = m
-
-	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
-	// Deliver resource rows via tabLoadedMsg.
-	rows := buildFixtureResources(5)
-	mm, _ = mm.Update(tabLoadedMsg{tab: TabResources, rows: rows})
-	// Press 's' to open selector.
-	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
-
-	tuitest.RequireGolden(t, []byte(mm.(Model).View()))
-}
-
-// ---------------------------------------------------------------------------
-// Test 2: Apply sort via enter → check engine ordering
-// ---------------------------------------------------------------------------
-
-func TestSortSelector_ApplySortAsc(t *testing.T) {
+func TestSort_SortsByHighlightedColumn(t *testing.T) {
 	rows := buildFixtureResources(5)
 	m := buildSortTestModel(t, rows, 0)
 
-	// Open selector.
 	var mm tea.Model = m
 	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
-	model := mm.(Model)
-	require.True(t, model.sortOpen, "sortOpen must be true after pressing 's'")
-	assert.Equal(t, 0, model.sortCursor, "sortCursor must start at 0 when sortCol==-1")
-
-	// Press enter → applies SortAsc on col 0.
-	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	result := mm.(Model)
 
-	assert.Equal(t, 0, result.tabs[TabResources].sortCol, "sortCol must be 0")
-	assert.Equal(t, components.SortAsc, result.tabs[TabResources].sortDir, "sortDir must be SortAsc")
-	assert.False(t, result.sortOpen, "sortOpen must be false after enter")
+	assert.Equal(t, 0, result.tabs[TabResources].sortCol, "s must sort by the highlighted column (0)")
+	assert.Equal(t, components.SortAsc, result.tabs[TabResources].sortDir, "a fresh column sorts ascending")
 }
 
 // ---------------------------------------------------------------------------
-// Test 3: Re-enter on same column toggles to desc; header shows ▼
+// Pressing s again on the active column toggles the direction; header shows ▼.
 // ---------------------------------------------------------------------------
 
-func TestSortSelector_ToggleDesc(t *testing.T) {
+func TestSort_ToggleDesc(t *testing.T) {
 	rows := buildFixtureResources(5)
 	m := buildSortTestModel(t, rows, 0)
 
-	// Pre-apply sort col 0 asc directly.
-	m.tabs[TabResources].sortCol = 0
-	m.tabs[TabResources].sortDir = components.SortAsc
-	m.tabs[TabResources] = m.tabs[TabResources].sync(m.opts.MaxRows)
-
 	var mm tea.Model = m
-	// Open selector → sortCursor should start at applied col (0).
-	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
-	model := mm.(Model)
-	require.True(t, model.sortOpen)
-	assert.Equal(t, 0, model.sortCursor, "sortCursor must start at applied sortCol=0")
-
-	// Press enter → toggles to SortDesc.
-	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}}) // asc
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}}) // toggle desc
 	result := mm.(Model)
 
-	assert.Equal(t, components.SortDesc, result.tabs[TabResources].sortDir, "sortDir must toggle to SortDesc")
-	assert.False(t, result.sortOpen, "sortOpen must be false after enter")
-
-	// View must contain ▼.
+	assert.Equal(t, components.SortDesc, result.tabs[TabResources].sortDir, "second s must toggle to SortDesc")
 	assert.Contains(t, result.View(), "▼", "View must contain ▼ after sort desc applied")
 }
 
 // ---------------------------------------------------------------------------
-// Test 4: esc leaves prior ordering untouched
+// →← move the sort-column highlight without sorting; s then sorts the new one.
 // ---------------------------------------------------------------------------
 
-func TestSortSelector_EscLeavesSort(t *testing.T) {
+func TestSort_ArrowsMoveHighlightThenSort(t *testing.T) {
 	rows := buildFixtureResources(5)
 	m := buildSortTestModel(t, rows, 0)
 
-	// Pre-apply sort col 1 asc directly.
-	m.tabs[TabResources].sortCol = 1
-	m.tabs[TabResources].sortDir = components.SortAsc
-	m.tabs[TabResources] = m.tabs[TabResources].sync(m.opts.MaxRows)
-
 	var mm tea.Model = m
-	// Open selector.
-	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
-	// Move cursor left (toward col 0).
-	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyLeft})
-	// Press esc.
-	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	// → moves the highlight to column 1 but does not sort.
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRight})
+	mid := mm.(Model)
+	assert.Equal(t, 1, mid.tabs[TabResources].sortHi, "→ must move the highlight to column 1")
+	assert.Equal(t, -1, mid.tabs[TabResources].sortCol, "→ alone must not apply a sort")
 
-	result := mm.(Model)
-	assert.Equal(t, 1, result.tabs[TabResources].sortCol, "sortCol must remain 1 after esc")
-	assert.False(t, result.sortOpen, "sortOpen must be false after esc")
+	// s then sorts by the highlighted column (1).
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	assert.Equal(t, 1, mm.(Model).tabs[TabResources].sortCol, "s must sort the highlighted column (1)")
 }
 
 // ---------------------------------------------------------------------------
-// Test 5: R1 re-cap pin — sort desc → visible rows are global top-N
+// ← wraps around the column set.
 // ---------------------------------------------------------------------------
 
-func TestSortSelector_R1RecapPin(t *testing.T) {
-	// Build 10 distinct rows with unique NativeIDs.
+func TestSort_LeftWrapsAround(t *testing.T) {
+	rows := buildFixtureResources(5)
+	m := buildSortTestModel(t, rows, 0)
+
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	n := len(m.specs[TabResources].columns)
+	assert.Equal(t, n-1, mm.(Model).tabs[TabResources].sortHi, "← from column 0 must wrap to the last column")
+}
+
+// ---------------------------------------------------------------------------
+// R1 re-cap pin — sort desc → visible rows are the global top-N, not a
+// locally-re-sorted first page.
+// ---------------------------------------------------------------------------
+
+func TestSort_R1RecapPin(t *testing.T) {
 	rows := buildFixtureResources(10)
 	m := buildSortTestModel(t, rows, 3)
 
 	var mm tea.Model = m
-	// Open selector — cursor at 0 (NativeID col).
+	// s sorts by column 0 (NativeID) ascending.
 	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
-	// Press enter → SortAsc col 0.
-	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
-
 	result := mm.(Model)
 	assert.Equal(t, 0, result.tabs[TabResources].sortCol)
 	assert.Equal(t, components.SortAsc, result.tabs[TabResources].sortDir)
 
-	// Get visible rows.
 	vis, total := result.tabs[TabResources].visible(3)
 	assert.Equal(t, 10, total, "total must be 10 (all rows)")
 	require.Len(t, vis, 3, "visible must be capped at 3")
-
-	// Verify the GLOBAL top-3 in asc order by exact NativeID values. If the cap
-	// were (incorrectly) applied before the sort, the window would hold the
-	// first 3 server-order rows re-sorted locally — a different set entirely.
-	assert.Equal(t, "arn:aws:iam:::role/app", vis[0].cells[0],
-		"first visible row must be the global asc minimum")
+	assert.Equal(t, "arn:aws:iam:::role/app", vis[0].cells[0], "first visible row must be the global asc minimum")
 	assert.Equal(t, "arn:aws:rds:::db/primary", vis[1].cells[0])
 	assert.Equal(t, "arn:aws:s3:::my-bucket", vis[2].cells[0])
 
-	// Now toggle to desc: open again, enter on same col.
+	// Toggle to desc: another s on the same column.
 	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
-	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
-
 	result = mm.(Model)
 	assert.Equal(t, components.SortDesc, result.tabs[TabResources].sortDir)
 
 	visDesc, _ := result.tabs[TabResources].visible(3)
 	require.Len(t, visDesc, 3)
-	// Global top-3 in desc order by exact NativeID values.
-	assert.Equal(t, "subnet-0abc123456789b", visDesc[0].cells[0],
-		"first visible row must be the global desc maximum")
+	assert.Equal(t, "subnet-0abc123456789b", visDesc[0].cells[0], "first visible row must be the global desc maximum")
 	assert.Equal(t, "subnet-0abc123456789a", visDesc[1].cells[0])
 	assert.Equal(t, "sg-0123456789ab", visDesc[2].cells[0])
 }
 
 // ---------------------------------------------------------------------------
-// Test 6: While open, pressing "2" does NOT switch tabs
+// Exact-fill after a sort is applied.
 // ---------------------------------------------------------------------------
 
-func TestSortSelector_KeysBlockedWhenOpen(t *testing.T) {
-	rows := buildFixtureResources(3)
+func TestSort_ExactFillAfterSort(t *testing.T) {
+	rows := buildFixtureResources(5)
 	m := buildSortTestModel(t, rows, 0)
 
 	var mm tea.Model = m
-	// Open selector.
 	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
-	// Press '2' — must NOT switch tabs.
-	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
 
-	result := mm.(Model)
-	assert.Equal(t, TabResources, result.active, "active tab must remain Resources while sort selector is open")
-	assert.True(t, result.sortOpen, "sortOpen must still be true (key was swallowed)")
+	lines := strings.Split(mm.(Model).View(), "\n")
+	assert.Equal(t, 24, len(lines), "View must fill exactly 24 lines after a sort is applied")
 }
 
 // ---------------------------------------------------------------------------
-// Test 7: Exact-fill while selector open
+// Golden: a column highlighted (moved) and sorted descending.
 // ---------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// Test: ? while sort selector open does NOT open help overlay
-// ---------------------------------------------------------------------------
-
-// TestSortSelector_QuestionMarkBlockedWhenOpen: pressing ? while the sort
-// selector is open must be swallowed — helpOpen stays false and sortOpen
-// stays true.
-func TestSortSelector_QuestionMarkBlockedWhenOpen(t *testing.T) {
-	rows := buildFixtureResources(3)
-	m := buildSortTestModel(t, rows, 0)
-
-	var mm tea.Model = m
-	// Open selector.
-	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
-	require.True(t, mm.(Model).sortOpen, "sortOpen must be true after pressing 's'")
-
-	// Press ? — must NOT open help overlay.
-	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
-
-	result := mm.(Model)
-	assert.False(t, result.helpOpen, "? must not open help while sort selector is open")
-	assert.True(t, result.sortOpen, "sortOpen must remain true after pressing ?")
-}
-
-func TestSortSelector_ExactFillWhileOpen(t *testing.T) {
+func TestGolden_SortApplied(t *testing.T) {
 	fc := buildFixtureClientFull()
 	opts := Options{
 		FocusTab: TabResources,
@@ -244,14 +167,14 @@ func TestSortSelector_ExactFillWhileOpen(t *testing.T) {
 	}
 	m := newTestInventoryModel(t, fc, opts)
 	var mm tea.Model = m
-
 	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
-	rows := buildFixtureResources(5)
-	mm, _ = mm.Update(tabLoadedMsg{tab: TabResources, rows: rows})
-	// Open selector.
-	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	mm, _ = mm.Update(tabLoadedMsg{tab: TabResources, rows: buildFixtureResources(5)})
 
-	view := mm.(Model).View()
-	lines := strings.Split(view, "\n")
-	assert.Equal(t, 24, len(lines), "View must fill exactly 24 lines when sort selector is open")
+	// Move the highlight to Type (col 2) and sort descending.
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRight})
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRight})
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}}) // asc
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}}) // desc
+
+	tuitest.RequireGolden(t, []byte(mm.(Model).View()))
 }

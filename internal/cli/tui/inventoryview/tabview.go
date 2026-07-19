@@ -387,6 +387,52 @@ func replaceInAnsiLine(line string, visStart, visEnd int, styled string) string 
 	return line[:byteStart] + styled + line[byteEnd:]
 }
 
+// highlightHeaderColumn re-renders the header row so the sortHi column's cell
+// carries a Selection background — the →← sort-column highlight. bubbles/table
+// renders the whole header with one uniform TableHeader style, so we can strip
+// it back to plain text and re-render the three segments (before / highlighted /
+// after) from the same style, applying the background only to the middle slice.
+// Columns are packed adjacently at exactly effCols[i].Width visual chars.
+func highlightHeaderColumn(header string, tbl components.Table, effCols []components.Column, sortHi int, th *theme.Theme) string {
+	visIdx := tbl.VisibleColumnIndexes()
+	pos := -1
+	for p, orig := range visIdx {
+		if orig == sortHi {
+			pos = p
+			break
+		}
+	}
+	if pos < 0 {
+		return header // sortHi column is currently hidden (responsive drop)
+	}
+	start := 0
+	for p := 0; p < pos; p++ {
+		if orig := visIdx[p]; orig < len(effCols) {
+			start += effCols[orig].Width
+		}
+	}
+	width := 0
+	if sortHi < len(effCols) {
+		width = effCols[sortHi].Width
+	}
+	runes := []rune(ansi.Strip(header))
+	if width <= 0 || start >= len(runes) {
+		return header
+	}
+	end := start + width
+	if end > len(runes) {
+		end = len(runes)
+	}
+	// Re-render with a border-less style: TableHeader carries a bottom border
+	// (the separator line, rendered separately as the next line), so reusing it
+	// here would emit three stray border fragments. Match its foreground/bold.
+	base := lipgloss.NewStyle().Foreground(th.Palette.TextSecondary).Bold(true)
+	hiStyle := base.Background(th.Palette.Selection)
+	return base.Render(string(runes[:start])) +
+		hiStyle.Render(string(runes[start:end])) +
+		base.Render(string(runes[end:]))
+}
+
 // runeIndex finds the first occurrence of needle in haystack (both []rune).
 // Returns the rune index (visual position), or -1 if not found.
 func runeIndex(haystack, needle []rune) int {
@@ -443,6 +489,12 @@ func (t tabModel) loadedView(th *theme.Theme, maxRows int) []string {
 		effCols = t.spec.columns
 	}
 	tableLines = applyCellStyles(tableLines, t.styledCells, tbl, effCols)
+
+	// Highlight the sort-target column header (sortHi) with a background, so the
+	// →← highlight reads like the status-command TUI. The header row is line 0.
+	if th != nil && len(tableLines) > 0 {
+		tableLines[0] = highlightHeaderColumn(tableLines[0], tbl, effCols, t.sortHi, th)
+	}
 
 	// Remove trailing empty lines that bubbles/table may append.
 	for len(tableLines) > 0 && tableLines[len(tableLines)-1] == "" {
