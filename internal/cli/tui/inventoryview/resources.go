@@ -8,15 +8,17 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/platform-engineering-labs/formae/internal/constants"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
 // resourceRow converts a pkgmodel.Resource into a render-ready row.
 // Cells: [NativeID, Stack, Type, Label].
-// The Stack cell for "unmanaged" carries the "⚠ " prefix; other stacks are verbatim.
+// Unmanaged resources live on the "$unmanaged" sentinel stack; display it as a
+// plain "⚠ unmanaged" (no "$") so it reads as a distinct, non-managed grouping.
 func resourceRow(r pkgmodel.Resource) row {
 	stackCell := r.Stack
-	if r.Stack == "unmanaged" {
+	if r.Stack == constants.UnmanagedStack {
 		stackCell = "⚠ unmanaged"
 	}
 

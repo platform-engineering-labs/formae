@@ -300,7 +300,7 @@ func TestDetail_ExactFillLongContent(t *testing.T) {
 func TestGolden_DetailResource(t *testing.T) {
 	res := pkgmodel.Resource{
 		NativeID:   "arn:aws:s3:::old-logs",
-		Stack:      "unmanaged",
+		Stack:      "$unmanaged",
 		Type:       "AWS::S3::Bucket",
 		Label:      "old-logs",
 		Managed:    false,

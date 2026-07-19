@@ -384,8 +384,11 @@ func (v multiView) renderRows(maxRows int) []string {
 					cell := pad(fmt.Sprintf("%s %d/%d", verb, done, total), w)
 					sb.WriteString(textStyle.Render(cell))
 				} else {
-					// segmented bar + count; bar is bw-8 wide, count is right-aligned remainder
-					countStr := fmt.Sprintf(" %d/%d", done, total)
+					// segmented bar + count; bar is bw-8 wide, count is right-aligned remainder.
+					// The trailing space is REQUIRED: the count fills the column exactly,
+					// so without it the next (✓) column abuts the total — e.g. total 15
+					// + ✓ 4 rendered as "4/154". The gap keeps them separate.
+					countStr := fmt.Sprintf(" %d/%d ", done, total)
 					barW := w - utf8.RuneCountInString(countStr)
 					if barW < 1 {
 						barW = 1

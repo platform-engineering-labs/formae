@@ -31,7 +31,7 @@ func buildFixtureClientFull() *fakeClient {
 		Resources: []pkgmodel.Resource{
 			{NativeID: "arn:aws:s3:::my-bucket", Stack: "production", Type: "AWS::S3::Bucket", Label: "my-bucket"},
 			{NativeID: "i-0abc123456789", Stack: "production", Type: "AWS::EC2::Instance", Label: "web-1"},
-			{NativeID: "arn:aws:s3:::old-logs", Stack: "unmanaged", Type: "AWS::S3::Bucket", Label: "old-logs"},
+			{NativeID: "arn:aws:s3:::old-logs", Stack: "$unmanaged", Type: "AWS::S3::Bucket", Label: "old-logs"},
 		},
 	}
 	targets := []*pkgmodel.Target{

@@ -240,7 +240,7 @@ func TestNarrow_FooterSwitches_At80Boundary(t *testing.T) {
 		rows := []row{
 			resourceRow(pkgmodel.Resource{NativeID: "arn:aws:s3:::my-bucket", Stack: "production", Type: "AWS::S3::Bucket", Label: "my-bucket"}),
 			resourceRow(pkgmodel.Resource{NativeID: "i-0abc123456789", Stack: "production", Type: "AWS::EC2::Instance", Label: "web-1"}),
-			resourceRow(pkgmodel.Resource{NativeID: "arn:aws:s3:::old-logs", Stack: "unmanaged", Type: "AWS::S3::Bucket", Label: "old-logs"}),
+			resourceRow(pkgmodel.Resource{NativeID: "arn:aws:s3:::old-logs", Stack: "$unmanaged", Type: "AWS::S3::Bucket", Label: "old-logs"}),
 		}
 		mm, _ = mm.Update(tabLoadedMsg{tab: TabResources, rows: rows})
 		return mm.(Model).View()
@@ -283,7 +283,7 @@ func TestNarrow_WidthBound_30(t *testing.T) {
 		rows := []row{
 			resourceRow(pkgmodel.Resource{NativeID: "arn:aws:s3:::my-bucket", Stack: "production", Type: "AWS::S3::Bucket", Label: "my-bucket"}),
 			resourceRow(pkgmodel.Resource{NativeID: "i-0abc123456789", Stack: "production", Type: "AWS::EC2::Instance", Label: "web-1"}),
-			resourceRow(pkgmodel.Resource{NativeID: "arn:aws:s3:::old-logs", Stack: "unmanaged", Type: "AWS::S3::Bucket", Label: "old-logs"}),
+			resourceRow(pkgmodel.Resource{NativeID: "arn:aws:s3:::old-logs", Stack: "$unmanaged", Type: "AWS::S3::Bucket", Label: "old-logs"}),
 		}
 		mm, _ = mm.Update(tabLoadedMsg{tab: TabResources, rows: rows})
 	}, "Update at width 30 must not panic")
@@ -329,7 +329,7 @@ func TestGolden_Narrow56(t *testing.T) {
 		resourceRow(pkgmodel.Resource{NativeID: "arn:aws:s3:::my-bucket", Stack: "production", Type: "AWS::S3::Bucket", Label: "my-bucket"}),
 		resourceRow(pkgmodel.Resource{NativeID: "i-0abc123456789", Stack: "production", Type: "AWS::EC2::Instance", Label: "web-1"}),
 		resourceRow(pkgmodel.Resource{NativeID: "i-0abc123456xyz", Stack: "production", Type: "AWS::EC2::Instance", Label: "web-2"}),
-		resourceRow(pkgmodel.Resource{NativeID: "arn:aws:s3:::logs", Stack: "unmanaged", Type: "AWS::S3::Bucket", Label: "logs"}),
+		resourceRow(pkgmodel.Resource{NativeID: "arn:aws:s3:::logs", Stack: "$unmanaged", Type: "AWS::S3::Bucket", Label: "logs"}),
 	}
 	mm, _ = mm.Update(tabLoadedMsg{tab: TabResources, rows: rows})
 	tuitest.RequireGolden(t, []byte(mm.(Model).View()))
@@ -350,7 +350,7 @@ func TestGolden_Narrow30(t *testing.T) {
 	rows := []row{
 		resourceRow(pkgmodel.Resource{NativeID: "arn:aws:s3:::my-bucket", Stack: "production", Type: "AWS::S3::Bucket", Label: "my-bucket"}),
 		resourceRow(pkgmodel.Resource{NativeID: "i-0abc123456789", Stack: "production", Type: "AWS::EC2::Instance", Label: "web-1"}),
-		resourceRow(pkgmodel.Resource{NativeID: "arn:aws:s3:::old-logs", Stack: "unmanaged", Type: "AWS::S3::Bucket", Label: "old-logs"}),
+		resourceRow(pkgmodel.Resource{NativeID: "arn:aws:s3:::old-logs", Stack: "$unmanaged", Type: "AWS::S3::Bucket", Label: "old-logs"}),
 	}
 	mm, _ = mm.Update(tabLoadedMsg{tab: TabResources, rows: rows})
 

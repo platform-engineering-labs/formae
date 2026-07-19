@@ -28,6 +28,10 @@ const (
 	navShowMore                          // a "show N more" row
 )
 
+// detailPageSize is how many rows per group are shown before a "show N more"
+// row, and how many each activation reveals.
+const detailPageSize = 20
+
 // navigableLine tracks one navigable cursor position.
 type navigableLine struct {
 	kind      navigableLineKind
@@ -65,9 +69,11 @@ func newDetailModel(th *theme.Theme, width, height int) detailModel {
 	vp := viewport.New(width, max(height-chromeLines-2, 1)) // -2 for pinned cmd row + separator
 	return detailModel{
 		th:      th,
-		visible: map[updateKind]int{kindTarget: 10, kindStack: 10, kindPolicy: 10, kindResource: 10},
-		sortHi:  map[updateKind]int{kindTarget: 0, kindStack: 0, kindPolicy: 0, kindResource: 0},
-		sortCol: map[updateKind]int{kindTarget: 0, kindStack: 0, kindPolicy: 0, kindResource: 0},
+		visible: map[updateKind]int{kindTarget: detailPageSize, kindStack: detailPageSize, kindPolicy: detailPageSize, kindResource: detailPageSize},
+		// Default the sort to the Label column (not the empty status column) so the
+		// ▲/▼ arrow appears on a real, labeled header instead of a lone glyph.
+		sortHi:  map[updateKind]int{kindTarget: detailColLabel, kindStack: detailColLabel, kindPolicy: detailColLabel, kindResource: detailColLabel},
+		sortCol: map[updateKind]int{kindTarget: detailColLabel, kindStack: detailColLabel, kindPolicy: detailColLabel, kindResource: detailColLabel},
 		sortDir: map[updateKind]components.SortDirection{
 			kindTarget:   components.SortAsc,
 			kindStack:    components.SortAsc,
@@ -245,7 +251,7 @@ func (d detailModel) Update(msg tea.KeyMsg, keys tui.KeyMap) (detailModel, bool)
 			sortGroup(g.rows, d.sortCol[grpKind], d.sortDir[grpKind])
 		}
 		// Reset pagination for this group
-		d.visible[grpKind] = 10
+		d.visible[grpKind] = detailPageSize
 		// Reset cursor to top
 		d.cursor = 0
 
@@ -253,7 +259,7 @@ func (d detailModel) Update(msg tea.KeyMsg, keys tui.KeyMap) (detailModel, bool)
 		if d.cursor >= 0 && d.cursor < total {
 			line := nav[d.cursor]
 			if line.kind == navShowMore {
-				d.visible[line.groupKind] += 10
+				d.visible[line.groupKind] += detailPageSize
 			} else {
 				// Toggle expansion for this row key
 				if d.expanded[line.rowKey] {
@@ -354,7 +360,7 @@ func (d detailModel) View(height int, showQueryBar bool) string {
 			if isCursor {
 				cursorLine = lineCount
 			}
-			moreText := fmt.Sprintf("      ↓ show 10 more (%d remaining)", remaining)
+			moreText := fmt.Sprintf("      ↓ show %d more (%d remaining)", min(detailPageSize, remaining), remaining)
 			if isCursor {
 				body.WriteString(lipgloss.NewStyle().
 					Foreground(p.PrimaryAccent).

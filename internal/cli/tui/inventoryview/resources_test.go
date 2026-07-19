@@ -21,7 +21,7 @@ import (
 func TestResourceRow_Cells_Unmanaged(t *testing.T) {
 	r := pkgmodel.Resource{
 		NativeID: "arn:aws:s3:::logs",
-		Stack:    "unmanaged",
+		Stack:    "$unmanaged",
 		Type:     "AWS::S3::Bucket",
 		Label:    "logs",
 	}
@@ -162,7 +162,7 @@ func TestResourcesSpec_FetchDelegates(t *testing.T) {
 	c := &fakeClient{
 		forma: &pkgmodel.Forma{
 			Resources: []pkgmodel.Resource{
-				{NativeID: "arn:x", Stack: "unmanaged", Type: "AWS::S3::Bucket", Label: "x"},
+				{NativeID: "arn:x", Stack: "$unmanaged", Type: "AWS::S3::Bucket", Label: "x"},
 				{NativeID: "arn:y", Stack: "prod", Type: "AWS::S3::Bucket", Label: "y", Managed: true},
 			},
 		},

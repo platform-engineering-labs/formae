@@ -116,17 +116,18 @@ func TestDetailModel_ShowMoreRow(t *testing.T) {
 	dm = dm.SetCommand(c, r, "◉", now, nil)
 
 	v := plain(dm.View(40, false))
-	assert.Contains(t, v, "show 10 more (15 remaining)")
+	// 25 resources, page size 20 → 20 shown, 5 remaining.
+	assert.Contains(t, v, "show 5 more (5 remaining)")
 
-	// cursor to show-more row (row index 10, after 10 visible rows)
-	// navigate down 10 times from 0
+	// cursor to show-more row (row index 20, after 20 visible rows)
+	// navigate down 20 times from 0
 	keys := defaultKeyMap()
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 20; i++ {
 		dm, _ = dm.Update(tea.KeyMsg{Type: tea.KeyDown}, keys)
 	}
 	// Now cursor should be on the show-more row — press enter
 	dm, _ = dm.Update(tea.KeyMsg{Type: tea.KeyEnter}, keys)
-	assert.Equal(t, 20, dm.visible[kindResource], "visible should expand by 10 to 20")
+	assert.Equal(t, 40, dm.visible[kindResource], "visible should expand by 20 to 40")
 }
 
 func TestDetailModel_ExpandCardByKey(t *testing.T) {
@@ -347,12 +348,12 @@ func TestSetCommand_ClampsCursorWhenListShrinks(t *testing.T) {
 	th := theme.New("formae")
 	dm := newDetailModel(th, 100, 40)
 
-	// Build a command with 12 resource updates so visibleRows returns 10 + show-more.
+	// Build a command with 25 resource updates so visibleRows returns 20 + show-more.
 	c12 := apimodel.Command{
 		CommandID: "cmd-shrink",
 		State:     "InProgress",
 	}
-	for i := 0; i < 12; i++ {
+	for i := 0; i < 25; i++ {
 		c12.ResourceUpdates = append(c12.ResourceUpdates, apimodel.ResourceUpdate{
 			ResourceLabel: fmt.Sprintf("res-%02d", i),
 			ResourceType:  "AWS::S3::Bucket",
@@ -368,8 +369,8 @@ func TestSetCommand_ClampsCursorWhenListShrinks(t *testing.T) {
 	// Navigate cursor to the last navigable line (show-more row, index 10).
 	nav12 := dm.navLines()
 	dm.cursor = len(nav12) - 1
-	require.Equal(t, 11, len(nav12), "expect 10 rows + 1 show-more = 11 nav entries")
-	require.Equal(t, 10, dm.cursor)
+	require.Equal(t, 21, len(nav12), "expect 20 rows + 1 show-more = 21 nav entries")
+	require.Equal(t, 20, dm.cursor)
 
 	// Now refresh with a 2-resource command — list shrinks drastically.
 	c2 := apimodel.Command{

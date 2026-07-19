@@ -7,7 +7,7 @@
   [38;2;85;85;102m──────────────────────────────────────────────────────────────────────────────────────────────────[0m
 Label:    old-logs                                                                                  
 Type:     AWS::S3::Bucket                                                                           
-Stack:    unmanaged                                                                                 
+Stack:    $unmanaged                                                                                
 Target:   aws-prod                                                                                  
 NativeID: arn:aws:s3:::old-logs                                                                     
 Managed:  no                                                                                        

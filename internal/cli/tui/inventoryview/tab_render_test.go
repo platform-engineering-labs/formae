@@ -77,7 +77,7 @@ func buildFixtureResources(n int) []row {
 		{NativeID: "i-0abc123456789", Stack: "production", Type: "AWS::EC2::Instance", Label: "web-1"},
 		{NativeID: "sg-0123456789ab", Stack: "production", Type: "AWS::EC2::SecurityGroup", Label: "web-sg"},
 		{NativeID: "arn:aws:rds:::db/primary", Stack: "production", Type: "AWS::RDS::DBInstance", Label: "primary"},
-		{NativeID: "arn:aws:s3:::old-logs", Stack: "unmanaged", Type: "AWS::S3::Bucket", Label: "old-logs"},
+		{NativeID: "arn:aws:s3:::old-logs", Stack: "$unmanaged", Type: "AWS::S3::Bucket", Label: "old-logs"},
 		{NativeID: "subnet-0abc123456789a", Stack: "network", Type: "AWS::EC2::Subnet", Label: "subnet-1"},
 		{NativeID: "subnet-0abc123456789b", Stack: "network", Type: "AWS::EC2::Subnet", Label: "subnet-2"},
 		{NativeID: "rtb-0abc123456789c", Stack: "network", Type: "AWS::EC2::RouteTable", Label: "rt-main"},
@@ -364,7 +364,7 @@ func TestStyleCell_Resources_UnmanagedHasErrorAnsi(t *testing.T) {
 	th := theme.New("formae")
 	rows := []row{resourceRow(pkgmodel.Resource{
 		NativeID: "arn:aws:s3:::old-logs",
-		Stack:    "unmanaged",
+		Stack:    "$unmanaged",
 		Type:     "AWS::S3::Bucket",
 		Label:    "old-logs",
 	})}
@@ -538,7 +538,7 @@ func TestStyleCell_CursorOnStyledRow_NoCorruption(t *testing.T) {
 	// Use the resources tab which styles the Stack col for unmanaged resources.
 	rows := []row{resourceRow(pkgmodel.Resource{
 		NativeID: "arn:aws:s3:::old-logs",
-		Stack:    "unmanaged",
+		Stack:    "$unmanaged",
 		Type:     "AWS::S3::Bucket",
 		Label:    "old-logs",
 	})}
