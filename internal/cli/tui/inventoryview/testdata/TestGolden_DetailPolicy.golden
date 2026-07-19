@@ -5,16 +5,16 @@
 
   shared-retention (policy)                                                                         
   [38;2;85;85;102m──────────────────────────────────────────────────────────────────────────────────────────────────[0m
-Label: shared-retention                                                                             
-Type:  ttl                                                                                          
+  Label: shared-retention                                                                           
+  Type:  ttl                                                                                        
                                                                                                     
-Config:                                                                                             
- TTLSeconds: 86400                                                                                  
+  Config:                                                                                           
+   TTLSeconds: 86400                                                                                
                                                                                                     
-Attached stacks:                                                                                    
-  - production                                                                                      
-  - staging                                                                                         
-  - network                                                                                         
+  Attached stacks:                                                                                  
+    - production                                                                                    
+    - staging                                                                                       
+    - network                                                                                       
                                                                                                     
                                                                                                     
                                                                                                     

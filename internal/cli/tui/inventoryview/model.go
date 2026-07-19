@@ -253,6 +253,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// detailIndent is the left indent (spaces) applied to the detail-screen content
+// so it aligns with the indented header, title and rule above it.
+const detailIndent = 2
+
 // openDetail opens the full-screen detail view for the currently selected row.
 func (m Model) openDetail() (tea.Model, tea.Cmd) {
 	tab := m.tabs[m.active]
@@ -264,8 +268,14 @@ func (m Model) openDetail() (tea.Model, tea.Cmd) {
 
 	r := vis[cursor]
 	m.detailTitle = r.title
+	// Content is indented 2 spaces to align with the header/title/rule above it,
+	// so build it for the reduced width.
+	contentWidth := m.width - detailIndent
+	if contentWidth < 1 {
+		contentWidth = 1
+	}
 	if r.detail != nil {
-		m.detailBody = r.detail(m.width)
+		m.detailBody = r.detail(contentWidth)
 	} else {
 		m.detailBody = nil
 	}
@@ -275,10 +285,11 @@ func (m Model) openDetail() (tea.Model, tea.Cmd) {
 		vpH = 1
 	}
 	vp := viewport.New(m.width, vpH)
-	// Build content: truncate each line to m.width.
+	// Build content: indent 2 spaces and truncate each line to the content width.
+	indent := strings.Repeat(" ", detailIndent)
 	contentLines := make([]string, len(m.detailBody))
 	for i, line := range m.detailBody {
-		contentLines[i] = components.Truncate(line, m.width)
+		contentLines[i] = indent + components.Truncate(line, contentWidth)
 	}
 	vp.SetContent(strings.Join(contentLines, "\n"))
 	m.detailViewport = vp

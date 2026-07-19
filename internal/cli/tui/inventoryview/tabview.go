@@ -428,8 +428,10 @@ func highlightHeaderColumn(header string, tbl components.Table, effCols []compon
 	// Re-render with a border-less style: TableHeader carries a bottom border
 	// (the separator line, rendered separately as the next line), so reusing it
 	// here would emit three stray border fragments. Match its foreground/bold.
+	// The highlighted (sort-target) column is brightened to TextPrimary rather
+	// than given a background, so it stands out without a selection block.
 	base := lipgloss.NewStyle().Foreground(th.Palette.TextSecondary).Bold(true)
-	hiStyle := base.Background(th.Palette.Selection)
+	hiStyle := lipgloss.NewStyle().Foreground(th.Palette.TextPrimary).Bold(true)
 	return base.Render(string(runes[:start])) +
 		hiStyle.Render(string(runes[start:end])) +
 		base.Render(string(runes[end:]))

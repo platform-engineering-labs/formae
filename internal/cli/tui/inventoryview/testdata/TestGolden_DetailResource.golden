@@ -5,18 +5,18 @@
 
   old-logs (AWS::S3::Bucket)                                                                        
   [38;2;85;85;102m──────────────────────────────────────────────────────────────────────────────────────────────────[0m
-Label:    old-logs                                                                                  
-Type:     AWS::S3::Bucket                                                                           
-Stack:    $unmanaged                                                                                
-Target:   aws-prod                                                                                  
-NativeID: arn:aws:s3:::old-logs                                                                     
-Managed:  no                                                                                        
+  Label:    old-logs                                                                                
+  Type:     AWS::S3::Bucket                                                                         
+  Stack:    $unmanaged                                                                              
+  Target:   aws-prod                                                                                
+  NativeID: arn:aws:s3:::old-logs                                                                   
+  Managed:  no                                                                                      
                                                                                                     
-Properties:                                                                                         
- BucketName: old-logs                                                                               
- Tags:                                                                                              
-   Env: dev                                                                                         
-   Owner: ops                                                                                       
+  Properties:                                                                                       
+   BucketName: old-logs                                                                             
+   Tags:                                                                                            
+     Env: dev                                                                                       
+     Owner: ops                                                                                     
                                                                                                     
                                                                                                     
                                                                                                     

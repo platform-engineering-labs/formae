@@ -256,7 +256,11 @@ func (v multiView) headerRow() string {
 	headerStyle := lipgloss.NewStyle().
 		Foreground(p.TextSecondary).
 		Bold(true)
-	hiStyle := headerStyle.Background(p.Selection)
+	// The highlighted (sort-target) column is brightened to TextPrimary rather
+	// than given a background, so it stands out without a selection block.
+	hiStyle := lipgloss.NewStyle().
+		Foreground(p.TextPrimary).
+		Bold(true)
 
 	var sb strings.Builder
 	for c := 0; c < colCount; c++ {
