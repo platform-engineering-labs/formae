@@ -67,15 +67,16 @@ func TestRender_KittyTextRight(t *testing.T) {
 		t.Error("expected 'v1.2.3' as selectable text in Kitty output")
 	}
 
-	// Must contain relative row-down escape for version line.
-	if !strings.Contains(art, "\x1b[1B") {
-		t.Error("expected row-down escape \\x1b[1B in Kitty output")
+	// Version line + cursor-below moves use real newlines (\n), not the
+	// \x1b[1B CUD escape (which proved unreliable in Kitty after a C=1 image).
+	// The version CHA sits immediately after a newline, and the art ends with
+	// graphicsImageRows-1 trailing newlines to clear the image.
+	verCHA := fmt.Sprintf("\n\x1b[%dG", graphicsTextCol)
+	if !strings.Contains(art, verCHA) {
+		t.Errorf("expected newline + CHA %q before the version line", verCHA)
 	}
-
-	// Must contain trailing cursor-below move (graphicsImageRows-1 rows down).
-	trailingMove := "\x1b[2B" // graphicsImageRows-1 = 3-1 = 2
-	if !strings.Contains(art, trailingMove) {
-		t.Errorf("expected trailing cursor-below escape %q in Kitty output", trailingMove)
+	if !strings.HasSuffix(art, strings.Repeat("\n", graphicsImageRows-1)) {
+		t.Errorf("expected art to end with %d trailing newlines to clear the image", graphicsImageRows-1)
 	}
 
 	// rows must equal graphicsImageRows.
