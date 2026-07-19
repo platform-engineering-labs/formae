@@ -11,8 +11,10 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 )
 
 // Capability represents the rendering mode the terminal supports.
@@ -69,15 +71,20 @@ const (
 // once the graphics probe has disturbed the terminal, which renders AdaptiveColor
 // body text unreadable (dark-on-dark).
 //
-// Detection order (all leak-free — no terminal query):
-//  1. FORMAE_APPEARANCE=light|dark — explicit user override (escape hatch).
+// Detection order:
+//  1. FORMAE_APPEARANCE=light|dark — explicit user override (leak-free).
 //  2. COLORFGBG when the terminal exports it ("fg;bg"; a trailing field of 7 or
-//     15 means a light background).
-//  3. Otherwise assume dark (the safe, common default).
+//     15 means a light background) — leak-free.
+//  3. Auto-detect via an OSC-11 background-color query, but ONLY in a direct
+//     interactive terminal. Under tmux/screen/ssh the query's reply is not
+//     reliably drained and leaks into the shell as literal text, and off a TTY
+//     (piped/CI) there is nothing to query — so those all assume dark. The query
+//     result is memoized so per-frame callers (e.g. the header icon) never
+//     re-query, and the seed happens once at startup before any TUI/graphics
+//     probe disturbs the terminal.
 //
 // Exported so the CLI can seed lipgloss's global AdaptiveColor resolution once at
-// startup (lipgloss.SetHasDarkBackground) rather than let it run the flaky
-// per-render OSC query.
+// startup (lipgloss.SetHasDarkBackground).
 func HasDarkBackground() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("FORMAE_APPEARANCE"))) {
 	case "light":
@@ -87,12 +94,22 @@ func HasDarkBackground() bool {
 	}
 	if fgbg := os.Getenv("COLORFGBG"); fgbg != "" {
 		parts := strings.Split(fgbg, ";")
-		if bg := parts[len(parts)-1]; bg == "7" || bg == "15" {
-			return false
-		}
+		bg := parts[len(parts)-1]
+		return bg != "7" && bg != "15"
 	}
-	return true
+	env := gatherEnv()
+	if !env.IsTTY || env.Tmux || env.SSH || env.Dumb || env.CI {
+		return true
+	}
+	darkBgOnce.Do(func() { darkBgQueried = termenv.HasDarkBackground() })
+	return darkBgQueried
 }
+
+//nolint:gochecknoglobals
+var (
+	darkBgOnce    sync.Once
+	darkBgQueried bool
+)
 
 // hasDarkBackground is a seam for tests; it defaults to HasDarkBackground so
 // test code can override background detection deterministically.

@@ -419,7 +419,7 @@ func (m Model) viewRevertConfirm() string {
 	}
 
 	// Fixed bottom section: blank + confirm line = 2 lines.
-	confirmLine := "  " + textSt.Render("Are you sure? This cannot be undone. ") + warnSt.Render("[y/N]")
+	confirmLine := "  " + textSt.Render("Are you sure? This cannot be undone. ") + warnSt.Render("(y/N)")
 	const bottomLines = 2
 
 	// Fixed top section: header(2) + blank + intro + blank = 5 lines.
