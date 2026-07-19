@@ -331,6 +331,56 @@ func TestNarrowTerminal_NoPanicAndFitsWidth(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Wide-terminal regression: setSize on a terminal wider than the sum of the
+// declared column widths must grow the columns proportionally to consume the
+// available width, instead of leaving the surplus unused (values truncating
+// against slack). PLA-285 #3.
+// ---------------------------------------------------------------------------
+
+func TestWideTerminal_ColumnsGrowToFill(t *testing.T) {
+	const wideWidth = 200
+	const height = 24
+
+	th := theme.New("formae")
+	rows := buildFixtureResources(5)
+	tm := makeTab(th, rows)
+	tm = tm.setSize(wideWidth, height)
+	tm = tm.sync(0)
+
+	require.Len(t, tm.effectiveCols, 4)
+
+	// Natural declared content widths sum to 86; the grown columns must fill
+	// the conservative budget (width − 2·numCols of padding accounting) so no
+	// surplus is left unused.
+	naturalSum := 0
+	for _, c := range resourceSpec().columns {
+		naturalSum += c.Width
+	}
+	effSum := 0
+	for _, c := range tm.effectiveCols {
+		effSum += c.Width
+	}
+	assert.Greater(t, effSum, naturalSum, "columns must grow to use the wide terminal")
+	assert.Equal(t, wideWidth-2*4, effSum, "grown columns must exactly fill the width budget")
+
+	// Growth is proportional to declared width: NativeID (widest at 28) stays
+	// wider than Label (20) and every column grows.
+	natural := resourceSpec().columns
+	for i, c := range tm.effectiveCols {
+		assert.Greaterf(t, c.Width, natural[i].Width, "column %d must grow", i)
+	}
+	assert.Greater(t, tm.effectiveCols[0].Width, tm.effectiveCols[3].Width,
+		"proportional growth keeps NativeID wider than Label")
+
+	// No rendered line may exceed the terminal width.
+	lines := tm.view(th, 0, "⠋")
+	for i, line := range lines {
+		assert.LessOrEqualf(t, lipgloss.Width(line), wideWidth,
+			"line %d width %d exceeds terminal %d: %q", i, lipgloss.Width(line), wideWidth, line)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // styleCell hook: per-entity rendering
 // ---------------------------------------------------------------------------
 
@@ -574,9 +624,12 @@ func TestStyleCell_CursorOnStyledRow_NoCorruption(t *testing.T) {
 func TestStyleCell_TruncateBeforeStyle(t *testing.T) {
 	th := theme.New("formae")
 	// Build a spec with a narrow column (width 8) and a styleCell that wraps with
-	// the accent style. The cell value is 20 characters — longer than 8.
+	// the accent style. The cell value is 20 characters — longer than 8. The
+	// terminal is sized to exactly the column's width budget (8 + 2 padding) so
+	// the wide-terminal grow path does not expand the column past the value and
+	// the truncate-before-style invariant is exercised.
 	const colWidth = 8
-	const termWidth = 40
+	const termWidth = colWidth + 2
 
 	styleApplied := false
 	spec := tabSpec{

@@ -79,8 +79,47 @@ func (t tabModel) setSize(width, height int) tabModel {
 		t.table = components.NewTable(t.th, cols)
 	}
 
-	// Record the final (possibly-shrunk) column widths so sync can use them
-	// for truncation before styling.
+	// Grow columns to fill a wide terminal. When every column fits with room to
+	// spare, distribute the surplus proportionally to the declared widths so
+	// values consume the available space instead of truncating against unused
+	// slack. Growing to exactly the width budget (width − 2·numCols of padding
+	// accounting) keeps the responsive-hiding pass from dropping a column, and
+	// mirrors the shrink path's conservative margin. The two paths are mutually
+	// exclusive: shrink triggers only when the priority-0 columns overflow.
+	allSum := 0
+	for _, c := range cols {
+		allSum += c.Width + 2
+	}
+	if allSum < width && len(cols) > 0 {
+		available := width - 2*len(cols)
+		totalDeclared := 0
+		for _, c := range cols {
+			totalDeclared += c.Width
+		}
+		if totalDeclared > 0 && available > totalDeclared {
+			surplus := available - totalDeclared
+			distributed := 0
+			for i, c := range cols {
+				add := surplus * c.Width / totalDeclared
+				cols[i].Width += add
+				distributed += add
+			}
+			// Award the rounding remainder (< numCols) to the first column so
+			// the budget is filled exactly and deterministically.
+			cols[0].Width += surplus - distributed
+			t.spec = tabSpec{
+				title:     t.spec.title,
+				entity:    t.spec.entity,
+				columns:   cols,
+				fetch:     t.spec.fetch,
+				styleCell: t.spec.styleCell,
+			}
+			t.table = components.NewTable(t.th, cols)
+		}
+	}
+
+	// Record the final (possibly-shrunk-or-grown) column widths so sync can use
+	// them for truncation before styling.
 	t.effectiveCols = make([]components.Column, len(t.spec.columns))
 	copy(t.effectiveCols, t.spec.columns)
 
