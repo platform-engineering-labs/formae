@@ -449,21 +449,28 @@ func (m Model) View() string {
 	}
 
 	if m.view == viewDetail {
-		// Single-command mode (apply/destroy --watch): no back-to-list nav, so the
-		// header shows the command title instead of the "← esc/backspace" hint.
-		detailLeft := "← esc/backspace"
-		if m.opts.SingleCommand {
-			detailLeft = "formae status command"
-		}
-		header := components.HeaderBar(m.th, detailLeft, right, m.width)
-		// detail.View returns: pinnedHeader + pinnedRow + sep + vp (no footer).
-		// The query bar is NOT shown in the detail view — you're focused on a
-		// single command, so filtering belongs to the list view (this also avoids
-		// echoing the command ID in both the pinned row and the query bar). The
-		// footer is appended here and bottom-anchored by the height padding below.
-		detailContent := m.detail.View(m.height, false)
+		// The product header stays at the top (matching the inventory detail); a
+		// "← esc" back row sits directly under it when there is a list to return
+		// to. Single-command mode (apply/destroy --watch) has no back-to-list nav
+		// — esc quits — so it omits the back row.
+		header := components.HeaderBar(m.th, "formae status command", right, m.width)
+		// detail.View returns: pinnedHeader + pinnedRow + sep + vp (no footer), and
+		// sizes its own viewport from the height it is given. The query bar is NOT
+		// shown in the detail view — you're focused on a single command, so
+		// filtering belongs to the list view. The footer is appended here and
+		// bottom-anchored by the height padding below.
 		footer := components.FooterBar(m.th, m.width, detailFooterHints(m.opts.SingleCommand), "")
-		parts := header + "\n" + detailContent + "\n" + footer
+		var parts string
+		if m.opts.SingleCommand {
+			parts = header + "\n" + m.detail.View(m.height, false) + "\n" + footer
+		} else {
+			esc := "  " + lipgloss.NewStyle().Foreground(m.th.Palette.TextSubtle).Render("← esc")
+			if w := lipgloss.Width(esc); w < m.width {
+				esc += strings.Repeat(" ", m.width-w)
+			}
+			// Reserve one line for the esc row so the footer stays on screen.
+			parts = header + "\n" + esc + "\n" + m.detail.View(m.height-1, false) + "\n" + footer
+		}
 		lines := strings.Split(parts, "\n")
 		// Pad to height
 		for len(lines) < m.height {

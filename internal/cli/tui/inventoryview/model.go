@@ -117,7 +117,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Resize detail viewport if the detail screen is open.
 		if m.detailOpen {
-			vpH := m.height - 9
+			vpH := m.height - detailChromeLines
 			if vpH < 1 {
 				vpH = 1
 			}
@@ -257,6 +257,31 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // so it aligns with the indented header, title and rule above it.
 const detailIndent = 2
 
+// colorizeDetailLine adds structured color to a plain detail-body line:
+//   - a top-level "Section:" header (no indent, ends with ":") → accent
+//   - a "Key: value" line → dim key (through the colon), bright value
+//   - anything else → unchanged
+//
+// It operates on the already-truncated plain line so widths stay correct.
+func colorizeDetailLine(th *theme.Theme, line string) string {
+	if th == nil || strings.TrimSpace(line) == "" {
+		return line
+	}
+	p := th.Palette
+	rtrim := strings.TrimRight(line, " ")
+	indented := strings.HasPrefix(line, " ")
+	if !indented && strings.HasSuffix(rtrim, ":") {
+		return lipgloss.NewStyle().Foreground(p.PrimaryAccent).Render(line)
+	}
+	if idx := strings.Index(line, ":"); idx >= 0 {
+		key := line[:idx+1]
+		val := line[idx+1:]
+		return lipgloss.NewStyle().Foreground(p.TextSecondary).Render(key) +
+			lipgloss.NewStyle().Foreground(p.TextPrimary).Render(val)
+	}
+	return line
+}
+
 // openDetail opens the full-screen detail view for the currently selected row.
 func (m Model) openDetail() (tea.Model, tea.Cmd) {
 	tab := m.tabs[m.active]
@@ -280,16 +305,16 @@ func (m Model) openDetail() (tea.Model, tea.Cmd) {
 		m.detailBody = nil
 	}
 
-	vpH := m.height - 9
+	vpH := m.height - detailChromeLines
 	if vpH < 1 {
 		vpH = 1
 	}
 	vp := viewport.New(m.width, vpH)
-	// Build content: indent 2 spaces and truncate each line to the content width.
+	// Build content: indent 2 spaces, truncate to the content width, then colorize.
 	indent := strings.Repeat(" ", detailIndent)
 	contentLines := make([]string, len(m.detailBody))
 	for i, line := range m.detailBody {
-		contentLines[i] = indent + components.Truncate(line, contentWidth)
+		contentLines[i] = indent + colorizeDetailLine(m.th, components.Truncate(line, contentWidth))
 	}
 	vp.SetContent(strings.Join(contentLines, "\n"))
 	m.detailViewport = vp
@@ -456,44 +481,32 @@ func (m Model) bodyHeight() int {
 	return h
 }
 
-// viewDetail renders the full-screen detail view.
+// detailChromeLines is the number of non-viewport lines on the detail screen:
 //
-// Layout (m.height lines total):
-//
-//	HeaderBar           (2 lines)
-//	blank               (1 line)
-//	"  ← esc"           (1 line)
-//	blank               (1 line)
-//	"  <title>"         (1 line)
-//	rule                (1 line)
-//	viewport            (vpHeight = m.height - 9 lines)
-//	FooterBar           (2 lines)
+//	HeaderBar (2) + "  ← esc" (1) + "  <title>" (1) + rule (1) + FooterBar (2) = 7.
+const detailChromeLines = 7
+
+// viewDetail renders the full-screen detail view. The product header stays at the
+// top with a "← esc" back row directly under it (matching the status-command
+// detail), then the accent title, a rule, and the (colored) content.
 func (m Model) viewDetail() string {
 	p := m.th.Palette
 
 	header := components.HeaderBar(m.th, "formae inventory", "", m.width)
 
-	escLine := "  ← esc"
-	escW := lipgloss.Width(escLine)
-	if escW < m.width {
-		escLine += strings.Repeat(" ", m.width-escW)
+	pad := func(s string) string {
+		if w := lipgloss.Width(s); w < m.width {
+			return s + strings.Repeat(" ", m.width-w)
+		}
+		return s
 	}
-
-	titleLine := "  " + m.detailTitle
-	titleW := lipgloss.Width(titleLine)
-	if titleW < m.width {
-		titleLine += strings.Repeat(" ", m.width-titleW)
-	}
-
-	rule := "  " + lipgloss.NewStyle().Foreground(p.Border).Render(strings.Repeat("─", m.width-2))
-	ruleW := lipgloss.Width(rule)
-	if ruleW < m.width {
-		rule += strings.Repeat(" ", m.width-ruleW)
-	}
+	escLine := pad("  " + lipgloss.NewStyle().Foreground(p.TextSubtle).Render("← esc"))
+	titleLine := pad("  " + lipgloss.NewStyle().Foreground(p.PrimaryAccent).Bold(true).Render(m.detailTitle))
+	rule := pad("  " + lipgloss.NewStyle().Foreground(p.Border).Render(strings.Repeat("─", m.width-2)))
 
 	footer := components.FooterBar(m.th, m.width, []components.KeyHint{{Key: "esc", Desc: "back to list"}}, "")
 
-	vpH := m.height - 9
+	vpH := m.height - detailChromeLines
 	if vpH < 1 {
 		vpH = 1
 	}
@@ -505,9 +518,7 @@ func (m Model) viewDetail() string {
 
 	parts := []string{
 		header,
-		"",
 		escLine,
-		"",
 		titleLine,
 		rule,
 		vpContent,
