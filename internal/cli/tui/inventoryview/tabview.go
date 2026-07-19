@@ -437,6 +437,41 @@ func highlightHeaderColumn(header string, tbl components.Table, effCols []compon
 		base.Render(string(runes[end:]))
 }
 
+// highlightCursorRow extends the selected row's highlight across the full width.
+// bubbles/table wraps the selected row in the Selected style, but each cell's own
+// style reset (\x1b[0m) clears the background after the first column, so the
+// highlight only covers one cell. We locate that row by the Selection background
+// SGR it carries and re-apply the background after every reset — preserving each
+// cell's foreground (e.g. the ⚠ unmanaged red) while the background spans the
+// whole row.
+func highlightCursorRow(lines []string, width int, th *theme.Theme) []string {
+	probe := lipgloss.NewStyle().Background(th.Palette.Selection).Render("x")
+	mIdx := strings.IndexByte(probe, 'm')
+	if mIdx < 0 {
+		return lines
+	}
+	bgOpen := probe[:mIdx+1]                           // e.g. "\x1b[48;2;58;58;58m"
+	bgSGR := strings.TrimPrefix(probe[:mIdx], "\x1b[") // e.g. "48;2;58;58;58"
+	if bgSGR == "" {
+		return lines
+	}
+	const headerLines = 2 // header row + separator
+	for i := headerLines; i < len(lines); i++ {
+		if !strings.Contains(lines[i], bgSGR) {
+			continue
+		}
+		// Re-apply the background after every reset so it survives each cell's
+		// reset, then pad the trailing gap (background active) and close.
+		line := strings.ReplaceAll(lines[i], "\x1b[0m", "\x1b[0m"+bgOpen)
+		if w := lipgloss.Width(line); w < width {
+			line += strings.Repeat(" ", width-w)
+		}
+		lines[i] = line + "\x1b[0m"
+		break
+	}
+	return lines
+}
+
 // runeIndex finds the first occurrence of needle in haystack (both []rune).
 // Returns the rune index (visual position), or -1 if not found.
 func runeIndex(haystack, needle []rune) int {
@@ -498,6 +533,14 @@ func (t tabModel) loadedView(th *theme.Theme, maxRows int) []string {
 	// →← highlight reads like the status-command TUI. The header row is line 0.
 	if th != nil && len(tableLines) > 0 {
 		tableLines[0] = highlightHeaderColumn(tableLines[0], tbl, effCols, t.sortHi, th)
+	}
+
+	// Extend the cursor-row highlight across the full width. bubbles/table wraps
+	// the selected row in the Selected style, but each cell's own style reset
+	// clears the background after the first column — so re-render the highlighted
+	// row as a uniform full-width bar.
+	if th != nil {
+		tableLines = highlightCursorRow(tableLines, t.width, th)
 	}
 
 	// Remove trailing empty lines that bubbles/table may append.

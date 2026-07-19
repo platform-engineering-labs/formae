@@ -330,8 +330,8 @@ func (m Model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 'q':
-		// Swallowed — q does not quit from detail screen.
-		return m, nil
+		// q quits from the detail screen too (esc goes back to the list).
+		return m, tea.Quit
 
 	case msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == '?':
 		m.helpOpen = true
@@ -504,7 +504,10 @@ func (m Model) viewDetail() string {
 	titleLine := pad("  " + lipgloss.NewStyle().Foreground(p.PrimaryAccent).Bold(true).Render(m.detailTitle))
 	rule := pad("  " + lipgloss.NewStyle().Foreground(p.Border).Render(strings.Repeat("─", m.width-2)))
 
-	footer := components.FooterBar(m.th, m.width, []components.KeyHint{{Key: "esc", Desc: "back to list"}}, "")
+	footer := components.FooterBar(m.th, m.width, []components.KeyHint{
+		{Key: "esc", Desc: "back to list"},
+		{Key: "q", Desc: "quit"},
+	}, "")
 
 	vpH := m.height - detailChromeLines
 	if vpH < 1 {

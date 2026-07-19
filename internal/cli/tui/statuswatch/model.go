@@ -530,6 +530,16 @@ func statuswatchHelpGroups() []components.HelpGroup {
 				{Key: "?", Desc: "close help"},
 			},
 		},
+		{
+			Title: "Status",
+			Hints: []components.KeyHint{
+				{Key: "✓", Desc: "succeeded"},
+				{Key: "✗", Desc: "failed"},
+				{Key: "⊘", Desc: "canceled"},
+				{Key: "◐", Desc: "in progress"},
+				{Key: "○", Desc: "pending"},
+			},
+		},
 	}
 }
 

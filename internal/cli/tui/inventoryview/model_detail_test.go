@@ -126,21 +126,17 @@ func TestDetail_EscClosesDetail(t *testing.T) {
 }
 
 // TestDetail_QSwallowedInDetail verifies q does not quit from the detail screen.
-func TestDetail_QSwallowedInDetail(t *testing.T) {
+func TestDetail_QQuitsFromDetail(t *testing.T) {
 	rows := buildFixtureResources(3)
 	mm := buildDetailTestModel(t, rows)
 
 	mm = openDetailOnFirstRow(t, mm)
 	require.True(t, mm.(Model).detailOpen)
 
-	mm, cmd := mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	_, cmd := mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
 
-	assert.True(t, mm.(Model).detailOpen, "q must be swallowed — detail must remain open")
-	// cmd must not be a quit command.
-	if cmd != nil {
-		result := cmd()
-		assert.NotEqual(t, tea.Quit(), result, "'q' in detail must not produce a quit command")
-	}
+	require.NotNil(t, cmd, "q must quit from the detail screen")
+	assert.Equal(t, tea.Quit(), cmd(), "'q' in detail must produce a quit command")
 }
 
 // TestDetail_CtrlCQuitsFromDetail verifies ctrl+c quits from the detail screen.
