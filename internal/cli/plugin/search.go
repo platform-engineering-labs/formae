@@ -115,7 +115,7 @@ func runSearchForMachines(app *app.App, opts *SearchOptions) error {
 }
 
 func searchPlugins(app *app.App, opts *SearchOptions) ([]apimodel.Plugin, error) {
-	mgr, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, opts.Channel)
+	mgr, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, opts.Channel, true, true)
 	if err != nil {
 		return nil, err
 	}

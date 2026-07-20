@@ -148,7 +148,7 @@ type PluginManager struct {
 // 503s on every plugin command.
 func New(logger *slog.Logger, repos []pkgmodel.Repository, pluginDirs []string) (*PluginManager, error) {
 	factory := func(channel string) (orbitalClient, error) {
-		return opsmgr.NewFromRepositories(logger, repos, channel)
+		return opsmgr.NewFromRepositories(logger, repos, channel, false, false)
 	}
 	listOrb, err := factory("")
 	if err != nil {

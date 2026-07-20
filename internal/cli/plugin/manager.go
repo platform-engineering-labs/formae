@@ -41,16 +41,16 @@ type CLIPluginManager struct {
 // every later call would panic). Mirrors the agent-side
 // plugin_manager.New guard so dev binaries get a clear message rather
 // than a nil-pointer crash.
-func NewCLIPluginManager(logger *slog.Logger, repos []pkgmodel.Repository, channel string) (*CLIPluginManager, error) {
+func NewCLIPluginManager(logger *slog.Logger, repos []pkgmodel.Repository, channel string, sudo bool, writable bool) (*CLIPluginManager, error) {
 	if len(repos) == 0 {
 		return nil, nil
 	}
-	orb, err := opsmgr.NewFromRepositories(logger, repos, channel)
+	orb, err := opsmgr.NewFromRepositories(logger, repos, channel, sudo, writable)
 	if err != nil {
 		return nil, err
 	}
 	if !orb.Ready() {
-		return nil, fmt.Errorf("plugin store at %s is not initialized; install formae from the official installer, or set %s to point at an existing install (e.g. /opt/pel)", orb.Path, opsmgr.FormaePelRootEnv)
+		return nil, fmt.Errorf("plugin store at %s is not initialized; install formae from the official installer, or set %s to point at an existing install (e.g. /opt/pel)", orb.Path(), opsmgr.FormaePelRootEnv)
 	}
 	return &CLIPluginManager{orb: orb, logger: logger}, nil
 }

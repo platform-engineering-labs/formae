@@ -99,7 +99,7 @@ func validateInstallOptions(opts *InstallOptions) error {
 }
 
 func runInstallForHumans(app *app.App, opts *InstallOptions) error {
-	mgr, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, opts.Channel)
+	mgr, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, opts.Channel, true, true)
 	if err != nil {
 		return err
 	}
@@ -119,7 +119,7 @@ func runInstallForHumans(app *app.App, opts *InstallOptions) error {
 }
 
 func runInstallForMachines(app *app.App, opts *InstallOptions) error {
-	mgr, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, opts.Channel)
+	mgr, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, opts.Channel, true, true)
 	if err != nil {
 		return err
 	}

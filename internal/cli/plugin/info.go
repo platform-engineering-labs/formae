@@ -114,7 +114,7 @@ func runInfoForMachines(app *app.App, opts *InfoOptions) error {
 }
 
 func fetchPluginInfo(app *app.App, opts *InfoOptions) (*apimodel.Plugin, error) {
-	mgr, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, opts.Channel)
+	mgr, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, opts.Channel, true, true)
 	if err != nil {
 		return nil, err
 	}

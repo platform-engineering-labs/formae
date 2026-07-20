@@ -84,7 +84,7 @@ func validateUpdateOptions(opts *UpdateOptions) error {
 }
 
 func runUpdateForHumans(app *app.App, opts *UpdateOptions) error {
-	mgr, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, opts.Channel)
+	mgr, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, opts.Channel, true, true)
 	if err != nil {
 		return err
 	}
@@ -108,7 +108,7 @@ func runUpdateForHumans(app *app.App, opts *UpdateOptions) error {
 }
 
 func runUpdateForMachines(app *app.App, opts *UpdateOptions) error {
-	mgr, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, opts.Channel)
+	mgr, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, opts.Channel, true, true)
 	if err != nil {
 		return err
 	}

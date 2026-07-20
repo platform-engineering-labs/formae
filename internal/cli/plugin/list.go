@@ -99,7 +99,7 @@ func runListForMachines(app *app.App, opts *ListOptions) error {
 // sudo when the tree path is privileged; callers should be prepared to
 // re-run under sudo if the elevation prompt is undesirable.
 func installedPlugins(app *app.App) ([]apimodel.Plugin, error) {
-	mgr, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, "")
+	mgr, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, "", false, false)
 	if err != nil {
 		return nil, err
 	}
