@@ -488,16 +488,16 @@ func (m Model) bodyHeight() int {
 
 // detailChromeLines is the number of non-viewport lines on the detail screen:
 //
-//	HeaderBar (2) + "  ← esc" (1) + "  <title>" (1) + rule (1) + FooterBar (2) = 7.
-const detailChromeLines = 7
+//	HeaderBar (2) + "  <title>" (1) + rule (1) + FooterBar (2) = 6.
+const detailChromeLines = 6
 
-// viewDetail renders the full-screen detail view. The product header stays at the
-// top with a "← esc" back row directly under it (matching the status-command
-// detail), then the accent title, a rule, and the (colored) content.
+// viewDetail renders the full-screen detail view: the branded header, the accent
+// title, a rule, then the (colored) content. Back navigation (esc) lives in the
+// footer, so there is no separate esc row.
 func (m Model) viewDetail() string {
 	p := m.th.Palette
 
-	header := components.HeaderBar(m.th, "formae inventory", "", m.width)
+	header := components.HeaderBarBranded(m.th, "inventory", "", m.width)
 
 	pad := func(s string) string {
 		if w := lipgloss.Width(s); w < m.width {
@@ -505,7 +505,6 @@ func (m Model) viewDetail() string {
 		}
 		return s
 	}
-	escLine := pad("  " + lipgloss.NewStyle().Foreground(p.TextSubtle).Render("← esc"))
 	titleLine := pad("  " + lipgloss.NewStyle().Foreground(p.PrimaryAccent).Bold(true).Render(m.detailTitle))
 	rule := pad("  " + lipgloss.NewStyle().Foreground(p.Border).Render(strings.Repeat("─", m.width-2)))
 
@@ -526,7 +525,6 @@ func (m Model) viewDetail() string {
 
 	parts := []string{
 		header,
-		escLine,
 		titleLine,
 		rule,
 		vpContent,
@@ -568,9 +566,7 @@ func (m Model) View() string {
 		return m.viewDetail()
 	}
 
-	// Command in bright white here; the status-command view uses the accent color
-	// so the two can be compared.
-	header := components.HeaderBarBranded(m.th, "inventory", "", m.width, false)
+	header := components.HeaderBarBranded(m.th, "inventory", "", m.width)
 	tabBar := m.renderTabBar()
 
 	narrow := m.width < narrowFooterThreshold
@@ -626,7 +622,7 @@ func (m Model) View() string {
 // viewHelp renders the help overlay centered on the screen, over the header
 // and footer (statuswatch pattern: panel borders, key/desc columns, theme roles).
 func (m Model) viewHelp() string {
-	header := components.HeaderBar(m.th, "formae inventory", "", m.width)
+	header := components.HeaderBarBranded(m.th, "inventory", "", m.width)
 	footer := components.FooterBar(m.th, m.width, inventoryFooterHints(), "")
 
 	// Body area: total height − header (2) − footer (2).

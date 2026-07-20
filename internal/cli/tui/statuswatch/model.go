@@ -428,7 +428,7 @@ func (m Model) View() string {
 
 	// Help overlay: render the help panel instead of the body between header and footer
 	if m.helpOpen {
-		header := components.HeaderBar(m.th, "formae status command", right, m.width)
+		header := components.HeaderBarBranded(m.th, "status command", right, m.width)
 		footer := components.FooterBar(m.th, m.width, multiFooterHints(), "")
 
 		// Calculate body height: total height - header (2) - footer (2)
@@ -457,28 +457,15 @@ func (m Model) View() string {
 	}
 
 	if m.view == viewDetail {
-		// The product header stays at the top (matching the inventory detail); a
-		// "← esc" back row sits directly under it when there is a list to return
-		// to. Single-command mode (apply/destroy --watch) has no back-to-list nav
-		// — esc quits — so it omits the back row.
-		header := components.HeaderBar(m.th, "formae status command", right, m.width)
-		// detail.View returns: pinnedHeader + pinnedRow + sep + vp (no footer), and
-		// sizes its own viewport from the height it is given. The query bar is NOT
-		// shown in the detail view — you're focused on a single command, so
-		// filtering belongs to the list view. The footer is appended here and
-		// bottom-anchored by the height padding below.
+		// The branded product header stays at the top. detail.View returns
+		// pinnedHeader + pinnedRow + sep + vp (no footer) and sizes its own
+		// viewport from the height it is given. The query bar is NOT shown in the
+		// detail view — you're focused on a single command, so filtering belongs to
+		// the list view. Back navigation (esc) lives in the footer, so there is no
+		// separate esc row.
+		header := components.HeaderBarBranded(m.th, "status command", right, m.width)
 		footer := components.FooterBar(m.th, m.width, detailFooterHints(m.opts.SingleCommand), "")
-		var parts string
-		if m.opts.SingleCommand {
-			parts = header + "\n" + m.detail.View(m.height, false) + "\n" + footer
-		} else {
-			esc := "  " + lipgloss.NewStyle().Foreground(m.th.Palette.TextSubtle).Render("← esc")
-			if w := lipgloss.Width(esc); w < m.width {
-				esc += strings.Repeat(" ", m.width-w)
-			}
-			// Reserve one line for the esc row so the footer stays on screen.
-			parts = header + "\n" + esc + "\n" + m.detail.View(m.height-1, false) + "\n" + footer
-		}
+		parts := header + "\n" + m.detail.View(m.height, false) + "\n" + footer
 		lines := strings.Split(parts, "\n")
 		// Pad to height
 		for len(lines) < m.height {
@@ -490,9 +477,7 @@ func (m Model) View() string {
 		return strings.Join(lines, "\n")
 	}
 
-	// Command in the accent color here; the inventory view uses bright white so
-	// the two can be compared.
-	header := components.HeaderBarBranded(m.th, "status command", right, m.width, true)
+	header := components.HeaderBarBranded(m.th, "status command", right, m.width)
 
 	visible := m.height - chromeLines
 	if visible < 0 {

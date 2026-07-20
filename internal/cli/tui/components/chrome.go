@@ -91,21 +91,15 @@ func VersionLabel(v string) string {
 	return "v" + v
 }
 
-// HeaderBarBranded renders a compact two-line header: the "formae" wordmark
-// ("form" in bright text, "ae" in brand orange) followed by the command, with a
-// right-aligned status and a bottom border. commandAccent renders the command in
-// the accent color instead of bright text.
-func HeaderBarBranded(th *theme.Theme, command, right string, width int, commandAccent bool) string {
+// HeaderBarBranded renders a compact two-line header: the "formae" wordmark in
+// bright white followed by the command in brand orange, with a right-aligned
+// status and a bottom border. Used consistently across list, detail and help
+// screens.
+func HeaderBarBranded(th *theme.Theme, command, right string, width int) string {
 	p := th.Palette
-	form := lipgloss.NewStyle().Foreground(p.TextPrimary).Bold(true).Render("form")
-	ae := lipgloss.NewStyle().Foreground(p.SecondaryAccent).Bold(true).Render("ae")
-	left := "  " + form + ae
+	left := "  " + lipgloss.NewStyle().Foreground(p.TextPrimary).Bold(true).Render("formae")
 	if command != "" {
-		cmdColor := p.TextPrimary
-		if commandAccent {
-			cmdColor = p.PrimaryAccent
-		}
-		left += " " + lipgloss.NewStyle().Foreground(cmdColor).Render(command)
+		left += " " + lipgloss.NewStyle().Foreground(p.SecondaryAccent).Bold(true).Render(command)
 	}
 	rt := ""
 	if right != "" {
