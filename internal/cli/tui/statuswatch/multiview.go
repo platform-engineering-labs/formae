@@ -218,7 +218,9 @@ func (v multiView) rowStyles(h health, cursor bool) (id, text lipgloss.Style) {
 	case healthRunningFailing:
 		idc, txt = p.Error, p.Error
 	case healthFinishedFailed:
-		idc, txt = p.ErrorSubtle, p.ErrorSubtle
+		// Match the detail screen's failed red (Error), not a dimmed variant,
+		// so a canceled/failed command reads the same in the list and the drill-in.
+		idc, txt = p.Error, p.Error
 		if cursor {
 			idc, txt = p.ErrorBright, p.ErrorBright
 		}
@@ -341,7 +343,7 @@ func (v multiView) renderRows(maxRows int) []string {
 		case terminal && r.health == healthFinishedOK:
 			glyphStr = textStyle.Render(pad("✓", multiCols[colStatus].width))
 		case terminal && (r.health == healthFinishedFailed):
-			errSt := lipgloss.NewStyle().Foreground(p.ErrorSubtle)
+			errSt := lipgloss.NewStyle().Foreground(p.Error)
 			if isCursor {
 				errSt = errSt.Background(p.Selection).Foreground(p.ErrorBright)
 			}
