@@ -173,6 +173,7 @@ func UpdateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			a.PrintBanner()
 
 			var orb *mgr.Manager
 			if len(a.Config.Artifacts.Repositories) > 0 {
@@ -270,6 +271,7 @@ func UpdateListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			a.PrintBanner()
 
 			var orb *mgr.Manager
 			if len(a.Config.Artifacts.Repositories) > 0 {

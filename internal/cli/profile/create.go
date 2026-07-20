@@ -7,6 +7,7 @@ package profile
 import (
 	"fmt"
 
+	"github.com/platform-engineering-labs/formae/internal/cli/banner"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/spf13/cobra"
 )
@@ -25,6 +26,7 @@ func newCreateCmd() *cobra.Command {
 			if err := s.Create(args[0], force); err != nil {
 				return err
 			}
+			banner.PrintBanner()
 			w := cmd.OutOrStdout()
 			if isTerminal(w) {
 				th := theme.New("formae")

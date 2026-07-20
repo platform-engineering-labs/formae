@@ -30,6 +30,7 @@ func CleanCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			app.PrintBanner()
 
 			orb, err := opsmgr.New(slog.Default(), app.Config.Artifacts.URL, "")
 			if err != nil {
