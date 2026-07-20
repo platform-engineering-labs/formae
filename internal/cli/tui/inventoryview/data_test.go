@@ -89,13 +89,47 @@ func (f *fakeClient) ExtractPolicies(fromTUI bool) ([]apimodel.PolicyInventoryIt
 }
 
 // ---------------------------------------------------------------------------
-// Helper: unwrapRefValue
+// Helper: simplifyValue
 // ---------------------------------------------------------------------------
 
-func TestUnwrapRefValue(t *testing.T) {
-	v := unwrapRefValue(map[string]any{"$ref": "formae://abc", "$value": "us-east-1"})
-	assert.Equal(t, "us-east-1", v)
-	assert.Equal(t, "plain", unwrapRefValue("plain"))
+func TestSimplifyValue(t *testing.T) {
+	// Plain scalar passes through.
+	assert.Equal(t, "plain", simplifyValue("plain"))
+
+	// Ordinary object (no "$" markers) is returned unchanged.
+	obj := map[string]any{"a": "b"}
+	assert.Equal(t, obj, simplifyValue(obj))
+
+	// SetOnce/Clear wrapper unwraps to its value.
+	assert.Equal(t, "lifeline-igw", simplifyValue(map[string]any{
+		"$strategy": "SetOnce", "$visibility": "Clear", "$value": "lifeline-igw",
+	}))
+
+	// Opaque wrapper masks the value.
+	assert.Equal(t, opaqueVal{}, simplifyValue(map[string]any{
+		"$visibility": "Opaque", "$value": "s3cr3t",
+	}))
+
+	// Resolvable ref carries value + "label.property" target.
+	got := simplifyValue(map[string]any{
+		"$res": true, "$label": "lifeline-vpc", "$property": "VpcId",
+		"$stack": "lifeline-fresh", "$type": "AWS::EC2::VPC", "$value": "vpc-0b5",
+	})
+	assert.Equal(t, refVal{value: "vpc-0b5", target: "lifeline-vpc.VpcId"}, got)
+
+	// $ref-only resolvable strips the formae:// scheme for its target.
+	got2 := simplifyValue(map[string]any{"$ref": "formae://abc", "$value": "us-east-1"})
+	assert.Equal(t, refVal{value: "us-east-1", target: "abc"}, got2)
+}
+
+func TestFormatScalar(t *testing.T) {
+	assert.Equal(t, opaqueMask, formatScalar(opaqueVal{}))
+	assert.Equal(t, "vpc-0b5  → lifeline-vpc.VpcId",
+		formatScalar(refVal{value: "vpc-0b5", target: "lifeline-vpc.VpcId"}))
+	assert.Equal(t, "plain", formatScalar("plain"))
+	// Compact form drops the ref target.
+	assert.Equal(t, "vpc-0b5",
+		formatCompact(refVal{value: "vpc-0b5", target: "lifeline-vpc.VpcId"}))
 }
 
 // ---------------------------------------------------------------------------

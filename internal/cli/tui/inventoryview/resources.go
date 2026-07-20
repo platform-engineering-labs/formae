@@ -5,8 +5,8 @@
 package inventoryview
 
 import (
+	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/platform-engineering-labs/formae/internal/constants"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -32,8 +32,9 @@ func resourceRow(r pkgmodel.Resource) row {
 }
 
 // resourceDetail renders the detail panel for a resource.
-// Identity lines are key-aligned; Properties tree follows, then ReadOnlyProperties
-// when non-empty.
+// Identity lines are key-aligned; a single Properties tree follows, merging the
+// desired Properties with the cloud-computed ReadOnlyProperties — the
+// distinction is an implementation detail users don't need.
 func resourceDetail(r pkgmodel.Resource, _ int) []string {
 	managed := "no"
 	if r.Managed {
@@ -56,23 +57,27 @@ func resourceDetail(r pkgmodel.Resource, _ int) []string {
 
 	lines = append(lines, "")
 	lines = append(lines, "Properties:")
-	lines = append(lines, jsonTree(r.Properties, 1)...)
-
-	if isNonEmptyJSON(r.ReadOnlyProperties) {
-		lines = append(lines, "")
-		lines = append(lines, "ReadOnlyProperties:")
-		lines = append(lines, jsonTree(r.ReadOnlyProperties, 1)...)
-	}
+	lines = append(lines, jsonTreeMap(mergeProperties(r.Properties, r.ReadOnlyProperties), 1)...)
 
 	return lines
 }
 
-// isNonEmptyJSON reports whether raw is a non-nil, non-empty JSON value other
-// than "null" or "{}".
-func isNonEmptyJSON(raw []byte) bool {
-	if len(raw) == 0 {
-		return false
+// mergeProperties unmarshals and merges the desired and read-only property
+// objects into a single map for rendering. Desired properties win on the (rare)
+// key collision. Invalid/empty inputs contribute nothing.
+func mergeProperties(desired, readOnly json.RawMessage) map[string]any {
+	merged := map[string]any{}
+	for _, raw := range []json.RawMessage{readOnly, desired} {
+		if len(raw) == 0 {
+			continue
+		}
+		var m map[string]any
+		if err := json.Unmarshal(raw, &m); err != nil {
+			continue
+		}
+		for k, v := range m {
+			merged[k] = v
+		}
 	}
-	s := strings.TrimSpace(string(raw))
-	return s != "null" && s != "{}"
+	return merged
 }

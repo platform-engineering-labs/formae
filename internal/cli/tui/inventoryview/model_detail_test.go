@@ -302,16 +302,24 @@ func TestDetail_ExactFillLongContent(t *testing.T) {
 // Golden tests (100x24)
 // ---------------------------------------------------------------------------
 
-// TestGolden_DetailResource: resource detail for an "⚠ unmanaged" row.
+// TestGolden_DetailResource: resource detail exercising the property renderer —
+// a {Key,Value} tag list, an opaque (masked) value, a resolvable reference, and
+// read-only properties merged into the single Properties section.
 func TestGolden_DetailResource(t *testing.T) {
 	res := pkgmodel.Resource{
-		NativeID:   "arn:aws:s3:::old-logs",
-		Stack:      "$unmanaged",
-		Type:       "AWS::S3::Bucket",
-		Label:      "old-logs",
-		Managed:    false,
-		Target:     "aws-prod",
-		Properties: json.RawMessage(`{"BucketName":"old-logs","Tags":{"Env":"dev","Owner":"ops"}}`),
+		NativeID: "sg-09ac96a367d79de3d",
+		Stack:    "lifeline-fresh",
+		Type:     "AWS::EC2::SecurityGroup",
+		Label:    "lifeline-alb-sg",
+		Managed:  true,
+		Target:   "aws-target",
+		Properties: json.RawMessage(`{
+			"GroupDescription":"Allow HTTP traffic to ALB",
+			"Secret":{"$visibility":"Opaque","$value":"s3cr3t"},
+			"Tags":[{"Key":"Name","Value":{"$strategy":"SetOnce","$value":"lifeline-alb-sg","$visibility":"Clear"}}],
+			"VpcId":{"$res":true,"$label":"lifeline-vpc","$property":"VpcId","$value":"vpc-0b5e088737f3ba535"}
+		}`),
+		ReadOnlyProperties: json.RawMessage(`{"GroupId":"sg-09ac96a367d79de3d"}`),
 	}
 	r := resourceRow(res)
 	mm := buildDetailTestModel(t, []row{r})

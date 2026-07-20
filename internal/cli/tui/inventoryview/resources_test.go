@@ -103,10 +103,12 @@ func TestResourceRow_Detail_PropertiesTree(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// resourceRow: detail renderer — ReadOnlyProperties section
+// resourceRow: detail renderer — merged Properties (desired + read-only)
 // ---------------------------------------------------------------------------
 
-func TestResourceRow_Detail_ReadOnlyProperties_NonEmpty(t *testing.T) {
+// Read-only (cloud-computed) fields render alongside desired properties under a
+// single "Properties:" header — never a separate "ReadOnlyProperties:" section.
+func TestResourceRow_Detail_Properties_MergedWithReadOnly(t *testing.T) {
 	r := pkgmodel.Resource{
 		Properties:         json.RawMessage(`{"BucketName":"b"}`),
 		ReadOnlyProperties: json.RawMessage(`{"Arn":"arn:aws:s3:::b"}`),
@@ -114,44 +116,46 @@ func TestResourceRow_Detail_ReadOnlyProperties_NonEmpty(t *testing.T) {
 	got := resourceRow(r)
 	lines := got.detail(80)
 
-	assert.Contains(t, lines, "ReadOnlyProperties:")
+	assert.Contains(t, lines, "Properties:")
 	assert.Contains(t, lines, " Arn: arn:aws:s3:::b")
-}
-
-func TestResourceRow_Detail_ReadOnlyProperties_EmptyOmitted(t *testing.T) {
-	r := pkgmodel.Resource{
-		Properties:         json.RawMessage(`{"BucketName":"b"}`),
-		ReadOnlyProperties: json.RawMessage(`{}`),
-	}
-	got := resourceRow(r)
-	lines := got.detail(80)
+	assert.Contains(t, lines, " BucketName: b")
+	// No separate read-only section.
 	for _, l := range lines {
 		assert.NotEqual(t, "ReadOnlyProperties:", l)
 	}
 }
 
-func TestResourceRow_Detail_ReadOnlyProperties_NullOmitted(t *testing.T) {
-	r := pkgmodel.Resource{
-		Properties:         json.RawMessage(`{"BucketName":"b"}`),
-		ReadOnlyProperties: json.RawMessage(`null`),
-	}
-	got := resourceRow(r)
-	lines := got.detail(80)
-	for _, l := range lines {
-		assert.NotEqual(t, "ReadOnlyProperties:", l)
+// Empty / null / nil read-only properties simply contribute nothing.
+func TestResourceRow_Detail_Properties_EmptyReadOnly(t *testing.T) {
+	for _, ro := range []json.RawMessage{json.RawMessage(`{}`), json.RawMessage(`null`), nil} {
+		r := pkgmodel.Resource{
+			Properties:         json.RawMessage(`{"BucketName":"b"}`),
+			ReadOnlyProperties: ro,
+		}
+		lines := resourceRow(r).detail(80)
+		assert.Contains(t, lines, " BucketName: b")
+		for _, l := range lines {
+			assert.NotEqual(t, "ReadOnlyProperties:", l)
+		}
 	}
 }
 
-func TestResourceRow_Detail_ReadOnlyProperties_NilOmitted(t *testing.T) {
+// Special-value wrappers render readably: SetOnce/Clear unwraps, Opaque masks,
+// resolvables show "value → target", and {Key,Value} tags collapse.
+func TestResourceRow_Detail_Properties_SpecialValues(t *testing.T) {
 	r := pkgmodel.Resource{
-		Properties:         json.RawMessage(`{"BucketName":"b"}`),
-		ReadOnlyProperties: nil,
+		Properties: json.RawMessage(`{
+			"Tags":[{"Key":"Name","Value":{"$strategy":"SetOnce","$value":"lifeline-igw","$visibility":"Clear"}}],
+			"Password":{"$visibility":"Opaque","$value":"s3cr3t"},
+			"VpcId":{"$res":true,"$label":"lifeline-vpc","$property":"VpcId","$value":"vpc-0b5"}
+		}`),
 	}
-	got := resourceRow(r)
-	lines := got.detail(80)
-	for _, l := range lines {
-		assert.NotEqual(t, "ReadOnlyProperties:", l)
-	}
+	lines := resourceRow(r).detail(80)
+
+	assert.Contains(t, lines, " Tags:")
+	assert.Contains(t, lines, "   - Name: lifeline-igw")
+	assert.Contains(t, lines, " Password: "+opaqueMask)
+	assert.Contains(t, lines, " VpcId: vpc-0b5  → lifeline-vpc.VpcId")
 }
 
 // ---------------------------------------------------------------------------
