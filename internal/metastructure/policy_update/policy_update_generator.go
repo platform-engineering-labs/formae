@@ -134,20 +134,14 @@ func (pg *PolicyUpdateGenerator) generateInlinePolicyUpdates(stack pkgmodel.Stac
 			// Reuse the existing label for inline policies
 			if label == "" {
 				label = existing.GetLabel()
-				// Set the label on the policy
-				if ttl, ok := policy.(*pkgmodel.TTLPolicy); ok {
-					ttl.Label = label
-				}
+				setPolicyLabel(policy, label)
 			}
 			operation = PolicyOperationUpdate
 		} else {
 			// New policy - generate label if not provided
 			if label == "" {
 				label = fmt.Sprintf("%s-%s-%s", stack.Label, policy.GetType(), util.NewID()[:8])
-				// Set the label on the policy
-				if ttl, ok := policy.(*pkgmodel.TTLPolicy); ok {
-					ttl.Label = label
-				}
+				setPolicyLabel(policy, label)
 			}
 			operation = PolicyOperationCreate
 		}
@@ -238,6 +232,20 @@ func (pg *PolicyUpdateGenerator) generateStandalonePolicyUpdates(rawPolicies []j
 	return updates, nil
 }
 
+// policyLabelSetter is satisfied by concrete policy types that can have their
+// label written back (TTLPolicy, AutoReconcilePolicy). Kept unexported so the
+// public Policy interface is not widened.
+type policyLabelSetter interface {
+	SetLabel(string)
+}
+
+// setPolicyLabel writes label back onto policy when the concrete type supports it.
+func setPolicyLabel(policy pkgmodel.Policy, label string) {
+	if ls, ok := policy.(policyLabelSetter); ok {
+		ls.SetLabel(label)
+	}
+}
+
 // policiesEqual compares two policies for equality
 func policiesEqual(a, b pkgmodel.Policy) bool {
 	if a == nil || b == nil {
@@ -258,6 +266,14 @@ func policiesEqual(a, b pkgmodel.Policy) bool {
 			return false
 		}
 		return pa.TTLSeconds == pb.TTLSeconds && pa.OnDependents == pb.OnDependents
+	case *pkgmodel.AutoReconcilePolicy:
+		pb, ok := b.(*pkgmodel.AutoReconcilePolicy)
+		if !ok {
+			return false
+		}
+		// Desired-config equality: LastReconcileAt is runtime state (populated at
+		// query time) and is deliberately not compared.
+		return pa.IntervalSeconds == pb.IntervalSeconds
 	default:
 		// For unknown types, assume not equal to be safe
 		return false
