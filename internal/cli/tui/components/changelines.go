@@ -46,9 +46,6 @@ func RenderChangeLinesFromPatch(th *theme.Theme, patchDoc, properties, oldProper
 	subtleSt := lipgloss.NewStyle().Foreground(p.TextSubtle)
 
 	var lines []string
-	for _, tch := range cs.Tags {
-		lines = append(lines, FormatTagChange(tch, doneSt, warnSt, subtleSt))
-	}
 	for _, ch := range cs.Properties {
 		if ch.NoOp {
 			continue
@@ -56,43 +53,6 @@ func RenderChangeLinesFromPatch(th *theme.Theme, patchDoc, properties, oldProper
 		lines = append(lines, FormatPropertyChange(ch, "", doneSt, warnSt, subtleSt))
 	}
 	return lines, nil
-}
-
-// FormatTagChange formats a single TagChange into a card line.
-// Mirrors the mockup format from docs/mockups/simulation-preview.txt:
-//
-//	add  Tags[key]: "value"     — Done style for keyword and value
-//	remove  Tags[key]           — Warning style for keyword and key (no value)
-//	set  Tags[key]: "old" → "new" — TextSubtle old, Done new (replace operation)
-func FormatTagChange(tch TagChange, doneSt, warnSt, subtleSt lipgloss.Style) string {
-	path := "Tags[" + tch.Key + "]"
-
-	switch tch.Operation {
-	case "add":
-		kw := doneSt.Render("add")
-		pathStr := subtleSt.Render(path)
-		val := QuoteCardValue(tch.Value)
-		return kw + "  " + pathStr + ": " + doneSt.Render(val)
-
-	case "remove":
-		kw := warnSt.Render("remove")
-		pathStr := warnSt.Render(path)
-		return kw + "  " + pathStr
-
-	case "replace":
-		kw := subtleSt.Render("set")
-		pathStr := subtleSt.Render(path)
-		if tch.HasOld {
-			oldVal := QuoteCardValue(tch.OldValue)
-			newVal := QuoteCardValue(tch.Value)
-			return kw + "  " + pathStr + ": " + subtleSt.Render(oldVal) + " → " + doneSt.Render(newVal)
-		}
-		newVal := QuoteCardValue(tch.Value)
-		return kw + "  " + pathStr + ": " + doneSt.Render(newVal)
-
-	default:
-		return subtleSt.Render(tch.Operation) + "  " + subtleSt.Render(path)
-	}
 }
 
 // FormatPropertyChange formats a single PropertyChange into a card line.

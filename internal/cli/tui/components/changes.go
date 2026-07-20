@@ -7,6 +7,7 @@ package components
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -18,15 +19,6 @@ type patchOperation struct {
 	Op    string
 	Path  string
 	Value any
-}
-
-// TagChange holds the structured representation of a tag patch operation.
-type TagChange struct {
-	Key       string
-	Value     string
-	OldValue  string
-	Operation string
-	HasOld    bool
 }
 
 // PropertyChange holds the structured representation of a property patch
@@ -62,24 +54,16 @@ type PropertyChange struct {
 // ChangeSet is the structured form of a patch document's visible changes.
 type ChangeSet struct {
 	Properties []PropertyChange
-	Tags       []TagChange
 }
 
 // extractFromOperations is the single semantics home for the per-operation
-// classification loop: a Tags path goes to extractTagChange; everything else
-// goes to extractPropertyChange. Both ExtractChanges and MutableChangesForReplace
-// delegate here so the logic lives in exactly one place.
+// loop: every op goes through extractPropertyChange. Tags are not special-cased
+// — they render as generic objects like any other collection. Both
+// ExtractChanges and MutableChangesForReplace delegate here so the logic lives
+// in exactly one place.
 func extractFromOperations(ops []patchOperation, props map[string]any, previousProperties json.RawMessage, refLabels map[string]string) (ChangeSet, error) {
 	var cs ChangeSet
 	for _, patch := range ops {
-		if strings.Contains(patch.Path, "/Tags/") {
-			change, err := extractTagChange(patch, previousProperties)
-			if err != nil {
-				return ChangeSet{}, fmt.Errorf("error processing tag patch: %w", err)
-			}
-			cs.Tags = append(cs.Tags, change)
-			continue
-		}
 		change, err := extractPropertyChange(patch, props, previousProperties, refLabels)
 		if err != nil {
 			return ChangeSet{}, fmt.Errorf("error processing property patch: %w", err)
@@ -162,54 +146,6 @@ func decodePatchOperations(patchDoc json.RawMessage) ([]patchOperation, error) {
 		}
 	}
 	return operations, nil
-}
-
-// extractTagChange extracts tag information from a patch operation.
-func extractTagChange(patch patchOperation, previousProperties json.RawMessage) (TagChange, error) {
-	change := TagChange{
-		Operation: patch.Op,
-	}
-
-	switch patch.Op {
-	case "add", "replace":
-		if patch.Value == nil {
-			return change, fmt.Errorf("tag patch has nil value for path %s", patch.Path)
-		}
-
-		if strings.HasSuffix(patch.Path, "/Value") {
-			// Partial tag value update - e.g. replace /Tags/3/Value
-			change.Key = findTagKeyFromPath(patch.Path, previousProperties)
-			if change.Key == "" {
-				return change, fmt.Errorf("could not extract tag key from path %s", patch.Path)
-			}
-			change.Value = fmt.Sprintf("%v", patch.Value)
-		} else {
-			// Complete tag object - e.g. add /Tags/3
-			if tagMap, ok := patch.Value.(map[string]any); ok {
-				if key, ok := tagMap["Key"].(string); ok {
-					change.Key = key
-				}
-				if val, ok := tagMap["Value"].(string); ok {
-					change.Value = val
-				}
-			}
-			if change.Key == "" {
-				return change, fmt.Errorf("could not extract tag key from patch value")
-			}
-		}
-
-		// Get old value for replace operations
-		if patch.Op == "replace" && len(previousProperties) > 0 {
-			if oldValue := findPreviousTagValue(previousProperties, change.Key); oldValue != "" {
-				change.OldValue = oldValue
-				change.HasOld = true
-			}
-		}
-	case "remove":
-		change.Key = findTagKeyFromPath(patch.Path, previousProperties)
-	}
-
-	return change, nil
 }
 
 // extractPropertyChange extracts property information from a patch operation.
@@ -331,61 +267,6 @@ func unwrapFormaeValue(v any) any {
 	return v
 }
 
-// findTagKeyFromPath extracts tag key from path using array index in old properties.
-func findTagKeyFromPath(path string, previousProps json.RawMessage) string {
-	// Extract index
-	parts := strings.Split(path, "/")
-	if len(parts) > 2 && parts[1] != "Tags" {
-		return ""
-	}
-	index, err := strconv.Atoi(parts[2])
-	if err != nil {
-		return ""
-	}
-
-	var oldProps map[string]any
-	if err := json.Unmarshal(previousProps, &oldProps); err != nil {
-		return ""
-	}
-	tags, ok := oldProps["Tags"].([]any)
-	if !ok || index >= len(tags) {
-		return ""
-	}
-
-	if tagMap, ok := tags[index].(map[string]any); ok {
-		if key, ok := tagMap["Key"].(string); ok {
-			return key
-		}
-	}
-
-	return ""
-}
-
-// findPreviousTagValue extracts the value of a tag with the given key from old properties.
-func findPreviousTagValue(oldProps json.RawMessage, tagKey string) string {
-	var props map[string]any
-	if err := json.Unmarshal(oldProps, &props); err != nil {
-		return ""
-	}
-
-	tags, ok := props["Tags"].([]any)
-	if !ok {
-		return ""
-	}
-
-	for _, tag := range tags {
-		if tagMap, ok := tag.(map[string]any); ok {
-			if key, ok := tagMap["Key"].(string); ok && key == tagKey {
-				if value, ok := tagMap["Value"].(string); ok {
-					return value
-				}
-			}
-		}
-	}
-
-	return ""
-}
-
 // cleanPatchPath converts JSON Pointer paths to more readable format.
 func cleanPatchPath(path string) string {
 	if len(path) > 0 && path[0] == '/' {
@@ -479,13 +360,63 @@ func formatPatchValue(value any, refLabels map[string]string) string {
 	case nil:
 		return "null"
 	case map[string]any, []any:
-		// For complex values, serialize to JSON
-		if bytes, err := json.Marshal(v); err == nil {
-			return string(bytes)
-		}
-		return formatValueForDisplay(v)
+		return formatCompositeValue(v, refLabels)
 	default:
 		return formatValueForDisplay(v)
+	}
+}
+
+// formatCompositeValue renders an object or array value in a compact, readable
+// form — no raw JSON. Objects render as "{k: v, k: v}" with keys sorted; arrays
+// as "[v, v]". Forma special-value wrappers ($ref/$value/$visibility) are
+// unwrapped. Used by both the add-side (formatPatchValue) and remove/old-side
+// (formatValueForDisplay) so a diff's two halves stay byte-aligned.
+//
+// A top-level scalar is returned unquoted so QuoteCardValue can decide quoting
+// at render time (unchanged from the old behavior); scalars nested inside an
+// object/array are quoted inline, since QuoteCardValue treats the whole "{…}"
+// as an already-composite string and won't recurse.
+func formatCompositeValue(value any, refLabels map[string]string) string {
+	return formatValueRec(value, refLabels, true)
+}
+
+func formatValueRec(value any, refLabels map[string]string, top bool) string {
+	switch v := value.(type) {
+	case map[string]any:
+		if ref, ok := v["$ref"].(string); ok {
+			return formatReferenceValue(ref, refLabels)
+		}
+		if vis, ok := v["$visibility"].(string); ok && vis == "Opaque" {
+			return "(opaque value)"
+		}
+		if inner, ok := v["$value"]; ok {
+			return formatValueRec(inner, refLabels, top)
+		}
+		keys := make([]string, 0, len(v))
+		for k := range v {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		parts := make([]string, 0, len(keys))
+		for _, k := range keys {
+			parts = append(parts, k+": "+formatValueRec(v[k], refLabels, false))
+		}
+		return "{" + strings.Join(parts, ", ") + "}"
+	case []any:
+		parts := make([]string, 0, len(v))
+		for _, e := range v {
+			parts = append(parts, formatValueRec(e, refLabels, false))
+		}
+		return "[" + strings.Join(parts, ", ") + "]"
+	case string:
+		if top {
+			return v
+		}
+		return fmt.Sprintf("%q", v)
+	case nil:
+		return "null"
+	default:
+		return fmt.Sprintf("%v", v)
 	}
 }
 
@@ -514,31 +445,13 @@ func formatReferenceValue(ref string, refLabels map[string]string) string {
 }
 
 // formatValueForDisplay handles both regular values and Formae Value structures.
+// Composite values (objects and arrays) render through formatCompositeValue so
+// the remove/old side stays byte-aligned with the add side.
 func formatValueForDisplay(value any) string {
-	if valueMap, ok := value.(map[string]any); ok {
-		if visibility, ok := valueMap["$visibility"].(string); ok && visibility == "Opaque" {
-			return "(opaque value)"
-		}
-
-		if val, ok := valueMap["$value"]; ok {
-			return fmt.Sprintf("%v", val)
-		}
-	}
-
-	// Composite values (objects and arrays) must render as JSON to match
-	// the add-side formatter (formatPatchValue). Without this, remove ops
-	// use Go's default `map[k:v]` syntax while add ops use JSON, making
-	// array-set diffs visually uncomparable.
-	// Note: json.Marshal sorts map keys alphabetically, so both sides are
-	// key-aligned regardless of source order — that alignment is what makes
-	// the diff readable.
-	switch v := value.(type) {
+	switch value.(type) {
 	case map[string]any, []any:
-		if bytes, err := json.Marshal(v); err == nil {
-			return string(bytes)
-		}
+		return formatCompositeValue(value, nil)
 	}
-
 	return fmt.Sprintf("%v", value)
 }
 

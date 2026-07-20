@@ -532,10 +532,11 @@ func TestRenderCard_TagAdd(t *testing.T) {
 
 	// Must contain add keyword
 	assert.Contains(t, p, "add", "should have add keyword for tag add")
-	// Must contain the tag key in Tags[backup] form
-	assert.Contains(t, p, "Tags[backup]", `should show Tags[backup] path`)
-	// Value must be quoted
-	assert.Contains(t, p, `"daily"`, `tag value should be quoted`)
+	// Tags are no longer special-cased: the added tag renders as a generic
+	// object on the "Tags" path (index stripped), not Tags[backup].
+	assert.Contains(t, p, "Tags:", `should show generic Tags path`)
+	assert.NotContains(t, p, "Tags[backup]", `should not use map-index syntax`)
+	assert.Contains(t, p, `{Key: "backup", Value: "daily"}`, `object should render readably, not as JSON`)
 }
 
 // TestRenderCard_TagRemove verifies a tag remove renders:
@@ -572,10 +573,10 @@ func TestRenderCard_TagRemove(t *testing.T) {
 	card := strings.Join(lines, "\n")
 	p := plain(card)
 
-	// Must contain remove keyword
+	// Must contain remove keyword on the generic Tags path (no map-index).
 	assert.Contains(t, p, "remove", "should have remove keyword for tag remove")
-	// Must contain the tag key
-	assert.Contains(t, p, "Tags[temporary]", `should show Tags[temporary] path`)
+	assert.Contains(t, p, "Tags", "should reference the Tags path")
+	assert.NotContains(t, p, "Tags[temporary]", "should not use map-index syntax")
 }
 
 // TestRenderCard_TagReplace verifies a tag replace (set with old value) renders:
@@ -612,10 +613,12 @@ func TestRenderCard_TagReplace(t *testing.T) {
 	card := strings.Join(lines, "\n")
 	p := plain(card)
 
-	// Must contain set keyword
+	// Must contain set keyword. A tag value-update now renders on the generic
+	// Tags.Value path (no map-index) — see the note on the value-update
+	// tradeoff of dropping the tag special-case.
 	assert.Contains(t, p, "set", "should have set keyword for tag replace")
-	// Must show Tags[env]
-	assert.Contains(t, p, "Tags[env]", `should show Tags[env] path`)
+	assert.Contains(t, p, "Tags.Value", `should show generic Tags.Value path`)
+	assert.NotContains(t, p, "Tags[env]", "should not use map-index syntax")
 	// Old and new values both quoted
 	assert.Contains(t, p, `"staging"`, `old tag value should be quoted`)
 	assert.Contains(t, p, `"prod"`, `new tag value should be quoted`)
@@ -657,13 +660,13 @@ func TestRenderCard_MixedPropertyAndTagChanges(t *testing.T) {
 	p := plain(card)
 
 	// Both changes must appear
-	assert.Contains(t, p, "Tags[backup]", "tag change must appear")
+	assert.Contains(t, p, `{Key: "backup", Value: "daily"}`, "tag change must appear as a readable object")
 	assert.Contains(t, p, "VersioningConfiguration", "property change must appear")
 
-	// Tags come FIRST (mirrors renderer order: cs.Tags then cs.Properties)
-	tagIdx := strings.Index(p, "Tags[backup]")
+	// Changes render in patch order — the tag op precedes the property op.
+	tagIdx := strings.Index(p, "Tags")
 	propIdx := strings.Index(p, "VersioningConfiguration")
-	assert.Less(t, tagIdx, propIdx, "tag lines must come before property lines (mirrors renderer order)")
+	assert.Less(t, tagIdx, propIdx, "changes render in patch order")
 
 	// └ must be the last change connector — it sits at the start of the property line.
 	// Verify: last ├ appears before the last └, and the last └ comes before the end of the

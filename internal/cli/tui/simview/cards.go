@@ -214,10 +214,6 @@ func buildPropertyChangeLines(_ *theme.Theme, r simRow, doneSt, warnSt, subtleSt
 		}
 		cs, err := components.ExtractChanges(delPatch, delProps, delOldProps, refLabels)
 		if err == nil {
-			// Tags first (mirrors renderer order)
-			for _, tch := range cs.Tags {
-				lines = append(lines, components.FormatTagChange(tch, doneSt, warnSt, subtleSt))
-			}
 			for _, ch := range cs.Properties {
 				if ch.NoOp {
 					continue
@@ -229,10 +225,6 @@ func buildPropertyChangeLines(_ *theme.Theme, r simRow, doneSt, warnSt, subtleSt
 		// Mutable carried changes via MutableChangesForReplace
 		mcs, err := components.MutableChangesForReplace(patchDoc, r.delRes.CreateOnlyPatch, properties, oldProperties, refLabels)
 		if err == nil {
-			// Tags first (mirrors renderer order)
-			for _, tch := range mcs.Tags {
-				lines = append(lines, components.FormatTagChange(tch, doneSt, warnSt, subtleSt))
-			}
 			for _, ch := range mcs.Properties {
 				if ch.NoOp {
 					continue
@@ -244,10 +236,6 @@ func buildPropertyChangeLines(_ *theme.Theme, r simRow, doneSt, warnSt, subtleSt
 		// Regular update/create/delete card
 		cs, err := components.ExtractChanges(patchDoc, properties, oldProperties, refLabels)
 		if err == nil {
-			// Tags first (mirrors FormatPatchDocument order: cs.Tags then cs.Properties)
-			for _, tch := range cs.Tags {
-				lines = append(lines, components.FormatTagChange(tch, doneSt, warnSt, subtleSt))
-			}
 			for _, ch := range cs.Properties {
 				if ch.NoOp {
 					continue

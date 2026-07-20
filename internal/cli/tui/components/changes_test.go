@@ -10,64 +10,37 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // --- private helper tests (relocated from renderer/patches_test.go) ---
 
-func TestExtractTagChange(t *testing.T) {
-	t.Run("complete tag object for add operation", func(t *testing.T) {
-		patch := patchOperation{
-			Op:    "add",
-			Path:  "/Tags/0",
-			Value: map[string]any{"Key": "Environment", "Value": "production"},
-		}
+// Tags are no longer special-cased — an added tag object flows through the
+// generic property path and renders as a readable object (no Tags[key] map
+// syntax, no raw JSON), with the array index stripped from the path.
+func TestExtractChanges_TagsRenderAsGenericObject(t *testing.T) {
+	patchDoc := json.RawMessage(`[{"op":"add","path":"/Tags/1","value":{"Key":"oob-test","Value":"soft-reconcile"}}]`)
+	props := json.RawMessage(`{"Tags":[{"Key":"Name","Value":"n"},{"Key":"oob-test","Value":"soft-reconcile"}]}`)
 
-		change, err := extractTagChange(patch, nil)
+	cs, err := ExtractChanges(patchDoc, props, json.RawMessage(`{}`), nil)
+	require.NoError(t, err)
+	require.Len(t, cs.Properties, 1)
 
-		assert.NoError(t, err)
-		assert.Equal(t, "Environment", change.Key)
-		assert.Equal(t, "production", change.Value)
-		assert.Equal(t, "add", change.Operation)
-	})
+	ch := cs.Properties[0]
+	assert.Equal(t, "add", ch.Operation)
+	assert.Equal(t, "Tags[1]", ch.Path)
+	// Composite renders readably, not as raw JSON.
+	assert.Equal(t, "{Key: \"oob-test\", Value: \"soft-reconcile\"}", ch.Value)
 
-	t.Run("partial tag value update", func(t *testing.T) {
-		oldProps := `{"Tags":[{"Key":"Environment","Value":"dev"}]}`
-		patch := patchOperation{
-			Op:    "replace",
-			Path:  "/Tags/0/Value",
-			Value: "production",
-		}
-
-		change, err := extractTagChange(patch, json.RawMessage(oldProps))
-
-		assert.NoError(t, err)
-		assert.Equal(t, "Environment", change.Key)
-		assert.Equal(t, "production", change.Value)
-		assert.Equal(t, "dev", change.OldValue)
-		assert.True(t, change.HasOld)
-	})
-
-	t.Run("returns error for add op with nil value", func(t *testing.T) {
-		patch := patchOperation{Op: "add", Path: "/Tags/0", Value: nil}
-
-		_, err := extractTagChange(patch, nil)
-
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "nil value")
-	})
-
-	t.Run("tag removal", func(t *testing.T) {
-		oldProps := `{"Tags":[{"Key":"Environment","Value":"dev"}]}`
-		patch := patchOperation{Op: "remove", Path: "/Tags/0", Value: nil}
-
-		change, err := extractTagChange(patch, json.RawMessage(oldProps))
-
-		assert.NoError(t, err)
-		assert.Equal(t, "Environment", change.Key)
-		assert.Equal(t, "remove", change.Operation)
-	})
+	// The rendered line strips the numeric index and doesn't quote the composite.
+	doneSt := lipgloss.NewStyle()
+	line := FormatPropertyChange(ch, "", doneSt, doneSt, doneSt)
+	assert.Contains(t, line, "add")
+	assert.Contains(t, line, "Tags:")
+	assert.NotContains(t, line, "Tags[1]")
+	assert.Contains(t, line, "{Key: \"oob-test\", Value: \"soft-reconcile\"}")
 }
 
 func TestFormatValueForDisplay(t *testing.T) {
@@ -197,17 +170,17 @@ func TestPropertyExistsInPrevious(t *testing.T) {
 	})
 }
 
-func TestFormatValueForDisplay_CompositeValuesAsJSON(t *testing.T) {
-	t.Run("map renders as JSON", func(t *testing.T) {
+func TestFormatValueForDisplay_CompositeValuesReadable(t *testing.T) {
+	t.Run("map renders as readable object", func(t *testing.T) {
 		v := map[string]any{"k": "v", "n": float64(1)}
 		got := formatValueForDisplay(v)
-		assert.Equal(t, `{"k":"v","n":1}`, got)
+		assert.Equal(t, `{k: "v", n: 1}`, got)
 	})
 
-	t.Run("slice renders as JSON", func(t *testing.T) {
+	t.Run("slice renders as readable array", func(t *testing.T) {
 		v := []any{"a", float64(2), map[string]any{"k": "v"}}
 		got := formatValueForDisplay(v)
-		assert.Equal(t, `["a",2,{"k":"v"}]`, got)
+		assert.Equal(t, `["a", 2, {k: "v"}]`, got)
 	})
 
 	t.Run("scalar still uses %v", func(t *testing.T) {
@@ -325,9 +298,9 @@ func TestChangeSet_TagChanges(t *testing.T) {
 
 	cs, err := ExtractChanges(patchDoc, props, prev, nil)
 	require.NoError(t, err)
-	require.Len(t, cs.Tags, 1)
-	assert.Equal(t, "Env", cs.Tags[0].Key)
-	assert.Equal(t, "prod", cs.Tags[0].Value)
-	assert.Equal(t, "add", cs.Tags[0].Operation)
-	assert.Empty(t, cs.Properties)
+	// Tags flow through the generic property path now — no dedicated Tags slice.
+	require.Len(t, cs.Properties, 1)
+	assert.Equal(t, "add", cs.Properties[0].Operation)
+	assert.Equal(t, "Tags[0]", cs.Properties[0].Path)
+	assert.Equal(t, `{Key: "Env", Value: "prod"}`, cs.Properties[0].Value)
 }

@@ -510,14 +510,6 @@ func (m Model) revertConsequence(r driftRow) string {
 		return ""
 	}
 
-	// Tag changes precede property changes, mirroring the change-line order.
-	for _, tch := range cs.Tags {
-		if !tch.HasOld {
-			continue
-		}
-		old := components.TruncateCascadeValue(tch.OldValue, 30)
-		return "Tags[" + tch.Key + "] → " + components.QuoteCardValue(old)
-	}
 	for _, ch := range cs.Properties {
 		if ch.NoOp {
 			continue
