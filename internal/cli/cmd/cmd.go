@@ -44,7 +44,7 @@ func init() {
 		"{{if (index $cmd.Annotations \"doc\")}}\n" +
 		grey("{{formatDoc (index $cmd.Annotations \"doc\") $cmd}}\n") + "{{end}}" +
 		"{{end}}{{end}}\n{{end}}" +
-		"{{if .HasAvailableLocalFlags}}\n" + accent("Options:\n") +
+		"{{if .HasAvailableLocalFlags}}\n" + accent("Options:") + "\n" +
 		"{{range .LocalFlags | optionsUsage}}{{.}}\n{{end}}" +
 		"{{end}}" +
 		banner.DefaultLinks() +
@@ -61,10 +61,10 @@ func init() {
 		"{{if (index $cmd.Annotations \"doc\")}}\n" +
 		grey("{{formatDoc (index $cmd.Annotations \"doc\") $cmd}}\n") + "{{end}}" +
 		"{{end}}\n{{end}}" +
-		"{{if .HasAvailableLocalFlags}}\n" + accent("Options:\n") +
+		"{{if .HasAvailableLocalFlags}}\n" + accent("Options:") + "\n" +
 		"{{range .LocalFlags | optionsUsage}}{{.}}\n{{end}}" +
 		"{{end}}\n" +
-		"{{if .LocalFlags | hasPropertyFlags}}\n" + accent("Properties:\n") +
+		"{{if .LocalFlags | hasPropertyFlags}}\n" + accent("Properties:") + "\n" +
 		"{{range .LocalFlags | propertyUsage}}{{.}}\n{{end}}" +
 		"{{end}}" +
 		banner.DefaultLinks() +
