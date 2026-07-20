@@ -30,6 +30,12 @@ path = ["**/Dockerfile*"]
 SPDX-FileCopyrightText = "© 2025 Platform Engineering Labs Inc."
 SPDX-License-Identifier = "FSL-1.1-ALv2"
 
+# Image assets (binary; cannot carry inline SPDX headers)
+[[annotations]]
+path = ["**/*.png", "**/*.jpg", "**/*.jpeg", "**/*.gif", "**/*.svg", "**/*.ico"]
+SPDX-FileCopyrightText = "© 2025 Platform Engineering Labs Inc."
+SPDX-License-Identifier = "FSL-1.1-ALv2"
+
 # Third-party files from Pkl project (Apache-2.0)
 [[annotations]]
 path = ["internal/schema/pkl/schema/ext/URI.pkl", "internal/schema/pkl/assets/formae/ext/URI.pkl"]
