@@ -146,9 +146,19 @@ jobs:
   pkg_opkg:
     uses: "./.github/workflows/package.yml"
     secrets: inherit
-    if: ${{ contains(fromJSON('["", "pkg_opkg", "all"]'), inputs.pkg_job) && github.actor != 'peldroid[bot]' }}
+    # pkg_opkg builds the formae opkg, which bundles the standard-bundle members'
+    # examples and resolve-gates them against formae@$(VERSION). That schema is
+    # published by pkg_pkl (make publish-pkl), so pkg_opkg must wait for it -
+    # otherwise the resolve gate races the schema publish. The `!cancelled()` +
+    # explicit pkg_job=='pkg_opkg' clause keeps the manual `pkg_job=pkg_opkg`
+    # dispatch working even though pkg_pkl is skipped there.
+    if: ${{ !cancelled()
+          && github.actor != 'peldroid[bot]'
+          && contains(fromJSON('["", "pkg_opkg", "all"]'), inputs.pkg_job)
+          && (inputs.pkg_job == 'pkg_opkg' || needs.pkg_pkl.result == 'success') }}
     needs:
       - verify
+      - pkg_pkl
 
   pkg_container:
     uses: "./.github/workflows/container.yml"
