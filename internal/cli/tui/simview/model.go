@@ -340,7 +340,7 @@ func (m Model) View() string {
 
 // viewAck renders the description acknowledgment screen (exactly m.height lines).
 func (m Model) viewAck() string {
-	header := components.HeaderBar(m.th, m.headerLeft(), m.headerRight(), m.width)
+	header := components.HeaderBarBranded(m.th, m.headerCommand(), m.headerRight(), m.width)
 	footer := components.FooterBar(m.th, m.width, ackFooterHints(), "")
 
 	// The viewport body contains the description panel + enter prompt.
@@ -401,7 +401,7 @@ func (m Model) viewAck() string {
 
 // viewPreview renders the main simulation preview (exactly m.height lines).
 func (m Model) viewPreview() string {
-	header := components.HeaderBar(m.th, m.headerLeft(), m.headerRight(), m.width)
+	header := components.HeaderBarBranded(m.th, m.headerCommand(), m.headerRight(), m.width)
 	summaryLine := "  " + m.renderSummaryCounts()
 	footer := m.renderFooter()
 
@@ -434,13 +434,13 @@ func (m Model) viewPreview() string {
 	return strings.Join(lines, "\n")
 }
 
-// headerLeft returns the header's left-side text.
-func (m Model) headerLeft() string {
-	verb := "apply"
+// headerCommand returns the command verb shown (in the brand accent) after the
+// white "formae" wordmark in the header: "apply" or "destroy".
+func (m Model) headerCommand() string {
 	if m.opts.Kind == KindDestroy {
-		verb = "destroy"
+		return "destroy"
 	}
-	return "formae " + verb + " — simulation"
+	return "apply"
 }
 
 // headerRight returns the header's right-side text.

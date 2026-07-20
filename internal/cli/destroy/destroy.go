@@ -61,6 +61,7 @@ var (
 		model := statuswatch.New(th, a, statuswatch.Options{
 			Query:          "id:" + commandID,
 			FocusCommandID: commandID,
+			HeaderCommand:  "destroy",
 			ExitWhenDone:   true,
 			SingleCommand:  true, // destroy --watch is scoped to one command: no back-to-list nav
 		})

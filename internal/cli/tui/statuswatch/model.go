@@ -27,6 +27,11 @@ type Options struct {
 	MaxResults int
 	// Version is the formae version shown in the header banner.
 	Version string
+	// HeaderCommand is the command verb shown (brand accent) after the white
+	// "formae" wordmark in the header — e.g. "status command" for the standalone
+	// status TUI, or "apply" / "destroy" for the post-submit --watch flows.
+	// Defaults to "status command" when empty.
+	HeaderCommand string
 	// PollInterval controls how often the API is polled; default 2s.
 	PollInterval time.Duration
 	// Now is an injectable clock used for duration/age rendering; default time.Now.
@@ -93,6 +98,15 @@ const exitGracePeriod = 1500 * time.Millisecond
 
 // exitNowMsg is delivered after exitGracePeriod to trigger the deferred quit.
 type exitNowMsg struct{}
+
+// headerCommand returns the command verb shown after the "formae" wordmark in
+// the header, defaulting to "status command" for the standalone status TUI.
+func (m Model) headerCommand() string {
+	if m.opts.HeaderCommand != "" {
+		return m.opts.HeaderCommand
+	}
+	return "status command"
+}
 
 // New constructs a Model with sensible defaults applied to opts.
 func New(th *theme.Theme, client Client, opts Options) Model {
@@ -428,7 +442,7 @@ func (m Model) View() string {
 
 	// Help overlay: render the help panel instead of the body between header and footer
 	if m.helpOpen {
-		header := components.HeaderBarBranded(m.th, "status command", right, m.width)
+		header := components.HeaderBarBranded(m.th, m.headerCommand(), right, m.width)
 		footer := components.FooterBar(m.th, m.width, multiFooterHints(), "")
 
 		// Calculate body height: total height - header (2) - footer (2)
@@ -463,7 +477,7 @@ func (m Model) View() string {
 		// detail view — you're focused on a single command, so filtering belongs to
 		// the list view. Back navigation (esc) lives in the footer, so there is no
 		// separate esc row.
-		header := components.HeaderBarBranded(m.th, "status command", right, m.width)
+		header := components.HeaderBarBranded(m.th, m.headerCommand(), right, m.width)
 		footer := components.FooterBar(m.th, m.width, detailFooterHints(m.opts.SingleCommand), "")
 		parts := header + "\n" + m.detail.View(m.height, false) + "\n" + footer
 		lines := strings.Split(parts, "\n")
@@ -477,7 +491,7 @@ func (m Model) View() string {
 		return strings.Join(lines, "\n")
 	}
 
-	header := components.HeaderBarBranded(m.th, "status command", right, m.width)
+	header := components.HeaderBarBranded(m.th, m.headerCommand(), right, m.width)
 
 	visible := m.height - chromeLines
 	if visible < 0 {

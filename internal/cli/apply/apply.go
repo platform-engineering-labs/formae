@@ -66,6 +66,7 @@ var (
 		model := statuswatch.New(th, a, statuswatch.Options{
 			Query:          "id:" + commandID,
 			FocusCommandID: commandID,
+			HeaderCommand:  "apply",
 			ExitWhenDone:   true,
 			SingleCommand:  true, // apply --watch is scoped to one command: no back-to-list nav
 		})
