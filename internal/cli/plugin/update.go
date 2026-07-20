@@ -86,6 +86,7 @@ func validateUpdateOptions(opts *UpdateOptions) error {
 }
 
 func runUpdateForHumans(app *app.App, opts *UpdateOptions) error {
+	app.PrintBanner()
 	return runUpdateForHumansWithSeams(app, opts, os.Stdout, nil)
 }
 

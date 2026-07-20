@@ -86,6 +86,7 @@ func validateUninstallOptions(opts *UninstallOptions) error {
 }
 
 func runUninstallForHumans(app *app.App, opts *UninstallOptions) error {
+	app.PrintBanner()
 	return runUninstallForHumansWithSeams(app, opts, os.Stdout, nil)
 }
 

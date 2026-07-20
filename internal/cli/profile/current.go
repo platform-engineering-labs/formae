@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/platform-engineering-labs/formae/internal/cli/banner"
 	"github.com/platform-engineering-labs/formae/internal/cli/printer"
 	"github.com/platform-engineering-labs/formae/internal/cli/profile/store"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
@@ -47,6 +48,7 @@ func newCurrentCmd() *cobra.Command {
 				return p.Print(&out)
 			}
 
+			banner.PrintBanner()
 			w := cc.OutOrStdout()
 			th := theme.New("formae")
 			tty := isTerminal(w)

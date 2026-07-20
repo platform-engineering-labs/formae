@@ -100,6 +100,7 @@ func validateInstallOptions(opts *InstallOptions) error {
 }
 
 func runInstallForHumans(app *app.App, opts *InstallOptions) error {
+	app.PrintBanner()
 	return runInstallForHumansWithSeams(app, opts, os.Stdout, nil)
 }
 

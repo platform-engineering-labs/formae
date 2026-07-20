@@ -89,6 +89,7 @@ func validateInfoOptions(opts *InfoOptions) error {
 }
 
 func runInfoForHumans(app *app.App, opts *InfoOptions) error {
+	app.PrintBanner()
 	plugin, err := fetchPluginInfo(app, opts)
 	if err != nil {
 		return err

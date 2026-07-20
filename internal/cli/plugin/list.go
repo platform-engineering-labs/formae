@@ -75,6 +75,7 @@ func validateListOptions(opts *ListOptions) error {
 }
 
 func runListForHumans(app *app.App, opts *ListOptions) error {
+	app.PrintBanner()
 	plugins, err := installedPlugins(app)
 	if err != nil {
 		return err
