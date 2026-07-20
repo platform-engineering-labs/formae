@@ -411,7 +411,7 @@ func (v multiView) renderRows(maxRows int) []string {
 					if barW < 1 {
 						barW = 1
 					}
-					bar := components.ProgressBar(v.th, barW, r.counts)
+					bar := components.ProgressBar(v.th, barW, r.counts, healthFailed(r.health))
 					cell := bar + textStyle.Render(pad(countStr, w-barW))
 					sb.WriteString(cell)
 				}

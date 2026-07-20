@@ -90,6 +90,13 @@ func commandHealth(c apimodel.Command, counts map[components.State]int) health {
 	return healthFinishedOK
 }
 
+// healthFailed reports whether a command's health means its outcome is
+// failed/canceled (or failing in-flight), used to color the progress bar's
+// completed fill red rather than the bright done color.
+func healthFailed(h health) bool {
+	return h == healthRunningFailing || h == healthFinishedFailed
+}
+
 // doneOf returns completed count and total. Skipped updates count as done,
 // matching the ProgressBar component's segment allocation.
 func doneOf(counts map[components.State]int) (done, total int) {

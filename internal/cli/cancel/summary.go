@@ -167,7 +167,9 @@ func renderCancelSummary(th *theme.Theme, cmds []apimodel.Command, exps map[stri
 			}
 		}
 		done := counts[components.StateDone]
-		bar := components.ProgressBar(th, 10, counts)
+		failed := counts[components.StateFailed] > 0 || counts[components.StateSkipped] > 0 ||
+			cmd.State == "Failed" || cmd.State == "Canceled"
+		bar := components.ProgressBar(th, 10, counts, failed)
 
 		cmdLine := fmt.Sprintf("    %s  %s %s  %s %d/%d  %s",
 			accent.Render(cmd.CommandID),

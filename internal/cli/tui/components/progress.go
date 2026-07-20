@@ -12,40 +12,37 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 )
 
-// progressSegment maps a class of states onto a bar character and theme
-// color, in display order. Character density (solid → hatched → light →
-// dots) carries the meaning without color — colorblind-safe by default.
-type progressSegment struct {
-	states []State
-	char   string
-	color  func(theme.Palette) lipgloss.AdaptiveColor
-}
-
-var progressSegments = []progressSegment{
-	{[]State{StateDone, StateSkipped}, "█", func(p theme.Palette) lipgloss.AdaptiveColor { return p.Done }},
-	{[]State{StateFailed}, "▒", func(p theme.Palette) lipgloss.AdaptiveColor { return p.Error }},
-	{[]State{StateInProgress}, "░", func(p theme.Palette) lipgloss.AdaptiveColor { return p.InProgress }},
-	{[]State{StatePending}, "⋅", func(p theme.Palette) lipgloss.AdaptiveColor { return p.Pending }},
-}
-
-// ProgressBar renders a fixed-width bar segmented by state, per the
-// status-watch mockup: █ done/skipped, ▒ failed, ░ in-progress, ⋅ pending.
-// Segment colors follow the theme roles (Done-bright, Error, InProgress,
-// Pending). A zero total renders a full pending track. Non-zero states
-// never round away to zero cells while the width allows.
-func ProgressBar(th *theme.Theme, width int, counts map[State]int) string {
+// ProgressBar renders a fixed-width bar for a command's progress. The completed
+// portion (done + skipped + failed) is a single █ fill whose color reflects the
+// command's OUTCOME — the theme Done color normally, or Error (red) when the
+// command is failing/failed/canceled (failed == true) — so the whole bar
+// toggles to its end-state color instead of showing per-resource success/
+// failure sections. In-progress (░) and pending (⋅) keep their own colors. A
+// zero total renders a full pending track. Non-zero segments never round away
+// to zero cells while the width allows.
+func ProgressBar(th *theme.Theme, width int, counts map[State]int, failed bool) string {
 	if width <= 0 {
 		return ""
 	}
 	p := th.Palette
 
-	segCounts := make([]int, len(progressSegments))
+	fill := p.Done
+	if failed {
+		fill = p.Error
+	}
+
+	// Display order: completed fill, in-progress, pending.
+	chars := []string{"█", "░", "⋅"}
+	colors := []lipgloss.AdaptiveColor{fill, p.InProgress, p.Pending}
+	segCounts := []int{
+		counts[StateDone] + counts[StateSkipped] + counts[StateFailed],
+		counts[StateInProgress],
+		counts[StatePending],
+	}
+
 	total := 0
-	for i, seg := range progressSegments {
-		for _, s := range seg.states {
-			segCounts[i] += counts[s]
-		}
-		total += segCounts[i]
+	for _, n := range segCounts {
+		total += n
 	}
 	if total == 0 {
 		pending := lipgloss.NewStyle().Foreground(p.Pending)
@@ -55,12 +52,12 @@ func ProgressBar(th *theme.Theme, width int, counts map[State]int) string {
 	widths := allocateCells(segCounts, total, width)
 
 	var b strings.Builder
-	for i, seg := range progressSegments {
+	for i := range segCounts {
 		if widths[i] == 0 {
 			continue
 		}
-		st := lipgloss.NewStyle().Foreground(seg.color(p))
-		b.WriteString(st.Render(strings.Repeat(seg.char, widths[i])))
+		st := lipgloss.NewStyle().Foreground(colors[i])
+		b.WriteString(st.Render(strings.Repeat(chars[i], widths[i])))
 	}
 	return b.String()
 }
