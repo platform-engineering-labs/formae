@@ -116,9 +116,11 @@ func runDriftFlow(a *app.App, th *theme.Theme, opts *ApplyOptions, rejected apim
 // merge Formas, generate source code, confirm overwrite if needed, print panel.
 func handleExtract(a *app.App, th *theme.Theme, d driftview.DecisionExtract) error {
 	merged := &pkgmodel.Forma{
+		Stacks:    []pkgmodel.Stack{},
 		Targets:   []pkgmodel.Target{},
 		Resources: []pkgmodel.Resource{},
 	}
+	seenStacks := map[string]bool{}
 	seenTargets := map[string]bool{}
 
 	for _, ref := range d.Selected {
@@ -131,6 +133,15 @@ func handleExtract(a *app.App, th *theme.Theme, d driftview.DecisionExtract) err
 			continue
 		}
 		merged.Resources = append(merged.Resources, forma.Resources...)
+		// Carry over stacks and targets. The PKL generator requires the Stacks
+		// property to be present; omitting it makes serialization fail with
+		// "Cannot find property `Stacks`".
+		for _, s := range forma.Stacks {
+			if !seenStacks[s.Label] {
+				seenStacks[s.Label] = true
+				merged.Stacks = append(merged.Stacks, s)
+			}
+		}
 		for _, t := range forma.Targets {
 			if !seenTargets[t.Label] {
 				seenTargets[t.Label] = true

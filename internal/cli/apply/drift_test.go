@@ -308,6 +308,65 @@ func TestRunDriftFlow_Extract(t *testing.T) {
 	assert.True(t, generateSourceCodeFnCalled, "GenerateSourceCode must be called once")
 }
 
+// TestRunDriftFlow_Extract_CarriesStacksAndTargets guards against a regression
+// where handleExtract built its merged Forma without copying Stacks (and
+// Targets). Because Forma.Stacks is `omitempty`, an empty slice is dropped from
+// the serialized JSON entirely, and the PKL generator then fails with
+// "Cannot find property `Stacks`". The unit path stubs the generator, so this
+// asserts the merged Forma directly.
+func TestRunDriftFlow_Extract_CarriesStacksAndTargets(t *testing.T) {
+	stubDriftSeams(t)
+
+	rejected := makeRejected()
+	launchDriftView = func(th *theme.Theme, r *apimodel.FormaReconcileRejectedError, opts driftview.Options) (driftview.Decision, error) {
+		return driftview.DecisionExtract{
+			Path: "./out.pkl",
+			Selected: []driftview.ResourceRef{
+				{Stack: "prod", Type: "AWS::S3::Bucket", Label: "bucket-a", Operation: "update"},
+				{Stack: "prod", Type: "AWS::S3::Bucket", Label: "bucket-b", Operation: "update"},
+			},
+		}, nil
+	}
+
+	// Every extracted resource comes back with its stack and target, mirroring a
+	// real App.ExtractResources response.
+	extractResourcesFn = func(a *app.App, query string) (*pkgmodel.Forma, []string, error) {
+		return &pkgmodel.Forma{
+			Stacks:    []pkgmodel.Stack{{Label: "prod"}},
+			Targets:   []pkgmodel.Target{{Label: "aws"}},
+			Resources: []pkgmodel.Resource{{Type: "AWS::S3::Bucket", Label: query}},
+		}, nil, nil
+	}
+
+	var captured *pkgmodel.Forma
+	generateSourceCodeFn = func(a *app.App, forma *pkgmodel.Forma, path string) error {
+		captured = forma
+		return nil
+	}
+	confirmOverwriteFn = func(th *theme.Theme, path string) (bool, error) { return true, nil }
+	applyFn = func(a *app.App, opts *ApplyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
+		t.Fatal("applyFn must NOT be called on extract path")
+		return nil, nil, nil
+	}
+
+	a := newTestApp()
+	opts := &ApplyOptions{
+		OutputConsumer: printer.ConsumerHuman,
+		FormaFile:      "forma.pkl",
+		Mode:           pkgmodel.FormaApplyModeReconcile,
+	}
+	err := runDriftFlow(a, theme.New("formae"), opts, rejected)
+	require.NoError(t, err)
+
+	require.NotNil(t, captured)
+	require.Len(t, captured.Resources, 2)
+	// Stacks and targets must be present (and deduped) or PKL generation fails.
+	require.Len(t, captured.Stacks, 1, "merged Forma must carry the stack")
+	assert.Equal(t, "prod", captured.Stacks[0].Label)
+	require.Len(t, captured.Targets, 1, "merged Forma must carry the target (deduped)")
+	assert.Equal(t, "aws", captured.Targets[0].Label)
+}
+
 func TestRunDriftFlow_RevertIdentical(t *testing.T) {
 	stubDriftSeams(t)
 
