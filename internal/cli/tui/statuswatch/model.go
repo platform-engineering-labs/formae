@@ -15,7 +15,6 @@ import (
 
 	tui "github.com/platform-engineering-labs/formae/internal/cli/tui"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
-	"github.com/platform-engineering-labs/formae/internal/cli/tui/logo"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 )
 
@@ -407,11 +406,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // chromeLines is the number of lines consumed by fixed UI chrome:
 //
-//	header banner (4) + column header (1) + query bar (2) + footer bar (2) = 9.
+//	header (2) + column header (1) + query bar (2) + footer bar (2) = 7.
 //
-// The data rows area receives height - chromeLines lines. (The detail view uses
-// a plain two-line header, so it simply gains padded lines — no truncation.)
-const chromeLines = 9
+// The data rows area receives height - chromeLines lines.
+const chromeLines = 7
 
 // View composes the full terminal screen.
 func (m Model) View() string {
@@ -492,7 +490,9 @@ func (m Model) View() string {
 		return strings.Join(lines, "\n")
 	}
 
-	header := components.HeaderBarWithLogo(m.th, "status command", right, components.VersionLabel(m.opts.Version), m.width, logo.MiniPropeller())
+	// Command in the accent color here; the inventory view uses bright white so
+	// the two can be compared.
+	header := components.HeaderBarBranded(m.th, "status command", right, m.width, true)
 
 	visible := m.height - chromeLines
 	if visible < 0 {

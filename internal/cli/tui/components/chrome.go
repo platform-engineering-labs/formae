@@ -91,6 +91,31 @@ func VersionLabel(v string) string {
 	return "v" + v
 }
 
+// HeaderBarBranded renders a compact two-line header: the "formae" wordmark
+// ("form" in bright text, "ae" in brand orange) followed by the command, with a
+// right-aligned status and a bottom border. commandAccent renders the command in
+// the accent color instead of bright text.
+func HeaderBarBranded(th *theme.Theme, command, right string, width int, commandAccent bool) string {
+	p := th.Palette
+	form := lipgloss.NewStyle().Foreground(p.TextPrimary).Bold(true).Render("form")
+	ae := lipgloss.NewStyle().Foreground(p.SecondaryAccent).Bold(true).Render("ae")
+	left := "  " + form + ae
+	if command != "" {
+		cmdColor := p.TextPrimary
+		if commandAccent {
+			cmdColor = p.PrimaryAccent
+		}
+		left += " " + lipgloss.NewStyle().Foreground(cmdColor).Render(command)
+	}
+	rt := ""
+	if right != "" {
+		rt = right + "  "
+	}
+	line := left + PadBetween(width, left, rt) + rt
+	border := lipgloss.NewStyle().Foreground(p.Border).Render(strings.Repeat("─", width))
+	return line + "\n" + border
+}
+
 // HeaderBarWithLogo renders a four-line header banner with a brand icon on the
 // left. The icon occupies three rows, with the wordmark stacked alongside it:
 // "formae" (accent) on row 1 with the right-aligned status, the command (bright)
