@@ -31,6 +31,11 @@ var (
 	// The theme name comes from the CLI profile configuration (Config.Cli.Theme);
 	// unknown names fall back to "formae" inside theme.New.
 	launchInventoryTUI = func(a *app.App, focus inventoryview.Tab, opts *InventoryOptions) error {
+		// Surface connection / auth / version-mismatch errors as ordinary CLI
+		// errors before the alt-screen TUI takes over the terminal.
+		if err := a.Preflight(); err != nil {
+			return err
+		}
 		themeName := ""
 		if a != nil && a.Config != nil {
 			themeName = a.Config.Cli.Theme

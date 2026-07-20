@@ -279,25 +279,14 @@ func Start() {
 	}
 
 	if err := rootCommand.Execute(); err != nil {
-		// Check if this is a FlagError (validation/usage error).
-		// In this case, show usage information to help the user.
-		var flagError *cmd.FlagError
-		if errors.As(err, &flagError) {
-			fmt.Fprintln(os.Stderr, lipgloss.NewStyle().Foreground(theme.New("formae").Palette.Error).Render("Error: "+err.Error()))
-			fmt.Println()
-			// Find the command that failed and print its usage
-			if activeCmd, _, findErr := rootCommand.Find(os.Args[1:]); findErr == nil && activeCmd != nil {
-				fmt.Println(activeCmd.UsageString())
-			}
-			os.Exit(1)
-		}
+		errStyle := lipgloss.NewStyle().Foreground(theme.New("formae").Palette.Error)
 
-		// For unknown command errors, show the parent command's usage
-		// to help the user find the correct command.
-		if strings.HasPrefix(err.Error(), "unknown command") {
-			fmt.Fprintln(os.Stderr, lipgloss.NewStyle().Foreground(theme.New("formae").Palette.Error).Render("Error: "+err.Error()))
+		// Usage errors (bad flag, bad args, unknown command) get the offending
+		// command's usage printed after the error so the user can self-correct.
+		// Runtime errors just print the error.
+		if isUsageError(err) {
+			fmt.Fprintln(os.Stderr, errStyle.Render("Error: "+err.Error()))
 			fmt.Println()
-			// Find the parent command and show its usage
 			if activeCmd, _, findErr := rootCommand.Find(os.Args[1:]); findErr == nil && activeCmd != nil {
 				fmt.Println(activeCmd.UsageString())
 			} else {
@@ -306,8 +295,36 @@ func Start() {
 			os.Exit(1)
 		}
 
-		// For other errors (runtime errors), just print the error.
-		fmt.Fprintln(os.Stderr, lipgloss.NewStyle().Foreground(theme.New("formae").Palette.Error).Render("Error: "+err.Error()))
+		fmt.Fprintln(os.Stderr, errStyle.Render("Error: "+err.Error()))
 		os.Exit(1)
 	}
+}
+
+// isUsageError reports whether err is a CLI-usage error — a bad flag, bad
+// arguments, or an unknown command/subcommand — for which we print command
+// usage, as opposed to a runtime error. It recognises both our own FlagError
+// and Cobra's native flag/arg/command parse errors.
+func isUsageError(err error) bool {
+	var flagError *cmd.FlagError
+	if errors.As(err, &flagError) {
+		return true
+	}
+	msg := err.Error()
+	for _, marker := range []string{
+		"unknown command",
+		"unknown flag:",
+		"unknown shorthand flag:",
+		"flag needs an argument:",
+		"invalid argument \"",
+		"required flag(s)",
+		"accepts ",         // cobra ExactArgs/RangeArgs: "accepts 1 arg(s), received 2"
+		"arg(s), received", // cobra MinimumNArgs/MaximumNArgs
+		"requires at least",
+		"requires exactly",
+	} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
 }

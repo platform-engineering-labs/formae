@@ -509,6 +509,24 @@ func (a *App) UpdatePlugins(req apimodel.UpdatePluginsRequest) (*apimodel.Update
 	return client.UpdatePlugins(req)
 }
 
+// Preflight verifies the agent is reachable and version-compatible before an
+// interactive (TUI) command takes over the screen, so connection, auth, and
+// version-mismatch errors surface as ordinary CLI errors instead of being
+// rendered inside the alt-screen TUI. transmitStats is false so a preflight
+// check doesn't double-report usage stats.
+func (a *App) Preflight() error {
+	auth, net, err := a.getAuthAndNetHandlers()
+	if err != nil {
+		return err
+	}
+	client := api.NewClient(a.Config.Cli.API, auth, net)
+
+	if compatible, _, _, err := a.runBeforeCommand(client, false); !compatible {
+		return err
+	}
+	return nil
+}
+
 func (a *App) Stats() (*apimodel.Stats, []string, error) {
 	auth, net, err := a.getAuthAndNetHandlers()
 	if err != nil {

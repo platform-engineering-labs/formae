@@ -156,6 +156,11 @@ func themeFor(a *app.App) *theme.Theme {
 // The theme name comes from the CLI profile configuration (Config.Cli.Theme);
 // unknown names fall back to "formae" inside theme.New.
 func launchStatusTUI(a *app.App, opts *StatusOptions) error {
+	// Surface connection / auth / version-mismatch errors as ordinary CLI
+	// errors before the alt-screen TUI takes over the terminal.
+	if err := a.Preflight(); err != nil {
+		return err
+	}
 	th := themeFor(a)
 	swOpts := statuswatch.Options{
 		Query:      opts.Query,
