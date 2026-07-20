@@ -524,7 +524,9 @@ func (d *DatastoreMSSQL) FindTargetsDependingOnMany(ksuids []string) (map[string
 	}
 
 	query := fmt.Sprintf(`
-	SELECT label, version, namespace, config, config_schema, discoverable
+	SELECT label, version, namespace, config, config_schema, discoverable,
+	       target_incarnation_id, health_state, last_seen_at, observed_at,
+	       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code
 	FROM targets t1
 	WHERE (%s)
 	AND NOT EXISTS (
@@ -543,32 +545,12 @@ func (d *DatastoreMSSQL) FindTargetsDependingOnMany(ksuids []string) (map[string
 
 	result := make(map[string][]*pkgmodel.Target)
 	for rows.Next() {
-		var label, namespace string
-		var version int
-		var config json.RawMessage
-		var configSchemaRaw sql.NullString
-		var discoverable bool
-		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaRaw, &discoverable); err != nil {
+		target, err := scanTargetColumns(rows.Scan)
+		if err != nil {
 			return nil, err
 		}
 
-		var configSchema pkgmodel.ConfigSchema
-		if configSchemaRaw.Valid && configSchemaRaw.String != "" {
-			if err := json.Unmarshal([]byte(configSchemaRaw.String), &configSchema); err != nil {
-				return nil, fmt.Errorf("failed to unmarshal config_schema for target %s: %w", label, err)
-			}
-		}
-
-		target := &pkgmodel.Target{
-			Label:        label,
-			Namespace:    namespace,
-			Config:       config,
-			ConfigSchema: configSchema,
-			Discoverable: discoverable,
-			Version:      version,
-		}
-
-		configStr := string(config)
+		configStr := string(target.Config)
 		for _, ksuid := range ksuids {
 			pattern := fmt.Sprintf("\"$ref\":\"formae://%s#", ksuid)
 			if strings.Contains(configStr, pattern) {
