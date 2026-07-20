@@ -137,6 +137,13 @@ func stage(dist, manifestPath, formaeVer, stdRepo, hub string) error {
 			return err
 		}
 		defer func() { _ = os.RemoveAll(tmp) }()
+		// os.MkdirTemp creates the dir 0700, but this tree is renamed into place
+		// as dist/pel/formae/examples/<member>/ and shipped in the opkg. It must
+		// be world-readable (0755) like its parent and its subdirs, otherwise the
+		// installed <member>/ dir needs sudo to read.
+		if err := os.Chmod(tmp, 0o755); err != nil {
+			return err
+		}
 
 		hasDir, files, err := fetchExamples(repo, tag, tmp)
 		if err != nil {
