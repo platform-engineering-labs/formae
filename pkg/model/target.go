@@ -4,7 +4,10 @@
 
 package model
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"time"
+)
 
 // ConfigFieldHint describes mutability characteristics of a target config field.
 // Mirrors FieldHint but scoped to target configuration.
@@ -23,6 +26,19 @@ func (cs ConfigSchema) IsZero() bool {
 	return len(cs.Hints) == 0
 }
 
+// TargetHealth holds persisted health-observation fields for a target.
+// These are runtime state, not part of the declared/serialized target.
+type TargetHealth struct {
+	IncarnationID           string     `json:"-"`
+	State                   string     `json:"-"`
+	LastSeenAt              *time.Time `json:"-"`
+	ObservedAt              *time.Time `json:"-"`
+	FirstUnreachableAt      *time.Time `json:"-"`
+	LastSampleAt            *time.Time `json:"-"`
+	UnreachableAccumSeconds int64      `json:"-"`
+	LastErrorCode           string     `json:"-"`
+}
+
 type Target struct {
 	Label        string          `json:"Label" pkl:"Label"`
 	Namespace    string          `json:"Namespace" pkl:"Namespace"`
@@ -30,6 +46,7 @@ type Target struct {
 	ConfigSchema ConfigSchema    `json:"ConfigSchema,omitzero" pkl:"ConfigSchema,omitempty"`
 	Discoverable bool            `json:"Discoverable" pkl:"Discoverable"`
 	Version      int             `json:"Version,omitempty"`
+	Health       *TargetHealth   `json:"-"`
 }
 
 func NewTargetFromString(target string) Target {

@@ -1027,7 +1027,9 @@ func (d DatastorePostgres) LoadAllTargets() ([]*pkgmodel.Target, error) {
 	defer span.End()
 
 	query := `
-	SELECT label, version, namespace, config, config_schema, discoverable
+	SELECT label, version, namespace, config, config_schema, discoverable,
+	       target_incarnation_id, health_state, last_seen_at, observed_at,
+	       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code
 	FROM targets t1
 	WHERE NOT EXISTS (
 		SELECT 1
@@ -1050,7 +1052,13 @@ func (d DatastorePostgres) LoadAllTargets() ([]*pkgmodel.Target, error) {
 		var config json.RawMessage
 		var configSchemaRaw []byte
 		var discoverable bool
-		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaRaw, &discoverable); err != nil {
+		var incarnationID, healthState string
+		var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt *time.Time
+		var unreachableAccumSeconds int64
+		var lastErrorCode *string
+		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaRaw, &discoverable,
+			&incarnationID, &healthState, &lastSeenAt, &observedAt,
+			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode); err != nil {
 			return nil, err
 		}
 
@@ -1068,6 +1076,7 @@ func (d DatastorePostgres) LoadAllTargets() ([]*pkgmodel.Target, error) {
 			ConfigSchema: configSchema,
 			Discoverable: discoverable,
 			Version:      version,
+			Health:       buildPostgresTargetHealth(incarnationID, healthState, lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt, unreachableAccumSeconds, lastErrorCode),
 		})
 	}
 
@@ -1290,7 +1299,9 @@ func (d DatastorePostgres) FindTargetsDependingOnMany(ksuids []string) (map[stri
 	}
 
 	query := fmt.Sprintf(`
-	SELECT label, version, namespace, config, config_schema, discoverable
+	SELECT label, version, namespace, config, config_schema, discoverable,
+	       target_incarnation_id, health_state, last_seen_at, observed_at,
+	       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code
 	FROM targets t1
 	WHERE (%s)
 	AND NOT EXISTS (
@@ -1315,7 +1326,13 @@ func (d DatastorePostgres) FindTargetsDependingOnMany(ksuids []string) (map[stri
 		var config json.RawMessage
 		var configSchemaRaw []byte
 		var discoverable bool
-		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaRaw, &discoverable); err != nil {
+		var incarnationID, healthState string
+		var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt *time.Time
+		var unreachableAccumSeconds int64
+		var lastErrorCode *string
+		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaRaw, &discoverable,
+			&incarnationID, &healthState, &lastSeenAt, &observedAt,
+			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode); err != nil {
 			return nil, err
 		}
 
@@ -1333,6 +1350,7 @@ func (d DatastorePostgres) FindTargetsDependingOnMany(ksuids []string) (map[stri
 			ConfigSchema: configSchema,
 			Discoverable: discoverable,
 			Version:      version,
+			Health:       buildPostgresTargetHealth(incarnationID, healthState, lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt, unreachableAccumSeconds, lastErrorCode),
 		}
 
 		// Find which of the input KSUIDs this target depends on
@@ -2618,7 +2636,9 @@ func (d DatastorePostgres) LoadTarget(label string) (*pkgmodel.Target, error) {
 	defer span.End()
 
 	query := `
-	SELECT version, namespace, config, config_schema, discoverable
+	SELECT version, namespace, config, config_schema, discoverable,
+	       target_incarnation_id, health_state, last_seen_at, observed_at,
+	       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code
 	FROM targets
 	WHERE label = $1
 	ORDER BY version DESC
@@ -2631,7 +2651,13 @@ func (d DatastorePostgres) LoadTarget(label string) (*pkgmodel.Target, error) {
 	var config json.RawMessage
 	var configSchemaRaw []byte
 	var discoverable bool
-	if err := row.Scan(&version, &namespace, &config, &configSchemaRaw, &discoverable); err != nil {
+	var incarnationID, healthState string
+	var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt *time.Time
+	var unreachableAccumSeconds int64
+	var lastErrorCode *string
+	if err := row.Scan(&version, &namespace, &config, &configSchemaRaw, &discoverable,
+		&incarnationID, &healthState, &lastSeenAt, &observedAt,
+		&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil // Target not found, return nil without error
 		}
@@ -2652,7 +2678,34 @@ func (d DatastorePostgres) LoadTarget(label string) (*pkgmodel.Target, error) {
 		ConfigSchema: configSchema,
 		Discoverable: discoverable,
 		Version:      version,
+		Health:       buildPostgresTargetHealth(incarnationID, healthState, lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt, unreachableAccumSeconds, lastErrorCode),
 	}, nil
+}
+
+// buildPostgresTargetHealth constructs a TargetHealth from postgres scan results.
+func buildPostgresTargetHealth(
+	incarnationID string,
+	healthState string,
+	lastSeenAt *time.Time,
+	observedAt *time.Time,
+	firstUnreachableAt *time.Time,
+	lastSampleAt *time.Time,
+	unreachableAccumSeconds int64,
+	lastErrorCode *string,
+) *pkgmodel.TargetHealth {
+	h := &pkgmodel.TargetHealth{
+		IncarnationID:           incarnationID,
+		State:                   healthState,
+		LastSeenAt:              lastSeenAt,
+		ObservedAt:              observedAt,
+		FirstUnreachableAt:      firstUnreachableAt,
+		LastSampleAt:            lastSampleAt,
+		UnreachableAccumSeconds: unreachableAccumSeconds,
+	}
+	if lastErrorCode != nil {
+		h.LastErrorCode = *lastErrorCode
+	}
+	return h
 }
 
 func (d DatastorePostgres) LoadTargetsByLabels(targetNames []string) ([]*pkgmodel.Target, error) {
@@ -2672,7 +2725,9 @@ func (d DatastorePostgres) LoadTargetsByLabels(targetNames []string) ([]*pkgmode
 	}
 
 	query := fmt.Sprintf(`
-	SELECT t1.label, t1.version, t1.namespace, t1.config, t1.config_schema, t1.discoverable
+	SELECT t1.label, t1.version, t1.namespace, t1.config, t1.config_schema, t1.discoverable,
+	       t1.target_incarnation_id, t1.health_state, t1.last_seen_at, t1.observed_at,
+	       t1.first_unreachable_at, t1.last_sample_at, t1.unreachable_accum_seconds, t1.last_error_code
 	FROM targets t1
 	WHERE t1.label IN (%s)
 	AND NOT EXISTS (
@@ -2696,7 +2751,13 @@ func (d DatastorePostgres) LoadTargetsByLabels(targetNames []string) ([]*pkgmode
 		var config json.RawMessage
 		var configSchemaRaw []byte
 		var discoverable bool
-		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaRaw, &discoverable); err != nil {
+		var incarnationID, healthState string
+		var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt *time.Time
+		var unreachableAccumSeconds int64
+		var lastErrorCode *string
+		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaRaw, &discoverable,
+			&incarnationID, &healthState, &lastSeenAt, &observedAt,
+			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode); err != nil {
 			return nil, err
 		}
 
@@ -2714,6 +2775,7 @@ func (d DatastorePostgres) LoadTargetsByLabels(targetNames []string) ([]*pkgmode
 			ConfigSchema: configSchema,
 			Discoverable: discoverable,
 			Version:      version,
+			Health:       buildPostgresTargetHealth(incarnationID, healthState, lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt, unreachableAccumSeconds, lastErrorCode),
 		})
 	}
 
@@ -2727,7 +2789,9 @@ func (d DatastorePostgres) LoadDiscoverableTargets() ([]*pkgmodel.Target, error)
 	// Get latest version per label where discoverable = true, deduplicated by config using DISTINCT ON
 	query := `
 	WITH latest_targets AS (
-		SELECT label, version, namespace, config, config_schema, discoverable
+		SELECT label, version, namespace, config, config_schema, discoverable,
+		       target_incarnation_id, health_state, last_seen_at, observed_at,
+		       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code
 		FROM targets t1
 		WHERE discoverable = TRUE
 		AND NOT EXISTS (
@@ -2737,7 +2801,9 @@ func (d DatastorePostgres) LoadDiscoverableTargets() ([]*pkgmodel.Target, error)
 			AND t2.version > t1.version
 		)
 	)
-	SELECT DISTINCT ON (config) label, version, namespace, config, config_schema, discoverable
+	SELECT DISTINCT ON (config) label, version, namespace, config, config_schema, discoverable,
+	       target_incarnation_id, health_state, last_seen_at, observed_at,
+	       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code
 	FROM latest_targets
 	ORDER BY config, version DESC`
 
@@ -2754,7 +2820,13 @@ func (d DatastorePostgres) LoadDiscoverableTargets() ([]*pkgmodel.Target, error)
 		var config json.RawMessage
 		var configSchemaRaw []byte
 		var discoverable bool
-		if err := rows.Scan(&label, &version, &ns, &config, &configSchemaRaw, &discoverable); err != nil {
+		var incarnationID, healthState string
+		var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt *time.Time
+		var unreachableAccumSeconds int64
+		var lastErrorCode *string
+		if err := rows.Scan(&label, &version, &ns, &config, &configSchemaRaw, &discoverable,
+			&incarnationID, &healthState, &lastSeenAt, &observedAt,
+			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode); err != nil {
 			return nil, err
 		}
 
@@ -2772,6 +2844,7 @@ func (d DatastorePostgres) LoadDiscoverableTargets() ([]*pkgmodel.Target, error)
 			ConfigSchema: configSchema,
 			Discoverable: discoverable,
 			Version:      version,
+			Health:       buildPostgresTargetHealth(incarnationID, healthState, lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt, unreachableAccumSeconds, lastErrorCode),
 		})
 	}
 
@@ -2783,7 +2856,9 @@ func (d DatastorePostgres) QueryTargets(query *datastore.TargetQuery) ([]*pkgmod
 	defer span.End()
 
 	queryStr := `
-		SELECT label, version, namespace, config, config_schema, discoverable
+		SELECT label, version, namespace, config, config_schema, discoverable,
+		       target_incarnation_id, health_state, last_seen_at, observed_at,
+		       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code
 		FROM targets t1
 		WHERE NOT EXISTS (
 			SELECT 1
@@ -2811,7 +2886,13 @@ func (d DatastorePostgres) QueryTargets(query *datastore.TargetQuery) ([]*pkgmod
 		var config json.RawMessage
 		var configSchemaRaw []byte
 		var discoverable bool
-		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaRaw, &discoverable); err != nil {
+		var incarnationID, healthState string
+		var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt *time.Time
+		var unreachableAccumSeconds int64
+		var lastErrorCode *string
+		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaRaw, &discoverable,
+			&incarnationID, &healthState, &lastSeenAt, &observedAt,
+			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode); err != nil {
 			return nil, err
 		}
 
@@ -2829,6 +2910,7 @@ func (d DatastorePostgres) QueryTargets(query *datastore.TargetQuery) ([]*pkgmod
 			ConfigSchema: configSchema,
 			Discoverable: discoverable,
 			Version:      version,
+			Health:       buildPostgresTargetHealth(incarnationID, healthState, lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt, unreachableAccumSeconds, lastErrorCode),
 		})
 	}
 
@@ -3297,11 +3379,14 @@ func (d DatastorePostgres) CreateTarget(target *pkgmodel.Target) (string, error)
 		}
 	}
 
+	incarnationID := mksuid.New().String()
+
 	query := `
-	INSERT INTO targets (label, version, namespace, config, config_schema, discoverable)
-	VALUES ($1, 1, $2, $3, $4, $5)
+	INSERT INTO targets (label, version, namespace, config, config_schema, discoverable,
+	                     target_incarnation_id, health_state, unreachable_accum_seconds)
+	VALUES ($1, 1, $2, $3, $4, $5, $6, 'unknown', 0)
 	`
-	_, err = d.pool.Exec(ctx, query, target.Label, target.Namespace, cfg, configSchemaJSON, target.Discoverable)
+	_, err = d.pool.Exec(ctx, query, target.Label, target.Namespace, cfg, configSchemaJSON, target.Discoverable, incarnationID)
 	if err != nil {
 		slog.Debug("failed to create target (may be retried as update)", "error", err, "label", target.Label)
 		return "", err
@@ -3314,16 +3399,40 @@ func (d DatastorePostgres) UpdateTarget(target *pkgmodel.Target) (string, error)
 	ctx, span := tracer.Start(context.Background(), "UpdateTarget")
 	defer span.End()
 
-	query := `SELECT MAX(version) FROM targets WHERE label = $1`
-	row := d.pool.QueryRow(ctx, query, target.Label)
+	// Load current health state to carry it forward onto the new version row.
+	healthQuery := `
+		SELECT MAX(version), target_incarnation_id, health_state, last_seen_at, observed_at,
+		       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code
+		FROM targets WHERE label = $1`
+	healthRow := d.pool.QueryRow(ctx, healthQuery, target.Label)
 
 	var maxVersion sql.NullInt64
-	if err := row.Scan(&maxVersion); err != nil {
+	var incarnationID, healthState *string
+	var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt *time.Time
+	var unreachableAccumSeconds *int64
+	var lastErrorCode *string
+	if err := healthRow.Scan(&maxVersion, &incarnationID, &healthState, &lastSeenAt, &observedAt,
+		&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode); err != nil {
 		return "", err
 	}
 
 	if !maxVersion.Valid {
 		return "", fmt.Errorf("target %s does not exist, cannot update", target.Label)
+	}
+
+	// Extract values with safe defaults for empty row (should not happen after the Valid check,
+	// but guards against partial null groups from aggregate with no rows).
+	safeStr := func(s *string) string {
+		if s == nil {
+			return ""
+		}
+		return *s
+	}
+	safeInt64 := func(i *int64) int64 {
+		if i == nil {
+			return 0
+		}
+		return *i
 	}
 
 	newVersion := int(maxVersion.Int64) + 1
@@ -3340,8 +3449,14 @@ func (d DatastorePostgres) UpdateTarget(target *pkgmodel.Target) (string, error)
 		}
 	}
 
-	insertQuery := `INSERT INTO targets (label, version, namespace, config, config_schema, discoverable) VALUES ($1, $2, $3, $4, $5, $6)`
-	_, err = d.pool.Exec(ctx, insertQuery, target.Label, newVersion, target.Namespace, cfg, configSchemaJSON, target.Discoverable)
+	insertQuery := `
+		INSERT INTO targets (label, version, namespace, config, config_schema, discoverable,
+		                     target_incarnation_id, health_state, last_seen_at, observed_at,
+		                     first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`
+	_, err = d.pool.Exec(ctx, insertQuery, target.Label, newVersion, target.Namespace, cfg, configSchemaJSON, target.Discoverable,
+		safeStr(incarnationID), safeStr(healthState), lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt,
+		safeInt64(unreachableAccumSeconds), lastErrorCode)
 	if err != nil {
 		slog.Error("failed to update target", "error", err, "label", target.Label, "version", newVersion)
 		return "", err

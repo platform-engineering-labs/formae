@@ -71,6 +71,8 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunDeleteTargetSuccess(t, newDS)
 	RunUpdateTargetNotFoundReturnsError(t, newDS)
 	RunDeleteTargetNotFound(t, newDS)
+	RunTargetHealthDefaults(t, newDS)
+	RunTargetHealthStableAcrossUpdate(t, newDS)
 
 	RunCreateStack(t, newDS)
 	RunCreateStackAlreadyExists(t, newDS)

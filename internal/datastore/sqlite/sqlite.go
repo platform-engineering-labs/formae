@@ -2538,8 +2538,10 @@ func (d DatastoreSQLite) CreateTarget(target *pkgmodel.Target) (string, error) {
 		}
 	}
 
-	query := `INSERT INTO targets (label, version, namespace, config, config_schema, discoverable) VALUES (?, 1, ?, ?, ?, ?)`
-	_, err = d.conn.Exec(query, target.Label, target.Namespace, cfg, configSchemaJSON, datastore.BoolToInt(target.Discoverable))
+	incarnationID := mksuid.New().String()
+
+	query := `INSERT INTO targets (label, version, namespace, config, config_schema, discoverable, target_incarnation_id, health_state, unreachable_accum_seconds) VALUES (?, 1, ?, ?, ?, ?, ?, 'unknown', 0)`
+	_, err = d.conn.Exec(query, target.Label, target.Namespace, cfg, configSchemaJSON, datastore.BoolToInt(target.Discoverable), incarnationID)
 	if err != nil {
 		slog.Debug("Failed to create target (may be retried as update)", "error", err, "label", target.Label)
 		return "", err
@@ -2552,11 +2554,20 @@ func (d DatastoreSQLite) UpdateTarget(target *pkgmodel.Target) (string, error) {
 	_, span := sqliteTracer.Start(context.Background(), "UpdateTarget")
 	defer span.End()
 
-	query := `SELECT MAX(version) FROM targets WHERE label = ?`
-	row := d.conn.QueryRow(query, target.Label)
+	// Load the current row to carry forward health state and incarnation id.
+	healthQuery := `
+		SELECT MAX(version), target_incarnation_id, health_state, last_seen_at, observed_at,
+		       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code
+		FROM targets WHERE label = ?`
+	healthRow := d.conn.QueryRow(healthQuery, target.Label)
 
 	var maxVersion sql.NullInt64
-	if err := row.Scan(&maxVersion); err != nil {
+	var incarnationID, healthState sql.NullString
+	var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt sql.NullString
+	var unreachableAccumSeconds sql.NullInt64
+	var lastErrorCode sql.NullString
+	if err := healthRow.Scan(&maxVersion, &incarnationID, &healthState, &lastSeenAt, &observedAt,
+		&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode); err != nil {
 		return "", err
 	}
 
@@ -2579,8 +2590,16 @@ func (d DatastoreSQLite) UpdateTarget(target *pkgmodel.Target) (string, error) {
 		}
 	}
 
-	insertQuery := `INSERT INTO targets (label, version, namespace, config, config_schema, discoverable) VALUES (?, ?, ?, ?, ?, ?)`
-	_, err = d.conn.Exec(insertQuery, target.Label, newVersion, target.Namespace, cfg, configSchemaJSON, datastore.BoolToInt(target.Discoverable))
+	insertQuery := `
+		INSERT INTO targets (label, version, namespace, config, config_schema, discoverable,
+		                     target_incarnation_id, health_state, last_seen_at, observed_at,
+		                     first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	_, err = d.conn.Exec(insertQuery, target.Label, newVersion, target.Namespace, cfg, configSchemaJSON,
+		datastore.BoolToInt(target.Discoverable),
+		incarnationID.String, healthState.String,
+		lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt,
+		unreachableAccumSeconds.Int64, lastErrorCode)
 	if err != nil {
 		slog.Error("Failed to update target", "error", err, "label", target.Label, "version", newVersion)
 		return "", err
@@ -2638,11 +2657,58 @@ func (d DatastoreSQLite) CountResourcesInTarget(targetLabel string) (int, error)
 	return count, nil
 }
 
+// scanSQLiteTargetHealth reads the health columns from a scan result and returns
+// a populated TargetHealth. nullTimestamp is a sql.NullString holding an ISO-8601
+// timestamp string as SQLite stores datetimes as text.
+func scanSQLiteTargetHealth(
+	incarnationID string,
+	healthState string,
+	lastSeenAt sql.NullString,
+	observedAt sql.NullString,
+	firstUnreachableAt sql.NullString,
+	lastSampleAt sql.NullString,
+	unreachableAccumSeconds int64,
+	lastErrorCode sql.NullString,
+) *pkgmodel.TargetHealth {
+	parseTime := func(ns sql.NullString) *time.Time {
+		if !ns.Valid || ns.String == "" {
+			return nil
+		}
+		t, err := time.Parse(time.RFC3339Nano, ns.String)
+		if err != nil {
+			// Try without nanoseconds
+			t, err = time.Parse(time.RFC3339, ns.String)
+			if err != nil {
+				return nil
+			}
+		}
+		return &t
+	}
+
+	h := &pkgmodel.TargetHealth{
+		IncarnationID:           incarnationID,
+		State:                   healthState,
+		LastSeenAt:              parseTime(lastSeenAt),
+		ObservedAt:              parseTime(observedAt),
+		FirstUnreachableAt:      parseTime(firstUnreachableAt),
+		LastSampleAt:            parseTime(lastSampleAt),
+		UnreachableAccumSeconds: unreachableAccumSeconds,
+	}
+	if lastErrorCode.Valid {
+		h.LastErrorCode = lastErrorCode.String
+	}
+	return h
+}
+
 func (d DatastoreSQLite) LoadTarget(label string) (*pkgmodel.Target, error) {
 	_, span := sqliteTracer.Start(context.Background(), "LoadTarget")
 	defer span.End()
 
-	query := `SELECT version, namespace, config, config_schema, discoverable FROM targets WHERE label = ? ORDER BY version DESC LIMIT 1`
+	query := `
+		SELECT version, namespace, config, config_schema, discoverable,
+		       target_incarnation_id, health_state, last_seen_at, observed_at,
+		       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code
+		FROM targets WHERE label = ? ORDER BY version DESC LIMIT 1`
 	row := d.conn.QueryRow(query, label)
 
 	var version int
@@ -2650,7 +2716,13 @@ func (d DatastoreSQLite) LoadTarget(label string) (*pkgmodel.Target, error) {
 	var config json.RawMessage
 	var configSchemaStr sql.NullString
 	var discoverable int
-	if err := row.Scan(&version, &namespace, &config, &configSchemaStr, &discoverable); err != nil {
+	var incarnationID, healthState string
+	var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt sql.NullString
+	var unreachableAccumSeconds int64
+	var lastErrorCode sql.NullString
+	if err := row.Scan(&version, &namespace, &config, &configSchemaStr, &discoverable,
+		&incarnationID, &healthState, &lastSeenAt, &observedAt,
+		&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil // Target not found, return nil without error
 		}
@@ -2671,6 +2743,8 @@ func (d DatastoreSQLite) LoadTarget(label string) (*pkgmodel.Target, error) {
 		ConfigSchema: configSchema,
 		Discoverable: discoverable == 1,
 		Version:      version,
+		Health: scanSQLiteTargetHealth(incarnationID, healthState, lastSeenAt, observedAt,
+			firstUnreachableAt, lastSampleAt, unreachableAccumSeconds, lastErrorCode),
 	}, nil
 }
 
@@ -2684,7 +2758,9 @@ func (d DatastoreSQLite) LoadAllTargets() ([]*pkgmodel.Target, error) {
 	var targets []*pkgmodel.Target
 
 	query := `
-		SELECT label, version, namespace, config, config_schema, discoverable
+		SELECT label, version, namespace, config, config_schema, discoverable,
+		       target_incarnation_id, health_state, last_seen_at, observed_at,
+		       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code
 		FROM targets t1
 		WHERE NOT EXISTS (
 			SELECT 1
@@ -2705,7 +2781,13 @@ func (d DatastoreSQLite) LoadAllTargets() ([]*pkgmodel.Target, error) {
 		var config json.RawMessage
 		var configSchemaStr sql.NullString
 		var discoverable int
-		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaStr, &discoverable); err != nil {
+		var incarnationID, healthState string
+		var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt sql.NullString
+		var unreachableAccumSeconds int64
+		var lastErrorCode sql.NullString
+		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaStr, &discoverable,
+			&incarnationID, &healthState, &lastSeenAt, &observedAt,
+			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode); err != nil {
 			return nil, err
 		}
 
@@ -2723,6 +2805,8 @@ func (d DatastoreSQLite) LoadAllTargets() ([]*pkgmodel.Target, error) {
 			ConfigSchema: configSchema,
 			Discoverable: discoverable == 1,
 			Version:      version,
+			Health: scanSQLiteTargetHealth(incarnationID, healthState, lastSeenAt, observedAt,
+				firstUnreachableAt, lastSampleAt, unreachableAccumSeconds, lastErrorCode),
 		})
 	}
 
@@ -2746,7 +2830,9 @@ func (d DatastoreSQLite) LoadTargetsByLabels(targetNames []string) ([]*pkgmodel.
 	}
 
 	query := fmt.Sprintf(`
-		SELECT t1.label, t1.version, t1.namespace, t1.config, t1.config_schema, t1.discoverable
+		SELECT t1.label, t1.version, t1.namespace, t1.config, t1.config_schema, t1.discoverable,
+		       t1.target_incarnation_id, t1.health_state, t1.last_seen_at, t1.observed_at,
+		       t1.first_unreachable_at, t1.last_sample_at, t1.unreachable_accum_seconds, t1.last_error_code
 		FROM targets t1
 		WHERE t1.label IN (%s)
 		AND NOT EXISTS (
@@ -2769,7 +2855,13 @@ func (d DatastoreSQLite) LoadTargetsByLabels(targetNames []string) ([]*pkgmodel.
 		var config json.RawMessage
 		var configSchemaStr sql.NullString
 		var discoverable int
-		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaStr, &discoverable); err != nil {
+		var incarnationID, healthState string
+		var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt sql.NullString
+		var unreachableAccumSeconds int64
+		var lastErrorCode sql.NullString
+		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaStr, &discoverable,
+			&incarnationID, &healthState, &lastSeenAt, &observedAt,
+			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode); err != nil {
 			return nil, err
 		}
 
@@ -2787,6 +2879,8 @@ func (d DatastoreSQLite) LoadTargetsByLabels(targetNames []string) ([]*pkgmodel.
 			ConfigSchema: configSchema,
 			Discoverable: discoverable == 1,
 			Version:      version,
+			Health: scanSQLiteTargetHealth(incarnationID, healthState, lastSeenAt, observedAt,
+				firstUnreachableAt, lastSampleAt, unreachableAccumSeconds, lastErrorCode),
 		})
 	}
 
@@ -2801,7 +2895,9 @@ func (d DatastoreSQLite) LoadDiscoverableTargets() ([]*pkgmodel.Target, error) {
 	// Deduplicate by config across all namespaces
 	query := `
 		WITH latest_targets AS (
-			SELECT label, version, namespace, config, config_schema, discoverable
+			SELECT label, version, namespace, config, config_schema, discoverable,
+			       target_incarnation_id, health_state, last_seen_at, observed_at,
+			       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code
 			FROM targets t1
 			WHERE discoverable = 1
 			AND NOT EXISTS (
@@ -2811,7 +2907,9 @@ func (d DatastoreSQLite) LoadDiscoverableTargets() ([]*pkgmodel.Target, error) {
 				AND t2.version > t1.version
 			)
 		)
-		SELECT label, version, namespace, config, config_schema, discoverable
+		SELECT label, version, namespace, config, config_schema, discoverable,
+		       target_incarnation_id, health_state, last_seen_at, observed_at,
+		       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code
 		FROM latest_targets
 		GROUP BY config
 		HAVING version = MAX(version)`
@@ -2829,7 +2927,13 @@ func (d DatastoreSQLite) LoadDiscoverableTargets() ([]*pkgmodel.Target, error) {
 		var config json.RawMessage
 		var configSchemaStr sql.NullString
 		var discoverable int
-		if err := rows.Scan(&label, &version, &ns, &config, &configSchemaStr, &discoverable); err != nil {
+		var incarnationID, healthState string
+		var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt sql.NullString
+		var unreachableAccumSeconds int64
+		var lastErrorCode sql.NullString
+		if err := rows.Scan(&label, &version, &ns, &config, &configSchemaStr, &discoverable,
+			&incarnationID, &healthState, &lastSeenAt, &observedAt,
+			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode); err != nil {
 			return nil, err
 		}
 
@@ -2847,6 +2951,8 @@ func (d DatastoreSQLite) LoadDiscoverableTargets() ([]*pkgmodel.Target, error) {
 			ConfigSchema: configSchema,
 			Discoverable: discoverable == 1,
 			Version:      version,
+			Health: scanSQLiteTargetHealth(incarnationID, healthState, lastSeenAt, observedAt,
+				firstUnreachableAt, lastSampleAt, unreachableAccumSeconds, lastErrorCode),
 		})
 	}
 
@@ -2858,7 +2964,9 @@ func (d DatastoreSQLite) QueryTargets(query *datastore.TargetQuery) ([]*pkgmodel
 	defer span.End()
 
 	queryStr := `
-		SELECT label, version, namespace, config, config_schema, discoverable
+		SELECT label, version, namespace, config, config_schema, discoverable,
+		       target_incarnation_id, health_state, last_seen_at, observed_at,
+		       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code
 		FROM targets t1
 		WHERE NOT EXISTS (
 			SELECT 1
@@ -2889,7 +2997,13 @@ func (d DatastoreSQLite) QueryTargets(query *datastore.TargetQuery) ([]*pkgmodel
 		var config json.RawMessage
 		var configSchemaStr sql.NullString
 		var discoverable int
-		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaStr, &discoverable); err != nil {
+		var incarnationID, healthState string
+		var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt sql.NullString
+		var unreachableAccumSeconds int64
+		var lastErrorCode sql.NullString
+		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaStr, &discoverable,
+			&incarnationID, &healthState, &lastSeenAt, &observedAt,
+			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode); err != nil {
 			return nil, err
 		}
 
@@ -2907,6 +3021,8 @@ func (d DatastoreSQLite) QueryTargets(query *datastore.TargetQuery) ([]*pkgmodel
 			ConfigSchema: configSchema,
 			Discoverable: discoverable == 1,
 			Version:      version,
+			Health: scanSQLiteTargetHealth(incarnationID, healthState, lastSeenAt, observedAt,
+				firstUnreachableAt, lastSampleAt, unreachableAccumSeconds, lastErrorCode),
 		})
 	}
 
@@ -3362,7 +3478,9 @@ func (d DatastoreSQLite) FindTargetsDependingOnMany(ksuids []string) (map[string
 	}
 
 	query := fmt.Sprintf(`
-	SELECT label, version, namespace, config, config_schema, discoverable
+	SELECT label, version, namespace, config, config_schema, discoverable,
+	       target_incarnation_id, health_state, last_seen_at, observed_at,
+	       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code
 	FROM targets t1
 	WHERE (%s)
 	AND NOT EXISTS (
@@ -3387,7 +3505,13 @@ func (d DatastoreSQLite) FindTargetsDependingOnMany(ksuids []string) (map[string
 		var config json.RawMessage
 		var configSchemaStr sql.NullString
 		var discoverable int
-		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaStr, &discoverable); err != nil {
+		var incarnationID, healthState string
+		var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt sql.NullString
+		var unreachableAccumSeconds int64
+		var lastErrorCode sql.NullString
+		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaStr, &discoverable,
+			&incarnationID, &healthState, &lastSeenAt, &observedAt,
+			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode); err != nil {
 			return nil, err
 		}
 
@@ -3405,6 +3529,8 @@ func (d DatastoreSQLite) FindTargetsDependingOnMany(ksuids []string) (map[string
 			ConfigSchema: configSchema,
 			Discoverable: discoverable == 1,
 			Version:      version,
+			Health: scanSQLiteTargetHealth(incarnationID, healthState, lastSeenAt, observedAt,
+				firstUnreachableAt, lastSampleAt, unreachableAccumSeconds, lastErrorCode),
 		}
 
 		// Find which of the input KSUIDs this target depends on
