@@ -291,6 +291,47 @@ func TestMutableChangesForReplace_MovedToComponents(t *testing.T) {
 	assert.Equal(t, "Region", cs.Properties[0].Path)
 }
 
+// Entity-set element changes are identified by a data-resolved key (the unique
+// field of the collection) rather than a positional index, so remove/replace
+// say WHICH element changed.
+func TestExtractChanges_EntitySetKeyResolution(t *testing.T) {
+	old := json.RawMessage(`{"Tags":[{"Key":"Name","Value":"n"},{"Key":"env","Value":"staging"},{"Key":"temporary","Value":"yes"}]}`)
+	cur := json.RawMessage(`{"Tags":[{"Key":"Name","Value":"n"},{"Key":"env","Value":"prod"}]}`)
+
+	t.Run("replace of a field resolves the key from the unchanged field", func(t *testing.T) {
+		patch := json.RawMessage(`[{"op":"replace","path":"/Tags/1/Value","value":"prod"}]`)
+		cs, err := ExtractChanges(patch, cur, old, nil)
+		require.NoError(t, err)
+		require.Len(t, cs.Properties, 1)
+		assert.Equal(t, "Tags[env].Value", cs.Properties[0].Path)
+	})
+
+	t.Run("remove resolves the key from previous state", func(t *testing.T) {
+		patch := json.RawMessage(`[{"op":"remove","path":"/Tags/2"}]`)
+		cs, err := ExtractChanges(patch, cur, old, nil)
+		require.NoError(t, err)
+		require.Len(t, cs.Properties, 1)
+		assert.Equal(t, "Tags[temporary]", cs.Properties[0].Path)
+	})
+
+	t.Run("add keeps the positional index (object shows its own identity)", func(t *testing.T) {
+		patch := json.RawMessage(`[{"op":"add","path":"/Tags/1","value":{"Key":"env","Value":"prod"}}]`)
+		cs, err := ExtractChanges(patch, cur, old, nil)
+		require.NoError(t, err)
+		require.Len(t, cs.Properties, 1)
+		assert.Equal(t, "Tags[1]", cs.Properties[0].Path)
+	})
+}
+
+// StripCardArrayIndices drops positional numeric indices but keeps a resolved
+// semantic key so "Tags[env].Value" survives to the rendered line.
+func TestStripCardArrayIndices_KeepsSemanticKeys(t *testing.T) {
+	assert.Equal(t, "items", StripCardArrayIndices("items[0]"))
+	assert.Equal(t, "matrix", StripCardArrayIndices("matrix[1][2]"))
+	assert.Equal(t, "Tags[env].Value", StripCardArrayIndices("Tags[env].Value"))
+	assert.Equal(t, "Tags[temporary]", StripCardArrayIndices("Tags[temporary]"))
+}
+
 func TestChangeSet_TagChanges(t *testing.T) {
 	patchDoc := json.RawMessage(`[{"op":"add","path":"/Tags/0","value":{"Key":"Env","Value":"prod"}}]`)
 	props := json.RawMessage(`{"Tags":[{"Key":"Env","Value":"prod"}]}`)

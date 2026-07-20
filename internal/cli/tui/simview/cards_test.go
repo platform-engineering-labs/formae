@@ -573,10 +573,10 @@ func TestRenderCard_TagRemove(t *testing.T) {
 	card := strings.Join(lines, "\n")
 	p := plain(card)
 
-	// Must contain remove keyword on the generic Tags path (no map-index).
+	// The removed element is identified by its entity-set key, resolved from
+	// the data (the "Key" field is unique across the collection).
 	assert.Contains(t, p, "remove", "should have remove keyword for tag remove")
-	assert.Contains(t, p, "Tags", "should reference the Tags path")
-	assert.NotContains(t, p, "Tags[temporary]", "should not use map-index syntax")
+	assert.Contains(t, p, "Tags[temporary]", "removed element should be identified by its key")
 }
 
 // TestRenderCard_TagReplace verifies a tag replace (set with old value) renders:
@@ -613,12 +613,11 @@ func TestRenderCard_TagReplace(t *testing.T) {
 	card := strings.Join(lines, "\n")
 	p := plain(card)
 
-	// Must contain set keyword. A tag value-update now renders on the generic
-	// Tags.Value path (no map-index) — see the note on the value-update
-	// tradeoff of dropping the tag special-case.
+	// A tag value-update identifies the element by its resolved key: the "Key"
+	// field ("env") is unique across the collection and isn't the field being
+	// changed, so it's used as the index.
 	assert.Contains(t, p, "set", "should have set keyword for tag replace")
-	assert.Contains(t, p, "Tags.Value", `should show generic Tags.Value path`)
-	assert.NotContains(t, p, "Tags[env]", "should not use map-index syntax")
+	assert.Contains(t, p, "Tags[env].Value", `should identify the element by its key`)
 	// Old and new values both quoted
 	assert.Contains(t, p, `"staging"`, `old tag value should be quoted`)
 	assert.Contains(t, p, `"prod"`, `new tag value should be quoted`)

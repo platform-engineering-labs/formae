@@ -151,7 +151,7 @@ func decodePatchOperations(patchDoc json.RawMessage) ([]patchOperation, error) {
 // extractPropertyChange extracts property information from a patch operation.
 func extractPropertyChange(patch patchOperation, props map[string]any, previousProperties json.RawMessage, refLabels map[string]string) (PropertyChange, error) {
 	change := PropertyChange{
-		Path:      cleanPatchPath(patch.Path),
+		Path:      resolveEntitySetPath(patch.Path, patch.Op, props, previousProperties),
 		Operation: patch.Op,
 	}
 
@@ -288,6 +288,128 @@ func cleanPatchPath(path string) string {
 	}
 
 	return strings.Join(parts, ".")
+}
+
+// resolveEntitySetPath rewrites a positional array index in a change path into
+// the indexed element's entity-set key, so a change to one element of a keyed
+// collection identifies WHICH element — e.g. "Tags[env].Value" instead of a
+// bare "Tags.Value", and "Tags[temporary]" for a removed element. It handles
+// single-level collection paths (/Coll/N or /Coll/N/Field) for remove/replace
+// ops; adds keep their positional index (stripped downstream) because the added
+// object already shows its own identity. Falls back to cleanPatchPath(rawPath)
+// whenever a key can't be resolved from the data.
+func resolveEntitySetPath(rawPath, op string, props map[string]any, previousProperties json.RawMessage) string {
+	clean := cleanPatchPath(rawPath)
+	if op != "remove" && op != "replace" {
+		return clean
+	}
+
+	segs := strings.Split(strings.TrimPrefix(rawPath, "/"), "/")
+	if len(segs) < 2 || len(segs) > 3 {
+		return clean
+	}
+	coll := segs[0]
+	idx, err := strconv.Atoi(segs[1])
+	if err != nil {
+		return clean
+	}
+	changedField := ""
+	if len(segs) == 3 {
+		changedField = segs[2]
+	}
+
+	// Removes reference an element that's gone from the current properties, so
+	// look it up in the previous state; replaces keep the (unchanged) key in
+	// current properties.
+	source := props
+	if op == "remove" {
+		if len(previousProperties) == 0 {
+			return clean
+		}
+		var prev map[string]any
+		if err := json.Unmarshal(previousProperties, &prev); err != nil {
+			return clean
+		}
+		source = prev
+	}
+
+	list, ok := source[coll].([]any)
+	if !ok || idx < 0 || idx >= len(list) {
+		return clean
+	}
+	elem, ok := list[idx].(map[string]any)
+	if !ok {
+		return clean
+	}
+	keyField := pickIndexField(list, changedField)
+	if keyField == "" {
+		return clean
+	}
+	keyVal, ok := elem[keyField]
+	if !ok {
+		return clean
+	}
+
+	display := coll + "[" + fmt.Sprintf("%v", keyVal) + "]"
+	if changedField != "" {
+		display += "." + changedField
+	}
+	return display
+}
+
+// pickIndexField returns the field that best identifies elements of a keyed
+// collection: the alphabetically-first field whose scalar value is unique
+// across all elements, excluding the field currently being changed. When no
+// field is unique it falls back to the first candidate for a stable label, and
+// returns "" when there are no usable candidates.
+func pickIndexField(list []any, exclude string) string {
+	first, ok := list[0].(map[string]any)
+	if !ok {
+		return ""
+	}
+	cands := make([]string, 0, len(first))
+	for k := range first {
+		if k == exclude {
+			continue
+		}
+		cands = append(cands, k)
+	}
+	sort.Strings(cands)
+	for _, f := range cands {
+		if isUniqueScalarField(list, f) {
+			return f
+		}
+	}
+	if len(cands) > 0 {
+		return cands[0]
+	}
+	return ""
+}
+
+// isUniqueScalarField reports whether field has a present, scalar, and unique
+// value across every element of list.
+func isUniqueScalarField(list []any, field string) bool {
+	seen := make(map[string]bool, len(list))
+	for _, e := range list {
+		m, ok := e.(map[string]any)
+		if !ok {
+			return false
+		}
+		v, ok := m[field]
+		if !ok {
+			return false
+		}
+		switch v.(type) {
+		case map[string]any, []any:
+			return false
+		}
+		key := fmt.Sprintf("%v", v)
+		if seen[key] {
+			return false
+		}
+		seen[key] = true
+	}
+	return true
 }
 
 func extractPreviousValue(oldProps json.RawMessage, path string) string {

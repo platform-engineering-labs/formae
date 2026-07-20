@@ -187,11 +187,36 @@ func StripCardArrayIndices(path string) string {
 	}
 	result := parts[0]
 	for i := 1; i < len(parts); i++ {
-		if bracketEnd := strings.Index(parts[i], "]"); bracketEnd != -1 {
-			result += parts[i][bracketEnd+1:]
+		bracketEnd := strings.Index(parts[i], "]")
+		if bracketEnd == -1 {
+			result += "[" + parts[i]
+			continue
+		}
+		inner := parts[i][:bracketEnd]
+		rest := parts[i][bracketEnd+1:]
+		// Strip positional numeric indices ("items[0]" → "items") but keep a
+		// resolved entity-set key ("Tags[env]" → "Tags[env]") — the key
+		// identifies which element of a keyed collection changed.
+		if isAllDigits(inner) {
+			result += rest
+		} else {
+			result += "[" + inner + "]" + rest
 		}
 	}
 	return result
+}
+
+// isAllDigits reports whether s is non-empty and consists only of ASCII digits.
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // TruncateCascadeValue truncates the cascade current value to maxLen runes,
