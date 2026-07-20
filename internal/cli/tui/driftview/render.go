@@ -13,7 +13,13 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
 )
 
-const headerTitle = "formae apply — reconcile rejected"
+// header renders the branded driftview header: "formae apply" (white/orange,
+// consistent with every other screen) plus a distinct alert-colored
+// "reconcile rejected" indicator to flag that this screen needs attention.
+func (m Model) header() string {
+	alert := lipgloss.NewStyle().Foreground(m.th.Palette.Error).Bold(true).Render("reconcile rejected")
+	return components.HeaderBarBranded(m.th, "apply", alert, m.width)
+}
 
 // View implements tea.Model. Every screen renders exactly m.height lines.
 func (m Model) View() string {
@@ -45,7 +51,7 @@ func (m Model) padToHeight(s string) string {
 // viewList renders the main drift list screen.
 func (m Model) viewList() string {
 	p := m.th.Palette
-	header := components.HeaderBar(m.th, headerTitle, "mode: reconcile", m.width)
+	header := m.header()
 
 	var sb strings.Builder
 	sb.WriteString(header)
@@ -56,9 +62,10 @@ func (m Model) viewList() string {
 		sb.WriteString("  " + noticeSt.Render(m.opts.Notice) + "\n")
 	}
 
+	alertSt := lipgloss.NewStyle().Foreground(p.Error)
 	introSt := lipgloss.NewStyle().Foreground(p.TextSecondary)
 	sb.WriteString("\n")
-	sb.WriteString("  " + introSt.Render("Your infrastructure has changed since the last reconcile.") + "\n")
+	sb.WriteString("  " + alertSt.Render("Your infrastructure has changed since the last reconcile.") + "\n")
 	sb.WriteString("  " + introSt.Render("Select resources to extract, or revert all changes.") + "\n")
 	sb.WriteString("\n")
 
@@ -181,25 +188,22 @@ func (m Model) renderRow(r driftRow, isCursor bool) string {
 		return st
 	}
 
-	// Operation word color per class.
+	// Operation word color per class. No gold: deletes read as destructive
+	// (Error), updates use the interactive accent, creates the done role —
+	// consistent with the other screens. Labels stay uniform (TextPrimary).
 	var opColor lipgloss.AdaptiveColor
 	switch r.class {
 	case rowClassCreate:
 		opColor = p.Done
 	case rowClassDelete:
-		opColor = p.Warning
+		opColor = p.Error
 	default:
 		opColor = p.PrimaryAccent
 	}
 
-	labelColor := p.TextPrimary
-	if r.class == rowClassDelete {
-		labelColor = p.Warning
-	}
-
 	frameSt := style(p.TextSecondary)
 	opSt := style(opColor)
-	labelSt := style(labelColor)
+	labelSt := style(p.TextPrimary)
 	typeSt := style(p.TextSubtle)
 
 	checkbox := "[ ]"
@@ -224,7 +228,9 @@ func (m Model) renderRow(r driftRow, isCursor bool) string {
 			labelSt.Render("  "+r.mod.Label) +
 			typeSt.Render(" ("+r.mod.Type+")")
 	default: // delete
-		line = frameSt.Render("    ·   ") +
+		// Leading "·" sits in the same column as the update triangle so the
+		// non-selectable deletes don't read as more indented than updates.
+		line = frameSt.Render("  ·     ") +
 			opSt.Render("delete") +
 			labelSt.Render("  "+r.mod.Label) +
 			typeSt.Render(" ("+r.mod.Type+")")
@@ -326,7 +332,7 @@ func (m Model) renderFooter() string {
 func (m Model) viewFilePrompt() string {
 	p := m.th.Palette
 	s := m.th.Styles
-	header := components.HeaderBar(m.th, headerTitle, "mode: reconcile", m.width)
+	header := m.header()
 
 	textSt := lipgloss.NewStyle().Foreground(p.TextPrimary)
 	labelSt := lipgloss.NewStyle().Foreground(p.TextSubtle)
@@ -389,7 +395,7 @@ func (m Model) viewFilePrompt() string {
 // viewRevertConfirm renders the revert-all confirmation screen.
 func (m Model) viewRevertConfirm() string {
 	p := m.th.Palette
-	header := components.HeaderBar(m.th, headerTitle, "mode: reconcile", m.width)
+	header := m.header()
 
 	textSt := lipgloss.NewStyle().Foreground(p.TextPrimary)
 	warnSt := lipgloss.NewStyle().Foreground(p.Warning)
@@ -474,7 +480,7 @@ func (m Model) opColorForClass(c rowClass) lipgloss.AdaptiveColor {
 	case rowClassCreate:
 		return p.Done
 	case rowClassDelete:
-		return p.Warning
+		return p.Error
 	default:
 		return p.PrimaryAccent
 	}

@@ -1,7 +1,7 @@
-[1;38;2;232;232;232m  formae apply — reconcile rejected                                                mode: reconcile  [0m
+  [1;38;2;232;232;232mformae[0m [1;38;2;255;133;51mapply[0m                                                                  [1;38;2;248;113;113mreconcile rejected[0m  
 [38;2;85;85;102m────────────────────────────────────────────────────────────────────────────────────────────────────[0m
 
-  [38;2;170;170;170mYour infrastructure has changed since the last reconcile.[0m
+  [38;2;248;113;113mYour infrastructure has changed since the last reconcile.[0m
   [38;2;170;170;170mSelect resources to extract, or revert all changes.[0m
 
                                                                                                     
@@ -11,7 +11,7 @@
         [38;2;170;170;170m├[0m [38;2;153;153;153mset[0m  [38;2;153;153;153mValue[0m: [38;2;153;153;153m"/api/v1"[0m → [38;2;232;232;232m"/api/v2"[0m                                                         
         [38;2;170;170;170m└[0m [38;2;153;153;153mset[0m  [38;2;153;153;153mDescription[0m: [38;2;153;153;153m"API endpoint"[0m → [38;2;232;232;232m"API endpoint v2"[0m                                      
 [38;2;170;170;170m    [x] [0m[38;2;232;232;232mcreate[0m[38;2;232;232;232m  monitoring-bucket[0m[38;2;153;153;153m (AWS::S3::Bucket)[0m                                                 
-[38;2;170;170;170m    ·   [0m[38;2;181;181;91mdelete[0m[38;2;181;181;91m  old-cache[0m[38;2;153;153;153m (AWS::ElastiCache::Cluster)[0m                                               
+[38;2;170;170;170m  ·     [0m[38;2;248;113;113mdelete[0m[38;2;232;232;232m  old-cache[0m[38;2;153;153;153m (AWS::ElastiCache::Cluster)[0m                                               
         [38;2;153;153;153mDeleted outside of formae. Remove from your code to align.[0m                                  
                                                                                                     
   [1;38;2;232;232;232mStack: staging[0m [38;2;153;153;153m(1 change)[0m                                                                         

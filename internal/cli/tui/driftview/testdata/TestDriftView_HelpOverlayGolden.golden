@@ -1,7 +1,7 @@
-[1;38;2;232;232;232m  formae apply — reconcile rejected                                                mode: reconcile  [0m
+  [1;38;2;232;232;232mformae[0m [1;38;2;255;133;51mapply[0m                                                                  [1;38;2;248;113;113mreconcile rejected[0m  
 [38;2;85;85;102m────────────────────────────────────────────────────────────────────────────────────────────────────[0m
 
-  [38;2;170;170;170mYour infrastructure has changed since the last reconcile.[0m
+  [38;2;248;113;113mYour infrastructure has changed since the last reconcile.[0m
   [38;2;170;170;170mSelect resources to extract, or revert all changes.[0m
 
                                                                                                     
