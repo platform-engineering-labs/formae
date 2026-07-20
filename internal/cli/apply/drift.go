@@ -66,14 +66,11 @@ func runDriftFlow(a *app.App, th *theme.Theme, opts *ApplyOptions, rejected apim
 
 		switch d := decision.(type) {
 		case driftview.DecisionAbort:
-			msg, renderErr := errfmt.Render(&apimodel.ErrorResponse[apimodel.FormaReconcileRejectedError]{
-				ErrorType: apimodel.ReconcileRejected,
-				Data:      rejected,
-			})
-			if renderErr != nil {
-				return fmt.Errorf("error rendering error message: %v", renderErr)
-			}
-			return fmt.Errorf("%s", msg)
+			// The user already reviewed the drift in the TUI — don't dump the
+			// verbose rejection to the scrollback on the way out. A concise
+			// acknowledgement (matching the simview abort) is enough.
+			fmt.Print(lipgloss.NewStyle().Foreground(th.Palette.TextSubtle).Render("Apply aborted.") + "\n")
+			return nil
 
 		case driftview.DecisionExtract:
 			return handleExtract(a, th, d)

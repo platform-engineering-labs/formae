@@ -188,17 +188,15 @@ func (m Model) renderRow(r driftRow, isCursor bool) string {
 		return st
 	}
 
-	// Operation word color per class. No gold: deletes read as destructive
-	// (Error), updates use the interactive accent, creates the done role —
-	// consistent with the other screens. Labels stay uniform (TextPrimary).
+	// Operation word color per class. Only deletes are colored (Error, as
+	// they're destructive); creates and updates stay white so we're not
+	// coloring routine changes. No gold anywhere.
 	var opColor lipgloss.AdaptiveColor
 	switch r.class {
-	case rowClassCreate:
-		opColor = p.Done
 	case rowClassDelete:
 		opColor = p.Error
 	default:
-		opColor = p.PrimaryAccent
+		opColor = p.TextPrimary
 	}
 
 	frameSt := style(p.TextSecondary)
@@ -473,17 +471,14 @@ func (m Model) selectedRows() []driftRow {
 	return rows
 }
 
-// opColorForClass returns the operation-word color for a row class.
+// opColorForClass returns the operation-word color for a row class. Only
+// deletes are colored (Error); creates and updates stay white.
 func (m Model) opColorForClass(c rowClass) lipgloss.AdaptiveColor {
 	p := m.th.Palette
-	switch c {
-	case rowClassCreate:
-		return p.Done
-	case rowClassDelete:
+	if c == rowClassDelete {
 		return p.Error
-	default:
-		return p.PrimaryAccent
 	}
+	return p.TextPrimary
 }
 
 // revertConsequence describes what a forced re-apply does to one drifted row.

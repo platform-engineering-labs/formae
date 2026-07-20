@@ -247,9 +247,10 @@ func TestRunDriftFlow_Abort(t *testing.T) {
 	}
 	th := theme.New("formae")
 	err := runDriftFlow(a, th, opts, rejected)
-	require.Error(t, err)
-	// The error should mention the reconcile rejection (rendered by renderer).
-	assert.True(t, len(err.Error()) > 0)
+	// Abort no longer dumps the verbose rejection as an error — the user
+	// reviewed the drift in the TUI; a concise "Apply aborted." is printed and
+	// the flow returns cleanly.
+	require.NoError(t, err)
 }
 
 func TestRunDriftFlow_Extract(t *testing.T) {
@@ -450,8 +451,9 @@ func TestRunDriftFlow_RevertChanged(t *testing.T) {
 	}
 	th := theme.New("formae")
 	err := runDriftFlow(a, th, opts, rejected)
-	// After abort on second launch, an error is returned.
-	require.Error(t, err)
+	// Abort returns cleanly now (concise "Apply aborted." printed instead of a
+	// verbose error dump); the point of this test is the relaunch behavior.
+	require.NoError(t, err)
 
 	assert.Equal(t, 2, driftViewCallCount, "driftview must be relaunched on changed drift")
 	// First call: no notice; second call: non-empty notice.
