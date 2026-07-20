@@ -171,17 +171,30 @@ func logoBytes(dark bool) []byte {
 //	formae      (white)
 //	v{version}  (brand orange)
 //
-// Fixed colors are used (no AdaptiveColor) to avoid OSC terminal queries that
-// leak as literal text in multiplexed sessions (tmux/screen/ssh).
+// The wordmark color is resolved via the package's own leak-safe
+// HasDarkBackground (no AdaptiveColor, so no per-render OSC query that would
+// leak as literal text under tmux/screen/ssh) — bright on dark, near-black on
+// light so "formae" stays legible on light terminals.
 //
 // The two lines are joined with JoinVertical so that a MarginLeft applied to
 // the outer block shifts BOTH lines equally — string concatenation with "\n"
 // only pads the first line when used as a JoinHorizontal argument.
 func wordmarkStyle(version string) string {
-	nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF"))
+	nameStyle := lipgloss.NewStyle().Foreground(brandTextColor(HasDarkBackground()))
 	versionStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(brandOrange))
 	block := lipgloss.JoinVertical(lipgloss.Left, nameStyle.Render("formae"), versionStyle.Render("v"+version))
 	return lipgloss.NewStyle().MarginLeft(2).Render(block)
+}
+
+// brandTextColor returns the "formae" wordmark / logo-letter color for the
+// detected background: bright (#E8E8E8) on dark, near-black (#1A1A1A) on light,
+// mirroring the theme's TextPrimary. Takes an explicit dark flag so callers can
+// pass the value they already resolved without re-querying.
+func brandTextColor(dark bool) lipgloss.Color {
+	if dark {
+		return lipgloss.Color("#E8E8E8")
+	}
+	return lipgloss.Color("#1A1A1A")
 }
 
 // wordmarkLines returns the two raw ANSI-styled lines used for graphics
@@ -189,7 +202,7 @@ func wordmarkStyle(version string) string {
 // ("v{version}" in brand orange). These are plain strings with ANSI color
 // codes, suitable for direct terminal output via CHA positioning.
 func wordmarkLines(version string) (nameLine, verLine string) {
-	nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF"))
+	nameStyle := lipgloss.NewStyle().Foreground(brandTextColor(HasDarkBackground()))
 	versionStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(brandOrange))
 	return nameStyle.Render("formae"), versionStyle.Render("v" + version)
 }

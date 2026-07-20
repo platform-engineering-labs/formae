@@ -314,12 +314,12 @@ func runDestroyInteractive(a *app.App, opts *DestroyOptions) error {
 func runDestroyLegacy(app *app.App, opts *DestroyOptions) error {
 	{
 		th := themeFor(app)
-		goldStyle := lipgloss.NewStyle().Foreground(th.Palette.Warning)
+		headerStyle := lipgloss.NewStyle().Foreground(th.Palette.Error)
 		doneStyle := lipgloss.NewStyle().Foreground(th.Palette.Done)
 		if opts.FormaFile != "" {
-			fmt.Print(goldStyle.Render("Destroying resources defined by forma:\n ") + doneStyle.Render("File: ") + fmt.Sprintf("%s\n\n", opts.FormaFile))
+			fmt.Print(headerStyle.Render("Destroying resources defined by forma:\n ") + doneStyle.Render("File: ") + fmt.Sprintf("%s\n\n", opts.FormaFile))
 		} else {
-			fmt.Print(goldStyle.Render("Destroying resources defined by query:\n ") + doneStyle.Render("Query: ") + fmt.Sprintf("%s\n\n", opts.Query))
+			fmt.Print(headerStyle.Render("Destroying resources defined by query:\n ") + doneStyle.Render("Query: ") + fmt.Sprintf("%s\n\n", opts.Query))
 		}
 	}
 
@@ -334,7 +334,7 @@ func runDestroyLegacy(app *app.App, opts *DestroyOptions) error {
 
 	if !res.Simulation.ChangesRequired {
 		th := themeFor(app)
-		goldStyle := lipgloss.NewStyle().Foreground(th.Palette.Warning)
+		doneStyle := lipgloss.NewStyle().Foreground(th.Palette.Done)
 		subtleStyle := lipgloss.NewStyle().Foreground(th.Palette.TextSubtle)
 		var msg string
 		if opts.FormaFile != "" {
@@ -344,7 +344,7 @@ func runDestroyLegacy(app *app.App, opts *DestroyOptions) error {
 		}
 
 		fmt.Printf("%s\n\n%s\n\n",
-			goldStyle.Render("No resources to destroy:"),
+			doneStyle.Render("No resources to destroy:"),
 			msg)
 		return nil
 	}

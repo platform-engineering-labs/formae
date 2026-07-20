@@ -114,10 +114,11 @@ func TestRender_FullBrailleRows(t *testing.T) {
 }
 
 // TestRender_FullBrailleWordmark asserts that SizeFull with CapBraille renders
-// the FULL wordmark as two-color braille — white letters (#FFFFFF →
-// 38;2;255;255;255) and brand-orange propeller (#FF8201 → 38;2;255;130;1) — with
-// the version "v1.2.3" in light grey (#AAAAAA → 38;2;170;170;170) joined to its
-// right. The "formae" letters are braille runes, NOT literal text.
+// the FULL wordmark as two-color braille — brand-text letters (bright on dark,
+// near-black on light, so they stay legible) and a brand-orange propeller
+// (#FF8201 → 38;2;255;130;1) — with the version "v1.2.3" in light grey
+// (#AAAAAA → 38;2;170;170;170) joined to its right. The "formae" letters are
+// braille runes, NOT literal text.
 func TestRender_FullBrailleWordmark(t *testing.T) {
 	t.Parallel()
 	art, _ := Render(CapBraille, SizeFull, "1.2.3")
@@ -131,10 +132,14 @@ func TestRender_FullBrailleWordmark(t *testing.T) {
 		t.Errorf("SizeFull CapBraille art missing version 'v1.2.3'; got %q", art[:min(len(art), 200)])
 	}
 
-	// Two-color braille: white for the letters, brand orange for the propeller.
-	const whiteANSI = "38;2;255;255;255"
-	if !strings.Contains(art, whiteANSI) {
-		t.Errorf("expected white ANSI color (%s) for the letters; not found in art", whiteANSI)
+	// Two-color braille: brand-text for the letters (background-aware, no OSC
+	// query), brand orange for the propeller.
+	letterANSI := "38;2;232;232;232" // #E8E8E8 on dark
+	if !HasDarkBackground() {
+		letterANSI = "38;2;26;26;26" // #1A1A1A on light
+	}
+	if !strings.Contains(art, letterANSI) {
+		t.Errorf("expected brand-text ANSI color (%s) for the letters; not found in art", letterANSI)
 	}
 	const orangeANSI = "38;2;255;130;1"
 	if !strings.Contains(art, orangeANSI) {

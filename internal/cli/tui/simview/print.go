@@ -25,21 +25,10 @@ func RenderSimulationPlain(th *theme.Theme, sim *apimodel.Simulation, width int)
 
 	// Summary counts line — same op ordering and colors as renderSummaryCounts.
 	counts := opCounts(groups)
-	opColor := func(o opKind) lipgloss.AdaptiveColor {
-		switch o {
-		case opCreate:
-			return p.Done
-		case opUpdate:
-			return p.PrimaryAccent
-		case opDelete:
-			return p.Warning
-		case opReplace:
-			return p.SecondaryAccent
-		case opDetach:
-			return p.TextSecondary
-		case opKeep:
-			return p.TextSubtle
-		}
+	// Operations are not color-coded by type (consistent with the TUI's
+	// renderSummaryCounts and the rest of the CLI); the symbol and word
+	// distinguish them.
+	opColor := func(_ opKind) lipgloss.AdaptiveColor {
 		return p.TextPrimary
 	}
 	ordered := []opKind{opCreate, opUpdate, opDelete, opReplace, opDetach, opKeep}

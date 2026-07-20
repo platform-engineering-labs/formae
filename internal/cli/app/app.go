@@ -126,13 +126,11 @@ func (a *App) LoadConfig(path string, configPathPrefix string) error {
 				// As soon as we start supporting multiple configuration formats we need to move the
 				// helpful links to the plugin.
 				if strings.ToLower(fileExtension) == ".pkl" {
-					th := theme.New("formae")
-					goldStyle := lipgloss.NewStyle().Foreground(th.Palette.Warning)
 					return fmt.Errorf("%w\n%s %s\n%s %s",
 						err,
-						goldStyle.Render("Pkl documentation:"),
+						docLabelStyle().Render("Pkl documentation:"),
 						"https://pkl-lang.org/main/current/language-reference/index.html",
-						goldStyle.Render("Pkl primer:"),
+						docLabelStyle().Render("Pkl primer:"),
 						"https://pkl.platform.engineering",
 					)
 				}
@@ -156,6 +154,14 @@ func (a *App) LoadConfig(path string, configPathPrefix string) error {
 	}
 
 	return nil
+}
+
+// docLabelStyle is the shared style for doc-link / callout labels (e.g.
+// "Getting started:", "Pkl documentation:", "Configuration documentation:") —
+// brand orange (SecondaryAccent), consistent with the banner "Docs:" and the
+// cmd help. Distinct from Warning (gold), which is reserved for genuine cautions.
+func docLabelStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(theme.New("formae").Palette.SecondaryAccent)
 }
 
 // PrintBanner prints the formae banner followed by any config warnings
@@ -214,13 +220,11 @@ func (a *App) Apply(path string, props map[string]string, mode pkgmodel.FormaApp
 	}
 	forma, err := schemaPlugin.Evaluate(path, pkgmodel.CommandApply, mode, props)
 	if err != nil {
-		th := theme.New("formae")
-		goldStyle := lipgloss.NewStyle().Foreground(th.Palette.Warning)
 		return nil, nil, fmt.Errorf("%w\n%s %s\n%s %s",
 			err,
-			goldStyle.Render("Pkl documentation:"),
+			docLabelStyle().Render("Pkl documentation:"),
 			"https://pkl-lang.org/main/current/language-reference/index.html",
-			goldStyle.Render("Pkl primer:"),
+			docLabelStyle().Render("Pkl primer:"),
 			"https://pkl.platform.engineering",
 		)
 	}
@@ -261,13 +265,11 @@ func (a *App) Destroy(path string, query string, props map[string]string, simula
 
 		forma, err := schemaPlugin.Evaluate(path, pkgmodel.CommandDestroy, pkgmodel.FormaApplyModeReconcile, props)
 		if err != nil {
-			th := theme.New("formae")
-			goldStyle := lipgloss.NewStyle().Foreground(th.Palette.Warning)
 			return nil, nil, fmt.Errorf("%w\n%s %s\n%s %s",
 				err,
-				goldStyle.Render("Pkl documentation:"),
+				docLabelStyle().Render("Pkl documentation:"),
 				"https://pkl-lang.org/main/current/language-reference/index.html",
-				goldStyle.Render("Pkl primer:"),
+				docLabelStyle().Render("Pkl primer:"),
 				"https://pkl.platform.engineering",
 			)
 		}
@@ -518,9 +520,7 @@ func (a *App) Stats() (*apimodel.Stats, []string, error) {
 		return nil, nil, err
 	} else {
 		if err == syscall.ECONNREFUSED {
-			th := theme.New("formae")
-			goldStyle := lipgloss.NewStyle().Foreground(th.Palette.Warning)
-			return nil, nil, fmt.Errorf("agent is not running; please start the agent and try again\n\n%s %s", goldStyle.Render("Getting started:"), banner.DocRoot)
+			return nil, nil, fmt.Errorf("agent is not running; please start the agent and try again\n\n%s %s", docLabelStyle().Render("Getting started:"), banner.DocRoot)
 
 		} else if err != nil {
 			return nil, nil, fmt.Errorf("error fetching stats from agent: %v", err)
@@ -537,7 +537,7 @@ func (a *App) runBeforeCommand(client *api.Client, transmitStats bool) (bool, *a
 		goldStyle := lipgloss.NewStyle().Foreground(th.Palette.Warning)
 		errStyle := lipgloss.NewStyle().Foreground(th.Palette.Error)
 		if err == syscall.ECONNREFUSED {
-			return false, nil, nil, fmt.Errorf("agent is not running; please start the agent and try again\n\n%s %s", goldStyle.Render("Getting started:"), banner.DocRoot)
+			return false, nil, nil, fmt.Errorf("agent is not running; please start the agent and try again\n\n%s %s", docLabelStyle().Render("Getting started:"), banner.DocRoot)
 		}
 		if errors.Is(err, api.AuthenticationError{}) {
 			return false, nil, nil, fmt.Errorf("%s\n\n%s",
@@ -548,9 +548,7 @@ func (a *App) runBeforeCommand(client *api.Client, transmitStats bool) (bool, *a
 	}
 
 	if stats.Version != formae.Version {
-		th := theme.New("formae")
-		goldStyle := lipgloss.NewStyle().Foreground(th.Palette.Warning)
-		return false, nil, nil, fmt.Errorf("incompatible agent version: expected %s, got %s\n\n%s %s", formae.Version, stats.Version, goldStyle.Render("Configuration documentation:"), banner.DocRoot)
+		return false, nil, nil, fmt.Errorf("incompatible agent version: expected %s, got %s\n\n%s %s", formae.Version, stats.Version, docLabelStyle().Render("Configuration documentation:"), banner.DocRoot)
 	}
 
 	if transmitStats && !a.Config.Cli.DisableUsageReporting {
@@ -659,13 +657,11 @@ func (a *App) Evaluate(path string, props map[string]string, mode pkgmodel.Forma
 
 	forma, err := schemaPlugin.Evaluate(path, pkgmodel.CommandEval, mode, props)
 	if err != nil {
-		th := theme.New("formae")
-		goldStyle := lipgloss.NewStyle().Foreground(th.Palette.Warning)
 		return nil, fmt.Errorf("%w\n%s %s\n%s %s",
 			err,
-			goldStyle.Render("Pkl documentation:"),
+			docLabelStyle().Render("Pkl documentation:"),
 			"https://pkl-lang.org/main/current/language-reference/index.html",
-			goldStyle.Render("Pkl primer:"),
+			docLabelStyle().Render("Pkl primer:"),
 			"https://pkl.platform.engineering",
 		)
 	}

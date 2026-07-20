@@ -39,7 +39,7 @@ func renderCard(th *theme.Theme, r simRow, width int) []string {
 	valueSt := lipgloss.NewStyle().Foreground(p.TextSecondary)
 	treeSt := lipgloss.NewStyle().Foreground(p.TextSecondary)
 	doneSt := lipgloss.NewStyle().Foreground(p.Done)
-	warnSt := lipgloss.NewStyle().Foreground(p.Warning)
+	errSt := lipgloss.NewStyle().Foreground(p.Error)
 	subtleSt := lipgloss.NewStyle().Foreground(p.TextSubtle)
 
 	kv := func(k, v string) string {
@@ -60,7 +60,7 @@ func renderCard(th *theme.Theme, r simRow, width int) []string {
 	}
 
 	// --- Collect change lines ---
-	changeLines := collectChangeLines(th, r, doneSt, warnSt, subtleSt)
+	changeLines := collectChangeLines(th, r, doneSt, errSt, subtleSt)
 
 	if len(changeLines) > 0 {
 		bodyLines = append(bodyLines, "")
@@ -135,16 +135,18 @@ func renderCard(th *theme.Theme, r simRow, width int) []string {
 // Order: (1) management, (2) rename, (3) property changes.
 // For replace cards: immutable lines first (from delRes.CreateOnlyPatch), then
 // mutable lines (from MutableChangesForReplace).
-func collectChangeLines(th *theme.Theme, r simRow, doneSt, warnSt, subtleSt lipgloss.Style) []string {
+func collectChangeLines(th *theme.Theme, r simRow, doneSt, errSt, subtleSt lipgloss.Style) []string {
 	var lines []string
 
-	// (1) Management line
+	// (1) Management line — adopting an unmanaged resource is a benign action,
+	// so use the brand accent, not the destructive Error color.
 	if r.res != nil && r.res.OldStackName == "$unmanaged" {
+		adoptSt := lipgloss.NewStyle().Foreground(th.Palette.SecondaryAccent)
 		stackName := r.res.StackName
 		if stackName == "" && r.stack != "" {
 			stackName = r.stack
 		}
-		lines = append(lines, warnSt.Render("put resource under management")+" "+
+		lines = append(lines, adoptSt.Render("put resource under management")+" "+
 			subtleSt.Render("(unmanaged → "+stackName+")"))
 	}
 
@@ -158,13 +160,13 @@ func collectChangeLines(th *theme.Theme, r simRow, doneSt, warnSt, subtleSt lipg
 
 	// (3) Property changes
 	if r.res != nil {
-		propLines := buildPropertyChangeLines(th, r, doneSt, warnSt, subtleSt)
+		propLines := buildPropertyChangeLines(th, r, doneSt, errSt, subtleSt)
 		lines = append(lines, propLines...)
 	}
 
 	// Policy changes (if it's a policy row with config data)
 	if r.policy != nil && r.res == nil {
-		policyLines := buildPolicyChangeLines(th, r, doneSt, warnSt, subtleSt)
+		policyLines := buildPolicyChangeLines(th, r, doneSt, errSt, subtleSt)
 		lines = append(lines, policyLines...)
 	}
 
@@ -177,7 +179,7 @@ func collectChangeLines(th *theme.Theme, r simRow, doneSt, warnSt, subtleSt lipg
 //
 // For replace cards: immutable property lines first (Warning), then mutable set lines.
 // For all others: all changes from PatchDocument, tags preceding properties.
-func buildPropertyChangeLines(_ *theme.Theme, r simRow, doneSt, warnSt, subtleSt lipgloss.Style) []string {
+func buildPropertyChangeLines(_ *theme.Theme, r simRow, doneSt, errSt, subtleSt lipgloss.Style) []string {
 	if r.res == nil {
 		return nil
 	}
@@ -218,7 +220,7 @@ func buildPropertyChangeLines(_ *theme.Theme, r simRow, doneSt, warnSt, subtleSt
 				if ch.NoOp {
 					continue
 				}
-				lines = append(lines, components.FormatPropertyChange(ch, "immutable", doneSt, warnSt, subtleSt))
+				lines = append(lines, components.FormatPropertyChange(ch, "immutable", doneSt, errSt, subtleSt))
 			}
 		}
 
@@ -229,7 +231,7 @@ func buildPropertyChangeLines(_ *theme.Theme, r simRow, doneSt, warnSt, subtleSt
 				if ch.NoOp {
 					continue
 				}
-				lines = append(lines, components.FormatPropertyChange(ch, "set", doneSt, warnSt, subtleSt))
+				lines = append(lines, components.FormatPropertyChange(ch, "set", doneSt, errSt, subtleSt))
 			}
 		}
 	} else {
@@ -240,7 +242,7 @@ func buildPropertyChangeLines(_ *theme.Theme, r simRow, doneSt, warnSt, subtleSt
 				if ch.NoOp {
 					continue
 				}
-				lines = append(lines, components.FormatPropertyChange(ch, "", doneSt, warnSt, subtleSt))
+				lines = append(lines, components.FormatPropertyChange(ch, "", doneSt, errSt, subtleSt))
 			}
 		}
 	}
@@ -251,7 +253,7 @@ func buildPropertyChangeLines(_ *theme.Theme, r simRow, doneSt, warnSt, subtleSt
 // buildPolicyChangeLines renders a minimal policy config diff for policy rows.
 // If PolicyConfig/OldPolicyConfig are present, show key-level differences.
 // Otherwise, render nothing — the card already shows Operation/Type/Stack.
-func buildPolicyChangeLines(_ *theme.Theme, r simRow, doneSt, warnSt, subtleSt lipgloss.Style) []string {
+func buildPolicyChangeLines(_ *theme.Theme, r simRow, doneSt, errSt, subtleSt lipgloss.Style) []string {
 	if r.policy == nil {
 		return nil
 	}
@@ -301,8 +303,8 @@ func buildPolicyChangeLines(_ *theme.Theme, r simRow, doneSt, warnSt, subtleSt l
 			kw := doneSt.Render("add")
 			lines = append(lines, kw+"  "+subtleSt.Render(k)+": "+doneSt.Render(components.QuoteCardValue(string(cv))))
 		case ook:
-			kw := warnSt.Render("remove")
-			lines = append(lines, kw+"  "+warnSt.Render(k))
+			kw := errSt.Render("remove")
+			lines = append(lines, kw+"  "+errSt.Render(k))
 		}
 	}
 	return lines

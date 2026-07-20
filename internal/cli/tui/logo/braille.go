@@ -119,7 +119,7 @@ func renderFullLogoBraille(dark bool, widthChars int) string {
 	if cropped := cropToOpaqueBounds(img); cropped != nil {
 		img = cropped
 	}
-	return encodeFullBrailleArt(img, widthChars)
+	return encodeFullBrailleArt(img, widthChars, dark)
 }
 
 // cropToOpaqueBounds returns img cropped to the bounding box of its opaque
@@ -165,8 +165,9 @@ func cropToOpaqueBounds(img image.Image) image.Image {
 }
 
 // encodeFullBrailleArt downscales img to widthChars braille columns and returns
-// a two-color braille string (white letters, orange propeller).
-func encodeFullBrailleArt(img image.Image, widthChars int) string {
+// a two-color braille string: brand-text letters (legible on the detected
+// background) and an orange propeller.
+func encodeFullBrailleArt(img image.Image, widthChars int, dark bool) string {
 	bounds := img.Bounds()
 	srcW := bounds.Dx()
 	srcH := bounds.Dy()
@@ -182,7 +183,7 @@ func encodeFullBrailleArt(img image.Image, widthChars int) string {
 	resized := image.NewRGBA(image.Rect(0, 0, dotW, dotH))
 	draw.BiLinear.Scale(resized, resized.Bounds(), img, bounds, draw.Over, nil)
 
-	white := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF"))
+	letter := lipgloss.NewStyle().Foreground(brandTextColor(dark))
 	orange := lipgloss.NewStyle().Foreground(lipgloss.Color(brandOrange))
 
 	rows := make([]string, 0, heightChars)
@@ -196,7 +197,7 @@ func encodeFullBrailleArt(img image.Image, widthChars int) string {
 			case isOrange:
 				row.WriteString(orange.Render(string(ch)))
 			default:
-				row.WriteString(white.Render(string(ch)))
+				row.WriteString(letter.Render(string(ch)))
 			}
 		}
 		rows = append(rows, row.String())

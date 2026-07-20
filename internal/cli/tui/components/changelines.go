@@ -42,7 +42,7 @@ func RenderChangeLinesFromPatch(th *theme.Theme, patchDoc, properties, oldProper
 
 	p := th.Palette
 	doneSt := lipgloss.NewStyle().Foreground(p.Done)
-	warnSt := lipgloss.NewStyle().Foreground(p.Warning)
+	errSt := lipgloss.NewStyle().Foreground(p.Error)
 	subtleSt := lipgloss.NewStyle().Foreground(p.TextSubtle)
 
 	var lines []string
@@ -50,7 +50,7 @@ func RenderChangeLinesFromPatch(th *theme.Theme, patchDoc, properties, oldProper
 		if ch.NoOp {
 			continue
 		}
-		lines = append(lines, FormatPropertyChange(ch, "", doneSt, warnSt, subtleSt))
+		lines = append(lines, FormatPropertyChange(ch, "", doneSt, errSt, subtleSt))
 	}
 	return lines, nil
 }
@@ -58,7 +58,7 @@ func RenderChangeLinesFromPatch(th *theme.Theme, patchDoc, properties, oldProper
 // FormatPropertyChange formats a single PropertyChange into a card line.
 // verb overrides the keyword ("immutable" for replace causes). If verb is "",
 // the keyword is derived from the operation (add/set/remove).
-func FormatPropertyChange(ch PropertyChange, verb string, doneSt, warnSt, subtleSt lipgloss.Style) string {
+func FormatPropertyChange(ch PropertyChange, verb string, doneSt, errSt, subtleSt lipgloss.Style) string {
 	path := StripCardArrayIndices(ch.Path)
 
 	// Cascade-resolvable: "set  Path → new <label> (current: "value")"
@@ -67,7 +67,7 @@ func FormatPropertyChange(ch PropertyChange, verb string, doneSt, warnSt, subtle
 		if verb != "" {
 			keyword = verb
 		}
-		kw := warnSt.Render(keyword)
+		kw := errSt.Render(keyword)
 		if keyword == "set" {
 			kw = subtleSt.Render(keyword)
 		}
@@ -117,20 +117,20 @@ func FormatPropertyChange(ch PropertyChange, verb string, doneSt, warnSt, subtle
 		return kw + "  " + pathStr + ": " + doneSt.Render(val)
 
 	case "remove":
-		kw := warnSt.Render("remove")
-		pathStr := warnSt.Render(path)
+		kw := errSt.Render("remove")
+		pathStr := errSt.Render(path)
 		return kw + "  " + pathStr
 
 	case "immutable":
-		kw := warnSt.Render("immutable")
-		pathStr := warnSt.Render(path)
+		kw := errSt.Render("immutable")
+		pathStr := errSt.Render(path)
 		if ch.HasOld {
 			oldVal := QuoteCardValue(ch.OldValue)
 			newVal := QuoteCardValue(ch.Value)
-			return kw + "  " + pathStr + ": " + warnSt.Render(oldVal) + " → " + warnSt.Render(newVal)
+			return kw + "  " + pathStr + ": " + errSt.Render(oldVal) + " → " + errSt.Render(newVal)
 		}
 		val := QuoteCardValue(ch.Value)
-		return kw + "  " + pathStr + ": " + warnSt.Render(val)
+		return kw + "  " + pathStr + ": " + errSt.Render(val)
 
 	default:
 		return subtleSt.Render(keyword) + "  " + subtleSt.Render(path)

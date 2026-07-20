@@ -307,7 +307,7 @@ func runApplyLegacy(a *app.App, opts *ApplyOptions) error {
 
 	if !res.Simulation.ChangesRequired {
 		fmt.Printf("%s\n\n%s\n\n",
-			lipgloss.NewStyle().Foreground(themeFor(a).Palette.Warning).Render("No changes needed:"),
+			lipgloss.NewStyle().Foreground(themeFor(a).Palette.Done).Render("No changes needed:"),
 			lipgloss.NewStyle().Foreground(themeFor(a).Palette.TextSubtle).Render("The specified forma resources are up to date."))
 		return nil
 	}

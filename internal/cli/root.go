@@ -197,7 +197,7 @@ func init() {
 
 			if _, ok := flag.Annotations["cobra_annotation_bash_completion_one_required_flag"]; ok {
 				th := theme.New("formae")
-				s += lipgloss.NewStyle().Foreground(th.Palette.Warning).Render(" [required]")
+				s += lipgloss.NewStyle().Foreground(th.Palette.TextSubtle).Render(" [required]")
 			} else if flag.DefValue != "" {
 				th := theme.New("formae")
 				s += lipgloss.NewStyle().Foreground(th.Palette.TextSubtle).Render(fmt.Sprintf(" [default: %q]", flag.DefValue))

@@ -130,8 +130,8 @@ func analyzeCommands(cmd *apimodel.Command) (targetCreates, targetUpdates, stack
 }
 
 // operationSummary builds the colored "This operation will …" sentence.
-// Colors use theme roles: Error for destructive ops, Done for creates,
-// Warning for updates. Never uses green directly.
+// Colors use theme roles: Error for destructive ops (delete/replace), Done for
+// creates, and TextPrimary for updates (no gold; routine updates aren't tinted).
 func operationSummary(targetCreates, targetUpdates, stackCreates, stackUpdates, policyCreates, policyUpdates, resourceCreates, resourceUpdates, resourceDeletes, resourceReplaces int) string {
 	if targetCreates == 0 && targetUpdates == 0 && stackCreates == 0 && stackUpdates == 0 && policyCreates == 0 && policyUpdates == 0 && resourceCreates == 0 && resourceUpdates == 0 && resourceDeletes == 0 && resourceReplaces == 0 {
 		return ""
@@ -140,7 +140,7 @@ func operationSummary(targetCreates, targetUpdates, stackCreates, stackUpdates, 
 	th := theme.New("formae")
 	errSt := lipgloss.NewStyle().Foreground(th.Palette.Error)
 	doneSt := lipgloss.NewStyle().Foreground(th.Palette.Done)
-	warnSt := lipgloss.NewStyle().Foreground(th.Palette.Warning)
+	updateSt := lipgloss.NewStyle().Foreground(th.Palette.TextPrimary)
 
 	var parts []string
 
@@ -168,16 +168,16 @@ func operationSummary(targetCreates, targetUpdates, stackCreates, stackUpdates, 
 
 	// Updates (stacks, policies, targets, resources)
 	if stackUpdates > 0 {
-		parts = append(parts, warnSt.Render(fmt.Sprintf("update %d stack(s)", stackUpdates)))
+		parts = append(parts, updateSt.Render(fmt.Sprintf("update %d stack(s)", stackUpdates)))
 	}
 	if policyUpdates > 0 {
-		parts = append(parts, warnSt.Render(fmt.Sprintf("update %d policy(ies)", policyUpdates)))
+		parts = append(parts, updateSt.Render(fmt.Sprintf("update %d policy(ies)", policyUpdates)))
 	}
 	if targetUpdates > 0 {
-		parts = append(parts, warnSt.Render(fmt.Sprintf("update %d target(s)", targetUpdates)))
+		parts = append(parts, updateSt.Render(fmt.Sprintf("update %d target(s)", targetUpdates)))
 	}
 	if resourceUpdates > 0 {
-		parts = append(parts, warnSt.Render(fmt.Sprintf("update %d resource(s)", resourceUpdates)))
+		parts = append(parts, updateSt.Render(fmt.Sprintf("update %d resource(s)", resourceUpdates)))
 	}
 
 	var joinedParts string
