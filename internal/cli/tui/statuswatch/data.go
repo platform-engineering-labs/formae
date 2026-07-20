@@ -50,17 +50,28 @@ func isTerminalCommand(state string) bool {
 
 func commandCounts(c apimodel.Command) map[components.State]int {
 	counts := make(map[components.State]int)
+	add := func(raw string) {
+		st := mapUpdateState(raw)
+		// For the progress bar, a user-canceled resource groups with failures
+		// (red ▒) instead of the bright done/skipped color, so a canceled command
+		// reads as visibly interrupted rather than a clean 100% success. The
+		// per-resource glyph still maps state directly, keeping the ⊘ canceled mark.
+		if st == components.StateSkipped {
+			st = components.StateFailed
+		}
+		counts[st]++
+	}
 	for _, u := range c.TargetUpdates {
-		counts[mapUpdateState(u.State)]++
+		add(u.State)
 	}
 	for _, u := range c.StackUpdates {
-		counts[mapUpdateState(u.State)]++
+		add(u.State)
 	}
 	for _, u := range c.PolicyUpdates {
-		counts[mapUpdateState(u.State)]++
+		add(u.State)
 	}
 	for _, u := range c.ResourceUpdates {
-		counts[mapUpdateState(u.State)]++
+		add(u.State)
 	}
 	return counts
 }

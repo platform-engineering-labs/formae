@@ -39,15 +39,17 @@ func TestCommandCounts_SpansAllUpdateKinds(t *testing.T) {
 	}
 	counts := commandCounts(c)
 	assert.Equal(t, 2, counts[components.StateDone])
-	assert.Equal(t, 1, counts[components.StateFailed])
+	// Canceled groups with Failed in the bar counts (1 Failed + 1 Canceled),
+	// so the progress bar reads a canceled command as interrupted, not done.
+	assert.Equal(t, 2, counts[components.StateFailed])
 	assert.Equal(t, 1, counts[components.StateInProgress])
 	assert.Equal(t, 1, counts[components.StatePending])
-	assert.Equal(t, 1, counts[components.StateSkipped])
+	assert.Equal(t, 0, counts[components.StateSkipped])
 
 	done, total := doneOf(counts)
-	assert.Equal(t, 3, done) // done + skipped
+	assert.Equal(t, 2, done) // only genuine Done (canceled no longer counts as done)
 	assert.Equal(t, 6, total)
-	assert.InDelta(t, 0.5, progressFraction(counts), 0.001)
+	assert.InDelta(t, 0.3333, progressFraction(counts), 0.001)
 }
 
 func TestCommandHealth(t *testing.T) {
