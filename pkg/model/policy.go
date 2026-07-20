@@ -20,31 +20,33 @@ type Policy interface {
 
 // TTLPolicy destroys a stack after the specified duration
 type TTLPolicy struct {
-	Type         string `json:"Type"`                   // "ttl"
+	Type         string `json:"Type"` // "ttl"
 	Label        string `json:"Label,omitempty"`
 	TTLSeconds   int64  `json:"TTLSeconds"`
-	OnDependents string `json:"OnDependents"`          // "abort" or "cascade"
-	StackID      string `json:"-"`                     // Set during processing, not from PKL
+	OnDependents string `json:"OnDependents"` // "abort" or "cascade"
+	StackID      string `json:"-"`            // Set during processing, not from PKL
 }
 
-func (p *TTLPolicy) GetLabel() string    { return p.Label }
-func (p *TTLPolicy) GetType() string     { return "ttl" }
-func (p *TTLPolicy) GetStackID() string  { return p.StackID }
-func (p *TTLPolicy) SetStackID(id string) { p.StackID = id }
+func (p *TTLPolicy) GetLabel() string      { return p.Label }
+func (p *TTLPolicy) GetType() string       { return "ttl" }
+func (p *TTLPolicy) GetStackID() string    { return p.StackID }
+func (p *TTLPolicy) SetStackID(id string)  { p.StackID = id }
+func (p *TTLPolicy) SetLabel(label string) { p.Label = label }
 
 // AutoReconcilePolicy periodically reconciles a stack to its declared state
 type AutoReconcilePolicy struct {
-	Type            string    `json:"Type"`                        // "auto-reconcile"
+	Type            string    `json:"Type"` // "auto-reconcile"
 	Label           string    `json:"Label,omitempty"`
 	IntervalSeconds int64     `json:"IntervalSeconds"`
-	LastReconcileAt time.Time `json:"LastReconcileAt,omitzero"`    // Populated at query time, not from PKL
-	StackID         string    `json:"-"`                           // Set during processing, not from PKL
+	LastReconcileAt time.Time `json:"LastReconcileAt,omitzero"` // Populated at query time, not from PKL
+	StackID         string    `json:"-"`                        // Set during processing, not from PKL
 }
 
-func (p *AutoReconcilePolicy) GetLabel() string     { return p.Label }
-func (p *AutoReconcilePolicy) GetType() string      { return "auto-reconcile" }
-func (p *AutoReconcilePolicy) GetStackID() string   { return p.StackID }
-func (p *AutoReconcilePolicy) SetStackID(id string) { p.StackID = id }
+func (p *AutoReconcilePolicy) GetLabel() string      { return p.Label }
+func (p *AutoReconcilePolicy) GetType() string       { return "auto-reconcile" }
+func (p *AutoReconcilePolicy) GetStackID() string    { return p.StackID }
+func (p *AutoReconcilePolicy) SetStackID(id string)  { p.StackID = id }
+func (p *AutoReconcilePolicy) SetLabel(label string) { p.Label = label }
 
 // ParsePolicy parses a single policy from JSON
 func ParsePolicy(raw json.RawMessage) (Policy, error) {

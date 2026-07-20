@@ -55,6 +55,18 @@ func TestParsePolicy_TTL(t *testing.T) {
 	assert.Equal(t, "cascade", ttl.OnDependents)
 }
 
+func TestSetLabel_TTL(t *testing.T) {
+	p := &TTLPolicy{}
+	p.SetLabel("ephemeral-1h")
+	assert.Equal(t, "ephemeral-1h", p.GetLabel())
+}
+
+func TestSetLabel_AutoReconcile(t *testing.T) {
+	p := &AutoReconcilePolicy{}
+	p.SetLabel("reconcile-5m")
+	assert.Equal(t, "reconcile-5m", p.GetLabel())
+}
+
 func TestParsePolicy_UnknownType(t *testing.T) {
 	raw := json.RawMessage(`{"Type": "unknown"}`)
 
