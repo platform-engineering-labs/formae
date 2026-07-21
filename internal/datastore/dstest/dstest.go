@@ -83,6 +83,8 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunUpdateTargetHealthMonotonicGuard(t, newDS)
 	RunUpdateTargetHealthSubSecondMonotonic(t, newDS)
 	RunUpdateTargetHealthReapedGuard(t, newDS)
+	RunUpdateTargetHealthIncarnationMatch(t, newDS)
+	RunUpdateTargetHealthIncarnationMismatch(t, newDS)
 
 	RunCreateStack(t, newDS)
 	RunCreateStackAlreadyExists(t, newDS)

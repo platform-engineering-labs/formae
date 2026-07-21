@@ -157,6 +157,104 @@ func RunUpdateTargetHealthSubSecondMonotonic(t *testing.T, newDS func(t *testing
 	})
 }
 
+// RunUpdateTargetHealthIncarnationMatch verifies that an observation carrying
+// the target's current target_incarnation_id is applied normally.
+func RunUpdateTargetHealthIncarnationMatch(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("UpdateTargetHealth_IncarnationMatch", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		target := newHealthTestTarget("health-incarnation-match-test")
+		_, err := ds.CreateTarget(target)
+		require.NoError(t, err)
+
+		loaded, err := ds.LoadTarget("health-incarnation-match-test")
+		require.NoError(t, err)
+		require.NotNil(t, loaded)
+		require.NotNil(t, loaded.Health)
+		require.NotEmpty(t, loaded.Health.IncarnationID, "target must have an incarnation id after creation")
+
+		now := time.Now().UTC().Truncate(time.Second)
+		obs := pkgmodel.TargetHealthObservation{
+			TargetLabel:   "health-incarnation-match-test",
+			IncarnationID: loaded.Health.IncarnationID,
+			State:         pkgmodel.TargetHealthStateReachable,
+			ObservedAt:    now,
+			LastSeenAt:    &now,
+		}
+		applied, err := ds.UpdateTargetHealth(obs)
+		require.NoError(t, err)
+		assert.True(t, applied, "observation matching the current incarnation id must be applied")
+
+		reloaded, err := ds.LoadTarget("health-incarnation-match-test")
+		require.NoError(t, err)
+		require.NotNil(t, reloaded)
+		require.NotNil(t, reloaded.Health)
+		assert.Equal(t, pkgmodel.TargetHealthStateReachable, reloaded.Health.State)
+		require.NotNil(t, reloaded.Health.ObservedAt)
+		assert.WithinDuration(t, now, *reloaded.Health.ObservedAt, time.Second)
+	})
+}
+
+// RunUpdateTargetHealthIncarnationMismatch verifies that an observation
+// carrying a stale/foreign target_incarnation_id is rejected (applied=false)
+// and the persisted health state is left unchanged, even though the
+// observation is otherwise newer than the stored observed_at.
+func RunUpdateTargetHealthIncarnationMismatch(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("UpdateTargetHealth_IncarnationMismatch", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		target := newHealthTestTarget("health-incarnation-mismatch-test")
+		_, err := ds.CreateTarget(target)
+		require.NoError(t, err)
+
+		loaded, err := ds.LoadTarget("health-incarnation-mismatch-test")
+		require.NoError(t, err)
+		require.NotNil(t, loaded)
+		require.NotNil(t, loaded.Health)
+
+		// Establish a known-good baseline state to detect any mutation.
+		baseline := time.Now().UTC().Truncate(time.Second)
+		setup := pkgmodel.TargetHealthObservation{
+			TargetLabel: "health-incarnation-mismatch-test",
+			State:       pkgmodel.TargetHealthStateReachable,
+			ObservedAt:  baseline,
+			LastSeenAt:  &baseline,
+		}
+		applied, err := ds.UpdateTargetHealth(setup)
+		require.NoError(t, err)
+		require.True(t, applied)
+
+		// Submit a chronologically newer observation with a bogus incarnation id.
+		newer := baseline.Add(time.Minute)
+		staleIncarnation := pkgmodel.TargetHealthObservation{
+			TargetLabel:   "health-incarnation-mismatch-test",
+			IncarnationID: "bogus-incarnation-id-does-not-exist",
+			State:         pkgmodel.TargetHealthStateUnreachable,
+			ObservedAt:    newer,
+			LastErrorCode: "NetworkFailure",
+		}
+		applied, err = ds.UpdateTargetHealth(staleIncarnation)
+		require.NoError(t, err)
+		assert.False(t, applied, "observation with a mismatched incarnation id must be rejected")
+
+		reloaded, err := ds.LoadTarget("health-incarnation-mismatch-test")
+		require.NoError(t, err)
+		require.NotNil(t, reloaded)
+		require.NotNil(t, reloaded.Health)
+		assert.Equal(t, pkgmodel.TargetHealthStateReachable, reloaded.Health.State,
+			"health state must be unchanged when the incarnation guard rejects the observation")
+		require.NotNil(t, reloaded.Health.ObservedAt)
+		assert.WithinDuration(t, baseline, *reloaded.Health.ObservedAt, time.Second,
+			"observed_at must be unchanged when the incarnation guard rejects the observation")
+		assert.Equal(t, loaded.Health.IncarnationID, reloaded.Health.IncarnationID,
+			"incarnation id itself must be unaffected by the rejected observation")
+	})
+}
+
 // RunUpdateTargetHealthReapedGuard verifies that applying any observation to a
 // target whose health_state is 'reaped' is a no-op (applied=false).
 func RunUpdateTargetHealthReapedGuard(t *testing.T, newDS func(t *testing.T) TestDatastore) {
