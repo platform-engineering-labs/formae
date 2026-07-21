@@ -4,12 +4,16 @@
  * SPDX-License-Identifier: FSL-1.1-ALv2
  */
 
-module Forma
+open module Forma
 
 import "formae.pkl"
 
 description: formae.Description?
-properties: Dynamic?
+properties: Any?
+
+/// fill: entry point used by the self-injecting output below; constructs a
+/// typed instance of the user's properties class from external `prop:` values.
+function fill(clazz: Class): Typed = formae.fillProps(clazz)
 hidden forma: Listing<formae.Resource|formae.Resolvable|formae.Stack|formae.Target|formae.Policy>
 
 /// defaultStack: returns the first defined Stack
@@ -22,17 +26,33 @@ hidden defaultTarget: formae.TargetResolvable =
 forma.toList().filterIsInstance(formae.Target).firstOrNull?.res
 ?? forma.toList().filterIsInstance(formae.TargetResolvable).firstOrNull ?? throw("no default target found")
 
+// hidden guard for the self-injecting output: the first evaluation amends this
+// module with a filled `properties` instance (reading `prop:` values), the
+// second renders normally with the injected values visible everywhere via
+// late binding. Same mechanism pkl:Command's runtime uses ("synthesize a
+// module that amends the command module and sets options").
+hidden injected: Boolean = false
+
 // NOTE: a lot of this would be uneeded if bugs or unfinished implementation issues were resolved in PKL
 output {
     value =
-        if (formae.mode() == "properties")
+        // `properties is Typed` = the new extends shape (typed Props class).
+        // LEGACY: amends-based formae assign a Dynamic `properties {}` block,
+        // fail this check, and skip injection entirely - their Prop members
+        // self-read `prop:` values as before. Remove this discriminator (and
+        // the legacy passthrough in formae.renderProperties) when the legacy
+        // block is dropped after the deprecation window.
+        if (!injected && properties != null && properties is Typed)
+            let (m = module)
+            ((m) { injected = true; properties = m.fill(m.properties.getClass()) }).output.value
+        else if (formae.mode() == "properties")
             new formae.FormaRender {
-                Properties = module.properties
+                Properties = formae.renderProperties(module.properties)
             }
         else
             new formae.FormaRender {
                 Description = module.description
-                Properties = module.properties
+                Properties = formae.renderProperties(module.properties)
                 Stacks = forma.toList().filterIsInstance(formae.Stack).toListing()
                 Targets = forma.toList().filterIsInstance(formae.Target).toListing()
                 Policies = forma.toList().filterIsInstance(formae.Policy).map((p) -> p.render()).toListing()
