@@ -170,3 +170,19 @@ func TestPluginReadCommands_PrivilegedTree(t *testing.T) {
 		}
 	}
 }
+
+// TestRefresh_WarmsWritableTree proves `formae refresh` succeeds against a
+// writable tree. Requires network to the hub (it fetches repo metadata for
+// both channels).
+func TestRefresh_WarmsWritableTree(t *testing.T) {
+	tree := cloneWarmTree(t)
+	env := newReadEnv(t, tree)
+
+	out, err := runFormae(t, env, "refresh")
+	if err != nil {
+		t.Fatalf("`formae refresh` failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "done.") {
+		t.Errorf("expected 'done.' in refresh output, got:\n%s", out)
+	}
+}
