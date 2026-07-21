@@ -772,6 +772,12 @@ func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData,
 			// send MarkResourceUpdateAsComplete anyway.
 		}
 
+		if obs, ok := targetHealthObservation(data.resourceUpdate.ResourceTarget.Label, &message, time.Now()); ok {
+			if err := proc.Send(resourcePersisterProcess(proc), messages.UpdateTargetHealth{Observation: obs}); err != nil {
+				proc.Log().Warning("failed to send UpdateTargetHealth for target %s: %v", obs.TargetLabel, err)
+			}
+		}
+
 		return nextState(state, data, proc)
 	}
 
@@ -798,6 +804,11 @@ func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData,
 	}
 
 	if message.Failed() {
+		if obs, ok := targetHealthObservation(data.resourceUpdate.ResourceTarget.Label, &message, time.Now()); ok {
+			if err := proc.Send(resourcePersisterProcess(proc), messages.UpdateTargetHealth{Observation: obs}); err != nil {
+				proc.Log().Warning("failed to send UpdateTargetHealth for target %s: %v", obs.TargetLabel, err)
+			}
+		}
 		data.resourceUpdate.MarkAsFailed()
 		return StateFinishedWithError, data, nil, nil
 	}
