@@ -8,7 +8,6 @@ import (
 	crand "crypto/rand"
 	"encoding/json"
 	"fmt"
-	"math"
 	"math/rand/v2"
 	"net/url"
 	"strconv"
@@ -59,14 +58,19 @@ func id(args url.Values) *extension.Result {
 		}
 	}
 
-	mx := int64(math.Pow10(length)) - 1
-	mn := int64(math.Pow10(length - 1))
-
-	id := rand.Int64N(mx - mn)
-
-	if id < mn {
-		id = mn + (id % (mx - mn + 1))
+	if length > 18 {
+		return &extension.Result{
+			Error: fmt.Sprintf("length must be %d or less; id is a 64-bit integer", 18),
+		}
 	}
+
+	mn := int64(1)
+	for i := 1; i < length; i++ {
+		mn *= 10 // 10^(length-1)
+	}
+	mx := mn*10 - 1 // 10^length - 1
+
+	id := mn + rand.Int64N(mx-mn+1)
 
 	body, err := json.Marshal(map[string]any{
 		"id": id,
