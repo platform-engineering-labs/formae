@@ -29,6 +29,33 @@ FROM targets t
 INNER JOIN label_ids li ON t.label = li.label;
 
 -- +goose Down
+-- Columns with inline DEFAULT clauses get system-named default constraints on
+-- SQL Server. Those constraints must be dropped before the column can be dropped.
+-- The DECLARE/SELECT/EXEC pattern looks up the constraint name dynamically so it
+-- works regardless of the system-generated name and is idempotent (no-ops when the
+-- constraint or column does not exist).
+DECLARE @sql nvarchar(max);
+
+SELECT @sql = 'ALTER TABLE targets DROP CONSTRAINT ' + dc.name
+FROM sys.default_constraints dc
+JOIN sys.columns c ON dc.parent_object_id = c.object_id AND dc.parent_column_id = c.column_id
+WHERE dc.parent_object_id = OBJECT_ID('targets') AND c.name = 'unreachable_accum_seconds';
+IF @sql IS NOT NULL EXEC sp_executesql @sql;
+SET @sql = NULL;
+
+SELECT @sql = 'ALTER TABLE targets DROP CONSTRAINT ' + dc.name
+FROM sys.default_constraints dc
+JOIN sys.columns c ON dc.parent_object_id = c.object_id AND dc.parent_column_id = c.column_id
+WHERE dc.parent_object_id = OBJECT_ID('targets') AND c.name = 'health_state';
+IF @sql IS NOT NULL EXEC sp_executesql @sql;
+SET @sql = NULL;
+
+SELECT @sql = 'ALTER TABLE targets DROP CONSTRAINT ' + dc.name
+FROM sys.default_constraints dc
+JOIN sys.columns c ON dc.parent_object_id = c.object_id AND dc.parent_column_id = c.column_id
+WHERE dc.parent_object_id = OBJECT_ID('targets') AND c.name = 'target_incarnation_id';
+IF @sql IS NOT NULL EXEC sp_executesql @sql;
+
 ALTER TABLE targets DROP COLUMN last_error_code;
 ALTER TABLE targets DROP COLUMN unreachable_accum_seconds;
 ALTER TABLE targets DROP COLUMN last_sample_at;
