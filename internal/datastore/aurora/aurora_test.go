@@ -51,13 +51,14 @@ func TestDatastore(t *testing.T) {
 				slog.Warn("Failed to clean up datastore", "error", err)
 			}
 		}
+		d, _ := ds.(*aurora.DatastoreAuroraDataAPI)
 		return dstest.TestDatastore{
 			Datastore: ds,
 			CleanUpFn: func() error {
-				if d, ok := ds.(*aurora.DatastoreAuroraDataAPI); ok {
-					return d.CleanUp()
-				}
-				return nil
+				return d.CleanUp()
+			},
+			SetTargetHealthStateForTest: func(label, state string) error {
+				return d.SetHealthStateForTesting(label, state)
 			},
 		}
 	})

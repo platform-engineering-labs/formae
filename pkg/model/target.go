@@ -9,6 +9,33 @@ import (
 	"time"
 )
 
+// Target health state values stored in the health_state column.
+const (
+	TargetHealthStateUnknown     = "unknown"
+	TargetHealthStateReachable   = "reachable"
+	TargetHealthStateUnreachable = "unreachable"
+	TargetHealthStateReaped      = "reaped"
+)
+
+// TargetHealthObservation carries the result of a single health sample for a target.
+// It is produced by the classifier and delivered to the datastore via the async persister.
+// IncarnationID may be empty, in which case the incarnation guard is skipped.
+type TargetHealthObservation struct {
+	// TargetLabel identifies the target this observation applies to.
+	TargetLabel string
+	// IncarnationID is the expected target_incarnation_id. When non-empty the
+	// datastore rejects the write if the stored id does not match.
+	IncarnationID string
+	// State is the new health state (use the TargetHealthState* constants).
+	State string
+	// ObservedAt is the time the observation was taken (used as the monotonic guard).
+	ObservedAt time.Time
+	// LastSeenAt is set to ObservedAt for reachable observations; nil otherwise.
+	LastSeenAt *time.Time
+	// LastErrorCode is non-empty for unreachable observations.
+	LastErrorCode string
+}
+
 // ConfigFieldHint describes mutability characteristics of a target config field.
 // Mirrors FieldHint but scoped to target configuration.
 type ConfigFieldHint struct {

@@ -241,6 +241,10 @@ func (m *mockExtractDatastore) ForceCancelResourceUpdates(_ string, _ []datastor
 	panic("not implemented")
 }
 
+func (m *mockExtractDatastore) UpdateTargetHealth(_ pkgmodel.TargetHealthObservation) (bool, error) {
+	panic("not implemented")
+}
+
 func TestExtractResources_ManagedAndUnmanagedStacks(t *testing.T) {
 	managedStack := &pkgmodel.Stack{
 		Label:       "my-stack",

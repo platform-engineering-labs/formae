@@ -3465,6 +3465,64 @@ func (d DatastorePostgres) UpdateTarget(target *pkgmodel.Target) (string, error)
 	return fmt.Sprintf("%s_%d", target.Label, newVersion), nil
 }
 
+func (d DatastorePostgres) UpdateTargetHealth(obs pkgmodel.TargetHealthObservation) (bool, error) {
+	ctx, span := tracer.Start(context.Background(), "UpdateTargetHealth")
+	defer span.End()
+
+	var lastSeenAt *time.Time
+	if obs.LastSeenAt != nil {
+		t := obs.LastSeenAt.UTC()
+		lastSeenAt = &t
+	}
+	observedAt := obs.ObservedAt.UTC()
+
+	var lastErrorCode *string
+	if obs.LastErrorCode != "" {
+		lastErrorCode = &obs.LastErrorCode
+	}
+
+	var rowsAffected int64
+	var err error
+	if obs.IncarnationID != "" {
+		query := `
+			UPDATE targets SET
+				health_state = $1,
+				observed_at = $2,
+				last_seen_at = COALESCE($3, last_seen_at),
+				last_error_code = $4
+			WHERE label = $5
+			  AND version = (SELECT MAX(version) FROM targets WHERE label = $5)
+			  AND health_state <> 'reaped'
+			  AND (observed_at IS NULL OR observed_at < $2)
+			  AND target_incarnation_id = $6`
+		tag, execErr := d.pool.Exec(ctx, query, obs.State, observedAt, lastSeenAt, lastErrorCode, obs.TargetLabel, obs.IncarnationID)
+		err = execErr
+		if execErr == nil {
+			rowsAffected = tag.RowsAffected()
+		}
+	} else {
+		query := `
+			UPDATE targets SET
+				health_state = $1,
+				observed_at = $2,
+				last_seen_at = COALESCE($3, last_seen_at),
+				last_error_code = $4
+			WHERE label = $5
+			  AND version = (SELECT MAX(version) FROM targets WHERE label = $5)
+			  AND health_state <> 'reaped'
+			  AND (observed_at IS NULL OR observed_at < $2)`
+		tag, execErr := d.pool.Exec(ctx, query, obs.State, observedAt, lastSeenAt, lastErrorCode, obs.TargetLabel)
+		err = execErr
+		if execErr == nil {
+			rowsAffected = tag.RowsAffected()
+		}
+	}
+	if err != nil {
+		return false, err
+	}
+	return rowsAffected == 1, nil
+}
+
 func (d DatastorePostgres) DeleteTarget(targetLabel string) (string, error) {
 	ctx, span := tracer.Start(context.Background(), "DeleteTarget")
 	defer span.End()
@@ -3927,6 +3985,10 @@ func (d DatastorePostgres) UpdateFormaCommandTargetUpdates(commandID string, tar
 func (d DatastorePostgres) Close() {
 	d.pool.Close()
 }
+
+// Pool returns the underlying connection pool. Used by test helpers that need
+// direct SQL access (e.g. forcing health_state for guard assertions).
+func (d DatastorePostgres) Pool() *pgxpool.Pool { return d.pool }
 
 // This can be only used in tests or in setups where we have access to admin (non-production)
 func (d DatastorePostgres) CleanUp() error {

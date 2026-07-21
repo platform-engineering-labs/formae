@@ -107,6 +107,13 @@ func (rp *ResourcePersister) HandleMessage(from gen.PID, message any) error {
 	case messages.CleanupEmptyStacks:
 		rp.cleanupEmptyStacks(msg.StackLabels, msg.CommandID)
 		return nil
+	case messages.UpdateTargetHealth:
+		_, err := rp.datastore.UpdateTargetHealth(msg.Observation)
+		if err != nil {
+			rp.Log().Error("ResourcePersister: failed to update target health",
+				"target", msg.Observation.TargetLabel, "error", err)
+		}
+		return nil
 	default:
 		rp.Log().Error("ResourcePersister: unknown message type=%s", fmt.Sprintf("%T", message))
 		return nil

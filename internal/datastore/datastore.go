@@ -231,6 +231,11 @@ type Datastore interface {
 	DeleteTarget(targetLabel string) (string, error)
 	// CountResourcesInTarget returns the count of non-deleted resources belonging to a target
 	CountResourcesInTarget(targetLabel string) (int, error)
+	// UpdateTargetHealth applies an in-place health observation to the target's current
+	// (max-version) row. Returns applied=true when exactly one row was updated. A guard
+	// rejection (reaped state, stale observedAt, or incarnation mismatch) returns
+	// applied=false with no error.
+	UpdateTargetHealth(obs pkgmodel.TargetHealthObservation) (applied bool, err error)
 
 	// Stats returns aggregated statistics about the datastore contents
 	Stats() (*stats.Stats, error)

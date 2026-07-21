@@ -2657,6 +2657,66 @@ func (d DatastoreSQLite) CountResourcesInTarget(targetLabel string) (int, error)
 	return count, nil
 }
 
+func (d DatastoreSQLite) UpdateTargetHealth(obs pkgmodel.TargetHealthObservation) (bool, error) {
+	_, span := sqliteTracer.Start(context.Background(), "UpdateTargetHealth")
+	defer span.End()
+
+	observedAt := obs.ObservedAt.UTC().Format(time.RFC3339Nano)
+
+	var lastSeenAt any
+	if obs.LastSeenAt != nil {
+		lastSeenAt = obs.LastSeenAt.UTC().Format(time.RFC3339Nano)
+	}
+
+	var lastErrorCode any
+	if obs.LastErrorCode != "" {
+		lastErrorCode = obs.LastErrorCode
+	}
+
+	// Base WHERE: label matches max-version row, not reaped, monotonic guard on observed_at.
+	// SQLite stores timestamps as text; NULL observed_at means no prior observation, so allow it.
+	var query string
+	var args []any
+	if obs.IncarnationID != "" {
+		query = `
+			UPDATE targets SET
+				health_state = ?,
+				observed_at = ?,
+				last_seen_at = COALESCE(?, last_seen_at),
+				last_error_code = ?
+			WHERE label = ?
+			  AND version = (SELECT MAX(version) FROM targets WHERE label = ?)
+			  AND health_state <> 'reaped'
+			  AND (observed_at IS NULL OR observed_at < ?)
+			  AND target_incarnation_id = ?`
+		args = []any{obs.State, observedAt, lastSeenAt, lastErrorCode,
+			obs.TargetLabel, obs.TargetLabel, observedAt, obs.IncarnationID}
+	} else {
+		query = `
+			UPDATE targets SET
+				health_state = ?,
+				observed_at = ?,
+				last_seen_at = COALESCE(?, last_seen_at),
+				last_error_code = ?
+			WHERE label = ?
+			  AND version = (SELECT MAX(version) FROM targets WHERE label = ?)
+			  AND health_state <> 'reaped'
+			  AND (observed_at IS NULL OR observed_at < ?)`
+		args = []any{obs.State, observedAt, lastSeenAt, lastErrorCode,
+			obs.TargetLabel, obs.TargetLabel, observedAt}
+	}
+
+	result, err := d.conn.Exec(query, args...)
+	if err != nil {
+		return false, err
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
+}
+
 // scanSQLiteTargetHealth reads the health columns from a scan result and returns
 // a populated TargetHealth. nullTimestamp is a sql.NullString holding an ISO-8601
 // timestamp string as SQLite stores datetimes as text.
@@ -4241,3 +4301,7 @@ func (d DatastoreSQLite) CleanUp() error {
 	// No cleanup needed for SQLite, this is only used in the Postgres integration tests
 	return nil
 }
+
+// Conn returns the underlying database connection. Used by test helpers that
+// need direct SQL access (e.g. forcing health_state for guard assertions).
+func (d DatastoreSQLite) Conn() *sql.DB { return d.conn }

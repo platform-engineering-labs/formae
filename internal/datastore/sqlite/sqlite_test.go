@@ -31,13 +31,19 @@ func TestDatastore(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to create SQLite datastore: %v", err)
 		}
+		d, _ := ds.(dssqlite.DatastoreSQLite)
 		return dstest.TestDatastore{
 			Datastore: ds,
 			CleanUpFn: func() error {
-				if d, ok := ds.(dssqlite.DatastoreSQLite); ok {
-					return d.CleanUp()
-				}
-				return nil
+				return d.CleanUp()
+			},
+			SetTargetHealthStateForTest: func(label, state string) error {
+				conn := d.Conn()
+				_, err := conn.Exec(
+					`UPDATE targets SET health_state = ? WHERE label = ? AND version = (SELECT MAX(version) FROM targets WHERE label = ?)`,
+					state, label, label,
+				)
+				return err
 			},
 		}
 	})
@@ -53,13 +59,19 @@ func newTestDS(t *testing.T) dstest.TestDatastore {
 	if err != nil {
 		t.Fatalf("Failed to create SQLite datastore: %v", err)
 	}
+	d, _ := ds.(dssqlite.DatastoreSQLite)
 	return dstest.TestDatastore{
 		Datastore: ds,
 		CleanUpFn: func() error {
-			if d, ok := ds.(dssqlite.DatastoreSQLite); ok {
-				return d.CleanUp()
-			}
-			return nil
+			return d.CleanUp()
+		},
+		SetTargetHealthStateForTest: func(label, state string) error {
+			conn := d.Conn()
+			_, err := conn.Exec(
+				`UPDATE targets SET health_state = ? WHERE label = ? AND version = (SELECT MAX(version) FROM targets WHERE label = ?)`,
+				state, label, label,
+			)
+			return err
 		},
 	}
 }

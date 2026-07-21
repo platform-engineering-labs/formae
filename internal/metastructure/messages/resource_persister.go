@@ -23,3 +23,10 @@ type CleanupEmptyStacks struct {
 	StackLabels []string
 	CommandID   string
 }
+
+// UpdateTargetHealth is sent asynchronously to ResourcePersister to record a
+// health observation for a target. The persister applies it via an in-place
+// UPDATE guarded by monotonicity and incarnation checks.
+type UpdateTargetHealth struct {
+	Observation pkgmodel.TargetHealthObservation
+}

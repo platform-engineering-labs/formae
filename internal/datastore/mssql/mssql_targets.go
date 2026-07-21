@@ -180,6 +180,63 @@ func (d *DatastoreMSSQL) UpdateTarget(target *pkgmodel.Target) (string, error) {
 	return fmt.Sprintf("%s_%d", target.Label, newVersion), nil
 }
 
+func (d *DatastoreMSSQL) UpdateTargetHealth(obs pkgmodel.TargetHealthObservation) (bool, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "UpdateTargetHealth")
+	defer span.End()
+
+	observedAt := obs.ObservedAt.UTC()
+
+	var lastSeenAt any
+	if obs.LastSeenAt != nil {
+		lastSeenAt = obs.LastSeenAt.UTC()
+	}
+
+	var lastErrorCode any
+	if obs.LastErrorCode != "" {
+		lastErrorCode = obs.LastErrorCode
+	}
+
+	// MSSQL uses named parameters (@p1, @p2, …).
+	// The monotonic guard uses a string comparison for observed_at since MSSQL stores it
+	// as datetime2. observed_at < @p_observed_at handles the NULL case via COALESCE in WHERE.
+	var result sql.Result
+	var err error
+	if obs.IncarnationID != "" {
+		query := `
+			UPDATE targets SET
+				health_state = @p1,
+				observed_at = @p2,
+				last_seen_at = COALESCE(@p3, last_seen_at),
+				last_error_code = @p4
+			WHERE label = @p5
+			  AND version = (SELECT MAX(version) FROM targets WHERE label = @p5)
+			  AND health_state <> 'reaped'
+			  AND (observed_at IS NULL OR observed_at < @p2)
+			  AND target_incarnation_id = @p6`
+		result, err = d.conn.ExecContext(ctx, query, obs.State, observedAt, lastSeenAt, lastErrorCode, obs.TargetLabel, obs.IncarnationID)
+	} else {
+		query := `
+			UPDATE targets SET
+				health_state = @p1,
+				observed_at = @p2,
+				last_seen_at = COALESCE(@p3, last_seen_at),
+				last_error_code = @p4
+			WHERE label = @p5
+			  AND version = (SELECT MAX(version) FROM targets WHERE label = @p5)
+			  AND health_state <> 'reaped'
+			  AND (observed_at IS NULL OR observed_at < @p2)`
+		result, err = d.conn.ExecContext(ctx, query, obs.State, observedAt, lastSeenAt, lastErrorCode, obs.TargetLabel)
+	}
+	if err != nil {
+		return false, err
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
+}
+
 func (d *DatastoreMSSQL) LoadTarget(label string) (*pkgmodel.Target, error) {
 	ctx, span := mssqlTracer.Start(context.Background(), "LoadTarget")
 	defer span.End()

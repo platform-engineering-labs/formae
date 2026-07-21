@@ -2268,6 +2268,74 @@ func (d *DatastoreAuroraDataAPI) UpdateTarget(target *pkgmodel.Target) (string, 
 	return fmt.Sprintf("%s_%d", target.Label, newVersion), nil
 }
 
+func (d *DatastoreAuroraDataAPI) UpdateTargetHealth(obs pkgmodel.TargetHealthObservation) (bool, error) {
+	ctx := context.Background()
+
+	observedAt := obs.ObservedAt.UTC().Format(time.RFC3339Nano)
+
+	var lastSeenAtParam types.Field
+	if obs.LastSeenAt != nil {
+		lastSeenAtParam = &types.FieldMemberStringValue{Value: obs.LastSeenAt.UTC().Format(time.RFC3339Nano)}
+	} else {
+		lastSeenAtParam = &types.FieldMemberIsNull{Value: true}
+	}
+
+	var lastErrorCodeParam types.Field
+	if obs.LastErrorCode != "" {
+		lastErrorCodeParam = &types.FieldMemberStringValue{Value: obs.LastErrorCode}
+	} else {
+		lastErrorCodeParam = &types.FieldMemberIsNull{Value: true}
+	}
+
+	var query string
+	var params []types.SqlParameter
+	if obs.IncarnationID != "" {
+		query = `
+		UPDATE targets SET
+			health_state = :health_state,
+			observed_at = :observed_at::timestamptz,
+			last_seen_at = COALESCE(:last_seen_at::timestamptz, last_seen_at),
+			last_error_code = :last_error_code
+		WHERE label = :label
+		  AND version = (SELECT MAX(version) FROM targets WHERE label = :label)
+		  AND health_state <> 'reaped'
+		  AND (observed_at IS NULL OR observed_at < :observed_at::timestamptz)
+		  AND target_incarnation_id = :incarnation_id`
+		params = []types.SqlParameter{
+			{Name: aws.String("health_state"), Value: &types.FieldMemberStringValue{Value: obs.State}},
+			{Name: aws.String("observed_at"), Value: &types.FieldMemberStringValue{Value: observedAt}},
+			{Name: aws.String("last_seen_at"), Value: lastSeenAtParam},
+			{Name: aws.String("last_error_code"), Value: lastErrorCodeParam},
+			{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: obs.TargetLabel}},
+			{Name: aws.String("incarnation_id"), Value: &types.FieldMemberStringValue{Value: obs.IncarnationID}},
+		}
+	} else {
+		query = `
+		UPDATE targets SET
+			health_state = :health_state,
+			observed_at = :observed_at::timestamptz,
+			last_seen_at = COALESCE(:last_seen_at::timestamptz, last_seen_at),
+			last_error_code = :last_error_code
+		WHERE label = :label
+		  AND version = (SELECT MAX(version) FROM targets WHERE label = :label)
+		  AND health_state <> 'reaped'
+		  AND (observed_at IS NULL OR observed_at < :observed_at::timestamptz)`
+		params = []types.SqlParameter{
+			{Name: aws.String("health_state"), Value: &types.FieldMemberStringValue{Value: obs.State}},
+			{Name: aws.String("observed_at"), Value: &types.FieldMemberStringValue{Value: observedAt}},
+			{Name: aws.String("last_seen_at"), Value: lastSeenAtParam},
+			{Name: aws.String("last_error_code"), Value: lastErrorCodeParam},
+			{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: obs.TargetLabel}},
+		}
+	}
+
+	output, err := d.executeStatement(ctx, query, params)
+	if err != nil {
+		return false, err
+	}
+	return output.NumberOfRecordsUpdated == 1, nil
+}
+
 func (d *DatastoreAuroraDataAPI) LoadTarget(targetLabel string) (*pkgmodel.Target, error) {
 	ctx := context.Background()
 
@@ -4772,6 +4840,24 @@ func (d *DatastoreAuroraDataAPI) CleanUp() error {
 	}
 
 	return nil
+}
+
+// SetHealthStateForTesting forces health_state for the target's max-version row.
+// Used by test hooks that need to set up guard conditions (e.g. 'reaped') that cannot
+// be reached through the public Datastore API.
+func (d *DatastoreAuroraDataAPI) SetHealthStateForTesting(label, state string) error {
+	ctx := context.Background()
+	query := `
+	UPDATE targets SET health_state = :state
+	WHERE label = :label
+	  AND version = (SELECT MAX(version) FROM targets WHERE label = :label)
+	`
+	params := []types.SqlParameter{
+		{Name: aws.String("state"), Value: &types.FieldMemberStringValue{Value: state}},
+		{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: label}},
+	}
+	_, err := d.executeStatement(ctx, query, params)
+	return err
 }
 
 // ForceCancelResourceUpdates CAS-terminalizes in-flight resource updates to Canceled in one

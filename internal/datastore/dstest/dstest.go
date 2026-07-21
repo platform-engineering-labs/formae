@@ -22,6 +22,12 @@ type TestDatastore struct {
 	// strings (e.g. byte-order vs case-insensitive comparison) use it.
 	// Backends that don't provide it leave it nil and the test t.Skip()s.
 	RawInsertResource func(uri, version, target, operation string) error
+	// SetTargetHealthStateForTest forces the health_state column of the current
+	// (max-version) targets row for the given label to the supplied value.
+	// Used to set up guard conditions (e.g. 'reaped') that cannot be reached
+	// through the public Datastore API. Backends that don't provide it leave
+	// it nil and the relevant tests t.Skip().
+	SetTargetHealthStateForTest func(label, state string) error
 }
 
 // RunAll runs the full datastore test suite against the provided factory.
@@ -73,6 +79,9 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunDeleteTargetNotFound(t, newDS)
 	RunTargetHealthDefaults(t, newDS)
 	RunTargetHealthStableAcrossUpdate(t, newDS)
+	RunUpdateTargetHealthReachable(t, newDS)
+	RunUpdateTargetHealthMonotonicGuard(t, newDS)
+	RunUpdateTargetHealthReapedGuard(t, newDS)
 
 	RunCreateStack(t, newDS)
 	RunCreateStackAlreadyExists(t, newDS)
