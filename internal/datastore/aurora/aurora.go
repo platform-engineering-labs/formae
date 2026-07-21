@@ -2164,11 +2164,11 @@ func (d *DatastoreAuroraDataAPI) CreateTarget(target *pkgmodel.Target) (string, 
 func (d *DatastoreAuroraDataAPI) UpdateTarget(target *pkgmodel.Target) (string, error) {
 	ctx := context.Background()
 
-	// Load current max version and health state to carry forward.
+	// Load the latest row to carry health state forward onto the new version.
 	query := `
-	SELECT MAX(version), target_incarnation_id, health_state, last_seen_at, observed_at,
+	SELECT version, target_incarnation_id, health_state, last_seen_at, observed_at,
 	       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code
-	FROM targets WHERE label = :label`
+	FROM targets WHERE label = :label ORDER BY version DESC LIMIT 1`
 	params := []types.SqlParameter{
 		{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: target.Label}},
 	}
@@ -2178,7 +2178,7 @@ func (d *DatastoreAuroraDataAPI) UpdateTarget(target *pkgmodel.Target) (string, 
 		return "", err
 	}
 
-	if len(output.Records) == 0 || len(output.Records[0]) == 0 {
+	if len(output.Records) == 0 {
 		return "", fmt.Errorf("target %s does not exist, cannot update", target.Label)
 	}
 
@@ -2186,9 +2186,6 @@ func (d *DatastoreAuroraDataAPI) UpdateTarget(target *pkgmodel.Target) (string, 
 	maxVersion, err := getIntField(record[0])
 	if err != nil {
 		return "", err
-	}
-	if maxVersion == 0 {
-		return "", fmt.Errorf("target %s does not exist, cannot update", target.Label)
 	}
 
 	incarnationID, _ := getStringField(record[1])

@@ -3399,29 +3399,26 @@ func (d DatastorePostgres) UpdateTarget(target *pkgmodel.Target) (string, error)
 	ctx, span := tracer.Start(context.Background(), "UpdateTarget")
 	defer span.End()
 
-	// Load current health state to carry it forward onto the new version row.
+	// Load the latest row to carry health state forward onto the new version.
 	healthQuery := `
-		SELECT MAX(version), target_incarnation_id, health_state, last_seen_at, observed_at,
+		SELECT version, target_incarnation_id, health_state, last_seen_at, observed_at,
 		       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code
-		FROM targets WHERE label = $1`
+		FROM targets WHERE label = $1 ORDER BY version DESC LIMIT 1`
 	healthRow := d.pool.QueryRow(ctx, healthQuery, target.Label)
 
-	var maxVersion sql.NullInt64
+	var currentVersion int64
 	var incarnationID, healthState *string
 	var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt *time.Time
 	var unreachableAccumSeconds *int64
 	var lastErrorCode *string
-	if err := healthRow.Scan(&maxVersion, &incarnationID, &healthState, &lastSeenAt, &observedAt,
+	if err := healthRow.Scan(&currentVersion, &incarnationID, &healthState, &lastSeenAt, &observedAt,
 		&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", fmt.Errorf("target %s does not exist, cannot update", target.Label)
+		}
 		return "", err
 	}
 
-	if !maxVersion.Valid {
-		return "", fmt.Errorf("target %s does not exist, cannot update", target.Label)
-	}
-
-	// Extract values with safe defaults for empty row (should not happen after the Valid check,
-	// but guards against partial null groups from aggregate with no rows).
 	safeStr := func(s *string) string {
 		if s == nil {
 			return ""
@@ -3435,7 +3432,7 @@ func (d DatastorePostgres) UpdateTarget(target *pkgmodel.Target) (string, error)
 		return *i
 	}
 
-	newVersion := int(maxVersion.Int64) + 1
+	newVersion := int(currentVersion) + 1
 	cfg, err := json.Marshal(target.Config)
 	if err != nil {
 		return "", err

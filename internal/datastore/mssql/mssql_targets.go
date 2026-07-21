@@ -118,27 +118,27 @@ func (d *DatastoreMSSQL) UpdateTarget(target *pkgmodel.Target) (string, error) {
 	ctx, span := mssqlTracer.Start(context.Background(), "UpdateTarget")
 	defer span.End()
 
-	// Load current health state to carry it forward onto the new version row.
+	// Load the latest row to carry health state forward onto the new version.
 	healthQuery := `
-		SELECT MAX(version), target_incarnation_id, health_state, last_seen_at, observed_at,
+		SELECT TOP (1) version, target_incarnation_id, health_state, last_seen_at, observed_at,
 		       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code
-		FROM targets WHERE label = @p1`
+		FROM targets WHERE label = @p1 ORDER BY version DESC`
 	healthRow := d.conn.QueryRowContext(ctx, healthQuery, target.Label)
 
-	var maxVersion sql.NullInt64
+	var currentVersion int64
 	var incarnationID, healthState sql.NullString
 	var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt sql.NullTime
 	var unreachableAccumSeconds sql.NullInt64
 	var lastErrorCode sql.NullString
-	if err := healthRow.Scan(&maxVersion, &incarnationID, &healthState, &lastSeenAt, &observedAt,
+	if err := healthRow.Scan(&currentVersion, &incarnationID, &healthState, &lastSeenAt, &observedAt,
 		&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", fmt.Errorf("target %s does not exist, cannot update", target.Label)
+		}
 		return "", err
 	}
-	if !maxVersion.Valid {
-		return "", fmt.Errorf("target %s does not exist, cannot update", target.Label)
-	}
 
-	newVersion := int(maxVersion.Int64) + 1
+	newVersion := int(currentVersion) + 1
 	cfg, err := json.Marshal(target.Config)
 	if err != nil {
 		return "", err
