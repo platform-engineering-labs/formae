@@ -57,7 +57,7 @@ var generateSourceCodeFn = func(a *app.App, forma *pkgmodel.Forma, path string) 
 // runDriftFlow drives the reconcile-rejected loop; returns nil when handled
 // (extracted or self-resolved) and submits+watches on a validated revert.
 func runDriftFlow(a *app.App, th *theme.Theme, opts *ApplyOptions, rejected apimodel.FormaReconcileRejectedError) error {
-	driftOpts := driftview.Options{SimulateOnly: opts.Simulate}
+	driftOpts := driftview.Options{SimulateOnly: opts.Simulate, FormaFile: opts.FormaFile}
 	for {
 		decision, err := launchDriftView(th, &rejected, driftOpts)
 		if err != nil {
@@ -73,7 +73,7 @@ func runDriftFlow(a *app.App, th *theme.Theme, opts *ApplyOptions, rejected apim
 			return nil
 
 		case driftview.DecisionExtract:
-			return handleExtract(a, th, d)
+			return handleExtract(a, th, d, opts.FormaFile)
 
 		case driftview.DecisionRevertAll:
 			// Hard guard: under --simulate, never perform a real cloud mutation.
@@ -94,6 +94,7 @@ func runDriftFlow(a *app.App, th *theme.Theme, opts *ApplyOptions, rejected apim
 					driftOpts = driftview.Options{
 						Notice:       "Drift changed while you were reviewing — re-confirm against the current changes.",
 						SimulateOnly: opts.Simulate,
+						FormaFile:    opts.FormaFile,
 					}
 					continue
 				}
@@ -110,8 +111,10 @@ func runDriftFlow(a *app.App, th *theme.Theme, opts *ApplyOptions, rejected apim
 }
 
 // handleExtract implements the Extract decision: extract each selected resource,
-// merge Formas, generate source code, confirm overwrite if needed, print panel.
-func handleExtract(a *app.App, th *theme.Theme, d driftview.DecisionExtract) error {
+// merge Formas, generate source code, confirm overwrite if needed, and print the
+// next-steps guidance. formaFile is the user's original forma, named in the
+// re-apply command.
+func handleExtract(a *app.App, th *theme.Theme, d driftview.DecisionExtract, formaFile string) error {
 	merged := &pkgmodel.Forma{
 		Stacks:    []pkgmodel.Stack{},
 		Targets:   []pkgmodel.Target{},
@@ -168,37 +171,28 @@ func handleExtract(a *app.App, th *theme.Theme, d driftview.DecisionExtract) err
 		return fmt.Errorf("error generating source code: %v", err)
 	}
 
-	lines := buildExtractPanel(d, merged)
-	panel := components.Panel(th, th.Palette.Border, "formae apply — next steps", lines, 80)
-	fmt.Println(panel)
+	for _, ln := range buildExtractGuidance(len(merged.Resources), d.Path, formaFile) {
+		fmt.Println(ln)
+	}
 
 	return nil
 }
 
-// buildExtractPanel assembles the lines for the post-extract next-steps panel.
-func buildExtractPanel(d driftview.DecisionExtract, merged *pkgmodel.Forma) []string {
-	lines := []string{
-		fmt.Sprintf("Extracted %d resource(s) to %s", len(merged.Resources), d.Path),
-		"",
-		"Next steps:",
-		"  1. Review the extracted file and adjust as needed.",
-		"  2. Run `formae apply --mode reconcile` to reconcile the new state.",
-		"  3. Re-run the original apply command once reconciled.",
+// buildExtractGuidance returns the plain post-extract next-steps lines. The
+// extracted file only captures the selected resources' current state; applying
+// it directly would reconcile a partial stack and destroy everything else.
+// The correct workflow is to fold the wanted values into the original forma and
+// re-apply the whole stack with --force — which absorbs the kept changes as
+// no-ops and overwrites the rest back to the code.
+func buildExtractGuidance(count int, path, formaFile string) []string {
+	if formaFile == "" {
+		formaFile = "your forma"
 	}
-
-	var deletes []driftview.ResourceRef
-	for _, ref := range d.Selected {
-		if ref.Operation == "delete" {
-			deletes = append(deletes, ref)
-		}
+	return []string{
+		fmt.Sprintf("Extracted %d resource(s) to %s", count, path),
+		"Fold the values you want to keep into your forma, then re-apply with --force:",
+		fmt.Sprintf("  formae apply --mode reconcile --force %s", formaFile),
 	}
-	if len(deletes) > 0 {
-		lines = append(lines, "", "The following resources were deleted outside of formae (handle manually):")
-		for _, ref := range deletes {
-			lines = append(lines, fmt.Sprintf("  - %s / %s / %s", ref.Stack, ref.Type, ref.Label))
-		}
-	}
-	return lines
 }
 
 // submitForcedApply submits a force apply after re-validated identical drift.

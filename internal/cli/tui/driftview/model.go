@@ -52,6 +52,10 @@ type Options struct {
 	// operation) when the parent apply is running in --simulate mode.
 	// Extract-as-code remains available because it only writes local files.
 	SimulateOnly bool
+	// FormaFile is the path to the forma the user applied. It is shown in the
+	// extract screen's re-apply command so the user reconciles the whole stack
+	// (their original forma), not the partial extracted file.
+	FormaFile string
 }
 
 // screenKind identifies which screen is currently displayed.
@@ -81,18 +85,6 @@ type driftRow struct {
 
 // selectable reports whether the row responds to selection keys.
 func (r driftRow) selectable() bool { return r.class != rowClassDelete }
-
-// classWord returns the operation word shown for the row.
-func (r driftRow) classWord() string {
-	switch r.class {
-	case rowClassCreate:
-		return "create"
-	case rowClassDelete:
-		return "delete"
-	default:
-		return "update"
-	}
-}
 
 // driftStack groups rows under their stack name.
 type driftStack struct {
@@ -216,14 +208,48 @@ func (m Model) selectedCount() int {
 	return n
 }
 
-// chromeLines is the fixed line count around the list viewport:
-// header (2) + optional notice (1) + intro (4) + footer (3).
+// chromeLines is the fixed line count around the list viewport: header (2) +
+// optional notice (1) + intro (blank + guidance lines + blank) + footer (3).
 func (m Model) chromeLines() int {
-	c := 9
+	c := 2 // header
 	if m.opts.Notice != "" {
 		c++
 	}
+	c += 3 + len(m.introLines()) // blank + situation + blank + rest + blank
+	c += 3                       // footer
 	return c
+}
+
+// hasDeletes reports whether any drifted row was deleted out of band.
+func (m Model) hasDeletes() bool {
+	for _, st := range m.stacks {
+		for _, r := range st.rows {
+			if r.class == rowClassDelete {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// introLines returns the guidance shown above the drift list. The deletion
+// line appears only when a resource was deleted out of band; the revert line
+// only when reverting is available (it is hidden under --simulate).
+func (m Model) introLines() []string {
+	lines := []string{
+		"Your infrastructure changed outside formae since the last reconcile.",
+		"Keep a change: extract the resource, fold it into your code, then re-apply.",
+	}
+	if m.hasDeletes() {
+		lines = append(lines,
+			"To accept a deletion, remove that resource from your code, or the next apply",
+			"recreates it.")
+	}
+	if !m.opts.SimulateOnly {
+		lines = append(lines,
+			"Press r to discard all out-of-band changes and re-apply your code with --force.")
+	}
+	return lines
 }
 
 // Update implements tea.Model.

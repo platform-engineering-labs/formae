@@ -64,9 +64,22 @@ func (m Model) viewList() string {
 
 	alertSt := lipgloss.NewStyle().Foreground(p.Error)
 	introSt := lipgloss.NewStyle().Foreground(p.TextSecondary)
+	keySt := m.th.Styles.KeybindingKey
 	sb.WriteString("\n")
-	sb.WriteString("  " + alertSt.Render("Your infrastructure has changed since the last reconcile.") + "\n")
-	sb.WriteString("  " + introSt.Render("Select resources to extract, or revert all changes.") + "\n")
+	for i, ln := range m.introLines() {
+		switch {
+		case i == 0:
+			// Situation line in alert red, with a blank line separating it from
+			// the guidance that follows.
+			sb.WriteString("  " + alertSt.Render(ln) + "\n\n")
+		case strings.HasPrefix(ln, "Press r "):
+			// Accent the "r" key so it reads as a keybinding, matching the footer.
+			rest := strings.TrimPrefix(ln, "Press r ")
+			sb.WriteString("  " + introSt.Render("Press ") + keySt.Render("r") + introSt.Render(" "+rest) + "\n")
+		default:
+			sb.WriteString("  " + introSt.Render(ln) + "\n")
+		}
+	}
 	sb.WriteString("\n")
 
 	// Viewport body.
@@ -118,7 +131,6 @@ func (m Model) renderBody() (string, int) {
 	countSt := lipgloss.NewStyle().Foreground(p.TextSubtle)
 	ruleSt := lipgloss.NewStyle().Foreground(p.Border)
 	treeSt := lipgloss.NewStyle().Foreground(p.TextSecondary)
-	guideSt := lipgloss.NewStyle().Foreground(p.TextSubtle)
 
 	ruleW := min(58, max(m.width-4, 10))
 
@@ -142,9 +154,6 @@ func (m Model) renderBody() (string, int) {
 			lineCount++
 
 			switch r.class {
-			case rowClassDelete:
-				sb.WriteString("        " + guideSt.Render("Deleted outside of formae. Remove from your code to align.") + "\n")
-				lineCount++
 			case rowClassUpdate:
 				if m.expanded[r.key] {
 					changeLines, err := components.RenderChangeLinesFromPatch(
@@ -335,7 +344,7 @@ func (m Model) viewFilePrompt() string {
 	textSt := lipgloss.NewStyle().Foreground(p.TextPrimary)
 	labelSt := lipgloss.NewStyle().Foreground(p.TextSubtle)
 	pathSt := lipgloss.NewStyle().Foreground(p.TextPrimary)
-	cursorSt := lipgloss.NewStyle().Foreground(p.PrimaryAccent)
+	cursorSt := lipgloss.NewStyle().Foreground(p.TextPrimary)
 	typeSt := lipgloss.NewStyle().Foreground(p.TextSubtle)
 	subtleSt := lipgloss.NewStyle().Foreground(p.TextSubtle)
 
@@ -345,8 +354,9 @@ func (m Model) viewFilePrompt() string {
 	promptLine := "  " + labelSt.Render("Extract to: ") + pathSt.Render(m.fileInput) + cursorSt.Render("█")
 	keybindLine := "  " + s.KeybindingKey.Render("enter") + s.KeybindingDesc.Render(": confirm") +
 		"  " + s.KeybindingKey.Render("esc") + s.KeybindingDesc.Render(": cancel")
-	// bottom = blank + prompt + blank + keybindings = 4 lines
-	const bottomLines = 4
+	// bottom = blank + prompt + blank + 2 warning + blank + copy + command +
+	// blank + keybindings = 10 lines
+	const bottomLines = 10
 
 	// Fixed top section: header (2) + blank + count line = 4 lines
 	countLine := "  " + textSt.Render(fmt.Sprintf("Extracting %d %s as code:", len(rows), pluralize(len(rows), "resource", "resources")))
@@ -361,9 +371,8 @@ func (m Model) viewFilePrompt() string {
 	// Collect resource list lines, truncating with "… and N more" if needed.
 	var listLines []string
 	for _, r := range rows {
-		opSt := lipgloss.NewStyle().Foreground(m.opColorForClass(r.class))
-		listLines = append(listLines, "    "+opSt.Render(r.classWord())+
-			textSt.Render("  "+r.mod.Label)+
+		listLines = append(listLines, "    "+
+			textSt.Render(r.mod.Label)+
 			typeSt.Render(" ("+r.mod.Type+")"))
 	}
 	if len(listLines) > listBudget {
@@ -384,6 +393,18 @@ func (m Model) viewFilePrompt() string {
 	}
 	sb.WriteString("\n")
 	sb.WriteString(promptLine + "\n")
+	sb.WriteString("\n")
+
+	warnSt := lipgloss.NewStyle().Foreground(p.Warning)
+	formaFile := m.opts.FormaFile
+	if formaFile == "" {
+		formaFile = "your forma"
+	}
+	sb.WriteString("  " + warnSt.Render("Don't apply this file directly. It holds only the selected resource(s), so") + "\n")
+	sb.WriteString("  " + warnSt.Render("reconciling it would delete every other resource in the stack.") + "\n")
+	sb.WriteString("\n")
+	sb.WriteString("  " + textSt.Render("Copy the values you want to keep into your forma, then re-apply with --force:") + "\n")
+	sb.WriteString("    " + textSt.Render("formae apply --mode reconcile --force "+formaFile) + "\n")
 	sb.WriteString("\n")
 	sb.WriteString(keybindLine)
 
@@ -469,16 +490,6 @@ func (m Model) selectedRows() []driftRow {
 		}
 	}
 	return rows
-}
-
-// opColorForClass returns the operation-word color for a row class. Only
-// deletes are colored (Error); creates and updates stay white.
-func (m Model) opColorForClass(c rowClass) lipgloss.AdaptiveColor {
-	p := m.th.Palette
-	if c == rowClassDelete {
-		return p.Error
-	}
-	return p.TextPrimary
 }
 
 // revertConsequence describes what a forced re-apply does to one drifted row.

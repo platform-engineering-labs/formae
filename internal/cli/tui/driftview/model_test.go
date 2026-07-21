@@ -85,7 +85,7 @@ func makeFixtureError() *apimodel.FormaReconcileRejectedError {
 func makeModel(width, height int) Model {
 	th := theme.New("formae")
 	rejected := makeFixtureError()
-	m := New(th, rejected, Options{})
+	m := New(th, rejected, Options{FormaFile: "infra.pkl"})
 	var mm tea.Model = m
 	mm, _ = mm.Update(tea.WindowSizeMsg{Width: width, Height: height})
 	return mm.(Model)
@@ -120,6 +120,40 @@ func press(t *testing.T, m Model, key string) Model {
 func TestDriftView_GoldenMain(t *testing.T) {
 	m := makeModel(100, 32)
 	tuitest.RequireGolden(t, []byte(m.View()))
+}
+
+// TestDriftView_IntroLines pins the conditional guidance lines: the deletion
+// line appears only when a delete drift is present, and the revert line only
+// when reverting is available (hidden under --simulate).
+func TestDriftView_IntroLines(t *testing.T) {
+	th := theme.New("formae")
+
+	// Fixture has a delete row and revert is available → both extra lines show.
+	full := strings.Join(New(th, makeFixtureError(), Options{}).introLines(), "\n")
+	assert.Contains(t, full, "To accept a deletion")
+	assert.Contains(t, full, "Press r to discard")
+
+	// Under --simulate the revert line is hidden.
+	sim := strings.Join(New(th, makeFixtureError(), Options{SimulateOnly: true}).introLines(), "\n")
+	assert.NotContains(t, sim, "Press r")
+	assert.Contains(t, sim, "To accept a deletion")
+
+	// With no delete drift, the deletion line is hidden.
+	noDelete := &apimodel.FormaReconcileRejectedError{
+		ModifiedStacks: map[string]apimodel.ModifiedStack{
+			"production": {ModifiedResources: []apimodel.ResourceModification{
+				{
+					Stack: "production", Type: "AWS::S3::Bucket", Label: "b", Operation: "update",
+					PatchDocument: []byte(`[{"op":"replace","path":"/X","value":"y"}]`),
+					Properties:    []byte(`{"X":"y"}`),
+					OldProperties: []byte(`{"X":"z"}`),
+				},
+			}},
+		},
+	}
+	nd := strings.Join(New(th, noDelete, Options{}).introLines(), "\n")
+	assert.NotContains(t, nd, "To accept a deletion")
+	assert.Contains(t, nd, "Press r to discard")
 }
 
 // TestDriftView_SelectionToggles exercises space/a/n selection semantics per

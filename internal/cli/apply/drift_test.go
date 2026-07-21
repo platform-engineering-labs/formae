@@ -104,6 +104,35 @@ func TestSameDrift_DifferentStacks(t *testing.T) {
 	assert.False(t, sameDrift(a, b), "different stack names should not be equal")
 }
 
+// ---- buildExtractGuidance tests ----
+
+// TestBuildExtractGuidance pins the post-extract next-steps text: it must point
+// at the user's ORIGINAL forma with --force (never at the partial extracted
+// file, and never a plain reconcile), and must tell the user to fold values in
+// first. This is the regression guard for the dangerous old guidance that told
+// users to `apply --mode reconcile` the extracted file.
+func TestBuildExtractGuidance(t *testing.T) {
+	lines := buildExtractGuidance(2, "./out.pkl", "infra.pkl")
+	require.Len(t, lines, 3)
+
+	assert.Contains(t, lines[0], "./out.pkl")
+	assert.Contains(t, lines[1], "Fold the values you want to keep")
+	assert.Equal(t, "  formae apply --mode reconcile --force infra.pkl", lines[2])
+
+	for _, l := range lines {
+		assert.NotContains(t, l, "reconcile the new state", "dangerous old guidance must be gone")
+		assert.NotContains(t, l, "Re-run the original apply")
+		// The command must never point at the partial extracted file.
+		assert.NotContains(t, l, "--force ./out.pkl")
+	}
+}
+
+// TestBuildExtractGuidance_EmptyFormaFile falls back to a generic name.
+func TestBuildExtractGuidance_EmptyFormaFile(t *testing.T) {
+	lines := buildExtractGuidance(1, "./out.pkl", "")
+	assert.Contains(t, lines[2], "--force your forma")
+}
+
 // ---- runDriftFlow tests ----
 
 // stubDriftSeams saves originals and restores them on cleanup.
