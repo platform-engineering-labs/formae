@@ -57,10 +57,6 @@ func (r *renderer) accent(s string) string {
 	return lipgloss.NewStyle().Foreground(r.th.Palette.PrimaryAccent).Render(s)
 }
 
-func (r *renderer) accentf(format string, args ...any) string {
-	return r.accent(fmt.Sprintf(format, args...))
-}
-
 func (r *renderer) subtle(s string) string {
 	return lipgloss.NewStyle().Foreground(r.th.Palette.TextSubtle).Render(s)
 }
@@ -171,25 +167,33 @@ func (r *renderer) render(err error) (string, error) {
 // It renders the list of conflicting command IDs (accent) and a short
 // summary of each command's state (using the plain command status lines).
 func (r *renderer) renderConflictingCommands(data *apimodel.FormaConflictingCommandsError) (string, error) {
-	ids := make([]string, 0, len(data.ConflictingCommands))
-	var statusLines []string
-	for _, cmd := range data.ConflictingCommands {
-		ids = append(ids, cmd.CommandID)
-		line := renderCommandStatusLine(cmd)
-		statusLines = append(statusLines, line)
+	n := len(data.ConflictingCommands)
+	subject, them := "Another command is", "it"
+	if n > 1 {
+		subject, them = fmt.Sprintf("%d other commands are", n), "them"
 	}
 
-	msg := r.error("forma command rejected because the following forma command is currently modifying same resources: ") +
-		r.accentf("%s\n\n", strings.Join(ids, ",")) +
-		strings.Join(statusLines, "\n") + "\n"
-	return msg, nil
+	lines := make([]string, 0, n)
+	for _, cmd := range data.ConflictingCommands {
+		lines = append(lines, r.conflictLine(cmd))
+	}
+
+	// Keep every styled span single-line: newlines inside a lipgloss-rendered
+	// string get padded to the span's width, which injected stray whitespace.
+	return r.error(subject+" already working on the same resources:") + "\n\n" +
+		strings.Join(lines, "\n") + "\n\n" +
+		r.error("Wait for "+them+" to finish, or cancel with `formae cancel`, then retry.") + "\n", nil
 }
 
-// renderCommandStatusLine renders a single command as a summary line.
-// This mirrors the shape of renderer.RenderStatus without the full gtree tree.
-func renderCommandStatusLine(cmd apimodel.Command) string {
-	state := cmd.State
-	return fmt.Sprintf("  %s (ID: %s, state: %s)", cmd.Command, cmd.CommandID, state)
+// conflictLine renders one conflicting command as an indented summary: the verb
+// and mode, the command id (accent, so it's easy to copy into `formae cancel`),
+// and the current state.
+func (r *renderer) conflictLine(cmd apimodel.Command) string {
+	verb := string(cmd.Command)
+	if cmd.Mode != "" {
+		verb += " · " + string(cmd.Mode)
+	}
+	return fmt.Sprintf("  %s   %s   %s", verb, r.accent(cmd.CommandID), cmd.State)
 }
 
 // renderReconcileRejected formats FormaReconcileRejectedError.

@@ -28,6 +28,7 @@ func TestRender_ConflictingCommands_Golden(t *testing.T) {
 				{
 					CommandID: "cmd-abc123",
 					Command:   "apply",
+					Mode:      "reconcile",
 					State:     "InProgress",
 				},
 			},

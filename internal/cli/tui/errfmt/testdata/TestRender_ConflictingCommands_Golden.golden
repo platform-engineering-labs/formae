@@ -1,3 +1,5 @@
-[38;2;248;113;113mforma command rejected because the following forma command is currently modifying same resources: [0m[38;2;129;209;219mcmd-abc123[0m
-[38;2;129;209;219m[0m          
-[38;2;129;209;219m[0m            apply (ID: cmd-abc123, state: InProgress)
+[38;2;248;113;113mAnother command is already working on the same resources:[0m
+
+  apply · reconcile   [38;2;129;209;219mcmd-abc123[0m   InProgress
+
+[38;2;248;113;113mWait for it to finish, or cancel with `formae cancel`, then retry.[0m
