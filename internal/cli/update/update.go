@@ -175,7 +175,7 @@ func UpdateListCmd() *cobra.Command {
 
 			fmt.Print("available versions:\n\n")
 			for _, entry := range available.Available {
-				if entry.Version.Semver().EQ(available.Installed.Version.Semver()) {
+				if available.Installed != nil && entry.Version.Semver().EQ(available.Installed.Version.Semver()) {
 					age := "Newer"
 					if entry.Version.LT(available.Installed.Version) {
 						age = "Older"
