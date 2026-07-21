@@ -106,6 +106,17 @@ func TestSimView_GoldenApply(t *testing.T) {
 	tuitest.RequireGolden(t, []byte(m.View()))
 }
 
+// TestSimView_HeaderShowsMode pins that the apply header carries the mode next
+// to the verb, and that destroy (which has no mode) does not.
+func TestSimView_HeaderShowsMode(t *testing.T) {
+	th := theme.New("formae")
+	sim := makeFixtureSim()
+	assert.Equal(t, "apply · patch", New(th, sim, Options{Kind: KindApply, Mode: "patch"}).headerCommand())
+	assert.Equal(t, "apply · reconcile", New(th, sim, Options{Kind: KindApply, Mode: "reconcile"}).headerCommand())
+	assert.Equal(t, "apply", New(th, sim, Options{Kind: KindApply}).headerCommand())
+	assert.Equal(t, "destroy", New(th, sim, Options{Kind: KindDestroy, Mode: "reconcile"}).headerCommand())
+}
+
 // TestSimView_PaginationShowsMore navigates to the "show more" row in the
 // Resources group and presses enter; asserts that 10 more rows become visible.
 func TestSimView_PaginationShowsMore(t *testing.T) {

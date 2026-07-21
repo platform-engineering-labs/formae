@@ -440,19 +440,18 @@ func (m Model) headerCommand() string {
 	if m.opts.Kind == KindDestroy {
 		return "destroy"
 	}
+	// Show the mode (reconcile/patch) next to the verb so it's visible at a
+	// glance on the apply plan. Destroy has no mode.
+	if m.opts.Mode != "" {
+		return "apply · " + m.opts.Mode
+	}
 	return "apply"
 }
 
-// headerRight returns the header's right-side text.
-// Shows Source if set, otherwise mode.
+// headerRight returns the header's right-side text: the source (file or origin)
+// when set. The mode is shown next to the command verb (see headerCommand).
 func (m Model) headerRight() string {
-	if m.opts.Source != "" {
-		return m.opts.Source
-	}
-	if m.opts.Mode != "" {
-		return "mode: " + m.opts.Mode
-	}
-	return ""
+	return m.opts.Source
 }
 
 // navLines computes the flat navigable list given current pagination state.
