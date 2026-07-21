@@ -1343,6 +1343,39 @@ func TestResourcePersister_IdempotentTargetCreate_DifferentConfig(t *testing.T) 
 
 // newResourcePersisterForTest creates a ResourcePersister actor for testing.
 // This follows the same pattern as FormaCommandPersister tests.
+func TestResourcePersister_UpdateTargetHealth(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+
+	target := &pkgmodel.Target{
+		Label:     "health-actor-test",
+		Namespace: "AWS",
+		Config:    json.RawMessage(`{"Region":"us-east-1"}`),
+	}
+	_, err = ds.CreateTarget(target)
+	require.NoError(t, err)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	obs := pkgmodel.TargetHealthObservation{
+		TargetLabel: "health-actor-test",
+		State:       pkgmodel.TargetHealthStateReachable,
+		ObservedAt:  now,
+		LastSeenAt:  &now,
+	}
+
+	persister.SendMessage(sender, messages.UpdateTargetHealth{
+		Observation: obs,
+	})
+
+	assert.Eventually(t, func() bool {
+		loaded, loadErr := ds.LoadTarget("health-actor-test")
+		if loadErr != nil || loaded == nil || loaded.Health == nil {
+			return false
+		}
+		return loaded.Health.State == pkgmodel.TargetHealthStateReachable
+	}, 5*time.Second, 50*time.Millisecond, "datastore must reflect the health observation sent to the actor")
+}
+
 func newResourcePersisterForTest(t *testing.T) (*unit.TestActor, gen.PID, datastore.Datastore, error) {
 	// Create an in-memory datastore for testing
 	ds, err := newTestDatastore()

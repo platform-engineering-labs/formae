@@ -2687,7 +2687,7 @@ func (d DatastoreSQLite) UpdateTargetHealth(obs pkgmodel.TargetHealthObservation
 			WHERE label = ?
 			  AND version = (SELECT MAX(version) FROM targets WHERE label = ?)
 			  AND health_state <> 'reaped'
-			  AND (observed_at IS NULL OR observed_at < ?)
+			  AND (observed_at IS NULL OR julianday(observed_at) < julianday(?))
 			  AND target_incarnation_id = ?`
 		args = []any{obs.State, observedAt, lastSeenAt, lastErrorCode,
 			obs.TargetLabel, obs.TargetLabel, observedAt, obs.IncarnationID}
@@ -2701,7 +2701,7 @@ func (d DatastoreSQLite) UpdateTargetHealth(obs pkgmodel.TargetHealthObservation
 			WHERE label = ?
 			  AND version = (SELECT MAX(version) FROM targets WHERE label = ?)
 			  AND health_state <> 'reaped'
-			  AND (observed_at IS NULL OR observed_at < ?)`
+			  AND (observed_at IS NULL OR julianday(observed_at) < julianday(?))`
 		args = []any{obs.State, observedAt, lastSeenAt, lastErrorCode,
 			obs.TargetLabel, obs.TargetLabel, observedAt}
 	}

@@ -81,6 +81,7 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunTargetHealthStableAcrossUpdate(t, newDS)
 	RunUpdateTargetHealthReachable(t, newDS)
 	RunUpdateTargetHealthMonotonicGuard(t, newDS)
+	RunUpdateTargetHealthSubSecondMonotonic(t, newDS)
 	RunUpdateTargetHealthReapedGuard(t, newDS)
 
 	RunCreateStack(t, newDS)

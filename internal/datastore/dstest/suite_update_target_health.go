@@ -109,6 +109,54 @@ func RunUpdateTargetHealthMonotonicGuard(t *testing.T, newDS func(t *testing.T) 
 	})
 }
 
+// RunUpdateTargetHealthSubSecondMonotonic verifies that a fractional-second
+// observation (nanosecond precision) is accepted when the stored timestamp is a
+// whole-second value, i.e. the guard compares temporally rather than
+// lexicographically.  RFC3339Nano trims trailing zeros, so "…:05Z" sorts after
+// "…:05.5Z" under lexicographic ordering ('Z' > '.'), which would cause the
+// guard to falsely reject a chronologically-newer fractional observation.
+func RunUpdateTargetHealthSubSecondMonotonic(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("UpdateTargetHealth_SubSecondMonotonic", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		target := newHealthTestTarget("health-subsecond-test")
+		_, err := ds.CreateTarget(target)
+		require.NoError(t, err)
+
+		// First observation: whole-second timestamp (no fractional part).
+		whole := time.Date(2024, 3, 15, 10, 30, 5, 0, time.UTC)
+		obs1 := pkgmodel.TargetHealthObservation{
+			TargetLabel: "health-subsecond-test",
+			State:       pkgmodel.TargetHealthStateReachable,
+			ObservedAt:  whole,
+			LastSeenAt:  &whole,
+		}
+		applied, err := ds.UpdateTargetHealth(obs1)
+		require.NoError(t, err)
+		require.True(t, applied, "initial observation must be applied")
+
+		// Second observation: same second plus 500 ms — chronologically newer.
+		fractional := time.Date(2024, 3, 15, 10, 30, 5, 500_000_000, time.UTC)
+		obs2 := pkgmodel.TargetHealthObservation{
+			TargetLabel: "health-subsecond-test",
+			State:       pkgmodel.TargetHealthStateUnreachable,
+			ObservedAt:  fractional,
+		}
+		applied, err = ds.UpdateTargetHealth(obs2)
+		require.NoError(t, err)
+		assert.True(t, applied, "fractional-second observation newer than stored whole-second must be accepted")
+
+		loaded, err := ds.LoadTarget("health-subsecond-test")
+		require.NoError(t, err)
+		require.NotNil(t, loaded)
+		require.NotNil(t, loaded.Health)
+		assert.Equal(t, pkgmodel.TargetHealthStateUnreachable, loaded.Health.State,
+			"state must reflect the newer fractional-second observation")
+	})
+}
+
 // RunUpdateTargetHealthReapedGuard verifies that applying any observation to a
 // target whose health_state is 'reaped' is a no-op (applied=false).
 func RunUpdateTargetHealthReapedGuard(t *testing.T, newDS func(t *testing.T) TestDatastore) {
