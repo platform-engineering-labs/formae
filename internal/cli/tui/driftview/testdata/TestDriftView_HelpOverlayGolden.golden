@@ -1,11 +1,13 @@
   [1;38;2;232;232;232mformae[0m [1;38;2;255;133;51mapply[0m                                                                  [1;38;2;248;113;113mreconcile rejected[0m  
 [38;2;85;85;102m────────────────────────────────────────────────────────────────────────────────────────────────────[0m
 
-  [38;2;248;113;113mYour infrastructure has changed since the last reconcile.[0m
-  [38;2;170;170;170mSelect resources to extract, or revert all changes.[0m
+  [38;2;248;113;113mYour infrastructure changed outside formae since the last reconcile.[0m
 
-                                                                                                    
-                                                                                                    
+  [38;2;170;170;170mKeep a change: extract the resource, fold it into your code, then re-apply.[0m
+  [38;2;170;170;170mTo accept a deletion, remove that resource from your code, or the next apply[0m
+  [38;2;170;170;170mrecreates it.[0m
+  [38;2;170;170;170mPress [0m[1;38;2;129;209;219mr[0m[38;2;170;170;170m to discard all out-of-band changes and re-apply your code with --force.[0m
+
                                                                                                     
                                 [38;2;85;85;102m╭──────────────────────────────────╮[0m                                
                                 [38;2;85;85;102m│[0m                                  [38;2;85;85;102m│[0m                                
@@ -26,6 +28,4 @@
                                 [38;2;85;85;102m│[0m    [38;2;129;209;219m?[0m        — [38;2;170;170;170mclose help[0m         [38;2;85;85;102m│[0m                                
                                 [38;2;85;85;102m│[0m                                  [38;2;85;85;102m│[0m                                
                                 [38;2;85;85;102m╰──────────────────────────────────╯[0m                                
-                                                                                                    
-                                                                                                    
                                                                                                     
