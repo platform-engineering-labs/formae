@@ -152,9 +152,9 @@ func UpdateListCmd() *cobra.Command {
 
 			var orb *mgr.Manager
 			if len(app.Config.Artifacts.Repositories) > 0 {
-				orb, err = opsmgr.NewFromRepositoriesFiltered(slog.Default(), app.Config.Artifacts.Repositories, channel, true, true, pkgmodel.RepositoryTypeBinary)
+				orb, err = opsmgr.NewFromRepositoriesFiltered(slog.Default(), app.Config.Artifacts.Repositories, channel, false, false, pkgmodel.RepositoryTypeBinary)
 			} else {
-				orb, err = opsmgr.New(slog.Default(), app.Config.Artifacts.URL, channel, true, true)
+				orb, err = opsmgr.New(slog.Default(), app.Config.Artifacts.URL, channel, false, false)
 			}
 			if err != nil {
 				return err
@@ -162,11 +162,6 @@ func UpdateListCmd() *cobra.Command {
 
 			if !orb.Ready() {
 				return fmt.Errorf("no managed installation root detected at: %s\n", orb.Path())
-			}
-
-			err = orb.Refresh()
-			if err != nil {
-				return err
 			}
 
 			available, err := orb.AvailableForSimple("formae")

@@ -106,9 +106,6 @@ func (pm *CLIPluginManager) ListInstalled() ([]apimodel.Plugin, error) {
 // AvailableVersions populated) so the CLI can stand alone without an
 // agent.
 func (pm *CLIPluginManager) LocalSearch(query, category, typ string) ([]apimodel.Plugin, error) {
-	if err := pm.orb.Refresh(); err != nil {
-		pm.logger.Warn("refresh failed, using cached repository data", "error", err)
-	}
 	avail, err := pm.orb.Available()
 	if err != nil {
 		return nil, fmt.Errorf("querying available packages: %w", err)
@@ -147,9 +144,6 @@ func (pm *CLIPluginManager) LocalSearch(query, category, typ string) ([]apimodel
 // metadata or the package is unknown. Mirrors the agent-side
 // PluginManager.Info.
 func (pm *CLIPluginManager) LocalInfo(name string) (*apimodel.Plugin, error) {
-	if err := pm.orb.Refresh(); err != nil {
-		pm.logger.Warn("refresh failed, using cached repository data", "error", err)
-	}
 	status, err := pm.orb.AvailableFor(name)
 	if err != nil {
 		// orbital's AvailableFor returns "no available packages for: <name>"
