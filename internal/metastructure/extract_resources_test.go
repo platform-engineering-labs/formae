@@ -308,7 +308,8 @@ func TestExtractResources_ManagedAndUnmanagedStacks(t *testing.T) {
 	// Unmanaged stack should be synthesized with a description
 	unmanaged, ok := stacksByLabel[constants.UnmanagedStack]
 	require.True(t, ok, "should have $unmanaged stack")
-	assert.NotEmpty(t, unmanaged.Description, "$unmanaged stack should have a non-empty description")
+	assert.Equal(t, "Resources imported with formae extract", unmanaged.Description,
+		"$unmanaged stack should be synthesized with the import description")
 
 	// Verify the forma can be serialized to JSON with Stacks present
 	jsonBytes, err := json.Marshal(forma)
