@@ -1029,7 +1029,8 @@ func (d DatastorePostgres) LoadAllTargets() ([]*pkgmodel.Target, error) {
 	query := `
 	SELECT label, version, namespace, config, config_schema, discoverable,
 	       target_incarnation_id, health_state, last_seen_at, observed_at,
-	       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code
+	       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+	       reap_kind, reap_max_unreachable_seconds
 	FROM targets t1
 	WHERE NOT EXISTS (
 		SELECT 1
@@ -1056,9 +1057,12 @@ func (d DatastorePostgres) LoadAllTargets() ([]*pkgmodel.Target, error) {
 		var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt *time.Time
 		var unreachableAccumSeconds int64
 		var lastErrorCode *string
+		var reapKind string
+		var reapMaxUnreachableSeconds int64
 		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaRaw, &discoverable,
 			&incarnationID, &healthState, &lastSeenAt, &observedAt,
-			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode); err != nil {
+			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode,
+			&reapKind, &reapMaxUnreachableSeconds); err != nil {
 			return nil, err
 		}
 
@@ -1076,6 +1080,7 @@ func (d DatastorePostgres) LoadAllTargets() ([]*pkgmodel.Target, error) {
 			ConfigSchema: configSchema,
 			Discoverable: discoverable,
 			Version:      version,
+			Reaping:      pkgmodel.ReapingRawFromColumns(reapKind, reapMaxUnreachableSeconds),
 			Health:       buildPostgresTargetHealth(incarnationID, healthState, lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt, unreachableAccumSeconds, lastErrorCode),
 		})
 	}
@@ -1301,7 +1306,8 @@ func (d DatastorePostgres) FindTargetsDependingOnMany(ksuids []string) (map[stri
 	query := fmt.Sprintf(`
 	SELECT label, version, namespace, config, config_schema, discoverable,
 	       target_incarnation_id, health_state, last_seen_at, observed_at,
-	       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code
+	       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+	       reap_kind, reap_max_unreachable_seconds
 	FROM targets t1
 	WHERE (%s)
 	AND NOT EXISTS (
@@ -1330,9 +1336,12 @@ func (d DatastorePostgres) FindTargetsDependingOnMany(ksuids []string) (map[stri
 		var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt *time.Time
 		var unreachableAccumSeconds int64
 		var lastErrorCode *string
+		var reapKind string
+		var reapMaxUnreachableSeconds int64
 		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaRaw, &discoverable,
 			&incarnationID, &healthState, &lastSeenAt, &observedAt,
-			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode); err != nil {
+			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode,
+			&reapKind, &reapMaxUnreachableSeconds); err != nil {
 			return nil, err
 		}
 
@@ -1350,6 +1359,7 @@ func (d DatastorePostgres) FindTargetsDependingOnMany(ksuids []string) (map[stri
 			ConfigSchema: configSchema,
 			Discoverable: discoverable,
 			Version:      version,
+			Reaping:      pkgmodel.ReapingRawFromColumns(reapKind, reapMaxUnreachableSeconds),
 			Health:       buildPostgresTargetHealth(incarnationID, healthState, lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt, unreachableAccumSeconds, lastErrorCode),
 		}
 
@@ -2638,7 +2648,8 @@ func (d DatastorePostgres) LoadTarget(label string) (*pkgmodel.Target, error) {
 	query := `
 	SELECT version, namespace, config, config_schema, discoverable,
 	       target_incarnation_id, health_state, last_seen_at, observed_at,
-	       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code
+	       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+	       reap_kind, reap_max_unreachable_seconds
 	FROM targets
 	WHERE label = $1
 	ORDER BY version DESC
@@ -2655,9 +2666,12 @@ func (d DatastorePostgres) LoadTarget(label string) (*pkgmodel.Target, error) {
 	var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt *time.Time
 	var unreachableAccumSeconds int64
 	var lastErrorCode *string
+	var reapKind string
+	var reapMaxUnreachableSeconds int64
 	if err := row.Scan(&version, &namespace, &config, &configSchemaRaw, &discoverable,
 		&incarnationID, &healthState, &lastSeenAt, &observedAt,
-		&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode); err != nil {
+		&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode,
+		&reapKind, &reapMaxUnreachableSeconds); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil // Target not found, return nil without error
 		}
@@ -2678,6 +2692,7 @@ func (d DatastorePostgres) LoadTarget(label string) (*pkgmodel.Target, error) {
 		ConfigSchema: configSchema,
 		Discoverable: discoverable,
 		Version:      version,
+		Reaping:      pkgmodel.ReapingRawFromColumns(reapKind, reapMaxUnreachableSeconds),
 		Health:       buildPostgresTargetHealth(incarnationID, healthState, lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt, unreachableAccumSeconds, lastErrorCode),
 	}, nil
 }
@@ -2727,7 +2742,8 @@ func (d DatastorePostgres) LoadTargetsByLabels(targetNames []string) ([]*pkgmode
 	query := fmt.Sprintf(`
 	SELECT t1.label, t1.version, t1.namespace, t1.config, t1.config_schema, t1.discoverable,
 	       t1.target_incarnation_id, t1.health_state, t1.last_seen_at, t1.observed_at,
-	       t1.first_unreachable_at, t1.last_sample_at, t1.unreachable_accum_seconds, t1.last_error_code
+	       t1.first_unreachable_at, t1.last_sample_at, t1.unreachable_accum_seconds, t1.last_error_code,
+	       t1.reap_kind, t1.reap_max_unreachable_seconds
 	FROM targets t1
 	WHERE t1.label IN (%s)
 	AND NOT EXISTS (
@@ -2755,9 +2771,12 @@ func (d DatastorePostgres) LoadTargetsByLabels(targetNames []string) ([]*pkgmode
 		var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt *time.Time
 		var unreachableAccumSeconds int64
 		var lastErrorCode *string
+		var reapKind string
+		var reapMaxUnreachableSeconds int64
 		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaRaw, &discoverable,
 			&incarnationID, &healthState, &lastSeenAt, &observedAt,
-			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode); err != nil {
+			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode,
+			&reapKind, &reapMaxUnreachableSeconds); err != nil {
 			return nil, err
 		}
 
@@ -2775,6 +2794,7 @@ func (d DatastorePostgres) LoadTargetsByLabels(targetNames []string) ([]*pkgmode
 			ConfigSchema: configSchema,
 			Discoverable: discoverable,
 			Version:      version,
+			Reaping:      pkgmodel.ReapingRawFromColumns(reapKind, reapMaxUnreachableSeconds),
 			Health:       buildPostgresTargetHealth(incarnationID, healthState, lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt, unreachableAccumSeconds, lastErrorCode),
 		})
 	}
@@ -2791,7 +2811,8 @@ func (d DatastorePostgres) LoadDiscoverableTargets() ([]*pkgmodel.Target, error)
 	WITH latest_targets AS (
 		SELECT label, version, namespace, config, config_schema, discoverable,
 		       target_incarnation_id, health_state, last_seen_at, observed_at,
-		       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code
+		       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+		       reap_kind, reap_max_unreachable_seconds
 		FROM targets t1
 		WHERE discoverable = TRUE
 		AND NOT EXISTS (
@@ -2803,7 +2824,8 @@ func (d DatastorePostgres) LoadDiscoverableTargets() ([]*pkgmodel.Target, error)
 	)
 	SELECT DISTINCT ON (config) label, version, namespace, config, config_schema, discoverable,
 	       target_incarnation_id, health_state, last_seen_at, observed_at,
-	       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code
+	       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+	       reap_kind, reap_max_unreachable_seconds
 	FROM latest_targets
 	ORDER BY config, version DESC`
 
@@ -2824,9 +2846,12 @@ func (d DatastorePostgres) LoadDiscoverableTargets() ([]*pkgmodel.Target, error)
 		var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt *time.Time
 		var unreachableAccumSeconds int64
 		var lastErrorCode *string
+		var reapKind string
+		var reapMaxUnreachableSeconds int64
 		if err := rows.Scan(&label, &version, &ns, &config, &configSchemaRaw, &discoverable,
 			&incarnationID, &healthState, &lastSeenAt, &observedAt,
-			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode); err != nil {
+			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode,
+			&reapKind, &reapMaxUnreachableSeconds); err != nil {
 			return nil, err
 		}
 
@@ -2844,6 +2869,7 @@ func (d DatastorePostgres) LoadDiscoverableTargets() ([]*pkgmodel.Target, error)
 			ConfigSchema: configSchema,
 			Discoverable: discoverable,
 			Version:      version,
+			Reaping:      pkgmodel.ReapingRawFromColumns(reapKind, reapMaxUnreachableSeconds),
 			Health:       buildPostgresTargetHealth(incarnationID, healthState, lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt, unreachableAccumSeconds, lastErrorCode),
 		})
 	}
@@ -2858,7 +2884,8 @@ func (d DatastorePostgres) QueryTargets(query *datastore.TargetQuery) ([]*pkgmod
 	queryStr := `
 		SELECT label, version, namespace, config, config_schema, discoverable,
 		       target_incarnation_id, health_state, last_seen_at, observed_at,
-		       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code
+		       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+		       reap_kind, reap_max_unreachable_seconds
 		FROM targets t1
 		WHERE NOT EXISTS (
 			SELECT 1
@@ -2890,9 +2917,12 @@ func (d DatastorePostgres) QueryTargets(query *datastore.TargetQuery) ([]*pkgmod
 		var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt *time.Time
 		var unreachableAccumSeconds int64
 		var lastErrorCode *string
+		var reapKind string
+		var reapMaxUnreachableSeconds int64
 		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaRaw, &discoverable,
 			&incarnationID, &healthState, &lastSeenAt, &observedAt,
-			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode); err != nil {
+			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode,
+			&reapKind, &reapMaxUnreachableSeconds); err != nil {
 			return nil, err
 		}
 
@@ -2910,6 +2940,7 @@ func (d DatastorePostgres) QueryTargets(query *datastore.TargetQuery) ([]*pkgmod
 			ConfigSchema: configSchema,
 			Discoverable: discoverable,
 			Version:      version,
+			Reaping:      pkgmodel.ReapingRawFromColumns(reapKind, reapMaxUnreachableSeconds),
 			Health:       buildPostgresTargetHealth(incarnationID, healthState, lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt, unreachableAccumSeconds, lastErrorCode),
 		})
 	}
@@ -3381,12 +3412,18 @@ func (d DatastorePostgres) CreateTarget(target *pkgmodel.Target) (string, error)
 
 	incarnationID := mksuid.New().String()
 
+	reapKind, reapMaxUnreachableSeconds, err := pkgmodel.ReapingToColumns(target.Reaping)
+	if err != nil {
+		return "", err
+	}
+
 	query := `
 	INSERT INTO targets (label, version, namespace, config, config_schema, discoverable,
-	                     target_incarnation_id, health_state, unreachable_accum_seconds)
-	VALUES ($1, 1, $2, $3, $4, $5, $6, 'unknown', 0)
+	                     target_incarnation_id, health_state, unreachable_accum_seconds,
+	                     reap_kind, reap_max_unreachable_seconds)
+	VALUES ($1, 1, $2, $3, $4, $5, $6, 'unknown', 0, $7, $8)
 	`
-	_, err = d.pool.Exec(ctx, query, target.Label, target.Namespace, cfg, configSchemaJSON, target.Discoverable, incarnationID)
+	_, err = d.pool.Exec(ctx, query, target.Label, target.Namespace, cfg, configSchemaJSON, target.Discoverable, incarnationID, reapKind, reapMaxUnreachableSeconds)
 	if err != nil {
 		slog.Debug("failed to create target (may be retried as update)", "error", err, "label", target.Label)
 		return "", err
@@ -3446,14 +3483,42 @@ func (d DatastorePostgres) UpdateTarget(target *pkgmodel.Target) (string, error)
 		}
 	}
 
+	reapKind, reapMaxUnreachableSeconds, err := pkgmodel.ReapingToColumns(target.Reaping)
+	if err != nil {
+		return "", err
+	}
+
+	// Recovery: when the current row has been reaped, re-declaring the target
+	// mints a fresh incarnation id and resets health to 'unknown' (accrual 0,
+	// timestamps cleared) rather than carrying the reaped state forward.
+	newIncarnationID := safeStr(incarnationID)
+	newHealthState := safeStr(healthState)
+	newLastSeenAt := lastSeenAt
+	newObservedAt := observedAt
+	newFirstUnreachableAt := firstUnreachableAt
+	newLastSampleAt := lastSampleAt
+	newUnreachableAccumSeconds := safeInt64(unreachableAccumSeconds)
+	newLastErrorCode := lastErrorCode
+	if safeStr(healthState) == pkgmodel.TargetHealthStateReaped {
+		newIncarnationID = mksuid.New().String()
+		newHealthState = pkgmodel.TargetHealthStateUnknown
+		newLastSeenAt = nil
+		newObservedAt = nil
+		newFirstUnreachableAt = nil
+		newLastSampleAt = nil
+		newUnreachableAccumSeconds = 0
+		newLastErrorCode = nil
+	}
+
 	insertQuery := `
 		INSERT INTO targets (label, version, namespace, config, config_schema, discoverable,
 		                     target_incarnation_id, health_state, last_seen_at, observed_at,
-		                     first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`
+		                     first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+		                     reap_kind, reap_max_unreachable_seconds)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`
 	_, err = d.pool.Exec(ctx, insertQuery, target.Label, newVersion, target.Namespace, cfg, configSchemaJSON, target.Discoverable,
-		safeStr(incarnationID), safeStr(healthState), lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt,
-		safeInt64(unreachableAccumSeconds), lastErrorCode)
+		newIncarnationID, newHealthState, newLastSeenAt, newObservedAt, newFirstUnreachableAt, newLastSampleAt,
+		newUnreachableAccumSeconds, newLastErrorCode, reapKind, reapMaxUnreachableSeconds)
 	if err != nil {
 		slog.Error("failed to update target", "error", err, "label", target.Label, "version", newVersion)
 		return "", err
@@ -3478,36 +3543,46 @@ func (d DatastorePostgres) UpdateTargetHealth(obs pkgmodel.TargetHealthObservati
 		lastErrorCode = &obs.LastErrorCode
 	}
 
+	// A reachable ("success") observation clears any accrued unreachability:
+	// the target is healthy again, so first_unreachable_at and the accumulated
+	// unreachable seconds reset to their pristine (never-unreachable) values.
+	accrualReset := ""
+	if obs.State == pkgmodel.TargetHealthStateReachable {
+		accrualReset = `,
+				first_unreachable_at = NULL,
+				unreachable_accum_seconds = 0`
+	}
+
 	var rowsAffected int64
 	var err error
 	if obs.IncarnationID != "" {
-		query := `
+		query := fmt.Sprintf(`
 			UPDATE targets SET
 				health_state = $1,
 				observed_at = $2,
 				last_seen_at = COALESCE($3, last_seen_at),
-				last_error_code = $4
+				last_error_code = $4%s
 			WHERE label = $5
 			  AND version = (SELECT MAX(version) FROM targets WHERE label = $5)
 			  AND health_state <> 'reaped'
 			  AND (observed_at IS NULL OR observed_at < $2)
-			  AND target_incarnation_id = $6`
+			  AND target_incarnation_id = $6`, accrualReset)
 		tag, execErr := d.pool.Exec(ctx, query, obs.State, observedAt, lastSeenAt, lastErrorCode, obs.TargetLabel, obs.IncarnationID)
 		err = execErr
 		if execErr == nil {
 			rowsAffected = tag.RowsAffected()
 		}
 	} else {
-		query := `
+		query := fmt.Sprintf(`
 			UPDATE targets SET
 				health_state = $1,
 				observed_at = $2,
 				last_seen_at = COALESCE($3, last_seen_at),
-				last_error_code = $4
+				last_error_code = $4%s
 			WHERE label = $5
 			  AND version = (SELECT MAX(version) FROM targets WHERE label = $5)
 			  AND health_state <> 'reaped'
-			  AND (observed_at IS NULL OR observed_at < $2)`
+			  AND (observed_at IS NULL OR observed_at < $2)`, accrualReset)
 		tag, execErr := d.pool.Exec(ctx, query, obs.State, observedAt, lastSeenAt, lastErrorCode, obs.TargetLabel)
 		err = execErr
 		if execErr == nil {

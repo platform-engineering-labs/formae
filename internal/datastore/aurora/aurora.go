@@ -1912,7 +1912,8 @@ func (d *DatastoreAuroraDataAPI) FindTargetsDependingOnMany(ksuids []string) (ma
 	query := fmt.Sprintf(`
 	SELECT label, version, namespace, config, discoverable, config_schema,
 	       target_incarnation_id, health_state, last_seen_at, observed_at,
-	       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code
+	       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+	       reap_kind, reap_max_unreachable_seconds
 	FROM targets t1
 	WHERE (%s)
 	AND NOT EXISTS (
@@ -1931,7 +1932,7 @@ func (d *DatastoreAuroraDataAPI) FindTargetsDependingOnMany(ksuids []string) (ma
 	// Build a map of KSUID -> targets that depend on it
 	result := make(map[string][]*pkgmodel.Target)
 	for _, record := range output.Records {
-		if len(record) < 14 {
+		if len(record) < 16 {
 			return nil, fmt.Errorf("unexpected record length: %d", len(record))
 		}
 
@@ -1962,6 +1963,7 @@ func (d *DatastoreAuroraDataAPI) FindTargetsDependingOnMany(ksuids []string) (ma
 
 		configSchema, _ := unmarshalConfigSchema(record[5])
 		health, _ := scanAuroraTargetHealth(record[6:])
+		reapingRaw := auroraReapingFromFields(record[14], record[15])
 
 		target := &pkgmodel.Target{
 			Label:        label,
@@ -1970,6 +1972,7 @@ func (d *DatastoreAuroraDataAPI) FindTargetsDependingOnMany(ksuids []string) (ma
 			ConfigSchema: configSchema,
 			Discoverable: discoverable,
 			Version:      version,
+			Reaping:      reapingRaw,
 			Health:       health,
 		}
 
@@ -2120,9 +2123,10 @@ func (d *DatastoreAuroraDataAPI) CreateTarget(target *pkgmodel.Target) (string, 
 
 	query := `
 	INSERT INTO targets (label, version, namespace, config, discoverable, config_schema,
-	                     target_incarnation_id, health_state, unreachable_accum_seconds)
+	                     target_incarnation_id, health_state, unreachable_accum_seconds,
+	                     reap_kind, reap_max_unreachable_seconds)
 	VALUES (:label, 1, :namespace, :config::jsonb, :discoverable, :config_schema::jsonb,
-	        :target_incarnation_id, 'unknown', 0)
+	        :target_incarnation_id, 'unknown', 0, :reap_kind, :reap_max_unreachable_seconds)
 	`
 
 	configJSON, err := json.Marshal(target.Config)
@@ -2143,6 +2147,11 @@ func (d *DatastoreAuroraDataAPI) CreateTarget(target *pkgmodel.Target) (string, 
 
 	incarnationID := mksuid.New().String()
 
+	reapKind, reapMaxUnreachableSeconds, err := pkgmodel.ReapingToColumns(target.Reaping)
+	if err != nil {
+		return "", err
+	}
+
 	params := []types.SqlParameter{
 		{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: target.Label}},
 		{Name: aws.String("namespace"), Value: &types.FieldMemberStringValue{Value: target.Namespace}},
@@ -2150,6 +2159,8 @@ func (d *DatastoreAuroraDataAPI) CreateTarget(target *pkgmodel.Target) (string, 
 		{Name: aws.String("discoverable"), Value: &types.FieldMemberBooleanValue{Value: target.Discoverable}},
 		{Name: aws.String("config_schema"), Value: configSchemaParam},
 		{Name: aws.String("target_incarnation_id"), Value: &types.FieldMemberStringValue{Value: incarnationID}},
+		{Name: aws.String("reap_kind"), Value: &types.FieldMemberStringValue{Value: reapKind}},
+		{Name: aws.String("reap_max_unreachable_seconds"), Value: &types.FieldMemberLongValue{Value: reapMaxUnreachableSeconds}},
 	}
 
 	_, err = d.executeStatement(ctx, query, params)
@@ -2213,6 +2224,19 @@ func (d *DatastoreAuroraDataAPI) UpdateTarget(target *pkgmodel.Target) (string, 
 		lastErrorCodeParam = &types.FieldMemberStringValue{Value: lastErrorCode}
 	}
 
+	// Recovery: a reaped current row is brought back to life on re-declare —
+	// fresh incarnation, health reset to 'unknown', accrual and timestamps cleared.
+	if healthState == pkgmodel.TargetHealthStateReaped {
+		incarnationID = mksuid.New().String()
+		healthState = pkgmodel.TargetHealthStateUnknown
+		lastSeenAtParam = &types.FieldMemberIsNull{Value: true}
+		observedAtParam = &types.FieldMemberIsNull{Value: true}
+		firstUnreachableAtParam = &types.FieldMemberIsNull{Value: true}
+		lastSampleAtParam = &types.FieldMemberIsNull{Value: true}
+		accumSeconds = 0
+		lastErrorCodeParam = &types.FieldMemberIsNull{Value: true}
+	}
+
 	newVersion := maxVersion + 1
 
 	configJSON, err := json.Marshal(target.Config)
@@ -2231,13 +2255,20 @@ func (d *DatastoreAuroraDataAPI) UpdateTarget(target *pkgmodel.Target) (string, 
 		configSchemaParam = &types.FieldMemberIsNull{Value: true}
 	}
 
+	reapKind, reapMaxUnreachableSeconds, err := pkgmodel.ReapingToColumns(target.Reaping)
+	if err != nil {
+		return "", err
+	}
+
 	insertQuery := `
 	INSERT INTO targets (label, version, namespace, config, discoverable, config_schema,
 	                     target_incarnation_id, health_state, last_seen_at, observed_at,
-	                     first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code)
+	                     first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+	                     reap_kind, reap_max_unreachable_seconds)
 	VALUES (:label, :version, :namespace, :config::jsonb, :discoverable, :config_schema::jsonb,
 	        :target_incarnation_id, :health_state, :last_seen_at::timestamptz, :observed_at::timestamptz,
-	        :first_unreachable_at::timestamptz, :last_sample_at::timestamptz, :unreachable_accum_seconds, :last_error_code)
+	        :first_unreachable_at::timestamptz, :last_sample_at::timestamptz, :unreachable_accum_seconds, :last_error_code,
+	        :reap_kind, :reap_max_unreachable_seconds)
 	`
 	insertParams := []types.SqlParameter{
 		{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: target.Label}},
@@ -2254,6 +2285,8 @@ func (d *DatastoreAuroraDataAPI) UpdateTarget(target *pkgmodel.Target) (string, 
 		{Name: aws.String("last_sample_at"), Value: lastSampleAtParam},
 		{Name: aws.String("unreachable_accum_seconds"), Value: &types.FieldMemberLongValue{Value: int64(accumSeconds)}},
 		{Name: aws.String("last_error_code"), Value: lastErrorCodeParam},
+		{Name: aws.String("reap_kind"), Value: &types.FieldMemberStringValue{Value: reapKind}},
+		{Name: aws.String("reap_max_unreachable_seconds"), Value: &types.FieldMemberLongValue{Value: reapMaxUnreachableSeconds}},
 	}
 
 	_, err = d.executeStatement(ctx, insertQuery, insertParams)
@@ -2284,20 +2317,28 @@ func (d *DatastoreAuroraDataAPI) UpdateTargetHealth(obs pkgmodel.TargetHealthObs
 		lastErrorCodeParam = &types.FieldMemberIsNull{Value: true}
 	}
 
+	// A reachable ("success") observation clears any accrued unreachability.
+	accrualReset := ""
+	if obs.State == pkgmodel.TargetHealthStateReachable {
+		accrualReset = `,
+			first_unreachable_at = NULL,
+			unreachable_accum_seconds = 0`
+	}
+
 	var query string
 	var params []types.SqlParameter
 	if obs.IncarnationID != "" {
-		query = `
+		query = fmt.Sprintf(`
 		UPDATE targets SET
 			health_state = :health_state,
 			observed_at = :observed_at::timestamptz,
 			last_seen_at = COALESCE(:last_seen_at::timestamptz, last_seen_at),
-			last_error_code = :last_error_code
+			last_error_code = :last_error_code%s
 		WHERE label = :label
 		  AND version = (SELECT MAX(version) FROM targets WHERE label = :label)
 		  AND health_state <> 'reaped'
 		  AND (observed_at IS NULL OR observed_at < :observed_at::timestamptz)
-		  AND target_incarnation_id = :incarnation_id`
+		  AND target_incarnation_id = :incarnation_id`, accrualReset)
 		params = []types.SqlParameter{
 			{Name: aws.String("health_state"), Value: &types.FieldMemberStringValue{Value: obs.State}},
 			{Name: aws.String("observed_at"), Value: &types.FieldMemberStringValue{Value: observedAt}},
@@ -2307,16 +2348,16 @@ func (d *DatastoreAuroraDataAPI) UpdateTargetHealth(obs pkgmodel.TargetHealthObs
 			{Name: aws.String("incarnation_id"), Value: &types.FieldMemberStringValue{Value: obs.IncarnationID}},
 		}
 	} else {
-		query = `
+		query = fmt.Sprintf(`
 		UPDATE targets SET
 			health_state = :health_state,
 			observed_at = :observed_at::timestamptz,
 			last_seen_at = COALESCE(:last_seen_at::timestamptz, last_seen_at),
-			last_error_code = :last_error_code
+			last_error_code = :last_error_code%s
 		WHERE label = :label
 		  AND version = (SELECT MAX(version) FROM targets WHERE label = :label)
 		  AND health_state <> 'reaped'
-		  AND (observed_at IS NULL OR observed_at < :observed_at::timestamptz)`
+		  AND (observed_at IS NULL OR observed_at < :observed_at::timestamptz)`, accrualReset)
 		params = []types.SqlParameter{
 			{Name: aws.String("health_state"), Value: &types.FieldMemberStringValue{Value: obs.State}},
 			{Name: aws.String("observed_at"), Value: &types.FieldMemberStringValue{Value: observedAt}},
@@ -2339,7 +2380,8 @@ func (d *DatastoreAuroraDataAPI) LoadTarget(targetLabel string) (*pkgmodel.Targe
 	query := `
 	SELECT version, namespace, config, discoverable, config_schema,
 	       target_incarnation_id, health_state, last_seen_at, observed_at,
-	       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code
+	       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+	       reap_kind, reap_max_unreachable_seconds
 	FROM targets
 	WHERE label = :label
 	ORDER BY version DESC
@@ -2359,7 +2401,7 @@ func (d *DatastoreAuroraDataAPI) LoadTarget(targetLabel string) (*pkgmodel.Targe
 	}
 
 	record := output.Records[0]
-	if len(record) < 13 {
+	if len(record) < 15 {
 		return nil, fmt.Errorf("unexpected record length: %d", len(record))
 	}
 
@@ -2392,6 +2434,7 @@ func (d *DatastoreAuroraDataAPI) LoadTarget(targetLabel string) (*pkgmodel.Targe
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse target health: %w", err)
 	}
+	reapingRaw := auroraReapingFromFields(record[13], record[14])
 
 	return &pkgmodel.Target{
 		Label:        targetLabel,
@@ -2400,6 +2443,7 @@ func (d *DatastoreAuroraDataAPI) LoadTarget(targetLabel string) (*pkgmodel.Targe
 		ConfigSchema: configSchema,
 		Discoverable: discoverable,
 		Version:      version,
+		Reaping:      reapingRaw,
 		Health:       health,
 	}, nil
 }
@@ -2439,13 +2483,26 @@ func scanAuroraTargetHealth(fields []types.Field) (*pkgmodel.TargetHealth, error
 	}, nil
 }
 
+// auroraReapingFromFields reconstructs a target's raw reaping message from the
+// reap_kind and reap_max_unreachable_seconds Data API fields. An empty kind
+// falls back to the global default ('after').
+func auroraReapingFromFields(kindField, maxField types.Field) json.RawMessage {
+	kind, _ := getStringField(kindField)
+	maxUnreachableSeconds, _ := getIntField(maxField)
+	if kind == "" {
+		kind = "after"
+	}
+	return pkgmodel.ReapingRawFromColumns(kind, int64(maxUnreachableSeconds))
+}
+
 func (d *DatastoreAuroraDataAPI) LoadAllTargets() ([]*pkgmodel.Target, error) {
 	ctx := context.Background()
 
 	query := `
 	SELECT label, version, namespace, config, discoverable, config_schema,
 	       target_incarnation_id, health_state, last_seen_at, observed_at,
-	       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code
+	       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+	       reap_kind, reap_max_unreachable_seconds
 	FROM targets t1
 	WHERE NOT EXISTS (
 		SELECT 1
@@ -2462,7 +2519,7 @@ func (d *DatastoreAuroraDataAPI) LoadAllTargets() ([]*pkgmodel.Target, error) {
 
 	var targets []*pkgmodel.Target
 	for _, record := range output.Records {
-		if len(record) < 14 {
+		if len(record) < 16 {
 			continue
 		}
 
@@ -2497,6 +2554,7 @@ func (d *DatastoreAuroraDataAPI) LoadAllTargets() ([]*pkgmodel.Target, error) {
 		}
 
 		health, _ := scanAuroraTargetHealth(record[6:])
+		reapingRaw := auroraReapingFromFields(record[14], record[15])
 
 		targets = append(targets, &pkgmodel.Target{
 			Label:        label,
@@ -2505,6 +2563,7 @@ func (d *DatastoreAuroraDataAPI) LoadAllTargets() ([]*pkgmodel.Target, error) {
 			ConfigSchema: configSchema,
 			Discoverable: discoverable,
 			Version:      version,
+			Reaping:      reapingRaw,
 			Health:       health,
 		})
 	}
@@ -2533,7 +2592,8 @@ func (d *DatastoreAuroraDataAPI) LoadTargetsByLabels(targetNames []string) ([]*p
 	query := fmt.Sprintf(`
 	SELECT t1.label, t1.version, t1.namespace, t1.config, t1.discoverable, t1.config_schema,
 	       t1.target_incarnation_id, t1.health_state, t1.last_seen_at, t1.observed_at,
-	       t1.first_unreachable_at, t1.last_sample_at, t1.unreachable_accum_seconds, t1.last_error_code
+	       t1.first_unreachable_at, t1.last_sample_at, t1.unreachable_accum_seconds, t1.last_error_code,
+	       t1.reap_kind, t1.reap_max_unreachable_seconds
 	FROM targets t1
 	WHERE t1.label IN (%s)
 	AND NOT EXISTS (
@@ -2551,7 +2611,7 @@ func (d *DatastoreAuroraDataAPI) LoadTargetsByLabels(targetNames []string) ([]*p
 
 	var targets []*pkgmodel.Target
 	for _, record := range output.Records {
-		if len(record) < 14 {
+		if len(record) < 16 {
 			continue
 		}
 
@@ -2562,6 +2622,7 @@ func (d *DatastoreAuroraDataAPI) LoadTargetsByLabels(targetNames []string) ([]*p
 		discoverable, _ := getBoolField(record[4])
 		configSchema, _ := unmarshalConfigSchema(record[5])
 		health, _ := scanAuroraTargetHealth(record[6:])
+		reapingRaw := auroraReapingFromFields(record[14], record[15])
 
 		targets = append(targets, &pkgmodel.Target{
 			Label:        label,
@@ -2570,6 +2631,7 @@ func (d *DatastoreAuroraDataAPI) LoadTargetsByLabels(targetNames []string) ([]*p
 			ConfigSchema: configSchema,
 			Discoverable: discoverable,
 			Version:      version,
+			Reaping:      reapingRaw,
 			Health:       health,
 		})
 	}
@@ -2584,7 +2646,8 @@ func (d *DatastoreAuroraDataAPI) LoadDiscoverableTargets() ([]*pkgmodel.Target, 
 	WITH latest_targets AS (
 		SELECT label, version, namespace, config, discoverable, config_schema,
 		       target_incarnation_id, health_state, last_seen_at, observed_at,
-		       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code
+		       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+		       reap_kind, reap_max_unreachable_seconds
 		FROM targets t1
 		WHERE discoverable = TRUE
 		AND NOT EXISTS (
@@ -2596,7 +2659,8 @@ func (d *DatastoreAuroraDataAPI) LoadDiscoverableTargets() ([]*pkgmodel.Target, 
 	)
 	SELECT DISTINCT ON (config) label, version, namespace, config, discoverable, config_schema,
 	       target_incarnation_id, health_state, last_seen_at, observed_at,
-	       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code
+	       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+	       reap_kind, reap_max_unreachable_seconds
 	FROM latest_targets
 	ORDER BY config, version DESC
 	`
@@ -2608,7 +2672,7 @@ func (d *DatastoreAuroraDataAPI) LoadDiscoverableTargets() ([]*pkgmodel.Target, 
 
 	var targets []*pkgmodel.Target
 	for _, record := range output.Records {
-		if len(record) < 14 {
+		if len(record) < 16 {
 			continue
 		}
 
@@ -2619,6 +2683,7 @@ func (d *DatastoreAuroraDataAPI) LoadDiscoverableTargets() ([]*pkgmodel.Target, 
 		discoverable, _ := getBoolField(record[4])
 		configSchema, _ := unmarshalConfigSchema(record[5])
 		health, _ := scanAuroraTargetHealth(record[6:])
+		reapingRaw := auroraReapingFromFields(record[14], record[15])
 
 		targets = append(targets, &pkgmodel.Target{
 			Label:        label,
@@ -2627,6 +2692,7 @@ func (d *DatastoreAuroraDataAPI) LoadDiscoverableTargets() ([]*pkgmodel.Target, 
 			ConfigSchema: configSchema,
 			Discoverable: discoverable,
 			Version:      version,
+			Reaping:      reapingRaw,
 			Health:       health,
 		})
 	}
@@ -2640,7 +2706,8 @@ func (d *DatastoreAuroraDataAPI) QueryTargets(targetQuery *datastore.TargetQuery
 	queryStr := `
 	SELECT label, version, namespace, config, discoverable, config_schema,
 	       target_incarnation_id, health_state, last_seen_at, observed_at,
-	       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code
+	       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+	       reap_kind, reap_max_unreachable_seconds
 	FROM targets t1
 	WHERE NOT EXISTS (
 		SELECT 1
@@ -2665,7 +2732,7 @@ func (d *DatastoreAuroraDataAPI) QueryTargets(targetQuery *datastore.TargetQuery
 
 	var targets []*pkgmodel.Target
 	for _, record := range output.Records {
-		if len(record) < 14 {
+		if len(record) < 16 {
 			continue
 		}
 
@@ -2676,6 +2743,7 @@ func (d *DatastoreAuroraDataAPI) QueryTargets(targetQuery *datastore.TargetQuery
 		discoverable, _ := getBoolField(record[4])
 		configSchema, _ := unmarshalConfigSchema(record[5])
 		health, _ := scanAuroraTargetHealth(record[6:])
+		reapingRaw := auroraReapingFromFields(record[14], record[15])
 
 		targets = append(targets, &pkgmodel.Target{
 			Label:        label,
@@ -2684,6 +2752,7 @@ func (d *DatastoreAuroraDataAPI) QueryTargets(targetQuery *datastore.TargetQuery
 			ConfigSchema: configSchema,
 			Discoverable: discoverable,
 			Version:      version,
+			Reaping:      reapingRaw,
 			Health:       health,
 		})
 	}

@@ -32,9 +32,12 @@ func scanTargetColumns(scan func(dest ...any) error) (*pkgmodel.Target, error) {
 	var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt sql.NullTime
 	var unreachableAccumSeconds int64
 	var lastErrorCode sql.NullString
+	var reapKind string
+	var reapMaxUnreachableSeconds int64
 	if err := scan(&label, &version, &namespace, &config, &configSchemaRaw, &discoverable,
 		&incarnationID, &healthState, &lastSeenAt, &observedAt,
-		&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode); err != nil {
+		&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode,
+		&reapKind, &reapMaxUnreachableSeconds); err != nil {
 		return nil, err
 	}
 
@@ -77,6 +80,7 @@ func scanTargetColumns(scan func(dest ...any) error) (*pkgmodel.Target, error) {
 		ConfigSchema: configSchema,
 		Discoverable: discoverable,
 		Version:      version,
+		Reaping:      pkgmodel.ReapingRawFromColumns(reapKind, reapMaxUnreachableSeconds),
 		Health:       health,
 	}, nil
 }
@@ -104,8 +108,13 @@ func (d *DatastoreMSSQL) CreateTarget(target *pkgmodel.Target) (string, error) {
 
 	incarnationID := mksuid.New().String()
 
-	query := `INSERT INTO targets (label, version, namespace, config, config_schema, discoverable, target_incarnation_id, health_state, unreachable_accum_seconds) VALUES (@p1, 1, @p2, @p3, @p4, @p5, @p6, 'unknown', 0)`
-	_, err = d.conn.ExecContext(ctx, query, target.Label, target.Namespace, string(cfg), nullableJSON(configSchemaJSON), target.Discoverable, incarnationID)
+	reapKind, reapMaxUnreachableSeconds, err := pkgmodel.ReapingToColumns(target.Reaping)
+	if err != nil {
+		return "", err
+	}
+
+	query := `INSERT INTO targets (label, version, namespace, config, config_schema, discoverable, target_incarnation_id, health_state, unreachable_accum_seconds, reap_kind, reap_max_unreachable_seconds) VALUES (@p1, 1, @p2, @p3, @p4, @p5, @p6, 'unknown', 0, @p7, @p8)`
+	_, err = d.conn.ExecContext(ctx, query, target.Label, target.Namespace, string(cfg), nullableJSON(configSchemaJSON), target.Discoverable, incarnationID, reapKind, reapMaxUnreachableSeconds)
 	if err != nil {
 		slog.Debug("failed to create target (may be retried as update)", "error", err, "label", target.Label)
 		return "", err
@@ -162,16 +171,43 @@ func (d *DatastoreMSSQL) UpdateTarget(target *pkgmodel.Target) (string, error) {
 		return nil
 	}
 
+	reapKind, reapMaxUnreachableSeconds, err := pkgmodel.ReapingToColumns(target.Reaping)
+	if err != nil {
+		return "", err
+	}
+
+	// Recovery: a reaped current row is brought back to life on re-declare —
+	// fresh incarnation, health reset to 'unknown', accrual and timestamps cleared.
+	newIncarnationID := incarnationID.String
+	newHealthState := healthState.String
+	newLastSeenAt := nullTime(lastSeenAt)
+	newObservedAt := nullTime(observedAt)
+	newFirstUnreachableAt := nullTime(firstUnreachableAt)
+	newLastSampleAt := nullTime(lastSampleAt)
+	newUnreachableAccumSeconds := unreachableAccumSeconds.Int64
+	newLastErrorCode := nullStr(lastErrorCode)
+	if healthState.String == pkgmodel.TargetHealthStateReaped {
+		newIncarnationID = mksuid.New().String()
+		newHealthState = pkgmodel.TargetHealthStateUnknown
+		newLastSeenAt = nil
+		newObservedAt = nil
+		newFirstUnreachableAt = nil
+		newLastSampleAt = nil
+		newUnreachableAccumSeconds = 0
+		newLastErrorCode = nil
+	}
+
 	query := `
 		INSERT INTO targets (label, version, namespace, config, config_schema, discoverable,
 		                     target_incarnation_id, health_state, last_seen_at, observed_at,
-		                     first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code)
-		VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14)`
+		                     first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+		                     reap_kind, reap_max_unreachable_seconds)
+		VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16)`
 	_, err = d.conn.ExecContext(ctx, query,
 		target.Label, newVersion, target.Namespace, string(cfg), nullableJSON(configSchemaJSON), target.Discoverable,
-		incarnationID.String, healthState.String,
-		nullTime(lastSeenAt), nullTime(observedAt), nullTime(firstUnreachableAt), nullTime(lastSampleAt),
-		unreachableAccumSeconds.Int64, nullStr(lastErrorCode))
+		newIncarnationID, newHealthState,
+		newLastSeenAt, newObservedAt, newFirstUnreachableAt, newLastSampleAt,
+		newUnreachableAccumSeconds, newLastErrorCode, reapKind, reapMaxUnreachableSeconds)
 	if err != nil {
 		slog.Error("failed to update target", "error", err, "label", target.Label, "version", newVersion)
 		return "", err
@@ -199,32 +235,40 @@ func (d *DatastoreMSSQL) UpdateTargetHealth(obs pkgmodel.TargetHealthObservation
 	// MSSQL uses named parameters (@p1, @p2, …).
 	// The monotonic guard uses a string comparison for observed_at since MSSQL stores it
 	// as datetime2. observed_at < @p_observed_at handles the NULL case via COALESCE in WHERE.
+	// A reachable ("success") observation clears any accrued unreachability.
+	accrualReset := ""
+	if obs.State == pkgmodel.TargetHealthStateReachable {
+		accrualReset = `,
+				first_unreachable_at = NULL,
+				unreachable_accum_seconds = 0`
+	}
+
 	var result sql.Result
 	var err error
 	if obs.IncarnationID != "" {
-		query := `
+		query := fmt.Sprintf(`
 			UPDATE targets SET
 				health_state = @p1,
 				observed_at = @p2,
 				last_seen_at = COALESCE(@p3, last_seen_at),
-				last_error_code = @p4
+				last_error_code = @p4%s
 			WHERE label = @p5
 			  AND version = (SELECT MAX(version) FROM targets WHERE label = @p5)
 			  AND health_state <> 'reaped'
 			  AND (observed_at IS NULL OR observed_at < @p2)
-			  AND target_incarnation_id = @p6`
+			  AND target_incarnation_id = @p6`, accrualReset)
 		result, err = d.conn.ExecContext(ctx, query, obs.State, observedAt, lastSeenAt, lastErrorCode, obs.TargetLabel, obs.IncarnationID)
 	} else {
-		query := `
+		query := fmt.Sprintf(`
 			UPDATE targets SET
 				health_state = @p1,
 				observed_at = @p2,
 				last_seen_at = COALESCE(@p3, last_seen_at),
-				last_error_code = @p4
+				last_error_code = @p4%s
 			WHERE label = @p5
 			  AND version = (SELECT MAX(version) FROM targets WHERE label = @p5)
 			  AND health_state <> 'reaped'
-			  AND (observed_at IS NULL OR observed_at < @p2)`
+			  AND (observed_at IS NULL OR observed_at < @p2)`, accrualReset)
 		result, err = d.conn.ExecContext(ctx, query, obs.State, observedAt, lastSeenAt, lastErrorCode, obs.TargetLabel)
 	}
 	if err != nil {
@@ -241,7 +285,7 @@ func (d *DatastoreMSSQL) LoadTarget(label string) (*pkgmodel.Target, error) {
 	ctx, span := mssqlTracer.Start(context.Background(), "LoadTarget")
 	defer span.End()
 
-	query := `SELECT TOP (1) label, version, namespace, config, config_schema, discoverable, target_incarnation_id, health_state, last_seen_at, observed_at, first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code FROM targets WHERE label = @p1 ORDER BY version DESC`
+	query := `SELECT TOP (1) label, version, namespace, config, config_schema, discoverable, target_incarnation_id, health_state, last_seen_at, observed_at, first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code, reap_kind, reap_max_unreachable_seconds FROM targets WHERE label = @p1 ORDER BY version DESC`
 	row := d.conn.QueryRowContext(ctx, query, label)
 
 	target, err := scanTargetColumns(row.Scan)
@@ -261,7 +305,8 @@ func (d *DatastoreMSSQL) LoadAllTargets() ([]*pkgmodel.Target, error) {
 	query := `
 		SELECT label, version, namespace, config, config_schema, discoverable,
 		       target_incarnation_id, health_state, last_seen_at, observed_at,
-		       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code
+		       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+		       reap_kind, reap_max_unreachable_seconds
 		FROM targets t1
 		WHERE NOT EXISTS (
 			SELECT 1
@@ -302,7 +347,8 @@ func (d *DatastoreMSSQL) LoadTargetsByLabels(targetNames []string) ([]*pkgmodel.
 	query := fmt.Sprintf(`
 		SELECT t1.label, t1.version, t1.namespace, t1.config, t1.config_schema, t1.discoverable,
 		       t1.target_incarnation_id, t1.health_state, t1.last_seen_at, t1.observed_at,
-		       t1.first_unreachable_at, t1.last_sample_at, t1.unreachable_accum_seconds, t1.last_error_code
+		       t1.first_unreachable_at, t1.last_sample_at, t1.unreachable_accum_seconds, t1.last_error_code,
+		       t1.reap_kind, t1.reap_max_unreachable_seconds
 		FROM targets t1
 		WHERE t1.label IN (%s)
 		AND NOT EXISTS (
@@ -339,7 +385,8 @@ func (d *DatastoreMSSQL) LoadDiscoverableTargets() ([]*pkgmodel.Target, error) {
 		WITH latest_targets AS (
 			SELECT label, version, namespace, config, config_schema, discoverable,
 			       target_incarnation_id, health_state, last_seen_at, observed_at,
-			       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code
+			       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+			       reap_kind, reap_max_unreachable_seconds
 			FROM targets t1
 			WHERE discoverable = 1
 			AND NOT EXISTS (
@@ -353,12 +400,14 @@ func (d *DatastoreMSSQL) LoadDiscoverableTargets() ([]*pkgmodel.Target, error) {
 			SELECT label, version, namespace, config, config_schema, discoverable,
 			       target_incarnation_id, health_state, last_seen_at, observed_at,
 			       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+			       reap_kind, reap_max_unreachable_seconds,
 				ROW_NUMBER() OVER (PARTITION BY config ORDER BY version DESC) AS rn
 			FROM latest_targets
 		)
 		SELECT label, version, namespace, config, config_schema, discoverable,
 		       target_incarnation_id, health_state, last_seen_at, observed_at,
-		       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code
+		       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+		       reap_kind, reap_max_unreachable_seconds
 		FROM ranked
 		WHERE rn = 1`
 
@@ -386,7 +435,8 @@ func (d *DatastoreMSSQL) QueryTargets(query *datastore.TargetQuery) ([]*pkgmodel
 	queryStr := `
 		SELECT label, version, namespace, config, config_schema, discoverable,
 		       target_incarnation_id, health_state, last_seen_at, observed_at,
-		       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code
+		       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+		       reap_kind, reap_max_unreachable_seconds
 		FROM targets t1
 		WHERE NOT EXISTS (
 			SELECT 1

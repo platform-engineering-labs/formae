@@ -526,7 +526,8 @@ func (d *DatastoreMSSQL) FindTargetsDependingOnMany(ksuids []string) (map[string
 	query := fmt.Sprintf(`
 	SELECT label, version, namespace, config, config_schema, discoverable,
 	       target_incarnation_id, health_state, last_seen_at, observed_at,
-	       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code
+	       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+	       reap_kind, reap_max_unreachable_seconds
 	FROM targets t1
 	WHERE (%s)
 	AND NOT EXISTS (

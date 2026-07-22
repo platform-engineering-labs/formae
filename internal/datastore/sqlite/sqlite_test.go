@@ -45,6 +45,14 @@ func TestDatastore(t *testing.T) {
 				)
 				return err
 			},
+			SetTargetAccrualForTest: func(label string, firstUnreachableAt time.Time, accumSeconds int64) error {
+				conn := d.Conn()
+				_, err := conn.Exec(
+					`UPDATE targets SET first_unreachable_at = ?, unreachable_accum_seconds = ? WHERE label = ? AND version = (SELECT MAX(version) FROM targets WHERE label = ?)`,
+					firstUnreachableAt.UTC().Format(time.RFC3339Nano), accumSeconds, label, label,
+				)
+				return err
+			},
 		}
 	})
 }
@@ -70,6 +78,14 @@ func newTestDS(t *testing.T) dstest.TestDatastore {
 			_, err := conn.Exec(
 				`UPDATE targets SET health_state = ? WHERE label = ? AND version = (SELECT MAX(version) FROM targets WHERE label = ?)`,
 				state, label, label,
+			)
+			return err
+		},
+		SetTargetAccrualForTest: func(label string, firstUnreachableAt time.Time, accumSeconds int64) error {
+			conn := d.Conn()
+			_, err := conn.Exec(
+				`UPDATE targets SET first_unreachable_at = ?, unreachable_accum_seconds = ? WHERE label = ? AND version = (SELECT MAX(version) FROM targets WHERE label = ?)`,
+				firstUnreachableAt.UTC().Format(time.RFC3339Nano), accumSeconds, label, label,
 			)
 			return err
 		},

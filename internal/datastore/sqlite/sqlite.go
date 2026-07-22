@@ -2541,8 +2541,13 @@ func (d DatastoreSQLite) CreateTarget(target *pkgmodel.Target) (string, error) {
 
 	incarnationID := mksuid.New().String()
 
-	query := `INSERT INTO targets (label, version, namespace, config, config_schema, discoverable, target_incarnation_id, health_state, unreachable_accum_seconds) VALUES (?, 1, ?, ?, ?, ?, ?, 'unknown', 0)`
-	_, err = d.conn.Exec(query, target.Label, target.Namespace, cfg, configSchemaJSON, datastore.BoolToInt(target.Discoverable), incarnationID)
+	reapKind, reapMaxUnreachableSeconds, err := pkgmodel.ReapingToColumns(target.Reaping)
+	if err != nil {
+		return "", err
+	}
+
+	query := `INSERT INTO targets (label, version, namespace, config, config_schema, discoverable, target_incarnation_id, health_state, unreachable_accum_seconds, reap_kind, reap_max_unreachable_seconds) VALUES (?, 1, ?, ?, ?, ?, ?, 'unknown', 0, ?, ?)`
+	_, err = d.conn.Exec(query, target.Label, target.Namespace, cfg, configSchemaJSON, datastore.BoolToInt(target.Discoverable), incarnationID, reapKind, reapMaxUnreachableSeconds)
 	if err != nil {
 		slog.Debug("Failed to create target (may be retried as update)", "error", err, "label", target.Label)
 		return "", err
@@ -2590,16 +2595,47 @@ func (d DatastoreSQLite) UpdateTarget(target *pkgmodel.Target) (string, error) {
 		}
 	}
 
+	reapKind, reapMaxUnreachableSeconds, err := pkgmodel.ReapingToColumns(target.Reaping)
+	if err != nil {
+		return "", err
+	}
+
+	// Recovery: when the current row has been reaped, re-declaring the target
+	// brings it back to life. Mint a fresh incarnation id and reset health to
+	// 'unknown' (accrual 0, timestamps cleared) rather than carrying the reaped
+	// state forward — a new incarnation makes stale in-flight observations for
+	// the old incarnation no-ops.
+	newIncarnationID := incarnationID.String
+	newHealthState := healthState.String
+	newLastSeenAt := lastSeenAt
+	newObservedAt := observedAt
+	newFirstUnreachableAt := firstUnreachableAt
+	newLastSampleAt := lastSampleAt
+	newUnreachableAccumSeconds := unreachableAccumSeconds.Int64
+	newLastErrorCode := lastErrorCode
+	if healthState.String == pkgmodel.TargetHealthStateReaped {
+		newIncarnationID = mksuid.New().String()
+		newHealthState = pkgmodel.TargetHealthStateUnknown
+		newLastSeenAt = sql.NullString{}
+		newObservedAt = sql.NullString{}
+		newFirstUnreachableAt = sql.NullString{}
+		newLastSampleAt = sql.NullString{}
+		newUnreachableAccumSeconds = 0
+		newLastErrorCode = sql.NullString{}
+	}
+
 	insertQuery := `
 		INSERT INTO targets (label, version, namespace, config, config_schema, discoverable,
 		                     target_incarnation_id, health_state, last_seen_at, observed_at,
-		                     first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		                     first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+		                     reap_kind, reap_max_unreachable_seconds)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	_, err = d.conn.Exec(insertQuery, target.Label, newVersion, target.Namespace, cfg, configSchemaJSON,
 		datastore.BoolToInt(target.Discoverable),
-		incarnationID.String, healthState.String,
-		lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt,
-		unreachableAccumSeconds.Int64, lastErrorCode)
+		newIncarnationID, newHealthState,
+		newLastSeenAt, newObservedAt, newFirstUnreachableAt, newLastSampleAt,
+		newUnreachableAccumSeconds, newLastErrorCode,
+		reapKind, reapMaxUnreachableSeconds)
 	if err != nil {
 		slog.Error("Failed to update target", "error", err, "label", target.Label, "version", newVersion)
 		return "", err
@@ -2673,35 +2709,45 @@ func (d DatastoreSQLite) UpdateTargetHealth(obs pkgmodel.TargetHealthObservation
 		lastErrorCode = obs.LastErrorCode
 	}
 
+	// A reachable ("success") observation clears any accrued unreachability:
+	// the target is healthy again, so first_unreachable_at and the accumulated
+	// unreachable seconds reset to their pristine (never-unreachable) values.
+	accrualReset := ""
+	if obs.State == pkgmodel.TargetHealthStateReachable {
+		accrualReset = `,
+				first_unreachable_at = NULL,
+				unreachable_accum_seconds = 0`
+	}
+
 	// Base WHERE: label matches max-version row, not reaped, monotonic guard on observed_at.
 	// SQLite stores timestamps as text; NULL observed_at means no prior observation, so allow it.
 	var query string
 	var args []any
 	if obs.IncarnationID != "" {
-		query = `
+		query = fmt.Sprintf(`
 			UPDATE targets SET
 				health_state = ?,
 				observed_at = ?,
 				last_seen_at = COALESCE(?, last_seen_at),
-				last_error_code = ?
+				last_error_code = ?%s
 			WHERE label = ?
 			  AND version = (SELECT MAX(version) FROM targets WHERE label = ?)
 			  AND health_state <> 'reaped'
 			  AND (observed_at IS NULL OR julianday(observed_at) < julianday(?))
-			  AND target_incarnation_id = ?`
+			  AND target_incarnation_id = ?`, accrualReset)
 		args = []any{obs.State, observedAt, lastSeenAt, lastErrorCode,
 			obs.TargetLabel, obs.TargetLabel, observedAt, obs.IncarnationID}
 	} else {
-		query = `
+		query = fmt.Sprintf(`
 			UPDATE targets SET
 				health_state = ?,
 				observed_at = ?,
 				last_seen_at = COALESCE(?, last_seen_at),
-				last_error_code = ?
+				last_error_code = ?%s
 			WHERE label = ?
 			  AND version = (SELECT MAX(version) FROM targets WHERE label = ?)
 			  AND health_state <> 'reaped'
-			  AND (observed_at IS NULL OR julianday(observed_at) < julianday(?))`
+			  AND (observed_at IS NULL OR julianday(observed_at) < julianday(?))`, accrualReset)
 		args = []any{obs.State, observedAt, lastSeenAt, lastErrorCode,
 			obs.TargetLabel, obs.TargetLabel, observedAt}
 	}
@@ -2767,7 +2813,8 @@ func (d DatastoreSQLite) LoadTarget(label string) (*pkgmodel.Target, error) {
 	query := `
 		SELECT version, namespace, config, config_schema, discoverable,
 		       target_incarnation_id, health_state, last_seen_at, observed_at,
-		       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code
+		       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+		       reap_kind, reap_max_unreachable_seconds
 		FROM targets WHERE label = ? ORDER BY version DESC LIMIT 1`
 	row := d.conn.QueryRow(query, label)
 
@@ -2780,9 +2827,12 @@ func (d DatastoreSQLite) LoadTarget(label string) (*pkgmodel.Target, error) {
 	var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt sql.NullString
 	var unreachableAccumSeconds int64
 	var lastErrorCode sql.NullString
+	var reapKind string
+	var reapMaxUnreachableSeconds int64
 	if err := row.Scan(&version, &namespace, &config, &configSchemaStr, &discoverable,
 		&incarnationID, &healthState, &lastSeenAt, &observedAt,
-		&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode); err != nil {
+		&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode,
+		&reapKind, &reapMaxUnreachableSeconds); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil // Target not found, return nil without error
 		}
@@ -2803,6 +2853,7 @@ func (d DatastoreSQLite) LoadTarget(label string) (*pkgmodel.Target, error) {
 		ConfigSchema: configSchema,
 		Discoverable: discoverable == 1,
 		Version:      version,
+		Reaping:      pkgmodel.ReapingRawFromColumns(reapKind, reapMaxUnreachableSeconds),
 		Health: scanSQLiteTargetHealth(incarnationID, healthState, lastSeenAt, observedAt,
 			firstUnreachableAt, lastSampleAt, unreachableAccumSeconds, lastErrorCode),
 	}, nil
@@ -2820,7 +2871,8 @@ func (d DatastoreSQLite) LoadAllTargets() ([]*pkgmodel.Target, error) {
 	query := `
 		SELECT label, version, namespace, config, config_schema, discoverable,
 		       target_incarnation_id, health_state, last_seen_at, observed_at,
-		       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code
+		       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+		       reap_kind, reap_max_unreachable_seconds
 		FROM targets t1
 		WHERE NOT EXISTS (
 			SELECT 1
@@ -2845,9 +2897,12 @@ func (d DatastoreSQLite) LoadAllTargets() ([]*pkgmodel.Target, error) {
 		var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt sql.NullString
 		var unreachableAccumSeconds int64
 		var lastErrorCode sql.NullString
+		var reapKind string
+		var reapMaxUnreachableSeconds int64
 		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaStr, &discoverable,
 			&incarnationID, &healthState, &lastSeenAt, &observedAt,
-			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode); err != nil {
+			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode,
+			&reapKind, &reapMaxUnreachableSeconds); err != nil {
 			return nil, err
 		}
 
@@ -2865,6 +2920,7 @@ func (d DatastoreSQLite) LoadAllTargets() ([]*pkgmodel.Target, error) {
 			ConfigSchema: configSchema,
 			Discoverable: discoverable == 1,
 			Version:      version,
+			Reaping:      pkgmodel.ReapingRawFromColumns(reapKind, reapMaxUnreachableSeconds),
 			Health: scanSQLiteTargetHealth(incarnationID, healthState, lastSeenAt, observedAt,
 				firstUnreachableAt, lastSampleAt, unreachableAccumSeconds, lastErrorCode),
 		})
@@ -2892,7 +2948,8 @@ func (d DatastoreSQLite) LoadTargetsByLabels(targetNames []string) ([]*pkgmodel.
 	query := fmt.Sprintf(`
 		SELECT t1.label, t1.version, t1.namespace, t1.config, t1.config_schema, t1.discoverable,
 		       t1.target_incarnation_id, t1.health_state, t1.last_seen_at, t1.observed_at,
-		       t1.first_unreachable_at, t1.last_sample_at, t1.unreachable_accum_seconds, t1.last_error_code
+		       t1.first_unreachable_at, t1.last_sample_at, t1.unreachable_accum_seconds, t1.last_error_code,
+		       t1.reap_kind, t1.reap_max_unreachable_seconds
 		FROM targets t1
 		WHERE t1.label IN (%s)
 		AND NOT EXISTS (
@@ -2919,9 +2976,12 @@ func (d DatastoreSQLite) LoadTargetsByLabels(targetNames []string) ([]*pkgmodel.
 		var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt sql.NullString
 		var unreachableAccumSeconds int64
 		var lastErrorCode sql.NullString
+		var reapKind string
+		var reapMaxUnreachableSeconds int64
 		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaStr, &discoverable,
 			&incarnationID, &healthState, &lastSeenAt, &observedAt,
-			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode); err != nil {
+			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode,
+			&reapKind, &reapMaxUnreachableSeconds); err != nil {
 			return nil, err
 		}
 
@@ -2939,6 +2999,7 @@ func (d DatastoreSQLite) LoadTargetsByLabels(targetNames []string) ([]*pkgmodel.
 			ConfigSchema: configSchema,
 			Discoverable: discoverable == 1,
 			Version:      version,
+			Reaping:      pkgmodel.ReapingRawFromColumns(reapKind, reapMaxUnreachableSeconds),
 			Health: scanSQLiteTargetHealth(incarnationID, healthState, lastSeenAt, observedAt,
 				firstUnreachableAt, lastSampleAt, unreachableAccumSeconds, lastErrorCode),
 		})
@@ -2957,7 +3018,8 @@ func (d DatastoreSQLite) LoadDiscoverableTargets() ([]*pkgmodel.Target, error) {
 		WITH latest_targets AS (
 			SELECT label, version, namespace, config, config_schema, discoverable,
 			       target_incarnation_id, health_state, last_seen_at, observed_at,
-			       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code
+			       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+			       reap_kind, reap_max_unreachable_seconds
 			FROM targets t1
 			WHERE discoverable = 1
 			AND NOT EXISTS (
@@ -2969,7 +3031,8 @@ func (d DatastoreSQLite) LoadDiscoverableTargets() ([]*pkgmodel.Target, error) {
 		)
 		SELECT label, version, namespace, config, config_schema, discoverable,
 		       target_incarnation_id, health_state, last_seen_at, observed_at,
-		       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code
+		       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+		       reap_kind, reap_max_unreachable_seconds
 		FROM latest_targets
 		GROUP BY config
 		HAVING version = MAX(version)`
@@ -2991,9 +3054,12 @@ func (d DatastoreSQLite) LoadDiscoverableTargets() ([]*pkgmodel.Target, error) {
 		var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt sql.NullString
 		var unreachableAccumSeconds int64
 		var lastErrorCode sql.NullString
+		var reapKind string
+		var reapMaxUnreachableSeconds int64
 		if err := rows.Scan(&label, &version, &ns, &config, &configSchemaStr, &discoverable,
 			&incarnationID, &healthState, &lastSeenAt, &observedAt,
-			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode); err != nil {
+			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode,
+			&reapKind, &reapMaxUnreachableSeconds); err != nil {
 			return nil, err
 		}
 
@@ -3011,6 +3077,7 @@ func (d DatastoreSQLite) LoadDiscoverableTargets() ([]*pkgmodel.Target, error) {
 			ConfigSchema: configSchema,
 			Discoverable: discoverable == 1,
 			Version:      version,
+			Reaping:      pkgmodel.ReapingRawFromColumns(reapKind, reapMaxUnreachableSeconds),
 			Health: scanSQLiteTargetHealth(incarnationID, healthState, lastSeenAt, observedAt,
 				firstUnreachableAt, lastSampleAt, unreachableAccumSeconds, lastErrorCode),
 		})
@@ -3026,7 +3093,8 @@ func (d DatastoreSQLite) QueryTargets(query *datastore.TargetQuery) ([]*pkgmodel
 	queryStr := `
 		SELECT label, version, namespace, config, config_schema, discoverable,
 		       target_incarnation_id, health_state, last_seen_at, observed_at,
-		       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code
+		       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+		       reap_kind, reap_max_unreachable_seconds
 		FROM targets t1
 		WHERE NOT EXISTS (
 			SELECT 1
@@ -3061,9 +3129,12 @@ func (d DatastoreSQLite) QueryTargets(query *datastore.TargetQuery) ([]*pkgmodel
 		var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt sql.NullString
 		var unreachableAccumSeconds int64
 		var lastErrorCode sql.NullString
+		var reapKind string
+		var reapMaxUnreachableSeconds int64
 		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaStr, &discoverable,
 			&incarnationID, &healthState, &lastSeenAt, &observedAt,
-			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode); err != nil {
+			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode,
+			&reapKind, &reapMaxUnreachableSeconds); err != nil {
 			return nil, err
 		}
 
@@ -3081,6 +3152,7 @@ func (d DatastoreSQLite) QueryTargets(query *datastore.TargetQuery) ([]*pkgmodel
 			ConfigSchema: configSchema,
 			Discoverable: discoverable == 1,
 			Version:      version,
+			Reaping:      pkgmodel.ReapingRawFromColumns(reapKind, reapMaxUnreachableSeconds),
 			Health: scanSQLiteTargetHealth(incarnationID, healthState, lastSeenAt, observedAt,
 				firstUnreachableAt, lastSampleAt, unreachableAccumSeconds, lastErrorCode),
 		})
@@ -3540,7 +3612,8 @@ func (d DatastoreSQLite) FindTargetsDependingOnMany(ksuids []string) (map[string
 	query := fmt.Sprintf(`
 	SELECT label, version, namespace, config, config_schema, discoverable,
 	       target_incarnation_id, health_state, last_seen_at, observed_at,
-	       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code
+	       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+	       reap_kind, reap_max_unreachable_seconds
 	FROM targets t1
 	WHERE (%s)
 	AND NOT EXISTS (
@@ -3569,9 +3642,12 @@ func (d DatastoreSQLite) FindTargetsDependingOnMany(ksuids []string) (map[string
 		var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt sql.NullString
 		var unreachableAccumSeconds int64
 		var lastErrorCode sql.NullString
+		var reapKind string
+		var reapMaxUnreachableSeconds int64
 		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaStr, &discoverable,
 			&incarnationID, &healthState, &lastSeenAt, &observedAt,
-			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode); err != nil {
+			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode,
+			&reapKind, &reapMaxUnreachableSeconds); err != nil {
 			return nil, err
 		}
 
@@ -3589,6 +3665,7 @@ func (d DatastoreSQLite) FindTargetsDependingOnMany(ksuids []string) (map[string
 			ConfigSchema: configSchema,
 			Discoverable: discoverable == 1,
 			Version:      version,
+			Reaping:      pkgmodel.ReapingRawFromColumns(reapKind, reapMaxUnreachableSeconds),
 			Health: scanSQLiteTargetHealth(incarnationID, healthState, lastSeenAt, observedAt,
 				firstUnreachableAt, lastSampleAt, unreachableAccumSeconds, lastErrorCode),
 		}

@@ -8,6 +8,7 @@ package dstest
 
 import (
 	"testing"
+	"time"
 
 	"github.com/platform-engineering-labs/formae/internal/datastore"
 )
@@ -28,6 +29,13 @@ type TestDatastore struct {
 	// through the public Datastore API. Backends that don't provide it leave
 	// it nil and the relevant tests t.Skip().
 	SetTargetHealthStateForTest func(label, state string) error
+	// SetTargetAccrualForTest seeds the unreachability-accrual columns
+	// (first_unreachable_at, unreachable_accum_seconds) of the current
+	// (max-version) targets row for the given label. Used to set up a
+	// non-pristine accrual state that a later success observation must clear.
+	// Backends that don't provide it leave it nil and the relevant tests
+	// t.Skip().
+	SetTargetAccrualForTest func(label string, firstUnreachableAt time.Time, accumSeconds int64) error
 }
 
 // RunAll runs the full datastore test suite against the provided factory.
@@ -85,6 +93,11 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunUpdateTargetHealthReapedGuard(t, newDS)
 	RunUpdateTargetHealthIncarnationMatch(t, newDS)
 	RunUpdateTargetHealthIncarnationMismatch(t, newDS)
+	RunTargetReapingPersists(t, newDS)
+	RunTargetReapingPopulatedByDependencyLoad(t, newDS)
+	RunUpdateTargetMintsFreshIncarnationOnReaped(t, newDS)
+	RunUpdateTargetCarriesHealthForwardWhenNotReaped(t, newDS)
+	RunSuccessObservationZeroesAccrual(t, newDS)
 
 	RunCreateStack(t, newDS)
 	RunCreateStackAlreadyExists(t, newDS)

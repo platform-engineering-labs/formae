@@ -137,6 +137,67 @@ func ParseReaping(raw json.RawMessage) (ReapingBehaviour, error) {
 	}
 }
 
+// DefaultReapMaxUnreachableSeconds is the global fallback reap-after duration
+// (24h) applied when neither the target nor its plugin manifest declares a
+// reaping behaviour.
+const DefaultReapMaxUnreachableSeconds int64 = 86400
+
+// ResolveReaping applies the reaping precedence: an explicit per-target
+// behaviour wins, then the plugin manifest default, then the global default
+// (ReapAfter of DefaultReapMaxUnreachableSeconds). Either argument may be nil.
+func ResolveReaping(explicit, manifestDefault ReapingBehaviour) ReapingBehaviour {
+	if explicit != nil {
+		return explicit
+	}
+	if manifestDefault != nil {
+		return manifestDefault
+	}
+	return &ReapAfter{Kind: "after", MaxUnreachableSeconds: DefaultReapMaxUnreachableSeconds}
+}
+
+// MarshalReaping serializes a reaping behaviour to its raw JSON representation,
+// suitable for storing in Target.Reaping. A nil behaviour yields a nil message.
+func MarshalReaping(b ReapingBehaviour) (json.RawMessage, error) {
+	if b == nil {
+		return nil, nil
+	}
+	raw, err := json.Marshal(b)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal reaping behaviour: %w", err)
+	}
+	return raw, nil
+}
+
+// ReapingToColumns decomposes a target's raw reaping message into the persisted
+// column values (reap_kind, reap_max_unreachable_seconds). A nil/absent message
+// falls back to the global default (after / DefaultReapMaxUnreachableSeconds).
+func ReapingToColumns(raw json.RawMessage) (string, int64, error) {
+	behaviour, err := ParseReaping(raw)
+	if err != nil {
+		return "", 0, err
+	}
+	switch b := behaviour.(type) {
+	case nil:
+		return "after", DefaultReapMaxUnreachableSeconds, nil
+	case *NeverReap:
+		return "never", DefaultReapMaxUnreachableSeconds, nil
+	case *ReapAfter:
+		return "after", b.MaxUnreachableSeconds, nil
+	default:
+		return "", 0, fmt.Errorf("unknown reaping behaviour: %T", behaviour)
+	}
+}
+
+// ReapingRawFromColumns reconstructs a target's raw reaping message from the
+// persisted column values. A "never" kind reconstructs a NeverReap regardless of
+// the stored seconds; any other kind is treated as reap-after.
+func ReapingRawFromColumns(kind string, maxUnreachableSeconds int64) json.RawMessage {
+	if kind == "never" {
+		return json.RawMessage(`{"Kind":"never"}`)
+	}
+	return json.RawMessage(fmt.Sprintf(`{"Kind":"after","MaxUnreachableSeconds":%d}`, maxUnreachableSeconds))
+}
+
 func NewTargetFromString(target string) Target {
 	var t Target
 	err := json.Unmarshal([]byte(target), &t)
