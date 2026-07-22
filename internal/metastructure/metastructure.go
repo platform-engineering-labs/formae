@@ -143,6 +143,7 @@ func NewMetastructureWithDataStoreAndContext(ctx context.Context, cfg *pkgmodel.
 		gen.Env("LoggingConfig"):           cfg.Agent.Logging,
 		gen.Env("OTelConfig"):              cfg.Agent.OTel,
 		gen.Env("StackExpirerConfig"):      cfg.Agent.StackExpirer,
+		gen.Env("TargetReapingConfig"):     cfg.Agent.TargetReaping,
 		gen.Env("AgentID"):                 agentID,
 		gen.Env("ResourcePluginConfigs"):   cfg.Agent.ResourcePlugins,
 	}
@@ -1267,10 +1268,10 @@ func (m *Metastructure) ForceDiscovery() error {
 }
 
 // ForceReap triggers a single, immediate TargetReaper tick: it advances the
-// unreachability-accrual clock for every currently-unreachable target and
-// detects reap candidates. It performs no reaping/tombstoning action — see
-// TargetReaper. Exists so workflow tests can drive a deterministic tick
-// without waiting for config.ReaperInterval to elapse.
+// unreachability-accrual clock for every currently-unreachable target,
+// detects reap candidates, and (subject to the rate cap and dry-run mode —
+// see TargetReaper) actually reaps them. Exists so workflow tests can drive a
+// deterministic tick without waiting for config.ReaperInterval to elapse.
 func (m *Metastructure) ForceReap() error {
 	if err := m.Node.Send(gen.Atom(actornames.TargetReaper), CheckUnreachableTargets{}); err != nil {
 		slog.Error(fmt.Sprintf("Failed to send message to TargetReaper: %v", err))
@@ -2096,6 +2097,13 @@ func (m *Metastructure) Stats() (*apimodel.Stats, error) {
 		})
 	}
 
+	reapPending, reaped, reapErr := m.reapTargetCounts()
+	if reapErr != nil {
+		// Same posture as the plugin registry lookup above: don't fail the
+		// whole /stats response over this, just omit the counts.
+		slog.Warn("failed to compute reap-pending/reaped target counts; stats response will report zero", "error", reapErr)
+	}
+
 	return &apimodel.Stats{
 		Version:            formae.Version,
 		AgentID:            m.AgentID,
@@ -2109,7 +2117,36 @@ func (m *Metastructure) Stats() (*apimodel.Stats, error) {
 		ResourceTypes:      stats.ResourceTypes,
 		ResourceErrors:     stats.ResourceErrors,
 		Plugins:            plugins,
+		ReapPendingTargets: reapPending,
+		ReapedTargets:      reaped,
 	}, nil
+}
+
+// reapTargetCounts derives the reap-pending and reaped target counts for the
+// stats surface directly from LoadAllTargets (implemented identically across
+// every datastore backend), so no per-backend Stats() query is needed. See
+// TargetReapStatus for what "reap-pending" means.
+func (m *Metastructure) reapTargetCounts() (reapPending, reaped int, err error) {
+	targets, err := m.Datastore.LoadAllTargets()
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to load targets: %w", err)
+	}
+
+	for _, target := range targets {
+		status, statusErr := TargetReapStatus(target)
+		if statusErr != nil {
+			slog.Warn("failed to resolve reap status for target; skipping from stats", "target", target.Label, "error", statusErr)
+			continue
+		}
+		switch status {
+		case pkgmodel.TargetHealthStateReapPending:
+			reapPending++
+		case pkgmodel.TargetHealthStateReaped:
+			reaped++
+		}
+	}
+
+	return reapPending, reaped, nil
 }
 
 func extractKSUIDs(jsonStr string, ksuidSet map[string]struct{}) {

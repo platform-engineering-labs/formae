@@ -18,6 +18,14 @@ const (
 	TargetHealthStateReaped      = "reaped"
 )
 
+// TargetHealthStateReapPending is NEVER persisted to the health_state column.
+// It is a purely computed display status for an 'unreachable' target that has
+// already accrued at least its configured reap-after duration — i.e. it is
+// due to be reaped (on an upcoming tick, or held back by the rate cap, an
+// in-flight command, or dry-run mode). Surfaced to operators via stats so a
+// candidate is visible before any tombstone.
+const TargetHealthStateReapPending = "reap-pending"
+
 // TargetHealthObservation carries the result of a single health sample for a target.
 // It is produced by the classifier and delivered to the datastore via the async persister.
 // IncarnationID may be empty, in which case the incarnation guard is skipped.

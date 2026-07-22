@@ -31,9 +31,11 @@ import (
 // reapTargetForTest drives targetLabel through the full reap sequence using
 // only the public Datastore interface: an unreachable health observation,
 // accrual advanced to (at least) the target's own configured reap-after
-// threshold, then the PersistTargetReap CAS. The TargetReaper isn't wired to
-// actually reap yet (that's a later task), so tests reap directly, mirroring
-// the datastore suite's seedReapReadyTarget/PersistTargetReap pattern.
+// threshold, then the PersistTargetReap CAS. Tests that only care about the
+// post-reap state (not the reaper's own tick behaviour) reap directly here
+// rather than going through a TargetReaper tick, mirroring the datastore
+// suite's seedReapReadyTarget/PersistTargetReap pattern. See target_reap_wiring_test.go
+// for tests that drive the reap through the actual reaper (via ForceReap).
 func reapTargetForTest(t *testing.T, ds datastore.Datastore, label string) {
 	t.Helper()
 
@@ -149,7 +151,8 @@ func TestAutoReconciler_ReapedTargetNotResurrected(t *testing.T) {
 		}, 15*time.Second, 200*time.Millisecond, "initial apply should create the resource")
 		r.Equal(int32(1), createCount.Load(), "exactly one Create from initial apply")
 
-		// Reap the target directly (the reaper isn't wired to reap yet).
+		// Reap the target directly — this test is about the post-reap
+		// no-resurrection guard, not the reaper's own tick behaviour.
 		reapTargetForTest(t, m.Datastore, "reap-target")
 
 		// Sanity: the resource is now invisible to the live view.

@@ -33,16 +33,28 @@ func RenderStats(stats *apimodel.Stats) (string, error) {
 
 	totalTargets := sumMap(stats.Targets)
 
+	structureRows := [][]string{
+		{"Stacks", fmt.Sprintf("%d", stats.Stacks)},
+		{"Targets", fmt.Sprintf("%d", totalTargets)},
+	}
+	if stats.ReapPendingTargets > 0 {
+		structureRows = append(structureRows, []string{
+			display.Gold("Reap Pending"), display.Gold(fmt.Sprintf("%d", stats.ReapPendingTargets)),
+		})
+	}
+	if stats.ReapedTargets > 0 {
+		structureRows = append(structureRows, []string{
+			display.Red("Reaped"), display.Red(fmt.Sprintf("%d", stats.ReapedTargets)),
+		})
+	}
+
 	tablesLine1 = append(tablesLine1, struct {
 		Headline string
 		Headers  []string
 		Rows     [][]string
 	}{
 		Headline: "Structure",
-		Rows: [][]string{
-			{"Stacks", fmt.Sprintf("%d", stats.Stacks)},
-			{"Targets", fmt.Sprintf("%d", totalTargets)},
-		},
+		Rows:     structureRows,
 	})
 
 	totalCommands := 0

@@ -103,6 +103,9 @@ func NewTestMetastructureConfig() *pkgmodel.Config {
 				Interval: 5 * time.Minute,
 				Enabled:  false,
 			},
+			TargetReaping: pkgmodel.TargetReapingConfig{
+				MaxReapsPerTick: 50,
+			},
 		},
 		PluginDir: "",
 	}

@@ -9,6 +9,7 @@ package metastructure
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 
 	"github.com/platform-engineering-labs/formae/internal/datastore"
 	dssqlite "github.com/platform-engineering-labs/formae/internal/datastore/sqlite"
+	"github.com/platform-engineering-labs/formae/internal/logging"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
@@ -258,4 +260,130 @@ func TestNoMutation_PlanAndCandidateDetectionAreReadOnly(t *testing.T) {
 		"unreachable_accum_seconds must not change — only the async AdvanceTargetAccrual write may mutate it")
 	assert.Equal(t, before.Health.IncarnationID, after.Health.IncarnationID, "incarnation must not change")
 	assert.Equal(t, before.Version, after.Version, "target version must not change")
+}
+
+// TestPlanReapExecution_CapsCandidatesAndLogsDeferred is the rate-cap unit
+// test: a tick with more candidates than the configured cap must only reap up
+// to the cap, and the remainder must be logged (not silently dropped) so an
+// operator can see what was deferred to the next tick.
+func TestPlanReapExecution_CapsCandidatesAndLogsDeferred(t *testing.T) {
+	capture := logging.NewTestLogCaptureQuiet()
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(capture, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	candidates := []ReapCandidate{
+		{TargetLabel: "target-a", IncarnationID: "inc-a", UnreachableAccumSeconds: 100},
+		{TargetLabel: "target-b", IncarnationID: "inc-b", UnreachableAccumSeconds: 200},
+		{TargetLabel: "target-c", IncarnationID: "inc-c", UnreachableAccumSeconds: 300},
+	}
+
+	plan := planReapExecution(candidates, 2)
+
+	require.Len(t, plan.ToReap, 2, "only the cap's worth of candidates may be reaped this tick")
+	assert.Equal(t, "target-a", plan.ToReap[0].TargetLabel)
+	assert.Equal(t, "target-b", plan.ToReap[1].TargetLabel)
+
+	require.Len(t, plan.Deferred, 1, "the remainder must be deferred, not dropped")
+	assert.Equal(t, "target-c", plan.Deferred[0].TargetLabel)
+
+	assert.True(t, capture.ContainsAll("target-c"),
+		"the deferred candidate must be logged so nothing is silently dropped, got: %v", capture.GetEntries())
+	assert.True(t, capture.ContainsAll("rate cap"),
+		"the log must explain why the candidate was deferred, got: %v", capture.GetEntries())
+}
+
+// TestPlanReapExecution_UnboundedWhenCapNotPositive verifies the documented
+// fallback: a MaxReapsPerTick of zero or negative means unbounded, so every
+// candidate is reaped this tick (e.g. when the value was never configured).
+func TestPlanReapExecution_UnboundedWhenCapNotPositive(t *testing.T) {
+	candidates := []ReapCandidate{
+		{TargetLabel: "target-a"},
+		{TargetLabel: "target-b"},
+	}
+
+	for _, maxPerTick := range []int{0, -1} {
+		plan := planReapExecution(candidates, maxPerTick)
+		assert.Len(t, plan.ToReap, 2, "maxPerTick=%d must mean unbounded", maxPerTick)
+		assert.Empty(t, plan.Deferred, "maxPerTick=%d must defer nothing", maxPerTick)
+	}
+}
+
+// TestPlanReapExecution_UnderCapReapsAllAndDefersNone verifies the cap is a
+// ceiling, not a floor or a fixed batch size: fewer candidates than the cap
+// are all reaped, deferring nothing.
+func TestPlanReapExecution_UnderCapReapsAllAndDefersNone(t *testing.T) {
+	candidates := []ReapCandidate{{TargetLabel: "target-a"}}
+	plan := planReapExecution(candidates, 5)
+	assert.Len(t, plan.ToReap, 1)
+	assert.Empty(t, plan.Deferred)
+}
+
+// TestTargetReapStatus_PendingBeforeTombstoneThenReapedAfter is the
+// reap-pending visibility unit test: an unreachable target that has already
+// crossed its own reap-after threshold must surface as "reap-pending" while
+// its persisted health_state is still 'unreachable' — i.e. before any
+// tombstone — and only becomes "reaped" once PersistTargetReap actually
+// commits.
+func TestTargetReapStatus_PendingBeforeTombstoneThenReapedAfter(t *testing.T) {
+	ds := newReaperTestDatastore(t)
+	label := "reap-status-test"
+
+	reaping, err := pkgmodel.MarshalReaping(&pkgmodel.ReapAfter{Kind: "after", MaxUnreachableSeconds: 0})
+	require.NoError(t, err)
+	_, err = ds.CreateTarget(&pkgmodel.Target{
+		Label:     label,
+		Namespace: "AWS",
+		Config:    json.RawMessage(`{}`),
+		Reaping:   reaping,
+	})
+	require.NoError(t, err)
+
+	seenAt := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	observedAt := time.Now().UTC().Add(-30 * time.Minute).Truncate(time.Second)
+	applied, err := ds.UpdateTargetHealth(pkgmodel.TargetHealthObservation{
+		TargetLabel: label,
+		State:       pkgmodel.TargetHealthStateUnreachable,
+		ObservedAt:  observedAt,
+		LastSeenAt:  &seenAt,
+	})
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	target, err := ds.LoadTarget(label)
+	require.NoError(t, err)
+	require.NotNil(t, target.Health)
+
+	// Seed last_sample_at (a prior tick's accrual advance would normally do
+	// this); a zero delta is enough since the threshold is already 0.
+	sampleAt := time.Now().UTC().Add(-15 * time.Minute).Truncate(time.Second)
+	applied, err = ds.AdvanceTargetAccrual(label, target.Health.IncarnationID, sampleAt, 0)
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	target, err = ds.LoadTarget(label)
+	require.NoError(t, err)
+
+	status, err := TargetReapStatus(target)
+	require.NoError(t, err)
+	assert.Equal(t, pkgmodel.TargetHealthStateReapPending, status,
+		"an over-threshold unreachable target must surface as reap-pending before any tombstone")
+
+	cutoff := time.Now().UTC()
+	reaped, err := ds.PersistTargetReap(datastore.PersistTargetReapRequest{
+		Label:            label,
+		IncarnationID:    target.Health.IncarnationID,
+		LastSeenBefore:   cutoff,
+		LastSampleBefore: cutoff,
+		ReapedAt:         cutoff,
+	})
+	require.NoError(t, err)
+	require.True(t, reaped)
+
+	target, err = ds.LoadTarget(label)
+	require.NoError(t, err)
+
+	status, err = TargetReapStatus(target)
+	require.NoError(t, err)
+	assert.Equal(t, pkgmodel.TargetHealthStateReaped, status, "once reaped, the status must flip to reaped")
 }

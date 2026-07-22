@@ -115,6 +115,11 @@ type StackExpirerConfig struct {
 	Interval *pkl.Duration `pkl:"interval"`
 }
 
+type TargetReapingConfig struct {
+	DryRun          bool  `pkl:"dryRun"`
+	MaxReapsPerTick int32 `pkl:"maxReapsPerTick"`
+}
+
 type LoggingConfig struct {
 	FilePath        string `pkl:"filePath"`
 	FileLogLevel    string `pkl:"fileLogLevel"`
@@ -181,6 +186,7 @@ type AgentConfig struct {
 	Logging         LoggingConfig         `pkl:"logging"`
 	OTel            OTelConfig            `pkl:"oTel"`
 	StackExpirer    StackExpirerConfig    `pkl:"stackExpirer"`
+	TargetReaping   TargetReapingConfig   `pkl:"targetReaping"`
 	Auth            pkl.Object            `pkl:"auth"`
 	ResourcePlugins []pkl.Object          `pkl:"resourcePlugins"`
 }

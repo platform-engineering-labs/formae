@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/platform-engineering-labs/formae"
+	"github.com/platform-engineering-labs/formae/internal/datastore"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/testutil"
@@ -153,5 +154,74 @@ func TestMetastructure_Stats(t *testing.T) {
 		// ResourceErrors are now keyed by resource type, not error message
 		assert.Equal(t, 1, len(stats.ResourceErrors))
 		assert.Contains(t, stats.ResourceErrors, "FakeAWS::S3::Bucket")
+	})
+}
+
+// TestMetastructure_Stats_ReapPendingAndReapedTargets verifies the new
+// reap-pending/reaped counts on the stats surface: an unreachable target that
+// has crossed its own reap-after threshold is counted under
+// ReapPendingTargets before any tombstone, and moves to ReapedTargets once
+// PersistTargetReap actually commits.
+func TestMetastructure_Stats_ReapPendingAndReapedTargets(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		m, def, err := test_helpers.NewTestMetastructure(t, &plugin.ResourcePluginOverrides{})
+		defer def()
+		assert.NoError(t, err)
+
+		label := "stats-reap-target"
+		reaping, err := pkgmodel.MarshalReaping(&pkgmodel.ReapAfter{Kind: "after", MaxUnreachableSeconds: 0})
+		assert.NoError(t, err)
+		_, err = m.Datastore.CreateTarget(&pkgmodel.Target{
+			Label:     label,
+			Namespace: "FakeAWS",
+			Reaping:   reaping,
+		})
+		assert.NoError(t, err)
+
+		stats, err := m.Stats()
+		assert.NoError(t, err)
+		assert.Equal(t, 0, stats.ReapPendingTargets, "a reachable/unknown target must not count as reap-pending")
+		assert.Equal(t, 0, stats.ReapedTargets)
+
+		seenAt := time.Now().UTC()
+		observedAt := time.Now().UTC()
+		applied, err := m.Datastore.UpdateTargetHealth(pkgmodel.TargetHealthObservation{
+			TargetLabel: label,
+			State:       pkgmodel.TargetHealthStateUnreachable,
+			ObservedAt:  observedAt,
+			LastSeenAt:  &seenAt,
+		})
+		assert.NoError(t, err)
+		assert.True(t, applied)
+
+		target, err := m.Datastore.LoadTarget(label)
+		assert.NoError(t, err)
+		assert.NotNil(t, target.Health)
+
+		sampleAt := time.Now().UTC()
+		applied, err = m.Datastore.AdvanceTargetAccrual(label, target.Health.IncarnationID, sampleAt, 0)
+		assert.NoError(t, err)
+		assert.True(t, applied)
+
+		stats, err = m.Stats()
+		assert.NoError(t, err)
+		assert.Equal(t, 1, stats.ReapPendingTargets, "an over-threshold unreachable target must surface as reap-pending before any tombstone")
+		assert.Equal(t, 0, stats.ReapedTargets)
+
+		cutoff := time.Now().UTC()
+		reaped, err := m.Datastore.PersistTargetReap(datastore.PersistTargetReapRequest{
+			Label:            label,
+			IncarnationID:    target.Health.IncarnationID,
+			LastSeenBefore:   cutoff,
+			LastSampleBefore: cutoff,
+			ReapedAt:         cutoff,
+		})
+		assert.NoError(t, err)
+		assert.True(t, reaped)
+
+		stats, err = m.Stats()
+		assert.NoError(t, err)
+		assert.Equal(t, 0, stats.ReapPendingTargets, "a reaped target must no longer count as reap-pending")
+		assert.Equal(t, 1, stats.ReapedTargets)
 	})
 }
