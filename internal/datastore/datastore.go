@@ -236,6 +236,18 @@ type Datastore interface {
 	// rejection (reaped state, stale observedAt, or incarnation mismatch) returns
 	// applied=false with no error.
 	UpdateTargetHealth(obs pkgmodel.TargetHealthObservation) (applied bool, err error)
+	// AdvanceTargetAccrual applies an in-place unreachability-accrual update to a
+	// target's current (max-version) row: adds deltaSeconds to
+	// unreachable_accum_seconds and sets last_sample_at to lastSampleAt. Guarded by
+	// incarnation match, current max-version pinning, and health_state == 'unreachable'
+	// (mirrors UpdateTargetHealth's guard shape). Returns applied=false with no error
+	// when the guard rejects the write (incarnation mismatch, or the target is no
+	// longer the max-version/unreachable row it was when the caller read it).
+	AdvanceTargetAccrual(targetLabel, incarnationID string, lastSampleAt time.Time, deltaSeconds int64) (applied bool, err error)
+	// GetUnreachableTargets returns all current (max-version) targets whose
+	// health_state is 'unreachable', with Health fully populated. Used by the
+	// TargetReaper to compute per-tick accrual and detect reap candidates.
+	GetUnreachableTargets() ([]*pkgmodel.Target, error)
 
 	// Stats returns aggregated statistics about the datastore contents
 	Stats() (*stats.Stats, error)

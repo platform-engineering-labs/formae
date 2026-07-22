@@ -2763,6 +2763,98 @@ func (d DatastoreSQLite) UpdateTargetHealth(obs pkgmodel.TargetHealthObservation
 	return n == 1, nil
 }
 
+func (d DatastoreSQLite) AdvanceTargetAccrual(targetLabel, incarnationID string, lastSampleAt time.Time, deltaSeconds int64) (bool, error) {
+	_, span := sqliteTracer.Start(context.Background(), "AdvanceTargetAccrual")
+	defer span.End()
+
+	query := `
+		UPDATE targets SET
+			unreachable_accum_seconds = unreachable_accum_seconds + ?,
+			last_sample_at = ?
+		WHERE label = ?
+		  AND version = (SELECT MAX(version) FROM targets WHERE label = ?)
+		  AND health_state = 'unreachable'
+		  AND target_incarnation_id = ?`
+
+	result, err := d.conn.Exec(query, deltaSeconds, lastSampleAt.UTC().Format(time.RFC3339Nano),
+		targetLabel, targetLabel, incarnationID)
+	if err != nil {
+		return false, err
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
+}
+
+func (d DatastoreSQLite) GetUnreachableTargets() ([]*pkgmodel.Target, error) {
+	_, span := sqliteTracer.Start(context.Background(), "GetUnreachableTargets")
+	defer span.End()
+
+	var targets []*pkgmodel.Target
+
+	query := `
+		SELECT label, version, namespace, config, config_schema, discoverable,
+		       target_incarnation_id, health_state, last_seen_at, observed_at,
+		       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+		       reap_kind, reap_max_unreachable_seconds
+		FROM targets t1
+		WHERE NOT EXISTS (
+			SELECT 1
+			FROM targets t2
+			WHERE t1.label = t2.label
+			AND t2.version > t1.version
+		)
+		AND t1.health_state = 'unreachable'`
+	rows, err := d.conn.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer closeRows(rows)
+
+	for rows.Next() {
+		var label, namespace string
+		var version int
+		var config json.RawMessage
+		var configSchemaStr sql.NullString
+		var discoverable int
+		var incarnationID, healthState string
+		var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt sql.NullString
+		var unreachableAccumSeconds int64
+		var lastErrorCode sql.NullString
+		var reapKind string
+		var reapMaxUnreachableSeconds int64
+		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaStr, &discoverable,
+			&incarnationID, &healthState, &lastSeenAt, &observedAt,
+			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode,
+			&reapKind, &reapMaxUnreachableSeconds); err != nil {
+			return nil, err
+		}
+
+		var configSchema pkgmodel.ConfigSchema
+		if configSchemaStr.Valid {
+			if err := json.Unmarshal([]byte(configSchemaStr.String), &configSchema); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal config_schema for target %s: %w", label, err)
+			}
+		}
+
+		targets = append(targets, &pkgmodel.Target{
+			Label:        label,
+			Namespace:    namespace,
+			Config:       config,
+			ConfigSchema: configSchema,
+			Discoverable: discoverable == 1,
+			Version:      version,
+			Reaping:      pkgmodel.ReapingRawFromColumns(reapKind, reapMaxUnreachableSeconds),
+			Health: scanSQLiteTargetHealth(incarnationID, healthState, lastSeenAt, observedAt,
+				firstUnreachableAt, lastSampleAt, unreachableAccumSeconds, lastErrorCode),
+		})
+	}
+
+	return targets, rows.Err()
+}
+
 // scanSQLiteTargetHealth reads the health columns from a scan result and returns
 // a populated TargetHealth. nullTimestamp is a sql.NullString holding an ISO-8601
 // timestamp string as SQLite stores datetimes as text.

@@ -68,6 +68,10 @@ func (sup *Supervisor) Init(args ...any) (act.SupervisorSpec, error) {
 			Factory: NewStackExpirer,
 		},
 		{
+			Name:    "TargetReaper",
+			Factory: NewTargetReaper,
+		},
+		{
 			Name:    "AutoReconciler",
 			Factory: NewAutoReconciler,
 		},

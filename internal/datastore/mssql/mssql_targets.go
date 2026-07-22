@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/demula/mksuid/v2"
 	json "github.com/goccy/go-json"
@@ -279,6 +280,64 @@ func (d *DatastoreMSSQL) UpdateTargetHealth(obs pkgmodel.TargetHealthObservation
 		return false, err
 	}
 	return n == 1, nil
+}
+
+func (d *DatastoreMSSQL) AdvanceTargetAccrual(targetLabel, incarnationID string, lastSampleAt time.Time, deltaSeconds int64) (bool, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "AdvanceTargetAccrual")
+	defer span.End()
+
+	query := `
+		UPDATE targets SET
+			unreachable_accum_seconds = unreachable_accum_seconds + @p1,
+			last_sample_at = @p2
+		WHERE label = @p3
+		  AND version = (SELECT MAX(version) FROM targets WHERE label = @p3)
+		  AND health_state = 'unreachable'
+		  AND target_incarnation_id = @p4`
+
+	result, err := d.conn.ExecContext(ctx, query, deltaSeconds, lastSampleAt.UTC(), targetLabel, incarnationID)
+	if err != nil {
+		return false, err
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
+}
+
+func (d *DatastoreMSSQL) GetUnreachableTargets() ([]*pkgmodel.Target, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "GetUnreachableTargets")
+	defer span.End()
+
+	query := `
+		SELECT label, version, namespace, config, config_schema, discoverable,
+		       target_incarnation_id, health_state, last_seen_at, observed_at,
+		       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+		       reap_kind, reap_max_unreachable_seconds
+		FROM targets t1
+		WHERE NOT EXISTS (
+			SELECT 1
+			FROM targets t2
+			WHERE t1.label = t2.label
+			AND t2.version > t1.version
+		)
+		AND t1.health_state = 'unreachable'`
+	rows, err := d.conn.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var targets []*pkgmodel.Target
+	for rows.Next() {
+		target, err := scanTargetColumns(rows.Scan)
+		if err != nil {
+			return nil, err
+		}
+		targets = append(targets, target)
+	}
+	return targets, rows.Err()
 }
 
 func (d *DatastoreMSSQL) LoadTarget(label string) (*pkgmodel.Target, error) {

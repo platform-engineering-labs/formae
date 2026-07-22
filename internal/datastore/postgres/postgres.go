@@ -3595,6 +3595,93 @@ func (d DatastorePostgres) UpdateTargetHealth(obs pkgmodel.TargetHealthObservati
 	return rowsAffected == 1, nil
 }
 
+func (d DatastorePostgres) AdvanceTargetAccrual(targetLabel, incarnationID string, lastSampleAt time.Time, deltaSeconds int64) (bool, error) {
+	ctx, span := tracer.Start(context.Background(), "AdvanceTargetAccrual")
+	defer span.End()
+
+	query := `
+		UPDATE targets SET
+			unreachable_accum_seconds = unreachable_accum_seconds + $1,
+			last_sample_at = $2
+		WHERE label = $3
+		  AND version = (SELECT MAX(version) FROM targets WHERE label = $3)
+		  AND health_state = 'unreachable'
+		  AND target_incarnation_id = $4`
+
+	tag, err := d.pool.Exec(ctx, query, deltaSeconds, lastSampleAt.UTC(), targetLabel, incarnationID)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+func (d DatastorePostgres) GetUnreachableTargets() ([]*pkgmodel.Target, error) {
+	ctx, span := tracer.Start(context.Background(), "GetUnreachableTargets")
+	defer span.End()
+
+	query := `
+	SELECT label, version, namespace, config, config_schema, discoverable,
+	       target_incarnation_id, health_state, last_seen_at, observed_at,
+	       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+	       reap_kind, reap_max_unreachable_seconds
+	FROM targets t1
+	WHERE NOT EXISTS (
+		SELECT 1
+		FROM targets t2
+		WHERE t1.label = t2.label
+		AND t2.version > t1.version
+	)
+	AND t1.health_state = 'unreachable'
+	`
+
+	rows, err := d.pool.Query(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var targets []*pkgmodel.Target
+	for rows.Next() {
+		var label, namespace string
+		var version int
+		var config json.RawMessage
+		var configSchemaRaw []byte
+		var discoverable bool
+		var incarnationID, healthState string
+		var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt *time.Time
+		var unreachableAccumSeconds int64
+		var lastErrorCode *string
+		var reapKind string
+		var reapMaxUnreachableSeconds int64
+		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaRaw, &discoverable,
+			&incarnationID, &healthState, &lastSeenAt, &observedAt,
+			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode,
+			&reapKind, &reapMaxUnreachableSeconds); err != nil {
+			return nil, err
+		}
+
+		var configSchema pkgmodel.ConfigSchema
+		if len(configSchemaRaw) > 0 {
+			if err := json.Unmarshal(configSchemaRaw, &configSchema); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal config_schema for target %s: %w", label, err)
+			}
+		}
+
+		targets = append(targets, &pkgmodel.Target{
+			Label:        label,
+			Namespace:    namespace,
+			Config:       config,
+			ConfigSchema: configSchema,
+			Discoverable: discoverable,
+			Version:      version,
+			Reaping:      pkgmodel.ReapingRawFromColumns(reapKind, reapMaxUnreachableSeconds),
+			Health:       buildPostgresTargetHealth(incarnationID, healthState, lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt, unreachableAccumSeconds, lastErrorCode),
+		})
+	}
+
+	return targets, rows.Err()
+}
+
 func (d DatastorePostgres) DeleteTarget(targetLabel string) (string, error) {
 	ctx, span := tracer.Start(context.Background(), "DeleteTarget")
 	defer span.End()

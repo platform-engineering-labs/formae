@@ -98,6 +98,8 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunUpdateTargetMintsFreshIncarnationOnReaped(t, newDS)
 	RunUpdateTargetCarriesHealthForwardWhenNotReaped(t, newDS)
 	RunSuccessObservationZeroesAccrual(t, newDS)
+	RunAdvanceTargetAccrual(t, newDS)
+	RunGetUnreachableTargets(t, newDS)
 
 	RunCreateStack(t, newDS)
 	RunCreateStackAlreadyExists(t, newDS)

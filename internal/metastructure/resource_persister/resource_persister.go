@@ -114,6 +114,13 @@ func (rp *ResourcePersister) HandleMessage(from gen.PID, message any) error {
 				"target", msg.Observation.TargetLabel, "error", err)
 		}
 		return nil
+	case messages.AdvanceTargetAccrual:
+		_, err := rp.datastore.AdvanceTargetAccrual(msg.TargetLabel, msg.IncarnationID, msg.LastSampleAt, msg.DeltaSeconds)
+		if err != nil {
+			rp.Log().Error("ResourcePersister: failed to advance target accrual",
+				"target", msg.TargetLabel, "error", err)
+		}
+		return nil
 	default:
 		rp.Log().Error("ResourcePersister: unknown message type=%s", fmt.Sprintf("%T", message))
 		return nil

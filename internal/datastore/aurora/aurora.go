@@ -2374,6 +2374,108 @@ func (d *DatastoreAuroraDataAPI) UpdateTargetHealth(obs pkgmodel.TargetHealthObs
 	return output.NumberOfRecordsUpdated == 1, nil
 }
 
+func (d *DatastoreAuroraDataAPI) AdvanceTargetAccrual(targetLabel, incarnationID string, lastSampleAt time.Time, deltaSeconds int64) (bool, error) {
+	ctx := context.Background()
+
+	query := `
+	UPDATE targets SET
+		unreachable_accum_seconds = unreachable_accum_seconds + :delta_seconds,
+		last_sample_at = :last_sample_at::timestamptz
+	WHERE label = :label
+	  AND version = (SELECT MAX(version) FROM targets WHERE label = :label)
+	  AND health_state = 'unreachable'
+	  AND target_incarnation_id = :incarnation_id`
+	params := []types.SqlParameter{
+		{Name: aws.String("delta_seconds"), Value: &types.FieldMemberLongValue{Value: deltaSeconds}},
+		{Name: aws.String("last_sample_at"), Value: &types.FieldMemberStringValue{Value: lastSampleAt.UTC().Format(time.RFC3339Nano)}},
+		{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: targetLabel}},
+		{Name: aws.String("incarnation_id"), Value: &types.FieldMemberStringValue{Value: incarnationID}},
+	}
+
+	output, err := d.executeStatement(ctx, query, params)
+	if err != nil {
+		return false, err
+	}
+	return output.NumberOfRecordsUpdated == 1, nil
+}
+
+func (d *DatastoreAuroraDataAPI) GetUnreachableTargets() ([]*pkgmodel.Target, error) {
+	ctx := context.Background()
+
+	query := `
+	SELECT label, version, namespace, config, discoverable, config_schema,
+	       target_incarnation_id, health_state, last_seen_at, observed_at,
+	       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+	       reap_kind, reap_max_unreachable_seconds
+	FROM targets t1
+	WHERE NOT EXISTS (
+		SELECT 1
+		FROM targets t2
+		WHERE t1.label = t2.label
+		AND t2.version > t1.version
+	)
+	AND t1.health_state = 'unreachable'
+	`
+
+	output, err := d.executeStatement(ctx, query, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var targets []*pkgmodel.Target
+	for _, record := range output.Records {
+		if len(record) < 16 {
+			continue
+		}
+
+		label, err := getStringField(record[0])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse label: %w", err)
+		}
+
+		version, err := getIntField(record[1])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse version: %w", err)
+		}
+
+		namespace, err := getStringField(record[2])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse namespace: %w", err)
+		}
+
+		config, err := getRawJSONField(record[3])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse config: %w", err)
+		}
+
+		discoverable, err := getBoolField(record[4])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse discoverable: %w", err)
+		}
+
+		configSchema, err := unmarshalConfigSchema(record[5])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse config_schema: %w", err)
+		}
+
+		health, _ := scanAuroraTargetHealth(record[6:])
+		reapingRaw := auroraReapingFromFields(record[14], record[15])
+
+		targets = append(targets, &pkgmodel.Target{
+			Label:        label,
+			Namespace:    namespace,
+			Config:       config,
+			ConfigSchema: configSchema,
+			Discoverable: discoverable,
+			Version:      version,
+			Reaping:      reapingRaw,
+			Health:       health,
+		})
+	}
+
+	return targets, nil
+}
+
 func (d *DatastoreAuroraDataAPI) LoadTarget(targetLabel string) (*pkgmodel.Target, error) {
 	ctx := context.Background()
 

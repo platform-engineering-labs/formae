@@ -106,7 +106,11 @@ func (m *mockDatastore) CountResourcesInTarget(_ string) (int, error) { return 0
 func (m *mockDatastore) UpdateTargetHealth(_ pkgmodel.TargetHealthObservation) (bool, error) {
 	return false, nil
 }
-func (m *mockDatastore) Stats() (*stats.Stats, error) { return nil, nil }
+func (m *mockDatastore) AdvanceTargetAccrual(_, _ string, _ time.Time, _ int64) (bool, error) {
+	return false, nil
+}
+func (m *mockDatastore) GetUnreachableTargets() ([]*pkgmodel.Target, error) { return nil, nil }
+func (m *mockDatastore) Stats() (*stats.Stats, error)                       { return nil, nil }
 func (m *mockDatastore) GetKSUIDByTriplet(_, _, _ string) (string, error) {
 	return "", nil
 }

@@ -61,6 +61,7 @@ type MetastructureAPI interface {
 	ForceDiscovery() error
 	ForceAutoReconcile(stackLabel string) (*apimodel.ForceReconcileResponse, error)
 	ForceCheckTTL() (*apimodel.ForceCheckTTLResponse, error)
+	ForceReap() error
 	ListDrift(stack string) (*apimodel.ModifiedStack, error)
 	Stats() (*apimodel.Stats, error)
 	RegisteredPlugins() ([]messages.RegisteredPluginInfo, error)
@@ -1249,6 +1250,20 @@ func (m *Metastructure) ForceSync() error {
 func (m *Metastructure) ForceDiscovery() error {
 	if err := m.Node.Send(gen.Atom("Discovery"), discovery.Discover{}); err != nil {
 		slog.Error(fmt.Sprintf("Failed to send message to Discovery: %v", err))
+		return err
+	}
+
+	return nil
+}
+
+// ForceReap triggers a single, immediate TargetReaper tick: it advances the
+// unreachability-accrual clock for every currently-unreachable target and
+// detects reap candidates. It performs no reaping/tombstoning action — see
+// TargetReaper. Exists so workflow tests can drive a deterministic tick
+// without waiting for config.ReaperInterval to elapse.
+func (m *Metastructure) ForceReap() error {
+	if err := m.Node.Send(gen.Atom(actornames.TargetReaper), CheckUnreachableTargets{}); err != nil {
+		slog.Error(fmt.Sprintf("Failed to send message to TargetReaper: %v", err))
 		return err
 	}
 

@@ -598,6 +598,15 @@ func (c *Client) ForceReconcile(stackLabel string) (*apimodel.ForceReconcileResp
 	}
 }
 
+func (c *Client) ForceReap() error {
+	_, err := c.resty.R().
+		Post(c.endpoint + "/api/v1/admin/reap")
+	if err != nil {
+		return fmt.Errorf("failed to force reap: %w", err)
+	}
+	return nil
+}
+
 func (c *Client) ForceCheckTTL() (*apimodel.ForceCheckTTLResponse, error) {
 	resp, err := c.resty.R().
 		Post(c.endpoint + "/api/v1/admin/check-ttl")

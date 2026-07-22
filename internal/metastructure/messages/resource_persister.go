@@ -5,6 +5,8 @@
 package messages
 
 import (
+	"time"
+
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
@@ -29,4 +31,16 @@ type CleanupEmptyStacks struct {
 // UPDATE guarded by monotonicity and incarnation checks.
 type UpdateTargetHealth struct {
 	Observation pkgmodel.TargetHealthObservation
+}
+
+// AdvanceTargetAccrual is sent asynchronously to ResourcePersister by the
+// TargetReaper to apply one tick's computed unreachability-accrual delta for
+// a target. The persister applies it via an in-place UPDATE guarded by
+// incarnation match and current max-version pinning (see
+// datastore.AdvanceTargetAccrual).
+type AdvanceTargetAccrual struct {
+	TargetLabel   string
+	IncarnationID string
+	LastSampleAt  time.Time
+	DeltaSeconds  int64
 }

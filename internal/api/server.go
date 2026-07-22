@@ -51,6 +51,7 @@ const (
 	SyncRoute     = AdminBasePath + "/synchronize"
 	DiscoverRoute = AdminBasePath + "/discover"
 	CheckTTLRoute = AdminBasePath + "/check-ttl"
+	ReapRoute     = AdminBasePath + "/reap"
 
 	PluginsRoute         = BasePath + "/plugins"
 	PluginRoute          = BasePath + "/plugins/:name"
@@ -235,6 +236,7 @@ func (s *Server) configureEcho() *echo.Echo {
 	e.POST(SyncRoute, s.ForceSync)
 	e.POST(DiscoverRoute, s.ForceDiscover)
 	e.POST(CheckTTLRoute, s.ForceCheckTTL)
+	e.POST(ReapRoute, s.ForceReap)
 
 	// Plugin management endpoints
 	e.GET(PluginsRoute, s.listPluginsHandler)
@@ -609,6 +611,21 @@ func (s *Server) ForceCheckTTL(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 	}
 	return c.JSON(http.StatusOK, result)
+}
+
+// @Summary Force a target-reaper tick
+// @Description Triggers a single, immediate TargetReaper tick: advances the unreachability-accrual
+// @Description clock for every currently-unreachable target and detects reap candidates. Performs no
+// @Description reaping/tombstoning action.
+// @Tags admin
+// @Success 200
+// @Failure 500 {string} string "Internal Server Error."
+// @Router /admin/reap [post]
+func (s *Server) ForceReap(c echo.Context) error {
+	if err := s.metastructure.ForceReap(); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError)
+	}
+	return c.JSON(http.StatusOK, "")
 }
 
 // getCommandStatus is a helper to retrieve command status and handle common error/status logic

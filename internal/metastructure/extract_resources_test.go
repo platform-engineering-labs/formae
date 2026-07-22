@@ -245,6 +245,14 @@ func (m *mockExtractDatastore) UpdateTargetHealth(_ pkgmodel.TargetHealthObserva
 	panic("not implemented")
 }
 
+func (m *mockExtractDatastore) AdvanceTargetAccrual(_, _ string, _ time.Time, _ int64) (bool, error) {
+	panic("not implemented")
+}
+
+func (m *mockExtractDatastore) GetUnreachableTargets() ([]*pkgmodel.Target, error) {
+	panic("not implemented")
+}
+
 func TestExtractResources_ManagedAndUnmanagedStacks(t *testing.T) {
 	managedStack := &pkgmodel.Stack{
 		Label:       "my-stack",
