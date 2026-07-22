@@ -138,7 +138,7 @@ func runEval(app *app.App, opts *EvalOptions) error {
 func runEvalForHumans(app *app.App, opts *EvalOptions) error {
 	th := themeFor(app)
 	app.PrintBanner()
-	fmt.Println(renderEvalHeader(th, opts.FormaFile, string(opts.Mode)))
+	fmt.Printf("%s\n\n", renderEvalHeader(th, opts.FormaFile, string(opts.Mode)))
 
 	result, err := app.Evaluate(opts.FormaFile, opts.Properties, opts.Mode)
 	if err != nil {

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 
+	"github.com/platform-engineering-labs/formae/internal/cli/banner"
 	"github.com/platform-engineering-labs/formae/internal/cli/profile/store"
 	"github.com/spf13/cobra"
 )
@@ -20,6 +21,9 @@ func newDiffCmd() *cobra.Command {
 		Short: "Run `diff -u` between two profiles (or <a> vs the active profile)",
 		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// TTY-gated (suppressed when piped), so `profile diff a b | patch`
+			// stays a clean unified diff.
+			banner.PrintBanner()
 			s, err := openStore()
 			if err != nil {
 				return err

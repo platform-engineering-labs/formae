@@ -127,7 +127,7 @@ func resourcesCmd() *cobra.Command {
 	command.Flags().String("query", "", "Query that allows to find resources by their attributes. Use * as a wildcard anywhere (e.g. foo*, *foo, *foo*, foo*bar). ? and regex are not yet supported.")
 	command.Flags().String("output-consumer", string(printer.ConsumerHuman), "Consumer of the command output (human | machine)")
 	command.Flags().String("output-schema", "json", "The schema to use for the machine output (json | yaml)")
-	command.Flags().Int("max-results", 10, "Maximum number of resources to display in the table (0 = unlimited)")
+	command.Flags().Int("max-results", 200, "Maximum resources shown (0 = unlimited); applies to both the interactive view and piped output. Piped output defaults to 10.")
 	cmd.AddConfigFlags(command)
 
 	return command
@@ -224,7 +224,7 @@ func InventoryCmd() *cobra.Command {
 	command.Flags().String("query", "", "Query that allows to find resources by their attributes. Use * as a wildcard anywhere (e.g. foo*, *foo, *foo*, foo*bar). ? and regex are not yet supported.")
 	command.Flags().String("output-consumer", string(printer.ConsumerHuman), "Consumer of the command output (human | machine)")
 	command.Flags().String("output-schema", "json", "The schema to use for the machine output (json | yaml)")
-	command.Flags().Int("max-results", 10, "Maximum number of resources to display in the table (0 = unlimited)")
+	command.Flags().Int("max-results", 200, "Maximum resources shown (0 = unlimited); applies to both the interactive view and piped output. Piped output defaults to 10.")
 	cmd.AddConfigFlags(command)
 
 	resources := resourcesCmd()
@@ -275,7 +275,7 @@ func targetsCmd() *cobra.Command {
 	command.Flags().String("query", "", "Query that allows to find targets by their attributes (e.g., 'namespace:AWS', 'discoverable:true', 'label:prod-us-east-1'). Use * as a wildcard anywhere (e.g. foo*, *foo, *foo*, foo*bar). ? and regex are not yet supported.")
 	command.Flags().String("output-consumer", string(printer.ConsumerHuman), "Consumer of the command output (human | machine)")
 	command.Flags().String("output-schema", "json", "The schema to use for the machine output (json | yaml)")
-	command.Flags().Int("max-results", 10, "Maximum number of targets to display in the table (0 = unlimited)")
+	command.Flags().Int("max-results", 200, "Maximum targets shown (0 = unlimited); applies to both the interactive view and piped output. Piped output defaults to 10.")
 	cmd.AddConfigFlags(command)
 
 	return command
@@ -357,7 +357,7 @@ func stacksCmd() *cobra.Command {
 
 	command.Flags().String("output-consumer", string(printer.ConsumerHuman), "Consumer of the command output (human | machine)")
 	command.Flags().String("output-schema", "json", "The schema to use for the machine output (json | yaml)")
-	command.Flags().Int("max-results", 10, "Maximum number of stacks to display in the table (0 = unlimited)")
+	command.Flags().Int("max-results", 200, "Maximum stacks shown (0 = unlimited); applies to both the interactive view and piped output. Piped output defaults to 10.")
 	cmd.AddConfigFlags(command)
 
 	return command
@@ -406,7 +406,7 @@ func policiesCmd() *cobra.Command {
 
 	command.Flags().String("output-consumer", string(printer.ConsumerHuman), "Consumer of the command output (human | machine)")
 	command.Flags().String("output-schema", "json", "The schema to use for the machine output (json | yaml)")
-	command.Flags().Int("max-results", 10, "Maximum number of policies to display in the table (0 = unlimited)")
+	command.Flags().Int("max-results", 200, "Maximum policies shown (0 = unlimited); applies to both the interactive view and piped output. Piped output defaults to 10.")
 	cmd.AddConfigFlags(command)
 
 	return command

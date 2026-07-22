@@ -114,7 +114,10 @@ func init() {
 		cmdName := cmd.Name()
 		replaced := strings.ReplaceAll(examples, "{{.Name}}", cliName)
 		replaced = strings.ReplaceAll(replaced, "{{.Command}}", cmdName)
-		parts := strings.Split(replaced, "|")
+		// Split on either pipe or newline so both separator conventions render
+		// one example per line, each aligned under the first (which the usage
+		// template already indents by two spaces).
+		parts := strings.FieldsFunc(replaced, func(r rune) bool { return r == '|' || r == '\n' })
 		for i, p := range parts {
 			parts[i] = strings.TrimSpace(p)
 		}
