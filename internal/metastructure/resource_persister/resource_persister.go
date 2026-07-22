@@ -580,8 +580,17 @@ func (rp *ResourcePersister) persistTargetUpdate(update *target_update.TargetUpd
 		// the target update is marked failed and retried, and the retry is safe —
 		// tombstoning is idempotent and the re-query only returns rows not yet
 		// tombstoned — so a retry converges rather than double-deleting.
+		//
+		// A reaped target's managed resources were tombstoned as 'reaped' by
+		// PersistTargetReap and never entered the changeset cascade (they're
+		// invisible to every live-resource query, so the destroy generator never
+		// saw them). Convert them to a definitive delete tombstone here — DB-only,
+		// same reasoning as forgetUnmanagedResourcesOnTarget: the target is
+		// confirmed gone, so there is nothing for a plugin to delete.
 		if err = rp.forgetUnmanagedResourcesOnTarget(update.Target.Label, commandID); err == nil {
-			version, err = rp.datastore.DeleteTarget(update.Target.Label)
+			if err = rp.purgeReapedResourcesOnTarget(update.Target.Label, commandID); err == nil {
+				version, err = rp.datastore.DeleteTarget(update.Target.Label)
+			}
 		}
 	default:
 		err = fmt.Errorf("unknown target operation: %s", update.Operation)
@@ -645,6 +654,29 @@ func (rp *ResourcePersister) forgetUnmanagedResourcesOnTarget(targetLabel, comma
 	for _, res := range unmanaged {
 		if _, err := rp.datastore.DeleteResource(res, commandID); err != nil {
 			return fmt.Errorf("failed to forget unmanaged resource %s on deleted target %s: %w", res.Ksuid, targetLabel, err)
+		}
+	}
+	return nil
+}
+
+// purgeReapedResourcesOnTarget converts every reaped-tombstoned resource on
+// targetLabel into a definitive delete tombstone. DeleteResource is exempt
+// from the reaped-write guard (see storeResource) precisely so this
+// conversion can happen; it is a DB-only forget — reaped resources were
+// already presumed gone when the target was reaped, so this never calls the
+// plugin, mirroring forgetUnmanagedResourcesOnTarget.
+func (rp *ResourcePersister) purgeReapedResourcesOnTarget(targetLabel, commandID string) error {
+	reaped, err := rp.datastore.LoadReapedResources()
+	if err != nil {
+		return fmt.Errorf("failed to load reaped resources for deleted target %s: %w", targetLabel, err)
+	}
+
+	for _, res := range reaped {
+		if res.Target != targetLabel {
+			continue
+		}
+		if _, err := rp.datastore.DeleteResource(res, commandID); err != nil {
+			return fmt.Errorf("failed to clean up reaped resource %s on deleted target %s: %w", res.Ksuid, targetLabel, err)
 		}
 	}
 	return nil

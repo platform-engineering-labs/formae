@@ -191,6 +191,26 @@ func reconcileMatchesExisting(newResource, existingResource pkgmodel.Resource) b
 	return newResource.Alias != "" && newResource.Alias == existingResource.Label
 }
 
+// skipResurrectionForReapedTarget reports whether a candidate create/sync
+// update for a resource on the given target must be dropped because the
+// target has been reaped. Once PersistTargetReap tombstones a target's
+// resources, they become invisible to every live-resource query (task 5).
+// Without this guard, Synchronize (whose desired state can be built from a
+// baseline unaware of reaping — see GetResourcesAtLastReconcile) and
+// auto-reconcile (which diffs that same baseline against the live view)
+// would read the target's absence from the live view as "missing" and
+// re-create its resources.
+//
+// Destroy is deliberately NOT guarded here: destroying a reaped target's
+// leftover rows is the explicit cleanup path (destroy-of-reaped), not a
+// resurrection risk.
+func skipResurrectionForReapedTarget(source FormaCommandSource, target *pkgmodel.Target) bool {
+	if source != FormaCommandSourceSynchronize && source != FormaCommandSourcePolicyAutoReconcile {
+		return false
+	}
+	return target != nil && target.Health != nil && target.Health.State == pkgmodel.TargetHealthStateReaped
+}
+
 // stackExistsInForma checks if a stack label exists in the Forma.Stacks slice
 func stackExistsInForma(forma *pkgmodel.Forma, stackLabel string) bool {
 	for _, stack := range forma.Stacks {
@@ -662,6 +682,9 @@ func generateResourceUpdatesForSync(
 					if target == nil {
 						target = &pkgmodel.Target{Label: existingResource.Target}
 					}
+					if skipResurrectionForReapedTarget(source, target) {
+						continue
+					}
 					resourceUpdate, err := NewResourceUpdateForSync(
 						*existingResource,
 						*target,
@@ -756,6 +779,9 @@ func generateResourceUpdatesForReconcile(
 		// Existing stack not found which means that all resources will be created.
 		if len(existingResources) == 0 {
 			for _, newResource := range stack.Resources {
+				if skipResurrectionForReapedTarget(source, existingTargetMap[newResource.Target]) {
+					continue
+				}
 				if existingUnmanaged, ok := findUnmanagedResource(newResource, allResourcesByStack); ok {
 					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, resolvableLookup)
 					if err != nil {
@@ -883,6 +909,9 @@ func generateResourceUpdatesForReconcile(
 			}
 
 			if !found {
+				if skipResurrectionForReapedTarget(source, existingTargetMap[newResource.Target]) {
+					continue
+				}
 				// Check if this resource exists as an unmanaged resource
 				if existingUnmanaged, ok := findUnmanagedResource(newResource, allResourcesByStack); ok {
 					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, resolvableLookup)

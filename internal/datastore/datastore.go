@@ -203,6 +203,11 @@ type Datastore interface {
 	LoadResourceByNativeID(nativeID string, resourceType string) (*pkgmodel.Resource, error)
 	// LoadAllResources returns all stored resources
 	LoadAllResources() ([]*pkgmodel.Resource, error)
+	// LoadReapedResources returns the current-version rows tombstoned with the
+	// 'reaped' marker (PersistTargetReap), across all targets. Reaped rows are
+	// excluded from every other resource query; this is the one path back to
+	// them, used by destroy-of-reaped cleanup and the dangling-reference report.
+	LoadReapedResources() ([]*pkgmodel.Resource, error)
 	// LatestLabelForResource returns the most recent label variant for a resource
 	LatestLabelForResource(label string) (string, error)
 	// LoadResourceById retrieves a resource by its KSUID

@@ -384,6 +384,48 @@ func (d *DatastoreMSSQL) LoadAllResources() ([]*pkgmodel.Resource, error) {
 	return resources, rows.Err()
 }
 
+// LoadReapedResources returns the current-version rows tombstoned with the
+// 'reaped' marker, across all targets. See the Datastore interface for the
+// contract.
+func (d *DatastoreMSSQL) LoadReapedResources() ([]*pkgmodel.Resource, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "LoadReapedResources")
+	defer span.End()
+
+	query := fmt.Sprintf(`
+	SELECT data, ksuid
+	FROM resources r1
+	WHERE NOT EXISTS (
+		SELECT 1
+		FROM resources r2
+		WHERE r1.uri = r2.uri
+		AND r2.version %[1]s > r1.version %[1]s
+	)
+	AND operation = 'reaped'
+	`, binColl)
+	rows, err := d.conn.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var resources []*pkgmodel.Resource
+	for rows.Next() {
+		var jsonData, ksuid string
+		if err := rows.Scan(&jsonData, &ksuid); err != nil {
+			return nil, err
+		}
+
+		var resource pkgmodel.Resource
+		if err := json.Unmarshal([]byte(jsonData), &resource); err != nil {
+			return nil, err
+		}
+		resource.Ksuid = ksuid
+		resources = append(resources, &resource)
+	}
+
+	return resources, rows.Err()
+}
+
 func (d *DatastoreMSSQL) LatestLabelForResource(label string) (string, error) {
 	ctx, span := mssqlTracer.Start(context.Background(), "LatestLabelForResource")
 	defer span.End()
