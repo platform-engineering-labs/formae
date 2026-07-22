@@ -5,8 +5,10 @@
 package refresh
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 
 	clicmd "github.com/platform-engineering-labs/formae/internal/cli/cmd"
 	"github.com/platform-engineering-labs/formae/internal/cli/config"
@@ -16,6 +18,22 @@ import (
 	"github.com/platform-engineering-labs/orbital/mgr"
 	"github.com/spf13/cobra"
 )
+
+// refreshErrorCounter wraps a slog.Handler and counts records logged at ERROR
+// level. orbital's Refresh() logs per-repository fetch/validation failures
+// (o.Error(...)) but always returns nil, so refresh counts those records to
+// detect failures the API swallows rather than printing a false "done.".
+type refreshErrorCounter struct {
+	slog.Handler
+	count *atomic.Int64
+}
+
+func (h refreshErrorCounter) Handle(ctx context.Context, r slog.Record) error {
+	if r.Level >= slog.LevelError {
+		h.count.Add(1)
+	}
+	return h.Handler.Handle(ctx, r)
+}
 
 // RefreshCmd refreshes the locally cached package index for every configured
 // repository across all channels. It writes to the package store, so on a
@@ -47,12 +65,18 @@ sudo.`,
 				return err
 			}
 
+			// orbital's Refresh() always returns nil, logging per-repository
+			// fetch failures at ERROR level instead. Count those so we don't
+			// report success when a repo/channel was not actually warmed.
+			var refreshErrors atomic.Int64
+			logger := slog.New(refreshErrorCounter{Handler: slog.Default().Handler(), count: &refreshErrors})
+
 			for _, channel := range constants.AllChannels {
 				var orb *mgr.Manager
 				if len(app.Config.Artifacts.Repositories) > 0 {
-					orb, err = opsmgr.NewFromRepositories(slog.Default(), app.Config.Artifacts.Repositories, channel, true, true)
+					orb, err = opsmgr.NewFromRepositories(logger, app.Config.Artifacts.Repositories, channel, true, true)
 				} else {
-					orb, err = opsmgr.New(slog.Default(), app.Config.Artifacts.URL, channel, true, true)
+					orb, err = opsmgr.New(logger, app.Config.Artifacts.URL, channel, true, true)
 				}
 				if err != nil {
 					return err
@@ -66,6 +90,10 @@ sudo.`,
 				if err := orb.Refresh(); err != nil {
 					return err
 				}
+			}
+
+			if n := refreshErrors.Load(); n > 0 {
+				return fmt.Errorf("refresh completed with %d repository error(s); some package metadata may be stale — see the log for details", n)
 			}
 
 			fmt.Println("done.")
