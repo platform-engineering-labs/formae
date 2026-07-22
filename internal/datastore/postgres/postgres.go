@@ -3595,7 +3595,25 @@ func (d DatastorePostgres) UpdateTarget(target *pkgmodel.Target) (string, error)
 		                     first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
 		                     reap_kind, reap_max_unreachable_seconds)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`
-	_, err = d.pool.Exec(ctx, insertQuery, target.Label, newVersion, target.Namespace, cfg, configSchemaJSON, target.Discoverable,
+
+	// The version INSERT and the recovery un-reap must be atomic. A crash strictly
+	// between them would leave the target recovered (fresh incarnation, health
+	// 'unknown') while its resources stayed marked 'reaped'; a resumed UpdateTarget
+	// would not re-trigger the un-reap (the target is no longer reaped), stranding
+	// those resources as invisible tombstones the write-guard permanently rejects.
+	// One transaction makes it both-or-neither.
+	tx, err := d.pool.Begin(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to begin target update transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+
+	_, err = tx.Exec(ctx, insertQuery, target.Label, newVersion, target.Namespace, cfg, configSchemaJSON, target.Discoverable,
 		newIncarnationID, newHealthState, newLastSeenAt, newObservedAt, newFirstUnreachableAt, newLastSampleAt,
 		newUnreachableAccumSeconds, newLastErrorCode, reapKind, reapMaxUnreachableSeconds)
 	if err != nil {
@@ -3607,7 +3625,7 @@ func (d DatastorePostgres) UpdateTarget(target *pkgmodel.Target) (string, error)
 	// the fresh incarnation, so a subsequent re-adopt write is accepted rather than
 	// rejected as a reaped tombstone. See the SQLite UpdateTarget for the rationale.
 	if recovered {
-		if _, err = d.pool.Exec(ctx, `
+		if _, err = tx.Exec(ctx, `
 			UPDATE resources SET operation = $1, target_incarnation_id = $2
 			WHERE target = $3
 			  AND operation = 'reaped'
@@ -3620,6 +3638,11 @@ func (d DatastorePostgres) UpdateTarget(target *pkgmodel.Target) (string, error)
 			return "", err
 		}
 	}
+
+	if err = tx.Commit(ctx); err != nil {
+		return "", fmt.Errorf("failed to commit target update transaction: %w", err)
+	}
+	committed = true
 
 	return fmt.Sprintf("%s_%d", target.Label, newVersion), nil
 }

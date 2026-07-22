@@ -2376,7 +2376,24 @@ func (d *DatastoreAuroraDataAPI) UpdateTarget(target *pkgmodel.Target) (string, 
 		{Name: aws.String("reap_max_unreachable_seconds"), Value: &types.FieldMemberLongValue{Value: reapMaxUnreachableSeconds}},
 	}
 
-	_, err = d.executeStatement(ctx, insertQuery, insertParams)
+	// The version INSERT and the recovery un-reap must be atomic. A crash strictly
+	// between them would leave the target recovered (fresh incarnation, health
+	// 'unknown') while its resources stayed marked 'reaped'; a resumed UpdateTarget
+	// would not re-trigger the un-reap (the target is no longer reaped), stranding
+	// those resources as invisible tombstones the write-guard permanently rejects.
+	// One transaction makes it both-or-neither.
+	txID, err := d.beginTransaction(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to begin target update transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = d.rollbackTransaction(ctx, txID)
+		}
+	}()
+
+	_, err = d.executeStatementInTransaction(ctx, txID, insertQuery, insertParams)
 	if err != nil {
 		slog.Error("failed to update target", "error", err, "label", target.Label, "version", newVersion)
 		return "", err
@@ -2399,11 +2416,16 @@ func (d *DatastoreAuroraDataAPI) UpdateTarget(target *pkgmodel.Target) (string, 
 			{Name: aws.String("incarnation"), Value: &types.FieldMemberStringValue{Value: incarnationID}},
 			{Name: aws.String("target"), Value: &types.FieldMemberStringValue{Value: target.Label}},
 		}
-		if _, err = d.executeStatement(ctx, unreapQuery, unreapParams); err != nil {
+		if _, err = d.executeStatementInTransaction(ctx, txID, unreapQuery, unreapParams); err != nil {
 			slog.Error("failed to un-reap resources on target recovery", "error", err, "label", target.Label)
 			return "", err
 		}
 	}
+
+	if err = d.commitTransaction(ctx, txID); err != nil {
+		return "", fmt.Errorf("failed to commit target update transaction: %w", err)
+	}
+	committed = true
 
 	return fmt.Sprintf("%s_%d", target.Label, newVersion), nil
 }

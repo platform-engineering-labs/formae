@@ -2708,7 +2708,25 @@ func (d DatastoreSQLite) UpdateTarget(target *pkgmodel.Target) (string, error) {
 		                     first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
 		                     reap_kind, reap_max_unreachable_seconds)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	_, err = d.conn.Exec(insertQuery, target.Label, newVersion, target.Namespace, cfg, configSchemaJSON,
+
+	// The version INSERT and the recovery un-reap must be atomic. A crash strictly
+	// between them would leave the target recovered (fresh incarnation, health
+	// 'unknown') while its resources stayed marked 'reaped'; a resumed UpdateTarget
+	// would not re-trigger the un-reap (the target is no longer reaped), stranding
+	// those resources as invisible tombstones the write-guard permanently rejects.
+	// One transaction makes it both-or-neither.
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return "", fmt.Errorf("failed to begin target update transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	_, err = tx.Exec(insertQuery, target.Label, newVersion, target.Namespace, cfg, configSchemaJSON,
 		datastore.BoolToInt(target.Discoverable),
 		newIncarnationID, newHealthState,
 		newLastSeenAt, newObservedAt, newFirstUnreachableAt, newLastSampleAt,
@@ -2727,7 +2745,7 @@ func (d DatastoreSQLite) UpdateTarget(target *pkgmodel.Target) (string, error) {
 	// accepted by the resource-write guard instead of being rejected as a
 	// tombstone. Delete tombstones are left untouched.
 	if recovered {
-		if _, err = d.conn.Exec(`
+		if _, err = tx.Exec(`
 			UPDATE resources SET operation = ?, target_incarnation_id = ?
 			WHERE target = ?
 			  AND operation = 'reaped'
@@ -2740,6 +2758,11 @@ func (d DatastoreSQLite) UpdateTarget(target *pkgmodel.Target) (string, error) {
 			return "", err
 		}
 	}
+
+	if err = tx.Commit(); err != nil {
+		return "", fmt.Errorf("failed to commit target update transaction: %w", err)
+	}
+	committed = true
 
 	return fmt.Sprintf("%s_%d", target.Label, newVersion), nil
 }
