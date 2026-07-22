@@ -10,6 +10,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 )
 
@@ -31,23 +32,21 @@ type extractedResource struct {
 func renderExtractSummary(th *theme.Theme, path string, resources []extractedResource) string {
 	p := th.Palette
 
-	headerStyle := lipgloss.NewStyle().Foreground(p.TextPrimary)
 	labelStyle := lipgloss.NewStyle().Foreground(p.PrimaryAccent)
 	typeStyle := lipgloss.NewStyle().Foreground(p.TextSecondary)
 	stackStyle := lipgloss.NewStyle().Foreground(p.TextPrimary)
 
 	var sb strings.Builder
 
-	// Header line: "Extracted N resources to <path>"
+	// Section header at column 0: "▌ Extracted N resources to <path>"
 	n := len(resources)
 	noun := "resources"
 	if n == 1 {
 		noun = "resource"
 	}
-	sb.WriteString(headerStyle.Render(fmt.Sprintf("Extracted %d %s to %s", n, noun, path)))
-	sb.WriteString("\n")
+	sb.WriteString(components.SectionHeader(th, fmt.Sprintf("Extracted %d %s to %s", n, noun, path)))
 
-	// Per-resource lines (indented 2 spaces).
+	// Per-resource lines (indented 2 spaces), tight under the header.
 	for _, r := range resources {
 		line := fmt.Sprintf("  %s (%s) on stack %s",
 			labelStyle.Render(r.Label),

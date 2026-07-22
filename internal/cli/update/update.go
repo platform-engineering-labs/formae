@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/platform-engineering-labs/formae/internal/agent"
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
@@ -262,12 +261,10 @@ func UpdateCmd() *cobra.Command {
 // skips the candidate at index 0 — so a cold index (nothing installed) would
 // omit the newest version or render an empty list.
 //
-// The human `update list` path now renders a themed list (see renderVersionList),
-// which uses the same full-candidate-list read. This plain renderer is retained
-// (with its cold-index tests) as the guard for that correctness fix and for the
-// machine/plain output wired up in the follow-up styling pass.
-//
-//nolint:unused // retained for the plain/machine path (see comment above)
+// The TTY `update list` path renders a themed list (see renderVersionList); this
+// plain renderer drives the piped/non-TTY path (see renderUpdateList). Both read
+// the same full-candidate list, so the cold-index tests here also guard the
+// themed path against the index-0 drop.
 func formatAvailableVersions(available []*records.Package) string {
 	var installed *records.Package
 	for _, pkg := range available {
@@ -344,32 +341,9 @@ func UpdateListCmd() *cobra.Command {
 				return err
 			}
 
-			// Themed rendering fed by AvailableFor's FULL candidate list. Do NOT
-			// use AvailableForSimple: it drops the index-0 candidate, which #555's
-			// formatAvailableVersions (kept + tested for the plain path) exists to
-			// guard against. Installed may be absent on a cold index.
-			var installedShort string
-			var installedDate time.Time
-			seen := make(map[string]bool, len(available.Available))
-			versions := make([]string, 0, len(available.Available))
-			for _, pkg := range available.Available {
-				if pkg == nil || pkg.Version == nil {
-					continue
-				}
-				short := pkg.Version.Short()
-				if pkg.Installed && installedShort == "" {
-					installedShort = short
-					installedDate = pkg.Version.Timestamp
-				}
-				if seen[short] {
-					continue
-				}
-				seen[short] = true
-				versions = append(versions, short)
-			}
-
-			th := themeFor(a)
-			fmt.Print(renderVersionList(th, installedShort, installedDate, versions))
+			// Themed list on a TTY; plain, ANSI-free list when piped (see
+			// renderUpdateList). Both read AvailableFor's FULL candidate list.
+			fmt.Print(renderUpdateList(themeFor(a), tui.IsTerminal(os.Stdout), available.Available))
 
 			return nil
 		},

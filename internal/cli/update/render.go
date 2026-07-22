@@ -9,9 +9,44 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/platform-engineering-labs/orbital/opm/records"
 
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 )
+
+// renderUpdateList renders `formae update list`. On a TTY it produces the themed
+// list (renderVersionList); when piped it produces the plain, ANSI-free listing
+// (formatAvailableVersions) so scripts get stable output. Both read the FULL
+// candidate list (never orbital's AvailableForSimple, which drops the index-0
+// candidate — see formatAvailableVersions), so a cold index still lists the
+// newest version.
+func renderUpdateList(th *theme.Theme, tty bool, available []*records.Package) string {
+	if !tty {
+		return formatAvailableVersions(available)
+	}
+
+	var installedShort string
+	var installedDate time.Time
+	seen := make(map[string]bool, len(available))
+	versions := make([]string, 0, len(available))
+	for _, pkg := range available {
+		if pkg == nil || pkg.Version == nil {
+			continue
+		}
+		short := pkg.Version.Short()
+		if pkg.Installed && installedShort == "" {
+			installedShort = short
+			installedDate = pkg.Version.Timestamp
+		}
+		if seen[short] {
+			continue
+		}
+		seen[short] = true
+		versions = append(versions, short)
+	}
+	return renderVersionList(th, installedShort, installedDate, versions)
+}
 
 // renderVersionList renders the themed output for `formae update list`.
 //
@@ -46,9 +81,9 @@ func renderVersionList(th *theme.Theme, installed string, installedDate time.Tim
 		sb.WriteString("\n\n")
 	}
 
-	// Section label
-	sb.WriteString(labelStyle.Render("Available versions:"))
-	sb.WriteString("\n\n")
+	// Section header at column 0 (CLI convention); versions indented tight below.
+	sb.WriteString(components.SectionHeader(th, "Available versions"))
+	sb.WriteString("\n")
 
 	// Find the position of the installed version in the list (newest-first).
 	// Entries before it are newer; entries after are older.

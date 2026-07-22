@@ -13,8 +13,8 @@ import (
 // serialized output on the human path.
 func renderEvalHeader(th *theme.Theme, file, mode string) string {
 	return components.SectionHeader(th, "Evaluating forma") + "\n" +
-		components.FieldList(th, [][2]string{
+		components.Indent(components.FieldList(th, [][2]string{
 			{"File", file},
 			{"Mode", mode},
-		})
+		}), 2)
 }

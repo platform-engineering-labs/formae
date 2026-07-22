@@ -68,8 +68,6 @@ func renderPluginList(th *theme.Theme, plugins []apimodel.Plugin) string {
 	sortByName(auth)
 	sortByName(bundles)
 
-	headerStyle := lipgloss.NewStyle().Foreground(th.Palette.PrimaryAccent)
-
 	var sb strings.Builder
 	emit := func(header string, plugins []apimodel.Plugin, addLeadingNewline bool) {
 		if len(plugins) == 0 {
@@ -78,7 +76,10 @@ func renderPluginList(th *theme.Theme, plugins []apimodel.Plugin) string {
 		if addLeadingNewline {
 			sb.WriteString("\n")
 		}
-		sb.WriteString("  " + headerStyle.Render(header) + "\n")
+		// Group headers use the shared SectionHeader ("▌ Title", SecondaryAccent
+		// bold) at column 0, with rows indented 2 (renderPluginRow) — the
+		// CLI-wide convention (see components.SectionHeader / Indent).
+		sb.WriteString(components.SectionHeader(th, header) + "\n")
 		for _, p := range plugins {
 			sb.WriteString(renderPluginRow(th, p) + "\n")
 		}
@@ -101,7 +102,8 @@ func renderPluginRow(th *theme.Theme, p apimodel.Plugin) string {
 	if p.ManagedBy != "" {
 		managedBy = "   " + subtleStyle.Render("(part of "+p.ManagedBy+")")
 	}
-	return fmt.Sprintf("    %s %s  %s%s",
+	// Rows indent 2 under the column-0 SectionHeader (CLI convention).
+	return fmt.Sprintf("  %s %s  %s%s",
 		doneStyle.Render("✓"), name, secondaryStyle.Render(p.InstalledVersion), managedBy)
 }
 

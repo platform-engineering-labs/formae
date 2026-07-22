@@ -11,6 +11,25 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// Indent prefixes every non-empty line of s with n spaces, leaving blank lines
+// untouched (no trailing whitespace). It is ANSI-safe: the prefix is added
+// before styled content, never inside it. This is the canonical way to place
+// content under a SectionHeader per the CLI convention — header at column 0,
+// content indented 2.
+func Indent(s string, n int) string {
+	if n <= 0 || s == "" {
+		return s
+	}
+	pad := strings.Repeat(" ", n)
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		if line != "" {
+			lines[i] = pad + line
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 // Pad pads or truncates PLAIN (unstyled) s to exactly w display cells (rune
 // count). This function operates on plain text only; never pass ANSI-styled
 // strings — ANSI escape codes are counted as runes and will corrupt the output.

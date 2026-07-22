@@ -30,12 +30,14 @@ func renderProfileList(th *theme.Theme, names []string, active string) string {
 	lines := make([]string, 0, len(names))
 	for _, n := range names {
 		if n == active {
-			lines = append(lines, activeStyle.Render("● "+n)+" "+subtle.Render("(active)"))
+			// Marker at indent 2; name aligns at 4 (after "● ").
+			lines = append(lines, "  "+activeStyle.Render("● "+n)+" "+subtle.Render("(active)"))
 			continue
 		}
-		lines = append(lines, "  "+body.Render(n))
+		lines = append(lines, "    "+body.Render(n))
 	}
-	return strings.Join(lines, "\n")
+	// Listing → section header at col 0, entries indented beneath (CLI convention).
+	return components.SectionHeader(th, "Profiles") + "\n" + strings.Join(lines, "\n")
 }
 
 // renderCurrentHuman renders the current-profile output for a human reader.

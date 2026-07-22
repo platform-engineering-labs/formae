@@ -17,6 +17,29 @@ var ansiRe = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 func stripANSI(s string) string { return ansiRe.ReplaceAllString(s, "") }
 
+func TestIndent(t *testing.T) {
+	t.Run("prefixes non-empty lines, leaves blank lines untouched", func(t *testing.T) {
+		in := "a\n\nb"
+		assert.Equal(t, "  a\n\n  b", Indent(in, 2))
+	})
+
+	t.Run("n<=0 returns input unchanged", func(t *testing.T) {
+		assert.Equal(t, "a\nb", Indent("a\nb", 0))
+		assert.Equal(t, "a\nb", Indent("a\nb", -1))
+	})
+
+	t.Run("empty string returns empty", func(t *testing.T) {
+		assert.Equal(t, "", Indent("", 2))
+	})
+
+	t.Run("ANSI-safe: prefix added before styled content", func(t *testing.T) {
+		styled := lipgloss.NewStyle().Bold(true).Render("x")
+		out := Indent(styled, 2)
+		assert.True(t, out[:2] == "  ", "indent spaces precede the escape sequence")
+		assert.Equal(t, "  x", stripANSI(out))
+	})
+}
+
 func TestPad(t *testing.T) {
 	t.Run("pads_short_string", func(t *testing.T) {
 		assert.Equal(t, "ab  ", Pad("ab", 4))

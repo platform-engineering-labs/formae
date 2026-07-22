@@ -108,11 +108,12 @@ func ProjectInitCmd() *cobra.Command {
 			if pluginsVal == "" {
 				pluginsVal = "(none)"
 			}
-			fmt.Printf("\nProject initialized at %s\n\n", path)
-			fmt.Println(components.FieldList(th, [][2]string{
+			fmt.Printf("\n%s\n", components.SectionHeader(th, "Project initialized"))
+			fmt.Println(components.Indent(components.FieldList(th, [][2]string{
+				{"Path", path},
 				{"Schema", schema},
 				{"Plugins", pluginsVal},
-			}))
+			}), 2))
 			fmt.Println()
 
 			return nil
