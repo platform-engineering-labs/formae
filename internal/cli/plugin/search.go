@@ -35,9 +35,8 @@ configured plugin repositories. With no arguments, every available
 plugin is listed; with a query, only plugins whose name, summary, or
 description matches are returned.
 
-On a stock install the plugin store lives at a path that only root can
-write to, so this command may prompt for sudo to refresh the
-repository metadata.`,
+This reads the locally cached package index without sudo; the data may
+be stale until you run 'formae refresh'.`,
 		Annotations: map[string]string{
 			"args": "[<query>]",
 		},
@@ -115,7 +114,7 @@ func runSearchForMachines(app *app.App, opts *SearchOptions) error {
 }
 
 func searchPlugins(app *app.App, opts *SearchOptions) ([]apimodel.Plugin, error) {
-	mgr, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, opts.Channel)
+	mgr, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, opts.Channel, false, false)
 	if err != nil {
 		return nil, err
 	}

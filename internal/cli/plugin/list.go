@@ -28,9 +28,7 @@ func PluginListCmd() *cobra.Command {
 		Short: "List installed plugins on this host",
 		Long: `List the plugins installed on this host with their version.
 
-On a stock install the plugin store lives at a path that only root can
-write to, so this command may prompt for sudo to read the install
-metadata.`,
+This reads the local package store without sudo.`,
 		RunE: func(cc *cobra.Command, args []string) error {
 			opts := &ListOptions{}
 			consumer, _ := cc.Flags().GetString("output-consumer")
@@ -95,11 +93,10 @@ func runListForMachines(app *app.App, opts *ListOptions) error {
 
 // installedPlugins reads the local orbital tree directly. The CLI runs
 // no agent / actor system locally, so this is the only source of truth
-// for what is installed on this host. orbital re-execs the CLI under
-// sudo when the tree path is privileged; callers should be prepared to
-// re-run under sudo if the elevation prompt is undesirable.
+// for what is installed on this host. The tree is opened read-only
+// (sudo=false, writable=false), so this never elevates.
 func installedPlugins(app *app.App) ([]apimodel.Plugin, error) {
-	mgr, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, "")
+	mgr, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, "", false, false)
 	if err != nil {
 		return nil, err
 	}

@@ -84,7 +84,7 @@ func validateUninstallOptions(opts *UninstallOptions) error {
 }
 
 func runUninstallForHumans(app *app.App, opts *UninstallOptions) error {
-	mgr, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, "")
+	mgr, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, "", true, true)
 	if err != nil {
 		return err
 	}
@@ -104,7 +104,7 @@ func runUninstallForHumans(app *app.App, opts *UninstallOptions) error {
 }
 
 func runUninstallForMachines(app *app.App, opts *UninstallOptions) error {
-	mgr, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, "")
+	mgr, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, "", true, true)
 	if err != nil {
 		return err
 	}

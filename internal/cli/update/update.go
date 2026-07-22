@@ -45,9 +45,9 @@ func UpdateCmd() *cobra.Command {
 
 			var orb *mgr.Manager
 			if len(app.Config.Artifacts.Repositories) > 0 {
-				orb, err = opsmgr.NewFromRepositoriesFiltered(slog.Default(), app.Config.Artifacts.Repositories, channel, pkgmodel.RepositoryTypeBinary)
+				orb, err = opsmgr.NewFromRepositoriesFiltered(slog.Default(), app.Config.Artifacts.Repositories, channel, true, true, pkgmodel.RepositoryTypeBinary)
 			} else {
-				orb, err = opsmgr.New(slog.Default(), app.Config.Artifacts.URL, channel)
+				orb, err = opsmgr.New(slog.Default(), app.Config.Artifacts.URL, channel, true, true)
 			}
 			if err != nil {
 				return err
@@ -55,7 +55,7 @@ func UpdateCmd() *cobra.Command {
 
 			// init root if needed
 			if !orb.Ready() {
-				fmt.Printf("no managed installation root detected at: %s\n", orb.Path)
+				fmt.Printf("no managed installation root detected at: %s\n", orb.Path())
 				fmt.Print("initialize? [y/n]: ")
 				var response string
 
@@ -132,6 +132,50 @@ func UpdateCmd() *cobra.Command {
 	return command
 }
 
+// formatAvailableVersions renders the `update list` output for the formae
+// package: an "installed" line when a version is installed, then the distinct
+// available versions (annotating the installed one). It reads the full
+// candidate list directly rather than orbital's AvailableForSimple, which
+// skips the candidate at index 0 — so a cold index (nothing installed) would
+// omit the newest version or render an empty list.
+func formatAvailableVersions(available []*records.Package) string {
+	var installed *records.Package
+	for _, pkg := range available {
+		if pkg != nil && pkg.Installed && pkg.Version != nil {
+			installed = pkg
+			break
+		}
+	}
+
+	var b strings.Builder
+	if installed != nil {
+		fmt.Fprintf(&b, "installed: %s (%s)\n\n", installed.Version.Short(), installed.Version.Timestamp.String())
+	}
+
+	b.WriteString("available versions:\n\n")
+	seen := make(map[string]bool, len(available))
+	for _, entry := range available {
+		if entry == nil || entry.Version == nil {
+			continue
+		}
+		short := entry.Version.Short()
+		if seen[short] {
+			continue
+		}
+		seen[short] = true
+		if installed != nil && entry.Version.Semver().EQ(installed.Version.Semver()) {
+			age := "Newer"
+			if entry.Version.LT(installed.Version) {
+				age = "Older"
+			}
+			fmt.Fprintf(&b, "  %s %s: (%s)\n", short, age, entry.Version.Timestamp.String())
+		} else {
+			fmt.Fprintf(&b, "  %s\n", short)
+		}
+	}
+	return b.String()
+}
+
 func UpdateListCmd() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "list",
@@ -152,45 +196,24 @@ func UpdateListCmd() *cobra.Command {
 
 			var orb *mgr.Manager
 			if len(app.Config.Artifacts.Repositories) > 0 {
-				orb, err = opsmgr.NewFromRepositoriesFiltered(slog.Default(), app.Config.Artifacts.Repositories, channel, pkgmodel.RepositoryTypeBinary)
+				orb, err = opsmgr.NewFromRepositoriesFiltered(slog.Default(), app.Config.Artifacts.Repositories, channel, false, false, pkgmodel.RepositoryTypeBinary)
 			} else {
-				orb, err = opsmgr.New(slog.Default(), app.Config.Artifacts.URL, channel)
+				orb, err = opsmgr.New(slog.Default(), app.Config.Artifacts.URL, channel, false, false)
 			}
 			if err != nil {
 				return err
 			}
 
 			if !orb.Ready() {
-				return fmt.Errorf("no managed installation root detected at: %s\n", orb.Path)
+				return fmt.Errorf("no managed installation root detected at: %s\n", orb.Path())
 			}
 
-			err = orb.Refresh()
+			available, err := orb.AvailableFor("formae")
 			if err != nil {
 				return err
 			}
 
-			available, err := orb.AvailableForSimple("formae")
-			if err != nil {
-				return err
-			}
-
-			if available.Installed != nil {
-				fmt.Printf("installed: %s (%s)\n\n", available.Installed.Version.Short(), available.Installed.Version.Timestamp.String())
-			}
-
-			fmt.Print("available versions:\n\n")
-			for _, entry := range available.Available {
-				if entry.Version.Semver().EQ(available.Installed.Version.Semver()) {
-					age := "Newer"
-					if entry.Version.LT(available.Installed.Version) {
-						age = "Older"
-					}
-
-					fmt.Printf("  %s %s: (%s)\n", entry.Version.Short(), age, entry.Version.Timestamp.String())
-				} else {
-					fmt.Printf("  %s\n", entry.Version.Short())
-				}
-			}
+			fmt.Print(formatAvailableVersions(available.Available))
 
 			return nil
 		},
