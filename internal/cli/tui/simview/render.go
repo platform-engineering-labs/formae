@@ -161,8 +161,11 @@ func groupLayout(kind rowKind, w int) (opW, labelW, typeW, stackW int) {
 func (m Model) renderGroupColHeader(kind rowKind, opW, labelW, typeW, stackW int) string {
 	p := m.th.Palette
 	dimStyle := lipgloss.NewStyle().Foreground(p.TextSecondary)
-	hiStyle := lipgloss.NewStyle().Foreground(p.TextPrimary).Background(p.Selection).Bold(true)
-	accentStyle := lipgloss.NewStyle().Foreground(p.PrimaryAccent).Bold(true)
+	// The active (sort-by) and selected (cursor) column headers both render bright
+	// white (TextPrimary, bold); the sort arrow alone marks the active one. No
+	// background and no accent colour — consistent with the inventory/status table
+	// headers (highlightHeaderColumn / headerRow).
+	hiStyle := lipgloss.NewStyle().Foreground(p.TextPrimary).Bold(true)
 
 	grpHi := m.sortHi[kind]
 	grpAct := m.sortCol[kind]
@@ -181,14 +184,10 @@ func (m Model) renderGroupColHeader(kind rowKind, opW, labelW, typeW, stackW int
 		}
 		text := name + arrow
 		padded := components.Pad(text, w) // pad PLAIN text first
-		switch {
-		case isHL:
+		if isHL || isAct {
 			return hiStyle.Render(padded)
-		case isAct:
-			return accentStyle.Render(padded)
-		default:
-			return dimStyle.Render(padded)
 		}
+		return dimStyle.Render(padded)
 	}
 	renderHdrLast := func(name string, col int) string {
 		isHL := col == grpHi
@@ -202,14 +201,10 @@ func (m Model) renderGroupColHeader(kind rowKind, opW, labelW, typeW, stackW int
 			}
 		}
 		text := name + arrow
-		switch {
-		case isHL:
+		if isHL || isAct {
 			return hiStyle.Render(text)
-		case isAct:
-			return accentStyle.Render(text)
-		default:
-			return dimStyle.Render(text)
 		}
+		return dimStyle.Render(text)
 	}
 
 	var sb strings.Builder

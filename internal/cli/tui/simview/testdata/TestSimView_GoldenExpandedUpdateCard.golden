@@ -7,11 +7,11 @@
   [38;2;170;170;170m+ create      [0m[38;2;129;209;219maws-us-east-1[0m                                                                       
                                                                                                     
   [1;38;2;255;133;51m▌ Stacks[0m                                                                                          
-  [1;38;2;232;232;232;48;2;58;58;58mOperation ▲   [0m[38;2;170;170;170mLabel[0m                                                                               
+  [1;38;2;232;232;232mOperation ▲   [0m[38;2;170;170;170mLabel[0m                                                                               
   [38;2;170;170;170m+ create      [0m[38;2;129;209;219mproduction[0m                                                                          
                                                                                                     
   [1;38;2;255;133;51m▌ Policies[0m                                                                                        
-  [1;38;2;232;232;232;48;2;58;58;58mOperation ▲   [0m[38;2;170;170;170mLabel                            [0m[38;2;170;170;170mType            [0m[38;2;170;170;170mStack[0m                              
+  [1;38;2;232;232;232mOperation ▲   [0m[38;2;170;170;170mLabel                            [0m[38;2;170;170;170mType            [0m[38;2;170;170;170mStack[0m                              
   [38;2;170;170;170m~ update      [0m[38;2;129;209;219mstaging-reconcile                [0m[38;2;170;170;170mauto-reconcile  [0m[38;2;170;170;170mstaging[0m                            
   [38;2;170;170;170m⊘ detach      [0m[38;2;129;209;219mold-policy                       [0m[38;2;170;170;170mttl             [0m[38;2;170;170;170mstaging[0m                            
   [38;2;170;170;170m+ create      [0m[38;2;129;209;219mauto-reconcile                   [0m[38;2;170;170;170mttl             [0m[38;2;170;170;170mproduction[0m                         
@@ -19,7 +19,7 @@
       [38;2;153;153;153mstill referenced by: production, development[0m                                                  
                                                                                                     
   [1;38;2;255;133;51m▌ Resources[0m                                                                                       
-  [1;38;2;232;232;232;48;2;58;58;58mOperation ▲   [0m[38;2;170;170;170mLabel                                              [0m[38;2;170;170;170mType[0m                             
+  [1;38;2;232;232;232mOperation ▲   [0m[38;2;170;170;170mLabel                                              [0m[38;2;170;170;170mType[0m                             
   [38;2;170;170;170m- delete      [0m[38;2;129;209;219mold-cache                                          [0m[38;2;170;170;170mAWS::ElastiCache::CacheCluster[0m   
   [38;2;170;170;170m- delete      [0m[38;2;129;209;219mlegacy-queue                                       [0m[38;2;170;170;170mAWS::SQS::Queue[0m                  
       [38;2;153;153;153mdepends on: old-cache[0m                                                                         

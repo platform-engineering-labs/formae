@@ -186,7 +186,13 @@ func (t tabModel) sync(maxRows int) tabModel {
 		styledCells[i] = styledRow
 	}
 
-	t.table = t.table.SetRows(cells).SetSortState(t.sortCol, t.sortDir)
+	// SetSortState MUST precede SetRows: SetRows runs applySort using the table's
+	// current sortCol, so setting rows first would re-sort by the PREVIOUS column
+	// while styledCells (from visible()) are ordered by the new one — a one-frame
+	// mismatch that renders per-cell styles (e.g. "⚠ unmanaged") against the wrong
+	// rows until the next event re-syncs. Setting the sort state first makes
+	// SetRows sort by the new column, keeping both orders aligned.
+	t.table = t.table.SetSortState(t.sortCol, t.sortDir).SetRows(cells)
 	t.styledCells = styledCells
 	return t
 }

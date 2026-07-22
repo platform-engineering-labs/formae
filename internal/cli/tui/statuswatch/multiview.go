@@ -287,7 +287,9 @@ func (v multiView) headerRow() string {
 
 		cell := pad(title, w)
 		st := headerStyle
-		if v.sortHi == c {
+		// Both the sort-by (active, arrowed) and the cursor (selected) column
+		// headers render bright white; the arrow alone marks the active one.
+		if v.sortHi == c || v.sortCol == c {
 			st = hiStyle
 		}
 		sb.WriteString(st.Render(cell))
