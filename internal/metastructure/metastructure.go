@@ -105,6 +105,12 @@ func NewMetastructure(ctx context.Context, cfg *pkgmodel.Config, externalResourc
 }
 
 func NewMetastructureWithDataStoreAndContext(ctx context.Context, cfg *pkgmodel.Config, externalResourcePlugins []plugin.ResourcePluginInfo, datastore datastore.Datastore, agentID string) (*Metastructure, error) {
+	// Fail fast on a reaping/sync misconfiguration that would silently disable
+	// target reaping (accrual pinned at zero) rather than starting a degraded agent.
+	if err := config.ValidateReapingConfig(cfg.Agent.Synchronization.Interval); err != nil {
+		return nil, err
+	}
+
 	metastructure := &Metastructure{}
 
 	metastructure.Datastore = datastore

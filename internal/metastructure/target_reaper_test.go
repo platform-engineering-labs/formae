@@ -154,6 +154,37 @@ func TestPlanAccrual_ClockStopBeyondMaxBeatGap(t *testing.T) {
 	assert.Equal(t, int64(0), plan.NewAccumSeconds, "accrual must not advance across the clock-stop")
 }
 
+// TestAccrualStep_SyncIntervalGapDoesNotTripClockStop is the regression guard
+// for the calibration bug that made reaping inert: an unreachable target's
+// observed_at is refreshed only about once per synchronization cycle, so the
+// reaper's per-step gap is one sync interval wide (default 5m, schema Config.pkl
+// SynchronizationConfig.interval). If MaxBeatGap sits at or below that interval,
+// every ordinary step trips the clock-stop, delta is pinned at zero and the
+// target can never accrue toward reaping. This asserts a full sync-interval-sized
+// gap accrues normally under the shipped MaxBeatGap.
+func TestAccrualStep_SyncIntervalGapDoesNotTripClockStop(t *testing.T) {
+	// The default synchronization interval (Config.pkl); the reaper's observed_at
+	// refresh cadence in the healthy case.
+	const defaultSyncInterval = 5 * time.Minute
+
+	require.Greater(t, config.MaxBeatGap, defaultSyncInterval,
+		"a sync-interval-sized gap must be smaller than MaxBeatGap, else reaping is inert")
+
+	lastSampleAt := time.Now().UTC().Truncate(time.Second)
+	observedAt := lastSampleAt.Add(defaultSyncInterval)
+	health := &pkgmodel.TargetHealth{
+		ObservedAt:              &observedAt,
+		LastSampleAt:            &lastSampleAt,
+		UnreachableAccumSeconds: 0,
+	}
+
+	delta, newLastSampleAt := accrualStep(health)
+
+	assert.Equal(t, int64(defaultSyncInterval.Seconds()), delta,
+		"a sync-interval-sized gap must accrue the full delta, not be zeroed by the clock-stop")
+	assert.True(t, newLastSampleAt.Equal(observedAt), "last_sample_at must advance to observed_at")
+}
+
 func TestReapCandidates_DetectsCandidateWithoutBlockingCommand(t *testing.T) {
 	ds := newReaperTestDatastore(t)
 	observedAt := time.Now().UTC().Truncate(time.Second)
