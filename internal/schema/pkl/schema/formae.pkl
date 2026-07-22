@@ -282,11 +282,35 @@ open class Schema {
     function query(prop: String): Listing<String> = this.hints.toMap().filter((_, v) -> v.getProperty(prop)).keys.toListing()
 }
 
+// Reaping behaviour for a target - what happens once the target has been
+// continuously unreachable.
+typealias Reaping = NeverReap|ReapAfter
+
+// NeverReap - the target is never reaped, no matter how long it stays unreachable
+open class NeverReap {
+    function render(): Dynamic = new {
+        Kind = "never"
+    }
+}
+
+// ReapAfter - the target is reaped once it has been continuously unreachable
+// for at least maxUnreachable
+open class ReapAfter {
+    hidden maxUnreachable: Duration
+
+    local self = this
+    function render(): Dynamic = new {
+        Kind = "after"
+        MaxUnreachableSeconds = self.maxUnreachable.toUnit("s").value.toInt()
+    }
+}
+
 open class Target {
     hidden label: String
     hidden namespace: String = config.type.toUpperCase()
     hidden config: Any?
     hidden discoverable: Boolean = true
+    hidden reap: Reaping?
 
     local self = this
     hidden res: TargetResolvable = new {
@@ -305,6 +329,7 @@ open class Target {
             else null
         else null
     fixed Discoverable: Boolean = discoverable
+    fixed Reaping: Dynamic? = self.reap?.render()
 }
 
 open class TargetResolvable extends Resolvable {

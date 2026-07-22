@@ -6,6 +6,7 @@ package model
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 )
 
@@ -74,6 +75,66 @@ type Target struct {
 	Discoverable bool            `json:"Discoverable" pkl:"Discoverable"`
 	Version      int             `json:"Version,omitempty"`
 	Health       *TargetHealth   `json:"-"`
+	// Reaping holds the target's reaping behaviour. It is stored as a raw
+	// JSON message (not the ReapingBehaviour interface) because Target is
+	// embedded in structs that round-trip through json.Marshal/Unmarshal for
+	// persistence, and encoding/json cannot unmarshal a present JSON object
+	// into a nil interface field. Use ParseReaping to decode it.
+	Reaping json.RawMessage `json:"Reaping,omitempty" pkl:"Reaping,omitempty"`
+}
+
+// ReapingBehaviour is the base interface for all target reaping variants.
+type ReapingBehaviour interface {
+	GetKind() string
+}
+
+// NeverReap means the target is never reaped, regardless of how long it
+// remains unreachable.
+type NeverReap struct {
+	Kind string `json:"Kind"` // "never"
+}
+
+func (r *NeverReap) GetKind() string { return "never" }
+
+// ReapAfter reaps the target once it has been continuously unreachable for
+// MaxUnreachableSeconds.
+type ReapAfter struct {
+	Kind                  string `json:"Kind"` // "after"
+	MaxUnreachableSeconds int64  `json:"MaxUnreachableSeconds"`
+}
+
+func (r *ReapAfter) GetKind() string { return "after" }
+
+// ParseReaping parses a target's reaping behaviour from JSON. A nil or
+// JSON-null raw message returns (nil, nil).
+func ParseReaping(raw json.RawMessage) (ReapingBehaviour, error) {
+	if raw == nil || string(raw) == "null" {
+		return nil, nil
+	}
+
+	var header struct {
+		Kind string `json:"Kind"`
+	}
+	if err := json.Unmarshal(raw, &header); err != nil {
+		return nil, fmt.Errorf("failed to parse reaping kind: %w", err)
+	}
+
+	switch header.Kind {
+	case "never":
+		var r NeverReap
+		if err := json.Unmarshal(raw, &r); err != nil {
+			return nil, fmt.Errorf("failed to parse never-reap: %w", err)
+		}
+		return &r, nil
+	case "after":
+		var r ReapAfter
+		if err := json.Unmarshal(raw, &r); err != nil {
+			return nil, fmt.Errorf("failed to parse reap-after: %w", err)
+		}
+		return &r, nil
+	default:
+		return nil, fmt.Errorf("unknown reaping kind: %s", header.Kind)
+	}
 }
 
 func NewTargetFromString(target string) Target {

@@ -60,6 +60,19 @@ local testTarget = new formae.Target {
     }
 }
 
+local testNeverReap = new formae.NeverReap {}
+
+local testReapAfter = new formae.ReapAfter {
+    maxUnreachable = 30.min
+}
+
+local testTargetWithReap = new formae.Target {
+    label = "reapable-target"
+    namespace = "AWS"
+    discoverable = true
+    reap = testReapAfter
+}
+
 // Test base resource class
 @formae.ResourceHint {
     type = "AWS::S3::Bucket"
@@ -346,6 +359,18 @@ examples {
 
     ["Target"] {
         testTarget
+    }
+
+    ["NeverReap render()"] {
+        testNeverReap.render()
+    }
+
+    ["ReapAfter render()"] {
+        testReapAfter.render()
+    }
+
+    ["Target with reap"] {
+        testTargetWithReap
     }
 
     ["Test Resource - fields()"] {
