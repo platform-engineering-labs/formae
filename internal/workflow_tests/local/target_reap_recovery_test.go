@@ -130,9 +130,9 @@ func TestApplyForma_RecoversReapedTargetWithResource(t *testing.T) {
 		newTarget, err := m.Datastore.LoadTarget("recover-target")
 		r.NoError(err)
 		newIncarnation := newTarget.Health.IncarnationID
+		r.NotEqual(oldIncarnation, newIncarnation, "recovery must mint a fresh incarnation, not carry the reaped one forward")
 		live, err := m.Datastore.LoadResourcesByStack("recover-stack")
 		r.NoError(err)
 		r.Len(live, 1)
-		_ = newIncarnation
 	})
 }
