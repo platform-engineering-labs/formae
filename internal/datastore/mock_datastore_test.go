@@ -49,7 +49,7 @@ func (m *mockDatastore) QueryFormaCommands(_ *StatusQuery) ([]*forma_command.For
 func (m *mockDatastore) QueryResources(_ *ResourceQuery) ([]*pkgmodel.Resource, error) {
 	return nil, nil
 }
-func (m *mockDatastore) StoreResource(_ *pkgmodel.Resource, _ string) (string, error) {
+func (m *mockDatastore) StoreResource(_ *pkgmodel.Resource, _ string, _ ...string) (string, error) {
 	return "", nil
 }
 func (m *mockDatastore) DeleteResource(_ *pkgmodel.Resource, _ string) (string, error) {

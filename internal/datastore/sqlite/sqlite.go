@@ -584,7 +584,7 @@ WHERE
         FROM resources AS r2
         WHERE
           r1.ksuid = r2.ksuid AND r2.version > r1.version
-      ) AND r1.operation != 'delete'
+      ) AND r1.operation != 'delete' AND r1.operation != 'reaped'
   ) AND T1.timestamp > (
     SELECT
       fc.timestamp
@@ -839,7 +839,8 @@ func (d DatastoreSQLite) QueryResources(query *datastore.ResourceQuery) ([]*pkgm
 		WHERE r1.uri = r2.uri
 		AND r2.version > r1.version
 		)
-		AND r1.operation != '%s'`, string(resource_update.OperationDelete))
+		AND r1.operation != '%s'
+		AND r1.operation != '%s'`, string(resource_update.OperationDelete), string(resource_update.OperationReaped))
 	args := []any{}
 
 	queryStr = extendSQLiteQueryString(queryStr, query.NativeID, " AND native_id %s ?{esc}", &args)
@@ -877,7 +878,7 @@ func (d DatastoreSQLite) QueryResources(query *datastore.ResourceQuery) ([]*pkgm
 	return resources, rows.Err()
 }
 
-func (d DatastoreSQLite) storeResource(resource *pkgmodel.Resource, data []byte, commandID string, operation string) (string, error) {
+func (d DatastoreSQLite) storeResource(resource *pkgmodel.Resource, data []byte, commandID string, operation string, expectedIncarnation string) (string, error) {
 	slog.Debug("SQLite START", "method", "storeResource", "ksuid", resource.Ksuid, "label", resource.Label, "operation", operation)
 	start := time.Now()
 	defer func() {
@@ -896,6 +897,33 @@ func (d DatastoreSQLite) storeResource(resource *pkgmodel.Resource, data []byte,
 		}
 	}
 
+	// Reaped/incarnation guard. Deletes are exempt: a delete tombstone must
+	// always be recordable (e.g. cleaning up an already-reaped resource). For
+	// every other write, inspect the resource's current (max-version) row and
+	// reject the write when that row is a reaped tombstone, or when an expected
+	// incarnation was supplied and does not match the incarnation stamped on the
+	// current row. An empty stored incarnation (pre-migration rows, or rows
+	// written by incarnation-less callers) skips the incarnation check.
+	if operation != string(resource_update.OperationDelete) {
+		var curOp, curInc string
+		guardErr := d.conn.QueryRow(
+			`SELECT operation, COALESCE(target_incarnation_id, '') FROM resources WHERE uri = ? ORDER BY version DESC LIMIT 1`,
+			resource.URI(),
+		).Scan(&curOp, &curInc)
+		if guardErr != nil && guardErr != sql.ErrNoRows {
+			return "", guardErr
+		}
+		if guardErr == nil {
+			if curOp == string(resource_update.OperationReaped) {
+				return "", fmt.Errorf("%w: resource %s current row is reaped", datastore.ErrResourceWriteRejected, resource.URI())
+			}
+			if expectedIncarnation != "" && curInc != "" && curInc != expectedIncarnation {
+				return "", fmt.Errorf("%w: resource %s incarnation %q does not match expected %q",
+					datastore.ErrResourceWriteRejected, resource.URI(), curInc, expectedIncarnation)
+			}
+		}
+	}
+
 	// Check if this resource already exists using native_id and type
 	query := `SELECT ksuid, data, uri, version, managed FROM resources WHERE native_id = ? AND type = ? ORDER BY version DESC LIMIT 1`
 	row := d.conn.QueryRow(query, resource.NativeID, resource.Type)
@@ -911,8 +939,8 @@ func (d DatastoreSQLite) storeResource(resource *pkgmodel.Resource, data []byte,
 		newVersion := mksuid.New()
 
 		query = `
-			INSERT INTO resources (uri, version, command_id, operation, native_id, stack, type, label, target, data, managed, ksuid)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			INSERT INTO resources (uri, version, command_id, operation, native_id, stack, type, label, target, data, managed, ksuid, target_incarnation_id)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`
 		_, err = d.conn.Exec(
 			query,
@@ -927,7 +955,8 @@ func (d DatastoreSQLite) storeResource(resource *pkgmodel.Resource, data []byte,
 			resource.Target,
 			data,
 			datastore.BoolToInt(resource.Managed),
-			resource.Ksuid)
+			resource.Ksuid,
+			expectedIncarnation)
 		if err != nil {
 			slog.Error("Failed to store resource", "error", err, "resourceURI", resource.URI())
 			return "", err
@@ -992,8 +1021,8 @@ func (d DatastoreSQLite) storeResource(resource *pkgmodel.Resource, data []byte,
 	}
 
 	query = `
-		INSERT OR REPLACE INTO resources (uri, version, command_id, operation, native_id, stack, type, label, target, data, managed, ksuid)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT OR REPLACE INTO resources (uri, version, command_id, operation, native_id, stack, type, label, target, data, managed, ksuid, target_incarnation_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	_, err = d.conn.Exec(
 		query,
@@ -1008,7 +1037,8 @@ func (d DatastoreSQLite) storeResource(resource *pkgmodel.Resource, data []byte,
 		resource.Target,
 		data,
 		datastore.BoolToInt(resource.Managed),
-		resource.Ksuid)
+		resource.Ksuid,
+		expectedIncarnation)
 	if err != nil {
 		slog.Error("Failed to store resource", "error", err, "resourceURI", resource.URI())
 		return "", err
@@ -1017,7 +1047,7 @@ func (d DatastoreSQLite) storeResource(resource *pkgmodel.Resource, data []byte,
 	return fmt.Sprintf("%s_%s", resource.Ksuid, newVersion), nil
 }
 
-func (d DatastoreSQLite) StoreResource(resource *pkgmodel.Resource, commandID string) (string, error) {
+func (d DatastoreSQLite) StoreResource(resource *pkgmodel.Resource, commandID string, expectedIncarnation ...string) (string, error) {
 	slog.Debug("SQLite START", "method", "StoreResource", "ksuid", resource.Ksuid, "label", resource.Label)
 	start := time.Now()
 	defer func() {
@@ -1031,7 +1061,11 @@ func (d DatastoreSQLite) StoreResource(resource *pkgmodel.Resource, commandID st
 		return "", err
 	}
 
-	return d.storeResource(resource, jsonData, commandID, string(resource_update.OperationUpdate))
+	inc := ""
+	if len(expectedIncarnation) > 0 {
+		inc = expectedIncarnation[0]
+	}
+	return d.storeResource(resource, jsonData, commandID, string(resource_update.OperationUpdate), inc)
 }
 
 func (d DatastoreSQLite) DeleteResource(resource *pkgmodel.Resource, commandID string) (string, error) {
@@ -1043,7 +1077,7 @@ func (d DatastoreSQLite) DeleteResource(resource *pkgmodel.Resource, commandID s
 	_, span := sqliteTracer.Start(context.Background(), "DeleteResource")
 	defer span.End()
 
-	return d.storeResource(resource, []byte("{}"), commandID, string(resource_update.OperationDelete))
+	return d.storeResource(resource, []byte("{}"), commandID, string(resource_update.OperationDelete), "")
 }
 
 func (d DatastoreSQLite) LoadResource(uri pkgmodel.FormaeURI) (*pkgmodel.Resource, error) {
@@ -1054,7 +1088,7 @@ func (d DatastoreSQLite) LoadResource(uri pkgmodel.FormaeURI) (*pkgmodel.Resourc
 	SELECT data, ksuid
 	FROM resources
 	WHERE uri = ?
-	AND operation != ?
+	AND operation != ? AND operation != 'reaped'
 	ORDER BY version DESC
 	LIMIT 1
 	`
@@ -1093,7 +1127,7 @@ func (d DatastoreSQLite) LoadResourceByNativeID(nativeID string, resourceType st
 		WHERE r1.uri = r2.uri
 		AND r2.version > r1.version
 	)
-	AND r1.operation != ?
+	AND r1.operation != ? AND r1.operation != 'reaped'
 	LIMIT 1
 	`
 	row := d.conn.QueryRow(query, nativeID, resourceType, resource_update.OperationDelete)
@@ -1129,7 +1163,7 @@ func (d DatastoreSQLite) LoadAllResources() ([]*pkgmodel.Resource, error) {
 	WHERE r1.uri = r2.uri
 	AND r2.version > r1.version
 	)
-	AND operation != ?
+	AND operation != ? AND operation != 'reaped'
 	`
 	rows, err := d.conn.Query(query, resource_update.OperationDelete)
 	if err != nil {
@@ -1185,7 +1219,7 @@ func (d DatastoreSQLite) LoadAllResourcesByStack() (map[string][]*pkgmodel.Resou
 	WHERE r1.uri = r2.uri
 	AND r2.version > r1.version
 	)
-	AND operation != ?
+	AND operation != ? AND operation != 'reaped'
 	`
 
 	rows, err := d.conn.Query(query, resource_update.OperationDelete)
@@ -1240,7 +1274,7 @@ func (d DatastoreSQLite) LoadResourcesByStack(stackLabel string) ([]*pkgmodel.Re
 	WHERE r1.uri = r2.uri
 	AND r2.version > r1.version
 	)
-	AND operation != ?
+	AND operation != ? AND operation != 'reaped'
 	`
 
 	rows, err := d.conn.Query(query, stackLabel, resource_update.OperationDelete)
@@ -1560,7 +1594,7 @@ func (d DatastoreSQLite) CountResourcesInStack(label string) (int, error) {
 			WHERE r1.uri = r2.uri
 			AND r2.version > r1.version
 		)
-		AND operation != ?
+		AND operation != ? AND operation != 'reaped'
 	`
 	row := d.conn.QueryRow(query, label, resource_update.OperationDelete)
 
@@ -2681,7 +2715,7 @@ func (d DatastoreSQLite) CountResourcesInTarget(targetLabel string) (int, error)
 			WHERE r1.uri = r2.uri
 			AND r2.version > r1.version
 		)
-		AND operation != ?
+		AND operation != ? AND operation != 'reaped'
 	`
 	row := d.conn.QueryRow(query, targetLabel, resource_update.OperationDelete)
 
@@ -3346,7 +3380,7 @@ func (d DatastoreSQLite) Stats() (*stats.Stats, error) {
 		FROM resources r1
 		WHERE stack IS NOT NULL
 		AND stack != '%s'
-		AND operation != ?
+		AND operation != ? AND operation != 'reaped'
 		AND NOT EXISTS (
 			SELECT 1
 			FROM resources r2
@@ -3368,7 +3402,7 @@ func (d DatastoreSQLite) Stats() (*stats.Stats, error) {
 		FROM resources r1
 		WHERE stack IS NOT NULL
 		AND stack != '%s'
-		AND operation != ?
+		AND operation != ? AND operation != 'reaped'
 		AND NOT EXISTS (
 			SELECT 1
 			FROM resources r2
@@ -3399,7 +3433,7 @@ func (d DatastoreSQLite) Stats() (*stats.Stats, error) {
 		SELECT SUBSTR(type, 1, INSTR(type, '::') - 1) as namespace, COUNT(*)
 		FROM resources r1
 		WHERE stack = '%s'
-		AND operation != ?
+		AND operation != ? AND operation != 'reaped'
 		AND NOT EXISTS (
 			SELECT 1
 			FROM resources r2
@@ -3459,7 +3493,7 @@ func (d DatastoreSQLite) Stats() (*stats.Stats, error) {
 	resourceTypesQuery := `
 		SELECT type, COUNT(*)
 		FROM resources r1
-		WHERE operation != ?
+		WHERE operation != ? AND operation != 'reaped'
 		AND NOT EXISTS (
 			SELECT 1
 			FROM resources r2
@@ -3528,7 +3562,7 @@ func (d DatastoreSQLite) LoadResourceById(ksuid string) (*pkgmodel.Resource, err
 	SELECT data, ksuid
 	FROM resources
 	WHERE ksuid = ?
-	AND operation != ?
+	AND operation != ? AND operation != 'reaped'
 	ORDER BY version DESC
 	LIMIT 1
 	`
@@ -3582,7 +3616,7 @@ func (d DatastoreSQLite) FindResourcesDependingOn(ksuid string) ([]*pkgmodel.Res
 		WHERE r1.uri = r2.uri
 		AND r2.version > r1.version
 	)
-	AND operation != ?
+	AND operation != ? AND operation != 'reaped'
 	`
 
 	rows, err := d.conn.Query(query, pattern, resource_update.OperationDelete)
@@ -3643,7 +3677,7 @@ func (d DatastoreSQLite) FindResourcesDependingOnMany(ksuids []string) (map[stri
 		WHERE r1.uri = r2.uri
 		AND r2.version > r1.version
 	)
-	AND operation != ?
+	AND operation != ? AND operation != 'reaped'
 	`, strings.Join(conditions, " OR "))
 
 	rows, err := d.conn.Query(query, args...)
@@ -3783,7 +3817,7 @@ func (d DatastoreSQLite) GetKSUIDByTriplet(stack, label, resourceType string) (s
 	SELECT ksuid
 	FROM resources
 	WHERE stack = ? AND label = ? AND LOWER(type) = LOWER(?)
-	AND operation != ?
+	AND operation != ? AND operation != 'reaped'
 	ORDER BY version DESC
 	LIMIT 1
 	`
@@ -3823,7 +3857,7 @@ func (d DatastoreSQLite) BatchGetKSUIDsByTriplets(triplets []pkgmodel.TripletKey
 		SELECT stack, label, type, ksuid
 		FROM resources r1
 		WHERE (stack, label, type) IN (%s)
-		AND r1.operation != ?
+		AND r1.operation != ? AND r1.operation != 'reaped'
 		AND NOT EXISTS (
 			SELECT 1 FROM resources r2
 			WHERE r1.stack = r2.stack AND r1.label = r2.label AND r1.type = r2.type
@@ -3874,7 +3908,7 @@ func (d DatastoreSQLite) BatchGetTripletsByKSUIDs(ksuids []string) (map[string]p
 			       ROW_NUMBER() OVER (PARTITION BY ksuid ORDER BY managed DESC, version DESC) as rn
 			FROM resources
 			WHERE ksuid IN (%s)
-			AND operation != ?
+			AND operation != ? AND operation != 'reaped'
 		)
 		SELECT ksuid, stack, label, type
 		FROM latest_resources

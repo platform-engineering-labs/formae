@@ -42,7 +42,7 @@ func (d *DatastoreMSSQL) QueryResources(query *datastore.ResourceQuery) ([]*pkgm
 		WHERE r1.uri = r2.uri
 		AND r2.version %[1]s > r1.version %[1]s
 	)
-	AND r1.operation != @p1
+	AND r1.operation != @p1 AND r1.operation != 'reaped'
 	`, binColl)
 	args := []any{string(resource_update.OperationDelete)}
 
@@ -78,7 +78,7 @@ func (d *DatastoreMSSQL) QueryResources(query *datastore.ResourceQuery) ([]*pkgm
 	return resources, rows.Err()
 }
 
-func (d *DatastoreMSSQL) StoreResource(resource *pkgmodel.Resource, commandID string) (string, error) {
+func (d *DatastoreMSSQL) StoreResource(resource *pkgmodel.Resource, commandID string, expectedIncarnation ...string) (string, error) {
 	ctx, span := mssqlTracer.Start(context.Background(), "StoreResource")
 	defer span.End()
 
@@ -86,20 +86,51 @@ func (d *DatastoreMSSQL) StoreResource(resource *pkgmodel.Resource, commandID st
 	if err != nil {
 		return "", err
 	}
-	return d.storeResource(ctx, resource, jsonData, commandID, string(resource_update.OperationUpdate))
+	inc := ""
+	if len(expectedIncarnation) > 0 {
+		inc = expectedIncarnation[0]
+	}
+	return d.storeResource(ctx, resource, jsonData, commandID, string(resource_update.OperationUpdate), inc)
 }
 
 func (d *DatastoreMSSQL) DeleteResource(resource *pkgmodel.Resource, commandID string) (string, error) {
 	ctx, span := mssqlTracer.Start(context.Background(), "DeleteResource")
 	defer span.End()
 
-	return d.storeResource(ctx, resource, []byte("{}"), commandID, string(resource_update.OperationDelete))
+	return d.storeResource(ctx, resource, []byte("{}"), commandID, string(resource_update.OperationDelete), "")
 }
 
 // storeResource is the shared upsert path for create/update/delete.
-func (d *DatastoreMSSQL) storeResource(ctx context.Context, resource *pkgmodel.Resource, data []byte, commandID, operation string) (string, error) {
+func (d *DatastoreMSSQL) storeResource(ctx context.Context, resource *pkgmodel.Resource, data []byte, commandID, operation, expectedIncarnation string) (string, error) {
 	if resource.Ksuid == "" {
 		resource.Ksuid = metautil.NewID()
+	}
+
+	// Reaped/incarnation guard. Deletes are exempt: a delete tombstone must
+	// always be recordable. For every other write, inspect the resource's
+	// current (max-version) row and reject the write when that row is a reaped
+	// tombstone, or when an expected incarnation was supplied and does not match
+	// the incarnation stamped on the current row. An empty stored incarnation
+	// skips the incarnation check.
+	if operation != string(resource_update.OperationDelete) {
+		guardQuery := fmt.Sprintf(
+			"SELECT TOP (1) operation, COALESCE(target_incarnation_id, '') FROM resources WHERE uri = @p1 ORDER BY version %s DESC",
+			binColl,
+		)
+		var curOp, curInc string
+		guardErr := d.conn.QueryRowContext(ctx, guardQuery, string(resource.URI())).Scan(&curOp, &curInc)
+		if guardErr != nil && !errors.Is(guardErr, sql.ErrNoRows) {
+			return "", fmt.Errorf("failed to evaluate resource write guard: %w", guardErr)
+		}
+		if guardErr == nil {
+			if curOp == string(resource_update.OperationReaped) {
+				return "", fmt.Errorf("%w: resource %s current row is reaped", datastore.ErrResourceWriteRejected, resource.URI())
+			}
+			if expectedIncarnation != "" && curInc != "" && curInc != expectedIncarnation {
+				return "", fmt.Errorf("%w: resource %s incarnation %q does not match expected %q",
+					datastore.ErrResourceWriteRejected, resource.URI(), curInc, expectedIncarnation)
+			}
+		}
 	}
 
 	lookup := fmt.Sprintf(
@@ -119,7 +150,7 @@ func (d *DatastoreMSSQL) storeResource(ctx context.Context, resource *pkgmodel.R
 
 	if errors.Is(err, sql.ErrNoRows) {
 		newVersion := mksuid.New().String()
-		if err := d.insertResource(ctx, resource, newVersion, commandID, operation, data); err != nil {
+		if err := d.insertResource(ctx, resource, newVersion, commandID, operation, data, expectedIncarnation); err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("%s_%s", resource.Ksuid, newVersion), nil
@@ -173,22 +204,23 @@ func (d *DatastoreMSSQL) storeResource(ctx context.Context, resource *pkgmodel.R
 		newVersion = mksuid.New().String()
 	}
 
-	if err := d.upsertResource(ctx, resource, newVersion, commandID, operation, data); err != nil {
+	if err := d.upsertResource(ctx, resource, newVersion, commandID, operation, data, expectedIncarnation); err != nil {
 		return "", err
 	}
 
 	return fmt.Sprintf("%s_%s", resource.Ksuid, newVersion), nil
 }
 
-func (d *DatastoreMSSQL) insertResource(ctx context.Context, resource *pkgmodel.Resource, version, commandID, operation string, data []byte) error {
+func (d *DatastoreMSSQL) insertResource(ctx context.Context, resource *pkgmodel.Resource, version, commandID, operation string, data []byte, expectedIncarnation string) error {
 	query := `
-	INSERT INTO resources (uri, version, command_id, operation, native_id, stack, type, label, target, data, managed, ksuid)
-	VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12)
+	INSERT INTO resources (uri, version, command_id, operation, native_id, stack, type, label, target, data, managed, ksuid, target_incarnation_id)
+	VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13)
 	`
 	_, err := d.conn.ExecContext(ctx, query,
 		string(resource.URI()), version, commandID, operation,
 		resource.NativeID, resource.Stack, resource.Type, resource.Label,
 		resource.Target, string(data), resource.Managed, resource.Ksuid,
+		expectedIncarnation,
 	)
 	if err != nil {
 		slog.Error("failed to store resource", "error", err, "resourceURI", resource.URI())
@@ -199,11 +231,12 @@ func (d *DatastoreMSSQL) insertResource(ctx context.Context, resource *pkgmodel.
 
 // upsertResource is MSSQL's atomic ON CONFLICT (uri, version) DO UPDATE:
 // UPDATE WITH (UPDLOCK, SERIALIZABLE); IF @@ROWCOUNT=0 INSERT in a transaction.
-func (d *DatastoreMSSQL) upsertResource(ctx context.Context, resource *pkgmodel.Resource, version, commandID, operation string, data []byte) error {
+func (d *DatastoreMSSQL) upsertResource(ctx context.Context, resource *pkgmodel.Resource, version, commandID, operation string, data []byte, expectedIncarnation string) error {
 	args := []any{
 		string(resource.URI()), version, commandID, operation,
 		resource.NativeID, resource.Stack, resource.Type, resource.Label,
 		resource.Target, string(data), resource.Managed, resource.Ksuid,
+		expectedIncarnation,
 	}
 
 	tx, err := d.conn.BeginTx(ctx, nil)
@@ -220,7 +253,8 @@ func (d *DatastoreMSSQL) upsertResource(ctx context.Context, resource *pkgmodel.
 	const updateQuery = `
 	UPDATE resources WITH (UPDLOCK, SERIALIZABLE) SET
 		command_id = @p3, operation = @p4, native_id = @p5, stack = @p6,
-		type = @p7, label = @p8, target = @p9, data = @p10, managed = @p11, ksuid = @p12
+		type = @p7, label = @p8, target = @p9, data = @p10, managed = @p11, ksuid = @p12,
+		target_incarnation_id = @p13
 	WHERE uri = @p1 AND version = @p2`
 	res, err := tx.ExecContext(ctx, updateQuery, args...)
 	if err != nil {
@@ -233,8 +267,8 @@ func (d *DatastoreMSSQL) upsertResource(ctx context.Context, resource *pkgmodel.
 	}
 	if rows == 0 {
 		const insertQuery = `
-		INSERT INTO resources (uri, version, command_id, operation, native_id, stack, type, label, target, data, managed, ksuid)
-		VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12)`
+		INSERT INTO resources (uri, version, command_id, operation, native_id, stack, type, label, target, data, managed, ksuid, target_incarnation_id)
+		VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13)`
 		if _, err := tx.ExecContext(ctx, insertQuery, args...); err != nil {
 			slog.Error("failed to upsert resource (insert)", "error", err, "resourceURI", resource.URI())
 			return fmt.Errorf("failed to store resource: %w", err)
@@ -256,7 +290,7 @@ func (d *DatastoreMSSQL) LoadResource(uri pkgmodel.FormaeURI) (*pkgmodel.Resourc
 	SELECT TOP (1) data, ksuid
 	FROM resources
 	WHERE uri = @p1
-	AND operation != @p2
+	AND operation != @p2 AND operation != 'reaped'
 	ORDER BY version %s DESC
 	`, binColl)
 	row := d.conn.QueryRowContext(ctx, query, string(uri), string(resource_update.OperationDelete))
@@ -291,7 +325,7 @@ func (d *DatastoreMSSQL) LoadResourceByNativeID(nativeID, resourceType string) (
 		WHERE r1.uri = r2.uri
 		AND r2.version %[1]s > r1.version %[1]s
 	)
-	AND r1.operation != @p3
+	AND r1.operation != @p3 AND r1.operation != 'reaped'
 	`, binColl)
 	row := d.conn.QueryRowContext(ctx, query, nativeID, resourceType, string(resource_update.OperationDelete))
 
@@ -324,7 +358,7 @@ func (d *DatastoreMSSQL) LoadAllResources() ([]*pkgmodel.Resource, error) {
 		WHERE r1.uri = r2.uri
 		AND r2.version %[1]s > r1.version %[1]s
 	)
-	AND operation != @p1
+	AND operation != @p1 AND operation != 'reaped'
 	`, binColl)
 	rows, err := d.conn.QueryContext(ctx, query, string(resource_update.OperationDelete))
 	if err != nil {
@@ -380,7 +414,7 @@ func (d *DatastoreMSSQL) LoadResourceById(ksuid string) (*pkgmodel.Resource, err
 	SELECT TOP (1) data, ksuid
 	FROM resources
 	WHERE ksuid = @p1
-	AND operation != @p2
+	AND operation != @p2 AND operation != 'reaped'
 	ORDER BY version %s DESC
 	`, binColl)
 	row := d.conn.QueryRowContext(ctx, query, ksuid, string(resource_update.OperationDelete))
@@ -419,7 +453,7 @@ func (d *DatastoreMSSQL) FindResourcesDependingOn(ksuid string) ([]*pkgmodel.Res
 		WHERE r1.uri = r2.uri
 		AND r2.version %[1]s > r1.version %[1]s
 	)
-	AND operation != @p2
+	AND operation != @p2 AND operation != 'reaped'
 	`, binColl)
 
 	rows, err := d.conn.QueryContext(ctx, query, pattern, string(resource_update.OperationDelete))
@@ -474,7 +508,7 @@ func (d *DatastoreMSSQL) FindResourcesDependingOnMany(ksuids []string) (map[stri
 		WHERE r1.uri = r2.uri
 		AND r2.version %s > r1.version %s
 	)
-	AND operation != @p%d
+	AND operation != @p%d AND operation != 'reaped'
 	`, strings.Join(conditions, " OR "), binColl, binColl, deleteArgNum)
 
 	rows, err := d.conn.QueryContext(ctx, query, args...)
@@ -593,7 +627,7 @@ func (d *DatastoreMSSQL) LoadResourcesByStack(stackLabel string) ([]*pkgmodel.Re
 		WHERE r1.uri = r2.uri
 		AND r2.version %[1]s > r1.version %[1]s
 	)
-	AND operation != @p2
+	AND operation != @p2 AND operation != 'reaped'
 	`, binColl)
 
 	rows, err := d.conn.QueryContext(ctx, query, stackLabel, string(resource_update.OperationDelete))
@@ -633,7 +667,7 @@ func (d *DatastoreMSSQL) LoadAllResourcesByStack() (map[string][]*pkgmodel.Resou
 		WHERE r1.uri = r2.uri
 		AND r2.version %[1]s > r1.version %[1]s
 	)
-	AND operation != @p1
+	AND operation != @p1 AND operation != 'reaped'
 	`, binColl)
 
 	rows, err := d.conn.QueryContext(ctx, query, string(resource_update.OperationDelete))

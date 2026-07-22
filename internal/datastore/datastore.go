@@ -164,8 +164,14 @@ type Datastore interface {
 
 	// QueryResources searches resources based on filter criteria
 	QueryResources(query *ResourceQuery) ([]*pkgmodel.Resource, error)
-	// StoreResource persists a resource after successful creation/update in the cloud
-	StoreResource(resource *pkgmodel.Resource, commandID string) (string, error)
+	// StoreResource persists a resource after successful creation/update in the
+	// cloud. The optional expectedIncarnation is the target incarnation the
+	// caller believes is current; when supplied (non-empty) the write is
+	// rejected (ErrResourceWriteRejected) if the resource's current row was
+	// written under a different incarnation, closing the reaped-then-recovered
+	// stale-write race. A write to a resource whose current row is a reaped
+	// tombstone is always rejected regardless of the incarnation argument.
+	StoreResource(resource *pkgmodel.Resource, commandID string, expectedIncarnation ...string) (string, error)
 	// DeleteResource removes a resource record after successful deletion in the cloud
 	DeleteResource(resource *pkgmodel.Resource, commandID string) (string, error)
 	// LoadResource retrieves a resource by its formae URI

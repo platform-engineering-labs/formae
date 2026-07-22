@@ -617,7 +617,7 @@ WHERE EXISTS (
     WHERE r1.stack = @p1 AND NOT EXISTS (
         SELECT 1 FROM resources AS r2
         WHERE r1.ksuid = r2.ksuid AND r2.version %[2]s > r1.version %[2]s
-    ) AND r1.operation != 'delete'
+    ) AND r1.operation != 'delete' AND r1.operation != 'reaped'
   ) AND T1.timestamp > (
     SELECT TOP (1) fc.timestamp FROM forma_commands fc
     WHERE fc.config_mode = 'reconcile'

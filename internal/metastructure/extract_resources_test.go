@@ -91,7 +91,7 @@ func (m *mockExtractDatastore) GetResourceModificationsSinceLastReconcile(_ stri
 func (m *mockExtractDatastore) QueryFormaCommands(_ *datastore.StatusQuery) ([]*forma_command.FormaCommand, error) {
 	panic("not implemented")
 }
-func (m *mockExtractDatastore) StoreResource(_ *pkgmodel.Resource, _ string) (string, error) {
+func (m *mockExtractDatastore) StoreResource(_ *pkgmodel.Resource, _ string, _ ...string) (string, error) {
 	panic("not implemented")
 }
 func (m *mockExtractDatastore) DeleteResource(_ *pkgmodel.Resource, _ string) (string, error) {

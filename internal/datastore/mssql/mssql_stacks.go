@@ -164,7 +164,7 @@ func (d *DatastoreMSSQL) CountResourcesInStack(label string) (int, error) {
 			WHERE r1.uri = r2.uri
 			AND r2.version COLLATE Latin1_General_BIN2 > r1.version COLLATE Latin1_General_BIN2
 		)
-		AND operation != @p2
+		AND operation != @p2 AND operation != 'reaped'
 	`
 	row := d.conn.QueryRowContext(ctx, query, label, string(resource_update.OperationDelete))
 

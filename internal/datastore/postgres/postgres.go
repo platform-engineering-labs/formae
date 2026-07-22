@@ -714,7 +714,7 @@ func (d DatastorePostgres) GetKSUIDByTriplet(stack, label, resourceType string) 
 	SELECT ksuid
 	FROM resources
 	WHERE stack = $1 AND label = $2 AND LOWER(type) = LOWER($3)
-	AND operation != $4
+	AND operation != $4 AND operation != 'reaped'
 	ORDER BY version COLLATE "C" DESC
 	LIMIT 1
 	`
@@ -753,7 +753,7 @@ func (d DatastorePostgres) BatchGetKSUIDsByTriplets(triplets []pkgmodel.TripletK
 	SELECT stack, label, type, ksuid
 	FROM resources r1
 	WHERE (stack, label, type) IN (%s)
-	AND r1.operation != $%d
+	AND r1.operation != $%d AND r1.operation != 'reaped'
 	AND NOT EXISTS (
 		SELECT 1 FROM resources r2
 		WHERE r1.stack = r2.stack AND r1.label = r2.label AND r1.type = r2.type
@@ -811,6 +811,7 @@ func (d DatastorePostgres) GetResourceModificationsSinceLastReconcile(stack stri
 			AND r2.version COLLATE "C" > r1.version COLLATE "C"
 		)
 		AND r1.operation != 'delete'
+		AND r1.operation != 'reaped'
 	)
 	AND T1.timestamp > (
 		SELECT fc.timestamp
@@ -872,7 +873,7 @@ func (d DatastorePostgres) BatchGetTripletsByKSUIDs(ksuids []string) (map[string
 		       ROW_NUMBER() OVER (PARTITION BY ksuid ORDER BY managed DESC, version COLLATE "C" DESC) as rn
 		FROM resources
 		WHERE ksuid IN (%s)
-		AND operation != $%d
+		AND operation != $%d AND operation != 'reaped'
 	)
 	SELECT ksuid, stack, label, type
 	FROM latest_resources
@@ -929,7 +930,7 @@ func (d DatastorePostgres) DeleteResource(resource *pkgmodel.Resource, commandID
 	ctx, span := tracer.Start(context.Background(), "DeleteResource")
 	defer span.End()
 
-	return d.storeResource(ctx, resource, []byte("{}"), commandID, string(resource_update.OperationDelete))
+	return d.storeResource(ctx, resource, []byte("{}"), commandID, string(resource_update.OperationDelete), "")
 }
 
 func (d DatastorePostgres) LoadAllResources() ([]*pkgmodel.Resource, error) {
@@ -945,7 +946,7 @@ func (d DatastorePostgres) LoadAllResources() ([]*pkgmodel.Resource, error) {
 		WHERE r1.uri = r2.uri
 		AND r2.version COLLATE "C" > r1.version COLLATE "C"
 	)
-	AND operation != $1
+	AND operation != $1 AND operation != 'reaped'
 	`
 	rows, err := d.pool.Query(ctx, query, resource_update.OperationDelete)
 	if err != nil {
@@ -986,7 +987,7 @@ func (d DatastorePostgres) LoadAllResourcesByStack() (map[string][]*pkgmodel.Res
 		WHERE r1.uri = r2.uri
 		AND r2.version COLLATE "C" > r1.version COLLATE "C"
 	)
-	AND operation != $1
+	AND operation != $1 AND operation != 'reaped'
 	`
 
 	rows, err := d.pool.Query(ctx, query, resource_update.OperationDelete)
@@ -1112,7 +1113,7 @@ func (d DatastorePostgres) LoadResource(uri pkgmodel.FormaeURI) (*pkgmodel.Resou
 	SELECT data, ksuid
 	FROM resources
 	WHERE uri = $1
-	AND operation != $2
+	AND operation != $2 AND operation != 'reaped'
 	ORDER BY version COLLATE "C" DESC
 	LIMIT 1
 	`
@@ -1144,7 +1145,7 @@ func (d DatastorePostgres) LoadResourceById(ksuid string) (*pkgmodel.Resource, e
 	SELECT data, ksuid
 	FROM resources
 	WHERE ksuid = $1
-	AND operation != $2
+	AND operation != $2 AND operation != 'reaped'
 	ORDER BY version COLLATE "C" DESC
 	LIMIT 1
 	`
@@ -1193,7 +1194,7 @@ func (d DatastorePostgres) FindResourcesDependingOn(ksuid string) ([]*pkgmodel.R
 		WHERE r1.uri = r2.uri
 		AND r2.version COLLATE "C" > r1.version COLLATE "C"
 	)
-	AND operation != $2
+	AND operation != $2 AND operation != 'reaped'
 	`
 
 	rows, err := d.pool.Query(ctx, query, pattern, resource_update.OperationDelete)
@@ -1250,7 +1251,7 @@ func (d DatastorePostgres) FindResourcesDependingOnMany(ksuids []string) (map[st
 		WHERE r1.uri = r2.uri
 		AND r2.version COLLATE "C" > r1.version COLLATE "C"
 	)
-	AND operation != $%d
+	AND operation != $%d AND operation != 'reaped'
 	`, strings.Join(conditions, " OR "), deleteArgNum)
 
 	rows, err := d.pool.Query(ctx, query, args...)
@@ -1392,7 +1393,7 @@ func (d DatastorePostgres) LoadResourceByNativeID(nativeID string, resourceType 
 		WHERE r1.uri = r2.uri
 		AND r2.version COLLATE "C" > r1.version COLLATE "C"
 	)
-	AND r1.operation != $3
+	AND r1.operation != $3 AND r1.operation != 'reaped'
 	LIMIT 1
 	`
 	row := d.pool.QueryRow(ctx, query, nativeID, resourceType, resource_update.OperationDelete)
@@ -1429,7 +1430,7 @@ func (d DatastorePostgres) LoadResourcesByStack(stackLabel string) ([]*pkgmodel.
 		WHERE r1.uri = r2.uri
 		AND r2.version COLLATE "C" > r1.version COLLATE "C"
 	)
-	AND operation != $2
+	AND operation != $2 AND operation != 'reaped'
 	`
 
 	rows, err := d.pool.Query(ctx, query, stackLabel, resource_update.OperationDelete)
@@ -1720,7 +1721,7 @@ func (d DatastorePostgres) CountResourcesInStack(label string) (int, error) {
 			WHERE r1.uri = r2.uri
 			AND r2.version COLLATE "C" > r1.version COLLATE "C"
 		)
-		AND operation != $2
+		AND operation != $2 AND operation != 'reaped'
 	`
 	row := d.pool.QueryRow(ctx, query, label, resource_update.OperationDelete)
 
@@ -2961,7 +2962,7 @@ func (d DatastorePostgres) QueryResources(query *datastore.ResourceQuery) ([]*pk
 		WHERE r1.uri = r2.uri
 		AND r2.version COLLATE "C" > r1.version COLLATE "C"
 	)
-	AND r1.operation != $1
+	AND r1.operation != $1 AND r1.operation != 'reaped'
 	`
 	args := []any{resource_update.OperationDelete}
 
@@ -3064,7 +3065,7 @@ func (d DatastorePostgres) Stats() (*stats.Stats, error) {
 	FROM resources r1
 	WHERE stack IS NOT NULL
 	AND stack != '%s'
-	AND operation != $1
+	AND operation != $1 AND operation != 'reaped'
 	AND NOT EXISTS (
 		SELECT 1
 		FROM resources r2
@@ -3084,7 +3085,7 @@ func (d DatastorePostgres) Stats() (*stats.Stats, error) {
 	FROM resources r1
 	WHERE stack IS NOT NULL
 	AND stack != '%s'
-	AND operation != $1
+	AND operation != $1 AND operation != 'reaped'
 	AND NOT EXISTS (
 		SELECT 1
 		FROM resources r2
@@ -3114,7 +3115,7 @@ func (d DatastorePostgres) Stats() (*stats.Stats, error) {
 	SELECT SPLIT_PART(type, '::', 1) as namespace, COUNT(*)
 	FROM resources r1
 	WHERE stack = '%s'
-	AND operation != $1
+	AND operation != $1 AND operation != 'reaped'
 	AND NOT EXISTS (
 		SELECT 1
 		FROM resources r2
@@ -3171,7 +3172,7 @@ func (d DatastorePostgres) Stats() (*stats.Stats, error) {
 	resourceTypesQuery := `
 	SELECT type, COUNT(*)
 	FROM resources r1
-	WHERE operation != $1
+	WHERE operation != $1 AND operation != 'reaped'
 	AND NOT EXISTS (
 		SELECT 1
 		FROM resources r2
@@ -3224,7 +3225,7 @@ func (d DatastorePostgres) Stats() (*stats.Stats, error) {
 	return &res, nil
 }
 
-func (d DatastorePostgres) StoreResource(resource *pkgmodel.Resource, commandID string) (string, error) {
+func (d DatastorePostgres) StoreResource(resource *pkgmodel.Resource, commandID string, expectedIncarnation ...string) (string, error) {
 	ctx, span := tracer.Start(context.Background(), "StoreResource")
 	defer span.End()
 
@@ -3233,12 +3234,42 @@ func (d DatastorePostgres) StoreResource(resource *pkgmodel.Resource, commandID 
 		return "", err
 	}
 
-	return d.storeResource(ctx, resource, jsonData, commandID, string(resource_update.OperationUpdate))
+	inc := ""
+	if len(expectedIncarnation) > 0 {
+		inc = expectedIncarnation[0]
+	}
+	return d.storeResource(ctx, resource, jsonData, commandID, string(resource_update.OperationUpdate), inc)
 }
 
-func (d DatastorePostgres) storeResource(ctx context.Context, resource *pkgmodel.Resource, data []byte, commandID string, operation string) (string, error) {
+func (d DatastorePostgres) storeResource(ctx context.Context, resource *pkgmodel.Resource, data []byte, commandID string, operation string, expectedIncarnation string) (string, error) {
 	if resource.Ksuid == "" {
 		resource.Ksuid = metautil.NewID()
+	}
+
+	// Reaped/incarnation guard. Deletes are exempt: a delete tombstone must
+	// always be recordable. For every other write, inspect the resource's
+	// current (max-version) row and reject the write when that row is a reaped
+	// tombstone, or when an expected incarnation was supplied and does not match
+	// the incarnation stamped on the current row. An empty stored incarnation
+	// skips the incarnation check.
+	if operation != string(resource_update.OperationDelete) {
+		var curOp, curInc string
+		guardErr := d.pool.QueryRow(ctx,
+			`SELECT operation, COALESCE(target_incarnation_id, '') FROM resources WHERE uri = $1 ORDER BY version COLLATE "C" DESC LIMIT 1`,
+			resource.URI(),
+		).Scan(&curOp, &curInc)
+		if guardErr != nil && !errors.Is(guardErr, pgx.ErrNoRows) {
+			return "", fmt.Errorf("failed to evaluate resource write guard: %w", guardErr)
+		}
+		if guardErr == nil {
+			if curOp == string(resource_update.OperationReaped) {
+				return "", fmt.Errorf("%w: resource %s current row is reaped", datastore.ErrResourceWriteRejected, resource.URI())
+			}
+			if expectedIncarnation != "" && curInc != "" && curInc != expectedIncarnation {
+				return "", fmt.Errorf("%w: resource %s incarnation %q does not match expected %q",
+					datastore.ErrResourceWriteRejected, resource.URI(), curInc, expectedIncarnation)
+			}
+		}
 	}
 
 	// Check if this resource already exists by native_id and type
@@ -3255,8 +3286,8 @@ func (d DatastorePostgres) storeResource(ctx context.Context, resource *pkgmodel
 	if errors.Is(err, pgx.ErrNoRows) {
 		newVersion := mksuid.New().String()
 		query = `
-		INSERT INTO resources (uri, version, command_id, operation, native_id, stack, type, label, target, data, managed, ksuid)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		INSERT INTO resources (uri, version, command_id, operation, native_id, stack, type, label, target, data, managed, ksuid, target_incarnation_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		`
 		_, err = d.pool.Exec(
 			ctx,
@@ -3273,6 +3304,7 @@ func (d DatastorePostgres) storeResource(ctx context.Context, resource *pkgmodel
 			data,
 			resource.Managed,
 			resource.Ksuid,
+			expectedIncarnation,
 		)
 		if err != nil {
 			slog.Error("failed to store resource", "error", err, "resourceURI", resource.URI())
@@ -3339,8 +3371,8 @@ func (d DatastorePostgres) storeResource(ctx context.Context, resource *pkgmodel
 	}
 
 	query = `
-	INSERT INTO resources (uri, version, command_id, operation, native_id, stack, type, label, target, data, managed, ksuid)
-	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+	INSERT INTO resources (uri, version, command_id, operation, native_id, stack, type, label, target, data, managed, ksuid, target_incarnation_id)
+	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 	ON CONFLICT (uri, version) DO UPDATE SET
 	command_id = EXCLUDED.command_id,
 	operation = EXCLUDED.operation,
@@ -3351,7 +3383,8 @@ func (d DatastorePostgres) storeResource(ctx context.Context, resource *pkgmodel
 	target = EXCLUDED.target,
 	data = EXCLUDED.data,
 	managed = EXCLUDED.managed,
-	ksuid = EXCLUDED.ksuid
+	ksuid = EXCLUDED.ksuid,
+	target_incarnation_id = EXCLUDED.target_incarnation_id
 	`
 	_, err = d.pool.Exec(
 		ctx,
@@ -3368,6 +3401,7 @@ func (d DatastorePostgres) storeResource(ctx context.Context, resource *pkgmodel
 		data,
 		resource.Managed,
 		resource.Ksuid,
+		expectedIncarnation,
 	)
 	if err != nil {
 		slog.Error("failed to store resource", "error", err, "resourceURI", resource.URI())
@@ -3715,7 +3749,7 @@ func (d DatastorePostgres) CountResourcesInTarget(targetLabel string) (int, erro
 			WHERE r1.uri = r2.uri
 			AND r2.version COLLATE "C" > r1.version COLLATE "C"
 		)
-		AND operation != $2
+		AND operation != $2 AND operation != 'reaped'
 	`
 	row := d.pool.QueryRow(ctx, query, targetLabel, resource_update.OperationDelete)
 

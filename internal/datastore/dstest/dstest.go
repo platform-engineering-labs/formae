@@ -36,6 +36,18 @@ type TestDatastore struct {
 	// Backends that don't provide it leave it nil and the relevant tests
 	// t.Skip().
 	SetTargetAccrualForTest func(label string, firstUnreachableAt time.Time, accumSeconds int64) error
+	// MarkResourceReapedForTest forces the operation column of the current
+	// (max-version) resources row for the given uri to 'reaped'. Used to set up
+	// the reaped tombstone that the live-query exclusion and the resource-write
+	// guard react to, a state no public Datastore API reaches yet. Backends that
+	// don't provide it leave it nil and the relevant tests t.Skip().
+	MarkResourceReapedForTest func(uri string) error
+	// RawResourceOperationForTest returns the operation column of the current
+	// (max-version) resources row for the given uri, bypassing the live-row
+	// filters, or "" when no row exists. Used to prove a reaped row is retained
+	// in the table. Backends that don't provide it leave it nil and the relevant
+	// tests t.Skip().
+	RawResourceOperationForTest func(uri string) (string, error)
 }
 
 // RunAll runs the full datastore test suite against the provided factory.
@@ -72,6 +84,9 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunStoreResourceAfterDeleteWithSameNativeID(t, newDS)
 	RunStoreResourceWithDifferentKSUIDSameData(t, newDS)
 	RunStoreResourceRenamePreservesKsuidAndAddsNewVersion(t, newDS)
+	RunReapedResourcesInvisibleToLiveQueries(t, newDS)
+	RunResourceWriteRejectedWhenTargetReaped(t, newDS)
+	RunResourceWriteRejectedWhenIncarnationChanged(t, newDS)
 
 	RunQueryTargetsAll(t, newDS)
 	RunQueryTargetsByNamespace(t, newDS)

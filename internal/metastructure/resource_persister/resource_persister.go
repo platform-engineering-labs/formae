@@ -348,6 +348,16 @@ func resourceOperationFromPluginOperation(resourceOperation resource_update.Oper
 func (rp *ResourcePersister) processResourceUpdate(commandID string, rc resource_update.ResourceUpdate) (string, error) {
 	stackLabel := rc.DesiredState.Stack
 
+	// Expected target incarnation for the incarnation-carrying resource-write
+	// guard. The ResourcePersister holds the resource's target in memory, so it
+	// can pass the incarnation it believes is current. An empty incarnation
+	// (target health not populated) means "no incarnation check" at the
+	// datastore; the reaped-tombstone check still applies.
+	expectedIncarnation := ""
+	if rc.ResourceTarget.Health != nil {
+		expectedIncarnation = rc.ResourceTarget.Health.IncarnationID
+	}
+
 	var resourceVersion string
 	var storeResourceErr error
 
@@ -364,10 +374,10 @@ func (rp *ResourcePersister) processResourceUpdate(commandID string, rc resource
 	switch rc.Operation {
 	case resource_update.OperationCreate:
 		secretSafeResource.PatchDocument = nil
-		resourceVersion, storeResourceErr = rp.datastore.StoreResource(secretSafeResource, commandID)
+		resourceVersion, storeResourceErr = rp.datastore.StoreResource(secretSafeResource, commandID, expectedIncarnation)
 	case resource_update.OperationUpdate:
 		secretSafeResource.PatchDocument = nil
-		resourceVersion, storeResourceErr = rp.datastore.StoreResource(secretSafeResource, commandID)
+		resourceVersion, storeResourceErr = rp.datastore.StoreResource(secretSafeResource, commandID, expectedIncarnation)
 	case resource_update.OperationDelete:
 		r, err := rp.datastore.LoadResource(rc.DesiredState.URI())
 		if err == nil && r != nil {
@@ -424,7 +434,7 @@ func (rp *ResourcePersister) processResourceUpdate(commandID string, rc resource
 					"resourceLabel", rc.DesiredState.Label,
 					"stackLabel", stackLabel)
 
-				resourceVersion, storeResourceErr = rp.datastore.StoreResource(secretSafeResource, commandID)
+				resourceVersion, storeResourceErr = rp.datastore.StoreResource(secretSafeResource, commandID, expectedIncarnation)
 
 				return resourceVersion, storeResourceErr
 			}
@@ -461,7 +471,7 @@ func (rp *ResourcePersister) processResourceUpdate(commandID string, rc resource
 					"resourceLabel", rc.DesiredState.Label,
 					"stackLabel", stackLabel)
 
-				resourceVersion, storeResourceErr = rp.datastore.StoreResource(secretSafeResource, commandID)
+				resourceVersion, storeResourceErr = rp.datastore.StoreResource(secretSafeResource, commandID, expectedIncarnation)
 				if storeResourceErr != nil {
 					return "", fmt.Errorf("failed to persist updated resource %s: %w", rc.DesiredState.Label, storeResourceErr)
 				}

@@ -8,6 +8,7 @@ package sqlite_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -52,6 +53,25 @@ func TestDatastore(t *testing.T) {
 					firstUnreachableAt.UTC().Format(time.RFC3339Nano), accumSeconds, label, label,
 				)
 				return err
+			},
+			MarkResourceReapedForTest: func(uri string) error {
+				conn := d.Conn()
+				_, err := conn.Exec(
+					`UPDATE resources SET operation = 'reaped' WHERE uri = ? AND version = (SELECT MAX(version) FROM resources WHERE uri = ?)`,
+					uri, uri,
+				)
+				return err
+			},
+			RawResourceOperationForTest: func(uri string) (string, error) {
+				conn := d.Conn()
+				var op string
+				err := conn.QueryRow(
+					`SELECT operation FROM resources WHERE uri = ? ORDER BY version DESC LIMIT 1`, uri,
+				).Scan(&op)
+				if err == sql.ErrNoRows {
+					return "", nil
+				}
+				return op, err
 			},
 		}
 	})

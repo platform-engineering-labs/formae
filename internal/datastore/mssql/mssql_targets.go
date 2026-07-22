@@ -561,7 +561,7 @@ func (d *DatastoreMSSQL) CountResourcesInTarget(targetLabel string) (int, error)
 			WHERE r1.uri = r2.uri
 			AND r2.version %[1]s > r1.version %[1]s
 		)
-		AND operation != @p2`, binColl)
+		AND operation != @p2 AND operation != 'reaped'`, binColl)
 	row := d.conn.QueryRowContext(ctx, query, targetLabel, resource_update.OperationDelete)
 
 	var count int

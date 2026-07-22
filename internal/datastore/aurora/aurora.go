@@ -973,7 +973,7 @@ func (d *DatastoreAuroraDataAPI) GetResourceModificationsSinceLastReconcile(stac
 			WHERE r1.ksuid = r2.ksuid
 			AND r2.version COLLATE "C" > r1.version COLLATE "C"
 		)
-		AND r1.operation != 'delete'
+		AND r1.operation != 'delete' AND r1.operation != 'reaped'
 	)
 	AND T1.timestamp > (
 		SELECT fc.timestamp
@@ -1098,7 +1098,7 @@ func (d *DatastoreAuroraDataAPI) QueryResources(query *datastore.ResourceQuery) 
 		WHERE r1.uri = r2.uri
 		AND r2.version COLLATE "C" > r1.version COLLATE "C"
 	)
-	AND r1.operation != :operation
+	AND r1.operation != :operation AND r1.operation != 'reaped'
 	`
 	params := []types.SqlParameter{
 		{Name: aws.String("operation"), Value: &types.FieldMemberStringValue{Value: string(resource_update.OperationDelete)}},
@@ -1147,7 +1147,7 @@ func (d *DatastoreAuroraDataAPI) QueryResources(query *datastore.ResourceQuery) 
 	return resources, nil
 }
 
-func (d *DatastoreAuroraDataAPI) StoreResource(resource *pkgmodel.Resource, commandID string) (string, error) {
+func (d *DatastoreAuroraDataAPI) StoreResource(resource *pkgmodel.Resource, commandID string, expectedIncarnation ...string) (string, error) {
 	ctx := context.Background()
 
 	jsonData, err := json.Marshal(resource)
@@ -1155,13 +1155,17 @@ func (d *DatastoreAuroraDataAPI) StoreResource(resource *pkgmodel.Resource, comm
 		return "", err
 	}
 
-	return d.storeResource(ctx, resource, jsonData, commandID, string(resource_update.OperationUpdate))
+	inc := ""
+	if len(expectedIncarnation) > 0 {
+		inc = expectedIncarnation[0]
+	}
+	return d.storeResource(ctx, resource, jsonData, commandID, string(resource_update.OperationUpdate), inc)
 }
 
 func (d *DatastoreAuroraDataAPI) DeleteResource(resource *pkgmodel.Resource, commandID string) (string, error) {
 	ctx := context.Background()
 
-	return d.storeResource(ctx, resource, []byte("{}"), commandID, string(resource_update.OperationDelete))
+	return d.storeResource(ctx, resource, []byte("{}"), commandID, string(resource_update.OperationDelete), "")
 }
 
 func (d *DatastoreAuroraDataAPI) BulkStoreResources(resources []pkgmodel.Resource, commandID string) (string, error) {
@@ -1188,7 +1192,7 @@ func (d *DatastoreAuroraDataAPI) CountResourcesInStack(label string) (int, error
 			WHERE r1.uri = r2.uri
 			AND r2.version COLLATE "C" > r1.version COLLATE "C"
 		)
-		AND operation != :operation
+		AND operation != :operation AND operation != 'reaped'
 	`
 	params := []types.SqlParameter{
 		{Name: aws.String("stack"), Value: &types.FieldMemberStringValue{Value: label}},
@@ -1223,7 +1227,7 @@ func (d *DatastoreAuroraDataAPI) LoadAllResourcesByStack() (map[string][]*pkgmod
 			WHERE r1.uri = r2.uri
 			AND r2.version COLLATE "C" > r1.version COLLATE "C"
 		)
-		AND operation != :operation
+		AND operation != :operation AND operation != 'reaped'
 	`
 	params := []types.SqlParameter{
 		{Name: aws.String("operation"), Value: &types.FieldMemberStringValue{Value: string(resource_update.OperationDelete)}},
@@ -1282,7 +1286,7 @@ func (d *DatastoreAuroraDataAPI) LoadResourcesByStack(stackLabel string) ([]*pkg
 			WHERE r1.uri = r2.uri
 			AND r2.version COLLATE "C" > r1.version COLLATE "C"
 		)
-		AND operation != :operation
+		AND operation != :operation AND operation != 'reaped'
 	`
 	params := []types.SqlParameter{
 		{Name: aws.String("stack"), Value: &types.FieldMemberStringValue{Value: stackLabel}},
@@ -1333,7 +1337,7 @@ func (d *DatastoreAuroraDataAPI) CountResourcesInTarget(targetLabel string) (int
 			WHERE r1.uri = r2.uri
 			AND r2.version COLLATE "C" > r1.version COLLATE "C"
 		)
-		AND operation != :operation
+		AND operation != :operation AND operation != 'reaped'
 	`
 	params := []types.SqlParameter{
 		{Name: aws.String("target"), Value: &types.FieldMemberStringValue{Value: targetLabel}},
@@ -1356,9 +1360,37 @@ func (d *DatastoreAuroraDataAPI) CountResourcesInTarget(targetLabel string) (int
 	return 0, fmt.Errorf("unexpected type for COUNT result")
 }
 
-func (d *DatastoreAuroraDataAPI) storeResource(ctx context.Context, resource *pkgmodel.Resource, data []byte, commandID string, operation string) (string, error) {
+func (d *DatastoreAuroraDataAPI) storeResource(ctx context.Context, resource *pkgmodel.Resource, data []byte, commandID string, operation string, expectedIncarnation string) (string, error) {
 	if resource.Ksuid == "" {
 		resource.Ksuid = metautil.NewID()
+	}
+
+	// Reaped/incarnation guard. Deletes are exempt: a delete tombstone must
+	// always be recordable. For every other write, inspect the resource's
+	// current (max-version) row and reject the write when that row is a reaped
+	// tombstone, or when an expected incarnation was supplied and does not match
+	// the incarnation stamped on the current row. An empty stored incarnation
+	// skips the incarnation check.
+	if operation != string(resource_update.OperationDelete) {
+		guardQuery := `SELECT operation, COALESCE(target_incarnation_id, '') FROM resources WHERE uri = :uri ORDER BY version COLLATE "C" DESC LIMIT 1`
+		guardParams := []types.SqlParameter{
+			{Name: aws.String("uri"), Value: &types.FieldMemberStringValue{Value: string(resource.URI())}},
+		}
+		guardOutput, err := d.executeStatement(ctx, guardQuery, guardParams)
+		if err != nil {
+			return "", fmt.Errorf("failed to evaluate resource write guard: %w", err)
+		}
+		if len(guardOutput.Records) > 0 && len(guardOutput.Records[0]) >= 2 {
+			curOp, _ := getStringField(guardOutput.Records[0][0])
+			curInc, _ := getStringField(guardOutput.Records[0][1])
+			if curOp == string(resource_update.OperationReaped) {
+				return "", fmt.Errorf("%w: resource %s current row is reaped", datastore.ErrResourceWriteRejected, resource.URI())
+			}
+			if expectedIncarnation != "" && curInc != "" && curInc != expectedIncarnation {
+				return "", fmt.Errorf("%w: resource %s incarnation %q does not match expected %q",
+					datastore.ErrResourceWriteRejected, resource.URI(), curInc, expectedIncarnation)
+			}
+		}
 	}
 
 	// Check if this resource already exists by native_id and type
@@ -1395,8 +1427,8 @@ func (d *DatastoreAuroraDataAPI) storeResource(ctx context.Context, resource *pk
 	if maxRecordIdx == -1 {
 		newVersion := mksuid.New().String()
 		insertQuery := `
-		INSERT INTO resources (uri, version, command_id, operation, native_id, stack, type, label, target, data, managed, ksuid)
-		VALUES (:uri, :version, :command_id, :operation, :native_id, :stack, :type, :label, :target, :data::jsonb, :managed, :ksuid)
+		INSERT INTO resources (uri, version, command_id, operation, native_id, stack, type, label, target, data, managed, ksuid, target_incarnation_id)
+		VALUES (:uri, :version, :command_id, :operation, :native_id, :stack, :type, :label, :target, :data::jsonb, :managed, :ksuid, :target_incarnation_id)
 		`
 		insertParams := []types.SqlParameter{
 			{Name: aws.String("uri"), Value: &types.FieldMemberStringValue{Value: string(resource.URI())}},
@@ -1411,6 +1443,7 @@ func (d *DatastoreAuroraDataAPI) storeResource(ctx context.Context, resource *pk
 			{Name: aws.String("data"), Value: &types.FieldMemberStringValue{Value: string(data)}},
 			{Name: aws.String("managed"), Value: &types.FieldMemberBooleanValue{Value: resource.Managed}},
 			{Name: aws.String("ksuid"), Value: &types.FieldMemberStringValue{Value: resource.Ksuid}},
+			{Name: aws.String("target_incarnation_id"), Value: &types.FieldMemberStringValue{Value: expectedIncarnation}},
 		}
 
 		_, err = d.executeStatement(ctx, insertQuery, insertParams)
@@ -1477,8 +1510,8 @@ func (d *DatastoreAuroraDataAPI) storeResource(ctx context.Context, resource *pk
 	}
 
 	upsertQuery := `
-	INSERT INTO resources (uri, version, command_id, operation, native_id, stack, type, label, target, data, managed, ksuid)
-	VALUES (:uri, :version, :command_id, :operation, :native_id, :stack, :type, :label, :target, :data::jsonb, :managed, :ksuid)
+	INSERT INTO resources (uri, version, command_id, operation, native_id, stack, type, label, target, data, managed, ksuid, target_incarnation_id)
+	VALUES (:uri, :version, :command_id, :operation, :native_id, :stack, :type, :label, :target, :data::jsonb, :managed, :ksuid, :target_incarnation_id)
 	ON CONFLICT (uri, version) DO UPDATE SET
 	command_id = EXCLUDED.command_id,
 	operation = EXCLUDED.operation,
@@ -1489,7 +1522,8 @@ func (d *DatastoreAuroraDataAPI) storeResource(ctx context.Context, resource *pk
 	target = EXCLUDED.target,
 	data = EXCLUDED.data,
 	managed = EXCLUDED.managed,
-	ksuid = EXCLUDED.ksuid
+	ksuid = EXCLUDED.ksuid,
+	target_incarnation_id = EXCLUDED.target_incarnation_id
 	`
 	upsertParams := []types.SqlParameter{
 		{Name: aws.String("uri"), Value: &types.FieldMemberStringValue{Value: string(resource.URI())}},
@@ -1504,6 +1538,7 @@ func (d *DatastoreAuroraDataAPI) storeResource(ctx context.Context, resource *pk
 		{Name: aws.String("data"), Value: &types.FieldMemberStringValue{Value: string(data)}},
 		{Name: aws.String("managed"), Value: &types.FieldMemberBooleanValue{Value: resource.Managed}},
 		{Name: aws.String("ksuid"), Value: &types.FieldMemberStringValue{Value: resource.Ksuid}},
+		{Name: aws.String("target_incarnation_id"), Value: &types.FieldMemberStringValue{Value: expectedIncarnation}},
 	}
 
 	_, err = d.executeStatement(ctx, upsertQuery, upsertParams)
@@ -1522,7 +1557,7 @@ func (d *DatastoreAuroraDataAPI) LoadResource(uri pkgmodel.FormaeURI) (*pkgmodel
 	SELECT data, ksuid
 	FROM resources
 	WHERE uri = :uri
-	AND operation != :operation
+	AND operation != :operation AND operation != 'reaped'
 	ORDER BY version COLLATE "C" DESC
 	LIMIT 1
 	`
@@ -1577,7 +1612,7 @@ func (d *DatastoreAuroraDataAPI) LoadResourceByNativeID(nativeID string, resourc
 		WHERE r1.uri = r2.uri
 		AND r2.version COLLATE "C" > r1.version COLLATE "C"
 	)
-	AND r1.operation != :operation
+	AND r1.operation != :operation AND r1.operation != 'reaped'
 	LIMIT 1
 	`
 	params := []types.SqlParameter{
@@ -1633,7 +1668,7 @@ func (d *DatastoreAuroraDataAPI) LoadAllResources() ([]*pkgmodel.Resource, error
 		WHERE r1.uri = r2.uri
 		AND r2.version COLLATE "C" > r1.version COLLATE "C"
 	)
-	AND operation != :operation
+	AND operation != :operation AND operation != 'reaped'
 	`
 	params := []types.SqlParameter{
 		{Name: aws.String("operation"), Value: &types.FieldMemberStringValue{Value: string(resource_update.OperationDelete)}},
@@ -1705,7 +1740,7 @@ func (d *DatastoreAuroraDataAPI) LoadResourceById(ksuid string) (*pkgmodel.Resou
 	SELECT data, ksuid
 	FROM resources
 	WHERE ksuid = :ksuid
-	AND operation != :operation
+	AND operation != :operation AND operation != 'reaped'
 	ORDER BY version COLLATE "C" DESC
 	LIMIT 1
 	`
@@ -1769,7 +1804,7 @@ func (d *DatastoreAuroraDataAPI) FindResourcesDependingOn(ksuid string) ([]*pkgm
 		WHERE r1.uri = r2.uri
 		AND r2.version COLLATE "C" > r1.version COLLATE "C"
 	)
-	AND operation != :operation
+	AND operation != :operation AND operation != 'reaped'
 	`
 	params := []types.SqlParameter{
 		{Name: aws.String("pattern"), Value: &types.FieldMemberStringValue{Value: pattern}},
@@ -1843,7 +1878,7 @@ func (d *DatastoreAuroraDataAPI) FindResourcesDependingOnMany(ksuids []string) (
 		WHERE r1.uri = r2.uri
 		AND r2.version COLLATE "C" > r1.version COLLATE "C"
 	)
-	AND operation != :operation
+	AND operation != :operation AND operation != 'reaped'
 	`, strings.Join(conditions, " OR "))
 
 	output, err := d.executeStatement(ctx, query, params)
@@ -2017,7 +2052,7 @@ func (d *DatastoreAuroraDataAPI) LoadStack(stackLabel string) (*pkgmodel.Forma, 
 		WHERE r1.uri = r2.uri
 		AND r2.version COLLATE "C" > r1.version COLLATE "C"
 	)
-	AND operation != :operation
+	AND operation != :operation AND operation != 'reaped'
 	`
 	params := []types.SqlParameter{
 		{Name: aws.String("stack"), Value: &types.FieldMemberStringValue{Value: stackLabel}},
@@ -2069,7 +2104,7 @@ func (d *DatastoreAuroraDataAPI) LoadAllStacks() ([]*pkgmodel.Forma, error) {
 		WHERE r1.uri = r2.uri
 		AND r2.version COLLATE "C" > r1.version COLLATE "C"
 	)
-	AND operation != :operation
+	AND operation != :operation AND operation != 'reaped'
 	`
 	params := []types.SqlParameter{
 		{Name: aws.String("operation"), Value: &types.FieldMemberStringValue{Value: string(resource_update.OperationDelete)}},
@@ -2927,7 +2962,7 @@ func (d *DatastoreAuroraDataAPI) Stats() (*stats.Stats, error) {
 	FROM resources r1
 	WHERE stack IS NOT NULL
 	AND stack != '%s'
-	AND operation != :operation
+	AND operation != :operation AND operation != 'reaped'
 	AND NOT EXISTS (
 		SELECT 1
 		FROM resources r2
@@ -2953,7 +2988,7 @@ func (d *DatastoreAuroraDataAPI) Stats() (*stats.Stats, error) {
 	FROM resources r1
 	WHERE stack IS NOT NULL
 	AND stack != '%s'
-	AND operation != :operation
+	AND operation != :operation AND operation != 'reaped'
 	AND NOT EXISTS (
 		SELECT 1
 		FROM resources r2
@@ -2980,7 +3015,7 @@ func (d *DatastoreAuroraDataAPI) Stats() (*stats.Stats, error) {
 	SELECT SPLIT_PART(type, '::', 1) as namespace, COUNT(*)
 	FROM resources r1
 	WHERE stack = '%s'
-	AND operation != :operation
+	AND operation != :operation AND operation != 'reaped'
 	AND NOT EXISTS (
 		SELECT 1
 		FROM resources r2
@@ -3031,7 +3066,7 @@ func (d *DatastoreAuroraDataAPI) Stats() (*stats.Stats, error) {
 	resourceTypesQuery := `
 	SELECT type, COUNT(*)
 	FROM resources r1
-	WHERE operation != :operation
+	WHERE operation != :operation AND operation != 'reaped'
 	AND NOT EXISTS (
 		SELECT 1
 		FROM resources r2
@@ -3088,7 +3123,7 @@ func (d *DatastoreAuroraDataAPI) GetKSUIDByTriplet(stack, label, resourceType st
 	SELECT ksuid
 	FROM resources
 	WHERE stack = :stack AND label = :label AND LOWER(type) = LOWER(:type)
-	AND operation != :operation
+	AND operation != :operation AND operation != 'reaped'
 	ORDER BY version COLLATE "C" DESC
 	LIMIT 1
 	`
@@ -3137,7 +3172,7 @@ func (d *DatastoreAuroraDataAPI) BatchGetKSUIDsByTriplets(triplets []pkgmodel.Tr
 	SELECT stack, label, type, ksuid
 	FROM resources r1
 	WHERE (stack, label, type) IN (%s)
-	AND r1.operation != :op_delete
+	AND r1.operation != :op_delete AND r1.operation != 'reaped'
 	AND NOT EXISTS (
 		SELECT 1 FROM resources r2
 		WHERE r1.stack = r2.stack AND r1.label = r2.label AND r1.type = r2.type
@@ -3196,7 +3231,7 @@ func (d *DatastoreAuroraDataAPI) BatchGetTripletsByKSUIDs(ksuids []string) (map[
 		       ROW_NUMBER() OVER (PARTITION BY ksuid ORDER BY managed DESC, version COLLATE "C" DESC) as rn
 		FROM resources
 		WHERE ksuid IN (%s)
-		AND operation != :operation
+		AND operation != :operation AND operation != 'reaped'
 	)
 	SELECT ksuid, stack, label, type
 	FROM latest_resources
