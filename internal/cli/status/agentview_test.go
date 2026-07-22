@@ -196,10 +196,11 @@ func TestRenderAgentStats_UnmanagedThresholds(t *testing.T) {
 }
 
 func TestPanelRow_JoinsHorizontallyWhenFits(t *testing.T) {
-	a := "AAA"
-	b := "BBB"
-	result := panelRow(200, a, b)
-	// When panels fit, lipgloss joins horizontally → result is one line
+	th := theme.New("formae")
+	a := panelSpec{title: "A", color: th.Palette.Border, lines: []string{"AAA"}}
+	b := panelSpec{title: "B", color: th.Palette.Border, lines: []string{"BBB"}}
+	result := renderPanelRow(th, 200, 30, 2, a, b)
+	// When panels fit, they're joined horizontally → both on the same line.
 	lines := strings.Split(result, "\n")
 	found := false
 	for _, l := range lines {
@@ -211,16 +212,30 @@ func TestPanelRow_JoinsHorizontallyWhenFits(t *testing.T) {
 	assert.True(t, found, "horizontal join should put both panels on the same line")
 }
 
-func TestPanelRow_StacksVerticallyWhenTooNarrow(t *testing.T) {
-	// Make panels wider than total width
-	wide := strings.Repeat("X", 80)
-	result := panelRow(10, wide, wide)
+func TestPanelRow_EqualizesHeightAndGaps(t *testing.T) {
+	th := theme.New("formae")
+	short := panelSpec{title: "S", color: th.Palette.Border, lines: []string{"one"}}
+	tall := panelSpec{title: "T", color: th.Palette.Border, lines: []string{"one", "two", "three"}}
+	result := renderPanelRow(th, 200, 30, 2, short, tall)
 	lines := strings.Split(result, "\n")
-	// Vertical stack: first panel's content on early lines, second on later lines
-	require.GreaterOrEqual(t, len(lines), 2)
-	// The two wide lines should NOT be on the same line
+	// Height-equalized: every rendered row spans both boxes (no row where the
+	// short box has already closed while the tall one continues), so all lines
+	// share one width.
+	width := lipgloss.Width(lines[0])
 	for _, l := range lines {
-		assert.LessOrEqual(t, lipgloss.Width(l), 80+1,
+		assert.Equal(t, width, lipgloss.Width(l), "all rows must be equal width: %q", l)
+	}
+}
+
+func TestPanelRow_StacksVerticallyWhenTooNarrow(t *testing.T) {
+	th := theme.New("formae")
+	// panelW wider than the terminal forces a vertical stack.
+	spec := panelSpec{title: "X", color: th.Palette.Border, lines: []string{strings.Repeat("X", 60)}}
+	result := renderPanelRow(th, 10, 80, 2, spec, spec)
+	lines := strings.Split(result, "\n")
+	require.GreaterOrEqual(t, len(lines), 2)
+	for _, l := range lines {
+		assert.LessOrEqual(t, lipgloss.Width(l), 84,
 			"no single line should have both panels side by side: %q", l)
 	}
 }

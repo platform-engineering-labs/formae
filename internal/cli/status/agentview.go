@@ -41,29 +41,62 @@ func termWidth(w io.Writer) int {
 	return agentTermWidth(w)
 }
 
-// panelRow joins panels horizontally (lipgloss.JoinHorizontal) when their
-// combined rendered width fits within width. Otherwise stacks them vertically.
-func panelRow(width int, panels ...string) string {
-	if len(panels) == 0 {
+// panelSpec is a panel's content before it is boxed, so a row of panels can be
+// height-equalized (all boxes the same height, borders aligned) before render.
+type panelSpec struct {
+	title string
+	color lipgloss.AdaptiveColor
+	lines []string
+}
+
+// boxWidth returns the widest line of a rendered box.
+func boxWidth(box string) int {
+	maxW := 0
+	for _, l := range strings.Split(box, "\n") {
+		if w := lipgloss.Width(l); w > maxW {
+			maxW = w
+		}
+	}
+	return maxW
+}
+
+// renderPanelRow boxes each spec, padding every panel's content to the row's
+// tallest so all boxes share a height and their borders align, then joins them
+// horizontally with a gap-column between. Falls back to a vertical stack when
+// the row is wider than the terminal.
+func renderPanelRow(th *theme.Theme, termW, panelW, gap int, specs ...panelSpec) string {
+	if len(specs) == 0 {
 		return ""
 	}
-	// Sum up total width of all panels
-	totalW := 0
-	for _, p := range panels {
-		lines := strings.Split(p, "\n")
-		maxW := 0
-		for _, l := range lines {
-			w := lipgloss.Width(l)
-			if w > maxW {
-				maxW = w
-			}
+	maxLines := 0
+	for _, s := range specs {
+		if len(s.lines) > maxLines {
+			maxLines = len(s.lines)
 		}
-		totalW += maxW
 	}
-	if totalW <= width {
-		return lipgloss.JoinHorizontal(lipgloss.Top, panels...)
+	boxes := make([]string, len(specs))
+	totalW := 0
+	for i, s := range specs {
+		lines := s.lines
+		for len(lines) < maxLines {
+			lines = append(lines, "")
+		}
+		boxes[i] = components.Panel(th, s.color, s.title, lines, panelW)
+		totalW += boxWidth(boxes[i])
 	}
-	return strings.Join(panels, "\n")
+	totalW += gap * (len(boxes) - 1)
+	if totalW > termW {
+		return strings.Join(boxes, "\n")
+	}
+	withGaps := make([]string, 0, len(boxes)*2-1)
+	spacer := strings.Repeat(" ", gap)
+	for i, b := range boxes {
+		if i > 0 {
+			withGaps = append(withGaps, spacer)
+		}
+		withGaps = append(withGaps, b)
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, withGaps...)
 }
 
 func sumMap(m map[string]int) int {
@@ -92,62 +125,65 @@ func renderAgentStats(th *theme.Theme, stats apimodel.Stats, width int) string {
 	if panelWidth < 24 {
 		panelWidth = 24
 	}
+	const gap = 2
 
-	structurePanel := buildStructurePanel(th, stats, panelWidth)
-	commandsPanel := buildCommandsPanel(th, stats, panelWidth)
-	resourcesPanel := buildResourcesPanel(th, stats, panelWidth)
-
-	sb.WriteString(panelRow(width, structurePanel, commandsPanel, resourcesPanel))
+	sb.WriteString(renderPanelRow(th, width, panelWidth, gap,
+		buildStructurePanel(th, stats),
+		buildCommandsPanel(th, stats),
+		buildResourcesPanel(th, stats),
+	))
 	sb.WriteString("\n")
 
 	// ── Row 2: Resource Types / Plugins / Resource Errors (if non-empty) ─────
-	resourceTypesPanel := buildResourceTypesPanel(th, stats, panelWidth)
-	pluginsPanel := buildPluginsPanel(th, stats, panelWidth)
-
-	row2Panels := []string{resourceTypesPanel, pluginsPanel}
-	if len(stats.ResourceErrors) > 0 {
-		errorsPanel := buildResourceErrorsPanel(th, stats, panelWidth)
-		row2Panels = append(row2Panels, errorsPanel)
+	row2 := []panelSpec{
+		buildResourceTypesPanel(th, stats),
+		buildPluginsPanel(th, stats),
 	}
-
-	sb.WriteString(panelRow(width, row2Panels...))
+	if len(stats.ResourceErrors) > 0 {
+		row2 = append(row2, buildResourceErrorsPanel(th, stats))
+	}
+	sb.WriteString(renderPanelRow(th, width, panelWidth, gap, row2...))
 
 	return sb.String()
 }
 
-func buildStructurePanel(th *theme.Theme, stats apimodel.Stats, width int) string {
+func buildStructurePanel(th *theme.Theme, stats apimodel.Stats) panelSpec {
 	totalTargets := sumMap(stats.Targets)
-	lines := []string{
-		fieldLine(th, "Stacks", fmt.Sprintf("%d", stats.Stacks)),
-		fieldLine(th, "Targets", fmt.Sprintf("%d", totalTargets)),
+	return panelSpec{
+		title: "Structure",
+		color: th.Palette.Border,
+		lines: []string{
+			fieldLine(th, "Stacks", fmt.Sprintf("%d", stats.Stacks)),
+			fieldLine(th, "Targets", fmt.Sprintf("%d", totalTargets)),
+		},
 	}
-	return components.Panel(th, th.Palette.Border, "Structure", lines, width)
 }
 
-func buildCommandsPanel(th *theme.Theme, stats apimodel.Stats, width int) string {
+func buildCommandsPanel(th *theme.Theme, stats apimodel.Stats) panelSpec {
 	totalCommands := sumMap(stats.Commands)
-	successes := stats.States["Success"]
-	failures := stats.States["Failed"]
-	inProgress := stats.States["InProgress"]
 
-	successStr := th.Styles.StatusDone.Render(fmt.Sprintf("%d", successes))
-	failureStr := th.Styles.StatusFailed.Render(fmt.Sprintf("%d", failures))
-	inProgressStr := th.Styles.StatusInProgress.Render(fmt.Sprintf("%d", inProgress))
-
-	successLabel := th.Styles.StatusDone.Render("Successes")
-	failureLabel := th.Styles.StatusFailed.Render("Failures")
-	inProgressLabel := th.Styles.StatusInProgress.Render("In Progress")
-
-	lines := []string{
-		fieldLine(th, "Total", fmt.Sprintf("%d", totalCommands)),
-		styledFieldLine(successLabel, successStr),
-		styledFieldLine(failureLabel, failureStr),
-		styledFieldLine(inProgressLabel, inProgressStr),
+	// A zero count is neutral — nothing to flag — so "Failures  0" no longer
+	// renders in alarming red. A non-zero count gets its semantic color.
+	countLine := func(style lipgloss.Style, label string, n int) string {
+		if n == 0 {
+			return fieldLine(th, label, "0")
+		}
+		return styledFieldLine(style.Render(label), style.Render(fmt.Sprintf("%d", n)))
 	}
-	return components.Panel(th, th.Palette.Border, "Commands", lines, width)
+
+	return panelSpec{
+		title: "Commands",
+		color: th.Palette.Border,
+		lines: []string{
+			fieldLine(th, "Total", fmt.Sprintf("%d", totalCommands)),
+			countLine(th.Styles.StatusDone, "Successes", stats.States["Success"]),
+			countLine(th.Styles.StatusFailed, "Failures", stats.States["Failed"]),
+			countLine(th.Styles.StatusInProgress, "In Progress", stats.States["InProgress"]),
+		},
+	}
 }
 
-func buildResourcesPanel(th *theme.Theme, stats apimodel.Stats, width int) string {
+func buildResourcesPanel(th *theme.Theme, stats apimodel.Stats) panelSpec {
 	totalManaged := sumMap(stats.ManagedResources)
 	totalUnmanaged := sumMap(stats.UnmanagedResources)
 	totalResources := totalManaged + totalUnmanaged
@@ -174,16 +210,19 @@ func buildResourcesPanel(th *theme.Theme, stats apimodel.Stats, width int) strin
 	pctStr := pctStyle.Render(fmt.Sprintf("%s %d%%", unmanagedPctSymbol, p))
 	pctLabel := pctStyle.Render("Unmanaged %")
 
-	lines := []string{
-		fieldLine(th, "Total", fmt.Sprintf("%d", totalResources)),
-		fieldLine(th, "Managed", fmt.Sprintf("%d", totalManaged)),
-		fieldLine(th, "Unmanaged", fmt.Sprintf("%d", totalUnmanaged)),
-		styledFieldLine(pctLabel, pctStr),
+	return panelSpec{
+		title: "Resources",
+		color: th.Palette.Border,
+		lines: []string{
+			fieldLine(th, "Total", fmt.Sprintf("%d", totalResources)),
+			fieldLine(th, "Managed", fmt.Sprintf("%d", totalManaged)),
+			fieldLine(th, "Unmanaged", fmt.Sprintf("%d", totalUnmanaged)),
+			styledFieldLine(pctLabel, pctStr),
+		},
 	}
-	return components.Panel(th, th.Palette.Border, "Resources", lines, width)
 }
 
-func buildResourceTypesPanel(th *theme.Theme, stats apimodel.Stats, width int) string {
+func buildResourceTypesPanel(th *theme.Theme, stats apimodel.Stats) panelSpec {
 	type typeCount struct {
 		name  string
 		count int
@@ -218,10 +257,10 @@ func buildResourceTypesPanel(th *theme.Theme, stats apimodel.Stats, width int) s
 		moreStyle := lipgloss.NewStyle().Foreground(th.Palette.TextSubtle)
 		lines = append(lines, moreStyle.Render(fmt.Sprintf("… and %d more types", overflow)))
 	}
-	return components.Panel(th, th.Palette.Border, "Resource Types", lines, width)
+	return panelSpec{title: "Resource Types", color: th.Palette.Border, lines: lines}
 }
 
-func buildPluginsPanel(th *theme.Theme, stats apimodel.Stats, width int) string {
+func buildPluginsPanel(th *theme.Theme, stats apimodel.Stats) panelSpec {
 	plugins := make([]apimodel.PluginInfo, len(stats.Plugins))
 	copy(plugins, stats.Plugins)
 	sort.Slice(plugins, func(i, j int) bool {
@@ -244,10 +283,10 @@ func buildPluginsPanel(th *theme.Theme, stats apimodel.Stats, width int) string 
 		moreStyle := lipgloss.NewStyle().Foreground(th.Palette.TextSubtle)
 		lines = append(lines, moreStyle.Render(fmt.Sprintf("… and %d more plugins", overflow)))
 	}
-	return components.Panel(th, th.Palette.Border, "Plugins", lines, width)
+	return panelSpec{title: "Plugins", color: th.Palette.Border, lines: lines}
 }
 
-func buildResourceErrorsPanel(th *theme.Theme, stats apimodel.Stats, width int) string {
+func buildResourceErrorsPanel(th *theme.Theme, stats apimodel.Stats) panelSpec {
 	type errCount struct {
 		name  string
 		count int
@@ -282,7 +321,7 @@ func buildResourceErrorsPanel(th *theme.Theme, stats apimodel.Stats, width int) 
 		moreStyle := lipgloss.NewStyle().Foreground(th.Palette.TextSubtle)
 		lines = append(lines, moreStyle.Render(fmt.Sprintf("… and %d more errors", overflow)))
 	}
-	return components.Panel(th, th.Palette.Error, "Resource Errors", lines, width)
+	return panelSpec{title: "Resource Errors", color: th.Palette.Error, lines: lines}
 }
 
 // fieldLine renders a plain label + plain value pair as a styled line.
