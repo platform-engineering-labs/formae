@@ -389,52 +389,48 @@ func replaceInAnsiLine(line string, visStart, visEnd int, styled string) string 
 	return line[:byteStart] + styled + line[byteEnd:]
 }
 
-// highlightHeaderColumn re-renders the header row so the sortHi column's cell
-// carries a Selection background — the →← sort-column highlight. bubbles/table
-// renders the whole header with one uniform TableHeader style, so we can strip
-// it back to plain text and re-render the three segments (before / highlighted /
-// after) from the same style, applying the background only to the middle slice.
-// Columns are packed adjacently at exactly effCols[i].Width visual chars.
-func highlightHeaderColumn(header string, tbl components.Table, effCols []components.Column, sortHi int, th *theme.Theme) string {
-	visIdx := tbl.VisibleColumnIndexes()
-	pos := -1
-	for p, orig := range visIdx {
-		if orig == sortHi {
-			pos = p
-			break
-		}
-	}
-	if pos < 0 {
-		return header // sortHi column is currently hidden (responsive drop)
-	}
-	start := 0
-	for p := 0; p < pos; p++ {
-		if orig := visIdx[p]; orig < len(effCols) {
-			start += effCols[orig].Width
-		}
-	}
-	width := 0
-	if sortHi < len(effCols) {
-		width = effCols[sortHi].Width
-	}
-	runes := []rune(ansi.Strip(header))
-	if width <= 0 || start >= len(runes) {
-		return header
-	}
-	end := start + width
-	if end > len(runes) {
-		end = len(runes)
-	}
-	// Re-render with a border-less style: TableHeader carries a bottom border
-	// (the separator line, rendered separately as the next line), so reusing it
-	// here would emit three stray border fragments. Match its foreground/bold.
-	// The highlighted (sort-target) column is brightened to TextPrimary rather
-	// than given a background, so it stands out without a selection block.
+// highlightHeaderColumn re-renders the header row so both the sorted (active,
+// arrowed) and the cursor (selected) column headers render bright white; the
+// sort arrow alone marks the active one. Every other column stays the dim
+// TableHeader colour. No background and no accent colour — consistent with the
+// status-command (headerRow) and simulate (renderGroupColHeader) headers.
+//
+// bubbles/table renders the whole header with one uniform TableHeader style, so
+// we strip it back to plain text and re-render each column's slice from its
+// width. A border-less style is used deliberately: TableHeader carries a bottom
+// border rendered as the separate next line, so reusing it here would emit stray
+// border fragments. Columns are packed adjacently at exactly effCols[i].Width.
+func highlightHeaderColumn(header string, tbl components.Table, effCols []components.Column, sortHi, sortCol int, th *theme.Theme) string {
 	base := lipgloss.NewStyle().Foreground(th.Palette.TextSecondary).Bold(true)
 	hiStyle := lipgloss.NewStyle().Foreground(th.Palette.TextPrimary).Bold(true)
-	return base.Render(string(runes[:start])) +
-		hiStyle.Render(string(runes[start:end])) +
-		base.Render(string(runes[end:]))
+
+	runes := []rune(ansi.Strip(header))
+	var sb strings.Builder
+	off := 0
+	for _, orig := range tbl.VisibleColumnIndexes() {
+		if off >= len(runes) {
+			break
+		}
+		w := 0
+		if orig < len(effCols) {
+			w = effCols[orig].Width
+		}
+		end := off + w
+		if end > len(runes) {
+			end = len(runes)
+		}
+		slice := string(runes[off:end])
+		if orig == sortHi || orig == sortCol {
+			sb.WriteString(hiStyle.Render(slice))
+		} else {
+			sb.WriteString(base.Render(slice))
+		}
+		off = end
+	}
+	if off < len(runes) {
+		sb.WriteString(base.Render(string(runes[off:])))
+	}
+	return sb.String()
 }
 
 // highlightCursorRow extends the selected row's highlight across the full width.
@@ -529,10 +525,11 @@ func (t tabModel) loadedView(th *theme.Theme, maxRows int) []string {
 	}
 	tableLines = applyCellStyles(tableLines, t.styledCells, tbl, effCols)
 
-	// Highlight the sort-target column header (sortHi) with a background, so the
-	// →← highlight reads like the status-command TUI. The header row is line 0.
+	// Brighten the sorted (active) and cursor (selected) column headers to bright
+	// white — matching the status-command and simulate headers. The header row is
+	// line 0; its separator (with the bottom border) is line 1, left untouched.
 	if th != nil && len(tableLines) > 0 {
-		tableLines[0] = highlightHeaderColumn(tableLines[0], tbl, effCols, t.sortHi, th)
+		tableLines[0] = highlightHeaderColumn(tableLines[0], tbl, effCols, t.sortHi, t.sortCol, th)
 	}
 
 	// Extend the cursor-row highlight across the full width. bubbles/table wraps
