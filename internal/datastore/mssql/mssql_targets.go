@@ -340,6 +340,125 @@ func (d *DatastoreMSSQL) GetUnreachableTargets() ([]*pkgmodel.Target, error) {
 	return targets, rows.Err()
 }
 
+// PersistTargetReap performs the whole target reap in one transaction. See the
+// Datastore interface for the contract. SQL Server compares the native
+// datetime2 grace columns directly, extracts JSON references with JSON_VALUE /
+// OPENJSON, and forces byte-order comparison of KSUID resource versions.
+func (d *DatastoreMSSQL) PersistTargetReap(req datastore.PersistTargetReapRequest) (bool, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "PersistTargetReap")
+	defer span.End()
+
+	tx, err := d.conn.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("begin reap tx: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	// 1. Conditional transition FIRST — the atomic CAS (no locks). Thresholds are
+	//    re-read from the row's OWN persisted columns, never from the request.
+	casRes, err := tx.ExecContext(ctx, `
+		UPDATE targets SET health_state = 'reaped'
+		WHERE label = @p1
+		  AND version = (SELECT MAX(version) FROM targets WHERE label = @p1)
+		  AND target_incarnation_id = @p2
+		  AND health_state = 'unreachable'
+		  AND reap_kind = 'after'
+		  AND unreachable_accum_seconds >= reap_max_unreachable_seconds
+		  AND last_seen_at <= @p3
+		  AND last_sample_at <= @p4`,
+		req.Label, req.IncarnationID, req.LastSeenBefore.UTC(), req.LastSampleBefore.UTC())
+	if err != nil {
+		return false, err
+	}
+	n, err := casRes.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if n != 1 {
+		return false, nil
+	}
+
+	var accumSeconds int64
+	if err = tx.QueryRowContext(ctx,
+		`SELECT unreachable_accum_seconds FROM targets
+		 WHERE label = @p1 AND version = (SELECT MAX(version) FROM targets WHERE label = @p1)`,
+		req.Label,
+	).Scan(&accumSeconds); err != nil {
+		return false, err
+	}
+
+	// 2. Active-command assertion. OPENJSON only runs on values that are JSON
+	//    arrays (the LEFT('[') guard skips the 'null'/scalar target_updates rows).
+	var active int
+	if err = tx.QueryRowContext(ctx, `
+		SELECT CASE WHEN
+		  EXISTS (
+		    SELECT 1 FROM resource_updates ru
+		    JOIN forma_commands fc ON ru.command_id = fc.command_id
+		    WHERE fc.command <> 'sync'
+		      AND fc.state NOT IN ('Success', 'Failed', 'Canceled')
+		      AND ru.resource IS NOT NULL
+		      AND JSON_VALUE(ru.resource, '$.Target') = @p1
+		  )
+		  OR EXISTS (
+		    SELECT 1 FROM forma_commands fc
+		    WHERE fc.command <> 'sync'
+		      AND fc.state NOT IN ('Success', 'Failed', 'Canceled')
+		      AND fc.target_updates IS NOT NULL
+		      AND ISJSON(fc.target_updates) = 1
+		      AND LEFT(LTRIM(fc.target_updates), 1) = '['
+		      AND EXISTS (
+		        SELECT 1 FROM OPENJSON(fc.target_updates)
+		          WITH (tlabel nvarchar(4000) '$.Target.Label') tu
+		        WHERE tu.tlabel = @p1
+		      )
+		  )
+		THEN 1 ELSE 0 END`, req.Label).Scan(&active); err != nil {
+		return false, err
+	}
+	if active == 1 {
+		return false, nil
+	}
+
+	// 3. Tombstone every current-row resource on this target.
+	tombRes, err := tx.ExecContext(ctx, fmt.Sprintf(`
+		UPDATE resources SET operation = 'reaped'
+		WHERE target = @p1
+		  AND operation <> 'delete' AND operation <> 'reaped'
+		  AND NOT EXISTS (
+		    SELECT 1 FROM resources r2
+		    WHERE r2.uri = resources.uri
+		    AND r2.version %[1]s > resources.version %[1]s
+		  )`, binColl), req.Label)
+	if err != nil {
+		return false, err
+	}
+	resourceCount, err := tombRes.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+
+	// 4. Insert the UNIQUE audit row.
+	if _, err = tx.ExecContext(ctx,
+		`INSERT INTO target_reap_audit (incarnation_id, label, reaped_at, accum_seconds, resource_count)
+		 VALUES (@p1, @p2, @p3, @p4, @p5)`,
+		req.IncarnationID, req.Label, req.ReapedAt.UTC(), accumSeconds, resourceCount,
+	); err != nil {
+		return false, err
+	}
+
+	if err = tx.Commit(); err != nil {
+		return false, err
+	}
+	committed = true
+	return true, nil
+}
+
 func (d *DatastoreMSSQL) LoadTarget(label string) (*pkgmodel.Target, error) {
 	ctx, span := mssqlTracer.Start(context.Background(), "LoadTarget")
 	defer span.End()

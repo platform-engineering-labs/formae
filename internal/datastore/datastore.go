@@ -126,6 +126,29 @@ type StackReconcileInfo struct {
 	LastReconcileAt time.Time
 }
 
+// PersistTargetReapRequest carries everything the reap transaction needs to
+// evaluate the conditional-transition CAS and write the audit row. The
+// per-target reap thresholds (reap_kind, reap_max_unreachable_seconds) are NOT
+// in the request: they are re-read from the target's own persisted row inside
+// the transaction so a stale caller cannot force a reap against a behaviour the
+// target no longer carries.
+type PersistTargetReapRequest struct {
+	// Label identifies the target to reap.
+	Label string
+	// IncarnationID is the incarnation the caller observed. The CAS requires the
+	// target's current row to still carry this incarnation, so a stale reaper
+	// (target reaped then recovered to a fresh incarnation) reaps nothing.
+	IncarnationID string
+	// LastSeenBefore is the grace cutoff for last_seen_at: the CAS requires
+	// last_seen_at <= this instant.
+	LastSeenBefore time.Time
+	// LastSampleBefore is the grace cutoff for last_sample_at: the CAS requires
+	// last_sample_at <= this instant.
+	LastSampleBefore time.Time
+	// ReapedAt is the reap instant recorded in the audit row.
+	ReapedAt time.Time
+}
+
 // ResourceSnapshot contains resource state at a point in time.
 type ResourceSnapshot struct {
 	KSUID      string
@@ -254,6 +277,21 @@ type Datastore interface {
 	// health_state is 'unreachable', with Health fully populated. Used by the
 	// TargetReaper to compute per-tick accrual and detect reap candidates.
 	GetUnreachableTargets() ([]*pkgmodel.Target, error)
+	// PersistTargetReap performs the whole target reap in one transaction:
+	//  1. a conditional transition (the atomic CAS, no locks) that flips the
+	//     target's current row from 'unreachable' to 'reaped' only when it still
+	//     matches the request's incarnation and the target's OWN persisted
+	//     reap_kind='after', accrued unreachable time >= its threshold, and the
+	//     grace cutoffs hold. If rows-affected != 1 nothing is reaped;
+	//  2. an assertion that no incomplete forma_command touches the target's
+	//     label (across all stacks); if any does, nothing is reaped;
+	//  3. tombstoning every current-row resource on that target with the reaped
+	//     marker;
+	//  4. inserting a UNIQUE audit row.
+	// Returns reaped=true only when the reap committed; a rejected CAS or a
+	// failed assertion rolls back and returns reaped=false with no error.
+	// Idempotent: a second call for an already-reaped incarnation reaps nothing.
+	PersistTargetReap(req PersistTargetReapRequest) (reaped bool, err error)
 
 	// Stats returns aggregated statistics about the datastore contents
 	Stats() (*stats.Stats, error)

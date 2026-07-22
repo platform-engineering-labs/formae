@@ -2889,6 +2889,128 @@ func (d DatastoreSQLite) GetUnreachableTargets() ([]*pkgmodel.Target, error) {
 	return targets, rows.Err()
 }
 
+// PersistTargetReap performs the whole target reap in one transaction. See the
+// Datastore interface for the contract. SQLite compares the text-stored grace
+// timestamps via julianday() (mirroring UpdateTargetHealth) so fractional-second
+// formatting can't skew the comparison.
+func (d DatastoreSQLite) PersistTargetReap(req datastore.PersistTargetReapRequest) (bool, error) {
+	_, span := sqliteTracer.Start(context.Background(), "PersistTargetReap")
+	defer span.End()
+
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return false, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	lastSeenBefore := req.LastSeenBefore.UTC().Format(time.RFC3339Nano)
+	lastSampleBefore := req.LastSampleBefore.UTC().Format(time.RFC3339Nano)
+
+	// 1. Conditional transition FIRST — the atomic CAS (no locks). The reap
+	//    thresholds are re-read from the row's OWN persisted columns, never
+	//    trusted from the request.
+	casQuery := `
+		UPDATE targets SET health_state = 'reaped'
+		WHERE label = ?
+		  AND version = (SELECT MAX(version) FROM targets WHERE label = ?)
+		  AND target_incarnation_id = ?
+		  AND health_state = 'unreachable'
+		  AND reap_kind = 'after'
+		  AND unreachable_accum_seconds >= reap_max_unreachable_seconds
+		  AND julianday(last_seen_at) <= julianday(?)
+		  AND julianday(last_sample_at) <= julianday(?)`
+	casRes, err := tx.Exec(casQuery, req.Label, req.Label, req.IncarnationID, lastSeenBefore, lastSampleBefore)
+	if err != nil {
+		return false, err
+	}
+	n, err := casRes.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if n != 1 {
+		// Not eligible, stale, or already reaped: reap nothing.
+		return false, nil
+	}
+
+	// Read the accrued seconds for the audit row.
+	var accumSeconds int64
+	if err = tx.QueryRow(
+		`SELECT unreachable_accum_seconds FROM targets
+		 WHERE label = ? AND version = (SELECT MAX(version) FROM targets WHERE label = ?)`,
+		req.Label, req.Label,
+	).Scan(&accumSeconds); err != nil {
+		return false, err
+	}
+
+	// 2. Active-command assertion: no incomplete (non-sync) forma_command may
+	//    touch this target label, via a resource_update's resource target or a
+	//    target-update op, across all stacks.
+	var active bool
+	if err = tx.QueryRow(`
+		SELECT
+		  EXISTS (
+		    SELECT 1 FROM resource_updates ru
+		    JOIN forma_commands fc ON ru.command_id = fc.command_id
+		    WHERE fc.command != 'sync'
+		      AND fc.state NOT IN ('Success', 'Failed', 'Canceled')
+		      AND json_extract(ru.resource, '$.Target') = ?
+		  )
+		  OR EXISTS (
+		    SELECT 1 FROM forma_commands fc
+		    WHERE fc.command != 'sync'
+		      AND fc.state NOT IN ('Success', 'Failed', 'Canceled')
+		      AND fc.target_updates IS NOT NULL
+		      AND EXISTS (
+		        SELECT 1 FROM json_each(fc.target_updates) je
+		        WHERE json_extract(je.value, '$.Target.Label') = ?
+		      )
+		  )`, req.Label, req.Label).Scan(&active); err != nil {
+		return false, err
+	}
+	if active {
+		// An in-flight command owns this target; abandon the reap.
+		return false, nil
+	}
+
+	// 3. Tombstone every current-row resource on this target (skipping rows that
+	//    are already delete/reaped tombstones).
+	tombRes, err := tx.Exec(`
+		UPDATE resources SET operation = 'reaped'
+		WHERE target = ?
+		  AND operation != ? AND operation != 'reaped'
+		  AND NOT EXISTS (
+		    SELECT 1 FROM resources r2
+		    WHERE r2.uri = resources.uri AND r2.version > resources.version
+		  )`, req.Label, resource_update.OperationDelete)
+	if err != nil {
+		return false, err
+	}
+	resourceCount, err := tombRes.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+
+	// 4. Insert the UNIQUE audit row.
+	if _, err = tx.Exec(
+		`INSERT INTO target_reap_audit (incarnation_id, label, reaped_at, accum_seconds, resource_count)
+		 VALUES (?, ?, ?, ?, ?)`,
+		req.IncarnationID, req.Label, req.ReapedAt.UTC().Format(time.RFC3339Nano), accumSeconds, resourceCount,
+	); err != nil {
+		return false, err
+	}
+
+	if err = tx.Commit(); err != nil {
+		return false, err
+	}
+	committed = true
+	return true, nil
+}
+
 // scanSQLiteTargetHealth reads the health columns from a scan result and returns
 // a populated TargetHealth. nullTimestamp is a sql.NullString holding an ISO-8601
 // timestamp string as SQLite stores datetimes as text.

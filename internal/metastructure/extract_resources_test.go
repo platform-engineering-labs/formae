@@ -253,6 +253,10 @@ func (m *mockExtractDatastore) GetUnreachableTargets() ([]*pkgmodel.Target, erro
 	panic("not implemented")
 }
 
+func (m *mockExtractDatastore) PersistTargetReap(_ datastore.PersistTargetReapRequest) (bool, error) {
+	panic("not implemented")
+}
+
 func TestExtractResources_ManagedAndUnmanagedStacks(t *testing.T) {
 	managedStack := &pkgmodel.Stack{
 		Label:       "my-stack",

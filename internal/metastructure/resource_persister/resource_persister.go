@@ -93,6 +93,18 @@ func (rp *ResourcePersister) HandleCall(from gen.PID, ref gen.Ref, request any) 
 		return versions, nil
 	case messages.LoadResource:
 		return rp.loadResource(req.ResourceURI)
+	case messages.PersistTargetReap:
+		reaped, err := rp.datastore.PersistTargetReap(datastore.PersistTargetReapRequest{
+			Label:            req.Label,
+			IncarnationID:    req.IncarnationID,
+			LastSeenBefore:   req.LastSeenBefore,
+			LastSampleBefore: req.LastSampleBefore,
+			ReapedAt:         req.ReapedAt,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return messages.PersistTargetReapResult{Reaped: reaped}, nil
 	default:
 		rp.Log().Error("ResourcePersister: unknown request type=%s", fmt.Sprintf("%T", request))
 		return nil, fmt.Errorf("resource persister: unknown request type %T", request)

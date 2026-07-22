@@ -3716,6 +3716,113 @@ func (d DatastorePostgres) GetUnreachableTargets() ([]*pkgmodel.Target, error) {
 	return targets, rows.Err()
 }
 
+// PersistTargetReap performs the whole target reap in one transaction. See the
+// Datastore interface for the contract. Postgres compares the native
+// timestamptz grace columns directly and extracts JSON references with jsonb
+// operators (the resource/target_updates columns are TEXT, so they are cast).
+func (d DatastorePostgres) PersistTargetReap(req datastore.PersistTargetReapRequest) (bool, error) {
+	ctx, span := tracer.Start(context.Background(), "PersistTargetReap")
+	defer span.End()
+
+	tx, err := d.pool.Begin(ctx)
+	if err != nil {
+		return false, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+
+	// 1. Conditional transition FIRST — the atomic CAS (no locks). Thresholds are
+	//    re-read from the row's OWN persisted columns, never from the request.
+	casTag, err := tx.Exec(ctx, `
+		UPDATE targets SET health_state = 'reaped'
+		WHERE label = $1
+		  AND version = (SELECT MAX(version) FROM targets WHERE label = $1)
+		  AND target_incarnation_id = $2
+		  AND health_state = 'unreachable'
+		  AND reap_kind = 'after'
+		  AND unreachable_accum_seconds >= reap_max_unreachable_seconds
+		  AND last_seen_at <= $3
+		  AND last_sample_at <= $4`,
+		req.Label, req.IncarnationID, req.LastSeenBefore.UTC(), req.LastSampleBefore.UTC())
+	if err != nil {
+		return false, err
+	}
+	if casTag.RowsAffected() != 1 {
+		return false, nil
+	}
+
+	var accumSeconds int64
+	if err = tx.QueryRow(ctx,
+		`SELECT unreachable_accum_seconds FROM targets
+		 WHERE label = $1 AND version = (SELECT MAX(version) FROM targets WHERE label = $1)`,
+		req.Label,
+	).Scan(&accumSeconds); err != nil {
+		return false, err
+	}
+
+	// 2. Active-command assertion.
+	var active bool
+	if err = tx.QueryRow(ctx, `
+		SELECT
+		  EXISTS (
+		    SELECT 1 FROM resource_updates ru
+		    JOIN forma_commands fc ON ru.command_id = fc.command_id
+		    WHERE fc.command <> 'sync'
+		      AND fc.state NOT IN ('Success', 'Failed', 'Canceled')
+		      AND ru.resource IS NOT NULL
+		      AND (ru.resource::jsonb ->> 'Target') = $1
+		  )
+		  OR EXISTS (
+		    SELECT 1 FROM forma_commands fc
+		    WHERE fc.command <> 'sync'
+		      AND fc.state NOT IN ('Success', 'Failed', 'Canceled')
+		      AND fc.target_updates IS NOT NULL
+		      AND jsonb_typeof(fc.target_updates::jsonb) = 'array'
+		      AND EXISTS (
+		        SELECT 1 FROM jsonb_array_elements(fc.target_updates::jsonb) e
+		        WHERE (e -> 'Target' ->> 'Label') = $1
+		      )
+		  )`, req.Label).Scan(&active); err != nil {
+		return false, err
+	}
+	if active {
+		return false, nil
+	}
+
+	// 3. Tombstone every current-row resource on this target.
+	tombTag, err := tx.Exec(ctx, `
+		UPDATE resources SET operation = 'reaped'
+		WHERE target = $1
+		  AND operation <> 'delete' AND operation <> 'reaped'
+		  AND NOT EXISTS (
+		    SELECT 1 FROM resources r2
+		    WHERE r2.uri = resources.uri AND r2.version > resources.version
+		  )`, req.Label)
+	if err != nil {
+		return false, err
+	}
+	resourceCount := tombTag.RowsAffected()
+
+	// 4. Insert the UNIQUE audit row.
+	if _, err = tx.Exec(ctx,
+		`INSERT INTO target_reap_audit (incarnation_id, label, reaped_at, accum_seconds, resource_count)
+		 VALUES ($1, $2, $3, $4, $5)`,
+		req.IncarnationID, req.Label, req.ReapedAt.UTC(), accumSeconds, resourceCount,
+	); err != nil {
+		return false, err
+	}
+
+	if err = tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	committed = true
+	return true, nil
+}
+
 func (d DatastorePostgres) DeleteTarget(targetLabel string) (string, error) {
 	ctx, span := tracer.Start(context.Background(), "DeleteTarget")
 	defer span.End()

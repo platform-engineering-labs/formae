@@ -1376,6 +1376,77 @@ func TestResourcePersister_UpdateTargetHealth(t *testing.T) {
 	}, 5*time.Second, 50*time.Millisecond, "datastore must reflect the health observation sent to the actor")
 }
 
+func TestResourcePersister_PersistTargetReap(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+
+	const label = "reap-actor-target"
+	const stack = "reap-actor-stack"
+
+	_, err = ds.CreateTarget(&pkgmodel.Target{
+		Label:     label,
+		Namespace: "AWS",
+		Config:    json.RawMessage(`{"Region":"us-east-1"}`),
+		Reaping:   json.RawMessage(`{"Kind":"after","MaxUnreachableSeconds":100}`),
+	})
+	require.NoError(t, err)
+
+	loaded, err := ds.LoadTarget(label)
+	require.NoError(t, err)
+	require.NotNil(t, loaded.Health)
+	inc := loaded.Health.IncarnationID
+
+	seenAt := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Second)
+	observedAt := time.Now().UTC().Add(-90 * time.Minute).Truncate(time.Second)
+	applied, err := ds.UpdateTargetHealth(pkgmodel.TargetHealthObservation{
+		TargetLabel:   label,
+		State:         pkgmodel.TargetHealthStateUnreachable,
+		ObservedAt:    observedAt,
+		LastSeenAt:    &seenAt,
+		IncarnationID: inc,
+	})
+	require.NoError(t, err)
+	require.True(t, applied)
+	sampleAt := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	applied, err = ds.AdvanceTargetAccrual(label, inc, sampleAt, 100)
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	res := &pkgmodel.Resource{
+		Ksuid:      util.NewID(),
+		NativeID:   "native-reap-actor",
+		Stack:      stack,
+		Type:       "AWS::S3::Bucket",
+		Label:      "bucket",
+		Target:     label,
+		Managed:    true,
+		Properties: json.RawMessage(`{"key":"value"}`),
+	}
+	_, err = ds.StoreResource(res, "cmd-create")
+	require.NoError(t, err)
+
+	result := persister.Call(sender, messages.PersistTargetReap{
+		Label:            label,
+		IncarnationID:    inc,
+		LastSeenBefore:   time.Now().UTC(),
+		LastSampleBefore: time.Now().UTC(),
+		ReapedAt:         time.Now().UTC(),
+	})
+	require.NoError(t, result.Error)
+	reapResult, ok := result.Response.(messages.PersistTargetReapResult)
+	require.True(t, ok, "handler must reply with PersistTargetReapResult, got %T", result.Response)
+	assert.True(t, reapResult.Reaped, "an over-threshold unreachable target must reap")
+
+	reloaded, err := ds.LoadTarget(label)
+	require.NoError(t, err)
+	require.NotNil(t, reloaded.Health)
+	assert.Equal(t, pkgmodel.TargetHealthStateReaped, reloaded.Health.State)
+
+	live, err := ds.LoadResourcesByStack(stack)
+	require.NoError(t, err)
+	assert.Empty(t, live, "the reaped target's resources must be invisible to live queries")
+}
+
 func newResourcePersisterForTest(t *testing.T) (*unit.TestActor, gen.PID, datastore.Datastore, error) {
 	// Create an in-memory datastore for testing
 	ds, err := newTestDatastore()

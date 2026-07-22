@@ -73,6 +73,14 @@ func TestDatastore(t *testing.T) {
 				}
 				return op, err
 			},
+			CountReapAuditRowsForTest: func(label string) (int, error) {
+				conn := d.Conn()
+				var n int
+				err := conn.QueryRow(
+					`SELECT COUNT(*) FROM target_reap_audit WHERE label = ?`, label,
+				).Scan(&n)
+				return n, err
+			},
 		}
 	})
 }

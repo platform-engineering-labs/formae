@@ -2511,6 +2511,141 @@ func (d *DatastoreAuroraDataAPI) GetUnreachableTargets() ([]*pkgmodel.Target, er
 	return targets, nil
 }
 
+// PersistTargetReap performs the whole target reap in one transaction. See the
+// Datastore interface for the contract. Aurora uses postgres SQL over the RDS
+// Data API: timestamp grace columns compared via ::timestamptz casts, JSON
+// references extracted with jsonb operators, and KSUID resource versions
+// compared with COLLATE "C".
+func (d *DatastoreAuroraDataAPI) PersistTargetReap(req datastore.PersistTargetReapRequest) (bool, error) {
+	ctx := context.Background()
+
+	txID, err := d.beginTransaction(ctx)
+	if err != nil {
+		return false, fmt.Errorf("begin reap tx: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = d.rollbackTransaction(ctx, txID)
+		}
+	}()
+
+	// 1. Conditional transition FIRST — the atomic CAS (no locks). Thresholds are
+	//    re-read from the row's OWN persisted columns, never from the request.
+	casSQL := `
+		UPDATE targets SET health_state = 'reaped'
+		WHERE label = :label
+		  AND version = (SELECT MAX(version) FROM targets WHERE label = :label)
+		  AND target_incarnation_id = :incarnation
+		  AND health_state = 'unreachable'
+		  AND reap_kind = 'after'
+		  AND unreachable_accum_seconds >= reap_max_unreachable_seconds
+		  AND last_seen_at <= :last_seen_before::timestamptz
+		  AND last_sample_at <= :last_sample_before::timestamptz`
+	casParams := []types.SqlParameter{
+		{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: req.Label}},
+		{Name: aws.String("incarnation"), Value: &types.FieldMemberStringValue{Value: req.IncarnationID}},
+		{Name: aws.String("last_seen_before"), Value: &types.FieldMemberStringValue{Value: req.LastSeenBefore.UTC().Format(time.RFC3339Nano)}},
+		{Name: aws.String("last_sample_before"), Value: &types.FieldMemberStringValue{Value: req.LastSampleBefore.UTC().Format(time.RFC3339Nano)}},
+	}
+	casOut, err := d.executeStatementInTransaction(ctx, txID, casSQL, casParams)
+	if err != nil {
+		return false, err
+	}
+	if casOut.NumberOfRecordsUpdated != 1 {
+		return false, nil
+	}
+
+	labelParam := []types.SqlParameter{
+		{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: req.Label}},
+	}
+
+	accumOut, err := d.executeStatementInTransaction(ctx, txID,
+		`SELECT unreachable_accum_seconds FROM targets
+		 WHERE label = :label AND version = (SELECT MAX(version) FROM targets WHERE label = :label)`,
+		labelParam)
+	if err != nil {
+		return false, err
+	}
+	var accumSeconds int64
+	if len(accumOut.Records) > 0 && len(accumOut.Records[0]) > 0 {
+		if lv, ok := accumOut.Records[0][0].(*types.FieldMemberLongValue); ok {
+			accumSeconds = lv.Value
+		}
+	}
+
+	// 2. Active-command assertion.
+	activeOut, err := d.executeStatementInTransaction(ctx, txID, `
+		SELECT (CASE WHEN
+		  EXISTS (
+		    SELECT 1 FROM resource_updates ru
+		    JOIN forma_commands fc ON ru.command_id = fc.command_id
+		    WHERE fc.command <> 'sync'
+		      AND fc.state NOT IN ('Success', 'Failed', 'Canceled')
+		      AND ru.resource IS NOT NULL
+		      AND (ru.resource::jsonb ->> 'Target') = :label
+		  )
+		  OR EXISTS (
+		    SELECT 1 FROM forma_commands fc
+		    WHERE fc.command <> 'sync'
+		      AND fc.state NOT IN ('Success', 'Failed', 'Canceled')
+		      AND fc.target_updates IS NOT NULL
+		      AND jsonb_typeof(fc.target_updates::jsonb) = 'array'
+		      AND EXISTS (
+		        SELECT 1 FROM jsonb_array_elements(fc.target_updates::jsonb) e
+		        WHERE (e -> 'Target' ->> 'Label') = :label
+		      )
+		  )
+		THEN 1 ELSE 0 END)`, labelParam)
+	if err != nil {
+		return false, err
+	}
+	var active int64
+	if len(activeOut.Records) > 0 && len(activeOut.Records[0]) > 0 {
+		if lv, ok := activeOut.Records[0][0].(*types.FieldMemberLongValue); ok {
+			active = lv.Value
+		}
+	}
+	if active == 1 {
+		return false, nil
+	}
+
+	// 3. Tombstone every current-row resource on this target.
+	tombOut, err := d.executeStatementInTransaction(ctx, txID, `
+		UPDATE resources SET operation = 'reaped'
+		WHERE target = :label
+		  AND operation <> 'delete' AND operation <> 'reaped'
+		  AND NOT EXISTS (
+		    SELECT 1 FROM resources r2
+		    WHERE r2.uri = resources.uri
+		    AND r2.version COLLATE "C" > resources.version COLLATE "C"
+		  )`, labelParam)
+	if err != nil {
+		return false, err
+	}
+	resourceCount := tombOut.NumberOfRecordsUpdated
+
+	// 4. Insert the UNIQUE audit row.
+	if _, err = d.executeStatementInTransaction(ctx, txID,
+		`INSERT INTO target_reap_audit (incarnation_id, label, reaped_at, accum_seconds, resource_count)
+		 VALUES (:incarnation, :label, :reaped_at::timestamptz, :accum, :count)`,
+		[]types.SqlParameter{
+			{Name: aws.String("incarnation"), Value: &types.FieldMemberStringValue{Value: req.IncarnationID}},
+			{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: req.Label}},
+			{Name: aws.String("reaped_at"), Value: &types.FieldMemberStringValue{Value: req.ReapedAt.UTC().Format(time.RFC3339Nano)}},
+			{Name: aws.String("accum"), Value: &types.FieldMemberLongValue{Value: accumSeconds}},
+			{Name: aws.String("count"), Value: &types.FieldMemberLongValue{Value: resourceCount}},
+		}); err != nil {
+		return false, err
+	}
+
+	if err = d.commitTransaction(ctx, txID); err != nil {
+		return false, err
+	}
+	committed = true
+	return true, nil
+}
+
 func (d *DatastoreAuroraDataAPI) LoadTarget(targetLabel string) (*pkgmodel.Target, error) {
 	ctx := context.Background()
 

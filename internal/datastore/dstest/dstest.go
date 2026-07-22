@@ -48,6 +48,11 @@ type TestDatastore struct {
 	// in the table. Backends that don't provide it leave it nil and the relevant
 	// tests t.Skip().
 	RawResourceOperationForTest func(uri string) (string, error)
+	// CountReapAuditRowsForTest returns the number of target_reap_audit rows for
+	// the given label. Used to prove exactly one audit row is written per reap
+	// and none on a rejected/no-op reap. Backends that don't provide it leave it
+	// nil and the relevant assertions are skipped.
+	CountReapAuditRowsForTest func(label string) (int, error)
 }
 
 // RunAll runs the full datastore test suite against the provided factory.
@@ -115,6 +120,9 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunSuccessObservationZeroesAccrual(t, newDS)
 	RunAdvanceTargetAccrual(t, newDS)
 	RunGetUnreachableTargets(t, newDS)
+	RunPersistTargetReapHappyPath(t, newDS)
+	RunPersistTargetReapGuards(t, newDS)
+	RunPersistTargetReapConcurrent(t, newDS)
 
 	RunCreateStack(t, newDS)
 	RunCreateStackAlreadyExists(t, newDS)
