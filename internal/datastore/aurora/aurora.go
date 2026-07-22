@@ -2312,7 +2312,8 @@ func (d *DatastoreAuroraDataAPI) UpdateTarget(target *pkgmodel.Target) (string, 
 
 	// Recovery: a reaped current row is brought back to life on re-declare —
 	// fresh incarnation, health reset to 'unknown', accrual and timestamps cleared.
-	if healthState == pkgmodel.TargetHealthStateReaped {
+	recovered := healthState == pkgmodel.TargetHealthStateReaped
+	if recovered {
 		incarnationID = mksuid.New().String()
 		healthState = pkgmodel.TargetHealthStateUnknown
 		lastSeenAtParam = &types.FieldMemberIsNull{Value: true}
@@ -2379,6 +2380,29 @@ func (d *DatastoreAuroraDataAPI) UpdateTarget(target *pkgmodel.Target) (string, 
 	if err != nil {
 		slog.Error("failed to update target", "error", err, "label", target.Label, "version", newVersion)
 		return "", err
+	}
+
+	// Recovery: un-reap the target's tombstoned resource rows and stamp them with
+	// the fresh incarnation, so a subsequent re-adopt write is accepted rather than
+	// rejected as a reaped tombstone. See the SQLite UpdateTarget for the rationale.
+	if recovered {
+		unreapQuery := `
+		UPDATE resources SET operation = :operation, target_incarnation_id = :incarnation
+		WHERE target = :target
+		  AND operation = 'reaped'
+		  AND NOT EXISTS (
+		    SELECT 1 FROM resources r2
+		    WHERE r2.uri = resources.uri AND r2.version > resources.version
+		  )`
+		unreapParams := []types.SqlParameter{
+			{Name: aws.String("operation"), Value: &types.FieldMemberStringValue{Value: string(resource_update.OperationUpdate)}},
+			{Name: aws.String("incarnation"), Value: &types.FieldMemberStringValue{Value: incarnationID}},
+			{Name: aws.String("target"), Value: &types.FieldMemberStringValue{Value: target.Label}},
+		}
+		if _, err = d.executeStatement(ctx, unreapQuery, unreapParams); err != nil {
+			slog.Error("failed to un-reap resources on target recovery", "error", err, "label", target.Label)
+			return "", err
+		}
 	}
 
 	return fmt.Sprintf("%s_%d", target.Label, newVersion), nil

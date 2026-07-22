@@ -368,7 +368,9 @@ func RunPersistTargetReapGuards(t *testing.T, newDS func(t *testing.T) TestDatas
 		require.NoError(t, err)
 		require.True(t, applied)
 
-		// A live resource on the fresh incarnation.
+		// A live resource on the fresh incarnation. Recovery already un-reaped the
+		// original resource and re-stamped it with the fresh incarnation, so the
+		// stack now holds two live resources on that incarnation.
 		newRes := reapSuiteResource(util.NewID(), "bucket-new", stack, label)
 		_, err = ds.StoreResource(newRes, "cmd-create-new", newInc)
 		require.NoError(t, err)
@@ -391,7 +393,7 @@ func RunPersistTargetReapGuards(t *testing.T, newDS func(t *testing.T) TestDatas
 			"the new incarnation's resource must not be tombstoned by a stale reap")
 		live, err := ds.LoadResourcesByStack(stack)
 		require.NoError(t, err)
-		require.Len(t, live, 1, "the fresh incarnation's resource must remain live")
+		require.Len(t, live, 2, "the recovered and the fresh-incarnation resource must both remain live")
 
 		// Still exactly one audit row (from the first, real reap).
 		if td.CountReapAuditRowsForTest != nil {

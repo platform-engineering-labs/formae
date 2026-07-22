@@ -3577,7 +3577,8 @@ func (d DatastorePostgres) UpdateTarget(target *pkgmodel.Target) (string, error)
 	newLastSampleAt := lastSampleAt
 	newUnreachableAccumSeconds := safeInt64(unreachableAccumSeconds)
 	newLastErrorCode := lastErrorCode
-	if safeStr(healthState) == pkgmodel.TargetHealthStateReaped {
+	recovered := safeStr(healthState) == pkgmodel.TargetHealthStateReaped
+	if recovered {
 		newIncarnationID = mksuid.New().String()
 		newHealthState = pkgmodel.TargetHealthStateUnknown
 		newLastSeenAt = nil
@@ -3600,6 +3601,24 @@ func (d DatastorePostgres) UpdateTarget(target *pkgmodel.Target) (string, error)
 	if err != nil {
 		slog.Error("failed to update target", "error", err, "label", target.Label, "version", newVersion)
 		return "", err
+	}
+
+	// Recovery: un-reap the target's tombstoned resource rows and stamp them with
+	// the fresh incarnation, so a subsequent re-adopt write is accepted rather than
+	// rejected as a reaped tombstone. See the SQLite UpdateTarget for the rationale.
+	if recovered {
+		if _, err = d.pool.Exec(ctx, `
+			UPDATE resources SET operation = $1, target_incarnation_id = $2
+			WHERE target = $3
+			  AND operation = 'reaped'
+			  AND NOT EXISTS (
+			    SELECT 1 FROM resources r2
+			    WHERE r2.uri = resources.uri AND r2.version > resources.version
+			  )`,
+			string(resource_update.OperationUpdate), newIncarnationID, target.Label); err != nil {
+			slog.Error("failed to un-reap resources on target recovery", "error", err, "label", target.Label)
+			return "", err
+		}
 	}
 
 	return fmt.Sprintf("%s_%d", target.Label, newVersion), nil

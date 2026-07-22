@@ -124,6 +124,7 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunPersistTargetReapGuards(t, newDS)
 	RunPersistTargetReapConcurrent(t, newDS)
 	RunCheckTargetsReaped(t, newDS)
+	RunUpdateTargetUnreapsResourcesOnRecovery(t, newDS)
 
 	RunCreateStack(t, newDS)
 	RunCreateStackAlreadyExists(t, newDS)

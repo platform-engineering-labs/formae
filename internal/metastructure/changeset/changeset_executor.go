@@ -399,6 +399,18 @@ func targetUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, mess
 		}
 	}
 
+	// When the completed target update recovered a reaped target, its dependent
+	// resource updates were generated against the pre-recovery (reaped) incarnation.
+	// The recover update has now minted a fresh incarnation and un-reaped the
+	// target's resource rows, so drop the stale incarnation expectation from those
+	// pending resource updates or the resource-write guard would reject the
+	// recovery command's own re-adopts.
+	if message.State == target_update.TargetUpdateStateSuccess {
+		if tu, ok := node.Update.(*target_update.TargetUpdate); ok && targetUpdateRecoveredReaped(tu) {
+			data.changeset.DAG.clearTargetIncarnationOnResources(tu.Target.Label)
+		}
+	}
+
 	return handleUpdateFinished(from, state, data, updateFinishedEvent{
 		nodeURI:   message.NodeURI,
 		isSuccess: message.State == target_update.TargetUpdateStateSuccess,
@@ -858,6 +870,17 @@ func cancelWhileCanceling(from gen.PID, state gen.Atom, data ChangesetData, mess
 
 func shutdown(from gen.PID, state gen.Atom, data ChangesetData, shutdown Shutdown, proc gen.Process) (gen.Atom, ChangesetData, []statemachine.Action, error) {
 	return state, data, nil, gen.TerminateReasonNormal
+}
+
+// targetUpdateRecoveredReaped reports whether a completed target update recovered
+// a reaped target: the target existed and its pre-update row was in the reaped
+// health state. Such an update mints a fresh incarnation and un-reaps the
+// target's resources, so its dependent resource updates must have their stale
+// incarnation expectation cleared.
+func targetUpdateRecoveredReaped(tu *target_update.TargetUpdate) bool {
+	return tu.ExistingTarget != nil &&
+		tu.ExistingTarget.Health != nil &&
+		tu.ExistingTarget.Health.State == pkgmodel.TargetHealthStateReaped
 }
 
 // changesetHasUserUpdates checks if the changeset contains any updates from user operations.

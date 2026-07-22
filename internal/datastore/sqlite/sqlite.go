@@ -2690,7 +2690,8 @@ func (d DatastoreSQLite) UpdateTarget(target *pkgmodel.Target) (string, error) {
 	newLastSampleAt := lastSampleAt
 	newUnreachableAccumSeconds := unreachableAccumSeconds.Int64
 	newLastErrorCode := lastErrorCode
-	if healthState.String == pkgmodel.TargetHealthStateReaped {
+	recovered := healthState.String == pkgmodel.TargetHealthStateReaped
+	if recovered {
 		newIncarnationID = mksuid.New().String()
 		newHealthState = pkgmodel.TargetHealthStateUnknown
 		newLastSeenAt = sql.NullString{}
@@ -2716,6 +2717,28 @@ func (d DatastoreSQLite) UpdateTarget(target *pkgmodel.Target) (string, error) {
 	if err != nil {
 		slog.Error("Failed to update target", "error", err, "label", target.Label, "version", newVersion)
 		return "", err
+	}
+
+	// Recovery: bring the reaped target's tombstoned resource rows back to life
+	// and stamp them with the fresh incarnation. Reaping flipped each current-row
+	// resource on this target to the 'reaped' marker in place; recovery reverses
+	// that so the resources are visible again and any subsequent re-adopt write
+	// (which now carries — or, post-crash, omits — the fresh incarnation) is
+	// accepted by the resource-write guard instead of being rejected as a
+	// tombstone. Delete tombstones are left untouched.
+	if recovered {
+		if _, err = d.conn.Exec(`
+			UPDATE resources SET operation = ?, target_incarnation_id = ?
+			WHERE target = ?
+			  AND operation = 'reaped'
+			  AND NOT EXISTS (
+			    SELECT 1 FROM resources r2
+			    WHERE r2.uri = resources.uri AND r2.version > resources.version
+			  )`,
+			string(resource_update.OperationUpdate), newIncarnationID, target.Label); err != nil {
+			slog.Error("Failed to un-reap resources on target recovery", "error", err, "label", target.Label)
+			return "", err
+		}
 	}
 
 	return fmt.Sprintf("%s_%d", target.Label, newVersion), nil
