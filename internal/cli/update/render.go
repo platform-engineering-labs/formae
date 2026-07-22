@@ -34,14 +34,17 @@ func renderVersionList(th *theme.Theme, installed string, installedDate time.Tim
 
 	var sb strings.Builder
 
-	// Header line: "Installed: <version>  (<yyyy-mm-dd>)"
-	dateStr := installedDate.Format("2006-01-02")
-	sb.WriteString(
-		labelStyle.Render("Installed:") + " " +
-			valueStyle.Render(installed) + "  " +
-			labelStyle.Render("("+dateStr+")"),
-	)
-	sb.WriteString("\n\n")
+	// Header line: "Installed: <version>  (<yyyy-mm-dd>)" — omitted on a cold
+	// index where nothing is installed yet.
+	if installed != "" {
+		dateStr := installedDate.Format("2006-01-02")
+		sb.WriteString(
+			labelStyle.Render("Installed:") + " " +
+				valueStyle.Render(installed) + "  " +
+				labelStyle.Render("("+dateStr+")"),
+		)
+		sb.WriteString("\n\n")
+	}
 
 	// Section label
 	sb.WriteString(labelStyle.Render("Available versions:"))

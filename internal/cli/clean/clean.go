@@ -32,13 +32,13 @@ func CleanCmd() *cobra.Command {
 			}
 			app.PrintBanner()
 
-			orb, err := opsmgr.New(slog.Default(), app.Config.Artifacts.URL, "")
+			orb, err := opsmgr.New(slog.Default(), app.Config.Artifacts.URL, "", true, true)
 			if err != nil {
 				return err
 			}
 
 			if !orb.Ready() {
-				return fmt.Errorf("no managed installation root detected at: %s\n", orb.Path)
+				return fmt.Errorf("no managed installation root detected at: %s\n", orb.Path())
 			}
 
 			if all {

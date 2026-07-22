@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/platform-engineering-labs/formae/internal/agent"
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
@@ -177,9 +178,9 @@ func UpdateCmd() *cobra.Command {
 
 			var orb *mgr.Manager
 			if len(a.Config.Artifacts.Repositories) > 0 {
-				orb, err = opsmgr.NewFromRepositoriesFiltered(slog.Default(), a.Config.Artifacts.Repositories, channel, pkgmodel.RepositoryTypeBinary)
+				orb, err = opsmgr.NewFromRepositoriesFiltered(slog.Default(), a.Config.Artifacts.Repositories, channel, true, true, pkgmodel.RepositoryTypeBinary)
 			} else {
-				orb, err = opsmgr.New(slog.Default(), a.Config.Artifacts.URL, channel)
+				orb, err = opsmgr.New(slog.Default(), a.Config.Artifacts.URL, channel, true, true)
 			}
 			if err != nil {
 				return err
@@ -194,7 +195,7 @@ func UpdateCmd() *cobra.Command {
 					runConfirmFn:    runConfirm,
 					// stopAgentFn and installFn are not used in the init path.
 				}
-				proceed, err := runInitConfirmDecision(os.Stdout, th, seams, orb.Path, yes)
+				proceed, err := runInitConfirmDecision(os.Stdout, th, seams, orb.Path(), yes)
 				if err != nil {
 					return err
 				}
@@ -254,6 +255,57 @@ func UpdateCmd() *cobra.Command {
 	return command
 }
 
+// formatAvailableVersions renders the `update list` output for the formae
+// package: an "installed" line when a version is installed, then the distinct
+// available versions (annotating the installed one). It reads the full
+// candidate list directly rather than orbital's AvailableForSimple, which
+// skips the candidate at index 0 — so a cold index (nothing installed) would
+// omit the newest version or render an empty list.
+//
+// The human `update list` path now renders a themed list (see renderVersionList),
+// which uses the same full-candidate-list read. This plain renderer is retained
+// (with its cold-index tests) as the guard for that correctness fix and for the
+// machine/plain output wired up in the follow-up styling pass.
+//
+//nolint:unused // retained for the plain/machine path (see comment above)
+func formatAvailableVersions(available []*records.Package) string {
+	var installed *records.Package
+	for _, pkg := range available {
+		if pkg != nil && pkg.Installed && pkg.Version != nil {
+			installed = pkg
+			break
+		}
+	}
+
+	var b strings.Builder
+	if installed != nil {
+		fmt.Fprintf(&b, "installed: %s (%s)\n\n", installed.Version.Short(), installed.Version.Timestamp.String())
+	}
+
+	b.WriteString("available versions:\n\n")
+	seen := make(map[string]bool, len(available))
+	for _, entry := range available {
+		if entry == nil || entry.Version == nil {
+			continue
+		}
+		short := entry.Version.Short()
+		if seen[short] {
+			continue
+		}
+		seen[short] = true
+		if installed != nil && entry.Version.Semver().EQ(installed.Version.Semver()) {
+			age := "Newer"
+			if entry.Version.LT(installed.Version) {
+				age = "Older"
+			}
+			fmt.Fprintf(&b, "  %s %s: (%s)\n", short, age, entry.Version.Timestamp.String())
+		} else {
+			fmt.Fprintf(&b, "  %s\n", short)
+		}
+	}
+	return b.String()
+}
+
 func UpdateListCmd() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "list",
@@ -275,39 +327,49 @@ func UpdateListCmd() *cobra.Command {
 
 			var orb *mgr.Manager
 			if len(a.Config.Artifacts.Repositories) > 0 {
-				orb, err = opsmgr.NewFromRepositoriesFiltered(slog.Default(), a.Config.Artifacts.Repositories, channel, pkgmodel.RepositoryTypeBinary)
+				orb, err = opsmgr.NewFromRepositoriesFiltered(slog.Default(), a.Config.Artifacts.Repositories, channel, false, false, pkgmodel.RepositoryTypeBinary)
 			} else {
-				orb, err = opsmgr.New(slog.Default(), a.Config.Artifacts.URL, channel)
+				orb, err = opsmgr.New(slog.Default(), a.Config.Artifacts.URL, channel, false, false)
 			}
 			if err != nil {
 				return err
 			}
 
 			if !orb.Ready() {
-				return fmt.Errorf("no managed installation root detected at: %s\n", orb.Path)
+				return fmt.Errorf("no managed installation root detected at: %s\n", orb.Path())
 			}
 
-			err = orb.Refresh()
+			available, err := orb.AvailableFor("formae")
 			if err != nil {
 				return err
 			}
 
-			available, err := orb.AvailableForSimple("formae")
-			if err != nil {
-				return err
-			}
-
-			if available.Installed == nil {
-				return fmt.Errorf("no installed version found")
-			}
-
+			// Themed rendering fed by AvailableFor's FULL candidate list. Do NOT
+			// use AvailableForSimple: it drops the index-0 candidate, which #555's
+			// formatAvailableVersions (kept + tested for the plain path) exists to
+			// guard against. Installed may be absent on a cold index.
+			var installedShort string
+			var installedDate time.Time
+			seen := make(map[string]bool, len(available.Available))
 			versions := make([]string, 0, len(available.Available))
-			for _, entry := range available.Available {
-				versions = append(versions, entry.Version.Short())
+			for _, pkg := range available.Available {
+				if pkg == nil || pkg.Version == nil {
+					continue
+				}
+				short := pkg.Version.Short()
+				if pkg.Installed && installedShort == "" {
+					installedShort = short
+					installedDate = pkg.Version.Timestamp
+				}
+				if seen[short] {
+					continue
+				}
+				seen[short] = true
+				versions = append(versions, short)
 			}
 
 			th := themeFor(a)
-			fmt.Print(renderVersionList(th, available.Installed.Version.Short(), available.Installed.Version.Timestamp, versions))
+			fmt.Print(renderVersionList(th, installedShort, installedDate, versions))
 
 			return nil
 		},

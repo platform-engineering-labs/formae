@@ -432,12 +432,62 @@ open class Prop {
     fixed Value: (String|Boolean|Int|Float)? = value
 }
 
+// ---- typed CLI properties (RFC-105) ----------------------------------------
+
+/// Resolve a reflected type to its simple name, unwrapping nullables.
+function typeName(t): String =
+    if (t is reflect.DeclaredType) t.referent.name
+    else if (t is reflect.NullableType) typeName(t.member)
+    else "unknown"
+
+/// fillProps constructs a typed instance of `clazz`, reading `prop:<member>`
+/// per member, coercing to the declared type, and falling back to the declared
+/// default. Type constraints on the class members are validated by `toTyped`.
+/// Prior art: pkl-pantry `pkl.experimental.structuredRead`.
+function fillProps(clazz: Class): Typed =
+    new Mapping {
+        for (n, p in reflect.Class(clazz).properties) {
+            [n] = let (raw = read?("prop:\(n)"))
+                if (raw == null) p.defaultValue
+                else
+                    let (tn = typeName(p.type))
+                    if (tn == "Int") raw.toInt()
+                    else if (tn == "Float") raw.toFloat()
+                    else if (tn == "Boolean") raw.toBoolean()
+                    else raw
+        }
+    }.toMap().toTyped(clazz)
+
+/// renderProperties turns the module's `properties` value into the manifest the
+/// CLI/agent consume. Typed instances (the extends shape) are reflected into
+/// `{ name -> Prop }`; legacy Dynamic blocks pass through unchanged. The
+/// manifest Value always comes from the INSTANCE (never a self-reading Prop),
+/// so manifest and resources cannot disagree.
+function renderProperties(opts: Any?): Any? =
+    if (opts == null) new Mapping {}
+    // LEGACY: a Dynamic `properties {}` block (amends-based formae) passes
+    // through unchanged, preserving today's wire output byte for byte.
+    // Remove together with forma.pkl's `is Typed` discriminator when the
+    // legacy block is dropped after the deprecation window.
+    else if (!(opts is Typed)) opts
+    else
+        let (inst = opts.toDynamic().toMap())
+        new Mapping {
+            for (name, p in reflect.Class(opts.getClass()).properties) {
+                [name] = new Prop {
+                    flag = name
+                    default = p.defaultValue as (String|Boolean|Int|Float)?
+                    value = inst[name] as (String|Boolean|Int|Float)?
+                }
+            }
+        }
+
 /// FormaeRender is an ouput class notice the casing difference
 class FormaRender {
     local self = this
 
     Description: Description?
-    Properties: Dynamic?
+    Properties: Any?
     Stacks: Listing<Stack>
     Targets: Listing<Target>
     Policies: Listing<Dynamic>?

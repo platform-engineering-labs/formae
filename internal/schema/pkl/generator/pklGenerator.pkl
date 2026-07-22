@@ -37,13 +37,13 @@ typeMap = resourceTypes.fold(Map(), (acc: Map<String, resources.Resource>, elem)
 
 function headerImports(): String =
     """
-    amends "@formae/forma.pkl"
+    extends "@formae/forma.pkl"
     import "@formae/formae.pkl"
     """
 
 function getImports(type: String, dependencies: List<String>): String =
     """
-    amends "@formae/forma.pkl"
+    extends "@formae/forma.pkl"
     import "@formae/formae.pkl"
 
 

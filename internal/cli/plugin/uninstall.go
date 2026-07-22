@@ -94,7 +94,7 @@ func runUninstallForHumans(app *app.App, opts *UninstallOptions) error {
 // be non-nil to inject a stub; when nil a real CLIPluginManager is created.
 func runUninstallForHumansWithSeams(app *app.App, opts *UninstallOptions, w io.Writer, mgr localUninstaller) error {
 	if mgr == nil {
-		real, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, "")
+		real, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, "", true, true)
 		if err != nil {
 			return err
 		}
@@ -136,7 +136,7 @@ func runUninstallForMachines(app *app.App, opts *UninstallOptions) error {
 // the machine path. mgr may be non-nil to inject a stub.
 func runUninstallForMachinesWithSeams(app *app.App, opts *UninstallOptions, w io.Writer, mgr localUninstaller) error {
 	if mgr == nil {
-		real, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, "")
+		real, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, "", true, true)
 		if err != nil {
 			return err
 		}

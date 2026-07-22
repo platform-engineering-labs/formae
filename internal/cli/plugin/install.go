@@ -108,7 +108,7 @@ func runInstallForHumans(app *app.App, opts *InstallOptions) error {
 // be non-nil to inject a stub; when nil a real CLIPluginManager is created.
 func runInstallForHumansWithSeams(app *app.App, opts *InstallOptions, w io.Writer, mgr localInstaller) error {
 	if mgr == nil {
-		real, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, opts.Channel)
+		real, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, opts.Channel, true, true)
 		if err != nil {
 			return err
 		}
@@ -157,7 +157,7 @@ func runInstallForMachines(app *app.App, opts *InstallOptions) error {
 // machine path. mgr may be non-nil to inject a stub.
 func runInstallForMachinesWithSeams(app *app.App, opts *InstallOptions, w io.Writer, mgr localInstaller) error {
 	if mgr == nil {
-		real, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, opts.Channel)
+		real, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, opts.Channel, true, true)
 		if err != nil {
 			return err
 		}
