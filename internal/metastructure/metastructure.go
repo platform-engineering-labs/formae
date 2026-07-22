@@ -280,6 +280,16 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 		if err := m.checkForConflictingCommands(stackLabelsFromForma(forma)); err != nil {
 			return nil, err
 		}
+
+		// Reject an apply that touches a reaped target without re-declaring it.
+		// A reaped target is a tombstone for a target that stayed unreachable past
+		// its reap threshold; a resource-only or stale apply that references it must
+		// not silently resurrect it. Re-declaring the target (it appears in the
+		// forma's targets block) is the sanctioned recovery path: it produces a
+		// target update that mints a fresh incarnation, so it is allowed through.
+		if err := m.checkForReapedTargets(forma); err != nil {
+			return nil, err
+		}
 	}
 
 	fa, err := FormaCommandFromForma(forma, config, pkgmodel.CommandApply, m.Datastore, clientID, resource_update.FormaCommandSourceUser)
@@ -1555,6 +1565,56 @@ func (m *Metastructure) checkForConflictingCommands(commandStackLabels []string)
 		}
 
 		return err
+	}
+
+	return nil
+}
+
+// checkForReapedTargets rejects an apply that references a reaped target it does
+// not re-declare. It collects every target label the forma touches (via a
+// resource's Target or an explicit target declaration), asks the datastore which
+// of those are currently reaped, and rejects with a TargetReapedError for any
+// reaped target that the forma does not re-declare. Re-declared targets are the
+// recovery path and pass through untouched.
+func (m *Metastructure) checkForReapedTargets(forma *pkgmodel.Forma) error {
+	redeclared := make(map[string]bool)
+	for _, t := range forma.Targets {
+		redeclared[t.Label] = true
+	}
+
+	touched := make(map[string]bool)
+	var touchedLabels []string
+	addTouched := func(label string) {
+		if label == "" || touched[label] {
+			return
+		}
+		touched[label] = true
+		touchedLabels = append(touchedLabels, label)
+	}
+	for _, r := range forma.Resources {
+		addTouched(r.Target)
+	}
+	for _, t := range forma.Targets {
+		addTouched(t.Label)
+	}
+
+	if len(touchedLabels) == 0 {
+		return nil
+	}
+
+	reaped, err := m.Datastore.CheckTargetsReaped(touchedLabels)
+	if err != nil {
+		return fmt.Errorf("failed to check reaped targets: %w", err)
+	}
+
+	var unsafe []string
+	for _, label := range reaped {
+		if !redeclared[label] {
+			unsafe = append(unsafe, label)
+		}
+	}
+	if len(unsafe) > 0 {
+		return apimodel.TargetReapedError{TargetLabels: unsafe}
 	}
 
 	return nil

@@ -2932,6 +2932,49 @@ func (d DatastoreSQLite) GetUnreachableTargets() ([]*pkgmodel.Target, error) {
 	return targets, rows.Err()
 }
 
+func (d DatastoreSQLite) CheckTargetsReaped(labels []string) ([]string, error) {
+	_, span := sqliteTracer.Start(context.Background(), "CheckTargetsReaped")
+	defer span.End()
+
+	if len(labels) == 0 {
+		return nil, nil
+	}
+
+	placeholders := make([]string, len(labels))
+	args := make([]any, len(labels))
+	for i, label := range labels {
+		placeholders[i] = "?"
+		args[i] = label
+	}
+
+	query := fmt.Sprintf(`
+		SELECT t1.label
+		FROM targets t1
+		WHERE t1.label IN (%s)
+		AND NOT EXISTS (
+			SELECT 1 FROM targets t2
+			WHERE t1.label = t2.label AND t2.version > t1.version
+		)
+		AND t1.health_state = 'reaped'`, strings.Join(placeholders, ","))
+
+	rows, err := d.conn.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer closeRows(rows)
+
+	var reaped []string
+	for rows.Next() {
+		var label string
+		if err := rows.Scan(&label); err != nil {
+			return nil, err
+		}
+		reaped = append(reaped, label)
+	}
+
+	return reaped, rows.Err()
+}
+
 // PersistTargetReap performs the whole target reap in one transaction. See the
 // Datastore interface for the contract. SQLite compares the text-stored grace
 // timestamps via julianday() (mirroring UpdateTargetHealth) so fractional-second

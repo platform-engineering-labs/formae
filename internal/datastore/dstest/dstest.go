@@ -123,6 +123,7 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunPersistTargetReapHappyPath(t, newDS)
 	RunPersistTargetReapGuards(t, newDS)
 	RunPersistTargetReapConcurrent(t, newDS)
+	RunCheckTargetsReaped(t, newDS)
 
 	RunCreateStack(t, newDS)
 	RunCreateStackAlreadyExists(t, newDS)

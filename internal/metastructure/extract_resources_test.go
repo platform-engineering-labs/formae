@@ -260,6 +260,10 @@ func (m *mockExtractDatastore) PersistTargetReap(_ datastore.PersistTargetReapRe
 	panic("not implemented")
 }
 
+func (m *mockExtractDatastore) CheckTargetsReaped(_ []string) ([]string, error) {
+	panic("not implemented")
+}
+
 func TestExtractResources_ManagedAndUnmanagedStacks(t *testing.T) {
 	managedStack := &pkgmodel.Stack{
 		Label:       "my-stack",

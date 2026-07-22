@@ -736,6 +736,11 @@ func mapError(c echo.Context, err error) error {
 		return apiError(c, http.StatusConflict, apimodel.NonPortableResources, nonPortableError)
 	}
 
+	var targetReapedError apimodel.TargetReapedError
+	if errors.As(err, &targetReapedError) {
+		return apiError(c, http.StatusConflict, apimodel.TargetReaped, targetReapedError)
+	}
+
 	var requiredFieldMissingError apimodel.RequiredFieldMissingOnCreateError
 	if errors.As(err, &requiredFieldMissingError) {
 		return apiError(c, http.StatusBadRequest, apimodel.RequiredFieldMissingOnCreate, requiredFieldMissingError)

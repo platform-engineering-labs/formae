@@ -3693,6 +3693,52 @@ func (d DatastorePostgres) AdvanceTargetAccrual(targetLabel, incarnationID strin
 	return tag.RowsAffected() == 1, nil
 }
 
+func (d DatastorePostgres) CheckTargetsReaped(labels []string) ([]string, error) {
+	ctx, span := tracer.Start(context.Background(), "CheckTargetsReaped")
+	defer span.End()
+
+	if len(labels) == 0 {
+		return nil, nil
+	}
+
+	placeholders := make([]string, len(labels))
+	args := make([]any, len(labels))
+	for i, label := range labels {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		args[i] = label
+	}
+
+	query := fmt.Sprintf(`
+	SELECT t1.label
+	FROM targets t1
+	WHERE t1.label IN (%s)
+	AND NOT EXISTS (
+		SELECT 1
+		FROM targets t2
+		WHERE t1.label = t2.label
+		AND t2.version > t1.version
+	)
+	AND t1.health_state = 'reaped'
+	`, strings.Join(placeholders, ","))
+
+	rows, err := d.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var reaped []string
+	for rows.Next() {
+		var label string
+		if err := rows.Scan(&label); err != nil {
+			return nil, err
+		}
+		reaped = append(reaped, label)
+	}
+
+	return reaped, rows.Err()
+}
+
 func (d DatastorePostgres) GetUnreachableTargets() ([]*pkgmodel.Target, error) {
 	ctx, span := tracer.Start(context.Background(), "GetUnreachableTargets")
 	defer span.End()

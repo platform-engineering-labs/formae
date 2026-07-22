@@ -297,6 +297,12 @@ type Datastore interface {
 	// failed assertion rolls back and returns reaped=false with no error.
 	// Idempotent: a second call for an already-reaped incarnation reaps nothing.
 	PersistTargetReap(req PersistTargetReapRequest) (reaped bool, err error)
+	// CheckTargetsReaped inspects the current (max-version) row of each target in
+	// labels and returns the subset whose health_state is 'reaped'. Labels with no
+	// target row, or whose current row is any other health state, are omitted.
+	// Used by command admission to reject an apply that touches a reaped target
+	// without re-declaring it (which would otherwise resurrect it out of band).
+	CheckTargetsReaped(labels []string) ([]string, error)
 
 	// Stats returns aggregated statistics about the datastore contents
 	Stats() (*stats.Stats, error)

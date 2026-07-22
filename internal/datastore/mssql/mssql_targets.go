@@ -306,6 +306,48 @@ func (d *DatastoreMSSQL) AdvanceTargetAccrual(targetLabel, incarnationID string,
 	return n == 1, nil
 }
 
+func (d *DatastoreMSSQL) CheckTargetsReaped(labels []string) ([]string, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "CheckTargetsReaped")
+	defer span.End()
+
+	if len(labels) == 0 {
+		return nil, nil
+	}
+
+	args := make([]any, len(labels))
+	for i, label := range labels {
+		args[i] = label
+	}
+
+	query := fmt.Sprintf(`
+		SELECT t1.label
+		FROM targets t1
+		WHERE t1.label IN (%s)
+		AND NOT EXISTS (
+			SELECT 1
+			FROM targets t2
+			WHERE t1.label = t2.label
+			AND t2.version > t1.version
+		)
+		AND t1.health_state = 'reaped'`, placeholders(1, len(labels)))
+
+	rows, err := d.conn.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var reaped []string
+	for rows.Next() {
+		var label string
+		if err := rows.Scan(&label); err != nil {
+			return nil, err
+		}
+		reaped = append(reaped, label)
+	}
+	return reaped, rows.Err()
+}
+
 func (d *DatastoreMSSQL) GetUnreachableTargets() ([]*pkgmodel.Target, error) {
 	ctx, span := mssqlTracer.Start(context.Background(), "GetUnreachableTargets")
 	defer span.End()

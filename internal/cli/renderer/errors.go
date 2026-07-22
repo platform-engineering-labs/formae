@@ -94,6 +94,10 @@ func RenderErrorMessage(err error) (string, error) {
 		msg = renderNonPortableResourcesError(&errResp.Data)
 	}
 
+	if errResp, ok := err.(*apimodel.ErrorResponse[apimodel.TargetReapedError]); ok {
+		msg = renderTargetReapedError(&errResp.Data)
+	}
+
 	if errResp, ok := err.(*apimodel.ErrorResponse[apimodel.PluginNotFoundError]); ok {
 		msg = display.Redf("plugin '%s' not found\n", errResp.Data.Name)
 	}
@@ -252,6 +256,24 @@ func renderNonPortableResourcesError(errResp *apimodel.NonPortableResourcesError
 		message += fmt.Sprintf("  - %s\n", r)
 	}
 	message += "\n" + display.Gold("To proceed, manually remove these resources first with 'formae destroy',\nthen reapply to recreate them with the new target configuration.\n")
+	return message
+}
+
+func renderTargetReapedError(errResp *apimodel.TargetReapedError) string {
+	var message string
+	if len(errResp.TargetLabels) == 1 {
+		message = display.Redf("target '%s' has been reaped.\n\n", errResp.TargetLabels[0])
+	} else {
+		message = display.Red("the following targets have been reaped:\n\n")
+		for _, label := range errResp.TargetLabels {
+			message += fmt.Sprintf("  - %s\n", label)
+		}
+		message += "\n"
+	}
+	message += display.Gold("A reaped target was tombstoned after prolonged unreachability. Applying resources\n"+
+		"to it without re-declaring it would silently resurrect it.\n\n") +
+		"To recover it, re-declare the target in your forma file (its 'targets' block) and\n" +
+		"apply again — this mints a fresh incarnation and brings the target back under management.\n"
 	return message
 }
 

@@ -2485,6 +2485,56 @@ func (d *DatastoreAuroraDataAPI) AdvanceTargetAccrual(targetLabel, incarnationID
 	return output.NumberOfRecordsUpdated == 1, nil
 }
 
+func (d *DatastoreAuroraDataAPI) CheckTargetsReaped(labels []string) ([]string, error) {
+	if len(labels) == 0 {
+		return nil, nil
+	}
+
+	ctx := context.Background()
+
+	placeholders := make([]string, len(labels))
+	params := []types.SqlParameter{}
+	for i, label := range labels {
+		paramName := fmt.Sprintf("label_%d", i)
+		placeholders[i] = ":" + paramName
+		params = append(params, types.SqlParameter{
+			Name: aws.String(paramName), Value: &types.FieldMemberStringValue{Value: label},
+		})
+	}
+
+	query := fmt.Sprintf(`
+	SELECT t1.label
+	FROM targets t1
+	WHERE t1.label IN (%s)
+	AND NOT EXISTS (
+		SELECT 1
+		FROM targets t2
+		WHERE t1.label = t2.label
+		AND t2.version > t1.version
+	)
+	AND t1.health_state = 'reaped'
+	`, strings.Join(placeholders, ","))
+
+	output, err := d.executeStatement(ctx, query, params)
+	if err != nil {
+		return nil, err
+	}
+
+	var reaped []string
+	for _, record := range output.Records {
+		if len(record) < 1 {
+			continue
+		}
+		label, err := getStringField(record[0])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse label: %w", err)
+		}
+		reaped = append(reaped, label)
+	}
+
+	return reaped, nil
+}
+
 func (d *DatastoreAuroraDataAPI) GetUnreachableTargets() ([]*pkgmodel.Target, error) {
 	ctx := context.Background()
 
