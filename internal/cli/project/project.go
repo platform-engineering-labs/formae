@@ -11,9 +11,10 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
+	"github.com/platform-engineering-labs/formae/internal/cli/banner"
 	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
-	"github.com/platform-engineering-labs/formae/internal/cli/display"
-	"github.com/platform-engineering-labs/formae/internal/cli/prompter"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/platform-engineering-labs/formae/internal/util"
 )
 
@@ -45,18 +46,39 @@ func ProjectInitCmd() *cobra.Command {
 			yes, _ := command.Flags().GetBool("yes")
 			pluginDir, _ := command.Flags().GetString("plugin-dir")
 
-			// Confirm with user if no plugins specified
-			if len(include) == 0 && !yes {
-				fmt.Println(display.Gold("No plugins specified.") + " The project will not include any cloud provider schemas.")
-				fmt.Println(display.Grey("  To add plugins, use: --include aws --include gcp"))
-				fmt.Println()
+			banner.PrintBanner()
+			th := theme.New("")
 
-				p := prompter.NewBasicPrompter()
-				if !p.Confirm("Continue without plugins?", false) {
-					fmt.Print(display.Red("\nProject initialization aborted\n"))
-					return nil
+			// Interactive plugin multi-select (D10):
+			// Only when no --include is specified and --yes is not set.
+			if len(include) == 0 && !yes {
+				if !isInteractive() {
+					// Non-TTY without --include or --yes: return a non-zero error.
+					return fmt.Errorf("interactive input requires a TTY — pass --include or --yes")
 				}
-				fmt.Println()
+
+				// Resolve the app for the agent call. We may not have a
+				// config flag yet (project init is typically run before the
+				// agent exists), so we attempt a best-effort connection and
+				// fall back to the local scan on failure.
+				configFile, _ := command.Flags().GetString("config")
+				var appCtx *app.App
+				if appCtx2, err := cmd.AppFromContext(command.Context(), configFile, "", command); err == nil {
+					appCtx = appCtx2
+				}
+
+				selectedIncludes, err := runPluginSelect(th, appCtx, pluginDir, schema)
+				if err != nil {
+					return err
+				}
+				include = selectedIncludes
+			}
+
+			// Emit styled summary: "Project initialized at <path>"
+			// followed by a FieldList with Schema and Plugins.
+			path := command.Flags().Arg(0)
+			if path == "" {
+				path = "."
 			}
 
 			// Non-@local includes need plugin versions from the agent —
@@ -77,14 +99,31 @@ func ProjectInitCmd() *cobra.Command {
 			}
 
 			projects := &app.Projects{}
-			return projects.Init(command.Flags().Arg(0), schema, include, util.ExpandHomePath(pluginDir), installedVersions)
+			if err := projects.Init(path, schema, include, util.ExpandHomePath(pluginDir), installedVersions); err != nil {
+				return err
+			}
+
+			// Styled summary output.
+			pluginsVal := strings.Join(include, ", ")
+			if pluginsVal == "" {
+				pluginsVal = "(none)"
+			}
+			fmt.Printf("\n%s\n", components.SectionHeader(th, "Project initialized"))
+			fmt.Println(components.Indent(components.FieldList(th, [][2]string{
+				{"Path", path},
+				{"Schema", schema},
+				{"Plugins", pluginsVal},
+			}), 2))
+			fmt.Println()
+
+			return nil
 		},
 		SilenceErrors: true,
 	}
 
 	command.Flags().String("schema", "pkl", "Schema to use for the project (pkl)")
 	command.Flags().StringArray("include", []string{}, "Packages to include (use @local suffix for local plugins, e.g. myplugin@local)")
-	command.Flags().BoolP("yes", "y", false, "Skip confirmation prompts")
+	command.Flags().BoolP("yes", "y", false, "Skip the plugin prompt and proceed without plugins")
 	command.Flags().String("plugin-dir", "~/.pel/formae/plugins", "Directory to scan for @local plugin schemas")
 	cmd.AddConfigFlags(command)
 

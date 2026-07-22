@@ -95,11 +95,16 @@ func validateSearchOptions(opts *SearchOptions) error {
 }
 
 func runSearchForHumans(app *app.App, opts *SearchOptions) error {
+	app.PrintBanner()
 	plugins, err := searchPlugins(app, opts)
 	if err != nil {
 		return err
 	}
-	fmt.Print(renderPluginSearch(plugins))
+	fmt.Print(renderPluginSearch(themeFor(app), plugins, SearchRenderOpts{
+		Query:    opts.Query,
+		Category: opts.Category,
+		Type:     opts.Type,
+	}))
 	return nil
 }
 

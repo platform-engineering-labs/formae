@@ -1,0 +1,11 @@
+[38;2;248;113;113mCannot replace target 'aws-us-east-1'[0m
+[38;2;248;113;113m[0m                                     
+[38;2;248;113;113m[0m                                     [38;2;181;181;91mThe following resources are bound to the current target configuration and[0m
+[38;2;181;181;91mcannot be automatically moved to the new target:[0m                         
+[38;2;181;181;91m[0m                                                                         
+[38;2;181;181;91m[0m                                                                           - production/AWS::S3::Bucket/my-bucket
+  - production/AWS::RDS::DBInstance/my-db
+
+[38;2;181;181;91mTo proceed, manually remove these resources first with 'formae destroy',[0m
+[38;2;181;181;91mthen reapply to recreate them with the new target configuration.[0m        
+[38;2;181;181;91m[0m                                                                        

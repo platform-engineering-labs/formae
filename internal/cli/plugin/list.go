@@ -73,11 +73,12 @@ func validateListOptions(opts *ListOptions) error {
 }
 
 func runListForHumans(app *app.App, opts *ListOptions) error {
+	app.PrintBanner()
 	plugins, err := installedPlugins(app)
 	if err != nil {
 		return err
 	}
-	fmt.Print(renderPluginList(plugins))
+	fmt.Print(renderPluginList(themeFor(app), plugins))
 	return nil
 }
 

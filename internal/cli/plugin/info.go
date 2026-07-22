@@ -88,6 +88,7 @@ func validateInfoOptions(opts *InfoOptions) error {
 }
 
 func runInfoForHumans(app *app.App, opts *InfoOptions) error {
+	app.PrintBanner()
 	plugin, err := fetchPluginInfo(app, opts)
 	if err != nil {
 		return err
@@ -95,7 +96,7 @@ func runInfoForHumans(app *app.App, opts *InfoOptions) error {
 	if plugin == nil {
 		return fmt.Errorf("plugin '%s' not found", opts.Name)
 	}
-	fmt.Print(renderPluginInfo(plugin))
+	fmt.Print(renderPluginInfo(themeFor(app), plugin))
 	return nil
 }
 

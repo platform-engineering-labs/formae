@@ -10,17 +10,60 @@ import (
 	"os"
 	"strings"
 
+	"github.com/charmbracelet/huh"
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
 	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
 	"github.com/platform-engineering-labs/formae/internal/cli/config"
-	"github.com/platform-engineering-labs/formae/internal/cli/display"
 	"github.com/platform-engineering-labs/formae/internal/cli/nag"
-	"github.com/platform-engineering-labs/formae/internal/cli/prompter"
-	"github.com/platform-engineering-labs/formae/internal/cli/renderer"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/errfmt"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	"github.com/platform-engineering-labs/formae/internal/schema"
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/spf13/cobra"
 )
+
+// Package-level seams — replaced in tests to avoid TTY / network calls.
+var (
+	isInteractive = tui.IsInteractive
+	runConfirm    = components.RunConfirm
+	promptPath    = defaultPromptPath
+
+	extractFn = func(a *app.App, query string) (*pkgmodel.Forma, []string, error) {
+		return a.ExtractResources(query, false)
+	}
+	generateFn = func(a *app.App, forma *pkgmodel.Forma, targetPath, outputSchema string, schemaLocation schema.SchemaLocation) (schema.GenerateSourcesResult, error) {
+		return a.GenerateSourceCode(forma, targetPath, outputSchema, schemaLocation)
+	}
+)
+
+// defaultPromptPath shows a huh text-input pre-filled with defaultVal and
+// returns the user's chosen path. Called only when interactive && no path given.
+func defaultPromptPath(th *theme.Theme, defaultVal string) (string, error) {
+	result := defaultVal
+	input := huh.NewInput().
+		Title("Extract to:").
+		Value(&result)
+	form := components.NewThemedForm(th, huh.NewGroup(input))
+	if err := form.Run(); err != nil {
+		return "", err
+	}
+	return result, nil
+}
+
+// themeFor resolves the active theme from the app config.
+// The name falls back to "formae" for nil configs (theme.New nil-guards internally).
+func themeFor(a *app.App) *theme.Theme {
+	name := ""
+	if a != nil && a.Config != nil {
+		name = a.Config.Cli.Theme
+	}
+	return theme.New(name)
+}
 
 type ExtractOptions struct {
 	TargetPath     string
@@ -28,6 +71,9 @@ type ExtractOptions struct {
 	Yes            bool
 	OutputSchema   string
 	SchemaLocation schema.SchemaLocation
+	// pathExplicit tracks whether the target path was explicitly provided
+	// (positional arg present), so we know when to show the path prompt.
+	pathExplicit bool
 }
 
 func ExtractCmd() *cobra.Command {
@@ -40,6 +86,7 @@ func ExtractCmd() *cobra.Command {
 		RunE: func(command *cobra.Command, args []string) error {
 			opts := &ExtractOptions{}
 			opts.TargetPath = command.Flags().Arg(0)
+			opts.pathExplicit = opts.TargetPath != ""
 			opts.Query, _ = command.Flags().GetString("query")
 			opts.Yes, _ = command.Flags().GetBool("yes")
 			opts.OutputSchema, _ = command.Flags().GetString("output-schema")
@@ -51,19 +98,19 @@ func ExtractCmd() *cobra.Command {
 			opts.SchemaLocation = loc
 
 			configFile, _ := command.Flags().GetString("config")
-			app, err := cmd.AppFromContext(command.Context(), configFile, "", command)
+			a, err := cmd.AppFromContext(command.Context(), configFile, "", command)
 			if err != nil {
 				return err
 			}
 
-			return runExtract(app, opts)
+			return runExtract(a, opts)
 		},
 		Annotations: map[string]string{
 			"type": "Forma",
 			"examples": "formae extract --query 'type:AWS::S3::Bucket' ./buckets.pkl" +
 				" | formae extract --query 'type:GCP::Compute::* managed:false' ./gcp-unmanaged.pkl" +
 				" | formae extract --query 'stack:prod target:eu target:us' ./prod.pkl",
-			"args": "<target file>",
+			"args": "[<target file>]",
 		},
 		SilenceErrors: true,
 	}
@@ -93,21 +140,47 @@ func parseSchemaLocation(s string) (schema.SchemaLocation, error) {
 	}
 }
 
-func runExtract(app *app.App, opts *ExtractOptions) error {
-	err := validateExtractOptions(opts)
-	if err != nil {
+// runExtract is the entry point called by the Cobra command.
+// It validates options, shows the path prompt when appropriate, then
+// delegates to runExtractCore.
+func runExtract(a *app.App, opts *ExtractOptions) error {
+	th := themeFor(a)
+
+	// Path prompt: shown when interactive && !--yes && no explicit path given.
+	if !opts.pathExplicit && !opts.Yes {
+		if !isInteractive() {
+			return fmt.Errorf("interactive input requires a TTY — pass the target file as an argument")
+		}
+		chosen, err := promptPath(th, "./extracted.pkl")
+		if err != nil {
+			return err
+		}
+		opts.TargetPath = chosen
+		opts.pathExplicit = true
+	}
+
+	if err := validateExtractOptions(opts); err != nil {
 		return err
 	}
 
-	app.PrintBanner()
+	a.PrintBanner()
 
-	if !app.IsSupportedOutputSchema(opts.OutputSchema) {
-		return fmt.Errorf("unsupported output schema '%s', supported schemas are: %v", opts.OutputSchema, app.SupportedOutputSchemas())
+	return runExtractCore(a, opts)
+}
+
+// runExtractCore is the testable core of the extract flow.
+// It assumes validateExtractOptions has already passed and the target path is set.
+func runExtractCore(a *app.App, opts *ExtractOptions) error {
+	th := themeFor(a)
+
+	// Validate output schema when the app is available.
+	if a != nil && !a.IsSupportedOutputSchema(opts.OutputSchema) {
+		return fmt.Errorf("unsupported output schema '%s', supported schemas are: %v", opts.OutputSchema, a.SupportedOutputSchemas())
 	}
 
-	forma, nags, err := app.ExtractResources(opts.Query)
+	forma, nags, err := extractFn(a, opts.Query)
 	if err != nil {
-		msg, renderErr := renderer.RenderErrorMessage(err)
+		msg, renderErr := errfmt.Render(err)
 		if renderErr != nil {
 			return fmt.Errorf("error rendering error message: %v", renderErr)
 		}
@@ -119,20 +192,28 @@ func runExtract(app *app.App, opts *ExtractOptions) error {
 		return nil
 	}
 
-	_, err = os.Stat(opts.TargetPath)
-	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("error checking target path: %v", err)
-	}
+	// Check whether the target file already exists.
+	_, statErr := os.Stat(opts.TargetPath)
+	fileExists := statErr == nil
 
-	if _, err = os.Stat(opts.TargetPath); err == nil && !opts.Yes {
-		prompter := prompter.NewBasicPrompter()
-		if !prompter.Confirm(fmt.Sprintf("File '%s' already exists. Overwrite?", opts.TargetPath), false) {
+	if fileExists && !opts.Yes {
+		// D8: overwrite confirm requires a TTY.
+		if !isInteractive() {
+			return fmt.Errorf("interactive input requires a TTY — pass --yes to overwrite '%s' non-interactively", opts.TargetPath)
+		}
+		ok, err := runConfirm(th, fmt.Sprintf("File '%s' already exists. Overwrite?", opts.TargetPath), "")
+		if err != nil {
+			return err
+		}
+		if !ok {
 			fmt.Println("Operation cancelled")
 			return nil
 		}
+	} else if statErr != nil && !os.IsNotExist(statErr) {
+		return fmt.Errorf("error checking target path: %v", statErr)
 	}
 
-	res, err := app.GenerateSourceCode(forma, opts.TargetPath, opts.OutputSchema, opts.SchemaLocation)
+	res, err := generateFn(a, forma, opts.TargetPath, opts.OutputSchema, opts.SchemaLocation)
 	if errors.Is(err, schema.ErrFailedToGenerateSources) {
 		logFilePath := fmt.Sprintf("%s/log/client.log", config.Config.DataDirectory())
 		return fmt.Errorf("something went wrong during the extraction. This is our fault. Please contact us and send over the error logs from '%s'", logFilePath)
@@ -141,15 +222,32 @@ func runExtract(app *app.App, opts *ExtractOptions) error {
 		return fmt.Errorf("error generating source code: %v", err)
 	}
 
+	warnStyle := lipgloss.NewStyle().Foreground(th.Palette.Warning)
 	if res.InitializedNewProject {
-		display.Gold(fmt.Sprintf("Initialzed %s project at '%s'\n", opts.OutputSchema, res.ProjectPath))
+		fmt.Println(warnStyle.Render(fmt.Sprintf("Initialized %s project at '%s'", opts.OutputSchema, res.ProjectPath)))
 	}
 	for _, warning := range res.Warnings {
-		display.Warning(warning)
+		fmt.Println(warnStyle.Render(warning))
 	}
-	display.Success(fmt.Sprintf("Successfully extracted %d resource(s) as Pkl to '%s'\n", res.ResourceCount, res.TargetPath))
 
-	nag.MaybePrintNags(nags)
+	// Build per-resource list from the forma that was extracted.
+	extracted := make([]extractedResource, 0, len(forma.Resources))
+	for _, r := range forma.Resources {
+		extracted = append(extracted, extractedResource{
+			Label: r.Label,
+			Type:  r.Type,
+			Stack: r.Stack,
+		})
+	}
+
+	// Themed summary (styled when stdout is a TTY).
+	if tui.IsTerminal(os.Stdout) {
+		fmt.Println(renderExtractSummary(th, res.TargetPath, extracted))
+	} else {
+		fmt.Printf("Extracted %d resource(s) to '%s'\n", len(extracted), res.TargetPath)
+	}
+
+	nag.MaybePrintNags(themeFor(a), nags)
 
 	return nil
 }

@@ -11,16 +11,27 @@ import (
 	"strings"
 	"time"
 
+	"github.com/platform-engineering-labs/formae"
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
+	"github.com/platform-engineering-labs/formae/internal/cli/banner"
 	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
 	"github.com/platform-engineering-labs/formae/internal/cli/config"
-	"github.com/platform-engineering-labs/formae/internal/cli/display"
 	"github.com/platform-engineering-labs/formae/internal/cli/nag"
 	"github.com/platform-engineering-labs/formae/internal/cli/printer"
-	"github.com/platform-engineering-labs/formae/internal/cli/renderer"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/errfmt"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/statuswatch"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	"github.com/spf13/cobra"
+)
+
+// isTerminal, launchTUI, and printBanner are package-level vars so tests can stub them.
+var (
+	isTerminal  = tui.IsTerminal
+	launchTUI   = launchStatusTUI
+	printBanner = func(a *app.App) { a.PrintBanner() }
 )
 
 type StatusOutput string
@@ -55,11 +66,8 @@ func CommandCmd() *cobra.Command {
 			maxResults, _ := command.Flags().GetInt("max-results")
 			opts.Query = strings.TrimSpace(query)
 
-			if opts.Query == "" || opts.OutputConsumer == printer.ConsumerMachine {
-				opts.MaxResults = 1
-			} else {
-				opts.MaxResults = maxResults
-			}
+			humanTTY := opts.OutputConsumer == printer.ConsumerHuman && isTerminal(os.Stdout)
+			opts.MaxResults = resolveMaxResults(opts.Query, maxResults, humanTTY)
 
 			opts.Watch, _ = command.Flags().GetBool("watch")
 			outputLayout, _ := command.Flags().GetString("output-layout")
@@ -122,34 +130,90 @@ func validateStatusOptions(options *StatusOptions) error {
 	return nil
 }
 
-func runStatusForHumans(app *app.App, opts *StatusOptions) error {
-	app.PrintBanner()
+// resolveMaxResults returns the correct page-size for the given context.
+// When the caller is a human with a TTY (humanTTY == true), or when a query
+// string is provided, the full flagValue is used so the multi-command view is
+// populated. Otherwise (non-TTY or machine consumer) we collapse to 1 to
+// preserve the pre-TUI behaviour of showing only the most-recent command.
+func resolveMaxResults(query string, flagValue int, humanTTY bool) int {
+	if humanTTY || strings.TrimSpace(query) != "" {
+		return flagValue
+	}
+	return 1
+}
 
-	status, nags, err := app.GetCommandsStatus(opts.Query, opts.MaxResults, false)
+// themeFor resolves the active theme from the app config.
+// The name falls back to "formae" for nil configs (theme.New nil-guards internally).
+func themeFor(a *app.App) *theme.Theme {
+	name := ""
+	if a != nil && a.Config != nil {
+		name = a.Config.Cli.Theme
+	}
+	return theme.New(name)
+}
+
+// launchStatusTUI starts the interactive status/watch TUI.
+// The theme name comes from the CLI profile configuration (Config.Cli.Theme);
+// unknown names fall back to "formae" inside theme.New.
+func launchStatusTUI(a *app.App, opts *StatusOptions) error {
+	// Surface connection / auth / version-mismatch errors as ordinary CLI
+	// errors before the alt-screen TUI takes over the terminal.
+	if err := a.Preflight(); err != nil {
+		return err
+	}
+	th := themeFor(a)
+	swOpts := statuswatch.Options{
+		Query:      opts.Query,
+		MaxResults: opts.MaxResults,
+		Version:    formae.Version,
+	}
+	// If the query targets a single command by exact id (e.g. `status command
+	// --query 'id:<ksuid>'`), drill straight into its detail view instead of
+	// dropping the user in a one-row list they must "enter" into.
+	if id := bareCommandID(opts.Query); id != "" {
+		swOpts.FocusCommandID = id
+	}
+	model := statuswatch.New(th, a, swOpts)
+	_, err := tui.Run(model, tui.DefaultRunOptions())
+	return err
+}
+
+// bareCommandID returns the command id when query is exactly "id:<value>" with
+// no wildcards or additional terms; otherwise it returns "".
+func bareCommandID(query string) string {
+	rest, ok := strings.CutPrefix(strings.TrimSpace(query), "id:")
+	if !ok || rest == "" || strings.ContainsAny(rest, " *?") {
+		return ""
+	}
+	return rest
+}
+
+func runStatusForHumans(a *app.App, opts *StatusOptions) error {
+	// Human + TTY → interactive TUI (owns the whole screen; banner suppressed).
+	if isTerminal(os.Stdout) {
+		return launchTUI(a, opts)
+	}
+
+	// Human + non-TTY → existing print-and-exit path, completely unchanged.
+	printBanner(a)
+
+	status, nags, err := a.GetCommandsStatus(opts.Query, opts.MaxResults, false)
 	if err != nil {
-		msg, renderErr := renderer.RenderErrorMessage(err)
+		msg, renderErr := errfmt.Render(err)
 		if renderErr != nil {
 			return fmt.Errorf("error rendering error message: %v", renderErr)
 		}
 		return fmt.Errorf("%s", msg)
 	}
 
-	// printer for summary or detailed
-	p := printer.NewHumanReadablePrinter[apimodel.ListCommandStatusResponse](os.Stdout)
-	if opts.OutputLayout == StatusOutputDetailed {
-		err = p.Print(status, printer.PrintOptions{Summary: false})
-	} else {
-		err = p.Print(status, printer.PrintOptions{Summary: true})
-	}
-	if err != nil {
-		return err
-	}
+	// Render summary or detailed layout via the lipgloss print function.
+	_, _ = fmt.Print(renderStatusList(themeFor(a), status, opts.OutputLayout == StatusOutputDetailed, termWidth(os.Stdout)))
 
 	// print nags
-	nag.MaybePrintNags(nags)
+	nag.MaybePrintNags(themeFor(a), nags)
 
 	if opts.Watch {
-		return WatchCommandsStatus(app, opts.Query, opts.MaxResults, opts.OutputLayout)
+		return WatchCommandsStatus(a, opts.Query, opts.MaxResults, opts.OutputLayout)
 	}
 
 	return nil
@@ -158,7 +222,7 @@ func runStatusForHumans(app *app.App, opts *StatusOptions) error {
 func runStatusForMachines(app *app.App, opts *StatusOptions) error {
 	status, _, err := app.GetCommandsStatus(opts.Query, opts.MaxResults, false)
 	if err != nil {
-		msg, renderErr := renderer.RenderErrorMessage(err)
+		msg, renderErr := errfmt.Render(err)
 		if renderErr != nil {
 			return fmt.Errorf("error rendering error message: %v", renderErr)
 		}
@@ -215,17 +279,14 @@ func AgentCmd() *cobra.Command {
 				return nil
 			}
 
-			err = renderStats(stats)
-			if err != nil {
-				return err
-			}
+			fmt.Println(renderAgentStats(themeFor(app), *stats, termWidth(os.Stdout)))
 
 			if consumer != printer.ConsumerMachine && !watch {
-				nag.MaybePrintNags(nags)
+				nag.MaybePrintNags(themeFor(app), nags)
 			}
 
 			if watch && consumer == printer.ConsumerHuman { // machine consumer can't watch
-				nag.MaybePrintNags(nags)
+				nag.MaybePrintNags(themeFor(app), nags)
 				return watchStats(app)
 			}
 
@@ -245,34 +306,14 @@ func AgentCmd() *cobra.Command {
 	return command
 }
 
-func renderCommandsStatus(status *apimodel.ListCommandStatusResponse, outputLayout StatusOutput) error {
-	p := printer.NewHumanReadablePrinter[apimodel.ListCommandStatusResponse](os.Stdout)
-	var err error
-	if outputLayout == StatusOutputDetailed {
-		err = p.Print(status, printer.PrintOptions{Summary: false})
-	} else {
-		err = p.Print(status, printer.PrintOptions{Summary: true})
-	}
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func renderStats(stats *apimodel.Stats) error {
-	p := printer.NewHumanReadablePrinter[apimodel.Stats](os.Stdout)
-	err := p.Print(stats, printer.PrintOptions{})
-	if err != nil {
-		return err
-	}
-
+func renderCommandsStatus(a *app.App, status *apimodel.ListCommandStatusResponse, outputLayout StatusOutput) error {
+	_, _ = fmt.Println(renderStatusList(themeFor(a), status, outputLayout == StatusOutputDetailed, termWidth(os.Stdout)))
 	return nil
 }
 
 func prepareScreen(what string) {
-	display.ClearScreen()
-	display.PrintBanner()
+	banner.ClearScreen()
+	banner.PrintBanner()
 	fmt.Printf("Watching %s (refreshing every 2s)...\n\n", what)
 }
 
@@ -290,7 +331,7 @@ func WatchCommandsStatus(app *app.App, query string, n int, outputLayout StatusO
 		}
 
 		// render detailed or summary
-		err = renderCommandsStatus(status, outputLayout)
+		err = renderCommandsStatus(app, status, outputLayout)
 		if err != nil {
 			return err
 		}
@@ -308,7 +349,7 @@ func WatchCommandsStatus(app *app.App, query string, n int, outputLayout StatusO
 		}
 	}
 
-	nag.MaybePrintNags(nags)
+	nag.MaybePrintNags(themeFor(app), nags)
 
 	return nil
 }
@@ -323,10 +364,7 @@ func watchStats(app *app.App) error {
 			return err
 		}
 
-		err = renderStats(stats)
-		if err != nil {
-			return err
-		}
+		fmt.Println(renderAgentStats(themeFor(app), *stats, termWidth(os.Stdout)))
 	}
 }
 

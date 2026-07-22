@@ -1,0 +1,8 @@
+[38;2;248;113;113mresource validation failed.[0m
+[38;2;248;113;113m[0m                           
+[38;2;248;113;113m[0m                           [38;2;181;181;91mresource 'my-bucket' (type: AWS::S3::Bucket, stack: production) cannot be created because the following required fields are missing:[0m
+[38;2;181;181;91m[0m                                                                                                                                    
+[38;2;181;181;91m[0m                                                                                                                                      BucketName, Tags
+
+[38;2;181;181;91mPlease add values for these required fields to your forma file and try again.[0m
+[38;2;181;181;91m[0m                                                                             

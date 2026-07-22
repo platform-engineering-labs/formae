@@ -15,10 +15,12 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/platform-engineering-labs/formae"
 	"github.com/platform-engineering-labs/formae/internal/api"
+	"github.com/platform-engineering-labs/formae/internal/cli/banner"
 	"github.com/platform-engineering-labs/formae/internal/cli/config"
-	"github.com/platform-engineering-labs/formae/internal/cli/display"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/platform-engineering-labs/formae/internal/network"
 	_ "github.com/platform-engineering-labs/formae/internal/network/all"
 	"github.com/platform-engineering-labs/formae/internal/schema"
@@ -67,7 +69,7 @@ type Projects struct{}
 func NewApp() *App {
 	u, err := usage.NewPostHogSender()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, display.Red("Error: "+err.Error()))
+		_, _ = fmt.Fprintln(os.Stderr, lipgloss.NewStyle().Foreground(theme.New("formae").Palette.Error).Render("Error: "+err.Error()))
 		os.Exit(1)
 	}
 
@@ -83,7 +85,7 @@ func NewApp() *App {
 
 	err = config.Config.EnsureClientID()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, display.Red("Error: "+err.Error()))
+		_, _ = fmt.Fprintln(os.Stderr, lipgloss.NewStyle().Foreground(theme.New("formae").Palette.Error).Render("Error: "+err.Error()))
 		os.Exit(1)
 	}
 
@@ -126,9 +128,9 @@ func (a *App) LoadConfig(path string, configPathPrefix string) error {
 				if strings.ToLower(fileExtension) == ".pkl" {
 					return fmt.Errorf("%w\n%s %s\n%s %s",
 						err,
-						display.Gold("Pkl documentation:"),
+						docLabelStyle().Render("Pkl documentation:"),
 						"https://pkl-lang.org/main/current/language-reference/index.html",
-						display.Gold("Pkl primer:"),
+						docLabelStyle().Render("Pkl primer:"),
 						"https://pkl.platform.engineering",
 					)
 				}
@@ -154,17 +156,27 @@ func (a *App) LoadConfig(path string, configPathPrefix string) error {
 	return nil
 }
 
+// docLabelStyle is the shared style for doc-link / callout labels (e.g.
+// "Getting started:", "Pkl documentation:", "Configuration documentation:") —
+// brand orange (SecondaryAccent), consistent with the banner "Docs:" and the
+// cmd help. Distinct from Warning (gold), which is reserved for genuine cautions.
+func docLabelStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(theme.New("formae").Palette.SecondaryAccent)
+}
+
 // PrintBanner prints the formae banner followed by any config warnings
 // (e.g. deprecation notices for the old plugins block). Call this instead
-// of display.PrintBanner() in human-readable command flows so that
+// of banner.PrintBanner() in human-readable command flows so that
 // warnings are never emitted in machine-readable (JSON) output.
 func (a *App) PrintBanner() {
-	display.PrintBanner()
+	banner.PrintBanner()
 	if a.Config != nil && len(a.Config.Warnings) > 0 {
+		th := theme.New("formae")
+		goldStyle := lipgloss.NewStyle().Foreground(th.Palette.Warning)
 		for _, w := range a.Config.Warnings {
-			fmt.Fprintf(os.Stderr, "%s %s\n", display.Gold("Warning:"), w)
+			_, _ = fmt.Fprintf(os.Stderr, "%s %s\n", goldStyle.Render("Warning:"), w)
 		}
-		fmt.Fprintln(os.Stderr)
+		_, _ = fmt.Fprintln(os.Stderr)
 	}
 }
 
@@ -210,9 +222,9 @@ func (a *App) Apply(path string, props map[string]string, mode pkgmodel.FormaApp
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w\n%s %s\n%s %s",
 			err,
-			display.Gold("Pkl documentation:"),
+			docLabelStyle().Render("Pkl documentation:"),
 			"https://pkl-lang.org/main/current/language-reference/index.html",
-			display.Gold("Pkl primer:"),
+			docLabelStyle().Render("Pkl primer:"),
 			"https://pkl.platform.engineering",
 		)
 	}
@@ -255,9 +267,9 @@ func (a *App) Destroy(path string, query string, props map[string]string, simula
 		if err != nil {
 			return nil, nil, fmt.Errorf("%w\n%s %s\n%s %s",
 				err,
-				display.Gold("Pkl documentation:"),
+				docLabelStyle().Render("Pkl documentation:"),
 				"https://pkl-lang.org/main/current/language-reference/index.html",
-				display.Gold("Pkl primer:"),
+				docLabelStyle().Render("Pkl primer:"),
 				"https://pkl.platform.engineering",
 			)
 		}
@@ -332,14 +344,14 @@ func (a *App) GetCommandsStatus(query string, n int, fromWatch bool) (*apimodel.
 	return res, nags, nil
 }
 
-func (a *App) ExtractResources(query string) (*pkgmodel.Forma, []string, error) {
+func (a *App) ExtractResources(query string, fromTUI bool) (*pkgmodel.Forma, []string, error) {
 	auth, net, err := a.getAuthAndNetHandlers()
 	if err != nil {
 		return nil, nil, err
 	}
 	client := api.NewClient(a.Config.Cli.API, auth, net)
 
-	compatible, _, nags, err := a.runBeforeCommand(client, true)
+	compatible, _, nags, err := a.runBeforeCommand(client, !fromTUI)
 	if !compatible {
 		return nil, nil, err
 	}
@@ -497,6 +509,24 @@ func (a *App) UpdatePlugins(req apimodel.UpdatePluginsRequest) (*apimodel.Update
 	return client.UpdatePlugins(req)
 }
 
+// Preflight verifies the agent is reachable and version-compatible before an
+// interactive (TUI) command takes over the screen, so connection, auth, and
+// version-mismatch errors surface as ordinary CLI errors instead of being
+// rendered inside the alt-screen TUI. transmitStats is false so a preflight
+// check doesn't double-report usage stats.
+func (a *App) Preflight() error {
+	auth, net, err := a.getAuthAndNetHandlers()
+	if err != nil {
+		return err
+	}
+	client := api.NewClient(a.Config.Cli.API, auth, net)
+
+	if compatible, _, _, err := a.runBeforeCommand(client, false); !compatible {
+		return err
+	}
+	return nil
+}
+
 func (a *App) Stats() (*apimodel.Stats, []string, error) {
 	auth, net, err := a.getAuthAndNetHandlers()
 	if err != nil {
@@ -508,7 +538,7 @@ func (a *App) Stats() (*apimodel.Stats, []string, error) {
 		return nil, nil, err
 	} else {
 		if err == syscall.ECONNREFUSED {
-			return nil, nil, fmt.Errorf("agent is not running; please start the agent and try again\n\n%s %s", display.Gold("Getting started:"), display.DocRoot)
+			return nil, nil, fmt.Errorf("agent is not running; please start the agent and try again\n\n%s %s", docLabelStyle().Render("Getting started:"), banner.DocRoot)
 
 		} else if err != nil {
 			return nil, nil, fmt.Errorf("error fetching stats from agent: %v", err)
@@ -521,19 +551,22 @@ func (a *App) Stats() (*apimodel.Stats, []string, error) {
 func (a *App) runBeforeCommand(client *api.Client, transmitStats bool) (bool, *apimodel.Stats, []string, error) {
 	stats, err := client.Stats()
 	if err != nil {
+		th := theme.New("formae")
+		goldStyle := lipgloss.NewStyle().Foreground(th.Palette.Warning)
+		errStyle := lipgloss.NewStyle().Foreground(th.Palette.Error)
 		if err == syscall.ECONNREFUSED {
-			return false, nil, nil, fmt.Errorf("agent is not running; please start the agent and try again\n\n%s %s", display.Gold("Getting started:"), display.DocRoot)
+			return false, nil, nil, fmt.Errorf("agent is not running; please start the agent and try again\n\n%s %s", docLabelStyle().Render("Getting started:"), banner.DocRoot)
 		}
 		if errors.Is(err, api.AuthenticationError{}) {
 			return false, nil, nil, fmt.Errorf("%s\n\n%s",
-				display.Red("authentication failed"),
-				display.Gold("Check your cli.auth and agent.auth configuration."))
+				errStyle.Render("authentication failed"),
+				goldStyle.Render("Check your cli.auth and agent.auth configuration."))
 		}
 		return false, nil, nil, fmt.Errorf("error fetching stats from agent: %v", err)
 	}
 
 	if stats.Version != formae.Version {
-		return false, nil, nil, fmt.Errorf("incompatible agent version: expected %s, got %s\n\n%s %s", formae.Version, stats.Version, display.Gold("Configuration documentation:"), display.DocRoot)
+		return false, nil, nil, fmt.Errorf("incompatible agent version: expected %s, got %s\n\n%s %s", formae.Version, stats.Version, docLabelStyle().Render("Configuration documentation:"), banner.DocRoot)
 	}
 
 	if transmitStats && !a.Config.Cli.DisableUsageReporting {
@@ -559,7 +592,8 @@ func (a *App) calculateNags(stats *apimodel.Stats) []string {
 		if totalUnmanaged == 1 {
 			plural = ""
 		}
-		nags = append(nags, fmt.Sprintf("You have %d unmanaged resource%s. You can extract them using %s, adjust and apply the changes.", totalUnmanaged, plural, display.LightBlue("formae extract --query='managed:false'")))
+		th := theme.New("formae")
+		nags = append(nags, fmt.Sprintf("You have %d unmanaged resource%s. You can extract them using %s, adjust and apply the changes.", totalUnmanaged, plural, lipgloss.NewStyle().Foreground(th.Palette.PrimaryAccent).Render("formae extract --query='managed:false'")))
 	}
 
 	return nags
@@ -643,9 +677,9 @@ func (a *App) Evaluate(path string, props map[string]string, mode pkgmodel.Forma
 	if err != nil {
 		return nil, fmt.Errorf("%w\n%s %s\n%s %s",
 			err,
-			display.Gold("Pkl documentation:"),
+			docLabelStyle().Render("Pkl documentation:"),
 			"https://pkl-lang.org/main/current/language-reference/index.html",
-			display.Gold("Pkl primer:"),
+			docLabelStyle().Render("Pkl primer:"),
 			"https://pkl.platform.engineering",
 		)
 	}
@@ -756,14 +790,14 @@ func (a *App) buildDependencyStrings(forma *pkgmodel.Forma, location schema.Sche
 	return deps, nil
 }
 
-func (a *App) ExtractTargets(query string) ([]*pkgmodel.Target, []string, error) {
+func (a *App) ExtractTargets(query string, fromTUI bool) ([]*pkgmodel.Target, []string, error) {
 	auth, net, err := a.getAuthAndNetHandlers()
 	if err != nil {
 		return nil, nil, err
 	}
 	client := api.NewClient(a.Config.Cli.API, auth, net)
 
-	compatible, _, nags, err := a.runBeforeCommand(client, true)
+	compatible, _, nags, err := a.runBeforeCommand(client, !fromTUI)
 	if !compatible {
 		return nil, nil, err
 	}
@@ -780,14 +814,14 @@ func (a *App) ExtractTargets(query string) ([]*pkgmodel.Target, []string, error)
 	return targets, nags, nil
 }
 
-func (a *App) ExtractStacks() ([]*pkgmodel.Stack, []string, error) {
+func (a *App) ExtractStacks(fromTUI bool) ([]*pkgmodel.Stack, []string, error) {
 	auth, net, err := a.getAuthAndNetHandlers()
 	if err != nil {
 		return nil, nil, err
 	}
 	client := api.NewClient(a.Config.Cli.API, auth, net)
 
-	compatible, _, nags, err := a.runBeforeCommand(client, true)
+	compatible, _, nags, err := a.runBeforeCommand(client, !fromTUI)
 	if !compatible {
 		return nil, nil, err
 	}
@@ -804,14 +838,14 @@ func (a *App) ExtractStacks() ([]*pkgmodel.Stack, []string, error) {
 	return stacks, nags, nil
 }
 
-func (a *App) ExtractPolicies() ([]apimodel.PolicyInventoryItem, []string, error) {
+func (a *App) ExtractPolicies(fromTUI bool) ([]apimodel.PolicyInventoryItem, []string, error) {
 	auth, net, err := a.getAuthAndNetHandlers()
 	if err != nil {
 		return nil, nil, err
 	}
 	client := api.NewClient(a.Config.Cli.API, auth, net)
 
-	compatible, _, nags, err := a.runBeforeCommand(client, true)
+	compatible, _, nags, err := a.runBeforeCommand(client, !fromTUI)
 	if !compatible {
 		return nil, nil, err
 	}

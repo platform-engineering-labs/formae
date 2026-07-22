@@ -1,0 +1,1 @@
+{"CommandIds":["cmd-abc123","cmd-def456"],"ResourceUpdateStates":{"formae://res-aaa#":{"State":"Success","CommandId":"cmd-abc123"},"formae://res-bbb#":{"State":"InProgress","ForceCanceled":true,"CommandId":"cmd-abc123"},"formae://res-ccc#":{"State":"Canceled","CommandId":"cmd-def456"}},"Forced":true}

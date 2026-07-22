@@ -250,6 +250,7 @@ func translateConfig(config *pklmodel.Config) *pkgmodel.Config {
 			},
 			DisableUsageReporting: config.Cli.DisableUsageReporting,
 			Auth:                  translateAuthConfig(&config.Cli.Auth),
+			Theme:                 config.Cli.Theme,
 		},
 	}
 
@@ -534,7 +535,7 @@ func (p PKL) GenerateSourceCode(forma *pkgmodel.Forma, path string, includes []s
 	code, err := p.SerializeForma(forma, options)
 	if err != nil {
 		slog.Error(err.Error())
-		return schema.GenerateSourcesResult{}, schema.ErrFailedToGenerateSources
+		return schema.GenerateSourcesResult{}, fmt.Errorf("%w: %v", schema.ErrFailedToGenerateSources, err)
 	}
 	res.ResourceCount = len(forma.Resources)
 

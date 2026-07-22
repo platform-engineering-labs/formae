@@ -1,0 +1,1 @@
+[{"Label":"prod","Description":"Production stack","Policies":[{"TTLSeconds":7200,"Type":"ttl"}],"CreatedAt":"2026-01-15T10:00:00Z"},{"Label":"staging","Description":"Staging stack","CreatedAt":"2025-06-01T00:00:00Z"},{"Label":"expired-stack","Description":"Stack with expired TTL","Policies":[{"TTLSeconds":7200,"Type":"ttl"}],"CreatedAt":"2025-01-01T00:00:00Z"}]

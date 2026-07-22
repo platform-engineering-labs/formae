@@ -9,17 +9,40 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/platform-engineering-labs/formae/internal/cli/display"
+	"github.com/charmbracelet/lipgloss"
+
+	"github.com/platform-engineering-labs/formae/internal/cli/app"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 )
+
+// themeFor resolves the active theme from the app config.
+// The name falls back to "formae" for nil configs (theme.New nil-guards internally).
+func themeFor(a *app.App) *theme.Theme {
+	name := ""
+	if a != nil && a.Config != nil {
+		name = a.Config.Cli.Theme
+	}
+	return theme.New(name)
+}
+
+// SearchRenderOpts carries the optional filter echo parameters for renderPluginSearch.
+type SearchRenderOpts struct {
+	Query    string
+	Category string
+	Type     string
+}
 
 // renderPluginList groups the installed plugins by kind and renders one
 // row per plugin (✓ name version, optionally annotated with the bundle
 // they came from). The list is sourced from a single local read of the
 // orbital tree; there is no agent/CLI divergence to surface here.
-func renderPluginList(plugins []apimodel.Plugin) string {
+func renderPluginList(th *theme.Theme, plugins []apimodel.Plugin) string {
 	if len(plugins) == 0 {
-		return "No plugins installed.\n"
+		subtleStyle := lipgloss.NewStyle().Foreground(th.Palette.TextSubtle)
+		return "No plugins installed.\n" +
+			subtleStyle.Render("Search available plugins: formae plugin search <term>") + "\n"
 	}
 
 	// Group by kind/type. Bundles get their own section so users can see
@@ -53,54 +76,106 @@ func renderPluginList(plugins []apimodel.Plugin) string {
 		if addLeadingNewline {
 			sb.WriteString("\n")
 		}
-		sb.WriteString(display.LightBlue(header) + "\n")
+		// Group headers use the shared SectionHeader ("▌ Title", SecondaryAccent
+		// bold) at column 0, with rows indented 2 (renderPluginRow) — the
+		// CLI-wide convention (see components.SectionHeader / Indent).
+		sb.WriteString(components.SectionHeader(th, header) + "\n")
 		for _, p := range plugins {
-			sb.WriteString(renderPluginRow(p) + "\n")
+			sb.WriteString(renderPluginRow(th, p) + "\n")
 		}
 	}
 
-	emit("Resource plugins:", resource, false)
-	emit("Auth plugins:", auth, len(resource) > 0)
-	emit("Bundles:", bundles, len(resource) > 0 || len(auth) > 0)
+	emit("Resource plugins", resource, false)
+	emit("Auth plugins", auth, len(resource) > 0)
+	emit("Bundles", bundles, len(resource) > 0 || len(auth) > 0)
 
 	return sb.String()
 }
 
-func renderPluginRow(p apimodel.Plugin) string {
-	name := padRight(p.Name, 14)
+func renderPluginRow(th *theme.Theme, p apimodel.Plugin) string {
+	doneStyle := lipgloss.NewStyle().Foreground(th.Palette.Done)
+	secondaryStyle := lipgloss.NewStyle().Foreground(th.Palette.TextSecondary)
+	subtleStyle := lipgloss.NewStyle().Foreground(th.Palette.TextSubtle)
+
+	name := components.Pad(p.Name, 14)
 	managedBy := ""
 	if p.ManagedBy != "" {
-		managedBy = display.Grey("  (" + p.ManagedBy + ")")
+		managedBy = "   " + subtleStyle.Render("(part of "+p.ManagedBy+")")
 	}
+	// Rows indent 2 under the column-0 SectionHeader (CLI convention).
 	return fmt.Sprintf("  %s %s  %s%s",
-		display.Green("✓"), name, display.Grey(p.InstalledVersion), managedBy)
+		doneStyle.Render("✓"), name, secondaryStyle.Render(p.InstalledVersion), managedBy)
 }
 
-func renderPluginSearch(plugins []apimodel.Plugin) string {
+func renderPluginSearch(th *theme.Theme, plugins []apimodel.Plugin, opts SearchRenderOpts) string {
 	if len(plugins) == 0 {
-		return "No plugins found.\n"
+		query := opts.Query
+		if query == "" {
+			query = "your query"
+		}
+		return "No plugins found for '" + query + "'.\n"
+	}
+
+	accentStyle := lipgloss.NewStyle().Foreground(th.Palette.PrimaryAccent)
+	doneStyle := lipgloss.NewStyle().Foreground(th.Palette.Done)
+	secondaryStyle := lipgloss.NewStyle().Foreground(th.Palette.TextSecondary)
+
+	// Determine max name width for padding.
+	maxName := 0
+	for _, p := range plugins {
+		if len(p.Name) > maxName {
+			maxName = len(p.Name)
+		}
+	}
+	if maxName < 14 {
+		maxName = 14
 	}
 
 	var sb strings.Builder
 	for _, p := range plugins {
-		line := fmt.Sprintf("  %s  %s",
-			padRight(p.Name, 14),
-			p.Summary)
+		name := components.Pad(p.Name, maxName)
+		styledName := accentStyle.Render(name)
+		line := fmt.Sprintf("  %s  %s", styledName, p.Summary)
 		if p.InstalledVersion != "" {
-			line += "  " + display.Green("✓ installed")
+			// right-align the installed marker after the summary
+			line += "  " + doneStyle.Render("✓ installed")
 		}
 		sb.WriteString(line + "\n")
 	}
+
+	// Footer: count + install hint + optional filter echo.
+	footerParts := []string{fmt.Sprintf("%d plugin", len(plugins))}
+	if len(plugins) != 1 {
+		footerParts[0] += "s"
+	}
+	footerParts[0] += " · install with: formae plugin install <name>"
+	if opts.Category != "" {
+		footerParts = append(footerParts, "category: "+opts.Category)
+	}
+	if opts.Type != "" {
+		footerParts = append(footerParts, "type: "+opts.Type)
+	}
+	footer := strings.Join(footerParts, " · ")
+	sb.WriteString("  " + secondaryStyle.Render(footer) + "\n")
+
 	return sb.String()
 }
 
-func renderPluginInfo(p *apimodel.Plugin) string {
+func renderPluginInfo(th *theme.Theme, p *apimodel.Plugin) string {
+	accentStyle := lipgloss.NewStyle().Foreground(th.Palette.PrimaryAccent).Bold(true)
+	doneStyle := lipgloss.NewStyle().Foreground(th.Palette.Done)
+
 	var sb strings.Builder
-	installed := ""
+
+	// Header: name (accent bold) + version + optional installed marker.
+	header := accentStyle.Render(p.Name)
 	if p.InstalledVersion != "" {
-		installed = " (installed)"
+		header += " " + p.InstalledVersion + "  " + doneStyle.Render("✓ installed")
 	}
-	fmt.Fprintf(&sb, "%s %s%s\n", display.LightBlue(p.Name), p.InstalledVersion, display.Green(installed))
+	fmt.Fprintf(&sb, "%s\n\n", header)
+
+	// Build field pairs — same conditional set as original renderPluginInfo.
+	var pairs [][2]string
 
 	// For bundles display "bundle" rather than the empty plugin type and
 	// surface the description so the user understands what the bundle
@@ -108,43 +183,50 @@ func renderPluginInfo(p *apimodel.Plugin) string {
 	// (resource | auth) and namespace as before. ("metapackage" is the
 	// internal orbital term; "bundle" is what we show users.)
 	if p.Kind == "metapackage" {
-		fmt.Fprintf(&sb, "  %-14s %s\n", display.Grey("Type:"), "bundle")
+		pairs = append(pairs, [2]string{"Type", "bundle"})
 	} else {
-		fmt.Fprintf(&sb, "  %-14s %s\n", display.Grey("Type:"), p.Type)
+		pairs = append(pairs, [2]string{"Type", p.Type})
 		if p.Namespace != "" {
-			fmt.Fprintf(&sb, "  %-14s %s\n", display.Grey("Namespace:"), p.Namespace)
+			pairs = append(pairs, [2]string{"Namespace", p.Namespace})
 		}
 	}
 	if p.Category != "" {
-		fmt.Fprintf(&sb, "  %-14s %s\n", display.Grey("Category:"), p.Category)
+		pairs = append(pairs, [2]string{"Category", p.Category})
 	}
 	if p.Summary != "" {
-		fmt.Fprintf(&sb, "  %-14s %s\n", display.Grey("Summary:"), p.Summary)
+		pairs = append(pairs, [2]string{"Summary", p.Summary})
 	}
 	if p.Kind == "metapackage" && p.Description != "" && p.Description != p.Summary {
-		fmt.Fprintf(&sb, "  %-14s %s\n", display.Grey("Description:"), p.Description)
+		pairs = append(pairs, [2]string{"Description", p.Description})
 	}
 	if p.Publisher != "" {
-		fmt.Fprintf(&sb, "  %-14s %s\n", display.Grey("Publisher:"), p.Publisher)
+		pairs = append(pairs, [2]string{"Publisher", p.Publisher})
 	}
 	if p.License != "" {
-		fmt.Fprintf(&sb, "  %-14s %s\n", display.Grey("License:"), p.License)
+		pairs = append(pairs, [2]string{"License", p.License})
 	}
 	if p.Channel != "" {
-		fmt.Fprintf(&sb, "  %-14s %s\n", display.Grey("Channel:"), p.Channel)
+		pairs = append(pairs, [2]string{"Channel", p.Channel})
 	}
 	if len(p.AvailableVersions) > 0 {
-		fmt.Fprintf(&sb, "  %-14s %s\n", display.Grey("Available:"), strings.Join(p.AvailableVersions, ", "))
+		// Highlight the installed version inside the available list.
+		versions := make([]string, len(p.AvailableVersions))
+		for i, v := range p.AvailableVersions {
+			if v == p.InstalledVersion {
+				versions[i] = doneStyle.Render(v)
+			} else {
+				versions[i] = v
+			}
+		}
+		pairs = append(pairs, [2]string{"Available", strings.Join(versions, ", ")})
 	}
 	if p.ManagedBy != "" {
-		fmt.Fprintf(&sb, "  %-14s %s\n", display.Grey("Part of:"), p.ManagedBy)
+		pairs = append(pairs, [2]string{"Part of", p.ManagedBy})
 	}
-	return sb.String()
-}
 
-func padRight(s string, width int) string {
-	if len(s) >= width {
-		return s
+	if len(pairs) > 0 {
+		fmt.Fprintf(&sb, "  %s\n", strings.ReplaceAll(components.FieldList(th, pairs), "\n", "\n  "))
 	}
-	return s + strings.Repeat(" ", width-len(s))
+
+	return sb.String()
 }

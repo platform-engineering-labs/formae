@@ -6,15 +6,17 @@ package plugin
 
 import (
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
 	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
-	"github.com/platform-engineering-labs/formae/internal/cli/display"
 	"github.com/platform-engineering-labs/formae/internal/cli/printer"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 )
 
@@ -84,32 +86,64 @@ func validateUninstallOptions(opts *UninstallOptions) error {
 }
 
 func runUninstallForHumans(app *app.App, opts *UninstallOptions) error {
-	mgr, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, "", true, true)
-	if err != nil {
-		return err
-	}
+	app.PrintBanner()
+	return runUninstallForHumansWithSeams(app, opts, os.Stdout, nil)
+}
+
+// runUninstallForHumansWithSeams is the testable inner implementation. mgr may
+// be non-nil to inject a stub; when nil a real CLIPluginManager is created.
+func runUninstallForHumansWithSeams(app *app.App, opts *UninstallOptions, w io.Writer, mgr localUninstaller) error {
 	if mgr == nil {
-		return fmt.Errorf("no artifact repositories configured; set artifacts.repositories in your formae config")
+		real, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, "", true, true)
+		if err != nil {
+			return err
+		}
+		if real == nil {
+			return fmt.Errorf("no artifact repositories configured; set artifacts.repositories in your formae config")
+		}
+		mgr = real
 	}
+
+	th := themeFor(app)
+	tty := pluginIsTerminal(w)
+	n := len(opts.Packages)
+	noun := "plugin"
+	if n != 1 {
+		noun = "plugins"
+	}
+	label := fmt.Sprintf("Removing %d %s…", n, noun)
+	step := components.StartStep(w, th, label)
 
 	if err := mgr.LocalUninstall(opts.Packages); err != nil {
+		step.Fail(fmt.Sprintf("Failed to remove %s", strings.Join(opts.Packages, ", ")))
 		return err
 	}
 
+	step.Done(fmt.Sprintf("Removed %d %s", n, noun))
+
 	for _, name := range opts.Packages {
-		fmt.Printf("  %s Removed %s\n", display.Green("✓"), name)
+		ackLine(w, tty, th, components.AckDone, fmt.Sprintf("Removed %s", name))
 	}
-	fmt.Printf("\n  %s If this host runs the formae agent, restart it to unload the plugins: formae agent restart\n", display.Gold("!"))
+	ackLine(w, tty, th, components.AckWarn, "If this host runs the formae agent, restart it to unload the plugins: formae agent restart")
 	return nil
 }
 
 func runUninstallForMachines(app *app.App, opts *UninstallOptions) error {
-	mgr, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, "", true, true)
-	if err != nil {
-		return err
-	}
+	return runUninstallForMachinesWithSeams(app, opts, os.Stdout, nil)
+}
+
+// runUninstallForMachinesWithSeams is the testable inner implementation for
+// the machine path. mgr may be non-nil to inject a stub.
+func runUninstallForMachinesWithSeams(app *app.App, opts *UninstallOptions, w io.Writer, mgr localUninstaller) error {
 	if mgr == nil {
-		return fmt.Errorf("no artifact repositories configured; set artifacts.repositories in your formae config")
+		real, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, "", true, true)
+		if err != nil {
+			return err
+		}
+		if real == nil {
+			return fmt.Errorf("no artifact repositories configured; set artifacts.repositories in your formae config")
+		}
+		mgr = real
 	}
 
 	if err := mgr.LocalUninstall(opts.Packages); err != nil {
@@ -120,6 +154,6 @@ func runUninstallForMachines(app *app.App, opts *UninstallOptions) error {
 		Operations:      operationsFromPackages(opts.Packages, "remove"),
 		RequiresRestart: true,
 	}
-	p := printer.NewMachineReadablePrinter[apimodel.UninstallPluginsResponse](os.Stdout, opts.OutputSchema)
+	p := printer.NewMachineReadablePrinter[apimodel.UninstallPluginsResponse](w, opts.OutputSchema)
 	return p.Print(resp)
 }

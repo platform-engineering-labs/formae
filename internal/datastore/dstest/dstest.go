@@ -34,6 +34,7 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunGetFormaApplyByFormaHash(t, newDS)
 	RunStoreAndLoadFormaCommandOptionalFields(t, newDS)
 	RunStoreFormaCommandSyncSkipsResourceUpdates(t, newDS)
+	RunCommandSourceRoundTrip(t, newDS)
 	RunGetMostRecentFormaCommandByClientID(t, newDS)
 	RunGetMostRecentNonReconcileFormaCommandsByStack(t, newDS)
 	RunQueryFormaCommands(t, newDS)

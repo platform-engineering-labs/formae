@@ -21,8 +21,6 @@ func TestValidateEvalOptions(t *testing.T) {
 			Mode:           pkgmodel.FormaApplyModePatch,
 			OutputConsumer: printer.ConsumerHuman,
 			OutputSchema:   "json",
-			Beautify:       true,
-			Colorize:       true,
 			Properties:     map[string]string{},
 		}
 		assert.EqualError(t, validateEvalOptions(opts), "forma file is required")
@@ -34,8 +32,6 @@ func TestValidateEvalOptions(t *testing.T) {
 			Mode:           "invalid",
 			OutputConsumer: printer.ConsumerHuman,
 			OutputSchema:   "json",
-			Beautify:       true,
-			Colorize:       true,
 			Properties:     map[string]string{},
 		}
 		assert.EqualError(t, validateEvalOptions(opts), "mode must be 'patch' or 'reconcile'")
@@ -47,8 +43,6 @@ func TestValidateEvalOptions(t *testing.T) {
 			Mode:           pkgmodel.FormaApplyModePatch,
 			OutputConsumer: "invalid",
 			OutputSchema:   "json",
-			Beautify:       true,
-			Colorize:       true,
 			Properties:     map[string]string{},
 		}
 		assert.EqualError(t, validateEvalOptions(opts), "output-consumer must be 'human' or 'machine'")
@@ -60,10 +54,14 @@ func TestValidateEvalOptions(t *testing.T) {
 			Mode:           pkgmodel.FormaApplyModePatch,
 			OutputConsumer: printer.ConsumerMachine,
 			OutputSchema:   "invalid",
-			Beautify:       true,
-			Colorize:       true,
 			Properties:     map[string]string{},
 		}
 		assert.EqualError(t, validateEvalOptions(opts), "output-schema must be 'json' or 'yaml' for machine consumer")
 	})
+}
+
+func TestEvalCmd_BeautifyColorizeFlagsRemoved(t *testing.T) {
+	cmd := EvalCmd()
+	assert.Nil(t, cmd.Flags().Lookup("beautify"))
+	assert.Nil(t, cmd.Flags().Lookup("colorize"))
 }

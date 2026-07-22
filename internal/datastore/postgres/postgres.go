@@ -207,8 +207,8 @@ func (d DatastorePostgres) StoreFormaCommand(fa *forma_command.FormaCommand, com
 	query := fmt.Sprintf(`
 	INSERT INTO %s (command_id, timestamp, command, state, agent_version, client_id, agent_id,
 		description_text, description_confirm, config_mode, config_force, config_simulate,
-		target_updates, stack_updates, policy_updates, modified_ts)
-	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+		target_updates, stack_updates, policy_updates, modified_ts, source)
+	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 	ON CONFLICT (command_id) DO UPDATE
 	SET timestamp = EXCLUDED.timestamp,
 	command = EXCLUDED.command,
@@ -224,12 +224,13 @@ func (d DatastorePostgres) StoreFormaCommand(fa *forma_command.FormaCommand, com
 	target_updates = EXCLUDED.target_updates,
 	stack_updates = EXCLUDED.stack_updates,
 	policy_updates = EXCLUDED.policy_updates,
-	modified_ts = EXCLUDED.modified_ts
+	modified_ts = EXCLUDED.modified_ts,
+	source = EXCLUDED.source
 	`, datastore.CommandsTable)
 
 	_, err = d.pool.Exec(ctx, query, commandID, fa.StartTs.UTC(), fa.Command, fa.State, formae.Version, fa.ClientID, d.agentID,
 		fa.Description.Text, fa.Description.Confirm, fa.Config.Mode, fa.Config.Force, fa.Config.Simulate,
-		targetUpdatesJSON, stackUpdatesJSON, policyUpdatesJSON, fa.ModifiedTs.UTC())
+		targetUpdatesJSON, stackUpdatesJSON, policyUpdatesJSON, fa.ModifiedTs.UTC(), string(fa.Source))
 	if err != nil {
 		slog.Error("failed to store FormaCommand", "query", query, "error", err)
 		return err
@@ -253,7 +254,7 @@ const formaCommandWithResourceUpdatesQueryBasePostgres = `
 SELECT
 	fc.command_id, fc.timestamp, fc.command, fc.state, fc.client_id,
 	fc.description_text, fc.description_confirm, fc.config_mode, fc.config_force, fc.config_simulate,
-	fc.target_updates, fc.stack_updates, fc.policy_updates, fc.modified_ts,
+	fc.target_updates, fc.stack_updates, fc.policy_updates, fc.modified_ts, fc.source,
 	ru.ksuid, ru.operation, ru.state, ru.start_ts, ru.modified_ts,
 	ru.retries, ru.remaining, ru.version, ru.stack_label, ru.group_id, ru.source,
 	ru.resource, ru.resource_target, ru.existing_resource, ru.existing_target,
@@ -280,6 +281,7 @@ func scanJoinedRowPostgres(rows pgx.Rows) (*forma_command.FormaCommand, *resourc
 	var stackUpdatesJSON []byte
 	var policyUpdatesJSON []byte
 	var fcModifiedTs *time.Time
+	var fcSource *string
 
 	// ResourceUpdate fields (all nullable due to LEFT JOIN)
 	var ruKsuid, ruOperation, ruState *string
@@ -296,7 +298,7 @@ func scanJoinedRowPostgres(rows pgx.Rows) (*forma_command.FormaCommand, *resourc
 		// FormaCommand columns
 		&commandID, &fcTimestamp, &fcCommand, &fcState, &fcClientID,
 		&descriptionText, &descriptionConfirm, &configMode, &configForce, &configSimulate,
-		&targetUpdatesJSON, &stackUpdatesJSON, &policyUpdatesJSON, &fcModifiedTs,
+		&targetUpdatesJSON, &stackUpdatesJSON, &policyUpdatesJSON, &fcModifiedTs, &fcSource,
 		// ResourceUpdate columns
 		&ruKsuid, &ruOperation, &ruState, &ruStartTs, &ruModifiedTs,
 		&ruRetries, &ruRemaining, &ruVersion, &ruStackLabel, &ruGroupID, &ruSource,
@@ -333,6 +335,9 @@ func scanJoinedRowPostgres(rows pgx.Rows) (*forma_command.FormaCommand, *resourc
 
 	if fcModifiedTs != nil {
 		cmd.ModifiedTs = *fcModifiedTs
+	}
+	if fcSource != nil {
+		cmd.Source = forma_command.Source(*fcSource)
 	}
 
 	if len(targetUpdatesJSON) > 0 {
@@ -686,7 +691,7 @@ func (d DatastorePostgres) QueryFormaCommands(query *datastore.StatusQuery) ([]*
 		SELECT
 			fc.command_id, fc.timestamp, fc.command, fc.state, fc.client_id,
 			fc.description_text, fc.description_confirm, fc.config_mode, fc.config_force, fc.config_simulate,
-			fc.target_updates, fc.stack_updates, fc.policy_updates, fc.modified_ts,
+			fc.target_updates, fc.stack_updates, fc.policy_updates, fc.modified_ts, fc.source,
 			ru.ksuid, ru.operation, ru.state, ru.start_ts, ru.modified_ts,
 			ru.retries, ru.remaining, ru.version, ru.stack_label, ru.group_id, ru.source,
 			ru.resource, ru.resource_target, ru.existing_resource, ru.existing_target,
@@ -795,7 +800,8 @@ func (d DatastorePostgres) GetResourceModificationsSinceLastReconcile(stack stri
 	SELECT DISTINCT
 	T2.type,
 	T2.label,
-	T2.operation
+	T2.operation,
+	T2.ksuid
 	FROM forma_commands AS T1
 	JOIN resources AS T2
 	ON T1.command_id = T2.command_id
@@ -831,23 +837,116 @@ func (d DatastorePostgres) GetResourceModificationsSinceLastReconcile(stack stri
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
-	modifications := make(map[datastore.ResourceModification]struct{})
+	// Phase 1: fully drain and close rows before issuing secondary queries so
+	// we never hold a pool connection hostage while acquiring another one.
+	type rawRow struct {
+		resourceType string
+		label        string
+		operation    string
+		ksuid        string
+	}
+	var raw []rawRow
 	for rows.Next() {
-		var resourceType, label, operation string
-		if err := rows.Scan(&resourceType, &label, &operation); err != nil {
+		var r rawRow
+		if err := rows.Scan(&r.resourceType, &r.label, &r.operation, &r.ksuid); err != nil {
+			rows.Close()
 			return nil, err
 		}
-		modifications[datastore.ResourceModification{Stack: stack, Type: resourceType, Label: label, Operation: operation}] = struct{}{}
+		raw = append(raw, r)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 
-	result := make([]datastore.ResourceModification, 0, len(modifications))
-	for mod := range modifications {
-		result = append(result, mod)
+	// Phase 2: for update ops, fetch the current and at-last-reconcile properties.
+	var modifications []datastore.ResourceModification
+	for _, r := range raw {
+		mod := datastore.ResourceModification{
+			Stack:     stack,
+			Type:      r.resourceType,
+			Label:     r.label,
+			Operation: r.operation,
+		}
+		if r.operation == "update" {
+			curProps, propErr := d.fetchCurrentPropertiesPG(ctx, r.ksuid)
+			if propErr != nil {
+				return nil, fmt.Errorf("failed to fetch current properties for %s: %w", r.ksuid, propErr)
+			}
+			oldProps, propErr := d.fetchReconcilePropertiesPG(ctx, r.ksuid, stack)
+			if propErr != nil {
+				return nil, fmt.Errorf("failed to fetch reconcile properties for %s: %w", r.ksuid, propErr)
+			}
+			mod.Properties = curProps
+			mod.OldProperties = oldProps
+		}
+		modifications = append(modifications, mod)
 	}
 
-	return result, nil
+	return modifications, nil
+}
+
+// fetchCurrentPropertiesPG returns the Properties JSON from the latest resource version for the given ksuid.
+func (d DatastorePostgres) fetchCurrentPropertiesPG(ctx context.Context, ksuid string) (json.RawMessage, error) {
+	query := `
+SELECT data->>'Properties'
+FROM resources
+WHERE ksuid = $1
+ORDER BY version COLLATE "C" DESC
+LIMIT 1
+`
+	var props *string
+	if err := d.pool.QueryRow(ctx, query, ksuid).Scan(&props); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if props == nil || *props == "" {
+		return nil, nil
+	}
+	return json.RawMessage(*props), nil
+}
+
+// fetchReconcilePropertiesPG returns the Properties JSON of the resource version
+// that was current as of the most recent reconcile command for the given stack:
+// the latest version whose owning command does not postdate that reconcile.
+// A resource untouched by the last reconcile (no new version row) still
+// resolves to the version it had when that reconcile ran.
+func (d DatastorePostgres) fetchReconcilePropertiesPG(ctx context.Context, ksuid, stack string) (json.RawMessage, error) {
+	query := `
+SELECT r.data->>'Properties'
+FROM resources r
+JOIN forma_commands fc_r
+  ON fc_r.command_id = r.command_id
+WHERE r.ksuid = $1
+  AND fc_r.timestamp <= (
+    SELECT fc.timestamp
+    FROM forma_commands fc
+    WHERE fc.config_mode = 'reconcile'
+      AND EXISTS (
+        SELECT 1 FROM resources rr
+        WHERE rr.command_id = fc.command_id
+          AND rr.stack = $2
+      )
+    ORDER BY fc.timestamp DESC
+    LIMIT 1
+  )
+ORDER BY r.version COLLATE "C" DESC
+LIMIT 1
+`
+	var props *string
+	if err := d.pool.QueryRow(ctx, query, ksuid, stack).Scan(&props); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if props == nil || *props == "" {
+		return nil, nil
+	}
+	return json.RawMessage(*props), nil
 }
 
 func (d DatastorePostgres) BatchGetTripletsByKSUIDs(ksuids []string) (map[string]pkgmodel.TripletKey, error) {

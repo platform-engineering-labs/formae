@@ -391,6 +391,50 @@ func TestMetastructure_ForceCancelCommand_CommandWritePersistFailureSurfaces(t *
 	})
 }
 
+// TestMetastructure_ForceCancelCommand_ResourceStatesAttributeCommandID verifies that every
+// entry in CancelCommandResponse.ResourceUpdateStates carries the CommandID of the canceled
+// command it belongs to.
+func TestMetastructure_ForceCancelCommand_ResourceStatesAttributeCommandID(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		m, def, err := test_helpers.NewTestMetastructure(t, neverReturningOverrides())
+		defer def()
+		require.NoError(t, err)
+
+		resp, err := m.ApplyForma(twoBucketForma(), &config.FormaCommandConfig{
+			Mode: pkgmodel.FormaApplyModeReconcile,
+		}, "test-client")
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+		canceledCommandID := resp.CommandID
+
+		// Wait for at least 2 resources to be InProgress.
+		assert.Eventually(t, func() bool {
+			commands, err := m.Datastore.LoadFormaCommands()
+			if err != nil || len(commands) != 1 || len(commands[0].ResourceUpdates) != 3 {
+				return false
+			}
+			inProgress := 0
+			for _, ru := range commands[0].ResourceUpdates {
+				if ru.State == resource_update.ResourceUpdateStateInProgress {
+					inProgress++
+				}
+			}
+			return inProgress >= 2
+		}, 10*time.Second, 50*time.Millisecond, "expected at least 2 resource updates to be in progress")
+
+		// Cancel via CancelCommandsByQuery (the aggregation path that builds ResourceUpdateStates).
+		cancelResp, err := m.CancelCommandsByQuery("", true, "test-client")
+		require.NoError(t, err)
+		require.NotNil(t, cancelResp)
+
+		// Every entry in ResourceUpdateStates must attribute the command it belongs to.
+		require.NotEmpty(t, cancelResp.ResourceUpdateStates, "expected ResourceUpdateStates to be populated")
+		for uri, rs := range cancelResp.ResourceUpdateStates {
+			assert.Equalf(t, canceledCommandID, rs.CommandID, "entry %s must attribute its command", uri)
+		}
+	})
+}
+
 // TestMetastructure_ForceCancelCommand_WriteFenceDropsLateMessages verifies the monotonic
 // terminality write-fence at the workflow level: after a force-cancel commits, a late
 // completion message for a force-canceled resource update is dropped — the per-RU state

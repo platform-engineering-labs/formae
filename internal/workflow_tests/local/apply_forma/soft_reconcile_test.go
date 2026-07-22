@@ -309,18 +309,44 @@ func TestApplyForma_SoftReconcile_ReturnsMostRecentChangesPerStack(t *testing.T)
 
 		assert.Contains(t, rejectedErr.ModifiedStacks, "test-stack1")
 		assert.Len(t, rejectedErr.ModifiedStacks["test-stack1"].ModifiedResources, 2)
-		assert.Contains(t, rejectedErr.ModifiedStacks["test-stack1"].ModifiedResources, apimodel.ResourceModification{
-			Stack:     "test-stack1",
-			Type:      "FakeAWS::S3::Bucket",
-			Label:     "test-resource1",
-			Operation: "update",
-		})
-		assert.Contains(t, rejectedErr.ModifiedStacks["test-stack1"].ModifiedResources, apimodel.ResourceModification{
-			Stack:     "test-stack1",
-			Type:      "FakeAWS::S3::Bucket",
-			Label:     "test-resource2",
-			Operation: "update",
-		})
+
+		// findMod returns the modification matching stack/type/label/operation, or nil.
+		findMod := func(label string) *apimodel.ResourceModification {
+			for i := range rejectedErr.ModifiedStacks["test-stack1"].ModifiedResources {
+				m := &rejectedErr.ModifiedStacks["test-stack1"].ModifiedResources[i]
+				if m.Stack == "test-stack1" && m.Type == "FakeAWS::S3::Bucket" &&
+					m.Label == label && m.Operation == "update" {
+					return m
+				}
+			}
+			return nil
+		}
+
+		// assertDrift verifies an update-op modification carries the drift
+		// payload: both property documents and a non-empty patch describing
+		// the transition from oldProps to curProps.
+		assertDrift := func(mod *apimodel.ResourceModification, oldProps, curProps string) {
+			t.Helper()
+			assert.JSONEq(t, oldProps, string(mod.OldProperties), "OldProperties should hold the at-last-reconcile state")
+			assert.JSONEq(t, curProps, string(mod.Properties), "Properties should hold the current cloud state")
+			if assert.NotEmpty(t, mod.PatchDocument, "PatchDocument should be populated for update ops") {
+				var ops []map[string]any
+				assert.NoError(t, json.Unmarshal(mod.PatchDocument, &ops))
+				assert.NotEmpty(t, ops, "PatchDocument should have at least one op")
+			}
+		}
+
+		// The fake plugin's Update override always reports {"foo":"baz"} as the
+		// resulting cloud state, so that is the current state for both resources.
+		mod1 := findMod("test-resource1")
+		if assert.NotNil(t, mod1, "test-resource1 modification should be present") {
+			assertDrift(mod1, `{"foo":"bar"}`, `{"foo":"baz"}`)
+		}
+
+		mod2 := findMod("test-resource2")
+		if assert.NotNil(t, mod2, "test-resource2 modification should be present") {
+			assertDrift(mod2, `{"foo":"bar"}`, `{"foo":"baz"}`)
+		}
 
 		// The command should not have been executed or stored
 		commands, err = m.Datastore.LoadFormaCommands()

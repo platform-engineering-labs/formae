@@ -31,6 +31,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_persister"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/patch"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/policy_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/querier"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
@@ -332,7 +333,7 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 				if len(unabsorbed) > 0 {
 					modifiedResources := make([]apimodel.ResourceModification, 0, len(unabsorbed))
 					for _, modification := range unabsorbed {
-						modifiedResources = append(modifiedResources, apimodel.ResourceModification(modification))
+						modifiedResources = append(modifiedResources, toAPIResourceModification(modification))
 					}
 					modifiedStacks[stackLabel] = apimodel.ModifiedStack{
 						ModifiedResources: modifiedResources,
@@ -551,6 +552,8 @@ func translateToAPICommand(fa *forma_command.FormaCommand) apimodel.Command {
 	apiCommand := apimodel.Command{
 		CommandID: fa.ID,
 		Command:   string(fa.Command),
+		Mode:      string(fa.Config.Mode),
+		Source:    string(fa.Source),
 		State:     string(fa.State),
 		StartTs:   fa.StartTs,
 		EndTs:     fa.ModifiedTs,
@@ -907,6 +910,7 @@ func (m *Metastructure) CancelCommandsByQuery(query string, force bool, clientID
 					allResourceStates[uri] = apimodel.CancelResourceState{
 						State:         state,
 						ForceCanceled: forceCanceled[uri],
+						CommandID:     cmd.ID,
 					}
 				}
 			}
@@ -1231,7 +1235,7 @@ func (m *Metastructure) ListDrift(stack string) (*apimodel.ModifiedStack, error)
 
 	modifiedResources := make([]apimodel.ResourceModification, 0, len(modifications))
 	for _, modification := range modifications {
-		modifiedResources = append(modifiedResources, apimodel.ResourceModification(modification))
+		modifiedResources = append(modifiedResources, toAPIResourceModification(modification))
 	}
 
 	return &apimodel.ModifiedStack{ModifiedResources: modifiedResources}, nil
@@ -1740,6 +1744,31 @@ func findCascadeTargetDeletes(
 	return cascadeTargetUpdates, cascadeResourceUpdates, nil
 }
 
+// toAPIResourceModification converts a datastore ResourceModification into its
+// API-model counterpart. For update operations it also computes the JSON-patch
+// document describing the drift between the properties at the last reconcile
+// and the current (cloud) properties. A failed patch computation degrades to
+// label-only display — it never fails the caller.
+func toAPIResourceModification(modification datastore.ResourceModification) apimodel.ResourceModification {
+	patchDoc := json.RawMessage(nil)
+	if modification.Operation == "update" && len(modification.OldProperties) > 0 && len(modification.Properties) > 0 {
+		if p, perr := patch.DriftPatch(modification.OldProperties, modification.Properties); perr == nil {
+			patchDoc = p
+		} else {
+			slog.Warn("failed to compute drift patch", "stack", modification.Stack, "label", modification.Label, "error", perr)
+		}
+	}
+	return apimodel.ResourceModification{
+		Stack:         modification.Stack,
+		Type:          modification.Type,
+		Label:         modification.Label,
+		Operation:     modification.Operation,
+		PatchDocument: patchDoc,
+		Properties:    modification.Properties,
+		OldProperties: modification.OldProperties,
+	}
+}
+
 // filterUnabsorbedModifications returns only those modifications that have NOT been
 // absorbed into the provided forma. A modification is considered absorbed when:
 //   - The forma contains a resource with matching stack, type, and label
@@ -1975,6 +2004,7 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 		stackUpdates,
 		policyUpdates,
 		clientID,
+		forma_command.SourceUser,
 	), nil
 }
 

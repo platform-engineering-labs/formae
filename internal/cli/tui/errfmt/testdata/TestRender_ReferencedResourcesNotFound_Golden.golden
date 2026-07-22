@@ -1,0 +1,7 @@
+[38;2;248;113;113mforma command rejected because the following referenced resources were not found:[0m
+  my-vpc
+    [38;2;153;153;153mof type [0mAWS::EC2::VPC
+    [38;2;153;153;153mfrom stack [0mnetworking
+  my-subnet
+    [38;2;153;153;153mof type [0mAWS::EC2::Subnet
+    [38;2;153;153;153mfrom stack [0mnetworking

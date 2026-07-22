@@ -7,21 +7,64 @@ package cancel
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
+	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
 	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
 	"github.com/platform-engineering-labs/formae/internal/cli/config"
-	"github.com/platform-engineering-labs/formae/internal/cli/display"
 	"github.com/platform-engineering-labs/formae/internal/cli/printer"
-	"github.com/platform-engineering-labs/formae/internal/cli/prompter"
-	"github.com/platform-engineering-labs/formae/internal/cli/renderer"
 	"github.com/platform-engineering-labs/formae/internal/cli/status"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/errfmt"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/statuswatch"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 )
+
+// Package-level seams — replaced in tests to avoid TTY / network calls.
+var (
+	isInteractive = tui.IsInteractive
+	runConfirm    = components.RunConfirm
+)
+
+// printBanner is a seam so tests can assert the banner is/isn't called.
+var printBanner = func(a *app.App) { a.PrintBanner() }
+
+// isTerminal returns true when the writer is a real terminal (includes Cygwin).
+var isTerminal = tui.IsTerminal
+
+// getCommandsStatusFn is a seam so tests can stub the pre-fetch call.
+var getCommandsStatusFn = func(a *app.App, query string, n int, fromWatch bool) (*apimodel.ListCommandStatusResponse, []string, error) {
+	return a.GetCommandsStatus(query, n, fromWatch)
+}
+
+// cancelCommandFn is a seam so tests can stub the cancel call.
+var cancelCommandFn = func(a *app.App, query string, force bool) (*apimodel.CancelCommandResponse, error) {
+	return a.CancelCommand(query, force)
+}
+
+// launchCancelWatch is a seam so tests can stub the statuswatch TUI launch after cancel.
+var launchCancelWatch = func(a *app.App, th *theme.Theme, opts statuswatch.Options) error {
+	model := statuswatch.New(th, a, opts)
+	_, err := tui.Run(model, tui.DefaultRunOptions())
+	return err
+}
+
+// themeFor resolves the active theme from the app config.
+func themeFor(a *app.App) *theme.Theme {
+	name := ""
+	if a != nil && a.Config != nil {
+		name = a.Config.Cli.Theme
+	}
+	return theme.New(name)
+}
 
 type CancelOptions struct {
 	Query          string
@@ -123,9 +166,220 @@ func runCancel(app *app.App, opts *CancelOptions) error {
 	return runCancelForMachines(app, opts)
 }
 
-func runCancelForHumans(app *app.App, opts *CancelOptions) error {
-	app.PrintBanner()
+func runCancelForHumans(a *app.App, opts *CancelOptions) error {
+	// TTY: the styled D6 frozen-set flow (--yes only skips the force confirm).
+	// Non-TTY: the legacy flow, unchanged.
+	if isTerminal(os.Stdout) {
+		// Suppress banner when the huh confirmForceCancel prompt will be shown
+		// (graphics cannot precede an alt-screen UI). All other interactive paths
+		// are styled text output, so the banner is safe there.
+		if !opts.Force || opts.Yes {
+			printBanner(a)
+		}
+		return runCancelInteractive(a, opts)
+	}
+	printBanner(a)
+	return runCancelLegacy(a, opts)
+}
 
+// runCancelInteractive implements the styled TTY cancel flow. The commands to
+// cancel are frozen at pre-fetch time (D6): the user cancels exactly the
+// commands they were shown, never a re-evaluated query.
+func runCancelInteractive(a *app.App, opts *CancelOptions) error {
+	th := themeFor(a)
+	now := time.Now()
+
+	// Step 1: Pre-fetch non-terminal commands matching the query (D6 frozen set).
+	preFetch, _, err := getCommandsStatusFn(a, opts.Query, 50, false)
+	if err != nil {
+		msg, renderErr := errfmt.Render(err)
+		if renderErr != nil {
+			return fmt.Errorf("error rendering error message: %v", renderErr)
+		}
+		return fmt.Errorf("%s", msg)
+	}
+
+	// Filter to non-terminal commands only.
+	var activeCmds []apimodel.Command
+	if preFetch != nil {
+		for _, c := range preFetch.Commands {
+			if !isTerminalState(c.State) {
+				activeCmds = append(activeCmds, c)
+			}
+		}
+	}
+
+	if len(activeCmds) == 0 {
+		fmt.Println("No commands to cancel.")
+		return nil
+	}
+
+	// Step 2: --force && !--yes → show warning panel and ask for confirmation.
+	if opts.Force && !opts.Yes {
+		if !isInteractive() {
+			return fmt.Errorf("interactive input requires a TTY — pass --yes")
+		}
+		// Build the pre-consent summary for the confirmation panel. Each command shows
+		// a header line (ID + command + mode) followed by an expectation bullet derived
+		// from its pre-fetched ResourceUpdates (per mockup VIEW 2b).
+		thForSummary := themeFor(a)
+		var summaryLines []string
+		for _, c := range activeCmds {
+			summaryLines = append(summaryLines, fmt.Sprintf("  %s  %s %s", c.CommandID, c.Command, c.Mode))
+			counts := bucketPreCancel(c)
+			if line := renderPreCancelExpectationLine(thForSummary, counts); line != "" {
+				summaryLines = append(summaryLines, line)
+			}
+		}
+		summary := strings.Join(summaryLines, "\n")
+
+		ok, confirmErr := confirmForceCancel(th, summary)
+		if confirmErr != nil {
+			// User aborted (ctrl+c / esc) — treat as decline
+			return nil
+		}
+		if !ok {
+			return nil
+		}
+	}
+
+	// Step 3: D6 frozen set — submit one cancel per pre-fetched command ID.
+	merged := &apimodel.CancelCommandResponse{
+		Forced:               opts.Force,
+		ResourceUpdateStates: make(map[string]apimodel.CancelResourceState),
+	}
+	for _, c := range activeCmds {
+		idQuery := fmt.Sprintf("id:%s", c.CommandID)
+		res, cancelErr := cancelCommandFn(a, idQuery, opts.Force)
+		if cancelErr != nil {
+			msg, renderErr := errfmt.Render(cancelErr)
+			if renderErr != nil {
+				return fmt.Errorf("error rendering error message: %v", renderErr)
+			}
+			return fmt.Errorf("%s", msg)
+		}
+		if res == nil || len(res.CommandIDs) == 0 {
+			// Command finished between pre-fetch and cancel — skip silently.
+			continue
+		}
+		// Merge CommandIDs (union).
+		merged.CommandIDs = append(merged.CommandIDs, res.CommandIDs...)
+		// Merge ResourceUpdateStates.
+		for k, v := range res.ResourceUpdateStates {
+			merged.ResourceUpdateStates[k] = v
+		}
+	}
+
+	if len(merged.CommandIDs) == 0 {
+		fmt.Println("No commands to cancel.")
+		return nil
+	}
+
+	// Compute expectations from merged response.
+	exps := cancelExpectations(merged)
+
+	// Step 4/5: --watch vs. no-watch.
+	if opts.Watch {
+		fmt.Println(renderCancelSummary(th, activeCmds, exps, opts.Force, now))
+
+		// Build the set of force-abandoned resource ksuids (P3 normalization at call site).
+		var abandonedKsuids []string
+		for uri, rs := range merged.ResourceUpdateStates {
+			if rs.ForceCanceled {
+				abandonedKsuids = append(abandonedKsuids, ksuidFromURI(uri))
+			}
+		}
+		sort.Strings(abandonedKsuids)
+
+		if len(merged.CommandIDs) == 1 {
+			return launchCancelWatch(a, th, statuswatch.Options{
+				Query:              fmt.Sprintf("id:%s", merged.CommandIDs[0]),
+				FocusCommandID:     merged.CommandIDs[0],
+				ExitWhenDone:       true,
+				AbandonedResources: abandonedKsuids,
+			})
+		}
+		idTerms := make([]string, len(merged.CommandIDs))
+		for i, id := range merged.CommandIDs {
+			idTerms[i] = "id:" + id
+		}
+		return launchCancelWatch(a, th, statuswatch.Options{
+			Query:              strings.Join(idTerms, " "),
+			ExitWhenDone:       true,
+			AbandonedResources: abandonedKsuids,
+		})
+	}
+
+	// No --watch: print styled summary.
+	fmt.Print(renderCancelSummary(th, activeCmds, exps, opts.Force, now))
+
+	// Force output: list force-canceled resources with warning.
+	if opts.Force {
+		renderForceCanceledResources(th, merged, activeCmds)
+	}
+
+	return nil
+}
+
+// isTerminalState returns true for states that can no longer be canceled.
+func isTerminalState(state string) bool {
+	switch state {
+	case "Success", "Failed", "Canceled":
+		return true
+	}
+	return false
+}
+
+// renderForceCanceledResources prints the list of resources that were abandoned
+// due to --force, followed by the abandoned/orphan reminder lines (the copy
+// from the legacy RenderCancelCommandResponse, restyled via theme roles).
+func renderForceCanceledResources(th *theme.Theme, merged *apimodel.CancelCommandResponse, cmds []apimodel.Command) {
+	warnStyle := lipgloss.NewStyle().Foreground(th.Palette.Warning)
+	subtle := lipgloss.NewStyle().Foreground(th.Palette.TextSecondary)
+
+	// Resolve response keys (FormaeURIs) to resource labels via the pre-fetched
+	// commands: the URI's ksuid matches ResourceUpdate.ResourceID.
+	labels := make(map[string]string)
+	for _, c := range cmds {
+		for _, ru := range c.ResourceUpdates {
+			if ru.ResourceLabel != "" {
+				labels[ru.ResourceID] = fmt.Sprintf("%s (%s)", ru.ResourceLabel, ru.ResourceType)
+			}
+		}
+	}
+
+	var abandoned []string
+	for uri, rs := range merged.ResourceUpdateStates {
+		if !rs.ForceCanceled {
+			continue
+		}
+		ksuid := ksuidFromURI(uri)
+		if label, ok := labels[ksuid]; ok {
+			abandoned = append(abandoned, label)
+		} else {
+			abandoned = append(abandoned, ksuid)
+		}
+	}
+	sort.Strings(abandoned)
+
+	if len(abandoned) > 0 {
+		fmt.Println()
+		fmt.Printf("  %s\n", warnStyle.Render("The following resources were abandoned mid-operation and may exist in your cloud provider:"))
+		for _, res := range abandoned {
+			fmt.Printf("    %s %s\n", warnStyle.Render("⚠"), res)
+		}
+	}
+
+	fmt.Println()
+	fmt.Printf("  %s\n", subtle.Render("Force-cancel abandons in-progress work; cloud-side operations may still be running."))
+	fmt.Printf("  %s\n", subtle.Render("Update/Delete operations are reconciled by the synchronizer on its next cycle."))
+	fmt.Printf("  %s\n", subtle.Render("A still-running Create may orphan a resource: verify the resources above in your"))
+	fmt.Printf("  %s\n", subtle.Render("cloud provider and clean up manually, or let discovery pick them up."))
+}
+
+// runCancelLegacy is the pre-TUI human flow, used on non-TTY output. It
+// submits the user's query as-is and prints via the human-readable printer.
+func runCancelLegacy(a *app.App, opts *CancelOptions) error {
 	// A plain cancel is safe (it waits for in-progress resources to finish). A
 	// --force cancel is a destructive escape hatch: it abandons in-progress work,
 	// can leave cloud-side operations running, and may orphan resources. Confirm
@@ -144,29 +398,32 @@ func runCancelForHumans(app *app.App, opts *CancelOptions) error {
 				"  • Update/Delete operations are reconciled by the synchronizer on its next cycle.\n\n"+
 				"Only use this for operations that will not complete on their own.\n\n"+
 				"Force-cancel anyway?",
-			display.Gold("Warning: --force is a destructive escape hatch."),
+			lipgloss.NewStyle().Foreground(themeFor(a).Palette.Warning).Render("Warning: --force is a destructive escape hatch."),
 			target,
 		)
-		if !prompter.NewBasicPrompter().Confirm(prompt, false) {
-			fmt.Print(display.Red("\nCommand aborted\n"))
+		if !isInteractive() {
+			return fmt.Errorf("interactive input requires a TTY — pass --yes")
+		}
+		ok, confirmErr := runConfirm(themeFor(a), prompt, "")
+		if confirmErr != nil {
+			return confirmErr
+		}
+		if !ok {
+			fmt.Print(lipgloss.NewStyle().Foreground(themeFor(a).Palette.Error).Render("\nCommand aborted") + "\n")
 			return nil
 		}
 	}
 
-	res, err := app.CancelCommand(opts.Query, opts.Force)
+	res, err := cancelCommandFn(a, opts.Query, opts.Force)
 	if err != nil {
-		msg, renderErr := renderer.RenderErrorMessage(err)
+		msg, renderErr := errfmt.Render(err)
 		if renderErr != nil {
 			return fmt.Errorf("error rendering error message: %v", renderErr)
 		}
 		return fmt.Errorf("%s", msg)
 	}
 
-	p := printer.NewHumanReadablePrinter[apimodel.CancelCommandResponse](os.Stdout)
-	err = p.Print(res, printer.PrintOptions{})
-	if err != nil {
-		return err
-	}
+	_, _ = fmt.Print(renderCancelResult(themeFor(a), res, cancelTermWidth(os.Stdout)))
 
 	// If no commands were canceled, nothing to watch
 	if res == nil || len(res.CommandIDs) == 0 {
@@ -179,26 +436,12 @@ func runCancelForHumans(app *app.App, opts *CancelOptions) error {
 		// For single command, watch by ID
 		if len(res.CommandIDs) == 1 {
 			query := fmt.Sprintf("id:%s", res.CommandIDs[0])
-			return status.WatchCommandsStatus(app, query, 1, opts.StatusOutput)
+			return status.WatchCommandsStatus(a, query, 1, opts.StatusOutput)
 		}
 
 		// For multiple commands, watch without filter to see all recent commands
 		// (which will include all the canceling/canceled commands)
-		return status.WatchCommandsStatus(app, "", len(res.CommandIDs), opts.StatusOutput)
-	}
-
-	// Show how query the status of the canceled commands
-	if len(res.CommandIDs) == 1 {
-		query := fmt.Sprintf("id:%s", res.CommandIDs[0])
-		fmt.Printf("\nRun the following command to check the status of this command:\n\n  %s%s%s\n",
-			display.Grey("formae status command --query='"), display.LightBlue(query), display.Grey("'"))
-	} else {
-		// For multiple commands, list individual command IDs
-		fmt.Printf("\nRun the following commands to check the status of each canceled command:\n\n")
-		for _, cmdID := range res.CommandIDs {
-			fmt.Printf("  %s%s%s\n",
-				display.Grey("formae status command --query='id:"), display.LightBlue(cmdID), display.Grey("'"))
-		}
+		return status.WatchCommandsStatus(a, "", len(res.CommandIDs), opts.StatusOutput)
 	}
 
 	return nil
