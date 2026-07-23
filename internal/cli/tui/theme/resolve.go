@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Resolve returns the theme for a config name, applying aliases, user-dir
@@ -36,7 +37,7 @@ func resolveWithDir(name, userDir string, warn func(string)) *Theme {
 
 	// Step 2: user-dir override (may shadow a built-in name).
 	if userDir != "" {
-		if th, ok := loadUserTheme(userDir, name); ok {
+		if th, ok := loadUserTheme(userDir, name, warn); ok {
 			return th
 		}
 	}
@@ -47,24 +48,31 @@ func resolveWithDir(name, userDir string, warn func(string)) *Theme {
 	}
 
 	// Step 4: warn + fall back to quiet.
-	warn(fmt.Sprintf("formae: unknown cli.theme %q, falling back to quiet", name))
+	warn(fmt.Sprintf("formae: unknown cli.theme %q, falling back to quiet (available: %s)",
+		name, strings.Join(builtinNames(), ", ")))
 	th, _ := loadBuiltin("quiet")
 	return th
 }
 
 // loadUserTheme loads ~/.config/formae/themes/<name>.toml, resolving one level
-// of extends against a built-in base. Returns (nil, false) if absent/broken.
-func loadUserTheme(dir, name string) (*Theme, bool) {
-	data, err := os.ReadFile(filepath.Join(dir, name+".toml"))
+// of extends against a built-in base. A missing file returns (nil, false)
+// silently (the resolver falls through to built-ins); a file that exists but
+// fails to parse or has an invalid extends is reported via warn before
+// returning (nil, false), so a user debugging their own theme sees why.
+func loadUserTheme(dir, name string, warn func(string)) (*Theme, bool) {
+	path := filepath.Join(dir, name+".toml")
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, false
 	}
 	f, err := parseThemeFile(data)
 	if err != nil {
+		warn(fmt.Sprintf("formae: theme file %s failed to parse: %v", path, err))
 		return nil, false
 	}
 	merged, err := resolveExtends(f)
 	if err != nil {
+		warn(fmt.Sprintf("formae: theme file %s: %v", path, err))
 		return nil, false
 	}
 	return merged.toTheme(), true

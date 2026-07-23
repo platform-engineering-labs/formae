@@ -11,7 +11,6 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/platform-engineering-labs/formae/internal/cli/app"
 	tui "github.com/platform-engineering-labs/formae/internal/cli/tui"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/inventoryview"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"

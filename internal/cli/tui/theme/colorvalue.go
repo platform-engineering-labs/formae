@@ -41,8 +41,3 @@ func (c *colorValue) UnmarshalTOML(v any) error {
 func (c colorValue) adaptive() lipgloss.AdaptiveColor {
 	return lipgloss.AdaptiveColor{Light: c.Light, Dark: c.Dark}
 }
-
-// isZero reports whether the value is unset (used by extends merge).
-func (c colorValue) isZero() bool {
-	return c.Light == "" && c.Dark == ""
-}

@@ -36,11 +36,6 @@ func TestColorValueTable(t *testing.T) {
 	assert.Equal(t, "#EEEEEE", doc.C.Dark)
 }
 
-func TestColorValueIsZero(t *testing.T) {
-	assert.True(t, colorValue{}.isZero())
-	assert.False(t, colorValue{Light: "#000000"}.isZero())
-}
-
 func lipglossAdaptive(light, dark string) lipgloss.AdaptiveColor {
 	return lipgloss.AdaptiveColor{Light: light, Dark: dark}
 }
