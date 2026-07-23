@@ -1,0 +1,21 @@
+name = "colorblind"
+extends = "quiet"
+
+[palette]
+# Blue/orange safe pairing; avoid relying on red vs green.
+op_create  = { light = "#0072B2", dark = "#56B4E9" }
+op_update  = { light = "#009E73", dark = "#33C295" }
+op_delete  = { light = "#D55E00", dark = "#E69F55" }
+op_replace = { light = "#CC79A7", dark = "#E6A0C4" }
+done       = { light = "#0072B2", dark = "#56B4E9" }
+error      = { light = "#D55E00", dark = "#E69F55" }
+
+[progress]
+# Distinct textures per state so shape (not only hue) carries meaning.
+fill_done = "█"
+fill_inprogress = "▚"
+fill_pending = "░"
+animation = "blink"
+
+[confirmation_bar]
+color = "brand"

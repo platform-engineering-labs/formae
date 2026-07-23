@@ -1,0 +1,22 @@
+name = "classic"
+extends = "quiet"
+
+[palette]
+base             = { light = "#FFFFFF", dark = "#000000" }
+surface          = { light = "#FFFFFF", dark = "#111111" }
+text_primary     = { light = "#000000", dark = "#FFFFFF" }
+text_secondary   = { light = "#666666", dark = "#808080" }
+text_subtle      = { light = "#999999", dark = "#555555" }
+border           = { light = "#CCCCCC", dark = "#444444" }
+primary_accent   = { light = "#5B9BD5", dark = "#ADD8E6" }
+secondary_accent = "#B5B55B"
+error            = { light = "#FF0000", dark = "#FF6666" }
+error_subtle     = { light = "#A94442", dark = "#994444" }
+error_bright     = { light = "#CC0000", dark = "#FF9999" }
+warning          = "#B5B55B"
+done             = { light = "#008000", dark = "#00FF00" }
+in_progress      = { light = "#5B9BD5", dark = "#ADD8E6" }
+pending          = "#808080"
+op_create  = { light = "#008000", dark = "#00FF00" }
+op_update  = { light = "#5B9BD5", dark = "#ADD8E6" }
+op_delete  = { light = "#FF0000", dark = "#FF6666" }

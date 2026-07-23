@@ -1,0 +1,13 @@
+name = "rich"
+extends = "quiet"
+
+[palette]
+op_create  = { light = "#16A34A", dark = "#4ADE80" }
+op_update  = { light = "#2563EB", dark = "#60A5FA" }
+op_delete  = { light = "#B5B55B", dark = "#B5B55B" }
+op_replace = { light = "#FF6B00", dark = "#FF8533" }
+op_detach  = { light = "#888888", dark = "#888888" }
+op_keep    = { light = "#888888", dark = "#888888" }
+
+[confirmation_bar]
+color = "severity"
