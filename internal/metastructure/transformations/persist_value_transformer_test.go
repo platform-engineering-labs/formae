@@ -303,6 +303,41 @@ func TestApplyToResource_HashesTopLevelScalarPatchOpValue(t *testing.T) {
 	require.NoError(t, err)
 	var ops []map[string]any
 	require.NoError(t, json.Unmarshal(out.PatchDocument, &ops))
-	assert.NotEqual(t, "super-secret-password", ops[0]["value"])
-	assert.Len(t, ops[0]["value"].(string), 64)
+
+	value, ok := ops[0]["value"].(map[string]any)
+	require.True(t, ok, "hashed patch-op value must be a typed envelope, not a bare string")
+	assert.Equal(t, true, value["$hashed"])
+	assert.Equal(t, "Opaque", value["$visibility"])
+	assert.NotEqual(t, "super-secret-password", value["$value"])
+	assert.Len(t, value["$value"].(string), 64)
+}
+
+// TestApplyToResource_PatchOpHashingIsIdempotent guards against hash-of-hash: both
+// hashSensitiveDataIfComplete (on FormaCommand completion) and BackfillHashedSecrets
+// (on agent boot) re-run ApplyToResource against an already-hashed patch document.
+// Re-running the transform on its own output must be a no-op.
+func TestApplyToResource_PatchOpHashingIsIdempotent(t *testing.T) {
+	r := &pkgmodel.Resource{
+		Schema:        schemaWithOpaque("SecretString"),
+		PatchDocument: json.RawMessage(`[{"op":"replace","path":"/SecretString","value":"super-secret-password"}]`),
+	}
+
+	firstRun, err := NewPersistValueTransformer().ApplyToResource(r)
+	require.NoError(t, err)
+
+	var ops []map[string]any
+	require.NoError(t, json.Unmarshal(firstRun.PatchDocument, &ops))
+	value, ok := ops[0]["value"].(map[string]any)
+	require.True(t, ok, "hashed patch-op value must be a typed envelope")
+	require.Equal(t, true, value["$hashed"])
+	require.NotEqual(t, "super-secret-password", value["$value"])
+	require.Len(t, value["$value"].(string), 64)
+
+	// Re-run against the already-hashed output (as boot-time BackfillHashedSecrets
+	// or a resumed completion pass would).
+	secondRun, err := NewPersistValueTransformer().ApplyToResource(firstRun)
+	require.NoError(t, err)
+
+	assert.Equal(t, string(firstRun.PatchDocument), string(secondRun.PatchDocument),
+		"re-hashing an already-hashed patch document must be a byte-identical no-op")
 }

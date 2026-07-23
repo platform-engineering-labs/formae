@@ -185,8 +185,19 @@ func (pv *PersistValueTransformer) transformPatchDocument(patchDoc json.RawMessa
 			continue
 		}
 		if path, _ := op["path"].(string); opaqueFields[path] {
+			if m, ok := value.(map[string]any); ok {
+				if h, ok := m["$hashed"].(bool); ok && h {
+					// Already a hashed envelope — idempotent, leave as-is.
+					continue
+				}
+			}
 			if s, ok := value.(string); ok {
-				patchOps[i]["value"] = (&pkgmodel.Value{Value: s, Visibility: pkgmodel.VisibilityOpaque}).Hash().Value
+				hashed := (&pkgmodel.Value{Value: s, Visibility: pkgmodel.VisibilityOpaque}).Hash()
+				patchOps[i]["value"] = map[string]any{
+					"$value":      hashed.Value,
+					"$visibility": pkgmodel.VisibilityOpaque,
+					"$hashed":     true,
+				}
 				continue
 			}
 		}
