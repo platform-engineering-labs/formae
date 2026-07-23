@@ -219,6 +219,7 @@ open class FieldHint extends Annotation {
     /// which only excludes a field from drift detection.
     hidden requiredOnUpdate: Boolean = false
     hidden hasProviderDefault: Boolean = false
+    hidden opaque: Boolean = false                // NEW: field carries a formae.SecretValue
     hidden attachesTo: Boolean = false           // DEPRECATED; use edgeKind instead
     hidden edgeKind: EdgeKind = "default"        // NEW
     hidden indexField: String?
@@ -236,6 +237,7 @@ open class FieldHint extends Annotation {
     fixed RequiredOnCreate: Boolean = requiredOnCreate
     fixed RequiredOnUpdate: Boolean = requiredOnUpdate
     fixed HasProviderDefault: Boolean = hasProviderDefault
+    fixed Opaque: Boolean = opaque                // NEW
     fixed AttachesTo: Boolean = attachesTo
     fixed EdgeKind: String = edgeKind
     fixed UpdateMethod: String = updateMethod ?? ""
@@ -422,6 +424,20 @@ open class Value {
     $value: String = value
     $visibility: String = visibility
     $strategy: String = strategy
+}
+
+/// A secret value. Typing a resource field `(String|formae.SecretValue)` (or
+/// nullable/union variants thereof) marks the field opaque in its schema
+/// FieldHint (opaque-by-default), so the agent hashes it at rest regardless
+/// of how the author supplied the value.
+open class SecretValue extends Value {
+    hidden opaque: SecretValue = (this) {
+        visibility = "Opaque"
+    }
+
+    hidden setOnce: SecretValue = (this) {
+        strategy = "SetOnce"
+    }
 }
 
 open class Prop {
@@ -623,6 +639,7 @@ class Fq {
             let(key = if(fieldHint.outputField != null) fieldHint.outputField else resourceHint.outputKeyTransformation.apply(k))
             let(baseHint = (fieldHint) {
                 required = !(v.type is reflect.NullableType)
+                opaque = isSecretValueType(v.type)
             })
             Pair(key, baseHint)
         ))
@@ -657,6 +674,7 @@ class Fq {
             let(key = if(fieldHint.outputField != null) fieldHint.outputField else outputKeyTransformation.apply(k))
             let(baseHint = (fieldHint) {
                 required = !(v.type is reflect.NullableType)
+                opaque = isSecretValueType(v.type)
             })
             Pair(key, baseHint)
         ))
@@ -698,6 +716,24 @@ class Fq {
         cls.superclass != null &&
         (cls.superclass.name == "SubResource" ||
          isSubResourceClass(cls.superclass))
+
+    /// Detects whether a field's declared type references formae.SecretValue,
+    /// directly or through nullable/union positions. Nested/list/map
+    /// positions are deferred — first cut only.
+    function isSecretValueType(type: reflect.Type): Boolean =
+        if (type is reflect.DeclaredType)
+            let (referent = type.referent)
+            if (referent is reflect.Class) isSecretValueClass(referent) else false
+        else if (type is reflect.NullableType)
+            isSecretValueType(type.member)
+        else if (type is reflect.UnionType)
+            type.members.any((m) -> isSecretValueType(m))
+        else false
+
+    function isSecretValueClass(c: reflect.Class): Boolean =
+        if (c.name == "SecretValue") true
+        else if (c.superclass != null) isSecretValueClass(c.superclass)
+        else false
 
     function getSubResourceClass(type: reflect.Type): reflect.Class =
         if (type is reflect.DeclaredType)
