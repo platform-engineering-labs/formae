@@ -700,7 +700,7 @@ func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData,
 			// Check if resource should be filtered using MatchFilters (declarative, OR logic)
 			shouldFilter := false
 			for i := range data.resourceUpdate.MatchFilters {
-				if shouldFilterByMatchFilter(&data.resourceUpdate.MatchFilters[i], completeProperties) {
+				if ShouldFilterByMatchFilter(&data.resourceUpdate.MatchFilters[i], completeProperties) {
 					shouldFilter = true
 					break
 				}
@@ -933,9 +933,9 @@ func resourceFailedToResolve(from gen.PID, state gen.Atom, data ResourceUpdateDa
 	return StateFinishedWithError, data, nil, nil
 }
 
-// shouldFilterByMatchFilter checks if a resource should be filtered using declarative MatchFilter.
+// ShouldFilterByMatchFilter checks if a resource should be filtered using declarative MatchFilter.
 // Returns true if all conditions match (AND logic), indicating the resource should be excluded.
-func shouldFilterByMatchFilter(filter *pkgmodel.MatchFilter, properties json.RawMessage) bool {
+func ShouldFilterByMatchFilter(filter *pkgmodel.MatchFilter, properties json.RawMessage) bool {
 	if filter == nil {
 		return false
 	}

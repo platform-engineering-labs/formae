@@ -1582,3 +1582,123 @@ func TestTargetDelete_ForgetsUnmanagedResourcesImmediately(t *testing.T) {
 			"only the surviving provider target's unmanaged resource should remain after target deletion")
 	})
 }
+
+// TestSynchronizer_EvictsUnmanagedRowMatchingDiscoveryFilter verifies that a sync
+// pass evicts an unmanaged inventory row when the freshly-read cloud state matches
+// a discovery filter configured on the plugin.
+//
+// Two cases are exercised in one test to keep setup cheap:
+//  1. Unmanaged row — its Read response contains the filter sentinel value.
+//     The row must be gone from inventory after ForceSync.
+//  2. Managed row — same filter sentinel in its Read response but Managed=true.
+//     The row must survive ForceSync because the eviction path is unmanaged-only.
+func TestSynchronizer_EvictsUnmanagedRowMatchingDiscoveryFilter(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		// FakeAWS.DiscoveryFilters() returns a filter for FakeAWS::S3::Bucket that
+		// excludes resources where $.SkipDiscovery == "true". The Read override
+		// below returns that value for both resources so we can verify that only
+		// the unmanaged row gets evicted.
+		overrides := &plugin.ResourcePluginOverrides{
+			Read: func(request *resource.ReadRequest) (*resource.ReadResult, error) {
+				return &resource.ReadResult{
+					ResourceType: request.ResourceType,
+					Properties:   `{"BucketName":"` + request.NativeID + `","SkipDiscovery":"true"}`,
+				}, nil
+			},
+		}
+
+		cfg := test_helpers.NewTestMetastructureConfig()
+		cfg.Agent.Synchronization.Enabled = false
+		m, def, err := test_helpers.NewTestMetastructureWithConfig(t, overrides, cfg)
+		defer def()
+		require.NoError(t, err)
+
+		// Create the target that both resources live on.
+		_, err = m.Datastore.CreateTarget(&pkgmodel.Target{Label: "test-target", Discoverable: true, Namespace: "FakeAWS"})
+		require.NoError(t, err)
+
+		unmanagedKsuid := util.NewID()
+		managedKsuid := util.NewID()
+
+		// Seed unmanaged row: Managed=false, stack=$unmanaged.
+		_, err = m.Datastore.StoreResource(&pkgmodel.Resource{
+			Ksuid:      unmanagedKsuid,
+			NativeID:   "bucket-unmanaged",
+			Stack:      "$unmanaged",
+			Type:       "FakeAWS::S3::Bucket",
+			Label:      "bucket-unmanaged",
+			Target:     "test-target",
+			Properties: json.RawMessage(`{"BucketName":"bucket-unmanaged"}`),
+			Schema: pkgmodel.Schema{
+				Identifier: "BucketName",
+				Fields:     []string{"BucketName"},
+			},
+			Managed: false,
+		}, "seed-cmd")
+		require.NoError(t, err)
+
+		// Seed managed row: Managed=true, stack=managed-stack.
+		_, err = m.Datastore.StoreResource(&pkgmodel.Resource{
+			Ksuid:      managedKsuid,
+			NativeID:   "bucket-managed",
+			Stack:      "managed-stack",
+			Type:       "FakeAWS::S3::Bucket",
+			Label:      "bucket-managed",
+			Target:     "test-target",
+			Properties: json.RawMessage(`{"BucketName":"bucket-managed"}`),
+			Schema: pkgmodel.Schema{
+				Identifier: "BucketName",
+				Fields:     []string{"BucketName"},
+			},
+			Managed: true,
+		}, "seed-cmd")
+		require.NoError(t, err)
+
+		// Both rows should be present before the sync.
+		unmanagedRows, err := m.Datastore.LoadResourcesByStack("$unmanaged")
+		require.NoError(t, err)
+		require.Len(t, unmanagedRows, 1, "unmanaged row must be seeded before sync")
+
+		managedRows, err := m.Datastore.LoadResourcesByStack("managed-stack")
+		require.NoError(t, err)
+		require.Len(t, managedRows, 1, "managed row must be seeded before sync")
+
+		// Trigger a single sync pass.
+		err = m.ForceSync()
+		require.NoError(t, err)
+
+		// Wait for the sync to complete by polling the forma commands table.
+		require.Eventually(t, func() bool {
+			cmds, err := m.Datastore.LoadFormaCommands()
+			if err != nil {
+				return false
+			}
+			for _, cmd := range cmds {
+				if cmd.Command == pkgmodel.CommandSync && len(cmd.ResourceUpdates) > 0 {
+					allDone := true
+					for _, ru := range cmd.ResourceUpdates {
+						if ru.State != resource_update.ResourceUpdateStateSuccess &&
+							ru.State != resource_update.ResourceUpdateStateFailed {
+							allDone = false
+							break
+						}
+					}
+					if allDone {
+						return true
+					}
+				}
+			}
+			return false
+		}, 10*time.Second, 100*time.Millisecond, "sync command should complete")
+
+		// Unmanaged row whose Read response matches the filter must be evicted.
+		unmanagedRows, err = m.Datastore.LoadResourcesByStack("$unmanaged")
+		require.NoError(t, err)
+		assert.Empty(t, unmanagedRows, "unmanaged row matching discovery filter must be evicted by sync")
+
+		// Managed row must survive — eviction applies only to unmanaged rows.
+		managedRows, err = m.Datastore.LoadResourcesByStack("managed-stack")
+		require.NoError(t, err)
+		require.Len(t, managedRows, 1, "managed row must survive sync even when it matches a discovery filter")
+	})
+}

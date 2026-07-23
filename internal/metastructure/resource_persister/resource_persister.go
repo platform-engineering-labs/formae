@@ -145,6 +145,7 @@ func (rp *ResourcePersister) storeResourceUpdate(commandID string, resourceOpera
 				MostRecentProgressResult: *relevantProgress,
 				GroupID:                  resourceUpdate.GroupID,
 				StackLabel:               resourceUpdate.StackLabel,
+				MatchFilters:             resourceUpdate.MatchFilters,
 			},
 		},
 	}
@@ -413,6 +414,44 @@ func (rp *ResourcePersister) processResourceUpdate(commandID string, rc resource
 				resourceVersion, storeResourceErr = rp.datastore.StoreResource(secretSafeResource, commandID)
 
 				return resourceVersion, storeResourceErr
+			}
+
+			// Evict unmanaged rows whose freshly-read cloud state matches a discovery
+			// filter. Discovery filters are forward-only: they prevent newly-found
+			// resources from entering inventory, but a resource discovered before a
+			// filter was added stays in inventory until a sync Read checks it here.
+			// This check must run before the JsonEqualRaw early-return below so that
+			// a wedged unmanaged row with unchanged properties is still removed when
+			// it begins to match a filter.
+			if !currentResource.Managed && len(rc.MatchFilters) > 0 {
+				// Merge Properties and ReadOnlyProperties to get the complete cloud
+				// state to evaluate against — mirrors the merge Discovery uses.
+				completeProperties, mergeErr := util.MergeJSON(
+					rc.DesiredState.Properties,
+					rc.DesiredState.ReadOnlyProperties,
+				)
+				if mergeErr != nil {
+					completeProperties = rc.DesiredState.Properties
+				}
+
+				for i := range rc.MatchFilters {
+					// A filter with no conditions never evicts here — skip it so that
+					// an unconfigured filter does not accidentally remove every row.
+					// This deliberately overrides the matcher's vacuous-true result
+					// for an empty condition set.
+					if len(rc.MatchFilters[i].Conditions) == 0 {
+						continue
+					}
+					if resource_update.ShouldFilterByMatchFilter(&rc.MatchFilters[i], completeProperties) {
+						slog.Info("Evicting unmanaged inventory row that matches a discovery filter",
+							"namespace", rc.ResourceTarget.Namespace,
+							"resourceType", rc.DesiredState.Type,
+							"nativeID", rc.DesiredState.NativeID,
+							"filterResourceTypes", rc.MatchFilters[i].ResourceTypes,
+						)
+						return rp.datastore.DeleteResource(&rc.DesiredState, commandID)
+					}
+				}
 			}
 
 			// Only persist if Properties or ReadOnlyProperties have changed
