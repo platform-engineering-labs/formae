@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/tuitest"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
@@ -548,11 +549,13 @@ func TestSimView_DestroyConfirmCountsDependents(t *testing.T) {
 	m = mm.(Model)
 	plainView := plain(m.View())
 
-	// Should mention total resource count (4) and cascade count (2)
-	assert.Contains(t, plainView, "4 resource(s)", "footer must mention total resource count")
-	// cascade count and dependency reason must appear (may be split across lines)
-	assert.Contains(t, plainView, "2 will be deleted", "footer must mention cascade delete count")
-	assert.Contains(t, plainView, "depend on other targeted resources", "footer must explain cascade reason")
+	// The confirm bar surfaces the total and cascade counts prominently.
+	assert.Contains(t, plainView, "4 resource(s)", "confirm bar must mention total resource count")
+	assert.Contains(t, plainView, "2 by cascade", "confirm bar must mention cascade delete count")
+	// The confirm bar carries the destroy call to action.
+	assert.Contains(t, plainView, "press y to destroy", "confirm bar must prompt to destroy")
+	// The cascade "why" is explained in the body warning panel.
+	assert.Contains(t, plainView, "depend on", "body banner must explain the cascade reason")
 }
 
 // TestSimView_NonCascadeConfirmFooter verifies that the non-cascade confirm footer
@@ -570,38 +573,22 @@ func TestSimView_NonCascadeConfirmFooter(t *testing.T) {
 	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: 32})
 	m = mm.(Model)
 
-	plainView := plain(m.View())
+	// The confirm bar's summary delegates to components.PromptForOperations, which
+	// labels targets/stacks/policies with their own entity names (not
+	// "resource(s)") and joins the final clause with "and". The bar truncates to a
+	// single line, so assert the labelling against the full summary source that it
+	// renders from.
+	ops := plain(components.PromptForOperations(&m.cmd))
+	assert.Contains(t, ops, "target(s)", "target operations must be labelled 'target(s)', not 'resource(s)'")
+	assert.Contains(t, ops, "stack(s)", "stack operations must be labelled 'stack(s)', not 'resource(s)'")
+	assert.Contains(t, ops, "policy", "policy operations must be labelled correctly")
+	assert.Contains(t, ops, "resource(s)", "resource operations must be labelled 'resource(s)'")
+	assert.Contains(t, ops, " and ", "final separator must use 'and' (delegated to PromptForOperations)")
 
-	// The footer must mention the correct entity labels from components.PromptForOperations.
-	assert.Contains(t, plainView, "target(s)",
-		"non-cascade footer must label target operations as 'target(s)', not 'resource(s)'")
-	assert.Contains(t, plainView, "stack(s)",
-		"non-cascade footer must label stack operations as 'stack(s)', not 'resource(s)'")
-	assert.Contains(t, plainView, "policy",
-		"non-cascade footer must label policy operations correctly")
-
-	// Counts: fixture has 1 stack create, 1 policy create, 1 policy update, 1 target create,
-	// 1 target update, 1 target replace, 7 resource creates, 2 resource updates, 2 resource
-	// deletes, 1 resource replace. Verify at least one resource count is present.
-	assert.Contains(t, plainView, "resource(s)",
-		"non-cascade footer must still mention resource(s) for resource operations")
-
-	// The final separator must use "and" (not just a comma).
-	assert.Contains(t, plainView, " and ",
-		"non-cascade footer must use 'and' as final separator (delegated to components.PromptForOperations)")
-
-	// Targets must NOT be described as "resource(s)" — a line containing "target" should not
-	// contain "target(s)... resource(s)" in a way that implies targets are resources.
-	// The simplest guard: "create 1 target" or "create N target(s)" must appear.
-	assert.Contains(t, plainView, "target(s)",
-		"target operations must be labelled as target(s) in the footer")
-
-	// Verify targets are NOT mislabelled: the fixture has 1 target create and 1 target update
-	// (replace is counted as targetUpdates). If the old code were still in place, all ops would
-	// appear as "resource(s)". With the fix, "target(s)" appears independently.
-	// The footer text wraps across multiple lines with trailing spaces; check the raw view.
-	assert.Contains(t, m.View(), "Do you",
-		"footer must contain 'Do you want to continue' prompt")
+	// The confirm bar carries the apply call to action (replacing the old
+	// "Do you want to continue" footer text).
+	assert.Contains(t, plain(m.View()), "press y to apply",
+		"confirm bar must prompt to apply")
 }
 
 // TestSimView_SourceInHeader verifies that Options.Source renders in the header.

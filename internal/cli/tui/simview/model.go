@@ -530,13 +530,14 @@ func simHelpGroups() []components.HelpGroup {
 
 // footerHints returns the key hints for the preview footer bar (with y confirm).
 func footerHints() []components.KeyHint {
+	// No "y: confirm" or "q: abort" here — both actions live in the confirm bar
+	// above the footer ("press y … · n to abort"), so repeating them (and showing
+	// a second abort key) would be redundant and conflicting. q/esc still abort.
 	return []components.KeyHint{
 		{Key: "↑↓", Desc: "select"},
 		{Key: "space", Desc: "expand"},
 		{Key: "→←", Desc: "column"},
 		{Key: "s", Desc: "sort"},
-		{Key: "y", Desc: "confirm"},
-		{Key: "q", Desc: "abort"},
 	}
 }
 
@@ -562,42 +563,68 @@ func (m Model) renderFooter() string {
 		return components.FooterBar(m.th, m.width, nil, simOnlyMsg)
 	}
 
-	// Destroy with cascades: multi-line footer.
+	// A confirm is required: draw a prominent, full-width confirm bar (attention
+	// colour) directly above the standard key-hint footer. The bar carries the
+	// operation summary and the y/n call to action; the footer keeps only
+	// navigation hints (no redundant "y: confirm").
+	return m.renderConfirmBar() + "\n" + components.FooterBar(m.th, m.width, footerHints(), "")
+}
+
+// renderConfirmBar renders the full-width, attention-drawing confirmation bar
+// shown above the footer when the plan awaits a y/n decision. It uses a deep
+// burnt-orange background with bold white text for both apply and destroy — the
+// verb in the message distinguishes them. A darker, calmer orange (rather than
+// the bright brand SecondaryAccent) keeps the white text legible; a bright bar
+// washed the text out.
+func (m Model) renderConfirmBar() string {
+	// Deeper than the SecondaryAccent brand orange, chosen for white-text
+	// contrast on a solid bar. Not a general palette role, so kept inline.
+	bg := lipgloss.AdaptiveColor{Light: "#C2410C", Dark: "#C2410C"}
+	verb := "apply"
 	if m.opts.Kind == KindDestroy {
-		totalDeletes, cascadeDeletes := countDestroyResources(m.groups)
-		if cascadeDeletes > 0 {
-			line1 := fmt.Sprintf("  This operation will delete %d resource(s), of which %d will be deleted", totalDeletes, cascadeDeletes)
-			line2 := "  because they depend on other targeted resources."
-			line3 := ""
-			line4 := "  Do you want to continue? (y/N)"
-			content := line1 + "\n" + line2 + "\n" + line3 + "\n" + line4
-			return lipgloss.NewStyle().
-				Width(m.width).
-				BorderStyle(lipgloss.NormalBorder()).
-				BorderTop(true).
-				BorderForeground(p.Border).
-				Render(content)
+		verb = "destroy"
+	}
+
+	// Operation summary sentence: PromptForOperations labels targets/stacks/
+	// policies correctly and joins with "and". Strip its ANSI + trailing
+	// "Do you want to continue?" framing down to the one-line summary.
+	summary := "Review the plan above"
+	if raw := components.PromptForOperations(&m.cmd); raw != "" {
+		stripped := ansiEscape.ReplaceAllString(raw, "")
+		s := strings.SplitN(stripped, "\n\n", 2)[0]
+		s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
+		if s != "" {
+			summary = s
 		}
 	}
 
-	// Non-cascade confirm: delegate to components.PromptForOperations so that
-	// targets, stacks, and policies are labelled correctly (not all "resource(s)"),
-	// and the final separator is "and" instead of comma-only.
-	raw := components.PromptForOperations(&m.cmd)
-	var confirmMsg string
-	if raw != "" {
-		// PromptForOperations returns ANSI-colored text with a trailing
-		// "\n\nDo you want to continue?" framing.  Strip ANSI codes (the simview
-		// uses theme roles, not display-package colors) then extract just the
-		// one-line summary.
-		stripped := ansiEscape.ReplaceAllString(raw, "")
-		// Split on the double-newline separator and take the first part.
-		summary := strings.SplitN(stripped, "\n\n", 2)[0]
-		// Defensively collapse any remaining newlines (e.g. very long commands).
-		summary = strings.ReplaceAll(summary, "\n", " ")
-		confirmMsg = summary + "  Do you want to continue? (y/N)"
+	// For destroy plans that cascade, make the cascade count explicit in the bar
+	// (the full "why" stays in the body warning panel).
+	if m.opts.Kind == KindDestroy {
+		if total, cascade := countDestroyResources(m.groups); cascade > 0 {
+			summary = fmt.Sprintf("Deleting %d resource(s), %d by cascade (dependents)", total, cascade)
+		}
 	}
-	return components.FooterBar(m.th, m.width, footerHints(), confirmMsg)
+
+	action := fmt.Sprintf("press y to %s · n to abort", verb)
+	indent := "  "
+	tail := action + "  "
+
+	// Truncate the summary so the whole bar fits one line at the current width.
+	avail := m.width - lipgloss.Width(indent) - lipgloss.Width(tail) - 3
+	if avail < 10 {
+		avail = 10
+	}
+	summary = components.Truncate(summary, avail)
+
+	left := indent + summary
+	content := left + components.PadBetween(m.width, left, tail) + tail
+
+	return lipgloss.NewStyle().
+		Background(bg).
+		Foreground(lipgloss.AdaptiveColor{Light: "#FFFFFF", Dark: "#FFFFFF"}).
+		Bold(true).
+		Render(content)
 }
 
 // countDestroyResources returns total delete count and cascade delete count
