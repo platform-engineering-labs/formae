@@ -27,9 +27,13 @@ func EnforceSetOnceAndCompareResourceForUpdate(existing, new *pkgmodel.Resource,
 		return false, nil, err
 	}
 
-	// Hash the filtered properties ONLY for comparison (like verses like)
+	// Hash the filtered properties ONLY for comparison (like verses like).
+	// The temp resource carries the schema so schema-keyed opaque fields
+	// (PersistValueTransformer) are hashed here the same way they are hashed
+	// on persist — otherwise a stored-hashed secret compares unequal to the
+	// re-submitted desired plaintext and produces a spurious update.
 	transformer := transformations.NewPersistValueTransformer()
-	tempResource := &pkgmodel.Resource{Properties: filteredRawProps}
+	tempResource := &pkgmodel.Resource{Schema: new.Schema, Properties: filteredRawProps}
 	hashedForComparison, err := transformer.ApplyToResource(tempResource)
 	if err != nil {
 		return false, nil, err
