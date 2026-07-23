@@ -41,10 +41,16 @@ import (
 //     reaper/agent outage.
 //   - MaxBeatGapFloor: the minimum MaxBeatGap regardless of how small
 //     syncInterval is configured, so a fast sync interval doesn't collapse the
-//     tolerance to something a single delayed heartbeat could trip. 5 minutes
-//     is chosen to match the schema's own default sync interval — comfortably
-//     larger than ordinary network/scheduling jitter for any realistically fast
-//     interval.
+//     tolerance to something a single delayed heartbeat could trip. It MUST
+//     exceed ReaperInterval: the reaper samples observed_at once per
+//     ReaperInterval, so an ordinary per-step gap is ~ReaperInterval wide; a
+//     floor equal to (or below) ReaperInterval means every ordinary step sits
+//     on the clock-stop boundary, so accrual stalls or zeroes and reaping is
+//     silently slowed or disabled at fast sync intervals. Deriving it as
+//     2 × ReaperInterval keeps that headroom structural — it tolerates up to one
+//     missed reaper tick before a gap is treated as an outage — instead of
+//     pinning an independent constant that can silently collide with
+//     ReaperInterval.
 //
 // MinReapDuration must stay strictly greater than MaxBeatGap so a target can
 // never reap off a single (potentially near-maximal) accrual step; it must
@@ -69,7 +75,9 @@ const (
 	DefaultSyncInterval = 5 * time.Minute
 
 	MaxBeatGapMultiplier = 6
-	MaxBeatGapFloor      = 5 * time.Minute
+	// MaxBeatGapFloor must stay strictly greater than ReaperInterval — see the
+	// package doc. 2 × ReaperInterval tolerates one missed reaper tick.
+	MaxBeatGapFloor = 2 * ReaperInterval
 
 	MinReapDurationMultiplier = 2
 )

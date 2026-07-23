@@ -53,6 +53,21 @@ func TestDeriveMaxBeatGap_ZeroInterval(t *testing.T) {
 	assert.Equal(t, MaxBeatGapFloor, DeriveMaxBeatGap(0))
 }
 
+// TestMaxBeatGapExceedsReaperInterval pins the invariant that the reaper's
+// clock-stop threshold is always wider than its own sampling cadence. The
+// reaper samples observed_at once per ReaperInterval, so an ordinary per-step
+// gap is ~ReaperInterval wide; if MaxBeatGap did not exceed ReaperInterval,
+// every ordinary step would sit on the clock-stop boundary and accrual would
+// stall — silently slowing or disabling reaping at fast sync intervals.
+func TestMaxBeatGapExceedsReaperInterval(t *testing.T) {
+	assert.Greater(t, MaxBeatGapFloor, ReaperInterval,
+		"MaxBeatGapFloor must strictly exceed ReaperInterval")
+	for _, interval := range []time.Duration{0, 1 * time.Second, 10 * time.Second, 50 * time.Second, DefaultSyncInterval, 3 * time.Hour} {
+		assert.Greater(t, DeriveMaxBeatGap(interval), ReaperInterval,
+			"DeriveMaxBeatGap(%s) must exceed ReaperInterval", interval)
+	}
+}
+
 // TestDeriveMinReapDuration_ExceedsMaxBeatGap pins the load-bearing invariant
 // that the reap-duration floor is strictly greater than the maximum
 // tolerated beat gap it was derived from: a target must never be reapable
