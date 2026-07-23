@@ -57,10 +57,10 @@ func mergeThemeFiles(base, child *themeFile) *themeFile {
 	}
 
 	out.Prog = progressFile{
-		FillDone: pickS(child.Prog.FillDone, base.Prog.FillDone),
+		FillDone:       pickS(child.Prog.FillDone, base.Prog.FillDone),
 		FillInProgress: pickS(child.Prog.FillInProgress, base.Prog.FillInProgress),
-		FillPending: pickS(child.Prog.FillPending, base.Prog.FillPending),
-		Animation: pickS(child.Prog.Animation, base.Prog.Animation),
+		FillPending:    pickS(child.Prog.FillPending, base.Prog.FillPending),
+		Animation:      pickS(child.Prog.Animation, base.Prog.Animation),
 	}
 
 	spin := base.Spin

@@ -14,13 +14,13 @@ import (
 // themeFile is the on-disk TOML shape. Palette colors are pointers so an unset
 // key stays nil through an extends merge (Task 5).
 type themeFile struct {
-	Name    string        `toml:"name"`
-	Extends string        `toml:"extends"`
-	Palette paletteFile   `toml:"palette"`
-	Glyphs  glyphsFile    `toml:"glyphs"`
-	Prog    progressFile  `toml:"progress"`
-	Spin    spinnerFile   `toml:"spinner"`
-	ConfBar confBarFile   `toml:"confirmation_bar"`
+	Name    string       `toml:"name"`
+	Extends string       `toml:"extends"`
+	Palette paletteFile  `toml:"palette"`
+	Glyphs  glyphsFile   `toml:"glyphs"`
+	Prog    progressFile `toml:"progress"`
+	Spin    spinnerFile  `toml:"spinner"`
+	ConfBar confBarFile  `toml:"confirmation_bar"`
 }
 
 type paletteFile struct {
