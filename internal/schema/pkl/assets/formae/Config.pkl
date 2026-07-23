@@ -303,7 +303,10 @@ class CliConfig {
 
     auth: (BaseCliAuthConfig|Dynamic)?
 
-    theme: "formae" | "classic" = "formae"
+    // Theme name: a built-in (quiet, rich, colorblind, omarchy) or the stem of a
+    // TOML file in ~/.config/formae/themes/. "formae" and "classic" are accepted
+    // for backward compatibility. Unknown names fall back to quiet at runtime.
+    theme: String = "quiet"
 }
 
 /// Deprecated: use top-level pluginDir, network, and agent.auth / cli.auth instead.
