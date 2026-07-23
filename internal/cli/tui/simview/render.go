@@ -20,9 +20,9 @@ func (m Model) renderSummaryCounts() string {
 	counts := opCounts(groups)
 	p := m.th.Palette
 
-	// Operations are not color-coded by type (consistent with the rest of the
-	// CLI); the symbol and word distinguish them.
-	st := lipgloss.NewStyle().Foreground(p.TextPrimary)
+	// The glyph is colored per-op from the theme palette; the count and word
+	// stay in the row's base text color.
+	wordSt := lipgloss.NewStyle().Foreground(p.TextPrimary)
 
 	ordered := []opKind{opCreate, opUpdate, opDelete, opReplace, opDetach, opKeep}
 	var parts []string
@@ -31,7 +31,8 @@ func (m Model) renderSummaryCounts() string {
 		if n == 0 {
 			continue
 		}
-		token := st.Render(op.symbol()) + " " + fmt.Sprintf("%d", n) + " " + st.Render(op.word())
+		glyphSt := lipgloss.NewStyle().Foreground(opColor(p, op))
+		token := glyphSt.Render(opGlyph(m.th.Glyphs, op)) + " " + fmt.Sprintf("%d", n) + " " + wordSt.Render(op.word())
 		parts = append(parts, token)
 	}
 	return strings.Join(parts, "  ")
@@ -239,10 +240,8 @@ func (m Model) renderRow(r simRow, kind rowKind, opW, labelW, typeW, stackW int,
 		bg = lipgloss.Color(p.Selection.Dark)
 	}
 
-	// Determine base foreground color. Operations are NOT color-coded by type
-	// (create/update/delete/replace all render alike, consistent with the rest of
-	// the CLI); the op word + glyph carry the meaning, so delete rows use the
-	// same treatment as any other row.
+	// Determine base foreground color for non-operation cells (label/type/stack).
+	// The operation cell is colored separately below via opColor.
 	var fgColor lipgloss.AdaptiveColor
 	if isCursor {
 		fgColor = p.TextPrimary
@@ -265,11 +264,14 @@ func (m Model) renderRow(r simRow, kind rowKind, opW, labelW, typeW, stackW int,
 		labelSt = labelSt.Background(bg)
 	}
 
-	// Operation text is not color-coded by type — it uses the base row color.
-	opSt := baseSt
+	// Operation text is colored per-op from the theme palette.
+	opSt := lipgloss.NewStyle().Foreground(opColor(p, r.op))
+	if isCursor {
+		opSt = opSt.Background(bg)
+	}
 
 	// Build op plain string and pad
-	opPlain := r.op.symbol() + " " + r.op.word()
+	opPlain := opGlyph(m.th.Glyphs, r.op) + " " + r.op.word()
 	opPadded := components.Pad(opPlain, opW)
 
 	trunc := func(s string, maxW int) string {

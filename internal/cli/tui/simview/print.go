@@ -25,12 +25,9 @@ func RenderSimulationPlain(th *theme.Theme, sim *apimodel.Simulation, width int)
 
 	// Summary counts line — same op ordering and colors as renderSummaryCounts.
 	counts := opCounts(groups)
-	// Operations are not color-coded by type (consistent with the TUI's
-	// renderSummaryCounts and the rest of the CLI); the symbol and word
-	// distinguish them.
-	opColor := func(_ opKind) lipgloss.AdaptiveColor {
-		return p.TextPrimary
-	}
+	// The glyph is colored per-op from the theme palette; the count and word
+	// stay in the base text color.
+	wordSt := lipgloss.NewStyle().Foreground(p.TextPrimary)
 	ordered := []opKind{opCreate, opUpdate, opDelete, opReplace, opDetach, opKeep}
 	var parts []string
 	for _, op := range ordered {
@@ -38,8 +35,8 @@ func RenderSimulationPlain(th *theme.Theme, sim *apimodel.Simulation, width int)
 		if n == 0 {
 			continue
 		}
-		st := lipgloss.NewStyle().Foreground(opColor(op))
-		token := st.Render(op.symbol()) + " " + fmt.Sprintf("%d", n) + " " + st.Render(op.word())
+		glyphSt := lipgloss.NewStyle().Foreground(opColor(p, op))
+		token := glyphSt.Render(opGlyph(th.Glyphs, op)) + " " + fmt.Sprintf("%d", n) + " " + wordSt.Render(op.word())
 		parts = append(parts, token)
 	}
 	if len(parts) > 0 {

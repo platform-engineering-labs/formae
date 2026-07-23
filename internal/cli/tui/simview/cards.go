@@ -105,9 +105,9 @@ func renderCard(th *theme.Theme, r simRow, width int) []string {
 	}
 
 	// Build title-in-border top line: ╭─ ~ label ─────╮
-	opSymbol := r.op.symbol()
+	opSymbol := opGlyph(th.Glyphs, r.op)
 	titleStr := opSymbol + " " + r.label
-	titleSt := lipgloss.NewStyle().Foreground(p.PrimaryAccent)
+	titleSt := lipgloss.NewStyle().Foreground(opColor(p, r.op))
 	titleContent := " " + titleSt.Render(titleStr) + " "
 	titleW := lipgloss.Width(titleContent)
 	dashW := actualWidth - titleW - 2 // 2 = ╭ + ╮
