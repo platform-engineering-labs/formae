@@ -55,16 +55,6 @@ func defaultPromptPath(th *theme.Theme, defaultVal string) (string, error) {
 	return result, nil
 }
 
-// themeFor resolves the active theme from the app config.
-// The name falls back to "formae" for nil configs (theme.New nil-guards internally).
-func themeFor(a *app.App) *theme.Theme {
-	name := ""
-	if a != nil && a.Config != nil {
-		name = a.Config.Cli.Theme
-	}
-	return theme.New(name)
-}
-
 type ExtractOptions struct {
 	TargetPath     string
 	Query          string
@@ -144,7 +134,7 @@ func parseSchemaLocation(s string) (schema.SchemaLocation, error) {
 // It validates options, shows the path prompt when appropriate, then
 // delegates to runExtractCore.
 func runExtract(a *app.App, opts *ExtractOptions) error {
-	th := themeFor(a)
+	th := a.Theme()
 
 	// Path prompt: shown when interactive && !--yes && no explicit path given.
 	if !opts.pathExplicit && !opts.Yes {
@@ -171,7 +161,7 @@ func runExtract(a *app.App, opts *ExtractOptions) error {
 // runExtractCore is the testable core of the extract flow.
 // It assumes validateExtractOptions has already passed and the target path is set.
 func runExtractCore(a *app.App, opts *ExtractOptions) error {
-	th := themeFor(a)
+	th := a.Theme()
 
 	// Validate output schema when the app is available.
 	if a != nil && !a.IsSupportedOutputSchema(opts.OutputSchema) {
@@ -247,7 +237,7 @@ func runExtractCore(a *app.App, opts *ExtractOptions) error {
 		fmt.Printf("Extracted %d resource(s) to '%s'\n", len(extracted), res.TargetPath)
 	}
 
-	nag.MaybePrintNags(themeFor(a), nags)
+	nag.MaybePrintNags(a.Theme(), nags)
 
 	return nil
 }

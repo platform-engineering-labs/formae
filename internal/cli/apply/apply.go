@@ -62,7 +62,7 @@ var (
 	}
 
 	launchWatch = func(a *app.App, commandID string) error {
-		th := themeFor(a)
+		th := a.Theme()
 		model := statuswatch.New(th, a, statuswatch.Options{
 			Query:          "id:" + commandID,
 			FocusCommandID: commandID,
@@ -91,16 +91,6 @@ var legacyWidth = func(w io.Writer) int {
 		}
 	}
 	return 100
-}
-
-// themeFor resolves the active theme from the app config.
-// The name falls back to "formae" for nil configs (theme.New nil-guards internally).
-func themeFor(a *app.App) *theme.Theme {
-	name := ""
-	if a != nil && a.Config != nil {
-		name = a.Config.Cli.Theme
-	}
-	return theme.New(name)
 }
 
 type ApplyCommand struct {
@@ -215,7 +205,7 @@ func runApplyForHumans(a *app.App, opts *ApplyOptions) error {
 
 // runApplyInteractive implements the new TTY apply flow: simview preview → watch.
 func runApplyInteractive(a *app.App, opts *ApplyOptions) error {
-	th := themeFor(a)
+	th := a.Theme()
 
 	res, _, err := applyFn(a, opts, true)
 	if err != nil {
@@ -255,7 +245,7 @@ func runApplyInteractive(a *app.App, opts *ApplyOptions) error {
 	}
 
 	if decision == simview.DecisionAborted {
-		fmt.Print(lipgloss.NewStyle().Foreground(themeFor(a).Palette.TextSubtle).Render("Apply aborted.") + "\n")
+		fmt.Print(lipgloss.NewStyle().Foreground(a.Theme().Palette.TextSubtle).Render("Apply aborted.") + "\n")
 		return nil
 	}
 
@@ -287,7 +277,7 @@ func runApplyInteractive(a *app.App, opts *ApplyOptions) error {
 	// Hint for users who detached with q before the command finished.
 	fmt.Printf("\nRun the following command to check status:\n\n  formae status command --query='id:%s' --watch\n", realRes.CommandID)
 
-	nag.MaybePrintNags(themeFor(a), nags)
+	nag.MaybePrintNags(a.Theme(), nags)
 
 	return nil
 }
@@ -308,28 +298,28 @@ func runApplyLegacy(a *app.App, opts *ApplyOptions) error {
 
 	if !res.Simulation.ChangesRequired {
 		fmt.Printf("%s\n\n%s\n\n",
-			lipgloss.NewStyle().Foreground(themeFor(a).Palette.Done).Render("No changes needed:"),
-			lipgloss.NewStyle().Foreground(themeFor(a).Palette.TextSubtle).Render("The specified forma resources are up to date."))
+			lipgloss.NewStyle().Foreground(a.Theme().Palette.Done).Render("No changes needed:"),
+			lipgloss.NewStyle().Foreground(a.Theme().Palette.TextSubtle).Render("The specified forma resources are up to date."))
 		return nil
 	}
 
 	// don't show anything if --yes is specified
 	if !opts.Yes {
-		if err := maybePrintDescription(themeFor(a), res.Description); err != nil {
+		if err := maybePrintDescription(a.Theme(), res.Description); err != nil {
 			if errors.Is(err, errDescriptionAborted) {
-				fmt.Print(lipgloss.NewStyle().Foreground(themeFor(a).Palette.Error).Render("\nCommand aborted") + "\n")
+				fmt.Print(lipgloss.NewStyle().Foreground(a.Theme().Palette.Error).Render("\nCommand aborted") + "\n")
 				return nil
 			}
 			return err
 		}
 
-		th := themeFor(a)
+		th := a.Theme()
 		width := legacyWidth(os.Stdout)
 		_, _ = fmt.Print(simview.RenderSimulationPlain(th, &res.Simulation, width))
 	}
 
 	if opts.Simulate {
-		fmt.Print(lipgloss.NewStyle().Foreground(themeFor(a).Palette.TextSubtle).Render("Command will not continue - simulation only") + "\n")
+		fmt.Print(lipgloss.NewStyle().Foreground(a.Theme().Palette.TextSubtle).Render("Command will not continue - simulation only") + "\n")
 		return nil
 	}
 
@@ -339,12 +329,12 @@ func runApplyLegacy(a *app.App, opts *ApplyOptions) error {
 			return fmt.Errorf("interactive input requires a TTY — pass --yes")
 		}
 		prompt := components.PromptForOperations(&res.Simulation.Command)
-		ok, err := runConfirm(themeFor(a), prompt, "")
+		ok, err := runConfirm(a.Theme(), prompt, "")
 		if err != nil {
 			return err
 		}
 		if !ok {
-			fmt.Print(lipgloss.NewStyle().Foreground(themeFor(a).Palette.Error).Render("\nCommand aborted") + "\n")
+			fmt.Print(lipgloss.NewStyle().Foreground(a.Theme().Palette.Error).Render("\nCommand aborted") + "\n")
 			return nil
 		}
 	}
@@ -359,7 +349,7 @@ func runApplyLegacy(a *app.App, opts *ApplyOptions) error {
 		return fmt.Errorf("%s", msg)
 	}
 
-	fmt.Printf("\n%s\n", lipgloss.NewStyle().Foreground(themeFor(a).Palette.Warning).Render("The asynchronous command has started on the formae agent."))
+	fmt.Printf("\n%s\n", lipgloss.NewStyle().Foreground(a.Theme().Palette.Warning).Render("The asynchronous command has started on the formae agent."))
 
 	if opts.Watch {
 		query := fmt.Sprintf("id:%s", res.CommandID)
@@ -367,11 +357,11 @@ func runApplyLegacy(a *app.App, opts *ApplyOptions) error {
 	}
 
 	fmt.Printf("\nRun the following command to check the status of this command:\n\n  %s%s%s\n",
-		lipgloss.NewStyle().Foreground(themeFor(a).Palette.TextSubtle).Render("formae status command --query='id:"),
-		lipgloss.NewStyle().Foreground(themeFor(a).Palette.PrimaryAccent).Render(res.CommandID),
-		lipgloss.NewStyle().Foreground(themeFor(a).Palette.TextSubtle).Render("'"))
+		lipgloss.NewStyle().Foreground(a.Theme().Palette.TextSubtle).Render("formae status command --query='id:"),
+		lipgloss.NewStyle().Foreground(a.Theme().Palette.PrimaryAccent).Render(res.CommandID),
+		lipgloss.NewStyle().Foreground(a.Theme().Palette.TextSubtle).Render("'"))
 
-	nag.MaybePrintNags(themeFor(a), nags)
+	nag.MaybePrintNags(a.Theme(), nags)
 
 	return nil
 }

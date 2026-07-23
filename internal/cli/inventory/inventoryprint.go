@@ -37,15 +37,6 @@ func inventoryTermWidth(w io.Writer) int {
 	return defaultPrintWidth
 }
 
-// themeForInventory resolves the active theme from the app config.
-func themeForInventory(a *app.App) *theme.Theme {
-	name := ""
-	if a != nil && a.Config != nil {
-		name = a.Config.Cli.Theme
-	}
-	return theme.New(name)
-}
-
 // renderInventoryResources renders the resources table for non-TTY human output.
 // It delegates to inventoryview.RenderResources which reuses the TUI row builders
 // and components.Table for consistent column layout.

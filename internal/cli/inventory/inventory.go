@@ -17,7 +17,6 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/printer"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/inventoryview"
-	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -29,18 +28,14 @@ var (
 	isTerminal = tui.IsTerminal
 	// launchInventoryTUI starts the interactive inventory TUI.
 	// The theme name comes from the CLI profile configuration (Config.Cli.Theme);
-	// unknown names fall back to "formae" inside theme.New.
+	// unknown names fall back to "quiet" via App.Theme().
 	launchInventoryTUI = func(a *app.App, focus inventoryview.Tab, opts *InventoryOptions) error {
 		// Surface connection / auth / version-mismatch errors as ordinary CLI
 		// errors before the alt-screen TUI takes over the terminal.
 		if err := a.Preflight(); err != nil {
 			return err
 		}
-		themeName := ""
-		if a != nil && a.Config != nil {
-			themeName = a.Config.Cli.Theme
-		}
-		th := theme.New(themeName)
+		th := a.Theme()
 		maxRows := opts.MaxResults
 		if !opts.MaxResultsSet {
 			maxRows = 200
@@ -181,7 +176,7 @@ func runResourcesForHumans(app *app.App, opts *InventoryOptions) error {
 	if !opts.MaxResultsSet {
 		maxResults = 10
 	}
-	th := themeForInventory(app)
+	th := app.Theme()
 	_, _ = fmt.Println(renderInventoryResources(th, forma, maxResults, inventoryTermWidth(os.Stdout)))
 	return nil
 }
@@ -320,7 +315,7 @@ func runTargetsForHumans(app *app.App, opts *InventoryOptions) error {
 	if !opts.MaxResultsSet {
 		maxResults = 10
 	}
-	th := themeForInventory(app)
+	th := app.Theme()
 	_, _ = fmt.Println(renderInventoryTargets(th, targets, maxResults, inventoryTermWidth(os.Stdout)))
 	return nil
 }
@@ -451,7 +446,7 @@ func runPoliciesForHumans(app *app.App, opts *InventoryOptions) error {
 	if !opts.MaxResultsSet {
 		maxResults = 10
 	}
-	th := themeForInventory(app)
+	th := app.Theme()
 	_, _ = fmt.Println(renderInventoryPolicies(th, policies, maxResults, inventoryTermWidth(os.Stdout)))
 	return nil
 }
@@ -484,7 +479,7 @@ func runStacksForHumans(app *app.App, opts *InventoryOptions) error {
 	if !opts.MaxResultsSet {
 		maxResults = 10
 	}
-	th := themeForInventory(app)
+	th := app.Theme()
 	_, _ = fmt.Println(renderInventoryStacks(th, stacks, time.Now(), maxResults, inventoryTermWidth(os.Stdout)))
 	return nil
 }

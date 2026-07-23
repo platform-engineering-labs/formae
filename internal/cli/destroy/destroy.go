@@ -57,7 +57,7 @@ var (
 	}
 
 	launchWatch = func(a *app.App, commandID string) error {
-		th := themeFor(a)
+		th := a.Theme()
 		model := statuswatch.New(th, a, statuswatch.Options{
 			Query:          "id:" + commandID,
 			FocusCommandID: commandID,
@@ -73,16 +73,6 @@ var (
 		return a.Destroy(opts.FormaFile, opts.Query, opts.Properties, simulate)
 	}
 )
-
-// themeFor resolves the active theme from the app config.
-// The name falls back to "formae" for nil configs (theme.New nil-guards internally).
-func themeFor(a *app.App) *theme.Theme {
-	name := ""
-	if a != nil && a.Config != nil {
-		name = a.Config.Cli.Theme
-	}
-	return theme.New(name)
-}
 
 // legacyWidth is a package-level var so tests can stub it. Returns 100 for
 // non-TTY output (piped/redirected) or the real terminal width for TTY.
@@ -225,7 +215,7 @@ func runDestroyForHumans(app *app.App, opts *DestroyOptions) error {
 // banner and the direct-vs-dependent confirm footer when cascade rows exist, and
 // the interactive confirmation substitutes for --on-dependents=cascade.
 func runDestroyInteractive(a *app.App, opts *DestroyOptions) error {
-	th := themeFor(a)
+	th := a.Theme()
 
 	res, _, err := destroyFn(a, opts, true)
 	if err != nil {
@@ -270,7 +260,7 @@ func runDestroyInteractive(a *app.App, opts *DestroyOptions) error {
 	}
 
 	if decision == simview.DecisionAborted {
-		th := themeFor(a)
+		th := a.Theme()
 		fmt.Print(lipgloss.NewStyle().Foreground(th.Palette.TextSubtle).Render("Destroy aborted.") + "\n")
 		return nil
 	}
@@ -314,7 +304,7 @@ func runDestroyInteractive(a *app.App, opts *DestroyOptions) error {
 // panel (the issue-mandated D5 exception to the legacy-paths-unchanged rule).
 func runDestroyLegacy(app *app.App, opts *DestroyOptions) error {
 	{
-		th := themeFor(app)
+		th := app.Theme()
 		headerStyle := lipgloss.NewStyle().Foreground(th.Palette.Error)
 		doneStyle := lipgloss.NewStyle().Foreground(th.Palette.Done)
 		if opts.FormaFile != "" {
@@ -334,7 +324,7 @@ func runDestroyLegacy(app *app.App, opts *DestroyOptions) error {
 	}
 
 	if !res.Simulation.ChangesRequired {
-		th := themeFor(app)
+		th := app.Theme()
 		doneStyle := lipgloss.NewStyle().Foreground(th.Palette.Done)
 		subtleStyle := lipgloss.NewStyle().Foreground(th.Palette.TextSubtle)
 		var msg string
@@ -357,7 +347,7 @@ func runDestroyLegacy(app *app.App, opts *DestroyOptions) error {
 	// The styled panel renders even on the --yes path — the issue-mandated D5
 	// exception to the legacy-paths-unchanged rule (destroy-cascade mockup VIEW 2).
 	if opts.Yes && hasCascades && opts.OnDependents == OnDependentsAbort {
-		th := themeFor(app)
+		th := app.Theme()
 
 		var lines []string
 		for _, ru := range res.Simulation.Command.ResourceUpdates {
@@ -382,17 +372,17 @@ func runDestroyLegacy(app *app.App, opts *DestroyOptions) error {
 	if !opts.Yes {
 		// Show warning about cascades before simulation output
 		if hasCascades {
-			th := themeFor(app)
+			th := app.Theme()
 			fmt.Printf("%s\n\n", lipgloss.NewStyle().Foreground(th.Palette.Warning).Render("Warning: This operation will cascade delete additional resources."))
 		}
 
-		th := themeFor(app)
+		th := app.Theme()
 		width := legacyWidth(os.Stdout)
 		_, _ = fmt.Print(simview.RenderSimulationPlain(th, &res.Simulation, width))
 	}
 
 	if opts.Simulate {
-		th := themeFor(app)
+		th := app.Theme()
 		fmt.Print(lipgloss.NewStyle().Foreground(th.Palette.TextSubtle).Render("Command will not continue - simulation only") + "\n")
 		return nil
 	}
@@ -403,12 +393,12 @@ func runDestroyLegacy(app *app.App, opts *DestroyOptions) error {
 			return fmt.Errorf("interactive input requires a TTY — pass --yes")
 		}
 		prompt := components.PromptForOperations(&res.Simulation.Command)
-		ok, err := runConfirm(themeFor(app), prompt, "")
+		ok, err := runConfirm(app.Theme(), prompt, "")
 		if err != nil {
 			return err
 		}
 		if !ok {
-			th := themeFor(app)
+			th := app.Theme()
 			fmt.Print(lipgloss.NewStyle().Foreground(th.Palette.Error).Render("\nCommand aborted") + "\n")
 			return nil
 		}
@@ -425,7 +415,7 @@ func runDestroyLegacy(app *app.App, opts *DestroyOptions) error {
 	}
 
 	{
-		th := themeFor(app)
+		th := app.Theme()
 		fmt.Printf("\n%s\n", lipgloss.NewStyle().Foreground(th.Palette.Warning).Render("The asynchronous command has started on the formae agent."))
 	}
 
@@ -435,14 +425,14 @@ func runDestroyLegacy(app *app.App, opts *DestroyOptions) error {
 	}
 
 	{
-		th := themeFor(app)
+		th := app.Theme()
 		subtleStyle := lipgloss.NewStyle().Foreground(th.Palette.TextSubtle)
 		accentStyle := lipgloss.NewStyle().Foreground(th.Palette.PrimaryAccent)
 		fmt.Printf("\nRun the following command to check the status of this command:\n\n  %s%s%s\n",
 			subtleStyle.Render("formae status command --query='id:"), accentStyle.Render(res.CommandID), subtleStyle.Render("'"))
 	}
 
-	nag.MaybePrintNags(themeFor(app), nags)
+	nag.MaybePrintNags(app.Theme(), nags)
 
 	return nil
 }
