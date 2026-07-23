@@ -11,8 +11,14 @@ import (
 )
 
 func TestNewTheme(t *testing.T) {
+	th := New("quiet")
+	assert.Equal(t, "quiet", th.Name)
+	assert.NotEmpty(t, th.Styles.Title.Render("test"))
+}
+
+func TestNewThemeFormaeAlias(t *testing.T) {
 	th := New("formae")
-	assert.Equal(t, "formae", th.Name)
+	assert.Equal(t, "quiet", th.Name, "formae is an alias for quiet")
 	assert.NotEmpty(t, th.Styles.Title.Render("test"))
 }
 
@@ -24,10 +30,10 @@ func TestNewThemeClassic(t *testing.T) {
 
 func TestNewThemeDefault(t *testing.T) {
 	th := New("")
-	assert.Equal(t, "formae", th.Name)
+	assert.Equal(t, "quiet", th.Name)
 }
 
 func TestNewThemeUnknown(t *testing.T) {
 	th := New("doesnotexist")
-	assert.Equal(t, "formae", th.Name, "unknown theme names should normalize to formae")
+	assert.Equal(t, "quiet", th.Name, "unknown theme names should fall back to quiet")
 }

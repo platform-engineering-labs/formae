@@ -16,19 +16,8 @@ type Theme struct {
 	ConfirmationBar ConfirmationBar
 }
 
-// New creates a Theme from a theme name ("formae" or "classic").
-// Unknown names fall back to "formae".
+// New creates a Theme by resolving the given theme name against built-in and
+// user themes (see Resolve). Empty/unknown names fall back to "quiet".
 func New(name string) *Theme {
-	switch name {
-	case "formae", "classic":
-		// valid
-	default:
-		name = "formae"
-	}
-	p := PaletteByName(name)
-	return &Theme{
-		Name:    name,
-		Palette: p,
-		Styles:  NewStyles(p),
-	}
+	return Resolve(name)
 }
