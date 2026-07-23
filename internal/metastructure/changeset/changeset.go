@@ -724,6 +724,31 @@ func (p *ExecutionDAG) propagateResolvedTargetConfig(targetLabel string, pluginC
 	}
 }
 
+// clearTargetIncarnationOnResources drops the target-incarnation expectation
+// from every resource-update node bound to targetLabel. It runs after a reaped
+// target recovers: the recover target update mints a fresh incarnation and
+// un-reaps the target's resource rows (stamping them with that fresh
+// incarnation), but the pending resource updates were generated from the target
+// as it was loaded BEFORE recovery, so they still carry the stale (reaped)
+// incarnation. Left in place, the resource-write guard would reject the recovery
+// command's own re-adopts (stale expected != fresh current). Clearing the
+// expectation lets these writes through (the row is no longer reaped, so the
+// tombstone check passes and the incarnation check is skipped), while a genuinely
+// stale in-flight sync write from a different command still carries the old
+// incarnation and is still correctly rejected. The incarnation is not persisted
+// with resource_updates rows, so a resume after crash rebuilds these updates with
+// no expectation at all — making the clear effectively durable without a separate
+// persisted re-stamp.
+func (p *ExecutionDAG) clearTargetIncarnationOnResources(targetLabel string) {
+	for _, node := range p.Nodes {
+		if ru, ok := node.Update.(*resource_update.ResourceUpdate); ok {
+			if ru.DesiredState.Target == targetLabel && ru.ResourceTarget.Health != nil {
+				ru.ResourceTarget.Health = nil
+			}
+		}
+	}
+}
+
 // dependsOnTransitively reports whether node depends, directly or transitively,
 // on the node identified by targetURI by walking the Dependencies graph. Used to
 // keep new ordering edges cycle-safe: adding node→targetURI would close a cycle

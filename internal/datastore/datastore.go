@@ -128,6 +128,29 @@ type StackReconcileInfo struct {
 	LastReconcileAt time.Time
 }
 
+// PersistTargetReapRequest carries everything the reap transaction needs to
+// evaluate the conditional-transition CAS and write the audit row. The
+// per-target reap thresholds (reap_kind, reap_max_unreachable_seconds) are NOT
+// in the request: they are re-read from the target's own persisted row inside
+// the transaction so a stale caller cannot force a reap against a behaviour the
+// target no longer carries.
+type PersistTargetReapRequest struct {
+	// Label identifies the target to reap.
+	Label string
+	// IncarnationID is the incarnation the caller observed. The CAS requires the
+	// target's current row to still carry this incarnation, so a stale reaper
+	// (target reaped then recovered to a fresh incarnation) reaps nothing.
+	IncarnationID string
+	// LastSeenBefore is the grace cutoff for last_seen_at: the CAS requires
+	// last_seen_at <= this instant.
+	LastSeenBefore time.Time
+	// LastSampleBefore is the grace cutoff for last_sample_at: the CAS requires
+	// last_sample_at <= this instant.
+	LastSampleBefore time.Time
+	// ReapedAt is the reap instant recorded in the audit row.
+	ReapedAt time.Time
+}
+
 // ResourceSnapshot contains resource state at a point in time.
 type ResourceSnapshot struct {
 	KSUID      string
@@ -166,8 +189,14 @@ type Datastore interface {
 
 	// QueryResources searches resources based on filter criteria
 	QueryResources(query *ResourceQuery) ([]*pkgmodel.Resource, error)
-	// StoreResource persists a resource after successful creation/update in the cloud
-	StoreResource(resource *pkgmodel.Resource, commandID string) (string, error)
+	// StoreResource persists a resource after successful creation/update in the
+	// cloud. The optional expectedIncarnation is the target incarnation the
+	// caller believes is current; when supplied (non-empty) the write is
+	// rejected (ErrResourceWriteRejected) if the resource's current row was
+	// written under a different incarnation, closing the reaped-then-recovered
+	// stale-write race. A write to a resource whose current row is a reaped
+	// tombstone is always rejected regardless of the incarnation argument.
+	StoreResource(resource *pkgmodel.Resource, commandID string, expectedIncarnation ...string) (string, error)
 	// DeleteResource removes a resource record after successful deletion in the cloud
 	DeleteResource(resource *pkgmodel.Resource, commandID string) (string, error)
 	// LoadResource retrieves a resource by its formae URI
@@ -176,6 +205,11 @@ type Datastore interface {
 	LoadResourceByNativeID(nativeID string, resourceType string) (*pkgmodel.Resource, error)
 	// LoadAllResources returns all stored resources
 	LoadAllResources() ([]*pkgmodel.Resource, error)
+	// LoadReapedResources returns the current-version rows tombstoned with the
+	// 'reaped' marker (PersistTargetReap), across all targets. Reaped rows are
+	// excluded from every other resource query; this is the one path back to
+	// them, used by destroy-of-reaped cleanup and the dangling-reference report.
+	LoadReapedResources() ([]*pkgmodel.Resource, error)
 	// LatestLabelForResource returns the most recent label variant for a resource
 	LatestLabelForResource(label string) (string, error)
 	// LoadResourceById retrieves a resource by its KSUID
@@ -233,6 +267,47 @@ type Datastore interface {
 	DeleteTarget(targetLabel string) (string, error)
 	// CountResourcesInTarget returns the count of non-deleted resources belonging to a target
 	CountResourcesInTarget(targetLabel string) (int, error)
+	// UpdateTargetHealth applies an in-place health observation to the target's current
+	// (max-version) row. Returns applied=true when exactly one row was updated. A guard
+	// rejection (reaped state, stale observedAt, or incarnation mismatch) returns
+	// applied=false with no error.
+	UpdateTargetHealth(obs pkgmodel.TargetHealthObservation) (applied bool, err error)
+	// AdvanceTargetAccrual applies an in-place unreachability-accrual update to a
+	// target's current (max-version) row: adds deltaSeconds to
+	// unreachable_accum_seconds and sets last_sample_at to lastSampleAt. Guarded by
+	// incarnation match, current max-version pinning, and health_state == 'unreachable'
+	// (mirrors UpdateTargetHealth's guard shape). Returns applied=false with no error
+	// when the guard rejects the write (incarnation mismatch, or the target is no
+	// longer the max-version/unreachable row it was when the caller read it).
+	AdvanceTargetAccrual(targetLabel, incarnationID string, lastSampleAt time.Time, deltaSeconds int64) (applied bool, err error)
+	// GetUnreachableTargets returns all current (max-version) targets whose
+	// health_state is 'unreachable', with Health fully populated. Used by the
+	// TargetReaper to compute per-tick accrual and detect reap candidates.
+	GetUnreachableTargets() ([]*pkgmodel.Target, error)
+	// PersistTargetReap performs the whole target reap in one transaction:
+	//  1. a conditional transition (the atomic CAS, no locks) that flips the
+	//     target's current row from 'unreachable' to 'reaped' only when it still
+	//     matches the request's incarnation and the target's OWN persisted
+	//     reap_kind='after', accrued unreachable time >= its threshold, and the
+	//     grace cutoffs hold. If rows-affected != 1 nothing is reaped;
+	//  2. an assertion that no incomplete forma_command touches the target's
+	//     label (across all stacks); if any does, nothing is reaped;
+	//  3. tombstoning every current-row resource on that target with the reaped
+	//     marker;
+	//  4. inserting a UNIQUE audit row.
+	// Returns reaped=true only when the reap committed; a rejected CAS or a
+	// failed assertion rolls back and returns reaped=false with no error.
+	// Idempotent: a second call for an already-reaped incarnation reaps nothing.
+	// reapedStacks holds the distinct stack labels whose live resources this
+	// reap tombstoned, so the caller can clean up any stack the reap empties; it
+	// is nil/empty when nothing committed.
+	PersistTargetReap(req PersistTargetReapRequest) (reaped bool, reapedStacks []string, err error)
+	// CheckTargetsReaped inspects the current (max-version) row of each target in
+	// labels and returns the subset whose health_state is 'reaped'. Labels with no
+	// target row, or whose current row is any other health state, are omitted.
+	// Used by command admission to reject an apply that touches a reaped target
+	// without re-declaring it (which would otherwise resurrect it out of band).
+	CheckTargetsReaped(labels []string) ([]string, error)
 
 	// Stats returns aggregated statistics about the datastore contents
 	Stats() (*stats.Stats, error)

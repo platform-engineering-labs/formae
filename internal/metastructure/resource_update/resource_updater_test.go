@@ -9,11 +9,13 @@ package resource_update
 import (
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"ergo.services/ergo/gen"
 	"ergo.services/ergo/testing/unit"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
@@ -206,4 +208,102 @@ func TestMostRecentFailureMessage_PrefersProgressMessage(t *testing.T) {
 
 	assert.Equal(t, pluginErr, ru.MostRecentFailureMessage(),
 		"a plugin failure message must take precedence over the resolve FailureReason fallback")
+}
+
+// stubUpdaterLog swallows all log output for handleProgressUpdate tests.
+type stubUpdaterLog struct{ gen.Log }
+
+func (stubUpdaterLog) Trace(string, ...any)   {}
+func (stubUpdaterLog) Debug(string, ...any)   {}
+func (stubUpdaterLog) Info(string, ...any)    {}
+func (stubUpdaterLog) Warning(string, ...any) {}
+func (stubUpdaterLog) Error(string, ...any)   {}
+func (stubUpdaterLog) Panic(string, ...any)   {}
+
+// stubUpdaterNode returns a fixed node name so ProcessID comparisons work.
+type stubUpdaterNode struct{ gen.Node }
+
+func (stubUpdaterNode) Name() gen.Atom { return gen.Atom("test-node") }
+
+// stubUpdaterProcess is a hand-rolled gen.Process double for handleProgressUpdate
+// tests. It records every proc.Send call so tests can assert health observations.
+type stubUpdaterProcess struct {
+	gen.Process
+
+	mu    sync.Mutex
+	sends []any
+}
+
+func (p *stubUpdaterProcess) Log() gen.Log    { return stubUpdaterLog{} }
+func (p *stubUpdaterProcess) Node() gen.Node  { return stubUpdaterNode{} }
+func (p *stubUpdaterProcess) PID() gen.PID    { return gen.PID{Node: "test-node", ID: 1} }
+func (p *stubUpdaterProcess) Send(_ any, msg any) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.sends = append(p.sends, msg)
+	return nil
+}
+
+// sentUpdateTargetHealthMessages returns all UpdateTargetHealth messages sent via
+// proc.Send, in order.
+func (p *stubUpdaterProcess) sentUpdateTargetHealthMessages() []messages.UpdateTargetHealth {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var out []messages.UpdateTargetHealth
+	for _, s := range p.sends {
+		if m, ok := s.(messages.UpdateTargetHealth); ok {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// TestHandleProgressUpdate_FilteredDiscoveryEmitsTargetHealth asserts that a
+// discovery progress that is filtered out (early return from the filter branch)
+// still emits an UpdateTargetHealth observation to the resource persister.
+// Before the fix, the reachable emission was placed after the persist block and
+// was never reached on the filter path.
+func TestHandleProgressUpdate_FilteredDiscoveryEmitsTargetHealth(t *testing.T) {
+	const targetLabel = "us-east-1"
+
+	ru := &ResourceUpdate{
+		Operation: OperationRead,
+		DesiredState: pkgmodel.Resource{
+			Label:      "my-bucket",
+			Type:       "S3Bucket",
+			Properties: json.RawMessage(`{"Name":"my-bucket"}`),
+		},
+		ResourceTarget: pkgmodel.Target{Label: targetLabel},
+		// A filter with no conditions always matches — the resource will be filtered.
+		MatchFilters: []pkgmodel.MatchFilter{{}},
+	}
+
+	data := ResourceUpdateData{
+		resourceUpdate: ru,
+		commandID:      "cmd-001",
+		commandSource:  FormaCommandSourceDiscovery,
+		resourceLabeler: NewResourceLabeler(&mockDatastore{
+			resourcesByStack: make(map[string][]*pkgmodel.Resource),
+			triplet:          make(map[pkgmodel.TripletKey]string),
+		}),
+	}
+
+	successProgress := plugin.TrackedProgress{
+		ProgressResult: resource.ProgressResult{
+			Operation:       resource.OperationRead,
+			OperationStatus: resource.OperationStatusSuccess,
+			NativeID:        "my-bucket",
+		},
+	}
+
+	proc := &stubUpdaterProcess{}
+	state, _, _, err := handleProgressUpdate(gen.PID{}, StateSynchronizing, data, successProgress, proc)
+
+	require.NoError(t, err)
+	assert.Equal(t, StateFinishedSuccessfully, state, "filtered discovery resource must finish successfully")
+
+	healthMsgs := proc.sentUpdateTargetHealthMessages()
+	require.Len(t, healthMsgs, 1, "exactly one UpdateTargetHealth must be sent even on the filter path")
+	assert.Equal(t, targetLabel, healthMsgs[0].Observation.TargetLabel)
+	assert.Equal(t, pkgmodel.TargetHealthStateReachable, healthMsgs[0].Observation.State)
 }

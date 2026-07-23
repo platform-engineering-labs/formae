@@ -23,7 +23,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-
 func TestServer_ApplyFormaSuccessResponse(t *testing.T) {
 	meta := &apitest.FakeMetastructure{}
 	meta.ApplyResponses = []apitest.WrappedCommandResponse{{&apimodel.SubmitCommandResponse{

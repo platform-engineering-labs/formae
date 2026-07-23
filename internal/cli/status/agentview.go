@@ -149,13 +149,32 @@ func renderAgentStats(th *theme.Theme, stats apimodel.Stats, width int) string {
 
 func buildStructurePanel(th *theme.Theme, stats apimodel.Stats) panelSpec {
 	totalTargets := sumMap(stats.Targets)
+	lines := []string{
+		fieldLine(th, "Stacks", fmt.Sprintf("%d", stats.Stacks)),
+		fieldLine(th, "Targets", fmt.Sprintf("%d", totalTargets)),
+	}
+	// Reaped/reap-pending are counts within this same Structure panel (not a
+	// separate panel), and the Targets count above already excludes reaped, so
+	// the two read as active vs. reaped. They are surfaced only when non-zero,
+	// so a healthy fleet keeps the panel uncluttered.
+	if stats.ReapPendingTargets > 0 {
+		warnStyle := lipgloss.NewStyle().Foreground(th.Palette.Warning)
+		lines = append(lines, styledFieldLine(
+			warnStyle.Render("Reap Pending"),
+			warnStyle.Render(fmt.Sprintf("%d", stats.ReapPendingTargets)),
+		))
+	}
+	if stats.ReapedTargets > 0 {
+		errStyle := lipgloss.NewStyle().Foreground(th.Palette.Error)
+		lines = append(lines, styledFieldLine(
+			errStyle.Render("Reaped"),
+			errStyle.Render(fmt.Sprintf("%d", stats.ReapedTargets)),
+		))
+	}
 	return panelSpec{
 		title: "Structure",
 		color: th.Palette.Border,
-		lines: []string{
-			fieldLine(th, "Stacks", fmt.Sprintf("%d", stats.Stacks)),
-			fieldLine(th, "Targets", fmt.Sprintf("%d", totalTargets)),
-		},
+		lines: lines,
 	}
 }
 

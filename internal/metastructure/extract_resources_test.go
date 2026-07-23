@@ -91,7 +91,7 @@ func (m *mockExtractDatastore) GetResourceModificationsSinceLastReconcile(_ stri
 func (m *mockExtractDatastore) QueryFormaCommands(_ *datastore.StatusQuery) ([]*forma_command.FormaCommand, error) {
 	panic("not implemented")
 }
-func (m *mockExtractDatastore) StoreResource(_ *pkgmodel.Resource, _ string) (string, error) {
+func (m *mockExtractDatastore) StoreResource(_ *pkgmodel.Resource, _ string, _ ...string) (string, error) {
 	panic("not implemented")
 }
 func (m *mockExtractDatastore) DeleteResource(_ *pkgmodel.Resource, _ string) (string, error) {
@@ -104,6 +104,9 @@ func (m *mockExtractDatastore) LoadResourceByNativeID(_ string, _ string) (*pkgm
 	panic("not implemented")
 }
 func (m *mockExtractDatastore) LoadAllResources() ([]*pkgmodel.Resource, error) {
+	panic("not implemented")
+}
+func (m *mockExtractDatastore) LoadReapedResources() ([]*pkgmodel.Resource, error) {
 	panic("not implemented")
 }
 func (m *mockExtractDatastore) LatestLabelForResource(_ string) (string, error) {
@@ -238,6 +241,26 @@ func (m *mockExtractDatastore) UpdateFormaCommandTargetUpdates(_ string, _ json.
 	panic("not implemented")
 }
 func (m *mockExtractDatastore) ForceCancelResourceUpdates(_ string, _ []datastore.ForceCancelRow, _ []datastore.ResourceUpdateRef, _ time.Time) (datastore.ForceCancelResult, error) {
+	panic("not implemented")
+}
+
+func (m *mockExtractDatastore) UpdateTargetHealth(_ pkgmodel.TargetHealthObservation) (bool, error) {
+	panic("not implemented")
+}
+
+func (m *mockExtractDatastore) AdvanceTargetAccrual(_, _ string, _ time.Time, _ int64) (bool, error) {
+	panic("not implemented")
+}
+
+func (m *mockExtractDatastore) GetUnreachableTargets() ([]*pkgmodel.Target, error) {
+	panic("not implemented")
+}
+
+func (m *mockExtractDatastore) PersistTargetReap(_ datastore.PersistTargetReapRequest) (bool, []string, error) {
+	panic("not implemented")
+}
+
+func (m *mockExtractDatastore) CheckTargetsReaped(_ []string) ([]string, error) {
 	panic("not implemented")
 }
 

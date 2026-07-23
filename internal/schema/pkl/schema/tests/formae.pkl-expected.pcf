@@ -73,6 +73,31 @@ examples {
       }
       ConfigSchema = null
       Discoverable = true
+      Reaping = null
+    }
+  }
+  ["NeverReap render()"] {
+    new {
+      Kind = "never"
+    }
+  }
+  ["ReapAfter render()"] {
+    new {
+      Kind = "after"
+      MaxUnreachableSeconds = 1800
+    }
+  }
+  ["Target with reap"] {
+    new {
+      Label = "reapable-target"
+      Namespace = "AWS"
+      Config = null
+      ConfigSchema = null
+      Discoverable = true
+      Reaping {
+        Kind = "after"
+        MaxUnreachableSeconds = 1800
+      }
     }
   }
   ["Test Resource - fields()"] {

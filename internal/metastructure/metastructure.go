@@ -34,8 +34,10 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/patch"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/policy_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/querier"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/reaping"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/stack_update"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/target_reaper"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -62,6 +64,7 @@ type MetastructureAPI interface {
 	ForceDiscovery() error
 	ForceAutoReconcile(stackLabel string) (*apimodel.ForceReconcileResponse, error)
 	ForceCheckTTL() (*apimodel.ForceCheckTTLResponse, error)
+	ForceReap() error
 	ListDrift(stack string) (*apimodel.ModifiedStack, error)
 	Stats() (*apimodel.Stats, error)
 	RegisteredPlugins() ([]messages.RegisteredPluginInfo, error)
@@ -280,9 +283,19 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 		if err := m.checkForConflictingCommands(stackLabelsFromForma(forma)); err != nil {
 			return nil, err
 		}
+
+		// Reject an apply that touches a reaped target without re-declaring it.
+		// A reaped target is a tombstone for a target that stayed unreachable past
+		// its reap threshold; a resource-only or stale apply that references it must
+		// not silently resurrect it. Re-declaring the target (it appears in the
+		// forma's targets block) is the sanctioned recovery path: it produces a
+		// target update that mints a fresh incarnation, so it is allowed through.
+		if err := m.checkForReapedTargets(forma); err != nil {
+			return nil, err
+		}
 	}
 
-	fa, err := FormaCommandFromForma(forma, config, pkgmodel.CommandApply, m.Datastore, clientID, resource_update.FormaCommandSourceUser)
+	fa, err := FormaCommandFromForma(forma, config, pkgmodel.CommandApply, m.Datastore, clientID, resource_update.FormaCommandSourceUser, m.Cfg.Agent.Synchronization.Interval)
 	if err != nil {
 		if requiredFieldsErr, ok := err.(apimodel.RequiredFieldMissingOnCreateError); ok {
 			return nil, requiredFieldsErr
@@ -703,7 +716,7 @@ func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.Forma
 		}
 	}
 
-	fa, err := FormaCommandFromForma(forma, config, pkgmodel.CommandDestroy, m.Datastore, clientID, resource_update.FormaCommandSourceUser)
+	fa, err := FormaCommandFromForma(forma, config, pkgmodel.CommandDestroy, m.Datastore, clientID, resource_update.FormaCommandSourceUser, m.Cfg.Agent.Synchronization.Interval)
 	if err != nil {
 		slog.Error("Failed to create destroy from forma", "error", err)
 		return nil, err
@@ -957,206 +970,6 @@ func (m *Metastructure) ListFormaCommandStatus(query string, clientID string, n 
 	}
 }
 
-func (m *Metastructure) ExtractResources(query string) (*pkgmodel.Forma, error) {
-	q := querier.NewBlugeQuerier(m.Datastore)
-	resources, err := q.QueryResources(query)
-	if err != nil {
-		slog.Debug("Cannot get resources from query", "error", err)
-		return nil, err
-	}
-
-	if err := m.reverseTranslateKSUIDsToTriplets(resources); err != nil {
-		slog.Error("Failed to reverse translate KSUIDs to triplets", "error", err)
-		return nil, err
-	}
-
-	targetNames := make([]string, 0)
-	uniqueTargets := make(map[string]struct{})
-	stackLabels := make([]string, 0)
-	uniqueStacks := make(map[string]struct{})
-
-	for _, resource := range resources {
-		if resource.Target != "" {
-			if _, exists := uniqueTargets[resource.Target]; !exists {
-				uniqueTargets[resource.Target] = struct{}{}
-				targetNames = append(targetNames, resource.Target)
-			}
-		}
-		if resource.Stack != "" {
-			if _, exists := uniqueStacks[resource.Stack]; !exists {
-				uniqueStacks[resource.Stack] = struct{}{}
-				stackLabels = append(stackLabels, resource.Stack)
-			}
-		}
-	}
-
-	forma := pkgmodel.FormaFromResources(resources)
-
-	if len(targetNames) > 0 {
-		targets, err := m.Datastore.LoadTargetsByLabels(targetNames)
-		if err != nil {
-			slog.Error("Failed to load targets by names", "error", err)
-			return nil, err
-		}
-
-		forma.Targets = make([]pkgmodel.Target, 0, len(targets))
-		for _, t := range targets {
-			if t != nil {
-				forma.Targets = append(forma.Targets, *t)
-			}
-		}
-	}
-
-	if len(stackLabels) > 0 {
-		forma.Stacks = make([]pkgmodel.Stack, 0, len(stackLabels))
-		for _, label := range stackLabels {
-			stack, err := m.Datastore.GetStackByLabel(label)
-			if err != nil {
-				slog.Error("Failed to load stack by label", "label", label, "error", err)
-				continue
-			}
-			if stack != nil {
-				forma.Stacks = append(forma.Stacks, *stack)
-			} else {
-				// Stack not found in datastore (e.g., $unmanaged) - create a synthetic entry
-				forma.Stacks = append(forma.Stacks, pkgmodel.Stack{
-					Label:       label,
-					Description: "Resources imported with formae extract",
-				})
-			}
-		}
-	}
-
-	// Collect referenced standalone policy labels from stacks
-	uniquePolicyLabels := make(map[string]struct{})
-	for _, stack := range forma.Stacks {
-		for _, rawPolicy := range stack.Policies {
-			if pkgmodel.IsPolicyReference(rawPolicy) {
-				policyLabel, err := pkgmodel.ParsePolicyReference(rawPolicy)
-				if err != nil {
-					slog.Debug("Failed to parse policy reference", "error", err)
-					continue
-				}
-				uniquePolicyLabels[policyLabel] = struct{}{}
-			}
-		}
-	}
-
-	// Load standalone policies and add to forma
-	if len(uniquePolicyLabels) > 0 {
-		forma.Policies = make([]json.RawMessage, 0, len(uniquePolicyLabels))
-		for label := range uniquePolicyLabels {
-			policy, err := m.Datastore.GetStandalonePolicy(label)
-			if err != nil {
-				slog.Error("Failed to load standalone policy", "label", label, "error", err)
-				continue
-			}
-			if policy != nil {
-				policyJSON, err := json.Marshal(policy)
-				if err != nil {
-					slog.Error("Failed to marshal standalone policy", "label", label, "error", err)
-					continue
-				}
-				forma.Policies = append(forma.Policies, policyJSON)
-			}
-		}
-	}
-
-	return forma, nil
-}
-
-func (m *Metastructure) ExtractTargets(queryStr string) ([]*pkgmodel.Target, error) {
-	slog.Debug("ExtractTargets called", "queryStr", queryStr)
-	query := &datastore.TargetQuery{}
-
-	if queryStr != "" {
-		parts := strings.Fields(queryStr)
-		for _, part := range parts {
-			if strings.Contains(part, ":") {
-				kv := strings.SplitN(part, ":", 2)
-				key := strings.TrimSpace(kv[0])
-				value := strings.TrimSpace(kv[1])
-
-				switch key {
-				case "label":
-					query.Label = &datastore.QueryItem[string]{
-						Item:       value,
-						Constraint: datastore.Required,
-					}
-				case "namespace":
-					query.Namespace = &datastore.QueryItem[string]{
-						Item:       value,
-						Constraint: datastore.Required,
-					}
-				case "discoverable":
-					boolVal := value == "true"
-					query.Discoverable = &datastore.QueryItem[bool]{
-						Item:       boolVal,
-						Constraint: datastore.Required,
-					}
-				}
-			}
-		}
-	}
-
-	slog.Debug("Calling QueryTargets", "query", query)
-	targets, err := m.Datastore.QueryTargets(query)
-	if err != nil {
-		slog.Debug("Cannot get targets from query", "error", err)
-		return nil, err
-	}
-
-	slog.Debug("ExtractTargets returning", "count", len(targets))
-	return targets, nil
-}
-
-func (m *Metastructure) ExtractStacks() ([]*pkgmodel.Stack, error) {
-	slog.Debug("ExtractStacks called")
-	stacks, err := m.Datastore.ListAllStacks()
-	if err != nil {
-		slog.Debug("Cannot get stacks from datastore", "error", err)
-		return nil, err
-	}
-
-	// Build a lookup of last reconcile times per stack
-	reconcileInfos, err := m.Datastore.GetStacksWithAutoReconcilePolicy()
-	lastReconcileByStack := make(map[string]time.Time)
-	if err != nil {
-		slog.Warn("Failed to get auto-reconcile info", "error", err)
-	} else {
-		for _, info := range reconcileInfos {
-			lastReconcileByStack[info.StackLabel] = info.LastReconcileAt
-		}
-	}
-
-	// Populate policies for each stack
-	for _, stack := range stacks {
-		policies, err := m.Datastore.GetPoliciesForStack(stack.ID)
-		if err != nil {
-			slog.Warn("Failed to get policies for stack", "stack", stack.Label, "error", err)
-			continue
-		}
-		// Convert policies to json.RawMessage for the Stack.Policies field
-		for _, policy := range policies {
-			// Enrich auto-reconcile policies with last reconcile time
-			if arPolicy, ok := policy.(*pkgmodel.AutoReconcilePolicy); ok {
-				if lastRecon, found := lastReconcileByStack[stack.Label]; found {
-					arPolicy.LastReconcileAt = lastRecon
-				}
-			}
-			policyJSON, err := json.Marshal(policy)
-			if err != nil {
-				slog.Warn("Failed to marshal policy", "policy", policy.GetLabel(), "error", err)
-				continue
-			}
-			stack.Policies = append(stack.Policies, json.RawMessage(policyJSON))
-		}
-	}
-
-	slog.Debug("ExtractStacks returning", "count", len(stacks))
-	return stacks, nil
-}
-
 func (m *Metastructure) ExtractPolicies() ([]apimodel.PolicyInventoryItem, error) {
 	policies, err := m.Datastore.ListAllStandalonePolicies()
 	if err != nil {
@@ -1253,6 +1066,20 @@ func (m *Metastructure) ForceSync() error {
 func (m *Metastructure) ForceDiscovery() error {
 	if err := m.Node.Send(gen.Atom("Discovery"), discovery.Discover{}); err != nil {
 		slog.Error(fmt.Sprintf("Failed to send message to Discovery: %v", err))
+		return err
+	}
+
+	return nil
+}
+
+// ForceReap triggers a single, immediate TargetReaper tick: it advances the
+// unreachability-accrual clock for every currently-unreachable target,
+// detects reap candidates, and (subject to the per-tick rate cap — see
+// TargetReaper) actually reaps them. Exists so workflow tests can drive a
+// deterministic tick without waiting for the reaper's interval to elapse.
+func (m *Metastructure) ForceReap() error {
+	if err := m.Node.Send(gen.Atom(actornames.TargetReaper), target_reaper.CheckUnreachableTargets{}); err != nil {
+		slog.Error(fmt.Sprintf("Failed to send message to TargetReaper: %v", err))
 		return err
 	}
 
@@ -1544,6 +1371,56 @@ func (m *Metastructure) checkForConflictingCommands(commandStackLabels []string)
 		}
 
 		return err
+	}
+
+	return nil
+}
+
+// checkForReapedTargets rejects an apply that references a reaped target it does
+// not re-declare. It collects every target label the forma touches (via a
+// resource's Target or an explicit target declaration), asks the datastore which
+// of those are currently reaped, and rejects with a TargetReapedError for any
+// reaped target that the forma does not re-declare. Re-declared targets are the
+// recovery path and pass through untouched.
+func (m *Metastructure) checkForReapedTargets(forma *pkgmodel.Forma) error {
+	redeclared := make(map[string]bool)
+	for _, t := range forma.Targets {
+		redeclared[t.Label] = true
+	}
+
+	touched := make(map[string]bool)
+	var touchedLabels []string
+	addTouched := func(label string) {
+		if label == "" || touched[label] {
+			return
+		}
+		touched[label] = true
+		touchedLabels = append(touchedLabels, label)
+	}
+	for _, r := range forma.Resources {
+		addTouched(r.Target)
+	}
+	for _, t := range forma.Targets {
+		addTouched(t.Label)
+	}
+
+	if len(touchedLabels) == 0 {
+		return nil
+	}
+
+	reaped, err := m.Datastore.CheckTargetsReaped(touchedLabels)
+	if err != nil {
+		return fmt.Errorf("failed to check reaped targets: %w", err)
+	}
+
+	var unsafe []string
+	for _, label := range reaped {
+		if !redeclared[label] {
+			unsafe = append(unsafe, label)
+		}
+	}
+	if len(unsafe) > 0 {
+		return apimodel.TargetReapedError{TargetLabels: unsafe}
 	}
 
 	return nil
@@ -1907,7 +1784,8 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 	command pkgmodel.Command,
 	ds datastore.Datastore,
 	clientID string,
-	source resource_update.FormaCommandSource) (*forma_command.FormaCommand, error) {
+	source resource_update.FormaCommandSource,
+	syncInterval time.Duration) (*forma_command.FormaCommand, error) {
 
 	if formaCommandConfig.Mode == "" {
 		formaCommandConfig.Mode = pkgmodel.FormaApplyModePatch
@@ -1937,7 +1815,10 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 		}
 	}
 
-	targetUpdates, err := target_update.NewTargetUpdateGenerator(ds).GenerateTargetUpdates(forma.Targets, command, len(forma.Resources) > 0)
+	minReapDuration := reaping.DeriveMinReapDuration(reaping.DeriveMaxBeatGap(syncInterval))
+	targetUpdates, err := target_update.NewTargetUpdateGenerator(ds).
+		WithMinReapDuration(minReapDuration).
+		GenerateTargetUpdates(forma.Targets, command, len(forma.Resources) > 0)
 	if err != nil {
 		return nil, err
 	}
@@ -2051,6 +1932,13 @@ func (m *Metastructure) Stats() (*apimodel.Stats, error) {
 		})
 	}
 
+	reapPending, reaped, reapErr := m.reapTargetCounts()
+	if reapErr != nil {
+		// Same posture as the plugin registry lookup above: don't fail the
+		// whole /stats response over this, just omit the counts.
+		slog.Warn("failed to compute reap-pending/reaped target counts; stats response will report zero", "error", reapErr)
+	}
+
 	return &apimodel.Stats{
 		Version:            formae.Version,
 		AgentID:            m.AgentID,
@@ -2064,7 +1952,36 @@ func (m *Metastructure) Stats() (*apimodel.Stats, error) {
 		ResourceTypes:      stats.ResourceTypes,
 		ResourceErrors:     stats.ResourceErrors,
 		Plugins:            plugins,
+		ReapPendingTargets: reapPending,
+		ReapedTargets:      reaped,
 	}, nil
+}
+
+// reapTargetCounts derives the reap-pending and reaped target counts for the
+// stats surface directly from LoadAllTargets (implemented identically across
+// every datastore backend), so no per-backend Stats() query is needed. See
+// TargetReapStatus for what "reap-pending" means.
+func (m *Metastructure) reapTargetCounts() (reapPending, reaped int, err error) {
+	targets, err := m.Datastore.LoadAllTargets()
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to load targets: %w", err)
+	}
+
+	for _, target := range targets {
+		status, statusErr := target_reaper.TargetReapStatus(target)
+		if statusErr != nil {
+			slog.Warn("failed to resolve reap status for target; skipping from stats", "target", target.Label, "error", statusErr)
+			continue
+		}
+		switch status {
+		case pkgmodel.TargetHealthStateReapPending:
+			reapPending++
+		case pkgmodel.TargetHealthStateReaped:
+			reaped++
+		}
+	}
+
+	return reapPending, reaped, nil
 }
 
 func extractKSUIDs(jsonStr string, ksuidSet map[string]struct{}) {

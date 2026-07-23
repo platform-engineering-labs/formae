@@ -686,6 +686,15 @@ func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData,
 	// BEFORE recording the progress as Success. This prevents a crash window
 	// where the command record shows Success but the resource was never written.
 	if message.FinishedSuccessfully() {
+		// Emit reachable target-health observation on every successful path,
+		// including discovery filter matches and synchronizing rejects that
+		// return early below without reaching the normal emission point.
+		if obs, ok := targetHealthObservation(data.resourceUpdate.ResourceTarget.Label, &message, time.Now()); ok {
+			if err := proc.Send(resourcePersisterProcess(proc), messages.UpdateTargetHealth{Observation: obs}); err != nil {
+				proc.Log().Warning("failed to send UpdateTargetHealth for target %s: %v", obs.TargetLabel, err)
+			}
+		}
+
 		if data.commandSource == FormaCommandSourceDiscovery {
 			// Merge Properties and ReadOnlyProperties to get complete cloud state for filtering
 			completeProperties, mergeErr := util.MergeJSON(
@@ -798,6 +807,11 @@ func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData,
 	}
 
 	if message.Failed() {
+		if obs, ok := targetHealthObservation(data.resourceUpdate.ResourceTarget.Label, &message, time.Now()); ok {
+			if err := proc.Send(resourcePersisterProcess(proc), messages.UpdateTargetHealth{Observation: obs}); err != nil {
+				proc.Log().Warning("failed to send UpdateTargetHealth for target %s: %v", obs.TargetLabel, err)
+			}
+		}
 		data.resourceUpdate.MarkAsFailed()
 		return StateFinishedWithError, data, nil, nil
 	}

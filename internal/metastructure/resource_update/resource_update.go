@@ -40,6 +40,7 @@ const (
 	OperationUpdate  = types.OperationUpdate
 	OperationDelete  = types.OperationDelete
 	OperationRead    = types.OperationRead
+	OperationReaped  = types.OperationReaped
 	OperationReplace = types.OperationReplace
 
 	ResourceUpdateStateUnknown    = types.ResourceUpdateStateUnknown

@@ -8,6 +8,7 @@ package dstest
 
 import (
 	"testing"
+	"time"
 
 	"github.com/platform-engineering-labs/formae/internal/datastore"
 )
@@ -22,6 +23,36 @@ type TestDatastore struct {
 	// strings (e.g. byte-order vs case-insensitive comparison) use it.
 	// Backends that don't provide it leave it nil and the test t.Skip()s.
 	RawInsertResource func(uri, version, target, operation string) error
+	// SetTargetHealthStateForTest forces the health_state column of the current
+	// (max-version) targets row for the given label to the supplied value.
+	// Used to set up guard conditions (e.g. 'reaped') that cannot be reached
+	// through the public Datastore API. Backends that don't provide it leave
+	// it nil and the relevant tests t.Skip().
+	SetTargetHealthStateForTest func(label, state string) error
+	// SetTargetAccrualForTest seeds the unreachability-accrual columns
+	// (first_unreachable_at, unreachable_accum_seconds) of the current
+	// (max-version) targets row for the given label. Used to set up a
+	// non-pristine accrual state that a later success observation must clear.
+	// Backends that don't provide it leave it nil and the relevant tests
+	// t.Skip().
+	SetTargetAccrualForTest func(label string, firstUnreachableAt time.Time, accumSeconds int64) error
+	// MarkResourceReapedForTest forces the operation column of the current
+	// (max-version) resources row for the given uri to 'reaped'. Used to set up
+	// the reaped tombstone that the live-query exclusion and the resource-write
+	// guard react to, a state no public Datastore API reaches yet. Backends that
+	// don't provide it leave it nil and the relevant tests t.Skip().
+	MarkResourceReapedForTest func(uri string) error
+	// RawResourceOperationForTest returns the operation column of the current
+	// (max-version) resources row for the given uri, bypassing the live-row
+	// filters, or "" when no row exists. Used to prove a reaped row is retained
+	// in the table. Backends that don't provide it leave it nil and the relevant
+	// tests t.Skip().
+	RawResourceOperationForTest func(uri string) (string, error)
+	// CountReapAuditRowsForTest returns the number of target_reap_audit rows for
+	// the given label. Used to prove exactly one audit row is written per reap
+	// and none on a rejected/no-op reap. Backends that don't provide it leave it
+	// nil and the relevant assertions are skipped.
+	CountReapAuditRowsForTest func(label string) (int, error)
 }
 
 // RunAll runs the full datastore test suite against the provided factory.
@@ -59,6 +90,9 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunStoreResourceAfterDeleteWithSameNativeID(t, newDS)
 	RunStoreResourceWithDifferentKSUIDSameData(t, newDS)
 	RunStoreResourceRenamePreservesKsuidAndAddsNewVersion(t, newDS)
+	RunReapedResourcesInvisibleToLiveQueries(t, newDS)
+	RunResourceWriteRejectedWhenTargetReaped(t, newDS)
+	RunResourceWriteRejectedWhenIncarnationChanged(t, newDS)
 
 	RunQueryTargetsAll(t, newDS)
 	RunQueryTargetsByNamespace(t, newDS)
@@ -67,11 +101,33 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunQueryTargetsDiscoverableAWS(t, newDS)
 	RunQueryTargetsNonDiscoverable(t, newDS)
 	RunQueryTargetsVersioning(t, newDS)
+	RunReapedTargetsInvisibleToQuery(t, newDS)
+	RunStatsExcludesReapedTargets(t, newDS)
 	RunCountResourcesInTarget(t, newDS)
 	RunCountResourcesInTargetUsesByteOrderForVersionComparison(t, newDS)
 	RunDeleteTargetSuccess(t, newDS)
 	RunUpdateTargetNotFoundReturnsError(t, newDS)
 	RunDeleteTargetNotFound(t, newDS)
+	RunTargetHealthDefaults(t, newDS)
+	RunTargetHealthStableAcrossUpdate(t, newDS)
+	RunUpdateTargetHealthReachable(t, newDS)
+	RunUpdateTargetHealthMonotonicGuard(t, newDS)
+	RunUpdateTargetHealthSubSecondMonotonic(t, newDS)
+	RunUpdateTargetHealthReapedGuard(t, newDS)
+	RunUpdateTargetHealthIncarnationMatch(t, newDS)
+	RunUpdateTargetHealthIncarnationMismatch(t, newDS)
+	RunTargetReapingPersists(t, newDS)
+	RunTargetReapingPopulatedByDependencyLoad(t, newDS)
+	RunUpdateTargetMintsFreshIncarnationOnReaped(t, newDS)
+	RunUpdateTargetCarriesHealthForwardWhenNotReaped(t, newDS)
+	RunSuccessObservationZeroesAccrual(t, newDS)
+	RunAdvanceTargetAccrual(t, newDS)
+	RunGetUnreachableTargets(t, newDS)
+	RunPersistTargetReapHappyPath(t, newDS)
+	RunPersistTargetReapGuards(t, newDS)
+	RunPersistTargetReapConcurrent(t, newDS)
+	RunCheckTargetsReaped(t, newDS)
+	RunUpdateTargetUnreapsResourcesOnRecovery(t, newDS)
 
 	RunCreateStack(t, newDS)
 	RunCreateStackAlreadyExists(t, newDS)

@@ -14,6 +14,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/plugin_coordinator"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/plugin_process_supervisor"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_persister"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/target_reaper"
 )
 
 func newSupervisor() gen.ProcessBehavior {
@@ -66,6 +67,10 @@ func (sup *Supervisor) Init(args ...any) (act.SupervisorSpec, error) {
 		{
 			Name:    "StackExpirer",
 			Factory: NewStackExpirer,
+		},
+		{
+			Name:    "TargetReaper",
+			Factory: target_reaper.NewTargetReaper,
 		},
 		{
 			Name:    "AutoReconciler",

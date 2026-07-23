@@ -315,6 +315,13 @@ func (c *Client) parseSubmitCommandErrorResponse(body io.ReadCloser) (*apimodel.
 		}
 		return nil, &errResp
 
+	case apimodel.TargetReaped:
+		var errResp apimodel.ErrorResponse[apimodel.TargetReapedError]
+		if err := json.Unmarshal(bodyBytes, &errResp); err != nil {
+			return nil, fmt.Errorf("failed to parse TargetReaped error: %w", err)
+		}
+		return nil, &errResp
+
 	case apimodel.RequiredFieldMissingOnCreate:
 		var errResp apimodel.ErrorResponse[apimodel.RequiredFieldMissingOnCreateError]
 		if err := json.Unmarshal(bodyBytes, &errResp); err != nil {
@@ -596,6 +603,15 @@ func (c *Client) ForceReconcile(stackLabel string) (*apimodel.ForceReconcileResp
 	default:
 		return nil, fmt.Errorf("unexpected response code from the formae agent: %d - %s", resp.StatusCode(), resp.String())
 	}
+}
+
+func (c *Client) ForceReap() error {
+	_, err := c.resty.R().
+		Post(c.endpoint + "/api/v1/admin/reap")
+	if err != nil {
+		return fmt.Errorf("failed to force reap: %w", err)
+	}
+	return nil
 }
 
 func (c *Client) ForceCheckTTL() (*apimodel.ForceCheckTTLResponse, error) {

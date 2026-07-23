@@ -7,6 +7,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -586,7 +587,7 @@ WHERE
         FROM resources AS r2
         WHERE
           r1.ksuid = r2.ksuid AND r2.version > r1.version
-      ) AND r1.operation != 'delete'
+      ) AND r1.operation != 'delete' AND r1.operation != 'reaped'
   ) AND T1.timestamp > (
     SELECT
       fc.timestamp
@@ -939,7 +940,8 @@ func (d DatastoreSQLite) QueryResources(query *datastore.ResourceQuery) ([]*pkgm
 		WHERE r1.uri = r2.uri
 		AND r2.version > r1.version
 		)
-		AND r1.operation != '%s'`, string(resource_update.OperationDelete))
+		AND r1.operation != '%s'
+		AND r1.operation != '%s'`, string(resource_update.OperationDelete), string(resource_update.OperationReaped))
 	args := []any{}
 
 	queryStr = extendSQLiteQueryString(queryStr, query.NativeID, " AND native_id %s ?{esc}", &args)
@@ -977,7 +979,7 @@ func (d DatastoreSQLite) QueryResources(query *datastore.ResourceQuery) ([]*pkgm
 	return resources, rows.Err()
 }
 
-func (d DatastoreSQLite) storeResource(resource *pkgmodel.Resource, data []byte, commandID string, operation string) (string, error) {
+func (d DatastoreSQLite) storeResource(resource *pkgmodel.Resource, data []byte, commandID string, operation string, expectedIncarnation string) (string, error) {
 	slog.Debug("SQLite START", "method", "storeResource", "ksuid", resource.Ksuid, "label", resource.Label, "operation", operation)
 	start := time.Now()
 	defer func() {
@@ -996,6 +998,33 @@ func (d DatastoreSQLite) storeResource(resource *pkgmodel.Resource, data []byte,
 		}
 	}
 
+	// Reaped/incarnation guard. Deletes are exempt: a delete tombstone must
+	// always be recordable (e.g. cleaning up an already-reaped resource). For
+	// every other write, inspect the resource's current (max-version) row and
+	// reject the write when that row is a reaped tombstone, or when an expected
+	// incarnation was supplied and does not match the incarnation stamped on the
+	// current row. An empty stored incarnation (pre-migration rows, or rows
+	// written by incarnation-less callers) skips the incarnation check.
+	if operation != string(resource_update.OperationDelete) {
+		var curOp, curInc string
+		guardErr := d.conn.QueryRow(
+			`SELECT operation, COALESCE(target_incarnation_id, '') FROM resources WHERE uri = ? ORDER BY version DESC LIMIT 1`,
+			resource.URI(),
+		).Scan(&curOp, &curInc)
+		if guardErr != nil && guardErr != sql.ErrNoRows {
+			return "", guardErr
+		}
+		if guardErr == nil {
+			if curOp == string(resource_update.OperationReaped) {
+				return "", fmt.Errorf("%w: resource %s current row is reaped", datastore.ErrResourceWriteRejected, resource.URI())
+			}
+			if expectedIncarnation != "" && curInc != "" && curInc != expectedIncarnation {
+				return "", fmt.Errorf("%w: resource %s incarnation %q does not match expected %q",
+					datastore.ErrResourceWriteRejected, resource.URI(), curInc, expectedIncarnation)
+			}
+		}
+	}
+
 	// Check if this resource already exists using native_id and type
 	query := `SELECT ksuid, data, uri, version, managed FROM resources WHERE native_id = ? AND type = ? ORDER BY version DESC LIMIT 1`
 	row := d.conn.QueryRow(query, resource.NativeID, resource.Type)
@@ -1011,8 +1040,8 @@ func (d DatastoreSQLite) storeResource(resource *pkgmodel.Resource, data []byte,
 		newVersion := mksuid.New()
 
 		query = `
-			INSERT INTO resources (uri, version, command_id, operation, native_id, stack, type, label, target, data, managed, ksuid)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			INSERT INTO resources (uri, version, command_id, operation, native_id, stack, type, label, target, data, managed, ksuid, target_incarnation_id)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`
 		_, err = d.conn.Exec(
 			query,
@@ -1027,7 +1056,8 @@ func (d DatastoreSQLite) storeResource(resource *pkgmodel.Resource, data []byte,
 			resource.Target,
 			data,
 			datastore.BoolToInt(resource.Managed),
-			resource.Ksuid)
+			resource.Ksuid,
+			expectedIncarnation)
 		if err != nil {
 			slog.Error("Failed to store resource", "error", err, "resourceURI", resource.URI())
 			return "", err
@@ -1092,8 +1122,8 @@ func (d DatastoreSQLite) storeResource(resource *pkgmodel.Resource, data []byte,
 	}
 
 	query = `
-		INSERT OR REPLACE INTO resources (uri, version, command_id, operation, native_id, stack, type, label, target, data, managed, ksuid)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT OR REPLACE INTO resources (uri, version, command_id, operation, native_id, stack, type, label, target, data, managed, ksuid, target_incarnation_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	_, err = d.conn.Exec(
 		query,
@@ -1108,7 +1138,8 @@ func (d DatastoreSQLite) storeResource(resource *pkgmodel.Resource, data []byte,
 		resource.Target,
 		data,
 		datastore.BoolToInt(resource.Managed),
-		resource.Ksuid)
+		resource.Ksuid,
+		expectedIncarnation)
 	if err != nil {
 		slog.Error("Failed to store resource", "error", err, "resourceURI", resource.URI())
 		return "", err
@@ -1117,7 +1148,7 @@ func (d DatastoreSQLite) storeResource(resource *pkgmodel.Resource, data []byte,
 	return fmt.Sprintf("%s_%s", resource.Ksuid, newVersion), nil
 }
 
-func (d DatastoreSQLite) StoreResource(resource *pkgmodel.Resource, commandID string) (string, error) {
+func (d DatastoreSQLite) StoreResource(resource *pkgmodel.Resource, commandID string, expectedIncarnation ...string) (string, error) {
 	slog.Debug("SQLite START", "method", "StoreResource", "ksuid", resource.Ksuid, "label", resource.Label)
 	start := time.Now()
 	defer func() {
@@ -1131,7 +1162,11 @@ func (d DatastoreSQLite) StoreResource(resource *pkgmodel.Resource, commandID st
 		return "", err
 	}
 
-	return d.storeResource(resource, jsonData, commandID, string(resource_update.OperationUpdate))
+	inc := ""
+	if len(expectedIncarnation) > 0 {
+		inc = expectedIncarnation[0]
+	}
+	return d.storeResource(resource, jsonData, commandID, string(resource_update.OperationUpdate), inc)
 }
 
 func (d DatastoreSQLite) DeleteResource(resource *pkgmodel.Resource, commandID string) (string, error) {
@@ -1143,7 +1178,7 @@ func (d DatastoreSQLite) DeleteResource(resource *pkgmodel.Resource, commandID s
 	_, span := sqliteTracer.Start(context.Background(), "DeleteResource")
 	defer span.End()
 
-	return d.storeResource(resource, []byte("{}"), commandID, string(resource_update.OperationDelete))
+	return d.storeResource(resource, []byte("{}"), commandID, string(resource_update.OperationDelete), "")
 }
 
 func (d DatastoreSQLite) LoadResource(uri pkgmodel.FormaeURI) (*pkgmodel.Resource, error) {
@@ -1154,7 +1189,7 @@ func (d DatastoreSQLite) LoadResource(uri pkgmodel.FormaeURI) (*pkgmodel.Resourc
 	SELECT data, ksuid
 	FROM resources
 	WHERE uri = ?
-	AND operation != ?
+	AND operation != ? AND operation != 'reaped'
 	ORDER BY version DESC
 	LIMIT 1
 	`
@@ -1193,7 +1228,7 @@ func (d DatastoreSQLite) LoadResourceByNativeID(nativeID string, resourceType st
 		WHERE r1.uri = r2.uri
 		AND r2.version > r1.version
 	)
-	AND r1.operation != ?
+	AND r1.operation != ? AND r1.operation != 'reaped'
 	LIMIT 1
 	`
 	row := d.conn.QueryRow(query, nativeID, resourceType, resource_update.OperationDelete)
@@ -1229,7 +1264,7 @@ func (d DatastoreSQLite) LoadAllResources() ([]*pkgmodel.Resource, error) {
 	WHERE r1.uri = r2.uri
 	AND r2.version > r1.version
 	)
-	AND operation != ?
+	AND operation != ? AND operation != 'reaped'
 	`
 	rows, err := d.conn.Query(query, resource_update.OperationDelete)
 	if err != nil {
@@ -1241,6 +1276,49 @@ func (d DatastoreSQLite) LoadAllResources() ([]*pkgmodel.Resource, error) {
 	for rows.Next() {
 		var jsonData string
 		var ksuid string
+		if err := rows.Scan(&jsonData, &ksuid); err != nil {
+			return nil, err
+		}
+
+		var resource pkgmodel.Resource
+		if err := json.Unmarshal([]byte(jsonData), &resource); err != nil {
+			return nil, err
+		}
+
+		resource.Ksuid = ksuid
+		resources = append(resources, &resource)
+	}
+
+	return resources, rows.Err()
+}
+
+// LoadReapedResources returns the current-version rows tombstoned with the
+// 'reaped' marker, across all targets. See the Datastore interface for the
+// contract.
+func (d DatastoreSQLite) LoadReapedResources() ([]*pkgmodel.Resource, error) {
+	_, span := sqliteTracer.Start(context.Background(), "LoadReapedResources")
+	defer span.End()
+
+	query := `
+	SELECT data, ksuid
+	FROM resources r1
+	WHERE NOT EXISTS (
+	SELECT 1
+	FROM resources r2
+	WHERE r1.uri = r2.uri
+	AND r2.version > r1.version
+	)
+	AND operation = 'reaped'
+	`
+	rows, err := d.conn.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer closeRows(rows)
+
+	var resources []*pkgmodel.Resource
+	for rows.Next() {
+		var jsonData, ksuid string
 		if err := rows.Scan(&jsonData, &ksuid); err != nil {
 			return nil, err
 		}
@@ -1285,7 +1363,7 @@ func (d DatastoreSQLite) LoadAllResourcesByStack() (map[string][]*pkgmodel.Resou
 	WHERE r1.uri = r2.uri
 	AND r2.version > r1.version
 	)
-	AND operation != ?
+	AND operation != ? AND operation != 'reaped'
 	`
 
 	rows, err := d.conn.Query(query, resource_update.OperationDelete)
@@ -1340,7 +1418,7 @@ func (d DatastoreSQLite) LoadResourcesByStack(stackLabel string) ([]*pkgmodel.Re
 	WHERE r1.uri = r2.uri
 	AND r2.version > r1.version
 	)
-	AND operation != ?
+	AND operation != ? AND operation != 'reaped'
 	`
 
 	rows, err := d.conn.Query(query, stackLabel, resource_update.OperationDelete)
@@ -1660,7 +1738,7 @@ func (d DatastoreSQLite) CountResourcesInStack(label string) (int, error) {
 			WHERE r1.uri = r2.uri
 			AND r2.version > r1.version
 		)
-		AND operation != ?
+		AND operation != ? AND operation != 'reaped'
 	`
 	row := d.conn.QueryRow(query, label, resource_update.OperationDelete)
 
@@ -2639,8 +2717,15 @@ func (d DatastoreSQLite) CreateTarget(target *pkgmodel.Target) (string, error) {
 		}
 	}
 
-	query := `INSERT INTO targets (label, version, namespace, config, config_schema, discoverable) VALUES (?, 1, ?, ?, ?, ?)`
-	_, err = d.conn.Exec(query, target.Label, target.Namespace, cfg, configSchemaJSON, datastore.BoolToInt(target.Discoverable))
+	incarnationID := mksuid.New().String()
+
+	reapKind, reapMaxUnreachableSeconds, err := pkgmodel.ReapingToColumns(target.Reaping)
+	if err != nil {
+		return "", err
+	}
+
+	query := `INSERT INTO targets (label, version, namespace, config, config_schema, discoverable, target_incarnation_id, health_state, unreachable_accum_seconds, reap_kind, reap_max_unreachable_seconds) VALUES (?, 1, ?, ?, ?, ?, ?, 'unknown', 0, ?, ?)`
+	_, err = d.conn.Exec(query, target.Label, target.Namespace, cfg, configSchemaJSON, datastore.BoolToInt(target.Discoverable), incarnationID, reapKind, reapMaxUnreachableSeconds)
 	if err != nil {
 		slog.Debug("Failed to create target (may be retried as update)", "error", err, "label", target.Label)
 		return "", err
@@ -2653,19 +2738,27 @@ func (d DatastoreSQLite) UpdateTarget(target *pkgmodel.Target) (string, error) {
 	_, span := sqliteTracer.Start(context.Background(), "UpdateTarget")
 	defer span.End()
 
-	query := `SELECT MAX(version) FROM targets WHERE label = ?`
-	row := d.conn.QueryRow(query, target.Label)
+	// Load the latest row to carry health state forward onto the new version.
+	healthQuery := `
+		SELECT version, target_incarnation_id, health_state, last_seen_at, observed_at,
+		       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code
+		FROM targets WHERE label = ? ORDER BY version DESC LIMIT 1`
+	healthRow := d.conn.QueryRow(healthQuery, target.Label)
 
-	var maxVersion sql.NullInt64
-	if err := row.Scan(&maxVersion); err != nil {
+	var currentVersion int64
+	var incarnationID, healthState sql.NullString
+	var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt sql.NullString
+	var unreachableAccumSeconds sql.NullInt64
+	var lastErrorCode sql.NullString
+	if err := healthRow.Scan(&currentVersion, &incarnationID, &healthState, &lastSeenAt, &observedAt,
+		&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", fmt.Errorf("target %s does not exist, cannot update", target.Label)
+		}
 		return "", err
 	}
 
-	if !maxVersion.Valid {
-		return "", fmt.Errorf("target %s does not exist, cannot update", target.Label)
-	}
-
-	newVersion := int(maxVersion.Int64) + 1
+	newVersion := int(currentVersion) + 1
 
 	cfg, err := json.Marshal(target.Config)
 	if err != nil {
@@ -2680,12 +2773,97 @@ func (d DatastoreSQLite) UpdateTarget(target *pkgmodel.Target) (string, error) {
 		}
 	}
 
-	insertQuery := `INSERT INTO targets (label, version, namespace, config, config_schema, discoverable) VALUES (?, ?, ?, ?, ?, ?)`
-	_, err = d.conn.Exec(insertQuery, target.Label, newVersion, target.Namespace, cfg, configSchemaJSON, datastore.BoolToInt(target.Discoverable))
+	reapKind, reapMaxUnreachableSeconds, err := pkgmodel.ReapingToColumns(target.Reaping)
+	if err != nil {
+		return "", err
+	}
+
+	// Recovery: when the current row has been reaped, re-declaring the target
+	// brings it back to life. Mint a fresh incarnation id and reset health to
+	// 'unknown' (accrual 0, timestamps cleared) rather than carrying the reaped
+	// state forward — a new incarnation makes stale in-flight observations for
+	// the old incarnation no-ops.
+	newIncarnationID := incarnationID.String
+	newHealthState := healthState.String
+	newLastSeenAt := lastSeenAt
+	newObservedAt := observedAt
+	newFirstUnreachableAt := firstUnreachableAt
+	newLastSampleAt := lastSampleAt
+	newUnreachableAccumSeconds := unreachableAccumSeconds.Int64
+	newLastErrorCode := lastErrorCode
+	recovered := healthState.String == pkgmodel.TargetHealthStateReaped
+	if recovered {
+		newIncarnationID = mksuid.New().String()
+		newHealthState = pkgmodel.TargetHealthStateUnknown
+		newLastSeenAt = sql.NullString{}
+		newObservedAt = sql.NullString{}
+		newFirstUnreachableAt = sql.NullString{}
+		newLastSampleAt = sql.NullString{}
+		newUnreachableAccumSeconds = 0
+		newLastErrorCode = sql.NullString{}
+	}
+
+	insertQuery := `
+		INSERT INTO targets (label, version, namespace, config, config_schema, discoverable,
+		                     target_incarnation_id, health_state, last_seen_at, observed_at,
+		                     first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+		                     reap_kind, reap_max_unreachable_seconds)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
+	// The version INSERT and the recovery un-reap must be atomic. A crash strictly
+	// between them would leave the target recovered (fresh incarnation, health
+	// 'unknown') while its resources stayed marked 'reaped'; a resumed UpdateTarget
+	// would not re-trigger the un-reap (the target is no longer reaped), stranding
+	// those resources as invisible tombstones the write-guard permanently rejects.
+	// One transaction makes it both-or-neither.
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return "", fmt.Errorf("failed to begin target update transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	_, err = tx.Exec(insertQuery, target.Label, newVersion, target.Namespace, cfg, configSchemaJSON,
+		datastore.BoolToInt(target.Discoverable),
+		newIncarnationID, newHealthState,
+		newLastSeenAt, newObservedAt, newFirstUnreachableAt, newLastSampleAt,
+		newUnreachableAccumSeconds, newLastErrorCode,
+		reapKind, reapMaxUnreachableSeconds)
 	if err != nil {
 		slog.Error("Failed to update target", "error", err, "label", target.Label, "version", newVersion)
 		return "", err
 	}
+
+	// Recovery: bring the reaped target's tombstoned resource rows back to life
+	// and stamp them with the fresh incarnation. Reaping flipped each current-row
+	// resource on this target to the 'reaped' marker in place; recovery reverses
+	// that so the resources are visible again and any subsequent re-adopt write
+	// (which now carries — or, post-crash, omits — the fresh incarnation) is
+	// accepted by the resource-write guard instead of being rejected as a
+	// tombstone. Delete tombstones are left untouched.
+	if recovered {
+		if _, err = tx.Exec(`
+			UPDATE resources SET operation = ?, target_incarnation_id = ?
+			WHERE target = ?
+			  AND operation = 'reaped'
+			  AND NOT EXISTS (
+			    SELECT 1 FROM resources r2
+			    WHERE r2.uri = resources.uri AND r2.version > resources.version
+			  )`,
+			string(resource_update.OperationUpdate), newIncarnationID, target.Label); err != nil {
+			slog.Error("Failed to un-reap resources on target recovery", "error", err, "label", target.Label)
+			return "", err
+		}
+	}
+
+	if err = tx.Commit(); err != nil {
+		return "", fmt.Errorf("failed to commit target update transaction: %w", err)
+	}
+	committed = true
 
 	return fmt.Sprintf("%s_%d", target.Label, newVersion), nil
 }
@@ -2727,7 +2905,7 @@ func (d DatastoreSQLite) CountResourcesInTarget(targetLabel string) (int, error)
 			WHERE r1.uri = r2.uri
 			AND r2.version > r1.version
 		)
-		AND operation != ?
+		AND operation != ? AND operation != 'reaped'
 	`
 	row := d.conn.QueryRow(query, targetLabel, resource_update.OperationDelete)
 
@@ -2739,11 +2917,417 @@ func (d DatastoreSQLite) CountResourcesInTarget(targetLabel string) (int, error)
 	return count, nil
 }
 
+func (d DatastoreSQLite) UpdateTargetHealth(obs pkgmodel.TargetHealthObservation) (bool, error) {
+	_, span := sqliteTracer.Start(context.Background(), "UpdateTargetHealth")
+	defer span.End()
+
+	observedAt := obs.ObservedAt.UTC().Format(time.RFC3339Nano)
+
+	var lastSeenAt any
+	if obs.LastSeenAt != nil {
+		lastSeenAt = obs.LastSeenAt.UTC().Format(time.RFC3339Nano)
+	}
+
+	var lastErrorCode any
+	if obs.LastErrorCode != "" {
+		lastErrorCode = obs.LastErrorCode
+	}
+
+	// A reachable ("success") observation clears any accrued unreachability:
+	// the target is healthy again, so first_unreachable_at and the accumulated
+	// unreachable seconds reset to their pristine (never-unreachable) values.
+	accrualReset := ""
+	if obs.State == pkgmodel.TargetHealthStateReachable {
+		accrualReset = `,
+				first_unreachable_at = NULL,
+				unreachable_accum_seconds = 0`
+	}
+
+	// Base WHERE: label matches max-version row, not reaped, monotonic guard on observed_at.
+	// SQLite stores timestamps as text; NULL observed_at means no prior observation, so allow it.
+	var query string
+	var args []any
+	if obs.IncarnationID != "" {
+		query = fmt.Sprintf(`
+			UPDATE targets SET
+				health_state = ?,
+				observed_at = ?,
+				last_seen_at = COALESCE(?, last_seen_at),
+				last_error_code = ?%s
+			WHERE label = ?
+			  AND version = (SELECT MAX(version) FROM targets WHERE label = ?)
+			  AND health_state <> 'reaped'
+			  AND (observed_at IS NULL OR julianday(observed_at) < julianday(?))
+			  AND target_incarnation_id = ?`, accrualReset)
+		args = []any{obs.State, observedAt, lastSeenAt, lastErrorCode,
+			obs.TargetLabel, obs.TargetLabel, observedAt, obs.IncarnationID}
+	} else {
+		query = fmt.Sprintf(`
+			UPDATE targets SET
+				health_state = ?,
+				observed_at = ?,
+				last_seen_at = COALESCE(?, last_seen_at),
+				last_error_code = ?%s
+			WHERE label = ?
+			  AND version = (SELECT MAX(version) FROM targets WHERE label = ?)
+			  AND health_state <> 'reaped'
+			  AND (observed_at IS NULL OR julianday(observed_at) < julianday(?))`, accrualReset)
+		args = []any{obs.State, observedAt, lastSeenAt, lastErrorCode,
+			obs.TargetLabel, obs.TargetLabel, observedAt}
+	}
+
+	result, err := d.conn.Exec(query, args...)
+	if err != nil {
+		return false, err
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
+}
+
+func (d DatastoreSQLite) AdvanceTargetAccrual(targetLabel, incarnationID string, lastSampleAt time.Time, deltaSeconds int64) (bool, error) {
+	_, span := sqliteTracer.Start(context.Background(), "AdvanceTargetAccrual")
+	defer span.End()
+
+	query := `
+		UPDATE targets SET
+			unreachable_accum_seconds = unreachable_accum_seconds + ?,
+			last_sample_at = ?
+		WHERE label = ?
+		  AND version = (SELECT MAX(version) FROM targets WHERE label = ?)
+		  AND health_state = 'unreachable'
+		  AND target_incarnation_id = ?`
+
+	result, err := d.conn.Exec(query, deltaSeconds, lastSampleAt.UTC().Format(time.RFC3339Nano),
+		targetLabel, targetLabel, incarnationID)
+	if err != nil {
+		return false, err
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
+}
+
+func (d DatastoreSQLite) GetUnreachableTargets() ([]*pkgmodel.Target, error) {
+	_, span := sqliteTracer.Start(context.Background(), "GetUnreachableTargets")
+	defer span.End()
+
+	var targets []*pkgmodel.Target
+
+	query := `
+		SELECT label, version, namespace, config, config_schema, discoverable,
+		       target_incarnation_id, health_state, last_seen_at, observed_at,
+		       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+		       reap_kind, reap_max_unreachable_seconds
+		FROM targets t1
+		WHERE NOT EXISTS (
+			SELECT 1
+			FROM targets t2
+			WHERE t1.label = t2.label
+			AND t2.version > t1.version
+		)
+		AND t1.health_state = 'unreachable'`
+	rows, err := d.conn.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer closeRows(rows)
+
+	for rows.Next() {
+		var label, namespace string
+		var version int
+		var config json.RawMessage
+		var configSchemaStr sql.NullString
+		var discoverable int
+		var incarnationID, healthState string
+		var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt sql.NullString
+		var unreachableAccumSeconds int64
+		var lastErrorCode sql.NullString
+		var reapKind string
+		var reapMaxUnreachableSeconds int64
+		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaStr, &discoverable,
+			&incarnationID, &healthState, &lastSeenAt, &observedAt,
+			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode,
+			&reapKind, &reapMaxUnreachableSeconds); err != nil {
+			return nil, err
+		}
+
+		var configSchema pkgmodel.ConfigSchema
+		if configSchemaStr.Valid {
+			if err := json.Unmarshal([]byte(configSchemaStr.String), &configSchema); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal config_schema for target %s: %w", label, err)
+			}
+		}
+
+		targets = append(targets, &pkgmodel.Target{
+			Label:        label,
+			Namespace:    namespace,
+			Config:       config,
+			ConfigSchema: configSchema,
+			Discoverable: discoverable == 1,
+			Version:      version,
+			Reaping:      pkgmodel.ReapingRawFromColumns(reapKind, reapMaxUnreachableSeconds),
+			Health: scanSQLiteTargetHealth(incarnationID, healthState, lastSeenAt, observedAt,
+				firstUnreachableAt, lastSampleAt, unreachableAccumSeconds, lastErrorCode),
+		})
+	}
+
+	return targets, rows.Err()
+}
+
+func (d DatastoreSQLite) CheckTargetsReaped(labels []string) ([]string, error) {
+	_, span := sqliteTracer.Start(context.Background(), "CheckTargetsReaped")
+	defer span.End()
+
+	if len(labels) == 0 {
+		return nil, nil
+	}
+
+	placeholders := make([]string, len(labels))
+	args := make([]any, len(labels))
+	for i, label := range labels {
+		placeholders[i] = "?"
+		args[i] = label
+	}
+
+	query := fmt.Sprintf(`
+		SELECT t1.label
+		FROM targets t1
+		WHERE t1.label IN (%s)
+		AND NOT EXISTS (
+			SELECT 1 FROM targets t2
+			WHERE t1.label = t2.label AND t2.version > t1.version
+		)
+		AND t1.health_state = 'reaped'`, strings.Join(placeholders, ","))
+
+	rows, err := d.conn.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer closeRows(rows)
+
+	var reaped []string
+	for rows.Next() {
+		var label string
+		if err := rows.Scan(&label); err != nil {
+			return nil, err
+		}
+		reaped = append(reaped, label)
+	}
+
+	return reaped, rows.Err()
+}
+
+// PersistTargetReap performs the whole target reap in one transaction. See the
+// Datastore interface for the contract. SQLite compares the text-stored grace
+// timestamps via julianday() (mirroring UpdateTargetHealth) so fractional-second
+// formatting can't skew the comparison.
+func (d DatastoreSQLite) PersistTargetReap(req datastore.PersistTargetReapRequest) (bool, []string, error) {
+	_, span := sqliteTracer.Start(context.Background(), "PersistTargetReap")
+	defer span.End()
+
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return false, nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	lastSeenBefore := req.LastSeenBefore.UTC().Format(time.RFC3339Nano)
+	lastSampleBefore := req.LastSampleBefore.UTC().Format(time.RFC3339Nano)
+
+	// 1. Conditional transition FIRST — the atomic CAS (no locks). The reap
+	//    thresholds are re-read from the row's OWN persisted columns, never
+	//    trusted from the request.
+	casQuery := `
+		UPDATE targets SET health_state = 'reaped'
+		WHERE label = ?
+		  AND version = (SELECT MAX(version) FROM targets WHERE label = ?)
+		  AND target_incarnation_id = ?
+		  AND health_state = 'unreachable'
+		  AND reap_kind = 'after'
+		  AND unreachable_accum_seconds >= reap_max_unreachable_seconds
+		  AND julianday(last_seen_at) <= julianday(?)
+		  AND julianday(last_sample_at) <= julianday(?)`
+	casRes, err := tx.Exec(casQuery, req.Label, req.Label, req.IncarnationID, lastSeenBefore, lastSampleBefore)
+	if err != nil {
+		return false, nil, err
+	}
+	n, err := casRes.RowsAffected()
+	if err != nil {
+		return false, nil, err
+	}
+	if n != 1 {
+		// Not eligible, stale, or already reaped: reap nothing.
+		return false, nil, nil
+	}
+
+	// Read the accrued seconds for the audit row.
+	var accumSeconds int64
+	if err = tx.QueryRow(
+		`SELECT unreachable_accum_seconds FROM targets
+		 WHERE label = ? AND version = (SELECT MAX(version) FROM targets WHERE label = ?)`,
+		req.Label, req.Label,
+	).Scan(&accumSeconds); err != nil {
+		return false, nil, err
+	}
+
+	// 2. Active-command assertion: no incomplete (non-sync) forma_command may
+	//    touch this target label, via a resource_update's resource target or a
+	//    target-update op, across all stacks.
+	var active bool
+	if err = tx.QueryRow(`
+		SELECT
+		  EXISTS (
+		    SELECT 1 FROM resource_updates ru
+		    JOIN forma_commands fc ON ru.command_id = fc.command_id
+		    WHERE fc.command != 'sync'
+		      AND fc.state NOT IN ('Success', 'Failed', 'Canceled')
+		      AND json_extract(ru.resource, '$.Target') = ?
+		  )
+		  OR EXISTS (
+		    SELECT 1 FROM forma_commands fc
+		    WHERE fc.command != 'sync'
+		      AND fc.state NOT IN ('Success', 'Failed', 'Canceled')
+		      AND fc.target_updates IS NOT NULL
+		      AND EXISTS (
+		        SELECT 1 FROM json_each(fc.target_updates) je
+		        WHERE json_extract(je.value, '$.Target.Label') = ?
+		      )
+		  )`, req.Label, req.Label).Scan(&active); err != nil {
+		return false, nil, err
+	}
+	if active {
+		// An in-flight command owns this target; abandon the reap.
+		return false, nil, nil
+	}
+
+	// Collect the distinct stacks whose live resources this reap tombstones, so
+	// the caller can clean up any stack the reap empties. The predicate matches
+	// the tombstone UPDATE below exactly. Rows must be fully read and closed
+	// before the next statement runs on this single-connection transaction.
+	reapedStacks, err := func() ([]string, error) {
+		rows, qErr := tx.Query(`
+			SELECT DISTINCT stack FROM resources
+			WHERE target = ?
+			  AND operation != ? AND operation != 'reaped'
+			  AND NOT EXISTS (
+			    SELECT 1 FROM resources r2
+			    WHERE r2.uri = resources.uri AND r2.version > resources.version
+			  )`, req.Label, resource_update.OperationDelete)
+		if qErr != nil {
+			return nil, qErr
+		}
+		defer closeRows(rows)
+		var stacks []string
+		for rows.Next() {
+			var stack string
+			if sErr := rows.Scan(&stack); sErr != nil {
+				return nil, sErr
+			}
+			stacks = append(stacks, stack)
+		}
+		return stacks, rows.Err()
+	}()
+	if err != nil {
+		return false, nil, err
+	}
+
+	// 3. Tombstone every current-row resource on this target (skipping rows that
+	//    are already delete/reaped tombstones).
+	tombRes, err := tx.Exec(`
+		UPDATE resources SET operation = 'reaped'
+		WHERE target = ?
+		  AND operation != ? AND operation != 'reaped'
+		  AND NOT EXISTS (
+		    SELECT 1 FROM resources r2
+		    WHERE r2.uri = resources.uri AND r2.version > resources.version
+		  )`, req.Label, resource_update.OperationDelete)
+	if err != nil {
+		return false, nil, err
+	}
+	resourceCount, err := tombRes.RowsAffected()
+	if err != nil {
+		return false, nil, err
+	}
+
+	// 4. Insert the UNIQUE audit row.
+	if _, err = tx.Exec(
+		`INSERT INTO target_reap_audit (incarnation_id, label, reaped_at, accum_seconds, resource_count)
+		 VALUES (?, ?, ?, ?, ?)`,
+		req.IncarnationID, req.Label, req.ReapedAt.UTC().Format(time.RFC3339Nano), accumSeconds, resourceCount,
+	); err != nil {
+		return false, nil, err
+	}
+
+	if err = tx.Commit(); err != nil {
+		return false, nil, err
+	}
+	committed = true
+	return true, reapedStacks, nil
+}
+
+// scanSQLiteTargetHealth reads the health columns from a scan result and returns
+// a populated TargetHealth. nullTimestamp is a sql.NullString holding an ISO-8601
+// timestamp string as SQLite stores datetimes as text.
+func scanSQLiteTargetHealth(
+	incarnationID string,
+	healthState string,
+	lastSeenAt sql.NullString,
+	observedAt sql.NullString,
+	firstUnreachableAt sql.NullString,
+	lastSampleAt sql.NullString,
+	unreachableAccumSeconds int64,
+	lastErrorCode sql.NullString,
+) *pkgmodel.TargetHealth {
+	parseTime := func(ns sql.NullString) *time.Time {
+		if !ns.Valid || ns.String == "" {
+			return nil
+		}
+		t, err := time.Parse(time.RFC3339Nano, ns.String)
+		if err != nil {
+			// Try without nanoseconds
+			t, err = time.Parse(time.RFC3339, ns.String)
+			if err != nil {
+				return nil
+			}
+		}
+		return &t
+	}
+
+	h := &pkgmodel.TargetHealth{
+		IncarnationID:           incarnationID,
+		State:                   healthState,
+		LastSeenAt:              parseTime(lastSeenAt),
+		ObservedAt:              parseTime(observedAt),
+		FirstUnreachableAt:      parseTime(firstUnreachableAt),
+		LastSampleAt:            parseTime(lastSampleAt),
+		UnreachableAccumSeconds: unreachableAccumSeconds,
+	}
+	if lastErrorCode.Valid {
+		h.LastErrorCode = lastErrorCode.String
+	}
+	return h
+}
+
 func (d DatastoreSQLite) LoadTarget(label string) (*pkgmodel.Target, error) {
 	_, span := sqliteTracer.Start(context.Background(), "LoadTarget")
 	defer span.End()
 
-	query := `SELECT version, namespace, config, config_schema, discoverable FROM targets WHERE label = ? ORDER BY version DESC LIMIT 1`
+	query := `
+		SELECT version, namespace, config, config_schema, discoverable,
+		       target_incarnation_id, health_state, last_seen_at, observed_at,
+		       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+		       reap_kind, reap_max_unreachable_seconds
+		FROM targets WHERE label = ? ORDER BY version DESC LIMIT 1`
 	row := d.conn.QueryRow(query, label)
 
 	var version int
@@ -2751,7 +3335,16 @@ func (d DatastoreSQLite) LoadTarget(label string) (*pkgmodel.Target, error) {
 	var config json.RawMessage
 	var configSchemaStr sql.NullString
 	var discoverable int
-	if err := row.Scan(&version, &namespace, &config, &configSchemaStr, &discoverable); err != nil {
+	var incarnationID, healthState string
+	var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt sql.NullString
+	var unreachableAccumSeconds int64
+	var lastErrorCode sql.NullString
+	var reapKind string
+	var reapMaxUnreachableSeconds int64
+	if err := row.Scan(&version, &namespace, &config, &configSchemaStr, &discoverable,
+		&incarnationID, &healthState, &lastSeenAt, &observedAt,
+		&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode,
+		&reapKind, &reapMaxUnreachableSeconds); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil // Target not found, return nil without error
 		}
@@ -2772,6 +3365,9 @@ func (d DatastoreSQLite) LoadTarget(label string) (*pkgmodel.Target, error) {
 		ConfigSchema: configSchema,
 		Discoverable: discoverable == 1,
 		Version:      version,
+		Reaping:      pkgmodel.ReapingRawFromColumns(reapKind, reapMaxUnreachableSeconds),
+		Health: scanSQLiteTargetHealth(incarnationID, healthState, lastSeenAt, observedAt,
+			firstUnreachableAt, lastSampleAt, unreachableAccumSeconds, lastErrorCode),
 	}, nil
 }
 
@@ -2785,7 +3381,10 @@ func (d DatastoreSQLite) LoadAllTargets() ([]*pkgmodel.Target, error) {
 	var targets []*pkgmodel.Target
 
 	query := `
-		SELECT label, version, namespace, config, config_schema, discoverable
+		SELECT label, version, namespace, config, config_schema, discoverable,
+		       target_incarnation_id, health_state, last_seen_at, observed_at,
+		       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+		       reap_kind, reap_max_unreachable_seconds
 		FROM targets t1
 		WHERE NOT EXISTS (
 			SELECT 1
@@ -2806,7 +3405,16 @@ func (d DatastoreSQLite) LoadAllTargets() ([]*pkgmodel.Target, error) {
 		var config json.RawMessage
 		var configSchemaStr sql.NullString
 		var discoverable int
-		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaStr, &discoverable); err != nil {
+		var incarnationID, healthState string
+		var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt sql.NullString
+		var unreachableAccumSeconds int64
+		var lastErrorCode sql.NullString
+		var reapKind string
+		var reapMaxUnreachableSeconds int64
+		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaStr, &discoverable,
+			&incarnationID, &healthState, &lastSeenAt, &observedAt,
+			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode,
+			&reapKind, &reapMaxUnreachableSeconds); err != nil {
 			return nil, err
 		}
 
@@ -2824,6 +3432,9 @@ func (d DatastoreSQLite) LoadAllTargets() ([]*pkgmodel.Target, error) {
 			ConfigSchema: configSchema,
 			Discoverable: discoverable == 1,
 			Version:      version,
+			Reaping:      pkgmodel.ReapingRawFromColumns(reapKind, reapMaxUnreachableSeconds),
+			Health: scanSQLiteTargetHealth(incarnationID, healthState, lastSeenAt, observedAt,
+				firstUnreachableAt, lastSampleAt, unreachableAccumSeconds, lastErrorCode),
 		})
 	}
 
@@ -2847,7 +3458,10 @@ func (d DatastoreSQLite) LoadTargetsByLabels(targetNames []string) ([]*pkgmodel.
 	}
 
 	query := fmt.Sprintf(`
-		SELECT t1.label, t1.version, t1.namespace, t1.config, t1.config_schema, t1.discoverable
+		SELECT t1.label, t1.version, t1.namespace, t1.config, t1.config_schema, t1.discoverable,
+		       t1.target_incarnation_id, t1.health_state, t1.last_seen_at, t1.observed_at,
+		       t1.first_unreachable_at, t1.last_sample_at, t1.unreachable_accum_seconds, t1.last_error_code,
+		       t1.reap_kind, t1.reap_max_unreachable_seconds
 		FROM targets t1
 		WHERE t1.label IN (%s)
 		AND NOT EXISTS (
@@ -2870,7 +3484,16 @@ func (d DatastoreSQLite) LoadTargetsByLabels(targetNames []string) ([]*pkgmodel.
 		var config json.RawMessage
 		var configSchemaStr sql.NullString
 		var discoverable int
-		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaStr, &discoverable); err != nil {
+		var incarnationID, healthState string
+		var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt sql.NullString
+		var unreachableAccumSeconds int64
+		var lastErrorCode sql.NullString
+		var reapKind string
+		var reapMaxUnreachableSeconds int64
+		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaStr, &discoverable,
+			&incarnationID, &healthState, &lastSeenAt, &observedAt,
+			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode,
+			&reapKind, &reapMaxUnreachableSeconds); err != nil {
 			return nil, err
 		}
 
@@ -2888,6 +3511,9 @@ func (d DatastoreSQLite) LoadTargetsByLabels(targetNames []string) ([]*pkgmodel.
 			ConfigSchema: configSchema,
 			Discoverable: discoverable == 1,
 			Version:      version,
+			Reaping:      pkgmodel.ReapingRawFromColumns(reapKind, reapMaxUnreachableSeconds),
+			Health: scanSQLiteTargetHealth(incarnationID, healthState, lastSeenAt, observedAt,
+				firstUnreachableAt, lastSampleAt, unreachableAccumSeconds, lastErrorCode),
 		})
 	}
 
@@ -2902,7 +3528,10 @@ func (d DatastoreSQLite) LoadDiscoverableTargets() ([]*pkgmodel.Target, error) {
 	// Deduplicate by config across all namespaces
 	query := `
 		WITH latest_targets AS (
-			SELECT label, version, namespace, config, config_schema, discoverable
+			SELECT label, version, namespace, config, config_schema, discoverable,
+			       target_incarnation_id, health_state, last_seen_at, observed_at,
+			       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+			       reap_kind, reap_max_unreachable_seconds
 			FROM targets t1
 			WHERE discoverable = 1
 			AND NOT EXISTS (
@@ -2912,7 +3541,10 @@ func (d DatastoreSQLite) LoadDiscoverableTargets() ([]*pkgmodel.Target, error) {
 				AND t2.version > t1.version
 			)
 		)
-		SELECT label, version, namespace, config, config_schema, discoverable
+		SELECT label, version, namespace, config, config_schema, discoverable,
+		       target_incarnation_id, health_state, last_seen_at, observed_at,
+		       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+		       reap_kind, reap_max_unreachable_seconds
 		FROM latest_targets
 		GROUP BY config
 		HAVING version = MAX(version)`
@@ -2930,7 +3562,16 @@ func (d DatastoreSQLite) LoadDiscoverableTargets() ([]*pkgmodel.Target, error) {
 		var config json.RawMessage
 		var configSchemaStr sql.NullString
 		var discoverable int
-		if err := rows.Scan(&label, &version, &ns, &config, &configSchemaStr, &discoverable); err != nil {
+		var incarnationID, healthState string
+		var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt sql.NullString
+		var unreachableAccumSeconds int64
+		var lastErrorCode sql.NullString
+		var reapKind string
+		var reapMaxUnreachableSeconds int64
+		if err := rows.Scan(&label, &version, &ns, &config, &configSchemaStr, &discoverable,
+			&incarnationID, &healthState, &lastSeenAt, &observedAt,
+			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode,
+			&reapKind, &reapMaxUnreachableSeconds); err != nil {
 			return nil, err
 		}
 
@@ -2948,6 +3589,9 @@ func (d DatastoreSQLite) LoadDiscoverableTargets() ([]*pkgmodel.Target, error) {
 			ConfigSchema: configSchema,
 			Discoverable: discoverable == 1,
 			Version:      version,
+			Reaping:      pkgmodel.ReapingRawFromColumns(reapKind, reapMaxUnreachableSeconds),
+			Health: scanSQLiteTargetHealth(incarnationID, healthState, lastSeenAt, observedAt,
+				firstUnreachableAt, lastSampleAt, unreachableAccumSeconds, lastErrorCode),
 		})
 	}
 
@@ -2959,14 +3603,18 @@ func (d DatastoreSQLite) QueryTargets(query *datastore.TargetQuery) ([]*pkgmodel
 	defer span.End()
 
 	queryStr := `
-		SELECT label, version, namespace, config, config_schema, discoverable
+		SELECT label, version, namespace, config, config_schema, discoverable,
+		       target_incarnation_id, health_state, last_seen_at, observed_at,
+		       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+		       reap_kind, reap_max_unreachable_seconds
 		FROM targets t1
 		WHERE NOT EXISTS (
 			SELECT 1
 			FROM targets t2
 			WHERE t1.label = t2.label
 			AND t2.version > t1.version
-		)`
+		)
+		AND health_state != 'reaped'`
 	args := []any{}
 
 	queryStr = extendSQLiteQueryString(queryStr, query.Label, " AND label %s ?{esc}", &args)
@@ -2990,7 +3638,16 @@ func (d DatastoreSQLite) QueryTargets(query *datastore.TargetQuery) ([]*pkgmodel
 		var config json.RawMessage
 		var configSchemaStr sql.NullString
 		var discoverable int
-		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaStr, &discoverable); err != nil {
+		var incarnationID, healthState string
+		var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt sql.NullString
+		var unreachableAccumSeconds int64
+		var lastErrorCode sql.NullString
+		var reapKind string
+		var reapMaxUnreachableSeconds int64
+		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaStr, &discoverable,
+			&incarnationID, &healthState, &lastSeenAt, &observedAt,
+			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode,
+			&reapKind, &reapMaxUnreachableSeconds); err != nil {
 			return nil, err
 		}
 
@@ -3008,6 +3665,9 @@ func (d DatastoreSQLite) QueryTargets(query *datastore.TargetQuery) ([]*pkgmodel
 			ConfigSchema: configSchema,
 			Discoverable: discoverable == 1,
 			Version:      version,
+			Reaping:      pkgmodel.ReapingRawFromColumns(reapKind, reapMaxUnreachableSeconds),
+			Health: scanSQLiteTargetHealth(incarnationID, healthState, lastSeenAt, observedAt,
+				firstUnreachableAt, lastSampleAt, unreachableAccumSeconds, lastErrorCode),
 		})
 	}
 
@@ -3107,7 +3767,7 @@ func (d DatastoreSQLite) Stats() (*stats.Stats, error) {
 		FROM resources r1
 		WHERE stack IS NOT NULL
 		AND stack != '%s'
-		AND operation != ?
+		AND operation != ? AND operation != 'reaped'
 		AND NOT EXISTS (
 			SELECT 1
 			FROM resources r2
@@ -3129,7 +3789,7 @@ func (d DatastoreSQLite) Stats() (*stats.Stats, error) {
 		FROM resources r1
 		WHERE stack IS NOT NULL
 		AND stack != '%s'
-		AND operation != ?
+		AND operation != ? AND operation != 'reaped'
 		AND NOT EXISTS (
 			SELECT 1
 			FROM resources r2
@@ -3160,7 +3820,7 @@ func (d DatastoreSQLite) Stats() (*stats.Stats, error) {
 		SELECT SUBSTR(type, 1, INSTR(type, '::') - 1) as namespace, COUNT(*)
 		FROM resources r1
 		WHERE stack = '%s'
-		AND operation != ?
+		AND operation != ? AND operation != 'reaped'
 		AND NOT EXISTS (
 			SELECT 1
 			FROM resources r2
@@ -3196,6 +3856,7 @@ func (d DatastoreSQLite) Stats() (*stats.Stats, error) {
 			WHERE t1.label = t2.label
 			AND t2.version > t1.version
 		)
+		AND health_state != 'reaped'
 		GROUP BY namespace
 	`
 	rows, err = d.conn.Query(targetsQuery)
@@ -3220,7 +3881,7 @@ func (d DatastoreSQLite) Stats() (*stats.Stats, error) {
 	resourceTypesQuery := `
 		SELECT type, COUNT(*)
 		FROM resources r1
-		WHERE operation != ?
+		WHERE operation != ? AND operation != 'reaped'
 		AND NOT EXISTS (
 			SELECT 1
 			FROM resources r2
@@ -3289,7 +3950,7 @@ func (d DatastoreSQLite) LoadResourceById(ksuid string) (*pkgmodel.Resource, err
 	SELECT data, ksuid
 	FROM resources
 	WHERE ksuid = ?
-	AND operation != ?
+	AND operation != ? AND operation != 'reaped'
 	ORDER BY version DESC
 	LIMIT 1
 	`
@@ -3343,7 +4004,7 @@ func (d DatastoreSQLite) FindResourcesDependingOn(ksuid string) ([]*pkgmodel.Res
 		WHERE r1.uri = r2.uri
 		AND r2.version > r1.version
 	)
-	AND operation != ?
+	AND operation != ? AND operation != 'reaped'
 	`
 
 	rows, err := d.conn.Query(query, pattern, resource_update.OperationDelete)
@@ -3404,7 +4065,7 @@ func (d DatastoreSQLite) FindResourcesDependingOnMany(ksuids []string) (map[stri
 		WHERE r1.uri = r2.uri
 		AND r2.version > r1.version
 	)
-	AND operation != ?
+	AND operation != ? AND operation != 'reaped'
 	`, strings.Join(conditions, " OR "))
 
 	rows, err := d.conn.Query(query, args...)
@@ -3463,7 +4124,10 @@ func (d DatastoreSQLite) FindTargetsDependingOnMany(ksuids []string) (map[string
 	}
 
 	query := fmt.Sprintf(`
-	SELECT label, version, namespace, config, config_schema, discoverable
+	SELECT label, version, namespace, config, config_schema, discoverable,
+	       target_incarnation_id, health_state, last_seen_at, observed_at,
+	       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+	       reap_kind, reap_max_unreachable_seconds
 	FROM targets t1
 	WHERE (%s)
 	AND NOT EXISTS (
@@ -3488,7 +4152,16 @@ func (d DatastoreSQLite) FindTargetsDependingOnMany(ksuids []string) (map[string
 		var config json.RawMessage
 		var configSchemaStr sql.NullString
 		var discoverable int
-		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaStr, &discoverable); err != nil {
+		var incarnationID, healthState string
+		var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt sql.NullString
+		var unreachableAccumSeconds int64
+		var lastErrorCode sql.NullString
+		var reapKind string
+		var reapMaxUnreachableSeconds int64
+		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaStr, &discoverable,
+			&incarnationID, &healthState, &lastSeenAt, &observedAt,
+			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode,
+			&reapKind, &reapMaxUnreachableSeconds); err != nil {
 			return nil, err
 		}
 
@@ -3506,6 +4179,9 @@ func (d DatastoreSQLite) FindTargetsDependingOnMany(ksuids []string) (map[string
 			ConfigSchema: configSchema,
 			Discoverable: discoverable == 1,
 			Version:      version,
+			Reaping:      pkgmodel.ReapingRawFromColumns(reapKind, reapMaxUnreachableSeconds),
+			Health: scanSQLiteTargetHealth(incarnationID, healthState, lastSeenAt, observedAt,
+				firstUnreachableAt, lastSampleAt, unreachableAccumSeconds, lastErrorCode),
 		}
 
 		// Find which of the input KSUIDs this target depends on
@@ -3529,7 +4205,7 @@ func (d DatastoreSQLite) GetKSUIDByTriplet(stack, label, resourceType string) (s
 	SELECT ksuid
 	FROM resources
 	WHERE stack = ? AND label = ? AND LOWER(type) = LOWER(?)
-	AND operation != ?
+	AND operation != ? AND operation != 'reaped'
 	ORDER BY version DESC
 	LIMIT 1
 	`
@@ -3569,7 +4245,7 @@ func (d DatastoreSQLite) BatchGetKSUIDsByTriplets(triplets []pkgmodel.TripletKey
 		SELECT stack, label, type, ksuid
 		FROM resources r1
 		WHERE (stack, label, type) IN (%s)
-		AND r1.operation != ?
+		AND r1.operation != ? AND r1.operation != 'reaped'
 		AND NOT EXISTS (
 			SELECT 1 FROM resources r2
 			WHERE r1.stack = r2.stack AND r1.label = r2.label AND r1.type = r2.type
@@ -3620,7 +4296,7 @@ func (d DatastoreSQLite) BatchGetTripletsByKSUIDs(ksuids []string) (map[string]p
 			       ROW_NUMBER() OVER (PARTITION BY ksuid ORDER BY managed DESC, version DESC) as rn
 			FROM resources
 			WHERE ksuid IN (%s)
-			AND operation != ?
+			AND operation != ? AND operation != 'reaped'
 		)
 		SELECT ksuid, stack, label, type
 		FROM latest_resources
@@ -4216,3 +4892,7 @@ func (d DatastoreSQLite) CleanUp() error {
 	// No cleanup needed for SQLite, this is only used in the Postgres integration tests
 	return nil
 }
+
+// Conn returns the underlying database connection. Used by test helpers that
+// need direct SQL access (e.g. forcing health_state for guard assertions).
+func (d DatastoreSQLite) Conn() *sql.DB { return d.conn }

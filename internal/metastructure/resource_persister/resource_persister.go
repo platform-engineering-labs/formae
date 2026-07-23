@@ -93,6 +93,26 @@ func (rp *ResourcePersister) HandleCall(from gen.PID, ref gen.Ref, request any) 
 		return versions, nil
 	case messages.LoadResource:
 		return rp.loadResource(req.ResourceURI)
+	case messages.PersistTargetReap:
+		reaped, reapedStacks, err := rp.datastore.PersistTargetReap(datastore.PersistTargetReapRequest{
+			Label:            req.Label,
+			IncarnationID:    req.IncarnationID,
+			LastSeenBefore:   req.LastSeenBefore,
+			LastSampleBefore: req.LastSampleBefore,
+			ReapedAt:         req.ReapedAt,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if reaped && len(reapedStacks) > 0 {
+			// The reap tombstoned the last live resource(s) of one or more
+			// stacks; clean up any that are now empty, exactly as a normal
+			// resource delete does. The reap bypasses the changeset executor, so
+			// there is no forma command to attribute the stack tombstone to — a
+			// synthetic id records the provenance on the deleted stack row.
+			rp.cleanupEmptyStacks(reapedStacks, "reap-"+util.NewID())
+		}
+		return messages.PersistTargetReapResult{Reaped: reaped, ReapedStackLabels: reapedStacks}, nil
 	default:
 		rp.Log().Error("ResourcePersister: unknown request type=%s", fmt.Sprintf("%T", request))
 		return nil, fmt.Errorf("resource persister: unknown request type %T", request)
@@ -106,6 +126,20 @@ func (rp *ResourcePersister) HandleMessage(from gen.PID, message any) error {
 	switch msg := message.(type) {
 	case messages.CleanupEmptyStacks:
 		rp.cleanupEmptyStacks(msg.StackLabels, msg.CommandID)
+		return nil
+	case messages.UpdateTargetHealth:
+		_, err := rp.datastore.UpdateTargetHealth(msg.Observation)
+		if err != nil {
+			rp.Log().Error("ResourcePersister: failed to update target health",
+				"target", msg.Observation.TargetLabel, "error", err)
+		}
+		return nil
+	case messages.AdvanceTargetAccrual:
+		_, err := rp.datastore.AdvanceTargetAccrual(msg.TargetLabel, msg.IncarnationID, msg.LastSampleAt, msg.DeltaSeconds)
+		if err != nil {
+			rp.Log().Error("ResourcePersister: failed to advance target accrual",
+				"target", msg.TargetLabel, "error", err)
+		}
 		return nil
 	default:
 		rp.Log().Error("ResourcePersister: unknown message type=%s", fmt.Sprintf("%T", message))
@@ -335,6 +369,16 @@ func resourceOperationFromPluginOperation(resourceOperation resource_update.Oper
 func (rp *ResourcePersister) processResourceUpdate(commandID string, rc resource_update.ResourceUpdate) (string, error) {
 	stackLabel := rc.DesiredState.Stack
 
+	// Expected target incarnation for the incarnation-carrying resource-write
+	// guard. The ResourcePersister holds the resource's target in memory, so it
+	// can pass the incarnation it believes is current. An empty incarnation
+	// (target health not populated) means "no incarnation check" at the
+	// datastore; the reaped-tombstone check still applies.
+	expectedIncarnation := ""
+	if rc.ResourceTarget.Health != nil {
+		expectedIncarnation = rc.ResourceTarget.Health.IncarnationID
+	}
+
 	var resourceVersion string
 	var storeResourceErr error
 
@@ -351,10 +395,10 @@ func (rp *ResourcePersister) processResourceUpdate(commandID string, rc resource
 	switch rc.Operation {
 	case resource_update.OperationCreate:
 		secretSafeResource.PatchDocument = nil
-		resourceVersion, storeResourceErr = rp.datastore.StoreResource(secretSafeResource, commandID)
+		resourceVersion, storeResourceErr = rp.datastore.StoreResource(secretSafeResource, commandID, expectedIncarnation)
 	case resource_update.OperationUpdate:
 		secretSafeResource.PatchDocument = nil
-		resourceVersion, storeResourceErr = rp.datastore.StoreResource(secretSafeResource, commandID)
+		resourceVersion, storeResourceErr = rp.datastore.StoreResource(secretSafeResource, commandID, expectedIncarnation)
 	case resource_update.OperationDelete:
 		r, err := rp.datastore.LoadResource(rc.DesiredState.URI())
 		if err == nil && r != nil {
@@ -411,7 +455,7 @@ func (rp *ResourcePersister) processResourceUpdate(commandID string, rc resource
 					"resourceLabel", rc.DesiredState.Label,
 					"stackLabel", stackLabel)
 
-				resourceVersion, storeResourceErr = rp.datastore.StoreResource(secretSafeResource, commandID)
+				resourceVersion, storeResourceErr = rp.datastore.StoreResource(secretSafeResource, commandID, expectedIncarnation)
 
 				return resourceVersion, storeResourceErr
 			}
@@ -486,7 +530,7 @@ func (rp *ResourcePersister) processResourceUpdate(commandID string, rc resource
 					"resourceLabel", rc.DesiredState.Label,
 					"stackLabel", stackLabel)
 
-				resourceVersion, storeResourceErr = rp.datastore.StoreResource(secretSafeResource, commandID)
+				resourceVersion, storeResourceErr = rp.datastore.StoreResource(secretSafeResource, commandID, expectedIncarnation)
 				if storeResourceErr != nil {
 					return "", fmt.Errorf("failed to persist updated resource %s: %w", rc.DesiredState.Label, storeResourceErr)
 				}
@@ -583,8 +627,17 @@ func (rp *ResourcePersister) persistTargetUpdate(update *target_update.TargetUpd
 		// the target update is marked failed and retried, and the retry is safe —
 		// tombstoning is idempotent and the re-query only returns rows not yet
 		// tombstoned — so a retry converges rather than double-deleting.
+		//
+		// A reaped target's managed resources were tombstoned as 'reaped' by
+		// PersistTargetReap and never entered the changeset cascade (they're
+		// invisible to every live-resource query, so the destroy generator never
+		// saw them). Convert them to a definitive delete tombstone here — DB-only,
+		// same reasoning as forgetUnmanagedResourcesOnTarget: the target is
+		// confirmed gone, so there is nothing for a plugin to delete.
 		if err = rp.forgetUnmanagedResourcesOnTarget(update.Target.Label, commandID); err == nil {
-			version, err = rp.datastore.DeleteTarget(update.Target.Label)
+			if err = rp.purgeReapedResourcesOnTarget(update.Target.Label, commandID); err == nil {
+				version, err = rp.datastore.DeleteTarget(update.Target.Label)
+			}
 		}
 	default:
 		err = fmt.Errorf("unknown target operation: %s", update.Operation)
@@ -648,6 +701,29 @@ func (rp *ResourcePersister) forgetUnmanagedResourcesOnTarget(targetLabel, comma
 	for _, res := range unmanaged {
 		if _, err := rp.datastore.DeleteResource(res, commandID); err != nil {
 			return fmt.Errorf("failed to forget unmanaged resource %s on deleted target %s: %w", res.Ksuid, targetLabel, err)
+		}
+	}
+	return nil
+}
+
+// purgeReapedResourcesOnTarget converts every reaped-tombstoned resource on
+// targetLabel into a definitive delete tombstone. DeleteResource is exempt
+// from the reaped-write guard (see storeResource) precisely so this
+// conversion can happen; it is a DB-only forget — reaped resources were
+// already presumed gone when the target was reaped, so this never calls the
+// plugin, mirroring forgetUnmanagedResourcesOnTarget.
+func (rp *ResourcePersister) purgeReapedResourcesOnTarget(targetLabel, commandID string) error {
+	reaped, err := rp.datastore.LoadReapedResources()
+	if err != nil {
+		return fmt.Errorf("failed to load reaped resources for deleted target %s: %w", targetLabel, err)
+	}
+
+	for _, res := range reaped {
+		if res.Target != targetLabel {
+			continue
+		}
+		if _, err := rp.datastore.DeleteResource(res, commandID); err != nil {
+			return fmt.Errorf("failed to clean up reaped resource %s on deleted target %s: %w", res.Ksuid, targetLabel, err)
 		}
 	}
 	return nil

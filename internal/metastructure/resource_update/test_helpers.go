@@ -116,7 +116,7 @@ func (m *mockDatastore) StoreStack(stack *pkgmodel.Forma, commandID string) (str
 }
 
 // StoreResource is a helper for tests to store individual resources
-func (m *mockDatastore) StoreResource(resource *pkgmodel.Resource, commandID string) (string, error) {
+func (m *mockDatastore) StoreResource(resource *pkgmodel.Resource, commandID string, _ ...string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

@@ -55,7 +55,7 @@ func (d *DatastoreMSSQL) Stats() (*stats.Stats, error) {
 		FROM resources r1
 		WHERE stack IS NOT NULL
 		AND stack != '%s'
-		AND operation != @p1
+		AND operation != @p1 AND operation != 'reaped'
 		AND NOT EXISTS (
 			SELECT 1 FROM resources r2
 			WHERE r1.uri = r2.uri
@@ -71,7 +71,7 @@ func (d *DatastoreMSSQL) Stats() (*stats.Stats, error) {
 		FROM resources r1
 		WHERE stack IS NOT NULL
 		AND stack != '%s'
-		AND operation != @p1
+		AND operation != @p1 AND operation != 'reaped'
 		AND NOT EXISTS (
 			SELECT 1 FROM resources r2
 			WHERE r1.uri = r2.uri
@@ -88,7 +88,7 @@ func (d *DatastoreMSSQL) Stats() (*stats.Stats, error) {
 		SELECT SUBSTRING(type, 1, CHARINDEX('::', type) - 1) AS namespace, COUNT(*)
 		FROM resources r1
 		WHERE stack = '%s'
-		AND operation != @p1
+		AND operation != @p1 AND operation != 'reaped'
 		AND NOT EXISTS (
 			SELECT 1 FROM resources r2
 			WHERE r1.uri = r2.uri
@@ -109,6 +109,7 @@ func (d *DatastoreMSSQL) Stats() (*stats.Stats, error) {
 			WHERE t1.label = t2.label
 			AND t2.version > t1.version
 		)
+		AND health_state <> 'reaped'
 		GROUP BY namespace`, res.Targets,
 	); err != nil {
 		return nil, err
@@ -118,7 +119,7 @@ func (d *DatastoreMSSQL) Stats() (*stats.Stats, error) {
 	if err := d.scanCountMap(ctx, `
 		SELECT type, COUNT(*)
 		FROM resources r1
-		WHERE operation != @p1
+		WHERE operation != @p1 AND operation != 'reaped'
 		AND NOT EXISTS (
 			SELECT 1 FROM resources r2
 			WHERE r1.uri = r2.uri
@@ -174,7 +175,7 @@ func (d *DatastoreMSSQL) GetKSUIDByTriplet(stack, label, resourceType string) (s
 		SELECT TOP (1) ksuid
 		FROM resources
 		WHERE stack = @p1 AND label = @p2 AND LOWER(type) = LOWER(@p3)
-		AND operation != @p4
+		AND operation != @p4 AND operation != 'reaped'
 		ORDER BY version COLLATE Latin1_General_BIN2 DESC`
 	var ksuid string
 	err := d.conn.QueryRowContext(ctx, query, stack, label, resourceType, string(types.OperationDelete)).Scan(&ksuid)
@@ -215,7 +216,7 @@ func (d *DatastoreMSSQL) BatchGetKSUIDsByTriplets(triplets []pkgmodel.TripletKey
 		SELECT stack, label, type, ksuid
 		FROM resources r1
 		WHERE (%s)
-		AND r1.operation != @p%d
+		AND r1.operation != @p%d AND r1.operation != 'reaped'
 		AND NOT EXISTS (
 			SELECT 1 FROM resources r2
 			WHERE r1.stack = r2.stack AND r1.label = r2.label AND r1.type = r2.type
@@ -262,7 +263,7 @@ func (d *DatastoreMSSQL) BatchGetTripletsByKSUIDs(ksuids []string) (map[string]p
 				ROW_NUMBER() OVER (PARTITION BY ksuid ORDER BY managed DESC, version COLLATE Latin1_General_BIN2 DESC) AS rn
 			FROM resources
 			WHERE ksuid IN (%s)
-			AND operation != @p%d
+			AND operation != @p%d AND operation != 'reaped'
 		)
 		SELECT ksuid, stack, label, type
 		FROM latest_resources

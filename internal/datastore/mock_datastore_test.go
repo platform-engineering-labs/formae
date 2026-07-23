@@ -49,7 +49,7 @@ func (m *mockDatastore) QueryFormaCommands(_ *StatusQuery) ([]*forma_command.For
 func (m *mockDatastore) QueryResources(_ *ResourceQuery) ([]*pkgmodel.Resource, error) {
 	return nil, nil
 }
-func (m *mockDatastore) StoreResource(_ *pkgmodel.Resource, _ string) (string, error) {
+func (m *mockDatastore) StoreResource(_ *pkgmodel.Resource, _ string, _ ...string) (string, error) {
 	return "", nil
 }
 func (m *mockDatastore) DeleteResource(_ *pkgmodel.Resource, _ string) (string, error) {
@@ -61,8 +61,9 @@ func (m *mockDatastore) LoadResource(_ pkgmodel.FormaeURI) (*pkgmodel.Resource, 
 func (m *mockDatastore) LoadResourceByNativeID(_, _ string) (*pkgmodel.Resource, error) {
 	return nil, nil
 }
-func (m *mockDatastore) LoadAllResources() ([]*pkgmodel.Resource, error) { return nil, nil }
-func (m *mockDatastore) LatestLabelForResource(_ string) (string, error) { return "", nil }
+func (m *mockDatastore) LoadAllResources() ([]*pkgmodel.Resource, error)    { return nil, nil }
+func (m *mockDatastore) LoadReapedResources() ([]*pkgmodel.Resource, error) { return nil, nil }
+func (m *mockDatastore) LatestLabelForResource(_ string) (string, error)    { return "", nil }
 func (m *mockDatastore) LoadResourceById(_ string) (*pkgmodel.Resource, error) {
 	return nil, nil
 }
@@ -103,7 +104,18 @@ func (m *mockDatastore) QueryTargets(_ *TargetQuery) ([]*pkgmodel.Target, error)
 }
 func (m *mockDatastore) DeleteTarget(_ string) (string, error)        { return "", nil }
 func (m *mockDatastore) CountResourcesInTarget(_ string) (int, error) { return 0, nil }
-func (m *mockDatastore) Stats() (*stats.Stats, error)                 { return nil, nil }
+func (m *mockDatastore) UpdateTargetHealth(_ pkgmodel.TargetHealthObservation) (bool, error) {
+	return false, nil
+}
+func (m *mockDatastore) AdvanceTargetAccrual(_, _ string, _ time.Time, _ int64) (bool, error) {
+	return false, nil
+}
+func (m *mockDatastore) GetUnreachableTargets() ([]*pkgmodel.Target, error) { return nil, nil }
+func (m *mockDatastore) PersistTargetReap(_ PersistTargetReapRequest) (bool, []string, error) {
+	return false, nil, nil
+}
+func (m *mockDatastore) CheckTargetsReaped(_ []string) ([]string, error) { return nil, nil }
+func (m *mockDatastore) Stats() (*stats.Stats, error)                    { return nil, nil }
 func (m *mockDatastore) GetKSUIDByTriplet(_, _, _ string) (string, error) {
 	return "", nil
 }

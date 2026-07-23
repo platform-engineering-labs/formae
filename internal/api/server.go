@@ -51,6 +51,7 @@ const (
 	SyncRoute     = AdminBasePath + "/synchronize"
 	DiscoverRoute = AdminBasePath + "/discover"
 	CheckTTLRoute = AdminBasePath + "/check-ttl"
+	ReapRoute     = AdminBasePath + "/reap"
 
 	PluginsRoute         = BasePath + "/plugins"
 	PluginRoute          = BasePath + "/plugins/:name"
@@ -241,6 +242,7 @@ func (s *Server) configureEcho() *echo.Echo {
 	e.POST(SyncRoute, s.ForceSync)
 	e.POST(DiscoverRoute, s.ForceDiscover)
 	e.POST(CheckTTLRoute, s.ForceCheckTTL)
+	e.POST(ReapRoute, s.ForceReap)
 
 	// Plugin management endpoints
 	e.GET(PluginsRoute, s.listPluginsHandler)
@@ -617,6 +619,22 @@ func (s *Server) ForceCheckTTL(c echo.Context) error {
 	return c.JSON(http.StatusOK, result)
 }
 
+// @Summary Force a target-reaper tick
+// @Description Triggers a single, immediate TargetReaper tick: advances the unreachability-accrual
+// @Description clock for every currently-unreachable target, detects reap candidates that have
+// @Description reached their reap-after duration, and reaps (tombstones) the eligible ones, subject
+// @Description to the per-tick rate cap.
+// @Tags admin
+// @Success 200
+// @Failure 500 {string} string "Internal Server Error."
+// @Router /admin/reap [post]
+func (s *Server) ForceReap(c echo.Context) error {
+	if err := s.metastructure.ForceReap(); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError)
+	}
+	return c.JSON(http.StatusOK, "")
+}
+
 // getCommandStatus is a helper to retrieve command status and handle common error/status logic
 func (s *Server) getCommandStatus(c echo.Context, clientID, query string, n int) error {
 	result, err := s.metastructure.ListFormaCommandStatus(query, clientID, n)
@@ -723,6 +741,11 @@ func mapError(c echo.Context, err error) error {
 	var nonPortableError apimodel.NonPortableResourcesError
 	if errors.As(err, &nonPortableError) {
 		return apiError(c, http.StatusConflict, apimodel.NonPortableResources, nonPortableError)
+	}
+
+	var targetReapedError apimodel.TargetReapedError
+	if errors.As(err, &targetReapedError) {
+		return apiError(c, http.StatusConflict, apimodel.TargetReaped, targetReapedError)
 	}
 
 	var requiredFieldMissingError apimodel.RequiredFieldMissingOnCreateError

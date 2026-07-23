@@ -83,6 +83,30 @@ func TestRenderAgentStats_Golden(t *testing.T) {
 	tuitest.RequireGolden(t, []byte(out))
 }
 
+func TestRenderAgentStats_ReapRows(t *testing.T) {
+	th := theme.New("formae")
+	stats := makeFullStats()
+	stats.ReapPendingTargets = 2
+	stats.ReapedTargets = 1
+
+	out := renderAgentStats(th, stats, 120)
+	plain := stripANSIAgent(out)
+
+	assert.Contains(t, plain, "Reap Pending", "reap-pending count expected in the Structure panel when non-zero")
+	assert.Contains(t, plain, "Reaped", "reaped count expected in the Structure panel when non-zero")
+}
+
+func TestRenderAgentStats_NoReapRowsWhenZero(t *testing.T) {
+	th := theme.New("formae")
+	stats := makeFullStats()
+	// makeFullStats leaves reap counts at zero.
+	out := renderAgentStats(th, stats, 120)
+	plain := stripANSIAgent(out)
+
+	assert.NotContains(t, plain, "Reap Pending", "reap-pending row should be elided at zero")
+	assert.NotContains(t, plain, "Reaped", "reaped row should be elided at zero")
+}
+
 func TestRenderAgentStats_TopNTruncation(t *testing.T) {
 	th := theme.New("formae")
 	stats := makeFullStats()

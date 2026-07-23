@@ -719,7 +719,7 @@ func (d DatastorePostgres) GetKSUIDByTriplet(stack, label, resourceType string) 
 	SELECT ksuid
 	FROM resources
 	WHERE stack = $1 AND label = $2 AND LOWER(type) = LOWER($3)
-	AND operation != $4
+	AND operation != $4 AND operation != 'reaped'
 	ORDER BY version COLLATE "C" DESC
 	LIMIT 1
 	`
@@ -758,7 +758,7 @@ func (d DatastorePostgres) BatchGetKSUIDsByTriplets(triplets []pkgmodel.TripletK
 	SELECT stack, label, type, ksuid
 	FROM resources r1
 	WHERE (stack, label, type) IN (%s)
-	AND r1.operation != $%d
+	AND r1.operation != $%d AND r1.operation != 'reaped'
 	AND NOT EXISTS (
 		SELECT 1 FROM resources r2
 		WHERE r1.stack = r2.stack AND r1.label = r2.label AND r1.type = r2.type
@@ -817,6 +817,7 @@ func (d DatastorePostgres) GetResourceModificationsSinceLastReconcile(stack stri
 			AND r2.version COLLATE "C" > r1.version COLLATE "C"
 		)
 		AND r1.operation != 'delete'
+		AND r1.operation != 'reaped'
 	)
 	AND T1.timestamp > (
 		SELECT fc.timestamp
@@ -971,7 +972,7 @@ func (d DatastorePostgres) BatchGetTripletsByKSUIDs(ksuids []string) (map[string
 		       ROW_NUMBER() OVER (PARTITION BY ksuid ORDER BY managed DESC, version COLLATE "C" DESC) as rn
 		FROM resources
 		WHERE ksuid IN (%s)
-		AND operation != $%d
+		AND operation != $%d AND operation != 'reaped'
 	)
 	SELECT ksuid, stack, label, type
 	FROM latest_resources
@@ -1028,7 +1029,7 @@ func (d DatastorePostgres) DeleteResource(resource *pkgmodel.Resource, commandID
 	ctx, span := tracer.Start(context.Background(), "DeleteResource")
 	defer span.End()
 
-	return d.storeResource(ctx, resource, []byte("{}"), commandID, string(resource_update.OperationDelete))
+	return d.storeResource(ctx, resource, []byte("{}"), commandID, string(resource_update.OperationDelete), "")
 }
 
 func (d DatastorePostgres) LoadAllResources() ([]*pkgmodel.Resource, error) {
@@ -1044,9 +1045,53 @@ func (d DatastorePostgres) LoadAllResources() ([]*pkgmodel.Resource, error) {
 		WHERE r1.uri = r2.uri
 		AND r2.version COLLATE "C" > r1.version COLLATE "C"
 	)
-	AND operation != $1
+	AND operation != $1 AND operation != 'reaped'
 	`
 	rows, err := d.pool.Query(ctx, query, resource_update.OperationDelete)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var resources []*pkgmodel.Resource
+	for rows.Next() {
+		var jsonData string
+		var ksuid string
+		if err := rows.Scan(&jsonData, &ksuid); err != nil {
+			return nil, err
+		}
+
+		var resource pkgmodel.Resource
+		if err := json.Unmarshal([]byte(jsonData), &resource); err != nil {
+			return nil, err
+		}
+
+		resource.Ksuid = ksuid
+		resources = append(resources, &resource)
+	}
+
+	return resources, rows.Err()
+}
+
+// LoadReapedResources returns the current-version rows tombstoned with the
+// 'reaped' marker, across all targets. See the Datastore interface for the
+// contract.
+func (d DatastorePostgres) LoadReapedResources() ([]*pkgmodel.Resource, error) {
+	ctx, span := tracer.Start(context.Background(), "LoadReapedResources")
+	defer span.End()
+
+	query := `
+	SELECT data, ksuid
+	FROM resources r1
+	WHERE NOT EXISTS (
+		SELECT 1
+		FROM resources r2
+		WHERE r1.uri = r2.uri
+		AND r2.version COLLATE "C" > r1.version COLLATE "C"
+	)
+	AND operation = 'reaped'
+	`
+	rows, err := d.pool.Query(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -1085,7 +1130,7 @@ func (d DatastorePostgres) LoadAllResourcesByStack() (map[string][]*pkgmodel.Res
 		WHERE r1.uri = r2.uri
 		AND r2.version COLLATE "C" > r1.version COLLATE "C"
 	)
-	AND operation != $1
+	AND operation != $1 AND operation != 'reaped'
 	`
 
 	rows, err := d.pool.Query(ctx, query, resource_update.OperationDelete)
@@ -1126,7 +1171,10 @@ func (d DatastorePostgres) LoadAllTargets() ([]*pkgmodel.Target, error) {
 	defer span.End()
 
 	query := `
-	SELECT label, version, namespace, config, config_schema, discoverable
+	SELECT label, version, namespace, config, config_schema, discoverable,
+	       target_incarnation_id, health_state, last_seen_at, observed_at,
+	       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+	       reap_kind, reap_max_unreachable_seconds
 	FROM targets t1
 	WHERE NOT EXISTS (
 		SELECT 1
@@ -1149,7 +1197,16 @@ func (d DatastorePostgres) LoadAllTargets() ([]*pkgmodel.Target, error) {
 		var config json.RawMessage
 		var configSchemaRaw []byte
 		var discoverable bool
-		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaRaw, &discoverable); err != nil {
+		var incarnationID, healthState string
+		var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt *time.Time
+		var unreachableAccumSeconds int64
+		var lastErrorCode *string
+		var reapKind string
+		var reapMaxUnreachableSeconds int64
+		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaRaw, &discoverable,
+			&incarnationID, &healthState, &lastSeenAt, &observedAt,
+			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode,
+			&reapKind, &reapMaxUnreachableSeconds); err != nil {
 			return nil, err
 		}
 
@@ -1167,6 +1224,8 @@ func (d DatastorePostgres) LoadAllTargets() ([]*pkgmodel.Target, error) {
 			ConfigSchema: configSchema,
 			Discoverable: discoverable,
 			Version:      version,
+			Reaping:      pkgmodel.ReapingRawFromColumns(reapKind, reapMaxUnreachableSeconds),
+			Health:       buildPostgresTargetHealth(incarnationID, healthState, lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt, unreachableAccumSeconds, lastErrorCode),
 		})
 	}
 
@@ -1197,7 +1256,7 @@ func (d DatastorePostgres) LoadResource(uri pkgmodel.FormaeURI) (*pkgmodel.Resou
 	SELECT data, ksuid
 	FROM resources
 	WHERE uri = $1
-	AND operation != $2
+	AND operation != $2 AND operation != 'reaped'
 	ORDER BY version COLLATE "C" DESC
 	LIMIT 1
 	`
@@ -1229,7 +1288,7 @@ func (d DatastorePostgres) LoadResourceById(ksuid string) (*pkgmodel.Resource, e
 	SELECT data, ksuid
 	FROM resources
 	WHERE ksuid = $1
-	AND operation != $2
+	AND operation != $2 AND operation != 'reaped'
 	ORDER BY version COLLATE "C" DESC
 	LIMIT 1
 	`
@@ -1278,7 +1337,7 @@ func (d DatastorePostgres) FindResourcesDependingOn(ksuid string) ([]*pkgmodel.R
 		WHERE r1.uri = r2.uri
 		AND r2.version COLLATE "C" > r1.version COLLATE "C"
 	)
-	AND operation != $2
+	AND operation != $2 AND operation != 'reaped'
 	`
 
 	rows, err := d.pool.Query(ctx, query, pattern, resource_update.OperationDelete)
@@ -1335,7 +1394,7 @@ func (d DatastorePostgres) FindResourcesDependingOnMany(ksuids []string) (map[st
 		WHERE r1.uri = r2.uri
 		AND r2.version COLLATE "C" > r1.version COLLATE "C"
 	)
-	AND operation != $%d
+	AND operation != $%d AND operation != 'reaped'
 	`, strings.Join(conditions, " OR "), deleteArgNum)
 
 	rows, err := d.pool.Query(ctx, query, args...)
@@ -1389,7 +1448,10 @@ func (d DatastorePostgres) FindTargetsDependingOnMany(ksuids []string) (map[stri
 	}
 
 	query := fmt.Sprintf(`
-	SELECT label, version, namespace, config, config_schema, discoverable
+	SELECT label, version, namespace, config, config_schema, discoverable,
+	       target_incarnation_id, health_state, last_seen_at, observed_at,
+	       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+	       reap_kind, reap_max_unreachable_seconds
 	FROM targets t1
 	WHERE (%s)
 	AND NOT EXISTS (
@@ -1414,7 +1476,16 @@ func (d DatastorePostgres) FindTargetsDependingOnMany(ksuids []string) (map[stri
 		var config json.RawMessage
 		var configSchemaRaw []byte
 		var discoverable bool
-		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaRaw, &discoverable); err != nil {
+		var incarnationID, healthState string
+		var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt *time.Time
+		var unreachableAccumSeconds int64
+		var lastErrorCode *string
+		var reapKind string
+		var reapMaxUnreachableSeconds int64
+		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaRaw, &discoverable,
+			&incarnationID, &healthState, &lastSeenAt, &observedAt,
+			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode,
+			&reapKind, &reapMaxUnreachableSeconds); err != nil {
 			return nil, err
 		}
 
@@ -1432,6 +1503,8 @@ func (d DatastorePostgres) FindTargetsDependingOnMany(ksuids []string) (map[stri
 			ConfigSchema: configSchema,
 			Discoverable: discoverable,
 			Version:      version,
+			Reaping:      pkgmodel.ReapingRawFromColumns(reapKind, reapMaxUnreachableSeconds),
+			Health:       buildPostgresTargetHealth(incarnationID, healthState, lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt, unreachableAccumSeconds, lastErrorCode),
 		}
 
 		// Find which of the input KSUIDs this target depends on
@@ -1463,7 +1536,7 @@ func (d DatastorePostgres) LoadResourceByNativeID(nativeID string, resourceType 
 		WHERE r1.uri = r2.uri
 		AND r2.version COLLATE "C" > r1.version COLLATE "C"
 	)
-	AND r1.operation != $3
+	AND r1.operation != $3 AND r1.operation != 'reaped'
 	LIMIT 1
 	`
 	row := d.pool.QueryRow(ctx, query, nativeID, resourceType, resource_update.OperationDelete)
@@ -1500,7 +1573,7 @@ func (d DatastorePostgres) LoadResourcesByStack(stackLabel string) ([]*pkgmodel.
 		WHERE r1.uri = r2.uri
 		AND r2.version COLLATE "C" > r1.version COLLATE "C"
 	)
-	AND operation != $2
+	AND operation != $2 AND operation != 'reaped'
 	`
 
 	rows, err := d.pool.Query(ctx, query, stackLabel, resource_update.OperationDelete)
@@ -1791,7 +1864,7 @@ func (d DatastorePostgres) CountResourcesInStack(label string) (int, error) {
 			WHERE r1.uri = r2.uri
 			AND r2.version COLLATE "C" > r1.version COLLATE "C"
 		)
-		AND operation != $2
+		AND operation != $2 AND operation != 'reaped'
 	`
 	row := d.pool.QueryRow(ctx, query, label, resource_update.OperationDelete)
 
@@ -2717,7 +2790,10 @@ func (d DatastorePostgres) LoadTarget(label string) (*pkgmodel.Target, error) {
 	defer span.End()
 
 	query := `
-	SELECT version, namespace, config, config_schema, discoverable
+	SELECT version, namespace, config, config_schema, discoverable,
+	       target_incarnation_id, health_state, last_seen_at, observed_at,
+	       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+	       reap_kind, reap_max_unreachable_seconds
 	FROM targets
 	WHERE label = $1
 	ORDER BY version DESC
@@ -2730,7 +2806,16 @@ func (d DatastorePostgres) LoadTarget(label string) (*pkgmodel.Target, error) {
 	var config json.RawMessage
 	var configSchemaRaw []byte
 	var discoverable bool
-	if err := row.Scan(&version, &namespace, &config, &configSchemaRaw, &discoverable); err != nil {
+	var incarnationID, healthState string
+	var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt *time.Time
+	var unreachableAccumSeconds int64
+	var lastErrorCode *string
+	var reapKind string
+	var reapMaxUnreachableSeconds int64
+	if err := row.Scan(&version, &namespace, &config, &configSchemaRaw, &discoverable,
+		&incarnationID, &healthState, &lastSeenAt, &observedAt,
+		&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode,
+		&reapKind, &reapMaxUnreachableSeconds); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil // Target not found, return nil without error
 		}
@@ -2751,7 +2836,35 @@ func (d DatastorePostgres) LoadTarget(label string) (*pkgmodel.Target, error) {
 		ConfigSchema: configSchema,
 		Discoverable: discoverable,
 		Version:      version,
+		Reaping:      pkgmodel.ReapingRawFromColumns(reapKind, reapMaxUnreachableSeconds),
+		Health:       buildPostgresTargetHealth(incarnationID, healthState, lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt, unreachableAccumSeconds, lastErrorCode),
 	}, nil
+}
+
+// buildPostgresTargetHealth constructs a TargetHealth from postgres scan results.
+func buildPostgresTargetHealth(
+	incarnationID string,
+	healthState string,
+	lastSeenAt *time.Time,
+	observedAt *time.Time,
+	firstUnreachableAt *time.Time,
+	lastSampleAt *time.Time,
+	unreachableAccumSeconds int64,
+	lastErrorCode *string,
+) *pkgmodel.TargetHealth {
+	h := &pkgmodel.TargetHealth{
+		IncarnationID:           incarnationID,
+		State:                   healthState,
+		LastSeenAt:              lastSeenAt,
+		ObservedAt:              observedAt,
+		FirstUnreachableAt:      firstUnreachableAt,
+		LastSampleAt:            lastSampleAt,
+		UnreachableAccumSeconds: unreachableAccumSeconds,
+	}
+	if lastErrorCode != nil {
+		h.LastErrorCode = *lastErrorCode
+	}
+	return h
 }
 
 func (d DatastorePostgres) LoadTargetsByLabels(targetNames []string) ([]*pkgmodel.Target, error) {
@@ -2771,7 +2884,10 @@ func (d DatastorePostgres) LoadTargetsByLabels(targetNames []string) ([]*pkgmode
 	}
 
 	query := fmt.Sprintf(`
-	SELECT t1.label, t1.version, t1.namespace, t1.config, t1.config_schema, t1.discoverable
+	SELECT t1.label, t1.version, t1.namespace, t1.config, t1.config_schema, t1.discoverable,
+	       t1.target_incarnation_id, t1.health_state, t1.last_seen_at, t1.observed_at,
+	       t1.first_unreachable_at, t1.last_sample_at, t1.unreachable_accum_seconds, t1.last_error_code,
+	       t1.reap_kind, t1.reap_max_unreachable_seconds
 	FROM targets t1
 	WHERE t1.label IN (%s)
 	AND NOT EXISTS (
@@ -2795,7 +2911,16 @@ func (d DatastorePostgres) LoadTargetsByLabels(targetNames []string) ([]*pkgmode
 		var config json.RawMessage
 		var configSchemaRaw []byte
 		var discoverable bool
-		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaRaw, &discoverable); err != nil {
+		var incarnationID, healthState string
+		var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt *time.Time
+		var unreachableAccumSeconds int64
+		var lastErrorCode *string
+		var reapKind string
+		var reapMaxUnreachableSeconds int64
+		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaRaw, &discoverable,
+			&incarnationID, &healthState, &lastSeenAt, &observedAt,
+			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode,
+			&reapKind, &reapMaxUnreachableSeconds); err != nil {
 			return nil, err
 		}
 
@@ -2813,6 +2938,8 @@ func (d DatastorePostgres) LoadTargetsByLabels(targetNames []string) ([]*pkgmode
 			ConfigSchema: configSchema,
 			Discoverable: discoverable,
 			Version:      version,
+			Reaping:      pkgmodel.ReapingRawFromColumns(reapKind, reapMaxUnreachableSeconds),
+			Health:       buildPostgresTargetHealth(incarnationID, healthState, lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt, unreachableAccumSeconds, lastErrorCode),
 		})
 	}
 
@@ -2826,7 +2953,10 @@ func (d DatastorePostgres) LoadDiscoverableTargets() ([]*pkgmodel.Target, error)
 	// Get latest version per label where discoverable = true, deduplicated by config using DISTINCT ON
 	query := `
 	WITH latest_targets AS (
-		SELECT label, version, namespace, config, config_schema, discoverable
+		SELECT label, version, namespace, config, config_schema, discoverable,
+		       target_incarnation_id, health_state, last_seen_at, observed_at,
+		       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+		       reap_kind, reap_max_unreachable_seconds
 		FROM targets t1
 		WHERE discoverable = TRUE
 		AND NOT EXISTS (
@@ -2836,7 +2966,10 @@ func (d DatastorePostgres) LoadDiscoverableTargets() ([]*pkgmodel.Target, error)
 			AND t2.version > t1.version
 		)
 	)
-	SELECT DISTINCT ON (config) label, version, namespace, config, config_schema, discoverable
+	SELECT DISTINCT ON (config) label, version, namespace, config, config_schema, discoverable,
+	       target_incarnation_id, health_state, last_seen_at, observed_at,
+	       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+	       reap_kind, reap_max_unreachable_seconds
 	FROM latest_targets
 	ORDER BY config, version DESC`
 
@@ -2853,7 +2986,16 @@ func (d DatastorePostgres) LoadDiscoverableTargets() ([]*pkgmodel.Target, error)
 		var config json.RawMessage
 		var configSchemaRaw []byte
 		var discoverable bool
-		if err := rows.Scan(&label, &version, &ns, &config, &configSchemaRaw, &discoverable); err != nil {
+		var incarnationID, healthState string
+		var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt *time.Time
+		var unreachableAccumSeconds int64
+		var lastErrorCode *string
+		var reapKind string
+		var reapMaxUnreachableSeconds int64
+		if err := rows.Scan(&label, &version, &ns, &config, &configSchemaRaw, &discoverable,
+			&incarnationID, &healthState, &lastSeenAt, &observedAt,
+			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode,
+			&reapKind, &reapMaxUnreachableSeconds); err != nil {
 			return nil, err
 		}
 
@@ -2871,6 +3013,8 @@ func (d DatastorePostgres) LoadDiscoverableTargets() ([]*pkgmodel.Target, error)
 			ConfigSchema: configSchema,
 			Discoverable: discoverable,
 			Version:      version,
+			Reaping:      pkgmodel.ReapingRawFromColumns(reapKind, reapMaxUnreachableSeconds),
+			Health:       buildPostgresTargetHealth(incarnationID, healthState, lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt, unreachableAccumSeconds, lastErrorCode),
 		})
 	}
 
@@ -2882,14 +3026,18 @@ func (d DatastorePostgres) QueryTargets(query *datastore.TargetQuery) ([]*pkgmod
 	defer span.End()
 
 	queryStr := `
-		SELECT label, version, namespace, config, config_schema, discoverable
+		SELECT label, version, namespace, config, config_schema, discoverable,
+		       target_incarnation_id, health_state, last_seen_at, observed_at,
+		       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+		       reap_kind, reap_max_unreachable_seconds
 		FROM targets t1
 		WHERE NOT EXISTS (
 			SELECT 1
 			FROM targets t2
 			WHERE t1.label = t2.label
 			AND t2.version > t1.version
-		)`
+		)
+		AND health_state != 'reaped'`
 	args := []any{}
 
 	queryStr = extendPostgresQueryString(queryStr, query.Label, " AND label %s $%d", &args)
@@ -2910,7 +3058,16 @@ func (d DatastorePostgres) QueryTargets(query *datastore.TargetQuery) ([]*pkgmod
 		var config json.RawMessage
 		var configSchemaRaw []byte
 		var discoverable bool
-		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaRaw, &discoverable); err != nil {
+		var incarnationID, healthState string
+		var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt *time.Time
+		var unreachableAccumSeconds int64
+		var lastErrorCode *string
+		var reapKind string
+		var reapMaxUnreachableSeconds int64
+		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaRaw, &discoverable,
+			&incarnationID, &healthState, &lastSeenAt, &observedAt,
+			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode,
+			&reapKind, &reapMaxUnreachableSeconds); err != nil {
 			return nil, err
 		}
 
@@ -2928,6 +3085,8 @@ func (d DatastorePostgres) QueryTargets(query *datastore.TargetQuery) ([]*pkgmod
 			ConfigSchema: configSchema,
 			Discoverable: discoverable,
 			Version:      version,
+			Reaping:      pkgmodel.ReapingRawFromColumns(reapKind, reapMaxUnreachableSeconds),
+			Health:       buildPostgresTargetHealth(incarnationID, healthState, lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt, unreachableAccumSeconds, lastErrorCode),
 		})
 	}
 
@@ -2947,7 +3106,7 @@ func (d DatastorePostgres) QueryResources(query *datastore.ResourceQuery) ([]*pk
 		WHERE r1.uri = r2.uri
 		AND r2.version COLLATE "C" > r1.version COLLATE "C"
 	)
-	AND r1.operation != $1
+	AND r1.operation != $1 AND r1.operation != 'reaped'
 	`
 	args := []any{resource_update.OperationDelete}
 
@@ -3050,7 +3209,7 @@ func (d DatastorePostgres) Stats() (*stats.Stats, error) {
 	FROM resources r1
 	WHERE stack IS NOT NULL
 	AND stack != '%s'
-	AND operation != $1
+	AND operation != $1 AND operation != 'reaped'
 	AND NOT EXISTS (
 		SELECT 1
 		FROM resources r2
@@ -3070,7 +3229,7 @@ func (d DatastorePostgres) Stats() (*stats.Stats, error) {
 	FROM resources r1
 	WHERE stack IS NOT NULL
 	AND stack != '%s'
-	AND operation != $1
+	AND operation != $1 AND operation != 'reaped'
 	AND NOT EXISTS (
 		SELECT 1
 		FROM resources r2
@@ -3100,7 +3259,7 @@ func (d DatastorePostgres) Stats() (*stats.Stats, error) {
 	SELECT SPLIT_PART(type, '::', 1) as namespace, COUNT(*)
 	FROM resources r1
 	WHERE stack = '%s'
-	AND operation != $1
+	AND operation != $1 AND operation != 'reaped'
 	AND NOT EXISTS (
 		SELECT 1
 		FROM resources r2
@@ -3135,6 +3294,7 @@ func (d DatastorePostgres) Stats() (*stats.Stats, error) {
 		WHERE t1.label = t2.label
 		AND t2.version > t1.version
 	)
+	AND health_state != 'reaped'
 	GROUP BY namespace
 	`
 	rows, err = d.pool.Query(ctx, targetsQuery)
@@ -3157,7 +3317,7 @@ func (d DatastorePostgres) Stats() (*stats.Stats, error) {
 	resourceTypesQuery := `
 	SELECT type, COUNT(*)
 	FROM resources r1
-	WHERE operation != $1
+	WHERE operation != $1 AND operation != 'reaped'
 	AND NOT EXISTS (
 		SELECT 1
 		FROM resources r2
@@ -3210,7 +3370,7 @@ func (d DatastorePostgres) Stats() (*stats.Stats, error) {
 	return &res, nil
 }
 
-func (d DatastorePostgres) StoreResource(resource *pkgmodel.Resource, commandID string) (string, error) {
+func (d DatastorePostgres) StoreResource(resource *pkgmodel.Resource, commandID string, expectedIncarnation ...string) (string, error) {
 	ctx, span := tracer.Start(context.Background(), "StoreResource")
 	defer span.End()
 
@@ -3219,12 +3379,42 @@ func (d DatastorePostgres) StoreResource(resource *pkgmodel.Resource, commandID 
 		return "", err
 	}
 
-	return d.storeResource(ctx, resource, jsonData, commandID, string(resource_update.OperationUpdate))
+	inc := ""
+	if len(expectedIncarnation) > 0 {
+		inc = expectedIncarnation[0]
+	}
+	return d.storeResource(ctx, resource, jsonData, commandID, string(resource_update.OperationUpdate), inc)
 }
 
-func (d DatastorePostgres) storeResource(ctx context.Context, resource *pkgmodel.Resource, data []byte, commandID string, operation string) (string, error) {
+func (d DatastorePostgres) storeResource(ctx context.Context, resource *pkgmodel.Resource, data []byte, commandID string, operation string, expectedIncarnation string) (string, error) {
 	if resource.Ksuid == "" {
 		resource.Ksuid = metautil.NewID()
+	}
+
+	// Reaped/incarnation guard. Deletes are exempt: a delete tombstone must
+	// always be recordable. For every other write, inspect the resource's
+	// current (max-version) row and reject the write when that row is a reaped
+	// tombstone, or when an expected incarnation was supplied and does not match
+	// the incarnation stamped on the current row. An empty stored incarnation
+	// skips the incarnation check.
+	if operation != string(resource_update.OperationDelete) {
+		var curOp, curInc string
+		guardErr := d.pool.QueryRow(ctx,
+			`SELECT operation, COALESCE(target_incarnation_id, '') FROM resources WHERE uri = $1 ORDER BY version COLLATE "C" DESC LIMIT 1`,
+			resource.URI(),
+		).Scan(&curOp, &curInc)
+		if guardErr != nil && !errors.Is(guardErr, pgx.ErrNoRows) {
+			return "", fmt.Errorf("failed to evaluate resource write guard: %w", guardErr)
+		}
+		if guardErr == nil {
+			if curOp == string(resource_update.OperationReaped) {
+				return "", fmt.Errorf("%w: resource %s current row is reaped", datastore.ErrResourceWriteRejected, resource.URI())
+			}
+			if expectedIncarnation != "" && curInc != "" && curInc != expectedIncarnation {
+				return "", fmt.Errorf("%w: resource %s incarnation %q does not match expected %q",
+					datastore.ErrResourceWriteRejected, resource.URI(), curInc, expectedIncarnation)
+			}
+		}
 	}
 
 	// Check if this resource already exists by native_id and type
@@ -3241,8 +3431,8 @@ func (d DatastorePostgres) storeResource(ctx context.Context, resource *pkgmodel
 	if errors.Is(err, pgx.ErrNoRows) {
 		newVersion := mksuid.New().String()
 		query = `
-		INSERT INTO resources (uri, version, command_id, operation, native_id, stack, type, label, target, data, managed, ksuid)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		INSERT INTO resources (uri, version, command_id, operation, native_id, stack, type, label, target, data, managed, ksuid, target_incarnation_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		`
 		_, err = d.pool.Exec(
 			ctx,
@@ -3259,6 +3449,7 @@ func (d DatastorePostgres) storeResource(ctx context.Context, resource *pkgmodel
 			data,
 			resource.Managed,
 			resource.Ksuid,
+			expectedIncarnation,
 		)
 		if err != nil {
 			slog.Error("failed to store resource", "error", err, "resourceURI", resource.URI())
@@ -3325,8 +3516,8 @@ func (d DatastorePostgres) storeResource(ctx context.Context, resource *pkgmodel
 	}
 
 	query = `
-	INSERT INTO resources (uri, version, command_id, operation, native_id, stack, type, label, target, data, managed, ksuid)
-	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+	INSERT INTO resources (uri, version, command_id, operation, native_id, stack, type, label, target, data, managed, ksuid, target_incarnation_id)
+	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 	ON CONFLICT (uri, version) DO UPDATE SET
 	command_id = EXCLUDED.command_id,
 	operation = EXCLUDED.operation,
@@ -3337,7 +3528,8 @@ func (d DatastorePostgres) storeResource(ctx context.Context, resource *pkgmodel
 	target = EXCLUDED.target,
 	data = EXCLUDED.data,
 	managed = EXCLUDED.managed,
-	ksuid = EXCLUDED.ksuid
+	ksuid = EXCLUDED.ksuid,
+	target_incarnation_id = EXCLUDED.target_incarnation_id
 	`
 	_, err = d.pool.Exec(
 		ctx,
@@ -3354,6 +3546,7 @@ func (d DatastorePostgres) storeResource(ctx context.Context, resource *pkgmodel
 		data,
 		resource.Managed,
 		resource.Ksuid,
+		expectedIncarnation,
 	)
 	if err != nil {
 		slog.Error("failed to store resource", "error", err, "resourceURI", resource.URI())
@@ -3396,11 +3589,20 @@ func (d DatastorePostgres) CreateTarget(target *pkgmodel.Target) (string, error)
 		}
 	}
 
+	incarnationID := mksuid.New().String()
+
+	reapKind, reapMaxUnreachableSeconds, err := pkgmodel.ReapingToColumns(target.Reaping)
+	if err != nil {
+		return "", err
+	}
+
 	query := `
-	INSERT INTO targets (label, version, namespace, config, config_schema, discoverable)
-	VALUES ($1, 1, $2, $3, $4, $5)
+	INSERT INTO targets (label, version, namespace, config, config_schema, discoverable,
+	                     target_incarnation_id, health_state, unreachable_accum_seconds,
+	                     reap_kind, reap_max_unreachable_seconds)
+	VALUES ($1, 1, $2, $3, $4, $5, $6, 'unknown', 0, $7, $8)
 	`
-	_, err = d.pool.Exec(ctx, query, target.Label, target.Namespace, cfg, configSchemaJSON, target.Discoverable)
+	_, err = d.pool.Exec(ctx, query, target.Label, target.Namespace, cfg, configSchemaJSON, target.Discoverable, incarnationID, reapKind, reapMaxUnreachableSeconds)
 	if err != nil {
 		slog.Debug("failed to create target (may be retried as update)", "error", err, "label", target.Label)
 		return "", err
@@ -3413,19 +3615,40 @@ func (d DatastorePostgres) UpdateTarget(target *pkgmodel.Target) (string, error)
 	ctx, span := tracer.Start(context.Background(), "UpdateTarget")
 	defer span.End()
 
-	query := `SELECT MAX(version) FROM targets WHERE label = $1`
-	row := d.pool.QueryRow(ctx, query, target.Label)
+	// Load the latest row to carry health state forward onto the new version.
+	healthQuery := `
+		SELECT version, target_incarnation_id, health_state, last_seen_at, observed_at,
+		       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code
+		FROM targets WHERE label = $1 ORDER BY version DESC LIMIT 1`
+	healthRow := d.pool.QueryRow(ctx, healthQuery, target.Label)
 
-	var maxVersion sql.NullInt64
-	if err := row.Scan(&maxVersion); err != nil {
+	var currentVersion int64
+	var incarnationID, healthState *string
+	var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt *time.Time
+	var unreachableAccumSeconds *int64
+	var lastErrorCode *string
+	if err := healthRow.Scan(&currentVersion, &incarnationID, &healthState, &lastSeenAt, &observedAt,
+		&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", fmt.Errorf("target %s does not exist, cannot update", target.Label)
+		}
 		return "", err
 	}
 
-	if !maxVersion.Valid {
-		return "", fmt.Errorf("target %s does not exist, cannot update", target.Label)
+	safeStr := func(s *string) string {
+		if s == nil {
+			return ""
+		}
+		return *s
+	}
+	safeInt64 := func(i *int64) int64 {
+		if i == nil {
+			return 0
+		}
+		return *i
 	}
 
-	newVersion := int(maxVersion.Int64) + 1
+	newVersion := int(currentVersion) + 1
 	cfg, err := json.Marshal(target.Config)
 	if err != nil {
 		return "", err
@@ -3439,14 +3662,426 @@ func (d DatastorePostgres) UpdateTarget(target *pkgmodel.Target) (string, error)
 		}
 	}
 
-	insertQuery := `INSERT INTO targets (label, version, namespace, config, config_schema, discoverable) VALUES ($1, $2, $3, $4, $5, $6)`
-	_, err = d.pool.Exec(ctx, insertQuery, target.Label, newVersion, target.Namespace, cfg, configSchemaJSON, target.Discoverable)
+	reapKind, reapMaxUnreachableSeconds, err := pkgmodel.ReapingToColumns(target.Reaping)
+	if err != nil {
+		return "", err
+	}
+
+	// Recovery: when the current row has been reaped, re-declaring the target
+	// mints a fresh incarnation id and resets health to 'unknown' (accrual 0,
+	// timestamps cleared) rather than carrying the reaped state forward.
+	newIncarnationID := safeStr(incarnationID)
+	newHealthState := safeStr(healthState)
+	newLastSeenAt := lastSeenAt
+	newObservedAt := observedAt
+	newFirstUnreachableAt := firstUnreachableAt
+	newLastSampleAt := lastSampleAt
+	newUnreachableAccumSeconds := safeInt64(unreachableAccumSeconds)
+	newLastErrorCode := lastErrorCode
+	recovered := safeStr(healthState) == pkgmodel.TargetHealthStateReaped
+	if recovered {
+		newIncarnationID = mksuid.New().String()
+		newHealthState = pkgmodel.TargetHealthStateUnknown
+		newLastSeenAt = nil
+		newObservedAt = nil
+		newFirstUnreachableAt = nil
+		newLastSampleAt = nil
+		newUnreachableAccumSeconds = 0
+		newLastErrorCode = nil
+	}
+
+	insertQuery := `
+		INSERT INTO targets (label, version, namespace, config, config_schema, discoverable,
+		                     target_incarnation_id, health_state, last_seen_at, observed_at,
+		                     first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+		                     reap_kind, reap_max_unreachable_seconds)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`
+
+	// The version INSERT and the recovery un-reap must be atomic. A crash strictly
+	// between them would leave the target recovered (fresh incarnation, health
+	// 'unknown') while its resources stayed marked 'reaped'; a resumed UpdateTarget
+	// would not re-trigger the un-reap (the target is no longer reaped), stranding
+	// those resources as invisible tombstones the write-guard permanently rejects.
+	// One transaction makes it both-or-neither.
+	tx, err := d.pool.Begin(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to begin target update transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+
+	_, err = tx.Exec(ctx, insertQuery, target.Label, newVersion, target.Namespace, cfg, configSchemaJSON, target.Discoverable,
+		newIncarnationID, newHealthState, newLastSeenAt, newObservedAt, newFirstUnreachableAt, newLastSampleAt,
+		newUnreachableAccumSeconds, newLastErrorCode, reapKind, reapMaxUnreachableSeconds)
 	if err != nil {
 		slog.Error("failed to update target", "error", err, "label", target.Label, "version", newVersion)
 		return "", err
 	}
 
+	// Recovery: un-reap the target's tombstoned resource rows and stamp them with
+	// the fresh incarnation, so a subsequent re-adopt write is accepted rather than
+	// rejected as a reaped tombstone. See the SQLite UpdateTarget for the rationale.
+	if recovered {
+		if _, err = tx.Exec(ctx, `
+			UPDATE resources SET operation = $1, target_incarnation_id = $2
+			WHERE target = $3
+			  AND operation = 'reaped'
+			  AND NOT EXISTS (
+			    SELECT 1 FROM resources r2
+			    WHERE r2.uri = resources.uri AND r2.version > resources.version
+			  )`,
+			string(resource_update.OperationUpdate), newIncarnationID, target.Label); err != nil {
+			slog.Error("failed to un-reap resources on target recovery", "error", err, "label", target.Label)
+			return "", err
+		}
+	}
+
+	if err = tx.Commit(ctx); err != nil {
+		return "", fmt.Errorf("failed to commit target update transaction: %w", err)
+	}
+	committed = true
+
 	return fmt.Sprintf("%s_%d", target.Label, newVersion), nil
+}
+
+func (d DatastorePostgres) UpdateTargetHealth(obs pkgmodel.TargetHealthObservation) (bool, error) {
+	ctx, span := tracer.Start(context.Background(), "UpdateTargetHealth")
+	defer span.End()
+
+	var lastSeenAt *time.Time
+	if obs.LastSeenAt != nil {
+		t := obs.LastSeenAt.UTC()
+		lastSeenAt = &t
+	}
+	observedAt := obs.ObservedAt.UTC()
+
+	var lastErrorCode *string
+	if obs.LastErrorCode != "" {
+		lastErrorCode = &obs.LastErrorCode
+	}
+
+	// A reachable ("success") observation clears any accrued unreachability:
+	// the target is healthy again, so first_unreachable_at and the accumulated
+	// unreachable seconds reset to their pristine (never-unreachable) values.
+	accrualReset := ""
+	if obs.State == pkgmodel.TargetHealthStateReachable {
+		accrualReset = `,
+				first_unreachable_at = NULL,
+				unreachable_accum_seconds = 0`
+	}
+
+	var rowsAffected int64
+	var err error
+	if obs.IncarnationID != "" {
+		query := fmt.Sprintf(`
+			UPDATE targets SET
+				health_state = $1,
+				observed_at = $2,
+				last_seen_at = COALESCE($3, last_seen_at),
+				last_error_code = $4%s
+			WHERE label = $5
+			  AND version = (SELECT MAX(version) FROM targets WHERE label = $5)
+			  AND health_state <> 'reaped'
+			  AND (observed_at IS NULL OR observed_at < $2)
+			  AND target_incarnation_id = $6`, accrualReset)
+		tag, execErr := d.pool.Exec(ctx, query, obs.State, observedAt, lastSeenAt, lastErrorCode, obs.TargetLabel, obs.IncarnationID)
+		err = execErr
+		if execErr == nil {
+			rowsAffected = tag.RowsAffected()
+		}
+	} else {
+		query := fmt.Sprintf(`
+			UPDATE targets SET
+				health_state = $1,
+				observed_at = $2,
+				last_seen_at = COALESCE($3, last_seen_at),
+				last_error_code = $4%s
+			WHERE label = $5
+			  AND version = (SELECT MAX(version) FROM targets WHERE label = $5)
+			  AND health_state <> 'reaped'
+			  AND (observed_at IS NULL OR observed_at < $2)`, accrualReset)
+		tag, execErr := d.pool.Exec(ctx, query, obs.State, observedAt, lastSeenAt, lastErrorCode, obs.TargetLabel)
+		err = execErr
+		if execErr == nil {
+			rowsAffected = tag.RowsAffected()
+		}
+	}
+	if err != nil {
+		return false, err
+	}
+	return rowsAffected == 1, nil
+}
+
+func (d DatastorePostgres) AdvanceTargetAccrual(targetLabel, incarnationID string, lastSampleAt time.Time, deltaSeconds int64) (bool, error) {
+	ctx, span := tracer.Start(context.Background(), "AdvanceTargetAccrual")
+	defer span.End()
+
+	query := `
+		UPDATE targets SET
+			unreachable_accum_seconds = unreachable_accum_seconds + $1,
+			last_sample_at = $2
+		WHERE label = $3
+		  AND version = (SELECT MAX(version) FROM targets WHERE label = $3)
+		  AND health_state = 'unreachable'
+		  AND target_incarnation_id = $4`
+
+	tag, err := d.pool.Exec(ctx, query, deltaSeconds, lastSampleAt.UTC(), targetLabel, incarnationID)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+func (d DatastorePostgres) CheckTargetsReaped(labels []string) ([]string, error) {
+	ctx, span := tracer.Start(context.Background(), "CheckTargetsReaped")
+	defer span.End()
+
+	if len(labels) == 0 {
+		return nil, nil
+	}
+
+	placeholders := make([]string, len(labels))
+	args := make([]any, len(labels))
+	for i, label := range labels {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		args[i] = label
+	}
+
+	query := fmt.Sprintf(`
+	SELECT t1.label
+	FROM targets t1
+	WHERE t1.label IN (%s)
+	AND NOT EXISTS (
+		SELECT 1
+		FROM targets t2
+		WHERE t1.label = t2.label
+		AND t2.version > t1.version
+	)
+	AND t1.health_state = 'reaped'
+	`, strings.Join(placeholders, ","))
+
+	rows, err := d.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var reaped []string
+	for rows.Next() {
+		var label string
+		if err := rows.Scan(&label); err != nil {
+			return nil, err
+		}
+		reaped = append(reaped, label)
+	}
+
+	return reaped, rows.Err()
+}
+
+func (d DatastorePostgres) GetUnreachableTargets() ([]*pkgmodel.Target, error) {
+	ctx, span := tracer.Start(context.Background(), "GetUnreachableTargets")
+	defer span.End()
+
+	query := `
+	SELECT label, version, namespace, config, config_schema, discoverable,
+	       target_incarnation_id, health_state, last_seen_at, observed_at,
+	       first_unreachable_at, last_sample_at, unreachable_accum_seconds, last_error_code,
+	       reap_kind, reap_max_unreachable_seconds
+	FROM targets t1
+	WHERE NOT EXISTS (
+		SELECT 1
+		FROM targets t2
+		WHERE t1.label = t2.label
+		AND t2.version > t1.version
+	)
+	AND t1.health_state = 'unreachable'
+	`
+
+	rows, err := d.pool.Query(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var targets []*pkgmodel.Target
+	for rows.Next() {
+		var label, namespace string
+		var version int
+		var config json.RawMessage
+		var configSchemaRaw []byte
+		var discoverable bool
+		var incarnationID, healthState string
+		var lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt *time.Time
+		var unreachableAccumSeconds int64
+		var lastErrorCode *string
+		var reapKind string
+		var reapMaxUnreachableSeconds int64
+		if err := rows.Scan(&label, &version, &namespace, &config, &configSchemaRaw, &discoverable,
+			&incarnationID, &healthState, &lastSeenAt, &observedAt,
+			&firstUnreachableAt, &lastSampleAt, &unreachableAccumSeconds, &lastErrorCode,
+			&reapKind, &reapMaxUnreachableSeconds); err != nil {
+			return nil, err
+		}
+
+		var configSchema pkgmodel.ConfigSchema
+		if len(configSchemaRaw) > 0 {
+			if err := json.Unmarshal(configSchemaRaw, &configSchema); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal config_schema for target %s: %w", label, err)
+			}
+		}
+
+		targets = append(targets, &pkgmodel.Target{
+			Label:        label,
+			Namespace:    namespace,
+			Config:       config,
+			ConfigSchema: configSchema,
+			Discoverable: discoverable,
+			Version:      version,
+			Reaping:      pkgmodel.ReapingRawFromColumns(reapKind, reapMaxUnreachableSeconds),
+			Health:       buildPostgresTargetHealth(incarnationID, healthState, lastSeenAt, observedAt, firstUnreachableAt, lastSampleAt, unreachableAccumSeconds, lastErrorCode),
+		})
+	}
+
+	return targets, rows.Err()
+}
+
+// PersistTargetReap performs the whole target reap in one transaction. See the
+// Datastore interface for the contract. Postgres compares the native
+// timestamptz grace columns directly and extracts JSON references with jsonb
+// operators (the resource/target_updates columns are TEXT, so they are cast).
+func (d DatastorePostgres) PersistTargetReap(req datastore.PersistTargetReapRequest) (bool, []string, error) {
+	ctx, span := tracer.Start(context.Background(), "PersistTargetReap")
+	defer span.End()
+
+	tx, err := d.pool.Begin(ctx)
+	if err != nil {
+		return false, nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+
+	// 1. Conditional transition FIRST — the atomic CAS (no locks). Thresholds are
+	//    re-read from the row's OWN persisted columns, never from the request.
+	casTag, err := tx.Exec(ctx, `
+		UPDATE targets SET health_state = 'reaped'
+		WHERE label = $1
+		  AND version = (SELECT MAX(version) FROM targets WHERE label = $1)
+		  AND target_incarnation_id = $2
+		  AND health_state = 'unreachable'
+		  AND reap_kind = 'after'
+		  AND unreachable_accum_seconds >= reap_max_unreachable_seconds
+		  AND last_seen_at <= $3
+		  AND last_sample_at <= $4`,
+		req.Label, req.IncarnationID, req.LastSeenBefore.UTC(), req.LastSampleBefore.UTC())
+	if err != nil {
+		return false, nil, err
+	}
+	if casTag.RowsAffected() != 1 {
+		return false, nil, nil
+	}
+
+	var accumSeconds int64
+	if err = tx.QueryRow(ctx,
+		`SELECT unreachable_accum_seconds FROM targets
+		 WHERE label = $1 AND version = (SELECT MAX(version) FROM targets WHERE label = $1)`,
+		req.Label,
+	).Scan(&accumSeconds); err != nil {
+		return false, nil, err
+	}
+
+	// 2. Active-command assertion.
+	var active bool
+	if err = tx.QueryRow(ctx, `
+		SELECT
+		  EXISTS (
+		    SELECT 1 FROM resource_updates ru
+		    JOIN forma_commands fc ON ru.command_id = fc.command_id
+		    WHERE fc.command <> 'sync'
+		      AND fc.state NOT IN ('Success', 'Failed', 'Canceled')
+		      AND ru.resource IS NOT NULL
+		      AND (ru.resource::jsonb ->> 'Target') = $1
+		  )
+		  OR EXISTS (
+		    SELECT 1 FROM forma_commands fc
+		    WHERE fc.command <> 'sync'
+		      AND fc.state NOT IN ('Success', 'Failed', 'Canceled')
+		      AND fc.target_updates IS NOT NULL
+		      AND jsonb_typeof(fc.target_updates::jsonb) = 'array'
+		      AND EXISTS (
+		        SELECT 1 FROM jsonb_array_elements(fc.target_updates::jsonb) e
+		        WHERE (e -> 'Target' ->> 'Label') = $1
+		      )
+		  )`, req.Label).Scan(&active); err != nil {
+		return false, nil, err
+	}
+	if active {
+		return false, nil, nil
+	}
+
+	// Collect the distinct stacks whose live resources this reap tombstones, so
+	// the caller can clean up any stack the reap empties. The predicate matches
+	// the tombstone UPDATE below exactly.
+	stackRows, err := tx.Query(ctx, `
+		SELECT DISTINCT stack FROM resources
+		WHERE target = $1
+		  AND operation <> 'delete' AND operation <> 'reaped'
+		  AND NOT EXISTS (
+		    SELECT 1 FROM resources r2
+		    WHERE r2.uri = resources.uri AND r2.version > resources.version
+		  )`, req.Label)
+	if err != nil {
+		return false, nil, err
+	}
+	var reapedStacks []string
+	for stackRows.Next() {
+		var stack string
+		if err = stackRows.Scan(&stack); err != nil {
+			stackRows.Close()
+			return false, nil, err
+		}
+		reapedStacks = append(reapedStacks, stack)
+	}
+	stackRows.Close()
+	if err = stackRows.Err(); err != nil {
+		return false, nil, err
+	}
+
+	// 3. Tombstone every current-row resource on this target.
+	tombTag, err := tx.Exec(ctx, `
+		UPDATE resources SET operation = 'reaped'
+		WHERE target = $1
+		  AND operation <> 'delete' AND operation <> 'reaped'
+		  AND NOT EXISTS (
+		    SELECT 1 FROM resources r2
+		    WHERE r2.uri = resources.uri AND r2.version > resources.version
+		  )`, req.Label)
+	if err != nil {
+		return false, nil, err
+	}
+	resourceCount := tombTag.RowsAffected()
+
+	// 4. Insert the UNIQUE audit row.
+	if _, err = tx.Exec(ctx,
+		`INSERT INTO target_reap_audit (incarnation_id, label, reaped_at, accum_seconds, resource_count)
+		 VALUES ($1, $2, $3, $4, $5)`,
+		req.IncarnationID, req.Label, req.ReapedAt.UTC(), accumSeconds, resourceCount,
+	); err != nil {
+		return false, nil, err
+	}
+
+	if err = tx.Commit(ctx); err != nil {
+		return false, nil, err
+	}
+	committed = true
+	return true, reapedStacks, nil
 }
 
 func (d DatastorePostgres) DeleteTarget(targetLabel string) (string, error) {
@@ -3482,7 +4117,7 @@ func (d DatastorePostgres) CountResourcesInTarget(targetLabel string) (int, erro
 			WHERE r1.uri = r2.uri
 			AND r2.version COLLATE "C" > r1.version COLLATE "C"
 		)
-		AND operation != $2
+		AND operation != $2 AND operation != 'reaped'
 	`
 	row := d.pool.QueryRow(ctx, query, targetLabel, resource_update.OperationDelete)
 
@@ -3911,6 +4546,10 @@ func (d DatastorePostgres) UpdateFormaCommandTargetUpdates(commandID string, tar
 func (d DatastorePostgres) Close() {
 	d.pool.Close()
 }
+
+// Pool returns the underlying connection pool. Used by test helpers that need
+// direct SQL access (e.g. forcing health_state for guard assertions).
+func (d DatastorePostgres) Pool() *pgxpool.Pool { return d.pool }
 
 // This can be only used in tests or in setups where we have access to admin (non-production)
 func (d DatastorePostgres) CleanUp() error {
