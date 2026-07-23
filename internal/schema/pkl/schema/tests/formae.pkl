@@ -314,6 +314,25 @@ local testSecretParentResource = new TestSecretParentResource {
     }
 }
 
+// Test that a secret field typed through a typealias (rather than referencing
+// formae.SecretValue directly) is still marked Opaque, covering the
+// reflect.TypeAlias referent position in isSecretValueType.
+local typealias TestSecretAlias = String|formae.SecretValue
+
+@formae.ResourceHint {
+    type = "Test::SecretAlias"
+    identifier = "Ref"
+}
+local class TestSecretAliasResource extends formae.Resource {
+    @formae.FieldHint
+    secretAliased: TestSecretAlias?
+}
+
+local testSecretAliasResource = new TestSecretAliasResource {
+    label = "test-secret-alias"
+    secretAliased = "shh-alias"
+}
+
 // Test config class with ConfigFieldHint annotations
 local class TestConfig {
     hidden fixed type: String = "TestProvider"
@@ -662,6 +681,11 @@ facts {
     ["Opaque hint propagates for SecretValue field inside SubResource"] {
         let (hints = testSecretParentResource.hints())
         hints["nested.secretNested"].Opaque == true
+    }
+
+    ["Opaque hint set for typealias-typed SecretValue field"] {
+        let (hints = testSecretAliasResource.hints())
+        hints["secretAliased"].Opaque == true
     }
 
     ["FieldHint exposes AttachesTo"] {

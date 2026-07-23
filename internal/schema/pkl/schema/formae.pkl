@@ -723,7 +723,11 @@ class Fq {
     function isSecretValueType(type: reflect.Type): Boolean =
         if (type is reflect.DeclaredType)
             let (referent = type.referent)
-            if (referent is reflect.Class) isSecretValueClass(referent) else false
+            if (referent is reflect.Class) isSecretValueClass(referent)
+            else if (referent is reflect.TypeAlias)
+                // Handle type alias by checking its aliased type
+                isSecretValueType(referent.referent)
+            else false
         else if (type is reflect.NullableType)
             isSecretValueType(type.member)
         else if (type is reflect.UnionType)
