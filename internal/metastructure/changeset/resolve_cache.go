@@ -107,7 +107,7 @@ func resolveMissReason(resourceURI pkgmodel.FormaeURI, source *pkgmodel.Resource
 func (r *ResolveCache) startResolve(from gen.PID, resourceURI pkgmodel.FormaeURI) {
 	// Check if the resource is already in the cache
 	if json, ok := r.cache[resourceURI.Stripped()]; ok {
-		r.Log().Debug("Cache hit for resource URI uri=%v value=%v", resourceURI, json)
+		r.Log().Debug("Cache hit for resource URI uri=%v", resourceURI)
 		value := json.Get(resourceURI.PropertyPath())
 		if !value.Exists() {
 			r.Log().Error("Unable to resolve property in cached properties property=%s resourceURI=%v", resourceURI.PropertyPath(), resourceURI)
@@ -200,7 +200,7 @@ func (r *ResolveCache) continueResolve(retry resolveRetry) {
 	enhancedParsed := r.preserveRefMetadata(retry.loadResult.Resource, parsed)
 
 	r.cache[resourceURI.Stripped()] = enhancedParsed
-	r.Log().Debug("Cached resolved properties uri=%v value=%v", resourceURI, enhancedParsed)
+	r.Log().Debug("Cached resolved properties uri=%v", resourceURI)
 	value := enhancedParsed.Get(resourceURI.PropertyPath())
 	if !value.Exists() {
 		r.Log().Error("Unable to resolve property in cached properties property=%s resourceURI=%v", resourceURI.PropertyPath(), resourceURI)
@@ -262,8 +262,15 @@ func (r *ResolveCache) readViaPlugin(retry resolveRetry) (*plugin.TrackedProgres
 }
 
 func (r *ResolveCache) preserveRefMetadata(originalResource pkgmodel.Resource, pluginResult gjson.Result) gjson.Result {
-	if !hasOpaqueValues(originalResource.Properties) {
+	schemaOpaqueFields := originalResource.Schema.Opaque()
+
+	if !hasOpaqueValues(originalResource.Properties) && len(schemaOpaqueFields) == 0 {
 		return pluginResult
+	}
+
+	opaqueFields := make(map[string]bool, len(schemaOpaqueFields))
+	for _, f := range schemaOpaqueFields {
+		opaqueFields[f] = true
 	}
 
 	originalProps := gjson.Parse(string(originalResource.Properties))
@@ -277,7 +284,9 @@ func (r *ResolveCache) preserveRefMetadata(originalResource pkgmodel.Resource, p
 	modified := false
 	for propName, propValue := range pluginProps {
 		originalProp := originalProps.Get(propName)
-		if originalProp.Exists() && originalProp.Get("$visibility").String() == "Opaque" {
+		isOpaque := opaqueFields[propName] ||
+			(originalProp.Exists() && originalProp.Get("$visibility").String() == "Opaque")
+		if isOpaque {
 			pluginProps[propName] = map[string]any{
 				"$value":      propValue,
 				"$visibility": "Opaque",
