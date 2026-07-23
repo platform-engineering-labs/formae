@@ -623,8 +623,7 @@ func (s *Server) ForceCheckTTL(c echo.Context) error {
 // @Description Triggers a single, immediate TargetReaper tick: advances the unreachability-accrual
 // @Description clock for every currently-unreachable target, detects reap candidates that have
 // @Description reached their reap-after duration, and reaps (tombstones) the eligible ones, subject
-// @Description to the per-tick rate cap and the dry-run safety valve (when dry-run is enabled the tick
-// @Description accrues and logs would-be reaps but tombstones nothing).
+// @Description to the per-tick rate cap.
 // @Tags admin
 // @Success 200
 // @Failure 500 {string} string "Internal Server Error."

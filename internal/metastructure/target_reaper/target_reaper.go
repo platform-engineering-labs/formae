@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
-package metastructure
+package target_reaper
 
 import (
 	"fmt"
@@ -14,8 +14,8 @@ import (
 
 	"github.com/platform-engineering-labs/formae/internal/datastore"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/reaping"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -26,14 +26,13 @@ import (
 // candidates, and actually reaping them via the ResourcePersister. It runs on
 // a scheduled interval, mirroring StackExpirer.
 //
-// Blast-radius controls: reaping a whole tick's worth of candidates
+// Blast-radius control: reaping a whole tick's worth of candidates
 // unconditionally would let a correlated outage (many targets crossing their
-// threshold together) tombstone the entire fleet in one cycle. Two safety
-// valves guard against that:
-//   - maxReapsPerTick caps how many candidates are actually reaped per tick;
-//     the remainder are logged and retried on the next tick.
-//   - dryRun (an operator opt-in) logs every would-be reap without ever
-//     calling PersistTargetReap. Real reaping is the default.
+// threshold together) tombstone the entire fleet in one cycle, so at most
+// maxReapsPerTick candidates are reaped per tick and the remainder are logged
+// and retried on the next tick. Reaping is fully recoverable (a re-apply
+// re-adopts), so this is blast-radius insurance rather than a hard limit — an
+// internal constant, not user-configurable.
 //
 // Deconfliction: the reaper only skips a candidate that has an incomplete
 // FormaCommand touching it (mirrors checkForConflictingCommands). It does NOT
@@ -47,12 +46,14 @@ import (
 type TargetReaper struct {
 	act.Actor
 
-	datastore       datastore.Datastore
-	interval        time.Duration
-	maxBeatGap      time.Duration
-	dryRun          bool
-	maxReapsPerTick int
+	datastore  datastore.Datastore
+	interval   time.Duration
+	maxBeatGap time.Duration
 }
+
+// maxReapsPerTick bounds how many over-threshold targets the reaper tombstones
+// in a single tick (see the type doc). Internal, not user-configurable.
+const maxReapsPerTick = 50
 
 func NewTargetReaper() gen.ProcessBehavior {
 	return &TargetReaper{}
@@ -70,24 +71,18 @@ func (r *TargetReaper) Init(args ...any) error {
 		return fmt.Errorf("target_reaper: missing 'Datastore' environment variable")
 	}
 	r.datastore = ds.(datastore.Datastore)
-	r.interval = config.ReaperInterval
 
-	// MaxBeatGap is derived from the agent's actual configured synchronization
-	// interval (not a fixed constant) so it self-adjusts if the interval
-	// changes — see the package doc on config.DeriveMaxBeatGap. Missing
-	// 'SynchronizationConfig' falls back to the package's nominal default
-	// rather than failing startup, since a floor is always applied.
-	r.maxBeatGap = config.DeriveMaxBeatGap(config.DefaultSyncInterval)
+	// Both the reaper cadence and its clock-stop threshold derive from the one
+	// user-facing knob — the agent's synchronization interval — so a fast (e.g.
+	// demo) interval reaps responsively and neither value needs separate
+	// operator tuning. A missing SynchronizationConfig falls back to the package
+	// nominal defensively (production always sets it).
+	syncInterval := reaping.NominalSyncInterval
 	if sc, ok := r.Env("SynchronizationConfig"); ok {
-		syncConfig := sc.(pkgmodel.SynchronizationConfig)
-		r.maxBeatGap = config.DeriveMaxBeatGap(syncConfig.Interval)
+		syncInterval = sc.(pkgmodel.SynchronizationConfig).Interval
 	}
-
-	if rc, ok := r.Env("TargetReapingConfig"); ok {
-		reapingConfig := rc.(pkgmodel.TargetReapingConfig)
-		r.dryRun = reapingConfig.DryRun
-		r.maxReapsPerTick = reapingConfig.MaxReapsPerTick
-	}
+	r.interval = reaping.DeriveReaperInterval(syncInterval)
+	r.maxBeatGap = reaping.DeriveMaxBeatGap(syncInterval)
 
 	if _, err := r.SendAfter(r.PID(), CheckUnreachableTargets{}, r.interval); err != nil {
 		return fmt.Errorf("failed to send initial check message: %s", err)
@@ -138,14 +133,7 @@ func (r *TargetReaper) checkUnreachableTargets() {
 	}
 	r.Log().Info("Reap candidates detected (reap-pending): %v", labels)
 
-	execution := planReapExecution(candidates, r.maxReapsPerTick)
-
-	if r.dryRun {
-		r.Log().Info("Dry-run: would reap %d target(s) this tick, tombstoning nothing: %v",
-			len(execution.ToReap), reapCandidateLabels(execution.ToReap))
-		r.scheduleNextCheck()
-		return
-	}
+	execution := planReapExecution(candidates, maxReapsPerTick)
 
 	for _, candidate := range execution.ToReap {
 		r.reap(candidate, now)
@@ -286,7 +274,7 @@ type accrualPlan struct {
 //	else: unreachable_accum_seconds += delta, last_sample_at advances
 //	if last_sample_at is NULL: seed it to observed_at this tick, accrue 0
 //
-// maxBeatGap is the reaper's derived clock-stop threshold (config.DeriveMaxBeatGap),
+// maxBeatGap is the reaper's derived clock-stop threshold (reaping.DeriveMaxBeatGap),
 // computed once from the agent's configured synchronization interval.
 //
 // now is used only defensively (logging) for a target with no observed_at at
@@ -351,7 +339,7 @@ func accrualStep(h *pkgmodel.TargetHealth, maxBeatGap time.Duration) (deltaSecon
 // unreachable time has reached its configured reap-after duration and which
 // has no incomplete command touching it (the front-door check). Detecting a
 // candidate does not by itself reap it — see planReapExecution and
-// TargetReaper.reap for the rate cap and dry-run controls applied on top.
+// TargetReaper.reap for the per-tick rate cap applied on top.
 type ReapCandidate struct {
 	TargetLabel             string
 	IncarnationID           string

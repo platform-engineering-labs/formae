@@ -191,21 +191,6 @@ type StackExpirerConfig struct {
 	Disabled bool
 }
 
-// TargetReapingConfig controls the TargetReaper's execution-time safety
-// valves, on top of the reap-after thresholds carried by each target itself:
-//   - DryRun logs would-be reaps but never calls PersistTargetReap — an
-//     operator opt-in audit-only mode. Reaping is real (DryRun=false) by
-//     default.
-//   - MaxReapsPerTick bounds how many over-threshold candidates the reaper
-//     actually reaps in a single tick, so a correlated outage (many targets
-//     crossing their threshold together) cannot tombstone the whole fleet in
-//     one cycle. Candidates beyond the cap are logged and retried on the next
-//     tick. A value <= 0 means unbounded.
-type TargetReapingConfig struct {
-	DryRun          bool
-	MaxReapsPerTick int
-}
-
 type TailscaleConfig struct {
 	TLS           bool
 	AuthKey       string
@@ -245,7 +230,6 @@ type AgentConfig struct {
 	Logging         LoggingConfig
 	OTel            OTelConfig
 	StackExpirer    StackExpirerConfig
-	TargetReaping   TargetReapingConfig
 	Auth            json.RawMessage
 	ResourcePlugins []ResourcePluginUserConfig
 }

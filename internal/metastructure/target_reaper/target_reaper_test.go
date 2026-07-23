@@ -4,7 +4,7 @@
 
 //go:build unit
 
-package metastructure
+package target_reaper
 
 import (
 	"context"
@@ -21,6 +21,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/reaping"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -47,14 +48,14 @@ func newReaperTestDatastore(t *testing.T) datastore.Datastore {
 func newUnreachableTestTarget(t *testing.T, ds datastore.Datastore, label string, maxUnreachableSeconds int64, observedAt time.Time) string {
 	t.Helper()
 
-	reaping, err := pkgmodel.MarshalReaping(&pkgmodel.ReapAfter{Kind: "after", MaxUnreachableSeconds: maxUnreachableSeconds})
+	reapingRaw, err := pkgmodel.MarshalReaping(&pkgmodel.ReapAfter{Kind: "after", MaxUnreachableSeconds: maxUnreachableSeconds})
 	require.NoError(t, err)
 
 	target := &pkgmodel.Target{
 		Label:     label,
 		Namespace: "AWS",
 		Config:    json.RawMessage(`{"Region":"us-east-1"}`),
-		Reaping:   reaping,
+		Reaping:   reapingRaw,
 	}
 	_, err = ds.CreateTarget(target)
 	require.NoError(t, err)
@@ -84,7 +85,7 @@ const defaultSyncInterval = 5 * time.Minute
 // testMaxBeatGap is the MaxBeatGap derived from defaultSyncInterval, used
 // throughout this file wherever a test needs the reaper's actual clock-stop
 // threshold rather than the raw derivation function.
-var testMaxBeatGap = config.DeriveMaxBeatGap(defaultSyncInterval)
+var testMaxBeatGap = reaping.DeriveMaxBeatGap(defaultSyncInterval)
 
 func TestPlanAccrual_SeedsNullLastSampleAt(t *testing.T) {
 	ds := newReaperTestDatastore(t)
@@ -167,7 +168,7 @@ func TestPlanAccrual_ClockStopBeyondMaxBeatGap(t *testing.T) {
 // for the calibration bug that made reaping inert: an unreachable target's
 // observed_at is refreshed only about once per synchronization cycle, so the
 // reaper's per-step gap is one sync interval wide. Because MaxBeatGap is now
-// derived from the sync interval itself (config.DeriveMaxBeatGap), a
+// derived from the sync interval itself (reaping.DeriveMaxBeatGap), a
 // sync-interval-sized gap can never sit at or above it — this holds by
 // construction, not by calibration, for any sync interval. This test pins the
 // equivalent assertion for the default interval.
@@ -188,22 +189,6 @@ func TestAccrualStep_SyncIntervalGapDoesNotTripClockStop(t *testing.T) {
 	assert.Equal(t, int64(defaultSyncInterval.Seconds()), delta,
 		"a sync-interval-sized gap must accrue the full delta, not be zeroed by the clock-stop")
 	assert.True(t, newLastSampleAt.Equal(observedAt), "last_sample_at must advance to observed_at")
-}
-
-// TestDeriveMaxBeatGap_ScalesWithConfiguredSyncInterval verifies MaxBeatGap
-// scales with whatever synchronization interval the reaper is actually
-// configured with — not a fixed constant — and that the derivation floor
-// protects a very fast interval from collapsing MaxBeatGap to something a
-// single delayed heartbeat could trip.
-func TestDeriveMaxBeatGap_ScalesWithConfiguredSyncInterval(t *testing.T) {
-	longInterval := 3 * time.Hour
-	got := config.DeriveMaxBeatGap(longInterval)
-	assert.Equal(t, 18*time.Hour, got, "MaxBeatGap must scale with the configured sync interval (k=6)")
-	assert.Greater(t, got, longInterval, "a scaled-up sync interval must still sit below the derived MaxBeatGap")
-
-	tinyInterval := 10 * time.Second
-	got = config.DeriveMaxBeatGap(tinyInterval)
-	assert.Equal(t, config.MaxBeatGapFloor, got, "a very fast sync interval must be floored, not collapse MaxBeatGap")
 }
 
 func TestReapCandidates_DetectsCandidateWithoutBlockingCommand(t *testing.T) {
@@ -347,7 +332,7 @@ func TestPlanReapExecution_CapsCandidatesAndLogsDeferred(t *testing.T) {
 }
 
 // TestPlanReapExecution_UnboundedWhenCapNotPositive verifies the documented
-// fallback: a MaxReapsPerTick of zero or negative means unbounded, so every
+// fallback: a maxPerTick of zero or negative means unbounded, so every
 // candidate is reaped this tick (e.g. when the value was never configured).
 func TestPlanReapExecution_UnboundedWhenCapNotPositive(t *testing.T) {
 	candidates := []ReapCandidate{
@@ -382,13 +367,13 @@ func TestTargetReapStatus_PendingBeforeTombstoneThenReapedAfter(t *testing.T) {
 	ds := newReaperTestDatastore(t)
 	label := "reap-status-test"
 
-	reaping, err := pkgmodel.MarshalReaping(&pkgmodel.ReapAfter{Kind: "after", MaxUnreachableSeconds: 0})
+	reapingRaw, err := pkgmodel.MarshalReaping(&pkgmodel.ReapAfter{Kind: "after", MaxUnreachableSeconds: 0})
 	require.NoError(t, err)
 	_, err = ds.CreateTarget(&pkgmodel.Target{
 		Label:     label,
 		Namespace: "AWS",
 		Config:    json.RawMessage(`{}`),
-		Reaping:   reaping,
+		Reaping:   reapingRaw,
 	})
 	require.NoError(t, err)
 

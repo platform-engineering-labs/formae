@@ -225,10 +225,6 @@ func translateConfig(config *pklmodel.Config) *pkgmodel.Config {
 				Disabled: !config.Agent.StackExpirer.Enabled,
 				Interval: config.Agent.StackExpirer.Interval.GoDuration(),
 			},
-			TargetReaping: pkgmodel.TargetReapingConfig{
-				DryRun:          config.Agent.TargetReaping.DryRun,
-				MaxReapsPerTick: int(config.Agent.TargetReaping.MaxReapsPerTick),
-			},
 			OTel: pkgmodel.OTelConfig{
 				Enabled:     config.Agent.OTel.Enabled,
 				ServiceName: config.Agent.OTel.ServiceName,

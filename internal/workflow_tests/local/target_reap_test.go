@@ -13,12 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/platform-engineering-labs/formae/internal/constants"
 	"github.com/platform-engineering-labs/formae/internal/datastore"
-	"github.com/platform-engineering-labs/formae/internal/metastructure"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/discovery"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/testutil"
@@ -346,87 +344,6 @@ func TestDestroyForma_ReapedTargetCleansUpTombstones(t *testing.T) {
 		r.Empty(reaped, "destroy-of-reaped must clean up the reaped tombstone rows")
 
 		r.Equal(int32(0), deleteCount.Load(), "destroy-of-reaped must never call the plugin Delete")
-	})
-}
-
-// TestDanglingReapedReferences_SurfacedNotDeleted verifies the
-// dangling-dependent report: a live resource on a still-reachable target that
-// $refs a resource which has since been reaped is surfaced by
-// FindDanglingReapedReferences, and is left completely untouched (not
-// deleted, not modified) — nested/cross-target reaping never cascades.
-func TestDanglingReapedReferences_SurfacedNotDeleted(t *testing.T) {
-	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
-		overrides := &plugin.ResourcePluginOverrides{
-			Create: func(request *resource.CreateRequest) (*resource.CreateResult, error) {
-				return &resource.CreateResult{
-					ProgressResult: &resource.ProgressResult{
-						Operation:       resource.OperationCreate,
-						OperationStatus: resource.OperationStatusSuccess,
-						NativeID:        "native-" + request.Label,
-					},
-				}, nil
-			},
-		}
-
-		cfg := test_helpers.NewTestMetastructureConfig()
-		cfg.Agent.Synchronization.Enabled = false
-		m, cleanup, err := test_helpers.NewTestMetastructureWithConfig(t, overrides, cfg)
-		defer cleanup()
-		require.NoError(t, err)
-
-		r := require.New(t)
-
-		// Parent resource, on the target that will be reaped.
-		parentForma := &pkgmodel.Forma{
-			Stacks: []pkgmodel.Stack{{Label: "dangling-stack"}},
-			Resources: []pkgmodel.Resource{
-				{Label: "parent", Type: "FakeAWS::Resource", Properties: json.RawMessage(`{"foo":"v1"}`), Schema: pkgmodel.Schema{Fields: []string{"foo"}}, Stack: "dangling-stack", Target: "dangling-parent-target"},
-			},
-			Targets: []pkgmodel.Target{{Label: "dangling-parent-target"}},
-		}
-		_, err = m.ApplyForma(parentForma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client")
-		r.NoError(err)
-		r.Eventually(func() bool {
-			resources, err := m.Datastore.LoadResourcesByStack("dangling-stack")
-			return err == nil && len(resources) == 1
-		}, 15*time.Second, 200*time.Millisecond)
-
-		parentResources, err := m.Datastore.LoadResourcesByStack("dangling-stack")
-		r.NoError(err)
-		r.Len(parentResources, 1)
-		parentKsuid := parentResources[0].Ksuid
-
-		// Dependent resource, on a DIFFERENT (still-reachable) target, $refs the parent.
-		dependentProperties := json.RawMessage(fmt.Sprintf(`{"upstream":{"$ref":"formae://%s#/foo","$value":"v1"}}`, parentKsuid))
-		dependent := &pkgmodel.Resource{
-			NativeID:   "dependent-native",
-			Label:      "dependent",
-			Type:       "FakeAWS::Resource",
-			Properties: dependentProperties,
-			Stack:      "dangling-stack",
-			Target:     "dangling-live-target",
-			Managed:    true,
-		}
-		_, err = m.Datastore.StoreResource(dependent, "test-cmd")
-		r.NoError(err)
-		_, err = m.Datastore.CreateTarget(&pkgmodel.Target{Label: "dangling-live-target"})
-		r.NoError(err)
-
-		// Reap only the parent's target — the dependent's target is untouched.
-		reapTargetForTest(t, m.Datastore, "dangling-parent-target")
-
-		findings, err := metastructure.FindDanglingReapedReferences(m.Datastore)
-		r.NoError(err)
-		r.Len(findings, 1, "the dependent resource's $ref to the reaped parent must be surfaced exactly once")
-		r.NotNil(findings[0].DependentResource)
-		r.Equal("dependent", findings[0].DependentResource.Label)
-		r.Equal(parentResources[0].URI(), findings[0].ReapedResource)
-
-		// Left alone: the dependent resource itself is untouched by the report.
-		stillLive, err := m.Datastore.LoadResource(dependent.URI())
-		r.NoError(err)
-		r.NotNil(stillLive, "the dangling dependent must not be deleted")
-		assert.JSONEq(t, string(dependentProperties), string(stillLive.Properties))
 	})
 }
 

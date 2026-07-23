@@ -49,7 +49,7 @@ type AdvanceTargetAccrual struct {
 // reap as one datastore transaction. Unlike the accrual/health messages it needs
 // a return value — whether the reap committed — so it is a Call and replies with
 // a PersistTargetReapResult. Sent by the TargetReaper for each candidate it
-// actually reaps this tick (subject to the rate cap and dry-run mode).
+// actually reaps this tick (subject to the per-tick rate cap).
 type PersistTargetReap struct {
 	Label            string
 	IncarnationID    string

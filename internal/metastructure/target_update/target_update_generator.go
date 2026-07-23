@@ -10,7 +10,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/reaping"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	"github.com/platform-engineering-labs/formae/pkg/api/model"
@@ -30,7 +30,7 @@ type TargetUpdateGenerator struct {
 	// in which case admission falls through to the global reaping default.
 	manifestDefaultReap pkgmodel.ReapingBehaviour
 	// minReapDuration is the floor enforced on any target's explicit reap-after
-	// duration (see resolveTargetReaping). It defaults to config.MinReapDuration
+	// duration (see resolveTargetReaping). It defaults to reaping.MinReapDuration
 	// (derived from the nominal/default sync interval); WithMinReapDuration lets
 	// the caller align it with the agent's actual configured interval.
 	minReapDuration time.Duration
@@ -40,7 +40,7 @@ type TargetUpdateGenerator struct {
 func NewTargetUpdateGenerator(ds TargetDatastore) *TargetUpdateGenerator {
 	return &TargetUpdateGenerator{
 		datastore:       ds,
-		minReapDuration: config.MinReapDuration,
+		minReapDuration: reaping.MinReapDuration,
 	}
 }
 

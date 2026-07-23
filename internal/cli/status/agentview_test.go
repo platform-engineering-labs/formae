@@ -92,8 +92,8 @@ func TestRenderAgentStats_ReapRows(t *testing.T) {
 	out := renderAgentStats(th, stats, 120)
 	plain := stripANSIAgent(out)
 
-	assert.Contains(t, plain, "Reap Pending", "reap-pending row expected when count is non-zero")
-	assert.Contains(t, plain, "Reaped", "reaped row expected when count is non-zero")
+	assert.Contains(t, plain, "Reap Pending", "reap-pending count expected in the Structure panel when non-zero")
+	assert.Contains(t, plain, "Reaped", "reaped count expected in the Structure panel when non-zero")
 }
 
 func TestRenderAgentStats_NoReapRowsWhenZero(t *testing.T) {

@@ -191,8 +191,8 @@ type Stats struct {
 	// ReapPendingTargets counts targets that are still 'unreachable' but have
 	// already accrued at least their configured reap-after duration — they
 	// are due to be reaped (on an upcoming reaper tick, or held back by the
-	// rate cap, an in-flight command, or dry-run mode). Surfaced so an
-	// over-threshold target is visible before any tombstone.
+	// rate cap or an in-flight command). Surfaced so an over-threshold target
+	// is visible before any tombstone.
 	ReapPendingTargets int `json:"ReapPendingTargets"`
 	// ReapedTargets counts targets whose current health state is 'reaped'.
 	ReapedTargets int `json:"ReapedTargets"`
