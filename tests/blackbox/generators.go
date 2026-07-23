@@ -188,6 +188,24 @@ func fillOperationFields(t *rapid.T, op *Operation, config PropertyTestConfig) {
 			op.ResourceIDs = resourceIDsGen(t, config.ResourceCount, 1)
 		}
 		op.Properties = resourcePropsGen(t)
+		// RFC-0041: with rename enabled, OpApply optionally carries a rename
+		// overlay for one slot from ResourceIDs. The executor only honours
+		// the overlay if that slot is StateExists at execution time
+		// (otherwise rename is a no-op). Combined with the property template
+		// above this lets a single apply model an update as label-only,
+		// property-only, or both. Parent-slots only for pool configs — the
+		// forma builder does not thread label overrides through
+		// ParentLabelForStack so renaming a parent with children mid-apply
+		// would leave child `$res` blocks pointing at the old label.
+		op.RenameSlotIndex = -1
+		if config.EnableRename && len(op.ResourceIDs) > 0 {
+			if rapid.IntRange(0, 2).Draw(t, "applyRenameRoll") == 0 {
+				op.RenameSlotIndex = renameSlotIndexFromIDs(t, op.ResourceIDs, pool)
+				if op.RenameSlotIndex >= 0 {
+					op.RenameNewLabel = renameLabelGen(t)
+				}
+			}
+		}
 		if config.EnableFailures {
 			op.DrawnOutcomes = make(map[string]DrawnOutcome)
 			for i := 0; i < slotCount; i++ {
@@ -522,4 +540,37 @@ func subsequenceGen(t *rapid.T, values []string, label string) []string {
 		return []string{}
 	}
 	return result
+}
+
+// renameSlotIndexFromIDs picks one slot from `ids` to rename as part of an
+// OpApply. For pool-based configs we restrict to parent slots: the forma
+// builder does not thread label overrides through ParentLabelForStack /
+// CrossStackParentLabelForStack, so renaming a parent that has child
+// references would leave subsequent applies pointing at the parent's old
+// label. Returns -1 when no eligible slot is in `ids` — the caller treats
+// that as "no rename on this apply".
+func renameSlotIndexFromIDs(t *rapid.T, ids []int, pool *ResourcePool) int {
+	if len(ids) == 0 {
+		return -1
+	}
+	var candidates []int
+	for _, id := range ids {
+		if pool != nil && !pool.IsParent(id) {
+			continue
+		}
+		candidates = append(candidates, id)
+	}
+	if len(candidates) == 0 {
+		return -1
+	}
+	return rapid.SampledFrom(candidates).Draw(t, "applyRenameSlot")
+}
+
+// renameLabelGen produces a fresh label string for a rename overlay on an
+// OpApply. The label space is small and unique; collisions across operations
+// are unlikely within a single sequence but the executor catches the
+// new-label-already-exists case at apply time.
+func renameLabelGen(t *rapid.T) string {
+	suffix := rapid.IntRange(100, 9999).Draw(t, "renameLabelSuffix")
+	return fmt.Sprintf("renamed-%d", suffix)
 }
