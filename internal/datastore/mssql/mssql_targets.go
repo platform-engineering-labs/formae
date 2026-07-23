@@ -705,7 +705,8 @@ func (d *DatastoreMSSQL) QueryTargets(query *datastore.TargetQuery) ([]*pkgmodel
 			FROM targets t2
 			WHERE t1.label = t2.label
 			AND t2.version > t1.version
-		)`
+		)
+		AND health_state <> 'reaped'`
 	args := []any{}
 
 	queryStr = extendMSSQLQueryString(queryStr, query.Label, " AND label %s @p%d{esc}", &args)

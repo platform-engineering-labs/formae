@@ -3223,6 +3223,7 @@ func (d *DatastoreAuroraDataAPI) QueryTargets(targetQuery *datastore.TargetQuery
 		WHERE t1.label = t2.label
 		AND t2.version > t1.version
 	)
+	AND health_state != 'reaped'
 	`
 	params := []types.SqlParameter{}
 	paramIdx := 1
@@ -3418,6 +3419,7 @@ func (d *DatastoreAuroraDataAPI) Stats() (*stats.Stats, error) {
 		WHERE t1.label = t2.label
 		AND t2.version > t1.version
 	)
+	AND health_state != 'reaped'
 	GROUP BY namespace
 	`
 	output, err = d.executeStatement(ctx, targetsQuery, nil)

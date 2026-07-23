@@ -3036,7 +3036,8 @@ func (d DatastorePostgres) QueryTargets(query *datastore.TargetQuery) ([]*pkgmod
 			FROM targets t2
 			WHERE t1.label = t2.label
 			AND t2.version > t1.version
-		)`
+		)
+		AND health_state != 'reaped'`
 	args := []any{}
 
 	queryStr = extendPostgresQueryString(queryStr, query.Label, " AND label %s $%d", &args)
@@ -3293,6 +3294,7 @@ func (d DatastorePostgres) Stats() (*stats.Stats, error) {
 		WHERE t1.label = t2.label
 		AND t2.version > t1.version
 	)
+	AND health_state != 'reaped'
 	GROUP BY namespace
 	`
 	rows, err = d.pool.Query(ctx, targetsQuery)

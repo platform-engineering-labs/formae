@@ -3582,7 +3582,8 @@ func (d DatastoreSQLite) QueryTargets(query *datastore.TargetQuery) ([]*pkgmodel
 			FROM targets t2
 			WHERE t1.label = t2.label
 			AND t2.version > t1.version
-		)`
+		)
+		AND health_state != 'reaped'`
 	args := []any{}
 
 	queryStr = extendSQLiteQueryString(queryStr, query.Label, " AND label %s ?{esc}", &args)
@@ -3824,6 +3825,7 @@ func (d DatastoreSQLite) Stats() (*stats.Stats, error) {
 			WHERE t1.label = t2.label
 			AND t2.version > t1.version
 		)
+		AND health_state != 'reaped'
 		GROUP BY namespace
 	`
 	rows, err = d.conn.Query(targetsQuery)

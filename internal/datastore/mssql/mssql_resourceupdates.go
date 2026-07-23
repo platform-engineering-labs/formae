@@ -109,6 +109,7 @@ func (d *DatastoreMSSQL) Stats() (*stats.Stats, error) {
 			WHERE t1.label = t2.label
 			AND t2.version > t1.version
 		)
+		AND health_state <> 'reaped'
 		GROUP BY namespace`, res.Targets,
 	); err != nil {
 		return nil, err

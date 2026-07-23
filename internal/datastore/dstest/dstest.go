@@ -101,6 +101,8 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunQueryTargetsDiscoverableAWS(t, newDS)
 	RunQueryTargetsNonDiscoverable(t, newDS)
 	RunQueryTargetsVersioning(t, newDS)
+	RunReapedTargetsInvisibleToQuery(t, newDS)
+	RunStatsExcludesReapedTargets(t, newDS)
 	RunCountResourcesInTarget(t, newDS)
 	RunCountResourcesInTargetUsesByteOrderForVersionComparison(t, newDS)
 	RunDeleteTargetSuccess(t, newDS)
