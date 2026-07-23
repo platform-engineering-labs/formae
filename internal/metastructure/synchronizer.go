@@ -301,6 +301,7 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 		nil, // No stack updates on sync
 		nil, // No policy updates on sync
 		"synchronizer",
+		forma_command.SourceSynchronizer,
 	)
 	data.commandID = syncCommand.ID
 	proc.Log().Debug("Synchronizer: created sync command commandID=%s resourceUpdateCount=%d", syncCommand.ID, len(allResourceUpdates))

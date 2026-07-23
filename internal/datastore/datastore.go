@@ -78,10 +78,12 @@ type TargetQuery struct {
 }
 
 type ResourceModification struct {
-	Stack     string
-	Type      string
-	Label     string
-	Operation string
+	Stack         string
+	Type          string
+	Label         string
+	Operation     string
+	Properties    json.RawMessage // current (cloud) properties — update ops only
+	OldProperties json.RawMessage // properties at last reconcile — update ops only
 }
 
 // ResourceUpdateRef identifies a specific ResourceUpdate by its key components.

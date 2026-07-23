@@ -6,6 +6,7 @@ package plugin
 
 import (
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"strings"
@@ -14,8 +15,8 @@ import (
 
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
 	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
-	"github.com/platform-engineering-labs/formae/internal/cli/display"
 	"github.com/platform-engineering-labs/formae/internal/cli/printer"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 )
 
@@ -99,32 +100,71 @@ func validateInstallOptions(opts *InstallOptions) error {
 }
 
 func runInstallForHumans(app *app.App, opts *InstallOptions) error {
-	mgr, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, opts.Channel)
-	if err != nil {
-		return err
-	}
+	app.PrintBanner()
+	return runInstallForHumansWithSeams(app, opts, os.Stdout, nil)
+}
+
+// runInstallForHumansWithSeams is the testable inner implementation. mgr may
+// be non-nil to inject a stub; when nil a real CLIPluginManager is created.
+func runInstallForHumansWithSeams(app *app.App, opts *InstallOptions, w io.Writer, mgr localInstaller) error {
 	if mgr == nil {
-		return fmt.Errorf("no artifact repositories configured; set artifacts.repositories in your formae config")
+		real, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, opts.Channel, true, true)
+		if err != nil {
+			return err
+		}
+		if real == nil {
+			return fmt.Errorf("no artifact repositories configured; set artifacts.repositories in your formae config")
+		}
+		mgr = real
 	}
+
+	th := themeFor(app)
+	tty := pluginIsTerminal(w)
+	n := len(opts.Packages)
+	noun := "plugin"
+	if n != 1 {
+		noun = "plugins"
+	}
+	label := fmt.Sprintf("Installing %d %s…", n, noun)
+	step := components.StartStep(w, th, label)
 
 	if err := mgr.LocalInstall(opts.Packages); err != nil {
+		step.Fail(fmt.Sprintf("Failed to install %s", strings.Join(pluginNamesFromArgs(opts.Packages), ", ")))
 		return err
 	}
 
-	for _, name := range pluginNamesFromArgs(opts.Packages) {
-		fmt.Printf("  %s Installed %s\n", display.Green("✓"), name)
+	step.Done(fmt.Sprintf("Installed %d %s", n, noun))
+
+	for _, pkg := range opts.Packages {
+		name, version, hasVersion := strings.Cut(pkg, "@")
+		var line string
+		if hasVersion && version != "" {
+			line = fmt.Sprintf("Installed %s %s", name, version)
+		} else {
+			line = fmt.Sprintf("Installed %s", name)
+		}
+		ackLine(w, tty, th, components.AckDone, line)
 	}
-	fmt.Printf("\n  %s If this host runs the formae agent, restart it to load the new plugins: formae agent restart\n", display.Gold("!"))
+	ackLine(w, tty, th, components.AckWarn, "If this host runs the formae agent, restart it to load the new plugins: formae agent restart")
 	return nil
 }
 
 func runInstallForMachines(app *app.App, opts *InstallOptions) error {
-	mgr, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, opts.Channel)
-	if err != nil {
-		return err
-	}
+	return runInstallForMachinesWithSeams(app, opts, os.Stdout, nil)
+}
+
+// runInstallForMachinesWithSeams is the testable inner implementation for the
+// machine path. mgr may be non-nil to inject a stub.
+func runInstallForMachinesWithSeams(app *app.App, opts *InstallOptions, w io.Writer, mgr localInstaller) error {
 	if mgr == nil {
-		return fmt.Errorf("no artifact repositories configured; set artifacts.repositories in your formae config")
+		real, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, opts.Channel, true, true)
+		if err != nil {
+			return err
+		}
+		if real == nil {
+			return fmt.Errorf("no artifact repositories configured; set artifacts.repositories in your formae config")
+		}
+		mgr = real
 	}
 
 	if err := mgr.LocalInstall(opts.Packages); err != nil {
@@ -135,7 +175,7 @@ func runInstallForMachines(app *app.App, opts *InstallOptions) error {
 		Operations:      operationsFromPackages(opts.Packages, "install"),
 		RequiresRestart: true,
 	}
-	p := printer.NewMachineReadablePrinter[apimodel.InstallPluginsResponse](os.Stdout, opts.OutputSchema)
+	p := printer.NewMachineReadablePrinter[apimodel.InstallPluginsResponse](w, opts.OutputSchema)
 	return p.Print(resp)
 }
 

@@ -11,51 +11,65 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
 	"github.com/platform-engineering-labs/formae/internal/api"
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
-	"github.com/platform-engineering-labs/formae/internal/cli/display"
+	"github.com/platform-engineering-labs/formae/internal/cli/banner"
 	"github.com/platform-engineering-labs/formae/internal/cli/profile/store"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/platform-engineering-labs/formae/internal/schema"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
-var RootCmdUsageTemplate = display.Grey("Usage: ") + display.Green("{{.CommandPath}} [OPTIONS]{{if .HasAvailableSubCommands}} [COMMAND]{{end}}\n") +
-	"{{if .HasAvailableSubCommands}}\n" + display.Gold("Commands:") + "{{$types := typeMap .Commands}}" +
-	"{{$first := true}}{{range $type, $cmds := $types}}" +
-	"{{if $first}}{{$first = false}}{{else}}\n{{end}}\n  " + display.Gold("{{$type}}:") +
-	"{{range $cmd := $cmds}}\n    " + display.Green("{{rpad $cmd.Name $cmd.NamePadding}}") + "     {{$cmd.Short}}" +
-	"{{if (index $cmd.Annotations \"examples\")}}\n                   " +
-	display.Grey("  {{formatExamples (index $cmd.Annotations \"examples\") $cmd}}") + "{{end}}" +
-	"{{if (index $cmd.Annotations \"doc\")}}\n" +
-	display.Grey("{{formatDoc (index $cmd.Annotations \"doc\") $cmd}}\n") + "{{end}}" +
-	"{{end}}{{end}}\n{{end}}" +
-	"{{if .HasAvailableLocalFlags}}\n" + display.Gold("Options:\n") +
-	"{{range .LocalFlags | optionsUsage}}{{.}}\n{{end}}" +
-	"{{end}}" +
-	display.DefaultLinks() +
-	"\n"
+// RootCmdUsageTemplate and SimpleCmdUsageTemplate are built in init() so that
+// theme colors are resolved at startup rather than at package-init import time.
+var RootCmdUsageTemplate string
+var SimpleCmdUsageTemplate string
 
-var SimpleCmdUsageTemplate = display.Grey("Usage: ") + display.Green("{{.CommandPath}}{{if .HasAvailableLocalFlags}} [OPTIONS]{{end}}{{if .HasAvailableSubCommands}} [COMMAND]{{end}}") +
-	display.Green("{{if index .Annotations \"args\"}} {{index .Annotations \"args\"}}{{end}}") + "\n" +
-	"{{if index .Annotations \"examples\"}}\n" + display.Gold("Examples:") + "\n  " +
-	display.Grey("{{formatExamplesMultiline (index .Annotations \"examples\") .}}") + "\n{{end}}" +
-	"{{if .HasAvailableSubCommands}}\n" + display.Gold("Commands:") +
-	"{{range $cmd := .Commands}}\n  " + display.Green("{{rpad $cmd.Name $cmd.NamePadding}}") + "       {{$cmd.Short}}" +
-	"{{if (index $cmd.Annotations \"examples\")}}\n                   " +
-	display.Grey("  {{formatExamples (index $cmd.Annotations \"examples\") $cmd}}") + "{{end}}" +
-	"{{if (index $cmd.Annotations \"doc\")}}\n" +
-	display.Grey("{{formatDoc (index $cmd.Annotations \"doc\") $cmd}}\n") + "{{end}}" +
-	"{{end}}\n{{end}}" +
-	"{{if .HasAvailableLocalFlags}}\n" + display.Gold("Options:\n") +
-	"{{range .LocalFlags | optionsUsage}}{{.}}\n{{end}}" +
-	"{{end}}\n" +
-	"{{if .LocalFlags | hasPropertyFlags}}\n" + display.Gold("Properties:\n") +
-	"{{range .LocalFlags | propertyUsage}}{{.}}\n{{end}}" +
-	"{{end}}" +
-	display.DefaultLinks() +
-	"\n"
+func init() {
+	th := theme.New("formae")
+	grey := func(s string) string { return lipgloss.NewStyle().Foreground(th.Palette.TextSubtle).Render(s) }
+	accent := func(s string) string { return lipgloss.NewStyle().Foreground(th.Palette.SecondaryAccent).Render(s) }
+	done := func(s string) string { return lipgloss.NewStyle().Foreground(th.Palette.Done).Render(s) }
+
+	RootCmdUsageTemplate = grey("Usage: ") + done("{{.CommandPath}} [OPTIONS]{{if .HasAvailableSubCommands}} [COMMAND]{{end}}\n") +
+		"{{if .HasAvailableSubCommands}}\n" + accent("Commands:") + "{{$types := typeMap .Commands}}" +
+		"{{$first := true}}{{range $type, $cmds := $types}}" +
+		"{{if $first}}{{$first = false}}{{else}}\n{{end}}\n  " + accent("{{$type}}:") +
+		"{{range $cmd := $cmds}}\n    " + done("{{rpad $cmd.Name $cmd.NamePadding}}") + "     {{$cmd.Short}}" +
+		"{{if (index $cmd.Annotations \"examples\")}}\n                   " +
+		grey("  {{formatExamples (index $cmd.Annotations \"examples\") $cmd}}") + "{{end}}" +
+		"{{if (index $cmd.Annotations \"doc\")}}\n" +
+		grey("{{formatDoc (index $cmd.Annotations \"doc\") $cmd}}\n") + "{{end}}" +
+		"{{end}}{{end}}\n{{end}}" +
+		"{{if .HasAvailableLocalFlags}}\n" + accent("Options:") + "\n" +
+		"{{range .LocalFlags | optionsUsage}}{{.}}\n{{end}}" +
+		"{{end}}" +
+		banner.DefaultLinks() +
+		"\n"
+
+	SimpleCmdUsageTemplate = grey("Usage: ") + done("{{.CommandPath}}{{if .HasAvailableLocalFlags}} [OPTIONS]{{end}}{{if .HasAvailableSubCommands}} [COMMAND]{{end}}") +
+		done("{{if index .Annotations \"args\"}} {{index .Annotations \"args\"}}{{end}}") + "\n" +
+		"{{if index .Annotations \"examples\"}}\n" + accent("Examples:") + "\n  " +
+		grey("{{formatExamplesMultiline (index .Annotations \"examples\") .}}") + "\n{{end}}" +
+		"{{if .HasAvailableSubCommands}}\n" + accent("Commands:") +
+		"{{range $cmd := .Commands}}\n  " + done("{{rpad $cmd.Name $cmd.NamePadding}}") + "       {{$cmd.Short}}" +
+		"{{if (index $cmd.Annotations \"examples\")}}\n                   " +
+		grey("  {{formatExamples (index $cmd.Annotations \"examples\") $cmd}}") + "{{end}}" +
+		"{{if (index $cmd.Annotations \"doc\")}}\n" +
+		grey("{{formatDoc (index $cmd.Annotations \"doc\") $cmd}}\n") + "{{end}}" +
+		"{{end}}\n{{end}}" +
+		"{{if .HasAvailableLocalFlags}}\n" + accent("Options:") + "\n" +
+		"{{range .LocalFlags | optionsUsage}}{{.}}\n{{end}}" +
+		"{{end}}\n" +
+		"{{if .LocalFlags | hasPropertyFlags}}\n" + accent("Properties:") + "\n" +
+		"{{range .LocalFlags | propertyUsage}}{{.}}\n{{end}}" +
+		"{{end}}" +
+		banner.DefaultLinks() +
+		"\n"
+}
 
 var PropertyCommands = []string{
 	"apply",
@@ -111,10 +125,14 @@ func AppFromContext(ctx context.Context, configFilePath, endpoint string, cmd *c
 		profileFlag, _ := cmd.Flags().GetString("profile") // "" if the flag is absent
 		path, err := ResolveConfigPath(configFilePath, profileFlag)
 		if err != nil {
-			return nil, fmt.Errorf("%w\n\n%s %s", err, display.Gold("Configuration docs:"), display.DocRoot+"/configuration")
+			th := theme.New("formae")
+			accentStyle := lipgloss.NewStyle().Foreground(th.Palette.SecondaryAccent)
+			return nil, fmt.Errorf("%w\n\n%s %s", err, accentStyle.Render("Configuration docs:"), banner.DocRoot+"/configuration")
 		}
 		if err := application.LoadConfig(path, ""); err != nil {
-			return nil, fmt.Errorf("%w\n\n%s %s", err, display.Gold("Configuration docs:"), display.DocRoot+"/configuration")
+			th := theme.New("formae")
+			accentStyle := lipgloss.NewStyle().Foreground(th.Palette.SecondaryAccent)
+			return nil, fmt.Errorf("%w\n\n%s %s", err, accentStyle.Render("Configuration docs:"), banner.DocRoot+"/configuration")
 		}
 		return application, nil
 	}

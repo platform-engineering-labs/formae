@@ -173,6 +173,12 @@ func (s *Server) Start() {
 	s.Stop(false)
 }
 
+// Handler returns the underlying HTTP handler (the echo instance) so test helpers
+// can wrap it in an httptest.Server without starting a real listener.
+func (s *Server) Handler() http.Handler {
+	return s.echo
+}
+
 // Stop gracefully shuts down the server, waiting for ongoing requests to complete
 func (s *Server) Stop(_ bool) {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 1*time.Second)

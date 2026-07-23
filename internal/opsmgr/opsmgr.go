@@ -10,9 +10,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"syscall"
 
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
+	"github.com/platform-engineering-labs/orbital"
 	"github.com/platform-engineering-labs/orbital/mgr"
 	"github.com/platform-engineering-labs/orbital/opm/security"
 	"github.com/platform-engineering-labs/orbital/opm/tree"
@@ -22,22 +22,22 @@ import (
 
 // New constructs a Manager from a single URL + channel.
 // Kept for backwards compatibility. Prefer NewFromRepositories.
-func New(logger *slog.Logger, uri url.URL, channel string) (*mgr.Manager, error) {
+func New(logger *slog.Logger, uri url.URL, channel string, sudo bool, writable bool) (*mgr.Manager, error) {
 	repos := []pkgmodel.Repository{{URI: uri, Type: pkgmodel.RepositoryTypeBinary}}
-	return NewFromRepositories(logger, repos, channel)
+	return NewFromRepositories(logger, repos, channel, sudo, writable)
 }
 
 // NewFromRepositories constructs a Manager with all configured repos loaded.
 // Channel (if non-empty) overrides the URI fragment for every repo.
-func NewFromRepositories(logger *slog.Logger, repos []pkgmodel.Repository, channel string) (*mgr.Manager, error) {
-	return newManager(logger, repos, channel)
+func NewFromRepositories(logger *slog.Logger, repos []pkgmodel.Repository, channel string, sudo bool, writable bool) (*mgr.Manager, error) {
+	return newManager(logger, repos, channel, sudo, writable)
 }
 
 // NewFromRepositoriesFiltered constructs a Manager containing only repos whose
 // type is in the allowed set. Empty allowed = all types.
-func NewFromRepositoriesFiltered(logger *slog.Logger, repos []pkgmodel.Repository, channel string, allowed ...pkgmodel.RepositoryType) (*mgr.Manager, error) {
+func NewFromRepositoriesFiltered(logger *slog.Logger, repos []pkgmodel.Repository, channel string, sudo bool, writable bool, allowed ...pkgmodel.RepositoryType) (*mgr.Manager, error) {
 	if len(allowed) == 0 {
-		return newManager(logger, repos, channel)
+		return newManager(logger, repos, channel, sudo, writable)
 	}
 	allow := make(map[pkgmodel.RepositoryType]bool, len(allowed))
 	for _, a := range allowed {
@@ -52,7 +52,7 @@ func NewFromRepositoriesFiltered(logger *slog.Logger, repos []pkgmodel.Repositor
 	if len(filtered) == 0 {
 		return nil, fmt.Errorf("no matching repositories after filtering")
 	}
-	return newManager(logger, filtered, channel)
+	return newManager(logger, filtered, channel, sudo, writable)
 }
 
 // FormaePelRootEnv overrides the orbital tree root that opsmgr would
@@ -65,7 +65,7 @@ func NewFromRepositoriesFiltered(logger *slog.Logger, repos []pkgmodel.Repositor
 // dev runs and isolated tests.
 const FormaePelRootEnv = "FORMAE_PEL_ROOT"
 
-func newManager(logger *slog.Logger, repos []pkgmodel.Repository, channel string) (*mgr.Manager, error) {
+func newManager(logger *slog.Logger, repos []pkgmodel.Repository, channel string, sudo bool, writable bool) (*mgr.Manager, error) {
 	treePath, err := resolveTreePath()
 	if err != nil {
 		return nil, err
@@ -84,12 +84,26 @@ func newManager(logger *slog.Logger, repos []pkgmodel.Repository, channel string
 		return nil, fmt.Errorf("no repositories configured")
 	}
 
-	return mgr.New(logger, treePath, &tree.Config{
-		OS:           platform.Current().OS,
-		Arch:         platform.Current().Arch,
-		Security:     security.Default,
-		Repositories: opsRepos,
-	})
+	var opts []orbital.Option
+
+	if sudo {
+		opts = append(opts, orbital.WithSudo())
+	}
+
+	if writable {
+		opts = append(opts, orbital.WithWritable())
+	}
+
+	opts = append(opts, orbital.WithEmbedded(
+		treePath, &tree.Config{
+			OS:           platform.Current().OS,
+			Arch:         platform.Current().Arch,
+			Security:     security.Default,
+			Repositories: opsRepos,
+		},
+	))
+
+	return mgr.New(logger, opts...)
 }
 
 // resolveTreePath returns FORMAE_PEL_ROOT when set, otherwise the
@@ -104,34 +118,4 @@ func resolveTreePath() (string, error) {
 		return "", fmt.Errorf("could not determine binary path: %w", err)
 	}
 	return filepath.Dir(filepath.Dir(binPath)), nil
-}
-
-// TreeRequiresElevation reports whether constructing an orbital manager
-// against the configured tree would re-exec the process under sudo.
-// orbital's tree.New triggers a sudo re-exec whenever the tree path is
-// root-owned and the caller is not root — including for read-only
-// operations like List(). Callers that want to remain unprivileged
-// (e.g. `plugin list`) check this first and skip the local arm when it
-// would force a sudo prompt.
-//
-// Returns false (with no error) if the tree path can't be stat'd; the
-// caller can then attempt orbital construction and rely on the existing
-// Ready() guard.
-func TreeRequiresElevation() bool {
-	path, err := resolveTreePath()
-	if err != nil {
-		return false
-	}
-	stat, err := os.Stat(path)
-	if err != nil {
-		return false
-	}
-	sys, ok := stat.Sys().(*syscall.Stat_t)
-	if !ok {
-		return false
-	}
-	if sys.Uid != 0 {
-		return false
-	}
-	return os.Geteuid() != 0
 }

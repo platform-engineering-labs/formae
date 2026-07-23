@@ -1,0 +1,31 @@
+  [1;38;2;232;232;232mformae[0m [1;38;2;255;133;51mapply[0m                                                                  [1;38;2;248;113;113mreconcile rejected[0m  
+[38;2;85;85;102m────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+
+  [38;2;232;232;232mExtracting 3 resources as code:[0m
+    [38;2;232;232;232mweb-config[0m[38;2;153;153;153m (AWS::SSM::Parameter)[0m
+    [38;2;232;232;232mmonitoring-bucket[0m[38;2;153;153;153m (AWS::S3::Bucket)[0m
+    [38;2;232;232;232mapi-gateway[0m[38;2;153;153;153m (AWS::ApiGateway::RestApi)[0m
+
+  [38;2;153;153;153mExtract to: [0m[38;2;232;232;232m./extracted-drift.pkl[0m[38;2;232;232;232m█[0m
+
+  [38;2;181;181;91mDon't apply this file directly. It holds only the selected resource(s), so[0m
+  [38;2;181;181;91mreconciling it would delete every other resource in the stack.[0m
+
+  [38;2;232;232;232mCopy the values you want to keep into your forma, then re-apply with --force:[0m
+    [38;2;232;232;232mformae apply --mode reconcile --force infra.pkl[0m
+
+  [1;38;2;129;209;219menter[0m[38;2;153;153;153m: confirm[0m  [1;38;2;129;209;219mesc[0m[38;2;153;153;153m: cancel[0m
+
+
+
+
+
+
+
+
+
+
+
+
+
+

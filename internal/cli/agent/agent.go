@@ -10,9 +10,9 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/platform-engineering-labs/formae/internal/agent"
+	"github.com/platform-engineering-labs/formae/internal/cli/banner"
 	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
 	"github.com/platform-engineering-labs/formae/internal/cli/config"
-	"github.com/platform-engineering-labs/formae/internal/cli/display"
 	"github.com/platform-engineering-labs/formae/internal/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
@@ -59,7 +59,7 @@ func startCmd() *cobra.Command {
 			a.Wait()
 		},
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
-			display.PrintBanner()
+			banner.PrintBanner()
 		},
 		SilenceErrors: true,
 	}
@@ -81,7 +81,7 @@ func stopCmd() *cobra.Command {
 			}
 		},
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
-			display.PrintBanner()
+			banner.PrintBanner()
 		},
 		SilenceErrors: true,
 	}

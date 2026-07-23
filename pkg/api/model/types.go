@@ -35,6 +35,8 @@ type ListCommandStatusResponse struct {
 type Command struct {
 	CommandID       string           `json:"CommandId"`
 	Command         string           `json:"Command"`
+	Mode            string           `json:"Mode,omitempty"` // "reconcile" | "patch"
+	Source          string           `json:"Source,omitempty"`
 	State           string           `json:"State"`
 	StartTs         time.Time        `json:"StartTs,omitempty"`
 	EndTs           time.Time        `json:"EndTs,omitempty"`
@@ -66,6 +68,9 @@ type CancelResourceState struct {
 	// progress entry). These are the resources whose cloud-side state may be
 	// orphaned and need manual verification.
 	ForceCanceled bool `json:"ForceCanceled,omitempty"`
+	// CommandID attributes this update to the canceled command it belongs to;
+	// the ResourceUpdateStates map is flat across all canceled commands.
+	CommandID string `json:"CommandId,omitempty"`
 }
 
 type ResourceUpdate struct {

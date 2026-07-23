@@ -1,0 +1,39 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+/// RFC-105 target shape: extends + pure-schema typed properties.
+extends "@formae/forma.pkl"
+
+import "@formae/formae.pkl"
+import "@fakeaws/fakeaws.pkl"
+import "@fakeaws/sqs/queue.pkl"
+
+properties: Props
+
+class Props {
+  /// The name to deploy
+  name: String = "pel"
+
+  /// Port to listen on
+  port: Int(this > 0) = 8080
+}
+
+forma {
+  new formae.Stack {
+    label = "\(properties.name)-stack"
+    description = "stack for \(properties.name)"
+  }
+
+  new formae.Target {
+    label = "default-target"
+    config = new fakeaws.Config { region = "us-east-1" }
+  }
+
+  new queue.Queue {
+    label = "q"
+    queueName = "\(properties.name)-\(properties.port)-queue"
+  }
+}

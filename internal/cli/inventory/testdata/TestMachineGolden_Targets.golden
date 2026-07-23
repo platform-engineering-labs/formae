@@ -1,0 +1,1 @@
+[{"Label":"aws-us-east-1","Namespace":"AWS","Discoverable":true,"Version":2},{"Label":"aws-eu-west-1","Namespace":"AWS","Discoverable":false,"Version":1},{"Label":"tailscale-main","Namespace":"tailscale","Discoverable":false,"Version":1}]

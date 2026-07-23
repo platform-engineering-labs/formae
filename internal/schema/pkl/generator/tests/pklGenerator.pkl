@@ -28,7 +28,7 @@ facts {
 
     ["SQS Queue - generates forma block with stacks and targets"] {
         let (result = generator.generateFormaFile(sqsJson))
-        result.contains("amends \"@formae/forma.pkl\"") &&
+        result.contains("extends \"@formae/forma.pkl\"") &&
         result.contains("import \"@formae/formae.pkl\"") &&
         result.contains("formae.Stack") &&
         result.contains("label = \"queue-stack\"") &&

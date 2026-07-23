@@ -8,8 +8,10 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/platform-engineering-labs/formae/internal/cli/banner"
 	"github.com/platform-engineering-labs/formae/internal/cli/printer"
 	"github.com/platform-engineering-labs/formae/internal/cli/profile/store"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/spf13/cobra"
 )
 
@@ -46,11 +48,11 @@ func newCurrentCmd() *cobra.Command {
 				return p.Print(&out)
 			}
 
-			if active == "" {
-				_, _ = fmt.Fprintln(cc.OutOrStdout(), "no active profile yet")
-				return nil
-			}
-			_, _ = fmt.Fprintln(cc.OutOrStdout(), active)
+			banner.PrintBanner()
+			w := cc.OutOrStdout()
+			th := theme.New("formae")
+			tty := isTerminal(w)
+			_, _ = fmt.Fprintln(w, renderCurrentHuman(th, active, tty))
 			return nil
 		},
 	}

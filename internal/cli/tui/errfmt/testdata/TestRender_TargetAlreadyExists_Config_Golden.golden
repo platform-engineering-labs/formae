@@ -1,0 +1,21 @@
+[38;2;248;113;113mtarget 'aws-prod' already exists with different configuration.[0m
+[38;2;248;113;113m[0m                                                              
+[38;2;248;113;113m[0m                                                                Existing target configuration:
+
+    Existing target configuration
+      account:
+        111111111111
+      region:
+        us-east-1
+
+  Provided target configuration:
+
+    Forma target configuration
+      account:
+        222222222222
+      region:
+        eu-west-1
+
+[38;2;181;181;91mPlease either:[0m
+[38;2;181;181;91m[0m                - Use a different target label in your forma file
+  - Update your forma file configuration to match the existing target

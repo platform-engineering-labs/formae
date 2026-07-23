@@ -63,10 +63,13 @@ func (e FormaReconcileRejectedError) Error() string {
 }
 
 type ResourceModification struct {
-	Stack     string `json:"Stack"`
-	Type      string `json:"Type"`
-	Label     string `json:"Label"`
-	Operation string `json:"Operation"`
+	Stack         string          `json:"Stack"`
+	Type          string          `json:"Type"`
+	Label         string          `json:"Label"`
+	Operation     string          `json:"Operation"`
+	PatchDocument json.RawMessage `json:"PatchDocument,omitempty"` // JSON-patch diff between OldProperties and Properties — update ops only
+	Properties    json.RawMessage `json:"Properties,omitempty"`    // current (cloud) properties — update ops only
+	OldProperties json.RawMessage `json:"OldProperties,omitempty"` // properties at last reconcile — update ops only
 }
 
 type ModifiedStack struct {

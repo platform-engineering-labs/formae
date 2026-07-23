@@ -12,30 +12,35 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/platform-engineering-labs/formae"
 	"github.com/platform-engineering-labs/formae/internal/cli/agent"
 	"github.com/platform-engineering-labs/formae/internal/cli/apply"
+	"github.com/platform-engineering-labs/formae/internal/cli/banner"
 	"github.com/platform-engineering-labs/formae/internal/cli/cancel"
 	"github.com/platform-engineering-labs/formae/internal/cli/clean"
 	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
 	"github.com/platform-engineering-labs/formae/internal/cli/config"
 	"github.com/platform-engineering-labs/formae/internal/cli/destroy"
 	"github.com/platform-engineering-labs/formae/internal/cli/dev"
-	"github.com/platform-engineering-labs/formae/internal/cli/display"
 	"github.com/platform-engineering-labs/formae/internal/cli/eval"
 	"github.com/platform-engineering-labs/formae/internal/cli/extract"
 	"github.com/platform-engineering-labs/formae/internal/cli/inventory"
 	"github.com/platform-engineering-labs/formae/internal/cli/plugin"
 	"github.com/platform-engineering-labs/formae/internal/cli/profile"
 	"github.com/platform-engineering-labs/formae/internal/cli/project"
+	"github.com/platform-engineering-labs/formae/internal/cli/refresh"
 	"github.com/platform-engineering-labs/formae/internal/cli/status"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/logo"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/platform-engineering-labs/formae/internal/cli/update"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
 
 func longDescription() string {
-	return display.Tool + ": " + display.Green("A modern infrastructure as code tool that platform engineers deserve")
+	th := theme.New("formae")
+	return banner.Tool + ": " + lipgloss.NewStyle().Foreground(th.Palette.Done).Render("A modern infrastructure as code tool that platform engineers deserve")
 }
 
 // setSilenceUsageRecursive sets SilenceUsage on a command and all its subcommands.
@@ -48,8 +53,8 @@ func setSilenceUsageRecursive(cmd *cobra.Command) {
 }
 
 var rootCmd = &cobra.Command{
-	Use:     display.Tool,
-	Short:   display.Tool + " CLI",
+	Use:     banner.Tool,
+	Short:   banner.Tool + " CLI",
 	Long:    longDescription(),
 	Version: formae.Version,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
@@ -70,7 +75,7 @@ func init() {
 	hp := rootCmd.HelpFunc()
 	longestFlagName := 0
 	rootCmd.SetHelpFunc(func(cmd *cobra.Command, args []string) {
-		display.PrintBanner()
+		banner.PrintBanner()
 		hp(cmd, args)
 	})
 
@@ -110,7 +115,10 @@ func init() {
 		cmdName := cmd.Name()
 		replaced := strings.ReplaceAll(examples, "{{.Name}}", cliName)
 		replaced = strings.ReplaceAll(replaced, "{{.Command}}", cmdName)
-		parts := strings.Split(replaced, "|")
+		// Split on either pipe or newline so both separator conventions render
+		// one example per line, each aligned under the first (which the usage
+		// template already indents by two spaces).
+		parts := strings.FieldsFunc(replaced, func(r rune) bool { return r == '|' || r == '\n' })
 		for i, p := range parts {
 			parts[i] = strings.TrimSpace(p)
 		}
@@ -165,7 +173,8 @@ func init() {
 				flag.DefValue != "[]" &&
 				flag.Name != "help" &&
 				flag.Name != "version" {
-				s += display.Grey(fmt.Sprintf(" [default: %q]", flag.DefValue))
+				th := theme.New("formae")
+				s += lipgloss.NewStyle().Foreground(th.Palette.TextSubtle).Render(fmt.Sprintf(" [default: %q]", flag.DefValue))
 			}
 
 			usage = append(usage, s)
@@ -191,9 +200,11 @@ func init() {
 			s = fmt.Sprintf("%-*s%s", longestFlagName, s, flag.Usage)
 
 			if _, ok := flag.Annotations["cobra_annotation_bash_completion_one_required_flag"]; ok {
-				s += display.Gold(" [required]")
+				th := theme.New("formae")
+				s += lipgloss.NewStyle().Foreground(th.Palette.TextSubtle).Render(" [required]")
 			} else if flag.DefValue != "" {
-				s += display.Grey(fmt.Sprintf(" [default: %q]", flag.DefValue))
+				th := theme.New("formae")
+				s += lipgloss.NewStyle().Foreground(th.Palette.TextSubtle).Render(fmt.Sprintf(" [default: %q]", flag.DefValue))
 			}
 
 			usage = append(usage, s)
@@ -227,6 +238,7 @@ func init() {
 	rootCmd.AddCommand(status.StatusCmd())
 	rootCmd.AddCommand(extract.ExtractCmd())
 	rootCmd.AddCommand(update.UpdateCmd())
+	rootCmd.AddCommand(refresh.RefreshCmd())
 	rootCmd.AddCommand(inventory.InventoryCmd())
 
 	if !strings.HasSuffix(os.Args[0], "formae") {
@@ -246,44 +258,40 @@ func init() {
 }
 
 func Start() {
+	// Seed lipgloss's global background ONCE so AdaptiveColor resolves
+	// consistently without a per-render OSC-11 query. That query is flaky (it
+	// mis-detects as light after the banner's graphics probe, turning body text
+	// unreadable on dark backgrounds) and leaks escape codes into the shell.
+	// COLORFGBG when the terminal exports it, otherwise assume dark.
+	lipgloss.SetHasDarkBackground(logo.HasDarkBackground())
+
 	err := config.Config.EnsureConfigDirectory()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, display.Red("Error: "+err.Error()))
+		fmt.Fprintln(os.Stderr, lipgloss.NewStyle().Foreground(theme.New("formae").Palette.Error).Render("Error: "+err.Error()))
 		os.Exit(1)
 	}
 
 	err = config.Config.EnsureDataDirectory()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, display.Red("Error: "+err.Error()))
+		fmt.Fprintln(os.Stderr, lipgloss.NewStyle().Foreground(theme.New("formae").Palette.Error).Render("Error: "+err.Error()))
 		os.Exit(1)
 	}
 
 	rootCommand, err := cmd.InitCommandWithContext(rootCmd)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, display.Red("Error: "+err.Error()))
+		fmt.Fprintln(os.Stderr, lipgloss.NewStyle().Foreground(theme.New("formae").Palette.Error).Render("Error: "+err.Error()))
 		os.Exit(1)
 	}
 
 	if err := rootCommand.Execute(); err != nil {
-		// Check if this is a FlagError (validation/usage error).
-		// In this case, show usage information to help the user.
-		var flagError *cmd.FlagError
-		if errors.As(err, &flagError) {
-			fmt.Fprintln(os.Stderr, display.Red("Error: "+err.Error()))
-			fmt.Println()
-			// Find the command that failed and print its usage
-			if activeCmd, _, findErr := rootCommand.Find(os.Args[1:]); findErr == nil && activeCmd != nil {
-				fmt.Println(activeCmd.UsageString())
-			}
-			os.Exit(1)
-		}
+		errStyle := lipgloss.NewStyle().Foreground(theme.New("formae").Palette.Error)
 
-		// For unknown command errors, show the parent command's usage
-		// to help the user find the correct command.
-		if strings.HasPrefix(err.Error(), "unknown command") {
-			fmt.Fprintln(os.Stderr, display.Red("Error: "+err.Error()))
+		// Usage errors (bad flag, bad args, unknown command) get the offending
+		// command's usage printed after the error so the user can self-correct.
+		// Runtime errors just print the error.
+		if isUsageError(err) {
+			fmt.Fprintln(os.Stderr, errStyle.Render("Error: "+err.Error()))
 			fmt.Println()
-			// Find the parent command and show its usage
 			if activeCmd, _, findErr := rootCommand.Find(os.Args[1:]); findErr == nil && activeCmd != nil {
 				fmt.Println(activeCmd.UsageString())
 			} else {
@@ -292,8 +300,36 @@ func Start() {
 			os.Exit(1)
 		}
 
-		// For other errors (runtime errors), just print the error.
-		fmt.Fprintln(os.Stderr, display.Red("Error: "+err.Error()))
+		fmt.Fprintln(os.Stderr, errStyle.Render("Error: "+err.Error()))
 		os.Exit(1)
 	}
+}
+
+// isUsageError reports whether err is a CLI-usage error — a bad flag, bad
+// arguments, or an unknown command/subcommand — for which we print command
+// usage, as opposed to a runtime error. It recognises both our own FlagError
+// and Cobra's native flag/arg/command parse errors.
+func isUsageError(err error) bool {
+	var flagError *cmd.FlagError
+	if errors.As(err, &flagError) {
+		return true
+	}
+	msg := err.Error()
+	for _, marker := range []string{
+		"unknown command",
+		"unknown flag:",
+		"unknown shorthand flag:",
+		"flag needs an argument:",
+		"invalid argument \"",
+		"required flag(s)",
+		"accepts ",         // cobra ExactArgs/RangeArgs: "accepts 1 arg(s), received 2"
+		"arg(s), received", // cobra MinimumNArgs/MaximumNArgs
+		"requires at least",
+		"requires exactly",
+	} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
 }

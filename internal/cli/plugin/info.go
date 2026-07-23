@@ -31,9 +31,8 @@ func PluginInfoCmd() *cobra.Command {
 		Long: `Show the description, version, and metadata for a single
 plugin from the configured plugin repositories.
 
-On a stock install the plugin store lives at a path that only root can
-write to, so this command may prompt for sudo to refresh the
-repository metadata.`,
+This reads the locally cached package index without sudo; the data may
+be stale until you run 'formae refresh'.`,
 		Annotations: map[string]string{
 			"args": "<name>",
 		},
@@ -89,6 +88,7 @@ func validateInfoOptions(opts *InfoOptions) error {
 }
 
 func runInfoForHumans(app *app.App, opts *InfoOptions) error {
+	app.PrintBanner()
 	plugin, err := fetchPluginInfo(app, opts)
 	if err != nil {
 		return err
@@ -96,7 +96,7 @@ func runInfoForHumans(app *app.App, opts *InfoOptions) error {
 	if plugin == nil {
 		return fmt.Errorf("plugin '%s' not found", opts.Name)
 	}
-	fmt.Print(renderPluginInfo(plugin))
+	fmt.Print(renderPluginInfo(themeFor(app), plugin))
 	return nil
 }
 
@@ -114,7 +114,7 @@ func runInfoForMachines(app *app.App, opts *InfoOptions) error {
 }
 
 func fetchPluginInfo(app *app.App, opts *InfoOptions) (*apimodel.Plugin, error) {
-	mgr, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, opts.Channel)
+	mgr, err := NewCLIPluginManager(slog.Default(), app.Config.Artifacts.Repositories, opts.Channel, false, false)
 	if err != nil {
 		return nil, err
 	}

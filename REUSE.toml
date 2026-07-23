@@ -20,13 +20,19 @@ SPDX-License-Identifier = "FSL-1.1-ALv2"
 
 # Binary and generated test files
 [[annotations]]
-path = ["**/*.zip", "**/*.pcf", "**/*.log", "**/*.txt"]
+path = ["**/*.zip", "**/*.pcf", "**/*.log", "**/*.txt", "**/testdata/*.golden"]
 SPDX-FileCopyrightText = "© 2025 Platform Engineering Labs Inc."
 SPDX-License-Identifier = "FSL-1.1-ALv2"
 
 # Dockerfile
 [[annotations]]
 path = ["**/Dockerfile*"]
+SPDX-FileCopyrightText = "© 2025 Platform Engineering Labs Inc."
+SPDX-License-Identifier = "FSL-1.1-ALv2"
+
+# Image assets (binary; cannot carry inline SPDX headers)
+[[annotations]]
+path = ["**/*.png", "**/*.jpg", "**/*.jpeg", "**/*.gif", "**/*.svg", "**/*.ico"]
 SPDX-FileCopyrightText = "© 2025 Platform Engineering Labs Inc."
 SPDX-License-Identifier = "FSL-1.1-ALv2"
 
