@@ -212,7 +212,7 @@ func TestComputeValueHash_ComplexString(t *testing.T) {
 	assert.Regexp(t, "^[a-f0-9]+$", result)
 }
 
-func TestPersistValueTransformer_SkipsAlreadyHashedValues(t *testing.T) {
+func TestPersistValueTransformer_HashesHexShapedValueWithoutMarker(t *testing.T) {
 	transformer := NewPersistValueTransformer()
 
 	knownHash := "5c76fcf4400da3b4804d70b91af20703d483f2c5860cc2f8d59592a1da8d2121"
@@ -232,9 +232,77 @@ func TestPersistValueTransformer_SkipsAlreadyHashedValues(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
+	// Guards the false-positive fix: a $value that merely looks like a 64-hex
+	// hash but carries no $hashed marker is treated as plaintext and hashed,
+	// not trusted by shape alone.
 	parsed := gjson.Parse(string(result.Properties))
-	resultHash := parsed.Get("MasterUserPassword.$value").String()
+	masterUserPassword := parsed.Get("MasterUserPassword")
+	resultHash := masterUserPassword.Get("$value").String()
 
-	assert.Equal(t, knownHash, resultHash)
+	assert.NotEqual(t, knownHash, resultHash)
 	assert.Len(t, resultHash, 64)
+	assert.True(t, masterUserPassword.Get("$hashed").Bool())
+}
+
+func schemaWithOpaque(field string) pkgmodel.Schema {
+	return pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{field: {Opaque: true}}}
+}
+
+func TestApplyToResource_HashesBareStringAtSchemaOpaquePath(t *testing.T) {
+	r := &pkgmodel.Resource{
+		Schema:     schemaWithOpaque("SecretString"),
+		Properties: json.RawMessage(`{"Name":"n","SecretString":"super-secret-password"}`),
+	}
+	out, err := NewPersistValueTransformer().ApplyToResource(r)
+	require.NoError(t, err)
+
+	var props map[string]any
+	require.NoError(t, json.Unmarshal(out.Properties, &props))
+	assert.Equal(t, "n", props["Name"], "non-secret field untouched")
+
+	sv := props["SecretString"].(map[string]any)
+	assert.Equal(t, "Opaque", sv["$visibility"])
+	assert.Equal(t, true, sv["$hashed"])
+	assert.Len(t, sv["$value"].(string), 64)
+	assert.NotEqual(t, "super-secret-password", sv["$value"])
+}
+
+func TestApplyToResource_HashesEnvelopedOpaque(t *testing.T) {
+	r := &pkgmodel.Resource{
+		Schema:     pkgmodel.Schema{},
+		Properties: json.RawMessage(`{"SecretString":{"$value":"s","$visibility":"Opaque","$strategy":"Update"}}`),
+	}
+	out, err := NewPersistValueTransformer().ApplyToResource(r)
+	require.NoError(t, err)
+	var props map[string]any
+	require.NoError(t, json.Unmarshal(out.Properties, &props))
+	sv := props["SecretString"].(map[string]any)
+	assert.Equal(t, true, sv["$hashed"])
+	assert.Len(t, sv["$value"].(string), 64)
+}
+
+func TestApplyToResource_IdempotentAndSkipsClear(t *testing.T) {
+	r := &pkgmodel.Resource{
+		Schema:     schemaWithOpaque("SecretString"),
+		Properties: json.RawMessage(`{"Public":"64charsofhexbutclear0000000000000000000000000000000000000000","SecretString":{"$value":"abc","$visibility":"Opaque","$hashed":true}}`),
+	}
+	out, err := NewPersistValueTransformer().ApplyToResource(r)
+	require.NoError(t, err)
+	var props map[string]any
+	require.NoError(t, json.Unmarshal(out.Properties, &props))
+	assert.Equal(t, "64charsofhexbutclear0000000000000000000000000000000000000000", props["Public"], "clear 64-hex not hashed")
+	assert.Equal(t, "abc", props["SecretString"].(map[string]any)["$value"], "already-hashed left as-is")
+}
+
+func TestApplyToResource_HashesTopLevelScalarPatchOpValue(t *testing.T) {
+	r := &pkgmodel.Resource{
+		Schema:        schemaWithOpaque("SecretString"),
+		PatchDocument: json.RawMessage(`[{"op":"replace","path":"/SecretString","value":"super-secret-password"}]`),
+	}
+	out, err := NewPersistValueTransformer().ApplyToResource(r)
+	require.NoError(t, err)
+	var ops []map[string]any
+	require.NoError(t, json.Unmarshal(out.PatchDocument, &ops))
+	assert.NotEqual(t, "super-secret-password", ops[0]["value"])
+	assert.Len(t, ops[0]["value"].(string), 64)
 }
