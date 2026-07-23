@@ -33,6 +33,14 @@ type Palette struct {
 	Done       lipgloss.AdaptiveColor // bright white
 	InProgress lipgloss.AdaptiveColor // dim/medium white
 	Pending    lipgloss.AdaptiveColor // dark gray
+
+	// Per-operation colors (rendered by simview/driftview in Plan 2).
+	OpCreate  lipgloss.AdaptiveColor
+	OpUpdate  lipgloss.AdaptiveColor
+	OpDelete  lipgloss.AdaptiveColor
+	OpReplace lipgloss.AdaptiveColor
+	OpDetach  lipgloss.AdaptiveColor
+	OpKeep    lipgloss.AdaptiveColor
 }
 
 // FormaePalette returns the new formae color palette.

@@ -4,11 +4,16 @@
 
 package theme
 
-// Theme holds the active color palette and derived lipgloss styles.
+// Theme holds the active color palette, derived lipgloss styles, and the
+// glyph/progress/spinner/behavior planes loaded from a theme file.
 type Theme struct {
-	Name    string
-	Palette Palette
-	Styles  Styles
+	Name            string
+	Palette         Palette
+	Styles          Styles
+	Glyphs          Glyphs
+	Progress        Progress
+	Spinner         Spinner
+	ConfirmationBar ConfirmationBar
 }
 
 // New creates a Theme from a theme name ("formae" or "classic").
