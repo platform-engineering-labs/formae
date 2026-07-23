@@ -428,13 +428,13 @@ func (d *DatastoreMSSQL) GetUnreachableTargets() ([]*pkgmodel.Target, error) {
 // Datastore interface for the contract. SQL Server compares the native
 // datetime2 grace columns directly, extracts JSON references with JSON_VALUE /
 // OPENJSON, and forces byte-order comparison of KSUID resource versions.
-func (d *DatastoreMSSQL) PersistTargetReap(req datastore.PersistTargetReapRequest) (bool, error) {
+func (d *DatastoreMSSQL) PersistTargetReap(req datastore.PersistTargetReapRequest) (bool, []string, error) {
 	ctx, span := mssqlTracer.Start(context.Background(), "PersistTargetReap")
 	defer span.End()
 
 	tx, err := d.conn.BeginTx(ctx, nil)
 	if err != nil {
-		return false, fmt.Errorf("begin reap tx: %w", err)
+		return false, nil, fmt.Errorf("begin reap tx: %w", err)
 	}
 	committed := false
 	defer func() {
@@ -457,14 +457,14 @@ func (d *DatastoreMSSQL) PersistTargetReap(req datastore.PersistTargetReapReques
 		  AND last_sample_at <= @p4`,
 		req.Label, req.IncarnationID, req.LastSeenBefore.UTC(), req.LastSampleBefore.UTC())
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	n, err := casRes.RowsAffected()
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	if n != 1 {
-		return false, nil
+		return false, nil, nil
 	}
 
 	var accumSeconds int64
@@ -473,7 +473,7 @@ func (d *DatastoreMSSQL) PersistTargetReap(req datastore.PersistTargetReapReques
 		 WHERE label = @p1 AND version = (SELECT MAX(version) FROM targets WHERE label = @p1)`,
 		req.Label,
 	).Scan(&accumSeconds); err != nil {
-		return false, err
+		return false, nil, err
 	}
 
 	// 2. Active-command assertion. OPENJSON only runs on values that are JSON
@@ -503,10 +503,42 @@ func (d *DatastoreMSSQL) PersistTargetReap(req datastore.PersistTargetReapReques
 		      )
 		  )
 		THEN 1 ELSE 0 END`, req.Label).Scan(&active); err != nil {
-		return false, err
+		return false, nil, err
 	}
 	if active == 1 {
-		return false, nil
+		return false, nil, nil
+	}
+
+	// Collect the distinct stacks whose live resources this reap tombstones, so
+	// the caller can clean up any stack the reap empties. The predicate matches
+	// the tombstone UPDATE below exactly. Rows must be fully read and closed
+	// before the next statement runs on this transaction.
+	reapedStacks, err := func() ([]string, error) {
+		rows, qErr := tx.QueryContext(ctx, fmt.Sprintf(`
+			SELECT DISTINCT stack FROM resources
+			WHERE target = @p1
+			  AND operation <> 'delete' AND operation <> 'reaped'
+			  AND NOT EXISTS (
+			    SELECT 1 FROM resources r2
+			    WHERE r2.uri = resources.uri
+			    AND r2.version %[1]s > resources.version %[1]s
+			  )`, binColl), req.Label)
+		if qErr != nil {
+			return nil, qErr
+		}
+		defer func() { _ = rows.Close() }()
+		var stacks []string
+		for rows.Next() {
+			var stack string
+			if sErr := rows.Scan(&stack); sErr != nil {
+				return nil, sErr
+			}
+			stacks = append(stacks, stack)
+		}
+		return stacks, rows.Err()
+	}()
+	if err != nil {
+		return false, nil, err
 	}
 
 	// 3. Tombstone every current-row resource on this target.
@@ -520,11 +552,11 @@ func (d *DatastoreMSSQL) PersistTargetReap(req datastore.PersistTargetReapReques
 		    AND r2.version %[1]s > resources.version %[1]s
 		  )`, binColl), req.Label)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	resourceCount, err := tombRes.RowsAffected()
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 
 	// 4. Insert the UNIQUE audit row.
@@ -533,14 +565,14 @@ func (d *DatastoreMSSQL) PersistTargetReap(req datastore.PersistTargetReapReques
 		 VALUES (@p1, @p2, @p3, @p4, @p5)`,
 		req.IncarnationID, req.Label, req.ReapedAt.UTC(), accumSeconds, resourceCount,
 	); err != nil {
-		return false, err
+		return false, nil, err
 	}
 
 	if err = tx.Commit(); err != nil {
-		return false, err
+		return false, nil, err
 	}
 	committed = true
-	return true, nil
+	return true, reapedStacks, nil
 }
 
 func (d *DatastoreMSSQL) LoadTarget(label string) (*pkgmodel.Target, error) {

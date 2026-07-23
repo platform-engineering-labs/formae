@@ -59,7 +59,10 @@ type PersistTargetReap struct {
 }
 
 // PersistTargetReapResult is the reply to a PersistTargetReap call. Reaped is
-// true only when the reap transaction committed.
+// true only when the reap transaction committed. ReapedStackLabels holds the
+// distinct stacks whose live resources the reap tombstoned; the persister uses
+// them to clean up any stack the reap empties.
 type PersistTargetReapResult struct {
-	Reaped bool
+	Reaped            bool
+	ReapedStackLabels []string
 }

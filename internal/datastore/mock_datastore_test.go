@@ -111,8 +111,8 @@ func (m *mockDatastore) AdvanceTargetAccrual(_, _ string, _ time.Time, _ int64) 
 	return false, nil
 }
 func (m *mockDatastore) GetUnreachableTargets() ([]*pkgmodel.Target, error) { return nil, nil }
-func (m *mockDatastore) PersistTargetReap(_ PersistTargetReapRequest) (bool, error) {
-	return false, nil
+func (m *mockDatastore) PersistTargetReap(_ PersistTargetReapRequest) (bool, []string, error) {
+	return false, nil, nil
 }
 func (m *mockDatastore) CheckTargetsReaped(_ []string) ([]string, error) { return nil, nil }
 func (m *mockDatastore) Stats() (*stats.Stats, error)                    { return nil, nil }

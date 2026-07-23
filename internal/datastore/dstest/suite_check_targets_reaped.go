@@ -30,7 +30,7 @@ func RunCheckTargetsReaped(t *testing.T, newDS func(t *testing.T) TestDatastore)
 		// A reaped target.
 		reapedLabel := "check-reaped-target"
 		inc, cutoff := seedReapReadyTarget(t, ds, reapedLabel, 100)
-		reaped, err := ds.PersistTargetReap(datastore.PersistTargetReapRequest{
+		reaped, _, err := ds.PersistTargetReap(datastore.PersistTargetReapRequest{
 			Label:            reapedLabel,
 			IncarnationID:    inc,
 			LastSeenBefore:   cutoff,

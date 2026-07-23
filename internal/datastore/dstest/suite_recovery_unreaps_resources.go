@@ -41,7 +41,7 @@ func RunUpdateTargetUnreapsResourcesOnRecovery(t *testing.T, newDS func(t *testi
 		require.NoError(t, err)
 		uri := string(res.URI())
 
-		reaped, err := ds.PersistTargetReap(datastore.PersistTargetReapRequest{
+		reaped, _, err := ds.PersistTargetReap(datastore.PersistTargetReapRequest{
 			Label:            label,
 			IncarnationID:    inc,
 			LastSeenBefore:   cutoff,

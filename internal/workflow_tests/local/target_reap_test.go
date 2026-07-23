@@ -75,7 +75,7 @@ func reapTargetForTest(t *testing.T, ds datastore.Datastore, label string) {
 	require.True(t, applied, "accrual advance must apply for target %s", label)
 
 	cutoff := time.Now().UTC().Add(2 * time.Hour)
-	reaped, err := ds.PersistTargetReap(datastore.PersistTargetReapRequest{
+	reaped, _, err := ds.PersistTargetReap(datastore.PersistTargetReapRequest{
 		Label:            label,
 		IncarnationID:    inc,
 		LastSeenBefore:   cutoff,

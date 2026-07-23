@@ -3126,13 +3126,13 @@ func (d DatastoreSQLite) CheckTargetsReaped(labels []string) ([]string, error) {
 // Datastore interface for the contract. SQLite compares the text-stored grace
 // timestamps via julianday() (mirroring UpdateTargetHealth) so fractional-second
 // formatting can't skew the comparison.
-func (d DatastoreSQLite) PersistTargetReap(req datastore.PersistTargetReapRequest) (bool, error) {
+func (d DatastoreSQLite) PersistTargetReap(req datastore.PersistTargetReapRequest) (bool, []string, error) {
 	_, span := sqliteTracer.Start(context.Background(), "PersistTargetReap")
 	defer span.End()
 
 	tx, err := d.conn.Begin()
 	if err != nil {
-		return false, fmt.Errorf("failed to begin transaction: %w", err)
+		return false, nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	committed := false
 	defer func() {
@@ -3159,15 +3159,15 @@ func (d DatastoreSQLite) PersistTargetReap(req datastore.PersistTargetReapReques
 		  AND julianday(last_sample_at) <= julianday(?)`
 	casRes, err := tx.Exec(casQuery, req.Label, req.Label, req.IncarnationID, lastSeenBefore, lastSampleBefore)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	n, err := casRes.RowsAffected()
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	if n != 1 {
 		// Not eligible, stale, or already reaped: reap nothing.
-		return false, nil
+		return false, nil, nil
 	}
 
 	// Read the accrued seconds for the audit row.
@@ -3177,7 +3177,7 @@ func (d DatastoreSQLite) PersistTargetReap(req datastore.PersistTargetReapReques
 		 WHERE label = ? AND version = (SELECT MAX(version) FROM targets WHERE label = ?)`,
 		req.Label, req.Label,
 	).Scan(&accumSeconds); err != nil {
-		return false, err
+		return false, nil, err
 	}
 
 	// 2. Active-command assertion: no incomplete (non-sync) forma_command may
@@ -3203,11 +3203,42 @@ func (d DatastoreSQLite) PersistTargetReap(req datastore.PersistTargetReapReques
 		        WHERE json_extract(je.value, '$.Target.Label') = ?
 		      )
 		  )`, req.Label, req.Label).Scan(&active); err != nil {
-		return false, err
+		return false, nil, err
 	}
 	if active {
 		// An in-flight command owns this target; abandon the reap.
-		return false, nil
+		return false, nil, nil
+	}
+
+	// Collect the distinct stacks whose live resources this reap tombstones, so
+	// the caller can clean up any stack the reap empties. The predicate matches
+	// the tombstone UPDATE below exactly. Rows must be fully read and closed
+	// before the next statement runs on this single-connection transaction.
+	reapedStacks, err := func() ([]string, error) {
+		rows, qErr := tx.Query(`
+			SELECT DISTINCT stack FROM resources
+			WHERE target = ?
+			  AND operation != ? AND operation != 'reaped'
+			  AND NOT EXISTS (
+			    SELECT 1 FROM resources r2
+			    WHERE r2.uri = resources.uri AND r2.version > resources.version
+			  )`, req.Label, resource_update.OperationDelete)
+		if qErr != nil {
+			return nil, qErr
+		}
+		defer closeRows(rows)
+		var stacks []string
+		for rows.Next() {
+			var stack string
+			if sErr := rows.Scan(&stack); sErr != nil {
+				return nil, sErr
+			}
+			stacks = append(stacks, stack)
+		}
+		return stacks, rows.Err()
+	}()
+	if err != nil {
+		return false, nil, err
 	}
 
 	// 3. Tombstone every current-row resource on this target (skipping rows that
@@ -3221,11 +3252,11 @@ func (d DatastoreSQLite) PersistTargetReap(req datastore.PersistTargetReapReques
 		    WHERE r2.uri = resources.uri AND r2.version > resources.version
 		  )`, req.Label, resource_update.OperationDelete)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	resourceCount, err := tombRes.RowsAffected()
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 
 	// 4. Insert the UNIQUE audit row.
@@ -3234,14 +3265,14 @@ func (d DatastoreSQLite) PersistTargetReap(req datastore.PersistTargetReapReques
 		 VALUES (?, ?, ?, ?, ?)`,
 		req.IncarnationID, req.Label, req.ReapedAt.UTC().Format(time.RFC3339Nano), accumSeconds, resourceCount,
 	); err != nil {
-		return false, err
+		return false, nil, err
 	}
 
 	if err = tx.Commit(); err != nil {
-		return false, err
+		return false, nil, err
 	}
 	committed = true
-	return true, nil
+	return true, reapedStacks, nil
 }
 
 // scanSQLiteTargetHealth reads the health columns from a scan result and returns

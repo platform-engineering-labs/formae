@@ -196,7 +196,7 @@ func TestUpdateTarget_RecoveryUnreapIsAtomic(t *testing.T) {
 	require.NoError(t, err)
 	uri := string(res.URI())
 
-	reaped, err := ds.PersistTargetReap(datastore.PersistTargetReapRequest{
+	reaped, _, err := ds.PersistTargetReap(datastore.PersistTargetReapRequest{
 		Label:            label,
 		IncarnationID:    inc,
 		LastSeenBefore:   time.Now().UTC(),

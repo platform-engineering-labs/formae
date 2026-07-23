@@ -256,7 +256,7 @@ func (m *mockExtractDatastore) GetUnreachableTargets() ([]*pkgmodel.Target, erro
 	panic("not implemented")
 }
 
-func (m *mockExtractDatastore) PersistTargetReap(_ datastore.PersistTargetReapRequest) (bool, error) {
+func (m *mockExtractDatastore) PersistTargetReap(_ datastore.PersistTargetReapRequest) (bool, []string, error) {
 	panic("not implemented")
 }
 

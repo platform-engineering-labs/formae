@@ -298,7 +298,10 @@ type Datastore interface {
 	// Returns reaped=true only when the reap committed; a rejected CAS or a
 	// failed assertion rolls back and returns reaped=false with no error.
 	// Idempotent: a second call for an already-reaped incarnation reaps nothing.
-	PersistTargetReap(req PersistTargetReapRequest) (reaped bool, err error)
+	// reapedStacks holds the distinct stack labels whose live resources this
+	// reap tombstoned, so the caller can clean up any stack the reap empties; it
+	// is nil/empty when nothing committed.
+	PersistTargetReap(req PersistTargetReapRequest) (reaped bool, reapedStacks []string, err error)
 	// CheckTargetsReaped inspects the current (max-version) row of each target in
 	// labels and returns the subset whose health_state is 'reaped'. Labels with no
 	// target row, or whose current row is any other health state, are omitted.

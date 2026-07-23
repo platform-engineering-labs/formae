@@ -137,7 +137,7 @@ func RunPersistTargetReapHappyPath(t *testing.T, newDS func(t *testing.T) TestDa
 		require.NoError(t, err)
 		require.Len(t, live, n)
 
-		reaped, err := ds.PersistTargetReap(datastore.PersistTargetReapRequest{
+		reaped, _, err := ds.PersistTargetReap(datastore.PersistTargetReapRequest{
 			Label:            label,
 			IncarnationID:    inc,
 			LastSeenBefore:   cutoff,
@@ -205,7 +205,7 @@ func RunPersistTargetReapGuards(t *testing.T, newDS func(t *testing.T) TestDatas
 		require.NoError(t, err)
 		require.True(t, applied)
 
-		reaped, err := ds.PersistTargetReap(datastore.PersistTargetReapRequest{
+		reaped, _, err := ds.PersistTargetReap(datastore.PersistTargetReapRequest{
 			Label:            label,
 			IncarnationID:    inc,
 			LastSeenBefore:   cutoff,
@@ -239,7 +239,7 @@ func RunPersistTargetReapGuards(t *testing.T, newDS func(t *testing.T) TestDatas
 		})
 		require.NoError(t, err)
 
-		reaped, err := ds.PersistTargetReap(datastore.PersistTargetReapRequest{
+		reaped, _, err := ds.PersistTargetReap(datastore.PersistTargetReapRequest{
 			Label:            labelNever,
 			IncarnationID:    incNever,
 			LastSeenBefore:   cutoffNever,
@@ -265,7 +265,7 @@ func RunPersistTargetReapGuards(t *testing.T, newDS func(t *testing.T) TestDatas
 		})
 		require.NoError(t, err)
 
-		reaped, err = ds.PersistTargetReap(datastore.PersistTargetReapRequest{
+		reaped, _, err = ds.PersistTargetReap(datastore.PersistTargetReapRequest{
 			Label:            labelHigh,
 			IncarnationID:    incHigh,
 			LastSeenBefore:   cutoffHigh,
@@ -294,7 +294,7 @@ func RunPersistTargetReapGuards(t *testing.T, newDS func(t *testing.T) TestDatas
 		// An incomplete forma_command whose resource_update targets this label.
 		storeActiveCommandTouchingTarget(t, ds, "active-cmd-1", stack, label)
 
-		reaped, err := ds.PersistTargetReap(datastore.PersistTargetReapRequest{
+		reaped, _, err := ds.PersistTargetReap(datastore.PersistTargetReapRequest{
 			Label:            label,
 			IncarnationID:    inc,
 			LastSeenBefore:   cutoff,
@@ -327,7 +327,7 @@ func RunPersistTargetReapGuards(t *testing.T, newDS func(t *testing.T) TestDatas
 		require.NoError(t, err)
 
 		// First reap succeeds.
-		reaped, err := ds.PersistTargetReap(datastore.PersistTargetReapRequest{
+		reaped, _, err := ds.PersistTargetReap(datastore.PersistTargetReapRequest{
 			Label:            label,
 			IncarnationID:    oldInc,
 			LastSeenBefore:   cutoff,
@@ -376,7 +376,7 @@ func RunPersistTargetReapGuards(t *testing.T, newDS func(t *testing.T) TestDatas
 		require.NoError(t, err)
 
 		// A stale reaper carrying the OLD incarnation reaps nothing.
-		reaped, err = ds.PersistTargetReap(datastore.PersistTargetReapRequest{
+		reaped, _, err = ds.PersistTargetReap(datastore.PersistTargetReapRequest{
 			Label:            label,
 			IncarnationID:    oldInc,
 			LastSeenBefore:   time.Now().UTC(),
@@ -425,11 +425,11 @@ func RunPersistTargetReapGuards(t *testing.T, newDS func(t *testing.T) TestDatas
 			LastSampleBefore: cutoff,
 			ReapedAt:         time.Now().UTC(),
 		}
-		reaped, err := ds.PersistTargetReap(req)
+		reaped, _, err := ds.PersistTargetReap(req)
 		require.NoError(t, err)
 		require.True(t, reaped, "first reap must succeed")
 
-		reaped, err = ds.PersistTargetReap(req)
+		reaped, _, err = ds.PersistTargetReap(req)
 		require.NoError(t, err)
 		assert.False(t, reaped, "a second reap of the same incarnation must be a no-op")
 
@@ -473,7 +473,7 @@ func RunPersistTargetReapConcurrent(t *testing.T, newDS func(t *testing.T) TestD
 		for i := 0; i < 2; i++ {
 			go func(idx int) {
 				defer wg.Done()
-				results[idx], errs[idx] = ds.PersistTargetReap(req)
+				results[idx], _, errs[idx] = ds.PersistTargetReap(req)
 			}(i)
 		}
 		wg.Wait()

@@ -94,7 +94,7 @@ func (rp *ResourcePersister) HandleCall(from gen.PID, ref gen.Ref, request any) 
 	case messages.LoadResource:
 		return rp.loadResource(req.ResourceURI)
 	case messages.PersistTargetReap:
-		reaped, err := rp.datastore.PersistTargetReap(datastore.PersistTargetReapRequest{
+		reaped, reapedStacks, err := rp.datastore.PersistTargetReap(datastore.PersistTargetReapRequest{
 			Label:            req.Label,
 			IncarnationID:    req.IncarnationID,
 			LastSeenBefore:   req.LastSeenBefore,
@@ -104,7 +104,15 @@ func (rp *ResourcePersister) HandleCall(from gen.PID, ref gen.Ref, request any) 
 		if err != nil {
 			return nil, err
 		}
-		return messages.PersistTargetReapResult{Reaped: reaped}, nil
+		if reaped && len(reapedStacks) > 0 {
+			// The reap tombstoned the last live resource(s) of one or more
+			// stacks; clean up any that are now empty, exactly as a normal
+			// resource delete does. The reap bypasses the changeset executor, so
+			// there is no forma command to attribute the stack tombstone to — a
+			// synthetic id records the provenance on the deleted stack row.
+			rp.cleanupEmptyStacks(reapedStacks, "reap-"+util.NewID())
+		}
+		return messages.PersistTargetReapResult{Reaped: reaped, ReapedStackLabels: reapedStacks}, nil
 	default:
 		rp.Log().Error("ResourcePersister: unknown request type=%s", fmt.Sprintf("%T", request))
 		return nil, fmt.Errorf("resource persister: unknown request type %T", request)

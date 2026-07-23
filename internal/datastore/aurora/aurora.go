@@ -2752,12 +2752,12 @@ func (d *DatastoreAuroraDataAPI) GetUnreachableTargets() ([]*pkgmodel.Target, er
 // Data API: timestamp grace columns compared via ::timestamptz casts, JSON
 // references extracted with jsonb operators, and KSUID resource versions
 // compared with COLLATE "C".
-func (d *DatastoreAuroraDataAPI) PersistTargetReap(req datastore.PersistTargetReapRequest) (bool, error) {
+func (d *DatastoreAuroraDataAPI) PersistTargetReap(req datastore.PersistTargetReapRequest) (bool, []string, error) {
 	ctx := context.Background()
 
 	txID, err := d.beginTransaction(ctx)
 	if err != nil {
-		return false, fmt.Errorf("begin reap tx: %w", err)
+		return false, nil, fmt.Errorf("begin reap tx: %w", err)
 	}
 	committed := false
 	defer func() {
@@ -2786,10 +2786,10 @@ func (d *DatastoreAuroraDataAPI) PersistTargetReap(req datastore.PersistTargetRe
 	}
 	casOut, err := d.executeStatementInTransaction(ctx, txID, casSQL, casParams)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	if casOut.NumberOfRecordsUpdated != 1 {
-		return false, nil
+		return false, nil, nil
 	}
 
 	labelParam := []types.SqlParameter{
@@ -2801,7 +2801,7 @@ func (d *DatastoreAuroraDataAPI) PersistTargetReap(req datastore.PersistTargetRe
 		 WHERE label = :label AND version = (SELECT MAX(version) FROM targets WHERE label = :label)`,
 		labelParam)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	var accumSeconds int64
 	if len(accumOut.Records) > 0 && len(accumOut.Records[0]) > 0 {
@@ -2834,7 +2834,7 @@ func (d *DatastoreAuroraDataAPI) PersistTargetReap(req datastore.PersistTargetRe
 		  )
 		THEN 1 ELSE 0 END)`, labelParam)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	var active int64
 	if len(activeOut.Records) > 0 && len(activeOut.Records[0]) > 0 {
@@ -2843,7 +2843,32 @@ func (d *DatastoreAuroraDataAPI) PersistTargetReap(req datastore.PersistTargetRe
 		}
 	}
 	if active == 1 {
-		return false, nil
+		return false, nil, nil
+	}
+
+	// Collect the distinct stacks whose live resources this reap tombstones, so
+	// the caller can clean up any stack the reap empties. The predicate matches
+	// the tombstone UPDATE below exactly.
+	stacksOut, err := d.executeStatementInTransaction(ctx, txID, `
+		SELECT DISTINCT stack FROM resources
+		WHERE target = :label
+		  AND operation <> 'delete' AND operation <> 'reaped'
+		  AND NOT EXISTS (
+		    SELECT 1 FROM resources r2
+		    WHERE r2.uri = resources.uri
+		    AND r2.version COLLATE "C" > resources.version COLLATE "C"
+		  )`, labelParam)
+	if err != nil {
+		return false, nil, err
+	}
+	var reapedStacks []string
+	for _, record := range stacksOut.Records {
+		if len(record) == 0 {
+			continue
+		}
+		if sv, ok := record[0].(*types.FieldMemberStringValue); ok {
+			reapedStacks = append(reapedStacks, sv.Value)
+		}
 	}
 
 	// 3. Tombstone every current-row resource on this target.
@@ -2857,7 +2882,7 @@ func (d *DatastoreAuroraDataAPI) PersistTargetReap(req datastore.PersistTargetRe
 		    AND r2.version COLLATE "C" > resources.version COLLATE "C"
 		  )`, labelParam)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	resourceCount := tombOut.NumberOfRecordsUpdated
 
@@ -2872,14 +2897,14 @@ func (d *DatastoreAuroraDataAPI) PersistTargetReap(req datastore.PersistTargetRe
 			{Name: aws.String("accum"), Value: &types.FieldMemberLongValue{Value: accumSeconds}},
 			{Name: aws.String("count"), Value: &types.FieldMemberLongValue{Value: resourceCount}},
 		}); err != nil {
-		return false, err
+		return false, nil, err
 	}
 
 	if err = d.commitTransaction(ctx, txID); err != nil {
-		return false, err
+		return false, nil, err
 	}
 	committed = true
-	return true, nil
+	return true, reapedStacks, nil
 }
 
 func (d *DatastoreAuroraDataAPI) LoadTarget(targetLabel string) (*pkgmodel.Target, error) {

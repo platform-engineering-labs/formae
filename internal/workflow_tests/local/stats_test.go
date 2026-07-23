@@ -209,7 +209,7 @@ func TestMetastructure_Stats_ReapPendingAndReapedTargets(t *testing.T) {
 		assert.Equal(t, 0, stats.ReapedTargets)
 
 		cutoff := time.Now().UTC()
-		reaped, err := m.Datastore.PersistTargetReap(datastore.PersistTargetReapRequest{
+		reaped, _, err := m.Datastore.PersistTargetReap(datastore.PersistTargetReapRequest{
 			Label:            label,
 			IncarnationID:    target.Health.IncarnationID,
 			LastSeenBefore:   cutoff,

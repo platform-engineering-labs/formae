@@ -3953,13 +3953,13 @@ func (d DatastorePostgres) GetUnreachableTargets() ([]*pkgmodel.Target, error) {
 // Datastore interface for the contract. Postgres compares the native
 // timestamptz grace columns directly and extracts JSON references with jsonb
 // operators (the resource/target_updates columns are TEXT, so they are cast).
-func (d DatastorePostgres) PersistTargetReap(req datastore.PersistTargetReapRequest) (bool, error) {
+func (d DatastorePostgres) PersistTargetReap(req datastore.PersistTargetReapRequest) (bool, []string, error) {
 	ctx, span := tracer.Start(context.Background(), "PersistTargetReap")
 	defer span.End()
 
 	tx, err := d.pool.Begin(ctx)
 	if err != nil {
-		return false, fmt.Errorf("failed to begin transaction: %w", err)
+		return false, nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	committed := false
 	defer func() {
@@ -3982,10 +3982,10 @@ func (d DatastorePostgres) PersistTargetReap(req datastore.PersistTargetReapRequ
 		  AND last_sample_at <= $4`,
 		req.Label, req.IncarnationID, req.LastSeenBefore.UTC(), req.LastSampleBefore.UTC())
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	if casTag.RowsAffected() != 1 {
-		return false, nil
+		return false, nil, nil
 	}
 
 	var accumSeconds int64
@@ -3994,7 +3994,7 @@ func (d DatastorePostgres) PersistTargetReap(req datastore.PersistTargetReapRequ
 		 WHERE label = $1 AND version = (SELECT MAX(version) FROM targets WHERE label = $1)`,
 		req.Label,
 	).Scan(&accumSeconds); err != nil {
-		return false, err
+		return false, nil, err
 	}
 
 	// 2. Active-command assertion.
@@ -4020,10 +4020,38 @@ func (d DatastorePostgres) PersistTargetReap(req datastore.PersistTargetReapRequ
 		        WHERE (e -> 'Target' ->> 'Label') = $1
 		      )
 		  )`, req.Label).Scan(&active); err != nil {
-		return false, err
+		return false, nil, err
 	}
 	if active {
-		return false, nil
+		return false, nil, nil
+	}
+
+	// Collect the distinct stacks whose live resources this reap tombstones, so
+	// the caller can clean up any stack the reap empties. The predicate matches
+	// the tombstone UPDATE below exactly.
+	stackRows, err := tx.Query(ctx, `
+		SELECT DISTINCT stack FROM resources
+		WHERE target = $1
+		  AND operation <> 'delete' AND operation <> 'reaped'
+		  AND NOT EXISTS (
+		    SELECT 1 FROM resources r2
+		    WHERE r2.uri = resources.uri AND r2.version > resources.version
+		  )`, req.Label)
+	if err != nil {
+		return false, nil, err
+	}
+	var reapedStacks []string
+	for stackRows.Next() {
+		var stack string
+		if err = stackRows.Scan(&stack); err != nil {
+			stackRows.Close()
+			return false, nil, err
+		}
+		reapedStacks = append(reapedStacks, stack)
+	}
+	stackRows.Close()
+	if err = stackRows.Err(); err != nil {
+		return false, nil, err
 	}
 
 	// 3. Tombstone every current-row resource on this target.
@@ -4036,7 +4064,7 @@ func (d DatastorePostgres) PersistTargetReap(req datastore.PersistTargetReapRequ
 		    WHERE r2.uri = resources.uri AND r2.version > resources.version
 		  )`, req.Label)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	resourceCount := tombTag.RowsAffected()
 
@@ -4046,14 +4074,14 @@ func (d DatastorePostgres) PersistTargetReap(req datastore.PersistTargetReapRequ
 		 VALUES ($1, $2, $3, $4, $5)`,
 		req.IncarnationID, req.Label, req.ReapedAt.UTC(), accumSeconds, resourceCount,
 	); err != nil {
-		return false, err
+		return false, nil, err
 	}
 
 	if err = tx.Commit(ctx); err != nil {
-		return false, err
+		return false, nil, err
 	}
 	committed = true
-	return true, nil
+	return true, reapedStacks, nil
 }
 
 func (d DatastorePostgres) DeleteTarget(targetLabel string) (string, error) {

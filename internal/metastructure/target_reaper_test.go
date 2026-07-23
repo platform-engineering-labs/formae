@@ -423,7 +423,7 @@ func TestTargetReapStatus_PendingBeforeTombstoneThenReapedAfter(t *testing.T) {
 		"an over-threshold unreachable target must surface as reap-pending before any tombstone")
 
 	cutoff := time.Now().UTC()
-	reaped, err := ds.PersistTargetReap(datastore.PersistTargetReapRequest{
+	reaped, _, err := ds.PersistTargetReap(datastore.PersistTargetReapRequest{
 		Label:            label,
 		IncarnationID:    target.Health.IncarnationID,
 		LastSeenBefore:   cutoff,
