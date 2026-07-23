@@ -65,12 +65,17 @@ func NewResourceUpdateForExisting(
 		// stay, so rotation still produces a patch op. filteredProps is left
 		// untouched for DesiredState.Properties below — only the patch inputs are
 		// stripped.
-		existingForPatch, desiredForPatch, err := SuppressUnchangedOpaqueValues(existingResource.Properties, filteredProps)
+		existingForPatch, desiredForPatch, err := SuppressUnchangedOpaqueValues(existingResource.Properties, filteredProps, newResource.Schema)
 		if err != nil {
 			return nil, fmt.Errorf("failed to suppress unchanged opaque values for resource %s: %w", existingResource.Label, err)
 		}
 
-		existingPluginProps, err := resolver.ConvertToPluginFormat(existingForPatch)
+		// Read-safe/comparison conversion: existingForPatch is only used as the "before"
+		// side of a local diff (patch.GeneratePatch below), never transmitted to a plugin.
+		// A genuinely-rotated opaque field's existing side is a stored hash that can never
+		// be un-hashed back to plaintext — that must not block patch generation; the
+		// resulting patch document carries the desired (live plaintext) value, not this one.
+		existingPluginProps, err := resolver.ConvertExistingStateForComparison(existingForPatch)
 		if err != nil {
 			return nil, fmt.Errorf("failed to convert existing properties to plugin format: %w", err)
 		}
@@ -251,7 +256,11 @@ func NewResourceUpdateForSyncWithFilter(
 	// need to copy the existing resource to avoid modifying it directly
 	existingResourceCopy := existingResource
 
-	resolvedExistingProperties, err := resolver.ConvertToPluginFormat(existingResource.Properties)
+	// Read-safe conversion: this ResourceUpdate only ever drives a Read (via the
+	// ResourceUpdater's synchronize state), never a Create/Update, so a schema-opaque
+	// field already hashed at rest (the steady state after PLA-320) must not be rejected
+	// here — nothing gets written to the cloud from PriorState/PreviousProperties.
+	resolvedExistingProperties, err := resolver.ConvertExistingStateForRead(existingResource.Properties)
 	if err != nil {
 		return ResourceUpdate{}, fmt.Errorf("failed to resolve dynamic properties for existing resource %s: %w", existingResource.Label, err)
 	}

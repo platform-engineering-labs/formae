@@ -486,6 +486,45 @@ func Test_mergeRefsPreservingUserRefs_preservesResolvableValuesWithVisibilityAnd
 	require.Equal(t, float64(500), mergedMap["TTL"])
 }
 
+// Test_mergeRefsPreservingUserRefs_OpaqueEnvelope_ReplacesHashWithLiveReadValue covers
+// the pre-update out-of-band-check merge: the stored ("user") side of an opaque field is
+// a hashed-at-rest envelope ({"$hashed":true,"$value":"<sha256>","$visibility":"Opaque"}),
+// while a live plugin Read always returns the underlying field as a bare scalar (secret
+// stores never re-wrap on read). Before this fix, mergeObject treated the envelope as a
+// generic object and recursed into its own keys ($hashed/$value/$visibility) against a
+// nonexistent plugin sub-object, which silently preserved the stored hash verbatim — the
+// live plaintext from the Read was discarded, so the PriorState fed into the next stage
+// (an actual Update call) still carried $hashed:true and was permanently rejected by the
+// PLA-320 plugin-boundary guard (resolver.ConvertToPluginFormat) for the rest of the
+// resource's life. The merge must instead adopt the plugin's live value and drop $hashed.
+func Test_mergeRefsPreservingUserRefs_OpaqueEnvelope_ReplacesHashWithLiveReadValue(t *testing.T) {
+	storedHash := pkgmodel.ComputeValueHash("super-secret-password")
+	userProps := []byte(`{
+        "Name": "my-secret",
+        "SecretString": {"$hashed":true,"$value":"` + storedHash + `","$visibility":"Opaque"}
+    }`)
+	pluginProps := []byte(`{
+        "Name": "my-secret",
+        "SecretString": "super-secret-password"
+    }`)
+
+	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{
+		Hints: map[string]pkgmodel.FieldHint{"SecretString": {Opaque: true}},
+	})
+	require.NoError(t, err)
+
+	var mergedMap map[string]any
+	require.NoError(t, json.Unmarshal(merged, &mergedMap))
+
+	secretString, ok := mergedMap["SecretString"].(map[string]any)
+	require.True(t, ok, "SecretString must remain an Opaque envelope, not a bare string")
+	assert.Equal(t, "Opaque", secretString["$visibility"])
+	assert.Equal(t, "super-secret-password", secretString["$value"],
+		"the envelope's $value must be replaced with the plugin's live read, not preserve the stale stored hash")
+	assert.NotContains(t, secretString, "$hashed", "a freshly-read live value is no longer a hash")
+	assert.Equal(t, "my-secret", mergedMap["Name"])
+}
+
 func Test_mergeRefsPreservingUserRefs_RemovesArrayElements(t *testing.T) {
 	hostedZoneKsuid := util.NewID()
 

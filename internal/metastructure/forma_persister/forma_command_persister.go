@@ -956,11 +956,27 @@ func (f *FormaCommandPersister) markResourceUpdateAsComplete(msg *messages.MarkR
 		res.StartTs = msg.ResourceStartTs
 		res.ModifiedTs = msg.ResourceModifiedTs
 
+		// Hash read/actual-state properties at this write choke point, same as
+		// updateCommandFromProgress does for intermediate progress. This matters most
+		// for sync commands: their BulkStoreResourceUpdates call below writes straight
+		// to the resource_updates table BEFORE finalizeAndPersist's end-of-command
+		// hashSensitiveDataIfComplete ever runs, so without hashing here a schema-opaque
+		// field's live (Read-enriched) value would be persisted as plaintext.
 		if msg.ResourceProperties != nil {
-			res.DesiredState.Properties = msg.ResourceProperties
+			hashedProps, hashErr := hashReadActualProps(msg.ResourceProperties, res.DesiredState.Schema)
+			if hashErr != nil {
+				f.Log().Error("Failed to hash resource properties on completion commandID=%s: %v", msg.CommandID, hashErr)
+				return false, fmt.Errorf("failed to hash resource properties on completion: %w", hashErr)
+			}
+			res.DesiredState.Properties = hashedProps
 		}
 		if msg.ResourceReadOnlyProperties != nil {
-			res.DesiredState.ReadOnlyProperties = msg.ResourceReadOnlyProperties
+			hashedReadOnly, hashErr := hashReadActualProps(msg.ResourceReadOnlyProperties, res.DesiredState.Schema)
+			if hashErr != nil {
+				f.Log().Error("Failed to hash resource read-only properties on completion commandID=%s: %v", msg.CommandID, hashErr)
+				return false, fmt.Errorf("failed to hash resource read-only properties on completion: %w", hashErr)
+			}
+			res.DesiredState.ReadOnlyProperties = hashedReadOnly
 		}
 		if msg.Version != "" {
 			res.Version = msg.Version

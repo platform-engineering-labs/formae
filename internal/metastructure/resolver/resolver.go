@@ -29,11 +29,40 @@ func ResolvePropertyReferences(ksuidUri pkgmodel.FormaeURI, properties json.RawM
 	return resolver.resolveReferences(properties)
 }
 
-// ConvertToPluginFormat converts properties to the format expected by cloud provider plugins
+// ConvertToPluginFormat converts properties to the format expected by cloud provider plugins.
+// Guarded: refuses to convert a property still carrying a $hashed:true marker. Use this for
+// any properties that will be sent to a plugin as literal field values to create/write (Create,
+// Update, Delete) — a stored hash must never be written to the cloud as if it were the live
+// secret value.
 func ConvertToPluginFormat(properties json.RawMessage) (json.RawMessage, error) {
 	if err := guardNoHashedValues(properties); err != nil {
 		return nil, err
 	}
+	return convertToPluginFormatUnguarded(properties)
+}
+
+// ConvertExistingStateForRead converts properties the same way as ConvertToPluginFormat, but
+// WITHOUT rejecting $hashed:true values. Use this to prepare prior/existing-state CONTEXT for a
+// Read operation (sync, discovery, or the pre-update out-of-band check) — a Read never uses
+// these values as literal fields to write, it only uses identity (NativeID/TargetConfig) to
+// fetch fresh truth from the cloud, so a stored hash passed through as context here is inert:
+// nothing is ever written from it, unlike the Create/Update path ConvertToPluginFormat guards.
+func ConvertExistingStateForRead(properties json.RawMessage) (json.RawMessage, error) {
+	return convertToPluginFormatUnguarded(properties)
+}
+
+// ConvertExistingStateForComparison converts properties the same way as ConvertToPluginFormat,
+// but WITHOUT rejecting $hashed:true values. Use this for the "existing" side of a LOCAL diff
+// (e.g. generating a patch document from existing vs. desired properties) — once an opaque
+// field is persisted hashed at rest, its existing/prior value IS a hash and can never be
+// un-hashed back to plaintext. That is fine here because this converted copy is only compared
+// locally to detect what changed; it is never itself transmitted to a plugin — the resulting
+// patch document carries the desired (live plaintext) value, not this existing one.
+func ConvertExistingStateForComparison(properties json.RawMessage) (json.RawMessage, error) {
+	return convertToPluginFormatUnguarded(properties)
+}
+
+func convertToPluginFormatUnguarded(properties json.RawMessage) (json.RawMessage, error) {
 	resolver := newPropertyResolver(properties)
 	resolved, err := resolver.resolveReferences(properties)
 	if err != nil {
