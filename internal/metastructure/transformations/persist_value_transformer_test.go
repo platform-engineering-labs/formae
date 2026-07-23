@@ -312,6 +312,58 @@ func TestApplyToResource_HashesTopLevelScalarPatchOpValue(t *testing.T) {
 	assert.Len(t, value["$value"].(string), 64)
 }
 
+// TestApplyToResource_PatchOpNonSecretValueCollidingWithSecretPlaintextIsUntouched guards
+// against content-based substitution: a non-secret patch op whose value happens to equal a
+// schema-opaque field's plaintext must not be rewritten. The old valueMap-based substitution
+// keyed purely on value equality, so it corrupted unrelated fields and left a bare (unmarked)
+// digest behind that hashOpaqueField would treat as plaintext and re-hash on the next boot
+// backfill.
+func TestApplyToResource_PatchOpNonSecretValueCollidingWithSecretPlaintextIsUntouched(t *testing.T) {
+	r := &pkgmodel.Resource{
+		Schema: schemaWithOpaque("SecretString"),
+		Properties: json.RawMessage(`{
+            "SecretString": "same"
+        }`),
+		PatchDocument: json.RawMessage(`[{"op":"replace","path":"/Description","value":"same"}]`),
+	}
+	out, err := NewPersistValueTransformer().ApplyToResource(r)
+	require.NoError(t, err)
+
+	var ops []map[string]any
+	require.NoError(t, json.Unmarshal(out.PatchDocument, &ops))
+
+	value, ok := ops[0]["value"].(string)
+	require.True(t, ok, "non-secret patch-op value must remain a bare string")
+	assert.Equal(t, "same", value)
+}
+
+// TestApplyToResource_HashesOpaqueEnvelopePatchOpValue covers a patch op whose value is an
+// explicit opaque envelope not matched by schema path (e.g. a nested/non-top-level field). It
+// must be hashed structurally, and a second pass must be a no-op.
+func TestApplyToResource_HashesOpaqueEnvelopePatchOpValue(t *testing.T) {
+	r := &pkgmodel.Resource{
+		Schema:        pkgmodel.Schema{},
+		PatchDocument: json.RawMessage(`[{"op":"replace","path":"/Whatever","value":{"$value":"s","$visibility":"Opaque"}}]`),
+	}
+
+	firstRun, err := NewPersistValueTransformer().ApplyToResource(r)
+	require.NoError(t, err)
+
+	var ops []map[string]any
+	require.NoError(t, json.Unmarshal(firstRun.PatchDocument, &ops))
+	value, ok := ops[0]["value"].(map[string]any)
+	require.True(t, ok, "opaque envelope patch-op value must remain a map")
+	assert.Equal(t, true, value["$hashed"])
+	assert.Equal(t, "Opaque", value["$visibility"])
+	assert.NotEqual(t, "s", value["$value"])
+	assert.Len(t, value["$value"].(string), 64)
+
+	secondRun, err := NewPersistValueTransformer().ApplyToResource(firstRun)
+	require.NoError(t, err)
+	assert.Equal(t, string(firstRun.PatchDocument), string(secondRun.PatchDocument),
+		"re-hashing an already-hashed envelope patch-op value must be a byte-identical no-op")
+}
+
 // TestApplyToResource_PatchOpHashingIsIdempotent guards against hash-of-hash: both
 // hashSensitiveDataIfComplete (on FormaCommand completion) and BackfillHashedSecrets
 // (on agent boot) re-run ApplyToResource against an already-hashed patch document.
