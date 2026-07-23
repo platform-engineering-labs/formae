@@ -11,57 +11,76 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
-
-// defaultSyncInterval mirrors the schema default (Config.pkl
-// SynchronizationConfig.interval = 5.min). The reaping calibration is only
-// valid relative to this.
-const defaultSyncInterval = 5 * time.Minute
-
-// TestMinReapDurationExceedsMaxBeatGap pins the load-bearing invariant that the
-// reap-duration floor is strictly greater than the maximum tolerated beat gap:
-// a target must never be reapable before at least one full beat gap could have
-// confirmed it unreachable.
-func TestMinReapDurationExceedsMaxBeatGap(t *testing.T) {
-	assert.Greater(t, MinReapDuration, MaxBeatGap,
-		"MinReapDuration must be strictly greater than MaxBeatGap")
-}
 
 func TestReaperIntervalPositive(t *testing.T) {
 	assert.Positive(t, ReaperInterval, "ReaperInterval must be positive")
 }
 
-// TestMaxBeatGapExceedsSyncInterval pins the calibration that regressed and made
-// reaping inert: MaxBeatGap must comfortably exceed the sync interval, because
-// an unreachable target's observed_at only refreshes about once per sync cycle,
-// so the reaper's per-step gap is one cycle wide. When MaxBeatGap sat below the
-// interval, every step tripped the clock-stop and accrual never advanced.
-func TestMaxBeatGapExceedsSyncInterval(t *testing.T) {
-	assert.Greater(t, MaxBeatGap, defaultSyncInterval,
-		"MaxBeatGap must exceed the default sync interval, or accrual is pinned at zero")
+// TestDeriveMaxBeatGap_ScalesWithSyncInterval pins the core behaviour of this
+// refactor: MaxBeatGap is no longer a fixed constant coupled to a nominal sync
+// interval, it scales with whatever interval the agent is actually
+// configured with, so raising the sync interval can never make MaxBeatGap sit
+// at or below it (the bug that made reaping inert).
+func TestDeriveMaxBeatGap_ScalesWithSyncInterval(t *testing.T) {
+	interval := 3 * time.Hour
+	got := DeriveMaxBeatGap(interval)
+
+	assert.Equal(t, MaxBeatGapMultiplier*interval, got)
+	assert.Greater(t, got, interval, "MaxBeatGap must exceed the sync interval it was derived from")
 }
 
-func TestValidateReapingConfig(t *testing.T) {
-	require.NoError(t, ValidateReapingConfig(defaultSyncInterval),
-		"the built-in reaping constants must satisfy their invariants under the default sync interval")
+// TestDeriveMaxBeatGap_DefaultInterval pins the default-interval case (5m) so
+// a change to the multiplier or floor is visible.
+func TestDeriveMaxBeatGap_DefaultInterval(t *testing.T) {
+	got := DeriveMaxBeatGap(DefaultSyncInterval)
+	assert.Equal(t, MaxBeatGapMultiplier*DefaultSyncInterval, got)
+	assert.Greater(t, got, DefaultSyncInterval)
 }
 
-// TestValidateReapingConfig_RejectsSyncIntervalAtOrAboveMaxBeatGap is the guard
-// for the exact class of misconfiguration that made reaping inert: a sync
-// interval that meets or exceeds MaxBeatGap means every sync-cycle-sized beat
-// gap trips the clock-stop and no target ever accrues toward reaping.
-func TestValidateReapingConfig_RejectsSyncIntervalAtOrAboveMaxBeatGap(t *testing.T) {
-	assert.Error(t, ValidateReapingConfig(MaxBeatGap),
-		"a sync interval equal to MaxBeatGap must be rejected")
-	assert.Error(t, ValidateReapingConfig(MaxBeatGap+time.Minute),
-		"a sync interval greater than MaxBeatGap must be rejected")
+// TestDeriveMaxBeatGap_FloorAppliesForTinyIntervals verifies the floor: a very
+// fast sync interval must not collapse MaxBeatGap to something a single
+// delayed heartbeat could trip.
+func TestDeriveMaxBeatGap_FloorAppliesForTinyIntervals(t *testing.T) {
+	got := DeriveMaxBeatGap(1 * time.Second)
+	assert.Equal(t, MaxBeatGapFloor, got, "a tiny sync interval must be floored")
+	assert.Greater(t, got, 1*time.Second)
 }
 
-// TestValidateReapingConfig_ZeroSyncIntervalSkipsCheck confirms a disabled/unset
-// synchronization interval (0) does not trip the sync-interval check — there are
-// no cycles to fabricate accrual against.
-func TestValidateReapingConfig_ZeroSyncIntervalSkipsCheck(t *testing.T) {
-	require.NoError(t, ValidateReapingConfig(0),
-		"a zero sync interval must not fail validation")
+// TestDeriveMaxBeatGap_ZeroInterval verifies a disabled/unset sync interval
+// (0) still yields a sane, floored MaxBeatGap rather than 0.
+func TestDeriveMaxBeatGap_ZeroInterval(t *testing.T) {
+	assert.Equal(t, MaxBeatGapFloor, DeriveMaxBeatGap(0))
+}
+
+// TestDeriveMinReapDuration_ExceedsMaxBeatGap pins the load-bearing invariant
+// that the reap-duration floor is strictly greater than the maximum
+// tolerated beat gap it was derived from: a target must never be reapable
+// before at least one full beat gap could have confirmed it unreachable.
+// This must hold for any sync interval, not just the default, since both
+// values are now derived from the same input.
+func TestDeriveMinReapDuration_ExceedsMaxBeatGap(t *testing.T) {
+	for _, interval := range []time.Duration{0, 1 * time.Second, 5 * time.Minute, 3 * time.Hour} {
+		maxBeatGap := DeriveMaxBeatGap(interval)
+		minReapDuration := DeriveMinReapDuration(maxBeatGap)
+		assert.Greater(t, minReapDuration, maxBeatGap,
+			"MinReapDuration must exceed MaxBeatGap for sync interval %s", interval)
+	}
+}
+
+// TestMinReapDuration_DefaultExceedsMaxBeatGap pins the package-level default
+// (used by target_update_generator.go's admission floor) against the
+// default-interval-derived MaxBeatGap.
+func TestMinReapDuration_DefaultExceedsMaxBeatGap(t *testing.T) {
+	assert.Greater(t, MinReapDuration, DeriveMaxBeatGap(DefaultSyncInterval))
+}
+
+// TestGlobalDefaultReapAfterExceedsMinReapDuration pins that the global
+// default reap-after duration (pkgmodel.DefaultReapMaxUnreachableSeconds,
+// unchanged by this refactor) comfortably exceeds MinReapDuration under the
+// default sync interval, so an operator relying on defaults end-to-end gets a
+// sane, non-degenerate configuration.
+func TestGlobalDefaultReapAfterExceedsMinReapDuration(t *testing.T) {
+	const defaultReapMaxUnreachableSeconds = 24 * time.Hour // pkgmodel.DefaultReapMaxUnreachableSeconds
+	assert.Greater(t, defaultReapMaxUnreachableSeconds, MinReapDuration)
 }

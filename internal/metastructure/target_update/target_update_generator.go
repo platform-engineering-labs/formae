@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
@@ -28,11 +29,28 @@ type TargetUpdateGenerator struct {
 	// when a target declares none. It is nil when no manifest default is wired,
 	// in which case admission falls through to the global reaping default.
 	manifestDefaultReap pkgmodel.ReapingBehaviour
+	// minReapDuration is the floor enforced on any target's explicit reap-after
+	// duration (see resolveTargetReaping). It defaults to config.MinReapDuration
+	// (derived from the nominal/default sync interval); WithMinReapDuration lets
+	// the caller align it with the agent's actual configured interval.
+	minReapDuration time.Duration
 }
 
 // NewTargetUpdateGenerator creates a new target update generator
 func NewTargetUpdateGenerator(ds TargetDatastore) *TargetUpdateGenerator {
-	return &TargetUpdateGenerator{datastore: ds}
+	return &TargetUpdateGenerator{
+		datastore:       ds,
+		minReapDuration: config.MinReapDuration,
+	}
+}
+
+// WithMinReapDuration overrides the reap-after admission floor. Production
+// wiring (FormaCommandFromForma) uses this to derive the floor from the
+// agent's actual configured synchronization interval rather than the
+// package's nominal default.
+func (tp *TargetUpdateGenerator) WithMinReapDuration(d time.Duration) *TargetUpdateGenerator {
+	tp.minReapDuration = d
+	return tp
 }
 
 // GenerateTargetUpdates determines what target changes are needed.
@@ -221,7 +239,7 @@ func (tp *TargetUpdateGenerator) resolveTargetReaping(target *pkgmodel.Target) e
 	resolved := pkgmodel.ResolveReaping(explicit, tp.manifestDefaultReap)
 
 	if after, ok := resolved.(*pkgmodel.ReapAfter); ok {
-		floor := int64(config.MinReapDuration.Seconds())
+		floor := int64(tp.minReapDuration.Seconds())
 		if after.MaxUnreachableSeconds < floor {
 			return fmt.Errorf("target %s reap-after of %ds is below the minimum of %ds",
 				target.Label, after.MaxUnreachableSeconds, floor)

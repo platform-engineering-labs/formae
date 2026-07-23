@@ -105,12 +105,6 @@ func NewMetastructure(ctx context.Context, cfg *pkgmodel.Config, externalResourc
 }
 
 func NewMetastructureWithDataStoreAndContext(ctx context.Context, cfg *pkgmodel.Config, externalResourcePlugins []plugin.ResourcePluginInfo, datastore datastore.Datastore, agentID string) (*Metastructure, error) {
-	// Fail fast on a reaping/sync misconfiguration that would silently disable
-	// target reaping (accrual pinned at zero) rather than starting a degraded agent.
-	if err := config.ValidateReapingConfig(cfg.Agent.Synchronization.Interval); err != nil {
-		return nil, err
-	}
-
 	metastructure := &Metastructure{}
 
 	metastructure.Datastore = datastore
@@ -299,7 +293,7 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 		}
 	}
 
-	fa, err := FormaCommandFromForma(forma, config, pkgmodel.CommandApply, m.Datastore, clientID, resource_update.FormaCommandSourceUser)
+	fa, err := FormaCommandFromForma(forma, config, pkgmodel.CommandApply, m.Datastore, clientID, resource_update.FormaCommandSourceUser, m.Cfg.Agent.Synchronization.Interval)
 	if err != nil {
 		if requiredFieldsErr, ok := err.(apimodel.RequiredFieldMissingOnCreateError); ok {
 			return nil, requiredFieldsErr
@@ -718,7 +712,7 @@ func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.Forma
 		}
 	}
 
-	fa, err := FormaCommandFromForma(forma, config, pkgmodel.CommandDestroy, m.Datastore, clientID, resource_update.FormaCommandSourceUser)
+	fa, err := FormaCommandFromForma(forma, config, pkgmodel.CommandDestroy, m.Datastore, clientID, resource_update.FormaCommandSourceUser, m.Cfg.Agent.Synchronization.Interval)
 	if err != nil {
 		slog.Error("Failed to create destroy from forma", "error", err)
 		return nil, err
@@ -1960,7 +1954,8 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 	command pkgmodel.Command,
 	ds datastore.Datastore,
 	clientID string,
-	source resource_update.FormaCommandSource) (*forma_command.FormaCommand, error) {
+	source resource_update.FormaCommandSource,
+	syncInterval time.Duration) (*forma_command.FormaCommand, error) {
 
 	if formaCommandConfig.Mode == "" {
 		formaCommandConfig.Mode = pkgmodel.FormaApplyModePatch
@@ -1990,7 +1985,10 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 		}
 	}
 
-	targetUpdates, err := target_update.NewTargetUpdateGenerator(ds).GenerateTargetUpdates(forma.Targets, command, len(forma.Resources) > 0)
+	minReapDuration := config.DeriveMinReapDuration(config.DeriveMaxBeatGap(syncInterval))
+	targetUpdates, err := target_update.NewTargetUpdateGenerator(ds).
+		WithMinReapDuration(minReapDuration).
+		GenerateTargetUpdates(forma.Targets, command, len(forma.Resources) > 0)
 	if err != nil {
 		return nil, err
 	}

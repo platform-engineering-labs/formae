@@ -77,12 +77,21 @@ func fixedClock(t time.Time) func() time.Time {
 	return func() time.Time { return t }
 }
 
+// defaultSyncInterval mirrors the schema default (Config.pkl
+// SynchronizationConfig.interval = 5.min).
+const defaultSyncInterval = 5 * time.Minute
+
+// testMaxBeatGap is the MaxBeatGap derived from defaultSyncInterval, used
+// throughout this file wherever a test needs the reaper's actual clock-stop
+// threshold rather than the raw derivation function.
+var testMaxBeatGap = config.DeriveMaxBeatGap(defaultSyncInterval)
+
 func TestPlanAccrual_SeedsNullLastSampleAt(t *testing.T) {
 	ds := newReaperTestDatastore(t)
 	observedAt := time.Now().UTC().Truncate(time.Second)
 	newUnreachableTestTarget(t, ds, "seed-test", 3600, observedAt)
 
-	plans, err := planAccrualForUnreachableTargets(ds, fixedClock(observedAt))
+	plans, err := planAccrualForUnreachableTargets(ds, fixedClock(observedAt), testMaxBeatGap)
 	require.NoError(t, err)
 	require.Len(t, plans, 1)
 
@@ -115,7 +124,7 @@ func TestPlanAccrual_NormalAccrualWithinBeatGap(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	plans, err := planAccrualForUnreachableTargets(ds, fixedClock(t2))
+	plans, err := planAccrualForUnreachableTargets(ds, fixedClock(t2), testMaxBeatGap)
 	require.NoError(t, err)
 	require.Len(t, plans, 1)
 
@@ -135,7 +144,7 @@ func TestPlanAccrual_ClockStopBeyondMaxBeatGap(t *testing.T) {
 	require.True(t, applied)
 
 	// A gap far larger than MaxBeatGap — the reaper must not have run for a while.
-	t2 := t1.Add(config.MaxBeatGap + time.Minute)
+	t2 := t1.Add(testMaxBeatGap + time.Minute)
 	_, err = ds.UpdateTargetHealth(pkgmodel.TargetHealthObservation{
 		TargetLabel:   "clock-stop-test",
 		State:         pkgmodel.TargetHealthStateUnreachable,
@@ -144,7 +153,7 @@ func TestPlanAccrual_ClockStopBeyondMaxBeatGap(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	plans, err := planAccrualForUnreachableTargets(ds, fixedClock(t2))
+	plans, err := planAccrualForUnreachableTargets(ds, fixedClock(t2), testMaxBeatGap)
 	require.NoError(t, err)
 	require.Len(t, plans, 1)
 
@@ -157,18 +166,14 @@ func TestPlanAccrual_ClockStopBeyondMaxBeatGap(t *testing.T) {
 // TestAccrualStep_SyncIntervalGapDoesNotTripClockStop is the regression guard
 // for the calibration bug that made reaping inert: an unreachable target's
 // observed_at is refreshed only about once per synchronization cycle, so the
-// reaper's per-step gap is one sync interval wide (default 5m, schema Config.pkl
-// SynchronizationConfig.interval). If MaxBeatGap sits at or below that interval,
-// every ordinary step trips the clock-stop, delta is pinned at zero and the
-// target can never accrue toward reaping. This asserts a full sync-interval-sized
-// gap accrues normally under the shipped MaxBeatGap.
+// reaper's per-step gap is one sync interval wide. Because MaxBeatGap is now
+// derived from the sync interval itself (config.DeriveMaxBeatGap), a
+// sync-interval-sized gap can never sit at or above it — this holds by
+// construction, not by calibration, for any sync interval. This test pins the
+// equivalent assertion for the default interval.
 func TestAccrualStep_SyncIntervalGapDoesNotTripClockStop(t *testing.T) {
-	// The default synchronization interval (Config.pkl); the reaper's observed_at
-	// refresh cadence in the healthy case.
-	const defaultSyncInterval = 5 * time.Minute
-
-	require.Greater(t, config.MaxBeatGap, defaultSyncInterval,
-		"a sync-interval-sized gap must be smaller than MaxBeatGap, else reaping is inert")
+	require.Greater(t, testMaxBeatGap, defaultSyncInterval,
+		"a sync-interval-sized gap must be smaller than the derived MaxBeatGap, else reaping is inert")
 
 	lastSampleAt := time.Now().UTC().Truncate(time.Second)
 	observedAt := lastSampleAt.Add(defaultSyncInterval)
@@ -178,11 +183,27 @@ func TestAccrualStep_SyncIntervalGapDoesNotTripClockStop(t *testing.T) {
 		UnreachableAccumSeconds: 0,
 	}
 
-	delta, newLastSampleAt := accrualStep(health)
+	delta, newLastSampleAt := accrualStep(health, testMaxBeatGap)
 
 	assert.Equal(t, int64(defaultSyncInterval.Seconds()), delta,
 		"a sync-interval-sized gap must accrue the full delta, not be zeroed by the clock-stop")
 	assert.True(t, newLastSampleAt.Equal(observedAt), "last_sample_at must advance to observed_at")
+}
+
+// TestDeriveMaxBeatGap_ScalesWithConfiguredSyncInterval verifies MaxBeatGap
+// scales with whatever synchronization interval the reaper is actually
+// configured with — not a fixed constant — and that the derivation floor
+// protects a very fast interval from collapsing MaxBeatGap to something a
+// single delayed heartbeat could trip.
+func TestDeriveMaxBeatGap_ScalesWithConfiguredSyncInterval(t *testing.T) {
+	longInterval := 3 * time.Hour
+	got := config.DeriveMaxBeatGap(longInterval)
+	assert.Equal(t, 18*time.Hour, got, "MaxBeatGap must scale with the configured sync interval (k=6)")
+	assert.Greater(t, got, longInterval, "a scaled-up sync interval must still sit below the derived MaxBeatGap")
+
+	tinyInterval := 10 * time.Second
+	got = config.DeriveMaxBeatGap(tinyInterval)
+	assert.Equal(t, config.MaxBeatGapFloor, got, "a very fast sync interval must be floored, not collapse MaxBeatGap")
 }
 
 func TestReapCandidates_DetectsCandidateWithoutBlockingCommand(t *testing.T) {
@@ -191,7 +212,7 @@ func TestReapCandidates_DetectsCandidateWithoutBlockingCommand(t *testing.T) {
 	// MaxUnreachableSeconds=0 so any tick's accrual (even the seed) already qualifies.
 	newUnreachableTestTarget(t, ds, "candidate-test", 0, observedAt)
 
-	plans, err := planAccrualForUnreachableTargets(ds, fixedClock(observedAt))
+	plans, err := planAccrualForUnreachableTargets(ds, fixedClock(observedAt), testMaxBeatGap)
 	require.NoError(t, err)
 	require.Len(t, plans, 1)
 
@@ -230,7 +251,7 @@ func TestReapCandidates_SkipsTargetWithIncompleteCommand(t *testing.T) {
 	)
 	require.NoError(t, ds.StoreFormaCommand(cmd, cmd.ID))
 
-	plans, err := planAccrualForUnreachableTargets(ds, fixedClock(observedAt))
+	plans, err := planAccrualForUnreachableTargets(ds, fixedClock(observedAt), testMaxBeatGap)
 	require.NoError(t, err)
 	require.Len(t, plans, 1)
 
@@ -253,7 +274,7 @@ func TestPlanAccrual_ReachableTargetsUntouched(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	plans, err := planAccrualForUnreachableTargets(ds, fixedClock(observedAt))
+	plans, err := planAccrualForUnreachableTargets(ds, fixedClock(observedAt), testMaxBeatGap)
 	require.NoError(t, err)
 	assert.Empty(t, plans, "reachable targets must never be planned for accrual")
 }
@@ -275,7 +296,7 @@ func TestNoMutation_PlanAndCandidateDetectionAreReadOnly(t *testing.T) {
 	before, err := ds.LoadTarget("no-mutation-test")
 	require.NoError(t, err)
 
-	plans, err := planAccrualForUnreachableTargets(ds, fixedClock(observedAt))
+	plans, err := planAccrualForUnreachableTargets(ds, fixedClock(observedAt), testMaxBeatGap)
 	require.NoError(t, err)
 	candidates := reapCandidatesFromPlans(ds, plans)
 	require.Len(t, candidates, 1, "target must still be detected as a candidate")

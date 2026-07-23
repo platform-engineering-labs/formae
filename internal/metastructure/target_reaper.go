@@ -49,6 +49,7 @@ type TargetReaper struct {
 
 	datastore       datastore.Datastore
 	interval        time.Duration
+	maxBeatGap      time.Duration
 	dryRun          bool
 	maxReapsPerTick int
 }
@@ -70,6 +71,17 @@ func (r *TargetReaper) Init(args ...any) error {
 	}
 	r.datastore = ds.(datastore.Datastore)
 	r.interval = config.ReaperInterval
+
+	// MaxBeatGap is derived from the agent's actual configured synchronization
+	// interval (not a fixed constant) so it self-adjusts if the interval
+	// changes — see the package doc on config.DeriveMaxBeatGap. Missing
+	// 'SynchronizationConfig' falls back to the package's nominal default
+	// rather than failing startup, since a floor is always applied.
+	r.maxBeatGap = config.DeriveMaxBeatGap(config.DefaultSyncInterval)
+	if sc, ok := r.Env("SynchronizationConfig"); ok {
+		syncConfig := sc.(pkgmodel.SynchronizationConfig)
+		r.maxBeatGap = config.DeriveMaxBeatGap(syncConfig.Interval)
+	}
 
 	if rc, ok := r.Env("TargetReapingConfig"); ok {
 		reapingConfig := rc.(pkgmodel.TargetReapingConfig)
@@ -103,7 +115,7 @@ func (r *TargetReaper) checkUnreachableTargets() {
 	// racing it.
 	now := time.Now()
 
-	plans, err := planAccrualForUnreachableTargets(r.datastore, func() time.Time { return now })
+	plans, err := planAccrualForUnreachableTargets(r.datastore, func() time.Time { return now }, r.maxBeatGap)
 	if err != nil {
 		r.Log().Error("Failed to plan target accrual: %v", err)
 		r.scheduleNextCheck()
@@ -270,14 +282,17 @@ type accrualPlan struct {
 // Accrual formula (exact, not keyed on any nominal interval):
 //
 //	delta = observed_at − last_sample_at (both real read timestamps)
-//	if delta > config.MaxBeatGap: delta = 0, but last_sample_at still advances
+//	if delta > maxBeatGap: delta = 0, but last_sample_at still advances
 //	else: unreachable_accum_seconds += delta, last_sample_at advances
 //	if last_sample_at is NULL: seed it to observed_at this tick, accrue 0
+//
+// maxBeatGap is the reaper's derived clock-stop threshold (config.DeriveMaxBeatGap),
+// computed once from the agent's configured synchronization interval.
 //
 // now is used only defensively (logging) for a target with no observed_at at
 // all, which should not happen for a row with health_state == 'unreachable'
 // but is guarded against rather than assumed.
-func planAccrualForUnreachableTargets(ds datastore.Datastore, now func() time.Time) ([]accrualPlan, error) {
+func planAccrualForUnreachableTargets(ds datastore.Datastore, now func() time.Time, maxBeatGap time.Duration) ([]accrualPlan, error) {
 	targets, err := ds.GetUnreachableTargets()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load unreachable targets: %w", err)
@@ -291,7 +306,7 @@ func planAccrualForUnreachableTargets(ds datastore.Datastore, now func() time.Ti
 			continue
 		}
 
-		delta, newLastSampleAt := accrualStep(target.Health)
+		delta, newLastSampleAt := accrualStep(target.Health, maxBeatGap)
 		plans = append(plans, accrualPlan{
 			Target:          target,
 			LastSampleAt:    newLastSampleAt,
@@ -306,7 +321,8 @@ func planAccrualForUnreachableTargets(ds datastore.Datastore, now func() time.Ti
 // accrualStep computes the incremental delta (seconds) to add to
 // unreachable_accum_seconds and the new last_sample_at to persist, per the
 // exact accrual formula documented on planAccrualForUnreachableTargets.
-func accrualStep(h *pkgmodel.TargetHealth) (deltaSeconds int64, newLastSampleAt time.Time) {
+// maxBeatGap is the reaper's derived clock-stop threshold.
+func accrualStep(h *pkgmodel.TargetHealth, maxBeatGap time.Duration) (deltaSeconds int64, newLastSampleAt time.Time) {
 	observedAt := *h.ObservedAt
 
 	if h.LastSampleAt == nil {
@@ -316,7 +332,7 @@ func accrualStep(h *pkgmodel.TargetHealth) (deltaSeconds int64, newLastSampleAt 
 	}
 
 	gap := observedAt.Sub(*h.LastSampleAt)
-	if gap > config.MaxBeatGap {
+	if gap > maxBeatGap {
 		// Clock-stop: too large a gap between beats to trust as continuous
 		// unreachable time (e.g. the reaper itself was down). Don't accrue,
 		// but still move last_sample_at forward so the next tick's gap is
