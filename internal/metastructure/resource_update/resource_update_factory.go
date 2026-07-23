@@ -268,14 +268,21 @@ func NewResourceUpdateForSyncWithFilter(
 	existingResource.Properties = resolvedExistingProperties
 
 	return ResourceUpdate{
-		PriorState:         existingResource,
-		ExistingTarget:     target,
-		DesiredState:       existingResourceCopy,
-		ResourceTarget:     target,
-		Operation:          OperationRead,
-		State:              ResourceUpdateStateNotStarted,
-		Source:             source,
-		StackLabel:         existingResource.Stack,
-		PreviousProperties: existingResource.Properties,
+		PriorState:     existingResource,
+		ExistingTarget: target,
+		DesiredState:   existingResourceCopy,
+		ResourceTarget: target,
+		Operation:      OperationRead,
+		State:          ResourceUpdateStateNotStarted,
+		Source:         source,
+		StackLabel:     existingResource.Stack,
+		// PreviousProperties must keep the ORIGINAL stored copy (existingResourceCopy), not the
+		// Read-context-stripped existingResource.Properties: a schema-opaque field hashed at
+		// rest carries a {$value,$visibility,$hashed:true} envelope, and
+		// ConvertExistingStateForRead strips that down to a bare digest for Read-context use
+		// only. If that stripped bare digest were persisted here as PreviousProperties, it would
+		// lose its $hashed marker and get treated as plaintext — and re-hashed (hash-of-hash) on
+		// the next boot backfill.
+		PreviousProperties: existingResourceCopy.Properties,
 	}, nil
 }
