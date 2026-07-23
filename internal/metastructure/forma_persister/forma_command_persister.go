@@ -342,6 +342,10 @@ func (f *FormaCommandPersister) HandleCall(from gen.PID, ref gen.Ref, message an
 func (f *FormaCommandPersister) storeNewFormaCommand(command *forma_command.FormaCommand) (bool, error) {
 	f.Log().Debug("Storing new Forma command commandID=%s commandType=%s", command.ID, command.Command)
 
+	// NOTE (PLA-320): do NOT hash DesiredState here. The user's plaintext secret input
+	// must survive to execution/resume; read/actual values are hashed at their own write
+	// choke points, and DesiredState input is hashed only at final state.
+
 	// Store the command metadata and ResourceUpdates (StoreFormaCommand handles both)
 	err := f.datastore.StoreFormaCommand(command, command.ID)
 	if err != nil {
@@ -412,6 +416,20 @@ func (f *FormaCommandPersister) updateCommandFromProgress(progress *messages.Upd
 		tracked.StartTs = progress.ResourceStartTs
 		tracked.ModifiedTs = progress.ResourceModifiedTs
 
+		// The progress copy is a read/actual-state snapshot (e.g. from a plugin poll or
+		// Read). It must be hashed schema-keyed before it is persisted (ProgressResult /
+		// MostRecentProgressResult, and the normalized resource_updates columns below).
+		// The in-memory res.DesiredState.Properties below stays plaintext — it is only
+		// hashed at final state (hashSensitiveDataIfComplete) so a resumed command can
+		// still execute with the real secret value.
+		if tracked.ResourceProperties != nil {
+			hashedProps, err := hashReadActualProps(tracked.ResourceProperties, res.DesiredState.Schema)
+			if err != nil {
+				return false, fmt.Errorf("failed to hash progress properties commandID=%s: %w", progress.CommandID, err)
+			}
+			tracked.ResourceProperties = hashedProps
+		}
+
 		index := slices.IndexFunc(res.ProgressResult, func(p plugin.TrackedProgress) bool {
 			return p.Operation == progress.Progress.Operation
 		})
@@ -443,7 +461,7 @@ func (f *FormaCommandPersister) updateCommandFromProgress(progress *messages.Upd
 				progress.Operation,
 				progress.ResourceState,
 				progress.ResourceModifiedTs,
-				progress.Progress,
+				tracked,
 			); err != nil {
 				f.Log().Error("Failed to update resource update progress in normalized table commandID=%s: %v", progress.CommandID, err)
 				// Continue with command meta update even if normalized update fails
@@ -1200,6 +1218,23 @@ func hasOpaqueValues(props json.RawMessage) bool {
 		bytes.Contains(props, []byte(`"Opaque"`))
 }
 
+// hashReadActualProps returns a schema-keyed hashed copy of props for a resource of the
+// given schema. Used to sanitize read-back/actual-state values (e.g. progress reported by
+// a plugin poll or Read) before they are persisted. Unlike DesiredState input, these
+// values are not needed in plaintext to resume execution, so they are hashed immediately
+// at their write choke point rather than deferred to final state.
+func hashReadActualProps(props json.RawMessage, schema pkgmodel.Schema) (json.RawMessage, error) {
+	if len(props) == 0 {
+		return props, nil
+	}
+	tmp := &pkgmodel.Resource{Schema: schema, Properties: props}
+	out, err := transformations.NewPersistValueTransformer().ApplyToResource(tmp)
+	if err != nil {
+		return nil, err
+	}
+	return out.Properties, nil
+}
+
 // hashSensitiveDataIfComplete checks if the command is in a final state and hashes sensitive data if so.
 // This should be called after updating resource states to ensure opaque values are hashed when the command completes.
 func (f *FormaCommandPersister) hashSensitiveDataIfComplete(command *forma_command.FormaCommand) (bool, error) {
@@ -1212,17 +1247,21 @@ func (f *FormaCommandPersister) hashSensitiveDataIfComplete(command *forma_comma
 	hashedCount := 0
 
 	// Hash opaque vals in ResourceUpdates array (Resources are stored in resource_updates table, not forma.Resources)
+	// Schema-keyed: a resource update needs hashing if its schema declares any opaque
+	// field, or if its properties already carry an opaque envelope (e.g. round-tripped
+	// from a prior hash, or a resource loaded without its schema populated).
 	for i, resourceUpdate := range command.ResourceUpdates {
-		if hasOpaqueValues(resourceUpdate.DesiredState.Properties) {
-			transformed, err := t.ApplyToResource(&resourceUpdate.DesiredState)
-			if err != nil {
-				f.Log().Error("Failed to hash resource update during final cleanup commandID=%s resourceLabel=%s: %v",
-					command.ID, resourceUpdate.DesiredState.Label, err)
-				return false, fmt.Errorf("failed to hash resource update %s during final cleanup: %w", resourceUpdate.DesiredState.Label, err)
-			}
-			command.ResourceUpdates[i].DesiredState = *transformed
-			hashedCount++
+		if len(resourceUpdate.DesiredState.Schema.Opaque()) == 0 && !hasOpaqueValues(resourceUpdate.DesiredState.Properties) {
+			continue
 		}
+		transformed, err := t.ApplyToResource(&resourceUpdate.DesiredState)
+		if err != nil {
+			f.Log().Error("Failed to hash resource update during final cleanup commandID=%s resourceLabel=%s: %v",
+				command.ID, resourceUpdate.DesiredState.Label, err)
+			return false, fmt.Errorf("failed to hash resource update %s during final cleanup: %w", resourceUpdate.DesiredState.Label, err)
+		}
+		command.ResourceUpdates[i].DesiredState = *transformed
+		hashedCount++
 	}
 
 	if hashedCount > 0 {
