@@ -1578,3 +1578,10 @@ func TestEmbed_DuplicateIdenticalSpans(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "cf.fn('VAL-42', 'VAL-42')", gjson.GetBytes(plugin, "code").String())
 }
+
+func TestToPluginFormat_ErrorsOnHashedValue(t *testing.T) {
+	props := json.RawMessage(`{"SecretString":{"$value":"deadbeef","$visibility":"Opaque","$hashed":true}}`)
+	_, err := ConvertToPluginFormat(props) // exported entry at resolver.go:33
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "hashed")
+}

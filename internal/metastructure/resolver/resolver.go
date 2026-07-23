@@ -31,6 +31,9 @@ func ResolvePropertyReferences(ksuidUri pkgmodel.FormaeURI, properties json.RawM
 
 // ConvertToPluginFormat converts properties to the format expected by cloud provider plugins
 func ConvertToPluginFormat(properties json.RawMessage) (json.RawMessage, error) {
+	if err := guardNoHashedValues(properties); err != nil {
+		return nil, err
+	}
 	resolver := newPropertyResolver(properties)
 	resolved, err := resolver.resolveReferences(properties)
 	if err != nil {
@@ -38,6 +41,42 @@ func ConvertToPluginFormat(properties json.RawMessage) (json.RawMessage, error) 
 		return nil, err
 	}
 	return resolver.toPluginFormat(resolved)
+}
+
+// guardNoHashedValues rejects any property carrying a $hashed:true marker.
+// Hashed values are terminal: once a secret has been hashed at rest, its
+// stored digest must never be sent to a plugin as if it were the live
+// secret value.
+func guardNoHashedValues(properties json.RawMessage) error {
+	if len(properties) == 0 {
+		return nil
+	}
+	var props map[string]any
+	if err := json.Unmarshal(properties, &props); err != nil {
+		return nil // malformed here is handled elsewhere; guard only checks structure it can read
+	}
+	return scanHashed(props, "")
+}
+
+func scanHashed(v any, path string) error {
+	switch val := v.(type) {
+	case map[string]any:
+		if h, ok := val["$hashed"].(bool); ok && h {
+			return fmt.Errorf("refusing to send hashed secret at %q to plugin: hashed values are terminal (needs live resolution)", path)
+		}
+		for k, child := range val {
+			if err := scanHashed(child, path+"/"+k); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for i, child := range val {
+			if err := scanHashed(child, fmt.Sprintf("%s/%d", path, i)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // ExtractResolvableURIs extracts all resolvable URIs from a resource
