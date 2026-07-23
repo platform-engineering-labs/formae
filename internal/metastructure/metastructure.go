@@ -23,6 +23,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/auth"
 	"github.com/platform-engineering-labs/formae/internal/constants"
 	"github.com/platform-engineering-labs/formae/internal/datastore"
+	"github.com/platform-engineering-labs/formae/internal/datastore/migration"
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/changeset"
@@ -219,6 +220,16 @@ func (m *Metastructure) Start() error {
 		return err
 	}
 	m.Node = node
+
+	// One-time, idempotent sweep that hashes any plaintext opaque secrets left
+	// behind by writes made before opaque-value hashing existed (PLA-320). Safe
+	// to run on every boot: it's a no-op once everything eligible is hashed, and
+	// it never touches DesiredState of a command that isn't final yet, so this
+	// can't interfere with ReRunIncompleteCommands below.
+	if err := migration.BackfillHashedSecrets(m.Datastore); err != nil {
+		slog.Error("Failed to backfill hashed secrets", "error", err)
+		return err
+	}
 
 	return m.ReRunIncompleteCommands()
 }
