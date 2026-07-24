@@ -33,6 +33,7 @@ type Model struct {
 	width     int
 	height    int
 	spinner   spinner.Model
+	watcher   *theme.OmarchyWatcher
 	nags      []string
 	nagSeen   map[string]struct{}
 	statsSent bool
@@ -63,7 +64,7 @@ func New(th *theme.Theme, client Client, opts Options) Model {
 	// applied query and the shared query bar with it so it is threaded to the
 	// fetch and shown in the bar, mirroring the status-command TUI.
 	tabs[opts.FocusTab].query = opts.Query
-	return Model{
+	model := Model{
 		th:      th,
 		keys:    tui.DefaultKeyMap(),
 		client:  client,
@@ -75,6 +76,31 @@ func New(th *theme.Theme, client Client, opts Options) Model {
 		nagSeen: make(map[string]struct{}),
 		query:   components.NewQueryBar(th, opts.Query),
 	}
+	if th.Name == "omarchy" {
+		if w, err := theme.NewOmarchyWatcher(); err == nil {
+			model.watcher = w
+		}
+	}
+	return model
+}
+
+// ApplyTheme swaps the model (and its per-tab caches) onto a new theme: it
+// threads the theme into every tab, rebuilds each tab's themed table styling
+// (components.Table bakes header/cell/selected-row styles in at construction
+// time — see Table.SetTheme) and cached per-cell styled replacements
+// (tabModel.styledCells, rebuilt via sync — see tab.go), re-themes the query
+// bar in place (WithTheme preserves any in-progress edit/focus state), and
+// rebuilds the stateful spinner.
+func (m Model) ApplyTheme(t *theme.Theme) Model {
+	m.th = t
+	for i := range m.tabs {
+		m.tabs[i].th = t
+		m.tabs[i].table = m.tabs[i].table.SetTheme(t)
+		m.tabs[i] = m.tabs[i].sync(m.opts.MaxRows)
+	}
+	m.query = m.query.WithTheme(t)
+	m.spinner = components.NewSpinner(t)
+	return m
 }
 
 // Nags returns the deduped, insertion-ordered nag messages collected across all
@@ -94,10 +120,14 @@ func (m Model) Nags() []string {
 // tabLoading transition happens in Update when the first fetch fires.
 func (m Model) Init() tea.Cmd {
 	// The focus tab's query was seeded from opts.Query in New (D3).
-	return tea.Batch(
+	cmds := []tea.Cmd{
 		m.spinner.Tick,
 		fetchCmd(m.client, m.specs, m.active, m.tabs[m.active].query, false),
-	)
+	}
+	if m.watcher != nil {
+		cmds = append(cmds, m.watcher.WaitCmd())
+	}
+	return tea.Batch(cmds...)
 }
 
 // Update handles all incoming messages and key events.
@@ -134,6 +164,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tabLoadedMsg:
 		return m.handleTabLoaded(msg)
+
+	case theme.ApplyThemeMsg:
+		m = m.ApplyTheme(msg.Theme)
+		cmds := []tea.Cmd{m.spinner.Tick} // restart the tick at the new interval
+		if m.watcher != nil {
+			cmds = append(cmds, m.watcher.WaitCmd()) // re-arm the watch
+		}
+		return m, tea.Batch(cmds...)
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
