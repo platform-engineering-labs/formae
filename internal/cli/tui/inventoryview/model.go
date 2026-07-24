@@ -100,6 +100,15 @@ func (m Model) ApplyTheme(t *theme.Theme) Model {
 	}
 	m.query = m.query.WithTheme(t)
 	m.spinner = components.NewSpinner(t)
+	if m.detailOpen {
+		// The detail screen (if open) has its colorized content baked into
+		// m.detailViewport once, at openDetail time (see openDetail below) —
+		// it is not re-derived from m.th on every View(). Rebuild it now so a
+		// live theme change (e.g. the Omarchy watcher) recolors the screen
+		// the user is actually looking at instead of leaving it stale until
+		// the next esc/enter round-trip.
+		m.detailViewport = m.refreshDetailContent()
+	}
 	return m
 }
 
@@ -363,17 +372,38 @@ func (m Model) openDetail() (tea.Model, tea.Cmd) {
 	if vpH < 1 {
 		vpH = 1
 	}
-	vp := viewport.New(m.width, vpH)
+	m.detailViewport = viewport.New(m.width, vpH)
+	m.detailViewport = m.refreshDetailContent()
+	m.detailOpen = true
+	return m, nil
+}
+
+// refreshDetailContent rebuilds the detail viewport's content from the
+// retained plain m.detailBody, recolorized for the CURRENT theme (m.th). It
+// is the single place that turns the plain body into the indented, colorized
+// string the viewport displays — used both by openDetail (first render) and
+// by ApplyTheme (recoloring an already-open detail screen after a live theme
+// change, see ApplyTheme above).
+//
+// It reuses the existing m.detailViewport (rather than constructing a new
+// one) so width/height and, importantly, YOffset carry over unchanged:
+// viewport.SetContent only clamps YOffset if it now exceeds the new
+// content's line count, it never resets it to zero — so a recolorize never
+// jumps the user back to the top of a scrolled detail body.
+func (m Model) refreshDetailContent() viewport.Model {
+	contentWidth := m.width - detailIndent
+	if contentWidth < 1 {
+		contentWidth = 1
+	}
 	// Build content: indent 2 spaces, truncate to the content width, then colorize.
 	indent := strings.Repeat(" ", detailIndent)
 	contentLines := make([]string, len(m.detailBody))
 	for i, line := range m.detailBody {
 		contentLines[i] = indent + colorizeDetailLine(m.th, components.Truncate(line, contentWidth))
 	}
+	vp := m.detailViewport
 	vp.SetContent(strings.Join(contentLines, "\n"))
-	m.detailViewport = vp
-	m.detailOpen = true
-	return m, nil
+	return vp
 }
 
 // handleDetailKey handles key events while the detail screen is open.
