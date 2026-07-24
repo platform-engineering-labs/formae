@@ -17,7 +17,7 @@ import (
 var warnTo io.Writer = os.Stderr
 
 // ResolveConfigDir returns the formae config directory using a
-// compatibility-safe precedence (see design RFC-27):
+// compatibility-safe precedence:
 //  1. FORMAE_CONFIG_DIR (expanded + absolutized) — always wins.
 //  2. A populated $HOME/.config/formae — even if $XDG_CONFIG_HOME is also
 //     populated (legacy wins; warn on the both-populated tie-break).

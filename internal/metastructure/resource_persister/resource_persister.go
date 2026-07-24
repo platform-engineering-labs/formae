@@ -498,9 +498,12 @@ func (rp *ResourcePersister) processResourceUpdate(commandID string, rc resource
 				}
 			}
 
-			// Only persist if Properties or ReadOnlyProperties have changed
-			if !util.JsonEqualRaw(currentResource.Properties, rc.DesiredState.Properties) ||
-				!util.JsonEqualRaw(currentResource.ReadOnlyProperties, rc.DesiredState.ReadOnlyProperties) {
+			// Only persist if Properties or ReadOnlyProperties have changed.
+			// Compare against the hashed copy (secretSafeResource) — the same
+			// representation we store — so read-back secrets converge hash-vs-hash
+			// instead of showing perpetual drift against the stored hash.
+			if !util.JsonEqualRaw(currentResource.Properties, secretSafeResource.Properties) ||
+				!util.JsonEqualRaw(currentResource.ReadOnlyProperties, secretSafeResource.ReadOnlyProperties) {
 
 				// Preserve the current stack and managed state during sync READ operations
 				// to prevent stale sync data from overwriting recent stack changes
@@ -509,7 +512,7 @@ func (rp *ResourcePersister) processResourceUpdate(commandID string, rc resource
 				secretSafeResource.Schema.Discoverable = currentResource.Schema.Discoverable
 				secretSafeResource.Schema.Extractable = currentResource.Schema.Extractable
 
-				// RFC-0041: sync must never rename. The label is part of formae's
+				// Sync must never rename. The label is part of formae's
 				// internal identity, not the cloud's; sync reads cloud state and
 				// must not mutate the managed row's label. If a sync-origin update
 				// ever arrives with a label diff against the current row, it

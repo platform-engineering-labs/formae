@@ -90,6 +90,7 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunStoreResourceAfterDeleteWithSameNativeID(t, newDS)
 	RunStoreResourceWithDifferentKSUIDSameData(t, newDS)
 	RunStoreResourceRenamePreservesKsuidAndAddsNewVersion(t, newDS)
+	RunScrubResourceVersions(t, newDS)
 	RunReapedResourcesInvisibleToLiveQueries(t, newDS)
 	RunResourceWriteRejectedWhenTargetReaped(t, newDS)
 	RunResourceWriteRejectedWhenIncarnationChanged(t, newDS)

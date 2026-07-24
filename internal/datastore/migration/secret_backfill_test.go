@@ -1,0 +1,378 @@
+// © 2025 Platform Engineering Labs Inc.
+//
+// SPDX-License-Identifier: FSL-1.1-ALv2
+
+//go:build unit
+
+package migration
+
+import (
+	"context"
+	"encoding/json"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/platform-engineering-labs/formae/internal/datastore"
+	dssqlite "github.com/platform-engineering-labs/formae/internal/datastore/sqlite"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
+)
+
+func testSchema() pkgmodel.Schema {
+	return pkgmodel.Schema{
+		Identifier: "test-type",
+		Hints: map[string]pkgmodel.FieldHint{
+			"SecretString": {Opaque: true},
+		},
+	}
+}
+
+// seedCommand stores a FormaCommand with a single ResourceUpdate carrying a
+// plaintext schema-opaque secret in DesiredState, PriorState (the read-back
+// snapshot) and PreviousProperties (also a read-back snapshot). Writes go
+// straight through the datastore, bypassing any of the live hashing hooks,
+// to simulate data written before the hashing landed.
+func seedCommand(t *testing.T, ds datastore.Datastore, state forma_command.CommandState, secretSuffix string) *forma_command.FormaCommand {
+	t.Helper()
+
+	cmd := &forma_command.FormaCommand{
+		ID:      "cmd-" + secretSuffix,
+		Command: pkgmodel.CommandApply,
+		State:   state,
+		Config: config.FormaCommandConfig{
+			Mode: pkgmodel.FormaApplyModeReconcile,
+		},
+		StartTs:    util.TimeNow(),
+		ModifiedTs: util.TimeNow(),
+		ResourceUpdates: []resource_update.ResourceUpdate{
+			{
+				DesiredState: pkgmodel.Resource{
+					Label:      "test-resource-" + secretSuffix,
+					Type:       "test-type",
+					Stack:      "test-stack",
+					Schema:     testSchema(),
+					Properties: json.RawMessage(`{"SecretString":"plaintext-desired-` + secretSuffix + `"}`),
+					Ksuid:      util.NewID(),
+				},
+				PriorState: pkgmodel.Resource{
+					Properties: json.RawMessage(`{"SecretString":"plaintext-prior-` + secretSuffix + `"}`),
+				},
+				PreviousProperties: json.RawMessage(`{"SecretString":"plaintext-previous-` + secretSuffix + `"}`),
+				ResourceTarget: pkgmodel.Target{
+					Label: "test-target",
+				},
+				Operation:  resource_update.OperationUpdate,
+				State:      resource_update.ResourceUpdateStateSuccess,
+				StackLabel: "test-stack",
+			},
+		},
+	}
+
+	require.NoError(t, ds.StoreFormaCommand(cmd, cmd.ID))
+	return cmd
+}
+
+func findCommand(t *testing.T, cmds []*forma_command.FormaCommand, id string) *forma_command.FormaCommand {
+	t.Helper()
+	for _, c := range cmds {
+		if c.ID == id {
+			return c
+		}
+	}
+	t.Fatalf("command %s not found", id)
+	return nil
+}
+
+func isHashed(t *testing.T, props json.RawMessage, field string) bool {
+	t.Helper()
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(props, &m))
+	envelope, ok := m[field].(map[string]any)
+	if !ok {
+		return false
+	}
+	hashed, _ := envelope["$hashed"].(bool)
+	return hashed
+}
+
+func newTestDatastore(t *testing.T) datastore.Datastore {
+	t.Helper()
+	cfg := &pkgmodel.DatastoreConfig{
+		DatastoreType: pkgmodel.SqliteDatastore,
+		Sqlite: pkgmodel.SqliteConfig{
+			FilePath: ":memory:",
+		},
+	}
+	ds, err := dssqlite.NewDatastoreSQLite(context.Background(), cfg, "test")
+	require.NoError(t, err)
+	t.Cleanup(ds.Close)
+	return ds
+}
+
+func TestBackfillHashedSecrets_HashesFinalButSkipsInflightDesiredState(t *testing.T) {
+	ds := newTestDatastore(t)
+
+	finalCmd := seedCommand(t, ds, forma_command.CommandStateSuccess, "final")
+	inflightCmd := seedCommand(t, ds, forma_command.CommandStateInProgress, "inflight")
+
+	require.NoError(t, BackfillHashedSecrets(ds))
+
+	cmds, err := ds.LoadFormaCommands()
+	require.NoError(t, err)
+
+	final := findCommand(t, cmds, finalCmd.ID)
+	inflight := findCommand(t, cmds, inflightCmd.ID)
+
+	require.Len(t, final.ResourceUpdates, 1)
+	require.Len(t, inflight.ResourceUpdates, 1)
+
+	assert.True(t, isHashed(t, final.ResourceUpdates[0].DesiredState.Properties, "SecretString"),
+		"final command's DesiredState secret must be hashed")
+	assert.False(t, isHashed(t, inflight.ResourceUpdates[0].DesiredState.Properties, "SecretString"),
+		"in-flight DesiredState input must stay plaintext for resume")
+
+	// PriorState.Properties is live plugin input on resume (fed into Read/Update
+	// calls via convertResourceForPlugin), so it must only be hashed once the
+	// owning command is final — same gate as DesiredState.
+	assert.True(t, isHashed(t, final.ResourceUpdates[0].PriorState.Properties, "SecretString"),
+		"final command's PriorState secret must be hashed")
+	assert.False(t, isHashed(t, inflight.ResourceUpdates[0].PriorState.Properties, "SecretString"),
+		"in-flight PriorState input must stay plaintext for resume")
+
+	// PreviousProperties is only ever used for logging and API diff display,
+	// never fed back into a plugin call, so it's always safe to hash regardless
+	// of the owning command's state.
+	assert.True(t, isHashed(t, final.ResourceUpdates[0].PreviousProperties, "SecretString"))
+	assert.True(t, isHashed(t, inflight.ResourceUpdates[0].PreviousProperties, "SecretString"))
+
+	// Idempotency: a second sweep must be a no-op.
+	require.NoError(t, BackfillHashedSecrets(ds))
+	cmds2, err := ds.LoadFormaCommands()
+	require.NoError(t, err)
+	final2 := findCommand(t, cmds2, finalCmd.ID)
+	inflight2 := findCommand(t, cmds2, inflightCmd.ID)
+
+	assert.JSONEq(t,
+		string(final.ResourceUpdates[0].DesiredState.Properties),
+		string(final2.ResourceUpdates[0].DesiredState.Properties),
+		"re-running the sweep must not change already-hashed values")
+	assert.False(t, isHashed(t, inflight2.ResourceUpdates[0].DesiredState.Properties, "SecretString"),
+		"in-flight DesiredState must still be plaintext after a second sweep")
+	assert.False(t, isHashed(t, inflight2.ResourceUpdates[0].PriorState.Properties, "SecretString"),
+		"in-flight PriorState must still be plaintext after a second sweep")
+}
+
+// staleSecretSchema mimics a resources/resource_updates row written before the
+// secret field was typed formae.SecretValue: the embedded schema does NOT mark
+// SecretString opaque. The backfill must still hash it, keyed on the resource
+// type via the hard-coded known-opaque table.
+func staleSecretSchema() pkgmodel.Schema {
+	return pkgmodel.Schema{
+		Identifier: knownSecretType,
+		Hints: map[string]pkgmodel.FieldHint{
+			"SecretString": {Opaque: false},
+		},
+	}
+}
+
+const knownSecretType = "AWS::SecretsManager::Secret"
+
+func TestBackfillHashedSecrets_HashesKnownSecretTypeDespiteStaleSchema(t *testing.T) {
+	ds := newTestDatastore(t)
+
+	cmd := &forma_command.FormaCommand{
+		ID:      "cmd-stale",
+		Command: pkgmodel.CommandApply,
+		State:   forma_command.CommandStateSuccess,
+		Config: config.FormaCommandConfig{
+			Mode: pkgmodel.FormaApplyModeReconcile,
+		},
+		StartTs:    util.TimeNow(),
+		ModifiedTs: util.TimeNow(),
+		ResourceUpdates: []resource_update.ResourceUpdate{
+			{
+				DesiredState: pkgmodel.Resource{
+					Label:      "known-secret",
+					Type:       knownSecretType,
+					Stack:      "test-stack",
+					Schema:     staleSecretSchema(),
+					Properties: json.RawMessage(`{"SecretString":"stale-plaintext-desired"}`),
+					Ksuid:      util.NewID(),
+				},
+				PriorState: pkgmodel.Resource{
+					Properties: json.RawMessage(`{"SecretString":"stale-plaintext-prior"}`),
+				},
+				PreviousProperties: json.RawMessage(`{"SecretString":"stale-plaintext-previous"}`),
+				ResourceTarget: pkgmodel.Target{
+					Label: "test-target",
+				},
+				Operation:  resource_update.OperationUpdate,
+				State:      resource_update.ResourceUpdateStateSuccess,
+				StackLabel: "test-stack",
+			},
+		},
+	}
+	require.NoError(t, ds.StoreFormaCommand(cmd, cmd.ID))
+
+	require.NoError(t, BackfillHashedSecrets(ds))
+
+	cmds, err := ds.LoadFormaCommands()
+	require.NoError(t, err)
+	got := findCommand(t, cmds, cmd.ID)
+	require.Len(t, got.ResourceUpdates, 1)
+
+	assert.True(t, isHashed(t, got.ResourceUpdates[0].DesiredState.Properties, "SecretString"),
+		"known-secret-type DesiredState must be hashed despite a stale non-opaque embedded schema")
+	assert.True(t, isHashed(t, got.ResourceUpdates[0].PriorState.Properties, "SecretString"),
+		"known-secret-type PriorState must be hashed despite a stale schema")
+	assert.True(t, isHashed(t, got.ResourceUpdates[0].PreviousProperties, "SecretString"),
+		"known-secret-type PreviousProperties must be hashed despite a stale schema")
+}
+
+func TestBackfillHashedSecrets_HashesKnownSecretTypeInResourcesTableDespiteStaleSchema(t *testing.T) {
+	ds := newTestDatastore(t)
+
+	resource := &pkgmodel.Resource{
+		Label:      "known-secret",
+		Type:       knownSecretType,
+		Stack:      "test-stack",
+		NativeID:   "native-stale",
+		Managed:    true,
+		Schema:     staleSecretSchema(),
+		Properties: json.RawMessage(`{"SecretString":"stale-plaintext-resource"}`),
+	}
+	_, err := ds.StoreResource(resource, "seed-command")
+	require.NoError(t, err)
+
+	require.NoError(t, BackfillHashedSecrets(ds))
+
+	resources, err := ds.LoadAllResources()
+	require.NoError(t, err)
+	require.Len(t, resources, 1)
+	assert.True(t, isHashed(t, resources[0].Properties, "SecretString"),
+		"known-secret-type resources row must be hashed despite a stale non-opaque embedded schema")
+}
+
+func TestBackfillHashedSecrets_HashesKnownRDSPasswordFields(t *testing.T) {
+	ds := newTestDatastore(t)
+
+	// An RDS DBInstance row written before its password fields were typed as
+	// secret values: embedded schema marks neither field opaque. Both must be
+	// hashed via the hard-coded known-opaque table.
+	staleRDSSchema := pkgmodel.Schema{
+		Identifier: "AWS::RDS::DBInstance",
+		Hints: map[string]pkgmodel.FieldHint{
+			"MasterUserPassword":    {Opaque: false},
+			"TdeCredentialPassword": {Opaque: false},
+		},
+	}
+	resource := &pkgmodel.Resource{
+		Label:    "test-db",
+		Type:     "AWS::RDS::DBInstance",
+		Stack:    "test-stack",
+		NativeID: "native-db",
+		Managed:  true,
+		Schema:   staleRDSSchema,
+		Properties: json.RawMessage(
+			`{"MasterUserPassword":"stale-master-pw","TdeCredentialPassword":"stale-tde-pw"}`),
+	}
+	_, err := ds.StoreResource(resource, "seed-command")
+	require.NoError(t, err)
+
+	require.NoError(t, BackfillHashedSecrets(ds))
+
+	resources, err := ds.LoadAllResources()
+	require.NoError(t, err)
+	require.Len(t, resources, 1)
+	assert.True(t, isHashed(t, resources[0].Properties, "MasterUserPassword"),
+		"RDS MasterUserPassword must be hashed via the known-opaque table")
+	assert.True(t, isHashed(t, resources[0].Properties, "TdeCredentialPassword"),
+		"RDS TdeCredentialPassword must be hashed via the known-opaque table")
+}
+
+func versionsForLabel(vs []datastore.ResourceVersion, label string) []datastore.ResourceVersion {
+	var out []datastore.ResourceVersion
+	for _, v := range vs {
+		if v.Resource.Label == label {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+func TestBackfillHashedSecrets_ScrubsAllResourceVersions(t *testing.T) {
+	ds := newTestDatastore(t)
+
+	// Two versions of the same resource, both written plaintext (pre-fix). The
+	// resources table keeps version history, so the superseded version still
+	// holds the plaintext secret at rest — the backfill must scrub every version.
+	res := &pkgmodel.Resource{
+		Label: "db", Type: "AWS::RDS::DBInstance", Stack: "s", NativeID: "n-db", Managed: true,
+		Schema: pkgmodel.Schema{
+			Identifier: "AWS::RDS::DBInstance",
+			Hints:      map[string]pkgmodel.FieldHint{"MasterUserPassword": {Opaque: true}},
+		},
+		Properties: json.RawMessage(`{"MasterUserPassword":"pw-v1"}`),
+	}
+	_, err := ds.StoreResource(res, "c1")
+	require.NoError(t, err)
+	res.Properties = json.RawMessage(`{"MasterUserPassword":"pw-v2"}`)
+	_, err = ds.StoreResource(res, "c2")
+	require.NoError(t, err)
+
+	pre, err := ds.LoadAllResourceVersions()
+	require.NoError(t, err)
+	require.Len(t, versionsForLabel(pre, "db"), 2, "expected two seeded versions")
+
+	require.NoError(t, BackfillHashedSecrets(ds))
+
+	post, err := ds.LoadAllResourceVersions()
+	require.NoError(t, err)
+	versions := versionsForLabel(post, "db")
+	require.Len(t, versions, 2, "scrub is in place — no new version appended")
+	for _, v := range versions {
+		assert.True(t, isHashed(t, v.Resource.Properties, "MasterUserPassword"),
+			"resource version %s must be hashed, not left plaintext in history", v.Version)
+	}
+
+	// Idempotency: a second sweep must not change or append versions.
+	require.NoError(t, BackfillHashedSecrets(ds))
+	post2, err := ds.LoadAllResourceVersions()
+	require.NoError(t, err)
+	require.Len(t, versionsForLabel(post2, "db"), 2, "second sweep must not append versions")
+}
+
+func TestBackfillHashedSecrets_HashesResourcesTable(t *testing.T) {
+	ds := newTestDatastore(t)
+
+	resource := &pkgmodel.Resource{
+		Label:      "test-resource",
+		Type:       "test-type",
+		Stack:      "test-stack",
+		NativeID:   "native-1",
+		Managed:    true,
+		Schema:     testSchema(),
+		Properties: json.RawMessage(`{"SecretString":"plaintext-resource-secret"}`),
+	}
+	_, err := ds.StoreResource(resource, "seed-command")
+	require.NoError(t, err)
+
+	require.NoError(t, BackfillHashedSecrets(ds))
+
+	resources, err := ds.LoadAllResources()
+	require.NoError(t, err)
+	require.Len(t, resources, 1)
+	assert.True(t, isHashed(t, resources[0].Properties, "SecretString"))
+
+	// Idempotency: a second sweep must not append another version / change the value.
+	require.NoError(t, BackfillHashedSecrets(ds))
+	resourcesAfter, err := ds.LoadAllResources()
+	require.NoError(t, err)
+	require.Len(t, resourcesAfter, 1)
+	assert.JSONEq(t, string(resources[0].Properties), string(resourcesAfter[0].Properties))
+}

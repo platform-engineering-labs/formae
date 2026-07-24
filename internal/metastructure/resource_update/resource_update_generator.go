@@ -96,7 +96,7 @@ func GenerateResourceUpdates(
 		}
 	}
 
-	// RFC-0041: reject forma-authoring errors around `alias` before generating
+	// Reject forma-authoring errors around `alias` before generating
 	// updates. Only Apply commands carry user-authored aliases; sync/discovery
 	// commands construct resources programmatically and never set Alias.
 	if command == pkgmodel.CommandApply {
@@ -141,7 +141,7 @@ func GenerateResourceUpdates(
 // to a desired-state declaration. The match is by (Type, Label) within the
 // caller's already-narrowed stack scope.
 //
-// RFC-0041: when the desired declaration carries an `Alias`, a miss on the
+// When the desired declaration carries an `Alias`, a miss on the
 // current label falls through to a second lookup by the alias label. This is
 // the resource label rename path: the existing managed row sits at the old
 // label, the new declaration is at the new label, and the alias tells the
@@ -171,7 +171,7 @@ func matchExistingForDesired(existingResources []*pkgmodel.Resource, newResource
 // managed row refer to the same logical resource under reconcile semantics.
 // Matches require Type / Target equality and either the same stack or the
 // $unmanaged stack on the existing side. Labels match by either the current
-// label OR (RFC-0041) the forma resource's `alias` against the existing label.
+// label OR the forma resource's `alias` against the existing label.
 //
 // Without the alias arm the reconcile path treats a rename as
 // `delete(old) + create(new)`, destroying the cloud object.
@@ -221,7 +221,7 @@ func stackExistsInForma(forma *pkgmodel.Forma, stackLabel string) bool {
 	return false
 }
 
-// validateAliasUsage rejects two RFC-0041 forma-authoring errors that the
+// validateAliasUsage rejects two forma-authoring errors that the
 // generator would otherwise swallow:
 //
 //  1. Duplicate claim: two forma resources match the same existing managed
@@ -1160,7 +1160,7 @@ func findUnmanagedResource(resource pkgmodel.Resource, allResources map[string][
 			return *res, true
 		}
 	}
-	// RFC-0041: bring-under-management + rename in one apply. The forma's
+	// Bring-under-management + rename in one apply. The forma's
 	// resource declares the NEW human label, but the unmanaged row sits at
 	// the discovery default (recorded as `alias`). Without this fallback the
 	// generator emits a Create for the new label and orphans the unmanaged
@@ -1914,7 +1914,7 @@ func assignKSUIDs(resources []pkgmodel.Resource, ds ResourceDataLookup) ([]pkgmo
 			continue
 		}
 
-		// RFC-0041: a forma resource that declares `alias` is asking to take
+		// A forma resource that declares `alias` is asking to take
 		// over an existing managed row at the old label. Look up the existing
 		// KSUID by the alias triplet BEFORE falling through to the $unmanaged
 		// scan or minting a fresh KSUID. Without this, a rename mints a brand
@@ -1956,7 +1956,7 @@ func assignKSUIDs(resources []pkgmodel.Resource, ds ResourceDataLookup) ([]pkgmo
 			continue
 		}
 
-		// RFC-0041 edge case: bringing under management + renaming in one apply.
+		// Edge case: bringing under management + renaming in one apply.
 		// The existing row is in $unmanaged under the alias's discovery default
 		// label, not the new label. Try $unmanaged with the alias label too.
 		if resources[idx].Alias != "" {

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -253,7 +254,7 @@ func TestSynchronizer_ApplyThenDestroyThenSyncStack(t *testing.T) {
 
 func TestSynchronizer_SynchronizeOnce(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
-		readCalled := false
+		var readCalled atomic.Bool
 		updated := map[string]string{"foo": "updated", "bar": "updated"}
 		updatedJson, _ := json.Marshal(updated)
 
@@ -269,7 +270,7 @@ func TestSynchronizer_SynchronizeOnce(t *testing.T) {
 				}, nil
 			},
 			Read: func(request *resource.ReadRequest) (*resource.ReadResult, error) {
-				readCalled = true
+				readCalled.Store(true)
 
 				if request.NativeID == "1" {
 					return &resource.ReadResult{
@@ -320,13 +321,11 @@ func TestSynchronizer_SynchronizeOnce(t *testing.T) {
 
 		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test")
 		assert.NoError(t, err)
-		time.Sleep(1 * time.Second)
+		waitForApplyComplete(t, m)
 
 		// Manual one-time synchronization
-		err = m.ForceSync()
-		assert.NoError(t, err)
-		time.Sleep(2 * time.Second)
-		require.True(t, readCalled, "Read function should have been called during force sync")
+		waitForSync(t, m, readCalled.Load)
+		require.True(t, readCalled.Load(), "Read function should have been called during force sync")
 
 		// Verify synchronization happened
 		resourcesByStack, err := m.Datastore.LoadAllResourcesByStack()
@@ -1100,7 +1099,7 @@ func TestSynchronizer_UnregistersResourcesAfterFailedChangeset(t *testing.T) {
 // new fields returned by Read are classified as regular Properties (not ReadOnlyProperties).
 func TestSynchronizer_SyncPicksUpNewSchemaFields(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
-		readCalled := false
+		var readCalled atomic.Bool
 
 		// The plugin's full schema for FakeAWS::S3::Bucket includes many fields including
 		// "VersioningConfiguration". We apply a resource with a restricted schema that
@@ -1118,7 +1117,7 @@ func TestSynchronizer_SyncPicksUpNewSchemaFields(t *testing.T) {
 				}, nil
 			},
 			Read: func(request *resource.ReadRequest) (*resource.ReadResult, error) {
-				readCalled = true
+				readCalled.Store(true)
 				// Return properties that include a field NOT in the resource's original schema
 				return &resource.ReadResult{
 					ResourceType: request.ResourceType,
@@ -1155,13 +1154,11 @@ func TestSynchronizer_SyncPicksUpNewSchemaFields(t *testing.T) {
 
 		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test")
 		require.NoError(t, err)
-		time.Sleep(1 * time.Second)
+		waitForApplyComplete(t, m)
 
 		// Force a one-time sync
-		err = m.ForceSync()
-		require.NoError(t, err)
-		time.Sleep(2 * time.Second)
-		require.True(t, readCalled, "Read function should have been called during force sync")
+		waitForSync(t, m, readCalled.Load)
+		require.True(t, readCalled.Load(), "Read function should have been called during force sync")
 
 		// Verify the resource after sync
 		resourcesByStack, err := m.Datastore.LoadAllResourcesByStack()

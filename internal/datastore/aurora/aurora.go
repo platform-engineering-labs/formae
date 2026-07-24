@@ -1304,6 +1304,66 @@ func (d *DatastoreAuroraDataAPI) CountResourcesInStack(label string) (int, error
 	return 0, fmt.Errorf("unexpected type for COUNT result")
 }
 
+func (d *DatastoreAuroraDataAPI) LoadAllResourceVersions() ([]datastore.ResourceVersion, error) {
+	ctx := context.Background()
+
+	// Note: Large datasets may hit the 1 MiB response limit
+	query := `SELECT uri, version, data, ksuid FROM resources`
+	output, err := d.executeStatement(ctx, query, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var versions []datastore.ResourceVersion
+	for _, record := range output.Records {
+		if len(record) < 4 {
+			continue
+		}
+		uri, err := getStringField(record[0])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse uri: %w", err)
+		}
+		version, err := getStringField(record[1])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse version: %w", err)
+		}
+		jsonData, err := getStringField(record[2])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse data: %w", err)
+		}
+		ksuid, err := getStringField(record[3])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse ksuid: %w", err)
+		}
+		var resource pkgmodel.Resource
+		if err := json.Unmarshal([]byte(jsonData), &resource); err != nil {
+			return nil, err
+		}
+		resource.Ksuid = ksuid
+		versions = append(versions, datastore.ResourceVersion{URI: uri, Version: version, Resource: &resource})
+	}
+	return versions, nil
+}
+
+func (d *DatastoreAuroraDataAPI) UpdateResourceVersionData(uri string, version string, resource *pkgmodel.Resource) error {
+	ctx := context.Background()
+
+	data, err := json.Marshal(resource)
+	if err != nil {
+		return err
+	}
+	// data is a JSONB column; the Data API binds :data as text, so cast it
+	// explicitly to jsonb exactly as the insert/upsert paths do.
+	query := `UPDATE resources SET data = :data::jsonb WHERE uri = :uri AND version = :version`
+	params := []types.SqlParameter{
+		{Name: aws.String("data"), Value: &types.FieldMemberStringValue{Value: string(data)}},
+		{Name: aws.String("uri"), Value: &types.FieldMemberStringValue{Value: uri}},
+		{Name: aws.String("version"), Value: &types.FieldMemberStringValue{Value: version}},
+	}
+	_, err = d.executeStatement(ctx, query, params)
+	return err
+}
+
 func (d *DatastoreAuroraDataAPI) LoadAllResourcesByStack() (map[string][]*pkgmodel.Resource, error) {
 	ctx := context.Background()
 
@@ -3699,7 +3759,12 @@ func (d *DatastoreAuroraDataAPI) BulkStoreResourceUpdates(commandID string, upda
 				:remaining_resolvables, :reference_labels, :previous_properties)
 			ON CONFLICT (command_id, ksuid, operation) DO UPDATE SET
 				state = EXCLUDED.state,
-				modified_ts = EXCLUDED.modified_ts
+				modified_ts = EXCLUDED.modified_ts,
+				resource = EXCLUDED.resource,
+				existing_resource = EXCLUDED.existing_resource,
+				previous_properties = EXCLUDED.previous_properties,
+				progress_result = EXCLUDED.progress_result,
+				most_recent_progress = EXCLUDED.most_recent_progress
 		`
 
 		params := []types.SqlParameter{

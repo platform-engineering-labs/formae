@@ -15,7 +15,7 @@ import (
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
-// RFC-0041 reconcile-with-drift-and-rename: a modification recorded against
+// Reconcile-with-drift-and-rename: a modification recorded against
 // the OLD label must be considered absorbed when the forma renames that
 // resource (declares `alias = <old>`). Without alias-awareness the modification
 // shows up as unabsorbed and reconcile rejects the apply.
@@ -53,7 +53,7 @@ func TestFilterUnabsorbedModifications_ForeignModificationStillUnabsorbed(t *tes
 
 // A modification keyed by the NEW label paired with a ResourceUpdate against
 // that same key remains unabsorbed — the user is explicitly applying the
-// drift, which is the existing pre-RFC-0041 behaviour. Verifies the alias
+// drift, which is the existing behaviour. Verifies the alias
 // path doesn't accidentally swallow modifications that have a real update.
 func TestFilterUnabsorbedModifications_ModificationWithPendingUpdateIsUnabsorbed(t *testing.T) {
 	mods := []datastore.ResourceModification{

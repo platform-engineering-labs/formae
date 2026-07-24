@@ -270,6 +270,69 @@ local testDeepNested = new TestDeepNested {
     }
 }
 
+// Test that a SecretValue-typed field is marked Opaque in extracted hints,
+// covering direct/nullable/union field-type positions.
+@formae.ResourceHint {
+    type = "Test::Secret"
+    identifier = "Ref"
+}
+local class TestSecretResource extends formae.Resource {
+    @formae.FieldHint
+    secretString: (String|formae.SecretValue)?
+
+    @formae.FieldHint
+    plainString: String
+}
+
+local testSecretResource = new TestSecretResource {
+    label = "test-secret"
+    secretString = "shh"
+    plainString = "value"
+}
+
+// Test that a SecretValue-typed field nested inside a SubResource is also
+// marked Opaque, covering the subresource-scalar position.
+@formae.SubResourceHint
+local class TestSecretSub extends formae.SubResource {
+    @formae.FieldHint
+    secretNested: (String|formae.SecretValue)?
+}
+
+@formae.ResourceHint {
+    type = "Test::SecretParent"
+    identifier = "Ref"
+}
+local class TestSecretParentResource extends formae.Resource {
+    @formae.FieldHint
+    nested: TestSecretSub
+}
+
+local testSecretParentResource = new TestSecretParentResource {
+    label = "test-secret-parent"
+    nested = new TestSecretSub {
+        secretNested = "shh-nested"
+    }
+}
+
+// Test that a secret field typed through a typealias (rather than referencing
+// formae.SecretValue directly) is still marked Opaque, covering the
+// reflect.TypeAlias referent position in isSecretValueType.
+local typealias TestSecretAlias = String|formae.SecretValue
+
+@formae.ResourceHint {
+    type = "Test::SecretAlias"
+    identifier = "Ref"
+}
+local class TestSecretAliasResource extends formae.Resource {
+    @formae.FieldHint
+    secretAliased: TestSecretAlias?
+}
+
+local testSecretAliasResource = new TestSecretAliasResource {
+    label = "test-secret-alias"
+    secretAliased = "shh-alias"
+}
+
 // Test config class with ConfigFieldHint annotations
 local class TestConfig {
     hidden fixed type: String = "TestProvider"
@@ -407,6 +470,14 @@ examples {
 
     ["Fq - hints"] {
         formae.fq.hints(reflect.Class(TestBucket))
+    }
+
+    ["Test Secret Resource - hints()"] {
+        testSecretResource.hints()
+    }
+
+    ["Test Secret Parent Resource - hints()"] {
+        testSecretParentResource.hints()
     }
 
     ["Fq - schema"] {
@@ -599,6 +670,22 @@ facts {
         hints.containsKey("bucketName") &&
         schema.Identifier == "BucketName" &&
         type == "AWS::S3::Bucket"
+    }
+
+    ["Opaque hint set for direct/nullable/union SecretValue field"] {
+        let (hints = testSecretResource.hints())
+        hints["secretString"].Opaque == true &&
+        hints["plainString"].Opaque == false
+    }
+
+    ["Opaque hint propagates for SecretValue field inside SubResource"] {
+        let (hints = testSecretParentResource.hints())
+        hints["nested.secretNested"].Opaque == true
+    }
+
+    ["Opaque hint set for typealias-typed SecretValue field"] {
+        let (hints = testSecretAliasResource.hints())
+        hints["secretAliased"].Opaque == true
     }
 
     ["FieldHint exposes AttachesTo"] {

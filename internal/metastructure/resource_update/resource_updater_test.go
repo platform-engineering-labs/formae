@@ -171,6 +171,65 @@ func TestResolveValue_NonUpdateLeavesPatchDocumentUntouched(t *testing.T) {
 	}
 }
 
+// TestResolveValue_SuppressesUnchangedHashedOpaqueField verifies that
+// regenerating PatchDocument at apply time
+// (e.g. when a sibling resolvable is substituted mid-update) must route through
+// the same SuppressUnchangedOpaqueValues + plugin-format-conversion path that
+// builds the initial patch, so an opaque field that is unchanged from what is
+// stored at rest (here: a schema-opaque secret hashed at rest, resubmitted with
+// its original plaintext) is suppressed out of the regenerated patch — not
+// resurfaced carrying the stored hash. Without this, resource_updater.go's
+// update() forwards PatchDocument to the plugin unconverted, so any hash
+// material surviving here would reach the plugin unguarded.
+func TestResolveValue_SuppressesUnchangedHashedOpaqueField(t *testing.T) {
+	const plaintext = "super-secret-value"
+	hashed := pkgmodel.ComputeValueHash(plaintext)
+	parentKsuid := "parent-ksuid"
+	parentURI := pkgmodel.FormaeURI("formae://" + parentKsuid + "#/Arn")
+
+	schema := pkgmodel.Schema{
+		Identifier: "Name",
+		Fields:     []string{"Name", "SecretString", "Endpoint"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"SecretString": {Opaque: true},
+		},
+	}
+
+	priorProps := json.RawMessage(`{
+		"Name": "n",
+		"SecretString": {"$value": "` + hashed + `", "$visibility": "Opaque", "$hashed": true},
+		"Endpoint": {"$ref": "formae://` + parentKsuid + `#/Arn", "$value": "v1"}
+	}`)
+
+	ru := &ResourceUpdate{
+		Operation: OperationUpdate,
+		PriorState: pkgmodel.Resource{
+			Properties: priorProps,
+			Schema:     schema,
+		},
+		DesiredState: pkgmodel.Resource{
+			// Desired resubmits the SAME underlying secret (plaintext that
+			// hashes to the stored digest) plus the still-unresolved $ref that
+			// this ResolveValue call is about to substitute.
+			Properties: json.RawMessage(`{
+				"Name": "n",
+				"SecretString": "` + plaintext + `",
+				"Endpoint": {"$ref": "formae://` + parentKsuid + `#/Arn", "$value": "v1"}
+			}`),
+			Schema: schema,
+		},
+	}
+
+	err := ru.ResolveValue(parentURI, "v2")
+	require.NoError(t, err)
+
+	patchStr := string(ru.DesiredState.PatchDocument)
+	assert.Contains(t, patchStr, "Endpoint", "patch must still capture the resolved field's change")
+	assert.NotContains(t, patchStr, hashed, "regenerated patch must not resurrect the stored hash for an unchanged opaque field")
+	assert.NotContains(t, patchStr, "$hashed", "regenerated patch must not carry a hashed marker")
+	assert.NotContains(t, patchStr, "SecretString", "an unchanged opaque field must be suppressed out of the regenerated patch entirely")
+}
+
 // TestMostRecentFailureMessage_FallsBackToFailureReason covers the
 // terminal-resolve-miss path: the resource fails before any plugin operation
 // runs, so there is no progress-based failure message. Without a fallback the
@@ -234,9 +293,9 @@ type stubUpdaterProcess struct {
 	sends []any
 }
 
-func (p *stubUpdaterProcess) Log() gen.Log    { return stubUpdaterLog{} }
-func (p *stubUpdaterProcess) Node() gen.Node  { return stubUpdaterNode{} }
-func (p *stubUpdaterProcess) PID() gen.PID    { return gen.PID{Node: "test-node", ID: 1} }
+func (p *stubUpdaterProcess) Log() gen.Log   { return stubUpdaterLog{} }
+func (p *stubUpdaterProcess) Node() gen.Node { return stubUpdaterNode{} }
+func (p *stubUpdaterProcess) PID() gen.PID   { return gen.PID{Node: "test-node", ID: 1} }
 func (p *stubUpdaterProcess) Send(_ any, msg any) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()

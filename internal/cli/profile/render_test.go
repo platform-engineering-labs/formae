@@ -74,7 +74,7 @@ func TestCurrentBare_PipedOutput(t *testing.T) {
 }
 
 // TestCurrentBare_UnsetPiped verifies that the unset+piped path returns plain
-// text with no ANSI — exercises Finding 1 fix via the isTerminal seam.
+// text with no ANSI — exercises the isTerminal seam.
 func TestCurrentBare_UnsetPiped(t *testing.T) {
 	// Empty temp dir → Active() returns ErrNotInitialized → active == "".
 	cfgDir := t.TempDir()

@@ -18,7 +18,7 @@ import (
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
-// RFC-0041 bug regression: the factory must use existingResource.Ksuid, not
+// The factory must use existingResource.Ksuid, not
 // newResource.Ksuid. The upstream assignKSUIDs path can mint a fresh KSUID
 // when the (stack, new-label, type) triplet misses; if the factory then
 // trusted that fresh KSUID, the persister would write a SECOND row with the
@@ -57,7 +57,7 @@ func TestRename_PreservesExistingKsuidNotNewResourceKsuid(t *testing.T) {
 		"a stray KSUID from upstream must not pass through; that creates duplicate rows")
 }
 
-// RFC-0041: pure label rename — alias matches an existing row by old label,
+// Pure label rename — alias matches an existing row by old label,
 // labels differ, properties are identical. The factory must emit a single
 // OperationUpdate carrying PriorState (old label) and DesiredState (new label).
 func TestRename_PureLabelChange_AliasDriven(t *testing.T) {
@@ -65,13 +65,13 @@ func TestRename_PureLabelChange_AliasDriven(t *testing.T) {
 	nativeID := "i-0abc1234"
 
 	existing := pkgmodel.Resource{
-		Ksuid:    ksuid,
-		Label:    "web-server",
-		Type:     "AWS::EC2::Instance",
-		Stack:    "prod",
-		Target:   "test-target",
-		NativeID: nativeID,
-		Schema:   pkgmodel.Schema{Fields: []string{"InstanceType"}},
+		Ksuid:      ksuid,
+		Label:      "web-server",
+		Type:       "AWS::EC2::Instance",
+		Stack:      "prod",
+		Target:     "test-target",
+		NativeID:   nativeID,
+		Schema:     pkgmodel.Schema{Fields: []string{"InstanceType"}},
 		Properties: json.RawMessage(`{"InstanceType": "t3.small"}`),
 		Managed:    true,
 	}
@@ -166,7 +166,7 @@ func TestRename_AliasDoesNotMatchExisting_Rejected(t *testing.T) {
 	require.Error(t, err, "alias mismatch is a generator bug")
 }
 
-// RFC-0041 edge case: bringing a resource under management AND renaming it in
+// Edge case: bringing a resource under management AND renaming it in
 // the same apply.
 //
 // Discovery has assigned a default label (e.g. "i-0abc1234") to an unmanaged

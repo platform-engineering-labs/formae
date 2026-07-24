@@ -346,7 +346,7 @@ func TestRunPluginSelect_LocalScanTitleNote(t *testing.T) {
 		"fromLocalScan=true must be passed to runMultiSelect when source is local scan")
 }
 
-// ── schema is threaded through to multi-select (Finding 3) ───────────────────
+// ── schema is threaded through to multi-select ───────────────────
 
 // D10 / View 1: the schema value from the call site must reach runMultiSelect.
 func TestRunPluginSelect_SchemaThreadedToMultiSelect(t *testing.T) {

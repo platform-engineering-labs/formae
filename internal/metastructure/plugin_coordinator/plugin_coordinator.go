@@ -225,7 +225,7 @@ func (c *PluginCoordinator) HandleMessage(from gen.PID, message any) error {
 
 		// Reject this plugin if any schema declares an unknown FieldHint.Format
 		// (typo/unsupported). Log and skip — a non-nil HandleMessage return would
-		// terminate the coordinator actor, taking down every registered plugin (PLA-196).
+		// terminate the coordinator actor, taking down every registered plugin.
 		for resourceType, schema := range merged.ResourceSchemas {
 			if err := canonicalize.ValidateSchemaFormats(resourceType, schema); err != nil {
 				c.Log().Error("Rejecting plugin %s registration: invalid schema format for namespace %s: %v", msg.Name, msg.Namespace, err)

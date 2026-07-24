@@ -266,7 +266,7 @@ func TestPlanAccrual_ReachableTargetsUntouched(t *testing.T) {
 }
 
 // TestNoMutation_PlanAndCandidateDetectionAreReadOnly asserts the load-bearing
-// constraint of Task 3: computing the accrual plan and evaluating reap
+// constraint: computing the accrual plan and evaluating reap
 // candidates never mutates the datastore. Only the (separately tested)
 // AdvanceTargetAccrual write — dispatched asynchronously by the actor via
 // ResourcePersister — mutates state; this test exercises just the pure

@@ -147,7 +147,7 @@ func TestHelpOverlay_ContainsHints(t *testing.T) {
 // assert the shared invariant: the {Key:"?", Desc:"close help"} entry appears
 // in the rendered output of every view's help overlay, using the same label
 // ("?") and description ("close help"). This is the actual consistency guarantee
-// documented in PLA-290.
+// the help overlay provides.
 func TestHelpOverlay_CrossViewGeneralInvariant(t *testing.T) {
 	// General groups as each view defines them (faithful copies, not truncated).
 	viewGenerals := []struct {

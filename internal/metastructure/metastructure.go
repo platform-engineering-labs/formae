@@ -23,6 +23,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/auth"
 	"github.com/platform-engineering-labs/formae/internal/constants"
 	"github.com/platform-engineering-labs/formae/internal/datastore"
+	"github.com/platform-engineering-labs/formae/internal/datastore/migration"
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/changeset"
@@ -211,6 +212,20 @@ func (m *Metastructure) Start() error {
 	// Set after construction but before Start(), same pattern as TestResourcePlugin.
 	if m.AuthPluginHandle != nil {
 		m.options.Env[gen.Env("AuthPluginHandle")] = m.AuthPluginHandle
+	}
+
+	// One-time, idempotent sweep that hashes any plaintext opaque secrets left
+	// behind by writes made before opaque-value hashing existed. It
+	// runs against the datastore alone — no actors, no plugins — so it happens
+	// here, before the node starts, rather than after: keying opacity on the
+	// hard-coded known-opaque table (not a running plugin coordinator) means we
+	// don't have to sequence it against actor/plugin startup. Safe on every
+	// boot: a no-op once everything eligible is hashed, and it never touches
+	// DesiredState of a command that isn't final yet, so it can't interfere
+	// with ReRunIncompleteCommands below.
+	if err := migration.BackfillHashedSecrets(m.Datastore); err != nil {
+		slog.Error("Failed to backfill hashed secrets", "error", err)
+		return err
 	}
 
 	node, err := ergo.StartNode(gen.Atom(m.nodeName), m.options)
@@ -1676,7 +1691,7 @@ func filterUnabsorbedModifications(
 
 	// Build a set of resources present in the forma
 	formaResources := make(map[resourceKey]struct{})
-	// RFC-0041: a forma resource that declares an `alias` covers its previous
+	// A forma resource that declares an `alias` covers its previous
 	// label too. Index aliases by (stack, type, alias) so a drift recorded
 	// under the old label is absorbed when the forma renames the resource.
 	formaAliases := make(map[resourceKey]struct{})
@@ -1710,7 +1725,7 @@ func filterUnabsorbedModifications(
 		if inForma && !hasUpdate {
 			continue // absorbed
 		}
-		// RFC-0041: alias-aware absorption. A modification keyed by the OLD
+		// Alias-aware absorption. A modification keyed by the OLD
 		// label is absorbed by a forma resource declaring `alias = <old>`.
 		// The rename update (if any) takes the modification with it.
 		if _, isAlias := formaAliases[key]; isAlias {

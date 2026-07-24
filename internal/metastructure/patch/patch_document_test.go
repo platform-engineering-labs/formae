@@ -2708,7 +2708,7 @@ func TestGeneratePatch_EntitySetProviderDefault_OOBDrift_UserDeclaresOne(t *test
 	assert.Empty(t, patchDoc, "characterization: with hasProviderDefault on an EntitySet, OOB-added entries are tolerated even when user declares others")
 }
 
-// TestGeneratePatch_AtomicNestedArrayProducesReplace guards the PLA-37 fix:
+// TestGeneratePatch_AtomicNestedArrayProducesReplace guards atomic nested-array replacement:
 // a list field marked updateMethod=Atomic via a dotted nested hint key
 // (FirewallPolicy.StatefulDefaultActions) must produce a single whole-array
 // replace, not per-element remove+add. AWS Cloud Control does not reliably

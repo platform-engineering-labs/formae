@@ -101,8 +101,8 @@ func announcement(namespace string, schemas map[string]model.Schema) messages.Pl
 	}
 }
 
-// TestPluginCoordinator_RejectsBadFieldHintFormatWithoutCrashing is the PLA-196
-// regression test. A PluginAnnouncement carrying a schema with an unknown
+// TestPluginCoordinator_RejectsBadFieldHintFormatWithoutCrashing verifies that a
+// PluginAnnouncement carrying a schema with an unknown
 // FieldHint.Format must be rejected (not registered) WITHOUT terminating the
 // coordinator actor. A non-nil HandleMessage return would crash the actor,
 // dropping every registered plugin — this asserts ShouldNotTerminate. (Against

@@ -52,7 +52,7 @@ func validateModulePath(path string) error {
 
 // validatePluginNameWithError extends validatePluginName with an extra
 // nameError that is returned when the name has not changed from nameOriginal.
-// Task 14 uses this to pre-mark a name that failed the Hub availability check.
+// This pre-marks a name that failed the Hub availability check.
 func validatePluginNameWithError(name, nameOriginal, nameError string) error {
 	if err := validatePluginName(name); err != nil {
 		return err
@@ -84,7 +84,7 @@ func isCustomLicenseGroupHidden(v *initFormValues) bool {
 // pre-fill any flag-supplied values) before calling buildInitForm.
 //
 // nameError, when non-empty, pre-marks the name field invalid so that
-// Task 14's check-on-submit loop can display the Hub rejection message
+// the check-on-submit loop can display the Hub rejection message
 // without running a separate validation step.
 // customLicenseWarning is shown under the custom-SPDX input when the user
 // picks the "Other" license — the plugin will not be publishable to the Hub.
@@ -92,7 +92,7 @@ const customLicenseWarning = "⚠ Not publishable to hub.platform.engineering. S
 
 func buildInitForm(th *theme.Theme, v *initFormValues, nameError string) *huh.Form {
 	// Capture the name at form-build time so we can detect whether the user
-	// has changed it (used to gate the pre-seeded nameError, Task 14).
+	// has changed it (used to gate the pre-seeded nameError).
 	nameOriginal := v.Name
 
 	// dirTouched tracks whether the user has manually edited OutputDir.

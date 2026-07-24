@@ -93,6 +93,17 @@ type ResourceUpdateRef struct {
 	Operation types.OperationType
 }
 
+// ResourceVersion is one stored version of a resource — including superseded
+// versions, not just the current one. It carries the version's identity
+// (URI+Version) so a caller can rewrite that exact row in place. Used by the
+// one-time secret backfill to scrub plaintext opaque values from resource
+// history.
+type ResourceVersion struct {
+	URI      string
+	Version  string
+	Resource *pkgmodel.Resource
+}
+
 // ForceCancelRow is an in-progress resource update that should be force-canceled.
 // It carries the progress JSON to append to the row's progress_result, and the
 // serialized most-recent-progress entry to store as most_recent_progress.
@@ -205,6 +216,16 @@ type Datastore interface {
 	LoadResourceByNativeID(nativeID string, resourceType string) (*pkgmodel.Resource, error)
 	// LoadAllResources returns all stored resources
 	LoadAllResources() ([]*pkgmodel.Resource, error)
+	// LoadAllResourceVersions returns every stored version of every resource,
+	// including superseded ones (unlike LoadAllResources, which returns only the
+	// latest version per URI). Used by the one-time secret backfill to scrub
+	// plaintext opaque values from resource history.
+	LoadAllResourceVersions() ([]ResourceVersion, error)
+	// UpdateResourceVersionData overwrites the persisted data of a single
+	// resource version in place (keyed by uri+version), without appending a new
+	// version. Used by the secret backfill to rewrite a superseded version's
+	// payload with hashed values.
+	UpdateResourceVersionData(uri string, version string, resource *pkgmodel.Resource) error
 	// LoadReapedResources returns the current-version rows tombstoned with the
 	// 'reaped' marker (PersistTargetReap), across all targets. Reaped rows are
 	// excluded from every other resource query; this is the one path back to

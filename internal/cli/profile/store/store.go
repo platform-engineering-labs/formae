@@ -290,7 +290,7 @@ func copyFile(src, dst string) error {
 }
 
 // ensureInitialized establishes a usable active profile if one does not already
-// exist. It is a totally-defined ordered decision (see design RFC-27): every
+// exist. It is a totally-defined ordered decision: every
 // reachable state maps to exactly one outcome. It never deletes a profile file
 // and never overwrites an existing one; its two mutations (rename of the legacy
 // file, write of the active pointer) are atomic. Returns ErrNotInitialized for

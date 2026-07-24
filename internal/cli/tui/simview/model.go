@@ -498,7 +498,7 @@ func (m Model) cursorRowKind() rowKind {
 }
 
 // simHelpGroups returns the per-view binding table for the HelpOverlay.
-// Bindings reflect simview's actual key handling per the PLA-290 design spec.
+// Bindings reflect simview's actual key handling per the design spec.
 func simHelpGroups() []components.HelpGroup {
 	return []components.HelpGroup{
 		{
