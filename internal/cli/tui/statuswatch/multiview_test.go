@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
@@ -158,6 +159,57 @@ func TestMultiView_HeaderGlyphsFollowTheme(t *testing.T) {
 	assert.NotContains(t, h, "✗")
 	assert.NotContains(t, h, "◐")
 	assert.NotContains(t, h, "○")
+}
+
+// TestMultiView_HeaderThemeHighlight pins the theme-driven header emphasis
+// (PLA-348), mirroring simview's TestRenderGroupColHeaderThemeHighlight: under
+// "rich" (Header.Highlight="background") the navigated (sortHi) column
+// carries a background SGR sequence like the row cursor, and the active-sort
+// column (when different from the navigated one) carries the PrimaryAccent
+// (blue) foreground instead. Under "quiet" (Header.Highlight="brighten")
+// neither column gets a background — both just render bright white/bold.
+func TestMultiView_HeaderThemeHighlight(t *testing.T) {
+	richTh := theme.New("rich")
+	richV := multiView{th: richTh, width: 130, sortHi: colID, sortCol: colAge, sortDir: components.SortAsc}
+	richHdr := richV.headerRow()
+
+	quietTh := theme.New("quiet")
+	quietV := multiView{th: quietTh, width: 130, sortHi: colID, sortCol: colAge, sortDir: components.SortAsc}
+	quietHdr := quietV.headerRow()
+
+	assert.Contains(t, richHdr, "48;2;", "rich (background mode) navigated header must carry a background SGR sequence")
+	assert.NotContains(t, quietHdr, "48;2;", "quiet (brighten mode) header must never carry a background")
+
+	// The active-sort (Age) column under rich renders PrimaryAccent (blue),
+	// distinct from the navigated column's background treatment.
+	accentColor := richTh.Palette.PrimaryAccent
+	accentSeq := lipgloss.NewStyle().Foreground(accentColor).Bold(true).Render("x")
+	// Extract just the escape prefix (up to the 'x') for a substring match.
+	accentPrefix := strings.SplitN(accentSeq, "x", 2)[0]
+	assert.Contains(t, richHdr, accentPrefix, "rich active-sort column must carry PrimaryAccent")
+
+	// Under quiet, both navigated and active-sort columns are bright white —
+	// no accent color, no background, just bold brightening (rich's accent
+	// escape sequence must not appear).
+	assert.NotContains(t, quietHdr, accentPrefix, "quiet must not carry rich's PrimaryAccent color")
+	assert.Contains(t, quietHdr, "\x1b[1;", "quiet header should still render bold")
+}
+
+func TestMultiView_RunningStatusGlyphIsStatic(t *testing.T) {
+	now := time.Now()
+	c := apimodel.Command{
+		CommandID: "cmd-run-static", Command: "apply", Mode: "reconcile",
+		State: "InProgress", StartTs: now.Add(-5 * time.Second),
+		ResourceUpdates: []apimodel.ResourceUpdate{{State: "InProgress"}},
+	}
+	th := theme.New("formae")
+	// spinView set to a distinctive animated-spinner frame; it must NOT show
+	// up in the rendered row now that the redundant animated spinner has been
+	// replaced with the static themed in-progress glyph.
+	v := multiView{th: th, rows: buildRows([]apimodel.Command{c}), width: 110, now: now, spinView: "@ANIMATED@"}
+	out := plain(strings.Join(v.renderRows(10), "\n"))
+	assert.NotContains(t, out, "@ANIMATED@", "the animated spinner frame must not appear")
+	assert.Contains(t, out, th.Glyphs.StatusInProgress, "the static themed in-progress glyph must appear instead")
 }
 
 func TestMultiView_ScrollWindowFollowsCursor(t *testing.T) {

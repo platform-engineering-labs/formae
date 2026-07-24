@@ -273,7 +273,7 @@ func runDestroyInteractive(a *app.App, opts *DestroyOptions) error {
 	}
 
 	// Confirmed: run the real destroy.
-	realRes, nags, err := destroyFn(a, opts, false)
+	realRes, _, err := destroyFn(a, opts, false)
 	if err != nil {
 		msg, renderErr := errfmt.Render(err)
 		if renderErr != nil {
@@ -295,7 +295,7 @@ func runDestroyInteractive(a *app.App, opts *DestroyOptions) error {
 		printAsyncNotice(realRes.CommandID)
 	}
 
-	nag.MaybePrintNags(th, nags)
+	// No post-TUI nag here: the interactive path exits clean.
 
 	return nil
 }

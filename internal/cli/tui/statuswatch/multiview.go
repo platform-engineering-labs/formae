@@ -12,7 +12,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/x/ansi"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
@@ -269,21 +268,46 @@ func pad(s string, w int) string {
 	return components.Pad(s, w)
 }
 
-// headerRow renders the column header line with sort indicators and sort-hi
-// background highlight. All layout derives from multiCols[c].width.
+// headerRow renders the column header line with sort indicators. Emphasis of
+// the navigated (sort-hi) and active-sort columns is theme-driven — mirrors
+// simview's renderGroupColHeader (internal/cli/tui/simview/render.go):
+//   - "background": the navigated column gets a background highlight (like
+//     the row cursor, using Selection.Dark); the active-sort column gets the
+//     accent color. Navigated takes precedence over active-sort.
+//   - "brighten" (default for unknown values): navigated OR active-sort both
+//     render bright white, no background — today's quiet/colorblind behavior.
+//
+// All layout derives from multiCols[c].width.
 func (v multiView) headerRow() string {
 	p := v.th.Palette
 	vis := v.visibleCols()
 	bw := barWidth(v.width, vis)
 
-	headerStyle := lipgloss.NewStyle().
+	dimStyle := lipgloss.NewStyle().
 		Foreground(p.TextSecondary).
 		Bold(true)
-	// The highlighted (sort-target) column is brightened to TextPrimary rather
-	// than given a background, so it stands out without a selection block.
-	hiStyle := lipgloss.NewStyle().
-		Foreground(p.TextPrimary).
-		Bold(true)
+
+	background := v.th.Header.Highlight == "background"
+	highlightStyle := lipgloss.NewStyle().Foreground(p.TextPrimary).Background(lipgloss.Color(p.Selection.Dark)).Bold(true)
+	accentStyle := lipgloss.NewStyle().Foreground(p.PrimaryAccent).Bold(true)
+	hiStyle := lipgloss.NewStyle().Foreground(p.TextPrimary).Bold(true)
+
+	styleFor := func(isHL, isAct bool) lipgloss.Style {
+		if background {
+			switch {
+			case isHL:
+				return highlightStyle
+			case isAct:
+				return accentStyle
+			default:
+				return dimStyle
+			}
+		}
+		if isHL || isAct {
+			return hiStyle
+		}
+		return dimStyle
+	}
 
 	var sb strings.Builder
 	for c := 0; c < colCount; c++ {
@@ -307,12 +331,7 @@ func (v multiView) headerRow() string {
 		}
 
 		cell := pad(title, w)
-		st := headerStyle
-		// Both the sort-by (active, arrowed) and the cursor (selected) column
-		// headers render bright white; the arrow alone marks the active one.
-		if v.sortHi == c || v.sortCol == c {
-			st = hiStyle
-		}
+		st := styleFor(v.sortHi == c, v.sortCol == c)
 		sb.WriteString(st.Render(cell))
 	}
 	return sb.String()
@@ -372,18 +391,17 @@ func (v multiView) renderRows(maxRows int) []string {
 			}
 			glyphStr = errSt.Render(pad(v.th.Glyphs.StatusFailed, multiCols[colStatus].width))
 		default:
-			// running — spinner
-			spinSt := lipgloss.NewStyle().Foreground(p.InProgress)
+			// running — static in-progress glyph. Not animated: the row already
+			// shows live progress (counts/bar), so an animated spinner here would
+			// be a redundant second spinner next to the command ID.
+			glyphSt := lipgloss.NewStyle().Foreground(p.InProgress)
 			if r.health == healthRunningFailing {
-				spinSt = lipgloss.NewStyle().Foreground(p.Error)
+				glyphSt = lipgloss.NewStyle().Foreground(p.Error)
 			}
 			if isCursor {
-				spinSt = spinSt.Background(p.Selection)
+				glyphSt = glyphSt.Background(p.Selection)
 			}
-			// v.spinView is ANSI-styled by the bubbletea spinner; strip it to the
-			// raw glyph before pad() (which counts escape-code runes and would
-			// slice the sequence, collapsing the status column) and re-style here.
-			glyphStr = spinSt.Render(pad(ansi.Strip(v.spinView), multiCols[colStatus].width))
+			glyphStr = glyphSt.Render(pad(v.th.Glyphs.StatusInProgress, multiCols[colStatus].width))
 		}
 
 		done, total := doneOf(r.counts)

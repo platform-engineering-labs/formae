@@ -256,7 +256,7 @@ func runApplyInteractive(a *app.App, opts *ApplyOptions) error {
 	}
 
 	// Confirmed: run the real apply.
-	realRes, nags, err := applyFn(a, opts, false)
+	realRes, _, err := applyFn(a, opts, false)
 	if err != nil {
 		msg, renderErr := errfmt.Render(err)
 		if renderErr != nil {
@@ -278,7 +278,7 @@ func runApplyInteractive(a *app.App, opts *ApplyOptions) error {
 		printAsyncNotice(realRes.CommandID)
 	}
 
-	nag.MaybePrintNags(a.Theme(), nags)
+	// No post-TUI nag here: the interactive path exits clean.
 
 	return nil
 }

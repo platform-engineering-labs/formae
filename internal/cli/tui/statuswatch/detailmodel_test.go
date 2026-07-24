@@ -205,6 +205,33 @@ func TestDetailModel_CancelStateLabels(t *testing.T) {
 // every row state to the themed glyph (esp. Pending → StatusPending, which
 // previously had no direct test coverage — under the quiet theme it's "·",
 // not the old hardcoded "○").
+// TestDetailModel_PinnedRowRunningGlyphIsStatic asserts the detail view's
+// pinned command row (SetCommand -> multiView.renderRows, the same shared
+// renderer as the multi-command table) inherits the PLA-348 fix that
+// replaced the redundant animated spinner in colStatus with the static
+// themed in-progress glyph. spinView is set to a distinctive animated frame
+// that must not leak into the pinned row now that it's unused there.
+func TestDetailModel_PinnedRowRunningGlyphIsStatic(t *testing.T) {
+	th := theme.New("formae")
+	dm := newDetailModel(th, 100, 30)
+	c := apimodel.Command{
+		CommandID: "cmd-pinned-running",
+		Command:   "apply",
+		State:     "InProgress",
+		StartTs:   time.Date(2026, 7, 16, 11, 0, 0, 0, time.UTC),
+		ResourceUpdates: []apimodel.ResourceUpdate{
+			{ResourceLabel: "res-1", ResourceType: "AWS::S3::Bucket", StackName: "prod", Operation: "create", State: "InProgress"},
+		},
+	}
+	counts := commandCounts(c)
+	r := row{cmd: c, counts: counts, health: commandHealth(c, counts)}
+	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
+	dm = dm.SetCommand(c, r, "@ANIMATED@", now, nil)
+
+	assert.NotContains(t, dm.pinnedRow, "@ANIMATED@", "pinned row must not render the animated spinner frame")
+	assert.Contains(t, dm.pinnedRow, th.Glyphs.StatusInProgress, "pinned row must render the static themed in-progress glyph")
+}
+
 func TestDetailModel_RenderStateGlyph_AllStates(t *testing.T) {
 	th := theme.New("quiet")
 	dm := newDetailModel(th, 100, 30)

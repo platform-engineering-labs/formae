@@ -20,3 +20,14 @@ func TestRichPrimaryAccentMatchesPbBlue(t *testing.T) {
 	assert.Equal(t, "#60A5FA", string(New("rich").Palette.PrimaryAccent.Dark))
 	assert.Equal(t, "#81D1DB", string(New("quiet").Palette.PrimaryAccent.Dark))
 }
+
+// TestRichDoneIsGreen documents that rich's "done" color was changed to
+// green, matching pb's Done and rich's own op_create, replacing the
+// near-black/white value it had inherited from quiet. quiet and colorblind
+// keep their own values (brightness-based and blue, respectively) to prove
+// the themes are isolated from each other.
+func TestRichDoneIsGreen(t *testing.T) {
+	assert.Equal(t, "#4ADE80", New("rich").Palette.Done.Dark)
+	assert.Equal(t, "#16A34A", New("rich").Palette.Done.Light)
+	assert.Equal(t, "#E8E8E8", New("quiet").Palette.Done.Dark, "quiet's brightness-based done must be untouched")
+}

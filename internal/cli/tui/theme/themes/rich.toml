@@ -14,7 +14,7 @@ error            = { light = "#FF0000", dark = "#FF0000" }
 error_subtle     = { light = "#B45454", dark = "#9B4444" }
 error_bright     = { light = "#B91C1C", dark = "#FCA5A5" }
 warning          = "#B5B55B"
-done             = { light = "#1A1A1A", dark = "#E8E8E8" }
+done             = { light = "#16A34A", dark = "#4ADE80" }
 in_progress      = { light = "#444444", dark = "#AAAAAA" }
 pending          = { light = "#999999", dark = "#555555" }
 # rich brings vivid, per-operation color coding.
