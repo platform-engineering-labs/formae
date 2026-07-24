@@ -495,6 +495,21 @@ func (m Model) View() string {
 		return strings.Join(lines, "\n")
 	}
 
+	// In severity themes (rich), the summary indicator reflects overall outcome:
+	// green when every command has settled successfully, red when anything failed.
+	// Other themes keep the neutral blue "live" indicator. An active poll error
+	// (handled above) still wins.
+	if m.err == nil && m.th.ConfirmationBar.Color == "severity" {
+		switch m.multi.summaryOutcome() {
+		case outcomeFailed:
+			right = lipgloss.NewStyle().Foreground(m.th.Palette.Error).Render("↻ live")
+		case outcomeSuccess:
+			right = lipgloss.NewStyle().Foreground(m.th.Palette.Done).Render("↻ live")
+		case outcomeRunning:
+			// leave the default accent-blue indicator
+		}
+	}
+
 	header := components.HeaderBarBranded(m.th, m.headerCommand(), right, m.width)
 
 	visible := m.height - chromeLines
@@ -531,7 +546,7 @@ func statuswatchHelpGroups() []components.HelpGroup {
 				{Key: "enter", Desc: "details"},
 				{Key: "space", Desc: "expand"},
 				{Key: "d", Desc: "detail cards"},
-				{Key: "s", Desc: "toggle sort"},
+				{Key: "s", Desc: "sort"},
 				{Key: "/", Desc: "query"},
 			},
 		},
@@ -563,7 +578,7 @@ func multiFooterHints() []components.KeyHint {
 		{Key: "↑↓", Desc: "select"},
 		{Key: "enter", Desc: "details"},
 		{Key: "→←", Desc: "column"},
-		{Key: "s", Desc: "toggle sort"},
+		{Key: "s", Desc: "sort"},
 		{Key: "q", Desc: "quit"},
 	}
 }

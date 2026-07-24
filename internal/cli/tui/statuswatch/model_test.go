@@ -201,7 +201,7 @@ func TestModel_HelpOverlay(t *testing.T) {
 	out := plain(view)
 	assert.Contains(t, out, "Help")
 	assert.Contains(t, out, "j k")
-	assert.Contains(t, out, "toggle sort")
+	assert.Contains(t, out, "— sort")
 	assert.Contains(t, out, "Navigate")
 	assert.Contains(t, out, "Actions")
 	assert.Contains(t, out, "General")
@@ -351,6 +351,6 @@ func TestModel_DetailFooter_HasSortHints(t *testing.T) {
 	mm, _ = mm.Update(commandsMsg{commands: respFix("cmd-one").Commands})
 
 	out := plain(mm.(Model).View())
-	assert.Contains(t, out, "toggle sort", "detail footer must advertise the sort key")
+	assert.Contains(t, out, "s: sort", "detail footer must advertise the sort key")
 	assert.Contains(t, out, "column", "detail footer must advertise the column-nav keys")
 }

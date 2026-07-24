@@ -401,8 +401,36 @@ func replaceInAnsiLine(line string, visStart, visEnd int, styled string) string 
 // border rendered as the separate next line, so reusing it here would emit stray
 // border fragments. Columns are packed adjacently at exactly effCols[i].Width.
 func highlightHeaderColumn(header string, tbl components.Table, effCols []components.Column, sortHi, sortCol int, th *theme.Theme) string {
-	base := lipgloss.NewStyle().Foreground(th.Palette.TextSecondary).Bold(true)
-	hiStyle := lipgloss.NewStyle().Foreground(th.Palette.TextPrimary).Bold(true)
+	p := th.Palette
+	// Header emphasis is theme-driven, mirroring simview's renderGroupColHeader so
+	// the two screens read the same:
+	//   - "background" (rich): the navigated column gets a background band (like
+	//     the row cursor, using Selection.Dark explicitly so it merges uniformly),
+	//     the active-sort column gets the accent color (blue), others stay dim.
+	//   - "brighten" (quiet/colorblind, the default): navigated OR active-sort
+	//     render bright, no background.
+	base := lipgloss.NewStyle().Foreground(p.TextSecondary).Bold(true)
+	background := th.Header.Highlight == "background"
+	highlightStyle := lipgloss.NewStyle().Foreground(p.TextPrimary).Background(lipgloss.Color(p.Selection.Dark)).Bold(true)
+	accentStyle := lipgloss.NewStyle().Foreground(p.PrimaryAccent).Bold(true)
+	brightStyle := lipgloss.NewStyle().Foreground(p.TextPrimary).Bold(true)
+
+	styleFor := func(isHL, isAct bool) lipgloss.Style {
+		if background {
+			switch {
+			case isHL:
+				return highlightStyle
+			case isAct:
+				return accentStyle
+			default:
+				return base
+			}
+		}
+		if isHL || isAct {
+			return brightStyle
+		}
+		return base
+	}
 
 	runes := []rune(ansi.Strip(header))
 	var sb strings.Builder
@@ -420,11 +448,7 @@ func highlightHeaderColumn(header string, tbl components.Table, effCols []compon
 			end = len(runes)
 		}
 		slice := string(runes[off:end])
-		if orig == sortHi || orig == sortCol {
-			sb.WriteString(hiStyle.Render(slice))
-		} else {
-			sb.WriteString(base.Render(slice))
-		}
+		sb.WriteString(styleFor(orig == sortHi, orig == sortCol).Render(slice))
 		off = end
 	}
 	if off < len(runes) {

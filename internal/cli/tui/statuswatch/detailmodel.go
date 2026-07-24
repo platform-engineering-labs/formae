@@ -438,7 +438,7 @@ func (d detailModel) View(height int, showQueryBar bool) string {
 func detailFooterHints(singleCommand bool) []components.KeyHint {
 	hints := []components.KeyHint{
 		{Key: "→←", Desc: "column"},
-		{Key: "s", Desc: "toggle sort"},
+		{Key: "s", Desc: "sort"},
 		{Key: "space", Desc: "expand"},
 		{Key: "d", Desc: "details"},
 	}

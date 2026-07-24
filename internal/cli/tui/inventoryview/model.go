@@ -727,6 +727,7 @@ func inventoryHelpGroups() []components.HelpGroup {
 			Title: "Navigate",
 			Hints: []components.KeyHint{
 				{Key: "↑↓ / j k", Desc: "navigate"},
+				{Key: "→← / h l", Desc: "sort column"},
 				{Key: "ctrl-d / ctrl-u", Desc: "scroll detail"},
 				{Key: "1-4 / tab", Desc: "switch tab"},
 			},
@@ -755,6 +756,7 @@ func inventoryHelpGroups() []components.HelpGroup {
 func inventoryFooterHints() []components.KeyHint {
 	return []components.KeyHint{
 		{Key: "↑↓/j/k", Desc: "navigate"},
+		{Key: "→←", Desc: "column"},
 		{Key: "enter", Desc: "detail"},
 		{Key: "/", Desc: "search"},
 		{Key: "s", Desc: "sort"},

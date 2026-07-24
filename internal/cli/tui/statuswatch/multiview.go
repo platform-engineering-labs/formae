@@ -220,6 +220,41 @@ func (v multiView) visibleCols() map[int]bool {
 	return vis
 }
 
+// summaryOutcome classifies the visible commands for the top-right summary
+// indicator: failed when any command has a failure (running or settled), success
+// when every command has settled without failure, and running otherwise (work
+// still in flight and healthy, or an empty list).
+type summaryOutcome int
+
+const (
+	outcomeRunning summaryOutcome = iota
+	outcomeSuccess
+	outcomeFailed
+)
+
+func (v multiView) summaryOutcome() summaryOutcome {
+	if len(v.rows) == 0 {
+		return outcomeRunning
+	}
+	hasFailed, hasRunning := false, false
+	for _, r := range v.rows {
+		if healthFailed(r.health) {
+			hasFailed = true
+		}
+		if r.health == healthRunningFailing || r.health == healthRunning {
+			hasRunning = true
+		}
+	}
+	switch {
+	case hasFailed:
+		return outcomeFailed
+	case hasRunning:
+		return outcomeRunning
+	default:
+		return outcomeSuccess
+	}
+}
+
 // rowStyles returns the id and text lipgloss styles for a row based on its
 // health and cursor state. Implements the mockup's row-coloring table:
 // problems get color, done gets brightness, finished rows fade, the cursor
@@ -245,10 +280,10 @@ func (v multiView) rowStyles(h health, cursor bool) (id, text lipgloss.Style) {
 			idc, txt = p.ErrorBright, p.ErrorBright
 		}
 	case healthFinishedOK:
-		// Bright rows (like the inventory list) rather than faded grey, so the
-		// settled command list doesn't read as bland. Failed stays red and
-		// running stays accent for contrast.
-		idc, txt = p.TextPrimary, p.TextPrimary
+		// The command id (the row's label) is the accent color, matching simview's
+		// blue label and the running state; the rest of the row stays bright so a
+		// settled command doesn't read as bland. Failed stays red for contrast.
+		idc, txt = p.PrimaryAccent, p.TextPrimary
 	default: // healthRunning
 		idc, txt = p.PrimaryAccent, p.TextPrimary
 	}

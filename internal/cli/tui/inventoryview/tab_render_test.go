@@ -620,27 +620,24 @@ func TestStyleCell_CursorOnStyledRow_NoCorruption(t *testing.T) {
 // TestStyleCell_TruncateBeforeStyle verifies the truncate-then-style contract:
 // a cell longer than the column width must be truncated BEFORE styling, so the
 // rendered output contains the truncated-then-styled text (not the full text
-// styled), and every output line fits within the terminal width.
+// styled), and every output line fits within the terminal width. The label
+// column (col 0) is styled with the accent color via styledInventoryCell, so it
+// is the natural place to exercise this; the per-tab styleCell path (col ≥ 1) is
+// covered by the ⚠-unmanaged golden fixtures.
 func TestStyleCell_TruncateBeforeStyle(t *testing.T) {
 	th := theme.New("formae")
-	// Build a spec with a narrow column (width 8) and a styleCell that wraps with
-	// the accent style. The cell value is 20 characters — longer than 8. The
-	// terminal is sized to exactly the column's width budget (8 + 2 padding) so
-	// the wide-terminal grow path does not expand the column past the value and
-	// the truncate-before-style invariant is exercised.
+	// A single narrow label column (width 8) with a 19-char value. The terminal
+	// is sized to exactly the column's width budget (8 + 2 padding) so the
+	// wide-terminal grow path does not expand the column past the value and the
+	// truncate-before-style invariant is exercised.
 	const colWidth = 8
 	const termWidth = colWidth + 2
 
-	styleApplied := false
 	spec := tabSpec{
 		title:  "Test",
 		entity: "tests",
 		columns: []components.Column{
 			{Title: "Name", Width: colWidth, Priority: 0},
-		},
-		styleCell: func(th *theme.Theme, col int, cell string) string {
-			styleApplied = true
-			return th.Styles.Accent.Render(cell)
 		},
 	}
 
@@ -653,10 +650,8 @@ func TestStyleCell_TruncateBeforeStyle(t *testing.T) {
 	tm = tm.setSize(termWidth, 10)
 	tm = tm.sync(0)
 
-	// styleCell must have been invoked.
-	require.True(t, styleApplied, "styleCell must be called during sync")
-
-	// The rendered text must contain the truncated-then-styled fragment, not the full cell.
+	// The label cell (col 0) is accent-styled. The rendered text must contain the
+	// truncated-then-styled fragment, not the full cell.
 	truncated := components.Truncate(longCell, colWidth)
 	require.NotEqual(t, longCell, truncated, "fixture: cell must be longer than colWidth")
 	expectedStyled := th.Styles.Accent.Render(truncated)
