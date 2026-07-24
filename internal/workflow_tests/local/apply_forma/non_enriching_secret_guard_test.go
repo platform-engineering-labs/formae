@@ -103,11 +103,11 @@ func applyPatchDocumentForTest(t *testing.T, doc json.RawMessage, patchDoc *stri
 // FakeAWS (and the "enriching" tests in secret_hashing_test.go) simulate a
 // secret store whose GetSecretValue-equivalent returns the bare secret on
 // every Read, refreshing the stored $hashed envelope back to plaintext before
-// the plugin-boundary guard (resolver.guardNoHashedValues, PLA-320) ever sees
+// the plugin-boundary guard (resolver.guardNoHashedValues) ever sees
 // it again. Plenty of real secret fields never come back on Read at all (e.g.
 // a writeOnly credential) — this override reproduces that: it returns only
 // Name, never SecretString, so the stored envelope stays hashed at rest
-// exactly as it was after create. This is what exercises the PLA-349 gap:
+// exactly as it was after create. This is what exercises the gap:
 // resource_updater.go's delete()/update() converting DesiredState/PriorState
 // with the GUARDED converter even though those conversions carry prior/
 // existing state, not a new value being written.
@@ -215,7 +215,7 @@ func TestNonEnrichingSecretGuard_UpdateNonSecretFieldSucceeds(t *testing.T) {
 			Update: func(r *resource.UpdateRequest) (*resource.UpdateResult, error) {
 				received = r.DesiredProperties
 
-				// PLA-350: PriorProperties must never carry a hashed digest in
+				// PriorProperties must never carry a hashed digest in
 				// place of the live secret — directly, or reconstructable by
 				// applying PatchDocument on top of it (how a plugin that builds
 				// its write body from prior+patch, rather than DesiredProperties,

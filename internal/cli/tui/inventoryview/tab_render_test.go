@@ -334,7 +334,7 @@ func TestNarrowTerminal_NoPanicAndFitsWidth(t *testing.T) {
 // Wide-terminal regression: setSize on a terminal wider than the sum of the
 // declared column widths must grow the columns proportionally to consume the
 // available width, instead of leaving the surplus unused (values truncating
-// against slack). PLA-285 #3.
+// against slack).
 // ---------------------------------------------------------------------------
 
 func TestWideTerminal_ColumnsGrowToFill(t *testing.T) {

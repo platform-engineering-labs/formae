@@ -4,7 +4,7 @@
 
 // Package statuswatch implements the live status/watch TUI — the shared view
 // run by `formae status command` and handed off to by apply, destroy and
-// cancel for their watch phase (RFC-3, PLA-282).
+// cancel for their watch phase.
 package statuswatch
 
 import (

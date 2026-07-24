@@ -16,8 +16,8 @@ import (
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
-// TestStripOpaqueFieldsForPriorProperties_RedactsHashedDigest is the RED->GREEN
-// case for the Finding 1 fix (PLA-350): PriorProperties must never carry a
+// TestStripOpaqueFieldsForPriorProperties_RedactsHashedDigest verifies that
+// PriorProperties must never carry a
 // stored $hashed digest through to a plugin. This mirrors the shape
 // convertResourceForPluginRead produces for a non-enriching secret: once the
 // $hashed envelope is unwrapped for plugin format, only a bare 64-hex digest

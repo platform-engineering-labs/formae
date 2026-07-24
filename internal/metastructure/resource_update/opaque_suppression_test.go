@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// These are regression tests for PLA-35: a surfaced opaque value must not churn
+// A surfaced opaque value must not churn
 // (re-emit cleartext) or corrupt (re-emit its stored hash, for setOnce) on an
 // unrelated sibling edit, while a genuinely changed opaque value must still
 // produce a patch op. They drive the public factory entrypoint and assert on the
@@ -154,7 +154,7 @@ func TestUpdate_NonWriteOnlyOpaqueUnchanged_SiblingEdit_NoValueOp(t *testing.T) 
 // walk in SuppressUnchangedOpaqueValues only recognized enveloped ($visibility=="Opaque")
 // values; a bare schema-opaque scalar was invisible to it, so an unrelated sibling edit left
 // the stored hash on the existing side and the plaintext on the desired side both in the
-// patch inputs, which ConvertToPluginFormat then rejected outright (PLA-320 guard) instead
+// patch inputs, which ConvertToPluginFormat then rejected outright (the plugin-boundary guard) instead
 // of silently suppressing the unchanged field.
 func TestUpdate_SchemaKeyedOpaqueUnchanged_SiblingEdit_NoValueOp(t *testing.T) {
 	schema := pkgmodel.Schema{
@@ -192,7 +192,7 @@ func TestUpdate_SchemaKeyedOpaqueChanged_CarriesCleartext(t *testing.T) {
 	assert.NotRegexp(t, anySHA256, string(patchDoc))
 }
 
-// PLA-35 C2: an UNCHANGED opaque createOnly value must not phantom-replace the
+// An UNCHANGED opaque createOnly value must not phantom-replace the
 // resource when a sibling changes — the factory must plan one in-place update,
 // not a destroy+create.
 func TestUpdate_OpaqueCreateOnlyUnchanged_SiblingEdit_NoReplace(t *testing.T) {
@@ -209,7 +209,7 @@ func TestUpdate_OpaqueCreateOnlyUnchanged_SiblingEdit_NoReplace(t *testing.T) {
 	assert.Contains(t, opsByPath(t, updates[0].DesiredState.PatchDocument), "/name")
 }
 
-// PLA-35 C1 preserved: a CHANGED opaque createOnly value must still drive a
+// A CHANGED opaque createOnly value must still drive a
 // replacement (destroy+create), not be silently dropped.
 func TestUpdate_OpaqueCreateOnlyChanged_StillReplaces(t *testing.T) {
 	schema := pkgmodel.Schema{

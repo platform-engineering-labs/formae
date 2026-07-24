@@ -171,8 +171,8 @@ func TestResolveValue_NonUpdateLeavesPatchDocumentUntouched(t *testing.T) {
 	}
 }
 
-// TestResolveValue_SuppressesUnchangedHashedOpaqueField is the RED->GREEN case
-// for the Finding 2 fix (PLA-350): regenerating PatchDocument at apply time
+// TestResolveValue_SuppressesUnchangedHashedOpaqueField verifies that
+// regenerating PatchDocument at apply time
 // (e.g. when a sibling resolvable is substituted mid-update) must route through
 // the same SuppressUnchangedOpaqueValues + plugin-format-conversion path that
 // builds the initial patch, so an opaque field that is unchanged from what is
@@ -293,9 +293,9 @@ type stubUpdaterProcess struct {
 	sends []any
 }
 
-func (p *stubUpdaterProcess) Log() gen.Log    { return stubUpdaterLog{} }
-func (p *stubUpdaterProcess) Node() gen.Node  { return stubUpdaterNode{} }
-func (p *stubUpdaterProcess) PID() gen.PID    { return gen.PID{Node: "test-node", ID: 1} }
+func (p *stubUpdaterProcess) Log() gen.Log   { return stubUpdaterLog{} }
+func (p *stubUpdaterProcess) Node() gen.Node { return stubUpdaterNode{} }
+func (p *stubUpdaterProcess) PID() gen.PID   { return gen.PID{Node: "test-node", ID: 1} }
 func (p *stubUpdaterProcess) Send(_ any, msg any) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()

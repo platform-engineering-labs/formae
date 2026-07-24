@@ -20,7 +20,7 @@ import (
 
 // BackfillHashedSecrets is a one-time, idempotent sweep that hashes opaque
 // secret values left in cleartext by writes made before opaque-value hashing
-// (PLA-320) existed. It hashes:
+// existed. It hashes:
 //
 //   - PreviousProperties on every ResourceUpdate — this read-back snapshot is
 //     only ever used for logging and API diff display, never fed back into a

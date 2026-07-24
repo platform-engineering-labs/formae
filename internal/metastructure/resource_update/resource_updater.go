@@ -46,7 +46,7 @@ func convertResourceForPlugin(res pkgmodel.Resource) (pkgmodel.Resource, error) 
 // plugin Read call (sync, discovery, or the pre-update out-of-band check), which
 // never writes those values to the cloud. Unlike convertResourceForPlugin it does
 // NOT reject an already-hashed schema-opaque field — that hash is the steady state
-// once a secret has been persisted (PLA-320), and rejecting it here would make
+// once a secret has been persisted, and rejecting it here would make
 // every sync/OOB-check Read of a secret-bearing resource fail permanently.
 func convertResourceForPluginRead(res pkgmodel.Resource) (pkgmodel.Resource, error) {
 	return convertResourceForPluginWith(res, resolver.ConvertExistingStateForRead)
@@ -389,7 +389,7 @@ func synchronize(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen
 	// Convert properties to plugin format (extracts $value from opaque structures).
 	// This state only ever prepares a Read call — it never writes DesiredState/PriorState
 	// to the cloud — so use the Read-safe conversion: a schema-opaque field already hashed
-	// at rest (the steady state for a secret, PLA-320) must not be rejected here, or every
+	// at rest (the steady state for a secret) must not be rejected here, or every
 	// sync/OOB-check Read of a secret-bearing resource would fail permanently.
 	convertedResource, err := convertResourceForPluginRead(data.resourceUpdate.DesiredState)
 	if err != nil {
@@ -567,7 +567,7 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 	isBringingUnderManagement := data.resourceUpdate.PriorState.Stack == constants.UnmanagedStack &&
 		data.resourceUpdate.DesiredState.Stack != constants.UnmanagedStack
 
-	// RFC-0041: a label-only change (label differs, same stack, same target,
+	// A label-only change (label differs, same stack, same target,
 	// no property delta) is a metadata-only update. Skip the plugin call for
 	// the same reason "bringing under management without property changes"
 	// does — there is nothing for the cloud to do.
@@ -642,7 +642,7 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 		return StateFinishedWithError, data, nil, nil
 	}
 
-	// PLA-350: PriorProperties is diff/context for the plugin, never a value
+	// PriorProperties is diff/context for the plugin, never a value
 	// being written — the plugin has no legitimate use for the prior value of
 	// a schema-opaque field, hashed or not. convertResourceForPluginRead above
 	// is deliberately unguarded (see its doc comment), so a non-enriching

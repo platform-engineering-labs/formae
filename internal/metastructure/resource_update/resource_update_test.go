@@ -495,7 +495,7 @@ func Test_mergeRefsPreservingUserRefs_preservesResolvableValuesWithVisibilityAnd
 // nonexistent plugin sub-object, which silently preserved the stored hash verbatim — the
 // live plaintext from the Read was discarded, so the PriorState fed into the next stage
 // (an actual Update call) still carried $hashed:true and was permanently rejected by the
-// PLA-320 plugin-boundary guard (resolver.ConvertToPluginFormat) for the rest of the
+// plugin-boundary guard (resolver.ConvertToPluginFormat) for the rest of the
 // resource's life. The merge must instead adopt the plugin's live value and drop $hashed.
 func Test_mergeRefsPreservingUserRefs_OpaqueEnvelope_ReplacesHashWithLiveReadValue(t *testing.T) {
 	storedHash := pkgmodel.ComputeValueHash("super-secret-password")

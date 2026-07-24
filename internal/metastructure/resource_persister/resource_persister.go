@@ -512,7 +512,7 @@ func (rp *ResourcePersister) processResourceUpdate(commandID string, rc resource
 				secretSafeResource.Schema.Discoverable = currentResource.Schema.Discoverable
 				secretSafeResource.Schema.Extractable = currentResource.Schema.Extractable
 
-				// RFC-0041: sync must never rename. The label is part of formae's
+				// Sync must never rename. The label is part of formae's
 				// internal identity, not the cloud's; sync reads cloud state and
 				// must not mutate the managed row's label. If a sync-origin update
 				// ever arrives with a label diff against the current row, it

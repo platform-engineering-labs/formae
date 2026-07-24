@@ -1431,7 +1431,7 @@ func TestExtractResolvableRefs_EmbedField(t *testing.T) {
 	}
 
 	// Assert the Embedded flag and EmbedFieldPath are set on the internal Ref —
-	// these are the primary output of Task 3 and must survive refactoring.
+	// these carry the embedded-resolvable metadata and must survive refactoring.
 	pr := newPropertyResolverFromResource(res)
 	var embedRef pkgmodel.Ref
 	found := false

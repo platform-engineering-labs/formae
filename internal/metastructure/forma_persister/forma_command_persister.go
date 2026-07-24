@@ -342,7 +342,7 @@ func (f *FormaCommandPersister) HandleCall(from gen.PID, ref gen.Ref, message an
 func (f *FormaCommandPersister) storeNewFormaCommand(command *forma_command.FormaCommand) (bool, error) {
 	f.Log().Debug("Storing new Forma command commandID=%s commandType=%s", command.ID, command.Command)
 
-	// NOTE (PLA-320): do NOT hash DesiredState here. The user's plaintext secret input
+	// NOTE: do NOT hash DesiredState here. The user's plaintext secret input
 	// must survive to execution/resume; read/actual values are hashed at their own write
 	// choke points, and DesiredState input is hashed only at final state.
 

@@ -557,7 +557,7 @@ func (m *propertyMerger) mergeObject(path string, userVal, pluginVal gjson.Resul
 	// ($value/$visibility/$hashed) against that bare scalar (which has no sub-fields)
 	// and silently preserve the OLD envelope verbatim — for a $hashed:true envelope,
 	// the stored hash would never be replaced by the freshly-read plaintext, so the
-	// PLA-320 plugin-boundary guard would permanently reject this field on every
+	// plugin-boundary guard would permanently reject this field on every
 	// subsequent use. Replace the envelope's $value with the plugin's live value
 	// (dropping $hashed — it no longer holds a hash) and keep the visibility/strategy
 	// metadata. When the plugin did NOT return this path at all (e.g. a Create response

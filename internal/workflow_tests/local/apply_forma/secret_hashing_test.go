@@ -303,7 +303,7 @@ func TestSecretHashing_NoPerpetualDrift(t *testing.T) {
 
 // TestSecretHashing_UpdateNonSecretFieldOnSecretResourceSucceeds is the key regression
 // backstop: a RECONCILE apply that changes a non-secret field on a resource whose
-// secret is already hashed at rest must succeed — the PLA-320 plugin-boundary guard
+// secret is already hashed at rest must succeed — the plugin-boundary guard
 // (resolver.ConvertToPluginFormat's guardNoHashedValues) must not false-positive on
 // the pre-update out-of-band Read, the patch-generation diff, or the eventual Update
 // call. It also asserts the plugin's Update override never receives a $hashed value.
@@ -478,10 +478,10 @@ func TestSecretHashing_ResolveCacheDoesNotLogSecret(t *testing.T) {
 // the resolved value in an {"$value":...,"$visibility":"Opaque"} envelope, but nothing
 // downstream (TargetUpdater / resource_persister's target-store path) hashes that
 // envelope before it is persisted to the targets table — unlike the resources and
-// resource_updates tables, which Tasks 6/7/9 (PLA-320) hash at their write choke
+// resource_updates tables, which hash at their write choke
 // points. The plaintext secret is stored verbatim in targets.config.
 //
-// This sink was never in PLA-320 Tasks 1-12's scope (they cover resource properties/
+// This sink is outside the hash-at-rest scope (which covers resource properties/
 // resource_updates, not target configs) and fixing it is more than a wiring fix — a
 // target Config has no per-field schema the way a resource does, and the resolved
 // value here is later read back and sent live to a plugin as TargetConfig, so hashing
@@ -537,9 +537,9 @@ func TestSecretHashing_TargetConfigResolvedSecretStoredAsPlaintext_KnownGap(t *t
 		// stays green; the moment the underlying leak is fixed, this reverts to a plain
 		// assertion and the test starts passing for real with no code change needed.
 		if strings.Contains(string(consumerTarget.Config), plaintextSecret) {
-			t.Skip("KNOWN GAP found by PLA-320 Task 13: targets.config stores a $ref-resolved " +
-				"schema-opaque value as plaintext — see this test's doc comment. Tracked for a " +
-				"follow-up fix; not addressed by PLA-320 Tasks 1-12 or this task.")
+			t.Skip("KNOWN GAP: targets.config stores a $ref-resolved schema-opaque value as " +
+				"plaintext — see this test's doc comment. Tracked for a follow-up fix; not " +
+				"addressed by the schema-keyed opaque-value hashing this test covers.")
 		}
 		assert.NotContains(t, string(consumerTarget.Config), plaintextSecret)
 	})

@@ -116,7 +116,7 @@ func generatePatch(document []byte, patch []byte, properties resolver.Resolvable
 
 	// Drop serialization-only ops on Format-hinted fields before the createOnly
 	// split, so a cosmetic diff on a (possibly createOnly) hinted field neither
-	// reaches the plugin nor triggers a replacement (PLA-196).
+	// reaches the plugin nor triggers a replacement.
 	patchOps = dropCanonicallyEqualHintedOps(patchOps, flattenedDocument, flattenedPatch, schema)
 
 	if len(patchOps) == 0 {
@@ -658,7 +658,7 @@ func isTopLevelPath(p string) bool {
 // Format-hinted field whose old/new values are canonically equal (a
 // serialization-only diff). On any canonicalizer error, a non-string value, or a
 // nested/array path, the op is KEPT — suppression can only ever drop a cosmetic
-// op, never a real change (PLA-196).
+// op, never a real change.
 func dropCanonicallyEqualHintedOps(ops []jsonpatch.JsonPatchOperation, document, patch []byte, schema pkgmodel.Schema) []jsonpatch.JsonPatchOperation {
 	formats := schema.FormatHints()
 	if len(formats) == 0 {

@@ -36,7 +36,7 @@ func testSchema() pkgmodel.Schema {
 // plaintext schema-opaque secret in DesiredState, PriorState (the read-back
 // snapshot) and PreviousProperties (also a read-back snapshot). Writes go
 // straight through the datastore, bypassing any of the live hashing hooks,
-// to simulate data written before PLA-320's hashing landed.
+// to simulate data written before the hashing landed.
 func seedCommand(t *testing.T, ds datastore.Datastore, state forma_command.CommandState, secretSuffix string) *forma_command.FormaCommand {
 	t.Helper()
 

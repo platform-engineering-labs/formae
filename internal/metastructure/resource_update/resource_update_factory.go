@@ -32,7 +32,7 @@ func NewResourceUpdateForExisting(
 		return nil, nil
 	}
 
-	// Check if resources have same label and type. RFC-0041: labels may
+	// Check if resources have same label and type. Labels may
 	// legitimately differ when the new resource declares an `alias` that
 	// names the existing resource's label — this is the rename path. Any
 	// other label mismatch is a generator bug (the caller should not have
@@ -135,7 +135,7 @@ func NewResourceUpdateForExisting(
 			// `newResource` (desired declaration); the existing KSUID is the
 			// authoritative identity. Using `newResource.Ksuid` here would let
 			// a stale or freshly-minted KSUID from the upstream `assignKSUIDs`
-			// pass through, which (RFC-0041) causes a rename to write a second
+			// pass through, which causes a rename to write a second
 			// row with the same NativeID under a new KSUID.
 			Ksuid: existingResource.Ksuid,
 		},
@@ -258,7 +258,7 @@ func NewResourceUpdateForSyncWithFilter(
 
 	// Read-safe conversion: this ResourceUpdate only ever drives a Read (via the
 	// ResourceUpdater's synchronize state), never a Create/Update, so a schema-opaque
-	// field already hashed at rest (the steady state after PLA-320) must not be rejected
+	// field already hashed at rest (the steady state once a secret is hashed) must not be rejected
 	// here — nothing gets written to the cloud from PriorState/PreviousProperties.
 	resolvedExistingProperties, err := resolver.ConvertExistingStateForRead(existingResource.Properties)
 	if err != nil {

@@ -51,7 +51,7 @@ type FieldHint struct {
 
 	IndexField   string            `json:"IndexField" pkl:"IndexField"`
 	UpdateMethod FieldUpdateMethod `json:"UpdateMethod" pkl:"UpdateMethod"`
-	Format       string            `json:"Format" pkl:"Format"` // "" = opaque String; "json" = serialized JSON document (PLA-196)
+	Format       string            `json:"Format" pkl:"Format"` // "" = opaque String; "json" = serialized JSON document
 }
 
 // UnmarshalJSON normalizes the deprecated AttachesTo alias into EdgeKind so

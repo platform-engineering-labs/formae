@@ -19,7 +19,7 @@ import (
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
-// RFC-0041 pre-flight: two forma resources cannot claim the same existing
+// Pre-flight: two forma resources cannot claim the same existing
 // managed row. resourceA matches via current label, resourceB matches via
 // alias. Without rejection, the reconcile loop emits two updates against the
 // same existing row and the final label is nondeterministic.
@@ -58,7 +58,7 @@ func TestValidateAliasUsage_DuplicateClaim_LabelAndAlias(t *testing.T) {
 	assert.Contains(t, err.Error(), "via label")
 }
 
-// RFC-0041 pre-flight: an alias that matches nothing — neither an existing
+// Pre-flight: an alias that matches nothing — neither an existing
 // managed row in the resource's stack nor an unmanaged row — is rejected.
 // Creating-and-renaming a fresh resource is almost always a stale alias from
 // a prior refactor.
