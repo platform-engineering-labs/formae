@@ -9,11 +9,8 @@ package extract
 import (
 	"testing"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
-	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/platform-engineering-labs/formae/internal/schema"
 )
 
@@ -50,51 +47,11 @@ func TestValidateExtractOptions(t *testing.T) {
 
 }
 
-func TestHandleSchemaVersionUpgrade(t *testing.T) {
-	th := theme.New("")
-	warnStyle := lipgloss.NewStyle()
-
-	origInteractive, origConfirm := isInteractive, runConfirm
-	t.Cleanup(func() { isInteractive, runConfirm = origInteractive, origConfirm })
-
-	// setup wires the seams and returns call counters plus an upgrade tied to
-	// an Apply spy, so each case can assert whether the on-disk write happened.
-	setup := func(interactive, confirmAnswer bool) (confirmCalls, applyCalls *int, u *schema.SchemaVersionUpgrade) {
-		cc, ac := 0, 0
-		isInteractive = func() bool { return interactive }
-		runConfirm = func(_ *theme.Theme, _ string, _ string) (bool, error) { cc++; return confirmAnswer, nil }
-		u = &schema.SchemaVersionUpgrade{
-			ProjectDir: "/tmp/proj", Current: "0.85.0", Target: "0.88.0",
-			Apply: func() ([]string, error) { ac++; return nil, nil },
-		}
-		return &cc, &ac, u
-	}
-
-	t.Run("--yes applies without prompting", func(t *testing.T) {
-		cc, ac, u := setup(true, false)
-		require.NoError(t, handleSchemaVersionUpgrade(th, warnStyle, &ExtractOptions{Yes: true}, "out.pkl", u))
-		assert.Equal(t, 0, *cc, "should not prompt with --yes")
-		assert.Equal(t, 1, *ac, "should apply with --yes")
-	})
-
-	t.Run("interactive + confirmed applies", func(t *testing.T) {
-		cc, ac, u := setup(true, true)
-		require.NoError(t, handleSchemaVersionUpgrade(th, warnStyle, &ExtractOptions{}, "out.pkl", u))
-		assert.Equal(t, 1, *cc)
-		assert.Equal(t, 1, *ac)
-	})
-
-	t.Run("interactive + declined nags, no write", func(t *testing.T) {
-		cc, ac, u := setup(true, false)
-		require.NoError(t, handleSchemaVersionUpgrade(th, warnStyle, &ExtractOptions{}, "out.pkl", u))
-		assert.Equal(t, 1, *cc)
-		assert.Equal(t, 0, *ac, "declined must not write")
-	})
-
-	t.Run("non-interactive without --yes nags, no prompt, no write", func(t *testing.T) {
-		cc, ac, u := setup(false, false)
-		require.NoError(t, handleSchemaVersionUpgrade(th, warnStyle, &ExtractOptions{}, "out.pkl", u))
-		assert.Equal(t, 0, *cc, "must not prompt without a TTY")
-		assert.Equal(t, 0, *ac, "must not write without consent")
-	})
+func TestSchemaVersionNag(t *testing.T) {
+	u := &schema.SchemaVersionUpgrade{ProjectDir: "/tmp/proj", Current: "0.85.0", Target: "0.88.0"}
+	msg := schemaVersionNag(u)
+	assert.Contains(t, msg, "/tmp/proj/PklProject")
+	assert.Contains(t, msg, "0.85.0")
+	assert.Contains(t, msg, "formae@0.88.0")
+	assert.Contains(t, msg, "pkl project resolve")
 }

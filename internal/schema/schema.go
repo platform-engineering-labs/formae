@@ -30,28 +30,23 @@ type GenerateSourcesResult struct {
 	InitializedNewProject bool
 	Warnings              []string
 
-	// SchemaVersionUpgrade, when non-nil, reports that the target directory
-	// has an existing project pinned to a different core schema version than
-	// this binary emits. Generation already used the corrected version
-	// in-memory (so the file was written), but the on-disk project was left
-	// untouched — the caller decides whether to apply the upgrade to it.
+	// SchemaVersionUpgrade, when non-nil, reports that the target directory has
+	// an existing project pinned to an OLDER core schema version than this
+	// binary emits. Generation used the corrected version in-memory (so the
+	// written file matches this binary), but the on-disk project is left
+	// untouched — the caller nags the user to update it themselves.
 	SchemaVersionUpgrade *SchemaVersionUpgrade
 }
 
-// SchemaVersionUpgrade describes an available core-schema-version bump for an
+// SchemaVersionUpgrade describes an out-of-date core schema version pinned by an
 // existing on-disk project reused during generation.
 type SchemaVersionUpgrade struct {
 	// ProjectDir is the directory holding the project file (e.g. PklProject).
 	ProjectDir string
-	// Current is the core schema version currently pinned on disk.
+	// Current is the (older) core schema version currently pinned on disk.
 	Current string
-	// Target is the version this binary emits and would upgrade to.
+	// Target is the version this binary emits and recommends upgrading to.
 	Target string
-	// Apply performs the on-disk upgrade (rewrite + re-resolve), returning any
-	// non-fatal warnings. It is bound by the plugin that detected the mismatch,
-	// so callers apply it without knowing the concrete schema. Called only on
-	// explicit consent.
-	Apply func() ([]string, error)
 }
 
 // SerializeOptions controls how resources are serialized by a schema plugin.

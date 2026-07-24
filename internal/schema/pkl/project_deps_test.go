@@ -128,59 +128,12 @@ func TestCoreSchemaVersion(t *testing.T) {
 	}
 }
 
-func TestRewriteFormaeCoreVersion(t *testing.T) {
-	const project = `amends "pkl:Project"
-
-dependencies {
-  ["formae"] {
-    uri = "package://hub.platform.engineering/plugins/pkl/schema/pkl/formae/formae@0.85.0"
-  }
-  ["aws"] {
-    uri = "package://hub.platform.engineering/plugins/aws/schema/pkl/aws/aws@0.1.5"
-  }
-}
-`
-	write := func(t *testing.T, body string) string {
-		t.Helper()
-		path := filepath.Join(t.TempDir(), "PklProject")
-		require.NoError(t, os.WriteFile(path, []byte(body), 0644))
-		return path
-	}
-
-	t.Run("bumps mismatched version and leaves plugin deps untouched", func(t *testing.T) {
-		path := write(t, project)
-		changed, err := rewriteFormaeCoreVersion(path, "0.88.0")
-		require.NoError(t, err)
-		assert.True(t, changed)
-
-		deps, err := parsePklProjectDeps(path)
-		require.NoError(t, err)
-		assert.ElementsMatch(t, []string{"pkl.formae@0.88.0", "aws.aws@0.1.5"}, deps)
-	})
-
-	t.Run("no-op when already at target version", func(t *testing.T) {
-		path := write(t, project)
-		changed, err := rewriteFormaeCoreVersion(path, "0.85.0")
-		require.NoError(t, err)
-		assert.False(t, changed)
-	})
-
-	t.Run("no-op when no formae core dep present", func(t *testing.T) {
-		path := write(t, `amends "pkl:Project"
-
-dependencies {
-  ["aws"] {
-    uri = "package://hub.platform.engineering/plugins/aws/schema/pkl/aws/aws@0.1.5"
-  }
-}
-`)
-		changed, err := rewriteFormaeCoreVersion(path, "0.88.0")
-		require.NoError(t, err)
-		assert.False(t, changed)
-	})
-
-	t.Run("errors on missing file", func(t *testing.T) {
-		_, err := rewriteFormaeCoreVersion("/no/such/file", "0.88.0")
-		require.Error(t, err)
-	})
+func TestIsOlderVersion(t *testing.T) {
+	assert.True(t, isOlderVersion("0.85.0", "0.88.0"), "older patchline is behind")
+	assert.True(t, isOlderVersion("0.87.9", "0.88.0"))
+	assert.False(t, isOlderVersion("0.88.0", "0.88.0"), "equal is not older")
+	assert.False(t, isOlderVersion("0.89.0", "0.88.0"), "newer must not nag")
+	assert.False(t, isOlderVersion("", "0.88.0"), "no dep found → no nag")
+	assert.False(t, isOlderVersion("garbage", "0.88.0"), "unparseable → no nag")
+	assert.False(t, isOlderVersion("0.85.0", "nope"), "unparseable target → no nag")
 }

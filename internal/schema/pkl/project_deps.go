@@ -9,6 +9,8 @@ import (
 	"os"
 	"regexp"
 	"strings"
+
+	"github.com/masterminds/semver"
 )
 
 // remoteURIPattern matches the URI shape emitted by PklProjectTemplate.pkl:
@@ -24,15 +26,6 @@ var uriPattern = regexp.MustCompile(`uri\s*=\s*"([^"]+)"`)
 
 // nameKeyPattern matches the start of a remote dep block: ["<name>"] {
 var nameKeyPattern = regexp.MustCompile(`\[\s*"([^"]+)"\s*\]\s*\{`)
-
-// formaeCoreVersionPattern matches the version segment of the formae core
-// dependency URI inside a PklProject:
-//
-//	package://<host>/plugins/pkl/schema/pkl/formae/formae@<version>
-//
-// Only the core package (name "formae") ends in `/formae/formae@`, so plugin
-// deps are never touched.
-var formaeCoreVersionPattern = regexp.MustCompile(`(package://[^"]+/formae/formae@)[^"\s]+`)
 
 // formaeCoreDepPrefix is the package-spec prefix for the formae core schema
 // dependency, matching what PackageResolver emits (see buildDependencyStrings).
@@ -67,23 +60,20 @@ func coreSchemaVersion(v string) string {
 	return v
 }
 
-// rewriteFormaeCoreVersion pins the formae core dependency in the PklProject
-// at path to version. It returns true when the file changed (a formae core
-// dep existed and its version differed). A PklProject without a formae core
-// dep, or one already at version, is left untouched and returns (false, nil).
-func rewriteFormaeCoreVersion(path, version string) (bool, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return false, fmt.Errorf("read PklProject %q: %w", path, err)
+// isOlderVersion reports whether current is a strictly lower semver than
+// target. It returns false when current is empty (no dep found), when either
+// side fails to parse, or when current is equal to or newer than target — the
+// nag fires only when the on-disk project is genuinely behind.
+func isOlderVersion(current, target string) bool {
+	if current == "" {
+		return false
 	}
-	replaced := formaeCoreVersionPattern.ReplaceAllString(string(data), "${1}"+version)
-	if replaced == string(data) {
-		return false, nil
+	c, errC := semver.NewVersion(current)
+	t, errT := semver.NewVersion(target)
+	if errC != nil || errT != nil {
+		return false
 	}
-	if err := os.WriteFile(path, []byte(replaced), 0640); err != nil {
-		return false, fmt.Errorf("write PklProject %q: %w", path, err)
-	}
-	return true, nil
+	return c.LessThan(t)
 }
 
 // parsePklProjectDeps reads the `dependencies { ... }` block from an existing

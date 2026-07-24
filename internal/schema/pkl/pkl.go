@@ -511,19 +511,18 @@ func (p PKL) GenerateSourceCode(forma *pkgmodel.Forma, path string, includes []s
 		// prerelease binary (e.g. 0.88.0-dev.7) pins the base version. Skip on
 		// dev builds (0.0.0).
 		//
-		// The on-disk PklProject is deliberately NOT rewritten here — that
-		// would drop a surprise diff into the user's tree. Instead the mismatch
-		// is reported with a bound Apply the caller invokes only on consent.
+		// The on-disk PklProject is deliberately NOT rewritten — that would drop
+		// a surprise diff into the user's tree. When it pins an OLDER version,
+		// the mismatch is reported so the CLI can tell the user to update it.
 		schemaVersion := coreSchemaVersion(formae.Version)
 		if schemaVersion != "0.0.0" {
 			bumped, current := bumpFormaeCoreDep(deps, schemaVersion)
 			deps = bumped
-			if current != "" && current != schemaVersion {
+			if isOlderVersion(current, schemaVersion) {
 				res.SchemaVersionUpgrade = &schema.SchemaVersionUpgrade{
 					ProjectDir: parentDir,
 					Current:    current,
 					Target:     schemaVersion,
-					Apply:      func() ([]string, error) { return upgradeProjectFormaeVersion(parentDir, schemaVersion) },
 				}
 			}
 		}
@@ -574,33 +573,6 @@ func (p PKL) GenerateSourceCode(forma *pkgmodel.Forma, path string, includes []s
 	}
 
 	return res, nil
-}
-
-// upgradeProjectFormaeVersion rewrites the formae core dependency in the
-// PklProject under projectDir to version, then clears the stale deps.json and
-// re-resolves so the project evaluates against the new version. Re-resolve is
-// best-effort: a failure (e.g. offline) is returned as a warning rather than an
-// error, since the PklProject itself was already updated. A no-op (dep absent
-// or already at version) returns (nil, nil). Bound into a
-// schema.SchemaVersionUpgrade.Apply by GenerateSourceCode.
-func upgradeProjectFormaeVersion(projectDir, version string) ([]string, error) {
-	projectFile := filepath.Join(projectDir, ProjectFile)
-	changed, err := rewriteFormaeCoreVersion(projectFile, version)
-	if err != nil {
-		return nil, err
-	}
-	if !changed {
-		return nil, nil
-	}
-
-	depsJSON := filepath.Join(projectDir, "PklProject.deps.json")
-	if rmErr := os.Remove(depsJSON); rmErr != nil && !os.IsNotExist(rmErr) {
-		return nil, fmt.Errorf("failed to clear stale deps.json: %w", rmErr)
-	}
-	if resErr := pklrun.ProjectResolve(projectDir, pklrun.WithPklCommand(bundledPklCommand())); resErr != nil {
-		return []string{fmt.Sprintf("Re-resolving Pkl dependencies in %q failed (%v). Run 'pkl project resolve' there.", projectDir, resErr)}, nil
-	}
-	return nil, nil
 }
 
 func (p PKL) ProjectInit(path string, include []string, schemaLocation schema.SchemaLocation) error {
