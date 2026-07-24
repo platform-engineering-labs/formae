@@ -30,10 +30,11 @@ func ResolvePropertyReferences(ksuidUri pkgmodel.FormaeURI, properties json.RawM
 }
 
 // ConvertToPluginFormat converts properties to the format expected by cloud provider plugins.
-// Guarded: refuses to convert a property still carrying a $hashed:true marker. Use this for
-// any properties that will be sent to a plugin as literal field values to create/write (Create,
-// Update, Delete) — a stored hash must never be written to the cloud as if it were the live
-// secret value.
+// Guarded: refuses to convert a property still carrying a $hashed:true marker. Use this only for
+// the NEW value being written to the cloud — Create's properties and Update's desired/new-value
+// properties — where a stored hash must never be written as if it were the live secret value.
+// Delete (identity only) and Update's prior/existing-state context use ConvertExistingStateForRead
+// (unguarded), because those are never written as literal field values.
 func ConvertToPluginFormat(properties json.RawMessage) (json.RawMessage, error) {
 	if err := guardNoHashedValues(properties); err != nil {
 		return nil, err

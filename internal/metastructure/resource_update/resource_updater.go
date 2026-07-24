@@ -428,8 +428,16 @@ func synchronize(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen
 }
 
 func delete(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
-	// Convert properties to plugin format (extracts $value from opaque structures)
-	convertedResource, err := convertResourceForPlugin(data.resourceUpdate.DesiredState)
+	// Convert properties to plugin format (extracts $value from opaque structures).
+	// A delete only ever needs identity (NativeID/TargetConfig) — it never writes
+	// DesiredState's property values to the cloud — so use the Read-safe (unguarded)
+	// conversion. A schema-opaque field can still carry its stored $hashed marker
+	// here: the pre-delete synchronize() Read merges in only what the plugin's Read
+	// actually returns, so a non-enriching secret (one the plugin's Read never
+	// returns) leaves the stored hash untouched. The guarded converter would reject
+	// that hash even though nothing is ever written from it, permanently failing
+	// destroy for any resource with a non-enriching hashed secret.
+	convertedResource, err := convertResourceForPluginRead(data.resourceUpdate.DesiredState)
 	if err != nil {
 		proc.Log().Error("failed to convert resource properties for plugin: %v", err)
 		data.resourceUpdate.MarkAsFailed()
@@ -609,14 +617,25 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 		return handleProgressUpdate(proc.PID(), state, data, syntheticResult, proc)
 	}
 
-	// Convert properties to plugin format (extracts $value from opaque structures)
+	// Convert properties to plugin format (extracts $value from opaque structures).
+	// DesiredState is the NEW value being written to the cloud as DesiredProperties,
+	// so this stays guarded: a stored hash must never be sent to a plugin in place
+	// of the live secret. SuppressUnchangedOpaqueValues plus fresh forma input keep
+	// this plaintext-or-suppressed by the time we get here.
 	convertedResource, err := convertResourceForPlugin(data.resourceUpdate.DesiredState)
 	if err != nil {
 		proc.Log().Error("failed to convert resource properties for plugin: %v", err)
 		data.resourceUpdate.MarkAsFailed()
 		return StateFinishedWithError, data, nil, nil
 	}
-	convertedExisting, err := convertResourceForPlugin(data.resourceUpdate.PriorState)
+	// PriorState becomes PriorProperties: prior/diff CONTEXT for the plugin, not a
+	// value being written. Use the Read-safe (unguarded) conversion — the pre-update
+	// synchronize() Read only merges in what the plugin's Read actually returns, so a
+	// non-enriching secret (one the plugin's Read never returns) leaves PriorState's
+	// stored $hashed marker untouched. The guarded converter would reject that hash
+	// even though it is never written anywhere, permanently failing updates to any
+	// other field on a resource with a non-enriching hashed secret.
+	convertedExisting, err := convertResourceForPluginRead(data.resourceUpdate.PriorState)
 	if err != nil {
 		proc.Log().Error("failed to convert existing resource properties for plugin: %v", err)
 		data.resourceUpdate.MarkAsFailed()
