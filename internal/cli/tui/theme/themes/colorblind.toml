@@ -58,9 +58,9 @@ fill_pending = "░"
 animation = "blink"
 
 [spinner]
-frames = ["◐", "◓", "◑", "◒"]
-interval_ms = 120
-static_frame = "◐"
+frames = ["●", "◉", "○", "◉"]
+interval_ms = 333
+static_frame = "●"
 
 [confirmation_bar]
 color = "brand"

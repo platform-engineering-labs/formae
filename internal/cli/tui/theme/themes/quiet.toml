@@ -20,7 +20,7 @@ pending          = { light = "#999999", dark = "#555555" }
 # quiet keeps operation glyphs restrained: subtle, not vivid.
 op_create  = { light = "#444444", dark = "#AAAAAA" }
 op_update  = { light = "#444444", dark = "#AAAAAA" }
-op_delete  = { light = "#DC2626", dark = "#F87171" }
+op_delete  = { light = "#444444", dark = "#AAAAAA" }
 op_replace = { light = "#FF6B00", dark = "#FF8533" }
 op_detach  = { light = "#999999", dark = "#777777" }
 op_keep    = { light = "#999999", dark = "#777777" }
@@ -57,9 +57,9 @@ fill_pending = "░"
 animation = "static"
 
 [spinner]
-frames = ["◐", "◓", "◑", "◒"]
-interval_ms = 120
-static_frame = "◐"
+frames = ["●", "◉", "○", "◉"]
+interval_ms = 333
+static_frame = "●"
 
 [confirmation_bar]
 color = "brand"

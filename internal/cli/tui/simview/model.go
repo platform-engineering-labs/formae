@@ -638,7 +638,7 @@ func (m Model) renderConfirmBar() string {
 
 	return lipgloss.NewStyle().
 		Background(bg).
-		Foreground(lipgloss.AdaptiveColor{Light: "#FFFFFF", Dark: "#FFFFFF"}).
+		Foreground(lipgloss.AdaptiveColor{Light: "#1A1A1A", Dark: "#1A1A1A"}).
 		Bold(true).
 		Render(content)
 }

@@ -10,7 +10,7 @@ border           = { light = "#DDDDDD", dark = "#555566" }
 selection        = { light = "#DDDDDD", dark = "#3A3A3A" }
 primary_accent   = { light = "#2563EB", dark = "#60A5FA" }
 secondary_accent = { light = "#FF6B00", dark = "#FF8533" }
-error            = { light = "#DC2626", dark = "#F87171" }
+error            = { light = "#FF0000", dark = "#FF0000" }
 error_subtle     = { light = "#B45454", dark = "#9B4444" }
 error_bright     = { light = "#B91C1C", dark = "#FCA5A5" }
 warning          = "#B5B55B"
@@ -57,9 +57,9 @@ fill_pending = "░"
 animation = "static"
 
 [spinner]
-frames = ["◐", "◓", "◑", "◒"]
-interval_ms = 120
-static_frame = "◐"
+frames = ["●", "◉", "○", "◉"]
+interval_ms = 333
+static_frame = "●"
 
 [confirmation_bar]
 color = "severity"
