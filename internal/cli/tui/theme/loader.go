@@ -53,6 +53,22 @@ func resolveExtends(f *themeFile) (*themeFile, error) {
 	return mergeThemeFiles(base, f), nil
 }
 
+// quietRequiredFields returns quiet's resolved themeFile, used as the
+// required-field template for user-theme completeness checks (a candidate
+// theme is complete iff it has every field quiet has set). Panics on failure
+// like loadBuiltin: a broken embedded quiet.toml is a programming error.
+func quietRequiredFields() *themeFile {
+	f, err := readBuiltin("quiet")
+	if err != nil {
+		panic(fmt.Sprintf("theme: built-in quiet: %v", err))
+	}
+	merged, err := resolveExtends(f)
+	if err != nil {
+		panic(fmt.Sprintf("theme: built-in quiet: %v", err))
+	}
+	return merged
+}
+
 // builtinNames lists the embedded theme names (no .toml suffix).
 func builtinNames() []string {
 	entries, _ := builtinFS.ReadDir("themes")
