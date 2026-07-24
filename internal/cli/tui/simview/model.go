@@ -589,7 +589,7 @@ func (m Model) renderConfirmBar() string {
 	// policies correctly and joins with "and". Strip its ANSI + trailing
 	// "Do you want to continue?" framing down to the one-line summary.
 	summary := "Review the plan above"
-	if raw := components.PromptForOperations(&m.cmd); raw != "" {
+	if raw := components.PromptForOperations(m.th, &m.cmd); raw != "" {
 		stripped := ansiEscape.ReplaceAllString(raw, "")
 		s := strings.SplitN(stripped, "\n\n", 2)[0]
 		s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))

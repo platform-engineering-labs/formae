@@ -260,7 +260,7 @@ func runApplyInteractive(a *app.App, opts *ApplyOptions) error {
 	}
 
 	// Print one-line scrollback record.
-	raw := components.PromptForOperations(&res.Simulation.Command)
+	raw := components.PromptForOperations(a.Theme(), &res.Simulation.Command)
 	summary := ""
 	if raw != "" {
 		stripped := ansiEscape.ReplaceAllString(raw, "")
@@ -328,7 +328,7 @@ func runApplyLegacy(a *app.App, opts *ApplyOptions) error {
 		if !isInteractive() {
 			return fmt.Errorf("interactive input requires a TTY — pass --yes")
 		}
-		prompt := components.PromptForOperations(&res.Simulation.Command)
+		prompt := components.PromptForOperations(a.Theme(), &res.Simulation.Command)
 		ok, err := runConfirm(a.Theme(), prompt, "")
 		if err != nil {
 			return err

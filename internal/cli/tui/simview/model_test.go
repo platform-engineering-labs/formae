@@ -578,7 +578,7 @@ func TestSimView_NonCascadeConfirmFooter(t *testing.T) {
 	// "resource(s)") and joins the final clause with "and". The bar truncates to a
 	// single line, so assert the labelling against the full summary source that it
 	// renders from.
-	ops := plain(components.PromptForOperations(&m.cmd))
+	ops := plain(components.PromptForOperations(th, &m.cmd))
 	assert.Contains(t, ops, "target(s)", "target operations must be labelled 'target(s)', not 'resource(s)'")
 	assert.Contains(t, ops, "stack(s)", "stack operations must be labelled 'stack(s)', not 'resource(s)'")
 	assert.Contains(t, ops, "policy", "policy operations must be labelled correctly")

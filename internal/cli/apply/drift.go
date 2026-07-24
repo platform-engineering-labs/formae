@@ -258,7 +258,7 @@ func handleSelfResolvedDrift(a *app.App, th *theme.Theme, opts *ApplyOptions, re
 		return fmt.Errorf("%s", msg)
 	}
 
-	raw := components.PromptForOperations(&res.Simulation.Command)
+	raw := components.PromptForOperations(th, &res.Simulation.Command)
 	summary := ""
 	if raw != "" {
 		stripped := ansiEscape.ReplaceAllString(raw, "")

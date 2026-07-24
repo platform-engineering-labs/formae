@@ -276,7 +276,7 @@ func runDestroyInteractive(a *app.App, opts *DestroyOptions) error {
 	}
 
 	// Print one-line scrollback record.
-	raw := components.PromptForOperations(&res.Simulation.Command)
+	raw := components.PromptForOperations(a.Theme(), &res.Simulation.Command)
 	summary := ""
 	if raw != "" {
 		stripped := ansiEscape.ReplaceAllString(raw, "")
@@ -392,7 +392,7 @@ func runDestroyLegacy(app *app.App, opts *DestroyOptions) error {
 		if !isInteractive() {
 			return fmt.Errorf("interactive input requires a TTY — pass --yes")
 		}
-		prompt := components.PromptForOperations(&res.Simulation.Command)
+		prompt := components.PromptForOperations(app.Theme(), &res.Simulation.Command)
 		ok, err := runConfirm(app.Theme(), prompt, "")
 		if err != nil {
 			return err
