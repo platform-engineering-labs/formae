@@ -341,15 +341,15 @@ func (v multiView) renderRows(maxRows int) []string {
 		var glyphStr string
 		switch {
 		case r.cmd.State == "Canceled":
-			glyphStr = textStyle.Render(pad("⊘", multiCols[colStatus].width))
+			glyphStr = textStyle.Render(pad(v.th.Glyphs.StatusCanceled, multiCols[colStatus].width))
 		case terminal && r.health == healthFinishedOK:
-			glyphStr = textStyle.Render(pad("✓", multiCols[colStatus].width))
+			glyphStr = textStyle.Render(pad(v.th.Glyphs.StatusDone, multiCols[colStatus].width))
 		case terminal && (r.health == healthFinishedFailed):
 			errSt := lipgloss.NewStyle().Foreground(p.Error)
 			if isCursor {
 				errSt = errSt.Background(p.Selection).Foreground(p.ErrorBright)
 			}
-			glyphStr = errSt.Render(pad("✗", multiCols[colStatus].width))
+			glyphStr = errSt.Render(pad(v.th.Glyphs.StatusFailed, multiCols[colStatus].width))
 		default:
 			// running — spinner
 			spinSt := lipgloss.NewStyle().Foreground(p.InProgress)

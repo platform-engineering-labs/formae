@@ -77,16 +77,16 @@ func renderCommandHeader(th *theme.Theme, c apimodel.Command, width int, now tim
 	var stateSt lipgloss.Style
 	switch c.State {
 	case "Success":
-		glyphStr = "✓"
+		glyphStr = th.Glyphs.StatusDone
 		stateSt = lipgloss.NewStyle().Foreground(p.Done)
 	case "Failed":
-		glyphStr = "✗"
+		glyphStr = th.Glyphs.StatusFailed
 		stateSt = lipgloss.NewStyle().Foreground(p.Error)
 	case "Canceled":
-		glyphStr = "⊘"
+		glyphStr = th.Glyphs.StatusCanceled
 		stateSt = lipgloss.NewStyle().Foreground(p.TextSubtle)
 	default:
-		glyphStr = "◐"
+		glyphStr = th.Glyphs.StatusInProgress
 		stateSt = lipgloss.NewStyle().Foreground(p.InProgress)
 	}
 

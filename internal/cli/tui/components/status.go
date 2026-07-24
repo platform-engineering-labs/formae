@@ -32,12 +32,12 @@ const (
 
 // Glyph returns the leading glyph for problem states in list views;
 // non-problem states have none (their trailing indicator speaks).
-func Glyph(s State) string {
+func Glyph(g theme.Glyphs, s State) string {
 	switch s {
 	case StateFailed:
-		return "✗"
+		return g.StatusFailed
 	case StateSkipped:
-		return "⊘"
+		return g.StatusSkipped
 	default:
 		return ""
 	}
@@ -86,7 +86,7 @@ func Indicator(th *theme.Theme, s State, spinnerView, elapsed string) string {
 		v := strings.TrimSpace(spinnerView + " " + elapsed)
 		return lipgloss.NewStyle().Foreground(p.InProgress).Render(v)
 	case StatePending:
-		return lipgloss.NewStyle().Foreground(p.Pending).Render("·")
+		return lipgloss.NewStyle().Foreground(p.Pending).Render(th.Glyphs.StatusPending)
 	case StateFailed:
 		return lipgloss.NewStyle().Foreground(p.Error).Bold(true).Render("FAILED")
 	case StateSkipped:

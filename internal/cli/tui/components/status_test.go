@@ -22,18 +22,19 @@ func TestMain(m *testing.M) {
 }
 
 func TestGlyph(t *testing.T) {
+	th := theme.New("quiet")
 	tests := []struct {
 		state State
 		want  string
 	}{
-		{StateFailed, "✗"},
-		{StateSkipped, "⊘"},
+		{StateFailed, th.Glyphs.StatusFailed},
+		{StateSkipped, th.Glyphs.StatusSkipped},
 		{StateDone, ""},
 		{StateInProgress, ""},
 		{StatePending, ""},
 	}
 	for _, tt := range tests {
-		assert.Equal(t, tt.want, Glyph(tt.state), string(tt.state))
+		assert.Equal(t, tt.want, Glyph(th.Glyphs, tt.state), string(tt.state))
 	}
 }
 
