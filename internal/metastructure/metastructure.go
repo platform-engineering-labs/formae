@@ -214,22 +214,26 @@ func (m *Metastructure) Start() error {
 		m.options.Env[gen.Env("AuthPluginHandle")] = m.AuthPluginHandle
 	}
 
+	// One-time, idempotent sweep that hashes any plaintext opaque secrets left
+	// behind by writes made before opaque-value hashing existed (PLA-320). It
+	// runs against the datastore alone — no actors, no plugins — so it happens
+	// here, before the node starts, rather than after: keying opacity on the
+	// hard-coded known-opaque table (not a running plugin coordinator) means we
+	// don't have to sequence it against actor/plugin startup. Safe on every
+	// boot: a no-op once everything eligible is hashed, and it never touches
+	// DesiredState of a command that isn't final yet, so it can't interfere
+	// with ReRunIncompleteCommands below.
+	if err := migration.BackfillHashedSecrets(m.Datastore); err != nil {
+		slog.Error("Failed to backfill hashed secrets", "error", err)
+		return err
+	}
+
 	node, err := ergo.StartNode(gen.Atom(m.nodeName), m.options)
 	if err != nil {
 		slog.Error("Failed to start node", "error", err)
 		return err
 	}
 	m.Node = node
-
-	// One-time, idempotent sweep that hashes any plaintext opaque secrets left
-	// behind by writes made before opaque-value hashing existed (PLA-320). Safe
-	// to run on every boot: it's a no-op once everything eligible is hashed, and
-	// it never touches DesiredState of a command that isn't final yet, so this
-	// can't interfere with ReRunIncompleteCommands below.
-	if err := migration.BackfillHashedSecrets(m.Datastore); err != nil {
-		slog.Error("Failed to backfill hashed secrets", "error", err)
-		return err
-	}
 
 	return m.ReRunIncompleteCommands()
 }

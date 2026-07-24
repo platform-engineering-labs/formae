@@ -18,6 +18,22 @@ import (
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
+// knownOpaqueFields maps a resource type to the top-level secret property
+// names that must be hashed at rest even when a row's embedded schema does not
+// mark them opaque. Rows written before a field was typed formae.SecretValue
+// carry a stale, non-opaque embedded schema; keying the sweep only on that
+// schema would leave their secrets in cleartext forever. This hard-coded table
+// is the authoritative, plugin-independent opacity source for the backfill, so
+// the sweep needs neither a running plugin coordinator nor the actor system —
+// it runs against the datastore alone, before the node starts.
+//
+// First cut: top-level scalar secret fields only, matching PLA-320's scope
+// (nested/list/map secret fields are deferred). Keep in sync with the
+// SecretValue-typed fields in the resource plugins.
+var knownOpaqueFields = map[string][]string{
+	"AWS::SecretsManager::Secret": {"SecretString"},
+}
+
 // BackfillHashedSecrets is a one-time, idempotent sweep that hashes opaque
 // secret values left in cleartext by writes made before opaque-value hashing
 // (PLA-320) existed. It hashes:
@@ -66,10 +82,16 @@ func backfillFormaCommands(ds datastore.Datastore, t *transformations.PersistVal
 		for i := range cmd.ResourceUpdates {
 			ru := &cmd.ResourceUpdates[i]
 
+			// The authoritative opacity source is the embedded schema augmented
+			// with the hard-coded known-opaque fields for this resource type, so
+			// rows written with a stale (pre-SecretValue) non-opaque schema are
+			// still hashed.
+			schema := withKnownOpaqueFields(ru.DesiredState.Schema, ru.DesiredState.Type)
+
 			// PreviousProperties is a read-back snapshot only ever used for
 			// logging and API diff display, so it's always safe to hash —
 			// regardless of the owning command's state.
-			changed, err := hashPropsInPlace(t, ru.DesiredState.Schema, &ru.PreviousProperties)
+			changed, err := hashPropsInPlace(t, schema, &ru.PreviousProperties)
 			if err != nil {
 				return fmt.Errorf("backfill: hash previous properties for %s: %w", ru.DesiredState.Label, err)
 			}
@@ -83,20 +105,17 @@ func backfillFormaCommands(ds datastore.Datastore, t *transformations.PersistVal
 				continue
 			}
 
-			changed, err = hashPropsInPlace(t, ru.DesiredState.Schema, &ru.PriorState.Properties)
+			changed, err = hashPropsInPlace(t, schema, &ru.PriorState.Properties)
 			if err != nil {
 				return fmt.Errorf("backfill: hash prior state for %s: %w", ru.DesiredState.Label, err)
 			}
 			dirty = dirty || changed
 
-			out, err := t.ApplyToResource(&ru.DesiredState)
+			changed, err = hashResourceValuesInPlace(t, schema, &ru.DesiredState)
 			if err != nil {
 				return fmt.Errorf("backfill: hash desired state for %s: %w", ru.DesiredState.Label, err)
 			}
-			if resourceChanged(&ru.DesiredState, out) {
-				ru.DesiredState = *out
-				dirty = true
-			}
+			dirty = dirty || changed
 		}
 
 		if !dirty {
@@ -117,19 +136,69 @@ func backfillResourcesTable(ds datastore.Datastore, t *transformations.PersistVa
 	}
 
 	for _, res := range resources {
-		out, err := t.ApplyToResource(res)
+		schema := withKnownOpaqueFields(res.Schema, res.Type)
+		changed, err := hashResourceValuesInPlace(t, schema, res)
 		if err != nil {
 			return fmt.Errorf("backfill: hash resource %s: %w", res.Label, err)
 		}
-		if !resourceChanged(res, out) {
+		if !changed {
 			continue
 		}
-		if _, err := ds.StoreResource(out, "backfill-hashed-secrets"); err != nil {
+		if _, err := ds.StoreResource(res, "backfill-hashed-secrets"); err != nil {
 			return fmt.Errorf("backfill: re-store resource %s: %w", res.Label, err)
 		}
 	}
 
 	return nil
+}
+
+// withKnownOpaqueFields returns schema with the hard-coded known-opaque fields
+// for resourceType merged in as Opaque hints. It leaves the input schema
+// untouched (returns a copy) and never clears an existing opaque hint, so the
+// embedded schema and the hard-coded table union together as the opacity
+// source. Returns schema unchanged when the type has no known opaque fields.
+func withKnownOpaqueFields(schema pkgmodel.Schema, resourceType string) pkgmodel.Schema {
+	fields := knownOpaqueFields[resourceType]
+	if len(fields) == 0 {
+		return schema
+	}
+	hints := make(map[string]pkgmodel.FieldHint, len(schema.Hints)+len(fields))
+	for k, v := range schema.Hints {
+		hints[k] = v
+	}
+	for _, f := range fields {
+		h := hints[f]
+		h.Opaque = true
+		hints[f] = h
+	}
+	out := schema
+	out.Hints = hints
+	return out
+}
+
+// hashResourceValuesInPlace hashes the payload columns (Properties,
+// ReadOnlyProperties, PatchDocument) of res using the supplied schema, without
+// altering the resource's stored Schema (the migration hashes values, it does
+// not rewrite embedded schemas). It mutates res only when hashing actually
+// changed something and reports whether it did.
+func hashResourceValuesInPlace(t *transformations.PersistValueTransformer, schema pkgmodel.Schema, res *pkgmodel.Resource) (bool, error) {
+	tmp := &pkgmodel.Resource{
+		Schema:             schema,
+		Properties:         res.Properties,
+		ReadOnlyProperties: res.ReadOnlyProperties,
+		PatchDocument:      res.PatchDocument,
+	}
+	out, err := t.ApplyToResource(tmp)
+	if err != nil {
+		return false, err
+	}
+	if !resourceChanged(tmp, out) {
+		return false, nil
+	}
+	res.Properties = out.Properties
+	res.ReadOnlyProperties = out.ReadOnlyProperties
+	res.PatchDocument = out.PatchDocument
+	return true, nil
 }
 
 // hashPropsInPlace hashes any schema-opaque / opaque-enveloped values found in
