@@ -34,6 +34,27 @@ var nameKeyPattern = regexp.MustCompile(`\[\s*"([^"]+)"\s*\]\s*\{`)
 // deps are never touched.
 var formaeCoreVersionPattern = regexp.MustCompile(`(package://[^"]+/formae/formae@)[^"\s]+`)
 
+// formaeCoreDepPrefix is the package-spec prefix for the formae core schema
+// dependency, matching what PackageResolver emits (see buildDependencyStrings).
+const formaeCoreDepPrefix = "pkl.formae@"
+
+// bumpFormaeCoreDep returns a copy of deps with the formae core dependency
+// pinned to version, and the version it previously carried. current is empty
+// when deps has no formae core dep (nothing bumped). Only the in-memory spec
+// list is touched — no file is written.
+func bumpFormaeCoreDep(deps []string, version string) (out []string, current string) {
+	out = make([]string, len(deps))
+	copy(out, deps)
+	for i, d := range out {
+		if strings.HasPrefix(d, formaeCoreDepPrefix) {
+			current = strings.TrimPrefix(d, formaeCoreDepPrefix)
+			out[i] = formaeCoreDepPrefix + version
+			return out, current
+		}
+	}
+	return out, ""
+}
+
 // coreSchemaVersion strips any prerelease/build metadata from a binary version
 // so it names the published core schema package. Schemas are only ever
 // published at a base X.Y.Z — a prerelease binary like "0.88.0-dev.7" still

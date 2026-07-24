@@ -29,6 +29,25 @@ type GenerateSourcesResult struct {
 	ResourceCount         int
 	InitializedNewProject bool
 	Warnings              []string
+
+	// SchemaVersionUpgrade, when non-nil, reports that the target directory
+	// has an existing project pinned to a different core schema version than
+	// this binary emits. Generation already used the corrected version
+	// in-memory (so the file was written), but the on-disk project was left
+	// untouched — the CLI decides whether to apply the upgrade to it via
+	// UpgradeProjectSchemaVersion.
+	SchemaVersionUpgrade *SchemaVersionUpgrade
+}
+
+// SchemaVersionUpgrade describes an available core-schema-version bump for an
+// existing on-disk project reused during generation.
+type SchemaVersionUpgrade struct {
+	// ProjectDir is the directory holding the project file (e.g. PklProject).
+	ProjectDir string
+	// Current is the core schema version currently pinned on disk.
+	Current string
+	// Target is the version this binary emits and would upgrade to.
+	Target string
 }
 
 // SerializeOptions controls how resources are serialized by a schema plugin.
@@ -64,6 +83,12 @@ type SchemaPlugin interface {
 	Evaluate(path string, cmd model.Command, mode model.FormaApplyMode, props map[string]string) (*model.Forma, error)
 	SerializeForma(resources *model.Forma, options *SerializeOptions) (string, error)
 	GenerateSourceCode(forma *model.Forma, targetPath string, includes []string, options *SerializeOptions) (GenerateSourcesResult, error)
+	// UpgradeProjectSchemaVersion rewrites the on-disk project's core schema
+	// dependency in projectDir to version and re-resolves. It applies the
+	// upgrade advertised by GenerateSourcesResult.SchemaVersionUpgrade and
+	// returns any non-fatal warnings. Plugins that don't support extract
+	// return errors.ErrUnsupported.
+	UpgradeProjectSchemaVersion(projectDir, version string) ([]string, error)
 	ProjectInit(path string, include []string, schemaLocation SchemaLocation) error
 	ProjectProperties(path string) (map[string]model.Prop, error)
 }

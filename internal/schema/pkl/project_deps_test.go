@@ -93,6 +93,27 @@ func TestParsePklProjectDeps_FileMissing(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestBumpFormaeCoreDep(t *testing.T) {
+	t.Run("bumps and reports previous version, leaves plugin deps", func(t *testing.T) {
+		in := []string{"aws.aws@0.1.5", "pkl.formae@0.85.0"}
+		out, current := bumpFormaeCoreDep(in, "0.88.0")
+		assert.Equal(t, "0.85.0", current)
+		assert.Equal(t, []string{"aws.aws@0.1.5", "pkl.formae@0.88.0"}, out)
+		assert.Equal(t, "pkl.formae@0.85.0", in[1], "input slice must not be mutated")
+	})
+
+	t.Run("no formae core dep reports empty", func(t *testing.T) {
+		out, current := bumpFormaeCoreDep([]string{"aws.aws@0.1.5"}, "0.88.0")
+		assert.Empty(t, current)
+		assert.Equal(t, []string{"aws.aws@0.1.5"}, out)
+	})
+
+	t.Run("already current still reports it", func(t *testing.T) {
+		_, current := bumpFormaeCoreDep([]string{"pkl.formae@0.88.0"}, "0.88.0")
+		assert.Equal(t, "0.88.0", current)
+	})
+}
+
 func TestCoreSchemaVersion(t *testing.T) {
 	cases := map[string]string{
 		"0.88.0":         "0.88.0",

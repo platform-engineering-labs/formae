@@ -734,6 +734,18 @@ func (a *App) GenerateSourceCode(forma *pkgmodel.Forma, targetPath string, outpu
 	return schemaPlugin.GenerateSourceCode(forma, targetPath, nil, options)
 }
 
+// UpgradeProjectSchemaVersion applies the on-disk core-schema-version bump
+// advertised by GenerateSourceCode (GenerateSourcesResult.SchemaVersionUpgrade),
+// rewriting the project under projectDir to version and re-resolving. Returns
+// any non-fatal warnings.
+func (a *App) UpgradeProjectSchemaVersion(outputSchema, projectDir, version string) ([]string, error) {
+	schemaPlugin, err := schema.DefaultRegistry.Get(outputSchema)
+	if err != nil {
+		return nil, err
+	}
+	return schemaPlugin.UpgradeProjectSchemaVersion(projectDir, version)
+}
+
 // buildDependencyStrings asks the agent for installed plugin info and
 // emits PklProjectTemplate-formatted dep strings for every namespace
 // present in the forma, plus formae core.

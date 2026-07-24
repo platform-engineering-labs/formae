@@ -39,6 +39,9 @@ var (
 	generateFn = func(a *app.App, forma *pkgmodel.Forma, targetPath, outputSchema string, schemaLocation schema.SchemaLocation) (schema.GenerateSourcesResult, error) {
 		return a.GenerateSourceCode(forma, targetPath, outputSchema, schemaLocation)
 	}
+	upgradeFn = func(a *app.App, outputSchema, projectDir, version string) ([]string, error) {
+		return a.UpgradeProjectSchemaVersion(outputSchema, projectDir, version)
+	}
 )
 
 // defaultPromptPath shows a huh text-input pre-filled with defaultVal and
@@ -230,6 +233,12 @@ func runExtractCore(a *app.App, opts *ExtractOptions) error {
 		fmt.Println(warnStyle.Render(warning))
 	}
 
+	if u := res.SchemaVersionUpgrade; u != nil {
+		if err := handleSchemaVersionUpgrade(a, th, warnStyle, opts, res.TargetPath, u); err != nil {
+			return err
+		}
+	}
+
 	// Build per-resource list from the forma that was extracted.
 	extracted := make([]extractedResource, 0, len(forma.Resources))
 	for _, r := range forma.Resources {
@@ -249,6 +258,47 @@ func runExtractCore(a *app.App, opts *ExtractOptions) error {
 
 	nag.MaybePrintNags(themeFor(a), nags)
 
+	return nil
+}
+
+// handleSchemaVersionUpgrade surfaces a core-schema-version mismatch between an
+// existing on-disk project and this binary. The generated file already used the
+// current version, but the on-disk project still pins the old one, so evaluating
+// the file would fail until it is upgraded.
+//
+// --yes applies the upgrade non-interactively. On a TTY without --yes the user
+// is prompted (recommended). Otherwise — declined, or no TTY — a nag explains
+// how to upgrade manually. The on-disk project is only ever written on explicit
+// consent, so extract never drops a surprise diff into the user's tree.
+func handleSchemaVersionUpgrade(a *app.App, th *theme.Theme, warnStyle lipgloss.Style, opts *ExtractOptions, targetPath string, u *schema.SchemaVersionUpgrade) error {
+	projectFile := u.ProjectDir + "/PklProject"
+
+	apply := opts.Yes
+	if !apply && isInteractive() {
+		ok, err := runConfirm(th, fmt.Sprintf(
+			"'%s' pins formae schema %s, but this CLI emits %s. Update it so '%s' evaluates? (recommended)",
+			projectFile, u.Current, u.Target, targetPath), "")
+		if err != nil {
+			return err
+		}
+		apply = ok
+	}
+
+	if !apply {
+		fmt.Println(warnStyle.Render(fmt.Sprintf(
+			"'%s' still pins formae schema %s. '%s' may not evaluate until you set formae@%s in that PklProject and run 'pkl project resolve'.",
+			projectFile, u.Current, targetPath, u.Target)))
+		return nil
+	}
+
+	warnings, err := upgradeFn(a, opts.OutputSchema, u.ProjectDir, u.Target)
+	if err != nil {
+		return fmt.Errorf("failed to update formae schema version in '%s': %v", projectFile, err)
+	}
+	fmt.Println(warnStyle.Render(fmt.Sprintf("Updated formae schema version in '%s' to %s", projectFile, u.Target)))
+	for _, w := range warnings {
+		fmt.Println(warnStyle.Render(w))
+	}
 	return nil
 }
 
