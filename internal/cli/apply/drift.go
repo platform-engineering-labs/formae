@@ -7,7 +7,6 @@ package apply
 import (
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
@@ -80,7 +79,7 @@ func runDriftFlow(a *app.App, th *theme.Theme, opts *ApplyOptions, rejected apim
 			// The UI already hides the revert action (SimulateOnly on driftOpts),
 			// but defend in depth here in case the model is bypassed.
 			if opts.Simulate {
-				fmt.Print(lipgloss.NewStyle().Foreground(themeFor(a).Palette.TextSubtle).Render("Command will not continue — simulation only") + "\n")
+				fmt.Print(lipgloss.NewStyle().Foreground(a.Theme().Palette.TextSubtle).Render("Command will not continue — simulation only") + "\n")
 				return nil
 			}
 			newRes, _, simErr := applyFn(a, opts, true)
@@ -206,11 +205,13 @@ func submitForcedApply(a *app.App, th *theme.Theme, opts *ApplyOptions) error {
 		return fmt.Errorf("%s", msg)
 	}
 
-	fmt.Printf("Force apply submitted — command %s\n", realRes.CommandID)
-	if err := launchWatch(a, realRes.CommandID); err != nil {
+	finished, err := launchWatch(a, realRes.CommandID)
+	if err != nil {
 		return err
 	}
-	fmt.Printf("\nRun the following command to check status:\n\n  formae status command --query='id:%s' --watch\n", realRes.CommandID)
+	if !finished {
+		printAsyncNotice(realRes.CommandID)
+	}
 	nag.MaybePrintNags(th, nags)
 
 	return nil
@@ -245,7 +246,7 @@ func handleSelfResolvedDrift(a *app.App, th *theme.Theme, opts *ApplyOptions, re
 	}
 
 	if decision == simview.DecisionAborted {
-		fmt.Print(lipgloss.NewStyle().Foreground(themeFor(a).Palette.TextSubtle).Render("Apply aborted.") + "\n")
+		fmt.Print(lipgloss.NewStyle().Foreground(a.Theme().Palette.TextSubtle).Render("Apply aborted.") + "\n")
 		return nil
 	}
 
@@ -258,20 +259,13 @@ func handleSelfResolvedDrift(a *app.App, th *theme.Theme, opts *ApplyOptions, re
 		return fmt.Errorf("%s", msg)
 	}
 
-	raw := components.PromptForOperations(&res.Simulation.Command)
-	summary := ""
-	if raw != "" {
-		stripped := ansiEscape.ReplaceAllString(raw, "")
-		summary = strings.SplitN(stripped, "\n\n", 2)[0]
-		summary = strings.ReplaceAll(summary, "\n", " ")
-	}
-	fmt.Printf("Confirmed: %s — command %s submitted\n", summary, realRes.CommandID)
-
-	if err := launchWatch(a, realRes.CommandID); err != nil {
+	finished, err := launchWatch(a, realRes.CommandID)
+	if err != nil {
 		return err
 	}
-
-	fmt.Printf("\nRun the following command to check status:\n\n  formae status command --query='id:%s' --watch\n", realRes.CommandID)
+	if !finished {
+		printAsyncNotice(realRes.CommandID)
+	}
 	nag.MaybePrintNags(th, nags)
 
 	return nil

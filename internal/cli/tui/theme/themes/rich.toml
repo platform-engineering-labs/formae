@@ -1,0 +1,68 @@
+name = "rich"
+
+[palette]
+base             = { light = "#F5F5F5", dark = "#1A1A2E" }
+surface          = { light = "#FFFFFF", dark = "#16213E" }
+text_primary     = { light = "#1A1A1A", dark = "#E8E8E8" }
+text_secondary   = { light = "#666666", dark = "#AAAAAA" }
+text_subtle      = "#999999"
+border           = { light = "#DDDDDD", dark = "#555566" }
+selection        = { light = "#DDDDDD", dark = "#3A3A3A" }
+primary_accent   = { light = "#2563EB", dark = "#60A5FA" }
+secondary_accent = { light = "#FF6B00", dark = "#FF8533" }
+error            = { light = "#FF0000", dark = "#FF0000" }
+error_subtle     = { light = "#B45454", dark = "#9B4444" }
+error_bright     = { light = "#B91C1C", dark = "#FCA5A5" }
+warning          = "#B5B55B"
+done             = { light = "#16A34A", dark = "#4ADE80" }
+in_progress      = { light = "#444444", dark = "#AAAAAA" }
+pending          = { light = "#999999", dark = "#555555" }
+# rich brings vivid, per-operation color coding.
+op_create  = { light = "#16A34A", dark = "#4ADE80" }
+op_update  = { light = "#2563EB", dark = "#60A5FA" }
+op_delete  = { light = "#B5B55B", dark = "#B5B55B" }
+op_replace = { light = "#FF6B00", dark = "#FF8533" }
+op_detach  = { light = "#888888", dark = "#888888" }
+op_keep    = { light = "#888888", dark = "#888888" }
+
+[glyphs]
+op_create = "+"
+op_update = "~"
+op_delete = "-"
+op_replace = "↻"
+op_detach = "⊘"
+op_keep = "="
+status_done = "✓"
+status_failed = "✗"
+status_pending = "·"
+status_inprogress = "◐"
+status_skipped = "⊘"
+status_canceled = "⊘"
+ack_done = "✓"
+ack_skip = "·"
+ack_warn = "!"
+ack_fail = "✗"
+tree_branch = "├"
+tree_last = "└"
+expand_open = "▾"
+expand_closed = "▸"
+checkbox_on = "[x]"
+checkbox_off = "[ ]"
+transition = "→"
+
+[progress]
+fill_done = "█"
+fill_inprogress = "▓"
+fill_pending = "░"
+animation = "static"
+
+[spinner]
+frames = ["●", "◉", "○", "◉"]
+interval_ms = 333
+static_frame = "●"
+
+[confirmation_bar]
+color = "severity"
+
+[header]
+highlight = "background"

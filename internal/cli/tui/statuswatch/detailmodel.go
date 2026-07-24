@@ -709,19 +709,19 @@ func (d detailModel) renderStateGlyph(r updateRow, bg lipgloss.Color, isCursor b
 	}
 	switch r.state {
 	case components.StateDone:
-		return withBg(lipgloss.NewStyle().Foreground(p.Done)).Render("✓")
+		return withBg(lipgloss.NewStyle().Foreground(p.Done)).Render(d.th.Glyphs.StatusDone)
 	case components.StateInProgress:
 		spinFrame := d.spinView
 		if spinFrame == "" {
-			spinFrame = "◐"
+			spinFrame = d.th.Spinner.StaticFrame
 		}
 		return withBg(lipgloss.NewStyle().Foreground(p.PrimaryAccent)).Render(spinFrame)
 	case components.StatePending:
-		return withBg(lipgloss.NewStyle().Foreground(p.Pending)).Render("○")
+		return withBg(lipgloss.NewStyle().Foreground(p.Pending)).Render(d.th.Glyphs.StatusPending)
 	case components.StateFailed:
-		return withBg(lipgloss.NewStyle().Foreground(p.Error).Bold(true)).Render("✗")
+		return withBg(lipgloss.NewStyle().Foreground(p.Error).Bold(true)).Render(d.th.Glyphs.StatusFailed)
 	case components.StateSkipped:
-		return withBg(lipgloss.NewStyle().Foreground(p.TextSecondary)).Render("⊘")
+		return withBg(lipgloss.NewStyle().Foreground(p.TextSecondary)).Render(d.th.Glyphs.StatusSkipped)
 	}
 	return " "
 }

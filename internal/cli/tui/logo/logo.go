@@ -84,14 +84,57 @@ const (
 //     probe disturbs the terminal.
 //
 // Exported so the CLI can seed lipgloss's global AdaptiveColor resolution once at
-// startup (lipgloss.SetHasDarkBackground).
+// startup (lipgloss.SetHasDarkBackground). It carries no config layer, so it is
+// the right entry point for per-frame callers with no config in scope; commands
+// that have loaded a profile should re-seed via ResolveDarkBackground so the
+// cli.appearance setting takes effect.
 func HasDarkBackground() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("FORMAE_APPEARANCE"))) {
-	case "light":
-		return false
-	case "dark":
-		return true
+	return ResolveDarkBackground("")
+}
+
+// ResolveDarkBackground reports whether to treat the terminal background as dark,
+// applying the full appearance precedence:
+//
+//  1. FORMAE_APPEARANCE env (light|dark) — explicit user override.
+//  2. appearance — the cli.appearance profile setting (light|dark|auto). A
+//     light/dark value wins over auto-detection; "auto" (and empty/unknown)
+//     defer to it.
+//  3. auto-detect — COLORFGBG, then an OSC-11 query in a direct interactive
+//     terminal (see autoDetectDarkBackground).
+//
+// The env layer sits above config because an env override is a per-invocation
+// escape hatch (e.g. forcing light in a screenshot), whereas the config value is
+// the persistent default.
+func ResolveDarkBackground(appearance string) bool {
+	if dark, ok := parseAppearance(os.Getenv("FORMAE_APPEARANCE")); ok {
+		return dark
 	}
+	if dark, ok := parseAppearance(appearance); ok {
+		return dark
+	}
+	return autoDetectDarkBackground()
+}
+
+// parseAppearance maps an appearance string to its dark-background boolean. ok is
+// false for "auto", "", or any unrecognized value — those defer to the next layer
+// in the precedence chain.
+func parseAppearance(s string) (dark bool, ok bool) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "light":
+		return false, true
+	case "dark":
+		return true, true
+	default:
+		return false, false
+	}
+}
+
+// autoDetectDarkBackground is layer 3 of ResolveDarkBackground: COLORFGBG when the
+// terminal exports it, otherwise an OSC-11 query gated to a direct interactive
+// terminal (tmux/screen/ssh and non-TTY contexts assume dark to avoid a leaking,
+// mis-detecting query). The query result is memoized so per-frame callers never
+// re-query.
+func autoDetectDarkBackground() bool {
 	if fgbg := os.Getenv("COLORFGBG"); fgbg != "" {
 		parts := strings.Split(fgbg, ";")
 		bg := parts[len(parts)-1]

@@ -443,7 +443,7 @@ func (m Model) headerCommand() string {
 	// Show the mode (reconcile/patch) next to the verb so it's visible at a
 	// glance on the apply plan. Destroy has no mode.
 	if m.opts.Mode != "" {
-		return "apply · " + m.opts.Mode
+		return "apply (" + m.opts.Mode + ")"
 	}
 	return "apply"
 }
@@ -570,16 +570,32 @@ func (m Model) renderFooter() string {
 	return m.renderConfirmBar() + "\n" + components.FooterBar(m.th, m.width, footerHints(), "")
 }
 
+// confirmBarBg resolves the confirmation bar's background color from the
+// theme's ConfirmationBar.Color behavior toggle. "brand" always uses the
+// SecondaryAccent brand color; "severity" reflects the most severe operation
+// present across groups (delete/replace > update > create-only).
+func confirmBarBg(th *theme.Theme, groups []simGroup) lipgloss.AdaptiveColor {
+	if th.ConfirmationBar.Color != "severity" {
+		return th.Palette.SecondaryAccent // brand
+	}
+	counts := opCounts(groups)
+	switch {
+	case counts[opDelete] > 0 || counts[opReplace] > 0:
+		return th.Palette.Error
+	case counts[opUpdate] > 0:
+		return th.Palette.OpUpdate
+	default:
+		return th.Palette.Done
+	}
+}
+
 // renderConfirmBar renders the full-width, attention-drawing confirmation bar
-// shown above the footer when the plan awaits a y/n decision. It uses a deep
-// burnt-orange background with bold white text for both apply and destroy — the
-// verb in the message distinguishes them. A darker, calmer orange (rather than
-// the bright brand SecondaryAccent) keeps the white text legible; a bright bar
-// washed the text out.
+// shown above the footer when the plan awaits a y/n decision. Its background
+// follows the theme (brand or severity, see confirmBarBg) with bold white
+// text for both apply and destroy — the verb in the message distinguishes
+// them.
 func (m Model) renderConfirmBar() string {
-	// Deeper than the SecondaryAccent brand orange, chosen for white-text
-	// contrast on a solid bar. Not a general palette role, so kept inline.
-	bg := lipgloss.AdaptiveColor{Light: "#C2410C", Dark: "#C2410C"}
+	bg := confirmBarBg(m.th, m.groups)
 	verb := "apply"
 	if m.opts.Kind == KindDestroy {
 		verb = "destroy"
@@ -589,7 +605,7 @@ func (m Model) renderConfirmBar() string {
 	// policies correctly and joins with "and". Strip its ANSI + trailing
 	// "Do you want to continue?" framing down to the one-line summary.
 	summary := "Review the plan above"
-	if raw := components.PromptForOperations(&m.cmd); raw != "" {
+	if raw := components.PromptForOperations(m.th, &m.cmd); raw != "" {
 		stripped := ansiEscape.ReplaceAllString(raw, "")
 		s := strings.SplitN(stripped, "\n\n", 2)[0]
 		s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
@@ -622,7 +638,7 @@ func (m Model) renderConfirmBar() string {
 
 	return lipgloss.NewStyle().
 		Background(bg).
-		Foreground(lipgloss.AdaptiveColor{Light: "#FFFFFF", Dark: "#FFFFFF"}).
+		Foreground(lipgloss.AdaptiveColor{Light: "#1A1A1A", Dark: "#1A1A1A"}).
 		Bold(true).
 		Render(content)
 }

@@ -142,7 +142,7 @@ func stubDriftSeams(t *testing.T) {
 		launchDriftView      func(*theme.Theme, *apimodel.FormaReconcileRejectedError, driftview.Options) (driftview.Decision, error)
 		applyFn              func(*app.App, *ApplyOptions, bool) (*apimodel.SubmitCommandResponse, []string, error)
 		forcedApplyFn        func(*app.App, *ApplyOptions) (*apimodel.SubmitCommandResponse, []string, error)
-		launchWatch          func(*app.App, string) error
+		launchWatch          func(*app.App, string) (bool, error)
 		launchSimView        func(*theme.Theme, *apimodel.Simulation, simview.Options) (simview.Decision, error)
 		confirmOverwriteFn   func(*theme.Theme, string) (bool, error)
 		extractResourcesFn   func(*app.App, string) (*pkgmodel.Forma, []string, error)
@@ -245,7 +245,7 @@ func TestRunDriftFlow_NonSimulateRevertIdenticalDoesForcedApply(t *testing.T) {
 		return &apimodel.SubmitCommandResponse{CommandID: "force-123"}, nil, nil
 	}
 
-	launchWatch = func(a *app.App, commandID string) error { return nil }
+	launchWatch = func(a *app.App, commandID string) (bool, error) { return true, nil }
 
 	a := newTestApp()
 	opts := &ApplyOptions{
@@ -420,9 +420,9 @@ func TestRunDriftFlow_RevertIdentical(t *testing.T) {
 	}
 
 	watchedCmdID := ""
-	launchWatch = func(a *app.App, commandID string) error {
+	launchWatch = func(a *app.App, commandID string) (bool, error) {
 		watchedCmdID = commandID
-		return nil
+		return true, nil
 	}
 
 	a := newTestApp()
@@ -531,6 +531,199 @@ func TestRunDriftFlow_RevertResolved(t *testing.T) {
 	assert.True(t, simViewCalled, "launchSimView must be called on the self-resolved path")
 }
 
+// ---- submitForcedApply / handleSelfResolvedDrift async-notice gate tests ----
+//
+// These pin the `if !finished { printAsyncNotice(...) }` gate at both drift
+// call sites. A mutation that makes either site print unconditionally must
+// fail the corresponding "Finished" test below.
+
+// TestRunDriftFlow_ForcedApply_Finished_NoAsyncNotice drives submitForcedApply
+// via the identical-drift RevertAll path (same as TestRunDriftFlow_RevertIdentical)
+// and asserts that when launchWatch reports the command finished, no async
+// notice is printed.
+func TestRunDriftFlow_ForcedApply_Finished_NoAsyncNotice(t *testing.T) {
+	stubDriftSeams(t)
+
+	rejected := makeRejected()
+	launchDriftView = func(th *theme.Theme, r *apimodel.FormaReconcileRejectedError, opts driftview.Options) (driftview.Decision, error) {
+		return driftview.DecisionRevertAll{}, nil
+	}
+
+	// Second simulate returns the same rejection (identical drift) — the path
+	// that leads into submitForcedApply.
+	applyFn = func(a *app.App, opts *ApplyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
+		return nil, nil, &apimodel.ErrorResponse[apimodel.FormaReconcileRejectedError]{
+			ErrorType: apimodel.ReconcileRejected,
+			Data:      rejected,
+		}
+	}
+
+	forcedApplyFn = func(a *app.App, opts *ApplyOptions) (*apimodel.SubmitCommandResponse, []string, error) {
+		return &apimodel.SubmitCommandResponse{CommandID: "force-finished-1"}, nil, nil
+	}
+
+	launchWatch = func(a *app.App, commandID string) (bool, error) { return true, nil }
+
+	a := newTestApp()
+	opts := &ApplyOptions{
+		OutputConsumer: printer.ConsumerHuman,
+		FormaFile:      "forma.pkl",
+		Mode:           pkgmodel.FormaApplyModeReconcile,
+	}
+	th := theme.New("formae")
+
+	out := captureStdout(t, func() {
+		err := runDriftFlow(a, th, opts, rejected)
+		require.NoError(t, err)
+	})
+
+	assert.NotContains(t, out, "Still running asynchronously", "no async notice when the forced apply finished before the TUI closed")
+	assert.NotContains(t, out, "force-finished-1", "no scrollback record naming the command once it finished")
+}
+
+// TestRunDriftFlow_ForcedApply_Detached_PrintsAsyncNotice is the companion to
+// the above: when launchWatch reports the user detached (finished=false), the
+// async notice with the command ID and status invocation must be printed.
+func TestRunDriftFlow_ForcedApply_Detached_PrintsAsyncNotice(t *testing.T) {
+	stubDriftSeams(t)
+
+	rejected := makeRejected()
+	launchDriftView = func(th *theme.Theme, r *apimodel.FormaReconcileRejectedError, opts driftview.Options) (driftview.Decision, error) {
+		return driftview.DecisionRevertAll{}, nil
+	}
+
+	applyFn = func(a *app.App, opts *ApplyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
+		return nil, nil, &apimodel.ErrorResponse[apimodel.FormaReconcileRejectedError]{
+			ErrorType: apimodel.ReconcileRejected,
+			Data:      rejected,
+		}
+	}
+
+	forcedApplyFn = func(a *app.App, opts *ApplyOptions) (*apimodel.SubmitCommandResponse, []string, error) {
+		return &apimodel.SubmitCommandResponse{CommandID: "force-detached-1"}, nil, nil
+	}
+
+	launchWatch = func(a *app.App, commandID string) (bool, error) { return false, nil }
+
+	a := newTestApp()
+	opts := &ApplyOptions{
+		OutputConsumer: printer.ConsumerHuman,
+		FormaFile:      "forma.pkl",
+		Mode:           pkgmodel.FormaApplyModeReconcile,
+	}
+	th := theme.New("formae")
+
+	out := captureStdout(t, func() {
+		err := runDriftFlow(a, th, opts, rejected)
+		require.NoError(t, err)
+	})
+
+	assert.Contains(t, out, "Still running asynchronously on the agent. Check its status with:")
+	assert.Contains(t, out, "formae status command --query='id:force-detached-1' --watch")
+}
+
+// TestRunDriftFlow_SelfResolved_Finished_NoAsyncNotice drives
+// handleSelfResolvedDrift via the self-resolved RevertAll path (same as
+// TestRunDriftFlow_RevertResolved, but the user confirms the simview instead
+// of aborting, so the real apply + watch fire) and asserts that when
+// launchWatch reports the command finished, no async notice is printed.
+func TestRunDriftFlow_SelfResolved_Finished_NoAsyncNotice(t *testing.T) {
+	stubDriftSeams(t)
+
+	rejected := makeRejected()
+	launchDriftView = func(th *theme.Theme, r *apimodel.FormaReconcileRejectedError, opts driftview.Options) (driftview.Decision, error) {
+		return driftview.DecisionRevertAll{}, nil
+	}
+
+	applyFn = func(a *app.App, opts *ApplyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
+		if simulate {
+			// Second simulate succeeds (drift self-resolved).
+			return &apimodel.SubmitCommandResponse{
+				Simulation: apimodel.Simulation{
+					ChangesRequired: true,
+					Command: apimodel.Command{
+						CommandID:       "resolved-sim",
+						ResourceUpdates: []apimodel.ResourceUpdate{{Operation: "create", ResourceLabel: "bucket"}},
+					},
+				},
+			}, nil, nil
+		}
+		// Real apply after the user confirms the simview.
+		return &apimodel.SubmitCommandResponse{CommandID: "self-resolved-finished-1"}, nil, nil
+	}
+
+	launchSimView = func(th *theme.Theme, sim *apimodel.Simulation, opts simview.Options) (simview.Decision, error) {
+		return simview.DecisionConfirmed, nil
+	}
+
+	launchWatch = func(a *app.App, commandID string) (bool, error) { return true, nil }
+
+	a := newTestApp()
+	opts := &ApplyOptions{
+		OutputConsumer: printer.ConsumerHuman,
+		FormaFile:      "forma.pkl",
+		Mode:           pkgmodel.FormaApplyModeReconcile,
+	}
+	th := theme.New("formae")
+
+	out := captureStdout(t, func() {
+		err := runDriftFlow(a, th, opts, rejected)
+		require.NoError(t, err)
+	})
+
+	assert.NotContains(t, out, "Still running asynchronously", "no async notice when the self-resolved apply finished before the TUI closed")
+	assert.NotContains(t, out, "self-resolved-finished-1", "no scrollback record naming the command once it finished")
+}
+
+// TestRunDriftFlow_SelfResolved_Detached_PrintsAsyncNotice is the companion to
+// the above: when launchWatch reports the user detached (finished=false), the
+// async notice with the command ID and status invocation must be printed.
+func TestRunDriftFlow_SelfResolved_Detached_PrintsAsyncNotice(t *testing.T) {
+	stubDriftSeams(t)
+
+	rejected := makeRejected()
+	launchDriftView = func(th *theme.Theme, r *apimodel.FormaReconcileRejectedError, opts driftview.Options) (driftview.Decision, error) {
+		return driftview.DecisionRevertAll{}, nil
+	}
+
+	applyFn = func(a *app.App, opts *ApplyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
+		if simulate {
+			return &apimodel.SubmitCommandResponse{
+				Simulation: apimodel.Simulation{
+					ChangesRequired: true,
+					Command: apimodel.Command{
+						CommandID:       "resolved-sim",
+						ResourceUpdates: []apimodel.ResourceUpdate{{Operation: "create", ResourceLabel: "bucket"}},
+					},
+				},
+			}, nil, nil
+		}
+		return &apimodel.SubmitCommandResponse{CommandID: "self-resolved-detached-1"}, nil, nil
+	}
+
+	launchSimView = func(th *theme.Theme, sim *apimodel.Simulation, opts simview.Options) (simview.Decision, error) {
+		return simview.DecisionConfirmed, nil
+	}
+
+	launchWatch = func(a *app.App, commandID string) (bool, error) { return false, nil }
+
+	a := newTestApp()
+	opts := &ApplyOptions{
+		OutputConsumer: printer.ConsumerHuman,
+		FormaFile:      "forma.pkl",
+		Mode:           pkgmodel.FormaApplyModeReconcile,
+	}
+	th := theme.New("formae")
+
+	out := captureStdout(t, func() {
+		err := runDriftFlow(a, th, opts, rejected)
+		require.NoError(t, err)
+	})
+
+	assert.Contains(t, out, "Still running asynchronously on the agent. Check its status with:")
+	assert.Contains(t, out, "formae status command --query='id:self-resolved-detached-1' --watch")
+}
+
 // ---- E2E drift tests ----
 
 func TestDrift_E2E_ExtractFlow(t *testing.T) {
@@ -626,9 +819,9 @@ func TestDrift_E2E_RevertFlow(t *testing.T) {
 		return &apimodel.SubmitCommandResponse{CommandID: "e2e-force-cmd"}, nil, nil
 	}
 
-	launchWatch = func(a *app.App, commandID string) error {
+	launchWatch = func(a *app.App, commandID string) (bool, error) {
 		callOrder = append(callOrder, "watch:"+commandID)
-		return nil
+		return true, nil
 	}
 
 	a := newTestApp()

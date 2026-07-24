@@ -16,15 +16,16 @@ import (
 
 // PromptForOperations returns a human-readable prompt summarising the
 // operations that will be performed by cmd, followed by a confirmation
-// question. Returns "" when there is nothing to do.
-func PromptForOperations(cmd *apimodel.Command) string {
+// question. Returns "" when there is nothing to do. th supplies the active
+// theme's colors for the rendered summary.
+func PromptForOperations(th *theme.Theme, cmd *apimodel.Command) string {
 	targetCreates, targetUpdates, stackCreates, stackUpdates, policyCreates, policyUpdates, resourceCreates, resourceUpdates, resourceDeletes, resourceReplaces := analyzeCommands(cmd)
 
 	if targetCreates == 0 && targetUpdates == 0 && stackCreates == 0 && stackUpdates == 0 && policyCreates == 0 && policyUpdates == 0 && resourceCreates == 0 && resourceUpdates == 0 && resourceDeletes == 0 && resourceReplaces == 0 {
 		return ""
 	}
 
-	summary := operationSummary(targetCreates, targetUpdates, stackCreates, stackUpdates, policyCreates, policyUpdates, resourceCreates, resourceUpdates, resourceDeletes, resourceReplaces)
+	summary := operationSummary(th, targetCreates, targetUpdates, stackCreates, stackUpdates, policyCreates, policyUpdates, resourceCreates, resourceUpdates, resourceDeletes, resourceReplaces)
 	if summary == "" {
 		return ""
 	}
@@ -132,12 +133,11 @@ func analyzeCommands(cmd *apimodel.Command) (targetCreates, targetUpdates, stack
 // operationSummary builds the colored "This operation will …" sentence.
 // Colors use theme roles: Error for destructive ops (delete/replace), Done for
 // creates, and TextPrimary for updates (no gold; routine updates aren't tinted).
-func operationSummary(targetCreates, targetUpdates, stackCreates, stackUpdates, policyCreates, policyUpdates, resourceCreates, resourceUpdates, resourceDeletes, resourceReplaces int) string {
+func operationSummary(th *theme.Theme, targetCreates, targetUpdates, stackCreates, stackUpdates, policyCreates, policyUpdates, resourceCreates, resourceUpdates, resourceDeletes, resourceReplaces int) string {
 	if targetCreates == 0 && targetUpdates == 0 && stackCreates == 0 && stackUpdates == 0 && policyCreates == 0 && policyUpdates == 0 && resourceCreates == 0 && resourceUpdates == 0 && resourceDeletes == 0 && resourceReplaces == 0 {
 		return ""
 	}
 
-	th := theme.New("formae")
 	errSt := lipgloss.NewStyle().Foreground(th.Palette.Error)
 	doneSt := lipgloss.NewStyle().Foreground(th.Palette.Done)
 	updateSt := lipgloss.NewStyle().Foreground(th.Palette.TextPrimary)

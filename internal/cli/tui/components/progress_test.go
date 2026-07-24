@@ -5,6 +5,7 @@
 package components
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/charmbracelet/x/ansi"
@@ -24,6 +25,9 @@ func segCounts(s string) map[rune]int {
 
 func TestProgressBar_Segments(t *testing.T) {
 	th := theme.New("formae")
+	done := []rune(th.Progress.FillDone)[0]
+	inProgress := []rune(th.Progress.FillInProgress)[0]
+	pending := []rune(th.Progress.FillPending)[0]
 	tests := []struct {
 		name   string
 		width  int
@@ -34,31 +38,31 @@ func TestProgressBar_Segments(t *testing.T) {
 			"completed fill (done+failed) then in-progress then pending",
 			10,
 			map[State]int{StateDone: 5, StateFailed: 2, StateInProgress: 2, StatePending: 1},
-			map[rune]int{'█': 7, '░': 2, '⋅': 1},
+			map[rune]int{done: 7, inProgress: 2, pending: 1},
 		},
 		{
 			"skipped counts as done segment",
 			10,
 			map[State]int{StateDone: 3, StateSkipped: 2, StatePending: 5},
-			map[rune]int{'█': 5, '⋅': 5},
+			map[rune]int{done: 5, pending: 5},
 		},
 		{
 			"all pending",
 			8,
 			map[State]int{StatePending: 4},
-			map[rune]int{'⋅': 8},
+			map[rune]int{pending: 8},
 		},
 		{
 			"all done",
 			8,
 			map[State]int{StateDone: 3},
-			map[rune]int{'█': 8},
+			map[rune]int{done: 8},
 		},
 		{
 			"zero total renders pending track",
 			6,
 			map[State]int{},
-			map[rune]int{'⋅': 6},
+			map[rune]int{pending: 6},
 		},
 		{
 			"rounding still fills exact width",
@@ -84,15 +88,18 @@ func TestProgressBar_SegmentOrder(t *testing.T) {
 		StateDone: 3, StateFailed: 3, StateInProgress: 3, StatePending: 3,
 	}, false))
 	// completed fill (done+failed=6) → in-progress → pending, contiguous.
-	// Done and failed share the single █ fill (color, not char, distinguishes).
-	assert.Equal(t, "██████░░░⋅⋅⋅", got)
+	// Done and failed share the single fill glyph (color, not char, distinguishes).
+	want := strings.Repeat(th.Progress.FillDone, 6) +
+		strings.Repeat(th.Progress.FillInProgress, 3) +
+		strings.Repeat(th.Progress.FillPending, 3)
+	assert.Equal(t, want, got)
 }
 
 func TestProgressBar_TinySegmentsStillVisible(t *testing.T) {
 	// a non-zero state never rounds away to zero cells when width allows
 	th := theme.New("formae")
 	got := ansi.Strip(ProgressBar(th, 10, map[State]int{StateDone: 98, StateInProgress: 2}, false))
-	assert.Contains(t, got, "░", "in-progress segment must stay visible")
+	assert.Contains(t, got, th.Progress.FillInProgress, "in-progress segment must stay visible")
 	assert.Equal(t, 10, len([]rune(got)))
 }
 
@@ -120,6 +127,16 @@ func TestProgressBar_NonPositiveWidth(t *testing.T) {
 	th := theme.New("formae")
 	assert.Equal(t, "", ProgressBar(th, 0, map[State]int{StateDone: 1}, false))
 	assert.Equal(t, "", ProgressBar(th, -3, map[State]int{StateDone: 1}, false))
+}
+
+// The bar draws its fill characters from the active theme rather than a
+// hardcoded glyph set, so a discriminating theme (colorblind uses ▚ for
+// in-progress, distinct from the quiet theme's ▓/░) shows up in the output.
+func TestProgressBarUsesThemeFills(t *testing.T) {
+	th := theme.New("colorblind")
+	out := ProgressBar(th, 10, map[State]int{StateInProgress: 5, StateDone: 5}, false)
+	assert.Contains(t, out, th.Progress.FillInProgress) // "▚"
+	assert.NotContains(t, out, "░")                     // colorblind in-progress is not the quiet fill
 }
 
 func TestProgressBar_Golden(t *testing.T) {

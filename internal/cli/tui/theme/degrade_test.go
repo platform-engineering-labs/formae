@@ -58,9 +58,10 @@ func renderRoles(p Palette) string {
 // lipgloss/termenv and hardcoded a truecolor escape directly, this test would
 // catch it.
 //
-// Note: the classic theme's Done role is literal green — that is an intentional
-// palette choice (out of scope here). The test confirms it degrades to a 16-
-// color green code, not that it avoids green.
+// Note: each built-in's specific color choices (e.g. hue picked for Done) are
+// out of scope here. The test only confirms every role degrades cleanly
+// through the termenv profile hierarchy, not what any particular role's
+// degraded value is.
 func TestThemeDegrades(t *testing.T) {
 	// Save and restore the global lipgloss color profile so this test does not
 	// bleed into other tests running in the same process.
@@ -69,7 +70,7 @@ func TestThemeDegrades(t *testing.T) {
 		lipgloss.SetColorProfile(originalProfile)
 	})
 
-	themeNames := []string{"formae", "classic"}
+	themeNames := []string{"quiet", "rich", "colorblind"}
 	profiles := []struct {
 		name    string
 		profile termenv.Profile

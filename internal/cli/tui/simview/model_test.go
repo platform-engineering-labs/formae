@@ -108,12 +108,13 @@ func TestSimView_GoldenApply(t *testing.T) {
 }
 
 // TestSimView_HeaderShowsMode pins that the apply header carries the mode next
-// to the verb, and that destroy (which has no mode) does not.
+// to the verb in parentheses (not a "mode=" label or a "·" separator), and
+// that destroy (which has no mode) does not.
 func TestSimView_HeaderShowsMode(t *testing.T) {
 	th := theme.New("formae")
 	sim := makeFixtureSim()
-	assert.Equal(t, "apply · patch", New(th, sim, Options{Kind: KindApply, Mode: "patch"}).headerCommand())
-	assert.Equal(t, "apply · reconcile", New(th, sim, Options{Kind: KindApply, Mode: "reconcile"}).headerCommand())
+	assert.Equal(t, "apply (patch)", New(th, sim, Options{Kind: KindApply, Mode: "patch"}).headerCommand())
+	assert.Equal(t, "apply (reconcile)", New(th, sim, Options{Kind: KindApply, Mode: "reconcile"}).headerCommand())
 	assert.Equal(t, "apply", New(th, sim, Options{Kind: KindApply}).headerCommand())
 	assert.Equal(t, "destroy", New(th, sim, Options{Kind: KindDestroy, Mode: "reconcile"}).headerCommand())
 }
@@ -578,7 +579,7 @@ func TestSimView_NonCascadeConfirmFooter(t *testing.T) {
 	// "resource(s)") and joins the final clause with "and". The bar truncates to a
 	// single line, so assert the labelling against the full summary source that it
 	// renders from.
-	ops := plain(components.PromptForOperations(&m.cmd))
+	ops := plain(components.PromptForOperations(th, &m.cmd))
 	assert.Contains(t, ops, "target(s)", "target operations must be labelled 'target(s)', not 'resource(s)'")
 	assert.Contains(t, ops, "stack(s)", "stack operations must be labelled 'stack(s)', not 'resource(s)'")
 	assert.Contains(t, ops, "policy", "policy operations must be labelled correctly")

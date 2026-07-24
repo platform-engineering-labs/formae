@@ -11,7 +11,6 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/platform-engineering-labs/formae/internal/cli/app"
 	tui "github.com/platform-engineering-labs/formae/internal/cli/tui"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/inventoryview"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
@@ -35,15 +34,6 @@ func inventoryTermWidth(w io.Writer) int {
 		}
 	}
 	return defaultPrintWidth
-}
-
-// themeForInventory resolves the active theme from the app config.
-func themeForInventory(a *app.App) *theme.Theme {
-	name := ""
-	if a != nil && a.Config != nil {
-		name = a.Config.Cli.Theme
-	}
-	return theme.New(name)
 }
 
 // renderInventoryResources renders the resources table for non-TTY human output.

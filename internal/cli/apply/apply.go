@@ -9,8 +9,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"regexp"
-	"strings"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -30,9 +28,6 @@ import (
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
-
-// ansiEscape matches ANSI SGR escape sequences for stripping display colors.
-var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 // Package-level seams — replaced in tests to avoid TTY / network calls.
 var (
@@ -61,8 +56,8 @@ var (
 		return final.(simview.Model).Decision(), nil
 	}
 
-	launchWatch = func(a *app.App, commandID string) error {
-		th := themeFor(a)
+	launchWatch = func(a *app.App, commandID string) (bool, error) {
+		th := a.Theme()
 		model := statuswatch.New(th, a, statuswatch.Options{
 			Query:          "id:" + commandID,
 			FocusCommandID: commandID,
@@ -70,8 +65,11 @@ var (
 			ExitWhenDone:   true,
 			SingleCommand:  true, // apply --watch is scoped to one command: no back-to-list nav
 		})
-		_, err := tui.Run(model, tui.DefaultRunOptions())
-		return err
+		final, err := tui.Run(model, tui.DefaultRunOptions())
+		if err != nil {
+			return false, err
+		}
+		return final.(statuswatch.Model).Finished(), nil
 	}
 
 	applyFn = func(a *app.App, opts *ApplyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
@@ -93,14 +91,12 @@ var legacyWidth = func(w io.Writer) int {
 	return 100
 }
 
-// themeFor resolves the active theme from the app config.
-// The name falls back to "formae" for nil configs (theme.New nil-guards internally).
-func themeFor(a *app.App) *theme.Theme {
-	name := ""
-	if a != nil && a.Config != nil {
-		name = a.Config.Cli.Theme
-	}
-	return theme.New(name)
+// printAsyncNotice reminds the user how to check on a command that is still
+// running after the watch TUI has closed (the user detached early via
+// q/esc/ctrl+c). Not printed when the watch TUI closed because the command
+// already reached a terminal state.
+func printAsyncNotice(commandID string) {
+	fmt.Printf("\nStill running asynchronously on the agent. Check its status with:\n\n  formae status command --query='id:%s' --watch\n", commandID)
 }
 
 type ApplyCommand struct {
@@ -215,7 +211,7 @@ func runApplyForHumans(a *app.App, opts *ApplyOptions) error {
 
 // runApplyInteractive implements the new TTY apply flow: simview preview → watch.
 func runApplyInteractive(a *app.App, opts *ApplyOptions) error {
-	th := themeFor(a)
+	th := a.Theme()
 
 	res, _, err := applyFn(a, opts, true)
 	if err != nil {
@@ -255,12 +251,12 @@ func runApplyInteractive(a *app.App, opts *ApplyOptions) error {
 	}
 
 	if decision == simview.DecisionAborted {
-		fmt.Print(lipgloss.NewStyle().Foreground(themeFor(a).Palette.TextSubtle).Render("Apply aborted.") + "\n")
+		fmt.Print(lipgloss.NewStyle().Foreground(a.Theme().Palette.TextSubtle).Render("Apply aborted.") + "\n")
 		return nil
 	}
 
 	// Confirmed: run the real apply.
-	realRes, nags, err := applyFn(a, opts, false)
+	realRes, _, err := applyFn(a, opts, false)
 	if err != nil {
 		msg, renderErr := errfmt.Render(err)
 		if renderErr != nil {
@@ -269,25 +265,20 @@ func runApplyInteractive(a *app.App, opts *ApplyOptions) error {
 		return fmt.Errorf("%s", msg)
 	}
 
-	// Print one-line scrollback record.
-	raw := components.PromptForOperations(&res.Simulation.Command)
-	summary := ""
-	if raw != "" {
-		stripped := ansiEscape.ReplaceAllString(raw, "")
-		summary = strings.SplitN(stripped, "\n\n", 2)[0]
-		summary = strings.ReplaceAll(summary, "\n", " ")
-	}
-	fmt.Printf("Confirmed: %s — command %s submitted\n", summary, realRes.CommandID)
-
 	// Watch the command to completion (D4: watch-by-default on TTY path).
-	if err := launchWatch(a, realRes.CommandID); err != nil {
+	finished, err := launchWatch(a, realRes.CommandID)
+	if err != nil {
 		return err
 	}
 
-	// Hint for users who detached with q before the command finished.
-	fmt.Printf("\nRun the following command to check status:\n\n  formae status command --query='id:%s' --watch\n", realRes.CommandID)
+	// The user detached (q/esc/ctrl+c) before the command reached a terminal
+	// state — remind them how to check on it. When it finished before the TUI
+	// closed, there is nothing more to say.
+	if !finished {
+		printAsyncNotice(realRes.CommandID)
+	}
 
-	nag.MaybePrintNags(themeFor(a), nags)
+	// No post-TUI nag here: the interactive path exits clean.
 
 	return nil
 }
@@ -308,28 +299,28 @@ func runApplyLegacy(a *app.App, opts *ApplyOptions) error {
 
 	if !res.Simulation.ChangesRequired {
 		fmt.Printf("%s\n\n%s\n\n",
-			lipgloss.NewStyle().Foreground(themeFor(a).Palette.Done).Render("No changes needed:"),
-			lipgloss.NewStyle().Foreground(themeFor(a).Palette.TextSubtle).Render("The specified forma resources are up to date."))
+			lipgloss.NewStyle().Foreground(a.Theme().Palette.Done).Render("No changes needed:"),
+			lipgloss.NewStyle().Foreground(a.Theme().Palette.TextSubtle).Render("The specified forma resources are up to date."))
 		return nil
 	}
 
 	// don't show anything if --yes is specified
 	if !opts.Yes {
-		if err := maybePrintDescription(themeFor(a), res.Description); err != nil {
+		if err := maybePrintDescription(a.Theme(), res.Description); err != nil {
 			if errors.Is(err, errDescriptionAborted) {
-				fmt.Print(lipgloss.NewStyle().Foreground(themeFor(a).Palette.Error).Render("\nCommand aborted") + "\n")
+				fmt.Print(lipgloss.NewStyle().Foreground(a.Theme().Palette.Error).Render("\nCommand aborted") + "\n")
 				return nil
 			}
 			return err
 		}
 
-		th := themeFor(a)
+		th := a.Theme()
 		width := legacyWidth(os.Stdout)
 		_, _ = fmt.Print(simview.RenderSimulationPlain(th, &res.Simulation, width))
 	}
 
 	if opts.Simulate {
-		fmt.Print(lipgloss.NewStyle().Foreground(themeFor(a).Palette.TextSubtle).Render("Command will not continue - simulation only") + "\n")
+		fmt.Print(lipgloss.NewStyle().Foreground(a.Theme().Palette.TextSubtle).Render("Command will not continue - simulation only") + "\n")
 		return nil
 	}
 
@@ -338,13 +329,13 @@ func runApplyLegacy(a *app.App, opts *ApplyOptions) error {
 		if !isInteractive() {
 			return fmt.Errorf("interactive input requires a TTY — pass --yes")
 		}
-		prompt := components.PromptForOperations(&res.Simulation.Command)
-		ok, err := runConfirm(themeFor(a), prompt, "")
+		prompt := components.PromptForOperations(a.Theme(), &res.Simulation.Command)
+		ok, err := runConfirm(a.Theme(), prompt, "")
 		if err != nil {
 			return err
 		}
 		if !ok {
-			fmt.Print(lipgloss.NewStyle().Foreground(themeFor(a).Palette.Error).Render("\nCommand aborted") + "\n")
+			fmt.Print(lipgloss.NewStyle().Foreground(a.Theme().Palette.Error).Render("\nCommand aborted") + "\n")
 			return nil
 		}
 	}
@@ -359,7 +350,7 @@ func runApplyLegacy(a *app.App, opts *ApplyOptions) error {
 		return fmt.Errorf("%s", msg)
 	}
 
-	fmt.Printf("\n%s\n", lipgloss.NewStyle().Foreground(themeFor(a).Palette.Warning).Render("The asynchronous command has started on the formae agent."))
+	fmt.Printf("\n%s\n", lipgloss.NewStyle().Foreground(a.Theme().Palette.Warning).Render("The asynchronous command has started on the formae agent."))
 
 	if opts.Watch {
 		query := fmt.Sprintf("id:%s", res.CommandID)
@@ -367,11 +358,11 @@ func runApplyLegacy(a *app.App, opts *ApplyOptions) error {
 	}
 
 	fmt.Printf("\nRun the following command to check the status of this command:\n\n  %s%s%s\n",
-		lipgloss.NewStyle().Foreground(themeFor(a).Palette.TextSubtle).Render("formae status command --query='id:"),
-		lipgloss.NewStyle().Foreground(themeFor(a).Palette.PrimaryAccent).Render(res.CommandID),
-		lipgloss.NewStyle().Foreground(themeFor(a).Palette.TextSubtle).Render("'"))
+		lipgloss.NewStyle().Foreground(a.Theme().Palette.TextSubtle).Render("formae status command --query='id:"),
+		lipgloss.NewStyle().Foreground(a.Theme().Palette.PrimaryAccent).Render(res.CommandID),
+		lipgloss.NewStyle().Foreground(a.Theme().Palette.TextSubtle).Render("'"))
 
-	nag.MaybePrintNags(themeFor(a), nags)
+	nag.MaybePrintNags(a.Theme(), nags)
 
 	return nil
 }

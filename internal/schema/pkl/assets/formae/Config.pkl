@@ -303,7 +303,17 @@ class CliConfig {
 
     auth: (BaseCliAuthConfig|Dynamic)?
 
-    theme: "formae" | "classic" = "formae"
+    // Theme name: a built-in (quiet, rich, colorblind) or the stem of a TOML
+    // file in ~/.config/formae/themes/. "formae" is accepted as an alias for
+    // quiet. Unknown names fall back to quiet at runtime.
+    theme: String = "quiet"
+
+    // Appearance selects which side of every adaptive color the CLI renders:
+    // "light" or "dark" force it, "auto" detects it from the terminal
+    // background. Orthogonal to `theme` (every theme color has both a light and
+    // a dark variant). The FORMAE_APPEARANCE environment variable overrides
+    // this per invocation.
+    appearance: "light"|"dark"|"auto" = "auto"
 }
 
 /// Deprecated: use top-level pluginDir, network, and agent.auth / cli.auth instead.

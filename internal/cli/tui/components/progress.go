@@ -13,13 +13,14 @@ import (
 )
 
 // ProgressBar renders a fixed-width bar for a command's progress. The completed
-// portion (done + skipped + failed) is a single █ fill whose color reflects the
-// command's OUTCOME — the theme Done color normally, or Error (red) when the
-// command is failing/failed/canceled (failed == true) — so the whole bar
-// toggles to its end-state color instead of showing per-resource success/
-// failure sections. In-progress (░) and pending (⋅) keep their own colors. A
-// zero total renders a full pending track. Non-zero segments never round away
-// to zero cells while the width allows.
+// portion (done + skipped + failed) is a single fill (glyph from
+// th.Progress.FillDone) whose color reflects the command's OUTCOME — the theme
+// Done color normally, or Error (red) when the command is failing/failed/
+// canceled (failed == true) — so the whole bar toggles to its end-state color
+// instead of showing per-resource success/failure sections. In-progress
+// (th.Progress.FillInProgress) and pending (th.Progress.FillPending) glyphs
+// keep their own colors. A zero total renders a full pending track. Non-zero
+// segments never round away to zero cells while the width allows.
 func ProgressBar(th *theme.Theme, width int, counts map[State]int, failed bool) string {
 	if width <= 0 {
 		return ""
@@ -32,7 +33,7 @@ func ProgressBar(th *theme.Theme, width int, counts map[State]int, failed bool) 
 	}
 
 	// Display order: completed fill, in-progress, pending.
-	chars := []string{"█", "░", "⋅"}
+	chars := []string{th.Progress.FillDone, th.Progress.FillInProgress, th.Progress.FillPending}
 	colors := []lipgloss.AdaptiveColor{fill, p.InProgress, p.Pending}
 	segCounts := []int{
 		counts[StateDone] + counts[StateSkipped] + counts[StateFailed],
@@ -46,7 +47,7 @@ func ProgressBar(th *theme.Theme, width int, counts map[State]int, failed bool) 
 	}
 	if total == 0 {
 		pending := lipgloss.NewStyle().Foreground(p.Pending)
-		return pending.Render(strings.Repeat("⋅", width))
+		return pending.Render(strings.Repeat(th.Progress.FillPending, width))
 	}
 
 	widths := allocateCells(segCounts, total, width)

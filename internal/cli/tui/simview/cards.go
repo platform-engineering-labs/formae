@@ -19,7 +19,7 @@ import (
 // of styled lines (no trailing newlines). Reused verbatim by Task 14's driftview.
 //
 // Contract:
-//   - Bordered card with title-in-border (op symbol + label) in PrimaryAccent style
+//   - Bordered card with title-in-border (op symbol + label) colored per-op via opColor
 //   - Fields: Operation, Type (if set), Stack (if set)
 //   - Changes: tree with ├/└ connectors, ordered:
 //     1. "put resource under management (unmanaged → <stack>)" when OldStackName=="$unmanaged"
@@ -105,10 +105,17 @@ func renderCard(th *theme.Theme, r simRow, width int) []string {
 	}
 
 	// Build title-in-border top line: ╭─ ~ label ─────╮
-	opSymbol := r.op.symbol()
-	titleStr := opSymbol + " " + r.label
-	titleSt := lipgloss.NewStyle().Foreground(p.PrimaryAccent)
-	titleContent := " " + titleSt.Render(titleStr) + " "
+	// The op glyph and the label both carry their own (non-bold) color —
+	// Warning for delete rows (destructive), PrimaryAccent otherwise — matching
+	// pb's mockup (docs/mockups/prototypes/simulation/main.go).
+	opSymbol := opGlyph(th.Glyphs, r.op)
+	glyphSt := lipgloss.NewStyle().Foreground(opColor(p, r.op))
+	labelColor := p.PrimaryAccent
+	if r.op == opDelete {
+		labelColor = p.Warning
+	}
+	labelSt := lipgloss.NewStyle().Foreground(labelColor)
+	titleContent := " " + glyphSt.Render(opSymbol) + " " + labelSt.Render(r.label) + " "
 	titleW := lipgloss.Width(titleContent)
 	dashW := actualWidth - titleW - 2 // 2 = ╭ + ╮
 	if dashW < 1 {

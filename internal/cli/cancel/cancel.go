@@ -57,15 +57,6 @@ var launchCancelWatch = func(a *app.App, th *theme.Theme, opts statuswatch.Optio
 	return err
 }
 
-// themeFor resolves the active theme from the app config.
-func themeFor(a *app.App) *theme.Theme {
-	name := ""
-	if a != nil && a.Config != nil {
-		name = a.Config.Cli.Theme
-	}
-	return theme.New(name)
-}
-
 type CancelOptions struct {
 	Query          string
 	Force          bool
@@ -186,7 +177,7 @@ func runCancelForHumans(a *app.App, opts *CancelOptions) error {
 // cancel are frozen at pre-fetch time (D6): the user cancels exactly the
 // commands they were shown, never a re-evaluated query.
 func runCancelInteractive(a *app.App, opts *CancelOptions) error {
-	th := themeFor(a)
+	th := a.Theme()
 	now := time.Now()
 
 	// Step 1: Pre-fetch non-terminal commands matching the query (D6 frozen set).
@@ -222,7 +213,7 @@ func runCancelInteractive(a *app.App, opts *CancelOptions) error {
 		// Build the pre-consent summary for the confirmation panel. Each command shows
 		// a header line (ID + command + mode) followed by an expectation bullet derived
 		// from its pre-fetched ResourceUpdates (per mockup VIEW 2b).
-		thForSummary := themeFor(a)
+		thForSummary := a.Theme()
 		var summaryLines []string
 		for _, c := range activeCmds {
 			summaryLines = append(summaryLines, fmt.Sprintf("  %s  %s %s", c.CommandID, c.Command, c.Mode))
@@ -398,18 +389,18 @@ func runCancelLegacy(a *app.App, opts *CancelOptions) error {
 				"  • Update/Delete operations are reconciled by the synchronizer on its next cycle.\n\n"+
 				"Only use this for operations that will not complete on their own.\n\n"+
 				"Force-cancel anyway?",
-			lipgloss.NewStyle().Foreground(themeFor(a).Palette.Warning).Render("Warning: --force is a destructive escape hatch."),
+			lipgloss.NewStyle().Foreground(a.Theme().Palette.Warning).Render("Warning: --force is a destructive escape hatch."),
 			target,
 		)
 		if !isInteractive() {
 			return fmt.Errorf("interactive input requires a TTY — pass --yes")
 		}
-		ok, confirmErr := runConfirm(themeFor(a), prompt, "")
+		ok, confirmErr := runConfirm(a.Theme(), prompt, "")
 		if confirmErr != nil {
 			return confirmErr
 		}
 		if !ok {
-			fmt.Print(lipgloss.NewStyle().Foreground(themeFor(a).Palette.Error).Render("\nCommand aborted") + "\n")
+			fmt.Print(lipgloss.NewStyle().Foreground(a.Theme().Palette.Error).Render("\nCommand aborted") + "\n")
 			return nil
 		}
 	}
@@ -423,7 +414,7 @@ func runCancelLegacy(a *app.App, opts *CancelOptions) error {
 		return fmt.Errorf("%s", msg)
 	}
 
-	_, _ = fmt.Print(renderCancelResult(themeFor(a), res, cancelTermWidth(os.Stdout)))
+	_, _ = fmt.Print(renderCancelResult(a.Theme(), res, cancelTermWidth(os.Stdout)))
 
 	// If no commands were canceled, nothing to watch
 	if res == nil || len(res.CommandIDs) == 0 {

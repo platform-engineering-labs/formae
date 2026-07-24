@@ -20,9 +20,9 @@ func (m Model) renderSummaryCounts() string {
 	counts := opCounts(groups)
 	p := m.th.Palette
 
-	// Operations are not color-coded by type (consistent with the rest of the
-	// CLI); the symbol and word distinguish them.
-	st := lipgloss.NewStyle().Foreground(p.TextPrimary)
+	// The glyph is colored per-op from the theme palette; the count and word
+	// stay in the row's base text color.
+	wordSt := lipgloss.NewStyle().Foreground(p.TextPrimary)
 
 	ordered := []opKind{opCreate, opUpdate, opDelete, opReplace, opDetach, opKeep}
 	var parts []string
@@ -31,7 +31,8 @@ func (m Model) renderSummaryCounts() string {
 		if n == 0 {
 			continue
 		}
-		token := st.Render(op.symbol()) + " " + fmt.Sprintf("%d", n) + " " + st.Render(op.word())
+		glyphSt := lipgloss.NewStyle().Foreground(opColor(p, op))
+		token := glyphSt.Render(opGlyph(m.th.Glyphs, op)) + " " + fmt.Sprintf("%d", n) + " " + wordSt.Render(op.word())
 		parts = append(parts, token)
 	}
 	return strings.Join(parts, "  ")
@@ -160,16 +161,44 @@ func groupLayout(kind rowKind, w int) (opW, labelW, typeW, stackW int) {
 // Plain text is padded before styling — never pad styled strings.
 func (m Model) renderGroupColHeader(kind rowKind, opW, labelW, typeW, stackW int) string {
 	p := m.th.Palette
-	dimStyle := lipgloss.NewStyle().Foreground(p.TextSecondary)
-	// The active (sort-by) and selected (cursor) column headers both render bright
-	// white (TextPrimary, bold); the sort arrow alone marks the active one. No
-	// background and no accent colour — consistent with the inventory/status table
-	// headers (highlightHeaderColumn / headerRow).
+	// Inactive headers are dim but still bold, so all column headers read as
+	// headers regardless of navigation/sort state.
+	dimStyle := lipgloss.NewStyle().Foreground(p.TextSecondary).Bold(true)
+
+	// How the navigated/sorted header is emphasized is theme-driven:
+	//   - "background": the navigated column gets a background highlight (like
+	//     the row cursor); the active-sort column gets the accent color. The
+	//     cursor background uses Selection.Dark explicitly (same documented
+	//     compromise as renderRow) so it merges uniformly regardless of
+	//     terminal background; foregrounds stay adaptive.
+	//   - "brighten" (default for unknown values): navigated OR active-sort
+	//     both render bright white, no background — today's quiet/colorblind
+	//     behavior.
+	background := m.th.Header.Highlight == "background"
+	highlightStyle := lipgloss.NewStyle().Foreground(p.TextPrimary).Background(lipgloss.Color(p.Selection.Dark)).Bold(true)
+	accentStyle := lipgloss.NewStyle().Foreground(p.PrimaryAccent).Bold(true)
 	hiStyle := lipgloss.NewStyle().Foreground(p.TextPrimary).Bold(true)
 
 	grpHi := m.sortHi[kind]
 	grpAct := m.sortCol[kind]
 	grpDir := m.sortDir[kind]
+
+	styleFor := func(isHL, isAct bool) lipgloss.Style {
+		if background {
+			switch {
+			case isHL:
+				return highlightStyle
+			case isAct:
+				return accentStyle
+			default:
+				return dimStyle
+			}
+		}
+		if isHL || isAct {
+			return hiStyle
+		}
+		return dimStyle
+	}
 
 	renderHdr := func(name string, col int, w int) string {
 		isHL := col == grpHi
@@ -184,10 +213,7 @@ func (m Model) renderGroupColHeader(kind rowKind, opW, labelW, typeW, stackW int
 		}
 		text := name + arrow
 		padded := components.Pad(text, w) // pad PLAIN text first
-		if isHL || isAct {
-			return hiStyle.Render(padded)
-		}
-		return dimStyle.Render(padded)
+		return styleFor(isHL, isAct).Render(padded)
 	}
 	renderHdrLast := func(name string, col int) string {
 		isHL := col == grpHi
@@ -201,10 +227,7 @@ func (m Model) renderGroupColHeader(kind rowKind, opW, labelW, typeW, stackW int
 			}
 		}
 		text := name + arrow
-		if isHL || isAct {
-			return hiStyle.Render(text)
-		}
-		return dimStyle.Render(text)
+		return styleFor(isHL, isAct).Render(text)
 	}
 
 	var sb strings.Builder
@@ -239,10 +262,8 @@ func (m Model) renderRow(r simRow, kind rowKind, opW, labelW, typeW, stackW int,
 		bg = lipgloss.Color(p.Selection.Dark)
 	}
 
-	// Determine base foreground color. Operations are NOT color-coded by type
-	// (create/update/delete/replace all render alike, consistent with the rest of
-	// the CLI); the op word + glyph carry the meaning, so delete rows use the
-	// same treatment as any other row.
+	// Determine base foreground color for non-operation cells (label/type/stack).
+	// The operation cell is colored separately below via opColor.
 	var fgColor lipgloss.AdaptiveColor
 	if isCursor {
 		fgColor = p.TextPrimary
@@ -258,6 +279,14 @@ func (m Model) renderRow(r simRow, kind rowKind, opW, labelW, typeW, stackW int,
 		labelColor = p.PrimaryAccent
 	}
 
+	// Delete rows are the exception: the whole row takes the delete op color
+	// instead of the default blue label / gray type-stack, matching the
+	// mockup. Applied last so it overrides the isCursor branches above too.
+	if r.op == opDelete {
+		labelColor = opColor(p, opDelete)
+		fgColor = opColor(p, opDelete)
+	}
+
 	baseSt := lipgloss.NewStyle().Foreground(fgColor)
 	labelSt := lipgloss.NewStyle().Foreground(labelColor)
 	if isCursor {
@@ -265,11 +294,14 @@ func (m Model) renderRow(r simRow, kind rowKind, opW, labelW, typeW, stackW int,
 		labelSt = labelSt.Background(bg)
 	}
 
-	// Operation text is not color-coded by type — it uses the base row color.
-	opSt := baseSt
+	// Operation text is colored per-op from the theme palette.
+	opSt := lipgloss.NewStyle().Foreground(opColor(p, r.op))
+	if isCursor {
+		opSt = opSt.Background(bg)
+	}
 
 	// Build op plain string and pad
-	opPlain := r.op.symbol() + " " + r.op.word()
+	opPlain := opGlyph(m.th.Glyphs, r.op) + " " + r.op.word()
 	opPadded := components.Pad(opPlain, opW)
 
 	trunc := func(s string, maxW int) string {
