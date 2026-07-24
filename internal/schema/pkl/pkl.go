@@ -499,6 +499,12 @@ func (p PKL) GenerateSourceCode(forma *pkgmodel.Forma, path string, includes []s
 		// Case 1: target dir has an existing PklProject — reuse its deps so the
 		// generated .pkl resolves cleanly when the user later evaluates it under
 		// their own project.
+		//
+		// `computed` is what the caller resolved from the agent's installed
+		// plugins (formae core + a dep for every resource namespace). It is the
+		// source of truth for any namespace the existing PklProject is missing.
+		computed := options.Dependencies
+
 		deps, parseErr := parsePklProjectDeps(projectFile)
 		if parseErr != nil {
 			return schema.GenerateSourcesResult{}, fmt.Errorf("failed to parse existing PklProject %q: %w", projectFile, parseErr)
@@ -529,6 +535,30 @@ func (p PKL) GenerateSourceCode(forma *pkgmodel.Forma, path string, includes []s
 				}
 			}
 		}
+
+		// Add any plugin namespace the extracted resources need that the on-disk
+		// PklProject doesn't declare. Without this the generator can't resolve
+		// the resource's module and dies with an opaque "Cannot find key" error.
+		// Unlike the formae version (nag-only), these are added automatically —
+		// the file cannot be generated at all without them.
+		if missing := missingPluginDeps(deps, computed); len(missing) > 0 {
+			if addErr := addDepsToPklProject(projectFile, missing); addErr != nil {
+				return schema.GenerateSourcesResult{}, fmt.Errorf("failed to add missing dependencies to %q: %w", projectFile, addErr)
+			}
+			deps = append(deps, missing...)
+
+			// Drop the stale deps.json and re-resolve so the user's project
+			// resolves the added deps. Best-effort: a resolve failure (e.g.
+			// offline) still leaves a correct PklProject and a written .pkl.
+			depsJSON := filepath.Join(parentDir, "PklProject.deps.json")
+			if rmErr := os.Remove(depsJSON); rmErr != nil && !os.IsNotExist(rmErr) {
+				return schema.GenerateSourcesResult{}, fmt.Errorf("failed to clear stale deps.json: %w", rmErr)
+			}
+			if resErr := pklrun.ProjectResolve(parentDir, pklrun.WithPklCommand(bundledPklCommand())); resErr != nil {
+				res.Warnings = append(res.Warnings, fmt.Sprintf("Added dependencies to %q but re-resolving failed (%v). Run 'pkl project resolve' there.", projectFile, resErr))
+			}
+		}
+
 		options.Dependencies = deps
 	} else if os.IsNotExist(err) {
 		// Case 2: no existing PklProject — discover deps from options.LocalPluginDir
