@@ -99,6 +99,10 @@ const exitGracePeriod = 1500 * time.Millisecond
 // exitNowMsg is delivered after exitGracePeriod to trigger the deferred quit.
 type exitNowMsg struct{}
 
+// Finished reports whether the watch exited because the command reached a
+// terminal state (as opposed to the user detaching while it was still running).
+func (m Model) Finished() bool { return m.exitScheduled }
+
 // headerCommand returns the command verb shown after the "formae" wordmark in
 // the header, defaulting to "status command" for the standalone status TUI.
 func (m Model) headerCommand() string {

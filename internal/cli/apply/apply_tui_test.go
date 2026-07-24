@@ -8,6 +8,7 @@ package apply
 
 import (
 	"io"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -31,6 +32,24 @@ func newTestApp() *app.App {
 	}
 }
 
+// captureStdout redirects os.Stdout for the duration of fn and returns what
+// was written.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	orig := os.Stdout
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stdout = w
+	defer func() { os.Stdout = orig }()
+
+	fn()
+
+	require.NoError(t, w.Close())
+	out, err := io.ReadAll(r)
+	require.NoError(t, err)
+	return string(out)
+}
+
 // simOptions captures the Options that launchSimView was called with.
 var capturedSimOptions simview.Options
 
@@ -52,9 +71,9 @@ func TestApply_TTY_Confirmed(t *testing.T) {
 	isTerminal = func(w io.Writer) bool { return true }
 
 	var watchCommandID string
-	launchWatch = func(a *app.App, commandID string) error {
+	launchWatch = func(a *app.App, commandID string) (bool, error) {
 		watchCommandID = commandID
-		return nil
+		return true, nil
 	}
 
 	applyFn = func(a *app.App, opts *ApplyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
@@ -116,9 +135,9 @@ func TestApply_TTY_Aborted(t *testing.T) {
 	isTerminal = func(w io.Writer) bool { return true }
 
 	watchCalled := false
-	launchWatch = func(a *app.App, commandID string) error {
+	launchWatch = func(a *app.App, commandID string) (bool, error) {
 		watchCalled = true
-		return nil
+		return true, nil
 	}
 
 	applyFn = func(a *app.App, opts *ApplyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
@@ -169,9 +188,9 @@ func TestApply_Simulate(t *testing.T) {
 	isTerminal = func(w io.Writer) bool { return true }
 
 	watchCalled := false
-	launchWatch = func(a *app.App, commandID string) error {
+	launchWatch = func(a *app.App, commandID string) (bool, error) {
 		watchCalled = true
-		return nil
+		return true, nil
 	}
 
 	var capturedSimOnly bool
@@ -244,7 +263,7 @@ func TestApply_Yes_OnTTY(t *testing.T) {
 		return &apimodel.SubmitCommandResponse{CommandID: "yes-cmd"}, nil, nil
 	}
 
-	launchWatch = func(a *app.App, commandID string) error { return nil }
+	launchWatch = func(a *app.App, commandID string) (bool, error) { return true, nil }
 
 	a := newTestApp()
 	opts := &ApplyOptions{
@@ -294,7 +313,7 @@ func TestApply_NonTTY_WithYes(t *testing.T) {
 		return &apimodel.SubmitCommandResponse{CommandID: "nontty-cmd"}, nil, nil
 	}
 
-	launchWatch = func(a *app.App, commandID string) error { return nil }
+	launchWatch = func(a *app.App, commandID string) (bool, error) { return true, nil }
 
 	a := newTestApp()
 	opts := &ApplyOptions{
@@ -308,4 +327,104 @@ func TestApply_NonTTY_WithYes(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.False(t, simViewCalled, "launchSimView must NOT be called on non-TTY")
+}
+
+// TestApply_TTY_Confirmed_Finished_NoAsyncNotice verifies that once the watch
+// TUI closes because the command reached a terminal state, nothing further is
+// printed — no scrollback record and no async-detach notice.
+func TestApply_TTY_Confirmed_Finished_NoAsyncNotice(t *testing.T) {
+	origApplyFn := applyFn
+	origIsTerminal := isTerminal
+	origLaunchSimView := launchSimView
+	origLaunchWatch := launchWatch
+	t.Cleanup(func() {
+		applyFn = origApplyFn
+		isTerminal = origIsTerminal
+		launchSimView = origLaunchSimView
+		launchWatch = origLaunchWatch
+	})
+
+	isTerminal = func(w io.Writer) bool { return true }
+	launchWatch = func(a *app.App, commandID string) (bool, error) { return true, nil }
+
+	applyFn = func(a *app.App, opts *ApplyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
+		if simulate {
+			return &apimodel.SubmitCommandResponse{
+				Simulation: apimodel.Simulation{
+					ChangesRequired: true,
+					Command:         apimodel.Command{ResourceUpdates: []apimodel.ResourceUpdate{{Operation: "create", ResourceLabel: "my-bucket"}}},
+				},
+			}, nil, nil
+		}
+		return &apimodel.SubmitCommandResponse{CommandID: "finished-cmd-1"}, nil, nil
+	}
+
+	launchSimView = func(th *theme.Theme, sim *apimodel.Simulation, opts simview.Options) (simview.Decision, error) {
+		return simview.DecisionConfirmed, nil
+	}
+
+	a := newTestApp()
+	opts := &ApplyOptions{
+		OutputConsumer: printer.ConsumerHuman,
+		FormaFile:      "forma.pkl",
+		Mode:           pkgmodel.FormaApplyModeReconcile,
+	}
+
+	out := captureStdout(t, func() {
+		err := runApplyForHumans(a, opts)
+		require.NoError(t, err)
+	})
+
+	assert.NotContains(t, out, "Still running asynchronously", "no async notice when the command finished before the TUI closed")
+	assert.NotContains(t, out, "finished-cmd-1", "no scrollback record naming the command once it finished")
+}
+
+// TestApply_TTY_Confirmed_EarlyDetach_PrintsAsyncNotice verifies that when the
+// user detaches from the watch TUI before the command reaches a terminal
+// state, the reworded async notice (with the status invocation) is printed.
+func TestApply_TTY_Confirmed_EarlyDetach_PrintsAsyncNotice(t *testing.T) {
+	origApplyFn := applyFn
+	origIsTerminal := isTerminal
+	origLaunchSimView := launchSimView
+	origLaunchWatch := launchWatch
+	t.Cleanup(func() {
+		applyFn = origApplyFn
+		isTerminal = origIsTerminal
+		launchSimView = origLaunchSimView
+		launchWatch = origLaunchWatch
+	})
+
+	isTerminal = func(w io.Writer) bool { return true }
+	launchWatch = func(a *app.App, commandID string) (bool, error) { return false, nil }
+
+	applyFn = func(a *app.App, opts *ApplyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
+		if simulate {
+			return &apimodel.SubmitCommandResponse{
+				Simulation: apimodel.Simulation{
+					ChangesRequired: true,
+					Command:         apimodel.Command{ResourceUpdates: []apimodel.ResourceUpdate{{Operation: "create", ResourceLabel: "my-bucket"}}},
+				},
+			}, nil, nil
+		}
+		return &apimodel.SubmitCommandResponse{CommandID: "detached-cmd-2"}, nil, nil
+	}
+
+	launchSimView = func(th *theme.Theme, sim *apimodel.Simulation, opts simview.Options) (simview.Decision, error) {
+		return simview.DecisionConfirmed, nil
+	}
+
+	a := newTestApp()
+	opts := &ApplyOptions{
+		OutputConsumer: printer.ConsumerHuman,
+		FormaFile:      "forma.pkl",
+		Mode:           pkgmodel.FormaApplyModeReconcile,
+	}
+
+	out := captureStdout(t, func() {
+		err := runApplyForHumans(a, opts)
+		require.NoError(t, err)
+	})
+
+	assert.Contains(t, out, "Still running asynchronously on the agent. Check its status with:")
+	assert.Contains(t, out, "formae status command --query='id:detached-cmd-2' --watch")
 }

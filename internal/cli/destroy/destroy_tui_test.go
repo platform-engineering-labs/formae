@@ -93,9 +93,9 @@ func TestDestroy_TTY_Confirmed(t *testing.T) {
 	isTerminal = func(w io.Writer) bool { return true }
 
 	var watchCommandID string
-	launchWatch = func(a *app.App, commandID string) error {
+	launchWatch = func(a *app.App, commandID string) (bool, error) {
 		watchCommandID = commandID
-		return nil
+		return true, nil // command finished before the TUI closed
 	}
 
 	destroyFn = func(a *app.App, opts *DestroyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
@@ -142,14 +142,14 @@ func TestDestroy_TTY_Confirmed(t *testing.T) {
 	assert.Equal(t, simview.KindDestroy, capturedSimOptions.Kind)
 	assert.Equal(t, "forma.pkl", capturedSimOptions.Source, "Source should be the forma file when set")
 	assert.False(t, capturedSimOptions.SimulateOnly)
-	assert.Contains(t, out, "real-cmd-123", "scrollback record should mention the submitted command ID")
+	assert.NotContains(t, out, "real-cmd-123", "no scrollback/async-notice output once the watched command finished before the TUI closed")
 }
 
 func TestDestroy_TTY_Confirmed_QuerySource(t *testing.T) {
 	stubSeams(t)
 
 	isTerminal = func(w io.Writer) bool { return true }
-	launchWatch = func(a *app.App, commandID string) error { return nil }
+	launchWatch = func(a *app.App, commandID string) (bool, error) { return true, nil }
 
 	destroyFn = func(a *app.App, opts *DestroyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
 		if simulate {
@@ -195,9 +195,9 @@ func TestDestroy_TTY_Aborted(t *testing.T) {
 	isTerminal = func(w io.Writer) bool { return true }
 
 	watchCalled := false
-	launchWatch = func(a *app.App, commandID string) error {
+	launchWatch = func(a *app.App, commandID string) (bool, error) {
 		watchCalled = true
-		return nil
+		return true, nil
 	}
 
 	destroyFn = func(a *app.App, opts *DestroyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
@@ -241,9 +241,9 @@ func TestDestroy_Simulate(t *testing.T) {
 	isTerminal = func(w io.Writer) bool { return true }
 
 	watchCalled := false
-	launchWatch = func(a *app.App, commandID string) error {
+	launchWatch = func(a *app.App, commandID string) (bool, error) {
 		watchCalled = true
-		return nil
+		return true, nil
 	}
 
 	destroyFn = func(a *app.App, opts *DestroyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
@@ -306,7 +306,7 @@ func TestDestroy_Yes_OnTTY(t *testing.T) {
 		return &apimodel.SubmitCommandResponse{CommandID: "yes-cmd"}, nil, nil
 	}
 
-	launchWatch = func(a *app.App, commandID string) error { return nil }
+	launchWatch = func(a *app.App, commandID string) (bool, error) { return true, nil }
 
 	a := newTestApp()
 	opts := &DestroyOptions{
@@ -347,7 +347,7 @@ func TestDestroy_NonTTY(t *testing.T) {
 		return &apimodel.SubmitCommandResponse{CommandID: "nontty-cmd"}, nil, nil
 	}
 
-	launchWatch = func(a *app.App, commandID string) error { return nil }
+	launchWatch = func(a *app.App, commandID string) (bool, error) { return true, nil }
 
 	a := newTestApp()
 	opts := &DestroyOptions{
@@ -379,9 +379,9 @@ func TestDestroy_Yes_Cascades_Abort(t *testing.T) {
 	}
 
 	watchCalled := false
-	launchWatch = func(a *app.App, commandID string) error {
+	launchWatch = func(a *app.App, commandID string) (bool, error) {
 		watchCalled = true
-		return nil
+		return true, nil
 	}
 
 	destroyFn = func(a *app.App, opts *DestroyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
@@ -430,7 +430,7 @@ func TestDestroy_Yes_Cascades_CascadeFlag(t *testing.T) {
 		return &apimodel.SubmitCommandResponse{CommandID: "cascade-cmd"}, nil, nil
 	}
 
-	launchWatch = func(a *app.App, commandID string) error { return nil }
+	launchWatch = func(a *app.App, commandID string) (bool, error) { return true, nil }
 	launchSimView = func(th *theme.Theme, sim *apimodel.Simulation, opts simview.Options) (simview.Decision, error) {
 		return simview.DecisionConfirmed, nil
 	}
@@ -472,9 +472,9 @@ func TestDestroy_Interactive_Cascades(t *testing.T) {
 	}
 
 	var watchCommandID string
-	launchWatch = func(a *app.App, commandID string) error {
+	launchWatch = func(a *app.App, commandID string) (bool, error) {
 		watchCommandID = commandID
-		return nil
+		return true, nil
 	}
 
 	a := newTestApp()
@@ -511,4 +511,86 @@ func TestDestroy_Interactive_Cascades(t *testing.T) {
 
 	assert.Equal(t, "interactive-cascade-cmd", watchCommandID, "confirmed cascade destroy must proceed to watch")
 	assert.NotContains(t, out, "Command Aborted", "no abort panel on the interactive path")
+}
+
+// TestDestroy_TTY_Confirmed_Finished_NoAsyncNotice verifies that once the
+// watch TUI closes because the command reached a terminal state, nothing
+// further is printed — no scrollback record and no async-detach notice.
+func TestDestroy_TTY_Confirmed_Finished_NoAsyncNotice(t *testing.T) {
+	stubSeams(t)
+
+	isTerminal = func(w io.Writer) bool { return true }
+	launchWatch = func(a *app.App, commandID string) (bool, error) { return true, nil }
+
+	destroyFn = func(a *app.App, opts *DestroyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
+		if simulate {
+			return &apimodel.SubmitCommandResponse{
+				Simulation: apimodel.Simulation{
+					ChangesRequired: true,
+					Command:         apimodel.Command{ResourceUpdates: []apimodel.ResourceUpdate{{Operation: "delete", ResourceLabel: "my-bucket"}}},
+				},
+			}, nil, nil
+		}
+		return &apimodel.SubmitCommandResponse{CommandID: "finished-cmd-1"}, nil, nil
+	}
+
+	launchSimView = func(th *theme.Theme, sim *apimodel.Simulation, opts simview.Options) (simview.Decision, error) {
+		return simview.DecisionConfirmed, nil
+	}
+
+	a := newTestApp()
+	opts := &DestroyOptions{
+		OutputConsumer: printer.ConsumerHuman,
+		FormaFile:      "forma.pkl",
+		OnDependents:   OnDependentsAbort,
+	}
+
+	out := captureStdout(t, func() {
+		err := runDestroyForHumans(a, opts)
+		require.NoError(t, err)
+	})
+
+	assert.NotContains(t, out, "Still running asynchronously", "no async notice when the command finished before the TUI closed")
+	assert.NotContains(t, out, "finished-cmd-1", "no scrollback record naming the command once it finished")
+}
+
+// TestDestroy_TTY_Confirmed_EarlyDetach_PrintsAsyncNotice verifies that when
+// the user detaches from the watch TUI before the command reaches a terminal
+// state, the reworded async notice (with the status invocation) is printed.
+func TestDestroy_TTY_Confirmed_EarlyDetach_PrintsAsyncNotice(t *testing.T) {
+	stubSeams(t)
+
+	isTerminal = func(w io.Writer) bool { return true }
+	launchWatch = func(a *app.App, commandID string) (bool, error) { return false, nil }
+
+	destroyFn = func(a *app.App, opts *DestroyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
+		if simulate {
+			return &apimodel.SubmitCommandResponse{
+				Simulation: apimodel.Simulation{
+					ChangesRequired: true,
+					Command:         apimodel.Command{ResourceUpdates: []apimodel.ResourceUpdate{{Operation: "delete", ResourceLabel: "my-bucket"}}},
+				},
+			}, nil, nil
+		}
+		return &apimodel.SubmitCommandResponse{CommandID: "detached-cmd-2"}, nil, nil
+	}
+
+	launchSimView = func(th *theme.Theme, sim *apimodel.Simulation, opts simview.Options) (simview.Decision, error) {
+		return simview.DecisionConfirmed, nil
+	}
+
+	a := newTestApp()
+	opts := &DestroyOptions{
+		OutputConsumer: printer.ConsumerHuman,
+		FormaFile:      "forma.pkl",
+		OnDependents:   OnDependentsAbort,
+	}
+
+	out := captureStdout(t, func() {
+		err := runDestroyForHumans(a, opts)
+		require.NoError(t, err)
+	})
+
+	assert.Contains(t, out, "Still running asynchronously on the agent. Check its status with:")
+	assert.Contains(t, out, "formae status command --query='id:detached-cmd-2' --watch")
 }

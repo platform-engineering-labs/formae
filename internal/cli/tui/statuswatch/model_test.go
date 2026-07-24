@@ -113,6 +113,33 @@ func TestModel_ExitWhenDone(t *testing.T) {
 	assert.Equal(t, tea.Quit(), quitCmd())
 }
 
+// TestModel_Finished_TrueWhenExitScheduled verifies that once all commands
+// reach a terminal state and ExitWhenDone fires the deferred quit, Finished()
+// reports true — the caller uses this to decide whether to print the
+// async-detach notice after the TUI closes.
+func TestModel_Finished_TrueWhenExitScheduled(t *testing.T) {
+	fc := &fakeClient{resp: respFix("cmd-done")}
+	m := New(theme.New("formae"), fc, Options{MaxResults: 10, PollInterval: time.Hour, ExitWhenDone: true,
+		Now: func() time.Time { return time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC) }})
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	assert.False(t, mm.(Model).Finished(), "not finished before the poll observes a terminal command")
+	mm, cmd := mm.Update(commandsMsg{commands: fc.resp.Commands})
+	require.NotNil(t, cmd, "all commands terminal + ExitWhenDone → deferred quit scheduled")
+	assert.True(t, mm.(Model).Finished(), "exitScheduled → Finished() true")
+}
+
+// TestModel_Finished_FalseOnUserQuit verifies that quitting via 'q' while the
+// command is still running (no terminal poll observed) leaves Finished() false.
+func TestModel_Finished_FalseOnUserQuit(t *testing.T) {
+	m, _ := newTestModel(t, nil)
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	mm, cmd := mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	require.NotNil(t, cmd, "q should trigger quit")
+	assert.False(t, mm.(Model).Finished(), "user-initiated quit must not report Finished")
+}
+
 func TestModel_ErrorBanner(t *testing.T) {
 	m, _ := newTestModel(t, nil)
 	var mm tea.Model = m

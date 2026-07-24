@@ -9,8 +9,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"regexp"
-	"strings"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -30,9 +28,6 @@ import (
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
-
-// ansiEscape matches ANSI SGR escape sequences for stripping display colors.
-var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 // Package-level seams — replaced in tests to avoid TTY / network calls.
 var (
@@ -61,7 +56,7 @@ var (
 		return final.(simview.Model).Decision(), nil
 	}
 
-	launchWatch = func(a *app.App, commandID string) error {
+	launchWatch = func(a *app.App, commandID string) (bool, error) {
 		th := a.Theme()
 		model := statuswatch.New(th, a, statuswatch.Options{
 			Query:          "id:" + commandID,
@@ -70,8 +65,11 @@ var (
 			ExitWhenDone:   true,
 			SingleCommand:  true, // apply --watch is scoped to one command: no back-to-list nav
 		})
-		_, err := tui.Run(model, tui.DefaultRunOptions())
-		return err
+		final, err := tui.Run(model, tui.DefaultRunOptions())
+		if err != nil {
+			return false, err
+		}
+		return final.(statuswatch.Model).Finished(), nil
 	}
 
 	applyFn = func(a *app.App, opts *ApplyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
@@ -91,6 +89,14 @@ var legacyWidth = func(w io.Writer) int {
 		}
 	}
 	return 100
+}
+
+// printAsyncNotice reminds the user how to check on a command that is still
+// running after the watch TUI has closed (the user detached early via
+// q/esc/ctrl+c). Not printed when the watch TUI closed because the command
+// already reached a terminal state.
+func printAsyncNotice(commandID string) {
+	fmt.Printf("\nStill running asynchronously on the agent. Check its status with:\n\n  formae status command --query='id:%s' --watch\n", commandID)
 }
 
 type ApplyCommand struct {
@@ -259,23 +265,18 @@ func runApplyInteractive(a *app.App, opts *ApplyOptions) error {
 		return fmt.Errorf("%s", msg)
 	}
 
-	// Print one-line scrollback record.
-	raw := components.PromptForOperations(a.Theme(), &res.Simulation.Command)
-	summary := ""
-	if raw != "" {
-		stripped := ansiEscape.ReplaceAllString(raw, "")
-		summary = strings.SplitN(stripped, "\n\n", 2)[0]
-		summary = strings.ReplaceAll(summary, "\n", " ")
-	}
-	fmt.Printf("Confirmed: %s — command %s submitted\n", summary, realRes.CommandID)
-
 	// Watch the command to completion (D4: watch-by-default on TTY path).
-	if err := launchWatch(a, realRes.CommandID); err != nil {
+	finished, err := launchWatch(a, realRes.CommandID)
+	if err != nil {
 		return err
 	}
 
-	// Hint for users who detached with q before the command finished.
-	fmt.Printf("\nRun the following command to check status:\n\n  formae status command --query='id:%s' --watch\n", realRes.CommandID)
+	// The user detached (q/esc/ctrl+c) before the command reached a terminal
+	// state — remind them how to check on it. When it finished before the TUI
+	// closed, there is nothing more to say.
+	if !finished {
+		printAsyncNotice(realRes.CommandID)
+	}
 
 	nag.MaybePrintNags(a.Theme(), nags)
 
