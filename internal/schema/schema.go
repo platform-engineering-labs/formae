@@ -36,15 +36,6 @@ type GenerateSourcesResult struct {
 	// written file matches this binary), but the on-disk project is left
 	// untouched — the caller nags the user to update it themselves.
 	SchemaVersionUpgrade *SchemaVersionUpgrade
-
-	// AddedDependencies lists plugin dependency specs that the extracted
-	// resources required but the existing on-disk project did not declare, and
-	// which generation added to it (format "<plugin>.<name>@<version>" or
-	// "local:<name>:<path>"). Empty when nothing was added. Unlike the schema
-	// version (nag-only), missing plugin deps are added automatically because
-	// the file cannot be generated at all without them; the caller reports what
-	// it added.
-	AddedDependencies []string
 }
 
 // SchemaVersionUpgrade describes an out-of-date core schema version pinned by an

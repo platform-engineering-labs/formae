@@ -56,10 +56,3 @@ func TestSchemaVersionNag(t *testing.T) {
 	assert.Contains(t, msg, "update to 0.88.0 or greater")
 	assert.Contains(t, msg, "pkl project resolve")
 }
-
-func TestFriendlyDep(t *testing.T) {
-	assert.Equal(t, "aws@0.1.14", friendlyDep("aws.aws@0.1.14"))
-	assert.Equal(t, "formae@0.88.0", friendlyDep("pkl.formae@0.88.0"))
-	assert.Equal(t, "aws (local)", friendlyDep("local:aws:/p/PklProject"))
-	assert.Equal(t, "bare", friendlyDep("bare"))
-}

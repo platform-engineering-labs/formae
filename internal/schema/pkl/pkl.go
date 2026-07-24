@@ -540,7 +540,7 @@ func (p PKL) GenerateSourceCode(forma *pkgmodel.Forma, path string, includes []s
 		// PklProject doesn't declare. Without this the generator can't resolve
 		// the resource's module and dies with an opaque "Cannot find key" error.
 		// Unlike the formae version (nag-only), these are added automatically —
-		// the file cannot be generated at all without them — and reported.
+		// the file cannot be generated at all without them.
 		if missing := missingPluginDeps(deps, computed); len(missing) > 0 {
 			if addErr := addDepsToPklProject(projectFile, missing); addErr != nil {
 				return schema.GenerateSourcesResult{}, fmt.Errorf("failed to add missing dependencies to %q: %w", projectFile, addErr)
@@ -557,7 +557,6 @@ func (p PKL) GenerateSourceCode(forma *pkgmodel.Forma, path string, includes []s
 			if resErr := pklrun.ProjectResolve(parentDir, pklrun.WithPklCommand(bundledPklCommand())); resErr != nil {
 				res.Warnings = append(res.Warnings, fmt.Sprintf("Added dependencies to %q but re-resolving failed (%v). Run 'pkl project resolve' there.", projectFile, resErr))
 			}
-			res.AddedDependencies = missing
 		}
 
 		options.Dependencies = deps
