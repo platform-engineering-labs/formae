@@ -443,7 +443,7 @@ func (m Model) headerCommand() string {
 	// Show the mode (reconcile/patch) next to the verb so it's visible at a
 	// glance on the apply plan. Destroy has no mode.
 	if m.opts.Mode != "" {
-		return "apply · " + m.opts.Mode
+		return "apply, mode=" + m.opts.Mode
 	}
 	return "apply"
 }

@@ -108,12 +108,13 @@ func TestSimView_GoldenApply(t *testing.T) {
 }
 
 // TestSimView_HeaderShowsMode pins that the apply header carries the mode next
-// to the verb, and that destroy (which has no mode) does not.
+// to the verb using a readable "mode=" label (not a "·" separator), and that
+// destroy (which has no mode) does not.
 func TestSimView_HeaderShowsMode(t *testing.T) {
 	th := theme.New("formae")
 	sim := makeFixtureSim()
-	assert.Equal(t, "apply · patch", New(th, sim, Options{Kind: KindApply, Mode: "patch"}).headerCommand())
-	assert.Equal(t, "apply · reconcile", New(th, sim, Options{Kind: KindApply, Mode: "reconcile"}).headerCommand())
+	assert.Equal(t, "apply, mode=patch", New(th, sim, Options{Kind: KindApply, Mode: "patch"}).headerCommand())
+	assert.Equal(t, "apply, mode=reconcile", New(th, sim, Options{Kind: KindApply, Mode: "reconcile"}).headerCommand())
 	assert.Equal(t, "apply", New(th, sim, Options{Kind: KindApply}).headerCommand())
 	assert.Equal(t, "destroy", New(th, sim, Options{Kind: KindDestroy, Mode: "reconcile"}).headerCommand())
 }
