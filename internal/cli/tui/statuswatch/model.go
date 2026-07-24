@@ -78,6 +78,7 @@ type Model struct {
 	view         viewMode
 	query        components.QueryBar
 	spinner      spinner.Model
+	watcher      *theme.OmarchyWatcher
 	err          error
 	width        int
 	height       int
@@ -127,7 +128,7 @@ func New(th *theme.Theme, client Client, opts Options) Model {
 	for _, id := range opts.AbandonedResources {
 		abandonedSet[id] = true
 	}
-	return Model{
+	model := Model{
 		th:           th,
 		client:       client,
 		opts:         opts,
@@ -138,15 +139,37 @@ func New(th *theme.Theme, client Client, opts Options) Model {
 		spinner:      components.NewSpinner(th),
 		abandonedSet: abandonedSet,
 	}
+	if th.Name == "omarchy" {
+		if w, err := theme.NewOmarchyWatcher(); err == nil {
+			model.watcher = w
+		}
+	}
+	return model
+}
+
+// ApplyTheme swaps the model onto a new theme: it threads the theme into the
+// sub-components that cache it and rebuilds the stateful spinner. Renderers
+// that read m.th inline each frame need no other change.
+func (m Model) ApplyTheme(t *theme.Theme) Model {
+	m.th = t
+	m.multi.th = t
+	m.detail.th = t
+	m.query = components.NewQueryBar(t, m.query.Query())
+	m.spinner = components.NewSpinner(t)
+	return m
 }
 
 // Init kicks off the first fetch, the poll ticker, and the spinner animation.
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(
+	cmds := []tea.Cmd{
 		fetchCommands(m.client, m.query.Query(), m.opts.MaxResults),
 		tick(m.opts.PollInterval),
 		m.spinner.Tick,
-	)
+	}
+	if m.watcher != nil {
+		cmds = append(cmds, m.watcher.WaitCmd())
+	}
+	return tea.Batch(cmds...)
 }
 
 // Update handles all incoming messages and key events.
@@ -238,6 +261,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, nil
+
+	case theme.ApplyThemeMsg:
+		m = m.ApplyTheme(msg.Theme)
+		var cmds []tea.Cmd
+		cmds = append(cmds, m.spinner.Tick) // restart the tick at the new interval
+		if m.watcher != nil {
+			cmds = append(cmds, m.watcher.WaitCmd()) // re-arm the watch
+		}
+		return m, tea.Batch(cmds...)
 
 	case exitNowMsg:
 		return m, tea.Quit
