@@ -142,3 +142,80 @@ func TestOmarchyWatcher_SymlinkSwap(t *testing.T) {
 		t.Fatalf("after symlink swap, PrimaryAccent = %v, want #beef00", th)
 	}
 }
+
+// TestOmarchyWatcher_StaleTargetNotWatchedAfterSwap gates the fix for the
+// stale-watch leak: after a theme swap, arm() must Remove the watch on the
+// OLD resolved target directory, not just Add the new one. Otherwise the old
+// target's inotify watch lingers, leaking watch descriptors across swaps and
+// firing a spurious ApplyThemeMsg when a no-longer-current theme's
+// colors.toml is edited.
+func TestOmarchyWatcher_StaleTargetNotWatchedAfterSwap(t *testing.T) {
+	_, root := setupOmarchyHome(t, "alpha")
+	themes := filepath.Join(root, "themes")
+	_ = os.MkdirAll(filepath.Join(themes, "beta"), 0o755)
+	_ = os.WriteFile(filepath.Join(themes, "beta", "colors.toml"),
+		[]byte("background=\"#000000\"\nforeground=\"#ffffff\"\naccent=\"#beef00\"\ncolor1=\"#ff0000\"\ncolor2=\"#00ff00\"\ncolor3=\"#ffff00\"\ncolor8=\"#888888\"\n"), 0o644)
+
+	w, err := NewOmarchyWatcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	alphaTarget, _ := filepath.EvalSymlinks(filepath.Join(root, "current", "theme"))
+
+	// Atomic symlink swap: current/theme -> themes/beta. Drain the resulting
+	// event (this also re-arms the watcher, which is where the fix churns
+	// the resolved-target watch). The staging symlink is created in "themes"
+	// (unwatched), not "current" (watched): creating it inside "current"
+	// would itself fire a spurious CREATE event on "current" ahead of the
+	// real rename, leaving an extra queued event that would confuse the
+	// single-event drain below.
+	tmp := filepath.Join(themes, "theme.tmp")
+	_ = os.Symlink(filepath.Join(themes, "beta"), tmp)
+	if err := os.Rename(tmp, filepath.Join(root, "current", "theme")); err != nil {
+		t.Fatal(err)
+	}
+	if th := drainOne(t, w); th == nil || th.Palette.PrimaryAccent.Dark != "#beef00" {
+		t.Fatalf("after swap, PrimaryAccent = %v, want #beef00", th)
+	}
+
+	// Arm the next wait, then edit the OLD (alpha) target's colors.toml. If
+	// the stale watch on alpha's directory was not removed on swap, this
+	// fires a spurious ApplyThemeMsg carrying alpha's (stale) content.
+	type res struct{ th *Theme }
+	ch := make(chan res, 1)
+	go func() {
+		msg := w.WaitCmd()()
+		at, _ := msg.(ApplyThemeMsg)
+		ch <- res{at.Theme}
+	}()
+
+	if err := os.WriteFile(filepath.Join(alphaTarget, "colors.toml"),
+		[]byte("background=\"#000000\"\nforeground=\"#ffffff\"\naccent=\"#ffffff\"\ncolor1=\"#ff0000\"\ncolor2=\"#00ff00\"\ncolor3=\"#ffff00\"\ncolor8=\"#888888\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case r := <-ch:
+		t.Fatalf("spurious ApplyThemeMsg fired from an edit to the stale (no-longer-current) alpha target; got accent %v; old target watch was not removed on swap", r.th)
+	case <-time.After(800 * time.Millisecond):
+		// Expected: no event from the stale target.
+	}
+
+	// Prove the watch is still live and correctly re-pointed: editing the
+	// CURRENT (beta) target's colors.toml does fire, and reflects beta's
+	// fresh content.
+	if err := os.WriteFile(filepath.Join(themes, "beta", "colors.toml"),
+		[]byte("background=\"#000000\"\nforeground=\"#ffffff\"\naccent=\"#c0ffee\"\ncolor1=\"#ff0000\"\ncolor2=\"#00ff00\"\ncolor3=\"#ffff00\"\ncolor8=\"#888888\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case r := <-ch:
+		if r.th == nil || r.th.Palette.PrimaryAccent.Dark != "#c0ffee" {
+			t.Fatalf("after editing beta target, PrimaryAccent = %v, want #c0ffee", r.th)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("watcher did not fire for beta edit within 3s")
+	}
+}

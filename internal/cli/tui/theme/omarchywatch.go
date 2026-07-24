@@ -22,6 +22,11 @@ type ApplyThemeMsg struct{ Theme *Theme }
 type OmarchyWatcher struct {
 	w    *fsnotify.Watcher
 	warn func(string)
+	// watchedTarget is the filepath.EvalSymlinks-resolved theme directory
+	// currently under watch (empty if none resolved yet). Tracked so arm()
+	// can Remove the stale watch when a theme swap repoints the symlink,
+	// instead of leaking an inotify watch on the old target forever.
+	watchedTarget string
 }
 
 // NewOmarchyWatcher starts watching ~/.config/omarchy/{current, current/theme}.
@@ -37,15 +42,37 @@ func NewOmarchyWatcher() (*OmarchyWatcher, error) {
 	return ow, nil
 }
 
-// arm (re-)adds the watch paths. fsnotify de-dupes repeated Add of the same
-// path, so calling it after every event is safe and picks up a swapped target.
+// arm (re-)adds the watch paths. It keeps two stable, never-removed watches —
+// the omarchy root and "current" (the directory that CONTAINS the "theme"
+// symlink, so a rename of "theme" fires here) — which together catch the
+// symlink swap itself. It also churns the watch on the resolved theme target
+// (needed to catch in-place colors.toml edits): on every call it re-resolves
+// the "theme" symlink and, if the target changed, Removes the watch on the
+// previous target before Adding the new one. Without this, a theme swap would
+// leave a stale inotify watch on the old target — leaking watch descriptors
+// across swaps and firing a spurious ApplyThemeMsg if the old (no-longer-
+// current) theme's colors.toml is later edited.
 func (o *OmarchyWatcher) arm() {
 	cfgRoot := omarchyThemeDir()     // .../omarchy/current/theme
 	current := filepath.Dir(cfgRoot) // .../omarchy/current
 	parent := filepath.Dir(current)  // .../omarchy
-	for _, p := range []string{parent, current, cfgRoot} {
-		_ = o.w.Add(p) // ignore errors: not-yet-existing paths fire via parent
+	_ = o.w.Add(parent)              // ignore errors: not-yet-existing paths fire via parent
+	_ = o.w.Add(current)
+
+	target, err := filepath.EvalSymlinks(cfgRoot)
+	if err != nil {
+		// No install yet, or a dangling symlink: leave watchedTarget as-is
+		// (best-effort; a later create fires on "current").
+		return
 	}
+	if target == o.watchedTarget {
+		return
+	}
+	if o.watchedTarget != "" {
+		_ = o.w.Remove(o.watchedTarget) // ignore error: watch may already be gone
+	}
+	_ = o.w.Add(target)
+	o.watchedTarget = target
 }
 
 // WaitCmd blocks for the next relevant filesystem event, re-resolves the
