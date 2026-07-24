@@ -30,7 +30,6 @@ type Glyphs struct {
 	TreeLast     string
 	ExpandOpen   string
 	ExpandClosed string
-	SortMarker   string
 	CheckboxOn   string
 	CheckboxOff  string
 	Transition   string

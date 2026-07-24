@@ -72,7 +72,6 @@ type glyphsFile struct {
 	TreeLast     *string `toml:"tree_last"`
 	ExpandOpen   *string `toml:"expand_open"`
 	ExpandClosed *string `toml:"expand_closed"`
-	SortMarker   *string `toml:"sort_marker"`
 	CheckboxOn   *string `toml:"checkbox_on"`
 	CheckboxOff  *string `toml:"checkbox_off"`
 	Transition   *string `toml:"transition"`
@@ -163,7 +162,7 @@ func (f *themeFile) toTheme() *Theme {
 		AckDone: str(g.AckDone), AckSkip: str(g.AckSkip), AckWarn: str(g.AckWarn), AckFail: str(g.AckFail),
 		TreeBranch: str(g.TreeBranch), TreeLast: str(g.TreeLast),
 		ExpandOpen: str(g.ExpandOpen), ExpandClosed: str(g.ExpandClosed),
-		SortMarker: str(g.SortMarker), CheckboxOn: str(g.CheckboxOn),
+		CheckboxOn:  str(g.CheckboxOn),
 		CheckboxOff: str(g.CheckboxOff), Transition: str(g.Transition),
 	}
 	prog := Progress{

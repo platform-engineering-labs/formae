@@ -52,7 +52,7 @@ func mergeThemeFiles(base, child *themeFile) *themeFile {
 		AckWarn: pickS(cg.AckWarn, bg.AckWarn), AckFail: pickS(cg.AckFail, bg.AckFail),
 		TreeBranch: pickS(cg.TreeBranch, bg.TreeBranch), TreeLast: pickS(cg.TreeLast, bg.TreeLast),
 		ExpandOpen: pickS(cg.ExpandOpen, bg.ExpandOpen), ExpandClosed: pickS(cg.ExpandClosed, bg.ExpandClosed),
-		SortMarker: pickS(cg.SortMarker, bg.SortMarker), CheckboxOn: pickS(cg.CheckboxOn, bg.CheckboxOn),
+		CheckboxOn:  pickS(cg.CheckboxOn, bg.CheckboxOn),
 		CheckboxOff: pickS(cg.CheckboxOff, bg.CheckboxOff), Transition: pickS(cg.Transition, bg.Transition),
 	}
 
