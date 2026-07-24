@@ -14,6 +14,7 @@ type Theme struct {
 	Progress        Progress
 	Spinner         Spinner
 	ConfirmationBar ConfirmationBar
+	Header          HeaderStyle
 }
 
 // New creates a Theme by resolving the given theme name against built-in and

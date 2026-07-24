@@ -64,3 +64,6 @@ static_frame = "◐"
 
 [confirmation_bar]
 color = "brand"
+
+[header]
+highlight = "brighten"

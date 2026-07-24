@@ -75,5 +75,6 @@ func mergeThemeFiles(base, child *themeFile) *themeFile {
 	out.Spin = spin
 
 	out.ConfBar = confBarFile{Color: pickS(child.ConfBar.Color, base.ConfBar.Color)}
+	out.Header = headerFile{Highlight: pickS(child.Header.Highlight, base.Header.Highlight)}
 	return &out
 }

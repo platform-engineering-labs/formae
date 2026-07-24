@@ -20,6 +20,7 @@ func TestLoadBuiltinQuiet(t *testing.T) {
 	assert.Equal(t, "#2563EB", th.Palette.PrimaryAccent.Light)
 	assert.Equal(t, "+", th.Glyphs.OpCreate)
 	assert.Equal(t, "brand", th.ConfirmationBar.Color)
+	assert.Equal(t, "brighten", th.Header.Highlight)
 }
 
 func TestLoadBuiltinRichInheritsQuiet(t *testing.T) {
@@ -29,6 +30,7 @@ func TestLoadBuiltinRichInheritsQuiet(t *testing.T) {
 	// overridden
 	assert.Equal(t, "#4ADE80", th.Palette.OpCreate.Dark)
 	assert.Equal(t, "severity", th.ConfirmationBar.Color)
+	assert.Equal(t, "background", th.Header.Highlight)
 	// inherited from quiet
 	assert.Equal(t, "#2563EB", th.Palette.PrimaryAccent.Light)
 	assert.Equal(t, "↻", th.Glyphs.OpReplace)

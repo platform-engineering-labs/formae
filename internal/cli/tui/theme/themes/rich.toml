@@ -63,3 +63,6 @@ static_frame = "◐"
 
 [confirmation_bar]
 color = "severity"
+
+[header]
+highlight = "background"

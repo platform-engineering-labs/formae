@@ -30,6 +30,8 @@ interval_ms = 120
 static_frame = "◐"
 [confirmation_bar]
 color = "severity"
+[header]
+highlight = "background"
 `
 
 func TestParseThemeFile(t *testing.T) {
@@ -73,4 +75,5 @@ func TestToTheme(t *testing.T) {
 	assert.Equal(t, "pulse", th.Progress.Animation)
 	assert.Equal(t, []string{"◐", "◓"}, th.Spinner.Frames)
 	assert.Equal(t, "severity", th.ConfirmationBar.Color)
+	assert.Equal(t, "background", th.Header.Highlight)
 }

@@ -21,6 +21,7 @@ type themeFile struct {
 	Prog    progressFile `toml:"progress"`
 	Spin    spinnerFile  `toml:"spinner"`
 	ConfBar confBarFile  `toml:"confirmation_bar"`
+	Header  headerFile   `toml:"header"`
 }
 
 type paletteFile struct {
@@ -93,6 +94,10 @@ type spinnerFile struct {
 
 type confBarFile struct {
 	Color *string `toml:"color"`
+}
+
+type headerFile struct {
+	Highlight *string `toml:"highlight"`
 }
 
 // parseThemeFile decodes a theme TOML document.
@@ -181,5 +186,6 @@ func (f *themeFile) toTheme() *Theme {
 		Progress:        prog,
 		Spinner:         spin,
 		ConfirmationBar: ConfirmationBar{Color: str(f.ConfBar.Color)},
+		Header:          HeaderStyle{Highlight: str(f.Header.Highlight)},
 	}
 }

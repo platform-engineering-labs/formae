@@ -13,6 +13,8 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/tuitest"
 )
 
 // runeIndex returns the rune-offset of substr in s, or -1 if not found.
@@ -170,6 +172,29 @@ func TestRenderRowDeleteUsesFullDeleteColor(t *testing.T) {
 		Render(components.Pad(opGlyph(m.th.Glyphs, opCreate)+" "+opCreate.word(), opW))
 	assert.Contains(t, deleteOut, wantDeleteOp, "delete op token should be regular weight")
 	assert.Contains(t, createOut, wantCreateOp, "create op token should be regular weight")
+}
+
+// TestRenderGroupColHeaderThemeHighlight pins the theme-driven header
+// emphasis (PLA-348): under "rich" (Header.Highlight="background") the
+// navigated column header carries a background SGR sequence, matching the
+// row cursor; under "quiet" (Header.Highlight="brighten") the navigated
+// header carries only a foreground + bold, no background.
+func TestRenderGroupColHeaderThemeHighlight(t *testing.T) {
+	tuitest.PinRendering()
+
+	richModel := makeModel(100, 32)
+	richModel.th = theme.New("rich")
+	richModel.sortHi[kindResource] = colLabel
+	richHdr := richModel.renderGroupColHeader(kindResource, 14, 30, 30, 0)
+
+	quietModel := makeModel(100, 32)
+	quietModel.th = theme.New("quiet")
+	quietModel.sortHi[kindResource] = colLabel
+	quietHdr := quietModel.renderGroupColHeader(kindResource, 14, 30, 30, 0)
+
+	assert.Contains(t, richHdr, "48;2;", "rich (background mode) navigated header must carry a background SGR sequence")
+	assert.NotContains(t, quietHdr, "48;2;", "quiet (brighten mode) navigated header must not carry a background")
+	assert.Contains(t, quietHdr, "\x1b[1;", "quiet navigated header should still render bold")
 }
 
 // TestRenderSubLinesAppear verifies cascade and policy-keep sub-lines appear

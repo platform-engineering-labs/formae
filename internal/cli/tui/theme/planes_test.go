@@ -18,9 +18,11 @@ func TestThemeHasPlanes(t *testing.T) {
 		Progress:        Progress{FillDone: "█", Animation: "pulse"},
 		Spinner:         Spinner{Frames: []string{"◐", "◓"}, IntervalMs: 120},
 		ConfirmationBar: ConfirmationBar{Color: "brand"},
+		Header:          HeaderStyle{Highlight: "background"},
 	}
 	assert.Equal(t, "+", th.Glyphs.OpCreate)
 	assert.Equal(t, "pulse", th.Progress.Animation)
 	assert.Equal(t, 120, th.Spinner.IntervalMs)
 	assert.Equal(t, "brand", th.ConfirmationBar.Color)
+	assert.Equal(t, "background", th.Header.Highlight)
 }

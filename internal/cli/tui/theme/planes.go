@@ -55,3 +55,9 @@ type Spinner struct {
 type ConfirmationBar struct {
 	Color string // "brand" | "severity"
 }
+
+// HeaderStyle is a behavior toggle for how simview column headers emphasize
+// the navigated/sorted column.
+type HeaderStyle struct {
+	Highlight string // "background" | "brighten"
+}

@@ -39,3 +39,9 @@ func TestNewThemeUnknown(t *testing.T) {
 	th := New("doesnotexist")
 	assert.Equal(t, "quiet", th.Name, "unknown theme names should fall back to quiet")
 }
+
+func TestNewThemeHeaderHighlight(t *testing.T) {
+	assert.Equal(t, "background", New("rich").Header.Highlight)
+	assert.Equal(t, "brighten", New("quiet").Header.Highlight)
+	assert.Equal(t, "brighten", New("colorblind").Header.Highlight)
+}
