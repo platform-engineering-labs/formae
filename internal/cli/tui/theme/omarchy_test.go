@@ -52,3 +52,51 @@ func TestParseOmarchyColors_Malformed(t *testing.T) {
 		t.Error("expected a parse error for malformed TOML")
 	}
 }
+
+func TestMapOmarchyPalette(t *testing.T) {
+	oc := omarchyColors{
+		Background: "#1a1b26", Foreground: "#c0caf5", Accent: "#7aa2f7",
+		SelectionBackground: "#33467c",
+		Color1:              "#f7768e", Color2: "#9ece6a", Color3: "#e0af68",
+		Color4: "#7aa2f7", Color5: "#bb9af7", Color7: "#a9b1d6", Color8: "#414868",
+	}
+	p := mapOmarchyPalette(oc)
+
+	// A representative spread of the table, and the mirror invariant.
+	if got := p.Base; got == nil || got.Light != "#1a1b26" || got.Dark != "#1a1b26" {
+		t.Errorf("Base = %+v, want both sides #1a1b26", got)
+	}
+	if got := p.PrimaryAccent; got == nil || got.Dark != "#7aa2f7" {
+		t.Errorf("PrimaryAccent = %+v, want #7aa2f7", got)
+	}
+	if got := p.Error; got == nil || got.Dark != "#f7768e" {
+		t.Errorf("Error = %+v, want #f7768e (color1)", got)
+	}
+	if got := p.OpCreate; got == nil || got.Dark != "#9ece6a" {
+		t.Errorf("OpCreate = %+v, want #9ece6a (color2)", got)
+	}
+	if got := p.Warning; got == nil || got.Dark != "#e0af68" {
+		t.Errorf("Warning = %+v, want #e0af68 (color3)", got)
+	}
+	if got := p.Selection; got == nil || got.Dark != "#33467c" {
+		t.Errorf("Selection = %+v, want #33467c", got)
+	}
+}
+
+func TestMapOmarchyPalette_Fallbacks(t *testing.T) {
+	// Only background + foreground + accent + the ANSI reds/greens present;
+	// text_secondary/border/etc. must fall back, never end up empty.
+	oc := omarchyColors{
+		Background: "#000000", Foreground: "#ffffff", Accent: "#0000ff",
+		Color1: "#ff0000", Color2: "#00ff00", Color3: "#ffff00",
+	}
+	p := mapOmarchyPalette(oc)
+	// TextSecondary has no color7 → falls back to foreground.
+	if got := p.TextSecondary; got == nil || got.Dark != "#ffffff" {
+		t.Errorf("TextSecondary = %+v, want fallback to foreground #ffffff", got)
+	}
+	// SecondaryAccent has no color5 → falls back to accent.
+	if got := p.SecondaryAccent; got == nil || got.Dark != "#0000ff" {
+		t.Errorf("SecondaryAccent = %+v, want fallback to accent #0000ff", got)
+	}
+}
