@@ -212,6 +212,12 @@ func TestPkl_FormaeConfig(t *testing.T) {
 	assert.NotNil(t, config.Network.Tailscale)
 	assert.False(t, config.Network.Tailscale.TLS)
 	assert.Equal(t, "someAuthKey", config.Network.Tailscale.AuthKey)
+
+	// cli.theme / cli.appearance are plumbed pkl → pkl model → pkgmodel; with no
+	// cli block in the fixture they carry their Config.pkl defaults. A missing
+	// field or a dropped translation would surface here as an empty string.
+	assert.Equal(t, "quiet", config.Cli.Theme)
+	assert.Equal(t, "auto", config.Cli.Appearance)
 }
 
 func TestTranslateResourcePluginConfig(t *testing.T) {

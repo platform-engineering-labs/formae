@@ -18,6 +18,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
 	"github.com/platform-engineering-labs/formae/internal/cli/banner"
 	"github.com/platform-engineering-labs/formae/internal/cli/profile/store"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/logo"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/platform-engineering-labs/formae/internal/schema"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -134,6 +135,11 @@ func AppFromContext(ctx context.Context, configFilePath, endpoint string, cmd *c
 			accentStyle := lipgloss.NewStyle().Foreground(th.Palette.SecondaryAccent)
 			return nil, fmt.Errorf("%w\n\n%s %s", err, accentStyle.Render("Configuration docs:"), banner.DocRoot+"/configuration")
 		}
+		// Re-seed lipgloss's global dark-background now that the profile's
+		// cli.appearance is known. root.go seeds from env+auto-detect before any
+		// config is loaded; the config layer sits below the FORMAE_APPEARANCE env
+		// override and above auto-detect, so it can only take effect here.
+		lipgloss.SetHasDarkBackground(logo.ResolveDarkBackground(application.Config.Cli.Appearance))
 		return application, nil
 	}
 
