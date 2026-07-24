@@ -30,9 +30,9 @@ const (
 	StateSkipped    State = "skipped"
 )
 
-// Glyph returns the leading glyph for problem states in list views;
+// glyph returns the leading glyph for problem states in list views;
 // non-problem states have none (their trailing indicator speaks).
-func Glyph(g theme.Glyphs, s State) string {
+func glyph(g theme.Glyphs, s State) string {
 	switch s {
 	case StateFailed:
 		return g.StatusFailed
@@ -68,9 +68,7 @@ func presetFrames(name string) []string {
 		return spinner.Line.Frames
 	case "dot":
 		return spinner.Dot.Frames
-	case "circle", "":
-		return []string{"◐", "◓", "◑", "◒"}
-	default:
+	default: // "circle", "" and any unrecognized name
 		return []string{"◐", "◓", "◑", "◒"}
 	}
 }

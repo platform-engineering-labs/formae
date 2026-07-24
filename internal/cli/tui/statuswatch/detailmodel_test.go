@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	tui "github.com/platform-engineering-labs/formae/internal/cli/tui"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/tuitest"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
@@ -198,6 +199,33 @@ func TestDetailModel_CancelStateLabels(t *testing.T) {
 	v := plain(dm.View(40, false))
 	assert.Contains(t, v, "finishing", "in-progress row on canceling command shows 'finishing'")
 	assert.Contains(t, v, "canceled", "canceled row shows 'canceled'")
+}
+
+// TestDetailModel_RenderStateGlyph_AllStates asserts renderStateGlyph maps
+// every row state to the themed glyph (esp. Pending → StatusPending, which
+// previously had no direct test coverage — under the quiet theme it's "·",
+// not the old hardcoded "○").
+func TestDetailModel_RenderStateGlyph_AllStates(t *testing.T) {
+	th := theme.New("quiet")
+	dm := newDetailModel(th, 100, 30)
+
+	tests := []struct {
+		name  string
+		state components.State
+		want  string
+	}{
+		{"done", components.StateDone, th.Glyphs.StatusDone},
+		{"pending", components.StatePending, th.Glyphs.StatusPending},
+		{"failed", components.StateFailed, th.Glyphs.StatusFailed},
+		{"skipped", components.StateSkipped, th.Glyphs.StatusSkipped},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := plain(dm.renderStateGlyph(updateRow{state: tc.state}, lipgloss.Color("0"), false))
+			assert.Equal(t, tc.want, got)
+		})
+	}
 }
 
 func TestDetailModel_BackReturnsTrue(t *testing.T) {

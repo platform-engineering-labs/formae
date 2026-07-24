@@ -34,7 +34,7 @@ func TestGlyph(t *testing.T) {
 		{StatePending, ""},
 	}
 	for _, tt := range tests {
-		assert.Equal(t, tt.want, Glyph(th.Glyphs, tt.state), string(tt.state))
+		assert.Equal(t, tt.want, glyph(th.Glyphs, tt.state), string(tt.state))
 	}
 }
 

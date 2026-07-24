@@ -70,6 +70,27 @@ var multiCols = [colCount]colSpec{
 	colAge:      {"Age", 6, 2, true},
 }
 
+// headerGlyph returns the themed glyph for the four status-count column
+// headers (✓ ✗ ◐ ○ under the quiet default), falling back to the column's
+// static title for everything else. multiCols carries those four glyphs as
+// static defaults because widths/priority are fixed layout, but the glyphs
+// themselves must follow the active theme like every other glyph site
+// (the leading status column, Indicator, renderStateGlyph).
+func headerGlyph(c int, g theme.Glyphs, fallback string) string {
+	switch c {
+	case colDone:
+		return g.StatusDone
+	case colFailed:
+		return g.StatusFailed
+	case colInProg:
+		return g.StatusInProgress
+	case colPending:
+		return g.StatusPending
+	default:
+		return fallback
+	}
+}
+
 const minBarWidth = 10
 
 // buildRows constructs a row for each command, computing counts and health.
@@ -275,7 +296,7 @@ func (v multiView) headerRow() string {
 			w = bw
 		}
 
-		title := spec.title
+		title := headerGlyph(c, v.th.Glyphs, spec.title)
 		if v.sortCol == c {
 			switch v.sortDir {
 			case components.SortAsc:

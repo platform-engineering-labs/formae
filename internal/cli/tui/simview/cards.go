@@ -19,7 +19,7 @@ import (
 // of styled lines (no trailing newlines). Reused verbatim by Task 14's driftview.
 //
 // Contract:
-//   - Bordered card with title-in-border (op symbol + label) in PrimaryAccent style
+//   - Bordered card with title-in-border (op symbol + label) colored per-op via opColor
 //   - Fields: Operation, Type (if set), Stack (if set)
 //   - Changes: tree with ├/└ connectors, ordered:
 //     1. "put resource under management (unmanaged → <stack>)" when OldStackName=="$unmanaged"

@@ -136,6 +136,30 @@ func TestMultiView_HeaderShowsSortIndicator(t *testing.T) {
 	assert.Contains(t, h, "Age ▼")
 }
 
+// TestMultiView_HeaderGlyphsFollowTheme asserts the ✓/✗/◐/○ column headers
+// pick up the active theme's status glyphs instead of the fixed defaults
+// baked into multiCols, mirroring what the row cells already do.
+func TestMultiView_HeaderGlyphsFollowTheme(t *testing.T) {
+	// Markers chosen to not collide with any other column title (ID, Command,
+	// Mode, Progress, Time, Age) so Contains() only matches our override.
+	th := *theme.New("formae")
+	th.Glyphs.StatusDone = "Z1"
+	th.Glyphs.StatusFailed = "Z2"
+	th.Glyphs.StatusInProgress = "Z3"
+	th.Glyphs.StatusPending = "Z4"
+	v := multiView{th: &th, width: 130} // wide enough to keep every column visible
+
+	h := plain(v.headerRow())
+	assert.Contains(t, h, "Z1", "done column header follows theme")
+	assert.Contains(t, h, "Z2", "failed column header follows theme")
+	assert.Contains(t, h, "Z3", "in-progress column header follows theme")
+	assert.Contains(t, h, "Z4", "pending column header follows theme")
+	assert.NotContains(t, h, "✓")
+	assert.NotContains(t, h, "✗")
+	assert.NotContains(t, h, "◐")
+	assert.NotContains(t, h, "○")
+}
+
 func TestMultiView_ScrollWindowFollowsCursor(t *testing.T) {
 	now := time.Now()
 	var cmds []apimodel.Command
