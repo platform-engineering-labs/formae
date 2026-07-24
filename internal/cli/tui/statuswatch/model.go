@@ -153,8 +153,8 @@ func New(th *theme.Theme, client Client, opts Options) Model {
 func (m Model) ApplyTheme(t *theme.Theme) Model {
 	m.th = t
 	m.multi.th = t
-	m.detail.th = t
-	m.query = components.NewQueryBar(t, m.query.Query())
+	m.detail = m.detail.ApplyTheme(t)
+	m.query = m.query.WithTheme(t)
 	m.spinner = components.NewSpinner(t)
 	return m
 }

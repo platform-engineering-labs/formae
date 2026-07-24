@@ -63,6 +63,13 @@ type detailModel struct {
 	// The pinned header row + separator lines (injected during SetCommand, not rebuilt every View)
 	pinnedHeader string
 	pinnedRow    string
+	// pinnedSrc/pinnedNow cache the inputs SetCommand last used to render the
+	// pinned header/row, so ApplyTheme can re-render them under a new theme
+	// without a fresh command poll. hasCommand guards against re-rendering
+	// before any command has ever been set (pinnedHeader/pinnedRow stay empty).
+	pinnedSrc  row
+	pinnedNow  time.Time
+	hasCommand bool
 	// spinner view injected from outside
 	spinView string
 	// abandonedSet is the set of resource IDs that were force-canceled; rows in
@@ -130,17 +137,42 @@ func (d detailModel) SetCommand(c apimodel.Command, r row, spinView string, now 
 		d.cursor = len(nav) - 1
 	}
 
-	// Pinned header + row reuse the multi view's renderers so they share the
-	// responsive column drops and stay aligned; Age is omitted per mockup
-	// VIEW 2, and sortHi -1 suppresses the sort-navigation highlight.
-	mv := multiView{th: d.th, rows: []row{r}, cursor: -1, sortHi: -1, width: d.width, spinView: spinView, now: now, hideAge: true, pinned: true}
+	// Cache the inputs needed to re-render the pinned strings later (ApplyTheme).
+	d.pinnedSrc = r
+	d.pinnedNow = now
+	d.hasCommand = true
+
+	return d.renderPinned()
+}
+
+// renderPinned (re)builds pinnedHeader/pinnedRow from the theme currently on
+// d and the row/now last supplied to SetCommand. It reuses the multi view's
+// renderers so they share the responsive column drops and stay aligned; Age
+// is omitted per mockup VIEW 2, and sortHi -1 suppresses the sort-navigation
+// highlight. Called from both SetCommand (initial render / data refresh) and
+// ApplyTheme (live theme swap while drilled into a command), so a theme
+// change always re-renders the pinned row instead of leaving it stale in the
+// previous theme's colors. A no-op before any command has ever been set.
+func (d detailModel) renderPinned() detailModel {
+	if !d.hasCommand {
+		return d
+	}
+	mv := multiView{th: d.th, rows: []row{d.pinnedSrc}, cursor: -1, sortHi: -1, width: d.width, spinView: d.spinView, now: d.pinnedNow, hideAge: true, pinned: true}
 	d.pinnedHeader = mv.headerRow()
 	rows := mv.renderRows(1)
 	if len(rows) > 0 {
 		d.pinnedRow = rows[0]
 	}
-
 	return d
+}
+
+// ApplyTheme swaps the detail model onto a new theme and rebuilds the cached
+// pinnedHeader/pinnedRow strings so a live theme change (e.g. the Omarchy
+// live-follow watcher firing while the user is drilled into a command) is
+// fully reflected immediately, not just on the next poll's SetCommand call.
+func (d detailModel) ApplyTheme(t *theme.Theme) detailModel {
+	d.th = t
+	return d.renderPinned()
 }
 
 // navLines computes the flat list of navigable cursor positions given current state.
