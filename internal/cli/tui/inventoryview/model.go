@@ -103,6 +103,13 @@ func (m Model) ApplyTheme(t *theme.Theme) Model {
 	return m
 }
 
+// closeWatcher releases the Omarchy live-follow watcher, if one is running.
+func (m Model) closeWatcher() {
+	if m.watcher != nil {
+		_ = m.watcher.Close()
+	}
+}
+
 // Nags returns the deduped, insertion-ordered nag messages collected across all
 // tab fetches. Intended for post-exit stderr printing (design D9).
 func (m Model) Nags() []string {
@@ -216,6 +223,7 @@ func (m Model) handleTabLoaded(msg tabLoadedMsg) (tea.Model, tea.Cmd) {
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// ctrl+c always quits, even over the help overlay.
 	if msg.Type == tea.KeyCtrlC {
+		m.closeWatcher()
 		return m, tea.Quit
 	}
 
@@ -240,14 +248,17 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch {
 	case msg.Type == tea.KeyCtrlC:
+		m.closeWatcher()
 		return m, tea.Quit
 
 	case key.Matches(msg, m.keys.Quit):
+		m.closeWatcher()
 		return m, tea.Quit
 
 	// The inventory list is the top level, so esc quits (in the detail screen
 	// esc goes back to the list). Consistent with the other TUIs.
 	case msg.Type == tea.KeyEsc:
+		m.closeWatcher()
 		return m, tea.Quit
 
 	case msg.Type == tea.KeyTab:
@@ -374,6 +385,7 @@ func (m Model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 'q':
 		// q quits from the detail screen too (esc goes back to the list).
+		m.closeWatcher()
 		return m, tea.Quit
 
 	case msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == '?':
@@ -404,6 +416,7 @@ func (m Model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // client-side substring filter. Mirrors the status-command TUI.
 func (m Model) handleQueryKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.Type == tea.KeyCtrlC {
+		m.closeWatcher()
 		return m, tea.Quit
 	}
 	var applied bool

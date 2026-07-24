@@ -75,3 +75,8 @@ func TestApplyTheme_RebuildsTabStyledCells(t *testing.T) {
 	}
 }
 
+func TestCloseWatcher_NilSafe(t *testing.T) {
+	m := New(theme.New("quiet"), nil, Options{}) // no watcher (not omarchy)
+	m.closeWatcher()                             // must not panic
+}
+
