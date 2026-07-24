@@ -26,8 +26,15 @@ func TestResolveFormaeAlias(t *testing.T) {
 	assert.Equal(t, "quiet", resolveWithDir("formae", "", silent).Name)
 }
 
-func TestResolveClassicAlias(t *testing.T) {
-	assert.Equal(t, "classic", resolveWithDir("classic", "", silent).Name)
+// TestResolveClassicFallsBackToQuiet documents the back-compat drop: classic
+// was removed as a built-in (theming is unreleased), so it is now just an
+// unknown theme name — it must warn and fall back to quiet, not resolve to
+// itself.
+func TestResolveClassicFallsBackToQuiet(t *testing.T) {
+	var warned string
+	th := resolveWithDir("classic", "", func(m string) { warned = m })
+	assert.Equal(t, "quiet", th.Name)
+	assert.Contains(t, warned, "classic")
 }
 
 func TestResolveEmptyDefaultsQuiet(t *testing.T) {

@@ -58,12 +58,12 @@ primary_accent = "#999999"
 // entirely from base's is still complete as long as every field is set.
 func TestMissingAgainstComparesPresenceNotValue(t *testing.T) {
 	base := quietRequiredFields()
-	f, err := readBuiltin("classic")
+	f, err := readBuiltin("rich")
 	require.NoError(t, err)
 	merged, err := resolveExtends(f)
 	require.NoError(t, err)
 
 	assert.Empty(t, merged.missingAgainst(base))
-	// sanity: classic's values really do differ from quiet's.
-	assert.NotEqual(t, base.Palette.Done.Light, merged.Palette.Done.Light)
+	// sanity: rich's values really do differ from quiet's.
+	assert.NotEqual(t, base.Palette.OpCreate.Light, merged.Palette.OpCreate.Light)
 }

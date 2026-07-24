@@ -39,29 +39,3 @@ func TestQuietMatchesFormaePalette(t *testing.T) {
 	assert.Equal(t, f.InProgress, q.InProgress)
 	assert.Equal(t, f.Pending, q.Pending)
 }
-
-// TestClassicMatchesClassicPalette locks classic.toml against the pre-recolor
-// ClassicPalette (the deprecated backward-compat theme).
-func TestClassicMatchesClassicPalette(t *testing.T) {
-	th, ok := loadBuiltin("classic")
-	require.True(t, ok)
-	c := th.Palette
-	f := ClassicPalette()
-
-	assert.Equal(t, f.Base, c.Base)
-	assert.Equal(t, f.Surface, c.Surface)
-	assert.Equal(t, f.TextPrimary, c.TextPrimary)
-	assert.Equal(t, f.TextSecondary, c.TextSecondary)
-	assert.Equal(t, f.TextSubtle, c.TextSubtle)
-	assert.Equal(t, f.Border, c.Border)
-	assert.Equal(t, f.Selection, c.Selection)
-	assert.Equal(t, f.PrimaryAccent, c.PrimaryAccent)
-	assert.Equal(t, f.SecondaryAccent, c.SecondaryAccent)
-	assert.Equal(t, f.Error, c.Error)
-	assert.Equal(t, f.ErrorSubtle, c.ErrorSubtle)
-	assert.Equal(t, f.ErrorBright, c.ErrorBright)
-	assert.Equal(t, f.Warning, c.Warning)
-	assert.Equal(t, f.Done, c.Done)
-	assert.Equal(t, f.InProgress, c.InProgress)
-	assert.Equal(t, f.Pending, c.Pending)
-}

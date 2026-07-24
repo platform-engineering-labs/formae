@@ -40,7 +40,7 @@ func TestLoadBuiltinUnknown(t *testing.T) {
 }
 
 func TestBuiltinNames(t *testing.T) {
-	assert.ElementsMatch(t, []string{"quiet", "rich", "colorblind", "classic"}, builtinNames())
+	assert.ElementsMatch(t, []string{"quiet", "rich", "colorblind"}, builtinNames())
 }
 
 // TestBuiltinsAreCompleteRoots guards the design decision that every built-in

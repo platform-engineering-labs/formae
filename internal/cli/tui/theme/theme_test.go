@@ -22,9 +22,11 @@ func TestNewThemeFormaeAlias(t *testing.T) {
 	assert.NotEmpty(t, th.Styles.Title.Render("test"))
 }
 
+// TestNewThemeClassic documents that classic, once a built-in, is now just
+// an unknown theme name and falls back to quiet.
 func TestNewThemeClassic(t *testing.T) {
 	th := New("classic")
-	assert.Equal(t, "classic", th.Name)
+	assert.Equal(t, "quiet", th.Name, "classic was removed as a built-in; it falls back to quiet")
 	assert.NotEmpty(t, th.Styles.Title.Render("test"))
 }
 

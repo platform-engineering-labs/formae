@@ -86,14 +86,18 @@ func TestPromptForOperations_OnlyReads(t *testing.T) {
 func TestPromptForOperations_UsesPassedTheme(t *testing.T) {
 	cmd := buildMixedCommand()
 
+	// operationSummary colors via Error/Done/TextPrimary, which rich leaves
+	// identical to quiet (rich only varies the per-operation Op* colors and
+	// confirmation_bar). colorblind does vary Error and Done from quiet, so
+	// it's the theme that actually proves per-theme variation here.
 	quiet := PromptForOperations(theme.New("quiet"), cmd)
-	classic := PromptForOperations(theme.New("classic"), cmd)
+	colorblind := PromptForOperations(theme.New("colorblind"), cmd)
 
 	assert.NotEmpty(t, quiet)
-	assert.NotEmpty(t, classic)
-	assert.NotEqual(t, quiet, classic, "output should vary with the passed theme's palette, not a hardcoded default")
+	assert.NotEmpty(t, colorblind)
+	assert.NotEqual(t, quiet, colorblind, "output should vary with the passed theme's palette, not a hardcoded default")
 
 	// Both should still carry the same plain-text content — only the coloring
 	// (derived from the passed theme) should differ.
-	assert.Equal(t, stripANSI(quiet), stripANSI(classic))
+	assert.Equal(t, stripANSI(quiet), stripANSI(colorblind))
 }
