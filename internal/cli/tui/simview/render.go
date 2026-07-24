@@ -257,6 +257,14 @@ func (m Model) renderRow(r simRow, kind rowKind, opW, labelW, typeW, stackW int,
 		labelColor = p.PrimaryAccent
 	}
 
+	// Delete rows are the exception: the whole row takes the delete op color
+	// instead of the default blue label / gray type-stack, matching the
+	// mockup. Applied last so it overrides the isCursor branches above too.
+	if r.op == opDelete {
+		labelColor = opColor(p, opDelete)
+		fgColor = opColor(p, opDelete)
+	}
+
 	baseSt := lipgloss.NewStyle().Foreground(fgColor)
 	labelSt := lipgloss.NewStyle().Foreground(labelColor)
 	if isCursor {

@@ -105,10 +105,17 @@ func renderCard(th *theme.Theme, r simRow, width int) []string {
 	}
 
 	// Build title-in-border top line: ╭─ ~ label ─────╮
+	// The op glyph and the label both carry their own (non-bold) color —
+	// Warning for delete rows (destructive), PrimaryAccent otherwise — matching
+	// pb's mockup (docs/mockups/prototypes/simulation/main.go).
 	opSymbol := opGlyph(th.Glyphs, r.op)
-	titleStr := opSymbol + " " + r.label
-	titleSt := lipgloss.NewStyle().Foreground(opColor(p, r.op))
-	titleContent := " " + titleSt.Render(titleStr) + " "
+	glyphSt := lipgloss.NewStyle().Foreground(opColor(p, r.op))
+	labelColor := p.PrimaryAccent
+	if r.op == opDelete {
+		labelColor = p.Warning
+	}
+	labelSt := lipgloss.NewStyle().Foreground(labelColor)
+	titleContent := " " + glyphSt.Render(opSymbol) + " " + labelSt.Render(r.label) + " "
 	titleW := lipgloss.Width(titleContent)
 	dashW := actualWidth - titleW - 2 // 2 = ╭ + ╮
 	if dashW < 1 {

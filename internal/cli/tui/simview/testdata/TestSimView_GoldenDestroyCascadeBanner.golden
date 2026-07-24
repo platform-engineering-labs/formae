@@ -9,12 +9,12 @@
                                                                                                     
   [1;38;2;255;133;51m▌ Resources[0m                                                                                       
   [1;38;2;232;232;232mOperation ▲   [0m[38;2;170;170;170mLabel                                              [0m[38;2;170;170;170mType[0m                             
-[48;2;58;58;58m  [0m[38;2;248;113;113;48;2;58;58;58m- delete      [0m[38;2;232;232;232;48;2;58;58;58mprimary-db                                         [0m[38;2;232;232;232;48;2;58;58;58mAWS::RDS::DBInstance[0m[48;2;58;58;58m             [0m
-  [38;2;248;113;113m- delete      [0m[38;2;129;209;219mweb-server                                         [0m[38;2;170;170;170mAWS::EC2::Instance[0m               
+[48;2;58;58;58m  [0m[38;2;248;113;113;48;2;58;58;58m- delete      [0m[38;2;248;113;113;48;2;58;58;58mprimary-db                                         [0m[38;2;248;113;113;48;2;58;58;58mAWS::RDS::DBInstance[0m[48;2;58;58;58m             [0m
+  [38;2;248;113;113m- delete      [0m[38;2;248;113;113mweb-server                                         [0m[38;2;248;113;113mAWS::EC2::Instance[0m               
       [38;2;153;153;153mdepends on: primary-db[0m                                                                        
-  [38;2;248;113;113m- delete      [0m[38;2;129;209;219mlog-group                                          [0m[38;2;170;170;170mAWS::CloudWatch::LogGroup[0m        
+  [38;2;248;113;113m- delete      [0m[38;2;248;113;113mlog-group                                          [0m[38;2;248;113;113mAWS::CloudWatch::LogGroup[0m        
       [38;2;153;153;153mdepends on: web-server[0m                                                                        
-  [38;2;248;113;113m- delete      [0m[38;2;129;209;219mapi-handler                                        [0m[38;2;170;170;170mAWS::Lambda::Function[0m            
+  [38;2;248;113;113m- delete      [0m[38;2;248;113;113mapi-handler                                        [0m[38;2;248;113;113mAWS::Lambda::Function[0m            
                                                                                                     
                                                                                                     
                                                                                                     

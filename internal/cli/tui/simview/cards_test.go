@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -87,6 +88,45 @@ func TestRenderCard_UpdateSetAddRemove(t *testing.T) {
 	// remove line
 	assert.Contains(t, p, "remove", "should have remove keyword")
 	assert.Contains(t, p, "OldParameter", "should show removed field")
+}
+
+// TestRenderCard_TitleBoldScoping verifies the card title glyph and label are
+// separate, regular-weight (non-bold) spans with independent colors — bold
+// operation tokens were reverted per maintainer feedback (bold looked messy).
+// The op glyph carries opColor; the label carries its own color: Warning for
+// delete rows, PrimaryAccent otherwise, matching pb's mockup.
+func TestRenderCard_TitleBoldScoping(t *testing.T) {
+	th := makeCardTheme()
+	p := th.Palette
+
+	updateRow := simRow{op: opUpdate, label: "primary", typ: "AWS::RDS::DBInstance"}
+	deleteRow := simRow{op: opDelete, label: "old-cache", typ: "AWS::ElastiCache::CacheCluster"}
+
+	updateOut := strings.Join(renderCard(th, updateRow, 100), "\n")
+	deleteOut := strings.Join(renderCard(th, deleteRow, 100), "\n")
+
+	// Glyph span: regular weight + op color.
+	wantUpdateGlyph := lipgloss.NewStyle().Foreground(opColor(p, opUpdate)).
+		Render(opGlyph(th.Glyphs, opUpdate))
+	wantDeleteGlyph := lipgloss.NewStyle().Foreground(opColor(p, opDelete)).
+		Render(opGlyph(th.Glyphs, opDelete))
+	assert.Contains(t, updateOut, wantUpdateGlyph, "update card glyph should be regular weight and op-colored")
+	assert.Contains(t, deleteOut, wantDeleteGlyph, "delete card glyph should be regular weight and op-colored")
+
+	// Label span: PrimaryAccent for non-delete, Warning for delete. Distinct
+	// from the glyph's op color, confirming glyph and label remain separate spans.
+	wantUpdateLabel := lipgloss.NewStyle().Foreground(p.PrimaryAccent).Render(updateRow.label)
+	wantDeleteLabel := lipgloss.NewStyle().Foreground(p.Warning).Render(deleteRow.label)
+	assert.Contains(t, updateOut, wantUpdateLabel, "update card label should be PrimaryAccent")
+	assert.Contains(t, deleteOut, wantDeleteLabel, "delete card label should be Warning")
+
+	// Bold title spans (glyph+label bundled, or glyph alone bolded) must not appear.
+	boldUpdateGlyph := lipgloss.NewStyle().Foreground(opColor(p, opUpdate)).Bold(true).
+		Render(opGlyph(th.Glyphs, opUpdate))
+	boldDeleteGlyph := lipgloss.NewStyle().Foreground(opColor(p, opDelete)).Bold(true).
+		Render(opGlyph(th.Glyphs, opDelete))
+	assert.NotContains(t, updateOut, boldUpdateGlyph, "update card glyph must not be bold")
+	assert.NotContains(t, deleteOut, boldDeleteGlyph, "delete card glyph must not be bold")
 }
 
 // TestRenderCard_NoOpSkipped verifies that NoOp changes are not rendered.
