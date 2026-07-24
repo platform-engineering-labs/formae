@@ -258,6 +258,43 @@ func TestBackfillHashedSecrets_HashesKnownSecretTypeInResourcesTableDespiteStale
 		"known-secret-type resources row must be hashed despite a stale non-opaque embedded schema")
 }
 
+func TestBackfillHashedSecrets_HashesKnownRDSPasswordFields(t *testing.T) {
+	ds := newTestDatastore(t)
+
+	// An RDS DBInstance row written before its password fields were typed as
+	// secret values: embedded schema marks neither field opaque. Both must be
+	// hashed via the hard-coded known-opaque table.
+	staleRDSSchema := pkgmodel.Schema{
+		Identifier: "AWS::RDS::DBInstance",
+		Hints: map[string]pkgmodel.FieldHint{
+			"MasterUserPassword":    {Opaque: false},
+			"TdeCredentialPassword": {Opaque: false},
+		},
+	}
+	resource := &pkgmodel.Resource{
+		Label:    "test-db",
+		Type:     "AWS::RDS::DBInstance",
+		Stack:    "test-stack",
+		NativeID: "native-db",
+		Managed:  true,
+		Schema:   staleRDSSchema,
+		Properties: json.RawMessage(
+			`{"MasterUserPassword":"stale-master-pw","TdeCredentialPassword":"stale-tde-pw"}`),
+	}
+	_, err := ds.StoreResource(resource, "seed-command")
+	require.NoError(t, err)
+
+	require.NoError(t, BackfillHashedSecrets(ds))
+
+	resources, err := ds.LoadAllResources()
+	require.NoError(t, err)
+	require.Len(t, resources, 1)
+	assert.True(t, isHashed(t, resources[0].Properties, "MasterUserPassword"),
+		"RDS MasterUserPassword must be hashed via the known-opaque table")
+	assert.True(t, isHashed(t, resources[0].Properties, "TdeCredentialPassword"),
+		"RDS TdeCredentialPassword must be hashed via the known-opaque table")
+}
+
 func TestBackfillHashedSecrets_HashesResourcesTable(t *testing.T) {
 	ds := newTestDatastore(t)
 

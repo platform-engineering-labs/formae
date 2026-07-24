@@ -32,6 +32,8 @@ import (
 // SecretValue-typed fields in the resource plugins.
 var knownOpaqueFields = map[string][]string{
 	"AWS::SecretsManager::Secret": {"SecretString"},
+	"AWS::RDS::DBInstance":        {"MasterUserPassword", "TdeCredentialPassword"},
+	"AWS::RDS::DBCluster":         {"MasterUserPassword"},
 }
 
 // BackfillHashedSecrets is a one-time, idempotent sweep that hashes opaque
