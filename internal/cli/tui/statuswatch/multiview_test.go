@@ -118,11 +118,12 @@ func TestMultiView_RunningCommandShowsSegmentedBar(t *testing.T) {
 			{State: "Success"}, {State: "Failed"}, {State: "InProgress"}, {State: "Pending"},
 		},
 	}
-	v := multiView{th: theme.New("formae"), rows: buildRows([]apimodel.Command{c}), width: 110, now: now, spinView: "◉"}
+	th := theme.New("formae")
+	v := multiView{th: th, rows: buildRows([]apimodel.Command{c}), width: 110, now: now, spinView: "◉"}
 	out := plain(strings.Join(v.renderRows(10), "\n"))
-	// Completed (done+failed) is one █ fill (red here — the command is failing),
-	// then in-progress ░ and pending ⋅. No separate ▒ failed section.
-	for _, seg := range []string{"█", "░", "⋅"} {
+	// Completed (done+failed) is one fill (red here — the command is failing),
+	// then in-progress and pending fills. No separate ▒ failed section.
+	for _, seg := range []string{th.Progress.FillDone, th.Progress.FillInProgress, th.Progress.FillPending} {
 		assert.Contains(t, out, seg)
 	}
 	assert.NotContains(t, out, "▒")
