@@ -655,6 +655,44 @@ func (d *DatastoreMSSQL) BulkStoreResources(resources []pkgmodel.Resource, comma
 	return lastVersionID, nil
 }
 
+func (d *DatastoreMSSQL) LoadAllResourceVersions() ([]datastore.ResourceVersion, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "LoadAllResourceVersions")
+	defer span.End()
+
+	rows, err := d.conn.QueryContext(ctx, `SELECT uri, version, data, ksuid FROM resources`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var versions []datastore.ResourceVersion
+	for rows.Next() {
+		var uri, version, jsonData, ksuid string
+		if err := rows.Scan(&uri, &version, &jsonData, &ksuid); err != nil {
+			return nil, err
+		}
+		var resource pkgmodel.Resource
+		if err := json.Unmarshal([]byte(jsonData), &resource); err != nil {
+			return nil, err
+		}
+		resource.Ksuid = ksuid
+		versions = append(versions, datastore.ResourceVersion{URI: uri, Version: version, Resource: &resource})
+	}
+	return versions, rows.Err()
+}
+
+func (d *DatastoreMSSQL) UpdateResourceVersionData(uri string, version string, resource *pkgmodel.Resource) error {
+	ctx, span := mssqlTracer.Start(context.Background(), "UpdateResourceVersionData")
+	defer span.End()
+
+	data, err := json.Marshal(resource)
+	if err != nil {
+		return err
+	}
+	_, err = d.conn.ExecContext(ctx, `UPDATE resources SET data = @p1 WHERE uri = @p2 AND version = @p3`, string(data), uri, version)
+	return err
+}
+
 func (d *DatastoreMSSQL) LoadResourcesByStack(stackLabel string) ([]*pkgmodel.Resource, error) {
 	ctx, span := mssqlTracer.Start(context.Background(), "LoadResourcesByStack")
 	defer span.End()

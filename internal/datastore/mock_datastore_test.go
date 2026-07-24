@@ -61,7 +61,11 @@ func (m *mockDatastore) LoadResource(_ pkgmodel.FormaeURI) (*pkgmodel.Resource, 
 func (m *mockDatastore) LoadResourceByNativeID(_, _ string) (*pkgmodel.Resource, error) {
 	return nil, nil
 }
-func (m *mockDatastore) LoadAllResources() ([]*pkgmodel.Resource, error)    { return nil, nil }
+func (m *mockDatastore) LoadAllResources() ([]*pkgmodel.Resource, error)     { return nil, nil }
+func (m *mockDatastore) LoadAllResourceVersions() ([]ResourceVersion, error) { return nil, nil }
+func (m *mockDatastore) UpdateResourceVersionData(_ string, _ string, _ *pkgmodel.Resource) error {
+	return nil
+}
 func (m *mockDatastore) LoadReapedResources() ([]*pkgmodel.Resource, error) { return nil, nil }
 func (m *mockDatastore) LatestLabelForResource(_ string) (string, error)    { return "", nil }
 func (m *mockDatastore) LoadResourceById(_ string) (*pkgmodel.Resource, error) {

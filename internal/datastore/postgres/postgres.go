@@ -1117,6 +1117,44 @@ func (d DatastorePostgres) LoadReapedResources() ([]*pkgmodel.Resource, error) {
 	return resources, rows.Err()
 }
 
+func (d DatastorePostgres) LoadAllResourceVersions() ([]datastore.ResourceVersion, error) {
+	ctx, span := tracer.Start(context.Background(), "LoadAllResourceVersions")
+	defer span.End()
+
+	rows, err := d.pool.Query(ctx, `SELECT uri, version, data, ksuid FROM resources`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var versions []datastore.ResourceVersion
+	for rows.Next() {
+		var uri, version, jsonData, ksuid string
+		if err := rows.Scan(&uri, &version, &jsonData, &ksuid); err != nil {
+			return nil, err
+		}
+		var resource pkgmodel.Resource
+		if err := json.Unmarshal([]byte(jsonData), &resource); err != nil {
+			return nil, err
+		}
+		resource.Ksuid = ksuid
+		versions = append(versions, datastore.ResourceVersion{URI: uri, Version: version, Resource: &resource})
+	}
+	return versions, rows.Err()
+}
+
+func (d DatastorePostgres) UpdateResourceVersionData(uri string, version string, resource *pkgmodel.Resource) error {
+	ctx, span := tracer.Start(context.Background(), "UpdateResourceVersionData")
+	defer span.End()
+
+	data, err := json.Marshal(resource)
+	if err != nil {
+		return err
+	}
+	_, err = d.pool.Exec(ctx, `UPDATE resources SET data = $1 WHERE uri = $2 AND version = $3`, string(data), uri, version)
+	return err
+}
+
 func (d DatastorePostgres) LoadAllResourcesByStack() (map[string][]*pkgmodel.Resource, error) {
 	ctx, span := tracer.Start(context.Background(), "LoadAllResourcesByStack")
 	defer span.End()

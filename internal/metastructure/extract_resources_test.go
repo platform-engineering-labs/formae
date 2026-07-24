@@ -106,6 +106,12 @@ func (m *mockExtractDatastore) LoadResourceByNativeID(_ string, _ string) (*pkgm
 func (m *mockExtractDatastore) LoadAllResources() ([]*pkgmodel.Resource, error) {
 	panic("not implemented")
 }
+func (m *mockExtractDatastore) LoadAllResourceVersions() ([]datastore.ResourceVersion, error) {
+	panic("not implemented")
+}
+func (m *mockExtractDatastore) UpdateResourceVersionData(_ string, _ string, _ *pkgmodel.Resource) error {
+	panic("not implemented")
+}
 func (m *mockExtractDatastore) LoadReapedResources() ([]*pkgmodel.Resource, error) {
 	panic("not implemented")
 }

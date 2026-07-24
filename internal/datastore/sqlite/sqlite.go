@@ -1350,6 +1350,44 @@ func (d DatastoreSQLite) BulkStoreResources(resources []pkgmodel.Resource, comma
 	return ret, nil
 }
 
+func (d DatastoreSQLite) LoadAllResourceVersions() ([]datastore.ResourceVersion, error) {
+	_, span := sqliteTracer.Start(context.Background(), "LoadAllResourceVersions")
+	defer span.End()
+
+	rows, err := d.conn.Query(`SELECT uri, version, data, ksuid FROM resources`)
+	if err != nil {
+		return nil, err
+	}
+	defer closeRows(rows)
+
+	var versions []datastore.ResourceVersion
+	for rows.Next() {
+		var uri, version, jsonData, ksuid string
+		if err := rows.Scan(&uri, &version, &jsonData, &ksuid); err != nil {
+			return nil, err
+		}
+		var resource pkgmodel.Resource
+		if err := json.Unmarshal([]byte(jsonData), &resource); err != nil {
+			return nil, err
+		}
+		resource.Ksuid = ksuid
+		versions = append(versions, datastore.ResourceVersion{URI: uri, Version: version, Resource: &resource})
+	}
+	return versions, rows.Err()
+}
+
+func (d DatastoreSQLite) UpdateResourceVersionData(uri string, version string, resource *pkgmodel.Resource) error {
+	_, span := sqliteTracer.Start(context.Background(), "UpdateResourceVersionData")
+	defer span.End()
+
+	data, err := json.Marshal(resource)
+	if err != nil {
+		return err
+	}
+	_, err = d.conn.Exec(`UPDATE resources SET data = ? WHERE uri = ? AND version = ?`, string(data), uri, version)
+	return err
+}
+
 func (d DatastoreSQLite) LoadAllResourcesByStack() (map[string][]*pkgmodel.Resource, error) {
 	_, span := sqliteTracer.Start(context.Background(), "LoadAllResourcesByStack")
 	defer span.End()
