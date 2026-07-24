@@ -19,6 +19,10 @@ class Props {
 
   /// Port to listen on
   port: Int(this > 0) = 8080
+
+  /// ARN of the ACM certificate. Typed member `certArn`, CLI flag `--cert-arn`.
+  @formae.Flag { name = "cert-arn" }
+  certArn: String = ""
 }
 
 forma {
@@ -34,6 +38,7 @@ forma {
 
   new queue.Queue {
     label = "q"
-    queueName = "\(properties.name)-\(properties.port)-queue"
+    // typed access to the @Flag member; injected `--cert-arn` lands here
+    queueName = "\(properties.name)-\(properties.port)-\(properties.certArn)-queue"
   }
 }

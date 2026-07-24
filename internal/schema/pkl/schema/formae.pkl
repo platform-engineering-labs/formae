@@ -459,6 +459,18 @@ open class Prop {
 
 // ---- typed CLI properties (RFC-105) ----------------------------------------
 
+/// Overrides the CLI flag / `prop:` key for a typed Props member, decoupling the
+/// statically-typed member name (e.g. `certArn`) from the flag a user passes on
+/// the CLI (e.g. `--cert-arn`). Mirrors the legacy `Prop.flag` override, but the
+/// member stays typed so `properties.certArn` resolves in editors.
+open class Flag extends Annotation {
+    name: String
+}
+
+/// flagName: the member's `@Flag` override if present, else the member name.
+function flagName(p): String =
+    p.annotations.filterIsInstance(Flag).firstOrNull?.name ?? p.name
+
 /// Resolve a reflected type to its simple name, unwrapping nullables.
 function typeName(t): String =
     if (t is reflect.DeclaredType) t.referent.name
@@ -472,7 +484,7 @@ function typeName(t): String =
 function fillProps(clazz: Class): Typed =
     new Mapping {
         for (n, p in reflect.Class(clazz).properties) {
-            [n] = let (raw = read?("prop:\(n)"))
+            [n] = let (raw = read?("prop:\(flagName(p))"))
                 if (raw == null) p.defaultValue
                 else
                     let (tn = typeName(p.type))
@@ -500,7 +512,7 @@ function renderProperties(opts: Any?): Any? =
         new Mapping {
             for (name, p in reflect.Class(opts.getClass()).properties) {
                 [name] = new Prop {
-                    flag = name
+                    flag = flagName(p)
                     default = p.defaultValue as (String|Boolean|Int|Float)?
                     value = inst[name] as (String|Boolean|Int|Float)?
                 }

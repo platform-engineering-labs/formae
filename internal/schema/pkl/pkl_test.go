@@ -302,3 +302,25 @@ func TestDeprecationWarning_LegacyArtifactsURL(t *testing.T) {
 	assert.Equal(t, "example.org", config.Artifacts.Repositories[0].URI.Host)
 	assert.Equal(t, model.RepositoryTypeBinary, config.Artifacts.Repositories[0].Type)
 }
+
+// TestPkl_TypedPropsFlagAnnotation covers @formae.Flag on a typed Props member:
+// the statically-typed member `certArn` is fed by the CLI flag / prop key
+// `cert-arn`, the injected value reaches resources via late binding, and the
+// manifest Prop reports the overridden flag name.
+func TestPkl_TypedPropsFlagAnnotation(t *testing.T) {
+	const arn = "arn:aws:acm:us-east-1:123456789012:certificate/abc"
+	props := map[string]string{"cert-arn": arn}
+
+	p := PKL{}
+	forma, err := p.Evaluate("./testdata/forma/extends_props_test.pkl", model.CommandApply, model.FormaApplyModeReconcile, props)
+	require.NoError(t, err)
+
+	jsonString := forma.ToJSON()
+
+	// Manifest: member key stays `certArn`, flag carries the override.
+	assert.Equal(t, "cert-arn", gjson.Get(jsonString, "Properties.certArn.Flag").String())
+	assert.Equal(t, arn, gjson.Get(jsonString, "Properties.certArn.Value").String())
+
+	// Injected value carried into the resource via typed access.
+	assert.Equal(t, "pel-8080-"+arn+"-queue", gjson.Get(jsonString, "Resources.0.Properties.QueueName").String())
+}
