@@ -140,3 +140,26 @@ func resolveOmarchy(dir string, warn func(string)) *Theme {
 	merged := mergeThemeFiles(base, overlay)
 	return merged.toTheme()
 }
+
+// omarchyAutoAppearance reports the appearance ("light"/"dark") the Omarchy
+// theme at dir declares, via the presence of a light.mode marker file. Returns
+// "" when dir has no colors.toml (no Omarchy theme to follow).
+func omarchyAutoAppearance(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	if _, err := os.Stat(filepath.Join(dir, "colors.toml")); err != nil {
+		return ""
+	}
+	if _, err := os.Stat(filepath.Join(dir, "light.mode")); err == nil {
+		return "light"
+	}
+	return "dark"
+}
+
+// OmarchyAutoAppearance reports the OS Omarchy theme's declared appearance
+// ("light"/"dark"), or "" when no Omarchy theme is active. Used to let
+// cli.appearance="auto" follow the OS theme under cli.theme="omarchy".
+func OmarchyAutoAppearance() string {
+	return omarchyAutoAppearance(omarchyThemeDir())
+}

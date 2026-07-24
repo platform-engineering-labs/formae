@@ -138,12 +138,26 @@ func AppFromContext(ctx context.Context, configFilePath, endpoint string, cmd *c
 		// Re-seed lipgloss's global dark-background now that the profile's
 		// cli.appearance is known. root.go seeds from env+auto-detect before any
 		// config is loaded; the config layer sits below the FORMAE_APPEARANCE env
-		// override and above auto-detect, so it can only take effect here.
-		lipgloss.SetHasDarkBackground(logo.ResolveDarkBackground(application.Config.Cli.Appearance))
+		// override and above auto-detect, so it can only take effect here. Under
+		// cli.theme="omarchy" with appearance left on auto, prefer the OS theme's
+		// own light/dark declaration over a fragile OSC-11 probe.
+		appearance := application.Config.Cli.Appearance
+		if application.Config.Cli.Theme == "omarchy" && isAuto(appearance) {
+			if osAppearance := theme.OmarchyAutoAppearance(); osAppearance != "" {
+				appearance = osAppearance
+			}
+		}
+		lipgloss.SetHasDarkBackground(logo.ResolveDarkBackground(appearance))
 		return application, nil
 	}
 
 	return nil, api.AppNotFoundError{}
+}
+
+// isAuto reports whether appearance is unset or explicitly "auto" (the two
+// cases that defer to auto-detection rather than pinning light/dark).
+func isAuto(appearance string) bool {
+	return appearance == "" || strings.EqualFold(appearance, "auto")
 }
 
 // NOTE Cannot use cmd.Context because it is not part of the lifecycle yet

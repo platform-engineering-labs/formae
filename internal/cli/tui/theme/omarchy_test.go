@@ -197,3 +197,23 @@ func containsAny(xs []string, sub string) bool {
 	}
 	return false
 }
+
+func TestOmarchyAutoAppearance(t *testing.T) {
+	// Dark theme: colors.toml present, no light.mode marker.
+	dark := writeOmarchyFixture(t)
+	// Light theme: add a light.mode marker.
+	light := writeOmarchyFixture(t)
+	if err := os.WriteFile(filepath.Join(light, "light.mode"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := omarchyAutoAppearance(dark); got != "dark" {
+		t.Errorf("no marker → %q, want dark", got)
+	}
+	if got := omarchyAutoAppearance(light); got != "light" {
+		t.Errorf("light.mode marker → %q, want light", got)
+	}
+	if got := omarchyAutoAppearance(filepath.Join(t.TempDir(), "nope")); got != "" {
+		t.Errorf("no omarchy theme → %q, want empty", got)
+	}
+}
