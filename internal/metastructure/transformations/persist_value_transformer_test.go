@@ -212,7 +212,7 @@ func TestComputeValueHash_ComplexString(t *testing.T) {
 	assert.Regexp(t, "^[a-f0-9]+$", result)
 }
 
-func TestPersistValueTransformer_SkipsAlreadyHashedValues(t *testing.T) {
+func TestPersistValueTransformer_HashesHexShapedValueWithoutMarker(t *testing.T) {
 	transformer := NewPersistValueTransformer()
 
 	knownHash := "5c76fcf4400da3b4804d70b91af20703d483f2c5860cc2f8d59592a1da8d2121"
@@ -232,9 +232,164 @@ func TestPersistValueTransformer_SkipsAlreadyHashedValues(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
+	// Guards the false-positive fix: a $value that merely looks like a 64-hex
+	// hash but carries no $hashed marker is treated as plaintext and hashed,
+	// not trusted by shape alone.
 	parsed := gjson.Parse(string(result.Properties))
-	resultHash := parsed.Get("MasterUserPassword.$value").String()
+	masterUserPassword := parsed.Get("MasterUserPassword")
+	resultHash := masterUserPassword.Get("$value").String()
 
-	assert.Equal(t, knownHash, resultHash)
+	assert.NotEqual(t, knownHash, resultHash)
 	assert.Len(t, resultHash, 64)
+	assert.True(t, masterUserPassword.Get("$hashed").Bool())
+}
+
+func schemaWithOpaque(field string) pkgmodel.Schema {
+	return pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{field: {Opaque: true}}}
+}
+
+func TestApplyToResource_HashesBareStringAtSchemaOpaquePath(t *testing.T) {
+	r := &pkgmodel.Resource{
+		Schema:     schemaWithOpaque("SecretString"),
+		Properties: json.RawMessage(`{"Name":"n","SecretString":"super-secret-password"}`),
+	}
+	out, err := NewPersistValueTransformer().ApplyToResource(r)
+	require.NoError(t, err)
+
+	var props map[string]any
+	require.NoError(t, json.Unmarshal(out.Properties, &props))
+	assert.Equal(t, "n", props["Name"], "non-secret field untouched")
+
+	sv := props["SecretString"].(map[string]any)
+	assert.Equal(t, "Opaque", sv["$visibility"])
+	assert.Equal(t, true, sv["$hashed"])
+	assert.Len(t, sv["$value"].(string), 64)
+	assert.NotEqual(t, "super-secret-password", sv["$value"])
+}
+
+func TestApplyToResource_HashesEnvelopedOpaque(t *testing.T) {
+	r := &pkgmodel.Resource{
+		Schema:     pkgmodel.Schema{},
+		Properties: json.RawMessage(`{"SecretString":{"$value":"s","$visibility":"Opaque","$strategy":"Update"}}`),
+	}
+	out, err := NewPersistValueTransformer().ApplyToResource(r)
+	require.NoError(t, err)
+	var props map[string]any
+	require.NoError(t, json.Unmarshal(out.Properties, &props))
+	sv := props["SecretString"].(map[string]any)
+	assert.Equal(t, true, sv["$hashed"])
+	assert.Len(t, sv["$value"].(string), 64)
+}
+
+func TestApplyToResource_IdempotentAndSkipsClear(t *testing.T) {
+	r := &pkgmodel.Resource{
+		Schema:     schemaWithOpaque("SecretString"),
+		Properties: json.RawMessage(`{"Public":"64charsofhexbutclear0000000000000000000000000000000000000000","SecretString":{"$value":"abc","$visibility":"Opaque","$hashed":true}}`),
+	}
+	out, err := NewPersistValueTransformer().ApplyToResource(r)
+	require.NoError(t, err)
+	var props map[string]any
+	require.NoError(t, json.Unmarshal(out.Properties, &props))
+	assert.Equal(t, "64charsofhexbutclear0000000000000000000000000000000000000000", props["Public"], "clear 64-hex not hashed")
+	assert.Equal(t, "abc", props["SecretString"].(map[string]any)["$value"], "already-hashed left as-is")
+}
+
+func TestApplyToResource_HashesTopLevelScalarPatchOpValue(t *testing.T) {
+	r := &pkgmodel.Resource{
+		Schema:        schemaWithOpaque("SecretString"),
+		PatchDocument: json.RawMessage(`[{"op":"replace","path":"/SecretString","value":"super-secret-password"}]`),
+	}
+	out, err := NewPersistValueTransformer().ApplyToResource(r)
+	require.NoError(t, err)
+	var ops []map[string]any
+	require.NoError(t, json.Unmarshal(out.PatchDocument, &ops))
+
+	value, ok := ops[0]["value"].(map[string]any)
+	require.True(t, ok, "hashed patch-op value must be a typed envelope, not a bare string")
+	assert.Equal(t, true, value["$hashed"])
+	assert.Equal(t, "Opaque", value["$visibility"])
+	assert.NotEqual(t, "super-secret-password", value["$value"])
+	assert.Len(t, value["$value"].(string), 64)
+}
+
+// TestApplyToResource_PatchOpNonSecretValueCollidingWithSecretPlaintextIsUntouched guards
+// against content-based substitution: a non-secret patch op whose value happens to equal a
+// schema-opaque field's plaintext must not be rewritten. The old valueMap-based substitution
+// keyed purely on value equality, so it corrupted unrelated fields and left a bare (unmarked)
+// digest behind that hashOpaqueField would treat as plaintext and re-hash on the next boot
+// backfill.
+func TestApplyToResource_PatchOpNonSecretValueCollidingWithSecretPlaintextIsUntouched(t *testing.T) {
+	r := &pkgmodel.Resource{
+		Schema: schemaWithOpaque("SecretString"),
+		Properties: json.RawMessage(`{
+            "SecretString": "same"
+        }`),
+		PatchDocument: json.RawMessage(`[{"op":"replace","path":"/Description","value":"same"}]`),
+	}
+	out, err := NewPersistValueTransformer().ApplyToResource(r)
+	require.NoError(t, err)
+
+	var ops []map[string]any
+	require.NoError(t, json.Unmarshal(out.PatchDocument, &ops))
+
+	value, ok := ops[0]["value"].(string)
+	require.True(t, ok, "non-secret patch-op value must remain a bare string")
+	assert.Equal(t, "same", value)
+}
+
+// TestApplyToResource_HashesOpaqueEnvelopePatchOpValue covers a patch op whose value is an
+// explicit opaque envelope not matched by schema path (e.g. a nested/non-top-level field). It
+// must be hashed structurally, and a second pass must be a no-op.
+func TestApplyToResource_HashesOpaqueEnvelopePatchOpValue(t *testing.T) {
+	r := &pkgmodel.Resource{
+		Schema:        pkgmodel.Schema{},
+		PatchDocument: json.RawMessage(`[{"op":"replace","path":"/Whatever","value":{"$value":"s","$visibility":"Opaque"}}]`),
+	}
+
+	firstRun, err := NewPersistValueTransformer().ApplyToResource(r)
+	require.NoError(t, err)
+
+	var ops []map[string]any
+	require.NoError(t, json.Unmarshal(firstRun.PatchDocument, &ops))
+	value, ok := ops[0]["value"].(map[string]any)
+	require.True(t, ok, "opaque envelope patch-op value must remain a map")
+	assert.Equal(t, true, value["$hashed"])
+	assert.Equal(t, "Opaque", value["$visibility"])
+	assert.NotEqual(t, "s", value["$value"])
+	assert.Len(t, value["$value"].(string), 64)
+
+	secondRun, err := NewPersistValueTransformer().ApplyToResource(firstRun)
+	require.NoError(t, err)
+	assert.Equal(t, string(firstRun.PatchDocument), string(secondRun.PatchDocument),
+		"re-hashing an already-hashed envelope patch-op value must be a byte-identical no-op")
+}
+
+// TestApplyToResource_PatchOpHashingIsIdempotent guards against hash-of-hash: both
+// hashSensitiveDataIfComplete (on FormaCommand completion) and BackfillHashedSecrets
+// (on agent boot) re-run ApplyToResource against an already-hashed patch document.
+// Re-running the transform on its own output must be a no-op.
+func TestApplyToResource_PatchOpHashingIsIdempotent(t *testing.T) {
+	r := &pkgmodel.Resource{
+		Schema:        schemaWithOpaque("SecretString"),
+		PatchDocument: json.RawMessage(`[{"op":"replace","path":"/SecretString","value":"super-secret-password"}]`),
+	}
+
+	firstRun, err := NewPersistValueTransformer().ApplyToResource(r)
+	require.NoError(t, err)
+
+	var ops []map[string]any
+	require.NoError(t, json.Unmarshal(firstRun.PatchDocument, &ops))
+	value, ok := ops[0]["value"].(map[string]any)
+	require.True(t, ok, "hashed patch-op value must be a typed envelope")
+	require.Equal(t, true, value["$hashed"])
+	require.NotEqual(t, "super-secret-password", value["$value"])
+	require.Len(t, value["$value"].(string), 64)
+
+	// Re-run against the already-hashed output (as boot-time BackfillHashedSecrets
+	// or a resumed completion pass would).
+	secondRun, err := NewPersistValueTransformer().ApplyToResource(firstRun)
+	require.NoError(t, err)
+
+	assert.Equal(t, string(firstRun.PatchDocument), string(secondRun.PatchDocument),
+		"re-hashing an already-hashed patch document must be a byte-identical no-op")
 }

@@ -38,11 +38,34 @@ var jsonpathParser = jsonpath.NewParser(jsonpath.WithRegistry(registry.New()))
 // of nullable Listing/Mapping fields) to prevent cloud API rejections for fields like K8S probes
 // that require handler types when non-empty.
 func convertResourceForPlugin(res pkgmodel.Resource) (pkgmodel.Resource, error) {
+	return convertResourceForPluginWith(res, resolver.ConvertToPluginFormat)
+}
+
+// convertResourceForPluginRead is the Read-context counterpart of
+// convertResourceForPlugin: it prepares DesiredState/PriorState as context for a
+// plugin Read call (sync, discovery, or the pre-update out-of-band check), which
+// never writes those values to the cloud. Unlike convertResourceForPlugin it does
+// NOT reject an already-hashed schema-opaque field — that hash is the steady state
+// once a secret has been persisted (PLA-320), and rejecting it here would make
+// every sync/OOB-check Read of a secret-bearing resource fail permanently.
+func convertResourceForPluginRead(res pkgmodel.Resource) (pkgmodel.Resource, error) {
+	return convertResourceForPluginWith(res, resolver.ConvertExistingStateForRead)
+}
+
+// convertResourceForPluginWith converts a resource's properties to plugin format
+// by extracting $value from opaque value structures (e.g., {"$value": "secret", "$visibility": "Opaque"})
+// becomes just "secret". This must be done before sending to the plugin since the resolver
+// lives in the agent and plugins may be remote.
+//
+// It also strips nested empty collections ([]/{}  artifacts from PKL's null rendering
+// of nullable Listing/Mapping fields) to prevent cloud API rejections for fields like K8S probes
+// that require handler types when non-empty.
+func convertResourceForPluginWith(res pkgmodel.Resource, convert func(json.RawMessage) (json.RawMessage, error)) (pkgmodel.Resource, error) {
 	if res.Properties == nil {
 		return res, nil
 	}
 
-	convertedProps, err := resolver.ConvertToPluginFormat(res.Properties)
+	convertedProps, err := convert(res.Properties)
 	if err != nil {
 		return res, err
 	}
@@ -363,14 +386,18 @@ func synchronize(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen
 		return handleProgressUpdate(gen.PID{}, state, data, notFound, proc)
 	}
 
-	// Convert properties to plugin format (extracts $value from opaque structures)
-	convertedResource, err := convertResourceForPlugin(data.resourceUpdate.DesiredState)
+	// Convert properties to plugin format (extracts $value from opaque structures).
+	// This state only ever prepares a Read call — it never writes DesiredState/PriorState
+	// to the cloud — so use the Read-safe conversion: a schema-opaque field already hashed
+	// at rest (the steady state for a secret, PLA-320) must not be rejected here, or every
+	// sync/OOB-check Read of a secret-bearing resource would fail permanently.
+	convertedResource, err := convertResourceForPluginRead(data.resourceUpdate.DesiredState)
 	if err != nil {
 		proc.Log().Error("failed to convert resource properties for plugin: %v", err)
 		data.resourceUpdate.MarkAsFailed()
 		return StateFinishedWithError, data, nil, nil
 	}
-	convertedExisting, err := convertResourceForPlugin(data.resourceUpdate.PriorState)
+	convertedExisting, err := convertResourceForPluginRead(data.resourceUpdate.PriorState)
 	if err != nil {
 		proc.Log().Error("failed to convert existing resource properties for plugin: %v", err)
 		data.resourceUpdate.MarkAsFailed()

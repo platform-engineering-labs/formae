@@ -27,9 +27,13 @@ func EnforceSetOnceAndCompareResourceForUpdate(existing, new *pkgmodel.Resource,
 		return false, nil, err
 	}
 
-	// Hash the filtered properties ONLY for comparison (like verses like)
+	// Hash the filtered properties ONLY for comparison (like verses like).
+	// The temp resource carries the schema so schema-keyed opaque fields
+	// (PersistValueTransformer) are hashed here the same way they are hashed
+	// on persist — otherwise a stored-hashed secret compares unequal to the
+	// re-submitted desired plaintext and produces a spurious update.
 	transformer := transformations.NewPersistValueTransformer()
-	tempResource := &pkgmodel.Resource{Properties: filteredRawProps}
+	tempResource := &pkgmodel.Resource{Schema: new.Schema, Properties: filteredRawProps}
 	hashedForComparison, err := transformer.ApplyToResource(tempResource)
 	if err != nil {
 		return false, nil, err
@@ -101,20 +105,25 @@ func canonicalizeHintedFields(props json.RawMessage, schema pkgmodel.Schema) jso
 // "Unchanged" is decided exactly as the update gate decides whole-resource
 // change: hash the desired (wrapped) properties with PersistValueTransformer and
 // compare the resulting opaque $value to the stored $value. Keyed on
-// $visibility == Opaque, so it covers opaque fields whether or not they are also
-// writeOnly or createOnly, and never touches non-opaque fields. Inputs are the
-// wrapped {$strategy,$visibility,$value} forms, so call this before
-// ConvertToPluginFormat unwraps them. Inputs are not mutated; stripped copies
-// are returned.
-func SuppressUnchangedOpaqueValues(existing, desired json.RawMessage) (json.RawMessage, json.RawMessage, error) {
+// $visibility == Opaque OR schema-declared Opaque (schema is passed in so a
+// bare-scalar schema-opaque field — no inline $visibility envelope, e.g. a
+// SecretsManager SecretString — is recognized too), so it covers opaque fields
+// whether or not they are also writeOnly or createOnly, and never touches
+// non-opaque fields. Inputs are the wrapped {$strategy,$visibility,$value} (or
+// bare, for schema-opaque) forms, so call this before ConvertToPluginFormat
+// unwraps them. Inputs are not mutated; stripped copies are returned.
+func SuppressUnchangedOpaqueValues(existing, desired json.RawMessage, schema pkgmodel.Schema) (json.RawMessage, json.RawMessage, error) {
 	if len(existing) == 0 || len(desired) == 0 {
 		return existing, desired, nil
 	}
 
 	// Hash the desired opaque values the same way the gate and persistence do,
-	// so the comparison cannot drift from the gate's decision.
+	// so the comparison cannot drift from the gate's decision. Pass the schema
+	// so a schema-keyed opaque field is hashed here too — otherwise it is
+	// invisible to this function and its stored hash slips through to
+	// ConvertToPluginFormat, which rejects it (PLA-320 guard).
 	transformer := transformations.NewPersistValueTransformer()
-	hashed, err := transformer.ApplyToResource(&pkgmodel.Resource{Properties: desired})
+	hashed, err := transformer.ApplyToResource(&pkgmodel.Resource{Schema: schema, Properties: desired})
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to hash desired properties for opaque comparison: %w", err)
 	}
@@ -128,12 +137,19 @@ func SuppressUnchangedOpaqueValues(existing, desired json.RawMessage) (json.RawM
 	// filterSetOnceProps hash/freeze opaque values nested under arrays too, so
 	// they are equally subject to the churn this guards against).
 	var opaquePaths []string
+	seenPaths := make(map[string]bool)
+	addOpaquePath := func(p string) {
+		if !seenPaths[p] {
+			seenPaths[p] = true
+			opaquePaths = append(opaquePaths, p)
+		}
+	}
 	var walk func(prefix string, node gjson.Result)
 	walk = func(prefix string, node gjson.Result) {
 		switch {
 		case node.IsObject():
 			if node.Get("$visibility").String() == "Opaque" {
-				opaquePaths = append(opaquePaths, prefix)
+				addOpaquePath(prefix)
 				return
 			}
 			node.ForEach(func(key, val gjson.Result) bool {
@@ -151,6 +167,15 @@ func SuppressUnchangedOpaqueValues(existing, desired json.RawMessage) (json.RawM
 		walk(key.String(), val)
 		return true
 	})
+
+	// Schema-declared opaque fields are top-level and may arrive as bare
+	// scalars (no inline $visibility envelope) — the walk above only finds
+	// enveloped values, so add these explicitly.
+	for _, field := range schema.Opaque() {
+		if desiredResult.Get(field).Exists() {
+			addOpaquePath(field)
+		}
+	}
 
 	strippedExisting := string(existing)
 	strippedDesired := string(desired)

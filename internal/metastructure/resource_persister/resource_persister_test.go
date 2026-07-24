@@ -1827,3 +1827,118 @@ func TestResourcePersister_SyncRead_NoEvictionWithEmptyConditions(t *testing.T) 
 	require.NoError(t, loadErr)
 	assert.NotNil(t, loaded, "unmanaged row must not be evicted when filter has no conditions")
 }
+
+// TestResourcePersister_ReadOfUnchangedSecretDoesNotDrift covers a resource whose
+// schema marks a field Opaque (secret). The stored row holds the hashed
+// representation (via ApplyToResource on Create). A subsequent sync Read that reads
+// back the SAME plaintext secret from the cloud must not be seen as drift: comparing
+// the freshly-hashed copy (secretSafeResource) against the stored hashed copy
+// (currentResource) must converge to equal, so no re-persist happens. Comparing the
+// stored hash against the raw plaintext DesiredState (as before this fix) would never
+// be equal and would re-persist on every sync.
+func TestResourcePersister_ReadOfUnchangedSecretDoesNotDrift(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+
+	_, err = ds.CreateTarget(&pkgmodel.Target{Label: "test-target", Namespace: "aws"})
+	require.NoError(t, err)
+
+	resourceKsuid := util.NewID()
+	schema := pkgmodel.Schema{
+		Fields: []string{"Password"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"Password": {Opaque: true},
+		},
+	}
+
+	createUpdate := resource_update.ResourceUpdate{
+		DesiredState: pkgmodel.Resource{
+			Label:      "secret-resource",
+			Type:       "FakeAWS::RDS::Instance",
+			Properties: json.RawMessage(`{"Password":"super-secret"}`),
+			Stack:      "test-stack",
+			Target:     "test-target",
+			Ksuid:      resourceKsuid,
+			NativeID:   "rds-1",
+			Schema:     schema,
+			Managed:    true,
+		},
+		ResourceTarget: pkgmodel.Target{Label: "test-target", Namespace: "aws"},
+		State:          resource_update.ResourceUpdateStateSuccess,
+		StackLabel:     "test-stack",
+		ProgressResult: []plugin.TrackedProgress{
+			{
+				ProgressResult: resource.ProgressResult{
+					Operation:          resource.OperationCreate,
+					OperationStatus:    resource.OperationStatusSuccess,
+					NativeID:           "rds-1",
+					ResourceProperties: json.RawMessage(`{"Password":"super-secret"}`),
+				},
+				ResourceType: "FakeAWS::RDS::Instance",
+				StartTs:      util.TimeNow(),
+				ModifiedTs:   util.TimeNow(),
+			},
+		},
+	}
+
+	createResult := persister.Call(sender, resource_update.PersistResourceUpdate{
+		CommandID:         "create-cmd",
+		ResourceOperation: resource_update.OperationCreate,
+		PluginOperation:   resource.OperationCreate,
+		ResourceUpdate:    createUpdate,
+	})
+	require.NoError(t, createResult.Error)
+	createHash, ok := createResult.Response.(string)
+	require.True(t, ok)
+	require.NotEmpty(t, createHash)
+
+	// Confirm the stored row is hashed, not plaintext.
+	stored, loadErr := ds.LoadResource(createUpdate.DesiredState.URI())
+	require.NoError(t, loadErr)
+	require.NotContains(t, string(stored.Properties), "super-secret",
+		"stored resource must hold the hashed secret, not the plaintext")
+
+	// A sync Read reports the SAME secret, as bare plaintext, straight from the cloud
+	// (this is what a real Read operation returns - the plugin has no notion of hashing).
+	readUpdate := resource_update.ResourceUpdate{
+		DesiredState: pkgmodel.Resource{
+			Label:      "secret-resource",
+			Type:       "FakeAWS::RDS::Instance",
+			Properties: json.RawMessage(`{"Password":"super-secret"}`),
+			Stack:      "test-stack",
+			Target:     "test-target",
+			Ksuid:      resourceKsuid,
+			NativeID:   "rds-1",
+			Schema:     schema,
+			Managed:    true,
+		},
+		ResourceTarget: pkgmodel.Target{Label: "test-target", Namespace: "aws"},
+		State:          resource_update.ResourceUpdateStateSuccess,
+		StackLabel:     "test-stack",
+		ProgressResult: []plugin.TrackedProgress{
+			{
+				ProgressResult: resource.ProgressResult{
+					Operation:          resource.OperationRead,
+					OperationStatus:    resource.OperationStatusSuccess,
+					NativeID:           "rds-1",
+					ResourceProperties: json.RawMessage(`{"Password":"super-secret"}`),
+				},
+				ResourceType: "FakeAWS::RDS::Instance",
+				StartTs:      util.TimeNow(),
+				ModifiedTs:   util.TimeNow(),
+			},
+		},
+	}
+
+	readResult := persister.Call(sender, resource_update.PersistResourceUpdate{
+		CommandID:         "sync-cmd",
+		ResourceOperation: resource_update.OperationRead,
+		PluginOperation:   resource.OperationRead,
+		ResourceUpdate:    readUpdate,
+	})
+	require.NoError(t, readResult.Error)
+	readHash, ok := readResult.Response.(string)
+	require.True(t, ok)
+	assert.Empty(t, readHash,
+		"a read-back of an unchanged secret must not be treated as drift and re-persisted")
+}

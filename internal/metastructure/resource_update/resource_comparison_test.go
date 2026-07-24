@@ -490,3 +490,42 @@ func TestGate_HintedResolvableLeaf_DifferentContent_IsChange(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, hasChanges, "differing resolvable envelope $value must be detected as a change")
 }
+
+// TestEnforceSetOnce_NoSpuriousUpdateForUnchangedSecret asserts that a
+// schema-opaque field which is already hashed in the stored (existing)
+// resource, and re-submitted as plaintext in the desired (new) resource,
+// does not register as a change when the plaintext hashes to the same
+// digest. The comparison temp resource must be built with the schema so the
+// PersistValueTransformer hashes the desired plaintext before comparing like
+// with like.
+func TestEnforceSetOnce_NoSpuriousUpdateForUnchangedSecret(t *testing.T) {
+	schema := pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{"SecretString": {Opaque: true}}}
+	// existing = already-hashed stored state
+	hashed := (&pkgmodel.Value{Value: "super-secret", Visibility: pkgmodel.VisibilityOpaque}).Hash()
+	existing := &pkgmodel.Resource{Schema: schema,
+		Properties: json.RawMessage(`{"SecretString":{"$value":"` + hashed.Value.(string) + `","$visibility":"Opaque","$hashed":true}}`)}
+	// new = desired plaintext, same secret
+	newRes := &pkgmodel.Resource{Schema: schema,
+		Properties: json.RawMessage(`{"SecretString":"super-secret"}`)}
+
+	hasChanges, _, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, newRes, schema)
+	require.NoError(t, err)
+	assert.False(t, hasChanges, "unchanged secret must not register as a change")
+}
+
+// TestEnforceSetOnce_GenuineSecretRotation_IsChange is the behavioural
+// counterpart to the no-spurious-update test above: a genuinely rotated
+// secret must still be detected as a change once the comparison temp
+// resource is schema-aware.
+func TestEnforceSetOnce_GenuineSecretRotation_IsChange(t *testing.T) {
+	schema := pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{"SecretString": {Opaque: true}}}
+	hashed := (&pkgmodel.Value{Value: "super-secret", Visibility: pkgmodel.VisibilityOpaque}).Hash()
+	existing := &pkgmodel.Resource{Schema: schema,
+		Properties: json.RawMessage(`{"SecretString":{"$value":"` + hashed.Value.(string) + `","$visibility":"Opaque","$hashed":true}}`)}
+	newRes := &pkgmodel.Resource{Schema: schema,
+		Properties: json.RawMessage(`{"SecretString":"rotated-secret"}`)}
+
+	hasChanges, _, err := resource_update.EnforceSetOnceAndCompareResourceForUpdate(existing, newRes, schema)
+	require.NoError(t, err)
+	assert.True(t, hasChanges, "rotated secret must be detected as a change")
+}

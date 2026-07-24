@@ -26,9 +26,6 @@ func (pv *PersistValueTransformer) ApplyToResource(resource *pkgmodel.Resource) 
 		return nil, fmt.Errorf("resource cannot be nil")
 	}
 
-	// Create a map to track original -> hashed value substitutions
-	valueMap := make(map[string]string)
-
 	transformedResource := &pkgmodel.Resource{
 		Label:    resource.Label,
 		Type:     resource.Type,
@@ -41,7 +38,7 @@ func (pv *PersistValueTransformer) ApplyToResource(resource *pkgmodel.Resource) 
 	}
 
 	if resource.Properties != nil {
-		transformedProps, err := pv.transformRawProps(resource.Properties, valueMap)
+		transformedProps, err := pv.transformRawProps(resource.Properties, resource.Schema)
 		if err != nil {
 			return nil, fmt.Errorf("failed to transform properties: %w", err)
 		}
@@ -49,16 +46,15 @@ func (pv *PersistValueTransformer) ApplyToResource(resource *pkgmodel.Resource) 
 	}
 
 	if resource.ReadOnlyProperties != nil {
-		transformedReadOnly, err := pv.transformRawProps(resource.ReadOnlyProperties, valueMap)
+		transformedReadOnly, err := pv.transformRawProps(resource.ReadOnlyProperties, resource.Schema)
 		if err != nil {
 			return nil, fmt.Errorf("failed to transform read-only properties: %w", err)
 		}
 		transformedResource.ReadOnlyProperties = transformedReadOnly
 	}
 
-	// Transform PatchDocument using valueMap substitutions
 	if resource.PatchDocument != nil {
-		transformedPatchDoc, err := pv.transformPatchDocument(resource.PatchDocument, valueMap)
+		transformedPatchDoc, err := pv.transformPatchDocument(resource.PatchDocument, resource.Schema)
 		if err != nil {
 			return nil, fmt.Errorf("failed to transform patch document: %w", err)
 		}
@@ -68,65 +64,57 @@ func (pv *PersistValueTransformer) ApplyToResource(resource *pkgmodel.Resource) 
 	return transformedResource, nil
 }
 
-func (pv *PersistValueTransformer) transformRawProps(properties json.RawMessage, valueMap map[string]string) (json.RawMessage, error) {
+func (pv *PersistValueTransformer) transformRawProps(properties json.RawMessage, schema pkgmodel.Schema) (json.RawMessage, error) {
 	if len(properties) == 0 {
 		return json.RawMessage("{}"), nil
 	}
-
 	var props map[string]any
 	if err := json.Unmarshal(properties, &props); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal properties: %w", err)
 	}
 
-	err := pv.processProps(props, valueMap)
-	if err != nil {
-		return nil, fmt.Errorf("failed to process properties: %w", err)
+	opaqueFields := make(map[string]bool)
+	for _, f := range schema.Opaque() {
+		opaqueFields[f] = true
 	}
 
+	if err := pv.processProps(props, opaqueFields); err != nil {
+		return nil, fmt.Errorf("failed to process properties: %w", err)
+	}
 	result, err := json.Marshal(props)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal transformed properties: %w", err)
 	}
-
 	return result, nil
 }
 
-func (pv *PersistValueTransformer) processProps(m map[string]any, valueMap map[string]string) error {
-	for _, v := range m {
+// processProps hashes (a) any top-level property named in opaqueFields (schema-keyed,
+// first cut = top-level scalars) and (b) any nested map carrying a $visibility=="Opaque"
+// envelope. Idempotent: values already marked $hashed are skipped.
+func (pv *PersistValueTransformer) processProps(m map[string]any, opaqueFields map[string]bool) error {
+	for key, v := range m {
+		if opaqueFields[key] {
+			hashed, ok := pv.hashOpaqueField(v)
+			if ok {
+				m[key] = hashed
+				continue
+			}
+		}
 		switch val := v.(type) {
 		case map[string]any:
 			if visibility, ok := val["$visibility"].(string); ok && visibility == "Opaque" {
-				originalValue := val["$value"]
-
-				// Skip if already hashed
-				if valueStr, ok := originalValue.(string); ok && isAlreadyHashed(valueStr) {
-					continue
-				}
-
-				value := &pkgmodel.Value{
-					Value:      originalValue,
-					Visibility: visibility,
-				}
-				if strategy, ok := val["$strategy"].(string); ok {
-					value.Strategy = strategy
-				}
-
-				hashedValue := value.Hash()
-				val["$value"] = hashedValue.Value
-
-				// Store the mapping: original -> hashed
-				if originalStr := fmt.Sprintf("%v", originalValue); originalStr != "" {
-					valueMap[originalStr] = fmt.Sprintf("%v", hashedValue.Value)
+				if hashed, done := pv.hashEnvelope(val); done {
+					m[key] = hashed
 				}
 			} else {
-				if err := pv.processProps(val, valueMap); err != nil {
+				if err := pv.processProps(val, nil); err != nil {
 					return err
 				}
 			}
 		case []any:
 			for _, elem := range val {
 				if elemMap, ok := elem.(map[string]any); ok {
-					if err := pv.processProps(elemMap, valueMap); err != nil {
+					if err := pv.processProps(elemMap, nil); err != nil {
 						return err
 					}
 				}
@@ -136,8 +124,45 @@ func (pv *PersistValueTransformer) processProps(m map[string]any, valueMap map[s
 	return nil
 }
 
-// transformPatchDocument substitutes any original opaque values with their hashed equivalents
-func (pv *PersistValueTransformer) transformPatchDocument(patchDoc json.RawMessage, valueMap map[string]string) (json.RawMessage, error) {
+// hashOpaqueField hashes a schema-opaque property value. It accepts a bare scalar
+// (wrapping it into a hashed opaque envelope) or an existing envelope map.
+func (pv *PersistValueTransformer) hashOpaqueField(v any) (map[string]any, bool) {
+	if m, ok := v.(map[string]any); ok {
+		return pv.hashEnvelope(m)
+	}
+	// Bare scalar: wrap + hash.
+	value := &pkgmodel.Value{Value: v, Visibility: pkgmodel.VisibilityOpaque}
+	hashed := value.Hash()
+	return map[string]any{"$value": hashed.Value, "$visibility": pkgmodel.VisibilityOpaque, "$hashed": true}, true
+}
+
+// hashEnvelope hashes an existing {$value,$visibility,...} map in place, unless already $hashed.
+func (pv *PersistValueTransformer) hashEnvelope(val map[string]any) (map[string]any, bool) {
+	if h, ok := val["$hashed"].(bool); ok && h {
+		return val, false
+	}
+	original := val["$value"]
+	value := &pkgmodel.Value{Value: original, Visibility: pkgmodel.VisibilityOpaque}
+	if strategy, ok := val["$strategy"].(string); ok {
+		value.Strategy = strategy
+	}
+	hashed := value.Hash()
+	val["$value"] = hashed.Value
+	val["$hashed"] = true
+	return val, true
+}
+
+// transformPatchDocument hashes patch-op values purely structurally:
+//   - if the op's path names a schema-opaque field, hash a bare scalar value (or leave an
+//     already-$hashed envelope alone);
+//   - if the op's value is itself an opaque envelope ({"$visibility":"Opaque",...}), hash it
+//     in place unless it already carries $hashed:true.
+//
+// We deliberately do NOT substitute values by content match against other hashed properties:
+// that both corrupted non-secret fields that happened to collide with a secret's plaintext and
+// produced a bare (unmarked) digest, which hashOpaqueField treats as plaintext and re-hashes on
+// the next boot backfill (hash-of-hash).
+func (pv *PersistValueTransformer) transformPatchDocument(patchDoc json.RawMessage, schema pkgmodel.Schema) (json.RawMessage, error) {
 	if len(patchDoc) == 0 {
 		return patchDoc, nil
 	}
@@ -147,11 +172,39 @@ func (pv *PersistValueTransformer) transformPatchDocument(patchDoc json.RawMessa
 		return nil, fmt.Errorf("failed to unmarshal patch document: %w", err)
 	}
 
+	opaqueFields := make(map[string]bool)
+	for _, f := range schema.Opaque() {
+		opaqueFields["/"+f] = true
+	}
 	for i, op := range patchOps {
-		if value, hasValue := op["value"]; hasValue {
-			valueStr := fmt.Sprintf("%v", value)
-			if hashedValue, found := valueMap[valueStr]; found {
-				patchOps[i]["value"] = hashedValue
+		value, hasValue := op["value"]
+		if !hasValue {
+			continue
+		}
+		if path, _ := op["path"].(string); opaqueFields[path] {
+			if m, ok := value.(map[string]any); ok {
+				if h, ok := m["$hashed"].(bool); ok && h {
+					// Already a hashed envelope — idempotent, leave as-is.
+					continue
+				}
+			}
+			if s, ok := value.(string); ok {
+				hashed := (&pkgmodel.Value{Value: s, Visibility: pkgmodel.VisibilityOpaque}).Hash()
+				patchOps[i]["value"] = map[string]any{
+					"$value":      hashed.Value,
+					"$visibility": pkgmodel.VisibilityOpaque,
+					"$hashed":     true,
+				}
+				continue
+			}
+		}
+		// Not a schema-opaque path, but the value itself may be an explicit opaque
+		// envelope (e.g. a patch op targeting a non-top-level opaque field).
+		if m, ok := value.(map[string]any); ok {
+			if visibility, ok := m["$visibility"].(string); ok && visibility == "Opaque" {
+				if hashed, done := pv.hashEnvelope(m); done {
+					patchOps[i]["value"] = hashed
+				}
 			}
 		}
 	}
@@ -162,17 +215,4 @@ func (pv *PersistValueTransformer) transformPatchDocument(patchDoc json.RawMessa
 	}
 
 	return json.RawMessage(transformedPatchDoc), nil
-}
-
-// isAlreadyHashed checks if a string looks like a SHA-256 hash (64 hex characters)
-func isAlreadyHashed(value string) bool {
-	if len(value) != 64 {
-		return false
-	}
-	for _, r := range value {
-		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
-			return false
-		}
-	}
-	return true
 }

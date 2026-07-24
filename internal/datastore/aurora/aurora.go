@@ -3699,7 +3699,12 @@ func (d *DatastoreAuroraDataAPI) BulkStoreResourceUpdates(commandID string, upda
 				:remaining_resolvables, :reference_labels, :previous_properties)
 			ON CONFLICT (command_id, ksuid, operation) DO UPDATE SET
 				state = EXCLUDED.state,
-				modified_ts = EXCLUDED.modified_ts
+				modified_ts = EXCLUDED.modified_ts,
+				resource = EXCLUDED.resource,
+				existing_resource = EXCLUDED.existing_resource,
+				previous_properties = EXCLUDED.previous_properties,
+				progress_result = EXCLUDED.progress_result,
+				most_recent_progress = EXCLUDED.most_recent_progress
 		`
 
 		params := []types.SqlParameter{

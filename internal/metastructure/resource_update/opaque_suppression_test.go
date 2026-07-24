@@ -147,6 +147,51 @@ func TestUpdate_NonWriteOnlyOpaqueUnchanged_SiblingEdit_NoValueOp(t *testing.T) 
 	assert.NotRegexp(t, anySHA256, string(patchDoc))
 }
 
+// TestUpdate_SchemaKeyedOpaqueUnchanged_SiblingEdit_NoValueOp covers a schema-declared
+// opaque field (Hints[field].Opaque, e.g. a SecretsManager SecretString) that arrives as a
+// BARE scalar with no inline $visibility envelope — the shape produced when a plugin marks
+// a field opaque via schema rather than the caller wrapping it explicitly. The desired-side
+// walk in SuppressUnchangedOpaqueValues only recognized enveloped ($visibility=="Opaque")
+// values; a bare schema-opaque scalar was invisible to it, so an unrelated sibling edit left
+// the stored hash on the existing side and the plaintext on the desired side both in the
+// patch inputs, which ConvertToPluginFormat then rejected outright (PLA-320 guard) instead
+// of silently suppressing the unchanged field.
+func TestUpdate_SchemaKeyedOpaqueUnchanged_SiblingEdit_NoValueOp(t *testing.T) {
+	schema := pkgmodel.Schema{
+		Fields: []string{"SecretString", "Name"},
+		Hints:  map[string]pkgmodel.FieldHint{"SecretString": {Opaque: true}},
+	}
+	storedHash := pkgmodel.ComputeValueHash("super-secret-password")
+	existing := opaqueRes("r", schema, `{"SecretString":{"$hashed":true,"$value":"`+storedHash+`","$visibility":"Opaque"},"Name":"old"}`)
+	desired := opaqueRes("r", schema, `{"SecretString":"super-secret-password","Name":"new"}`)
+
+	patchDoc := updatePatchFor(t, existing, desired)
+	byPath := opsByPath(t, patchDoc)
+
+	assert.NotContains(t, byPath, "/SecretString", "unchanged schema-keyed opaque value must not enter the patch")
+	require.Contains(t, byPath, "/Name", "sibling change must still produce an op")
+	assert.NotRegexp(t, anySHA256, string(patchDoc), "no stored hash may leak into the patch")
+}
+
+// TestUpdate_SchemaKeyedOpaqueChanged_CarriesCleartext is the rotation counterpart: a
+// genuinely changed schema-keyed opaque bare scalar must still surface in the patch.
+func TestUpdate_SchemaKeyedOpaqueChanged_CarriesCleartext(t *testing.T) {
+	schema := pkgmodel.Schema{
+		Fields: []string{"SecretString", "Name"},
+		Hints:  map[string]pkgmodel.FieldHint{"SecretString": {Opaque: true}},
+	}
+	storedHash := pkgmodel.ComputeValueHash("old-secret")
+	existing := opaqueRes("r", schema, `{"SecretString":{"$hashed":true,"$value":"`+storedHash+`","$visibility":"Opaque"},"Name":"x"}`)
+	desired := opaqueRes("r", schema, `{"SecretString":"new-secret","Name":"x"}`)
+
+	patchDoc := updatePatchFor(t, existing, desired)
+	byPath := opsByPath(t, patchDoc)
+
+	require.Contains(t, byPath, "/SecretString", "changed schema-keyed opaque value must appear in the patch")
+	assert.Equal(t, "new-secret", byPath["/SecretString"].Value)
+	assert.NotRegexp(t, anySHA256, string(patchDoc))
+}
+
 // PLA-35 C2: an UNCHANGED opaque createOnly value must not phantom-replace the
 // resource when a sibling changes — the factory must plan one in-place update,
 // not a destroy+create.
@@ -191,7 +236,7 @@ func TestSuppressUnchangedOpaqueValues_Decisions(t *testing.T) {
 		existing := json.RawMessage(`{"secret":` + opaqueLeaf("Update", pkgmodel.ComputeValueHash("s")) + `,"name":"old"}`)
 		desired := json.RawMessage(`{"secret":` + opaqueLeaf("Update", "s") + `,"name":"new"}`)
 
-		strippedExisting, strippedDesired, err := SuppressUnchangedOpaqueValues(existing, desired)
+		strippedExisting, strippedDesired, err := SuppressUnchangedOpaqueValues(existing, desired, pkgmodel.Schema{})
 		require.NoError(t, err)
 		assert.NotContains(t, string(strippedDesired), "secret")
 		assert.NotContains(t, string(strippedExisting), "secret")
@@ -202,16 +247,38 @@ func TestSuppressUnchangedOpaqueValues_Decisions(t *testing.T) {
 		existing := json.RawMessage(`{"secret":` + opaqueLeaf("Update", pkgmodel.ComputeValueHash("old")) + `}`)
 		desired := json.RawMessage(`{"secret":` + opaqueLeaf("Update", "new") + `}`)
 
-		_, strippedDesired, err := SuppressUnchangedOpaqueValues(existing, desired)
+		_, strippedDesired, err := SuppressUnchangedOpaqueValues(existing, desired, pkgmodel.Schema{})
 		require.NoError(t, err)
 		assert.Contains(t, string(strippedDesired), "secret")
+	})
+
+	t.Run("schema-keyed bare-scalar unchanged dropped from both sides", func(t *testing.T) {
+		schema := pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{"secret": {Opaque: true}}}
+		existing := json.RawMessage(`{"secret":` + opaqueLeaf("Update", pkgmodel.ComputeValueHash("s")) + `,"name":"old"}`)
+		desired := json.RawMessage(`{"secret":"s","name":"new"}`)
+
+		strippedExisting, strippedDesired, err := SuppressUnchangedOpaqueValues(existing, desired, schema)
+		require.NoError(t, err)
+		assert.NotContains(t, string(strippedDesired), "secret")
+		assert.NotContains(t, string(strippedExisting), "secret")
+		assert.Contains(t, string(strippedDesired), "name")
+	})
+
+	t.Run("schema-keyed bare-scalar changed kept", func(t *testing.T) {
+		schema := pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{"secret": {Opaque: true}}}
+		existing := json.RawMessage(`{"secret":` + opaqueLeaf("Update", pkgmodel.ComputeValueHash("old")) + `}`)
+		desired := json.RawMessage(`{"secret":"new"}`)
+
+		_, strippedDesired, err := SuppressUnchangedOpaqueValues(existing, desired, schema)
+		require.NoError(t, err)
+		assert.Contains(t, string(strippedDesired), "new")
 	})
 
 	t.Run("non-opaque field untouched", func(t *testing.T) {
 		existing := json.RawMessage(`{"token":{"$visibility":"Clear","$value":"a"}}`)
 		desired := json.RawMessage(`{"token":{"$visibility":"Clear","$value":"a"}}`)
 
-		_, strippedDesired, err := SuppressUnchangedOpaqueValues(existing, desired)
+		_, strippedDesired, err := SuppressUnchangedOpaqueValues(existing, desired, pkgmodel.Schema{})
 		require.NoError(t, err)
 		assert.Contains(t, string(strippedDesired), "token")
 	})
@@ -220,7 +287,7 @@ func TestSuppressUnchangedOpaqueValues_Decisions(t *testing.T) {
 		existing := json.RawMessage(`{"name":"x"}`)
 		desired := json.RawMessage(`{"secret":` + opaqueLeaf("Update", "first") + `,"name":"x"}`)
 
-		_, strippedDesired, err := SuppressUnchangedOpaqueValues(existing, desired)
+		_, strippedDesired, err := SuppressUnchangedOpaqueValues(existing, desired, pkgmodel.Schema{})
 		require.NoError(t, err)
 		assert.Contains(t, string(strippedDesired), "secret")
 	})
@@ -229,7 +296,7 @@ func TestSuppressUnchangedOpaqueValues_Decisions(t *testing.T) {
 		existing := json.RawMessage(`{"login":{"password":` + opaqueLeaf("Update", pkgmodel.ComputeValueHash("p")) + `}}`)
 		desired := json.RawMessage(`{"login":{"password":` + opaqueLeaf("Update", "p") + `}}`)
 
-		_, strippedDesired, err := SuppressUnchangedOpaqueValues(existing, desired)
+		_, strippedDesired, err := SuppressUnchangedOpaqueValues(existing, desired, pkgmodel.Schema{})
 		require.NoError(t, err)
 		assert.NotContains(t, string(strippedDesired), "password")
 	})
@@ -238,7 +305,7 @@ func TestSuppressUnchangedOpaqueValues_Decisions(t *testing.T) {
 		existing := json.RawMessage(`{"users":[{"password":` + opaqueLeaf("Update", pkgmodel.ComputeValueHash("p")) + `}],"name":"old"}`)
 		desired := json.RawMessage(`{"users":[{"password":` + opaqueLeaf("Update", "p") + `}],"name":"new"}`)
 
-		strippedExisting, strippedDesired, err := SuppressUnchangedOpaqueValues(existing, desired)
+		strippedExisting, strippedDesired, err := SuppressUnchangedOpaqueValues(existing, desired, pkgmodel.Schema{})
 		require.NoError(t, err)
 		assert.NotContains(t, string(strippedDesired), "$value", "unchanged array-nested opaque value must be dropped")
 		assert.NotContains(t, string(strippedExisting), "$value")
@@ -249,7 +316,7 @@ func TestSuppressUnchangedOpaqueValues_Decisions(t *testing.T) {
 		existing := json.RawMessage(`{"users":[{"password":` + opaqueLeaf("Update", pkgmodel.ComputeValueHash("p1")) + `}]}`)
 		desired := json.RawMessage(`{"users":[{"password":` + opaqueLeaf("Update", "p2") + `}]}`)
 
-		_, strippedDesired, err := SuppressUnchangedOpaqueValues(existing, desired)
+		_, strippedDesired, err := SuppressUnchangedOpaqueValues(existing, desired, pkgmodel.Schema{})
 		require.NoError(t, err)
 		assert.Contains(t, string(strippedDesired), "p2", "changed array-nested opaque value must be kept")
 	})

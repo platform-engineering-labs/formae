@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 )
 
 const (
@@ -25,6 +26,7 @@ type Value struct {
 	Strategy   string `json:"$strategy,omitempty"`
 	Visibility string `json:"$visibility,omitempty"` // Visibility of the value
 	Value      any    `json:"$value,omitempty"`      // The actual value or hashed value, if applicable
+	Hashed     bool   `json:"$hashed,omitempty"`     // True when Value holds the SHA-256 digest, not plaintext
 }
 
 func (v *Value) IsOpaque() bool {
@@ -109,13 +111,22 @@ func (v *Value) Hash() *Value {
 	if v.Value == nil {
 		return v // Return as-is if no value to hash
 	}
+	if v.Hashed {
+		return v // Already hashed — do not double-hash
+	}
 
-	// Create a new Value with the same metadata but hashed value
-	hashedValue := &Value{
+	return &Value{
 		Strategy:   v.Strategy,
 		Visibility: v.Visibility,
 		Value:      v.computeHash(),
+		Hashed:     true,
 	}
+}
 
-	return hashedValue
+// LogValue implements slog.LogValuer so opaque values never appear in logs.
+func (v *Value) LogValue() slog.Value {
+	if v.IsOpaque() {
+		return slog.StringValue("<redacted>")
+	}
+	return slog.StringValue(v.GetStringValue())
 }

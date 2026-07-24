@@ -505,6 +505,27 @@ func (m *propertyMerger) mergeObject(path string, userVal, pluginVal gjson.Resul
 		return
 	}
 
+	// Opaque-value envelope ({"$value":...,"$visibility":"Opaque"[,"$hashed":true]})
+	// where the plugin actually returned something at this path AS A BARE SCALAR (e.g.
+	// a secret store's GetSecretValue-equivalent never re-wraps it on read): recursing
+	// field-by-field below would try to match the envelope's own keys
+	// ($value/$visibility/$hashed) against that bare scalar (which has no sub-fields)
+	// and silently preserve the OLD envelope verbatim — for a $hashed:true envelope,
+	// the stored hash would never be replaced by the freshly-read plaintext, so the
+	// PLA-320 plugin-boundary guard would permanently reject this field on every
+	// subsequent use. Replace the envelope's $value with the plugin's live value
+	// (dropping $hashed — it no longer holds a hash) and keep the visibility/strategy
+	// metadata. When the plugin did NOT return this path at all (e.g. a Create response
+	// with no ResourceProperties), fall through to the general recursive merge below,
+	// which correctly preserves the user's envelope unchanged.
+	if userVal.Get("$visibility").String() == pkgmodel.VisibilityOpaque && pluginVal.Exists() && !pluginVal.IsObject() {
+		cleanPath := m.cleanPath(path)
+		updated, _ := sjson.Set(userVal.Raw, "$value", pluginVal.Value())
+		updated, _ = sjson.Delete(updated, "$hashed")
+		*m.result, _ = sjson.SetRaw(*m.result, cleanPath, updated)
+		return
+	}
+
 	// Not a $ref or $embed object - recursively merge each field
 	userVal.ForEach(func(key, val gjson.Result) bool {
 		childPath := m.buildChildPath(path, key.String())

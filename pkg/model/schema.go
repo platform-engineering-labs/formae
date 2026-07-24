@@ -39,14 +39,15 @@ const (
 )
 
 type FieldHint struct {
-	CreateOnly         bool `json:"CreateOnly" pkl:"CreateOnly"`
-	WriteOnly          bool `json:"WriteOnly" pkl:"WriteOnly"`
-	Required           bool `json:"Required" pkl:"Required"`
-	RequiredOnCreate   bool `json:"RequiredOnCreate" pkl:"RequiredOnCreate"`
-	RequiredOnUpdate   bool `json:"RequiredOnUpdate" pkl:"RequiredOnUpdate"`
-	HasProviderDefault bool `json:"HasProviderDefault" pkl:"HasProviderDefault"`
+	CreateOnly         bool     `json:"CreateOnly" pkl:"CreateOnly"`
+	WriteOnly          bool     `json:"WriteOnly" pkl:"WriteOnly"`
+	Required           bool     `json:"Required" pkl:"Required"`
+	RequiredOnCreate   bool     `json:"RequiredOnCreate" pkl:"RequiredOnCreate"`
+	RequiredOnUpdate   bool     `json:"RequiredOnUpdate" pkl:"RequiredOnUpdate"`
+	HasProviderDefault bool     `json:"HasProviderDefault" pkl:"HasProviderDefault"`
+	Opaque             bool     `json:"Opaque" pkl:"Opaque"`         // NEW: this property is the resource's secret value
 	AttachesTo         bool     `json:"AttachesTo" pkl:"AttachesTo"` // DEPRECATED: kept for one release; engine derives EdgeKind from this when set.
-	EdgeKind           EdgeKind `json:"EdgeKind" pkl:"EdgeKind"`    // NEW
+	EdgeKind           EdgeKind `json:"EdgeKind" pkl:"EdgeKind"`     // NEW
 
 	IndexField   string            `json:"IndexField" pkl:"IndexField"`
 	UpdateMethod FieldUpdateMethod `json:"UpdateMethod" pkl:"UpdateMethod"`
@@ -113,6 +114,10 @@ func (s Schema) RequiredOnUpdate() []string {
 
 func (s Schema) HasProviderDefault() []string {
 	return filterFields(s, func(h FieldHint) bool { return h.HasProviderDefault }, true)
+}
+
+func (s Schema) Opaque() []string {
+	return filterFields(s, func(h FieldHint) bool { return h.Opaque }, true)
 }
 
 // FormatHints returns field→format for every field whose FieldHint declares a
