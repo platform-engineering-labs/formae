@@ -174,18 +174,60 @@ func TestResolveOmarchy_Malformed(t *testing.T) {
 }
 
 func TestResolve_OmarchyRoutesToOmarchyResolver(t *testing.T) {
-	// With no Omarchy install, Resolve("omarchy") must warn + fall back to quiet
-	// (proving the name is routed to resolveOmarchy, not treated as unknown).
-	t.Setenv("HOME", t.TempDir())          // empty config dir → no colors.toml
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	var warned []string
-	th := resolveWithDir("omarchy", "", func(m string) { warned = append(warned, m) })
-	if th.Name != "quiet" {
-		t.Errorf("Name = %q, want quiet (omarchy fallback)", th.Name)
-	}
-	if len(warned) == 0 || !containsAny(warned, "omarchy") {
-		t.Errorf("expected an omarchy-specific warning, got %v", warned)
-	}
+	t.Run("success path proves routing", func(t *testing.T) {
+		// Install a fixture Omarchy theme at the real omarchyThemeDir path
+		// (driven by XDG_CONFIG_HOME) and confirm resolveWithDir("omarchy", ...)
+		// produces the Omarchy-derived theme. The unknown-name→quiet fallback
+		// can never set Name="omarchy" or pick up this accent, so this only
+		// passes if the "omarchy" name is actually routed to resolveOmarchy.
+		tmp := t.TempDir()
+		t.Setenv("HOME", tmp)
+		t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, ".config"))
+
+		themeDir := filepath.Join(tmp, ".config", "omarchy", "current", "theme")
+		if err := os.MkdirAll(themeDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		const fixtureAccent = "#7aa2f7"
+		body := `background = "#1a1b26"
+foreground = "#c0caf5"
+accent = "` + fixtureAccent + `"
+color1 = "#f7768e"
+color2 = "#9ece6a"
+color3 = "#e0af68"
+`
+		if err := os.WriteFile(filepath.Join(themeDir, "colors.toml"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		var warned []string
+		th := resolveWithDir("omarchy", "", func(m string) { warned = append(warned, m) })
+		if th.Name != "omarchy" {
+			t.Errorf("Name = %q, want omarchy", th.Name)
+		}
+		if th.Palette.PrimaryAccent.Dark != fixtureAccent {
+			t.Errorf("PrimaryAccent.Dark = %+v, want %q (from Omarchy fixture, unreachable via the quiet fallback)",
+				th.Palette.PrimaryAccent, fixtureAccent)
+		}
+		if len(warned) != 0 {
+			t.Errorf("no warning expected on a successful Omarchy resolve, got %v", warned)
+		}
+	})
+
+	t.Run("missing install still warns and falls back to quiet", func(t *testing.T) {
+		// With no Omarchy install, Resolve("omarchy") must warn + fall back to
+		// quiet rather than silently succeeding.
+		t.Setenv("HOME", t.TempDir()) // empty config dir → no colors.toml
+		t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+		var warned []string
+		th := resolveWithDir("omarchy", "", func(m string) { warned = append(warned, m) })
+		if th.Name != "quiet" {
+			t.Errorf("Name = %q, want quiet (omarchy fallback)", th.Name)
+		}
+		if len(warned) == 0 || !containsAny(warned, "omarchy") {
+			t.Errorf("expected an omarchy-specific warning, got %v", warned)
+		}
+	})
 }
 
 // containsAny reports whether any string in xs contains sub.
