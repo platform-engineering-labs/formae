@@ -34,8 +34,7 @@ type GenerateSourcesResult struct {
 	// has an existing project pinned to a different core schema version than
 	// this binary emits. Generation already used the corrected version
 	// in-memory (so the file was written), but the on-disk project was left
-	// untouched — the CLI decides whether to apply the upgrade to it via
-	// UpgradeProjectSchemaVersion.
+	// untouched — the caller decides whether to apply the upgrade to it.
 	SchemaVersionUpgrade *SchemaVersionUpgrade
 }
 
@@ -48,6 +47,11 @@ type SchemaVersionUpgrade struct {
 	Current string
 	// Target is the version this binary emits and would upgrade to.
 	Target string
+	// Apply performs the on-disk upgrade (rewrite + re-resolve), returning any
+	// non-fatal warnings. It is bound by the plugin that detected the mismatch,
+	// so callers apply it without knowing the concrete schema. Called only on
+	// explicit consent.
+	Apply func() ([]string, error)
 }
 
 // SerializeOptions controls how resources are serialized by a schema plugin.
@@ -83,12 +87,6 @@ type SchemaPlugin interface {
 	Evaluate(path string, cmd model.Command, mode model.FormaApplyMode, props map[string]string) (*model.Forma, error)
 	SerializeForma(resources *model.Forma, options *SerializeOptions) (string, error)
 	GenerateSourceCode(forma *model.Forma, targetPath string, includes []string, options *SerializeOptions) (GenerateSourcesResult, error)
-	// UpgradeProjectSchemaVersion rewrites the on-disk project's core schema
-	// dependency in projectDir to version and re-resolves. It applies the
-	// upgrade advertised by GenerateSourcesResult.SchemaVersionUpgrade and
-	// returns any non-fatal warnings. Plugins that don't support extract
-	// return errors.ErrUnsupported.
-	UpgradeProjectSchemaVersion(projectDir, version string) ([]string, error)
 	ProjectInit(path string, include []string, schemaLocation SchemaLocation) error
 	ProjectProperties(path string) (map[string]model.Prop, error)
 }

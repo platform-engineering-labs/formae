@@ -144,10 +144,6 @@ func (j YAML) GenerateSourceCode(forma *model.Forma, targetPath string, includes
 	return schema.GenerateSourcesResult{}, errors.ErrUnsupported
 }
 
-func (j YAML) UpgradeProjectSchemaVersion(projectDir, version string) ([]string, error) {
-	return nil, errors.ErrUnsupported
-}
-
 func (j YAML) ProjectInit(path string, include []string, schemaLocation schema.SchemaLocation) error {
 	return errors.ErrUnsupported
 }

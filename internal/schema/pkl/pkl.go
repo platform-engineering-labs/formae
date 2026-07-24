@@ -513,7 +513,7 @@ func (p PKL) GenerateSourceCode(forma *pkgmodel.Forma, path string, includes []s
 		//
 		// The on-disk PklProject is deliberately NOT rewritten here — that
 		// would drop a surprise diff into the user's tree. Instead the mismatch
-		// is reported so the CLI can offer to apply it (UpgradeProjectSchemaVersion).
+		// is reported with a bound Apply the caller invokes only on consent.
 		schemaVersion := coreSchemaVersion(formae.Version)
 		if schemaVersion != "0.0.0" {
 			bumped, current := bumpFormaeCoreDep(deps, schemaVersion)
@@ -523,6 +523,7 @@ func (p PKL) GenerateSourceCode(forma *pkgmodel.Forma, path string, includes []s
 					ProjectDir: parentDir,
 					Current:    current,
 					Target:     schemaVersion,
+					Apply:      func() ([]string, error) { return upgradeProjectFormaeVersion(parentDir, schemaVersion) },
 				}
 			}
 		}
@@ -575,13 +576,14 @@ func (p PKL) GenerateSourceCode(forma *pkgmodel.Forma, path string, includes []s
 	return res, nil
 }
 
-// UpgradeProjectSchemaVersion rewrites the formae core dependency in the
+// upgradeProjectFormaeVersion rewrites the formae core dependency in the
 // PklProject under projectDir to version, then clears the stale deps.json and
 // re-resolves so the project evaluates against the new version. Re-resolve is
 // best-effort: a failure (e.g. offline) is returned as a warning rather than an
 // error, since the PklProject itself was already updated. A no-op (dep absent
-// or already at version) returns (nil, nil).
-func (p PKL) UpgradeProjectSchemaVersion(projectDir, version string) ([]string, error) {
+// or already at version) returns (nil, nil). Bound into a
+// schema.SchemaVersionUpgrade.Apply by GenerateSourceCode.
+func upgradeProjectFormaeVersion(projectDir, version string) ([]string, error) {
 	projectFile := filepath.Join(projectDir, ProjectFile)
 	changed, err := rewriteFormaeCoreVersion(projectFile, version)
 	if err != nil {

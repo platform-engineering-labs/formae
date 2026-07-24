@@ -39,9 +39,6 @@ var (
 	generateFn = func(a *app.App, forma *pkgmodel.Forma, targetPath, outputSchema string, schemaLocation schema.SchemaLocation) (schema.GenerateSourcesResult, error) {
 		return a.GenerateSourceCode(forma, targetPath, outputSchema, schemaLocation)
 	}
-	upgradeFn = func(a *app.App, outputSchema, projectDir, version string) ([]string, error) {
-		return a.UpgradeProjectSchemaVersion(outputSchema, projectDir, version)
-	}
 )
 
 // defaultPromptPath shows a huh text-input pre-filled with defaultVal and
@@ -234,7 +231,7 @@ func runExtractCore(a *app.App, opts *ExtractOptions) error {
 	}
 
 	if u := res.SchemaVersionUpgrade; u != nil {
-		if err := handleSchemaVersionUpgrade(a, th, warnStyle, opts, res.TargetPath, u); err != nil {
+		if err := handleSchemaVersionUpgrade(th, warnStyle, opts, res.TargetPath, u); err != nil {
 			return err
 		}
 	}
@@ -270,7 +267,7 @@ func runExtractCore(a *app.App, opts *ExtractOptions) error {
 // is prompted (recommended). Otherwise — declined, or no TTY — a nag explains
 // how to upgrade manually. The on-disk project is only ever written on explicit
 // consent, so extract never drops a surprise diff into the user's tree.
-func handleSchemaVersionUpgrade(a *app.App, th *theme.Theme, warnStyle lipgloss.Style, opts *ExtractOptions, targetPath string, u *schema.SchemaVersionUpgrade) error {
+func handleSchemaVersionUpgrade(th *theme.Theme, warnStyle lipgloss.Style, opts *ExtractOptions, targetPath string, u *schema.SchemaVersionUpgrade) error {
 	projectFile := u.ProjectDir + "/PklProject"
 
 	apply := opts.Yes
@@ -291,7 +288,7 @@ func handleSchemaVersionUpgrade(a *app.App, th *theme.Theme, warnStyle lipgloss.
 		return nil
 	}
 
-	warnings, err := upgradeFn(a, opts.OutputSchema, u.ProjectDir, u.Target)
+	warnings, err := u.Apply()
 	if err != nil {
 		return fmt.Errorf("failed to update formae schema version in '%s': %v", projectFile, err)
 	}

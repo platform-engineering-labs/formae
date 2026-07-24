@@ -13,7 +13,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/platform-engineering-labs/formae/internal/cli/app"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/platform-engineering-labs/formae/internal/schema"
 )
@@ -54,55 +53,48 @@ func TestValidateExtractOptions(t *testing.T) {
 func TestHandleSchemaVersionUpgrade(t *testing.T) {
 	th := theme.New("")
 	warnStyle := lipgloss.NewStyle()
-	u := &schema.SchemaVersionUpgrade{ProjectDir: "/tmp/proj", Current: "0.85.0", Target: "0.88.0"}
 
-	// Save and restore the package seams.
-	origInteractive, origConfirm, origUpgrade := isInteractive, runConfirm, upgradeFn
-	t.Cleanup(func() { isInteractive, runConfirm, upgradeFn = origInteractive, origConfirm, origUpgrade })
+	origInteractive, origConfirm := isInteractive, runConfirm
+	t.Cleanup(func() { isInteractive, runConfirm = origInteractive, origConfirm })
 
-	setup := func(interactive bool, confirmAnswer bool) (confirmCalls, upgradeCalls *int) {
-		cc, uc := 0, 0
+	// setup wires the seams and returns call counters plus an upgrade tied to
+	// an Apply spy, so each case can assert whether the on-disk write happened.
+	setup := func(interactive, confirmAnswer bool) (confirmCalls, applyCalls *int, u *schema.SchemaVersionUpgrade) {
+		cc, ac := 0, 0
 		isInteractive = func() bool { return interactive }
 		runConfirm = func(_ *theme.Theme, _ string, _ string) (bool, error) { cc++; return confirmAnswer, nil }
-		upgradeFn = func(_ *app.App, outputSchema, projectDir, version string) ([]string, error) {
-			uc++
-			assert.Equal(t, "pkl", outputSchema)
-			assert.Equal(t, u.ProjectDir, projectDir)
-			assert.Equal(t, u.Target, version)
-			return nil, nil
+		u = &schema.SchemaVersionUpgrade{
+			ProjectDir: "/tmp/proj", Current: "0.85.0", Target: "0.88.0",
+			Apply: func() ([]string, error) { ac++; return nil, nil },
 		}
-		return &cc, &uc
+		return &cc, &ac, u
 	}
 
 	t.Run("--yes applies without prompting", func(t *testing.T) {
-		cc, uc := setup(true, false)
-		opts := &ExtractOptions{OutputSchema: "pkl", Yes: true}
-		require.NoError(t, handleSchemaVersionUpgrade(nil, th, warnStyle, opts, "out.pkl", u))
+		cc, ac, u := setup(true, false)
+		require.NoError(t, handleSchemaVersionUpgrade(th, warnStyle, &ExtractOptions{Yes: true}, "out.pkl", u))
 		assert.Equal(t, 0, *cc, "should not prompt with --yes")
-		assert.Equal(t, 1, *uc, "should apply with --yes")
+		assert.Equal(t, 1, *ac, "should apply with --yes")
 	})
 
 	t.Run("interactive + confirmed applies", func(t *testing.T) {
-		cc, uc := setup(true, true)
-		opts := &ExtractOptions{OutputSchema: "pkl"}
-		require.NoError(t, handleSchemaVersionUpgrade(nil, th, warnStyle, opts, "out.pkl", u))
+		cc, ac, u := setup(true, true)
+		require.NoError(t, handleSchemaVersionUpgrade(th, warnStyle, &ExtractOptions{}, "out.pkl", u))
 		assert.Equal(t, 1, *cc)
-		assert.Equal(t, 1, *uc)
+		assert.Equal(t, 1, *ac)
 	})
 
 	t.Run("interactive + declined nags, no write", func(t *testing.T) {
-		cc, uc := setup(true, false)
-		opts := &ExtractOptions{OutputSchema: "pkl"}
-		require.NoError(t, handleSchemaVersionUpgrade(nil, th, warnStyle, opts, "out.pkl", u))
+		cc, ac, u := setup(true, false)
+		require.NoError(t, handleSchemaVersionUpgrade(th, warnStyle, &ExtractOptions{}, "out.pkl", u))
 		assert.Equal(t, 1, *cc)
-		assert.Equal(t, 0, *uc, "declined must not write")
+		assert.Equal(t, 0, *ac, "declined must not write")
 	})
 
 	t.Run("non-interactive without --yes nags, no prompt, no write", func(t *testing.T) {
-		cc, uc := setup(false, false)
-		opts := &ExtractOptions{OutputSchema: "pkl"}
-		require.NoError(t, handleSchemaVersionUpgrade(nil, th, warnStyle, opts, "out.pkl", u))
+		cc, ac, u := setup(false, false)
+		require.NoError(t, handleSchemaVersionUpgrade(th, warnStyle, &ExtractOptions{}, "out.pkl", u))
 		assert.Equal(t, 0, *cc, "must not prompt without a TTY")
-		assert.Equal(t, 0, *uc, "must not write without consent")
+		assert.Equal(t, 0, *ac, "must not write without consent")
 	})
 }
