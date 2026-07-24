@@ -60,7 +60,12 @@ func (o *OmarchyWatcher) WaitCmd() tea.Cmd {
 					return nil
 				}
 				o.arm() // re-add in case the symlink target changed
-				return ApplyThemeMsg{Theme: Resolve("omarchy")}
+				// Use the in-package resolver directly (not Resolve, which
+				// warns to stderr): a live re-resolve happens while an
+				// alt-screen TUI may be open, and any stderr write would
+				// corrupt the render. Route warnings through o.warn instead,
+				// which defaults to a no-op (see NewOmarchyWatcher).
+				return ApplyThemeMsg{Theme: resolveOmarchy(omarchyThemeDir(), o.warn)}
 			case _, ok := <-o.w.Errors:
 				if !ok {
 					return nil

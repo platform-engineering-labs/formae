@@ -88,6 +88,34 @@ func TestOmarchyWatcher_InPlaceEdit(t *testing.T) {
 	}
 }
 
+// TestOmarchyWatcher_MalformedColorsFallsBackGracefully exercises the live
+// re-resolve path when colors.toml becomes malformed while the watcher is
+// running (e.g. the user is mid-edit, or omarchy-theme-set races a write).
+// It asserts the watcher degrades to the "quiet" fallback theme without
+// panicking, and that the fallback is reached via resolveOmarchy(..., o.warn)
+// rather than the package-global Resolve("omarchy") (which would write a
+// warning straight to stderr and could corrupt an open alt-screen TUI).
+func TestOmarchyWatcher_MalformedColorsFallsBackGracefully(t *testing.T) {
+	_, root := setupOmarchyHome(t, "alpha")
+	w, err := NewOmarchyWatcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	// Corrupt the live colors.toml in place (current/theme/colors.toml is the
+	// watched file; resolve the theme symlink to find its target directory).
+	target, _ := filepath.EvalSymlinks(filepath.Join(root, "current", "theme"))
+	if err := os.WriteFile(filepath.Join(target, "colors.toml"),
+		[]byte("this is not valid toml {{{"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	th := drainOne(t, w)
+	if th == nil || th.Name != "quiet" {
+		t.Fatalf("expected graceful fallback to the quiet theme, got %+v", th)
+	}
+}
+
 func TestOmarchyWatcher_SymlinkSwap(t *testing.T) {
 	_, root := setupOmarchyHome(t, "alpha")
 	// Add a second theme "beta" with a distinct accent.
