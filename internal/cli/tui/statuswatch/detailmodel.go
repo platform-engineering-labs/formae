@@ -713,7 +713,7 @@ func (d detailModel) renderStateGlyph(r updateRow, bg lipgloss.Color, isCursor b
 	case components.StateInProgress:
 		spinFrame := d.spinView
 		if spinFrame == "" {
-			spinFrame = "◐"
+			spinFrame = d.th.Spinner.StaticFrame
 		}
 		return withBg(lipgloss.NewStyle().Foreground(p.PrimaryAccent)).Render(spinFrame)
 	case components.StatePending:

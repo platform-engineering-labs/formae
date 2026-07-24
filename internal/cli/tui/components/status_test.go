@@ -7,6 +7,7 @@ package components
 import (
 	"os"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
@@ -81,6 +82,13 @@ func TestNewSpinner_UsesPrimaryAccent(t *testing.T) {
 	th := theme.New("formae")
 	s := NewSpinner(th)
 	assert.Equal(t, th.Palette.PrimaryAccent, s.Style.GetForeground())
+}
+
+func TestNewSpinnerFromTheme(t *testing.T) {
+	th := theme.New("quiet")
+	s := NewSpinner(th)
+	assert.Equal(t, th.Spinner.Frames, s.Spinner.Frames)
+	assert.Equal(t, time.Duration(th.Spinner.IntervalMs)*time.Millisecond, s.Spinner.FPS)
 }
 
 func TestIndicator_Golden(t *testing.T) {

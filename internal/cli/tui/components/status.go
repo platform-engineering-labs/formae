@@ -11,6 +11,7 @@ package components
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/lipgloss"
@@ -42,13 +43,36 @@ func Glyph(s State) string {
 	}
 }
 
-// NewSpinner returns the shared in-progress spinner: dot style in the
-// primary accent.
+// NewSpinner returns the shared in-progress spinner, built from the active
+// theme's frames/interval (falling back to the named preset, then a default
+// interval, when the theme leaves them unset).
 func NewSpinner(th *theme.Theme) spinner.Model {
 	s := spinner.New()
-	s.Spinner = spinner.Dot
+	frames := th.Spinner.Frames
+	if len(frames) == 0 {
+		frames = presetFrames(th.Spinner.Preset) // fallback if only a preset is named
+	}
+	fps := time.Second / 10
+	if th.Spinner.IntervalMs > 0 {
+		fps = time.Duration(th.Spinner.IntervalMs) * time.Millisecond
+	}
+	s.Spinner = spinner.Spinner{Frames: frames, FPS: fps}
 	s.Style = lipgloss.NewStyle().Foreground(th.Palette.PrimaryAccent)
 	return s
+}
+
+// presetFrames maps a named preset to bubbles' built-in frames.
+func presetFrames(name string) []string {
+	switch name {
+	case "line":
+		return spinner.Line.Frames
+	case "dot":
+		return spinner.Dot.Frames
+	case "circle", "":
+		return []string{"◐", "◓", "◑", "◒"}
+	default:
+		return []string{"◐", "◓", "◑", "◒"}
+	}
 }
 
 // Indicator renders the trailing state indicator for a summary line. For
