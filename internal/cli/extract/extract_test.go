@@ -51,7 +51,8 @@ func TestSchemaVersionNag(t *testing.T) {
 	u := &schema.SchemaVersionUpgrade{ProjectDir: "/tmp/proj", Current: "0.85.0", Target: "0.88.0"}
 	msg := schemaVersionNag(u)
 	assert.Contains(t, msg, "/tmp/proj/PklProject")
-	assert.Contains(t, msg, "0.85.0")
-	assert.Contains(t, msg, "formae@0.88.0")
+	assert.Contains(t, msg, "is using formae version 0.85.0")
+	assert.Contains(t, msg, "CLI is at version 0.88.0")
+	assert.Contains(t, msg, "update to 0.88.0 or greater")
 	assert.Contains(t, msg, "pkl project resolve")
 }

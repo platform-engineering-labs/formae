@@ -258,12 +258,12 @@ func runExtractCore(a *app.App, opts *ExtractOptions) error {
 
 // schemaVersionNag builds the message shown when the extract target's existing
 // PklProject pins a formae schema older than the required floor. Extracted files
-// use `extends "@formae/forma.pkl"`, which needs formae >= that version; older
-// ones can't evaluate the file. We only tell the user — the PklProject is never
-// rewritten for them.
+// use `extends "@formae/forma.pkl"`, which needs formae >= that version (see
+// requiredFormaeSchemaVersion); older ones can't evaluate the file. We only tell
+// the user — the PklProject is never rewritten for them.
 func schemaVersionNag(u *schema.SchemaVersionUpgrade) string {
 	return fmt.Sprintf(
-		"'%s/PklProject' pins formae %s. Extracted files use `extends \"@formae/forma.pkl\"`, which requires formae >= %s. Update the PklProject to formae@%s and run 'pkl project resolve' so the extracted file evaluates.",
+		"'%s/PklProject' is using formae version %s, however CLI is at version %s. Please update to %s or greater and run 'pkl project resolve', in order to ensure extracted file evaluates.",
 		u.ProjectDir, u.Current, u.Target, u.Target)
 }
 
