@@ -93,6 +93,83 @@ func TestParsePklProjectDeps_FileMissing(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestDepKey(t *testing.T) {
+	assert.Equal(t, "formae", depKey("pkl.formae@0.88.0"))
+	assert.Equal(t, "aws", depKey("aws.aws@0.1.14"))
+	assert.Equal(t, "aws", depKey("local:aws:/some/path/PklProject"))
+	assert.Equal(t, "weird", depKey("weird"))
+}
+
+func TestMissingPluginDeps(t *testing.T) {
+	parsed := []string{"pkl.formae@0.85.0"}
+	computed := []string{"pkl.formae@0.88.0", "aws.aws@0.1.14", "k8s.k8s@0.2.0"}
+	missing := missingPluginDeps(parsed, computed)
+	// formae excluded (governed by the version rule); both plugins added, in order.
+	assert.Equal(t, []string{"aws.aws@0.1.14", "k8s.k8s@0.2.0"}, missing)
+
+	// Already-present plugin (any version) is not re-added.
+	parsed = []string{"pkl.formae@0.88.0", "aws.aws@0.1.5"}
+	assert.Equal(t, []string{"k8s.k8s@0.2.0"}, missingPluginDeps(parsed, computed))
+
+	// Nothing missing.
+	assert.Empty(t, missingPluginDeps([]string{"aws.aws@0.1.5", "k8s.k8s@0.2.0"}, computed))
+}
+
+func TestRenderDepBlock(t *testing.T) {
+	remote, err := renderDepBlock("aws.aws@0.1.14")
+	require.NoError(t, err)
+	assert.Equal(t, "  [\"aws\"] {\n    uri = \"package://hub.platform.engineering/plugins/aws/schema/pkl/aws/aws@0.1.14\"\n  }", remote)
+
+	local, err := renderDepBlock("local:aws:/p/PklProject")
+	require.NoError(t, err)
+	assert.Equal(t, "  [\"aws\"] = import(\"/p/PklProject\")", local)
+
+	_, err = renderDepBlock("garbage")
+	require.Error(t, err)
+}
+
+func TestAddDepsToPklProject(t *testing.T) {
+	write := func(t *testing.T, body string) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "PklProject")
+		require.NoError(t, os.WriteFile(path, []byte(body), 0644))
+		return path
+	}
+
+	t.Run("inserts into an existing block and round-trips", func(t *testing.T) {
+		path := write(t, `amends "pkl:Project"
+
+dependencies {
+  ["formae"] {
+    uri = "package://hub.platform.engineering/plugins/pkl/schema/pkl/formae/formae@0.88.0"
+  }
+}
+`)
+		require.NoError(t, addDepsToPklProject(path, []string{"aws.aws@0.1.14", "local:k8s:/p/PklProject"}))
+
+		deps, err := parsePklProjectDeps(path)
+		require.NoError(t, err)
+		assert.ElementsMatch(t, []string{
+			"pkl.formae@0.88.0",
+			"aws.aws@0.1.14",
+			"local:k8s:/p/PklProject",
+		}, deps)
+
+		// Original formae dep preserved verbatim.
+		data, err := os.ReadFile(path)
+		require.NoError(t, err)
+		assert.Contains(t, string(data), "formae/formae@0.88.0")
+	})
+
+	t.Run("appends a block when the file has none", func(t *testing.T) {
+		path := write(t, "amends \"pkl:Project\"\n")
+		require.NoError(t, addDepsToPklProject(path, []string{"aws.aws@0.1.14"}))
+		deps, err := parsePklProjectDeps(path)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"aws.aws@0.1.14"}, deps)
+	})
+}
+
 func TestBumpFormaeCoreDep(t *testing.T) {
 	t.Run("bumps and reports previous version, leaves plugin deps", func(t *testing.T) {
 		in := []string{"aws.aws@0.1.5", "pkl.formae@0.85.0"}

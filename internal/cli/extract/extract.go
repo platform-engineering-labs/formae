@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/huh"
@@ -234,6 +235,13 @@ func runExtractCore(a *app.App, opts *ExtractOptions) error {
 		fmt.Println(warnStyle.Render(schemaVersionNag(u)))
 	}
 
+	if len(res.AddedDependencies) > 0 {
+		projectFile := filepath.Join(filepath.Dir(res.TargetPath), "PklProject")
+		for _, spec := range res.AddedDependencies {
+			fmt.Println(warnStyle.Render(fmt.Sprintf("Added missing dependency '%s' to '%s'.", friendlyDep(spec), projectFile)))
+		}
+	}
+
 	// Build per-resource list from the forma that was extracted.
 	extracted := make([]extractedResource, 0, len(forma.Resources))
 	for _, r := range forma.Resources {
@@ -261,6 +269,22 @@ func runExtractCore(a *app.App, opts *ExtractOptions) error {
 // use `extends "@formae/forma.pkl"`, which needs formae >= that version (see
 // requiredFormaeSchemaVersion); older ones can't evaluate the file. We only tell
 // the user — the PklProject is never rewritten for them.
+// friendlyDep turns an internal package spec into a compact display form for
+// user messages: "aws.aws@0.1.14" -> "aws@0.1.14", "local:aws:/p" -> "aws (local)".
+func friendlyDep(spec string) string {
+	if rest, ok := strings.CutPrefix(spec, "local:"); ok {
+		name := rest
+		if i := strings.IndexByte(rest, ':'); i >= 0 {
+			name = rest[:i]
+		}
+		return name + " (local)"
+	}
+	if dot := strings.IndexByte(spec, '.'); dot >= 0 {
+		return spec[dot+1:]
+	}
+	return spec
+}
+
 func schemaVersionNag(u *schema.SchemaVersionUpgrade) string {
 	return fmt.Sprintf(
 		"'%s/PklProject' is using formae version %s, however CLI is at version %s. Please update to %s or greater and run 'pkl project resolve', in order to ensure extracted file evaluates.",
