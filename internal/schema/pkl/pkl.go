@@ -512,17 +512,20 @@ func (p PKL) GenerateSourceCode(forma *pkgmodel.Forma, path string, includes []s
 		// dev builds (0.0.0).
 		//
 		// The on-disk PklProject is deliberately NOT rewritten — that would drop
-		// a surprise diff into the user's tree. When it pins an OLDER version,
-		// the mismatch is reported so the CLI can tell the user to update it.
+		// a surprise diff into the user's tree. Instead we enforce the RULE:
+		// the PklProject must pin formae core >= requiredFormaeSchemaVersion
+		// (0.88.0). When it pins something older, report the mismatch so the CLI
+		// nags the user to update to exactly that version. The rule is a fixed
+		// literal, NOT the running binary version — see requiredFormaeSchemaVersion.
 		schemaVersion := coreSchemaVersion(formae.Version)
 		if schemaVersion != "0.0.0" {
 			bumped, current := bumpFormaeCoreDep(deps, schemaVersion)
 			deps = bumped
-			if isOlderVersion(current, schemaVersion) {
+			if isOlderVersion(current, requiredFormaeSchemaVersion) {
 				res.SchemaVersionUpgrade = &schema.SchemaVersionUpgrade{
 					ProjectDir: parentDir,
 					Current:    current,
-					Target:     schemaVersion,
+					Target:     requiredFormaeSchemaVersion,
 				}
 			}
 		}

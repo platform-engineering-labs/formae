@@ -136,4 +136,10 @@ func TestIsOlderVersion(t *testing.T) {
 	assert.False(t, isOlderVersion("", "0.88.0"), "no dep found → no nag")
 	assert.False(t, isOlderVersion("garbage", "0.88.0"), "unparseable → no nag")
 	assert.False(t, isOlderVersion("0.85.0", "nope"), "unparseable target → no nag")
+
+	// The rule is the hardcoded 0.88.0, independent of binary version.
+	assert.Equal(t, "0.88.0", requiredFormaeSchemaVersion, "the rule is 0.88.0")
+	assert.True(t, isOlderVersion("0.87.9", requiredFormaeSchemaVersion), "below the rule nags")
+	assert.False(t, isOlderVersion(requiredFormaeSchemaVersion, requiredFormaeSchemaVersion), "at the rule is fine")
+	assert.False(t, isOlderVersion("0.99.0", requiredFormaeSchemaVersion), "above the rule is fine")
 }

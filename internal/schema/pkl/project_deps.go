@@ -60,6 +60,16 @@ func coreSchemaVersion(v string) string {
 	return v
 }
 
+// RULE: extracted files require the target PklProject to pin formae core at
+// 0.88.0 or newer. 0.88.0 is the release where the current core schema shape
+// landed; anything older cannot evaluate a freshly extracted file.
+//
+// This is a FIXED LITERAL on purpose — it is NOT derived from the running
+// binary version and must not drift with each release. The rule is "0.88.0",
+// full stop. Change this value only on a deliberate, incompatible schema-shape
+// change, and treat that as changing the rule itself.
+const requiredFormaeSchemaVersion = "0.88.0"
+
 // isOlderVersion reports whether current is a strictly lower semver than
 // target. It returns false when current is empty (no dep found), when either
 // side fails to parse, or when current is equal to or newer than target — the
