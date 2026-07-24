@@ -25,6 +25,46 @@ var uriPattern = regexp.MustCompile(`uri\s*=\s*"([^"]+)"`)
 // nameKeyPattern matches the start of a remote dep block: ["<name>"] {
 var nameKeyPattern = regexp.MustCompile(`\[\s*"([^"]+)"\s*\]\s*\{`)
 
+// formaeCoreVersionPattern matches the version segment of the formae core
+// dependency URI inside a PklProject:
+//
+//	package://<host>/plugins/pkl/schema/pkl/formae/formae@<version>
+//
+// Only the core package (name "formae") ends in `/formae/formae@`, so plugin
+// deps are never touched.
+var formaeCoreVersionPattern = regexp.MustCompile(`(package://[^"]+/formae/formae@)[^"\s]+`)
+
+// coreSchemaVersion strips any prerelease/build metadata from a binary version
+// so it names the published core schema package. Schemas are only ever
+// published at a base X.Y.Z — a prerelease binary like "0.88.0-dev.7" still
+// resolves its schema against "0.88.0". Returns v unchanged if it carries no
+// suffix.
+func coreSchemaVersion(v string) string {
+	if i := strings.IndexAny(v, "-+"); i >= 0 {
+		return v[:i]
+	}
+	return v
+}
+
+// rewriteFormaeCoreVersion pins the formae core dependency in the PklProject
+// at path to version. It returns true when the file changed (a formae core
+// dep existed and its version differed). A PklProject without a formae core
+// dep, or one already at version, is left untouched and returns (false, nil).
+func rewriteFormaeCoreVersion(path, version string) (bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false, fmt.Errorf("read PklProject %q: %w", path, err)
+	}
+	replaced := formaeCoreVersionPattern.ReplaceAllString(string(data), "${1}"+version)
+	if replaced == string(data) {
+		return false, nil
+	}
+	if err := os.WriteFile(path, []byte(replaced), 0640); err != nil {
+		return false, fmt.Errorf("write PklProject %q: %w", path, err)
+	}
+	return true, nil
+}
+
 // parsePklProjectDeps reads the `dependencies { ... }` block from an existing
 // PklProject file and returns the entries as package specs in the format
 // emitted by PackageResolver:

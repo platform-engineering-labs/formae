@@ -19,6 +19,7 @@ import (
 	"time"
 
 	pklgo "github.com/apple/pkl-go/pkl"
+	formae "github.com/platform-engineering-labs/formae"
 	"github.com/platform-engineering-labs/formae/internal/schema"
 	pklmodel "github.com/platform-engineering-labs/formae/internal/schema/pkl/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -498,6 +499,37 @@ func (p PKL) GenerateSourceCode(forma *pkgmodel.Forma, path string, includes []s
 		// Case 1: target dir has an existing PklProject — reuse its deps so the
 		// generated .pkl resolves cleanly when the user later evaluates it under
 		// their own project.
+
+		// Pin the formae core dep to the running binary's version first. An
+		// older pinned version resolves the wrong core schema and fails to
+		// evaluate against the schema this binary emits, both during this
+		// extract's serialization and the user's later evals. Schemas publish
+		// only at a base X.Y.Z, so a prerelease binary (e.g. 0.88.0-dev.7)
+		// pins the base version. Skip on dev builds (0.0.0) where there is no
+		// real version to pin.
+		schemaVersion := coreSchemaVersion(formae.Version)
+		if schemaVersion != "0.0.0" {
+			changed, rwErr := rewriteFormaeCoreVersion(projectFile, schemaVersion)
+			if rwErr != nil {
+				return schema.GenerateSourcesResult{}, rwErr
+			}
+			if changed {
+				// deps.json still pins the old version — drop it and re-resolve
+				// so the user's PklProject evaluates against the new version.
+				// Best-effort: a resolve failure (e.g. offline) shouldn't sink
+				// the extract, which writes the .pkl regardless.
+				depsJSON := filepath.Join(parentDir, "PklProject.deps.json")
+				if rmErr := os.Remove(depsJSON); rmErr != nil && !os.IsNotExist(rmErr) {
+					return schema.GenerateSourcesResult{}, fmt.Errorf("failed to clear stale deps.json: %w", rmErr)
+				}
+				if resErr := pklrun.ProjectResolve(parentDir, pklrun.WithPklCommand(bundledPklCommand())); resErr != nil {
+					res.Warnings = append(res.Warnings, fmt.Sprintf("Updated formae schema version in %q to %s, but re-resolving Pkl dependencies failed (%v). Run 'pkl project resolve' in '%s'.", projectFile, schemaVersion, resErr, parentDir))
+				} else {
+					res.Warnings = append(res.Warnings, fmt.Sprintf("Updated formae schema version in %q to %s", projectFile, schemaVersion))
+				}
+			}
+		}
+
 		deps, parseErr := parsePklProjectDeps(projectFile)
 		if parseErr != nil {
 			return schema.GenerateSourcesResult{}, fmt.Errorf("failed to parse existing PklProject %q: %w", projectFile, parseErr)
