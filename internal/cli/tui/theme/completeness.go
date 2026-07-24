@@ -4,7 +4,10 @@
 
 package theme
 
-import "reflect"
+import (
+	"fmt"
+	"reflect"
+)
 
 // missingAgainst reports the TOML-qualified names of fields that base has set
 // (non-nil pointer, or non-empty slice) but f does not. It compares field
@@ -22,12 +25,18 @@ func (f *themeFile) missingAgainst(base *themeFile) []string {
 
 // collectMissing walks parallel struct values (base and candidate),
 // recursing into nested structs and comparing leaf pointer/slice fields by
-// presence. Fields without a toml tag (Name, Extends) are metadata, not
-// themeable surface, and are skipped.
+// presence. Name and Extends are metadata, not themeable surface, and are
+// skipped explicitly; any themeable field of a kind the switch does not
+// handle panics, so a future schema addition cannot silently escape the
+// completeness check (which would re-introduce the blank-theme bug).
 func collectMissing(base, cand reflect.Value, prefix string, missing *[]string) {
 	t := base.Type()
 	for i := 0; i < t.NumField(); i++ {
-		tag := t.Field(i).Tag.Get("toml")
+		field := t.Field(i)
+		if field.Name == "Name" || field.Name == "Extends" {
+			continue
+		}
+		tag := field.Tag.Get("toml")
 		if tag == "" || tag == "-" {
 			continue
 		}
@@ -48,6 +57,8 @@ func collectMissing(base, cand reflect.Value, prefix string, missing *[]string) 
 			if bf.Len() > 0 && cf.Len() == 0 {
 				*missing = append(*missing, name)
 			}
+		default:
+			panic(fmt.Sprintf("completeness: unhandled field kind %s for %q", bf.Kind(), name))
 		}
 	}
 }
