@@ -6,6 +6,8 @@ package theme
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/BurntSushi/toml"
 )
@@ -98,4 +100,43 @@ func mapOmarchyPalette(oc omarchyColors) paletteFile {
 		OpDetach:        mirror(oc.Color8),
 		OpKeep:          mirror(oc.Color8),
 	}
+}
+
+// omarchyThemeDir is the resolved OS theme directory the "omarchy" theme reads
+// (following the ~/.config/omarchy/current symlink). Empty if HOME is unset.
+func omarchyThemeDir() string {
+	cfg, err := os.UserConfigDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(cfg, "omarchy", "current", "theme")
+}
+
+// resolveOmarchy builds the "omarchy" theme by mapping dir/colors.toml onto
+// quiet's resolved themeFile (glyphs/progress/spinner/behavior inherited). Any
+// failure — no dir, unreadable or malformed colors.toml — warns once and falls
+// back to quiet, exactly like an unknown theme name.
+func resolveOmarchy(dir string, warn func(string)) *Theme {
+	fallback := func(msg string) *Theme {
+		warn(msg)
+		th, _ := loadBuiltin("quiet")
+		return th
+	}
+	if dir == "" {
+		return fallback("formae: cli.theme \"omarchy\" but no Omarchy theme dir; falling back to quiet")
+	}
+	path := filepath.Join(dir, "colors.toml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fallback(fmt.Sprintf("formae: cli.theme \"omarchy\": cannot read %s: %v; falling back to quiet", path, err))
+	}
+	oc, err := parseOmarchyColors(data)
+	if err != nil {
+		return fallback(fmt.Sprintf("formae: cli.theme \"omarchy\": %v; falling back to quiet", err))
+	}
+
+	base := quietRequiredFields() // quiet's complete resolved themeFile
+	overlay := &themeFile{Name: "omarchy", Palette: mapOmarchyPalette(oc)}
+	merged := mergeThemeFiles(base, overlay)
+	return merged.toTheme()
 }

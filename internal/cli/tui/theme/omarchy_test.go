@@ -6,7 +6,11 @@
 
 package theme
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestParseOmarchyColors(t *testing.T) {
 	data := []byte(`
@@ -98,5 +102,72 @@ func TestMapOmarchyPalette_Fallbacks(t *testing.T) {
 	// SecondaryAccent has no color5 → falls back to accent.
 	if got := p.SecondaryAccent; got == nil || got.Dark != "#0000ff" {
 		t.Errorf("SecondaryAccent = %+v, want fallback to accent #0000ff", got)
+	}
+}
+
+func writeOmarchyFixture(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	body := `background = "#1a1b26"
+foreground = "#c0caf5"
+accent = "#7aa2f7"
+color1 = "#f7768e"
+color2 = "#9ece6a"
+color3 = "#e0af68"
+color5 = "#bb9af7"
+color8 = "#414868"
+`
+	if err := os.WriteFile(filepath.Join(dir, "colors.toml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func TestResolveOmarchy_Success(t *testing.T) {
+	dir := writeOmarchyFixture(t)
+	var warned []string
+	th := resolveOmarchy(dir, func(m string) { warned = append(warned, m) })
+
+	if th.Name != "omarchy" {
+		t.Errorf("Name = %q, want omarchy", th.Name)
+	}
+	// Palette is Omarchy-derived...
+	if th.Palette.PrimaryAccent.Dark != "#7aa2f7" {
+		t.Errorf("PrimaryAccent.Dark = %q, want #7aa2f7", th.Palette.PrimaryAccent.Dark)
+	}
+	// ...but non-palette planes are inherited from quiet (self-contained root).
+	quiet, _ := loadBuiltin("quiet")
+	if th.Glyphs.OpCreate != quiet.Glyphs.OpCreate {
+		t.Errorf("OpCreate glyph = %q, want quiet's %q (inherited)", th.Glyphs.OpCreate, quiet.Glyphs.OpCreate)
+	}
+	if len(th.Spinner.Frames) == 0 {
+		t.Error("spinner frames should be inherited from quiet, got none")
+	}
+	if len(warned) != 0 {
+		t.Errorf("no warning expected on success, got %v", warned)
+	}
+}
+
+func TestResolveOmarchy_MissingFile(t *testing.T) {
+	var warned []string
+	th := resolveOmarchy(t.TempDir(), func(m string) { warned = append(warned, m) })
+	if th.Name != "quiet" {
+		t.Errorf("missing colors.toml → Name = %q, want quiet fallback", th.Name)
+	}
+	if len(warned) == 0 {
+		t.Error("expected a one-line warning on missing colors.toml")
+	}
+}
+
+func TestResolveOmarchy_Malformed(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, "colors.toml"), []byte("= not toml ="), 0o644)
+	var warned []string
+	th := resolveOmarchy(dir, func(m string) { warned = append(warned, m) })
+	if th.Name != "quiet" {
+		t.Errorf("malformed colors.toml → Name = %q, want quiet", th.Name)
+	}
+	if len(warned) == 0 {
+		t.Error("expected a warning on malformed colors.toml")
 	}
 }
