@@ -42,3 +42,8 @@ func TestUpdate_ApplyThemeMsgApplies(t *testing.T) {
 		t.Errorf("after ApplyThemeMsg, theme = %q, want rich", got)
 	}
 }
+
+func TestCloseWatcher_NilSafe(t *testing.T) {
+	m := New(theme.New("quiet"), nil, Options{}) // no watcher (not omarchy)
+	m.closeWatcher()                             // must not panic
+}

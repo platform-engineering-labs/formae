@@ -159,6 +159,13 @@ func (m Model) ApplyTheme(t *theme.Theme) Model {
 	return m
 }
 
+// closeWatcher releases the Omarchy live-follow watcher, if one is running.
+func (m Model) closeWatcher() {
+	if m.watcher != nil {
+		_ = m.watcher.Close()
+	}
+}
+
 // Init kicks off the first fetch, the poll ticker, and the spinner animation.
 func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{
@@ -272,6 +279,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 
 	case exitNowMsg:
+		m.closeWatcher()
 		return m, tea.Quit
 
 	case tickMsg:
@@ -297,6 +305,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Handle ctrl+c before query bar routing: quit on ctrl+c even while editing query.
 	if msg.Type == tea.KeyCtrlC {
+		m.closeWatcher()
 		return m, tea.Quit
 	}
 
@@ -332,6 +341,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.view == viewDetail {
 		switch {
 		case key.Matches(msg, m.keys.Quit):
+			m.closeWatcher()
 			return m, tea.Quit
 		case key.Matches(msg, m.keys.Help):
 			m.helpOpen = true
@@ -342,6 +352,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if back {
 				if m.opts.SingleCommand {
 					// No command list to return to — leaving detail means quitting.
+					m.closeWatcher()
 					return m, tea.Quit
 				}
 				m.view = viewMulti
@@ -357,11 +368,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch {
 	case key.Matches(msg, m.keys.Quit):
+		m.closeWatcher()
 		return m, tea.Quit
 
 	// The command list is the top level, so esc quits (in the detail view esc
 	// goes back to the list). Consistent with the other TUIs.
 	case msg.Type == tea.KeyEsc:
+		m.closeWatcher()
 		return m, tea.Quit
 
 	case key.Matches(msg, m.keys.Search):
