@@ -423,7 +423,7 @@ func (f *FormaCommandPersister) updateCommandFromProgress(progress *messages.Upd
 		// hashed at final state (hashSensitiveDataIfComplete) so a resumed command can
 		// still execute with the real secret value.
 		if tracked.ResourceProperties != nil {
-			hashedProps, err := hashReadActualProps(tracked.ResourceProperties, res.DesiredState.Schema)
+			hashedProps, err := hashReadActualProps(tracked.ResourceProperties, res.DesiredState.Schema, res.DesiredState.Type)
 			if err != nil {
 				return false, fmt.Errorf("failed to hash progress properties commandID=%s: %w", progress.CommandID, err)
 			}
@@ -963,7 +963,7 @@ func (f *FormaCommandPersister) markResourceUpdateAsComplete(msg *messages.MarkR
 		// hashSensitiveDataIfComplete ever runs, so without hashing here a schema-opaque
 		// field's live (Read-enriched) value would be persisted as plaintext.
 		if msg.ResourceProperties != nil {
-			hashedProps, hashErr := hashReadActualProps(msg.ResourceProperties, res.DesiredState.Schema)
+			hashedProps, hashErr := hashReadActualProps(msg.ResourceProperties, res.DesiredState.Schema, res.DesiredState.Type)
 			if hashErr != nil {
 				f.Log().Error("Failed to hash resource properties on completion commandID=%s: %v", msg.CommandID, hashErr)
 				return false, fmt.Errorf("failed to hash resource properties on completion: %w", hashErr)
@@ -971,7 +971,7 @@ func (f *FormaCommandPersister) markResourceUpdateAsComplete(msg *messages.MarkR
 			res.DesiredState.Properties = hashedProps
 		}
 		if msg.ResourceReadOnlyProperties != nil {
-			hashedReadOnly, hashErr := hashReadActualProps(msg.ResourceReadOnlyProperties, res.DesiredState.Schema)
+			hashedReadOnly, hashErr := hashReadActualProps(msg.ResourceReadOnlyProperties, res.DesiredState.Schema, res.DesiredState.Type)
 			if hashErr != nil {
 				f.Log().Error("Failed to hash resource read-only properties on completion commandID=%s: %v", msg.CommandID, hashErr)
 				return false, fmt.Errorf("failed to hash resource read-only properties on completion: %w", hashErr)
@@ -1239,11 +1239,13 @@ func hasOpaqueValues(props json.RawMessage) bool {
 // a plugin poll or Read) before they are persisted. Unlike DesiredState input, these
 // values are not needed in plaintext to resume execution, so they are hashed immediately
 // at their write choke point rather than deferred to final state.
-func hashReadActualProps(props json.RawMessage, schema pkgmodel.Schema) (json.RawMessage, error) {
+func hashReadActualProps(props json.RawMessage, schema pkgmodel.Schema, resourceType string) (json.RawMessage, error) {
 	if len(props) == 0 {
 		return props, nil
 	}
-	tmp := &pkgmodel.Resource{Schema: schema, Properties: props}
+	// Type is set so the transformer's known-opaque table fires for plugins whose
+	// schema drops FieldHint.Opaque — otherwise a Read-enriched secret persists plaintext.
+	tmp := &pkgmodel.Resource{Type: resourceType, Schema: schema, Properties: props}
 	out, err := transformations.NewPersistValueTransformer().ApplyToResource(tmp)
 	if err != nil {
 		return nil, err
@@ -1267,7 +1269,12 @@ func (f *FormaCommandPersister) hashSensitiveDataIfComplete(command *forma_comma
 	// field, or if its properties already carry an opaque envelope (e.g. round-tripped
 	// from a prior hash, or a resource loaded without its schema populated).
 	for i, resourceUpdate := range command.ResourceUpdates {
-		if len(resourceUpdate.DesiredState.Schema.Opaque()) == 0 && !hasOpaqueValues(resourceUpdate.DesiredState.Properties) {
+		// Decide "is anything opaque here?" using the schema-declared fields UNION
+		// the hard-coded known-opaque table (keyed on Type) — otherwise a plugin
+		// whose schema drops FieldHint.Opaque (SDK gap) would make this gate skip
+		// hashing and persist the final DesiredState secret in cleartext.
+		if len(transformations.OpaqueFields(resourceUpdate.DesiredState.Schema, resourceUpdate.DesiredState.Type)) == 0 &&
+			!hasOpaqueValues(resourceUpdate.DesiredState.Properties) {
 			continue
 		}
 		transformed, err := t.ApplyToResource(&resourceUpdate.DesiredState)

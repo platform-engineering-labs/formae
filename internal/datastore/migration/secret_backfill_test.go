@@ -295,6 +295,58 @@ func TestBackfillHashedSecrets_HashesKnownRDSPasswordFields(t *testing.T) {
 		"RDS TdeCredentialPassword must be hashed via the known-opaque table")
 }
 
+func versionsForLabel(vs []datastore.ResourceVersion, label string) []datastore.ResourceVersion {
+	var out []datastore.ResourceVersion
+	for _, v := range vs {
+		if v.Resource.Label == label {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+func TestBackfillHashedSecrets_ScrubsAllResourceVersions(t *testing.T) {
+	ds := newTestDatastore(t)
+
+	// Two versions of the same resource, both written plaintext (pre-fix). The
+	// resources table keeps version history, so the superseded version still
+	// holds the plaintext secret at rest — the backfill must scrub every version.
+	res := &pkgmodel.Resource{
+		Label: "db", Type: "AWS::RDS::DBInstance", Stack: "s", NativeID: "n-db", Managed: true,
+		Schema: pkgmodel.Schema{
+			Identifier: "AWS::RDS::DBInstance",
+			Hints:      map[string]pkgmodel.FieldHint{"MasterUserPassword": {Opaque: true}},
+		},
+		Properties: json.RawMessage(`{"MasterUserPassword":"pw-v1"}`),
+	}
+	_, err := ds.StoreResource(res, "c1")
+	require.NoError(t, err)
+	res.Properties = json.RawMessage(`{"MasterUserPassword":"pw-v2"}`)
+	_, err = ds.StoreResource(res, "c2")
+	require.NoError(t, err)
+
+	pre, err := ds.LoadAllResourceVersions()
+	require.NoError(t, err)
+	require.Len(t, versionsForLabel(pre, "db"), 2, "expected two seeded versions")
+
+	require.NoError(t, BackfillHashedSecrets(ds))
+
+	post, err := ds.LoadAllResourceVersions()
+	require.NoError(t, err)
+	versions := versionsForLabel(post, "db")
+	require.Len(t, versions, 2, "scrub is in place — no new version appended")
+	for _, v := range versions {
+		assert.True(t, isHashed(t, v.Resource.Properties, "MasterUserPassword"),
+			"resource version %s must be hashed, not left plaintext in history", v.Version)
+	}
+
+	// Idempotency: a second sweep must not change or append versions.
+	require.NoError(t, BackfillHashedSecrets(ds))
+	post2, err := ds.LoadAllResourceVersions()
+	require.NoError(t, err)
+	require.Len(t, versionsForLabel(post2, "db"), 2, "second sweep must not append versions")
+}
+
 func TestBackfillHashedSecrets_HashesResourcesTable(t *testing.T) {
 	ds := newTestDatastore(t)
 

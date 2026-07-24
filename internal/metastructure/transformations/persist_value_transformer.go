@@ -11,6 +11,43 @@ import (
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
+// knownOpaqueFields hard-codes the top-level secret fields per resource type so
+// opaque hashing fires even when a plugin's runtime schema does NOT carry
+// FieldHint.Opaque — e.g. a plugin built against a formae SDK that predates the
+// Opaque field, whose model.Schema structurally drops it before the RPC. Keyed on
+// resource Type. This is the agent-side guarantee: it does not depend on any plugin
+// shipping an up-to-date schema. Keep in sync with the SecretValue-typed fields in
+// the resource plugins. First cut: top-level scalar secret fields only.
+var knownOpaqueFields = map[string][]string{
+	"AWS::SecretsManager::Secret": {"SecretString"},
+	"AWS::RDS::DBInstance":        {"MasterUserPassword", "TdeCredentialPassword"},
+	"AWS::RDS::DBCluster":         {"MasterUserPassword"},
+}
+
+// opaqueFieldSet returns the union of the schema's opaque fields and the hard-coded
+// known-opaque fields for the resource type — so hashing fires whether opacity comes
+// from the plugin schema (FieldHint.Opaque) or the agent-side table.
+func opaqueFieldSet(schema pkgmodel.Schema, resourceType string) map[string]bool {
+	set := make(map[string]bool)
+	for _, f := range schema.Opaque() {
+		set[f] = true
+	}
+	for _, f := range knownOpaqueFields[resourceType] {
+		set[f] = true
+	}
+	return set
+}
+
+// OpaqueFields is the exported view of opaqueFieldSet: the set of top-level property
+// names that are opaque for a resource of the given schema and type (schema-declared
+// UNION the hard-coded known-opaque table). Persistence and planning choke points in
+// other packages use it to decide "is anything opaque here?" exactly the way the
+// transformer decides what to hash — so a plugin whose schema drops FieldHint.Opaque
+// can't cause those gates to skip hashing.
+func OpaqueFields(schema pkgmodel.Schema, resourceType string) map[string]bool {
+	return opaqueFieldSet(schema, resourceType)
+}
+
 type PersistValueTransformer struct{}
 
 // Ensure PersistValueTransformer implements ResourceTransformer
@@ -38,7 +75,7 @@ func (pv *PersistValueTransformer) ApplyToResource(resource *pkgmodel.Resource) 
 	}
 
 	if resource.Properties != nil {
-		transformedProps, err := pv.transformRawProps(resource.Properties, resource.Schema)
+		transformedProps, err := pv.transformRawProps(resource.Properties, resource.Schema, resource.Type)
 		if err != nil {
 			return nil, fmt.Errorf("failed to transform properties: %w", err)
 		}
@@ -46,7 +83,7 @@ func (pv *PersistValueTransformer) ApplyToResource(resource *pkgmodel.Resource) 
 	}
 
 	if resource.ReadOnlyProperties != nil {
-		transformedReadOnly, err := pv.transformRawProps(resource.ReadOnlyProperties, resource.Schema)
+		transformedReadOnly, err := pv.transformRawProps(resource.ReadOnlyProperties, resource.Schema, resource.Type)
 		if err != nil {
 			return nil, fmt.Errorf("failed to transform read-only properties: %w", err)
 		}
@@ -54,7 +91,7 @@ func (pv *PersistValueTransformer) ApplyToResource(resource *pkgmodel.Resource) 
 	}
 
 	if resource.PatchDocument != nil {
-		transformedPatchDoc, err := pv.transformPatchDocument(resource.PatchDocument, resource.Schema)
+		transformedPatchDoc, err := pv.transformPatchDocument(resource.PatchDocument, resource.Schema, resource.Type)
 		if err != nil {
 			return nil, fmt.Errorf("failed to transform patch document: %w", err)
 		}
@@ -64,7 +101,7 @@ func (pv *PersistValueTransformer) ApplyToResource(resource *pkgmodel.Resource) 
 	return transformedResource, nil
 }
 
-func (pv *PersistValueTransformer) transformRawProps(properties json.RawMessage, schema pkgmodel.Schema) (json.RawMessage, error) {
+func (pv *PersistValueTransformer) transformRawProps(properties json.RawMessage, schema pkgmodel.Schema, resourceType string) (json.RawMessage, error) {
 	if len(properties) == 0 {
 		return json.RawMessage("{}"), nil
 	}
@@ -73,10 +110,7 @@ func (pv *PersistValueTransformer) transformRawProps(properties json.RawMessage,
 		return nil, fmt.Errorf("failed to unmarshal properties: %w", err)
 	}
 
-	opaqueFields := make(map[string]bool)
-	for _, f := range schema.Opaque() {
-		opaqueFields[f] = true
-	}
+	opaqueFields := opaqueFieldSet(schema, resourceType)
 
 	if err := pv.processProps(props, opaqueFields); err != nil {
 		return nil, fmt.Errorf("failed to process properties: %w", err)
@@ -162,7 +196,7 @@ func (pv *PersistValueTransformer) hashEnvelope(val map[string]any) (map[string]
 // that both corrupted non-secret fields that happened to collide with a secret's plaintext and
 // produced a bare (unmarked) digest, which hashOpaqueField treats as plaintext and re-hashes on
 // the next boot backfill (hash-of-hash).
-func (pv *PersistValueTransformer) transformPatchDocument(patchDoc json.RawMessage, schema pkgmodel.Schema) (json.RawMessage, error) {
+func (pv *PersistValueTransformer) transformPatchDocument(patchDoc json.RawMessage, schema pkgmodel.Schema, resourceType string) (json.RawMessage, error) {
 	if len(patchDoc) == 0 {
 		return patchDoc, nil
 	}
@@ -173,7 +207,7 @@ func (pv *PersistValueTransformer) transformPatchDocument(patchDoc json.RawMessa
 	}
 
 	opaqueFields := make(map[string]bool)
-	for _, f := range schema.Opaque() {
+	for f := range opaqueFieldSet(schema, resourceType) {
 		opaqueFields["/"+f] = true
 	}
 	for i, op := range patchOps {

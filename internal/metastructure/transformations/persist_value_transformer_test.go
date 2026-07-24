@@ -393,3 +393,44 @@ func TestApplyToResource_PatchOpHashingIsIdempotent(t *testing.T) {
 	assert.Equal(t, string(firstRun.PatchDocument), string(secondRun.PatchDocument),
 		"re-hashing an already-hashed patch document must be a byte-identical no-op")
 }
+
+// TestApplyToResource_HashesKnownTypeFieldWithoutSchemaOpaque proves the hard-coded
+// known-opaque table (keyed on resource Type) hashes a secret even when the plugin's
+// schema does NOT mark the field opaque — the real-plugin case where the plugin was
+// built against an SDK predating FieldHint.Opaque, so its runtime schema drops it.
+// Without this, discovery/sync of such a resource persists the secret in cleartext.
+func TestApplyToResource_HashesKnownTypeFieldWithoutSchemaOpaque(t *testing.T) {
+	r := &pkgmodel.Resource{
+		Type:       "AWS::SecretsManager::Secret",
+		Schema:     pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{"SecretString": {Opaque: false}}},
+		Properties: json.RawMessage(`{"Name":"n","SecretString":"super-secret-discovered"}`),
+	}
+	out, err := NewPersistValueTransformer().ApplyToResource(r)
+	require.NoError(t, err)
+
+	var props map[string]any
+	require.NoError(t, json.Unmarshal(out.Properties, &props))
+	assert.Equal(t, "n", props["Name"], "non-secret field untouched")
+
+	sv, ok := props["SecretString"].(map[string]any)
+	require.True(t, ok, "SecretString must be wrapped into a hashed envelope, got: %v", props["SecretString"])
+	assert.Equal(t, true, sv["$hashed"])
+	assert.Equal(t, "Opaque", sv["$visibility"])
+	assert.Len(t, sv["$value"].(string), 64)
+	assert.NotEqual(t, "super-secret-discovered", sv["$value"])
+}
+
+// Unknown resource types are unaffected — a bare string on a non-opaque field of an
+// unknown type is left as-is (no over-hashing).
+func TestApplyToResource_LeavesUnknownTypeBareStringAlone(t *testing.T) {
+	r := &pkgmodel.Resource{
+		Type:       "AWS::S3::Bucket",
+		Schema:     pkgmodel.Schema{},
+		Properties: json.RawMessage(`{"BucketName":"my-bucket"}`),
+	}
+	out, err := NewPersistValueTransformer().ApplyToResource(r)
+	require.NoError(t, err)
+	var props map[string]any
+	require.NoError(t, json.Unmarshal(out.Properties, &props))
+	assert.Equal(t, "my-bucket", props["BucketName"])
+}

@@ -65,7 +65,7 @@ func NewResourceUpdateForExisting(
 		// stay, so rotation still produces a patch op. filteredProps is left
 		// untouched for DesiredState.Properties below — only the patch inputs are
 		// stripped.
-		existingForPatch, desiredForPatch, err := SuppressUnchangedOpaqueValues(existingResource.Properties, filteredProps, newResource.Schema)
+		existingForPatch, desiredForPatch, err := SuppressUnchangedOpaqueValues(existingResource.Properties, filteredProps, newResource.Schema, newResource.Type)
 		if err != nil {
 			return nil, fmt.Errorf("failed to suppress unchanged opaque values for resource %s: %w", existingResource.Label, err)
 		}

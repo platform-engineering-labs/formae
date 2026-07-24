@@ -148,7 +148,7 @@ func (ru *ResourceUpdate) ResolveValue(formaeUri pkgmodel.FormaeURI, value strin
 // unguarded.
 func (ru *ResourceUpdate) regeneratePatchDocument() (json.RawMessage, error) {
 	existingForPatch, desiredForPatch, err := SuppressUnchangedOpaqueValues(
-		ru.PriorState.Properties, ru.DesiredState.Properties, ru.DesiredState.Schema)
+		ru.PriorState.Properties, ru.DesiredState.Properties, ru.DesiredState.Schema, ru.DesiredState.Type)
 	if err != nil {
 		return nil, fmt.Errorf("failed to suppress unchanged opaque values: %w", err)
 	}

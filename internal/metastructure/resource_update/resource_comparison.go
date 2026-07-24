@@ -33,7 +33,7 @@ func EnforceSetOnceAndCompareResourceForUpdate(existing, new *pkgmodel.Resource,
 	// on persist — otherwise a stored-hashed secret compares unequal to the
 	// re-submitted desired plaintext and produces a spurious update.
 	transformer := transformations.NewPersistValueTransformer()
-	tempResource := &pkgmodel.Resource{Schema: new.Schema, Properties: filteredRawProps}
+	tempResource := &pkgmodel.Resource{Type: new.Type, Schema: new.Schema, Properties: filteredRawProps}
 	hashedForComparison, err := transformer.ApplyToResource(tempResource)
 	if err != nil {
 		return false, nil, err
@@ -112,18 +112,18 @@ func canonicalizeHintedFields(props json.RawMessage, schema pkgmodel.Schema) jso
 // non-opaque fields. Inputs are the wrapped {$strategy,$visibility,$value} (or
 // bare, for schema-opaque) forms, so call this before ConvertToPluginFormat
 // unwraps them. Inputs are not mutated; stripped copies are returned.
-func SuppressUnchangedOpaqueValues(existing, desired json.RawMessage, schema pkgmodel.Schema) (json.RawMessage, json.RawMessage, error) {
+func SuppressUnchangedOpaqueValues(existing, desired json.RawMessage, schema pkgmodel.Schema, resourceType string) (json.RawMessage, json.RawMessage, error) {
 	if len(existing) == 0 || len(desired) == 0 {
 		return existing, desired, nil
 	}
 
 	// Hash the desired opaque values the same way the gate and persistence do,
-	// so the comparison cannot drift from the gate's decision. Pass the schema
-	// so a schema-keyed opaque field is hashed here too — otherwise it is
-	// invisible to this function and its stored hash slips through to
+	// so the comparison cannot drift from the gate's decision. Pass schema AND
+	// type so a schema-keyed OR known-opaque field is hashed here too — otherwise
+	// it is invisible to this function and its stored hash slips through to
 	// ConvertToPluginFormat, which rejects it (PLA-320 guard).
 	transformer := transformations.NewPersistValueTransformer()
-	hashed, err := transformer.ApplyToResource(&pkgmodel.Resource{Schema: schema, Properties: desired})
+	hashed, err := transformer.ApplyToResource(&pkgmodel.Resource{Type: resourceType, Schema: schema, Properties: desired})
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to hash desired properties for opaque comparison: %w", err)
 	}
@@ -168,10 +168,11 @@ func SuppressUnchangedOpaqueValues(existing, desired json.RawMessage, schema pkg
 		return true
 	})
 
-	// Schema-declared opaque fields are top-level and may arrive as bare
-	// scalars (no inline $visibility envelope) — the walk above only finds
-	// enveloped values, so add these explicitly.
-	for _, field := range schema.Opaque() {
+	// Opaque top-level fields may arrive as bare scalars (no inline $visibility
+	// envelope) — the walk above only finds enveloped values, so add these
+	// explicitly. Use the schema-declared UNION known-opaque table so a field is
+	// recognized even when the plugin's schema drops FieldHint.Opaque.
+	for field := range transformations.OpaqueFields(schema, resourceType) {
 		if desiredResult.Get(field).Exists() {
 			addOpaquePath(field)
 		}
