@@ -50,6 +50,11 @@ func TestDatastore(t *testing.T) {
 		return dstest.TestDatastore{
 			Datastore: ds,
 			CleanUpFn: func() error {
+				// Close the pool before dropping the database so this datastore's
+				// pooled connections are released back to the server. Without this,
+				// every conformance subtest leaks its pool and the suite eventually
+				// exhausts Postgres's connection limit ("too many clients already").
+				d.Close()
 				return d.CleanUp()
 			},
 			SetTargetHealthStateForTest: func(label, state string) error {
