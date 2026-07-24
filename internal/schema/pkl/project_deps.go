@@ -61,13 +61,18 @@ func coreSchemaVersion(v string) string {
 }
 
 // RULE: extracted files require the target PklProject to pin formae core at
-// 0.88.0 or newer. 0.88.0 is the release where the current core schema shape
-// landed; anything older cannot evaluate a freshly extracted file.
+// 0.88.0 or newer.
 //
-// This is a FIXED LITERAL on purpose — it is NOT derived from the running
-// binary version and must not drift with each release. The rule is "0.88.0",
-// full stop. Change this value only on a deliberate, incompatible schema-shape
-// change, and treat that as changing the rule itself.
+// WHY 0.88.0: extracted forma files now use `extends "@formae/forma.pkl"`
+// instead of `amends`. The extends-based shape landed in formae core 0.88.0
+// and is NOT understood by earlier versions — a PklProject pinning formae
+// < 0.88.0 cannot evaluate a freshly extracted file (the pkl evaluator fails
+// to resolve the extends). So we require >= 0.88.0 and nag the user to update.
+//
+// This is a FIXED LITERAL tied to that specific schema change — it is NOT
+// derived from the running binary version and must not drift with each
+// release. The rule is "0.88.0", full stop. Only change it if a later,
+// incompatible schema-shape change raises the floor again.
 const requiredFormaeSchemaVersion = "0.88.0"
 
 // isOlderVersion reports whether current is a strictly lower semver than
