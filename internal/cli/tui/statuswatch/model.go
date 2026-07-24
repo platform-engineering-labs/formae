@@ -78,6 +78,7 @@ type Model struct {
 	view         viewMode
 	query        components.QueryBar
 	spinner      spinner.Model
+	watcher      *theme.OmarchyWatcher
 	err          error
 	width        int
 	height       int
@@ -127,7 +128,7 @@ func New(th *theme.Theme, client Client, opts Options) Model {
 	for _, id := range opts.AbandonedResources {
 		abandonedSet[id] = true
 	}
-	return Model{
+	model := Model{
 		th:           th,
 		client:       client,
 		opts:         opts,
@@ -138,15 +139,44 @@ func New(th *theme.Theme, client Client, opts Options) Model {
 		spinner:      components.NewSpinner(th),
 		abandonedSet: abandonedSet,
 	}
+	if th.Name == "omarchy" {
+		if w, err := theme.NewOmarchyWatcher(); err == nil {
+			model.watcher = w
+		}
+	}
+	return model
+}
+
+// ApplyTheme swaps the model onto a new theme: it threads the theme into the
+// sub-components that cache it and rebuilds the stateful spinner. Renderers
+// that read m.th inline each frame need no other change.
+func (m Model) ApplyTheme(t *theme.Theme) Model {
+	m.th = t
+	m.multi.th = t
+	m.detail = m.detail.ApplyTheme(t)
+	m.query = m.query.WithTheme(t)
+	m.spinner = components.NewSpinner(t)
+	return m
+}
+
+// closeWatcher releases the Omarchy live-follow watcher, if one is running.
+func (m Model) closeWatcher() {
+	if m.watcher != nil {
+		_ = m.watcher.Close()
+	}
 }
 
 // Init kicks off the first fetch, the poll ticker, and the spinner animation.
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(
+	cmds := []tea.Cmd{
 		fetchCommands(m.client, m.query.Query(), m.opts.MaxResults),
 		tick(m.opts.PollInterval),
 		m.spinner.Tick,
-	)
+	}
+	if m.watcher != nil {
+		cmds = append(cmds, m.watcher.WaitCmd())
+	}
+	return tea.Batch(cmds...)
 }
 
 // Update handles all incoming messages and key events.
@@ -239,7 +269,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case theme.ApplyThemeMsg:
+		m = m.ApplyTheme(msg.Theme)
+		var cmds []tea.Cmd
+		cmds = append(cmds, m.spinner.Tick) // restart the tick at the new interval
+		if m.watcher != nil {
+			cmds = append(cmds, m.watcher.WaitCmd()) // re-arm the watch
+		}
+		return m, tea.Batch(cmds...)
+
 	case exitNowMsg:
+		m.closeWatcher()
 		return m, tea.Quit
 
 	case tickMsg:
@@ -265,6 +305,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Handle ctrl+c before query bar routing: quit on ctrl+c even while editing query.
 	if msg.Type == tea.KeyCtrlC {
+		m.closeWatcher()
 		return m, tea.Quit
 	}
 
@@ -300,6 +341,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.view == viewDetail {
 		switch {
 		case key.Matches(msg, m.keys.Quit):
+			m.closeWatcher()
 			return m, tea.Quit
 		case key.Matches(msg, m.keys.Help):
 			m.helpOpen = true
@@ -310,6 +352,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if back {
 				if m.opts.SingleCommand {
 					// No command list to return to — leaving detail means quitting.
+					m.closeWatcher()
 					return m, tea.Quit
 				}
 				m.view = viewMulti
@@ -325,11 +368,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch {
 	case key.Matches(msg, m.keys.Quit):
+		m.closeWatcher()
 		return m, tea.Quit
 
 	// The command list is the top level, so esc quits (in the detail view esc
 	// goes back to the list). Consistent with the other TUIs.
 	case msg.Type == tea.KeyEsc:
+		m.closeWatcher()
 		return m, tea.Quit
 
 	case key.Matches(msg, m.keys.Search):

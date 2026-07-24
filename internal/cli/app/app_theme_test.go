@@ -28,3 +28,13 @@ func TestAppThemeFormaeAlias(t *testing.T) {
 	a := &App{Config: &pkgmodel.Config{Cli: pkgmodel.CliConfig{Theme: "formae"}}}
 	assert.Equal(t, "quiet", a.Theme().Name)
 }
+
+func TestAppThemeOmarchyFallsBackWhenAbsent(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	a := &App{Config: &pkgmodel.Config{Cli: pkgmodel.CliConfig{Theme: "omarchy"}}}
+	// No Omarchy install → quiet fallback, no panic/error.
+	if got := a.Theme().Name; got != "quiet" {
+		t.Errorf("omarchy theme with no install = %q, want quiet fallback", got)
+	}
+}

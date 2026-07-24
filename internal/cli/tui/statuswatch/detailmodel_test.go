@@ -614,6 +614,52 @@ func TestDetailModel_ColHeaderAlignment(t *testing.T) {
 	}
 }
 
+// TestDetailModel_ApplyThemeRebuildsPinnedStrings gates the PLA-348 fix for a
+// live theme swap while drilled into a command: SetCommand builds
+// pinnedHeader/pinnedRow ONCE from the theme in effect at the time, and View
+// reuses those cached strings verbatim every frame. Before the fix,
+// ApplyTheme only swapped d.th and left the cached strings rendered in the
+// old theme's colors until the next poll re-called SetCommand. This proves
+// the pinned row is actually re-rendered (not just that d.th changed) by
+// diffing the raw (ANSI-inclusive) pinnedRow/pinnedHeader before and after.
+func TestDetailModel_ApplyThemeRebuildsPinnedStrings(t *testing.T) {
+	quiet := theme.New("quiet")
+	rich := theme.New("rich")
+	dm := newDetailModel(quiet, 100, 30)
+	c := makeTerminalCmd()
+	r := makeTerminalRow()
+	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
+	dm = dm.SetCommand(c, r, "◉", now, nil)
+
+	beforeHeader := dm.pinnedHeader
+	beforeRow := dm.pinnedRow
+	require.NotEmpty(t, beforeRow, "precondition: pinned row must be populated after SetCommand")
+
+	dm = dm.ApplyTheme(rich)
+
+	assert.Equal(t, "rich", dm.th.Name, "theme must be threaded")
+	assert.NotEqual(t, beforeHeader, dm.pinnedHeader,
+		"pinned header must be re-rendered under the new theme, not left stale")
+	assert.NotEqual(t, beforeRow, dm.pinnedRow,
+		"pinned row must be re-rendered under the new theme, not left stale")
+
+	// The re-rendered row must reflect the SAME underlying data (command ID),
+	// just re-themed — this is a re-render, not a wipe.
+	assert.Contains(t, plain(dm.pinnedRow), "cmd-abc123", "re-rendered pinned row still shows the command data")
+}
+
+// TestDetailModel_ApplyThemeBeforeSetCommand asserts ApplyTheme is safe to
+// call on a detailModel that never had SetCommand called on it (e.g. a theme
+// change arriving before the first poll response) — it must not panic and
+// must leave the still-empty pinned strings alone.
+func TestDetailModel_ApplyThemeBeforeSetCommand(t *testing.T) {
+	dm := newDetailModel(theme.New("quiet"), 100, 30)
+	dm2 := dm.ApplyTheme(theme.New("rich"))
+	assert.Equal(t, "rich", dm2.th.Name)
+	assert.Empty(t, dm2.pinnedHeader)
+	assert.Empty(t, dm2.pinnedRow)
+}
+
 // TestDetailModel_SortKeepsFocusOnRow verifies that toggling the sort keeps the
 // cursor on the same row instead of jumping back to the top.
 func TestDetailModel_SortKeepsFocusOnRow(t *testing.T) {
