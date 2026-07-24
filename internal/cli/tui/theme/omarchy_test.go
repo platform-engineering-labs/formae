@@ -9,6 +9,7 @@ package theme
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -170,4 +171,29 @@ func TestResolveOmarchy_Malformed(t *testing.T) {
 	if len(warned) == 0 {
 		t.Error("expected a warning on malformed colors.toml")
 	}
+}
+
+func TestResolve_OmarchyRoutesToOmarchyResolver(t *testing.T) {
+	// With no Omarchy install, Resolve("omarchy") must warn + fall back to quiet
+	// (proving the name is routed to resolveOmarchy, not treated as unknown).
+	t.Setenv("HOME", t.TempDir())          // empty config dir → no colors.toml
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	var warned []string
+	th := resolveWithDir("omarchy", "", func(m string) { warned = append(warned, m) })
+	if th.Name != "quiet" {
+		t.Errorf("Name = %q, want quiet (omarchy fallback)", th.Name)
+	}
+	if len(warned) == 0 || !containsAny(warned, "omarchy") {
+		t.Errorf("expected an omarchy-specific warning, got %v", warned)
+	}
+}
+
+// containsAny reports whether any string in xs contains sub.
+func containsAny(xs []string, sub string) bool {
+	for _, x := range xs {
+		if strings.Contains(x, sub) {
+			return true
+		}
+	}
+	return false
 }

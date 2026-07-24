@@ -35,6 +35,11 @@ func resolveWithDir(name, userDir string, warn func(string)) *Theme {
 		name = "quiet"
 	}
 
+	// Step 1: omarchy special case — palette derived live from the OS theme.
+	if name == "omarchy" {
+		return resolveOmarchy(omarchyThemeDir(), warn)
+	}
+
 	// Step 2: user-dir override (may shadow a built-in name).
 	if userDir != "" {
 		if th, ok := loadUserTheme(userDir, name, warn); ok {
