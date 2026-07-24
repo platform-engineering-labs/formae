@@ -39,6 +39,7 @@ require (
 	github.com/demula/mksuid/v2 v2.0.1
 	github.com/exaring/otelpgx v0.9.4
 	github.com/fatih/color v1.18.0
+	github.com/fsnotify/fsnotify v1.7.0
 	github.com/goccy/go-json v0.10.5
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.7.6
@@ -167,7 +168,6 @@ require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/ebitengine/purego v0.9.1 // indirect
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
-	github.com/fsnotify/fsnotify v1.7.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.7.0 // indirect
 	github.com/gaissmai/bart v0.18.0 // indirect
 	github.com/ghodss/yaml v1.0.0 // indirect
