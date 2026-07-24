@@ -642,12 +642,27 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 		return StateFinishedWithError, data, nil, nil
 	}
 
+	// PLA-350: PriorProperties is diff/context for the plugin, never a value
+	// being written — the plugin has no legitimate use for the prior value of
+	// a schema-opaque field, hashed or not. convertResourceForPluginRead above
+	// is deliberately unguarded (see its doc comment), so a non-enriching
+	// secret's stored $hashed envelope survives conversion as a bare digest
+	// with nothing left to mark it as hashed. Strip every schema-opaque
+	// top-level field here so no digest (or plaintext) for it ever reaches
+	// the plugin via PriorProperties.
+	priorProperties, err := StripOpaqueFieldsForPriorProperties(convertedExisting.Properties, data.resourceUpdate.DesiredState.Schema.Opaque())
+	if err != nil {
+		proc.Log().Error("failed to strip opaque fields from prior properties: %v", err)
+		data.resourceUpdate.MarkAsFailed()
+		return StateFinishedWithError, data, nil, nil
+	}
+
 	updateOperation := plugin.UpdateResource{
 		Namespace:         convertedResource.Namespace(),
 		NativeID:          convertedResource.NativeID,
 		ResourceType:      convertedResource.Type,
 		Label:             convertedResource.Label,
-		PriorProperties:   convertedExisting.Properties,
+		PriorProperties:   priorProperties,
 		DesiredProperties: convertedResource.Properties,
 		PatchDocument:     string(data.resourceUpdate.DesiredState.PatchDocument),
 		TargetConfig:      data.resourceUpdate.ResourceTarget.Config,

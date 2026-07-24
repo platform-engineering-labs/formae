@@ -8,10 +8,14 @@ package workflow_tests_local
 
 import (
 	"encoding/json"
+	"fmt"
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/sjson"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
@@ -23,6 +27,76 @@ import (
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
+
+// hexDigestPattern matches a bare SHA-256 hex digest — the shape a hashed
+// opaque value takes once convertResourceForPluginRead strips the $hashed
+// envelope down to a plain value for plugin-format context (PriorProperties).
+var hexDigestPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// assertNoDigestOrHashedMarker walks props and fails the test if any value
+// looks like a hashed secret: a bare 64-hex digest, or an object still
+// carrying the $hashed:true marker. context names what was inspected, for a
+// legible failure message.
+func assertNoDigestOrHashedMarker(t *testing.T, props json.RawMessage, context string) {
+	t.Helper()
+	if len(props) == 0 {
+		return
+	}
+	var parsed any
+	require.NoError(t, json.Unmarshal(props, &parsed), "%s: must be valid JSON", context)
+
+	var walk func(v any, path string)
+	walk = func(v any, path string) {
+		switch val := v.(type) {
+		case map[string]any:
+			if h, ok := val["$hashed"].(bool); ok && h {
+				t.Errorf("%s: found a $hashed marker at %s — a plugin update write-input must never carry a hashed secret", context, path)
+			}
+			for k, cv := range val {
+				walk(cv, path+"."+k)
+			}
+		case string:
+			if hexDigestPattern.MatchString(val) {
+				t.Errorf("%s: found a 64-hex digest-shaped value at %s: %s — a plugin update write-input must never carry a hashed secret", context, path, val)
+			}
+		case []any:
+			for i, cv := range val {
+				walk(cv, fmt.Sprintf("%s[%d]", path, i))
+			}
+		}
+	}
+	walk(parsed, "$")
+}
+
+// applyPatchDocumentForTest applies a simple RFC6902-shaped ("op"/"path"/"value",
+// add/replace/remove) patch document to doc, mimicking a plugin that
+// reconstructs its write body from PriorProperties + PatchDocument rather than
+// using DesiredProperties directly. Only handles the flat top-level paths this
+// package's patches produce.
+func applyPatchDocumentForTest(t *testing.T, doc json.RawMessage, patchDoc *string) json.RawMessage {
+	t.Helper()
+	if patchDoc == nil || *patchDoc == "" {
+		return doc
+	}
+	var ops []map[string]any
+	require.NoError(t, json.Unmarshal([]byte(*patchDoc), &ops))
+
+	result := string(doc)
+	for _, op := range ops {
+		opType, _ := op["op"].(string)
+		path, _ := op["path"].(string)
+		sjsonPath := strings.ReplaceAll(strings.TrimPrefix(path, "/"), "/", ".")
+		var err error
+		switch opType {
+		case "add", "replace":
+			result, err = sjson.Set(result, sjsonPath, op["value"])
+		case "remove":
+			result, err = sjson.Delete(result, sjsonPath)
+		}
+		require.NoError(t, err)
+	}
+	return json.RawMessage(result)
+}
 
 // nonEnrichingSecretRead is a plugin Read override for FakeAWS's
 // SecretsManager::Secret that mimics a NON-enriching (writeOnly) secret: real
@@ -140,6 +214,16 @@ func TestNonEnrichingSecretGuard_UpdateNonSecretFieldSucceeds(t *testing.T) {
 			Read: nonEnrichingSecretRead(name),
 			Update: func(r *resource.UpdateRequest) (*resource.UpdateResult, error) {
 				received = r.DesiredProperties
+
+				// PLA-350: PriorProperties must never carry a hashed digest in
+				// place of the live secret — directly, or reconstructable by
+				// applying PatchDocument on top of it (how a plugin that builds
+				// its write body from prior+patch, rather than DesiredProperties,
+				// would assemble the value it actually sends to the cloud).
+				assertNoDigestOrHashedMarker(t, r.PriorProperties, "PriorProperties")
+				reconstructed := applyPatchDocumentForTest(t, r.PriorProperties, r.PatchDocument)
+				assertNoDigestOrHashedMarker(t, reconstructed, "PriorProperties+PatchDocument reconstruction")
+
 				return &resource.UpdateResult{
 					ProgressResult: &resource.ProgressResult{
 						Operation:          resource.OperationUpdate,
