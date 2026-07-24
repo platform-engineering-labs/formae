@@ -230,6 +230,10 @@ func runExtractCore(a *app.App, opts *ExtractOptions) error {
 		fmt.Println(warnStyle.Render(warning))
 	}
 
+	if u := res.SchemaVersionUpgrade; u != nil {
+		fmt.Println(warnStyle.Render(schemaVersionNag(u)))
+	}
+
 	// Build per-resource list from the forma that was extracted.
 	extracted := make([]extractedResource, 0, len(forma.Resources))
 	for _, r := range forma.Resources {
@@ -250,6 +254,17 @@ func runExtractCore(a *app.App, opts *ExtractOptions) error {
 	nag.MaybePrintNags(themeFor(a), nags)
 
 	return nil
+}
+
+// schemaVersionNag builds the message shown when the extract target's existing
+// PklProject pins a formae schema older than the required floor. Extracted files
+// use `extends "@formae/forma.pkl"`, which needs formae >= that version (see
+// requiredFormaeSchemaVersion); older ones can't evaluate the file. We only tell
+// the user — the PklProject is never rewritten for them.
+func schemaVersionNag(u *schema.SchemaVersionUpgrade) string {
+	return fmt.Sprintf(
+		"'%s/PklProject' is using formae version %s, however CLI is at version %s. Please update to %s or greater and run 'pkl project resolve', in order to ensure extracted file evaluates.",
+		u.ProjectDir, u.Current, u.Target, u.Target)
 }
 
 func validateExtractOptions(opts *ExtractOptions) error {
