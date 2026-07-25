@@ -28,6 +28,11 @@ import (
 
 const ProjectFile = "PklProject"
 
+// hashedSecretSentinel is the inline comment appended by the PKL generator to
+// every hashed opaque field. It MUST stay byte-identical to the trailing comment
+// that gen.pkl emits — the consistency test in pkl_generate_test.go guards drift.
+const hashedSecretSentinel = "// hashed secret value — cannot be applied as-is; re-supply the plaintext to set it"
+
 type PKL struct{}
 
 //go:embed assets
@@ -596,6 +601,7 @@ func (p PKL) GenerateSourceCode(forma *pkgmodel.Forma, path string, includes []s
 		return schema.GenerateSourcesResult{}, fmt.Errorf("%w: %v", schema.ErrFailedToGenerateSources, err)
 	}
 	res.ResourceCount = len(forma.Resources)
+	res.HashedSecretCount = strings.Count(code, hashedSecretSentinel)
 
 	if err := os.WriteFile(path, []byte(code), 0644); err != nil {
 		return schema.GenerateSourcesResult{}, fmt.Errorf("failed to write Pkl file: %v", err)

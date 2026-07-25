@@ -30,6 +30,11 @@ type GenerateSourcesResult struct {
 	InitializedNewProject bool
 	Warnings              []string
 
+	// HashedSecretCount is the number of resource fields in the generated source
+	// that carry a hashed opaque value. These fields cannot be re-applied without
+	// re-supplying the plaintext; the CLI surfaces this count as a stderr warning.
+	HashedSecretCount int
+
 	// SchemaVersionUpgrade, when non-nil, reports that the target directory has
 	// an existing project pinned to an OLDER core schema version than this
 	// binary emits. Generation used the corrected version in-memory (so the
