@@ -1583,5 +1583,11 @@ func TestToPluginFormat_ErrorsOnHashedValue(t *testing.T) {
 	props := json.RawMessage(`{"SecretString":{"$value":"deadbeef","$visibility":"Opaque","$hashed":true}}`)
 	_, err := ConvertToPluginFormat(props) // exported entry at resolver.go:33
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "hashed")
+	// The message must be actionable, not just internally descriptive: name the
+	// offending field, explain why the value can't be written (stored hashed, no
+	// plaintext to recover), and tell the user what to do (re-supply or accept).
+	msg := err.Error()
+	assert.Contains(t, msg, "SecretString", "names the offending secret field")
+	assert.Contains(t, msg, "hashed", "explains the value is stored hashed")
+	assert.Contains(t, msg, "re-supply", "tells the user how to proceed")
 }

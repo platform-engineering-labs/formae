@@ -92,7 +92,7 @@ func scanHashed(v any, path string) error {
 	switch val := v.(type) {
 	case map[string]any:
 		if h, ok := val["$hashed"].(bool); ok && h {
-			return fmt.Errorf("refusing to send hashed secret at %q to plugin: hashed values are terminal (needs live resolution)", path)
+			return fmt.Errorf("cannot write secret field %q: its value is stored hashed and formae cannot recover the plaintext to send to the provider — re-supply the value in your forma, or accept the current out-of-band value instead of overwriting", path)
 		}
 		for k, child := range val {
 			if err := scanHashed(child, path+"/"+k); err != nil {
