@@ -681,6 +681,55 @@ func (d *DatastoreMSSQL) LoadAllResourceVersions() ([]datastore.ResourceVersion,
 	return versions, rows.Err()
 }
 
+func (d *DatastoreMSSQL) LoadFormaCommandIDs() ([]string, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "LoadFormaCommandIDs")
+	defer span.End()
+	rows, err := d.conn.QueryContext(ctx, `SELECT command_id FROM forma_commands ORDER BY command_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+func (d *DatastoreMSSQL) LoadResourceVersionsPage(afterURI string, afterVersion string, limit int) ([]datastore.ResourceVersion, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "LoadResourceVersionsPage")
+	defer span.End()
+	// MSSQL has no LIMIT; TOP (@p3) with a parameter caps the page. The keyset
+	// predicate + ORDER BY (uri, version) makes the page deterministic.
+	rows, err := d.conn.QueryContext(ctx,
+		`SELECT TOP (@p3) uri, version, data, ksuid FROM resources
+		 WHERE uri > @p1 OR (uri = @p1 AND version > @p2)
+		 ORDER BY uri, version`,
+		afterURI, afterVersion, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var versions []datastore.ResourceVersion
+	for rows.Next() {
+		var uri, version, jsonData, ksuid string
+		if err := rows.Scan(&uri, &version, &jsonData, &ksuid); err != nil {
+			return nil, err
+		}
+		var resource pkgmodel.Resource
+		if err := json.Unmarshal([]byte(jsonData), &resource); err != nil {
+			return nil, err
+		}
+		resource.Ksuid = ksuid
+		versions = append(versions, datastore.ResourceVersion{URI: uri, Version: version, Resource: &resource})
+	}
+	return versions, rows.Err()
+}
+
 func (d *DatastoreMSSQL) UpdateResourceVersionData(uri string, version string, resource *pkgmodel.Resource) error {
 	ctx, span := mssqlTracer.Start(context.Background(), "UpdateResourceVersionData")
 	defer span.End()
