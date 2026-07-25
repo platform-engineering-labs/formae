@@ -109,6 +109,12 @@ func (m *mockExtractDatastore) LoadAllResources() ([]*pkgmodel.Resource, error) 
 func (m *mockExtractDatastore) LoadAllResourceVersions() ([]datastore.ResourceVersion, error) {
 	panic("not implemented")
 }
+func (m *mockExtractDatastore) LoadFormaCommandIDs() ([]string, error) {
+	panic("not implemented")
+}
+func (m *mockExtractDatastore) LoadResourceVersionsPage(_ string, _ string, _ int) ([]datastore.ResourceVersion, error) {
+	panic("not implemented")
+}
 func (m *mockExtractDatastore) UpdateResourceVersionData(_ string, _ string, _ *pkgmodel.Resource) error {
 	panic("not implemented")
 }

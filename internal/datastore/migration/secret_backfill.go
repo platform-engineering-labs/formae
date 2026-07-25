@@ -55,12 +55,20 @@ func BackfillHashedSecrets(ds datastore.Datastore) error {
 }
 
 func backfillFormaCommands(ds datastore.Datastore, t *transformations.PersistValueTransformer) error {
-	cmds, err := ds.LoadFormaCommands()
+	// Page over command IDs and load one command at a time. LoadFormaCommands
+	// would materialize every command and all its resource updates at once, which
+	// OOMs the agent at startup on large datasets; loading per command bounds
+	// memory to a single command's updates.
+	ids, err := ds.LoadFormaCommandIDs()
 	if err != nil {
-		return fmt.Errorf("backfill: load commands: %w", err)
+		return fmt.Errorf("backfill: load command ids: %w", err)
 	}
 
-	for _, cmd := range cmds {
+	for _, id := range ids {
+		cmd, err := ds.GetFormaCommandByCommandID(id)
+		if err != nil {
+			return fmt.Errorf("backfill: load command %s: %w", id, err)
+		}
 		dirty := false
 
 		for i := range cmd.ResourceUpdates {
@@ -115,27 +123,45 @@ func backfillFormaCommands(ds datastore.Datastore, t *transformations.PersistVal
 	return nil
 }
 
+// resourceVersionPageSize bounds how many resource versions the backfill holds
+// in memory at once. The resources table can hold tens of thousands of versions
+// (each with a potentially large data blob), so the scrub pages through them
+// rather than loading them all at once — loading everything OOMs the agent at
+// startup.
+const resourceVersionPageSize = 500
+
 // backfillResourcesTable scrubs plaintext opaque values from EVERY stored
 // resource version, not just the current one. The resources table keeps version
 // history, so a superseded version can still hold a pre-fix plaintext secret at
 // rest; each such version is rewritten in place (keyed by uri+version) so no new
-// version is appended and no plaintext lingers in history.
+// version is appended and no plaintext lingers in history. It pages by the
+// (uri, version) keyset so memory stays bounded regardless of dataset size;
+// rewriting a version's data in place never moves its keyset position, so paging
+// stays stable across the scrub.
 func backfillResourcesTable(ds datastore.Datastore, t *transformations.PersistValueTransformer) error {
-	versions, err := ds.LoadAllResourceVersions()
-	if err != nil {
-		return fmt.Errorf("backfill: load resource versions: %w", err)
-	}
-
-	for _, v := range versions {
-		changed, err := hashResourceValuesInPlace(t, v.Resource)
+	afterURI, afterVersion := "", ""
+	for {
+		page, err := ds.LoadResourceVersionsPage(afterURI, afterVersion, resourceVersionPageSize)
 		if err != nil {
-			return fmt.Errorf("backfill: hash resource %s version %s: %w", v.Resource.Label, v.Version, err)
+			return fmt.Errorf("backfill: load resource versions page: %w", err)
 		}
-		if !changed {
-			continue
+		if len(page) == 0 {
+			break
 		}
-		if err := ds.UpdateResourceVersionData(v.URI, v.Version, v.Resource); err != nil {
-			return fmt.Errorf("backfill: update resource %s version %s: %w", v.Resource.Label, v.Version, err)
+		for _, v := range page {
+			changed, err := hashResourceValuesInPlace(t, v.Resource)
+			if err != nil {
+				return fmt.Errorf("backfill: hash resource %s version %s: %w", v.Resource.Label, v.Version, err)
+			}
+			if changed {
+				if err := ds.UpdateResourceVersionData(v.URI, v.Version, v.Resource); err != nil {
+					return fmt.Errorf("backfill: update resource %s version %s: %w", v.Resource.Label, v.Version, err)
+				}
+			}
+			afterURI, afterVersion = v.URI, v.Version
+		}
+		if len(page) < resourceVersionPageSize {
+			break
 		}
 	}
 

@@ -183,6 +183,12 @@ type Datastore interface {
 	StoreFormaCommand(fa *forma_command.FormaCommand, commandID string) error
 	// LoadFormaCommands returns all stored FormaCommands
 	LoadFormaCommands() ([]*forma_command.FormaCommand, error)
+	// LoadFormaCommandIDs returns the IDs of all stored FormaCommands, ordered by
+	// command_id. Cheap (IDs only) so a caller can page through commands one at a
+	// time via GetFormaCommandByCommandID instead of materializing every command
+	// and all its resource updates at once — used by the secret backfill to bound
+	// memory on large datasets.
+	LoadFormaCommandIDs() ([]string, error)
 	// LoadIncompleteFormaCommands returns FormaCommands that haven't reached a terminal state
 	LoadIncompleteFormaCommands() ([]*forma_command.FormaCommand, error)
 	// DeleteFormaCommand removes a FormaCommand and its associated ResourceUpdates
@@ -221,6 +227,14 @@ type Datastore interface {
 	// latest version per URI). Used by the one-time secret backfill to scrub
 	// plaintext opaque values from resource history.
 	LoadAllResourceVersions() ([]ResourceVersion, error)
+	// LoadResourceVersionsPage returns a bounded page of resource versions whose
+	// (uri, version) keyset is strictly after (afterURI, afterVersion), ordered by
+	// (uri, version), at most limit rows. Pass "", "" to start. Lets the secret
+	// backfill scrub history without loading every version into memory at once;
+	// callers page until a short (< limit) page is returned. Rewriting a version's
+	// data in place (UpdateResourceVersionData) does not move its keyset position,
+	// so paging stays stable across the scrub.
+	LoadResourceVersionsPage(afterURI string, afterVersion string, limit int) ([]ResourceVersion, error)
 	// UpdateResourceVersionData overwrites the persisted data of a single
 	// resource version in place (keyed by uri+version), without appending a new
 	// version. Used by the secret backfill to rewrite a superseded version's

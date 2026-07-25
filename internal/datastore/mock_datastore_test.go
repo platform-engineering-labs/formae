@@ -63,6 +63,10 @@ func (m *mockDatastore) LoadResourceByNativeID(_, _ string) (*pkgmodel.Resource,
 }
 func (m *mockDatastore) LoadAllResources() ([]*pkgmodel.Resource, error)     { return nil, nil }
 func (m *mockDatastore) LoadAllResourceVersions() ([]ResourceVersion, error) { return nil, nil }
+func (m *mockDatastore) LoadFormaCommandIDs() ([]string, error)              { return nil, nil }
+func (m *mockDatastore) LoadResourceVersionsPage(_ string, _ string, _ int) ([]ResourceVersion, error) {
+	return nil, nil
+}
 func (m *mockDatastore) UpdateResourceVersionData(_ string, _ string, _ *pkgmodel.Resource) error {
 	return nil
 }

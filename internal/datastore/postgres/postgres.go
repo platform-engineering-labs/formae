@@ -1143,6 +1143,54 @@ func (d DatastorePostgres) LoadAllResourceVersions() ([]datastore.ResourceVersio
 	return versions, rows.Err()
 }
 
+func (d DatastorePostgres) LoadFormaCommandIDs() ([]string, error) {
+	ctx, span := tracer.Start(context.Background(), "LoadFormaCommandIDs")
+	defer span.End()
+	rows, err := d.pool.Query(ctx, `SELECT command_id FROM forma_commands ORDER BY command_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+func (d DatastorePostgres) LoadResourceVersionsPage(afterURI string, afterVersion string, limit int) ([]datastore.ResourceVersion, error) {
+	ctx, span := tracer.Start(context.Background(), "LoadResourceVersionsPage")
+	defer span.End()
+	rows, err := d.pool.Query(ctx,
+		`SELECT uri, version, data, ksuid FROM resources
+		 WHERE uri > $1 OR (uri = $1 AND version > $2)
+		 ORDER BY uri, version
+		 LIMIT $3`,
+		afterURI, afterVersion, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var versions []datastore.ResourceVersion
+	for rows.Next() {
+		var uri, version, jsonData, ksuid string
+		if err := rows.Scan(&uri, &version, &jsonData, &ksuid); err != nil {
+			return nil, err
+		}
+		var resource pkgmodel.Resource
+		if err := json.Unmarshal([]byte(jsonData), &resource); err != nil {
+			return nil, err
+		}
+		resource.Ksuid = ksuid
+		versions = append(versions, datastore.ResourceVersion{URI: uri, Version: version, Resource: &resource})
+	}
+	return versions, rows.Err()
+}
+
 func (d DatastorePostgres) UpdateResourceVersionData(uri string, version string, resource *pkgmodel.Resource) error {
 	ctx, span := tracer.Start(context.Background(), "UpdateResourceVersionData")
 	defer span.End()

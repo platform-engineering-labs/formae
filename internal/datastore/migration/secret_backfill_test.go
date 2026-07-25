@@ -9,6 +9,7 @@ package migration
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -375,4 +376,43 @@ func TestBackfillHashedSecrets_HashesResourcesTable(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, resourcesAfter, 1)
 	assert.JSONEq(t, string(resources[0].Properties), string(resourcesAfter[0].Properties))
+}
+
+// TestBackfillHashedSecrets_PagesAllResourceVersionsAtVolume seeds more than one
+// page (resourceVersionPageSize) of SecretsManager resources so the resources-table
+// scrub must page. Every stored SecretString must end up hashed — proving keyset
+// paging drops nothing across page boundaries. This is the regression guard for
+// the memory-bounded rewrite: loading the whole table at once OOMs at prod scale.
+func TestBackfillHashedSecrets_PagesAllResourceVersionsAtVolume(t *testing.T) {
+	ds := newTestDatastore(t)
+
+	const total = resourceVersionPageSize + 137 // spans full pages + a short final page
+	for i := 0; i < total; i++ {
+		r := &pkgmodel.Resource{
+			NativeID:   fmt.Sprintf("native-vol-%04d", i),
+			Stack:      "vol",
+			Type:       knownSecretType,
+			Label:      fmt.Sprintf("vol-%04d", i),
+			Schema:     staleSecretSchema(),
+			Properties: json.RawMessage(fmt.Sprintf(`{"SecretString":"plaintext-%04d"}`, i)),
+			Ksuid:      util.NewID(),
+		}
+		_, err := ds.StoreResource(r, fmt.Sprintf("cmd-vol-%04d", i))
+		require.NoError(t, err)
+	}
+
+	require.NoError(t, BackfillHashedSecrets(ds))
+
+	versions, err := ds.LoadAllResourceVersions()
+	require.NoError(t, err)
+	seen := 0
+	for _, v := range versions {
+		if v.Resource.Type != knownSecretType {
+			continue
+		}
+		seen++
+		require.True(t, isHashed(t, v.Resource.Properties, "SecretString"),
+			"resource %s SecretString must be hashed after paged backfill", v.Resource.Label)
+	}
+	require.Equal(t, total, seen, "every stored SecretsManager version must be present and hashed")
 }

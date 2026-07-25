@@ -1345,6 +1345,72 @@ func (d *DatastoreAuroraDataAPI) LoadAllResourceVersions() ([]datastore.Resource
 	return versions, nil
 }
 
+func (d *DatastoreAuroraDataAPI) LoadFormaCommandIDs() ([]string, error) {
+	ctx := context.Background()
+	output, err := d.executeStatement(ctx, `SELECT command_id FROM forma_commands ORDER BY command_id`, nil)
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for _, record := range output.Records {
+		if len(record) < 1 {
+			continue
+		}
+		id, err := getStringField(record[0])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse command_id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+func (d *DatastoreAuroraDataAPI) LoadResourceVersionsPage(afterURI string, afterVersion string, limit int) ([]datastore.ResourceVersion, error) {
+	ctx := context.Background()
+	query := `SELECT uri, version, data, ksuid FROM resources
+		WHERE uri > :after_uri OR (uri = :after_uri AND version > :after_version)
+		ORDER BY uri, version
+		LIMIT :page_limit`
+	params := []types.SqlParameter{
+		{Name: aws.String("after_uri"), Value: &types.FieldMemberStringValue{Value: afterURI}},
+		{Name: aws.String("after_version"), Value: &types.FieldMemberStringValue{Value: afterVersion}},
+		{Name: aws.String("page_limit"), Value: &types.FieldMemberLongValue{Value: int64(limit)}},
+	}
+	output, err := d.executeStatement(ctx, query, params)
+	if err != nil {
+		return nil, err
+	}
+	var versions []datastore.ResourceVersion
+	for _, record := range output.Records {
+		if len(record) < 4 {
+			continue
+		}
+		uri, err := getStringField(record[0])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse uri: %w", err)
+		}
+		version, err := getStringField(record[1])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse version: %w", err)
+		}
+		jsonData, err := getStringField(record[2])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse data: %w", err)
+		}
+		ksuid, err := getStringField(record[3])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse ksuid: %w", err)
+		}
+		var resource pkgmodel.Resource
+		if err := json.Unmarshal([]byte(jsonData), &resource); err != nil {
+			return nil, err
+		}
+		resource.Ksuid = ksuid
+		versions = append(versions, datastore.ResourceVersion{URI: uri, Version: version, Resource: &resource})
+	}
+	return versions, nil
+}
+
 func (d *DatastoreAuroraDataAPI) UpdateResourceVersionData(uri string, version string, resource *pkgmodel.Resource) error {
 	ctx := context.Background()
 
