@@ -122,35 +122,35 @@ jobs:
         # The agent's multi-source discovery finds plugins from both dirs.
         include:
           - test: TestReconcileApply
-            system_plugins: aws azure
+            system_plugins: aws@0.1.14 azure@0.1.8
           - test: TestPatchApply
-            system_plugins: aws azure
+            system_plugins: aws@0.1.14 azure@0.1.8
           - test: TestDiscovery
-            system_plugins: aws azure
+            system_plugins: aws@0.1.14 azure@0.1.8
           - test: TestSoftReconcile
-            system_plugins: aws azure
+            system_plugins: aws@0.1.14 azure@0.1.8
           - test: TestHardReconcile
-            system_plugins: aws azure
+            system_plugins: aws@0.1.14 azure@0.1.8
           - test: TestReplace
-            system_plugins: aws azure
+            system_plugins: aws@0.1.14 azure@0.1.8
           - test: TestAutoReconcile
-            system_plugins: aws
+            system_plugins: aws@0.1.14
           - test: TestTTL
-            system_plugins: aws
+            system_plugins: aws@0.1.14
           - test: TestCancelCommand
-            system_plugins: aws
+            system_plugins: aws@0.1.14
           - test: TestCascadeDelete
-            system_plugins: aws
+            system_plugins: aws@0.1.14
           - test: TestTargetResolvable
             system_plugins: compose grafana
           - test: TestProjectInit
-            system_plugins: aws azure
+            system_plugins: aws@0.1.14 azure@0.1.8
           - test: TestProfileRouting_E2E
-            system_plugins: aws
+            system_plugins: aws@0.1.14
           - test: TestSimulateApply
-            system_plugins: aws
+            system_plugins: aws@0.1.14
           - test: TestExtractAndReapply
-            system_plugins: aws
+            system_plugins: aws@0.1.14
           # Embedded resolvable inside a String field (CloudFront
           # Function.functionCode). Builds the AWS plugin from its main branch
           # (user-install) so it carries the widened functionCode
@@ -160,11 +160,11 @@ jobs:
           - test: TestEmbedResolvable
             user_plugins: aws
           - test: TestEvalDefault
-            system_plugins: aws
+            system_plugins: aws@0.1.14
           - test: TestEvalSchemaLocationLocal
-            system_plugins: aws
+            system_plugins: aws@0.1.14
           - test: TestExtractSchemaLocationLocal
-            system_plugins: aws
+            system_plugins: aws@0.1.14
           # User-install variant: aws is `make install`'d from its repo
           # (not in orbital's tree) so the merge code path in
           # listPluginsHandler is the only thing that can surface its
