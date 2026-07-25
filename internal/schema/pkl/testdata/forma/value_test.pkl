@@ -64,6 +64,25 @@ forma {
     secretString = formae.value(random.password(12, false)).opaque.setOnce
   }
 
+  // A hashed opaque value carries the $hashed marker so the agent
+  // knows the stored $value is a SHA-256 digest, not the plaintext secret.
+  new secret.Secret {
+    label = properties.name.value + "-hashed"
+    name = properties.name.value + "-hashed"
+    description = properties.description.value
+
+    secretString = formae.value(properties.secret.value).opaque.hashed
+  }
+
+  // A clear (non-opaque) value never carries $hashed regardless of the accessor.
+  new secret.Secret {
+    label = properties.name.value + "-clear"
+    name = properties.name.value + "-clear"
+    description = properties.description.value
+
+    secretString = formae.value(properties.secret.value)
+  }
+
   when (formae.cmd() == "eval") {
     new debug.Consumer {
       label = "my-consumer"
