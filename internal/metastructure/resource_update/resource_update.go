@@ -590,7 +590,37 @@ func (m *propertyMerger) mergeRefObject(path string, userVal, pluginVal gjson.Re
 
 	// Preserve user's $ref structure and update the $value
 	updatedRef, _ := sjson.Set(userVal.Raw, "$value", valueToSet)
+
+	// A $ref may also be an Opaque envelope (a resolvable that resolves another
+	// resource's opaque/secret field) carrying a $hashed:true marker. When we just
+	// refreshed its $value from the plugin's live read, $value now holds plaintext,
+	// not the stored digest — so the $hashed marker is stale. Drop it, mirroring the
+	// bare-opaque-envelope branch in mergeObject, so the persist transformer re-hashes
+	// the field at rest. Leaving $hashed:true would persist the cleartext secret while
+	// claiming it is hashed (a plaintext-at-rest leak, and the transformer's
+	// idempotency guard would skip it). Only drop it when the value came from the
+	// plugin; if we preserved the user's stored hash (plugin returned nothing), the
+	// marker is still correct.
+	if userVal.Get("$visibility").String() == pkgmodel.VisibilityOpaque &&
+		userVal.Get("$hashed").Bool() && !m.keptUserValue(userValue, pluginVal) {
+		updatedRef, _ = sjson.Delete(updatedRef, "$hashed")
+	}
+
 	*m.result, _ = sjson.SetRaw(*m.result, cleanPath, updatedRef)
+}
+
+// keptUserValue reports whether selectRefValue preserved the user's stored $value
+// (because the plugin returned nothing usable) rather than adopting the plugin's
+// live value. It mirrors selectRefValue/preferNonNullValue exactly so the $hashed
+// drop decision stays in lock-step with which value was actually chosen.
+func (m *propertyMerger) keptUserValue(userValue, pluginVal gjson.Result) bool {
+	effectivePluginVal := pluginVal
+	if pluginVal.IsObject() && pluginVal.Get("$ref").Exists() {
+		effectivePluginVal = pluginVal.Get("$value")
+	}
+	userHasValue := userValue.Exists() && userValue.Value() != nil
+	pluginIsNullOrEmpty := effectivePluginVal.Value() == nil || effectivePluginVal.String() == ""
+	return userHasValue && pluginIsNullOrEmpty
 }
 
 // selectRefValue determines which value to use for a $ref object's $value field
