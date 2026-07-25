@@ -1279,7 +1279,7 @@ func RunStoreResourceWithDifferentKSUIDSameData(t *testing.T, newDS func(t *test
 }
 
 // RunStoreResourceRenamePreservesKsuidAndAddsNewVersion verifies the
-// RFC-0041 invariant: a rename writes a NEW VERSION ROW under the same
+// invariant: a rename writes a NEW VERSION ROW under the same
 // KSUID, never a second row with a fresh KSUID. The previous version
 // remains in history; the latest visible row carries the new label.
 // QueryResources for the native id returns exactly one current row.
@@ -1315,7 +1315,7 @@ func RunStoreResourceRenamePreservesKsuidAndAddsNewVersion(t *testing.T, newDS f
 		assert.NotEmpty(t, versionOriginal)
 
 		// Simulate the rename apply: the persister writes with the SAME ksuid,
-		// the SAME native id, but the NEW label. This is what RFC-0041's
+		// the SAME native id, but the NEW label. This is what the
 		// persist path does after a successful update.
 		time.Sleep(1100 * time.Millisecond) // KSUID has 1-second precision
 		renamed := *original
@@ -1331,7 +1331,7 @@ func RunStoreResourceRenamePreservesKsuidAndAddsNewVersion(t *testing.T, newDS f
 			versionRenamed, ksuid)
 
 		// Latest visible row for this NativeID is exactly one — the renamed row.
-		// Before the RFC-0041 ksuid-preservation fix, this query returned TWO
+		// Before the ksuid-preservation fix, this query returned TWO
 		// rows (one per ksuid) because the rename minted a fresh ksuid.
 		results, err := ds.QueryResources(&datastore.ResourceQuery{
 			NativeID: &datastore.QueryItem[string]{Item: nativeID, Constraint: datastore.Required},

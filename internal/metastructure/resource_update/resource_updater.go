@@ -38,11 +38,34 @@ var jsonpathParser = jsonpath.NewParser(jsonpath.WithRegistry(registry.New()))
 // of nullable Listing/Mapping fields) to prevent cloud API rejections for fields like K8S probes
 // that require handler types when non-empty.
 func convertResourceForPlugin(res pkgmodel.Resource) (pkgmodel.Resource, error) {
+	return convertResourceForPluginWith(res, resolver.ConvertToPluginFormat)
+}
+
+// convertResourceForPluginRead is the Read-context counterpart of
+// convertResourceForPlugin: it prepares DesiredState/PriorState as context for a
+// plugin Read call (sync, discovery, or the pre-update out-of-band check), which
+// never writes those values to the cloud. Unlike convertResourceForPlugin it does
+// NOT reject an already-hashed schema-opaque field — that hash is the steady state
+// once a secret has been persisted, and rejecting it here would make
+// every sync/OOB-check Read of a secret-bearing resource fail permanently.
+func convertResourceForPluginRead(res pkgmodel.Resource) (pkgmodel.Resource, error) {
+	return convertResourceForPluginWith(res, resolver.ConvertExistingStateForRead)
+}
+
+// convertResourceForPluginWith converts a resource's properties to plugin format
+// by extracting $value from opaque value structures (e.g., {"$value": "secret", "$visibility": "Opaque"})
+// becomes just "secret". This must be done before sending to the plugin since the resolver
+// lives in the agent and plugins may be remote.
+//
+// It also strips nested empty collections ([]/{}  artifacts from PKL's null rendering
+// of nullable Listing/Mapping fields) to prevent cloud API rejections for fields like K8S probes
+// that require handler types when non-empty.
+func convertResourceForPluginWith(res pkgmodel.Resource, convert func(json.RawMessage) (json.RawMessage, error)) (pkgmodel.Resource, error) {
 	if res.Properties == nil {
 		return res, nil
 	}
 
-	convertedProps, err := resolver.ConvertToPluginFormat(res.Properties)
+	convertedProps, err := convert(res.Properties)
 	if err != nil {
 		return res, err
 	}
@@ -363,14 +386,18 @@ func synchronize(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen
 		return handleProgressUpdate(gen.PID{}, state, data, notFound, proc)
 	}
 
-	// Convert properties to plugin format (extracts $value from opaque structures)
-	convertedResource, err := convertResourceForPlugin(data.resourceUpdate.DesiredState)
+	// Convert properties to plugin format (extracts $value from opaque structures).
+	// This state only ever prepares a Read call — it never writes DesiredState/PriorState
+	// to the cloud — so use the Read-safe conversion: a schema-opaque field already hashed
+	// at rest (the steady state for a secret) must not be rejected here, or every
+	// sync/OOB-check Read of a secret-bearing resource would fail permanently.
+	convertedResource, err := convertResourceForPluginRead(data.resourceUpdate.DesiredState)
 	if err != nil {
 		proc.Log().Error("failed to convert resource properties for plugin: %v", err)
 		data.resourceUpdate.MarkAsFailed()
 		return StateFinishedWithError, data, nil, nil
 	}
-	convertedExisting, err := convertResourceForPlugin(data.resourceUpdate.PriorState)
+	convertedExisting, err := convertResourceForPluginRead(data.resourceUpdate.PriorState)
 	if err != nil {
 		proc.Log().Error("failed to convert existing resource properties for plugin: %v", err)
 		data.resourceUpdate.MarkAsFailed()
@@ -401,8 +428,16 @@ func synchronize(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen
 }
 
 func delete(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
-	// Convert properties to plugin format (extracts $value from opaque structures)
-	convertedResource, err := convertResourceForPlugin(data.resourceUpdate.DesiredState)
+	// Convert properties to plugin format (extracts $value from opaque structures).
+	// A delete only ever needs identity (NativeID/TargetConfig) — it never writes
+	// DesiredState's property values to the cloud — so use the Read-safe (unguarded)
+	// conversion. A schema-opaque field can still carry its stored $hashed marker
+	// here: the pre-delete synchronize() Read merges in only what the plugin's Read
+	// actually returns, so a non-enriching secret (one the plugin's Read never
+	// returns) leaves the stored hash untouched. The guarded converter would reject
+	// that hash even though nothing is ever written from it, permanently failing
+	// destroy for any resource with a non-enriching hashed secret.
+	convertedResource, err := convertResourceForPluginRead(data.resourceUpdate.DesiredState)
 	if err != nil {
 		proc.Log().Error("failed to convert resource properties for plugin: %v", err)
 		data.resourceUpdate.MarkAsFailed()
@@ -532,7 +567,7 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 	isBringingUnderManagement := data.resourceUpdate.PriorState.Stack == constants.UnmanagedStack &&
 		data.resourceUpdate.DesiredState.Stack != constants.UnmanagedStack
 
-	// RFC-0041: a label-only change (label differs, same stack, same target,
+	// A label-only change (label differs, same stack, same target,
 	// no property delta) is a metadata-only update. Skip the plugin call for
 	// the same reason "bringing under management without property changes"
 	// does — there is nothing for the cloud to do.
@@ -582,16 +617,42 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 		return handleProgressUpdate(proc.PID(), state, data, syntheticResult, proc)
 	}
 
-	// Convert properties to plugin format (extracts $value from opaque structures)
+	// Convert properties to plugin format (extracts $value from opaque structures).
+	// DesiredState is the NEW value being written to the cloud as DesiredProperties,
+	// so this stays guarded: a stored hash must never be sent to a plugin in place
+	// of the live secret. SuppressUnchangedOpaqueValues plus fresh forma input keep
+	// this plaintext-or-suppressed by the time we get here.
 	convertedResource, err := convertResourceForPlugin(data.resourceUpdate.DesiredState)
 	if err != nil {
 		proc.Log().Error("failed to convert resource properties for plugin: %v", err)
 		data.resourceUpdate.MarkAsFailed()
 		return StateFinishedWithError, data, nil, nil
 	}
-	convertedExisting, err := convertResourceForPlugin(data.resourceUpdate.PriorState)
+	// PriorState becomes PriorProperties: prior/diff CONTEXT for the plugin, not a
+	// value being written. Use the Read-safe (unguarded) conversion — the pre-update
+	// synchronize() Read only merges in what the plugin's Read actually returns, so a
+	// non-enriching secret (one the plugin's Read never returns) leaves PriorState's
+	// stored $hashed marker untouched. The guarded converter would reject that hash
+	// even though it is never written anywhere, permanently failing updates to any
+	// other field on a resource with a non-enriching hashed secret.
+	convertedExisting, err := convertResourceForPluginRead(data.resourceUpdate.PriorState)
 	if err != nil {
 		proc.Log().Error("failed to convert existing resource properties for plugin: %v", err)
+		data.resourceUpdate.MarkAsFailed()
+		return StateFinishedWithError, data, nil, nil
+	}
+
+	// PriorProperties is diff/context for the plugin, never a value
+	// being written — the plugin has no legitimate use for the prior value of
+	// a schema-opaque field, hashed or not. convertResourceForPluginRead above
+	// is deliberately unguarded (see its doc comment), so a non-enriching
+	// secret's stored $hashed envelope survives conversion as a bare digest
+	// with nothing left to mark it as hashed. Strip every schema-opaque
+	// top-level field here so no digest (or plaintext) for it ever reaches
+	// the plugin via PriorProperties.
+	priorProperties, err := StripOpaqueFieldsForPriorProperties(convertedExisting.Properties, data.resourceUpdate.DesiredState.Schema.Opaque())
+	if err != nil {
+		proc.Log().Error("failed to strip opaque fields from prior properties: %v", err)
 		data.resourceUpdate.MarkAsFailed()
 		return StateFinishedWithError, data, nil, nil
 	}
@@ -601,7 +662,7 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 		NativeID:          convertedResource.NativeID,
 		ResourceType:      convertedResource.Type,
 		Label:             convertedResource.Label,
-		PriorProperties:   convertedExisting.Properties,
+		PriorProperties:   priorProperties,
 		DesiredProperties: convertedResource.Properties,
 		PatchDocument:     string(data.resourceUpdate.DesiredState.PatchDocument),
 		TargetConfig:      data.resourceUpdate.ResourceTarget.Config,
@@ -686,6 +747,15 @@ func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData,
 	// BEFORE recording the progress as Success. This prevents a crash window
 	// where the command record shows Success but the resource was never written.
 	if message.FinishedSuccessfully() {
+		// Emit reachable target-health observation on every successful path,
+		// including discovery filter matches and synchronizing rejects that
+		// return early below without reaching the normal emission point.
+		if obs, ok := targetHealthObservation(data.resourceUpdate.ResourceTarget.Label, &message, time.Now()); ok {
+			if err := proc.Send(resourcePersisterProcess(proc), messages.UpdateTargetHealth{Observation: obs}); err != nil {
+				proc.Log().Warning("failed to send UpdateTargetHealth for target %s: %v", obs.TargetLabel, err)
+			}
+		}
+
 		if data.commandSource == FormaCommandSourceDiscovery {
 			// Merge Properties and ReadOnlyProperties to get complete cloud state for filtering
 			completeProperties, mergeErr := util.MergeJSON(
@@ -798,6 +868,11 @@ func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData,
 	}
 
 	if message.Failed() {
+		if obs, ok := targetHealthObservation(data.resourceUpdate.ResourceTarget.Label, &message, time.Now()); ok {
+			if err := proc.Send(resourcePersisterProcess(proc), messages.UpdateTargetHealth{Observation: obs}); err != nil {
+				proc.Log().Warning("failed to send UpdateTargetHealth for target %s: %v", obs.TargetLabel, err)
+			}
+		}
 		data.resourceUpdate.MarkAsFailed()
 		return StateFinishedWithError, data, nil, nil
 	}

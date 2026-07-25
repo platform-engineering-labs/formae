@@ -65,9 +65,9 @@ func FormaePalette() Palette {
 		Error:           lipgloss.AdaptiveColor{Light: "#D64545", Dark: "#F87171"},
 		ErrorSubtle:     lipgloss.AdaptiveColor{Light: "#B45454", Dark: "#9B4444"},
 		ErrorBright:     lipgloss.AdaptiveColor{Light: "#B91C1C", Dark: "#FCA5A5"},
-		// Decision (PLA-280): use gold #B5B55B for Warning rather than the
-		// RFC's brighter yellow — it fits the muted grayscale aesthetic;
-		// warnings still read as "colored" against the gray states.
+		// Decision: keep the gold #B5B55B for Warning rather than the RFC's
+		// brighter yellow — it fits the muted grayscale aesthetic; warnings
+		// still read as "colored" against the gray states.
 		Warning: lipgloss.AdaptiveColor{Light: "#B5B55B", Dark: "#B5B55B"},
 		// Unmanaged resources default to the same red as Error; themes can
 		// override it independently (e.g. colorblind uses its own safe hue).

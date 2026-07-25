@@ -302,6 +302,32 @@ func TestRender_PlainError_FallThrough(t *testing.T) {
 	require.Equal(t, plain.Error(), out)
 }
 
+// ── TargetReapedError ─────────────────────────────────────────────────────────
+
+func TestRender_TargetReaped_Single_Golden(t *testing.T) {
+	err := &apimodel.ErrorResponse[apimodel.TargetReapedError]{
+		ErrorType: apimodel.TargetReaped,
+		Data: apimodel.TargetReapedError{
+			TargetLabels: []string{"aws-prod"},
+		},
+	}
+	out, rerr := Render(err)
+	require.NoError(t, rerr)
+	tuitest.RequireGolden(t, []byte(out))
+}
+
+func TestRender_TargetReaped_Multiple_Golden(t *testing.T) {
+	err := &apimodel.ErrorResponse[apimodel.TargetReapedError]{
+		ErrorType: apimodel.TargetReaped,
+		Data: apimodel.TargetReapedError{
+			TargetLabels: []string{"aws-prod", "aws-staging"},
+		},
+	}
+	out, rerr := Render(err)
+	require.NoError(t, rerr)
+	tuitest.RequireGolden(t, []byte(out))
+}
+
 // ── 17. TargetAlreadyExists — nil/empty config sub-cases ─────────────────────
 
 func TestRender_TargetAlreadyExists_Config_EmptyConfig_Golden(t *testing.T) {

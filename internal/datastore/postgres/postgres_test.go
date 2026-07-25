@@ -46,13 +46,23 @@ func TestDatastore(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to create Postgres datastore: %v", err)
 		}
+		d, _ := ds.(postgres.DatastorePostgres)
 		return dstest.TestDatastore{
 			Datastore: ds,
 			CleanUpFn: func() error {
-				if d, ok := ds.(postgres.DatastorePostgres); ok {
-					return d.CleanUp()
-				}
-				return nil
+				// Close the pool before dropping the database so this datastore's
+				// pooled connections are released back to the server. Without this,
+				// every conformance subtest leaks its pool and the suite eventually
+				// exhausts Postgres's connection limit ("too many clients already").
+				d.Close()
+				return d.CleanUp()
+			},
+			SetTargetHealthStateForTest: func(label, state string) error {
+				_, err := d.Pool().Exec(context.Background(),
+					`UPDATE targets SET health_state = $1 WHERE label = $2 AND version = (SELECT MAX(version) FROM targets WHERE label = $2)`,
+					state, label,
+				)
+				return err
 			},
 		}
 	})

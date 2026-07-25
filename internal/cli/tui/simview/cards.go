@@ -16,7 +16,7 @@ import (
 )
 
 // renderCard renders an expanded detail card for a simRow and returns a slice
-// of styled lines (no trailing newlines). Reused verbatim by Task 14's driftview.
+// of styled lines (no trailing newlines). Reused verbatim by the driftview.
 //
 // Contract:
 //   - Bordered card with title-in-border (op symbol + label) colored per-op via opColor

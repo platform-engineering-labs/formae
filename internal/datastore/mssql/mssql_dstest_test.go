@@ -77,6 +77,13 @@ func TestDatastore(t *testing.T) {
 				)
 				return err
 			},
+			SetTargetHealthStateForTest: func(label, state string) error {
+				_, err := conn.Exec(
+					`UPDATE targets SET health_state = @p1 WHERE label = @p2 AND version = (SELECT MAX(version) FROM targets WHERE label = @p2)`,
+					state, label,
+				)
+				return err
+			},
 			CleanUpFn: func() error {
 				ds.Close()
 				m, err := sql.Open("sqlserver", dstestMSSQLBase+"&database=master")

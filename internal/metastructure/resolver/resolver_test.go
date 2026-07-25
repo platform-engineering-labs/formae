@@ -1431,7 +1431,7 @@ func TestExtractResolvableRefs_EmbedField(t *testing.T) {
 	}
 
 	// Assert the Embedded flag and EmbedFieldPath are set on the internal Ref —
-	// these are the primary output of Task 3 and must survive refactoring.
+	// these carry the embedded-resolvable metadata and must survive refactoring.
 	pr := newPropertyResolverFromResource(res)
 	var embedRef pkgmodel.Ref
 	found := false
@@ -1577,4 +1577,11 @@ func TestEmbed_DuplicateIdenticalSpans(t *testing.T) {
 	plugin, err := resolver.toPluginFormat(resolved)
 	require.NoError(t, err)
 	assert.Equal(t, "cf.fn('VAL-42', 'VAL-42')", gjson.GetBytes(plugin, "code").String())
+}
+
+func TestToPluginFormat_ErrorsOnHashedValue(t *testing.T) {
+	props := json.RawMessage(`{"SecretString":{"$value":"deadbeef","$visibility":"Opaque","$hashed":true}}`)
+	_, err := ConvertToPluginFormat(props) // exported entry at resolver.go:33
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "hashed")
 }

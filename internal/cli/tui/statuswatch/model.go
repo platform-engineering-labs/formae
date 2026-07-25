@@ -19,7 +19,7 @@ import (
 )
 
 // Options configures the status/watch TUI. The public surface here is consumed
-// by Task 13 (status command wiring) and PLA-283 (apply/destroy handoff).
+// by the status command wiring and the apply/destroy handoff.
 type Options struct {
 	// Query is the initial server-side filter string (--query flag).
 	Query string
@@ -36,7 +36,7 @@ type Options struct {
 	PollInterval time.Duration
 	// Now is an injectable clock used for duration/age rendering; default time.Now.
 	Now func() time.Time
-	// FocusCommandID is the command ID to start drilled into — wired in Task 11
+	// FocusCommandID is the command ID to start drilled into — wired in the
 	// (detail view). Stored here to preserve the public Options contract.
 	FocusCommandID string
 	// ExitWhenDone causes the TUI to quit automatically when all visible

@@ -545,7 +545,7 @@ func (m Model) viewDetail() string {
 }
 
 // narrowFooterThreshold is the terminal width below which the footer hint line
-// and status bar switch to abbreviated forms. Matches the PLA-282 statuswatch
+// and status bar switch to abbreviated forms. Matches the statuswatch
 // convention (no analogous constant exists in statuswatch — it uses full hints
 // at all widths; the threshold here is spec-defined at 80).
 const narrowFooterThreshold = 80

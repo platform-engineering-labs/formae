@@ -102,7 +102,7 @@ const (
 
 // simRow is a render-ready row for the simulation preview table.
 type simRow struct {
-	key               string // "<kind>/<stack>/<label>" — stable identity (PLA-282)
+	key               string // "<kind>/<stack>/<label>" — stable identity
 	op                opKind
 	label, typ, stack string
 	detail            string // target "to discoverable" / replace reason / policy referencing-stacks note

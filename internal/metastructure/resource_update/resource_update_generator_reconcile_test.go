@@ -1808,7 +1808,7 @@ func TestTargetReplace_Reconcile_TargetOnlyForma_RecreatesAll(t *testing.T) {
 	assert.Equal(t, 1, createCount, "should have 1 create for vpc")
 }
 
-// RFC-0041: a resource that declares `alias` matches an existing managed row
+// A resource that declares `alias` matches an existing managed row
 // by the alias label under reconcile mode. The renamed resource must surface
 // as a single OperationUpdate (label change in PriorState/DesiredState), NOT
 // as Delete(old) + Create(new). The destroy-and-recreate outcome would
@@ -1936,7 +1936,7 @@ func TestGenerateResourceUpdatesForReconcile_RenameWithPropertyChange(t *testing
 	assert.NotNil(t, u.DesiredState.PatchDocument, "patch document expected for property change")
 }
 
-// RFC-0041: bring-under-management + rename in a single reconcile.
+// Bring-under-management + rename in a single reconcile.
 // The forma's resource declares the NEW human label and an alias to the
 // discovery default. The unmanaged row sits at the discovery default in the
 // $unmanaged stack. Reconcile must emit ONE OperationUpdate pairing the

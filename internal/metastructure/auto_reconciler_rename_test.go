@@ -14,7 +14,7 @@ import (
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
-// RFC-0041 ForceReconcile-vs-rename: when the live row's label differs from
+// ForceReconcile-vs-rename: when the live row's label differs from
 // the snapshot's label, the synthesized reconcile resource must carry the
 // live label as `Label` and the snapshot label as `Alias`. Without this the
 // reconcile generator pairs by stale label, treats the renamed inventory row

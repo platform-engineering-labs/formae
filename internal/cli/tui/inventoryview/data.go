@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
-// Package inventoryview implements the data layer for the inventory TUI browser
-// (PLA-281). It exposes the Client seam, tab specs, and fetch commands that the
+// Package inventoryview implements the data layer for the inventory TUI
+// browser. It exposes the Client seam, tab specs, and fetch commands that the
 // tab engine (later tasks) drives to populate tabbed views over resources,
 // targets, stacks and policies.
 package inventoryview

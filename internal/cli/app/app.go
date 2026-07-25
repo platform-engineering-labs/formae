@@ -781,7 +781,7 @@ func (a *App) buildDependencyStrings(forma *pkgmodel.Forma, location schema.Sche
 
 		info, ok := plugins[ns]
 		if !ok || info.Version == "" {
-			continue
+			return nil, fmt.Errorf("resource type %q requires plugin namespace %q, but the agent does not report it installed. Install it with `formae plugin install %s` and retry", r.Type, ns, ns)
 		}
 
 		if location == schema.SchemaLocationLocal {
