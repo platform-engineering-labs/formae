@@ -12,11 +12,12 @@ RUN useradd -m -s /bin/bash pel
 
 # Two-step install. The formae binary lives in the pel repo at the
 # release's CHANNEL (stable for X.Y.Z, dev for X.Y.Z-dev[.N]); the
-# standard metapackage and its constituent plugins always come from
-# community#stable. Plugins are released independently of formae and
-# don't carry a parallel dev channel — even dev formae containers ship
-# with stable plugins. Pelmgr applies one channel per install call, so
-# they have to be separate invocations.
+# standard metapackage and its constituent plugins come from
+# community#stable. Plugins are released independently of formae; for a
+# dev formae build (CHANNEL=dev) the three plugins that have dev releases
+# (aws, gcp, azure) are re-installed from the dev channel afterward,
+# overriding the stable ones standard pulled in. Pelmgr applies one
+# channel per install call, so they have to be separate invocations.
 #
 # Standard's `requires` resolve at install time and pull in the curated
 # default plugin set (aws, azure, gcp, oci, ovh, auth-basic) —
@@ -31,6 +32,11 @@ RUN apt-get update &&  \
     apt-get install -y jq curl && \
     /bin/bash -e -c "$(curl -fsSL https://hub.platform.engineering/get/setup.sh)" -- install --yes --channel ${CHANNEL} formae@${VERSION} && \
     /bin/bash -e -c "$(curl -fsSL https://hub.platform.engineering/get/setup.sh)" -- install --yes --channel stable standard && \
+    if [ "${CHANNEL}" = "dev" ]; then \
+      for p in aws gcp azure; do \
+        /bin/bash -e -c "$(curl -fsSL https://hub.platform.engineering/get/setup.sh)" -- install --yes --channel dev "$p" || exit 1; \
+      done; \
+    fi && \
     apt-get remove -y jq curl && \
     apt-get autoremove -y --purge && \
     apt-get clean && \
