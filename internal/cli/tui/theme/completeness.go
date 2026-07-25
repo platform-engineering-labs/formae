@@ -49,7 +49,7 @@ func collectMissing(base, cand reflect.Value, prefix string, missing *[]string) 
 		switch bf.Kind() {
 		case reflect.Struct:
 			collectMissing(bf, cf, name, missing)
-		case reflect.Ptr:
+		case reflect.Pointer:
 			if !bf.IsNil() && cf.IsNil() {
 				*missing = append(*missing, name)
 			}
