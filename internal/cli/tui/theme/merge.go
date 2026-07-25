@@ -24,6 +24,12 @@ func mergeThemeFiles(base, child *themeFile) *themeFile {
 		}
 		return b
 	}
+	pickB := func(c, b *bool) *bool {
+		if c != nil {
+			return c
+		}
+		return b
+	}
 
 	cp, bp := child.Palette, base.Palette
 	out.Palette = paletteFile{
@@ -33,11 +39,13 @@ func mergeThemeFiles(base, child *themeFile) *themeFile {
 		Selection: pickC(cp.Selection, bp.Selection), PrimaryAccent: pickC(cp.PrimaryAccent, bp.PrimaryAccent),
 		SecondaryAccent: pickC(cp.SecondaryAccent, bp.SecondaryAccent), Error: pickC(cp.Error, bp.Error),
 		ErrorSubtle: pickC(cp.ErrorSubtle, bp.ErrorSubtle), ErrorBright: pickC(cp.ErrorBright, bp.ErrorBright),
-		Warning: pickC(cp.Warning, bp.Warning), Done: pickC(cp.Done, bp.Done),
+		Warning: pickC(cp.Warning, bp.Warning), Unmanaged: pickC(cp.Unmanaged, bp.Unmanaged),
+		Done:       pickC(cp.Done, bp.Done),
 		InProgress: pickC(cp.InProgress, bp.InProgress), Pending: pickC(cp.Pending, bp.Pending),
 		OpCreate: pickC(cp.OpCreate, bp.OpCreate), OpUpdate: pickC(cp.OpUpdate, bp.OpUpdate),
 		OpDelete: pickC(cp.OpDelete, bp.OpDelete), OpReplace: pickC(cp.OpReplace, bp.OpReplace),
 		OpDetach: pickC(cp.OpDetach, bp.OpDetach), OpKeep: pickC(cp.OpKeep, bp.OpKeep),
+		LogoWordmark: pickC(cp.LogoWordmark, bp.LogoWordmark),
 	}
 
 	cg, bg := child.Glyphs, base.Glyphs
@@ -76,5 +84,9 @@ func mergeThemeFiles(base, child *themeFile) *themeFile {
 
 	out.ConfBar = confBarFile{Color: pickS(child.ConfBar.Color, base.ConfBar.Color)}
 	out.Header = headerFile{Highlight: pickS(child.Header.Highlight, base.Header.Highlight)}
+	out.Rows = rowsFile{
+		LabelAccent:    pickB(child.Rows.LabelAccent, base.Rows.LabelAccent),
+		DeleteWholeRow: pickB(child.Rows.DeleteWholeRow, base.Rows.DeleteWholeRow),
+	}
 	return &out
 }

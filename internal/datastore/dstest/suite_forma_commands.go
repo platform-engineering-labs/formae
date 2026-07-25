@@ -739,6 +739,59 @@ func RunTerminalStatesLiteralsTest(t *testing.T, _ func(t *testing.T) TestDatast
 	})
 }
 
+// RunUpdateResourceUpdateProgressPersistsStartTs verifies that an in-progress
+// progress update writes the resource's StartTs to the datastore. Status reads
+// load the command straight from the datastore, so a read taken mid-flight
+// (before the command is finalized) must report the real start time rather than
+// the zero value. Regression test for in-progress StartedAt=0001-01-01T00:00:00Z.
+func RunUpdateResourceUpdateProgressPersistsStartTs(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("UpdateResourceUpdateProgressPersistsStartTs", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		resourceKsuid := util.NewID()
+		// The resource update is inserted NotStarted with a zero StartTs, mirroring
+		// how updates are stored before execution begins.
+		cmd := &forma_command.FormaCommand{
+			ID:          util.NewID(),
+			Command:     pkgmodel.CommandApply,
+			State:       forma_command.CommandStateInProgress,
+			Description: pkgmodel.Description{},
+			ResourceUpdates: []resource_update.ResourceUpdate{
+				{
+					DesiredState:   pkgmodel.Resource{Ksuid: resourceKsuid, Properties: json.RawMessage("{}")},
+					ResourceTarget: pkgmodel.Target{Label: "t", Namespace: "default", Config: json.RawMessage("{}")},
+					Operation:      resource_update.OperationCreate,
+					State:          resource_update.ResourceUpdateStateNotStarted,
+				},
+			},
+		}
+		err := ds.StoreFormaCommand(cmd, cmd.ID)
+		assert.NoError(t, err)
+
+		startTs := time.Now().UTC().Truncate(time.Second)
+		modifiedTs := startTs.Add(2 * time.Second)
+		progress := plugin.TrackedProgress{
+			ProgressResult: pkgresource.ProgressResult{ResourceProperties: json.RawMessage("{}")},
+		}
+
+		err = ds.UpdateResourceUpdateProgress(cmd.ID, resourceKsuid, resource_update.OperationCreate,
+			resource_update.ResourceUpdateStateInProgress, startTs, modifiedTs, progress)
+		assert.NoError(t, err)
+
+		loaded, err := ds.GetFormaCommandByCommandID(cmd.ID)
+		assert.NoError(t, err)
+		if assert.Len(t, loaded.ResourceUpdates, 1) {
+			assert.Equal(t, resource_update.ResourceUpdateStateInProgress, loaded.ResourceUpdates[0].State)
+			assert.False(t, loaded.ResourceUpdates[0].StartTs.IsZero(),
+				"in-progress StartTs must be persisted, not left at the zero value")
+			assert.WithinDuration(t, startTs, loaded.ResourceUpdates[0].StartTs, time.Second,
+				"persisted StartTs must match the value supplied to UpdateResourceUpdateProgress")
+		}
+	})
+}
+
 // RunMonotonicTerminalityTest verifies that once a ResourceUpdate reaches a terminal
 // state, subsequent state writes are no-ops (not errors) and the state is preserved.
 // Within the agent, state writes are serialized by the FormaCommandPersister actor;

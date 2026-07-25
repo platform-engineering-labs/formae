@@ -265,7 +265,11 @@ func (v multiView) rowStyles(h health, cursor bool) (id, text lipgloss.Style) {
 	// renders at full brightness regardless of terminal state — the state is
 	// already conveyed by the status glyph (✓/✗/⊘/spinner).
 	if v.pinned {
-		return lipgloss.NewStyle().Foreground(p.PrimaryAccent),
+		idc := p.TextPrimary
+		if v.th.Rows.LabelAccent {
+			idc = p.PrimaryAccent
+		}
+		return lipgloss.NewStyle().Foreground(idc),
 			lipgloss.NewStyle().Foreground(p.TextPrimary)
 	}
 	var idc, txt lipgloss.AdaptiveColor
@@ -286,6 +290,11 @@ func (v multiView) rowStyles(h health, cursor bool) (id, text lipgloss.Style) {
 		idc, txt = p.PrimaryAccent, p.TextPrimary
 	default: // healthRunning
 		idc, txt = p.PrimaryAccent, p.TextPrimary
+	}
+	// Themes that don't make the label special (quiet) render the command id in
+	// the same color as the rest of the row — nothing special about a label.
+	if !v.th.Rows.LabelAccent {
+		idc = txt
 	}
 	id = lipgloss.NewStyle().Foreground(idc)
 	text = lipgloss.NewStyle().Foreground(txt)
@@ -323,7 +332,7 @@ func (v multiView) headerRow() string {
 		Bold(true)
 
 	background := v.th.Header.Highlight == "background"
-	highlightStyle := lipgloss.NewStyle().Foreground(p.TextPrimary).Background(lipgloss.Color(p.Selection.Dark)).Bold(true)
+	highlightStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(p.TextPrimary.Dark)).Background(lipgloss.Color(p.Selection.Dark)).Bold(true)
 	accentStyle := lipgloss.NewStyle().Foreground(p.PrimaryAccent).Bold(true)
 	hiStyle := lipgloss.NewStyle().Foreground(p.TextPrimary).Bold(true)
 

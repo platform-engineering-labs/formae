@@ -3943,7 +3943,7 @@ func (d DatastoreSQLite) UpdateResourceUpdateState(commandID string, ksuid strin
 }
 
 // UpdateResourceUpdateProgress updates a ResourceUpdate with progress information
-func (d DatastoreSQLite) UpdateResourceUpdateProgress(commandID string, ksuid string, operation types.OperationType, state resource_update.ResourceUpdateState, modifiedTs time.Time, progress plugin.TrackedProgress) error {
+func (d DatastoreSQLite) UpdateResourceUpdateProgress(commandID string, ksuid string, operation types.OperationType, state resource_update.ResourceUpdateState, startTs time.Time, modifiedTs time.Time, progress plugin.TrackedProgress) error {
 	slog.Debug("SQLite START", "method", "UpdateResourceUpdateProgress", "commandID", commandID, "ksuid", ksuid, "state", state)
 	start := time.Now()
 	defer func() {
@@ -3982,12 +3982,12 @@ func (d DatastoreSQLite) UpdateResourceUpdateProgress(commandID string, ksuid st
 
 	updateQuery := `
 		UPDATE resource_updates
-		SET state = ?, modified_ts = ?, progress_result = ?, most_recent_progress = ?
+		SET state = ?, start_ts = ?, modified_ts = ?, progress_result = ?, most_recent_progress = ?
 		WHERE command_id = ? AND ksuid = ? AND operation = ?
 	`
 
-	// Normalize timestamp to UTC for consistent TEXT-based sorting in SQLite
-	result, err := d.conn.Exec(updateQuery, string(state), modifiedTs.UTC(), progressJSON, mostRecentJSON, commandID, ksuid, string(operation))
+	// Normalize timestamps to UTC for consistent TEXT-based sorting in SQLite
+	result, err := d.conn.Exec(updateQuery, string(state), startTs.UTC(), modifiedTs.UTC(), progressJSON, mostRecentJSON, commandID, ksuid, string(operation))
 	if err != nil {
 		return fmt.Errorf("failed to update resource update progress: %w", err)
 	}

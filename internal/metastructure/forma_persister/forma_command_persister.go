@@ -442,6 +442,7 @@ func (f *FormaCommandPersister) updateCommandFromProgress(progress *messages.Upd
 				progress.ResourceURI.KSUID(),
 				progress.Operation,
 				progress.ResourceState,
+				progress.ResourceStartTs,
 				progress.ResourceModifiedTs,
 				progress.Progress,
 			); err != nil {

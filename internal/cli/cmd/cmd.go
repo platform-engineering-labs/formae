@@ -30,16 +30,31 @@ var RootCmdUsageTemplate string
 var SimpleCmdUsageTemplate string
 
 func init() {
-	th := theme.New("formae")
-	grey := func(s string) string { return lipgloss.NewStyle().Foreground(th.Palette.TextSubtle).Render(s) }
-	accent := func(s string) string { return lipgloss.NewStyle().Foreground(th.Palette.SecondaryAccent).Render(s) }
-	done := func(s string) string { return lipgloss.NewStyle().Foreground(th.Palette.Done).Render(s) }
+	RootCmdUsageTemplate, SimpleCmdUsageTemplate = buildUsageTemplates(theme.New("formae"))
+}
 
-	RootCmdUsageTemplate = grey("Usage: ") + done("{{.CommandPath}} [OPTIONS]{{if .HasAvailableSubCommands}} [COMMAND]{{end}}\n") +
+// buildUsageTemplates renders the root and simple usage templates in th's
+// colors. Help and usage output is rendered by cobra before a command's config
+// has loaded, so init() builds these in the default theme and RethemeUsage
+// rebuilds them once the active theme is known (see root.go).
+func buildUsageTemplates(th *theme.Theme) (rootTpl, simpleTpl string) {
+	// The usage highlight is a single accent color: the theme's wordmark color
+	// when it sets one (rich → blue), else SecondaryAccent (quiet → orange). This
+	// keeps each theme to one highlight in the usage, with command names in
+	// neutral TextPrimary rather than a second color.
+	accentColor := th.Palette.SecondaryAccent
+	if wm := th.Palette.LogoWordmark; wm.Light != "" || wm.Dark != "" {
+		accentColor = wm
+	}
+	grey := func(s string) string { return lipgloss.NewStyle().Foreground(th.Palette.TextSubtle).Render(s) }
+	accent := func(s string) string { return lipgloss.NewStyle().Foreground(accentColor).Render(s) }
+	name := func(s string) string { return lipgloss.NewStyle().Foreground(th.Palette.TextPrimary).Render(s) }
+
+	rootTpl = grey("Usage: ") + name("{{.CommandPath}} [OPTIONS]{{if .HasAvailableSubCommands}} [COMMAND]{{end}}\n") +
 		"{{if .HasAvailableSubCommands}}\n" + accent("Commands:") + "{{$types := typeMap .Commands}}" +
 		"{{$first := true}}{{range $type, $cmds := $types}}" +
 		"{{if $first}}{{$first = false}}{{else}}\n{{end}}\n  " + accent("{{$type}}:") +
-		"{{range $cmd := $cmds}}\n    " + done("{{rpad $cmd.Name $cmd.NamePadding}}") + "     {{$cmd.Short}}" +
+		"{{range $cmd := $cmds}}\n    " + name("{{rpad $cmd.Name $cmd.NamePadding}}") + "     {{$cmd.Short}}" +
 		"{{if (index $cmd.Annotations \"examples\")}}\n                   " +
 		grey("  {{formatExamples (index $cmd.Annotations \"examples\") $cmd}}") + "{{end}}" +
 		"{{if (index $cmd.Annotations \"doc\")}}\n" +
@@ -51,12 +66,12 @@ func init() {
 		banner.DefaultLinks() +
 		"\n"
 
-	SimpleCmdUsageTemplate = grey("Usage: ") + done("{{.CommandPath}}{{if .HasAvailableLocalFlags}} [OPTIONS]{{end}}{{if .HasAvailableSubCommands}} [COMMAND]{{end}}") +
-		done("{{if index .Annotations \"args\"}} {{index .Annotations \"args\"}}{{end}}") + "\n" +
+	simpleTpl = grey("Usage: ") + name("{{.CommandPath}}{{if .HasAvailableLocalFlags}} [OPTIONS]{{end}}{{if .HasAvailableSubCommands}} [COMMAND]{{end}}") +
+		name("{{if index .Annotations \"args\"}} {{index .Annotations \"args\"}}{{end}}") + "\n" +
 		"{{if index .Annotations \"examples\"}}\n" + accent("Examples:") + "\n  " +
 		grey("{{formatExamplesMultiline (index .Annotations \"examples\") .}}") + "\n{{end}}" +
 		"{{if .HasAvailableSubCommands}}\n" + accent("Commands:") +
-		"{{range $cmd := .Commands}}\n  " + done("{{rpad $cmd.Name $cmd.NamePadding}}") + "       {{$cmd.Short}}" +
+		"{{range $cmd := .Commands}}\n  " + name("{{rpad $cmd.Name $cmd.NamePadding}}") + "       {{$cmd.Short}}" +
 		"{{if (index $cmd.Annotations \"examples\")}}\n                   " +
 		grey("  {{formatExamples (index $cmd.Annotations \"examples\") $cmd}}") + "{{end}}" +
 		"{{if (index $cmd.Annotations \"doc\")}}\n" +
@@ -70,6 +85,40 @@ func init() {
 		"{{end}}" +
 		banner.DefaultLinks() +
 		"\n"
+	return rootTpl, simpleTpl
+}
+
+// RethemeUsage rebuilds the usage templates in th's colors and re-applies the
+// one c currently uses (root vs simple). Help/usage output renders before a
+// command's config loads, so callers resolve the active theme at render time and
+// call this to color the output. A command using neither template is untouched.
+func RethemeUsage(c *cobra.Command, th *theme.Theme) {
+	oldRoot, oldSimple := RootCmdUsageTemplate, SimpleCmdUsageTemplate
+	RootCmdUsageTemplate, SimpleCmdUsageTemplate = buildUsageTemplates(th)
+	switch c.UsageTemplate() {
+	case oldRoot:
+		c.SetUsageTemplate(RootCmdUsageTemplate)
+	case oldSimple:
+		c.SetUsageTemplate(SimpleCmdUsageTemplate)
+	}
+}
+
+// ResolveConfiguredTheme best-effort resolves the CLI theme from c's
+// --profile/--config flags (or the active profile when neither is set), for
+// theming help/usage output. It falls back to the default theme on any error so
+// help always renders.
+func ResolveConfiguredTheme(c *cobra.Command) *theme.Theme {
+	profileFlag, _ := c.Flags().GetString("profile")
+	configFlag, _ := c.Flags().GetString("config")
+	path, err := ResolveConfigPath(configFlag, profileFlag)
+	if err != nil {
+		return theme.New("formae")
+	}
+	a := &app.App{}
+	if err := a.LoadConfig(path, ""); err != nil {
+		return theme.New("formae")
+	}
+	return a.Theme()
 }
 
 var PropertyCommands = []string{

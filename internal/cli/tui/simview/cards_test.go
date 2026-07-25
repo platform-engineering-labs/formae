@@ -60,18 +60,13 @@ func TestRenderCard_UpdateSetAddRemove(t *testing.T) {
 	p := plain(card)
 
 	// Title in top border
-	assert.Contains(t, p, "~ primary", "title should contain op symbol and label")
+	assert.Contains(t, p, "✎ primary", "title should contain op symbol and label")
 
-	// Fields
-	assert.Contains(t, p, "Operation:", "should have Operation field")
-	assert.Contains(t, p, "update", "should have operation value")
-	assert.Contains(t, p, "Type:", "should have Type field")
-	assert.Contains(t, p, "AWS::RDS::DBInstance", "should have type value")
-	assert.Contains(t, p, "Stack:", "should have Stack field")
-	assert.Contains(t, p, "production", "should have stack value")
-
-	// Changes header
-	assert.Contains(t, p, "Changes:", "should have Changes section")
+	// The card shows the property changes, not the redundant Operation/Type/Stack
+	// fields — those already appear in the row.
+	assert.NotContains(t, p, "Operation:", "card must not repeat the Operation field")
+	assert.NotContains(t, p, "Type:", "card must not repeat the Type field")
+	assert.NotContains(t, p, "Stack:", "card must not repeat the Stack field")
 
 	// Tree connectors ├ and └
 	assert.Contains(t, p, "├", "should have ├ connector for non-last lines")
@@ -93,10 +88,11 @@ func TestRenderCard_UpdateSetAddRemove(t *testing.T) {
 // TestRenderCard_TitleBoldScoping verifies the card title glyph and label are
 // separate, regular-weight (non-bold) spans with independent colors — bold
 // operation tokens were reverted per maintainer feedback (bold looked messy).
-// The op glyph carries opColor; the label carries its own color: Warning for
-// delete rows, PrimaryAccent otherwise, matching pb's mockup.
+// The op glyph always carries opColor; the label color is theme-driven. This
+// exercises rich (label_accent + delete_whole_row): the label is PrimaryAccent
+// for non-delete and the delete op color for delete.
 func TestRenderCard_TitleBoldScoping(t *testing.T) {
-	th := makeCardTheme()
+	th := theme.New("rich")
 	p := th.Palette
 
 	updateRow := simRow{op: opUpdate, label: "primary", typ: "AWS::RDS::DBInstance"}
@@ -113,12 +109,24 @@ func TestRenderCard_TitleBoldScoping(t *testing.T) {
 	assert.Contains(t, updateOut, wantUpdateGlyph, "update card glyph should be regular weight and op-colored")
 	assert.Contains(t, deleteOut, wantDeleteGlyph, "delete card glyph should be regular weight and op-colored")
 
-	// Label span: PrimaryAccent for non-delete, Warning for delete. Distinct
-	// from the glyph's op color, confirming glyph and label remain separate spans.
+	// Label span (rich): PrimaryAccent for non-delete, the delete op color for
+	// delete. Distinct from the glyph's op color, confirming glyph and label
+	// remain separate spans.
 	wantUpdateLabel := lipgloss.NewStyle().Foreground(p.PrimaryAccent).Render(updateRow.label)
-	wantDeleteLabel := lipgloss.NewStyle().Foreground(p.Warning).Render(deleteRow.label)
-	assert.Contains(t, updateOut, wantUpdateLabel, "update card label should be PrimaryAccent")
-	assert.Contains(t, deleteOut, wantDeleteLabel, "delete card label should be Warning")
+	wantDeleteLabel := lipgloss.NewStyle().Foreground(opColor(p, opDelete)).Render(deleteRow.label)
+	assert.Contains(t, updateOut, wantUpdateLabel, "rich update card label should be PrimaryAccent")
+	assert.Contains(t, deleteOut, wantDeleteLabel, "rich delete card label should be the delete op color")
+
+	// quiet renders the card title label in the plain column color (TextSecondary)
+	// for every op — nothing special about a label, and no whole-row delete tint.
+	q := theme.New("quiet")
+	qp := q.Palette
+	quietUpdate := strings.Join(renderCard(q, updateRow, 100), "\n")
+	quietDelete := strings.Join(renderCard(q, deleteRow, 100), "\n")
+	assert.Contains(t, quietUpdate, lipgloss.NewStyle().Foreground(qp.TextSecondary).Render(updateRow.label),
+		"quiet update card label should be the plain column color")
+	assert.Contains(t, quietDelete, lipgloss.NewStyle().Foreground(qp.TextSecondary).Render(deleteRow.label),
+		"quiet delete card label should be the plain column color")
 
 	// Bold title spans (glyph+label bundled, or glyph alone bolded) must not appear.
 	boldUpdateGlyph := lipgloss.NewStyle().Foreground(opColor(p, opUpdate)).Bold(true).
@@ -473,13 +481,11 @@ func TestRenderCard_PolicySimpleCard(t *testing.T) {
 	card := strings.Join(lines, "\n")
 	p := plain(card)
 
-	// Basic fields
-	assert.Contains(t, p, "Operation:", "should have Operation field")
-	assert.Contains(t, p, "update", "should have operation value")
-	assert.Contains(t, p, "Type:", "should have Type field")
-	assert.Contains(t, p, "auto-reconcile", "should have type value")
-	assert.Contains(t, p, "Stack:", "should have Stack field")
-	assert.Contains(t, p, "staging", "should have stack value")
+	// The card no longer repeats Operation/Type/Stack (they're already in the row).
+	assert.NotContains(t, p, "Operation:", "card must not repeat the Operation field")
+	assert.NotContains(t, p, "Type:", "card must not repeat the Type field")
+	assert.NotContains(t, p, "Stack:", "card must not repeat the Stack field")
+	assert.Contains(t, p, "staging-reconcile", "title should contain the policy label")
 }
 
 // TestRenderCard_NilRes verifies no panic when res is nil (e.g. target row).
@@ -801,11 +807,11 @@ func TestSimView_ExpandedCardAppearsInView(t *testing.T) {
 	mm, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace})
 	m = mm.(Model)
 
-	// View should now contain card elements
+	// View should now contain the expanded card's property detail (not the
+	// redundant Operation/Type/Stack fields, which live in the row).
 	v := plain(m.View())
-	assert.Contains(t, v, "Operation:", "expanded card should show Operation field")
-	assert.Contains(t, v, "Type:", "expanded card should show Type field")
-	assert.Contains(t, v, "Stack:", "expanded card should show Stack field")
+	assert.Contains(t, v, "InstanceClass", "expanded card should show the changed property")
+	assert.NotContains(t, v, "Operation:", "expanded card must not repeat the Operation field")
 }
 
 // ---------------------------------------------------------------------------

@@ -179,6 +179,7 @@ func docLabelStyle() lipgloss.Style {
 // of banner.PrintBanner() in human-readable command flows so that
 // warnings are never emitted in machine-readable (JSON) output.
 func (a *App) PrintBanner() {
+	banner.SetTheme(a.Theme())
 	banner.PrintBanner()
 	if a.Config != nil && len(a.Config.Warnings) > 0 {
 		th := theme.New("formae")

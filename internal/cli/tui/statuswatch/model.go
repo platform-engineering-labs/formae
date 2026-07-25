@@ -251,7 +251,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
-		m.multi.spinView = m.spinner.View()
+		v := m.spinner.View()
+		m.multi.spinView = v
+		// Also refresh the detail view's spinner frame on every tick. Otherwise
+		// the detail-view in-progress glyph only advances when SetCommand runs
+		// (on each poll), making it crawl at the poll interval instead of the
+		// spinner's own (fast) frame rate.
+		m.detail.spinView = v
+		// Refresh the clock too so live in-progress elapsed times tick smoothly
+		// (computed as now − startedAt) instead of only advancing on each poll.
+		now := m.opts.Now()
+		m.multi.now = now
+		m.detail.now = now
 		return m, cmd
 
 	case tea.KeyMsg:

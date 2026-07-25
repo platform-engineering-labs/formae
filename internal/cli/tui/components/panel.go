@@ -52,7 +52,7 @@ func Panel(th *theme.Theme, role lipgloss.AdaptiveColor, title string, lines []s
 	// Embed title in the top border: ╭─ title ─────╮
 	titleContent := " " + title + " "
 	titleW := lipgloss.Width(titleContent)
-	dashW := actualWidth - titleW - 2 // 2 = ╭ + ╮
+	dashW := actualWidth - titleW - 3 // 3 border glyphs: ╭ + ─ + ╮
 	if dashW < 1 {
 		dashW = 1
 	}

@@ -3175,7 +3175,7 @@ func (d *DatastoreAuroraDataAPI) UpdateResourceUpdateState(commandID string, ksu
 	return nil
 }
 
-func (d *DatastoreAuroraDataAPI) UpdateResourceUpdateProgress(commandID string, ksuid string, operation metaTypes.OperationType, state resource_update.ResourceUpdateState, modifiedTs time.Time, progress plugin.TrackedProgress) error {
+func (d *DatastoreAuroraDataAPI) UpdateResourceUpdateProgress(commandID string, ksuid string, operation metaTypes.OperationType, state resource_update.ResourceUpdateState, startTs time.Time, modifiedTs time.Time, progress plugin.TrackedProgress) error {
 	ctx := context.Background()
 
 	// First, load existing progress results to append to
@@ -3214,11 +3214,12 @@ func (d *DatastoreAuroraDataAPI) UpdateResourceUpdateProgress(commandID string, 
 
 	updateQuery := `
 	UPDATE resource_updates
-	SET state = :state, modified_ts = :modified_ts::timestamp, progress_result = :progress_result, most_recent_progress = :most_recent_progress
+	SET state = :state, start_ts = :start_ts::timestamp, modified_ts = :modified_ts::timestamp, progress_result = :progress_result, most_recent_progress = :most_recent_progress
 	WHERE command_id = :command_id AND ksuid = :ksuid AND operation = :operation
 	`
 	updateParams := []types.SqlParameter{
 		{Name: aws.String("state"), Value: &types.FieldMemberStringValue{Value: string(state)}},
+		{Name: aws.String("start_ts"), Value: &types.FieldMemberStringValue{Value: startTs.UTC().Format(time.RFC3339Nano)}},
 		{Name: aws.String("modified_ts"), Value: &types.FieldMemberStringValue{Value: modifiedTs.UTC().Format(time.RFC3339Nano)}},
 		{Name: aws.String("progress_result"), Value: &types.FieldMemberStringValue{Value: string(progressJSON)}},
 		{Name: aws.String("most_recent_progress"), Value: &types.FieldMemberStringValue{Value: string(mostRecentJSON)}},

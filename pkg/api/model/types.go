@@ -93,7 +93,8 @@ type ResourceUpdate struct {
 	// destroy + create.
 	CreateOnlyPatch json.RawMessage   `json:"CreateOnlyPatch,omitempty"`
 	State           string            `json:"State"`
-	Duration        int64             `json:"Duration,omitempty"` // milliseconds
+	StartedAt       time.Time         `json:"StartedAt,omitempty"` // when the update began (for live elapsed)
+	Duration        int64             `json:"Duration,omitempty"`  // milliseconds (final, set on completion)
 	CurrentAttempt  int               `json:"CurrentAttempt,omitempty"`
 	MaxAttempts     int               `json:"MaxAttempts,omitempty"`
 	ErrorMessage    string            `json:"ErrorMessage,omitempty"`

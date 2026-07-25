@@ -65,6 +65,24 @@ op_create = "+"
 	assert.False(t, ok, "Glyphs must not have a SortMarker field")
 }
 
+// TestUnmanagedColorIsThemeable proves the inventory unmanaged marker has its
+// own palette slot, independent of `error`, so a theme can recolor unmanaged
+// resources without touching failure coloring.
+func TestUnmanagedColorIsThemeable(t *testing.T) {
+	f, err := parseThemeFile([]byte(`
+name = "mini"
+[palette]
+error     = { light = "#DC2626", dark = "#F87171" }
+unmanaged = { light = "#7C3AED", dark = "#A78BFA" }
+`))
+	require.NoError(t, err)
+	th := f.toTheme()
+	assert.Equal(t, "#7C3AED", th.Palette.Unmanaged.Light)
+	assert.Equal(t, "#A78BFA", th.Palette.Unmanaged.Dark)
+	assert.NotEqual(t, th.Palette.Error, th.Palette.Unmanaged,
+		"unmanaged must be independent of error")
+}
+
 func TestToTheme(t *testing.T) {
 	f, err := parseThemeFile([]byte(miniTheme))
 	require.NoError(t, err)

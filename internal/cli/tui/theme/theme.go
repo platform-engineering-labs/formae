@@ -15,6 +15,7 @@ type Theme struct {
 	Spinner         Spinner
 	ConfirmationBar ConfirmationBar
 	Header          HeaderStyle
+	Rows            RowStyle
 }
 
 // New creates a Theme by resolving the given theme name against built-in and

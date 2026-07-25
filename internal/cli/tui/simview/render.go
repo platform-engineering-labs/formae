@@ -131,12 +131,18 @@ func (m Model) renderBody() (string, int) {
 	return body.String(), cursorLine
 }
 
+// simLeadW is the width of the blank column that leads each simulation row,
+// aligning the operation column under the state-glyph column of the status
+// detail view so the two screens read the same (the status view fills this
+// column with the live state glyph; simulation has no state yet).
+const simLeadW = 6
+
 // groupLayout returns opW, labelW, typeW, stackW column widths for a group.
-// Total used: 2 (indent) + opW + labelW [+ typeW [+ stackW]] = width.
+// Total used: 2 (indent) + simLeadW + opW + labelW [+ typeW [+ stackW]] = width.
 func groupLayout(kind rowKind, w int) (opW, labelW, typeW, stackW int) {
-	const opColW = 14
+	const opColW = 12
 	const indent = 2
-	rem := w - indent - opColW
+	rem := w - indent - simLeadW - opColW
 	if rem < 10 {
 		rem = 10
 	}
@@ -168,14 +174,14 @@ func (m Model) renderGroupColHeader(kind rowKind, opW, labelW, typeW, stackW int
 	// How the navigated/sorted header is emphasized is theme-driven:
 	//   - "background": the navigated column gets a background highlight (like
 	//     the row cursor); the active-sort column gets the accent color. The
-	//     cursor background uses Selection.Dark explicitly (same documented
-	//     compromise as renderRow) so it merges uniformly regardless of
-	//     terminal background; foregrounds stay adaptive.
+	//     highlight band uses Selection.Dark explicitly (same documented
+	//     compromise as renderRow), so its foreground uses TextPrimary.Dark too
+	//     — the band is always dark, so light-side text would be unreadable.
 	//   - "brighten" (default for unknown values): navigated OR active-sort
 	//     both render bright white, no background — today's quiet/colorblind
 	//     behavior.
 	background := m.th.Header.Highlight == "background"
-	highlightStyle := lipgloss.NewStyle().Foreground(p.TextPrimary).Background(lipgloss.Color(p.Selection.Dark)).Bold(true)
+	highlightStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(p.TextPrimary.Dark)).Background(lipgloss.Color(p.Selection.Dark)).Bold(true)
 	accentStyle := lipgloss.NewStyle().Foreground(p.PrimaryAccent).Bold(true)
 	hiStyle := lipgloss.NewStyle().Foreground(p.TextPrimary).Bold(true)
 
@@ -232,6 +238,8 @@ func (m Model) renderGroupColHeader(kind rowKind, opW, labelW, typeW, stackW int
 
 	var sb strings.Builder
 	sb.WriteString("  ")
+	// Blank lead column, aligning Operation under the status view's state glyph.
+	sb.WriteString(strings.Repeat(" ", simLeadW))
 	sb.WriteString(renderHdr("Operation", colOp, opW))
 
 	switch kind {
@@ -255,11 +263,19 @@ func (m Model) renderRow(r simRow, kind rowKind, opW, labelW, typeW, stackW int,
 
 	// The cursor background uses the .Dark value explicitly (same documented
 	// compromise as statuswatch's detailmodel) so the bg-filled trailing spaces
-	// and the styled cells always merge to one uniform band. All FOREGROUND
-	// colors below stay adaptive so light terminals resolve correctly.
+	// and the styled cells always merge to one uniform band. Because that band is
+	// always dark, cursor-row foregrounds also resolve to their .Dark side (via
+	// fgFor below) so text stays light and readable in light mode instead of
+	// resolving to a near-black foreground on the dark band.
 	var bg lipgloss.Color
 	if isCursor {
 		bg = lipgloss.Color(p.Selection.Dark)
+	}
+	fgFor := func(c lipgloss.AdaptiveColor) lipgloss.TerminalColor {
+		if isCursor {
+			return lipgloss.Color(c.Dark)
+		}
+		return c
 	}
 
 	// Determine base foreground color for non-operation cells (label/type/stack).
@@ -271,31 +287,38 @@ func (m Model) renderRow(r simRow, kind rowKind, opW, labelW, typeW, stackW int,
 		fgColor = p.TextSecondary
 	}
 
-	// Label color (more prominent than other fields)
+	// Label color. Themes decide whether the label is the accent-colored
+	// primary identifier (rich) or just another column in the same color as
+	// type/stack (quiet — nothing special about a label).
 	var labelColor lipgloss.AdaptiveColor
-	if isCursor {
+	switch {
+	case isCursor:
 		labelColor = p.TextPrimary
-	} else {
+	case m.th.Rows.LabelAccent:
 		labelColor = p.PrimaryAccent
+	default:
+		labelColor = fgColor
 	}
 
-	// Delete rows are the exception: the whole row takes the delete op color
-	// instead of the default blue label / gray type-stack, matching the
-	// mockup. Applied last so it overrides the isCursor branches above too.
-	if r.op == opDelete {
+	// Delete rows: when the theme opts in (rich), the whole row takes the
+	// delete op color instead of the default label/column colors, so
+	// destructive changes stand out. quiet leaves this off — the delete glyph
+	// and the word "delete" carry that meaning instead. Applied last so it
+	// overrides the isCursor branches above too.
+	if r.op == opDelete && m.th.Rows.DeleteWholeRow {
 		labelColor = opColor(p, opDelete)
 		fgColor = opColor(p, opDelete)
 	}
 
-	baseSt := lipgloss.NewStyle().Foreground(fgColor)
-	labelSt := lipgloss.NewStyle().Foreground(labelColor)
+	baseSt := lipgloss.NewStyle().Foreground(fgFor(fgColor))
+	labelSt := lipgloss.NewStyle().Foreground(fgFor(labelColor))
 	if isCursor {
 		baseSt = baseSt.Background(bg)
 		labelSt = labelSt.Background(bg)
 	}
 
 	// Operation text is colored per-op from the theme palette.
-	opSt := lipgloss.NewStyle().Foreground(opColor(p, r.op))
+	opSt := lipgloss.NewStyle().Foreground(fgFor(opColor(p, r.op)))
 	if isCursor {
 		opSt = opSt.Background(bg)
 	}
@@ -321,6 +344,12 @@ func (m Model) renderRow(r simRow, kind rowKind, opW, labelW, typeW, stackW int,
 	if isCursor {
 		indent = lipgloss.NewStyle().Background(bg).Render("  ")
 	}
+	// Blank lead column (aligns Operation under the status view's state glyph).
+	lead := strings.Repeat(" ", simLeadW)
+	if isCursor {
+		lead = lipgloss.NewStyle().Background(bg).Render(lead)
+	}
+	indent += lead
 
 	switch kind {
 	case kindPolicy:

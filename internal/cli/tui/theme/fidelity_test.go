@@ -35,6 +35,7 @@ func TestQuietMatchesFormaePalette(t *testing.T) {
 	assert.Equal(t, f.ErrorSubtle, q.ErrorSubtle)
 	assert.Equal(t, f.ErrorBright, q.ErrorBright)
 	assert.Equal(t, f.Warning, q.Warning)
+	assert.Equal(t, f.Unmanaged, q.Unmanaged)
 	assert.Equal(t, f.Done, q.Done)
 	assert.Equal(t, f.InProgress, q.InProgress)
 	assert.Equal(t, f.Pending, q.Pending)

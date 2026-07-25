@@ -70,7 +70,7 @@ func renderSummaryView(t *testing.T, th *theme.Theme, cmds []apimodel.Command) s
 func TestView_SummaryIndicator_SeverityTheme(t *testing.T) {
 	now := time.Date(2026, 7, 16, 11, 0, 0, 0, time.UTC)
 	const (
-		richErrorRed  = "38;2;255;0;0"    // rich Error.Dark #FF0000
+		richErrorRed  = "38;2;255;102;102" // rich Error.Dark #FF6666 (softened)
 		richDoneGreen = "38;2;73;222;128" // rich Done.Dark
 		richBlue      = "38;2;96;165;250" // rich PrimaryAccent.Dark #60A5FA
 	)

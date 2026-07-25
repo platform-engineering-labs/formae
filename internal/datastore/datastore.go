@@ -304,8 +304,10 @@ type Datastore interface {
 	// This is the key performance improvement: updating one row instead of re-serializing entire command
 	UpdateResourceUpdateState(commandID string, ksuid string, operation types.OperationType, state resource_update.ResourceUpdateState, modifiedTs time.Time) error
 
-	// UpdateResourceUpdateProgress updates a ResourceUpdate with progress information
-	UpdateResourceUpdateProgress(commandID string, ksuid string, operation types.OperationType, state resource_update.ResourceUpdateState, modifiedTs time.Time, progress plugin.TrackedProgress) error
+	// UpdateResourceUpdateProgress updates a ResourceUpdate with progress information.
+	// startTs is persisted so an in-progress status read (which loads straight from
+	// the datastore, before finalization) reports the real start time.
+	UpdateResourceUpdateProgress(commandID string, ksuid string, operation types.OperationType, state resource_update.ResourceUpdateState, startTs time.Time, modifiedTs time.Time, progress plugin.TrackedProgress) error
 
 	// BatchUpdateResourceUpdateState updates multiple ResourceUpdates to the same state
 	// Used for bulk operations like marking dependent resources as failed

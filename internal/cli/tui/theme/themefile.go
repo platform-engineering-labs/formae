@@ -22,6 +22,7 @@ type themeFile struct {
 	Spin    spinnerFile  `toml:"spinner"`
 	ConfBar confBarFile  `toml:"confirmation_bar"`
 	Header  headerFile   `toml:"header"`
+	Rows    rowsFile     `toml:"rows"`
 }
 
 type paletteFile struct {
@@ -38,6 +39,7 @@ type paletteFile struct {
 	ErrorSubtle     *colorValue `toml:"error_subtle"`
 	ErrorBright     *colorValue `toml:"error_bright"`
 	Warning         *colorValue `toml:"warning"`
+	Unmanaged       *colorValue `toml:"unmanaged"`
 	Done            *colorValue `toml:"done"`
 	InProgress      *colorValue `toml:"in_progress"`
 	Pending         *colorValue `toml:"pending"`
@@ -47,6 +49,7 @@ type paletteFile struct {
 	OpReplace       *colorValue `toml:"op_replace"`
 	OpDetach        *colorValue `toml:"op_detach"`
 	OpKeep          *colorValue `toml:"op_keep"`
+	LogoWordmark    *colorValue `toml:"logo_wordmark"`
 }
 
 type glyphsFile struct {
@@ -100,6 +103,11 @@ type headerFile struct {
 	Highlight *string `toml:"highlight"`
 }
 
+type rowsFile struct {
+	LabelAccent    *bool `toml:"label_accent"`
+	DeleteWholeRow *bool `toml:"delete_whole_row"`
+}
+
 // parseThemeFile decodes a theme TOML document.
 func parseThemeFile(data []byte) (*themeFile, error) {
 	var f themeFile
@@ -131,6 +139,9 @@ func (f *themeFile) toTheme() *Theme {
 		}
 		return *i
 	}
+	boolv := func(b *bool) bool {
+		return b != nil && *b
+	}
 
 	p := f.Palette
 	pal := Palette{
@@ -147,6 +158,7 @@ func (f *themeFile) toTheme() *Theme {
 		ErrorSubtle:     adapt(p.ErrorSubtle),
 		ErrorBright:     adapt(p.ErrorBright),
 		Warning:         adapt(p.Warning),
+		Unmanaged:       adapt(p.Unmanaged),
 		Done:            adapt(p.Done),
 		InProgress:      adapt(p.InProgress),
 		Pending:         adapt(p.Pending),
@@ -156,6 +168,7 @@ func (f *themeFile) toTheme() *Theme {
 		OpReplace:       adapt(p.OpReplace),
 		OpDetach:        adapt(p.OpDetach),
 		OpKeep:          adapt(p.OpKeep),
+		LogoWordmark:    adapt(p.LogoWordmark),
 	}
 	g := f.Glyphs
 	glyphs := Glyphs{
@@ -187,5 +200,9 @@ func (f *themeFile) toTheme() *Theme {
 		Spinner:         spin,
 		ConfirmationBar: ConfirmationBar{Color: str(f.ConfBar.Color)},
 		Header:          HeaderStyle{Highlight: str(f.Header.Highlight)},
+		Rows: RowStyle{
+			LabelAccent:    boolv(f.Rows.LabelAccent),
+			DeleteWholeRow: boolv(f.Rows.DeleteWholeRow),
+		},
 	}
 }

@@ -15,6 +15,8 @@ error            = { light = "#D55E00", dark = "#E69F55" }
 error_subtle     = { light = "#B45454", dark = "#9B4444" }
 error_bright     = { light = "#B91C1C", dark = "#FCA5A5" }
 warning          = "#B5B55B"
+# Unmanaged keeps colorblind's safe orange (same as error), not a red.
+unmanaged        = { light = "#D55E00", dark = "#E69F55" }
 done             = { light = "#0072B2", dark = "#56B4E9" }
 in_progress      = { light = "#444444", dark = "#AAAAAA" }
 pending          = { light = "#999999", dark = "#555555" }
@@ -59,7 +61,7 @@ animation = "blink"
 
 [spinner]
 frames = ["●", "◉", "○", "◉"]
-interval_ms = 333
+interval_ms = 100
 static_frame = "●"
 
 [confirmation_bar]
@@ -67,3 +69,7 @@ color = "brand"
 
 [header]
 highlight = "brighten"
+
+[rows]
+label_accent = true
+delete_whole_row = true

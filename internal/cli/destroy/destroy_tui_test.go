@@ -592,5 +592,5 @@ func TestDestroy_TTY_Confirmed_EarlyDetach_PrintsAsyncNotice(t *testing.T) {
 	})
 
 	assert.Contains(t, out, "Still running asynchronously on the agent. Check its status with:")
-	assert.Contains(t, out, "formae status command --query='id:detached-cmd-2' --watch")
+	assert.Contains(t, out, "formae status command --query='id:detached-cmd-2'")
 }

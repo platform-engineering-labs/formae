@@ -18,11 +18,13 @@ import (
 )
 
 // styledInventoryCell applies the theme styling for one table cell. Column 0 is
-// the row's label/name — the primary identifier — so it renders in the accent
-// color, matching simview's blue label. Other columns defer to the tab's own
-// styleCell (e.g. the ⚠ unmanaged red on Stack, the discoverable "yes" accent).
+// the row's label/name. Themes decide whether that column is special: rich
+// renders it in the accent color (the primary identifier), while quiet treats
+// it like any other column (nothing special about a label). Other columns defer
+// to the tab's own styleCell (e.g. the ⚠ unmanaged red on Stack, the
+// discoverable "yes" accent).
 func styledInventoryCell(th *theme.Theme, styleCell func(*theme.Theme, int, string) string, col int, plain string) string {
-	if th != nil && col == 0 {
+	if th != nil && col == 0 && th.Rows.LabelAccent {
 		return th.Styles.Accent.Render(plain)
 	}
 	if styleCell != nil && th != nil {
