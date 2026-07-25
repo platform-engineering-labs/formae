@@ -62,6 +62,16 @@ func (a *App) NewClient() (*api.Client, error) {
 	return api.NewClient(a.Config.Cli.API, auth, net), nil
 }
 
+// Theme resolves the active CLI theme from config, falling back to quiet when
+// config is absent. It is the single source of truth for command theming.
+func (a *App) Theme() *theme.Theme {
+	name := ""
+	if a != nil && a.Config != nil {
+		name = a.Config.Cli.Theme
+	}
+	return theme.New(name)
+}
+
 type Plugins struct{}
 
 type Projects struct{}
@@ -169,6 +179,7 @@ func docLabelStyle() lipgloss.Style {
 // of banner.PrintBanner() in human-readable command flows so that
 // warnings are never emitted in machine-readable (JSON) output.
 func (a *App) PrintBanner() {
+	banner.SetTheme(a.Theme())
 	banner.PrintBanner()
 	if a.Config != nil && len(a.Config.Warnings) > 0 {
 		th := theme.New("formae")

@@ -156,7 +156,7 @@ func TestDestroyTUI_EndToEnd(t *testing.T) {
 	}
 
 	watchedCommandID := ""
-	launchWatch = func(a *app.App, commandID string) error {
+	launchWatch = func(a *app.App, commandID string) (bool, error) {
 		watchedCommandID = commandID
 		m := statuswatch.New(theme.New("formae"), e2eClientAdapter{client}, statuswatch.Options{
 			Query:          "id:" + commandID,
@@ -171,7 +171,8 @@ func TestDestroyTUI_EndToEnd(t *testing.T) {
 		tuitest.WaitForContains(t, tm, "cmd-e2e-dest")
 		// ExitWhenDone quits automatically once the poll reports Success.
 		tm.WaitFinished(t, teatest.WithFinalTimeout(5*time.Second))
-		return nil
+		final := tm.FinalModel(t)
+		return final.(statuswatch.Model).Finished(), nil
 	}
 
 	a := &app.App{Config: &pkgmodel.Config{}}
@@ -236,9 +237,9 @@ func TestDestroyTUI_EndToEnd_CascadeAbort(t *testing.T) {
 	}
 
 	watchCalled := false
-	launchWatch = func(a *app.App, commandID string) error {
+	launchWatch = func(a *app.App, commandID string) (bool, error) {
 		watchCalled = true
-		return nil
+		return true, nil
 	}
 
 	a := &app.App{Config: &pkgmodel.Config{}}

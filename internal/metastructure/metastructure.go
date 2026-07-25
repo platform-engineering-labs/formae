@@ -610,6 +610,7 @@ func translateToAPICommand(fa *forma_command.FormaCommand) apimodel.Command {
 			CreateOnlyPatch: ru.CreateOnlyPatch,
 			Operation:       string(ru.Operation),
 			State:           string(ru.State),
+			StartedAt:       ru.StartTs,
 			Duration:        dur.Milliseconds(),
 			CurrentAttempt:  ru.MostRecentProgressResult.Attempts,
 			MaxAttempts:     ru.MostRecentProgressResult.MaxAttempts,

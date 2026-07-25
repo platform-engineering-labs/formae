@@ -267,6 +267,7 @@ type CliConfig struct {
 	DisableUsageReporting bool
 	Auth                  json.RawMessage
 	Theme                 string
+	Appearance            string
 }
 
 type Config struct {

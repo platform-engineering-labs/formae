@@ -4503,7 +4503,7 @@ func (d DatastorePostgres) UpdateResourceUpdateState(commandID string, ksuid str
 }
 
 // UpdateResourceUpdateProgress updates a ResourceUpdate with progress information
-func (d DatastorePostgres) UpdateResourceUpdateProgress(commandID string, ksuid string, operation types.OperationType, state resource_update.ResourceUpdateState, modifiedTs time.Time, progress plugin.TrackedProgress) error {
+func (d DatastorePostgres) UpdateResourceUpdateProgress(commandID string, ksuid string, operation types.OperationType, state resource_update.ResourceUpdateState, startTs time.Time, modifiedTs time.Time, progress plugin.TrackedProgress) error {
 	ctx, span := tracer.Start(context.Background(), "UpdateResourceUpdateProgress")
 	defer span.End()
 
@@ -4537,11 +4537,11 @@ func (d DatastorePostgres) UpdateResourceUpdateProgress(commandID string, ksuid 
 
 	updateQuery := `
 		UPDATE resource_updates
-		SET state = $1, modified_ts = $2, progress_result = $3, most_recent_progress = $4
-		WHERE command_id = $5 AND ksuid = $6 AND operation = $7
+		SET state = $1, start_ts = $2, modified_ts = $3, progress_result = $4, most_recent_progress = $5
+		WHERE command_id = $6 AND ksuid = $7 AND operation = $8
 	`
 
-	result, err := d.pool.Exec(ctx, updateQuery, string(state), modifiedTs.UTC(), progressJSON, mostRecentJSON, commandID, ksuid, string(operation))
+	result, err := d.pool.Exec(ctx, updateQuery, string(state), startTs.UTC(), modifiedTs.UTC(), progressJSON, mostRecentJSON, commandID, ksuid, string(operation))
 	if err != nil {
 		return fmt.Errorf("failed to update resource update progress: %w", err)
 	}

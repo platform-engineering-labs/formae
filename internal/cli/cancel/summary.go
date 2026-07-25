@@ -217,16 +217,13 @@ func renderCancelSummary(th *theme.Theme, cmds []apimodel.Command, exps map[stri
 		b.WriteString("\n")
 	}
 
-	// Watch hints
+	// Re-attach hints. `status command` opens the live view when the command is
+	// still running and prints a static summary once it's terminal — no flag.
 	fmt.Fprintf(&b, "  %s\n", heading.Render("To watch the cancellation progress:"))
 	for _, cmd := range cmds {
 		query := fmt.Sprintf("id:%s", cmd.CommandID)
-		watchSuffix := ""
-		if n == 1 {
-			watchSuffix = " --watch"
-		}
 		fmt.Fprintf(&b, "    %s\n",
-			hint.Render(fmt.Sprintf("formae status command --query='%s'%s", query, watchSuffix)))
+			hint.Render(fmt.Sprintf("formae status command --query='%s'", query)))
 	}
 
 	return b.String()

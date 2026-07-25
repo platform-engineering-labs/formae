@@ -53,7 +53,7 @@ func DefaultKeyMap() KeyMap {
 		),
 		Sort: key.NewBinding(
 			key.WithKeys("s"),
-			key.WithHelp("s", "toggle sort"),
+			key.WithHelp("s", "sort"),
 		),
 		Search: key.NewBinding(
 			key.WithKeys("/"),

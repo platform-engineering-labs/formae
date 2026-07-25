@@ -30,45 +30,8 @@ func TestFormaePalette(t *testing.T) {
 	assert.NotEmpty(t, string(p.Selection.Dark))
 }
 
-func TestClassicPalette(t *testing.T) {
-	p := ClassicPalette()
-
-	// Classic palette has same structure
-	assert.NotEmpty(t, string(p.PrimaryAccent.Dark))
-	assert.NotEmpty(t, string(p.SecondaryAccent.Dark))
-	assert.NotEmpty(t, string(p.Error.Dark))
-	assert.NotEmpty(t, string(p.Warning.Dark))
-	assert.NotEmpty(t, string(p.Selection.Dark))
-}
-
-func TestClassicPalette_PreservesExistingColors(t *testing.T) {
-	p := ClassicPalette()
-
-	// Gold matches gookit/color RGB(181, 181, 91) = #B5B55B
-	assert.Equal(t, "#B5B55B", string(p.SecondaryAccent.Dark))
-}
-
-func TestPaletteByName(t *testing.T) {
-	tests := []struct {
-		name     string
-		expected Palette
-	}{
-		{"formae", FormaePalette()},
-		{"classic", ClassicPalette()},
-		{"unknown", FormaePalette()}, // default fallback
-		{"", FormaePalette()},        // empty fallback
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			p := PaletteByName(tt.name)
-			assert.Equal(t, tt.expected, p)
-		})
-	}
-}
-
 func TestPalettes_HaveErrorTiers(t *testing.T) {
-	for _, p := range []Palette{FormaePalette(), ClassicPalette()} {
+	for _, p := range []Palette{FormaePalette()} {
 		assert.NotEmpty(t, p.ErrorSubtle.Dark)
 		assert.NotEmpty(t, p.ErrorBright.Dark)
 	}

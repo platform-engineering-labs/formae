@@ -20,6 +20,7 @@ require (
 	ergo.services/actor/statemachine v0.0.0-20251202053101-c0aa08b403e5
 	ergo.services/application v0.0.0-20240904055159-7f2e1a954c05
 	ergo.services/ergo v1.999.320
+	github.com/BurntSushi/toml v1.4.1-0.20240526193622-a339e1f7089c
 	github.com/XSAM/otelsql v0.41.0
 	github.com/alecthomas/chroma/v2 v2.23.1
 	github.com/apple/pkl-go v0.13.2

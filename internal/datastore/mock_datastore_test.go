@@ -171,7 +171,7 @@ func (m *mockDatastore) LoadResourceUpdates(_ string) ([]resource_update.Resourc
 func (m *mockDatastore) UpdateResourceUpdateState(_ string, _ string, _ types.OperationType, _ resource_update.ResourceUpdateState, _ time.Time) error {
 	return nil
 }
-func (m *mockDatastore) UpdateResourceUpdateProgress(_ string, _ string, _ types.OperationType, _ resource_update.ResourceUpdateState, _ time.Time, _ plugin.TrackedProgress) error {
+func (m *mockDatastore) UpdateResourceUpdateProgress(_ string, _ string, _ types.OperationType, _ resource_update.ResourceUpdateState, _ time.Time, _ time.Time, _ plugin.TrackedProgress) error {
 	return nil
 }
 func (m *mockDatastore) BatchUpdateResourceUpdateState(_ string, _ []ResourceUpdateRef, _ resource_update.ResourceUpdateState, _ time.Time) error {

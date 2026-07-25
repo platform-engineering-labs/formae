@@ -243,11 +243,11 @@ func TestMSSQLResourceUpdatesProgress(t *testing.T) {
 	}
 
 	p1 := plugin.TrackedProgress{ProgressResult: resource.ProgressResult{RequestID: "req-1", StatusMessage: "step 1"}}
-	if err := ds.UpdateResourceUpdateProgress(commandID, "k-p", types.OperationCreate, resource_update.ResourceUpdateStateInProgress, now.Add(time.Second), p1); err != nil {
+	if err := ds.UpdateResourceUpdateProgress(commandID, "k-p", types.OperationCreate, resource_update.ResourceUpdateStateInProgress, now, now.Add(time.Second), p1); err != nil {
 		t.Fatalf("UpdateResourceUpdateProgress 1: %v", err)
 	}
 	p2 := plugin.TrackedProgress{ProgressResult: resource.ProgressResult{RequestID: "req-2", StatusMessage: "step 2"}}
-	if err := ds.UpdateResourceUpdateProgress(commandID, "k-p", types.OperationCreate, resource_update.ResourceUpdateStateSuccess, now.Add(2*time.Second), p2); err != nil {
+	if err := ds.UpdateResourceUpdateProgress(commandID, "k-p", types.OperationCreate, resource_update.ResourceUpdateStateSuccess, now, now.Add(2*time.Second), p2); err != nil {
 		t.Fatalf("UpdateResourceUpdateProgress 2: %v", err)
 	}
 
@@ -270,7 +270,7 @@ func TestMSSQLResourceUpdatesProgress(t *testing.T) {
 	}
 
 	// Progress on a missing row errors (the SELECT finds no row).
-	if err := ds.UpdateResourceUpdateProgress(commandID, "nope", types.OperationCreate, resource_update.ResourceUpdateStateSuccess, now, p1); err == nil {
+	if err := ds.UpdateResourceUpdateProgress(commandID, "nope", types.OperationCreate, resource_update.ResourceUpdateStateSuccess, now, now, p1); err == nil {
 		t.Errorf("expected error for missing ksuid, got nil")
 	}
 }

@@ -17,6 +17,22 @@ import (
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
+// styledInventoryCell applies the theme styling for one table cell. Column 0 is
+// the row's label/name. Themes decide whether that column is special: rich
+// renders it in the accent color (the primary identifier), while quiet treats
+// it like any other column (nothing special about a label). Other columns defer
+// to the tab's own styleCell (e.g. the ⚠ unmanaged red on Stack, the
+// discoverable "yes" accent).
+func styledInventoryCell(th *theme.Theme, styleCell func(*theme.Theme, int, string) string, col int, plain string) string {
+	if th != nil && col == 0 && th.Rows.LabelAccent {
+		return th.Styles.Accent.Render(plain)
+	}
+	if styleCell != nil && th != nil {
+		return styleCell(th, col, plain)
+	}
+	return plain
+}
+
 // renderTable renders a slice of rows using the given column set and theme.
 // It returns the table output (header + data rows) as a single string.
 // entity is the plural noun used in the status line (e.g. "resources").
@@ -50,11 +66,7 @@ func renderTable(th *theme.Theme, cols []components.Column, rows []row, styleCel
 				plain = components.Truncate(cell, colWidth)
 			}
 			rowCells[col] = plain
-			sc := styledCell{col: col, plain: plain, styled: plain}
-			if styleCell != nil && th != nil {
-				sc.styled = styleCell(th, col, plain)
-			}
-			styledRow[col] = sc
+			styledRow[col] = styledCell{col: col, plain: plain, styled: styledInventoryCell(th, styleCell, col, plain)}
 		}
 		cells[i] = rowCells
 		styledCells[i] = styledRow

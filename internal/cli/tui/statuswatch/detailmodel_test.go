@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	tui "github.com/platform-engineering-labs/formae/internal/cli/tui"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/tuitest"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
@@ -82,6 +83,15 @@ func TestDetailModel_SummaryRowsAndSecondLines(t *testing.T) {
 				State:         "Canceled",
 				CascadeSource: "legacy-2",
 			},
+			{
+				// A failed resource with no error of its own — blocked because a
+				// dependency failed. The executor records no per-resource reason.
+				ResourceLabel: "blocked-child",
+				ResourceType:  "AWS::EC2::SubnetRouteTableAssociation",
+				StackName:     "production",
+				Operation:     "create",
+				State:         "Failed",
+			},
 		},
 	}
 	r := row{cmd: c, counts: commandCounts(c), health: commandHealth(c, commandCounts(c))}
@@ -90,8 +100,17 @@ func TestDetailModel_SummaryRowsAndSecondLines(t *testing.T) {
 
 	v := plain(dm.View(30, false))
 	assert.Contains(t, v, "▌ Resources", "section header")
-	assert.Contains(t, v, "BucketNotEmpty", "error message second line")
+	// The provider error is NOT shown in the summary row — it lives only in the
+	// expanded card so the summary stays scannable.
+	assert.NotContains(t, v, "BucketNotEmpty", "error must not appear in the summary row")
 	assert.Contains(t, v, "depends on legacy-2", "cascade second line")
+
+	// Expanding the rows surfaces the error and the cascade explanation in cards.
+	dm.detailMode = true
+	vCard := plain(dm.View(30, false))
+	assert.Contains(t, vCard, "BucketNotEmpty", "direct error appears in the expanded card")
+	assert.Contains(t, vCard, "Skipped: a resource it depends on failed",
+		"a failed resource with no error of its own is explained as a dependency failure")
 }
 
 func TestDetailModel_ShowMoreRow(t *testing.T) {
@@ -198,6 +217,60 @@ func TestDetailModel_CancelStateLabels(t *testing.T) {
 	v := plain(dm.View(40, false))
 	assert.Contains(t, v, "finishing", "in-progress row on canceling command shows 'finishing'")
 	assert.Contains(t, v, "canceled", "canceled row shows 'canceled'")
+}
+
+// TestDetailModel_RenderStateGlyph_AllStates asserts renderStateGlyph maps
+// every row state to the themed glyph (esp. Pending → StatusPending, which
+// previously had no direct test coverage — under the quiet theme it's "·",
+// not the old hardcoded "○").
+// TestDetailModel_PinnedRowRunningGlyphIsStatic asserts the detail view's
+// pinned command row (SetCommand -> multiView.renderRows, the same shared
+// renderer as the multi-command table) inherits the PLA-348 fix that
+// replaced the redundant animated spinner in colStatus with the static
+// themed in-progress glyph. spinView is set to a distinctive animated frame
+// that must not leak into the pinned row now that it's unused there.
+func TestDetailModel_PinnedRowRunningGlyphIsStatic(t *testing.T) {
+	th := theme.New("formae")
+	dm := newDetailModel(th, 100, 30)
+	c := apimodel.Command{
+		CommandID: "cmd-pinned-running",
+		Command:   "apply",
+		State:     "InProgress",
+		StartTs:   time.Date(2026, 7, 16, 11, 0, 0, 0, time.UTC),
+		ResourceUpdates: []apimodel.ResourceUpdate{
+			{ResourceLabel: "res-1", ResourceType: "AWS::S3::Bucket", StackName: "prod", Operation: "create", State: "InProgress"},
+		},
+	}
+	counts := commandCounts(c)
+	r := row{cmd: c, counts: counts, health: commandHealth(c, counts)}
+	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
+	dm = dm.SetCommand(c, r, "@ANIMATED@", now, nil)
+
+	assert.NotContains(t, dm.pinnedRow, "@ANIMATED@", "pinned row must not render the animated spinner frame")
+	assert.Contains(t, dm.pinnedRow, th.Glyphs.StatusInProgress, "pinned row must render the static themed in-progress glyph")
+}
+
+func TestDetailModel_RenderStateGlyph_AllStates(t *testing.T) {
+	th := theme.New("quiet")
+	dm := newDetailModel(th, 100, 30)
+
+	tests := []struct {
+		name  string
+		state components.State
+		want  string
+	}{
+		{"done", components.StateDone, th.Glyphs.StatusDone},
+		{"pending", components.StatePending, th.Glyphs.StatusPending},
+		{"failed", components.StateFailed, th.Glyphs.StatusFailed},
+		{"skipped", components.StateSkipped, th.Glyphs.StatusSkipped},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := plain(dm.renderStateGlyph(updateRow{state: tc.state}, lipgloss.Color("0"), false))
+			assert.Equal(t, tc.want, got)
+		})
+	}
 }
 
 func TestDetailModel_BackReturnsTrue(t *testing.T) {
@@ -591,4 +664,114 @@ func TestDetailModel_SortKeepsFocusOnRow(t *testing.T) {
 	assert.Equal(t, wantKey, navAfter[dm.cursor].rowKey,
 		"focus must stay on the same row after toggling sort, not jump to the top")
 	assert.NotEqual(t, 0, dm.cursor, "the focused row actually changed position under the reverse sort")
+}
+
+// TestDetailCard_ShowsResourceProperties verifies the resource detail card
+// renders the property listing for a create (like the inventory detail /
+// simulation card) and the change lines for an update — not just Type/Stack.
+func TestDetailCard_ShowsResourceProperties(t *testing.T) {
+	th := theme.New("quiet")
+	dm := newDetailModel(th, 120, 40)
+
+	c := apimodel.Command{
+		CommandID: "cmd-props",
+		State:     "Success",
+		ResourceUpdates: []apimodel.ResourceUpdate{
+			{
+				ResourceLabel: "my-queue",
+				ResourceType:  "AWS::SQS::Queue",
+				StackName:     "default",
+				Operation:     "create",
+				State:         "Success",
+				Duration:      1200,
+				Properties:    []byte(`{"QueueName":"my-queue-x","DelaySeconds":0}`),
+			},
+			{
+				ResourceLabel: "db",
+				ResourceType:  "AWS::RDS::DBInstance",
+				StackName:     "default",
+				Operation:     "update",
+				State:         "Success",
+				Duration:      3400,
+				PatchDocument: []byte(`[{"op":"replace","path":"/InstanceClass","value":"db.t3.large"}]`),
+				Properties:    []byte(`{"InstanceClass":"db.t3.large"}`),
+				OldProperties: []byte(`{"InstanceClass":"db.t3.medium"}`),
+			},
+		},
+	}
+	r := row{cmd: c, counts: commandCounts(c), health: commandHealth(c, commandCounts(c))}
+	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
+	dm = dm.SetCommand(c, r, "◉", now, nil)
+	dm.detailMode = true // expand all cards
+
+	v := plain(dm.View(40, false))
+	// create card lists its properties (inventory-detail style), not Type/Stack.
+	assert.Contains(t, v, "QueueName: my-queue-x", "create card should list its properties")
+	assert.Contains(t, v, "DelaySeconds: 0", "create card should list its properties")
+	// update card shows the change line.
+	assert.Contains(t, v, "InstanceClass", "update card should show the changed property")
+	assert.Contains(t, v, "db.t3.medium", "update card should show the old value")
+	assert.Contains(t, v, "db.t3.large", "update card should show the new value")
+}
+
+// TestDetailCard_InProgressElapsedIsLive verifies an in-progress resource shows
+// live elapsed (now − StartedAt), not the stale Duration the agent only sets on
+// completion.
+func TestDetailCard_InProgressElapsedIsLive(t *testing.T) {
+	th := theme.New("quiet")
+	dm := newDetailModel(th, 120, 40)
+	start := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
+	now := start.Add(37 * time.Second)
+
+	c := apimodel.Command{
+		CommandID: "cmd-live",
+		State:     "InProgress",
+		ResourceUpdates: []apimodel.ResourceUpdate{
+			{
+				ResourceLabel: "vpc",
+				ResourceType:  "AWS::EC2::VPC",
+				Operation:     "create",
+				State:         "InProgress",
+				StartedAt:     start,
+				Duration:      0, // agent hasn't set a final duration yet
+			},
+		},
+	}
+	r := row{cmd: c, counts: commandCounts(c), health: commandHealth(c, commandCounts(c))}
+	dm = dm.SetCommand(c, r, "◉", now, nil)
+	dm.detailMode = true
+
+	v := plain(dm.View(40, false))
+	assert.Contains(t, v, "00:37", "in-progress elapsed should be live (now − StartedAt), not the stale duration")
+}
+
+// TestDetailCard_ElapsedFallsBackToCommandStart verifies that an in-progress
+// resource whose per-resource StartedAt the agent hasn't recorded yet still
+// shows a live, ticking elapsed derived from the command's start time.
+func TestDetailCard_ElapsedFallsBackToCommandStart(t *testing.T) {
+	th := theme.New("quiet")
+	dm := newDetailModel(th, 120, 40)
+	cmdStart := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
+	now := cmdStart.Add(52 * time.Second)
+
+	c := apimodel.Command{
+		CommandID: "cmd-fb",
+		State:     "InProgress",
+		StartTs:   cmdStart,
+		ResourceUpdates: []apimodel.ResourceUpdate{
+			{
+				ResourceLabel: "sg",
+				ResourceType:  "AWS::EC2::SecurityGroup",
+				Operation:     "create",
+				State:         "InProgress",
+				// StartedAt intentionally zero (agent hasn't recorded it yet)
+			},
+		},
+	}
+	r := row{cmd: c, counts: commandCounts(c), health: commandHealth(c, commandCounts(c))}
+	dm = dm.SetCommand(c, r, "◉", now, nil)
+	dm.detailMode = true
+
+	v := plain(dm.View(40, false))
+	assert.Contains(t, v, "00:52", "in-progress elapsed should fall back to now − command start when per-resource start is missing")
 }

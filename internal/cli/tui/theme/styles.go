@@ -37,6 +37,9 @@ type Styles struct {
 	StatusFailed     lipgloss.Style
 	StatusWarning    lipgloss.Style
 
+	// Unmanaged marks unmanaged resources in the inventory (own palette slot).
+	Unmanaged lipgloss.Style
+
 	// Interactive elements
 	KeybindingKey  lipgloss.Style
 	KeybindingDesc lipgloss.Style
@@ -119,6 +122,10 @@ func NewStyles(p Palette) Styles {
 
 		StatusWarning: lipgloss.NewStyle().
 			Foreground(p.Warning),
+
+		Unmanaged: lipgloss.NewStyle().
+			Foreground(p.Unmanaged).
+			Bold(true),
 
 		KeybindingKey: lipgloss.NewStyle().
 			Foreground(p.PrimaryAccent).

@@ -8,11 +8,32 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
+
+// TestResourcesStyleCell_UnmanagedUsesUnmanagedColor pins the unmanaged marker
+// to the theme's dedicated Unmanaged style rather than the generic failure
+// style, so a theme can recolor unmanaged resources independently of failures.
+func TestResourcesStyleCell_UnmanagedUsesUnmanagedColor(t *testing.T) {
+	th := theme.New("rich")
+	// Give the two roles distinct colors so the wiring is observable regardless
+	// of the built-in defaults (which coincide today).
+	th.Styles.Unmanaged = lipgloss.NewStyle().Foreground(lipgloss.Color("#7C3AED"))
+	th.Styles.StatusFailed = lipgloss.NewStyle().Foreground(lipgloss.Color("#DC2626"))
+
+	spec := newSpecs(nil)[TabResources]
+	got := spec.styleCell(th, 1, "⚠ unmanaged")
+
+	assert.Equal(t, th.Styles.Unmanaged.Render("⚠ unmanaged"), got,
+		"unmanaged marker must render with the theme's Unmanaged style")
+	assert.NotEqual(t, th.Styles.StatusFailed.Render("⚠ unmanaged"), got,
+		"unmanaged marker must not reuse the generic failure style")
+}
 
 // ---------------------------------------------------------------------------
 // resourceRow: cell builders

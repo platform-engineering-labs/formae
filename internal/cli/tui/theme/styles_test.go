@@ -26,13 +26,14 @@ func TestNewStyles(t *testing.T) {
 	assert.NotEmpty(t, s.StatusFailed.Render("test"))
 }
 
-func TestNewStyles_BothPalettesProduceStyles(t *testing.T) {
-	formae := NewStyles(FormaePalette())
-	classic := NewStyles(ClassicPalette())
+// TestNewStyles_ProducesStylesWithoutPanicking guards NewStyles against
+// panicking for a fully-populated Palette. It used to build two Styles from
+// two distinct Go palettes (FormaePalette and the now-removed
+// ClassicPalette); only FormaePalette remains, so this is a straightforward
+// smoke test.
+func TestNewStyles_ProducesStylesWithoutPanicking(t *testing.T) {
+	s := NewStyles(FormaePalette())
 
-	// Both render without panicking
-	assert.NotEmpty(t, formae.Title.Render("test"))
-	assert.NotEmpty(t, classic.Title.Render("test"))
-	assert.NotEmpty(t, formae.Panel.Render("test"))
-	assert.NotEmpty(t, classic.Panel.Render("test"))
+	assert.NotEmpty(t, s.Title.Render("test"))
+	assert.NotEmpty(t, s.Panel.Render("test"))
 }

@@ -197,11 +197,11 @@ func TestRenderAgentStats_UnmanagedThresholds(t *testing.T) {
 		name      string
 		managed   int
 		unmanaged int
-		symbol    string
+		pct       string
 	}{
-		{"zero-pct", 100, 0, "✓"},   // 0% → Done ✓
-		{"forty-pct", 60, 40, "⚠"},  // 40% → Warning ⚠
-		{"eighty-pct", 20, 80, "✗"}, // 80% → Error ✗
+		{"zero-pct", 100, 0, "0%"},   // 0% → Done (green)
+		{"forty-pct", 60, 40, "40%"}, // 40% → Warning (yellow)
+		{"eighty-pct", 20, 80, "80%"}, // 80% → Error (red)
 	}
 
 	for _, tc := range cases {
@@ -213,8 +213,10 @@ func TestRenderAgentStats_UnmanagedThresholds(t *testing.T) {
 
 			out := renderAgentStats(th, stats, 120)
 			plain := stripANSIAgent(out)
-			assert.Contains(t, plain, tc.symbol,
-				"unmanaged threshold symbol %q expected", tc.symbol)
+			// Severity is conveyed by color (not an ambiguous-width glyph); the
+			// percentage text is always present.
+			assert.Contains(t, plain, tc.pct,
+				"unmanaged percentage %q expected", tc.pct)
 		})
 	}
 }

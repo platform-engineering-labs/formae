@@ -11,7 +11,21 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 )
+
+// driftOpColor returns the themed per-operation color for a drift row class.
+func driftOpColor(p theme.Palette, c rowClass) lipgloss.AdaptiveColor {
+	switch c {
+	case rowClassDelete:
+		return p.OpDelete
+	case rowClassCreate:
+		return p.OpCreate
+	case rowClassUpdate:
+		return p.OpUpdate
+	}
+	return p.TextPrimary
+}
 
 // header renders the branded driftview header: "formae apply" (white/orange,
 // consistent with every other screen) plus a distinct alert-colored
@@ -197,33 +211,25 @@ func (m Model) renderRow(r driftRow, isCursor bool) string {
 		return st
 	}
 
-	// Operation word color per class. Only deletes are colored (Error, as
-	// they're destructive); creates and updates stay white so we're not
-	// coloring routine changes. No gold anywhere.
-	var opColor lipgloss.AdaptiveColor
-	switch r.class {
-	case rowClassDelete:
-		opColor = p.Error
-	default:
-		opColor = p.TextPrimary
-	}
+	// Operation word color per class, themed via driftOpColor.
+	opColor := driftOpColor(p, r.class)
 
 	frameSt := style(p.TextSecondary)
 	opSt := style(opColor)
 	labelSt := style(p.TextPrimary)
 	typeSt := style(p.TextSubtle)
 
-	checkbox := "[ ]"
+	checkbox := m.th.Glyphs.CheckboxOff
 	if m.selected[r.key] {
-		checkbox = "[x]"
+		checkbox = m.th.Glyphs.CheckboxOn
 	}
 
 	var line string
 	switch r.class {
 	case rowClassUpdate:
-		tri := "▸"
+		tri := m.th.Glyphs.ExpandClosed
 		if m.expanded[r.key] {
-			tri = "▾"
+			tri = m.th.Glyphs.ExpandOpen
 		}
 		line = frameSt.Render("  "+tri+" "+checkbox+" ") +
 			opSt.Render("update") +

@@ -583,26 +583,8 @@ func TestSortRowsNone(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// opKind symbol + word
+// opKind word
 // ---------------------------------------------------------------------------
-
-// TestOpKindSymbol verifies each opKind returns the correct symbol.
-func TestOpKindSymbol(t *testing.T) {
-	cases := []struct {
-		op     opKind
-		symbol string
-	}{
-		{opDelete, "-"},
-		{opReplace, "↻"},
-		{opUpdate, "~"},
-		{opDetach, "⊘"},
-		{opCreate, "+"},
-		{opKeep, "="},
-	}
-	for _, tc := range cases {
-		assert.Equal(t, tc.symbol, tc.op.symbol(), "symbol for %v", tc.op)
-	}
-}
 
 // TestOpKindWord verifies each opKind returns the correct word.
 func TestOpKindWord(t *testing.T) {

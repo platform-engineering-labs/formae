@@ -14,17 +14,52 @@ import (
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 )
 
+// OperationGlyph returns the themed glyph for an operation string (create,
+// update, delete, replace), or "" for operations without a distinct glyph.
+// Shared by the simulation and status views so the operation column renders
+// identically in both.
+func OperationGlyph(g theme.Glyphs, op string) string {
+	switch op {
+	case apimodel.OperationCreate:
+		return g.OpCreate
+	case apimodel.OperationUpdate:
+		return g.OpUpdate
+	case apimodel.OperationDelete:
+		return g.OpDelete
+	case apimodel.OperationReplace:
+		return g.OpReplace
+	}
+	return ""
+}
+
+// OperationColor returns the themed per-operation color for an operation string,
+// falling back to TextPrimary for operations without a distinct color.
+func OperationColor(p theme.Palette, op string) lipgloss.AdaptiveColor {
+	switch op {
+	case apimodel.OperationCreate:
+		return p.OpCreate
+	case apimodel.OperationUpdate:
+		return p.OpUpdate
+	case apimodel.OperationDelete:
+		return p.OpDelete
+	case apimodel.OperationReplace:
+		return p.OpReplace
+	}
+	return p.TextPrimary
+}
+
 // PromptForOperations returns a human-readable prompt summarising the
 // operations that will be performed by cmd, followed by a confirmation
-// question. Returns "" when there is nothing to do.
-func PromptForOperations(cmd *apimodel.Command) string {
+// question. Returns "" when there is nothing to do. th supplies the active
+// theme's colors for the rendered summary.
+func PromptForOperations(th *theme.Theme, cmd *apimodel.Command) string {
 	targetCreates, targetUpdates, stackCreates, stackUpdates, policyCreates, policyUpdates, resourceCreates, resourceUpdates, resourceDeletes, resourceReplaces := analyzeCommands(cmd)
 
 	if targetCreates == 0 && targetUpdates == 0 && stackCreates == 0 && stackUpdates == 0 && policyCreates == 0 && policyUpdates == 0 && resourceCreates == 0 && resourceUpdates == 0 && resourceDeletes == 0 && resourceReplaces == 0 {
 		return ""
 	}
 
-	summary := operationSummary(targetCreates, targetUpdates, stackCreates, stackUpdates, policyCreates, policyUpdates, resourceCreates, resourceUpdates, resourceDeletes, resourceReplaces)
+	summary := operationSummary(th, targetCreates, targetUpdates, stackCreates, stackUpdates, policyCreates, policyUpdates, resourceCreates, resourceUpdates, resourceDeletes, resourceReplaces)
 	if summary == "" {
 		return ""
 	}
@@ -132,12 +167,11 @@ func analyzeCommands(cmd *apimodel.Command) (targetCreates, targetUpdates, stack
 // operationSummary builds the colored "This operation will …" sentence.
 // Colors use theme roles: Error for destructive ops (delete/replace), Done for
 // creates, and TextPrimary for updates (no gold; routine updates aren't tinted).
-func operationSummary(targetCreates, targetUpdates, stackCreates, stackUpdates, policyCreates, policyUpdates, resourceCreates, resourceUpdates, resourceDeletes, resourceReplaces int) string {
+func operationSummary(th *theme.Theme, targetCreates, targetUpdates, stackCreates, stackUpdates, policyCreates, policyUpdates, resourceCreates, resourceUpdates, resourceDeletes, resourceReplaces int) string {
 	if targetCreates == 0 && targetUpdates == 0 && stackCreates == 0 && stackUpdates == 0 && policyCreates == 0 && policyUpdates == 0 && resourceCreates == 0 && resourceUpdates == 0 && resourceDeletes == 0 && resourceReplaces == 0 {
 		return ""
 	}
 
-	th := theme.New("formae")
 	errSt := lipgloss.NewStyle().Foreground(th.Palette.Error)
 	doneSt := lipgloss.NewStyle().Foreground(th.Palette.Done)
 	updateSt := lipgloss.NewStyle().Foreground(th.Palette.TextPrimary)

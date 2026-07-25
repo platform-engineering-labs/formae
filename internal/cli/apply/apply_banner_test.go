@@ -62,7 +62,7 @@ func TestApply_BannerNotEmittedBeforeAltScreenTUI(t *testing.T) {
 		return simview.DecisionAborted, nil
 	}
 
-	launchWatch = func(a *app.App, commandID string) error { return nil }
+	launchWatch = func(a *app.App, commandID string) (bool, error) { return true, nil }
 
 	a := newTestApp()
 	opts := &ApplyOptions{
@@ -119,7 +119,7 @@ func TestApply_BannerEmittedOnPrintAndExitPath(t *testing.T) {
 		return simview.DecisionConfirmed, nil
 	}
 
-	launchWatch = func(a *app.App, commandID string) error { return nil }
+	launchWatch = func(a *app.App, commandID string) (bool, error) { return true, nil }
 
 	a := newTestApp()
 	opts := &ApplyOptions{

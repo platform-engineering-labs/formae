@@ -9,7 +9,12 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/tuitest"
 )
 
 // runeIndex returns the rune-offset of substr in s, or -1 if not found.
@@ -122,6 +127,88 @@ func TestRenderDeleteRowsHaveWarningColor(t *testing.T) {
 	plainView := plain(rawView)
 	assert.Contains(t, plainView, "delete", "delete operation should appear in view")
 	assert.Contains(t, plainView, "old-cache", "old-cache delete should appear in view")
+}
+
+// TestRenderRowLabelAndDeleteAreThemeDriven pins that row column coloring is
+// governed by the theme's [rows] plane (PLA-348):
+//   - rich (label_accent + delete_whole_row): the label is the accent color,
+//     and a delete row's label AND type both take the delete op color.
+//   - quiet (neither): the label renders the same color as the other columns
+//     (nothing special about a label), and delete rows are NOT tinted
+//     whole-row — only the operation cell carries the (uniform) op color.
+//
+// It also pins that the operation token is regular weight (not bold) on every
+// row, delete included.
+func TestRenderRowLabelAndDeleteAreThemeDriven(t *testing.T) {
+	const opW, labelW, typeW, stackW = 14, 30, 30, 0
+	deleteRow := simRow{op: opDelete, label: "old-cache", typ: "AWS::ElastiCache::CacheCluster"}
+	createRow := simRow{op: opCreate, label: "my-bucket", typ: "AWS::S3::Bucket"}
+
+	// --- rich: label accent + whole-row delete tint ---
+	rich := makeModel(100, 32)
+	rich.th = theme.New("rich")
+	rp := rich.th.Palette
+	richDelete := rich.renderRow(deleteRow, kindResource, opW, labelW, typeW, stackW, false)
+	richCreate := rich.renderRow(createRow, kindResource, opW, labelW, typeW, stackW, false)
+
+	wantRichDeleteLabel := lipgloss.NewStyle().Foreground(opColor(rp, opDelete)).
+		Render(components.Pad(components.Truncate(deleteRow.label, labelW-1), labelW))
+	wantRichDeleteType := lipgloss.NewStyle().Foreground(opColor(rp, opDelete)).
+		Render(components.Truncate(deleteRow.typ, typeW-1))
+	assert.Contains(t, richDelete, wantRichDeleteLabel, "rich delete label should carry the delete op color")
+	assert.Contains(t, richDelete, wantRichDeleteType, "rich delete type should carry the delete op color")
+
+	wantRichCreateLabel := lipgloss.NewStyle().Foreground(rp.PrimaryAccent).
+		Render(components.Pad(components.Truncate(createRow.label, labelW-1), labelW))
+	assert.Contains(t, richCreate, wantRichCreateLabel, "rich create label should be PrimaryAccent")
+
+	// --- quiet: label == columns, no whole-row delete tint ---
+	quiet := makeModel(100, 32)
+	quiet.th = theme.New("quiet")
+	qp := quiet.th.Palette
+	quietDelete := quiet.renderRow(deleteRow, kindResource, opW, labelW, typeW, stackW, false)
+	quietCreate := quiet.renderRow(createRow, kindResource, opW, labelW, typeW, stackW, false)
+
+	// Both delete and create labels render in TextSecondary, the same color as
+	// the type column — the label is not special, and delete is not tinted.
+	wantQuietDeleteLabel := lipgloss.NewStyle().Foreground(qp.TextSecondary).
+		Render(components.Pad(components.Truncate(deleteRow.label, labelW-1), labelW))
+	wantQuietCreateLabel := lipgloss.NewStyle().Foreground(qp.TextSecondary).
+		Render(components.Pad(components.Truncate(createRow.label, labelW-1), labelW))
+	assert.Contains(t, quietDelete, wantQuietDeleteLabel, "quiet delete label should match the column color")
+	assert.Contains(t, quietCreate, wantQuietCreateLabel, "quiet create label should match the column color")
+
+	// quiet colors the op cell uniformly (no per-op color); the delete op cell
+	// must NOT carry a distinct delete tint on the label.
+	assert.NotContains(t, quietDelete, wantRichDeleteLabel, "quiet must not tint the delete label")
+
+	// Operation token is colored (regular weight, not bold) on every row.
+	wantRichDeleteOp := lipgloss.NewStyle().Foreground(opColor(rp, opDelete)).
+		Render(components.Pad(opGlyph(rich.th.Glyphs, opDelete)+" "+opDelete.word(), opW))
+	assert.Contains(t, richDelete, wantRichDeleteOp, "delete op token should be regular weight")
+}
+
+// TestRenderGroupColHeaderThemeHighlight pins the theme-driven header
+// emphasis (PLA-348): under "rich" (Header.Highlight="background") the
+// navigated column header carries a background SGR sequence, matching the
+// row cursor; under "quiet" (Header.Highlight="brighten") the navigated
+// header carries only a foreground + bold, no background.
+func TestRenderGroupColHeaderThemeHighlight(t *testing.T) {
+	tuitest.PinRendering()
+
+	richModel := makeModel(100, 32)
+	richModel.th = theme.New("rich")
+	richModel.sortHi[kindResource] = colLabel
+	richHdr := richModel.renderGroupColHeader(kindResource, 14, 30, 30, 0)
+
+	quietModel := makeModel(100, 32)
+	quietModel.th = theme.New("quiet")
+	quietModel.sortHi[kindResource] = colLabel
+	quietHdr := quietModel.renderGroupColHeader(kindResource, 14, 30, 30, 0)
+
+	assert.Contains(t, richHdr, "48;2;", "rich (background mode) navigated header must carry a background SGR sequence")
+	assert.NotContains(t, quietHdr, "48;2;", "quiet (brighten mode) navigated header must not carry a background")
+	assert.Contains(t, quietHdr, "\x1b[1;", "quiet navigated header should still render bold")
 }
 
 // TestRenderSubLinesAppear verifies cascade and policy-keep sub-lines appear

@@ -13,7 +13,10 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 )
 
@@ -30,23 +33,42 @@ const (
 	opKeep                  // "="
 )
 
-// symbol returns the single-character glyph for the operation.
-func (o opKind) symbol() string {
+// opGlyph returns the themed glyph for an operation.
+func opGlyph(g theme.Glyphs, o opKind) string {
 	switch o {
 	case opDelete:
-		return "-"
+		return g.OpDelete
 	case opReplace:
-		return "↻"
+		return g.OpReplace
 	case opUpdate:
-		return "~"
+		return g.OpUpdate
 	case opDetach:
-		return "⊘"
+		return g.OpDetach
 	case opCreate:
-		return "+"
+		return g.OpCreate
 	case opKeep:
-		return "="
+		return g.OpKeep
 	}
 	return "?"
+}
+
+// opColor returns the themed color for an operation.
+func opColor(p theme.Palette, o opKind) lipgloss.AdaptiveColor {
+	switch o {
+	case opDelete:
+		return p.OpDelete
+	case opReplace:
+		return p.OpReplace
+	case opUpdate:
+		return p.OpUpdate
+	case opDetach:
+		return p.OpDetach
+	case opCreate:
+		return p.OpCreate
+	case opKeep:
+		return p.OpKeep
+	}
+	return p.TextPrimary
 }
 
 // word returns the human-readable operation name.

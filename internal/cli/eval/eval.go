@@ -16,7 +16,6 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/printer"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
-	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	"github.com/platform-engineering-labs/formae/internal/schema"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -24,16 +23,6 @@ import (
 
 // isTerminal is a package-level seam so tests can stub it.
 var isTerminal = tui.IsTerminal
-
-// themeFor resolves the active theme from the app config.
-// The name falls back to "formae" for nil configs (theme.New nil-guards internally).
-func themeFor(a *app.App) *theme.Theme {
-	name := ""
-	if a != nil && a.Config != nil {
-		name = a.Config.Cli.Theme
-	}
-	return theme.New(name)
-}
 
 type EvalOptions struct {
 	FormaFile      string
@@ -136,7 +125,7 @@ func runEval(app *app.App, opts *EvalOptions) error {
 }
 
 func runEvalForHumans(app *app.App, opts *EvalOptions) error {
-	th := themeFor(app)
+	th := app.Theme()
 	app.PrintBanner()
 	fmt.Printf("%s\n\n", renderEvalHeader(th, opts.FormaFile, string(opts.Mode)))
 

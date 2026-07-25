@@ -30,7 +30,7 @@ func RenderSummaryTable(th *theme.Theme, cmds []apimodel.Command, width int, now
 		cursor:   -1, // no cursor selection in non-TTY output
 		sortHi:   -1,
 		width:    width,
-		spinView: "◐", // static spinner frame for non-TTY
+		spinView: th.Spinner.StaticFrame, // static spinner frame for non-TTY
 		now:      now,
 	}
 	header := mv.headerRow()
@@ -54,7 +54,7 @@ func RenderDetailTable(th *theme.Theme, c apimodel.Command, width int, now time.
 	counts := commandCounts(c)
 	r := row{cmd: c, counts: counts, health: commandHealth(c, counts)}
 	dm := newDetailModel(th, width, 9999) // large height — viewport not used in non-TTY
-	dm = dm.SetCommand(c, r, "◐", now, nil)
+	dm = dm.SetCommand(c, r, th.Spinner.StaticFrame, now, nil)
 
 	var sb strings.Builder
 	for _, g := range dm.groups {

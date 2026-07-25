@@ -207,6 +207,7 @@ type CliConfig struct {
 	DisableUsageReporting bool       `pkl:"disableUsageReporting"`
 	Auth                  pkl.Object `pkl:"auth"`
 	Theme                 string     `pkl:"theme"`
+	Appearance            string     `pkl:"appearance"`
 }
 
 // PluginConfig is deprecated. Use top-level pluginDir, network, and agent.auth / cli.auth.

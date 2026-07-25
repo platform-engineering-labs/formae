@@ -213,20 +213,20 @@ func buildResourcesPanel(th *theme.Theme, stats apimodel.Stats) panelSpec {
 	}
 
 	var unmanagedPctColor lipgloss.AdaptiveColor
-	var unmanagedPctSymbol string
-	if p == 0 {
+	switch {
+	case p == 0:
 		unmanagedPctColor = th.Palette.Done
-		unmanagedPctSymbol = "✓"
-	} else if p <= 75 {
+	case p <= 75:
 		unmanagedPctColor = th.Palette.Warning
-		unmanagedPctSymbol = "⚠"
-	} else {
+	default:
 		unmanagedPctColor = th.Palette.Error
-		unmanagedPctSymbol = "✗"
 	}
 
+	// The percentage is colored by severity, so no leading glyph is needed —
+	// and it keeps the box free of ambiguous-width characters (✓/⚠/✗ render
+	// double-width in some terminals and would shear the side-by-side layout).
 	pctStyle := lipgloss.NewStyle().Foreground(unmanagedPctColor)
-	pctStr := pctStyle.Render(fmt.Sprintf("%s %d%%", unmanagedPctSymbol, p))
+	pctStr := pctStyle.Render(fmt.Sprintf("%d%%", p))
 	pctLabel := pctStyle.Render("Unmanaged %")
 
 	return panelSpec{
@@ -274,7 +274,7 @@ func buildResourceTypesPanel(th *theme.Theme, stats apimodel.Stats) panelSpec {
 	}
 	if overflow > 0 {
 		moreStyle := lipgloss.NewStyle().Foreground(th.Palette.TextSubtle)
-		lines = append(lines, moreStyle.Render(fmt.Sprintf("… and %d more types", overflow)))
+		lines = append(lines, moreStyle.Render(fmt.Sprintf("... and %d more types", overflow)))
 	}
 	return panelSpec{title: "Resource Types", color: th.Palette.Border, lines: lines}
 }
@@ -300,7 +300,7 @@ func buildPluginsPanel(th *theme.Theme, stats apimodel.Stats) panelSpec {
 	}
 	if overflow > 0 {
 		moreStyle := lipgloss.NewStyle().Foreground(th.Palette.TextSubtle)
-		lines = append(lines, moreStyle.Render(fmt.Sprintf("… and %d more plugins", overflow)))
+		lines = append(lines, moreStyle.Render(fmt.Sprintf("... and %d more plugins", overflow)))
 	}
 	return panelSpec{title: "Plugins", color: th.Palette.Border, lines: lines}
 }
@@ -338,7 +338,7 @@ func buildResourceErrorsPanel(th *theme.Theme, stats apimodel.Stats) panelSpec {
 	}
 	if overflow > 0 {
 		moreStyle := lipgloss.NewStyle().Foreground(th.Palette.TextSubtle)
-		lines = append(lines, moreStyle.Render(fmt.Sprintf("… and %d more errors", overflow)))
+		lines = append(lines, moreStyle.Render(fmt.Sprintf("... and %d more errors", overflow)))
 	}
 	return panelSpec{title: "Resource Errors", color: th.Palette.Error, lines: lines}
 }

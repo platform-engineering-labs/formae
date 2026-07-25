@@ -224,7 +224,7 @@ func TestCancelE2E_ForceWatch_AbandonedInView(t *testing.T) {
 	}
 	fc := &fakeStatusClient{cmd: terminalCmd}
 	swModel := statuswatch.New(
-		themeFor(&app.App{Config: &pkgmodel.Config{}}),
+		(&app.App{Config: &pkgmodel.Config{}}).Theme(),
 		fc,
 		capturedOpts,
 	)

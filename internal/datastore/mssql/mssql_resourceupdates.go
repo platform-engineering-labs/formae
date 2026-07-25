@@ -445,7 +445,7 @@ func (d *DatastoreMSSQL) UpdateResourceUpdateState(commandID string, ksuid strin
 
 // UpdateResourceUpdateProgress appends an entry to progress_result, updates
 // most_recent_progress, and bumps state.
-func (d *DatastoreMSSQL) UpdateResourceUpdateProgress(commandID string, ksuid string, operation types.OperationType, state resource_update.ResourceUpdateState, modifiedTs time.Time, progress plugin.TrackedProgress) error {
+func (d *DatastoreMSSQL) UpdateResourceUpdateProgress(commandID string, ksuid string, operation types.OperationType, state resource_update.ResourceUpdateState, startTs time.Time, modifiedTs time.Time, progress plugin.TrackedProgress) error {
 	ctx, span := mssqlTracer.Start(context.Background(), "UpdateResourceUpdateProgress")
 	defer span.End()
 
@@ -474,11 +474,11 @@ func (d *DatastoreMSSQL) UpdateResourceUpdateProgress(commandID string, ksuid st
 
 	updateQuery := `
 		UPDATE resource_updates
-		SET state = @p1, modified_ts = @p2, progress_result = @p3, most_recent_progress = @p4
-		WHERE command_id = @p5 AND ksuid = @p6 AND operation = @p7`
+		SET state = @p1, start_ts = @p2, modified_ts = @p3, progress_result = @p4, most_recent_progress = @p5
+		WHERE command_id = @p6 AND ksuid = @p7 AND operation = @p8`
 
 	result, err := d.conn.ExecContext(ctx, updateQuery,
-		string(state), modifiedTs.UTC(), string(progressJSON), string(mostRecentJSON),
+		string(state), startTs.UTC(), modifiedTs.UTC(), string(progressJSON), string(mostRecentJSON),
 		commandID, ksuid, string(operation))
 	if err != nil {
 		return fmt.Errorf("failed to update resource update progress: %w", err)

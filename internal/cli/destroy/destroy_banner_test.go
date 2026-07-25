@@ -67,7 +67,7 @@ func TestDestroy_BannerNotEmittedBeforeAltScreenTUI(t *testing.T) {
 		return simview.DecisionAborted, nil
 	}
 
-	launchWatch = func(a *app.App, commandID string) error { return nil }
+	launchWatch = func(a *app.App, commandID string) (bool, error) { return true, nil }
 
 	a := newDestroyTestApp()
 	opts := &DestroyOptions{
@@ -124,7 +124,7 @@ func TestDestroy_BannerEmittedOnPrintAndExitPath(t *testing.T) {
 		return simview.DecisionConfirmed, nil
 	}
 
-	launchWatch = func(a *app.App, commandID string) error { return nil }
+	launchWatch = func(a *app.App, commandID string) (bool, error) { return true, nil }
 
 	a := newDestroyTestApp()
 	opts := &DestroyOptions{

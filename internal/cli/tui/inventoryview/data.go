@@ -92,10 +92,11 @@ func newSpecs(now func() time.Time) [4]tabSpec {
 				{Title: "NativeID", Width: 28, Priority: 3},
 			},
 			// col 1 = Stack: cells starting with "⚠ " are rendered with the
-			// error/red role (StatusFailed) to highlight unmanaged resources.
+			// themeable Unmanaged role (default red) to highlight unmanaged
+			// resources, independent of the failure color.
 			styleCell: func(th *theme.Theme, col int, cell string) string {
 				if col == 1 && th != nil && strings.HasPrefix(cell, "⚠ ") {
-					return th.Styles.StatusFailed.Render(cell)
+					return th.Styles.Unmanaged.Render(cell)
 				}
 				return cell
 			},
