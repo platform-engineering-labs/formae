@@ -9,6 +9,7 @@ package pkl
 import (
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -536,6 +537,14 @@ func TestSerializeForma_HashedOpaque_StrictBoolean(t *testing.T) {
 			name:  "$hashed absent",
 			props: json.RawMessage(`{"SecretString":{"$value":"d6e8f5a9","$visibility":"Opaque","$strategy":"Update"}}`),
 		},
+		{
+			name:  "$hashed non-boolean string",
+			props: json.RawMessage(`{"SecretString":{"$value":"e7f9a6ba","$visibility":"Opaque","$strategy":"Update","$hashed":"true"}}`),
+		},
+		{
+			name:  "$hashed non-boolean number",
+			props: json.RawMessage(`{"SecretString":{"$value":"f8abb7cb","$visibility":"Opaque","$strategy":"Update","$hashed":1}}`),
+		},
 	}
 
 	for _, tc := range cases {
@@ -563,6 +572,51 @@ func TestSerializeForma_HashedOpaque_StrictBoolean(t *testing.T) {
 			assert.NotContains(t, out, "// hashed secret value", "strict boolean: %s must not emit sentinel comment", tc.name)
 		})
 	}
+}
+
+// TestSerializeForma_HashedOpaque_CommentIsTrailingLineComment verifies the
+// placement-safety invariant: the sentinel is emitted only as a trailing line
+// comment (nothing follows it on its line), so it can never comment out a
+// sibling in a single-line construct such as `new Listing { … }`.
+func TestSerializeForma_HashedOpaque_CommentIsTrailingLineComment(t *testing.T) {
+	deps, pluginDir := fakeawsDeps(t)
+	hex := "a3f5b2c8d9e1f04712345678abcdef0123456789abcdef0123456789abcdef01"
+
+	forma := &model.Forma{
+		Stacks:  []model.Stack{{Label: "default"}},
+		Targets: []model.Target{fakeawsTarget()},
+		Resources: []model.Resource{{
+			Label:      "my-secret",
+			Type:       "FakeAWS::SecretsManager::Secret",
+			Stack:      "default",
+			Target:     "aws",
+			Properties: hashedOpaqueProps(t, hex),
+		}},
+	}
+	options := &schema.SerializeOptions{
+		Schema:         "pkl",
+		SchemaLocation: schema.SchemaLocationLocal,
+		LocalPluginDir: pluginDir,
+		Dependencies:   deps,
+	}
+
+	out, err := PKL{}.SerializeForma(forma, options)
+	require.NoError(t, err)
+
+	const sentinel = "// hashed secret value — cannot be applied as-is; re-supply the plaintext to set it"
+	found := false
+	for _, line := range strings.Split(out, "\n") {
+		idx := strings.Index(line, sentinel)
+		if idx < 0 {
+			continue
+		}
+		found = true
+		// Everything after the sentinel on this line must be blank — a trailing
+		// line comment, never mid-expression where it could swallow siblings.
+		assert.Empty(t, strings.TrimSpace(line[idx+len(sentinel):]),
+			"sentinel must be a trailing line comment; got trailing content on line: %q", line)
+	}
+	assert.True(t, found, "expected the sentinel comment somewhere in the output")
 }
 
 // TestSerializeForma_ResolvableNested_NoHashedEmitted verifies that a $res
