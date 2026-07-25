@@ -26,6 +26,14 @@ const (
 	OperationDelete OperationType = "delete"
 	OperationRead   OperationType = "read"
 
+	// OperationReaped tombstones a resource whose target was reaped. It is
+	// distinct from OperationDelete: a reap records that the provider was never
+	// asked to delete the resource (the target became unreachable and was
+	// reaped), whereas a delete records an intentional provider-side removal.
+	// A reaped row is retained in the resources table but is invisible to every
+	// live-resource query, exactly like a delete tombstone.
+	OperationReaped OperationType = "reaped"
+
 	// Composite ops
 	OperationReplace OperationType = "replace" // delete + create
 )

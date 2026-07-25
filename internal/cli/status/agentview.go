@@ -149,13 +149,32 @@ func renderAgentStats(th *theme.Theme, stats apimodel.Stats, width int) string {
 
 func buildStructurePanel(th *theme.Theme, stats apimodel.Stats) panelSpec {
 	totalTargets := sumMap(stats.Targets)
+	lines := []string{
+		fieldLine(th, "Stacks", fmt.Sprintf("%d", stats.Stacks)),
+		fieldLine(th, "Targets", fmt.Sprintf("%d", totalTargets)),
+	}
+	// Reaped/reap-pending are counts within this same Structure panel (not a
+	// separate panel), and the Targets count above already excludes reaped, so
+	// the two read as active vs. reaped. They are surfaced only when non-zero,
+	// so a healthy fleet keeps the panel uncluttered.
+	if stats.ReapPendingTargets > 0 {
+		warnStyle := lipgloss.NewStyle().Foreground(th.Palette.Warning)
+		lines = append(lines, styledFieldLine(
+			warnStyle.Render("Reap Pending"),
+			warnStyle.Render(fmt.Sprintf("%d", stats.ReapPendingTargets)),
+		))
+	}
+	if stats.ReapedTargets > 0 {
+		errStyle := lipgloss.NewStyle().Foreground(th.Palette.Error)
+		lines = append(lines, styledFieldLine(
+			errStyle.Render("Reaped"),
+			errStyle.Render(fmt.Sprintf("%d", stats.ReapedTargets)),
+		))
+	}
 	return panelSpec{
 		title: "Structure",
 		color: th.Palette.Border,
-		lines: []string{
-			fieldLine(th, "Stacks", fmt.Sprintf("%d", stats.Stacks)),
-			fieldLine(th, "Targets", fmt.Sprintf("%d", totalTargets)),
-		},
+		lines: lines,
 	}
 }
 
@@ -194,20 +213,20 @@ func buildResourcesPanel(th *theme.Theme, stats apimodel.Stats) panelSpec {
 	}
 
 	var unmanagedPctColor lipgloss.AdaptiveColor
-	var unmanagedPctSymbol string
-	if p == 0 {
+	switch {
+	case p == 0:
 		unmanagedPctColor = th.Palette.Done
-		unmanagedPctSymbol = "✓"
-	} else if p <= 75 {
+	case p <= 75:
 		unmanagedPctColor = th.Palette.Warning
-		unmanagedPctSymbol = "⚠"
-	} else {
+	default:
 		unmanagedPctColor = th.Palette.Error
-		unmanagedPctSymbol = "✗"
 	}
 
+	// The percentage is colored by severity, so no leading glyph is needed —
+	// and it keeps the box free of ambiguous-width characters (✓/⚠/✗ render
+	// double-width in some terminals and would shear the side-by-side layout).
 	pctStyle := lipgloss.NewStyle().Foreground(unmanagedPctColor)
-	pctStr := pctStyle.Render(fmt.Sprintf("%s %d%%", unmanagedPctSymbol, p))
+	pctStr := pctStyle.Render(fmt.Sprintf("%d%%", p))
 	pctLabel := pctStyle.Render("Unmanaged %")
 
 	return panelSpec{
@@ -255,7 +274,7 @@ func buildResourceTypesPanel(th *theme.Theme, stats apimodel.Stats) panelSpec {
 	}
 	if overflow > 0 {
 		moreStyle := lipgloss.NewStyle().Foreground(th.Palette.TextSubtle)
-		lines = append(lines, moreStyle.Render(fmt.Sprintf("… and %d more types", overflow)))
+		lines = append(lines, moreStyle.Render(fmt.Sprintf("... and %d more types", overflow)))
 	}
 	return panelSpec{title: "Resource Types", color: th.Palette.Border, lines: lines}
 }
@@ -281,7 +300,7 @@ func buildPluginsPanel(th *theme.Theme, stats apimodel.Stats) panelSpec {
 	}
 	if overflow > 0 {
 		moreStyle := lipgloss.NewStyle().Foreground(th.Palette.TextSubtle)
-		lines = append(lines, moreStyle.Render(fmt.Sprintf("… and %d more plugins", overflow)))
+		lines = append(lines, moreStyle.Render(fmt.Sprintf("... and %d more plugins", overflow)))
 	}
 	return panelSpec{title: "Plugins", color: th.Palette.Border, lines: lines}
 }
@@ -319,7 +338,7 @@ func buildResourceErrorsPanel(th *theme.Theme, stats apimodel.Stats) panelSpec {
 	}
 	if overflow > 0 {
 		moreStyle := lipgloss.NewStyle().Foreground(th.Palette.TextSubtle)
-		lines = append(lines, moreStyle.Render(fmt.Sprintf("… and %d more errors", overflow)))
+		lines = append(lines, moreStyle.Render(fmt.Sprintf("... and %d more errors", overflow)))
 	}
 	return panelSpec{title: "Resource Errors", color: th.Palette.Error, lines: lines}
 }

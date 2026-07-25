@@ -40,6 +40,7 @@ const (
 	OperationUpdate  = types.OperationUpdate
 	OperationDelete  = types.OperationDelete
 	OperationRead    = types.OperationRead
+	OperationReaped  = types.OperationReaped
 	OperationReplace = types.OperationReplace
 
 	ResourceUpdateStateUnknown    = types.ResourceUpdateStateUnknown
@@ -124,13 +125,7 @@ func (ru *ResourceUpdate) ResolveValue(formaeUri pkgmodel.FormaeURI, value strin
 	ru.DesiredState.Properties = properties
 
 	if ru.Operation == OperationUpdate && len(ru.DesiredState.Schema.Fields) > 0 {
-		patchDoc, _, derr := patch.GeneratePatch(
-			ru.PriorState.Properties,
-			ru.DesiredState.Properties,
-			resolver.NewResolvableProperties(),
-			ru.DesiredState.Schema,
-			pkgmodel.FormaApplyModePatch,
-		)
+		patchDoc, derr := ru.regeneratePatchDocument()
 		if derr != nil {
 			return fmt.Errorf("failed to re-derive patch document after resolving %s: %w", formaeUri, derr)
 		}
@@ -138,6 +133,57 @@ func (ru *ResourceUpdate) ResolveValue(formaeUri pkgmodel.FormaeURI, value strin
 	}
 
 	return nil
+}
+
+// regeneratePatchDocument re-derives PatchDocument from (PriorState,
+// DesiredState, Schema) through the SAME opaque-suppression + plugin-format
+// conversion path that NewResourceUpdateForExisting uses to build the initial
+// patch (resource_update_factory.go). Without routing through
+// SuppressUnchangedOpaqueValues here too, an apply-time resolvable
+// substitution (e.g. a dependent resource picking up a just-created sibling's
+// native ID) would regenerate the patch straight from PriorState/DesiredState's
+// raw properties — an UNCHANGED opaque field could resurface as a spurious
+// patch op, and resource_updater.go's update() forwards PatchDocument to the
+// plugin unconverted, so any hash material in it would reach the plugin
+// unguarded.
+func (ru *ResourceUpdate) regeneratePatchDocument() (json.RawMessage, error) {
+	existingForPatch, desiredForPatch, err := SuppressUnchangedOpaqueValues(
+		ru.PriorState.Properties, ru.DesiredState.Properties, ru.DesiredState.Schema, ru.DesiredState.Type)
+	if err != nil {
+		return nil, fmt.Errorf("failed to suppress unchanged opaque values: %w", err)
+	}
+
+	// Read-safe/comparison conversion: existingPluginProps is only used as the
+	// "before" side of this local diff, never transmitted to a plugin. A
+	// genuinely-rotated opaque field's existing side is a stored hash that can
+	// never be un-hashed back to plaintext — that must not block patch
+	// generation.
+	existingPluginProps, err := resolver.ConvertExistingStateForComparison(existingForPatch)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert existing properties to plugin format: %w", err)
+	}
+
+	// Guarded conversion: desiredForPatch is the "after" side and, once an
+	// unchanged opaque field has been suppressed above, must never carry a
+	// stored hash — a genuinely hashed leftover here means something upstream
+	// is broken, and that must fail loudly rather than silently reach a plugin.
+	newPluginProps, err := resolver.ConvertToPluginFormat(desiredForPatch)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert desired properties to plugin format: %w", err)
+	}
+
+	patchDoc, _, err := patch.GeneratePatch(
+		existingPluginProps,
+		newPluginProps,
+		resolver.NewResolvableProperties(),
+		ru.DesiredState.Schema,
+		pkgmodel.FormaApplyModePatch,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return patchDoc, nil
 }
 
 func (ru *ResourceUpdate) RequiresDelete() bool {
@@ -504,6 +550,27 @@ func (m *propertyMerger) mergeObject(path string, userVal, pluginVal gjson.Resul
 		return
 	}
 
+	// Opaque-value envelope ({"$value":...,"$visibility":"Opaque"[,"$hashed":true]})
+	// where the plugin actually returned something at this path AS A BARE SCALAR (e.g.
+	// a secret store's GetSecretValue-equivalent never re-wraps it on read): recursing
+	// field-by-field below would try to match the envelope's own keys
+	// ($value/$visibility/$hashed) against that bare scalar (which has no sub-fields)
+	// and silently preserve the OLD envelope verbatim — for a $hashed:true envelope,
+	// the stored hash would never be replaced by the freshly-read plaintext, so the
+	// plugin-boundary guard would permanently reject this field on every
+	// subsequent use. Replace the envelope's $value with the plugin's live value
+	// (dropping $hashed — it no longer holds a hash) and keep the visibility/strategy
+	// metadata. When the plugin did NOT return this path at all (e.g. a Create response
+	// with no ResourceProperties), fall through to the general recursive merge below,
+	// which correctly preserves the user's envelope unchanged.
+	if userVal.Get("$visibility").String() == pkgmodel.VisibilityOpaque && pluginVal.Exists() && !pluginVal.IsObject() {
+		cleanPath := m.cleanPath(path)
+		updated, _ := sjson.Set(userVal.Raw, "$value", pluginVal.Value())
+		updated, _ = sjson.Delete(updated, "$hashed")
+		*m.result, _ = sjson.SetRaw(*m.result, cleanPath, updated)
+		return
+	}
+
 	// Not a $ref or $embed object - recursively merge each field
 	userVal.ForEach(func(key, val gjson.Result) bool {
 		childPath := m.buildChildPath(path, key.String())
@@ -523,7 +590,37 @@ func (m *propertyMerger) mergeRefObject(path string, userVal, pluginVal gjson.Re
 
 	// Preserve user's $ref structure and update the $value
 	updatedRef, _ := sjson.Set(userVal.Raw, "$value", valueToSet)
+
+	// A $ref may also be an Opaque envelope (a resolvable that resolves another
+	// resource's opaque/secret field) carrying a $hashed:true marker. When we just
+	// refreshed its $value from the plugin's live read, $value now holds plaintext,
+	// not the stored digest — so the $hashed marker is stale. Drop it, mirroring the
+	// bare-opaque-envelope branch in mergeObject, so the persist transformer re-hashes
+	// the field at rest. Leaving $hashed:true would persist the cleartext secret while
+	// claiming it is hashed (a plaintext-at-rest leak, and the transformer's
+	// idempotency guard would skip it). Only drop it when the value came from the
+	// plugin; if we preserved the user's stored hash (plugin returned nothing), the
+	// marker is still correct.
+	if userVal.Get("$visibility").String() == pkgmodel.VisibilityOpaque &&
+		userVal.Get("$hashed").Bool() && !m.keptUserValue(userValue, pluginVal) {
+		updatedRef, _ = sjson.Delete(updatedRef, "$hashed")
+	}
+
 	*m.result, _ = sjson.SetRaw(*m.result, cleanPath, updatedRef)
+}
+
+// keptUserValue reports whether selectRefValue preserved the user's stored $value
+// (because the plugin returned nothing usable) rather than adopting the plugin's
+// live value. It mirrors selectRefValue/preferNonNullValue exactly so the $hashed
+// drop decision stays in lock-step with which value was actually chosen.
+func (m *propertyMerger) keptUserValue(userValue, pluginVal gjson.Result) bool {
+	effectivePluginVal := pluginVal
+	if pluginVal.IsObject() && pluginVal.Get("$ref").Exists() {
+		effectivePluginVal = pluginVal.Get("$value")
+	}
+	userHasValue := userValue.Exists() && userValue.Value() != nil
+	pluginIsNullOrEmpty := effectivePluginVal.Value() == nil || effectivePluginVal.String() == ""
+	return userHasValue && pluginIsNullOrEmpty
 }
 
 // selectRefValue determines which value to use for a $ref object's $value field

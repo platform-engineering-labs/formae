@@ -101,3 +101,17 @@ func TestPromptForOperations_UsesPassedTheme(t *testing.T) {
 	// (derived from the passed theme) should differ.
 	assert.Equal(t, stripANSI(quiet), stripANSI(colorblind))
 }
+
+// TestOperationGlyphAndColor verifies the shared operation→glyph/color mapping
+// used to render the operation column consistently in simview and status.
+func TestOperationGlyphAndColor(t *testing.T) {
+	th := theme.New("rich")
+	// Create maps to the create glyph and the per-op create color.
+	assert.Equal(t, th.Glyphs.OpCreate, OperationGlyph(th.Glyphs, apimodel.OperationCreate))
+	assert.Equal(t, th.Palette.OpCreate, OperationColor(th.Palette, apimodel.OperationCreate))
+	assert.Equal(t, th.Glyphs.OpDelete, OperationGlyph(th.Glyphs, apimodel.OperationDelete))
+	assert.Equal(t, th.Palette.OpReplace, OperationColor(th.Palette, apimodel.OperationReplace))
+	// Unknown/uncolored operations fall back to primary text, no glyph.
+	assert.Equal(t, "", OperationGlyph(th.Glyphs, apimodel.OperationRead))
+	assert.Equal(t, th.Palette.TextPrimary, OperationColor(th.Palette, apimodel.OperationRead))
+}

@@ -1,0 +1,10 @@
+[38;2;248;113;113mthe following targets have been reaped:[0m
+[38;2;248;113;113m[0m                                       
+[38;2;248;113;113m[0m                                         - aws-prod
+  - aws-staging
+
+[38;2;181;181;91mA reaped target was tombstoned after prolonged unreachability. Applying resources[0m
+[38;2;181;181;91mto it without re-declaring it would silently resurrect it.[0m                       
+[38;2;181;181;91m[0m                                                                                 
+[38;2;181;181;91m[0m                                                                                 To recover it, re-declare the target in your forma file (its 'targets' block) and
+apply again — this mints a fresh incarnation and brings the target back under management.

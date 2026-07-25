@@ -111,7 +111,7 @@ func encodeBrailleArt(img image.Image, widthChars int) string {
 // alpha-based "on" test so the white letters survive, and classifies each
 // braille cell white-vs-orange by its average blue channel (orange #FF8201 has
 // near-zero blue; white is full blue).
-func renderFullLogoBraille(dark bool, widthChars int) string {
+func renderFullLogoBraille(dark bool, widthChars int, wordmark lipgloss.TerminalColor) string {
 	img, _, err := image.Decode(bytes.NewReader(logoBytes(dark)))
 	if err != nil {
 		return ""
@@ -119,7 +119,7 @@ func renderFullLogoBraille(dark bool, widthChars int) string {
 	if cropped := cropToOpaqueBounds(img); cropped != nil {
 		img = cropped
 	}
-	return encodeFullBrailleArt(img, widthChars, dark)
+	return encodeFullBrailleArt(img, widthChars, dark, wordmark)
 }
 
 // cropToOpaqueBounds returns img cropped to the bounding box of its opaque
@@ -167,7 +167,7 @@ func cropToOpaqueBounds(img image.Image) image.Image {
 // encodeFullBrailleArt downscales img to widthChars braille columns and returns
 // a two-color braille string: brand-text letters (legible on the detected
 // background) and an orange propeller.
-func encodeFullBrailleArt(img image.Image, widthChars int, dark bool) string {
+func encodeFullBrailleArt(img image.Image, widthChars int, dark bool, wordmark lipgloss.TerminalColor) string {
 	bounds := img.Bounds()
 	srcW := bounds.Dx()
 	srcH := bounds.Dy()
@@ -183,7 +183,13 @@ func encodeFullBrailleArt(img image.Image, widthChars int, dark bool) string {
 	resized := image.NewRGBA(image.Rect(0, 0, dotW, dotH))
 	draw.BiLinear.Scale(resized, resized.Bounds(), img, bounds, draw.Over, nil)
 
-	letter := lipgloss.NewStyle().Foreground(brandTextColor(dark))
+	// The wordmark letters default to the brand text color; a theme may override
+	// them (e.g. rich → blue). The propeller stays brand orange.
+	var letterColor lipgloss.TerminalColor = brandTextColor(dark)
+	if wordmark != nil {
+		letterColor = wordmark
+	}
+	letter := lipgloss.NewStyle().Foreground(letterColor)
 	orange := lipgloss.NewStyle().Foreground(lipgloss.Color(brandOrange))
 
 	rows := make([]string, 0, heightChars)

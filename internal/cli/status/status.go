@@ -27,11 +27,17 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// isTerminal, launchTUI, and printBanner are package-level vars so tests can stub them.
+// isTerminal, launchTUI, printBanner, and fetchCommandsStatus are package-level
+// vars so tests can stub them.
 var (
 	isTerminal  = tui.IsTerminal
 	launchTUI   = launchStatusTUI
 	printBanner = func(a *app.App) { a.PrintBanner() }
+	// fetchCommandsStatus is a seam so tests can drive the running/terminal
+	// decision (interactive vs static) without a live agent.
+	fetchCommandsStatus = func(a *app.App, query string, maxResults int) (*apimodel.ListCommandStatusResponse, []string, error) {
+		return a.GetCommandsStatus(query, maxResults, false)
+	}
 )
 
 type StatusOutput string
@@ -45,7 +51,6 @@ type StatusOptions struct {
 	OutputConsumer printer.Consumer
 	OutputSchema   string
 	Query          string
-	Watch          bool
 	OutputLayout   StatusOutput
 	MaxResults     int
 }
@@ -69,7 +74,6 @@ func CommandCmd() *cobra.Command {
 			humanTTY := opts.OutputConsumer == printer.ConsumerHuman && isTerminal(os.Stdout)
 			opts.MaxResults = resolveMaxResults(opts.Query, maxResults, humanTTY)
 
-			opts.Watch, _ = command.Flags().GetBool("watch")
 			outputLayout, _ := command.Flags().GetString("output-layout")
 			opts.OutputLayout = StatusOutput(outputLayout)
 
@@ -84,8 +88,7 @@ func CommandCmd() *cobra.Command {
 		Annotations: map[string]string{
 			"examples": "formae status command --query 'status:InProgress' --max-results 10" +
 				" | formae status command --query 'client:me command:apply'" +
-				" | formae status command --query 'stack:prod status:Success'" +
-				" | formae status command --watch",
+				" | formae status command --query 'stack:prod status:Success'",
 		},
 		SilenceErrors: true,
 	}
@@ -95,7 +98,6 @@ func CommandCmd() *cobra.Command {
 	command.Flags().String("output-consumer", string(printer.ConsumerHuman), "Consumer of the command result (human | machine)")
 	command.Flags().String("output-schema", "json", "The schema to use for the machine output (json | yaml)")
 	command.Flags().String("query", " ", "Query that allows to find past and current commands by their attributes. Use * as a wildcard anywhere (e.g. foo*, *foo, *foo*, foo*bar). ? and regex are not yet supported.")
-	command.Flags().Bool("watch", false, "Continuously refresh and print the status until completion")
 	command.Flags().String("output-layout", string(StatusOutputSummary), fmt.Sprintf("What to print as status output (%s | %s)", StatusOutputSummary, StatusOutputDetailed))
 	command.Flags().Int("max-results", 10, "Maximum number of command results to return when using a query")
 	cmd.AddConfigFlags(command)
@@ -189,15 +191,37 @@ func bareCommandID(query string) string {
 }
 
 func runStatusForHumans(a *app.App, opts *StatusOptions) error {
-	// Human + TTY → interactive TUI (owns the whole screen; banner suppressed).
+	// Human + TTY:
+	//   - A broad query (browse history) always opens the interactive list so
+	//     you can navigate and drill into past commands.
+	//   - A bare single-command id query is the "re-attach" path: open the live
+	//     view only while it's still running; once it's terminal, print a static
+	//     one-shot summary instead of taking over the screen.
+	// (There is no --watch flag — the query shape + running-ness decide.)
 	if isTerminal(os.Stdout) {
+		if bareCommandID(opts.Query) != "" {
+			status, nags, err := fetchCommandsStatus(a, opts.Query, opts.MaxResults)
+			if err != nil {
+				msg, renderErr := errfmt.Render(err)
+				if renderErr != nil {
+					return fmt.Errorf("error rendering error message: %v", renderErr)
+				}
+				return fmt.Errorf("%s", msg)
+			}
+			if !anyCommandRunning(status) {
+				printBanner(a)
+				_, _ = fmt.Print(renderStatusList(themeFor(a), status, opts.OutputLayout == StatusOutputDetailed, termWidth(os.Stdout)))
+				nag.MaybePrintNags(themeFor(a), nags)
+				return nil
+			}
+		}
 		return launchTUI(a, opts)
 	}
 
-	// Human + non-TTY → existing print-and-exit path, completely unchanged.
+	// Human + non-TTY → print-and-exit.
 	printBanner(a)
 
-	status, nags, err := a.GetCommandsStatus(opts.Query, opts.MaxResults, false)
+	status, nags, err := fetchCommandsStatus(a, opts.Query, opts.MaxResults)
 	if err != nil {
 		msg, renderErr := errfmt.Render(err)
 		if renderErr != nil {
@@ -212,11 +236,25 @@ func runStatusForHumans(a *app.App, opts *StatusOptions) error {
 	// print nags
 	nag.MaybePrintNags(themeFor(a), nags)
 
-	if opts.Watch {
-		return WatchCommandsStatus(a, opts.Query, opts.MaxResults, opts.OutputLayout)
-	}
-
 	return nil
+}
+
+// anyCommandRunning reports whether any command in the status response is still
+// in progress (not Success/Failed/Canceled). It decides whether a human TTY
+// status query opens the live watch view or prints a static summary.
+func anyCommandRunning(status *apimodel.ListCommandStatusResponse) bool {
+	if status == nil {
+		return false
+	}
+	for _, c := range status.Commands {
+		switch c.State {
+		case "Success", "Failed", "Canceled":
+			// terminal
+		default:
+			return true
+		}
+	}
+	return false
 }
 
 func runStatusForMachines(app *app.App, opts *StatusOptions) error {

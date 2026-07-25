@@ -374,7 +374,7 @@ func isResolvable(value any) bool {
 }
 
 // isEmbed reports whether value is a {$embed: true, $template: "..."} field
-// (an embedded resolvable inside a String-typed field — PLA-68).
+// (an embedded resolvable inside a String-typed field).
 func isEmbed(value any) bool {
 	m, ok := value.(map[string]any)
 	if !ok {
@@ -1087,7 +1087,7 @@ func compareProperties(r testReporter, expectedProperties map[string]any, actual
 
 		// Validate embedded-resolvable fields ($embed) by normalizing their
 		// $template spans — the stored form carries the resolved $value and
-		// sorted keys, the authored form does not (PLA-68).
+		// sorted keys, the authored form does not.
 		if isEmbed(expectedValue) {
 			r.Logf("Validating embedded-resolvable property %s (resolved at runtime)", key)
 			if !compareEmbed(r, key, expectedValue, actualValue) {

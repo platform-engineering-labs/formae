@@ -626,7 +626,7 @@ func (m Model) viewDetail() string {
 }
 
 // narrowFooterThreshold is the terminal width below which the footer hint line
-// and status bar switch to abbreviated forms. Matches the PLA-282 statuswatch
+// and status bar switch to abbreviated forms. Matches the statuswatch
 // convention (no analogous constant exists in statuswatch — it uses full hints
 // at all widths; the threshold here is spec-defined at 80).
 const narrowFooterThreshold = 80
@@ -808,6 +808,7 @@ func inventoryHelpGroups() []components.HelpGroup {
 			Title: "Navigate",
 			Hints: []components.KeyHint{
 				{Key: "↑↓ / j k", Desc: "navigate"},
+				{Key: "→← / h l", Desc: "sort column"},
 				{Key: "ctrl-d / ctrl-u", Desc: "scroll detail"},
 				{Key: "1-4 / tab", Desc: "switch tab"},
 			},
@@ -836,6 +837,7 @@ func inventoryHelpGroups() []components.HelpGroup {
 func inventoryFooterHints() []components.KeyHint {
 	return []components.KeyHint{
 		{Key: "↑↓/j/k", Desc: "navigate"},
+		{Key: "→←", Desc: "column"},
 		{Key: "enter", Desc: "detail"},
 		{Key: "/", Desc: "search"},
 		{Key: "s", Desc: "sort"},

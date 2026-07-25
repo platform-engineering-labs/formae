@@ -9,10 +9,44 @@ import (
 	"encoding/base64"
 	"fmt"
 	"image"
+	"image/color"
 	"image/png"
 
 	xdraw "golang.org/x/image/draw"
 )
+
+// tintWordmarkLetters recolors the white "formae" letters of the logo image to
+// tint while leaving the orange propeller untouched, preserving each pixel's
+// alpha so antialiased edges stay smooth. It uses the same hue split as the
+// braille renderer: a pixel is part of the propeller when its blue channel is
+// less than half its red (orange #FF8201 has near-zero blue; the white letters
+// have blue ≈ red). Fully transparent pixels are left transparent. Returns a new
+// image; the input is not modified. A nil tint returns img unchanged.
+func tintWordmarkLetters(img image.Image, tint color.Color) image.Image {
+	if tint == nil {
+		return img
+	}
+	tr, tg, tb, _ := tint.RGBA()
+	tint8 := color.NRGBA{R: uint8(tr >> 8), G: uint8(tg >> 8), B: uint8(tb >> 8)}
+
+	b := img.Bounds()
+	out := image.NewNRGBA(b)
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			r, _, blue, a := img.At(x, y).RGBA()
+			// Transparent or propeller (blue < half red) → copy through.
+			if a == 0 || blue*2 < r {
+				out.Set(x, y, img.At(x, y))
+				continue
+			}
+			// Letter pixel → tint color at the original coverage (alpha).
+			px := tint8
+			px.A = uint8(a >> 8)
+			out.SetNRGBA(x, y, px)
+		}
+	}
+	return out
+}
 
 // graphicsPxPerCell approximates a terminal cell's pixel width; the propeller
 // is scaled to cols*graphicsPxPerCell px so the Kitty/iTerm2 image occupies
@@ -56,9 +90,19 @@ const (
 	// (cropped logo aspect h/w = 0.2145): 600px → ~129px tall, and +14px width
 	// buys +3px height. Kitty renders the PNG at this natural pixel size.
 	graphicsFullLogoWidthPx = 623
+	// graphicsFullLogoCols is the number of terminal columns the image is pinned
+	// to via the Kitty c= key. Pinning the cell footprint (together with r=,
+	// graphicsFullLogoImageRows) is what makes the version placement zoom-robust:
+	// the image occupies exactly graphicsFullLogoCols×graphicsFullLogoImageRows
+	// cells at ANY font zoom (cell pixels scale uniformly, so the pinned footprint
+	// and its aspect ratio stay constant), so the version at column
+	// graphicsFullLogoCols+1 never drifts. Without pinning, the natural-size image
+	// spans zoom-dependent cells and the version slides out of alignment.
+	graphicsFullLogoCols = 40
 	// graphicsFullLogoTextCol is the 1-based column (CHA) where the version text
-	// begins — past the image's rendered cell width plus a small gap.
-	graphicsFullLogoTextCol = 41
+	// begins — two cells past the pinned image width (graphicsFullLogoCols+2) so
+	// it sits just clear of the logo's right edge.
+	graphicsFullLogoTextCol = graphicsFullLogoCols + 2
 	// graphicsFullLogoImageRows is the image height in terminal rows — the total
 	// cursor advance needed to move fully below the image (measured live: the
 	// ×2.5 image is ~4 rows tall, so advancing 4 lands just below it and the
@@ -75,20 +119,26 @@ const (
 // does NOT advance after the image, leaving it at the image top-left for
 // subsequent text positioning. Returns "" on decode error; does NOT write to
 // stdout.
-func encodeKittyFullLogo(dark bool, widthPx int) string {
+// When tint is non-nil, the white "formae" letters are recolored to it (the
+// orange propeller is left as-is) so the graphics logo follows the active theme.
+func encodeKittyFullLogo(dark bool, widthPx int, tint color.Color) string {
 	img, err := loadFullLogoImage(dark)
 	if err != nil {
 		return ""
 	}
 	img = scalePropeller(img, widthPx)
-	return kittyEncodeImage(img)
+	img = tintWordmarkLetters(img, tint)
+	return kittyEncodeImage(img, graphicsFullLogoCols, graphicsFullLogoImageRows)
 }
 
 // kittyEncodeImage PNG-encodes img and returns the Kitty APC graphics escape
 // sequence (a=T, f=100, C=1), chunked into 4096-byte APC payloads. C=1 keeps
-// the cursor at the image top-left for subsequent text positioning. Returns ""
-// on encode error; does NOT write to stdout.
-func kittyEncodeImage(img image.Image) string {
+// the cursor at the image top-left for subsequent text positioning. When cols
+// and rows are both > 0 the image is pinned to that cell footprint via the c=/r=
+// keys, so it occupies a fixed number of cells independent of font zoom (the
+// basis for zoom-robust version placement); pass 0 to keep the natural size.
+// Returns "" on encode error; does NOT write to stdout.
+func kittyEncodeImage(img image.Image, cols, rows int) string {
 	var imgBuf bytes.Buffer
 	if err := png.Encode(&imgBuf, img); err != nil {
 		return ""
@@ -116,8 +166,13 @@ func kittyEncodeImage(img image.Image) string {
 
 		if i == 0 {
 			// First chunk: a=T (transmit+display), f=100 (PNG format), C=1 (no cursor advance), m=more.
-			// No c=/r= forcing — natural size preserves aspect ratio correctly.
-			fmt.Fprintf(&seq, "\033_Ga=T,f=100,C=1,m=%d;%s\033\\", more, chunk)
+			// c=/r= pin the image to a fixed cell footprint so its size (and the
+			// version text positioned beside it) stays put across font zoom.
+			footprint := ""
+			if cols > 0 && rows > 0 {
+				footprint = fmt.Sprintf("c=%d,r=%d,", cols, rows)
+			}
+			fmt.Fprintf(&seq, "\033_Ga=T,f=100,C=1,%sm=%d;%s\033\\", footprint, more, chunk)
 		} else {
 			// Continuation chunks
 			fmt.Fprintf(&seq, "\033_Gm=%d;%s\033\\", more, chunk)

@@ -179,6 +179,7 @@ func docLabelStyle() lipgloss.Style {
 // of banner.PrintBanner() in human-readable command flows so that
 // warnings are never emitted in machine-readable (JSON) output.
 func (a *App) PrintBanner() {
+	banner.SetTheme(a.Theme())
 	banner.PrintBanner()
 	if a.Config != nil && len(a.Config.Warnings) > 0 {
 		th := theme.New("formae")
@@ -780,7 +781,7 @@ func (a *App) buildDependencyStrings(forma *pkgmodel.Forma, location schema.Sche
 
 		info, ok := plugins[ns]
 		if !ok || info.Version == "" {
-			continue
+			return nil, fmt.Errorf("resource type %q requires plugin namespace %q, but the agent does not report it installed. Install it with `formae plugin install %s` and retry", r.Type, ns, ns)
 		}
 
 		if location == schema.SchemaLocationLocal {

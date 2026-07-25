@@ -147,3 +147,11 @@ func TestSchemaFormatHints(t *testing.T) {
 		t.Fatalf("FormatHints = %v, want {configJson: json}", fh)
 	}
 }
+
+func TestSchema_OpaqueSelector(t *testing.T) {
+	s := Schema{Hints: map[string]FieldHint{
+		"SecretString": {Opaque: true},
+		"Name":         {Opaque: false},
+	}}
+	assert.Equal(t, []string{"SecretString"}, s.Opaque())
+}

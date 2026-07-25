@@ -19,7 +19,7 @@ import (
 )
 
 // Options configures the status/watch TUI. The public surface here is consumed
-// by Task 13 (status command wiring) and PLA-283 (apply/destroy handoff).
+// by the status command wiring and the apply/destroy handoff.
 type Options struct {
 	// Query is the initial server-side filter string (--query flag).
 	Query string
@@ -36,7 +36,7 @@ type Options struct {
 	PollInterval time.Duration
 	// Now is an injectable clock used for duration/age rendering; default time.Now.
 	Now func() time.Time
-	// FocusCommandID is the command ID to start drilled into — wired in Task 11
+	// FocusCommandID is the command ID to start drilled into — wired in the
 	// (detail view). Stored here to preserve the public Options contract.
 	FocusCommandID string
 	// ExitWhenDone causes the TUI to quit automatically when all visible
@@ -291,7 +291,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
-		m.multi.spinView = m.spinner.View()
+		v := m.spinner.View()
+		m.multi.spinView = v
+		// Also refresh the detail view's spinner frame on every tick. Otherwise
+		// the detail-view in-progress glyph only advances when SetCommand runs
+		// (on each poll), making it crawl at the poll interval instead of the
+		// spinner's own (fast) frame rate.
+		m.detail.spinView = v
+		// Refresh the clock too so live in-progress elapsed times tick smoothly
+		// (computed as now − startedAt) instead of only advancing on each poll.
+		now := m.opts.Now()
+		m.multi.now = now
+		m.detail.now = now
 		return m, cmd
 
 	case tea.KeyMsg:
@@ -540,6 +551,21 @@ func (m Model) View() string {
 		return strings.Join(lines, "\n")
 	}
 
+	// In severity themes (rich), the summary indicator reflects overall outcome:
+	// green when every command has settled successfully, red when anything failed.
+	// Other themes keep the neutral blue "live" indicator. An active poll error
+	// (handled above) still wins.
+	if m.err == nil && m.th.ConfirmationBar.Color == "severity" {
+		switch m.multi.summaryOutcome() {
+		case outcomeFailed:
+			right = lipgloss.NewStyle().Foreground(m.th.Palette.Error).Render("↻ live")
+		case outcomeSuccess:
+			right = lipgloss.NewStyle().Foreground(m.th.Palette.Done).Render("↻ live")
+		case outcomeRunning:
+			// leave the default accent-blue indicator
+		}
+	}
+
 	header := components.HeaderBarBranded(m.th, m.headerCommand(), right, m.width)
 
 	visible := m.height - chromeLines
@@ -576,7 +602,7 @@ func statuswatchHelpGroups() []components.HelpGroup {
 				{Key: "enter", Desc: "details"},
 				{Key: "space", Desc: "expand"},
 				{Key: "d", Desc: "detail cards"},
-				{Key: "s", Desc: "toggle sort"},
+				{Key: "s", Desc: "sort"},
 				{Key: "/", Desc: "query"},
 			},
 		},
@@ -608,7 +634,7 @@ func multiFooterHints() []components.KeyHint {
 		{Key: "↑↓", Desc: "select"},
 		{Key: "enter", Desc: "details"},
 		{Key: "→←", Desc: "column"},
-		{Key: "s", Desc: "toggle sort"},
+		{Key: "s", Desc: "sort"},
 		{Key: "q", Desc: "quit"},
 	}
 }

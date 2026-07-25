@@ -619,7 +619,7 @@ func TestRunDriftFlow_ForcedApply_Detached_PrintsAsyncNotice(t *testing.T) {
 	})
 
 	assert.Contains(t, out, "Still running asynchronously on the agent. Check its status with:")
-	assert.Contains(t, out, "formae status command --query='id:force-detached-1' --watch")
+	assert.Contains(t, out, "formae status command --query='id:force-detached-1'")
 }
 
 // TestRunDriftFlow_SelfResolved_Finished_NoAsyncNotice drives
@@ -721,7 +721,7 @@ func TestRunDriftFlow_SelfResolved_Detached_PrintsAsyncNotice(t *testing.T) {
 	})
 
 	assert.Contains(t, out, "Still running asynchronously on the agent. Check its status with:")
-	assert.Contains(t, out, "formae status command --query='id:self-resolved-detached-1' --watch")
+	assert.Contains(t, out, "formae status command --query='id:self-resolved-detached-1'")
 }
 
 // ---- E2E drift tests ----

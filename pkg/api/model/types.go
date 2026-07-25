@@ -78,7 +78,7 @@ type ResourceUpdate struct {
 	ResourceType  string `json:"ResourceType"`
 	ResourceLabel string `json:"ResourceLabel,omitempty"`
 	// OldLabel is the resource's previous label. Populated only when a
-	// label rename is part of this update (RFC-0041 alias path); empty
+	// label rename is part of this update (via the alias path); empty
 	// otherwise. The renderer uses it to surface the rename to the user.
 	OldLabel      string          `json:"OldLabel,omitempty"`
 	StackName     string          `json:"StackName,omitempty"`
@@ -93,7 +93,8 @@ type ResourceUpdate struct {
 	// destroy + create.
 	CreateOnlyPatch json.RawMessage   `json:"CreateOnlyPatch,omitempty"`
 	State           string            `json:"State"`
-	Duration        int64             `json:"Duration,omitempty"` // milliseconds
+	StartedAt       time.Time         `json:"StartedAt,omitempty"` // when the update began (for live elapsed)
+	Duration        int64             `json:"Duration,omitempty"`  // milliseconds (final, set on completion)
 	CurrentAttempt  int               `json:"CurrentAttempt,omitempty"`
 	MaxAttempts     int               `json:"MaxAttempts,omitempty"`
 	ErrorMessage    string            `json:"ErrorMessage,omitempty"`
@@ -188,6 +189,14 @@ type Stats struct {
 	ResourceTypes      map[string]int `json:"ResourceTypes"`      // key: resource type (e.g., "AWS::S3::Bucket")
 	ResourceErrors     map[string]int `json:"ResourceErrors"`     // key: resource type
 	Plugins            []PluginInfo   `json:"Plugins"`
+	// ReapPendingTargets counts targets that are still 'unreachable' but have
+	// already accrued at least their configured reap-after duration — they
+	// are due to be reaped (on an upcoming reaper tick, or held back by the
+	// rate cap or an in-flight command). Surfaced so an over-threshold target
+	// is visible before any tombstone.
+	ReapPendingTargets int `json:"ReapPendingTargets"`
+	// ReapedTargets counts targets whose current health state is 'reaped'.
+	ReapedTargets int `json:"ReapedTargets"`
 }
 
 // PluginInfo represents information about a registered plugin

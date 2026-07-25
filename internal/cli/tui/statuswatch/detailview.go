@@ -5,6 +5,7 @@
 package statuswatch
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"time"
@@ -32,6 +33,7 @@ type updateRow struct {
 	state      components.State
 	stateLabel string // "finishing"/"canceled" override, "" otherwise
 	duration   time.Duration
+	startedAt  time.Time // when the update began; used for live in-progress elapsed
 	errMsg     string
 	statusMsg  string
 	cascadeSrc string
@@ -41,6 +43,11 @@ type updateRow struct {
 	discoverable      bool     // targets
 	description       string   // stacks
 	referencingStacks []string // policies
+	// property/change detail (resources): what the operation creates or changes.
+	properties    json.RawMessage
+	patchDoc      json.RawMessage
+	oldProperties json.RawMessage
+	refLabels     json.RawMessage
 }
 
 type group struct {
@@ -154,20 +161,25 @@ func buildGroups(c apimodel.Command, abandonedIDs map[string]bool) []group {
 				lbl = "Abandoned"
 			}
 			r := updateRow{
-				kind:       kindResource,
-				key:        fmt.Sprintf("resource/%s/%s", u.StackName, u.ResourceLabel),
-				label:      u.ResourceLabel,
-				typeName:   u.ResourceType,
-				stack:      u.StackName,
-				operation:  u.Operation,
-				state:      mapUpdateState(u.State),
-				stateLabel: lbl,
-				duration:   time.Duration(u.Duration) * time.Millisecond,
-				errMsg:     u.ErrorMessage,
-				statusMsg:  u.StatusMessage,
-				cascadeSrc: u.CascadeSource,
-				attempt:    u.CurrentAttempt,
-				maxAttempt: u.MaxAttempts,
+				kind:          kindResource,
+				key:           fmt.Sprintf("resource/%s/%s", u.StackName, u.ResourceLabel),
+				label:         u.ResourceLabel,
+				typeName:      u.ResourceType,
+				stack:         u.StackName,
+				operation:     u.Operation,
+				state:         mapUpdateState(u.State),
+				stateLabel:    lbl,
+				duration:      time.Duration(u.Duration) * time.Millisecond,
+				startedAt:     u.StartedAt,
+				errMsg:        u.ErrorMessage,
+				statusMsg:     u.StatusMessage,
+				cascadeSrc:    u.CascadeSource,
+				attempt:       u.CurrentAttempt,
+				maxAttempt:    u.MaxAttempts,
+				properties:    u.Properties,
+				patchDoc:      u.PatchDocument,
+				oldProperties: u.OldProperties,
+				refLabels:     marshalRefLabels(u.ReferenceLabels),
 			}
 			g.rows = append(g.rows, r)
 		}
@@ -175,6 +187,20 @@ func buildGroups(c apimodel.Command, abandonedIDs map[string]bool) []group {
 	}
 
 	return groups
+}
+
+// marshalRefLabels JSON-encodes a reference-label map for the change-line
+// renderer (components.RenderChangeLinesFromPatch takes a json.RawMessage).
+// Returns nil when empty.
+func marshalRefLabels(m map[string]string) json.RawMessage {
+	if len(m) == 0 {
+		return nil
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return nil
+	}
+	return b
 }
 
 func visibleRows(g group, limit int) ([]updateRow, int) {
@@ -190,11 +216,11 @@ func visibleRows(g group, limit int) ([]updateRow, int) {
 func validSortCols(kind updateKind) []int {
 	switch kind {
 	case kindPolicy:
-		return []int{detailColStatus, detailColLabel, detailColType, detailColStack, detailColOperation, detailColTime}
+		return []int{detailColStatus, detailColOperation, detailColLabel, detailColType, detailColStack, detailColTime}
 	case kindResource:
-		return []int{detailColStatus, detailColLabel, detailColType, detailColOperation, detailColTime}
+		return []int{detailColStatus, detailColOperation, detailColLabel, detailColType, detailColTime}
 	default: // targets, stacks
-		return []int{detailColStatus, detailColLabel, detailColOperation, detailColTime}
+		return []int{detailColStatus, detailColOperation, detailColLabel, detailColTime}
 	}
 }
 

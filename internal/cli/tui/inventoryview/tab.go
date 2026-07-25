@@ -175,12 +175,9 @@ func (t tabModel) sync(maxRows int) tabModel {
 			}
 			row[col] = plain
 
-			// Step 2: record the intended styled replacement when styleCell applies.
-			styledRow[col] = styledCell{col: col, plain: plain, styled: plain}
-			if t.spec.styleCell != nil {
-				styled := t.spec.styleCell(t.th, col, plain)
-				styledRow[col] = styledCell{col: col, plain: plain, styled: styled}
-			}
+			// Step 2: record the intended styled replacement (accent label +
+			// per-tab styleCell). See styledInventoryCell.
+			styledRow[col] = styledCell{col: col, plain: plain, styled: styledInventoryCell(t.th, t.spec.styleCell, col, plain)}
 		}
 		cells[i] = row
 		styledCells[i] = styledRow

@@ -154,7 +154,7 @@ func TestResolveCache(t *testing.T) {
 }
 
 // TestResolveCache_MissingPropertyReportsReason covers the terminal
-// resolve-miss diagnosability gap (PLA-25): when a referenced property is
+// resolve-miss diagnosability gap: when a referenced property is
 // absent from the source resource after a successful Read, the ResolveCache
 // must report *why* it failed — naming the reference and the missing
 // property — rather than sending an empty failure that surfaces as a blank

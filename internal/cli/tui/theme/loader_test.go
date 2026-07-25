@@ -17,7 +17,7 @@ func TestLoadBuiltinQuiet(t *testing.T) {
 	th, ok := loadBuiltin("quiet")
 	require.True(t, ok)
 	assert.Equal(t, "quiet", th.Name)
-	assert.Equal(t, "#2563EB", th.Palette.PrimaryAccent.Light)
+	assert.Equal(t, "#2E97A8", th.Palette.PrimaryAccent.Light)
 	assert.Equal(t, "+", th.Glyphs.OpCreate)
 	assert.Equal(t, "brand", th.ConfirmationBar.Color)
 	assert.Equal(t, "brighten", th.Header.Highlight)

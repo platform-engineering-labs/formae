@@ -394,8 +394,7 @@ func TestSimView_RenderingIntegrity(t *testing.T) {
 		})
 
 		t.Run("card_visible_in_view", func(t *testing.T) {
-			assert.Contains(t, plainView, "Operation:", "expanded card should be visible in view")
-			assert.Contains(t, plainView, "InstanceClass", "card changes should be visible in view")
+			assert.Contains(t, plainView, "InstanceClass", "expanded card (property change) should be visible in view")
 		})
 	})
 }

@@ -431,7 +431,7 @@ func startReconcile(proc gen.Process, data *AutoReconcilerData, stackLabel strin
 // up by snapshot.KSUID, or nil if the KSUID has been deleted since the
 // snapshot was taken (its tombstone forbids reuse).
 //
-// RFC-0041: a rename (via patch apply) since the last reconcile leaves the
+// A rename (via patch apply) since the last reconcile leaves the
 // snapshot with the OLD label while the live row carries the NEW label.
 // Without the override the synthesized reconcile forma asks the engine to
 // "re-create" the old label, treats the new label as drift, and silently

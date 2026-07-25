@@ -96,7 +96,7 @@ var legacyWidth = func(w io.Writer) int {
 // q/esc/ctrl+c). Not printed when the watch TUI closed because the command
 // already reached a terminal state.
 func printAsyncNotice(commandID string) {
-	fmt.Printf("\nStill running asynchronously on the agent. Check its status with:\n\n  formae status command --query='id:%s' --watch\n", commandID)
+	fmt.Printf("\nStill running asynchronously on the agent. Check its status with:\n\n  formae status command --query='id:%s'\n", commandID)
 }
 
 type ApplyCommand struct {
@@ -226,12 +226,11 @@ func runApplyInteractive(a *app.App, opts *ApplyOptions) error {
 	}
 
 	if !res.Simulation.ChangesRequired {
-		panel := components.Panel(th, th.Palette.Border, "formae apply", []string{
-			"No changes needed",
-			"",
-			"The specified forma resources are up to date.",
-		}, 80)
-		fmt.Println(panel)
+		// Plain logo + message (the banner is already printed above), matching the
+		// legacy path and how other outcomes/errors render — no box.
+		fmt.Printf("%s\n\n%s\n\n",
+			lipgloss.NewStyle().Foreground(th.Palette.Done).Render("No changes needed:"),
+			lipgloss.NewStyle().Foreground(th.Palette.TextSubtle).Render("The specified forma resources are up to date."))
 		return nil
 	}
 

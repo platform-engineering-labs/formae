@@ -10,10 +10,11 @@ border           = { light = "#DDDDDD", dark = "#555566" }
 selection        = { light = "#DDDDDD", dark = "#3A3A3A" }
 primary_accent   = { light = "#2563EB", dark = "#60A5FA" }
 secondary_accent = { light = "#FF6B00", dark = "#FF8533" }
-error            = { light = "#FF0000", dark = "#FF0000" }
+error            = { light = "#DC2626", dark = "#FF6666" }
 error_subtle     = { light = "#B45454", dark = "#9B4444" }
 error_bright     = { light = "#B91C1C", dark = "#FCA5A5" }
 warning          = "#B5B55B"
+unmanaged        = { light = "#DC2626", dark = "#FF6666" }
 done             = { light = "#16A34A", dark = "#4ADE80" }
 in_progress      = { light = "#444444", dark = "#AAAAAA" }
 pending          = { light = "#999999", dark = "#555555" }
@@ -24,6 +25,8 @@ op_delete  = { light = "#B5B55B", dark = "#B5B55B" }
 op_replace = { light = "#FF6B00", dark = "#FF8533" }
 op_detach  = { light = "#888888", dark = "#888888" }
 op_keep    = { light = "#888888", dark = "#888888" }
+# rich colors the logo wordmark blue (letters) against the orange propeller.
+logo_wordmark = { light = "#2563EB", dark = "#60A5FA" }
 
 [glyphs]
 op_create = "+"
@@ -58,7 +61,7 @@ animation = "static"
 
 [spinner]
 frames = ["●", "◉", "○", "◉"]
-interval_ms = 333
+interval_ms = 100
 static_frame = "●"
 
 [confirmation_bar]
@@ -66,3 +69,9 @@ color = "severity"
 
 [header]
 highlight = "background"
+
+[rows]
+# rich makes the label the accent-colored primary identifier and gives delete
+# rows a loud whole-row tint (op_delete) so destructive changes stand out.
+label_accent = true
+delete_whole_row = true

@@ -338,6 +338,85 @@ func TestFormaCommandPersister_KeepsApplyCommandWithNoVersions(t *testing.T) {
 	assert.Equal(t, forma_command.CommandStateSuccess, loadedCommand.State)
 }
 
+// TestFormaCommandPersister_ProgressUpdate_HashesReadActualProperties verifies that a
+// progress update carrying a schema-opaque property (e.g. reported back by a plugin poll
+// or Read) is hashed before it is persisted into ProgressResult/MostRecentProgressResult
+// and the normalized resource_updates table. It also verifies the resume exemption: the
+// user's DesiredState input, stored at StoreNewFormaCommand time, is NOT hashed -- it must
+// survive in plaintext so a resumed command can still execute against the real secret.
+func TestFormaCommandPersister_ProgressUpdate_HashesReadActualProperties(t *testing.T) {
+	formaCommand := newFormaCommandWithCreateResourceUpdate()
+	formaCommand.ResourceUpdates[0].DesiredState.Schema = pkgmodel.Schema{
+		Identifier: "test-type",
+		Hints: map[string]pkgmodel.FieldHint{
+			"SecretString": {Opaque: true},
+		},
+	}
+	formaCommand.ResourceUpdates[0].DesiredState.Properties = json.RawMessage(`{"SecretString":"initial-secret"}`)
+
+	formaPersister, sender, err := newFormaCommandPersisterForTest(t)
+	assert.NoError(t, err)
+
+	storeResult := formaPersister.Call(sender, StoreNewFormaCommand{Command: *formaCommand})
+	assert.NoError(t, storeResult.Error)
+	assert.True(t, storeResult.Response.(bool))
+
+	// Resume exemption: the initial store must NOT hash the user's DesiredState input.
+	storedLoad := formaPersister.Call(sender, LoadFormaCommand{CommandID: formaCommand.ID})
+	assert.NoError(t, storedLoad.Error)
+	storedCommand := storedLoad.Response.(*forma_command.FormaCommand)
+	assert.JSONEq(t, `{"SecretString":"initial-secret"}`, string(storedCommand.ResourceUpdates[0].DesiredState.Properties),
+		"DesiredState input must remain plaintext at initial store to support resume-to-completion")
+
+	resourceURI := formaCommand.ResourceUpdates[0].DesiredState.URI()
+	polledProps := json.RawMessage(`{"SecretString":"polled-secret","Other":"plain"}`)
+
+	updateProgress := messages.UpdateResourceProgress{
+		CommandID:          formaCommand.ID,
+		ResourceURI:        resourceURI,
+		Operation:          resource_update.OperationCreate,
+		ResourceStartTs:    util.TimeNow(),
+		ResourceModifiedTs: util.TimeNow().Add(10 * time.Second),
+		ResourceState:      resource_update.ResourceUpdateStateInProgress,
+		Progress: plugin.TrackedProgress{
+			ProgressResult: resource.ProgressResult{
+				Operation:          resource.OperationCreate,
+				OperationStatus:    resource.OperationStatusInProgress,
+				ResourceProperties: polledProps,
+			},
+		},
+	}
+	res := formaPersister.Call(sender, updateProgress)
+	assert.NoError(t, res.Error)
+	assert.True(t, res.Response.(bool))
+
+	loadResult := formaPersister.Call(sender, LoadFormaCommand{CommandID: formaCommand.ID})
+	assert.NoError(t, loadResult.Error)
+	loaded := loadResult.Response.(*forma_command.FormaCommand)
+
+	persistedProgress := loaded.ResourceUpdates[0].MostRecentProgressResult.ResourceProperties
+	assert.NotContains(t, string(persistedProgress), "polled-secret",
+		"progress properties must not persist the plaintext secret")
+
+	var propsMap map[string]any
+	assert.NoError(t, json.Unmarshal(persistedProgress, &propsMap))
+	envelope, ok := propsMap["SecretString"].(map[string]any)
+	assert.True(t, ok, "SecretString must be wrapped in an opaque envelope")
+	hashVal, ok := envelope["$value"].(string)
+	assert.True(t, ok, "hashed envelope must carry a string $value")
+	assert.Len(t, hashVal, 64, "hashed value must be a 64-char sha256 hex digest")
+	assert.Equal(t, "plain", propsMap["Other"], "non-opaque fields must remain plaintext")
+
+	// Also assert the same for the appended ProgressResult entry (not just MostRecent).
+	assert.Len(t, loaded.ResourceUpdates[0].ProgressResult, 1)
+	appendedProps := loaded.ResourceUpdates[0].ProgressResult[0].ResourceProperties
+	assert.NotContains(t, string(appendedProps), "polled-secret")
+
+	// The DesiredState input (unrelated to this progress message's top-level
+	// ResourceProperties, which was left nil) must remain untouched and plaintext.
+	assert.JSONEq(t, `{"SecretString":"initial-secret"}`, string(loaded.ResourceUpdates[0].DesiredState.Properties))
+}
+
 func newSyncFormaCommand() *forma_command.FormaCommand {
 	resourceKsuid := util.NewID()
 

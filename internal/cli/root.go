@@ -74,9 +74,16 @@ var rootCmd = &cobra.Command{
 func init() {
 	hp := rootCmd.HelpFunc()
 	longestFlagName := 0
-	rootCmd.SetHelpFunc(func(cmd *cobra.Command, args []string) {
+	rootCmd.SetHelpFunc(func(c *cobra.Command, args []string) {
+		// Help renders before a command's config loads, so resolve the active
+		// theme here and color both the logo banner and the usage template with
+		// it (e.g. rich → blue wordmark + green command names; omarchy → the OS
+		// palette). Falls back to the default theme on any error.
+		th := cmd.ResolveConfiguredTheme(c)
+		banner.SetTheme(th)
+		cmd.RethemeUsage(c, th)
 		banner.PrintBanner()
-		hp(cmd, args)
+		hp(c, args)
 	})
 
 	rootCmd.SetHelpCommand(&cobra.Command{
@@ -290,13 +297,19 @@ func Start() {
 		// command's usage printed after the error so the user can self-correct.
 		// Runtime errors just print the error.
 		if isUsageError(err) {
+			// Flags are parsed by now, so resolve the active theme and color both
+			// the error line and the usage template with it.
+			usageCmd := rootCommand
+			if activeCmd, _, findErr := rootCommand.Find(os.Args[1:]); findErr == nil && activeCmd != nil {
+				usageCmd = activeCmd
+			}
+			th := cmd.ResolveConfiguredTheme(usageCmd)
+			cmd.RethemeUsage(usageCmd, th)
+			errStyle = lipgloss.NewStyle().Foreground(th.Palette.Error)
+
 			fmt.Fprintln(os.Stderr, errStyle.Render("Error: "+err.Error()))
 			fmt.Println()
-			if activeCmd, _, findErr := rootCommand.Find(os.Args[1:]); findErr == nil && activeCmd != nil {
-				fmt.Println(activeCmd.UsageString())
-			} else {
-				fmt.Println(rootCommand.UsageString())
-			}
+			fmt.Println(usageCmd.UsageString())
 			os.Exit(1)
 		}
 

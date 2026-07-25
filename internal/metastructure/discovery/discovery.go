@@ -141,6 +141,14 @@ type DiscoveryData struct {
 func (d *DiscoveryData) SetTargets(targets []*pkgmodel.Target) {
 	d.targets = make(map[string]pkgmodel.Target, len(targets))
 	for _, target := range targets {
+		// A reaped (or reap-pending) target is being — or has been —
+		// tombstoned by the reaper. Never sweep it: its resources are already
+		// invisible to every live-resource query, and scanning it would race
+		// the reap transaction and/or re-discover resources the target no
+		// longer answers for.
+		if target.Health != nil && target.Health.State == pkgmodel.TargetHealthStateReaped {
+			continue
+		}
 		d.targets[target.Label] = *target
 	}
 }

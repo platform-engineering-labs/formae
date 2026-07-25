@@ -14,6 +14,7 @@ import (
 
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
+	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 )
 
 // setSize stores the terminal dimensions on the model, budgets the table
@@ -189,24 +190,48 @@ func (t tabModel) loadingView(th *theme.Theme, spinView string) []string {
 	return lines
 }
 
+// errorPanelFor builds the ErrorPanel for a tab-load failure. An invalid query
+// gets a friendly "Invalid query" panel that names the offending term and shows
+// a short query guide instead of dumping the raw error value.
+func errorPanelFor(err error) components.ErrorPanel {
+	if reason, ok := invalidQueryReason(err); ok {
+		return components.ErrorPanel{
+			Title:   "Invalid query",
+			Message: reason,
+			Suggestions: []string{
+				"Filter with field:value terms separated by spaces.",
+				"Fields:    stack  type  label  target  managed",
+				"Example:   type:AWS::S3::Bucket stack:prod managed:false",
+				"Wildcards: type:AWS::S3::*  (* matches a prefix or suffix)",
+			},
+		}
+	}
+	msg := "unknown error"
+	if err != nil {
+		msg = err.Error()
+	}
+	return components.ErrorPanel{Title: "Error", Message: msg}
+}
+
+// invalidQueryReason returns the reason string when err is an invalid-query
+// error, mirroring how the CLI error formatter detects it.
+func invalidQueryReason(err error) (string, bool) {
+	if errResp, ok := err.(*apimodel.ErrorResponse[apimodel.InvalidQueryError]); ok {
+		return errResp.Data.Reason, true
+	}
+	return "", false
+}
+
 // failedView renders the error state: ErrorPanel + "r: retry" hint.
 func (t tabModel) failedView(th *theme.Theme) []string {
-	msg := "unknown error"
-	if t.err != nil {
-		msg = t.err.Error()
-	}
-
-	panel := components.ErrorPanel{
-		Title:   "Error",
-		Message: msg,
-	}
+	panel := errorPanelFor(t.err)
 
 	var panelLines []string
 	if th != nil {
 		rendered := panel.Render(th, t.width)
 		panelLines = strings.Split(rendered, "\n")
 	} else {
-		panelLines = []string{msg}
+		panelLines = []string{panel.Message}
 	}
 
 	// Hint line "r: retry" in dim style.
@@ -401,8 +426,36 @@ func replaceInAnsiLine(line string, visStart, visEnd int, styled string) string 
 // border rendered as the separate next line, so reusing it here would emit stray
 // border fragments. Columns are packed adjacently at exactly effCols[i].Width.
 func highlightHeaderColumn(header string, tbl components.Table, effCols []components.Column, sortHi, sortCol int, th *theme.Theme) string {
-	base := lipgloss.NewStyle().Foreground(th.Palette.TextSecondary).Bold(true)
-	hiStyle := lipgloss.NewStyle().Foreground(th.Palette.TextPrimary).Bold(true)
+	p := th.Palette
+	// Header emphasis is theme-driven, mirroring simview's renderGroupColHeader so
+	// the two screens read the same:
+	//   - "background" (rich): the navigated column gets a background band (like
+	//     the row cursor, using Selection.Dark explicitly so it merges uniformly),
+	//     the active-sort column gets the accent color (blue), others stay dim.
+	//   - "brighten" (quiet/colorblind, the default): navigated OR active-sort
+	//     render bright, no background.
+	base := lipgloss.NewStyle().Foreground(p.TextSecondary).Bold(true)
+	background := th.Header.Highlight == "background"
+	highlightStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(p.TextPrimary.Dark)).Background(lipgloss.Color(p.Selection.Dark)).Bold(true)
+	accentStyle := lipgloss.NewStyle().Foreground(p.PrimaryAccent).Bold(true)
+	brightStyle := lipgloss.NewStyle().Foreground(p.TextPrimary).Bold(true)
+
+	styleFor := func(isHL, isAct bool) lipgloss.Style {
+		if background {
+			switch {
+			case isHL:
+				return highlightStyle
+			case isAct:
+				return accentStyle
+			default:
+				return base
+			}
+		}
+		if isHL || isAct {
+			return brightStyle
+		}
+		return base
+	}
 
 	runes := []rune(ansi.Strip(header))
 	var sb strings.Builder
@@ -420,11 +473,7 @@ func highlightHeaderColumn(header string, tbl components.Table, effCols []compon
 			end = len(runes)
 		}
 		slice := string(runes[off:end])
-		if orig == sortHi || orig == sortCol {
-			sb.WriteString(hiStyle.Render(slice))
-		} else {
-			sb.WriteString(base.Render(slice))
-		}
+		sb.WriteString(styleFor(orig == sortHi, orig == sortCol).Render(slice))
 		off = end
 	}
 	if off < len(runes) {

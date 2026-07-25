@@ -144,6 +144,10 @@ func (r *renderer) render(err error) (string, error) {
 		msg = r.renderNonPortableResources(&errResp.Data)
 	}
 
+	if errResp, ok := err.(*apimodel.ErrorResponse[apimodel.TargetReapedError]); ok {
+		msg = r.renderTargetReaped(&errResp.Data)
+	}
+
 	if errResp, ok := err.(*apimodel.ErrorResponse[apimodel.PluginNotFoundError]); ok {
 		msg = r.errorf("plugin '%s' not found\n", errResp.Data.Name)
 	}
@@ -315,6 +319,25 @@ func (r *renderer) renderNonPortableResources(data *apimodel.NonPortableResource
 	}
 	msg += "\n" + r.warning("To proceed, manually remove these resources first with 'formae destroy',\nthen reapply to recreate them with the new target configuration.\n")
 	return msg
+}
+
+// renderTargetReaped formats TargetReapedError.
+func (r *renderer) renderTargetReaped(data *apimodel.TargetReapedError) string {
+	var message string
+	if len(data.TargetLabels) == 1 {
+		message = r.errorf("target '%s' has been reaped.\n\n", data.TargetLabels[0])
+	} else {
+		message = r.error("the following targets have been reaped:\n\n")
+		for _, label := range data.TargetLabels {
+			message += fmt.Sprintf("  - %s\n", label)
+		}
+		message += "\n"
+	}
+	message += r.warning("A reaped target was tombstoned after prolonged unreachability. Applying resources\n"+
+		"to it without re-declaring it would silently resurrect it.\n\n") +
+		"To recover it, re-declare the target in your forma file (its 'targets' block) and\n" +
+		"apply again — this mints a fresh incarnation and brings the target back under management.\n"
+	return message
 }
 
 // renderTargetTree renders a JSON target config as an indented list (replaces gtree).

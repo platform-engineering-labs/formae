@@ -12,28 +12,57 @@ import (
 
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
 	"github.com/platform-engineering-labs/formae/internal/cli/printer"
+	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestRunStatusForHumans_UsesTUIOnlyForTTY(t *testing.T) {
-	// runStatusForHumans consults package-level seams:
-	//   var isTerminal = tui.IsTerminal
-	//   var launchTUI  = launchStatusTUI
-	// Override them in the test and assert the dispatch.
-	calls := 0
+func TestRunStatusForHumans_TTYInteractiveOnlyWhenRunning(t *testing.T) {
+	// On a TTY, runStatusForHumans opens the live TUI only when a matched
+	// command is still running; when everything is terminal it prints a static
+	// summary. Stub the package-level seams to drive the decision.
 	origLaunch := launchTUI
 	origIsTerminal := isTerminal
-	launchTUI = func(_ *app.App, _ *StatusOptions) error { calls++; return nil }
-	isTerminal = func(_ io.Writer) bool { return true }
+	origFetch := fetchCommandsStatus
+	origBanner := printBanner
 	t.Cleanup(func() {
 		isTerminal = origIsTerminal
 		launchTUI = origLaunch
+		fetchCommandsStatus = origFetch
+		printBanner = origBanner
+	})
+	isTerminal = func(_ io.Writer) bool { return true }
+	printBanner = func(_ *app.App) {}
+
+	stubFetch := func(state string) {
+		fetchCommandsStatus = func(_ *app.App, _ string, _ int) (*apimodel.ListCommandStatusResponse, []string, error) {
+			return &apimodel.ListCommandStatusResponse{
+				Commands: []apimodel.Command{{CommandID: "c1", State: state}},
+			}, nil, nil
+		}
+	}
+	run := func(query string) int {
+		calls := 0
+		launchTUI = func(_ *app.App, _ *StatusOptions) error { calls++; return nil }
+		err := runStatusForHumans(nil, &StatusOptions{Query: query, OutputLayout: StatusOutputSummary})
+		require.NoError(t, err)
+		return calls
+	}
+
+	t.Run("bare id, running → live TUI", func(t *testing.T) {
+		stubFetch("InProgress")
+		assert.Equal(t, 1, run("id:c1"), "a running re-attach should open the TUI")
 	})
 
-	err := runStatusForHumans(nil, &StatusOptions{OutputLayout: StatusOutputSummary})
-	require.NoError(t, err)
-	assert.Equal(t, 1, calls)
+	t.Run("bare id, terminal → static, no TUI", func(t *testing.T) {
+		stubFetch("Success")
+		assert.Equal(t, 0, run("id:c1"), "a finished re-attach should print static, not open the TUI")
+	})
+
+	t.Run("broad query → always the interactive list", func(t *testing.T) {
+		stubFetch("Success") // terminal, but a browse query still opens the list
+		assert.Equal(t, 1, run("client:me"), "a browse query should always open the TUI")
+	})
 }
 
 func TestRunStatusForHumans_NonTTY_SkipsTUI(t *testing.T) {

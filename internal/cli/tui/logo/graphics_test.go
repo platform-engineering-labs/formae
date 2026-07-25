@@ -8,17 +8,99 @@ package logo
 
 import (
 	"fmt"
+	"image"
+	"image/color"
 	_ "image/png"
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/tuitest"
 )
+
+// TestRender_KittyWordmarkTintChangesImage asserts that supplying a wordmark
+// color recolors the Kitty logo image (the letters), so the emitted graphics
+// escape differs from the untinted one — the end-to-end wiring for theming the
+// graphics logo.
+func TestRender_KittyWordmarkTintChangesImage(t *testing.T) {
+	orig := hasDarkBackground
+	hasDarkBackground = func() bool { return true }
+	defer func() { hasDarkBackground = orig }()
+
+	plain, _ := Render(CapKitty, SizeFull, "1.2.3")
+	tinted, _ := Render(CapKitty, SizeFull, "1.2.3",
+		WithWordmarkColor(lipgloss.AdaptiveColor{Light: "#2563EB", Dark: "#60A5FA"}))
+
+	if plain == tinted {
+		t.Error("Kitty logo image must change when a wordmark tint is applied")
+	}
+	if !strings.Contains(tinted, "\033_G") {
+		t.Error("tinted output must still be a Kitty graphics escape")
+	}
+}
+
+// TestTintWordmarkLetters verifies the wordmark tint recolors the white
+// "formae" letters to the theme color while leaving the orange propeller
+// untouched, preserving each pixel's alpha (antialiasing).
+func TestTintWordmarkLetters(t *testing.T) {
+	t.Parallel()
+
+	src := image.NewNRGBA(image.Rect(0, 0, 3, 1))
+	src.SetNRGBA(0, 0, color.NRGBA{R: 230, G: 230, B: 230, A: 255}) // white letter
+	src.SetNRGBA(1, 0, color.NRGBA{R: 255, G: 130, B: 1, A: 255})   // orange propeller
+	src.SetNRGBA(2, 0, color.NRGBA{R: 230, G: 230, B: 230, A: 128}) // antialiased letter edge
+
+	tint := color.NRGBA{R: 96, G: 165, B: 250, A: 255} // rich blue #60A5FA
+	out := tintWordmarkLetters(src, tint)
+
+	// Letter pixel → tint color, full alpha.
+	if got := color.NRGBAModel.Convert(out.At(0, 0)).(color.NRGBA); got != (color.NRGBA{R: 96, G: 165, B: 250, A: 255}) {
+		t.Errorf("white letter pixel: got %+v, want blue tint at full alpha", got)
+	}
+	// Orange propeller pixel → unchanged.
+	if got := color.NRGBAModel.Convert(out.At(1, 0)).(color.NRGBA); got != (color.NRGBA{R: 255, G: 130, B: 1, A: 255}) {
+		t.Errorf("orange propeller pixel: got %+v, want unchanged orange", got)
+	}
+	// Antialiased letter edge → tint color, original alpha preserved.
+	if got := color.NRGBAModel.Convert(out.At(2, 0)).(color.NRGBA); got != (color.NRGBA{R: 96, G: 165, B: 250, A: 128}) {
+		t.Errorf("antialiased letter pixel: got %+v, want blue tint at alpha 128", got)
+	}
+}
 
 func TestEncodeITerm2_Golden(t *testing.T) {
 	t.Parallel()
 	out := encodeITerm2(true, graphicsFullCols)
 	tuitest.RequireGolden(t, []byte(out))
+}
+
+// TestKittyFullLogo_PinsCellFootprint asserts the Kitty image is transmitted
+// with an explicit cell footprint (c=cols,r=rows). Pinning the footprint is what
+// makes the version placement zoom-robust: the image always occupies exactly
+// graphicsFullLogoCols×graphicsFullLogoImageRows cells regardless of font zoom,
+// so the version at column graphicsFullLogoCols+1 stays aligned. Without it, the
+// natural-size image spans a zoom-dependent number of cells and the version
+// drifts.
+func TestKittyFullLogo_PinsCellFootprint(t *testing.T) {
+	t.Parallel()
+
+	out := encodeKittyFullLogo(true, graphicsFullLogoWidthPx, nil)
+	if out == "" {
+		t.Fatal("encodeKittyFullLogo returned empty string")
+	}
+
+	want := fmt.Sprintf("c=%d,r=%d", graphicsFullLogoCols, graphicsFullLogoImageRows)
+	if !strings.Contains(out, want) {
+		t.Errorf("Kitty escape must pin the cell footprint %q for zoom-robust placement; head: %q",
+			want, out[:min(len(out), 96)])
+	}
+
+	// The version column must sit two cells past the pinned image width, so the
+	// two constants cannot drift apart.
+	if graphicsFullLogoTextCol != graphicsFullLogoCols+2 {
+		t.Errorf("graphicsFullLogoTextCol (%d) must be graphicsFullLogoCols+2 (%d)",
+			graphicsFullLogoTextCol, graphicsFullLogoCols+2)
+	}
 }
 
 // TestRender_KittyFullLogo asserts that SizeFull + CapKitty output:

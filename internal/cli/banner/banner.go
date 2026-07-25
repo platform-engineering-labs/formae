@@ -31,6 +31,17 @@ var (
 	accentStyle = lipgloss.NewStyle().Foreground(th.Palette.SecondaryAccent)
 )
 
+// SetTheme points the banner at the active CLI theme so the logo wordmark and
+// link accents follow it. Called from (*app.App).PrintBanner once config is
+// loaded; the default ("formae") applies before that (e.g. the root help).
+func SetTheme(t *theme.Theme) {
+	if t == nil {
+		return
+	}
+	th = t
+	accentStyle = lipgloss.NewStyle().Foreground(th.Palette.SecondaryAccent)
+}
+
 // detect is a seam for tests: it wraps logo.Detect so tests can stub capability
 // detection without performing real terminal I/O.
 //
@@ -72,7 +83,14 @@ func PrintBanner() {
 	}
 
 	cap := detect()
-	art, rows := logo.Render(cap, logo.SizeFull, formae.Version)
+	var opts []logo.RenderOption
+	// A theme may color the "formae" wordmark (e.g. rich → blue letters). This
+	// applies to the braille renderer and, by tinting the letter pixels, to the
+	// Kitty graphics image.
+	if wm := th.Palette.LogoWordmark; wm.Light != "" || wm.Dark != "" {
+		opts = append(opts, logo.WithWordmarkColor(wm))
+	}
+	art, rows := logo.Render(cap, logo.SizeFull, formae.Version, opts...)
 
 	switch cap {
 	case logo.CapKitty, logo.CapITerm2:

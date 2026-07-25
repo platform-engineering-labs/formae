@@ -1229,3 +1229,100 @@ func TestGenerateTargetUpdates_RefWithCachedValue_NestedAuth_NoChange(t *testing
 	require.NoError(t, err)
 	assert.Empty(t, updates, "nested $ref+$value vs $ref-only with same resolved values must not produce an update")
 }
+
+// TestGenerateTargetUpdates_ReapedTarget_IdenticalRedeclare_ForcesRecoverUpdate
+// pins the recovery invariant: re-applying an identical target whose current
+// row is 'reaped' must emit a recover TargetOperationUpdate, not dedupe to no
+// update. Without the reaped-recover branch the identical config/discoverable/
+// schema would return no update, UpdateTarget would never run, and the target
+// would stay reaped forever.
+func TestGenerateTargetUpdates_ReapedTarget_IdenticalRedeclare_ForcesRecoverUpdate(t *testing.T) {
+	existing := &pkgmodel.Target{
+		Label:        "reaped-target",
+		Namespace:    "AWS",
+		Config:       json.RawMessage(`{"Region":"us-east-1"}`),
+		Discoverable: false,
+		Version:      1,
+		Health:       &pkgmodel.TargetHealth{State: pkgmodel.TargetHealthStateReaped},
+	}
+	mockDS := &mockTargetDatastore{
+		targets: map[string]*pkgmodel.Target{"reaped-target": existing},
+	}
+	generator := NewTargetUpdateGenerator(mockDS)
+
+	// Identical declaration (same config, discoverable, no schema).
+	targets := []pkgmodel.Target{
+		{Label: "reaped-target", Namespace: "AWS", Config: json.RawMessage(`{"Region":"us-east-1"}`)},
+	}
+
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
+	require.NoError(t, err)
+	require.Len(t, updates, 1, "a reaped target re-declared identically must still produce a recover update")
+	assert.Equal(t, TargetOperationUpdate, updates[0].Operation)
+}
+
+// TestGenerateTargetUpdates_HealthyTarget_IdenticalRedeclare_NoUpdate guards the
+// recovery branch: a non-reaped identical re-apply must still dedupe to no update.
+func TestGenerateTargetUpdates_HealthyTarget_IdenticalRedeclare_NoUpdate(t *testing.T) {
+	existing := &pkgmodel.Target{
+		Label:        "healthy-target",
+		Namespace:    "AWS",
+		Config:       json.RawMessage(`{"Region":"us-east-1"}`),
+		Discoverable: false,
+		Version:      1,
+		Health:       &pkgmodel.TargetHealth{State: pkgmodel.TargetHealthStateReachable},
+	}
+	mockDS := &mockTargetDatastore{
+		targets: map[string]*pkgmodel.Target{"healthy-target": existing},
+	}
+	generator := NewTargetUpdateGenerator(mockDS)
+
+	targets := []pkgmodel.Target{
+		{Label: "healthy-target", Namespace: "AWS", Config: json.RawMessage(`{"Region":"us-east-1"}`)},
+	}
+
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
+	require.NoError(t, err)
+	assert.Empty(t, updates, "an identical re-apply of a healthy target must not produce an update")
+}
+
+// TestGenerateTargetUpdates_ResolvesReapingDefault verifies that a created
+// target with no explicit reaping is admitted with the resolved global default
+// written into Target.Reaping.
+func TestGenerateTargetUpdates_ResolvesReapingDefault(t *testing.T) {
+	mockDS := &mockTargetDatastore{}
+	generator := NewTargetUpdateGenerator(mockDS)
+
+	targets := []pkgmodel.Target{
+		{Label: "new-target", Namespace: "AWS", Config: json.RawMessage(`{"Region":"us-east-1"}`)},
+	}
+
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
+	require.NoError(t, err)
+	require.Len(t, updates, 1)
+	require.NotEmpty(t, updates[0].Target.Reaping, "admission must write a resolved reaping")
+	behaviour, err := pkgmodel.ParseReaping(updates[0].Target.Reaping)
+	require.NoError(t, err)
+	after, ok := behaviour.(*pkgmodel.ReapAfter)
+	require.True(t, ok)
+	assert.Equal(t, pkgmodel.DefaultReapMaxUnreachableSeconds, after.MaxUnreachableSeconds)
+}
+
+// TestGenerateTargetUpdates_RejectsSubFloorReapAfter verifies the duration-floor
+// validation rejects an explicit reap-after below MinReapDuration.
+func TestGenerateTargetUpdates_RejectsSubFloorReapAfter(t *testing.T) {
+	mockDS := &mockTargetDatastore{}
+	generator := NewTargetUpdateGenerator(mockDS)
+
+	targets := []pkgmodel.Target{
+		{
+			Label:     "sub-floor-target",
+			Namespace: "AWS",
+			Config:    json.RawMessage(`{"Region":"us-east-1"}`),
+			Reaping:   json.RawMessage(`{"Kind":"after","MaxUnreachableSeconds":1}`),
+		},
+	}
+
+	_, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
+	require.Error(t, err, "a reap-after below the floor must be rejected at admission")
+}

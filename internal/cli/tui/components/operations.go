@@ -14,6 +14,40 @@ import (
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 )
 
+// OperationGlyph returns the themed glyph for an operation string (create,
+// update, delete, replace), or "" for operations without a distinct glyph.
+// Shared by the simulation and status views so the operation column renders
+// identically in both.
+func OperationGlyph(g theme.Glyphs, op string) string {
+	switch op {
+	case apimodel.OperationCreate:
+		return g.OpCreate
+	case apimodel.OperationUpdate:
+		return g.OpUpdate
+	case apimodel.OperationDelete:
+		return g.OpDelete
+	case apimodel.OperationReplace:
+		return g.OpReplace
+	}
+	return ""
+}
+
+// OperationColor returns the themed per-operation color for an operation string,
+// falling back to TextPrimary for operations without a distinct color.
+func OperationColor(p theme.Palette, op string) lipgloss.AdaptiveColor {
+	switch op {
+	case apimodel.OperationCreate:
+		return p.OpCreate
+	case apimodel.OperationUpdate:
+		return p.OpUpdate
+	case apimodel.OperationDelete:
+		return p.OpDelete
+	case apimodel.OperationReplace:
+		return p.OpReplace
+	}
+	return p.TextPrimary
+}
+
 // PromptForOperations returns a human-readable prompt summarising the
 // operations that will be performed by cmd, followed by a confirmation
 // question. Returns "" when there is nothing to do. th supplies the active

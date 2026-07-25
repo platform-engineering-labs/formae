@@ -20,6 +20,7 @@ const (
 	CyclesDetected               APIError = "CyclesDetected"
 	EmptyStackRejected           APIError = "EmptyStackRejected"
 	TargetAlreadyExists          APIError = "TargetAlreadyExists"
+	TargetReaped                 APIError = "TargetReaped"
 	ReferencedResourcesNotFound  APIError = "ReferencedResourcesNotFound"
 	RequiredFieldMissingOnCreate APIError = "RequiredFieldMissingOnCreate"
 	StackReferenceNotFound       APIError = "StackReferenceNotFound"
@@ -124,6 +125,23 @@ func (e TargetAlreadyExistsError) Error() string {
 	default:
 		return fmt.Sprintf("target '%s' already exists", e.TargetLabel)
 	}
+}
+
+// TargetReapedError is returned when an apply touches one or more reaped
+// targets without re-declaring them. A reaped target has been tombstoned after
+// prolonged unreachability; a resource-only or stale apply that references it
+// (but does not re-declare the target) would silently resurrect it against a
+// target the agent believes is dead. Re-declaring the target in the forma
+// recovers it instead — that path is allowed.
+type TargetReapedError struct {
+	TargetLabels []string `json:"TargetLabels"`
+}
+
+func (e TargetReapedError) Error() string {
+	if len(e.TargetLabels) == 1 {
+		return fmt.Sprintf("target %q is reaped; re-declare it in your forma to recover it before applying resources to it", e.TargetLabels[0])
+	}
+	return fmt.Sprintf("targets %v are reaped; re-declare them in your forma to recover them before applying resources to them", e.TargetLabels)
 }
 
 type RequiredFieldMissingOnCreateError struct {

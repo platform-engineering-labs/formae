@@ -83,6 +83,30 @@ func TestRenderAgentStats_Golden(t *testing.T) {
 	tuitest.RequireGolden(t, []byte(out))
 }
 
+func TestRenderAgentStats_ReapRows(t *testing.T) {
+	th := theme.New("formae")
+	stats := makeFullStats()
+	stats.ReapPendingTargets = 2
+	stats.ReapedTargets = 1
+
+	out := renderAgentStats(th, stats, 120)
+	plain := stripANSIAgent(out)
+
+	assert.Contains(t, plain, "Reap Pending", "reap-pending count expected in the Structure panel when non-zero")
+	assert.Contains(t, plain, "Reaped", "reaped count expected in the Structure panel when non-zero")
+}
+
+func TestRenderAgentStats_NoReapRowsWhenZero(t *testing.T) {
+	th := theme.New("formae")
+	stats := makeFullStats()
+	// makeFullStats leaves reap counts at zero.
+	out := renderAgentStats(th, stats, 120)
+	plain := stripANSIAgent(out)
+
+	assert.NotContains(t, plain, "Reap Pending", "reap-pending row should be elided at zero")
+	assert.NotContains(t, plain, "Reaped", "reaped row should be elided at zero")
+}
+
 func TestRenderAgentStats_TopNTruncation(t *testing.T) {
 	th := theme.New("formae")
 	stats := makeFullStats()
@@ -173,11 +197,11 @@ func TestRenderAgentStats_UnmanagedThresholds(t *testing.T) {
 		name      string
 		managed   int
 		unmanaged int
-		symbol    string
+		pct       string
 	}{
-		{"zero-pct", 100, 0, "✓"},   // 0% → Done ✓
-		{"forty-pct", 60, 40, "⚠"},  // 40% → Warning ⚠
-		{"eighty-pct", 20, 80, "✗"}, // 80% → Error ✗
+		{"zero-pct", 100, 0, "0%"},   // 0% → Done (green)
+		{"forty-pct", 60, 40, "40%"}, // 40% → Warning (yellow)
+		{"eighty-pct", 20, 80, "80%"}, // 80% → Error (red)
 	}
 
 	for _, tc := range cases {
@@ -189,8 +213,10 @@ func TestRenderAgentStats_UnmanagedThresholds(t *testing.T) {
 
 			out := renderAgentStats(th, stats, 120)
 			plain := stripANSIAgent(out)
-			assert.Contains(t, plain, tc.symbol,
-				"unmanaged threshold symbol %q expected", tc.symbol)
+			// Severity is conveyed by color (not an ambiguous-width glyph); the
+			// percentage text is always present.
+			assert.Contains(t, plain, tc.pct,
+				"unmanaged percentage %q expected", tc.pct)
 		})
 	}
 }

@@ -92,7 +92,7 @@ var legacyWidth = func(w io.Writer) int {
 // q/esc/ctrl+c). Not printed when the watch TUI closed because the command
 // already reached a terminal state.
 func printAsyncNotice(commandID string) {
-	fmt.Printf("\nStill running asynchronously on the agent. Check its status with:\n\n  formae status command --query='id:%s' --watch\n", commandID)
+	fmt.Printf("\nStill running asynchronously on the agent. Check its status with:\n\n  formae status command --query='id:%s'\n", commandID)
 }
 
 // OnDependents defines the behavior when resources depend on those being deleted.
@@ -238,12 +238,11 @@ func runDestroyInteractive(a *app.App, opts *DestroyOptions) error {
 		if opts.FormaFile == "" {
 			msg = "The specified query does not match any resources that can be destroyed."
 		}
-		panel := components.Panel(th, th.Palette.Border, "formae destroy", []string{
-			"No resources to destroy",
-			"",
-			msg,
-		}, 80)
-		fmt.Println(panel)
+		// Plain logo + message (the banner is already printed above), matching the
+		// legacy path and how other outcomes/errors render — no box.
+		fmt.Printf("%s\n\n%s\n\n",
+			lipgloss.NewStyle().Foreground(th.Palette.Done).Render("No resources to destroy:"),
+			lipgloss.NewStyle().Foreground(th.Palette.TextSubtle).Render(msg))
 		return nil
 	}
 

@@ -7,10 +7,12 @@
 package plugin
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -159,4 +161,35 @@ func TestManifest_Validate_RequiresAllFields(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestManifest_DefaultReap_Absent(t *testing.T) {
+	var m Manifest
+	require.NoError(t, json.Unmarshal([]byte(`{"name":"x","version":"1","namespace":"X","license":"MIT","minFormaeVersion":"1"}`), &m))
+
+	reaping, err := m.DefaultReap()
+	require.NoError(t, err)
+	assert.Nil(t, reaping, "absent defaultReap must yield a nil reaping behaviour")
+}
+
+func TestManifest_DefaultReap_Never(t *testing.T) {
+	var m Manifest
+	require.NoError(t, json.Unmarshal([]byte(`{"name":"x","version":"1","namespace":"X","license":"MIT","minFormaeVersion":"1","defaultReap":{"Kind":"never"}}`), &m))
+
+	reaping, err := m.DefaultReap()
+	require.NoError(t, err)
+	require.NotNil(t, reaping)
+	assert.Equal(t, "never", reaping.GetKind())
+}
+
+func TestManifest_DefaultReap_After(t *testing.T) {
+	var m Manifest
+	require.NoError(t, json.Unmarshal([]byte(`{"name":"x","version":"1","namespace":"X","license":"MIT","minFormaeVersion":"1","defaultReap":{"Kind":"after","MaxUnreachableSeconds":7200}}`), &m))
+
+	reaping, err := m.DefaultReap()
+	require.NoError(t, err)
+	require.NotNil(t, reaping)
+	after, ok := reaping.(*pkgmodel.ReapAfter)
+	require.True(t, ok)
+	assert.Equal(t, int64(7200), after.MaxUnreachableSeconds)
 }

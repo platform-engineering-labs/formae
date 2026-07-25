@@ -132,7 +132,7 @@ func TestFilterTestCases(t *testing.T) {
 }
 
 // TestFilterTestCases_Regex verifies /…/ delimited regex matching
-// against test case name and resource type (RFC-0022).
+// against test case name and resource type.
 func TestFilterTestCases_Regex(t *testing.T) {
 	testCases := []TestCase{
 		{Name: "AWS::s3-bucket", ResourceType: "s3-bucket", PKLFile: "/path/s3-bucket.pkl", PluginName: "aws"},
@@ -474,7 +474,7 @@ func TestCompareProperties_NestedResolvable(t *testing.T) {
 	}
 }
 
-// Reproduces the PLA-68 conformance Verify failure: a $embed field's stored
+// Reproduces the conformance Verify failure: a $embed field's stored
 // $template carries the resolved $value and Go sorted-key envelope encoding,
 // while the authored expected $template has neither. They must compare equal.
 func TestCompareProperties_Embed(t *testing.T) {
@@ -815,10 +815,10 @@ func TestCompareArrayUnordered_NestedProviderDefaults(t *testing.T) {
 		},
 	}
 	providerDefaults := map[string]providerDefault{
-		"webhooks.matchPolicy":          {},
-		"webhooks.timeoutSeconds":       {},
-		"webhooks.failurePolicy":        {},
-		"webhooks.sideEffects":          {},
+		"webhooks.matchPolicy":               {},
+		"webhooks.timeoutSeconds":            {},
+		"webhooks.failurePolicy":             {},
+		"webhooks.sideEffects":               {},
 		"webhooks.clientConfig.service.port": {},
 	}
 	result := compareArrayUnordered(t, "webhooks", expected, actual, "after create", providerDefaults)
@@ -864,8 +864,8 @@ func TestCompareProperties_ExtraTopLevelProviderDefault(t *testing.T) {
 	}
 	actualResource := map[string]any{
 		"Properties": map[string]any{
-			"metadata":      map[string]any{"name": "my-svc"},
-			"clusterIP":     "10.96.0.1",
+			"metadata":  map[string]any{"name": "my-svc"},
+			"clusterIP": "10.96.0.1",
 		},
 	}
 	providerDefaults := map[string]providerDefault{

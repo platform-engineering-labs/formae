@@ -129,49 +129,63 @@ func TestRenderDeleteRowsHaveWarningColor(t *testing.T) {
 	assert.Contains(t, plainView, "old-cache", "old-cache delete should appear in view")
 }
 
-// TestRenderRowDeleteUsesFullDeleteColor pins the mockup rule: a delete row's
-// label AND type use the delete op color (opColor(p, opDelete)), overriding
-// the default PrimaryAccent label / TextSecondary type used by every other
-// operation. It also pins that the operation token itself is regular weight
-// (not bold) for both delete and non-delete rows.
-func TestRenderRowDeleteUsesFullDeleteColor(t *testing.T) {
-	m := makeModel(100, 32)
-	p := m.th.Palette
+// TestRenderRowLabelAndDeleteAreThemeDriven pins that row column coloring is
+// governed by the theme's [rows] plane (PLA-348):
+//   - rich (label_accent + delete_whole_row): the label is the accent color,
+//     and a delete row's label AND type both take the delete op color.
+//   - quiet (neither): the label renders the same color as the other columns
+//     (nothing special about a label), and delete rows are NOT tinted
+//     whole-row — only the operation cell carries the (uniform) op color.
+//
+// It also pins that the operation token is regular weight (not bold) on every
+// row, delete included.
+func TestRenderRowLabelAndDeleteAreThemeDriven(t *testing.T) {
 	const opW, labelW, typeW, stackW = 14, 30, 30, 0
-
 	deleteRow := simRow{op: opDelete, label: "old-cache", typ: "AWS::ElastiCache::CacheCluster"}
 	createRow := simRow{op: opCreate, label: "my-bucket", typ: "AWS::S3::Bucket"}
 
-	deleteOut := m.renderRow(deleteRow, kindResource, opW, labelW, typeW, stackW, false)
-	createOut := m.renderRow(createRow, kindResource, opW, labelW, typeW, stackW, false)
+	// --- rich: label accent + whole-row delete tint ---
+	rich := makeModel(100, 32)
+	rich.th = theme.New("rich")
+	rp := rich.th.Palette
+	richDelete := rich.renderRow(deleteRow, kindResource, opW, labelW, typeW, stackW, false)
+	richCreate := rich.renderRow(createRow, kindResource, opW, labelW, typeW, stackW, false)
 
-	// Delete row: label and type both render in the delete op color.
-	wantDeleteLabel := lipgloss.NewStyle().Foreground(opColor(p, opDelete)).
+	wantRichDeleteLabel := lipgloss.NewStyle().Foreground(opColor(rp, opDelete)).
 		Render(components.Pad(components.Truncate(deleteRow.label, labelW-1), labelW))
-	wantDeleteType := lipgloss.NewStyle().Foreground(opColor(p, opDelete)).
+	wantRichDeleteType := lipgloss.NewStyle().Foreground(opColor(rp, opDelete)).
 		Render(components.Truncate(deleteRow.typ, typeW-1))
-	assert.Contains(t, deleteOut, wantDeleteLabel, "delete row label should carry the delete op color")
-	assert.Contains(t, deleteOut, wantDeleteType, "delete row type should carry the delete op color")
+	assert.Contains(t, richDelete, wantRichDeleteLabel, "rich delete label should carry the delete op color")
+	assert.Contains(t, richDelete, wantRichDeleteType, "rich delete type should carry the delete op color")
 
-	// Non-delete (create) row: label stays PrimaryAccent, type stays TextSecondary — unchanged.
-	wantCreateLabel := lipgloss.NewStyle().Foreground(p.PrimaryAccent).
+	wantRichCreateLabel := lipgloss.NewStyle().Foreground(rp.PrimaryAccent).
 		Render(components.Pad(components.Truncate(createRow.label, labelW-1), labelW))
-	wantCreateType := lipgloss.NewStyle().Foreground(p.TextSecondary).
-		Render(components.Truncate(createRow.typ, typeW-1))
-	assert.Contains(t, createOut, wantCreateLabel, "create row label should stay PrimaryAccent")
-	assert.Contains(t, createOut, wantCreateType, "create row type should stay TextSecondary")
+	assert.Contains(t, richCreate, wantRichCreateLabel, "rich create label should be PrimaryAccent")
 
-	// The delete-color label/type must not leak into the create row and vice versa.
-	assert.NotContains(t, createOut, wantDeleteLabel)
-	assert.NotContains(t, deleteOut, wantCreateLabel)
+	// --- quiet: label == columns, no whole-row delete tint ---
+	quiet := makeModel(100, 32)
+	quiet.th = theme.New("quiet")
+	qp := quiet.th.Palette
+	quietDelete := quiet.renderRow(deleteRow, kindResource, opW, labelW, typeW, stackW, false)
+	quietCreate := quiet.renderRow(createRow, kindResource, opW, labelW, typeW, stackW, false)
 
-	// Operation token is colored (regular weight, not bold) on every row, delete included.
-	wantDeleteOp := lipgloss.NewStyle().Foreground(opColor(p, opDelete)).
-		Render(components.Pad(opGlyph(m.th.Glyphs, opDelete)+" "+opDelete.word(), opW))
-	wantCreateOp := lipgloss.NewStyle().Foreground(opColor(p, opCreate)).
-		Render(components.Pad(opGlyph(m.th.Glyphs, opCreate)+" "+opCreate.word(), opW))
-	assert.Contains(t, deleteOut, wantDeleteOp, "delete op token should be regular weight")
-	assert.Contains(t, createOut, wantCreateOp, "create op token should be regular weight")
+	// Both delete and create labels render in TextSecondary, the same color as
+	// the type column — the label is not special, and delete is not tinted.
+	wantQuietDeleteLabel := lipgloss.NewStyle().Foreground(qp.TextSecondary).
+		Render(components.Pad(components.Truncate(deleteRow.label, labelW-1), labelW))
+	wantQuietCreateLabel := lipgloss.NewStyle().Foreground(qp.TextSecondary).
+		Render(components.Pad(components.Truncate(createRow.label, labelW-1), labelW))
+	assert.Contains(t, quietDelete, wantQuietDeleteLabel, "quiet delete label should match the column color")
+	assert.Contains(t, quietCreate, wantQuietCreateLabel, "quiet create label should match the column color")
+
+	// quiet colors the op cell uniformly (no per-op color); the delete op cell
+	// must NOT carry a distinct delete tint on the label.
+	assert.NotContains(t, quietDelete, wantRichDeleteLabel, "quiet must not tint the delete label")
+
+	// Operation token is colored (regular weight, not bold) on every row.
+	wantRichDeleteOp := lipgloss.NewStyle().Foreground(opColor(rp, opDelete)).
+		Render(components.Pad(opGlyph(rich.th.Glyphs, opDelete)+" "+opDelete.word(), opW))
+	assert.Contains(t, richDelete, wantRichDeleteOp, "delete op token should be regular weight")
 }
 
 // TestRenderGroupColHeaderThemeHighlight pins the theme-driven header

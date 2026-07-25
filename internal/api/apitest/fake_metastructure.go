@@ -188,6 +188,10 @@ func (m *FakeMetastructure) ForceDiscovery() error {
 	return nil
 }
 
+func (m *FakeMetastructure) ForceReap() error {
+	return nil
+}
+
 func (m *FakeMetastructure) ForceAutoReconcile(stackLabel string) (*apimodel.ForceReconcileResponse, error) {
 	nextResponse := m.ReconcileResponses[0]
 	m.ReconcileResponses = m.ReconcileResponses[1:]

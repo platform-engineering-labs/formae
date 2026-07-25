@@ -219,6 +219,7 @@ open class FieldHint extends Annotation {
     /// which only excludes a field from drift detection.
     hidden requiredOnUpdate: Boolean = false
     hidden hasProviderDefault: Boolean = false
+    hidden opaque: Boolean = false                // NEW: field carries a formae.SecretValue
     hidden attachesTo: Boolean = false           // DEPRECATED; use edgeKind instead
     hidden edgeKind: EdgeKind = "default"        // NEW
     hidden indexField: String?
@@ -236,6 +237,7 @@ open class FieldHint extends Annotation {
     fixed RequiredOnCreate: Boolean = requiredOnCreate
     fixed RequiredOnUpdate: Boolean = requiredOnUpdate
     fixed HasProviderDefault: Boolean = hasProviderDefault
+    fixed Opaque: Boolean = opaque                // NEW
     fixed AttachesTo: Boolean = attachesTo
     fixed EdgeKind: String = edgeKind
     fixed UpdateMethod: String = updateMethod ?? ""
@@ -282,11 +284,35 @@ open class Schema {
     function query(prop: String): Listing<String> = this.hints.toMap().filter((_, v) -> v.getProperty(prop)).keys.toListing()
 }
 
+// Reaping behaviour for a target - what happens once the target has been
+// continuously unreachable.
+typealias Reaping = NeverReap|ReapAfter
+
+// NeverReap - the target is never reaped, no matter how long it stays unreachable
+open class NeverReap {
+    function render(): Dynamic = new {
+        Kind = "never"
+    }
+}
+
+// ReapAfter - the target is reaped once it has been continuously unreachable
+// for at least maxUnreachable
+open class ReapAfter {
+    hidden maxUnreachable: Duration
+
+    local self = this
+    function render(): Dynamic = new {
+        Kind = "after"
+        MaxUnreachableSeconds = self.maxUnreachable.toUnit("s").value.toInt()
+    }
+}
+
 open class Target {
     hidden label: String
     hidden namespace: String = config.type.toUpperCase()
     hidden config: Any?
     hidden discoverable: Boolean = true
+    hidden reap: Reaping?
 
     local self = this
     hidden res: TargetResolvable = new {
@@ -305,6 +331,7 @@ open class Target {
             else null
         else null
     fixed Discoverable: Boolean = discoverable
+    fixed Reaping: Dynamic? = self.reap?.render()
 }
 
 open class TargetResolvable extends Resolvable {
@@ -399,6 +426,20 @@ open class Value {
     $strategy: String = strategy
 }
 
+/// A secret value. Typing a resource field `(String|formae.SecretValue)` (or
+/// nullable/union variants thereof) marks the field opaque in its schema
+/// FieldHint (opaque-by-default), so the agent hashes it at rest regardless
+/// of how the author supplied the value.
+open class SecretValue extends Value {
+    hidden opaque: SecretValue = (this) {
+        visibility = "Opaque"
+    }
+
+    hidden setOnce: SecretValue = (this) {
+        strategy = "SetOnce"
+    }
+}
+
 open class Prop {
     hidden flag: String?
     hidden default: (String|Boolean|Int|Float)?
@@ -434,6 +475,18 @@ open class Prop {
 
 // ---- typed CLI properties (RFC-105) ----------------------------------------
 
+/// Overrides the CLI flag / `prop:` key for a typed Props member, decoupling the
+/// statically-typed member name (e.g. `certArn`) from the flag a user passes on
+/// the CLI (e.g. `--cert-arn`). Mirrors the legacy `Prop.flag` override, but the
+/// member stays typed so `properties.certArn` resolves in editors.
+open class Flag extends Annotation {
+    name: String
+}
+
+/// flagName: the member's `@Flag` override if present, else the member name.
+function flagName(p): String =
+    p.annotations.filterIsInstance(Flag).firstOrNull?.name ?? p.name
+
 /// Resolve a reflected type to its simple name, unwrapping nullables.
 function typeName(t): String =
     if (t is reflect.DeclaredType) t.referent.name
@@ -447,7 +500,7 @@ function typeName(t): String =
 function fillProps(clazz: Class): Typed =
     new Mapping {
         for (n, p in reflect.Class(clazz).properties) {
-            [n] = let (raw = read?("prop:\(n)"))
+            [n] = let (raw = read?("prop:\(flagName(p))"))
                 if (raw == null) p.defaultValue
                 else
                     let (tn = typeName(p.type))
@@ -475,7 +528,7 @@ function renderProperties(opts: Any?): Any? =
         new Mapping {
             for (name, p in reflect.Class(opts.getClass()).properties) {
                 [name] = new Prop {
-                    flag = name
+                    flag = flagName(p)
                     default = p.defaultValue as (String|Boolean|Int|Float)?
                     value = inst[name] as (String|Boolean|Int|Float)?
                 }
@@ -598,6 +651,7 @@ class Fq {
             let(key = if(fieldHint.outputField != null) fieldHint.outputField else resourceHint.outputKeyTransformation.apply(k))
             let(baseHint = (fieldHint) {
                 required = !(v.type is reflect.NullableType)
+                opaque = isSecretValueType(v.type)
             })
             Pair(key, baseHint)
         ))
@@ -632,6 +686,7 @@ class Fq {
             let(key = if(fieldHint.outputField != null) fieldHint.outputField else outputKeyTransformation.apply(k))
             let(baseHint = (fieldHint) {
                 required = !(v.type is reflect.NullableType)
+                opaque = isSecretValueType(v.type)
             })
             Pair(key, baseHint)
         ))
@@ -673,6 +728,28 @@ class Fq {
         cls.superclass != null &&
         (cls.superclass.name == "SubResource" ||
          isSubResourceClass(cls.superclass))
+
+    /// Detects whether a field's declared type references formae.SecretValue,
+    /// directly or through nullable/union positions. Nested/list/map
+    /// positions are deferred — first cut only.
+    function isSecretValueType(type: reflect.Type): Boolean =
+        if (type is reflect.DeclaredType)
+            let (referent = type.referent)
+            if (referent is reflect.Class) isSecretValueClass(referent)
+            else if (referent is reflect.TypeAlias)
+                // Handle type alias by checking its aliased type
+                isSecretValueType(referent.referent)
+            else false
+        else if (type is reflect.NullableType)
+            isSecretValueType(type.member)
+        else if (type is reflect.UnionType)
+            type.members.any((m) -> isSecretValueType(m))
+        else false
+
+    function isSecretValueClass(c: reflect.Class): Boolean =
+        if (c.name == "SecretValue") true
+        else if (c.superclass != null) isSecretValueClass(c.superclass)
+        else false
 
     function getSubResourceClass(type: reflect.Type): reflect.Class =
         if (type is reflect.DeclaredType)

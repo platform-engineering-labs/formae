@@ -9,6 +9,7 @@ package logo
 import (
 	_ "embed"
 	"fmt"
+	"image/color"
 	"os"
 	"strings"
 	"sync"
@@ -186,8 +187,8 @@ func MiniPropeller() []string {
 // tests can force the empty-return (error) path and verify the fallback chain.
 //
 //nolint:gochecknoglobals
-var encodeKittyFn = func(dark bool, widthPx int) string {
-	return encodeKittyFullLogo(dark, widthPx)
+var encodeKittyFn = func(dark bool, widthPx int, tint color.Color) string {
+	return encodeKittyFullLogo(dark, widthPx, tint)
 }
 
 //nolint:gochecknoglobals
@@ -250,6 +251,65 @@ func wordmarkLines(version string) (nameLine, verLine string) {
 	return nameStyle.Render("formae"), versionStyle.Render("v" + version)
 }
 
+// renderCfg holds optional overrides applied via RenderOption.
+type renderCfg struct {
+	wordmark lipgloss.TerminalColor // overrides the braille wordmark letter color
+}
+
+// RenderOption customizes Render.
+type RenderOption func(*renderCfg)
+
+// WithWordmarkColor overrides the color of the logo's "formae" letters (the
+// propeller stays brand orange). Used to color the wordmark from the active
+// theme. Applies to the braille renderer and, by tinting the letter pixels, to
+// the Kitty graphics image.
+func WithWordmarkColor(c lipgloss.TerminalColor) RenderOption {
+	return func(cfg *renderCfg) { cfg.wordmark = c }
+}
+
+// wordmarkTintColor resolves the wordmark override to a concrete color for the
+// detected background, for tinting the graphics-logo letters. It resolves the
+// light/dark side explicitly (rather than via lipgloss AdaptiveColor, which
+// would trigger a per-render background query that leaks as text under
+// tmux/screen), matching how the rest of this package handles color. Returns nil
+// when no override is set or the value can't be parsed (leaving the image
+// untinted).
+func wordmarkTintColor(c lipgloss.TerminalColor, dark bool) color.Color {
+	var hex string
+	switch v := c.(type) {
+	case nil:
+		return nil
+	case lipgloss.AdaptiveColor:
+		if dark {
+			hex = v.Dark
+		} else {
+			hex = v.Light
+		}
+	case lipgloss.Color:
+		hex = string(v)
+	default:
+		return nil
+	}
+	rgba, ok := parseHexColor(hex)
+	if !ok {
+		return nil
+	}
+	return rgba
+}
+
+// parseHexColor parses a "#RRGGBB" string into an opaque color. Returns ok=false
+// for any other shape (empty, wrong length, non-hex).
+func parseHexColor(s string) (color.RGBA, bool) {
+	if len(s) != 7 || s[0] != '#' {
+		return color.RGBA{}, false
+	}
+	var r, g, b uint8
+	if _, err := fmt.Sscanf(s[1:], "%02x%02x%02x", &r, &g, &b); err != nil {
+		return color.RGBA{}, false
+	}
+	return color.RGBA{R: r, G: g, B: b, A: 0xFF}, true
+}
+
 // Render produces the logo art string and the number of terminal rows it
 // occupies, based on the detected terminal capability and the requested size.
 //
@@ -266,7 +326,12 @@ func wordmarkLines(version string) (nameLine, verLine string) {
 //
 // rows counts terminal lines consumed: braille = newlines+1; text = 1;
 // graphics = graphicsImageRows (calibrated constant).
-func Render(cap Capability, size Size, version string) (art string, rows int) {
+func Render(cap Capability, size Size, version string, opts ...RenderOption) (art string, rows int) {
+	var cfg renderCfg
+	for _, o := range opts {
+		o(&cfg)
+	}
+
 	// SizeNone: suppress unconditionally.
 	if size == SizeNone {
 		return "", 0
@@ -298,7 +363,7 @@ func Render(cap Capability, size Size, version string) (art string, rows int) {
 		// we place only the version to its right on the image's bottom row
 		// (baseline-aligned), positioned with CHA + a real newline (the \x1b[1B
 		// CUD escape is unreliable in Kitty after a C=1 image).
-		img := encodeKittyFn(dark, graphicsFullLogoWidthPx)
+		img := encodeKittyFn(dark, graphicsFullLogoWidthPx, wordmarkTintColor(cfg.wordmark, dark))
 		if img != "" {
 			ver := lipgloss.NewStyle().Foreground(lipgloss.Color(versionColor)).Render("v" + version)
 			var b strings.Builder
@@ -311,7 +376,7 @@ func Render(cap Capability, size Size, version string) (art string, rows int) {
 			return b.String(), graphicsFullLogoImageRows
 		}
 		// Fall through to full-logo braille on encoder failure.
-		if full := renderFullLogoBraille(dark, brailleFullLogoWidth); full != "" {
+		if full := renderFullLogoBraille(dark, brailleFullLogoWidth, cfg.wordmark); full != "" {
 			ver := lipgloss.NewStyle().Foreground(lipgloss.Color(versionColor)).MarginLeft(2).Render("v" + version)
 			art = lipgloss.JoinHorizontal(lipgloss.Bottom, full, ver)
 			rows = countRows(art)
@@ -339,7 +404,7 @@ func Render(cap Capability, size Size, version string) (art string, rows int) {
 		// Full-wordmark braille: white "formae" letters + orange propeller, with
 		// the version set to its right, vertically centered against the wordmark
 		// (mirrors the old logo's wordmark-to-the-right placement).
-		if full := renderFullLogoBraille(dark, brailleFullLogoWidth); full != "" {
+		if full := renderFullLogoBraille(dark, brailleFullLogoWidth, cfg.wordmark); full != "" {
 			ver := lipgloss.NewStyle().
 				Foreground(lipgloss.Color(versionColor)).
 				MarginLeft(2).

@@ -16,7 +16,7 @@ import (
 )
 
 // renderCard renders an expanded detail card for a simRow and returns a slice
-// of styled lines (no trailing newlines). Reused verbatim by Task 14's driftview.
+// of styled lines (no trailing newlines). Reused verbatim by the driftview.
 //
 // Contract:
 //   - Bordered card with title-in-border (op symbol + label) colored per-op via opColor
@@ -35,43 +35,37 @@ func renderCard(th *theme.Theme, r simRow, width int) []string {
 	// Styles
 	borderColor := p.PrimaryAccent
 	borderSt := lipgloss.NewStyle().Foreground(borderColor)
-	fieldSt := lipgloss.NewStyle().Foreground(p.TextSubtle)
-	valueSt := lipgloss.NewStyle().Foreground(p.TextSecondary)
 	treeSt := lipgloss.NewStyle().Foreground(p.TextSecondary)
 	doneSt := lipgloss.NewStyle().Foreground(p.Done)
 	errSt := lipgloss.NewStyle().Foreground(p.Error)
 	subtleSt := lipgloss.NewStyle().Foreground(p.TextSubtle)
 
-	kv := func(k, v string) string {
-		return fieldSt.Render(k) + " " + valueSt.Render(v)
-	}
-
-	// Collect card body lines
+	// The card shows the property-level detail — what is being created, changed,
+	// or is causing the replace. The row already carries the operation, label and
+	// type, so the card does not repeat them.
 	var bodyLines []string
 
-	// --- Operation/Type/Stack fields ---
-	opWord := r.op.word()
-	bodyLines = append(bodyLines, kv("Operation:", opWord))
-	if r.typ != "" {
-		bodyLines = append(bodyLines, kv("Type:     ", r.typ))
-	}
-	if r.stack != "" {
-		bodyLines = append(bodyLines, kv("Stack:    ", r.stack))
-	}
-
-	// --- Collect change lines ---
-	changeLines := collectChangeLines(th, r, doneSt, errSt, subtleSt)
-
-	if len(changeLines) > 0 {
-		bodyLines = append(bodyLines, "")
-		bodyLines = append(bodyLines, fieldSt.Render("Changes:"))
-
-		for i, cl := range changeLines {
-			connector := "├"
-			if i == len(changeLines)-1 {
-				connector = "└"
+	switch {
+	case r.op == opCreate && r.res != nil && len(r.res.Properties) > 0:
+		// A create simply lists the properties it will set — like the inventory
+		// detail screen — rather than a change tree of "add" lines.
+		for _, l := range components.PropertyLines(r.res.Properties, 1) {
+			bodyLines = append(bodyLines, treeSt.Render(l))
+		}
+	default:
+		changeLines := collectChangeLines(th, r, doneSt, errSt, subtleSt)
+		if len(changeLines) > 0 {
+			for i, cl := range changeLines {
+				connector := "├"
+				if i == len(changeLines)-1 {
+					connector = "└"
+				}
+				bodyLines = append(bodyLines, treeSt.Render(" "+connector+" ")+cl)
 			}
-			bodyLines = append(bodyLines, treeSt.Render(" "+connector+" ")+cl)
+		} else {
+			// Nothing to diff (e.g. a delete or a clean keep) — a one-line summary
+			// keeps the expanded card from being an empty box.
+			bodyLines = append(bodyLines, subtleSt.Render(cardEmptyNote(r)))
 		}
 	}
 
@@ -105,19 +99,23 @@ func renderCard(th *theme.Theme, r simRow, width int) []string {
 	}
 
 	// Build title-in-border top line: ╭─ ~ label ─────╮
-	// The op glyph and the label both carry their own (non-bold) color —
-	// Warning for delete rows (destructive), PrimaryAccent otherwise — matching
-	// pb's mockup (docs/mockups/prototypes/simulation/main.go).
+	// The op glyph always carries its per-op color. The label color is
+	// theme-driven, mirroring the row renderer: rich accents it (and tints a
+	// delete title with the delete op color); quiet renders it in the plain
+	// column color, so nothing but the glyph distinguishes the card.
 	opSymbol := opGlyph(th.Glyphs, r.op)
 	glyphSt := lipgloss.NewStyle().Foreground(opColor(p, r.op))
-	labelColor := p.PrimaryAccent
-	if r.op == opDelete {
-		labelColor = p.Warning
+	labelColor := p.TextSecondary
+	if th.Rows.LabelAccent {
+		labelColor = p.PrimaryAccent
+	}
+	if r.op == opDelete && th.Rows.DeleteWholeRow {
+		labelColor = opColor(p, opDelete)
 	}
 	labelSt := lipgloss.NewStyle().Foreground(labelColor)
 	titleContent := " " + glyphSt.Render(opSymbol) + " " + labelSt.Render(r.label) + " "
 	titleW := lipgloss.Width(titleContent)
-	dashW := actualWidth - titleW - 2 // 2 = ╭ + ╮
+	dashW := actualWidth - titleW - 3 // 3 border glyphs: ╭ + ─ + ╮
 	if dashW < 1 {
 		dashW = 1
 	}
@@ -197,6 +195,8 @@ func buildPropertyChangeLines(_ *theme.Theme, r simRow, doneSt, errSt, subtleSt 
 	oldProperties := r.res.OldProperties
 	refLabels := r.res.ReferenceLabels
 
+	// Creates are handled by renderCard directly (a property listing, not a
+	// change tree), so an empty patch document here means nothing to render.
 	if len(patchDoc) == 0 {
 		return nil
 	}
@@ -255,6 +255,21 @@ func buildPropertyChangeLines(_ *theme.Theme, r simRow, doneSt, errSt, subtleSt 
 	}
 
 	return lines
+}
+
+// cardEmptyNote returns a one-line summary for cards that have no property
+// detail to show (a delete has nothing to diff; a keep is a no-op).
+func cardEmptyNote(r simRow) string {
+	switch r.op {
+	case opDelete:
+		return "This resource will be removed."
+	case opDetach:
+		return "This policy will be detached."
+	case opKeep:
+		return "No changes."
+	default:
+		return "No property changes."
+	}
 }
 
 // buildPolicyChangeLines renders a minimal policy config diff for policy rows.

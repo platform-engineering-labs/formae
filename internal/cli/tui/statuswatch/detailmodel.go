@@ -76,6 +76,12 @@ type detailModel struct {
 	// this set with Canceled state render "Abandoned" in Warning color.
 	abandonedSet   map[string]bool
 	abandonedCount int // count of rows with stateLabel "Abandoned"
+	// now is the clock used to compute live elapsed for in-progress rows; set on
+	// SetCommand and refreshed on every spinner tick so the time visibly ticks.
+	now time.Time
+	// cmdStartTs is the command's start time, used as the elapsed fallback for an
+	// in-progress resource whose own StartedAt the agent hasn't recorded yet.
+	cmdStartTs time.Time
 }
 
 func newDetailModel(th *theme.Theme, width, height int) detailModel {
@@ -105,6 +111,8 @@ func (d detailModel) SetCommand(c apimodel.Command, r row, spinView string, now 
 	d.cmdID = c.CommandID
 	d.cmdState = c.State
 	d.spinView = spinView
+	d.now = now
+	d.cmdStartTs = c.StartTs
 	d.abandonedSet = abandonedIDs
 
 	// Rebuild groups, preserving sort state
@@ -157,11 +165,16 @@ func (d detailModel) renderPinned() detailModel {
 	if !d.hasCommand {
 		return d
 	}
-	mv := multiView{th: d.th, rows: []row{d.pinnedSrc}, cursor: -1, sortHi: -1, width: d.width, spinView: d.spinView, now: d.pinnedNow, hideAge: true, pinned: true}
-	d.pinnedHeader = mv.headerRow()
+	// Indent the pinned header + row by 2 so the leading command status glyph
+	// lines up with the ▌ section-header bars in the body below. Build the
+	// multiView 2 columns narrower so the indented line still fits the width.
+	const pinnedIndent = "  "
+	pinnedW := max(d.width-len(pinnedIndent), 1)
+	mv := multiView{th: d.th, rows: []row{d.pinnedSrc}, cursor: -1, sortHi: -1, width: pinnedW, spinView: d.spinView, now: d.pinnedNow, hideAge: true, pinned: true}
+	d.pinnedHeader = pinnedIndent + mv.headerRow()
 	rows := mv.renderRows(1)
 	if len(rows) > 0 {
-		d.pinnedRow = rows[0]
+		d.pinnedRow = pinnedIndent + rows[0]
 	}
 	return d
 }
@@ -470,7 +483,7 @@ func (d detailModel) View(height int, showQueryBar bool) string {
 func detailFooterHints(singleCommand bool) []components.KeyHint {
 	hints := []components.KeyHint{
 		{Key: "→←", Desc: "column"},
-		{Key: "s", Desc: "toggle sort"},
+		{Key: "s", Desc: "sort"},
 		{Key: "space", Desc: "expand"},
 		{Key: "d", Desc: "details"},
 	}
@@ -510,8 +523,29 @@ func (d detailModel) findShowMoreNavIndex(nav []navigableLine, kind updateKind) 
 func (d detailModel) renderGroupColHeader(kind updateKind, labelW, typeW, stackW int) string {
 	p := d.th.Palette
 	dimStyle := lipgloss.NewStyle().Foreground(p.TextSecondary)
-	hiStyle := lipgloss.NewStyle().Foreground(p.TextPrimary).Background(p.Selection).Bold(true)
+	// Header emphasis is theme-driven, mirroring simview: "background" (rich)
+	// gives the navigated column a Selection background; "brighten" (quiet)
+	// renders it bright-bold with no background.
+	background := d.th.Header.Highlight == "background"
+	highlightStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(p.TextPrimary.Dark)).Background(lipgloss.Color(p.Selection.Dark)).Bold(true)
 	accentStyle := lipgloss.NewStyle().Foreground(p.PrimaryAccent).Bold(true)
+	brightStyle := lipgloss.NewStyle().Foreground(p.TextPrimary).Bold(true)
+	styleFor := func(isHL, isAct bool) lipgloss.Style {
+		if background {
+			switch {
+			case isHL:
+				return highlightStyle
+			case isAct:
+				return accentStyle
+			default:
+				return dimStyle
+			}
+		}
+		if isHL || isAct {
+			return brightStyle
+		}
+		return dimStyle
+	}
 
 	grpHi := d.sortHi[kind]
 	grpAct := d.sortCol[kind]
@@ -537,14 +571,7 @@ func (d detailModel) renderGroupColHeader(kind updateKind, labelW, typeW, stackW
 		text := name + arrow
 		// Pad the plain text to the desired width, then apply the style.
 		paddedText := pad(text, w)
-		switch {
-		case isHL:
-			return hiStyle.Render(paddedText)
-		case isAct:
-			return accentStyle.Render(paddedText)
-		default:
-			return dimStyle.Render(paddedText)
-		}
+		return styleFor(isHL, isAct).Render(paddedText)
 	}
 	// renderColHdrLast renders the last (un-padded) column header cell.
 	renderColHdrLast := func(name string, col int) string {
@@ -559,14 +586,7 @@ func (d detailModel) renderGroupColHeader(kind updateKind, labelW, typeW, stackW
 			}
 		}
 		text := name + arrow
-		switch {
-		case isHL:
-			return hiStyle.Render(text)
-		case isAct:
-			return accentStyle.Render(text)
-		default:
-			return dimStyle.Render(text)
-		}
+		return styleFor(isHL, isAct).Render(text)
 	}
 
 	var sb strings.Builder
@@ -575,22 +595,22 @@ func (d detailModel) renderGroupColHeader(kind updateKind, labelW, typeW, stackW
 	sb.WriteString("  ")
 	// Status glyph cell: 6 wide, no label.
 	sb.WriteString(renderColHdrPadded("", detailColStatus, 6))
+	// Operation leads the descriptive columns (right after the state glyph),
+	// mirroring the simulation view so the two screens read the same.
+	sb.WriteString(renderColHdrPadded("Operation", detailColOperation, 12))
 
 	switch kind {
 	case kindPolicy:
 		sb.WriteString(renderColHdrPadded("Label", detailColLabel, labelW))
 		sb.WriteString(renderColHdrPadded("Type", detailColType, typeW))
 		sb.WriteString(renderColHdrPadded("Stack", detailColStack, stackW))
-		sb.WriteString(renderColHdrPadded("Operation", detailColOperation, 12))
 		sb.WriteString(renderColHdrLast("Time", detailColTime))
 	case kindResource:
 		sb.WriteString(renderColHdrPadded("Label", detailColLabel, labelW))
 		sb.WriteString(renderColHdrPadded("Type", detailColType, typeW))
-		sb.WriteString(renderColHdrPadded("Operation", detailColOperation, 12))
 		sb.WriteString(renderColHdrLast("Time", detailColTime))
 	default: // targets, stacks
 		sb.WriteString(renderColHdrPadded("Label", detailColLabel, labelW))
-		sb.WriteString(renderColHdrPadded("Operation", detailColOperation, 12))
 		sb.WriteString(renderColHdrLast("Time", detailColTime))
 	}
 	return sb.String()
@@ -628,8 +648,13 @@ func (d detailModel) renderSummaryRow(r updateRow, kind updateKind, labelW, type
 	glyphStr := d.renderStateGlyph(r, bg, isCursor)
 	glyphStr = padStr(glyphStr, 2)
 
-	// Styles
-	labelSt := withBg(lipgloss.NewStyle().Foreground(p.PrimaryAccent))
+	// Styles. The label is the accent color only when the theme makes it
+	// special (rich); quiet renders it the same as the other columns.
+	labelColor := p.TextSecondary
+	if d.th.Rows.LabelAccent {
+		labelColor = p.PrimaryAccent
+	}
+	labelSt := withBg(lipgloss.NewStyle().Foreground(labelColor))
 	textSt := withBg(lipgloss.NewStyle().Foreground(p.TextSecondary))
 	dimSt := withBg(lipgloss.NewStyle().Foreground(p.TextSubtle))
 
@@ -642,16 +667,25 @@ func (d detailModel) renderSummaryRow(r updateRow, kind updateKind, labelW, type
 		labelSt, textSt, dimSt = red, red, red
 	}
 	if isCursor {
+		// The cursor band is always the dark Selection color (see bg above), so
+		// cursor-row text uses the .Dark side of each adaptive color explicitly.
+		// In dark mode this matches normal adaptive resolution; in light mode it
+		// keeps the text light and readable on the dark band instead of resolving
+		// to a near-black foreground.
 		if isFailed {
-			bright := withBg(lipgloss.NewStyle().Foreground(p.ErrorBright))
+			bright := withBg(lipgloss.NewStyle().Foreground(lipgloss.Color(p.ErrorBright.Dark)))
 			labelSt, textSt, dimSt = bright, bright, bright
 		} else if isDone {
-			med := withBg(lipgloss.NewStyle().Foreground(p.TextSecondary))
+			med := withBg(lipgloss.NewStyle().Foreground(lipgloss.Color(p.TextSecondary.Dark)))
 			labelSt, textSt, dimSt = med, med, med
 		} else {
-			labelSt = withBg(lipgloss.NewStyle().Foreground(p.PrimaryAccent))
-			textSt = withBg(lipgloss.NewStyle().Foreground(p.TextPrimary))
-			dimSt = withBg(lipgloss.NewStyle().Foreground(p.TextPrimary))
+			cursorLabel := lipgloss.Color(p.TextPrimary.Dark)
+			if d.th.Rows.LabelAccent {
+				cursorLabel = lipgloss.Color(p.PrimaryAccent.Dark)
+			}
+			labelSt = withBg(lipgloss.NewStyle().Foreground(cursorLabel))
+			textSt = withBg(lipgloss.NewStyle().Foreground(lipgloss.Color(p.TextPrimary.Dark)))
+			dimSt = withBg(lipgloss.NewStyle().Foreground(lipgloss.Color(p.TextPrimary.Dark)))
 		}
 	}
 
@@ -664,19 +698,25 @@ func (d detailModel) renderSummaryRow(r updateRow, kind updateKind, labelW, type
 		return components.Truncate(s, maxW-1)
 	}
 
-	timeStr := formatDetailDuration(r)
+	timeStr := d.formatDetailDuration(r)
 
 	// State label ("finishing"/"Abandoned") placed just after the glyph. These are
 	// rare, additive annotations — canceled/done/etc rows carry NO label (the
 	// glyph conveys the state), so they keep the fixed 6-wide glyph column and
 	// stay aligned with the header; only the rare labeled rows widen this prefix.
 	// A trailing space guarantees a gap before the label (no "Abandonedlabel").
-	glyphCell := " " + glyphStr + " "
+	// The spaces flanking the glyph are background-filled on a cursor row so the
+	// selection band has no holes left/right of the glyph.
+	sp := " "
+	if isCursor {
+		sp = lipgloss.NewStyle().Background(bg).Render(" ")
+	}
+	glyphCell := sp + glyphStr + sp
 	if r.stateLabel == "Abandoned" {
 		warnSt := withBg(lipgloss.NewStyle().Foreground(p.Warning))
-		glyphCell = " " + glyphStr + " " + warnSt.Render(r.stateLabel) + " "
+		glyphCell = sp + glyphStr + sp + warnSt.Render(r.stateLabel) + sp
 	} else if r.stateLabel != "" {
-		glyphCell = " " + glyphStr + " " + dimSt.Render(r.stateLabel) + " "
+		glyphCell = sp + glyphStr + sp + dimSt.Render(r.stateLabel) + sp
 	}
 
 	sp2 := "  "
@@ -684,25 +724,40 @@ func (d detailModel) renderSummaryRow(r updateRow, kind updateKind, labelW, type
 		sp2 = lipgloss.NewStyle().Background(bg).Render("  ")
 	}
 
+	// Operation cell: colored glyph + word (e.g. "+ create"), leading the
+	// descriptive columns right after the state glyph — mirroring the simulation
+	// view. The per-op color is kept regardless of state; the state glyph conveys
+	// done/failed/in-progress.
+	opPlain := r.operation
+	if g := components.OperationGlyph(d.th.Glyphs, r.operation); g != "" {
+		opPlain = g + " " + r.operation
+	}
+	// On the cursor row (dark band) use the .Dark side so the op color stays
+	// readable in light mode instead of resolving to a near-black foreground.
+	opColor := components.OperationColor(p, r.operation)
+	var opFg lipgloss.TerminalColor = opColor
+	if isCursor {
+		opFg = lipgloss.Color(opColor.Dark)
+	}
+	opSt := withBg(lipgloss.NewStyle().Foreground(opFg))
+	opCell := padStr(opSt.Render(opPlain), 12)
+
 	var rowStr string
 	switch kind {
 	case kindPolicy:
-		rowStr = sp2 + padStr(glyphCell, 6) +
+		rowStr = sp2 + padStr(glyphCell, 6) + opCell +
 			padStr(labelSt.Render(trunc(r.label, labelW-1)), labelW) +
 			padStr(textSt.Render(trunc(r.typeName, typeW-1)), typeW) +
 			padStr(textSt.Render(trunc(r.stack, stackW-1)), stackW) +
-			padStr(textSt.Render(r.operation), 12) +
 			dimSt.Render(timeStr)
 	case kindResource:
-		rowStr = sp2 + padStr(glyphCell, 6) +
+		rowStr = sp2 + padStr(glyphCell, 6) + opCell +
 			padStr(labelSt.Render(trunc(r.label, labelW-1)), labelW) +
 			padStr(textSt.Render(trunc(r.typeName, typeW-1)), typeW) +
-			padStr(textSt.Render(r.operation), 12) +
 			dimSt.Render(timeStr)
 	default: // targets, stacks
-		rowStr = sp2 + padStr(glyphCell, 6) +
+		rowStr = sp2 + padStr(glyphCell, 6) + opCell +
 			padStr(labelSt.Render(trunc(r.label, labelW-1)), labelW) +
-			padStr(textSt.Render(r.operation), 12) +
 			dimSt.Render(timeStr)
 	}
 
@@ -716,11 +771,10 @@ func (d detailModel) renderSummaryRow(r updateRow, kind updateKind, labelW, type
 
 	result := rowStr + "\n"
 
-	// Second line for failed: error message
-	if r.state == components.StateFailed && r.errMsg != "" {
-		errLine := "      " + lipgloss.NewStyle().Foreground(p.Error).Render(r.errMsg)
-		result += errLine + "\n"
-	}
+	// The failed row's error message is intentionally NOT shown here — it lives
+	// only in the expanded card (press space) so the summary stays scannable and
+	// the long provider error isn't duplicated.
+
 	// Second line for cascade: depends on
 	if r.state == components.StateSkipped && r.cascadeSrc != "" {
 		depLine := "      " + lipgloss.NewStyle().Foreground(p.TextSubtle).Render("depends on "+r.cascadeSrc)
@@ -739,33 +793,83 @@ func (d detailModel) renderStateGlyph(r updateRow, bg lipgloss.Color, isCursor b
 		}
 		return s
 	}
+	// On a cursor row the band is always dark, so resolve glyph colors to their
+	// .Dark side so the symbol stays visible in light mode (e.g. quiet's Done is
+	// near-black on light, which would vanish on the dark cursor band).
+	fg := func(c lipgloss.AdaptiveColor) lipgloss.TerminalColor {
+		if isCursor {
+			return lipgloss.Color(c.Dark)
+		}
+		return c
+	}
 	switch r.state {
 	case components.StateDone:
-		return withBg(lipgloss.NewStyle().Foreground(p.Done)).Render(d.th.Glyphs.StatusDone)
+		return withBg(lipgloss.NewStyle().Foreground(fg(p.Done))).Render(d.th.Glyphs.StatusDone)
 	case components.StateInProgress:
 		spinFrame := d.spinView
 		if spinFrame == "" {
 			spinFrame = d.th.Spinner.StaticFrame
 		}
-		return withBg(lipgloss.NewStyle().Foreground(p.PrimaryAccent)).Render(spinFrame)
+		return withBg(lipgloss.NewStyle().Foreground(fg(p.PrimaryAccent))).Render(spinFrame)
 	case components.StatePending:
-		return withBg(lipgloss.NewStyle().Foreground(p.Pending)).Render(d.th.Glyphs.StatusPending)
+		return withBg(lipgloss.NewStyle().Foreground(fg(p.Pending))).Render(d.th.Glyphs.StatusPending)
 	case components.StateFailed:
-		return withBg(lipgloss.NewStyle().Foreground(p.Error).Bold(true)).Render(d.th.Glyphs.StatusFailed)
+		return withBg(lipgloss.NewStyle().Foreground(fg(p.Error)).Bold(true)).Render(d.th.Glyphs.StatusFailed)
 	case components.StateSkipped:
-		return withBg(lipgloss.NewStyle().Foreground(p.TextSecondary)).Render(d.th.Glyphs.StatusSkipped)
+		return withBg(lipgloss.NewStyle().Foreground(fg(p.TextSecondary))).Render(d.th.Glyphs.StatusSkipped)
 	}
 	return " "
 }
 
+// elapsed returns the duration to display for a row: a live now−start while the
+// update is in progress (so the time ticks), otherwise the final recorded
+// duration. It prefers the per-resource StartedAt; if the agent hasn't recorded
+// one yet (it lands reliably only on completion), it falls back to the command's
+// start so the timer still ticks rather than freezing at 00:00.
+func (d detailModel) elapsed(r updateRow) time.Duration {
+	if r.state == components.StateInProgress && !d.now.IsZero() {
+		start := r.startedAt
+		if start.IsZero() {
+			start = d.cmdStartTs
+		}
+		if !start.IsZero() {
+			if e := d.now.Sub(start); e > 0 {
+				return e
+			}
+		}
+	}
+	return r.duration
+}
+
 // formatDetailDuration returns the time string for a summary row.
-func formatDetailDuration(r updateRow) string {
+func (d detailModel) formatDetailDuration(r updateRow) string {
 	switch r.state {
 	case components.StateDone, components.StateInProgress, components.StateFailed:
-		return components.FormatDuration(r.duration)
+		return components.FormatDuration(d.elapsed(r))
 	default:
 		return "—"
 	}
+}
+
+// resourceDetailLines returns the property/change detail for a resource card:
+// a create lists the properties it set (like the inventory detail screen); an
+// update/replace/delete shows the change lines from its patch document. Returns
+// nil when there's nothing to show (e.g. a delete with no patch).
+func (d detailModel) resourceDetailLines(r updateRow, valueSt lipgloss.Style) []string {
+	if r.operation == apimodel.OperationCreate && len(r.properties) > 0 {
+		var out []string
+		for _, l := range components.PropertyLines(r.properties, 1) {
+			out = append(out, valueSt.Render(l))
+		}
+		return out
+	}
+	if len(r.patchDoc) > 0 {
+		lines, err := components.RenderChangeLinesFromPatch(d.th, r.patchDoc, r.properties, r.oldProperties, r.refLabels)
+		if err == nil {
+			return lines
+		}
+	}
+	return nil
 }
 
 // renderCard renders a bordered detail card for a row.
@@ -786,13 +890,11 @@ func (d detailModel) renderCard(r updateRow, w int, isCursor bool) string {
 
 	switch r.kind {
 	case kindResource:
-		lines = append(lines, kv("Type:    ", r.typeName))
-		lines = append(lines, kv("Stack:   ", r.stack))
 		switch r.state {
 		case components.StateDone:
 			lines = append(lines, kv("Duration:", components.FormatDuration(r.duration)))
 		case components.StateInProgress:
-			lines = append(lines, kv("Started: ", components.FormatDuration(r.duration)+" ago"))
+			lines = append(lines, kv("Started: ", components.FormatDuration(d.elapsed(r))+" ago"))
 			if r.maxAttempt > 0 {
 				lines = append(lines, kv("Attempt: ", fmt.Sprintf("%d/%d", r.attempt, r.maxAttempt)))
 			}
@@ -806,6 +908,13 @@ func (d detailModel) renderCard(r updateRow, w int, isCursor bool) string {
 			}
 			if r.errMsg != "" {
 				lines = append(lines, fieldSt.Render("Error:   ")+" "+errSt.Render(r.errMsg))
+			} else {
+				// A failed resource with no error of its own wasn't attempted — a
+				// resource it depends on failed first, so this one was skipped. The
+				// executor records no per-resource reason, so we can't name the
+				// culprit. Not styled as an error: this resource didn't itself fail.
+				skipSt := lipgloss.NewStyle().Foreground(p.Warning)
+				lines = append(lines, skipSt.Render("Skipped: a resource it depends on failed"))
 			}
 		case components.StateSkipped:
 			cascade := "yes"
@@ -813,6 +922,18 @@ func (d detailModel) renderCard(r updateRow, w int, isCursor bool) string {
 				cascade = "yes (depends on " + r.cascadeSrc + ")"
 			}
 			lines = append(lines, kv("Cascade: ", cascade))
+		}
+
+		// What the operation creates or changes — the property listing (create)
+		// or the change tree (update/replace), matching the simulation card.
+		if detail := d.resourceDetailLines(r, valueSt); len(detail) > 0 {
+			lines = append(lines, "")
+			header := "Properties:"
+			if r.operation != apimodel.OperationCreate {
+				header = "Changes:"
+			}
+			lines = append(lines, fieldSt.Render(header))
+			lines = append(lines, detail...)
 		}
 
 	case kindTarget:
@@ -883,10 +1004,7 @@ func (d detailModel) renderCard(r updateRow, w int, isCursor bool) string {
 
 	borderSt := lipgloss.NewStyle().Foreground(borderColor)
 	glyphStr := d.renderStateGlyph(r, lipgloss.Color(""), false)
-	timeStr := formatDetailDuration(r)
-	if r.state == components.StateInProgress {
-		timeStr = components.FormatDuration(r.duration)
-	}
+	timeStr := d.formatDetailDuration(r)
 
 	// Title: "operation label (type if resource/policy)"
 	titleLabel := r.label
@@ -909,7 +1027,7 @@ func (d detailModel) renderCard(r updateRow, w int, isCursor bool) string {
 	titleW := lipgloss.Width(titleContent)
 	statusW := lipgloss.Width(statusInTitle)
 	// Total = ╭ + ─ + titleContent + dashes + statusInTitle + ╮ = actualWidth
-	dashW := actualWidth - titleW - statusW - 2 // 2 = ╭ + ╮
+	dashW := actualWidth - titleW - statusW - 3 // 3 border glyphs: ╭ + ─ + ╮
 	if dashW < 1 {
 		dashW = 1
 	}

@@ -1343,6 +1343,110 @@ func TestResourcePersister_IdempotentTargetCreate_DifferentConfig(t *testing.T) 
 
 // newResourcePersisterForTest creates a ResourcePersister actor for testing.
 // This follows the same pattern as FormaCommandPersister tests.
+func TestResourcePersister_UpdateTargetHealth(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+
+	target := &pkgmodel.Target{
+		Label:     "health-actor-test",
+		Namespace: "AWS",
+		Config:    json.RawMessage(`{"Region":"us-east-1"}`),
+	}
+	_, err = ds.CreateTarget(target)
+	require.NoError(t, err)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	obs := pkgmodel.TargetHealthObservation{
+		TargetLabel: "health-actor-test",
+		State:       pkgmodel.TargetHealthStateReachable,
+		ObservedAt:  now,
+		LastSeenAt:  &now,
+	}
+
+	persister.SendMessage(sender, messages.UpdateTargetHealth{
+		Observation: obs,
+	})
+
+	assert.Eventually(t, func() bool {
+		loaded, loadErr := ds.LoadTarget("health-actor-test")
+		if loadErr != nil || loaded == nil || loaded.Health == nil {
+			return false
+		}
+		return loaded.Health.State == pkgmodel.TargetHealthStateReachable
+	}, 5*time.Second, 50*time.Millisecond, "datastore must reflect the health observation sent to the actor")
+}
+
+func TestResourcePersister_PersistTargetReap(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+
+	const label = "reap-actor-target"
+	const stack = "reap-actor-stack"
+
+	_, err = ds.CreateTarget(&pkgmodel.Target{
+		Label:     label,
+		Namespace: "AWS",
+		Config:    json.RawMessage(`{"Region":"us-east-1"}`),
+		Reaping:   json.RawMessage(`{"Kind":"after","MaxUnreachableSeconds":100}`),
+	})
+	require.NoError(t, err)
+
+	loaded, err := ds.LoadTarget(label)
+	require.NoError(t, err)
+	require.NotNil(t, loaded.Health)
+	inc := loaded.Health.IncarnationID
+
+	seenAt := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Second)
+	observedAt := time.Now().UTC().Add(-90 * time.Minute).Truncate(time.Second)
+	applied, err := ds.UpdateTargetHealth(pkgmodel.TargetHealthObservation{
+		TargetLabel:   label,
+		State:         pkgmodel.TargetHealthStateUnreachable,
+		ObservedAt:    observedAt,
+		LastSeenAt:    &seenAt,
+		IncarnationID: inc,
+	})
+	require.NoError(t, err)
+	require.True(t, applied)
+	sampleAt := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	applied, err = ds.AdvanceTargetAccrual(label, inc, sampleAt, 100)
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	res := &pkgmodel.Resource{
+		Ksuid:      util.NewID(),
+		NativeID:   "native-reap-actor",
+		Stack:      stack,
+		Type:       "AWS::S3::Bucket",
+		Label:      "bucket",
+		Target:     label,
+		Managed:    true,
+		Properties: json.RawMessage(`{"key":"value"}`),
+	}
+	_, err = ds.StoreResource(res, "cmd-create")
+	require.NoError(t, err)
+
+	result := persister.Call(sender, messages.PersistTargetReap{
+		Label:            label,
+		IncarnationID:    inc,
+		LastSeenBefore:   time.Now().UTC(),
+		LastSampleBefore: time.Now().UTC(),
+		ReapedAt:         time.Now().UTC(),
+	})
+	require.NoError(t, result.Error)
+	reapResult, ok := result.Response.(messages.PersistTargetReapResult)
+	require.True(t, ok, "handler must reply with PersistTargetReapResult, got %T", result.Response)
+	assert.True(t, reapResult.Reaped, "an over-threshold unreachable target must reap")
+
+	reloaded, err := ds.LoadTarget(label)
+	require.NoError(t, err)
+	require.NotNil(t, reloaded.Health)
+	assert.Equal(t, pkgmodel.TargetHealthStateReaped, reloaded.Health.State)
+
+	live, err := ds.LoadResourcesByStack(stack)
+	require.NoError(t, err)
+	assert.Empty(t, live, "the reaped target's resources must be invisible to live queries")
+}
+
 func newResourcePersisterForTest(t *testing.T) (*unit.TestActor, gen.PID, datastore.Datastore, error) {
 	// Create an in-memory datastore for testing
 	ds, err := newTestDatastore()
@@ -1722,4 +1826,119 @@ func TestResourcePersister_SyncRead_NoEvictionWithEmptyConditions(t *testing.T) 
 	loaded, loadErr := ds.LoadResource(ru.DesiredState.URI())
 	require.NoError(t, loadErr)
 	assert.NotNil(t, loaded, "unmanaged row must not be evicted when filter has no conditions")
+}
+
+// TestResourcePersister_ReadOfUnchangedSecretDoesNotDrift covers a resource whose
+// schema marks a field Opaque (secret). The stored row holds the hashed
+// representation (via ApplyToResource on Create). A subsequent sync Read that reads
+// back the SAME plaintext secret from the cloud must not be seen as drift: comparing
+// the freshly-hashed copy (secretSafeResource) against the stored hashed copy
+// (currentResource) must converge to equal, so no re-persist happens. Comparing the
+// stored hash against the raw plaintext DesiredState (as before this fix) would never
+// be equal and would re-persist on every sync.
+func TestResourcePersister_ReadOfUnchangedSecretDoesNotDrift(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+
+	_, err = ds.CreateTarget(&pkgmodel.Target{Label: "test-target", Namespace: "aws"})
+	require.NoError(t, err)
+
+	resourceKsuid := util.NewID()
+	schema := pkgmodel.Schema{
+		Fields: []string{"Password"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"Password": {Opaque: true},
+		},
+	}
+
+	createUpdate := resource_update.ResourceUpdate{
+		DesiredState: pkgmodel.Resource{
+			Label:      "secret-resource",
+			Type:       "FakeAWS::RDS::Instance",
+			Properties: json.RawMessage(`{"Password":"super-secret"}`),
+			Stack:      "test-stack",
+			Target:     "test-target",
+			Ksuid:      resourceKsuid,
+			NativeID:   "rds-1",
+			Schema:     schema,
+			Managed:    true,
+		},
+		ResourceTarget: pkgmodel.Target{Label: "test-target", Namespace: "aws"},
+		State:          resource_update.ResourceUpdateStateSuccess,
+		StackLabel:     "test-stack",
+		ProgressResult: []plugin.TrackedProgress{
+			{
+				ProgressResult: resource.ProgressResult{
+					Operation:          resource.OperationCreate,
+					OperationStatus:    resource.OperationStatusSuccess,
+					NativeID:           "rds-1",
+					ResourceProperties: json.RawMessage(`{"Password":"super-secret"}`),
+				},
+				ResourceType: "FakeAWS::RDS::Instance",
+				StartTs:      util.TimeNow(),
+				ModifiedTs:   util.TimeNow(),
+			},
+		},
+	}
+
+	createResult := persister.Call(sender, resource_update.PersistResourceUpdate{
+		CommandID:         "create-cmd",
+		ResourceOperation: resource_update.OperationCreate,
+		PluginOperation:   resource.OperationCreate,
+		ResourceUpdate:    createUpdate,
+	})
+	require.NoError(t, createResult.Error)
+	createHash, ok := createResult.Response.(string)
+	require.True(t, ok)
+	require.NotEmpty(t, createHash)
+
+	// Confirm the stored row is hashed, not plaintext.
+	stored, loadErr := ds.LoadResource(createUpdate.DesiredState.URI())
+	require.NoError(t, loadErr)
+	require.NotContains(t, string(stored.Properties), "super-secret",
+		"stored resource must hold the hashed secret, not the plaintext")
+
+	// A sync Read reports the SAME secret, as bare plaintext, straight from the cloud
+	// (this is what a real Read operation returns - the plugin has no notion of hashing).
+	readUpdate := resource_update.ResourceUpdate{
+		DesiredState: pkgmodel.Resource{
+			Label:      "secret-resource",
+			Type:       "FakeAWS::RDS::Instance",
+			Properties: json.RawMessage(`{"Password":"super-secret"}`),
+			Stack:      "test-stack",
+			Target:     "test-target",
+			Ksuid:      resourceKsuid,
+			NativeID:   "rds-1",
+			Schema:     schema,
+			Managed:    true,
+		},
+		ResourceTarget: pkgmodel.Target{Label: "test-target", Namespace: "aws"},
+		State:          resource_update.ResourceUpdateStateSuccess,
+		StackLabel:     "test-stack",
+		ProgressResult: []plugin.TrackedProgress{
+			{
+				ProgressResult: resource.ProgressResult{
+					Operation:          resource.OperationRead,
+					OperationStatus:    resource.OperationStatusSuccess,
+					NativeID:           "rds-1",
+					ResourceProperties: json.RawMessage(`{"Password":"super-secret"}`),
+				},
+				ResourceType: "FakeAWS::RDS::Instance",
+				StartTs:      util.TimeNow(),
+				ModifiedTs:   util.TimeNow(),
+			},
+		},
+	}
+
+	readResult := persister.Call(sender, resource_update.PersistResourceUpdate{
+		CommandID:         "sync-cmd",
+		ResourceOperation: resource_update.OperationRead,
+		PluginOperation:   resource.OperationRead,
+		ResourceUpdate:    readUpdate,
+	})
+	require.NoError(t, readResult.Error)
+	readHash, ok := readResult.Response.(string)
+	require.True(t, ok)
+	assert.Empty(t, readHash,
+		"a read-back of an unchanged secret must not be treated as drift and re-persisted")
 }

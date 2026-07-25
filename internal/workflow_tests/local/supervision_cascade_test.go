@@ -571,11 +571,11 @@ func TestResourceUpdaterTerminationCascadesToPluginOperator(t *testing.T) {
 	})
 }
 
-// TestPluginOperatorCrashConvergesViaTimeout is the Phase-1 regression guard for
-// the PLA-202 supervision-tree restructure.
+// TestPluginOperatorCrashConvergesViaTimeout is the regression guard for
+// the supervision-tree restructure.
 //
-// It verifies three properties that must hold after Tasks 2–6 removed the
-// global updater supervisors and switched to unidirectional LinkParent links:
+// It verifies three properties that must hold after removing the
+// global updater supervisors and switching to unidirectional LinkParent links:
 //
 //  1. Timeout convergence: when a PluginOperator for one resource is forcefully
 //     killed after having responded InProgress, the watching ResourceUpdater

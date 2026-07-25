@@ -61,3 +61,12 @@ type ConfirmationBar struct {
 type HeaderStyle struct {
 	Highlight string // "background" | "brighten"
 }
+
+// RowStyle controls how simview/inventory table rows color their columns.
+// It lets a theme treat the label/name column as special (accent) and give
+// delete rows a whole-row destructive tint (rich), or keep every column
+// uniform so nothing but the operation glyph distinguishes a row (quiet).
+type RowStyle struct {
+	LabelAccent    bool // label/name column rendered in the accent color (vs same as other columns)
+	DeleteWholeRow bool // delete rows tint the whole row in op_delete (vs the operation cell only)
+}

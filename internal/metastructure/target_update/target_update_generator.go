@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"time"
 
+	"github.com/platform-engineering-labs/formae/internal/metastructure/reaping"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	"github.com/platform-engineering-labs/formae/pkg/api/model"
@@ -23,11 +25,32 @@ type TargetDatastore interface {
 
 type TargetUpdateGenerator struct {
 	datastore TargetDatastore
+	// manifestDefaultReap is the plugin-manifest default reaping behaviour used
+	// when a target declares none. It is nil when no manifest default is wired,
+	// in which case admission falls through to the global reaping default.
+	manifestDefaultReap pkgmodel.ReapingBehaviour
+	// minReapDuration is the floor enforced on any target's explicit reap-after
+	// duration (see resolveTargetReaping). It defaults to reaping.MinReapDuration
+	// (derived from the nominal/default sync interval); WithMinReapDuration lets
+	// the caller align it with the agent's actual configured interval.
+	minReapDuration time.Duration
 }
 
 // NewTargetUpdateGenerator creates a new target update generator
 func NewTargetUpdateGenerator(ds TargetDatastore) *TargetUpdateGenerator {
-	return &TargetUpdateGenerator{datastore: ds}
+	return &TargetUpdateGenerator{
+		datastore:       ds,
+		minReapDuration: reaping.MinReapDuration,
+	}
+}
+
+// WithMinReapDuration overrides the reap-after admission floor. Production
+// wiring (FormaCommandFromForma) uses this to derive the floor from the
+// agent's actual configured synchronization interval rather than the
+// package's nominal default.
+func (tp *TargetUpdateGenerator) WithMinReapDuration(d time.Duration) *TargetUpdateGenerator {
+	tp.minReapDuration = d
+	return tp
 }
 
 // GenerateTargetUpdates determines what target changes are needed.
@@ -101,6 +124,13 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 	resolvables := resolver.ExtractResolvableURIsFromJSON(target.Config)
 	slog.Debug("Target resolvables extracted", "label", target.Label, "count", len(resolvables), "uris", resolvables)
 
+	// A target whose current row has been reaped is recovered on re-declare.
+	// Recovery must produce an update even when config/discoverable/schema are
+	// unchanged; otherwise an identical re-apply dedupes to no update, the
+	// datastore's UpdateTarget never runs, and the target stays reaped forever.
+	isReaped := existing != nil && existing.Health != nil &&
+		existing.Health.State == pkgmodel.TargetHealthStateReaped
+
 	// Handle apply command (create or update)
 	var operation TargetOperation
 	if existing == nil {
@@ -160,6 +190,11 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 				// An empty incoming schema means the plugin/agent doesn't emit one —
 				// don't wipe existing metadata.
 				operation = TargetOperationUpdate
+			} else if isReaped {
+				// Config/discoverable/schema are all unchanged, but the target is
+				// reaped — force a recover update so UpdateTarget mints a fresh
+				// incarnation and resets health.
+				operation = TargetOperationUpdate
 			} else {
 				return TargetUpdate{}, false, nil
 			}
@@ -173,6 +208,14 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 		target.ConfigSchema = existing.ConfigSchema
 	}
 
+	// Resolve the reaping behaviour at admission: explicit per-target > plugin
+	// manifest default > global default. Write the resolved behaviour back onto
+	// the target so the datastore persists the concrete reap_kind /
+	// reap_max_unreachable_seconds columns.
+	if err := tp.resolveTargetReaping(&target); err != nil {
+		return TargetUpdate{}, false, err
+	}
+
 	return TargetUpdate{
 		Target:               target,
 		ExistingTarget:       existing,
@@ -182,6 +225,33 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 		ModifiedTs:           now,
 		RemainingResolvables: resolvables,
 	}, true, nil
+}
+
+// resolveTargetReaping applies the reaping precedence (explicit > manifest
+// default > global default), enforces the reap-after duration floor, and writes
+// the resolved behaviour back onto target.Reaping.
+func (tp *TargetUpdateGenerator) resolveTargetReaping(target *pkgmodel.Target) error {
+	explicit, err := pkgmodel.ParseReaping(target.Reaping)
+	if err != nil {
+		return fmt.Errorf("invalid reaping for target %s: %w", target.Label, err)
+	}
+
+	resolved := pkgmodel.ResolveReaping(explicit, tp.manifestDefaultReap)
+
+	if after, ok := resolved.(*pkgmodel.ReapAfter); ok {
+		floor := int64(tp.minReapDuration.Seconds())
+		if after.MaxUnreachableSeconds < floor {
+			return fmt.Errorf("target %s reap-after of %ds is below the minimum of %ds",
+				target.Label, after.MaxUnreachableSeconds, floor)
+		}
+	}
+
+	raw, err := pkgmodel.MarshalReaping(resolved)
+	if err != nil {
+		return fmt.Errorf("failed to marshal resolved reaping for target %s: %w", target.Label, err)
+	}
+	target.Reaping = raw
+	return nil
 }
 
 // configSchemasEqual returns true if two ConfigSchemas have identical hints.

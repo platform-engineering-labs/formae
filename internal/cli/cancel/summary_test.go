@@ -112,7 +112,7 @@ func TestRenderCancelSummary_SingleCommand(t *testing.T) {
 	assert.Contains(t, plain, "will finish before stopping")
 	assert.Contains(t, plain, "5 updates pending")
 	assert.Contains(t, plain, "will be canceled")
-	assert.Contains(t, plain, "formae status command --query='id:cmd-abc123' --watch")
+	assert.Contains(t, plain, "formae status command --query='id:cmd-abc123'")
 }
 
 // TestRenderCancelSummary_MultiCommand tests the multi-command no-force variant.
