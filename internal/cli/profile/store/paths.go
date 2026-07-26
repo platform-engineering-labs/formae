@@ -37,6 +37,12 @@ func ResolveConfigDir() (string, error) {
 	if x := os.Getenv("XDG_CONFIG_HOME"); x != "" {
 		xdg = filepath.Join(x, "formae")
 	}
+	// When XDG_CONFIG_HOME is $HOME/.config (common on Linux), the xdg
+	// candidate is the very same directory as legacy. It is not a competing
+	// location, so drop it to avoid a bogus both-populated tie-break warning.
+	if xdg == legacy {
+		xdg = ""
+	}
 
 	legacyPop := hasUserConfig(legacy)
 	xdgPop := xdg != "" && hasUserConfig(xdg)
