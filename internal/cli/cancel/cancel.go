@@ -61,7 +61,6 @@ type CancelOptions struct {
 	Query          string
 	Force          bool
 	Yes            bool
-	Watch          bool
 	StatusOutput   status.StatusOutput
 	OutputConsumer printer.Consumer
 	OutputSchema   string
@@ -99,7 +98,6 @@ plugin stuck in an unbounded poll loop). With --force:
 			opts.Query = strings.TrimSpace(query)
 			opts.Force, _ = command.Flags().GetBool("force")
 			opts.Yes, _ = command.Flags().GetBool("yes")
-			opts.Watch, _ = command.Flags().GetBool("watch")
 			statusOutput, _ := command.Flags().GetString("status-output-layout")
 			opts.StatusOutput = status.StatusOutput(statusOutput)
 			outputConsumer, _ := command.Flags().GetString("output-consumer")
@@ -124,7 +122,6 @@ plugin stuck in an unbounded poll loop). With --force:
 	command.Flags().String("query", "", "Query to select commands to cancel. If not provided, cancels the most recent command. Use * as a wildcard anywhere (e.g. foo*, *foo, *foo*, foo*bar). ? and regex are not yet supported.")
 	command.Flags().Bool("force", false, "Abandon in-progress work and drive the command to a terminal 'Canceled' state immediately, instead of waiting for in-progress resources to finish. Cloud-side operations may continue: Update/Delete are reconciled by the synchronizer, but a still-running Create may orphan a resource that needs manual cleanup.")
 	command.Flags().Bool("yes", false, "Allow the command to run without any confirmations")
-	command.Flags().BoolP("watch", "w", false, "Watch the status of canceled commands until they complete")
 	command.Flags().String("status-output-layout", string(status.StatusOutputSummary), fmt.Sprintf("What to print as status output (%s | %s)", status.StatusOutputSummary, status.StatusOutputDetailed))
 	command.Flags().String("output-consumer", string(printer.ConsumerHuman), "Consumer of the command result (human | machine)")
 	command.Flags().String("output-schema", "yaml", "The schema to use for the result output (json | yaml)")
@@ -269,47 +266,38 @@ func runCancelInteractive(a *app.App, opts *CancelOptions) error {
 	// Compute expectations from merged response.
 	exps := cancelExpectations(merged)
 
-	// Step 4/5: --watch vs. no-watch.
-	if opts.Watch {
-		fmt.Println(renderCancelSummary(th, activeCmds, exps, opts.Force, now))
+	// Watch by default on a TTY: render the cancel summary, then drop into the
+	// cancel-watch TUI so the user sees their commands being canceled (this is
+	// one of the most valuable things to watch). Force-abandoned resources are
+	// surfaced inside the TUI via AbandonedResources.
+	fmt.Println(renderCancelSummary(th, activeCmds, exps, opts.Force, now))
 
-		// Build the set of force-abandoned resource ksuids (P3 normalization at call site).
-		var abandonedKsuids []string
-		for uri, rs := range merged.ResourceUpdateStates {
-			if rs.ForceCanceled {
-				abandonedKsuids = append(abandonedKsuids, ksuidFromURI(uri))
-			}
+	// Build the set of force-abandoned resource ksuids (P3 normalization at call site).
+	var abandonedKsuids []string
+	for uri, rs := range merged.ResourceUpdateStates {
+		if rs.ForceCanceled {
+			abandonedKsuids = append(abandonedKsuids, ksuidFromURI(uri))
 		}
-		sort.Strings(abandonedKsuids)
+	}
+	sort.Strings(abandonedKsuids)
 
-		if len(merged.CommandIDs) == 1 {
-			return launchCancelWatch(a, th, statuswatch.Options{
-				Query:              fmt.Sprintf("id:%s", merged.CommandIDs[0]),
-				FocusCommandID:     merged.CommandIDs[0],
-				ExitWhenDone:       true,
-				AbandonedResources: abandonedKsuids,
-			})
-		}
-		idTerms := make([]string, len(merged.CommandIDs))
-		for i, id := range merged.CommandIDs {
-			idTerms[i] = "id:" + id
-		}
+	if len(merged.CommandIDs) == 1 {
 		return launchCancelWatch(a, th, statuswatch.Options{
-			Query:              strings.Join(idTerms, " "),
+			Query:              fmt.Sprintf("id:%s", merged.CommandIDs[0]),
+			FocusCommandID:     merged.CommandIDs[0],
 			ExitWhenDone:       true,
 			AbandonedResources: abandonedKsuids,
 		})
 	}
-
-	// No --watch: print styled summary.
-	fmt.Print(renderCancelSummary(th, activeCmds, exps, opts.Force, now))
-
-	// Force output: list force-canceled resources with warning.
-	if opts.Force {
-		renderForceCanceledResources(th, merged, activeCmds)
+	idTerms := make([]string, len(merged.CommandIDs))
+	for i, id := range merged.CommandIDs {
+		idTerms[i] = "id:" + id
 	}
-
-	return nil
+	return launchCancelWatch(a, th, statuswatch.Options{
+		Query:              strings.Join(idTerms, " "),
+		ExitWhenDone:       true,
+		AbandonedResources: abandonedKsuids,
+	})
 }
 
 // isTerminalState returns true for states that can no longer be canceled.
@@ -319,53 +307,6 @@ func isTerminalState(state string) bool {
 		return true
 	}
 	return false
-}
-
-// renderForceCanceledResources prints the list of resources that were abandoned
-// due to --force, followed by the abandoned/orphan reminder lines (the copy
-// from the legacy RenderCancelCommandResponse, restyled via theme roles).
-func renderForceCanceledResources(th *theme.Theme, merged *apimodel.CancelCommandResponse, cmds []apimodel.Command) {
-	warnStyle := lipgloss.NewStyle().Foreground(th.Palette.Warning)
-	subtle := lipgloss.NewStyle().Foreground(th.Palette.TextSecondary)
-
-	// Resolve response keys (FormaeURIs) to resource labels via the pre-fetched
-	// commands: the URI's ksuid matches ResourceUpdate.ResourceID.
-	labels := make(map[string]string)
-	for _, c := range cmds {
-		for _, ru := range c.ResourceUpdates {
-			if ru.ResourceLabel != "" {
-				labels[ru.ResourceID] = fmt.Sprintf("%s (%s)", ru.ResourceLabel, ru.ResourceType)
-			}
-		}
-	}
-
-	var abandoned []string
-	for uri, rs := range merged.ResourceUpdateStates {
-		if !rs.ForceCanceled {
-			continue
-		}
-		ksuid := ksuidFromURI(uri)
-		if label, ok := labels[ksuid]; ok {
-			abandoned = append(abandoned, label)
-		} else {
-			abandoned = append(abandoned, ksuid)
-		}
-	}
-	sort.Strings(abandoned)
-
-	if len(abandoned) > 0 {
-		fmt.Println()
-		fmt.Printf("  %s\n", warnStyle.Render("The following resources were abandoned mid-operation and may exist in your cloud provider:"))
-		for _, res := range abandoned {
-			fmt.Printf("    %s %s\n", warnStyle.Render("⚠"), res)
-		}
-	}
-
-	fmt.Println()
-	fmt.Printf("  %s\n", subtle.Render("Force-cancel abandons in-progress work; cloud-side operations may still be running."))
-	fmt.Printf("  %s\n", subtle.Render("Update/Delete operations are reconciled by the synchronizer on its next cycle."))
-	fmt.Printf("  %s\n", subtle.Render("A still-running Create may orphan a resource: verify the resources above in your"))
-	fmt.Printf("  %s\n", subtle.Render("cloud provider and clean up manually, or let discovery pick them up."))
 }
 
 // runCancelLegacy is the pre-TUI human flow, used on non-TTY output. It
@@ -416,25 +357,9 @@ func runCancelLegacy(a *app.App, opts *CancelOptions) error {
 
 	_, _ = fmt.Print(renderCancelResult(a.Theme(), res, cancelTermWidth(os.Stdout)))
 
-	// If no commands were canceled, nothing to watch
-	if res == nil || len(res.CommandIDs) == 0 {
-		return nil
-	}
-
-	if opts.Watch {
-		fmt.Println() // Add spacing before watch output
-
-		// For single command, watch by ID
-		if len(res.CommandIDs) == 1 {
-			query := fmt.Sprintf("id:%s", res.CommandIDs[0])
-			return status.WatchCommandsStatus(a, query, 1, opts.StatusOutput)
-		}
-
-		// For multiple commands, watch without filter to see all recent commands
-		// (which will include all the canceling/canceled commands)
-		return status.WatchCommandsStatus(a, "", len(res.CommandIDs), opts.StatusOutput)
-	}
-
+	// Non-TTY is fire-and-forget: the cancel is submitted and the result printed;
+	// the caller queries progress via `formae status` (watching is a TTY-only
+	// affordance).
 	return nil
 }
 

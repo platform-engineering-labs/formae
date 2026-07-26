@@ -61,7 +61,6 @@ func TestCancelInteractive_H1_NonInteractive_D8Error(t *testing.T) {
 		Query:          "",
 		Force:          true,
 		Yes:            false,
-		Watch:          false,
 		OutputConsumer: printer.ConsumerHuman,
 	}
 
@@ -114,7 +113,6 @@ func TestCancelInteractive_H1_Interactive_ReachesConfirm(t *testing.T) {
 		Query:          "",
 		Force:          true,
 		Yes:            false,
-		Watch:          false,
 		OutputConsumer: printer.ConsumerHuman,
 	}
 
@@ -172,7 +170,6 @@ func TestCancel_BannerNotEmittedBeforeConfirmOrTUI(t *testing.T) {
 		Query:          "",
 		Force:          true,
 		Yes:            false, // triggers confirmForceCancel (interactive path)
-		Watch:          false,
 		OutputConsumer: printer.ConsumerHuman,
 	}
 
@@ -225,7 +222,6 @@ func TestCancel_BannerEmittedOnYesPath(t *testing.T) {
 		Query:          "",
 		Force:          true,
 		Yes:            true, // --yes: skip confirm, print-and-exit
-		Watch:          false,
 		OutputConsumer: printer.ConsumerHuman,
 	}
 

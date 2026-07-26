@@ -97,7 +97,6 @@ func TestCancelE2E_PerIDSubmit(t *testing.T) {
 		Query:          "stack:mystack",
 		Force:          false,
 		Yes:            true,
-		Watch:          false,
 		OutputConsumer: printer.ConsumerHuman,
 	}
 
@@ -191,7 +190,6 @@ func TestCancelE2E_ForceWatch_AbandonedInView(t *testing.T) {
 		Query:          "",
 		Force:          true,
 		Yes:            true,
-		Watch:          true,
 		OutputConsumer: printer.ConsumerHuman,
 	}
 

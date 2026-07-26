@@ -79,7 +79,6 @@ func TestCancelWatch_Single_LaunchCancelWatchOptions(t *testing.T) {
 		Query:          "id:cmd-single",
 		Force:          true,
 		Yes:            true,
-		Watch:          true,
 		OutputConsumer: printer.ConsumerHuman,
 	}
 
@@ -151,7 +150,6 @@ func TestCancelWatch_Multi_LaunchCancelWatchOptions(t *testing.T) {
 		Query:          "stack:test",
 		Force:          true,
 		Yes:            true,
-		Watch:          true,
 		OutputConsumer: printer.ConsumerHuman,
 	}
 
@@ -211,7 +209,6 @@ func TestCancelWatch_NoForce_EmptyAbandoned(t *testing.T) {
 		Query:          "",
 		Force:          false,
 		Yes:            true,
-		Watch:          true,
 		OutputConsumer: printer.ConsumerHuman,
 	}
 
