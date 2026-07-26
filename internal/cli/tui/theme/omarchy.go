@@ -99,6 +99,10 @@ func mapOmarchyPalette(oc omarchyColors) paletteFile {
 		OpReplace:       mirror(secondary),
 		OpDetach:        mirror(oc.Color8),
 		OpKeep:          mirror(oc.Color8),
+		// Color the logo wordmark with the OS accent so the printed logo follows
+		// the Omarchy theme, mirroring how rich tints its wordmark. The propeller
+		// stays brand orange.
+		LogoWordmark: mirror(primary),
 	}
 }
 
