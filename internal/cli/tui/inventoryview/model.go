@@ -64,6 +64,11 @@ func New(th *theme.Theme, client Client, opts Options) Model {
 	// applied query and the shared query bar with it so it is threaded to the
 	// fetch and shown in the bar, mirroring the status-command TUI.
 	tabs[opts.FocusTab].query = opts.Query
+	// Init() fires the focus tab's fetch immediately, so start it in tabLoading —
+	// otherwise the first frame renders an empty table (tabNotLoaded) and the user
+	// sees no spinner until they navigate away and back (which routes through
+	// switchTab and finally sets tabLoading).
+	tabs[opts.FocusTab].state = tabLoading
 	model := Model{
 		th:      th,
 		keys:    tui.DefaultKeyMap(),
@@ -132,8 +137,8 @@ func (m Model) Nags() []string {
 
 // Init kicks off the spinner tick and the first fetch (for opts.FocusTab).
 // The first fetch passes fromTUI=false to transmit usage stats once (R7).
-// The active tab's state is already tabNotLoaded at construction; the
-// tabLoading transition happens in Update when the first fetch fires.
+// The focus tab is already in tabLoading at construction (see New), so the very
+// first frame renders the loading spinner rather than an empty table.
 func (m Model) Init() tea.Cmd {
 	// The focus tab's query was seeded from opts.Query in New (D3).
 	cmds := []tea.Cmd{

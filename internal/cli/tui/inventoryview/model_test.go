@@ -163,6 +163,27 @@ func TestModel_QueryBindsToFocusTabOnly(t *testing.T) {
 	_ = mm
 }
 
+// TestModel_FocusTabShowsSpinnerBeforeFirstFetch verifies the focus tab renders
+// the loading spinner on the very first frame — before any fetch response lands.
+// Init() fires the focus tab's fetch immediately, so that tab must start in
+// tabLoading; otherwise it renders as an empty table and the user sees no
+// "Loading resources…" until they navigate away and back (which routes through
+// switchTab and finally sets tabLoading).
+func TestModel_FocusTabShowsSpinnerBeforeFirstFetch(t *testing.T) {
+	fc := buildFixtureClientFull()
+	opts := Options{FocusTab: TabResources}
+	m := newTestInventoryModel(t, fc, opts)
+	var mm tea.Model = m
+
+	// Size the view but do NOT deliver the fetch response yet.
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+
+	assert.Equal(t, tabLoading, mm.(Model).tabs[TabResources].state,
+		"focus tab must be tabLoading before the first fetch response arrives")
+	assert.Contains(t, mm.(Model).View(), "Loading resources",
+		"first frame must show the loading spinner for the focus tab")
+}
+
 // ---------------------------------------------------------------------------
 // TestModel_FirstFetchTransmitsStatsOnce
 // ---------------------------------------------------------------------------
