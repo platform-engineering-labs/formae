@@ -666,6 +666,30 @@ func generateResourceUpdatesForSync(
 			continue
 		}
 
+		// Refresh each freshly-loaded existing resource's schema from the forma
+		// resource (which may carry a plugin-refreshed schema) before anything
+		// downstream reads opacity from it.
+		for _, existingResource := range existingResources {
+			for _, resource := range forma.Resources {
+				if resource.Stack == stack.SingleStackLabel() &&
+					resource.Label == existingResource.Label &&
+					resource.Type == existingResource.Type {
+					existingResource.Schema = resource.Schema
+				}
+			}
+		}
+
+		// Normalize inherited-Opaque $res resolvables on the freshly-loaded rows
+		// before they become ResourceUpdates. A structured $res reference pointing at
+		// another resource's Opaque property is itself opaque, but the pre-resolution
+		// $res shape that reaches at-rest storage on non-translating paths carries no
+		// $visibility marker — so without this the sync merge refreshes its $value from
+		// the plugin's live read yet the persist transformer never hashes it, leaking
+		// the resolved secret in CLEARTEXT at rest (PLA-355 sibling). Here — with every
+		// sibling row of the stack in hand — we stamp $visibility:Opaque on such $res
+		// envelopes so the merge drops any stale $hashed and persist re-hashes.
+		markInheritedOpaqueResolvables(existingResources)
+
 		// Normal sync - create read resource updates for existing resources
 		for _, existingResource := range existingResources {
 			for _, resource := range forma.Resources {
@@ -2270,4 +2294,103 @@ func translateEmbedSpansInTemplate(tmpl string, tripletToKsuid map[pkgmodel.Trip
 		}
 	}
 	return tmpl, nil
+}
+
+// markInheritedOpaqueResolvables walks each resource's properties for structured
+// $res resolvables and, when a resolvable points at another resource's Opaque
+// property, stamps $visibility:Opaque on the $res envelope in place.
+//
+// A structured $res reference in its pre-resolution shape ({"$res":true,"$label":..,
+// "$type":..,"$stack":..,"$property":..[,"$value":..]}) survives at rest on the
+// non-translating paths (Synchronize/Discovery/Destroy/seed) where a user apply's
+// $res->$ref rewrite never runs. Unlike the resolved $ref shape — which inherits
+// opacity via preserveRefMetadata/the resolver at apply time — a raw $res carries no
+// $visibility marker, so on a sync the merge refreshes its $value from the plugin's
+// live read while the persist transformer never hashes it: the resolved secret leaks
+// in CLEARTEXT at rest (the PLA-355 sibling). Stamping $visibility:Opaque here lets
+// both the sync merge (drop stale $hashed) and the persist transformer (re-hash)
+// treat the field exactly like an Opaque $ref.
+//
+// Opacity is looked up strictly from the referenced resource (keyed by the
+// resolvable's $stack/$label/$type): a property counts as opaque if the referenced
+// resource's schema marks it Opaque OR its stored value already carries a
+// $visibility:Opaque envelope (the authoritative at-rest form, which survives even
+// when a plugin's runtime schema drops FieldHint.Opaque). Non-secret $res references
+// (native IDs, ARNs, etc.) are left untouched.
+func markInheritedOpaqueResolvables(resources []*pkgmodel.Resource) {
+	opaqueByTriplet := make(map[pkgmodel.TripletKey]map[string]bool)
+	for _, res := range resources {
+		set := make(map[string]bool)
+		for _, f := range res.Schema.Opaque() {
+			set[f] = true
+		}
+		gjson.ParseBytes(res.Properties).ForEach(func(key, val gjson.Result) bool {
+			if val.IsObject() && val.Get("$visibility").String() == pkgmodel.VisibilityOpaque {
+				set[key.String()] = true
+			}
+			return true
+		})
+		if len(set) == 0 {
+			continue
+		}
+		opaqueByTriplet[pkgmodel.TripletKey{Stack: res.Stack, Label: res.Label, Type: res.Type}] = set
+	}
+	if len(opaqueByTriplet) == 0 {
+		return
+	}
+
+	for _, res := range resources {
+		if len(res.Properties) == 0 {
+			continue
+		}
+		if updated, changed := markOpaqueResolvablesInProps(string(res.Properties), opaqueByTriplet); changed {
+			res.Properties = json.RawMessage(updated)
+		}
+	}
+}
+
+// markOpaqueResolvablesInProps returns props with $visibility:Opaque stamped on every
+// $res envelope that references a known Opaque property, and whether anything changed.
+func markOpaqueResolvablesInProps(propsJSON string, opaqueByTriplet map[pkgmodel.TripletKey]map[string]bool) (string, bool) {
+	var paths []string
+	collectOpaqueResolvablePaths("", gjson.Parse(propsJSON), opaqueByTriplet, &paths)
+	if len(paths) == 0 {
+		return propsJSON, false
+	}
+	result := propsJSON
+	for _, p := range paths {
+		result, _ = sjson.Set(result, p+".$visibility", pkgmodel.VisibilityOpaque)
+	}
+	return result, true
+}
+
+// collectOpaqueResolvablePaths records the gjson/sjson path of every $res envelope
+// that references a known Opaque property and does not already carry $visibility.
+func collectOpaqueResolvablePaths(basePath string, value gjson.Result, opaqueByTriplet map[pkgmodel.TripletKey]map[string]bool, paths *[]string) {
+	if !value.IsObject() && !value.IsArray() {
+		return
+	}
+	if value.IsObject() && pkgmodel.IsResolvableObject(value) {
+		if value.Get("$visibility").String() != "" {
+			return
+		}
+		triplet := pkgmodel.TripletKey{
+			Stack: value.Get("$stack").String(),
+			Label: value.Get("$label").String(),
+			Type:  value.Get("$type").String(),
+		}
+		property := value.Get("$property").String()
+		if set, ok := opaqueByTriplet[triplet]; ok && property != "" && set[property] {
+			*paths = append(*paths, basePath)
+		}
+		return
+	}
+	value.ForEach(func(key, val gjson.Result) bool {
+		childPath := key.String()
+		if basePath != "" {
+			childPath = basePath + "." + childPath
+		}
+		collectOpaqueResolvablePaths(childPath, val, opaqueByTriplet, paths)
+		return true
+	})
 }

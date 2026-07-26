@@ -525,6 +525,42 @@ func Test_mergeRefsPreservingUserRefs_OpaqueEnvelope_ReplacesHashWithLiveReadVal
 	assert.Equal(t, "my-secret", mergedMap["Name"])
 }
 
+// Test_mergeRefsPreservingUserRefs_ResEnvelope_EmptyPluginEchoPreservesHash covers the $res
+// sibling of the opaque-envelope merge. A structured $res resolvable that points at another
+// resource's Opaque property survives at rest on non-translating paths as a $res envelope. If
+// the plugin round-trips the resolvable back as a $res object whose $value is absent/empty
+// (unresolved), the merge must KEEP the stored hash AND retain $hashed:true. Regression guard:
+// keptUserValue only unwraps $ref, so mergeResObject must feed it the unwrapped plugin value —
+// otherwise a non-empty $res echo object is mistaken for a fresh value, $hashed is deleted, and
+// the persist transformer hashes the already-hashed digest again (hash-of-hash corruption).
+func Test_mergeRefsPreservingUserRefs_ResEnvelope_EmptyPluginEchoPreservesHash(t *testing.T) {
+	storedHash := pkgmodel.ComputeValueHash("v1")
+	userProps := []byte(`{
+        "name": "the-consumer",
+        "consumes": {"$res":true,"$label":"the-secret","$type":"FakeAWS::Resource","$stack":"s","$property":"secret","$hashed":true,"$value":"` + storedHash + `","$visibility":"Opaque"}
+    }`)
+	// Plugin echoes the resolvable back as a $res object with NO resolved $value.
+	pluginProps := []byte(`{
+        "name": "the-consumer",
+        "consumes": {"$res":true,"$label":"the-secret","$type":"FakeAWS::Resource","$stack":"s","$property":"secret"}
+    }`)
+
+	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{})
+	require.NoError(t, err)
+
+	var mergedMap map[string]any
+	require.NoError(t, json.Unmarshal(merged, &mergedMap))
+
+	consumes, ok := mergedMap["consumes"].(map[string]any)
+	require.True(t, ok, "consumes must remain a $res envelope")
+	assert.Equal(t, true, consumes["$res"])
+	assert.Equal(t, "Opaque", consumes["$visibility"])
+	assert.Equal(t, storedHash, consumes["$value"],
+		"stored hash must be retained when the plugin echo carries no resolved value")
+	assert.Equal(t, true, consumes["$hashed"],
+		"$hashed must be retained (no hash-of-hash): $value is still the stored digest, not a fresh plaintext")
+}
+
 func Test_mergeRefsPreservingUserRefs_RemovesArrayElements(t *testing.T) {
 	hostedZoneKsuid := util.NewID()
 

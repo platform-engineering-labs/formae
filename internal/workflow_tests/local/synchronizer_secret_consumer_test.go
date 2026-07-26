@@ -347,3 +347,234 @@ func TestSynchronizer_SecretConsumerOutOfBandDrift(t *testing.T) {
 		mu.Unlock()
 	})
 }
+
+// TestSynchronizer_SecretConsumer_ResEnvelope_OutOfBandDrift is the $res sibling
+// of TestSynchronizer_SecretConsumerOutOfBandDrift. It reproduces PLA-355's
+// unfixed twin: a consumer R whose "consumes" field is persisted at rest as a
+// STRUCTURED $res resolvable (NOT a $ref envelope) pointing at S's Opaque
+// "secret" property. Such a $res envelope enters at rest via non-translating
+// paths (Synchronize/Discovery/Destroy/seed) — a USER apply would rewrite $res
+// -> $ref, so the $ref twin never exercises this shape.
+//
+// The bug: on an OOB drift of S's secret v1->v2 followed by a sync, the merge
+// has no $res branch, so it recurses field-by-field and OVERWRITES the
+// envelope's $value with the plugin's LIVE plaintext v2; because the $res
+// envelope never carried $visibility:Opaque, the persist transformer never
+// hashes it — so cleartext "v2" is written to the datastore at rest.
+//
+// The fix must leave R.consumes.$value == sha256("v2") at rest, exactly like
+// the $ref case, and NEVER the literal cleartext.
+func TestSynchronizer_SecretConsumer_ResEnvelope_OutOfBandDrift(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		const sLabel = "the-secret"
+		const rLabel = "the-consumer"
+		const sNative = "s-native"
+		const rNative = "r-native"
+
+		var mu sync.Mutex
+		sCurrentSecret := "v1" // live value S's Read reports; flipped for OOB drift
+		stack := "test-stack-" + util.NewID()
+
+		overrides := &plugin.ResourcePluginOverrides{
+			Create: func(req *resource.CreateRequest) (*resource.CreateResult, error) {
+				nid := rNative
+				if req.Label == sLabel {
+					nid = sNative
+				}
+				return &resource.CreateResult{ProgressResult: &resource.ProgressResult{
+					Operation:          resource.OperationCreate,
+					OperationStatus:    resource.OperationStatusSuccess,
+					RequestID:          req.Label,
+					NativeID:           nid,
+					ResourceProperties: req.Properties,
+				}}, nil
+			},
+			Update: func(req *resource.UpdateRequest) (*resource.UpdateResult, error) {
+				nid := rNative
+				if req.Label == sLabel {
+					nid = sNative
+				}
+				return &resource.UpdateResult{ProgressResult: &resource.ProgressResult{
+					Operation:          resource.OperationUpdate,
+					OperationStatus:    resource.OperationStatusSuccess,
+					RequestID:          req.Label,
+					NativeID:           nid,
+					ResourceProperties: req.DesiredProperties,
+				}}, nil
+			},
+			Read: func(req *resource.ReadRequest) (*resource.ReadResult, error) {
+				mu.Lock()
+				cur := sCurrentSecret
+				mu.Unlock()
+				switch req.NativeID {
+				case sNative:
+					return &resource.ReadResult{
+						ResourceType: req.ResourceType,
+						Properties:   fmt.Sprintf(`{"name":%q,"secret":%q}`, sLabel, cur),
+					}, nil
+				case rNative:
+					// The consumer's cloud-native view holds the resolved secret. A
+					// provider that round-trips the resolvable it was handed echoes back
+					// a $res envelope carrying the LIVE plaintext at $value — which is
+					// what the sync merge sees and (unfixed) writes to $value at rest.
+					return &resource.ReadResult{
+						ResourceType: req.ResourceType,
+						Properties: fmt.Sprintf(
+							`{"name":%q,"consumes":{"$res":true,"$label":%q,"$type":"FakeAWS::Resource","$stack":%q,"$property":"secret","$value":%q}}`,
+							rLabel, sLabel, stack, cur),
+					}, nil
+				default:
+					return &resource.ReadResult{ResourceType: req.ResourceType, Properties: `{}`}, nil
+				}
+			},
+		}
+
+		cfg := test_helpers.NewTestMetastructureConfig()
+		cfg.Agent.Synchronization.Enabled = false // manual sync control
+		cfg.Agent.Retry.MaxRetries = 0
+		m, def, err := test_helpers.NewTestMetastructureWithConfig(t, overrides, cfg)
+		defer def()
+		require.NoError(t, err)
+
+		sKsuid := util.NewID()
+
+		sSchema := pkgmodel.Schema{
+			Identifier: "name",
+			Fields:     []string{"name", "secret"},
+			Hints:      map[string]pkgmodel.FieldHint{"secret": {Opaque: true}},
+		}
+		rSchema := pkgmodel.Schema{
+			Identifier: "name",
+			Fields:     []string{"name", "consumes"},
+		}
+
+		buildForma := func(secretVal string) *pkgmodel.Forma {
+			return &pkgmodel.Forma{
+				Stacks: []pkgmodel.Stack{{Label: stack}},
+				Resources: []pkgmodel.Resource{
+					{
+						Label:      sLabel,
+						Type:       "FakeAWS::Resource",
+						Stack:      stack,
+						Target:     "test-target",
+						Ksuid:      sKsuid,
+						Schema:     sSchema,
+						Properties: json.RawMessage(fmt.Sprintf(`{"name":%q,"secret":%q}`, sLabel, secretVal)),
+					},
+					{
+						Label:      rLabel,
+						Type:       "FakeAWS::Resource",
+						Stack:      stack,
+						Target:     "test-target",
+						Schema:     rSchema,
+						Properties: json.RawMessage(fmt.Sprintf(`{"name":%q,"consumes":%q}`, rLabel, secretVal)),
+					},
+				},
+				Targets: []pkgmodel.Target{{Label: "test-target", Namespace: "test-namespace"}},
+			}
+		}
+
+		field := func(label, path string) gjson.Result {
+			resources, err := m.Datastore.LoadResourcesByStack(stack)
+			require.NoError(t, err)
+			for _, r := range resources {
+				if r.Label == label {
+					return gjson.GetBytes(r.Properties, path)
+				}
+			}
+			return gjson.Result{}
+		}
+		load := func(label string) *pkgmodel.Resource {
+			resources, err := m.Datastore.LoadResourcesByStack(stack)
+			require.NoError(t, err)
+			for _, r := range resources {
+				if r.Label == label {
+					return r
+				}
+			}
+			return nil
+		}
+		dumpState := func(label string) {
+			t.Logf("=================== %s ===================", label)
+			resources, err := m.Datastore.LoadResourcesByStack(stack)
+			require.NoError(t, err)
+			for _, r := range resources {
+				t.Logf("  [datastore] %s/%s: props=%s", r.Type, r.Label, string(r.Properties))
+			}
+		}
+
+		hashV1 := pkgmodel.ComputeValueHash("v1")
+		hashV2 := pkgmodel.ComputeValueHash("v2")
+
+		// ───────────────────────── STEP 1: APPLY ─────────────────────────
+		// Author S and R without any cross-resource reference, so that both land
+		// at rest as plain managed resources with correct native IDs. R.consumes
+		// starts as a plain opaque-secret-carrying field; we then rewrite it, at
+		// rest, into the STRUCTURED $res envelope that a non-translating path
+		// would have persisted.
+		_, err = m.ApplyForma(buildForma("v1"), &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id")
+		require.NoError(t, err)
+		waitForApplyComplete(t, m)
+		dumpState("after STEP 1 apply")
+
+		// ─── Seed R.consumes at rest as a STRUCTURED $res envelope ──────────
+		// This is the prod-observed shape (throwaway stack, PLA-355 sibling):
+		//   {"$res":true,"$label":<S>,"$type":<S-type>,"$stack":<stack>,
+		//    "$property":"secret","$value":<hash-of-v1>}
+		// — a resolvable pointing at S's Opaque "secret" property, carrying the
+		// (correctly hashed) v1 value but NO $hashed/$visibility markers.
+		r := load(rLabel)
+		require.NotNil(t, r, "R must exist after apply")
+		resEnvelope := map[string]any{
+			"$res":      true,
+			"$label":    sLabel,
+			"$type":     "FakeAWS::Resource",
+			"$stack":    stack,
+			"$property": "secret",
+			"$value":    hashV1,
+		}
+		newProps := map[string]any{"name": rLabel, "consumes": resEnvelope}
+		rawProps, mErr := json.Marshal(newProps)
+		require.NoError(t, mErr)
+		r.Properties = json.RawMessage(rawProps)
+		_, err = m.Datastore.StoreResource(r, "seed-res-envelope")
+		require.NoError(t, err)
+
+		require.True(t, field(rLabel, "consumes.$res").Bool(), "R.consumes seeded as a $res envelope")
+		require.Equal(t, hashV1, field(rLabel, "consumes.$value").String(), "R.consumes seeded hashed(v1)")
+		dumpState("after seeding $res envelope")
+
+		// ─────────────── STEP 2: OOB drift on S + sync ────────────────────
+		mu.Lock()
+		sCurrentSecret = "v2" // S's live secret changed out of band
+		mu.Unlock()
+		t.Log("########## STEP 2: OOB drift S.secret v1->v2, then ForceSync ##########")
+		require.NoError(t, m.ForceSync())
+		require.Eventually(t, func() bool {
+			resources, err := m.Datastore.LoadResourcesByStack(stack)
+			if err != nil {
+				return false
+			}
+			for _, res := range resources {
+				if res.Label == sLabel {
+					return gjson.GetBytes(res.Properties, "secret.$value").String() == hashV2
+				}
+			}
+			return false
+		}, 10*time.Second, 100*time.Millisecond, "sync should ingest S.secret->hashed(v2)")
+		dumpState("after STEP 2 sync")
+
+		// The heart of the test: after the sync refreshes R.consumes' $value from
+		// S's new live secret, the resolved value MUST be HASHED at rest — sha256(v2)
+		// — exactly like the $ref case. The cleartext "v2" must NEVER appear in the
+		// stored $res envelope.
+		require.Equal(t, hashV2, field(sLabel, "secret.$value").String(), "S.secret must be ingested as hashed(v2)")
+		require.Equal(t, hashV2, field(rLabel, "consumes.$value").String(),
+			"R.consumes.$value must be re-hashed to sha256(v2) on sync (no plaintext at rest)")
+		require.NotContains(t, field(rLabel, "consumes").Raw, "v2",
+			"the cleartext secret 'v2' must never appear in R's stored $res envelope")
+		// Structural integrity: the resolvable envelope survives the sync merge.
+		require.True(t, field(rLabel, "consumes.$res").Bool(), "R.consumes keeps its $res resolvable structure after sync")
+		require.Equal(t, sLabel, field(rLabel, "consumes.$label").String(), "R.consumes keeps its $label pointing at S")
+	})
+}
