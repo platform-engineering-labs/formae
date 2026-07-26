@@ -27,6 +27,10 @@ type QueryBar struct {
 	applied string
 	edit    string
 	focused bool
+	// cursor is the caret position within edit, measured in RUNES (0 == before
+	// the first rune, len([]rune(edit)) == after the last). Left/Right move it;
+	// inserts and deletes act relative to it.
+	cursor int
 }
 
 // NewQueryBar creates a QueryBar with an initial applied query.
@@ -34,10 +38,12 @@ func NewQueryBar(th *theme.Theme, initial string) QueryBar {
 	return QueryBar{th: th, applied: initial}
 }
 
-// Focus enters edit mode, seeding the editable buffer with the applied query.
+// Focus enters edit mode, seeding the editable buffer with the applied query
+// and placing the caret at the end of it.
 func (q QueryBar) Focus() QueryBar {
 	q.focused = true
 	q.edit = q.applied
+	q.cursor = len([]rune(q.edit))
 	return q
 }
 
@@ -60,6 +66,7 @@ func (q QueryBar) Query() string { return q.applied }
 // Update handles a key message while the bar is focused. The second return
 // value is true when the user pressed enter (the query was applied).
 func (q QueryBar) Update(msg tea.KeyMsg) (QueryBar, bool) {
+	runes := []rune(q.edit)
 	switch msg.Type {
 	case tea.KeyEnter:
 		q.applied = strings.TrimSpace(q.edit)
@@ -68,14 +75,37 @@ func (q QueryBar) Update(msg tea.KeyMsg) (QueryBar, bool) {
 	case tea.KeyEsc:
 		q.focused = false
 		return q, false
+	case tea.KeyLeft:
+		if q.cursor > 0 {
+			q.cursor--
+		}
+	case tea.KeyRight:
+		if q.cursor < len(runes) {
+			q.cursor++
+		}
+	case tea.KeyHome, tea.KeyCtrlA:
+		q.cursor = 0
+	case tea.KeyEnd, tea.KeyCtrlE:
+		q.cursor = len(runes)
 	case tea.KeyBackspace:
-		if len(q.edit) > 0 {
-			q.edit = q.edit[:len(q.edit)-1]
+		if q.cursor > 0 {
+			q.edit = string(runes[:q.cursor-1]) + string(runes[q.cursor:])
+			q.cursor--
+		}
+	case tea.KeyDelete:
+		if q.cursor < len(runes) {
+			q.edit = string(runes[:q.cursor]) + string(runes[q.cursor+1:])
 		}
 	case tea.KeyCtrlU:
 		q.edit = ""
-	case tea.KeyRunes:
-		q.edit += string(msg.Runes)
+		q.cursor = 0
+	case tea.KeyRunes, tea.KeySpace:
+		ins := msg.Runes
+		if msg.Type == tea.KeySpace {
+			ins = []rune{' '}
+		}
+		q.edit = string(runes[:q.cursor]) + string(ins) + string(runes[q.cursor:])
+		q.cursor += len(ins)
 	}
 	return q, false
 }
@@ -90,8 +120,7 @@ func (q QueryBar) View(width int) string {
 	switch {
 	case q.focused:
 		slash := lipgloss.NewStyle().Foreground(q.th.Palette.PrimaryAccent).Render("/")
-		cursor := lipgloss.NewStyle().Foreground(q.th.Palette.TextPrimary).Render("█")
-		left = "  " + slash + " " + q.edit + cursor
+		left = "  " + slash + " " + q.renderEditWithCursor()
 		right = subtle.Render("enter: apply  esc: cancel") + "  "
 	case q.applied != "":
 		slash := lipgloss.NewStyle().Foreground(q.th.Palette.PrimaryAccent).Render("/")
@@ -103,4 +132,22 @@ func (q QueryBar) View(width int) string {
 	}
 	content := left + PadBetween(width, left, right) + right
 	return sep + "\n" + content
+}
+
+// renderEditWithCursor renders the edit buffer with the caret drawn at the
+// cursor position: a solid block when the caret sits past the last rune, or the
+// rune under the caret drawn in reverse video when it sits mid-buffer.
+func (q QueryBar) renderEditWithCursor() string {
+	runes := []rune(q.edit)
+	if q.cursor >= len(runes) {
+		block := lipgloss.NewStyle().Foreground(q.th.Palette.TextPrimary).Render("█")
+		return q.edit + block
+	}
+	caret := lipgloss.NewStyle().
+		Foreground(q.th.Palette.Base).
+		Background(q.th.Palette.TextPrimary)
+	before := string(runes[:q.cursor])
+	under := string(runes[q.cursor])
+	after := string(runes[q.cursor+1:])
+	return before + caret.Render(under) + after
 }
