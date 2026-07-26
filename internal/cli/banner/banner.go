@@ -72,7 +72,8 @@ func ClearScreen() {
 // For CapText the art is already "formae v{version}" — just print it.
 // For braille/graphics, rows is a countRows estimate. Graphics art includes the
 // wordmark as plain newline-separated lines below the image — no cursor escapes.
-// One blank line after the art separates it from subsequent output.
+// One blank line above the art separates the logo from the prior shell line, and
+// one blank line after the art separates it from subsequent output.
 //
 // TODO(D2): exact graphics spacing needs live tuning once real Kitty/iTerm2
 // row heights are measured.
@@ -91,6 +92,11 @@ func PrintBanner() {
 		opts = append(opts, logo.WithWordmarkColor(wm))
 	}
 	art, rows := logo.Render(cap, logo.SizeFull, formae.Version, opts...)
+
+	// Blank line above the art so the logo doesn't render flush against the
+	// prior shell line. A plain newline is safe before both the braille/text art
+	// and the Kitty/iTerm2 APC image escape.
+	_, _ = fmt.Println()
 
 	switch cap {
 	case logo.CapKitty, logo.CapITerm2:
