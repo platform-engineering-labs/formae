@@ -112,7 +112,6 @@ type ApplyOptions struct {
 	Simulate       bool
 	OutputSchema   string
 	StatusOutput   status.StatusOutput
-	Watch          bool
 	Properties     map[string]string
 }
 
@@ -130,7 +129,6 @@ func ApplyCmd() *cobra.Command {
 			opts.Force, _ = command.Flags().GetBool("force")
 			opts.OutputSchema, _ = command.Flags().GetString("output-schema")
 			opts.Simulate, _ = command.Flags().GetBool("simulate")
-			opts.Watch, _ = command.Flags().GetBool("watch")
 			statusOutput, _ := command.Flags().GetString("status-output-layout")
 			opts.StatusOutput = status.StatusOutput(statusOutput)
 			opts.Yes, _ = command.Flags().GetBool("yes")
@@ -159,7 +157,6 @@ func ApplyCmd() *cobra.Command {
 	command.Flags().String("output-schema", "json", "The schema to use for the result output (json | yaml)")
 	command.Flags().Bool("simulate", false, "Simulate the command rather than make actual changes")
 	command.Flags().Bool("force", false, "Overwrite any changes since the last reconcile without prompting. Only applicable in 'reconcile' mode.")
-	command.Flags().Bool("watch", false, "Continuously refresh and print the status until completion")
 	command.Flags().String("status-output-layout", string(status.StatusOutputSummary), fmt.Sprintf("What to print as status output (%s | %s)", status.StatusOutputSummary, status.StatusOutputDetailed))
 	command.Flags().Bool("yes", false, "Allow the command to run without any confirmations")
 	cmd.AddConfigFlags(command)
@@ -350,11 +347,6 @@ func runApplyLegacy(a *app.App, opts *ApplyOptions) error {
 	}
 
 	fmt.Printf("\n%s\n", lipgloss.NewStyle().Foreground(a.Theme().Palette.Warning).Render("The asynchronous command has started on the formae agent."))
-
-	if opts.Watch {
-		query := fmt.Sprintf("id:%s", res.CommandID)
-		return status.WatchCommandsStatus(a, query, 1, opts.StatusOutput)
-	}
 
 	fmt.Printf("\nRun the following command to check the status of this command:\n\n  %s%s%s\n",
 		lipgloss.NewStyle().Foreground(a.Theme().Palette.TextSubtle).Render("formae status command --query='id:"),

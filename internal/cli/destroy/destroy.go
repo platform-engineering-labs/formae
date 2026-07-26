@@ -110,7 +110,6 @@ type DestroyOptions struct {
 	Query          string
 	OutputConsumer printer.Consumer
 	OutputSchema   string
-	Watch          bool
 	StatusOutput   status.StatusOutput
 	Simulate       bool
 	Yes            bool
@@ -134,7 +133,6 @@ func DestroyCmd() *cobra.Command {
 			opts.OutputConsumer = printer.Consumer(outputConsumer)
 			opts.OutputSchema, _ = command.Flags().GetString("output-schema")
 			opts.Simulate, _ = command.Flags().GetBool("simulate")
-			opts.Watch, _ = command.Flags().GetBool("watch")
 			statusOutput, _ := command.Flags().GetString("status-output-layout")
 			opts.StatusOutput = status.StatusOutput(statusOutput)
 			opts.Yes, _ = command.Flags().GetBool("yes")
@@ -166,7 +164,6 @@ func DestroyCmd() *cobra.Command {
 	command.Flags().String("output-consumer", string(printer.ConsumerHuman), "Consumer of the command result (human | machine)")
 	command.Flags().String("output-schema", "json", "The schema to use for the result output (json | yaml)")
 	command.Flags().Bool("simulate", false, "Simulate the command rather than make actual changes")
-	command.Flags().Bool("watch", false, "Continuously refresh and print the status until completion")
 	command.Flags().String("status-output-layout", string(status.StatusOutputSummary), fmt.Sprintf("What to print as status output (%s | %s)", status.StatusOutputSummary, status.StatusOutputDetailed))
 	command.Flags().Bool("yes", false, "Allow the command to run without any confirmations")
 	command.Flags().String("on-dependents", "abort", "Behavior when resources depend on those being deleted (abort | cascade)")
@@ -418,11 +415,6 @@ func runDestroyLegacy(app *app.App, opts *DestroyOptions) error {
 	{
 		th := app.Theme()
 		fmt.Printf("\n%s\n", lipgloss.NewStyle().Foreground(th.Palette.Warning).Render("The asynchronous command has started on the formae agent."))
-	}
-
-	if opts.Watch {
-		query := fmt.Sprintf("id:%s", res.CommandID)
-		return status.WatchCommandsStatus(app, query, 1, opts.StatusOutput)
 	}
 
 	{
