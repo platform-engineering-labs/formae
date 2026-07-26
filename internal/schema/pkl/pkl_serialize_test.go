@@ -9,6 +9,7 @@ package pkl
 import (
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -383,4 +384,274 @@ func TestSwapVersionedDepsToLocal_AppendsWhenNamespaceMissing(t *testing.T) {
 		"pkl.formae@0.85.0",
 		"local:k8s:" + expectedPath,
 	}, got)
+}
+
+// fakeawsDeps builds the local dependency list for SerializeForma tests that
+// use the bundled fakeaws schema. Both deps are local so no pkl project resolve
+// is required and the tests run without any installed plugin.
+func fakeawsDeps(t *testing.T) ([]string, string) {
+	t.Helper()
+	// Go tests run with cwd = the package directory (internal/schema/pkl).
+	formaePklProject, err := filepath.Abs("schema/PklProject")
+	require.NoError(t, err)
+	fakeawsPklProject, err := filepath.Abs("../../testplugin/fakeaws/schema/pkl/PklProject")
+	require.NoError(t, err)
+	deps := []string{
+		"local:formae:" + formaePklProject,
+		"local:fakeaws:" + fakeawsPklProject,
+	}
+	pluginDir, err := filepath.Abs("../../testplugin/fakeaws/schema/pkl")
+	require.NoError(t, err)
+	return deps, pluginDir
+}
+
+// hashedOpaqueProps builds a JSON properties blob carrying a $hashed:true opaque value.
+func hashedOpaqueProps(t *testing.T, hex string) json.RawMessage {
+	t.Helper()
+	props := map[string]any{
+		"SecretString": map[string]any{
+			"$value":      hex,
+			"$visibility": "Opaque",
+			"$strategy":   "Update",
+			"$hashed":     true,
+		},
+	}
+	b, err := json.Marshal(props)
+	require.NoError(t, err)
+	return b
+}
+
+// fakeawsTarget returns a FakeAWS target with the minimal Config required.
+func fakeawsTarget() model.Target {
+	return model.Target{
+		Label:     "aws",
+		Namespace: "FakeAWS",
+		Config:    json.RawMessage(`{"Type":"FakeAWS","Region":"us-east-1"}`),
+	}
+}
+
+// TestSerializeForma_HashedOpaque_EmitsHashedMarker verifies that a resource
+// whose property carries $hashed:true in its stored value is rendered with
+// the .hashed fluent accessor in the serialized PKL output.
+func TestSerializeForma_HashedOpaque_EmitsHashedMarker(t *testing.T) {
+	deps, pluginDir := fakeawsDeps(t)
+	hex := "a3f5b2c8d9e1f04712345678abcdef0123456789abcdef0123456789abcdef01"
+
+	forma := &model.Forma{
+		Stacks:  []model.Stack{{Label: "default"}},
+		Targets: []model.Target{fakeawsTarget()},
+		Resources: []model.Resource{{
+			Label:      "my-secret",
+			Type:       "FakeAWS::SecretsManager::Secret",
+			Stack:      "default",
+			Target:     "aws",
+			Properties: hashedOpaqueProps(t, hex),
+		}},
+	}
+	options := &schema.SerializeOptions{
+		Schema:         "pkl",
+		SchemaLocation: schema.SchemaLocationLocal,
+		LocalPluginDir: pluginDir,
+		Dependencies:   deps,
+	}
+
+	out, err := PKL{}.SerializeForma(forma, options)
+	require.NoError(t, err)
+	assert.Contains(t, out, ".hashed", "hashed opaque field must emit the .hashed fluent accessor")
+}
+
+// TestSerializeForma_HashedOpaque_EmitsSentinelComment verifies that the
+// exact sentinel inline comment is appended for a hashed opaque field.
+func TestSerializeForma_HashedOpaque_EmitsSentinelComment(t *testing.T) {
+	deps, pluginDir := fakeawsDeps(t)
+	hex := "a3f5b2c8d9e1f04712345678abcdef0123456789abcdef0123456789abcdef01"
+
+	forma := &model.Forma{
+		Stacks:  []model.Stack{{Label: "default"}},
+		Targets: []model.Target{fakeawsTarget()},
+		Resources: []model.Resource{{
+			Label:      "my-secret",
+			Type:       "FakeAWS::SecretsManager::Secret",
+			Stack:      "default",
+			Target:     "aws",
+			Properties: hashedOpaqueProps(t, hex),
+		}},
+	}
+	options := &schema.SerializeOptions{
+		Schema:         "pkl",
+		SchemaLocation: schema.SchemaLocationLocal,
+		LocalPluginDir: pluginDir,
+		Dependencies:   deps,
+	}
+
+	out, err := PKL{}.SerializeForma(forma, options)
+	require.NoError(t, err)
+	const sentinel = "// hashed secret value — cannot be applied as-is; re-supply the plaintext to set it"
+	assert.Contains(t, out, sentinel, "hashed opaque field must carry the sentinel inline comment")
+}
+
+// TestSerializeForma_NonHashedOpaque_NoHashedMarker verifies that a non-hashed
+// opaque value (absent $hashed key) does not emit .hashed or the sentinel comment.
+func TestSerializeForma_NonHashedOpaque_NoHashedMarker(t *testing.T) {
+	deps, pluginDir := fakeawsDeps(t)
+	props := json.RawMessage(`{"SecretString":{"$value":"b4e6c3d7","$visibility":"Opaque","$strategy":"Update"}}`)
+
+	forma := &model.Forma{
+		Stacks:  []model.Stack{{Label: "default"}},
+		Targets: []model.Target{fakeawsTarget()},
+		Resources: []model.Resource{{
+			Label:      "my-secret",
+			Type:       "FakeAWS::SecretsManager::Secret",
+			Stack:      "default",
+			Target:     "aws",
+			Properties: props,
+		}},
+	}
+	options := &schema.SerializeOptions{
+		Schema:         "pkl",
+		SchemaLocation: schema.SchemaLocationLocal,
+		LocalPluginDir: pluginDir,
+		Dependencies:   deps,
+	}
+
+	out, err := PKL{}.SerializeForma(forma, options)
+	require.NoError(t, err)
+	assert.NotContains(t, out, ".hashed", "non-hashed opaque field must not emit .hashed")
+	assert.NotContains(t, out, "// hashed secret value", "non-hashed opaque must not carry the sentinel comment")
+}
+
+// TestSerializeForma_HashedOpaque_StrictBoolean verifies that $hashed:false
+// and absent $hashed are both treated as non-hashed (strict boolean check).
+func TestSerializeForma_HashedOpaque_StrictBoolean(t *testing.T) {
+	deps, pluginDir := fakeawsDeps(t)
+
+	cases := []struct {
+		name  string
+		props json.RawMessage
+	}{
+		{
+			name:  "$hashed false",
+			props: json.RawMessage(`{"SecretString":{"$value":"c5f7d4e8","$visibility":"Opaque","$strategy":"Update","$hashed":false}}`),
+		},
+		{
+			name:  "$hashed absent",
+			props: json.RawMessage(`{"SecretString":{"$value":"d6e8f5a9","$visibility":"Opaque","$strategy":"Update"}}`),
+		},
+		{
+			name:  "$hashed non-boolean string",
+			props: json.RawMessage(`{"SecretString":{"$value":"e7f9a6ba","$visibility":"Opaque","$strategy":"Update","$hashed":"true"}}`),
+		},
+		{
+			name:  "$hashed non-boolean number",
+			props: json.RawMessage(`{"SecretString":{"$value":"f8abb7cb","$visibility":"Opaque","$strategy":"Update","$hashed":1}}`),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			forma := &model.Forma{
+				Stacks:  []model.Stack{{Label: "default"}},
+				Targets: []model.Target{fakeawsTarget()},
+				Resources: []model.Resource{{
+					Label:      "my-secret",
+					Type:       "FakeAWS::SecretsManager::Secret",
+					Stack:      "default",
+					Target:     "aws",
+					Properties: tc.props,
+				}},
+			}
+			options := &schema.SerializeOptions{
+				Schema:         "pkl",
+				SchemaLocation: schema.SchemaLocationLocal,
+				LocalPluginDir: pluginDir,
+				Dependencies:   deps,
+			}
+			out, err := PKL{}.SerializeForma(forma, options)
+			require.NoError(t, err)
+			assert.NotContains(t, out, ".hashed", "strict boolean: %s must not emit .hashed", tc.name)
+			assert.NotContains(t, out, "// hashed secret value", "strict boolean: %s must not emit sentinel comment", tc.name)
+		})
+	}
+}
+
+// TestSerializeForma_HashedOpaque_CommentIsTrailingLineComment verifies the
+// placement-safety invariant: the sentinel is emitted only as a trailing line
+// comment (nothing follows it on its line), so it can never comment out a
+// sibling in a single-line construct such as `new Listing { … }`.
+func TestSerializeForma_HashedOpaque_CommentIsTrailingLineComment(t *testing.T) {
+	deps, pluginDir := fakeawsDeps(t)
+	hex := "a3f5b2c8d9e1f04712345678abcdef0123456789abcdef0123456789abcdef01"
+
+	forma := &model.Forma{
+		Stacks:  []model.Stack{{Label: "default"}},
+		Targets: []model.Target{fakeawsTarget()},
+		Resources: []model.Resource{{
+			Label:      "my-secret",
+			Type:       "FakeAWS::SecretsManager::Secret",
+			Stack:      "default",
+			Target:     "aws",
+			Properties: hashedOpaqueProps(t, hex),
+		}},
+	}
+	options := &schema.SerializeOptions{
+		Schema:         "pkl",
+		SchemaLocation: schema.SchemaLocationLocal,
+		LocalPluginDir: pluginDir,
+		Dependencies:   deps,
+	}
+
+	out, err := PKL{}.SerializeForma(forma, options)
+	require.NoError(t, err)
+
+	const sentinel = "// hashed secret value — cannot be applied as-is; re-supply the plaintext to set it"
+	found := false
+	for _, line := range strings.Split(out, "\n") {
+		idx := strings.Index(line, sentinel)
+		if idx < 0 {
+			continue
+		}
+		found = true
+		// Everything after the sentinel on this line must be blank — a trailing
+		// line comment, never mid-expression where it could swallow siblings.
+		assert.Empty(t, strings.TrimSpace(line[idx+len(sentinel):]),
+			"sentinel must be a trailing line comment; got trailing content on line: %q", line)
+	}
+	assert.True(t, found, "expected the sentinel comment somewhere in the output")
+}
+
+// TestSerializeForma_ResolvableNested_NoHashedEmitted verifies that a $res
+// resolvable renders as a live Resolvable reference and does not emit the
+// .hashed marker or the sentinel comment (resolvables are never hashed at rest).
+func TestSerializeForma_ResolvableNested_NoHashedEmitted(t *testing.T) {
+	deps, pluginDir := fakeawsDeps(t)
+
+	// A $res envelope referencing another resource's property.
+	props := json.RawMessage(`{"SecretString":{"$res":true,"$label":"other-secret","$type":"FakeAWS::SecretsManager::Secret","$stack":"default","$property":"SecretString","$value":"sha256hexdigest"}}`)
+
+	forma := &model.Forma{
+		Stacks:  []model.Stack{{Label: "default"}},
+		Targets: []model.Target{fakeawsTarget()},
+		Resources: []model.Resource{{
+			Label:      "my-secret",
+			Type:       "FakeAWS::SecretsManager::Secret",
+			Stack:      "default",
+			Target:     "aws",
+			Properties: props,
+		}},
+	}
+	options := &schema.SerializeOptions{
+		Schema:         "pkl",
+		SchemaLocation: schema.SchemaLocationLocal,
+		LocalPluginDir: pluginDir,
+		Dependencies:   deps,
+	}
+
+	out, err := PKL{}.SerializeForma(forma, options)
+	require.NoError(t, err)
+	// A resolvable renders as a live Resolvable type declaration, not as a formae.value().
+	assert.Contains(t, out, "SecretResolvable", "resolvable field must render as a Resolvable type, not a value")
+	// The .hashed marker must not appear for a resolvable-backed field.
+	assert.NotContains(t, out, ".hashed", "resolvable field must not emit the .hashed marker")
+	// The sentinel comment must not appear for a resolvable-backed field.
+	assert.NotContains(t, out, "// hashed secret value", "resolvable field must not emit the sentinel comment")
 }

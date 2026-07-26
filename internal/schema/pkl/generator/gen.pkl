@@ -140,6 +140,12 @@ hidden classHandlers: Mapping<Class, (List<reflect.Type>, Any) -> Any|Generation
     // For extraction, we just want the evaluated value - not the wrapper:
     // - setOnce: the expression has been evaluated, just use the result
     // - opaque: wrapping the hash again would double-hash it
+    //
+    // Note: the $hashed marker is not propagated here because Any-typed fields
+    // are never Opaque-hinted (FieldHint.Opaque is schema-driven and requires a
+    // SecretValue/opaque type). The agent only sets $hashed:true on fields with
+    // an Opaque FieldHint, so a stored $hashed:true value cannot appear under an
+    // Any-typed property in practice — leave this handler unchanged.
     if (value is Dynamic|Mapping)
       let (valueAsMap = value.toMap())
       if (valueAsMap.containsKey("$value") && valueAsMap.containsKey("$visibility") && valueAsMap.containsKey("$strategy"))
@@ -240,10 +246,12 @@ class FakeValue extends formae.Value {
   FakeValue: String = value
   FakeVisibility: String = visibility
   FakeStrategy: String = strategy
+  FakeHashed: Boolean = isHashed
 
   value = FakeValue
   visibility = FakeVisibility
   strategy = FakeStrategy
+  isHashed = FakeHashed
 }
 
 class FakeResolvable extends formae.Resolvable {
@@ -382,10 +390,13 @@ local function applyDynamicOrMapping(type: reflect.Class, value: Dynamic|Mapping
         let (fakeValue = valueAsMap.getOrNull("$value"))
         let (visibility = valueAsMap.getOrNull("$visibility"))
         let (strategy = valueAsMap.getOrNull("$strategy"))
+        // Treat as hashed only when $hashed is strictly the boolean true.
+        let (hashed = valueAsMap.getOrNull("$hashed") == true)
         new FakeValue {
             FakeValue = fakeValue
             FakeVisibility = visibility
             FakeStrategy = strategy
+            FakeHashed = hashed
         }
     else if (valueAsMap.containsKey("$embed") && valueAsMap.containsKey("$templateParts"))
         // $templateParts arrives as a Listing when parsed from JSON (the real
@@ -726,12 +737,17 @@ local function formatValueWithTypes(value: Any, indent: String): String =
           let (fakeValue = value.getOrNull("FakeValue"))
           let (visibility = value.getOrNull("FakeVisibility"))
           let (strategy = value.getOrNull("FakeStrategy"))
+          let (hashed = value.getOrNull("FakeHashed") == true)
           let (escapedValue = escapeString(fakeValue))
-          // Build fluent API: formae.value("...").opaque.setOnce
+          // Build fluent API: formae.value("...").opaque[.hashed][.setOnce]
           let (base = "formae.value(\"\(escapedValue)\")")
           let (withVisibility = if (visibility == "Opaque") base + ".opaque" else base)
-          let (withStrategy = if (strategy == "SetOnce") withVisibility + ".setOnce" else withVisibility)
-            withStrategy
+          let (withHashed = if (hashed) withVisibility + ".hashed" else withVisibility)
+          let (withStrategy = if (strategy == "SetOnce") withHashed + ".setOnce" else withHashed)
+          // Opaque hashed values carry a trailing comment so readers know
+          // the stored digest cannot be re-applied as plaintext.
+          let (withComment = if (hashed) withStrategy + " // hashed secret value — cannot be applied as-is; re-supply the plaintext to set it" else withStrategy)
+            withComment
         else if (typeName == "FakeEmbed")
           // Render as formae.embed("""...\(<resolvable-ref>)...""").
           // FakeParts is a List alternating String literals and $res maps.

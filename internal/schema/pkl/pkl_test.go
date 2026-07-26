@@ -7,12 +7,14 @@
 package pkl
 
 import (
+	"encoding/json"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	"github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -121,6 +123,39 @@ func TestPkl_FormaeValue(t *testing.T) {
 	assert.Equal(t, "Opaque", gjson.Get(jsonString, "Resources.0.Properties.SecretString.$visibility").String())
 	assert.Equal(t, "SetOnce", gjson.Get(jsonString, "Resources.1.Properties.SecretString.$strategy").String())
 	assert.Equal(t, props["secret"], gjson.Get(jsonString, "Resources.0.Properties.SecretString.$value").String())
+}
+
+func TestPkl_FormaeValue_Hashed(t *testing.T) {
+	props := map[string]string{
+		"name":        "test-secret",
+		"secret":      "l33ts3cr3t",
+		"description": "the test secret",
+	}
+
+	p := PKL{}
+	forma, err := p.Evaluate("./testdata/forma/value_test.pkl", model.CommandEval, model.FormaApplyModePatch, props)
+	require.NoError(t, err)
+
+	jsonString := forma.ToJSON()
+
+	// Resource index 2 uses .opaque.hashed — $hashed must be true.
+	hashedField := gjson.Get(jsonString, "Resources.2.Properties.SecretString.$hashed")
+	assert.True(t, hashedField.Bool(), "expected $hashed == true for .opaque.hashed value")
+
+	// A plain .opaque value (resource 0) must NOT carry $hashed at all.
+	plainHashedField := gjson.Get(jsonString, "Resources.0.Properties.SecretString.$hashed")
+	assert.False(t, plainHashedField.Exists(), "expected no $hashed key for plain .opaque value")
+
+	// A clear (non-opaque) value (resource 3) must never carry $hashed.
+	clearHashedField := gjson.Get(jsonString, "Resources.3.Properties.SecretString.$hashed")
+	assert.False(t, clearHashedField.Exists(), "expected no $hashed key for clear value")
+
+	// Round-trip guard: Properties of the hashed resource must be rejected by
+	// ConvertToPluginFormat, which refuses to write hashed values to the cloud.
+	hashedProps := gjson.Get(jsonString, "Resources.2.Properties").Raw
+	_, err = resolver.ConvertToPluginFormat(json.RawMessage(hashedProps))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "hashed")
 }
 
 func TestPkl_TFVarsIntegration(t *testing.T) {

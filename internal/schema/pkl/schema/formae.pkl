@@ -412,6 +412,7 @@ open class Value {
     hidden value: String
     hidden visibility: "Clear"|"Opaque" = "Clear"
     hidden strategy: "Update"|"SetOnce" = "Update"
+    hidden isHashed: Boolean = false
 
     hidden opaque: Value = (this) {
         visibility = "Opaque"
@@ -421,9 +422,17 @@ open class Value {
         strategy = "SetOnce"
     }
 
+    /// Marks the stored `$value` as a SHA-256 digest rather than plaintext.
+    /// The agent's plugin-boundary guard rejects hashed values from being
+    /// written to the cloud as literal field values.
+    hidden hashed: Value = (this) {
+        isHashed = true
+    }
+
     $value: String = value
     $visibility: String = visibility
     $strategy: String = strategy
+    $hashed: Boolean? = if (isHashed) true else null
 }
 
 /// A secret value. Typing a resource field `(String|formae.SecretValue)` (or
@@ -437,6 +446,10 @@ open class SecretValue extends Value {
 
     hidden setOnce: SecretValue = (this) {
         strategy = "SetOnce"
+    }
+
+    hidden hashed: SecretValue = (this) {
+        isHashed = true
     }
 }
 

@@ -224,6 +224,10 @@ func runExtractCore(a *app.App, opts *ExtractOptions) error {
 		fmt.Println(warnStyle.Render(schemaVersionNag(u)))
 	}
 
+	if res.HashedSecretCount > 0 {
+		fmt.Fprintf(os.Stderr, "warning: %d secret value(s) are stored hashed and cannot be re-applied without re-supplying the plaintext\n", res.HashedSecretCount)
+	}
+
 	// Build per-resource list from the forma that was extracted.
 	extracted := make([]extractedResource, 0, len(forma.Resources))
 	for _, r := range forma.Resources {

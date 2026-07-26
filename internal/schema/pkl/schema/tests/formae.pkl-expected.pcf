@@ -34,6 +34,7 @@ examples {
       $value = "secret-password"
       $visibility = "Clear"
       $strategy = "Update"
+      $hashed = null
     }
   }
   ["Opaque Value"] {
@@ -41,6 +42,7 @@ examples {
       $value = "secret-password"
       $visibility = "Opaque"
       $strategy = "Update"
+      $hashed = null
     }
   }
   ["SetOnce Value"] {
@@ -48,6 +50,7 @@ examples {
       $value = "secret-password"
       $visibility = "Clear"
       $strategy = "SetOnce"
+      $hashed = null
     }
   }
   ["Tag"] {

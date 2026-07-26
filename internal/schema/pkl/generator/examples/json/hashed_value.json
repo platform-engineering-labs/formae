@@ -1,0 +1,56 @@
+{
+  "Targets": [
+    {
+      "Label": "testprovider-target",
+      "Namespace": "TestProvider",
+      "Config": {
+        "Type": "TestProvider",
+        "Region": "us-east-1"
+      }
+    }
+  ],
+  "Stacks": [
+    {
+      "Label": "secret-stack",
+      "Description": "Stack with hashed opaque values"
+    }
+  ],
+  "Resources": [
+    {
+      "Label": "zone-hashed",
+      "Type": "TestProvider::DNS::Zone",
+      "Stack": "secret-stack",
+      "Target": "testprovider-target",
+      "Properties": {
+        "Name": {
+          "$value": "a3f5b2c8d9e1f04712345678abcdef0123456789abcdef0123456789abcdef01",
+          "$visibility": "Opaque",
+          "$strategy": "Update",
+          "$hashed": true
+        }
+      }
+    },
+    {
+      "Label": "zone-opaque-nohash",
+      "Type": "TestProvider::DNS::Zone",
+      "Stack": "secret-stack",
+      "Target": "testprovider-target",
+      "Properties": {
+        "Name": {
+          "$value": "b4e6c3d7e8f2a15823456789bcdef01234567890bcdef01234567890bcdef012",
+          "$visibility": "Opaque",
+          "$strategy": "Update"
+        }
+      }
+    },
+    {
+      "Label": "zone-clear-nohash",
+      "Type": "TestProvider::DNS::Zone",
+      "Stack": "secret-stack",
+      "Target": "testprovider-target",
+      "Properties": {
+        "Name": "example.com"
+      }
+    }
+  ]
+}
