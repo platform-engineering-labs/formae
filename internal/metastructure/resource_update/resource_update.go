@@ -541,6 +541,24 @@ func (m *propertyMerger) mergeObject(path string, userVal, pluginVal gjson.Resul
 		return
 	}
 
+	// Check if this is a $res object — a STRUCTURED resolvable reference in its
+	// pre-resolution shape ({"$res":true,"$label":..,"$type":..,"$stack":..,
+	// "$property":..[,"$value":..]}). This shape survives at rest on the
+	// non-translating paths (Synchronize/Discovery/Destroy/seed) where a user
+	// apply's $res->$ref rewrite never runs. Without this branch it would fall
+	// through to the generic recursive merge below, which walks the envelope's
+	// keys against the plugin's live value and OVERWRITES $value with plaintext —
+	// and because a $res envelope that points at another resource's Opaque
+	// property carries no schema-opaque field of its own, the persist transformer
+	// would never hash it, leaking the resolved secret in CLEARTEXT at rest.
+	// Handle it exactly like $ref: preserve the resolvable structure, refresh
+	// $value, and (when inherited-Opaque) drop the stale $hashed marker so the
+	// persist transformer re-hashes the field.
+	if userVal.Get("$res").Bool() {
+		m.mergeResObject(path, userVal, pluginVal)
+		return
+	}
+
 	// Check if this is a $embed object — preserve the user's envelope wholesale.
 	// The plugin value is always the assembled result of the template; we never
 	// let the plugin overwrite the user's $embed declaration.
@@ -607,6 +625,53 @@ func (m *propertyMerger) mergeRefObject(path string, userVal, pluginVal gjson.Re
 	}
 
 	*m.result, _ = sjson.SetRaw(*m.result, cleanPath, updatedRef)
+}
+
+// mergeResObject handles merging of $res objects (structured resolvable references
+// in their pre-resolution shape). It mirrors mergeRefObject: it preserves the user's
+// $res envelope wholesale and only refreshes $value from the plugin read.
+//
+// The plugin may echo the resolvable back either as a bare scalar (the resolved
+// live value) or as a $res/$value object; selectRefValue handles both (it already
+// unwraps $ref/$value objects, and a $res echo likewise carries the live value at
+// $value — normalized below).
+//
+// Opacity is INHERITED: a $res that resolves another resource's Opaque property is
+// itself opaque even though the consumer's own schema does not mark this field. When
+// the envelope carries the inherited $visibility:Opaque marker and we adopted the
+// plugin's fresh (plaintext) value, the stale $hashed marker must be dropped so the
+// persist transformer re-hashes the field at rest — exactly as mergeRefObject does
+// for $ref. Leaving $hashed:true would persist cleartext while claiming it is hashed
+// (a plaintext-at-rest leak that the transformer's idempotency guard would then skip).
+func (m *propertyMerger) mergeResObject(path string, userVal, pluginVal gjson.Result) {
+	cleanPath := m.cleanPath(path)
+
+	userValue := userVal.Get("$value")
+
+	// A plugin that round-trips the resolvable echoes it back as a $res/$value
+	// object; unwrap to its $value so we compare live-value-to-live-value.
+	effectivePluginVal := pluginVal
+	if pluginVal.IsObject() && (pluginVal.Get("$res").Exists() || pluginVal.Get("$ref").Exists()) {
+		effectivePluginVal = pluginVal.Get("$value")
+	}
+
+	valueToSet := m.preferNonNullValue(userValue, effectivePluginVal)
+	// Determine "did we keep the stored value?" against the SAME unwrapped value
+	// used for valueToSet. keptUserValue only unwraps $ref, so passing the raw
+	// pluginVal would treat a plugin's $res echo (a non-empty object) as a fresh
+	// value even when its $value is empty — deleting $hashed while the stored hash
+	// is retained, which makes the persist transformer hash the digest again
+	// (hash-of-hash). Use effectivePluginVal so the two decisions stay consistent.
+	keptUser := m.keptUserValue(userValue, effectivePluginVal)
+
+	updatedRes, _ := sjson.Set(userVal.Raw, "$value", valueToSet)
+
+	if userVal.Get("$visibility").String() == pkgmodel.VisibilityOpaque &&
+		userVal.Get("$hashed").Bool() && !keptUser {
+		updatedRes, _ = sjson.Delete(updatedRes, "$hashed")
+	}
+
+	*m.result, _ = sjson.SetRaw(*m.result, cleanPath, updatedRes)
 }
 
 // keptUserValue reports whether selectRefValue preserved the user's stored $value
