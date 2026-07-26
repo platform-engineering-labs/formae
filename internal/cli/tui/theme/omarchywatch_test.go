@@ -1,0 +1,221 @@
+//go:build unit
+
+// © 2025 Platform Engineering Labs Inc.
+//
+// SPDX-License-Identifier: FSL-1.1-ALv2
+
+package theme
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+// setupOmarchyHome builds a ~/.config/omarchy/current/theme -> themes/<name>
+// layout under a temp HOME and returns (home, root). This matches the
+// omarchyThemeDir() contract pinned by TestResolve_OmarchyRoutesToOmarchyResolver
+// (Phase A): "current" is a stable directory; "theme" is the symlink that
+// omarchy-theme-set atomically repoints.
+func setupOmarchyHome(t *testing.T, initial string) (string, string) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	root := filepath.Join(home, ".config", "omarchy")
+	themes := filepath.Join(root, "themes")
+	current := filepath.Join(root, "current")
+	if err := os.MkdirAll(filepath.Join(themes, initial), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(current, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeColors := func(name, accent string) {
+		body := "background=\"#000000\"\nforeground=\"#ffffff\"\naccent=\"" + accent + "\"\ncolor1=\"#ff0000\"\ncolor2=\"#00ff00\"\ncolor3=\"#ffff00\"\ncolor8=\"#888888\"\n"
+		if err := os.WriteFile(filepath.Join(themes, name, "colors.toml"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeColors(initial, "#111111")
+	// current/theme -> themes/<initial>
+	if err := os.Symlink(filepath.Join(themes, initial), filepath.Join(current, "theme")); err != nil {
+		t.Fatal(err)
+	}
+	return home, root
+}
+
+func drainOne(t *testing.T, w *OmarchyWatcher) *Theme {
+	t.Helper()
+	type res struct{ th *Theme }
+	ch := make(chan res, 1)
+	go func() {
+		msg := w.WaitCmd()()
+		at, _ := msg.(ApplyThemeMsg)
+		ch <- res{at.Theme}
+	}()
+	select {
+	case r := <-ch:
+		return r.th
+	case <-time.After(3 * time.Second):
+		t.Fatal("watcher did not fire within 3s")
+		return nil
+	}
+}
+
+func TestOmarchyWatcher_InPlaceEdit(t *testing.T) {
+	_, root := setupOmarchyHome(t, "alpha")
+	w, err := NewOmarchyWatcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	// Edit the live colors.toml in place (current/theme/colors.toml is the
+	// watched file; resolve the theme symlink to find its target directory).
+	target, _ := filepath.EvalSymlinks(filepath.Join(root, "current", "theme"))
+	if err := os.WriteFile(filepath.Join(target, "colors.toml"),
+		[]byte("background=\"#010203\"\nforeground=\"#ffffff\"\naccent=\"#abcdef\"\ncolor1=\"#ff0000\"\ncolor2=\"#00ff00\"\ncolor3=\"#ffff00\"\ncolor8=\"#888888\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	th := drainOne(t, w)
+	if th == nil || th.Name != "omarchy" {
+		t.Fatalf("expected an omarchy theme, got %+v", th)
+	}
+	if th.Palette.PrimaryAccent.Dark != "#abcdef" {
+		t.Errorf("PrimaryAccent.Dark = %q, want #abcdef after edit", th.Palette.PrimaryAccent.Dark)
+	}
+}
+
+// TestOmarchyWatcher_MalformedColorsFallsBackGracefully exercises the live
+// re-resolve path when colors.toml becomes malformed while the watcher is
+// running (e.g. the user is mid-edit, or omarchy-theme-set races a write).
+// It asserts the watcher degrades to the "quiet" fallback theme without
+// panicking, and that the fallback is reached via resolveOmarchy(..., o.warn)
+// rather than the package-global Resolve("omarchy") (which would write a
+// warning straight to stderr and could corrupt an open alt-screen TUI).
+func TestOmarchyWatcher_MalformedColorsFallsBackGracefully(t *testing.T) {
+	_, root := setupOmarchyHome(t, "alpha")
+	w, err := NewOmarchyWatcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	// Corrupt the live colors.toml in place (current/theme/colors.toml is the
+	// watched file; resolve the theme symlink to find its target directory).
+	target, _ := filepath.EvalSymlinks(filepath.Join(root, "current", "theme"))
+	if err := os.WriteFile(filepath.Join(target, "colors.toml"),
+		[]byte("this is not valid toml {{{"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	th := drainOne(t, w)
+	if th == nil || th.Name != "quiet" {
+		t.Fatalf("expected graceful fallback to the quiet theme, got %+v", th)
+	}
+}
+
+func TestOmarchyWatcher_SymlinkSwap(t *testing.T) {
+	_, root := setupOmarchyHome(t, "alpha")
+	// Add a second theme "beta" with a distinct accent.
+	themes := filepath.Join(root, "themes")
+	_ = os.MkdirAll(filepath.Join(themes, "beta"), 0o755)
+	_ = os.WriteFile(filepath.Join(themes, "beta", "colors.toml"),
+		[]byte("background=\"#000000\"\nforeground=\"#ffffff\"\naccent=\"#beef00\"\ncolor1=\"#ff0000\"\ncolor2=\"#00ff00\"\ncolor3=\"#ffff00\"\ncolor8=\"#888888\"\n"), 0o644)
+
+	w, err := NewOmarchyWatcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	// Atomic symlink swap: current/theme -> themes/beta (staged rename, like
+	// omarchy-theme-set).
+	tmp := filepath.Join(root, "current", "theme.tmp")
+	_ = os.Symlink(filepath.Join(themes, "beta"), tmp)
+	if err := os.Rename(tmp, filepath.Join(root, "current", "theme")); err != nil {
+		t.Fatal(err)
+	}
+	th := drainOne(t, w)
+	if th == nil || th.Palette.PrimaryAccent.Dark != "#beef00" {
+		t.Fatalf("after symlink swap, PrimaryAccent = %v, want #beef00", th)
+	}
+}
+
+// TestOmarchyWatcher_StaleTargetNotWatchedAfterSwap gates the fix for the
+// stale-watch leak: after a theme swap, arm() must Remove the watch on the
+// OLD resolved target directory, not just Add the new one. Otherwise the old
+// target's inotify watch lingers, leaking watch descriptors across swaps and
+// firing a spurious ApplyThemeMsg when a no-longer-current theme's
+// colors.toml is edited.
+func TestOmarchyWatcher_StaleTargetNotWatchedAfterSwap(t *testing.T) {
+	_, root := setupOmarchyHome(t, "alpha")
+	themes := filepath.Join(root, "themes")
+	_ = os.MkdirAll(filepath.Join(themes, "beta"), 0o755)
+	_ = os.WriteFile(filepath.Join(themes, "beta", "colors.toml"),
+		[]byte("background=\"#000000\"\nforeground=\"#ffffff\"\naccent=\"#beef00\"\ncolor1=\"#ff0000\"\ncolor2=\"#00ff00\"\ncolor3=\"#ffff00\"\ncolor8=\"#888888\"\n"), 0o644)
+
+	w, err := NewOmarchyWatcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	alphaTarget, _ := filepath.EvalSymlinks(filepath.Join(root, "current", "theme"))
+
+	// Atomic symlink swap: current/theme -> themes/beta. Drain the resulting
+	// event (this also re-arms the watcher, which is where the fix churns
+	// the resolved-target watch). The staging symlink is created in "themes"
+	// (unwatched), not "current" (watched): creating it inside "current"
+	// would itself fire a spurious CREATE event on "current" ahead of the
+	// real rename, leaving an extra queued event that would confuse the
+	// single-event drain below.
+	tmp := filepath.Join(themes, "theme.tmp")
+	_ = os.Symlink(filepath.Join(themes, "beta"), tmp)
+	if err := os.Rename(tmp, filepath.Join(root, "current", "theme")); err != nil {
+		t.Fatal(err)
+	}
+	if th := drainOne(t, w); th == nil || th.Palette.PrimaryAccent.Dark != "#beef00" {
+		t.Fatalf("after swap, PrimaryAccent = %v, want #beef00", th)
+	}
+
+	// Arm the next wait, then edit the OLD (alpha) target's colors.toml. If
+	// the stale watch on alpha's directory was not removed on swap, this
+	// fires a spurious ApplyThemeMsg carrying alpha's (stale) content.
+	type res struct{ th *Theme }
+	ch := make(chan res, 1)
+	go func() {
+		msg := w.WaitCmd()()
+		at, _ := msg.(ApplyThemeMsg)
+		ch <- res{at.Theme}
+	}()
+
+	if err := os.WriteFile(filepath.Join(alphaTarget, "colors.toml"),
+		[]byte("background=\"#000000\"\nforeground=\"#ffffff\"\naccent=\"#ffffff\"\ncolor1=\"#ff0000\"\ncolor2=\"#00ff00\"\ncolor3=\"#ffff00\"\ncolor8=\"#888888\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case r := <-ch:
+		t.Fatalf("spurious ApplyThemeMsg fired from an edit to the stale (no-longer-current) alpha target; got accent %v; old target watch was not removed on swap", r.th)
+	case <-time.After(800 * time.Millisecond):
+		// Expected: no event from the stale target.
+	}
+
+	// Prove the watch is still live and correctly re-pointed: editing the
+	// CURRENT (beta) target's colors.toml does fire, and reflects beta's
+	// fresh content.
+	if err := os.WriteFile(filepath.Join(themes, "beta", "colors.toml"),
+		[]byte("background=\"#000000\"\nforeground=\"#ffffff\"\naccent=\"#c0ffee\"\ncolor1=\"#ff0000\"\ncolor2=\"#00ff00\"\ncolor3=\"#ffff00\"\ncolor8=\"#888888\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case r := <-ch:
+		if r.th == nil || r.th.Palette.PrimaryAccent.Dark != "#c0ffee" {
+			t.Fatalf("after editing beta target, PrimaryAccent = %v, want #c0ffee", r.th)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("watcher did not fire for beta edit within 3s")
+	}
+}

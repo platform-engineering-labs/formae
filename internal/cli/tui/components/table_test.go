@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 
@@ -129,4 +130,39 @@ func TestVisibleColumnIndexes_NarrowDropsLowPriority(t *testing.T) {
 	got := tbl.VisibleColumnIndexes()
 	// Only Priority 0 column (Label at index 0) should remain.
 	assert.Equal(t, []int{0}, got)
+}
+
+// TestTable_SetThemeRebuildsHeaderAndCellStyles gates the PLA-348 fix for a
+// live theme swap (the Omarchy watcher firing theme.ApplyThemeMsg): Table
+// bakes header/cell/selected-row styles into the wrapped bubbles/table.Model
+// once, at NewTable time (see NewTable), and every subsequent View() reuses
+// those baked styles verbatim — a bare struct-field swap of a *theme.Theme
+// held elsewhere never touches them. SetTheme must rebuild the baked styles
+// from the new theme while preserving all other state (rows, sort, cursor).
+//
+// quiet and rich share identical neutral/border/selection colors by design
+// (only accents/status colors differ), so this test builds a synthetic
+// re-themed copy with different neutrals — the same shape of change the
+// Omarchy live-follow watcher produces when the OS palette changes.
+func TestTable_SetThemeRebuildsHeaderAndCellStyles(t *testing.T) {
+	base := theme.New("quiet")
+	tbl := NewTable(base, testColumns())
+	tbl = tbl.SetRows(testRows()).SetSize(80, 10)
+	before := tbl.View()
+
+	retheme := *base
+	retheme.Palette.TextSecondary = lipgloss.AdaptiveColor{Light: "#FF00FF", Dark: "#FF00FF"}
+	retheme.Palette.TextPrimary = lipgloss.AdaptiveColor{Light: "#00FFFF", Dark: "#00FFFF"}
+	retheme.Palette.Border = lipgloss.AdaptiveColor{Light: "#00FF00", Dark: "#00FF00"}
+	retheme.Styles = theme.NewStyles(retheme.Palette)
+
+	tbl = tbl.SetTheme(&retheme)
+	after := tbl.View()
+
+	assert.NotEqual(t, before, after,
+		"header/cell styling must be rebuilt from the new theme, not left stale")
+	// State survives the swap: same rows, same cursor — this is a re-theme,
+	// not a reconstruction (which is why SetTheme exists instead of NewTable).
+	assert.Equal(t, testRows()[0], tbl.SelectedRow())
+	assert.Equal(t, 0, tbl.Cursor())
 }

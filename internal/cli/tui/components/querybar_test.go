@@ -9,6 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 )
@@ -74,4 +75,42 @@ func TestQueryBar_ViewStates(t *testing.T) {
 	assert.Contains(t, v, "█")
 	assert.Contains(t, v, "enter: apply")
 	assert.Contains(t, v, "esc: cancel")
+}
+
+// TestQueryBar_WithThemePreservesEditingState gates the PLA-348 fix for a
+// live theme swap (e.g. the Omarchy watcher's async ApplyThemeMsg) arriving
+// while the user is mid-edit. Before the fix, Model.ApplyTheme rebuilt the
+// bar via NewQueryBar(t, q.Query()), which only carries over the applied
+// query and zero-values focused/edit — silently un-focusing the bar and
+// discarding the in-progress edit buffer. WithTheme must swap only the theme
+// field and leave focus/edit/applied untouched.
+func TestQueryBar_WithThemePreservesEditingState(t *testing.T) {
+	q := NewQueryBar(theme.New("quiet"), "state:InProgress")
+	q = q.Focus()
+	q, applied := q.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	require.False(t, applied)
+	require.True(t, q.Focused(), "precondition: bar is focused mid-edit")
+
+	themed := q.WithTheme(theme.New("rich"))
+
+	assert.True(t, themed.Focused(), "WithTheme must not steal focus mid-edit")
+	assert.Equal(t, "state:InProgress", themed.Query(), "WithTheme must not touch the applied query")
+
+	v := themed.View(80)
+	assert.Contains(t, v, "x", "in-progress edit buffer must survive WithTheme")
+	assert.Contains(t, v, "█", "still rendering in edit mode after WithTheme")
+
+	// Finish the edit to prove the buffer (not just focus) really survived.
+	themed, applied = themed.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	assert.True(t, applied)
+	assert.Equal(t, "state:InProgressx", themed.Query(), "edit buffer content survived WithTheme and applied correctly")
+}
+
+// TestQueryBar_WithThemePreservesUnfocusedState checks the simpler case: an
+// applied-but-not-editing bar keeps its applied query across WithTheme too.
+func TestQueryBar_WithThemePreservesUnfocusedState(t *testing.T) {
+	q := NewQueryBar(theme.New("quiet"), "state:Failed")
+	themed := q.WithTheme(theme.New("rich"))
+	assert.False(t, themed.Focused())
+	assert.Equal(t, "state:Failed", themed.Query())
 }

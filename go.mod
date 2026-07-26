@@ -39,6 +39,7 @@ require (
 	github.com/demula/mksuid/v2 v2.0.1
 	github.com/exaring/otelpgx v0.9.4
 	github.com/fatih/color v1.18.0
+	github.com/fsnotify/fsnotify v1.7.0
 	github.com/goccy/go-json v0.10.5
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.7.6

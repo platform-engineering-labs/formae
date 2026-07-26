@@ -33,6 +33,7 @@ type Model struct {
 	width     int
 	height    int
 	spinner   spinner.Model
+	watcher   *theme.OmarchyWatcher
 	nags      []string
 	nagSeen   map[string]struct{}
 	statsSent bool
@@ -63,7 +64,7 @@ func New(th *theme.Theme, client Client, opts Options) Model {
 	// applied query and the shared query bar with it so it is threaded to the
 	// fetch and shown in the bar, mirroring the status-command TUI.
 	tabs[opts.FocusTab].query = opts.Query
-	return Model{
+	model := Model{
 		th:      th,
 		keys:    tui.DefaultKeyMap(),
 		client:  client,
@@ -74,6 +75,47 @@ func New(th *theme.Theme, client Client, opts Options) Model {
 		spinner: components.NewSpinner(th),
 		nagSeen: make(map[string]struct{}),
 		query:   components.NewQueryBar(th, opts.Query),
+	}
+	if th.Name == "omarchy" {
+		if w, err := theme.NewOmarchyWatcher(); err == nil {
+			model.watcher = w
+		}
+	}
+	return model
+}
+
+// ApplyTheme swaps the model (and its per-tab caches) onto a new theme: it
+// threads the theme into every tab, rebuilds each tab's themed table styling
+// (components.Table bakes header/cell/selected-row styles in at construction
+// time — see Table.SetTheme) and cached per-cell styled replacements
+// (tabModel.styledCells, rebuilt via sync — see tab.go), re-themes the query
+// bar in place (WithTheme preserves any in-progress edit/focus state), and
+// rebuilds the stateful spinner.
+func (m Model) ApplyTheme(t *theme.Theme) Model {
+	m.th = t
+	for i := range m.tabs {
+		m.tabs[i].th = t
+		m.tabs[i].table = m.tabs[i].table.SetTheme(t)
+		m.tabs[i] = m.tabs[i].sync(m.opts.MaxRows)
+	}
+	m.query = m.query.WithTheme(t)
+	m.spinner = components.NewSpinner(t)
+	if m.detailOpen {
+		// The detail screen (if open) has its colorized content baked into
+		// m.detailViewport once, at openDetail time (see openDetail below) —
+		// it is not re-derived from m.th on every View(). Rebuild it now so a
+		// live theme change (e.g. the Omarchy watcher) recolors the screen
+		// the user is actually looking at instead of leaving it stale until
+		// the next esc/enter round-trip.
+		m.detailViewport = m.refreshDetailContent()
+	}
+	return m
+}
+
+// closeWatcher releases the Omarchy live-follow watcher, if one is running.
+func (m Model) closeWatcher() {
+	if m.watcher != nil {
+		_ = m.watcher.Close()
 	}
 }
 
@@ -94,10 +136,14 @@ func (m Model) Nags() []string {
 // tabLoading transition happens in Update when the first fetch fires.
 func (m Model) Init() tea.Cmd {
 	// The focus tab's query was seeded from opts.Query in New (D3).
-	return tea.Batch(
+	cmds := []tea.Cmd{
 		m.spinner.Tick,
 		fetchCmd(m.client, m.specs, m.active, m.tabs[m.active].query, false),
-	)
+	}
+	if m.watcher != nil {
+		cmds = append(cmds, m.watcher.WaitCmd())
+	}
+	return tea.Batch(cmds...)
 }
 
 // Update handles all incoming messages and key events.
@@ -134,6 +180,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tabLoadedMsg:
 		return m.handleTabLoaded(msg)
+
+	case theme.ApplyThemeMsg:
+		m = m.ApplyTheme(msg.Theme)
+		cmds := []tea.Cmd{m.spinner.Tick} // restart the tick at the new interval
+		if m.watcher != nil {
+			cmds = append(cmds, m.watcher.WaitCmd()) // re-arm the watch
+		}
+		return m, tea.Batch(cmds...)
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
@@ -178,6 +232,7 @@ func (m Model) handleTabLoaded(msg tabLoadedMsg) (tea.Model, tea.Cmd) {
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// ctrl+c always quits, even over the help overlay.
 	if msg.Type == tea.KeyCtrlC {
+		m.closeWatcher()
 		return m, tea.Quit
 	}
 
@@ -202,14 +257,17 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch {
 	case msg.Type == tea.KeyCtrlC:
+		m.closeWatcher()
 		return m, tea.Quit
 
 	case key.Matches(msg, m.keys.Quit):
+		m.closeWatcher()
 		return m, tea.Quit
 
 	// The inventory list is the top level, so esc quits (in the detail screen
 	// esc goes back to the list). Consistent with the other TUIs.
 	case msg.Type == tea.KeyEsc:
+		m.closeWatcher()
 		return m, tea.Quit
 
 	case msg.Type == tea.KeyTab:
@@ -314,17 +372,38 @@ func (m Model) openDetail() (tea.Model, tea.Cmd) {
 	if vpH < 1 {
 		vpH = 1
 	}
-	vp := viewport.New(m.width, vpH)
+	m.detailViewport = viewport.New(m.width, vpH)
+	m.detailViewport = m.refreshDetailContent()
+	m.detailOpen = true
+	return m, nil
+}
+
+// refreshDetailContent rebuilds the detail viewport's content from the
+// retained plain m.detailBody, recolorized for the CURRENT theme (m.th). It
+// is the single place that turns the plain body into the indented, colorized
+// string the viewport displays — used both by openDetail (first render) and
+// by ApplyTheme (recoloring an already-open detail screen after a live theme
+// change, see ApplyTheme above).
+//
+// It reuses the existing m.detailViewport (rather than constructing a new
+// one) so width/height and, importantly, YOffset carry over unchanged:
+// viewport.SetContent only clamps YOffset if it now exceeds the new
+// content's line count, it never resets it to zero — so a recolorize never
+// jumps the user back to the top of a scrolled detail body.
+func (m Model) refreshDetailContent() viewport.Model {
+	contentWidth := m.width - detailIndent
+	if contentWidth < 1 {
+		contentWidth = 1
+	}
 	// Build content: indent 2 spaces, truncate to the content width, then colorize.
 	indent := strings.Repeat(" ", detailIndent)
 	contentLines := make([]string, len(m.detailBody))
 	for i, line := range m.detailBody {
 		contentLines[i] = indent + colorizeDetailLine(m.th, components.Truncate(line, contentWidth))
 	}
+	vp := m.detailViewport
 	vp.SetContent(strings.Join(contentLines, "\n"))
-	m.detailViewport = vp
-	m.detailOpen = true
-	return m, nil
+	return vp
 }
 
 // handleDetailKey handles key events while the detail screen is open.
@@ -336,6 +415,7 @@ func (m Model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 'q':
 		// q quits from the detail screen too (esc goes back to the list).
+		m.closeWatcher()
 		return m, tea.Quit
 
 	case msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == '?':
@@ -366,6 +446,7 @@ func (m Model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // client-side substring filter. Mirrors the status-command TUI.
 func (m Model) handleQueryKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.Type == tea.KeyCtrlC {
+		m.closeWatcher()
 		return m, tea.Quit
 	}
 	var applied bool

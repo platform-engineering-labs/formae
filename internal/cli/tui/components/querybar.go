@@ -41,6 +41,16 @@ func (q QueryBar) Focus() QueryBar {
 	return q
 }
 
+// WithTheme returns a copy of q with only the theme swapped, preserving all
+// other state (applied query, in-progress edit buffer, focus). Use this for
+// a live theme change (e.g. the Omarchy watcher firing an async
+// ApplyThemeMsg) instead of rebuilding via NewQueryBar, which would silently
+// drop a mid-edit buffer and steal focus from the user.
+func (q QueryBar) WithTheme(th *theme.Theme) QueryBar {
+	q.th = th
+	return q
+}
+
 // Focused reports whether the bar is in edit mode.
 func (q QueryBar) Focused() bool { return q.focused }
 

@@ -74,6 +74,25 @@ func NewTable(th *theme.Theme, cols []Column) Table {
 	return Table{inner: inner, cols: cols, width: 80, sortCol: -1}
 }
 
+// SetTheme returns a copy of t with the header/cell/selected-row styles
+// rebuilt from th, preserving all other state (rows, columns, width, sort
+// order, cursor). Use this for a live theme change (e.g. the Omarchy watcher
+// firing an async ApplyThemeMsg) instead of NewTable, which would drop rows,
+// sort state, and cursor position.
+func (t Table) SetTheme(th *theme.Theme) Table {
+	p := th.Palette
+
+	styles := table.DefaultStyles()
+	styles.Header = th.Styles.TableHeader
+	styles.Cell = th.Styles.TableRow
+	styles.Selected = lipgloss.NewStyle().
+		Foreground(p.TextPrimary).
+		Background(p.Selection)
+
+	t.inner.SetStyles(styles)
+	return t
+}
+
 // SetRows replaces the table data. Each row must carry the full column set,
 // including values for currently hidden columns.
 func (t Table) SetRows(rows [][]string) Table {
