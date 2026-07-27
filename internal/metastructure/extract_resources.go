@@ -76,11 +76,10 @@ func (m *Metastructure) ExtractResources(query string) (*pkgmodel.Forma, error) 
 			if stack != nil {
 				forma.Stacks = append(forma.Stacks, *stack)
 			} else {
-				// Stack not found in datastore (e.g. $unmanaged): synthesize a minimal
-				// entry with no description. Description is optional, and leaving it
-				// empty means adopting these resources into an existing stack won't
-				// overwrite a description the user already set (the stack-update
-				// generator treats an empty incoming description as "unset").
+				// Stack not found in datastore (e.g. $unmanaged): synthesize a
+				// minimal entry with no description. Description is optional, so we
+				// no longer emit a placeholder ("Resources imported with formae
+				// extract") that the user would then have to strip by hand.
 				forma.Stacks = append(forma.Stacks, pkgmodel.Stack{Label: label})
 			}
 		}

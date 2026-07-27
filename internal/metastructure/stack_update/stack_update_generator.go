@@ -72,13 +72,13 @@ func (sg *StackUpdateGenerator) determineStackUpdate(stack pkgmodel.Stack) (Stac
 		// Generate ID upfront for new stacks so it's available throughout the flow
 		stack.ID = util.NewID()
 	} else {
-		// An incoming stack with no description (e.g. an extracted, adopted stack
-		// whose synthesized stack block carries no description) must not overwrite
-		// a description the user already set. Treat empty as "unset" and keep the
-		// stored description.
-		if stack.Description == "" {
-			stack.Description = existing.Description
-		}
+		// Reconcile is exact: the incoming stack is the source of truth, so an
+		// empty description clears any stored one (and, conversely, an empty
+		// description that matches an already-empty stored one is a no-op below).
+		// We don't special-case empty as "preserve" — that would make it
+		// impossible to clear a description and would leave reality diverging
+		// from the declared file.
+		//
 		// Check if there's any change
 		if existing.Description == stack.Description {
 			return StackUpdate{}, false, nil

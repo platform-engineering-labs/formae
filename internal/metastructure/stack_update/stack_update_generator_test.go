@@ -124,7 +124,7 @@ func TestGenerateStackUpdates_NoChange_DescriptionSame(t *testing.T) {
 	assert.Empty(t, updates) // No updates should be generated
 }
 
-func TestGenerateStackUpdates_EmptyDescription_PreservesExisting(t *testing.T) {
+func TestGenerateStackUpdates_EmptyDescription_ClearsExisting(t *testing.T) {
 	existing := &pkgmodel.Stack{
 		ID:          "existing-id",
 		Label:       "lifeline",
@@ -135,8 +135,9 @@ func TestGenerateStackUpdates_EmptyDescription_PreservesExisting(t *testing.T) {
 	}
 	generator := NewStackUpdateGenerator(mockDS)
 
-	// An extracted, adopted stack carries no description; applying it must not
-	// overwrite the description the user already set on the existing stack.
+	// Reconcile is exact: a stack applied with no description clears the stored
+	// one. Empty is not treated as "preserve" — otherwise a description could
+	// never be cleared and reality would diverge from the declared file.
 	stacks := []pkgmodel.Stack{
 		{Label: "lifeline", Description: ""},
 	}
@@ -144,7 +145,10 @@ func TestGenerateStackUpdates_EmptyDescription_PreservesExisting(t *testing.T) {
 	updates, err := generator.GenerateStackUpdates(stacks, pkgmodel.CommandApply)
 
 	require.NoError(t, err)
-	assert.Empty(t, updates, "an empty incoming description must not overwrite the existing one")
+	require.Len(t, updates, 1, "clearing a description is a real change")
+	assert.Equal(t, StackOperationUpdate, updates[0].Operation)
+	assert.Empty(t, updates[0].Stack.Description, "the description must be cleared to match the file")
+	assert.Equal(t, "existing-id", updates[0].Stack.ID, "must reuse the existing stack ID")
 }
 
 func TestGenerateStackUpdates_DatastoreError(t *testing.T) {
