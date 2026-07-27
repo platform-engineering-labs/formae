@@ -541,6 +541,14 @@ func footerHints() []components.KeyHint {
 	}
 }
 
+// simulateFooterHints returns the key hints for the simulate-only footer. Unlike
+// the confirm case (where the attention bar itself shows "n to abort"), simulate
+// mode has no y/n prompt, so the footer must advertise how to leave — hence the
+// explicit "q: quit".
+func simulateFooterHints() []components.KeyHint {
+	return append(footerHints(), components.KeyHint{Key: "q", Desc: "quit"})
+}
+
 // ackFooterHints returns key hints for the ack screen.
 func ackFooterHints() []components.KeyHint {
 	return []components.KeyHint{
@@ -559,7 +567,7 @@ func (m Model) renderFooter() string {
 		// "simulation only" notice catches the eye instead of hiding as a subtle
 		// line in the footer, and keep the standard nav key hints below it (the
 		// simulate footer previously showed none).
-		return m.renderSimulateBar() + "\n" + components.FooterBar(m.th, m.width, footerHints(), "")
+		return m.renderSimulateBar() + "\n" + components.FooterBar(m.th, m.width, simulateFooterHints(), "")
 	}
 
 	// A confirm is required: draw a prominent, full-width confirm bar (attention

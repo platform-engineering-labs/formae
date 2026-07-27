@@ -487,6 +487,8 @@ func TestSimView_SimulateNoticeBarAndHints(t *testing.T) {
 	// The nav key hints must be present in simulate mode (the help bar was empty before).
 	assert.Contains(t, out, "sort", "footer key hints must appear in simulate mode")
 	assert.Contains(t, out, "expand", "footer key hints must appear in simulate mode")
+	// Simulate mode has no y/n prompt, so the footer must advertise how to leave.
+	assert.Contains(t, out, "quit", "simulate footer must show a quit hint")
 }
 
 // TestSimView_SimulateOnlyIgnoresY verifies that y does NOT quit when SimulateOnly=true,

@@ -286,15 +286,20 @@ func runCancelInteractive(a *app.App, opts *CancelOptions) error {
 	}
 	sort.Strings(abandonedKsuids)
 
+	// A force cancel abandons in-progress work and can orphan resources, so always
+	// print the abandoned-resource cleanup warning to scrollback here. The watch
+	// TUI only surfaces AbandonedResources in its detail view and can auto-exit
+	// from the list before the user ever opens it, so the TUI is not a reliable
+	// place for this safety warning.
+	if opts.Force {
+		renderForceCanceledResources(th, merged, activeCmds)
+	}
+
 	// The watch TUI needs an interactive stdin to drive it. When stdout is a TTY
-	// but stdin is not (e.g. `formae cancel --force --yes </dev/null`), stay
-	// fire-and-forget. The cancels are already submitted and the summary prints
-	// how to follow progress via `formae status`; a force cancel still needs its
-	// abandoned-resource warning, which the watch TUI would otherwise surface.
+	// but stdin is not (e.g. `formae cancel --yes </dev/null`), stay
+	// fire-and-forget: the cancels are already submitted and the summary prints
+	// how to follow progress via `formae status`.
 	if !isInteractive() {
-		if opts.Force {
-			renderForceCanceledResources(th, merged, activeCmds)
-		}
 		return nil
 	}
 
