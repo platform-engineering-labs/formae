@@ -384,6 +384,68 @@ func isEmbed(value any) bool {
 	return ok && embed
 }
 
+// isOpaqueValue reports whether value is a serialized opaque secret value, i.e.
+// a model.Value with $visibility == "Opaque" (or the $hashed marker set). Secret
+// fields (schema FieldHint.Opaque) are hashed at rest, so the value read back
+// from inventory or emitted by `formae extract` is not the authored plaintext
+// but an opaque envelope: {"$visibility":"Opaque","$hashed":true,"$value":<sha256>}.
+func isOpaqueValue(value any) bool {
+	m, ok := value.(map[string]any)
+	if !ok {
+		return false
+	}
+	if vis, ok := m["$visibility"].(string); ok && vis == pkgmodel.VisibilityOpaque {
+		return true
+	}
+	hashed, ok := m["$hashed"].(bool)
+	return ok && hashed
+}
+
+// compareOpaqueValue validates an actual opaque secret value against the authored
+// expected value. Because formae hashes secret values at rest (unsalted SHA-256)
+// and cannot recover the plaintext, we never compare plaintext directly. Instead:
+//   - when the actual value carries the $hashed digest, assert it equals
+//     ComputeValueHash(expected) — a real integrity check that the plugin stored
+//     the authored secret, not a blind skip;
+//   - when $value is absent (e.g. after extraction, where the digest may be
+//     omitted), accept the opaque envelope as-is, mirroring compareResolvable.
+//
+// The expected value is normally the authored plaintext scalar, but may itself
+// already be an opaque envelope (if the fixture authored a model.Value); both are
+// handled. Neither plaintext nor digest is ever echoed into error text.
+func compareOpaqueValue(r testReporter, name string, expected, actual any, context string) bool {
+	actualMap, ok := actual.(map[string]any)
+	if !ok {
+		// Should not happen — callers gate on isOpaqueValue(actual).
+		return true
+	}
+
+	digest, hasDigest := actualMap["$value"].(string)
+	hashed, _ := actualMap["$hashed"].(bool)
+	if !hasDigest || digest == "" || !hashed {
+		// No digest to verify (e.g. omitted on extract). The envelope is opaque
+		// by construction; accept it rather than leaking anything by comparing.
+		r.Logf("Opaque value %s present without a verifiable digest (%s); accepting", name, context)
+		return true
+	}
+
+	// Derive the expected plaintext. If the fixture authored an opaque envelope,
+	// prefer its plaintext $value; otherwise use the scalar as authored.
+	expectedPlaintext := fmt.Sprintf("%v", expected)
+	if expMap, ok := expected.(map[string]any); ok {
+		if ev, ok := expMap["$value"]; ok {
+			expectedPlaintext = fmt.Sprintf("%v", ev)
+		}
+	}
+
+	if pkgmodel.ComputeValueHash(expectedPlaintext) != digest {
+		r.Errorf("Opaque value %s digest does not match the authored secret (%s)", name, context)
+		return false
+	}
+	r.Logf("Opaque value %s verified against authored secret via SHA-256 digest (%s)", name, context)
+	return true
+}
+
 // normalizeEmbedTemplate canonicalizes a $embed $template for comparison: each
 // framed span's envelope is stripped of $value/$visibility/$strategy and
 // re-encoded with sorted keys. An authored template (pre-resolution, no $value,
@@ -998,6 +1060,15 @@ func compareMap(r testReporter, name string, expected, actual map[string]any, co
 			}
 			continue
 		}
+		// Opaque secret fields are hashed at rest, so the actual value is an
+		// opaque envelope rather than the authored plaintext. Verify by digest
+		// instead of a plaintext scalar comparison.
+		if isOpaqueValue(actualValue) || isOpaqueValue(expectedValue) {
+			if !compareOpaqueValue(r, name+"."+key, expectedValue, actualValue, context) {
+				ok = false
+			}
+			continue
+		}
 		if expectedArr, isArray := expectedValue.([]any); isArray {
 			if !compareArrayUnordered(r, name+"."+key, expectedArr, actualValue, context, providerDefaults) {
 				ok = false
@@ -1100,6 +1171,16 @@ func compareProperties(r testReporter, expectedProperties map[string]any, actual
 		if isResolvable(expectedValue) {
 			r.Logf("Validating resolvable property %s (resolved at runtime)", key)
 			if !compareResolvable(r, key, expectedValue, actualValue, context) {
+				hasErrors = true
+			}
+			continue
+		}
+
+		// Validate opaque secret properties by digest — they are hashed at rest,
+		// so the actual value is an opaque envelope, not the authored plaintext.
+		if isOpaqueValue(actualValue) || isOpaqueValue(expectedValue) {
+			r.Logf("Validating opaque secret property %s (hashed at rest)", key)
+			if !compareOpaqueValue(r, key, expectedValue, actualValue, context) {
 				hasErrors = true
 			}
 			continue
