@@ -296,12 +296,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.sortCol[rk] = hi
 				m.sortDir[rk] = components.SortAsc
 			}
+			// Capture the selected row before re-sorting so the cursor can follow it
+			// instead of snapping to the top of the list (the first target row).
+			var selKey string
+			if m.cursor >= 0 && m.cursor < len(nav) && nav[m.cursor].kind == navRow {
+				selKey = nav[m.cursor].rowKey
+			}
 			g := m.groupForKind(rk)
 			if g != nil {
 				sortRows(g.rows, modelColToDataCol(m.sortCol[rk]), m.sortDir[rk])
 			}
-			m.visible[rk] = 10
+			// Re-find the previously-selected row in the re-sorted list; fall back to
+			// the top only if it can no longer be found.
 			m.cursor = 0
+			if selKey != "" {
+				for i, ln := range m.navLines() {
+					if ln.kind == navRow && ln.rowKey == selKey {
+						m.cursor = i
+						break
+					}
+				}
+			}
 
 		case key.Matches(msg, m.keys.Enter) || msg.Type == tea.KeySpace:
 			if m.cursor >= 0 && m.cursor < total {
