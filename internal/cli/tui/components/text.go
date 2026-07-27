@@ -42,6 +42,21 @@ func Pad(s string, w int) string {
 	return s + strings.Repeat(" ", w-n)
 }
 
+// PadCenter centers PLAIN (unstyled) s within w display cells (rune count),
+// splitting the padding across both sides (extra cell goes on the right).
+// Truncates like Pad when s is already at least w wide. Plain text only — never
+// pass ANSI-styled strings.
+func PadCenter(s string, w int) string {
+	n := utf8.RuneCountInString(s)
+	if n >= w {
+		runes := []rune(s)
+		return string(runes[:w])
+	}
+	left := (w - n) / 2
+	right := w - n - left
+	return strings.Repeat(" ", left) + s + strings.Repeat(" ", right)
+}
+
 // Truncate cuts PLAIN (unstyled) s to at most w runes, appending … when the
 // string is cut. w must be >= 1. This function operates on plain text only;
 // never pass ANSI-styled strings — escape codes are counted as runes and will
