@@ -42,9 +42,10 @@ func TestInventoryHeader_RichThreeState(t *testing.T) {
 	if hdr == "" {
 		t.Fatal("could not find the column-header line")
 	}
-	const richBlue = "38;2;96;165;250" // rich PrimaryAccent — the sorted column
+	const richBlue = "38;2;96;165;250"   // rich PrimaryAccent — the sorted (active) column
+	const richOrange = "38;2;255;133;51" // rich SecondaryAccent — the navigated (pending) column
 	assert.Contains(t, hdr, richBlue, "rich sorted-column header must be accent blue")
-	assert.Contains(t, hdr, "48;2;", "rich navigated-column header must carry a background band")
+	assert.Contains(t, hdr, richOrange, "rich navigated-column header must carry the SecondaryAccent highlight colour")
 }
 
 // TestInventoryHeader_QuietBrighten confirms the brighten path (quiet) uses no
