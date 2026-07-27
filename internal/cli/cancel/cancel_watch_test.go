@@ -161,6 +161,9 @@ func TestCancelWatch_Multi_LaunchCancelWatchOptions(t *testing.T) {
 	assert.True(t, capturedOpts.ExitWhenDone)
 	assert.Contains(t, capturedOpts.Query, "id:cmd-alpha")
 	assert.Contains(t, capturedOpts.Query, "id:cmd-beta")
+	// MaxResults must cover every canceled command so the watch doesn't stop at
+	// the default page size (10) and auto-exit while later commands still run.
+	assert.Equal(t, 2, capturedOpts.MaxResults, "multi: MaxResults must cover all canceled commands")
 
 	sort.Strings(capturedOpts.AbandonedResources)
 	assert.Equal(t, []string{"ksuid-cmd-alpha", "ksuid-cmd-beta"}, capturedOpts.AbandonedResources, "both force-canceled ksuids must be in abandoned list")
@@ -217,4 +220,49 @@ func TestCancelWatch_NoForce_EmptyAbandoned(t *testing.T) {
 
 	assert.Empty(t, capturedOpts.AbandonedResources, "no --force: AbandonedResources must be empty")
 	assert.True(t, capturedOpts.ExitWhenDone)
+}
+
+// TestCancelWatch_NonInteractiveStdin_FireAndForget verifies that when stdout is
+// a TTY but stdin is not interactive (e.g. `formae cancel --yes </dev/null`), the
+// cancel is submitted but the watch TUI is NOT launched (it would hang/fail with
+// no interactive stdin). The command stays fire-and-forget.
+func TestCancelWatch_NonInteractiveStdin_FireAndForget(t *testing.T) {
+	origGetStatus := getCommandsStatusFn
+	origCancel := cancelCommandFn
+	origIsTerminal := isTerminal
+	origIsInteractive := isInteractive
+	origLaunch := launchCancelWatch
+	t.Cleanup(func() {
+		getCommandsStatusFn = origGetStatus
+		cancelCommandFn = origCancel
+		isTerminal = origIsTerminal
+		isInteractive = origIsInteractive
+		launchCancelWatch = origLaunch
+	})
+
+	isTerminal = func(w io.Writer) bool { return true }    // stdout IS a TTY
+	isInteractive = func() bool { return false }           // stdin is NOT interactive
+
+	getCommandsStatusFn = func(a *app.App, query string, n int, fromWatch bool) (*apimodel.ListCommandStatusResponse, []string, error) {
+		return &apimodel.ListCommandStatusResponse{
+			Commands: []apimodel.Command{
+				{CommandID: "cmd-nonint", State: "InProgress", StartTs: time.Now().Add(-5 * time.Second)},
+			},
+		}, nil, nil
+	}
+	cancelCommandFn = func(a *app.App, query string, force bool) (*apimodel.CancelCommandResponse, error) {
+		return &apimodel.CancelCommandResponse{CommandIDs: []string{"cmd-nonint"}}, nil
+	}
+
+	watchCalled := false
+	launchCancelWatch = func(a *app.App, th *theme.Theme, opts statuswatch.Options) error {
+		watchCalled = true
+		return nil
+	}
+
+	opts := &CancelOptions{Query: "", Force: false, Yes: true, OutputConsumer: printer.ConsumerHuman}
+	err := runCancelForHumans(newCancelTestApp(), opts)
+	require.NoError(t, err)
+
+	assert.False(t, watchCalled, "watch TUI must NOT launch when stdin is not interactive")
 }

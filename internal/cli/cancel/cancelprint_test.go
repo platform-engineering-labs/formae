@@ -29,6 +29,10 @@ func TestMain(m *testing.M) {
 	// don't try to open a real TTY. Tests that assert on the watch options
 	// override this seam locally.
 	launchCancelWatch = func(_ *app.App, _ *theme.Theme, _ statuswatch.Options) error { return nil }
+	// Default to an interactive stdin so tests that exercise the watch-by-default
+	// path reach launchCancelWatch. Tests that assert the non-interactive
+	// (fire-and-forget) behavior set isInteractive = false locally.
+	isInteractive = func() bool { return true }
 	os.Exit(m.Run())
 }
 

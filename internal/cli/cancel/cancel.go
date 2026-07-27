@@ -272,6 +272,14 @@ func runCancelInteractive(a *app.App, opts *CancelOptions) error {
 	// surfaced inside the TUI via AbandonedResources.
 	fmt.Println(renderCancelSummary(th, activeCmds, exps, opts.Force, now))
 
+	// The watch TUI needs an interactive stdin to drive it. When stdout is a TTY
+	// but stdin is not (e.g. `formae cancel --yes </dev/null`), stay
+	// fire-and-forget: the cancels are already submitted, and the summary above
+	// prints how to follow progress via `formae status`.
+	if !isInteractive() {
+		return nil
+	}
+
 	// Build the set of force-abandoned resource ksuids (P3 normalization at call site).
 	var abandonedKsuids []string
 	for uri, rs := range merged.ResourceUpdateStates {
@@ -295,6 +303,7 @@ func runCancelInteractive(a *app.App, opts *CancelOptions) error {
 	}
 	return launchCancelWatch(a, th, statuswatch.Options{
 		Query:              strings.Join(idTerms, " "),
+		MaxResults:         len(merged.CommandIDs),
 		ExitWhenDone:       true,
 		AbandonedResources: abandonedKsuids,
 	})
