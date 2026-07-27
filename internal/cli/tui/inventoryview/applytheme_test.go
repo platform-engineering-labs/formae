@@ -42,20 +42,20 @@ func TestUpdate_ApplyThemeMsgApplies(t *testing.T) {
 	}
 }
 
-// TestApplyTheme_RebuildsTabStyledCells gates a live theme swap while a tab
+// TestApplyTheme_RebuildsTabStyledCells covers a live theme swap while a tab
 // holds cached per-cell styled replacements. tabModel.sync builds
 // styledCells ONCE per fetch/sort/filter event from the tabModel's own th
 // field (see tab.go's styleCell application), and loadedView/applyCellStyles
-// (tabview.go) reuse those cached strings verbatim every frame. Before the
-// fix, ApplyTheme swapped tabs[i].th but never re-ran sync, so a cell already
-// on screen (e.g. the "⚠ unmanaged" Stack cell, styled red via
-// th.Styles.StatusFailed) stayed rendered in the OLD theme's color until the
-// next unrelated fetch/sort/filter happened to call sync again. This proves
-// the styled replacement is actually re-rendered, not just that th changed.
+// (tabview.go) reuse those cached strings verbatim every frame. If ApplyTheme
+// swaps tabs[i].th but never re-runs sync, a cell already on screen (e.g. the
+// "⚠ unmanaged" Stack cell, styled red via th.Styles.StatusFailed) stays
+// rendered in the OLD theme's color until the next unrelated fetch/sort/filter
+// happens to call sync again. This proves the styled replacement is actually
+// re-rendered, not just that th changed.
 //
 // quiet and rich have different Error colors (light #DC2626 vs #FF0000, dark
 // #F87171 vs #FF0000), so StatusFailed's rendering genuinely differs between
-// them — a real (not synthetic) regression signal.
+// them.
 func TestApplyTheme_RebuildsTabStyledCells(t *testing.T) {
 	quiet := theme.New("quiet")
 	m := New(quiet, nil, Options{})
@@ -85,15 +85,15 @@ func TestCloseWatcher_NilSafe(t *testing.T) {
 	m.closeWatcher()                             // must not panic
 }
 
-// TestApplyTheme_RecolorsOpenDetailScreen gates PLA-348: the open detail
-// screen (opened via enter) keeps stale colors after a live Omarchy theme
-// change. openDetail bakes the colorized detail body into m.detailViewport
-// exactly once, via colorizeDetailLine(m.th, ...) piped into vp.SetContent —
-// see openDetail in model.go. Before the fix, ApplyTheme threaded the new
-// theme into tabs/table/query/spinner but never rebuilt the detail viewport,
-// so a resource's detail screen left open across a theme swap kept rendering
-// its "Key: value" lines in the OLD theme's colors until the user pressed
-// esc then enter again to force a rebuild.
+// TestApplyTheme_RecolorsOpenDetailScreen covers recoloring the open detail
+// screen (opened via enter) after a live Omarchy theme change. openDetail
+// bakes the colorized detail body into m.detailViewport exactly once, via
+// colorizeDetailLine(m.th, ...) piped into vp.SetContent — see openDetail in
+// model.go. If ApplyTheme threads the new theme into tabs/table/query/spinner
+// but never rebuilds the detail viewport, a resource's detail screen left
+// open across a theme swap keeps rendering its "Key: value" lines in the OLD
+// theme's colors until the user presses esc then enter again to force a
+// rebuild. ApplyTheme must rebuild the viewport in place.
 //
 // quiet and rich share identical TextPrimary/TextSecondary (see
 // TestTable_SetThemeRebuildsHeaderAndCellStyles), so this test builds a

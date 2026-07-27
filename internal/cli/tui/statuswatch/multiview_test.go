@@ -161,8 +161,8 @@ func TestMultiView_HeaderGlyphsFollowTheme(t *testing.T) {
 	assert.NotContains(t, h, "○")
 }
 
-// TestMultiView_HeaderThemeHighlight pins the theme-driven header emphasis
-// (PLA-348), mirroring simview's TestRenderGroupColHeaderThemeHighlight: under
+// TestMultiView_HeaderThemeHighlight pins the theme-driven header emphasis,
+// mirroring simview's TestRenderGroupColHeaderThemeHighlight: under
 // "rich" (Header.Highlight="background") the navigated (sortHi) column
 // carries a background SGR sequence like the row cursor, and the active-sort
 // column (when different from the navigated one) carries the PrimaryAccent

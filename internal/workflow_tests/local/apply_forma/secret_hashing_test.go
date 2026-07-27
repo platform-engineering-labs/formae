@@ -301,8 +301,8 @@ func TestSecretHashing_NoPerpetualDrift(t *testing.T) {
 	})
 }
 
-// TestSecretHashing_UpdateNonSecretFieldOnSecretResourceSucceeds is the key regression
-// backstop: a RECONCILE apply that changes a non-secret field on a resource whose
+// TestSecretHashing_UpdateNonSecretFieldOnSecretResourceSucceeds verifies that
+// a RECONCILE apply that changes a non-secret field on a resource whose
 // secret is already hashed at rest must succeed — the plugin-boundary guard
 // (resolver.ConvertToPluginFormat's guardNoHashedValues) must not false-positive on
 // the pre-update out-of-band Read, the patch-generation diff, or the eventual Update
@@ -487,8 +487,8 @@ func TestSecretHashing_ResolveCacheDoesNotLogSecret(t *testing.T) {
 // value here is later read back and sent live to a plugin as TargetConfig, so hashing
 // it here needs its own design (mirroring the resource-side hash-at-rest +
 // hash-vs-hash drift convergence work) rather than a quick patch. Left as a SKIPPED,
-// self-documenting regression test rather than silently dropped or weakened — un-skip
-// once a target-config hashing fix lands.
+// self-documenting test that pins the known gap — un-skip once a target-config
+// hashing fix lands.
 func TestSecretHashing_TargetConfigResolvedSecretStoredAsPlaintext_KnownGap(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		const plaintextSecret = "resolve-cache-must-not-log-this-secret"

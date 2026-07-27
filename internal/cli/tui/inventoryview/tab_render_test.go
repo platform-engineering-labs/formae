@@ -299,7 +299,7 @@ func TestSetSize_StoresDimensions(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Narrow-terminal regression: setSize at <30 cols must not panic and every
+// Narrow terminal: setSize at <30 cols must not panic and every
 // rendered line must be ≤ width printable columns (R8 overflow guard).
 // ---------------------------------------------------------------------------
 
@@ -331,7 +331,7 @@ func TestNarrowTerminal_NoPanicAndFitsWidth(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Wide-terminal regression: setSize on a terminal wider than the sum of the
+// Wide terminal: setSize on a terminal wider than the sum of the
 // declared column widths must grow the columns proportionally to consume the
 // available width, instead of leaving the surplus unused (values truncating
 // against slack).
@@ -493,7 +493,7 @@ func TestStyleCell_Targets_NoPlain(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Fix wave 3: column-bounded cell styling regression tests
+// column-bounded cell styling
 // ---------------------------------------------------------------------------
 
 // TestStyleCell_YesProdLabel_LabelCellNotCorrupted verifies that a target

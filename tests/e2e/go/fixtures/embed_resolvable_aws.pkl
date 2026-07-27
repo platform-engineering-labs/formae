@@ -4,11 +4,11 @@
  * SPDX-License-Identifier: FSL-1.1-ALv2
  */
 
-// E2E fixture for PLA-68: an embedded resolvable inside a String-typed field.
+// E2E fixture: an embedded resolvable inside a String-typed field.
 // The Function's functionCode is a cf-js-2.0 literal that references the
 // KeyValueStore's CloudFront-generated short Id, embedded into the source via
 // formae.embed(...). Applying this in one pass resolves the Id and ships a
-// plain String to CloudFront; pre-PLA-68 this required a two-apply manual
+// plain String to CloudFront; previously this required a two-apply manual
 // substitution.
 
 amends "@formae/forma.pkl"

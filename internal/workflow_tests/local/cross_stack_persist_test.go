@@ -26,8 +26,8 @@ import (
 // a command fails (some resources fail to create), other successfully-created
 // resources are still persisted to inventory.
 //
-// This reproduces an issue found by property tests where the command response
-// shows creates as Success, but the resources don't appear in inventory.
+// It guards against the command response showing creates as Success while the
+// resources fail to appear in inventory.
 func TestMetastructure_SuccessfulCreatePersistedInFailedCommand(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		// Fail creates for "res-b" to make the command fail while

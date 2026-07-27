@@ -209,7 +209,7 @@ func TestChangeset_ExecutionOrder_DeleteChainThenCreateChainWithParallelLeaves(t
 }
 
 func TestChangeset_RemoveNode_UnlinksAllDependentsWhenThreeOrMore(t *testing.T) {
-	// Regression test: removeNode must unlink ALL dependents, not just some.
+	// removeNode must unlink ALL dependents, not just some.
 	// With 3+ dependents, iterating node.Dependents while Unlink modifies
 	// the same slice causes elements to be skipped (Go range captures the
 	// backing array pointer but Unlink shifts elements via append).
@@ -2812,7 +2812,7 @@ func TestBuildDeleteDependencies_RuntimeDependency_MultipleRefsToSameProducer_Pr
 }
 
 // TestBuildCreateUpdateDependencies_RuntimeDependency_MultipleRefsToSameProducer_PrefersRuntimeDependency
-// is the create-side counterpart of the destroy-side regression test. Same
+// is the create-side counterpart of the destroy-side test. Same
 // shape: consumer carries two refs to the same producer KSUID — one default,
 // one runtimeDependency — and the planner must honor the runtimeDependency
 // hint regardless of map iteration order.

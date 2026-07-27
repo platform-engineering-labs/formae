@@ -390,10 +390,9 @@ func TestGeneratePatch(t *testing.T) {
 // fields trigger a replacement instead of being silently shipped to
 // the plugin as a mutable patch.
 //
-// Regression: before the fix, isCreateOnlyPath compared dot-paths to
-// slash-paths raw, so nested createOnly violations weren't caught.
-// Users only learned about the immutability when the cloud API
-// rejected the apply (e.g. K8s "spec.selector: field is immutable"
+// isCreateOnlyPath must normalize dot-paths against slash-paths so nested
+// createOnly violations are caught before the apply, rather than surfacing
+// as a cloud API rejection (e.g. K8s "spec.selector: field is immutable"
 // on Deployment).
 func TestGeneratePatch_NestedCreateOnlyTriggersReplacement(t *testing.T) {
 	document := []byte(`{
@@ -605,7 +604,7 @@ func TestGeneratePatch_ObjectResolvableMatchingLiveValue_NoPatch(t *testing.T) {
 	assert.Nil(t, patchDoc)
 }
 
-// Regression guard: a String field whose legitimate value is JSON text (e.g. an
+// A String field whose legitimate value is JSON text (e.g. an
 // IAM policy document) sourced from a resolvable reads back as a string on the
 // live side, so the desired side must stay a string — a blind "parse anything
 // that looks like JSON" would turn this into perpetual drift.
@@ -728,8 +727,8 @@ func TestRemoveNonSchemaFields_ThreeFieldsTotalTwoSchemaFields_RemovesNonSchemaF
 	assert.Equal(t, "c", c)
 }
 
-// This reproduces an API Gateway method response issue where the database
-// contains objects with both nested structure and flattened keys
+// Exercises an API Gateway method response shape where the database
+// contains objects with both nested structure and flattened keys.
 func TestGeneratePatch_MixedNestedAndFlattenedStructures(t *testing.T) {
 	document := []byte(`{
 		"Integration": {
@@ -924,8 +923,8 @@ func TestGeneratePatch_RequiredOnUpdateFieldsGenerateAddOperation(t *testing.T) 
 }
 
 func TestGeneratePatch_WriteOnlyCreateOnlyFieldsNoPhantomReplacement(t *testing.T) {
-	// Reproduces GitHub Issue #21: fields marked both writeOnly AND createOnly
-	// trigger phantom resource replacement on re-apply.
+	// Fields marked both writeOnly AND createOnly must not trigger phantom
+	// resource replacement on re-apply.
 	//
 	// writeOnly fields are stripped from the document (Read never returns them).
 	// If the field is also createOnly, jsonpatch generates an "add" op,
@@ -1383,7 +1382,7 @@ func TestGeneratePatch_ReconcileRemovesOOBTagsWhenDesiredIsNull(t *testing.T) {
 }
 
 func TestGeneratePatch_AbsentDesiredVsEmptyActualArray_NoPatch(t *testing.T) {
-	// Reproducer: ECS TaskDef Tags. PKL renders Tags as absent (no key);
+	// ECS TaskDef Tags: PKL renders Tags as absent (no key);
 	// AWS Read returns `Tags: []`. Diff layer must NOT emit a remove op,
 	// otherwise CCAPI rejects with "patchDocument length >= 1".
 	//
@@ -1463,7 +1462,7 @@ func TestStripTopLevelEmptyCollectionsAbsentInPatch(t *testing.T) {
 			wantDocument: `{"Tags": [], "Name": "x"}`,
 		},
 		{
-			name:         "absent in patch, top-level object containing only nested empties → preserved (regression guard from adversarial review)",
+			name:         "absent in patch, top-level object containing only nested empties → preserved",
 			document:     `{"Outer": {"Inner": []}, "Name": "x"}`,
 			patch:        `{"Name": "x"}`,
 			wantDocument: `{"Outer": {"Inner": []}, "Name": "x"}`,
@@ -1483,7 +1482,7 @@ func TestStripTopLevelEmptyCollectionsAbsentInPatch(t *testing.T) {
 }
 
 func TestGeneratePatch_OuterWithOnlyNestedEmpties_NoSpuriousSuppression(t *testing.T) {
-	// Regression guard for the adversarial-review finding on placement.
+	// Guards helper placement relative to StripNestedEmptyCollections.
 	//
 	// The concern: if our new helper ran AFTER StripNestedEmptyCollections,
 	// it would observe `{Outer: {}, Name: x}` (because nested-strip collapses
@@ -1516,11 +1515,11 @@ func TestGeneratePatch_OuterWithOnlyNestedEmpties_NoSpuriousSuppression(t *testi
 }
 
 func TestGeneratePatch_AbsentDesiredVsEmptyActualArray_PatchMode_NoPatch(t *testing.T) {
-	// Same shape and hint configuration as the Reconcile reproducer
+	// Same shape and hint configuration as the Reconcile-mode case
 	// (TestGeneratePatch_AbsentDesiredVsEmptyActualArray_NoPatch). In Patch
 	// mode, PatchStrategyEnsureExists does not emit removes for absent-desired
-	// keys, so the new suppression must be a no-op here. This test pins the
-	// per-mode behavior: the fix must not regress Patch-mode no-op semantics.
+	// keys, so the suppression must be a no-op here. This test pins the
+	// per-mode behavior: Patch-mode no-op semantics must be preserved.
 	document := []byte(`{"Tags": [], "Family": "x"}`)
 	patch := []byte(`{"Family": "x"}`)
 
@@ -1551,8 +1550,8 @@ func TestGeneratePatch_AbsentDesiredVsEmptyActual_EntitySetField_NotAWSSpecific_
 	// Using HasProviderDefault: false here is load-bearing — with true,
 	// removeProviderDefaultEntitySetElements would delete the field before
 	// our helper sees it, degenerately passing the test without exercising
-	// the new suppression. Names also intentionally differ from AWS
-	// reproducer (Attributes/ID, not Tags/Family) to demonstrate the fix is
+	// the new suppression. Names also intentionally differ from the AWS
+	// case (Attributes/ID, not Tags/Family) to demonstrate the behavior is
 	// provider-agnostic.
 	document := []byte(`{"Attributes": [], "ID": "abc"}`)
 	patch := []byte(`{"ID": "abc"}`)
@@ -2075,8 +2074,8 @@ func TestGeneratePatch_EntitySetProviderDefaults_WithUserChange(t *testing.T) {
 	assert.Contains(t, ops[0].Path, "Value")
 }
 
-// Reproduces the exact bug from the issue: re-applying an unchanged ECS
-// TaskDefinition triggers a REPLACE because the provider populates
+// Re-applying an unchanged ECS TaskDefinition must not trigger a REPLACE
+// when the provider populates
 // ContainerDefinition.Cpu=0 on Read, and the diff through jsonpatch's set
 // semantics treats the document element {Name:x, Cpu:0} as different from
 // the desired element {Name:x}. Because ContainerDefinitions is createOnly,
@@ -2085,7 +2084,7 @@ func TestGeneratePatch_EntitySetProviderDefaults_WithUserChange(t *testing.T) {
 // This test passes with a single-element array today (the existing
 // fieldExistsInMap short-circuits "Cpu not anywhere in patch" = strip).
 // The next test exercises the mixed case where at least one sibling does
-// set Cpu, which is what the production bug looks like.
+// set Cpu.
 func TestGeneratePatch_ProviderDefaultInsideArray_SingleElement_NoReplace(t *testing.T) {
 	document := []byte(`{
 		"Family": "my-task",
@@ -2316,7 +2315,7 @@ func TestGeneratePatch_UserChangedFieldInsideArray_StillReplaces(t *testing.T) {
 // Negative test: at the top level, stripping must remain conditional. A user
 // who explicitly overrides a provider-default value should still see a diff
 // (this is the BucketEncryption override case we already test elsewhere,
-// repeated here to guard against regressions from the new recursive logic).
+// repeated here to guard the new recursive logic).
 func TestGeneratePatch_TopLevelProviderDefaultOverride_StillDiffs(t *testing.T) {
 	document := []byte(`{
 		"BucketName": "my-bucket",
@@ -2379,8 +2378,8 @@ func TestGeneratePatch_EntitySetProviderDefaults_ReconcileMode(t *testing.T) {
 	assert.Empty(t, patchDoc, "Expected no patch when only provider-default elements differ in reconcile mode")
 }
 
-// Regression test for the spurious ECS Service replace on reapply. The cloud
-// provider returns nested lists (Environment, PortMappings inside a
+// A reapply of an unchanged ECS Service must not trigger a spurious replace.
+// The cloud provider returns nested lists (Environment, PortMappings inside a
 // ContainerDefinition) in a canonicalised order that may differ from the
 // PKL-evaluated desired state. Each nested element is byte-identical across
 // the two sides; only the order within the nested list differs. At the outer
