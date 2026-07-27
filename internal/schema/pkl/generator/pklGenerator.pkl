@@ -305,7 +305,13 @@ function generateFormaFile(parsed: json.Value): String =
     ).distinct.filter((p) -> importExists(p)))
     // Combine and deduplicate - for flat package structures, resourceImport and namespaceImport may be the same
     let (imports = (resourceImports + namespaceBaseImports).distinct)
-    let (dependencyImports = pklMaps.flatMap((pklMap) -> gen.generateImportStatements(pklMap)).distinct.filter((e) -> !imports.contains(e)))
+    // `@formae/formae.pkl` is always imported by headerImports() (binding the
+    // name `formae`), so it must never re-appear as an aliased dependency
+    // import — modulePathToAlias would alias it back to `formae`, producing a
+    // duplicate `formae` member. It reaches generateImportStatements as the
+    // __import_statement__ of any value rendered through the formae fluent API
+    // (e.g. an opaque `formae.value("...").opaque.hashed` secret).
+    let (dependencyImports = pklMaps.flatMap((pklMap) -> gen.generateImportStatements(pklMap)).distinct.filter((e) -> !imports.contains(e) && e != "@formae/formae.pkl"))
     let (allImports = (imports + dependencyImports).distinct)
 
     // Phase 3: Render resources with collision-aware aliases

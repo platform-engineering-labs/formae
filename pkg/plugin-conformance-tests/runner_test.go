@@ -516,6 +516,54 @@ func TestCompareEmbed_DifferentLiteralFails(t *testing.T) {
 	}
 }
 
+// An opaque secret field is hashed at rest, so inventory returns an opaque
+// envelope rather than the authored plaintext. compareProperties must verify it
+// by digest (positive: correct SHA-256 of the authored plaintext).
+func TestCompareProperties_OpaqueSecret_VerifiedByDigest(t *testing.T) {
+	expectedProperties := map[string]any{
+		"MasterUserPassword": "TestPassword123!",
+	}
+	actualResource := map[string]any{
+		"Properties": map[string]any{
+			"MasterUserPassword": map[string]any{
+				"$visibility": pkgmodel.VisibilityOpaque,
+				"$hashed":     true,
+				"$value":      pkgmodel.ComputeValueHash("TestPassword123!"),
+			},
+		},
+	}
+	if !compareProperties(t, expectedProperties, actualResource, "after create", map[string]providerDefault{}) {
+		t.Errorf("compareProperties should pass when the opaque value's digest matches the authored secret")
+	}
+}
+
+// A digest that does not match the authored plaintext MUST be flagged (negative).
+func TestCompareProperties_OpaqueSecret_WrongDigestFails(t *testing.T) {
+	expected := map[string]any{"MasterUserPassword": "TestPassword123!"}
+	actual := map[string]any{
+		"Properties": map[string]any{
+			"MasterUserPassword": map[string]any{
+				"$visibility": pkgmodel.VisibilityOpaque,
+				"$hashed":     true,
+				"$value":      pkgmodel.ComputeValueHash("a-different-password"),
+			},
+		},
+	}
+	rec := &recordingReporter{}
+	if compareProperties(rec, expected, actual, "after create", map[string]providerDefault{}) || rec.errors == 0 {
+		t.Errorf("compareProperties should fail when the opaque digest does not match the authored secret")
+	}
+}
+
+// After extraction the digest may be omitted; the opaque envelope is then
+// accepted as-is (no plaintext to leak), mirroring resolvable handling.
+func TestCompareOpaqueValue_NoDigestAccepted(t *testing.T) {
+	actual := map[string]any{"$visibility": pkgmodel.VisibilityOpaque}
+	if !compareOpaqueValue(t, "MasterUserPassword", "TestPassword123!", actual, "after extract") {
+		t.Errorf("compareOpaqueValue should accept an opaque envelope with no verifiable digest")
+	}
+}
+
 // recordingReporter captures errors without failing the test (for negative cases).
 type recordingReporter struct{ errors int }
 
