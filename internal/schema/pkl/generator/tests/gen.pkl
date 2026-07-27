@@ -367,8 +367,8 @@ facts {
         })
         let (resourceMap = Map("functionCode", fakeEmbedMap))
         let (rendered = gen.genMapToPklStringWithTypes("TestResource", resourceMap, "test"))
-        // Single-line form. The old multi-line """ rendering produced invalid PKL
-        // (content on the same line as """) and broke extract re-eval — see PLA-68.
+        // Single-line form. A multi-line """ rendering would produce invalid PKL
+        // (content on the same line as """) and break extract re-eval.
         rendered.contains("formae.embed(\"") && !rendered.contains("formae.embed(\"\"\"")
     }
 
@@ -410,8 +410,8 @@ facts {
     }
 
     ["EdgeFunction code body roundtrips with single escaping"] {
-        // Real-world repro: a Supabase EdgeFunction inline body containing
-        // double-quotes. Extract must escape each quote exactly once so the
+        // A Supabase EdgeFunction inline body containing double-quotes.
+        // Extract must escape each quote exactly once so the
         // generated forma parses back to the original source (no phantom drift).
         let (body = "Deno.serve(() => new Response(\"Hello from formae!\"))")
         let (applied = gen.apply(SimpleFoo, new Dynamic { x = 1; name = body; label = "fn" }))

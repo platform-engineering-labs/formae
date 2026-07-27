@@ -872,9 +872,9 @@ func newFormaCommandWithTargetAndResourceUpdate() *forma_command.FormaCommand {
 // (due to pending resource updates), the target's new state is actually written to the
 // database -- not just held in the in-memory cache.
 //
-// This is a regression test: the bug is that markTargetUpdateAsComplete uses
-// UpdateFormaCommandProgress (which only writes state + modified_ts) in the non-final
-// branch, so the target_updates JSON blob is never updated on disk.
+// markTargetUpdateAsComplete must persist the target_updates JSON blob in the
+// non-final branch. UpdateFormaCommandProgress only writes state + modified_ts, so
+// relying on it there would leave the target's new state unwritten on disk.
 func TestFormaCommandPersister_TargetUpdateState_PersistedToDB(t *testing.T) {
 	// Create a shared datastore so a second persister can read back from the same DB.
 	ds, err := dssqlite.NewDatastoreSQLite(context.Background(), &pkgmodel.DatastoreConfig{

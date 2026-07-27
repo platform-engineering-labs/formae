@@ -407,10 +407,10 @@ func TestTestCaseNames_Empty(t *testing.T) {
 }
 
 // TestCompareProperties_NestedResolvable verifies that compareProperties handles
-// Resolvable references nested inside SubResource maps. This reproduces the
-// elasticbeanstalk failure where ResourceLifecycleConfig.ServiceRole is a
-// Resolvable: Pkl eval produces $visibility:Clear, but after Formae resolves
-// the reference the inventory has $value with the actual ARN.
+// Resolvable references nested inside SubResource maps. Case in point:
+// ResourceLifecycleConfig.ServiceRole is a Resolvable where Pkl eval produces
+// $visibility:Clear, but after Formae resolves the reference the inventory has
+// $value with the actual ARN. The two must still compare equal.
 func TestCompareProperties_NestedResolvable(t *testing.T) {
 	// Expected: from Pkl eval — Resolvable has $visibility but no $value
 	expectedProperties := map[string]any{
@@ -474,9 +474,9 @@ func TestCompareProperties_NestedResolvable(t *testing.T) {
 	}
 }
 
-// Reproduces the conformance Verify failure: a $embed field's stored
-// $template carries the resolved $value and Go sorted-key envelope encoding,
-// while the authored expected $template has neither. They must compare equal.
+// TestCompareProperties_Embed verifies that a $embed field whose stored
+// $template carries the resolved $value and Go sorted-key envelope encoding
+// compares equal to an authored expected $template that has neither.
 func TestCompareProperties_Embed(t *testing.T) {
 	// Expected (from Pkl eval): $res span, insertion-order keys, no $value.
 	expectedSpan := pkgmodel.FrameEnvelope(

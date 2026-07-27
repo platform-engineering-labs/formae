@@ -321,11 +321,11 @@ func TestChangesetExecutor_CascadeFailure(t *testing.T) {
 // resources are Read operations with no inter-dependencies, so there is nothing
 // for a failure to cascade *to* — the only candidate is the failed Read itself.
 //
-// Reproduces the prod incident where a single-resource sync whose Read failed
-// produced a self-cascade: the executor reported the failed Read as a cascading
-// failure and pushed it to FormaCommandPersister.MarkResourcesAsFailed, which
-// (for an empty sync command already evicted from cache and deleted from the DB)
-// panicked the persister with "forma command not found".
+// Without this, a single-resource sync whose Read failed would produce a
+// self-cascade: the executor reports the failed Read as a cascading failure and
+// pushes it to FormaCommandPersister.MarkResourcesAsFailed, which (for an empty
+// sync command already evicted from cache and deleted from the DB) panics the
+// persister with "forma command not found".
 func TestChangesetExecutor_SyncReadFailureDoesNotCascade(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		logCapture := test_helpers.SetupTestLogger()
@@ -571,9 +571,9 @@ func newTestResourceUpdate(label string, dependencies []pkgmodel.FormaeURI, reso
 // changeset executor reaches a terminal state when a Read operation fails
 // during the synchronize phase of an Update workflow.
 //
-// Regression test for a bug where handleProgressUpdate() returned
-// StateFinishedWithError without calling MarkAsFailed() when
-// message.Failed() was true. This left ResourceUpdate.State as InProgress
+// It guards handleProgressUpdate(): when message.Failed() is true it must call
+// MarkAsFailed() rather than returning StateFinishedWithError alone. Omitting
+// the MarkAsFailed() call leaves ResourceUpdate.State as InProgress
 // (set by UpdateState() which short-circuited when fewer progress results
 // than required operations existed). The changeset's UpdatePipeline treated
 // InProgress as a no-op, stranding the update.

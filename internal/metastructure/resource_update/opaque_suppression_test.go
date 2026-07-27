@@ -230,7 +230,7 @@ func TestUpdate_OpaqueCreateOnlyChanged_StillReplaces(t *testing.T) {
 }
 
 // Direct unit coverage of the helper's per-leaf decisions (complements the
-// behavior-level regression tests above).
+// behavior-level tests above).
 func TestSuppressUnchangedOpaqueValues_Decisions(t *testing.T) {
 	t.Run("unchanged opaque dropped from both sides", func(t *testing.T) {
 		existing := json.RawMessage(`{"secret":` + opaqueLeaf("Update", pkgmodel.ComputeValueHash("s")) + `,"name":"old"}`)

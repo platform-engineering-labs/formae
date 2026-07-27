@@ -105,9 +105,9 @@ func applyPatchDocumentForTest(t *testing.T, doc json.RawMessage, patchDoc *stri
 // every Read, refreshing the stored $hashed envelope back to plaintext before
 // the plugin-boundary guard (resolver.guardNoHashedValues) ever sees
 // it again. Plenty of real secret fields never come back on Read at all (e.g.
-// a writeOnly credential) — this override reproduces that: it returns only
+// a writeOnly credential) — this override models that: it returns only
 // Name, never SecretString, so the stored envelope stays hashed at rest
-// exactly as it was after create. This is what exercises the gap:
+// exactly as it was after create. This is what exercises the path where:
 // resource_updater.go's delete()/update() converting DesiredState/PriorState
 // with the GUARDED converter even though those conversions carry prior/
 // existing state, not a new value being written.

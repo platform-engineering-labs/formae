@@ -130,7 +130,7 @@ func TestRenderDeleteRowsHaveWarningColor(t *testing.T) {
 }
 
 // TestRenderRowLabelAndDeleteAreThemeDriven pins that row column coloring is
-// governed by the theme's [rows] plane (PLA-348):
+// governed by the theme's [rows] plane:
 //   - rich (label_accent + delete_whole_row): the label is the accent color,
 //     and a delete row's label AND type both take the delete op color.
 //   - quiet (neither): the label renders the same color as the other columns
@@ -189,7 +189,7 @@ func TestRenderRowLabelAndDeleteAreThemeDriven(t *testing.T) {
 }
 
 // TestRenderGroupColHeaderThemeHighlight pins the theme-driven header
-// emphasis (PLA-348): under "rich" (Header.Highlight="background") the
+// emphasis: under "rich" (Header.Highlight="background") the
 // navigated column header carries a background SGR sequence, matching the
 // row cursor; under "quiet" (Header.Highlight="brighten") the navigated
 // header carries only a foreground + bold, no background.

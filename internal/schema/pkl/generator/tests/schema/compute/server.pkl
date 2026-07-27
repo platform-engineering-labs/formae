@@ -25,7 +25,7 @@ open class Server extends formae.Resource {
     imageId: String
 
     // String|formae.Embedded field — exercises extract-to-PKL regeneration of an
-    // embedded resolvable (formae.embed("…\(ref)…")). See PLA-68.
+    // embedded resolvable (formae.embed("…\(ref)…")).
     @testprovider.FieldHint
     userData: (String|formae.Embedded)?
 

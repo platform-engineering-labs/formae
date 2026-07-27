@@ -132,8 +132,8 @@ func TestVisibleColumnIndexes_NarrowDropsLowPriority(t *testing.T) {
 	assert.Equal(t, []int{0}, got)
 }
 
-// TestTable_SetThemeRebuildsHeaderAndCellStyles gates the PLA-348 fix for a
-// live theme swap (the Omarchy watcher firing theme.ApplyThemeMsg): Table
+// TestTable_SetThemeRebuildsHeaderAndCellStyles covers a live theme swap
+// (the Omarchy watcher firing theme.ApplyThemeMsg): Table
 // bakes header/cell/selected-row styles into the wrapped bubbles/table.Model
 // once, at NewTable time (see NewTable), and every subsequent View() reuses
 // those baked styles verbatim — a bare struct-field swap of a *theme.Theme

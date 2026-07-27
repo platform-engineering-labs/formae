@@ -282,7 +282,7 @@ func TestSynchronizer_SecretConsumerOutOfBandDrift(t *testing.T) {
 		// the stale $hashed marker so the persist transformer re-hashes it at rest.
 		// The field must therefore be stored as {"$hashed":true,"$value":sha256("v2")}
 		// — the resolved secret hashed, NEVER the literal cleartext. This is the
-		// integrity/no-leak guarantee at the heart of PLA-355.
+		// integrity/no-leak guarantee under test.
 		require.Equal(t, hashV2, field(sLabel, "secret.$value").String(), "S.secret must be ingested as hashed(v2)")
 		require.True(t, field(rLabel, "consumes.$hashed").Bool(), "R.consumes stays flagged $hashed:true after sync")
 		require.Equal(t, hashV2, field(rLabel, "consumes.$value").String(),
@@ -296,7 +296,7 @@ func TestSynchronizer_SecretConsumerOutOfBandDrift(t *testing.T) {
 		// Plain reconcile with the OLD desired (v1) is rejected because the OOB drift
 		// (S.secret is now v2 at rest) makes the stack "modified since the last
 		// reconcile". This is legitimate drift protection — desired v1 genuinely
-		// differs from the ingested current v2 — and is unrelated to the PLA-355 fix.
+		// differs from the ingested current v2 — and is unrelated to the hashing behavior.
 		require.Error(t, err3, "reconcile with stale desired (v1) after OOB drift to v2 must be rejected")
 		if err3 != nil {
 			t.Logf("STEP 3 reconcile ApplyForma RETURNED ERROR (submission-time rejection): %v", err3)
@@ -318,9 +318,9 @@ func TestSynchronizer_SecretConsumerOutOfBandDrift(t *testing.T) {
 		_, err4 := m.ApplyForma(buildForma("v2"), &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id")
 		// With R.consumes correctly hashed(v2) at rest, the absorbed desired (v2,
 		// matching the live/ingested value) is now accepted — R is no longer
-		// perpetually "unabsorbed", so the guard clears WITHOUT Force. Before the
-		// PLA-355 fix the corrupted (plaintext) R.consumes made even this plain
-		// absorb reject; that over-rejection is now gone.
+		// perpetually "unabsorbed", so the guard clears WITHOUT Force. A corrupted
+		// (plaintext) R.consumes would make even this plain absorb reject; the
+		// re-hash on read-merge prevents that over-rejection.
 		require.NoError(t, err4, "plain-reconcile absorb (desired=v2) is accepted once R.consumes is not corrupt")
 		waitForApplyComplete(t, m)
 		dumpState("after STEP 4a plain absorb")
@@ -349,20 +349,20 @@ func TestSynchronizer_SecretConsumerOutOfBandDrift(t *testing.T) {
 }
 
 // TestSynchronizer_SecretConsumer_ResEnvelope_OutOfBandDrift is the $res sibling
-// of TestSynchronizer_SecretConsumerOutOfBandDrift. It reproduces PLA-355's
-// unfixed twin: a consumer R whose "consumes" field is persisted at rest as a
+// of TestSynchronizer_SecretConsumerOutOfBandDrift. It exercises the $res twin:
+// a consumer R whose "consumes" field is persisted at rest as a
 // STRUCTURED $res resolvable (NOT a $ref envelope) pointing at S's Opaque
 // "secret" property. Such a $res envelope enters at rest via non-translating
 // paths (Synchronize/Discovery/Destroy/seed) — a USER apply would rewrite $res
 // -> $ref, so the $ref twin never exercises this shape.
 //
-// The bug: on an OOB drift of S's secret v1->v2 followed by a sync, the merge
-// has no $res branch, so it recurses field-by-field and OVERWRITES the
+// On an OOB drift of S's secret v1->v2 followed by a sync, the merge must have
+// a $res branch: without one it would recurse field-by-field and OVERWRITE the
 // envelope's $value with the plugin's LIVE plaintext v2; because the $res
-// envelope never carried $visibility:Opaque, the persist transformer never
-// hashes it — so cleartext "v2" is written to the datastore at rest.
+// envelope never carried $visibility:Opaque, the persist transformer would not
+// hash it and cleartext "v2" would land in the datastore at rest.
 //
-// The fix must leave R.consumes.$value == sha256("v2") at rest, exactly like
+// The merge must leave R.consumes.$value == sha256("v2") at rest, exactly like
 // the $ref case, and NEVER the literal cleartext.
 func TestSynchronizer_SecretConsumer_ResEnvelope_OutOfBandDrift(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
@@ -518,7 +518,7 @@ func TestSynchronizer_SecretConsumer_ResEnvelope_OutOfBandDrift(t *testing.T) {
 		dumpState("after STEP 1 apply")
 
 		// ─── Seed R.consumes at rest as a STRUCTURED $res envelope ──────────
-		// This is the prod-observed shape (throwaway stack, PLA-355 sibling):
+		// This is the at-rest shape produced by non-translating paths:
 		//   {"$res":true,"$label":<S>,"$type":<S-type>,"$stack":<stack>,
 		//    "$property":"secret","$value":<hash-of-v1>}
 		// — a resolvable pointing at S's Opaque "secret" property, carrying the

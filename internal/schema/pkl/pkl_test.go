@@ -35,11 +35,11 @@ func TestPkl_Evaluate(t *testing.T) {
 	assert.Equal(t, "A", gjson.Get(jsonString, "Resources.1.Properties.Type").String())
 }
 
-// TestPkl_Evaluate_AutoResolvesUnresolvedProject reproduces the reported failure:
-// applying a forma whose directory has a PklProject but no resolved
-// PklProject.deps.json used to fail with a NoSuchFileException and force a manual
-// `pkl project resolve`. Evaluate now auto-resolves via pklrun. The deps file is
-// gitignored and regenerated, so removing it needs no cleanup.
+// TestPkl_Evaluate_AutoResolvesUnresolvedProject verifies that applying a forma
+// whose directory has a PklProject but no resolved PklProject.deps.json succeeds:
+// Evaluate auto-resolves via pklrun instead of failing with a NoSuchFileException
+// that would force a manual `pkl project resolve`. The deps file is gitignored
+// and regenerated, so removing it needs no cleanup.
 func TestPkl_Evaluate_AutoResolvesUnresolvedProject(t *testing.T) {
 	depsPath := "./testdata/forma/PklProject.deps.json"
 	if err := os.Remove(depsPath); err != nil && !os.IsNotExist(err) {

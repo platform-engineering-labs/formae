@@ -225,10 +225,9 @@ func TestDetailModel_CancelStateLabels(t *testing.T) {
 // not the old hardcoded "○").
 // TestDetailModel_PinnedRowRunningGlyphIsStatic asserts the detail view's
 // pinned command row (SetCommand -> multiView.renderRows, the same shared
-// renderer as the multi-command table) inherits the PLA-348 fix that
-// replaced the redundant animated spinner in colStatus with the static
-// themed in-progress glyph. spinView is set to a distinctive animated frame
-// that must not leak into the pinned row now that it's unused there.
+// renderer as the multi-command table) renders colStatus with the static
+// themed in-progress glyph rather than an animated spinner. spinView is set
+// to a distinctive animated frame that must not leak into the pinned row.
 func TestDetailModel_PinnedRowRunningGlyphIsStatic(t *testing.T) {
 	th := theme.New("formae")
 	dm := newDetailModel(th, 100, 30)
@@ -632,14 +631,14 @@ func TestDetailModel_ColHeaderAlignment(t *testing.T) {
 	}
 }
 
-// TestDetailModel_ApplyThemeRebuildsPinnedStrings gates the PLA-348 fix for a
-// live theme swap while drilled into a command: SetCommand builds
-// pinnedHeader/pinnedRow ONCE from the theme in effect at the time, and View
-// reuses those cached strings verbatim every frame. Before the fix,
-// ApplyTheme only swapped d.th and left the cached strings rendered in the
-// old theme's colors until the next poll re-called SetCommand. This proves
-// the pinned row is actually re-rendered (not just that d.th changed) by
-// diffing the raw (ANSI-inclusive) pinnedRow/pinnedHeader before and after.
+// TestDetailModel_ApplyThemeRebuildsPinnedStrings covers a live theme swap
+// while drilled into a command: SetCommand builds pinnedHeader/pinnedRow ONCE
+// from the theme in effect at the time, and View reuses those cached strings
+// verbatim every frame. If ApplyTheme only swaps d.th, the cached strings
+// stay rendered in the old theme's colors until the next poll re-calls
+// SetCommand. This proves the pinned row is actually re-rendered (not just
+// that d.th changed) by diffing the raw (ANSI-inclusive)
+// pinnedRow/pinnedHeader before and after.
 func TestDetailModel_ApplyThemeRebuildsPinnedStrings(t *testing.T) {
 	quiet := theme.New("quiet")
 	rich := theme.New("rich")

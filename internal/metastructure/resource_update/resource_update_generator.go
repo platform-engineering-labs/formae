@@ -685,7 +685,7 @@ func generateResourceUpdatesForSync(
 		// $res shape that reaches at-rest storage on non-translating paths carries no
 		// $visibility marker — so without this the sync merge refreshes its $value from
 		// the plugin's live read yet the persist transformer never hashes it, leaking
-		// the resolved secret in CLEARTEXT at rest (PLA-355 sibling). Here — with every
+		// the resolved secret in CLEARTEXT at rest (sibling of the cleartext-at-rest case). Here — with every
 		// sibling row of the stack in hand — we stamp $visibility:Opaque on such $res
 		// envelopes so the merge drops any stale $hashed and persist re-hashes.
 		markInheritedOpaqueResolvables(existingResources)
@@ -2307,7 +2307,7 @@ func translateEmbedSpansInTemplate(tmpl string, tripletToKsuid map[pkgmodel.Trip
 // opacity via preserveRefMetadata/the resolver at apply time — a raw $res carries no
 // $visibility marker, so on a sync the merge refreshes its $value from the plugin's
 // live read while the persist transformer never hashes it: the resolved secret leaks
-// in CLEARTEXT at rest (the PLA-355 sibling). Stamping $visibility:Opaque here lets
+// in CLEARTEXT at rest (the sibling of the cleartext-at-rest case). Stamping $visibility:Opaque here lets
 // both the sync merge (drop stale $hashed) and the persist transformer (re-hash)
 // treat the field exactly like an Opaque $ref.
 //

@@ -148,13 +148,12 @@ func TestQueryBar_ViewStates(t *testing.T) {
 	assert.Contains(t, v, "esc: cancel")
 }
 
-// TestQueryBar_WithThemePreservesEditingState gates the PLA-348 fix for a
-// live theme swap (e.g. the Omarchy watcher's async ApplyThemeMsg) arriving
-// while the user is mid-edit. Before the fix, Model.ApplyTheme rebuilt the
-// bar via NewQueryBar(t, q.Query()), which only carries over the applied
-// query and zero-values focused/edit — silently un-focusing the bar and
-// discarding the in-progress edit buffer. WithTheme must swap only the theme
-// field and leave focus/edit/applied untouched.
+// TestQueryBar_WithThemePreservesEditingState covers a live theme swap
+// (e.g. the Omarchy watcher's async ApplyThemeMsg) arriving while the user
+// is mid-edit. Rebuilding the bar via NewQueryBar(t, q.Query()) would carry
+// over only the applied query and zero-value focused/edit — silently
+// un-focusing the bar and discarding the in-progress edit buffer. WithTheme
+// must swap only the theme field and leave focus/edit/applied untouched.
 func TestQueryBar_WithThemePreservesEditingState(t *testing.T) {
 	q := NewQueryBar(theme.New("quiet"), "state:InProgress")
 	q = q.Focus()
