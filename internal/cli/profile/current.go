@@ -47,11 +47,17 @@ func newCurrentCmd() *cobra.Command {
 				return p.Print(&out)
 			}
 
-			th := applyTheme(cc)
-			banner.PrintBanner()
 			w := cc.OutOrStdout()
-			tty := isTerminal(w)
-			_, _ = fmt.Fprintln(w, renderCurrentHuman(th, active, tty))
+			if isTerminal(w) {
+				th := applyTheme(cc)
+				banner.PrintBanner()
+				_, _ = fmt.Fprintln(w, renderCurrentHuman(th, active, true))
+			} else {
+				// Piped: pure read, no theme resolution. renderCurrentHuman
+				// ignores the theme when tty is false.
+				banner.PrintBanner()
+				_, _ = fmt.Fprintln(w, renderCurrentHuman(nil, active, false))
+			}
 			return nil
 		},
 	}

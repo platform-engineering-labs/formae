@@ -24,12 +24,13 @@ func newDeleteCmd() *cobra.Command {
 			if err := s.Delete(args[0]); err != nil {
 				return err
 			}
-			th := applyTheme(cmd)
-			banner.PrintBanner()
 			w := cmd.OutOrStdout()
 			if isTerminal(w) {
+				th := applyTheme(cmd)
+				banner.PrintBanner()
 				_, _ = fmt.Fprintln(w, renderAck(th, "deleted "+args[0]))
 			} else {
+				banner.PrintBanner()
 				_, _ = fmt.Fprintf(w, "deleted %s\n", args[0])
 			}
 			return nil

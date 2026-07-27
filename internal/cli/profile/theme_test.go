@@ -68,3 +68,32 @@ func TestListCmd_RendersBodyInResolvedTheme(t *testing.T) {
 	assert.NotEqual(t, def, want, "rich and default renderings must differ for this test to be meaningful")
 	assert.NotContains(t, buf.String(), def, "list must not fall back to the default theme")
 }
+
+// TestListCmd_PipedDoesNotResolveTheme verifies that piped `profile list` is a
+// pure read: it never resolves the theme (which would evaluate the profile
+// config and mutate the plugin-wrapper dir), and emits plain, unstyled output.
+func TestListCmd_PipedDoesNotResolveTheme(t *testing.T) {
+	seedProfiles(t, "prod", "prod", "staging")
+
+	origTTY := isTerminal
+	isTerminal = func(_ io.Writer) bool { return false }
+	t.Cleanup(func() { isTerminal = origTTY })
+
+	origApply := applyTheme
+	called := false
+	applyTheme = func(_ *cobra.Command) *theme.Theme {
+		called = true
+		return theme.New("formae")
+	}
+	t.Cleanup(func() { applyTheme = origApply })
+
+	var buf bytes.Buffer
+	c := newListCmd()
+	c.SetOut(&buf)
+	c.SetErr(&buf)
+	require.NoError(t, c.Execute())
+
+	assert.False(t, called, "piped list must not resolve the theme (pure read)")
+	assert.NotContains(t, buf.String(), "\x1b[", "piped output must have no ANSI escapes")
+	assert.Contains(t, buf.String(), "prod", "piped output must still list the profiles")
+}

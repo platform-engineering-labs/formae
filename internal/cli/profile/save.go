@@ -25,12 +25,13 @@ func newSaveCmd() *cobra.Command {
 			if err := s.Save(args[0], force); err != nil {
 				return err
 			}
-			th := applyTheme(cmd)
-			banner.PrintBanner()
 			w := cmd.OutOrStdout()
 			if isTerminal(w) {
+				th := applyTheme(cmd)
+				banner.PrintBanner()
 				_, _ = fmt.Fprintln(w, renderAck(th, "saved "+args[0]))
 			} else {
+				banner.PrintBanner()
 				_, _ = fmt.Fprintf(w, "saved %s\n", args[0])
 			}
 			return nil

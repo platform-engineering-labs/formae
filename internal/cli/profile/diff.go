@@ -22,8 +22,11 @@ func newDiffCmd() *cobra.Command {
 		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// TTY-gated (suppressed when piped), so `profile diff a b | patch`
-			// stays a clean unified diff.
-			applyTheme(cmd)
+			// stays a clean unified diff. Resolve the theme only on a TTY so a
+			// piped diff is a pure read (no config evaluation).
+			if isTerminal(cmd.OutOrStdout()) {
+				applyTheme(cmd)
+			}
 			banner.PrintBanner()
 			s, err := openStore()
 			if err != nil {
