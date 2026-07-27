@@ -17,6 +17,16 @@ import (
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
+// themeBanner resolves the configured CLI theme from the command's
+// --config/--profile flags and applies it to the banner, so the printed logo
+// wordmark follows the user's theme. The agent subcommands print their banner
+// from PersistentPreRun (before the app/config is loaded in Run), so they can't
+// use (*app.App).PrintBanner; they resolve the theme straight from config the
+// same way the root help screen does. Package var so tests can observe the call.
+var themeBanner = func(c *cobra.Command) {
+	banner.SetTheme(cmd.ResolveConfiguredTheme(c))
+}
+
 func startCmd() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "start",
@@ -58,7 +68,8 @@ func startCmd() *cobra.Command {
 
 			a.Wait()
 		},
-		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		PersistentPreRun: func(command *cobra.Command, args []string) {
+			themeBanner(command)
 			banner.PrintBanner()
 		},
 		SilenceErrors: true,
@@ -80,7 +91,8 @@ func stopCmd() *cobra.Command {
 				return
 			}
 		},
-		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		PersistentPreRun: func(command *cobra.Command, args []string) {
+			themeBanner(command)
 			banner.PrintBanner()
 		},
 		SilenceErrors: true,
