@@ -189,7 +189,7 @@ func (t tabModel) sync(maxRows int) tabModel {
 	// mismatch that renders per-cell styles (e.g. "⚠ unmanaged") against the wrong
 	// rows until the next event re-syncs. Setting the sort state first makes
 	// SetRows sort by the new column, keeping both orders aligned.
-	t.table = t.table.SetSortState(t.sortCol, t.sortDir).SetRows(cells)
+	t.table = t.table.SetSortState(t.sortCol, t.sortDir).SetSortHighlight(t.sortHi).SetRows(cells)
 	t.styledCells = styledCells
 	return t
 }

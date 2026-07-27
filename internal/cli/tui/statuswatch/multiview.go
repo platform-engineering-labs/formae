@@ -347,6 +347,13 @@ func (v multiView) headerRow() string {
 				return dimStyle
 			}
 		}
+		// The pending sort-target highlight (moved by ←/→) must be visually
+		// distinct from the active sort column; without this they both collapse to
+		// hiStyle in "brighten" mode and ←/→ appear to do nothing. Underline marks
+		// where the cursor is so pressing s sorts by that column.
+		if isHL && !isAct {
+			return hiStyle.Underline(true)
+		}
 		if isHL || isAct {
 			return hiStyle
 		}

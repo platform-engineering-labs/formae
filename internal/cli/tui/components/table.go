@@ -43,6 +43,7 @@ type Table struct {
 	width   int
 	sortCol int
 	sortDir SortDirection
+	sortHi  int // pending sort-target column highlighted by ←/→ (-1 = none)
 }
 
 // NewTable creates a themed table with the given column set.
@@ -71,7 +72,7 @@ func NewTable(th *theme.Theme, cols []Column) Table {
 		table.WithKeyMap(km),
 	)
 
-	return Table{inner: inner, cols: cols, width: 80, sortCol: -1}
+	return Table{inner: inner, cols: cols, width: 80, sortCol: -1, sortHi: -1}
 }
 
 // SetTheme returns a copy of t with the header/cell/selected-row styles
@@ -128,6 +129,18 @@ func (t Table) SetSortState(col int, dir SortDirection) Table {
 		return t.reproject()
 	}
 	t.sortCol, t.sortDir = col, dir
+	return t.reproject()
+}
+
+// SetSortHighlight marks the pending sort-target column (the one moved by ←/→
+// before pressing s). It is rendered distinctly from the active sort column so
+// the highlight is visible as the user moves it. Pass -1 for no highlight.
+func (t Table) SetSortHighlight(col int) Table {
+	if col < 0 || col >= len(t.cols) {
+		t.sortHi = -1
+	} else {
+		t.sortHi = col
+	}
 	return t.reproject()
 }
 
@@ -189,6 +202,12 @@ func (t Table) reproject() Table {
 			case SortDesc:
 				title += " ▼"
 			}
+		}
+		// The pending sort-target column (moved by ←/→, not yet the active sort)
+		// is underlined so the highlight is visible as it moves; the active sort
+		// column keeps its ▲/▼ arrow instead.
+		if i == t.sortHi && i != t.sortCol {
+			title = lipgloss.NewStyle().Underline(true).Render(title)
 		}
 		bcols = append(bcols, table.Column{Title: title, Width: t.cols[i].Width})
 	}
