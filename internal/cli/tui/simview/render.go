@@ -181,36 +181,30 @@ func (m Model) renderGroupColHeader(kind rowKind, opW, labelW, typeW, stackW int
 	//     both render bright white, no background — today's quiet/colorblind
 	//     behavior.
 	background := m.th.Header.Highlight == "background"
-	highlightStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(p.TextPrimary.Dark)).Background(lipgloss.Color(p.Selection.Dark)).Bold(true)
 	accentStyle := lipgloss.NewStyle().Foreground(p.PrimaryAccent).Bold(true)
 	hiStyle := lipgloss.NewStyle().Foreground(p.TextPrimary).Bold(true)
+	// hlStyle colours the pending sort-target column (moved by ←/→). It uses the
+	// SecondaryAccent foreground in every header mode so it reads as a distinct
+	// "cursor" colour — never an underline, and never the Selection background
+	// used by the row cursor (which would make the two indistinguishable).
+	hlStyle := lipgloss.NewStyle().Foreground(p.SecondaryAccent).Bold(true)
 
 	grpHi := m.sortHi[kind]
 	grpAct := m.sortCol[kind]
 	grpDir := m.sortDir[kind]
 
 	styleFor := func(isHL, isAct bool) lipgloss.Style {
-		if background {
-			switch {
-			case isHL:
-				return highlightStyle
-			case isAct:
+		switch {
+		case isHL && !isAct:
+			return hlStyle
+		case isAct:
+			if background {
 				return accentStyle
-			default:
-				return dimStyle
 			}
-		}
-		// The pending sort-target highlight (moved by ←/→) must be visually
-		// distinct from the active sort column; without this they both collapse to
-		// hiStyle in "brighten" mode and ←/→ appear to do nothing. Underline marks
-		// where the cursor is so pressing s sorts by that column.
-		if isHL && !isAct {
-			return hiStyle.Underline(true)
-		}
-		if isHL || isAct {
 			return hiStyle
+		default:
+			return dimStyle
 		}
-		return dimStyle
 	}
 
 	renderHdr := func(name string, col int, w int) string {

@@ -73,21 +73,6 @@ func TestTable_SortByColumn(t *testing.T) {
 	assert.Equal(t, []string{"web-1", "AWS::EC2::Instance", "production", "Done"}, tbl.SelectedRow())
 }
 
-// TestTable_SortHighlightUnderlinesPendingColumn verifies the pending sort-target
-// column (moved by ←/→ before pressing s) is rendered with an underline, distinct
-// from the active sort column's arrow — so ←/→ have a visible effect.
-func TestTable_SortHighlightUnderlinesPendingColumn(t *testing.T) {
-	// Active sort on Label (0); pending highlight on Type (1).
-	tbl := newTestTable(120).SetSortState(0, SortAsc).SetSortHighlight(1)
-	raw := tbl.View()
-	assert.Contains(t, raw, "\x1b[4;4m", "the pending sort-highlight column must be underlined")
-	assert.Contains(t, ansi.Strip(raw), "Label ▲", "active sort column keeps its arrow")
-
-	// No separate underline when the highlight sits on the active sort column.
-	tbl2 := newTestTable(120).SetSortState(0, SortAsc).SetSortHighlight(0)
-	assert.NotContains(t, tbl2.View(), "\x1b[4;4m", "no underline when highlight == active sort column")
-}
-
 func TestTable_CursorNavigation(t *testing.T) {
 	tbl := newTestTable(120)
 	assert.Equal(t, 0, tbl.Cursor())

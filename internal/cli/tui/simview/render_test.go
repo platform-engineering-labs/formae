@@ -206,8 +206,17 @@ func TestRenderGroupColHeaderThemeHighlight(t *testing.T) {
 	quietModel.sortHi[kindResource] = colLabel
 	quietHdr := quietModel.renderGroupColHeader(kindResource, 14, 30, 30, 0)
 
-	assert.Contains(t, richHdr, "48;2;", "rich (background mode) navigated header must carry a background SGR sequence")
-	assert.NotContains(t, quietHdr, "48;2;", "quiet (brighten mode) navigated header must not carry a background")
+	fgPrefix := func(c lipgloss.TerminalColor) string {
+		return strings.SplitN(lipgloss.NewStyle().Foreground(c).Bold(true).Render("x"), "x", 2)[0]
+	}
+
+	// The active sort column (here also the navigated one) uses PrimaryAccent under
+	// rich (background mode) and bold bright white under quiet (brighten mode). It
+	// no longer uses the Selection background, which the row cursor uses — so the
+	// sort indicator and the selected row stay visually distinct.
+	assert.Contains(t, richHdr, fgPrefix(richModel.th.Palette.PrimaryAccent), "rich active-sort header must carry PrimaryAccent")
+	assert.NotContains(t, richHdr, "48;2;", "rich sort header must not use a background")
+	assert.NotContains(t, quietHdr, fgPrefix(quietModel.th.Palette.PrimaryAccent), "quiet must not carry PrimaryAccent")
 	assert.Contains(t, quietHdr, "\x1b[1;", "quiet navigated header should still render bold")
 }
 

@@ -177,21 +177,21 @@ func TestMultiView_HeaderThemeHighlight(t *testing.T) {
 	quietV := multiView{th: quietTh, width: 130, sortHi: colID, sortCol: colAge, sortDir: components.SortAsc}
 	quietHdr := quietV.headerRow()
 
-	assert.Contains(t, richHdr, "48;2;", "rich (background mode) navigated header must carry a background SGR sequence")
-	assert.NotContains(t, quietHdr, "48;2;", "quiet (brighten mode) header must never carry a background")
+	fgPrefix := func(c lipgloss.TerminalColor) string {
+		return strings.SplitN(lipgloss.NewStyle().Foreground(c).Bold(true).Render("x"), "x", 2)[0]
+	}
 
-	// The active-sort (Age) column under rich renders PrimaryAccent (blue),
-	// distinct from the navigated column's background treatment.
-	accentColor := richTh.Palette.PrimaryAccent
-	accentSeq := lipgloss.NewStyle().Foreground(accentColor).Bold(true).Render("x")
-	// Extract just the escape prefix (up to the 'x') for a substring match.
-	accentPrefix := strings.SplitN(accentSeq, "x", 2)[0]
-	assert.Contains(t, richHdr, accentPrefix, "rich active-sort column must carry PrimaryAccent")
+	// The pending sort-target (navigated) column uses SecondaryAccent as a
+	// distinct "cursor" colour in every header mode — never the Selection
+	// background (which the row cursor uses) or an underline.
+	assert.Contains(t, richHdr, fgPrefix(richTh.Palette.SecondaryAccent), "rich pending-sort column must carry SecondaryAccent")
+	assert.Contains(t, quietHdr, fgPrefix(quietTh.Palette.SecondaryAccent), "quiet pending-sort column must carry SecondaryAccent")
 
-	// Under quiet, both navigated and active-sort columns are bright white —
-	// no accent color, no background, just bold brightening (rich's accent
-	// escape sequence must not appear).
-	assert.NotContains(t, quietHdr, accentPrefix, "quiet must not carry rich's PrimaryAccent color")
+	// The active-sort (Age) column under rich (background mode) renders
+	// PrimaryAccent; under quiet (brighten mode) it is bold bright white with no
+	// accent colour.
+	assert.Contains(t, richHdr, fgPrefix(richTh.Palette.PrimaryAccent), "rich active-sort column must carry PrimaryAccent")
+	assert.NotContains(t, quietHdr, fgPrefix(quietTh.Palette.PrimaryAccent), "quiet active-sort column must not carry PrimaryAccent")
 	assert.Contains(t, quietHdr, "\x1b[1;", "quiet header should still render bold")
 }
 
