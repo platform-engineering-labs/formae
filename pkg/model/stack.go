@@ -15,8 +15,8 @@ import (
 type Stack struct {
 	ID          string            `json:"ID,omitempty"`
 	Label       string            `json:"Label"`
-	Description string            `json:"Description"`
-	Policies    []json.RawMessage `json:"Policies,omitempty"` // Inline policies from PKL
+	Description string            `json:"Description,omitempty"` // optional; empty means "unset" (never overwrites a stored description)
+	Policies    []json.RawMessage `json:"Policies,omitempty"`    // Inline policies from PKL
 	CreatedAt   time.Time         `json:"CreatedAt,omitempty"`
 }
 

@@ -124,6 +124,29 @@ func TestGenerateStackUpdates_NoChange_DescriptionSame(t *testing.T) {
 	assert.Empty(t, updates) // No updates should be generated
 }
 
+func TestGenerateStackUpdates_EmptyDescription_PreservesExisting(t *testing.T) {
+	existing := &pkgmodel.Stack{
+		ID:          "existing-id",
+		Label:       "lifeline",
+		Description: "User's real description",
+	}
+	mockDS := &mockStackDatastore{
+		stacks: map[string]*pkgmodel.Stack{"lifeline": existing},
+	}
+	generator := NewStackUpdateGenerator(mockDS)
+
+	// An extracted, adopted stack carries no description; applying it must not
+	// overwrite the description the user already set on the existing stack.
+	stacks := []pkgmodel.Stack{
+		{Label: "lifeline", Description: ""},
+	}
+
+	updates, err := generator.GenerateStackUpdates(stacks, pkgmodel.CommandApply)
+
+	require.NoError(t, err)
+	assert.Empty(t, updates, "an empty incoming description must not overwrite the existing one")
+}
+
 func TestGenerateStackUpdates_DatastoreError(t *testing.T) {
 	mockDS := &mockStackDatastore{
 		shouldError: true,

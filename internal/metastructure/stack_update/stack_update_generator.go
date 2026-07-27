@@ -72,6 +72,13 @@ func (sg *StackUpdateGenerator) determineStackUpdate(stack pkgmodel.Stack) (Stac
 		// Generate ID upfront for new stacks so it's available throughout the flow
 		stack.ID = util.NewID()
 	} else {
+		// An incoming stack with no description (e.g. an extracted, adopted stack
+		// whose synthesized stack block carries no description) must not overwrite
+		// a description the user already set. Treat empty as "unset" and keep the
+		// stored description.
+		if stack.Description == "" {
+			stack.Description = existing.Description
+		}
 		// Check if there's any change
 		if existing.Description == stack.Description {
 			return StackUpdate{}, false, nil

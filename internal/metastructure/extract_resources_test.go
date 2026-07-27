@@ -340,11 +340,13 @@ func TestExtractResources_ManagedAndUnmanagedStacks(t *testing.T) {
 	require.True(t, ok, "should have managed stack")
 	assert.Equal(t, "My managed stack", managed.Description)
 
-	// Unmanaged stack should be synthesized with a description
+	// Unmanaged stack is synthesized with NO description: description is optional,
+	// and leaving it empty means adopting these resources into an existing stack
+	// won't overwrite a description the user already set.
 	unmanaged, ok := stacksByLabel[constants.UnmanagedStack]
 	require.True(t, ok, "should have $unmanaged stack")
-	assert.Equal(t, "Resources imported with formae extract", unmanaged.Description,
-		"$unmanaged stack should be synthesized with the import description")
+	assert.Empty(t, unmanaged.Description,
+		"$unmanaged stack should be synthesized without a description")
 
 	// Verify the forma can be serialized to JSON with Stacks present
 	jsonBytes, err := json.Marshal(forma)
@@ -382,10 +384,11 @@ func TestExtractResources_OnlyUnmanagedStack(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, forma)
 
-	// Should have the unmanaged stack even though it's not in the datastore
+	// Should have the unmanaged stack even though it's not in the datastore,
+	// synthesized without a description (optional; empty means "unset").
 	require.Len(t, forma.Stacks, 1, "should have exactly one stack")
 	assert.Equal(t, constants.UnmanagedStack, forma.Stacks[0].Label)
-	assert.NotEmpty(t, forma.Stacks[0].Description)
+	assert.Empty(t, forma.Stacks[0].Description)
 
 	// Verify JSON serialization includes Stacks (not omitted by omitempty)
 	jsonBytes, err := json.Marshal(forma)
