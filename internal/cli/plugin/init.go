@@ -76,6 +76,11 @@ type PluginInitOptions struct {
 	// Test seams — nil in production paths
 	HubClient          HubClient
 	TemplateDownloader TemplateDownloader
+
+	// resolvedTheme is the configured CLI theme for the interactive screen,
+	// set by the command's RunE on an interactive TTY. nil on the --no-input /
+	// automation path, where the screen falls back to the default theme.
+	resolvedTheme *theme.Theme
 }
 
 // TemplateDownloader fetches the plugin template tarball and extracts
@@ -296,13 +301,15 @@ Template repository: github.com/platform-engineering-labs/formae-plugin-template
 				return err
 			}
 
-			// Theme the interactive init screen (banner) to the user's configured
-			// theme. Gated on an interactive TTY — the only case that renders the
-			// banner + form — so --no-input/piped automation stays a pure read and
-			// never resolves config. runPluginInit prints the banner once it
-			// confirms the interactive path.
+			// Theme the whole interactive init screen (banner + forms + scaffold
+			// output) to the user's configured theme. Gated on an interactive TTY
+			// — the only case that renders a screen — so --no-input/piped
+			// automation stays a pure read and never resolves config. Resolve
+			// once and stash on opts so every part renders in the same theme.
 			if !opts.NoInput && tui.IsInteractive() {
-				banner.SetTheme(cmd.ResolveConfiguredTheme(c))
+				th := cmd.ResolveConfiguredTheme(c)
+				banner.SetTheme(th)
+				opts.resolvedTheme = th
 			}
 
 			return runPluginInitFn(c.Context(), opts)
@@ -524,7 +531,10 @@ func runPluginInitNoInput(ctx context.Context, opts *PluginInitOptions) error {
 //     nameErr pre-marked; all other fields in v are preserved — R5).
 //  5. On any other outcome: breaks and proceeds to scaffolding.
 func runPluginInitInteractive(ctx context.Context, opts *PluginInitOptions) error {
-	th := theme.New("formae")
+	th := opts.resolvedTheme
+	if th == nil {
+		th = theme.New("formae")
+	}
 	w := os.Stdout
 
 	// Pre-fill form values from CLI flags.
@@ -619,7 +629,10 @@ func runPluginInitInteractive(ctx context.Context, opts *PluginInitOptions) erro
 // and prints the "Done! Next steps:" block. Used by both the interactive and
 // --no-input paths.
 func runScaffold(ctx context.Context, opts *PluginInitOptions, config *PluginConfig, w io.Writer) error {
-	th := theme.New("formae")
+	th := opts.resolvedTheme
+	if th == nil {
+		th = theme.New("formae")
+	}
 
 	// Download template.
 	dlStep := components.StartStep(w, th, "Downloading template from GitHub…")

@@ -45,6 +45,30 @@ func loopOpts(name string, hubClient HubClient, dl TemplateDownloader, overrides
 	return opts
 }
 
+// TestInteractiveScreen_UsesResolvedTheme verifies runPluginInitInteractive
+// renders the interactive form with the theme the command resolved and stashed
+// on opts.resolvedTheme, so the whole init screen follows the user's configured
+// theme instead of the hardcoded default.
+func TestInteractiveScreen_UsesResolvedTheme(t *testing.T) {
+	orig := runFormFn
+	t.Cleanup(func() { runFormFn = orig })
+
+	want := theme.New("rich")
+	var got *theme.Theme
+	runFormFn = func(th *theme.Theme, _ *initFormValues, _ string) error {
+		got = th
+		return errors.New("stop after first form") // exit the loop immediately
+	}
+
+	opts := loopOpts("foo", nil, nil, func(o *PluginInitOptions) {
+		o.NoAvailabilityCheck = true // skip the Hub call
+		o.resolvedTheme = want
+	})
+	_ = runPluginInitInteractive(context.Background(), opts)
+
+	assert.Same(t, want, got, "interactive form must render with the resolved configured theme")
+}
+
 // ---------------------------------------------------------------------------
 // hubCheckResult (unit-test the availability classifier directly)
 // ---------------------------------------------------------------------------
