@@ -296,6 +296,15 @@ Template repository: github.com/platform-engineering-labs/formae-plugin-template
 				return err
 			}
 
+			// Theme the interactive init screen (banner) to the user's configured
+			// theme. Gated on an interactive TTY — the only case that renders the
+			// banner + form — so --no-input/piped automation stays a pure read and
+			// never resolves config. runPluginInit prints the banner once it
+			// confirms the interactive path.
+			if !opts.NoInput && tui.IsInteractive() {
+				banner.SetTheme(cmd.ResolveConfiguredTheme(c))
+			}
+
 			return runPluginInitFn(c.Context(), opts)
 		},
 		SilenceErrors: true,
@@ -452,10 +461,9 @@ func runPluginInit(ctx context.Context, opts *PluginInitOptions) error {
 	}
 
 	// Render the logo banner atop the interactive init screen, matching the
-	// other plugin subcommands. plugin init has no --config/--profile and its
-	// forms use the default formae theme, so the banner (also default-themed)
-	// stays consistent — and we avoid ResolveConfiguredTheme, which would
-	// bootstrap the config store. PrintBanner self-suppresses on non-TTY.
+	// other plugin subcommands. The RunE has already pointed the banner at the
+	// user's configured theme for this interactive path; PrintBanner
+	// self-suppresses on non-TTY.
 	banner.PrintBanner()
 
 	return runPluginInitInteractive(ctx, opts)

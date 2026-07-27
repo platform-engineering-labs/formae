@@ -46,16 +46,14 @@ func ProjectInitCmd() *cobra.Command {
 			yes, _ := command.Flags().GetBool("yes")
 			pluginDir, _ := command.Flags().GetString("plugin-dir")
 
-			// Theme the banner and interactive form. Resolve the configured
-			// theme only when the user explicitly passes --config/--profile —
-			// those paths read an existing file with no side effects. With
-			// neither flag, ResolveConfiguredTheme would run config-store
-			// migration/bootstrap (writing FORMAE_CONFIG_DIR), which project
-			// init must not do: it typically runs before any config exists.
+			// Theme the banner and interactive form to the user's configured
+			// theme, but only when we will actually show the interactive screen
+			// (no --include, no --yes, and a TTY). Otherwise there is no screen,
+			// so keep the default theme and skip config resolution — that keeps
+			// piped/--yes automation a pure read and never bootstraps the config
+			// store (project init typically runs before any config exists).
 			th := theme.New("")
-			if configFlag, _ := command.Flags().GetString("config"); configFlag != "" {
-				th = cmd.ResolveConfiguredTheme(command)
-			} else if profileFlag, _ := command.Flags().GetString("profile"); profileFlag != "" {
+			if len(include) == 0 && !yes && isInteractive() {
 				th = cmd.ResolveConfiguredTheme(command)
 			}
 			banner.SetTheme(th)
