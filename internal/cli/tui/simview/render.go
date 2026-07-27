@@ -195,7 +195,9 @@ func (m Model) renderGroupColHeader(kind rowKind, opW, labelW, typeW, stackW int
 
 	styleFor := func(isHL, isAct bool) lipgloss.Style {
 		switch {
-		case isHL && !isAct:
+		case isHL:
+			// The highlight colour shows wherever the ←/→ cursor is, including on
+			// the active sort column (which also keeps its ▲/▼ arrow).
 			return hlStyle
 		case isAct:
 			if background {

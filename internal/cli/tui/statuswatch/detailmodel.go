@@ -525,28 +525,27 @@ func (d detailModel) findShowMoreNavIndex(nav []navigableLine, kind updateKind) 
 func (d detailModel) renderGroupColHeader(kind updateKind, labelW, typeW, stackW int) string {
 	p := d.th.Palette
 	dimStyle := lipgloss.NewStyle().Foreground(p.TextSecondary)
-	// Header emphasis is theme-driven, mirroring simview: "background" (rich)
-	// gives the navigated column a Selection background; "brighten" (quiet)
-	// renders it bright-bold with no background.
+	// The active sort column uses PrimaryAccent (background mode) or bold bright
+	// white (brighten mode); the pending ←/→ highlight uses SecondaryAccent in
+	// every mode so it reads as a distinct cursor wherever it sits — including on
+	// the active column — and never reuses the Selection background of the row
+	// cursor. Mirrors simview and the multi view.
 	background := d.th.Header.Highlight == "background"
-	highlightStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(p.TextPrimary.Dark)).Background(lipgloss.Color(p.Selection.Dark)).Bold(true)
 	accentStyle := lipgloss.NewStyle().Foreground(p.PrimaryAccent).Bold(true)
 	brightStyle := lipgloss.NewStyle().Foreground(p.TextPrimary).Bold(true)
+	hlStyle := lipgloss.NewStyle().Foreground(p.SecondaryAccent).Bold(true)
 	styleFor := func(isHL, isAct bool) lipgloss.Style {
-		if background {
-			switch {
-			case isHL:
-				return highlightStyle
-			case isAct:
+		switch {
+		case isHL:
+			return hlStyle
+		case isAct:
+			if background {
 				return accentStyle
-			default:
-				return dimStyle
 			}
-		}
-		if isHL || isAct {
 			return brightStyle
+		default:
+			return dimStyle
 		}
-		return dimStyle
 	}
 
 	grpHi := d.sortHi[kind]
