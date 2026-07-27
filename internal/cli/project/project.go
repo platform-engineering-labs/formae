@@ -14,6 +14,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/banner"
 	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/platform-engineering-labs/formae/internal/util"
 )
 
@@ -45,7 +46,18 @@ func ProjectInitCmd() *cobra.Command {
 			yes, _ := command.Flags().GetBool("yes")
 			pluginDir, _ := command.Flags().GetString("plugin-dir")
 
-			th := cmd.ResolveConfiguredTheme(command)
+			// Theme the banner and interactive form. Resolve the configured
+			// theme only when the user explicitly passes --config/--profile —
+			// those paths read an existing file with no side effects. With
+			// neither flag, ResolveConfiguredTheme would run config-store
+			// migration/bootstrap (writing FORMAE_CONFIG_DIR), which project
+			// init must not do: it typically runs before any config exists.
+			th := theme.New("")
+			if configFlag, _ := command.Flags().GetString("config"); configFlag != "" {
+				th = cmd.ResolveConfiguredTheme(command)
+			} else if profileFlag, _ := command.Flags().GetString("profile"); profileFlag != "" {
+				th = cmd.ResolveConfiguredTheme(command)
+			}
 			banner.SetTheme(th)
 			banner.PrintBanner()
 
