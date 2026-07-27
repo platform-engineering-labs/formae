@@ -14,7 +14,6 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/banner"
 	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
-	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/platform-engineering-labs/formae/internal/util"
 )
 
@@ -46,8 +45,9 @@ func ProjectInitCmd() *cobra.Command {
 			yes, _ := command.Flags().GetBool("yes")
 			pluginDir, _ := command.Flags().GetString("plugin-dir")
 
+			th := cmd.ResolveConfiguredTheme(command)
+			banner.SetTheme(th)
 			banner.PrintBanner()
-			th := theme.New("")
 
 			// Interactive plugin multi-select (D10):
 			// Only when no --include is specified and --yes is not set.

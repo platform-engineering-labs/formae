@@ -349,9 +349,9 @@ func renderCommandsStatus(a *app.App, status *apimodel.ListCommandStatusResponse
 	return nil
 }
 
-func prepareScreen(what string) {
+func prepareScreen(a *app.App, what string) {
 	banner.ClearScreen()
-	banner.PrintBanner()
+	printBanner(a)
 	fmt.Printf("Watching %s (refreshing every 2s)...\n\n", what)
 }
 
@@ -362,7 +362,7 @@ func WatchCommandsStatus(app *app.App, query string, n int, outputLayout StatusO
 	for {
 		time.Sleep(2 * time.Second)
 
-		prepareScreen("commands status")
+		prepareScreen(app, "commands status")
 		status, nags, err = app.GetCommandsStatus(query, n, true)
 		if err != nil {
 			return err
@@ -396,7 +396,7 @@ func watchStats(app *app.App) error {
 	for {
 		time.Sleep(2 * time.Second)
 
-		prepareScreen("agent status")
+		prepareScreen(app, "agent status")
 		stats, _, err := app.Stats()
 		if err != nil {
 			return err
