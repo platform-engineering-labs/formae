@@ -61,7 +61,7 @@ animation = "static"
 
 [spinner]
 frames = ["●", "◉", "○", "◉"]
-interval_ms = 100
+interval_ms = 333
 static_frame = "●"
 
 [confirmation_bar]
