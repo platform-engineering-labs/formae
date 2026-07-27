@@ -484,7 +484,9 @@ func detailFooterHints(singleCommand bool) []components.KeyHint {
 	hints := []components.KeyHint{
 		{Key: "→←", Desc: "column"},
 		{Key: "s", Desc: "sort"},
-		{Key: "space", Desc: "expand"},
+		// enter is the universal "open the selected item" key; space also expands
+		// here but the footer advertises enter for cross-view consistency.
+		{Key: "enter", Desc: "expand"},
 		{Key: "d", Desc: "details"},
 	}
 	// In single-command mode (apply/destroy --watch) there is no command list to

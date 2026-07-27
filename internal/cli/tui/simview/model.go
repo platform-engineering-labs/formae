@@ -533,10 +533,14 @@ func footerHints() []components.KeyHint {
 	// No "y: confirm" or "q: abort" here — both actions live in the confirm bar
 	// above the footer ("press y … · n to abort"), so repeating them (and showing
 	// a second abort key) would be redundant and conflicting. q/esc still abort.
+	// enter is the universal "open the selected item" key (it drills into a detail
+	// screen in the list views and toggles inline expand here); space is an alias
+	// that also expands, but the footer advertises enter for cross-view
+	// consistency.
 	return []components.KeyHint{
 		{Key: "↑↓", Desc: "select"},
 		{Key: "→←", Desc: "column"},
-		{Key: "space", Desc: "expand"},
+		{Key: "enter", Desc: "expand"},
 		{Key: "s", Desc: "sort"},
 	}
 }
