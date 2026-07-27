@@ -21,6 +21,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
+	"github.com/platform-engineering-labs/formae/internal/cli/banner"
 	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
@@ -449,6 +450,13 @@ func runPluginInit(ctx context.Context, opts *PluginInitOptions) error {
 	if !tui.IsInteractive() {
 		return fmt.Errorf("interactive mode requires a TTY; use --no-input with all required flags for non-interactive use")
 	}
+
+	// Render the logo banner atop the interactive init screen, matching the
+	// other plugin subcommands. plugin init has no --config/--profile and its
+	// forms use the default formae theme, so the banner (also default-themed)
+	// stays consistent — and we avoid ResolveConfiguredTheme, which would
+	// bootstrap the config store. PrintBanner self-suppresses on non-TTY.
+	banner.PrintBanner()
 
 	return runPluginInitInteractive(ctx, opts)
 }
