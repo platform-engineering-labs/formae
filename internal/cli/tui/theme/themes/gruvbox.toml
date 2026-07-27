@@ -1,0 +1,78 @@
+# gruvbox — built-in formae CLI theme (generated; do not edit by hand).
+# Palette derived from the Omarchy "gruvbox" theme, based on the Gruvbox color scheme by Pavel Pertsev (https://github.com/morhetz/gruvbox).
+# Glyphs, spinner, progress, and behavior follow the built-in "quiet" theme.
+# Regenerate: FORMAE_UPDATE_THEMES=1 go test -tags=unit -run TestOmarchyThemesUpToDate ./internal/cli/tui/theme
+
+name = "gruvbox"
+
+[palette]
+  base = "#282828"
+  surface = "#282828"
+  text_primary = "#d4be98"
+  text_secondary = "#d4be98"
+  text_subtle = "#3c3836"
+  border = "#3c3836"
+  selection = "#d65d0e"
+  primary_accent = "#7daea3"
+  secondary_accent = "#d3869b"
+  error = "#ea6962"
+  error_subtle = "#ea6962"
+  error_bright = "#ea6962"
+  warning = "#d8a657"
+  unmanaged = "#ea6962"
+  done = "#a9b665"
+  in_progress = "#3c3836"
+  pending = "#3c3836"
+  op_create = "#a9b665"
+  op_update = "#d8a657"
+  op_delete = "#ea6962"
+  op_replace = "#d3869b"
+  op_detach = "#3c3836"
+  op_keep = "#3c3836"
+  logo_wordmark = "#7daea3"
+
+[glyphs]
+  op_create = "+"
+  op_update = "✎"
+  op_delete = "✕"
+  op_replace = "↻"
+  op_detach = "⊘"
+  op_keep = "="
+  status_done = "✓"
+  status_failed = "✗"
+  status_pending = "·"
+  status_inprogress = "◐"
+  status_skipped = "⊘"
+  status_canceled = "⊘"
+  ack_done = "✓"
+  ack_skip = "·"
+  ack_warn = "!"
+  ack_fail = "✗"
+  tree_branch = "├"
+  tree_last = "└"
+  expand_open = "▾"
+  expand_closed = "▸"
+  checkbox_on = "[x]"
+  checkbox_off = "[ ]"
+  transition = "→"
+
+[progress]
+  fill_done = "█"
+  fill_inprogress = "▓"
+  fill_pending = "░"
+  animation = "static"
+
+[spinner]
+  frames = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"]
+  interval_ms = 100
+  static_frame = "⣾"
+
+[confirmation_bar]
+  color = "brand"
+
+[header]
+  highlight = "brighten"
+
+[rows]
+  label_accent = false
+  delete_whole_row = false

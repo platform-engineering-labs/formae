@@ -1,0 +1,78 @@
+# catppuccin-latte — built-in formae CLI theme (generated; do not edit by hand).
+# Palette derived from the Omarchy "catppuccin-latte" theme, based on the Catppuccin Latte color scheme (https://catppuccin.com).
+# Glyphs, spinner, progress, and behavior follow the built-in "quiet" theme.
+# Regenerate: FORMAE_UPDATE_THEMES=1 go test -tags=unit -run TestOmarchyThemesUpToDate ./internal/cli/tui/theme
+
+name = "catppuccin-latte"
+
+[palette]
+  base = "#eff1f5"
+  surface = "#eff1f5"
+  text_primary = "#4c4f69"
+  text_secondary = "#5c5f77"
+  text_subtle = "#acb0be"
+  border = "#acb0be"
+  selection = "#dc8a78"
+  primary_accent = "#1e66f5"
+  secondary_accent = "#ea76cb"
+  error = "#d20f39"
+  error_subtle = "#d20f39"
+  error_bright = "#d20f39"
+  warning = "#df8e1d"
+  unmanaged = "#d20f39"
+  done = "#40a02b"
+  in_progress = "#acb0be"
+  pending = "#acb0be"
+  op_create = "#40a02b"
+  op_update = "#df8e1d"
+  op_delete = "#d20f39"
+  op_replace = "#ea76cb"
+  op_detach = "#acb0be"
+  op_keep = "#acb0be"
+  logo_wordmark = "#1e66f5"
+
+[glyphs]
+  op_create = "+"
+  op_update = "✎"
+  op_delete = "✕"
+  op_replace = "↻"
+  op_detach = "⊘"
+  op_keep = "="
+  status_done = "✓"
+  status_failed = "✗"
+  status_pending = "·"
+  status_inprogress = "◐"
+  status_skipped = "⊘"
+  status_canceled = "⊘"
+  ack_done = "✓"
+  ack_skip = "·"
+  ack_warn = "!"
+  ack_fail = "✗"
+  tree_branch = "├"
+  tree_last = "└"
+  expand_open = "▾"
+  expand_closed = "▸"
+  checkbox_on = "[x]"
+  checkbox_off = "[ ]"
+  transition = "→"
+
+[progress]
+  fill_done = "█"
+  fill_inprogress = "▓"
+  fill_pending = "░"
+  animation = "static"
+
+[spinner]
+  frames = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"]
+  interval_ms = 100
+  static_frame = "⣾"
+
+[confirmation_bar]
+  color = "brand"
+
+[header]
+  highlight = "brighten"
+
+[rows]
+  label_accent = false
+  delete_whole_row = false

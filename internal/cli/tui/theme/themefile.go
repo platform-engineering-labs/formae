@@ -15,7 +15,7 @@ import (
 // key stays nil through an extends merge (Task 5).
 type themeFile struct {
 	Name    string       `toml:"name"`
-	Extends string       `toml:"extends"`
+	Extends string       `toml:"extends,omitempty"`
 	Palette paletteFile  `toml:"palette"`
 	Glyphs  glyphsFile   `toml:"glyphs"`
 	Prog    progressFile `toml:"progress"`

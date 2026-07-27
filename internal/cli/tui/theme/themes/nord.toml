@@ -1,0 +1,78 @@
+# nord — built-in formae CLI theme (generated; do not edit by hand).
+# Palette derived from the Omarchy "nord" theme, based on the Nord color scheme (https://www.nordtheme.com).
+# Glyphs, spinner, progress, and behavior follow the built-in "quiet" theme.
+# Regenerate: FORMAE_UPDATE_THEMES=1 go test -tags=unit -run TestOmarchyThemesUpToDate ./internal/cli/tui/theme
+
+name = "nord"
+
+[palette]
+  base = "#2e3440"
+  surface = "#2e3440"
+  text_primary = "#d8dee9"
+  text_secondary = "#e5e9f0"
+  text_subtle = "#4c566a"
+  border = "#4c566a"
+  selection = "#4c566a"
+  primary_accent = "#81a1c1"
+  secondary_accent = "#b48ead"
+  error = "#bf616a"
+  error_subtle = "#bf616a"
+  error_bright = "#bf616a"
+  warning = "#ebcb8b"
+  unmanaged = "#bf616a"
+  done = "#a3be8c"
+  in_progress = "#4c566a"
+  pending = "#4c566a"
+  op_create = "#a3be8c"
+  op_update = "#ebcb8b"
+  op_delete = "#bf616a"
+  op_replace = "#b48ead"
+  op_detach = "#4c566a"
+  op_keep = "#4c566a"
+  logo_wordmark = "#81a1c1"
+
+[glyphs]
+  op_create = "+"
+  op_update = "✎"
+  op_delete = "✕"
+  op_replace = "↻"
+  op_detach = "⊘"
+  op_keep = "="
+  status_done = "✓"
+  status_failed = "✗"
+  status_pending = "·"
+  status_inprogress = "◐"
+  status_skipped = "⊘"
+  status_canceled = "⊘"
+  ack_done = "✓"
+  ack_skip = "·"
+  ack_warn = "!"
+  ack_fail = "✗"
+  tree_branch = "├"
+  tree_last = "└"
+  expand_open = "▾"
+  expand_closed = "▸"
+  checkbox_on = "[x]"
+  checkbox_off = "[ ]"
+  transition = "→"
+
+[progress]
+  fill_done = "█"
+  fill_inprogress = "▓"
+  fill_pending = "░"
+  animation = "static"
+
+[spinner]
+  frames = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"]
+  interval_ms = 100
+  static_frame = "⣾"
+
+[confirmation_bar]
+  color = "brand"
+
+[header]
+  highlight = "brighten"
+
+[rows]
+  label_accent = false
+  delete_whole_row = false

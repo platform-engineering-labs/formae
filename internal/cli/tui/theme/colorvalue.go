@@ -37,6 +37,16 @@ func (c *colorValue) UnmarshalTOML(v any) error {
 	}
 }
 
+// MarshalTOML emits a bare hex string when light and dark match, else an inline
+// { light, dark } table. It is the inverse of UnmarshalTOML so a theme file
+// round-trips (write then re-parse) without loss.
+func (c colorValue) MarshalTOML() ([]byte, error) {
+	if c.Light == c.Dark {
+		return []byte(fmt.Sprintf("%q", c.Light)), nil
+	}
+	return []byte(fmt.Sprintf("{ light = %q, dark = %q }", c.Light, c.Dark)), nil
+}
+
 // adaptive converts to the lipgloss form used throughout the theme.
 func (c colorValue) adaptive() lipgloss.AdaptiveColor {
 	return lipgloss.AdaptiveColor{Light: c.Light, Dark: c.Dark}
