@@ -76,11 +76,11 @@ func (m *Metastructure) ExtractResources(query string) (*pkgmodel.Forma, error) 
 			if stack != nil {
 				forma.Stacks = append(forma.Stacks, *stack)
 			} else {
-				// Stack not found in datastore (e.g., $unmanaged) - create a synthetic entry
-				forma.Stacks = append(forma.Stacks, pkgmodel.Stack{
-					Label:       label,
-					Description: "Resources imported with formae extract",
-				})
+				// Stack not found in datastore (e.g. $unmanaged): synthesize a
+				// minimal entry with no description. Description is optional, so we
+				// no longer emit a placeholder ("Resources imported with formae
+				// extract") that the user would then have to strip by hand.
+				forma.Stacks = append(forma.Stacks, pkgmodel.Stack{Label: label})
 			}
 		}
 	}

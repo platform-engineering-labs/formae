@@ -121,7 +121,7 @@ function parseStacks(stacksData: List<Map<String, Any>>, policyLabelMap: Map<Str
     let (stacksString = stacksData.map((stackData) ->
         let (label = stackData["label"])
         let (camelCaseLabel = toCamelCase(label))
-        let (description = stackData.getOrNull("description") ?? "This was generated")
+        let (description = stackData.getOrNull("description") as String?)
         let (policies = stackData.getOrNull("policies") as List?)
 
         let (labelLine = if (label == "$unmanaged")
@@ -174,11 +174,19 @@ function parseStacks(stacksData: List<Map<String, Any>>, policyLabelMap: Map<Str
             ""
         )
 
+        // Emit the description line only when the stack actually has one, so
+        // extracted/adopted stacks (which carry no description) don't ship an
+        // empty or placeholder value that would overwrite a stored description.
+        let (descriptionLine = if (description != null && description != "")
+            "\n        description = \"\(description)\""
+        else
+            ""
+        )
+
         """
 
       local \(camelCaseLabel) = new formae.Stack {
-        \(labelLine)
-        description = "\(description)"\(policiesLine)
+        \(labelLine)\(descriptionLine)\(policiesLine)
       }
       \(camelCaseLabel)
       """
@@ -337,7 +345,9 @@ function generateFormaFile(parsed: json.Value): String =
     // Extract stack data from the parsed JSON, falling back to resource stack labels if Stacks is not present
     let (stacksFromJson = parsed.Stacks.toList().map((stack) -> Map(
             "label", stack.Label,
-            "description", stack.Description,
+            // Description is optional and omitted from JSON when unset, so read it
+            // safely — a missing property must not error.
+            "description", stack.getPropertyOrNull("Description"),
             "policies", stack.getPropertyOrNull("Policies")?.toList() ?? List()
             )
         )

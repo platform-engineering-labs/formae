@@ -60,7 +60,9 @@ open class SubResource {
 
 open class Stack {
     hidden label: String(length > 0)
-    hidden description: String
+    // Optional: a stack need not carry a description. Extracted/adopted stacks
+    // omit it so applying them never overwrites a description already set.
+    hidden description: String?
     hidden policies: Listing<Policy|PolicyResolvable>?
 
     local parent = this
@@ -70,7 +72,7 @@ open class Stack {
 
     // Output
     fixed Label: String = label
-    fixed Description: String = description
+    fixed Description: String? = description
     fixed Policies: Listing<Dynamic>? = policies?.toList()?.map((p) ->
         if (p is PolicyResolvable)
             new Dynamic { `$ref` = "policy://\(p.label)" }
