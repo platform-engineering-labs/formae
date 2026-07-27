@@ -22,7 +22,7 @@ import (
 //   - Bordered card with title-in-border (op symbol + label) colored per-op via opColor
 //   - Fields: Operation, Type (if set), Stack (if set)
 //   - Changes: tree with ├/└ connectors, ordered:
-//     1. "put resource under management (unmanaged → <stack>)" when OldStackName=="$unmanaged"
+//     1. "bring resource under management (unmanaged → <stack>)" when OldStackName=="$unmanaged"
 //     2. "rename  <old> → <new>" when OldLabel != ""
 //     3. property changes from PatchDocument (replace: immutable lines first, then mutable)
 //   - NoOp changes skipped
@@ -151,7 +151,7 @@ func collectChangeLines(th *theme.Theme, r simRow, doneSt, errSt, subtleSt lipgl
 		if stackName == "" && r.stack != "" {
 			stackName = r.stack
 		}
-		lines = append(lines, adoptSt.Render("put resource under management")+" "+
+		lines = append(lines, adoptSt.Render("bring resource under management")+" "+
 			subtleSt.Render("(unmanaged → "+stackName+")"))
 	}
 

@@ -177,7 +177,7 @@ func TestRenderCard_NoOpSkipped(t *testing.T) {
 	_ = p // content verified above
 }
 
-// TestRenderCard_ManagementLine verifies "put resource under management" appears when OldStackName == "$unmanaged".
+// TestRenderCard_ManagementLine verifies "bring resource under management" appears when OldStackName == "$unmanaged".
 func TestRenderCard_ManagementLine(t *testing.T) {
 	th := makeCardTheme()
 	res := &apimodel.ResourceUpdate{
@@ -206,12 +206,12 @@ func TestRenderCard_ManagementLine(t *testing.T) {
 	p := plain(card)
 
 	// Management line should appear FIRST in changes
-	assert.Contains(t, p, "put resource under management", "management line should appear")
+	assert.Contains(t, p, "bring resource under management", "management line should appear")
 	assert.Contains(t, p, "unmanaged", "should mention unmanaged")
 	assert.Contains(t, p, "production", "should mention the target stack")
 
 	// Management line must appear BEFORE property changes
-	mgmtIdx := strings.Index(p, "put resource under management")
+	mgmtIdx := strings.Index(p, "bring resource under management")
 	versIdx := strings.Index(p, "VersioningConfiguration")
 	assert.Less(t, mgmtIdx, versIdx, "management line must come before property changes")
 }
@@ -446,7 +446,7 @@ func TestRenderCard_LineOrder(t *testing.T) {
 	card := strings.Join(lines, "\n")
 	p := plain(card)
 
-	mgmtIdx := strings.Index(p, "put resource under management")
+	mgmtIdx := strings.Index(p, "bring resource under management")
 	renameIdx := strings.Index(p, "rename")
 	typeIdx := strings.Index(p, "InstanceType")
 

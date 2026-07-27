@@ -1,0 +1,22 @@
+// © 2025 Platform Engineering Labs Inc.
+//
+// SPDX-License-Identifier: FSL-1.1-ALv2
+
+//go:build unit
+
+package apply
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
+
+// TestApplyCmd_NoWatchFlag guards the removal of --watch: apply watches by
+// default on a TTY and is fire-and-forget otherwise, so the flag no longer
+// exists.
+func TestApplyCmd_NoWatchFlag(t *testing.T) {
+	c := ApplyCmd()
+	assert.Nil(t, c.Flags().Lookup("watch"), "--watch must not exist on apply")
+	assert.NotNil(t, c.Flags().Lookup("simulate"), "simulate flag should still exist")
+}

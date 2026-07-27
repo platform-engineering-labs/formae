@@ -11,7 +11,9 @@ import (
 	"os"
 	"testing"
 
+	"github.com/platform-engineering-labs/formae/internal/cli/app"
 	"github.com/platform-engineering-labs/formae/internal/cli/printer"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/statuswatch"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/tuitest"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
@@ -21,6 +23,16 @@ import (
 
 func TestMain(m *testing.M) {
 	tuitest.PinRendering()
+	// Cancel now watches by default on a TTY, so runCancelInteractive ends in
+	// launchCancelWatch. Default it to a no-op for the whole package so tests
+	// that only exercise the pre-watch flow (banner, confirm, per-ID submit)
+	// don't try to open a real TTY. Tests that assert on the watch options
+	// override this seam locally.
+	launchCancelWatch = func(_ *app.App, _ *theme.Theme, _ statuswatch.Options) error { return nil }
+	// Default to an interactive stdin so tests that exercise the watch-by-default
+	// path reach launchCancelWatch. Tests that assert the non-interactive
+	// (fire-and-forget) behavior set isInteractive = false locally.
+	isInteractive = func() bool { return true }
 	os.Exit(m.Run())
 }
 

@@ -33,11 +33,68 @@ func stubDescriptionSeams(t *testing.T) {
 	origIsInteractive := isInteractive
 	origRunConfirm := runConfirm
 	origApplyFn := applyFn
+	origLaunchWatch := launchWatch
 	t.Cleanup(func() {
 		isInteractive = origIsInteractive
 		runConfirm = origRunConfirm
 		applyFn = origApplyFn
+		launchWatch = origLaunchWatch
 	})
+	// runApplyLegacy now watches by default on an interactive terminal; stub the
+	// watch launch to a no-op (finished) so the legacy-path tests don't open a TTY.
+	launchWatch = func(_ *app.App, _ string) (bool, error) { return true, nil }
+}
+
+// TestApplyLegacy_InteractiveYes_WatchesByDefault verifies that `apply --yes` on
+// an interactive terminal watches by default (the flag path was removed).
+func TestApplyLegacy_InteractiveYes_WatchesByDefault(t *testing.T) {
+	stubDescriptionSeams(t)
+	sim := applySimulationWithChanges()
+	applyFn = func(a *app.App, opts *ApplyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
+		if simulate {
+			return sim, nil, nil
+		}
+		return &apimodel.SubmitCommandResponse{CommandID: "real-cmd"}, nil, nil
+	}
+	isInteractive = func() bool { return true }
+	watchedID := ""
+	launchWatch = func(_ *app.App, commandID string) (bool, error) {
+		watchedID = commandID
+		return true, nil
+	}
+
+	err := runApplyLegacy(newTestApp(), &ApplyOptions{
+		OutputConsumer: printer.ConsumerHuman, FormaFile: "forma.pkl",
+		Mode: pkgmodel.FormaApplyModeReconcile, Yes: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "real-cmd", watchedID, "--yes on an interactive terminal must watch by default")
+}
+
+// TestApplyLegacy_NonInteractive_FireAndForget verifies that off a TTY the apply
+// is fire-and-forget (no watch launched).
+func TestApplyLegacy_NonInteractive_FireAndForget(t *testing.T) {
+	stubDescriptionSeams(t)
+	sim := applySimulationWithChanges()
+	applyFn = func(a *app.App, opts *ApplyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
+		if simulate {
+			return sim, nil, nil
+		}
+		return &apimodel.SubmitCommandResponse{CommandID: "real-cmd"}, nil, nil
+	}
+	isInteractive = func() bool { return false }
+	watchCalled := false
+	launchWatch = func(_ *app.App, _ string) (bool, error) {
+		watchCalled = true
+		return true, nil
+	}
+
+	err := runApplyLegacy(newTestApp(), &ApplyOptions{
+		OutputConsumer: printer.ConsumerHuman, FormaFile: "forma.pkl",
+		Mode: pkgmodel.FormaApplyModeReconcile, Yes: true,
+	})
+	require.NoError(t, err)
+	assert.False(t, watchCalled, "a non-interactive apply must be fire-and-forget")
 }
 
 // panicOnRealApply is an applyFn stub that panics if the real (non-simulate)

@@ -61,7 +61,6 @@ type CancelOptions struct {
 	Query          string
 	Force          bool
 	Yes            bool
-	Watch          bool
 	StatusOutput   status.StatusOutput
 	OutputConsumer printer.Consumer
 	OutputSchema   string
@@ -99,7 +98,6 @@ plugin stuck in an unbounded poll loop). With --force:
 			opts.Query = strings.TrimSpace(query)
 			opts.Force, _ = command.Flags().GetBool("force")
 			opts.Yes, _ = command.Flags().GetBool("yes")
-			opts.Watch, _ = command.Flags().GetBool("watch")
 			statusOutput, _ := command.Flags().GetString("status-output-layout")
 			opts.StatusOutput = status.StatusOutput(statusOutput)
 			outputConsumer, _ := command.Flags().GetString("output-consumer")
@@ -124,7 +122,6 @@ plugin stuck in an unbounded poll loop). With --force:
 	command.Flags().String("query", "", "Query to select commands to cancel. If not provided, cancels the most recent command. Use * as a wildcard anywhere (e.g. foo*, *foo, *foo*, foo*bar). ? and regex are not yet supported.")
 	command.Flags().Bool("force", false, "Abandon in-progress work and drive the command to a terminal 'Canceled' state immediately, instead of waiting for in-progress resources to finish. Cloud-side operations may continue: Update/Delete are reconciled by the synchronizer, but a still-running Create may orphan a resource that needs manual cleanup.")
 	command.Flags().Bool("yes", false, "Allow the command to run without any confirmations")
-	command.Flags().BoolP("watch", "w", false, "Watch the status of canceled commands until they complete")
 	command.Flags().String("status-output-layout", string(status.StatusOutputSummary), fmt.Sprintf("What to print as status output (%s | %s)", status.StatusOutputSummary, status.StatusOutputDetailed))
 	command.Flags().String("output-consumer", string(printer.ConsumerHuman), "Consumer of the command result (human | machine)")
 	command.Flags().String("output-schema", "yaml", "The schema to use for the result output (json | yaml)")
@@ -176,6 +173,11 @@ func runCancelForHumans(a *app.App, opts *CancelOptions) error {
 // runCancelInteractive implements the styled TTY cancel flow. The commands to
 // cancel are frozen at pre-fetch time (D6): the user cancels exactly the
 // commands they were shown, never a re-evaluated query.
+// cancelWatchPageLimit mirrors datastore.DefaultFormaCommandsQueryLimit: the
+// command-status query is capped to this many rows, so a cancel watch can only
+// ever display the first page of that many commands.
+const cancelWatchPageLimit = 10
+
 func runCancelInteractive(a *app.App, opts *CancelOptions) error {
 	th := a.Theme()
 	now := time.Now()
@@ -269,47 +271,61 @@ func runCancelInteractive(a *app.App, opts *CancelOptions) error {
 	// Compute expectations from merged response.
 	exps := cancelExpectations(merged)
 
-	// Step 4/5: --watch vs. no-watch.
-	if opts.Watch {
-		fmt.Println(renderCancelSummary(th, activeCmds, exps, opts.Force, now))
+	// Watch by default on a TTY: render the cancel summary, then drop into the
+	// cancel-watch TUI so the user sees their commands being canceled (this is
+	// one of the most valuable things to watch). Force-abandoned resources are
+	// surfaced inside the TUI via AbandonedResources.
+	fmt.Println(renderCancelSummary(th, activeCmds, exps, opts.Force, now))
 
-		// Build the set of force-abandoned resource ksuids (P3 normalization at call site).
-		var abandonedKsuids []string
-		for uri, rs := range merged.ResourceUpdateStates {
-			if rs.ForceCanceled {
-				abandonedKsuids = append(abandonedKsuids, ksuidFromURI(uri))
-			}
+	// Build the set of force-abandoned resource ksuids (P3 normalization at call site).
+	var abandonedKsuids []string
+	for uri, rs := range merged.ResourceUpdateStates {
+		if rs.ForceCanceled {
+			abandonedKsuids = append(abandonedKsuids, ksuidFromURI(uri))
 		}
-		sort.Strings(abandonedKsuids)
-
-		if len(merged.CommandIDs) == 1 {
-			return launchCancelWatch(a, th, statuswatch.Options{
-				Query:              fmt.Sprintf("id:%s", merged.CommandIDs[0]),
-				FocusCommandID:     merged.CommandIDs[0],
-				ExitWhenDone:       true,
-				AbandonedResources: abandonedKsuids,
-			})
-		}
-		idTerms := make([]string, len(merged.CommandIDs))
-		for i, id := range merged.CommandIDs {
-			idTerms[i] = "id:" + id
-		}
-		return launchCancelWatch(a, th, statuswatch.Options{
-			Query:              strings.Join(idTerms, " "),
-			ExitWhenDone:       true,
-			AbandonedResources: abandonedKsuids,
-		})
 	}
+	sort.Strings(abandonedKsuids)
 
-	// No --watch: print styled summary.
-	fmt.Print(renderCancelSummary(th, activeCmds, exps, opts.Force, now))
-
-	// Force output: list force-canceled resources with warning.
+	// A force cancel abandons in-progress work and can orphan resources, so always
+	// print the abandoned-resource cleanup warning to scrollback here. The watch
+	// TUI only surfaces AbandonedResources in its detail view and can auto-exit
+	// from the list before the user ever opens it, so the TUI is not a reliable
+	// place for this safety warning.
 	if opts.Force {
 		renderForceCanceledResources(th, merged, activeCmds)
 	}
 
-	return nil
+	// The watch TUI needs an interactive stdin to drive it. When stdout is a TTY
+	// but stdin is not (e.g. `formae cancel --yes </dev/null`), stay
+	// fire-and-forget: the cancels are already submitted and the summary prints
+	// how to follow progress via `formae status`.
+	if !isInteractive() {
+		return nil
+	}
+
+	if len(merged.CommandIDs) == 1 {
+		return launchCancelWatch(a, th, statuswatch.Options{
+			Query:              fmt.Sprintf("id:%s", merged.CommandIDs[0]),
+			FocusCommandID:     merged.CommandIDs[0],
+			ExitWhenDone:       true,
+			AbandonedResources: abandonedKsuids,
+		})
+	}
+	idTerms := make([]string, len(merged.CommandIDs))
+	for i, id := range merged.CommandIDs {
+		idTerms[i] = "id:" + id
+	}
+	// The status query is capped to cancelWatchPageLimit rows in the datastore, so
+	// for more canceled commands than that the watch can only ever see the first
+	// page. Only auto-exit when every command fits on that page; otherwise leave
+	// the view open (the user quits with q) so it can't falsely report "done"
+	// while off-page commands are still canceling.
+	return launchCancelWatch(a, th, statuswatch.Options{
+		Query:              strings.Join(idTerms, " "),
+		MaxResults:         len(merged.CommandIDs),
+		ExitWhenDone:       len(merged.CommandIDs) <= cancelWatchPageLimit,
+		AbandonedResources: abandonedKsuids,
+	})
 }
 
 // isTerminalState returns true for states that can no longer be canceled.
@@ -322,8 +338,9 @@ func isTerminalState(state string) bool {
 }
 
 // renderForceCanceledResources prints the list of resources that were abandoned
-// due to --force, followed by the abandoned/orphan reminder lines (the copy
-// from the legacy RenderCancelCommandResponse, restyled via theme roles).
+// due to --force, followed by the abandoned/orphan reminder lines. Used on the
+// fire-and-forget paths (non-interactive stdin) where the watch TUI, which would
+// otherwise surface abandoned resources, is not launched.
 func renderForceCanceledResources(th *theme.Theme, merged *apimodel.CancelCommandResponse, cmds []apimodel.Command) {
 	warnStyle := lipgloss.NewStyle().Foreground(th.Palette.Warning)
 	subtle := lipgloss.NewStyle().Foreground(th.Palette.TextSecondary)
@@ -416,25 +433,9 @@ func runCancelLegacy(a *app.App, opts *CancelOptions) error {
 
 	_, _ = fmt.Print(renderCancelResult(a.Theme(), res, cancelTermWidth(os.Stdout)))
 
-	// If no commands were canceled, nothing to watch
-	if res == nil || len(res.CommandIDs) == 0 {
-		return nil
-	}
-
-	if opts.Watch {
-		fmt.Println() // Add spacing before watch output
-
-		// For single command, watch by ID
-		if len(res.CommandIDs) == 1 {
-			query := fmt.Sprintf("id:%s", res.CommandIDs[0])
-			return status.WatchCommandsStatus(a, query, 1, opts.StatusOutput)
-		}
-
-		// For multiple commands, watch without filter to see all recent commands
-		// (which will include all the canceling/canceled commands)
-		return status.WatchCommandsStatus(a, "", len(res.CommandIDs), opts.StatusOutput)
-	}
-
+	// Non-TTY is fire-and-forget: the cancel is submitted and the result printed;
+	// the caller queries progress via `formae status` (watching is a TTY-only
+	// affordance).
 	return nil
 }
 

@@ -436,25 +436,26 @@ func highlightHeaderColumn(header string, tbl components.Table, effCols []compon
 	//     render bright, no background.
 	base := lipgloss.NewStyle().Foreground(p.TextSecondary).Bold(true)
 	background := th.Header.Highlight == "background"
-	highlightStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(p.TextPrimary.Dark)).Background(lipgloss.Color(p.Selection.Dark)).Bold(true)
 	accentStyle := lipgloss.NewStyle().Foreground(p.PrimaryAccent).Bold(true)
 	brightStyle := lipgloss.NewStyle().Foreground(p.TextPrimary).Bold(true)
+	// The pending ←/→ highlight uses SecondaryAccent in every mode so it reads as
+	// a distinct cursor colour wherever it sits — including on the active column —
+	// and never reuses the Selection background of the row cursor. Mirrors
+	// simview and the status views.
+	hlStyle := lipgloss.NewStyle().Foreground(p.SecondaryAccent).Bold(true)
 
 	styleFor := func(isHL, isAct bool) lipgloss.Style {
-		if background {
-			switch {
-			case isHL:
-				return highlightStyle
-			case isAct:
+		switch {
+		case isHL:
+			return hlStyle
+		case isAct:
+			if background {
 				return accentStyle
-			default:
-				return base
 			}
-		}
-		if isHL || isAct {
 			return brightStyle
+		default:
+			return base
 		}
-		return base
 	}
 
 	runes := []rune(ansi.Strip(header))

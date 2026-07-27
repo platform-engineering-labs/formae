@@ -296,12 +296,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.sortCol[rk] = hi
 				m.sortDir[rk] = components.SortAsc
 			}
+			// Capture the selected row before re-sorting so the cursor can follow it
+			// instead of snapping to the top of the list (the first target row).
+			var selKey string
+			if m.cursor >= 0 && m.cursor < len(nav) && nav[m.cursor].kind == navRow {
+				selKey = nav[m.cursor].rowKey
+			}
 			g := m.groupForKind(rk)
 			if g != nil {
 				sortRows(g.rows, modelColToDataCol(m.sortCol[rk]), m.sortDir[rk])
 			}
-			m.visible[rk] = 10
+			// Re-find the previously-selected row in the re-sorted list; fall back to
+			// the top only if it can no longer be found.
 			m.cursor = 0
+			if selKey != "" {
+				for i, ln := range m.navLines() {
+					if ln.kind == navRow && ln.rowKey == selKey {
+						m.cursor = i
+						break
+					}
+				}
+			}
 
 		case key.Matches(msg, m.keys.Enter) || msg.Type == tea.KeySpace:
 			if m.cursor >= 0 && m.cursor < total {
@@ -533,12 +548,24 @@ func footerHints() []components.KeyHint {
 	// No "y: confirm" or "q: abort" here — both actions live in the confirm bar
 	// above the footer ("press y … · n to abort"), so repeating them (and showing
 	// a second abort key) would be redundant and conflicting. q/esc still abort.
+	// enter is the universal "open the selected item" key (it drills into a detail
+	// screen in the list views and toggles inline expand here); space is an alias
+	// that also expands, but the footer advertises enter for cross-view
+	// consistency.
 	return []components.KeyHint{
 		{Key: "↑↓", Desc: "select"},
-		{Key: "space", Desc: "expand"},
 		{Key: "→←", Desc: "column"},
+		{Key: "enter", Desc: "expand"},
 		{Key: "s", Desc: "sort"},
 	}
+}
+
+// simulateFooterHints returns the key hints for the simulate-only footer. Unlike
+// the confirm case (where the attention bar itself shows "n to abort"), simulate
+// mode has no y/n prompt, so the footer must advertise how to leave — hence the
+// explicit "q: quit".
+func simulateFooterHints() []components.KeyHint {
+	return append(footerHints(), components.KeyHint{Key: "q", Desc: "quit"})
 }
 
 // ackFooterHints returns key hints for the ack screen.
@@ -554,13 +581,12 @@ func ackFooterHints() []components.KeyHint {
 // KindDestroy with cascades → multi-line warning + confirm paragraph (border, no hint bar).
 // Otherwise → FooterBar with action hints + PromptForOperations-style confirm right label.
 func (m Model) renderFooter() string {
-	p := m.th.Palette
-
 	if m.opts.SimulateOnly {
-		// Use FooterBar with no action hints so the standard "?: help" teaser
-		// appears on the right, consistent with every other view's footer.
-		simOnlyMsg := lipgloss.NewStyle().Foreground(p.TextSubtle).Render("simulation only — command will not continue")
-		return components.FooterBar(m.th, m.width, nil, simOnlyMsg)
+		// Reuse the prominent attention bar (like the confirm bar) so the
+		// "simulation only" notice catches the eye instead of hiding as a subtle
+		// line in the footer, and keep the standard nav key hints below it (the
+		// simulate footer previously showed none).
+		return m.renderSimulateBar() + "\n" + components.FooterBar(m.th, m.width, simulateFooterHints(), "")
 	}
 
 	// A confirm is required: draw a prominent, full-width confirm bar (attention
@@ -595,15 +621,28 @@ func confirmBarBg(th *theme.Theme, groups []simGroup) lipgloss.AdaptiveColor {
 // text for both apply and destroy — the verb in the message distinguishes
 // them.
 func (m Model) renderConfirmBar() string {
-	bg := confirmBarBg(m.th, m.groups)
 	verb := "apply"
 	if m.opts.Kind == KindDestroy {
 		verb = "destroy"
 	}
+	return m.attentionBar(confirmBarBg(m.th, m.groups), m.planSummary(), fmt.Sprintf("press y to %s · n to abort", verb))
+}
 
-	// Operation summary sentence: PromptForOperations labels targets/stacks/
-	// policies correctly and joins with "and". Strip its ANSI + trailing
-	// "Do you want to continue?" framing down to the one-line summary.
+// renderSimulateBar draws the same full-width attention bar as the confirm bar,
+// but coloured with the theme Warning role and reading the simulation notice in
+// place of the y/n prompt, so simulate mode stands out instead of hiding a
+// subtle line in the footer.
+func (m Model) renderSimulateBar() string {
+	return m.attentionBar(m.th.Palette.Warning, m.planSummary(), "simulation only — command will not continue")
+}
+
+// planSummary is the one-line operation summary shown on the left of the
+// attention bar, shared by the confirm and simulate bars. PromptForOperations
+// labels targets/stacks/policies correctly and joins with "and"; we strip its
+// ANSI and trailing "Do you want to continue?" framing down to one line. For
+// cascading destroys the cascade count is made explicit (the full "why" stays
+// in the body warning panel).
+func (m Model) planSummary() string {
 	summary := "Review the plan above"
 	if raw := components.PromptForOperations(m.th, &m.cmd); raw != "" {
 		stripped := ansiEscape.ReplaceAllString(raw, "")
@@ -613,20 +652,21 @@ func (m Model) renderConfirmBar() string {
 			summary = s
 		}
 	}
-
-	// For destroy plans that cascade, make the cascade count explicit in the bar
-	// (the full "why" stays in the body warning panel).
 	if m.opts.Kind == KindDestroy {
 		if total, cascade := countDestroyResources(m.groups); cascade > 0 {
 			summary = fmt.Sprintf("Deleting %d resource(s), %d by cascade (dependents)", total, cascade)
 		}
 	}
+	return summary
+}
 
-	action := fmt.Sprintf("press y to %s · n to abort", verb)
+// attentionBar renders a full-width, bold, background-coloured bar with a
+// summary on the left and an action/notice on the right, truncated to fit one
+// line at the current width.
+func (m Model) attentionBar(bg lipgloss.AdaptiveColor, summary, action string) string {
 	indent := "  "
 	tail := action + "  "
 
-	// Truncate the summary so the whole bar fits one line at the current width.
 	avail := m.width - lipgloss.Width(indent) - lipgloss.Width(tail) - 3
 	if avail < 10 {
 		avail = 10

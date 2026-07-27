@@ -632,8 +632,8 @@ func statuswatchHelpGroups() []components.HelpGroup {
 func multiFooterHints() []components.KeyHint {
 	return []components.KeyHint{
 		{Key: "↑↓", Desc: "select"},
-		{Key: "enter", Desc: "details"},
 		{Key: "→←", Desc: "column"},
+		{Key: "enter", Desc: "details"},
 		{Key: "s", Desc: "sort"},
 		{Key: "q", Desc: "quit"},
 	}

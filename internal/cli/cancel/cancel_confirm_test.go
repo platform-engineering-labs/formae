@@ -57,7 +57,6 @@ func TestCancelLegacy_NonTTY_NoYes_D8Error(t *testing.T) {
 		Query:          "",
 		Force:          true, // force = triggers the confirm path
 		Yes:            false,
-		Watch:          false,
 		OutputConsumer: printer.ConsumerHuman,
 	}
 
@@ -89,7 +88,6 @@ func TestCancelLegacy_NonTTY_WithYes_Proceeds(t *testing.T) {
 		Query:          "",
 		Force:          true, // force = would trigger confirm if not --yes
 		Yes:            true,
-		Watch:          false,
 		OutputConsumer: printer.ConsumerHuman,
 	}
 
@@ -119,7 +117,6 @@ func TestCancelLegacy_TTY_Declined_Aborts(t *testing.T) {
 		Query:          "",
 		Force:          true,
 		Yes:            false,
-		Watch:          false,
 		OutputConsumer: printer.ConsumerHuman,
 	}
 

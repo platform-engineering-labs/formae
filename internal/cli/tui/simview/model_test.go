@@ -470,6 +470,27 @@ func TestSimView_GoldenSimulateOnlyFooter(t *testing.T) {
 	tuitest.RequireGolden(t, []byte(m.View()))
 }
 
+// TestSimView_SimulateNoticeBarAndHints verifies that in SimulateOnly mode the
+// simulation notice is shown (Pavlo's F-item: it must catch the eye), and that
+// the footer key hints are present in simulate mode (previously the simulate
+// footer showed no navigation hints).
+func TestSimView_SimulateNoticeBarAndHints(t *testing.T) {
+	th := theme.New("formae")
+	sim := makeFixtureSim()
+	opts := Options{Kind: KindApply, Mode: "reconcile", SimulateOnly: true}
+	m := New(th, sim, opts)
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: 32})
+	out := ansiStripRe.ReplaceAllString(mm.(Model).View(), "")
+
+	assert.Contains(t, out, "simulation only", "the simulation notice must be shown")
+	// The nav key hints must be present in simulate mode (the help bar was empty before).
+	assert.Contains(t, out, "sort", "footer key hints must appear in simulate mode")
+	assert.Contains(t, out, "expand", "footer key hints must appear in simulate mode")
+	// Simulate mode has no y/n prompt, so the footer must advertise how to leave.
+	assert.Contains(t, out, "quit", "simulate footer must show a quit hint")
+}
+
 // TestSimView_SimulateOnlyIgnoresY verifies that y does NOT quit when SimulateOnly=true,
 // and that the default decision remains DecisionAborted.
 func TestSimView_SimulateOnlyIgnoresY(t *testing.T) {

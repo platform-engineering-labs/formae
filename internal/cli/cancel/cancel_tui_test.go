@@ -68,7 +68,6 @@ func TestCancelForHumans_PreFetch_PerID_D6(t *testing.T) {
 		Query:          "some-original-query",
 		Force:          false,
 		Yes:            true, // skip confirm
-		Watch:          false,
 		OutputConsumer: printer.ConsumerHuman,
 	}
 
@@ -126,7 +125,6 @@ func TestCancelForHumans_ForceDeclined_NoCalls(t *testing.T) {
 		Query:          "stack:test",
 		Force:          true,
 		Yes:            false, // force confirmation is required
-		Watch:          false,
 		OutputConsumer: printer.ConsumerHuman,
 	}
 
@@ -165,7 +163,6 @@ func TestCancelForHumans_EmptyPreFetch_NoCalls(t *testing.T) {
 		Query:          "",
 		Force:          false,
 		Yes:            true,
-		Watch:          false,
 		OutputConsumer: printer.ConsumerHuman,
 	}
 
@@ -206,7 +203,6 @@ func TestCancelForHumans_NonTTY_LegacyPath(t *testing.T) {
 		Query:          "stack:test",
 		Force:          false,
 		Yes:            true,
-		Watch:          false,
 		OutputConsumer: printer.ConsumerHuman,
 	}
 
@@ -268,7 +264,6 @@ func TestForceCancelSummary_ExpectationBullets(t *testing.T) {
 		Query:          "id:cmd-abc123",
 		Force:          true,
 		Yes:            false, // trigger confirmation
-		Watch:          false,
 		OutputConsumer: printer.ConsumerHuman,
 	}
 
@@ -328,7 +323,6 @@ func TestCancelForHumans_TerminalFiltered(t *testing.T) {
 		Query:          "",
 		Force:          false,
 		Yes:            true,
-		Watch:          false,
 		OutputConsumer: printer.ConsumerHuman,
 	}
 

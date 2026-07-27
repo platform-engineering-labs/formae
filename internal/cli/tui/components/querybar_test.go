@@ -56,6 +56,77 @@ func TestQueryBar_BackspaceAndClear(t *testing.T) {
 	assert.Equal(t, "", q.Query())
 }
 
+// runeKey is a tiny helper to send a single rune to the bar.
+func runeKey(q QueryBar, r rune) QueryBar {
+	q, _ = q.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	return q
+}
+
+// TestQueryBar_CursorInsertMovesAndInserts verifies Left/Right move the text
+// cursor and that typing inserts at the cursor, not always at the end.
+func TestQueryBar_CursorInsertMidBuffer(t *testing.T) {
+	q := NewQueryBar(theme.New("formae"), "abc")
+	q = q.Focus() // cursor seeded at end (after "abc")
+
+	// move left twice: cursor between 'a' and 'b'
+	q, _ = q.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	q, _ = q.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	q = runeKey(q, 'X')
+
+	q, applied := q.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	require.True(t, applied)
+	assert.Equal(t, "aXbc", q.Query())
+}
+
+// TestQueryBar_HomeEnd verifies Home jumps to the start and End to the end.
+func TestQueryBar_HomeEnd(t *testing.T) {
+	q := NewQueryBar(theme.New("formae"), "abc").Focus()
+	q, _ = q.Update(tea.KeyMsg{Type: tea.KeyHome})
+	q = runeKey(q, 'Y') // "Yabc"
+	q, _ = q.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	q = runeKey(q, 'Z') // "YabcZ"
+	q, _ = q.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	assert.Equal(t, "YabcZ", q.Query())
+}
+
+// TestQueryBar_BackspaceAndDeleteAtCursor verifies Backspace removes the rune
+// before the cursor and Delete removes the rune at the cursor.
+func TestQueryBar_BackspaceAndDeleteAtCursor(t *testing.T) {
+	// Backspace mid-buffer: "abc", cursor after 'b', backspace removes 'b'.
+	q := NewQueryBar(theme.New("formae"), "abc").Focus()
+	q, _ = q.Update(tea.KeyMsg{Type: tea.KeyLeft}) // cursor between 'b' and 'c'
+	q, _ = q.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	q, _ = q.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	assert.Equal(t, "ac", q.Query())
+
+	// Delete at start removes the first rune.
+	q = NewQueryBar(theme.New("formae"), "abc").Focus()
+	q, _ = q.Update(tea.KeyMsg{Type: tea.KeyHome})
+	q, _ = q.Update(tea.KeyMsg{Type: tea.KeyDelete})
+	q, _ = q.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	assert.Equal(t, "bc", q.Query())
+}
+
+// TestQueryBar_CursorClamps verifies Left past the start and Right past the end
+// are clamped (no panic, insertion still lands at the boundary).
+func TestQueryBar_CursorClamps(t *testing.T) {
+	q := NewQueryBar(theme.New("formae"), "ab").Focus()
+	for i := 0; i < 5; i++ {
+		q, _ = q.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	}
+	q = runeKey(q, 'Z') // inserts at start -> "Zab"
+	q, _ = q.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	assert.Equal(t, "Zab", q.Query())
+
+	q = NewQueryBar(theme.New("formae"), "ab").Focus()
+	for i := 0; i < 5; i++ {
+		q, _ = q.Update(tea.KeyMsg{Type: tea.KeyRight})
+	}
+	q = runeKey(q, 'Z') // inserts at end -> "abZ"
+	q, _ = q.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	assert.Equal(t, "abZ", q.Query())
+}
+
 func TestQueryBar_ViewStates(t *testing.T) {
 	th := theme.New("formae")
 	empty := NewQueryBar(th, "")

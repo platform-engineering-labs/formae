@@ -841,11 +841,11 @@ func inventoryHelpGroups() []components.HelpGroup {
 // inventoryFooterHints returns the key hints shown in the inventory footer (full width ≥80).
 func inventoryFooterHints() []components.KeyHint {
 	return []components.KeyHint{
-		{Key: "↑↓/j/k", Desc: "navigate"},
+		{Key: "↑↓/j/k", Desc: "select"},
 		{Key: "→←", Desc: "column"},
-		{Key: "enter", Desc: "detail"},
-		{Key: "/", Desc: "search"},
+		{Key: "enter", Desc: "details"},
 		{Key: "s", Desc: "sort"},
+		{Key: "/", Desc: "search"},
 		{Key: "r", Desc: "refresh"},
 		{Key: "1-4", Desc: "tab"},
 		{Key: "q", Desc: "quit"},
