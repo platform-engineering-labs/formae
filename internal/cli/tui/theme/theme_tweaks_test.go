@@ -66,27 +66,17 @@ func TestQuietUsesBrailleSpinner(t *testing.T) {
 	assert.Equal(t, 100, th.Spinner.IntervalMs)
 }
 
-// TestAllThemesSpinnerIsFast locks the fast (~100ms) spinner interval across
-// all three built-in themes — a slow interval made the glyph visibly stutter.
-// rich and colorblind keep pb's fading-dot frames; quiet uses braille.
-func TestAllThemesSpinnerIsFast(t *testing.T) {
-	for _, name := range []string{"rich", "quiet", "colorblind"} {
-		t.Run(name, func(t *testing.T) {
-			th := New(name)
-			assert.Equal(t, 100, th.Spinner.IntervalMs)
-		})
-	}
-}
-
-// TestRichAndColorblindKeepFadingDotSpinner documents that only quiet changed
-// its spinner frames; rich and colorblind keep pb's fading-dot frames.
-func TestRichAndColorblindKeepFadingDotSpinner(t *testing.T) {
+// TestRichAndColorblindUseFadingDotPulse locks the fading-dot spinner for rich
+// and colorblind: the ●◉○◉ frames at a 333ms interval, giving a calm fade pulse
+// rather than a fast flicker. quiet's braille spinner keeps its own interval.
+func TestRichAndColorblindUseFadingDotPulse(t *testing.T) {
 	want := []string{"●", "◉", "○", "◉"}
 	for _, name := range []string{"rich", "colorblind"} {
 		t.Run(name, func(t *testing.T) {
 			th := New(name)
 			assert.Equal(t, want, th.Spinner.Frames)
 			assert.Equal(t, "●", th.Spinner.StaticFrame)
+			assert.Equal(t, 333, th.Spinner.IntervalMs)
 		})
 	}
 }

@@ -312,6 +312,13 @@ func pad(s string, w int) string {
 	return components.Pad(s, w)
 }
 
+// padCenter centers s within w visible rune columns. Used for the status-glyph
+// column, whose single glyph reads as centered under its (also centered) header
+// sort arrow rather than hugging the left edge.
+func padCenter(s string, w int) string {
+	return components.PadCenter(s, w)
+}
+
 // headerRow renders the column header line with sort indicators. Emphasis of
 // the navigated (sort-hi) and active-sort columns is theme-driven — mirrors
 // simview's renderGroupColHeader (internal/cli/tui/simview/render.go):
@@ -378,6 +385,12 @@ func (v multiView) headerRow() string {
 		}
 
 		cell := pad(title, w)
+		if c == colStatus {
+			// The status column has no title text, only an optional sort arrow.
+			// Center the bare arrow (dropping the separator space that would
+			// otherwise offset it) so it sits over the centered row glyph.
+			cell = padCenter(strings.TrimSpace(title), w)
+		}
 		st := styleFor(v.sortHi == c, v.sortCol == c)
 		sb.WriteString(st.Render(cell))
 	}
@@ -428,15 +441,15 @@ func (v multiView) renderRows(maxRows int) []string {
 		var glyphStr string
 		switch {
 		case r.cmd.State == "Canceled":
-			glyphStr = textStyle.Render(pad(v.th.Glyphs.StatusCanceled, multiCols[colStatus].width))
+			glyphStr = textStyle.Render(padCenter(v.th.Glyphs.StatusCanceled, multiCols[colStatus].width))
 		case terminal && r.health == healthFinishedOK:
-			glyphStr = textStyle.Render(pad(v.th.Glyphs.StatusDone, multiCols[colStatus].width))
+			glyphStr = textStyle.Render(padCenter(v.th.Glyphs.StatusDone, multiCols[colStatus].width))
 		case terminal && (r.health == healthFinishedFailed):
 			errSt := lipgloss.NewStyle().Foreground(p.Error)
 			if isCursor {
 				errSt = errSt.Background(p.Selection).Foreground(p.ErrorBright)
 			}
-			glyphStr = errSt.Render(pad(v.th.Glyphs.StatusFailed, multiCols[colStatus].width))
+			glyphStr = errSt.Render(padCenter(v.th.Glyphs.StatusFailed, multiCols[colStatus].width))
 		default:
 			// running — static in-progress glyph. Not animated: the row already
 			// shows live progress (counts/bar), so an animated spinner here would
@@ -448,7 +461,7 @@ func (v multiView) renderRows(maxRows int) []string {
 			if isCursor {
 				glyphSt = glyphSt.Background(p.Selection)
 			}
-			glyphStr = glyphSt.Render(pad(v.th.Glyphs.StatusInProgress, multiCols[colStatus].width))
+			glyphStr = glyphSt.Render(padCenter(v.th.Glyphs.StatusInProgress, multiCols[colStatus].width))
 		}
 
 		done, total := doneOf(r.counts)

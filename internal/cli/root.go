@@ -71,6 +71,12 @@ var rootCmd = &cobra.Command{
 	SilenceErrors: true,
 }
 
+// exampleIndentCols is the column at which per-command examples are rendered in
+// the usage templates (internal/cli/cmd): 19 leading spaces in the template plus
+// the 2-space prefix in the grey wrapper. formatExamples aligns continuation
+// lines to it. Keep in sync with those templates and formatDoc's indent.
+const exampleIndentCols = 21
+
 func init() {
 	hp := rootCmd.HelpFunc()
 	longestFlagName := 0
@@ -111,7 +117,16 @@ func init() {
 		cliName := cmd.Root().Name()
 		cmdName := cmd.Name()
 		replaced := strings.ReplaceAll(examples, "{{.Name}}", cliName)
-		return strings.ReplaceAll(replaced, "{{.Command}}", cmdName)
+		replaced = strings.ReplaceAll(replaced, "{{.Command}}", cmdName)
+		// Split on either pipe or newline so multi-example annotations render
+		// one per line. The usage templates in internal/cli/cmd place the first
+		// line at column exampleIndentCols; align the continuation lines under
+		// it instead of letting them fall flush-left.
+		parts := strings.FieldsFunc(replaced, func(r rune) bool { return r == '|' || r == '\n' })
+		for i, p := range parts {
+			parts[i] = strings.TrimSpace(p)
+		}
+		return strings.Join(parts, "\n"+strings.Repeat(" ", exampleIndentCols))
 	})
 
 	// formatExamplesMultiline renders pipe-separated examples one per line

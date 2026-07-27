@@ -11,7 +11,6 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/banner"
 	"github.com/platform-engineering-labs/formae/internal/cli/printer"
 	"github.com/platform-engineering-labs/formae/internal/cli/profile/store"
-	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/spf13/cobra"
 )
 
@@ -53,12 +52,15 @@ func newListCmd() *cobra.Command {
 				return p.Print(&out)
 			}
 
-			banner.PrintBanner()
 			w := cc.OutOrStdout()
 			if isTerminal(w) {
-				th := theme.New("formae")
+				// Resolve the theme only when we render styled output; piped
+				// output is a pure read (no config evaluation).
+				th := applyTheme(cc)
+				banner.PrintBanner()
 				_, _ = fmt.Fprintln(w, renderProfileList(th, names, active))
 			} else {
+				banner.PrintBanner()
 				for _, n := range names {
 					marker := "  "
 					if n == active {

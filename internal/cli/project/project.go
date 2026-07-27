@@ -46,8 +46,18 @@ func ProjectInitCmd() *cobra.Command {
 			yes, _ := command.Flags().GetBool("yes")
 			pluginDir, _ := command.Flags().GetString("plugin-dir")
 
-			banner.PrintBanner()
+			// Theme the banner and interactive form to the user's configured
+			// theme, but only when we will actually show the interactive screen
+			// (no --include, no --yes, and a TTY). Otherwise there is no screen,
+			// so keep the default theme and skip config resolution — that keeps
+			// piped/--yes automation a pure read and never bootstraps the config
+			// store (project init typically runs before any config exists).
 			th := theme.New("")
+			if len(include) == 0 && !yes && isInteractive() {
+				th = cmd.ResolveConfiguredTheme(command)
+			}
+			banner.SetTheme(th)
+			banner.PrintBanner()
 
 			// Interactive plugin multi-select (D10):
 			// Only when no --include is specified and --yes is not set.

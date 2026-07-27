@@ -8,7 +8,6 @@ import (
 	"fmt"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/banner"
-	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/spf13/cobra"
 )
 
@@ -25,12 +24,13 @@ func newUseCmd() *cobra.Command {
 			if err := s.Use(args[0]); err != nil {
 				return err
 			}
-			banner.PrintBanner()
 			w := cmd.OutOrStdout()
 			if isTerminal(w) {
-				th := theme.New("formae")
+				th := applyTheme(cmd)
+				banner.PrintBanner()
 				_, _ = fmt.Fprintln(w, renderAck(th, "switched to "+args[0]))
 			} else {
+				banner.PrintBanner()
 				_, _ = fmt.Fprintf(w, "switched to %s\n", args[0])
 			}
 			return nil
