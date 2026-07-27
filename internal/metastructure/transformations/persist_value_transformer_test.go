@@ -265,6 +265,12 @@ func TestApplyToResource_HashesBareStringAtSchemaOpaquePath(t *testing.T) {
 	assert.Equal(t, true, sv["$hashed"])
 	assert.Len(t, sv["$value"].(string), 64)
 	assert.NotEqual(t, "super-secret-password", sv["$value"])
+	// A bare-string literal on an opaque field must be wrapped into a CANONICAL
+	// formae.Value carrying $strategy (the shape a `formae.value(x).opaque` literal
+	// produces). Without it the extract PKL generator does not recognize the value
+	// as opaque and, on a field whose type union includes formae.Resolvable, emits
+	// a label-less {$res,$visibility:Opaque} that fails to evaluate.
+	assert.Equal(t, "Update", sv["$strategy"], "hashed bare-scalar opaque value must carry the default $strategy")
 }
 
 func TestApplyToResource_HashesEnvelopedOpaque(t *testing.T) {
@@ -310,6 +316,42 @@ func TestApplyToResource_HashesTopLevelScalarPatchOpValue(t *testing.T) {
 	assert.Equal(t, "Opaque", value["$visibility"])
 	assert.NotEqual(t, "super-secret-password", value["$value"])
 	assert.Len(t, value["$value"].(string), 64)
+	assert.Equal(t, "Update", value["$strategy"], "hashed bare-scalar patch-op value must carry the default $strategy")
+}
+
+// TestApplyToResource_EnvelopeWithoutStrategyGetsCanonicalStrategy covers
+// canonicalization for an opaque envelope that arrives WITHOUT $strategy
+// (e.g. an enriched plugin Read that wraps only {$value,$visibility}): hashing it
+// at rest must default $strategy to "Update" so the stored value is a canonical
+// formae.Value.
+func TestApplyToResource_EnvelopeWithoutStrategyGetsCanonicalStrategy(t *testing.T) {
+	r := &pkgmodel.Resource{
+		Schema:     schemaWithOpaque("SecretString"),
+		Properties: json.RawMessage(`{"SecretString":{"$value":"plaintext","$visibility":"Opaque"}}`),
+	}
+	out, err := NewPersistValueTransformer().ApplyToResource(r)
+	require.NoError(t, err)
+	var props map[string]any
+	require.NoError(t, json.Unmarshal(out.Properties, &props))
+	sv := props["SecretString"].(map[string]any)
+	assert.Equal(t, true, sv["$hashed"])
+	assert.Equal(t, "Update", sv["$strategy"], "an opaque envelope missing $strategy must be canonicalized to Update")
+}
+
+// TestApplyToResource_EnvelopePreservesExplicitSetOnce guards that
+// canonicalization never overrides an explicitly-declared SetOnce strategy.
+func TestApplyToResource_EnvelopePreservesExplicitSetOnce(t *testing.T) {
+	r := &pkgmodel.Resource{
+		Schema:     schemaWithOpaque("SecretString"),
+		Properties: json.RawMessage(`{"SecretString":{"$value":"plaintext","$visibility":"Opaque","$strategy":"SetOnce"}}`),
+	}
+	out, err := NewPersistValueTransformer().ApplyToResource(r)
+	require.NoError(t, err)
+	var props map[string]any
+	require.NoError(t, json.Unmarshal(out.Properties, &props))
+	sv := props["SecretString"].(map[string]any)
+	assert.Equal(t, true, sv["$hashed"])
+	assert.Equal(t, "SetOnce", sv["$strategy"], "explicit SetOnce must be preserved, not overridden")
 }
 
 // TestApplyToResource_PatchOpNonSecretValueCollidingWithSecretPlaintextIsUntouched guards
