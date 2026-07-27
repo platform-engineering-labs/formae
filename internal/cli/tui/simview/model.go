@@ -535,8 +535,8 @@ func footerHints() []components.KeyHint {
 	// a second abort key) would be redundant and conflicting. q/esc still abort.
 	return []components.KeyHint{
 		{Key: "↑↓", Desc: "select"},
-		{Key: "space", Desc: "expand"},
 		{Key: "→←", Desc: "column"},
+		{Key: "space", Desc: "expand"},
 		{Key: "s", Desc: "sort"},
 	}
 }
