@@ -90,15 +90,19 @@ func mapOmarchyPalette(oc omarchyColors) paletteFile {
 		ErrorSubtle:     mirror(oc.Color1),
 		ErrorBright:     mirror(oc.Color1),
 		Warning:         mirror(oc.Color3),
-		Done:            mirror(oc.Color2),
-		InProgress:      mirror(pick(oc.Color8, oc.Color7)),
-		Pending:         mirror(oc.Color8),
-		OpCreate:        mirror(oc.Color2),
-		OpUpdate:        mirror(oc.Color3),
-		OpDelete:        mirror(oc.Color1),
-		OpReplace:       mirror(secondary),
-		OpDetach:        mirror(oc.Color8),
-		OpKeep:          mirror(oc.Color8),
+		// Unmanaged mirrors Error (both color1), matching quiet's own
+		// unmanaged==error relationship, so the inventory marker follows the
+		// palette instead of a fixed red.
+		Unmanaged:  mirror(oc.Color1),
+		Done:       mirror(oc.Color2),
+		InProgress: mirror(pick(oc.Color8, oc.Color7)),
+		Pending:    mirror(oc.Color8),
+		OpCreate:   mirror(oc.Color2),
+		OpUpdate:   mirror(oc.Color3),
+		OpDelete:   mirror(oc.Color1),
+		OpReplace:  mirror(secondary),
+		OpDetach:   mirror(oc.Color8),
+		OpKeep:     mirror(oc.Color8),
 		// Color the logo wordmark with the OS accent so the printed logo follows
 		// the Omarchy theme, mirroring how rich tints its wordmark. The propeller
 		// stays brand orange.

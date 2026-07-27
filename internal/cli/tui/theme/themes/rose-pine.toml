@@ -1,0 +1,78 @@
+# rose-pine — built-in formae CLI theme (generated; do not edit by hand).
+# Palette derived from the Omarchy "rose-pine" theme, based on the Rosé Pine color scheme (https://rosepinetheme.com).
+# Glyphs, spinner, progress, and behavior follow the built-in "quiet" theme.
+# Regenerate: FORMAE_UPDATE_THEMES=1 go test -tags=unit -run TestOmarchyThemesUpToDate ./internal/cli/tui/theme
+
+name = "rose-pine"
+
+[palette]
+  base = "#faf4ed"
+  surface = "#faf4ed"
+  text_primary = "#575279"
+  text_secondary = "#575279"
+  text_subtle = "#9893a5"
+  border = "#9893a5"
+  selection = "#dfdad9"
+  primary_accent = "#56949f"
+  secondary_accent = "#907aa9"
+  error = "#b4637a"
+  error_subtle = "#b4637a"
+  error_bright = "#b4637a"
+  warning = "#ea9d34"
+  unmanaged = "#b4637a"
+  done = "#286983"
+  in_progress = "#9893a5"
+  pending = "#9893a5"
+  op_create = "#286983"
+  op_update = "#ea9d34"
+  op_delete = "#b4637a"
+  op_replace = "#907aa9"
+  op_detach = "#9893a5"
+  op_keep = "#9893a5"
+  logo_wordmark = "#56949f"
+
+[glyphs]
+  op_create = "+"
+  op_update = "✎"
+  op_delete = "✕"
+  op_replace = "↻"
+  op_detach = "⊘"
+  op_keep = "="
+  status_done = "✓"
+  status_failed = "✗"
+  status_pending = "·"
+  status_inprogress = "◐"
+  status_skipped = "⊘"
+  status_canceled = "⊘"
+  ack_done = "✓"
+  ack_skip = "·"
+  ack_warn = "!"
+  ack_fail = "✗"
+  tree_branch = "├"
+  tree_last = "└"
+  expand_open = "▾"
+  expand_closed = "▸"
+  checkbox_on = "[x]"
+  checkbox_off = "[ ]"
+  transition = "→"
+
+[progress]
+  fill_done = "█"
+  fill_inprogress = "▓"
+  fill_pending = "░"
+  animation = "static"
+
+[spinner]
+  frames = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"]
+  interval_ms = 100
+  static_frame = "⣾"
+
+[confirmation_bar]
+  color = "brand"
+
+[header]
+  highlight = "brighten"
+
+[rows]
+  label_accent = false
+  delete_whole_row = false

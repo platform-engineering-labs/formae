@@ -1,0 +1,78 @@
+# tokyo-night — built-in formae CLI theme (generated; do not edit by hand).
+# Palette derived from the Omarchy "tokyo-night" theme, based on the Tokyo Night color scheme by enkia (https://github.com/enkia/tokyo-night-vscode-theme).
+# Glyphs, spinner, progress, and behavior follow the built-in "quiet" theme.
+# Regenerate: FORMAE_UPDATE_THEMES=1 go test -tags=unit -run TestOmarchyThemesUpToDate ./internal/cli/tui/theme
+
+name = "tokyo-night"
+
+[palette]
+  base = "#1a1b26"
+  surface = "#1a1b26"
+  text_primary = "#a9b1d6"
+  text_secondary = "#787c99"
+  text_subtle = "#444b6a"
+  border = "#444b6a"
+  selection = "#7aa2f7"
+  primary_accent = "#7aa2f7"
+  secondary_accent = "#ad8ee6"
+  error = "#f7768e"
+  error_subtle = "#f7768e"
+  error_bright = "#f7768e"
+  warning = "#e0af68"
+  unmanaged = "#f7768e"
+  done = "#9ece6a"
+  in_progress = "#444b6a"
+  pending = "#444b6a"
+  op_create = "#9ece6a"
+  op_update = "#e0af68"
+  op_delete = "#f7768e"
+  op_replace = "#ad8ee6"
+  op_detach = "#444b6a"
+  op_keep = "#444b6a"
+  logo_wordmark = "#7aa2f7"
+
+[glyphs]
+  op_create = "+"
+  op_update = "✎"
+  op_delete = "✕"
+  op_replace = "↻"
+  op_detach = "⊘"
+  op_keep = "="
+  status_done = "✓"
+  status_failed = "✗"
+  status_pending = "·"
+  status_inprogress = "◐"
+  status_skipped = "⊘"
+  status_canceled = "⊘"
+  ack_done = "✓"
+  ack_skip = "·"
+  ack_warn = "!"
+  ack_fail = "✗"
+  tree_branch = "├"
+  tree_last = "└"
+  expand_open = "▾"
+  expand_closed = "▸"
+  checkbox_on = "[x]"
+  checkbox_off = "[ ]"
+  transition = "→"
+
+[progress]
+  fill_done = "█"
+  fill_inprogress = "▓"
+  fill_pending = "░"
+  animation = "static"
+
+[spinner]
+  frames = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"]
+  interval_ms = 100
+  static_frame = "⣾"
+
+[confirmation_bar]
+  color = "brand"
+
+[header]
+  highlight = "brighten"
+
+[rows]
+  label_accent = false
+  delete_whole_row = false

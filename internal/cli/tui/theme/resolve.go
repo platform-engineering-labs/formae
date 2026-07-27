@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -54,9 +55,35 @@ func resolveWithDir(name, userDir string, warn func(string)) *Theme {
 
 	// Step 4: warn + fall back to quiet.
 	warn(fmt.Sprintf("formae: unknown cli.theme %q, falling back to quiet (available: %s)",
-		name, strings.Join(builtinNames(), ", ")))
+		name, strings.Join(availableThemeNames(userDir), ", ")))
 	th, _ := loadBuiltin("quiet")
 	return th
+}
+
+// availableThemeNames lists the theme names a user can select: every built-in,
+// the live "omarchy" theme, and any *.toml in the user theme dir. Used to make
+// the unknown-theme warning a discovery aid. Sorted and de-duplicated (a user
+// theme may shadow a built-in name).
+func availableThemeNames(userDir string) []string {
+	set := map[string]struct{}{"omarchy": {}}
+	for _, n := range builtinNames() {
+		set[n] = struct{}{}
+	}
+	if userDir != "" {
+		if entries, err := os.ReadDir(userDir); err == nil {
+			for _, e := range entries {
+				if !e.IsDir() && strings.HasSuffix(e.Name(), ".toml") {
+					set[strings.TrimSuffix(e.Name(), ".toml")] = struct{}{}
+				}
+			}
+		}
+	}
+	names := make([]string, 0, len(set))
+	for n := range set {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // loadUserTheme loads ~/.config/formae/themes/<name>.toml, resolving one level
