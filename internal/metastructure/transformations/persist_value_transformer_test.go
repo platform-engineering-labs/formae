@@ -265,11 +265,11 @@ func TestApplyToResource_HashesBareStringAtSchemaOpaquePath(t *testing.T) {
 	assert.Equal(t, true, sv["$hashed"])
 	assert.Len(t, sv["$value"].(string), 64)
 	assert.NotEqual(t, "super-secret-password", sv["$value"])
-	// PLA-361: a bare-string literal on an opaque field must be wrapped into a
-	// CANONICAL formae.Value carrying $strategy (the shape a `formae.value(x).opaque`
-	// literal produces). Without it the extract PKL generator does not recognize the
-	// value as opaque and, on a field whose type union includes formae.Resolvable,
-	// emits a label-less {$res,$visibility:Opaque} that fails to evaluate.
+	// A bare-string literal on an opaque field must be wrapped into a CANONICAL
+	// formae.Value carrying $strategy (the shape a `formae.value(x).opaque` literal
+	// produces). Without it the extract PKL generator does not recognize the value
+	// as opaque and, on a field whose type union includes formae.Resolvable, emits
+	// a label-less {$res,$visibility:Opaque} that fails to evaluate.
 	assert.Equal(t, "Update", sv["$strategy"], "hashed bare-scalar opaque value must carry the default $strategy")
 }
 
@@ -316,11 +316,11 @@ func TestApplyToResource_HashesTopLevelScalarPatchOpValue(t *testing.T) {
 	assert.Equal(t, "Opaque", value["$visibility"])
 	assert.NotEqual(t, "super-secret-password", value["$value"])
 	assert.Len(t, value["$value"].(string), 64)
-	assert.Equal(t, "Update", value["$strategy"], "hashed bare-scalar patch-op value must carry the default $strategy (PLA-361)")
+	assert.Equal(t, "Update", value["$strategy"], "hashed bare-scalar patch-op value must carry the default $strategy")
 }
 
-// TestApplyToResource_EnvelopeWithoutStrategyGetsCanonicalStrategy covers the
-// PLA-361 canonicalization for an opaque envelope that arrives WITHOUT $strategy
+// TestApplyToResource_EnvelopeWithoutStrategyGetsCanonicalStrategy covers
+// canonicalization for an opaque envelope that arrives WITHOUT $strategy
 // (e.g. an enriched plugin Read that wraps only {$value,$visibility}): hashing it
 // at rest must default $strategy to "Update" so the stored value is a canonical
 // formae.Value.

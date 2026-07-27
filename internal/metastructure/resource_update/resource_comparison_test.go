@@ -501,8 +501,8 @@ func TestGate_HintedResolvableLeaf_DifferentContent_IsChange(t *testing.T) {
 func TestEnforceSetOnce_NoSpuriousUpdateForUnchangedSecret(t *testing.T) {
 	schema := pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{"SecretString": {Opaque: true}}}
 	// existing = already-hashed stored state, in the CANONICAL form the persist
-	// transformer now writes (carries $strategy — see PersistValueTransformer /
-	// PLA-361). The desired plaintext hashes to the same canonical envelope, so the
+	// transformer now writes (carries $strategy — see PersistValueTransformer).
+	// The desired plaintext hashes to the same canonical envelope, so the
 	// whole-resource compare must see no change.
 	hashed := (&pkgmodel.Value{Value: "super-secret", Visibility: pkgmodel.VisibilityOpaque}).Hash()
 	existing := &pkgmodel.Resource{Schema: schema,

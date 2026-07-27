@@ -172,7 +172,7 @@ func (pv *PersistValueTransformer) hashOpaqueField(v any) (map[string]any, bool)
 	// generator does not recognize as an opaque value (its opaque-value branch
 	// keys on $value+$visibility+$strategy); on a field whose type union includes
 	// formae.Resolvable, union resolution then falls to the Resolvable arm and
-	// emits a label-less {$res,$visibility:Opaque} that fails to evaluate (PLA-361).
+	// emits a label-less {$res,$visibility:Opaque} that fails to evaluate.
 	value := &pkgmodel.Value{Value: v, Visibility: pkgmodel.VisibilityOpaque, Strategy: pkgmodel.StrategyUpdate}
 	hashed := value.Hash()
 	return map[string]any{
@@ -187,8 +187,8 @@ func (pv *PersistValueTransformer) hashOpaqueField(v any) (map[string]any, bool)
 func (pv *PersistValueTransformer) hashEnvelope(val map[string]any) (map[string]any, bool) {
 	if h, ok := val["$hashed"].(bool); ok && h {
 		// Already hashed — never re-hash. But canonicalize a missing $strategy so a
-		// legacy value persisted before the canonicalization fix (see hashOpaqueField
-		// / PLA-361) still round-trips through extract as a formae.Value rather than a
+		// legacy value persisted before the canonicalization fix (see hashOpaqueField)
+		// still round-trips through extract as a formae.Value rather than a
 		// label-less $res. Adding $strategy does not change the digest.
 		if s, ok := val["$strategy"].(string); !ok || s == "" {
 			val["$strategy"] = pkgmodel.StrategyUpdate
@@ -203,7 +203,7 @@ func (pv *PersistValueTransformer) hashEnvelope(val map[string]any) (map[string]
 	} else {
 		// Default an absent strategy to "Update" so the persisted envelope is a
 		// canonical formae.Value the extract generator recognizes (see
-		// hashOpaqueField / PLA-361). Never override an explicit SetOnce.
+		// hashOpaqueField). Never override an explicit SetOnce.
 		value.Strategy = pkgmodel.StrategyUpdate
 	}
 	hashed := value.Hash()
