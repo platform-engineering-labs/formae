@@ -22,20 +22,18 @@ import (
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
 
-// TestPLA361_WriteOnlyOpaqueLiteralStoredAsCanonicalValue reproduces the PLA-361
-// scenario end to end through ApplyForma: a schema-opaque field supplied as a
-// literal string, whose plugin Read NEVER returns a value (mirroring AWS RDS
-// MasterUserPassword, which the cloud omits on every read).
+// TestWriteOnlyOpaqueLiteralStoredAsCanonicalValue checks that a schema-opaque
+// field supplied as a literal string, whose plugin Read never returns a value
+// (a write-only field, as with an AWS RDS master password that the cloud omits
+// on every read), is persisted through ApplyForma as a canonical formae.Value
+// envelope carrying $strategy, not a bare {$value,$visibility,$hashed}.
 //
-// The stored resources.Properties (and the ExtractResources model output, which
-// reads it verbatim) must be a CANONICAL formae.Value envelope carrying $strategy
-// — not a bare {$value,$visibility,$hashed}. Without $strategy the extract PKL
-// generator does not recognize the value as opaque and, on a field whose type
-// union includes formae.Resolvable (RDS masterUserPassword), emits a label-less
-// {$res,$visibility:Opaque} that fails to evaluate. Asserting $strategy at rest
-// guards the root cause at the full-apply-path level; the generator render is
-// covered end to end by the plugin repo's rds-dbinstance conformance.
-func TestPLA361_WriteOnlyOpaqueLiteralStoredAsCanonicalValue(t *testing.T) {
+// $strategy is what the extract generator uses to recognize the value as opaque.
+// On a field whose type union includes formae.Resolvable it must be present, or
+// the generator emits a label-less {$res,$visibility:Opaque} that fails to
+// evaluate. The test asserts the canonical shape at rest in the resources table,
+// in ExtractResources output, and again after a sync.
+func TestWriteOnlyOpaqueLiteralStoredAsCanonicalValue(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		const plaintextSecret = "TestPassword123!"
 
@@ -81,7 +79,7 @@ func TestPLA361_WriteOnlyOpaqueLiteralStoredAsCanonicalValue(t *testing.T) {
 			require.Truef(t, ok, "%s: SecretString must be an opaque envelope, got %v", where, m["SecretString"])
 			assert.Equalf(t, "Opaque", sv["$visibility"], "%s: visibility", where)
 			assert.Equalf(t, true, sv["$hashed"], "%s: hashed marker", where)
-			assert.Equalf(t, "Update", sv["$strategy"], "%s: canonical $strategy (PLA-361)", where)
+			assert.Equalf(t, "Update", sv["$strategy"], "%s: canonical $strategy", where)
 			assert.NotEqualf(t, plaintextSecret, sv["$value"], "%s: value must be hashed", where)
 		}
 
