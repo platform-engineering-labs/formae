@@ -7,6 +7,7 @@
 package cancel
 
 import (
+	"fmt"
 	"io"
 	"sort"
 	"testing"
@@ -220,6 +221,52 @@ func TestCancelWatch_NoForce_EmptyAbandoned(t *testing.T) {
 
 	assert.Empty(t, capturedOpts.AbandonedResources, "no --force: AbandonedResources must be empty")
 	assert.True(t, capturedOpts.ExitWhenDone)
+}
+
+// TestCancelWatch_ManyCommands_NoAutoExit verifies that when more commands are
+// canceled than the datastore page cap (cancelWatchPageLimit), the watch does
+// NOT set ExitWhenDone (it would auto-exit while off-page commands still run).
+func TestCancelWatch_ManyCommands_NoAutoExit(t *testing.T) {
+	origGetStatus := getCommandsStatusFn
+	origCancel := cancelCommandFn
+	origIsTerminal := isTerminal
+	origLaunch := launchCancelWatch
+	t.Cleanup(func() {
+		getCommandsStatusFn = origGetStatus
+		cancelCommandFn = origCancel
+		isTerminal = origIsTerminal
+		launchCancelWatch = origLaunch
+	})
+
+	isTerminal = func(w io.Writer) bool { return true }
+
+	const n = cancelWatchPageLimit + 1
+	cmds := make([]apimodel.Command, n)
+	for i := 0; i < n; i++ {
+		cmds[i] = apimodel.Command{CommandID: fmt.Sprintf("cmd-%02d", i), State: "InProgress", StartTs: time.Now().Add(-time.Second)}
+	}
+	getCommandsStatusFn = func(a *app.App, query string, cnt int, fromWatch bool) (*apimodel.ListCommandStatusResponse, []string, error) {
+		return &apimodel.ListCommandStatusResponse{Commands: cmds}, nil, nil
+	}
+	callN := 0
+	cancelCommandFn = func(a *app.App, query string, force bool) (*apimodel.CancelCommandResponse, error) {
+		id := fmt.Sprintf("cmd-%02d", callN)
+		callN++
+		return &apimodel.CancelCommandResponse{CommandIDs: []string{id}}, nil
+	}
+
+	var capturedOpts statuswatch.Options
+	launchCancelWatch = func(a *app.App, th *theme.Theme, opts statuswatch.Options) error {
+		capturedOpts = opts
+		return nil
+	}
+
+	opts := &CancelOptions{Query: "stack:test", Yes: true, OutputConsumer: printer.ConsumerHuman}
+	err := runCancelForHumans(newCancelTestApp(), opts)
+	require.NoError(t, err)
+
+	assert.Equal(t, n, capturedOpts.MaxResults, "MaxResults must cover every canceled command")
+	assert.False(t, capturedOpts.ExitWhenDone, "must not auto-exit when more commands than the page cap are canceled")
 }
 
 // TestCancelWatch_NonInteractiveStdin_FireAndForget verifies that when stdout is

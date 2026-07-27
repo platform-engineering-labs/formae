@@ -417,6 +417,21 @@ func runDestroyLegacy(app *app.App, opts *DestroyOptions) error {
 		fmt.Printf("\n%s\n", lipgloss.NewStyle().Foreground(th.Palette.Warning).Render("The asynchronous command has started on the formae agent."))
 	}
 
+	// Watch by default on an interactive terminal (this path also serves --yes,
+	// which skips the confirmation but is still an interactive session). Off a
+	// TTY (piped/CI) stay fire-and-forget and print the status hint. Mirrors the
+	// interactive (non --yes) path, which always watches.
+	if isInteractive() {
+		finished, werr := launchWatch(app, res.CommandID)
+		if werr != nil {
+			return werr
+		}
+		if !finished {
+			printAsyncNotice(res.CommandID)
+		}
+		return nil
+	}
+
 	{
 		th := app.Theme()
 		subtleStyle := lipgloss.NewStyle().Foreground(th.Palette.TextSubtle)

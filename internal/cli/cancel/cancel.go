@@ -173,6 +173,11 @@ func runCancelForHumans(a *app.App, opts *CancelOptions) error {
 // runCancelInteractive implements the styled TTY cancel flow. The commands to
 // cancel are frozen at pre-fetch time (D6): the user cancels exactly the
 // commands they were shown, never a re-evaluated query.
+// cancelWatchPageLimit mirrors datastore.DefaultFormaCommandsQueryLimit: the
+// command-status query is capped to this many rows, so a cancel watch can only
+// ever display the first page of that many commands.
+const cancelWatchPageLimit = 10
+
 func runCancelInteractive(a *app.App, opts *CancelOptions) error {
 	th := a.Theme()
 	now := time.Now()
@@ -272,14 +277,6 @@ func runCancelInteractive(a *app.App, opts *CancelOptions) error {
 	// surfaced inside the TUI via AbandonedResources.
 	fmt.Println(renderCancelSummary(th, activeCmds, exps, opts.Force, now))
 
-	// The watch TUI needs an interactive stdin to drive it. When stdout is a TTY
-	// but stdin is not (e.g. `formae cancel --yes </dev/null`), stay
-	// fire-and-forget: the cancels are already submitted, and the summary above
-	// prints how to follow progress via `formae status`.
-	if !isInteractive() {
-		return nil
-	}
-
 	// Build the set of force-abandoned resource ksuids (P3 normalization at call site).
 	var abandonedKsuids []string
 	for uri, rs := range merged.ResourceUpdateStates {
@@ -288,6 +285,18 @@ func runCancelInteractive(a *app.App, opts *CancelOptions) error {
 		}
 	}
 	sort.Strings(abandonedKsuids)
+
+	// The watch TUI needs an interactive stdin to drive it. When stdout is a TTY
+	// but stdin is not (e.g. `formae cancel --force --yes </dev/null`), stay
+	// fire-and-forget. The cancels are already submitted and the summary prints
+	// how to follow progress via `formae status`; a force cancel still needs its
+	// abandoned-resource warning, which the watch TUI would otherwise surface.
+	if !isInteractive() {
+		if opts.Force {
+			renderForceCanceledResources(th, merged, activeCmds)
+		}
+		return nil
+	}
 
 	if len(merged.CommandIDs) == 1 {
 		return launchCancelWatch(a, th, statuswatch.Options{
@@ -301,10 +310,15 @@ func runCancelInteractive(a *app.App, opts *CancelOptions) error {
 	for i, id := range merged.CommandIDs {
 		idTerms[i] = "id:" + id
 	}
+	// The status query is capped to cancelWatchPageLimit rows in the datastore, so
+	// for more canceled commands than that the watch can only ever see the first
+	// page. Only auto-exit when every command fits on that page; otherwise leave
+	// the view open (the user quits with q) so it can't falsely report "done"
+	// while off-page commands are still canceling.
 	return launchCancelWatch(a, th, statuswatch.Options{
 		Query:              strings.Join(idTerms, " "),
 		MaxResults:         len(merged.CommandIDs),
-		ExitWhenDone:       true,
+		ExitWhenDone:       len(merged.CommandIDs) <= cancelWatchPageLimit,
 		AbandonedResources: abandonedKsuids,
 	})
 }
@@ -316,6 +330,54 @@ func isTerminalState(state string) bool {
 		return true
 	}
 	return false
+}
+
+// renderForceCanceledResources prints the list of resources that were abandoned
+// due to --force, followed by the abandoned/orphan reminder lines. Used on the
+// fire-and-forget paths (non-interactive stdin) where the watch TUI, which would
+// otherwise surface abandoned resources, is not launched.
+func renderForceCanceledResources(th *theme.Theme, merged *apimodel.CancelCommandResponse, cmds []apimodel.Command) {
+	warnStyle := lipgloss.NewStyle().Foreground(th.Palette.Warning)
+	subtle := lipgloss.NewStyle().Foreground(th.Palette.TextSecondary)
+
+	// Resolve response keys (FormaeURIs) to resource labels via the pre-fetched
+	// commands: the URI's ksuid matches ResourceUpdate.ResourceID.
+	labels := make(map[string]string)
+	for _, c := range cmds {
+		for _, ru := range c.ResourceUpdates {
+			if ru.ResourceLabel != "" {
+				labels[ru.ResourceID] = fmt.Sprintf("%s (%s)", ru.ResourceLabel, ru.ResourceType)
+			}
+		}
+	}
+
+	var abandoned []string
+	for uri, rs := range merged.ResourceUpdateStates {
+		if !rs.ForceCanceled {
+			continue
+		}
+		ksuid := ksuidFromURI(uri)
+		if label, ok := labels[ksuid]; ok {
+			abandoned = append(abandoned, label)
+		} else {
+			abandoned = append(abandoned, ksuid)
+		}
+	}
+	sort.Strings(abandoned)
+
+	if len(abandoned) > 0 {
+		fmt.Println()
+		fmt.Printf("  %s\n", warnStyle.Render("The following resources were abandoned mid-operation and may exist in your cloud provider:"))
+		for _, res := range abandoned {
+			fmt.Printf("    %s %s\n", warnStyle.Render("⚠"), res)
+		}
+	}
+
+	fmt.Println()
+	fmt.Printf("  %s\n", subtle.Render("Force-cancel abandons in-progress work; cloud-side operations may still be running."))
+	fmt.Printf("  %s\n", subtle.Render("Update/Delete operations are reconciled by the synchronizer on its next cycle."))
+	fmt.Printf("  %s\n", subtle.Render("A still-running Create may orphan a resource: verify the resources above in your"))
+	fmt.Printf("  %s\n", subtle.Render("cloud provider and clean up manually, or let discovery pick them up."))
 }
 
 // runCancelLegacy is the pre-TUI human flow, used on non-TTY output. It

@@ -348,6 +348,21 @@ func runApplyLegacy(a *app.App, opts *ApplyOptions) error {
 
 	fmt.Printf("\n%s\n", lipgloss.NewStyle().Foreground(a.Theme().Palette.Warning).Render("The asynchronous command has started on the formae agent."))
 
+	// Watch by default on an interactive terminal (this path also serves --yes,
+	// which skips the confirmation but is still an interactive session). Off a
+	// TTY (piped/CI) stay fire-and-forget and print the status hint. Mirrors the
+	// interactive (non --yes) path, which always watches.
+	if isInteractive() {
+		finished, werr := launchWatch(a, res.CommandID)
+		if werr != nil {
+			return werr
+		}
+		if !finished {
+			printAsyncNotice(res.CommandID)
+		}
+		return nil
+	}
+
 	fmt.Printf("\nRun the following command to check the status of this command:\n\n  %s%s%s\n",
 		lipgloss.NewStyle().Foreground(a.Theme().Palette.TextSubtle).Render("formae status command --query='id:"),
 		lipgloss.NewStyle().Foreground(a.Theme().Palette.PrimaryAccent).Render(res.CommandID),
