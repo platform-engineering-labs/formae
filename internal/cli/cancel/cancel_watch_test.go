@@ -287,8 +287,8 @@ func TestCancelWatch_NonInteractiveStdin_FireAndForget(t *testing.T) {
 		launchCancelWatch = origLaunch
 	})
 
-	isTerminal = func(w io.Writer) bool { return true }    // stdout IS a TTY
-	isInteractive = func() bool { return false }           // stdin is NOT interactive
+	isTerminal = func(w io.Writer) bool { return true } // stdout IS a TTY
+	isInteractive = func() bool { return false }        // stdin is NOT interactive
 
 	getCommandsStatusFn = func(a *app.App, query string, n int, fromWatch bool) (*apimodel.ListCommandStatusResponse, []string, error) {
 		return &apimodel.ListCommandStatusResponse{
