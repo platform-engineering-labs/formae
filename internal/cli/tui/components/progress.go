@@ -32,9 +32,13 @@ func ProgressBar(th *theme.Theme, width int, counts map[State]int, failed bool) 
 		fill = p.Error
 	}
 
-	// Display order: completed fill, in-progress, pending.
+	// Display order: completed fill, in-progress, pending. The pending track
+	// uses the Border tone rather than Pending: on light/low-contrast themes
+	// Pending sits too close to the background, so the unfilled track vanishes
+	// and the fixed-width bar reads as a variable-width one. Border stays a
+	// visible-but-subtle track so every bar shows its full extent.
 	chars := []string{th.Progress.FillDone, th.Progress.FillInProgress, th.Progress.FillPending}
-	colors := []lipgloss.AdaptiveColor{fill, p.InProgress, p.Pending}
+	colors := []lipgloss.AdaptiveColor{fill, p.InProgress, p.Border}
 	segCounts := []int{
 		counts[StateDone] + counts[StateSkipped] + counts[StateFailed],
 		counts[StateInProgress],
@@ -46,7 +50,7 @@ func ProgressBar(th *theme.Theme, width int, counts map[State]int, failed bool) 
 		total += n
 	}
 	if total == 0 {
-		pending := lipgloss.NewStyle().Foreground(p.Pending)
+		pending := lipgloss.NewStyle().Foreground(p.Border)
 		return pending.Render(strings.Repeat(th.Progress.FillPending, width))
 	}
 
