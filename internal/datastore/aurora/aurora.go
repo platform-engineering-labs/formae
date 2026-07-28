@@ -1500,10 +1500,16 @@ func (d *DatastoreAuroraDataAPI) UpdateResourceVersionData(uri string, version s
 
 // UpdateResourceRefs overwrites the refs column for a specific resource version.
 // This is an aurora-only method and is not part of the shared datastore interface.
+// UpdateResourceRefs overwrites the refs column for a specific resource version.
+// This is an aurora-only method and is not part of the shared datastore interface.
+// The `refs IS DISTINCT FROM` guard makes the write a no-op when the stored refs
+// already match, so the idempotent startup backfill produces no write churn on rows
+// that are already current.
 func (d *DatastoreAuroraDataAPI) UpdateResourceRefs(uri, version string, refs []string) error {
 	ctx := context.Background()
 
-	query := `UPDATE resources SET refs = ` + refsToSQL(":refs") + ` WHERE uri = :uri AND version = :version`
+	query := `UPDATE resources SET refs = ` + refsToSQL(":refs") +
+		` WHERE uri = :uri AND version = :version AND refs IS DISTINCT FROM ` + refsToSQL(":refs")
 	params := []types.SqlParameter{
 		{Name: aws.String("refs"), Value: &types.FieldMemberStringValue{Value: strings.Join(refs, ",")}},
 		{Name: aws.String("uri"), Value: &types.FieldMemberStringValue{Value: uri}},

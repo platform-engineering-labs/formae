@@ -1208,12 +1208,15 @@ func (d DatastorePostgres) UpdateResourceVersionData(uri string, version string,
 
 // UpdateResourceRefs overwrites the refs column for a specific resource version.
 // This is a postgres-only method and is not part of the shared datastore interface.
+// The `refs IS DISTINCT FROM` guard makes the write a no-op when the stored refs
+// already match, so the idempotent startup backfill produces no WAL or table churn
+// on rows that are already current.
 func (d DatastorePostgres) UpdateResourceRefs(uri, version string, refs []string) error {
 	ctx, span := tracer.Start(context.Background(), "UpdateResourceRefs")
 	defer span.End()
 
 	_, err := d.pool.Exec(ctx,
-		`UPDATE resources SET refs = $1 WHERE uri = $2 AND version = $3`,
+		`UPDATE resources SET refs = $1 WHERE uri = $2 AND version = $3 AND refs IS DISTINCT FROM $1`,
 		refs, uri, version,
 	)
 	return err
