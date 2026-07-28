@@ -1199,7 +1199,23 @@ func (d DatastorePostgres) UpdateResourceVersionData(uri string, version string,
 	if err != nil {
 		return err
 	}
-	_, err = d.pool.Exec(ctx, `UPDATE resources SET data = $1 WHERE uri = $2 AND version = $3`, string(data), uri, version)
+	_, err = d.pool.Exec(ctx,
+		`UPDATE resources SET data = $1, refs = $2 WHERE uri = $3 AND version = $4`,
+		string(data), pkgmodel.CollectReferencedKSUIDs(data), uri, version,
+	)
+	return err
+}
+
+// UpdateResourceRefs overwrites the refs column for a specific resource version.
+// This is a postgres-only method and is not part of the shared datastore interface.
+func (d DatastorePostgres) UpdateResourceRefs(uri, version string, refs []string) error {
+	ctx, span := tracer.Start(context.Background(), "UpdateResourceRefs")
+	defer span.End()
+
+	_, err := d.pool.Exec(ctx,
+		`UPDATE resources SET refs = $1 WHERE uri = $2 AND version = $3`,
+		refs, uri, version,
+	)
 	return err
 }
 
@@ -3517,8 +3533,8 @@ func (d DatastorePostgres) storeResource(ctx context.Context, resource *pkgmodel
 	if errors.Is(err, pgx.ErrNoRows) {
 		newVersion := mksuid.New().String()
 		query = `
-		INSERT INTO resources (uri, version, command_id, operation, native_id, stack, type, label, target, data, managed, ksuid, target_incarnation_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		INSERT INTO resources (uri, version, command_id, operation, native_id, stack, type, label, target, data, managed, ksuid, target_incarnation_id, refs)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 		`
 		_, err = d.pool.Exec(
 			ctx,
@@ -3536,6 +3552,7 @@ func (d DatastorePostgres) storeResource(ctx context.Context, resource *pkgmodel
 			resource.Managed,
 			resource.Ksuid,
 			expectedIncarnation,
+			pkgmodel.CollectReferencedKSUIDs(data),
 		)
 		if err != nil {
 			slog.Error("failed to store resource", "error", err, "resourceURI", resource.URI())
@@ -3602,8 +3619,8 @@ func (d DatastorePostgres) storeResource(ctx context.Context, resource *pkgmodel
 	}
 
 	query = `
-	INSERT INTO resources (uri, version, command_id, operation, native_id, stack, type, label, target, data, managed, ksuid, target_incarnation_id)
-	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+	INSERT INTO resources (uri, version, command_id, operation, native_id, stack, type, label, target, data, managed, ksuid, target_incarnation_id, refs)
+	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 	ON CONFLICT (uri, version) DO UPDATE SET
 	command_id = EXCLUDED.command_id,
 	operation = EXCLUDED.operation,
@@ -3615,7 +3632,8 @@ func (d DatastorePostgres) storeResource(ctx context.Context, resource *pkgmodel
 	data = EXCLUDED.data,
 	managed = EXCLUDED.managed,
 	ksuid = EXCLUDED.ksuid,
-	target_incarnation_id = EXCLUDED.target_incarnation_id
+	target_incarnation_id = EXCLUDED.target_incarnation_id,
+	refs = EXCLUDED.refs
 	`
 	_, err = d.pool.Exec(
 		ctx,
@@ -3633,6 +3651,7 @@ func (d DatastorePostgres) storeResource(ctx context.Context, resource *pkgmodel
 		resource.Managed,
 		resource.Ksuid,
 		expectedIncarnation,
+		pkgmodel.CollectReferencedKSUIDs(data),
 	)
 	if err != nil {
 		slog.Error("failed to store resource", "error", err, "resourceURI", resource.URI())
