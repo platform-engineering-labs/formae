@@ -897,7 +897,7 @@ func (d DatastoreSQLite) QueryFormaCommands(query *datastore.StatusQuery) ([]*fo
 	subqueryStr += " ORDER BY timestamp DESC"
 	if query.N > 0 {
 		subqueryStr += " LIMIT ?"
-		args = append(args, min(datastore.DefaultFormaCommandsQueryLimit, query.N))
+		args = append(args, query.N)
 	} else {
 		subqueryStr += fmt.Sprintf(" LIMIT %d", datastore.DefaultFormaCommandsQueryLimit)
 	}
