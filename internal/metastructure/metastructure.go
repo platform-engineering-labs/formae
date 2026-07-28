@@ -228,6 +228,15 @@ func (m *Metastructure) Start() error {
 		return err
 	}
 
+	// One-time, idempotent sweep that populates the refs column on pre-migration
+	// resource rows so they are queryable by the indexed cascade lookup. Runs
+	// against the datastore alone — no actors, no plugins — before the node
+	// starts; a no-op on dialects without the refs column (sqlite, mssql).
+	if err := migration.BackfillResourceRefs(m.Datastore); err != nil {
+		slog.Error("Failed to backfill resource refs", "error", err)
+		return err
+	}
+
 	node, err := ergo.StartNode(gen.Atom(m.nodeName), m.options)
 	if err != nil {
 		slog.Error("Failed to start node", "error", err)
