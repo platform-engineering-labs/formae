@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/url"
 	"slices"
+	"sort"
 	"strings"
 
 	"github.com/tidwall/gjson"
@@ -274,6 +275,57 @@ func AsResolvedReference(value gjson.Result) (ResolvedReference, bool) {
 		Ref:   FormaeURI(value.Get("$ref").String()),
 		Value: value.Get("$value"),
 	}, true
+}
+
+// CollectReferencedKSUIDs parses data as JSON, recurses through all objects
+// and arrays, and collects the KSUID authority from every object whose "$ref"
+// field holds a formae:// URI. Returns a deduplicated, sorted slice. Returns
+// a non-nil empty slice when data is empty, invalid, or contains no refs.
+func CollectReferencedKSUIDs(data []byte) []string {
+	if len(data) == 0 {
+		return []string{}
+	}
+
+	root := gjson.ParseBytes(data)
+	if !root.IsObject() && !root.IsArray() {
+		return []string{}
+	}
+
+	seen := make(map[string]struct{})
+	collectKSUIDsRecursive(root, seen)
+
+	result := make([]string, 0, len(seen))
+	for k := range seen {
+		result = append(result, k)
+	}
+	sort.Strings(result)
+	return result
+}
+
+// collectKSUIDsRecursive descends into all objects and arrays, collecting
+// KSUIDs from any object whose "$ref" field is a formae:// URI string.
+// Unlike findResolvablesRecursive, it does NOT return early at a "$ref"
+// object — it continues descending into all children to catch nested refs.
+func collectKSUIDsRecursive(value gjson.Result, seen map[string]struct{}) {
+	if value.IsObject() {
+		refField := value.Get("$ref")
+		if refField.Exists() && refField.Type == gjson.String {
+			if ksuid := FormaeURI(refField.String()).KSUID(); ksuid != "" {
+				seen[ksuid] = struct{}{}
+			}
+		}
+
+		// Always recurse into all children (including $value of a resolved ref).
+		value.ForEach(func(_, val gjson.Result) bool {
+			collectKSUIDsRecursive(val, seen)
+			return true
+		})
+	} else if value.IsArray() {
+		value.ForEach(func(_, val gjson.Result) bool {
+			collectKSUIDsRecursive(val, seen)
+			return true
+		})
+	}
 }
 
 // ToTripletKey converts a resolvable object to a TripletKey
