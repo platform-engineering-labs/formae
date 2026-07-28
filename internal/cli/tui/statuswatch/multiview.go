@@ -424,6 +424,21 @@ func (v multiView) renderRows(maxRows int) []string {
 	bw := barWidth(v.width, vis)
 	p := v.th.Palette
 
+	// Fixed-width count field for the Progress column: reserve the widest
+	// " done/total " across all in-progress rows so the bar (which fills the
+	// rest) is the same width on every row. Otherwise barW would shrink with
+	// the digit count of done/total, making bars look like different widths.
+	progCountW := 0
+	for _, r := range v.rows {
+		if isTerminalCommand(r.cmd.State) {
+			continue
+		}
+		d, t := doneOf(r.counts)
+		if l := utf8.RuneCountInString(fmt.Sprintf(" %d/%d ", d, t)); l > progCountW {
+			progCountW = l
+		}
+	}
+
 	off := scrollOffset(v.cursor, len(v.rows), maxRows)
 	end := off + maxRows
 	if end > len(v.rows) {
@@ -510,7 +525,7 @@ func (v multiView) renderRows(maxRows int) []string {
 					// so without it the next (✓) column abuts the total — e.g. total 15
 					// + ✓ 4 rendered as "4/154". The gap keeps them separate.
 					countStr := fmt.Sprintf(" %d/%d ", done, total)
-					barW := w - utf8.RuneCountInString(countStr)
+					barW := w - progCountW
 					if barW < 1 {
 						barW = 1
 					}
