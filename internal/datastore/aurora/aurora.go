@@ -277,9 +277,11 @@ func (d *DatastoreAuroraDataAPI) runMigrations() error {
 		"targetVersion", targetVersion)
 
 	// Run pending migrations.
-	// Each migration runs inside a transaction so that TEMP tables and other
+	// Normal migrations run inside a transaction so that TEMP tables and other
 	// session-scoped objects survive across the individual SQL statements
 	// (Aurora Data API creates a new session per ExecuteStatement call).
+	// Migrations marked NO TRANSACTION (e.g. those using CONCURRENTLY DDL, which
+	// Postgres forbids inside a transaction block) run in autocommit mode instead.
 	for _, m := range migrations {
 		if m.version <= currentVersion {
 			continue
@@ -287,28 +289,41 @@ func (d *DatastoreAuroraDataAPI) runMigrations() error {
 
 		slog.Info("Running migration", "version", m.version, "name", m.name)
 
-		txID, err := d.beginTransaction(ctx)
-		if err != nil {
-			return fmt.Errorf("migration %d: failed to begin transaction: %w", m.version, err)
-		}
-
-		// Execute migration statements within the transaction
-		for _, stmt := range m.upStatements {
-			stmt = strings.TrimSpace(stmt)
-			if stmt == "" {
-				continue
+		if m.noTransaction {
+			// Execute each statement in autocommit mode (no wrapping transaction).
+			for _, stmt := range m.upStatements {
+				stmt = strings.TrimSpace(stmt)
+				if stmt == "" {
+					continue
+				}
+				if _, err := d.executeStatement(ctx, stmt, nil); err != nil {
+					return fmt.Errorf("migration %d failed on statement: %w", m.version, err)
+				}
 			}
-
-			_, err := d.executeStatementInTransaction(ctx, txID, stmt, nil)
+		} else {
+			txID, err := d.beginTransaction(ctx)
 			if err != nil {
-				_ = d.rollbackTransaction(ctx, txID)
-				return fmt.Errorf("migration %d failed on statement: %w", m.version, err)
+				return fmt.Errorf("migration %d: failed to begin transaction: %w", m.version, err)
 			}
-		}
 
-		if err := d.commitTransaction(ctx, txID); err != nil {
-			_ = d.rollbackTransaction(ctx, txID)
-			return fmt.Errorf("migration %d: failed to commit transaction: %w", m.version, err)
+			// Execute migration statements within the transaction
+			for _, stmt := range m.upStatements {
+				stmt = strings.TrimSpace(stmt)
+				if stmt == "" {
+					continue
+				}
+
+				_, err := d.executeStatementInTransaction(ctx, txID, stmt, nil)
+				if err != nil {
+					_ = d.rollbackTransaction(ctx, txID)
+					return fmt.Errorf("migration %d failed on statement: %w", m.version, err)
+				}
+			}
+
+			if err := d.commitTransaction(ctx, txID); err != nil {
+				_ = d.rollbackTransaction(ctx, txID)
+				return fmt.Errorf("migration %d: failed to commit transaction: %w", m.version, err)
+			}
 		}
 
 		// Record migration version
@@ -322,9 +337,10 @@ func (d *DatastoreAuroraDataAPI) runMigrations() error {
 }
 
 type migration struct {
-	version      int64
-	name         string
-	upStatements []string
+	version       int64
+	name          string
+	upStatements  []string
+	noTransaction bool
 }
 
 // ensureVersionTable creates the db_version table if it doesn't exist.
@@ -405,9 +421,10 @@ func (d *DatastoreAuroraDataAPI) collectMigrations() ([]migration, error) {
 
 		upStatements := parseGooseUp(string(content))
 		migrations = append(migrations, migration{
-			version:      version,
-			name:         entry.Name(),
-			upStatements: upStatements,
+			version:       version,
+			name:          entry.Name(),
+			upStatements:  upStatements,
+			noTransaction: hasNoTransactionDirective(string(content)),
 		})
 	}
 
@@ -417,6 +434,18 @@ func (d *DatastoreAuroraDataAPI) collectMigrations() ([]migration, error) {
 	})
 
 	return migrations, nil
+}
+
+// hasNoTransactionDirective reports whether the migration content contains the
+// goose "-- +goose NO TRANSACTION" directive, which marks a migration that must
+// run outside of a transaction block (e.g. CONCURRENTLY DDL on Postgres).
+func hasNoTransactionDirective(content string) bool {
+	for _, line := range strings.Split(content, "\n") {
+		if strings.TrimSpace(line) == "-- +goose NO TRANSACTION" {
+			return true
+		}
+	}
+	return false
 }
 
 // parseGooseUp extracts the Up statements from a goose migration file.
