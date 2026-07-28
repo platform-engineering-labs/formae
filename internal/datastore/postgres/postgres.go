@@ -1457,7 +1457,7 @@ func (d DatastorePostgres) FindResourcesDependingOn(ksuid string) ([]*pkgmodel.R
 		resources = append(resources, &resource)
 	}
 
-	return resources, nil
+	return resources, rows.Err()
 }
 
 func (d DatastorePostgres) FindResourcesDependingOnMany(ksuids []string) (map[string][]*pkgmodel.Resource, error) {
@@ -1519,7 +1519,7 @@ func (d DatastorePostgres) FindResourcesDependingOnMany(ksuids []string) (map[st
 		}
 	}
 
-	return result, nil
+	return result, rows.Err()
 }
 
 func (d DatastorePostgres) FindTargetsDependingOnMany(ksuids []string) (map[string][]*pkgmodel.Target, error) {
