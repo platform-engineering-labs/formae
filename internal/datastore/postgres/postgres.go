@@ -681,7 +681,7 @@ func (d DatastorePostgres) QueryFormaCommands(query *datastore.StatusQuery) ([]*
 	subqueryStr += " ORDER BY timestamp DESC"
 	if query.N > 0 {
 		subqueryStr += fmt.Sprintf(" LIMIT $%d", len(args)+1)
-		args = append(args, min(datastore.DefaultFormaCommandsQueryLimit, query.N))
+		args = append(args, query.N)
 	} else {
 		subqueryStr += fmt.Sprintf(" LIMIT %d", datastore.DefaultFormaCommandsQueryLimit)
 	}

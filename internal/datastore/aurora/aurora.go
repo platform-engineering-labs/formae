@@ -1145,7 +1145,7 @@ func (d *DatastoreAuroraDataAPI) QueryFormaCommands(statusQuery *datastore.Statu
 	queryStr += " ORDER BY timestamp DESC"
 
 	limit := datastore.DefaultFormaCommandsQueryLimit
-	if statusQuery.N > 0 && statusQuery.N < limit {
+	if statusQuery.N > 0 {
 		limit = statusQuery.N
 	}
 	queryStr += fmt.Sprintf(" LIMIT %d", limit)

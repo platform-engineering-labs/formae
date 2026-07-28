@@ -568,6 +568,13 @@ func RunQueryFormaCommands(t *testing.T, newDS func(t *testing.T) TestDatastore)
 			assert.Equal(t, pkgmodel.CommandApply, result.Command)
 		}
 
+		// A max-results (N) above the default page size returns up to N rows:
+		// DefaultFormaCommandsQueryLimit is a fallback for unset N, not a ceiling.
+		query = &datastore.StatusQuery{N: 15}
+		results, err = ds.QueryFormaCommands(query)
+		assert.NoError(t, err)
+		assert.Len(t, results, 15)
+
 		query = &datastore.StatusQuery{
 			Status: &datastore.QueryItem[string]{
 				Item:       string(forma_command.CommandStateSuccess),

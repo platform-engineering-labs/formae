@@ -739,7 +739,7 @@ func (d *DatastoreMSSQL) QueryFormaCommands(query *datastore.StatusQuery) ([]*fo
 
 	limit := datastore.DefaultFormaCommandsQueryLimit
 	if query.N > 0 {
-		limit = min(datastore.DefaultFormaCommandsQueryLimit, query.N)
+		limit = query.N
 	}
 
 	subqueryStr := fmt.Sprintf("SELECT TOP (%d) command_id FROM forma_commands WHERE 1=1", limit)
