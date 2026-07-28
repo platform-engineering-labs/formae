@@ -459,3 +459,161 @@ func TestLoadResourcesByStack_ExcludesDeletedResourceWhenVersionsMixCase(t *test
 		"resource with a later delete row must be excluded from LoadResourcesByStack, "+
 			"but uncollated version comparison picked the earlier update row as 'latest'")
 }
+
+// TestFindResourcesDependingOn_UsesRefsIndex asserts that the cascade dependency
+// lookup is backed by an index scan on idx_resources_refs rather than a sequential
+// scan. The test seeds several hundred rows with cross-refs, runs ANALYZE, then
+// asks Postgres for the EXPLAIN plan and verifies that idx_resources_refs appears
+// and no Seq Scan on resources is present.
+//
+// The test is skipped automatically when Postgres is unavailable (the local SQLite
+// path is covered by the shared dstest suite).
+func TestFindResourcesDependingOn_UsesRefsIndex(t *testing.T) {
+	ctx := context.Background()
+
+	adminConn, err := pgx.Connect(ctx, "postgres://postgres:admin@localhost:5432/postgres")
+	if err != nil {
+		t.Skipf("Postgres not available: %v", err)
+	}
+	adminConn.Close(ctx)
+
+	d, cleanup := newTestDatastore(t)
+	defer cleanup()
+	storeTestTarget(t, d)
+
+	// Seed a parent resource.
+	parentKsuid := mksuid.New().String()
+	_, err = d.StoreResource(&pkgmodel.Resource{
+		Ksuid: parentKsuid, NativeID: "idx-parent", Stack: "s", Label: "idx-parent",
+		Type: "AWS::S3::Bucket", Target: "test-target",
+		Properties: json.RawMessage(`{"BucketName":"idx-test"}`),
+	}, "cmd-0")
+	require.NoError(t, err)
+
+	// Seed 300 child rows: 100 reference parentKsuid, 200 are unrelated.
+	for i := 0; i < 100; i++ {
+		childProps := fmt.Sprintf(`{"V":{"$ref":"formae://%s#/Arn","$value":"v"}}`, parentKsuid)
+		_, err = d.StoreResource(&pkgmodel.Resource{
+			Ksuid:      mksuid.New().String(),
+			NativeID:   fmt.Sprintf("idx-child-ref-%d", i),
+			Stack:      "s",
+			Label:      fmt.Sprintf("idx-child-ref-%d", i),
+			Type:       "AWS::IAM::Role",
+			Target:     "test-target",
+			Properties: json.RawMessage(childProps),
+		}, "cmd-1")
+		require.NoError(t, err)
+	}
+	for i := 0; i < 200; i++ {
+		_, err = d.StoreResource(&pkgmodel.Resource{
+			Ksuid:      mksuid.New().String(),
+			NativeID:   fmt.Sprintf("idx-child-noref-%d", i),
+			Stack:      "s",
+			Label:      fmt.Sprintf("idx-child-noref-%d", i),
+			Type:       "AWS::EC2::Subnet",
+			Target:     "test-target",
+			Properties: json.RawMessage(`{"CidrBlock":"10.0.0.0/24"}`),
+		}, "cmd-1")
+		require.NoError(t, err)
+	}
+
+	// Update table statistics so the planner has accurate row counts.
+	_, err = d.Pool().Exec(ctx, "ANALYZE resources")
+	require.NoError(t, err)
+
+	// Run EXPLAIN (FORMAT JSON) for the same query shape used by the real functions.
+	explainQuery := `EXPLAIN (FORMAT JSON)
+	SELECT data, ksuid, refs
+	FROM resources r1
+	WHERE refs && $1
+	AND NOT EXISTS (
+		SELECT 1
+		FROM resources r2
+		WHERE r1.uri = r2.uri
+		AND r2.version COLLATE "C" > r1.version COLLATE "C"
+	)
+	AND operation != $2 AND operation != 'reaped'`
+
+	var planJSON string
+	err = d.Pool().QueryRow(ctx, explainQuery, []string{parentKsuid}, "delete").Scan(&planJSON)
+	require.NoError(t, err)
+
+	assert.Contains(t, planJSON, "idx_resources_refs",
+		"EXPLAIN plan must reference idx_resources_refs; got plan:\n%s", planJSON)
+	assert.NotContains(t, planJSON, `"Seq Scan"`,
+		"EXPLAIN plan must not contain a Seq Scan on resources; got plan:\n%s", planJSON)
+}
+
+// TestFindResourcesDependingOnMany_UsesRefsIndex is the equivalent plan guard for
+// FindResourcesDependingOnMany, which passes the entire frontier as a single text[]
+// parameter.
+func TestFindResourcesDependingOnMany_UsesRefsIndex(t *testing.T) {
+	ctx := context.Background()
+
+	adminConn, err := pgx.Connect(ctx, "postgres://postgres:admin@localhost:5432/postgres")
+	if err != nil {
+		t.Skipf("Postgres not available: %v", err)
+	}
+	adminConn.Close(ctx)
+
+	d, cleanup := newTestDatastore(t)
+	defer cleanup()
+	storeTestTarget(t, d)
+
+	// Seed two parent resources (frontier of size 2).
+	parent1Ksuid := mksuid.New().String()
+	parent2Ksuid := mksuid.New().String()
+	for i, pk := range []string{parent1Ksuid, parent2Ksuid} {
+		_, err = d.StoreResource(&pkgmodel.Resource{
+			Ksuid: pk, NativeID: fmt.Sprintf("many-parent-%d", i), Stack: "s",
+			Label: fmt.Sprintf("many-parent-%d", i),
+			Type: "AWS::S3::Bucket", Target: "test-target",
+			Properties: json.RawMessage(fmt.Sprintf(`{"BucketName":"mp%d"}`, i)),
+		}, "cmd-0")
+		require.NoError(t, err)
+	}
+
+	// Seed 200 children, alternating refs between the two parents.
+	for i := 0; i < 200; i++ {
+		pk := parent1Ksuid
+		if i%2 == 1 {
+			pk = parent2Ksuid
+		}
+		childProps := fmt.Sprintf(`{"V":{"$ref":"formae://%s#/Arn","$value":"v"}}`, pk)
+		_, err = d.StoreResource(&pkgmodel.Resource{
+			Ksuid:      mksuid.New().String(),
+			NativeID:   fmt.Sprintf("many-child-%d", i),
+			Stack:      "s",
+			Label:      fmt.Sprintf("many-child-%d", i),
+			Type:       "AWS::IAM::Role",
+			Target:     "test-target",
+			Properties: json.RawMessage(childProps),
+		}, "cmd-1")
+		require.NoError(t, err)
+	}
+
+	_, err = d.Pool().Exec(ctx, "ANALYZE resources")
+	require.NoError(t, err)
+
+	explainQuery := `EXPLAIN (FORMAT JSON)
+	SELECT data, ksuid, refs
+	FROM resources r1
+	WHERE refs && $1
+	AND NOT EXISTS (
+		SELECT 1
+		FROM resources r2
+		WHERE r1.uri = r2.uri
+		AND r2.version COLLATE "C" > r1.version COLLATE "C"
+	)
+	AND operation != $2 AND operation != 'reaped'`
+
+	var planJSON string
+	frontier := []string{parent1Ksuid, parent2Ksuid}
+	err = d.Pool().QueryRow(ctx, explainQuery, frontier, "delete").Scan(&planJSON)
+	require.NoError(t, err)
+
+	assert.Contains(t, planJSON, "idx_resources_refs",
+		"EXPLAIN plan must reference idx_resources_refs; got plan:\n%s", planJSON)
+	assert.NotContains(t, planJSON, `"Seq Scan"`,
+		"EXPLAIN plan must not contain a Seq Scan on resources; got plan:\n%s", planJSON)
+}

@@ -1417,22 +1417,15 @@ func (d DatastorePostgres) LoadResourceById(ksuid string) (*pkgmodel.Resource, e
 }
 
 // FindResourcesDependingOn finds resources that reference the given KSUID via $ref in their properties.
-// This is essential for referential integrity — without it we risk leaving orphaned resources in an
-// inconsistent state. Currently this requires a full table scan (LIKE on the data column) which will
-// be slow for users with large resource counts.
-// TODO: make the dependency graph discoverable from the schema so we can query edges directly.
+// The query uses the GIN-indexed refs column (array overlap &&) to avoid a full table scan.
 func (d DatastorePostgres) FindResourcesDependingOn(ksuid string) ([]*pkgmodel.Resource, error) {
 	ctx, span := tracer.Start(context.Background(), "FindResourcesDependingOn")
 	defer span.End()
 
-	// Search for resources that contain a $ref to this KSUID in their properties
-	// Use regex to handle Postgres JSONB text formatting which adds spaces after colons
-	pattern := fmt.Sprintf(`"\$ref"\s*:\s*"formae://%s#`, ksuid)
-
 	query := `
-	SELECT data, ksuid
+	SELECT data, ksuid, refs
 	FROM resources r1
-	WHERE data::text ~ $1
+	WHERE refs && $1
 	AND NOT EXISTS (
 		SELECT 1
 		FROM resources r2
@@ -1442,7 +1435,7 @@ func (d DatastorePostgres) FindResourcesDependingOn(ksuid string) ([]*pkgmodel.R
 	AND operation != $2 AND operation != 'reaped'
 	`
 
-	rows, err := d.pool.Query(ctx, query, pattern, resource_update.OperationDelete)
+	rows, err := d.pool.Query(ctx, query, []string{ksuid}, resource_update.OperationDelete)
 	if err != nil {
 		return nil, err
 	}
@@ -1451,7 +1444,8 @@ func (d DatastorePostgres) FindResourcesDependingOn(ksuid string) ([]*pkgmodel.R
 	var resources []*pkgmodel.Resource
 	for rows.Next() {
 		var jsonData, ksuidResult string
-		if err := rows.Scan(&jsonData, &ksuidResult); err != nil {
+		var scannedRefs []string
+		if err := rows.Scan(&jsonData, &ksuidResult, &scannedRefs); err != nil {
 			return nil, err
 		}
 
@@ -1474,42 +1468,40 @@ func (d DatastorePostgres) FindResourcesDependingOnMany(ksuids []string) (map[st
 		return make(map[string][]*pkgmodel.Resource), nil
 	}
 
-	// Build OR conditions for each KSUID pattern with numbered placeholders
-	// Use regex to handle Postgres JSONB text formatting which adds spaces after colons
-	var conditions []string
-	var args []any
-	for i, ksuid := range ksuids {
-		pattern := fmt.Sprintf(`"\$ref"\s*:\s*"formae://%s#`, ksuid)
-		conditions = append(conditions, fmt.Sprintf("data::text ~ $%d", i+1))
-		args = append(args, pattern)
-	}
-	args = append(args, resource_update.OperationDelete)
-	deleteArgNum := len(ksuids) + 1
-
-	query := fmt.Sprintf(`
-	SELECT data, ksuid
+	// Single query: the refs && $1 overlap operator is served by the GIN index
+	// idx_resources_refs, replacing per-KSUID regex OR conditions.
+	query := `
+	SELECT data, ksuid, refs
 	FROM resources r1
-	WHERE (%s)
+	WHERE refs && $1
 	AND NOT EXISTS (
 		SELECT 1
 		FROM resources r2
 		WHERE r1.uri = r2.uri
 		AND r2.version COLLATE "C" > r1.version COLLATE "C"
 	)
-	AND operation != $%d AND operation != 'reaped'
-	`, strings.Join(conditions, " OR "), deleteArgNum)
+	AND operation != $2 AND operation != 'reaped'
+	`
 
-	rows, err := d.pool.Query(ctx, query, args...)
+	rows, err := d.pool.Query(ctx, query, ksuids, resource_update.OperationDelete)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	// Build a map of KSUID -> resources that depend on it
+	// Build the input KSUID set for O(1) membership checks.
+	frontierSet := make(map[string]struct{}, len(ksuids))
+	for _, k := range ksuids {
+		frontierSet[k] = struct{}{}
+	}
+
+	// Build a map of KSUID -> resources that depend on it by intersecting each
+	// returned row's refs with the frontier set.
 	result := make(map[string][]*pkgmodel.Resource)
 	for rows.Next() {
 		var jsonData, ksuidResult string
-		if err := rows.Scan(&jsonData, &ksuidResult); err != nil {
+		var rowRefs []string
+		if err := rows.Scan(&jsonData, &ksuidResult, &rowRefs); err != nil {
 			return nil, err
 		}
 
@@ -1519,11 +1511,10 @@ func (d DatastorePostgres) FindResourcesDependingOnMany(ksuids []string) (map[st
 		}
 		resource.Ksuid = ksuidResult
 
-		// Find which of the input KSUIDs this resource depends on
-		for _, ksuid := range ksuids {
-			pattern := fmt.Sprintf("\"$ref\":\"formae://%s#", ksuid)
-			if strings.Contains(jsonData, pattern) {
-				result[ksuid] = append(result[ksuid], &resource)
+		// Append this resource under every frontier KSUID it references.
+		for _, ref := range rowRefs {
+			if _, ok := frontierSet[ref]; ok {
+				result[ref] = append(result[ref], &resource)
 			}
 		}
 	}
