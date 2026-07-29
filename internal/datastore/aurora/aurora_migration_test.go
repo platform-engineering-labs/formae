@@ -47,3 +47,40 @@ func TestHasNoTransactionDirective(t *testing.T) {
 		}
 	})
 }
+
+func TestStripConcurrently(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "create index concurrently",
+			in:   "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_resources_refs ON resources USING GIN (refs)",
+			want: "CREATE INDEX IF NOT EXISTS idx_resources_refs ON resources USING GIN (refs)",
+		},
+		{
+			name: "drop index concurrently",
+			in:   "DROP INDEX CONCURRENTLY IF EXISTS idx_resources_refs",
+			want: "DROP INDEX IF EXISTS idx_resources_refs",
+		},
+		{
+			name: "lowercase keyword",
+			in:   "create index concurrently idx on t (c)",
+			want: "create index idx on t (c)",
+		},
+		{
+			name: "statement without the keyword is unchanged",
+			in:   "ALTER TABLE resources ADD COLUMN IF NOT EXISTS refs text[] NOT NULL DEFAULT '{}'",
+			want: "ALTER TABLE resources ADD COLUMN IF NOT EXISTS refs text[] NOT NULL DEFAULT '{}'",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := stripConcurrently(tc.in); got != tc.want {
+				t.Errorf("stripConcurrently(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}

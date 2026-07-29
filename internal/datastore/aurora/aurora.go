@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -290,9 +291,14 @@ func (d *DatastoreAuroraDataAPI) runMigrations() error {
 		slog.Info("Running migration", "version", m.version, "name", m.name)
 
 		if m.noTransaction {
-			// Execute each statement in autocommit mode (no wrapping transaction).
+			// The Data API runs every ExecuteStatement inside its own implicit
+			// transaction — there is no autocommit-outside-a-transaction mode — so
+			// CONCURRENTLY index DDL (which Postgres forbids inside a transaction
+			// block) cannot be honored on this backend. Strip CONCURRENTLY so the
+			// equivalent blocking DDL runs instead. The pgx-backed Postgres
+			// datastore keeps CONCURRENTLY via goose's own NO TRANSACTION handling.
 			for _, stmt := range m.upStatements {
-				stmt = strings.TrimSpace(stmt)
+				stmt = stripConcurrently(strings.TrimSpace(stmt))
 				if stmt == "" {
 					continue
 				}
@@ -446,6 +452,18 @@ func hasNoTransactionDirective(content string) bool {
 		}
 	}
 	return false
+}
+
+// concurrentlyKeyword matches the standalone CONCURRENTLY keyword (case-insensitive)
+// along with the whitespace that precedes it.
+var concurrentlyKeyword = regexp.MustCompile(`(?i)\s+CONCURRENTLY\b`)
+
+// stripConcurrently removes the CONCURRENTLY keyword from index DDL. The Aurora
+// Data API executes each statement inside an implicit transaction, where Postgres
+// forbids CREATE/DROP INDEX CONCURRENTLY, so the non-concurrent form is the only
+// option available on this backend.
+func stripConcurrently(stmt string) string {
+	return concurrentlyKeyword.ReplaceAllString(stmt, "")
 }
 
 // parseGooseUp extracts the Up statements from a goose migration file.
