@@ -572,9 +572,9 @@ func getStringArrayField(field types.Field) ([]string, error) {
 // directly (there is no FieldMemberArrayValue for SqlParameter inputs in the SDK).
 // KSUIDs are fixed-length base62 tokens (letters + digits only) so commas never
 // appear in a KSUID, making comma-delimiting unambiguous.  The empty-list edge
-// case requires special handling because string_to_array('', ',') returns {''}
+// case requires special handling because string_to_array(”, ',') returns {”}
 // (a one-element array containing an empty string), not an empty array.  We use
-// CASE WHEN ... = '' THEN '{}'::text[] ELSE string_to_array(..., ',') END to
+// CASE WHEN ... = ” THEN '{}'::text[] ELSE string_to_array(..., ',') END to
 // handle that correctly.
 func refsToSQL(param string) string {
 	return `CASE WHEN ` + param + ` = '' THEN '{}'::text[] ELSE string_to_array(` + param + `, ',') END`

@@ -18,8 +18,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/platform-engineering-labs/formae/internal/datastore/postgres"
-	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
 // TestBackfillResourceRefs_SkipOnUnsupportedDatastore verifies that
@@ -179,7 +179,7 @@ func TestBackfillResourceRefs_ParityPostgres(t *testing.T) {
 		},
 		{
 			// Non-formae:// $ref — must be excluded.
-			label: "non-formae-ref",
+			label:      "non-formae-ref",
 			properties: json.RawMessage(`{"Ext":{"$ref":"https://example.com/schema","$value":"x"}}`),
 		},
 		{
@@ -192,12 +192,12 @@ func TestBackfillResourceRefs_ParityPostgres(t *testing.T) {
 		},
 		{
 			// User-authored key that looks like a $ref but is not a formae:// URI.
-			label: "user-ref-key",
+			label:      "user-ref-key",
 			properties: json.RawMessage(`{"$ref":"some-local-reference"}`),
 		},
 		{
 			// No refs at all.
-			label: "no-refs",
+			label:      "no-refs",
 			properties: json.RawMessage(`{"BucketName":"my-bucket"}`),
 		},
 	}

@@ -460,11 +460,18 @@ func TestLoadResourcesByStack_ExcludesDeletedResourceWhenVersionsMixCase(t *test
 			"but uncollated version comparison picked the earlier update row as 'latest'")
 }
 
-// TestFindResourcesDependingOn_UsesRefsIndex asserts that the cascade dependency
-// lookup is backed by an index scan on idx_resources_refs rather than a sequential
-// scan. The test seeds several hundred rows with cross-refs, runs ANALYZE, then
-// asks Postgres for the EXPLAIN plan and verifies that idx_resources_refs appears
-// and no Seq Scan on resources is present.
+// TestFindResourcesDependingOn_UsesRefsIndex asserts that the refs && $1 predicate
+// of the cascade dependency lookup is backed by idx_resources_refs rather than a
+// full scan of the refs column. The test seeds several hundred rows with cross-refs,
+// runs ANALYZE, disables sequential scans for the session, then asks Postgres for the
+// EXPLAIN plan and verifies that idx_resources_refs appears.
+//
+// enable_seqscan is disabled because at the few-hundred-row scale of this test the
+// planner would pick a sequential scan on cost grounds; disabling it asserts that an
+// indexed path *exists* for the overlap predicate. The plan is not asserted to be
+// scan-free: the NOT EXISTS "latest version" anti-join legitimately reads the
+// candidate rows sharing a uri regardless of table size, and that is not what this
+// index targets.
 //
 // The test is skipped automatically when Postgres is unavailable (the local SQLite
 // path is covered by the shared dstest suite).
@@ -521,7 +528,16 @@ func TestFindResourcesDependingOn_UsesRefsIndex(t *testing.T) {
 	_, err = d.Pool().Exec(ctx, "ANALYZE resources")
 	require.NoError(t, err)
 
-	// Run EXPLAIN (FORMAT JSON) for the same query shape used by the real functions.
+	// Disable sequential scans on a dedicated connection so the SET and the
+	// EXPLAIN run against the same session, then confirm the overlap predicate
+	// resolves to the GIN index.
+	conn, err := d.Pool().Acquire(ctx)
+	require.NoError(t, err)
+	defer conn.Release()
+
+	_, err = conn.Exec(ctx, "SET enable_seqscan = off")
+	require.NoError(t, err)
+
 	explainQuery := `EXPLAIN (FORMAT JSON)
 	SELECT data, ksuid, refs
 	FROM resources r1
@@ -535,18 +551,18 @@ func TestFindResourcesDependingOn_UsesRefsIndex(t *testing.T) {
 	AND operation != $2 AND operation != 'reaped'`
 
 	var planJSON string
-	err = d.Pool().QueryRow(ctx, explainQuery, []string{parentKsuid}, "delete").Scan(&planJSON)
+	err = conn.QueryRow(ctx, explainQuery, []string{parentKsuid}, "delete").Scan(&planJSON)
 	require.NoError(t, err)
 
 	assert.Contains(t, planJSON, "idx_resources_refs",
 		"EXPLAIN plan must reference idx_resources_refs; got plan:\n%s", planJSON)
-	assert.NotContains(t, planJSON, `"Seq Scan"`,
-		"EXPLAIN plan must not contain a Seq Scan on resources; got plan:\n%s", planJSON)
 }
 
 // TestFindResourcesDependingOnMany_UsesRefsIndex is the equivalent plan guard for
 // FindResourcesDependingOnMany, which passes the entire frontier as a single text[]
-// parameter.
+// parameter. As with the single-KSUID guard, sequential scans are disabled for the
+// session so the overlap predicate is asserted to have an indexed path; the version
+// anti-join is not required to be scan-free.
 func TestFindResourcesDependingOnMany_UsesRefsIndex(t *testing.T) {
 	ctx := context.Background()
 
@@ -567,7 +583,7 @@ func TestFindResourcesDependingOnMany_UsesRefsIndex(t *testing.T) {
 		_, err = d.StoreResource(&pkgmodel.Resource{
 			Ksuid: pk, NativeID: fmt.Sprintf("many-parent-%d", i), Stack: "s",
 			Label: fmt.Sprintf("many-parent-%d", i),
-			Type: "AWS::S3::Bucket", Target: "test-target",
+			Type:  "AWS::S3::Bucket", Target: "test-target",
 			Properties: json.RawMessage(fmt.Sprintf(`{"BucketName":"mp%d"}`, i)),
 		}, "cmd-0")
 		require.NoError(t, err)
@@ -595,6 +611,13 @@ func TestFindResourcesDependingOnMany_UsesRefsIndex(t *testing.T) {
 	_, err = d.Pool().Exec(ctx, "ANALYZE resources")
 	require.NoError(t, err)
 
+	conn, err := d.Pool().Acquire(ctx)
+	require.NoError(t, err)
+	defer conn.Release()
+
+	_, err = conn.Exec(ctx, "SET enable_seqscan = off")
+	require.NoError(t, err)
+
 	explainQuery := `EXPLAIN (FORMAT JSON)
 	SELECT data, ksuid, refs
 	FROM resources r1
@@ -609,11 +632,9 @@ func TestFindResourcesDependingOnMany_UsesRefsIndex(t *testing.T) {
 
 	var planJSON string
 	frontier := []string{parent1Ksuid, parent2Ksuid}
-	err = d.Pool().QueryRow(ctx, explainQuery, frontier, "delete").Scan(&planJSON)
+	err = conn.QueryRow(ctx, explainQuery, frontier, "delete").Scan(&planJSON)
 	require.NoError(t, err)
 
 	assert.Contains(t, planJSON, "idx_resources_refs",
 		"EXPLAIN plan must reference idx_resources_refs; got plan:\n%s", planJSON)
-	assert.NotContains(t, planJSON, `"Seq Scan"`,
-		"EXPLAIN plan must not contain a Seq Scan on resources; got plan:\n%s", planJSON)
 }
