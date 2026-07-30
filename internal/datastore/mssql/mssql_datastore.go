@@ -824,6 +824,10 @@ func (d *DatastoreMSSQL) BulkStoreResourceUpdates(commandID string, updates []re
 		if err != nil {
 			return fmt.Errorf("failed to marshal resource target: %w", err)
 		}
+		resourceTargetJSON, err = datastore.StripOpaqueRefValues(resourceTargetJSON)
+		if err != nil {
+			return fmt.Errorf("failed to strip opaque ref values from resource target: %w", err)
+		}
 		existingResourceJSON, err := json.Marshal(ru.PriorState)
 		if err != nil {
 			return fmt.Errorf("failed to marshal existing resource: %w", err)
@@ -922,6 +926,12 @@ func (d *DatastoreMSSQL) UpdateFormaCommandProgress(commandID string, state form
 func (d *DatastoreMSSQL) UpdateFormaCommandTargetUpdates(commandID string, targetUpdatesJSON json.RawMessage, state forma_command.CommandState, modifiedTs time.Time) error {
 	ctx, span := mssqlTracer.Start(context.Background(), "UpdateFormaCommandTargetUpdates")
 	defer span.End()
+
+	var err error
+	targetUpdatesJSON, err = datastore.StripOpaqueRefValues(targetUpdatesJSON)
+	if err != nil {
+		return fmt.Errorf("failed to strip opaque ref values from target updates: %w", err)
+	}
 
 	result, err := d.conn.ExecContext(ctx,
 		fmt.Sprintf("UPDATE %s SET target_updates = @p1, state = @p2, modified_ts = @p3 WHERE command_id = @p4", datastore.CommandsTable),
