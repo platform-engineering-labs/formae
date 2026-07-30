@@ -8,6 +8,7 @@ package model
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -42,4 +43,19 @@ func TestValue_LogValueRedactsOpaque(t *testing.T) {
 
 	clear := &Value{Value: "public", Visibility: VisibilityClear}
 	assert.Equal(t, "public", clear.LogValue().String())
+}
+
+func TestValue_JSONPathRoundTrip(t *testing.T) {
+	v := Value{Visibility: "Opaque", JSONPath: "db.password"}
+	b, err := json.Marshal(&v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"$json":"db.password"`) {
+		t.Fatalf("missing $json in %s", b)
+	}
+	var back Value
+	if err := json.Unmarshal(b, &back); err != nil || back.JSONPath != "db.password" {
+		t.Fatalf("round-trip failed: %+v err %v", back, err)
+	}
 }

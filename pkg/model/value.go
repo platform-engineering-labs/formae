@@ -27,6 +27,7 @@ type Value struct {
 	Visibility string `json:"$visibility,omitempty"` // Visibility of the value
 	Value      any    `json:"$value,omitempty"`      // The actual value or hashed value, if applicable
 	Hashed     bool   `json:"$hashed,omitempty"`     // True when Value holds the SHA-256 digest, not plaintext
+	JSONPath   string `json:"$json,omitempty"`       // gjson dotted path applied post-resolution (secret .json())
 }
 
 func (v *Value) IsOpaque() bool {
