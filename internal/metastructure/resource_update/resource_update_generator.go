@@ -2114,8 +2114,9 @@ func translatePropertiesJSON(properties json.RawMessage, tripletToKsuid map[pkgm
 			}
 			formaeURI = resolvable.ToFormaeURI(ksuid)
 		}
-		refObject := map[string]string{
-			"$ref": string(formaeURI),
+		refObject := map[string]any{"$ref": string(formaeURI)}
+		if resolvable.JSONPath != "" {
+			refObject["$json"] = resolvable.JSONPath
 		}
 
 		result, err = sjson.Set(result, resolvable.Path, refObject)
@@ -2248,6 +2249,7 @@ func translateEmbedSpansInTemplate(tmpl string, tripletToKsuid map[pkgmodel.Trip
 			Type:     parsed.Get("$type").String(),
 			Stack:    parsed.Get("$stack").String(),
 			Property: parsed.Get("$property").String(),
+			JSONPath: parsed.Get("$json").String(),
 		}
 
 		var formaeURI pkgmodel.FormaeURI
@@ -2280,7 +2282,10 @@ func translateEmbedSpansInTemplate(tmpl string, tripletToKsuid map[pkgmodel.Trip
 			formaeURI = resolvable.ToFormaeURI(ksuid)
 		}
 
-		refEnv := map[string]string{"$ref": string(formaeURI)}
+		refEnv := map[string]any{"$ref": string(formaeURI)}
+		if resolvable.JSONPath != "" {
+			refEnv["$json"] = resolvable.JSONPath
+		}
 		refJSON, marshalErr := json.Marshal(refEnv)
 		if marshalErr != nil {
 			return tmpl, fmt.Errorf("embed span: failed to marshal $ref envelope: %w", marshalErr)

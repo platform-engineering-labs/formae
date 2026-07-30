@@ -175,6 +175,7 @@ type ResolvableObject struct {
 	Type     string
 	Stack    string
 	Property string
+	JSONPath string // gjson dotted path from $json, applied post-resolution
 }
 
 // FindResolvablesFromProperties traverses json properties and finds all objects with $res: true
@@ -197,6 +198,7 @@ func findResolvablesRecursive(basePath string, value gjson.Result, resolvables *
 				Type:     value.Get("$type").String(),
 				Stack:    value.Get("$stack").String(),
 				Property: value.Get("$property").String(),
+				JSONPath: value.Get("$json").String(),
 			}
 			*resolvables = append(*resolvables, resolvable)
 			return
