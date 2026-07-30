@@ -900,7 +900,15 @@ func resolveRefs(current, mod map[string]any, resolvableProperties resolver.Reso
 
 				val, found := resolvableProperties.Get(ksuid, property)
 				if found {
-					modVal["$value"] = normalizeResolvedValue(val, current[k])
+					resolved := val
+					if jsonPath, ok := modVal["$json"].(string); ok && jsonPath != "" {
+						extracted, err := resolver.ExtractJSONPath(val, jsonPath)
+						if err != nil {
+							return err
+						}
+						resolved = extracted
+					}
+					modVal["$value"] = normalizeResolvedValue(resolved, current[k])
 				}
 				// If not found, keep the $ref as-is for late-binding resolution
 				// at execution time (forward references to new resources).
