@@ -103,6 +103,31 @@ func TestKittyFullLogo_PinsCellFootprint(t *testing.T) {
 	}
 }
 
+// TestKittyFullLogo_SuppressesTerminalResponses asserts the Kitty transmit
+// command carries q=2 (suppress all responses). formae writes the logo and
+// exits without ever reading the tty; without q=2, terminals that acknowledge
+// graphics commands (e.g. iTerm2 3.6+ replies "ESC_Gi=0,p=0;OK" even when no
+// image id is given) leave their acks in the input buffer, and the shell
+// echoes them as stray "Gi=0,p=0;OK" text after the command exits.
+func TestKittyFullLogo_SuppressesTerminalResponses(t *testing.T) {
+	t.Parallel()
+
+	out := encodeKittyFullLogo(true, graphicsFullLogoWidthPx, nil)
+	if out == "" {
+		t.Fatal("encodeKittyFullLogo returned empty string")
+	}
+
+	// The control keys live in the first chunk's params, between the APC
+	// introducer and the payload separator ';'.
+	params, _, ok := strings.Cut(strings.TrimPrefix(out, "\033_G"), ";")
+	if !ok {
+		t.Fatalf("no payload separator in Kitty escape; head: %q", out[:min(len(out), 96)])
+	}
+	if !strings.Contains(params+",", "q=2,") {
+		t.Errorf("Kitty transmit must set q=2 to suppress terminal acks (they leak into the shell); params: %q", params)
+	}
+}
+
 // TestRender_KittyFullLogo asserts that SizeFull + CapKitty output:
 //   - contains the C=1 Kitty graphics escape (the full wordmark image)
 //   - drops graphicsFullLogoVersionRow rows then positions the version via CHA

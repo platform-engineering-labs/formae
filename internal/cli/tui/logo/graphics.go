@@ -168,11 +168,15 @@ func kittyEncodeImage(img image.Image, cols, rows int) string {
 			// First chunk: a=T (transmit+display), f=100 (PNG format), C=1 (no cursor advance), m=more.
 			// c=/r= pin the image to a fixed cell footprint so its size (and the
 			// version text positioned beside it) stays put across font zoom.
+			// q=2 suppresses ALL terminal responses: we never read the tty, so
+			// any ack (iTerm2 3.6+ replies "ESC_Gi=0;OK" even without an image
+			// id) would sit in the input buffer and echo into the shell as
+			// stray "Gi=0,p=0;OK" text after the command exits.
 			footprint := ""
 			if cols > 0 && rows > 0 {
 				footprint = fmt.Sprintf("c=%d,r=%d,", cols, rows)
 			}
-			fmt.Fprintf(&seq, "\033_Ga=T,f=100,C=1,%sm=%d;%s\033\\", footprint, more, chunk)
+			fmt.Fprintf(&seq, "\033_Ga=T,f=100,C=1,q=2,%sm=%d;%s\033\\", footprint, more, chunk)
 		} else {
 			// Continuation chunks
 			fmt.Fprintf(&seq, "\033_Gm=%d;%s\033\\", more, chunk)
