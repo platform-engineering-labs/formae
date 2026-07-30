@@ -4,6 +4,8 @@
 
 package model
 
+import "encoding/json"
+
 // RedactedForLog is substituted for the plaintext of an opaque value when it is
 // prepared for logging or other diagnostics.
 const RedactedForLog = "<redacted>"
@@ -13,9 +15,9 @@ const RedactedForLog = "<redacted>"
 // by RedactedForLog. An opaque envelope is a map carrying "$visibility": "Opaque"
 // (with or without a "$ref"). Maps and slices are walked recursively; every other
 // kind of data is returned unchanged. The input is never mutated.
-// It descends only into map[string]any and []any values; a json.RawMessage or
-// []byte (an already-serialized payload) is treated as a leaf and is not walked.
-// Pass decoded JSON so nested opaque values are found.
+// json.RawMessage and []byte values are attempted as JSON: if they parse
+// successfully the decoded value is recursed into and the (redacted) decoded
+// result is returned; unparseable byte slices are returned unchanged.
 func RedactOpaqueForLog(v any) any {
 	switch t := v.(type) {
 	case map[string]any:
@@ -35,6 +37,18 @@ func RedactOpaqueForLog(v any) any {
 			out[i] = RedactOpaqueForLog(val)
 		}
 		return out
+	case json.RawMessage:
+		var decoded any
+		if err := json.Unmarshal(t, &decoded); err != nil {
+			return v
+		}
+		return RedactOpaqueForLog(decoded)
+	case []byte:
+		var decoded any
+		if err := json.Unmarshal(t, &decoded); err != nil {
+			return v
+		}
+		return RedactOpaqueForLog(decoded)
 	default:
 		return v
 	}
