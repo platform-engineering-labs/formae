@@ -37,7 +37,12 @@ type Client interface {
 	ExtractTargets(query string, fromTUI bool) ([]*pkgmodel.Target, []string, error)
 	ExtractStacks(fromTUI bool) ([]*pkgmodel.Stack, []string, error)
 	ExtractPolicies(fromTUI bool) ([]apimodel.PolicyInventoryItem, []string, error)
-	ListResourceSummaries(query string, fromTUI bool) ([]pkgmodel.ResourceSummary, []string, error)
+	// ListResourceSummaries returns lightweight resource summaries. On the fast
+	// path (agent supports /resources/summary) the second return is nil and detail
+	// is fetched lazily by ksuid. On the fallback path (older agent) the second
+	// return carries the full resources so detail renders locally without an
+	// additional round-trip.
+	ListResourceSummaries(query string, fromTUI bool) ([]pkgmodel.ResourceSummary, []pkgmodel.Resource, []string, error)
 	ResourceDetailByKsuid(ksuid string, fromTUI bool) (*pkgmodel.Resource, []string, error)
 }
 
@@ -118,13 +123,23 @@ func newSpecs(now func() time.Time) [4]tabSpec {
 				return cell
 			},
 			fetch: func(c Client, query string, fromTUI bool) ([]row, []string, error) {
-				summaries, nags, err := c.ListResourceSummaries(query, fromTUI)
+				summaries, fullResources, nags, err := c.ListResourceSummaries(query, fromTUI)
 				if err != nil {
 					return nil, nags, err
 				}
 				rows := make([]row, 0, len(summaries))
-				for _, s := range summaries {
-					rows = append(rows, resourceSummaryRow(s))
+				if fullResources != nil {
+					// Fallback path: full resource data is available. Build rows with
+					// synchronous detail closures so detail renders locally without a
+					// per-row fetch (the by-ksuid endpoint may not exist on the agent).
+					for _, r := range fullResources {
+						rows = append(rows, resourceRow(r))
+					}
+				} else {
+					// Fast path: only summaries available; detail is fetched lazily.
+					for _, s := range summaries {
+						rows = append(rows, resourceSummaryRow(s))
+					}
 				}
 				return rows, nags, nil
 			},

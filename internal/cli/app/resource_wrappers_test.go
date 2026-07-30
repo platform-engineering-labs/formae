@@ -72,11 +72,12 @@ func TestListResourceSummaries_HappyPath(t *testing.T) {
 	t.Cleanup(ts.Close)
 
 	a := newAppWithServer(ts.URL)
-	got, nags, err := a.ListResourceSummaries("", false)
+	got, fullResources, nags, err := a.ListResourceSummaries("", false)
 
 	require.NoError(t, err)
 	assert.Empty(t, nags)
 	assert.Equal(t, want, got)
+	assert.Nil(t, fullResources, "fast path must not return full resources")
 }
 
 // TestListResourceSummaries_FallbackOnOlderAgent verifies that when the agent
@@ -108,7 +109,7 @@ func TestListResourceSummaries_FallbackOnOlderAgent(t *testing.T) {
 	t.Cleanup(ts.Close)
 
 	a := newAppWithServer(ts.URL)
-	got, nags, err := a.ListResourceSummaries("", false)
+	got, fullResources, nags, err := a.ListResourceSummaries("", false)
 
 	require.NoError(t, err)
 	assert.Empty(t, nags)
@@ -123,6 +124,10 @@ func TestListResourceSummaries_FallbackOnOlderAgent(t *testing.T) {
 	assert.Equal(t, "AWS::IAM::Role", got[1].Type)
 	assert.Equal(t, "role-two", got[1].NativeID)
 	assert.Equal(t, "3HCvcUX7215dJAkxJefX6Epd9VF", got[1].Ksuid)
+	// Fallback path must return full resources so detail can render locally.
+	require.Len(t, fullResources, 2, "fallback path must return full resources")
+	assert.Equal(t, "bucket-one", fullResources[0].Label)
+	assert.Equal(t, "role-two", fullResources[1].Label)
 }
 
 // TestListResourceSummaries_EmptyList verifies that an empty summary list is
@@ -142,7 +147,7 @@ func TestListResourceSummaries_EmptyList(t *testing.T) {
 	t.Cleanup(ts.Close)
 
 	a := newAppWithServer(ts.URL)
-	got, _, err := a.ListResourceSummaries("", false)
+	got, _, _, err := a.ListResourceSummaries("", false)
 
 	require.NoError(t, err)
 	assert.NotNil(t, got)

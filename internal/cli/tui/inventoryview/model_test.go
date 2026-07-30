@@ -666,3 +666,95 @@ func TestLazyDetail_StaleGuard_DetailClosed(t *testing.T) {
 
 	assert.False(t, mm.(Model).detailOpen, "detail must remain closed after dropped stale response")
 }
+
+// ---------------------------------------------------------------------------
+// Fallback mode: detail renders locally, no ResourceDetailByKsuid call
+// ---------------------------------------------------------------------------
+
+// buildFixtureClientFallback returns a fakeClient in fallback mode: the
+// ListResourceSummaries response includes full resources, simulating an older
+// agent that does not expose the /resources/summary endpoint.
+func buildFixtureClientFallback() *fakeClient {
+	forma := &pkgmodel.Forma{
+		Resources: []pkgmodel.Resource{
+			{NativeID: "arn:aws:s3:::my-bucket", Stack: "production", Type: "AWS::S3::Bucket", Label: "my-bucket", Managed: true},
+			{NativeID: "i-0abc123456789", Stack: "production", Type: "AWS::EC2::Instance", Label: "web-1", Managed: true},
+		},
+	}
+	return &fakeClient{
+		forma:        forma,
+		fallbackMode: true,
+	}
+}
+
+// TestFallback_OpenDetailRendersLocallyNoFetch verifies that when the resources
+// list was fetched via the fallback path (full resources available), pressing
+// Enter on a row populates the detail body synchronously and does NOT call
+// ResourceDetailByKsuid.
+func TestFallback_OpenDetailRendersLocallyNoFetch(t *testing.T) {
+	fc := buildFixtureClientFallback()
+	opts := Options{
+		FocusTab: TabResources,
+		Now:      func() time.Time { return time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC) },
+	}
+	m := newTestInventoryModel(t, fc, opts)
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+
+	// Run the resources fetch via the spec directly to get rows from the fallback path.
+	specs := newSpecs(opts.Now)
+	rows, _, err := specs[TabResources].fetch(fc, "", true)
+	require.NoError(t, err)
+	require.NotEmpty(t, rows)
+
+	// Fallback rows must have a synchronous detail closure, not a detailKsuid.
+	assert.NotNil(t, rows[0].detail, "fallback rows must have synchronous detail closure")
+	assert.Empty(t, rows[0].detailKsuid, "fallback rows must not have detailKsuid")
+
+	// Deliver rows to the model and open the first row.
+	mm, _ = mm.Update(tabLoadedMsg{tab: TabResources, rows: rows})
+	var cmd tea.Cmd
+	mm, cmd = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	m = mm.(Model)
+	assert.True(t, m.detailOpen, "detail screen must open")
+	// No async cmd for the fallback path — detail is synchronous.
+	assert.Nil(t, cmd, "fallback path must not return an async fetch cmd")
+	// ResourceDetailByKsuid must not have been called.
+	assert.Equal(t, 0, fc.resourceDetailByKsuidCalls, "ResourceDetailByKsuid must not be called on fallback path")
+	// Detail body must be populated with resource content.
+	bodyJoined := strings.Join(m.detailBody, "\n")
+	assert.Contains(t, bodyJoined, "my-bucket", "detail body must contain the resource label")
+}
+
+// TestFallback_FastPathStillFetchesLazily confirms the existing fast-path
+// behaviour is not regressed: when full resources are absent (fast path),
+// pressing Enter fires an async fetch and ResourceDetailByKsuid is called.
+func TestFallback_FastPathStillFetchesLazily(t *testing.T) {
+	fc := buildFixtureClientWithSummaries()
+	opts := Options{
+		FocusTab: TabResources,
+		Now:      func() time.Time { return time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC) },
+	}
+	m := newTestInventoryModel(t, fc, opts)
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+
+	summaryRows := []row{
+		resourceSummaryRow(pkgmodel.ResourceSummary{Label: "my-bucket", Stack: "production", Type: "AWS::S3::Bucket", NativeID: "arn:aws:s3:::my-bucket", Ksuid: "ksuid-001"}),
+	}
+	mm, _ = mm.Update(tabLoadedMsg{tab: TabResources, rows: summaryRows})
+
+	var cmd tea.Cmd
+	mm, cmd = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	m = mm.(Model)
+	assert.True(t, m.detailOpen, "detail screen must open")
+	require.NotNil(t, cmd, "fast path must return an async fetch cmd")
+	assert.Equal(t, "ksuid-001", m.detailKsuid, "fast path must set detailKsuid")
+
+	// Execute the cmd — this calls ResourceDetailByKsuid.
+	msg := cmd()
+	mm, _ = mm.Update(msg)
+	assert.Equal(t, 1, fc.resourceDetailByKsuidCalls, "fast path must call ResourceDetailByKsuid exactly once")
+}
