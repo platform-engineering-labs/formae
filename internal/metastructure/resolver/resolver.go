@@ -224,6 +224,7 @@ type propertyParser struct {
 	HasValue  bool
 	Reference string // The $ref value
 	Value     any
+	JSONPath  string // gjson dotted path from $json, applied post-resolution
 }
 
 // propertyType defines the type of property being parsed
@@ -242,6 +243,7 @@ func (pp *propertyParser) Parse(result gjson.Result) propertyType {
 
 	if pp.HasRef {
 		pp.Reference = result.Get("$ref").String()
+		pp.JSONPath = result.Get("$json").String()
 		if pp.HasValue {
 			pp.Value = result.Get("$value").Value()
 		}
@@ -269,12 +271,14 @@ func (pp *propertyParser) CreateRef(currentPath string, result gjson.Result) pkg
 			Strategy:   result.Get("$strategy").String(),
 			Visibility: result.Get("$visibility").String(),
 			Value:      pp.Value,
+			JSONPath:   pp.JSONPath,
 		}
 	} else {
 		// Even without a value, we might have strategy and visibility
 		rawValue = pkgmodel.Value{
 			Strategy:   result.Get("$strategy").String(),
 			Visibility: result.Get("$visibility").String(),
+			JSONPath:   pp.JSONPath,
 		}
 	}
 
@@ -610,6 +614,9 @@ func (pr *propertyResolver) resolveReference(properties json.RawMessage, ref pkg
 	if ref.ResolvedValue.Visibility != "" {
 		refObject["$visibility"] = ref.ResolvedValue.Visibility
 	}
+	if ref.ResolvedValue.JSONPath != "" {
+		refObject["$json"] = ref.ResolvedValue.JSONPath
+	}
 
 	marshalledObj, err := pr.marshalWithLogging(refObject, "reference resolution", ref.TargetPath)
 	if err != nil {
@@ -657,7 +664,16 @@ func (pr *propertyResolver) setRefValue(uri pkgmodel.FormaeURI, value string) er
 			continue
 		}
 
-		newValue := pkgmodel.Value{Value: actualValue}
+		resolvedForRef := actualValue
+		if ref.ResolvedValue.JSONPath != "" {
+			extracted, err := extractJSONPath(actualValue, ref.ResolvedValue.JSONPath)
+			if err != nil {
+				return err // path/type only — no plaintext (see extractJSONPath)
+			}
+			resolvedForRef = extracted
+		}
+
+		newValue := pkgmodel.Value{Value: resolvedForRef}
 
 		if ref.ResolvedValue.Strategy != "" {
 			newValue.Strategy = ref.ResolvedValue.Strategy
@@ -670,6 +686,9 @@ func (pr *propertyResolver) setRefValue(uri pkgmodel.FormaeURI, value string) er
 		} else if ref.ResolvedValue.Visibility != "" {
 			newValue.Visibility = ref.ResolvedValue.Visibility
 		}
+
+		// Preserve JSONPath on the stored value so re-apply is idempotent.
+		newValue.JSONPath = ref.ResolvedValue.JSONPath
 
 		ref.ResolvedValue = newValue
 	}
