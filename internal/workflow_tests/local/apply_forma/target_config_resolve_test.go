@@ -30,10 +30,8 @@ package workflow_tests_local
 //     {"$ref":…,"$visibility":"Opaque"} object still in TargetConfig instead of
 //     the plaintext credential.
 //
-// The test is skip-gated so it does not block the unit suite on the current tree.
-// Remove the t.Skip call once the synthetic Resolve op is wired up (slice 4,
-// Tasks 4/5). The assertions remain in place so the test goes GREEN as soon as
-// the fix lands.
+// The synthetic Resolve op (slice 4, Tasks 4/5) wires up the resolution so the
+// bucket Create receives the plaintext credential in its TargetConfig.
 
 import (
 	"encoding/json"
@@ -91,10 +89,6 @@ func findNthApplyCommand(cmds []*forma_command.FormaCommand, n int) *forma_comma
 }
 
 func TestTargetConfigResolve_UnchangedTargetWithOpaqueRef(t *testing.T) {
-	// Skip-gate: remove this line once the synthetic Resolve target op is wired up
-	// in the changeset executor (enabled by the synthetic Resolve op — slice 4 Task 4/5).
-	t.Skip("enabled by the synthetic Resolve op — slice 4 Task 4/5")
-
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		const plaintextSecret = "target-config-resolve-test-credential"
 
