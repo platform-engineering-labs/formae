@@ -107,6 +107,12 @@ func handleStartTargetUpdate(from gen.PID, state gen.Atom, data TargetUpdaterDat
 // resolveTargetConfig pops the next resolvable and sends a ResolveValue request.
 func resolveTargetConfig(state gen.Atom, data TargetUpdaterData, proc gen.Process) (gen.Atom, TargetUpdaterData, []statemachine.Action, error) {
 	if len(data.targetUpdate.RemainingResolvables) == 0 {
+		// A Resolve op resolves config in-memory only: the target row is never
+		// written. Transition directly to success so the finished signal carries
+		// the resolved config without touching the datastore.
+		if data.targetUpdate.Operation == TargetOperationResolve {
+			return StateFinishedSuccessfully, data, nil, nil
+		}
 		return persistTarget(data, proc)
 	}
 
