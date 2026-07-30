@@ -363,9 +363,12 @@ func targetUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, mess
 	// Notify the FormaCommandPersister about the target update completion.
 	// This is done here (not in the TargetUpdater) to avoid an import cycle
 	// between target_update and messages packages.
+	//
+	// Resolve ops are synthetic: they are not stored in command.TargetUpdates,
+	// so MarkTargetUpdateAsComplete must not be called for them.
 	node, exists := data.changeset.DAG.Nodes[message.NodeURI]
 	if exists {
-		if tu, ok := node.Update.(*target_update.TargetUpdate); ok {
+		if tu, ok := node.Update.(*target_update.TargetUpdate); ok && tu.Operation != target_update.TargetOperationResolve {
 			_, err := proc.Call(
 				gen.ProcessID{Name: gen.Atom("FormaCommandPersister"), Node: proc.Node().Name()},
 				messages.MarkTargetUpdateAsComplete{
