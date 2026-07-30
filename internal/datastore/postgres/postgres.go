@@ -3230,6 +3230,50 @@ func (d DatastorePostgres) QueryResources(query *datastore.ResourceQuery) ([]*pk
 	return resources, rows.Err()
 }
 
+func (d DatastorePostgres) ListResourceSummaries(q *datastore.ResourceQuery) ([]pkgmodel.ResourceSummary, error) {
+	ctx, span := tracer.Start(context.Background(), "ListResourceSummaries")
+	defer span.End()
+
+	queryStr := `
+	SELECT label, stack, type, native_id, ksuid
+	FROM resources r1
+	WHERE NOT EXISTS (
+		SELECT 1
+		FROM resources r2
+		WHERE r1.uri = r2.uri
+		AND r2.version COLLATE "C" > r1.version COLLATE "C"
+	)
+	AND r1.operation != $1 AND r1.operation != 'reaped'
+	`
+	args := []any{resource_update.OperationDelete}
+
+	queryStr = extendPostgresQueryString(queryStr, q.NativeID, " AND native_id %s $%d", &args)
+	queryStr = extendPostgresQueryString(queryStr, q.Stack, " AND stack %s $%d", &args)
+	queryStr = extendPostgresQueryString(queryStr, q.Type, " AND LOWER(type) %s LOWER($%d)", &args)
+	queryStr = extendPostgresQueryString(queryStr, q.Label, " AND label %s $%d", &args)
+	queryStr = extendPostgresQueryString(queryStr, q.Target, " AND target %s $%d", &args)
+	queryStr = extendPostgresQueryString(queryStr, q.Managed, " AND managed %s $%d", &args)
+
+	queryStr += " ORDER BY type, label"
+
+	rows, err := d.pool.Query(ctx, queryStr, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var summaries []pkgmodel.ResourceSummary
+	for rows.Next() {
+		var s pkgmodel.ResourceSummary
+		if err := rows.Scan(&s.Label, &s.Stack, &s.Type, &s.NativeID, &s.Ksuid); err != nil {
+			return nil, err
+		}
+		summaries = append(summaries, s)
+	}
+
+	return summaries, rows.Err()
+}
+
 func (d DatastorePostgres) Stats() (*stats.Stats, error) {
 	ctx, span := tracer.Start(context.Background(), "Stats")
 	defer span.End()

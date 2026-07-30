@@ -35,6 +35,17 @@ type Resource struct {
 	Alias              string          `json:"Alias,omitempty"` // previous label, used to rename in place
 }
 
+// ResourceSummary is a lightweight projection of a resource row that carries only
+// the top-level indexed columns. It is returned by ListResourceSummaries and avoids
+// unmarshaling the full data JSONB blob.
+type ResourceSummary struct {
+	Label    string `json:"Label"`
+	Stack    string `json:"Stack"`
+	Type     string `json:"Type"`
+	NativeID string `json:"NativeID,omitempty"`
+	Ksuid    string `json:"Ksuid,omitempty"`
+}
+
 // TupleKey returns the lookup key for this resource in the format: type/stack/label
 // This is used for reference resolution and replaces FormaeURI usage
 func (r *Resource) TupleKey() string {

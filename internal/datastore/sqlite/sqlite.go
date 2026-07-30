@@ -979,6 +979,49 @@ func (d DatastoreSQLite) QueryResources(query *datastore.ResourceQuery) ([]*pkgm
 	return resources, rows.Err()
 }
 
+func (d DatastoreSQLite) ListResourceSummaries(q *datastore.ResourceQuery) ([]pkgmodel.ResourceSummary, error) {
+	_, span := sqliteTracer.Start(context.Background(), "ListResourceSummaries")
+	defer span.End()
+
+	queryStr := fmt.Sprintf(`
+		SELECT label, stack, type, native_id, ksuid
+		FROM resources r1
+		WHERE NOT EXISTS (
+		SELECT 1
+		FROM resources r2
+		WHERE r1.uri = r2.uri
+		AND r2.version > r1.version
+		)
+		AND r1.operation != '%s'
+		AND r1.operation != '%s'`, string(resource_update.OperationDelete), string(resource_update.OperationReaped))
+	args := []any{}
+
+	queryStr = extendSQLiteQueryString(queryStr, q.NativeID, " AND native_id %s ?{esc}", &args)
+	queryStr = extendSQLiteQueryString(queryStr, q.Stack, " AND stack %s ?{esc}", &args)
+	queryStr = extendSQLiteQueryString(queryStr, q.Type, " AND LOWER(type) %s LOWER(?){esc}", &args)
+	queryStr = extendSQLiteQueryString(queryStr, q.Label, " AND label %s ?{esc}", &args)
+	queryStr = extendSQLiteQueryString(queryStr, q.Target, " AND target %s ?{esc}", &args)
+	queryStr = extendSQLiteQueryString(queryStr, q.Managed, " AND managed %s ?{esc}", &args)
+	queryStr += " ORDER BY type, label"
+
+	rows, err := d.conn.Query(queryStr, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer closeRows(rows)
+
+	var summaries []pkgmodel.ResourceSummary
+	for rows.Next() {
+		var s pkgmodel.ResourceSummary
+		if err := rows.Scan(&s.Label, &s.Stack, &s.Type, &s.NativeID, &s.Ksuid); err != nil {
+			return nil, err
+		}
+		summaries = append(summaries, s)
+	}
+
+	return summaries, rows.Err()
+}
+
 func (d DatastoreSQLite) storeResource(resource *pkgmodel.Resource, data []byte, commandID string, operation string, expectedIncarnation string) (string, error) {
 	slog.Debug("SQLite START", "method", "storeResource", "ksuid", resource.Ksuid, "label", resource.Label, "operation", operation)
 	start := time.Now()

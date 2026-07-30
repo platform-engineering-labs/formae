@@ -1236,6 +1236,78 @@ func (d *DatastoreAuroraDataAPI) QueryResources(query *datastore.ResourceQuery) 
 	return resources, nil
 }
 
+func (d *DatastoreAuroraDataAPI) ListResourceSummaries(q *datastore.ResourceQuery) ([]pkgmodel.ResourceSummary, error) {
+	ctx := context.Background()
+
+	queryStr := `
+	SELECT label, stack, type, native_id, ksuid
+	FROM resources r1
+	WHERE NOT EXISTS (
+		SELECT 1
+		FROM resources r2
+		WHERE r1.uri = r2.uri
+		AND r2.version COLLATE "C" > r1.version COLLATE "C"
+	)
+	AND r1.operation != :operation AND r1.operation != 'reaped'
+	`
+	params := []types.SqlParameter{
+		{Name: aws.String("operation"), Value: &types.FieldMemberStringValue{Value: string(resource_update.OperationDelete)}},
+	}
+	paramIdx := 1
+
+	queryStr, params, paramIdx = appendAuroraStringClause(queryStr, params, paramIdx, "native_id", "native_id", false, q.NativeID)
+	queryStr, params, paramIdx = appendAuroraStringClause(queryStr, params, paramIdx, "stack", "stack", false, q.Stack)
+	queryStr, params, paramIdx = appendAuroraStringClause(queryStr, params, paramIdx, "type", "type", true, q.Type)
+	queryStr, params, paramIdx = appendAuroraStringClause(queryStr, params, paramIdx, "label", "label", false, q.Label)
+	queryStr, params, paramIdx = appendAuroraStringClause(queryStr, params, paramIdx, "target", "target", false, q.Target)
+	queryStr, params, _ = appendAuroraBoolClause(queryStr, params, paramIdx, "managed", "managed", q.Managed)
+
+	queryStr += " ORDER BY type, label"
+
+	output, err := d.executeStatement(ctx, queryStr, params)
+	if err != nil {
+		return nil, err
+	}
+
+	var summaries []pkgmodel.ResourceSummary
+	for _, record := range output.Records {
+		if len(record) < 5 {
+			continue
+		}
+
+		label, err := getStringField(record[0])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse label: %w", err)
+		}
+		stack, err := getStringField(record[1])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse stack: %w", err)
+		}
+		resourceType, err := getStringField(record[2])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse type: %w", err)
+		}
+		nativeID, err := getStringField(record[3])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse native_id: %w", err)
+		}
+		ksuid, err := getStringField(record[4])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse ksuid: %w", err)
+		}
+
+		summaries = append(summaries, pkgmodel.ResourceSummary{
+			Label:    label,
+			Stack:    stack,
+			Type:     resourceType,
+			NativeID: nativeID,
+			Ksuid:    ksuid,
+		})
+	}
+
+	return summaries, nil
+}
+
 func (d *DatastoreAuroraDataAPI) StoreResource(resource *pkgmodel.Resource, commandID string, expectedIncarnation ...string) (string, error) {
 	ctx := context.Background()
 

@@ -206,6 +206,11 @@ type Datastore interface {
 
 	// QueryResources searches resources based on filter criteria
 	QueryResources(query *ResourceQuery) ([]*pkgmodel.Resource, error)
+	// ListResourceSummaries returns a lightweight projection of resources — only
+	// the top-level indexed columns (label, stack, type, native_id, ksuid) — for
+	// the same set of rows that QueryResources would return for the given query.
+	// No data JSONB blob is read or unmarshaled.
+	ListResourceSummaries(q *ResourceQuery) ([]pkgmodel.ResourceSummary, error)
 	// StoreResource persists a resource after successful creation/update in the
 	// cloud. The optional expectedIncarnation is the target incarnation the
 	// caller believes is current; when supplied (non-empty) the write is
