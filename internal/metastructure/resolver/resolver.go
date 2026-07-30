@@ -20,12 +20,12 @@ const (
 	maxJSONOutputBytes = 1 << 16 // 64 KiB: bound on the extracted scalar
 )
 
-// extractJSONPath parses resolved as JSON and returns the scalar at the gjson
+// ExtractJSONPath parses resolved as JSON and returns the scalar at the gjson
 // dotted path as a string. A JSON string returns verbatim; a number/bool returns
 // its canonical string form; an object, array, missing key, explicit null, or
 // invalid input is an error. Errors reference only the path and the JSON type —
 // never the resolved value — so no plaintext reaches logs or callers.
-func extractJSONPath(resolved, path string) (string, error) {
+func ExtractJSONPath(resolved, path string) (string, error) {
 	if len(resolved) > maxJSONInputBytes {
 		return "", fmt.Errorf("$json path %q: resolved JSON exceeds %d bytes", path, maxJSONInputBytes)
 	}
@@ -666,7 +666,7 @@ func (pr *propertyResolver) setRefValue(uri pkgmodel.FormaeURI, value string) er
 
 		resolvedForRef := actualValue
 		if ref.ResolvedValue.JSONPath != "" {
-			extracted, err := extractJSONPath(actualValue, ref.ResolvedValue.JSONPath)
+			extracted, err := ExtractJSONPath(actualValue, ref.ResolvedValue.JSONPath)
 			if err != nil {
 				return err // path/type only — no plaintext (see extractJSONPath)
 			}
