@@ -254,6 +254,11 @@ type Datastore interface {
 	LatestLabelForResource(label string) (string, error)
 	// LoadResourceById retrieves a resource by its KSUID
 	LoadResourceById(ksuid string) (*pkgmodel.Resource, error)
+	// LoadLatestResourceByKsuid retrieves the true latest version of the resource
+	// identified by ksuid, without filtering by operation. Returns nil, nil when the
+	// ksuid's latest version is a delete or reaped tombstone, so callers receive
+	// not-found semantics for deleted resources regardless of their prior history.
+	LoadLatestResourceByKsuid(ksuid string) (*pkgmodel.Resource, error)
 	// FindResourcesDependingOn returns all resources that reference the given resource via $ref
 	FindResourcesDependingOn(ksuid string) ([]*pkgmodel.Resource, error)
 	// FindResourcesDependingOnMany returns all resources that reference any of the given resources via $ref.

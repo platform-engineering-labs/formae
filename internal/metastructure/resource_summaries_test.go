@@ -21,21 +21,23 @@ import (
 )
 
 // mockSummaryDatastore is a spy datastore that tracks which methods are called.
-// Only QueryResources, ListResourceSummaries, BatchGetTripletsByKSUIDs, and
-// LoadResourceById are implemented; all others panic to catch unexpected calls.
+// Only QueryResources, ListResourceSummaries, BatchGetTripletsByKSUIDs,
+// LoadResourceById, and LoadLatestResourceByKsuid are implemented; all others
+// panic to catch unexpected calls.
 type mockSummaryDatastore struct {
-	resources  []*pkgmodel.Resource
-	summaries  []pkgmodel.ResourceSummary
-	byKsuid    map[string]*pkgmodel.Resource
+	resources      []*pkgmodel.Resource
+	summaries      []pkgmodel.ResourceSummary
+	byKsuid        map[string]*pkgmodel.Resource
 	ksuidToTriplet map[string]pkgmodel.TripletKey
 
 	// call counters
-	listSummariesCalls         int
-	queryResourcesCalls        int
-	batchGetTripletsCalls      int
-	loadResourceByIdCalls      int
-	getStackByLabelCalls       int
-	getStandalonePolicyCalls   int
+	listSummariesCalls        int
+	queryResourcesCalls       int
+	batchGetTripletsCalls     int
+	loadResourceByIdCalls     int
+	loadLatestByKsuidCalls    int
+	getStackByLabelCalls      int
+	getStandalonePolicyCalls  int
 }
 
 func (m *mockSummaryDatastore) QueryResources(_ *datastore.ResourceQuery) ([]*pkgmodel.Resource, error) {
@@ -64,6 +66,16 @@ func (m *mockSummaryDatastore) BatchGetTripletsByKSUIDs(ksuids []string) (map[st
 
 func (m *mockSummaryDatastore) LoadResourceById(ksuid string) (*pkgmodel.Resource, error) {
 	m.loadResourceByIdCalls++
+	if m.byKsuid != nil {
+		if r, ok := m.byKsuid[ksuid]; ok {
+			return r, nil
+		}
+	}
+	return nil, nil
+}
+
+func (m *mockSummaryDatastore) LoadLatestResourceByKsuid(ksuid string) (*pkgmodel.Resource, error) {
+	m.loadLatestByKsuidCalls++
 	if m.byKsuid != nil {
 		if r, ok := m.byKsuid[ksuid]; ok {
 			return r, nil
@@ -320,7 +332,7 @@ func TestListResourceSummaries_NoHeavyWork(t *testing.T) {
 
 // TestExtractResourceByKsuid_FoundPerformsKsuidRewrite asserts that for a found
 // resource whose Properties carry a formae URI reference, ExtractResourceByKsuid:
-//   - calls LoadResourceById exactly once
+//   - calls LoadLatestResourceByKsuid exactly once
 //   - calls BatchGetTripletsByKSUIDs exactly once (the KSUID→triplet rewrite)
 //   - returns the (rewritten) resource
 //
@@ -356,8 +368,8 @@ func TestExtractResourceByKsuid_FoundPerformsKsuidRewrite(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	// Verify LoadResourceById was called once
-	assert.Equal(t, 1, ds.loadResourceByIdCalls, "ExtractResourceByKsuid must call LoadResourceById exactly once")
+	// Verify LoadLatestResourceByKsuid was called once
+	assert.Equal(t, 1, ds.loadLatestByKsuidCalls, "ExtractResourceByKsuid must call LoadLatestResourceByKsuid exactly once")
 
 	// Verify BatchGetTripletsByKSUIDs was called once (for the KSUID rewrite)
 	assert.Equal(t, 1, ds.batchGetTripletsCalls, "ExtractResourceByKsuid must call BatchGetTripletsByKSUIDs exactly once for KSUID rewrite")
@@ -370,7 +382,7 @@ func TestExtractResourceByKsuid_FoundPerformsKsuidRewrite(t *testing.T) {
 	assert.Contains(t, propsStr, tripletKey.Label, "Properties should contain resolved label after rewrite")
 }
 
-// TestExtractResourceByKsuid_NotFoundReturnsNil asserts that when LoadResourceById
+// TestExtractResourceByKsuid_NotFoundReturnsNil asserts that when LoadLatestResourceByKsuid
 // returns nil (not found), ExtractResourceByKsuid returns nil, nil.
 func TestExtractResourceByKsuid_NotFoundReturnsNil(t *testing.T) {
 	ds := &mockSummaryDatastore{
@@ -382,7 +394,7 @@ func TestExtractResourceByKsuid_NotFoundReturnsNil(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, result, "not-found must return nil resource")
 
-	assert.Equal(t, 1, ds.loadResourceByIdCalls, "must call LoadResourceById once even for not-found")
+	assert.Equal(t, 1, ds.loadLatestByKsuidCalls, "must call LoadLatestResourceByKsuid once even for not-found")
 	assert.Equal(t, 0, ds.batchGetTripletsCalls, "must not call BatchGetTripletsByKSUIDs for not-found")
 }
 
@@ -407,8 +419,27 @@ func TestExtractResourceByKsuid_NoPropertiesKsuids(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	assert.Equal(t, 1, ds.loadResourceByIdCalls)
+	assert.Equal(t, 1, ds.loadLatestByKsuidCalls)
 	// reverseTranslateKSUIDsToTriplets short-circuits when no KSUIDs found,
 	// so BatchGetTripletsByKSUIDs should not be called.
 	assert.Equal(t, 0, ds.batchGetTripletsCalls)
+}
+
+// TestExtractResourceByKsuid_DeletedReturnsNil asserts that when
+// LoadLatestResourceByKsuid returns nil (because the latest version is a delete
+// or reaped tombstone), ExtractResourceByKsuid propagates nil rather than
+// returning a stale prior revision.
+func TestExtractResourceByKsuid_DeletedReturnsNil(t *testing.T) {
+	// byKsuid is nil — LoadLatestResourceByKsuid returns nil, simulating a
+	// resource whose latest row is a delete tombstone.
+	ds := &mockSummaryDatastore{}
+	m := &Metastructure{Datastore: ds}
+
+	result, err := m.ExtractResourceByKsuid("deleted-ksuid")
+	require.NoError(t, err)
+	assert.Nil(t, result, "deleted resource must return nil, not a stale prior revision")
+
+	assert.Equal(t, 1, ds.loadLatestByKsuidCalls)
+	assert.Equal(t, 0, ds.batchGetTripletsCalls, "must not call BatchGetTripletsByKSUIDs for deleted resource")
+	assert.Equal(t, 0, ds.loadResourceByIdCalls, "must not fall back to LoadResourceById")
 }

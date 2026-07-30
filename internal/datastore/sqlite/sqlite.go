@@ -4226,6 +4226,44 @@ func (d DatastoreSQLite) LoadResourceById(ksuid string) (*pkgmodel.Resource, err
 	return &loadedResource, nil
 }
 
+// LoadLatestResourceByKsuid retrieves the true latest version of the resource
+// identified by ksuid without pre-filtering by operation. It returns nil, nil
+// when no row exists for the ksuid or when the latest row's operation is delete
+// or reaped, so callers receive not-found semantics for deleted resources.
+func (d DatastoreSQLite) LoadLatestResourceByKsuid(ksuid string) (*pkgmodel.Resource, error) {
+	_, span := sqliteTracer.Start(context.Background(), "LoadLatestResourceByKsuid")
+	defer span.End()
+
+	query := `
+	SELECT data, ksuid, operation
+	FROM resources
+	WHERE ksuid = ?
+	ORDER BY version DESC
+	LIMIT 1
+	`
+	row := d.conn.QueryRow(query, ksuid)
+
+	var jsonData, ksuidResult, operation string
+	if err := row.Scan(&jsonData, &ksuidResult, &operation); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil // no row for this ksuid
+		}
+		return nil, err
+	}
+
+	// Treat delete and reaped tombstones as not-found.
+	if operation == string(resource_update.OperationDelete) || operation == string(resource_update.OperationReaped) {
+		return nil, nil
+	}
+
+	var loadedResource pkgmodel.Resource
+	if err := json.Unmarshal([]byte(jsonData), &loadedResource); err != nil {
+		return nil, err
+	}
+	loadedResource.Ksuid = ksuidResult
+	return &loadedResource, nil
+}
+
 // FindResourcesDependingOn finds resources that reference the given KSUID via $ref in their properties.
 // This is essential for referential integrity — without it we risk leaving orphaned resources in an
 // inconsistent state. Currently this requires a full table scan (LIKE on the data column) which will

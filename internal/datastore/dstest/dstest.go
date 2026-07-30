@@ -98,6 +98,9 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunReapedResourcesInvisibleToLiveQueries(t, newDS)
 	RunResourceWriteRejectedWhenTargetReaped(t, newDS)
 	RunResourceWriteRejectedWhenIncarnationChanged(t, newDS)
+	RunLoadLatestResourceByKsuid_DeletedReturnsNil(t, newDS)
+	RunLoadLatestResourceByKsuid_LiveReturnsLatest(t, newDS)
+	RunLoadLatestResourceByKsuid_MissingReturnsNil(t, newDS)
 
 	RunQueryTargetsAll(t, newDS)
 	RunQueryTargetsByNamespace(t, newDS)

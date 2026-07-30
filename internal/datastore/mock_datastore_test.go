@@ -78,6 +78,9 @@ func (m *mockDatastore) LatestLabelForResource(_ string) (string, error)    { re
 func (m *mockDatastore) LoadResourceById(_ string) (*pkgmodel.Resource, error) {
 	return nil, nil
 }
+func (m *mockDatastore) LoadLatestResourceByKsuid(_ string) (*pkgmodel.Resource, error) {
+	return nil, nil
+}
 func (m *mockDatastore) FindResourcesDependingOn(_ string) ([]*pkgmodel.Resource, error) {
 	return nil, nil
 }

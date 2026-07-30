@@ -2120,6 +2120,66 @@ func (d *DatastoreAuroraDataAPI) LoadResourceById(ksuid string) (*pkgmodel.Resou
 	return &resource, nil
 }
 
+// LoadLatestResourceByKsuid retrieves the true latest version of the resource
+// identified by ksuid without pre-filtering by operation. It returns nil, nil
+// when no row exists for the ksuid or when the latest row's operation is delete
+// or reaped, so callers receive not-found semantics for deleted resources.
+func (d *DatastoreAuroraDataAPI) LoadLatestResourceByKsuid(ksuid string) (*pkgmodel.Resource, error) {
+	ctx := context.Background()
+
+	query := `
+	SELECT data, ksuid, operation
+	FROM resources
+	WHERE ksuid = :ksuid
+	ORDER BY version COLLATE "C" DESC
+	LIMIT 1
+	`
+	params := []types.SqlParameter{
+		{Name: aws.String("ksuid"), Value: &types.FieldMemberStringValue{Value: ksuid}},
+	}
+
+	output, err := d.executeStatement(ctx, query, params)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(output.Records) == 0 {
+		return nil, nil // no row for this ksuid
+	}
+
+	record := output.Records[0]
+	if len(record) < 3 {
+		return nil, fmt.Errorf("unexpected record length: %d", len(record))
+	}
+
+	jsonData, err := getStringField(record[0])
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse data: %w", err)
+	}
+
+	ksuidResult, err := getStringField(record[1])
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse ksuid: %w", err)
+	}
+
+	operation, err := getStringField(record[2])
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse operation: %w", err)
+	}
+
+	// Treat delete and reaped tombstones as not-found.
+	if operation == string(resource_update.OperationDelete) || operation == string(resource_update.OperationReaped) {
+		return nil, nil
+	}
+
+	var resource pkgmodel.Resource
+	if err := json.Unmarshal([]byte(jsonData), &resource); err != nil {
+		return nil, err
+	}
+	resource.Ksuid = ksuidResult
+	return &resource, nil
+}
+
 // FindResourcesDependingOn finds resources that reference the given KSUID via $ref in their properties.
 // This is essential for referential integrity — without it we risk leaving orphaned resources in an
 // inconsistent state. Currently this requires a full table scan (LIKE on the data column) which will

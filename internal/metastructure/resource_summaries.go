@@ -27,9 +27,9 @@ func (m *Metastructure) ListResourceSummaries(query string) ([]pkgmodel.Resource
 // ExtractResourceByKsuid loads the single resource identified by ksuid from the
 // datastore, performs the KSUID→triplet rewrite on its Properties and
 // ReadOnlyProperties, and returns it. Returns nil, nil when no resource with that
-// ksuid exists.
+// ksuid exists or when the resource's latest version is a delete or reaped tombstone.
 func (m *Metastructure) ExtractResourceByKsuid(ksuid string) (*pkgmodel.Resource, error) {
-	res, err := m.Datastore.LoadResourceById(ksuid)
+	res, err := m.Datastore.LoadLatestResourceByKsuid(ksuid)
 	if err != nil {
 		slog.Debug("Cannot load resource by ksuid", "ksuid", ksuid, "error", err)
 		return nil, err

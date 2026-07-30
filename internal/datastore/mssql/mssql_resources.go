@@ -520,6 +520,43 @@ func (d *DatastoreMSSQL) LoadResourceById(ksuid string) (*pkgmodel.Resource, err
 	return &resource, nil
 }
 
+// LoadLatestResourceByKsuid retrieves the true latest version of the resource
+// identified by ksuid without pre-filtering by operation. It returns nil, nil
+// when no row exists for the ksuid or when the latest row's operation is delete
+// or reaped, so callers receive not-found semantics for deleted resources.
+func (d *DatastoreMSSQL) LoadLatestResourceByKsuid(ksuid string) (*pkgmodel.Resource, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "LoadLatestResourceByKsuid")
+	defer span.End()
+
+	query := fmt.Sprintf(`
+	SELECT TOP (1) data, ksuid, operation
+	FROM resources
+	WHERE ksuid = @p1
+	ORDER BY version %s DESC
+	`, binColl)
+	row := d.conn.QueryRowContext(ctx, query, ksuid)
+
+	var jsonData, ksuidResult, operation string
+	if err := row.Scan(&jsonData, &ksuidResult, &operation); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil // no row for this ksuid
+		}
+		return nil, err
+	}
+
+	// Treat delete and reaped tombstones as not-found.
+	if operation == string(resource_update.OperationDelete) || operation == string(resource_update.OperationReaped) {
+		return nil, nil
+	}
+
+	var resource pkgmodel.Resource
+	if err := json.Unmarshal([]byte(jsonData), &resource); err != nil {
+		return nil, err
+	}
+	resource.Ksuid = ksuidResult
+	return &resource, nil
+}
+
 // FindResourcesDependingOn matches `"$ref":"formae://<ksuid>#` over the
 // nvarchar(max) data column with LIKE. Full scan (same TODO as postgres/sqlite).
 func (d *DatastoreMSSQL) FindResourcesDependingOn(ksuid string) ([]*pkgmodel.Resource, error) {
