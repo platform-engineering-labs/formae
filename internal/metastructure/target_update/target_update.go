@@ -24,6 +24,7 @@ const (
 	TargetOperationUpdate  = types.OperationUpdate
 	TargetOperationDelete  = types.OperationDelete
 	TargetOperationReplace = types.OperationReplace
+	TargetOperationResolve = types.OperationResolve
 
 	TargetUpdateStateNotStarted = types.TargetUpdateStateNotStarted
 	TargetUpdateStateInProgress = types.TargetUpdateStateInProgress
@@ -68,8 +69,29 @@ func NewTargetUpdateForCascadeDelete(target *pkgmodel.Target, cascadeSource stri
 	}
 }
 
-// HasChange returns true if the discoverable field changed
+// NewResolveTargetUpdate creates a synthetic TargetUpdate that resolves opaque
+// $ref config values in-memory for an otherwise-unchanged target. The op is
+// never persisted and does not trigger discovery or cloud-side mutations.
+// ExistingTarget is nil because there is nothing to compare or persist.
+func NewResolveTargetUpdate(target pkgmodel.Target, resolvables []pkgmodel.FormaeURI) TargetUpdate {
+	now := util.TimeNow()
+	return TargetUpdate{
+		Target:               target,
+		ExistingTarget:       nil,
+		Operation:            TargetOperationResolve,
+		State:                TargetUpdateStateNotStarted,
+		StartTs:              now,
+		ModifiedTs:           now,
+		RemainingResolvables: resolvables,
+	}
+}
+
+// HasChange returns true if the discoverable field changed.
+// A Resolve op is synthetic and never persists anything, so it always returns false.
 func (tu *TargetUpdate) HasChange() bool {
+	if tu.Operation == TargetOperationResolve {
+		return false
+	}
 	if tu.ExistingTarget == nil {
 		return true
 	}
