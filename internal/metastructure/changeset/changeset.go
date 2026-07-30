@@ -94,6 +94,14 @@ func NewChangeset(
 	}
 	targetUpdates = append(targetUpdates, syntheticResolves...)
 
+	// Reject a credential-from-credential chain: a target whose config opaquely
+	// $refs a secret whose OWN target also carries opaque $ref config cannot be
+	// resolved, because bootstrapping its credential would first require
+	// bootstrapping another.
+	if err := rejectTransitivelyOpaqueTargets(resourceUpdates, targetUpdates, ds); err != nil {
+		return Changeset{}, err
+	}
+
 	// Copy target updates into a local slice so the DAG owns its own memory.
 	// Without this, DAG nodes would point into the FormaCommand's TargetUpdates
 	// backing array, which the FormaCommandPersister also mutates — violating
@@ -205,6 +213,89 @@ func synthesizeResolveTargetUpdates(
 	}
 
 	return synthetic, nil
+}
+
+// rejectTransitivelyOpaqueTargets rejects a target whose config opaquely $refs a
+// secret whose source resource lives on a target that ITSELF carries opaque $ref
+// config. Resolving such a target would require first bootstrapping a credential
+// from another credential that itself needs resolving — a chain that has no clear
+// starting point.
+//
+// For every target update in this command (real Create/Update ops AND synthetic
+// Resolve ops), each opaque $ref in the target config is followed to its source
+// resource (by KSUID). The source resource is looked up first among this command's
+// resource ops (a source being CREATED here is not yet persisted), then in the
+// datastore. The source's target config is then scanned: if it carries any opaque
+// $ref, the chain is rejected with an error naming both target labels and no secret
+// material.
+//
+// One hop is sufficient. A deeper chain (the source's target opaquely refs yet
+// another opaque target) is still rejected here, because the immediate hop this
+// guard inspects is already opaque. A nil datastore is treated as "nothing to
+// traverse" — such changesets never reference persisted secret sources.
+func rejectTransitivelyOpaqueTargets(
+	resourceUpdates []resource_update.ResourceUpdate,
+	targetUpdates []target_update.TargetUpdate,
+	ds datastore.Datastore,
+) error {
+	if ds == nil {
+		return nil
+	}
+
+	// Index in-command resource ops by KSUID so a secret source being created in
+	// this same command resolves to its target without a persisted row.
+	inCommandTargetByKsuid := make(map[string]string, len(resourceUpdates))
+	for i := range resourceUpdates {
+		ru := &resourceUpdates[i]
+		if k := ru.DesiredState.Ksuid; k != "" {
+			inCommandTargetByKsuid[k] = ru.DesiredState.Target
+		}
+	}
+
+	// sourceTargetLabel resolves a secret source KSUID to its target label, checking
+	// this command's resource ops before falling back to the persisted resource.
+	sourceTargetLabel := func(ksuid string) (string, error) {
+		if label, ok := inCommandTargetByKsuid[ksuid]; ok {
+			return label, nil
+		}
+		res, err := ds.LoadResourceById(ksuid)
+		if err != nil {
+			return "", fmt.Errorf("load secret source resource %q: %w", ksuid, err)
+		}
+		if res == nil {
+			return "", nil
+		}
+		return res.Target, nil
+	}
+
+	for i := range targetUpdates {
+		referencing := targetUpdates[i].Target.Label
+		opaqueRefs := resolver.ExtractOpaqueResolvableURIsFromJSON(targetUpdates[i].Target.Config)
+		for _, ref := range opaqueRefs {
+			sourceLabel, err := sourceTargetLabel(ref.KSUID())
+			if err != nil {
+				return err
+			}
+			if sourceLabel == "" || sourceLabel == referencing {
+				continue
+			}
+			sourceTarget, err := ds.LoadTarget(sourceLabel)
+			if err != nil {
+				return fmt.Errorf("load secret source target %q: %w", sourceLabel, err)
+			}
+			if sourceTarget == nil {
+				continue
+			}
+			if len(resolver.ExtractOpaqueResolvableURIsFromJSON(sourceTarget.Config)) > 0 {
+				return fmt.Errorf(
+					"cannot bootstrap a credential from a credential that itself requires resolution: "+
+						"target %q references a secret whose source lives on target %q, which itself carries opaque references",
+					referencing, sourceLabel)
+			}
+		}
+	}
+
+	return nil
 }
 
 // createOperationURI creates a unique URI that includes the operation type
