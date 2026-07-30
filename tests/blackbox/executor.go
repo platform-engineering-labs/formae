@@ -959,7 +959,21 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 					model.Stack(stackIdx).Label, slotIdx, ru.State, ru.Operation)
 				goto markDone
 			}
-			if snap, ok := snapBySlot[key]; ok {
+			// A failed create produces no resource, so its terminal model state
+			// is deterministically NotExist — independent of any pre-command
+			// snapshot. Reverting to the snapshot here is wrong: in reverse-order
+			// draining an older command's stale snapshot (still holding an
+			// optimistic Exists) could otherwise overwrite a newer command's
+			// correct NotExist and resurrect a resource that was never created.
+			if ru.Operation == "create" {
+				res := model.Resource(stackIdx, slotIdx)
+				if res != nil && res.State != StateNotExist {
+					t.Logf("correctModelFromCommandOutcome: forcing failed create stack=%s slot=%d to NotExist (ru.State=%s)",
+						model.Stack(stackIdx).Label, slotIdx, ru.State)
+					res.State = StateNotExist
+					res.Properties = ""
+				}
+			} else if snap, ok := snapBySlot[key]; ok {
 				res := model.Resource(stackIdx, slotIdx)
 				if res != nil && (res.State != snap.State || res.Properties != snap.Properties) {
 					t.Logf("correctModelFromCommandOutcome: reverting stack=%s slot=%d from %v to %v (ru.State=%s, op=%s)",
@@ -974,13 +988,6 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 					goto markDone
 				}
 				switch ru.Operation {
-				case "create":
-					if res.State == StateExists {
-						t.Logf("correctModelFromCommandOutcome: reverting failed create stack=%s slot=%d to NotExist",
-							model.Stack(stackIdx).Label, slotIdx)
-						res.State = StateNotExist
-						res.Properties = ""
-					}
 				case "delete":
 					if res.State == StateNotExist {
 						t.Logf("correctModelFromCommandOutcome: reverting failed delete stack=%s slot=%d to Exists",

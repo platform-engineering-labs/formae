@@ -257,6 +257,15 @@ type MarkResourcesAsCanceled struct {
 	Resources []ResourceUpdateRef
 }
 
+// MarkCommandResourcesAsCanceled cancels every still-non-terminal resource
+// update of a command without the caller having to enumerate them. It is used
+// when a command is canceled before its ChangesetExecutor has built the DAG
+// (cancel arrives while the executor is still in its not-started state), so the
+// executor has no resource references of its own to pass.
+type MarkCommandResourcesAsCanceled struct {
+	CommandID string
+}
+
 // TargetUpdateRef identifies a specific TargetUpdate by label and operation.
 type TargetUpdateRef struct {
 	Label     string
@@ -326,6 +335,8 @@ func (f *FormaCommandPersister) HandleCall(from gen.PID, ref gen.Ref, message an
 		return f.markTargetsAsFailed(&msg)
 	case MarkResourcesAsCanceled:
 		return f.markResourcesAsCanceled(&msg)
+	case MarkCommandResourcesAsCanceled:
+		return f.markCommandResourcesAsCanceled(&msg)
 	case BulkForceCancel:
 		return f.bulkForceCancel(&msg)
 	case messages.MarkResourceUpdateAsComplete:
@@ -726,6 +737,27 @@ func (f *FormaCommandPersister) markTargetsAsFailed(msg *MarkTargetsAsFailed) (b
 
 func (f *FormaCommandPersister) markResourcesAsCanceled(msg *MarkResourcesAsCanceled) (bool, error) {
 	return f.bulkUpdateResourceState(msg.CommandID, msg.Resources, types.ResourceUpdateStateCanceled, util.TimeNow())
+}
+
+func (f *FormaCommandPersister) markCommandResourcesAsCanceled(msg *MarkCommandResourcesAsCanceled) (bool, error) {
+	cached, err := f.getOrLoadCommand(msg.CommandID)
+	if err != nil {
+		return false, fmt.Errorf("failed to load command for cancellation: %w", err)
+	}
+
+	var refs []ResourceUpdateRef
+	for i := range cached.command.ResourceUpdates {
+		ru := &cached.command.ResourceUpdates[i]
+		if isResourceInFinalState(ru.State) {
+			continue
+		}
+		refs = append(refs, ResourceUpdateRef{URI: ru.URI(), Operation: ru.Operation})
+	}
+
+	if len(refs) == 0 {
+		return true, nil
+	}
+	return f.bulkUpdateResourceState(msg.CommandID, refs, types.ResourceUpdateStateCanceled, util.TimeNow())
 }
 
 // plannedForceCancel describes one in-memory resource-update mutation to apply ONLY
