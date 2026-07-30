@@ -13,6 +13,9 @@ const RedactedForLog = "<redacted>"
 // by RedactedForLog. An opaque envelope is a map carrying "$visibility": "Opaque"
 // (with or without a "$ref"). Maps and slices are walked recursively; every other
 // kind of data is returned unchanged. The input is never mutated.
+// It descends only into map[string]any and []any values; a json.RawMessage or
+// []byte (an already-serialized payload) is treated as a leaf and is not walked.
+// Pass decoded JSON so nested opaque values are found.
 func RedactOpaqueForLog(v any) any {
 	switch t := v.(type) {
 	case map[string]any:
