@@ -43,6 +43,62 @@ func spawnTargetUpdater(
 	return err
 }
 
+// TestTargetUpdater_ResolveOp_EmptyResolvables_SkipsPersist verifies that a
+// Resolve op with zero resolvables never calls persistTarget — it must not write
+// the target row and must still reach TargetUpdateStateSuccess, carrying the
+// (unchanged) config in the finished signal.
+func TestTargetUpdater_ResolveOp_EmptyResolvables_SkipsPersist(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		m, def, err := test_helpers.NewTestMetastructure(t, nil)
+		defer def()
+		require.NoError(t, err)
+
+		received := make(chan any, 1)
+		helperPID, err := testutil.StartTestHelperActor(m.Node, received)
+		require.NoError(t, err)
+
+		// A Resolve TU with no resolvables: the config has no $ref fields to fill in.
+		consumerConfig := json.RawMessage(`{"region":"us-west-2"}`)
+		tu := target_update.NewResolveTargetUpdate(
+			pkgmodel.Target{
+				Label:     "empty-consumer",
+				Namespace: "FakeAWS",
+				Config:    consumerConfig,
+			},
+			[]pkgmodel.FormaeURI{}, // deliberately empty
+		)
+
+		const commandID = "empty-resolve-cmd"
+
+		require.NoError(t, spawnTargetUpdater(t, m.Node, helperPID,
+			tu.Target.Label, string(tu.Operation), commandID))
+
+		tuName := actornames.TargetUpdater(tu.Target.Label, string(tu.Operation), commandID)
+		err = testutil.Send(m.Node, tuName, target_update.StartTargetUpdate{
+			TargetUpdate: tu,
+			CommandID:    commandID,
+		})
+		require.NoError(t, err)
+
+		// (a) The FSM must finish successfully and propagate the config.
+		testutil.ExpectMessageWithPredicate(t, received, 10*time.Second,
+			func(msg target_update.TargetUpdateFinished) bool {
+				assert.Equal(t, target_update.TargetUpdateStateSuccess, msg.State,
+					"Resolve op with empty resolvables must finish successfully")
+				require.NotNil(t, msg.ResolvedConfig,
+					"Resolve op must propagate config even when there are no resolvables")
+				return true
+			},
+		)
+
+		// (b) The target row must NOT have been written to the datastore.
+		consumerTarget, err := m.Datastore.LoadTarget("empty-consumer")
+		require.NoError(t, err)
+		assert.Nil(t, consumerTarget,
+			"Resolve op must not persist the target row even when resolvables are empty")
+	})
+}
+
 // TestTargetUpdater_ResolveOp_SkipsPersistAndSignalsResolvedConfig verifies that
 // a Resolve op drives the full resolvable loop (mutating Target.Config), then
 // terminates with TargetUpdateStateSuccess and the resolved config — without
