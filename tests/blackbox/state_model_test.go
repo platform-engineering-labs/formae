@@ -12,9 +12,93 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/tests/testcontrol"
 )
+
+// A failed create must leave the model slot NotExist even when the command's
+// pre-command snapshot optimistically recorded it as Exists. In reverse-order
+// draining a stale snapshot (still holding an optimistic Exists from an earlier
+// prediction) would otherwise resurrect a resource whose creation actually
+// failed, producing a model=Exists / inventory=NotExist mismatch under chaos.
+func TestCorrectModelFromCommandOutcome_FailedCreateForcesNotExist(t *testing.T) {
+	model := NewStateModel(1, 3)
+	model.ApplyCreated(0, []int{1}, "") // optimistic prediction: slot 1 exists
+	require.Equal(t, StateExists, model.Resource(0, 1).State)
+
+	snapshots := []ResourceSnapshot{{StackIndex: 0, SlotIndex: 1, State: StateExists}}
+	cmd := &apimodel.Command{
+		CommandID: "cmd-failed-create",
+		State:     "FinishedWithErrors",
+		ResourceUpdates: []apimodel.ResourceUpdate{{
+			StackName:     "stack-0",
+			ResourceLabel: "res-stack-0-b", // slot 1
+			Operation:     "create",
+			State:         "Failed",
+		}},
+	}
+
+	corrected := map[struct{ stackIdx, slotIdx int }]bool{}
+	correctModelFromCommandOutcome(t, cmd, model, nil, snapshots, corrected, true)
+
+	require.Equal(t, StateNotExist, model.Resource(0, 1).State,
+		"a failed create must leave the slot NotExist, not revert to a stale Exists snapshot")
+}
+
+// A failed delete must still revert to the pre-command snapshot (the resource
+// was never removed, so it still exists) — the failed-create fix must not
+// change delete/update handling.
+func TestCorrectModelFromCommandOutcome_FailedDeleteRevertsToSnapshot(t *testing.T) {
+	model := NewStateModel(1, 3)
+	model.ApplyDestroyed(0, []int{1}) // optimistic prediction: delete succeeded
+
+	snapshots := []ResourceSnapshot{{StackIndex: 0, SlotIndex: 1, State: StateExists}}
+	cmd := &apimodel.Command{
+		CommandID: "cmd-failed-delete",
+		State:     "FinishedWithErrors",
+		ResourceUpdates: []apimodel.ResourceUpdate{{
+			StackName:     "stack-0",
+			ResourceLabel: "res-stack-0-b", // slot 1
+			Operation:     "delete",
+			State:         "Failed",
+		}},
+	}
+
+	corrected := map[struct{ stackIdx, slotIdx int }]bool{}
+	correctModelFromCommandOutcome(t, cmd, model, nil, snapshots, corrected, true)
+
+	require.Equal(t, StateExists, model.Resource(0, 1).State,
+		"a failed delete leaves the resource in place, reverting to its Exists snapshot")
+}
+
+// Faithful reproduction of the chaos flake: two failed-create commands touch the
+// same slot during one reverse-order drain. The older command's snapshot still
+// holds a stale optimistic Exists. Processing must leave the slot NotExist
+// regardless of order — the older command must not resurrect it.
+func TestCorrectModelFromCommandOutcome_ReverseOrderFailedCreatesStayNotExist(t *testing.T) {
+	model := NewStateModel(1, 3)
+	model.ApplyCreated(0, []int{1}, "") // optimistic prediction: slot 1 exists
+
+	ru := apimodel.ResourceUpdate{
+		StackName:     "stack-0",
+		ResourceLabel: "res-stack-0-b", // slot 1
+		Operation:     "create",
+		State:         "Failed",
+	}
+	newerCmd := &apimodel.Command{CommandID: "newer", State: "FinishedWithErrors", ResourceUpdates: []apimodel.ResourceUpdate{ru}}
+	olderCmd := &apimodel.Command{CommandID: "older", State: "FinishedWithErrors", ResourceUpdates: []apimodel.ResourceUpdate{ru}}
+
+	// DrainPendingCommands processes most-recent first and shares `corrected`.
+	corrected := map[struct{ stackIdx, slotIdx int }]bool{}
+	newerSnap := []ResourceSnapshot{{StackIndex: 0, SlotIndex: 1, State: StateNotExist}}
+	olderSnap := []ResourceSnapshot{{StackIndex: 0, SlotIndex: 1, State: StateExists}} // stale
+	correctModelFromCommandOutcome(t, newerCmd, model, nil, newerSnap, corrected, true)
+	correctModelFromCommandOutcome(t, olderCmd, model, nil, olderSnap, corrected, true)
+
+	require.Equal(t, StateNotExist, model.Resource(0, 1).State,
+		"an older failed-create command must not resurrect a slot from its stale Exists snapshot")
+}
 
 func TestStateModel_NewModel(t *testing.T) {
 	model := NewStateModel(1, 3)
