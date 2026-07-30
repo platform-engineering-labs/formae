@@ -383,6 +383,75 @@ func (a *App) ExtractResources(query string, fromTUI bool) (*pkgmodel.Forma, []s
 	return f, nags, err
 }
 
+// ListResourceSummaries fetches lightweight resource summaries from the agent.
+// On success it returns the summaries alongside any nag messages from the
+// compatibility gate. On a 404 from the summary route (older agent that does
+// not expose the endpoint), it falls back to ExtractResources and maps the
+// full resource list to summaries.
+func (a *App) ListResourceSummaries(query string, fromTUI bool) ([]pkgmodel.ResourceSummary, []string, error) {
+	auth, net, err := a.getAuthAndNetHandlers()
+	if err != nil {
+		return nil, nil, err
+	}
+	client := api.NewClient(a.Config.Cli.API, auth, net)
+
+	compatible, _, nags, err := a.runBeforeCommand(client, !fromTUI)
+	if !compatible {
+		return nil, nil, err
+	}
+
+	summaries, err := client.ListResourceSummaries(query)
+	if errors.Is(err, api.ErrEndpointNotFound) {
+		// Older agent: fall back to full resource extraction and map to summaries.
+		f, fallbackErr := client.ExtractResources(query)
+		if fallbackErr != nil {
+			return nil, nil, fallbackErr
+		}
+		if f == nil {
+			return []pkgmodel.ResourceSummary{}, nags, nil
+		}
+		mapped := make([]pkgmodel.ResourceSummary, len(f.Resources))
+		for i, r := range f.Resources {
+			mapped[i] = pkgmodel.ResourceSummary{
+				Label:    r.Label,
+				Stack:    r.Stack,
+				Type:     r.Type,
+				NativeID: r.NativeID,
+				Ksuid:    r.Ksuid,
+			}
+		}
+		return mapped, nags, nil
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	if summaries == nil {
+		summaries = []pkgmodel.ResourceSummary{}
+	}
+	return summaries, nags, nil
+}
+
+// ResourceDetailByKsuid fetches a single resource by its ksuid from the agent.
+// Returns (nil, nags, nil) when the agent reports no resource for the ksuid.
+func (a *App) ResourceDetailByKsuid(ksuid string, fromTUI bool) (*pkgmodel.Resource, []string, error) {
+	auth, net, err := a.getAuthAndNetHandlers()
+	if err != nil {
+		return nil, nil, err
+	}
+	client := api.NewClient(a.Config.Cli.API, auth, net)
+
+	compatible, _, nags, err := a.runBeforeCommand(client, !fromTUI)
+	if !compatible {
+		return nil, nil, err
+	}
+
+	resource, err := client.GetResourceByKsuid(ksuid)
+	if err != nil {
+		return nil, nil, err
+	}
+	return resource, nags, nil
+}
+
 func (a *App) ForceSync() error {
 	auth, net, err := a.getAuthAndNetHandlers()
 	if err != nil {
