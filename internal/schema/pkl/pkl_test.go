@@ -255,6 +255,18 @@ func TestPkl_FormaeConfig(t *testing.T) {
 	assert.Equal(t, "auto", config.Cli.Appearance)
 }
 
+func TestPkl_SecretShapeMisuse_AtOnScalarFailsEval(t *testing.T) {
+	p := PKL{}
+	_, err := p.Evaluate("./testdata/forma/secret_at_on_scalar_test.pkl", model.CommandApply, model.FormaApplyModeReconcile, nil)
+	assert.Error(t, err)
+}
+
+func TestPkl_SecretShapeMisuse_BareMapSecretValueFailsEval(t *testing.T) {
+	p := PKL{}
+	_, err := p.Evaluate("./testdata/forma/secret_bare_map_value_test.pkl", model.CommandApply, model.FormaApplyModeReconcile, nil)
+	assert.Error(t, err)
+}
+
 func TestTranslateResourcePluginConfig(t *testing.T) {
 	p := PKL{}
 	config, err := p.FormaeConfig("./testdata/config/test_resource_plugin_config.pkl")
