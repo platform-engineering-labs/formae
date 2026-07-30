@@ -463,3 +463,60 @@ func TestStoreFormaCommand_StripsOpaqueRefValueFromTargetUpdates(t *testing.T) {
 	assert.NotContains(t, raw, `$value`, "stored target_updates must not contain $value")
 	assert.NotContains(t, raw, "super-secret", "stored target_updates must not contain the resolved secret")
 }
+
+// TestBulkStoreResourceUpdates_StripsOpaqueRefValueFromExistingTarget verifies
+// that BulkStoreResourceUpdates does not persist a $value from an opaque $ref
+// envelope in resource_updates.existing_target. A legacy target row written
+// before stripping was introduced may still carry a plaintext opaque $ref
+// $value; re-persisting it unstripped would re-introduce the secret.
+func TestBulkStoreResourceUpdates_StripsOpaqueRefValueFromExistingTarget(t *testing.T) {
+	cfg := &pkgmodel.DatastoreConfig{
+		DatastoreType: pkgmodel.SqliteDatastore,
+		Sqlite:        pkgmodel.SqliteConfig{FilePath: ":memory:"},
+	}
+	ds, err := dssqlite.NewDatastoreSQLite(context.Background(), cfg, "test")
+	require.NoError(t, err)
+	d, _ := ds.(dssqlite.DatastoreSQLite)
+	defer d.CleanUp() //nolint:errcheck
+
+	opaqueConfig := json.RawMessage(`{"auth":{"$ref":"formae://x","$visibility":"Opaque","$value":"super-secret"}}`)
+
+	commandID := util.NewID()
+	ksuid := util.NewID()
+
+	ru := resource_update.ResourceUpdate{
+		DesiredState: pkgmodel.Resource{
+			Ksuid:  ksuid,
+			Stack:  "default",
+			Type:   "AWS::S3::Bucket",
+			Label:  "my-bucket",
+			Target: "tgt",
+		},
+		ResourceTarget: pkgmodel.Target{
+			Label:     "tgt",
+			Namespace: "AWS",
+			Config:    json.RawMessage(`{}`),
+		},
+		ExistingTarget: pkgmodel.Target{
+			Label:     "tgt",
+			Namespace: "AWS",
+			Config:    opaqueConfig,
+		},
+		Operation: resource_update.OperationCreate,
+		State:     resource_update.ResourceUpdateStateNotStarted,
+	}
+
+	require.NoError(t, ds.BulkStoreResourceUpdates(commandID, []resource_update.ResourceUpdate{ru}))
+
+	// Read the raw stored bytes directly from the DB — bypassing any unmarshalling.
+	var raw string
+	err = d.Conn().QueryRow(
+		`SELECT existing_target FROM resource_updates WHERE command_id = ?`, commandID,
+	).Scan(&raw)
+	require.NoError(t, err)
+
+	assert.Contains(t, raw, `$ref`, "stored existing_target must preserve $ref")
+	assert.Contains(t, raw, `$visibility`, "stored existing_target must preserve $visibility")
+	assert.NotContains(t, raw, `$value`, "stored existing_target must not contain $value")
+	assert.NotContains(t, raw, "super-secret", "stored existing_target must not contain the resolved secret")
+}
