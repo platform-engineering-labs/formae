@@ -2668,6 +2668,10 @@ func (d *DatastoreAuroraDataAPI) CreateTarget(target *pkgmodel.Target) (string, 
 	if err != nil {
 		return "", err
 	}
+	configJSON, err = datastore.StripOpaqueRefValues(configJSON)
+	if err != nil {
+		return "", fmt.Errorf("failed to strip opaque ref values from target config: %w", err)
+	}
 
 	var configSchemaParam types.Field
 	if len(target.ConfigSchema.Hints) > 0 {
@@ -2778,6 +2782,10 @@ func (d *DatastoreAuroraDataAPI) UpdateTarget(target *pkgmodel.Target) (string, 
 	configJSON, err := json.Marshal(target.Config)
 	if err != nil {
 		return "", err
+	}
+	configJSON, err = datastore.StripOpaqueRefValues(configJSON)
+	if err != nil {
+		return "", fmt.Errorf("failed to strip opaque ref values from target config: %w", err)
 	}
 
 	var configSchemaParam types.Field
@@ -4036,7 +4044,12 @@ func (d *DatastoreAuroraDataAPI) BulkStoreResourceUpdates(commandID string, upda
 
 	for _, ru := range updates {
 		resourceJSON, _ := json.Marshal(ru.DesiredState)
-		resourceTargetJSON, _ := json.Marshal(ru.ResourceTarget)
+		resourceTargetJSONRaw, _ := json.Marshal(ru.ResourceTarget)
+		resourceTargetJSON, err := datastore.StripOpaqueRefValues(resourceTargetJSONRaw)
+		if err != nil {
+			_ = d.rollbackTransaction(ctx, txID)
+			return fmt.Errorf("failed to strip opaque ref values from resource target: %w", err)
+		}
 		existingResourceJSON, _ := json.Marshal(ru.PriorState)
 		existingTargetJSON, _ := json.Marshal(ru.ExistingTarget)
 		progressResultJSON, _ := json.Marshal(ru.ProgressResult)
@@ -4091,7 +4104,7 @@ func (d *DatastoreAuroraDataAPI) BulkStoreResourceUpdates(commandID string, upda
 			{Name: aws.String("previous_properties"), Value: &types.FieldMemberStringValue{Value: string(previousPropertiesJSON)}},
 		}
 
-		_, err := d.executeStatementInTransaction(ctx, txID, query, params)
+		_, err = d.executeStatementInTransaction(ctx, txID, query, params)
 		if err != nil {
 			_ = d.rollbackTransaction(ctx, txID)
 			return fmt.Errorf("failed to store resource update: %w", err)
@@ -4366,6 +4379,12 @@ func (d *DatastoreAuroraDataAPI) UpdateFormaCommandProgress(commandID string, st
 
 func (d *DatastoreAuroraDataAPI) UpdateFormaCommandTargetUpdates(commandID string, targetUpdatesJSON json.RawMessage, state forma_command.CommandState, modifiedTs time.Time) error {
 	ctx := context.Background()
+
+	var err error
+	targetUpdatesJSON, err = datastore.StripOpaqueRefValues(targetUpdatesJSON)
+	if err != nil {
+		return fmt.Errorf("failed to strip opaque ref values from target updates: %w", err)
+	}
 
 	query := `UPDATE forma_commands SET target_updates = :target_updates, state = :state, modified_ts = :modified_ts::timestamp WHERE command_id = :command_id`
 	params := []types.SqlParameter{

@@ -2958,6 +2958,10 @@ func (d DatastoreSQLite) CreateTarget(target *pkgmodel.Target) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	cfg, err = datastore.StripOpaqueRefValues(cfg)
+	if err != nil {
+		return "", fmt.Errorf("failed to strip opaque ref values from target config: %w", err)
+	}
 
 	var configSchemaJSON []byte
 	if len(target.ConfigSchema.Hints) > 0 {
@@ -3013,6 +3017,10 @@ func (d DatastoreSQLite) UpdateTarget(target *pkgmodel.Target) (string, error) {
 	cfg, err := json.Marshal(target.Config)
 	if err != nil {
 		return "", err
+	}
+	cfg, err = datastore.StripOpaqueRefValues(cfg)
+	if err != nil {
+		return "", fmt.Errorf("failed to strip opaque ref values from target config: %w", err)
 	}
 
 	var configSchemaJSON []byte
@@ -4664,6 +4672,10 @@ func (d DatastoreSQLite) BulkStoreResourceUpdates(commandID string, updates []re
 		if err != nil {
 			return fmt.Errorf("failed to marshal resource target: %w", err)
 		}
+		resourceTargetJSON, err = datastore.StripOpaqueRefValues(resourceTargetJSON)
+		if err != nil {
+			return fmt.Errorf("failed to strip opaque ref values from resource target: %w", err)
+		}
 
 		existingResourceJSON, err := json.Marshal(ru.PriorState)
 		if err != nil {
@@ -5065,6 +5077,12 @@ func (d DatastoreSQLite) UpdateFormaCommandTargetUpdates(commandID string, targe
 	defer func() {
 		slog.Debug("SQLite END", "method", "UpdateFormaCommandTargetUpdates", "commandID", commandID, "duration", time.Since(start))
 	}()
+
+	var err error
+	targetUpdatesJSON, err = datastore.StripOpaqueRefValues(targetUpdatesJSON)
+	if err != nil {
+		return fmt.Errorf("failed to strip opaque ref values from target updates: %w", err)
+	}
 
 	modifiedTsUTC := modifiedTs.UTC().Format(time.RFC3339Nano)
 
