@@ -17,7 +17,10 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/datastore"
 	"github.com/platform-engineering-labs/formae/internal/datastore/dstest"
 	dssqlite "github.com/platform-engineering-labs/formae/internal/datastore/sqlite"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/stretchr/testify/assert"
@@ -410,4 +413,53 @@ func TestUpdateTarget_StripsOpaqueRefValue(t *testing.T) {
 	assert.Contains(t, raw, `$ref`, "stored config must preserve $ref")
 	assert.NotContains(t, raw, `$value`, "stored config must not contain $value")
 	assert.NotContains(t, raw, "super-secret", "stored config must not contain the resolved secret")
+}
+
+// TestStoreFormaCommand_StripsOpaqueRefValueFromTargetUpdates verifies that
+// StoreFormaCommand does not persist $value from an opaque $ref envelope in
+// forma_commands.target_updates. The stored blob must retain $ref but must not
+// contain $value or the resolved secret.
+func TestStoreFormaCommand_StripsOpaqueRefValueFromTargetUpdates(t *testing.T) {
+	cfg := &pkgmodel.DatastoreConfig{
+		DatastoreType: pkgmodel.SqliteDatastore,
+		Sqlite:        pkgmodel.SqliteConfig{FilePath: ":memory:"},
+	}
+	ds, err := dssqlite.NewDatastoreSQLite(context.Background(), cfg, "test")
+	require.NoError(t, err)
+	d, _ := ds.(dssqlite.DatastoreSQLite)
+	defer d.CleanUp() //nolint:errcheck
+
+	opaqueConfig := json.RawMessage(`{"auth":{"$ref":"formae://x","$visibility":"Opaque","$value":"super-secret"}}`)
+
+	commandID := util.NewID()
+	fc := &forma_command.FormaCommand{
+		ID:      commandID,
+		Command: pkgmodel.CommandApply,
+		State:   forma_command.CommandStateNotStarted,
+		Config:  config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
+		TargetUpdates: []target_update.TargetUpdate{
+			{
+				Target: pkgmodel.Target{
+					Label:     "opaque-target",
+					Namespace: "AWS",
+					Config:    opaqueConfig,
+				},
+				Operation: target_update.TargetOperationCreate,
+				State:     target_update.TargetUpdateStateNotStarted,
+			},
+		},
+	}
+
+	require.NoError(t, ds.StoreFormaCommand(fc, commandID))
+
+	// Read the raw stored bytes directly from the DB — bypassing any unmarshalling.
+	var raw string
+	err = d.Conn().QueryRow(
+		`SELECT target_updates FROM forma_commands WHERE command_id = ?`, commandID,
+	).Scan(&raw)
+	require.NoError(t, err)
+
+	assert.Contains(t, raw, `$ref`, "stored target_updates must preserve $ref")
+	assert.NotContains(t, raw, `$value`, "stored target_updates must not contain $value")
+	assert.NotContains(t, raw, "super-secret", "stored target_updates must not contain the resolved secret")
 }

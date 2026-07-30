@@ -729,6 +729,10 @@ func (d *DatastoreAuroraDataAPI) StoreFormaCommand(fa *forma_command.FormaComman
 	if err != nil {
 		return fmt.Errorf("failed to marshal target updates: %w", err)
 	}
+	targetUpdatesJSON, err = datastore.StripOpaqueRefValues(targetUpdatesJSON)
+	if err != nil {
+		return fmt.Errorf("failed to strip opaque ref values from target updates: %w", err)
+	}
 
 	stackUpdatesJSON, err := json.Marshal(fa.StackUpdates)
 	if err != nil {
@@ -4051,6 +4055,7 @@ func (d *DatastoreAuroraDataAPI) BulkStoreResourceUpdates(commandID string, upda
 			return fmt.Errorf("failed to strip opaque ref values from resource target: %w", err)
 		}
 		existingResourceJSON, _ := json.Marshal(ru.PriorState)
+		// existing_target is read-side state (already stored stripped) — intentionally not re-stripped here.
 		existingTargetJSON, _ := json.Marshal(ru.ExistingTarget)
 		progressResultJSON, _ := json.Marshal(ru.ProgressResult)
 		mostRecentProgressJSON, _ := json.Marshal(ru.MostRecentProgressResult)
