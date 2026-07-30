@@ -152,27 +152,45 @@ func queryItem[T any](value T, constraint datastore.QueryItemConstraint) *datast
 }
 
 func (b *BlugeQuerier) QueryResources(queryString string) ([]*pkgmodel.Resource, error) {
-	// colons are used in resource types and byte query string syntax
+	rq, err := b.toResourceQuery(queryString)
+	if err != nil {
+		return nil, err
+	}
+	if rq == nil {
+		return []*pkgmodel.Resource{}, nil
+	}
+	return b.datastore.QueryResources(rq)
+}
+
+func (b *BlugeQuerier) QueryResourceSummaries(queryString string) ([]pkgmodel.ResourceSummary, error) {
+	rq, err := b.toResourceQuery(queryString)
+	if err != nil {
+		return nil, err
+	}
+	if rq == nil {
+		return []pkgmodel.ResourceSummary{}, nil
+	}
+	return b.datastore.ListResourceSummaries(rq)
+}
+
+// toResourceQuery translates a query string (with optional :: escaping) into a
+// *datastore.ResourceQuery. An empty string returns &ResourceQuery{} (match all).
+// A nil return means the parsed query produced no constraints (callers return empty).
+func (b *BlugeQuerier) toResourceQuery(queryString string) (*datastore.ResourceQuery, error) {
+	// colons are used in resource types and bluge query string syntax
 	if strings.Contains(queryString, "::") {
 		queryString = strings.ReplaceAll(queryString, "::", "\\:\\:")
 	}
 
-	var resourceQuery *datastore.ResourceQuery
-	var err error
 	if queryString == "" {
-		resourceQuery = &datastore.ResourceQuery{}
-	} else {
-		resourceQuery, err = b.resourceQuery(queryString)
-		if err != nil {
-			return nil, err
-		}
+		return &datastore.ResourceQuery{}, nil
 	}
 
-	if resourceQuery == nil {
-		return []*pkgmodel.Resource{}, nil
+	rq, err := b.resourceQuery(queryString)
+	if err != nil {
+		return nil, err
 	}
-
-	return b.datastore.QueryResources(resourceQuery)
+	return rq, nil
 }
 
 func (b *BlugeQuerier) resourceQuery(queryString string) (*datastore.ResourceQuery, error) {
