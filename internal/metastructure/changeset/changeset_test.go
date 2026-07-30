@@ -2947,11 +2947,16 @@ func TestBuildCreateUpdateDependencies_RuntimeDependency_UpdateChild_StillLinks(
 // honest about what these tests actually depend on.
 type stubResolveDatastore struct {
 	datastore.Datastore
-	targets map[string]*pkgmodel.Target
+	targets   map[string]*pkgmodel.Target
+	resources map[string]*pkgmodel.Resource
 }
 
 func (s *stubResolveDatastore) LoadTarget(label string) (*pkgmodel.Target, error) {
 	return s.targets[label], nil
+}
+
+func (s *stubResolveDatastore) LoadResourceById(ksuid string) (*pkgmodel.Resource, error) {
+	return s.resources[ksuid], nil
 }
 
 // opaqueRefConfig is a target config carrying a single opaque $ref, mirroring an
@@ -3104,4 +3109,132 @@ func TestNewChangeset_SyntheticResolveNodeIsDependencyOfEveryResourceOp(t *testi
 
 	assert.True(t, hasDependencyOn(createNode, resolveURI), "create op must depend on the Resolve node")
 	assert.True(t, hasDependencyOn(updateNode, resolveURI), "update op must depend on the Resolve node")
+}
+
+// TestNewChangeset_RejectsTransitivelyOpaqueTargetReference asserts that resolving a
+// target whose config opaquely $refs a secret source, where that source's OWN target
+// also carries opaque $ref config, is rejected: bootstrapping a credential would
+// require first bootstrapping another credential. The error must name both target
+// labels and leak no plaintext secret material.
+func TestNewChangeset_RejectsTransitivelyOpaqueTargetReference(t *testing.T) {
+	const (
+		t1            = "consumer"
+		t2            = "secret-source-target"
+		secretValue   = "super-secret-plaintext"
+		outerRefKSUID = "sourceResourceKsuid00000001"
+	)
+
+	// T1's config opaquely refs a secret whose source resource lives on T2.
+	t1RefURI := pkgmodel.NewFormaeURI(outerRefKSUID, "SecretString")
+	// T2's OWN config also carries an opaque $ref (its credential itself needs resolving).
+	t2InnerRefURI := pkgmodel.NewFormaeURI(util.NewID(), "SecretString")
+
+	ds := &stubResolveDatastore{
+		targets: map[string]*pkgmodel.Target{
+			t1: {Label: t1, Namespace: "AWS", Config: opaqueRefConfig(string(t1RefURI))},
+			t2: {Label: t2, Namespace: "AWS", Config: opaqueRefConfig(string(t2InnerRefURI))},
+		},
+		// The source resource behind T1's ref lives on T2 (persisted, not in-command).
+		resources: map[string]*pkgmodel.Resource{
+			outerRefKSUID: {Label: "the-secret", Type: "AWS::SecretsManager::Secret", Ksuid: outerRefKSUID, Target: t2},
+		},
+	}
+
+	// A resource op on T1 triggers T1's synthetic Resolve op.
+	resourceUpdates := []resource_update.ResourceUpdate{
+		{
+			DesiredState: pkgmodel.Resource{Label: "bucket", Type: "AWS::S3::Bucket", Stack: "s", Ksuid: util.NewID(), Target: t1},
+			Operation:    resource_update.OperationCreate,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "s",
+		},
+	}
+
+	_, err := NewChangeset(resourceUpdates, nil, "cmd-transitive-opaque", pkgmodel.CommandApply, ds)
+	require.Error(t, err, "resolving a target whose secret source's target is itself opaque must be rejected")
+	assert.Contains(t, err.Error(), t1, "error must name the referencing target")
+	assert.Contains(t, err.Error(), t2, "error must name the source resource's target")
+	assert.NotContains(t, err.Error(), secretValue, "error must not leak the plaintext secret")
+	assert.NotContains(t, err.Error(), "$value", "error must not include any $value envelope")
+}
+
+// TestNewChangeset_AllowsOpaqueRefWhenSourceTargetIsPlain asserts the normal case:
+// T1 opaquely $refs a secret whose source resource lives on T2, and T2's own config
+// carries NO opaque $ref. This is a single-hop bootstrap and must be allowed.
+func TestNewChangeset_AllowsOpaqueRefWhenSourceTargetIsPlain(t *testing.T) {
+	const (
+		t1            = "consumer"
+		t2            = "secret-source-target"
+		outerRefKSUID = "sourceResourceKsuid00000002"
+	)
+
+	t1RefURI := pkgmodel.NewFormaeURI(outerRefKSUID, "SecretString")
+
+	ds := &stubResolveDatastore{
+		targets: map[string]*pkgmodel.Target{
+			t1: {Label: t1, Namespace: "AWS", Config: opaqueRefConfig(string(t1RefURI))},
+			// T2 carries plain config only: no opaque bootstrapping needed.
+			t2: {Label: t2, Namespace: "AWS", Config: json.RawMessage(`{"region":"us-east-1"}`)},
+		},
+		resources: map[string]*pkgmodel.Resource{
+			outerRefKSUID: {Label: "the-secret", Type: "AWS::SecretsManager::Secret", Ksuid: outerRefKSUID, Target: t2},
+		},
+	}
+
+	resourceUpdates := []resource_update.ResourceUpdate{
+		{
+			DesiredState: pkgmodel.Resource{Label: "bucket", Type: "AWS::S3::Bucket", Stack: "s", Ksuid: util.NewID(), Target: t1},
+			Operation:    resource_update.OperationCreate,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "s",
+		},
+	}
+
+	_, err := NewChangeset(resourceUpdates, nil, "cmd-plain-source-target", pkgmodel.CommandApply, ds)
+	require.NoError(t, err, "an opaque ref to a secret on a plain-config target is the normal single-hop case")
+}
+
+// TestNewChangeset_TransitiveOpaqueSourceFoundInCommand asserts the guard also
+// consults in-command resource ops for the secret source (a source being CREATED in
+// THIS command is not yet persisted), following it to its target and rejecting when
+// that target itself carries opaque config.
+func TestNewChangeset_TransitiveOpaqueSourceFoundInCommand(t *testing.T) {
+	const (
+		t1            = "consumer"
+		t2            = "secret-source-target"
+		outerRefKSUID = "sourceResourceKsuid00000003"
+	)
+
+	t1RefURI := pkgmodel.NewFormaeURI(outerRefKSUID, "SecretString")
+	t2InnerRefURI := pkgmodel.NewFormaeURI(util.NewID(), "SecretString")
+
+	ds := &stubResolveDatastore{
+		targets: map[string]*pkgmodel.Target{
+			t1: {Label: t1, Namespace: "AWS", Config: opaqueRefConfig(string(t1RefURI))},
+			t2: {Label: t2, Namespace: "AWS", Config: opaqueRefConfig(string(t2InnerRefURI))},
+		},
+		// No persisted resource — the source is created in-command below.
+		resources: map[string]*pkgmodel.Resource{},
+	}
+
+	resourceUpdates := []resource_update.ResourceUpdate{
+		{
+			DesiredState: pkgmodel.Resource{Label: "bucket", Type: "AWS::S3::Bucket", Stack: "s", Ksuid: util.NewID(), Target: t1},
+			Operation:    resource_update.OperationCreate,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "s",
+		},
+		{
+			// The secret source resource, created in this same command, lives on T2.
+			DesiredState: pkgmodel.Resource{Label: "the-secret", Type: "AWS::SecretsManager::Secret", Stack: "s", Ksuid: outerRefKSUID, Target: t2},
+			Operation:    resource_update.OperationCreate,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "s",
+		},
+	}
+
+	_, err := NewChangeset(resourceUpdates, nil, "cmd-in-command-source", pkgmodel.CommandApply, ds)
+	require.Error(t, err, "in-command secret source on an opaque target must also be rejected")
+	assert.Contains(t, err.Error(), t1)
+	assert.Contains(t, err.Error(), t2)
 }
