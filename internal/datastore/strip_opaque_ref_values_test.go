@@ -4,7 +4,7 @@
 //
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
-package datastore_test
+package datastore
 
 import (
 	"encoding/json"
@@ -12,8 +12,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/platform-engineering-labs/formae/internal/datastore"
 )
 
 // TestStripOpaqueRefValues_StripsNestedOpaqueRefValue verifies that $value is
@@ -31,7 +29,7 @@ func TestStripOpaqueRefValues_StripsNestedOpaqueRefValue(t *testing.T) {
 	original := make(json.RawMessage, len(input))
 	copy(original, input)
 
-	out, err := datastore.StripOpaqueRefValues(input)
+	out, err := StripOpaqueRefValues(input)
 	require.NoError(t, err)
 
 	// Input must not have been mutated.
@@ -64,7 +62,7 @@ func TestStripOpaqueRefValues_KeepsRefVisibilityStrategy(t *testing.T) {
 		}
 	}`)
 
-	out, err := datastore.StripOpaqueRefValues(input)
+	out, err := StripOpaqueRefValues(input)
 	require.NoError(t, err)
 
 	var result map[string]any
@@ -89,7 +87,7 @@ func TestStripOpaqueRefValues_LeavesNonOpaqueUntouched(t *testing.T) {
 		}
 	}`)
 
-	out, err := datastore.StripOpaqueRefValues(input)
+	out, err := StripOpaqueRefValues(input)
 	require.NoError(t, err)
 
 	var result map[string]any
@@ -104,7 +102,7 @@ func TestStripOpaqueRefValues_LeavesNonOpaqueUntouched(t *testing.T) {
 func TestStripOpaqueRefValues_LeavesPlainRefUntouched(t *testing.T) {
 	input := json.RawMessage(`{"link": {"$ref": "resource://some/thing"}}`)
 
-	out, err := datastore.StripOpaqueRefValues(input)
+	out, err := StripOpaqueRefValues(input)
 	require.NoError(t, err)
 
 	var result map[string]any
@@ -124,7 +122,7 @@ func TestStripOpaqueRefValues_LeavesInlineOpaqueWithoutRefUntouched(t *testing.T
 		}
 	}`)
 
-	out, err := datastore.StripOpaqueRefValues(input)
+	out, err := StripOpaqueRefValues(input)
 	require.NoError(t, err)
 
 	var result map[string]any
@@ -140,7 +138,7 @@ func TestStripOpaqueRefValues_InputNotMutated(t *testing.T) {
 	input := json.RawMessage(`{"pw": {"$ref": "s://x", "$visibility": "Opaque", "$value": "sekret"}}`)
 	original := string(input)
 
-	_, err := datastore.StripOpaqueRefValues(input)
+	_, err := StripOpaqueRefValues(input)
 	require.NoError(t, err)
 
 	assert.Equal(t, original, string(input), "input slice must not be mutated")
@@ -154,7 +152,7 @@ func TestStripOpaqueRefValues_PlaintextGoneFromOutput(t *testing.T) {
 		"b": {"$ref": "s://b", "$visibility": "Opaque", "$value": "plaintext-secret-b"}
 	}`)
 
-	out, err := datastore.StripOpaqueRefValues(input)
+	out, err := StripOpaqueRefValues(input)
 	require.NoError(t, err)
 
 	assert.NotContains(t, string(out), "plaintext-secret-a")
@@ -169,7 +167,7 @@ func TestStripOpaqueRefValues_StripsInsideArray(t *testing.T) {
 		{"$ref": "s://y", "$visibility": "Opaque", "$value": "also-hidden"}
 	]`)
 
-	out, err := datastore.StripOpaqueRefValues(input)
+	out, err := StripOpaqueRefValues(input)
 	require.NoError(t, err)
 	assert.NotContains(t, string(out), "hidden")
 }
@@ -177,47 +175,37 @@ func TestStripOpaqueRefValues_StripsInsideArray(t *testing.T) {
 // TestStripOpaqueRefValues_EmptyInput verifies that an empty RawMessage is
 // returned as-is without error.
 func TestStripOpaqueRefValues_EmptyInput(t *testing.T) {
-	out, err := datastore.StripOpaqueRefValues(json.RawMessage{})
+	out, err := StripOpaqueRefValues(json.RawMessage{})
 	require.NoError(t, err)
 	assert.Empty(t, out)
 }
 
-// TestStripOpaqueRefValues_MalformedOpaqueRefReturnsError verifies the
-// reject-guard: if an opaque $ref envelope still carries $value after
-// normalization (a shape the transformer could not normalize), an error is
-// returned. This is exercised by constructing a raw JSON payload that manually
-// triggers the guard — i.e. the transformer sees the envelope but cannot strip
-// it because the key is not "$value" in the stripping pass (simulated here
-// with a type assertion bypass: we inject a raw message that still has $value
-// present and test that assertNoOpaqueRefValue fires the error).
-//
-// In practice, StripOpaqueRefValues strips correctly, so to reach the guard we
-// verify the error path by checking the public contract: passing a valid opaque
-// envelope returns no error, confirming the guard only fires on unexpected shapes.
-//
-// To directly test the guard's error branch, we rely on the fact that
-// StripOpaqueRefValues returns an error when the internal walk leaves $value
-// present. We construct a pathological JSON blob that encodes a map where
-// JSON unmarshalling yields the right keys but the stripping condition is not
-// met — there is no such input (strip always removes it). Instead, we test the
-// indirect surface: a pre-stripped input with no $value must not error, and
-// a direct test of the exported function with a valid opaque-ref-with-$value
-// input must strip correctly (no error, no $value in output).
-func TestStripOpaqueRefValues_MalformedOpaqueRefReturnsError(t *testing.T) {
-	// The reject-guard fires when, after the strip walk, an opaque $ref envelope
-	// still has $value. This cannot happen through normal stripOpaqueRefValues
-	// execution, so we test the guard indirectly by asserting that a well-formed
-	// input with $value present is handled correctly (no error), and separately
-	// by testing a contrived scenario:
-	//
-	// We can verify the error path exists by calling StripOpaqueRefValues with
-	// JSON that contains a nested opaque $ref and confirming a clean round-trip.
-	// The assertNoOpaqueRefValue guard is tested by the other test cases
-	// collectively: if stripping ever missed a case, the guard would fire.
+// TestAssertNoOpaqueRefValue_RejectsOpaqueRefWithValue verifies the reject-guard
+// directly: an opaque $ref envelope that still carries $value (the regression
+// state the strip is designed to prevent) must produce an error, and that error
+// must not contain the plaintext secret value.
+func TestAssertNoOpaqueRefValue_RejectsOpaqueRefWithValue(t *testing.T) {
+	// Construct the exact regression state: an opaque $ref that was NOT stripped.
+	envelope := map[string]any{
+		"$ref":        "formae://x",
+		"$visibility": "Opaque",
+		"$value":      "super-secret",
+	}
 
-	// Verify a clean opaque-ref input strips without error.
-	input := json.RawMessage(`{"pw": {"$ref": "s://x", "$visibility": "Opaque", "$value": "sekret"}}`)
-	out, err := datastore.StripOpaqueRefValues(input)
-	require.NoError(t, err)
-	assert.NotContains(t, string(out), "sekret")
+	err := assertNoOpaqueRefValue(envelope, "")
+	require.Error(t, err, "guard must reject an opaque $ref that still carries $value")
+	assert.NotContains(t, err.Error(), "super-secret", "error must not leak the secret value")
+}
+
+// TestAssertNoOpaqueRefValue_AcceptsStrippedOpaqueRef verifies that the guard
+// returns nil when an opaque $ref envelope has had $value correctly removed.
+func TestAssertNoOpaqueRefValue_AcceptsStrippedOpaqueRef(t *testing.T) {
+	envelope := map[string]any{
+		"$ref":        "formae://x",
+		"$visibility": "Opaque",
+		// no $value — correctly stripped
+	}
+
+	err := assertNoOpaqueRefValue(envelope, "")
+	require.NoError(t, err, "guard must accept a properly-stripped opaque $ref")
 }
