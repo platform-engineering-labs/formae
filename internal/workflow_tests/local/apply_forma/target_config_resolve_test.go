@@ -30,7 +30,7 @@ package workflow_tests_local
 //     {"$ref":…,"$visibility":"Opaque"} object still in TargetConfig instead of
 //     the plaintext credential.
 //
-// The synthetic Resolve op (slice 4, Tasks 4/5) wires up the resolution so the
+// The synthetic Resolve op wires up the resolution so the
 // bucket Create receives the plaintext credential in its TargetConfig.
 
 import (
