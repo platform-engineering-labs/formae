@@ -331,8 +331,11 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 		return state, data, nil, gen.TerminateReasonPanic
 	}
 
-	// Sync commands (READs) will never contain cycles so we can safely ignore the error here.
-	cs, _ := changeset.NewChangeset(allResourceUpdates, nil, syncCommand.ID, pkgmodel.CommandSync, data.datastore)
+	cs, err := changeset.NewChangeset(allResourceUpdates, nil, syncCommand.ID, pkgmodel.CommandSync, data.datastore)
+	if err != nil {
+		proc.Log().Error("Synchronizer: failed to build changeset, skipping sync cycle commandID=%s: %v", syncCommand.ID, err)
+		return StateIdle, data, rescheduleAction(data), nil
+	}
 
 	proc.Log().Debug("Ensuring ChangesetExecutor for sync command commandID=%s", syncCommand.ID)
 	_, err = proc.Call(
