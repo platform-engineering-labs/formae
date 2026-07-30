@@ -126,6 +126,7 @@ func (s *ChangesetExecutor) Init(args ...any) (statemachine.StateMachineSpec[Cha
 		statemachine.WithData(data),
 		statemachine.WithStateEnterCallback(onStateChange),
 		statemachine.WithStateMessageHandler(StateNotStarted, start),
+		statemachine.WithStateCallHandler(StateNotStarted, cancelBeforeStart),
 		statemachine.WithStateMessageHandler(StateProcessing, resourceUpdateFinished),
 		statemachine.WithStateMessageHandler(StateProcessing, targetUpdateFinished),
 		statemachine.WithStateMessageHandler(StateProcessing, resume),
@@ -133,10 +134,12 @@ func (s *ChangesetExecutor) Init(args ...any) (statemachine.StateMachineSpec[Cha
 		statemachine.WithStateCallHandler(StateCanceling, cancelWhileCanceling),
 		statemachine.WithStateMessageHandler(StateCanceling, resourceUpdateFinished),
 		statemachine.WithStateMessageHandler(StateCanceling, targetUpdateFinished),
+		statemachine.WithStateMessageHandler(StateCanceling, resumeWhileCanceling), // Ignore a late rate-limit Resume timer
 		statemachine.WithStateMessageHandler(StateFinishedWithError, shutdown),
 		statemachine.WithStateMessageHandler(StateFinishedSuccessfully, shutdown),
-		statemachine.WithStateMessageHandler(StateCanceled, resourceUpdateFinished), // Ignore late messages from ResourceUpdaters
-		statemachine.WithStateMessageHandler(StateCanceled, targetUpdateFinished),   // Ignore late messages from TargetUpdaters
+		statemachine.WithStateMessageHandler(StateCanceled, resourceUpdateFinished),  // Ignore late messages from ResourceUpdaters
+		statemachine.WithStateMessageHandler(StateCanceled, targetUpdateFinished),    // Ignore late messages from TargetUpdaters
+		statemachine.WithStateMessageHandler(StateCanceled, ignoreStartWhenCanceled), // Ignore a Start that lost the race to a cancel-before-start
 		statemachine.WithStateMessageHandler(StateCanceled, shutdown),
 	), nil
 }
@@ -335,6 +338,49 @@ func resume(from gen.PID, state gen.Atom, data ChangesetData, message Resume, pr
 	}
 
 	return StateProcessing, data, actions, nil
+}
+
+// cancelBeforeStart handles a Cancel that arrives before the executor has
+// processed Start. The spawn and Start of an executor are two separate
+// messages, so a client cancel issued right after submit can land while the
+// executor is still in StateNotStarted, with no DAG to enumerate. We terminalize
+// the command's resources by ID via the persister, then transition to the
+// terminal StateCanceled. Persist-before-terminate: on a persister error we stay
+// in StateNotStarted and carry the error in-band, terminating no actors.
+func cancelBeforeStart(from gen.PID, state gen.Atom, data ChangesetData, message Cancel, proc gen.Process) (gen.Atom, ChangesetData, CancelResponse, []statemachine.Action, error) {
+	proc.Log().Debug("ChangesetExecutor received cancel before start commandID=%s force=%t", message.CommandID, message.Force)
+
+	_, err := proc.Call(
+		gen.ProcessID{Node: proc.Node().Name(), Name: gen.Atom("FormaCommandPersister")},
+		forma_persister.MarkCommandResourcesAsCanceled{CommandID: message.CommandID},
+	)
+	if err != nil {
+		proc.Log().Error("Failed to cancel command before start commandID=%s: %v", message.CommandID, err)
+		return state, data, CancelResponse{ErrorMessage: fmt.Sprintf("cancel-before-start persist failed: %v", err)}, nil, nil
+	}
+
+	return StateCanceled, data, CancelResponse{ResourceStates: map[string]string{}}, nil, nil
+}
+
+// ignoreStartWhenCanceled absorbs a Start that arrives after the command was
+// already canceled before it started (see cancelBeforeStart). The command is
+// terminal; running the changeset now would resurrect canceled work, so we
+// ignore it and stay in StateCanceled.
+func ignoreStartWhenCanceled(from gen.PID, state gen.Atom, data ChangesetData, message Start, proc gen.Process) (gen.Atom, ChangesetData, []statemachine.Action, error) {
+	proc.Log().Debug("ChangesetExecutor ignoring Start received after cancel commandID=%s", message.Changeset.CommandID)
+	return StateCanceled, data, nil, nil
+}
+
+// resumeWhileCanceling absorbs a Resume that arrives after the executor has
+// already moved into StateCanceling. Resume is delivered by a self-rescheduling
+// GenericTimeout (the rate-limit backoff) that the framework does not cancel on
+// a state transition; a timer legitimately scheduled during StateProcessing can
+// therefore fire once the executor is winding down a cancel. Starting new work
+// here would be wrong, so we ignore it and stay in StateCanceling. Mirrors the
+// "ignore late messages" handlers registered for StateCanceled.
+func resumeWhileCanceling(from gen.PID, state gen.Atom, data ChangesetData, message Resume, proc gen.Process) (gen.Atom, ChangesetData, []statemachine.Action, error) {
+	proc.Log().Debug("ChangesetExecutor ignoring Resume received while canceling commandID=%s", data.changeset.CommandID)
+	return StateCanceling, data, nil, nil
 }
 
 // updateFinishedEvent normalizes the incoming completion message from either

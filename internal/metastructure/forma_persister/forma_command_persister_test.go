@@ -230,6 +230,60 @@ func TestFormaCommandPersister_BulkUpdateResourceState(t *testing.T) {
 	assert.WithinDuration(t, now, ruByKsuid[resource2Ksuid.KSUID()].ModifiedTs, 1*time.Second)
 }
 
+func TestFormaCommandPersister_MarkCommandResourcesAsCanceled(t *testing.T) {
+	var (
+		notStartedKsuid = pkgmodel.NewFormaeURI(util.NewID(), "")
+		inProgressKsuid = pkgmodel.NewFormaeURI(util.NewID(), "")
+		successKsuid    = pkgmodel.NewFormaeURI(util.NewID(), "")
+	)
+
+	formaCommand := &forma_command.FormaCommand{
+		ID: "test-cancel-by-command",
+		ResourceUpdates: []resource_update.ResourceUpdate{
+			{
+				Operation:    resource_update.OperationCreate,
+				DesiredState: pkgmodel.Resource{Label: "notStarted", Type: "AWS::EC2::VPC", Stack: "test-stack", Ksuid: notStartedKsuid.KSUID()},
+				State:        resource_update.ResourceUpdateStateNotStarted,
+			},
+			{
+				Operation:    resource_update.OperationCreate,
+				DesiredState: pkgmodel.Resource{Label: "inProgress", Type: "AWS::EC2::Subnet", Stack: "test-stack", Ksuid: inProgressKsuid.KSUID()},
+				State:        resource_update.ResourceUpdateStateInProgress,
+			},
+			{
+				Operation:    resource_update.OperationCreate,
+				DesiredState: pkgmodel.Resource{Label: "success", Type: "AWS::EC2::Instance", Stack: "test-stack", Ksuid: successKsuid.KSUID()},
+				State:        resource_update.ResourceUpdateStateSuccess,
+			},
+		},
+	}
+
+	formaPersister, sender, err := newFormaCommandPersisterForTest(t)
+	assert.NoError(t, err)
+
+	storeResult := formaPersister.Call(sender, StoreNewFormaCommand{Command: *formaCommand})
+	assert.NoError(t, storeResult.Error)
+
+	cancelResult := formaPersister.Call(sender, MarkCommandResourcesAsCanceled{CommandID: formaCommand.ID})
+	assert.NoError(t, cancelResult.Error)
+	assert.True(t, cancelResult.Response.(bool))
+
+	loadResult := formaPersister.Call(sender, LoadFormaCommand{CommandID: formaCommand.ID})
+	assert.NoError(t, loadResult.Error)
+	loadedCommand := loadResult.Response.(*forma_command.FormaCommand)
+
+	ruByKsuid := make(map[string]*resource_update.ResourceUpdate)
+	for i := range loadedCommand.ResourceUpdates {
+		ru := &loadedCommand.ResourceUpdates[i]
+		ruByKsuid[ru.DesiredState.Ksuid] = ru
+	}
+
+	// Non-terminal resources are canceled; the already-terminal Success is left untouched.
+	assert.Equal(t, resource_update.ResourceUpdateStateCanceled, ruByKsuid[notStartedKsuid.KSUID()].State)
+	assert.Equal(t, resource_update.ResourceUpdateStateCanceled, ruByKsuid[inProgressKsuid.KSUID()].State)
+	assert.Equal(t, resource_update.ResourceUpdateStateSuccess, ruByKsuid[successKsuid.KSUID()].State)
+}
+
 func TestFormaCommandPersister_DeletesSyncCommandWithNoVersions(t *testing.T) {
 	formaCommand := newSyncFormaCommand()
 	formaPersister, sender, err := newFormaCommandPersisterForTest(t)
