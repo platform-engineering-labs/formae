@@ -300,9 +300,9 @@ func TestInventoryE2E_QueryThreading(t *testing.T) {
 	tm.Send(tea.KeyMsg{Type: tea.KeyCtrlC})
 	tm.WaitFinished(t, teatest.WithFinalTimeout(5*time.Second))
 
-	// The query must have been received by the fake.
-	assert.Contains(t, fake.RecordedExtractQueries, "stack:prod",
-		"query 'stack:prod' must reach ExtractResources on the server")
+	// The query must have been received by the fake via the summary path.
+	assert.Contains(t, fake.RecordedSummaryQueries, "stack:prod",
+		"query 'stack:prod' must reach ListResourceSummaries on the server")
 }
 
 // captureStdout replaces os.Stdout with a pipe, calls fn, restores os.Stdout,

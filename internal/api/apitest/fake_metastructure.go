@@ -163,6 +163,21 @@ func (m *FakeMetastructure) ExtractResources(query string) (*pkgmodel.Forma, err
 
 func (m *FakeMetastructure) ListResourceSummaries(query string) ([]pkgmodel.ResourceSummary, error) {
 	m.RecordedSummaryQueries = append(m.RecordedSummaryQueries, query)
+	if m.SummaryResponses == nil && len(m.ExtractResponses) > 0 {
+		// Derive summaries from the head ExtractResponses entry without consuming it.
+		resources := m.ExtractResponses[0].Forma.Resources
+		summaries := make([]pkgmodel.ResourceSummary, len(resources))
+		for i, r := range resources {
+			summaries[i] = pkgmodel.ResourceSummary{
+				Label:    r.Label,
+				Stack:    r.Stack,
+				Type:     r.Type,
+				NativeID: r.NativeID,
+				Ksuid:    r.Ksuid,
+			}
+		}
+		return summaries, nil
+	}
 	if len(m.SummaryResponses) == 0 {
 		return []pkgmodel.ResourceSummary{}, nil
 	}
@@ -175,6 +190,16 @@ func (m *FakeMetastructure) ListResourceSummaries(query string) ([]pkgmodel.Reso
 
 func (m *FakeMetastructure) ExtractResourceByKsuid(ksuid string) (*pkgmodel.Resource, error) {
 	m.RecordedKsuidLookups = append(m.RecordedKsuidLookups, ksuid)
+	if m.ResourceByKsuidResponses == nil && len(m.ExtractResponses) > 0 {
+		// Resolve from the head ExtractResponses entry without consuming it.
+		for i := range m.ExtractResponses[0].Forma.Resources {
+			r := &m.ExtractResponses[0].Forma.Resources[i]
+			if r.Ksuid == ksuid {
+				return r, nil
+			}
+		}
+		return nil, nil
+	}
 	if len(m.ResourceByKsuidResponses) == 0 {
 		return nil, nil
 	}
