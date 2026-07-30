@@ -312,7 +312,7 @@ func (pr *propertyResolver) marshalWithLogging(value any, context string, path s
 		slog.Error("Failed to marshal value",
 			"context", context,
 			"path", path,
-			"value", value,
+			"value", pkgmodel.RedactOpaqueForLog(value),
 			"error", err)
 	}
 	return result, err
