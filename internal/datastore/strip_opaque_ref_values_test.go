@@ -181,11 +181,11 @@ func TestStripOpaqueRefValues_EmptyInput(t *testing.T) {
 }
 
 // TestAssertNoOpaqueRefValue_RejectsOpaqueRefWithValue verifies the reject-guard
-// directly: an opaque $ref envelope that still carries $value (the regression
-// state the strip is designed to prevent) must produce an error, and that error
-// must not contain the plaintext secret value.
+// directly: an opaque $ref envelope that still carries $value (the shape the
+// strip must reject) must produce an error, and that error must not contain
+// the plaintext secret value.
 func TestAssertNoOpaqueRefValue_RejectsOpaqueRefWithValue(t *testing.T) {
-	// Construct the exact regression state: an opaque $ref that was NOT stripped.
+	// Construct that shape directly: an opaque $ref that still carries $value.
 	envelope := map[string]any{
 		"$ref":        "formae://x",
 		"$visibility": "Opaque",
