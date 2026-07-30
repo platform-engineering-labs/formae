@@ -44,9 +44,9 @@ func spawnTargetUpdater(
 }
 
 // TestTargetUpdater_ResolveOp_EmptyResolvables_SkipsPersist verifies that a
-// Resolve op with zero resolvables never calls persistTarget — it must not write
-// the target row and must still reach TargetUpdateStateSuccess, carrying the
-// (unchanged) config in the finished signal.
+// Resolve op with zero resolvables never re-writes the target row — the row's
+// Version must be identical before and after the op — and must still reach
+// TargetUpdateStateSuccess, carrying the (unchanged) config in the finished signal.
 func TestTargetUpdater_ResolveOp_EmptyResolvables_SkipsPersist(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		m, def, err := test_helpers.NewTestMetastructure(t, nil)
@@ -57,15 +57,36 @@ func TestTargetUpdater_ResolveOp_EmptyResolvables_SkipsPersist(t *testing.T) {
 		helperPID, err := testutil.StartTestHelperActor(m.Node, received)
 		require.NoError(t, err)
 
-		// A Resolve TU with no resolvables: the config has no $ref fields to fill in.
+		// Persist the consumer target so revalidation (which re-reads the live row at
+		// execute time) can confirm it still exists. In production, synthesizeResolveTargetUpdates
+		// always operates on already-persisted targets; this mirrors that precondition.
 		consumerConfig := json.RawMessage(`{"region":"us-west-2"}`)
-		tu := target_update.NewResolveTargetUpdate(
-			pkgmodel.Target{
-				Label:     "empty-consumer",
-				Namespace: "FakeAWS",
-				Config:    consumerConfig,
+		_, err = testutil.Call(m.Node, "ResourcePersister", target_update.PersistTargetUpdates{
+			TargetUpdates: []target_update.TargetUpdate{
+				{
+					Target: pkgmodel.Target{
+						Label:     "empty-consumer",
+						Namespace: "FakeAWS",
+						Config:    consumerConfig,
+					},
+					Operation: target_update.TargetOperationCreate,
+					State:     target_update.TargetUpdateStateNotStarted,
+				},
 			},
-			[]pkgmodel.FormaeURI{}, // deliberately empty
+			CommandID: "empty-resolve-cmd",
+		})
+		require.NoError(t, err)
+
+		// Load the persisted target to capture its Version, then build the Resolve TU
+		// from it so the snapshot Version matches the live row (no stale-snapshot rebuild).
+		persistedConsumer, err := m.Datastore.LoadTarget("empty-consumer")
+		require.NoError(t, err)
+		require.NotNil(t, persistedConsumer)
+		versionBeforeOp := persistedConsumer.Version
+
+		tu := target_update.NewResolveTargetUpdate(
+			*persistedConsumer,
+			[]pkgmodel.FormaeURI{}, // deliberately empty — no resolvables to process
 		)
 
 		const commandID = "empty-resolve-cmd"
@@ -91,18 +112,21 @@ func TestTargetUpdater_ResolveOp_EmptyResolvables_SkipsPersist(t *testing.T) {
 			},
 		)
 
-		// (b) The target row must NOT have been written to the datastore.
+		// (b) The Resolve op must not re-write the target row: the Version must be
+		// identical to what was in place before the op ran.
 		consumerTarget, err := m.Datastore.LoadTarget("empty-consumer")
 		require.NoError(t, err)
-		assert.Nil(t, consumerTarget,
-			"Resolve op must not persist the target row even when resolvables are empty")
+		require.NotNil(t, consumerTarget,
+			"target row must still exist after a Resolve op")
+		assert.Equal(t, versionBeforeOp, consumerTarget.Version,
+			"Resolve op must not bump the target's Version — it must not write the target row")
 	})
 }
 
 // TestTargetUpdater_ResolveOp_SkipsPersistAndSignalsResolvedConfig verifies that
 // a Resolve op drives the full resolvable loop (mutating Target.Config), then
 // terminates with TargetUpdateStateSuccess and the resolved config — without
-// writing any target row to the datastore.
+// re-writing the target row to the datastore (Version must be unchanged).
 func TestTargetUpdater_ResolveOp_SkipsPersistAndSignalsResolvedConfig(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		// Plugin Read returns the resolved value so the ResolveCache can serve it.
@@ -189,18 +213,42 @@ func TestTargetUpdater_ResolveOp_SkipsPersistAndSignalsResolvedConfig(t *testing
 		// loop can request values.
 		require.NoError(t, spawnResolveCache(t, m.Node, "resolve-test-cmd"))
 
-		// Build the Resolve TU: unchanged target whose config has a $ref to the
-		// cluster's Endpoint. ExistingTarget is nil (Resolve ops are synthetic).
+		// Persist the consumer target so revalidation (which re-reads the live row at
+		// execute time) can confirm it still exists and its config is current.
+		// In production, synthesizeResolveTargetUpdates always operates on
+		// already-persisted targets; this mirrors that precondition.
 		resolvableURI := pkgmodel.NewFormaeURI(resourceKsuid, "Endpoint")
 		consumerConfig := json.RawMessage(`{
 			"endpoint": {"$ref": "` + string(resolvableURI) + `"}
 		}`)
-		tu := target_update.NewResolveTargetUpdate(
-			pkgmodel.Target{
-				Label:     "consumer",
-				Namespace: "FakeAWS",
-				Config:    consumerConfig,
+		_, err = testutil.Call(m.Node, "ResourcePersister", target_update.PersistTargetUpdates{
+			TargetUpdates: []target_update.TargetUpdate{
+				{
+					Target: pkgmodel.Target{
+						Label:     "consumer",
+						Namespace: "FakeAWS",
+						Config:    consumerConfig,
+					},
+					Operation: target_update.TargetOperationCreate,
+					State:     target_update.TargetUpdateStateNotStarted,
+				},
 			},
+			CommandID: "resolve-test-cmd",
+		})
+		require.NoError(t, err)
+
+		// Load the persisted consumer target to capture its Version, then build the
+		// Resolve TU from it so the snapshot Version matches the live row (revalidation
+		// sees an unchanged version and does not rebuild resolvables).
+		persistedConsumer, err := m.Datastore.LoadTarget("consumer")
+		require.NoError(t, err)
+		require.NotNil(t, persistedConsumer)
+		versionBeforeOp := persistedConsumer.Version
+
+		// Build the Resolve TU from the persisted target snapshot. The $ref in Config
+		// will be resolved in-memory during the op without touching the persisted row.
+		tu := target_update.NewResolveTargetUpdate(
+			*persistedConsumer,
 			[]pkgmodel.FormaeURI{resolvableURI},
 		)
 
@@ -240,10 +288,13 @@ func TestTargetUpdater_ResolveOp_SkipsPersistAndSignalsResolvedConfig(t *testing
 			},
 		)
 
-		// (b) The target row must NOT have been written — Resolve ops are never persisted.
+		// (b) The Resolve op must not re-write the target row: the Version must be
+		// identical to what was in place before the op ran.
 		consumerTarget, err := m.Datastore.LoadTarget("consumer")
 		require.NoError(t, err)
-		assert.Nil(t, consumerTarget,
-			"Resolve op must not persist the target row to the datastore")
+		require.NotNil(t, consumerTarget,
+			"target row must still exist after a Resolve op")
+		assert.Equal(t, versionBeforeOp, consumerTarget.Version,
+			"Resolve op must not bump the target's Version — it must not write the target row")
 	})
 }
