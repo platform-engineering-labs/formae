@@ -53,12 +53,12 @@ type fakeClient struct {
 	policiesNags []string
 
 	// recorders
-	resourcesQuery          string
-	resourcesFromTUI        bool
-	targetsQuery            string
-	targetsFromTUI          bool
-	stacksFromTUI           bool
-	policiesFromTUI         bool
+	resourcesQuery             string
+	resourcesFromTUI           bool
+	targetsQuery               string
+	targetsFromTUI             bool
+	stacksFromTUI              bool
+	policiesFromTUI            bool
 	resourceDetailByKsuidCalls int
 }
 

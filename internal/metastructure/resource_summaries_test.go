@@ -31,13 +31,13 @@ type mockSummaryDatastore struct {
 	ksuidToTriplet map[string]pkgmodel.TripletKey
 
 	// call counters
-	listSummariesCalls        int
-	queryResourcesCalls       int
-	batchGetTripletsCalls     int
-	loadResourceByIdCalls     int
-	loadLatestByKsuidCalls    int
-	getStackByLabelCalls      int
-	getStandalonePolicyCalls  int
+	listSummariesCalls       int
+	queryResourcesCalls      int
+	batchGetTripletsCalls    int
+	loadResourceByIdCalls    int
+	loadLatestByKsuidCalls   int
+	getStackByLabelCalls     int
+	getStandalonePolicyCalls int
 }
 
 func (m *mockSummaryDatastore) QueryResources(_ *datastore.ResourceQuery) ([]*pkgmodel.Resource, error) {
@@ -208,7 +208,7 @@ func (m *mockSummaryDatastore) DeleteTarget(_ string) (string, error) { panic("n
 func (m *mockSummaryDatastore) CountResourcesInTarget(_ string) (int, error) {
 	panic("not implemented")
 }
-func (m *mockSummaryDatastore) Stats() (*stats.Stats, error)     { panic("not implemented") }
+func (m *mockSummaryDatastore) Stats() (*stats.Stats, error) { panic("not implemented") }
 func (m *mockSummaryDatastore) GetKSUIDByTriplet(_, _, _ string) (string, error) {
 	panic("not implemented")
 }

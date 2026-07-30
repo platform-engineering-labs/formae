@@ -757,4 +757,9 @@ func TestFallback_FastPathStillFetchesLazily(t *testing.T) {
 	msg := cmd()
 	mm, _ = mm.Update(msg)
 	assert.Equal(t, 1, fc.resourceDetailByKsuidCalls, "fast path must call ResourceDetailByKsuid exactly once")
+
+	// The fetched resource must be rendered into the detail body.
+	m = mm.(Model)
+	bodyJoined := strings.Join(m.detailBody, "\n")
+	assert.Contains(t, bodyJoined, "my-bucket", "detail body must contain the fetched resource label")
 }

@@ -30,9 +30,9 @@ type mockExtractDatastore struct {
 	policies  map[string]pkgmodel.Policy
 
 	// call counters for verifying batched vs. per-item access patterns
-	getStackByLabelCalls             int
-	getStandalonePolicyCalls         int
-	loadStacksByLabelsCalls          int
+	getStackByLabelCalls                int
+	getStandalonePolicyCalls            int
+	loadStacksByLabelsCalls             int
 	loadStandalonePoliciesByLabelsCalls int
 }
 

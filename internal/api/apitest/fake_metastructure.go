@@ -80,23 +80,23 @@ type WrappedResourceResponse struct {
 }
 
 type FakeMetastructure struct {
-	ApplyResponses              []WrappedCommandResponse
-	DestroyResponses            []WrappedCommandResponse
-	ExtractResponses            []WrappedExtractResponse
-	SummaryResponses            []WrappedSummaryResponse
-	ResourceByKsuidResponses    []WrappedResourceResponse
-	TargetResponses             []WrappedTargetResponse
-	ListResponses               []WrappedListResponse
-	CancelResponses             []WrappedCancelResponse
-	DriftResponses              []WrappedDriftResponse
-	ReconcileResponses          []WrappedReconcileResponse
-	CheckTTLResponses           []WrappedCheckTTLResponse
-	StackResponses              []WrappedStackResponse
-	PolicyResponses             []WrappedPolicyResponse
-	RecordedCancelQueries       []string
-	RecordedExtractQueries      []string
-	RecordedSummaryQueries      []string
-	RecordedKsuidLookups        []string
+	ApplyResponses           []WrappedCommandResponse
+	DestroyResponses         []WrappedCommandResponse
+	ExtractResponses         []WrappedExtractResponse
+	SummaryResponses         []WrappedSummaryResponse
+	ResourceByKsuidResponses []WrappedResourceResponse
+	TargetResponses          []WrappedTargetResponse
+	ListResponses            []WrappedListResponse
+	CancelResponses          []WrappedCancelResponse
+	DriftResponses           []WrappedDriftResponse
+	ReconcileResponses       []WrappedReconcileResponse
+	CheckTTLResponses        []WrappedCheckTTLResponse
+	StackResponses           []WrappedStackResponse
+	PolicyResponses          []WrappedPolicyResponse
+	RecordedCancelQueries    []string
+	RecordedExtractQueries   []string
+	RecordedSummaryQueries   []string
+	RecordedKsuidLookups     []string
 }
 
 func (m *FakeMetastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error) {

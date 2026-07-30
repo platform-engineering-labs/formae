@@ -99,17 +99,17 @@ func (m *mockDatastore) LoadResourcesByStack(_ string) ([]*pkgmodel.Resource, er
 func (m *mockDatastore) LoadAllResourcesByStack() (map[string][]*pkgmodel.Resource, error) {
 	return nil, nil
 }
-func (m *mockDatastore) CreateStack(_ *pkgmodel.Stack, _ string) (string, error) { return "", nil }
-func (m *mockDatastore) UpdateStack(_ *pkgmodel.Stack, _ string) (string, error) { return "", nil }
-func (m *mockDatastore) DeleteStack(_, _ string) (string, error)                 { return "", nil }
-func (m *mockDatastore) GetStackByLabel(_ string) (*pkgmodel.Stack, error)           { return nil, nil }
-func (m *mockDatastore) LoadStacksByLabels(_ []string) ([]*pkgmodel.Stack, error)    { return nil, nil }
-func (m *mockDatastore) CountResourcesInStack(_ string) (int, error)                 { return 0, nil }
-func (m *mockDatastore) ListAllStacks() ([]*pkgmodel.Stack, error)                   { return nil, nil }
-func (m *mockDatastore) CreateTarget(_ *pkgmodel.Target) (string, error)         { return "", nil }
-func (m *mockDatastore) UpdateTarget(_ *pkgmodel.Target) (string, error)         { return "", nil }
-func (m *mockDatastore) LoadTarget(_ string) (*pkgmodel.Target, error)           { return nil, nil }
-func (m *mockDatastore) LoadAllTargets() ([]*pkgmodel.Target, error)             { return nil, nil }
+func (m *mockDatastore) CreateStack(_ *pkgmodel.Stack, _ string) (string, error)  { return "", nil }
+func (m *mockDatastore) UpdateStack(_ *pkgmodel.Stack, _ string) (string, error)  { return "", nil }
+func (m *mockDatastore) DeleteStack(_, _ string) (string, error)                  { return "", nil }
+func (m *mockDatastore) GetStackByLabel(_ string) (*pkgmodel.Stack, error)        { return nil, nil }
+func (m *mockDatastore) LoadStacksByLabels(_ []string) ([]*pkgmodel.Stack, error) { return nil, nil }
+func (m *mockDatastore) CountResourcesInStack(_ string) (int, error)              { return 0, nil }
+func (m *mockDatastore) ListAllStacks() ([]*pkgmodel.Stack, error)                { return nil, nil }
+func (m *mockDatastore) CreateTarget(_ *pkgmodel.Target) (string, error)          { return "", nil }
+func (m *mockDatastore) UpdateTarget(_ *pkgmodel.Target) (string, error)          { return "", nil }
+func (m *mockDatastore) LoadTarget(_ string) (*pkgmodel.Target, error)            { return nil, nil }
+func (m *mockDatastore) LoadAllTargets() ([]*pkgmodel.Target, error)              { return nil, nil }
 func (m *mockDatastore) LoadTargetsByLabels(_ []string) ([]*pkgmodel.Target, error) {
 	return nil, nil
 }
