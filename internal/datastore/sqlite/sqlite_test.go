@@ -336,3 +336,78 @@ func TestStoreDeleteStore(t *testing.T) {
 		assert.Equal(t, nativeID, loaded.NativeID)
 	}
 }
+
+// TestCreateTarget_StripsOpaqueRefValue verifies that CreateTarget does not
+// persist a $value from an opaque $ref envelope in targets.config. The
+// stored config must retain $ref and $visibility but must not contain $value
+// or the resolved secret.
+func TestCreateTarget_StripsOpaqueRefValue(t *testing.T) {
+	cfg := &pkgmodel.DatastoreConfig{
+		DatastoreType: pkgmodel.SqliteDatastore,
+		Sqlite:        pkgmodel.SqliteConfig{FilePath: ":memory:"},
+	}
+	ds, err := dssqlite.NewDatastoreSQLite(context.Background(), cfg, "test")
+	require.NoError(t, err)
+	d, _ := ds.(dssqlite.DatastoreSQLite)
+	defer d.CleanUp() //nolint:errcheck
+
+	opaqueConfig := json.RawMessage(`{"auth":{"$ref":"formae://x","$visibility":"Opaque","$value":"super-secret"}}`)
+	_, err = ds.CreateTarget(&pkgmodel.Target{
+		Label:     "opaque-create",
+		Namespace: "AWS",
+		Config:    opaqueConfig,
+	})
+	require.NoError(t, err)
+
+	// Read the raw stored bytes directly from the DB — bypassing any unmarshalling.
+	var raw string
+	err = d.Conn().QueryRow(
+		`SELECT config FROM targets WHERE label = 'opaque-create' ORDER BY version DESC LIMIT 1`,
+	).Scan(&raw)
+	require.NoError(t, err)
+
+	assert.Contains(t, raw, `$ref`, "stored config must preserve $ref")
+	assert.Contains(t, raw, `$visibility`, "stored config must preserve $visibility")
+	assert.NotContains(t, raw, `$value`, "stored config must not contain $value")
+	assert.NotContains(t, raw, "super-secret", "stored config must not contain the resolved secret")
+}
+
+// TestUpdateTarget_StripsOpaqueRefValue verifies that UpdateTarget does not
+// persist a $value from an opaque $ref envelope in targets.config.
+func TestUpdateTarget_StripsOpaqueRefValue(t *testing.T) {
+	cfg := &pkgmodel.DatastoreConfig{
+		DatastoreType: pkgmodel.SqliteDatastore,
+		Sqlite:        pkgmodel.SqliteConfig{FilePath: ":memory:"},
+	}
+	ds, err := dssqlite.NewDatastoreSQLite(context.Background(), cfg, "test")
+	require.NoError(t, err)
+	d, _ := ds.(dssqlite.DatastoreSQLite)
+	defer d.CleanUp() //nolint:errcheck
+
+	// Seed with a clean config first.
+	_, err = ds.CreateTarget(&pkgmodel.Target{
+		Label:     "opaque-update",
+		Namespace: "AWS",
+		Config:    json.RawMessage(`{"Region":"us-east-1"}`),
+	})
+	require.NoError(t, err)
+
+	loaded, err := ds.LoadTarget("opaque-update")
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+
+	// Update with a config that carries an opaque $ref $value.
+	loaded.Config = json.RawMessage(`{"auth":{"$ref":"formae://x","$visibility":"Opaque","$value":"super-secret"}}`)
+	_, err = ds.UpdateTarget(loaded)
+	require.NoError(t, err)
+
+	var raw string
+	err = d.Conn().QueryRow(
+		`SELECT config FROM targets WHERE label = 'opaque-update' ORDER BY version DESC LIMIT 1`,
+	).Scan(&raw)
+	require.NoError(t, err)
+
+	assert.Contains(t, raw, `$ref`, "stored config must preserve $ref")
+	assert.NotContains(t, raw, `$value`, "stored config must not contain $value")
+	assert.NotContains(t, raw, "super-secret", "stored config must not contain the resolved secret")
+}

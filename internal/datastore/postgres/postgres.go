@@ -3666,6 +3666,10 @@ func (d DatastorePostgres) CreateTarget(target *pkgmodel.Target) (string, error)
 	if err != nil {
 		return "", err
 	}
+	cfg, err = datastore.StripOpaqueRefValues(cfg)
+	if err != nil {
+		return "", fmt.Errorf("failed to strip opaque ref values from target config: %w", err)
+	}
 
 	var configSchemaJSON []byte
 	if len(target.ConfigSchema.Hints) > 0 {
@@ -3738,6 +3742,10 @@ func (d DatastorePostgres) UpdateTarget(target *pkgmodel.Target) (string, error)
 	cfg, err := json.Marshal(target.Config)
 	if err != nil {
 		return "", err
+	}
+	cfg, err = datastore.StripOpaqueRefValues(cfg)
+	if err != nil {
+		return "", fmt.Errorf("failed to strip opaque ref values from target config: %w", err)
 	}
 
 	var configSchemaJSON []byte
@@ -4245,6 +4253,10 @@ func (d DatastorePostgres) BulkStoreResourceUpdates(commandID string, updates []
 		if err != nil {
 			return fmt.Errorf("failed to marshal resource target: %w", err)
 		}
+		resourceTargetJSON, err = datastore.StripOpaqueRefValues(resourceTargetJSON)
+		if err != nil {
+			return fmt.Errorf("failed to strip opaque ref values from resource target: %w", err)
+		}
 
 		existingResourceJSON, err := json.Marshal(ru.PriorState)
 		if err != nil {
@@ -4615,6 +4627,12 @@ func (d DatastorePostgres) UpdateFormaCommandProgress(commandID string, state fo
 func (d DatastorePostgres) UpdateFormaCommandTargetUpdates(commandID string, targetUpdatesJSON json.RawMessage, state forma_command.CommandState, modifiedTs time.Time) error {
 	ctx, span := tracer.Start(context.Background(), "UpdateFormaCommandTargetUpdates")
 	defer span.End()
+
+	var err error
+	targetUpdatesJSON, err = datastore.StripOpaqueRefValues(targetUpdatesJSON)
+	if err != nil {
+		return fmt.Errorf("failed to strip opaque ref values from target updates: %w", err)
+	}
 
 	query := `UPDATE forma_commands SET target_updates = $1, state = $2, modified_ts = $3 WHERE command_id = $4`
 	result, err := d.pool.Exec(ctx, query, string(targetUpdatesJSON), string(state), modifiedTs.UTC(), commandID)
