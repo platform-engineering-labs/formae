@@ -350,7 +350,7 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 	// Create changeset early to catch validation errors before simulate
 	var cs changeset.Changeset
 	if len(fa.ResourceUpdates) > 0 || len(fa.TargetUpdates) > 0 {
-		cs, err = changeset.NewChangeset(fa.ResourceUpdates, fa.TargetUpdates, fa.ID, fa.Command)
+		cs, err = changeset.NewChangeset(fa.ResourceUpdates, fa.TargetUpdates, fa.ID, fa.Command, m.Datastore)
 		if err != nil {
 			return nil, err
 		}
@@ -811,7 +811,7 @@ func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.Forma
 	}
 
 	if len(fa.ResourceUpdates) > 0 || len(fa.TargetUpdates) > 0 {
-		cs, err := changeset.NewChangeset(fa.ResourceUpdates, fa.TargetUpdates, fa.ID, pkgmodel.CommandDestroy)
+		cs, err := changeset.NewChangeset(fa.ResourceUpdates, fa.TargetUpdates, fa.ID, pkgmodel.CommandDestroy, m.Datastore)
 		if err != nil {
 			return nil, err
 		}
@@ -1341,7 +1341,7 @@ func (m *Metastructure) ReRunIncompleteCommands() error {
 		// Build the changeset from only the pending (non-terminal) resource
 		// updates. Terminal resources are excluded so they don't create
 		// phantom dependency links in the new changeset's pipeline.
-		cs, _ := changeset.NewChangeset(pendingUpdates, pendingTargetUpdates, fa.ID, pkgmodel.CommandApply)
+		cs, _ := changeset.NewChangeset(pendingUpdates, pendingTargetUpdates, fa.ID, pkgmodel.CommandApply, m.Datastore)
 
 		m.Node.Log().Debug("Starting ChangesetExecutor of changeset from incomplete forma command commandID=%s", fa.ID)
 		_, err = m.callActor(
