@@ -3821,8 +3821,13 @@ func (d *DatastoreAuroraDataAPI) BulkStoreResourceUpdates(commandID string, upda
 			return fmt.Errorf("failed to strip opaque ref values from resource target: %w", err)
 		}
 		existingResourceJSON, _ := json.Marshal(ru.PriorState)
-		// existing_target is read-side state (already stored stripped) — intentionally not re-stripped here.
-		existingTargetJSON, _ := json.Marshal(ru.ExistingTarget)
+		// existing_target is stripped too: a pre-change (legacy) target row may still carry a plaintext opaque $ref value, so we never re-persist it unstripped.
+		existingTargetJSONRaw, _ := json.Marshal(ru.ExistingTarget)
+		existingTargetJSON, err := datastore.StripOpaqueRefValues(existingTargetJSONRaw)
+		if err != nil {
+			_ = d.rollbackTransaction(ctx, txID)
+			return fmt.Errorf("failed to strip opaque ref values from existing target: %w", err)
+		}
 		progressResultJSON, _ := json.Marshal(ru.ProgressResult)
 		mostRecentProgressJSON, _ := json.Marshal(ru.MostRecentProgressResult)
 		remainingResolvablesJSON, _ := json.Marshal(ru.RemainingResolvables)

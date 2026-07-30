@@ -4484,10 +4484,14 @@ func (d DatastoreSQLite) BulkStoreResourceUpdates(commandID string, updates []re
 			return fmt.Errorf("failed to marshal existing resource: %w", err)
 		}
 
-		// existing_target is read-side state (already stored stripped) — intentionally not re-stripped here.
+		// existing_target is stripped too: a pre-change (legacy) target row may still carry a plaintext opaque $ref value, so we never re-persist it unstripped.
 		existingTargetJSON, err := json.Marshal(ru.ExistingTarget)
 		if err != nil {
 			return fmt.Errorf("failed to marshal existing target: %w", err)
+		}
+		existingTargetJSON, err = datastore.StripOpaqueRefValues(existingTargetJSON)
+		if err != nil {
+			return fmt.Errorf("failed to strip opaque ref values from existing target: %w", err)
 		}
 
 		progressResultJSON, err := json.Marshal(ru.ProgressResult)
