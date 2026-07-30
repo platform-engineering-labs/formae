@@ -143,6 +143,10 @@ func (d DatastoreSQLite) StoreFormaCommand(fa *forma_command.FormaCommand, comma
 	if err != nil {
 		return fmt.Errorf("failed to marshal target updates: %w", err)
 	}
+	targetUpdatesJSON, err = datastore.StripOpaqueRefValues(targetUpdatesJSON)
+	if err != nil {
+		return fmt.Errorf("failed to strip opaque ref values from target updates: %w", err)
+	}
 
 	stackUpdatesJSON, err := json.Marshal(fa.StackUpdates)
 	if err != nil {
@@ -4480,6 +4484,7 @@ func (d DatastoreSQLite) BulkStoreResourceUpdates(commandID string, updates []re
 			return fmt.Errorf("failed to marshal existing resource: %w", err)
 		}
 
+		// existing_target is read-side state (already stored stripped) — intentionally not re-stripped here.
 		existingTargetJSON, err := json.Marshal(ru.ExistingTarget)
 		if err != nil {
 			return fmt.Errorf("failed to marshal existing target: %w", err)
