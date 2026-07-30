@@ -11,6 +11,7 @@ import (
 	"image"
 	"image/color"
 	_ "image/png"
+	"slices"
 	"strings"
 	"testing"
 
@@ -100,6 +101,46 @@ func TestKittyFullLogo_PinsCellFootprint(t *testing.T) {
 	if graphicsFullLogoTextCol != graphicsFullLogoCols+2 {
 		t.Errorf("graphicsFullLogoTextCol (%d) must be graphicsFullLogoCols+2 (%d)",
 			graphicsFullLogoTextCol, graphicsFullLogoCols+2)
+	}
+}
+
+// TestKittyFullLogo_SuppressesTerminalResponses asserts every chunk of the
+// Kitty transmit carries q=2 (suppress all responses). formae writes the logo
+// and exits without ever reading the tty; without q=2, terminals that
+// acknowledge graphics commands (e.g. iTerm2 3.6+ replies "ESC_Gi=0,p=0;OK"
+// even when no image id is given) leave their acks in the input buffer, and
+// the shell echoes them as stray "Gi=0,p=0;OK" text after the command exits.
+// Kitty proper inherits q from the first chunk, but the spec allows q on
+// continuation chunks too ("Subsequent chunks must have only the m and
+// optionally q keys") — repeating it guards against implementations that
+// don't inherit, the very class of deviation this fix is for.
+func TestKittyFullLogo_SuppressesTerminalResponses(t *testing.T) {
+	t.Parallel()
+
+	out := encodeKittyFullLogo(true, graphicsFullLogoWidthPx, nil)
+	if out == "" {
+		t.Fatal("encodeKittyFullLogo returned empty string")
+	}
+
+	chunks := strings.Split(out, "\033\\")
+	chunks = chunks[:len(chunks)-1] // drop the empty tail after the final ST
+	if len(chunks) < 2 {
+		t.Fatalf("expected a multi-chunk transmission to exercise continuation chunks, got %d chunk(s)", len(chunks))
+	}
+
+	for n, chunk := range chunks {
+		if !strings.HasPrefix(chunk, "\033_G") {
+			t.Fatalf("chunk %d does not start with the APC introducer; head: %q", n, chunk[:min(len(chunk), 32)])
+		}
+		// The control keys live between the APC introducer and the payload
+		// separator ';'.
+		params, _, ok := strings.Cut(strings.TrimPrefix(chunk, "\033_G"), ";")
+		if !ok {
+			t.Fatalf("chunk %d has no payload separator; head: %q", n, chunk[:min(len(chunk), 96)])
+		}
+		if !slices.Contains(strings.Split(params, ","), "q=2") {
+			t.Errorf("chunk %d must set q=2 to suppress terminal acks (they leak into the shell); params: %q", n, params)
+		}
 	}
 }
 

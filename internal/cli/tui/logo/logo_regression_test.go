@@ -74,7 +74,7 @@ func TestRender_ITerm2FallbackToBraille(t *testing.T) {
 // Note: NOT parallel — mutates the package-level encodeKittyFn seam.
 func TestRender_KittyFullLogoComposition(t *testing.T) {
 	origKitty := encodeKittyFn
-	encodeKittyFn = func(_ bool, _ int, _ color.Color) string { return "\x1b_Ga=T,f=100,C=1,m=0;AAAA\x1b\\" }
+	encodeKittyFn = func(_ bool, _ int, _ color.Color) string { return "\x1b_Ga=T,f=100,C=1,q=2,m=0;AAAA\x1b\\" }
 	t.Cleanup(func() { encodeKittyFn = origKitty })
 
 	art, rows := Render(CapKitty, SizeFull, "1.2.3")
