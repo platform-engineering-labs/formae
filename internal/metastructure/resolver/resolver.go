@@ -15,6 +15,45 @@ import (
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
+const (
+	maxJSONInputBytes  = 1 << 20 // 1 MiB: bound on the resolved JSON a $json path parses
+	maxJSONOutputBytes = 1 << 16 // 64 KiB: bound on the extracted scalar
+)
+
+// extractJSONPath parses resolved as JSON and returns the scalar at the gjson
+// dotted path as a string. A JSON string returns verbatim; a number/bool returns
+// its canonical string form; an object, array, missing key, explicit null, or
+// invalid input is an error. Errors reference only the path and the JSON type —
+// never the resolved value — so no plaintext reaches logs or callers.
+func extractJSONPath(resolved, path string) (string, error) {
+	if len(resolved) > maxJSONInputBytes {
+		return "", fmt.Errorf("$json path %q: resolved JSON exceeds %d bytes", path, maxJSONInputBytes)
+	}
+	if !gjson.Valid(resolved) {
+		return "", fmt.Errorf("$json path %q: resolved value is not valid JSON", path)
+	}
+	res := gjson.Get(resolved, path)
+	if !res.Exists() {
+		return "", fmt.Errorf("$json path %q not found", path)
+	}
+	switch res.Type {
+	case gjson.Null:
+		return "", fmt.Errorf("$json path %q resolved to null", path)
+	case gjson.String, gjson.Number, gjson.True, gjson.False:
+		out := res.String()
+		if len(out) > maxJSONOutputBytes {
+			return "", fmt.Errorf("$json path %q: extracted value exceeds %d bytes", path, maxJSONOutputBytes)
+		}
+		return out, nil
+	default: // gjson.JSON — object or array
+		kind := "object"
+		if res.IsArray() {
+			kind = "array"
+		}
+		return "", fmt.Errorf("$json path %q resolved to a JSON %s, expected a scalar", path, kind)
+	}
+}
+
 // ResolvePropertyReferences resolves a specific reference in resource properties
 func ResolvePropertyReferences(ksuidUri pkgmodel.FormaeURI, properties json.RawMessage, value string) (json.RawMessage, error) {
 	resolver := newPropertyResolver(properties)
