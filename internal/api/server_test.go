@@ -1218,3 +1218,188 @@ func TestServer_ForceCheckTTL_NothingExpired(t *testing.T) {
 		assert.Empty(t, response.ExpiredStacks)
 	}
 }
+
+func TestServer_ListResourceSummaries_HappyPath(t *testing.T) {
+	meta := &apitest.FakeMetastructure{
+		SummaryResponses: []apitest.WrappedSummaryResponse{
+			{
+				Summaries: []pkgmodel.ResourceSummary{
+					{Label: "bucket-1", Stack: "default", Type: "AWS::S3::Bucket", NativeID: "my-bucket", Ksuid: "2abc"},
+					{Label: "bucket-2", Stack: "default", Type: "AWS::S3::Bucket", NativeID: "other-bucket", Ksuid: "3def"},
+				},
+				Error: nil,
+			},
+		},
+	}
+
+	server := NewServer(context.Background(), meta, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/resources/summary?query=type:AWS::S3::Bucket", nil)
+	rec := httptest.NewRecorder()
+	c := server.echo.NewContext(req, rec)
+
+	if assert.NoError(t, server.ListResourceSummaries(c)) {
+		assert.Equal(t, http.StatusOK, rec.Code)
+
+		var summaries []pkgmodel.ResourceSummary
+		err := json.Unmarshal(rec.Body.Bytes(), &summaries)
+		assert.NoError(t, err)
+		assert.Len(t, summaries, 2)
+		assert.Equal(t, "bucket-1", summaries[0].Label)
+		assert.Equal(t, "bucket-2", summaries[1].Label)
+		assert.Equal(t, []string{"type:AWS::S3::Bucket"}, meta.RecordedSummaryQueries)
+	}
+}
+
+func TestServer_ListResourceSummaries_EmptyReturns200(t *testing.T) {
+	meta := &apitest.FakeMetastructure{}
+
+	server := NewServer(context.Background(), meta, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/resources/summary", nil)
+	rec := httptest.NewRecorder()
+	c := server.echo.NewContext(req, rec)
+
+	if assert.NoError(t, server.ListResourceSummaries(c)) {
+		assert.Equal(t, http.StatusOK, rec.Code)
+
+		var summaries []pkgmodel.ResourceSummary
+		err := json.Unmarshal(rec.Body.Bytes(), &summaries)
+		assert.NoError(t, err)
+		assert.Empty(t, summaries)
+	}
+}
+
+func TestServer_ListResourceSummaries_InvalidQueryError(t *testing.T) {
+	meta := &apitest.FakeMetastructure{
+		SummaryResponses: []apitest.WrappedSummaryResponse{
+			{
+				Summaries: nil,
+				Error:     apimodel.InvalidQueryError{Reason: "bad syntax"},
+			},
+		},
+	}
+
+	server := NewServer(context.Background(), meta, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/resources/summary?query=!!!", nil)
+	rec := httptest.NewRecorder()
+	c := server.echo.NewContext(req, rec)
+
+	if assert.NoError(t, server.ListResourceSummaries(c)) {
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+
+		var errorResponse apimodel.ErrorResponse[apimodel.InvalidQueryError]
+		err := json.Unmarshal(rec.Body.Bytes(), &errorResponse)
+		assert.NoError(t, err)
+		assert.Equal(t, apimodel.InvalidQuery, errorResponse.ErrorType)
+		assert.Equal(t, "bad syntax", errorResponse.Data.Reason)
+	}
+}
+
+func TestServer_GetResourceByKsuid_Found(t *testing.T) {
+	validKsuid := "3HCvcUX7215dJAkxJefX6Epd9VE"
+	meta := &apitest.FakeMetastructure{
+		ResourceByKsuidResponses: []apitest.WrappedResourceResponse{
+			{
+				Resource: &pkgmodel.Resource{
+					Label: "my-bucket",
+					Type:  "AWS::S3::Bucket",
+					Stack: "default",
+					Ksuid: validKsuid,
+				},
+				Error: nil,
+			},
+		},
+	}
+
+	server := NewServer(context.Background(), meta, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/resources/by-ksuid/%s", validKsuid), nil)
+	rec := httptest.NewRecorder()
+	c := server.echo.NewContext(req, rec)
+	c.SetParamNames("ksuid")
+	c.SetParamValues(validKsuid)
+
+	if assert.NoError(t, server.GetResourceByKsuid(c)) {
+		assert.Equal(t, http.StatusOK, rec.Code)
+
+		var resource pkgmodel.Resource
+		err := json.Unmarshal(rec.Body.Bytes(), &resource)
+		assert.NoError(t, err)
+		assert.Equal(t, "my-bucket", resource.Label)
+		assert.Equal(t, validKsuid, resource.Ksuid)
+	}
+}
+
+func TestServer_GetResourceByKsuid_NotFound(t *testing.T) {
+	validKsuid := "3HCvcUX7215dJAkxJefX6Epd9VE"
+	meta := &apitest.FakeMetastructure{
+		ResourceByKsuidResponses: []apitest.WrappedResourceResponse{
+			{Resource: nil, Error: nil},
+		},
+	}
+
+	server := NewServer(context.Background(), meta, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/resources/by-ksuid/%s", validKsuid), nil)
+	rec := httptest.NewRecorder()
+	c := server.echo.NewContext(req, rec)
+	c.SetParamNames("ksuid")
+	c.SetParamValues(validKsuid)
+
+	if assert.NoError(t, server.GetResourceByKsuid(c)) {
+		assert.Equal(t, http.StatusNotFound, rec.Code)
+	}
+}
+
+func TestServer_GetResourceByKsuid_MalformedKsuid(t *testing.T) {
+	meta := &apitest.FakeMetastructure{}
+
+	server := NewServer(context.Background(), meta, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/resources/by-ksuid/not-a-ksuid", nil)
+	rec := httptest.NewRecorder()
+	c := server.echo.NewContext(req, rec)
+	c.SetParamNames("ksuid")
+	c.SetParamValues("not-a-ksuid")
+
+	err := server.GetResourceByKsuid(c)
+	assert.Error(t, err)
+	httpErr, ok := err.(*echo.HTTPError)
+	assert.True(t, ok)
+	assert.Equal(t, http.StatusBadRequest, httpErr.Code)
+	assert.Empty(t, meta.RecordedKsuidLookups)
+}
+
+func TestServer_RouteNonCollision(t *testing.T) {
+	summaryHandlerCalled := false
+	byKsuidHandlerCalled := false
+
+	e := echo.New()
+	e.GET(ListResourceSummariesRoute, func(c echo.Context) error {
+		summaryHandlerCalled = true
+		return c.JSON(http.StatusOK, nil)
+	})
+	e.GET(GetResourceByKsuidRoute, func(c echo.Context) error {
+		byKsuidHandlerCalled = true
+		return c.JSON(http.StatusOK, nil)
+	})
+
+	// Request to the summary route must NOT be captured by the by-ksuid param route
+	summaryReq := httptest.NewRequest(http.MethodGet, "/api/v1/resources/summary", nil)
+	summaryRec := httptest.NewRecorder()
+	e.ServeHTTP(summaryRec, summaryReq)
+	assert.True(t, summaryHandlerCalled, "summary handler must be called for /resources/summary")
+	assert.False(t, byKsuidHandlerCalled, "by-ksuid handler must NOT be called for /resources/summary")
+
+	// Reset
+	summaryHandlerCalled = false
+
+	// Request to the by-ksuid route
+	byKsuidReq := httptest.NewRequest(http.MethodGet, "/api/v1/resources/by-ksuid/3HCvcUX7215dJAkxJefX6Epd9VE", nil)
+	byKsuidRec := httptest.NewRecorder()
+	e.ServeHTTP(byKsuidRec, byKsuidReq)
+	assert.False(t, summaryHandlerCalled, "summary handler must NOT be called for /resources/by-ksuid/...")
+	assert.True(t, byKsuidHandlerCalled, "by-ksuid handler must be called for /resources/by-ksuid/...")
+}

@@ -19,6 +19,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	"github.com/segmentio/ksuid"
 	echoSwagger "github.com/swaggo/echo-swagger"
 
 	_ "github.com/platform-engineering-labs/formae/docs"
@@ -39,6 +40,8 @@ const (
 	ListCommandStatusRoute              = BasePath + "/commands/status"
 	CancelCommandsRoute                 = BasePath + "/commands/cancel"
 	ListResourcesRoute                  = BasePath + "/resources"
+	ListResourceSummariesRoute          = BasePath + "/resources/summary"
+	GetResourceByKsuidRoute             = BasePath + "/resources/by-ksuid/:ksuid"
 	ListTargetsRoute                    = BasePath + "/targets"
 	ListStacksRoute                     = BasePath + "/stacks"
 	ListPoliciesRoute                   = BasePath + "/policies"
@@ -221,8 +224,10 @@ func (s *Server) configureEcho() *echo.Echo {
 	e.GET(ListCommandStatusRoute, s.ListCommandStatus)
 	e.POST(CancelCommandsRoute, s.CancelCommands)
 
-	// Resource extraction endpoint
+	// Resource extraction endpoints
 	e.GET(ListResourcesRoute, s.ListResources)
+	e.GET(ListResourceSummariesRoute, s.ListResourceSummaries)
+	e.GET(GetResourceByKsuidRoute, s.GetResourceByKsuid)
 
 	// Target listing endpoint
 	e.GET(ListTargetsRoute, s.ListTargets)
@@ -427,6 +432,54 @@ func (s *Server) ListResources(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, resources)
+}
+
+// @Summary List resource summaries
+// @Description Lists lightweight resource summaries (label, stack, type, native ID, ksuid) based on an optional query string.
+// @Tags resources
+// @Produce json
+// @Param query query string false "The query string to filter resources."
+// @Success 200 {array} pkgmodel.ResourceSummary "OK: The resource summaries."
+// @Failure 400 {string} string "Bad Request: Invalid query."
+// @Failure 500 {string} string "Internal Server Error."
+// @Router /resources/summary [get]
+func (s *Server) ListResourceSummaries(c echo.Context) error {
+	query := c.QueryParam("query")
+	summaries, err := s.metastructure.ListResourceSummaries(query)
+	if err != nil {
+		return mapError(c, err)
+	}
+	if summaries == nil {
+		summaries = []pkgmodel.ResourceSummary{}
+	}
+	return c.JSON(http.StatusOK, summaries)
+}
+
+// @Summary Get a resource by ksuid
+// @Description Retrieves a single resource by its ksuid identifier.
+// @Tags resources
+// @Produce json
+// @Param ksuid path string true "The ksuid of the resource."
+// @Success 200 {object} pkgmodel.Resource "OK: The resource."
+// @Failure 400 {string} string "Bad Request: Malformed ksuid."
+// @Failure 404 {string} string "Not Found: No resource found for the given ksuid."
+// @Failure 500 {string} string "Internal Server Error."
+// @Router /resources/by-ksuid/{ksuid} [get]
+func (s *Server) GetResourceByKsuid(c echo.Context) error {
+	id := c.Param("ksuid")
+	if _, err := ksuid.Parse(id); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("invalid ksuid: %s", id))
+	}
+	resource, err := s.metastructure.ExtractResourceByKsuid(id)
+	if err != nil {
+		return mapError(c, err)
+	}
+	if resource == nil {
+		return c.JSON(http.StatusNotFound, map[string]string{
+			"error": fmt.Sprintf("no resource found for ksuid: %s", id),
+		})
+	}
+	return c.JSON(http.StatusOK, resource)
 }
 
 // @Summary List targets

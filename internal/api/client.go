@@ -495,6 +495,104 @@ func (c *Client) ExtractResources(query string) (*pkgmodel.Forma, error) {
 	}
 }
 
+// ListResourceSummaries fetches lightweight resource summaries from the agent.
+//
+// A current agent returns 200 with an empty list when nothing matches, so a 404
+// on this route can only mean the agent does not expose the summary endpoint (an
+// older agent). In that case this returns ErrEndpointNotFound; callers may fall
+// back to the full resource extraction path. An empty result from a current agent
+// is returned as ([]ResourceSummary{}, nil).
+func (c *Client) ListResourceSummaries(query string) ([]pkgmodel.ResourceSummary, error) {
+	resp, err := c.resty.R().
+		SetQueryParam("query", query).
+		Get(c.endpoint + "/api/v1/resources/summary")
+	if err != nil {
+		return nil, fmt.Errorf("failed to list resource summaries: %w", err)
+	}
+	//nolint:errcheck
+	defer resp.Body.Close()
+	switch resp.StatusCode() {
+	case http.StatusOK:
+		var summaries []pkgmodel.ResourceSummary
+		if err := json.NewDecoder(resp.Body).Decode(&summaries); err != nil {
+			return nil, fmt.Errorf("failed to decode response: %w", err)
+		}
+		if summaries == nil {
+			summaries = []pkgmodel.ResourceSummary{}
+		}
+		return summaries, nil
+	case http.StatusNotFound:
+		// 404 on this route means the agent does not support the summary endpoint
+		// (older agent). Callers can detect this via errors.Is(err, ErrEndpointNotFound).
+		return nil, ErrEndpointNotFound
+	case http.StatusBadRequest:
+		return c.parseListResourceSummariesErrorResponse(resp.Body)
+	default:
+		return nil, fmt.Errorf("unexpected response code from the formae agent: %d - %s", resp.StatusCode(), resp.String())
+	}
+}
+
+// GetResourceByKsuid fetches a single resource by its ksuid from the agent.
+// Returns (nil, nil) when the resource is not found (404).
+func (c *Client) GetResourceByKsuid(id string) (*pkgmodel.Resource, error) {
+	resp, err := c.resty.R().
+		Get(c.endpoint + "/api/v1/resources/by-ksuid/" + id)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get resource by ksuid: %w", err)
+	}
+	//nolint:errcheck
+	defer resp.Body.Close()
+	switch resp.StatusCode() {
+	case http.StatusOK:
+		var resource pkgmodel.Resource
+		if err := json.NewDecoder(resp.Body).Decode(&resource); err != nil {
+			return nil, fmt.Errorf("failed to decode response: %w", err)
+		}
+		return &resource, nil
+	case http.StatusNotFound:
+		return nil, nil
+	case http.StatusBadRequest:
+		return c.parseGetResourceByKsuidErrorResponse(resp.Body)
+	default:
+		return nil, fmt.Errorf("unexpected response code from the formae agent: %d - %s", resp.StatusCode(), resp.String())
+	}
+}
+
+// parseListResourceSummariesErrorResponse parses a 400 response from the summary endpoint.
+func (c *Client) parseListResourceSummariesErrorResponse(body io.ReadCloser) ([]pkgmodel.ResourceSummary, error) {
+	bodyBytes, readErr := io.ReadAll(body)
+	if readErr != nil {
+		return nil, fmt.Errorf("failed to read error response body: %w", readErr)
+	}
+
+	var baseError struct {
+		Error apimodel.APIError `json:"error"`
+	}
+	if err := json.Unmarshal(bodyBytes, &baseError); err != nil {
+		return nil, fmt.Errorf("failed to parse error type: %w", err)
+	}
+
+	switch baseError.Error {
+	case apimodel.InvalidQuery:
+		var errResp apimodel.ErrorResponse[apimodel.InvalidQueryError]
+		if err := json.Unmarshal(bodyBytes, &errResp); err != nil {
+			return nil, fmt.Errorf("failed to parse InvalidQueryError error: %w", err)
+		}
+		return nil, &errResp
+	default:
+		return nil, fmt.Errorf("unknown error type: %s", baseError.Error)
+	}
+}
+
+// parseGetResourceByKsuidErrorResponse parses a 400 response from the by-ksuid endpoint.
+func (c *Client) parseGetResourceByKsuidErrorResponse(body io.ReadCloser) (*pkgmodel.Resource, error) {
+	bodyBytes, readErr := io.ReadAll(body)
+	if readErr != nil {
+		return nil, fmt.Errorf("failed to read error response body: %w", readErr)
+	}
+	return nil, fmt.Errorf("bad request: %s", strings.TrimSpace(string(bodyBytes)))
+}
+
 func (c *Client) ListTargets(query string) ([]*pkgmodel.Target, error) {
 	resp, err := c.resty.R().
 		SetQueryParam("query", query).
