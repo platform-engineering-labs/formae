@@ -34,9 +34,16 @@ func TestMarshalWithLogging_DoesNotLogOpaquePlaintextOnError(t *testing.T) {
 		t.Fatal("expected a marshal error to exercise the logging branch")
 	}
 
+	found := false
 	for _, entry := range capture.GetEntries() {
 		if strings.Contains(entry, "super-secret") {
 			t.Fatalf("plaintext secret leaked into a log entry: %q", entry)
 		}
+		if strings.Contains(entry, "<redacted>") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected at least one log entry to contain %q, but none did", "<redacted>")
 	}
 }
