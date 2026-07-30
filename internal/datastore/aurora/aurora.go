@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -277,9 +278,11 @@ func (d *DatastoreAuroraDataAPI) runMigrations() error {
 		"targetVersion", targetVersion)
 
 	// Run pending migrations.
-	// Each migration runs inside a transaction so that TEMP tables and other
+	// Normal migrations run inside a transaction so that TEMP tables and other
 	// session-scoped objects survive across the individual SQL statements
 	// (Aurora Data API creates a new session per ExecuteStatement call).
+	// Migrations marked NO TRANSACTION (e.g. those using CONCURRENTLY DDL, which
+	// Postgres forbids inside a transaction block) run in autocommit mode instead.
 	for _, m := range migrations {
 		if m.version <= currentVersion {
 			continue
@@ -287,28 +290,46 @@ func (d *DatastoreAuroraDataAPI) runMigrations() error {
 
 		slog.Info("Running migration", "version", m.version, "name", m.name)
 
-		txID, err := d.beginTransaction(ctx)
-		if err != nil {
-			return fmt.Errorf("migration %d: failed to begin transaction: %w", m.version, err)
-		}
-
-		// Execute migration statements within the transaction
-		for _, stmt := range m.upStatements {
-			stmt = strings.TrimSpace(stmt)
-			if stmt == "" {
-				continue
+		if m.noTransaction {
+			// The Data API runs every ExecuteStatement inside its own implicit
+			// transaction — there is no autocommit-outside-a-transaction mode — so
+			// CONCURRENTLY index DDL (which Postgres forbids inside a transaction
+			// block) cannot be honored on this backend. Strip CONCURRENTLY so the
+			// equivalent blocking DDL runs instead. The pgx-backed Postgres
+			// datastore keeps CONCURRENTLY via goose's own NO TRANSACTION handling.
+			for _, stmt := range m.upStatements {
+				stmt = stripConcurrently(strings.TrimSpace(stmt))
+				if stmt == "" {
+					continue
+				}
+				if _, err := d.executeStatement(ctx, stmt, nil); err != nil {
+					return fmt.Errorf("migration %d failed on statement: %w", m.version, err)
+				}
 			}
-
-			_, err := d.executeStatementInTransaction(ctx, txID, stmt, nil)
+		} else {
+			txID, err := d.beginTransaction(ctx)
 			if err != nil {
-				_ = d.rollbackTransaction(ctx, txID)
-				return fmt.Errorf("migration %d failed on statement: %w", m.version, err)
+				return fmt.Errorf("migration %d: failed to begin transaction: %w", m.version, err)
 			}
-		}
 
-		if err := d.commitTransaction(ctx, txID); err != nil {
-			_ = d.rollbackTransaction(ctx, txID)
-			return fmt.Errorf("migration %d: failed to commit transaction: %w", m.version, err)
+			// Execute migration statements within the transaction
+			for _, stmt := range m.upStatements {
+				stmt = strings.TrimSpace(stmt)
+				if stmt == "" {
+					continue
+				}
+
+				_, err := d.executeStatementInTransaction(ctx, txID, stmt, nil)
+				if err != nil {
+					_ = d.rollbackTransaction(ctx, txID)
+					return fmt.Errorf("migration %d failed on statement: %w", m.version, err)
+				}
+			}
+
+			if err := d.commitTransaction(ctx, txID); err != nil {
+				_ = d.rollbackTransaction(ctx, txID)
+				return fmt.Errorf("migration %d: failed to commit transaction: %w", m.version, err)
+			}
 		}
 
 		// Record migration version
@@ -322,9 +343,10 @@ func (d *DatastoreAuroraDataAPI) runMigrations() error {
 }
 
 type migration struct {
-	version      int64
-	name         string
-	upStatements []string
+	version       int64
+	name          string
+	upStatements  []string
+	noTransaction bool
 }
 
 // ensureVersionTable creates the db_version table if it doesn't exist.
@@ -405,9 +427,10 @@ func (d *DatastoreAuroraDataAPI) collectMigrations() ([]migration, error) {
 
 		upStatements := parseGooseUp(string(content))
 		migrations = append(migrations, migration{
-			version:      version,
-			name:         entry.Name(),
-			upStatements: upStatements,
+			version:       version,
+			name:          entry.Name(),
+			upStatements:  upStatements,
+			noTransaction: hasNoTransactionDirective(string(content)),
 		})
 	}
 
@@ -417,6 +440,30 @@ func (d *DatastoreAuroraDataAPI) collectMigrations() ([]migration, error) {
 	})
 
 	return migrations, nil
+}
+
+// hasNoTransactionDirective reports whether the migration content contains the
+// goose "-- +goose NO TRANSACTION" directive, which marks a migration that must
+// run outside of a transaction block (e.g. CONCURRENTLY DDL on Postgres).
+func hasNoTransactionDirective(content string) bool {
+	for _, line := range strings.Split(content, "\n") {
+		if strings.TrimSpace(line) == "-- +goose NO TRANSACTION" {
+			return true
+		}
+	}
+	return false
+}
+
+// concurrentlyKeyword matches the standalone CONCURRENTLY keyword (case-insensitive)
+// along with the whitespace that precedes it.
+var concurrentlyKeyword = regexp.MustCompile(`(?i)\s+CONCURRENTLY\b`)
+
+// stripConcurrently removes the CONCURRENTLY keyword from index DDL. The Aurora
+// Data API executes each statement inside an implicit transaction, where Postgres
+// forbids CREATE/DROP INDEX CONCURRENTLY, so the non-concurrent form is the only
+// option available on this backend.
+func stripConcurrently(stmt string) string {
+	return concurrentlyKeyword.ReplaceAllString(stmt, "")
 }
 
 // parseGooseUp extracts the Up statements from a goose migration file.
@@ -513,6 +560,42 @@ func getBoolField(field types.Field) (bool, error) {
 	default:
 		return false, fmt.Errorf("unexpected field type for bool: %T", field)
 	}
+}
+
+// getStringArrayField extracts a text[] value from a Data API field.
+// Aurora returns a text[] column as *types.FieldMemberArrayValue wrapping
+// *types.ArrayValueMemberStringValues; a NULL column arrives as *types.FieldMemberIsNull.
+// The refs column always has a NOT NULL DEFAULT '{}' so NULL should not appear, but
+// we handle it gracefully and return an empty slice.
+func getStringArrayField(field types.Field) ([]string, error) {
+	switch v := field.(type) {
+	case *types.FieldMemberArrayValue:
+		switch av := v.Value.(type) {
+		case *types.ArrayValueMemberStringValues:
+			return av.Value, nil
+		default:
+			return nil, fmt.Errorf("unexpected array member type for string array: %T", v.Value)
+		}
+	case *types.FieldMemberIsNull:
+		return nil, nil
+	default:
+		return nil, fmt.Errorf("unexpected field type for string array: %T", field)
+	}
+}
+
+// refsToSQL wraps a named parameter placeholder in the SQL expression that
+// converts the comma-delimited encoding to a text[] column value.
+//
+// Encoding rationale: the Data API does not support array-typed input parameters
+// directly (there is no FieldMemberArrayValue for SqlParameter inputs in the SDK).
+// KSUIDs are fixed-length base62 tokens (letters + digits only) so commas never
+// appear in a KSUID, making comma-delimiting unambiguous.  The empty-list edge
+// case requires special handling because string_to_array(”, ',') returns {”}
+// (a one-element array containing an empty string), not an empty array.  We use
+// CASE WHEN ... = ” THEN '{}'::text[] ELSE string_to_array(..., ',') END to
+// handle that correctly.
+func refsToSQL(param string) string {
+	return `CASE WHEN ` + param + ` = '' THEN '{}'::text[] ELSE string_to_array(` + param + `, ',') END`
 }
 
 // getRawJSONField extracts a JSON value from a Data API field as json.RawMessage.
@@ -1420,13 +1503,37 @@ func (d *DatastoreAuroraDataAPI) UpdateResourceVersionData(uri string, version s
 	}
 	// data is a JSONB column; the Data API binds :data as text, so cast it
 	// explicitly to jsonb exactly as the insert/upsert paths do.
-	query := `UPDATE resources SET data = :data::jsonb WHERE uri = :uri AND version = :version`
+	// refs is encoded as a comma-delimited string and converted to text[] via
+	// CASE/string_to_array — see refsToSQL for the encoding rationale.
+	query := `UPDATE resources SET data = :data::jsonb, refs = ` + refsToSQL(":refs") + ` WHERE uri = :uri AND version = :version`
 	params := []types.SqlParameter{
 		{Name: aws.String("data"), Value: &types.FieldMemberStringValue{Value: string(data)}},
+		{Name: aws.String("refs"), Value: &types.FieldMemberStringValue{Value: strings.Join(pkgmodel.CollectReferencedKSUIDs(data), ",")}},
 		{Name: aws.String("uri"), Value: &types.FieldMemberStringValue{Value: uri}},
 		{Name: aws.String("version"), Value: &types.FieldMemberStringValue{Value: version}},
 	}
 	_, err = d.executeStatement(ctx, query, params)
+	return err
+}
+
+// UpdateResourceRefs overwrites the refs column for a specific resource version.
+// This is an aurora-only method and is not part of the shared datastore interface.
+// UpdateResourceRefs overwrites the refs column for a specific resource version.
+// This is an aurora-only method and is not part of the shared datastore interface.
+// The `refs IS DISTINCT FROM` guard makes the write a no-op when the stored refs
+// already match, so the idempotent startup backfill produces no write churn on rows
+// that are already current.
+func (d *DatastoreAuroraDataAPI) UpdateResourceRefs(uri, version string, refs []string) error {
+	ctx := context.Background()
+
+	query := `UPDATE resources SET refs = ` + refsToSQL(":refs") +
+		` WHERE uri = :uri AND version = :version AND refs IS DISTINCT FROM ` + refsToSQL(":refs")
+	params := []types.SqlParameter{
+		{Name: aws.String("refs"), Value: &types.FieldMemberStringValue{Value: strings.Join(refs, ",")}},
+		{Name: aws.String("uri"), Value: &types.FieldMemberStringValue{Value: uri}},
+		{Name: aws.String("version"), Value: &types.FieldMemberStringValue{Value: version}},
+	}
+	_, err := d.executeStatement(ctx, query, params)
 	return err
 }
 
@@ -1642,8 +1749,8 @@ func (d *DatastoreAuroraDataAPI) storeResource(ctx context.Context, resource *pk
 	if maxRecordIdx == -1 {
 		newVersion := mksuid.New().String()
 		insertQuery := `
-		INSERT INTO resources (uri, version, command_id, operation, native_id, stack, type, label, target, data, managed, ksuid, target_incarnation_id)
-		VALUES (:uri, :version, :command_id, :operation, :native_id, :stack, :type, :label, :target, :data::jsonb, :managed, :ksuid, :target_incarnation_id)
+		INSERT INTO resources (uri, version, command_id, operation, native_id, stack, type, label, target, data, managed, ksuid, target_incarnation_id, refs)
+		VALUES (:uri, :version, :command_id, :operation, :native_id, :stack, :type, :label, :target, :data::jsonb, :managed, :ksuid, :target_incarnation_id, ` + refsToSQL(":refs") + `)
 		`
 		insertParams := []types.SqlParameter{
 			{Name: aws.String("uri"), Value: &types.FieldMemberStringValue{Value: string(resource.URI())}},
@@ -1659,6 +1766,7 @@ func (d *DatastoreAuroraDataAPI) storeResource(ctx context.Context, resource *pk
 			{Name: aws.String("managed"), Value: &types.FieldMemberBooleanValue{Value: resource.Managed}},
 			{Name: aws.String("ksuid"), Value: &types.FieldMemberStringValue{Value: resource.Ksuid}},
 			{Name: aws.String("target_incarnation_id"), Value: &types.FieldMemberStringValue{Value: expectedIncarnation}},
+			{Name: aws.String("refs"), Value: &types.FieldMemberStringValue{Value: strings.Join(pkgmodel.CollectReferencedKSUIDs(data), ",")}},
 		}
 
 		_, err = d.executeStatement(ctx, insertQuery, insertParams)
@@ -1725,8 +1833,8 @@ func (d *DatastoreAuroraDataAPI) storeResource(ctx context.Context, resource *pk
 	}
 
 	upsertQuery := `
-	INSERT INTO resources (uri, version, command_id, operation, native_id, stack, type, label, target, data, managed, ksuid, target_incarnation_id)
-	VALUES (:uri, :version, :command_id, :operation, :native_id, :stack, :type, :label, :target, :data::jsonb, :managed, :ksuid, :target_incarnation_id)
+	INSERT INTO resources (uri, version, command_id, operation, native_id, stack, type, label, target, data, managed, ksuid, target_incarnation_id, refs)
+	VALUES (:uri, :version, :command_id, :operation, :native_id, :stack, :type, :label, :target, :data::jsonb, :managed, :ksuid, :target_incarnation_id, ` + refsToSQL(":refs") + `)
 	ON CONFLICT (uri, version) DO UPDATE SET
 	command_id = EXCLUDED.command_id,
 	operation = EXCLUDED.operation,
@@ -1738,7 +1846,8 @@ func (d *DatastoreAuroraDataAPI) storeResource(ctx context.Context, resource *pk
 	data = EXCLUDED.data,
 	managed = EXCLUDED.managed,
 	ksuid = EXCLUDED.ksuid,
-	target_incarnation_id = EXCLUDED.target_incarnation_id
+	target_incarnation_id = EXCLUDED.target_incarnation_id,
+	refs = EXCLUDED.refs
 	`
 	upsertParams := []types.SqlParameter{
 		{Name: aws.String("uri"), Value: &types.FieldMemberStringValue{Value: string(resource.URI())}},
@@ -1754,6 +1863,7 @@ func (d *DatastoreAuroraDataAPI) storeResource(ctx context.Context, resource *pk
 		{Name: aws.String("managed"), Value: &types.FieldMemberBooleanValue{Value: resource.Managed}},
 		{Name: aws.String("ksuid"), Value: &types.FieldMemberStringValue{Value: resource.Ksuid}},
 		{Name: aws.String("target_incarnation_id"), Value: &types.FieldMemberStringValue{Value: expectedIncarnation}},
+		{Name: aws.String("refs"), Value: &types.FieldMemberStringValue{Value: strings.Join(pkgmodel.CollectReferencedKSUIDs(data), ",")}},
 	}
 
 	_, err = d.executeStatement(ctx, upsertQuery, upsertParams)
@@ -2049,21 +2159,16 @@ func (d *DatastoreAuroraDataAPI) LoadResourceById(ksuid string) (*pkgmodel.Resou
 }
 
 // FindResourcesDependingOn finds resources that reference the given KSUID via $ref in their properties.
-// This is essential for referential integrity — without it we risk leaving orphaned resources in an
-// inconsistent state. Currently this requires a full table scan (LIKE on the data column) which will
-// be slow for users with large resource counts.
-// TODO: make the dependency graph discoverable from the schema so we can query edges directly.
+// The query uses the GIN-indexed refs column (array overlap &&) to avoid a full table scan.
 func (d *DatastoreAuroraDataAPI) FindResourcesDependingOn(ksuid string) ([]*pkgmodel.Resource, error) {
 	ctx := context.Background()
 
-	// Search for resources that contain a $ref to this KSUID in their properties.
-	// Use a regex to handle PostgreSQL's jsonb::text formatting, which adds spaces after colons.
-	pattern := fmt.Sprintf(`"\$ref"\s*:\s*"formae://%s#`, ksuid)
-
+	// refs is queried via array overlap (&&). The frontier always contains exactly one KSUID here
+	// so the comma-delimited encoding is just the KSUID itself (no comma needed).
 	query := `
-	SELECT data, ksuid
+	SELECT data, ksuid, refs
 	FROM resources r1
-	WHERE data::text ~ :pattern
+	WHERE refs && ` + refsToSQL(":refs") + `
 	AND NOT EXISTS (
 		SELECT 1
 		FROM resources r2
@@ -2073,7 +2178,7 @@ func (d *DatastoreAuroraDataAPI) FindResourcesDependingOn(ksuid string) ([]*pkgm
 	AND operation != :operation AND operation != 'reaped'
 	`
 	params := []types.SqlParameter{
-		{Name: aws.String("pattern"), Value: &types.FieldMemberStringValue{Value: pattern}},
+		{Name: aws.String("refs"), Value: &types.FieldMemberStringValue{Value: ksuid}},
 		{Name: aws.String("operation"), Value: &types.FieldMemberStringValue{Value: string(resource_update.OperationDelete)}},
 	}
 
@@ -2084,7 +2189,7 @@ func (d *DatastoreAuroraDataAPI) FindResourcesDependingOn(ksuid string) ([]*pkgm
 
 	var resources []*pkgmodel.Resource
 	for _, record := range output.Records {
-		if len(record) < 2 {
+		if len(record) < 3 {
 			return nil, fmt.Errorf("unexpected record length: %d", len(record))
 		}
 
@@ -2116,28 +2221,12 @@ func (d *DatastoreAuroraDataAPI) FindResourcesDependingOnMany(ksuids []string) (
 		return make(map[string][]*pkgmodel.Resource), nil
 	}
 
-	// Build OR conditions for each KSUID pattern with named parameters.
-	// Use regex to handle PostgreSQL's jsonb::text formatting, which adds spaces after colons.
-	var conditions []string
-	var params []types.SqlParameter
-	for i, ksuid := range ksuids {
-		pattern := fmt.Sprintf(`"\$ref"\s*:\s*"formae://%s#`, ksuid)
-		paramName := fmt.Sprintf("pattern%d", i)
-		conditions = append(conditions, fmt.Sprintf("data::text ~ :%s", paramName))
-		params = append(params, types.SqlParameter{
-			Name:  aws.String(paramName),
-			Value: &types.FieldMemberStringValue{Value: pattern},
-		})
-	}
-	params = append(params, types.SqlParameter{
-		Name:  aws.String("operation"),
-		Value: &types.FieldMemberStringValue{Value: string(resource_update.OperationDelete)},
-	})
-
-	query := fmt.Sprintf(`
-	SELECT data, ksuid
+	// Single query: the refs && overlap operator is served by the GIN index.
+	// The frontier is comma-joined and converted to text[] by refsToSQL.
+	query := `
+	SELECT data, ksuid, refs
 	FROM resources r1
-	WHERE (%s)
+	WHERE refs && ` + refsToSQL(":refs") + `
 	AND NOT EXISTS (
 		SELECT 1
 		FROM resources r2
@@ -2145,17 +2234,28 @@ func (d *DatastoreAuroraDataAPI) FindResourcesDependingOnMany(ksuids []string) (
 		AND r2.version COLLATE "C" > r1.version COLLATE "C"
 	)
 	AND operation != :operation AND operation != 'reaped'
-	`, strings.Join(conditions, " OR "))
+	`
+	params := []types.SqlParameter{
+		{Name: aws.String("refs"), Value: &types.FieldMemberStringValue{Value: strings.Join(ksuids, ",")}},
+		{Name: aws.String("operation"), Value: &types.FieldMemberStringValue{Value: string(resource_update.OperationDelete)}},
+	}
 
 	output, err := d.executeStatement(ctx, query, params)
 	if err != nil {
 		return nil, err
 	}
 
-	// Build a map of KSUID -> resources that depend on it
+	// Build the input KSUID set for O(1) membership checks.
+	frontierSet := make(map[string]struct{}, len(ksuids))
+	for _, k := range ksuids {
+		frontierSet[k] = struct{}{}
+	}
+
+	// Build a map of KSUID -> resources that depend on it by intersecting each
+	// returned row's refs with the frontier set.
 	result := make(map[string][]*pkgmodel.Resource)
 	for _, record := range output.Records {
-		if len(record) < 2 {
+		if len(record) < 3 {
 			return nil, fmt.Errorf("unexpected record length: %d", len(record))
 		}
 
@@ -2169,19 +2269,21 @@ func (d *DatastoreAuroraDataAPI) FindResourcesDependingOnMany(ksuids []string) (
 			return nil, fmt.Errorf("failed to parse ksuid: %w", err)
 		}
 
+		rowRefs, err := getStringArrayField(record[2])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse refs: %w", err)
+		}
+
 		var resource pkgmodel.Resource
 		if err := json.Unmarshal([]byte(jsonData), &resource); err != nil {
 			return nil, err
 		}
 		resource.Ksuid = ksuidResult
 
-		// Find which of the input KSUIDs this resource depends on.
-		// jsonb::text output has spaces after colons, so check both forms.
-		for _, ksuid := range ksuids {
-			withSpace := fmt.Sprintf("\"$ref\": \"formae://%s#", ksuid)
-			withoutSpace := fmt.Sprintf("\"$ref\":\"formae://%s#", ksuid)
-			if strings.Contains(jsonData, withSpace) || strings.Contains(jsonData, withoutSpace) {
-				result[ksuid] = append(result[ksuid], &resource)
+		// Append this resource under every frontier KSUID it references.
+		for _, ref := range rowRefs {
+			if _, ok := frontierSet[ref]; ok {
+				result[ref] = append(result[ref], &resource)
 			}
 		}
 	}

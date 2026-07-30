@@ -143,6 +143,11 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunFindResourcesDependingOnMultipleRefs(t, newDS)
 	RunFindResourcesDependingOnNoRefs(t, newDS)
 	RunFindResourcesDependingOnDeletedResourcesExcluded(t, newDS)
+	RunFindResourcesDependingOnMany_MultipleFrontierRefs(t, newDS)
+	RunFindResourcesDependingOnMany_RepeatedRef(t, newDS)
+	RunFindResourcesDependingOnMany_FrontierMemberOverlap(t, newDS)
+	RunFindResourcesDependingOnMany_DeepChain(t, newDS)
+	RunFindResourcesDependingOnMany_BroadFanOut(t, newDS)
 
 	RunStackTransition(t, newDS)
 
