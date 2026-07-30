@@ -258,13 +258,15 @@ func TestPkl_FormaeConfig(t *testing.T) {
 func TestPkl_SecretShapeMisuse_AtOnScalarFailsEval(t *testing.T) {
 	p := PKL{}
 	_, err := p.Evaluate("./testdata/forma/secret_at_on_scalar_test.pkl", model.CommandApply, model.FormaApplyModeReconcile, nil)
-	assert.Error(t, err)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "Cannot find method `at`")
 }
 
 func TestPkl_SecretShapeMisuse_BareMapSecretValueFailsEval(t *testing.T) {
 	p := PKL{}
 	_, err := p.Evaluate("./testdata/forma/secret_bare_map_value_test.pkl", model.CommandApply, model.FormaApplyModeReconcile, nil)
-	assert.Error(t, err)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "SecretMapAccessor")
 }
 
 func TestTranslateResourcePluginConfig(t *testing.T) {
