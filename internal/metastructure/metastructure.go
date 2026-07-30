@@ -1341,7 +1341,11 @@ func (m *Metastructure) ReRunIncompleteCommands() error {
 		// Build the changeset from only the pending (non-terminal) resource
 		// updates. Terminal resources are excluded so they don't create
 		// phantom dependency links in the new changeset's pipeline.
-		cs, _ := changeset.NewChangeset(pendingUpdates, pendingTargetUpdates, fa.ID, pkgmodel.CommandApply, m.Datastore)
+		cs, err := changeset.NewChangeset(pendingUpdates, pendingTargetUpdates, fa.ID, pkgmodel.CommandApply, m.Datastore)
+		if err != nil {
+			slog.Error("Failed to build changeset for incomplete forma command, skipping", "commandID", fa.ID, "error", err)
+			continue
+		}
 
 		m.Node.Log().Debug("Starting ChangesetExecutor of changeset from incomplete forma command commandID=%s", fa.ID)
 		_, err = m.callActor(

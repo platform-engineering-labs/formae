@@ -714,7 +714,11 @@ func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Ta
 
 	// Pass CommandSync so the DAG skips buildOperationRelationships — discovery
 	// sync reads are independent and one failed read must not cascade to others.
-	cs, _ := changeset.NewChangeset(syncCommand.ResourceUpdates, nil, syncCommand.ID, pkgmodel.CommandSync, data.ds)
+	cs, err := changeset.NewChangeset(syncCommand.ResourceUpdates, nil, syncCommand.ID, pkgmodel.CommandSync, data.ds)
+	if err != nil {
+		slog.Error("failed to build changeset for discovery sync command", "commandID", syncCommand.ID, "error", err)
+		return "", fmt.Errorf("failed to build changeset: %w", err)
+	}
 
 	proc.Log().Debug("Ensuring ChangesetExecutor for sync command commandID=%s", syncCommand.ID)
 	_, err = proc.Call(
