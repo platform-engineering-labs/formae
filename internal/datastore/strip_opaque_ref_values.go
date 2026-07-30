@@ -32,7 +32,8 @@ func StripOpaqueRefValues(raw json.RawMessage) (json.RawMessage, error) {
 func stripOpaqueRefValues(v any) any {
 	switch t := v.(type) {
 	case map[string]any:
-		opaqueRef := t["$ref"] != nil && t["$visibility"] == "Opaque"
+		_, hasRef := t["$ref"]
+		opaqueRef := hasRef && t["$visibility"] == "Opaque"
 		out := make(map[string]any, len(t))
 		for k, val := range t {
 			if opaqueRef && k == "$value" {
@@ -55,7 +56,7 @@ func stripOpaqueRefValues(v any) any {
 func assertNoOpaqueRefValue(v any, path string) error {
 	switch t := v.(type) {
 	case map[string]any:
-		if t["$ref"] != nil && t["$visibility"] == "Opaque" {
+		if _, hasRef := t["$ref"]; hasRef && t["$visibility"] == "Opaque" {
 			if _, has := t["$value"]; has {
 				return fmt.Errorf("opaque $ref at %q still carries $value after normalization", path)
 			}
