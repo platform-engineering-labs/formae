@@ -12,6 +12,21 @@ import (
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
+// resourceSummaryRow converts a pkgmodel.ResourceSummary into a render-ready row.
+// Cells: [Label, Stack, Type, NativeID]. The detail is not computed synchronously;
+// instead detailKsuid is set so openDetail can dispatch a lazy fetch.
+func resourceSummaryRow(s pkgmodel.ResourceSummary) row {
+	stackCell := s.Stack
+	if s.Stack == constants.UnmanagedStack {
+		stackCell = "⚠ unmanaged"
+	}
+	return row{
+		cells:       []string{s.Label, stackCell, s.Type, s.NativeID},
+		title:       fmt.Sprintf("%s (%s)", s.Label, s.Type),
+		detailKsuid: s.Ksuid,
+	}
+}
+
 // resourceRow converts a pkgmodel.Resource into a render-ready row.
 // Cells: [Label, Stack, Type, NativeID].
 // Unmanaged resources live on the "$unmanaged" sentinel stack; display it as a

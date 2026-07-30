@@ -5,6 +5,7 @@
 package inventoryview
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -47,6 +48,11 @@ type Model struct {
 	detailTitle    string         // captured at open time
 	detailBody     []string       // captured at open time (row.detail(width))
 	detailViewport viewport.Model // scrollable content area for the detail screen
+	// detailKsuid is the ksuid of the resource currently shown in the detail
+	// screen, when the detail was opened for a summary row (lazy fetch path).
+	// It is empty for synchronous-detail rows (other tabs) and is cleared when
+	// the detail screen closes so late-arriving responses are dropped.
+	detailKsuid string
 	// helpOpen tracks whether the help overlay is currently displayed.
 	helpOpen bool
 }
@@ -185,6 +191,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tabLoadedMsg:
 		return m.handleTabLoaded(msg)
+
+	case resourceDetailLoadedMsg:
+		return m.handleResourceDetailLoaded(msg)
 
 	case theme.ApplyThemeMsg:
 		m = m.ApplyTheme(msg.Theme)
@@ -351,6 +360,10 @@ func colorizeDetailLine(th *theme.Theme, line string) string {
 }
 
 // openDetail opens the full-screen detail view for the currently selected row.
+// For rows with a detailKsuid (resources-tab summary rows) the detail is not
+// computed synchronously: instead a loading placeholder is shown and an async
+// fetchResourceDetailCmd is returned. For other rows the synchronous detail
+// closure is used as before.
 func (m Model) openDetail() (tea.Model, tea.Cmd) {
 	tab := m.tabs[m.active]
 	vis, _ := tab.visible(m.opts.MaxRows)
@@ -361,6 +374,23 @@ func (m Model) openDetail() (tea.Model, tea.Cmd) {
 
 	r := vis[cursor]
 	m.detailTitle = r.title
+
+	vpH := m.height - detailChromeLines
+	if vpH < 1 {
+		vpH = 1
+	}
+	m.detailViewport = viewport.New(m.width, vpH)
+
+	if r.detailKsuid != "" {
+		// Lazy async path: show a loading placeholder immediately and fire the fetch.
+		m.detailKsuid = r.detailKsuid
+		m.detailBody = []string{"Loading…"}
+		m.detailViewport = m.refreshDetailContent()
+		m.detailOpen = true
+		return m, fetchResourceDetailCmd(m.client, r.detailKsuid)
+	}
+
+	// Synchronous path (other tabs): compute the detail body from the closure.
 	// Content is indented 2 spaces to align with the header/title/rule above it,
 	// so build it for the reduced width.
 	contentWidth := m.width - detailIndent
@@ -372,14 +402,30 @@ func (m Model) openDetail() (tea.Model, tea.Cmd) {
 	} else {
 		m.detailBody = nil
 	}
-
-	vpH := m.height - detailChromeLines
-	if vpH < 1 {
-		vpH = 1
-	}
-	m.detailViewport = viewport.New(m.width, vpH)
 	m.detailViewport = m.refreshDetailContent()
 	m.detailOpen = true
+	return m, nil
+}
+
+// handleResourceDetailLoaded processes a resourceDetailLoadedMsg. It applies the
+// stale-response guard: the message is dropped unless detailOpen is true AND the
+// msg ksuid matches the currently-open detailKsuid.
+func (m Model) handleResourceDetailLoaded(msg resourceDetailLoadedMsg) (tea.Model, tea.Cmd) {
+	// Stale guard: drop responses for closed or mismatched ksuid.
+	if !m.detailOpen || msg.ksuid != m.detailKsuid {
+		return m, nil
+	}
+
+	if msg.err != nil {
+		m.detailBody = []string{fmt.Sprintf("error loading detail: %v", msg.err)}
+	} else if msg.resource != nil {
+		contentWidth := m.width - detailIndent
+		if contentWidth < 1 {
+			contentWidth = 1
+		}
+		m.detailBody = resourceDetail(*msg.resource, contentWidth)
+	}
+	m.detailViewport = m.refreshDetailContent()
 	return m, nil
 }
 
@@ -416,6 +462,7 @@ func (m Model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case msg.Type == tea.KeyEsc:
 		m.detailOpen = false
+		m.detailKsuid = "" // clear so any in-flight response is dropped by the stale guard
 		return m, nil
 
 	case msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 'q':
