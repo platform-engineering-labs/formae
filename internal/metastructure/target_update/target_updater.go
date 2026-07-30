@@ -94,11 +94,13 @@ func resourcePersisterProcess(proc gen.Process) gen.ProcessID {
 }
 
 // handleStartTargetUpdate receives the initial message and enters the resolve loop or goes straight to persist.
+// A Resolve op is always routed through resolveTargetConfig regardless of resolvables count, because Resolve
+// ops must never call persistTarget — the resolve loop's drain path handles the zero-resolvables case directly.
 func handleStartTargetUpdate(from gen.PID, state gen.Atom, data TargetUpdaterData, message StartTargetUpdate, proc gen.Process) (gen.Atom, TargetUpdaterData, []statemachine.Action, error) {
 	data.targetUpdate = message.TargetUpdate
 	data.commandID = message.CommandID
 
-	if len(data.targetUpdate.RemainingResolvables) > 0 {
+	if len(data.targetUpdate.RemainingResolvables) > 0 || data.targetUpdate.Operation == TargetOperationResolve {
 		return resolveTargetConfig(state, data, proc)
 	}
 	return persistTarget(data, proc)
