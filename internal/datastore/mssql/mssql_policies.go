@@ -230,6 +230,56 @@ func (d *DatastoreMSSQL) GetStandalonePolicy(label string) (pkgmodel.Policy, err
 	return deserializePolicy(policyLabel, policyType, policyDataStr, "")
 }
 
+func (d *DatastoreMSSQL) LoadStandalonePoliciesByLabels(labels []string) ([]pkgmodel.Policy, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "LoadStandalonePoliciesByLabels")
+	defer span.End()
+
+	if len(labels) == 0 {
+		return []pkgmodel.Policy{}, nil
+	}
+
+	args := make([]any, len(labels))
+	for i, label := range labels {
+		args[i] = label
+	}
+
+	query := fmt.Sprintf(`
+		WITH latest_policies AS (
+			SELECT id, label, policy_type, policy_data, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE Latin1_General_BIN2 DESC) AS rn
+			FROM policies
+			WHERE label IN (%s) AND (stack_id IS NULL OR stack_id = '')
+		)
+		SELECT label, policy_type, policy_data
+		FROM latest_policies
+		WHERE rn = 1 AND operation != 'delete'`, placeholders(1, len(labels)))
+
+	rows, err := d.conn.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load standalone policies by labels: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var policies []pkgmodel.Policy
+	for rows.Next() {
+		var policyLabel, policyType, policyDataStr string
+		if err := rows.Scan(&policyLabel, &policyType, &policyDataStr); err != nil {
+			return nil, fmt.Errorf("failed to scan policy: %w", err)
+		}
+		policy, err := deserializePolicy(policyLabel, policyType, policyDataStr, "")
+		if err != nil {
+			slog.Warn("Failed to deserialize policy", "label", policyLabel, "error", err)
+			continue
+		}
+		policies = append(policies, policy)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating policies: %w", err)
+	}
+
+	return policies, nil
+}
+
 func (d *DatastoreMSSQL) ListAllStandalonePolicies() ([]pkgmodel.Policy, error) {
 	ctx, span := mssqlTracer.Start(context.Background(), "ListAllStandalonePolicies")
 	defer span.End()

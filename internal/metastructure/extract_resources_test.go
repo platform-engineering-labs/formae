@@ -28,10 +28,20 @@ type mockExtractDatastore struct {
 	targets   map[string]*pkgmodel.Target
 	stacks    map[string]*pkgmodel.Stack
 	policies  map[string]pkgmodel.Policy
+
+	// call counters for verifying batched vs. per-item access patterns
+	getStackByLabelCalls             int
+	getStandalonePolicyCalls         int
+	loadStacksByLabelsCalls          int
+	loadStandalonePoliciesByLabelsCalls int
 }
 
 func (m *mockExtractDatastore) QueryResources(_ *datastore.ResourceQuery) ([]*pkgmodel.Resource, error) {
 	return m.resources, nil
+}
+
+func (m *mockExtractDatastore) ListResourceSummaries(_ *datastore.ResourceQuery) ([]pkgmodel.ResourceSummary, error) {
+	panic("not implemented")
 }
 
 func (m *mockExtractDatastore) BatchGetTripletsByKSUIDs(_ []string) (map[string]pkgmodel.TripletKey, error) {
@@ -51,6 +61,7 @@ func (m *mockExtractDatastore) LoadTargetsByLabels(labels []string) ([]*pkgmodel
 }
 
 func (m *mockExtractDatastore) GetStackByLabel(label string) (*pkgmodel.Stack, error) {
+	m.getStackByLabelCalls++
 	if s, ok := m.stacks[label]; ok {
 		return s, nil
 	}
@@ -58,10 +69,33 @@ func (m *mockExtractDatastore) GetStackByLabel(label string) (*pkgmodel.Stack, e
 }
 
 func (m *mockExtractDatastore) GetStandalonePolicy(label string) (pkgmodel.Policy, error) {
+	m.getStandalonePolicyCalls++
 	if p, ok := m.policies[label]; ok {
 		return p, nil
 	}
 	return nil, nil
+}
+
+func (m *mockExtractDatastore) LoadStacksByLabels(labels []string) ([]*pkgmodel.Stack, error) {
+	m.loadStacksByLabelsCalls++
+	result := make([]*pkgmodel.Stack, 0, len(labels))
+	for _, label := range labels {
+		if s, ok := m.stacks[label]; ok {
+			result = append(result, s)
+		}
+	}
+	return result, nil
+}
+
+func (m *mockExtractDatastore) LoadStandalonePoliciesByLabels(labels []string) ([]pkgmodel.Policy, error) {
+	m.loadStandalonePoliciesByLabelsCalls++
+	result := make([]pkgmodel.Policy, 0, len(labels))
+	for _, label := range labels {
+		if p, ok := m.policies[label]; ok {
+			result = append(result, p)
+		}
+	}
+	return result, nil
 }
 
 // Stub implementations for the rest of the Datastore interface.
@@ -394,4 +428,142 @@ func TestExtractResources_OnlyUnmanagedStack(t *testing.T) {
 	jsonBytes, err := json.Marshal(forma)
 	require.NoError(t, err)
 	assert.Contains(t, string(jsonBytes), `"Stacks"`)
+}
+
+// TestExtractResources_BatchedLookups verifies that ExtractResources issues exactly
+// one batched call for stacks and one for policies, and never falls back to the
+// per-item GetStackByLabel / GetStandalonePolicy methods.
+func TestExtractResources_BatchedLookups(t *testing.T) {
+	managedStack := &pkgmodel.Stack{
+		Label:       "stack-a",
+		Description: "Stack A",
+	}
+	anotherStack := &pkgmodel.Stack{
+		Label:       "stack-b",
+		Description: "Stack B",
+	}
+
+	target := &pkgmodel.Target{
+		Label:     "aws-target",
+		Namespace: "AWS",
+		Config:    json.RawMessage(`{"Region":"us-east-1"}`),
+	}
+
+	ds := &mockExtractDatastore{
+		resources: []*pkgmodel.Resource{
+			{
+				Label:      "res-1",
+				Type:       "AWS::EC2::VPC",
+				Stack:      "stack-a",
+				Target:     "aws-target",
+				Properties: json.RawMessage(`{"CidrBlock":"10.0.0.0/16"}`),
+			},
+			{
+				Label:      "res-2",
+				Type:       "AWS::EC2::Subnet",
+				Stack:      "stack-b",
+				Target:     "aws-target",
+				Properties: json.RawMessage(`{"CidrBlock":"10.0.1.0/24"}`),
+			},
+			{
+				Label:      "res-3",
+				Type:       "AWS::S3::Bucket",
+				Stack:      "stack-a", // duplicate stack — still one batch call
+				Target:     "aws-target",
+				Properties: json.RawMessage(`{"BucketName":"my-bucket"}`),
+			},
+		},
+		targets: map[string]*pkgmodel.Target{
+			"aws-target": target,
+		},
+		stacks: map[string]*pkgmodel.Stack{
+			"stack-a": managedStack,
+			"stack-b": anotherStack,
+		},
+		policies: map[string]pkgmodel.Policy{},
+	}
+
+	m := &Metastructure{Datastore: ds}
+	forma, err := m.ExtractResources("")
+	require.NoError(t, err)
+	require.NotNil(t, forma)
+
+	// Results must be correct (both stacks present)
+	require.Len(t, forma.Stacks, 2)
+	stackLabels := map[string]bool{}
+	for _, s := range forma.Stacks {
+		stackLabels[s.Label] = true
+	}
+	assert.True(t, stackLabels["stack-a"], "stack-a should be present")
+	assert.True(t, stackLabels["stack-b"], "stack-b should be present")
+
+	// Access-pattern assertions: exactly one batched call, zero per-item calls
+	assert.Equal(t, 1, ds.loadStacksByLabelsCalls, "LoadStacksByLabels must be called exactly once")
+	assert.Equal(t, 0, ds.getStackByLabelCalls, "GetStackByLabel must not be called (N+1 avoided)")
+	assert.Equal(t, 0, ds.loadStandalonePoliciesByLabelsCalls,
+		"LoadStandalonePoliciesByLabels must not be called when there are no policy references")
+	assert.Equal(t, 0, ds.getStandalonePolicyCalls, "GetStandalonePolicy must not be called (N+1 avoided)")
+}
+
+// TestExtractResources_BatchedPolicyLookups exercises the positive side of the
+// batched-policy path: a stack carries a standalone policy reference, so the
+// policy must be resolved via the single batched call, never the per-item one,
+// and it must actually land in forma.Policies.
+func TestExtractResources_BatchedPolicyLookups(t *testing.T) {
+	stackWithPolicy := &pkgmodel.Stack{
+		Label:       "stack-a",
+		Description: "Stack A",
+		Policies: []json.RawMessage{
+			json.RawMessage(`{"$ref":"policy://my-policy"}`),
+		},
+	}
+
+	target := &pkgmodel.Target{
+		Label:     "aws-target",
+		Namespace: "AWS",
+		Config:    json.RawMessage(`{"Region":"us-east-1"}`),
+	}
+
+	ds := &mockExtractDatastore{
+		resources: []*pkgmodel.Resource{
+			{
+				Label:      "res-1",
+				Type:       "AWS::EC2::VPC",
+				Stack:      "stack-a",
+				Target:     "aws-target",
+				Properties: json.RawMessage(`{"CidrBlock":"10.0.0.0/16"}`),
+			},
+		},
+		targets: map[string]*pkgmodel.Target{
+			"aws-target": target,
+		},
+		stacks: map[string]*pkgmodel.Stack{
+			"stack-a": stackWithPolicy,
+		},
+		policies: map[string]pkgmodel.Policy{
+			"my-policy": &pkgmodel.TTLPolicy{
+				Type:         "ttl",
+				Label:        "my-policy",
+				TTLSeconds:   3600,
+				OnDependents: "cascade",
+			},
+		},
+	}
+
+	m := &Metastructure{Datastore: ds}
+	forma, err := m.ExtractResources("")
+	require.NoError(t, err)
+	require.NotNil(t, forma)
+
+	// The referenced policy must have been loaded and marshalled into the forma.
+	require.Len(t, forma.Policies, 1, "the referenced standalone policy should be loaded")
+	assert.Contains(t, string(forma.Policies[0]), "my-policy")
+
+	// Access-pattern assertions: exactly one batched call, zero per-item calls.
+	assert.Equal(t, 1, ds.loadStandalonePoliciesByLabelsCalls,
+		"LoadStandalonePoliciesByLabels must be called exactly once")
+	assert.Equal(t, 0, ds.getStandalonePolicyCalls,
+		"GetStandalonePolicy must not be called (N+1 avoided)")
+	assert.Equal(t, 1, ds.loadStacksByLabelsCalls, "LoadStacksByLabels must be called exactly once")
+	assert.Equal(t, 0, ds.getStackByLabelCalls, "GetStackByLabel must not be called (N+1 avoided)")
 }

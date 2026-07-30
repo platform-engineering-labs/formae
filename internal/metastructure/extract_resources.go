@@ -66,15 +66,22 @@ func (m *Metastructure) ExtractResources(query string) (*pkgmodel.Forma, error) 
 	}
 
 	if len(stackLabels) > 0 {
+		foundStacks, err := m.Datastore.LoadStacksByLabels(stackLabels)
+		if err != nil {
+			slog.Error("Failed to load stacks by labels", "error", err)
+			return nil, err
+		}
+
+		// Build a lookup so we can synthesize entries for labels with no datastore row.
+		stackByLabel := make(map[string]*pkgmodel.Stack, len(foundStacks))
+		for _, s := range foundStacks {
+			stackByLabel[s.Label] = s
+		}
+
 		forma.Stacks = make([]pkgmodel.Stack, 0, len(stackLabels))
 		for _, label := range stackLabels {
-			stack, err := m.Datastore.GetStackByLabel(label)
-			if err != nil {
-				slog.Error("Failed to load stack by label", "label", label, "error", err)
-				continue
-			}
-			if stack != nil {
-				forma.Stacks = append(forma.Stacks, *stack)
+			if s, ok := stackByLabel[label]; ok {
+				forma.Stacks = append(forma.Stacks, *s)
 			} else {
 				// Stack not found in datastore (e.g. $unmanaged): synthesize a
 				// minimal entry with no description. Description is optional, so we
@@ -102,21 +109,25 @@ func (m *Metastructure) ExtractResources(query string) (*pkgmodel.Forma, error) 
 
 	// Load standalone policies and add to forma
 	if len(uniquePolicyLabels) > 0 {
-		forma.Policies = make([]json.RawMessage, 0, len(uniquePolicyLabels))
+		policyLabels := make([]string, 0, len(uniquePolicyLabels))
 		for label := range uniquePolicyLabels {
-			policy, err := m.Datastore.GetStandalonePolicy(label)
+			policyLabels = append(policyLabels, label)
+		}
+
+		foundPolicies, err := m.Datastore.LoadStandalonePoliciesByLabels(policyLabels)
+		if err != nil {
+			slog.Error("Failed to load standalone policies by labels", "error", err)
+			return nil, err
+		}
+
+		forma.Policies = make([]json.RawMessage, 0, len(foundPolicies))
+		for _, policy := range foundPolicies {
+			policyJSON, err := json.Marshal(policy)
 			if err != nil {
-				slog.Error("Failed to load standalone policy", "label", label, "error", err)
+				slog.Error("Failed to marshal standalone policy", "label", policy.GetLabel(), "error", err)
 				continue
 			}
-			if policy != nil {
-				policyJSON, err := json.Marshal(policy)
-				if err != nil {
-					slog.Error("Failed to marshal standalone policy", "label", label, "error", err)
-					continue
-				}
-				forma.Policies = append(forma.Policies, policyJSON)
-			}
+			forma.Policies = append(forma.Policies, policyJSON)
 		}
 	}
 

@@ -49,6 +49,9 @@ func (m *mockDatastore) QueryFormaCommands(_ *StatusQuery) ([]*forma_command.For
 func (m *mockDatastore) QueryResources(_ *ResourceQuery) ([]*pkgmodel.Resource, error) {
 	return nil, nil
 }
+func (m *mockDatastore) ListResourceSummaries(_ *ResourceQuery) ([]pkgmodel.ResourceSummary, error) {
+	return nil, nil
+}
 func (m *mockDatastore) StoreResource(_ *pkgmodel.Resource, _ string, _ ...string) (string, error) {
 	return "", nil
 }
@@ -96,9 +99,10 @@ func (m *mockDatastore) LoadAllResourcesByStack() (map[string][]*pkgmodel.Resour
 func (m *mockDatastore) CreateStack(_ *pkgmodel.Stack, _ string) (string, error) { return "", nil }
 func (m *mockDatastore) UpdateStack(_ *pkgmodel.Stack, _ string) (string, error) { return "", nil }
 func (m *mockDatastore) DeleteStack(_, _ string) (string, error)                 { return "", nil }
-func (m *mockDatastore) GetStackByLabel(_ string) (*pkgmodel.Stack, error)       { return nil, nil }
-func (m *mockDatastore) CountResourcesInStack(_ string) (int, error)             { return 0, nil }
-func (m *mockDatastore) ListAllStacks() ([]*pkgmodel.Stack, error)               { return nil, nil }
+func (m *mockDatastore) GetStackByLabel(_ string) (*pkgmodel.Stack, error)           { return nil, nil }
+func (m *mockDatastore) LoadStacksByLabels(_ []string) ([]*pkgmodel.Stack, error)    { return nil, nil }
+func (m *mockDatastore) CountResourcesInStack(_ string) (int, error)                 { return 0, nil }
+func (m *mockDatastore) ListAllStacks() ([]*pkgmodel.Stack, error)                   { return nil, nil }
 func (m *mockDatastore) CreateTarget(_ *pkgmodel.Target) (string, error)         { return "", nil }
 func (m *mockDatastore) UpdateTarget(_ *pkgmodel.Target) (string, error)         { return "", nil }
 func (m *mockDatastore) LoadTarget(_ string) (*pkgmodel.Target, error)           { return nil, nil }
@@ -139,6 +143,9 @@ func (m *mockDatastore) GetPoliciesForStack(_ string) ([]pkgmodel.Policy, error)
 	return nil, nil
 }
 func (m *mockDatastore) GetStandalonePolicy(_ string) (pkgmodel.Policy, error) {
+	return nil, nil
+}
+func (m *mockDatastore) LoadStandalonePoliciesByLabels(_ []string) ([]pkgmodel.Policy, error) {
 	return nil, nil
 }
 func (m *mockDatastore) ListAllStandalonePolicies() ([]pkgmodel.Policy, error) { return nil, nil }

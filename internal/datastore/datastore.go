@@ -282,6 +282,11 @@ type Datastore interface {
 	DeleteStack(label string, commandID string) (string, error)
 	// GetStackByLabel retrieves stack by its label (latest non-deleted version)
 	GetStackByLabel(label string) (*pkgmodel.Stack, error)
+	// LoadStacksByLabels retrieves multiple stacks by their labels in a single query.
+	// Only found stacks are returned; labels with no matching non-deleted stack row are
+	// omitted from the result. The caller is responsible for synthesizing entries for
+	// any labels not present in the returned slice.
+	LoadStacksByLabels(labels []string) ([]*pkgmodel.Stack, error)
 	// CountResourcesInStack returns the count of non-deleted resources in a stack
 	CountResourcesInStack(label string) (int, error)
 	// ListAllStacks returns all non-deleted stack entries
@@ -372,6 +377,10 @@ type Datastore interface {
 	// GetStandalonePolicy retrieves a standalone policy by label (stack_id IS NULL)
 	// Returns nil, nil if no policy is found
 	GetStandalonePolicy(label string) (pkgmodel.Policy, error)
+	// LoadStandalonePoliciesByLabels retrieves multiple standalone policies by their
+	// labels in a single query. Only found, non-deleted policies are returned; labels
+	// with no matching row are omitted from the result.
+	LoadStandalonePoliciesByLabels(labels []string) ([]pkgmodel.Policy, error)
 	// ListAllStandalonePolicies returns all non-deleted standalone policies (stack_id IS NULL)
 	ListAllStandalonePolicies() ([]pkgmodel.Policy, error)
 	// AttachPolicyToStack creates an association between a standalone policy and a stack

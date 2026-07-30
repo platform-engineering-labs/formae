@@ -4449,6 +4449,66 @@ func (d *DatastoreAuroraDataAPI) GetStackByLabel(label string) (*pkgmodel.Stack,
 	return stack, nil
 }
 
+func (d *DatastoreAuroraDataAPI) LoadStacksByLabels(labels []string) ([]*pkgmodel.Stack, error) {
+	if len(labels) == 0 {
+		return []*pkgmodel.Stack{}, nil
+	}
+
+	ctx := context.Background()
+
+	placeholders := make([]string, len(labels))
+	params := []types.SqlParameter{}
+	for i, label := range labels {
+		paramName := fmt.Sprintf("label_%d", i)
+		placeholders[i] = ":" + paramName
+		params = append(params, types.SqlParameter{
+			Name: aws.String(paramName), Value: &types.FieldMemberStringValue{Value: label},
+		})
+	}
+
+	query := fmt.Sprintf(`
+		SELECT label, id, description FROM (
+			SELECT label, id, description, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) AS rn
+			FROM stacks
+			WHERE label IN (%s)
+		) sub
+		WHERE rn = 1 AND operation != 'delete'
+	`, strings.Join(placeholders, ","))
+
+	output, err := d.executeStatement(ctx, query, params)
+	if err != nil {
+		return nil, err
+	}
+
+	stacks := make([]*pkgmodel.Stack, 0, len(output.Records))
+	for _, record := range output.Records {
+		if len(record) < 3 {
+			continue
+		}
+		label, _ := getStringField(record[0])
+		id, _ := getStringField(record[1])
+		description, _ := getStringField(record[2])
+
+		stack := &pkgmodel.Stack{
+			ID:          id,
+			Label:       label,
+			Description: description,
+		}
+
+		policies, err := d.loadPoliciesForStackAsJSON(ctx, id)
+		if err != nil {
+			slog.Warn("Failed to load policies for stack", "label", label, "error", err)
+		} else {
+			stack.Policies = policies
+		}
+
+		stacks = append(stacks, stack)
+	}
+
+	return stacks, nil
+}
+
 // loadPoliciesForStackAsJSON loads all policies for a stack and returns them as JSON.
 // For inline policies, returns the full policy JSON.
 // For standalone policies, returns {"$ref": "policy://label"} format.
@@ -4856,6 +4916,60 @@ func (d *DatastoreAuroraDataAPI) GetStandalonePolicy(label string) (pkgmodel.Pol
 	policyDataStr, _ := getStringField(record[2])
 
 	return deserializePolicyAurora(policyLabel, policyType, policyDataStr, "")
+}
+
+func (d *DatastoreAuroraDataAPI) LoadStandalonePoliciesByLabels(labels []string) ([]pkgmodel.Policy, error) {
+	if len(labels) == 0 {
+		return []pkgmodel.Policy{}, nil
+	}
+
+	ctx := context.Background()
+
+	placeholders := make([]string, len(labels))
+	params := []types.SqlParameter{}
+	for i, label := range labels {
+		paramName := fmt.Sprintf("label_%d", i)
+		placeholders[i] = ":" + paramName
+		params = append(params, types.SqlParameter{
+			Name: aws.String(paramName), Value: &types.FieldMemberStringValue{Value: label},
+		})
+	}
+
+	query := fmt.Sprintf(`
+		WITH latest_policies AS (
+			SELECT id, label, policy_type, policy_data, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) AS rn
+			FROM policies
+			WHERE label IN (%s) AND (stack_id IS NULL OR stack_id = '')
+		)
+		SELECT label, policy_type, policy_data
+		FROM latest_policies
+		WHERE rn = 1 AND operation != 'delete'
+	`, strings.Join(placeholders, ","))
+
+	result, err := d.executeStatement(ctx, query, params)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load standalone policies by labels: %w", err)
+	}
+
+	var policies []pkgmodel.Policy
+	for _, record := range result.Records {
+		if len(record) < 3 {
+			continue
+		}
+		label, _ := getStringField(record[0])
+		policyType, _ := getStringField(record[1])
+		policyDataStr, _ := getStringField(record[2])
+
+		policy, err := deserializePolicyAurora(label, policyType, policyDataStr, "")
+		if err != nil {
+			slog.Warn("Failed to deserialize policy", "label", label, "error", err)
+			continue
+		}
+		policies = append(policies, policy)
+	}
+
+	return policies, nil
 }
 
 func (d *DatastoreAuroraDataAPI) ListAllStandalonePolicies() ([]pkgmodel.Policy, error) {

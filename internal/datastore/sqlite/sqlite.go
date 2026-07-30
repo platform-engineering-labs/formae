@@ -1751,6 +1751,74 @@ func (d DatastoreSQLite) GetStackByLabel(label string) (*pkgmodel.Stack, error) 
 	return stack, nil
 }
 
+func (d DatastoreSQLite) LoadStacksByLabels(labels []string) ([]*pkgmodel.Stack, error) {
+	_, span := sqliteTracer.Start(context.Background(), "LoadStacksByLabels")
+	defer span.End()
+
+	if len(labels) == 0 {
+		return []*pkgmodel.Stack{}, nil
+	}
+
+	placeholders := make([]string, len(labels))
+	args := make([]any, len(labels))
+	for i, label := range labels {
+		placeholders[i] = "?"
+		args[i] = label
+	}
+
+	query := fmt.Sprintf(`
+		SELECT label, id, description FROM (
+			SELECT label, id, description, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version DESC) AS rn
+			FROM stacks
+			WHERE label IN (%s)
+		) sub
+		WHERE rn = 1 AND operation != 'delete'
+	`, strings.Join(placeholders, ","))
+
+	rows, err := d.conn.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	type stackRow struct {
+		label, id, description string
+	}
+	var stackRows []stackRow
+	for rows.Next() {
+		var r stackRow
+		if err := rows.Scan(&r.label, &r.id, &r.description); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		stackRows = append(stackRows, r)
+	}
+	_ = rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	stacks := make([]*pkgmodel.Stack, 0, len(stackRows))
+	for _, r := range stackRows {
+		stack := &pkgmodel.Stack{
+			ID:          r.id,
+			Label:       r.label,
+			Description: r.description,
+		}
+
+		policies, err := d.loadPoliciesForStackAsJSON(r.id)
+		if err != nil {
+			slog.Warn("Failed to load policies for stack", "label", r.label, "error", err)
+		} else {
+			stack.Policies = policies
+		}
+
+		stacks = append(stacks, stack)
+	}
+
+	return stacks, nil
+}
+
 // loadPoliciesForStackAsJSON loads all policies for a stack and returns them as JSON.
 // For inline policies, returns the full policy JSON including Type and Label.
 // For standalone policies, returns {"$ref": "policy://label"} format.
@@ -2124,6 +2192,59 @@ func (d DatastoreSQLite) GetStandalonePolicy(label string) (pkgmodel.Policy, err
 	}
 
 	return deserializePolicy(policyLabel, policyType, policyDataStr, "")
+}
+
+func (d DatastoreSQLite) LoadStandalonePoliciesByLabels(labels []string) ([]pkgmodel.Policy, error) {
+	_, span := sqliteTracer.Start(context.Background(), "LoadStandalonePoliciesByLabels")
+	defer span.End()
+
+	if len(labels) == 0 {
+		return []pkgmodel.Policy{}, nil
+	}
+
+	placeholders := make([]string, len(labels))
+	args := make([]any, len(labels))
+	for i, label := range labels {
+		placeholders[i] = "?"
+		args[i] = label
+	}
+
+	query := fmt.Sprintf(`
+		WITH latest_policies AS (
+			SELECT id, label, policy_type, policy_data, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version DESC) AS rn
+			FROM policies
+			WHERE label IN (%s) AND (stack_id IS NULL OR stack_id = '')
+		)
+		SELECT label, policy_type, policy_data
+		FROM latest_policies
+		WHERE rn = 1 AND operation != 'delete'
+	`, strings.Join(placeholders, ","))
+
+	rows, err := d.conn.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load standalone policies by labels: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var policies []pkgmodel.Policy
+	for rows.Next() {
+		var policyLabel, policyType, policyDataStr string
+		if err := rows.Scan(&policyLabel, &policyType, &policyDataStr); err != nil {
+			return nil, fmt.Errorf("failed to scan policy: %w", err)
+		}
+		policy, err := deserializePolicy(policyLabel, policyType, policyDataStr, "")
+		if err != nil {
+			slog.Warn("Failed to deserialize policy", "label", policyLabel, "error", err)
+			continue
+		}
+		policies = append(policies, policy)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating policies: %w", err)
+	}
+
+	return policies, nil
 }
 
 func (d DatastoreSQLite) ListAllStandalonePolicies() ([]pkgmodel.Policy, error) {
