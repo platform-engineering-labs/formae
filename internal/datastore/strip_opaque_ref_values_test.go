@@ -172,6 +172,47 @@ func TestStripOpaqueRefValues_StripsInsideArray(t *testing.T) {
 	assert.NotContains(t, string(out), "hidden")
 }
 
+// TestStripOpaqueRefValues_StripsNullRefOpaqueValue verifies that an envelope
+// whose $ref key is present but JSON null, together with $visibility:"Opaque",
+// is still treated as an opaque $ref envelope and has its $value stripped. The
+// envelope is defined by the presence of the $ref key, not by its value being
+// non-null.
+func TestStripOpaqueRefValues_StripsNullRefOpaqueValue(t *testing.T) {
+	input := json.RawMessage(`{
+		"credentials": {
+			"$ref": null,
+			"$visibility": "Opaque",
+			"$value": "super-secret-plaintext"
+		}
+	}`)
+
+	out, err := StripOpaqueRefValues(input)
+	require.NoError(t, err)
+
+	var result map[string]any
+	require.NoError(t, json.Unmarshal(out, &result))
+
+	creds := result["credentials"].(map[string]any)
+	_, hasValue := creds["$value"]
+	assert.False(t, hasValue, "$value must be stripped even when $ref is null")
+	assert.NotContains(t, string(out), "super-secret-plaintext")
+}
+
+// TestAssertNoOpaqueRefValue_RejectsNullRefWithValue verifies the reject-guard
+// treats a present-but-null $ref key together with $visibility:"Opaque" as an
+// opaque $ref envelope, so a surviving $value is rejected rather than persisted.
+func TestAssertNoOpaqueRefValue_RejectsNullRefWithValue(t *testing.T) {
+	envelope := map[string]any{
+		"$ref":        nil,
+		"$visibility": "Opaque",
+		"$value":      "super-secret",
+	}
+
+	err := assertNoOpaqueRefValue(envelope, "")
+	require.Error(t, err, "guard must reject a null-$ref opaque envelope that still carries $value")
+	assert.NotContains(t, err.Error(), "super-secret", "error must not leak the secret value")
+}
+
 // TestStripOpaqueRefValues_EmptyInput verifies that an empty RawMessage is
 // returned as-is without error.
 func TestStripOpaqueRefValues_EmptyInput(t *testing.T) {
