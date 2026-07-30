@@ -178,8 +178,10 @@ func kittyEncodeImage(img image.Image, cols, rows int) string {
 			}
 			fmt.Fprintf(&seq, "\033_Ga=T,f=100,C=1,q=2,%sm=%d;%s\033\\", footprint, more, chunk)
 		} else {
-			// Continuation chunks
-			fmt.Fprintf(&seq, "\033_Gm=%d;%s\033\\", more, chunk)
+			// Continuation chunks: the spec allows only m and optionally q
+			// here. Kitty proper inherits q from the first chunk, but repeat
+			// q=2 for implementations that don't.
+			fmt.Fprintf(&seq, "\033_Gq=2,m=%d;%s\033\\", more, chunk)
 		}
 	}
 
