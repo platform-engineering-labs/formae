@@ -28,7 +28,7 @@ import (
 // error so tests can drive NewChangeset failure without full actor infrastructure.
 type stubSyncResourcesDatastore struct {
 	datastore.Datastore
-	targets     []*pkgmodel.Target
+	targets       []*pkgmodel.Target
 	loadTargetErr error
 }
 
