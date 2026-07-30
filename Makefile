@@ -246,6 +246,8 @@ mutation-test: build
 
 test-schema-pkl:
 	cd internal/schema/pkl/schema && pkl test tests/formae.pkl
+	cd internal/schema/pkl/schema && pkl test tests/collection_resolvable_test.pkl
+	cd internal/schema/pkl/schema && pkl test tests/secret_resolvable_test.pkl
 	cd internal/schema/pkl/assets && pkl test tests/PklProjectTemplate_test.pkl
 
 test-generator-pkl:
