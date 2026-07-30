@@ -10,7 +10,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"testing"
 	"time"
 
@@ -471,25 +470,12 @@ func TestSecretHashing_ResolveCacheDoesNotLogSecret(t *testing.T) {
 	})
 }
 
-// TestSecretHashing_TargetConfigResolvedSecretStoredAsPlaintext_KnownGap documents a
-// REAL, currently-unaddressed plaintext leak found while writing the workflow tests
-// above: when a target's Config $refs a schema-opaque resource property (e.g. a
-// SecretsManager SecretString), ResolveCache.preserveRefMetadata correctly re-wraps
-// the resolved value in an {"$value":...,"$visibility":"Opaque"} envelope, but nothing
-// downstream (TargetUpdater / resource_persister's target-store path) hashes that
-// envelope before it is persisted to the targets table — unlike the resources and
-// resource_updates tables, which hash at their write choke
-// points. The plaintext secret is stored verbatim in targets.config.
-//
-// This sink is outside the hash-at-rest scope (which covers resource properties/
-// resource_updates, not target configs) and fixing it is more than a wiring fix — a
-// target Config has no per-field schema the way a resource does, and the resolved
-// value here is later read back and sent live to a plugin as TargetConfig, so hashing
-// it here needs its own design (mirroring the resource-side hash-at-rest +
-// hash-vs-hash drift convergence work) rather than a quick patch. Left as a SKIPPED,
-// self-documenting test that pins the known gap — un-skip once a target-config
-// hashing fix lands.
-func TestSecretHashing_TargetConfigResolvedSecretStoredAsPlaintext_KnownGap(t *testing.T) {
+// TestSecretHashing_TargetConfigResolvedSecretStoredAsReference verifies that when a
+// target's Config contains a $ref pointing to a schema-opaque resource property (e.g.
+// a SecretsManager SecretString), the persisted targets.config retains the $ref pointer
+// but does not store the resolved plaintext value or the intermediate $value envelope.
+// Only the reference is persisted; the opaque value is stripped at the write boundary.
+func TestSecretHashing_TargetConfigResolvedSecretStoredAsReference(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		const plaintextSecret = "resolve-cache-must-not-log-this-secret"
 
@@ -533,14 +519,9 @@ func TestSecretHashing_TargetConfigResolvedSecretStoredAsPlaintext_KnownGap(t *t
 		require.NotNil(t, consumerTarget)
 		t.Logf("targets.config for %q: %s", "consumer", consumerTarget.Config)
 
-		// Skip (rather than fail) while the gap is open, so this file's required suite
-		// stays green; the moment the underlying leak is fixed, this reverts to a plain
-		// assertion and the test starts passing for real with no code change needed.
-		if strings.Contains(string(consumerTarget.Config), plaintextSecret) {
-			t.Skip("KNOWN GAP: targets.config stores a $ref-resolved schema-opaque value as " +
-				"plaintext — see this test's doc comment. Tracked for a follow-up fix; not " +
-				"addressed by the schema-keyed opaque-value hashing this test covers.")
-		}
+		// The $ref pointer is preserved in persisted config; the resolved opaque value is not.
+		assert.Contains(t, string(consumerTarget.Config), "$ref")
+		assert.NotContains(t, string(consumerTarget.Config), `"$value"`)
 		assert.NotContains(t, string(consumerTarget.Config), plaintextSecret)
 	})
 }
