@@ -13,6 +13,7 @@ import (
 
 	"log/slog"
 
+	"github.com/platform-engineering-labs/formae/internal/datastore"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
@@ -69,6 +70,7 @@ func NewChangeset(
 	targetUpdates []target_update.TargetUpdate,
 	commandID string,
 	command pkgmodel.Command,
+	ds datastore.Datastore,
 ) (Changeset, error) {
 	changeset := Changeset{
 		CommandID:      commandID,
@@ -79,6 +81,18 @@ func NewChangeset(
 	if err := changeset.DAG.Init(resourceUpdates, command); err != nil {
 		return Changeset{}, err
 	}
+
+	// Synthesize Resolve target ops for targets that a resource op references but
+	// that carry no real target update in this command. Such an unchanged target
+	// may still hold opaque $ref config that must be resolved before dependent
+	// ops dispatch it to the plugin. These synthetic ops are added as target
+	// updates so the shared target/resource edge-building wires them like a real
+	// create/update.
+	syntheticResolves, err := synthesizeResolveTargetUpdates(resourceUpdates, targetUpdates, ds)
+	if err != nil {
+		return Changeset{}, err
+	}
+	targetUpdates = append(targetUpdates, syntheticResolves...)
 
 	// Copy target updates into a local slice so the DAG owns its own memory.
 	// Without this, DAG nodes would point into the FormaCommand's TargetUpdates
@@ -127,6 +141,72 @@ func NewChangeset(
 	return changeset, nil
 }
 
+// synthesizeResolveTargetUpdates builds synthetic Resolve target ops for targets
+// that a resource op references but that are NOT already covered by a real
+// Create/Update/Replace/Delete target update in this command.
+//
+// An unchanged target may still hold opaque $ref config (e.g. a secret). Without a
+// real target update carrying resolved desired config, that config would be
+// dispatched to the plugin unresolved. For each such distinct target label, the
+// PERSISTED target row is loaded (a target with a real update already carries its
+// desired config, so it is never synthesized for), its config is scanned for
+// resolvable $refs using the same extractor that populates a target update's
+// RemainingResolvables, and — if any exist — a NewResolveTargetUpdate is appended.
+//
+// A nil datastore (unit tests that never reference persisted targets) or a target
+// that is not found is treated as "nothing to synthesize" and skipped.
+func synthesizeResolveTargetUpdates(
+	resourceUpdates []resource_update.ResourceUpdate,
+	targetUpdates []target_update.TargetUpdate,
+	ds datastore.Datastore,
+) ([]target_update.TargetUpdate, error) {
+	// Targets already covered by a real target update in this command must never be
+	// synthesized for — their update carries the desired (and re-resolved) config.
+	covered := make(map[string]bool)
+	for i := range targetUpdates {
+		covered[targetUpdates[i].Target.Label] = true
+	}
+
+	// Distinct candidate target labels referenced by a resource op, in first-seen
+	// order for a stable synthetic list.
+	seen := make(map[string]bool)
+	var candidates []string
+	consider := func(label string) {
+		if label == "" || covered[label] || seen[label] {
+			return
+		}
+		seen[label] = true
+		candidates = append(candidates, label)
+	}
+	for i := range resourceUpdates {
+		ru := &resourceUpdates[i]
+		consider(ru.DesiredState.Target)
+		consider(ru.ResourceTarget.Label)
+	}
+
+	if len(candidates) == 0 || ds == nil {
+		return nil, nil
+	}
+
+	var synthetic []target_update.TargetUpdate
+	for _, label := range candidates {
+		persisted, err := ds.LoadTarget(label)
+		if err != nil {
+			return nil, fmt.Errorf("synthesize resolve target %q: %w", label, err)
+		}
+		if persisted == nil {
+			continue
+		}
+		resolvables := resolver.ExtractResolvableURIsFromJSON(persisted.Config)
+		if len(resolvables) == 0 {
+			continue
+		}
+		synthetic = append(synthetic, target_update.NewResolveTargetUpdate(*persisted, resolvables))
+	}
+
+	return synthetic, nil
+}
+
 // createOperationURI creates a unique URI that includes the operation type
 func createOperationURI(baseURI pkgmodel.FormaeURI, operation resource_update.OperationType) pkgmodel.FormaeURI {
 	return pkgmodel.FormaeURI(fmt.Sprintf("%s/%s/%s", string(baseURI.KSUID()), string(baseURI.PropertyPath()), operation))
@@ -149,11 +229,12 @@ func (p *ExecutionDAG) buildOperationRelationships(allOps []resource_update.Reso
 //   - Delete:  resource deletes → target delete
 //   - Resolvables: target create/update → depends on resource creates it references
 //
-// For a target create/update node, every create/update resource op on that target
-// depends on it. A delete op on that target also depends on it, but only when the
-// target update re-resolves config ($ref → $value): the delete must dispatch with
+// For a target create/update/resolve node, every create/update resource op on that
+// target depends on it. A delete op on that target also depends on it, but only when
+// the target update re-resolves config ($ref → $value): the delete must dispatch with
 // the resolved config rather than the stale $ref-only snapshot. That delete edge is
-// gated on resolvables and skipped when it would close a cycle.
+// gated on resolvables and skipped when it would close a cycle. A synthetic Resolve
+// node is treated exactly like a create/update here.
 func (p *ExecutionDAG) buildTargetResourceEdges(targetUpdates []target_update.TargetUpdate) {
 	// Build resolvable-based dependency edges for target create/update operations.
 	// When a target config contains $ref to a resource property, the target node
@@ -164,7 +245,9 @@ func (p *ExecutionDAG) buildTargetResourceEdges(targetUpdates []target_update.Ta
 	// This ensures the target is persisted (and resolved, if it has resolvables) before
 	// the dependent op dispatches its config to the plugin.
 	for _, tu := range targetUpdates {
-		if tu.Operation == target_update.TargetOperationCreate || tu.Operation == target_update.TargetOperationUpdate {
+		if tu.Operation == target_update.TargetOperationCreate ||
+			tu.Operation == target_update.TargetOperationUpdate ||
+			tu.Operation == target_update.TargetOperationResolve {
 			targetNode := p.Nodes[tu.NodeURI()]
 			if targetNode == nil {
 				continue
@@ -527,7 +610,9 @@ func (p *ExecutionDAG) connectDeleteToCreate(allOps []resource_update.ResourceUp
 // buildTargetResolvableEdges links target nodes that have resolvables to the
 // resource nodes they depend on.
 //
-// For create/update: target waits for the resource it depends on (normal order).
+// For create/update/resolve: target waits for the resource it depends on (normal
+// order) — a synthetic Resolve node whose $ref points at a same-command source
+// resource waits for that resource's create/update just like a real update.
 // For delete: the resource delete waits for the target delete (reversed order),
 // ensuring resources on a dependent target are destroyed before the resource
 // that provides the target's config (e.g., Grafana dashboards deleted before

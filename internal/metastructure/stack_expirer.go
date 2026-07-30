@@ -250,7 +250,7 @@ func prepareDestroyExpiredStack(ds datastore.Datastore, stackInfo datastore.Expi
 	)
 
 	// Create changeset
-	cs, err := changeset.NewChangeset(resourceUpdates, nil, destroyCommand.ID, pkgmodel.CommandDestroy)
+	cs, err := changeset.NewChangeset(resourceUpdates, nil, destroyCommand.ID, pkgmodel.CommandDestroy, ds)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create changeset: %w", err)
 	}

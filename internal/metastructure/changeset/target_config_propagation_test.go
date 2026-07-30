@@ -66,7 +66,7 @@ func TestBuildTargetResourceEdges_MutableTargetUpdate_AllDependentOpsDependOnTar
 
 	targetUpdates := []target_update.TargetUpdate{mutableResolvableTargetUpdate(targetLabel)}
 
-	cs, err := NewChangeset(resourceUpdates, targetUpdates, "cmd-ordering", pkgmodel.CommandApply)
+	cs, err := NewChangeset(resourceUpdates, targetUpdates, "cmd-ordering", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	targetNode := cs.DAG.Nodes[pkgmodel.FormaeURI("target://"+targetLabel+"/update")]
@@ -106,7 +106,7 @@ func TestNewChangeset_ResourceReplaceOnResolvableTarget_RemainsAcyclic(t *testin
 	}
 	targetUpdates := []target_update.TargetUpdate{mutableResolvableTargetUpdate(targetLabel)}
 
-	cs, err := NewChangeset(resourceUpdates, targetUpdates, "cmd-replace-acyclic", pkgmodel.CommandApply)
+	cs, err := NewChangeset(resourceUpdates, targetUpdates, "cmd-replace-acyclic", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	assert.False(t, cs.DAG.HasCycles(),
@@ -147,7 +147,7 @@ func TestBuildTargetResourceEdges_CycleProneDeleteEdge_IsSkipped(t *testing.T) {
 		},
 	}
 
-	cs, err := NewChangeset(resourceUpdates, targetUpdates, "cmd-cycle-guard", pkgmodel.CommandApply)
+	cs, err := NewChangeset(resourceUpdates, targetUpdates, "cmd-cycle-guard", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	deleteNode := dagNodeForOp(t, cs.DAG, pkgmodel.NewFormaeURI(k, ""), resource_update.OperationDelete)
@@ -218,7 +218,7 @@ func TestChangeset_MutableTargetUpdate_DeleteDispatchesResolvedConfigAfterTarget
 	}
 	targetUpdates := []target_update.TargetUpdate{mutableResolvableTargetUpdate(targetLabel)}
 
-	cs, err := NewChangeset(resourceUpdates, targetUpdates, "cmd-propagation", pkgmodel.CommandApply)
+	cs, err := NewChangeset(resourceUpdates, targetUpdates, "cmd-propagation", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	// isGrafanaDelete identifies the grafana delete among scheduled updates. A
