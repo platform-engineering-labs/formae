@@ -472,3 +472,314 @@ func resourceRowsFromForma(f *pkgmodel.Forma) []row {
 	}
 	return rows
 }
+
+// ---------------------------------------------------------------------------
+// Lazy detail: list from summaries, async detail fetch, stale guard
+// ---------------------------------------------------------------------------
+
+// buildFixtureClientWithSummaries returns a fakeClient seeded with explicit
+// summaries (including an ⚠-unmanaged row) and a detail-by-ksuid map.
+func buildFixtureClientWithSummaries() *fakeClient {
+	summaries := []pkgmodel.ResourceSummary{
+		{Label: "my-bucket", Stack: "production", Type: "AWS::S3::Bucket", NativeID: "arn:aws:s3:::my-bucket", Ksuid: "ksuid-001"},
+		{Label: "web-1", Stack: "production", Type: "AWS::EC2::Instance", NativeID: "i-0abc123456789", Ksuid: "ksuid-002"},
+		{Label: "old-logs", Stack: "$unmanaged", Type: "AWS::S3::Bucket", NativeID: "arn:aws:s3:::old-logs", Ksuid: "ksuid-003"},
+	}
+	details := map[string]*pkgmodel.Resource{
+		"ksuid-001": {Label: "my-bucket", Stack: "production", Type: "AWS::S3::Bucket", NativeID: "arn:aws:s3:::my-bucket", Managed: true},
+		"ksuid-002": {Label: "web-1", Stack: "production", Type: "AWS::EC2::Instance", NativeID: "i-0abc123456789", Managed: true},
+		"ksuid-003": {Label: "old-logs", Stack: "$unmanaged", Type: "AWS::S3::Bucket", NativeID: "arn:aws:s3:::old-logs", Managed: false},
+	}
+	fc := &fakeClient{summaries: summaries, detailsByKsuid: details}
+	// Also seed forma so existing ExtractResources-based tests still work.
+	fc.forma = &pkgmodel.Forma{
+		Resources: []pkgmodel.Resource{
+			{NativeID: "arn:aws:s3:::my-bucket", Stack: "production", Type: "AWS::S3::Bucket", Label: "my-bucket"},
+			{NativeID: "i-0abc123456789", Stack: "production", Type: "AWS::EC2::Instance", Label: "web-1"},
+			{NativeID: "arn:aws:s3:::old-logs", Stack: "$unmanaged", Type: "AWS::S3::Bucket", Label: "old-logs"},
+		},
+	}
+	return fc
+}
+
+// TestSummaryRow_Cells checks that resourceSummaryRow produces the correct cells.
+func TestSummaryRow_Cells(t *testing.T) {
+	s := pkgmodel.ResourceSummary{
+		Label: "my-bucket", Stack: "production",
+		Type: "AWS::S3::Bucket", NativeID: "arn:aws:s3:::my-bucket", Ksuid: "ksuid-001",
+	}
+	got := resourceSummaryRow(s)
+	assert.Equal(t, []string{"my-bucket", "production", "AWS::S3::Bucket", "arn:aws:s3:::my-bucket"}, got.cells)
+	assert.Equal(t, "my-bucket (AWS::S3::Bucket)", got.title)
+	assert.Equal(t, "ksuid-001", got.detailKsuid, "detailKsuid must carry the summary's ksuid")
+	assert.Nil(t, got.detail, "summary rows have no synchronous detail closure")
+}
+
+// TestSummaryRow_Cells_Unmanaged checks that ⚠ unmanaged is applied for $unmanaged stacks.
+func TestSummaryRow_Cells_Unmanaged(t *testing.T) {
+	s := pkgmodel.ResourceSummary{
+		Label: "old-logs", Stack: "$unmanaged",
+		Type: "AWS::S3::Bucket", NativeID: "arn:aws:s3:::old-logs", Ksuid: "ksuid-003",
+	}
+	got := resourceSummaryRow(s)
+	assert.Equal(t, []string{"old-logs", "⚠ unmanaged", "AWS::S3::Bucket", "arn:aws:s3:::old-logs"}, got.cells)
+	assert.Equal(t, "ksuid-003", got.detailKsuid)
+}
+
+// TestResourcesFetch_UsesSummaries verifies that the Resources tab fetch now
+// calls ListResourceSummaries and builds rows from summaries.
+func TestResourcesFetch_UsesSummaries(t *testing.T) {
+	fc := buildFixtureClientWithSummaries()
+	specs := newSpecs(nil)
+	rows, _, err := specs[TabResources].fetch(fc, "", true)
+	require.NoError(t, err)
+	require.Len(t, rows, 3)
+	// Row 0: my-bucket
+	assert.Equal(t, []string{"my-bucket", "production", "AWS::S3::Bucket", "arn:aws:s3:::my-bucket"}, rows[0].cells)
+	assert.Equal(t, "ksuid-001", rows[0].detailKsuid)
+	assert.Nil(t, rows[0].detail, "summary rows have no synchronous detail closure")
+	// Row 2: ⚠ unmanaged
+	assert.Equal(t, []string{"old-logs", "⚠ unmanaged", "AWS::S3::Bucket", "arn:aws:s3:::old-logs"}, rows[2].cells)
+	assert.Equal(t, "ksuid-003", rows[2].detailKsuid)
+}
+
+// TestLazyDetail_EnterFiresAsyncCmd verifies that pressing Enter on a resources
+// row with a detailKsuid returns a non-nil cmd (async detail fetch).
+func TestLazyDetail_EnterFiresAsyncCmd(t *testing.T) {
+	fc := buildFixtureClientWithSummaries()
+	opts := Options{
+		FocusTab: TabResources,
+		Now:      func() time.Time { return time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC) },
+	}
+	m := newTestInventoryModel(t, fc, opts)
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+
+	// Load summary rows directly (simulating the fetch response).
+	summaryRows := []row{
+		resourceSummaryRow(pkgmodel.ResourceSummary{Label: "my-bucket", Stack: "production", Type: "AWS::S3::Bucket", NativeID: "arn:aws:s3:::my-bucket", Ksuid: "ksuid-001"}),
+	}
+	mm, _ = mm.Update(tabLoadedMsg{tab: TabResources, rows: summaryRows})
+
+	// Press Enter — must return a non-nil async cmd.
+	var cmd tea.Cmd
+	mm, cmd = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	m = mm.(Model)
+	assert.True(t, m.detailOpen, "detail screen must open immediately")
+	assert.Equal(t, "ksuid-001", m.detailKsuid, "model must record the open ksuid")
+	require.NotNil(t, cmd, "Enter on a summary row must return an async fetch cmd")
+
+	// The loading placeholder must be shown.
+	assert.NotEmpty(t, m.detailBody, "detail body must have loading placeholder while fetching")
+}
+
+// TestLazyDetail_DetailLoadedMsgRendersDetail verifies that on receiving a
+// resourceDetailLoadedMsg the detail body is populated from resourceDetail.
+func TestLazyDetail_DetailLoadedMsgRendersDetail(t *testing.T) {
+	fc := buildFixtureClientWithSummaries()
+	opts := Options{
+		FocusTab: TabResources,
+		Now:      func() time.Time { return time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC) },
+	}
+	m := newTestInventoryModel(t, fc, opts)
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+
+	summaryRows := []row{
+		resourceSummaryRow(pkgmodel.ResourceSummary{Label: "my-bucket", Stack: "production", Type: "AWS::S3::Bucket", NativeID: "arn:aws:s3:::my-bucket", Ksuid: "ksuid-001"}),
+	}
+	mm, _ = mm.Update(tabLoadedMsg{tab: TabResources, rows: summaryRows})
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	seq := mm.(Model).detailReqSeq
+
+	// Deliver the detail loaded message.
+	res := &pkgmodel.Resource{
+		Label: "my-bucket", Stack: "production", Type: "AWS::S3::Bucket",
+		NativeID: "arn:aws:s3:::my-bucket", Managed: true,
+	}
+	mm, _ = mm.Update(resourceDetailLoadedMsg{ksuid: "ksuid-001", seq: seq, resource: res})
+
+	m = mm.(Model)
+	assert.True(t, m.detailOpen)
+	// Detail body must be populated — must contain resource identity lines.
+	bodyJoined := strings.Join(m.detailBody, "\n")
+	assert.Contains(t, bodyJoined, "my-bucket", "detail body must contain the resource label")
+}
+
+// TestLazyDetail_DetailLoadedMsg_NotFoundShowsMessage verifies that a
+// resourceDetailLoadedMsg carrying neither a resource nor an error (the
+// not-found case, e.g. the resource's latest version became a delete or reaped
+// tombstone between listing and open) replaces the loading placeholder with an
+// explicit message rather than leaving the detail stuck on "Loading…".
+func TestLazyDetail_DetailLoadedMsg_NotFoundShowsMessage(t *testing.T) {
+	fc := buildFixtureClientWithSummaries()
+	opts := Options{
+		FocusTab: TabResources,
+		Now:      func() time.Time { return time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC) },
+	}
+	m := newTestInventoryModel(t, fc, opts)
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+
+	summaryRows := []row{
+		resourceSummaryRow(pkgmodel.ResourceSummary{Label: "my-bucket", Stack: "production", Type: "AWS::S3::Bucket", NativeID: "arn:aws:s3:::my-bucket", Ksuid: "ksuid-001"}),
+	}
+	mm, _ = mm.Update(tabLoadedMsg{tab: TabResources, rows: summaryRows})
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	seq := mm.(Model).detailReqSeq
+
+	loadingBody := strings.Join(mm.(Model).detailBody, "\n")
+
+	// Deliver a not-found response: matching ksuid and seq, but nil resource and nil error.
+	mm, _ = mm.Update(resourceDetailLoadedMsg{ksuid: "ksuid-001", seq: seq, resource: nil, err: nil})
+
+	m = mm.(Model)
+	assert.True(t, m.detailOpen)
+	bodyJoined := strings.Join(m.detailBody, "\n")
+	assert.NotEqual(t, loadingBody, bodyJoined, "not-found response must replace the loading placeholder")
+	assert.Contains(t, bodyJoined, "no longer exists", "not-found detail must explain the resource is gone")
+}
+
+// TestLazyDetail_StaleGuard_WrongKsuid verifies that a resourceDetailLoadedMsg
+// whose ksuid differs from the currently-open row's ksuid is dropped.
+func TestLazyDetail_StaleGuard_WrongKsuid(t *testing.T) {
+	fc := buildFixtureClientWithSummaries()
+	opts := Options{
+		FocusTab: TabResources,
+		Now:      func() time.Time { return time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC) },
+	}
+	m := newTestInventoryModel(t, fc, opts)
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+
+	summaryRows := []row{
+		resourceSummaryRow(pkgmodel.ResourceSummary{Label: "my-bucket", Stack: "production", Type: "AWS::S3::Bucket", NativeID: "arn:aws:s3:::my-bucket", Ksuid: "ksuid-001"}),
+	}
+	mm, _ = mm.Update(tabLoadedMsg{tab: TabResources, rows: summaryRows})
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	// Capture the loading placeholder body.
+	loadingBody := mm.(Model).detailBody
+
+	// Deliver a response for a DIFFERENT ksuid (stale).
+	staleRes := &pkgmodel.Resource{Label: "old-logs", Stack: "$unmanaged", Type: "AWS::S3::Bucket", NativeID: "arn:aws:s3:::old-logs"}
+	mm, _ = mm.Update(resourceDetailLoadedMsg{ksuid: "ksuid-WRONG", resource: staleRes})
+
+	m = mm.(Model)
+	// The stale response must be dropped — body unchanged (still loading).
+	assert.Equal(t, loadingBody, m.detailBody, "stale response must be dropped; detail body must remain unchanged")
+}
+
+// TestLazyDetail_StaleGuard_DetailClosed verifies that a resourceDetailLoadedMsg
+// received after the detail is closed is dropped.
+func TestLazyDetail_StaleGuard_DetailClosed(t *testing.T) {
+	fc := buildFixtureClientWithSummaries()
+	opts := Options{
+		FocusTab: TabResources,
+		Now:      func() time.Time { return time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC) },
+	}
+	m := newTestInventoryModel(t, fc, opts)
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+
+	summaryRows := []row{
+		resourceSummaryRow(pkgmodel.ResourceSummary{Label: "my-bucket", Stack: "production", Type: "AWS::S3::Bucket", NativeID: "arn:aws:s3:::my-bucket", Ksuid: "ksuid-001"}),
+	}
+	mm, _ = mm.Update(tabLoadedMsg{tab: TabResources, rows: summaryRows})
+
+	// Open detail, then close it (esc).
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	require.True(t, mm.(Model).detailOpen)
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	require.False(t, mm.(Model).detailOpen, "detail must be closed after esc")
+	require.Empty(t, mm.(Model).detailKsuid, "detailKsuid must be cleared on esc")
+
+	// Now receive a late response — must be dropped (detailOpen=false).
+	res := &pkgmodel.Resource{Label: "my-bucket", Stack: "production", Type: "AWS::S3::Bucket", NativeID: "arn:aws:s3:::my-bucket"}
+	mm, _ = mm.Update(resourceDetailLoadedMsg{ksuid: "ksuid-001", resource: res})
+
+	assert.False(t, mm.(Model).detailOpen, "detail must remain closed after dropped stale response")
+}
+
+// TestLazyDetail_StaleGuard_ReopenSameKsuidOutOfOrder verifies that after an
+// open -> close -> reopen of the SAME row, a late response from the first
+// dispatch (older seq) is dropped even though its ksuid matches, so it cannot
+// overwrite the newer dispatch's response when the two arrive out of order.
+func TestLazyDetail_StaleGuard_ReopenSameKsuidOutOfOrder(t *testing.T) {
+	fc := buildFixtureClientWithSummaries()
+	opts := Options{
+		FocusTab: TabResources,
+		Now:      func() time.Time { return time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC) },
+	}
+	m := newTestInventoryModel(t, fc, opts)
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+
+	summaryRows := []row{
+		resourceSummaryRow(pkgmodel.ResourceSummary{Label: "my-bucket", Stack: "production", Type: "AWS::S3::Bucket", NativeID: "arn:aws:s3:::my-bucket", Ksuid: "ksuid-001"}),
+	}
+	mm, _ = mm.Update(tabLoadedMsg{tab: TabResources, rows: summaryRows})
+
+	// Open (first dispatch), then close.
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	firstSeq := mm.(Model).detailReqSeq
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEsc})
+
+	// Reopen the same row (second dispatch).
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	secondSeq := mm.(Model).detailReqSeq
+	require.Greater(t, secondSeq, firstSeq, "reopen must dispatch a newer request generation")
+
+	// The current (second) response lands first and renders successfully.
+	freshRes := &pkgmodel.Resource{Label: "my-bucket", Stack: "production", Type: "AWS::S3::Bucket", NativeID: "arn:aws:s3:::my-bucket", Managed: true}
+	mm, _ = mm.Update(resourceDetailLoadedMsg{ksuid: "ksuid-001", seq: secondSeq, resource: freshRes})
+	rendered := strings.Join(mm.(Model).detailBody, "\n")
+	require.Contains(t, rendered, "my-bucket")
+
+	// The stale first-dispatch response arrives last, carrying different content.
+	// Same ksuid, older seq — it must be dropped, leaving the newer render intact.
+	staleRes := &pkgmodel.Resource{Label: "STALE-must-not-render", Stack: "production", Type: "AWS::S3::Bucket", NativeID: "arn:aws:s3:::my-bucket"}
+	mm, _ = mm.Update(resourceDetailLoadedMsg{ksuid: "ksuid-001", seq: firstSeq, resource: staleRes})
+
+	final := strings.Join(mm.(Model).detailBody, "\n")
+	assert.Equal(t, rendered, final, "stale first-dispatch response must not overwrite the newer render")
+	assert.NotContains(t, final, "STALE-must-not-render", "stale response content must not appear")
+}
+
+// TestFastPath_OpenDetailFetchesLazily confirms that on the resources tab,
+// pressing Enter on a summary row fires an async fetch and ResourceDetailByKsuid
+// is called (detail is loaded lazily by ksuid).
+func TestFastPath_OpenDetailFetchesLazily(t *testing.T) {
+	fc := buildFixtureClientWithSummaries()
+	opts := Options{
+		FocusTab: TabResources,
+		Now:      func() time.Time { return time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC) },
+	}
+	m := newTestInventoryModel(t, fc, opts)
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+
+	summaryRows := []row{
+		resourceSummaryRow(pkgmodel.ResourceSummary{Label: "my-bucket", Stack: "production", Type: "AWS::S3::Bucket", NativeID: "arn:aws:s3:::my-bucket", Ksuid: "ksuid-001"}),
+	}
+	mm, _ = mm.Update(tabLoadedMsg{tab: TabResources, rows: summaryRows})
+
+	var cmd tea.Cmd
+	mm, cmd = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	m = mm.(Model)
+	assert.True(t, m.detailOpen, "detail screen must open")
+	require.NotNil(t, cmd, "fast path must return an async fetch cmd")
+	assert.Equal(t, "ksuid-001", m.detailKsuid, "fast path must set detailKsuid")
+
+	// Execute the cmd — this calls ResourceDetailByKsuid.
+	msg := cmd()
+	mm, _ = mm.Update(msg)
+	assert.Equal(t, 1, fc.resourceDetailByKsuidCalls, "fast path must call ResourceDetailByKsuid exactly once")
+
+	// The fetched resource must be rendered into the detail body.
+	m = mm.(Model)
+	bodyJoined := strings.Join(m.detailBody, "\n")
+	assert.Contains(t, bodyJoined, "my-bucket", "detail body must contain the fetched resource label")
+}

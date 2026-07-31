@@ -37,6 +37,10 @@ type Client interface {
 	ExtractTargets(query string, fromTUI bool) ([]*pkgmodel.Target, []string, error)
 	ExtractStacks(fromTUI bool) ([]*pkgmodel.Stack, []string, error)
 	ExtractPolicies(fromTUI bool) ([]apimodel.PolicyInventoryItem, []string, error)
+	// ListResourceSummaries returns lightweight resource summaries; detail is
+	// fetched lazily by ksuid via ResourceDetailByKsuid.
+	ListResourceSummaries(query string, fromTUI bool) ([]pkgmodel.ResourceSummary, []string, error)
+	ResourceDetailByKsuid(ksuid string, fromTUI bool) (*pkgmodel.Resource, []string, error)
 }
 
 // Options configures an inventory TUI session.
@@ -49,10 +53,15 @@ type Options struct {
 }
 
 // row is a render-ready table row with an optional detail expander.
+// When detailKsuid is non-empty, the detail is fetched lazily by ksuid rather
+// than computed synchronously via the detail closure. The two are mutually
+// exclusive: summary rows (resources tab) set detailKsuid and leave detail nil;
+// other tabs set detail and leave detailKsuid empty.
 type row struct {
-	cells  []string
-	title  string // display title used in the detail screen header
-	detail func(width int) []string
+	cells       []string
+	title       string // display title used in the detail screen header
+	detail      func(width int) []string
+	detailKsuid string // non-empty → lazy async detail fetch; empty → use detail closure
 }
 
 // tabSpec describes one inventory tab declaratively.
@@ -78,6 +87,19 @@ type tabLoadedMsg struct {
 	err  error
 }
 
+// resourceDetailLoadedMsg is the bubbletea message delivered when a lazy
+// resource detail fetch completes. ksuid carries the resource the fetch was
+// dispatched for, and seq carries the monotonic request generation so the
+// stale-response guard can drop responses that are no longer the latest
+// dispatch — including a second in-flight fetch for the same ksuid after an
+// open -> close -> reopen of the same row.
+type resourceDetailLoadedMsg struct {
+	ksuid    string
+	seq      uint64
+	resource *pkgmodel.Resource
+	err      error
+}
+
 // newSpecs returns the four tab specifications.
 func newSpecs(now func() time.Time) [4]tabSpec {
 	return [4]tabSpec{
@@ -101,16 +123,13 @@ func newSpecs(now func() time.Time) [4]tabSpec {
 				return cell
 			},
 			fetch: func(c Client, query string, fromTUI bool) ([]row, []string, error) {
-				forma, nags, err := c.ExtractResources(query, fromTUI)
+				summaries, nags, err := c.ListResourceSummaries(query, fromTUI)
 				if err != nil {
 					return nil, nags, err
 				}
-				if forma == nil {
-					return nil, nags, nil
-				}
-				rows := make([]row, 0, len(forma.Resources))
-				for i := range forma.Resources {
-					rows = append(rows, resourceRow(forma.Resources[i]))
+				rows := make([]row, 0, len(summaries))
+				for _, s := range summaries {
+					rows = append(rows, resourceSummaryRow(s))
 				}
 				return rows, nags, nil
 			},
@@ -199,5 +218,16 @@ func fetchCmd(c Client, specs [4]tabSpec, tab Tab, query string, fromTUI bool) t
 		spec := specs[tab]
 		rows, nags, err := spec.fetch(c, query, fromTUI)
 		return tabLoadedMsg{tab: tab, rows: rows, nags: nags, err: err}
+	}
+}
+
+// fetchResourceDetailCmd returns a bubbletea Cmd that fetches the full resource
+// detail for the given ksuid and delivers a resourceDetailLoadedMsg. The ksuid
+// and seq are carried back in the msg so the stale-response guard can accept
+// only the latest dispatch for the currently-open row.
+func fetchResourceDetailCmd(c Client, ksuid string, seq uint64) tea.Cmd {
+	return func() tea.Msg {
+		resource, _, err := c.ResourceDetailByKsuid(ksuid, true)
+		return resourceDetailLoadedMsg{ksuid: ksuid, seq: seq, resource: resource, err: err}
 	}
 }

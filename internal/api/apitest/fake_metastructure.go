@@ -69,20 +69,34 @@ type WrappedPolicyResponse struct {
 	Error    error
 }
 
+type WrappedSummaryResponse struct {
+	Summaries []pkgmodel.ResourceSummary
+	Error     error
+}
+
+type WrappedResourceResponse struct {
+	Resource *pkgmodel.Resource
+	Error    error
+}
+
 type FakeMetastructure struct {
-	ApplyResponses         []WrappedCommandResponse
-	DestroyResponses       []WrappedCommandResponse
-	ExtractResponses       []WrappedExtractResponse
-	TargetResponses        []WrappedTargetResponse
-	ListResponses          []WrappedListResponse
-	CancelResponses        []WrappedCancelResponse
-	DriftResponses         []WrappedDriftResponse
-	ReconcileResponses     []WrappedReconcileResponse
-	CheckTTLResponses      []WrappedCheckTTLResponse
-	StackResponses         []WrappedStackResponse
-	PolicyResponses        []WrappedPolicyResponse
-	RecordedCancelQueries  []string
-	RecordedExtractQueries []string
+	ApplyResponses           []WrappedCommandResponse
+	DestroyResponses         []WrappedCommandResponse
+	ExtractResponses         []WrappedExtractResponse
+	SummaryResponses         []WrappedSummaryResponse
+	ResourceByKsuidResponses []WrappedResourceResponse
+	TargetResponses          []WrappedTargetResponse
+	ListResponses            []WrappedListResponse
+	CancelResponses          []WrappedCancelResponse
+	DriftResponses           []WrappedDriftResponse
+	ReconcileResponses       []WrappedReconcileResponse
+	CheckTTLResponses        []WrappedCheckTTLResponse
+	StackResponses           []WrappedStackResponse
+	PolicyResponses          []WrappedPolicyResponse
+	RecordedCancelQueries    []string
+	RecordedExtractQueries   []string
+	RecordedSummaryQueries   []string
+	RecordedKsuidLookups     []string
 }
 
 func (m *FakeMetastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error) {
@@ -145,6 +159,55 @@ func (m *FakeMetastructure) ExtractResources(query string) (*pkgmodel.Forma, err
 		m.ExtractResponses = m.ExtractResponses[1:]
 	}
 	return next.Forma, next.Error
+}
+
+func (m *FakeMetastructure) ListResourceSummaries(query string) ([]pkgmodel.ResourceSummary, error) {
+	m.RecordedSummaryQueries = append(m.RecordedSummaryQueries, query)
+	if m.SummaryResponses == nil && len(m.ExtractResponses) > 0 {
+		// Derive summaries from the head ExtractResponses entry without consuming it.
+		resources := m.ExtractResponses[0].Forma.Resources
+		summaries := make([]pkgmodel.ResourceSummary, len(resources))
+		for i, r := range resources {
+			summaries[i] = pkgmodel.ResourceSummary{
+				Label:    r.Label,
+				Stack:    r.Stack,
+				Type:     r.Type,
+				NativeID: r.NativeID,
+				Ksuid:    r.Ksuid,
+			}
+		}
+		return summaries, nil
+	}
+	if len(m.SummaryResponses) == 0 {
+		return []pkgmodel.ResourceSummary{}, nil
+	}
+	next := m.SummaryResponses[0]
+	if len(m.SummaryResponses) > 1 {
+		m.SummaryResponses = m.SummaryResponses[1:]
+	}
+	return next.Summaries, next.Error
+}
+
+func (m *FakeMetastructure) ExtractResourceByKsuid(ksuid string) (*pkgmodel.Resource, error) {
+	m.RecordedKsuidLookups = append(m.RecordedKsuidLookups, ksuid)
+	if m.ResourceByKsuidResponses == nil && len(m.ExtractResponses) > 0 {
+		// Resolve from the head ExtractResponses entry without consuming it.
+		for i := range m.ExtractResponses[0].Forma.Resources {
+			r := &m.ExtractResponses[0].Forma.Resources[i]
+			if r.Ksuid == ksuid {
+				return r, nil
+			}
+		}
+		return nil, nil
+	}
+	if len(m.ResourceByKsuidResponses) == 0 {
+		return nil, nil
+	}
+	next := m.ResourceByKsuidResponses[0]
+	if len(m.ResourceByKsuidResponses) > 1 {
+		m.ResourceByKsuidResponses = m.ResourceByKsuidResponses[1:]
+	}
+	return next.Resource, next.Error
 }
 
 func (m *FakeMetastructure) ExtractTargets(query string) ([]*pkgmodel.Target, error) {

@@ -31,6 +31,11 @@ type fakeClient struct {
 	stacks   []*pkgmodel.Stack
 	policies []apimodel.PolicyInventoryItem
 
+	// summaries and detail-by-ksuid for the lazy-detail path. When summaries is
+	// nil, ListResourceSummaries derives them from forma (for backward compat).
+	summaries      []pkgmodel.ResourceSummary
+	detailsByKsuid map[string]*pkgmodel.Resource
+
 	// per-entity errors
 	formaErr    error
 	targetsErr  error
@@ -44,12 +49,13 @@ type fakeClient struct {
 	policiesNags []string
 
 	// recorders
-	resourcesQuery   string
-	resourcesFromTUI bool
-	targetsQuery     string
-	targetsFromTUI   bool
-	stacksFromTUI    bool
-	policiesFromTUI  bool
+	resourcesQuery             string
+	resourcesFromTUI           bool
+	targetsQuery               string
+	targetsFromTUI             bool
+	stacksFromTUI              bool
+	policiesFromTUI            bool
+	resourceDetailByKsuidCalls int
 }
 
 func (f *fakeClient) ExtractResources(query string, fromTUI bool) (*pkgmodel.Forma, []string, error) {
@@ -86,6 +92,69 @@ func (f *fakeClient) ExtractStacks(fromTUI bool) ([]*pkgmodel.Stack, []string, e
 func (f *fakeClient) ExtractPolicies(fromTUI bool) ([]apimodel.PolicyInventoryItem, []string, error) {
 	f.policiesFromTUI = fromTUI
 	return f.policies, f.policiesNags, f.policiesErr
+}
+
+// ListResourceSummaries returns the pre-seeded summaries. When summaries is nil
+// it derives them from forma.Resources so existing tests that only set forma
+// continue to work without modification.
+func (f *fakeClient) ListResourceSummaries(query string, fromTUI bool) ([]pkgmodel.ResourceSummary, []string, error) {
+	f.resourcesQuery = query
+	f.resourcesFromTUI = fromTUI
+	if f.formaErr != nil {
+		return nil, f.formaNags, f.formaErr
+	}
+	if f.summaries != nil {
+		// Use explicit summaries; apply a simple substring filter if query is set.
+		var filtered []pkgmodel.ResourceSummary
+		if query == "" {
+			filtered = f.summaries
+		} else {
+			needle := strings.ToLower(query)
+			for _, s := range f.summaries {
+				hay := strings.ToLower(s.Label + " " + s.Stack + " " + s.Type + " " + s.NativeID)
+				if strings.Contains(hay, needle) {
+					filtered = append(filtered, s)
+				}
+			}
+		}
+		return filtered, f.formaNags, nil
+	}
+	// Derive summaries from forma for backward compatibility with existing tests.
+	if f.forma == nil {
+		return nil, f.formaNags, nil
+	}
+	needle := strings.ToLower(query)
+	summaries := make([]pkgmodel.ResourceSummary, 0, len(f.forma.Resources))
+	for _, r := range f.forma.Resources {
+		if query != "" {
+			hay := strings.ToLower(r.NativeID + " " + r.Stack + " " + r.Type + " " + r.Label)
+			if !strings.Contains(hay, needle) {
+				continue
+			}
+		}
+		summaries = append(summaries, pkgmodel.ResourceSummary{
+			Label:    r.Label,
+			Stack:    r.Stack,
+			Type:     r.Type,
+			NativeID: r.NativeID,
+			Ksuid:    r.Ksuid,
+		})
+	}
+	return summaries, f.formaNags, nil
+}
+
+// ResourceDetailByKsuid returns the resource for the given ksuid from
+// detailsByKsuid, or nil if not found or map is nil. Increments the call counter.
+func (f *fakeClient) ResourceDetailByKsuid(ksuid string, _ bool) (*pkgmodel.Resource, []string, error) {
+	f.resourceDetailByKsuidCalls++
+	if f.detailsByKsuid == nil {
+		return nil, nil, nil
+	}
+	r, ok := f.detailsByKsuid[ksuid]
+	if !ok {
+		return nil, nil, nil
+	}
+	return r, nil, nil
 }
 
 // ---------------------------------------------------------------------------

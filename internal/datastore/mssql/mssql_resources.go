@@ -78,6 +78,49 @@ func (d *DatastoreMSSQL) QueryResources(query *datastore.ResourceQuery) ([]*pkgm
 	return resources, rows.Err()
 }
 
+func (d *DatastoreMSSQL) ListResourceSummaries(q *datastore.ResourceQuery) ([]pkgmodel.ResourceSummary, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "ListResourceSummaries")
+	defer span.End()
+
+	queryStr := fmt.Sprintf(`
+	SELECT label, stack, type, native_id, ksuid
+	FROM resources r1
+	WHERE NOT EXISTS (
+		SELECT 1
+		FROM resources r2
+		WHERE r1.uri = r2.uri
+		AND r2.version %[1]s > r1.version %[1]s
+	)
+	AND r1.operation != @p1 AND r1.operation != 'reaped'
+	`, binColl)
+	args := []any{string(resource_update.OperationDelete)}
+
+	queryStr = extendMSSQLQueryString(queryStr, q.NativeID, " AND native_id %s @p%d{esc}", &args)
+	queryStr = extendMSSQLQueryString(queryStr, q.Stack, " AND stack %s @p%d{esc}", &args)
+	queryStr = extendMSSQLQueryString(queryStr, q.Type, " AND LOWER(type) %s LOWER(@p%d){esc}", &args)
+	queryStr = extendMSSQLQueryString(queryStr, q.Label, " AND label %s @p%d{esc}", &args)
+	queryStr = extendMSSQLQueryString(queryStr, q.Target, " AND target %s @p%d{esc}", &args)
+	queryStr = extendMSSQLQueryString(queryStr, q.Managed, " AND managed %s @p%d", &args)
+	queryStr += " ORDER BY type, label"
+
+	rows, err := d.conn.QueryContext(ctx, queryStr, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var summaries []pkgmodel.ResourceSummary
+	for rows.Next() {
+		var s pkgmodel.ResourceSummary
+		if err := rows.Scan(&s.Label, &s.Stack, &s.Type, &s.NativeID, &s.Ksuid); err != nil {
+			return nil, err
+		}
+		summaries = append(summaries, s)
+	}
+
+	return summaries, rows.Err()
+}
+
 func (d *DatastoreMSSQL) StoreResource(resource *pkgmodel.Resource, commandID string, expectedIncarnation ...string) (string, error) {
 	ctx, span := mssqlTracer.Start(context.Background(), "StoreResource")
 	defer span.End()
@@ -467,6 +510,43 @@ func (d *DatastoreMSSQL) LoadResourceById(ksuid string) (*pkgmodel.Resource, err
 			return nil, nil
 		}
 		return nil, err
+	}
+
+	var resource pkgmodel.Resource
+	if err := json.Unmarshal([]byte(jsonData), &resource); err != nil {
+		return nil, err
+	}
+	resource.Ksuid = ksuidResult
+	return &resource, nil
+}
+
+// LoadLatestResourceByKsuid retrieves the true latest version of the resource
+// identified by ksuid without pre-filtering by operation. It returns nil, nil
+// when no row exists for the ksuid or when the latest row's operation is delete
+// or reaped, so callers receive not-found semantics for deleted resources.
+func (d *DatastoreMSSQL) LoadLatestResourceByKsuid(ksuid string) (*pkgmodel.Resource, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "LoadLatestResourceByKsuid")
+	defer span.End()
+
+	query := fmt.Sprintf(`
+	SELECT TOP (1) data, ksuid, operation
+	FROM resources
+	WHERE ksuid = @p1
+	ORDER BY version %s DESC
+	`, binColl)
+	row := d.conn.QueryRowContext(ctx, query, ksuid)
+
+	var jsonData, ksuidResult, operation string
+	if err := row.Scan(&jsonData, &ksuidResult, &operation); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil // no row for this ksuid
+		}
+		return nil, err
+	}
+
+	// Treat delete and reaped tombstones as not-found.
+	if operation == string(resource_update.OperationDelete) || operation == string(resource_update.OperationReaped) {
+		return nil, nil
 	}
 
 	var resource pkgmodel.Resource

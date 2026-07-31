@@ -185,11 +185,9 @@ func TestResourceRow_Detail_Properties_SpecialValues(t *testing.T) {
 
 func TestResourcesSpec_FetchDelegates(t *testing.T) {
 	c := &fakeClient{
-		forma: &pkgmodel.Forma{
-			Resources: []pkgmodel.Resource{
-				{NativeID: "arn:x", Stack: "$unmanaged", Type: "AWS::S3::Bucket", Label: "x"},
-				{NativeID: "arn:y", Stack: "prod", Type: "AWS::S3::Bucket", Label: "y", Managed: true},
-			},
+		summaries: []pkgmodel.ResourceSummary{
+			{NativeID: "arn:x", Stack: "$unmanaged", Type: "AWS::S3::Bucket", Label: "x", Ksuid: "ksuid-x"},
+			{NativeID: "arn:y", Stack: "prod", Type: "AWS::S3::Bucket", Label: "y", Ksuid: "ksuid-y"},
 		},
 	}
 	specs := newSpecs(nil)
@@ -199,6 +197,9 @@ func TestResourcesSpec_FetchDelegates(t *testing.T) {
 	require.Len(t, rows, 2)
 	assert.Equal(t, []string{"x", "⚠ unmanaged", "AWS::S3::Bucket", "arn:x"}, rows[0].cells)
 	assert.Equal(t, []string{"y", "prod", "AWS::S3::Bucket", "arn:y"}, rows[1].cells)
-	assert.NotNil(t, rows[0].detail)
-	assert.NotNil(t, rows[1].detail)
+	// Summary rows use the lazy fetch path: detail closure is nil, detailKsuid is set.
+	assert.Nil(t, rows[0].detail)
+	assert.Nil(t, rows[1].detail)
+	assert.Equal(t, "ksuid-x", rows[0].detailKsuid)
+	assert.Equal(t, "ksuid-y", rows[1].detailKsuid)
 }

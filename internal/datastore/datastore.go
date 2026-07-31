@@ -206,6 +206,11 @@ type Datastore interface {
 
 	// QueryResources searches resources based on filter criteria
 	QueryResources(query *ResourceQuery) ([]*pkgmodel.Resource, error)
+	// ListResourceSummaries returns a lightweight projection of resources — only
+	// the top-level indexed columns (label, stack, type, native_id, ksuid) — for
+	// the same set of rows that QueryResources would return for the given query.
+	// No data JSONB blob is read or unmarshaled.
+	ListResourceSummaries(q *ResourceQuery) ([]pkgmodel.ResourceSummary, error)
 	// StoreResource persists a resource after successful creation/update in the
 	// cloud. The optional expectedIncarnation is the target incarnation the
 	// caller believes is current; when supplied (non-empty) the write is
@@ -249,6 +254,11 @@ type Datastore interface {
 	LatestLabelForResource(label string) (string, error)
 	// LoadResourceById retrieves a resource by its KSUID
 	LoadResourceById(ksuid string) (*pkgmodel.Resource, error)
+	// LoadLatestResourceByKsuid retrieves the true latest version of the resource
+	// identified by ksuid, without filtering by operation. Returns nil, nil when the
+	// ksuid's latest version is a delete or reaped tombstone, so callers receive
+	// not-found semantics for deleted resources regardless of their prior history.
+	LoadLatestResourceByKsuid(ksuid string) (*pkgmodel.Resource, error)
 	// FindResourcesDependingOn returns all resources that reference the given resource via $ref
 	FindResourcesDependingOn(ksuid string) ([]*pkgmodel.Resource, error)
 	// FindResourcesDependingOnMany returns all resources that reference any of the given resources via $ref.
@@ -277,6 +287,11 @@ type Datastore interface {
 	DeleteStack(label string, commandID string) (string, error)
 	// GetStackByLabel retrieves stack by its label (latest non-deleted version)
 	GetStackByLabel(label string) (*pkgmodel.Stack, error)
+	// LoadStacksByLabels retrieves multiple stacks by their labels in a single query.
+	// Only found stacks are returned; labels with no matching non-deleted stack row are
+	// omitted from the result. The caller is responsible for synthesizing entries for
+	// any labels not present in the returned slice.
+	LoadStacksByLabels(labels []string) ([]*pkgmodel.Stack, error)
 	// CountResourcesInStack returns the count of non-deleted resources in a stack
 	CountResourcesInStack(label string) (int, error)
 	// ListAllStacks returns all non-deleted stack entries
@@ -367,6 +382,10 @@ type Datastore interface {
 	// GetStandalonePolicy retrieves a standalone policy by label (stack_id IS NULL)
 	// Returns nil, nil if no policy is found
 	GetStandalonePolicy(label string) (pkgmodel.Policy, error)
+	// LoadStandalonePoliciesByLabels retrieves multiple standalone policies by their
+	// labels in a single query. Only found, non-deleted policies are returned; labels
+	// with no matching row are omitted from the result.
+	LoadStandalonePoliciesByLabels(labels []string) ([]pkgmodel.Policy, error)
 	// ListAllStandalonePolicies returns all non-deleted standalone policies (stack_id IS NULL)
 	ListAllStandalonePolicies() ([]pkgmodel.Policy, error)
 	// AttachPolicyToStack creates an association between a standalone policy and a stack

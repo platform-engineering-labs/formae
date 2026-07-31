@@ -1419,6 +1419,44 @@ func (d DatastorePostgres) LoadResourceById(ksuid string) (*pkgmodel.Resource, e
 	return &resource, nil
 }
 
+// LoadLatestResourceByKsuid retrieves the true latest version of the resource
+// identified by ksuid without pre-filtering by operation. It returns nil, nil
+// when no row exists for the ksuid or when the latest row's operation is delete
+// or reaped, so callers receive not-found semantics for deleted resources.
+func (d DatastorePostgres) LoadLatestResourceByKsuid(ksuid string) (*pkgmodel.Resource, error) {
+	ctx, span := tracer.Start(context.Background(), "LoadLatestResourceByKsuid")
+	defer span.End()
+
+	query := `
+	SELECT data, ksuid, operation
+	FROM resources
+	WHERE ksuid = $1
+	ORDER BY version COLLATE "C" DESC
+	LIMIT 1
+	`
+	row := d.pool.QueryRow(ctx, query, ksuid)
+
+	var jsonData, ksuidResult, operation string
+	if err := row.Scan(&jsonData, &ksuidResult, &operation); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil // no row for this ksuid
+		}
+		return nil, err
+	}
+
+	// Treat delete and reaped tombstones as not-found.
+	if operation == string(resource_update.OperationDelete) || operation == string(resource_update.OperationReaped) {
+		return nil, nil
+	}
+
+	var resource pkgmodel.Resource
+	if err := json.Unmarshal([]byte(jsonData), &resource); err != nil {
+		return nil, err
+	}
+	resource.Ksuid = ksuidResult
+	return &resource, nil
+}
+
 // FindResourcesDependingOn finds resources that reference the given KSUID via $ref in their properties.
 // The query uses the GIN-indexed refs column (array overlap &&) to avoid a full table scan.
 func (d DatastorePostgres) FindResourcesDependingOn(ksuid string) ([]*pkgmodel.Resource, error) {
@@ -1857,6 +1895,66 @@ func (d DatastorePostgres) GetStackByLabel(label string) (*pkgmodel.Stack, error
 	return stack, nil
 }
 
+func (d DatastorePostgres) LoadStacksByLabels(labels []string) ([]*pkgmodel.Stack, error) {
+	ctx, span := tracer.Start(context.Background(), "LoadStacksByLabels")
+	defer span.End()
+
+	if len(labels) == 0 {
+		return []*pkgmodel.Stack{}, nil
+	}
+
+	placeholders := make([]string, len(labels))
+	args := make([]any, len(labels))
+	for i, label := range labels {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		args[i] = label
+	}
+
+	query := fmt.Sprintf(`
+		SELECT label, id, description FROM (
+			SELECT label, id, description, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) AS rn
+			FROM stacks
+			WHERE label IN (%s)
+		) sub
+		WHERE rn = 1 AND operation != 'delete'
+	`, strings.Join(placeholders, ","))
+
+	rows, err := d.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var stacks []*pkgmodel.Stack
+	for rows.Next() {
+		var label, id, description string
+		if err := rows.Scan(&label, &id, &description); err != nil {
+			return nil, err
+		}
+
+		stack := &pkgmodel.Stack{
+			ID:          id,
+			Label:       label,
+			Description: description,
+		}
+
+		policies, err := d.loadPoliciesForStackAsJSON(ctx, id)
+		if err != nil {
+			slog.Warn("Failed to load policies for stack", "label", label, "error", err)
+		} else {
+			stack.Policies = policies
+		}
+
+		stacks = append(stacks, stack)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return stacks, nil
+}
+
 // loadPoliciesForStackAsJSON loads all policies for a stack and returns them as JSON.
 // For inline policies, returns the full policy JSON including Type and Label.
 // For standalone policies, returns {"$ref": "policy://label"} format.
@@ -2217,6 +2315,59 @@ func (d DatastorePostgres) GetStandalonePolicy(label string) (pkgmodel.Policy, e
 	}
 
 	return deserializePolicyPostgres(policyLabel, policyType, policyDataStr, "")
+}
+
+func (d DatastorePostgres) LoadStandalonePoliciesByLabels(labels []string) ([]pkgmodel.Policy, error) {
+	ctx, span := tracer.Start(context.Background(), "LoadStandalonePoliciesByLabels")
+	defer span.End()
+
+	if len(labels) == 0 {
+		return []pkgmodel.Policy{}, nil
+	}
+
+	placeholders := make([]string, len(labels))
+	args := make([]any, len(labels))
+	for i, label := range labels {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		args[i] = label
+	}
+
+	query := fmt.Sprintf(`
+		WITH latest_policies AS (
+			SELECT id, label, policy_type, policy_data, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) AS rn
+			FROM policies
+			WHERE label IN (%s) AND (stack_id IS NULL OR stack_id = '')
+		)
+		SELECT label, policy_type, policy_data
+		FROM latest_policies
+		WHERE rn = 1 AND operation != 'delete'
+	`, strings.Join(placeholders, ","))
+
+	rows, err := d.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load standalone policies by labels: %w", err)
+	}
+	defer rows.Close()
+
+	var policies []pkgmodel.Policy
+	for rows.Next() {
+		var policyLabel, policyType, policyDataStr string
+		if err := rows.Scan(&policyLabel, &policyType, &policyDataStr); err != nil {
+			return nil, fmt.Errorf("failed to scan policy: %w", err)
+		}
+		policy, err := deserializePolicyPostgres(policyLabel, policyType, policyDataStr, "")
+		if err != nil {
+			slog.Warn("Failed to deserialize policy", "label", policyLabel, "error", err)
+			continue
+		}
+		policies = append(policies, policy)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating policies: %w", err)
+	}
+
+	return policies, nil
 }
 
 func (d DatastorePostgres) ListAllStandalonePolicies() ([]pkgmodel.Policy, error) {
@@ -3238,6 +3389,50 @@ func (d DatastorePostgres) QueryResources(query *datastore.ResourceQuery) ([]*pk
 	}
 
 	return resources, rows.Err()
+}
+
+func (d DatastorePostgres) ListResourceSummaries(q *datastore.ResourceQuery) ([]pkgmodel.ResourceSummary, error) {
+	ctx, span := tracer.Start(context.Background(), "ListResourceSummaries")
+	defer span.End()
+
+	queryStr := `
+	SELECT label, stack, type, native_id, ksuid
+	FROM resources r1
+	WHERE NOT EXISTS (
+		SELECT 1
+		FROM resources r2
+		WHERE r1.uri = r2.uri
+		AND r2.version COLLATE "C" > r1.version COLLATE "C"
+	)
+	AND r1.operation != $1 AND r1.operation != 'reaped'
+	`
+	args := []any{resource_update.OperationDelete}
+
+	queryStr = extendPostgresQueryString(queryStr, q.NativeID, " AND native_id %s $%d", &args)
+	queryStr = extendPostgresQueryString(queryStr, q.Stack, " AND stack %s $%d", &args)
+	queryStr = extendPostgresQueryString(queryStr, q.Type, " AND LOWER(type) %s LOWER($%d)", &args)
+	queryStr = extendPostgresQueryString(queryStr, q.Label, " AND label %s $%d", &args)
+	queryStr = extendPostgresQueryString(queryStr, q.Target, " AND target %s $%d", &args)
+	queryStr = extendPostgresQueryString(queryStr, q.Managed, " AND managed %s $%d", &args)
+
+	queryStr += " ORDER BY type, label"
+
+	rows, err := d.pool.Query(ctx, queryStr, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var summaries []pkgmodel.ResourceSummary
+	for rows.Next() {
+		var s pkgmodel.ResourceSummary
+		if err := rows.Scan(&s.Label, &s.Stack, &s.Type, &s.NativeID, &s.Ksuid); err != nil {
+			return nil, err
+		}
+		summaries = append(summaries, s)
+	}
+
+	return summaries, rows.Err()
 }
 
 func (d DatastorePostgres) Stats() (*stats.Stats, error) {

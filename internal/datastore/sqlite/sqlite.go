@@ -979,6 +979,49 @@ func (d DatastoreSQLite) QueryResources(query *datastore.ResourceQuery) ([]*pkgm
 	return resources, rows.Err()
 }
 
+func (d DatastoreSQLite) ListResourceSummaries(q *datastore.ResourceQuery) ([]pkgmodel.ResourceSummary, error) {
+	_, span := sqliteTracer.Start(context.Background(), "ListResourceSummaries")
+	defer span.End()
+
+	queryStr := fmt.Sprintf(`
+		SELECT label, stack, type, native_id, ksuid
+		FROM resources r1
+		WHERE NOT EXISTS (
+		SELECT 1
+		FROM resources r2
+		WHERE r1.uri = r2.uri
+		AND r2.version > r1.version
+		)
+		AND r1.operation != '%s'
+		AND r1.operation != '%s'`, string(resource_update.OperationDelete), string(resource_update.OperationReaped))
+	args := []any{}
+
+	queryStr = extendSQLiteQueryString(queryStr, q.NativeID, " AND native_id %s ?{esc}", &args)
+	queryStr = extendSQLiteQueryString(queryStr, q.Stack, " AND stack %s ?{esc}", &args)
+	queryStr = extendSQLiteQueryString(queryStr, q.Type, " AND LOWER(type) %s LOWER(?){esc}", &args)
+	queryStr = extendSQLiteQueryString(queryStr, q.Label, " AND label %s ?{esc}", &args)
+	queryStr = extendSQLiteQueryString(queryStr, q.Target, " AND target %s ?{esc}", &args)
+	queryStr = extendSQLiteQueryString(queryStr, q.Managed, " AND managed %s ?{esc}", &args)
+	queryStr += " ORDER BY type, label"
+
+	rows, err := d.conn.Query(queryStr, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer closeRows(rows)
+
+	var summaries []pkgmodel.ResourceSummary
+	for rows.Next() {
+		var s pkgmodel.ResourceSummary
+		if err := rows.Scan(&s.Label, &s.Stack, &s.Type, &s.NativeID, &s.Ksuid); err != nil {
+			return nil, err
+		}
+		summaries = append(summaries, s)
+	}
+
+	return summaries, rows.Err()
+}
+
 func (d DatastoreSQLite) storeResource(resource *pkgmodel.Resource, data []byte, commandID string, operation string, expectedIncarnation string) (string, error) {
 	slog.Debug("SQLite START", "method", "storeResource", "ksuid", resource.Ksuid, "label", resource.Label, "operation", operation)
 	start := time.Now()
@@ -1708,6 +1751,74 @@ func (d DatastoreSQLite) GetStackByLabel(label string) (*pkgmodel.Stack, error) 
 	return stack, nil
 }
 
+func (d DatastoreSQLite) LoadStacksByLabels(labels []string) ([]*pkgmodel.Stack, error) {
+	_, span := sqliteTracer.Start(context.Background(), "LoadStacksByLabels")
+	defer span.End()
+
+	if len(labels) == 0 {
+		return []*pkgmodel.Stack{}, nil
+	}
+
+	placeholders := make([]string, len(labels))
+	args := make([]any, len(labels))
+	for i, label := range labels {
+		placeholders[i] = "?"
+		args[i] = label
+	}
+
+	query := fmt.Sprintf(`
+		SELECT label, id, description FROM (
+			SELECT label, id, description, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version DESC) AS rn
+			FROM stacks
+			WHERE label IN (%s)
+		) sub
+		WHERE rn = 1 AND operation != 'delete'
+	`, strings.Join(placeholders, ","))
+
+	rows, err := d.conn.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	type stackRow struct {
+		label, id, description string
+	}
+	var stackRows []stackRow
+	for rows.Next() {
+		var r stackRow
+		if err := rows.Scan(&r.label, &r.id, &r.description); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		stackRows = append(stackRows, r)
+	}
+	_ = rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	stacks := make([]*pkgmodel.Stack, 0, len(stackRows))
+	for _, r := range stackRows {
+		stack := &pkgmodel.Stack{
+			ID:          r.id,
+			Label:       r.label,
+			Description: r.description,
+		}
+
+		policies, err := d.loadPoliciesForStackAsJSON(r.id)
+		if err != nil {
+			slog.Warn("Failed to load policies for stack", "label", r.label, "error", err)
+		} else {
+			stack.Policies = policies
+		}
+
+		stacks = append(stacks, stack)
+	}
+
+	return stacks, nil
+}
+
 // loadPoliciesForStackAsJSON loads all policies for a stack and returns them as JSON.
 // For inline policies, returns the full policy JSON including Type and Label.
 // For standalone policies, returns {"$ref": "policy://label"} format.
@@ -2081,6 +2192,59 @@ func (d DatastoreSQLite) GetStandalonePolicy(label string) (pkgmodel.Policy, err
 	}
 
 	return deserializePolicy(policyLabel, policyType, policyDataStr, "")
+}
+
+func (d DatastoreSQLite) LoadStandalonePoliciesByLabels(labels []string) ([]pkgmodel.Policy, error) {
+	_, span := sqliteTracer.Start(context.Background(), "LoadStandalonePoliciesByLabels")
+	defer span.End()
+
+	if len(labels) == 0 {
+		return []pkgmodel.Policy{}, nil
+	}
+
+	placeholders := make([]string, len(labels))
+	args := make([]any, len(labels))
+	for i, label := range labels {
+		placeholders[i] = "?"
+		args[i] = label
+	}
+
+	query := fmt.Sprintf(`
+		WITH latest_policies AS (
+			SELECT id, label, policy_type, policy_data, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version DESC) AS rn
+			FROM policies
+			WHERE label IN (%s) AND (stack_id IS NULL OR stack_id = '')
+		)
+		SELECT label, policy_type, policy_data
+		FROM latest_policies
+		WHERE rn = 1 AND operation != 'delete'
+	`, strings.Join(placeholders, ","))
+
+	rows, err := d.conn.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load standalone policies by labels: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var policies []pkgmodel.Policy
+	for rows.Next() {
+		var policyLabel, policyType, policyDataStr string
+		if err := rows.Scan(&policyLabel, &policyType, &policyDataStr); err != nil {
+			return nil, fmt.Errorf("failed to scan policy: %w", err)
+		}
+		policy, err := deserializePolicy(policyLabel, policyType, policyDataStr, "")
+		if err != nil {
+			slog.Warn("Failed to deserialize policy", "label", policyLabel, "error", err)
+			continue
+		}
+		policies = append(policies, policy)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating policies: %w", err)
+	}
+
+	return policies, nil
 }
 
 func (d DatastoreSQLite) ListAllStandalonePolicies() ([]pkgmodel.Policy, error) {
@@ -4059,6 +4223,44 @@ func (d DatastoreSQLite) LoadResourceById(ksuid string) (*pkgmodel.Resource, err
 	// Set the KSUID directly since we already have it
 	loadedResource.Ksuid = ksuidResult
 
+	return &loadedResource, nil
+}
+
+// LoadLatestResourceByKsuid retrieves the true latest version of the resource
+// identified by ksuid without pre-filtering by operation. It returns nil, nil
+// when no row exists for the ksuid or when the latest row's operation is delete
+// or reaped, so callers receive not-found semantics for deleted resources.
+func (d DatastoreSQLite) LoadLatestResourceByKsuid(ksuid string) (*pkgmodel.Resource, error) {
+	_, span := sqliteTracer.Start(context.Background(), "LoadLatestResourceByKsuid")
+	defer span.End()
+
+	query := `
+	SELECT data, ksuid, operation
+	FROM resources
+	WHERE ksuid = ?
+	ORDER BY version DESC
+	LIMIT 1
+	`
+	row := d.conn.QueryRow(query, ksuid)
+
+	var jsonData, ksuidResult, operation string
+	if err := row.Scan(&jsonData, &ksuidResult, &operation); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil // no row for this ksuid
+		}
+		return nil, err
+	}
+
+	// Treat delete and reaped tombstones as not-found.
+	if operation == string(resource_update.OperationDelete) || operation == string(resource_update.OperationReaped) {
+		return nil, nil
+	}
+
+	var loadedResource pkgmodel.Resource
+	if err := json.Unmarshal([]byte(jsonData), &loadedResource); err != nil {
+		return nil, err
+	}
+	loadedResource.Ksuid = ksuidResult
 	return &loadedResource, nil
 }
 

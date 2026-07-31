@@ -152,6 +152,54 @@ func (d *DatastoreMSSQL) GetStackByLabel(label string) (*pkgmodel.Stack, error) 
 	}, nil
 }
 
+func (d *DatastoreMSSQL) LoadStacksByLabels(labels []string) ([]*pkgmodel.Stack, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "LoadStacksByLabels")
+	defer span.End()
+
+	if len(labels) == 0 {
+		return []*pkgmodel.Stack{}, nil
+	}
+
+	args := make([]any, len(labels))
+	for i, label := range labels {
+		args[i] = label
+	}
+
+	query := fmt.Sprintf(`
+		SELECT label, id, description FROM (
+			SELECT label, id, description, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE Latin1_General_BIN2 DESC) AS rn
+			FROM stacks
+			WHERE label IN (%s)
+		) sub
+		WHERE rn = 1 AND operation != 'delete'
+	`, placeholders(1, len(labels)))
+
+	rows, err := d.conn.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var stacks []*pkgmodel.Stack
+	for rows.Next() {
+		var label, id, description string
+		if err := rows.Scan(&label, &id, &description); err != nil {
+			return nil, err
+		}
+		stacks = append(stacks, &pkgmodel.Stack{
+			ID:          id,
+			Label:       label,
+			Description: description,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return stacks, nil
+}
+
 func (d *DatastoreMSSQL) CountResourcesInStack(label string) (int, error) {
 	ctx, span := mssqlTracer.Start(context.Background(), "CountResourcesInStack")
 	defer span.End()

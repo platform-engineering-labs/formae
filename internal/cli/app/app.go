@@ -383,6 +383,52 @@ func (a *App) ExtractResources(query string, fromTUI bool) (*pkgmodel.Forma, []s
 	return f, nags, err
 }
 
+// ListResourceSummaries fetches lightweight resource summaries from the agent,
+// alongside any nag messages from the compatibility gate. Detail is fetched
+// lazily by ksuid via ResourceDetailByKsuid.
+func (a *App) ListResourceSummaries(query string, fromTUI bool) ([]pkgmodel.ResourceSummary, []string, error) {
+	auth, net, err := a.getAuthAndNetHandlers()
+	if err != nil {
+		return nil, nil, err
+	}
+	client := api.NewClient(a.Config.Cli.API, auth, net)
+
+	compatible, _, nags, err := a.runBeforeCommand(client, !fromTUI)
+	if !compatible {
+		return nil, nil, err
+	}
+
+	summaries, err := client.ListResourceSummaries(query)
+	if err != nil {
+		return nil, nil, err
+	}
+	if summaries == nil {
+		summaries = []pkgmodel.ResourceSummary{}
+	}
+	return summaries, nags, nil
+}
+
+// ResourceDetailByKsuid fetches a single resource by its ksuid from the agent.
+// Returns (nil, nags, nil) when the agent reports no resource for the ksuid.
+func (a *App) ResourceDetailByKsuid(ksuid string, fromTUI bool) (*pkgmodel.Resource, []string, error) {
+	auth, net, err := a.getAuthAndNetHandlers()
+	if err != nil {
+		return nil, nil, err
+	}
+	client := api.NewClient(a.Config.Cli.API, auth, net)
+
+	compatible, _, nags, err := a.runBeforeCommand(client, !fromTUI)
+	if !compatible {
+		return nil, nil, err
+	}
+
+	resource, err := client.GetResourceByKsuid(ksuid)
+	if err != nil {
+		return nil, nil, err
+	}
+	return resource, nags, nil
+}
+
 func (a *App) ForceSync() error {
 	auth, net, err := a.getAuthAndNetHandlers()
 	if err != nil {

@@ -58,6 +58,8 @@ type MetastructureAPI interface {
 	CancelCommandsByQuery(query string, force bool, clientID string) (*apimodel.CancelCommandResponse, error)
 	ListFormaCommandStatus(query string, clientID string, n int) (*apimodel.ListCommandStatusResponse, error)
 	ExtractResources(query string) (*pkgmodel.Forma, error)
+	ListResourceSummaries(query string) ([]pkgmodel.ResourceSummary, error)
+	ExtractResourceByKsuid(ksuid string) (*pkgmodel.Resource, error)
 	ExtractTargets(query string) ([]*pkgmodel.Target, error)
 	ExtractStacks() ([]*pkgmodel.Stack, error)
 	ExtractPolicies() ([]apimodel.PolicyInventoryItem, error)
