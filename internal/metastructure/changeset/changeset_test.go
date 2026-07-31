@@ -3238,3 +3238,144 @@ func TestNewChangeset_TransitiveOpaqueSourceFoundInCommand(t *testing.T) {
 	assert.Contains(t, err.Error(), t1)
 	assert.Contains(t, err.Error(), t2)
 }
+
+// TestNewChangeset_MutuallyReferencingInCommandTargets_ReturnsCycleError covers two
+// NEW in-command targets whose configs reference secrets hosted on each other. The
+// transitive-opaque guard does not catch this — neither peer is persisted, so its
+// LoadTarget returns nil and the guard skips it — yet the target-resolvable edges form
+// a cycle (A.create → resource-on-B → B.create → resource-on-A → A.create). Without a
+// full-graph cycle check this hangs the executor; NewChangeset must return an error.
+func TestNewChangeset_MutuallyReferencingInCommandTargets_ReturnsCycleError(t *testing.T) {
+	const (
+		targetA = "target-a"
+		targetB = "target-b"
+	)
+	// The secret sources: a resource created on A, and a resource created on B.
+	resOnA := pkgmodel.NewFormaeURI(util.NewID(), "SecretString")
+	resOnB := pkgmodel.NewFormaeURI(util.NewID(), "SecretString")
+
+	// Both targets are NEW in-command creates: not persisted, so the transitive
+	// guard's LoadTarget of the peer returns nil and skips.
+	ds := &stubResolveDatastore{
+		targets:   map[string]*pkgmodel.Target{},
+		resources: map[string]*pkgmodel.Resource{},
+	}
+
+	resourceUpdates := []resource_update.ResourceUpdate{
+		{
+			// Source of the secret that target B references; lives on A.
+			DesiredState: pkgmodel.Resource{Label: "secret-on-a", Type: "AWS::SecretsManager::Secret", Stack: "s", Ksuid: resOnA.KSUID(), Target: targetA},
+			Operation:    resource_update.OperationCreate,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "s",
+		},
+		{
+			// Source of the secret that target A references; lives on B.
+			DesiredState: pkgmodel.Resource{Label: "secret-on-b", Type: "AWS::SecretsManager::Secret", Stack: "s", Ksuid: resOnB.KSUID(), Target: targetB},
+			Operation:    resource_update.OperationCreate,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "s",
+		},
+	}
+
+	// A's config refers to the secret hosted on B; B's config refers to the secret hosted on A.
+	targetUpdates := []target_update.TargetUpdate{
+		{
+			Target:               pkgmodel.Target{Label: targetA, Namespace: "AWS", Config: opaqueRefConfig(string(resOnB))},
+			Operation:            target_update.TargetOperationCreate,
+			State:                target_update.TargetUpdateStateNotStarted,
+			RemainingResolvables: []pkgmodel.FormaeURI{resOnB},
+		},
+		{
+			Target:               pkgmodel.Target{Label: targetB, Namespace: "AWS", Config: opaqueRefConfig(string(resOnA))},
+			Operation:            target_update.TargetOperationCreate,
+			State:                target_update.TargetUpdateStateNotStarted,
+			RemainingResolvables: []pkgmodel.FormaeURI{resOnA},
+		},
+	}
+
+	_, err := NewChangeset(resourceUpdates, targetUpdates, "cmd-mutual-cycle", pkgmodel.CommandApply, ds)
+	require.Error(t, err, "mutually referencing in-command targets form a cycle and must be rejected, not hang")
+}
+
+// TestNewChangeset_SelfReferentialTarget_ReturnsCycleError covers a target whose config
+// references a secret hosted on a resource on the SAME target. The transitive-opaque
+// guard explicitly skips a self-reference, but the target-resolvable edges still form a
+// self-cycle (target.create → resource-on-target → target.create). NewChangeset must
+// return an error rather than let the executor hang.
+func TestNewChangeset_SelfReferentialTarget_ReturnsCycleError(t *testing.T) {
+	const targetLabel = "self-target"
+	secretOnSelf := pkgmodel.NewFormaeURI(util.NewID(), "SecretString")
+
+	ds := &stubResolveDatastore{
+		targets:   map[string]*pkgmodel.Target{},
+		resources: map[string]*pkgmodel.Resource{},
+	}
+
+	resourceUpdates := []resource_update.ResourceUpdate{
+		{
+			DesiredState: pkgmodel.Resource{Label: "secret", Type: "AWS::SecretsManager::Secret", Stack: "s", Ksuid: secretOnSelf.KSUID(), Target: targetLabel},
+			Operation:    resource_update.OperationCreate,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "s",
+		},
+	}
+
+	targetUpdates := []target_update.TargetUpdate{
+		{
+			Target:               pkgmodel.Target{Label: targetLabel, Namespace: "AWS", Config: opaqueRefConfig(string(secretOnSelf))},
+			Operation:            target_update.TargetOperationCreate,
+			State:                target_update.TargetUpdateStateNotStarted,
+			RemainingResolvables: []pkgmodel.FormaeURI{secretOnSelf},
+		},
+	}
+
+	_, err := NewChangeset(resourceUpdates, targetUpdates, "cmd-self-cycle", pkgmodel.CommandApply, ds)
+	require.Error(t, err, "a self-referential target forms a self-cycle and must be rejected, not hang")
+}
+
+// TestNewChangeset_ValidTargetResolvableEdge_NoFalsePositive asserts the full-graph
+// cycle check does not reject a legitimate target-resolvable edge: target A resolves
+// from a resource hosted on target B, and B has no back-edge to A. This acyclic shape
+// must build without error.
+func TestNewChangeset_ValidTargetResolvableEdge_NoFalsePositive(t *testing.T) {
+	const (
+		targetA = "consumer"
+		targetB = "provider"
+	)
+	// The secret source lives on B; A's config references it. B references nothing back.
+	secretOnB := pkgmodel.NewFormaeURI(util.NewID(), "SecretString")
+
+	ds := &stubResolveDatastore{
+		targets:   map[string]*pkgmodel.Target{},
+		resources: map[string]*pkgmodel.Resource{},
+	}
+
+	resourceUpdates := []resource_update.ResourceUpdate{
+		{
+			DesiredState: pkgmodel.Resource{Label: "secret", Type: "AWS::SecretsManager::Secret", Stack: "s", Ksuid: secretOnB.KSUID(), Target: targetB},
+			Operation:    resource_update.OperationCreate,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "s",
+		},
+	}
+
+	targetUpdates := []target_update.TargetUpdate{
+		{
+			Target:               pkgmodel.Target{Label: targetA, Namespace: "AWS", Config: opaqueRefConfig(string(secretOnB))},
+			Operation:            target_update.TargetOperationCreate,
+			State:                target_update.TargetUpdateStateNotStarted,
+			RemainingResolvables: []pkgmodel.FormaeURI{secretOnB},
+		},
+		{
+			// B is a plain create with no resolvables — no back-edge to A.
+			Target:    pkgmodel.Target{Label: targetB, Namespace: "AWS", Config: json.RawMessage(`{"region":"us-east-1"}`)},
+			Operation: target_update.TargetOperationCreate,
+			State:     target_update.TargetUpdateStateNotStarted,
+		},
+	}
+
+	cs, err := NewChangeset(resourceUpdates, targetUpdates, "cmd-valid-resolvable", pkgmodel.CommandApply, ds)
+	require.NoError(t, err, "a valid acyclic target-resolvable edge must not be rejected")
+	assert.False(t, cs.DAG.HasCycles(), "the built graph must be acyclic")
+}

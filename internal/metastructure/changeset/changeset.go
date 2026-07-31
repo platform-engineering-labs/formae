@@ -146,6 +146,16 @@ func NewChangeset(
 	// Build implicit edges between target and resource nodes
 	changeset.DAG.buildTargetResourceEdges(targetUpdates)
 
+	// Re-run cycle detection over the FULL graph. DAG.Init runs its cycle check
+	// before any target node or target-resolvable edge exists, so a cycle formed
+	// purely by target-resolvable edges — two in-command targets whose configs
+	// reference each other's secrets, or a target referencing a secret hosted on
+	// itself — would otherwise slip through and hang the executor. This second
+	// pass turns any such cycle into a clean build-time error.
+	if changeset.DAG.HasCycles() {
+		return Changeset{}, fmt.Errorf("changeset has a dependency cycle involving target-resolvable references")
+	}
+
 	return changeset, nil
 }
 
