@@ -63,9 +63,16 @@ func revalidateResolveTarget(tu TargetUpdate, ds targetLoader) (TargetUpdate, er
 	}
 
 	// Revision advanced under us: rebuild against the current persisted config so
-	// resolution never runs against the stale snapshot.
+	// resolution never runs against the stale snapshot. Preserve the op's
+	// selection policy — an opaque-only Resolve (cascade-deleted secret-backed
+	// target) must keep excluding non-opaque cross-resource refs whose sources are
+	// being deleted in the same command; the full extractor would re-include them.
 	tu.Target.Config = current.Config
 	tu.Target.Version = current.Version
-	tu.RemainingResolvables = resolver.ExtractResolvableURIsFromJSON(current.Config)
+	if tu.OpaqueOnly {
+		tu.RemainingResolvables = resolver.ExtractOpaqueResolvableURIsFromJSON(current.Config)
+	} else {
+		tu.RemainingResolvables = resolver.ExtractResolvableURIsFromJSON(current.Config)
+	}
 	return tu, nil
 }

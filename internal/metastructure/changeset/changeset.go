@@ -270,7 +270,8 @@ func synthesizeResolveTargetUpdates(
 		// path non-opaque refs carry their stored value via NativeID and do not
 		// require resolution.
 		var resolvables []pkgmodel.FormaeURI
-		if cascadeOpaqueUncovered[label] {
+		opaqueOnly := cascadeOpaqueUncovered[label]
+		if opaqueOnly {
 			resolvables = resolver.ExtractOpaqueResolvableURIsFromJSON(persisted.Config)
 		} else {
 			resolvables = resolver.ExtractResolvableURIsFromJSON(persisted.Config)
@@ -278,7 +279,11 @@ func synthesizeResolveTargetUpdates(
 		if len(resolvables) == 0 {
 			continue
 		}
-		synthetic = append(synthetic, target_update.NewResolveTargetUpdate(*persisted, resolvables))
+		resolveTU := target_update.NewResolveTargetUpdate(*persisted, resolvables)
+		// Preserve the opaque-only selection so execute-time revalidation keeps
+		// excluding vanishing non-opaque refs if the config advances under us.
+		resolveTU.OpaqueOnly = opaqueOnly
+		synthetic = append(synthetic, resolveTU)
 	}
 
 	return synthetic, nil
