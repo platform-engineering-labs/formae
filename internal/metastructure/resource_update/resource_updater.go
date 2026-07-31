@@ -933,7 +933,7 @@ func nextState(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.A
 		return StateFinishedSuccessfully, data, nil, nil
 	default:
 		// We should never reach this point, so if we do we exit the state machine with an error.
-		proc.Log().Error("ResourceUpdater reached an unexpected state state=%s data=%v", state, data)
+		proc.Log().Error("ResourceUpdater reached an unexpected state state=%s commandID=%s ksuid=%s operation=%s", state, data.commandID, data.originalResourceKsuidURI.KSUID(), data.resourceUpdate.Operation)
 		data.resourceUpdate.MarkAsFailed()
 		return StateFinishedWithError, data, nil, gen.TerminateReasonPanic
 	}
@@ -987,13 +987,13 @@ func doPluginOperation(resourceURI pkgmodel.FormaeURI, operation plugin.PluginOp
 }
 
 func pluginOperationMissingInAction(from gen.PID, state gen.Atom, data ResourceUpdateData, message PluginOperatorMissingInAction, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
-	proc.Log().Error("Plugin operator is missing in action state=%s data=%v", state, data)
+	proc.Log().Error("Plugin operator is missing in action state=%s commandID=%s ksuid=%s operation=%s", state, data.commandID, data.originalResourceKsuidURI.KSUID(), data.resourceUpdate.Operation)
 	data.resourceUpdate.MarkAsFailed()
 	return StateFinishedWithError, data, nil, nil
 }
 
 func resolveCacheMissingInAction(from gen.PID, state gen.Atom, data ResourceUpdateData, message ResolveCacheMissingInAction, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
-	proc.Log().Error("Resolve cache is missing in action state=%s data=%v", state, data)
+	proc.Log().Error("Resolve cache is missing in action state=%s commandID=%s ksuid=%s operation=%s", state, data.commandID, data.originalResourceKsuidURI.KSUID(), data.resourceUpdate.Operation)
 	data.resourceUpdate.MarkAsFailed()
 	return StateFinishedWithError, data, nil, nil
 }
