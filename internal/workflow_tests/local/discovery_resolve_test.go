@@ -63,8 +63,6 @@ func (c *discoveryListCapture) all() []json.RawMessage {
 //   - Discovery is triggered; the recorded List TargetConfig is asserted to
 //     carry the resolved credential and to contain no "$ref" substring.
 func TestDiscoveryResolve_TargetConfigOpaqueRefIsResolvedBeforeList(t *testing.T) {
-	t.Skip("enabled by discovery List-phase target-config resolution")
-
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		const plaintextSecret = "discovery-target-config-secret-value"
 
@@ -174,6 +172,10 @@ func TestDiscoveryResolve_TargetConfigOpaqueRefIsResolvedBeforeList(t *testing.T
 			"stored target config must retain the $ref pointer")
 		require.NotContains(t, string(discoveryTarget.Config), plaintextSecret,
 			"stored target config must not persist the resolved plaintext")
+
+		// Start the test helper actor so testutil.Send can relay messages.
+		_, err = testutil.StartTestHelperActor(m.Node, make(chan any, 1))
+		require.NoError(t, err)
 
 		// Trigger discovery. The discovery path must resolve the opaque $ref in
 		// discovery-target's Config before passing TargetConfig to the plugin's List.

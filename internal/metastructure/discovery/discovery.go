@@ -137,10 +137,22 @@ type DiscoveryData struct {
 	hasPendingResumeScan bool
 	// Cached plugin info per namespace, refreshed at start of each discovery cycle
 	pluginInfoCache map[string]*messages.PluginInfoResponse
+	// resolvedTargets tracks which targets have had their opaque $ref config
+	// successfully resolved this cycle. Keyed by target label.
+	resolvedTargets map[string]bool
+	// failedTargets tracks which targets failed opaque $ref resolution this
+	// cycle. Such targets are skipped for all remaining scan operations.
+	failedTargets map[string]bool
 }
 
 func (d *DiscoveryData) SetTargets(targets []*pkgmodel.Target) {
 	d.targets = make(map[string]pkgmodel.Target, len(targets))
+	if d.resolvedTargets == nil {
+		d.resolvedTargets = make(map[string]bool)
+	}
+	if d.failedTargets == nil {
+		d.failedTargets = make(map[string]bool)
+	}
 	for _, target := range targets {
 		// A reaped (or reap-pending) target is being — or has been —
 		// tombstoned by the reaper. Never sweep it: its resources are already
@@ -204,6 +216,8 @@ func (d *Discovery) Init(args ...any) (statemachine.StateMachineSpec[DiscoveryDa
 		pluginInfoCache:               make(map[string]*messages.PluginInfoResponse),
 		typesWithChildrenQueued:       make(map[string]struct{}),
 		nativeIDsByCommand:            make(map[string][]string),
+		resolvedTargets:               make(map[string]bool),
+		failedTargets:                 make(map[string]bool),
 	}
 
 	spec := statemachine.NewStateMachineSpec(StateIdle,
@@ -309,6 +323,8 @@ func discover(from gen.PID, state gen.Atom, data DiscoveryData, message Discover
 	data.pluginInfoCache = make(map[string]*messages.PluginInfoResponse)
 	data.typesWithChildrenQueued = make(map[string]struct{})
 	data.recentlyDiscoveredResourceIDs = make(map[string]struct{})
+	data.resolvedTargets = make(map[string]bool)
+	data.failedTargets = make(map[string]bool)
 	proc.Log().Debug("Starting resource discovery timestamp=%v", data.timeStarted)
 
 	allTargets, err := data.ds.LoadDiscoverableTargets()
@@ -386,6 +402,44 @@ func discover(from gen.PID, state gen.Atom, data DiscoveryData, message Discover
 	return StateDiscovering, data, nil, nil
 }
 
+// ensureTargetResolved guarantees that data.targets[label].Config holds the
+// ephemeral resolved form of the target's config (opaque $ref replaced by live
+// plaintext) before any List call reaches the plugin. Resolution is memoized
+// within the current discovery cycle via data.resolvedTargets / data.failedTargets
+// so each target is resolved at most once per cycle regardless of how many
+// resource types it scans.
+//
+// Returns the updated DiscoveryData and true on success; false when the target
+// failed resolution (it should be skipped for the remainder of this cycle).
+func ensureTargetResolved(data DiscoveryData, label string, proc gen.Process) (DiscoveryData, bool) {
+	if data.resolvedTargets == nil {
+		data.resolvedTargets = make(map[string]bool)
+	}
+	if data.failedTargets == nil {
+		data.failedTargets = make(map[string]bool)
+	}
+
+	if data.resolvedTargets[label] {
+		return data, true
+	}
+	if data.failedTargets[label] {
+		return data, false
+	}
+
+	resolved, err := resolveTargetConfigForList(proc, data.targets[label])
+	if err != nil {
+		proc.Log().Error("discovery: skipping target %s: could not resolve its config: %v", label, err)
+		data.failedTargets[label] = true
+		return data, false
+	}
+
+	t := data.targets[label]
+	t.Config = resolved
+	data.targets[label] = t
+	data.resolvedTargets[label] = true
+	return data, true
+}
+
 func resumeScanning(from gen.PID, state gen.Atom, data DiscoveryData, message ResumeScanning, proc gen.Process) (gen.Atom, DiscoveryData, []statemachine.Action, error) {
 	// The delayed message has arrived - clear the pending flag
 	data.hasPendingResumeScan = false
@@ -415,6 +469,11 @@ func resumeScanning(from gen.PID, state gen.Atom, data DiscoveryData, message Re
 		for range n {
 			nextOp := data.queuedListOperations[namespace][0]
 			data.queuedListOperations[namespace] = data.queuedListOperations[namespace][1:]
+			var ok bool
+			data, ok = ensureTargetResolved(data, nextOp.TargetLabel, proc)
+			if !ok {
+				continue
+			}
 			if err := scanTargetForResourceType(data.targets[nextOp.TargetLabel], nextOp, data, proc); err != nil {
 				// A failed scan of a single resource type must not crash the
 				// Discovery actor. Skip the resource type for this cycle and
