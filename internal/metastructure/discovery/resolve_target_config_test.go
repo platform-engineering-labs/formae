@@ -425,3 +425,126 @@ var _ gen.Process = (*resolveStubProcess)(nil)
 
 // stubActorNamesSentinel verifies the expected actor name constant is accessible.
 var _ = actornames.ResourcePersister
+
+// buildDiscoveryDataWithTarget returns a DiscoveryData ready for
+// ensureTargetResolved tests: resolvedTargets/failedTargets are initialized and
+// the given target is registered.
+func buildDiscoveryDataWithTarget(label string, cfg json.RawMessage) DiscoveryData {
+	t := pkgmodel.Target{Label: label, Namespace: "FakeAWS", Config: cfg}
+	return DiscoveryData{
+		targets:         map[string]pkgmodel.Target{label: t},
+		resolvedTargets: make(map[string]bool),
+		failedTargets:   make(map[string]bool),
+	}
+}
+
+// TestEnsureTargetResolved_OpaqueRefResolvedOnce asserts that the first call
+// for a target with an opaque $ref invokes resolveTargetConfigForList (one
+// LoadResource call), stores the resolved config back into data.targets, and
+// marks the target resolved. A second call with the same data hits the
+// resolvedTargets cache and issues no further LoadResource calls.
+func TestEnsureTargetResolved_OpaqueRefResolvedOnce(t *testing.T) {
+	const label = "prod"
+	const ksuid = "35R2vyf6mT5wEs0mTWT5bp1Lf0E"
+	const prop = "SecretString"
+	const plaintext = "s3cr3t"
+
+	srcResource := buildSourceResource(ksuid)
+	srcTarget := pkgmodel.Target{
+		Label:     "us-east-1",
+		Namespace: "FakeAWS",
+		Config:    json.RawMessage(`{"Region":"us-east-1"}`),
+	}
+
+	proc := &resolveStubProcess{
+		loadResult: messages.LoadResourceResult{
+			Resource: srcResource,
+			Target:   srcTarget,
+		},
+		readResponses: []readResponse{
+			{
+				progress: &plugin.TrackedProgress{
+					ProgressResult: resource.ProgressResult{
+						OperationStatus:    resource.OperationStatusSuccess,
+						ResourceProperties: json.RawMessage(fmt.Sprintf(`{"%s":"%s"}`, prop, plaintext)),
+					},
+				},
+			},
+		},
+	}
+
+	cfg := buildOpaqueTargetConfig(ksuid, prop)
+	data := buildDiscoveryDataWithTarget(label, cfg)
+
+	// First call: should resolve the opaque $ref.
+	data, ok := ensureTargetResolved(data, label, proc)
+	require.True(t, ok, "first call must succeed")
+	assert.True(t, data.resolvedTargets[label], "target must be marked resolved")
+	assert.False(t, data.failedTargets[label], "target must not be marked failed")
+	resolvedCfg := string(data.targets[label].Config)
+	assert.Contains(t, resolvedCfg, plaintext, "resolved config must contain the plaintext")
+	assert.NotContains(t, resolvedCfg, `"$ref"`, "resolved config must not contain $ref")
+	loadCallsAfterFirst := len(proc.loadResourceCalls)
+	assert.Equal(t, 1, loadCallsAfterFirst, "exactly one LoadResource call on first resolve")
+
+	// Second call: must hit the cache, no additional LoadResource.
+	data, ok = ensureTargetResolved(data, label, proc)
+	require.True(t, ok, "second call must return true (cache hit)")
+	assert.Equal(t, loadCallsAfterFirst, len(proc.loadResourceCalls),
+		"second call must not issue another LoadResource (cache hit)")
+}
+
+// TestEnsureTargetResolved_FailedTargetNotRetried asserts that a target already
+// in failedTargets returns false immediately without calling resolveTargetConfigForList.
+func TestEnsureTargetResolved_FailedTargetNotRetried(t *testing.T) {
+	const label = "broken"
+	proc := &resolveStubProcess{}
+
+	cfg := json.RawMessage(`{"Region":"us-east-1"}`)
+	data := buildDiscoveryDataWithTarget(label, cfg)
+	data.failedTargets[label] = true
+
+	data, ok := ensureTargetResolved(data, label, proc)
+	require.False(t, ok, "a target already in failedTargets must return false")
+	assert.Empty(t, proc.loadResourceCalls,
+		"no LoadResource must be issued for a pre-failed target")
+}
+
+// TestEnsureTargetResolved_ResolveFailureMarksTargetFailed asserts that when
+// resolveTargetConfigForList returns an error the target is added to
+// failedTargets and the call returns false.
+func TestEnsureTargetResolved_ResolveFailureMarksTargetFailed(t *testing.T) {
+	const label = "prod"
+	const ksuid = "35R2vyf6mT5wEs0mTWT5bp1Lf0E"
+	const prop = "SecretString"
+
+	proc := &resolveStubProcess{
+		loadErr: fmt.Errorf("datastore unavailable"),
+	}
+
+	cfg := buildOpaqueTargetConfig(ksuid, prop)
+	data := buildDiscoveryDataWithTarget(label, cfg)
+
+	data, ok := ensureTargetResolved(data, label, proc)
+	require.False(t, ok, "a resolve failure must return false")
+	assert.True(t, data.failedTargets[label], "target must be marked failed after a resolve error")
+	assert.False(t, data.resolvedTargets[label], "target must not be marked resolved after a resolve error")
+}
+
+// TestEnsureTargetResolved_NoOpaqueRefPassthrough asserts that a target config
+// with no opaque refs is passed through unchanged and is immediately cached as
+// resolved without issuing any LoadResource or Read calls.
+func TestEnsureTargetResolved_NoOpaqueRefPassthrough(t *testing.T) {
+	const label = "plain"
+	proc := &resolveStubProcess{}
+
+	cfg := json.RawMessage(`{"Region":"us-east-1","AccountId":"123456789012"}`)
+	data := buildDiscoveryDataWithTarget(label, cfg)
+
+	data, ok := ensureTargetResolved(data, label, proc)
+	require.True(t, ok, "a target with no opaque refs must succeed")
+	assert.True(t, data.resolvedTargets[label])
+	assert.Empty(t, proc.loadResourceCalls, "no LoadResource for a plain config")
+	assert.Equal(t, string(cfg), string(data.targets[label].Config),
+		"plain config must be stored unchanged")
+}
