@@ -1893,6 +1893,25 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 		if err != nil {
 			return nil, fmt.Errorf("failed to find cascade target deletes: %w", err)
 		}
+
+		// Default to abort: deleting a resource that a target's config references
+		// (e.g. a secret) would cascade-delete that target and its resources. Unless
+		// the command carries on-dependents=cascade, reject it and name the
+		// dependents — mirroring the resource/stack cascade-abort default. Simulation
+		// still surfaces the cascades so the client can show them and prompt the user.
+		if len(cascadeTargetUpdates) > 0 &&
+			!formaCommandConfig.Simulate &&
+			formaCommandConfig.OnDependents != "cascade" {
+			dependents := make([]apimodel.TargetDependent, 0, len(cascadeTargetUpdates))
+			for _, tu := range cascadeTargetUpdates {
+				dependents = append(dependents, apimodel.TargetDependent{
+					TargetLabel:   tu.Target.Label,
+					CascadeSource: tu.CascadeSource,
+				})
+			}
+			return nil, apimodel.FormaTargetHasDependentsError{Dependents: dependents}
+		}
+
 		targetUpdates = append(targetUpdates, cascadeTargetUpdates...)
 		resourceUpdates = append(resourceUpdates, cascadeResourceUpdates...)
 	}

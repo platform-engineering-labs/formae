@@ -69,7 +69,7 @@ var (
 	}
 
 	destroyFn = func(a *app.App, opts *DestroyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
-		return a.Destroy(opts.FormaFile, opts.Query, opts.Properties, simulate)
+		return a.Destroy(opts.FormaFile, opts.Query, opts.Properties, simulate, string(opts.OnDependents))
 	}
 )
 
