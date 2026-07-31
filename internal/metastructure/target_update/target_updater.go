@@ -225,14 +225,14 @@ func onTargetUpdaterStateChange(oldState gen.Atom, newState gen.Atom, data Targe
 		}
 
 		proc.Log().Debug("TargetUpdater: sending TargetUpdateFinished to requester state=%s target=%s", newState, data.targetUpdate.Target.Label)
-		err := proc.Send(
-			data.requestedBy,
-			TargetUpdateFinished{
-				NodeURI:        data.targetUpdate.NodeURI(),
-				State:          finalState,
-				ResolvedConfig: data.targetUpdate.Target.Config,
-			},
-		)
+		finished := TargetUpdateFinished{
+			NodeURI: data.targetUpdate.NodeURI(),
+			State:   finalState,
+		}
+		if finalState == TargetUpdateStateSuccess {
+			finished.ResolvedConfig = data.targetUpdate.Target.Config
+		}
+		err := proc.Send(data.requestedBy, finished)
 		if err != nil {
 			proc.Log().Error("TargetUpdater: failed to send TargetUpdateFinished to requester: %v", err)
 		}
