@@ -238,6 +238,16 @@ func FilterCompatiblePlugins(plugins []PluginInfo, agentVersion, sdkMinFormaeVer
 
 	// Development builds have version "0.0.0" (ldflags not set).
 	// Skip compatibility checks entirely — all plugins are loaded.
+	//
+	// This bypass is intentional and accepted: it allows local development and
+	// the e2e test suite (which run untagged source builds) to load any plugin
+	// without version friction. The real leak surface is nil for released agents
+	// because (a) all released agents carry a real semver and are fully gated,
+	// and (b) a current-source dev build hashes secret values at rest regardless
+	// of any plugin-level flag, so no secrets are exposed in plain text even if
+	// an older plugin is spawned. Fail-closing on 0.0.0 or adding an explicit
+	// unsafe override would break the local dev and e2e workflows and requires a
+	// deliberate team decision — it is not done here.
 	if agentVersion == "0.0.0" {
 		return plugins
 	}

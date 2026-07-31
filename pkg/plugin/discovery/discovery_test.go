@@ -367,9 +367,9 @@ func TestFilterCompatiblePlugins_AllCompatible(t *testing.T) {
 }
 
 func TestFilterCompatiblePlugins_OldAgentRejectsPluginRequiringNewerVersion(t *testing.T) {
-	// A plugin that declares minFormaeVersion=0.89.0 cannot load on an agent
-	// running 0.88.0. The version gate at agent startup (FilterCompatiblePlugins)
-	// must reject it so no Read can reach the plugin process.
+	// FilterCompatiblePlugins drops a plugin whose minFormaeVersion exceeds the
+	// running agent version. A released agent below that floor will never
+	// include the plugin in its load set.
 	plugin := PluginInfo{
 		Name:             "aws",
 		Namespace:        "AWS",
