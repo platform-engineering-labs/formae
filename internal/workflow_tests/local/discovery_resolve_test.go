@@ -7,7 +7,6 @@ package workflow_tests_local
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -115,6 +114,7 @@ func TestDiscoveryResolve_TargetConfigOpaqueRefIsResolvedBeforeList(t *testing.T
 		// propagateResolvedTargetConfig resolves the $ref for any resource ops.
 		// The datastore strips the resolved $value before persisting
 		// (StripOpaqueRefValues), so the stored config retains only the raw $ref.
+		// arbitrary stable KSUID for the test secret — must match the $ref below.
 		secretKsuid := "2MiD2rA1SJbLMGZgTL0hCxjkjjw"
 		stack := "discovery-resolve-test-stack"
 
@@ -177,10 +177,6 @@ func TestDiscoveryResolve_TargetConfigOpaqueRefIsResolvedBeforeList(t *testing.T
 
 		// Trigger discovery. The discovery path must resolve the opaque $ref in
 		// discovery-target's Config before passing TargetConfig to the plugin's List.
-		incoming := make(chan any, 1)
-		_, err = testutil.StartTestHelperActor(m.Node, incoming)
-		require.NoError(t, err)
-
 		err = testutil.Send(m.Node, "Discovery", discovery.Discover{})
 		require.NoError(t, err)
 
@@ -200,7 +196,7 @@ func TestDiscoveryResolve_TargetConfigOpaqueRefIsResolvedBeforeList(t *testing.T
 			cfgStr := string(cfg)
 			assert.NotContains(t, cfgStr, `"$ref"`,
 				"List call %d: TargetConfig must not contain a raw $ref — it must be resolved before reaching the plugin", i)
-			assert.True(t, strings.Contains(cfgStr, plaintextSecret),
+			assert.Contains(t, cfgStr, plaintextSecret,
 				"List call %d: TargetConfig must contain the resolved credential value", i)
 		}
 	})
