@@ -3379,3 +3379,54 @@ func TestNewChangeset_ValidTargetResolvableEdge_NoFalsePositive(t *testing.T) {
 	require.NoError(t, err, "a valid acyclic target-resolvable edge must not be rejected")
 	assert.False(t, cs.DAG.HasCycles(), "the built graph must be acyclic")
 }
+
+// TestNewChangeset_SynthesizesResolveForDeleteOnlyOpaqueTarget asserts that a target
+// carrying opaque $ref config gets a synthetic Resolve node even when the only target
+// update for that target is a Delete op. A Delete TU does not carry re-resolved config,
+// so resource-delete ops on that target must still get a Resolve dependency or they
+// dispatch with an unresolved credential.
+func TestNewChangeset_SynthesizesResolveForDeleteOnlyOpaqueTarget(t *testing.T) {
+	const targetLabel = "t1"
+	refURI := pkgmodel.NewFormaeURI(util.NewID(), "SecretString")
+
+	ds := &stubResolveDatastore{targets: map[string]*pkgmodel.Target{
+		targetLabel: {Label: targetLabel, Namespace: "AWS", Config: opaqueRefConfig(string(refURI))},
+	}}
+
+	deleteKsuid := util.NewID()
+	resourceUpdates := []resource_update.ResourceUpdate{
+		{
+			PriorState:   pkgmodel.Resource{Label: "res", Type: "AWS::S3::Bucket", Stack: "s", Ksuid: deleteKsuid, Target: targetLabel},
+			DesiredState: pkgmodel.Resource{Label: "res", Type: "AWS::S3::Bucket", Stack: "s", Ksuid: deleteKsuid, Target: targetLabel},
+			Operation:    resource_update.OperationDelete,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "s",
+		},
+	}
+
+	// The only TU for t1 is a Delete — it must NOT suppress Resolve synthesis.
+	targetUpdates := []target_update.TargetUpdate{
+		{
+			Target:    pkgmodel.Target{Label: targetLabel, Namespace: "AWS"},
+			Operation: target_update.TargetOperationDelete,
+			State:     target_update.TargetUpdateStateNotStarted,
+		},
+	}
+
+	cs, err := NewChangeset(resourceUpdates, targetUpdates, "cmd-delete-resolve", pkgmodel.CommandApply, ds)
+	require.NoError(t, err)
+
+	resolveURI := pkgmodel.FormaeURI("target://" + targetLabel + "/resolve")
+	resolveNode := cs.DAG.Nodes[resolveURI]
+	require.NotNil(t, resolveNode, "expected a synthetic Resolve node for the delete-only opaque target")
+
+	tu, ok := resolveNode.Update.(*target_update.TargetUpdate)
+	require.True(t, ok)
+	assert.Equal(t, target_update.TargetOperationResolve, tu.Operation)
+	require.Len(t, tu.RemainingResolvables, 1)
+	assert.Equal(t, refURI, tu.RemainingResolvables[0])
+
+	deleteNode := dagNodeForOp(t, cs.DAG, pkgmodel.NewFormaeURI(deleteKsuid, ""), resource_update.OperationDelete)
+	assert.True(t, hasDependencyOn(deleteNode, resolveURI),
+		"resource-delete must depend on the Resolve node so it dispatches with resolved config")
+}
