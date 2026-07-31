@@ -53,6 +53,12 @@ type Model struct {
 	// It is empty for synchronous-detail rows (other tabs) and is cleared when
 	// the detail screen closes so late-arriving responses are dropped.
 	detailKsuid string
+	// detailReqSeq is a monotonic counter incremented on every lazy detail
+	// fetch dispatch. The stale-response guard accepts a response only when its
+	// seq matches the latest dispatch, so a second in-flight fetch for the same
+	// ksuid (open -> close -> reopen the same row) cannot clobber the newer one
+	// when responses arrive out of order.
+	detailReqSeq uint64
 	// helpOpen tracks whether the help overlay is currently displayed.
 	helpOpen bool
 }
@@ -382,12 +388,15 @@ func (m Model) openDetail() (tea.Model, tea.Cmd) {
 	m.detailViewport = viewport.New(m.width, vpH)
 
 	if r.detailKsuid != "" {
-		// Lazy async path: show a loading placeholder immediately and fire the fetch.
+		// Lazy async path: show a loading placeholder immediately and fire the
+		// fetch, stamped with a fresh request sequence so only this dispatch's
+		// response is accepted.
 		m.detailKsuid = r.detailKsuid
+		m.detailReqSeq++
 		m.detailBody = []string{"Loading…"}
 		m.detailViewport = m.refreshDetailContent()
 		m.detailOpen = true
-		return m, fetchResourceDetailCmd(m.client, r.detailKsuid)
+		return m, fetchResourceDetailCmd(m.client, r.detailKsuid, m.detailReqSeq)
 	}
 
 	// Synchronous path (other tabs): compute the detail body from the closure.
@@ -408,11 +417,14 @@ func (m Model) openDetail() (tea.Model, tea.Cmd) {
 }
 
 // handleResourceDetailLoaded processes a resourceDetailLoadedMsg. It applies the
-// stale-response guard: the message is dropped unless detailOpen is true AND the
-// msg ksuid matches the currently-open detailKsuid.
+// stale-response guard: the message is dropped unless detailOpen is true, the
+// msg ksuid matches the currently-open detailKsuid, AND the msg seq is the
+// latest dispatch (so an earlier in-flight fetch for the same ksuid, after an
+// open -> close -> reopen, cannot overwrite the newer response).
 func (m Model) handleResourceDetailLoaded(msg resourceDetailLoadedMsg) (tea.Model, tea.Cmd) {
-	// Stale guard: drop responses for closed or mismatched ksuid.
-	if !m.detailOpen || msg.ksuid != m.detailKsuid {
+	// Stale guard: drop responses for closed detail, a mismatched ksuid, or a
+	// superseded request generation.
+	if !m.detailOpen || msg.ksuid != m.detailKsuid || msg.seq != m.detailReqSeq {
 		return m, nil
 	}
 

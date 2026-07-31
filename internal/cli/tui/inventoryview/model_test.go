@@ -591,13 +591,14 @@ func TestLazyDetail_DetailLoadedMsgRendersDetail(t *testing.T) {
 	}
 	mm, _ = mm.Update(tabLoadedMsg{tab: TabResources, rows: summaryRows})
 	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	seq := mm.(Model).detailReqSeq
 
 	// Deliver the detail loaded message.
 	res := &pkgmodel.Resource{
 		Label: "my-bucket", Stack: "production", Type: "AWS::S3::Bucket",
 		NativeID: "arn:aws:s3:::my-bucket", Managed: true,
 	}
-	mm, _ = mm.Update(resourceDetailLoadedMsg{ksuid: "ksuid-001", resource: res})
+	mm, _ = mm.Update(resourceDetailLoadedMsg{ksuid: "ksuid-001", seq: seq, resource: res})
 
 	m = mm.(Model)
 	assert.True(t, m.detailOpen)
@@ -626,11 +627,12 @@ func TestLazyDetail_DetailLoadedMsg_NotFoundShowsMessage(t *testing.T) {
 	}
 	mm, _ = mm.Update(tabLoadedMsg{tab: TabResources, rows: summaryRows})
 	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	seq := mm.(Model).detailReqSeq
 
 	loadingBody := strings.Join(mm.(Model).detailBody, "\n")
 
-	// Deliver a not-found response: matching ksuid, but nil resource and nil error.
-	mm, _ = mm.Update(resourceDetailLoadedMsg{ksuid: "ksuid-001", resource: nil, err: nil})
+	// Deliver a not-found response: matching ksuid and seq, but nil resource and nil error.
+	mm, _ = mm.Update(resourceDetailLoadedMsg{ksuid: "ksuid-001", seq: seq, resource: nil, err: nil})
 
 	m = mm.(Model)
 	assert.True(t, m.detailOpen)
@@ -698,6 +700,51 @@ func TestLazyDetail_StaleGuard_DetailClosed(t *testing.T) {
 	mm, _ = mm.Update(resourceDetailLoadedMsg{ksuid: "ksuid-001", resource: res})
 
 	assert.False(t, mm.(Model).detailOpen, "detail must remain closed after dropped stale response")
+}
+
+// TestLazyDetail_StaleGuard_ReopenSameKsuidOutOfOrder verifies that after an
+// open -> close -> reopen of the SAME row, a late response from the first
+// dispatch (older seq) is dropped even though its ksuid matches, so it cannot
+// overwrite the newer dispatch's response when the two arrive out of order.
+func TestLazyDetail_StaleGuard_ReopenSameKsuidOutOfOrder(t *testing.T) {
+	fc := buildFixtureClientWithSummaries()
+	opts := Options{
+		FocusTab: TabResources,
+		Now:      func() time.Time { return time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC) },
+	}
+	m := newTestInventoryModel(t, fc, opts)
+	var mm tea.Model = m
+	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+
+	summaryRows := []row{
+		resourceSummaryRow(pkgmodel.ResourceSummary{Label: "my-bucket", Stack: "production", Type: "AWS::S3::Bucket", NativeID: "arn:aws:s3:::my-bucket", Ksuid: "ksuid-001"}),
+	}
+	mm, _ = mm.Update(tabLoadedMsg{tab: TabResources, rows: summaryRows})
+
+	// Open (first dispatch), then close.
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	firstSeq := mm.(Model).detailReqSeq
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEsc})
+
+	// Reopen the same row (second dispatch).
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	secondSeq := mm.(Model).detailReqSeq
+	require.Greater(t, secondSeq, firstSeq, "reopen must dispatch a newer request generation")
+
+	// The current (second) response lands first and renders successfully.
+	freshRes := &pkgmodel.Resource{Label: "my-bucket", Stack: "production", Type: "AWS::S3::Bucket", NativeID: "arn:aws:s3:::my-bucket", Managed: true}
+	mm, _ = mm.Update(resourceDetailLoadedMsg{ksuid: "ksuid-001", seq: secondSeq, resource: freshRes})
+	rendered := strings.Join(mm.(Model).detailBody, "\n")
+	require.Contains(t, rendered, "my-bucket")
+
+	// The stale first-dispatch response arrives last, carrying different content.
+	// Same ksuid, older seq — it must be dropped, leaving the newer render intact.
+	staleRes := &pkgmodel.Resource{Label: "STALE-must-not-render", Stack: "production", Type: "AWS::S3::Bucket", NativeID: "arn:aws:s3:::my-bucket"}
+	mm, _ = mm.Update(resourceDetailLoadedMsg{ksuid: "ksuid-001", seq: firstSeq, resource: staleRes})
+
+	final := strings.Join(mm.(Model).detailBody, "\n")
+	assert.Equal(t, rendered, final, "stale first-dispatch response must not overwrite the newer render")
+	assert.NotContains(t, final, "STALE-must-not-render", "stale response content must not appear")
 }
 
 // TestFastPath_OpenDetailFetchesLazily confirms that on the resources tab,

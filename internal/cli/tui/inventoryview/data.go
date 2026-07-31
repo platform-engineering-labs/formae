@@ -88,11 +88,14 @@ type tabLoadedMsg struct {
 }
 
 // resourceDetailLoadedMsg is the bubbletea message delivered when a lazy
-// resource detail fetch completes. The ksuid field carries the same ksuid that
-// was open when the fetch was dispatched so the stale-response guard can drop
-// responses for rows that are no longer open.
+// resource detail fetch completes. ksuid carries the resource the fetch was
+// dispatched for, and seq carries the monotonic request generation so the
+// stale-response guard can drop responses that are no longer the latest
+// dispatch — including a second in-flight fetch for the same ksuid after an
+// open -> close -> reopen of the same row.
 type resourceDetailLoadedMsg struct {
 	ksuid    string
+	seq      uint64
 	resource *pkgmodel.Resource
 	err      error
 }
@@ -219,12 +222,12 @@ func fetchCmd(c Client, specs [4]tabSpec, tab Tab, query string, fromTUI bool) t
 }
 
 // fetchResourceDetailCmd returns a bubbletea Cmd that fetches the full resource
-// detail for the given ksuid and delivers a resourceDetailLoadedMsg. The ksuid is
-// carried back in the msg so the stale-response guard can match it against the
-// currently-open row.
-func fetchResourceDetailCmd(c Client, ksuid string) tea.Cmd {
+// detail for the given ksuid and delivers a resourceDetailLoadedMsg. The ksuid
+// and seq are carried back in the msg so the stale-response guard can accept
+// only the latest dispatch for the currently-open row.
+func fetchResourceDetailCmd(c Client, ksuid string, seq uint64) tea.Cmd {
 	return func() tea.Msg {
 		resource, _, err := c.ResourceDetailByKsuid(ksuid, true)
-		return resourceDetailLoadedMsg{ksuid: ksuid, resource: resource, err: err}
+		return resourceDetailLoadedMsg{ksuid: ksuid, seq: seq, resource: resource, err: err}
 	}
 }
