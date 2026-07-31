@@ -54,17 +54,27 @@ func (s *stubSyncResourcesDatastore) LoadTarget(label string) (*pkgmodel.Target,
 
 // persistCommandProcess is a gen.Process double that handles all actor calls
 // that synchronizeResources issues: StoreNewFormaCommand (before NewChangeset)
-// and EnsureChangesetExecutor (after). All other messages are delegated to the
-// embedded stubProcess.
+// and EnsureChangesetExecutor (after). It records MarkResourcesAsFailed and
+// FinalizeIncompleteCommand calls so tests can verify orphan-command cleanup.
+// All other messages are delegated to the embedded stubProcess.
 type persistCommandProcess struct {
 	*stubProcess
+
+	markFailedCalls    []forma_persister.MarkResourcesAsFailed
+	finalizeCalls      []forma_persister.FinalizeIncompleteCommand
 }
 
 func (p *persistCommandProcess) Call(_ any, message any) (any, error) {
-	switch message.(type) {
+	switch m := message.(type) {
 	case forma_persister.StoreNewFormaCommand:
 		return struct{}{}, nil
 	case changeset.EnsureChangesetExecutor:
+		return struct{}{}, nil
+	case forma_persister.MarkResourcesAsFailed:
+		p.markFailedCalls = append(p.markFailedCalls, m)
+		return struct{}{}, nil
+	case forma_persister.FinalizeIncompleteCommand:
+		p.finalizeCalls = append(p.finalizeCalls, m)
 		return struct{}{}, nil
 	default:
 		return p.stubProcess.Call(nil, message)
@@ -186,3 +196,51 @@ func TestSynchronizeResources_ReturnsCommandIDOnSuccess(t *testing.T) {
 
 // Ensure persistCommandProcess satisfies the gen.Process interface.
 var _ gen.Process = (*persistCommandProcess)(nil)
+
+// TestSynchronizeResources_FinalizesCommandOnNewChangesetError asserts that when
+// NewChangeset fails after the command has already been persisted, synchronizeResources
+// finalizes the stored command (marks all resources failed, then calls
+// FinalizeIncompleteCommand) so no command is left permanently pending.
+func TestSynchronizeResources_FinalizesCommandOnNewChangesetError(t *testing.T) {
+	const (
+		namespace    = "FakeAWS"
+		resourceType = "FakeAWS::S3::Bucket"
+		targetLabel  = "us-east-1"
+		nativeID     = "my-bucket"
+	)
+
+	loadTargetErr := errors.New("datastore read error")
+	ds := &stubSyncResourcesDatastore{
+		targets: []*pkgmodel.Target{
+			{Label: targetLabel, Namespace: namespace},
+		},
+		loadTargetErr: loadTargetErr,
+	}
+
+	data := newSyncResourcesData(ds, namespace, resourceType)
+	proc := &persistCommandProcess{stubProcess: &stubProcess{}}
+
+	op := ListOperation{
+		ResourceType: resourceType,
+		TargetLabel:  targetLabel,
+	}
+	target := pkgmodel.Target{Label: targetLabel, Namespace: namespace}
+	resources := []plugin.ListedResource{
+		{NativeID: nativeID, ResourceType: resourceType},
+	}
+
+	_, err := synchronizeResources(op, namespace, target, resources, data, proc)
+
+	require.Error(t, err, "synchronizeResources must propagate the NewChangeset error")
+
+	assert.NotEmpty(t, proc.markFailedCalls,
+		"MarkResourcesAsFailed must be called to terminalize resource updates before finalizing")
+	require.Len(t, proc.finalizeCalls, 1,
+		"FinalizeIncompleteCommand must be called exactly once to close out the orphaned command")
+
+	// The same command ID must be used throughout.
+	if len(proc.markFailedCalls) > 0 {
+		assert.Equal(t, proc.finalizeCalls[0].CommandID, proc.markFailedCalls[0].CommandID,
+			"MarkResourcesAsFailed and FinalizeIncompleteCommand must reference the same command")
+	}
+}
