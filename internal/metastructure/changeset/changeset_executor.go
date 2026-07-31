@@ -389,14 +389,31 @@ func targetUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, mess
 	// all downstream resource updates that reference this target. Without this,
 	// resource updaters would use the stale snapshot from generation time which
 	// still contains unresolved $ref objects.
+	//
+	// Fail closed if the resolved config cannot be converted to plugin format
+	// (e.g. it still carries a $hashed value that must never be sent to a
+	// provider). Propagating the unconverted document would leak $ref/$value
+	// metadata and secret material to the plugin, so instead the target finish
+	// is treated as a failure: the node is marked failed and the failure
+	// cascades to every dependent resource op, ensuring nothing malformed
+	// reaches a plugin. The conversion error is structural and carries no
+	// plaintext; message.ResolvedConfig is never logged.
 	if message.State == target_update.TargetUpdateStateSuccess && message.ResolvedConfig != nil {
 		if tu, ok := node.Update.(*target_update.TargetUpdate); ok {
 			// Convert the resolved config to plugin format: strip $ref/$value
 			// metadata so plugins receive plain values.
 			pluginConfig, err := resolver.ConvertToPluginFormat(message.ResolvedConfig)
 			if err != nil {
-				proc.Log().Error("Failed to convert target config to plugin format target=%s: %v", tu.Target.Label, err)
-				pluginConfig = message.ResolvedConfig
+				proc.Log().Error("Failed to convert target config to plugin format, failing dependent resource ops target=%s: %v", tu.Target.Label, err)
+				// Route through the failure branch of handleUpdateFinished so the
+				// node (still running here) is marked failed there and the failure
+				// cascades to dependent resource ops. Marking it failed now would
+				// make handleUpdateFinished treat it as already-completed and skip
+				// the cascade.
+				return handleUpdateFinished(from, state, data, updateFinishedEvent{
+					nodeURI:   message.NodeURI,
+					isSuccess: false,
+				}, proc)
 			}
 			data.changeset.DAG.propagateResolvedTargetConfig(tu.Target.Label, pluginConfig)
 		}
