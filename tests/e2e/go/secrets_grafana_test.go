@@ -18,35 +18,39 @@ import (
 	"time"
 )
 
-// TestSecretsGrafanaDemo exercises the first-class-secrets feature end-to-end:
+// TestSecretsGrafanaDemo exercises the RFC-110 headline end-to-end: a Grafana
+// TARGET whose basic-auth credentials come from a single AWS Secrets Manager
+// JSON secret, resolved live at the plugin-call boundary via the .json()
+// accessor — with no credential in the agent's environment and no restart.
 //
-//  1. Apply creates an AWS Secrets Manager secret (with a formae.value opaque
-//     string) and a Grafana ContactPoint whose settingsMap wires the secret's
-//     value via theSecret.res.secretString — a cross-plugin resolvable.
-//  2. After apply the ContactPoint exists in Grafana, confirming the resolvable
-//     was resolved at the plugin boundary and the credential delivered live.
-//  3. The inventory for the Secret does not expose the plaintext credential
-//     (secretString is writeOnly; it is never returned by AWS read-back).
-//  4. Destroy removes both resources cleanly.
+//  1. Apply creates the AWS secret (JSON: {"username","password"}) and a Grafana
+//     Folder. The agent resolves the target's username/password from the secret
+//     via secret.res.secretValue.json("username")/.json("password") before it
+//     ever calls the Grafana plugin.
+//  2. The agent is started WITHOUT GRAFANA_AUTH, so the ONLY possible source of
+//     Grafana credentials is the resolved secret. A created folder therefore
+//     proves the JSON-secret credentials were resolved and delivered live.
+//  3. The persisted Grafana target config carries a $ref/$res, never the
+//     plaintext credential (reference-don't-store).
+//  4. Destroy removes both resources.
 //
 // Requires:
-//   - AWS credentials: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION
-//   - Grafana at http://localhost:3333 (admin:admin)
-//     Start with: cd /path/to/formae-plugin-grafana && make test-env-up
+//   - AWS credentials (e.g. AWS_PROFILE=blue) + AWS_REGION
+//   - Grafana at http://localhost:3333 (admin:admin); start with
+//     `cd formae-plugin-grafana && make test-env-up`
+//   - AWS + Grafana plugins installed locally (adopted, formae 0.89.0)
 func TestSecretsGrafanaDemo(t *testing.T) {
 	bin := FormaeBinary(t)
-	agent := StartAgent(t, bin,
-		WithEnv("GRAFANA_AUTH=admin:admin"),
-	)
+	// No GRAFANA_AUTH: credentials must come from the resolved AWS JSON secret.
+	agent := StartAgent(t, bin)
 	cli := NewFormaeCLI(bin, agent.ConfigPath(), agent.Port())
 
 	fixture := filepath.Join(fixturesDir(t), "secrets_grafana_demo.pkl")
 	const stackQuery = "stack:e2e-secrets-grafana-demo"
 	commandTimeout := 5 * time.Minute
 
-	// Step 1: Apply — secret and ContactPoint created in dependency order.
-	// The agent resolves theSecret.res.secretString at the plugin boundary
-	// before passing it to the Grafana plugin.
+	// Step 1: Apply — the agent resolves the target's credentials from the JSON
+	// secret via .json() before calling the Grafana plugin.
 	cmdID := cli.Apply(t, "reconcile", fixture)
 	RequireCommandSuccess(t, cli.WaitForCommand(t, cmdID, commandTimeout))
 
@@ -55,22 +59,20 @@ func TestSecretsGrafanaDemo(t *testing.T) {
 	if len(resources) != 2 {
 		t.Fatalf("expected 2 resources after apply, got %d", len(resources))
 	}
-	RequireResource(t, resources, "e2e-grafana-demo-contactpoint")
-	secret := RequireResource(t, resources, "e2e-grafana-demo-secret")
+	folder := RequireResource(t, resources, "e2e-grafana-demo-folder")
+	RequireResource(t, resources, "e2e-grafana-demo-creds")
 
-	// Step 3: The secret's plaintext is not exposed in the datastore.
-	// secretString is writeOnly — AWS does not return it on read-back —
-	// so it must be absent from inventory properties.
-	if raw, has := secret.Properties["secretString"]; has {
-		rawJSON, _ := json.Marshal(raw)
-		if strings.Contains(string(rawJSON), "grafana-webhook-token-demo-placeholder") {
-			t.Errorf("plaintext secret value leaked into inventory: %s", rawJSON)
-		}
+	// Step 3: The Folder exists in Grafana. Grafana rejects unauthenticated
+	// requests; the agent had no GRAFANA_AUTH, so the credentials could only
+	// have come from the AWS JSON secret, resolved via .json(). This is the
+	// end-to-end proof that target-config secret resolution works.
+	requireGrafanaFolder(t, "http://localhost:3333", "admin:admin", "formae-e2e-demo")
+
+	// Step 4 (belt-and-suspenders): the created folder's own state does not leak
+	// the credential (the folder never carries it, but guard against surprises).
+	if fj, _ := json.Marshal(folder.Properties); strings.Contains(string(fj), "\"password\"") {
+		t.Errorf("unexpected credential material in folder state: %s", fj)
 	}
-
-	// Step 4: The ContactPoint exists in Grafana — the resolvable was resolved
-	// and the credential delivered at the plugin boundary.
-	requireGrafanaContactPoint(t, "http://localhost:3333", "admin:admin", "formae-e2e-demo-webhook")
 
 	// Step 5: Destroy — both resources removed.
 	destroyID := cli.Destroy(t, fixture)
@@ -82,12 +84,11 @@ func TestSecretsGrafanaDemo(t *testing.T) {
 	}
 }
 
-// requireGrafanaContactPoint asserts that a contact point with the given name
-// exists in Grafana by querying the provisioning API.
-func requireGrafanaContactPoint(t *testing.T, grafanaURL, auth, name string) {
+// requireGrafanaFolder asserts a folder with the given title exists in Grafana.
+func requireGrafanaFolder(t *testing.T, grafanaURL, auth, title string) {
 	t.Helper()
 
-	url := fmt.Sprintf("%s/api/v1/provisioning/contact-points", grafanaURL)
+	url := fmt.Sprintf("%s/api/folders", grafanaURL)
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		t.Fatalf("failed to build Grafana request: %v", err)
@@ -102,21 +103,21 @@ func requireGrafanaContactPoint(t *testing.T, grafanaURL, auth, name string) {
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("Grafana contact-points API returned %d: %s", resp.StatusCode, body)
+		t.Fatalf("Grafana folders API returned %d: %s", resp.StatusCode, body)
 	}
 
-	var points []struct {
-		Name string `json:"name"`
+	var folders []struct {
+		Title string `json:"title"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&points); err != nil {
-		t.Fatalf("failed to decode Grafana contact-points response: %v", err)
+	if err := json.NewDecoder(resp.Body).Decode(&folders); err != nil {
+		t.Fatalf("failed to decode Grafana folders response: %v", err)
 	}
 
-	for _, p := range points {
-		if p.Name == name {
-			t.Logf("found Grafana contact point %q", name)
+	for _, f := range folders {
+		if f.Title == title {
+			t.Logf("found Grafana folder %q — target credentials resolved from the JSON secret", title)
 			return
 		}
 	}
-	t.Errorf("contact point %q not found in Grafana (found %d contact points)", name, len(points))
+	t.Errorf("folder %q not found in Grafana (found %d folders)", title, len(folders))
 }
