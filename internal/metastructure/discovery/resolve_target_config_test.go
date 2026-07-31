@@ -164,7 +164,8 @@ func TestResolveTargetConfigForList_OpaqueRefResolved(t *testing.T) {
 
 	// Exactly one LoadResource call was issued (for the opaque URI)
 	require.Len(t, proc.loadResourceCalls, 1)
-	assert.Equal(t, pkgmodel.FormaeURI(fmt.Sprintf("formae://%s#", ksuid)),
+	sourceURI := pkgmodel.FormaeURI(fmt.Sprintf("formae://%s#/%s", ksuid, prop))
+	assert.Equal(t, sourceURI.Stripped(),
 		proc.loadResourceCalls[0],
 		"LoadResource must be called with the stripped URI (no property path)")
 }
@@ -247,6 +248,8 @@ func TestResolveTargetConfigForList_NonRecoverableReadFailure(t *testing.T) {
 	// Error must NOT contain the plaintext or the raw $value
 	assert.NotContains(t, errMsg, plaintext,
 		"error must not leak the plaintext secret value")
+	assert.NotContains(t, errMsg, "$value",
+		"error must not include raw $ref envelope fields")
 }
 
 // TestResolveTargetConfigForList_RecoverableFailureThenSuccess asserts that a
@@ -331,9 +334,90 @@ func TestResolveTargetConfigForList_RecoverableFailureThenSuccess(t *testing.T) 
 
 		require.Error(t, err, "exhausting the retry budget must return an error")
 		assert.Nil(t, result, "result must be nil when budget is exhausted")
-		assert.LessOrEqual(t, proc.readAttempts, maxDiscoveryResolveAttempts,
-			"must not exceed the attempt budget")
+		assert.Equal(t, maxDiscoveryResolveAttempts, proc.readAttempts,
+			"must exhaust the full attempt budget on repeated recoverable failures")
 	})
+}
+
+// TestResolveTargetConfigForList_ConvertFailureDoesNotLeakEnvelope asserts that
+// when the final ConvertToPluginFormat step fails (e.g. a $hashed field remains
+// in the working config after all $ref URIs have been resolved), the function
+// returns an error and a nil result — never the still-wrapped envelope
+// containing $value.
+//
+// The trigger: the target config carries both an opaque $ref (which is
+// successfully resolved) AND a separately hashed field that has no $ref so it
+// is not in the opaque-URI list. ConvertToPluginFormat rejects the $hashed
+// marker, exercising the error surface introduced by this fix.
+func TestResolveTargetConfigForList_ConvertFailureDoesNotLeakEnvelope(t *testing.T) {
+	const ksuid = "35R2vyf6mT5wEs0mTWT5bp1Lf0E"
+	const prop = "SecretString"
+	const plaintext = "s3cr3t"
+	// hashedPlaintext is the value stored hashed in the target config; it must
+	// not appear in any error message.
+	const hashedPlaintext = "hashed-secret-value"
+
+	srcResource := buildSourceResource(ksuid)
+	srcTarget := pkgmodel.Target{
+		Label:     "us-east-1",
+		Namespace: "FakeAWS",
+		Config:    json.RawMessage(`{"Region":"us-east-1"}`),
+	}
+
+	proc := &resolveStubProcess{
+		loadResult: messages.LoadResourceResult{
+			Resource: srcResource,
+			Target:   srcTarget,
+		},
+		readResponses: []readResponse{
+			{
+				progress: &plugin.TrackedProgress{
+					ProgressResult: resource.ProgressResult{
+						OperationStatus:    resource.OperationStatusSuccess,
+						ResourceProperties: json.RawMessage(fmt.Sprintf(`{"%s":"%s"}`, prop, plaintext)),
+					},
+				},
+			},
+		},
+	}
+
+	// Target config has one resolvable $ref (SecretString) plus a hashed field
+	// (StoredHash) that carries no $ref — ExtractOpaqueResolvableURIsFromJSON
+	// will not include it in the URI list, so it survives to the final
+	// ConvertToPluginFormat call, which rejects the $hashed marker.
+	targetCfg := json.RawMessage(fmt.Sprintf(`{
+		"Region": "us-east-1",
+		"ApiKey": {
+			"$ref": "formae://%s#/%s",
+			"$value": "old-value",
+			"$visibility": "Opaque"
+		},
+		"StoredHash": {
+			"$value": %q,
+			"$visibility": "Opaque",
+			"$hashed": true
+		}
+	}`, ksuid, prop, hashedPlaintext))
+
+	target := pkgmodel.Target{
+		Label:  "prod",
+		Config: targetCfg,
+	}
+
+	result, err := resolveTargetConfigForList(proc, target)
+
+	require.Error(t, err, "a ConvertToPluginFormat failure must surface as an error")
+	assert.Nil(t, result, "result must be nil — envelope config must not be returned")
+
+	errMsg := err.Error()
+	assert.NotContains(t, errMsg, plaintext,
+		"error must not contain the plaintext resolved value")
+	assert.NotContains(t, errMsg, hashedPlaintext,
+		"error must not contain the hashed field's stored value")
+	assert.NotContains(t, errMsg, "$value",
+		"error must not include raw $ref envelope fields")
+	assert.Contains(t, errMsg, "prod",
+		"error must name the target label for operator action")
 }
 
 // Ensure resolveStubProcess satisfies gen.Process.
