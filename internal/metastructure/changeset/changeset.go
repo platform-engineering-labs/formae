@@ -178,11 +178,19 @@ func synthesizeResolveTargetUpdates(
 	targetUpdates []target_update.TargetUpdate,
 	ds datastore.Datastore,
 ) ([]target_update.TargetUpdate, error) {
-	// Targets already covered by a real target update in this command must never be
-	// synthesized for — their update carries the desired (and re-resolved) config.
+	// A target is covered only when a resolving op already carries re-resolved config.
+	// A Delete op does not carry resolved config, so it must not mark the target covered:
+	// resource ops on a Delete-only target still need a synthetic Resolve to dispatch
+	// with the current secret value.
 	covered := make(map[string]bool)
 	for i := range targetUpdates {
-		covered[targetUpdates[i].Target.Label] = true
+		switch targetUpdates[i].Operation {
+		case target_update.TargetOperationCreate,
+			target_update.TargetOperationUpdate,
+			target_update.TargetOperationReplace,
+			target_update.TargetOperationResolve:
+			covered[targetUpdates[i].Target.Label] = true
+		}
 	}
 
 	// Distinct candidate target labels referenced by a resource op, in first-seen
