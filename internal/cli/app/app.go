@@ -383,56 +383,29 @@ func (a *App) ExtractResources(query string, fromTUI bool) (*pkgmodel.Forma, []s
 	return f, nags, err
 }
 
-// ListResourceSummaries fetches lightweight resource summaries from the agent.
-// On success it returns the summaries alongside any nag messages from the
-// compatibility gate. On a 404 from the summary route (older agent that does
-// not expose the endpoint), it falls back to ExtractResources; the full
-// resource slice is returned as the second value so callers can render detail
-// locally without a per-row round-trip. On the fast path the second return is
-// nil, indicating that detail must be fetched lazily by ksuid.
-func (a *App) ListResourceSummaries(query string, fromTUI bool) ([]pkgmodel.ResourceSummary, []pkgmodel.Resource, []string, error) {
+// ListResourceSummaries fetches lightweight resource summaries from the agent,
+// alongside any nag messages from the compatibility gate. Detail is fetched
+// lazily by ksuid via ResourceDetailByKsuid.
+func (a *App) ListResourceSummaries(query string, fromTUI bool) ([]pkgmodel.ResourceSummary, []string, error) {
 	auth, net, err := a.getAuthAndNetHandlers()
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 	client := api.NewClient(a.Config.Cli.API, auth, net)
 
 	compatible, _, nags, err := a.runBeforeCommand(client, !fromTUI)
 	if !compatible {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 
 	summaries, err := client.ListResourceSummaries(query)
-	if errors.Is(err, api.ErrEndpointNotFound) {
-		// Older agent: fall back to full resource extraction and map to summaries.
-		// Return the full resources alongside so callers can render detail locally.
-		f, fallbackErr := client.ExtractResources(query)
-		if fallbackErr != nil {
-			return nil, nil, nil, fallbackErr
-		}
-		if f == nil {
-			return []pkgmodel.ResourceSummary{}, nil, nags, nil
-		}
-		mapped := make([]pkgmodel.ResourceSummary, len(f.Resources))
-		for i, r := range f.Resources {
-			mapped[i] = pkgmodel.ResourceSummary{
-				Label:    r.Label,
-				Stack:    r.Stack,
-				Type:     r.Type,
-				NativeID: r.NativeID,
-				Ksuid:    r.Ksuid,
-			}
-		}
-		return mapped, f.Resources, nags, nil
-	}
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 	if summaries == nil {
 		summaries = []pkgmodel.ResourceSummary{}
 	}
-	// Fast path: full resource data is not available; detail is fetched lazily.
-	return summaries, nil, nags, nil
+	return summaries, nags, nil
 }
 
 // ResourceDetailByKsuid fetches a single resource by its ksuid from the agent.

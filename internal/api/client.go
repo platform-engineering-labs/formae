@@ -496,12 +496,7 @@ func (c *Client) ExtractResources(query string) (*pkgmodel.Forma, error) {
 }
 
 // ListResourceSummaries fetches lightweight resource summaries from the agent.
-//
-// A current agent returns 200 with an empty list when nothing matches, so a 404
-// on this route can only mean the agent does not expose the summary endpoint (an
-// older agent). In that case this returns ErrEndpointNotFound; callers may fall
-// back to the full resource extraction path. An empty result from a current agent
-// is returned as ([]ResourceSummary{}, nil).
+// An empty result is returned as ([]ResourceSummary{}, nil).
 func (c *Client) ListResourceSummaries(query string) ([]pkgmodel.ResourceSummary, error) {
 	resp, err := c.resty.R().
 		SetQueryParam("query", query).
@@ -521,10 +516,6 @@ func (c *Client) ListResourceSummaries(query string) ([]pkgmodel.ResourceSummary
 			summaries = []pkgmodel.ResourceSummary{}
 		}
 		return summaries, nil
-	case http.StatusNotFound:
-		// 404 on this route means the agent does not support the summary endpoint
-		// (older agent). Callers can detect this via errors.Is(err, ErrEndpointNotFound).
-		return nil, ErrEndpointNotFound
 	case http.StatusBadRequest:
 		return c.parseListResourceSummariesErrorResponse(resp.Body)
 	default:

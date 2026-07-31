@@ -36,10 +36,6 @@ type fakeClient struct {
 	summaries      []pkgmodel.ResourceSummary
 	detailsByKsuid map[string]*pkgmodel.Resource
 
-	// fallbackMode simulates an older agent: ListResourceSummaries returns the
-	// full resources alongside the summaries (no lazy fetch needed).
-	fallbackMode bool
-
 	// per-entity errors
 	formaErr    error
 	targetsErr  error
@@ -100,13 +96,12 @@ func (f *fakeClient) ExtractPolicies(fromTUI bool) ([]apimodel.PolicyInventoryIt
 
 // ListResourceSummaries returns the pre-seeded summaries. When summaries is nil
 // it derives them from forma.Resources so existing tests that only set forma
-// continue to work without modification. When fallbackMode is true, the full
-// resource slice is returned alongside so openDetail renders locally.
-func (f *fakeClient) ListResourceSummaries(query string, fromTUI bool) ([]pkgmodel.ResourceSummary, []pkgmodel.Resource, []string, error) {
+// continue to work without modification.
+func (f *fakeClient) ListResourceSummaries(query string, fromTUI bool) ([]pkgmodel.ResourceSummary, []string, error) {
 	f.resourcesQuery = query
 	f.resourcesFromTUI = fromTUI
 	if f.formaErr != nil {
-		return nil, nil, f.formaNags, f.formaErr
+		return nil, f.formaNags, f.formaErr
 	}
 	if f.summaries != nil {
 		// Use explicit summaries; apply a simple substring filter if query is set.
@@ -122,18 +117,14 @@ func (f *fakeClient) ListResourceSummaries(query string, fromTUI bool) ([]pkgmod
 				}
 			}
 		}
-		if f.fallbackMode && f.forma != nil {
-			return filtered, f.forma.Resources, f.formaNags, nil
-		}
-		return filtered, nil, f.formaNags, nil
+		return filtered, f.formaNags, nil
 	}
 	// Derive summaries from forma for backward compatibility with existing tests.
 	if f.forma == nil {
-		return nil, nil, f.formaNags, nil
+		return nil, f.formaNags, nil
 	}
 	needle := strings.ToLower(query)
 	summaries := make([]pkgmodel.ResourceSummary, 0, len(f.forma.Resources))
-	var fullResources []pkgmodel.Resource
 	for _, r := range f.forma.Resources {
 		if query != "" {
 			hay := strings.ToLower(r.NativeID + " " + r.Stack + " " + r.Type + " " + r.Label)
@@ -148,11 +139,8 @@ func (f *fakeClient) ListResourceSummaries(query string, fromTUI bool) ([]pkgmod
 			NativeID: r.NativeID,
 			Ksuid:    r.Ksuid,
 		})
-		if f.fallbackMode {
-			fullResources = append(fullResources, r)
-		}
 	}
-	return summaries, fullResources, f.formaNags, nil
+	return summaries, f.formaNags, nil
 }
 
 // ResourceDetailByKsuid returns the resource for the given ksuid from
