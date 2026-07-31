@@ -717,6 +717,7 @@ func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Ta
 	cs, err := changeset.NewChangeset(syncCommand.ResourceUpdates, nil, syncCommand.ID, pkgmodel.CommandSync, data.ds)
 	if err != nil {
 		slog.Error("failed to build changeset for discovery sync command", "commandID", syncCommand.ID, "error", err)
+		finalizeFailedSyncCommand(syncCommand, proc)
 		return "", fmt.Errorf("failed to build changeset: %w", err)
 	}
 
@@ -1039,4 +1040,31 @@ func injectResolvables(props string, op ListOperation) json.RawMessage {
 	}
 
 	return json.RawMessage(props)
+}
+
+// finalizeFailedSyncCommand marks all resource updates in the command as failed and then
+// finalizes the command itself, preventing persisted commands from being left in a
+// non-terminal pending state when changeset construction fails after storage.
+func finalizeFailedSyncCommand(cmd *forma_command.FormaCommand, proc gen.Process) {
+	refs := make([]forma_persister.ResourceUpdateRef, 0, len(cmd.ResourceUpdates))
+	for _, ru := range cmd.ResourceUpdates {
+		refs = append(refs, forma_persister.ResourceUpdateRef{
+			URI:       ru.URI(),
+			Operation: ru.Operation,
+		})
+	}
+	persister := actornames.FormaCommandPersister
+	if len(refs) > 0 {
+		if _, err := proc.Call(persister, forma_persister.MarkResourcesAsFailed{
+			CommandID:          cmd.ID,
+			Resources:          refs,
+			ResourceModifiedTs: time.Now(),
+		}); err != nil {
+			slog.Error("Discovery: failed to mark resources as failed for aborted command", "commandID", cmd.ID, "error", err)
+			return
+		}
+	}
+	if _, err := proc.Call(persister, forma_persister.FinalizeIncompleteCommand{CommandID: cmd.ID}); err != nil {
+		slog.Error("Discovery: failed to finalize aborted command", "commandID", cmd.ID, "error", err)
+	}
 }
