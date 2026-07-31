@@ -268,7 +268,12 @@ func runDestroyInteractive(a *app.App, opts *DestroyOptions) error {
 		return nil
 	}
 
-	// Confirmed: run the real destroy.
+	// Confirmed: run the real destroy. If the simulation showed cascade deletes,
+	// the interactive confirmation serves as the user's opt-in — elevate to cascade
+	// so the server gate does not reject with a dependents conflict.
+	if hasCascadeDeletes(&res.Simulation.Command) {
+		opts.OnDependents = OnDependentsCascade
+	}
 	realRes, _, err := destroyFn(a, opts, false)
 	if err != nil {
 		msg, renderErr := errfmt.Render(err)
@@ -399,6 +404,12 @@ func runDestroyLegacy(app *app.App, opts *DestroyOptions) error {
 			th := app.Theme()
 			fmt.Print(lipgloss.NewStyle().Foreground(th.Palette.Error).Render("\nCommand aborted") + "\n")
 			return nil
+		}
+		// The interactive confirmation serves as the user's opt-in for cascade
+		// deletes — elevate so the server gate does not reject with a dependents
+		// conflict when the simulation showed cascades.
+		if hasCascades {
+			opts.OnDependents = OnDependentsCascade
 		}
 	}
 

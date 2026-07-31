@@ -194,6 +194,12 @@ func synthesizeResolveTargetUpdates(
 	ds datastore.Datastore,
 ) ([]target_update.TargetUpdate, error) {
 	covered := make(map[string]bool)
+	// cascadeOpaqueUncovered tracks targets that are uncovered specifically
+	// because they are cascade-deleted with an opaque $ref. For these targets
+	// only opaque resolvables should be included in the synthetic Resolve: their
+	// non-opaque cross-resource $refs point at source resources being torn down
+	// in the same command, so resolving them would read a vanishing source.
+	cascadeOpaqueUncovered := make(map[string]bool)
 	for i := range targetUpdates {
 		switch targetUpdates[i].Operation {
 		case target_update.TargetOperationCreate,
@@ -214,13 +220,15 @@ func synthesizeResolveTargetUpdates(
 			// plugin genuinely needs the resolved value to authenticate its teardown
 			// calls, and the changeset orders the secret delete AFTER the target
 			// delete, keeping the secret present at Resolve time. So un-cover it and
-			// let the synthetic Resolve read it.
+			// let the synthetic Resolve read it — but only for the opaque refs.
 			if targetUpdates[i].IsCascade {
 				existing := targetUpdates[i].ExistingTarget
 				hasOpaque := existing != nil &&
 					len(resolver.ExtractOpaqueResolvableURIsFromJSON(existing.Config)) > 0
 				if !hasOpaque {
 					covered[targetUpdates[i].Target.Label] = true
+				} else {
+					cascadeOpaqueUncovered[targetUpdates[i].Target.Label] = true
 				}
 			}
 		}
@@ -256,7 +264,17 @@ func synthesizeResolveTargetUpdates(
 		if persisted == nil {
 			continue
 		}
-		resolvables := resolver.ExtractResolvableURIsFromJSON(persisted.Config)
+		// For cascade-opaque uncovered targets, only resolve opaque $refs: their
+		// non-opaque cross-resource $refs point at sources being deleted in this
+		// same command, and reading a vanishing source would fail. On the delete
+		// path non-opaque refs carry their stored value via NativeID and do not
+		// require resolution.
+		var resolvables []pkgmodel.FormaeURI
+		if cascadeOpaqueUncovered[label] {
+			resolvables = resolver.ExtractOpaqueResolvableURIsFromJSON(persisted.Config)
+		} else {
+			resolvables = resolver.ExtractResolvableURIsFromJSON(persisted.Config)
+		}
 		if len(resolvables) == 0 {
 			continue
 		}
