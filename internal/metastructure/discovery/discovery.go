@@ -251,6 +251,14 @@ func (d *Discovery) Init(args ...any) (statemachine.StateMachineSpec[DiscoveryDa
 func onStateChange(oldState gen.Atom, newState gen.Atom, data DiscoveryData, proc gen.Process) (gen.Atom, DiscoveryData, error) {
 	if oldState == StateDiscovering && newState == StateIdle {
 		proc.Log().Debug("Discovery finished (duration=%s). The following resources have been discovered:\n%s", time.Since(data.timeStarted), renderSummary(data.summary))
+		if len(data.failedTargets) > 0 {
+			labels := make([]string, 0, len(data.failedTargets))
+			for label := range data.failedTargets {
+				labels = append(labels, label)
+			}
+			slices.Sort(labels)
+			proc.Log().Warning("discovery: %d target(s) skipped this cycle due to config resolution failure: %v", len(data.failedTargets), labels)
+		}
 	}
 	return newState, data, nil
 }
@@ -428,6 +436,10 @@ func ensureTargetResolved(data DiscoveryData, label string, proc gen.Process) (D
 
 	resolved, err := resolveTargetConfigForList(proc, data.targets[label])
 	if err != nil {
+		// Fail closed: a target whose credential source is missing or rotated is
+		// skipped for the remainder of this cycle so its ListResources call is
+		// never issued with a stale or unresolved credential. The target recovers
+		// automatically on the next discovery cycle once the source resolves.
 		proc.Log().Error("discovery: skipping target %s: could not resolve its config: %v", label, err)
 		data.failedTargets[label] = true
 		return data, false

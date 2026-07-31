@@ -10,13 +10,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"ergo.services/ergo/gen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/changeset"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
@@ -426,6 +429,45 @@ var _ gen.Process = (*resolveStubProcess)(nil)
 // stubActorNamesSentinel verifies the expected actor name constant is accessible.
 var _ = actornames.ResourcePersister
 
+// recordingLog is a gen.Log test double that records every formatted message
+// produced by any log method. Tests use it to assert that no log line on the
+// resolve-failure path contains a plaintext secret or a raw "$value" envelope.
+type recordingLog struct {
+	gen.Log
+	mu       sync.Mutex
+	messages []string
+}
+
+func (r *recordingLog) record(format string, args ...any) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.messages = append(r.messages, fmt.Sprintf(format, args...))
+}
+
+func (r *recordingLog) Trace(format string, args ...any)   { r.record(format, args...) }
+func (r *recordingLog) Debug(format string, args ...any)   { r.record(format, args...) }
+func (r *recordingLog) Info(format string, args ...any)    { r.record(format, args...) }
+func (r *recordingLog) Warning(format string, args ...any) { r.record(format, args...) }
+func (r *recordingLog) Error(format string, args ...any)   { r.record(format, args...) }
+func (r *recordingLog) Panic(format string, args ...any)   { r.record(format, args...) }
+
+func (r *recordingLog) allMessages() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]string, len(r.messages))
+	copy(out, r.messages)
+	return out
+}
+
+// recordingProcess wraps resolveStubProcess but routes Log() to a recordingLog
+// so tests can assert on the content of log lines produced during resolution.
+type recordingProcess struct {
+	*resolveStubProcess
+	log *recordingLog
+}
+
+func (p *recordingProcess) Log() gen.Log { return p.log }
+
 // buildDiscoveryDataWithTarget returns a DiscoveryData ready for
 // ensureTargetResolved tests: resolvedTargets/failedTargets are initialized and
 // the given target is registered.
@@ -548,3 +590,190 @@ func TestEnsureTargetResolved_NoOpaqueRefPassthrough(t *testing.T) {
 	assert.Equal(t, string(cfg), string(data.targets[label].Config),
 		"plain config must be stored unchanged")
 }
+
+// TestEnsureTargetResolved_ResolveFailureLogsNoSecret asserts that when a
+// target's opaque reference cannot be resolved, none of the log lines produced
+// on that failure path contain the plaintext secret value or a raw "$value"
+// envelope field. This test runs at the ensureTargetResolved seam: it
+// exercises the full call chain (ensureTargetResolved → resolveTargetConfigForList)
+// with a recording log and a failing LoadResource stub, then scans every captured
+// message for the sentinel values.
+func TestEnsureTargetResolved_ResolveFailureLogsNoSecret(t *testing.T) {
+	const label = "prod"
+	const ksuid = "35R2vyf6mT5wEs0mTWT5bp1Lf0E"
+	const prop = "SecretString"
+	// plaintext is the value stored in the $value envelope; it must not leak
+	// into any log line on the failure path.
+	const plaintext = "super-secret-credential-value"
+
+	inner := &resolveStubProcess{
+		loadErr: fmt.Errorf("secret source unavailable"),
+	}
+	recLog := &recordingLog{}
+	proc := &recordingProcess{resolveStubProcess: inner, log: recLog}
+
+	// Build a config with the plaintext embedded in the $value envelope so any
+	// accidental serialisation of the raw config would contain the sentinel.
+	targetCfg := json.RawMessage(strings.ReplaceAll(
+		string(buildOpaqueTargetConfig(ksuid, prop)),
+		"old-value", plaintext,
+	))
+	data := buildDiscoveryDataWithTarget(label, targetCfg)
+
+	data, ok := ensureTargetResolved(data, label, proc)
+
+	require.False(t, ok, "resolve must fail when the source is unavailable")
+	assert.True(t, data.failedTargets[label], "failed target must be recorded")
+
+	for _, msg := range recLog.allMessages() {
+		assert.NotContains(t, msg, plaintext,
+			"log line must not contain the plaintext secret: %s", msg)
+		assert.NotContains(t, msg, "$value",
+			"log line must not include raw $ref envelope fields: %s", msg)
+	}
+}
+
+// resolveFailureProcess is a gen.Process double that makes resolveTargetConfigForList
+// fail (LoadResource returns an error) while also acting as a rate-limiter stub
+// for the resumeScanning outer loop. It records every SpawnPluginOperator request
+// so tests can assert that no ListResources is ever dispatched for the failed target.
+type resolveFailureProcess struct {
+	gen.Process
+	log           *recordingLog
+	loadErr       error
+	spawnRequests []messages.SpawnPluginOperator
+}
+
+func (p *resolveFailureProcess) Log() gen.Log            { return p.log }
+func (p *resolveFailureProcess) Node() gen.Node          { return stubNode{} }
+func (p *resolveFailureProcess) PID() gen.PID            { return gen.PID{Node: "test-node", ID: 1} }
+func (p *resolveFailureProcess) Send(_ any, _ any) error { return nil }
+
+func (p *resolveFailureProcess) Call(_ any, message any) (any, error) {
+	switch m := message.(type) {
+	case changeset.RequestTokens:
+		return changeset.TokensGranted{N: m.N}, nil
+	case messages.LoadResource:
+		if p.loadErr != nil {
+			return nil, p.loadErr
+		}
+		return nil, fmt.Errorf("resolveFailureProcess: no load result configured")
+	case messages.SpawnPluginOperator:
+		p.spawnRequests = append(p.spawnRequests, m)
+		return messages.SpawnPluginOperatorResult{}, nil
+	default:
+		return nil, fmt.Errorf("resolveFailureProcess: unexpected Call %T", message)
+	}
+}
+
+// TestResumeScanning_FailedResolveNeverDispatchesListResources asserts that
+// when a target's opaque config cannot be resolved, resumeScanning skips the
+// SpawnPluginOperator call entirely — no ListResources reaches the plugin —
+// and the discovery cycle still completes (returns StateIdle) rather than
+// hanging in StateDiscovering.
+func TestResumeScanning_FailedResolveNeverDispatchesListResources(t *testing.T) {
+	const namespace = "FakeAWS"
+	const targetLabel = "us-east-1"
+	const ksuid = "35R2vyf6mT5wEs0mTWT5bp1Lf0E"
+	const prop = "SecretString"
+	const plaintext = "top-secret-cred"
+
+	// Target has an opaque $ref that cannot be resolved.
+	opaqueConfig := json.RawMessage(strings.ReplaceAll(
+		string(buildOpaqueTargetConfig(ksuid, prop)),
+		"old-value", plaintext,
+	))
+
+	proc := &resolveFailureProcess{
+		log:     &recordingLog{},
+		loadErr: fmt.Errorf("secret manager unavailable"),
+	}
+
+	data := DiscoveryData{
+		discoveryCfg: &pkgmodel.DiscoveryConfig{Enabled: true, Interval: 20 * time.Second},
+		targets: map[string]pkgmodel.Target{
+			targetLabel: {Label: targetLabel, Namespace: namespace, Config: opaqueConfig},
+		},
+		resourceDescriptors: map[string]plugin.ResourceDescriptor{
+			"FakeAWS::S3::Bucket": {Type: "FakeAWS::S3::Bucket", Discoverable: true},
+		},
+		queuedListOperations: map[string][]ListOperation{
+			namespace: {
+				{ResourceType: "FakeAWS::S3::Bucket", TargetLabel: targetLabel},
+			},
+		},
+		outstandingListOperations: map[string]ListOperation{},
+		outstandingSyncCommands:   map[string]ListOperation{},
+		summary:                   map[string]int{},
+		resolvedTargets:           make(map[string]bool),
+		failedTargets:             make(map[string]bool),
+		typesWithChildrenQueued:   map[string]struct{}{},
+		nativeIDsByCommand:        map[string][]string{},
+	}
+
+	nextState, resultData, _, err := resumeScanning(gen.PID{}, StateDiscovering, data, ResumeScanning{}, proc)
+
+	require.NoError(t, err, "a resolve failure must not crash the actor")
+	assert.Empty(t, proc.spawnRequests,
+		"SpawnPluginOperator must not be called for a target whose config resolution failed")
+	assert.True(t, resultData.failedTargets[targetLabel],
+		"the target must be recorded in failedTargets")
+	assert.Equal(t, StateIdle, nextState,
+		"a cycle where all targets fail resolution must still return to Idle")
+
+	// Redaction invariant: no log line must contain the plaintext or a raw "$value".
+	for _, msg := range proc.log.allMessages() {
+		assert.NotContains(t, msg, plaintext,
+			"log line must not leak the plaintext credential: %s", msg)
+		assert.NotContains(t, msg, "$value",
+			"log line must not include raw $ref envelope fields: %s", msg)
+	}
+}
+
+// TestOnStateChange_WarnsAboutFailedTargets asserts that when transitioning
+// from StateDiscovering to StateIdle with at least one failed target, a warning
+// log line is produced that names the failed target label(s) and their count.
+// No config content is logged — only labels, which are safe to surface.
+func TestOnStateChange_WarnsAboutFailedTargets(t *testing.T) {
+	recLog := &recordingLog{}
+	proc := &onStateChangeProc{log: recLog}
+
+	data := DiscoveryData{
+		timeStarted: time.Now().Add(-5 * time.Second),
+		summary:     map[string]int{},
+		failedTargets: map[string]bool{
+			"prod-us-east-1": true,
+			"staging-eu":     true,
+		},
+	}
+
+	_, _, err := onStateChange(StateDiscovering, StateIdle, data, proc)
+	require.NoError(t, err)
+
+	msgs := recLog.allMessages()
+	found := false
+	for _, msg := range msgs {
+		if strings.Contains(msg, "2") && strings.Contains(msg, "prod-us-east-1") && strings.Contains(msg, "staging-eu") {
+			found = true
+		}
+	}
+	assert.True(t, found,
+		"completion warning must name the count and labels of all failed targets, got: %v", msgs)
+
+	// Labels are safe to log but config contents must not appear.
+	for _, msg := range msgs {
+		assert.NotContains(t, msg, "$value",
+			"completion log must not include raw $ref envelope fields: %s", msg)
+	}
+}
+
+// onStateChangeProc is a minimal gen.Process stub whose Log() returns the
+// recording logger used by TestOnStateChange_WarnsAboutFailedTargets.
+type onStateChangeProc struct {
+	gen.Process
+	log *recordingLog
+}
+
+func (p *onStateChangeProc) Log() gen.Log   { return p.log }
+func (p *onStateChangeProc) Node() gen.Node { return stubNode{} }
+func (p *onStateChangeProc) PID() gen.PID   { return gen.PID{Node: "test-node", ID: 3} }
