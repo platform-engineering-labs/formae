@@ -424,6 +424,12 @@ func (m Model) handleResourceDetailLoaded(msg resourceDetailLoadedMsg) (tea.Mode
 			contentWidth = 1
 		}
 		m.detailBody = resourceDetail(*msg.resource, contentWidth)
+	} else {
+		// Not-found: the resource's latest version became a delete or reaped
+		// tombstone between the list render and opening detail. Replace the
+		// loading placeholder with an explicit message rather than leaving it
+		// stuck on "Loading…".
+		m.detailBody = []string{"This resource no longer exists (it was deleted)."}
 	}
 	m.detailViewport = m.refreshDetailContent()
 	return m, nil
