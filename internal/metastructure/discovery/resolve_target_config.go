@@ -118,14 +118,22 @@ func resolveTargetConfigForList(proc gen.Process, target pkgmodel.Target) (json.
 	}
 
 	// Strip the $ref/$value/$visibility wrappers so the returned config is
-	// plain JSON the plugin can unmarshal directly. A convert failure falls
-	// through and returns the partially-resolved (still-wrapped) config; the
-	// existing ConvertToPluginFormat guard in the scan path will handle it.
-	if plain, err := resolver.ConvertToPluginFormat(cfg); err == nil {
-		cfg = plain
+	// plain JSON the plugin can unmarshal directly. A failure here indicates
+	// an unresolvable envelope (e.g. a $hashed field whose plaintext is
+	// irrecoverable); surface it rather than returning the still-wrapped config.
+	plain, err := resolver.ConvertToPluginFormat(cfg)
+	if err != nil {
+		proc.Log().Error(
+			"failed to strip opaque wrappers from resolved target config target=%s configRedacted=%v: %v",
+			target.Label, pkgmodel.RedactOpaqueForLog(cfg), err,
+		)
+		return nil, fmt.Errorf(
+			"failed to prepare resolved config for target %q: convert error",
+			target.Label,
+		)
 	}
 
-	return cfg, nil
+	return plain, nil
 }
 
 // readWithRetry calls ReadResourceViaPlugin up to maxDiscoveryResolveAttempts
