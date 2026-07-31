@@ -3430,3 +3430,42 @@ func TestNewChangeset_SynthesizesResolveForDeleteOnlyOpaqueTarget(t *testing.T) 
 	assert.True(t, hasDependencyOn(deleteNode, resolveURI),
 		"resource-delete must depend on the Resolve node so it dispatches with resolved config")
 }
+
+// TestNewChangeset_NoSynthesisForCascadeDeletedOpaqueTarget asserts that a target
+// whose $ref source is being torn down in the same command — carrying a CASCADE Delete
+// TU — is NOT given a synthetic Resolve node. A cascade delete leaves the target config
+// intentionally unresolvable (its source resource is going away), so a Resolve would
+// try to read a source that no longer resolves and fail the command.
+func TestNewChangeset_NoSynthesisForCascadeDeletedOpaqueTarget(t *testing.T) {
+	const targetLabel = "consumer"
+	refURI := pkgmodel.NewFormaeURI(util.NewID(), "SecretString")
+
+	ds := &stubResolveDatastore{targets: map[string]*pkgmodel.Target{
+		targetLabel: {Label: targetLabel, Namespace: "AWS", Config: opaqueRefConfig(string(refURI))},
+	}}
+
+	deleteKsuid := util.NewID()
+	resourceUpdates := []resource_update.ResourceUpdate{
+		{
+			PriorState:   pkgmodel.Resource{Label: "res", Type: "AWS::S3::Bucket", Stack: "s", Ksuid: deleteKsuid, Target: targetLabel},
+			DesiredState: pkgmodel.Resource{Label: "res", Type: "AWS::S3::Bucket", Stack: "s", Ksuid: deleteKsuid, Target: targetLabel},
+			Operation:    resource_update.OperationDelete,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "s",
+		},
+	}
+
+	// A cascade Delete TU: the target's $ref source is being deleted in this command.
+	targetUpdates := []target_update.TargetUpdate{
+		target_update.NewTargetUpdateForCascadeDelete(
+			&pkgmodel.Target{Label: targetLabel, Namespace: "AWS", Config: opaqueRefConfig(string(refURI))},
+			"the-source-resource",
+		),
+	}
+
+	cs, err := NewChangeset(resourceUpdates, targetUpdates, "cmd-cascade-no-resolve", pkgmodel.CommandApply, ds)
+	require.NoError(t, err)
+
+	assert.Nil(t, cs.DAG.Nodes[pkgmodel.FormaeURI("target://"+targetLabel+"/resolve")],
+		"a cascade-deleted target must not get a synthetic Resolve node — its source is being torn down")
+}

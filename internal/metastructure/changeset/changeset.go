@@ -160,16 +160,29 @@ func NewChangeset(
 }
 
 // synthesizeResolveTargetUpdates builds synthetic Resolve target ops for targets
-// that a resource op references but that are NOT already covered by a real
-// Create/Update/Replace/Delete target update in this command.
+// that a resource op references but that are NOT already covered by a target update
+// carrying (or intentionally forgoing) resolved config in this command.
 //
 // An unchanged target may still hold opaque $ref config (e.g. a secret). Without a
-// real target update carrying resolved desired config, that config would be
-// dispatched to the plugin unresolved. For each such distinct target label, the
-// PERSISTED target row is loaded (a target with a real update already carries its
-// desired config, so it is never synthesized for), its config is scanned for
-// resolvable $refs using the same extractor that populates a target update's
-// RemainingResolvables, and — if any exist — a NewResolveTargetUpdate is appended.
+// target update carrying resolved desired config, that config would be dispatched to
+// the plugin unresolved. For each such distinct target label, the PERSISTED target
+// row is loaded (a target with a resolving update already carries its desired config,
+// so it is never synthesized for), its config is scanned for resolvable $refs using
+// the same extractor that populates a target update's RemainingResolvables, and — if
+// any exist — a NewResolveTargetUpdate is appended.
+//
+// Coverage rules:
+//   - Create/Update/Replace/Resolve ops carry freshly re-resolved config, so they
+//     cover the target and suppress synthesis.
+//   - A plain (non-cascade) Delete op does NOT carry resolved config, yet resource
+//     ops still tearing down on that target need the current secret value. Such a
+//     target is NOT covered, so a synthetic Resolve is generated to read the still-
+//     present source secret and propagate it to the dependent deletes.
+//   - A CASCADE Delete op covers the target: cascade delete means the target's own
+//     $ref source resource is being torn down in this same command, so its config is
+//     intentionally left unresolvable (NewTargetUpdateForCascadeDelete clears
+//     RemainingResolvables). Synthesizing a Resolve there would try to read a source
+//     that no longer resolves and fail the command.
 //
 // A nil datastore (unit tests that never reference persisted targets) or a target
 // that is not found is treated as "nothing to synthesize" and skipped.
@@ -178,10 +191,6 @@ func synthesizeResolveTargetUpdates(
 	targetUpdates []target_update.TargetUpdate,
 	ds datastore.Datastore,
 ) ([]target_update.TargetUpdate, error) {
-	// A target is covered only when a resolving op already carries re-resolved config.
-	// A Delete op does not carry resolved config, so it must not mark the target covered:
-	// resource ops on a Delete-only target still need a synthetic Resolve to dispatch
-	// with the current secret value.
 	covered := make(map[string]bool)
 	for i := range targetUpdates {
 		switch targetUpdates[i].Operation {
@@ -190,6 +199,14 @@ func synthesizeResolveTargetUpdates(
 			target_update.TargetOperationReplace,
 			target_update.TargetOperationResolve:
 			covered[targetUpdates[i].Target.Label] = true
+		case target_update.TargetOperationDelete:
+			// A cascade delete tears down the target's $ref source in this same
+			// command, so its config cannot (and must not) be resolved. A plain
+			// delete leaves the source in place, so it stays uncovered and gets a
+			// synthetic Resolve for the dependent resource deletes.
+			if targetUpdates[i].IsCascade {
+				covered[targetUpdates[i].Target.Label] = true
+			}
 		}
 	}
 
