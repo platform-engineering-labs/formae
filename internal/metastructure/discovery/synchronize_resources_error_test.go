@@ -60,8 +60,8 @@ func (s *stubSyncResourcesDatastore) LoadTarget(label string) (*pkgmodel.Target,
 type persistCommandProcess struct {
 	*stubProcess
 
-	markFailedCalls    []forma_persister.MarkResourcesAsFailed
-	finalizeCalls      []forma_persister.FinalizeIncompleteCommand
+	markFailedCalls []forma_persister.MarkResourcesAsFailed
+	finalizeCalls   []forma_persister.FinalizeIncompleteCommand
 }
 
 func (p *persistCommandProcess) Call(_ any, message any) (any, error) {
