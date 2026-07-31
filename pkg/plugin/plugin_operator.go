@@ -138,7 +138,6 @@ type ReadResource struct {
 	ExistingResource  model.Resource  `json:"ExistingResource"`
 	IsSync            bool            `json:"IsSync"`
 	IsDelete          bool            `json:"IsDelete"`
-	RedactSensitive   bool            `json:"RedactSensitive"`
 }
 
 func (r *ReadResource) TreatNotFoundAsSuccess() bool {
@@ -553,7 +552,6 @@ func read(from gen.PID, state gen.Atom, data PluginUpdateData, operation ReadRes
 		NativeID:        operation.NativeID,
 		ResourceType:    operation.ResourceType,
 		TargetConfig:    operation.TargetConfig,
-		RedactSensitive: operation.RedactSensitive,
 		PriorProperties: operation.ExistingResource.Properties,
 	})
 	if err != nil {

@@ -365,3 +365,31 @@ func TestFilterCompatiblePlugins_AllCompatible(t *testing.T) {
 	result := FilterCompatiblePlugins(plugins, "1.0.0", "0.50.0", "0.2.1")
 	require.Len(t, result, 2)
 }
+
+func TestFilterCompatiblePlugins_OldAgentRejectsPluginRequiringNewerVersion(t *testing.T) {
+	// A plugin that declares minFormaeVersion=0.89.0 cannot load on an agent
+	// running 0.88.0. The version gate at agent startup (FilterCompatiblePlugins)
+	// must reject it so no Read can reach the plugin process.
+	plugin := PluginInfo{
+		Name:             "aws",
+		Namespace:        "AWS",
+		Version:          "v2.0.0",
+		BinaryPath:       "/plugins/aws/v2.0.0/aws",
+		Type:             Resource,
+		MinFormaeVersion: "0.89.0",
+	}
+
+	// Old agent (0.88.0) must not load a plugin that requires 0.89.0.
+	rejected := FilterCompatiblePlugins([]PluginInfo{plugin}, "0.88.0", "0.84.0", "0.2.1")
+	assert.Empty(t, rejected, "old agent should reject plugin requiring a newer formae version")
+
+	// Agent running exactly the required version must accept it.
+	accepted := FilterCompatiblePlugins([]PluginInfo{plugin}, "0.89.0", "0.84.0", "0.2.1")
+	require.Len(t, accepted, 1, "agent at exactly the required version should accept the plugin")
+	assert.Equal(t, "aws", accepted[0].Name)
+
+	// Newer agent must also accept it.
+	alsoAccepted := FilterCompatiblePlugins([]PluginInfo{plugin}, "0.90.0", "0.84.0", "0.2.1")
+	require.Len(t, alsoAccepted, 1, "newer agent should accept the plugin")
+	assert.Equal(t, "aws", alsoAccepted[0].Name)
+}

@@ -414,9 +414,6 @@ func synchronize(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen
 		NativeID:          data.resourceUpdate.DesiredState.NativeID,
 		IsSync:            data.resourceUpdate.IsSync(),
 		IsDelete:          data.resourceUpdate.IsDelete(),
-
-		// If the source is discovery, remove sensitive information from the resource update.
-		RedactSensitive: data.commandSource == FormaCommandSourceDiscovery,
 	}, proc)
 	if err != nil {
 		proc.Log().Error("failed to synchronize resource resourceURI=%v: %v", data.resourceUpdate.DesiredState.URI(), err)

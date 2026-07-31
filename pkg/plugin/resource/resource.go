@@ -59,9 +59,6 @@ type ReadRequest struct {
 	ResourceType string
 	TargetConfig json.RawMessage
 
-	// RedactSensitive declares intent to remove sensitive properties
-	RedactSensitive bool
-
 	// PriorProperties carries the caller's last-known model for this resource
 	// (the stored row), as an OPTIONAL hint. It is never required to satisfy a
 	// Read: a plugin may ignore it entirely, and most should. A Read still
