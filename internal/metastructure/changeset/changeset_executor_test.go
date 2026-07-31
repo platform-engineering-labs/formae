@@ -428,3 +428,80 @@ func TestResolveNodeFinished_PropagatesConfigAndSkipsPersist(t *testing.T) {
 			"MarkTargetUpdateAsComplete must not be called for a synthetic Resolve op; got %+v", callEvent.Request)
 	}
 }
+
+// TestResolveNodeFinished_ConversionFailure_FailsDependentsClosed verifies that when a
+// resolved target config cannot be converted to plugin format (here it still carries a
+// $hashed value that must never be sent to a provider), the executor fails closed: the
+// unconverted document is NOT propagated to dependent resource ops, and those ops are
+// failed (removed from the DAG) so nothing malformed reaches a plugin.
+func TestResolveNodeFinished_ConversionFailure_FailsDependentsClosed(t *testing.T) {
+	const targetLabel = "consumer"
+	ksuid := util.NewID()
+
+	unresolved := json.RawMessage(`{"apiKey":{"$ref":"formae://secret#/token","$visibility":"Opaque"}}`)
+	// A resolved config carrying a $hashed value: ConvertToPluginFormat rejects it,
+	// because a stored hash can never be recovered to the live secret for a plugin.
+	hashedResolved := json.RawMessage(`{"apiKey":{"$value":"deadbeef","$hashed":true}}`)
+
+	resourceOp := resource_update.ResourceUpdate{
+		DesiredState:   pkgmodel.Resource{Label: "bucket", Type: "FakeAWS::S3::Bucket", Stack: "s", Ksuid: ksuid, Target: targetLabel},
+		Operation:      resource_update.OperationCreate,
+		State:          resource_update.ResourceUpdateStateNotStarted,
+		StackLabel:     "s",
+		ResourceTarget: pkgmodel.Target{Label: targetLabel, Namespace: "test", Config: unresolved},
+	}
+
+	resolveOp := target_update.NewResolveTargetUpdate(
+		pkgmodel.Target{Label: targetLabel, Namespace: "test", Config: unresolved},
+		[]pkgmodel.FormaeURI{pkgmodel.NewFormaeURI(util.NewID(), "")},
+	)
+
+	cs, err := NewChangeset(
+		[]resource_update.ResourceUpdate{resourceOp},
+		[]target_update.TargetUpdate{resolveOp},
+		"cmd-resolve-fail-closed",
+		pkgmodel.CommandApply,
+		nil,
+	)
+	require.NoError(t, err)
+
+	resolveNodeURI := pkgmodel.FormaeURI("target://" + targetLabel + "/resolve")
+	resolveNode := cs.DAG.Nodes[resolveNodeURI]
+	require.NotNil(t, resolveNode, "resolve node must exist in DAG")
+	resolveNode.Update.MarkInProgress()
+
+	opURI := createOperationURI(pkgmodel.NewFormaeURI(ksuid, ""), resource_update.OperationCreate)
+	cs.trackedUpdates[string(opURI)] = true
+
+	// Capture the resource node before the handler runs so we can inspect its config after.
+	resourceNode := cs.DAG.Nodes[opURI]
+	require.NotNil(t, resourceNode)
+	ru := resourceNode.Update.(*resource_update.ResourceUpdate)
+
+	actor, err := unit.Spawn(t, NewChangesetExecutor, unit.WithArgs(gen.PID{}), unit.WithLogLevel(gen.LogLevelError))
+	require.NoError(t, err)
+	proc := actor.Process()
+
+	data := ChangesetData{changeset: cs, requestedBy: gen.PID{}}
+
+	finishedMsg := target_update.TargetUpdateFinished{
+		NodeURI:        resolveNodeURI,
+		State:          target_update.TargetUpdateStateSuccess,
+		ResolvedConfig: hashedResolved,
+	}
+
+	_, updatedData, _, _ := targetUpdateFinished(gen.PID{}, StateProcessing, data, finishedMsg, proc)
+
+	// The unconverted (hashed) config must NOT have been propagated onto the dependent op.
+	assert.NotContains(t, string(ru.ResourceTarget.Config), "$hashed",
+		"the unconverted hashed config must never be propagated to a dependent resource op")
+	assert.JSONEq(t, string(unresolved), string(ru.ResourceTarget.Config),
+		"the dependent op must retain its original config, not receive the unconverted document")
+
+	// The dependent resource op must be failed (removed from the DAG) so it is never
+	// dispatched to a plugin with malformed config.
+	assert.Nil(t, updatedData.changeset.DAG.Nodes[opURI],
+		"the dependent resource op must be failed and removed from the DAG (fail closed)")
+	assert.True(t, ru.IsFailed(),
+		"the dependent resource op must be marked failed when the target config conversion fails")
+}
