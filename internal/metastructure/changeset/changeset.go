@@ -178,11 +178,13 @@ func NewChangeset(
 //     ops still tearing down on that target need the current secret value. Such a
 //     target is NOT covered, so a synthetic Resolve is generated to read the still-
 //     present source secret and propagate it to the dependent deletes.
-//   - A CASCADE Delete op covers the target: cascade delete means the target's own
-//     $ref source resource is being torn down in this same command, so its config is
-//     intentionally left unresolvable (NewTargetUpdateForCascadeDelete clears
-//     RemainingResolvables). Synthesizing a Resolve there would try to read a source
-//     that no longer resolves and fail the command.
+//   - A cascade Delete op tears down its config's $ref source in the same command.
+//     For a plain cross-resource $ref that is fine — the delete uses the stored
+//     snapshot / NativeID — so the target stays COVERED (a Resolve would read a
+//     vanishing source and fail). But when the cascade target carries an OPAQUE $ref
+//     (a secret credential the plugin needs to authenticate teardown), it is
+//     un-covered like a plain delete: the changeset orders the secret delete AFTER
+//     the target delete, so the secret is still present at Resolve time.
 //
 // A nil datastore (unit tests that never reference persisted targets) or a target
 // that is not found is treated as "nothing to synthesize" and skipped.
@@ -200,12 +202,26 @@ func synthesizeResolveTargetUpdates(
 			target_update.TargetOperationResolve:
 			covered[targetUpdates[i].Target.Label] = true
 		case target_update.TargetOperationDelete:
-			// A cascade delete tears down the target's $ref source in this same
-			// command, so its config cannot (and must not) be resolved. A plain
-			// delete leaves the source in place, so it stays uncovered and gets a
-			// synthetic Resolve for the dependent resource deletes.
+			// A plain Delete leaves its config's source(s) in place, so it stays
+			// uncovered: resource-delete ops on that target still need a synthetic
+			// Resolve to dispatch with the current secret value.
+			//
+			// A cascade Delete tears down its config's source resource in the same
+			// command. For a non-opaque cross-resource $ref that is harmless — the
+			// delete works off the stored snapshot / NativeID, and forcing a Resolve
+			// would read a vanishing source and fail. So a cascade Delete is covered
+			// UNLESS it carries an opaque $ref (a secret credential): there the
+			// plugin genuinely needs the resolved value to authenticate its teardown
+			// calls, and the changeset orders the secret delete AFTER the target
+			// delete, keeping the secret present at Resolve time. So un-cover it and
+			// let the synthetic Resolve read it.
 			if targetUpdates[i].IsCascade {
-				covered[targetUpdates[i].Target.Label] = true
+				existing := targetUpdates[i].ExistingTarget
+				hasOpaque := existing != nil &&
+					len(resolver.ExtractOpaqueResolvableURIsFromJSON(existing.Config)) > 0
+				if !hasOpaque {
+					covered[targetUpdates[i].Target.Label] = true
+				}
 			}
 		}
 	}
