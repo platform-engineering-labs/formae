@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -250,10 +251,24 @@ func isSourcePropertyOpaque(source *pkgmodel.Resource, propertyName string) bool
 	if source == nil || propertyName == "" {
 		return false
 	}
-	if gjson.GetBytes(source.Properties, propertyName).Get("$visibility").String() == pkgmodel.VisibilityOpaque {
-		return true
+	// Check the property path itself and its top-level field. A ref into a
+	// MAP-shaped opaque secret (e.g. "decodedData.password", produced by
+	// secret.res.secretValue.at("password")) is opaque by virtue of its opaque
+	// parent field: the field is stored as a single hashed envelope with no
+	// per-key sub-structure, so the leaf path has no $visibility of its own.
+	candidates := []string{propertyName}
+	if root, _, found := strings.Cut(propertyName, "."); found {
+		candidates = append(candidates, root)
 	}
-	return gjson.GetBytes(source.ReadOnlyProperties, propertyName).Get("$visibility").String() == pkgmodel.VisibilityOpaque
+	for _, p := range candidates {
+		if gjson.GetBytes(source.Properties, p).Get("$visibility").String() == pkgmodel.VisibilityOpaque {
+			return true
+		}
+		if gjson.GetBytes(source.ReadOnlyProperties, p).Get("$visibility").String() == pkgmodel.VisibilityOpaque {
+			return true
+		}
+	}
+	return false
 }
 
 // ExtractSourceOpaqueResolvableURIsFromJSON returns the resolvable URIs in data
