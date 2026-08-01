@@ -223,8 +223,14 @@ func synthesizeResolveTargetUpdates(
 			// let the synthetic Resolve read it — but only for the opaque refs.
 			if targetUpdates[i].IsCascade {
 				existing := targetUpdates[i].ExistingTarget
-				hasOpaque := existing != nil &&
-					len(resolver.ExtractOpaqueResolvableURIsFromJSON(existing.Config)) > 0
+				var hasOpaque bool
+				if existing != nil && ds != nil {
+					opaqueURIs, err := resolver.ExtractSourceOpaqueResolvableURIsFromJSON(existing.Config, ds.LoadResourceById)
+					if err != nil {
+						return nil, fmt.Errorf("detect opaque refs for cascade target %q: %w", targetUpdates[i].Target.Label, err)
+					}
+					hasOpaque = len(opaqueURIs) > 0
+				}
 				if !hasOpaque {
 					covered[targetUpdates[i].Target.Label] = true
 				} else {
@@ -272,7 +278,10 @@ func synthesizeResolveTargetUpdates(
 		var resolvables []pkgmodel.FormaeURI
 		opaqueOnly := cascadeOpaqueUncovered[label]
 		if opaqueOnly {
-			resolvables = resolver.ExtractOpaqueResolvableURIsFromJSON(persisted.Config)
+			resolvables, err = resolver.ExtractSourceOpaqueResolvableURIsFromJSON(persisted.Config, ds.LoadResourceById)
+			if err != nil {
+				return nil, fmt.Errorf("extract opaque resolvables for cascade target %q: %w", label, err)
+			}
 		} else {
 			resolvables = resolver.ExtractResolvableURIsFromJSON(persisted.Config)
 		}

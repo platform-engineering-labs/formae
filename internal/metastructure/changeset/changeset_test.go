@@ -2966,6 +2966,19 @@ func opaqueRefConfig(refURI string) json.RawMessage {
 	return json.RawMessage(`{"auth":{"$ref":"` + refURI + `","$visibility":"Opaque"}}`)
 }
 
+// jsonCredConfig mirrors how a Grafana target's basic-auth credentials persist
+// when sourced from a JSON secret via secret.res.secretValue.json("<key>"): a
+// $ref to the secret's value property plus a $json extraction path. Crucially the
+// envelope's $visibility is "Clear" — opacity is derived from the source secret's
+// FieldHint at resolve time, not stamped on the envelope — even though the
+// resolved value is a credential the plugin needs to authenticate.
+func jsonCredConfig(refURI string) json.RawMessage {
+	return json.RawMessage(`{` +
+		`"username":{"$ref":"` + refURI + `","$json":"username","$visibility":"Clear"},` +
+		`"password":{"$ref":"` + refURI + `","$json":"password","$visibility":"Clear"}` +
+		`}`)
+}
+
 func hasDependencyOn(node *DAGNode, uri pkgmodel.FormaeURI) bool {
 	for _, dep := range node.Dependencies {
 		if dep.URI == uri {
@@ -3507,6 +3520,84 @@ func TestNewChangeset_SynthesizesResolveForCascadeDeletedOpaqueTarget(t *testing
 	secretDelete := dagNodeForOp(t, cs.DAG, pkgmodel.NewFormaeURI(secretKsuid, ""), resource_update.OperationDelete)
 	assert.True(t, hasDependencyOn(secretDelete, targetDeleteURI),
 		"source secret-delete must wait for the cascade target-delete so the secret is present at Resolve time")
+
+	assert.False(t, cs.DAG.HasCycles(), "the cascade delete graph must be acyclic")
+}
+
+// TestNewChangeset_SynthesizesResolveForCascadeDeletedJSONCredTarget asserts the
+// RFC-110 headline case for the delete path: a cascade-deleted target whose
+// credentials come from a JSON secret via .json() (persisted as $ref+$json with
+// $visibility "Clear") must still get a synthetic Resolve, and its resource-delete
+// ops must depend on that Resolve — otherwise the plugin dispatches the teardown
+// with unresolved credentials and the real cloud resource is orphaned. This is the
+// same shape as the opaque-$ref cascade test, but with .json()-derived Clear
+// credentials rather than a directly-opaque $ref.
+func TestNewChangeset_SynthesizesResolveForCascadeDeletedJSONCredTarget(t *testing.T) {
+	const targetLabel = "consumer"
+	secretKsuid := util.NewID()
+	refURI := pkgmodel.NewFormaeURI(secretKsuid, "SecretString")
+
+	// The source secret resource: its SecretString property is opaque at rest, so
+	// the .json() credential refs deriving from it are really secrets even though
+	// their consumer-side envelopes are Clear.
+	ds := &stubResolveDatastore{
+		targets: map[string]*pkgmodel.Target{
+			targetLabel: {Label: targetLabel, Namespace: "GRAFANA", Config: jsonCredConfig(string(refURI))},
+		},
+		resources: map[string]*pkgmodel.Resource{
+			secretKsuid: {
+				Label: "secret", Type: "AWS::SecretsManager::Secret", Ksuid: secretKsuid, Target: "provider",
+				Properties: json.RawMessage(`{"SecretString":{"$value":"deadbeef","$visibility":"Opaque","$hashed":true,"$strategy":"Update"}}`),
+			},
+		},
+	}
+
+	// A resource-delete on the cascade target (the folder being torn down), plus
+	// the source secret's own delete op (must run last).
+	folderKsuid := util.NewID()
+	resourceUpdates := []resource_update.ResourceUpdate{
+		{
+			PriorState:   pkgmodel.Resource{Label: "folder", Type: "GRAFANA::Core::Folder", Stack: "consumer-stack", Ksuid: folderKsuid, Target: targetLabel},
+			DesiredState: pkgmodel.Resource{Label: "folder", Type: "GRAFANA::Core::Folder", Stack: "consumer-stack", Ksuid: folderKsuid, Target: targetLabel},
+			Operation:    resource_update.OperationDelete,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "consumer-stack",
+		},
+		{
+			PriorState:   pkgmodel.Resource{Label: "secret", Type: "AWS::SecretsManager::Secret", Stack: "s", Ksuid: secretKsuid, Target: "provider"},
+			DesiredState: pkgmodel.Resource{Label: "secret", Type: "AWS::SecretsManager::Secret", Stack: "s", Ksuid: secretKsuid, Target: "provider"},
+			Operation:    resource_update.OperationDelete,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "s",
+		},
+	}
+
+	targetUpdates := []target_update.TargetUpdate{
+		target_update.NewTargetUpdateForCascadeDelete(
+			&pkgmodel.Target{Label: targetLabel, Namespace: "GRAFANA", Config: jsonCredConfig(string(refURI))},
+			"secret",
+		),
+	}
+
+	cs, err := NewChangeset(resourceUpdates, targetUpdates, "cmd-cascade-jsoncred", pkgmodel.CommandApply, ds)
+	require.NoError(t, err)
+
+	// The cascade target must get a synthetic Resolve carrying its credential ref,
+	// so the folder-delete can dispatch with resolved credentials.
+	resolveURI := pkgmodel.FormaeURI("target://" + targetLabel + "/resolve")
+	resolveNode := cs.DAG.Nodes[resolveURI]
+	require.NotNil(t, resolveNode, "a cascade-deleted target whose creds come via .json() must get a synthetic Resolve node")
+
+	tu, ok := resolveNode.Update.(*target_update.TargetUpdate)
+	require.True(t, ok)
+	assert.Equal(t, target_update.TargetOperationResolve, tu.Operation)
+	require.NotEmpty(t, tu.RemainingResolvables, "the synthetic Resolve must carry the credential resolvable")
+	assert.Contains(t, tu.RemainingResolvables, refURI)
+
+	// The folder resource-delete depends on the Resolve so it dispatches with creds.
+	folderDelete := dagNodeForOp(t, cs.DAG, pkgmodel.NewFormaeURI(folderKsuid, ""), resource_update.OperationDelete)
+	assert.True(t, hasDependencyOn(folderDelete, resolveURI),
+		"resource-delete on the cascade target must depend on the Resolve node")
 
 	assert.False(t, cs.DAG.HasCycles(), "the cascade delete graph must be acyclic")
 }

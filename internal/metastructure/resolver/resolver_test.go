@@ -1591,3 +1591,57 @@ func TestToPluginFormat_ErrorsOnHashedValue(t *testing.T) {
 	assert.Contains(t, msg, "hashed", "explains the value is stored hashed")
 	assert.Contains(t, msg, "re-supply", "tells the user how to proceed")
 }
+
+// TestExtractSourceOpaqueResolvableURIsFromJSON covers deriving credential-ness
+// from the SOURCE property rather than the consumer envelope, including the
+// ReadOnlyProperties fallback (a plugin may expose a generated credential there).
+func TestExtractSourceOpaqueResolvableURIsFromJSON(t *testing.T) {
+	secretKsuid := util.NewID()
+	roKsuid := util.NewID()
+	plainKsuid := util.NewID()
+
+	secretURI := pkgmodel.NewFormaeURI(secretKsuid, "SecretString")
+	roURI := pkgmodel.NewFormaeURI(roKsuid, "Token")
+	plainURI := pkgmodel.NewFormaeURI(plainKsuid, "Arn")
+
+	sources := map[string]*pkgmodel.Resource{
+		secretKsuid: {Ksuid: secretKsuid, Properties: json.RawMessage(`{"SecretString":{"$value":"h","$visibility":"Opaque","$hashed":true}}`)},
+		roKsuid:     {Ksuid: roKsuid, ReadOnlyProperties: json.RawMessage(`{"Token":{"$value":"h","$visibility":"Opaque","$hashed":true}}`)},
+		plainKsuid:  {Ksuid: plainKsuid, ReadOnlyProperties: json.RawMessage(`{"Arn":"arn:aws:iam::123:role/r"}`)},
+	}
+	load := func(ksuid string) (*pkgmodel.Resource, error) { return sources[ksuid], nil }
+
+	// A Clear .json() cred whose opaque source lives in Properties is a credential.
+	got, err := ExtractSourceOpaqueResolvableURIsFromJSON(
+		json.RawMessage(`{"password":{"$ref":"`+string(secretURI)+`","$json":"password","$visibility":"Clear"}}`), load)
+	require.NoError(t, err)
+	assert.Equal(t, []pkgmodel.FormaeURI{secretURI}, got)
+
+	// A Clear cred whose opaque source lives in ReadOnlyProperties is a credential.
+	got, err = ExtractSourceOpaqueResolvableURIsFromJSON(
+		json.RawMessage(`{"token":{"$ref":"`+string(roURI)+`","$visibility":"Clear"}}`), load)
+	require.NoError(t, err)
+	assert.Equal(t, []pkgmodel.FormaeURI{roURI}, got)
+
+	// A Clear cross-resource ref to a plain (non-opaque) source is excluded.
+	got, err = ExtractSourceOpaqueResolvableURIsFromJSON(
+		json.RawMessage(`{"roleArn":{"$ref":"`+string(plainURI)+`","$visibility":"Clear"}}`), load)
+	require.NoError(t, err)
+	assert.Empty(t, got)
+
+	// An envelope-Opaque ref is a credential without ever loading the source.
+	loadFail := func(string) (*pkgmodel.Resource, error) {
+		return nil, fmt.Errorf("source must not be loaded for an envelope-opaque ref")
+	}
+	got, err = ExtractSourceOpaqueResolvableURIsFromJSON(
+		json.RawMessage(`{"auth":{"$ref":"`+string(secretURI)+`","$visibility":"Opaque"}}`), loadFail)
+	require.NoError(t, err)
+	assert.Equal(t, []pkgmodel.FormaeURI{secretURI}, got)
+
+	// An unloadable (missing) source is not classified as a credential.
+	missingURI := pkgmodel.NewFormaeURI(util.NewID(), "SecretString")
+	got, err = ExtractSourceOpaqueResolvableURIsFromJSON(
+		json.RawMessage(`{"password":{"$ref":"`+string(missingURI)+`","$visibility":"Clear"}}`), load)
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}

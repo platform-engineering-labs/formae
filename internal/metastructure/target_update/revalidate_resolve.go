@@ -12,10 +12,12 @@ import (
 )
 
 // targetLoader is the minimal datastore surface revalidateResolveTarget needs:
-// it re-reads a persisted target by label. The full datastore.Datastore
-// satisfies it, and a narrow stub can be used in tests.
+// it re-reads a persisted target by label, and (for an opaque-only Resolve) a
+// source resource by KSUID to preserve source-derived credential opacity. The
+// full datastore.Datastore satisfies it, and a narrow stub can be used in tests.
 type targetLoader interface {
 	LoadTarget(label string) (*pkgmodel.Target, error)
+	LoadResourceById(ksuid string) (*pkgmodel.Resource, error)
 }
 
 // revalidateResolveTarget closes the TOCTOU window between changeset build and
@@ -70,7 +72,11 @@ func revalidateResolveTarget(tu TargetUpdate, ds targetLoader) (TargetUpdate, er
 	tu.Target.Config = current.Config
 	tu.Target.Version = current.Version
 	if tu.OpaqueOnly {
-		tu.RemainingResolvables = resolver.ExtractOpaqueResolvableURIsFromJSON(current.Config)
+		opaqueURIs, err := resolver.ExtractSourceOpaqueResolvableURIsFromJSON(current.Config, ds.LoadResourceById)
+		if err != nil {
+			return tu, fmt.Errorf("re-validate resolve target %q: %w", label, err)
+		}
+		tu.RemainingResolvables = opaqueURIs
 	} else {
 		tu.RemainingResolvables = resolver.ExtractResolvableURIsFromJSON(current.Config)
 	}

@@ -23,11 +23,16 @@ type revalidateStubDatastore struct {
 	target    *pkgmodel.Target
 	loadErr   error
 	loadCalls int
+	resources map[string]*pkgmodel.Resource
 }
 
 func (s *revalidateStubDatastore) LoadTarget(_ string) (*pkgmodel.Target, error) {
 	s.loadCalls++
 	return s.target, s.loadErr
+}
+
+func (s *revalidateStubDatastore) LoadResourceById(ksuid string) (*pkgmodel.Resource, error) {
+	return s.resources[ksuid], nil
 }
 
 // configA is the build-time (snapshot) config the Resolve TU carries; configB is
