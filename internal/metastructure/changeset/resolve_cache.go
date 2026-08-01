@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strings"
 	"time"
 
 	"ergo.services/ergo/act"
@@ -107,7 +108,7 @@ func (r *ResolveCache) startResolve(from gen.PID, resourceURI pkgmodel.FormaeURI
 	// Check if the resource is already in the cache
 	if json, ok := r.cache[resourceURI.Stripped()]; ok {
 		r.Log().Debug("Cache hit for resource URI uri=%v", resourceURI)
-		value := json.Get(resourceURI.PropertyPath())
+		value := resolvedValueAt(json, resourceURI.PropertyPath())
 		if !value.Exists() {
 			r.Log().Error("Unable to resolve property in cached properties property=%s resourceURI=%v", resourceURI.PropertyPath(), resourceURI)
 			_ = r.Send(from, messages.FailedToResolveValue{ResourceURI: resourceURI, Reason: resolveMissReason(resourceURI, nil)})
@@ -200,7 +201,7 @@ func (r *ResolveCache) continueResolve(retry resolveRetry) {
 
 	r.cache[resourceURI.Stripped()] = enhancedParsed
 	r.Log().Debug("Cached resolved properties uri=%v", resourceURI)
-	value := enhancedParsed.Get(resourceURI.PropertyPath())
+	value := resolvedValueAt(enhancedParsed, resourceURI.PropertyPath())
 	if !value.Exists() {
 		r.Log().Error("Unable to resolve property in cached properties property=%s resourceURI=%v", resourceURI.PropertyPath(), resourceURI)
 		_ = r.Send(from, messages.FailedToResolveValue{ResourceURI: resourceURI, Reason: resolveMissReason(resourceURI, &retry.loadResult.Resource)})
@@ -268,4 +269,38 @@ func (r *ResolveCache) preserveRefMetadata(originalResource pkgmodel.Resource, p
 func hasOpaqueValues(props json.RawMessage) bool {
 	return bytes.Contains(props, []byte(`"$visibility"`)) &&
 		bytes.Contains(props, []byte(`"Opaque"`))
+}
+
+// resolvedValueAt extracts the resolved value for propertyPath from cached
+// plugin properties. preserveRefMetadata wraps an opaque field as
+// {"$value": <fieldValue>, "$visibility": "Opaque"}, so a scalar secret whose
+// path IS the field name resolves directly. A ref into a MAP-shaped opaque
+// secret selects a key (e.g. "decodedData.username") that lives beneath the
+// wrapper at "<field>.$value.<subpath>"; when the direct lookup misses, descend
+// into the opaque parent's $value and re-wrap the leaf in the same envelope
+// shape so downstream handling is identical for scalar and map secrets.
+func resolvedValueAt(props gjson.Result, propertyPath string) gjson.Result {
+	if v := props.Get(propertyPath); v.Exists() {
+		return v
+	}
+	root, subpath, nested := strings.Cut(propertyPath, ".")
+	if !nested {
+		return gjson.Result{}
+	}
+	parent := props.Get(root)
+	if parent.Get("$visibility").String() != pkgmodel.VisibilityOpaque {
+		return gjson.Result{}
+	}
+	leaf := parent.Get("$value." + subpath)
+	if !leaf.Exists() {
+		return gjson.Result{}
+	}
+	wrapped, err := json.Marshal(map[string]any{
+		"$value":      leaf.Value(),
+		"$visibility": pkgmodel.VisibilityOpaque,
+	})
+	if err != nil {
+		return gjson.Result{}
+	}
+	return gjson.ParseBytes(wrapped)
 }
