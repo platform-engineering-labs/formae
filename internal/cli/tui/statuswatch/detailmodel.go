@@ -24,13 +24,8 @@ import (
 type navigableLineKind int
 
 const (
-	navRow      navigableLineKind = iota // a summary or card row
-	navShowMore                          // a "show N more" row
+	navRow navigableLineKind = iota // a summary or card row
 )
-
-// detailPageSize is how many rows per group are shown before a "show N more"
-// row, and how many each activation reveals.
-const detailPageSize = 20
 
 // detailChromeLines is the detail view's non-viewport height: a plain two-line
 // header + the pinned command row + separator + the two-line footer. It is
@@ -43,7 +38,6 @@ type navigableLine struct {
 	kind      navigableLineKind
 	groupKind updateKind // which group this line belongs to
 	rowKey    string     // updateRow.key (for navRow only)
-	rowIdx    int        // index into the group's visible rows slice (for navRow only)
 }
 
 type detailModel struct {
@@ -54,7 +48,6 @@ type detailModel struct {
 	cursor     int                // index into the flat navigable lines list
 	expanded   map[string]bool    // keyed by updateRow.key
 	detailMode bool               // 'd': every row renders as card
-	visible    map[updateKind]int // pagination limit per group (starts at 10)
 	sortHi     map[updateKind]int // column highlighted by →←
 	sortCol    map[updateKind]int // active sort column per group
 	sortDir    map[updateKind]components.SortDirection
@@ -87,8 +80,7 @@ type detailModel struct {
 func newDetailModel(th *theme.Theme, width, height int) detailModel {
 	vp := viewport.New(width, max(height-detailChromeLines, 1)) // placeholder; resized on SetCommand/View
 	return detailModel{
-		th:      th,
-		visible: map[updateKind]int{kindTarget: detailPageSize, kindStack: detailPageSize, kindPolicy: detailPageSize, kindResource: detailPageSize},
+		th: th,
 		// Default the sort to the Label column (not the empty status column) so the
 		// ▲/▼ arrow appears on a real, labeled header instead of a lone glyph.
 		sortHi:  map[updateKind]int{kindTarget: detailColLabel, kindStack: detailColLabel, kindPolicy: detailColLabel, kindResource: detailColLabel},
@@ -192,20 +184,11 @@ func (d detailModel) ApplyTheme(t *theme.Theme) detailModel {
 func (d detailModel) navLines() []navigableLine {
 	var lines []navigableLine
 	for _, g := range d.groups {
-		lim := d.visible[g.kind]
-		shown, remaining := visibleRows(g, lim)
-		for i, r := range shown {
+		for _, r := range g.rows {
 			lines = append(lines, navigableLine{
 				kind:      navRow,
 				groupKind: g.kind,
 				rowKey:    r.key,
-				rowIdx:    i,
-			})
-		}
-		if remaining > 0 {
-			lines = append(lines, navigableLine{
-				kind:      navShowMore,
-				groupKind: g.kind,
 			})
 		}
 	}
@@ -329,15 +312,11 @@ func (d detailModel) Update(msg tea.KeyMsg, keys tui.KeyMap) (detailModel, bool)
 	case key.Matches(msg, keys.Enter) || msg.Type == tea.KeySpace:
 		if d.cursor >= 0 && d.cursor < total {
 			line := nav[d.cursor]
-			if line.kind == navShowMore {
-				d.visible[line.groupKind] += detailPageSize
+			// Toggle expansion for this row key
+			if d.expanded[line.rowKey] {
+				delete(d.expanded, line.rowKey)
 			} else {
-				// Toggle expansion for this row key
-				if d.expanded[line.rowKey] {
-					delete(d.expanded, line.rowKey)
-				} else {
-					d.expanded[line.rowKey] = true
-				}
+				d.expanded[line.rowKey] = true
 			}
 		}
 
@@ -376,14 +355,16 @@ func (d detailModel) View(height int, showQueryBar bool) string {
 
 	// Build scrollable body
 	var body strings.Builder
-	nav := d.navLines()
 	cursorLine := 0 // line index within body where cursor is
 
 	lineCount := 0 // running count of lines emitted to body
+	// navIdx is a running index into the flat nav list. Rendering visits groups
+	// and rows in the same order navLines builds them (one nav entry per row), so
+	// a per-row counter matches the nav index without an O(n) lookup per row.
+	navIdx := 0
 
 	for _, g := range d.groups {
-		lim := d.visible[g.kind]
-		shown, remaining := visibleRows(g, lim)
+		shown := g.rows
 
 		labelW, typeW, stackW := groupLayout(g.kind, w)
 
@@ -398,9 +379,7 @@ func (d detailModel) View(height int, showQueryBar bool) string {
 		lineCount++
 
 		// Rows
-		for i, r := range shown {
-			// Find this row's nav index
-			navIdx := d.findNavIndex(nav, g.kind, r.key, i)
+		for _, r := range shown {
 			isCursor := navIdx == d.cursor
 			if isCursor {
 				cursorLine = lineCount
@@ -422,27 +401,7 @@ func (d detailModel) View(height int, showQueryBar bool) string {
 				rowLines := strings.Count(rowStr, "\n")
 				lineCount += rowLines
 			}
-		}
-
-		// Show-more row
-		if remaining > 0 {
-			showMoreNavIdx := d.findShowMoreNavIndex(nav, g.kind)
-			isCursor := showMoreNavIdx == d.cursor
-			if isCursor {
-				cursorLine = lineCount
-			}
-			moreText := fmt.Sprintf("      ↓ show %d more (%d remaining)", min(detailPageSize, remaining), remaining)
-			if isCursor {
-				body.WriteString(lipgloss.NewStyle().
-					Foreground(p.PrimaryAccent).
-					Bold(true).
-					Render(moreText) + "\n")
-			} else {
-				body.WriteString(lipgloss.NewStyle().
-					Foreground(p.TextSubtle).
-					Render(moreText) + "\n")
-			}
-			lineCount++
+			navIdx++
 		}
 	}
 
@@ -495,26 +454,6 @@ func detailFooterHints(singleCommand bool) []components.KeyHint {
 		hints = append(hints, components.KeyHint{Key: "esc", Desc: "back"})
 	}
 	return append(hints, components.KeyHint{Key: "q", Desc: "quit"})
-}
-
-// findNavIndex finds the nav cursor index for a specific row in a group.
-func (d detailModel) findNavIndex(nav []navigableLine, kind updateKind, key string, rowIdx int) int {
-	for i, n := range nav {
-		if n.kind == navRow && n.groupKind == kind && n.rowKey == key && n.rowIdx == rowIdx {
-			return i
-		}
-	}
-	return -1
-}
-
-// findShowMoreNavIndex finds the nav cursor index for a show-more row.
-func (d detailModel) findShowMoreNavIndex(nav []navigableLine, kind updateKind) int {
-	for i, n := range nav {
-		if n.kind == navShowMore && n.groupKind == kind {
-			return i
-		}
-	}
-	return -1
 }
 
 // renderGroupColHeader renders the column header row for a group.

@@ -5,7 +5,6 @@
 package statuswatch
 
 import (
-	"fmt"
 	"testing"
 	"time"
 
@@ -79,24 +78,6 @@ func TestBuildGroups_KeysDistinguishSameLabelAcrossStacks(t *testing.T) {
 	assert.Contains(t, rows[1].key, "web")
 }
 
-func TestVisibleRows_Pagination(t *testing.T) {
-	g := group{kind: kindResource, title: "Resources"}
-	for i := 0; i < 25; i++ {
-		g.rows = append(g.rows, updateRow{label: fmt.Sprintf("r-%02d", i)})
-	}
-	shown, remaining := visibleRows(g, 10)
-	assert.Len(t, shown, 10)
-	assert.Equal(t, 15, remaining)
-
-	shown, remaining = visibleRows(g, 20)
-	assert.Len(t, shown, 20)
-	assert.Equal(t, 5, remaining)
-
-	shown, remaining = visibleRows(g, 99)
-	assert.Len(t, shown, 25)
-	assert.Zero(t, remaining)
-}
-
 func TestSortGroup_ByLabelAndTime(t *testing.T) {
 	rows := []updateRow{
 		{label: "b", duration: 2 * time.Second},
@@ -113,12 +94,4 @@ func TestValidSortCols_PerKind(t *testing.T) {
 	assert.NotContains(t, validSortCols(kindTarget), detailColStack)
 	assert.Contains(t, validSortCols(kindResource), detailColType)
 	assert.Contains(t, validSortCols(kindPolicy), detailColStack)
-}
-
-func TestVisibleRows_ReturnsCopy(t *testing.T) {
-	g := group{rows: []updateRow{{key: "a"}, {key: "b"}, {key: "c"}}}
-	rows, remaining := visibleRows(g, 2)
-	assert.Equal(t, 1, remaining)
-	rows[0].key = "mutated"
-	assert.Equal(t, "a", g.rows[0].key, "returned slice must not alias the group's backing array")
 }

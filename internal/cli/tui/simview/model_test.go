@@ -119,38 +119,28 @@ func TestSimView_HeaderShowsMode(t *testing.T) {
 	assert.Equal(t, "destroy", New(th, sim, Options{Kind: KindDestroy, Mode: "reconcile"}).headerCommand())
 }
 
-// TestSimView_PaginationShowsMore navigates to the "show more" row in the
-// Resources group and presses enter; asserts that 10 more rows become visible.
-func TestSimView_PaginationShowsMore(t *testing.T) {
+// TestSimView_ShowsAllRowsNoTruncation asserts that every resource row is
+// navigable with no pagination cap: the number of resource rows in the flat nav
+// list equals the total resource rows in the group, and no show-more affordance
+// is produced.
+func TestSimView_ShowsAllRowsNoTruncation(t *testing.T) {
 	m := makeModel(100, 40)
 
-	// Resources group has 12 rows → first 10 shown + show-more.
-	// Nav list: targets(3) + stack(1) + policies(4) + resources(10) + show-more = 19 navigable entries.
-	// Navigate to show-more of resources group.
-	nav := m.navLines()
-	showMoreIdx := -1
-	for i, n := range nav {
-		if n.kind == navShowMore && n.rowKind == kindResource {
-			showMoreIdx = i
-			break
+	var totalResourceRows int
+	for _, g := range m.groups {
+		if g.kind == kindResource {
+			totalResourceRows = len(g.rows)
 		}
 	}
-	require.GreaterOrEqual(t, showMoreIdx, 0, "show-more row for resources must exist")
+	require.Greater(t, totalResourceRows, 10, "fixture must have >10 resource rows to exercise the previously-truncated case")
 
-	// Navigate cursor to show-more
-	for m.cursor < showMoreIdx {
-		var mm tea.Model
-		mm, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
-		m = mm.(Model)
+	navResourceRows := 0
+	for _, n := range m.navLines() {
+		if n.rowKind == kindResource {
+			navResourceRows++
+		}
 	}
-	assert.Equal(t, showMoreIdx, m.cursor, "cursor should be on show-more")
-
-	// Press enter to expand
-	var mm tea.Model
-	mm, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = mm.(Model)
-
-	assert.Equal(t, 20, m.visible[kindResource], "visible[resource] should expand by 10 to 20")
+	assert.Equal(t, totalResourceRows, navResourceRows, "all resource rows must be navigable (no truncation)")
 }
 
 // TestSimView_SortByColumn presses → then s and asserts the Resources group

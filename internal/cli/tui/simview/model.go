@@ -60,8 +60,7 @@ const (
 type navLineKind int
 
 const (
-	navRow      navLineKind = iota
-	navShowMore navLineKind = iota
+	navRow navLineKind = iota
 )
 
 // navLine is one cursor position in the flat navigable list.
@@ -69,7 +68,6 @@ type navLine struct {
 	kind    navLineKind
 	rowKind rowKind
 	rowKey  string
-	rowIdx  int
 }
 
 // simviewChromeLines is the total fixed lines consumed by header + summary + footer.
@@ -94,7 +92,6 @@ type Model struct {
 	cmd      apimodel.Command // stored for footer delegation to components.PromptForOperations
 	groups   []simGroup
 	cursor   int
-	visible  map[rowKind]int
 	sortHi   map[rowKind]int
 	sortCol  map[rowKind]int
 	sortDir  map[rowKind]components.SortDirection
@@ -126,12 +123,6 @@ func New(th *theme.Theme, sim *apimodel.Simulation, opts Options) Model {
 		cmd:    sim.Command,
 		groups: groups,
 		cursor: 0,
-		visible: map[rowKind]int{
-			kindTarget:   10,
-			kindStack:    10,
-			kindPolicy:   10,
-			kindResource: 10,
-		},
 		sortHi: map[rowKind]int{
 			kindTarget:   colOp,
 			kindStack:    colOp,
@@ -321,9 +312,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.Enter) || msg.Type == tea.KeySpace:
 			if m.cursor >= 0 && m.cursor < total {
 				line := nav[m.cursor]
-				if line.kind == navShowMore {
-					m.visible[line.rowKind] += 10
-				} else if line.kind == navRow {
+				if line.kind == navRow {
 					// Toggle card expansion by row key.
 					if m.expanded[line.rowKey] {
 						delete(m.expanded, line.rowKey)
@@ -473,20 +462,11 @@ func (m Model) headerRight() string {
 func (m Model) navLines() []navLine {
 	var lines []navLine
 	for _, g := range m.groups {
-		lim := m.visible[g.kind]
-		shown, remaining := simVisibleRows(g, lim)
-		for i, r := range shown {
+		for _, r := range g.rows {
 			lines = append(lines, navLine{
 				kind:    navRow,
 				rowKind: g.kind,
 				rowKey:  r.key,
-				rowIdx:  i,
-			})
-		}
-		if remaining > 0 {
-			lines = append(lines, navLine{
-				kind:    navShowMore,
-				rowKind: g.kind,
 			})
 		}
 	}
@@ -730,17 +710,6 @@ func wrapText(text string, maxWidth int) string {
 		lines = append(lines, line)
 	}
 	return strings.Join(lines, "\n")
-}
-
-// simVisibleRows returns the visible slice and remaining count for a group.
-func simVisibleRows(g simGroup, limit int) ([]simRow, int) {
-	n := len(g.rows)
-	if limit > n {
-		limit = n
-	}
-	rows := make([]simRow, limit)
-	copy(rows, g.rows[:limit])
-	return rows, n - limit
 }
 
 // validSimSortCols returns the valid sort column indexes for a rowKind.
