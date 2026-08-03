@@ -118,14 +118,22 @@ func stripResolvableValuesRaw(raw json.RawMessage) json.RawMessage {
 	return out
 }
 
-// stripResolvableValues recursively removes $value from any object that
-// contains a $ref key. This ensures that a resolved config (with cached
-// $value) compares equal to an unresolved config (only $ref).
+// stripResolvableValues recursively removes derived metadata from any object
+// that contains a $ref key, leaving only the reference's semantic identity
+// ($ref path and $json). $value is a cached resolution; $visibility and
+// $strategy are derived from the source property (a secret-sourced credential
+// persists $visibility:"Opaque" so reference-don't-store strips its $value,
+// while the forma renders the same ref $visibility:"Clear"). Dropping all three
+// ensures a resolved / opacity-stamped stored config compares equal to the
+// authored $ref, so an idempotent re-apply of a target with secret-sourced
+// config does not spuriously classify a createOnly credential as changed.
 func stripResolvableValues(v any) {
 	switch val := v.(type) {
 	case map[string]any:
 		if _, hasRef := val["$ref"]; hasRef {
 			delete(val, "$value")
+			delete(val, "$visibility")
+			delete(val, "$strategy")
 		}
 		for _, child := range val {
 			stripResolvableValues(child)
