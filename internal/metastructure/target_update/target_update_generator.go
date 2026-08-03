@@ -148,7 +148,7 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 
 		// Determine which configs to compare. When the new config contains
 		// $ref resolvables, resolve them first so we compare actual values.
-		existingResolved, newResolved, allRefsResolved, err := tp.resolvedConfigs(existing.Config, target.Config, resolvables)
+		existingResolved, newResolved, _, anyRefDangling, err := tp.resolvedConfigs(existing.Config, target.Config, resolvables)
 		if err != nil {
 			return TargetUpdate{}, false, fmt.Errorf("failed to resolve target configs: %w", err)
 		}
@@ -171,15 +171,22 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 			// - The raw config format changed (e.g., plain value ↔ $ref wrapper)
 			// - The discoverable flag changed
 			// - The ConfigSchema changed (e.g., plugin annotations updated)
-			// Only strip cached $value entries when refs were successfully
-			// resolved. If resolution failed, a stale cached $value paired
-			// with a dangling $ref must still surface as an update so the
-			// failure isn't silently absorbed.
-			existingForRaw := existing.Config
-			desiredForRaw := target.Config
-			if allRefsResolved {
-				existingForRaw = stripResolvableValuesRaw(existingForRaw)
-				desiredForRaw = stripResolvableValuesRaw(desiredForRaw)
+			//
+			// Two configs with the same $refs are the same config: strip the
+			// cached $value and the derived $visibility/$strategy so identity
+			// alone drives the comparison. The one exception is a DANGLING ref
+			// (its source is gone): keep its stale cached $value so it surfaces
+			// as an update rather than being silently fed to a plugin. A ref that
+			// merely exposes no readable value (an opaque hash, an unsynced
+			// status) is not dangling and must not trigger a spurious update on
+			// every re-apply.
+			var existingForRaw, desiredForRaw json.RawMessage
+			if anyRefDangling {
+				existingForRaw = stripDerivedRefMetadataRaw(existing.Config)
+				desiredForRaw = stripDerivedRefMetadataRaw(target.Config)
+			} else {
+				existingForRaw = stripResolvableValuesRaw(existing.Config)
+				desiredForRaw = stripResolvableValuesRaw(target.Config)
 			}
 			if !util.JsonEqualRaw(existingForRaw, desiredForRaw) {
 				operation = TargetOperationUpdate
@@ -272,54 +279,78 @@ func configSchemasEqual(a, b pkgmodel.ConfigSchema) bool {
 // field-level comparison. Both configs are stripped of $ref metadata so that
 // ClassifyConfigChange compares plain values. When the new config contains
 // $ref resolvables, they are resolved from the DB first.
-func (tp *TargetUpdateGenerator) resolvedConfigs(existingConfig, newConfig json.RawMessage, resolvables []pkgmodel.FormaeURI) (json.RawMessage, json.RawMessage, bool, error) {
+// resolvedConfigs resolves the $refs in newConfig against the datastore and
+// returns both configs with $ref metadata stripped for comparison. The third
+// return reports whether ALL refs resolved to a value; the fourth reports
+// whether any ref is DANGLING — its source resource could not be loaded at all,
+// as opposed to loading fine but exposing no readable value at the path (e.g. an
+// opaque credential stored as a hash, or a status field not yet synced). A
+// dangling ref means a stale cached $value must surface as an update; a
+// present-but-unresolvable ref does not, because the reference identity is
+// unchanged.
+func (tp *TargetUpdateGenerator) resolvedConfigs(existingConfig, newConfig json.RawMessage, resolvables []pkgmodel.FormaeURI) (json.RawMessage, json.RawMessage, bool, bool, error) {
 	if len(resolvables) == 0 {
 		// No resolvables in new config, but existing config may still have
 		// $ref metadata from a previous apply. Strip it for comparison.
 		existingValues, err := resolver.ConvertToPluginFormat(existingConfig)
 		if err != nil {
-			return existingConfig, newConfig, true, nil
+			return existingConfig, newConfig, true, false, nil
 		}
-		return existingValues, newConfig, true, nil
+		return existingValues, newConfig, true, false, nil
 	}
 
 	// Resolve $ref values from DB for comparison
 	resolvedConfig := make([]byte, len(newConfig))
 	copy(resolvedConfig, newConfig)
 
+	allResolved := true
+	anyDangling := false
 	for _, uri := range resolvables {
 		ksuid := uri.KSUID()
 		propertyPath := uri.PropertyPath()
 
 		resource, err := tp.datastore.LoadResourceById(ksuid)
 		if err != nil || resource == nil {
-			slog.Debug("Cannot resolve $ref from DB, treating as config change",
+			// The source resource is gone — a genuinely dangling ref.
+			slog.Debug("Cannot load $ref source from DB, treating as dangling",
 				"uri", uri, "error", err)
-			return existingConfig, newConfig, false, nil
+			anyDangling = true
+			allResolved = false
+			continue
 		}
 
 		strVal, ok := resource.GetProperty(propertyPath)
 		if !ok {
-			slog.Debug("Referenced property not found in resource, treating as config change",
+			// The source is present but exposes no readable value at this path
+			// (e.g. an opaque credential hashed at rest, or an unsynced status
+			// field). The reference is valid, so this is not a change — compare
+			// by $ref identity rather than treating it as dangling.
+			slog.Debug("Referenced property not readable, comparing by ref identity",
 				"uri", uri, "propertyPath", propertyPath)
-			return existingConfig, newConfig, false, nil
+			allResolved = false
+			continue
 		}
 
 		resolvedConfig, err = resolver.ResolvePropertyReferences(uri, resolvedConfig, strVal)
 		if err != nil {
-			return existingConfig, newConfig, false, nil
+			allResolved = false
+			continue
 		}
+	}
+
+	if !allResolved {
+		return existingConfig, newConfig, false, anyDangling, nil
 	}
 
 	// Strip $ref metadata from both sides so ClassifyConfigChange sees plain values
 	existingValues, err := resolver.ConvertToPluginFormat(existingConfig)
 	if err != nil {
-		return existingConfig, json.RawMessage(resolvedConfig), true, nil
+		return existingConfig, json.RawMessage(resolvedConfig), true, false, nil
 	}
 	newValues, err := resolver.ConvertToPluginFormat(resolvedConfig)
 	if err != nil {
-		return existingConfig, json.RawMessage(resolvedConfig), true, nil
+		return existingConfig, json.RawMessage(resolvedConfig), true, false, nil
 	}
 
-	return existingValues, newValues, true, nil
+	return existingValues, newValues, true, false, nil
 }

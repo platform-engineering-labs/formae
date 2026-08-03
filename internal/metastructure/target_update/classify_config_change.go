@@ -118,6 +118,47 @@ func stripResolvableValuesRaw(raw json.RawMessage) json.RawMessage {
 	return out
 }
 
+// stripDerivedRefMetadataRaw returns a copy of raw with only the DERIVED
+// metadata ($visibility, $strategy) stripped from every $ref object, leaving
+// $ref, $json, and any cached $value intact. Used where a stale $value must
+// still surface (a dangling ref) but derived metadata — which the forma never
+// authors and which flips Opaque↔Clear for secret-sourced credentials — must
+// never count as a change.
+func stripDerivedRefMetadataRaw(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return raw
+	}
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return raw
+	}
+	stripDerivedRefMetadata(v)
+	out, err := json.Marshal(v)
+	if err != nil {
+		return raw
+	}
+	return out
+}
+
+// stripDerivedRefMetadata recursively removes $visibility and $strategy (but not
+// $value) from any object that contains a $ref key.
+func stripDerivedRefMetadata(v any) {
+	switch val := v.(type) {
+	case map[string]any:
+		if _, hasRef := val["$ref"]; hasRef {
+			delete(val, "$visibility")
+			delete(val, "$strategy")
+		}
+		for _, child := range val {
+			stripDerivedRefMetadata(child)
+		}
+	case []any:
+		for _, item := range val {
+			stripDerivedRefMetadata(item)
+		}
+	}
+}
+
 // stripResolvableValues recursively removes derived metadata from any object
 // that contains a $ref key, leaving only the reference's semantic identity
 // ($ref path and $json). $value is a cached resolution; $visibility and

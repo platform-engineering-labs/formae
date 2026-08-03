@@ -1177,6 +1177,43 @@ func TestGenerateTargetUpdates_RefWithCachedValue_UnresolvableRef(t *testing.T) 
 	assert.Equal(t, TargetOperationUpdate, updates[0].Operation)
 }
 
+// A target credential sourced from a secret persists $visibility:"Opaque" (so
+// reference-don't-store drops its $value) while the forma renders the same ref
+// $visibility:"Clear". The source resource is PRESENT but exposes no readable
+// value at the ref path (the secret value is a single hash at rest). Unlike a
+// dangling ref, this must not produce an update on every re-apply.
+func TestGenerateTargetUpdates_OpaqueCredRef_PresentButUnreadable_NoChange(t *testing.T) {
+	mockDS := &mockTargetDatastore{
+		targets: map[string]*pkgmodel.Target{
+			"grafana-target": {
+				Label:     "grafana-target",
+				Namespace: "GRAFANA",
+				Config:    json.RawMessage(`{"Type":"Grafana","Username":"admin","Password":{"$ref":"formae://sec1#/decodedData.admin-password","$visibility":"Opaque"}}`),
+			},
+		},
+		resources: map[string]*pkgmodel.Resource{
+			"sec1": {
+				Ksuid: "sec1",
+				// decodedData is one hashed envelope; the sub-key is not readable.
+				Properties: json.RawMessage(`{"decodedData":{"$value":"deadbeef","$visibility":"Opaque","$hashed":true}}`),
+			},
+		},
+	}
+	generator := NewTargetUpdateGenerator(mockDS)
+
+	targets := []pkgmodel.Target{
+		{
+			Label:     "grafana-target",
+			Namespace: "GRAFANA",
+			Config:    json.RawMessage(`{"Type":"Grafana","Username":"admin","Password":{"$ref":"formae://sec1#/decodedData.admin-password","$visibility":"Clear"}}`),
+		},
+	}
+
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
+	require.NoError(t, err)
+	assert.Empty(t, updates, "an opaque credential ref (present source, unreadable hashed value, Opaque->Clear) must be idempotent, not update every re-apply")
+}
+
 // Mirrors a real K8s target Config shape: $refs are nested under Auth, alongside
 // plain scalar fields. Existing Config has $ref+$value pairs (resolved at apply);
 // desired Config has $ref only. Same resolved values, same shape → no update.
