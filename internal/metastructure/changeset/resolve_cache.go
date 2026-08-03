@@ -18,7 +18,6 @@ import (
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
@@ -137,12 +136,18 @@ func (r *ResolveCache) startResolve(from gen.PID, resourceURI pkgmodel.FormaeURI
 		return
 	}
 
-	// The persisted target config may contain resolvable metadata ($ref/$value
-	// wrappers) that plugins cannot parse.  Strip these to produce clean JSON
-	// the plugin can unmarshal.
-	targetConfig := loadResourceResult.Target.Config
-	if cleanConfig, err := resolver.ConvertToPluginFormat(targetConfig); err == nil {
-		targetConfig = cleanConfig
+	// Resolve the source resource's target config before the Read. When the
+	// target authenticates from a secret, its persisted config carries a bare
+	// opaque $ref with no $value at rest (reference-don't-store), and
+	// ConvertToPluginFormat only strips metadata — it does not read the source.
+	// Resolving here (reading the source secret live) uses the same shared
+	// routine as the discovery List and apply paths, so a resolve-read
+	// authenticates instead of calling the plugin with an unresolved credential.
+	targetConfig, err := resource_update.ResolveOpaqueTargetConfig(r, loadResourceResult.Target)
+	if err != nil {
+		r.Log().Error("Failed to resolve target config for resolve-read resourceURI=%v: %v", resourceURI, err)
+		_ = r.Send(from, messages.FailedToResolveValue{ResourceURI: resourceURI, Reason: err.Error()})
+		return
 	}
 
 	// Execute the first attempt inline (no delay).

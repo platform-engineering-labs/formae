@@ -21,6 +21,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/changeset"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
@@ -321,7 +322,7 @@ func TestResolveTargetConfigForList_RecoverableFailureThenSuccess(t *testing.T) 
 				},
 			},
 		}
-		responses := make([]readResponse, maxDiscoveryResolveAttempts+1)
+		responses := make([]readResponse, resource_update.MaxTargetConfigResolveAttempts+1)
 		for i := range responses {
 			responses[i] = recoverableResp
 		}
@@ -337,7 +338,7 @@ func TestResolveTargetConfigForList_RecoverableFailureThenSuccess(t *testing.T) 
 
 		require.Error(t, err, "exhausting the retry budget must return an error")
 		assert.Nil(t, result, "result must be nil when budget is exhausted")
-		assert.Equal(t, maxDiscoveryResolveAttempts, proc.readAttempts,
+		assert.Equal(t, resource_update.MaxTargetConfigResolveAttempts, proc.readAttempts,
 			"must exhaust the full attempt budget on repeated recoverable failures")
 	})
 }
