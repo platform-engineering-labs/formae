@@ -42,9 +42,13 @@ func (m Model) renderSummaryCounts() string {
 // plus the line index of the cursor row (for scroll-to-cursor).
 func (m Model) renderBody() (string, int) {
 	var body strings.Builder
-	nav := m.navLines()
 	cursorLine := 0
 	lineCount := 0
+	// navIdx is a running index into the flat nav list. Rendering visits groups
+	// and rows in the exact order navLines builds them (one nav entry per row),
+	// so a counter incremented per row matches the nav index without an O(n)
+	// lookup per row.
+	navIdx := 0
 
 	// Destroy cascade warning banner: shown at the top of the viewport when
 	// KindDestroy and any resource row has cascade=true.
@@ -75,8 +79,7 @@ func (m Model) renderBody() (string, int) {
 	}
 
 	for _, g := range m.groups {
-		lim := m.visible[g.kind]
-		shown, remaining := simVisibleRows(g, lim)
+		shown := g.rows
 		opW, labelW, typeW, stackW := groupLayout(g.kind, m.width)
 
 		// Blank line + section header
@@ -89,8 +92,7 @@ func (m Model) renderBody() (string, int) {
 		lineCount++
 
 		// Rows
-		for i, r := range shown {
-			navIdx := findNavIndex(nav, g.kind, r.key, i)
+		for _, r := range shown {
 			isCursor := navIdx == m.cursor
 			if isCursor {
 				cursorLine = lineCount
@@ -108,23 +110,7 @@ func (m Model) renderBody() (string, int) {
 					lineCount++
 				}
 			}
-		}
-
-		// Show-more row
-		if remaining > 0 {
-			smNavIdx := findShowMoreNavIndex(nav, g.kind)
-			isCursor := smNavIdx == m.cursor
-			if isCursor {
-				cursorLine = lineCount
-			}
-			moreText := fmt.Sprintf("      ↓ show 10 more (%d remaining)", remaining)
-			p := m.th.Palette
-			if isCursor {
-				body.WriteString(lipgloss.NewStyle().Foreground(p.PrimaryAccent).Bold(true).Render(moreText) + "\n")
-			} else {
-				body.WriteString(lipgloss.NewStyle().Foreground(p.TextSubtle).Render(moreText) + "\n")
-			}
-			lineCount++
+			navIdx++
 		}
 	}
 
@@ -392,24 +378,4 @@ func (m Model) renderRow(r simRow, kind rowKind, opW, labelW, typeW, stackW int,
 	}
 
 	return result
-}
-
-// findNavIndex returns the nav list index for a specific row in a group.
-func findNavIndex(nav []navLine, kind rowKind, key string, rowIdx int) int {
-	for i, n := range nav {
-		if n.kind == navRow && n.rowKind == kind && n.rowKey == key && n.rowIdx == rowIdx {
-			return i
-		}
-	}
-	return -1
-}
-
-// findShowMoreNavIndex returns the nav index for a show-more row in a group.
-func findShowMoreNavIndex(nav []navLine, kind rowKind) int {
-	for i, n := range nav {
-		if n.kind == navShowMore && n.rowKind == kind {
-			return i
-		}
-	}
-	return -1
 }

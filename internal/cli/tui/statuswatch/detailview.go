@@ -203,16 +203,6 @@ func marshalRefLabels(m map[string]string) json.RawMessage {
 	return b
 }
 
-func visibleRows(g group, limit int) ([]updateRow, int) {
-	n := len(g.rows)
-	if limit > n {
-		limit = n
-	}
-	rows := make([]updateRow, limit)
-	copy(rows, g.rows[:limit])
-	return rows, n - limit
-}
-
 func validSortCols(kind updateKind) []int {
 	switch kind {
 	case kindPolicy:

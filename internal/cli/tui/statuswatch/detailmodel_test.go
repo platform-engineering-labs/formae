@@ -113,7 +113,7 @@ func TestDetailModel_SummaryRowsAndSecondLines(t *testing.T) {
 		"a failed resource with no error of its own is explained as a dependency failure")
 }
 
-func TestDetailModel_ShowMoreRow(t *testing.T) {
+func TestDetailModel_ShowsAllRowsNoTruncation(t *testing.T) {
 	th := theme.New("formae")
 	dm := newDetailModel(th, 100, 40)
 
@@ -134,19 +134,19 @@ func TestDetailModel_ShowMoreRow(t *testing.T) {
 	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
 	dm = dm.SetCommand(c, r, "◉", now, nil)
 
-	v := plain(dm.View(40, false))
-	// 25 resources, page size 20 → 20 shown, 5 remaining.
-	assert.Contains(t, v, "show 5 more (5 remaining)")
-
-	// cursor to show-more row (row index 20, after 20 visible rows)
-	// navigate down 20 times from 0
-	keys := defaultKeyMap()
-	for i := 0; i < 20; i++ {
-		dm, _ = dm.Update(tea.KeyMsg{Type: tea.KeyDown}, keys)
+	// All 25 resource rows are navigable — no pagination cap.
+	navResourceRows := 0
+	for _, n := range dm.navLines() {
+		if n.groupKind == kindResource {
+			navResourceRows++
+		}
 	}
-	// Now cursor should be on the show-more row — press enter
-	dm, _ = dm.Update(tea.KeyMsg{Type: tea.KeyEnter}, keys)
-	assert.Equal(t, 40, dm.visible[kindResource], "visible should expand by 20 to 40")
+	assert.Equal(t, 25, navResourceRows, "all resource rows must be navigable (no truncation)")
+
+	// No show-more affordance is rendered.
+	v := plain(dm.View(40, false))
+	assert.NotContains(t, v, "↓ show", "no show-more row should be rendered")
+	assert.NotContains(t, v, "remaining)", "no show-more remaining-count should be rendered")
 }
 
 func TestDetailModel_ExpandCardByKey(t *testing.T) {
@@ -420,7 +420,7 @@ func TestSetCommand_ClampsCursorWhenListShrinks(t *testing.T) {
 	th := theme.New("formae")
 	dm := newDetailModel(th, 100, 40)
 
-	// Build a command with 25 resource updates so visibleRows returns 20 + show-more.
+	// Build a command with 25 resource updates; all render (no truncation).
 	c12 := apimodel.Command{
 		CommandID: "cmd-shrink",
 		State:     "InProgress",
@@ -438,11 +438,11 @@ func TestSetCommand_ClampsCursorWhenListShrinks(t *testing.T) {
 	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
 	dm = dm.SetCommand(c12, r12, "◉", now, nil)
 
-	// Navigate cursor to the last navigable line (show-more row, index 10).
+	// Navigate cursor to the last navigable line.
 	nav12 := dm.navLines()
 	dm.cursor = len(nav12) - 1
-	require.Equal(t, 21, len(nav12), "expect 20 rows + 1 show-more = 21 nav entries")
-	require.Equal(t, 20, dm.cursor)
+	require.Equal(t, 25, len(nav12), "expect all 25 rows as nav entries (no truncation)")
+	require.Equal(t, 24, dm.cursor)
 
 	// Now refresh with a 2-resource command — list shrinks drastically.
 	c2 := apimodel.Command{
