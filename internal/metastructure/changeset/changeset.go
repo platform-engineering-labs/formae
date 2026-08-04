@@ -446,6 +446,21 @@ func (p *ExecutionDAG) buildTargetResourceEdges(targetUpdates []target_update.Ta
 					if reResolvesConfig && !dependsOnTransitively(targetNode, node.URI) {
 						node.LinkWith(targetNode)
 					}
+				case resource_update.OperationRead:
+					// A read on a target whose config is being resolved — the
+					// synthetic Resolve op, e.g. a sync/OOB read of a resource on a
+					// secret-authed target — must wait for that Resolve so it
+					// dispatches the resolved credential instead of the raw opaque
+					// $ref (which the plugin cannot authenticate with, hanging or
+					// failing the read). Only the Resolve op warrants this edge: a
+					// plain target create/update already carries a usable config, and
+					// sync reads are otherwise deliberately edge-free (independent of
+					// one another) to avoid one failing read cascading a whole
+					// subtree. Guard against a cycle exactly as deletes do.
+					if tu.Operation == target_update.TargetOperationResolve &&
+						reResolvesConfig && !dependsOnTransitively(targetNode, node.URI) {
+						node.LinkWith(targetNode)
+					}
 				}
 			}
 		}
