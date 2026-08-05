@@ -15,6 +15,45 @@ import (
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
+const (
+	maxJSONInputBytes  = 1 << 20 // 1 MiB: bound on the resolved JSON a $json path parses
+	maxJSONOutputBytes = 1 << 16 // 64 KiB: bound on the extracted scalar
+)
+
+// ExtractJSONPath parses resolved as JSON and returns the scalar at the gjson
+// dotted path as a string. A JSON string returns verbatim; a number/bool returns
+// its canonical string form; an object, array, missing key, explicit null, or
+// invalid input is an error. Errors reference only the path and the JSON type —
+// never the resolved value — so no plaintext reaches logs or callers.
+func ExtractJSONPath(resolved, path string) (string, error) {
+	if len(resolved) > maxJSONInputBytes {
+		return "", fmt.Errorf("$json path %q: resolved JSON exceeds %d bytes", path, maxJSONInputBytes)
+	}
+	if !gjson.Valid(resolved) {
+		return "", fmt.Errorf("$json path %q: resolved value is not valid JSON", path)
+	}
+	res := gjson.Get(resolved, path)
+	if !res.Exists() {
+		return "", fmt.Errorf("$json path %q not found", path)
+	}
+	switch res.Type {
+	case gjson.Null:
+		return "", fmt.Errorf("$json path %q resolved to null", path)
+	case gjson.String, gjson.Number, gjson.True, gjson.False:
+		out := res.String()
+		if len(out) > maxJSONOutputBytes {
+			return "", fmt.Errorf("$json path %q: extracted value exceeds %d bytes", path, maxJSONOutputBytes)
+		}
+		return out, nil
+	default: // gjson.JSON — object or array
+		kind := "object"
+		if res.IsArray() {
+			kind = "array"
+		}
+		return "", fmt.Errorf("$json path %q resolved to a JSON %s, expected a scalar", path, kind)
+	}
+}
+
 // ResolvePropertyReferences resolves a specific reference in resource properties
 func ResolvePropertyReferences(ksuidUri pkgmodel.FormaeURI, properties json.RawMessage, value string) (json.RawMessage, error) {
 	resolver := newPropertyResolver(properties)
@@ -185,6 +224,7 @@ type propertyParser struct {
 	HasValue  bool
 	Reference string // The $ref value
 	Value     any
+	JSONPath  string // gjson dotted path from $json, applied post-resolution
 }
 
 // propertyType defines the type of property being parsed
@@ -203,6 +243,7 @@ func (pp *propertyParser) Parse(result gjson.Result) propertyType {
 
 	if pp.HasRef {
 		pp.Reference = result.Get("$ref").String()
+		pp.JSONPath = result.Get("$json").String()
 		if pp.HasValue {
 			pp.Value = result.Get("$value").Value()
 		}
@@ -230,12 +271,14 @@ func (pp *propertyParser) CreateRef(currentPath string, result gjson.Result) pkg
 			Strategy:   result.Get("$strategy").String(),
 			Visibility: result.Get("$visibility").String(),
 			Value:      pp.Value,
+			JSONPath:   pp.JSONPath,
 		}
 	} else {
 		// Even without a value, we might have strategy and visibility
 		rawValue = pkgmodel.Value{
 			Strategy:   result.Get("$strategy").String(),
 			Visibility: result.Get("$visibility").String(),
+			JSONPath:   pp.JSONPath,
 		}
 	}
 
@@ -571,6 +614,9 @@ func (pr *propertyResolver) resolveReference(properties json.RawMessage, ref pkg
 	if ref.ResolvedValue.Visibility != "" {
 		refObject["$visibility"] = ref.ResolvedValue.Visibility
 	}
+	if ref.ResolvedValue.JSONPath != "" {
+		refObject["$json"] = ref.ResolvedValue.JSONPath
+	}
 
 	marshalledObj, err := pr.marshalWithLogging(refObject, "reference resolution", ref.TargetPath)
 	if err != nil {
@@ -618,7 +664,16 @@ func (pr *propertyResolver) setRefValue(uri pkgmodel.FormaeURI, value string) er
 			continue
 		}
 
-		newValue := pkgmodel.Value{Value: actualValue}
+		resolvedForRef := actualValue
+		if ref.ResolvedValue.JSONPath != "" {
+			extracted, err := ExtractJSONPath(actualValue, ref.ResolvedValue.JSONPath)
+			if err != nil {
+				return err // path/type only — no plaintext (see extractJSONPath)
+			}
+			resolvedForRef = extracted
+		}
+
+		newValue := pkgmodel.Value{Value: resolvedForRef}
 
 		if ref.ResolvedValue.Strategy != "" {
 			newValue.Strategy = ref.ResolvedValue.Strategy
@@ -631,6 +686,9 @@ func (pr *propertyResolver) setRefValue(uri pkgmodel.FormaeURI, value string) er
 		} else if ref.ResolvedValue.Visibility != "" {
 			newValue.Visibility = ref.ResolvedValue.Visibility
 		}
+
+		// Preserve JSONPath on the stored value so re-apply is idempotent.
+		newValue.JSONPath = ref.ResolvedValue.JSONPath
 
 		ref.ResolvedValue = newValue
 	}

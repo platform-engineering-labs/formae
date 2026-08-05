@@ -705,6 +705,36 @@ func TestResolveRefs_UnresolvedForwardRefLeftIntact(t *testing.T) {
 	assert.False(t, hasValue, "an unresolved forward ref must not gain a $value")
 }
 
+// TestResolveRefs_JSONPathAppliedOnUpdatePath verifies that resolveRefs, when a
+// mod envelope carries both $ref and $json, sets $value to the scalar extracted
+// at the $json dotted path rather than to the entire resolved JSON document.
+func TestResolveRefs_JSONPathAppliedOnUpdatePath(t *testing.T) {
+	resourceKsuid := util.NewID()
+	uri := fmt.Sprintf("formae://%s#/SecretString", resourceKsuid)
+
+	current := map[string]any{"Password": "old-value"}
+	mod := map[string]any{
+		"Password": map[string]any{
+			"$ref":  uri,
+			"$json": "db.password",
+		},
+	}
+
+	props := resolver.NewResolvableProperties()
+	props.Add(resourceKsuid, "SecretString", `{"db":{"password":"the-secret"}}`)
+
+	err := resolveRefs(current, mod, props)
+	require.NoError(t, err)
+
+	envelope, ok := mod["Password"].(map[string]any)
+	require.True(t, ok)
+
+	got, hasValue := envelope["$value"]
+	require.True(t, hasValue, "resolveRefs must set $value on the mod envelope")
+	assert.Equal(t, "the-secret", got,
+		"resolveRefs must extract the scalar at the $json path, not return the whole document")
+}
+
 func TestRemoveNonSchemaFields_ThreeFieldsTotalTwoSchemaFields_RemovesNonSchemaField(t *testing.T) {
 	document := []byte(`{"a": "a", "b": "b", "c": "c"}`)
 	schemaFields := []string{"a", "c"}

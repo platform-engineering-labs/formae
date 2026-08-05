@@ -420,7 +420,13 @@ open class ListingResolvable extends Resolvable {
 /// The consumable result of a secret reference: `secret.res.secretValue` (scalar)
 /// or `secret.res.secretValue.at(key)` (map). Opacity is derived agent-side from
 /// the source field's FieldHint.Opaque, not re-declared here.
-open class SecretValueResolvable extends Resolvable {}
+open class SecretValueResolvable extends Resolvable {
+    hidden jsonPath: String?
+    /// Parse the resolved value as JSON and extract a dotted path (gjson syntax).
+    /// Terminal; chainable after .at(). The extracted value stays opaque.
+    function json(path: String): SecretValueResolvable = (this) { jsonPath = path }
+    $json: String? = jsonPath
+}
 
 /// Scalar secret backends (e.g. AWS SecretString, Azure value): `secretValue` IS
 /// the value. There is no at(). A plugin's secret resolvable extends this and
