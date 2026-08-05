@@ -3525,7 +3525,7 @@ func TestNewChangeset_SynthesizesResolveForCascadeDeletedOpaqueTarget(t *testing
 }
 
 // TestNewChangeset_SynthesizesResolveForCascadeDeletedJSONCredTarget asserts the
-// RFC-110 headline case for the delete path: a cascade-deleted target whose
+// headline case for the delete path: a cascade-deleted target whose
 // credentials come from a JSON secret via .json() (persisted as $ref+$json with
 // $visibility "Clear") must still get a synthetic Resolve, and its resource-delete
 // ops must depend on that Resolve — otherwise the plugin dispatches the teardown
