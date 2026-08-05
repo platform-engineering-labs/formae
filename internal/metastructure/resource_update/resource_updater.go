@@ -471,6 +471,20 @@ func delete(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 	return handleProgressUpdate(gen.PID{}, state, data, *result, proc)
 }
 
+// resolveWatchdogTimeout sizes the ResolveCache watchdog to outlive the cache's
+// worst-case resolve wall time: MaxRetries reads (each up to the plugin call
+// timeout) plus the exponential backoff budget the ResolveCache schedules with
+// (RetryStrategy.MaxTotalDelay), plus a margin. The backoff term is derived from
+// the same RetryStrategy the cache retries with, so a tuned or exponential
+// policy cannot make the two drift: a flat MaxRetries*RetryDelay estimate would
+// under-cover exponential throttling backoff and trip this watchdog mid-retry.
+func resolveWatchdogTimeout(cfg pkgmodel.RetryConfig) time.Duration {
+	const resolveCacheMargin = 30 * time.Second
+	perAttempt := time.Duration(PluginOperationCallTimeout) * time.Second
+	strategy := resource.RetryStrategy{MaxRetries: cfg.MaxRetries, BaseDelay: cfg.RetryDelay}
+	return time.Duration(cfg.MaxRetries)*perAttempt + strategy.MaxTotalDelay() + resolveCacheMargin
+}
+
 func resolve(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
 	if len(data.resourceUpdate.RemainingResolvables) == 0 {
 		return nextState(state, data, proc)
@@ -491,21 +505,8 @@ func resolve(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Ato
 		return StateResolving, data, nil, fmt.Errorf("failed to send ResolveValue message to resolve cache: %w", err)
 	}
 
-	// The watchdog must outlive ResolveCache's worst-case wall time per property:
-	// each plugin Call takes up to PluginOperationCallTimeout, retried up to
-	// MaxRetries times, with EXPONENTIAL backoff spacing for throttling. Derive
-	// the backoff envelope from the same RetryStrategy the ResolveCache schedules
-	// with (its MaxTotalDelay), so a tuned policy cannot cause the two to drift —
-	// a flat MaxRetries*RetryDelay estimate would under-cover the exponential
-	// backoff and trip this watchdog mid-retry.
-	perAttempt := time.Duration(PluginOperationCallTimeout) * time.Second
-	const resolveCacheMargin = 30 * time.Second
-	resolveStrategy := resource.RetryStrategy{MaxRetries: data.retryConfig.MaxRetries, BaseDelay: data.retryConfig.RetryDelay}
-	resolveCacheTimeout := time.Duration(data.retryConfig.MaxRetries)*perAttempt +
-		resolveStrategy.MaxTotalDelay() +
-		resolveCacheMargin
 	timeout := statemachine.StateTimeout{
-		Duration: resolveCacheTimeout,
+		Duration: resolveWatchdogTimeout(data.retryConfig),
 		Message:  ResolveCacheMissingInAction{},
 	}
 
