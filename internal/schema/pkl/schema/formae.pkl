@@ -53,6 +53,13 @@ open class Resource {
     }
 }
 
+/// Base for first-class secret resources. A provider's secret (aws.Secret, the
+/// Azure Key Vault Secret, ...) extends this and names its value property. The
+/// rotation field is intentionally absent in this stage (deferred to Stage 2).
+abstract class Secret extends Resource {
+    hidden valueProperty: String
+}
+
 open class SubResource {
     function props(): Dynamic = module.fq.subresourceProps(reflect.Class(this.getClass()), this)
     function render(): Dynamic = this.props()
@@ -406,6 +413,61 @@ open class ListingResolvable extends Resolvable {
         property = if (_self.property != null)
             _self.property + "." + index.toString()
             else index.toString()
+        visibility = _self.visibility
+    }
+}
+
+/// The consumable result of a secret reference: `secret.res.secretValue` (scalar)
+/// or `secret.res.secretValue.at(key)` (map). Opacity is derived agent-side from
+/// the source field's FieldHint.Opaque, not re-declared here.
+open class SecretValueResolvable extends Resolvable {}
+
+/// Scalar secret backends (e.g. AWS SecretString, Azure value): `secretValue` IS
+/// the value. There is no at(). A plugin's secret resolvable extends this and
+/// sets valueProperty.
+open class ScalarSecretResolvable extends Resolvable {
+    local _self = this
+    hidden valueProperty: String
+    hidden secretValue: SecretValueResolvable = new {
+        label = _self.label
+        type = _self.type
+        stack = _self.stack
+        property = valueProperty
+        visibility = _self.visibility
+    }
+}
+
+/// Accessor for map secret backends. Intentionally NOT a Resolvable: a bare
+/// `secretValue` (a forgotten .at()) cannot be assigned to a Resolvable-typed
+/// consumer field, so the mistake is a PKL eval-time type error. Only .at(key)
+/// produces a Resolvable.
+class SecretMapAccessor {
+    hidden label: String?
+    hidden type: String(matches(Regex(#"^.*::.*$"#)))?
+    hidden stack: String?
+    hidden valueProperty: String
+    hidden visibility: "Clear"|"Opaque" = "Clear"
+    /// Access a value by key in the resolved map. Colons and dots are escaped for
+    /// gjson, matching MappingResolvable.at.
+    function at(key: String): SecretValueResolvable = new {
+        label = this.label
+        type = this.type
+        stack = this.stack
+        property = valueProperty + "." + key.replaceAll(":", "\\:").replaceAll(".", "\\.")
+        visibility = this.visibility
+    }
+}
+
+/// Map secret backends (e.g. Kubernetes data, a Vault KV path): `secretValue` is
+/// an accessor you must .at() into.
+open class MapSecretResolvable extends Resolvable {
+    local _self = this
+    hidden valueProperty: String
+    hidden secretValue: SecretMapAccessor = new {
+        label = _self.label
+        type = _self.type
+        stack = _self.stack
+        valueProperty = _self.valueProperty
         visibility = _self.visibility
     }
 }
