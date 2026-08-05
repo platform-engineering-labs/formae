@@ -363,7 +363,7 @@ func TestResolveNodeFinished_PropagatesConfigAndSkipsPersist(t *testing.T) {
 		[]pkgmodel.FormaeURI{pkgmodel.NewFormaeURI(util.NewID(), "")},
 	)
 
-	cs, err := NewChangeset(
+	cs, err := buildChangesetForTest(
 		[]resource_update.ResourceUpdate{resourceOp},
 		[]target_update.TargetUpdate{resolveOp},
 		"cmd-resolve-propagation",
@@ -456,7 +456,7 @@ func TestResolveNodeFinished_ConversionFailure_FailsDependentsClosed(t *testing.
 		[]pkgmodel.FormaeURI{pkgmodel.NewFormaeURI(util.NewID(), "")},
 	)
 
-	cs, err := NewChangeset(
+	cs, err := buildChangesetForTest(
 		[]resource_update.ResourceUpdate{resourceOp},
 		[]target_update.TargetUpdate{resolveOp},
 		"cmd-resolve-fail-closed",

@@ -350,7 +350,14 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 	// Create changeset early to catch validation errors before simulate
 	var cs changeset.Changeset
 	if len(fa.ResourceUpdates) > 0 || len(fa.TargetUpdates) > 0 {
-		cs, err = changeset.NewChangeset(fa.ResourceUpdates, fa.TargetUpdates, fa.ID, fa.Command, m.Datastore)
+		synth, synthErr := target_update.SynthesizeResolveTargetUpdates(
+			resource_update.ReferencedTargetLabels(fa.ResourceUpdates),
+			resource_update.SourceTargetByKsuid(fa.ResourceUpdates),
+			fa.TargetUpdates, m.Datastore)
+		if synthErr != nil {
+			return nil, synthErr
+		}
+		cs, err = changeset.NewChangeset(fa.ResourceUpdates, append(fa.TargetUpdates, synth...), fa.ID, fa.Command)
 		if err != nil {
 			return nil, err
 		}
@@ -811,7 +818,14 @@ func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.Forma
 	}
 
 	if len(fa.ResourceUpdates) > 0 || len(fa.TargetUpdates) > 0 {
-		cs, err := changeset.NewChangeset(fa.ResourceUpdates, fa.TargetUpdates, fa.ID, pkgmodel.CommandDestroy, m.Datastore)
+		synth, synthErr := target_update.SynthesizeResolveTargetUpdates(
+			resource_update.ReferencedTargetLabels(fa.ResourceUpdates),
+			resource_update.SourceTargetByKsuid(fa.ResourceUpdates),
+			fa.TargetUpdates, m.Datastore)
+		if synthErr != nil {
+			return nil, synthErr
+		}
+		cs, err := changeset.NewChangeset(fa.ResourceUpdates, append(fa.TargetUpdates, synth...), fa.ID, pkgmodel.CommandDestroy)
 		if err != nil {
 			return nil, err
 		}
@@ -1341,7 +1355,15 @@ func (m *Metastructure) ReRunIncompleteCommands() error {
 		// Build the changeset from only the pending (non-terminal) resource
 		// updates. Terminal resources are excluded so they don't create
 		// phantom dependency links in the new changeset's pipeline.
-		cs, err := changeset.NewChangeset(pendingUpdates, pendingTargetUpdates, fa.ID, pkgmodel.CommandApply, m.Datastore)
+		synth, synthErr := target_update.SynthesizeResolveTargetUpdates(
+			resource_update.ReferencedTargetLabels(pendingUpdates),
+			resource_update.SourceTargetByKsuid(pendingUpdates),
+			pendingTargetUpdates, m.Datastore)
+		if synthErr != nil {
+			slog.Error("Failed to build changeset for incomplete forma command, skipping", "commandID", fa.ID, "error", synthErr)
+			continue
+		}
+		cs, err := changeset.NewChangeset(pendingUpdates, append(pendingTargetUpdates, synth...), fa.ID, pkgmodel.CommandApply)
 		if err != nil {
 			slog.Error("Failed to build changeset for incomplete forma command, skipping", "commandID", fa.ID, "error", err)
 			continue

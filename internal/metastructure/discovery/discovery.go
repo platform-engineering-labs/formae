@@ -31,6 +31,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
@@ -714,7 +715,16 @@ func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Ta
 
 	// Pass CommandSync so the DAG skips buildOperationRelationships — discovery
 	// sync reads are independent and one failed read must not cascade to others.
-	cs, err := changeset.NewChangeset(syncCommand.ResourceUpdates, nil, syncCommand.ID, pkgmodel.CommandSync, data.ds)
+	synth, err := target_update.SynthesizeResolveTargetUpdates(
+		resource_update.ReferencedTargetLabels(syncCommand.ResourceUpdates),
+		resource_update.SourceTargetByKsuid(syncCommand.ResourceUpdates),
+		nil, data.ds)
+	if err != nil {
+		slog.Error("failed to build changeset for discovery sync command", "commandID", syncCommand.ID, "error", err)
+		finalizeFailedSyncCommand(syncCommand, proc)
+		return "", fmt.Errorf("failed to build changeset: %w", err)
+	}
+	cs, err := changeset.NewChangeset(syncCommand.ResourceUpdates, synth, syncCommand.ID, pkgmodel.CommandSync)
 	if err != nil {
 		slog.Error("failed to build changeset for discovery sync command", "commandID", syncCommand.ID, "error", err)
 		finalizeFailedSyncCommand(syncCommand, proc)

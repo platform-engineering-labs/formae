@@ -66,7 +66,7 @@ func TestBuildTargetResourceEdges_MutableTargetUpdate_AllDependentOpsDependOnTar
 
 	targetUpdates := []target_update.TargetUpdate{mutableResolvableTargetUpdate(targetLabel)}
 
-	cs, err := NewChangeset(resourceUpdates, targetUpdates, "cmd-ordering", pkgmodel.CommandApply, nil)
+	cs, err := buildChangesetForTest(resourceUpdates, targetUpdates, "cmd-ordering", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	targetNode := cs.DAG.Nodes[pkgmodel.FormaeURI("target://"+targetLabel+"/update")]
@@ -106,7 +106,7 @@ func TestNewChangeset_ResourceReplaceOnResolvableTarget_RemainsAcyclic(t *testin
 	}
 	targetUpdates := []target_update.TargetUpdate{mutableResolvableTargetUpdate(targetLabel)}
 
-	cs, err := NewChangeset(resourceUpdates, targetUpdates, "cmd-replace-acyclic", pkgmodel.CommandApply, nil)
+	cs, err := buildChangesetForTest(resourceUpdates, targetUpdates, "cmd-replace-acyclic", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	assert.False(t, cs.DAG.HasCycles(),
@@ -149,7 +149,7 @@ func TestNewChangeset_TargetRefsResourceReplacedOnSameTarget_ReturnsCycleError(t
 		},
 	}
 
-	_, err := NewChangeset(resourceUpdates, targetUpdates, "cmd-cycle-guard", pkgmodel.CommandApply, nil)
+	_, err := buildChangesetForTest(resourceUpdates, targetUpdates, "cmd-cycle-guard", pkgmodel.CommandApply, nil)
 	require.Error(t, err, "a target $ref to a resource replaced on the same target forms a cycle and must be rejected")
 }
 
@@ -213,7 +213,7 @@ func TestChangeset_MutableTargetUpdate_DeleteDispatchesResolvedConfigAfterTarget
 	}
 	targetUpdates := []target_update.TargetUpdate{mutableResolvableTargetUpdate(targetLabel)}
 
-	cs, err := NewChangeset(resourceUpdates, targetUpdates, "cmd-propagation", pkgmodel.CommandApply, nil)
+	cs, err := buildChangesetForTest(resourceUpdates, targetUpdates, "cmd-propagation", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	// isGrafanaDelete identifies the grafana delete among scheduled updates. A

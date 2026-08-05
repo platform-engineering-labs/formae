@@ -112,7 +112,7 @@ func TestChangeset_ExecutionOrder_DeleteChainThenCreateChainWithParallelLeaves(t
 		},
 	}
 
-	changeset, err := NewChangeset(resourceUpdates, nil, "test-command-1", pkgmodel.CommandApply, nil)
+	changeset, err := buildChangesetForTest(resourceUpdates, nil, "test-command-1", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	// Print initial DAG state
@@ -272,7 +272,7 @@ func TestChangeset_RemoveNode_UnlinksAllDependentsWhenThreeOrMore(t *testing.T) 
 		},
 	}
 
-	changeset, err := NewChangeset(resourceUpdates, nil, "test-unlink-all", pkgmodel.CommandApply, nil)
+	changeset, err := buildChangesetForTest(resourceUpdates, nil, "test-unlink-all", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	// Step 1: Only VPC should be executable (no dependencies)
@@ -391,7 +391,7 @@ func TestChangeset_ExecutionOrder_IndependentCreateRunsParallelWithDeleteChain(t
 		},
 	}
 
-	changeset, err := NewChangeset(resourceUpdates, nil, "test-command-1", pkgmodel.CommandApply, nil)
+	changeset, err := buildChangesetForTest(resourceUpdates, nil, "test-command-1", pkgmodel.CommandApply, nil)
 	assert.NoError(t, err)
 
 	// Get initial executable updates
@@ -549,7 +549,7 @@ func TestChangeset_ExecutionOrder_ExternalResolvableDoesNotBlock(t *testing.T) {
 		},
 	}
 
-	changeset, err := NewChangeset(resourceUpdates, nil, "test-command-1", pkgmodel.CommandApply, nil)
+	changeset, err := buildChangesetForTest(resourceUpdates, nil, "test-command-1", pkgmodel.CommandApply, nil)
 	assert.NoError(t, err)
 
 	// Print initial DAG state for debugging
@@ -746,7 +746,7 @@ func TestChangeset_ExecutionOrder_MultipleUpstreamDependenciesBothMustComplete(t
 		},
 	}
 
-	changeset, err := NewChangeset(resourceUpdates, nil, "test-command-1", pkgmodel.CommandApply, nil)
+	changeset, err := buildChangesetForTest(resourceUpdates, nil, "test-command-1", pkgmodel.CommandApply, nil)
 	assert.NoError(t, err)
 
 	// Get initial executable updates
@@ -918,7 +918,7 @@ func TestChangeset_Init_DifferentTypesSameLabelNoFalseReplace(t *testing.T) {
 			StackLabel: "test-stack",
 		},
 	}
-	changeset, err := NewChangeset(resourceUpdateInitial, nil, "test-command-1", pkgmodel.CommandApply, nil)
+	changeset, err := buildChangesetForTest(resourceUpdateInitial, nil, "test-command-1", pkgmodel.CommandApply, nil)
 	assert.NoError(t, err)
 
 	executables := changeset.GetExecutableUpdates("AWS", 100)
@@ -989,7 +989,7 @@ func TestChangeset_ExecutionOrder_DeleteChainReversesCreateDependencies(t *testi
 		},
 	}
 
-	changeset, err := NewChangeset(resourceUpdates, nil, "test-command-1", pkgmodel.CommandApply, nil)
+	changeset, err := buildChangesetForTest(resourceUpdates, nil, "test-command-1", pkgmodel.CommandApply, nil)
 	assert.NoError(t, err)
 
 	executables := changeset.GetExecutableUpdates("AWS", 100)
@@ -1037,7 +1037,7 @@ func TestChangeset_FailureCascade_TransitiveDependentsAllFail(t *testing.T) {
 		RemainingResolvables: []pkgmodel.FormaeURI{subnetKsuid},
 	}
 
-	changeset, err := NewChangeset(
+	changeset, err := buildChangesetForTest(
 		[]resource_update.ResourceUpdate{vpcUpdate, subnetUpdate, instanceUpdate},
 		nil,
 		"test-recursive-cascade",
@@ -1105,7 +1105,7 @@ func TestChangeset_UpdateDAG_FailureCascadeRemovesNodes(t *testing.T) {
 		RemainingResolvables: []pkgmodel.FormaeURI{subnetKsuid},
 	}
 
-	changeset, err := NewChangeset(
+	changeset, err := buildChangesetForTest(
 		[]resource_update.ResourceUpdate{vpcUpdate, subnetUpdate, instanceUpdate},
 		nil,
 		"test-update-DAG-cascade",
@@ -1189,7 +1189,7 @@ func TestChangeset_GetExecutableUpdates_FiltersByNamespace(t *testing.T) {
 		},
 	}
 
-	changeset, err := NewChangeset(
+	changeset, err := buildChangesetForTest(
 		updates,
 		nil,
 		"test-max-n",
@@ -1249,7 +1249,7 @@ func TestChangeset_Init_CyclicDependenciesReturnError(t *testing.T) {
 		},
 	}
 
-	_, err := NewChangeset(
+	_, err := buildChangesetForTest(
 		resourceUpdates,
 		nil,
 		"test-cycle",
@@ -1286,7 +1286,7 @@ func TestChangeset_GetExecutableUpdates_RespectsMaxLimit(t *testing.T) {
 		},
 	}
 
-	cs, err := NewChangeset(updates, nil, "cmd-1", pkgmodel.CommandApply, nil)
+	cs, err := buildChangesetForTest(updates, nil, "cmd-1", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	result := cs.GetExecutableUpdates("AWS", 1)
@@ -1316,7 +1316,7 @@ func TestChangeset_UpdateDAG_RejectedUpdateCascadesToDependents(t *testing.T) {
 		},
 	}
 
-	cs, err := NewChangeset(updates, nil, "cmd-1", pkgmodel.CommandApply, nil)
+	cs, err := buildChangesetForTest(updates, nil, "cmd-1", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	exec := cs.GetExecutableUpdates("AWS", 10)
@@ -1344,7 +1344,7 @@ func TestChangeset_IsComplete_InProgressIsNotComplete(t *testing.T) {
 		},
 	}
 
-	cs, err := NewChangeset(updates, nil, "cmd-1", pkgmodel.CommandApply, nil)
+	cs, err := buildChangesetForTest(updates, nil, "cmd-1", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	exec := cs.GetExecutableUpdates("AWS", 10)
@@ -1354,7 +1354,7 @@ func TestChangeset_IsComplete_InProgressIsNotComplete(t *testing.T) {
 }
 
 func TestChangeset_IsComplete_EmptyChangesetIsComplete(t *testing.T) {
-	cs, err := NewChangeset(nil, nil, "cmd-1", pkgmodel.CommandApply, nil)
+	cs, err := buildChangesetForTest(nil, nil, "cmd-1", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	assert.True(t, cs.IsComplete(), "empty changeset should be complete")
@@ -1380,7 +1380,7 @@ func TestChangeset_ExecutionOrder_DestroyChainCompletesInReverseOrder(t *testing
 		},
 	}
 
-	cs, err := NewChangeset(updates, nil, "cmd-1", pkgmodel.CommandApply, nil)
+	cs, err := buildChangesetForTest(updates, nil, "cmd-1", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	// Subnet delete first (reversed dependency order)
@@ -1426,7 +1426,7 @@ func TestChangeset_ExecutionOrder_UpdateOperationRespectsDependencies(t *testing
 		},
 	}
 
-	cs, err := NewChangeset(updates, nil, "cmd-1", pkgmodel.CommandApply, nil)
+	cs, err := buildChangesetForTest(updates, nil, "cmd-1", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	// VPC update should be first (subnet depends on it)
@@ -1473,7 +1473,7 @@ func TestChangeset_AvailableExecutableUpdates_SkipsInProgressNodes(t *testing.T)
 		},
 	}
 
-	cs, err := NewChangeset(updates, nil, "cmd-1", pkgmodel.CommandApply, nil)
+	cs, err := buildChangesetForTest(updates, nil, "cmd-1", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	// Start one update (moves to InProgress)
@@ -1575,7 +1575,7 @@ func TestChangeset_Init_ReplaceOperationSplitsIntoDeleteAndCreateNodes(t *testin
 		},
 	}
 
-	cs, err := NewChangeset(updates, nil, "cmd-1", pkgmodel.CommandApply, nil)
+	cs, err := buildChangesetForTest(updates, nil, "cmd-1", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	// Replace should produce 2 DAG nodes: one delete, one create
@@ -1631,7 +1631,7 @@ func TestChangeset_ExecutionOrder_MixedResourceAndTargetUpdates(t *testing.T) {
 		},
 	}
 
-	cs, err := NewChangeset(resourceUpdates, targetUpdates, "cmd-mixed", pkgmodel.CommandApply, nil)
+	cs, err := buildChangesetForTest(resourceUpdates, targetUpdates, "cmd-mixed", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	// Step 2: AvailableExecutableUpdates should only count resource updates (rate-limited), not targets
@@ -1708,7 +1708,7 @@ func TestChangeset_UpdateDAG_UnexpectedStateTreatedAsFailure(t *testing.T) {
 		},
 	}
 
-	cs, err := NewChangeset(resourceUpdates, nil, "cmd-unexpected", pkgmodel.CommandApply, nil)
+	cs, err := buildChangesetForTest(resourceUpdates, nil, "cmd-unexpected", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	// Get the update to mark it in progress (so it's not "ready" and not "success" and not "failed")
@@ -1747,7 +1747,7 @@ func TestChangeset_IsComplete_AllFailedIsComplete(t *testing.T) {
 		},
 	}
 
-	cs, err := NewChangeset(resourceUpdates, nil, "cmd-allfailed", pkgmodel.CommandApply, nil)
+	cs, err := buildChangesetForTest(resourceUpdates, nil, "cmd-allfailed", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	// Get both updates and fail them
@@ -1793,7 +1793,7 @@ func TestChangeset_FailureCascade_SkipsInProgressDependents(t *testing.T) {
 		},
 	}
 
-	cs, err := NewChangeset(resourceUpdates, nil, "cmd-cascade-skip", pkgmodel.CommandApply, nil)
+	cs, err := buildChangesetForTest(resourceUpdates, nil, "cmd-cascade-skip", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	// Start the parent
@@ -1838,7 +1838,7 @@ func TestChangeset_AvailableExecutableUpdates_NonRateLimitedShowsZeroCount(t *te
 		},
 	}
 
-	cs, err := NewChangeset(nil, targetUpdates, "cmd-nonrl", pkgmodel.CommandApply, nil)
+	cs, err := buildChangesetForTest(nil, targetUpdates, "cmd-nonrl", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	available := cs.AvailableExecutableUpdates()
@@ -1857,7 +1857,7 @@ func TestChangeset_TargetReplace_SplitsIntoDeleteAndCreate(t *testing.T) {
 		},
 	}
 
-	cs, err := NewChangeset(nil, targetUpdates, "cmd-1", pkgmodel.CommandApply, nil)
+	cs, err := buildChangesetForTest(nil, targetUpdates, "cmd-1", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	// Should have 2 nodes: delete + create
@@ -1896,7 +1896,7 @@ func TestChangeset_TargetReplace_ResourceEdges(t *testing.T) {
 		},
 	}
 
-	cs, err := NewChangeset(resourceUpdates, targetUpdates, "cmd-2", pkgmodel.CommandApply, nil)
+	cs, err := buildChangesetForTest(resourceUpdates, targetUpdates, "cmd-2", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	// 4 nodes: resource delete, resource create, target delete, target create
@@ -1946,7 +1946,7 @@ func TestChangeset_SyncReadsDoNotCreateDependencyEdges(t *testing.T) {
 		},
 	}
 
-	cs, err := NewChangeset(updates, nil, "cmd-sync", pkgmodel.CommandSync, nil)
+	cs, err := buildChangesetForTest(updates, nil, "cmd-sync", pkgmodel.CommandSync, nil)
 	assert.NoError(t, err)
 
 	vpcNode := cs.DAG.Nodes[createOperationURI(vpcURI, resource_update.OperationRead)]
@@ -2003,7 +2003,7 @@ func TestChangeset_CrashRecovery_SuccessParentBlocksChildren(t *testing.T) {
 		},
 	}
 
-	cs, err := NewChangeset(allUpdates, nil, "test-crash-bug", pkgmodel.CommandApply, nil)
+	cs, err := buildChangesetForTest(allUpdates, nil, "test-crash-bug", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	// BUG: Subnet is blocked because VPC (Success) is in the pipeline as an
@@ -2041,7 +2041,7 @@ func TestChangeset_CrashRecovery_FilteredPendingUpdatesOnly(t *testing.T) {
 		},
 	}
 
-	cs, err := NewChangeset(pendingOnly, nil, "test-crash-fix", pkgmodel.CommandApply, nil)
+	cs, err := buildChangesetForTest(pendingOnly, nil, "test-crash-fix", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	// VPC URI is in RemainingResolvables but not in the changeset, so no
@@ -2071,7 +2071,7 @@ func TestChangeset_SyncReadFailureDoesNotCascade(t *testing.T) {
 		},
 	}
 
-	cs, err := NewChangeset(updates, nil, "cmd-sync", pkgmodel.CommandSync, nil)
+	cs, err := buildChangesetForTest(updates, nil, "cmd-sync", pkgmodel.CommandSync, nil)
 	require.NoError(t, err)
 
 	opURI := createOperationURI(vpcURI, resource_update.OperationRead)
@@ -2136,7 +2136,7 @@ func TestBuildDeleteDependencies_AttachesToInvertsEdgeDirection(t *testing.T) {
 			DesiredState: bResource,
 			Operation:    resource_update.OperationDelete,
 		}
-		cs, err := NewChangeset([]resource_update.ResourceUpdate{aDelete, bDelete}, nil, "c1", pkgmodel.CommandApply, nil)
+		cs, err := buildChangesetForTest([]resource_update.ResourceUpdate{aDelete, bDelete}, nil, "c1", pkgmodel.CommandApply, nil)
 		if err != nil {
 			t.Fatalf("NewChangeset: %v", err)
 		}
@@ -2190,7 +2190,7 @@ func TestBuildDeleteDependencies_MixedRefsOnOneResourceGetIndependentDirections(
 	bResource := pkgmodel.Resource{Ksuid: "B1", Label: "b", Type: "Test::B", Stack: "s", Properties: json.RawMessage(`{}`)}
 	cResource := pkgmodel.Resource{Ksuid: "C1", Label: "c", Type: "Test::C", Stack: "s", Properties: json.RawMessage(`{}`)}
 
-	cs, err := NewChangeset(
+	cs, err := buildChangesetForTest(
 		[]resource_update.ResourceUpdate{
 			{DesiredState: aResource, Operation: resource_update.OperationDelete, RemainingResolvables: []pkgmodel.FormaeURI{bURI, cURI}},
 			{DesiredState: bResource, Operation: resource_update.OperationDelete},
@@ -2230,7 +2230,7 @@ func TestBuildDeleteDependencies_MissingHintFallsBackToConstructionReverse(t *te
 	}
 	bResource := pkgmodel.Resource{Ksuid: "B1", Label: "b", Type: "Test::B", Stack: "s", Properties: json.RawMessage(`{}`)}
 
-	cs, err := NewChangeset(
+	cs, err := buildChangesetForTest(
 		[]resource_update.ResourceUpdate{
 			{DesiredState: aResource, Operation: resource_update.OperationDelete, RemainingResolvables: []pkgmodel.FormaeURI{bURI}},
 			{DesiredState: bResource, Operation: resource_update.OperationDelete},
@@ -2301,7 +2301,7 @@ func TestBuildDeleteDependencies_RuntimeDependency_AddsChildEdges(t *testing.T) 
 		Properties: json.RawMessage(`{"FileSystemId":"fs-abc"}`),
 	}
 
-	cs, err := NewChangeset([]resource_update.ResourceUpdate{
+	cs, err := buildChangesetForTest([]resource_update.ResourceUpdate{
 		{DesiredState: consumer, Operation: resource_update.OperationDelete, RemainingResolvables: []pkgmodel.FormaeURI{producerURI}},
 		{DesiredState: producer, Operation: resource_update.OperationDelete},
 		{DesiredState: mtA, Operation: resource_update.OperationDelete},
@@ -2385,7 +2385,7 @@ func TestBuildDeleteDependencies_RuntimeDependency_InstanceSafe(t *testing.T) {
 		}
 	}
 
-	cs, err := NewChangeset([]resource_update.ResourceUpdate{
+	cs, err := buildChangesetForTest([]resource_update.ResourceUpdate{
 		{DesiredState: consumer, Operation: resource_update.OperationDelete, RemainingResolvables: []pkgmodel.FormaeURI{fs1URI}},
 		{DesiredState: fs1, Operation: resource_update.OperationDelete},
 		{DesiredState: fs2, Operation: resource_update.OperationDelete},
@@ -2446,7 +2446,7 @@ func TestBuildDeleteDependencies_RuntimeDependency_NoMatchingChildren_FallsBackT
 		Properties: json.RawMessage(`{"FileSystemId":"fs-abc"}`),
 	}
 
-	cs, err := NewChangeset([]resource_update.ResourceUpdate{
+	cs, err := buildChangesetForTest([]resource_update.ResourceUpdate{
 		{DesiredState: consumer, Operation: resource_update.OperationDelete, RemainingResolvables: []pkgmodel.FormaeURI{producerURI}},
 		{DesiredState: producer, Operation: resource_update.OperationDelete},
 	}, nil, "rt3", pkgmodel.CommandApply, nil)
@@ -2533,7 +2533,7 @@ func TestBuildCreateUpdateDependencies_RuntimeDependency_AddsChildEdges(t *testi
 		Properties: json.RawMessage(`{"FileSystemId":{"$ref":"formae://PROD1#/FileSystemId","$value":""}}`),
 	}
 
-	cs, err := NewChangeset([]resource_update.ResourceUpdate{
+	cs, err := buildChangesetForTest([]resource_update.ResourceUpdate{
 		{DesiredState: consumer, Operation: resource_update.OperationCreate, RemainingResolvables: []pkgmodel.FormaeURI{producerURI}},
 		{DesiredState: producer, Operation: resource_update.OperationCreate},
 		{DesiredState: mtA, Operation: resource_update.OperationCreate, RemainingResolvables: []pkgmodel.FormaeURI{producerURI}},
@@ -2621,7 +2621,7 @@ func TestBuildCreateUpdateDependencies_RuntimeDependency_InstanceSafe(t *testing
 		}
 	}
 
-	cs, err := NewChangeset([]resource_update.ResourceUpdate{
+	cs, err := buildChangesetForTest([]resource_update.ResourceUpdate{
 		{DesiredState: consumer, Operation: resource_update.OperationCreate, RemainingResolvables: []pkgmodel.FormaeURI{fs1URI}},
 		{DesiredState: fs1, Operation: resource_update.OperationCreate},
 		{DesiredState: fs2, Operation: resource_update.OperationCreate},
@@ -2698,7 +2698,7 @@ func TestBuildCreateUpdateDependencies_RuntimeDependency_NoMatchingChildren_Fall
 		Properties: json.RawMessage(`{"OtherId":"other-1"}`),
 	}
 
-	cs, err := NewChangeset([]resource_update.ResourceUpdate{
+	cs, err := buildChangesetForTest([]resource_update.ResourceUpdate{
 		{DesiredState: consumer, Operation: resource_update.OperationCreate, RemainingResolvables: []pkgmodel.FormaeURI{producerURI}},
 		{DesiredState: producer, Operation: resource_update.OperationCreate},
 		{DesiredState: unrelated, Operation: resource_update.OperationCreate},
@@ -2796,7 +2796,7 @@ func TestBuildDeleteDependencies_RuntimeDependency_MultipleRefsToSameProducer_Pr
 	// iteration — Go intentionally randomizes iteration order so one
 	// invocation could happen to pick the "good" ordering by luck.
 	for i := 0; i < 50; i++ {
-		cs, err := NewChangeset([]resource_update.ResourceUpdate{
+		cs, err := buildChangesetForTest([]resource_update.ResourceUpdate{
 			{DesiredState: consumer, Operation: resource_update.OperationDelete, RemainingResolvables: []pkgmodel.FormaeURI{producerURI}},
 			{DesiredState: producer, Operation: resource_update.OperationDelete},
 			{DesiredState: mtA, Operation: resource_update.OperationDelete},
@@ -2862,7 +2862,7 @@ func TestBuildCreateUpdateDependencies_RuntimeDependency_MultipleRefsToSameProdu
 	}
 
 	for i := 0; i < 50; i++ {
-		cs, err := NewChangeset([]resource_update.ResourceUpdate{
+		cs, err := buildChangesetForTest([]resource_update.ResourceUpdate{
 			{DesiredState: consumer, Operation: resource_update.OperationCreate, RemainingResolvables: []pkgmodel.FormaeURI{producerURI}},
 			{DesiredState: producer, Operation: resource_update.OperationCreate},
 			{DesiredState: mtA, Operation: resource_update.OperationCreate, RemainingResolvables: []pkgmodel.FormaeURI{producerURI}},
@@ -2922,7 +2922,7 @@ func TestBuildCreateUpdateDependencies_RuntimeDependency_UpdateChild_StillLinks(
 
 	// mtA is in the changeset as Update, not Create — the hardcoded lookup
 	// would silently miss its node.
-	cs, err := NewChangeset([]resource_update.ResourceUpdate{
+	cs, err := buildChangesetForTest([]resource_update.ResourceUpdate{
 		{DesiredState: consumer, Operation: resource_update.OperationCreate, RemainingResolvables: []pkgmodel.FormaeURI{producerURI}},
 		{DesiredState: producer, Operation: resource_update.OperationCreate},
 		{DesiredState: mtA, Operation: resource_update.OperationUpdate, RemainingResolvables: []pkgmodel.FormaeURI{producerURI}},
@@ -2996,7 +2996,7 @@ func TestNewChangeset_SynthesizesResolveNodeForUnchangedOpaqueTarget(t *testing.
 		},
 	}
 
-	cs, err := NewChangeset(resourceUpdates, nil, "cmd-synth", pkgmodel.CommandApply, ds)
+	cs, err := buildChangesetForTest(resourceUpdates, nil, "cmd-synth", pkgmodel.CommandApply, ds)
 	require.NoError(t, err)
 
 	resolveNode := cs.DAG.Nodes[pkgmodel.FormaeURI("target://"+targetLabel+"/resolve")]
@@ -3036,7 +3036,7 @@ func TestNewChangeset_NoSynthesisWhenTargetAlreadyHasUpdate(t *testing.T) {
 		},
 	}
 
-	cs, err := NewChangeset(resourceUpdates, targetUpdates, "cmd-nodup", pkgmodel.CommandApply, ds)
+	cs, err := buildChangesetForTest(resourceUpdates, targetUpdates, "cmd-nodup", pkgmodel.CommandApply, ds)
 	require.NoError(t, err)
 
 	assert.Nil(t, cs.DAG.Nodes[pkgmodel.FormaeURI("target://"+targetLabel+"/resolve")],
@@ -3061,7 +3061,7 @@ func TestNewChangeset_NoSynthesisWhenTargetHasNoOpaqueRefs(t *testing.T) {
 		},
 	}
 
-	cs, err := NewChangeset(resourceUpdates, nil, "cmd-norefs", pkgmodel.CommandApply, ds)
+	cs, err := buildChangesetForTest(resourceUpdates, nil, "cmd-norefs", pkgmodel.CommandApply, ds)
 	require.NoError(t, err)
 
 	assert.Nil(t, cs.DAG.Nodes[pkgmodel.FormaeURI("target://"+targetLabel+"/resolve")],
@@ -3096,7 +3096,7 @@ func TestNewChangeset_SyntheticResolveNodeIsDependencyOfEveryResourceOp(t *testi
 		},
 	}
 
-	cs, err := NewChangeset(resourceUpdates, nil, "cmd-dep", pkgmodel.CommandApply, ds)
+	cs, err := buildChangesetForTest(resourceUpdates, nil, "cmd-dep", pkgmodel.CommandApply, ds)
 	require.NoError(t, err)
 
 	resolveURI := pkgmodel.FormaeURI("target://" + targetLabel + "/resolve")
@@ -3150,7 +3150,7 @@ func TestNewChangeset_RejectsTransitivelyOpaqueTargetReference(t *testing.T) {
 		},
 	}
 
-	_, err := NewChangeset(resourceUpdates, nil, "cmd-transitive-opaque", pkgmodel.CommandApply, ds)
+	_, err := buildChangesetForTest(resourceUpdates, nil, "cmd-transitive-opaque", pkgmodel.CommandApply, ds)
 	require.Error(t, err, "resolving a target whose secret source's target is itself opaque must be rejected")
 	assert.Contains(t, err.Error(), t1, "error must name the referencing target")
 	assert.Contains(t, err.Error(), t2, "error must name the source resource's target")
@@ -3190,7 +3190,7 @@ func TestNewChangeset_AllowsOpaqueRefWhenSourceTargetIsPlain(t *testing.T) {
 		},
 	}
 
-	_, err := NewChangeset(resourceUpdates, nil, "cmd-plain-source-target", pkgmodel.CommandApply, ds)
+	_, err := buildChangesetForTest(resourceUpdates, nil, "cmd-plain-source-target", pkgmodel.CommandApply, ds)
 	require.NoError(t, err, "an opaque ref to a secret on a plain-config target is the normal single-hop case")
 }
 
@@ -3233,7 +3233,7 @@ func TestNewChangeset_TransitiveOpaqueSourceFoundInCommand(t *testing.T) {
 		},
 	}
 
-	_, err := NewChangeset(resourceUpdates, nil, "cmd-in-command-source", pkgmodel.CommandApply, ds)
+	_, err := buildChangesetForTest(resourceUpdates, nil, "cmd-in-command-source", pkgmodel.CommandApply, ds)
 	require.Error(t, err, "in-command secret source on an opaque target must also be rejected")
 	assert.Contains(t, err.Error(), t1)
 	assert.Contains(t, err.Error(), t2)
@@ -3294,7 +3294,7 @@ func TestNewChangeset_MutuallyReferencingInCommandTargets_ReturnsCycleError(t *t
 		},
 	}
 
-	_, err := NewChangeset(resourceUpdates, targetUpdates, "cmd-mutual-cycle", pkgmodel.CommandApply, ds)
+	_, err := buildChangesetForTest(resourceUpdates, targetUpdates, "cmd-mutual-cycle", pkgmodel.CommandApply, ds)
 	require.Error(t, err, "mutually referencing in-command targets form a cycle and must be rejected, not hang")
 }
 
@@ -3330,7 +3330,7 @@ func TestNewChangeset_SelfReferentialTarget_ReturnsCycleError(t *testing.T) {
 		},
 	}
 
-	_, err := NewChangeset(resourceUpdates, targetUpdates, "cmd-self-cycle", pkgmodel.CommandApply, ds)
+	_, err := buildChangesetForTest(resourceUpdates, targetUpdates, "cmd-self-cycle", pkgmodel.CommandApply, ds)
 	require.Error(t, err, "a self-referential target forms a self-cycle and must be rejected, not hang")
 }
 
@@ -3375,7 +3375,7 @@ func TestNewChangeset_ValidTargetResolvableEdge_NoFalsePositive(t *testing.T) {
 		},
 	}
 
-	cs, err := NewChangeset(resourceUpdates, targetUpdates, "cmd-valid-resolvable", pkgmodel.CommandApply, ds)
+	cs, err := buildChangesetForTest(resourceUpdates, targetUpdates, "cmd-valid-resolvable", pkgmodel.CommandApply, ds)
 	require.NoError(t, err, "a valid acyclic target-resolvable edge must not be rejected")
 	assert.False(t, cs.DAG.HasCycles(), "the built graph must be acyclic")
 }

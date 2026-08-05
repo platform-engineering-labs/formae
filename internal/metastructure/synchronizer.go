@@ -20,6 +20,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_persister"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
@@ -331,7 +332,16 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 		return state, data, nil, gen.TerminateReasonPanic
 	}
 
-	cs, err := changeset.NewChangeset(allResourceUpdates, nil, syncCommand.ID, pkgmodel.CommandSync, data.datastore)
+	synth, err := target_update.SynthesizeResolveTargetUpdates(
+		resource_update.ReferencedTargetLabels(allResourceUpdates),
+		resource_update.SourceTargetByKsuid(allResourceUpdates),
+		nil, data.datastore)
+	if err != nil {
+		proc.Log().Error("Synchronizer: failed to build changeset, skipping sync cycle commandID=%s: %v", syncCommand.ID, err)
+		finalizeFailedCommand(syncCommand, proc)
+		return StateIdle, data, rescheduleAction(data), nil
+	}
+	cs, err := changeset.NewChangeset(allResourceUpdates, synth, syncCommand.ID, pkgmodel.CommandSync)
 	if err != nil {
 		proc.Log().Error("Synchronizer: failed to build changeset, skipping sync cycle commandID=%s: %v", syncCommand.ID, err)
 		finalizeFailedCommand(syncCommand, proc)

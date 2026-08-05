@@ -13,7 +13,6 @@ import (
 
 	"log/slog"
 
-	"github.com/platform-engineering-labs/formae/internal/datastore"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
@@ -65,12 +64,16 @@ type DAGNode struct {
 	Dependencies []*DAGNode
 }
 
+// NewChangeset builds the execution DAG from the given resource and target
+// updates. It is a pure graph-builder: any synthetic Resolve target ops the
+// command needs (for unchanged targets carrying opaque $ref config) are generated
+// in the Update-construction phase by target_update.SynthesizeResolveTargetUpdates
+// and passed in via targetUpdates, so this constructor needs no datastore.
 func NewChangeset(
 	resourceUpdates []resource_update.ResourceUpdate,
 	targetUpdates []target_update.TargetUpdate,
 	commandID string,
 	command pkgmodel.Command,
-	ds datastore.Datastore,
 ) (Changeset, error) {
 	changeset := Changeset{
 		CommandID:      commandID,
@@ -79,26 +82,6 @@ func NewChangeset(
 	}
 
 	if err := changeset.DAG.Init(resourceUpdates, command); err != nil {
-		return Changeset{}, err
-	}
-
-	// Synthesize Resolve target ops for targets that a resource op references but
-	// that carry no real target update in this command. Such an unchanged target
-	// may still hold opaque $ref config that must be resolved before dependent
-	// ops dispatch it to the plugin. These synthetic ops are added as target
-	// updates so the shared target/resource edge-building wires them like a real
-	// create/update.
-	syntheticResolves, err := synthesizeResolveTargetUpdates(resourceUpdates, targetUpdates, ds)
-	if err != nil {
-		return Changeset{}, err
-	}
-	targetUpdates = append(targetUpdates, syntheticResolves...)
-
-	// Reject a credential-from-credential chain: a target whose config opaquely
-	// $refs a secret whose OWN target also carries opaque $ref config cannot be
-	// resolved, because bootstrapping its credential would first require
-	// bootstrapping another.
-	if err := rejectTransitivelyOpaqueTargets(resourceUpdates, targetUpdates, ds); err != nil {
 		return Changeset{}, err
 	}
 
@@ -157,155 +140,6 @@ func NewChangeset(
 	}
 
 	return changeset, nil
-}
-
-// synthesizeResolveTargetUpdates builds synthetic Resolve target ops for targets
-// that a resource op references but that are NOT already covered by a real
-// Create/Update/Replace/Delete target update in this command.
-//
-// An unchanged target may still hold opaque $ref config (e.g. a secret). Without a
-// real target update carrying resolved desired config, that config would be
-// dispatched to the plugin unresolved. For each such distinct target label, the
-// PERSISTED target row is loaded (a target with a real update already carries its
-// desired config, so it is never synthesized for), its config is scanned for
-// resolvable $refs using the same extractor that populates a target update's
-// RemainingResolvables, and — if any exist — a NewResolveTargetUpdate is appended.
-//
-// A nil datastore (unit tests that never reference persisted targets) or a target
-// that is not found is treated as "nothing to synthesize" and skipped.
-func synthesizeResolveTargetUpdates(
-	resourceUpdates []resource_update.ResourceUpdate,
-	targetUpdates []target_update.TargetUpdate,
-	ds datastore.Datastore,
-) ([]target_update.TargetUpdate, error) {
-	// Targets already covered by a real target update in this command must never be
-	// synthesized for — their update carries the desired (and re-resolved) config.
-	covered := make(map[string]bool)
-	for i := range targetUpdates {
-		covered[targetUpdates[i].Target.Label] = true
-	}
-
-	// Distinct candidate target labels referenced by a resource op, in first-seen
-	// order for a stable synthetic list.
-	seen := make(map[string]bool)
-	var candidates []string
-	consider := func(label string) {
-		if label == "" || covered[label] || seen[label] {
-			return
-		}
-		seen[label] = true
-		candidates = append(candidates, label)
-	}
-	for i := range resourceUpdates {
-		ru := &resourceUpdates[i]
-		consider(ru.DesiredState.Target)
-		consider(ru.ResourceTarget.Label)
-	}
-
-	if len(candidates) == 0 || ds == nil {
-		return nil, nil
-	}
-
-	var synthetic []target_update.TargetUpdate
-	for _, label := range candidates {
-		persisted, err := ds.LoadTarget(label)
-		if err != nil {
-			return nil, fmt.Errorf("synthesize resolve target %q: %w", label, err)
-		}
-		if persisted == nil {
-			continue
-		}
-		resolvables := resolver.ExtractResolvableURIsFromJSON(persisted.Config)
-		if len(resolvables) == 0 {
-			continue
-		}
-		synthetic = append(synthetic, target_update.NewResolveTargetUpdate(*persisted, resolvables))
-	}
-
-	return synthetic, nil
-}
-
-// rejectTransitivelyOpaqueTargets rejects a target whose config opaquely $refs a
-// secret whose source resource lives on a target that ITSELF carries opaque $ref
-// config. Resolving such a target would require first bootstrapping a credential
-// from another credential that itself needs resolving — a chain that has no clear
-// starting point.
-//
-// For every target update in this command (real Create/Update ops AND synthetic
-// Resolve ops), each opaque $ref in the target config is followed to its source
-// resource (by KSUID). The source resource is looked up first among this command's
-// resource ops (a source being CREATED here is not yet persisted), then in the
-// datastore. The source's target config is then scanned: if it carries any opaque
-// $ref, the chain is rejected with an error naming both target labels and no secret
-// material.
-//
-// One hop is sufficient. A deeper chain (the source's target opaquely refs yet
-// another opaque target) is still rejected here, because the immediate hop this
-// guard inspects is already opaque. A nil datastore is treated as "nothing to
-// traverse" — such changesets never reference persisted secret sources.
-func rejectTransitivelyOpaqueTargets(
-	resourceUpdates []resource_update.ResourceUpdate,
-	targetUpdates []target_update.TargetUpdate,
-	ds datastore.Datastore,
-) error {
-	if ds == nil {
-		return nil
-	}
-
-	// Index in-command resource ops by KSUID so a secret source being created in
-	// this same command resolves to its target without a persisted row.
-	inCommandTargetByKsuid := make(map[string]string, len(resourceUpdates))
-	for i := range resourceUpdates {
-		ru := &resourceUpdates[i]
-		if k := ru.DesiredState.Ksuid; k != "" {
-			inCommandTargetByKsuid[k] = ru.DesiredState.Target
-		}
-	}
-
-	// sourceTargetLabel resolves a secret source KSUID to its target label, checking
-	// this command's resource ops before falling back to the persisted resource.
-	sourceTargetLabel := func(ksuid string) (string, error) {
-		if label, ok := inCommandTargetByKsuid[ksuid]; ok {
-			return label, nil
-		}
-		res, err := ds.LoadResourceById(ksuid)
-		if err != nil {
-			return "", fmt.Errorf("load secret source resource %q: %w", ksuid, err)
-		}
-		if res == nil {
-			return "", nil
-		}
-		return res.Target, nil
-	}
-
-	for i := range targetUpdates {
-		referencing := targetUpdates[i].Target.Label
-		opaqueRefs := resolver.ExtractOpaqueResolvableURIsFromJSON(targetUpdates[i].Target.Config)
-		for _, ref := range opaqueRefs {
-			sourceLabel, err := sourceTargetLabel(ref.KSUID())
-			if err != nil {
-				return err
-			}
-			if sourceLabel == "" || sourceLabel == referencing {
-				continue
-			}
-			sourceTarget, err := ds.LoadTarget(sourceLabel)
-			if err != nil {
-				return fmt.Errorf("load secret source target %q: %w", sourceLabel, err)
-			}
-			if sourceTarget == nil {
-				continue
-			}
-			if len(resolver.ExtractOpaqueResolvableURIsFromJSON(sourceTarget.Config)) > 0 {
-				return fmt.Errorf(
-					"cannot bootstrap a credential from a credential that itself requires resolution: "+
-						"target %q references a secret whose source lives on target %q, which itself carries opaque references",
-					referencing, sourceLabel)
-			}
-		}
-	}
-
-	return nil
 }
 
 // createOperationURI creates a unique URI that includes the operation type
