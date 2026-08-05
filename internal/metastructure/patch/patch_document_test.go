@@ -705,10 +705,9 @@ func TestResolveRefs_UnresolvedForwardRefLeftIntact(t *testing.T) {
 	assert.False(t, hasValue, "an unresolved forward ref must not gain a $value")
 }
 
-// TestResolveRefs_JSONPathAppliedOnUpdatePath verifies that resolveRefs applies the
-// $json extraction when a mod envelope carries both $ref and $json. Without the fix,
-// resolveRefs would set $value to the entire resolved JSON document; with the fix it
-// extracts only the scalar at the given dotted path.
+// TestResolveRefs_JSONPathAppliedOnUpdatePath verifies that resolveRefs, when a
+// mod envelope carries both $ref and $json, sets $value to the scalar extracted
+// at the $json dotted path rather than to the entire resolved JSON document.
 func TestResolveRefs_JSONPathAppliedOnUpdatePath(t *testing.T) {
 	resourceKsuid := util.NewID()
 	uri := fmt.Sprintf("formae://%s#/SecretString", resourceKsuid)
