@@ -48,8 +48,8 @@ type TargetUpdateFinished struct {
 // Shutdown is sent to terminate the TargetUpdater process.
 type Shutdown struct{}
 
-// ResolveCacheMissingInAction is a timeout message for the resolve loop.
-type ResolveCacheMissingInAction struct{}
+// ResolveTimedOut is a timeout message for the resolve loop.
+type ResolveTimedOut struct{}
 
 // TargetUpdaterData holds the FSM's internal state.
 type TargetUpdaterData struct {
@@ -140,12 +140,12 @@ func handleStartTargetUpdate(from gen.PID, state gen.Atom, data TargetUpdaterDat
 }
 
 // resolveTargetConfig pops the next resolvable and sends a ResolveValue request.
-// resolveWatchdogTimeout sizes the ResolveCache watchdog to outlive the cache's
+// resolvingTimeout sizes the ResolveCache timeout to outlive the cache's
 // worst-case retry wall time: MaxRetries reads (each up to the plugin call
 // timeout) plus the exponential backoff budget. It derives the backoff envelope
 // from the same RetryConfig the ResolveCache reads, so a tuned policy cannot
-// cause the two to drift and trip this watchdog mid-retry.
-func resolveWatchdogTimeout(proc gen.Process) time.Duration {
+// cause the two to drift and trip this timeout mid-retry.
+func resolvingTimeout(proc gen.Process) time.Duration {
 	// perAttempt mirrors resource_update.PluginOperationCallTimeout (60s). It is
 	// duplicated as a local const because target_update must not import
 	// resource_update (which imports target_update).
@@ -191,8 +191,8 @@ func resolveTargetConfig(state gen.Atom, data TargetUpdaterData, proc gen.Proces
 	}
 
 	timeout := statemachine.StateTimeout{
-		Duration: resolveWatchdogTimeout(proc),
-		Message:  ResolveCacheMissingInAction{},
+		Duration: resolvingTimeout(proc),
+		Message:  ResolveTimedOut{},
 	}
 
 	return StateResolving, data, []statemachine.Action{timeout}, nil
@@ -216,7 +216,7 @@ func targetFailedToResolve(from gen.PID, state gen.Atom, data TargetUpdaterData,
 }
 
 // targetResolveCacheTimeout handles the timeout when the resolve cache doesn't respond.
-func targetResolveCacheTimeout(from gen.PID, state gen.Atom, data TargetUpdaterData, message ResolveCacheMissingInAction, proc gen.Process) (gen.Atom, TargetUpdaterData, []statemachine.Action, error) {
+func targetResolveCacheTimeout(from gen.PID, state gen.Atom, data TargetUpdaterData, message ResolveTimedOut, proc gen.Process) (gen.Atom, TargetUpdaterData, []statemachine.Action, error) {
 	proc.Log().Error("TargetUpdater: resolve cache timeout target=%s", data.targetUpdate.Target.Label)
 	return StateFinishedWithError, data, nil, nil
 }

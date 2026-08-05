@@ -1404,9 +1404,9 @@ func TestAppendCascadeUpdatesIfAbsent_MarksExistingUpdate(t *testing.T) {
 			IsCascade:    false,
 		}
 		cascade := ResourceUpdate{
-			DesiredState: pkgmodel.Resource{Label: "dependent", Type: "T", Stack: "s", Ksuid: dependentURI.KSUID()},
-			Operation:    OperationUpdate,
-			IsCascade:    true,
+			DesiredState:  pkgmodel.Resource{Label: "dependent", Type: "T", Stack: "s", Ksuid: dependentURI.KSUID()},
+			Operation:     OperationUpdate,
+			IsCascade:     true,
 			CascadeSource: sourceLabel,
 		}
 

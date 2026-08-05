@@ -150,11 +150,11 @@ func (r *ResolveCache) startResolve(from gen.PID, resourceURI pkgmodel.FormaeURI
 }
 
 // strategy is the retry strategy for a resolve read: exponential-for-throttling,
-// and the single source of truth the caller's watchdog budget is derived from.
+// and the single source of truth the caller's timeout budget is derived from.
 // It uses the command-global RetryConfig the actor reads at startup. Honoring a
 // per-plugin retry override for the source namespace is a known gap: it would
 // need the cache to query the coordinator for that namespace's config, plus a
-// per-namespace watchdog budget (a resource can reference secrets across several
+// per-namespace timeout budget (a resource can reference secrets across several
 // plugins), so it is deferred.
 func (r *ResolveCache) strategy() resource.RetryStrategy {
 	return resource.RetryStrategy{MaxRetries: r.maxRetries, BaseDelay: r.retryDelay}

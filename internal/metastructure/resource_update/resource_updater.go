@@ -154,7 +154,7 @@ type StartResourceUpdate struct {
 
 type PluginOperatorMissingInAction struct{}
 
-type ResolveCacheMissingInAction struct{}
+type ResolveTimedOut struct{}
 
 type Shutdown struct{}
 
@@ -251,7 +251,7 @@ func (r *ResourceUpdater) Init(args ...any) (statemachine.StateMachineSpec[Resou
 		statemachine.WithStateMessageHandler(StateUpdating, pluginOperationMissingInAction),
 		statemachine.WithStateMessageHandler(StateUpdating, shutdown),
 		statemachine.WithStateMessageHandler(StateResolving, resourceResolved),
-		statemachine.WithStateMessageHandler(StateResolving, resolveCacheMissingInAction),
+		statemachine.WithStateMessageHandler(StateResolving, resolveTimedOut),
 		statemachine.WithStateMessageHandler(StateResolving, resourceFailedToResolve),
 		statemachine.WithStateMessageHandler(StateResolving, shutdown),
 		statemachine.WithStateMessageHandler(StateSynchronizing, handleProgressUpdate),
@@ -471,14 +471,14 @@ func delete(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 	return handleProgressUpdate(gen.PID{}, state, data, *result, proc)
 }
 
-// resolveWatchdogTimeout sizes the ResolveCache watchdog to outlive the cache's
+// resolvingTimeout sizes the ResolveCache timeout to outlive the cache's
 // worst-case resolve wall time: MaxRetries reads (each up to the plugin call
 // timeout) plus the exponential backoff budget the ResolveCache schedules with
 // (RetryStrategy.MaxTotalDelay), plus a margin. The backoff term is derived from
 // the same RetryStrategy the cache retries with, so a tuned or exponential
 // policy cannot make the two drift: a flat MaxRetries*RetryDelay estimate would
-// under-cover exponential throttling backoff and trip this watchdog mid-retry.
-func resolveWatchdogTimeout(cfg pkgmodel.RetryConfig) time.Duration {
+// under-cover exponential throttling backoff and trip this timeout mid-retry.
+func resolvingTimeout(cfg pkgmodel.RetryConfig) time.Duration {
 	const resolveCacheMargin = 30 * time.Second
 	perAttempt := time.Duration(PluginOperationCallTimeout) * time.Second
 	strategy := resource.RetryStrategy{MaxRetries: cfg.MaxRetries, BaseDelay: cfg.RetryDelay}
@@ -506,8 +506,8 @@ func resolve(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Ato
 	}
 
 	timeout := statemachine.StateTimeout{
-		Duration: resolveWatchdogTimeout(data.retryConfig),
-		Message:  ResolveCacheMissingInAction{},
+		Duration: resolvingTimeout(data.retryConfig),
+		Message:  ResolveTimedOut{},
 	}
 
 	return StateResolving, data, []statemachine.Action{timeout}, nil
@@ -996,7 +996,7 @@ func pluginOperationMissingInAction(from gen.PID, state gen.Atom, data ResourceU
 	return StateFinishedWithError, data, nil, nil
 }
 
-func resolveCacheMissingInAction(from gen.PID, state gen.Atom, data ResourceUpdateData, message ResolveCacheMissingInAction, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
+func resolveTimedOut(from gen.PID, state gen.Atom, data ResourceUpdateData, message ResolveTimedOut, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
 	proc.Log().Error("Resolve cache is missing in action state=%s commandID=%s ksuid=%s operation=%s", state, data.commandID, data.originalResourceKsuidURI.KSUID(), data.resourceUpdate.Operation)
 	data.resourceUpdate.MarkAsFailed()
 	return StateFinishedWithError, data, nil, nil
