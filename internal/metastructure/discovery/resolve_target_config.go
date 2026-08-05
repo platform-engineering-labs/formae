@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
-	"time"
 
 	"ergo.services/ergo/gen"
 	"github.com/tidwall/gjson"
@@ -22,10 +21,6 @@ import (
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
-
-// maxDiscoveryResolveAttempts is the maximum number of plugin Read attempts
-// made by readWithRetry before giving up on a single opaque reference.
-const maxDiscoveryResolveAttempts = 3
 
 // resolveTargetConfigForList returns an ephemeral copy of target.Config with
 // every opaque $ref replaced by its live plaintext value. When the config
@@ -77,7 +72,7 @@ func resolveTargetConfigForList(proc gen.Process, target pkgmodel.Target) (json.
 			srcCfg = cleanCfg
 		}
 
-		progress, err := readWithRetry(proc, loadResult.Resource, srcCfg)
+		progress, err := readSource(proc, loadResult.Resource, srcCfg)
 		if err != nil {
 			proc.Log().Error(
 				"failed to read resource for opaque ref resolution uri=%s target=%s: %v",
@@ -136,44 +131,18 @@ func resolveTargetConfigForList(proc gen.Process, target pkgmodel.Target) (json.
 	return plain, nil
 }
 
-// readWithRetry calls ReadResourceViaPlugin up to maxDiscoveryResolveAttempts
-// times. It retries with a short pause when the result is a recoverable
-// failure; on success, non-recoverable failure, or exhausted budget it returns.
-func readWithRetry(proc gen.Process, res pkgmodel.Resource, cfg json.RawMessage) (*plugin.TrackedProgress, error) {
-	for attempt := 1; attempt <= maxDiscoveryResolveAttempts; attempt++ {
-		progress, err := resource_update.ReadResourceViaPlugin(proc, res, cfg)
-		if err != nil {
-			return nil, err
-		}
-
-		if progress.OperationStatus == resource.OperationStatusFailure &&
-			resource.IsRecoverable(progress.ErrorCode) {
-			if attempt < maxDiscoveryResolveAttempts {
-				proc.Log().Info(
-					"readWithRetry: recoverable error, retrying errorCode=%s attempt=%d/%d",
-					progress.ErrorCode, attempt, maxDiscoveryResolveAttempts,
-				)
-				time.Sleep(75 * time.Millisecond)
-				continue
-			}
-			proc.Log().Error(
-				"readWithRetry: exhausted attempts errorCode=%s attempts=%d",
-				progress.ErrorCode, attempt,
-			)
-			return nil, fmt.Errorf(
-				"read failed after %d attempts: recoverable error %s",
-				attempt, progress.ErrorCode,
-			)
-		}
-
-		// Non-recoverable failure or success — return immediately.
-		if progress.OperationStatus == resource.OperationStatusFailure {
-			return nil, fmt.Errorf("read failed: non-recoverable error %s", progress.ErrorCode)
-		}
-
-		return progress, nil
+// readSource performs a single ReadResourceViaPlugin for opaque-ref resolution.
+// It does not retry and never sleeps: a recoverable failure is surfaced to the
+// caller, and discovery skips the target for this cycle and retries it on the
+// next cycle, so a transient failure is absorbed without blocking the discovery
+// actor.
+func readSource(proc gen.Process, res pkgmodel.Resource, cfg json.RawMessage) (*plugin.TrackedProgress, error) {
+	progress, err := resource_update.ReadResourceViaPlugin(proc, res, cfg)
+	if err != nil {
+		return nil, err
 	}
-
-	// Should not be reachable, but guard against the loop falling through.
-	return nil, fmt.Errorf("read failed: exhausted %d attempts", maxDiscoveryResolveAttempts)
+	if progress.OperationStatus == resource.OperationStatusFailure {
+		return nil, fmt.Errorf("read failed: error %s", progress.ErrorCode)
+	}
+	return progress, nil
 }

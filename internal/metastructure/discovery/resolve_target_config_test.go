@@ -255,13 +255,14 @@ func TestResolveTargetConfigForList_NonRecoverableReadFailure(t *testing.T) {
 		"error must not include raw $ref envelope fields")
 }
 
-// TestResolveTargetConfigForList_RecoverableFailureThenSuccess asserts that a
-// recoverable failure followed by success within the attempt budget resolves
-// successfully, and that exceeding the budget returns an error.
-func TestResolveTargetConfigForList_RecoverableFailureThenSuccess(t *testing.T) {
+// TestResolveTargetConfigForList_RecoverableReadFailureReturnsError asserts that
+// a recoverable read failure surfaces as an error after a single attempt.
+// resolveTargetConfigForList is single-shot and never sleeps: discovery skips the
+// target for this cycle and retries it on the next cycle, so retry does not
+// happen inside this call.
+func TestResolveTargetConfigForList_RecoverableReadFailureReturnsError(t *testing.T) {
 	const ksuid = "35R2vyf6mT5wEs0mTWT5bp1Lf0E"
 	const prop = "SecretString"
-	const plaintext = "s3cr3t"
 
 	srcResource := buildSourceResource(ksuid)
 	srcTarget := pkgmodel.Target{
@@ -269,77 +270,34 @@ func TestResolveTargetConfigForList_RecoverableFailureThenSuccess(t *testing.T) 
 		Namespace: "FakeAWS",
 		Config:    json.RawMessage(`{"Region":"us-east-1"}`),
 	}
-
-	targetCfg := buildOpaqueTargetConfig(ksuid, prop)
 	target := pkgmodel.Target{
 		Label:  "prod",
-		Config: targetCfg,
+		Config: buildOpaqueTargetConfig(ksuid, prop),
 	}
 
-	t.Run("recoverable then success", func(t *testing.T) {
-		proc := &resolveStubProcess{
-			loadResult: messages.LoadResourceResult{
-				Resource: srcResource,
-				Target:   srcTarget,
-			},
-			readResponses: []readResponse{
-				{
-					progress: &plugin.TrackedProgress{
-						ProgressResult: resource.ProgressResult{
-							OperationStatus: resource.OperationStatusFailure,
-							ErrorCode:       resource.OperationErrorCodeServiceTimeout, // recoverable
-						},
-					},
-				},
-				{
-					progress: &plugin.TrackedProgress{
-						ProgressResult: resource.ProgressResult{
-							OperationStatus:    resource.OperationStatusSuccess,
-							ResourceProperties: json.RawMessage(fmt.Sprintf(`{"%s":"%s"}`, prop, plaintext)),
-						},
+	proc := &resolveStubProcess{
+		loadResult: messages.LoadResourceResult{
+			Resource: srcResource,
+			Target:   srcTarget,
+		},
+		readResponses: []readResponse{
+			{
+				progress: &plugin.TrackedProgress{
+					ProgressResult: resource.ProgressResult{
+						OperationStatus: resource.OperationStatusFailure,
+						ErrorCode:       resource.OperationErrorCodeServiceTimeout, // recoverable
 					},
 				},
 			},
-		}
+		},
+	}
 
-		result, err := resolveTargetConfigForList(proc, target)
+	result, err := resolveTargetConfigForList(proc, target)
 
-		require.NoError(t, err, "retry after recoverable failure must succeed")
-		assert.Contains(t, string(result), plaintext,
-			"resolved config must contain the plaintext after retry")
-		assert.GreaterOrEqual(t, proc.readAttempts, 2,
-			"at least two read attempts must be made: one failure, one success")
-	})
-
-	t.Run("exhausts budget", func(t *testing.T) {
-		// Build a process where every attempt is a recoverable failure
-		recoverableResp := readResponse{
-			progress: &plugin.TrackedProgress{
-				ProgressResult: resource.ProgressResult{
-					OperationStatus: resource.OperationStatusFailure,
-					ErrorCode:       resource.OperationErrorCodeServiceTimeout,
-				},
-			},
-		}
-		responses := make([]readResponse, maxDiscoveryResolveAttempts+1)
-		for i := range responses {
-			responses[i] = recoverableResp
-		}
-		proc := &resolveStubProcess{
-			loadResult: messages.LoadResourceResult{
-				Resource: srcResource,
-				Target:   srcTarget,
-			},
-			readResponses: responses,
-		}
-
-		result, err := resolveTargetConfigForList(proc, target)
-
-		require.Error(t, err, "exhausting the retry budget must return an error")
-		assert.Nil(t, result, "result must be nil when budget is exhausted")
-		assert.Equal(t, maxDiscoveryResolveAttempts, proc.readAttempts,
-			"must exhaust the full attempt budget on repeated recoverable failures")
-	})
+	require.Error(t, err, "a recoverable read failure must surface as an error, not an in-call retry")
+	assert.Nil(t, result)
+	assert.Equal(t, 1, proc.readAttempts,
+		"resolveTargetConfigForList must read exactly once: retry is the discovery cycle's job")
 }
 
 // TestResolveTargetConfigForList_ConvertFailureDoesNotLeakEnvelope asserts that
