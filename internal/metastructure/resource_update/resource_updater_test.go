@@ -8,6 +8,7 @@ package resource_update
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -365,4 +366,95 @@ func TestHandleProgressUpdate_FilteredDiscoveryEmitsTargetHealth(t *testing.T) {
 	require.Len(t, healthMsgs, 1, "exactly one UpdateTargetHealth must be sent even on the filter path")
 	assert.Equal(t, targetLabel, healthMsgs[0].Observation.TargetLabel)
 	assert.Equal(t, pkgmodel.TargetHealthStateReachable, healthMsgs[0].Observation.State)
+}
+
+// capturingLog is a gen.Log that records all Error-level messages.
+type capturingLog struct {
+	gen.Log
+	mu   sync.Mutex
+	msgs []string
+}
+
+func (l *capturingLog) Error(format string, args ...any) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.msgs = append(l.msgs, fmt.Sprintf(format, args...))
+}
+func (l *capturingLog) Trace(string, ...any)   {}
+func (l *capturingLog) Debug(string, ...any)   {}
+func (l *capturingLog) Info(string, ...any)    {}
+func (l *capturingLog) Warning(string, ...any) {}
+func (l *capturingLog) Panic(string, ...any)   {}
+
+func (l *capturingLog) all() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]string(nil), l.msgs...)
+}
+
+// capturingProcess wraps stubUpdaterProcess but uses a capturingLog.
+type capturingProcess struct {
+	*stubUpdaterProcess
+	log *capturingLog
+}
+
+func (p *capturingProcess) Log() gen.Log { return p.log }
+
+// TestTimeoutHandlers_DoNotLogResolvedConfig asserts that the two timeout
+// handlers (plugin-operator missing, resolve-cache missing) log only safe
+// identifiers — command ID, KSUID, and operation — and never render the
+// ResourceUpdate data struct, which transitively contains ResourceTarget.Config
+// and may hold resolved plaintext credentials after target-config propagation.
+func TestTimeoutHandlers_DoNotLogResolvedConfig(t *testing.T) {
+	const knownPlaintext = "super-secret-plaintext-value"
+	commandID := "cmd-timeout-test"
+	ksuid := "3E3wKW8YqVCQEyfKjsGpbsoE8bl"
+
+	ru := &ResourceUpdate{
+		Operation: OperationCreate,
+		DesiredState: pkgmodel.Resource{
+			Label: "my-resource",
+			Ksuid: ksuid,
+		},
+		ResourceTarget: pkgmodel.Target{
+			Label:  "us-east-1",
+			Config: json.RawMessage(`{"password":"` + knownPlaintext + `"}`),
+		},
+	}
+
+	data := ResourceUpdateData{
+		resourceUpdate:           ru,
+		commandID:                commandID,
+		originalResourceKsuidURI: ru.DesiredState.URI(),
+	}
+
+	clog := &capturingLog{}
+	proc := &capturingProcess{
+		stubUpdaterProcess: &stubUpdaterProcess{},
+		log:                clog,
+	}
+
+	// pluginOperationMissingInAction handler
+	t.Run("PluginOperatorMissingInAction", func(t *testing.T) {
+		_, _, _, err := pluginOperationMissingInAction(gen.PID{}, gen.Atom("waiting_for_plugin"), data, PluginOperatorMissingInAction{}, proc)
+		require.NoError(t, err)
+		for _, msg := range clog.all() {
+			assert.NotContains(t, msg, knownPlaintext, "timeout log must not contain resolved credentials")
+			assert.NotContains(t, msg, "Config", "timeout log must not render Config field name (would expose struct)")
+		}
+		assert.NotEmpty(t, clog.all(), "a log message must have been emitted")
+	})
+
+	// resolveCacheMissingInAction handler
+	t.Run("ResolveCacheMissingInAction", func(t *testing.T) {
+		clog2 := &capturingLog{}
+		proc2 := &capturingProcess{stubUpdaterProcess: &stubUpdaterProcess{}, log: clog2}
+		_, _, _, err := resolveCacheMissingInAction(gen.PID{}, gen.Atom("resolving"), data, ResolveCacheMissingInAction{}, proc2)
+		require.NoError(t, err)
+		for _, msg := range clog2.all() {
+			assert.NotContains(t, msg, knownPlaintext, "timeout log must not contain resolved credentials")
+			assert.NotContains(t, msg, "Config", "timeout log must not render Config field name (would expose struct)")
+		}
+		assert.NotEmpty(t, clog2.all(), "a log message must have been emitted")
+	})
 }

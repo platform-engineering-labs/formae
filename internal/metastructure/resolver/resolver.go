@@ -218,6 +218,28 @@ func ExtractResolvableURIsFromJSON(data json.RawMessage) []pkgmodel.FormaeURI {
 	return resolver.getResolvableURIs()
 }
 
+// ExtractOpaqueResolvableURIsFromJSON extracts only the resolvable URIs whose $ref
+// carries an Opaque visibility (a secret credential), ignoring Clear cross-resource
+// references. Used to detect opaque target-config references that must be resolved
+// from a real secret source. Opacity is decided by the parsed Ref's ResolvedValue,
+// reusing pkgmodel.Value.IsOpaque rather than a hand-rolled $visibility string walk.
+func ExtractOpaqueResolvableURIsFromJSON(data json.RawMessage) []pkgmodel.FormaeURI {
+	if data == nil {
+		return nil
+	}
+	resolver := newPropertyResolver(data)
+	var uris []pkgmodel.FormaeURI
+	for uri, refs := range resolver.refs {
+		for i := range refs {
+			if refs[i].ResolvedValue.IsOpaque() {
+				uris = append(uris, uri)
+				break
+			}
+		}
+	}
+	return uris
+}
+
 // propertyParser parses JSON properties to identify references and values
 type propertyParser struct {
 	HasRef    bool

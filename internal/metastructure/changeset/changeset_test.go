@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/platform-engineering-labs/formae/internal/datastore"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
@@ -111,7 +112,7 @@ func TestChangeset_ExecutionOrder_DeleteChainThenCreateChainWithParallelLeaves(t
 		},
 	}
 
-	changeset, err := NewChangeset(resourceUpdates, nil, "test-command-1", pkgmodel.CommandApply)
+	changeset, err := buildChangesetForTest(resourceUpdates, nil, "test-command-1", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	// Print initial DAG state
@@ -271,7 +272,7 @@ func TestChangeset_RemoveNode_UnlinksAllDependentsWhenThreeOrMore(t *testing.T) 
 		},
 	}
 
-	changeset, err := NewChangeset(resourceUpdates, nil, "test-unlink-all", pkgmodel.CommandApply)
+	changeset, err := buildChangesetForTest(resourceUpdates, nil, "test-unlink-all", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	// Step 1: Only VPC should be executable (no dependencies)
@@ -390,7 +391,7 @@ func TestChangeset_ExecutionOrder_IndependentCreateRunsParallelWithDeleteChain(t
 		},
 	}
 
-	changeset, err := NewChangeset(resourceUpdates, nil, "test-command-1", pkgmodel.CommandApply)
+	changeset, err := buildChangesetForTest(resourceUpdates, nil, "test-command-1", pkgmodel.CommandApply, nil)
 	assert.NoError(t, err)
 
 	// Get initial executable updates
@@ -548,7 +549,7 @@ func TestChangeset_ExecutionOrder_ExternalResolvableDoesNotBlock(t *testing.T) {
 		},
 	}
 
-	changeset, err := NewChangeset(resourceUpdates, nil, "test-command-1", pkgmodel.CommandApply)
+	changeset, err := buildChangesetForTest(resourceUpdates, nil, "test-command-1", pkgmodel.CommandApply, nil)
 	assert.NoError(t, err)
 
 	// Print initial DAG state for debugging
@@ -745,7 +746,7 @@ func TestChangeset_ExecutionOrder_MultipleUpstreamDependenciesBothMustComplete(t
 		},
 	}
 
-	changeset, err := NewChangeset(resourceUpdates, nil, "test-command-1", pkgmodel.CommandApply)
+	changeset, err := buildChangesetForTest(resourceUpdates, nil, "test-command-1", pkgmodel.CommandApply, nil)
 	assert.NoError(t, err)
 
 	// Get initial executable updates
@@ -917,7 +918,7 @@ func TestChangeset_Init_DifferentTypesSameLabelNoFalseReplace(t *testing.T) {
 			StackLabel: "test-stack",
 		},
 	}
-	changeset, err := NewChangeset(resourceUpdateInitial, nil, "test-command-1", pkgmodel.CommandApply)
+	changeset, err := buildChangesetForTest(resourceUpdateInitial, nil, "test-command-1", pkgmodel.CommandApply, nil)
 	assert.NoError(t, err)
 
 	executables := changeset.GetExecutableUpdates("AWS", 100)
@@ -988,7 +989,7 @@ func TestChangeset_ExecutionOrder_DeleteChainReversesCreateDependencies(t *testi
 		},
 	}
 
-	changeset, err := NewChangeset(resourceUpdates, nil, "test-command-1", pkgmodel.CommandApply)
+	changeset, err := buildChangesetForTest(resourceUpdates, nil, "test-command-1", pkgmodel.CommandApply, nil)
 	assert.NoError(t, err)
 
 	executables := changeset.GetExecutableUpdates("AWS", 100)
@@ -1036,11 +1037,12 @@ func TestChangeset_FailureCascade_TransitiveDependentsAllFail(t *testing.T) {
 		RemainingResolvables: []pkgmodel.FormaeURI{subnetKsuid},
 	}
 
-	changeset, err := NewChangeset(
+	changeset, err := buildChangesetForTest(
 		[]resource_update.ResourceUpdate{vpcUpdate, subnetUpdate, instanceUpdate},
 		nil,
 		"test-recursive-cascade",
 		pkgmodel.CommandApply,
+		nil,
 	)
 	assert.NoError(t, err)
 
@@ -1103,11 +1105,12 @@ func TestChangeset_UpdateDAG_FailureCascadeRemovesNodes(t *testing.T) {
 		RemainingResolvables: []pkgmodel.FormaeURI{subnetKsuid},
 	}
 
-	changeset, err := NewChangeset(
+	changeset, err := buildChangesetForTest(
 		[]resource_update.ResourceUpdate{vpcUpdate, subnetUpdate, instanceUpdate},
 		nil,
 		"test-update-DAG-cascade",
 		pkgmodel.CommandApply,
+		nil,
 	)
 	require.NoError(t, err)
 
@@ -1186,11 +1189,12 @@ func TestChangeset_GetExecutableUpdates_FiltersByNamespace(t *testing.T) {
 		},
 	}
 
-	changeset, err := NewChangeset(
+	changeset, err := buildChangesetForTest(
 		updates,
 		nil,
 		"test-max-n",
 		pkgmodel.CommandApply,
+		nil,
 	)
 	assert.NoError(t, err)
 
@@ -1245,11 +1249,12 @@ func TestChangeset_Init_CyclicDependenciesReturnError(t *testing.T) {
 		},
 	}
 
-	_, err := NewChangeset(
+	_, err := buildChangesetForTest(
 		resourceUpdates,
 		nil,
 		"test-cycle",
 		pkgmodel.CommandApply,
+		nil,
 	)
 
 	assert.Error(t, err)
@@ -1281,7 +1286,7 @@ func TestChangeset_GetExecutableUpdates_RespectsMaxLimit(t *testing.T) {
 		},
 	}
 
-	cs, err := NewChangeset(updates, nil, "cmd-1", pkgmodel.CommandApply)
+	cs, err := buildChangesetForTest(updates, nil, "cmd-1", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	result := cs.GetExecutableUpdates("AWS", 1)
@@ -1311,7 +1316,7 @@ func TestChangeset_UpdateDAG_RejectedUpdateCascadesToDependents(t *testing.T) {
 		},
 	}
 
-	cs, err := NewChangeset(updates, nil, "cmd-1", pkgmodel.CommandApply)
+	cs, err := buildChangesetForTest(updates, nil, "cmd-1", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	exec := cs.GetExecutableUpdates("AWS", 10)
@@ -1339,7 +1344,7 @@ func TestChangeset_IsComplete_InProgressIsNotComplete(t *testing.T) {
 		},
 	}
 
-	cs, err := NewChangeset(updates, nil, "cmd-1", pkgmodel.CommandApply)
+	cs, err := buildChangesetForTest(updates, nil, "cmd-1", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	exec := cs.GetExecutableUpdates("AWS", 10)
@@ -1349,7 +1354,7 @@ func TestChangeset_IsComplete_InProgressIsNotComplete(t *testing.T) {
 }
 
 func TestChangeset_IsComplete_EmptyChangesetIsComplete(t *testing.T) {
-	cs, err := NewChangeset(nil, nil, "cmd-1", pkgmodel.CommandApply)
+	cs, err := buildChangesetForTest(nil, nil, "cmd-1", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	assert.True(t, cs.IsComplete(), "empty changeset should be complete")
@@ -1375,7 +1380,7 @@ func TestChangeset_ExecutionOrder_DestroyChainCompletesInReverseOrder(t *testing
 		},
 	}
 
-	cs, err := NewChangeset(updates, nil, "cmd-1", pkgmodel.CommandApply)
+	cs, err := buildChangesetForTest(updates, nil, "cmd-1", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	// Subnet delete first (reversed dependency order)
@@ -1421,7 +1426,7 @@ func TestChangeset_ExecutionOrder_UpdateOperationRespectsDependencies(t *testing
 		},
 	}
 
-	cs, err := NewChangeset(updates, nil, "cmd-1", pkgmodel.CommandApply)
+	cs, err := buildChangesetForTest(updates, nil, "cmd-1", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	// VPC update should be first (subnet depends on it)
@@ -1468,7 +1473,7 @@ func TestChangeset_AvailableExecutableUpdates_SkipsInProgressNodes(t *testing.T)
 		},
 	}
 
-	cs, err := NewChangeset(updates, nil, "cmd-1", pkgmodel.CommandApply)
+	cs, err := buildChangesetForTest(updates, nil, "cmd-1", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	// Start one update (moves to InProgress)
@@ -1570,7 +1575,7 @@ func TestChangeset_Init_ReplaceOperationSplitsIntoDeleteAndCreateNodes(t *testin
 		},
 	}
 
-	cs, err := NewChangeset(updates, nil, "cmd-1", pkgmodel.CommandApply)
+	cs, err := buildChangesetForTest(updates, nil, "cmd-1", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	// Replace should produce 2 DAG nodes: one delete, one create
@@ -1626,7 +1631,7 @@ func TestChangeset_ExecutionOrder_MixedResourceAndTargetUpdates(t *testing.T) {
 		},
 	}
 
-	cs, err := NewChangeset(resourceUpdates, targetUpdates, "cmd-mixed", pkgmodel.CommandApply)
+	cs, err := buildChangesetForTest(resourceUpdates, targetUpdates, "cmd-mixed", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	// Step 2: AvailableExecutableUpdates should only count resource updates (rate-limited), not targets
@@ -1703,7 +1708,7 @@ func TestChangeset_UpdateDAG_UnexpectedStateTreatedAsFailure(t *testing.T) {
 		},
 	}
 
-	cs, err := NewChangeset(resourceUpdates, nil, "cmd-unexpected", pkgmodel.CommandApply)
+	cs, err := buildChangesetForTest(resourceUpdates, nil, "cmd-unexpected", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	// Get the update to mark it in progress (so it's not "ready" and not "success" and not "failed")
@@ -1742,7 +1747,7 @@ func TestChangeset_IsComplete_AllFailedIsComplete(t *testing.T) {
 		},
 	}
 
-	cs, err := NewChangeset(resourceUpdates, nil, "cmd-allfailed", pkgmodel.CommandApply)
+	cs, err := buildChangesetForTest(resourceUpdates, nil, "cmd-allfailed", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	// Get both updates and fail them
@@ -1788,7 +1793,7 @@ func TestChangeset_FailureCascade_SkipsInProgressDependents(t *testing.T) {
 		},
 	}
 
-	cs, err := NewChangeset(resourceUpdates, nil, "cmd-cascade-skip", pkgmodel.CommandApply)
+	cs, err := buildChangesetForTest(resourceUpdates, nil, "cmd-cascade-skip", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	// Start the parent
@@ -1833,7 +1838,7 @@ func TestChangeset_AvailableExecutableUpdates_NonRateLimitedShowsZeroCount(t *te
 		},
 	}
 
-	cs, err := NewChangeset(nil, targetUpdates, "cmd-nonrl", pkgmodel.CommandApply)
+	cs, err := buildChangesetForTest(nil, targetUpdates, "cmd-nonrl", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	available := cs.AvailableExecutableUpdates()
@@ -1852,7 +1857,7 @@ func TestChangeset_TargetReplace_SplitsIntoDeleteAndCreate(t *testing.T) {
 		},
 	}
 
-	cs, err := NewChangeset(nil, targetUpdates, "cmd-1", pkgmodel.CommandApply)
+	cs, err := buildChangesetForTest(nil, targetUpdates, "cmd-1", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	// Should have 2 nodes: delete + create
@@ -1891,7 +1896,7 @@ func TestChangeset_TargetReplace_ResourceEdges(t *testing.T) {
 		},
 	}
 
-	cs, err := NewChangeset(resourceUpdates, targetUpdates, "cmd-2", pkgmodel.CommandApply)
+	cs, err := buildChangesetForTest(resourceUpdates, targetUpdates, "cmd-2", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	// 4 nodes: resource delete, resource create, target delete, target create
@@ -1941,7 +1946,7 @@ func TestChangeset_SyncReadsDoNotCreateDependencyEdges(t *testing.T) {
 		},
 	}
 
-	cs, err := NewChangeset(updates, nil, "cmd-sync", pkgmodel.CommandSync)
+	cs, err := buildChangesetForTest(updates, nil, "cmd-sync", pkgmodel.CommandSync, nil)
 	assert.NoError(t, err)
 
 	vpcNode := cs.DAG.Nodes[createOperationURI(vpcURI, resource_update.OperationRead)]
@@ -1998,7 +2003,7 @@ func TestChangeset_CrashRecovery_SuccessParentBlocksChildren(t *testing.T) {
 		},
 	}
 
-	cs, err := NewChangeset(allUpdates, nil, "test-crash-bug", pkgmodel.CommandApply)
+	cs, err := buildChangesetForTest(allUpdates, nil, "test-crash-bug", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	// BUG: Subnet is blocked because VPC (Success) is in the pipeline as an
@@ -2036,7 +2041,7 @@ func TestChangeset_CrashRecovery_FilteredPendingUpdatesOnly(t *testing.T) {
 		},
 	}
 
-	cs, err := NewChangeset(pendingOnly, nil, "test-crash-fix", pkgmodel.CommandApply)
+	cs, err := buildChangesetForTest(pendingOnly, nil, "test-crash-fix", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	// VPC URI is in RemainingResolvables but not in the changeset, so no
@@ -2066,7 +2071,7 @@ func TestChangeset_SyncReadFailureDoesNotCascade(t *testing.T) {
 		},
 	}
 
-	cs, err := NewChangeset(updates, nil, "cmd-sync", pkgmodel.CommandSync)
+	cs, err := buildChangesetForTest(updates, nil, "cmd-sync", pkgmodel.CommandSync, nil)
 	require.NoError(t, err)
 
 	opURI := createOperationURI(vpcURI, resource_update.OperationRead)
@@ -2131,7 +2136,7 @@ func TestBuildDeleteDependencies_AttachesToInvertsEdgeDirection(t *testing.T) {
 			DesiredState: bResource,
 			Operation:    resource_update.OperationDelete,
 		}
-		cs, err := NewChangeset([]resource_update.ResourceUpdate{aDelete, bDelete}, nil, "c1", pkgmodel.CommandApply)
+		cs, err := buildChangesetForTest([]resource_update.ResourceUpdate{aDelete, bDelete}, nil, "c1", pkgmodel.CommandApply, nil)
 		if err != nil {
 			t.Fatalf("NewChangeset: %v", err)
 		}
@@ -2185,12 +2190,12 @@ func TestBuildDeleteDependencies_MixedRefsOnOneResourceGetIndependentDirections(
 	bResource := pkgmodel.Resource{Ksuid: "B1", Label: "b", Type: "Test::B", Stack: "s", Properties: json.RawMessage(`{}`)}
 	cResource := pkgmodel.Resource{Ksuid: "C1", Label: "c", Type: "Test::C", Stack: "s", Properties: json.RawMessage(`{}`)}
 
-	cs, err := NewChangeset(
+	cs, err := buildChangesetForTest(
 		[]resource_update.ResourceUpdate{
 			{DesiredState: aResource, Operation: resource_update.OperationDelete, RemainingResolvables: []pkgmodel.FormaeURI{bURI, cURI}},
 			{DesiredState: bResource, Operation: resource_update.OperationDelete},
 			{DesiredState: cResource, Operation: resource_update.OperationDelete},
-		}, nil, "c2", pkgmodel.CommandApply)
+		}, nil, "c2", pkgmodel.CommandApply, nil)
 	if err != nil {
 		t.Fatalf("NewChangeset: %v", err)
 	}
@@ -2225,11 +2230,11 @@ func TestBuildDeleteDependencies_MissingHintFallsBackToConstructionReverse(t *te
 	}
 	bResource := pkgmodel.Resource{Ksuid: "B1", Label: "b", Type: "Test::B", Stack: "s", Properties: json.RawMessage(`{}`)}
 
-	cs, err := NewChangeset(
+	cs, err := buildChangesetForTest(
 		[]resource_update.ResourceUpdate{
 			{DesiredState: aResource, Operation: resource_update.OperationDelete, RemainingResolvables: []pkgmodel.FormaeURI{bURI}},
 			{DesiredState: bResource, Operation: resource_update.OperationDelete},
-		}, nil, "c3", pkgmodel.CommandApply)
+		}, nil, "c3", pkgmodel.CommandApply, nil)
 	if err != nil {
 		t.Fatalf("NewChangeset: %v", err)
 	}
@@ -2296,12 +2301,12 @@ func TestBuildDeleteDependencies_RuntimeDependency_AddsChildEdges(t *testing.T) 
 		Properties: json.RawMessage(`{"FileSystemId":"fs-abc"}`),
 	}
 
-	cs, err := NewChangeset([]resource_update.ResourceUpdate{
+	cs, err := buildChangesetForTest([]resource_update.ResourceUpdate{
 		{DesiredState: consumer, Operation: resource_update.OperationDelete, RemainingResolvables: []pkgmodel.FormaeURI{producerURI}},
 		{DesiredState: producer, Operation: resource_update.OperationDelete},
 		{DesiredState: mtA, Operation: resource_update.OperationDelete},
 		{DesiredState: mtB, Operation: resource_update.OperationDelete},
-	}, nil, "rt1", pkgmodel.CommandApply)
+	}, nil, "rt1", pkgmodel.CommandApply, nil)
 	if err != nil {
 		t.Fatalf("NewChangeset: %v", err)
 	}
@@ -2380,7 +2385,7 @@ func TestBuildDeleteDependencies_RuntimeDependency_InstanceSafe(t *testing.T) {
 		}
 	}
 
-	cs, err := NewChangeset([]resource_update.ResourceUpdate{
+	cs, err := buildChangesetForTest([]resource_update.ResourceUpdate{
 		{DesiredState: consumer, Operation: resource_update.OperationDelete, RemainingResolvables: []pkgmodel.FormaeURI{fs1URI}},
 		{DesiredState: fs1, Operation: resource_update.OperationDelete},
 		{DesiredState: fs2, Operation: resource_update.OperationDelete},
@@ -2388,7 +2393,7 @@ func TestBuildDeleteDependencies_RuntimeDependency_InstanceSafe(t *testing.T) {
 		{DesiredState: mountTarget("MT1B", "mt1B", "fs-1"), Operation: resource_update.OperationDelete},
 		{DesiredState: mountTarget("MT2A", "mt2A", "fs-2"), Operation: resource_update.OperationDelete},
 		{DesiredState: mountTarget("MT2B", "mt2B", "fs-2"), Operation: resource_update.OperationDelete},
-	}, nil, "rt2", pkgmodel.CommandApply)
+	}, nil, "rt2", pkgmodel.CommandApply, nil)
 	if err != nil {
 		t.Fatalf("NewChangeset: %v", err)
 	}
@@ -2441,10 +2446,10 @@ func TestBuildDeleteDependencies_RuntimeDependency_NoMatchingChildren_FallsBackT
 		Properties: json.RawMessage(`{"FileSystemId":"fs-abc"}`),
 	}
 
-	cs, err := NewChangeset([]resource_update.ResourceUpdate{
+	cs, err := buildChangesetForTest([]resource_update.ResourceUpdate{
 		{DesiredState: consumer, Operation: resource_update.OperationDelete, RemainingResolvables: []pkgmodel.FormaeURI{producerURI}},
 		{DesiredState: producer, Operation: resource_update.OperationDelete},
-	}, nil, "rt3", pkgmodel.CommandApply)
+	}, nil, "rt3", pkgmodel.CommandApply, nil)
 	if err != nil {
 		t.Fatalf("NewChangeset: %v", err)
 	}
@@ -2528,12 +2533,12 @@ func TestBuildCreateUpdateDependencies_RuntimeDependency_AddsChildEdges(t *testi
 		Properties: json.RawMessage(`{"FileSystemId":{"$ref":"formae://PROD1#/FileSystemId","$value":""}}`),
 	}
 
-	cs, err := NewChangeset([]resource_update.ResourceUpdate{
+	cs, err := buildChangesetForTest([]resource_update.ResourceUpdate{
 		{DesiredState: consumer, Operation: resource_update.OperationCreate, RemainingResolvables: []pkgmodel.FormaeURI{producerURI}},
 		{DesiredState: producer, Operation: resource_update.OperationCreate},
 		{DesiredState: mtA, Operation: resource_update.OperationCreate, RemainingResolvables: []pkgmodel.FormaeURI{producerURI}},
 		{DesiredState: mtB, Operation: resource_update.OperationCreate, RemainingResolvables: []pkgmodel.FormaeURI{producerURI}},
-	}, nil, "rtc1", pkgmodel.CommandApply)
+	}, nil, "rtc1", pkgmodel.CommandApply, nil)
 	if err != nil {
 		t.Fatalf("NewChangeset: %v", err)
 	}
@@ -2616,7 +2621,7 @@ func TestBuildCreateUpdateDependencies_RuntimeDependency_InstanceSafe(t *testing
 		}
 	}
 
-	cs, err := NewChangeset([]resource_update.ResourceUpdate{
+	cs, err := buildChangesetForTest([]resource_update.ResourceUpdate{
 		{DesiredState: consumer, Operation: resource_update.OperationCreate, RemainingResolvables: []pkgmodel.FormaeURI{fs1URI}},
 		{DesiredState: fs1, Operation: resource_update.OperationCreate},
 		{DesiredState: fs2, Operation: resource_update.OperationCreate},
@@ -2624,7 +2629,7 @@ func TestBuildCreateUpdateDependencies_RuntimeDependency_InstanceSafe(t *testing
 		{DesiredState: mountTarget("MT1B", "mt1B", "FS1"), Operation: resource_update.OperationCreate, RemainingResolvables: []pkgmodel.FormaeURI{fs1URI}},
 		{DesiredState: mountTarget("MT2A", "mt2A", "FS2"), Operation: resource_update.OperationCreate, RemainingResolvables: []pkgmodel.FormaeURI{fs2URI}},
 		{DesiredState: mountTarget("MT2B", "mt2B", "FS2"), Operation: resource_update.OperationCreate, RemainingResolvables: []pkgmodel.FormaeURI{fs2URI}},
-	}, nil, "rtc2", pkgmodel.CommandApply)
+	}, nil, "rtc2", pkgmodel.CommandApply, nil)
 	if err != nil {
 		t.Fatalf("NewChangeset: %v", err)
 	}
@@ -2693,11 +2698,11 @@ func TestBuildCreateUpdateDependencies_RuntimeDependency_NoMatchingChildren_Fall
 		Properties: json.RawMessage(`{"OtherId":"other-1"}`),
 	}
 
-	cs, err := NewChangeset([]resource_update.ResourceUpdate{
+	cs, err := buildChangesetForTest([]resource_update.ResourceUpdate{
 		{DesiredState: consumer, Operation: resource_update.OperationCreate, RemainingResolvables: []pkgmodel.FormaeURI{producerURI}},
 		{DesiredState: producer, Operation: resource_update.OperationCreate},
 		{DesiredState: unrelated, Operation: resource_update.OperationCreate},
-	}, nil, "rtc3", pkgmodel.CommandApply)
+	}, nil, "rtc3", pkgmodel.CommandApply, nil)
 	if err != nil {
 		t.Fatalf("NewChangeset: %v", err)
 	}
@@ -2791,11 +2796,11 @@ func TestBuildDeleteDependencies_RuntimeDependency_MultipleRefsToSameProducer_Pr
 	// iteration — Go intentionally randomizes iteration order so one
 	// invocation could happen to pick the "good" ordering by luck.
 	for i := 0; i < 50; i++ {
-		cs, err := NewChangeset([]resource_update.ResourceUpdate{
+		cs, err := buildChangesetForTest([]resource_update.ResourceUpdate{
 			{DesiredState: consumer, Operation: resource_update.OperationDelete, RemainingResolvables: []pkgmodel.FormaeURI{producerURI}},
 			{DesiredState: producer, Operation: resource_update.OperationDelete},
 			{DesiredState: mtA, Operation: resource_update.OperationDelete},
-		}, nil, "rtmulti1", pkgmodel.CommandApply)
+		}, nil, "rtmulti1", pkgmodel.CommandApply, nil)
 		if err != nil {
 			t.Fatalf("iteration %d NewChangeset: %v", i, err)
 		}
@@ -2857,11 +2862,11 @@ func TestBuildCreateUpdateDependencies_RuntimeDependency_MultipleRefsToSameProdu
 	}
 
 	for i := 0; i < 50; i++ {
-		cs, err := NewChangeset([]resource_update.ResourceUpdate{
+		cs, err := buildChangesetForTest([]resource_update.ResourceUpdate{
 			{DesiredState: consumer, Operation: resource_update.OperationCreate, RemainingResolvables: []pkgmodel.FormaeURI{producerURI}},
 			{DesiredState: producer, Operation: resource_update.OperationCreate},
 			{DesiredState: mtA, Operation: resource_update.OperationCreate, RemainingResolvables: []pkgmodel.FormaeURI{producerURI}},
-		}, nil, "rtcmulti1", pkgmodel.CommandApply)
+		}, nil, "rtcmulti1", pkgmodel.CommandApply, nil)
 		if err != nil {
 			t.Fatalf("iteration %d NewChangeset: %v", i, err)
 		}
@@ -2917,11 +2922,11 @@ func TestBuildCreateUpdateDependencies_RuntimeDependency_UpdateChild_StillLinks(
 
 	// mtA is in the changeset as Update, not Create — the hardcoded lookup
 	// would silently miss its node.
-	cs, err := NewChangeset([]resource_update.ResourceUpdate{
+	cs, err := buildChangesetForTest([]resource_update.ResourceUpdate{
 		{DesiredState: consumer, Operation: resource_update.OperationCreate, RemainingResolvables: []pkgmodel.FormaeURI{producerURI}},
 		{DesiredState: producer, Operation: resource_update.OperationCreate},
 		{DesiredState: mtA, Operation: resource_update.OperationUpdate, RemainingResolvables: []pkgmodel.FormaeURI{producerURI}},
-	}, nil, "rtcupd1", pkgmodel.CommandApply)
+	}, nil, "rtcupd1", pkgmodel.CommandApply, nil)
 	if err != nil {
 		t.Fatalf("NewChangeset: %v", err)
 	}
@@ -2934,4 +2939,443 @@ func TestBuildCreateUpdateDependencies_RuntimeDependency_UpdateChild_StillLinks(
 	if !hasDependency(consNode, mtANode) {
 		t.Fatalf("consumer.create should depend on mountTargetA.update (runtimeDependency child edge must follow the child's actual operation, not a hardcoded Create)")
 	}
+}
+
+// stubResolveDatastore is a minimal datastore.Datastore used by the synthetic
+// Resolve-target tests. Only LoadTarget is exercised; every other method
+// inherits the embedded interface and panics if called, which keeps the stub
+// honest about what these tests actually depend on.
+type stubResolveDatastore struct {
+	datastore.Datastore
+	targets   map[string]*pkgmodel.Target
+	resources map[string]*pkgmodel.Resource
+}
+
+func (s *stubResolveDatastore) LoadTarget(label string) (*pkgmodel.Target, error) {
+	return s.targets[label], nil
+}
+
+func (s *stubResolveDatastore) LoadResourceById(ksuid string) (*pkgmodel.Resource, error) {
+	return s.resources[ksuid], nil
+}
+
+// opaqueRefConfig is a target config carrying a single opaque $ref, mirroring an
+// otherwise-unchanged target whose secret must be resolved before dependent
+// resource ops dispatch.
+func opaqueRefConfig(refURI string) json.RawMessage {
+	return json.RawMessage(`{"auth":{"$ref":"` + refURI + `","$visibility":"Opaque"}}`)
+}
+
+func hasDependencyOn(node *DAGNode, uri pkgmodel.FormaeURI) bool {
+	for _, dep := range node.Dependencies {
+		if dep.URI == uri {
+			return true
+		}
+	}
+	return false
+}
+
+// TestNewChangeset_SynthesizesResolveNodeForUnchangedOpaqueTarget asserts that a
+// resource op referencing a persisted target whose config carries an opaque $ref,
+// with NO real target update in the changeset, produces exactly one synthetic
+// Resolve node keyed target://<label>/resolve carrying the target's resolvables.
+func TestNewChangeset_SynthesizesResolveNodeForUnchangedOpaqueTarget(t *testing.T) {
+	const targetLabel = "aws-prod"
+	refURI := pkgmodel.NewFormaeURI(util.NewID(), "SecretString")
+
+	ds := &stubResolveDatastore{targets: map[string]*pkgmodel.Target{
+		targetLabel: {Label: targetLabel, Namespace: "AWS", Config: opaqueRefConfig(string(refURI))},
+	}}
+
+	resourceUpdates := []resource_update.ResourceUpdate{
+		{
+			DesiredState: pkgmodel.Resource{Label: "bucket", Type: "AWS::S3::Bucket", Stack: "s", Ksuid: util.NewID(), Target: targetLabel},
+			Operation:    resource_update.OperationCreate,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "s",
+		},
+	}
+
+	cs, err := buildChangesetForTest(resourceUpdates, nil, "cmd-synth", pkgmodel.CommandApply, ds)
+	require.NoError(t, err)
+
+	resolveNode := cs.DAG.Nodes[pkgmodel.FormaeURI("target://"+targetLabel+"/resolve")]
+	require.NotNil(t, resolveNode, "expected a synthetic Resolve node for the unchanged opaque target")
+
+	tu, ok := resolveNode.Update.(*target_update.TargetUpdate)
+	require.True(t, ok)
+	assert.Equal(t, target_update.TargetOperationResolve, tu.Operation)
+	require.Len(t, tu.RemainingResolvables, 1)
+	assert.Equal(t, refURI, tu.RemainingResolvables[0])
+}
+
+// TestNewChangeset_NoSynthesisWhenTargetAlreadyHasUpdate asserts that a target
+// already covered by a real Create/Update target update never gets a duplicate
+// synthetic Resolve node.
+func TestNewChangeset_NoSynthesisWhenTargetAlreadyHasUpdate(t *testing.T) {
+	const targetLabel = "aws-prod"
+	refURI := pkgmodel.NewFormaeURI(util.NewID(), "SecretString")
+
+	ds := &stubResolveDatastore{targets: map[string]*pkgmodel.Target{
+		targetLabel: {Label: targetLabel, Namespace: "AWS", Config: opaqueRefConfig(string(refURI))},
+	}}
+
+	resourceUpdates := []resource_update.ResourceUpdate{
+		{
+			DesiredState: pkgmodel.Resource{Label: "bucket", Type: "AWS::S3::Bucket", Stack: "s", Ksuid: util.NewID(), Target: targetLabel},
+			Operation:    resource_update.OperationCreate,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "s",
+		},
+	}
+	targetUpdates := []target_update.TargetUpdate{
+		{
+			Target:    pkgmodel.Target{Label: targetLabel, Namespace: "AWS"},
+			Operation: target_update.TargetOperationUpdate,
+			State:     target_update.TargetUpdateStateNotStarted,
+		},
+	}
+
+	cs, err := buildChangesetForTest(resourceUpdates, targetUpdates, "cmd-nodup", pkgmodel.CommandApply, ds)
+	require.NoError(t, err)
+
+	assert.Nil(t, cs.DAG.Nodes[pkgmodel.FormaeURI("target://"+targetLabel+"/resolve")],
+		"a target with a real update must not get a synthetic Resolve node")
+}
+
+// TestNewChangeset_NoSynthesisWhenTargetHasNoOpaqueRefs asserts that a persisted
+// target whose config carries no $ref produces no synthetic Resolve node.
+func TestNewChangeset_NoSynthesisWhenTargetHasNoOpaqueRefs(t *testing.T) {
+	const targetLabel = "aws-prod"
+
+	ds := &stubResolveDatastore{targets: map[string]*pkgmodel.Target{
+		targetLabel: {Label: targetLabel, Namespace: "AWS", Config: json.RawMessage(`{"region":"us-east-1"}`)},
+	}}
+
+	resourceUpdates := []resource_update.ResourceUpdate{
+		{
+			DesiredState: pkgmodel.Resource{Label: "bucket", Type: "AWS::S3::Bucket", Stack: "s", Ksuid: util.NewID(), Target: targetLabel},
+			Operation:    resource_update.OperationCreate,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "s",
+		},
+	}
+
+	cs, err := buildChangesetForTest(resourceUpdates, nil, "cmd-norefs", pkgmodel.CommandApply, ds)
+	require.NoError(t, err)
+
+	assert.Nil(t, cs.DAG.Nodes[pkgmodel.FormaeURI("target://"+targetLabel+"/resolve")],
+		"a target with no $ref config must not get a synthetic Resolve node")
+}
+
+// TestNewChangeset_SyntheticResolveNodeIsDependencyOfEveryResourceOp asserts that
+// every resource op on the unchanged opaque target depends on the synthetic
+// Resolve node, so none dispatch before the target config is resolved.
+func TestNewChangeset_SyntheticResolveNodeIsDependencyOfEveryResourceOp(t *testing.T) {
+	const targetLabel = "aws-prod"
+	refURI := pkgmodel.NewFormaeURI(util.NewID(), "SecretString")
+
+	ds := &stubResolveDatastore{targets: map[string]*pkgmodel.Target{
+		targetLabel: {Label: targetLabel, Namespace: "AWS", Config: opaqueRefConfig(string(refURI))},
+	}}
+
+	createKsuid := util.NewID()
+	updateKsuid := util.NewID()
+	resourceUpdates := []resource_update.ResourceUpdate{
+		{
+			DesiredState: pkgmodel.Resource{Label: "bucket", Type: "AWS::S3::Bucket", Stack: "s", Ksuid: createKsuid, Target: targetLabel},
+			Operation:    resource_update.OperationCreate,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "s",
+		},
+		{
+			DesiredState: pkgmodel.Resource{Label: "queue", Type: "AWS::SQS::Queue", Stack: "s", Ksuid: updateKsuid, Target: targetLabel},
+			Operation:    resource_update.OperationUpdate,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "s",
+		},
+	}
+
+	cs, err := buildChangesetForTest(resourceUpdates, nil, "cmd-dep", pkgmodel.CommandApply, ds)
+	require.NoError(t, err)
+
+	resolveURI := pkgmodel.FormaeURI("target://" + targetLabel + "/resolve")
+	require.NotNil(t, cs.DAG.Nodes[resolveURI])
+
+	createNode := cs.DAG.Nodes[createOperationURI(resourceUpdates[0].URI(), resource_update.OperationCreate)]
+	updateNode := cs.DAG.Nodes[createOperationURI(resourceUpdates[1].URI(), resource_update.OperationUpdate)]
+	require.NotNil(t, createNode)
+	require.NotNil(t, updateNode)
+
+	assert.True(t, hasDependencyOn(createNode, resolveURI), "create op must depend on the Resolve node")
+	assert.True(t, hasDependencyOn(updateNode, resolveURI), "update op must depend on the Resolve node")
+}
+
+// TestNewChangeset_RejectsTransitivelyOpaqueTargetReference asserts that resolving a
+// target whose config opaquely $refs a secret source, where that source's OWN target
+// also carries opaque $ref config, is rejected: bootstrapping a credential would
+// require first bootstrapping another credential. The error must name both target
+// labels and leak no plaintext secret material.
+func TestNewChangeset_RejectsTransitivelyOpaqueTargetReference(t *testing.T) {
+	const (
+		t1            = "consumer"
+		t2            = "secret-source-target"
+		secretValue   = "super-secret-plaintext"
+		outerRefKSUID = "sourceResourceKsuid00000001"
+	)
+
+	// T1's config opaquely refs a secret whose source resource lives on T2.
+	t1RefURI := pkgmodel.NewFormaeURI(outerRefKSUID, "SecretString")
+	// T2's OWN config also carries an opaque $ref (its credential itself needs resolving).
+	t2InnerRefURI := pkgmodel.NewFormaeURI(util.NewID(), "SecretString")
+
+	ds := &stubResolveDatastore{
+		targets: map[string]*pkgmodel.Target{
+			t1: {Label: t1, Namespace: "AWS", Config: opaqueRefConfig(string(t1RefURI))},
+			t2: {Label: t2, Namespace: "AWS", Config: opaqueRefConfig(string(t2InnerRefURI))},
+		},
+		// The source resource behind T1's ref lives on T2 (persisted, not in-command).
+		resources: map[string]*pkgmodel.Resource{
+			outerRefKSUID: {Label: "the-secret", Type: "AWS::SecretsManager::Secret", Ksuid: outerRefKSUID, Target: t2},
+		},
+	}
+
+	// A resource op on T1 triggers T1's synthetic Resolve op.
+	resourceUpdates := []resource_update.ResourceUpdate{
+		{
+			DesiredState: pkgmodel.Resource{Label: "bucket", Type: "AWS::S3::Bucket", Stack: "s", Ksuid: util.NewID(), Target: t1},
+			Operation:    resource_update.OperationCreate,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "s",
+		},
+	}
+
+	_, err := buildChangesetForTest(resourceUpdates, nil, "cmd-transitive-opaque", pkgmodel.CommandApply, ds)
+	require.Error(t, err, "resolving a target whose secret source's target is itself opaque must be rejected")
+	assert.Contains(t, err.Error(), t1, "error must name the referencing target")
+	assert.Contains(t, err.Error(), t2, "error must name the source resource's target")
+	assert.NotContains(t, err.Error(), secretValue, "error must not leak the plaintext secret")
+	assert.NotContains(t, err.Error(), "$value", "error must not include any $value envelope")
+}
+
+// TestNewChangeset_AllowsOpaqueRefWhenSourceTargetIsPlain asserts the normal case:
+// T1 opaquely $refs a secret whose source resource lives on T2, and T2's own config
+// carries NO opaque $ref. This is a single-hop bootstrap and must be allowed.
+func TestNewChangeset_AllowsOpaqueRefWhenSourceTargetIsPlain(t *testing.T) {
+	const (
+		t1            = "consumer"
+		t2            = "secret-source-target"
+		outerRefKSUID = "sourceResourceKsuid00000002"
+	)
+
+	t1RefURI := pkgmodel.NewFormaeURI(outerRefKSUID, "SecretString")
+
+	ds := &stubResolveDatastore{
+		targets: map[string]*pkgmodel.Target{
+			t1: {Label: t1, Namespace: "AWS", Config: opaqueRefConfig(string(t1RefURI))},
+			// T2 carries plain config only: no opaque bootstrapping needed.
+			t2: {Label: t2, Namespace: "AWS", Config: json.RawMessage(`{"region":"us-east-1"}`)},
+		},
+		resources: map[string]*pkgmodel.Resource{
+			outerRefKSUID: {Label: "the-secret", Type: "AWS::SecretsManager::Secret", Ksuid: outerRefKSUID, Target: t2},
+		},
+	}
+
+	resourceUpdates := []resource_update.ResourceUpdate{
+		{
+			DesiredState: pkgmodel.Resource{Label: "bucket", Type: "AWS::S3::Bucket", Stack: "s", Ksuid: util.NewID(), Target: t1},
+			Operation:    resource_update.OperationCreate,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "s",
+		},
+	}
+
+	_, err := buildChangesetForTest(resourceUpdates, nil, "cmd-plain-source-target", pkgmodel.CommandApply, ds)
+	require.NoError(t, err, "an opaque ref to a secret on a plain-config target is the normal single-hop case")
+}
+
+// TestNewChangeset_TransitiveOpaqueSourceFoundInCommand asserts the guard also
+// consults in-command resource ops for the secret source (a source being CREATED in
+// THIS command is not yet persisted), following it to its target and rejecting when
+// that target itself carries opaque config.
+func TestNewChangeset_TransitiveOpaqueSourceFoundInCommand(t *testing.T) {
+	const (
+		t1            = "consumer"
+		t2            = "secret-source-target"
+		outerRefKSUID = "sourceResourceKsuid00000003"
+	)
+
+	t1RefURI := pkgmodel.NewFormaeURI(outerRefKSUID, "SecretString")
+	t2InnerRefURI := pkgmodel.NewFormaeURI(util.NewID(), "SecretString")
+
+	ds := &stubResolveDatastore{
+		targets: map[string]*pkgmodel.Target{
+			t1: {Label: t1, Namespace: "AWS", Config: opaqueRefConfig(string(t1RefURI))},
+			t2: {Label: t2, Namespace: "AWS", Config: opaqueRefConfig(string(t2InnerRefURI))},
+		},
+		// No persisted resource — the source is created in-command below.
+		resources: map[string]*pkgmodel.Resource{},
+	}
+
+	resourceUpdates := []resource_update.ResourceUpdate{
+		{
+			DesiredState: pkgmodel.Resource{Label: "bucket", Type: "AWS::S3::Bucket", Stack: "s", Ksuid: util.NewID(), Target: t1},
+			Operation:    resource_update.OperationCreate,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "s",
+		},
+		{
+			// The secret source resource, created in this same command, lives on T2.
+			DesiredState: pkgmodel.Resource{Label: "the-secret", Type: "AWS::SecretsManager::Secret", Stack: "s", Ksuid: outerRefKSUID, Target: t2},
+			Operation:    resource_update.OperationCreate,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "s",
+		},
+	}
+
+	_, err := buildChangesetForTest(resourceUpdates, nil, "cmd-in-command-source", pkgmodel.CommandApply, ds)
+	require.Error(t, err, "in-command secret source on an opaque target must also be rejected")
+	assert.Contains(t, err.Error(), t1)
+	assert.Contains(t, err.Error(), t2)
+}
+
+// TestNewChangeset_MutuallyReferencingInCommandTargets_ReturnsCycleError covers two
+// NEW in-command targets whose configs reference secrets hosted on each other. The
+// transitive-opaque guard does not catch this — neither peer is persisted, so its
+// LoadTarget returns nil and the guard skips it — yet the target-resolvable edges form
+// a cycle (A.create → resource-on-B → B.create → resource-on-A → A.create). Without a
+// full-graph cycle check this hangs the executor; NewChangeset must return an error.
+func TestNewChangeset_MutuallyReferencingInCommandTargets_ReturnsCycleError(t *testing.T) {
+	const (
+		targetA = "target-a"
+		targetB = "target-b"
+	)
+	// The secret sources: a resource created on A, and a resource created on B.
+	resOnA := pkgmodel.NewFormaeURI(util.NewID(), "SecretString")
+	resOnB := pkgmodel.NewFormaeURI(util.NewID(), "SecretString")
+
+	// Both targets are NEW in-command creates: not persisted, so the transitive
+	// guard's LoadTarget of the peer returns nil and skips.
+	ds := &stubResolveDatastore{
+		targets:   map[string]*pkgmodel.Target{},
+		resources: map[string]*pkgmodel.Resource{},
+	}
+
+	resourceUpdates := []resource_update.ResourceUpdate{
+		{
+			// Source of the secret that target B references; lives on A.
+			DesiredState: pkgmodel.Resource{Label: "secret-on-a", Type: "AWS::SecretsManager::Secret", Stack: "s", Ksuid: resOnA.KSUID(), Target: targetA},
+			Operation:    resource_update.OperationCreate,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "s",
+		},
+		{
+			// Source of the secret that target A references; lives on B.
+			DesiredState: pkgmodel.Resource{Label: "secret-on-b", Type: "AWS::SecretsManager::Secret", Stack: "s", Ksuid: resOnB.KSUID(), Target: targetB},
+			Operation:    resource_update.OperationCreate,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "s",
+		},
+	}
+
+	// A's config refers to the secret hosted on B; B's config refers to the secret hosted on A.
+	targetUpdates := []target_update.TargetUpdate{
+		{
+			Target:               pkgmodel.Target{Label: targetA, Namespace: "AWS", Config: opaqueRefConfig(string(resOnB))},
+			Operation:            target_update.TargetOperationCreate,
+			State:                target_update.TargetUpdateStateNotStarted,
+			RemainingResolvables: []pkgmodel.FormaeURI{resOnB},
+		},
+		{
+			Target:               pkgmodel.Target{Label: targetB, Namespace: "AWS", Config: opaqueRefConfig(string(resOnA))},
+			Operation:            target_update.TargetOperationCreate,
+			State:                target_update.TargetUpdateStateNotStarted,
+			RemainingResolvables: []pkgmodel.FormaeURI{resOnA},
+		},
+	}
+
+	_, err := buildChangesetForTest(resourceUpdates, targetUpdates, "cmd-mutual-cycle", pkgmodel.CommandApply, ds)
+	require.Error(t, err, "mutually referencing in-command targets form a cycle and must be rejected, not hang")
+}
+
+// TestNewChangeset_SelfReferentialTarget_ReturnsCycleError covers a target whose config
+// references a secret hosted on a resource on the SAME target. The transitive-opaque
+// guard explicitly skips a self-reference, but the target-resolvable edges still form a
+// self-cycle (target.create → resource-on-target → target.create). NewChangeset must
+// return an error rather than let the executor hang.
+func TestNewChangeset_SelfReferentialTarget_ReturnsCycleError(t *testing.T) {
+	const targetLabel = "self-target"
+	secretOnSelf := pkgmodel.NewFormaeURI(util.NewID(), "SecretString")
+
+	ds := &stubResolveDatastore{
+		targets:   map[string]*pkgmodel.Target{},
+		resources: map[string]*pkgmodel.Resource{},
+	}
+
+	resourceUpdates := []resource_update.ResourceUpdate{
+		{
+			DesiredState: pkgmodel.Resource{Label: "secret", Type: "AWS::SecretsManager::Secret", Stack: "s", Ksuid: secretOnSelf.KSUID(), Target: targetLabel},
+			Operation:    resource_update.OperationCreate,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "s",
+		},
+	}
+
+	targetUpdates := []target_update.TargetUpdate{
+		{
+			Target:               pkgmodel.Target{Label: targetLabel, Namespace: "AWS", Config: opaqueRefConfig(string(secretOnSelf))},
+			Operation:            target_update.TargetOperationCreate,
+			State:                target_update.TargetUpdateStateNotStarted,
+			RemainingResolvables: []pkgmodel.FormaeURI{secretOnSelf},
+		},
+	}
+
+	_, err := buildChangesetForTest(resourceUpdates, targetUpdates, "cmd-self-cycle", pkgmodel.CommandApply, ds)
+	require.Error(t, err, "a self-referential target forms a self-cycle and must be rejected, not hang")
+}
+
+// TestNewChangeset_ValidTargetResolvableEdge_NoFalsePositive asserts the full-graph
+// cycle check does not reject a legitimate target-resolvable edge: target A resolves
+// from a resource hosted on target B, and B has no back-edge to A. This acyclic shape
+// must build without error.
+func TestNewChangeset_ValidTargetResolvableEdge_NoFalsePositive(t *testing.T) {
+	const (
+		targetA = "consumer"
+		targetB = "provider"
+	)
+	// The secret source lives on B; A's config references it. B references nothing back.
+	secretOnB := pkgmodel.NewFormaeURI(util.NewID(), "SecretString")
+
+	ds := &stubResolveDatastore{
+		targets:   map[string]*pkgmodel.Target{},
+		resources: map[string]*pkgmodel.Resource{},
+	}
+
+	resourceUpdates := []resource_update.ResourceUpdate{
+		{
+			DesiredState: pkgmodel.Resource{Label: "secret", Type: "AWS::SecretsManager::Secret", Stack: "s", Ksuid: secretOnB.KSUID(), Target: targetB},
+			Operation:    resource_update.OperationCreate,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "s",
+		},
+	}
+
+	targetUpdates := []target_update.TargetUpdate{
+		{
+			Target:               pkgmodel.Target{Label: targetA, Namespace: "AWS", Config: opaqueRefConfig(string(secretOnB))},
+			Operation:            target_update.TargetOperationCreate,
+			State:                target_update.TargetUpdateStateNotStarted,
+			RemainingResolvables: []pkgmodel.FormaeURI{secretOnB},
+		},
+		{
+			// B is a plain create with no resolvables — no back-edge to A.
+			Target:    pkgmodel.Target{Label: targetB, Namespace: "AWS", Config: json.RawMessage(`{"region":"us-east-1"}`)},
+			Operation: target_update.TargetOperationCreate,
+			State:     target_update.TargetUpdateStateNotStarted,
+		},
+	}
+
+	cs, err := buildChangesetForTest(resourceUpdates, targetUpdates, "cmd-valid-resolvable", pkgmodel.CommandApply, ds)
+	require.NoError(t, err, "a valid acyclic target-resolvable edge must not be rejected")
+	assert.False(t, cs.DAG.HasCycles(), "the built graph must be acyclic")
 }

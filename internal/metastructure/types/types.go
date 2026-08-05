@@ -36,6 +36,11 @@ const (
 
 	// Composite ops
 	OperationReplace OperationType = "replace" // delete + create
+
+	// OperationResolve is a synthetic op that resolves opaque $ref config values
+	// in-memory for an otherwise-unchanged target. It is never persisted and does
+	// not trigger discovery or cloud-side mutations.
+	OperationResolve OperationType = "resolve"
 )
 
 // ResourceUpdateState represents the current state of a resource update operation

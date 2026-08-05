@@ -19,6 +19,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_persister"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/stack_update"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
@@ -249,8 +250,15 @@ func prepareDestroyExpiredStack(ds datastore.Datastore, stackInfo datastore.Expi
 		forma_command.SourceStackExpirer,
 	)
 
-	// Create changeset
-	cs, err := changeset.NewChangeset(resourceUpdates, nil, destroyCommand.ID, pkgmodel.CommandDestroy)
+	// Generate any synthetic Resolve target ops, then build the changeset.
+	synth, err := target_update.SynthesizeResolveTargetUpdates(
+		resource_update.ReferencedTargetLabels(resourceUpdates),
+		resource_update.SourceTargetByKsuid(resourceUpdates),
+		nil, ds)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create changeset: %w", err)
+	}
+	cs, err := changeset.NewChangeset(resourceUpdates, synth, destroyCommand.ID, pkgmodel.CommandDestroy)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create changeset: %w", err)
 	}

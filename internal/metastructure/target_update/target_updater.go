@@ -55,6 +55,12 @@ type TargetUpdaterData struct {
 	targetUpdate TargetUpdate
 	commandID    string
 	requestedBy  gen.PID
+	// datastore re-reads the live persisted target so a synthetic Resolve op can
+	// close the TOCTOU window between changeset build and execute. It is read from
+	// the node environment (the same handle every other actor shares) rather than
+	// threaded through the supervisor, so it broadens no plumbing. May be nil in
+	// unit harnesses that never wire the environment; re-validation then no-ops.
+	datastore targetLoader
 }
 
 func NewTargetUpdater() gen.ProcessBehavior {
@@ -64,6 +70,19 @@ func NewTargetUpdater() gen.ProcessBehavior {
 func (t *TargetUpdater) Init(args ...any) (statemachine.StateMachineSpec[TargetUpdaterData], error) {
 	data := TargetUpdaterData{
 		requestedBy: args[0].(gen.PID),
+	}
+
+	// Read the shared datastore handle from the node environment so a synthetic
+	// Resolve op can re-validate the target's revision at execute time. It is
+	// asserted against the local targetLoader interface (not the concrete
+	// datastore.Datastore) to avoid an import cycle — target_update is imported by
+	// the datastore package. Absence is tolerated (some test harnesses run the FSM
+	// without an environment): re-validation then no-ops and the op resolves
+	// against its snapshot.
+	if env, ok := t.Env("Datastore"); ok {
+		if ds, ok := env.(targetLoader); ok {
+			data.datastore = ds
+		}
 	}
 
 	t.Log().Debug("TargetUpdater %s initialized", t.Name())
@@ -94,11 +113,26 @@ func resourcePersisterProcess(proc gen.Process) gen.ProcessID {
 }
 
 // handleStartTargetUpdate receives the initial message and enters the resolve loop or goes straight to persist.
+// A Resolve op is always routed through resolveTargetConfig regardless of resolvables count, because Resolve
+// ops must never call persistTarget — the resolve loop's drain path handles the zero-resolvables case directly.
 func handleStartTargetUpdate(from gen.PID, state gen.Atom, data TargetUpdaterData, message StartTargetUpdate, proc gen.Process) (gen.Atom, TargetUpdaterData, []statemachine.Action, error) {
 	data.targetUpdate = message.TargetUpdate
 	data.commandID = message.CommandID
 
-	if len(data.targetUpdate.RemainingResolvables) > 0 {
+	// A synthetic Resolve op carries the target's config and revision as they were
+	// at changeset build time. Before resolving, re-read the live persisted target:
+	// if a concurrent command bumped its revision, resolve against the current
+	// config instead of the stale snapshot; if the target was deleted, fail rather
+	// than resolve a phantom credential.
+	revised, err := revalidateResolveTarget(data.targetUpdate, data.datastore)
+	if err != nil {
+		proc.Log().Error("TargetUpdater: failed to re-validate resolve target target=%s: %v",
+			data.targetUpdate.Target.Label, err)
+		return StateFinishedWithError, data, nil, nil
+	}
+	data.targetUpdate = revised
+
+	if len(data.targetUpdate.RemainingResolvables) > 0 || data.targetUpdate.Operation == TargetOperationResolve {
 		return resolveTargetConfig(state, data, proc)
 	}
 	return persistTarget(data, proc)
@@ -107,6 +141,12 @@ func handleStartTargetUpdate(from gen.PID, state gen.Atom, data TargetUpdaterDat
 // resolveTargetConfig pops the next resolvable and sends a ResolveValue request.
 func resolveTargetConfig(state gen.Atom, data TargetUpdaterData, proc gen.Process) (gen.Atom, TargetUpdaterData, []statemachine.Action, error) {
 	if len(data.targetUpdate.RemainingResolvables) == 0 {
+		// A Resolve op resolves config in-memory only: the target row is never
+		// written. Transition directly to success so the finished signal carries
+		// the resolved config without touching the datastore.
+		if data.targetUpdate.Operation == TargetOperationResolve {
+			return StateFinishedSuccessfully, data, nil, nil
+		}
 		return persistTarget(data, proc)
 	}
 
@@ -185,14 +225,14 @@ func onTargetUpdaterStateChange(oldState gen.Atom, newState gen.Atom, data Targe
 		}
 
 		proc.Log().Debug("TargetUpdater: sending TargetUpdateFinished to requester state=%s target=%s", newState, data.targetUpdate.Target.Label)
-		err := proc.Send(
-			data.requestedBy,
-			TargetUpdateFinished{
-				NodeURI:        data.targetUpdate.NodeURI(),
-				State:          finalState,
-				ResolvedConfig: data.targetUpdate.Target.Config,
-			},
-		)
+		finished := TargetUpdateFinished{
+			NodeURI: data.targetUpdate.NodeURI(),
+			State:   finalState,
+		}
+		if finalState == TargetUpdateStateSuccess {
+			finished.ResolvedConfig = data.targetUpdate.Target.Config
+		}
+		err := proc.Send(data.requestedBy, finished)
 		if err != nil {
 			proc.Log().Error("TargetUpdater: failed to send TargetUpdateFinished to requester: %v", err)
 		}

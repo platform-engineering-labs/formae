@@ -64,6 +64,11 @@ type DAGNode struct {
 	Dependencies []*DAGNode
 }
 
+// NewChangeset builds the execution DAG from the given resource and target
+// updates. It is a pure graph-builder: any synthetic Resolve target ops the
+// command needs (for unchanged targets carrying opaque $ref config) are generated
+// in the Update-construction phase by target_update.SynthesizeResolveTargetUpdates
+// and passed in via targetUpdates, so this constructor needs no datastore.
 func NewChangeset(
 	resourceUpdates []resource_update.ResourceUpdate,
 	targetUpdates []target_update.TargetUpdate,
@@ -124,6 +129,16 @@ func NewChangeset(
 	// Build implicit edges between target and resource nodes
 	changeset.DAG.buildTargetResourceEdges(targetUpdates)
 
+	// Re-run cycle detection over the FULL graph. DAG.Init runs its cycle check
+	// before any target node or target-resolvable edge exists, so a cycle formed
+	// purely by target-resolvable edges — two in-command targets whose configs
+	// reference each other's secrets, or a target referencing a secret hosted on
+	// itself — would otherwise slip through and hang the executor. This second
+	// pass turns any such cycle into a clean build-time error.
+	if changeset.DAG.HasCycles() {
+		return Changeset{}, fmt.Errorf("changeset has a dependency cycle involving target-resolvable references")
+	}
+
 	return changeset, nil
 }
 
@@ -149,11 +164,12 @@ func (p *ExecutionDAG) buildOperationRelationships(allOps []resource_update.Reso
 //   - Delete:  resource deletes → target delete
 //   - Resolvables: target create/update → depends on resource creates it references
 //
-// For a target create/update node, every create/update resource op on that target
-// depends on it. A delete op on that target also depends on it, but only when the
-// target update re-resolves config ($ref → $value): the delete must dispatch with
+// For a target create/update/resolve node, every create/update resource op on that
+// target depends on it. A delete op on that target also depends on it, but only when
+// the target update re-resolves config ($ref → $value): the delete must dispatch with
 // the resolved config rather than the stale $ref-only snapshot. That delete edge is
-// gated on resolvables and skipped when it would close a cycle.
+// gated on resolvables and skipped when it would close a cycle. A synthetic Resolve
+// node is treated exactly like a create/update here.
 func (p *ExecutionDAG) buildTargetResourceEdges(targetUpdates []target_update.TargetUpdate) {
 	// Build resolvable-based dependency edges for target create/update operations.
 	// When a target config contains $ref to a resource property, the target node
@@ -164,7 +180,9 @@ func (p *ExecutionDAG) buildTargetResourceEdges(targetUpdates []target_update.Ta
 	// This ensures the target is persisted (and resolved, if it has resolvables) before
 	// the dependent op dispatches its config to the plugin.
 	for _, tu := range targetUpdates {
-		if tu.Operation == target_update.TargetOperationCreate || tu.Operation == target_update.TargetOperationUpdate {
+		if tu.Operation == target_update.TargetOperationCreate ||
+			tu.Operation == target_update.TargetOperationUpdate ||
+			tu.Operation == target_update.TargetOperationResolve {
 			targetNode := p.Nodes[tu.NodeURI()]
 			if targetNode == nil {
 				continue
@@ -527,7 +545,9 @@ func (p *ExecutionDAG) connectDeleteToCreate(allOps []resource_update.ResourceUp
 // buildTargetResolvableEdges links target nodes that have resolvables to the
 // resource nodes they depend on.
 //
-// For create/update: target waits for the resource it depends on (normal order).
+// For create/update/resolve: target waits for the resource it depends on (normal
+// order) — a synthetic Resolve node whose $ref points at a same-command source
+// resource waits for that resource's create/update just like a real update.
 // For delete: the resource delete waits for the target delete (reversed order),
 // ensuring resources on a dependent target are destroyed before the resource
 // that provides the target's config (e.g., Grafana dashboards deleted before

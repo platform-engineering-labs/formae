@@ -67,7 +67,7 @@ func TestChangesetExecutor_SingleResourceUpdate(t *testing.T) {
 		})
 
 		// Create changeset and start executor
-		cs, err := changeset.NewChangeset([]resource_update.ResourceUpdate{resourceUpdate}, nil, commandID, pkgmodel.CommandApply)
+		cs, err := buildChangesetWithResolves([]resource_update.ResourceUpdate{resourceUpdate}, nil, commandID, pkgmodel.CommandApply, m.Datastore)
 		assert.NoError(t, err)
 
 		// Ensure the changeset executor exists
@@ -166,7 +166,7 @@ func TestChangesetExecutor_DependentResources(t *testing.T) {
 		})
 
 		// Create changeset - it will automatically build the dependency pipeline
-		cs, err := changeset.NewChangeset([]resource_update.ResourceUpdate{vpcUpdate, subnetUpdate}, nil, commandID, pkgmodel.CommandApply)
+		cs, err := buildChangesetWithResolves([]resource_update.ResourceUpdate{vpcUpdate, subnetUpdate}, nil, commandID, pkgmodel.CommandApply, m.Datastore)
 		assert.NoError(t, err)
 
 		// Ensure the changeset executor exists
@@ -265,7 +265,7 @@ func TestChangesetExecutor_CascadeFailure(t *testing.T) {
 		})
 
 		// Create changeset - it will automatically build the dependency pipeline
-		cs, err := changeset.NewChangeset([]resource_update.ResourceUpdate{vpcUpdate, subnetUpdate}, nil, commandID, pkgmodel.CommandApply)
+		cs, err := buildChangesetWithResolves([]resource_update.ResourceUpdate{vpcUpdate, subnetUpdate}, nil, commandID, pkgmodel.CommandApply, m.Datastore)
 		assert.NoError(t, err)
 
 		// Ensure the changeset executor exists
@@ -362,8 +362,8 @@ func TestChangesetExecutor_SyncReadFailureDoesNotCascade(t *testing.T) {
 			},
 		})
 
-		cs, err := changeset.NewChangeset(
-			[]resource_update.ResourceUpdate{readUpdate}, nil, commandID, pkgmodel.CommandSync)
+		cs, err := buildChangesetWithResolves(
+			[]resource_update.ResourceUpdate{readUpdate}, nil, commandID, pkgmodel.CommandSync, m.Datastore)
 		assert.NoError(t, err)
 
 		_, err = testutil.Call(m.Node, "ChangesetSupervisor", changeset.EnsureChangesetExecutor{
@@ -425,7 +425,7 @@ func TestChangesetExecutor_HashesAllResourcesOnCompletion(t *testing.T) {
 		})
 
 		// Create changeset
-		cs, err := changeset.NewChangeset([]resource_update.ResourceUpdate{resourceUpdate}, nil, commandID, pkgmodel.CommandApply)
+		cs, err := buildChangesetWithResolves([]resource_update.ResourceUpdate{resourceUpdate}, nil, commandID, pkgmodel.CommandApply, m.Datastore)
 		assert.NoError(t, err)
 
 		// Ensure the changeset executor exists
@@ -494,7 +494,7 @@ func TestChangesetExecutor_HashesAllResourcesOnFailure(t *testing.T) {
 		})
 
 		// Create changeset
-		cs, err := changeset.NewChangeset([]resource_update.ResourceUpdate{resourceUpdate}, nil, commandID, pkgmodel.CommandApply)
+		cs, err := buildChangesetWithResolves([]resource_update.ResourceUpdate{resourceUpdate}, nil, commandID, pkgmodel.CommandApply, m.Datastore)
 		assert.NoError(t, err)
 
 		// Ensure the changeset executor exists
@@ -634,8 +634,8 @@ func TestChangesetExecutor_StuckOnReadFailureDuringUpdate(t *testing.T) {
 		})
 
 		// Create changeset from the updates
-		cs, err := changeset.NewChangeset(
-			[]resource_update.ResourceUpdate{resOK, resFail}, nil, commandID, pkgmodel.CommandApply)
+		cs, err := buildChangesetWithResolves(
+			[]resource_update.ResourceUpdate{resOK, resFail}, nil, commandID, pkgmodel.CommandApply, m.Datastore)
 		assert.NoError(t, err)
 
 		// Ensure the changeset executor exists
@@ -712,11 +712,12 @@ func TestChangesetExecutor_MixedResourceAndTargetUpdates(t *testing.T) {
 		})
 
 		// Create changeset with both resource and target updates
-		cs, err := changeset.NewChangeset(
+		cs, err := buildChangesetWithResolves(
 			[]resource_update.ResourceUpdate{resourceUpdate},
 			[]target_update.TargetUpdate{targetUp},
 			commandID,
 			pkgmodel.CommandApply,
+			m.Datastore,
 		)
 		require.NoError(t, err)
 

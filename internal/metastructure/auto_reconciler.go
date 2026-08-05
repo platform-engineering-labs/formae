@@ -19,6 +19,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_persister"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
@@ -362,8 +363,15 @@ func prepareReconcile(ds datastore.Datastore, stackLabel string, clientID string
 		forma_command.SourceAutoReconciler,
 	)
 
-	// Create changeset
-	cs, err := changeset.NewChangeset(resourceUpdates, nil, reconcileCommand.ID, pkgmodel.CommandApply)
+	// Generate any synthetic Resolve target ops, then build the changeset.
+	synth, err := target_update.SynthesizeResolveTargetUpdates(
+		resource_update.ReferencedTargetLabels(resourceUpdates),
+		resource_update.SourceTargetByKsuid(resourceUpdates),
+		nil, ds)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create changeset: %w", err)
+	}
+	cs, err := changeset.NewChangeset(resourceUpdates, synth, reconcileCommand.ID, pkgmodel.CommandApply)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create changeset: %w", err)
 	}

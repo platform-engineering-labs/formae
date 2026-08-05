@@ -20,6 +20,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_persister"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
@@ -331,8 +332,21 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 		return state, data, nil, gen.TerminateReasonPanic
 	}
 
-	// Sync commands (READs) will never contain cycles so we can safely ignore the error here.
-	cs, _ := changeset.NewChangeset(allResourceUpdates, nil, syncCommand.ID, pkgmodel.CommandSync)
+	synth, err := target_update.SynthesizeResolveTargetUpdates(
+		resource_update.ReferencedTargetLabels(allResourceUpdates),
+		resource_update.SourceTargetByKsuid(allResourceUpdates),
+		nil, data.datastore)
+	if err != nil {
+		proc.Log().Error("Synchronizer: failed to build changeset, skipping sync cycle commandID=%s: %v", syncCommand.ID, err)
+		finalizeFailedCommand(syncCommand, proc)
+		return StateIdle, data, rescheduleAction(data), nil
+	}
+	cs, err := changeset.NewChangeset(allResourceUpdates, synth, syncCommand.ID, pkgmodel.CommandSync)
+	if err != nil {
+		proc.Log().Error("Synchronizer: failed to build changeset, skipping sync cycle commandID=%s: %v", syncCommand.ID, err)
+		finalizeFailedCommand(syncCommand, proc)
+		return StateIdle, data, rescheduleAction(data), nil
+	}
 
 	proc.Log().Debug("Ensuring ChangesetExecutor for sync command commandID=%s", syncCommand.ID)
 	_, err = proc.Call(
@@ -388,4 +402,31 @@ func findMatchFiltersForType(filters []pkgmodel.MatchFilter, resourceType string
 		}
 	}
 	return result
+}
+
+// finalizeFailedCommand marks all resource updates in the command as failed and then
+// finalizes the command itself, preventing persisted commands from being left in a
+// non-terminal pending state when changeset construction fails after storage.
+func finalizeFailedCommand(cmd *forma_command.FormaCommand, proc gen.Process) {
+	refs := make([]forma_persister.ResourceUpdateRef, 0, len(cmd.ResourceUpdates))
+	for _, ru := range cmd.ResourceUpdates {
+		refs = append(refs, forma_persister.ResourceUpdateRef{
+			URI:       ru.URI(),
+			Operation: ru.Operation,
+		})
+	}
+	persister := gen.ProcessID{Name: actornames.FormaCommandPersister, Node: proc.Node().Name()}
+	if len(refs) > 0 {
+		if _, err := proc.Call(persister, forma_persister.MarkResourcesAsFailed{
+			CommandID:          cmd.ID,
+			Resources:          refs,
+			ResourceModifiedTs: time.Now(),
+		}); err != nil {
+			proc.Log().Error("Synchronizer: failed to mark resources as failed for aborted command commandID=%s: %v", cmd.ID, err)
+			return
+		}
+	}
+	if _, err := proc.Call(persister, forma_persister.FinalizeIncompleteCommand{CommandID: cmd.ID}); err != nil {
+		proc.Log().Error("Synchronizer: failed to finalize aborted command commandID=%s: %v", cmd.ID, err)
+	}
 }

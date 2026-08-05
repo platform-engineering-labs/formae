@@ -66,7 +66,7 @@ func TestBuildTargetResourceEdges_MutableTargetUpdate_AllDependentOpsDependOnTar
 
 	targetUpdates := []target_update.TargetUpdate{mutableResolvableTargetUpdate(targetLabel)}
 
-	cs, err := NewChangeset(resourceUpdates, targetUpdates, "cmd-ordering", pkgmodel.CommandApply)
+	cs, err := buildChangesetForTest(resourceUpdates, targetUpdates, "cmd-ordering", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	targetNode := cs.DAG.Nodes[pkgmodel.FormaeURI("target://"+targetLabel+"/update")]
@@ -106,7 +106,7 @@ func TestNewChangeset_ResourceReplaceOnResolvableTarget_RemainsAcyclic(t *testin
 	}
 	targetUpdates := []target_update.TargetUpdate{mutableResolvableTargetUpdate(targetLabel)}
 
-	cs, err := NewChangeset(resourceUpdates, targetUpdates, "cmd-replace-acyclic", pkgmodel.CommandApply)
+	cs, err := buildChangesetForTest(resourceUpdates, targetUpdates, "cmd-replace-acyclic", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	assert.False(t, cs.DAG.HasCycles(),
@@ -120,12 +120,14 @@ func TestNewChangeset_ResourceReplaceOnResolvableTarget_RemainsAcyclic(t *testin
 		"the replace's delete should wait for the target update when no cycle would result")
 }
 
-// TestBuildTargetResourceEdges_CycleProneDeleteEdge_IsSkipped covers the adversarial
-// shape the cycle-safety guard exists for: a target update whose $ref points at a
-// resource being replaced on that same target. There, target-update→create (resolvable)
-// and create→delete (replace) already exist, so adding delete→target-update would close
-// a cycle. The guard must skip that edge.
-func TestBuildTargetResourceEdges_CycleProneDeleteEdge_IsSkipped(t *testing.T) {
+// TestNewChangeset_TargetRefsResourceReplacedOnSameTarget_ReturnsCycleError covers a
+// target update whose $ref points at a resource being replaced on that SAME target. The
+// target update must wait for the resource's create to resolve its config (target→create),
+// while every resource create on the target must wait for the target to be persisted
+// (create→target). Those two edges form a genuine cycle that cannot be scheduled, so the
+// full-graph cycle check must reject the changeset with an error rather than let the
+// executor hang.
+func TestNewChangeset_TargetRefsResourceReplacedOnSameTarget_ReturnsCycleError(t *testing.T) {
 	const targetLabel = "grafana"
 	k := util.NewID()
 
@@ -147,15 +149,8 @@ func TestBuildTargetResourceEdges_CycleProneDeleteEdge_IsSkipped(t *testing.T) {
 		},
 	}
 
-	cs, err := NewChangeset(resourceUpdates, targetUpdates, "cmd-cycle-guard", pkgmodel.CommandApply)
-	require.NoError(t, err)
-
-	deleteNode := dagNodeForOp(t, cs.DAG, pkgmodel.NewFormaeURI(k, ""), resource_update.OperationDelete)
-	targetNode := cs.DAG.Nodes[pkgmodel.FormaeURI("target://"+targetLabel+"/update")]
-	require.NotNil(t, targetNode)
-
-	assert.False(t, hasDependency(deleteNode, targetNode),
-		"the cycle-prone delete→target-update edge must be skipped by the cycle-safety guard")
+	_, err := buildChangesetForTest(resourceUpdates, targetUpdates, "cmd-cycle-guard", pkgmodel.CommandApply, nil)
+	require.Error(t, err, "a target $ref to a resource replaced on the same target forms a cycle and must be rejected")
 }
 
 // TestDependsOnTransitively_WalksDependencyChain locks the semantics of the
@@ -218,7 +213,7 @@ func TestChangeset_MutableTargetUpdate_DeleteDispatchesResolvedConfigAfterTarget
 	}
 	targetUpdates := []target_update.TargetUpdate{mutableResolvableTargetUpdate(targetLabel)}
 
-	cs, err := NewChangeset(resourceUpdates, targetUpdates, "cmd-propagation", pkgmodel.CommandApply)
+	cs, err := buildChangesetForTest(resourceUpdates, targetUpdates, "cmd-propagation", pkgmodel.CommandApply, nil)
 	require.NoError(t, err)
 
 	// isGrafanaDelete identifies the grafana delete among scheduled updates. A
