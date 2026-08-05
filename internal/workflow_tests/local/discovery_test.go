@@ -605,7 +605,6 @@ func TestDiscovery_NoTagKeysAreFound_LabelIsSetToNativeId(t *testing.T) {
 	})
 }
 
-
 func awsRegionFromTargetConfig(t *testing.T, targetConfig json.RawMessage) string {
 	var config map[string]string
 	err := json.Unmarshal(targetConfig, &config)
