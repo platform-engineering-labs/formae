@@ -8,6 +8,7 @@ package discovery
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -259,7 +260,7 @@ func TestResolveTargetConfigForList_NonRecoverableReadFailure(t *testing.T) {
 // TestResolveTargetConfigForList_RecoverableFailureThenSuccess asserts that a
 // recoverable failure followed by success within the attempt budget resolves
 // successfully, and that exceeding the budget returns an error.
-func TestResolveTargetConfigForList_RecoverableFailureThenSuccess(t *testing.T) {
+func TestResolveTargetConfigForList_RecoverableFailureIsSingleShot(t *testing.T) {
 	const ksuid = "35R2vyf6mT5wEs0mTWT5bp1Lf0E"
 	const prop = "SecretString"
 	const plaintext = "s3cr3t"
@@ -277,7 +278,7 @@ func TestResolveTargetConfigForList_RecoverableFailureThenSuccess(t *testing.T) 
 		Config: targetCfg,
 	}
 
-	t.Run("recoverable then success", func(t *testing.T) {
+	t.Run("recoverable failure is single-shot and typed", func(t *testing.T) {
 		proc := &resolveStubProcess{
 			loadResult: messages.LoadResourceResult{
 				Resource: srcResource,
@@ -292,6 +293,28 @@ func TestResolveTargetConfigForList_RecoverableFailureThenSuccess(t *testing.T) 
 						},
 					},
 				},
+			},
+		}
+
+		result, err := resolveTargetConfigForList(proc, target)
+
+		require.Error(t, err, "a recoverable read failure must surface as an error")
+		assert.Nil(t, result)
+		var rec *resource_update.RecoverableResolveError
+		require.True(t, errors.As(err, &rec),
+			"a recoverable failure must surface as *RecoverableResolveError so the caller can reschedule")
+		assert.Equal(t, resource.OperationErrorCodeServiceTimeout, rec.Code)
+		assert.Equal(t, 1, proc.readAttempts,
+			"resolution is single-shot: exactly one read, no in-place retry")
+	})
+
+	t.Run("success resolves in one read", func(t *testing.T) {
+		proc := &resolveStubProcess{
+			loadResult: messages.LoadResourceResult{
+				Resource: srcResource,
+				Target:   srcTarget,
+			},
+			readResponses: []readResponse{
 				{
 					progress: &plugin.TrackedProgress{
 						ProgressResult: resource.ProgressResult{
@@ -305,41 +328,9 @@ func TestResolveTargetConfigForList_RecoverableFailureThenSuccess(t *testing.T) 
 
 		result, err := resolveTargetConfigForList(proc, target)
 
-		require.NoError(t, err, "retry after recoverable failure must succeed")
-		assert.Contains(t, string(result), plaintext,
-			"resolved config must contain the plaintext after retry")
-		assert.GreaterOrEqual(t, proc.readAttempts, 2,
-			"at least two read attempts must be made: one failure, one success")
-	})
-
-	t.Run("exhausts budget", func(t *testing.T) {
-		// Build a process where every attempt is a recoverable failure
-		recoverableResp := readResponse{
-			progress: &plugin.TrackedProgress{
-				ProgressResult: resource.ProgressResult{
-					OperationStatus: resource.OperationStatusFailure,
-					ErrorCode:       resource.OperationErrorCodeServiceTimeout,
-				},
-			},
-		}
-		responses := make([]readResponse, resource_update.MaxTargetConfigResolveAttempts+1)
-		for i := range responses {
-			responses[i] = recoverableResp
-		}
-		proc := &resolveStubProcess{
-			loadResult: messages.LoadResourceResult{
-				Resource: srcResource,
-				Target:   srcTarget,
-			},
-			readResponses: responses,
-		}
-
-		result, err := resolveTargetConfigForList(proc, target)
-
-		require.Error(t, err, "exhausting the retry budget must return an error")
-		assert.Nil(t, result, "result must be nil when budget is exhausted")
-		assert.Equal(t, resource_update.MaxTargetConfigResolveAttempts, proc.readAttempts,
-			"must exhaust the full attempt budget on repeated recoverable failures")
+		require.NoError(t, err)
+		assert.Contains(t, string(result), plaintext)
+		assert.Equal(t, 1, proc.readAttempts)
 	})
 }
 

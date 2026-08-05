@@ -7,6 +7,7 @@ package changeset
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -136,36 +137,69 @@ func (r *ResolveCache) startResolve(from gen.PID, resourceURI pkgmodel.FormaeURI
 		return
 	}
 
-	// Resolve the source resource's target config before the Read. When the
-	// target authenticates from a secret, its persisted config carries a bare
-	// opaque $ref with no $value at rest (reference-don't-store), and
-	// ConvertToPluginFormat only strips metadata — it does not read the source.
-	// Resolving here (reading the source secret live) uses the same shared
-	// routine as the discovery List and apply paths, so a resolve-read
-	// authenticates instead of calling the plugin with an unresolved credential.
-	targetConfig, err := resource_update.ResolveOpaqueTargetConfig(r, loadResourceResult.Target)
-	if err != nil {
-		r.Log().Error("Failed to resolve target config for resolve-read resourceURI=%v: %v", resourceURI, err)
-		_ = r.Send(from, messages.FailedToResolveValue{ResourceURI: resourceURI, Reason: err.Error()})
-		return
-	}
-
-	// Execute the first attempt inline (no delay).
+	// Execute the first attempt inline (no delay). Both the source target's
+	// config resolution and the Read happen in continueResolve, so a recoverable
+	// failure in EITHER reschedules via SendAfter on one non-blocking budget.
 	retry := resolveRetry{
 		From:        from,
 		ResourceURI: resourceURI,
 		Attempt:     1,
 		loadResult:  loadResourceResult,
-		config:      targetConfig,
 	}
 	r.continueResolve(retry)
 }
 
-// continueResolve executes a single read attempt and either resolves, schedules
-// a retry via SendAfter, or sends a failure back to the original requester.
+// strategy is the retry strategy for a resolve read: exponential-for-throttling,
+// and the single source of truth the caller's watchdog budget is derived from.
+// It uses the command-global RetryConfig the actor reads at startup. Honoring a
+// per-plugin retry override for the source namespace is a known gap: it would
+// need the cache to query the coordinator for that namespace's config, plus a
+// per-namespace watchdog budget (a resource can reference secrets across several
+// plugins), so it is deferred.
+func (r *ResolveCache) strategy() resource.RetryStrategy {
+	return resource.RetryStrategy{MaxRetries: r.maxRetries, BaseDelay: r.retryDelay}
+}
+
+// scheduleRetry reschedules a resolve attempt without blocking the actor loop.
+func (r *ResolveCache) scheduleRetry(retry resolveRetry, after time.Duration) {
+	if _, err := r.SendAfter(r.PID(), retry, after); err != nil {
+		r.Log().Error("Failed to schedule resolve retry: %v", err)
+		_ = r.Send(retry.From, messages.FailedToResolveValue{ResourceURI: retry.ResourceURI})
+	}
+}
+
+// continueResolve resolves the source target's config (single-shot) and executes
+// a read attempt; on a recoverable failure in either it schedules a retry via
+// SendAfter (non-blocking), otherwise it resolves or reports failure.
 func (r *ResolveCache) continueResolve(retry resolveRetry) {
 	resourceURI := retry.ResourceURI
 	from := retry.From
+
+	// Resolve the source target's opaque config (single-shot) before the Read.
+	// When the target authenticates from a secret, its persisted config carries a
+	// bare opaque $ref with no $value at rest (reference-don't-store), and
+	// ConvertToPluginFormat only strips metadata — it does not read the source. A
+	// recoverable failure here reschedules the whole resolve via SendAfter, on the
+	// same non-blocking budget as the Read below.
+	if retry.config == nil {
+		targetConfig, err := resource_update.ResolveOpaqueTargetConfig(r, retry.loadResult.Target)
+		if err != nil {
+			var rec *resource_update.RecoverableResolveError
+			if errors.As(err, &rec) {
+				if dec := r.strategy().Decide(retry.Attempt, rec.Code); dec.Retry {
+					r.Log().Info("ResolveCache: recoverable target-config resolve error, retrying errorCode=%s resourceURI=%v attempt=%d",
+						rec.Code, resourceURI, retry.Attempt)
+					retry.Attempt++
+					r.scheduleRetry(retry, dec.After)
+					return
+				}
+			}
+			r.Log().Error("Failed to resolve target config for resolve-read resourceURI=%v: %v", resourceURI, err)
+			_ = r.Send(from, messages.FailedToResolveValue{ResourceURI: resourceURI, Reason: err.Error()})
+			return
+		}
+		retry.config = targetConfig
+	}
 
 	progress, err := r.readViaPlugin(retry)
 	if err != nil {
@@ -174,16 +208,14 @@ func (r *ResolveCache) continueResolve(retry resolveRetry) {
 		return
 	}
 
-	// Retry on recoverable errors via SendAfter (non-blocking).
+	// Retry on recoverable read errors via SendAfter (non-blocking), sharing the
+	// same attempt budget as the config resolution above.
 	if progress.OperationStatus == resource.OperationStatusFailure && resource.IsRecoverable(progress.ErrorCode) {
-		if retry.Attempt < r.maxRetries {
+		if dec := r.strategy().Decide(retry.Attempt, progress.ErrorCode); dec.Retry {
 			r.Log().Info("ResolveCache: recoverable error, retrying errorCode=%s resourceURI=%v attempt=%d maxRetries=%d",
 				progress.ErrorCode, resourceURI, retry.Attempt, r.maxRetries)
 			retry.Attempt++
-			if _, err := r.SendAfter(r.PID(), retry, r.retryDelay); err != nil {
-				r.Log().Error("Failed to schedule resolve retry: %v", err)
-				_ = r.Send(from, messages.FailedToResolveValue{ResourceURI: resourceURI})
-			}
+			r.scheduleRetry(retry, dec.After)
 			return
 		}
 		r.Log().Error("ResolveCache: exhausted retries errorCode=%s resourceURI=%v attempts=%d",

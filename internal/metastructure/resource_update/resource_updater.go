@@ -493,13 +493,16 @@ func resolve(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Ato
 
 	// The watchdog must outlive ResolveCache's worst-case wall time per property:
 	// each plugin Call takes up to PluginOperationCallTimeout, retried up to
-	// MaxRetries times with RetryDelay spacing for recoverable errors. Derive
-	// the envelope from the same RetryConfig that ResolveCache itself reads, so
-	// the two cannot drift if the policy is tuned.
+	// MaxRetries times, with EXPONENTIAL backoff spacing for throttling. Derive
+	// the backoff envelope from the same RetryStrategy the ResolveCache schedules
+	// with (its MaxTotalDelay), so a tuned policy cannot cause the two to drift —
+	// a flat MaxRetries*RetryDelay estimate would under-cover the exponential
+	// backoff and trip this watchdog mid-retry.
 	perAttempt := time.Duration(PluginOperationCallTimeout) * time.Second
 	const resolveCacheMargin = 30 * time.Second
+	resolveStrategy := resource.RetryStrategy{MaxRetries: data.retryConfig.MaxRetries, BaseDelay: data.retryConfig.RetryDelay}
 	resolveCacheTimeout := time.Duration(data.retryConfig.MaxRetries)*perAttempt +
-		time.Duration(data.retryConfig.MaxRetries-1)*data.retryConfig.RetryDelay +
+		resolveStrategy.MaxTotalDelay() +
 		resolveCacheMargin
 	timeout := statemachine.StateTimeout{
 		Duration: resolveCacheTimeout,

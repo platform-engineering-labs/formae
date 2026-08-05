@@ -14,6 +14,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
+	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
 
 const (
@@ -139,6 +140,28 @@ func handleStartTargetUpdate(from gen.PID, state gen.Atom, data TargetUpdaterDat
 }
 
 // resolveTargetConfig pops the next resolvable and sends a ResolveValue request.
+// resolveWatchdogTimeout sizes the ResolveCache watchdog to outlive the cache's
+// worst-case retry wall time: MaxRetries reads (each up to the plugin call
+// timeout) plus the exponential backoff budget. It derives the backoff envelope
+// from the same RetryConfig the ResolveCache reads, so a tuned policy cannot
+// cause the two to drift and trip this watchdog mid-retry.
+func resolveWatchdogTimeout(proc gen.Process) time.Duration {
+	// perAttempt mirrors resource_update.PluginOperationCallTimeout (60s). It is
+	// duplicated as a local const because target_update must not import
+	// resource_update (which imports target_update).
+	const perAttempt = 60 * time.Second
+	const margin = 30 * time.Second
+
+	env, _ := proc.Env("RetryConfig")
+	cfg, ok := env.(pkgmodel.RetryConfig)
+	if !ok {
+		// No environment (unit harness): a fixed, generous default.
+		return perAttempt + margin
+	}
+	strategy := resource.RetryStrategy{MaxRetries: cfg.MaxRetries, BaseDelay: cfg.RetryDelay}
+	return time.Duration(cfg.MaxRetries)*perAttempt + strategy.MaxTotalDelay() + margin
+}
+
 func resolveTargetConfig(state gen.Atom, data TargetUpdaterData, proc gen.Process) (gen.Atom, TargetUpdaterData, []statemachine.Action, error) {
 	if len(data.targetUpdate.RemainingResolvables) == 0 {
 		// A Resolve op resolves config in-memory only: the target row is never
@@ -168,7 +191,7 @@ func resolveTargetConfig(state gen.Atom, data TargetUpdaterData, proc gen.Proces
 	}
 
 	timeout := statemachine.StateTimeout{
-		Duration: 30 * time.Second,
+		Duration: resolveWatchdogTimeout(proc),
 		Message:  ResolveCacheMissingInAction{},
 	}
 

@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
-	"time"
 
 	"ergo.services/ergo/gen"
 	"github.com/tidwall/gjson"
@@ -22,9 +21,17 @@ import (
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
 
-// MaxTargetConfigResolveAttempts is the number of plugin Read attempts made per
-// opaque reference before giving up.
-const MaxTargetConfigResolveAttempts = 3
+// RecoverableResolveError marks a target-config resolution failure whose
+// underlying plugin Read returned a recoverable error code. Resolution is
+// single-shot and never blocks; a caller running on an actor loop should detect
+// this (errors.As) and reschedule the resolve non-blockingly rather than fail.
+type RecoverableResolveError struct {
+	Code resource.OperationErrorCode
+}
+
+func (e *RecoverableResolveError) Error() string {
+	return fmt.Sprintf("recoverable resolve read error: %s", e.Code)
+}
 
 // ResolveOpaqueTargetConfig returns an ephemeral copy of target.Config with
 // every opaque $ref replaced by its live plaintext value, ready to hand to a
@@ -94,15 +101,17 @@ func ResolveOpaqueTargetConfig(proc gen.Process, target pkgmodel.Target) (json.R
 			srcCfg = cleanCfg
 		}
 
-		progress, err := readSourceWithRetry(proc, loadResult.Resource, srcCfg)
+		progress, err := readSource(proc, loadResult.Resource, srcCfg)
 		if err != nil {
 			proc.Log().Error(
 				"failed to read resource for opaque ref resolution uri=%s target=%s: %v",
 				uri, target.Label, err,
 			)
+			// Wrap with %w so a caller on an actor loop can detect a
+			// RecoverableResolveError and reschedule non-blockingly.
 			return nil, fmt.Errorf(
-				"failed to resolve opaque reference %q for target %q: read error",
-				uri, target.Label,
+				"failed to resolve opaque reference %q for target %q: %w",
+				uri, target.Label, err,
 			)
 		}
 
@@ -151,41 +160,20 @@ func ResolveOpaqueTargetConfig(proc gen.Process, target pkgmodel.Target) (json.R
 	return plain, nil
 }
 
-// readSourceWithRetry calls ReadResourceViaPlugin up to
-// MaxTargetConfigResolveAttempts times, retrying on recoverable failures.
-func readSourceWithRetry(proc gen.Process, res pkgmodel.Resource, cfg json.RawMessage) (*plugin.TrackedProgress, error) {
-	for attempt := 1; attempt <= MaxTargetConfigResolveAttempts; attempt++ {
-		progress, err := ReadResourceViaPlugin(proc, res, cfg)
-		if err != nil {
-			return nil, err
-		}
-
-		if progress.OperationStatus == resource.OperationStatusFailure &&
-			resource.IsRecoverable(progress.ErrorCode) {
-			if attempt < MaxTargetConfigResolveAttempts {
-				proc.Log().Info(
-					"readSourceWithRetry: recoverable error, retrying errorCode=%s attempt=%d/%d",
-					progress.ErrorCode, attempt, MaxTargetConfigResolveAttempts,
-				)
-				time.Sleep(75 * time.Millisecond)
-				continue
-			}
-			proc.Log().Error(
-				"readSourceWithRetry: exhausted attempts errorCode=%s attempts=%d",
-				progress.ErrorCode, attempt,
-			)
-			return nil, fmt.Errorf(
-				"read failed after %d attempts: recoverable error %s",
-				attempt, progress.ErrorCode,
-			)
-		}
-
-		if progress.OperationStatus == resource.OperationStatusFailure {
-			return nil, fmt.Errorf("read failed: non-recoverable error %s", progress.ErrorCode)
-		}
-
-		return progress, nil
+// readSource performs a SINGLE plugin Read of a credential source resource. It
+// never retries and never blocks: a recoverable failure is surfaced as a
+// *RecoverableResolveError so the actor-loop caller can reschedule the whole
+// resolve via SendAfter. A non-recoverable failure is a plain terminal error.
+func readSource(proc gen.Process, res pkgmodel.Resource, cfg json.RawMessage) (*plugin.TrackedProgress, error) {
+	progress, err := ReadResourceViaPlugin(proc, res, cfg)
+	if err != nil {
+		return nil, err
 	}
-
-	return nil, fmt.Errorf("read failed: exhausted %d attempts", MaxTargetConfigResolveAttempts)
+	if progress.OperationStatus == resource.OperationStatusFailure {
+		if resource.IsRecoverable(progress.ErrorCode) {
+			return nil, &RecoverableResolveError{Code: progress.ErrorCode}
+		}
+		return nil, fmt.Errorf("read failed: non-recoverable error %s", progress.ErrorCode)
+	}
+	return progress, nil
 }

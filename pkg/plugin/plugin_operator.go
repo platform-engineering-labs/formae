@@ -735,27 +735,6 @@ func resume(from gen.PID, state gen.Atom, data PluginUpdateData, operation Resum
 	return handlePluginResult(data, operation.Request, proc, result.ProgressResult)
 }
 
-// calculateExponentialBackoff returns a delay that doubles with each attempt.
-// For throttling errors, this prevents the "thundering herd" problem where
-// all throttled operations retry simultaneously after a fixed delay.
-// Formula: baseDelay * 2^(attempt-1), capped at 30 seconds.
-func calculateExponentialBackoff(attempt int, baseDelay time.Duration) time.Duration {
-	const maxBackoff = 30 * time.Second
-
-	if attempt <= 1 {
-		return baseDelay
-	}
-
-	// Calculate 2^(attempt-1)
-	multiplier := 1 << (attempt - 1) // 1, 2, 4, 8, ...
-	backoff := baseDelay * time.Duration(multiplier)
-
-	if backoff > maxBackoff {
-		return maxBackoff
-	}
-	return backoff
-}
-
 // isThrottlingError checks if an error is a throttling/rate limit error.
 // This checks for common throttling indicators in error messages since
 // the AWS SDK wraps errors when retries are exhausted.
@@ -800,7 +779,7 @@ func handlePluginResult(data PluginUpdateData, operation StatusCheck, proc gen.P
 			// Use exponential backoff for throttling errors to avoid thundering herd
 			retryDelay := data.config.RetryDelay
 			if progress.ErrorCode == resource.OperationErrorCodeThrottling {
-				retryDelay = calculateExponentialBackoff(data.attempts, data.config.RetryDelay)
+				retryDelay = resource.RetryStrategy{BaseDelay: data.config.RetryDelay}.Backoff(data.attempts)
 				proc.Log().Debug("PluginOperator: %T throttled, backing off for %v before retry (%d/%d)", operation, retryDelay, data.attempts, maxAttempts)
 			} else {
 				proc.Log().Info("PluginOperator: %T operation failed with recoverable error code %s. Status message: %s. Retrying (%d/%d)", operation, progress.ErrorCode, progress.StatusMessage, data.attempts, maxAttempts)
@@ -886,7 +865,7 @@ func list(from gen.PID, state gen.Atom, data PluginUpdateData, operation ListRes
 
 			// Check if this is a throttling error worth retrying
 			if isThrottlingError(err) && attempt < maxListAttempts {
-				backoff := calculateExponentialBackoff(attempt, data.config.RetryDelay)
+				backoff := resource.RetryStrategy{BaseDelay: data.config.RetryDelay}.Backoff(attempt)
 				proc.Log().Debug("PluginOperator: list %s throttled, backing off for %v before retry (%d/%d)",
 					operation.ResourceType, backoff, attempt, maxListAttempts)
 				time.Sleep(backoff)
