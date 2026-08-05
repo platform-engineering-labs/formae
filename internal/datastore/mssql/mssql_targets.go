@@ -101,6 +101,10 @@ func (d *DatastoreMSSQL) CreateTarget(target *pkgmodel.Target) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	cfg, err = datastore.StripOpaqueRefValues(cfg)
+	if err != nil {
+		return "", fmt.Errorf("failed to strip opaque ref values from target config: %w", err)
+	}
 
 	configSchemaJSON, err := marshalConfigSchema(target)
 	if err != nil {
@@ -152,6 +156,10 @@ func (d *DatastoreMSSQL) UpdateTarget(target *pkgmodel.Target) (string, error) {
 	cfg, err := json.Marshal(target.Config)
 	if err != nil {
 		return "", err
+	}
+	cfg, err = datastore.StripOpaqueRefValues(cfg)
+	if err != nil {
+		return "", fmt.Errorf("failed to strip opaque ref values from target config: %w", err)
 	}
 
 	configSchemaJSON, err := marshalConfigSchema(target)

@@ -17,7 +17,10 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/datastore"
 	"github.com/platform-engineering-labs/formae/internal/datastore/dstest"
 	dssqlite "github.com/platform-engineering-labs/formae/internal/datastore/sqlite"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/stretchr/testify/assert"
@@ -335,4 +338,185 @@ func TestStoreDeleteStore(t *testing.T) {
 		assert.Equal(t, ksuidB, loaded.Ksuid, "loaded resource should have KSUID-B")
 		assert.Equal(t, nativeID, loaded.NativeID)
 	}
+}
+
+// TestCreateTarget_StripsOpaqueRefValue verifies that CreateTarget does not
+// persist a $value from an opaque $ref envelope in targets.config. The
+// stored config must retain $ref and $visibility but must not contain $value
+// or the resolved secret.
+func TestCreateTarget_StripsOpaqueRefValue(t *testing.T) {
+	cfg := &pkgmodel.DatastoreConfig{
+		DatastoreType: pkgmodel.SqliteDatastore,
+		Sqlite:        pkgmodel.SqliteConfig{FilePath: ":memory:"},
+	}
+	ds, err := dssqlite.NewDatastoreSQLite(context.Background(), cfg, "test")
+	require.NoError(t, err)
+	d, _ := ds.(dssqlite.DatastoreSQLite)
+	defer d.CleanUp() //nolint:errcheck
+
+	opaqueConfig := json.RawMessage(`{"auth":{"$ref":"formae://x","$visibility":"Opaque","$value":"super-secret"}}`)
+	_, err = ds.CreateTarget(&pkgmodel.Target{
+		Label:     "opaque-create",
+		Namespace: "AWS",
+		Config:    opaqueConfig,
+	})
+	require.NoError(t, err)
+
+	// Read the raw stored bytes directly from the DB — bypassing any unmarshalling.
+	var raw string
+	err = d.Conn().QueryRow(
+		`SELECT config FROM targets WHERE label = 'opaque-create' ORDER BY version DESC LIMIT 1`,
+	).Scan(&raw)
+	require.NoError(t, err)
+
+	assert.Contains(t, raw, `$ref`, "stored config must preserve $ref")
+	assert.Contains(t, raw, `$visibility`, "stored config must preserve $visibility")
+	assert.NotContains(t, raw, `$value`, "stored config must not contain $value")
+	assert.NotContains(t, raw, "super-secret", "stored config must not contain the resolved secret")
+}
+
+// TestUpdateTarget_StripsOpaqueRefValue verifies that UpdateTarget does not
+// persist a $value from an opaque $ref envelope in targets.config.
+func TestUpdateTarget_StripsOpaqueRefValue(t *testing.T) {
+	cfg := &pkgmodel.DatastoreConfig{
+		DatastoreType: pkgmodel.SqliteDatastore,
+		Sqlite:        pkgmodel.SqliteConfig{FilePath: ":memory:"},
+	}
+	ds, err := dssqlite.NewDatastoreSQLite(context.Background(), cfg, "test")
+	require.NoError(t, err)
+	d, _ := ds.(dssqlite.DatastoreSQLite)
+	defer d.CleanUp() //nolint:errcheck
+
+	// Seed with a clean config first.
+	_, err = ds.CreateTarget(&pkgmodel.Target{
+		Label:     "opaque-update",
+		Namespace: "AWS",
+		Config:    json.RawMessage(`{"Region":"us-east-1"}`),
+	})
+	require.NoError(t, err)
+
+	loaded, err := ds.LoadTarget("opaque-update")
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+
+	// Update with a config that carries an opaque $ref $value.
+	loaded.Config = json.RawMessage(`{"auth":{"$ref":"formae://x","$visibility":"Opaque","$value":"super-secret"}}`)
+	_, err = ds.UpdateTarget(loaded)
+	require.NoError(t, err)
+
+	var raw string
+	err = d.Conn().QueryRow(
+		`SELECT config FROM targets WHERE label = 'opaque-update' ORDER BY version DESC LIMIT 1`,
+	).Scan(&raw)
+	require.NoError(t, err)
+
+	assert.Contains(t, raw, `$ref`, "stored config must preserve $ref")
+	assert.NotContains(t, raw, `$value`, "stored config must not contain $value")
+	assert.NotContains(t, raw, "super-secret", "stored config must not contain the resolved secret")
+}
+
+// TestStoreFormaCommand_StripsOpaqueRefValueFromTargetUpdates verifies that
+// StoreFormaCommand does not persist $value from an opaque $ref envelope in
+// forma_commands.target_updates. The stored blob must retain $ref but must not
+// contain $value or the resolved secret.
+func TestStoreFormaCommand_StripsOpaqueRefValueFromTargetUpdates(t *testing.T) {
+	cfg := &pkgmodel.DatastoreConfig{
+		DatastoreType: pkgmodel.SqliteDatastore,
+		Sqlite:        pkgmodel.SqliteConfig{FilePath: ":memory:"},
+	}
+	ds, err := dssqlite.NewDatastoreSQLite(context.Background(), cfg, "test")
+	require.NoError(t, err)
+	d, _ := ds.(dssqlite.DatastoreSQLite)
+	defer d.CleanUp() //nolint:errcheck
+
+	opaqueConfig := json.RawMessage(`{"auth":{"$ref":"formae://x","$visibility":"Opaque","$value":"super-secret"}}`)
+
+	commandID := util.NewID()
+	fc := &forma_command.FormaCommand{
+		ID:      commandID,
+		Command: pkgmodel.CommandApply,
+		State:   forma_command.CommandStateNotStarted,
+		Config:  config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
+		TargetUpdates: []target_update.TargetUpdate{
+			{
+				Target: pkgmodel.Target{
+					Label:     "opaque-target",
+					Namespace: "AWS",
+					Config:    opaqueConfig,
+				},
+				Operation: target_update.TargetOperationCreate,
+				State:     target_update.TargetUpdateStateNotStarted,
+			},
+		},
+	}
+
+	require.NoError(t, ds.StoreFormaCommand(fc, commandID))
+
+	// Read the raw stored bytes directly from the DB — bypassing any unmarshalling.
+	var raw string
+	err = d.Conn().QueryRow(
+		`SELECT target_updates FROM forma_commands WHERE command_id = ?`, commandID,
+	).Scan(&raw)
+	require.NoError(t, err)
+
+	assert.Contains(t, raw, `$ref`, "stored target_updates must preserve $ref")
+	assert.NotContains(t, raw, `$value`, "stored target_updates must not contain $value")
+	assert.NotContains(t, raw, "super-secret", "stored target_updates must not contain the resolved secret")
+}
+
+// TestBulkStoreResourceUpdates_StripsOpaqueRefValueFromExistingTarget verifies
+// that BulkStoreResourceUpdates does not persist a $value from an opaque $ref
+// envelope in resource_updates.existing_target. A legacy target row written
+// before stripping was introduced may still carry a plaintext opaque $ref
+// $value; re-persisting it unstripped would re-introduce the secret.
+func TestBulkStoreResourceUpdates_StripsOpaqueRefValueFromExistingTarget(t *testing.T) {
+	cfg := &pkgmodel.DatastoreConfig{
+		DatastoreType: pkgmodel.SqliteDatastore,
+		Sqlite:        pkgmodel.SqliteConfig{FilePath: ":memory:"},
+	}
+	ds, err := dssqlite.NewDatastoreSQLite(context.Background(), cfg, "test")
+	require.NoError(t, err)
+	d, _ := ds.(dssqlite.DatastoreSQLite)
+	defer d.CleanUp() //nolint:errcheck
+
+	opaqueConfig := json.RawMessage(`{"auth":{"$ref":"formae://x","$visibility":"Opaque","$value":"super-secret"}}`)
+
+	commandID := util.NewID()
+	ksuid := util.NewID()
+
+	ru := resource_update.ResourceUpdate{
+		DesiredState: pkgmodel.Resource{
+			Ksuid:  ksuid,
+			Stack:  "default",
+			Type:   "AWS::S3::Bucket",
+			Label:  "my-bucket",
+			Target: "tgt",
+		},
+		ResourceTarget: pkgmodel.Target{
+			Label:     "tgt",
+			Namespace: "AWS",
+			Config:    json.RawMessage(`{}`),
+		},
+		ExistingTarget: pkgmodel.Target{
+			Label:     "tgt",
+			Namespace: "AWS",
+			Config:    opaqueConfig,
+		},
+		Operation: resource_update.OperationCreate,
+		State:     resource_update.ResourceUpdateStateNotStarted,
+	}
+
+	require.NoError(t, ds.BulkStoreResourceUpdates(commandID, []resource_update.ResourceUpdate{ru}))
+
+	// Read the raw stored bytes directly from the DB — bypassing any unmarshalling.
+	var raw string
+	err = d.Conn().QueryRow(
+		`SELECT existing_target FROM resource_updates WHERE command_id = ?`, commandID,
+	).Scan(&raw)
+	require.NoError(t, err)
+
+	assert.Contains(t, raw, `$ref`, "stored existing_target must preserve $ref")
+	assert.Contains(t, raw, `$visibility`, "stored existing_target must preserve $visibility")
+	assert.NotContains(t, raw, `$value`, "stored existing_target must not contain $value")
+	assert.NotContains(t, raw, "super-secret", "stored existing_target must not contain the resolved secret")
 }
