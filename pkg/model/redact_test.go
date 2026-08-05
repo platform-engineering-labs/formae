@@ -8,26 +8,19 @@ package model
 
 import (
 	"encoding/json"
-	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRedactOpaqueForLog_RedactsOpaqueValue(t *testing.T) {
 	in := map[string]any{"$visibility": "Opaque", "$value": "super-secret"}
 	out := RedactOpaqueForLog(in).(map[string]any)
 
-	if out["$value"] != RedactedForLog {
-		t.Fatalf("expected $value = %q, got %v", RedactedForLog, out["$value"])
-	}
-	if in["$value"] != "super-secret" {
-		t.Fatalf("input was mutated: $value = %v", in["$value"])
-	}
-
-	// Positive assertion: output $value must equal RedactedForLog exactly.
-	if got, want := out["$value"], any(RedactedForLog); got != want {
-		t.Fatalf("expected $value == %q, got %v", want, got)
-	}
+	assert.Equal(t, RedactedForLog, out["$value"])
+	assert.Equal(t, "super-secret", in["$value"], "input must not be mutated")
 }
 
 func TestRedactOpaqueForLog_RedactsOpaqueRefEnvelope(t *testing.T) {
@@ -38,12 +31,8 @@ func TestRedactOpaqueForLog_RedactsOpaqueRefEnvelope(t *testing.T) {
 	}
 	out := RedactOpaqueForLog(in).(map[string]any)
 
-	if out["$value"] != RedactedForLog {
-		t.Fatalf("expected $value redacted, got %v", out["$value"])
-	}
-	if out["$ref"] != "formae://res" {
-		t.Fatalf("expected $ref preserved, got %v", out["$ref"])
-	}
+	assert.Equal(t, RedactedForLog, out["$value"])
+	assert.Equal(t, "formae://res", out["$ref"], "$ref must be preserved")
 }
 
 func TestRedactOpaqueForLog_RedactsNestedAndInSlice(t *testing.T) {
@@ -58,32 +47,22 @@ func TestRedactOpaqueForLog_RedactsNestedAndInSlice(t *testing.T) {
 	out := RedactOpaqueForLog(in).(map[string]any)
 
 	auth := out["config"].(map[string]any)["auth"].(map[string]any)
-	if auth["$value"] != RedactedForLog {
-		t.Fatalf("nested opaque value not redacted: %v", auth["$value"])
-	}
+	assert.Equal(t, RedactedForLog, auth["$value"], "nested opaque value must be redacted")
 	elem := out["list"].([]any)[0].(map[string]any)
-	if elem["$value"] != RedactedForLog {
-		t.Fatalf("opaque value in slice not redacted: %v", elem["$value"])
-	}
+	assert.Equal(t, RedactedForLog, elem["$value"], "opaque value in slice must be redacted")
 }
 
 func TestRedactOpaqueForLog_PreservesClearValue(t *testing.T) {
 	in := map[string]any{"$visibility": "Clear", "$value": "public"}
 	out := RedactOpaqueForLog(in).(map[string]any)
 
-	if out["$value"] != "public" {
-		t.Fatalf("clear value must be preserved, got %v", out["$value"])
-	}
+	assert.Equal(t, "public", out["$value"], "clear value must be preserved")
 }
 
 func TestRedactOpaqueForLog_PassesThroughScalars(t *testing.T) {
-	if got := RedactOpaqueForLog("plain"); got != "plain" {
-		t.Fatalf("scalar changed: %v", got)
-	}
+	assert.Equal(t, "plain", RedactOpaqueForLog("plain"))
 	nested := []any{"a", map[string]any{"k": "v"}}
-	if got := RedactOpaqueForLog(nested); !reflect.DeepEqual(got, nested) {
-		t.Fatalf("non-opaque structure changed: %v", got)
-	}
+	assert.Equal(t, nested, RedactOpaqueForLog(nested), "non-opaque structure must be unchanged")
 }
 
 func TestRedactOpaqueForLog_RedactsOpaqueInsideJSONRawMessage(t *testing.T) {
@@ -95,36 +74,22 @@ func TestRedactOpaqueForLog_RedactsOpaqueInsideJSONRawMessage(t *testing.T) {
 
 	// The payload must have been decoded and recursed into, producing a map.
 	payload, ok := out["payload"].(map[string]any)
-	if !ok {
-		t.Fatalf("expected payload to be map[string]any after redaction, got %T", out["payload"])
-	}
+	require.Truef(t, ok, "expected payload to be map[string]any after redaction, got %T", out["payload"])
 	auth, ok := payload["auth"].(map[string]any)
-	if !ok {
-		t.Fatalf("expected auth to be map[string]any, got %T", payload["auth"])
-	}
+	require.Truef(t, ok, "expected auth to be map[string]any, got %T", payload["auth"])
 
-	// Positive assertion: $value must equal RedactedForLog.
-	if got := auth["$value"]; got != RedactedForLog {
-		t.Fatalf("expected $value = %q, got %v", RedactedForLog, got)
-	}
+	assert.Equal(t, RedactedForLog, auth["$value"])
 
-	// Confirm plaintext does not appear when the result is serialized.
-	// Use a bytes.Buffer + json.Encoder with HTML escaping disabled so we can
-	// also check for the literal RedactedForLog string.
+	// Confirm plaintext does not appear when the result is serialized. Disable
+	// HTML escaping so we can also check for the literal RedactedForLog string.
 	var buf strings.Builder
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
-	if err := enc.Encode(out); err != nil {
-		t.Fatalf("failed to encode result: %v", err)
-	}
+	require.NoError(t, enc.Encode(out))
 	result := buf.String()
 
-	if strings.Contains(result, "super-secret") {
-		t.Fatalf("plaintext secret leaked into redacted output: %s", result)
-	}
-	if !strings.Contains(result, RedactedForLog) {
-		t.Fatalf("expected %q in redacted output, got: %s", RedactedForLog, result)
-	}
+	assert.NotContains(t, result, "super-secret", "plaintext secret must not leak into redacted output")
+	assert.Contains(t, result, RedactedForLog)
 }
 
 func TestRedactOpaqueForLog_UnparseableByteSlicePassedThrough(t *testing.T) {
@@ -133,10 +98,6 @@ func TestRedactOpaqueForLog_UnparseableByteSlicePassedThrough(t *testing.T) {
 	out := RedactOpaqueForLog(in).(map[string]any)
 
 	got, ok := out["raw"].([]byte)
-	if !ok {
-		t.Fatalf("expected []byte, got %T", out["raw"])
-	}
-	if !reflect.DeepEqual(got, bad) {
-		t.Fatalf("unparseable []byte was modified: %v", got)
-	}
+	require.Truef(t, ok, "expected []byte, got %T", out["raw"])
+	assert.Equal(t, bad, got, "unparseable []byte must not be modified")
 }

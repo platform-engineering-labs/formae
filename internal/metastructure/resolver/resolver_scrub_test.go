@@ -11,6 +11,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/platform-engineering-labs/formae/internal/logging"
 )
 
@@ -30,20 +33,15 @@ func TestMarshalWithLogging_DoesNotLogOpaquePlaintextOnError(t *testing.T) {
 		"unmarshalable": make(chan int),
 	}
 
-	if _, err := pr.marshalWithLogging(value, "reference resolution", "config.auth"); err == nil {
-		t.Fatal("expected a marshal error to exercise the logging branch")
-	}
+	_, err := pr.marshalWithLogging(value, "reference resolution", "config.auth")
+	require.Error(t, err, "expected a marshal error to exercise the logging branch")
 
 	found := false
 	for _, entry := range capture.GetEntries() {
-		if strings.Contains(entry, "super-secret") {
-			t.Fatalf("plaintext secret leaked into a log entry: %q", entry)
-		}
+		assert.NotContains(t, entry, "super-secret", "plaintext secret leaked into a log entry")
 		if strings.Contains(entry, "<redacted>") {
 			found = true
 		}
 	}
-	if !found {
-		t.Fatalf("expected at least one log entry to contain %q, but none did", "<redacted>")
-	}
+	assert.True(t, found, "expected at least one log entry to contain \"<redacted>\"")
 }
