@@ -5,10 +5,42 @@
 package api
 
 import (
+	"bytes"
+	"encoding/json"
+	"io"
 	"testing"
 
+	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+// TestParseSubmitCommandErrorResponse_ResourceHasDependents asserts the client
+// decodes a 409 ResourceHasDependents body into a typed
+// FormaResourceHasDependentsError (so the CLI renders it) rather than falling
+// through to "unknown error type".
+func TestParseSubmitCommandErrorResponse_ResourceHasDependents(t *testing.T) {
+	body, err := json.Marshal(apimodel.ErrorResponse[apimodel.FormaResourceHasDependentsError]{
+		ErrorType: apimodel.ResourceHasDependents,
+		Data: apimodel.FormaResourceHasDependentsError{
+			Dependents: []apimodel.ResourceDependent{
+				{ResourceLabel: "child-subnet", ResourceType: "FakeAWS::EC2::Subnet", Stack: "consumer-stack", CascadeSource: "parent-vpc"},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	c := &Client{}
+	_, perr := c.parseSubmitCommandErrorResponse(io.NopCloser(bytes.NewReader(body)))
+	require.Error(t, perr)
+
+	var got *apimodel.ErrorResponse[apimodel.FormaResourceHasDependentsError]
+	require.ErrorAs(t, perr, &got, "must decode into a typed FormaResourceHasDependentsError")
+	require.Len(t, got.Data.Dependents, 1)
+	assert.Equal(t, "child-subnet", got.Data.Dependents[0].ResourceLabel)
+	assert.Equal(t, "consumer-stack", got.Data.Dependents[0].Stack)
+	assert.Equal(t, "parent-vpc", got.Data.Dependents[0].CascadeSource)
+}
 
 func TestFormatEndpointStandardPort(t *testing.T) {
 	want := "http://localhost:49684"

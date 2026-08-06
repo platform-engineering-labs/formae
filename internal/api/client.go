@@ -331,6 +331,13 @@ func (c *Client) parseSubmitCommandErrorResponse(body io.ReadCloser) (*apimodel.
 		}
 		return nil, &errResp
 
+	case apimodel.ResourceHasDependents:
+		var errResp apimodel.ErrorResponse[apimodel.FormaResourceHasDependentsError]
+		if err := json.Unmarshal(bodyBytes, &errResp); err != nil {
+			return nil, fmt.Errorf("failed to parse ResourceHasDependents error: %w", err)
+		}
+		return nil, &errResp
+
 	case apimodel.RequiredFieldMissingOnCreate:
 		var errResp apimodel.ErrorResponse[apimodel.RequiredFieldMissingOnCreateError]
 		if err := json.Unmarshal(bodyBytes, &errResp); err != nil {
