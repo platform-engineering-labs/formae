@@ -130,7 +130,7 @@ func (h *TestHarness) ResetAgentState(t *testing.T) {
 			h.dumpRawResourceRows(t, forma.Resources, seen)
 		}
 
-		resp, err := h.client.DestroyForma(forma, false, clientID)
+		resp, err := h.client.DestroyForma(forma, false, "abort", clientID)
 		if err != nil {
 			t.Logf("ResetAgentState: destroy returned: %v (attempt %d)", err, attempt+1)
 			time.Sleep(500 * time.Millisecond)
@@ -1228,7 +1228,7 @@ func (h *TestHarness) executeDestroyDefault(t *testing.T, op *Operation, model *
 		}
 	}
 
-	resp, err := h.client.DestroyForma(forma, false, clientID)
+	resp, err := h.client.DestroyForma(forma, false, "abort", clientID)
 	if err != nil {
 		if len(programmedSeqs) > 0 {
 			h.UnprogramResponses(t, programmedSeqs)
@@ -1280,7 +1280,7 @@ func (h *TestHarness) executeDestroyAbort(t *testing.T, op *Operation, model *St
 
 	if hasDependents {
 		// Simulate to check whether the agent would create cascade deletes.
-		simResp, err := h.client.DestroyForma(forma, true, clientID)
+		simResp, err := h.client.DestroyForma(forma, true, "abort", clientID)
 		if err != nil {
 			t.Logf("[op %d] Destroy (abort) stack=%s resources %v → simulate error: %v", op.SequenceNum, stackLabel, existingIDs, err)
 			return
@@ -1309,7 +1309,7 @@ func (h *TestHarness) executeDestroyAbort(t *testing.T, op *Operation, model *St
 		}
 	}
 
-	resp, err := h.client.DestroyForma(forma, false, clientID)
+	resp, err := h.client.DestroyForma(forma, false, "abort", clientID)
 	if err != nil {
 		if len(programmedSeqs) > 0 {
 			h.UnprogramResponses(t, programmedSeqs)
@@ -1361,7 +1361,7 @@ func (h *TestHarness) executeDestroyCascade(t *testing.T, op *Operation, model *
 		}
 	}
 
-	resp, err := h.client.DestroyForma(forma, false, clientID)
+	resp, err := h.client.DestroyForma(forma, false, "cascade", clientID)
 	if err != nil {
 		if len(programmedSeqs) > 0 {
 			h.UnprogramResponses(t, programmedSeqs)

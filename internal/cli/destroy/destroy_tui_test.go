@@ -594,3 +594,45 @@ func TestDestroy_TTY_Confirmed_EarlyDetach_PrintsAsyncNotice(t *testing.T) {
 	assert.Contains(t, out, "Still running asynchronously on the agent. Check its status with:")
 	assert.Contains(t, out, "formae status command --query='id:detached-cmd-2'")
 }
+
+// TestDestroy_Interactive_Cascades_ElevatesOnDependents asserts that when the
+// interactive path's simulation shows cascade deletes and the user confirms via
+// the simview, the real destroy call receives OnDependentsCascade — not the
+// default abort. Without this elevation the server gate returns 409 on cascade
+// destroys even after an explicit confirmation.
+func TestDestroy_Interactive_Cascades_ElevatesOnDependents(t *testing.T) {
+	stubSeams(t)
+
+	isTerminal = func(w io.Writer) bool { return true }
+
+	var realOnDependents OnDependents
+	destroyFn = func(a *app.App, opts *DestroyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
+		if simulate {
+			return &apimodel.SubmitCommandResponse{Simulation: cascadeSimulation()}, nil, nil
+		}
+		realOnDependents = opts.OnDependents
+		return &apimodel.SubmitCommandResponse{CommandID: "elevated-cascade-cmd"}, nil, nil
+	}
+
+	launchSimView = func(th *theme.Theme, sim *apimodel.Simulation, opts simview.Options) (simview.Decision, error) {
+		return simview.DecisionConfirmed, nil
+	}
+
+	launchWatch = func(a *app.App, commandID string) (bool, error) { return true, nil }
+
+	a := newTestApp()
+	opts := &DestroyOptions{
+		OutputConsumer: printer.ConsumerHuman,
+		FormaFile:      "forma.pkl",
+		OnDependents:   OnDependentsAbort,
+		Yes:            false,
+	}
+
+	_ = captureStdout(t, func() {
+		err := runDestroyForHumans(a, opts)
+		require.NoError(t, err)
+	})
+
+	assert.Equal(t, OnDependentsCascade, realOnDependents,
+		"interactive confirm with cascades must pass OnDependentsCascade to the real destroy call")
+}

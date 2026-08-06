@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
 // SynthesizeResolveTargetUpdates builds synthetic Resolve target ops for targets
@@ -43,11 +44,43 @@ func SynthesizeResolveTargetUpdates(
 	existing []TargetUpdate,
 	ds TargetDatastore,
 ) ([]TargetUpdate, error) {
-	// Targets already covered by a real target update in this command must never be
-	// synthesized for — their update carries the desired (and re-resolved) config.
+	// A target is covered (needs no synthetic Resolve) only when an update already
+	// carries re-resolved config:
+	//   - Create/Update/Replace/Resolve carry freshly re-resolved config, so they cover.
+	//   - A plain Delete does NOT carry resolved config, yet resource ops tearing down
+	//     on that target still need the current secret value, so it stays uncovered.
+	//   - A cascade Delete tears down its config's $ref source in the same command. For
+	//     a plain cross-resource $ref that is fine (the delete works off the stored
+	//     snapshot / NativeID), so it stays covered. But when the cascade target carries
+	//     an OPAQUE $ref (a secret the plugin needs to authenticate teardown) it is
+	//     un-covered: the changeset orders the secret delete AFTER the target delete, so
+	//     the secret is still present at Resolve time, and only its opaque refs resolve.
 	covered := make(map[string]bool)
+	cascadeOpaqueUncovered := make(map[string]bool)
 	for i := range existing {
-		covered[existing[i].Target.Label] = true
+		switch existing[i].Operation {
+		case TargetOperationCreate,
+			TargetOperationUpdate,
+			TargetOperationReplace,
+			TargetOperationResolve:
+			covered[existing[i].Target.Label] = true
+		case TargetOperationDelete:
+			if existing[i].IsCascade {
+				var hasOpaque bool
+				if existing[i].ExistingTarget != nil && ds != nil {
+					opaqueURIs, err := resolver.ExtractSourceOpaqueResolvableURIsFromJSON(existing[i].ExistingTarget.Config, ds.LoadResourceById)
+					if err != nil {
+						return nil, fmt.Errorf("detect opaque refs for cascade target %q: %w", existing[i].Target.Label, err)
+					}
+					hasOpaque = len(opaqueURIs) > 0
+				}
+				if !hasOpaque {
+					covered[existing[i].Target.Label] = true
+				} else {
+					cascadeOpaqueUncovered[existing[i].Target.Label] = true
+				}
+			}
+		}
 	}
 
 	var candidates []string
@@ -71,11 +104,28 @@ func SynthesizeResolveTargetUpdates(
 		if persisted == nil {
 			continue
 		}
-		resolvables := resolver.ExtractResolvableURIsFromJSON(persisted.Config)
+		// For a cascade-opaque uncovered target, resolve ONLY its opaque $refs: its
+		// non-opaque cross-resource $refs point at sources being deleted in this same
+		// command, so reading a vanishing source would fail. On the delete path those
+		// non-opaque refs carry their stored value via NativeID and need no resolution.
+		var resolvables []pkgmodel.FormaeURI
+		opaqueOnly := cascadeOpaqueUncovered[label]
+		if opaqueOnly {
+			resolvables, err = resolver.ExtractSourceOpaqueResolvableURIsFromJSON(persisted.Config, ds.LoadResourceById)
+			if err != nil {
+				return nil, fmt.Errorf("extract opaque resolvables for cascade target %q: %w", label, err)
+			}
+		} else {
+			resolvables = resolver.ExtractResolvableURIsFromJSON(persisted.Config)
+		}
 		if len(resolvables) == 0 {
 			continue
 		}
-		synthetic = append(synthetic, NewResolveTargetUpdate(*persisted, resolvables))
+		resolveTU := NewResolveTargetUpdate(*persisted, resolvables)
+		// Preserve the opaque-only selection so execute-time revalidation keeps
+		// excluding vanishing non-opaque refs if the config advances under us.
+		resolveTU.OpaqueOnly = opaqueOnly
+		synthetic = append(synthetic, resolveTU)
 	}
 
 	if err := rejectTransitivelyOpaqueTargets(append(existing, synthetic...), sourceTargetByKsuid, ds); err != nil {

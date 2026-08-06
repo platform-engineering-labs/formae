@@ -46,6 +46,12 @@ type TargetUpdate struct {
 	RemainingResolvables []pkgmodel.FormaeURI `json:"RemainingResolvables,omitempty"`
 	IsCascade            bool                 `json:"IsCascade,omitempty"`     // True if this delete is triggered by cascade
 	CascadeSource        string               `json:"CascadeSource,omitempty"` // Label of resource that triggered the cascade
+	// OpaqueOnly marks a synthetic Resolve that must resolve only opaque
+	// (credential) refs. Its non-opaque cross-resource refs point at sources
+	// being deleted in the same command, so they must not be resolved. The flag
+	// is preserved so execute-time revalidation keeps the opaque-only selection
+	// when it rebuilds resolvables against a concurrently-advanced config.
+	OpaqueOnly bool `json:"OpaqueOnly,omitempty"`
 }
 
 // NewTargetUpdateForCascadeDelete creates a cascade delete TargetUpdate for a target

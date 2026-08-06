@@ -140,7 +140,7 @@ func (c *Client) ApplyForma(forma *pkgmodel.Forma, mode pkgmodel.FormaApplyMode,
 	}
 }
 
-func (c *Client) DestroyForma(forma *pkgmodel.Forma, simulate bool, clientID string) (*apimodel.SubmitCommandResponse, error) {
+func (c *Client) DestroyForma(forma *pkgmodel.Forma, simulate bool, onDependents string, clientID string) (*apimodel.SubmitCommandResponse, error) {
 	var status apimodel.SubmitCommandResponse
 
 	formaJSON, err := json.Marshal(&forma)
@@ -157,8 +157,9 @@ func (c *Client) DestroyForma(forma *pkgmodel.Forma, simulate bool, clientID str
 		SetContentType("multipart/form-data").
 		SetHeader("Client-ID", clientID).
 		SetFormData(map[string]string{
-			"command":  "destroy",
-			"simulate": fmt.Sprintf("%t", simulate),
+			"command":       "destroy",
+			"simulate":      fmt.Sprintf("%t", simulate),
+			"on-dependents": onDependents,
 		}).
 		SetFileReader(formFieldName, clientFileName, formaBuffer).
 		Post(c.endpoint + "/api/v1/commands")
@@ -179,16 +180,17 @@ func (c *Client) DestroyForma(forma *pkgmodel.Forma, simulate bool, clientID str
 	}
 }
 
-func (c *Client) DestroyByQuery(query string, simulate bool, clientID string) (*apimodel.SubmitCommandResponse, error) {
+func (c *Client) DestroyByQuery(query string, simulate bool, onDependents string, clientID string) (*apimodel.SubmitCommandResponse, error) {
 	var status apimodel.SubmitCommandResponse
 	resp, err := c.resty.R().
 		SetResult(&status).
 		SetContentType("multipart/form-data").
 		SetHeader("Client-ID", clientID).
 		SetFormData(map[string]string{
-			"command":  "destroy",
-			"query":    query,
-			"simulate": fmt.Sprintf("%t", simulate),
+			"command":       "destroy",
+			"query":         query,
+			"simulate":      fmt.Sprintf("%t", simulate),
+			"on-dependents": onDependents,
 		}).
 		Post(c.endpoint + "/api/v1/commands")
 	if err != nil {
@@ -319,6 +321,13 @@ func (c *Client) parseSubmitCommandErrorResponse(body io.ReadCloser) (*apimodel.
 		var errResp apimodel.ErrorResponse[apimodel.TargetReapedError]
 		if err := json.Unmarshal(bodyBytes, &errResp); err != nil {
 			return nil, fmt.Errorf("failed to parse TargetReaped error: %w", err)
+		}
+		return nil, &errResp
+
+	case apimodel.TargetHasDependents:
+		var errResp apimodel.ErrorResponse[apimodel.FormaTargetHasDependentsError]
+		if err := json.Unmarshal(bodyBytes, &errResp); err != nil {
+			return nil, fmt.Errorf("failed to parse TargetHasDependents error: %w", err)
 		}
 		return nil, &errResp
 
