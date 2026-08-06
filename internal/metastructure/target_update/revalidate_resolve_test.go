@@ -23,11 +23,16 @@ type revalidateStubDatastore struct {
 	target    *pkgmodel.Target
 	loadErr   error
 	loadCalls int
+	resources map[string]*pkgmodel.Resource
 }
 
 func (s *revalidateStubDatastore) LoadTarget(_ string) (*pkgmodel.Target, error) {
 	s.loadCalls++
 	return s.target, s.loadErr
+}
+
+func (s *revalidateStubDatastore) LoadResourceById(ksuid string) (*pkgmodel.Resource, error) {
+	return s.resources[ksuid], nil
 }
 
 // configA is the build-time (snapshot) config the Resolve TU carries; configB is
@@ -36,6 +41,9 @@ func (s *revalidateStubDatastore) LoadTarget(_ string) (*pkgmodel.Target, error)
 var (
 	configA = json.RawMessage(`{"secret":{"$ref":"formae://aaa111#/SecretString","$visibility":"Opaque"}}`)
 	configB = json.RawMessage(`{"secret":{"$ref":"formae://bbb222#/SecretString","$visibility":"Opaque"}}`)
+	// configMixed carries one opaque credential $ref and one non-opaque
+	// cross-resource $ref, both current (post-revision-bump).
+	configMixed = json.RawMessage(`{"cred":{"$ref":"formae://sec111#/SecretString","$visibility":"Opaque"},"peer":{"$ref":"formae://res222#/Id"}}`)
 )
 
 func TestRevalidateResolveTarget_StaleRevision_RebuildsAgainstCurrentConfig(t *testing.T) {
@@ -63,6 +71,51 @@ func TestRevalidateResolveTarget_StaleRevision_RebuildsAgainstCurrentConfig(t *t
 	assert.Equal(t, pkgmodel.FormaeURI("formae://bbb222#/SecretString"), revised.RemainingResolvables[0],
 		"resolvables must be rebuilt from the current config")
 	assert.Equal(t, 1, ds.loadCalls, "a single re-read suffices")
+}
+
+func TestRevalidateResolveTarget_OpaqueOnly_StaleRevision_RebuildsOpaqueOnly(t *testing.T) {
+	// An opaque-only synthetic Resolve (a cascade-deleted secret-backed target)
+	// whose revision advanced under a concurrent command must rebuild against the
+	// current config using only its OPAQUE refs. Its non-opaque cross-resource
+	// refs point at sources being deleted in the same command; re-including them
+	// would attempt to resolve a vanishing value and fail the cascade teardown.
+	tu := NewResolveTargetUpdate(
+		pkgmodel.Target{Label: "consumer", Version: 1, Config: configA},
+		[]pkgmodel.FormaeURI{"formae://aaa111#/SecretString"},
+	)
+	tu.OpaqueOnly = true
+
+	ds := &revalidateStubDatastore{
+		target: &pkgmodel.Target{Label: "consumer", Version: 2, Config: configMixed},
+	}
+
+	revised, err := revalidateResolveTarget(tu, ds)
+	require.NoError(t, err)
+
+	require.Len(t, revised.RemainingResolvables, 1,
+		"opaque-only rebuild must exclude the non-opaque cross-resource ref")
+	assert.Equal(t, pkgmodel.FormaeURI("formae://sec111#/SecretString"), revised.RemainingResolvables[0],
+		"only the opaque credential ref survives the opaque-only rebuild")
+}
+
+func TestRevalidateResolveTarget_FullSelection_StaleRevision_RebuildsAllRefs(t *testing.T) {
+	// A default (non-opaque-only) synthetic Resolve rebuilds with EVERY ref in the
+	// current config, opaque and non-opaque alike — the OpaqueOnly flag is the only
+	// thing that narrows the selection.
+	tu := NewResolveTargetUpdate(
+		pkgmodel.Target{Label: "consumer", Version: 1, Config: configA},
+		[]pkgmodel.FormaeURI{"formae://aaa111#/SecretString"},
+	)
+
+	ds := &revalidateStubDatastore{
+		target: &pkgmodel.Target{Label: "consumer", Version: 2, Config: configMixed},
+	}
+
+	revised, err := revalidateResolveTarget(tu, ds)
+	require.NoError(t, err)
+
+	require.Len(t, revised.RemainingResolvables, 2,
+		"the default selection rebuilds with both the opaque and non-opaque refs")
 }
 
 func TestRevalidateResolveTarget_UnchangedRevision_NoRebuild(t *testing.T) {

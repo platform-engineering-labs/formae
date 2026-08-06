@@ -133,7 +133,7 @@ func TestDestroyTUI_EndToEnd(t *testing.T) {
 	var postedSimulateFlags []bool
 	destroyFn = func(a *app.App, opts *DestroyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
 		postedSimulateFlags = append(postedSimulateFlags, simulate)
-		resp, err := client.DestroyByQuery(opts.Query, simulate, "e2e-client")
+		resp, err := client.DestroyByQuery(opts.Query, simulate, string(opts.OnDependents), "e2e-client")
 		return resp, nil, err
 	}
 
@@ -226,7 +226,7 @@ func TestDestroyTUI_EndToEnd_CascadeAbort(t *testing.T) {
 	postCount := 0
 	destroyFn = func(a *app.App, opts *DestroyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
 		postCount++
-		resp, err := client.DestroyByQuery(opts.Query, simulate, "e2e-client")
+		resp, err := client.DestroyByQuery(opts.Query, simulate, string(opts.OnDependents), "e2e-client")
 		return resp, nil, err
 	}
 

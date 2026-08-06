@@ -303,9 +303,12 @@ func TestDestroyWithCascade_CascadeDeletesDependentTargetAndResources(t *testing
 		require.NoError(t, err)
 		require.Len(t, consumerResources, 1, "Should have the deployment resource")
 
-		// Step 5: Actually destroy forma A (not simulate)
+		// Step 5: Actually destroy forma A (not simulate). The consumer target's
+		// config references the cluster being deleted, so this cascades — opt in
+		// with on-dependents=cascade (the default is to abort).
 		_, err = m.DestroyForma(providerForma, &config.FormaCommandConfig{
-			Mode: pkgmodel.FormaApplyModeReconcile,
+			Mode:         pkgmodel.FormaApplyModeReconcile,
+			OnDependents: "cascade",
 		}, "test")
 		require.NoError(t, err)
 
@@ -331,5 +334,174 @@ func TestDestroyWithCascade_CascadeDeletesDependentTargetAndResources(t *testing
 		consumerResources, err = m.Datastore.LoadResourcesByStack("consumer-stack")
 		require.NoError(t, err)
 		assert.Empty(t, consumerResources, "Deployment resource should be deleted")
+	})
+}
+
+// TestDestroyWithCascade_TargetDependentsAbortByDefault asserts that destroying a
+// resource whose deletion would cascade-delete a target (because the target's config
+// references it) is REJECTED by default with a FormaTargetHasDependentsError naming
+// the dependent target, and PROCEEDS only when on-dependents=cascade is set.
+func TestDestroyWithCascade_TargetDependentsAbortByDefault(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		overrides := &plugin.ResourcePluginOverrides{}
+
+		m, def, err := test_helpers.NewTestMetastructure(t, overrides)
+		defer def()
+		require.NoError(t, err, "Failed to create metastructure")
+
+		// Apply forma A — provider target + cluster resource.
+		providerForma := &pkgmodel.Forma{
+			Stacks: []pkgmodel.Stack{{Label: "provider-stack"}},
+			Resources: []pkgmodel.Resource{
+				{
+					Label:      "cluster",
+					Type:       "FakeAWS::S3::Bucket",
+					Properties: json.RawMessage(`{"BucketName":"my-cluster"}`),
+					Stack:      "provider-stack",
+					Target:     "provider",
+				},
+			},
+			Targets: []pkgmodel.Target{{Label: "provider"}},
+		}
+
+		_, err = m.ApplyForma(providerForma, &config.FormaCommandConfig{
+			Mode: pkgmodel.FormaApplyModeReconcile,
+		}, "test")
+		require.NoError(t, err)
+
+		assert.Eventually(t, func() bool {
+			fas, err := m.Datastore.LoadFormaCommands()
+			if err != nil || len(fas) == 0 {
+				return false
+			}
+			return fas[0].State == forma_command.CommandStateSuccess
+		}, 5*time.Second, 100*time.Millisecond, "Provider forma should be applied")
+
+		clusterResources, err := m.Datastore.LoadResourcesByStack("provider-stack")
+		require.NoError(t, err)
+		require.Len(t, clusterResources, 1)
+		clusterKsuid := clusterResources[0].Ksuid
+
+		// A "consumer" target whose config $refs the cluster being deleted.
+		consumerConfig := fmt.Sprintf(`{"endpoint":{"$ref":"formae://%s#/BucketName","$value":"my-cluster"}}`, clusterKsuid)
+		_, err = m.Datastore.CreateTarget(&pkgmodel.Target{
+			Label:  "consumer",
+			Config: json.RawMessage(consumerConfig),
+		})
+		require.NoError(t, err)
+
+		// Default (abort): the destroy is rejected with a dependents error naming the
+		// consumer target, and no command is executed.
+		_, err = m.DestroyForma(providerForma, &config.FormaCommandConfig{
+			Mode: pkgmodel.FormaApplyModeReconcile,
+		}, "test")
+		require.Error(t, err, "default destroy must abort when a dependent target exists")
+
+		var depErr apimodel.FormaTargetHasDependentsError
+		require.ErrorAs(t, err, &depErr, "error must be a FormaTargetHasDependentsError")
+		require.Len(t, depErr.Dependents, 1)
+		assert.Equal(t, "consumer", depErr.Dependents[0].TargetLabel)
+		assert.Equal(t, "cluster", depErr.Dependents[0].CascadeSource)
+
+		// The consumer target and cluster must still be intact — nothing ran.
+		consumerTarget, err := m.Datastore.LoadTarget("consumer")
+		require.NoError(t, err)
+		require.NotNil(t, consumerTarget, "consumer target must still exist after an aborted destroy")
+
+		// With on-dependents=cascade, the destroy proceeds and tears the consumer down.
+		_, err = m.DestroyForma(providerForma, &config.FormaCommandConfig{
+			Mode:         pkgmodel.FormaApplyModeReconcile,
+			OnDependents: "cascade",
+		}, "test")
+		require.NoError(t, err, "on-dependents=cascade must be accepted")
+
+		assert.Eventually(t, func() bool {
+			ct, err := m.Datastore.LoadTarget("consumer")
+			return err == nil && ct == nil
+		}, 10*time.Second, 100*time.Millisecond, "consumer target should be cascade-deleted")
+	})
+}
+
+// TestDestroyWithCascade_ResourceDependentsAbortByDefault asserts that destroying a
+// resource whose deletion would cascade-delete a dependent resource IN ANOTHER STACK
+// (the dependent references it on a CreateOnly field) is REJECTED by default with a
+// FormaResourceHasDependentsError naming the cross-stack dependent, and PROCEEDS only
+// when on-dependents=cascade is set — mirroring the target-cascade default.
+func TestDestroyWithCascade_ResourceDependentsAbortByDefault(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		overrides := &plugin.ResourcePluginOverrides{}
+
+		m, def, err := test_helpers.NewTestMetastructure(t, overrides)
+		defer def()
+		require.NoError(t, err, "Failed to create metastructure")
+
+		// Apply a provider VPC in provider-stack.
+		providerForma := &pkgmodel.Forma{
+			Stacks: []pkgmodel.Stack{{Label: "provider-stack"}},
+			Resources: []pkgmodel.Resource{
+				{
+					Label:      "parent-vpc",
+					Type:       "FakeAWS::EC2::VPC",
+					Properties: json.RawMessage(`{"CidrBlock":"10.0.0.0/16"}`),
+					Stack:      "provider-stack",
+					Target:     "shared-target",
+				},
+			},
+			Targets: []pkgmodel.Target{{Label: "shared-target"}},
+		}
+		_, err = m.ApplyForma(providerForma, &config.FormaCommandConfig{
+			Mode: pkgmodel.FormaApplyModeReconcile,
+		}, "test")
+		require.NoError(t, err)
+
+		assert.Eventually(t, func() bool {
+			fas, err := m.Datastore.LoadFormaCommands()
+			return err == nil && len(fas) > 0 && fas[0].State == forma_command.CommandStateSuccess
+		}, 5*time.Second, 100*time.Millisecond, "provider VPC should be applied")
+
+		parentResources, err := m.Datastore.LoadResourcesByStack("provider-stack")
+		require.NoError(t, err)
+		require.Len(t, parentResources, 1)
+		parentKsuid := parentResources[0].Ksuid
+
+		// A dependent subnet in a DIFFERENT stack, referencing the VPC's VpcId on the
+		// CreateOnly VpcId field, so deleting the VPC cascade-deletes the subnet.
+		childProperties := fmt.Sprintf(`{"VpcId":{"$ref":"formae://%s#/VpcId","$value":"vpc-123"},"CidrBlock":"10.0.1.0/24"}`, parentKsuid)
+		_, err = m.Datastore.StoreResource(&pkgmodel.Resource{
+			NativeID:   "subnet-child-native",
+			Label:      "child-subnet",
+			Type:       "FakeAWS::EC2::Subnet",
+			Properties: json.RawMessage(childProperties),
+			Stack:      "consumer-stack",
+			Target:     "shared-target",
+			Managed:    true,
+		}, "seed-cmd")
+		require.NoError(t, err)
+
+		// Default (abort): the destroy is rejected with a dependents error naming the
+		// cross-stack dependent, and nothing runs.
+		_, err = m.DestroyForma(providerForma, &config.FormaCommandConfig{
+			Mode: pkgmodel.FormaApplyModeReconcile,
+		}, "test")
+		require.Error(t, err, "default destroy must abort when a dependent resource exists")
+
+		var depErr apimodel.FormaResourceHasDependentsError
+		require.ErrorAs(t, err, &depErr, "error must be a FormaResourceHasDependentsError")
+		require.Len(t, depErr.Dependents, 1)
+		assert.Equal(t, "child-subnet", depErr.Dependents[0].ResourceLabel)
+		assert.Equal(t, "consumer-stack", depErr.Dependents[0].Stack)
+		assert.Equal(t, "parent-vpc", depErr.Dependents[0].CascadeSource)
+
+		// The dependent must still exist — nothing ran.
+		remaining, err := m.Datastore.LoadResourcesByStack("consumer-stack")
+		require.NoError(t, err)
+		require.Len(t, remaining, 1, "cross-stack dependent must survive an aborted destroy")
+
+		// With on-dependents=cascade, the destroy proceeds.
+		_, err = m.DestroyForma(providerForma, &config.FormaCommandConfig{
+			Mode:         pkgmodel.FormaApplyModeReconcile,
+			OnDependents: "cascade",
+		}, "test")
+		require.NoError(t, err, "on-dependents=cascade must be accepted")
 	})
 }

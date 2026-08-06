@@ -278,6 +278,7 @@ func (s *Server) configureEcho() *echo.Echo {
 // @Param simulate formData boolean false "If true, simulates command execution without actual changes to the infrastructure (defaults to false)."
 // @Param force formData boolean false "Only applies to the apply command in reconcile mode. If true, any changes made to the infrastructure since the last reconcile, either by patches or outside of Formae, will be overwritten."
 // @Param query formData string false "Only applies to destroy commands. A query string to select the resources to be destroyed."
+// @Param on-dependents formData string false "Only applies to destroy commands. Behavior when a delete would cascade onto dependent targets: abort (default) or cascade."
 // @Param file formData file false "A valid Forma file."
 // @Success 200 {object} apimodel.SubmitCommandResponse "OK: No changes required, or simulation result returned."
 // @Success 202 {object} apimodel.SubmitCommandResponse "Accepted: The command is validated, stored, and queued for execution."
@@ -320,10 +321,14 @@ func (s *Server) SubmitFormaCommand(c echo.Context) error {
 		}
 	case "destroy":
 		var err error
+		// on-dependents governs whether a destroy that cascades onto dependent
+		// targets aborts (default) or proceeds. Empty is treated as "abort" by the
+		// metastructure.
+		onDependents := c.FormValue("on-dependents")
 		query := c.FormValue("query")
 		if query != "" {
 			// If query is provided, use it
-			response, err = s.metastructure.DestroyByQuery(query, &config.FormaCommandConfig{Simulate: simulate}, clientID)
+			response, err = s.metastructure.DestroyByQuery(query, &config.FormaCommandConfig{Simulate: simulate, OnDependents: onDependents}, clientID)
 		} else {
 			// Otherwise, expect a Forma file
 			if !hasFormaFile(c) {
@@ -333,7 +338,7 @@ func (s *Server) SubmitFormaCommand(c echo.Context) error {
 			if getFormaErr != nil {
 				return echo.NewHTTPError(http.StatusInternalServerError, getFormaErr.Error())
 			}
-			response, err = s.metastructure.DestroyForma(forma, &config.FormaCommandConfig{Simulate: simulate}, clientID)
+			response, err = s.metastructure.DestroyForma(forma, &config.FormaCommandConfig{Simulate: simulate, OnDependents: onDependents}, clientID)
 		}
 		if err != nil {
 			return mapError(c, err)
@@ -799,6 +804,16 @@ func mapError(c echo.Context, err error) error {
 	var targetReapedError apimodel.TargetReapedError
 	if errors.As(err, &targetReapedError) {
 		return apiError(c, http.StatusConflict, apimodel.TargetReaped, targetReapedError)
+	}
+
+	var targetHasDependentsError apimodel.FormaTargetHasDependentsError
+	if errors.As(err, &targetHasDependentsError) {
+		return apiError(c, http.StatusConflict, apimodel.TargetHasDependents, targetHasDependentsError)
+	}
+
+	var resourceHasDependentsError apimodel.FormaResourceHasDependentsError
+	if errors.As(err, &resourceHasDependentsError) {
+		return apiError(c, http.StatusConflict, apimodel.ResourceHasDependents, resourceHasDependentsError)
 	}
 
 	var requiredFieldMissingError apimodel.RequiredFieldMissingOnCreateError

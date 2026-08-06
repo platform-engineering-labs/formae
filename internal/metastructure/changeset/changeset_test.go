@@ -2966,6 +2966,19 @@ func opaqueRefConfig(refURI string) json.RawMessage {
 	return json.RawMessage(`{"auth":{"$ref":"` + refURI + `","$visibility":"Opaque"}}`)
 }
 
+// jsonCredConfig mirrors how a Grafana target's basic-auth credentials persist
+// when sourced from a JSON secret via secret.res.secretValue.json("<key>"): a
+// $ref to the secret's value property plus a $json extraction path. Crucially the
+// envelope's $visibility is "Clear" — opacity is derived from the source secret's
+// FieldHint at resolve time, not stamped on the envelope — even though the
+// resolved value is a credential the plugin needs to authenticate.
+func jsonCredConfig(refURI string) json.RawMessage {
+	return json.RawMessage(`{` +
+		`"username":{"$ref":"` + refURI + `","$json":"username","$visibility":"Clear"},` +
+		`"password":{"$ref":"` + refURI + `","$json":"password","$visibility":"Clear"}` +
+		`}`)
+}
+
 func hasDependencyOn(node *DAGNode, uri pkgmodel.FormaeURI) bool {
 	for _, dep := range node.Dependencies {
 		if dep.URI == uri {
@@ -3378,4 +3391,286 @@ func TestNewChangeset_ValidTargetResolvableEdge_NoFalsePositive(t *testing.T) {
 	cs, err := buildChangesetForTest(resourceUpdates, targetUpdates, "cmd-valid-resolvable", pkgmodel.CommandApply, ds)
 	require.NoError(t, err, "a valid acyclic target-resolvable edge must not be rejected")
 	assert.False(t, cs.DAG.HasCycles(), "the built graph must be acyclic")
+}
+
+// TestNewChangeset_SynthesizesResolveForDeleteOnlyOpaqueTarget asserts that a target
+// carrying opaque $ref config gets a synthetic Resolve node even when the only target
+// update for that target is a Delete op. A Delete TU does not carry re-resolved config,
+// so resource-delete ops on that target must still get a Resolve dependency or they
+// dispatch with an unresolved credential.
+func TestNewChangeset_SynthesizesResolveForDeleteOnlyOpaqueTarget(t *testing.T) {
+	const targetLabel = "t1"
+	refURI := pkgmodel.NewFormaeURI(util.NewID(), "SecretString")
+
+	ds := &stubResolveDatastore{targets: map[string]*pkgmodel.Target{
+		targetLabel: {Label: targetLabel, Namespace: "AWS", Config: opaqueRefConfig(string(refURI))},
+	}}
+
+	deleteKsuid := util.NewID()
+	resourceUpdates := []resource_update.ResourceUpdate{
+		{
+			PriorState:   pkgmodel.Resource{Label: "res", Type: "AWS::S3::Bucket", Stack: "s", Ksuid: deleteKsuid, Target: targetLabel},
+			DesiredState: pkgmodel.Resource{Label: "res", Type: "AWS::S3::Bucket", Stack: "s", Ksuid: deleteKsuid, Target: targetLabel},
+			Operation:    resource_update.OperationDelete,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "s",
+		},
+	}
+
+	// The only TU for t1 is a Delete — it must NOT suppress Resolve synthesis.
+	targetUpdates := []target_update.TargetUpdate{
+		{
+			Target:    pkgmodel.Target{Label: targetLabel, Namespace: "AWS"},
+			Operation: target_update.TargetOperationDelete,
+			State:     target_update.TargetUpdateStateNotStarted,
+		},
+	}
+
+	cs, err := buildChangesetForTest(resourceUpdates, targetUpdates, "cmd-delete-resolve", pkgmodel.CommandApply, ds)
+	require.NoError(t, err)
+
+	resolveURI := pkgmodel.FormaeURI("target://" + targetLabel + "/resolve")
+	resolveNode := cs.DAG.Nodes[resolveURI]
+	require.NotNil(t, resolveNode, "expected a synthetic Resolve node for the delete-only opaque target")
+
+	tu, ok := resolveNode.Update.(*target_update.TargetUpdate)
+	require.True(t, ok)
+	assert.Equal(t, target_update.TargetOperationResolve, tu.Operation)
+	require.Len(t, tu.RemainingResolvables, 1)
+	assert.Equal(t, refURI, tu.RemainingResolvables[0])
+
+	deleteNode := dagNodeForOp(t, cs.DAG, pkgmodel.NewFormaeURI(deleteKsuid, ""), resource_update.OperationDelete)
+	assert.True(t, hasDependencyOn(deleteNode, resolveURI),
+		"resource-delete must depend on the Resolve node so it dispatches with resolved config")
+}
+
+// TestNewChangeset_SynthesizesResolveForCascadeDeletedOpaqueTarget asserts that a
+// target cascade-deleted because its $ref source resource is torn down in the same
+// command DOES get a synthetic Resolve node. The cascade orders the source-secret
+// delete AFTER the target delete, so the secret is still present when the target
+// resolves — the resource deletes on that target must dispatch with the resolved
+// credential, exactly like a plain delete.
+//
+// It also asserts the DAG ordering holds and is acyclic:
+//
+//	Resolve(target) → resource-delete → target-delete → secret-delete
+func TestNewChangeset_SynthesizesResolveForCascadeDeletedOpaqueTarget(t *testing.T) {
+	const targetLabel = "consumer"
+	// The secret source resource lives on some other target; the cascade target's
+	// config $refs it. Deleting the secret is what triggers the cascade.
+	secretKsuid := util.NewID()
+	refURI := pkgmodel.NewFormaeURI(secretKsuid, "SecretString")
+
+	ds := &stubResolveDatastore{targets: map[string]*pkgmodel.Target{
+		targetLabel: {Label: targetLabel, Namespace: "AWS", Config: opaqueRefConfig(string(refURI))},
+	}}
+
+	// A resource-delete on the cascade target (the deployment being torn down).
+	deploymentKsuid := util.NewID()
+	// The source secret's own delete op — it must run LAST (after the target delete).
+	resourceUpdates := []resource_update.ResourceUpdate{
+		{
+			PriorState:   pkgmodel.Resource{Label: "deployment", Type: "AWS::S3::Bucket", Stack: "consumer-stack", Ksuid: deploymentKsuid, Target: targetLabel},
+			DesiredState: pkgmodel.Resource{Label: "deployment", Type: "AWS::S3::Bucket", Stack: "consumer-stack", Ksuid: deploymentKsuid, Target: targetLabel},
+			Operation:    resource_update.OperationDelete,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "consumer-stack",
+		},
+		{
+			PriorState:   pkgmodel.Resource{Label: "secret", Type: "AWS::SecretsManager::Secret", Stack: "s", Ksuid: secretKsuid, Target: "provider"},
+			DesiredState: pkgmodel.Resource{Label: "secret", Type: "AWS::SecretsManager::Secret", Stack: "s", Ksuid: secretKsuid, Target: "provider"},
+			Operation:    resource_update.OperationDelete,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "s",
+		},
+	}
+
+	// A cascade Delete TU: the target's $ref source is being deleted in this command.
+	// ExistingTarget carries the opaque $ref config so the reversed delete edge and the
+	// synthetic Resolve can both find the resolvable.
+	targetUpdates := []target_update.TargetUpdate{
+		target_update.NewTargetUpdateForCascadeDelete(
+			&pkgmodel.Target{Label: targetLabel, Namespace: "AWS", Config: opaqueRefConfig(string(refURI))},
+			"secret",
+		),
+	}
+
+	cs, err := buildChangesetForTest(resourceUpdates, targetUpdates, "cmd-cascade-resolve", pkgmodel.CommandApply, ds)
+	require.NoError(t, err)
+
+	// A synthetic Resolve node must exist for the cascade target.
+	resolveURI := pkgmodel.FormaeURI("target://" + targetLabel + "/resolve")
+	resolveNode := cs.DAG.Nodes[resolveURI]
+	require.NotNil(t, resolveNode, "a cascade-deleted opaque target must get a synthetic Resolve node")
+
+	tu, ok := resolveNode.Update.(*target_update.TargetUpdate)
+	require.True(t, ok)
+	assert.Equal(t, target_update.TargetOperationResolve, tu.Operation)
+	require.Len(t, tu.RemainingResolvables, 1)
+	assert.Equal(t, refURI, tu.RemainingResolvables[0])
+
+	// The deployment resource-delete depends on the Resolve node.
+	deploymentDelete := dagNodeForOp(t, cs.DAG, pkgmodel.NewFormaeURI(deploymentKsuid, ""), resource_update.OperationDelete)
+	assert.True(t, hasDependencyOn(deploymentDelete, resolveURI),
+		"resource-delete on the cascade target must depend on the Resolve node")
+
+	// The source secret-delete depends on the cascade target-delete (reversed edge),
+	// so the secret is still present at Resolve time.
+	targetDeleteURI := pkgmodel.FormaeURI("target://" + targetLabel + "/delete")
+	secretDelete := dagNodeForOp(t, cs.DAG, pkgmodel.NewFormaeURI(secretKsuid, ""), resource_update.OperationDelete)
+	assert.True(t, hasDependencyOn(secretDelete, targetDeleteURI),
+		"source secret-delete must wait for the cascade target-delete so the secret is present at Resolve time")
+
+	assert.False(t, cs.DAG.HasCycles(), "the cascade delete graph must be acyclic")
+}
+
+// TestNewChangeset_SynthesizesResolveForCascadeDeletedJSONCredTarget asserts the
+// headline case for the delete path: a cascade-deleted target whose
+// credentials come from a JSON secret via .json() (persisted as $ref+$json with
+// $visibility "Clear") must still get a synthetic Resolve, and its resource-delete
+// ops must depend on that Resolve — otherwise the plugin dispatches the teardown
+// with unresolved credentials and the real cloud resource is orphaned. This is the
+// same shape as the opaque-$ref cascade test, but with .json()-derived Clear
+// credentials rather than a directly-opaque $ref.
+func TestNewChangeset_SynthesizesResolveForCascadeDeletedJSONCredTarget(t *testing.T) {
+	const targetLabel = "consumer"
+	secretKsuid := util.NewID()
+	refURI := pkgmodel.NewFormaeURI(secretKsuid, "SecretString")
+
+	// The source secret resource: its SecretString property is opaque at rest, so
+	// the .json() credential refs deriving from it are really secrets even though
+	// their consumer-side envelopes are Clear.
+	ds := &stubResolveDatastore{
+		targets: map[string]*pkgmodel.Target{
+			targetLabel: {Label: targetLabel, Namespace: "GRAFANA", Config: jsonCredConfig(string(refURI))},
+		},
+		resources: map[string]*pkgmodel.Resource{
+			secretKsuid: {
+				Label: "secret", Type: "AWS::SecretsManager::Secret", Ksuid: secretKsuid, Target: "provider",
+				Properties: json.RawMessage(`{"SecretString":{"$value":"deadbeef","$visibility":"Opaque","$hashed":true,"$strategy":"Update"}}`),
+			},
+		},
+	}
+
+	// A resource-delete on the cascade target (the folder being torn down), plus
+	// the source secret's own delete op (must run last).
+	folderKsuid := util.NewID()
+	resourceUpdates := []resource_update.ResourceUpdate{
+		{
+			PriorState:   pkgmodel.Resource{Label: "folder", Type: "GRAFANA::Core::Folder", Stack: "consumer-stack", Ksuid: folderKsuid, Target: targetLabel},
+			DesiredState: pkgmodel.Resource{Label: "folder", Type: "GRAFANA::Core::Folder", Stack: "consumer-stack", Ksuid: folderKsuid, Target: targetLabel},
+			Operation:    resource_update.OperationDelete,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "consumer-stack",
+		},
+		{
+			PriorState:   pkgmodel.Resource{Label: "secret", Type: "AWS::SecretsManager::Secret", Stack: "s", Ksuid: secretKsuid, Target: "provider"},
+			DesiredState: pkgmodel.Resource{Label: "secret", Type: "AWS::SecretsManager::Secret", Stack: "s", Ksuid: secretKsuid, Target: "provider"},
+			Operation:    resource_update.OperationDelete,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "s",
+		},
+	}
+
+	targetUpdates := []target_update.TargetUpdate{
+		target_update.NewTargetUpdateForCascadeDelete(
+			&pkgmodel.Target{Label: targetLabel, Namespace: "GRAFANA", Config: jsonCredConfig(string(refURI))},
+			"secret",
+		),
+	}
+
+	cs, err := buildChangesetForTest(resourceUpdates, targetUpdates, "cmd-cascade-jsoncred", pkgmodel.CommandApply, ds)
+	require.NoError(t, err)
+
+	// The cascade target must get a synthetic Resolve carrying its credential ref,
+	// so the folder-delete can dispatch with resolved credentials.
+	resolveURI := pkgmodel.FormaeURI("target://" + targetLabel + "/resolve")
+	resolveNode := cs.DAG.Nodes[resolveURI]
+	require.NotNil(t, resolveNode, "a cascade-deleted target whose creds come via .json() must get a synthetic Resolve node")
+
+	tu, ok := resolveNode.Update.(*target_update.TargetUpdate)
+	require.True(t, ok)
+	assert.Equal(t, target_update.TargetOperationResolve, tu.Operation)
+	require.NotEmpty(t, tu.RemainingResolvables, "the synthetic Resolve must carry the credential resolvable")
+	assert.Contains(t, tu.RemainingResolvables, refURI)
+
+	// The folder resource-delete depends on the Resolve so it dispatches with creds.
+	folderDelete := dagNodeForOp(t, cs.DAG, pkgmodel.NewFormaeURI(folderKsuid, ""), resource_update.OperationDelete)
+	assert.True(t, hasDependencyOn(folderDelete, resolveURI),
+		"resource-delete on the cascade target must depend on the Resolve node")
+
+	assert.False(t, cs.DAG.HasCycles(), "the cascade delete graph must be acyclic")
+}
+
+// TestNewChangeset_CascadeDeleteOpaqueTargetWithNonOpaqueRef_SyntheticResolveOpaqueOnly asserts
+// that when a cascade-deleted target carries BOTH an opaque $ref AND a non-opaque
+// cross-resource $ref whose source is being deleted in the same command, the synthetic
+// Resolve node for that target includes ONLY the opaque resolvable. Including the
+// non-opaque ref would attempt to read a vanishing source; the non-opaque ref carries
+// its stored value in the resource's NativeID and does not need in-flight resolution.
+func TestNewChangeset_CascadeDeleteOpaqueTargetWithNonOpaqueRef_SyntheticResolveOpaqueOnly(t *testing.T) {
+	const targetLabel = "consumer"
+
+	// The opaque ref: a secret credential still present at Resolve time (deleted after the target).
+	secretKsuid := util.NewID()
+	opaqueRef := pkgmodel.NewFormaeURI(secretKsuid, "SecretString")
+
+	// The non-opaque ref: a cross-resource ref whose source is being deleted in the same command.
+	vanishingKsuid := util.NewID()
+	nonOpaqueRef := pkgmodel.NewFormaeURI(vanishingKsuid, "Arn")
+
+	// Mixed config: both an opaque and a non-opaque $ref.
+	mixedConfig := json.RawMessage(`{
+		"auth":   {"$ref":"` + string(opaqueRef) + `","$visibility":"Opaque"},
+		"roleArn":{"$ref":"` + string(nonOpaqueRef) + `","$value":"arn:aws:iam::123:role/r"}
+	}`)
+
+	ds := &stubResolveDatastore{targets: map[string]*pkgmodel.Target{
+		targetLabel: {Label: targetLabel, Namespace: "AWS", Config: mixedConfig},
+	}}
+
+	deploymentKsuid := util.NewID()
+	resourceUpdates := []resource_update.ResourceUpdate{
+		{
+			PriorState:   pkgmodel.Resource{Label: "deployment", Type: "AWS::S3::Bucket", Stack: "s", Ksuid: deploymentKsuid, Target: targetLabel},
+			DesiredState: pkgmodel.Resource{Label: "deployment", Type: "AWS::S3::Bucket", Stack: "s", Ksuid: deploymentKsuid, Target: targetLabel},
+			Operation:    resource_update.OperationDelete,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "s",
+		},
+		{
+			// The vanishing non-opaque source being deleted in this command.
+			PriorState:   pkgmodel.Resource{Label: "role", Type: "AWS::IAM::Role", Stack: "s", Ksuid: vanishingKsuid, Target: "provider"},
+			DesiredState: pkgmodel.Resource{Label: "role", Type: "AWS::IAM::Role", Stack: "s", Ksuid: vanishingKsuid, Target: "provider"},
+			Operation:    resource_update.OperationDelete,
+			State:        resource_update.ResourceUpdateStateNotStarted,
+			StackLabel:   "s",
+		},
+	}
+
+	// Cascade Delete: the target's opaque $ref source is being torn down.
+	targetUpdates := []target_update.TargetUpdate{
+		target_update.NewTargetUpdateForCascadeDelete(
+			&pkgmodel.Target{Label: targetLabel, Namespace: "AWS", Config: mixedConfig},
+			"secret",
+		),
+	}
+
+	cs, err := buildChangesetForTest(resourceUpdates, targetUpdates, "cmd-mixed-visibility", pkgmodel.CommandApply, ds)
+	require.NoError(t, err)
+
+	resolveURI := pkgmodel.FormaeURI("target://" + targetLabel + "/resolve")
+	resolveNode := cs.DAG.Nodes[resolveURI]
+	require.NotNil(t, resolveNode, "a cascade-deleted target with an opaque $ref must get a synthetic Resolve node")
+
+	tu, ok := resolveNode.Update.(*target_update.TargetUpdate)
+	require.True(t, ok)
+	assert.Equal(t, target_update.TargetOperationResolve, tu.Operation)
+
+	// The synthetic Resolve must carry ONLY the opaque resolvable, not the
+	// non-opaque one whose source is being deleted in this command.
+	require.Len(t, tu.RemainingResolvables, 1,
+		"only the opaque resolvable must be included; the non-opaque vanishing source must be excluded")
+	assert.Equal(t, opaqueRef, tu.RemainingResolvables[0],
+		"the single resolvable must be the opaque $ref, not the non-opaque one")
 }

@@ -1915,6 +1915,67 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 		if err != nil {
 			return nil, fmt.Errorf("failed to find cascade target deletes: %w", err)
 		}
+
+		// Default to abort: deleting a resource that a target's config references
+		// (e.g. a secret) would cascade-delete that target and its resources. Unless
+		// the command carries on-dependents=cascade, reject it and name the
+		// dependents — mirroring the resource/stack cascade-abort default. Simulation
+		// still surfaces the cascades so the client can show them and prompt the user.
+		if len(cascadeTargetUpdates) > 0 &&
+			!formaCommandConfig.Simulate &&
+			formaCommandConfig.OnDependents != "cascade" {
+			dependents := make([]apimodel.TargetDependent, 0, len(cascadeTargetUpdates))
+			for _, tu := range cascadeTargetUpdates {
+				dependents = append(dependents, apimodel.TargetDependent{
+					TargetLabel:   tu.Target.Label,
+					CascadeSource: tu.CascadeSource,
+				})
+			}
+			return nil, apimodel.FormaTargetHasDependentsError{Dependents: dependents}
+		}
+
+		// Same default-abort for resource-to-resource cascades: deleting a resource
+		// whose CreateOnly field another resource references cascade-deletes that
+		// dependent (possibly in another stack — findCascadeDeletes matches by ref
+		// URI across all managed stacks). These IsCascade deletes are already folded
+		// into resourceUpdates by the generator. Gate them server-side too, so a
+		// non-CLI caller cannot tear down dependents without on-dependents=cascade;
+		// the CLI still surfaces them via simulation and elevates on confirmation.
+		//
+		// Exclude the resource's own target being torn down: a resource deleted
+		// because its target is destroyed in this same command (the generator also
+		// marks that IsCascade, with CascadeSource = the target) is the expected
+		// consequence of an explicit target destroy, not a surprising dependency
+		// cascade, so it must not require opt-in.
+		if !formaCommandConfig.Simulate && formaCommandConfig.OnDependents != "cascade" {
+			targetsBeingDeleted := make(map[string]bool)
+			for i := range targetUpdates {
+				if targetUpdates[i].Operation == target_update.TargetOperationDelete {
+					targetsBeingDeleted[targetUpdates[i].Target.Label] = true
+				}
+			}
+			for i := range cascadeTargetUpdates {
+				targetsBeingDeleted[cascadeTargetUpdates[i].Target.Label] = true
+			}
+
+			var resourceDependents []apimodel.ResourceDependent
+			for i := range resourceUpdates {
+				ru := &resourceUpdates[i]
+				if ru.IsCascade && ru.Operation == resource_update.OperationDelete &&
+					!targetsBeingDeleted[ru.DesiredState.Target] {
+					resourceDependents = append(resourceDependents, apimodel.ResourceDependent{
+						ResourceLabel: ru.DesiredState.Label,
+						ResourceType:  ru.DesiredState.Type,
+						Stack:         ru.DesiredState.Stack,
+						CascadeSource: ru.CascadeSource,
+					})
+				}
+			}
+			if len(resourceDependents) > 0 {
+				return nil, apimodel.FormaResourceHasDependentsError{Dependents: resourceDependents}
+			}
+		}
+
 		targetUpdates = append(targetUpdates, cascadeTargetUpdates...)
 		resourceUpdates = append(resourceUpdates, cascadeResourceUpdates...)
 	}

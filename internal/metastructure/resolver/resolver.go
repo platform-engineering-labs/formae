@@ -240,6 +240,61 @@ func ExtractOpaqueResolvableURIsFromJSON(data json.RawMessage) []pkgmodel.Formae
 	return uris
 }
 
+// isSourcePropertyOpaque reports whether propertyName on a source resource is an
+// opaque value — a secret stored hashed-at-rest with Opaque visibility. Used to
+// decide, from the SOURCE side, whether an otherwise Clear consumer ref is really
+// a credential. It checks Properties first then ReadOnlyProperties, mirroring
+// Resource property precedence: an opaque value (e.g. a plugin-generated token)
+// may be persisted in either collection.
+func isSourcePropertyOpaque(source *pkgmodel.Resource, propertyName string) bool {
+	if source == nil || propertyName == "" {
+		return false
+	}
+	if gjson.GetBytes(source.Properties, propertyName).Get("$visibility").String() == pkgmodel.VisibilityOpaque {
+		return true
+	}
+	return gjson.GetBytes(source.ReadOnlyProperties, propertyName).Get("$visibility").String() == pkgmodel.VisibilityOpaque
+}
+
+// ExtractSourceOpaqueResolvableURIsFromJSON returns the resolvable URIs in data
+// that resolve a SECRET: either the ref envelope itself is Opaque, or — crucially —
+// the ref's SOURCE property is opaque even though the consumer envelope is Clear.
+// The latter is how .json()-derived credentials (secret.res.secretValue.json("k"))
+// look at rest: their envelope is Clear because opacity is derived from the source
+// secret's FieldHint, not stamped on the consumer envelope. Non-opaque
+// cross-resource refs (whose source property is a plain value) are excluded, so a
+// cascade delete still avoids resolving a vanishing cross-resource source.
+// loadResource loads a resource by KSUID; a nil source contributes nothing.
+func ExtractSourceOpaqueResolvableURIsFromJSON(data json.RawMessage, loadResource func(ksuid string) (*pkgmodel.Resource, error)) ([]pkgmodel.FormaeURI, error) {
+	if data == nil {
+		return nil, nil
+	}
+	resolver := newPropertyResolver(data)
+	var uris []pkgmodel.FormaeURI
+	for uri, refs := range resolver.refs {
+		for i := range refs {
+			if refs[i].ResolvedValue.IsOpaque() {
+				uris = append(uris, uri)
+				break
+			}
+			src, err := loadResource(refs[i].ResourceURI.KSUID())
+			if err != nil {
+				return nil, err
+			}
+			// A source that cannot be loaded (nil) is treated as non-opaque. In a
+			// same-command cascade this is safe: DAG ordering keeps a credential
+			// source present until the Resolve and its dependent deletes complete,
+			// so it loads here. A genuinely dangling source (data inconsistency)
+			// would fall through as non-opaque — a narrow accepted residual.
+			if src != nil && isSourcePropertyOpaque(src, refs[i].SourcePropertyName) {
+				uris = append(uris, uri)
+				break
+			}
+		}
+	}
+	return uris, nil
+}
+
 // propertyParser parses JSON properties to identify references and values
 type propertyParser struct {
 	HasRef    bool

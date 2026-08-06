@@ -7,6 +7,7 @@
 package destroy
 
 import (
+	"io"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -140,4 +141,49 @@ func TestDestroyLegacy_TTY_Declined_Aborts(t *testing.T) {
 	err := runDestroyLegacy(a, opts)
 	require.NoError(t, err)
 	assert.Equal(t, 1, destroyCallCount, "only simulate call — real destroy not submitted after decline")
+}
+
+// TestDestroyLegacy_TTY_Confirmed_Cascade_ElevatesOnDependents asserts that when
+// the legacy path's simulation shows cascade deletes and the user confirms via
+// the interactive prompt, the real destroy call receives OnDependentsCascade —
+// not the default abort. Without this elevation the server gate returns 409
+// even after an explicit interactive confirmation.
+func TestDestroyLegacy_TTY_Confirmed_Cascade_ElevatesOnDependents(t *testing.T) {
+	stubDestroyConfirmSeams(t)
+	origLaunchWatch := launchWatch
+	origLegacyWidth := legacyWidth
+	t.Cleanup(func() {
+		launchWatch = origLaunchWatch
+		legacyWidth = origLegacyWidth
+	})
+
+	legacyWidth = func(w io.Writer) int { return 100 }
+	launchWatch = func(a *app.App, commandID string) (bool, error) { return true, nil }
+
+	var realOnDependents OnDependents
+	destroyFn = func(a *app.App, opts *DestroyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
+		if simulate {
+			return &apimodel.SubmitCommandResponse{Simulation: cascadeSimulation()}, nil, nil
+		}
+		realOnDependents = opts.OnDependents
+		return &apimodel.SubmitCommandResponse{CommandID: "legacy-cascade-cmd"}, nil, nil
+	}
+
+	isInteractive = func() bool { return true }
+	runConfirm = func(_ *theme.Theme, _, _ string) (bool, error) {
+		return true, nil // user confirmed
+	}
+
+	a := newTestApp()
+	opts := &DestroyOptions{
+		OutputConsumer: printer.ConsumerHuman,
+		FormaFile:      "forma.pkl",
+		OnDependents:   OnDependentsAbort,
+		Yes:            false,
+	}
+
+	err := runDestroyLegacy(a, opts)
+	require.NoError(t, err)
+	assert.Equal(t, OnDependentsCascade, realOnDependents,
+		"legacy interactive confirm with cascades must pass OnDependentsCascade to the real destroy call")
 }

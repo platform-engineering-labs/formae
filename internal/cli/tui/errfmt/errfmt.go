@@ -148,6 +148,14 @@ func (r *renderer) render(err error) (string, error) {
 		msg = r.renderTargetReaped(&errResp.Data)
 	}
 
+	if errResp, ok := err.(*apimodel.ErrorResponse[apimodel.FormaTargetHasDependentsError]); ok {
+		msg = r.renderTargetHasDependents(&errResp.Data)
+	}
+
+	if errResp, ok := err.(*apimodel.ErrorResponse[apimodel.FormaResourceHasDependentsError]); ok {
+		msg = r.renderResourceHasDependents(&errResp.Data)
+	}
+
 	if errResp, ok := err.(*apimodel.ErrorResponse[apimodel.PluginNotFoundError]); ok {
 		msg = r.errorf("plugin '%s' not found\n", errResp.Data.Name)
 	}
@@ -337,6 +345,49 @@ func (r *renderer) renderTargetReaped(data *apimodel.TargetReapedError) string {
 		"to it without re-declaring it would silently resurrect it.\n\n") +
 		"To recover it, re-declare the target in your forma file (its 'targets' block) and\n" +
 		"apply again — this mints a fresh incarnation and brings the target back under management.\n"
+	return message
+}
+
+// renderTargetHasDependents formats FormaTargetHasDependentsError: a destroy that
+// would cascade onto targets whose config references a resource being deleted.
+func (r *renderer) renderTargetHasDependents(data *apimodel.FormaTargetHasDependentsError) string {
+	var message string
+	if len(data.Dependents) == 1 {
+		d := data.Dependents[0]
+		message = r.errorf("deleting '%s' would cascade-delete dependent target '%s' and its resources.\n\n", d.CascadeSource, d.TargetLabel)
+	} else {
+		message = r.error("this delete would cascade-delete the following dependent targets and their resources:\n\n")
+		for _, d := range data.Dependents {
+			message += fmt.Sprintf("  - %s (referenced by %s)\n", d.TargetLabel, d.CascadeSource)
+		}
+		message += "\n"
+	}
+	message += r.warning("A target's config references a resource being deleted. Removing it would leave the\n"+
+		"dependent target unresolvable.\n\n") +
+		"To proceed and tear the dependent target(s) and their resources down too, re-run with\n" +
+		"--on-dependents=cascade.\n"
+	return message
+}
+
+// renderResourceHasDependents formats FormaResourceHasDependentsError: a destroy
+// that would cascade-delete dependent resources (a resource whose CreateOnly field
+// references one being deleted), possibly across stacks.
+func (r *renderer) renderResourceHasDependents(data *apimodel.FormaResourceHasDependentsError) string {
+	var message string
+	if len(data.Dependents) == 1 {
+		d := data.Dependents[0]
+		message = r.errorf("deleting '%s' would cascade-delete dependent resource '%s'.\n\n", d.CascadeSource, d.ResourceLabel)
+	} else {
+		message = r.error("this delete would cascade-delete the following dependent resources:\n\n")
+		for _, d := range data.Dependents {
+			message += fmt.Sprintf("  - %s (%s, stack %s; referenced by %s)\n", d.ResourceLabel, d.ResourceType, d.Stack, d.CascadeSource)
+		}
+		message += "\n"
+	}
+	message += r.warning("Another resource references a resource being deleted on a create-only field, so\n"+
+		"it would be torn down too.\n\n") +
+		"To proceed and tear the dependent resource(s) down as well, re-run with\n" +
+		"--on-dependents=cascade.\n"
 	return message
 }
 

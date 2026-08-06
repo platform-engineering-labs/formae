@@ -34,6 +34,8 @@ const (
 	PluginDependencyConflict     APIError = "PluginDependencyConflict"
 	PluginRepositoryUnreachable  APIError = "PluginRepositoryUnreachable"
 	PluginSignatureInvalid       APIError = "PluginSignatureInvalid"
+	TargetHasDependents          APIError = "TargetHasDependents"
+	ResourceHasDependents        APIError = "ResourceHasDependents"
 )
 
 type ErrorResponse[T any] struct {
@@ -217,6 +219,66 @@ type TargetHasResourcesError struct {
 
 func (e TargetHasResourcesError) Error() string {
 	return fmt.Sprintf("target %s cannot be deleted: has %d deployed resources", e.TargetLabel, e.ResourceCount)
+}
+
+// TargetDependent names a target whose config references a resource being
+// deleted, along with the source resource that triggers the cascade.
+type TargetDependent struct {
+	TargetLabel   string `json:"TargetLabel"`
+	CascadeSource string `json:"CascadeSource"`
+}
+
+// FormaTargetHasDependentsError is returned when a destroy would cascade onto one
+// or more targets whose config references a resource being deleted (e.g. a secret),
+// but the command was not run with on-dependents=cascade. The default is to abort
+// so the user does not unknowingly tear down dependent targets and their resources.
+type FormaTargetHasDependentsError struct {
+	Dependents []TargetDependent `json:"Dependents"`
+}
+
+func (e FormaTargetHasDependentsError) Error() string {
+	if len(e.Dependents) == 1 {
+		return fmt.Sprintf("deleting %q would cascade-delete dependent target %q; re-run with --on-dependents=cascade to proceed",
+			e.Dependents[0].CascadeSource, e.Dependents[0].TargetLabel)
+	}
+	labels := make([]string, len(e.Dependents))
+	for i, d := range e.Dependents {
+		labels[i] = d.TargetLabel
+	}
+	return fmt.Sprintf("this delete would cascade-delete %d dependent target(s) %v; re-run with --on-dependents=cascade to proceed",
+		len(e.Dependents), labels)
+}
+
+// ResourceDependent names a resource whose config references (on a CreateOnly
+// field) a resource being deleted, along with the source resource that triggers
+// the cascade. The dependent may live in a different stack.
+type ResourceDependent struct {
+	ResourceLabel string `json:"ResourceLabel"`
+	ResourceType  string `json:"ResourceType"`
+	Stack         string `json:"Stack"`
+	CascadeSource string `json:"CascadeSource"`
+}
+
+// FormaResourceHasDependentsError is returned when a destroy would cascade-delete
+// one or more dependent resources (a resource whose CreateOnly field references a
+// resource being deleted, possibly across stacks) but the command was not run with
+// on-dependents=cascade. The default is to abort so the user does not unknowingly
+// tear down dependent resources, mirroring the target-cascade default.
+type FormaResourceHasDependentsError struct {
+	Dependents []ResourceDependent `json:"Dependents"`
+}
+
+func (e FormaResourceHasDependentsError) Error() string {
+	if len(e.Dependents) == 1 {
+		return fmt.Sprintf("deleting %q would cascade-delete dependent resource %q; re-run with --on-dependents=cascade to proceed",
+			e.Dependents[0].CascadeSource, e.Dependents[0].ResourceLabel)
+	}
+	labels := make([]string, len(e.Dependents))
+	for i, d := range e.Dependents {
+		labels[i] = d.ResourceLabel
+	}
+	return fmt.Sprintf("this delete would cascade-delete %d dependent resource(s) %v; re-run with --on-dependents=cascade to proceed",
+		len(e.Dependents), labels)
 }
 
 type PluginNotFoundError struct {

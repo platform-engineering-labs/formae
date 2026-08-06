@@ -251,7 +251,7 @@ func (a *App) Apply(path string, props map[string]string, mode pkgmodel.FormaApp
 	return resp, nags, nil
 }
 
-func (a *App) Destroy(path string, query string, props map[string]string, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
+func (a *App) Destroy(path string, query string, props map[string]string, simulate bool, onDependents string) (*apimodel.SubmitCommandResponse, []string, error) {
 	auth, net, err := a.getAuthAndNetHandlers()
 	if err != nil {
 		return nil, nil, err
@@ -285,12 +285,12 @@ func (a *App) Destroy(path string, query string, props map[string]string, simula
 			)
 		}
 
-		resp, err = client.DestroyForma(forma, simulate, clientID)
+		resp, err = client.DestroyForma(forma, simulate, onDependents, clientID)
 		if err != nil {
 			return nil, nil, err
 		}
 	} else {
-		resp, err = client.DestroyByQuery(query, simulate, clientID)
+		resp, err = client.DestroyByQuery(query, simulate, onDependents, clientID)
 		if err != nil {
 			return nil, nil, err
 		}
