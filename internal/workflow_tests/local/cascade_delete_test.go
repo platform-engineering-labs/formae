@@ -421,3 +421,87 @@ func TestDestroyWithCascade_TargetDependentsAbortByDefault(t *testing.T) {
 		}, 10*time.Second, 100*time.Millisecond, "consumer target should be cascade-deleted")
 	})
 }
+
+// TestDestroyWithCascade_ResourceDependentsAbortByDefault asserts that destroying a
+// resource whose deletion would cascade-delete a dependent resource IN ANOTHER STACK
+// (the dependent references it on a CreateOnly field) is REJECTED by default with a
+// FormaResourceHasDependentsError naming the cross-stack dependent, and PROCEEDS only
+// when on-dependents=cascade is set — mirroring the target-cascade default.
+func TestDestroyWithCascade_ResourceDependentsAbortByDefault(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		overrides := &plugin.ResourcePluginOverrides{}
+
+		m, def, err := test_helpers.NewTestMetastructure(t, overrides)
+		defer def()
+		require.NoError(t, err, "Failed to create metastructure")
+
+		// Apply a provider VPC in provider-stack.
+		providerForma := &pkgmodel.Forma{
+			Stacks: []pkgmodel.Stack{{Label: "provider-stack"}},
+			Resources: []pkgmodel.Resource{
+				{
+					Label:      "parent-vpc",
+					Type:       "FakeAWS::EC2::VPC",
+					Properties: json.RawMessage(`{"CidrBlock":"10.0.0.0/16"}`),
+					Stack:      "provider-stack",
+					Target:     "shared-target",
+				},
+			},
+			Targets: []pkgmodel.Target{{Label: "shared-target"}},
+		}
+		_, err = m.ApplyForma(providerForma, &config.FormaCommandConfig{
+			Mode: pkgmodel.FormaApplyModeReconcile,
+		}, "test")
+		require.NoError(t, err)
+
+		assert.Eventually(t, func() bool {
+			fas, err := m.Datastore.LoadFormaCommands()
+			return err == nil && len(fas) > 0 && fas[0].State == forma_command.CommandStateSuccess
+		}, 5*time.Second, 100*time.Millisecond, "provider VPC should be applied")
+
+		parentResources, err := m.Datastore.LoadResourcesByStack("provider-stack")
+		require.NoError(t, err)
+		require.Len(t, parentResources, 1)
+		parentKsuid := parentResources[0].Ksuid
+
+		// A dependent subnet in a DIFFERENT stack, referencing the VPC's VpcId on the
+		// CreateOnly VpcId field, so deleting the VPC cascade-deletes the subnet.
+		childProperties := fmt.Sprintf(`{"VpcId":{"$ref":"formae://%s#/VpcId","$value":"vpc-123"},"CidrBlock":"10.0.1.0/24"}`, parentKsuid)
+		_, err = m.Datastore.StoreResource(&pkgmodel.Resource{
+			NativeID:   "subnet-child-native",
+			Label:      "child-subnet",
+			Type:       "FakeAWS::EC2::Subnet",
+			Properties: json.RawMessage(childProperties),
+			Stack:      "consumer-stack",
+			Target:     "shared-target",
+			Managed:    true,
+		}, "seed-cmd")
+		require.NoError(t, err)
+
+		// Default (abort): the destroy is rejected with a dependents error naming the
+		// cross-stack dependent, and nothing runs.
+		_, err = m.DestroyForma(providerForma, &config.FormaCommandConfig{
+			Mode: pkgmodel.FormaApplyModeReconcile,
+		}, "test")
+		require.Error(t, err, "default destroy must abort when a dependent resource exists")
+
+		var depErr apimodel.FormaResourceHasDependentsError
+		require.ErrorAs(t, err, &depErr, "error must be a FormaResourceHasDependentsError")
+		require.Len(t, depErr.Dependents, 1)
+		assert.Equal(t, "child-subnet", depErr.Dependents[0].ResourceLabel)
+		assert.Equal(t, "consumer-stack", depErr.Dependents[0].Stack)
+		assert.Equal(t, "parent-vpc", depErr.Dependents[0].CascadeSource)
+
+		// The dependent must still exist — nothing ran.
+		remaining, err := m.Datastore.LoadResourcesByStack("consumer-stack")
+		require.NoError(t, err)
+		require.Len(t, remaining, 1, "cross-stack dependent must survive an aborted destroy")
+
+		// With on-dependents=cascade, the destroy proceeds.
+		_, err = m.DestroyForma(providerForma, &config.FormaCommandConfig{
+			Mode:         pkgmodel.FormaApplyModeReconcile,
+			OnDependents: "cascade",
+		}, "test")
+		require.NoError(t, err, "on-dependents=cascade must be accepted")
+	})
+}

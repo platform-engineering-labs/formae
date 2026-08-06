@@ -1934,6 +1934,31 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 			return nil, apimodel.FormaTargetHasDependentsError{Dependents: dependents}
 		}
 
+		// Same default-abort for resource-to-resource cascades: deleting a resource
+		// whose CreateOnly field another resource references cascade-deletes that
+		// dependent (possibly in another stack — findCascadeDeletes matches by ref
+		// URI across all managed stacks). These IsCascade deletes are already folded
+		// into resourceUpdates by the generator. Gate them server-side too, so a
+		// non-CLI caller cannot tear down dependents without on-dependents=cascade;
+		// the CLI still surfaces them via simulation and elevates on confirmation.
+		if !formaCommandConfig.Simulate && formaCommandConfig.OnDependents != "cascade" {
+			var resourceDependents []apimodel.ResourceDependent
+			for i := range resourceUpdates {
+				ru := &resourceUpdates[i]
+				if ru.IsCascade && ru.Operation == resource_update.OperationDelete {
+					resourceDependents = append(resourceDependents, apimodel.ResourceDependent{
+						ResourceLabel: ru.DesiredState.Label,
+						ResourceType:  ru.DesiredState.Type,
+						Stack:         ru.DesiredState.Stack,
+						CascadeSource: ru.CascadeSource,
+					})
+				}
+			}
+			if len(resourceDependents) > 0 {
+				return nil, apimodel.FormaResourceHasDependentsError{Dependents: resourceDependents}
+			}
+		}
+
 		targetUpdates = append(targetUpdates, cascadeTargetUpdates...)
 		resourceUpdates = append(resourceUpdates, cascadeResourceUpdates...)
 	}

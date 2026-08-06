@@ -811,6 +811,11 @@ func mapError(c echo.Context, err error) error {
 		return apiError(c, http.StatusConflict, apimodel.TargetHasDependents, targetHasDependentsError)
 	}
 
+	var resourceHasDependentsError apimodel.FormaResourceHasDependentsError
+	if errors.As(err, &resourceHasDependentsError) {
+		return apiError(c, http.StatusConflict, apimodel.ResourceHasDependents, resourceHasDependentsError)
+	}
+
 	var requiredFieldMissingError apimodel.RequiredFieldMissingOnCreateError
 	if errors.As(err, &requiredFieldMissingError) {
 		return apiError(c, http.StatusBadRequest, apimodel.RequiredFieldMissingOnCreate, requiredFieldMissingError)
