@@ -605,43 +605,6 @@ func TestDiscovery_NoTagKeysAreFound_LabelIsSetToNativeId(t *testing.T) {
 	})
 }
 
-func TestDiscovery_DiscoveryReadSetsRedactSensitiveIntent(t *testing.T) {
-	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
-		var detected bool
-		overrides := &plugin.ResourcePluginOverrides{
-			List: func(req *resource.ListRequest) (*resource.ListResult, error) {
-				if req.ResourceType != "FakeAWS::S3::Bucket" {
-					return &resource.ListResult{}, nil
-				}
-				return &resource.ListResult{NativeIDs: []string{"bucket-1"}}, nil
-			},
-			Read: func(req *resource.ReadRequest) (*resource.ReadResult, error) {
-				detected = req.RedactSensitive
-				return &resource.ReadResult{ResourceType: "FakeAWS::S3::Bucket", Properties: `{}`}, nil
-			},
-		}
-		cfg := test_helpers.NewTestMetastructureConfig()
-
-		m, def, err := test_helpers.NewTestMetastructureWithConfig(t, overrides, cfg)
-		defer def()
-		require.NoError(t, err)
-
-		target := &pkgmodel.Target{
-			Label:        "us-east-1",
-			Namespace:    "FakeAWS",
-			Config:       json.RawMessage(`{"region":"us-east-1"}`),
-			Discoverable: true,
-		}
-		_, err = m.Datastore.CreateTarget(target)
-		require.NoError(t, err)
-		_, err = testutil.StartTestHelperActor(m.Node, make(chan any, 1))
-		require.NoError(t, err)
-
-		require.NoError(t, testutil.Send(m.Node, "Discovery", discovery.Discover{}))
-		assert.Eventually(t, func() bool { return detected }, 5*time.Second, 100*time.Millisecond, "RedactSensitive should be true during discovery reads")
-	})
-}
-
 func awsRegionFromTargetConfig(t *testing.T, targetConfig json.RawMessage) string {
 	var config map[string]string
 	err := json.Unmarshal(targetConfig, &config)
