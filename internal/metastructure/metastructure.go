@@ -1941,11 +1941,28 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 		// into resourceUpdates by the generator. Gate them server-side too, so a
 		// non-CLI caller cannot tear down dependents without on-dependents=cascade;
 		// the CLI still surfaces them via simulation and elevates on confirmation.
+		//
+		// Exclude the resource's own target being torn down: a resource deleted
+		// because its target is destroyed in this same command (the generator also
+		// marks that IsCascade, with CascadeSource = the target) is the expected
+		// consequence of an explicit target destroy, not a surprising dependency
+		// cascade, so it must not require opt-in.
 		if !formaCommandConfig.Simulate && formaCommandConfig.OnDependents != "cascade" {
+			targetsBeingDeleted := make(map[string]bool)
+			for i := range targetUpdates {
+				if targetUpdates[i].Operation == target_update.TargetOperationDelete {
+					targetsBeingDeleted[targetUpdates[i].Target.Label] = true
+				}
+			}
+			for i := range cascadeTargetUpdates {
+				targetsBeingDeleted[cascadeTargetUpdates[i].Target.Label] = true
+			}
+
 			var resourceDependents []apimodel.ResourceDependent
 			for i := range resourceUpdates {
 				ru := &resourceUpdates[i]
-				if ru.IsCascade && ru.Operation == resource_update.OperationDelete {
+				if ru.IsCascade && ru.Operation == resource_update.OperationDelete &&
+					!targetsBeingDeleted[ru.DesiredState.Target] {
 					resourceDependents = append(resourceDependents, apimodel.ResourceDependent{
 						ResourceLabel: ru.DesiredState.Label,
 						ResourceType:  ru.DesiredState.Type,
