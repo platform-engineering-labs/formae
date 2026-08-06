@@ -52,11 +52,14 @@ func ResolveOpaqueTargetConfig(proc gen.Process, target pkgmodel.Target) (json.R
 	uris := resolver.ExtractOpaqueResolvableURIsFromJSON(target.Config)
 	if len(uris) == 0 {
 		// No opaque refs: still strip any cached $value/metadata so the plugin
-		// receives plain JSON, mirroring the resolved path's final conversion.
-		if plain, err := resolver.ConvertToPluginFormat(target.Config); err == nil {
-			return plain, nil
+		// receives plain JSON, mirroring the resolved path's final conversion. Fail
+		// closed on a conversion error (e.g. an irrecoverable $hashed field) rather
+		// than leaking the raw envelope to the plugin.
+		plain, err := resolver.ConvertToPluginFormat(target.Config)
+		if err != nil {
+			return nil, fmt.Errorf("failed to prepare config for target %q: convert error", target.Label)
 		}
-		return target.Config, nil
+		return plain, nil
 	}
 
 	// Work on a copy so the caller's original config is never mutated.
