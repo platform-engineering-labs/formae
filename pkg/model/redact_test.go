@@ -7,6 +7,7 @@
 package model
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -90,6 +91,58 @@ func TestRedactOpaqueForLog_RedactsOpaqueInsideJSONRawMessage(t *testing.T) {
 
 	assert.NotContains(t, result, "super-secret", "plaintext secret must not leak into redacted output")
 	assert.Contains(t, result, RedactedForLog)
+}
+
+func TestRedactOpaqueForLog_RedactsOpaqueInsideEmbedTemplate(t *testing.T) {
+	// A secret interpolated into a string field is stored as an embed:
+	// {$embed:true, $template:"...<RS base64(envelope) US>..."} where the framed
+	// envelope carries the resolved plaintext in $value. The generic walk cannot
+	// see it (the value lives base64-framed inside a string), so the redactor
+	// must decode, redact, and re-frame each span.
+	const secret = "super-secret-embedded"
+	envelope := `{"$ref":"formae://res","$visibility":"Opaque","$value":"` + secret + `"}`
+	tmpl := "https://user:" + FrameEnvelope(envelope) + "@example.com"
+	in := map[string]any{
+		"url": map[string]any{"$embed": true, "$template": tmpl},
+	}
+
+	out := RedactOpaqueForLog(in).(map[string]any)
+
+	// The redacted template's span must no longer decode to the plaintext.
+	redactedTmpl := out["url"].(map[string]any)["$template"].(string)
+	spans, err := ScanEmbedSpans(redactedTmpl)
+	require.NoError(t, err)
+	require.Len(t, spans, 1)
+	assert.Contains(t, spans[0].EnvelopeJSON, RedactedForLog, "span $value must be redacted")
+	assert.NotContains(t, spans[0].EnvelopeJSON, secret, "plaintext must not survive in the span")
+
+	// No serialized form may leak, including the base64 frame of the plaintext
+	// envelope.
+	var buf strings.Builder
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	require.NoError(t, enc.Encode(out))
+	result := buf.String()
+	assert.NotContains(t, result, secret, "plaintext must not leak")
+	assert.NotContains(t, result, base64.StdEncoding.EncodeToString([]byte(envelope)),
+		"the base64 frame carrying the plaintext must not survive")
+
+	// Input must not be mutated.
+	assert.Equal(t, tmpl, in["url"].(map[string]any)["$template"].(string), "input must not be mutated")
+}
+
+func TestRedactOpaqueForLog_PreservesClearEmbedSpan(t *testing.T) {
+	// A non-opaque (Clear) embedded value must survive redaction unchanged.
+	envelope := `{"$ref":"formae://res","$visibility":"Clear","$value":"public-part"}`
+	tmpl := "prefix-" + FrameEnvelope(envelope) + "-suffix"
+	in := map[string]any{"field": map[string]any{"$embed": true, "$template": tmpl}}
+
+	out := RedactOpaqueForLog(in).(map[string]any)
+	redactedTmpl := out["field"].(map[string]any)["$template"].(string)
+	spans, err := ScanEmbedSpans(redactedTmpl)
+	require.NoError(t, err)
+	require.Len(t, spans, 1)
+	assert.Contains(t, spans[0].EnvelopeJSON, "public-part", "clear embedded value must be preserved")
 }
 
 func TestRedactOpaqueForLog_UnparseableByteSlicePassedThrough(t *testing.T) {
