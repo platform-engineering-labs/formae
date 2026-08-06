@@ -162,7 +162,18 @@ func (pv *PersistValueTransformer) processProps(m map[string]any, opaqueFields m
 // (wrapping it into a hashed opaque envelope) or an existing envelope map.
 func (pv *PersistValueTransformer) hashOpaqueField(v any) (map[string]any, bool) {
 	if m, ok := v.(map[string]any); ok {
-		return pv.hashEnvelope(m)
+		// A formae opaque envelope carries BOTH $value and $visibility — hash it in
+		// place. A raw map is itself the secret value (a map-shaped secret field,
+		// e.g. K8S decodedData), even when one of its keys happens to be named
+		// "$value": without $visibility it is not an envelope. Fall through so the
+		// whole map is hashed into one opaque envelope rather than being mistaken for
+		// an envelope, which would hash only the "$value" key and leave sibling
+		// plaintext keys at rest.
+		_, hasValue := m["$value"]
+		_, hasVisibility := m["$visibility"]
+		if hasValue && hasVisibility {
+			return pv.hashEnvelope(m)
+		}
 	}
 	// Bare scalar (e.g. an opaque field supplied as a plain string literal, RDS
 	// MasterUserPassword): wrap + hash into a CANONICAL formae.Value envelope. It

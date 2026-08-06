@@ -118,14 +118,63 @@ func stripResolvableValuesRaw(raw json.RawMessage) json.RawMessage {
 	return out
 }
 
-// stripResolvableValues recursively removes $value from any object that
-// contains a $ref key. This ensures that a resolved config (with cached
-// $value) compares equal to an unresolved config (only $ref).
+// stripDerivedRefMetadataRaw returns a copy of raw with only the DERIVED
+// metadata ($visibility, $strategy) stripped from every $ref object, leaving
+// $ref, $json, and any cached $value intact. Used where a stale $value must
+// still surface (a dangling ref) but derived metadata — which the forma never
+// authors and which flips Opaque↔Clear for secret-sourced credentials — must
+// never count as a change.
+func stripDerivedRefMetadataRaw(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return raw
+	}
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return raw
+	}
+	stripDerivedRefMetadata(v)
+	out, err := json.Marshal(v)
+	if err != nil {
+		return raw
+	}
+	return out
+}
+
+// stripDerivedRefMetadata recursively removes $visibility and $strategy (but not
+// $value) from any object that contains a $ref key.
+func stripDerivedRefMetadata(v any) {
+	switch val := v.(type) {
+	case map[string]any:
+		if _, hasRef := val["$ref"]; hasRef {
+			delete(val, "$visibility")
+			delete(val, "$strategy")
+		}
+		for _, child := range val {
+			stripDerivedRefMetadata(child)
+		}
+	case []any:
+		for _, item := range val {
+			stripDerivedRefMetadata(item)
+		}
+	}
+}
+
+// stripResolvableValues recursively removes derived metadata from any object
+// that contains a $ref key, leaving only the reference's semantic identity
+// ($ref path and $json). $value is a cached resolution; $visibility and
+// $strategy are derived from the source property (a secret-sourced credential
+// persists $visibility:"Opaque" so reference-don't-store strips its $value,
+// while the forma renders the same ref $visibility:"Clear"). Dropping all three
+// ensures a resolved / opacity-stamped stored config compares equal to the
+// authored $ref, so an idempotent re-apply of a target with secret-sourced
+// config does not spuriously classify a createOnly credential as changed.
 func stripResolvableValues(v any) {
 	switch val := v.(type) {
 	case map[string]any:
 		if _, hasRef := val["$ref"]; hasRef {
 			delete(val, "$value")
+			delete(val, "$visibility")
+			delete(val, "$strategy")
 		}
 		for _, child := range val {
 			stripResolvableValues(child)

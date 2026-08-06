@@ -8,6 +8,7 @@ package discovery
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -21,6 +22,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/changeset"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
@@ -255,14 +257,13 @@ func TestResolveTargetConfigForList_NonRecoverableReadFailure(t *testing.T) {
 		"error must not include raw $ref envelope fields")
 }
 
-// TestResolveTargetConfigForList_RecoverableReadFailureReturnsError asserts that
-// a recoverable read failure surfaces as an error after a single attempt.
-// resolveTargetConfigForList is single-shot and never sleeps: discovery skips the
-// target for this cycle and retries it on the next cycle, so retry does not
-// happen inside this call.
-func TestResolveTargetConfigForList_RecoverableReadFailureReturnsError(t *testing.T) {
+// TestResolveTargetConfigForList_RecoverableFailureThenSuccess asserts that a
+// recoverable failure followed by success within the attempt budget resolves
+// successfully, and that exceeding the budget returns an error.
+func TestResolveTargetConfigForList_RecoverableFailureIsSingleShot(t *testing.T) {
 	const ksuid = "35R2vyf6mT5wEs0mTWT5bp1Lf0E"
 	const prop = "SecretString"
+	const plaintext = "s3cr3t"
 
 	srcResource := buildSourceResource(ksuid)
 	srcTarget := pkgmodel.Target{
@@ -270,34 +271,67 @@ func TestResolveTargetConfigForList_RecoverableReadFailureReturnsError(t *testin
 		Namespace: "FakeAWS",
 		Config:    json.RawMessage(`{"Region":"us-east-1"}`),
 	}
+
+	targetCfg := buildOpaqueTargetConfig(ksuid, prop)
 	target := pkgmodel.Target{
 		Label:  "prod",
-		Config: buildOpaqueTargetConfig(ksuid, prop),
+		Config: targetCfg,
 	}
 
-	proc := &resolveStubProcess{
-		loadResult: messages.LoadResourceResult{
-			Resource: srcResource,
-			Target:   srcTarget,
-		},
-		readResponses: []readResponse{
-			{
-				progress: &plugin.TrackedProgress{
-					ProgressResult: resource.ProgressResult{
-						OperationStatus: resource.OperationStatusFailure,
-						ErrorCode:       resource.OperationErrorCodeServiceTimeout, // recoverable
+	t.Run("recoverable failure is single-shot and typed", func(t *testing.T) {
+		proc := &resolveStubProcess{
+			loadResult: messages.LoadResourceResult{
+				Resource: srcResource,
+				Target:   srcTarget,
+			},
+			readResponses: []readResponse{
+				{
+					progress: &plugin.TrackedProgress{
+						ProgressResult: resource.ProgressResult{
+							OperationStatus: resource.OperationStatusFailure,
+							ErrorCode:       resource.OperationErrorCodeServiceTimeout, // recoverable
+						},
 					},
 				},
 			},
-		},
-	}
+		}
 
-	result, err := resolveTargetConfigForList(proc, target)
+		result, err := resolveTargetConfigForList(proc, target)
 
-	require.Error(t, err, "a recoverable read failure must surface as an error, not an in-call retry")
-	assert.Nil(t, result)
-	assert.Equal(t, 1, proc.readAttempts,
-		"resolveTargetConfigForList must read exactly once: retry is the discovery cycle's job")
+		require.Error(t, err, "a recoverable read failure must surface as an error")
+		assert.Nil(t, result)
+		var rec *resource_update.RecoverableResolveError
+		require.True(t, errors.As(err, &rec),
+			"a recoverable failure must surface as *RecoverableResolveError so the caller can reschedule")
+		assert.Equal(t, resource.OperationErrorCodeServiceTimeout, rec.Code)
+		assert.Equal(t, 1, proc.readAttempts,
+			"resolution is single-shot: exactly one read, no in-place retry")
+	})
+
+	t.Run("success resolves in one read", func(t *testing.T) {
+		proc := &resolveStubProcess{
+			loadResult: messages.LoadResourceResult{
+				Resource: srcResource,
+				Target:   srcTarget,
+			},
+			readResponses: []readResponse{
+				{
+					progress: &plugin.TrackedProgress{
+						ProgressResult: resource.ProgressResult{
+							OperationStatus:    resource.OperationStatusSuccess,
+							ResourceProperties: json.RawMessage(fmt.Sprintf(`{"%s":"%s"}`, prop, plaintext)),
+						},
+					},
+				},
+			},
+		}
+
+		result, err := resolveTargetConfigForList(proc, target)
+
+		require.NoError(t, err)
+		assert.Contains(t, string(result), plaintext)
+		assert.Equal(t, 1, proc.readAttempts)
+	})
 }
 
 // TestResolveTargetConfigForList_ConvertFailureDoesNotLeakEnvelope asserts that

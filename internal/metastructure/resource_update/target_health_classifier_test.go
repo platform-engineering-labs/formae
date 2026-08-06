@@ -74,7 +74,7 @@ func TestTargetHealthObservation(t *testing.T) {
 			wantOK: false,
 		},
 		{
-			name:   "non-terminal in-progress → no observation",
+			name: "non-terminal in-progress → no observation",
 			tp: &plugin.TrackedProgress{
 				ProgressResult: resource.ProgressResult{
 					OperationStatus: resource.OperationStatusInProgress,

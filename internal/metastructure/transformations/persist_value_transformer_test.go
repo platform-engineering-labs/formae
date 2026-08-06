@@ -287,6 +287,59 @@ func TestApplyToResource_HashesEnvelopedOpaque(t *testing.T) {
 	assert.Len(t, sv["$value"].(string), 64)
 }
 
+func TestApplyToResource_HashesMapValuedSchemaOpaqueField(t *testing.T) {
+	// A map-shaped secret field (e.g. K8S decodedData) is itself the secret value.
+	// It must be hashed into ONE opaque envelope, never left with plaintext keys
+	// beside a nil $value.
+	r := &pkgmodel.Resource{
+		Schema:     schemaWithOpaque("decodedData"),
+		Properties: json.RawMessage(`{"Name":"n","decodedData":{"username":"admin","password":"s3cr3t"}}`),
+	}
+	out, err := NewPersistValueTransformer().ApplyToResource(r)
+	require.NoError(t, err)
+
+	var props map[string]any
+	require.NoError(t, json.Unmarshal(out.Properties, &props))
+	assert.Equal(t, "n", props["Name"], "non-secret field untouched")
+
+	dd := props["decodedData"].(map[string]any)
+	assert.Equal(t, "Opaque", dd["$visibility"])
+	assert.Equal(t, true, dd["$hashed"])
+	assert.Equal(t, "Update", dd["$strategy"])
+	assert.Len(t, dd["$value"].(string), 64, "the whole map is hashed into one digest")
+	_, hasUser := dd["username"]
+	_, hasPass := dd["password"]
+	assert.False(t, hasUser, "plaintext username key must not survive at rest")
+	assert.False(t, hasPass, "plaintext password key must not survive at rest")
+	assert.NotContains(t, dd["$value"].(string), "admin")
+	assert.NotContains(t, dd["$value"].(string), "s3cr3t")
+}
+
+func TestApplyToResource_MapSecretWithValueKeyIsNotMistakenForEnvelope(t *testing.T) {
+	// A map-shaped secret whose keys happen to include one literally named "$value"
+	// but NO $visibility is not a formae envelope — it is the secret value. It must
+	// be hashed as a whole, not hashed-in-place (which would digest only the
+	// "$value" key and leave sibling plaintext at rest).
+	r := &pkgmodel.Resource{
+		Schema:     schemaWithOpaque("decodedData"),
+		Properties: json.RawMessage(`{"decodedData":{"password":"s3cr3t","$value":"not-an-envelope"}}`),
+	}
+	out, err := NewPersistValueTransformer().ApplyToResource(r)
+	require.NoError(t, err)
+
+	var props map[string]any
+	require.NoError(t, json.Unmarshal(out.Properties, &props))
+	dd := props["decodedData"].(map[string]any)
+	assert.Equal(t, "Opaque", dd["$visibility"])
+	assert.Equal(t, true, dd["$hashed"])
+	assert.Len(t, dd["$value"].(string), 64, "the whole map is hashed into one digest")
+	_, hasPass := dd["password"]
+	assert.False(t, hasPass, "sibling plaintext key must not survive at rest")
+	assert.NotContains(t, dd["$value"].(string), "s3cr3t")
+	assert.NotContains(t, dd["$value"].(string), "not-an-envelope",
+		"the coincidental $value key must be hashed, not surfaced as plaintext")
+}
+
 func TestApplyToResource_IdempotentAndSkipsClear(t *testing.T) {
 	r := &pkgmodel.Resource{
 		Schema:     schemaWithOpaque("SecretString"),
