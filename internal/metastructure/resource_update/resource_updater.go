@@ -469,17 +469,18 @@ func delete(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 }
 
 // resolvingTimeout sizes the ResolveCache timeout to outlive the cache's
-// worst-case resolve wall time: MaxRetries reads (each up to the plugin call
-// timeout) plus the exponential backoff budget the ResolveCache schedules with
-// (RetryStrategy.MaxTotalDelay), plus a margin. The backoff term is derived from
-// the same RetryStrategy the cache retries with, so a tuned or exponential
-// policy cannot make the two drift: a flat MaxRetries*RetryDelay estimate would
-// under-cover exponential throttling backoff and trip this timeout mid-retry.
+// worst-case resolve wall time: MaxRetries+1 reads (the initial read plus
+// MaxRetries retries, each up to the plugin call timeout) plus the exponential
+// backoff budget the ResolveCache schedules with (RetryStrategy.MaxTotalDelay),
+// plus a margin. The backoff term is derived from the same RetryStrategy the
+// cache retries with, so a tuned or exponential policy cannot make the two
+// drift: a flat MaxRetries*RetryDelay estimate would under-cover exponential
+// throttling backoff and trip this timeout mid-retry.
 func resolvingTimeout(cfg pkgmodel.RetryConfig) time.Duration {
 	const resolveCacheMargin = 30 * time.Second
 	perAttempt := time.Duration(PluginOperationCallTimeout) * time.Second
 	strategy := resource.RetryStrategy{MaxRetries: cfg.MaxRetries, BaseDelay: cfg.RetryDelay}
-	return time.Duration(cfg.MaxRetries)*perAttempt + strategy.MaxTotalDelay() + resolveCacheMargin
+	return time.Duration(cfg.MaxRetries+1)*perAttempt + strategy.MaxTotalDelay() + resolveCacheMargin
 }
 
 func resolve(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {

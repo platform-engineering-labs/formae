@@ -39,8 +39,16 @@ func TestResolveTimeoutTimeout_CoversExponentialBackoff(t *testing.T) {
 
 	const perAttempt = 60 * time.Second
 	strategy := resource.RetryStrategy{MaxRetries: cfg.MaxRetries, BaseDelay: cfg.RetryDelay}
-	want := time.Duration(cfg.MaxRetries)*perAttempt + strategy.MaxTotalDelay() + 30*time.Second
+	// The retry loop performs MaxRetries+1 reads (the initial read plus MaxRetries
+	// retries), so the envelope must budget one read per attempt, not per retry.
+	want := time.Duration(cfg.MaxRetries+1)*perAttempt + strategy.MaxTotalDelay() + 30*time.Second
 	assert.Equal(t, want, resolvingTimeout(proc))
+
+	// Invariant: the envelope must cover every attempt plus the full backoff
+	// budget, or it can fire mid-retry.
+	assert.GreaterOrEqual(t, resolvingTimeout(proc),
+		time.Duration(cfg.MaxRetries+1)*perAttempt+strategy.MaxTotalDelay(),
+		"timeout must cover MaxRetries+1 attempts plus the backoff budget")
 
 	flatEstimate := time.Duration(cfg.MaxRetries)*perAttempt +
 		time.Duration(cfg.MaxRetries-1)*cfg.RetryDelay + 30*time.Second

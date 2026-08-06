@@ -141,10 +141,11 @@ func handleStartTargetUpdate(from gen.PID, state gen.Atom, data TargetUpdaterDat
 
 // resolveTargetConfig pops the next resolvable and sends a ResolveValue request.
 // resolvingTimeout sizes the ResolveCache timeout to outlive the cache's
-// worst-case retry wall time: MaxRetries reads (each up to the plugin call
-// timeout) plus the exponential backoff budget. It derives the backoff envelope
-// from the same RetryConfig the ResolveCache reads, so a tuned policy cannot
-// cause the two to drift and trip this timeout mid-retry.
+// worst-case retry wall time: MaxRetries+1 reads (the initial read plus
+// MaxRetries retries, each up to the plugin call timeout) plus the exponential
+// backoff budget. It derives the backoff envelope from the same RetryConfig the
+// ResolveCache reads, so a tuned policy cannot cause the two to drift and trip
+// this timeout mid-retry.
 func resolvingTimeout(proc gen.Process) time.Duration {
 	// perAttempt mirrors resource_update.PluginOperationCallTimeout (60s). It is
 	// duplicated as a local const because target_update must not import
@@ -159,7 +160,7 @@ func resolvingTimeout(proc gen.Process) time.Duration {
 		return perAttempt + margin
 	}
 	strategy := resource.RetryStrategy{MaxRetries: cfg.MaxRetries, BaseDelay: cfg.RetryDelay}
-	return time.Duration(cfg.MaxRetries)*perAttempt + strategy.MaxTotalDelay() + margin
+	return time.Duration(cfg.MaxRetries+1)*perAttempt + strategy.MaxTotalDelay() + margin
 }
 
 func resolveTargetConfig(state gen.Atom, data TargetUpdaterData, proc gen.Process) (gen.Atom, TargetUpdaterData, []statemachine.Action, error) {
