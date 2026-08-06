@@ -4,7 +4,11 @@
 
 package model
 
-import "encoding/json"
+import (
+	"bytes"
+	"encoding/json"
+	"strings"
+)
 
 // RedactedForLog is substituted for the plaintext of an opaque value when it is
 // prepared for logging or other diagnostics.
@@ -21,6 +25,22 @@ const RedactedForLog = "<redacted>"
 func RedactOpaqueForLog(v any) any {
 	switch t := v.(type) {
 	case map[string]any:
+		// An embedded field ({"$embed": true, "$template": "...RS base64(env) US..."})
+		// hides opaque values base64-framed inside the $template string, where the
+		// generic walk below cannot reach them. Redact each span's $value in place.
+		if t["$embed"] == true {
+			if tmpl, ok := t["$template"].(string); ok {
+				out := make(map[string]any, len(t))
+				for k, val := range t {
+					if k == "$template" {
+						out[k] = redactEmbedTemplate(tmpl)
+						continue
+					}
+					out[k] = RedactOpaqueForLog(val)
+				}
+				return out
+			}
+		}
 		opaque := t["$visibility"] == VisibilityOpaque
 		out := make(map[string]any, len(t))
 		for k, val := range t {
@@ -52,4 +72,41 @@ func RedactOpaqueForLog(v any) any {
 	default:
 		return v
 	}
+}
+
+// redactEmbedTemplate redacts opaque $value fields carried inside the framed
+// spans of an $embed $template string, then re-frames each span so the template
+// stays structurally intact. If the template cannot be scanned (corrupt framing),
+// it fails closed: the whole template is replaced with RedactedForLog rather than
+// risk leaking an unparseable payload.
+func redactEmbedTemplate(tmpl string) string {
+	spans, err := ScanEmbedSpans(tmpl)
+	if err != nil {
+		return RedactedForLog
+	}
+	out := tmpl
+	// Splice back-to-front so earlier spans' byte offsets stay valid.
+	for i := len(spans) - 1; i >= 0; i-- {
+		sp := spans[i]
+		redacted := RedactOpaqueForLog(json.RawMessage(sp.EnvelopeJSON))
+		reJSON, err := marshalNoEscape(redacted)
+		if err != nil {
+			// Should not happen for a span we just decoded; fail closed.
+			reJSON = `"` + RedactedForLog + `"`
+		}
+		out = out[:sp.Start] + FrameEnvelope(reJSON) + out[sp.End:]
+	}
+	return out
+}
+
+// marshalNoEscape marshals v to JSON without escaping <, >, & so the redaction
+// marker stays human-readable (RedactedForLog contains angle brackets).
+func marshalNoEscape(v any) (string, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return "", err
+	}
+	return strings.TrimRight(buf.String(), "\n"), nil
 }
