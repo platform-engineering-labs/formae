@@ -154,7 +154,7 @@ type StartResourceUpdate struct {
 
 type PluginOperatorMissingInAction struct{}
 
-type ResolveCacheMissingInAction struct{}
+type ResolveTimedOut struct{}
 
 type Shutdown struct{}
 
@@ -251,7 +251,7 @@ func (r *ResourceUpdater) Init(args ...any) (statemachine.StateMachineSpec[Resou
 		statemachine.WithStateMessageHandler(StateUpdating, pluginOperationMissingInAction),
 		statemachine.WithStateMessageHandler(StateUpdating, shutdown),
 		statemachine.WithStateMessageHandler(StateResolving, resourceResolved),
-		statemachine.WithStateMessageHandler(StateResolving, resolveCacheMissingInAction),
+		statemachine.WithStateMessageHandler(StateResolving, resolveTimedOut),
 		statemachine.WithStateMessageHandler(StateResolving, resourceFailedToResolve),
 		statemachine.WithStateMessageHandler(StateResolving, shutdown),
 		statemachine.WithStateMessageHandler(StateSynchronizing, handleProgressUpdate),
@@ -468,6 +468,20 @@ func delete(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 	return handleProgressUpdate(gen.PID{}, state, data, *result, proc)
 }
 
+// resolvingTimeout sizes the ResolveCache timeout to outlive the cache's
+// worst-case resolve wall time: MaxRetries reads (each up to the plugin call
+// timeout) plus the exponential backoff budget the ResolveCache schedules with
+// (RetryStrategy.MaxTotalDelay), plus a margin. The backoff term is derived from
+// the same RetryStrategy the cache retries with, so a tuned or exponential
+// policy cannot make the two drift: a flat MaxRetries*RetryDelay estimate would
+// under-cover exponential throttling backoff and trip this timeout mid-retry.
+func resolvingTimeout(cfg pkgmodel.RetryConfig) time.Duration {
+	const resolveCacheMargin = 30 * time.Second
+	perAttempt := time.Duration(PluginOperationCallTimeout) * time.Second
+	strategy := resource.RetryStrategy{MaxRetries: cfg.MaxRetries, BaseDelay: cfg.RetryDelay}
+	return time.Duration(cfg.MaxRetries)*perAttempt + strategy.MaxTotalDelay() + resolveCacheMargin
+}
+
 func resolve(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
 	if len(data.resourceUpdate.RemainingResolvables) == 0 {
 		return nextState(state, data, proc)
@@ -488,19 +502,9 @@ func resolve(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Ato
 		return StateResolving, data, nil, fmt.Errorf("failed to send ResolveValue message to resolve cache: %w", err)
 	}
 
-	// The watchdog must outlive ResolveCache's worst-case wall time per property:
-	// each plugin Call takes up to PluginOperationCallTimeout, retried up to
-	// MaxRetries times with RetryDelay spacing for recoverable errors. Derive
-	// the envelope from the same RetryConfig that ResolveCache itself reads, so
-	// the two cannot drift if the policy is tuned.
-	perAttempt := time.Duration(PluginOperationCallTimeout) * time.Second
-	const resolveCacheMargin = 30 * time.Second
-	resolveCacheTimeout := time.Duration(data.retryConfig.MaxRetries)*perAttempt +
-		time.Duration(data.retryConfig.MaxRetries-1)*data.retryConfig.RetryDelay +
-		resolveCacheMargin
 	timeout := statemachine.StateTimeout{
-		Duration: resolveCacheTimeout,
-		Message:  ResolveCacheMissingInAction{},
+		Duration: resolvingTimeout(data.retryConfig),
+		Message:  ResolveTimedOut{},
 	}
 
 	return StateResolving, data, []statemachine.Action{timeout}, nil
@@ -989,7 +993,7 @@ func pluginOperationMissingInAction(from gen.PID, state gen.Atom, data ResourceU
 	return StateFinishedWithError, data, nil, nil
 }
 
-func resolveCacheMissingInAction(from gen.PID, state gen.Atom, data ResourceUpdateData, message ResolveCacheMissingInAction, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
+func resolveTimedOut(from gen.PID, state gen.Atom, data ResourceUpdateData, message ResolveTimedOut, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
 	proc.Log().Error("Resolve cache is missing in action state=%s commandID=%s ksuid=%s operation=%s", state, data.commandID, data.originalResourceKsuidURI.KSUID(), data.resourceUpdate.Operation)
 	data.resourceUpdate.MarkAsFailed()
 	return StateFinishedWithError, data, nil, nil

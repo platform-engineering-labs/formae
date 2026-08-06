@@ -445,11 +445,11 @@ func TestTimeoutHandlers_DoNotLogResolvedConfig(t *testing.T) {
 		assert.NotEmpty(t, clog.all(), "a log message must have been emitted")
 	})
 
-	// resolveCacheMissingInAction handler
-	t.Run("ResolveCacheMissingInAction", func(t *testing.T) {
+	// resolveTimedOut handler
+	t.Run("ResolveTimedOut", func(t *testing.T) {
 		clog2 := &capturingLog{}
 		proc2 := &capturingProcess{stubUpdaterProcess: &stubUpdaterProcess{}, log: clog2}
-		_, _, _, err := resolveCacheMissingInAction(gen.PID{}, gen.Atom("resolving"), data, ResolveCacheMissingInAction{}, proc2)
+		_, _, _, err := resolveTimedOut(gen.PID{}, gen.Atom("resolving"), data, ResolveTimedOut{}, proc2)
 		require.NoError(t, err)
 		for _, msg := range clog2.all() {
 			assert.NotContains(t, msg, knownPlaintext, "timeout log must not contain resolved credentials")

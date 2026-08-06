@@ -448,19 +448,22 @@ open class ScalarSecretResolvable extends Resolvable {
 /// consumer field, so the mistake is a PKL eval-time type error. Only .at(key)
 /// produces a Resolvable.
 class SecretMapAccessor {
+    local _self = this
     hidden label: String?
     hidden type: String(matches(Regex(#"^.*::.*$"#)))?
     hidden stack: String?
     hidden valueProperty: String
     hidden visibility: "Clear"|"Opaque" = "Clear"
     /// Access a value by key in the resolved map. Colons and dots are escaped for
-    /// gjson, matching MappingResolvable.at.
+    /// gjson, matching MappingResolvable.at. The leaf's label/type/stack/visibility
+    /// are captured from the accessor (via `_self`) rather than `this`, which inside
+    /// the `new {}` binds to the leaf being constructed and would self-reference.
     function at(key: String): SecretValueResolvable = new {
-        label = this.label
-        type = this.type
-        stack = this.stack
-        property = valueProperty + "." + key.replaceAll(":", "\\:").replaceAll(".", "\\.")
-        visibility = this.visibility
+        label = _self.label
+        type = _self.type
+        stack = _self.stack
+        property = _self.valueProperty + "." + key.replaceAll(":", "\\:").replaceAll(".", "\\.")
+        visibility = _self.visibility
     }
 }
 

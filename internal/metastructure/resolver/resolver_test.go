@@ -1629,6 +1629,22 @@ func TestExtractSourceOpaqueResolvableURIsFromJSON(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, got)
 
+	// A map-shaped secret (Kubernetes-style): the opaque value is a single field
+	// `decodedData` stored as one hashed envelope, and a ref selects a key with
+	// .at("password"), so its source property path is "decodedData.password".
+	// The ref is a credential by virtue of its opaque PARENT field, even though
+	// the leaf path has no envelope of its own.
+	mapKsuid := util.NewID()
+	mapURI := pkgmodel.NewFormaeURI(mapKsuid, "decodedData.password")
+	sources[mapKsuid] = &pkgmodel.Resource{
+		Ksuid:      mapKsuid,
+		Properties: json.RawMessage(`{"decodedData":{"$value":"h","$visibility":"Opaque","$hashed":true}}`),
+	}
+	got, err = ExtractSourceOpaqueResolvableURIsFromJSON(
+		json.RawMessage(`{"password":{"$ref":"`+string(mapURI)+`","$visibility":"Clear"}}`), load)
+	require.NoError(t, err)
+	assert.Equal(t, []pkgmodel.FormaeURI{mapURI}, got)
+
 	// An envelope-Opaque ref is a credential without ever loading the source.
 	loadFail := func(string) (*pkgmodel.Resource, error) {
 		return nil, fmt.Errorf("source must not be loaded for an envelope-opaque ref")
