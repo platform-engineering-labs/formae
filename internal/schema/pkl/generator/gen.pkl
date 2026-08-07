@@ -535,15 +535,7 @@ function applyResource(res: Class, value: Dynamic, context: String) : Map =
 
 
 local function getTypeName(value: Typed): String =
-  let (clazz = value.getClass())
-  let (reflectClass = reflect.Class(clazz))
-    // Check if it's a subclass of a known base type
-    if (reflectClass.isSubclassOf(reflect.Class(Resource)))
-      clazz.simpleName
-    else if (reflectClass.isSubclassOf(reflect.Class(Module)))
-      clazz.simpleName
-    else
-      clazz.simpleName
+  value.getClass().simpleName
 
 function shouldSkipProperty(prop: Any): Boolean =
   (prop.annotations.filterIsInstance(formae.FieldHint).isEmpty && prop.name != "label" )
