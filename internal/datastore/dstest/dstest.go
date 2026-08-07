@@ -136,6 +136,7 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunStatsResourceErrors_ReplaceDeleteFailedThenCreateSucceeds(t, newDS)
 	RunStatsResourceErrors_ReplaceDeleteSucceedsThenCreateFailed(t, newDS)
 	RunStatsResourceErrors_ReplaceSameTimestampFailedWins(t, newDS)
+	RunStatsResourceErrors_LaterCommandWinsOnTimestampTie(t, newDS)
 	RunStatsResourceErrors_FailedDeleteCounted(t, newDS)
 	RunStatsResourceErrors_GroupedByType(t, newDS)
 	RunCountResourcesInTarget(t, newDS)

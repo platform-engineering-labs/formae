@@ -288,6 +288,8 @@ func RunStatsResourceErrors_RejectedDoesNotClear(t *testing.T, newDS func(t *tes
 		)
 		assert.NoError(t, td.StoreFormaCommand(failed, failed.ID))
 
+		// A command whose resource updates end up rejected reports overall as
+		// failed; there is no separate rejected command state.
 		rejected := outcomeCommand(
 			forma_command.CommandStateFailed,
 			-1*time.Minute,
@@ -430,11 +432,13 @@ func RunStatsResourceErrors_ReplaceSameTimestampFailedWins(t *testing.T, newDS f
 		td := newDS(t)
 		defer td.CleanUpFn() //nolint:errcheck
 
+		// The failure is on the delete side, which sorts after the create side
+		// by operation, so only the state tiebreak can select it.
 		sameTs := -10 * time.Minute
 		deleteSide := outcomeUpdate("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket",
-			types.OperationDelete, resource_update.ResourceUpdateStateSuccess, sameTs)
+			types.OperationDelete, resource_update.ResourceUpdateStateFailed, sameTs)
 		createSide := outcomeUpdate("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket",
-			types.OperationCreate, resource_update.ResourceUpdateStateFailed, sameTs)
+			types.OperationCreate, resource_update.ResourceUpdateStateSuccess, sameTs)
 		createSide.ModifiedTs = deleteSide.ModifiedTs
 
 		replace := outcomeCommand(
@@ -448,6 +452,50 @@ func RunStatsResourceErrors_ReplaceSameTimestampFailedWins(t *testing.T, newDS f
 		assert.NoError(t, err)
 		assert.Equal(t, map[string]int{"AWS::S3::Bucket": 1}, s.ResourceErrors,
 			"an unresolvable tie must report the failure rather than hide it")
+	})
+}
+
+// RunStatsResourceErrors_LaterCommandWinsOnTimestampTie verifies that when two
+// commands carry a row for the same resource with an identical timestamp, the
+// later command's row is the latest outcome: its success clears the earlier
+// command's failure.
+func RunStatsResourceErrors_LaterCommandWinsOnTimestampTie(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("StatsResourceErrors_LaterCommandWinsOnTimestampTie", func(t *testing.T) {
+		td := newDS(t)
+		defer td.CleanUpFn() //nolint:errcheck
+
+		sameTs := -10 * time.Minute
+		failedRow := outcomeUpdate("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket",
+			types.OperationCreate, resource_update.ResourceUpdateStateFailed, sameTs)
+		succeededRow := outcomeUpdate("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket",
+			types.OperationCreate, resource_update.ResourceUpdateStateSuccess, sameTs)
+		succeededRow.ModifiedTs = failedRow.ModifiedTs
+
+		earlier := outcomeCommand(
+			forma_command.CommandStateFailed,
+			sameTs,
+			[]resource_update.ResourceUpdate{failedRow},
+		)
+		later := outcomeCommand(
+			forma_command.CommandStateSuccess,
+			sameTs,
+			[]resource_update.ResourceUpdate{succeededRow},
+		)
+		// Command ids are KSUIDs whose timestamp part has second granularity, so
+		// two ids minted within the same second sort by their random payload.
+		// Order the pair explicitly so the failure always carries the lower id.
+		if earlier.ID > later.ID {
+			earlier.ID, later.ID = later.ID, earlier.ID
+		}
+		assert.Less(t, earlier.ID, later.ID)
+
+		assert.NoError(t, td.StoreFormaCommand(earlier, earlier.ID))
+		assert.NoError(t, td.StoreFormaCommand(later, later.ID))
+
+		s, err := td.Stats()
+		assert.NoError(t, err)
+		assert.Empty(t, s.ResourceErrors,
+			"with timestamps tied the later command's success is the latest outcome")
 	})
 }
 

@@ -4352,6 +4352,10 @@ func (d DatastoreSQLite) Stats() (*stats.Stats, error) {
 	// filtering it out of the ordering set would leave that failure reported
 	// forever.
 	//
+	// The resource_type IS NOT NULL filter is load-bearing: it drops rows whose
+	// stored resource carries no type, which would otherwise fail to scan into
+	// a string.
+	//
 	// ORDER BY ends with operation so the ordering is total within a ksuid
 	// (the primary key includes operation), making ROW_NUMBER deterministic.
 	// The state tiebreak comes first: when a replace pair's delete and create
