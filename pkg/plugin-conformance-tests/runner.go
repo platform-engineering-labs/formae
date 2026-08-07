@@ -212,6 +212,30 @@ func getDiscoveryTimeout() time.Duration {
 	return 2 * time.Minute // Default timeout
 }
 
+// defaultSyncTimeout bounds the wait for a forced synchronization to report
+// completion.
+//
+// It has to clear the plugin-side retry budget, not just a typical sync. A
+// healthy sync settles in a few seconds, but plugins absorb recoverable
+// CloudControl errors with their own exponential backoff. The AWS plugin,
+// for instance, budgets ten attempts over a 1s..30s backoff, roughly three
+// minutes. Under the shared-account throttling the conformance matrix
+// generates, a sync that is still retrying is making progress, not hanging.
+// A shorter wait here turns that into a spurious failure on a random test
+// each run, so the default sits above the retry budget with headroom.
+const defaultSyncTimeout = 5 * time.Minute
+
+// getSyncTimeout returns the timeout duration for waiting on synchronization.
+// It reads from the FORMAE_TEST_SYNC_TIMEOUT environment variable (in minutes).
+func getSyncTimeout() time.Duration {
+	if val := os.Getenv("FORMAE_TEST_SYNC_TIMEOUT"); val != "" {
+		if minutes, err := strconv.Atoi(val); err == nil && minutes > 0 {
+			return time.Duration(minutes) * time.Minute
+		}
+	}
+	return defaultSyncTimeout
+}
+
 const (
 	// discoveryPollInterval is how often the discovery wait loop reads the local
 	// inventory while waiting for a scan to surface the resource.
@@ -261,6 +285,45 @@ func getOOBDeleteTimeout() time.Duration {
 		}
 	}
 	return 2 * time.Minute // Default timeout
+}
+
+const (
+	// oobSyncPollInterval is how often the OOB-delete wait loop re-reads the
+	// local inventory between sync re-triggers.
+	oobSyncPollInterval = 2 * time.Second
+	// oobSyncRetriggerDefault is the default interval before the first sync
+	// re-trigger in the OOB-delete wait; it then backs off toward the cap.
+	oobSyncRetriggerDefault = 10 * time.Second
+	// oobSyncRetriggerCap is the ceiling for the re-trigger interval.
+	oobSyncRetriggerCap = 30 * time.Second
+	// oobSyncRetriggerFloor is the minimum re-trigger interval. Sync walks every
+	// managed resource, and the conformance matrix runs ~150 jobs against one
+	// shared cloud account, so the floor caps re-trigger pressure and cannot be
+	// configured away.
+	oobSyncRetriggerFloor = 5 * time.Second
+)
+
+// getOOBSyncRetriggerBackoff returns the capped exponential backoff schedule for
+// re-triggering sync in the OOB-delete wait loop. The base interval is read from
+// FORMAE_TEST_OOB_SYNC_RETRIGGER_INTERVAL (in seconds); empty, non-numeric, or
+// non-positive values fall back to the default, and the value is clamped into
+// [floor, cap] - up to the floor so the rate-limit guarantee holds, and down to
+// the cap so an oversized base interval cannot push the first re-trigger past
+// the timeout and suppress retries entirely.
+func getOOBSyncRetriggerBackoff() backoffConfig {
+	initial := oobSyncRetriggerDefault
+	if val := os.Getenv("FORMAE_TEST_OOB_SYNC_RETRIGGER_INTERVAL"); val != "" {
+		if secs, err := strconv.Atoi(val); err == nil && secs > 0 {
+			initial = time.Duration(secs) * time.Second
+			if initial < oobSyncRetriggerFloor {
+				initial = oobSyncRetriggerFloor
+			}
+			if initial > oobSyncRetriggerCap {
+				initial = oobSyncRetriggerCap
+			}
+		}
+	}
+	return backoffConfig{initial: initial, max: oobSyncRetriggerCap}
 }
 
 // RunCRUDTests discovers test cases from the testdata directory and runs
@@ -1439,7 +1502,7 @@ func runCRUDTest(t *testing.T, tc TestCase, rc *ResultCollector) {
 
 	// === Step 8: Wait for synchronization to complete ===
 	t.Log("Step 8: Waiting for synchronization to complete...")
-	if err := harness.WaitForSyncCompletion(60 * time.Second); err != nil {
+	if err := harness.WaitForSyncCompletion(getSyncTimeout()); err != nil {
 		rc.CRUDFatalf(t, idx, PhaseSync, "Synchronization should complete successfully: %v", err)
 	}
 
