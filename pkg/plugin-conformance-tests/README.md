@@ -117,6 +117,7 @@ exercised.
 | `FORMAE_TEST_PARALLEL` | Set truthy (e.g. `true`, `1`) to run cases with `t.Parallel()`. |
 | `FORMAE_TEST_TESTDATA_DIR` | Override the testdata directory. Relative paths resolve against the plugin directory. |
 | `FORMAE_TEST_EXTRA_DISCOVERY_TYPES` | Extra resource types (comma-separated) to add to the discovery scan, beyond those declared in test data. |
+| `FORMAE_TEST_KEEP_TEMP` | Set truthy (e.g. `true`, `1`) to keep each test's temp directory even when the test passes. Failing tests keep theirs regardless. |
 | `FORMAE_BINARY` | Absolute path to a specific `formae` binary. Skips the channel-aware resolver. |
 | `FORMAE_VERSION` | Pin a specific formae version. The resolver searches stable then dev channels for an exact match. |
 | `FORMAE_TEST_RUN_ID` | Set by the harness for each run; available to Pkl fixtures for unique resource naming. |
@@ -124,6 +125,37 @@ exercised.
 A timeout knob for the OOB-delete inventory-removal step is also exposed for
 slow backends; see the comment block above `RunCRUDTests` in
 [`runner.go`](./runner.go) for the current name and default.
+
+## Diagnostics on failure
+
+Each test case runs against its own temp directory holding the generated agent
+config, the SQLite datastore and the agent log. A case that **fails** keeps that
+directory instead of deleting it, and prints where it is:
+
+```
+Retaining test temp directory for diagnostics: /tmp/formae-test-TestCRUD_AWS_s3-bucket-2454657119 (agent log: /tmp/formae-test-TestCRUD_AWS_s3-bucket-2454657119/formae-test.log)
+```
+
+The agent log is always `formae-test.log` inside that directory, so a CI job can
+collect it with the glob `<temp>/formae-test-*/formae-test.log`. The directory
+name carries the sanitised test name, so an artifact maps back to the fixture
+that produced it. `<temp>` is Go's `os.TempDir()` — `$TMPDIR` when set, else
+`/tmp`.
+
+Set `FORMAE_TEST_KEEP_TEMP=1` to keep the directory on a **passing** run too,
+which is useful when reproducing an intermittent failure locally. Note that a
+retained passing run only prints its path under `go test -v`.
+
+Two caveats:
+
+* Retained directories are yours to delete. On an ephemeral CI runner they go
+  away with the runner, but on a developer machine whose temp directory is not
+  reclaimed the `formae-test-*` glob will also match older retained runs.
+* A test that dies by an unrecovered **panic** still loses its directory: Go's
+  `testing` package runs cleanup functions during panic unwinding, before it
+  records the test as failed, so the harness cannot tell that run apart from a
+  passing one. Failures reported through `t.Error`/`t.Fatal` — which is how the
+  suite reports every assertion — retain correctly.
 
 ## Which `formae` binary gets used
 
