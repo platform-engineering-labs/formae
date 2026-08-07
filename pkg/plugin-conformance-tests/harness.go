@@ -164,21 +164,38 @@ func cleanupTempDir(r testReporter, tempDir, logPath string, failed bool) {
 	}
 }
 
+// registerDiagnosticsCleanup arranges for the per-test temp directory to be
+// removed after the test, or retained when the test failed so its agent log and
+// datastore can be collected. Registered before any other cleanup so that it
+// runs last, and a no-op if setup never got as far as creating the directory.
+func (h *TestHarness) registerDiagnosticsCleanup() {
+	h.t.Cleanup(func() {
+		if h.tempDir == "" {
+			return
+		}
+		cleanupTempDir(h.t, h.tempDir, h.logFile, h.t.Failed())
+	})
+}
+
 // NewTestHarness creates a new test harness instance
 func NewTestHarness(t *testing.T) *TestHarness {
-	// Acquire the formae binary, downloading via orbital if needed
-	formaeBinary, binaryCleanup := EnsureFormaeBinary(t)
-
-	ctx, cancel := context.WithCancel(context.Background())
-
 	h := &TestHarness{
 		t:            t,
-		formaeBinary: formaeBinary,
-		agentCtx:     ctx,
-		agentCancel:  cancel,
 		cleanupFuncs: []func(){},
 		agentStarted: false,
 	}
+
+	// Registered first so that it runs last: the temp directory outlives every
+	// other cleanup, including a t.Fatalf during the rest of this constructor.
+	h.registerDiagnosticsCleanup()
+
+	// Acquire the formae binary, downloading via orbital if needed
+	formaeBinary, binaryCleanup := EnsureFormaeBinary(t)
+	h.formaeBinary = formaeBinary
+
+	ctx, cancel := context.WithCancel(context.Background())
+	h.agentCtx = ctx
+	h.agentCancel = cancel
 
 	// Register binary cleanup so any temp download directory is removed on teardown
 	h.RegisterCleanup(binaryCleanup)
@@ -216,24 +233,21 @@ func NewTestHarness(t *testing.T) *TestHarness {
 
 // setupTestEnvironment creates a temporary directory and config file for testing
 func (h *TestHarness) setupTestEnvironment() error {
-	// Create temp directory
-	tempDir, err := os.MkdirTemp("", "formae-test-*")
+	// Create temp directory, named after the test so a retained directory is
+	// traceable back to the case that produced it
+	tempDir, err := os.MkdirTemp("", fmt.Sprintf("formae-test-%s-*", sanitizeForPath(h.t.Name())))
 	if err != nil {
 		return fmt.Errorf("failed to create temp directory: %w", err)
 	}
 	h.tempDir = tempDir
 
-	// Register cleanup to remove temp directory
-	h.RegisterCleanup(func() {
-		h.t.Logf("Cleaning up temp directory: %s", tempDir)
-		_ = os.RemoveAll(tempDir)
-	})
-
 	// Create database path in temp directory
 	dbPath := filepath.Join(tempDir, "formae-test.db")
 
-	// Create log file path in temp directory
+	// Create log file path in temp directory. Recorded before the fallible
+	// steps below so a setup failure still reports the agent log path.
 	logPath := filepath.Join(tempDir, "formae-test.log")
+	h.logFile = logPath
 
 	// Generate a random network cookie for distributed plugin communication
 	cookieBytes := make([]byte, 16)
@@ -323,7 +337,6 @@ pluginDir = "~/.pel/formae/plugins"
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
 	h.configFile = configFile
-	h.logFile = logPath
 
 	h.t.Logf("Created test environment: tempDir=%s, configFile=%s, dbPath=%s, logPath=%s", tempDir, configFile, dbPath, logPath)
 	return nil

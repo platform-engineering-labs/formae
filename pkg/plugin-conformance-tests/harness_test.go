@@ -7,9 +7,11 @@ package conformance
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // fakeReporter is a local testReporter fake, shaped like collectingReporter,
@@ -110,6 +112,9 @@ func TestCleanupTempDir(t *testing.T) {
 		if !dirExists(dir) {
 			t.Errorf("expected temp directory %s to be retained", dir)
 		}
+		if len(r.errors) != 0 {
+			t.Errorf("expected no reported errors, got %v", r.errors)
+		}
 	})
 
 	t.Run("passing with malformed FORMAE_TEST_KEEP_TEMP removes the directory and reports the ignored value", func(t *testing.T) {
@@ -124,6 +129,9 @@ func TestCleanupTempDir(t *testing.T) {
 		}
 		if !r.logContaining("FORMAE_TEST_KEEP_TEMP", "yes") {
 			t.Errorf("expected the ignored-value message to name FORMAE_TEST_KEEP_TEMP and the value, got %v", r.logs)
+		}
+		if len(r.errors) != 0 {
+			t.Errorf("expected no reported errors, got %v", r.errors)
 		}
 	})
 
@@ -239,6 +247,20 @@ func TestSanitizeForPath(t *testing.T) {
 		}
 	})
 
+	t.Run("caps at 40 runes for multi-byte input", func(t *testing.T) {
+		// 60 sanitized runes spread over 90 input bytes: the cap counts runes,
+		// and every multi-byte rune is replaced before the cap applies.
+		input := strings.Repeat("aé", 30)
+		got := sanitizeForPath(input)
+		want := strings.Repeat("a_", 20)
+		if got != want {
+			t.Errorf("sanitizeForPath(%q) = %q, want %q", input, got, want)
+		}
+		if n := utf8.RuneCountInString(got); n != 40 {
+			t.Errorf("sanitizeForPath(%q) length = %d runes, want 40", input, n)
+		}
+	})
+
 	t.Run("result is a valid os.MkdirTemp pattern component", func(t *testing.T) {
 		sanitized := sanitizeForPath("TestCRUD/AWS::s3-bucket")
 		dir, err := os.MkdirTemp(t.TempDir(), fmt.Sprintf("formae-test-%s-*", sanitized))
@@ -249,4 +271,145 @@ func TestSanitizeForPath(t *testing.T) {
 			t.Errorf("expected MkdirTemp to create %s", dir)
 		}
 	})
+}
+
+// Env keys driving the retention child process (see TestRetentionChild). They
+// are passed to the re-invoked test binary through its environment, so no shell
+// is involved and the test is OS-independent.
+const (
+	envRetentionMode = "FORMAE_TEST_RETENTION_MODE"    // how the child ends: pass, error or fatal
+	envRetentionDir  = "FORMAE_TEST_RETENTION_TEMPDIR" // directory handed to the harness as its temp dir
+)
+
+// Fragments of the messages cleanupTempDir emits, asserted against the child
+// output.
+const (
+	cleanupLogFragment   = "Cleaning up temp directory"
+	retentionLogFragment = "Retaining test temp directory"
+)
+
+// TestRetentionChild is not a real test: it is the child process re-invoked by
+// TestTempDirRetention. It is inert during a normal test run and only acts when
+// FORMAE_TEST_RETENTION_MODE is set, registering the harness diagnostics
+// cleanup over the directory named by FORMAE_TEST_RETENTION_TEMPDIR and then
+// ending the way the mode asks for.
+func TestRetentionChild(t *testing.T) {
+	mode := os.Getenv(envRetentionMode)
+	if mode == "" {
+		return
+	}
+
+	dir := os.Getenv(envRetentionDir)
+	h := &TestHarness{t: t, tempDir: dir, logFile: filepath.Join(dir, "formae-test.log")}
+	h.registerDiagnosticsCleanup()
+
+	switch mode {
+	case "pass":
+	case "error":
+		t.Errorf("deliberate failure")
+	case "fatal":
+		t.Fatalf("deliberate fatal failure")
+	default:
+		t.Fatalf("unknown retention mode %q", mode)
+	}
+}
+
+// newRetentionVictimDir creates a directory holding an agent log file, standing
+// in for the harness temp directory the child process keeps or removes. It
+// lives inside t.TempDir(), so a retained directory is still cleaned up.
+func newRetentionVictimDir(t *testing.T) (dir, logPath string) {
+	t.Helper()
+	dir = filepath.Join(t.TempDir(), "formae-test-victim")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatalf("failed to create victim directory: %v", err)
+	}
+	logPath = filepath.Join(dir, "formae-test.log")
+	if err := os.WriteFile(logPath, []byte("agent log\n"), 0o644); err != nil {
+		t.Fatalf("failed to write victim agent log: %v", err)
+	}
+	return dir, logPath
+}
+
+// runRetentionChild re-invokes this test binary for TestRetentionChild only,
+// returning its combined output and exit error. keepTemp is always set
+// explicitly so an ambient FORMAE_TEST_KEEP_TEMP cannot leak into the child.
+func runRetentionChild(t *testing.T, mode, dir, keepTemp string) (string, error) {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestRetentionChild$", "-test.v")
+	cmd.Env = append(os.Environ(),
+		envRetentionMode+"="+mode,
+		envRetentionDir+"="+dir,
+		"FORMAE_TEST_KEEP_TEMP="+keepTemp,
+	)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+func TestTempDirRetention(t *testing.T) {
+	tests := []struct {
+		name         string
+		mode         string
+		keepTemp     string
+		wantRetained bool
+		wantSuccess  bool
+		wantOutput   string // proof the child ran this mode rather than skipping or matching no test
+	}{
+		{
+			name:        "passing test removes the temp directory",
+			mode:        "pass",
+			keepTemp:    "false",
+			wantSuccess: true,
+			wantOutput:  "--- PASS: TestRetentionChild",
+		},
+		{
+			name:         "failing test retains the temp directory",
+			mode:         "error",
+			keepTemp:     "false",
+			wantRetained: true,
+			wantOutput:   "deliberate failure",
+		},
+		{
+			name:         "fatal failure retains the temp directory",
+			mode:         "fatal",
+			keepTemp:     "false",
+			wantRetained: true,
+			wantOutput:   "deliberate fatal failure",
+		},
+		{
+			name:         "passing test with FORMAE_TEST_KEEP_TEMP=1 retains the temp directory",
+			mode:         "pass",
+			keepTemp:     "1",
+			wantRetained: true,
+			wantSuccess:  true,
+			wantOutput:   "--- PASS: TestRetentionChild",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir, logPath := newRetentionVictimDir(t)
+
+			out, err := runRetentionChild(t, tt.mode, dir, tt.keepTemp)
+
+			if tt.wantSuccess && err != nil {
+				t.Errorf("child exited with %v, want success\n%s", err, out)
+			}
+			if !tt.wantSuccess && err == nil {
+				t.Errorf("child exited successfully, want a non-zero exit status\n%s", out)
+			}
+			if got := dirExists(dir); got != tt.wantRetained {
+				t.Errorf("directory %s present = %v, want %v\n%s", dir, got, tt.wantRetained, out)
+			}
+
+			want := []string{cleanupLogFragment, dir, tt.wantOutput}
+			if tt.wantRetained {
+				want = []string{retentionLogFragment, dir, logPath, tt.wantOutput}
+			}
+			for _, s := range want {
+				if !strings.Contains(out, s) {
+					t.Errorf("child output does not contain %q\n%s", s, out)
+				}
+			}
+		})
+	}
 }
