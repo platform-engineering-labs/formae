@@ -714,4 +714,10 @@ examples {
   ["Fq - type"] {
     "AWS::S3::Bucket"
   }
+  ["TTL policy with both ttl and expiresAt is rejected"] {
+    "TTLPolicy: set either ttl or expiresAt, not both"
+  }
+  ["TTL policy with neither ttl nor expiresAt is rejected"] {
+    "TTLPolicy: set either ttl or expiresAt"
+  }
 }

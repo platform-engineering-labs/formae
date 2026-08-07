@@ -109,19 +109,49 @@ open class PolicyResolvable extends Resolvable {
     hidden type = "Formae::Policy"
 }
 
-// TTL Policy - destroys stack after duration
+// TTL Policy - destroys a stack at a deadline.
+//
+// Set exactly one of:
+//   ttl       - a duration, counted from when the stack was created. Stable
+//               across re-applies: the countdown never restarts.
+//   expiresAt - an absolute instant, as an RFC 3339 timestamp. Use this when you
+//               already hold the deadline and want it to survive re-applies
+//               unchanged. Sub-second precision is dropped, and the instant must
+//               be no earlier than 2000-01-01T00:00:00Z.
+//
+// The regex on expiresAt is a shape check only — a real calendar date is
+// validated when the forma is applied.
 open class TTLPolicy extends Policy {
-    hidden ttl: Duration
+    hidden ttl: Duration?
+    hidden expiresAt: String(matches(Regex(#"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$"#)))?
     hidden onDependents: ("abort"|"cascade") = "abort"
 
     local self = this
     // Output
-    function render(): Dynamic = new {
-        Type = "ttl"
-        Label = self.label
-        TTLSeconds = self.ttl.toUnit("s").value.toInt()
-        OnDependents = self.onDependents
-    }
+    //
+    // Each variant builds its own Dynamic rather than emitting both keys and
+    // leaning on null elision: the stored payload carries the key for the
+    // variant that is set and only that key, and which key is present is what
+    // decides how the deadline is read back.
+    function render(): Dynamic =
+        if (self.ttl != null && self.expiresAt != null)
+            throw("TTLPolicy: set either ttl or expiresAt, not both")
+        else if (self.ttl != null)
+            new {
+                Type = "ttl"
+                Label = self.label
+                TTLSeconds = self.ttl.toUnit("s").value.toInt()
+                OnDependents = self.onDependents
+            }
+        else if (self.expiresAt != null)
+            new {
+                Type = "ttl"
+                Label = self.label
+                ExpiresAt = self.expiresAt
+                OnDependents = self.onDependents
+            }
+        else
+            throw("TTLPolicy: set either ttl or expiresAt")
 }
 
 // Auto-Reconcile Policy - periodically reconciles stack to declared state

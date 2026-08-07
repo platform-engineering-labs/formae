@@ -325,6 +325,18 @@ func policiesEqual(a, b pkgmodel.Policy) bool {
 		if !ok {
 			return false
 		}
+		if pa.IsAbsolute() != pb.IsAbsolute() {
+			// Switching a policy between a duration and an instant is a change,
+			// not a no-op.
+			return false
+		}
+		if pa.IsAbsolute() {
+			// Compare the canonical form rather than the time.Time: storage
+			// normalises to UTC whole seconds, so two spellings of one instant
+			// are the same deadline, and == would additionally compare monotonic
+			// and location representation.
+			return pa.CanonicalExpiresAt() == pb.CanonicalExpiresAt() && pa.OnDependents == pb.OnDependents
+		}
 		return pa.TTLSeconds == pb.TTLSeconds && pa.OnDependents == pb.OnDependents
 	case *pkgmodel.AutoReconcilePolicy:
 		pb, ok := b.(*pkgmodel.AutoReconcilePolicy)

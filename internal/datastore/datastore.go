@@ -129,6 +129,43 @@ type ExpiredStackInfo struct {
 	StackLabel   string
 	StackID      string
 	OnDependents string // "abort" or "cascade"
+	// StackCreatedAt is the stack's first version's timestamp — the anchor a
+	// relative TTL counts from.
+	StackCreatedAt time.Time
+	// ExpiresAt is the policy's absolute deadline in its stored form, empty for
+	// a relative policy; TTLSeconds is the relative deadline, nil for an
+	// absolute one. Both are reported so an expiry can be explained in the log
+	// rather than only announced.
+	ExpiresAt  string
+	TTLSeconds *int64
+}
+
+// HasUnreadableDeadline reports whether this stack was reported expired on an
+// absolute deadline that is not actually a readable instant.
+//
+// The expiry queries compare absolute deadlines as fixed-width strings, on
+// purpose: a cast would let one corrupt row abort the whole scan and stop every
+// stack from ever expiring. The cost is that a string comparison cannot tell a
+// real calendar date from an impossible one — "2025-02-30T12:00:00Z" has the
+// right shape and sorts like a date. Expiry destroys real resources, so a real
+// parse gets the last word before anything is acted on.
+func (e ExpiredStackInfo) HasUnreadableDeadline() bool {
+	if e.ExpiresAt == "" {
+		return false
+	}
+	_, err := pkgmodel.CanonicalizeExpiresAt(e.ExpiresAt)
+	return err != nil
+}
+
+// Deadline renders the instant this stack was due to be destroyed, for logging.
+func (e ExpiredStackInfo) Deadline() string {
+	if e.ExpiresAt != "" {
+		return e.ExpiresAt
+	}
+	if e.TTLSeconds == nil {
+		return "unknown"
+	}
+	return e.StackCreatedAt.Add(time.Duration(*e.TTLSeconds) * time.Second).UTC().Format(pkgmodel.ExpiresAtLayout)
 }
 
 // StackReconcileInfo contains information about a stack with an auto-reconcile policy.

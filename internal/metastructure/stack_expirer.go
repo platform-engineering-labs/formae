@@ -6,6 +6,7 @@ package metastructure
 
 import (
 	"fmt"
+	"log/slog"
 	"time"
 
 	"ergo.services/ergo/act"
@@ -100,9 +101,13 @@ func (s *StackExpirer) checkExpiredStacks() {
 		return
 	}
 
-	// For each expired stack, trigger a destroy command
+	// For each expired stack, trigger a destroy command. Expiry destroys real
+	// resources, so log the deadline and the anchor it was measured from — an
+	// unexpected destroy should be explainable from the log alone.
 	for _, stackInfo := range expiredStacks {
-		s.Log().Info("Expiring stack label=%s onDependents=%s", stackInfo.StackLabel, stackInfo.OnDependents)
+		s.Log().Info("Expiring stack label=%s onDependents=%s deadline=%s createdAt=%s",
+			stackInfo.StackLabel, stackInfo.OnDependents,
+			stackInfo.Deadline(), stackInfo.StackCreatedAt.UTC().Format(time.RFC3339))
 
 		if err := s.destroyExpiredStack(stackInfo); err != nil {
 			s.Log().Error("Failed to destroy expired stack label=%s: %v", stackInfo.StackLabel, err)
@@ -164,6 +169,15 @@ type destroyExpiredResult struct {
 // when expiration is aborted due to external dependents, or when no updates are needed.
 // The caller is responsible for persisting the command and starting the changeset execution.
 func prepareDestroyExpiredStack(ds datastore.Datastore, stackInfo datastore.ExpiredStackInfo, clientID string, cleanupClientID string) (*destroyExpiredResult, error) {
+	// The query matches absolute deadlines by string comparison, which cannot
+	// reject an impossible calendar date. Re-check with a real parse before
+	// destroying anything: a deadline nobody can read is not a deadline.
+	if stackInfo.HasUnreadableDeadline() {
+		slog.Warn("Refusing to expire stack: its deadline is not a readable instant",
+			"stack", stackInfo.StackLabel, "expiresAt", stackInfo.ExpiresAt)
+		return nil, nil
+	}
+
 	// Load all resources in the stack
 	resources, err := ds.LoadResourcesByStack(stackInfo.StackLabel)
 	if err != nil {

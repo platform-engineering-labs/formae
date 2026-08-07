@@ -4803,13 +4803,17 @@ func reconstructPolicyJSONAurora(label, policyType, policyData string) (json.Raw
 func (d *DatastoreAuroraDataAPI) ListAllStacks() ([]*pkgmodel.Stack, error) {
 	ctx := context.Background()
 
-	// Get all stacks at their latest version that aren't deleted
-	// Uses window function to reliably get the most recent version per stack id
+	// Get all stacks at their latest version that aren't deleted.
+	// Uses window functions to reliably get the most recent version per stack id
+	// for the metadata, and the first version's timestamp for CreatedAt — a
+	// stack gains a version whenever its description changes, so the latest
+	// version's valid_from is a modification time, not a creation time.
 	// Note: Use COLLATE "C" for binary ordering of KSUID strings (en_US.utf8 collation breaks ASCII ordering)
 	query := `
-		SELECT id, label, description, valid_from FROM (
-			SELECT id, label, description, valid_from, operation,
-			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+		SELECT id, label, description, created_at FROM (
+			SELECT id, label, description, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn,
+			       FIRST_VALUE(valid_from) OVER (PARTITION BY id ORDER BY version COLLATE "C" ASC) as created_at
 			FROM stacks
 		) sub
 		WHERE rn = 1 AND operation != 'delete'
@@ -4839,13 +4843,13 @@ func (d *DatastoreAuroraDataAPI) ListAllStacks() ([]*pkgmodel.Stack, error) {
 		if err != nil {
 			return nil, err
 		}
-		validFrom, _ := getTimestampField(record[3])
+		createdAt, _ := getTimestampField(record[3])
 
 		stacks = append(stacks, &pkgmodel.Stack{
 			ID:          id,
 			Label:       label,
 			Description: description,
-			CreatedAt:   validFrom,
+			CreatedAt:   createdAt,
 		})
 	}
 
@@ -4865,10 +4869,7 @@ func (d *DatastoreAuroraDataAPI) CreatePolicy(policy pkgmodel.Policy, commandID 
 	var policyData string
 	switch p := policy.(type) {
 	case *pkgmodel.TTLPolicy:
-		data, err := json.Marshal(map[string]any{
-			"TTLSeconds":   p.TTLSeconds,
-			"OnDependents": p.OnDependents,
-		})
+		data, err := json.Marshal(datastore.TTLPolicyData(p))
 		if err != nil {
 			return "", fmt.Errorf("failed to marshal policy data: %w", err)
 		}
@@ -4960,10 +4961,7 @@ func (d *DatastoreAuroraDataAPI) UpdatePolicy(policy pkgmodel.Policy, commandID 
 	var policyData string
 	switch p := policy.(type) {
 	case *pkgmodel.TTLPolicy:
-		data, err := json.Marshal(map[string]any{
-			"TTLSeconds":   p.TTLSeconds,
-			"OnDependents": p.OnDependents,
-		})
+		data, err := json.Marshal(datastore.TTLPolicyData(p))
 		if err != nil {
 			return "", fmt.Errorf("failed to marshal policy data: %w", err)
 		}
@@ -5669,20 +5667,7 @@ func (d *DatastoreAuroraDataAPI) DeletePoliciesForStack(stackID string, commandI
 func deserializePolicyAurora(label, policyType, policyDataStr, stackID string) (pkgmodel.Policy, error) {
 	switch policyType {
 	case "ttl":
-		var data struct {
-			TTLSeconds   int64  `json:"TTLSeconds"`
-			OnDependents string `json:"OnDependents"`
-		}
-		if err := json.Unmarshal([]byte(policyDataStr), &data); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal TTL policy data: %w", err)
-		}
-		return &pkgmodel.TTLPolicy{
-			Type:         "ttl",
-			Label:        label,
-			TTLSeconds:   data.TTLSeconds,
-			OnDependents: data.OnDependents,
-			StackID:      stackID,
-		}, nil
+		return datastore.TTLPolicyFromData(label, policyDataStr, stackID)
 	case "auto-reconcile":
 		var data struct {
 			IntervalSeconds int64 `json:"IntervalSeconds"`
@@ -5701,18 +5686,58 @@ func deserializePolicyAurora(label, policyType, policyDataStr, stackID string) (
 	}
 }
 
+// isNullField reports whether a Data API field carried a SQL NULL. The typed
+// getters coerce NULL to a zero value, which is indistinguishable from a real
+// zero for a column where zero is meaningful — TTLSeconds is one.
+func isNullField(field types.Field) bool {
+	_, isNull := field.(*types.FieldMemberIsNull)
+	return isNull
+}
+
+// ttlExpiredPredicatePgAurora decides whether a TTL policy's deadline has
+// passed. It is shared by the inline and standalone branches of GetExpiredStacks
+// so the two cannot drift apart.
+//
+// An absolute deadline is compared as a string, not as a timestamp. ExpiresAt is
+// stored in one fixed-width UTC form, so byte order under the "C" collation is
+// chronological order, and the comparison needs no cast. That matters for more
+// than tidiness: casting means a single unparsable value aborts the whole
+// statement, so one corrupt row would stop every stack in the installation from
+// ever expiring. Compared as a string, a malformed value simply never sorts
+// before now — that one policy fails safe and the rest of the scan is unaffected.
+//
+// Comparing as a string cuts both ways, though, so the value is guarded before
+// it is compared. A malformed value that happens to sort ABOVE now is harmless —
+// it simply never expires. One that sorts BELOW now ("", "0000", a zero
+// timestamp) would read as a deadline long past and destroy the stack on the
+// next poll. The guard is therefore what makes "fails safe" true: the value must
+// match the canonical fixed-width shape and be no earlier than
+// pkgmodel.MinExpiresAt, which the parser enforces on the way in so the two
+// agree. Neither check is a cast, so neither can abort the scan.
+//
+// A row carrying both keys is not reachable through any accepted input, but is
+// resolved here in favour of ExpiresAt rather than left to chance.
+const ttlExpiredPredicatePgAurora = `CASE
+				WHEN p.policy_data->>'ExpiresAt' IS NOT NULL
+				THEN p.policy_data->>'ExpiresAt' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
+				     AND (p.policy_data->>'ExpiresAt') COLLATE "C" >= '2000-01-01T00:00:00Z'
+				     AND (p.policy_data->>'ExpiresAt') COLLATE "C" < to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+				ELSE s.created_at + ((p.policy_data->>'TTLSeconds')::bigint * interval '1 second') < now()
+			END`
+
 func (d *DatastoreAuroraDataAPI) GetExpiredStacks() ([]datastore.ExpiredStackInfo, error) {
 	ctx := context.Background()
 
 	// Get stacks with TTL policies that have expired:
 	// - Handles both inline policies (stack_id set) and standalone policies (via stack_policies junction)
-	// - Calculate expiration as stack.valid_from + policy.ttl_seconds
+	// - Calculate expiration as the policy's ExpiresAt, or the stack's creation time plus its TTL
 	// - Exclude stacks with active forma commands
 	// - Only consider latest non-deleted versions of both stacks and policies
-	query := `
+	query := fmt.Sprintf(`
 		WITH latest_stacks AS (
 			SELECT id, label, valid_from, operation,
-			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn,
+			       FIRST_VALUE(valid_from) OVER (PARTITION BY id ORDER BY version COLLATE "C" ASC) as created_at
 			FROM stacks
 		),
 		latest_policies AS (
@@ -5724,19 +5749,23 @@ func (d *DatastoreAuroraDataAPI) GetExpiredStacks() ([]datastore.ExpiredStackInf
 		inline_expired AS (
 			SELECT s.label as stack_label, s.id as stack_id,
 			       p.policy_data->>'OnDependents' as on_dependents,
-			       s.valid_from
+			       s.created_at,
+			       p.policy_data->>'ExpiresAt' as expires_at,
+			       (p.policy_data->>'TTLSeconds')::bigint as ttl_seconds
 			FROM latest_stacks s
 			JOIN latest_policies p ON p.stack_id = s.id
 			WHERE s.rn = 1 AND s.operation != 'delete'
 			AND p.rn = 1 AND p.operation != 'delete'
 			AND p.policy_type = 'ttl'
-			AND s.valid_from + ((p.policy_data->>'TTLSeconds')::int * interval '1 second') < now()
+			AND %[1]s
 		),
 		-- Standalone policies: attached via stack_policies junction table
 		standalone_expired AS (
 			SELECT s.label as stack_label, s.id as stack_id,
 			       p.policy_data->>'OnDependents' as on_dependents,
-			       s.valid_from
+			       s.created_at,
+			       p.policy_data->>'ExpiresAt' as expires_at,
+			       (p.policy_data->>'TTLSeconds')::bigint as ttl_seconds
 			FROM latest_stacks s
 			JOIN stack_policies sp ON sp.stack_id = s.id
 			JOIN latest_policies p ON p.id = sp.policy_id
@@ -5744,7 +5773,7 @@ func (d *DatastoreAuroraDataAPI) GetExpiredStacks() ([]datastore.ExpiredStackInf
 			AND p.rn = 1 AND p.operation != 'delete'
 			AND p.policy_type = 'ttl'
 			AND (p.stack_id IS NULL OR p.stack_id = '')  -- standalone policies have NULL or empty stack_id
-			AND s.valid_from + ((p.policy_data->>'TTLSeconds')::int * interval '1 second') < now()
+			AND %[1]s
 		),
 		-- Combine both inline and standalone expired stacks
 		all_expired AS (
@@ -5752,7 +5781,7 @@ func (d *DatastoreAuroraDataAPI) GetExpiredStacks() ([]datastore.ExpiredStackInf
 			UNION
 			SELECT * FROM standalone_expired
 		)
-		SELECT stack_label, stack_id, on_dependents
+		SELECT stack_label, stack_id, on_dependents, created_at, expires_at, ttl_seconds
 		FROM all_expired
 		WHERE NOT EXISTS (
 			SELECT 1 FROM resource_updates ru
@@ -5760,8 +5789,8 @@ func (d *DatastoreAuroraDataAPI) GetExpiredStacks() ([]datastore.ExpiredStackInf
 			WHERE ru.stack_label = all_expired.stack_label
 			AND fc.state NOT IN ('Success', 'Failed', 'Canceled')
 		)
-		ORDER BY valid_from
-	`
+		ORDER BY created_at
+	`, ttlExpiredPredicatePgAurora)
 
 	output, err := d.executeStatement(ctx, query, nil)
 	if err != nil {
@@ -5770,7 +5799,7 @@ func (d *DatastoreAuroraDataAPI) GetExpiredStacks() ([]datastore.ExpiredStackInf
 
 	var result []datastore.ExpiredStackInfo
 	for _, record := range output.Records {
-		if len(record) < 3 {
+		if len(record) < 6 {
 			continue
 		}
 
@@ -5786,15 +5815,29 @@ func (d *DatastoreAuroraDataAPI) GetExpiredStacks() ([]datastore.ExpiredStackInf
 		if onDependents == "" {
 			onDependents = "abort" // default
 		}
+		createdAt, _ := getTimestampField(record[3])
+		expiresAt, _ := getStringField(record[4])
 
-		result = append(result, datastore.ExpiredStackInfo{
-			StackLabel:   stackLabel,
-			StackID:      stackID,
-			OnDependents: onDependents,
-		})
+		info := datastore.ExpiredStackInfo{
+			StackLabel:     stackLabel,
+			StackID:        stackID,
+			OnDependents:   onDependents,
+			StackCreatedAt: createdAt,
+			ExpiresAt:      expiresAt,
+		}
+		if !isNullField(record[5]) {
+			ttlSeconds, err := getIntField(record[5])
+			if err != nil {
+				return nil, err
+			}
+			seconds := int64(ttlSeconds)
+			info.TTLSeconds = &seconds
+		}
+
+		result = append(result, info)
 	}
 
-	return result, nil
+	return datastore.DedupeExpiredStacks(result), nil
 }
 
 func (d *DatastoreAuroraDataAPI) GetStacksWithAutoReconcilePolicy() ([]datastore.StackReconcileInfo, error) {
@@ -6083,6 +6126,61 @@ func (d *DatastoreAuroraDataAPI) SetHealthStateForTesting(label, state string) e
 	`
 	params := []types.SqlParameter{
 		{Name: aws.String("state"), Value: &types.FieldMemberStringValue{Value: state}},
+		{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: label}},
+	}
+	_, err := d.executeStatement(ctx, query, params)
+	return err
+}
+
+// SetStackValidFromForTesting rewrites the valid_from of a stack's versions in
+// ascending version order, so tests can age a stack deterministically instead of
+// sleeping.
+func (d *DatastoreAuroraDataAPI) SetStackValidFromForTesting(label string, validFrom []time.Time) error {
+	ctx := context.Background()
+	output, err := d.executeStatement(ctx,
+		`SELECT version FROM stacks WHERE label = :label ORDER BY version COLLATE "C" ASC`,
+		[]types.SqlParameter{{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: label}}},
+	)
+	if err != nil {
+		return err
+	}
+	if len(output.Records) != len(validFrom) {
+		return fmt.Errorf("stack %q has %d versions, got %d timestamps", label, len(output.Records), len(validFrom))
+	}
+
+	for i, record := range output.Records {
+		version, err := getStringField(record[0])
+		if err != nil {
+			return err
+		}
+		_, err = d.executeStatement(ctx,
+			`UPDATE stacks SET valid_from = CAST(:valid_from AS timestamp) WHERE label = :label AND version = :version`,
+			[]types.SqlParameter{
+				{Name: aws.String("valid_from"), Value: &types.FieldMemberStringValue{
+					Value: validFrom[i].UTC().Format("2006-01-02 15:04:05"),
+				}},
+				{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: label}},
+				{Name: aws.String("version"), Value: &types.FieldMemberStringValue{Value: version}},
+			},
+		)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// SetPolicyDataForTesting overwrites the policy_data of a policy's current
+// version, so tests can stage stored state no public API produces.
+func (d *DatastoreAuroraDataAPI) SetPolicyDataForTesting(label, policyData string) error {
+	ctx := context.Background()
+	query := `
+	UPDATE policies SET policy_data = CAST(:policy_data AS jsonb)
+	WHERE label = :label
+	  AND version = (SELECT MAX(version) FROM policies WHERE label = :label)
+	`
+	params := []types.SqlParameter{
+		{Name: aws.String("policy_data"), Value: &types.FieldMemberStringValue{Value: policyData}},
 		{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: label}},
 	}
 	_, err := d.executeStatement(ctx, query, params)

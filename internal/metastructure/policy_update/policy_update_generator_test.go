@@ -9,6 +9,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -103,6 +104,40 @@ func TestPoliciesEqual_TTL(t *testing.T) {
 
 	c := &pkgmodel.TTLPolicy{Label: "ephemeral", TTLSeconds: 7200, OnDependents: "abort"}
 	assert.False(t, policiesEqual(a, c), "differing TTLSeconds should compare not-equal")
+}
+
+func TestPoliciesEqual_TTLAbsolute(t *testing.T) {
+	deadline := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+
+	a := &pkgmodel.TTLPolicy{Label: "trial", ExpiresAt: deadline, OnDependents: "abort"}
+	b := &pkgmodel.TTLPolicy{Label: "trial", ExpiresAt: deadline, OnDependents: "abort"}
+	assert.True(t, policiesEqual(a, b), "identical absolute TTL policies should compare equal")
+
+	c := &pkgmodel.TTLPolicy{
+		Label: "trial", ExpiresAt: deadline.Add(time.Hour), OnDependents: "abort",
+	}
+	assert.False(t, policiesEqual(a, c), "a moved deadline should compare not-equal")
+
+	// Switching a policy between the two variants is a change, not a no-op.
+	relative := &pkgmodel.TTLPolicy{Label: "trial", TTLSeconds: 3600, OnDependents: "abort"}
+	assert.False(t, policiesEqual(a, relative), "ttl to expiresAt should compare not-equal")
+	assert.False(t, policiesEqual(relative, a), "expiresAt to ttl should compare not-equal")
+}
+
+// The same instant spelled differently is the same deadline: storage
+// canonicalises to UTC whole seconds, so comparing representations rather than
+// instants would report a change on every re-apply.
+func TestPoliciesEqual_TTLAbsoluteSameInstantDifferentSpelling(t *testing.T) {
+	utc := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	offset := time.Date(2026, 8, 7, 14, 0, 0, 0, time.FixedZone("CEST", 2*60*60))
+	subsecond := time.Date(2026, 8, 7, 12, 0, 0, 750_000_000, time.UTC)
+
+	a := &pkgmodel.TTLPolicy{Label: "trial", ExpiresAt: utc, OnDependents: "abort"}
+	b := &pkgmodel.TTLPolicy{Label: "trial", ExpiresAt: offset, OnDependents: "abort"}
+	c := &pkgmodel.TTLPolicy{Label: "trial", ExpiresAt: subsecond, OnDependents: "abort"}
+
+	assert.True(t, policiesEqual(a, b), "the same instant in another zone is not a change")
+	assert.True(t, policiesEqual(a, c), "sub-second precision is dropped by storage, so not a change")
 }
 
 func TestGenerateInlinePolicyUpdates_AutoReconcile_NewPolicyGeneratesLabel(t *testing.T) {
