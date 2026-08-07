@@ -1,0 +1,66 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+/// Fixtures that pin the entry-point rule used by ResolvablesGenerator.pkl:
+/// a class is an entry-point resolvable iff it transitively extends
+/// formae.Resolvable AND declares its own `type` property with a non-null
+/// default. Nested accessor resolvables inherit `type` and must not declare it.
+///
+/// This module declares no formae.Resource on purpose — it exists only to
+/// exercise resolvable discovery, so it leaves resource generation untouched.
+module testprovider.discovery.discovery
+
+import "@formae/formae.pkl"
+
+/// Extends a specialised base and declares its own defaulted `type`: collected.
+open class ScalarSecretEntry extends formae.ScalarSecretResolvable {
+    hidden type = "TestProvider::Discovery::ScalarSecret"
+    hidden valueProperty = "SecretString"
+}
+
+/// Extends a specialised base and declares its own defaulted `type`: collected.
+open class MappingEntry extends formae.MappingResolvable {
+    hidden type = "TestProvider::Discovery::Mapping"
+}
+
+/// Extends a specialised base and declares its own defaulted `type`: collected.
+open class ListingEntry extends formae.ListingResolvable {
+    hidden type = "TestProvider::Discovery::Listing"
+}
+
+/// Intermediate base declaring no `type` of its own: not collected itself.
+open class IntermediateBase extends formae.ScalarSecretResolvable {
+    hidden valueProperty = "SecretString"
+}
+
+/// Two levels below a specialised base: collected via the transitive chain.
+open class DeepChainEntry extends IntermediateBase {
+    hidden type = "TestProvider::Discovery::DeepChain"
+}
+
+/// Nested accessor: inherits `type` from the resolvable it hangs off and
+/// deliberately does not declare it, so it is not an entry point.
+open class NestedAccessor extends formae.MappingResolvable {
+    hidden recordValue: NestedAccessor = (this) {
+        property = "Value"
+    }
+}
+
+/// Declares `type` without a default, so there is no type URI to key on.
+open class UndefaultedEntry extends formae.Resolvable {
+    hidden type: String(matches(Regex(#"^.*::.*$"#)))?
+}
+
+/// A provider-local base that merely shares the name `Resolvable` — unrelated
+/// to formae.Resolvable. Discovery matches on class identity, not on the name.
+open class Resolvable {
+    hidden type: String?
+}
+
+/// Extends the same-named local base, not formae's: must not be collected.
+open class ImposterEntry extends Resolvable {
+    hidden type = "TestProvider::Discovery::Imposter"
+}
