@@ -64,6 +64,12 @@ func TestDatastore(t *testing.T) {
 			SetTargetHealthStateForTest: func(label, state string) error {
 				return d.SetHealthStateForTesting(label, state)
 			},
+			SetStackValidFromForTest: func(label string, validFrom []time.Time) error {
+				return d.SetStackValidFromForTesting(label, validFrom)
+			},
+			SetPolicyDataForTest: func(label, policyData string) error {
+				return d.SetPolicyDataForTesting(label, policyData)
+			},
 		}
 	})
 }

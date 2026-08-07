@@ -6002,6 +6002,61 @@ func (d *DatastoreAuroraDataAPI) SetHealthStateForTesting(label, state string) e
 	return err
 }
 
+// SetStackValidFromForTesting rewrites the valid_from of a stack's versions in
+// ascending version order, so tests can age a stack deterministically instead of
+// sleeping.
+func (d *DatastoreAuroraDataAPI) SetStackValidFromForTesting(label string, validFrom []time.Time) error {
+	ctx := context.Background()
+	output, err := d.executeStatement(ctx,
+		`SELECT version FROM stacks WHERE label = :label ORDER BY version COLLATE "C" ASC`,
+		[]types.SqlParameter{{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: label}}},
+	)
+	if err != nil {
+		return err
+	}
+	if len(output.Records) != len(validFrom) {
+		return fmt.Errorf("stack %q has %d versions, got %d timestamps", label, len(output.Records), len(validFrom))
+	}
+
+	for i, record := range output.Records {
+		version, err := getStringField(record[0])
+		if err != nil {
+			return err
+		}
+		_, err = d.executeStatement(ctx,
+			`UPDATE stacks SET valid_from = CAST(:valid_from AS timestamp) WHERE label = :label AND version = :version`,
+			[]types.SqlParameter{
+				{Name: aws.String("valid_from"), Value: &types.FieldMemberStringValue{
+					Value: validFrom[i].UTC().Format("2006-01-02 15:04:05"),
+				}},
+				{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: label}},
+				{Name: aws.String("version"), Value: &types.FieldMemberStringValue{Value: version}},
+			},
+		)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// SetPolicyDataForTesting overwrites the policy_data of a policy's current
+// version, so tests can stage stored state no public API produces.
+func (d *DatastoreAuroraDataAPI) SetPolicyDataForTesting(label, policyData string) error {
+	ctx := context.Background()
+	query := `
+	UPDATE policies SET policy_data = CAST(:policy_data AS jsonb)
+	WHERE label = :label
+	  AND version = (SELECT MAX(version) FROM policies WHERE label = :label)
+	`
+	params := []types.SqlParameter{
+		{Name: aws.String("policy_data"), Value: &types.FieldMemberStringValue{Value: policyData}},
+		{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: label}},
+	}
+	_, err := d.executeStatement(ctx, query, params)
+	return err
+}
+
 // ForceCancelResourceUpdates CAS-terminalizes in-flight resource updates to Canceled in one
 // transaction. For InProgress rows it also writes force-cancel progress. Returns the rows
 // transitioned (split by prior state) and those already terminal (Skipped). Idempotent.

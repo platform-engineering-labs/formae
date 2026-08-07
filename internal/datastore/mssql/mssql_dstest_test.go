@@ -84,6 +84,48 @@ func TestDatastore(t *testing.T) {
 				)
 				return err
 			},
+			SetStackValidFromForTest: func(label string, validFrom []time.Time) error {
+				rows, err := conn.Query(
+					`SELECT version FROM stacks WHERE label = @p1 ORDER BY version COLLATE Latin1_General_BIN2 ASC`, label)
+				if err != nil {
+					return err
+				}
+				var versions []string
+				for rows.Next() {
+					var version string
+					if err := rows.Scan(&version); err != nil {
+						_ = rows.Close()
+						return err
+					}
+					versions = append(versions, version)
+				}
+				if err := rows.Err(); err != nil {
+					_ = rows.Close()
+					return err
+				}
+				if err := rows.Close(); err != nil {
+					return err
+				}
+				if len(versions) != len(validFrom) {
+					return fmt.Errorf("stack %q has %d versions, got %d timestamps", label, len(versions), len(validFrom))
+				}
+				for i, version := range versions {
+					if _, err := conn.Exec(
+						`UPDATE stacks SET valid_from = @p1 WHERE label = @p2 AND version = @p3`,
+						validFrom[i].UTC(), label, version,
+					); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+			SetPolicyDataForTest: func(label, policyData string) error {
+				_, err := conn.Exec(
+					`UPDATE policies SET policy_data = @p1 WHERE label = @p2 AND version = (SELECT MAX(version) FROM policies WHERE label = @p2)`,
+					policyData, label,
+				)
+				return err
+			},
 			CleanUpFn: func() error {
 				ds.Close()
 				m, err := sql.Open("sqlserver", dstestMSSQLBase+"&database=master")

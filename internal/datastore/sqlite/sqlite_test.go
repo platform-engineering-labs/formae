@@ -10,6 +10,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -86,6 +87,17 @@ func TestDatastore(t *testing.T) {
 					`SELECT COUNT(*) FROM target_reap_audit WHERE label = ?`, label,
 				).Scan(&n)
 				return n, err
+			},
+			SetStackValidFromForTest: func(label string, validFrom []time.Time) error {
+				return setStackValidFrom(d, label, validFrom)
+			},
+			SetPolicyDataForTest: func(label, policyData string) error {
+				conn := d.Conn()
+				_, err := conn.Exec(
+					`UPDATE policies SET policy_data = ? WHERE label = ? AND version = (SELECT MAX(version) FROM policies WHERE label = ?)`,
+					policyData, label, label,
+				)
+				return err
 			},
 		}
 	})
@@ -519,4 +531,45 @@ func TestBulkStoreResourceUpdates_StripsOpaqueRefValueFromExistingTarget(t *test
 	assert.Contains(t, raw, `$visibility`, "stored existing_target must preserve $visibility")
 	assert.NotContains(t, raw, `$value`, "stored existing_target must not contain $value")
 	assert.NotContains(t, raw, "super-secret", "stored existing_target must not contain the resolved secret")
+}
+
+// setStackValidFrom rewrites the valid_from of a stack's versions in ascending
+// version order. SQLite's CURRENT_TIMESTAMP default writes "YYYY-MM-DD HH:MM:SS"
+// in UTC, so the backdated values are written in that same shape — the expiry
+// query's datetime() arithmetic reads the column, not a Go time.
+func setStackValidFrom(d dssqlite.DatastoreSQLite, label string, validFrom []time.Time) error {
+	conn := d.Conn()
+	rows, err := conn.Query(`SELECT version FROM stacks WHERE label = ? ORDER BY version ASC`, label)
+	if err != nil {
+		return err
+	}
+	var versions []string
+	for rows.Next() {
+		var version string
+		if err := rows.Scan(&version); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		versions = append(versions, version)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if len(versions) != len(validFrom) {
+		return fmt.Errorf("stack %q has %d versions, got %d timestamps", label, len(versions), len(validFrom))
+	}
+
+	for i, version := range versions {
+		if _, err := conn.Exec(
+			`UPDATE stacks SET valid_from = ? WHERE label = ? AND version = ?`,
+			validFrom[i].UTC().Format("2006-01-02 15:04:05"), label, version,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
 }

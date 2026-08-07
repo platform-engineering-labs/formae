@@ -53,6 +53,18 @@ type TestDatastore struct {
 	// and none on a rejected/no-op reap. Backends that don't provide it leave it
 	// nil and the relevant assertions are skipped.
 	CountReapAuditRowsForTest func(label string) (int, error)
+	// SetStackValidFromForTest rewrites the valid_from of the named stack's
+	// versions, in ascending version order, to the supplied timestamps. Used to
+	// age a stack deterministically instead of sleeping, so TTL expiry can be
+	// exercised against a known creation anchor. Backends that don't provide it
+	// leave it nil and the relevant tests t.Skip().
+	SetStackValidFromForTest func(label string, validFrom []time.Time) error
+	// SetPolicyDataForTest overwrites the policy_data column of the current
+	// (max-version) policies row for the given label. Used to stage stored state
+	// no public API produces — a malformed or hand-edited payload — so the
+	// expiry query's defensive behaviour can be asserted. Backends that don't
+	// provide it leave it nil and the relevant tests t.Skip().
+	SetPolicyDataForTest func(label, policyData string) error
 }
 
 // RunAll runs the full datastore test suite against the provided factory.
@@ -144,6 +156,16 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunDeleteStack(t, newDS)
 	RunDeleteStackThenRecreate(t, newDS)
 	RunCountResourcesInStack(t, newDS)
+	RunStackCreatedAtIsFirstVersion(t, newDS)
+	RunStackCreatedAtSerializesOverAPI(t, newDS)
+
+	RunGetExpiredStacks_RelativeAnchoredAtCreation(t, newDS)
+	RunGetExpiredStacks_Absolute(t, newDS)
+	RunGetExpiredStacks_MalformedExpiresAt(t, newDS)
+	RunGetExpiredStacks_BothVariantsSet(t, newDS)
+	RunGetExpiredStacks_LegacyRelative(t, newDS)
+	RunGetExpiredStacks_ReportsAnchorAndDeadline(t, newDS)
+	RunTTLPolicyVariantRoundTrip(t, newDS)
 
 	RunFindResourcesDependingOn(t, newDS)
 	RunFindResourcesDependingOnMultipleRefs(t, newDS)

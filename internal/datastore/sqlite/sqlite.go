@@ -1951,6 +1951,23 @@ func (d DatastoreSQLite) CountResourcesInStack(label string) (int, error) {
 	return count, nil
 }
 
+// parseSQLiteTimestamp reads a timestamp column that arrives as text. A column
+// produced by a window function has no declared affinity, so the driver hands it
+// over as a string instead of converting it, and the value has to be parsed
+// here. SQLite's CURRENT_TIMESTAMP default writes the first form, in UTC.
+func parseSQLiteTimestamp(value string) time.Time {
+	for _, layout := range []string{
+		"2006-01-02 15:04:05",
+		"2006-01-02 15:04:05.999999999-07:00",
+		time.RFC3339Nano,
+	} {
+		if ts, err := time.Parse(layout, value); err == nil {
+			return ts
+		}
+	}
+	return time.Time{}
+}
+
 func (d DatastoreSQLite) ListAllStacks() ([]*pkgmodel.Stack, error) {
 	_, span := sqliteTracer.Start(context.Background(), "ListAllStackMetadata")
 	defer span.End()
@@ -1978,8 +1995,7 @@ func (d DatastoreSQLite) ListAllStacks() ([]*pkgmodel.Stack, error) {
 
 	var stacks []*pkgmodel.Stack
 	for rows.Next() {
-		var id, label, description string
-		var createdAt time.Time
+		var id, label, description, createdAt string
 		if err := rows.Scan(&id, &label, &description, &createdAt); err != nil {
 			return nil, err
 		}
@@ -1987,7 +2003,7 @@ func (d DatastoreSQLite) ListAllStacks() ([]*pkgmodel.Stack, error) {
 			ID:          id,
 			Label:       label,
 			Description: description,
-			CreatedAt:   createdAt,
+			CreatedAt:   parseSQLiteTimestamp(createdAt),
 		})
 	}
 
@@ -2731,12 +2747,13 @@ func (d DatastoreSQLite) GetExpiredStacks() ([]datastore.ExpiredStackInfo, error
 	var result []datastore.ExpiredStackInfo
 	for rows.Next() {
 		var info datastore.ExpiredStackInfo
-		var onDependents, expiresAt sql.NullString
+		var onDependents, expiresAt, createdAt sql.NullString
 		var ttlSeconds sql.NullInt64
 		if err := rows.Scan(&info.StackLabel, &info.StackID, &onDependents,
-			&info.StackCreatedAt, &expiresAt, &ttlSeconds); err != nil {
+			&createdAt, &expiresAt, &ttlSeconds); err != nil {
 			return nil, err
 		}
+		info.StackCreatedAt = parseSQLiteTimestamp(createdAt.String)
 		if onDependents.Valid {
 			info.OnDependents = onDependents.String
 		} else {

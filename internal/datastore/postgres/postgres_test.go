@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/demula/mksuid/v2"
 	"github.com/jackc/pgx/v5"
@@ -375,6 +376,46 @@ func TestDatastore(t *testing.T) {
 				_, err := d.Pool().Exec(context.Background(),
 					`UPDATE targets SET health_state = $1 WHERE label = $2 AND version = (SELECT MAX(version) FROM targets WHERE label = $2)`,
 					state, label,
+				)
+				return err
+			},
+			SetStackValidFromForTest: func(label string, validFrom []time.Time) error {
+				ctx := context.Background()
+				rows, err := d.Pool().Query(ctx,
+					`SELECT version FROM stacks WHERE label = $1 ORDER BY version COLLATE "C" ASC`, label)
+				if err != nil {
+					return err
+				}
+				var versions []string
+				for rows.Next() {
+					var version string
+					if err := rows.Scan(&version); err != nil {
+						rows.Close()
+						return err
+					}
+					versions = append(versions, version)
+				}
+				rows.Close()
+				if err := rows.Err(); err != nil {
+					return err
+				}
+				if len(versions) != len(validFrom) {
+					return fmt.Errorf("stack %q has %d versions, got %d timestamps", label, len(versions), len(validFrom))
+				}
+				for i, version := range versions {
+					if _, err := d.Pool().Exec(ctx,
+						`UPDATE stacks SET valid_from = $1 WHERE label = $2 AND version = $3`,
+						validFrom[i].UTC(), label, version,
+					); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+			SetPolicyDataForTest: func(label, policyData string) error {
+				_, err := d.Pool().Exec(context.Background(),
+					`UPDATE policies SET policy_data = $1 WHERE label = $2 AND version = (SELECT MAX(version) FROM policies WHERE label = $2)`,
+					policyData, label,
 				)
 				return err
 			},
