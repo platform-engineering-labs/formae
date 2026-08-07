@@ -102,6 +102,68 @@ func getFreePort() (int, error) {
 	return l.Addr().(*net.TCPAddr).Port, nil
 }
 
+// sanitizeForPath converts an arbitrary string (typically a *testing.T name,
+// which may contain "/" from subtests or "::" from a resource type, e.g.
+// "TestCRUD/AWS::s3-bucket") into a string safe to embed in an
+// os.MkdirTemp pattern: only [A-Za-z0-9._-] survive, every other rune becomes
+// "_", runs of "_" collapse to one, leading and trailing "_" are trimmed, and
+// the result is capped at 40 runes.
+func sanitizeForPath(name string) string {
+	var b strings.Builder
+	b.Grow(len(name))
+	prevUnderscore := false
+	for _, r := range name {
+		out := r
+		switch {
+		case r >= 'A' && r <= 'Z', r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '.', r == '_', r == '-':
+			// keep as-is
+		default:
+			out = '_'
+		}
+		if out == '_' && prevUnderscore {
+			continue
+		}
+		b.WriteRune(out)
+		prevUnderscore = out == '_'
+	}
+
+	trimmed := strings.Trim(b.String(), "_")
+	runes := []rune(trimmed)
+	if len(runes) > 40 {
+		runes = runes[:40]
+	}
+	return string(runes)
+}
+
+// keepTempDirRequested reports whether FORMAE_TEST_KEEP_TEMP asks the harness to
+// retain the per-test temp directory even when the test passes.
+func keepTempDirRequested(r testReporter) bool {
+	raw := strings.TrimSpace(os.Getenv("FORMAE_TEST_KEEP_TEMP"))
+	if raw == "" {
+		return false
+	}
+	keep, err := strconv.ParseBool(raw)
+	if err != nil {
+		r.Logf("Ignoring FORMAE_TEST_KEEP_TEMP=%q: want a boolean such as 1, true, 0 or false", raw)
+		return false
+	}
+	return keep
+}
+
+// cleanupTempDir removes the harness temp directory, unless the test failed or
+// FORMAE_TEST_KEEP_TEMP asks for retention — in which case the directory is left
+// in place and its path reported so CI can collect the agent log.
+func cleanupTempDir(r testReporter, tempDir, logPath string, failed bool) {
+	if failed || keepTempDirRequested(r) {
+		r.Logf("Retaining test temp directory for diagnostics: %s (agent log: %s)", tempDir, logPath)
+		return
+	}
+	r.Logf("Cleaning up temp directory: %s", tempDir)
+	if err := os.RemoveAll(tempDir); err != nil {
+		r.Logf("Failed to remove temp directory %s: %v", tempDir, err)
+	}
+}
+
 // NewTestHarness creates a new test harness instance
 func NewTestHarness(t *testing.T) *TestHarness {
 	// Acquire the formae binary, downloading via orbital if needed
