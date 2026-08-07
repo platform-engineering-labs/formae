@@ -316,7 +316,9 @@ function generateFormaFile(parsed: json.Value): String =
     let (pklMaps = parsedList.map((resource) ->
         let (resourceType = resource.Type)
         let (properties = appendProperties(resource))
-        gen.genPklToMap(gen.applyResource(typeMap[resourceType].clazz, properties).toDynamic()).put("target", resource.Target).put("stack", resource.Stack)
+        // Identifies which resource is being rendered, for use in error messages.
+        let (resourceContext = "Cannot render resource \"\(resource.Label)\" in stack \"\(resource.Stack)\" of type \"\(resourceType)\"")
+        gen.genPklToMap(gen.applyResource(typeMap[resourceType].clazz, properties, resourceContext).toDynamic()).put("target", resource.Target).put("stack", resource.Stack)
     ))
 
     // Phase 2: Collect all imports for collision-aware alias computation

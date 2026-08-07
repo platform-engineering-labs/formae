@@ -161,15 +161,15 @@ examples {
     }
 
     //["ApplyResource for Simple class fails when it is no resource"] {
-    //    gen.applyResource(SimpleFoo, simpleProperties)
+    //    gen.applyResource(SimpleFoo, simpleProperties, "Cannot render resource \"simple\"")
     //}
     //
     //["ApplyResource for Complex class fails when it is no resource"] {
-    //    gen.applyResource(ComplexBar, complexProperties)
+    //    gen.applyResource(ComplexBar, complexProperties, "Cannot render resource \"complex\"")
     //}
     //
     //["Apply resource class"] {
-    //    gen.applyResource(TestResource, resourceProperties)
+    //    gen.applyResource(TestResource, resourceProperties, "Cannot render resource \"test\"")
     //}
 
     ["Convert to map with types - simple"] {

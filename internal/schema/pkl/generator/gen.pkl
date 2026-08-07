@@ -495,7 +495,20 @@ local function applyType(type: reflect.Type, value: Any): Any|GenerationFailure 
 function isResourceClass(clazz: reflect.Class): Boolean =
   clazz.isSubclassOf(reflect.Class(formae.Resource))
 
-function applyResource(res: Class, value: Dynamic) : Any =
+/// Renders one resource's properties into the map the forma file is built from.
+///
+/// This is a generation boundary, like `apply`: what it returns is serialized
+/// into the forma file, so a failure must become a `throw` here instead of a
+/// `GenerationFailure` value. A returned failure ends up in the forma as a
+/// `message` property that no schema class declares, and the forma then cannot
+/// be evaluated. The `Map` return type rejects such a value outright.
+///
+/// `context` names the resource being rendered; the caller builds it because
+/// only the caller has the label, stack and type URI at hand. The diagnostic
+/// names the class through `enclosingDeclaration` — simple names are ambiguous
+/// (a provider's `Secret` and `formae.Secret` share one) — and never
+/// interpolates the reflected class itself, which renders its whole graph.
+function applyResource(res: Class, value: Dynamic, context: String) : Map =
     let (clazz = reflect.Class(res))
     let (valueAsMap = value.toMap())
     if (isResourceClass(clazz))
@@ -515,7 +528,10 @@ function applyResource(res: Class, value: Dynamic) : Any =
                     acc
         )
     else
-        Fail("applyResource - Expected a Resource class, got \(clazz)")
+        throw("\(context): schema class \"\(clazz.enclosingDeclaration.name).\(clazz.name)\" "
+            + "does not extend formae.Resource. A class annotated with @formae.ResourceHint "
+            + "must extend formae.Resource (directly or through one of its bases, such as "
+            + "formae.Secret).")
 
 
 local function getTypeName(value: Typed): String =
