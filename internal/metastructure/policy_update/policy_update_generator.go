@@ -128,15 +128,18 @@ func (pg *PolicyUpdateGenerator) generateInlinePolicyUpdates(stack pkgmodel.Stac
 
 	now := util.TimeNow()
 	var updates []PolicyUpdate
-	declaredTypes := make(map[string]bool, len(policies))
+	// Labels of the stored policies a declaration matched. Within a stack's
+	// inline set the label identifies the row, so it is what the delete pass
+	// checks a stored policy against.
+	matchedLabels := make(map[string]bool, len(policies))
 
 	for _, policy := range policies {
 		var operation PolicyOperation
 		label := policy.GetLabel()
-		declaredTypes[policy.GetType()] = true
 
 		// Check if a policy of this type already exists for this stack
 		if existing, found := existingPoliciesByType[policy.GetType()]; found {
+			matchedLabels[existing.GetLabel()] = true
 			// Reuse the existing label for inline policies
 			if label == "" {
 				label = existing.GetLabel()
@@ -174,8 +177,8 @@ func (pg *PolicyUpdateGenerator) generateInlinePolicyUpdates(stack pkgmodel.Stac
 	}
 
 	for _, existing := range existingPolicies {
-		if declaredTypes[existing.GetType()] {
-			continue // Still declared, handled as a create or update above
+		if matchedLabels[existing.GetLabel()] {
+			continue // Still declared, handled as an update above
 		}
 
 		update := PolicyUpdate{

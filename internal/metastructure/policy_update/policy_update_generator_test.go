@@ -224,6 +224,61 @@ func TestGenerateInlinePolicyUpdates_Reconcile_DeclaredTypeUpdatedUndeclaredDele
 	assert.Equal(t, "my-stack-auto-reconcile-def67890", updates[1].Policy.GetLabel())
 }
 
+func TestGenerateInlinePolicyUpdates_Reconcile_SurplusPolicyOfDeclaredTypeDeleted(t *testing.T) {
+	ds := &stubDatastore{
+		stackByLabel: &pkgmodel.Stack{ID: "stack-1", Label: "my-stack"},
+		inlinePoliciesForStack: []pkgmodel.Policy{
+			&pkgmodel.TTLPolicy{Label: "my-stack-ttl-abc12345", TTLSeconds: 3600, OnDependents: "abort", StackID: "stack-1"},
+			&pkgmodel.TTLPolicy{Label: "my-stack-ttl-def67890", TTLSeconds: 1800, OnDependents: "abort", StackID: "stack-1"},
+		},
+	}
+	pg := NewPolicyUpdateGenerator(ds)
+
+	stack := pkgmodel.Stack{
+		Label: "my-stack",
+		Policies: []json.RawMessage{
+			json.RawMessage(`{"Type":"ttl","TTLSeconds":7200,"OnDependents":"abort"}`),
+		},
+	}
+
+	updates, err := pg.generateInlinePolicyUpdates(stack, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	require.Len(t, updates, 2, "a single declaration matches one stored policy of its type; the surplus is deleted")
+
+	require.Equal(t, PolicyOperationUpdate, updates[0].Operation)
+	matched := updates[0].Policy.GetLabel()
+	assert.Contains(t, []string{"my-stack-ttl-abc12345", "my-stack-ttl-def67890"}, matched)
+
+	assert.Equal(t, PolicyOperationDelete, updates[1].Operation)
+	assert.Equal(t, "ttl", updates[1].Policy.GetType())
+	assert.Contains(t, []string{"my-stack-ttl-abc12345", "my-stack-ttl-def67890"}, updates[1].Policy.GetLabel())
+	assert.NotEqual(t, matched, updates[1].Policy.GetLabel(),
+		"the delete must target the stored policy the declaration did not match")
+	assert.Equal(t, "my-stack", updates[1].StackLabel)
+}
+
+func TestGenerateInlinePolicyUpdates_Reconcile_AllUndeclaredPoliciesOfOneTypeDeleted(t *testing.T) {
+	ds := &stubDatastore{
+		stackByLabel: &pkgmodel.Stack{ID: "stack-1", Label: "my-stack"},
+		inlinePoliciesForStack: []pkgmodel.Policy{
+			&pkgmodel.TTLPolicy{Label: "my-stack-ttl-abc12345", TTLSeconds: 3600, OnDependents: "abort", StackID: "stack-1"},
+			&pkgmodel.TTLPolicy{Label: "my-stack-ttl-def67890", TTLSeconds: 1800, OnDependents: "abort", StackID: "stack-1"},
+		},
+	}
+	pg := NewPolicyUpdateGenerator(ds)
+
+	stack := pkgmodel.Stack{Label: "my-stack"}
+
+	updates, err := pg.generateInlinePolicyUpdates(stack, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	require.Len(t, updates, 2, "a stack declaring no policies drops every inline policy it stores")
+
+	assert.Equal(t, PolicyOperationDelete, updates[0].Operation)
+	assert.Equal(t, "my-stack-ttl-abc12345", updates[0].Policy.GetLabel())
+	assert.Equal(t, PolicyOperationDelete, updates[1].Operation)
+	assert.Equal(t, "my-stack-ttl-def67890", updates[1].Policy.GetLabel())
+}
+
 func TestGenerateInlinePolicyUpdates_Reconcile_AttachedStandalonePolicyNotDeleted(t *testing.T) {
 	ds := &stubDatastore{
 		stackByLabel: &pkgmodel.Stack{ID: "stack-1", Label: "my-stack"},
