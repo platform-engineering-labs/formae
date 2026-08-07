@@ -403,7 +403,8 @@ type Datastore interface {
 	DeletePolicy(policyLabel string) (string, error)
 	// DeleteInlinePolicy soft-deletes the inline policies (stack_id set) on a stack
 	// that carry the given label (returns version string). Deleting when no live
-	// row matches is a no-op success that returns an empty version.
+	// row matches is a no-op success that returns an empty version. When several
+	// rows match, the version returned is that of the last tombstone written.
 	DeleteInlinePolicy(stackID string, policyLabel string, commandID string) (string, error)
 	// DeletePoliciesForStack soft-deletes all policies for a stack (cascade delete)
 	DeletePoliciesForStack(stackID string, commandID string) error

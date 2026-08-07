@@ -5478,6 +5478,12 @@ func (d *DatastoreAuroraDataAPI) DeletePolicy(policyLabel string) (string, error
 func (d *DatastoreAuroraDataAPI) DeleteInlinePolicy(stackID string, policyLabel string, commandID string) (string, error) {
 	ctx := context.Background()
 
+	// Standalone policies are stored with an empty stack id, so an empty stack id
+	// here would match them; there is no inline policy to delete without a stack.
+	if stackID == "" {
+		return "", nil
+	}
+
 	// Inline policy labels are only unique within their stack, so the lookup is
 	// scoped by stack_id as well as label. Liveness is decided per policy id: an
 	// id whose latest version is a tombstone is already deleted.

@@ -83,6 +83,55 @@ func RunDeleteInlinePolicy(t *testing.T, newDS func(t *testing.T) TestDatastore)
 	})
 }
 
+// RunDeleteInlinePolicyDeletesEveryMatchingID verifies that every live inline
+// policy carrying the label is tombstoned, not just the first one found.
+func RunDeleteInlinePolicyDeletesEveryMatchingID(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("DeleteInlinePolicy_DeletesEveryMatchingID", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		stack := createDeleteInlinePolicyStack(t, ds, "inline-duplicates")
+		_, err := ds.CreatePolicy(deleteInlinePolicyTTL("keep-a-day", stack.ID, 86400), "cmd-create")
+		require.NoError(t, err)
+		_, err = ds.CreatePolicy(deleteInlinePolicyTTL("keep-a-day", stack.ID, 7200), "cmd-create-again")
+		require.NoError(t, err)
+
+		policies, err := ds.GetPoliciesForStack(stack.ID)
+		require.NoError(t, err)
+		require.Equal(t, []string{"keep-a-day", "keep-a-day"}, policyLabels(policies))
+
+		_, err = ds.DeleteInlinePolicy(stack.ID, "keep-a-day", "cmd-delete")
+		require.NoError(t, err)
+
+		policies, err = ds.GetPoliciesForStack(stack.ID)
+		require.NoError(t, err)
+		assert.Empty(t, policies, "every inline policy carrying the label must be deleted")
+	})
+}
+
+// RunDeleteInlinePolicyEmptyStackID verifies that an empty stack id never
+// reaches standalone policies, which are stored without a stack id.
+func RunDeleteInlinePolicyEmptyStackID(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("DeleteInlinePolicy_EmptyStackID", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		_, err := ds.CreatePolicy(deleteInlinePolicyTTL("standalone-ttl", "", 3600), "cmd-create")
+		require.NoError(t, err)
+
+		version, err := ds.DeleteInlinePolicy("", "standalone-ttl", "cmd-delete")
+		require.NoError(t, err, "deleting with an empty stack id must be a no-op success")
+		assert.Empty(t, version)
+
+		standalone, err := ds.GetStandalonePolicy("standalone-ttl")
+		require.NoError(t, err)
+		require.NotNil(t, standalone, "the standalone policy must survive an empty stack id delete")
+		assert.Equal(t, int64(3600), standalone.(*pkgmodel.TTLPolicy).TTLSeconds)
+	})
+}
+
 // RunDeleteInlinePolicyLeavesAttachedStandalone verifies that deleting an inline
 // policy does not disturb a standalone policy attached to the same stack.
 func RunDeleteInlinePolicyLeavesAttachedStandalone(t *testing.T, newDS func(t *testing.T) TestDatastore) {

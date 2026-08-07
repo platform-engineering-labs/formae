@@ -146,6 +146,8 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunCountResourcesInStack(t, newDS)
 
 	RunDeleteInlinePolicy(t, newDS)
+	RunDeleteInlinePolicyDeletesEveryMatchingID(t, newDS)
+	RunDeleteInlinePolicyEmptyStackID(t, newDS)
 	RunDeleteInlinePolicyLeavesAttachedStandalone(t, newDS)
 	RunDeleteInlinePolicyLeavesSameLabelledStandalone(t, newDS)
 	RunDeleteInlinePolicyIsIdempotent(t, newDS)
