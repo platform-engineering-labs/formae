@@ -17,8 +17,9 @@ import (
 type PolicyDatastore interface {
 	// GetStackByLabel retrieves a stack by its label
 	GetStackByLabel(label string) (*pkgmodel.Stack, error)
-	// GetPoliciesForStack returns all non-deleted policies for a given stack ID
-	GetPoliciesForStack(stackID string) ([]pkgmodel.Policy, error)
+	// GetInlinePoliciesForStack returns the non-deleted inline policies of a stack,
+	// leaving out the standalone policies attached to it
+	GetInlinePoliciesForStack(stackID string) ([]pkgmodel.Policy, error)
 	// GetStandalonePolicy retrieves a standalone policy by label (stack_id IS NULL)
 	// Returns nil, nil if no policy is found
 	GetStandalonePolicy(label string) (pkgmodel.Policy, error)
@@ -197,10 +198,10 @@ func (pg *PolicyUpdateGenerator) generateInlinePolicyUpdates(stack pkgmodel.Stac
 }
 
 // existingInlinePolicies returns the policies the stack owns inline. A stack the
-// datastore does not know yet has none. GetPoliciesForStack also returns the
-// standalone policies attached to the stack, which are excluded here: they are
-// attachments, generated and removed by generatePolicyAttachments and
-// generatePolicyDetachments.
+// datastore does not know yet has none. The lookup is inline-scoped: the
+// standalone policies attached to the stack are attachments, generated and
+// removed by generatePolicyAttachments and generatePolicyDetachments, and are
+// never deleted from here.
 func (pg *PolicyUpdateGenerator) existingInlinePolicies(stackLabel string) ([]pkgmodel.Policy, error) {
 	if pg.datastore == nil {
 		return nil, nil
@@ -214,16 +215,9 @@ func (pg *PolicyUpdateGenerator) existingInlinePolicies(stackLabel string) ([]pk
 		return nil, nil
 	}
 
-	storedPolicies, err := pg.datastore.GetPoliciesForStack(existingStack.ID)
+	inline, err := pg.datastore.GetInlinePoliciesForStack(existingStack.ID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load policies for stack: %w", err)
-	}
-
-	var inline []pkgmodel.Policy
-	for _, p := range storedPolicies {
-		if p.GetStackID() == existingStack.ID {
-			inline = append(inline, p)
-		}
 	}
 
 	return inline, nil

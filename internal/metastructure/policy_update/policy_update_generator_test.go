@@ -19,13 +19,20 @@ import (
 // stubDatastore is a minimal in-test PolicyDatastore. Only the methods a given
 // test needs are populated; the rest return zero values. The *Err fields make a
 // method fail, and lookupCalls counts the existing-state lookups.
+//
+// It models both stack-scoped policy reads the datastore offers, because they
+// differ: the inline read returns only the policies the stack owns, while the
+// stack-wide read also returns the standalone policies attached to it through
+// the junction table, stamping every row it returns with the queried stack's ID.
+// A policy's stack ID therefore cannot tell inline and attached apart.
 type stubDatastore struct {
-	stackByLabel        *pkgmodel.Stack
-	stackByLabelErr     error
-	policiesForStack    []pkgmodel.Policy
-	policiesForStackErr error
-	standalonePolicy    pkgmodel.Policy
-	lookupCalls         int
+	stackByLabel             *pkgmodel.Stack
+	stackByLabelErr          error
+	inlinePoliciesForStack   []pkgmodel.Policy
+	attachedPoliciesForStack []pkgmodel.Policy
+	policyLookupErr          error
+	standalonePolicy         pkgmodel.Policy
+	lookupCalls              int
 }
 
 func (s *stubDatastore) GetStackByLabel(label string) (*pkgmodel.Stack, error) {
@@ -36,12 +43,23 @@ func (s *stubDatastore) GetStackByLabel(label string) (*pkgmodel.Stack, error) {
 	return s.stackByLabel, nil
 }
 
+func (s *stubDatastore) GetInlinePoliciesForStack(stackID string) ([]pkgmodel.Policy, error) {
+	s.lookupCalls++
+	if s.policyLookupErr != nil {
+		return nil, s.policyLookupErr
+	}
+	return stampStackID(s.inlinePoliciesForStack, stackID), nil
+}
+
 func (s *stubDatastore) GetPoliciesForStack(stackID string) ([]pkgmodel.Policy, error) {
 	s.lookupCalls++
-	if s.policiesForStackErr != nil {
-		return nil, s.policiesForStackErr
+	if s.policyLookupErr != nil {
+		return nil, s.policyLookupErr
 	}
-	return s.policiesForStack, nil
+	policies := make([]pkgmodel.Policy, 0, len(s.inlinePoliciesForStack)+len(s.attachedPoliciesForStack))
+	policies = append(policies, stampStackID(s.inlinePoliciesForStack, stackID)...)
+	policies = append(policies, stampStackID(s.attachedPoliciesForStack, stackID)...)
+	return policies, nil
 }
 
 func (s *stubDatastore) GetStandalonePolicy(label string) (pkgmodel.Policy, error) {
@@ -58,6 +76,15 @@ func (s *stubDatastore) GetStacksReferencingPolicy(policyLabel string) ([]string
 
 func (s *stubDatastore) GetAttachedPolicyLabelsForStack(stackLabel string) ([]string, error) {
 	return nil, nil
+}
+
+// stampStackID applies the stamping a stack-scoped read performs: every policy
+// it returns carries the queried stack's ID, attached standalone ones included.
+func stampStackID(policies []pkgmodel.Policy, stackID string) []pkgmodel.Policy {
+	for _, p := range policies {
+		p.SetStackID(stackID)
+	}
+	return policies
 }
 
 func TestPoliciesEqual_AutoReconcile(t *testing.T) {
@@ -102,7 +129,7 @@ func TestGenerateInlinePolicyUpdates_AutoReconcile_NewPolicyGeneratesLabel(t *te
 func TestGenerateInlinePolicyUpdates_AutoReconcile_ReusesExistingLabel(t *testing.T) {
 	ds := &stubDatastore{
 		stackByLabel: &pkgmodel.Stack{ID: "stack-1", Label: "my-stack"},
-		policiesForStack: []pkgmodel.Policy{
+		inlinePoliciesForStack: []pkgmodel.Policy{
 			&pkgmodel.AutoReconcilePolicy{Label: "existing-label", IntervalSeconds: 300, StackID: "stack-1"},
 		},
 	}
@@ -127,8 +154,8 @@ func TestGenerateInlinePolicyUpdates_AutoReconcile_ReusesExistingLabel(t *testin
 func TestGenerateInlinePolicyUpdates_Reconcile_UndeclaredInlinePolicyDeleted(t *testing.T) {
 	stored := &pkgmodel.TTLPolicy{Label: "my-stack-ttl-abc12345", TTLSeconds: 3600, OnDependents: "abort", StackID: "stack-1"}
 	ds := &stubDatastore{
-		stackByLabel:     &pkgmodel.Stack{ID: "stack-1", Label: "my-stack"},
-		policiesForStack: []pkgmodel.Policy{stored},
+		stackByLabel:           &pkgmodel.Stack{ID: "stack-1", Label: "my-stack"},
+		inlinePoliciesForStack: []pkgmodel.Policy{stored},
 	}
 	pg := NewPolicyUpdateGenerator(ds)
 
@@ -147,8 +174,8 @@ func TestGenerateInlinePolicyUpdates_Reconcile_UndeclaredInlinePolicyDeleted(t *
 func TestGenerateInlinePolicyUpdates_Reconcile_StandaloneRefDoesNotPreventInlineDelete(t *testing.T) {
 	stored := &pkgmodel.TTLPolicy{Label: "my-stack-ttl-abc12345", TTLSeconds: 3600, OnDependents: "abort", StackID: "stack-1"}
 	ds := &stubDatastore{
-		stackByLabel:     &pkgmodel.Stack{ID: "stack-1", Label: "my-stack"},
-		policiesForStack: []pkgmodel.Policy{stored},
+		stackByLabel:           &pkgmodel.Stack{ID: "stack-1", Label: "my-stack"},
+		inlinePoliciesForStack: []pkgmodel.Policy{stored},
 	}
 	pg := NewPolicyUpdateGenerator(ds)
 
@@ -170,7 +197,7 @@ func TestGenerateInlinePolicyUpdates_Reconcile_StandaloneRefDoesNotPreventInline
 func TestGenerateInlinePolicyUpdates_Reconcile_DeclaredTypeUpdatedUndeclaredDeleted(t *testing.T) {
 	ds := &stubDatastore{
 		stackByLabel: &pkgmodel.Stack{ID: "stack-1", Label: "my-stack"},
-		policiesForStack: []pkgmodel.Policy{
+		inlinePoliciesForStack: []pkgmodel.Policy{
 			&pkgmodel.TTLPolicy{Label: "my-stack-ttl-abc12345", TTLSeconds: 3600, OnDependents: "abort", StackID: "stack-1"},
 			&pkgmodel.AutoReconcilePolicy{Label: "my-stack-auto-reconcile-def67890", IntervalSeconds: 300, StackID: "stack-1"},
 		},
@@ -200,8 +227,7 @@ func TestGenerateInlinePolicyUpdates_Reconcile_DeclaredTypeUpdatedUndeclaredDele
 func TestGenerateInlinePolicyUpdates_Reconcile_AttachedStandalonePolicyNotDeleted(t *testing.T) {
 	ds := &stubDatastore{
 		stackByLabel: &pkgmodel.Stack{ID: "stack-1", Label: "my-stack"},
-		policiesForStack: []pkgmodel.Policy{
-			// Attached via the junction table, so it carries no stack ID.
+		attachedPoliciesForStack: []pkgmodel.Policy{
 			&pkgmodel.TTLPolicy{Label: "shared-ttl", TTLSeconds: 3600, OnDependents: "abort"},
 		},
 	}
@@ -214,10 +240,31 @@ func TestGenerateInlinePolicyUpdates_Reconcile_AttachedStandalonePolicyNotDelete
 	assert.Empty(t, updates, "an attached standalone policy is detached, never deleted as an inline policy")
 }
 
+func TestGenerateInlinePolicyUpdates_Reconcile_ReferencedStandalonePolicyNotDeleted(t *testing.T) {
+	ds := &stubDatastore{
+		stackByLabel: &pkgmodel.Stack{ID: "stack-1", Label: "my-stack"},
+		attachedPoliciesForStack: []pkgmodel.Policy{
+			&pkgmodel.TTLPolicy{Label: "shared-ttl", TTLSeconds: 3600, OnDependents: "abort"},
+		},
+	}
+	pg := NewPolicyUpdateGenerator(ds)
+
+	stack := pkgmodel.Stack{
+		Label: "my-stack",
+		Policies: []json.RawMessage{
+			json.RawMessage(`{"$ref":"policy://shared-ttl"}`),
+		},
+	}
+
+	updates, err := pg.generateInlinePolicyUpdates(stack, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Empty(t, updates, "a standalone policy the stack still references must never be deleted")
+}
+
 func TestGenerateInlinePolicyUpdates_Reconcile_AttachedStandaloneLabelNotReused(t *testing.T) {
 	ds := &stubDatastore{
 		stackByLabel: &pkgmodel.Stack{ID: "stack-1", Label: "my-stack"},
-		policiesForStack: []pkgmodel.Policy{
+		attachedPoliciesForStack: []pkgmodel.Policy{
 			&pkgmodel.TTLPolicy{Label: "shared-ttl", TTLSeconds: 3600, OnDependents: "abort"},
 		},
 	}
@@ -242,7 +289,7 @@ func TestGenerateInlinePolicyUpdates_Reconcile_AttachedStandaloneLabelNotReused(
 func TestGenerateInlinePolicyUpdates_Patch_NoPoliciesPerformsNoLookups(t *testing.T) {
 	ds := &stubDatastore{
 		stackByLabel: &pkgmodel.Stack{ID: "stack-1", Label: "my-stack"},
-		policiesForStack: []pkgmodel.Policy{
+		inlinePoliciesForStack: []pkgmodel.Policy{
 			&pkgmodel.TTLPolicy{Label: "my-stack-ttl-abc12345", TTLSeconds: 3600, OnDependents: "abort", StackID: "stack-1"},
 		},
 	}
@@ -269,8 +316,8 @@ func TestGenerateInlinePolicyUpdates_Reconcile_StackLookupFails(t *testing.T) {
 
 func TestGenerateInlinePolicyUpdates_Reconcile_PolicyLookupFails(t *testing.T) {
 	ds := &stubDatastore{
-		stackByLabel:        &pkgmodel.Stack{ID: "stack-1", Label: "my-stack"},
-		policiesForStackErr: errors.New("connection refused"),
+		stackByLabel:    &pkgmodel.Stack{ID: "stack-1", Label: "my-stack"},
+		policyLookupErr: errors.New("connection refused"),
 	}
 	pg := NewPolicyUpdateGenerator(ds)
 
@@ -282,12 +329,25 @@ func TestGenerateInlinePolicyUpdates_Reconcile_PolicyLookupFails(t *testing.T) {
 }
 
 func TestGenerateInlinePolicyUpdates_Reconcile_SecondApplyAfterDeleteIsNoOp(t *testing.T) {
-	ds := &stubDatastore{stackByLabel: &pkgmodel.Stack{ID: "stack-1", Label: "my-stack"}}
+	ds := &stubDatastore{
+		stackByLabel: &pkgmodel.Stack{ID: "stack-1", Label: "my-stack"},
+		inlinePoliciesForStack: []pkgmodel.Policy{
+			&pkgmodel.TTLPolicy{Label: "my-stack-ttl-abc12345", TTLSeconds: 3600, OnDependents: "abort", StackID: "stack-1"},
+		},
+	}
 	pg := NewPolicyUpdateGenerator(ds)
 
 	stack := pkgmodel.Stack{Label: "my-stack"}
 
 	updates, err := pg.generateInlinePolicyUpdates(stack, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	require.Len(t, updates, 1, "the first apply drops the inline policy the declaration omits")
+	require.Equal(t, PolicyOperationDelete, updates[0].Operation)
+
+	// The delete has been executed, so the stack no longer carries the policy.
+	ds.inlinePoliciesForStack = nil
+
+	updates, err = pg.generateInlinePolicyUpdates(stack, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Empty(t, updates, "re-applying a stack whose inline policy is already gone should emit nothing")
 }
@@ -295,8 +355,8 @@ func TestGenerateInlinePolicyUpdates_Reconcile_SecondApplyAfterDeleteIsNoOp(t *t
 func TestGeneratePolicyUpdates_Reconcile_DeletesUndeclaredInlinePolicy(t *testing.T) {
 	stored := &pkgmodel.TTLPolicy{Label: "my-stack-ttl-abc12345", TTLSeconds: 3600, OnDependents: "abort", StackID: "stack-1"}
 	ds := &stubDatastore{
-		stackByLabel:     &pkgmodel.Stack{ID: "stack-1", Label: "my-stack"},
-		policiesForStack: []pkgmodel.Policy{stored},
+		stackByLabel:           &pkgmodel.Stack{ID: "stack-1", Label: "my-stack"},
+		inlinePoliciesForStack: []pkgmodel.Policy{stored},
 	}
 	pg := NewPolicyUpdateGenerator(ds)
 
@@ -314,7 +374,7 @@ func TestGeneratePolicyUpdates_Reconcile_DeletesUndeclaredInlinePolicy(t *testin
 func TestGeneratePolicyUpdates_Destroy_EmitsNoInlinePolicyDelete(t *testing.T) {
 	ds := &stubDatastore{
 		stackByLabel: &pkgmodel.Stack{ID: "stack-1", Label: "my-stack"},
-		policiesForStack: []pkgmodel.Policy{
+		inlinePoliciesForStack: []pkgmodel.Policy{
 			&pkgmodel.TTLPolicy{Label: "my-stack-ttl-abc12345", TTLSeconds: 3600, OnDependents: "abort", StackID: "stack-1"},
 		},
 	}
