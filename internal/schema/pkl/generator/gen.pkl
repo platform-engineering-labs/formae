@@ -478,10 +478,40 @@ local function applyType(type: reflect.Type, value: Any): Any|GenerationFailure 
     Fail("applyType - Unsupported type in reflect handlers: \(clazz.simpleName)")
 
 
-function applyResource(res: Class, value: Dynamic) : Any =
+/// Tests whether a schema class is a formae resource.
+///
+/// The test is identity-based and transitive: it compares against the
+/// `formae.Resource` class itself and walks the whole superclass chain. A
+/// provider-local class that merely shares the name `Resource` therefore does
+/// not match, while a resource that reaches `formae.Resource` through an
+/// intermediate base such as `formae.Secret` does. The reference must stay
+/// qualified — the bare name `Resource` in this module resolves to
+/// `pkl:base.Resource`, which no schema class extends.
+///
+/// Identity holds per loaded formae schema: a class compiled against a
+/// different `formae.pkl` version carries a different `formae.Resource` and
+/// does not match. Keeping the schema package pins aligned is what prevents
+/// that.
+function isResourceClass(clazz: reflect.Class): Boolean =
+  clazz.isSubclassOf(reflect.Class(formae.Resource))
+
+/// Renders one resource's properties into the map the forma file is built from.
+///
+/// This is a generation boundary, like `apply`: what it returns is serialized
+/// into the forma file, so a failure must become a `throw` here instead of a
+/// `GenerationFailure` value. A returned failure ends up in the forma as a
+/// `message` property that no schema class declares, and the forma then cannot
+/// be evaluated. The `Map` return type rejects such a value outright.
+///
+/// `context` names the resource being rendered; the caller builds it because
+/// only the caller has the label, stack and type URI at hand. The diagnostic
+/// names the class through `enclosingDeclaration` — simple names are ambiguous
+/// (a provider's `Secret` and `formae.Secret` share one) — and never
+/// interpolates the reflected class itself, which renders its whole graph.
+function applyResource(res: Class, value: Dynamic, context: String) : Map =
     let (clazz = reflect.Class(res))
     let (valueAsMap = value.toMap())
-    if (clazz.superclass.reflectee.simpleName == "Resource")
+    if (isResourceClass(clazz))
         let (clazzProperties = getAllProperties(clazz))
         let (reverseMapping = formae.fq.reverseFieldMapping(clazz))
         clazzProperties.fold(Map(), (acc: Map|GenerationFailure, name: String, prop: reflect.Property) ->
@@ -498,19 +528,14 @@ function applyResource(res: Class, value: Dynamic) : Any =
                     acc
         )
     else
-        Fail("applyResource - Expected a Resource class, got \(clazz)")
+        throw("\(context): schema class \"\(clazz.enclosingDeclaration.name).\(clazz.name)\" "
+            + "does not extend formae.Resource. A class annotated with @formae.ResourceHint "
+            + "must extend formae.Resource (directly or through one of its bases, such as "
+            + "formae.Secret).")
 
 
 local function getTypeName(value: Typed): String =
-  let (clazz = value.getClass())
-  let (reflectClass = reflect.Class(clazz))
-    // Check if it's a subclass of a known base type
-    if (reflectClass.isSubclassOf(reflect.Class(Resource)))
-      clazz.simpleName
-    else if (reflectClass.isSubclassOf(reflect.Class(Module)))
-      clazz.simpleName
-    else
-      clazz.simpleName
+  value.getClass().simpleName
 
 function shouldSkipProperty(prop: Any): Boolean =
   (prop.annotations.filterIsInstance(formae.FieldHint).isEmpty && prop.name != "label" )

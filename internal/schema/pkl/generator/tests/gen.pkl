@@ -13,6 +13,7 @@ import "pkl:reflect" as reflect
 import "@testprovider/dns/zone.pkl" as zone
 import "@testprovider/apprunner/service.pkl" as apprunner
 import "@testprovider/shared/deploymentconfig.pkl" as deploymentconfig
+import "@testprovider/secretsmanager/secret.pkl" as secret
 
 /// Local Tag class for testing (mirrors the pattern used by resource plugins)
 local class Tag {
@@ -52,6 +53,20 @@ local class TestResource extends formae.Resource {
 
     @formae.FieldHint
     bucketName: String
+}
+
+/// A provider-local base that merely shares the name `Resource` — unrelated to
+/// formae.Resource. Classification matches on class identity, not on the name.
+local open class Resource {
+    label: String
+}
+
+/// Extends the same-named local base, not formae's: annotating it changes
+/// nothing, it is still not a formae resource.
+@formae.ResourceHint
+local class ImposterResource extends Resource {
+    @formae.FieldHint
+    name: String
 }
 
 /// Mutual-exclusivity check: exactly one of the two candidate values is non-null.
@@ -146,15 +161,15 @@ examples {
     }
 
     //["ApplyResource for Simple class fails when it is no resource"] {
-    //    gen.applyResource(SimpleFoo, simpleProperties)
+    //    gen.applyResource(SimpleFoo, simpleProperties, "Cannot render resource \"simple\"")
     //}
     //
     //["ApplyResource for Complex class fails when it is no resource"] {
-    //    gen.applyResource(ComplexBar, complexProperties)
+    //    gen.applyResource(ComplexBar, complexProperties, "Cannot render resource \"complex\"")
     //}
     //
     //["Apply resource class"] {
-    //    gen.applyResource(TestResource, resourceProperties)
+    //    gen.applyResource(TestResource, resourceProperties, "Cannot render resource \"test\"")
     //}
 
     ["Convert to map with types - simple"] {
@@ -285,6 +300,28 @@ facts {
         // Local file URIs return placeholder (which is expected)
         // For package URIs like @oci/oci.pkl, it would return "oci"
         importInfo == gen.importPlaceholder
+    }
+
+    // --- Resource classification tests ---
+
+    ["direct formae.Resource subclass is a resource class"] {
+        gen.isResourceClass(reflect.Class(TestResource)) == true
+    }
+
+    ["subclass reached through formae.Secret is a resource class"] {
+        gen.isResourceClass(reflect.Class(secret.Secret)) == true
+    }
+
+    ["unrelated same-named Resource base is not a resource class"] {
+        gen.isResourceClass(reflect.Class(Resource)) == false
+    }
+
+    ["class extending an unrelated same-named Resource is not a resource class"] {
+        gen.isResourceClass(reflect.Class(ImposterResource)) == false
+    }
+
+    ["formae.SubResource subclass is not a resource class"] {
+        gen.isResourceClass(reflect.Class(zone.ZoneConfig)) == false
     }
 
     // --- SubResource import statement tests ---

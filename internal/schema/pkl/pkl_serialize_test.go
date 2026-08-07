@@ -459,6 +459,8 @@ func TestSerializeForma_HashedOpaque_EmitsHashedMarker(t *testing.T) {
 
 	out, err := PKL{}.SerializeForma(forma, options)
 	require.NoError(t, err)
+	assert.NotContains(t, out, "message = \"applyResource",
+		"a secret resource must render its own fields, not a leaked classification failure")
 	assert.Contains(t, out, ".hashed", "hashed opaque field must emit the .hashed fluent accessor")
 }
 
@@ -783,6 +785,49 @@ func TestSerializeForma_ReferenceToUndeclaredResolvable_FailsActionably(t *testi
 	assert.Contains(t, msg, `reference to resource "ghost" in stack "default"`,
 		"the error must identify which reference failed")
 	assert.NotContains(t, msg, "Cannot find property", "the failure must not surface as a raw PKL property error")
+}
+
+// TestSerializeForma_ResourceHintOnNonResourceClass_FailsActionably covers a
+// schema class that carries a resource hint but does not extend
+// formae.Resource. Rendering it is impossible, so generation must stop with a
+// message naming the resource, its type and the schema class at fault, rather
+// than folding the rejection text into the forma file as a property no class
+// declares.
+func TestSerializeForma_ResourceHintOnNonResourceClass_FailsActionably(t *testing.T) {
+	deps, pluginDir := fakeawsDeps(t)
+
+	forma := &model.Forma{
+		Stacks:  []model.Stack{{Label: "default"}},
+		Targets: []model.Target{fakeawsTarget()},
+		Resources: []model.Resource{{
+			Label:      "app-widget",
+			Type:       "FakeAWS::Misdeclared::Widget",
+			Stack:      "default",
+			Target:     "aws",
+			Properties: json.RawMessage(`{"WidgetId":"w-1"}`),
+		}},
+	}
+	options := &schema.SerializeOptions{
+		Schema:         "pkl",
+		SchemaLocation: schema.SchemaLocationLocal,
+		LocalPluginDir: pluginDir,
+		Dependencies:   deps,
+	}
+
+	out, err := PKL{}.SerializeForma(forma, options)
+	assert.NotContains(t, out, `message = "applyResource`,
+		"the rejection must not be rendered into the forma file")
+	require.Error(t, err, "a class that is not a formae.Resource must not serialize")
+
+	msg := err.Error()
+	assert.Contains(t, msg, `resource "app-widget" in stack "default"`,
+		"the error must identify which resource failed")
+	assert.Contains(t, msg, "FakeAWS::Misdeclared::Widget", "the error must name the resource type")
+	assert.Contains(t, msg, "fakeaws.misdeclared.widget.Widget",
+		"the error must name the schema class, qualified by its module")
+	assert.Contains(t, msg, "must extend formae.Resource", "the error must say what the schema has to change")
+	assert.NotContains(t, msg, "Cannot find property", "the failure must not surface as a raw PKL property error")
+	assert.NotContains(t, msg, "docComment", "the error must name the class, not dump the reflected class graph")
 }
 
 // TestGenPkl_NoUnguardedResolvableLookup pins the invariant behind the test
