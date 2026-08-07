@@ -379,6 +379,11 @@ type Datastore interface {
 	UpdatePolicy(policy pkgmodel.Policy, commandID string) (string, error)
 	// GetPoliciesForStack returns all non-deleted policies for a given stack ID
 	GetPoliciesForStack(stackID string) ([]pkgmodel.Policy, error)
+	// GetInlinePoliciesForStack returns the non-deleted inline policies of a stack
+	// (those whose stack_id is the stack). Unlike GetPoliciesForStack it leaves out
+	// the standalone policies attached to the stack through the junction table. An
+	// empty stack ID has no inline policies and returns none.
+	GetInlinePoliciesForStack(stackID string) ([]pkgmodel.Policy, error)
 	// GetStandalonePolicy retrieves a standalone policy by label (stack_id IS NULL)
 	// Returns nil, nil if no policy is found
 	GetStandalonePolicy(label string) (pkgmodel.Policy, error)

@@ -2168,6 +2168,59 @@ func (d DatastoreSQLite) GetPoliciesForStack(stackID string) ([]pkgmodel.Policy,
 	return policies, nil
 }
 
+func (d DatastoreSQLite) GetInlinePoliciesForStack(stackID string) ([]pkgmodel.Policy, error) {
+	_, span := sqliteTracer.Start(context.Background(), "GetInlinePoliciesForStack")
+	defer span.End()
+
+	// Standalone policies are stored with an empty stack id, so an empty stack id
+	// here would match them; a stack that is not identified has no inline policies.
+	if stackID == "" {
+		return nil, nil
+	}
+
+	// Only the policies the stack owns: the standalone policies attached to it
+	// through the stack_policies junction table are not inline. Liveness is decided
+	// per policy id: an id whose latest version is a tombstone is already deleted.
+	query := `
+		WITH latest_policies AS (
+			SELECT id, label, policy_type, policy_data, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version DESC) as rn
+			FROM policies
+			WHERE stack_id = ?
+		)
+		SELECT label, policy_type, policy_data
+		FROM latest_policies
+		WHERE rn = 1 AND operation != 'delete'
+	`
+
+	rows, err := d.conn.Query(query, stackID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var policies []pkgmodel.Policy
+	for rows.Next() {
+		var label, policyType, policyDataStr string
+		if err := rows.Scan(&label, &policyType, &policyDataStr); err != nil {
+			return nil, err
+		}
+
+		policy, err := deserializePolicy(label, policyType, policyDataStr, stackID)
+		if err != nil {
+			slog.Warn("Failed to deserialize policy, skipping", "error", err, "label", label, "type", policyType)
+			continue
+		}
+		policies = append(policies, policy)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return policies, nil
+}
+
 func (d DatastoreSQLite) GetStandalonePolicy(label string) (pkgmodel.Policy, error) {
 	_, span := sqliteTracer.Start(context.Background(), "GetStandalonePolicy")
 	defer span.End()

@@ -145,6 +145,12 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunDeleteStackThenRecreate(t, newDS)
 	RunCountResourcesInStack(t, newDS)
 
+	RunGetInlinePoliciesForStack(t, newDS)
+	RunGetInlinePoliciesForStackExcludesAttachedStandalone(t, newDS)
+	RunGetInlinePoliciesForStackExcludesDeleted(t, newDS)
+	RunGetInlinePoliciesForStackReturnsLatestVersion(t, newDS)
+	RunGetInlinePoliciesForStackEmptyStackID(t, newDS)
+
 	RunDeleteInlinePolicy(t, newDS)
 	RunDeleteInlinePolicyDeletesEveryMatchingID(t, newDS)
 	RunDeleteInlinePolicyEmptyStackID(t, newDS)

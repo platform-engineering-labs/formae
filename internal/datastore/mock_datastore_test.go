@@ -145,6 +145,9 @@ func (m *mockDatastore) UpdatePolicy(_ pkgmodel.Policy, _ string) (string, error
 func (m *mockDatastore) GetPoliciesForStack(_ string) ([]pkgmodel.Policy, error) {
 	return nil, nil
 }
+func (m *mockDatastore) GetInlinePoliciesForStack(_ string) ([]pkgmodel.Policy, error) {
+	return nil, nil
+}
 func (m *mockDatastore) GetStandalonePolicy(_ string) (pkgmodel.Policy, error) {
 	return nil, nil
 }

@@ -2291,6 +2291,59 @@ func (d DatastorePostgres) GetPoliciesForStack(stackID string) ([]pkgmodel.Polic
 	return policies, nil
 }
 
+func (d DatastorePostgres) GetInlinePoliciesForStack(stackID string) ([]pkgmodel.Policy, error) {
+	ctx, span := tracer.Start(context.Background(), "GetInlinePoliciesForStack")
+	defer span.End()
+
+	// Standalone policies are stored with an empty stack id, so an empty stack id
+	// here would match them; a stack that is not identified has no inline policies.
+	if stackID == "" {
+		return nil, nil
+	}
+
+	// Only the policies the stack owns: the standalone policies attached to it
+	// through the stack_policies junction table are not inline. Liveness is decided
+	// per policy id: an id whose latest version is a tombstone is already deleted.
+	query := `
+		WITH latest_policies AS (
+			SELECT id, label, policy_type, policy_data, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			FROM policies
+			WHERE stack_id = $1
+		)
+		SELECT label, policy_type, policy_data
+		FROM latest_policies
+		WHERE rn = 1 AND operation != 'delete'
+	`
+
+	rows, err := d.pool.Query(ctx, query, stackID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var policies []pkgmodel.Policy
+	for rows.Next() {
+		var label, policyType, policyDataStr string
+		if err := rows.Scan(&label, &policyType, &policyDataStr); err != nil {
+			return nil, err
+		}
+
+		policy, err := deserializePolicyPostgres(label, policyType, policyDataStr, stackID)
+		if err != nil {
+			slog.Warn("Failed to deserialize policy, skipping", "error", err, "label", label, "type", policyType)
+			continue
+		}
+		policies = append(policies, policy)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return policies, nil
+}
+
 func (d DatastorePostgres) GetStandalonePolicy(label string) (pkgmodel.Policy, error) {
 	ctx, span := tracer.Start(context.Background(), "GetStandalonePolicy")
 	defer span.End()

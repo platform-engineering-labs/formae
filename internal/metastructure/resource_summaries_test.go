@@ -224,6 +224,9 @@ func (m *mockSummaryDatastore) UpdatePolicy(_ pkgmodel.Policy, _ string) (string
 func (m *mockSummaryDatastore) GetPoliciesForStack(_ string) ([]pkgmodel.Policy, error) {
 	panic("not implemented")
 }
+func (m *mockSummaryDatastore) GetInlinePoliciesForStack(_ string) ([]pkgmodel.Policy, error) {
+	panic("not implemented")
+}
 func (m *mockSummaryDatastore) ListAllStandalonePolicies() ([]pkgmodel.Policy, error) {
 	panic("not implemented")
 }
