@@ -478,10 +478,27 @@ local function applyType(type: reflect.Type, value: Any): Any|GenerationFailure 
     Fail("applyType - Unsupported type in reflect handlers: \(clazz.simpleName)")
 
 
+/// Tests whether a schema class is a formae resource.
+///
+/// The test is identity-based and transitive: it compares against the
+/// `formae.Resource` class itself and walks the whole superclass chain. A
+/// provider-local class that merely shares the name `Resource` therefore does
+/// not match, while a resource that reaches `formae.Resource` through an
+/// intermediate base such as `formae.Secret` does. The reference must stay
+/// qualified — the bare name `Resource` in this module resolves to
+/// `pkl:base.Resource`, which no schema class extends.
+///
+/// Identity holds per loaded formae schema: a class compiled against a
+/// different `formae.pkl` version carries a different `formae.Resource` and
+/// does not match. Keeping the schema package pins aligned is what prevents
+/// that.
+function isResourceClass(clazz: reflect.Class): Boolean =
+  clazz.isSubclassOf(reflect.Class(formae.Resource))
+
 function applyResource(res: Class, value: Dynamic) : Any =
     let (clazz = reflect.Class(res))
     let (valueAsMap = value.toMap())
-    if (clazz.superclass.reflectee.simpleName == "Resource")
+    if (isResourceClass(clazz))
         let (clazzProperties = getAllProperties(clazz))
         let (reverseMapping = formae.fq.reverseFieldMapping(clazz))
         clazzProperties.fold(Map(), (acc: Map|GenerationFailure, name: String, prop: reflect.Property) ->
