@@ -4,19 +4,28 @@
 # SPDX-License-Identifier: FSL-1.1-ALv2
 
 """
-Generate a large-scale AWS infrastructure environment for performance testing formae.
+Generate a large-scale multi-cloud infrastructure environment for performance testing formae.
 
 This script generates either PKL files (for formae) or CloudFormation templates
 (for creating resources outside formae, useful for discovery testing).
 
 The distribution of resource types mimics typical enterprise production environments.
+Supports AWS, Azure, and GCP resources either individually or combined.
 
 Usage:
-    # Generate PKL files for formae
+    # Generate PKL files for formae (AWS only - default)
     python3 scripts/generate-perf-test-env.py --count 1000 --region us-east-1
     python3 scripts/generate-perf-test-env.py --count 3000 --region eu-west-1 --output ./perf-test
 
-    # Generate CloudFormation templates (for discovery testing)
+    # Generate multi-cloud PKL files
+    python3 scripts/generate-perf-test-env.py --count 100 --clouds aws,azure,gcp \\
+        --region us-east-2 --subscription-azure <sub-id> --project-gcp <project-id>
+
+    # Use scale profiles for multi-cloud
+    python3 scripts/generate-perf-test-env.py --profile medium --clouds aws,azure,gcp \\
+        --region us-east-2 --subscription-azure <sub-id> --project-gcp <project-id>
+
+    # Generate CloudFormation templates (for discovery testing, AWS only)
     python3 scripts/generate-perf-test-env.py --format cloudformation --count 500 --region us-east-1
 
 To apply PKL environment:
@@ -132,6 +141,188 @@ DISTRIBUTION_QUOTA_SAFE = {
     "api_gateway": 0.02,        # API Gateway REST APIs (limit 600)
     "api_stage": 0.01,          # API Gateway stages
 }
+
+
+# Azure resource distribution for realistic production environments
+# Based on typical enterprise Azure usage patterns
+AZURE_DISTRIBUTION = {
+    # Networking
+    "resource_group": 0.06,         # Azure::Resources::ResourceGroup
+    "virtual_network": 0.04,        # Azure::Resources::VirtualNetwork
+    "subnet": 0.04,                 # Azure::Resources::Subnet
+    "nsg": 0.05,                    # Azure::Network::NetworkSecurityGroup
+    "public_ip": 0.03,              # Azure::Network::PublicIPAddress
+
+    # Compute
+    "virtual_machine": 0.06,        # Azure::Compute::VirtualMachine
+    "network_interface": 0.06,      # Azure::Network::NetworkInterface
+
+    # Storage
+    "storage_account": 0.10,        # Azure::Storage::StorageAccount
+
+    # IAM
+    "managed_identity": 0.08,       # Azure::ManagedIdentity::UserAssignedIdentity
+
+    # Security
+    "key_vault": 0.06,              # Azure::KeyVault::Vault
+
+    # Container
+    "container_registry": 0.03,     # Azure::ContainerRegistry::Registry
+
+    # Database
+    "postgres_server": 0.02,        # Azure::DBforPostgreSQL::FlexibleServer
+}
+
+
+# GCP resource distribution for realistic production environments
+# NOTE: IAM ServiceAccount and Artifact Registry are not in the current GCP plugin schema,
+# so we redistribute those percentages to other available resource types.
+GCP_DISTRIBUTION = {
+    # Compute
+    "compute_instance": 0.06,       # GCP::Compute::Instance
+    "compute_disk": 0.04,           # GCP::Compute::Disk
+
+    # Networking
+    "compute_network": 0.04,        # GCP::Compute::Network
+    "compute_subnetwork": 0.04,     # GCP::Compute::Subnetwork
+    "compute_firewall": 0.05,       # GCP::Compute::Firewall
+    "compute_address": 0.03,        # GCP::Compute::Address
+
+    # Storage
+    "storage_bucket": 0.12,         # GCP::Storage::Bucket (bumped, absorbing IAM/AR share)
+
+    # Database
+    "sql_instance": 0.02,           # GCP::SQL::DatabaseInstance
+
+    # BigQuery
+    "bigquery_dataset": 0.05,       # GCP::BigQuery::Dataset (bumped, absorbing IAM/AR share)
+}
+
+
+# Scale profiles: maps profile name -> (aws_count, azure_count, gcp_count)
+SCALE_PROFILES = {
+    "small":  (200, 150, 150),
+    "medium": (2000, 1500, 1500),
+    "large":  (8000, 6000, 6000),
+    "xl":     (20000, 15000, 15000),
+}
+
+
+@dataclass
+class AzureResourceCounts:
+    """Calculated resource counts for Azure based on total target."""
+    resource_groups: int
+    virtual_networks: int
+    subnets_per_vnet: int
+    nsgs: int
+    public_ips: int
+    virtual_machines: int
+    network_interfaces: int
+    storage_accounts: int
+    managed_identities: int
+    key_vaults: int
+    container_registries: int
+    postgres_servers: int
+
+    @property
+    def total(self) -> int:
+        return (
+            self.resource_groups +
+            self.virtual_networks +
+            (self.virtual_networks * self.subnets_per_vnet) +
+            self.nsgs +
+            self.public_ips +
+            self.virtual_machines +
+            self.network_interfaces +
+            self.storage_accounts +
+            self.managed_identities +
+            self.key_vaults +
+            self.container_registries +
+            self.postgres_servers
+        )
+
+
+def calculate_azure_counts(total: int) -> AzureResourceCounts:
+    """Calculate Azure resource counts based on target total and distribution.
+
+    Quota caps:
+    - Resource Groups: cap at 50 (limit 980)
+    - VNets: cap at 50 (limit 1000)
+    - Storage Accounts: cap at 200 (limit 250)
+    - Key Vaults: cap at 200
+    - VMs: cap conservatively
+    """
+    d = AZURE_DISTRIBUTION
+
+    rgs = min(50, max(1, int(total * d["resource_group"])))
+    vnets = min(50, max(1, int(total * d["virtual_network"])))
+    subnets_per_vnet = max(1, min(6, int(total * d["subnet"] / max(1, vnets))))
+
+    return AzureResourceCounts(
+        resource_groups=rgs,
+        virtual_networks=vnets,
+        subnets_per_vnet=subnets_per_vnet,
+        nsgs=max(1, int(total * d["nsg"])),
+        public_ips=max(1, int(total * d["public_ip"])),
+        virtual_machines=max(1, int(total * d["virtual_machine"])),
+        network_interfaces=max(1, int(total * d["network_interface"])),
+        storage_accounts=min(200, max(1, int(total * d["storage_account"]))),
+        managed_identities=max(1, int(total * d["managed_identity"])),
+        key_vaults=min(200, max(1, int(total * d["key_vault"]))),
+        container_registries=max(1, int(total * d["container_registry"])),
+        postgres_servers=max(0, int(total * d["postgres_server"])),
+    )
+
+
+@dataclass
+class GCPResourceCounts:
+    """Calculated resource counts for GCP based on total target."""
+    compute_instances: int
+    compute_disks: int
+    compute_networks: int
+    compute_subnetworks: int
+    compute_firewalls: int
+    compute_addresses: int
+    storage_buckets: int
+    sql_instances: int
+    bigquery_datasets: int
+
+    @property
+    def total(self) -> int:
+        return (
+            self.compute_instances +
+            self.compute_disks +
+            self.compute_networks +
+            self.compute_subnetworks +
+            self.compute_firewalls +
+            self.compute_addresses +
+            self.storage_buckets +
+            self.sql_instances +
+            self.bigquery_datasets
+        )
+
+
+def calculate_gcp_counts(total: int) -> GCPResourceCounts:
+    """Calculate GCP resource counts based on target total and distribution.
+
+    Quota caps:
+    - Networks: cap at 15 (default limit)
+    - Firewall rules: cap at 400 (limit 500)
+    - Cloud SQL instances: cap at 30 (limit 40)
+    """
+    d = GCP_DISTRIBUTION
+
+    return GCPResourceCounts(
+        compute_instances=max(1, int(total * d["compute_instance"])),
+        compute_disks=max(1, int(total * d["compute_disk"])),
+        compute_networks=min(15, max(1, int(total * d["compute_network"]))),
+        compute_subnetworks=max(1, int(total * d["compute_subnetwork"])),
+        compute_firewalls=min(400, max(1, int(total * d["compute_firewall"]))),
+        compute_addresses=max(1, int(total * d["compute_address"])),
+        storage_buckets=max(1, int(total * d["storage_bucket"])),
+        sql_instances=min(30, max(0, int(total * d["sql_instance"]))),
+        bigquery_datasets=max(1, int(total * d["bigquery_dataset"])),
+    )
 
 
 @dataclass
@@ -1537,7 +1728,1142 @@ class RDS {{
 '''
 
 
-def generate_main_pkl(env_id: str, stack_name: str, counts: ResourceCounts) -> str:
+# ============================================================================
+# Azure PKL Generators
+# ============================================================================
+
+AZURE_COPYRIGHT = '''/*
+ * Stress Test Environment - Auto-generated (Azure)
+ * Generated by generate-stress-test-env.py
+ *
+ * WARNING: This environment is for testing only. Resources will incur Azure costs.
+ */
+'''
+
+
+def generate_azure_networking_pkl(counts: AzureResourceCounts, location: str) -> str:
+    """Generate Azure networking.pkl with resource groups, VNets, subnets, NSGs, and public IPs."""
+
+    rg_blocks = []
+    vnet_blocks = []
+    subnet_blocks = []
+    nsg_blocks = []
+    pip_blocks = []
+
+    # Resource groups
+    for i in range(counts.resource_groups):
+        rg_blocks.append(f'''
+  hidden rg{i}: rg.ResourceGroup = new {{
+    label = "\\(prefix)-rg-{i}"
+    name = "\\(prefix)-rg-{i}"
+    location = "{location}"
+    tags {{
+      new azure.Tag {{ key = "Environment"; value = "stress-test" }}
+      new azure.Tag {{ key = "ManagedBy"; value = "formae" }}
+      new azure.Tag {{ key = "run-id"; value = "\\(prefix)" }}
+    }}
+  }}''')
+
+    # Virtual networks
+    for i in range(counts.virtual_networks):
+        rg_idx = i % counts.resource_groups
+        vnet_blocks.append(f'''
+  hidden vnet{i}: vnet.VirtualNetwork = new {{
+    label = "\\(prefix)-vnet-{i}"
+    name = "\\(prefix)-vnet-{i}"
+    location = "{location}"
+    resourceGroupName = rg{rg_idx}.res.name
+    addressSpace = new vnet.AddressSpace {{
+      addressPrefixes {{
+        "10.{i % 256}.0.0/16"
+      }}
+    }}
+    tags {{
+      new azure.Tag {{ key = "Environment"; value = "stress-test" }}
+      new azure.Tag {{ key = "ManagedBy"; value = "formae" }}
+    }}
+  }}''')
+
+        # Subnets for this VNet
+        for j in range(counts.subnets_per_vnet):
+            subnet_blocks.append(f'''
+  hidden subnet{i}_{j}: snet.Subnet = new {{
+    label = "\\(prefix)-subnet-{i}-{j}"
+    name = "\\(prefix)-subnet-{i}-{j}"
+    resourceGroupName = rg{rg_idx}.res.name
+    virtualNetworkName = vnet{i}.res.name
+    addressPrefix = "10.{i % 256}.{j}.0/24"
+  }}''')
+
+    # NSGs
+    for i in range(counts.nsgs):
+        rg_idx = i % counts.resource_groups
+        nsg_blocks.append(f'''
+  hidden nsg{i}: nsg.NetworkSecurityGroup = new {{
+    label = "\\(prefix)-nsg-{i}"
+    name = "\\(prefix)-nsg-{i}"
+    location = "{location}"
+    resourceGroupName = rg{rg_idx}.res.name
+    securityRules {{
+      new nsg.SecurityRule {{
+        name = "AllowHTTP"
+        priority = {100 + i}
+        direction = "Inbound"
+        access = "Allow"
+        protocol = "Tcp"
+        sourceAddressPrefix = "10.0.0.0/8"
+        sourcePortRange = "*"
+        destinationAddressPrefix = "*"
+        destinationPortRange = "80"
+      }}
+    }}
+    tags {{
+      new azure.Tag {{ key = "Environment"; value = "stress-test" }}
+      new azure.Tag {{ key = "ManagedBy"; value = "formae" }}
+    }}
+  }}''')
+
+    # Public IPs
+    for i in range(counts.public_ips):
+        rg_idx = i % counts.resource_groups
+        pip_blocks.append(f'''
+  hidden pip{i}: pip.PublicIPAddress = new {{
+    label = "\\(prefix)-pip-{i}"
+    name = "\\(prefix)-pip-{i}"
+    location = "{location}"
+    resourceGroupName = rg{rg_idx}.res.name
+    sku = new pip.PublicIPAddressSKU {{
+      name = "Standard"
+      tier = "Regional"
+    }}
+    publicIPAllocationMethod = "Static"
+    publicIPAddressVersion = "IPv4"
+    tags {{
+      new azure.Tag {{ key = "Environment"; value = "stress-test" }}
+      new azure.Tag {{ key = "ManagedBy"; value = "formae" }}
+    }}
+  }}''')
+
+    # Resource listing
+    resource_list = []
+    for i in range(counts.resource_groups):
+        resource_list.append(f"    rg{i}")
+    for i in range(counts.virtual_networks):
+        resource_list.append(f"    vnet{i}")
+        for j in range(counts.subnets_per_vnet):
+            resource_list.append(f"    subnet{i}_{j}")
+    for i in range(counts.nsgs):
+        resource_list.append(f"    nsg{i}")
+    for i in range(counts.public_ips):
+        resource_list.append(f"    pip{i}")
+
+    return f'''{AZURE_COPYRIGHT}
+import "@azure/azure.pkl"
+import "@azure/resources/resourcegroup.pkl" as rg
+import "@azure/resources/virtualnetwork.pkl" as vnet
+import "@azure/resources/subnet.pkl" as snet
+import "@azure/network/networksecuritygroup.pkl" as nsg
+import "@azure/network/publicipaddress.pkl" as pip
+
+class AzureNetworking {{
+  prefix: String
+{"".join(rg_blocks)}
+{"".join(vnet_blocks)}
+{"".join(subnet_blocks)}
+{"".join(nsg_blocks)}
+{"".join(pip_blocks)}
+
+  // Expose resource groups for other modules
+  resourceGroups: Listing = new {{
+{chr(10).join(f"    rg{i}" for i in range(counts.resource_groups))}
+  }}
+
+  // Expose VNets for other modules
+  vnets: Listing = new {{
+{chr(10).join(f"    vnet{i}" for i in range(counts.virtual_networks))}
+  }}
+
+  // Expose subnets for other modules
+  subnets: Listing = new {{
+{chr(10).join(f"    subnet{i}_0" for i in range(counts.virtual_networks))}
+  }}
+
+  // Expose NSGs for other modules
+  nsgs: Listing = new {{
+{chr(10).join(f"    nsg{i}" for i in range(counts.nsgs))}
+  }}
+
+  // Expose public IPs for other modules
+  publicIps: Listing = new {{
+{chr(10).join(f"    pip{i}" for i in range(counts.public_ips))}
+  }}
+
+  resources: Listing = new {{
+{chr(10).join(resource_list)}
+  }}
+}}
+'''
+
+
+def generate_azure_compute_pkl(counts: AzureResourceCounts, location: str) -> str:
+    """Generate Azure compute.pkl with VMs and NICs."""
+
+    nic_blocks = []
+    vm_blocks = []
+
+    # Network interfaces
+    for i in range(counts.network_interfaces):
+        rg_idx = i % counts.resource_groups
+        vnet_idx = i % counts.virtual_networks
+        nsg_idx = i % counts.nsgs
+        pip_idx = i % counts.public_ips if i < counts.public_ips else -1
+
+        ip_config = f'''
+      new nic.IPConfiguration {{
+        name = "ipconfig1"
+        subnet = networking.subnets.toList()[{vnet_idx}].res.id
+        privateIPAllocationMethod = "Dynamic"
+        primary = true'''
+        if pip_idx >= 0:
+            ip_config += f'''
+        publicIPAddress = networking.publicIps.toList()[{pip_idx}].res.id'''
+        ip_config += '''
+      }'''
+
+        nic_blocks.append(f'''
+  hidden nic{i}: nic.NetworkInterface = new {{
+    label = "\\(prefix)-nic-{i}"
+    name = "\\(prefix)-nic-{i}"
+    location = "{location}"
+    resourceGroupName = networking.resourceGroups.toList()[{rg_idx}].res.name
+    ipConfigurations {{{ip_config}
+    }}
+    networkSecurityGroup = networking.nsgs.toList()[{nsg_idx}].res.id
+    tags {{
+      new azure.Tag {{ key = "Environment"; value = "stress-test" }}
+      new azure.Tag {{ key = "ManagedBy"; value = "formae" }}
+    }}
+  }}''')
+
+    # Virtual machines
+    for i in range(counts.virtual_machines):
+        rg_idx = i % counts.resource_groups
+        nic_idx = i % counts.network_interfaces
+
+        vm_blocks.append(f'''
+  hidden vm{i}: vm.VirtualMachine = new {{
+    label = "\\(prefix)-vm-{i}"
+    name = "\\(prefix)-vm-{i}"
+    location = "{location}"
+    resourceGroupName = networking.resourceGroups.toList()[{rg_idx}].res.name
+    vmSize = "Standard_B1s"
+    networkInterfaces {{
+      new vm.NetworkInterfaceReference {{
+        id = nic{nic_idx}.res.id
+        primary = true
+      }}
+    }}
+    imageReference = new vm.ImageReference {{
+      publisher = "Canonical"
+      offer = "0001-com-ubuntu-server-jammy"
+      sku = "22_04-lts-gen2"
+      version = "latest"
+    }}
+    osDisk = new vm.OSDisk {{
+      createOption = "FromImage"
+      managedDisk = new vm.ManagedDiskParameters {{
+        storageAccountType = "Standard_LRS"
+      }}
+      caching = "ReadWrite"
+      deleteOption = "Delete"
+    }}
+    adminUsername = "azureadmin"
+    linuxConfiguration = new vm.LinuxConfiguration {{
+      disablePasswordAuthentication = true
+      provisionVMAgent = true
+      ssh = new vm.SSHConfiguration {{
+        publicKeys {{
+          new vm.SSHPublicKey {{
+            path = "/home/azureadmin/.ssh/authorized_keys"
+            keyData = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC+PLACEHOLDER stress-test-key"
+          }}
+        }}
+      }}
+    }}
+    tags {{
+      new azure.Tag {{ key = "Environment"; value = "stress-test" }}
+      new azure.Tag {{ key = "ManagedBy"; value = "formae" }}
+    }}
+  }}''')
+
+    resource_list = []
+    for i in range(counts.network_interfaces):
+        resource_list.append(f"    nic{i}")
+    for i in range(counts.virtual_machines):
+        resource_list.append(f"    vm{i}")
+
+    return f'''{AZURE_COPYRIGHT}
+import "@azure/azure.pkl"
+import "@azure/network/networkinterface.pkl" as nic
+import "@azure/compute/virtualmachine.pkl" as vm
+
+import "./networking.pkl" as networkingModule
+
+class AzureCompute {{
+  prefix: String
+  networking: networkingModule.AzureNetworking
+{"".join(nic_blocks)}
+{"".join(vm_blocks)}
+
+  resources: Listing = new {{
+{chr(10).join(resource_list)}
+  }}
+}}
+'''
+
+
+def generate_azure_storage_pkl(counts: AzureResourceCounts, location: str) -> str:
+    """Generate Azure storage.pkl with storage accounts."""
+
+    sa_blocks = []
+    for i in range(counts.storage_accounts):
+        rg_idx = i % counts.resource_groups
+        # Storage account names: lowercase, no hyphens, 3-24 chars
+        sa_blocks.append(f'''
+  hidden sa{i}: sa.StorageAccount = new {{
+    label = "\\(prefix)-sa-{i}"
+    name = "\\(safeName)sa{i}"
+    location = "{location}"
+    resourceGroupName = networking.resourceGroups.toList()[{rg_idx}].res.name
+    kind = "StorageV2"
+    sku = new sa.StorageAccountSKU {{ name = "Standard_LRS" }}
+    enableHttpsTrafficOnly = true
+    minimumTlsVersion = "TLS1_2"
+    allowBlobPublicAccess = false
+    tags {{
+      new azure.Tag {{ key = "Environment"; value = "stress-test" }}
+      new azure.Tag {{ key = "ManagedBy"; value = "formae" }}
+    }}
+  }}''')
+
+    resource_list = []
+    for i in range(counts.storage_accounts):
+        resource_list.append(f"    sa{i}")
+
+    return f'''{AZURE_COPYRIGHT}
+import "@azure/azure.pkl"
+import "@azure/storage/storageaccount.pkl" as sa
+
+import "./networking.pkl" as networkingModule
+
+class AzureStorage {{
+  prefix: String
+  // safeName: name with hyphens removed and truncated for storage account naming (max 24 chars)
+  safeName: String
+  networking: networkingModule.AzureNetworking
+{"".join(sa_blocks)}
+
+  resources: Listing = new {{
+{chr(10).join(resource_list)}
+  }}
+}}
+'''
+
+
+def generate_azure_iam_pkl(counts: AzureResourceCounts, location: str) -> str:
+    """Generate Azure iam.pkl with managed identities."""
+
+    mi_blocks = []
+    for i in range(counts.managed_identities):
+        rg_idx = i % counts.resource_groups
+        mi_blocks.append(f'''
+  hidden identity{i}: identity.UserAssignedIdentity = new {{
+    label = "\\(prefix)-identity-{i}"
+    name = "\\(prefix)-identity-{i}"
+    location = "{location}"
+    resourceGroupName = networking.resourceGroups.toList()[{rg_idx}].res.name
+    tags {{
+      new azure.Tag {{ key = "Environment"; value = "stress-test" }}
+      new azure.Tag {{ key = "ManagedBy"; value = "formae" }}
+    }}
+  }}''')
+
+    resource_list = []
+    for i in range(counts.managed_identities):
+        resource_list.append(f"    identity{i}")
+
+    return f'''{AZURE_COPYRIGHT}
+import "@azure/azure.pkl"
+import "@azure/managedidentity/userassignedidentity.pkl" as identity
+
+import "./networking.pkl" as networkingModule
+
+class AzureIAM {{
+  prefix: String
+  networking: networkingModule.AzureNetworking
+{"".join(mi_blocks)}
+
+  resources: Listing = new {{
+{chr(10).join(resource_list)}
+  }}
+}}
+'''
+
+
+def generate_azure_security_pkl(counts: AzureResourceCounts, location: str) -> str:
+    """Generate Azure security.pkl with key vaults and container registries."""
+
+    kv_blocks = []
+    cr_blocks = []
+
+    for i in range(counts.key_vaults):
+        rg_idx = i % counts.resource_groups
+        kv_blocks.append(f'''
+  hidden kv{i}: kv.Vault = new {{
+    label = "\\(prefix)-kv-{i}"
+    name = "\\(kvPrefix)-kv-{i}"
+    location = "{location}"
+    resourceGroupName = networking.resourceGroups.toList()[{rg_idx}].res.name
+    tenantId = "00000000-0000-0000-0000-000000000000"
+    sku = new kv.VaultSKU {{ family = "A"; name = "standard" }}
+    enableSoftDelete = false
+    tags {{
+      new azure.Tag {{ key = "Environment"; value = "stress-test" }}
+      new azure.Tag {{ key = "ManagedBy"; value = "formae" }}
+    }}
+  }}''')
+
+    for i in range(counts.container_registries):
+        rg_idx = i % counts.resource_groups
+        # Registry names: alphanumeric only, 5-50 chars
+        cr_blocks.append(f'''
+  hidden cr{i}: cr.Registry = new {{
+    label = "\\(prefix)-cr-{i}"
+    name = "\\(safeName)cr{i}"
+    location = "{location}"
+    resourceGroupName = networking.resourceGroups.toList()[{rg_idx}].res.name
+    sku = new cr.RegistrySKU {{ name = "Basic" }}
+    adminUserEnabled = false
+    tags {{
+      new azure.Tag {{ key = "Environment"; value = "stress-test" }}
+      new azure.Tag {{ key = "ManagedBy"; value = "formae" }}
+    }}
+  }}''')
+
+    resource_list = []
+    for i in range(counts.key_vaults):
+        resource_list.append(f"    kv{i}")
+    for i in range(counts.container_registries):
+        resource_list.append(f"    cr{i}")
+
+    return f'''{AZURE_COPYRIGHT}
+import "@azure/azure.pkl"
+import "@azure/keyvault/vault.pkl" as kv
+import "@azure/containerregistry/registry.pkl" as cr
+
+import "./networking.pkl" as networkingModule
+
+class AzureSecurity {{
+  prefix: String
+  // kvPrefix: truncated name for key vault naming (max 24 chars total with suffix)
+  kvPrefix: String
+  // safeName: name with hyphens removed for registry naming
+  safeName: String
+  networking: networkingModule.AzureNetworking
+{"".join(kv_blocks)}
+{"".join(cr_blocks)}
+
+  resources: Listing = new {{
+{chr(10).join(resource_list)}
+  }}
+}}
+'''
+
+
+def generate_azure_database_pkl(counts: AzureResourceCounts, location: str) -> str:
+    """Generate Azure database.pkl with PostgreSQL flexible servers."""
+
+    pg_blocks = []
+    for i in range(counts.postgres_servers):
+        rg_idx = i % counts.resource_groups
+        pg_blocks.append(f'''
+  hidden pg{i}: pg.FlexibleServer = new {{
+    label = "\\(prefix)-pg-{i}"
+    name = "\\(prefix)-pg-{i}"
+    location = "{location}"
+    resourceGroupName = networking.resourceGroups.toList()[{rg_idx}].res.name
+    sku = new pg.SKU {{ name = "Standard_B1ms"; tier = "Burstable" }}
+    version = "15"
+    administratorLogin = "pgadmin"
+    administratorLoginPassword = "StressTest123!"
+    storage = new pg.Storage {{ storageSizeGB = 32; autoGrow = "Disabled" }}
+    backup = new pg.Backup {{ backupRetentionDays = 7; geoRedundantBackup = "Disabled" }}
+    highAvailability = new pg.HighAvailability {{ mode = "Disabled" }}
+    authConfig = new pg.AuthConfig {{ passwordAuth = "Enabled"; activeDirectoryAuth = "Disabled" }}
+    tags {{
+      new azure.Tag {{ key = "Environment"; value = "stress-test" }}
+      new azure.Tag {{ key = "ManagedBy"; value = "formae" }}
+    }}
+  }}''')
+
+    resource_list = []
+    for i in range(counts.postgres_servers):
+        resource_list.append(f"    pg{i}")
+
+    return f'''{AZURE_COPYRIGHT}
+import "@azure/azure.pkl"
+import "@azure/dbforpostgresql/flexibleserver.pkl" as pg
+
+import "./networking.pkl" as networkingModule
+
+class AzureDatabase {{
+  prefix: String
+  networking: networkingModule.AzureNetworking
+{"".join(pg_blocks)}
+
+  resources: Listing = new {{
+{chr(10).join(resource_list)}
+  }}
+}}
+'''
+
+
+def generate_azure_main_pkl(env_id: str, counts: AzureResourceCounts) -> str:
+    """Generate azure/main.pkl that ties Azure resources together."""
+
+    has_compute = counts.virtual_machines > 0 or counts.network_interfaces > 0
+    has_database = counts.postgres_servers > 0
+
+    imports = [
+        'import "./networking.pkl" as networkingModule',
+        'import "./storage.pkl" as storageModule',
+        'import "./iam.pkl" as iamModule',
+        'import "./security.pkl" as securityModule',
+    ]
+    if has_compute:
+        imports.append('import "./compute.pkl" as computeModule')
+    if has_database:
+        imports.append('import "./database.pkl" as databaseModule')
+
+    locals_block = f'''
+local _networking = new networkingModule.AzureNetworking {{
+    prefix = vars.envId
+}}
+
+local _storage = new storageModule.AzureStorage {{
+    prefix = vars.envId
+    safeName = vars.azureSafeName
+    networking = _networking
+}}
+
+local _iam = new iamModule.AzureIAM {{
+    prefix = vars.envId
+    networking = _networking
+}}
+
+local _security = new securityModule.AzureSecurity {{
+    prefix = vars.envId
+    kvPrefix = vars.azureKvPrefix
+    safeName = vars.azureSafeName
+    networking = _networking
+}}'''
+
+    if has_compute:
+        locals_block += f'''
+
+local _compute = new computeModule.AzureCompute {{
+    prefix = vars.envId
+    networking = _networking
+}}'''
+
+    if has_database:
+        locals_block += f'''
+
+local _database = new databaseModule.AzureDatabase {{
+    prefix = vars.envId
+    networking = _networking
+}}'''
+
+    spread_items = [
+        '    ..._networking.resources',
+        '    ..._storage.resources',
+        '    ..._iam.resources',
+        '    ..._security.resources',
+    ]
+    if has_compute:
+        spread_items.append('    ..._compute.resources')
+    if has_database:
+        spread_items.append('    ..._database.resources')
+
+    return f'''{AZURE_COPYRIGHT}
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+import "../vars.pkl"
+{chr(10).join(imports)}
+{locals_block}
+
+forma {{
+    vars.azureStack
+    vars.azureTarget
+
+{chr(10).join(spread_items)}
+}}
+'''
+
+
+# ============================================================================
+# GCP PKL Generators
+# ============================================================================
+
+GCP_COPYRIGHT = '''/*
+ * Stress Test Environment - Auto-generated (GCP)
+ * Generated by generate-stress-test-env.py
+ *
+ * WARNING: This environment is for testing only. Resources will incur GCP costs.
+ */
+'''
+
+
+def generate_gcp_networking_pkl(counts: GCPResourceCounts, region: str) -> str:
+    """Generate GCP networking.pkl with networks, subnetworks, firewalls, and addresses."""
+
+    network_blocks = []
+    subnet_blocks = []
+    firewall_blocks = []
+    address_blocks = []
+
+    # Networks
+    for i in range(counts.compute_networks):
+        network_blocks.append(f'''
+  hidden net{i}: network.Network = new {{
+    label = "\\(prefix)-net-{i}"
+    name = "\\(prefix)-net-{i}"
+    autoCreateSubnetworks = false
+    routingConfig = new network.RoutingConfig {{
+      routingMode = "REGIONAL"
+    }}
+  }}''')
+
+    # Subnetworks
+    for i in range(counts.compute_subnetworks):
+        net_idx = i % counts.compute_networks
+        subnet_blocks.append(f'''
+  hidden subnet{i}: subnetwork.Subnetwork = new {{
+    label = "\\(prefix)-subnet-{i}"
+    name = "\\(prefix)-subnet-{i}"
+    network = net{net_idx}.res.selfLink
+    region = "{region}"
+    ipCidrRange = "10.{i // 256}.{i % 256}.0/24"
+    privateIpGoogleAccess = true
+  }}''')
+
+    # Firewalls
+    protocols = ["tcp", "udp", "tcp"]
+    ports = [["80", "443"], ["53"], ["22"]]
+    for i in range(counts.compute_firewalls):
+        net_idx = i % counts.compute_networks
+        proto = protocols[i % len(protocols)]
+        port_list = ports[i % len(ports)]
+        port_entries = "; ".join(f'"{p}"' for p in port_list)
+        firewall_blocks.append(f'''
+  hidden fw{i}: firewall.Firewall = new {{
+    label = "\\(prefix)-fw-{i}"
+    name = "\\(prefix)-fw-{i}"
+    network = net{net_idx}.res.selfLink
+    direction = "INGRESS"
+    sourceRanges {{
+      "10.0.0.0/8"
+    }}
+    allowed {{
+      new {{
+        protocol = "{proto}"
+        ports {{ {port_entries} }}
+      }}
+    }}
+  }}''')
+
+    # Addresses
+    for i in range(counts.compute_addresses):
+        address_blocks.append(f'''
+  hidden addr{i}: address.Address = new {{
+    label = "\\(prefix)-addr-{i}"
+    name = "\\(prefix)-addr-{i}"
+    region = "{region}"
+    addressType = "EXTERNAL"
+  }}''')
+
+    resource_list = []
+    for i in range(counts.compute_networks):
+        resource_list.append(f"    net{i}")
+    for i in range(counts.compute_subnetworks):
+        resource_list.append(f"    subnet{i}")
+    for i in range(counts.compute_firewalls):
+        resource_list.append(f"    fw{i}")
+    for i in range(counts.compute_addresses):
+        resource_list.append(f"    addr{i}")
+
+    return f'''{GCP_COPYRIGHT}
+import "@gcp/compute/network.pkl"
+import "@gcp/compute/subnetwork.pkl"
+import "@gcp/compute/firewall.pkl"
+import "@gcp/compute/address.pkl"
+
+class GCPNetworking {{
+  prefix: String
+{"".join(network_blocks)}
+{"".join(subnet_blocks)}
+{"".join(firewall_blocks)}
+{"".join(address_blocks)}
+
+  // Expose networks for other modules
+  networks: Listing = new {{
+{chr(10).join(f"    net{i}" for i in range(counts.compute_networks))}
+  }}
+
+  // Expose subnets for other modules
+  subnets: Listing = new {{
+{chr(10).join(f"    subnet{i}" for i in range(counts.compute_subnetworks))}
+  }}
+
+  resources: Listing = new {{
+{chr(10).join(resource_list)}
+  }}
+}}
+'''
+
+
+def generate_gcp_compute_pkl(counts: GCPResourceCounts, region: str, project: str) -> str:
+    """Generate GCP compute.pkl with instances and disks."""
+
+    disk_blocks = []
+    instance_blocks = []
+
+    zone = f"{region}-b"
+
+    # Disks
+    for i in range(counts.compute_disks):
+        disk_blocks.append(f'''
+  hidden disk{i}: disk.Disk = new {{
+    label = "\\(prefix)-disk-{i}"
+    project = "{project}"
+    zone = "{zone}"
+    name = "\\(prefix)-disk-{i}"
+    sizeGb = {20 + (i % 5) * 10}
+    type = "{["pd-balanced", "pd-standard"][i % 2]}"
+    labels {{
+      ["environment"] = "stress-test"
+      ["managed-by"] = "formae"
+    }}
+  }}''')
+
+    # Instances
+    machine_types = ["e2-micro", "e2-small"]
+    for i in range(counts.compute_instances):
+        net_idx = i % counts.compute_networks
+        subnet_idx = i % max(1, counts.compute_subnetworks)
+        machine_type = machine_types[i % len(machine_types)]
+
+        instance_blocks.append(f'''
+  hidden instance{i}: instance.Instance = new {{
+    label = "\\(prefix)-instance-{i}"
+    project = "{project}"
+    zone = "{zone}"
+    name = "\\(prefix)-instance-{i}"
+    machineType = "{machine_type}"
+    networkInterfaces {{
+      new {{
+        network = networking.networks.toList()[{net_idx}].res.selfLink
+        subnetwork = networking.subnets.toList()[{subnet_idx}].res.selfLink
+      }}
+    }}
+    labels {{
+      ["environment"] = "stress-test"
+      ["managed-by"] = "formae"
+    }}
+  }}''')
+        # NOTE: Boot disk via initializeParams is not yet supported in the GCP plugin.
+        # Instances are created without explicit boot disks for now.
+
+    resource_list = []
+    for i in range(counts.compute_disks):
+        resource_list.append(f"    disk{i}")
+    for i in range(counts.compute_instances):
+        resource_list.append(f"    instance{i}")
+
+    return f'''{GCP_COPYRIGHT}
+import "@gcp/compute/disk.pkl"
+import "@gcp/compute/instance.pkl"
+
+import "./networking.pkl" as networkingModule
+
+class GCPCompute {{
+  prefix: String
+  networking: networkingModule.GCPNetworking
+{"".join(disk_blocks)}
+{"".join(instance_blocks)}
+
+  resources: Listing = new {{
+{chr(10).join(resource_list)}
+  }}
+}}
+'''
+
+
+def generate_gcp_storage_pkl(counts: GCPResourceCounts, region: str) -> str:
+    """Generate GCP storage.pkl with storage buckets."""
+
+    bucket_blocks = []
+    for i in range(counts.storage_buckets):
+        bucket_blocks.append(f'''
+  hidden bucket{i}: bucket.Bucket = new {{
+    label = "\\(prefix)-bucket-{i}"
+    name = "\\(prefix)-bucket-{i}"
+    location = "{region}"
+    storageClass = "STANDARD"
+    versioning = new bucket.Versioning {{ enabled = true }}
+  }}''')
+
+    resource_list = []
+    for i in range(counts.storage_buckets):
+        resource_list.append(f"    bucket{i}")
+
+    return f'''{GCP_COPYRIGHT}
+import "@gcp/storage/bucket.pkl"
+
+class GCPStorage {{
+  prefix: String
+{"".join(bucket_blocks)}
+
+  resources: Listing = new {{
+{chr(10).join(resource_list)}
+  }}
+}}
+'''
+
+
+def generate_gcp_database_pkl(counts: GCPResourceCounts, region: str, project: str) -> str:
+    """Generate GCP database.pkl with Cloud SQL instances and BigQuery datasets."""
+
+    sql_blocks = []
+    bq_blocks = []
+
+    for i in range(counts.sql_instances):
+        sql_blocks.append(f'''
+  hidden sqlInstance{i}: database.DatabaseInstance = new {{
+    label = "\\(prefix)-sql-{i}"
+    project = "{project}"
+    name = "\\(prefix)-sql-{i}"
+    databaseVersion = "POSTGRES_15"
+    region = "{region}"
+    settings = new database.Settings {{
+      tier = "db-f1-micro"
+      availabilityType = "ZONAL"
+      dataDiskSizeGb = 10
+      dataDiskType = "PD_SSD"
+      ipConfiguration = new database.IpConfiguration {{
+        ipv4Enabled = true
+        requireSsl = false
+      }}
+      userLabels = new Mapping {{
+        ["environment"] = "stress-test"
+        ["managed-by"] = "formae"
+      }}
+    }}
+  }}''')
+
+    for i in range(counts.bigquery_datasets):
+        bq_blocks.append(f'''
+  hidden bqDataset{i}: dataset.Dataset = new {{
+    label = "\\(prefix)-bq-{i}"
+    project = "{project}"
+    datasetId = "\\(bqSafeName)_bq_{i}"
+    location = "{region}"
+    description = "Stress test dataset {i}"
+  }}''')
+
+    resource_list = []
+    for i in range(counts.sql_instances):
+        resource_list.append(f"    sqlInstance{i}")
+    for i in range(counts.bigquery_datasets):
+        resource_list.append(f"    bqDataset{i}")
+
+    return f'''{GCP_COPYRIGHT}
+import "@gcp/sql/database.pkl"
+import "@gcp/bigquery/dataset.pkl"
+
+class GCPDatabase {{
+  prefix: String
+  // bqSafeName: name with hyphens replaced by underscores for BigQuery dataset IDs
+  bqSafeName: String
+{"".join(sql_blocks)}
+{"".join(bq_blocks)}
+
+  resources: Listing = new {{
+{chr(10).join(resource_list)}
+  }}
+}}
+'''
+
+
+def generate_gcp_main_pkl(env_id: str, counts: GCPResourceCounts) -> str:
+    """Generate gcp/main.pkl that ties GCP resources together."""
+
+    has_compute = counts.compute_instances > 0 or counts.compute_disks > 0
+    has_database = counts.sql_instances > 0 or counts.bigquery_datasets > 0
+
+    imports = [
+        'import "./networking.pkl" as networkingModule',
+        'import "./storage.pkl" as storageModule',
+    ]
+    if has_compute:
+        imports.append('import "./compute.pkl" as computeModule')
+    if has_database:
+        imports.append('import "./database.pkl" as databaseModule')
+
+    locals_block = f'''
+local _networking = new networkingModule.GCPNetworking {{
+    prefix = vars.envId
+}}
+
+local _storage = new storageModule.GCPStorage {{
+    prefix = vars.envId
+}}'''
+
+    if has_compute:
+        locals_block += f'''
+
+local _compute = new computeModule.GCPCompute {{
+    prefix = vars.envId
+    networking = _networking
+}}'''
+
+    if has_database:
+        locals_block += f'''
+
+local _database = new databaseModule.GCPDatabase {{
+    prefix = vars.envId
+    bqSafeName = vars.gcpBqSafeName
+}}'''
+
+    spread_items = [
+        '    ..._networking.resources',
+        '    ..._storage.resources',
+    ]
+    if has_compute:
+        spread_items.append('    ..._compute.resources')
+    if has_database:
+        spread_items.append('    ..._database.resources')
+
+    return f'''{GCP_COPYRIGHT}
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+import "../vars.pkl"
+{chr(10).join(imports)}
+{locals_block}
+
+forma {{
+    vars.gcpStack
+    vars.gcpTarget
+
+{chr(10).join(spread_items)}
+}}
+'''
+
+
+# ============================================================================
+# Multi-cloud vars.pkl and main.pkl generators
+# ============================================================================
+
+
+def generate_multicloud_vars_pkl(
+    env_id: str,
+    run_id: str,
+    clouds: list,
+    region: str,
+    stack_name: str,
+    azure_subscription: str = None,
+    azure_location: str = "eastus",
+    gcp_project: str = None,
+    gcp_region: str = "us-central1",
+) -> str:
+    """Generate vars.pkl with environment configuration for all enabled clouds."""
+
+    content = f'''{COPYRIGHT}
+import "@formae/formae.pkl"
+'''
+
+    if "aws" in clouds:
+        content += 'import "@aws/aws.pkl"\n'
+    if "azure" in clouds:
+        content += 'import "@azure/azure.pkl"\n'
+    if "gcp" in clouds:
+        content += 'import "@gcp/gcp.pkl"\n'
+
+    content += f'''
+envId = "{env_id}"
+runId = "{run_id}"
+'''
+
+    if "aws" in clouds:
+        content += f'''
+// AWS Configuration
+awsRegion = "{region}"
+
+awsStack: formae.Stack = new {{
+    label = "{stack_name}-aws"
+    description = "Stress test environment {env_id} - AWS"
+}}
+
+awsTarget: formae.Target = new {{
+    label = "stress-test-aws"
+    config = new aws.Config {{
+        region = awsRegion
+    }}
+}}
+
+// Helper for unique naming
+local function uniqueName(base: String): String = "\\(envId)-\\(base)"
+'''
+
+    if "azure" in clouds:
+        content += f'''
+// Azure Configuration
+azureLocation = "{azure_location}"
+azureSubscriptionId = "{azure_subscription}"
+
+// Safe name for Azure resources that don't allow hyphens (storage accounts, registries)
+azureSafeName = envId.replaceAll("-", "").take(14)
+// Prefix for key vault names (max 24 chars total with suffix)
+azureKvPrefix = envId.take(16)
+
+azureStack: formae.Stack = new {{
+    label = "{stack_name}-azure"
+    description = "Stress test environment {env_id} - Azure"
+}}
+
+azureTarget: formae.Target = new {{
+    label = "stress-test-azure"
+    config = new azure.Config {{
+        subscriptionId = azureSubscriptionId
+    }}
+}}
+'''
+
+    if "gcp" in clouds:
+        content += f'''
+// GCP Configuration
+gcpProject = "{gcp_project}"
+gcpRegion = "{gcp_region}"
+
+// Safe name for BigQuery dataset IDs (no hyphens allowed)
+gcpBqSafeName = envId.replaceAll("-", "_")
+
+gcpStack: formae.Stack = new {{
+    label = "{stack_name}-gcp"
+    description = "Stress test environment {env_id} - GCP"
+}}
+
+gcpTarget: formae.Target = new {{
+    label = "stress-test-gcp"
+    config = new gcp.Config {{
+        project = gcpProject
+        region = gcpRegion
+        location = gcpRegion
+    }}
+}}
+'''
+
+    return content
+
+
+def generate_multicloud_main_pkl(
+    env_id: str,
+    clouds: list,
+    aws_counts: ResourceCounts = None,
+    azure_counts: AzureResourceCounts = None,
+    gcp_counts: GCPResourceCounts = None,
+) -> str:
+    """Generate main.pkl that imports all cloud-specific files."""
+
+    imports = ['import "./vars.pkl"']
+
+    if "aws" in clouds:
+        imports.append('import "./aws/main.pkl" as awsForma')
+    if "azure" in clouds:
+        imports.append('import "./azure/main.pkl" as azureForma')
+    if "gcp" in clouds:
+        imports.append('import "./gcp/main.pkl" as gcpForma')
+
+    # Build description
+    total = 0
+    cloud_details = []
+    if "aws" in clouds and aws_counts:
+        total += aws_counts.total
+        cloud_details.append(f"    - AWS: ~{aws_counts.total} resources")
+    if "azure" in clouds and azure_counts:
+        total += azure_counts.total
+        cloud_details.append(f"    - Azure: ~{azure_counts.total} resources")
+    if "gcp" in clouds and gcp_counts:
+        total += gcp_counts.total
+        cloud_details.append(f"    - GCP: ~{gcp_counts.total} resources")
+
+    # Each cloud has its own main.pkl that is a standalone forma file.
+    # Apply each one separately: formae apply aws/main.pkl, azure/main.pkl, gcp/main.pkl
+    # This is a documentation/index file listing what was generated.
+    cloud_paths = []
+    if "aws" in clouds:
+        cloud_paths.append("aws/main.pkl")
+    if "azure" in clouds:
+        cloud_paths.append("azure/main.pkl")
+    if "gcp" in clouds:
+        cloud_paths.append("gcp/main.pkl")
+
+    apply_cmds = chr(10).join(f"#   formae apply {p} --yes" for p in cloud_paths)
+    destroy_cmds = chr(10).join(f"#   formae destroy {p} --yes" for p in cloud_paths)
+
+    return f'''# Multi-Cloud Stress Test Environment: {env_id}
+#
+# This environment contains approximately {total} resources across
+# {", ".join(c.upper() for c in clouds)}.
+#
+{chr(10).join(cloud_details)}
+#
+# Each cloud has its own forma file. Apply them separately:
+#
+{apply_cmds}
+#
+# To destroy:
+#
+{destroy_cmds}
+'''
+
+
+def generate_multicloud_pkl_project(formae_path: str, clouds: list) -> str:
+    """Generate PklProject file for multi-cloud environments."""
+    # Plugin repos live alongside the formae repo as siblings
+    parent_dir = os.path.dirname(formae_path)
+    deps = [f'  ["formae"] = import("{formae_path}/internal/schema/pkl/schema/PklProject")']
+
+    if "aws" in clouds:
+        deps.append(f'  ["aws"] = import("{parent_dir}/formae-plugin-aws/schema/pkl/PklProject")')
+    if "azure" in clouds:
+        deps.append(f'  ["azure"] = import("{parent_dir}/formae-plugin-azure/schema/pkl/PklProject")')
+    if "gcp" in clouds:
+        deps.append(f'  ["gcp"] = import("{parent_dir}/formae-plugin-gcp/schema/pkl/PklProject")')
+
+    return f'''amends "pkl:Project"
+
+dependencies {{
+{chr(10).join(deps)}
+}}
+'''
+
+
+def generate_main_pkl(env_id: str, stack_name: str, counts: ResourceCounts,
+                      stack_var: str = "stack", target_var: str = "target",
+                      region_var: str = "_region") -> str:
     """Generate main.pkl that ties everything together."""
 
     return f'''{COPYRIGHT}
@@ -1585,7 +2911,7 @@ description {{
 }}
 
 local _name = vars.envId
-local _region = vars._region
+local _region = vars.{region_var}
 
 local _networking = new networkingModule.Networking {{
     name = _name
@@ -1646,8 +2972,8 @@ local _rds = new rdsModule.RDS {{
 }}
 
 forma {{
-    vars.stack
-    vars.target
+    vars.{stack_var}
+    vars.{target_var}
 
     ..._networking.resources
     ..._securityGroups.resources
@@ -1667,11 +2993,12 @@ forma {{
 
 def generate_pkl_project(formae_path: str) -> str:
     """Generate PklProject file."""
+    parent_dir = os.path.dirname(formae_path)
     return f'''amends "pkl:Project"
 
 dependencies {{
   ["formae"] = import("{formae_path}/internal/schema/pkl/schema/PklProject")
-  ["aws"] = import("{formae_path}/plugins/aws/schema/pkl/PklProject")
+  ["aws"] = import("{parent_dir}/formae-plugin-aws/schema/pkl/PklProject")
 }}
 '''
 
@@ -2924,15 +4251,23 @@ This environment creates real AWS resources that will incur costs.
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate a large-scale AWS infrastructure environment for performance testing formae.",
+        description="Generate a large-scale multi-cloud infrastructure environment for performance testing formae.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Generate PKL files for formae
+  # Generate PKL files for formae (AWS only - default)
   %(prog)s --count 100 --region us-east-1
   %(prog)s --count 1000 --region eu-west-1 --output ./perf-test
 
-  # Generate CloudFormation templates for discovery testing
+  # Generate multi-cloud PKL files
+  %(prog)s --count 50 --clouds aws,azure,gcp --region us-east-2 \\
+      --subscription-azure <sub-id> --project-gcp <project-id>
+
+  # Use scale profiles
+  %(prog)s --scale-profile medium --clouds aws,azure,gcp \\
+      --subscription-azure <sub-id> --project-gcp <project-id>
+
+  # Generate CloudFormation templates for discovery testing (AWS only)
   %(prog)s --format cloudformation --count 100 --region us-east-1
   %(prog)s -f cfn -c 500 -r eu-west-1 -o ./discovery-test
         """
@@ -2950,7 +4285,7 @@ Examples:
         "--count", "-c",
         type=int,
         default=100,
-        help="Target number of resources to generate (default: 100)"
+        help="Target number of resources to generate per cloud (default: 100)"
     )
 
     parser.add_argument(
@@ -2985,73 +4320,207 @@ Examples:
         type=str,
         choices=["default", "quota-safe"],
         default="default",
-        help="Resource profile: 'default' for full resources, 'quota-safe' to avoid resources with tight quotas (EC2, EIP, VPC, etc.)"
+        help="AWS resource profile: 'default' for full resources, 'quota-safe' to avoid resources with tight quotas (EC2, EIP, VPC, etc.)"
+    )
+
+    # Multi-cloud arguments
+    parser.add_argument(
+        "--clouds",
+        type=str,
+        default="aws",
+        help="Comma-separated list of clouds: aws, azure, gcp (default: aws)"
+    )
+
+    parser.add_argument(
+        "--scale-profile",
+        type=str,
+        choices=["small", "medium", "large", "xl"],
+        default=None,
+        help="Scale profile overrides --count with per-cloud splits: small=500, medium=5000, large=20000, xl=50000"
+    )
+
+    parser.add_argument(
+        "--subscription-azure",
+        type=str,
+        default=None,
+        help="Azure subscription ID (required when azure is in --clouds)"
+    )
+
+    parser.add_argument(
+        "--project-gcp",
+        type=str,
+        default=None,
+        help="GCP project ID (required when gcp is in --clouds)"
+    )
+
+    parser.add_argument(
+        "--region-gcp",
+        type=str,
+        default="us-central1",
+        help="GCP region (default: us-central1)"
+    )
+
+    parser.add_argument(
+        "--run-id",
+        type=str,
+        default=None,
+        help="Unique run ID for tagging (default: auto-generated UUID)"
     )
 
     args = parser.parse_args()
+
+    # Parse clouds
+    clouds = [c.strip().lower() for c in args.clouds.split(",")]
+    for c in clouds:
+        if c not in ("aws", "azure", "gcp"):
+            print(f"Error: unknown cloud '{c}'. Must be aws, azure, or gcp.", file=sys.stderr)
+            sys.exit(1)
+
+    # Validate required arguments for each cloud
+    if "azure" in clouds and not args.subscription_azure:
+        print("Error: --subscription-azure is required when azure is in --clouds", file=sys.stderr)
+        sys.exit(1)
+    if "gcp" in clouds and not args.project_gcp:
+        print("Error: --project-gcp is required when gcp is in --clouds", file=sys.stderr)
+        sys.exit(1)
+
+    # CloudFormation is AWS-only
+    output_format = args.format if args.format != "cfn" else "cloudformation"
+    if output_format == "cloudformation" and (len(clouds) > 1 or clouds[0] != "aws"):
+        print("Error: CloudFormation format is only supported for AWS-only generation", file=sys.stderr)
+        sys.exit(1)
+
+    # Determine resource counts
+    is_multicloud = len(clouds) > 1 or clouds != ["aws"]
+    run_id = args.run_id or uuid.uuid4().hex[:12]
+
+    if args.scale_profile:
+        aws_count, azure_count, gcp_count = SCALE_PROFILES[args.scale_profile]
+    else:
+        aws_count = args.count
+        azure_count = args.count
+        gcp_count = args.count
 
     # Generate unique environment ID
     env_id = f"perf-{uuid.uuid4().hex[:8]}"
     stack_name = f"perf-test-{env_id}"
 
-    # Calculate resource counts based on profile
-    if args.profile == "quota-safe":
-        counts = calculate_counts_quota_safe(args.count)
-    else:
-        counts = calculate_counts(args.count)
+    # Calculate resource counts for each cloud
+    aws_counts = None
+    azure_counts = None
+    gcp_counts = None
+
+    if "aws" in clouds:
+        if args.profile == "quota-safe":
+            aws_counts = calculate_counts_quota_safe(aws_count)
+        else:
+            aws_counts = calculate_counts(aws_count)
+
+    if "azure" in clouds:
+        azure_counts = calculate_azure_counts(azure_count)
+
+    if "gcp" in clouds:
+        gcp_counts = calculate_gcp_counts(gcp_count)
 
     if args.dry_run:
-        print(f"Profile: {args.profile}")
-        print(f"Target count: {args.count}")
-        print(f"Calculated total: {counts.total}")
-        print(f"\nResource breakdown:")
-        print(f"\n  Networking (capped to stay within quotas):")
-        print(f"    VPCs: {counts.vpcs} (hard cap at 5)")
-        print(f"    Subnets: {counts.vpcs * counts.subnets_per_vpc} ({counts.subnets_per_vpc} per VPC)")
-        print(f"    Route Tables: {counts.route_tables}")
-        print(f"    Routes: {counts.routes}")
-        print(f"    Internet Gateways: {counts.igws} (1 per VPC)")
-        print(f"    NAT Gateways: {counts.nat_gws} (capped at 5)")
-        print(f"    Elastic IPs: {counts.eips}")
-        print(f"    Security Groups: {counts.security_groups}")
-        print(f"    SG Ingress Rules: {counts.sg_ingress_rules}")
-        print(f"    SG Egress Rules: {counts.sg_egress_rules}")
-        print(f"    VPC Endpoints: {counts.vpc_endpoints}")
-        print(f"\n  Compute:")
-        print(f"    EC2 Instances: {counts.ec2_instances}")
-        print(f"    EBS Volumes: {counts.ebs_volumes}")
-        print(f"    Launch Templates: {counts.launch_templates}")
-        print(f"\n  IAM & Security:")
-        print(f"    IAM Roles: {counts.iam_roles}")
-        print(f"    IAM Policies: {counts.iam_policies}")
-        print(f"    Instance Profiles: {counts.instance_profiles}")
-        print(f"    KMS Keys: {counts.kms_keys}")
-        print(f"    KMS Aliases: {counts.kms_aliases}")
-        print(f"    Secrets: {counts.secrets}")
-        print(f"\n  Storage:")
-        print(f"    S3 Buckets: {counts.s3_buckets}")
-        print(f"    DynamoDB Tables: {counts.dynamodb_tables}")
-        print(f"    EFS File Systems: {counts.efs_filesystems}")
-        print(f"    EFS Mount Targets: {counts.efs_mount_targets}")
-        print(f"\n  Observability:")
-        print(f"    CloudWatch Log Groups: {counts.log_groups}")
-        print(f"    SQS Queues: {counts.sqs_queues}")
-        print(f"\n  Application:")
-        print(f"    Lambda Functions: {counts.lambdas}")
-        print(f"    ECR Repositories: {counts.ecr_repos}")
-        print(f"\n  DNS & API Gateway:")
-        print(f"    Route53 Hosted Zones: {counts.route53_zones}")
-        print(f"    Route53 Records: {counts.route53_records}")
-        print(f"    API Gateways: {counts.api_gateways}")
-        print(f"    API Stages: {counts.api_stages}")
-        print(f"\n  RDS:")
-        print(f"    RDS Instances: {counts.rds_instances}")
-        print(f"    DB Subnet Groups: {counts.db_subnet_groups}")
-        print(f"    DB Parameter Groups: {counts.db_parameter_groups}")
-        print(f"\n  Implicit Resources:")
-        print(f"    VPC Gateway Attachments: {counts.vpcs}")
-        print(f"    Subnet Route Table Associations: {counts.vpcs * counts.subnets_per_vpc}")
-        print(f"    EBS Volume Attachments: ~{counts.ec2_instances * 2}")
+        print(f"Clouds: {', '.join(c.upper() for c in clouds)}")
+        if args.scale_profile:
+            print(f"Scale profile: {args.scale_profile}")
+        print(f"Run ID: {run_id}")
+
+        if aws_counts:
+            print(f"\n{'=' * 40}")
+            print(f"AWS (target: {aws_count}, calculated: {aws_counts.total})")
+            print(f"{'=' * 40}")
+            print(f"  Profile: {args.profile}")
+            print(f"\n  Networking (capped to stay within quotas):")
+            print(f"    VPCs: {aws_counts.vpcs} (hard cap at 5)")
+            print(f"    Subnets: {aws_counts.vpcs * aws_counts.subnets_per_vpc} ({aws_counts.subnets_per_vpc} per VPC)")
+            print(f"    Route Tables: {aws_counts.route_tables}")
+            print(f"    Routes: {aws_counts.routes}")
+            print(f"    Internet Gateways: {aws_counts.igws} (1 per VPC)")
+            print(f"    NAT Gateways: {aws_counts.nat_gws} (capped at 5)")
+            print(f"    Elastic IPs: {aws_counts.eips}")
+            print(f"    Security Groups: {aws_counts.security_groups}")
+            print(f"    SG Ingress Rules: {aws_counts.sg_ingress_rules}")
+            print(f"    SG Egress Rules: {aws_counts.sg_egress_rules}")
+            print(f"    VPC Endpoints: {aws_counts.vpc_endpoints}")
+            print(f"\n  Compute:")
+            print(f"    EC2 Instances: {aws_counts.ec2_instances}")
+            print(f"    EBS Volumes: {aws_counts.ebs_volumes}")
+            print(f"    Launch Templates: {aws_counts.launch_templates}")
+            print(f"\n  IAM & Security:")
+            print(f"    IAM Roles: {aws_counts.iam_roles}")
+            print(f"    IAM Policies: {aws_counts.iam_policies}")
+            print(f"    Instance Profiles: {aws_counts.instance_profiles}")
+            print(f"    KMS Keys: {aws_counts.kms_keys}")
+            print(f"    KMS Aliases: {aws_counts.kms_aliases}")
+            print(f"    Secrets: {aws_counts.secrets}")
+            print(f"\n  Storage:")
+            print(f"    S3 Buckets: {aws_counts.s3_buckets}")
+            print(f"    DynamoDB Tables: {aws_counts.dynamodb_tables}")
+            print(f"    EFS File Systems: {aws_counts.efs_filesystems}")
+            print(f"    EFS Mount Targets: {aws_counts.efs_mount_targets}")
+            print(f"\n  Observability:")
+            print(f"    CloudWatch Log Groups: {aws_counts.log_groups}")
+            print(f"    SQS Queues: {aws_counts.sqs_queues}")
+            print(f"\n  Application:")
+            print(f"    Lambda Functions: {aws_counts.lambdas}")
+            print(f"    ECR Repositories: {aws_counts.ecr_repos}")
+            print(f"\n  DNS & API Gateway:")
+            print(f"    Route53 Hosted Zones: {aws_counts.route53_zones}")
+            print(f"    Route53 Records: {aws_counts.route53_records}")
+            print(f"    API Gateways: {aws_counts.api_gateways}")
+            print(f"    API Stages: {aws_counts.api_stages}")
+            print(f"\n  RDS:")
+            print(f"    RDS Instances: {aws_counts.rds_instances}")
+            print(f"    DB Subnet Groups: {aws_counts.db_subnet_groups}")
+            print(f"    DB Parameter Groups: {aws_counts.db_parameter_groups}")
+
+        if azure_counts:
+            print(f"\n{'=' * 40}")
+            print(f"Azure (target: {azure_count}, calculated: {azure_counts.total})")
+            print(f"{'=' * 40}")
+            print(f"\n  Networking:")
+            print(f"    Resource Groups: {azure_counts.resource_groups}")
+            print(f"    Virtual Networks: {azure_counts.virtual_networks}")
+            print(f"    Subnets: {azure_counts.virtual_networks * azure_counts.subnets_per_vnet}")
+            print(f"    NSGs: {azure_counts.nsgs}")
+            print(f"    Public IPs: {azure_counts.public_ips}")
+            print(f"\n  Compute:")
+            print(f"    Virtual Machines: {azure_counts.virtual_machines}")
+            print(f"    Network Interfaces: {azure_counts.network_interfaces}")
+            print(f"\n  Storage:")
+            print(f"    Storage Accounts: {azure_counts.storage_accounts}")
+            print(f"\n  IAM:")
+            print(f"    Managed Identities: {azure_counts.managed_identities}")
+            print(f"\n  Security:")
+            print(f"    Key Vaults: {azure_counts.key_vaults}")
+            print(f"    Container Registries: {azure_counts.container_registries}")
+            print(f"\n  Database:")
+            print(f"    PostgreSQL Flex Servers: {azure_counts.postgres_servers}")
+
+        if gcp_counts:
+            print(f"\n{'=' * 40}")
+            print(f"GCP (target: {gcp_count}, calculated: {gcp_counts.total})")
+            print(f"{'=' * 40}")
+            print(f"\n  Networking:")
+            print(f"    Networks: {gcp_counts.compute_networks}")
+            print(f"    Subnetworks: {gcp_counts.compute_subnetworks}")
+            print(f"    Firewalls: {gcp_counts.compute_firewalls}")
+            print(f"    Addresses: {gcp_counts.compute_addresses}")
+            print(f"\n  Compute:")
+            print(f"    Instances: {gcp_counts.compute_instances}")
+            print(f"    Disks: {gcp_counts.compute_disks}")
+            print(f"\n  Storage:")
+            print(f"    Buckets: {gcp_counts.storage_buckets}")
+            print(f"\n  Database:")
+            print(f"    SQL Instances: {gcp_counts.sql_instances}")
+            print(f"    BigQuery Datasets: {gcp_counts.bigquery_datasets}")
+
+        grand_total = sum(c.total for c in [aws_counts, azure_counts, gcp_counts] if c)
+        print(f"\n{'=' * 40}")
+        print(f"Grand Total: {grand_total} resources")
         return
 
     # Determine output directory
@@ -3071,175 +4540,380 @@ Examples:
     # Create output directory
     os.makedirs(output_dir, exist_ok=True)
 
-    # Normalize format
-    output_format = args.format if args.format != "cfn" else "cloudformation"
-
     if output_format == "pkl":
-        # Generate PKL files for formae
-        files = {
-            "PklProject": generate_pkl_project(formae_path),
-            "vars.pkl": generate_vars_pkl(env_id, args.region, stack_name),
-            "networking.pkl": generate_networking_pkl(counts, args.region),
-            "security_groups.pkl": generate_security_groups_pkl(counts),
-            "compute.pkl": generate_compute_pkl(counts, args.region),
-            "iam.pkl": generate_iam_pkl(counts),
-            "kms.pkl": generate_kms_pkl(counts),
-            "storage.pkl": generate_storage_pkl(counts),
-            "observability.pkl": generate_observability_pkl(counts),
-            "secrets.pkl": generate_secrets_pkl(counts),
-            "application.pkl": generate_application_pkl(counts),
-            "route53.pkl": generate_route53_pkl(counts),
-            "api_gateway.pkl": generate_api_gateway_pkl(counts),
-            "rds.pkl": generate_rds_pkl(counts),
-            "main.pkl": generate_main_pkl(env_id, stack_name, counts),
-            "README.md": generate_readme(env_id, stack_name, args.region, counts),
-        }
-
-        for filename, content in files.items():
-            filepath = os.path.join(output_dir, filename)
-            with open(filepath, "w") as f:
-                f.write(content)
-            print(f"Generated: {filepath}")
-
-        print(f"\n{'=' * 60}")
-        print(f"Performance test environment generated successfully!")
-        print(f"{'=' * 60}")
-        print(f"\nFormat: PKL (for formae)")
-        print(f"Environment ID: {env_id}")
-        print(f"Stack Name: {stack_name}")
-        print(f"Region: {args.region}")
-        print(f"Target Resources: {args.count}")
-        print(f"Calculated Resources: {counts.total}")
-        print(f"Output Directory: {output_dir}")
-        print(f"\nNext steps:")
-        print(f"  1. cd {output_dir}")
-        print(f"  2. pkl project resolve")
-        print(f"  3. formae apply --simulate main.pkl  # dry-run")
-        print(f"  4. formae apply main.pkl             # deploy")
-        print(f"  5. formae destroy --stack {stack_name}  # cleanup")
-
+        if is_multicloud or len(clouds) > 1 or (len(clouds) == 1 and clouds[0] != "aws"):
+            # Multi-cloud or single non-AWS cloud: use subdirectory layout
+            _generate_multicloud_pkl(
+                output_dir=output_dir,
+                formae_path=formae_path,
+                env_id=env_id,
+                run_id=run_id,
+                stack_name=stack_name,
+                clouds=clouds,
+                region=args.region,
+                aws_counts=aws_counts,
+                azure_counts=azure_counts,
+                gcp_counts=gcp_counts,
+                azure_subscription=args.subscription_azure,
+                gcp_project=args.project_gcp,
+                gcp_region=args.region_gcp,
+            )
+        else:
+            # AWS-only: use the original flat layout for backwards compatibility
+            _generate_aws_only_pkl(
+                output_dir=output_dir,
+                formae_path=formae_path,
+                env_id=env_id,
+                stack_name=stack_name,
+                region=args.region,
+                counts=aws_counts,
+            )
     else:
-        # Generate CloudFormation templates with automatic stack splitting
-        networking_stack = f"{env_id}-networking"
-        sg_stack_base = f"{env_id}-security-groups"
-        iam_stack_base = f"{env_id}-iam"
+        # CloudFormation (AWS only)
+        _generate_cloudformation(
+            output_dir=output_dir,
+            env_id=env_id,
+            stack_name=stack_name,
+            region=args.region,
+            counts=aws_counts,
+            is_quota_safe=(args.profile == "quota-safe"),
+        )
 
-        # Collect all templates and track stacks for deploy/destroy scripts
-        files = {}
-        stacks = []
 
-        # Check if we're in quota-safe mode (no VPC-dependent resources)
-        is_quota_safe = args.profile == "quota-safe"
+def _generate_aws_only_pkl(
+    output_dir: str,
+    formae_path: str,
+    env_id: str,
+    stack_name: str,
+    region: str,
+    counts: ResourceCounts,
+):
+    """Generate AWS-only PKL files (backwards-compatible flat layout)."""
+    files = {
+        "PklProject": generate_pkl_project(formae_path),
+        "vars.pkl": generate_vars_pkl(env_id, region, stack_name),
+        "networking.pkl": generate_networking_pkl(counts, region),
+        "security_groups.pkl": generate_security_groups_pkl(counts),
+        "compute.pkl": generate_compute_pkl(counts, region),
+        "iam.pkl": generate_iam_pkl(counts),
+        "kms.pkl": generate_kms_pkl(counts),
+        "storage.pkl": generate_storage_pkl(counts),
+        "observability.pkl": generate_observability_pkl(counts),
+        "secrets.pkl": generate_secrets_pkl(counts),
+        "application.pkl": generate_application_pkl(counts),
+        "route53.pkl": generate_route53_pkl(counts),
+        "api_gateway.pkl": generate_api_gateway_pkl(counts),
+        "rds.pkl": generate_rds_pkl(counts),
+        "main.pkl": generate_main_pkl(env_id, stack_name, counts),
+        "README.md": generate_readme(env_id, stack_name, region, counts),
+    }
 
-        # Networking (single stack - skip in quota-safe mode)
-        if not is_quota_safe:
-            files["networking.yaml"] = generate_cfn_networking(counts, env_id, args.region)
-            stacks.append({"name": "networking", "file": "networking.yaml"})
+    for filename, content in files.items():
+        filepath = os.path.join(output_dir, filename)
+        with open(filepath, "w") as f:
+            f.write(content)
+        print(f"Generated: {filepath}")
 
-        # Security groups (may be split - skip in quota-safe mode)
-        sg_stack = None
-        if not is_quota_safe:
-            sg_templates = generate_cfn_security_groups_split(counts, env_id, networking_stack)
-            for filename, content in sg_templates:
-                files[filename] = content
-                # Extract stack name from filename: security-groups.yaml or security-groups-0.yaml
-                stack_name = filename.replace(".yaml", "")
-                stacks.append({"name": stack_name, "file": filename})
-            sg_stack = sg_stack_base if len(sg_templates) == 1 else f"{sg_stack_base}-0"
+    print(f"\n{'=' * 60}")
+    print(f"Performance test environment generated successfully!")
+    print(f"{'=' * 60}")
+    print(f"\nFormat: PKL (for formae)")
+    print(f"Environment ID: {env_id}")
+    print(f"Stack Name: {stack_name}")
+    print(f"Region: {region}")
+    print(f"Target Resources: {counts.total}")
+    print(f"Output Directory: {output_dir}")
+    print(f"\nNext steps:")
+    print(f"  1. cd {output_dir}")
+    print(f"  2. pkl project resolve")
+    print(f"  3. formae apply --simulate main.pkl  # dry-run")
+    print(f"  4. formae apply main.pkl             # deploy")
+    print(f"  5. formae destroy --stack {stack_name}  # cleanup")
 
-        # IAM (may be split)
-        iam_templates = generate_cfn_iam_split(counts, env_id)
-        for filename, content in iam_templates:
-            files[filename] = content
-            stack_name = filename.replace(".yaml", "")
-            stacks.append({"name": stack_name, "file": filename})
 
-        # KMS (may be split if many keys)
-        kms_templates = generate_cfn_kms_split(counts, env_id)
-        for filename, content in kms_templates:
-            files[filename] = content
-            stack_name = filename.replace(".yaml", "")
-            stacks.append({"name": stack_name, "file": filename})
+def _generate_multicloud_pkl(
+    output_dir: str,
+    formae_path: str,
+    env_id: str,
+    run_id: str,
+    stack_name: str,
+    clouds: list,
+    region: str,
+    aws_counts: ResourceCounts,
+    azure_counts: AzureResourceCounts,
+    gcp_counts: GCPResourceCounts,
+    azure_subscription: str = None,
+    gcp_project: str = None,
+    gcp_region: str = "us-central1",
+):
+    """Generate multi-cloud PKL files with subdirectory layout."""
 
-        # Storage (may be split) - generates S3/DynamoDB (always) and EFS (skip in quota-safe)
-        storage_templates = generate_cfn_storage_split(counts, env_id, networking_stack, sg_stack or "")
-        for filename, content in storage_templates:
-            files[filename] = content
-            stack_name = filename.replace(".yaml", "")
-            stacks.append({"name": stack_name, "file": filename})
+    # Azure location mapping from AWS region
+    azure_location_map = {
+        "us-east-1": "eastus",
+        "us-east-2": "eastus2",
+        "us-west-1": "westus",
+        "us-west-2": "westus2",
+        "eu-west-1": "westeurope",
+        "eu-central-1": "germanywestcentral",
+    }
+    azure_location = azure_location_map.get(region, "eastus")
 
-        # Compute (may be split - skip in quota-safe mode)
-        if not is_quota_safe:
-            compute_templates = generate_cfn_compute_split(counts, env_id, args.region, networking_stack, sg_stack_base)
-            for filename, content in compute_templates:
-                files[filename] = content
-                stack_name = filename.replace(".yaml", "")
-                stacks.append({"name": stack_name, "file": filename})
+    # Generate PklProject
+    files = {
+        "PklProject": generate_multicloud_pkl_project(formae_path, clouds),
+    }
 
-        # Observability (may be split)
-        obs_templates = generate_cfn_observability_split(counts, env_id)
-        for filename, content in obs_templates:
-            files[filename] = content
-            stack_name = filename.replace(".yaml", "")
-            stacks.append({"name": stack_name, "file": filename})
+    # Generate vars.pkl
+    files["vars.pkl"] = generate_multicloud_vars_pkl(
+        env_id=env_id,
+        run_id=run_id,
+        clouds=clouds,
+        region=region,
+        stack_name=stack_name,
+        azure_subscription=azure_subscription,
+        azure_location=azure_location,
+        gcp_project=gcp_project,
+        gcp_region=gcp_region,
+    )
 
-        # Secrets (single stack - usually small)
-        files["secrets.yaml"] = generate_cfn_secrets(counts, env_id)
-        stacks.append({"name": "secrets", "file": "secrets.yaml"})
+    # Generate main.pkl
+    files["main.pkl"] = generate_multicloud_main_pkl(
+        env_id=env_id,
+        clouds=clouds,
+        aws_counts=aws_counts,
+        azure_counts=azure_counts,
+        gcp_counts=gcp_counts,
+    )
 
-        # Application (may be split)
-        app_templates = generate_cfn_application_split(counts, env_id, iam_stack_base)
-        for filename, content in app_templates:
-            files[filename] = content
-            stack_name = filename.replace(".yaml", "")
-            stacks.append({"name": stack_name, "file": filename})
+    # Each cloud subdirectory gets a symlink to the parent vars.pkl
+    # This is simpler than trying to extend/import since the module files use `import "./vars.pkl"`
 
-        # Route53 (single stack - usually small)
-        files["route53.yaml"] = generate_cfn_route53(counts, env_id)
-        stacks.append({"name": "route53", "file": "route53.yaml"})
-
-        # API Gateway (single stack)
-        files["api-gateway.yaml"] = generate_cfn_api_gateway(counts, env_id)
-        stacks.append({"name": "api-gateway", "file": "api-gateway.yaml"})
-
-        # RDS (single stack - skip in quota-safe mode, requires VPC)
-        if not is_quota_safe:
-            files["rds.yaml"] = generate_cfn_rds(counts, env_id, networking_stack, sg_stack)
-            stacks.append({"name": "rds", "file": "rds.yaml"})
-
-        # Generate deploy and destroy scripts
-        files["deploy.sh"] = generate_cfn_deploy_script(env_id, args.region, stacks)
-        files["destroy.sh"] = generate_cfn_destroy_script(env_id, args.region, stacks)
-        files["README.md"] = generate_cfn_readme(env_id, args.region, counts)
-
-        for filename, content in files.items():
-            filepath = os.path.join(output_dir, filename)
+    # Generate AWS files
+    if "aws" in clouds and aws_counts:
+        aws_dir = os.path.join(output_dir, "aws")
+        os.makedirs(aws_dir, exist_ok=True)
+        # Symlink vars.pkl from parent so module imports work
+        os.symlink("../vars.pkl", os.path.join(aws_dir, "vars.pkl"))
+        aws_files = {
+            "networking.pkl": generate_networking_pkl(aws_counts, region),
+            "security_groups.pkl": generate_security_groups_pkl(aws_counts),
+            "compute.pkl": generate_compute_pkl(aws_counts, region),
+            "iam.pkl": generate_iam_pkl(aws_counts),
+            "kms.pkl": generate_kms_pkl(aws_counts),
+            "storage.pkl": generate_storage_pkl(aws_counts),
+            "observability.pkl": generate_observability_pkl(aws_counts),
+            "secrets.pkl": generate_secrets_pkl(aws_counts),
+            "application.pkl": generate_application_pkl(aws_counts),
+            "route53.pkl": generate_route53_pkl(aws_counts),
+            "api_gateway.pkl": generate_api_gateway_pkl(aws_counts),
+            "rds.pkl": generate_rds_pkl(aws_counts),
+            "main.pkl": generate_main_pkl(env_id, f"{stack_name}-aws", aws_counts,
+                                          stack_var="awsStack", target_var="awsTarget",
+                                          region_var="awsRegion"),
+        }
+        for filename, content in aws_files.items():
+            filepath = os.path.join(aws_dir, filename)
             with open(filepath, "w") as f:
                 f.write(content)
             print(f"Generated: {filepath}")
 
-        # Make scripts executable
-        os.chmod(os.path.join(output_dir, "deploy.sh"), 0o755)
-        os.chmod(os.path.join(output_dir, "destroy.sh"), 0o755)
+    # Generate Azure files
+    if "azure" in clouds and azure_counts:
+        az_dir = os.path.join(output_dir, "azure")
+        os.makedirs(az_dir, exist_ok=True)
+        os.symlink("../vars.pkl", os.path.join(az_dir, "vars.pkl"))
+        azure_files = {
+            "networking.pkl": generate_azure_networking_pkl(azure_counts, azure_location),
+            "storage.pkl": generate_azure_storage_pkl(azure_counts, azure_location),
+            "iam.pkl": generate_azure_iam_pkl(azure_counts, azure_location),
+            "security.pkl": generate_azure_security_pkl(azure_counts, azure_location),
+            "main.pkl": generate_azure_main_pkl(env_id, azure_counts),
+        }
+        if azure_counts.virtual_machines > 0 or azure_counts.network_interfaces > 0:
+            azure_files["compute.pkl"] = generate_azure_compute_pkl(azure_counts, azure_location)
+        if azure_counts.postgres_servers > 0:
+            azure_files["database.pkl"] = generate_azure_database_pkl(azure_counts, azure_location)
+        for filename, content in azure_files.items():
+            filepath = os.path.join(az_dir, filename)
+            with open(filepath, "w") as f:
+                f.write(content)
+            print(f"Generated: {filepath}")
 
-        print(f"\n{'=' * 60}")
-        print(f"Performance test environment generated successfully!")
-        print(f"{'=' * 60}")
-        print(f"\nFormat: CloudFormation (for discovery testing)")
-        print(f"Environment ID: {env_id}")
-        print(f"Region: {args.region}")
-        print(f"Target Resources: {args.count}")
-        print(f"Calculated Resources: {counts.total}")
-        print(f"Output Directory: {output_dir}")
-        print(f"CloudFormation Stacks: {len(stacks)}")
-        print(f"\nNext steps:")
-        print(f"  1. cd {output_dir}")
-        print(f"  2. ./deploy.sh             # deploy all stacks")
-        print(f"  3. # Test formae discovery:")
-        print(f"     formae agent start")
-        print(f"     formae discover --target aws --region {args.region}")
-        print(f"     formae inventory --unmanaged")
-        print(f"  4. ./destroy.sh            # cleanup")
+    # Generate GCP files
+    if "gcp" in clouds and gcp_counts:
+        gcp_dir = os.path.join(output_dir, "gcp")
+        os.makedirs(gcp_dir, exist_ok=True)
+        os.symlink("../vars.pkl", os.path.join(gcp_dir, "vars.pkl"))
+        gcp_files = {
+            "networking.pkl": generate_gcp_networking_pkl(gcp_counts, gcp_region),
+            "storage.pkl": generate_gcp_storage_pkl(gcp_counts, gcp_region),
+            "main.pkl": generate_gcp_main_pkl(env_id, gcp_counts),
+        }
+        if gcp_counts.compute_instances > 0 or gcp_counts.compute_disks > 0:
+            gcp_files["compute.pkl"] = generate_gcp_compute_pkl(gcp_counts, gcp_region, gcp_project)
+        if gcp_counts.sql_instances > 0 or gcp_counts.bigquery_datasets > 0:
+            gcp_files["database.pkl"] = generate_gcp_database_pkl(gcp_counts, gcp_region, gcp_project)
+        for filename, content in gcp_files.items():
+            filepath = os.path.join(gcp_dir, filename)
+            with open(filepath, "w") as f:
+                f.write(content)
+            print(f"Generated: {filepath}")
+
+    # Write top-level files
+    for filename, content in files.items():
+        filepath = os.path.join(output_dir, filename)
+        with open(filepath, "w") as f:
+            f.write(content)
+        print(f"Generated: {filepath}")
+
+    grand_total = sum(c.total for c in [aws_counts, azure_counts, gcp_counts] if c)
+    print(f"\n{'=' * 60}")
+    print(f"Multi-cloud stress test environment generated successfully!")
+    print(f"{'=' * 60}")
+    print(f"\nFormat: PKL (for formae)")
+    print(f"Environment ID: {env_id}")
+    print(f"Run ID: {run_id}")
+    print(f"Clouds: {', '.join(c.upper() for c in clouds)}")
+    if aws_counts:
+        print(f"  AWS: ~{aws_counts.total} resources (region: {region})")
+    if azure_counts:
+        print(f"  Azure: ~{azure_counts.total} resources (location: {azure_location})")
+    if gcp_counts:
+        print(f"  GCP: ~{gcp_counts.total} resources (region: {gcp_region})")
+    print(f"Grand Total: ~{grand_total} resources")
+    print(f"Output Directory: {output_dir}")
+    print(f"\nNext steps:")
+    print(f"  1. cd {output_dir}")
+    print(f"  2. pkl project resolve")
+    print(f"  3. formae apply --simulate main.pkl  # dry-run")
+    print(f"  4. formae apply main.pkl             # deploy")
+
+
+def _generate_cloudformation(
+    output_dir: str,
+    env_id: str,
+    stack_name: str,
+    region: str,
+    counts: ResourceCounts,
+    is_quota_safe: bool,
+):
+    """Generate CloudFormation templates (AWS only)."""
+    networking_stack = f"{env_id}-networking"
+    sg_stack_base = f"{env_id}-security-groups"
+    iam_stack_base = f"{env_id}-iam"
+
+    # Collect all templates and track stacks for deploy/destroy scripts
+    files = {}
+    stacks = []
+
+    # Networking (single stack - skip in quota-safe mode)
+    if not is_quota_safe:
+        files["networking.yaml"] = generate_cfn_networking(counts, env_id, region)
+        stacks.append({"name": "networking", "file": "networking.yaml"})
+
+    # Security groups (may be split - skip in quota-safe mode)
+    sg_stack = None
+    if not is_quota_safe:
+        sg_templates = generate_cfn_security_groups_split(counts, env_id, networking_stack)
+        for filename, content in sg_templates:
+            files[filename] = content
+            sn = filename.replace(".yaml", "")
+            stacks.append({"name": sn, "file": filename})
+        sg_stack = sg_stack_base if len(sg_templates) == 1 else f"{sg_stack_base}-0"
+
+    # IAM (may be split)
+    iam_templates = generate_cfn_iam_split(counts, env_id)
+    for filename, content in iam_templates:
+        files[filename] = content
+        sn = filename.replace(".yaml", "")
+        stacks.append({"name": sn, "file": filename})
+
+    # KMS (may be split if many keys)
+    kms_templates = generate_cfn_kms_split(counts, env_id)
+    for filename, content in kms_templates:
+        files[filename] = content
+        sn = filename.replace(".yaml", "")
+        stacks.append({"name": sn, "file": filename})
+
+    # Storage (may be split)
+    storage_templates = generate_cfn_storage_split(counts, env_id, networking_stack, sg_stack or "")
+    for filename, content in storage_templates:
+        files[filename] = content
+        sn = filename.replace(".yaml", "")
+        stacks.append({"name": sn, "file": filename})
+
+    # Compute (may be split - skip in quota-safe mode)
+    if not is_quota_safe:
+        compute_templates = generate_cfn_compute_split(counts, env_id, region, networking_stack, sg_stack_base)
+        for filename, content in compute_templates:
+            files[filename] = content
+            sn = filename.replace(".yaml", "")
+            stacks.append({"name": sn, "file": filename})
+
+    # Observability (may be split)
+    obs_templates = generate_cfn_observability_split(counts, env_id)
+    for filename, content in obs_templates:
+        files[filename] = content
+        sn = filename.replace(".yaml", "")
+        stacks.append({"name": sn, "file": filename})
+
+    # Secrets (single stack - usually small)
+    files["secrets.yaml"] = generate_cfn_secrets(counts, env_id)
+    stacks.append({"name": "secrets", "file": "secrets.yaml"})
+
+    # Application (may be split)
+    app_templates = generate_cfn_application_split(counts, env_id, iam_stack_base)
+    for filename, content in app_templates:
+        files[filename] = content
+        sn = filename.replace(".yaml", "")
+        stacks.append({"name": sn, "file": filename})
+
+    # Route53 (single stack - usually small)
+    files["route53.yaml"] = generate_cfn_route53(counts, env_id)
+    stacks.append({"name": "route53", "file": "route53.yaml"})
+
+    # API Gateway (single stack)
+    files["api-gateway.yaml"] = generate_cfn_api_gateway(counts, env_id)
+    stacks.append({"name": "api-gateway", "file": "api-gateway.yaml"})
+
+    # RDS (single stack - skip in quota-safe mode, requires VPC)
+    if not is_quota_safe:
+        files["rds.yaml"] = generate_cfn_rds(counts, env_id, networking_stack, sg_stack)
+        stacks.append({"name": "rds", "file": "rds.yaml"})
+
+    # Generate deploy and destroy scripts
+    files["deploy.sh"] = generate_cfn_deploy_script(env_id, region, stacks)
+    files["destroy.sh"] = generate_cfn_destroy_script(env_id, region, stacks)
+    files["README.md"] = generate_cfn_readme(env_id, region, counts)
+
+    for filename, content in files.items():
+        filepath = os.path.join(output_dir, filename)
+        with open(filepath, "w") as f:
+            f.write(content)
+        print(f"Generated: {filepath}")
+
+    # Make scripts executable
+    os.chmod(os.path.join(output_dir, "deploy.sh"), 0o755)
+    os.chmod(os.path.join(output_dir, "destroy.sh"), 0o755)
+
+    print(f"\n{'=' * 60}")
+    print(f"Performance test environment generated successfully!")
+    print(f"{'=' * 60}")
+    print(f"\nFormat: CloudFormation (for discovery testing)")
+    print(f"Environment ID: {env_id}")
+    print(f"Region: {region}")
+    print(f"Calculated Resources: {counts.total}")
+    print(f"Output Directory: {output_dir}")
+    print(f"CloudFormation Stacks: {len(stacks)}")
+    print(f"\nNext steps:")
+    print(f"  1. cd {output_dir}")
+    print(f"  2. ./deploy.sh             # deploy all stacks")
+    print(f"  3. # Test formae discovery:")
+    print(f"     formae agent start")
+    print(f"     formae discover --target aws --region {region}")
+    print(f"     formae inventory --unmanaged")
+    print(f"  4. ./destroy.sh            # cleanup")
 
 
 if __name__ == "__main__":
