@@ -4336,14 +4336,60 @@ func (d DatastoreSQLite) Stats() (*stats.Stats, error) {
 	}
 
 	res.ResourceErrors = make(map[string]int)
+	// Resources whose LATEST completed outcome is a failure, counted once per
+	// resource (ksuid) and grouped by type. Counting every failed row instead
+	// would accumulate for the lifetime of the datastore: each retry adds a
+	// row and a later success never removes one, so the count could only ever
+	// grow.
+	//
+	// Only completed outcomes (Failed, Success) take part in the ordering.
+	// In-flight, canceled, rejected and unknown rows carry no verdict on
+	// whether the resource converged, so they must not displace — and thereby
+	// clear — a standing failure.
+	//
+	// The type filter belongs in the outer SELECT only. A later Success row
+	// whose stored resource has no Type still supersedes an earlier failure;
+	// filtering it out of the ordering set would leave that failure reported
+	// forever.
+	//
+	// ORDER BY ends with operation so the ordering is total within a ksuid
+	// (the primary key includes operation), making ROW_NUMBER deterministic.
+	// The state tiebreak comes first: when a replace pair's delete and create
+	// rows share a timestamp, the failure is reported rather than hidden.
 	resourceErrorsQuery := `
-		SELECT json_extract(resource, '$.Type') as resource_type, COUNT(*)
-		FROM resource_updates
-		WHERE state = ?
-		AND resource IS NOT NULL
+		WITH failed_ksuids AS (
+			SELECT DISTINCT ksuid FROM resource_updates WHERE state = ?
+		),
+		outcomes AS (
+			SELECT ru.ksuid,
+			       ru.state,
+			       json_extract(ru.resource,'$.Type') AS resource_type,
+			       ROW_NUMBER() OVER (
+			           PARTITION BY ru.ksuid
+			           ORDER BY ru.modified_ts DESC,
+			                    ru.command_id DESC,
+			                    CASE WHEN ru.state = ? THEN 0 ELSE 1 END,
+			                    ru.operation
+			       ) AS rn
+			FROM resource_updates ru
+			JOIN failed_ksuids f ON f.ksuid = ru.ksuid
+			WHERE ru.state IN (?, ?)
+		)
+		SELECT resource_type, COUNT(*)
+		FROM outcomes
+		WHERE rn = 1
+		  AND state = ?
+		  AND resource_type IS NOT NULL
+		  AND resource_type <> ''
 		GROUP BY resource_type
 	`
-	rows, err = d.conn.Query(resourceErrorsQuery, types.ResourceUpdateStateFailed)
+	rows, err = d.conn.Query(resourceErrorsQuery,
+		types.ResourceUpdateStateFailed,
+		types.ResourceUpdateStateFailed,
+		types.ResourceUpdateStateFailed,
+		types.ResourceUpdateStateSuccess,
+		types.ResourceUpdateStateFailed,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -4355,9 +4401,7 @@ func (d DatastoreSQLite) Stats() (*stats.Stats, error) {
 		if err = rows.Scan(&resourceType, &count); err != nil {
 			return nil, err
 		}
-		if resourceType != "" {
-			res.ResourceErrors[resourceType] = count
-		}
+		res.ResourceErrors[resourceType] = count
 	}
 	if err = rows.Err(); err != nil {
 		return nil, err
