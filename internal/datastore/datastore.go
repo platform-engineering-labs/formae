@@ -401,6 +401,10 @@ type Datastore interface {
 	DetachPolicyFromStack(stackLabel, policyLabel string) error
 	// DeletePolicy soft-deletes a standalone policy by label (returns version string)
 	DeletePolicy(policyLabel string) (string, error)
+	// DeleteInlinePolicy soft-deletes the inline policies (stack_id set) on a stack
+	// that carry the given label (returns version string). Deleting when no live
+	// row matches is a no-op success that returns an empty version.
+	DeleteInlinePolicy(stackID string, policyLabel string, commandID string) (string, error)
 	// DeletePoliciesForStack soft-deletes all policies for a stack (cascade delete)
 	DeletePoliciesForStack(stackID string, commandID string) error
 	// GetExpiredStacks returns stacks with TTL policies that have expired,

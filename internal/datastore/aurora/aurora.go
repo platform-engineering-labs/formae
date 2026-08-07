@@ -5475,6 +5475,66 @@ func (d *DatastoreAuroraDataAPI) DeletePolicy(policyLabel string) (string, error
 	return version, nil
 }
 
+func (d *DatastoreAuroraDataAPI) DeleteInlinePolicy(stackID string, policyLabel string, commandID string) (string, error) {
+	ctx := context.Background()
+
+	// Inline policy labels are only unique within their stack, so the lookup is
+	// scoped by stack_id as well as label. Liveness is decided per policy id: an
+	// id whose latest version is a tombstone is already deleted.
+	query := `
+		WITH latest_policies AS (
+			SELECT id, label, policy_type, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			FROM policies
+			WHERE stack_id = :stack_id AND label = :policy_label
+		)
+		SELECT id, policy_type
+		FROM latest_policies
+		WHERE rn = 1 AND operation != 'delete'
+	`
+	params := []types.SqlParameter{
+		{Name: aws.String("stack_id"), Value: &types.FieldMemberStringValue{Value: stackID}},
+		{Name: aws.String("policy_label"), Value: &types.FieldMemberStringValue{Value: policyLabel}},
+	}
+	result, err := d.executeStatement(ctx, query, params)
+	if err != nil {
+		return "", fmt.Errorf("failed to get inline policy for deletion: %w", err)
+	}
+
+	// An empty version reports that nothing live matched, so a replayed delete
+	// stays a no-op success instead of failing its command.
+	var version string
+	insertQuery := `INSERT INTO policies (id, version, command_id, operation, label, policy_type, stack_id, policy_data) VALUES (:id, :version, :command_id, :operation, :label, :policy_type, :stack_id, :policy_data)`
+	for _, record := range result.Records {
+		if len(record) < 2 {
+			continue
+		}
+
+		id, _ := getStringField(record[0])
+		policyType, _ := getStringField(record[1])
+
+		version = mksuid.New().String()
+		insertParams := []types.SqlParameter{
+			{Name: aws.String("id"), Value: &types.FieldMemberStringValue{Value: id}},
+			{Name: aws.String("version"), Value: &types.FieldMemberStringValue{Value: version}},
+			{Name: aws.String("command_id"), Value: &types.FieldMemberStringValue{Value: commandID}},
+			{Name: aws.String("operation"), Value: &types.FieldMemberStringValue{Value: "delete"}},
+			{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: policyLabel}},
+			{Name: aws.String("policy_type"), Value: &types.FieldMemberStringValue{Value: policyType}},
+			{Name: aws.String("stack_id"), Value: &types.FieldMemberStringValue{Value: stackID}},
+			{Name: aws.String("policy_data"), Value: &types.FieldMemberStringValue{Value: "{}"}},
+		}
+
+		_, err = d.executeStatement(ctx, insertQuery, insertParams)
+		if err != nil {
+			return "", fmt.Errorf("failed to delete inline policy: %w", err)
+		}
+		slog.Debug("Deleted inline policy", "label", policyLabel, "id", id, "stackID", stackID)
+	}
+
+	return version, nil
+}
+
 func (d *DatastoreAuroraDataAPI) DeletePoliciesForStack(stackID string, commandID string) error {
 	ctx := context.Background()
 

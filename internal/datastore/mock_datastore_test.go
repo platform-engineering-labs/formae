@@ -160,8 +160,11 @@ func (m *mockDatastore) GetStacksReferencingPolicy(_ string) ([]string, error) {
 func (m *mockDatastore) GetAttachedPolicyLabelsForStack(_ string) ([]string, error) {
 	return nil, nil
 }
-func (m *mockDatastore) DetachPolicyFromStack(_, _ string) error       { return nil }
-func (m *mockDatastore) DeletePolicy(_ string) (string, error)         { return "", nil }
+func (m *mockDatastore) DetachPolicyFromStack(_, _ string) error { return nil }
+func (m *mockDatastore) DeletePolicy(_ string) (string, error)   { return "", nil }
+func (m *mockDatastore) DeleteInlinePolicy(_, _, _ string) (string, error) {
+	return "", nil
+}
 func (m *mockDatastore) DeletePoliciesForStack(_, _ string) error      { return nil }
 func (m *mockDatastore) GetExpiredStacks() ([]ExpiredStackInfo, error) { return nil, nil }
 func (m *mockDatastore) GetStacksWithAutoReconcilePolicy() ([]StackReconcileInfo, error) {

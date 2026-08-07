@@ -547,6 +547,60 @@ func (d *DatastoreMSSQL) DeletePolicy(policyLabel string) (string, error) {
 	return version, nil
 }
 
+func (d *DatastoreMSSQL) DeleteInlinePolicy(stackID string, policyLabel string, commandID string) (string, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "DeleteInlinePolicy")
+	defer span.End()
+
+	// Inline policy labels are only unique within their stack, so the lookup is
+	// scoped by stack_id as well as label. Liveness is decided per policy id: an
+	// id whose latest version is a tombstone is already deleted.
+	query := `
+		WITH latest_policies AS (
+			SELECT id, label, policy_type, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE Latin1_General_BIN2 DESC) as rn
+			FROM policies
+			WHERE stack_id = @p1 AND label = @p2
+		)
+		SELECT id, policy_type
+		FROM latest_policies
+		WHERE rn = 1 AND operation != 'delete'`
+	rows, err := d.conn.QueryContext(ctx, query, stackID, policyLabel)
+	if err != nil {
+		return "", fmt.Errorf("failed to get inline policy for deletion: %w", err)
+	}
+
+	type inlinePolicy struct{ id, policyType string }
+	var toDelete []inlinePolicy
+	for rows.Next() {
+		var p inlinePolicy
+		if err := rows.Scan(&p.id, &p.policyType); err != nil {
+			_ = rows.Close()
+			return "", fmt.Errorf("failed to scan inline policy for deletion: %w", err)
+		}
+		toDelete = append(toDelete, p)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return "", fmt.Errorf("failed to iterate inline policies for deletion: %w", err)
+	}
+	_ = rows.Close()
+
+	// An empty version reports that nothing live matched, so a replayed delete
+	// stays a no-op success instead of failing its command.
+	var version string
+	insertQuery := `INSERT INTO policies (id, version, command_id, operation, label, policy_type, stack_id, policy_data)
+	                VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8)`
+	for _, p := range toDelete {
+		version = mksuid.New().String()
+		if _, err := d.conn.ExecContext(ctx, insertQuery, p.id, version, commandID, "delete", policyLabel, p.policyType, stackID, "{}"); err != nil {
+			return "", fmt.Errorf("failed to delete inline policy: %w", err)
+		}
+		slog.Debug("Deleted inline policy", "label", policyLabel, "id", p.id, "stackID", stackID)
+	}
+
+	return version, nil
+}
+
 func (d *DatastoreMSSQL) DeletePoliciesForStack(stackID string, commandID string) error {
 	ctx, span := mssqlTracer.Start(context.Background(), "DeletePoliciesForStack")
 	defer span.End()
