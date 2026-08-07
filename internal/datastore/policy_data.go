@@ -5,6 +5,10 @@
 package datastore
 
 import (
+	"encoding/json"
+	"fmt"
+	"log/slog"
+
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
@@ -25,4 +29,52 @@ func TTLPolicyData(p *pkgmodel.TTLPolicy) map[string]any {
 		data["TTLSeconds"] = p.TTLSeconds
 	}
 	return data
+}
+
+// TTLPolicyFromData rebuilds a TTL policy from a stored policy_data payload.
+//
+// It is deliberately lenient where TTLPolicyData's counterpart in ParsePolicy is
+// strict. ParsePolicy is the gate on the way in, so anything that reaches
+// storage is well formed; a row that is not — hand-edited or corrupt — must
+// still be readable, because failing here would make the stack that carries it
+// unloadable. Payloads outside the one-of therefore degrade rather than error,
+// and resolve exactly as the expiry queries resolve them: a parsable ExpiresAt
+// wins over TTLSeconds, and anything else leaves the policy with no deadline,
+// which means it never expires.
+func TTLPolicyFromData(label, policyDataStr, stackID string) (*pkgmodel.TTLPolicy, error) {
+	var data struct {
+		TTLSeconds   *int64  `json:"TTLSeconds"`
+		ExpiresAt    *string `json:"ExpiresAt"`
+		OnDependents string  `json:"OnDependents"`
+	}
+	if err := json.Unmarshal([]byte(policyDataStr), &data); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal TTL policy data: %w", err)
+	}
+
+	policy := &pkgmodel.TTLPolicy{
+		Type:         "ttl",
+		Label:        label,
+		OnDependents: data.OnDependents,
+		StackID:      stackID,
+	}
+
+	if data.ExpiresAt != nil {
+		expiresAt, err := pkgmodel.CanonicalizeExpiresAt(*data.ExpiresAt)
+		if err == nil {
+			policy.ExpiresAt = expiresAt
+			return policy, nil
+		}
+		slog.Warn("TTL policy has an unreadable ExpiresAt and will never expire",
+			"label", label, "stackID", stackID, "error", err)
+		return policy, nil
+	}
+
+	if data.TTLSeconds == nil {
+		slog.Warn("TTL policy sets neither TTLSeconds nor ExpiresAt and will never expire",
+			"label", label, "stackID", stackID)
+		return policy, nil
+	}
+
+	policy.TTLSeconds = *data.TTLSeconds
+	return policy, nil
 }

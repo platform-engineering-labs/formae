@@ -4865,10 +4865,7 @@ func (d *DatastoreAuroraDataAPI) CreatePolicy(policy pkgmodel.Policy, commandID 
 	var policyData string
 	switch p := policy.(type) {
 	case *pkgmodel.TTLPolicy:
-		data, err := json.Marshal(map[string]any{
-			"TTLSeconds":   p.TTLSeconds,
-			"OnDependents": p.OnDependents,
-		})
+		data, err := json.Marshal(datastore.TTLPolicyData(p))
 		if err != nil {
 			return "", fmt.Errorf("failed to marshal policy data: %w", err)
 		}
@@ -4960,10 +4957,7 @@ func (d *DatastoreAuroraDataAPI) UpdatePolicy(policy pkgmodel.Policy, commandID 
 	var policyData string
 	switch p := policy.(type) {
 	case *pkgmodel.TTLPolicy:
-		data, err := json.Marshal(map[string]any{
-			"TTLSeconds":   p.TTLSeconds,
-			"OnDependents": p.OnDependents,
-		})
+		data, err := json.Marshal(datastore.TTLPolicyData(p))
 		if err != nil {
 			return "", fmt.Errorf("failed to marshal policy data: %w", err)
 		}
@@ -5550,20 +5544,7 @@ func (d *DatastoreAuroraDataAPI) DeletePoliciesForStack(stackID string, commandI
 func deserializePolicyAurora(label, policyType, policyDataStr, stackID string) (pkgmodel.Policy, error) {
 	switch policyType {
 	case "ttl":
-		var data struct {
-			TTLSeconds   int64  `json:"TTLSeconds"`
-			OnDependents string `json:"OnDependents"`
-		}
-		if err := json.Unmarshal([]byte(policyDataStr), &data); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal TTL policy data: %w", err)
-		}
-		return &pkgmodel.TTLPolicy{
-			Type:         "ttl",
-			Label:        label,
-			TTLSeconds:   data.TTLSeconds,
-			OnDependents: data.OnDependents,
-			StackID:      stackID,
-		}, nil
+		return datastore.TTLPolicyFromData(label, policyDataStr, stackID)
 	case "auto-reconcile":
 		var data struct {
 			IntervalSeconds int64 `json:"IntervalSeconds"`

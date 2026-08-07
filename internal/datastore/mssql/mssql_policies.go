@@ -26,10 +26,7 @@ import (
 func marshalPolicyData(policy pkgmodel.Policy) ([]byte, error) {
 	switch p := policy.(type) {
 	case *pkgmodel.TTLPolicy:
-		return json.Marshal(map[string]any{
-			"TTLSeconds":   p.TTLSeconds,
-			"OnDependents": p.OnDependents,
-		})
+		return json.Marshal(datastore.TTLPolicyData(p))
 	case *pkgmodel.AutoReconcilePolicy:
 		return json.Marshal(map[string]any{
 			"IntervalSeconds": p.IntervalSeconds,
@@ -42,20 +39,7 @@ func marshalPolicyData(policy pkgmodel.Policy) ([]byte, error) {
 func deserializePolicy(label, policyType, policyDataStr, stackID string) (pkgmodel.Policy, error) {
 	switch policyType {
 	case "ttl":
-		var data struct {
-			TTLSeconds   int64  `json:"TTLSeconds"`
-			OnDependents string `json:"OnDependents"`
-		}
-		if err := json.Unmarshal([]byte(policyDataStr), &data); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal TTL policy data: %w", err)
-		}
-		return &pkgmodel.TTLPolicy{
-			Type:         "ttl",
-			Label:        label,
-			TTLSeconds:   data.TTLSeconds,
-			OnDependents: data.OnDependents,
-			StackID:      stackID,
-		}, nil
+		return datastore.TTLPolicyFromData(label, policyDataStr, stackID)
 	case "auto-reconcile":
 		var data struct {
 			IntervalSeconds int64 `json:"IntervalSeconds"`
