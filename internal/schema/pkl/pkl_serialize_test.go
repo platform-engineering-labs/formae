@@ -8,7 +8,9 @@ package pkl
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -654,4 +656,147 @@ func TestSerializeForma_ResolvableNested_NoHashedEmitted(t *testing.T) {
 	assert.NotContains(t, out, ".hashed", "resolvable field must not emit the .hashed marker")
 	// The sentinel comment must not appear for a resolvable-backed field.
 	assert.NotContains(t, out, "// hashed secret value", "resolvable field must not emit the sentinel comment")
+}
+
+// TestSerializeForma_ScalarSecretResolvableRef_ResolvesImportAndEvaluates covers
+// a resolvable whose class extends one of the specialised bases rather than
+// formae.Resolvable itself. Such a class only reaches the resource-type-URI map
+// when the generator collects transitive subclasses, so without that the
+// reference below has no import to resolve and serialization fails outright.
+func TestSerializeForma_ScalarSecretResolvableRef_ResolvesImportAndEvaluates(t *testing.T) {
+	deps, pluginDir := fakeawsDeps(t)
+
+	// A DBInstance whose master password is a $res reference to a Secret — the
+	// secret's resolvable extends formae.ScalarSecretResolvable.
+	dbProps := json.RawMessage(`{"DbInstanceClass":"db.t3.micro","Engine":"postgres","MasterUserPassword":{"$res":true,"$label":"db-secret","$type":"FakeAWS::SecretsManager::Secret","$stack":"default","$property":"SecretString","$visibility":"Clear","$value":"hunter2"}}`)
+
+	forma := &model.Forma{
+		Stacks:  []model.Stack{{Label: "default"}},
+		Targets: []model.Target{fakeawsTarget()},
+		Resources: []model.Resource{
+			{
+				Label:      "db-secret",
+				Type:       "FakeAWS::SecretsManager::Secret",
+				Stack:      "default",
+				Target:     "aws",
+				Properties: json.RawMessage(`{"Name":"db-secret"}`),
+			},
+			{
+				Label:      "app-db",
+				Type:       "FakeAWS::RDS::DBInstance",
+				Stack:      "default",
+				Target:     "aws",
+				Properties: dbProps,
+			},
+		},
+	}
+	options := &schema.SerializeOptions{
+		Schema:         "pkl",
+		SchemaLocation: schema.SchemaLocationLocal,
+		LocalPluginDir: pluginDir,
+		Dependencies:   deps,
+	}
+
+	out, err := PKL{}.SerializeForma(forma, options)
+	require.NoError(t, err)
+
+	// The import for the referenced resolvable's module must be emitted, under
+	// the alias the reference expression uses.
+	assert.Contains(t, out, `import "@fakeaws/secretsmanager/secret.pkl" as secret`,
+		"the referenced resolvable's module must be imported")
+
+	// The reference must render as a live Resolvable declaration terminating in
+	// the mapped property accessor — asserted whole so a stray substring match
+	// (a comment or the import line) cannot satisfy it.
+	assert.Contains(t, out, strings.Join([]string{
+		`    masterUserPassword = new secret.SecretResolvable {`,
+		`      // RealValue: hunter2`,
+		`      stack = default.res.label`,
+		`      label = "db-secret"`,
+		`    }.secretString`,
+	}, "\n"), "the reference must render as a Resolvable declaration ending in the mapped accessor")
+
+	// The emitted PKL must evaluate: write it out as a project and read it back.
+	dir := t.TempDir()
+	res, err := PKL{}.GenerateSourceCode(forma, filepath.Join(dir, "out.pkl"), nil, options)
+	require.NoError(t, err)
+
+	evaluated, err := PKL{}.Evaluate(res.TargetPath, model.CommandApply, model.FormaApplyModeReconcile, nil)
+	require.NoError(t, err, "the emitted PKL must evaluate")
+	require.Len(t, evaluated.Resources, 2)
+
+	// The reference must survive the round trip as a $res envelope, not as the
+	// baked-out literal value.
+	var appDB *model.Resource
+	for i := range evaluated.Resources {
+		if evaluated.Resources[i].Label == "app-db" {
+			appDB = &evaluated.Resources[i]
+		}
+	}
+	require.NotNil(t, appDB, "the referencing resource must survive evaluation")
+
+	var props map[string]any
+	require.NoError(t, json.Unmarshal(appDB.Properties, &props))
+	password, ok := props["MasterUserPassword"].(map[string]any)
+	require.True(t, ok, "the referencing property must round-trip as an envelope, got %v", props["MasterUserPassword"])
+	assert.Equal(t, true, password["$res"])
+	assert.Equal(t, "db-secret", password["$label"])
+	assert.Equal(t, "FakeAWS::SecretsManager::Secret", password["$type"])
+	assert.Equal(t, "SecretString", password["$property"])
+	assert.NotContains(t, string(appDB.Properties), "hunter2",
+		"the referenced value must not be baked in as a literal")
+}
+
+// TestSerializeForma_ReferenceToUndeclaredResolvable_FailsActionably covers a
+// $res envelope naming a resource type that no schema declares a resolvable
+// for. There is no import to emit, so generation must stop with a message
+// naming the type and the reference that carried it, rather than either dying
+// inside PKL or quietly emitting a forma file with a missing reference.
+func TestSerializeForma_ReferenceToUndeclaredResolvable_FailsActionably(t *testing.T) {
+	deps, pluginDir := fakeawsDeps(t)
+
+	props := json.RawMessage(`{"DbInstanceClass":"db.t3.micro","Engine":"postgres","MasterUserPassword":{"$res":true,"$label":"ghost","$type":"FakeAWS::Nonexistent::Thing","$stack":"default","$property":"Value","$visibility":"Clear","$value":"hunter2"}}`)
+
+	forma := &model.Forma{
+		Stacks:  []model.Stack{{Label: "default"}},
+		Targets: []model.Target{fakeawsTarget()},
+		Resources: []model.Resource{{
+			Label:      "app-db",
+			Type:       "FakeAWS::RDS::DBInstance",
+			Stack:      "default",
+			Target:     "aws",
+			Properties: props,
+		}},
+	}
+	options := &schema.SerializeOptions{
+		Schema:         "pkl",
+		SchemaLocation: schema.SchemaLocationLocal,
+		LocalPluginDir: pluginDir,
+		Dependencies:   deps,
+	}
+
+	_, err := PKL{}.SerializeForma(forma, options)
+	require.Error(t, err, "a reference to an undeclared resolvable must not serialize")
+
+	msg := err.Error()
+	assert.Contains(t, msg, "FakeAWS::Nonexistent::Thing", "the error must name the unresolvable type")
+	assert.Contains(t, msg, `reference to resource "ghost" in stack "default"`,
+		"the error must identify which reference failed")
+	assert.NotContains(t, msg, "Cannot find property", "the failure must not surface as a raw PKL property error")
+}
+
+// TestGenPkl_NoUnguardedResolvableLookup pins the invariant behind the test
+// above. Every site that renders a reference reads the resolvable map, but only
+// the first one reached can surface its error, so a behavioural test cannot
+// tell whether the others are still dereferencing getOrNull directly. Assert on
+// the source instead: no lookup may read a field straight off the nullable
+// result. Guarded uses that bind the result and null-check it — the embed path
+// deliberately falls back to a literal — do not match.
+func TestGenPkl_NoUnguardedResolvableLookup(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("generator", "gen.pkl"))
+	require.NoError(t, err)
+
+	unguarded := regexp.MustCompile(`MapResolvableResourceUri\(\)\.getOrNull\([^()]*\)\.`)
+	assert.Empty(t, unguarded.FindAllString(string(src), -1),
+		"resolvable lookups must go through requireResolvableInfo, not dereference getOrNull directly")
 }

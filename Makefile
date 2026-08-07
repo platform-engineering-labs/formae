@@ -258,6 +258,7 @@ test-generator-pkl:
 	# Stage 2: Unit tests
 	cd internal/schema/pkl/generator && pkl test tests/gen.pkl
 	cd internal/schema/pkl/generator && pkl test tests/jsonhelper.pkl
+	cd internal/schema/pkl/generator && pkl test tests/resolvables.pkl
 	# Stage 3: Integration test - generate + validate
 	cd internal/schema/pkl/generator && pkl test tests/pklGenerator.pkl
 	# Stage 4: Full pipeline validation - generate PKL and evaluate it

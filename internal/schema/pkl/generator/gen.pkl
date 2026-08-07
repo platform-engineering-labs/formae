@@ -349,6 +349,29 @@ function getResolvablePropertyMapping(typeName: String): Map<String, String> =
     else
         Map()
 
+/// Identifies which reference failed, for use in error messages. The label and
+/// stack are the reference's target — the resource being pointed at — which is
+/// what both the FakeResolvable carrier and the map rendered from it expose.
+local function referenceContext(label: Any, stack: Any): String =
+    "in the reference to resource \"\(label)\" in stack \"\(stack)\""
+
+/// Looks up the entry-point resolvable declared for a resource type URI.
+///
+/// Callers need the resolvable's import and class name to render a reference,
+/// so there is nothing sensible to fall back to when the lookup misses: a
+/// guessed or omitted import yields a forma file that looks fine and applies
+/// the wrong thing. Fail loudly instead, naming both the type and the reference
+/// that carried it.
+local function requireResolvableInfo(typeUri: String?, context: String): resolvables.Resolvable =
+    if (typeUri == null)
+        throw("Cannot render a resource reference \(context): the reference carries no resource type.")
+    else if (!resolvables.MapResolvableResourceUri().containsKey(typeUri))
+        throw("No resolvable is declared for resource type \"\(typeUri)\" \(context). "
+            + "The plugin schema for this type must declare a resolvable class that extends "
+            + "formae.Resolvable (or one of its specialisations) and sets its own `type`.")
+    else
+        resolvables.MapResolvableResourceUri()[typeUri]
+
 local function applyDynamicOrMapping(type: reflect.Class, value: Dynamic|Mapping): Typed|GenerationFailure|Any =
     let (valueAsMap = value.toMap())
     if (valueAsMap.containsKey("$res"))
@@ -536,7 +559,8 @@ local function parseValueEnhanced(value: Any): Any =
     let (importInfo = getImportInfoForType(value.getClass(), typeName, value))
     let (defaultMap =
       if (typeName == "FakeResolvable")
-        Map("__type__", typeName, "__import__", importInfo, "__import_statement__", resolvables.MapResolvableResourceUri().getOrNull(value.FakeType).moduleName)
+        Map("__type__", typeName, "__import__", importInfo, "__import_statement__",
+            requireResolvableInfo(value.FakeType, referenceContext(value.FakeLabel, value.FakeStack)).moduleName)
       else
         let (moduleUri = reflect.Class(value.getClass()).enclosingDeclaration.uri)
         if (moduleUri.startsWith("@") || (moduleUri.contains("://") && moduleUri.contains("#")))
@@ -578,7 +602,7 @@ local function parseValueEnhanced(value: Any): Any =
 local function getImportInfoForType(clazz: Class, typeName: String, value: Any): String =
   let (actualImport = getImportInfo(clazz))
   if (typeName == "FakeResolvable")
-    resolvables.MapResolvableResourceUri().getOrNull(value.FakeType).importName
+    requireResolvableInfo(value.FakeType, referenceContext(value.FakeLabel, value.FakeStack)).importName
   else
     actualImport
 
@@ -705,7 +729,9 @@ local function formatValueWithTypes(value: Any, indent: String): String =
       let (importInfo = value.getOrNull("__import__"))
       let (typeDeclaration =
         if (typeName.contains("FakeResolvable"))
-          let (resolvableInfo = resolvables.MapResolvableResourceUri().getOrNull(value.getOrNull("FakeType")))
+          let (resolvableInfo = requireResolvableInfo(
+            value.getOrNull("FakeType") as String?,
+            referenceContext(value.getOrNull("FakeLabel"), value.getOrNull("FakeStack"))))
           "new \(resolvableInfo.importName).\(resolvableInfo.clazz.simpleName)"
         else if (typeName == "FakeValue")
           "new formae.Value"
