@@ -919,14 +919,16 @@ func (rp *ResourcePersister) persistPolicyUpdate(update *policy_update.PolicyUpd
 			}
 		}
 		if policyType == "auto-reconcile" {
-			if err := rp.Send(
-				gen.ProcessID{Name: actornames.AutoReconciler, Node: rp.Node().Name()},
-				messages.PolicyRemoved{StackLabel: update.StackLabel},
-			); err != nil {
-				slog.Error("Failed to notify AutoReconciler of policy removal",
+			stack, lookupErr := rp.datastore.GetStackByLabel(update.StackLabel)
+			if lookupErr != nil {
+				slog.Error("Failed to look up stack for AutoReconciler notification",
 					"stackLabel", update.StackLabel,
-					"error", err)
-				// Don't fail the operation - just log the error
+					"error", lookupErr)
+			} else if stack == nil {
+				slog.Warn("Stack not found for AutoReconciler notification",
+					"stackLabel", update.StackLabel)
+			} else {
+				rp.notifyAutoReconcilerOfPolicyRemoval(update.StackLabel, stack.ID)
 			}
 		}
 
@@ -970,7 +972,14 @@ func (rp *ResourcePersister) persistPolicyUpdate(update *policy_update.PolicyUpd
 	case policy_update.PolicyOperationUpdate:
 		version, err = rp.datastore.UpdatePolicy(update.Policy, commandID)
 	case policy_update.PolicyOperationDelete:
-		version, err = rp.datastore.DeletePolicy(update.Policy.GetLabel())
+		// A stack label marks the policy as inline on that stack; the stack ID was
+		// resolved onto the policy above. Without one the policy is standalone, and
+		// DeletePolicy is scoped to standalone rows.
+		if update.StackLabel != "" {
+			version, err = rp.datastore.DeleteInlinePolicy(update.Policy.GetStackID(), update.Policy.GetLabel(), commandID)
+		} else {
+			version, err = rp.datastore.DeletePolicy(update.Policy.GetLabel())
+		}
 	case policy_update.PolicyOperationAttach:
 		// Attach standalone policy to stack via junction table
 		// We need to get the stack ID from the stack label
@@ -1036,7 +1045,51 @@ func (rp *ResourcePersister) persistPolicyUpdate(update *policy_update.PolicyUpd
 		}
 	}
 
+	// Notify the AutoReconciler if an inline auto-reconcile policy was deleted. The
+	// deletion is already persisted at this point, so the remaining-policy check does
+	// not see the policy that just went away.
+	if update.Operation == policy_update.PolicyOperationDelete && update.StackLabel != "" &&
+		update.Policy != nil && update.Policy.GetType() == "auto-reconcile" {
+		rp.notifyAutoReconcilerOfPolicyRemoval(update.StackLabel, update.Policy.GetStackID())
+	}
+
 	return nil
+}
+
+// notifyAutoReconcilerOfPolicyRemoval tells the AutoReconciler that a stack lost an
+// auto-reconcile policy, but only once no auto-reconcile policy is left effective for
+// the stack - neither inline nor attached standalone. A stack that still has one keeps
+// its schedule, because the AutoReconciler drops a stack outright when it is notified.
+// A failed check suppresses the notification: the AutoReconciler re-reads the datastore
+// on every beat and drops a schedule whose policy is gone, so a missing message only
+// delays that, while a wrong one stops the stack from being reconciled at all.
+func (rp *ResourcePersister) notifyAutoReconcilerOfPolicyRemoval(stackLabel, stackID string) {
+	policies, err := rp.datastore.GetPoliciesForStack(stackID)
+	if err != nil {
+		slog.Error("Failed to check remaining policies for AutoReconciler notification",
+			"stackLabel", stackLabel,
+			"stackID", stackID,
+			"error", err)
+		return
+	}
+	for _, policy := range policies {
+		if policy.GetType() == "auto-reconcile" {
+			slog.Debug("Auto-reconcile policy still effective for stack, keeping its schedule",
+				"stackLabel", stackLabel,
+				"policyLabel", policy.GetLabel())
+			return
+		}
+	}
+
+	if err := rp.Send(
+		gen.ProcessID{Name: actornames.AutoReconciler, Node: rp.Node().Name()},
+		messages.PolicyRemoved{StackLabel: stackLabel},
+	); err != nil {
+		slog.Error("Failed to notify AutoReconciler of policy removal",
+			"stackLabel", stackLabel,
+			"error", err)
+		// Don't fail the operation - just log the error
+	}
 }
 
 // cleanupEmptyStacks checks each stack and deletes it if it has no remaining resources.

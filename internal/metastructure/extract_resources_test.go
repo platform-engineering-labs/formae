@@ -237,6 +237,9 @@ func (m *mockExtractDatastore) UpdatePolicy(_ pkgmodel.Policy, _ string) (string
 func (m *mockExtractDatastore) GetPoliciesForStack(_ string) ([]pkgmodel.Policy, error) {
 	panic("not implemented")
 }
+func (m *mockExtractDatastore) GetInlinePoliciesForStack(_ string) ([]pkgmodel.Policy, error) {
+	panic("not implemented")
+}
 func (m *mockExtractDatastore) ListAllStandalonePolicies() ([]pkgmodel.Policy, error) {
 	panic("not implemented")
 }
@@ -252,6 +255,9 @@ func (m *mockExtractDatastore) GetAttachedPolicyLabelsForStack(_ string) ([]stri
 }
 func (m *mockExtractDatastore) DetachPolicyFromStack(_, _ string) error { panic("not implemented") }
 func (m *mockExtractDatastore) DeletePolicy(_ string) (string, error)   { panic("not implemented") }
+func (m *mockExtractDatastore) DeleteInlinePolicy(_, _, _ string) (string, error) {
+	panic("not implemented")
+}
 func (m *mockExtractDatastore) DeletePoliciesForStack(_ string, _ string) error {
 	panic("not implemented")
 }

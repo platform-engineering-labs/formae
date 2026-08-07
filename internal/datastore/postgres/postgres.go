@@ -2291,6 +2291,59 @@ func (d DatastorePostgres) GetPoliciesForStack(stackID string) ([]pkgmodel.Polic
 	return policies, nil
 }
 
+func (d DatastorePostgres) GetInlinePoliciesForStack(stackID string) ([]pkgmodel.Policy, error) {
+	ctx, span := tracer.Start(context.Background(), "GetInlinePoliciesForStack")
+	defer span.End()
+
+	// Standalone policies are stored with an empty stack id, so an empty stack id
+	// here would match them; a stack that is not identified has no inline policies.
+	if stackID == "" {
+		return nil, nil
+	}
+
+	// Only the policies the stack owns: the standalone policies attached to it
+	// through the stack_policies junction table are not inline. Liveness is decided
+	// per policy id: an id whose latest version is a tombstone is already deleted.
+	query := `
+		WITH latest_policies AS (
+			SELECT id, label, policy_type, policy_data, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			FROM policies
+			WHERE stack_id = $1
+		)
+		SELECT label, policy_type, policy_data
+		FROM latest_policies
+		WHERE rn = 1 AND operation != 'delete'
+	`
+
+	rows, err := d.pool.Query(ctx, query, stackID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var policies []pkgmodel.Policy
+	for rows.Next() {
+		var label, policyType, policyDataStr string
+		if err := rows.Scan(&label, &policyType, &policyDataStr); err != nil {
+			return nil, err
+		}
+
+		policy, err := deserializePolicyPostgres(label, policyType, policyDataStr, stackID)
+		if err != nil {
+			slog.Warn("Failed to deserialize policy, skipping", "error", err, "label", label, "type", policyType)
+			continue
+		}
+		policies = append(policies, policy)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return policies, nil
+}
+
 func (d DatastorePostgres) GetStandalonePolicy(label string) (pkgmodel.Policy, error) {
 	ctx, span := tracer.Start(context.Background(), "GetStandalonePolicy")
 	defer span.End()
@@ -2651,6 +2704,67 @@ func (d DatastorePostgres) DeletePolicy(policyLabel string) (string, error) {
 	}
 
 	slog.Debug("Deleted standalone policy", "label", policyLabel, "id", id)
+
+	return version, nil
+}
+
+func (d DatastorePostgres) DeleteInlinePolicy(stackID string, policyLabel string, commandID string) (string, error) {
+	ctx, span := tracer.Start(context.Background(), "DeleteInlinePolicy")
+	defer span.End()
+
+	// Standalone policies are stored with an empty stack id, so an empty stack id
+	// here would match them; there is no inline policy to delete without a stack.
+	if stackID == "" {
+		return "", nil
+	}
+
+	// Inline policy labels are only unique within their stack, so the lookup is
+	// scoped by stack_id as well as label. Liveness is decided per policy id: an
+	// id whose latest version is a tombstone is already deleted.
+	query := `
+		WITH latest_policies AS (
+			SELECT id, label, policy_type, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			FROM policies
+			WHERE stack_id = $1 AND label = $2
+		)
+		SELECT id, policy_type
+		FROM latest_policies
+		WHERE rn = 1 AND operation != 'delete'
+	`
+	rows, err := d.pool.Query(ctx, query, stackID, policyLabel)
+	if err != nil {
+		return "", fmt.Errorf("failed to get inline policy for deletion: %w", err)
+	}
+	defer rows.Close()
+
+	type policyToDelete struct {
+		id, policyType string
+	}
+	var policiesToDelete []policyToDelete
+	for rows.Next() {
+		var p policyToDelete
+		if err := rows.Scan(&p.id, &p.policyType); err != nil {
+			return "", fmt.Errorf("failed to scan inline policy for deletion: %w", err)
+		}
+		policiesToDelete = append(policiesToDelete, p)
+	}
+	if err := rows.Err(); err != nil {
+		return "", fmt.Errorf("failed to iterate inline policies for deletion: %w", err)
+	}
+
+	// An empty version reports that nothing live matched, so a replayed delete
+	// stays a no-op success instead of failing its command.
+	var version string
+	insertQuery := `INSERT INTO policies (id, version, command_id, operation, label, policy_type, stack_id, policy_data) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
+	for _, p := range policiesToDelete {
+		version = mksuid.New().String()
+		_, err = d.pool.Exec(ctx, insertQuery, p.id, version, commandID, "delete", policyLabel, p.policyType, stackID, "{}")
+		if err != nil {
+			return "", fmt.Errorf("failed to delete inline policy: %w", err)
+		}
+		slog.Debug("Deleted inline policy", "label", policyLabel, "id", p.id, "stackID", stackID)
+	}
 
 	return version, nil
 }

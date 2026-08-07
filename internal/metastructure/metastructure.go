@@ -1985,7 +1985,7 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 		return nil, err
 	}
 
-	policyUpdates, err := policy_update.NewPolicyUpdateGenerator(ds).GeneratePolicyUpdates(forma, command)
+	policyUpdates, err := policy_update.NewPolicyUpdateGenerator(ds).GeneratePolicyUpdates(forma, command, formaCommandConfig.Mode)
 	if err != nil {
 		return nil, err
 	}

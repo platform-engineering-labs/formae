@@ -5069,6 +5069,59 @@ func (d *DatastoreAuroraDataAPI) GetPoliciesForStack(stackID string) ([]pkgmodel
 	return policies, nil
 }
 
+func (d *DatastoreAuroraDataAPI) GetInlinePoliciesForStack(stackID string) ([]pkgmodel.Policy, error) {
+	ctx := context.Background()
+
+	// Standalone policies are stored with an empty stack id, so an empty stack id
+	// here would match them; a stack that is not identified has no inline policies.
+	if stackID == "" {
+		return nil, nil
+	}
+
+	// Only the policies the stack owns: the standalone policies attached to it
+	// through the stack_policies junction table are not inline. Liveness is decided
+	// per policy id: an id whose latest version is a tombstone is already deleted.
+	query := `
+		WITH latest_policies AS (
+			SELECT id, label, policy_type, policy_data, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			FROM policies
+			WHERE stack_id = :stack_id
+		)
+		SELECT label, policy_type, policy_data
+		FROM latest_policies
+		WHERE rn = 1 AND operation != 'delete'
+	`
+	params := []types.SqlParameter{
+		{Name: aws.String("stack_id"), Value: &types.FieldMemberStringValue{Value: stackID}},
+	}
+
+	result, err := d.executeStatement(ctx, query, params)
+	if err != nil {
+		return nil, err
+	}
+
+	var policies []pkgmodel.Policy
+	for _, record := range result.Records {
+		if len(record) < 3 {
+			continue
+		}
+
+		label, _ := getStringField(record[0])
+		policyType, _ := getStringField(record[1])
+		policyDataStr, _ := getStringField(record[2])
+
+		policy, err := deserializePolicyAurora(label, policyType, policyDataStr, stackID)
+		if err != nil {
+			slog.Warn("Failed to deserialize policy, skipping", "error", err, "label", label, "type", policyType)
+			continue
+		}
+		policies = append(policies, policy)
+	}
+
+	return policies, nil
+}
+
 func (d *DatastoreAuroraDataAPI) GetStandalonePolicy(label string) (pkgmodel.Policy, error) {
 	ctx := context.Background()
 
@@ -5471,6 +5524,72 @@ func (d *DatastoreAuroraDataAPI) DeletePolicy(policyLabel string) (string, error
 	}
 
 	slog.Debug("Deleted standalone policy", "label", policyLabel, "id", id)
+
+	return version, nil
+}
+
+func (d *DatastoreAuroraDataAPI) DeleteInlinePolicy(stackID string, policyLabel string, commandID string) (string, error) {
+	ctx := context.Background()
+
+	// Standalone policies are stored with an empty stack id, so an empty stack id
+	// here would match them; there is no inline policy to delete without a stack.
+	if stackID == "" {
+		return "", nil
+	}
+
+	// Inline policy labels are only unique within their stack, so the lookup is
+	// scoped by stack_id as well as label. Liveness is decided per policy id: an
+	// id whose latest version is a tombstone is already deleted.
+	query := `
+		WITH latest_policies AS (
+			SELECT id, label, policy_type, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			FROM policies
+			WHERE stack_id = :stack_id AND label = :policy_label
+		)
+		SELECT id, policy_type
+		FROM latest_policies
+		WHERE rn = 1 AND operation != 'delete'
+	`
+	params := []types.SqlParameter{
+		{Name: aws.String("stack_id"), Value: &types.FieldMemberStringValue{Value: stackID}},
+		{Name: aws.String("policy_label"), Value: &types.FieldMemberStringValue{Value: policyLabel}},
+	}
+	result, err := d.executeStatement(ctx, query, params)
+	if err != nil {
+		return "", fmt.Errorf("failed to get inline policy for deletion: %w", err)
+	}
+
+	// An empty version reports that nothing live matched, so a replayed delete
+	// stays a no-op success instead of failing its command.
+	var version string
+	insertQuery := `INSERT INTO policies (id, version, command_id, operation, label, policy_type, stack_id, policy_data) VALUES (:id, :version, :command_id, :operation, :label, :policy_type, :stack_id, :policy_data)`
+	for _, record := range result.Records {
+		if len(record) < 2 {
+			continue
+		}
+
+		id, _ := getStringField(record[0])
+		policyType, _ := getStringField(record[1])
+
+		version = mksuid.New().String()
+		insertParams := []types.SqlParameter{
+			{Name: aws.String("id"), Value: &types.FieldMemberStringValue{Value: id}},
+			{Name: aws.String("version"), Value: &types.FieldMemberStringValue{Value: version}},
+			{Name: aws.String("command_id"), Value: &types.FieldMemberStringValue{Value: commandID}},
+			{Name: aws.String("operation"), Value: &types.FieldMemberStringValue{Value: "delete"}},
+			{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: policyLabel}},
+			{Name: aws.String("policy_type"), Value: &types.FieldMemberStringValue{Value: policyType}},
+			{Name: aws.String("stack_id"), Value: &types.FieldMemberStringValue{Value: stackID}},
+			{Name: aws.String("policy_data"), Value: &types.FieldMemberStringValue{Value: "{}"}},
+		}
+
+		_, err = d.executeStatement(ctx, insertQuery, insertParams)
+		if err != nil {
+			return "", fmt.Errorf("failed to delete inline policy: %w", err)
+		}
+		slog.Debug("Deleted inline policy", "label", policyLabel, "id", id, "stackID", stackID)
+	}
 
 	return version, nil
 }

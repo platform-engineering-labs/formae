@@ -20,6 +20,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/datastore"
 	dssqlite "github.com/platform-engineering-labs/formae/internal/datastore/sqlite"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/policy_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
@@ -1941,4 +1942,260 @@ func TestResourcePersister_ReadOfUnchangedSecretDoesNotDrift(t *testing.T) {
 	require.True(t, ok)
 	assert.Empty(t, readHash,
 		"a read-back of an unchanged secret must not be treated as drift and re-persisted")
+}
+
+// createPolicyStack creates a stack for the policy persistence tests and returns it
+// with its generated ID populated.
+func createPolicyStack(t *testing.T, ds datastore.Datastore, label string) *pkgmodel.Stack {
+	t.Helper()
+	stack := &pkgmodel.Stack{Label: label, Description: "policy persistence"}
+	_, err := ds.CreateStack(stack, "cmd-stack")
+	require.NoError(t, err)
+	require.NotEmpty(t, stack.ID)
+	return stack
+}
+
+// seedPolicy stores a policy directly into the datastore, bypassing the actor. A
+// policy carrying a stack ID is inline on that stack; one without is standalone.
+func seedPolicy(t *testing.T, ds datastore.Datastore, policy pkgmodel.Policy) {
+	t.Helper()
+	_, err := ds.CreatePolicy(policy, "cmd-seed")
+	require.NoError(t, err)
+}
+
+// TestResourcePersister_DeletesInlinePolicyLeavingStandaloneIntact covers an inline
+// policy delete on a stack that also has a same-labelled standalone policy attached:
+// the inline row is tombstoned and the standalone one is untouched.
+func TestResourcePersister_DeletesInlinePolicyLeavingStandaloneIntact(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+
+	stack := createPolicyStack(t, ds, "inline-delete-stack")
+	seedPolicy(t, ds, &pkgmodel.TTLPolicy{
+		Label: "expiry", TTLSeconds: 86400, OnDependents: "cascade", StackID: stack.ID,
+	})
+	seedPolicy(t, ds, &pkgmodel.TTLPolicy{
+		Label: "expiry", TTLSeconds: 7200, OnDependents: "cascade",
+	})
+	require.NoError(t, ds.AttachPolicyToStack(stack.ID, "expiry"))
+
+	result := persister.Call(sender, policy_update.PersistPolicyUpdates{
+		CommandID: "cmd-delete",
+		PolicyUpdates: []policy_update.PolicyUpdate{
+			{
+				Operation:  policy_update.PolicyOperationDelete,
+				Policy:     &pkgmodel.TTLPolicy{Label: "expiry", TTLSeconds: 86400, OnDependents: "cascade"},
+				StackLabel: stack.Label,
+			},
+		},
+		StackIDMap: map[string]string{stack.Label: stack.ID},
+	})
+	require.NoError(t, result.Error)
+
+	inlinePolicies, err := ds.GetInlinePoliciesForStack(stack.ID)
+	require.NoError(t, err)
+	assert.Empty(t, inlinePolicies, "the inline policy must be tombstoned")
+
+	standalone, err := ds.GetStandalonePolicy("expiry")
+	require.NoError(t, err)
+	assert.NotNil(t, standalone, "the standalone policy sharing the label must survive an inline delete")
+}
+
+// TestResourcePersister_DeletesStandalonePolicyLeavingInlineIntact is the mirror
+// case: a delete without a stack label stays scoped to the standalone row.
+func TestResourcePersister_DeletesStandalonePolicyLeavingInlineIntact(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+
+	stack := createPolicyStack(t, ds, "standalone-delete-stack")
+	seedPolicy(t, ds, &pkgmodel.TTLPolicy{
+		Label: "expiry", TTLSeconds: 86400, OnDependents: "cascade", StackID: stack.ID,
+	})
+	seedPolicy(t, ds, &pkgmodel.TTLPolicy{
+		Label: "expiry", TTLSeconds: 7200, OnDependents: "cascade",
+	})
+
+	result := persister.Call(sender, policy_update.PersistPolicyUpdates{
+		CommandID: "cmd-delete",
+		PolicyUpdates: []policy_update.PolicyUpdate{
+			{
+				Operation: policy_update.PolicyOperationDelete,
+				Policy:    &pkgmodel.TTLPolicy{Label: "expiry", TTLSeconds: 7200, OnDependents: "cascade"},
+			},
+		},
+		StackIDMap: map[string]string{stack.Label: stack.ID},
+	})
+	require.NoError(t, result.Error)
+
+	standalone, err := ds.GetStandalonePolicy("expiry")
+	require.NoError(t, err)
+	assert.Nil(t, standalone, "the standalone policy must be tombstoned")
+
+	inlinePolicies, err := ds.GetInlinePoliciesForStack(stack.ID)
+	require.NoError(t, err)
+	assert.Len(t, inlinePolicies, 1, "the inline policy sharing the label must survive a standalone delete")
+}
+
+// TestResourcePersister_InlinePolicyDeleteFailsWithoutStackID pins the destructive
+// branch: an inline delete whose stack label cannot be resolved fails instead of
+// falling through to a differently scoped delete.
+func TestResourcePersister_InlinePolicyDeleteFailsWithoutStackID(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+
+	stack := createPolicyStack(t, ds, "unmapped-stack")
+	seedPolicy(t, ds, &pkgmodel.TTLPolicy{
+		Label: "expiry", TTLSeconds: 86400, OnDependents: "cascade", StackID: stack.ID,
+	})
+
+	result := persister.Call(sender, policy_update.PersistPolicyUpdates{
+		CommandID: "cmd-delete",
+		PolicyUpdates: []policy_update.PolicyUpdate{
+			{
+				Operation:  policy_update.PolicyOperationDelete,
+				Policy:     &pkgmodel.TTLPolicy{Label: "expiry", TTLSeconds: 86400, OnDependents: "cascade"},
+				StackLabel: stack.Label,
+			},
+		},
+		StackIDMap: map[string]string{},
+	})
+	require.Error(t, result.Error, "an inline delete without a resolvable stack ID must fail")
+
+	inlinePolicies, err := ds.GetInlinePoliciesForStack(stack.ID)
+	require.NoError(t, err)
+	assert.Len(t, inlinePolicies, 1, "a failed inline delete must leave the policy in place")
+}
+
+// TestResourcePersister_InlineAutoReconcileDeleteNotifiesAutoReconciler covers the
+// last auto-reconcile policy of a stack being deleted: the AutoReconciler is told to
+// drop the stack's schedule.
+func TestResourcePersister_InlineAutoReconcileDeleteNotifiesAutoReconciler(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+
+	stack := createPolicyStack(t, ds, "auto-reconcile-stack")
+	seedPolicy(t, ds, &pkgmodel.AutoReconcilePolicy{
+		Label: "inline-reconcile", IntervalSeconds: 300, StackID: stack.ID,
+	})
+
+	result := persister.Call(sender, policy_update.PersistPolicyUpdates{
+		CommandID: "cmd-delete",
+		PolicyUpdates: []policy_update.PolicyUpdate{
+			{
+				Operation:  policy_update.PolicyOperationDelete,
+				Policy:     &pkgmodel.AutoReconcilePolicy{Label: "inline-reconcile", IntervalSeconds: 300},
+				StackLabel: stack.Label,
+			},
+		},
+		StackIDMap: map[string]string{stack.Label: stack.ID},
+	})
+	require.NoError(t, result.Error)
+
+	persister.ShouldSend().
+		Message(messages.PolicyRemoved{StackLabel: stack.Label}).
+		Once().
+		Assert()
+}
+
+// TestResourcePersister_InlineAutoReconcileDeleteKeepsScheduleWhenStandaloneRemains
+// covers a stack carrying both an inline and an attached standalone auto-reconcile
+// policy: deleting the inline one leaves the stack auto-reconciled, so the
+// AutoReconciler must not be told to drop its schedule.
+func TestResourcePersister_InlineAutoReconcileDeleteKeepsScheduleWhenStandaloneRemains(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+
+	stack := createPolicyStack(t, ds, "shared-reconcile-stack")
+	seedPolicy(t, ds, &pkgmodel.AutoReconcilePolicy{
+		Label: "inline-reconcile", IntervalSeconds: 300, StackID: stack.ID,
+	})
+	seedPolicy(t, ds, &pkgmodel.AutoReconcilePolicy{Label: "shared-reconcile", IntervalSeconds: 600})
+	require.NoError(t, ds.AttachPolicyToStack(stack.ID, "shared-reconcile"))
+
+	result := persister.Call(sender, policy_update.PersistPolicyUpdates{
+		CommandID: "cmd-delete",
+		PolicyUpdates: []policy_update.PolicyUpdate{
+			{
+				Operation:  policy_update.PolicyOperationDelete,
+				Policy:     &pkgmodel.AutoReconcilePolicy{Label: "inline-reconcile", IntervalSeconds: 300},
+				StackLabel: stack.Label,
+			},
+		},
+		StackIDMap: map[string]string{stack.Label: stack.ID},
+	})
+	require.NoError(t, result.Error)
+
+	inlinePolicies, err := ds.GetInlinePoliciesForStack(stack.ID)
+	require.NoError(t, err)
+	require.Empty(t, inlinePolicies, "the inline policy must be tombstoned")
+
+	persister.ShouldNotSend().
+		Message(messages.PolicyRemoved{StackLabel: stack.Label}).
+		Assert()
+}
+
+// TestResourcePersister_DetachKeepsScheduleWhenInlineAutoReconcileRemains covers the
+// same invariant on the detach path: detaching a standalone auto-reconcile policy
+// from a stack that also declares an inline one must not drop the schedule.
+func TestResourcePersister_DetachKeepsScheduleWhenInlineAutoReconcileRemains(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+
+	stack := createPolicyStack(t, ds, "detach-shared-stack")
+	seedPolicy(t, ds, &pkgmodel.AutoReconcilePolicy{
+		Label: "inline-reconcile", IntervalSeconds: 300, StackID: stack.ID,
+	})
+	seedPolicy(t, ds, &pkgmodel.AutoReconcilePolicy{Label: "shared-reconcile", IntervalSeconds: 600})
+	require.NoError(t, ds.AttachPolicyToStack(stack.ID, "shared-reconcile"))
+
+	result := persister.Call(sender, policy_update.PersistPolicyUpdates{
+		CommandID: "cmd-detach",
+		PolicyUpdates: []policy_update.PolicyUpdate{
+			{
+				Operation:  policy_update.PolicyOperationDetach,
+				PolicyRef:  "shared-reconcile",
+				StackLabel: stack.Label,
+			},
+		},
+		StackIDMap: map[string]string{stack.Label: stack.ID},
+	})
+	require.NoError(t, result.Error)
+
+	attached, err := ds.IsPolicyAttachedToStack(stack.Label, "shared-reconcile")
+	require.NoError(t, err)
+	require.False(t, attached, "the standalone policy must be detached")
+
+	persister.ShouldNotSend().
+		Message(messages.PolicyRemoved{StackLabel: stack.Label}).
+		Assert()
+}
+
+// TestResourcePersister_DetachNotifiesAutoReconcilerWhenNoPolicyRemains keeps the
+// detach notification alive for the case it was written for: the detached policy was
+// the stack's only auto-reconcile policy.
+func TestResourcePersister_DetachNotifiesAutoReconcilerWhenNoPolicyRemains(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+
+	stack := createPolicyStack(t, ds, "detach-only-stack")
+	seedPolicy(t, ds, &pkgmodel.AutoReconcilePolicy{Label: "shared-reconcile", IntervalSeconds: 600})
+	require.NoError(t, ds.AttachPolicyToStack(stack.ID, "shared-reconcile"))
+
+	result := persister.Call(sender, policy_update.PersistPolicyUpdates{
+		CommandID: "cmd-detach",
+		PolicyUpdates: []policy_update.PolicyUpdate{
+			{
+				Operation:  policy_update.PolicyOperationDetach,
+				PolicyRef:  "shared-reconcile",
+				StackLabel: stack.Label,
+			},
+		},
+		StackIDMap: map[string]string{stack.Label: stack.ID},
+	})
+	require.NoError(t, result.Error)
+
+	persister.ShouldSend().
+		Message(messages.PolicyRemoved{StackLabel: stack.Label}).
+		Once().
+		Assert()
 }
