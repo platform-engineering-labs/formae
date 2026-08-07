@@ -228,10 +228,14 @@ func (d *DatastoreMSSQL) ListAllStacks() ([]*pkgmodel.Stack, error) {
 	ctx, span := mssqlTracer.Start(context.Background(), "ListAllStacks")
 	defer span.End()
 
+	// CreatedAt comes from the stack's first version, not its latest: a stack
+	// gains a version whenever its description changes, so the latest version's
+	// valid_from is a modification time, not a creation time.
 	query := `
-		SELECT id, label, description, valid_from FROM (
-			SELECT id, label, description, valid_from, operation,
-			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE Latin1_General_BIN2 DESC) as rn
+		SELECT id, label, description, created_at FROM (
+			SELECT id, label, description, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE Latin1_General_BIN2 DESC) as rn,
+			       FIRST_VALUE(valid_from) OVER (PARTITION BY id ORDER BY version COLLATE Latin1_General_BIN2 ASC) as created_at
 			FROM stacks
 		) sub
 		WHERE rn = 1 AND operation != 'delete'
@@ -246,15 +250,15 @@ func (d *DatastoreMSSQL) ListAllStacks() ([]*pkgmodel.Stack, error) {
 	var stacks []*pkgmodel.Stack
 	for rows.Next() {
 		var id, label, description string
-		var validFrom time.Time
-		if err := rows.Scan(&id, &label, &description, &validFrom); err != nil {
+		var createdAt time.Time
+		if err := rows.Scan(&id, &label, &description, &createdAt); err != nil {
 			return nil, err
 		}
 		stacks = append(stacks, &pkgmodel.Stack{
 			ID:          id,
 			Label:       label,
 			Description: description,
-			CreatedAt:   validFrom,
+			CreatedAt:   createdAt,
 		})
 	}
 

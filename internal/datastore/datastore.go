@@ -129,6 +129,26 @@ type ExpiredStackInfo struct {
 	StackLabel   string
 	StackID      string
 	OnDependents string // "abort" or "cascade"
+	// StackCreatedAt is the stack's first version's timestamp — the anchor a
+	// relative TTL counts from.
+	StackCreatedAt time.Time
+	// ExpiresAt is the policy's absolute deadline in its stored form, empty for
+	// a relative policy; TTLSeconds is the relative deadline, nil for an
+	// absolute one. Both are reported so an expiry can be explained in the log
+	// rather than only announced.
+	ExpiresAt  string
+	TTLSeconds *int64
+}
+
+// Deadline renders the instant this stack was due to be destroyed, for logging.
+func (e ExpiredStackInfo) Deadline() string {
+	if e.ExpiresAt != "" {
+		return e.ExpiresAt
+	}
+	if e.TTLSeconds == nil {
+		return "unknown"
+	}
+	return e.StackCreatedAt.Add(time.Duration(*e.TTLSeconds) * time.Second).UTC().Format(pkgmodel.ExpiresAtLayout)
 }
 
 // StackReconcileInfo contains information about a stack with an auto-reconcile policy.

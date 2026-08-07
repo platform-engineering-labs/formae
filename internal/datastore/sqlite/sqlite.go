@@ -1955,12 +1955,16 @@ func (d DatastoreSQLite) ListAllStacks() ([]*pkgmodel.Stack, error) {
 	_, span := sqliteTracer.Start(context.Background(), "ListAllStackMetadata")
 	defer span.End()
 
-	// Get all stacks at their latest version that aren't deleted
-	// Uses window function to reliably get the most recent version per stack id
+	// Get all stacks at their latest version that aren't deleted.
+	// Uses window functions to reliably get the most recent version per stack id
+	// for the metadata, and the first version's timestamp for CreatedAt — a
+	// stack gains a version whenever its description changes, so the latest
+	// version's valid_from is a modification time, not a creation time.
 	query := `
-		SELECT id, label, description, valid_from FROM (
-			SELECT id, label, description, valid_from, operation,
-			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version DESC) as rn
+		SELECT id, label, description, created_at FROM (
+			SELECT id, label, description, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version DESC) as rn,
+			       FIRST_VALUE(valid_from) OVER (PARTITION BY id ORDER BY version ASC) as created_at
 			FROM stacks
 		) sub
 		WHERE rn = 1 AND operation != 'delete'
@@ -1975,15 +1979,15 @@ func (d DatastoreSQLite) ListAllStacks() ([]*pkgmodel.Stack, error) {
 	var stacks []*pkgmodel.Stack
 	for rows.Next() {
 		var id, label, description string
-		var validFrom time.Time
-		if err := rows.Scan(&id, &label, &description, &validFrom); err != nil {
+		var createdAt time.Time
+		if err := rows.Scan(&id, &label, &description, &createdAt); err != nil {
 			return nil, err
 		}
 		stacks = append(stacks, &pkgmodel.Stack{
 			ID:          id,
 			Label:       label,
 			Description: description,
-			CreatedAt:   validFrom,
+			CreatedAt:   createdAt,
 		})
 	}
 
@@ -2629,6 +2633,24 @@ func deserializePolicy(label, policyType, policyDataStr, stackID string) (pkgmod
 	}
 }
 
+// ttlExpiredPredicateSQLite decides whether a TTL policy's deadline has passed.
+// It is shared by the inline and standalone branches of GetExpiredStacks so the
+// two cannot drift apart.
+//
+// An absolute deadline is compared as a string, not as a timestamp. ExpiresAt is
+// stored in one fixed-width UTC form, so byte order — SQLite's default TEXT
+// collation — is chronological order, and the comparison needs no conversion. A
+// malformed value therefore never sorts before now: that one policy fails safe
+// instead of taking the rest of the scan down with it.
+//
+// A row carrying both keys is not reachable through any accepted input, but is
+// resolved here in favour of ExpiresAt rather than left to chance.
+const ttlExpiredPredicateSQLite = `CASE
+				WHEN json_extract(p.policy_data, '$.ExpiresAt') IS NOT NULL
+				THEN json_extract(p.policy_data, '$.ExpiresAt') < strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+				ELSE datetime(s.created_at, '+' || json_extract(p.policy_data, '$.TTLSeconds') || ' seconds') < datetime('now')
+			END`
+
 func (d DatastoreSQLite) GetExpiredStacks() ([]datastore.ExpiredStackInfo, error) {
 	slog.Debug("SQLite START", "method", "GetExpiredStacks")
 	start := time.Now()
@@ -2638,13 +2660,14 @@ func (d DatastoreSQLite) GetExpiredStacks() ([]datastore.ExpiredStackInfo, error
 
 	// Get stacks with TTL policies that have expired:
 	// - Handles both inline policies (stack_id set) and standalone policies (via stack_policies junction)
-	// - Calculate expiration as stack.valid_from + policy.ttl_seconds
+	// - Calculate expiration as the policy's ExpiresAt, or the stack's creation time plus its TTL
 	// - Exclude stacks with active forma commands
 	// - Only consider latest non-deleted versions of both stacks and policies
-	query := `
+	query := fmt.Sprintf(`
 		WITH latest_stacks AS (
 			SELECT id, label, valid_from, operation,
-			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version DESC) as rn
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version DESC) as rn,
+			       FIRST_VALUE(valid_from) OVER (PARTITION BY id ORDER BY version ASC) as created_at
 			FROM stacks
 		),
 		latest_policies AS (
@@ -2656,19 +2679,23 @@ func (d DatastoreSQLite) GetExpiredStacks() ([]datastore.ExpiredStackInfo, error
 		inline_expired AS (
 			SELECT s.label as stack_label, s.id as stack_id,
 			       json_extract(p.policy_data, '$.OnDependents') as on_dependents,
-			       s.valid_from
+			       s.created_at,
+			       json_extract(p.policy_data, '$.ExpiresAt') as expires_at,
+			       json_extract(p.policy_data, '$.TTLSeconds') as ttl_seconds
 			FROM latest_stacks s
 			JOIN latest_policies p ON p.stack_id = s.id
 			WHERE s.rn = 1 AND s.operation != 'delete'
 			AND p.rn = 1 AND p.operation != 'delete'
 			AND p.policy_type = 'ttl'
-			AND datetime(s.valid_from, '+' || json_extract(p.policy_data, '$.TTLSeconds') || ' seconds') < datetime('now')
+			AND %[1]s
 		),
 		-- Standalone policies: attached via stack_policies junction table
 		standalone_expired AS (
 			SELECT s.label as stack_label, s.id as stack_id,
 			       json_extract(p.policy_data, '$.OnDependents') as on_dependents,
-			       s.valid_from
+			       s.created_at,
+			       json_extract(p.policy_data, '$.ExpiresAt') as expires_at,
+			       json_extract(p.policy_data, '$.TTLSeconds') as ttl_seconds
 			FROM latest_stacks s
 			JOIN stack_policies sp ON sp.stack_id = s.id
 			JOIN latest_policies p ON p.id = sp.policy_id
@@ -2676,7 +2703,7 @@ func (d DatastoreSQLite) GetExpiredStacks() ([]datastore.ExpiredStackInfo, error
 			AND p.rn = 1 AND p.operation != 'delete'
 			AND p.policy_type = 'ttl'
 			AND (p.stack_id IS NULL OR p.stack_id = '')  -- standalone policies have NULL or empty stack_id
-			AND datetime(s.valid_from, '+' || json_extract(p.policy_data, '$.TTLSeconds') || ' seconds') < datetime('now')
+			AND %[1]s
 		),
 		-- Combine both inline and standalone expired stacks
 		all_expired AS (
@@ -2684,7 +2711,7 @@ func (d DatastoreSQLite) GetExpiredStacks() ([]datastore.ExpiredStackInfo, error
 			UNION
 			SELECT * FROM standalone_expired
 		)
-		SELECT stack_label, stack_id, on_dependents
+		SELECT stack_label, stack_id, on_dependents, created_at, expires_at, ttl_seconds
 		FROM all_expired
 		WHERE NOT EXISTS (
 			SELECT 1 FROM resource_updates ru
@@ -2692,8 +2719,8 @@ func (d DatastoreSQLite) GetExpiredStacks() ([]datastore.ExpiredStackInfo, error
 			WHERE ru.stack_label = all_expired.stack_label
 			AND fc.state NOT IN ('Success', 'Failed', 'Canceled')
 		)
-		ORDER BY valid_from
-	`
+		ORDER BY created_at
+	`, ttlExpiredPredicateSQLite)
 
 	rows, err := d.conn.Query(query)
 	if err != nil {
@@ -2704,14 +2731,20 @@ func (d DatastoreSQLite) GetExpiredStacks() ([]datastore.ExpiredStackInfo, error
 	var result []datastore.ExpiredStackInfo
 	for rows.Next() {
 		var info datastore.ExpiredStackInfo
-		var onDependents sql.NullString
-		if err := rows.Scan(&info.StackLabel, &info.StackID, &onDependents); err != nil {
+		var onDependents, expiresAt sql.NullString
+		var ttlSeconds sql.NullInt64
+		if err := rows.Scan(&info.StackLabel, &info.StackID, &onDependents,
+			&info.StackCreatedAt, &expiresAt, &ttlSeconds); err != nil {
 			return nil, err
 		}
 		if onDependents.Valid {
 			info.OnDependents = onDependents.String
 		} else {
 			info.OnDependents = "abort" // default
+		}
+		info.ExpiresAt = expiresAt.String
+		if ttlSeconds.Valid {
+			info.TTLSeconds = &ttlSeconds.Int64
 		}
 		result = append(result, info)
 	}

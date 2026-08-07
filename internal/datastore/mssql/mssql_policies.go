@@ -586,16 +586,38 @@ func (d *DatastoreMSSQL) DeletePoliciesForStack(stackID string, commandID string
 	return nil
 }
 
+// ttlExpiredPredicateMSSQL decides whether a TTL policy's deadline has passed.
+// It is shared by the inline and standalone branches of GetExpiredStacks so the
+// two cannot drift apart.
+//
+// An absolute deadline is compared as a string, not as a datetime. ExpiresAt is
+// stored in one fixed-width UTC form, so byte order under Latin1_General_BIN2 is
+// chronological order, and the comparison needs no conversion. That matters for
+// more than tidiness: converting means a single unparsable value aborts the
+// whole statement, so one corrupt row would stop every stack in the installation
+// from ever expiring. Compared as a string, a malformed value simply never sorts
+// before now — that one policy fails safe and the rest of the scan is unaffected.
+// TRY_CAST guards the relative branch for the same reason.
+//
+// A row carrying both keys is not reachable through any accepted input, but is
+// resolved here in favour of ExpiresAt rather than left to chance.
+const ttlExpiredPredicateMSSQL = `CASE
+				WHEN JSON_VALUE(p.policy_data, '$.ExpiresAt') IS NOT NULL
+				THEN CASE WHEN JSON_VALUE(p.policy_data, '$.ExpiresAt') COLLATE Latin1_General_BIN2 < CONVERT(VARCHAR(19), SYSUTCDATETIME(), 126) + 'Z' THEN 1 ELSE 0 END
+				ELSE CASE WHEN DATEADD(SECOND, TRY_CAST(JSON_VALUE(p.policy_data, '$.TTLSeconds') AS INT), s.created_at) < SYSUTCDATETIME() THEN 1 ELSE 0 END
+			END = 1`
+
 func (d *DatastoreMSSQL) GetExpiredStacks() ([]datastore.ExpiredStackInfo, error) {
 	ctx, span := mssqlTracer.Start(context.Background(), "GetExpiredStacks")
 	defer span.End()
 
 	// Stacks whose TTL (inline or attached standalone) has elapsed, excluding any
 	// with active commands. JSON_VALUE + DATEADD stand in for postgres interval math.
-	query := `
+	query := fmt.Sprintf(`
 		WITH latest_stacks AS (
 			SELECT id, label, valid_from, operation,
-			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE Latin1_General_BIN2 DESC) as rn
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE Latin1_General_BIN2 DESC) as rn,
+			       FIRST_VALUE(valid_from) OVER (PARTITION BY id ORDER BY version COLLATE Latin1_General_BIN2 ASC) as created_at
 			FROM stacks
 		),
 		latest_policies AS (
@@ -606,18 +628,22 @@ func (d *DatastoreMSSQL) GetExpiredStacks() ([]datastore.ExpiredStackInfo, error
 		inline_expired AS (
 			SELECT s.label as stack_label, s.id as stack_id,
 			       JSON_VALUE(p.policy_data, '$.OnDependents') as on_dependents,
-			       s.valid_from
+			       s.created_at,
+			       JSON_VALUE(p.policy_data, '$.ExpiresAt') as expires_at,
+			       TRY_CAST(JSON_VALUE(p.policy_data, '$.TTLSeconds') AS BIGINT) as ttl_seconds
 			FROM latest_stacks s
 			JOIN latest_policies p ON p.stack_id = s.id
 			WHERE s.rn = 1 AND s.operation != 'delete'
 			AND p.rn = 1 AND p.operation != 'delete'
 			AND p.policy_type = 'ttl'
-			AND DATEADD(SECOND, CAST(JSON_VALUE(p.policy_data, '$.TTLSeconds') AS INT), s.valid_from) < SYSUTCDATETIME()
+			AND %[1]s
 		),
 		standalone_expired AS (
 			SELECT s.label as stack_label, s.id as stack_id,
 			       JSON_VALUE(p.policy_data, '$.OnDependents') as on_dependents,
-			       s.valid_from
+			       s.created_at,
+			       JSON_VALUE(p.policy_data, '$.ExpiresAt') as expires_at,
+			       TRY_CAST(JSON_VALUE(p.policy_data, '$.TTLSeconds') AS BIGINT) as ttl_seconds
 			FROM latest_stacks s
 			JOIN stack_policies sp ON sp.stack_id = s.id
 			JOIN latest_policies p ON p.id = sp.policy_id
@@ -625,14 +651,14 @@ func (d *DatastoreMSSQL) GetExpiredStacks() ([]datastore.ExpiredStackInfo, error
 			AND p.rn = 1 AND p.operation != 'delete'
 			AND p.policy_type = 'ttl'
 			AND (p.stack_id IS NULL OR p.stack_id = '')
-			AND DATEADD(SECOND, CAST(JSON_VALUE(p.policy_data, '$.TTLSeconds') AS INT), s.valid_from) < SYSUTCDATETIME()
+			AND %[1]s
 		),
 		all_expired AS (
 			SELECT * FROM inline_expired
 			UNION
 			SELECT * FROM standalone_expired
 		)
-		SELECT stack_label, stack_id, on_dependents
+		SELECT stack_label, stack_id, on_dependents, created_at, expires_at, ttl_seconds
 		FROM all_expired
 		WHERE NOT EXISTS (
 			SELECT 1 FROM resource_updates ru
@@ -640,7 +666,7 @@ func (d *DatastoreMSSQL) GetExpiredStacks() ([]datastore.ExpiredStackInfo, error
 			WHERE ru.stack_label = all_expired.stack_label
 			AND fc.state NOT IN ('Success', 'Failed', 'Canceled')
 		)
-		ORDER BY valid_from`
+		ORDER BY created_at`, ttlExpiredPredicateMSSQL)
 
 	rows, err := d.conn.QueryContext(ctx, query)
 	if err != nil {
@@ -651,14 +677,20 @@ func (d *DatastoreMSSQL) GetExpiredStacks() ([]datastore.ExpiredStackInfo, error
 	var result []datastore.ExpiredStackInfo
 	for rows.Next() {
 		var info datastore.ExpiredStackInfo
-		var onDependents sql.NullString
-		if err := rows.Scan(&info.StackLabel, &info.StackID, &onDependents); err != nil {
+		var onDependents, expiresAt sql.NullString
+		var ttlSeconds sql.NullInt64
+		if err := rows.Scan(&info.StackLabel, &info.StackID, &onDependents,
+			&info.StackCreatedAt, &expiresAt, &ttlSeconds); err != nil {
 			return nil, err
 		}
 		if onDependents.Valid {
 			info.OnDependents = onDependents.String
 		} else {
 			info.OnDependents = "abort" // default
+		}
+		info.ExpiresAt = expiresAt.String
+		if ttlSeconds.Valid {
+			info.TTLSeconds = &ttlSeconds.Int64
 		}
 		result = append(result, info)
 	}
