@@ -1206,12 +1206,24 @@ type backoffConfig struct {
 // than a misleading not-found timeout. No re-trigger is issued once the time
 // remaining before the deadline drops below the poll interval (the scan grace),
 // since a scan started that late has almost no chance of completing in time.
+// waitDescription supplies the nouns waitForResource uses in its log lines and
+// error messages, so one loop can serve both the discovery wait ("discovery" /
+// "appear in inventory") and the out-of-band delete wait ("sync" / "leave
+// inventory") without either reporting the other's vocabulary.
+type waitDescription struct {
+	// trigger names what re-triggering does, e.g. "discovery" or "sync".
+	trigger string
+	// condition names what the check waits for, e.g. "leave inventory".
+	condition string
+}
+
 func waitForResource(
 	clk clock,
 	logf func(format string, args ...any),
 	timeout time.Duration,
 	backoff backoffConfig,
 	pollInterval time.Duration,
+	desc waitDescription,
 	trigger func() error,
 	check func() (bool, error),
 ) error {
@@ -1240,7 +1252,7 @@ func waitForResource(
 				attempts++
 				if err := trigger(); err != nil {
 					lastTriggerErr = err
-					logf("discovery trigger attempt %d failed (continuing): %v", attempts, err)
+					logf("%s trigger attempt %d failed (continuing): %v", desc.trigger, attempts, err)
 				} else {
 					successes++
 				}
@@ -1257,9 +1269,9 @@ func waitForResource(
 
 		found, err := check()
 		if err != nil {
-			logf("discovery inventory check failed (will retry): %v", err)
+			logf("%s inventory check failed (will retry): %v", desc.trigger, err)
 		} else if found {
-			logf("resource discovered after %d trigger attempt(s) in %v", attempts, clk.Now().Sub(start))
+			logf("resource observed to %s after %d %s trigger attempt(s) in %v", desc.condition, attempts, desc.trigger, clk.Now().Sub(start))
 			return nil
 		}
 
@@ -1267,9 +1279,9 @@ func waitForResource(
 	}
 
 	if attempts > 0 && successes == 0 {
-		return fmt.Errorf("could not trigger discovery: all %d trigger attempt(s) failed; last error: %v", attempts, lastTriggerErr)
+		return fmt.Errorf("could not trigger %s: all %d trigger attempt(s) failed; last error: %v", desc.trigger, attempts, lastTriggerErr)
 	}
-	msg := fmt.Sprintf("timeout after %v: resource did not appear in inventory (%d discovery trigger attempt(s))", timeout, attempts)
+	msg := fmt.Sprintf("timeout after %v: resource did not %s (%d %s trigger attempt(s))", timeout, desc.condition, attempts, desc.trigger)
 	if lastTriggerErr != nil {
 		msg += fmt.Sprintf("; last trigger error: %v", lastTriggerErr)
 	}
@@ -1292,6 +1304,7 @@ func (h *TestHarness) WaitForResourceDiscovered(resourceType, nativeID string, t
 		timeout,
 		backoff,
 		discoveryPollInterval,
+		waitDescription{trigger: "discovery", condition: "appear in inventory"},
 		h.TriggerDiscovery,
 		func() (bool, error) {
 			inventory, err := h.Inventory(fmt.Sprintf("type: %s managed: false", resourceType))
@@ -2145,43 +2158,45 @@ func (h *TestHarness) DeleteResourceOOB(resourceType, nativeID string, target *p
 	return h.DeleteUnmanagedResource(resourceType, nativeID, target)
 }
 
-// WaitForResourceRemovedFromInventory polls the inventory until the specified resource
-// is no longer present. This is used to verify that sync correctly tombstones resources
-// that were deleted out-of-band.
+// WaitForResourceRemovedFromInventory waits for a resource deleted out-of-band
+// to be tombstoned: it re-triggers sync on a backoff schedule while polling the
+// inventory for the given type + nativeID, until the resource is gone or the
+// timeout elapses.
+//
+// The re-trigger is the point. A single sync can start inside the cloud
+// provider's propagation window for the delete, read the resource as still
+// present, and persist that. Polling the inventory alone after that point can
+// never observe the tombstone, because nothing goes back out to the cloud, so
+// the wait burns its whole budget on state that is frozen and stale. Re-syncing
+// across the window is what makes eventual consistency tolerable here, exactly
+// as re-scanning does for WaitForResourceDiscovered.
 func (h *TestHarness) WaitForResourceRemovedFromInventory(resourceType, nativeID string, timeout time.Duration) error {
-	h.t.Logf("Waiting for resource to be removed from inventory: type=%s, nativeID=%s", resourceType, nativeID)
+	backoff := getOOBSyncRetriggerBackoff()
+	h.t.Logf("Waiting for resource to be removed from inventory: type=%s, nativeID=%s (timeout=%v, base re-trigger=%v)", resourceType, nativeID, timeout, backoff.initial)
 
-	deadline := time.Now().Add(timeout)
-	pollInterval := 2 * time.Second
-
-	for time.Now().Before(deadline) {
-		inventory, err := h.Inventory(fmt.Sprintf("type: %s", resourceType))
-		if err != nil {
-			h.t.Logf("Inventory query failed (will retry): %v", err)
-			time.Sleep(pollInterval)
-			continue
-		}
-
-		found := false
-		for _, res := range inventory.Resources {
-			if resNativeID, ok := res["NativeID"].(string); ok {
-				if resNativeID == nativeID {
-					found = true
-					break
+	return waitForResource(
+		realClock{},
+		h.t.Logf,
+		timeout,
+		backoff,
+		oobSyncPollInterval,
+		waitDescription{trigger: "sync", condition: "leave inventory"},
+		h.Sync,
+		func() (bool, error) {
+			inventory, err := h.Inventory(fmt.Sprintf("type: %s", resourceType))
+			if err != nil {
+				return false, err
+			}
+			for _, res := range inventory.Resources {
+				if resNativeID, ok := res["NativeID"].(string); ok && resNativeID == nativeID {
+					h.t.Logf("Resource still in inventory, polling...")
+					return false, nil
 				}
 			}
-		}
-
-		if !found {
 			h.t.Logf("Resource removed from inventory: NativeID=%s", nativeID)
-			return nil
-		}
-
-		h.t.Logf("Resource still in inventory, polling...")
-		time.Sleep(pollInterval)
-	}
-
-	return fmt.Errorf("timeout waiting for resource %s (type: %s) to be removed from inventory after %v", nativeID, resourceType, timeout)
+			return true, nil
+		},
+	)
 }
 
 // pluginNameToPascalCase converts a hyphenated plugin name to PascalCase

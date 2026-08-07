@@ -34,7 +34,8 @@ func TestWaitForResource(t *testing.T) {
 
 		err := waitForResource(clk, t.Logf, 100*time.Second,
 			backoffConfig{initial: 10 * time.Second, max: 60 * time.Second},
-			2*time.Second, trigger, check)
+			2*time.Second, waitDescription{trigger: "discovery", condition: "appear in inventory"},
+			trigger, check)
 		if err != nil {
 			t.Fatalf("expected success, got error: %v", err)
 		}
@@ -54,7 +55,8 @@ func TestWaitForResource(t *testing.T) {
 
 		_ = waitForResource(clk, t.Logf, 200*time.Second,
 			backoffConfig{initial: 10 * time.Second, max: 60 * time.Second},
-			5*time.Second, trigger, check)
+			5*time.Second, waitDescription{trigger: "discovery", condition: "appear in inventory"},
+			trigger, check)
 
 		want := []time.Duration{0, 10, 30, 70, 130, 190}
 		for i := range want {
@@ -78,7 +80,8 @@ func TestWaitForResource(t *testing.T) {
 
 		err := waitForResource(clk, t.Logf, 20*time.Second,
 			backoffConfig{initial: 10 * time.Second, max: 60 * time.Second},
-			5*time.Second, trigger, check)
+			5*time.Second, waitDescription{trigger: "discovery", condition: "appear in inventory"},
+			trigger, check)
 		if err == nil {
 			t.Fatal("expected timeout error, got nil")
 		}
@@ -101,7 +104,8 @@ func TestWaitForResource(t *testing.T) {
 
 		err := waitForResource(clk, t.Logf, 20*time.Second,
 			backoffConfig{initial: 10 * time.Second, max: 60 * time.Second},
-			5*time.Second, trigger, check)
+			5*time.Second, waitDescription{trigger: "discovery", condition: "appear in inventory"},
+			trigger, check)
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}
@@ -127,7 +131,8 @@ func TestWaitForResource(t *testing.T) {
 
 		err := waitForResource(clk, t.Logf, 100*time.Second,
 			backoffConfig{initial: 10 * time.Second, max: 60 * time.Second},
-			2*time.Second, trigger, check)
+			2*time.Second, waitDescription{trigger: "discovery", condition: "appear in inventory"},
+			trigger, check)
 		if err != nil {
 			t.Fatalf("a transient first-trigger error must not abort the wait, got: %v", err)
 		}
@@ -143,7 +148,8 @@ func TestWaitForResource(t *testing.T) {
 		// 9s deadline — below the ~one-poll-interval scan grace, so it is skipped.
 		err := waitForResource(clk, t.Logf, 9*time.Second,
 			backoffConfig{initial: 8 * time.Second, max: 60 * time.Second},
-			2*time.Second, trigger, check)
+			2*time.Second, waitDescription{trigger: "discovery", condition: "appear in inventory"},
+			trigger, check)
 		if err == nil {
 			t.Fatal("expected timeout error, got nil")
 		}
@@ -179,6 +185,76 @@ func TestGetDiscoveryRetriggerBackoff(t *testing.T) {
 			}
 			if got.max != discoveryRetriggerCap {
 				t.Errorf("max = %v, want %v", got.max, discoveryRetriggerCap)
+			}
+		})
+	}
+}
+
+// The out-of-band delete wait re-uses the same loop as the discovery wait. Its
+// distinguishing requirement is that it must re-trigger sync: a single sync can
+// land inside the cloud provider's propagation window for the delete, read the
+// resource as still present, and cache that. Polling the inventory alone after
+// that point can never observe the tombstone.
+func TestWaitForResource_RemovalRetriggersSync(t *testing.T) {
+	t.Run("resource leaves inventory only after a later sync", func(t *testing.T) {
+		clk := &fakeClock{now: clockBase}
+		syncs := 0
+		trigger := func() error { syncs++; return nil }
+		// Sync #1 races the delete and still sees the resource; only the second
+		// sync observes it gone.
+		stillPresent := func() (bool, error) { return syncs >= 2, nil }
+
+		err := waitForResource(clk, t.Logf, 100*time.Second,
+			backoffConfig{initial: 10 * time.Second, max: 60 * time.Second},
+			2*time.Second, waitDescription{trigger: "sync", condition: "leave inventory"},
+			trigger, stillPresent)
+		if err != nil {
+			t.Fatalf("expected success, got error: %v", err)
+		}
+		if syncs < 2 {
+			t.Errorf("expected at least 2 sync triggers, got %d", syncs)
+		}
+	})
+
+	t.Run("timeout message names the sync trigger and the removal condition", func(t *testing.T) {
+		clk := &fakeClock{now: clockBase}
+		trigger := func() error { return nil }
+		neverRemoved := func() (bool, error) { return false, nil }
+
+		err := waitForResource(clk, t.Logf, 20*time.Second,
+			backoffConfig{initial: 5 * time.Second, max: 10 * time.Second},
+			2*time.Second, waitDescription{trigger: "sync", condition: "leave inventory"},
+			trigger, neverRemoved)
+		if err == nil {
+			t.Fatal("expected a timeout error")
+		}
+		if !strings.Contains(err.Error(), "leave inventory") {
+			t.Errorf("error should name the removal condition, got: %v", err)
+		}
+		if !strings.Contains(err.Error(), "sync") {
+			t.Errorf("error should name the sync trigger, got: %v", err)
+		}
+	})
+}
+
+func TestGetOOBSyncRetriggerBackoff(t *testing.T) {
+	tests := []struct {
+		name string
+		env  string
+		want time.Duration
+	}{
+		{"unset uses default", "", oobSyncRetriggerDefault},
+		{"seconds are honoured", "12", 12 * time.Second},
+		{"clamped up to the floor", "1", oobSyncRetriggerFloor},
+		{"clamped down to the cap", "9999", oobSyncRetriggerCap},
+		{"non-numeric falls back", "soon", oobSyncRetriggerDefault},
+		{"zero falls back", "0", oobSyncRetriggerDefault},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("FORMAE_TEST_OOB_SYNC_RETRIGGER_INTERVAL", tt.env)
+			if got := getOOBSyncRetriggerBackoff().initial; got != tt.want {
+				t.Errorf("initial = %v, want %v", got, tt.want)
 			}
 		})
 	}
