@@ -8,7 +8,9 @@ package pkl
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -743,4 +745,58 @@ func TestSerializeForma_ScalarSecretResolvableRef_ResolvesImportAndEvaluates(t *
 	assert.Equal(t, "SecretString", password["$property"])
 	assert.NotContains(t, string(appDB.Properties), "hunter2",
 		"the referenced value must not be baked in as a literal")
+}
+
+// TestSerializeForma_ReferenceToUndeclaredResolvable_FailsActionably covers a
+// $res envelope naming a resource type that no schema declares a resolvable
+// for. There is no import to emit, so generation must stop with a message
+// naming the type and the reference that carried it, rather than either dying
+// inside PKL or quietly emitting a forma file with a missing reference.
+func TestSerializeForma_ReferenceToUndeclaredResolvable_FailsActionably(t *testing.T) {
+	deps, pluginDir := fakeawsDeps(t)
+
+	props := json.RawMessage(`{"DbInstanceClass":"db.t3.micro","Engine":"postgres","MasterUserPassword":{"$res":true,"$label":"ghost","$type":"FakeAWS::Nonexistent::Thing","$stack":"default","$property":"Value","$visibility":"Clear","$value":"hunter2"}}`)
+
+	forma := &model.Forma{
+		Stacks:  []model.Stack{{Label: "default"}},
+		Targets: []model.Target{fakeawsTarget()},
+		Resources: []model.Resource{{
+			Label:      "app-db",
+			Type:       "FakeAWS::RDS::DBInstance",
+			Stack:      "default",
+			Target:     "aws",
+			Properties: props,
+		}},
+	}
+	options := &schema.SerializeOptions{
+		Schema:         "pkl",
+		SchemaLocation: schema.SchemaLocationLocal,
+		LocalPluginDir: pluginDir,
+		Dependencies:   deps,
+	}
+
+	_, err := PKL{}.SerializeForma(forma, options)
+	require.Error(t, err, "a reference to an undeclared resolvable must not serialize")
+
+	msg := err.Error()
+	assert.Contains(t, msg, "FakeAWS::Nonexistent::Thing", "the error must name the unresolvable type")
+	assert.Contains(t, msg, `reference to resource "ghost" in stack "default"`,
+		"the error must identify which reference failed")
+	assert.NotContains(t, msg, "Cannot find property", "the failure must not surface as a raw PKL property error")
+}
+
+// TestGenPkl_NoUnguardedResolvableLookup pins the invariant behind the test
+// above. Every site that renders a reference reads the resolvable map, but only
+// the first one reached can surface its error, so a behavioural test cannot
+// tell whether the others are still dereferencing getOrNull directly. Assert on
+// the source instead: no lookup may read a field straight off the nullable
+// result. Guarded uses that bind the result and null-check it — the embed path
+// deliberately falls back to a literal — do not match.
+func TestGenPkl_NoUnguardedResolvableLookup(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("generator", "gen.pkl"))
+	require.NoError(t, err)
+
+	unguarded := regexp.MustCompile(`MapResolvableResourceUri\(\)\.getOrNull\([^()]*\)\.`)
+	assert.Empty(t, unguarded.FindAllString(string(src), -1),
+		"resolvable lookups must go through requireResolvableInfo, not dereference getOrNull directly")
 }
