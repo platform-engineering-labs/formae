@@ -116,7 +116,8 @@ open class PolicyResolvable extends Resolvable {
 //               across re-applies: the countdown never restarts.
 //   expiresAt - an absolute instant, as an RFC 3339 timestamp. Use this when you
 //               already hold the deadline and want it to survive re-applies
-//               unchanged. Sub-second precision is dropped.
+//               unchanged. Sub-second precision is dropped, and the instant must
+//               be no earlier than 2000-01-01T00:00:00Z.
 //
 // The regex on expiresAt is a shape check only — a real calendar date is
 // validated when the forma is applied.

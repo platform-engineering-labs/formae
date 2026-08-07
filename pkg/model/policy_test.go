@@ -129,6 +129,11 @@ func TestParsePolicy_TTLExpiresAtInvalid(t *testing.T) {
 		// Well-shaped but not a real calendar date: only a real parse catches it.
 		{name: "impossible date", raw: `{"Type":"ttl","ExpiresAt":"2026-02-30T12:00:00Z"}`},
 		{name: "empty", raw: `{"Type":"ttl","ExpiresAt":""}`},
+		// Storage compares deadlines as strings and cannot tell an implausibly
+		// early value from a corrupt one, so the contract excludes them and says
+		// so here rather than accepting the value and quietly never acting on it.
+		{name: "before the earliest supported deadline", raw: `{"Type":"ttl","ExpiresAt":"1999-12-31T23:59:59Z"}`},
+		{name: "zero timestamp", raw: `{"Type":"ttl","ExpiresAt":"0001-01-01T00:00:00Z"}`},
 	}
 
 	for _, tt := range tests {
@@ -212,6 +217,17 @@ func TestTTLPolicy_MarshalEmitsOnlyTheSetVariant(t *testing.T) {
 			assert.Equal(t, tt.policy.OnDependents, roundTripped.OnDependents)
 		})
 	}
+}
+
+// The floor the parser enforces and the floor the expiry queries enforce have
+// to be the same value, or a deadline is accepted and then never acted on.
+func TestMinExpiresAt(t *testing.T) {
+	assert.Equal(t, "2000-01-01T00:00:00Z", MinExpiresAt.Format(ExpiresAtLayout))
+
+	atFloor := MinExpiresAt.Format(ExpiresAtLayout)
+	policy, err := ParsePolicy(json.RawMessage(`{"Type":"ttl","ExpiresAt":"` + atFloor + `"}`))
+	require.NoError(t, err, "the floor itself is a supported deadline")
+	assert.Equal(t, MinExpiresAt, policy.(*TTLPolicy).ExpiresAt)
 }
 
 // A canonical value is fixed width and always ends in Z. Storage relies on that

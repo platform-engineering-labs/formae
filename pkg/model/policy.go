@@ -25,6 +25,17 @@ type Policy interface {
 // collation, with no timestamp cast.
 const ExpiresAtLayout = "2006-01-02T15:04:05Z"
 
+// MinExpiresAt is the earliest absolute TTL deadline the system accepts.
+//
+// A deadline this old is not a deadline anyone set — it is a zero value or
+// corrupt data. The distinction matters because the expiry queries compare
+// deadlines as strings and cannot tell the two apart: a value that reads as
+// long past destroys the stack on the next poll. So the queries refuse anything
+// below this floor, and the parser refuses it too. The two must agree —
+// enforcing it only in the queries would accept a deadline and then silently
+// never act on it.
+var MinExpiresAt = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+
 // TTLPolicy destroys a stack at a deadline expressed either relatively
 // (TTLSeconds, counted from the stack's creation) or absolutely (ExpiresAt).
 // Exactly one of the two is set; ParsePolicy enforces that.
@@ -98,7 +109,13 @@ func CanonicalizeExpiresAt(value string) (time.Time, error) {
 	if err != nil {
 		return time.Time{}, fmt.Errorf("invalid ExpiresAt %q: %w", value, err)
 	}
-	return t.UTC().Truncate(time.Second), nil
+
+	canonical := t.UTC().Truncate(time.Second)
+	if canonical.Before(MinExpiresAt) {
+		return time.Time{}, fmt.Errorf("invalid ExpiresAt %q: must be no earlier than %s",
+			value, MinExpiresAt.Format(ExpiresAtLayout))
+	}
+	return canonical, nil
 }
 
 // AutoReconcilePolicy periodically reconciles a stack to its declared state
