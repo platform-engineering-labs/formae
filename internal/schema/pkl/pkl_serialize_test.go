@@ -459,6 +459,8 @@ func TestSerializeForma_HashedOpaque_EmitsHashedMarker(t *testing.T) {
 
 	out, err := PKL{}.SerializeForma(forma, options)
 	require.NoError(t, err)
+	assert.NotContains(t, out, "message = \"applyResource",
+		"a secret resource must render its own fields, not a leaked classification failure")
 	assert.Contains(t, out, ".hashed", "hashed opaque field must emit the .hashed fluent accessor")
 }
 
