@@ -100,9 +100,13 @@ func (s *StackExpirer) checkExpiredStacks() {
 		return
 	}
 
-	// For each expired stack, trigger a destroy command
+	// For each expired stack, trigger a destroy command. Expiry destroys real
+	// resources, so log the deadline and the anchor it was measured from — an
+	// unexpected destroy should be explainable from the log alone.
 	for _, stackInfo := range expiredStacks {
-		s.Log().Info("Expiring stack label=%s onDependents=%s", stackInfo.StackLabel, stackInfo.OnDependents)
+		s.Log().Info("Expiring stack label=%s onDependents=%s deadline=%s createdAt=%s",
+			stackInfo.StackLabel, stackInfo.OnDependents,
+			stackInfo.Deadline(), stackInfo.StackCreatedAt.UTC().Format(time.RFC3339))
 
 		if err := s.destroyExpiredStack(stackInfo); err != nil {
 			s.Log().Error("Failed to destroy expired stack label=%s: %v", stackInfo.StackLabel, err)

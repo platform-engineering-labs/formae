@@ -55,32 +55,47 @@ func policySummary(policies []json.RawMessage, createdAt time.Time, now time.Tim
 		policyType, _ := policy["Type"].(string)
 		switch policyType {
 		case "ttl":
-			ttlSeconds, _ := policy["TTLSeconds"].(float64)
-			duration := time.Duration(int64(ttlSeconds)) * time.Second
 			label, _ := policy["Label"].(string)
+			// A TTL policy carries either an absolute deadline or a duration
+			// counted from the stack's creation. The absolute form has no
+			// duration to show, so it renders the instant on its own.
+			expiresAtStr, absolute := policy["ExpiresAt"].(string)
 
 			var expiryStr string
-			if !createdAt.IsZero() {
-				expiresAt := createdAt.Add(duration)
-				expiryStr = formatExpiryTimeInj(expiresAt, now)
+			var head string
+			if absolute {
+				head = "TTL"
+				if expiresAt, err := time.Parse(time.RFC3339, expiresAtStr); err == nil {
+					expiryStr = formatExpiryTimeInj(expiresAt, now)
+				}
+			} else {
+				ttlSeconds, _ := policy["TTLSeconds"].(float64)
+				duration := time.Duration(int64(ttlSeconds)) * time.Second
+				head = fmt.Sprintf("TTL: %s", formatTTLDur(duration))
+				if !createdAt.IsZero() {
+					expiryStr = formatExpiryTimeInj(createdAt.Add(duration), now)
+				}
 			}
 
-			if expiryStr == "expired" {
-				// Expired: render as "TTL: <dur> (expired)" with optional label
-				if label != "" {
-					parts = append(parts, fmt.Sprintf("TTL: %s (expired) (%s)", formatTTLDur(duration), label))
-				} else {
-					parts = append(parts, fmt.Sprintf("TTL: %s (expired)", formatTTLDur(duration)))
+			var part string
+			switch {
+			case expiryStr == "expired" && absolute:
+				part = "TTL: expired"
+			case expiryStr == "expired":
+				part = fmt.Sprintf("%s (expired)", head)
+			case expiryStr != "":
+				separator := ", "
+				if absolute {
+					separator = ": "
 				}
-			} else if label != "" && expiryStr != "" {
-				parts = append(parts, fmt.Sprintf("TTL: %s, expires %s (%s)", formatTTLDur(duration), expiryStr, label))
-			} else if expiryStr != "" {
-				parts = append(parts, fmt.Sprintf("TTL: %s, expires %s", formatTTLDur(duration), expiryStr))
-			} else if label != "" {
-				parts = append(parts, fmt.Sprintf("TTL: %s (%s)", formatTTLDur(duration), label))
-			} else {
-				parts = append(parts, fmt.Sprintf("TTL: %s", formatTTLDur(duration)))
+				part = fmt.Sprintf("%s%sexpires %s", head, separator, expiryStr)
+			default:
+				part = head
 			}
+			if label != "" {
+				part = fmt.Sprintf("%s (%s)", part, label)
+			}
+			parts = append(parts, part)
 
 		case "auto-reconcile":
 			intervalSeconds, _ := policy["IntervalSeconds"].(float64)

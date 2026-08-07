@@ -85,6 +85,54 @@ func TestStackRow_Cells_TTLPolicy_Expired(t *testing.T) {
 	assert.Equal(t, "TTL: 1d (expired)", got.cells[2])
 }
 
+func TestStackRow_Cells_TTLPolicy_AbsoluteExpiresIn23h(t *testing.T) {
+	// An absolute deadline is rendered from the instant itself, not from
+	// CreatedAt — so a stack of any age shows the same remaining time.
+	expiresAt := stacksNow.Add(23 * time.Hour).Format(time.RFC3339)
+	ttlJSON := json.RawMessage(`{"Type":"ttl","ExpiresAt":"` + expiresAt + `"}`)
+	s := &pkgmodel.Stack{
+		Label:     "trial-stack",
+		CreatedAt: stacksNow.Add(-100 * time.Hour),
+		Policies:  []json.RawMessage{ttlJSON},
+	}
+	got := stackRow(s, stacksNow)
+	assert.Equal(t, "TTL: expires in 23h0m", got.cells[2])
+}
+
+func TestStackRow_Cells_TTLPolicy_AbsoluteExpired(t *testing.T) {
+	expiresAt := stacksNow.Add(-1 * time.Hour).Format(time.RFC3339)
+	ttlJSON := json.RawMessage(`{"Type":"ttl","ExpiresAt":"` + expiresAt + `"}`)
+	s := &pkgmodel.Stack{
+		Label:     "trial-stack",
+		CreatedAt: stacksNow.Add(-2 * time.Hour),
+		Policies:  []json.RawMessage{ttlJSON},
+	}
+	got := stackRow(s, stacksNow)
+	assert.Equal(t, "TTL: expired", got.cells[2])
+}
+
+func TestStackRow_Cells_TTLPolicy_AbsoluteWithLabel(t *testing.T) {
+	expiresAt := stacksNow.Add(23 * time.Hour).Format(time.RFC3339)
+	ttlJSON := json.RawMessage(`{"Type":"ttl","Label":"trial","ExpiresAt":"` + expiresAt + `"}`)
+	s := &pkgmodel.Stack{
+		Label:    "trial-stack",
+		Policies: []json.RawMessage{ttlJSON},
+	}
+	got := stackRow(s, stacksNow)
+	assert.Equal(t, "TTL: expires in 23h0m (trial)", got.cells[2])
+}
+
+// An unreadable stored deadline must not be rendered as an expiry.
+func TestStackRow_Cells_TTLPolicy_AbsoluteMalformed(t *testing.T) {
+	ttlJSON := json.RawMessage(`{"Type":"ttl","ExpiresAt":"not-a-timestamp"}`)
+	s := &pkgmodel.Stack{
+		Label:    "trial-stack",
+		Policies: []json.RawMessage{ttlJSON},
+	}
+	got := stackRow(s, stacksNow)
+	assert.Equal(t, "TTL", got.cells[2])
+}
+
 func TestStackRow_Cells_TTLPolicy_NoCreatedAt(t *testing.T) {
 	// Zero CreatedAt — no expiry string
 	ttlJSON := json.RawMessage(`{"Type":"ttl","TTLSeconds":3600}`)
