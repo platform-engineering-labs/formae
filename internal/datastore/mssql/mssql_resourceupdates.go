@@ -130,17 +130,43 @@ func (d *DatastoreMSSQL) Stats() (*stats.Stats, error) {
 		return nil, err
 	}
 
+	// Resources whose latest completed outcome is a failure, counted once per
+	// resource (ksuid). Only Failed and Success rows carry an outcome, so an
+	// in-flight, canceled or rejected row never clears a standing failure. The
+	// type filter sits in the outer SELECT only, so a later typeless success
+	// still supersedes an earlier failure. command_id is a KSUID, collated
+	// byte-wise so its ordering matches the other backends.
 	res.ResourceErrors = make(map[string]int)
 	if err := d.scanCountMap(ctx, `
-		SELECT JSON_VALUE(resource, '$.Type') AS resource_type, COUNT(*)
-		FROM resource_updates
-		WHERE state = @p1
-		AND resource IS NOT NULL
-		GROUP BY JSON_VALUE(resource, '$.Type')`, res.ResourceErrors, string(types.ResourceUpdateStateFailed),
+		WITH failed_ksuids AS (
+			SELECT DISTINCT ksuid FROM resource_updates WHERE state = @p1
+		),
+		outcomes AS (
+			SELECT ru.ksuid,
+			       ru.state,
+			       JSON_VALUE(ru.resource, '$.Type') AS resource_type,
+			       ROW_NUMBER() OVER (
+			           PARTITION BY ru.ksuid
+			           ORDER BY ru.modified_ts DESC,
+			                    ru.command_id COLLATE Latin1_General_BIN2 DESC,
+			                    CASE WHEN ru.state = @p1 THEN 0 ELSE 1 END,
+			                    ru.operation
+			       ) AS rn
+			FROM resource_updates ru
+			JOIN failed_ksuids f ON f.ksuid = ru.ksuid
+			WHERE ru.state IN (@p1, @p2)
+		)
+		SELECT resource_type, COUNT(*)
+		FROM outcomes
+		WHERE rn = 1
+		  AND state = @p1
+		  AND resource_type IS NOT NULL
+		  AND resource_type <> ''
+		GROUP BY resource_type`, res.ResourceErrors,
+		string(types.ResourceUpdateStateFailed), string(types.ResourceUpdateStateSuccess),
 	); err != nil {
 		return nil, err
 	}
-	delete(res.ResourceErrors, "")
 
 	return &res, nil
 }

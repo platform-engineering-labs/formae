@@ -3775,16 +3775,44 @@ func (d DatastorePostgres) Stats() (*stats.Stats, error) {
 		res.ResourceTypes[resourceType] = count
 	}
 
-	// Count resource errors by resource type
+	// Count resource errors by resource type: resources whose latest completed
+	// outcome is a failure, counted once per resource (ksuid). Only Failed and
+	// Success rows carry an outcome, so an in-flight, canceled or rejected row
+	// never clears a standing failure. The type filter sits in the outer SELECT
+	// only, so a later typeless success still supersedes an earlier failure.
+	// command_id is a KSUID, ordered byte-wise like the other backends.
 	res.ResourceErrors = make(map[string]int)
 	errorQuery := `
-	SELECT resource::jsonb->>'Type' as resource_type, COUNT(*)
-	FROM resource_updates
-	WHERE state = $1
-	AND resource IS NOT NULL
+	WITH failed_ksuids AS (
+		SELECT DISTINCT ksuid FROM resource_updates WHERE state = $1
+	),
+	outcomes AS (
+		SELECT ru.ksuid,
+		       ru.state,
+		       ru.resource::jsonb->>'Type' AS resource_type,
+		       ROW_NUMBER() OVER (
+		           PARTITION BY ru.ksuid
+		           ORDER BY ru.modified_ts DESC,
+		                    ru.command_id COLLATE "C" DESC,
+		                    CASE WHEN ru.state = $1 THEN 0 ELSE 1 END,
+		                    ru.operation
+		       ) AS rn
+		FROM resource_updates ru
+		JOIN failed_ksuids f ON f.ksuid = ru.ksuid
+		WHERE ru.state IN ($1, $2)
+	)
+	SELECT resource_type, COUNT(*)
+	FROM outcomes
+	WHERE rn = 1
+	  AND state = $1
+	  AND resource_type IS NOT NULL
+	  AND resource_type <> ''
 	GROUP BY resource_type
 	`
-	rows, err = d.pool.Query(ctx, errorQuery, types.ResourceUpdateStateFailed)
+	rows, err = d.pool.Query(ctx, errorQuery,
+		types.ResourceUpdateStateFailed,
+		types.ResourceUpdateStateSuccess,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -3796,9 +3824,7 @@ func (d DatastorePostgres) Stats() (*stats.Stats, error) {
 		if err := rows.Scan(&resourceType, &count); err != nil {
 			return nil, err
 		}
-		if resourceType != "" {
-			res.ResourceErrors[resourceType] = count
-		}
+		res.ResourceErrors[resourceType] = count
 	}
 
 	return &res, nil

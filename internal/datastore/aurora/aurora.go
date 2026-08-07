@@ -3857,17 +3857,43 @@ func (d *DatastoreAuroraDataAPI) Stats() (*stats.Stats, error) {
 		}
 	}
 
-	// Count resource errors by resource type
+	// Count resource errors by resource type: resources whose latest completed
+	// outcome is a failure, counted once per resource (ksuid). Only Failed and
+	// Success rows carry an outcome, so an in-flight, canceled or rejected row
+	// never clears a standing failure. The type filter sits in the outer SELECT
+	// only, so a later typeless success still supersedes an earlier failure.
+	// command_id is a KSUID, ordered byte-wise like the other backends.
 	res.ResourceErrors = make(map[string]int)
 	errorQuery := `
-	SELECT resource::jsonb->>'Type' as resource_type, COUNT(*)
-	FROM resource_updates
-	WHERE state = :state
-	AND resource IS NOT NULL
+	WITH failed_ksuids AS (
+		SELECT DISTINCT ksuid FROM resource_updates WHERE state = :failed
+	),
+	outcomes AS (
+		SELECT ru.ksuid,
+		       ru.state,
+		       ru.resource::jsonb->>'Type' AS resource_type,
+		       ROW_NUMBER() OVER (
+		           PARTITION BY ru.ksuid
+		           ORDER BY ru.modified_ts DESC,
+		                    ru.command_id COLLATE "C" DESC,
+		                    CASE WHEN ru.state = :failed THEN 0 ELSE 1 END,
+		                    ru.operation
+		       ) AS rn
+		FROM resource_updates ru
+		JOIN failed_ksuids f ON f.ksuid = ru.ksuid
+		WHERE ru.state IN (:failed, :success)
+	)
+	SELECT resource_type, COUNT(*)
+	FROM outcomes
+	WHERE rn = 1
+	  AND state = :failed
+	  AND resource_type IS NOT NULL
+	  AND resource_type <> ''
 	GROUP BY resource_type
 	`
 	errorParams := []types.SqlParameter{
-		{Name: aws.String("state"), Value: &types.FieldMemberStringValue{Value: string(metaTypes.ResourceUpdateStateFailed)}},
+		{Name: aws.String("failed"), Value: &types.FieldMemberStringValue{Value: string(metaTypes.ResourceUpdateStateFailed)}},
+		{Name: aws.String("success"), Value: &types.FieldMemberStringValue{Value: string(metaTypes.ResourceUpdateStateSuccess)}},
 	}
 	output, err = d.executeStatement(ctx, errorQuery, errorParams)
 	if err != nil {
@@ -3877,9 +3903,7 @@ func (d *DatastoreAuroraDataAPI) Stats() (*stats.Stats, error) {
 		if len(record) >= 2 {
 			resourceType, _ := getStringField(record[0])
 			count, _ := getIntField(record[1])
-			if resourceType != "" {
-				res.ResourceErrors[resourceType] = count
-			}
+			res.ResourceErrors[resourceType] = count
 		}
 	}
 
