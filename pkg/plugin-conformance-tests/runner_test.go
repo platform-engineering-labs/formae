@@ -7,6 +7,7 @@ package conformance
 import (
 	"os"
 	"testing"
+	"time"
 
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
@@ -1332,4 +1333,39 @@ func TestFindMainResourceNativeID(t *testing.T) {
 			t.Fatal("expected error when no resource matches type")
 		}
 	})
+}
+
+func TestGetSyncTimeout(t *testing.T) {
+	tests := []struct {
+		name string
+		env  string
+		want time.Duration
+	}{
+		{"unset falls back to default", "", defaultSyncTimeout},
+		{"minutes are honoured", "7", 7 * time.Minute},
+		{"non-numeric falls back to default", "soon", defaultSyncTimeout},
+		{"zero falls back to default", "0", defaultSyncTimeout},
+		{"negative falls back to default", "-3", defaultSyncTimeout},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("FORMAE_TEST_SYNC_TIMEOUT", tt.env)
+			if got := getSyncTimeout(); got != tt.want {
+				t.Errorf("getSyncTimeout() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// The plugin-side retry budget (exponential backoff over recoverable
+// CloudControl errors) can legitimately keep a single read in flight for
+// minutes. If the harness gives up first it reports a failure for a sync that
+// was still making progress, so the default must leave room for that budget.
+func TestSyncTimeoutDefaultExceedsPluginRetryBudget(t *testing.T) {
+	const observedPluginRetryBudget = 3 * time.Minute
+	if defaultSyncTimeout <= observedPluginRetryBudget {
+		t.Errorf("defaultSyncTimeout = %v, must exceed the plugin retry budget of %v",
+			defaultSyncTimeout, observedPluginRetryBudget)
+	}
 }

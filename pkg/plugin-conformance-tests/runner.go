@@ -212,6 +212,30 @@ func getDiscoveryTimeout() time.Duration {
 	return 2 * time.Minute // Default timeout
 }
 
+// defaultSyncTimeout bounds the wait for a forced synchronization to report
+// completion.
+//
+// It has to clear the plugin-side retry budget, not just a typical sync. A
+// healthy sync settles in a few seconds, but plugins absorb recoverable
+// CloudControl errors with their own exponential backoff. The AWS plugin,
+// for instance, budgets ten attempts over a 1s..30s backoff, roughly three
+// minutes. Under the shared-account throttling the conformance matrix
+// generates, a sync that is still retrying is making progress, not hanging.
+// A shorter wait here turns that into a spurious failure on a random test
+// each run, so the default sits above the retry budget with headroom.
+const defaultSyncTimeout = 5 * time.Minute
+
+// getSyncTimeout returns the timeout duration for waiting on synchronization.
+// It reads from the FORMAE_TEST_SYNC_TIMEOUT environment variable (in minutes).
+func getSyncTimeout() time.Duration {
+	if val := os.Getenv("FORMAE_TEST_SYNC_TIMEOUT"); val != "" {
+		if minutes, err := strconv.Atoi(val); err == nil && minutes > 0 {
+			return time.Duration(minutes) * time.Minute
+		}
+	}
+	return defaultSyncTimeout
+}
+
 const (
 	// discoveryPollInterval is how often the discovery wait loop reads the local
 	// inventory while waiting for a scan to surface the resource.
@@ -1439,7 +1463,7 @@ func runCRUDTest(t *testing.T, tc TestCase, rc *ResultCollector) {
 
 	// === Step 8: Wait for synchronization to complete ===
 	t.Log("Step 8: Waiting for synchronization to complete...")
-	if err := harness.WaitForSyncCompletion(60 * time.Second); err != nil {
+	if err := harness.WaitForSyncCompletion(getSyncTimeout()); err != nil {
 		rc.CRUDFatalf(t, idx, PhaseSync, "Synchronization should complete successfully: %v", err)
 	}
 
