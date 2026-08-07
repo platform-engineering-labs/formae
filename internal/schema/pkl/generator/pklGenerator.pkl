@@ -148,14 +148,26 @@ function parseStacks(stacksData: List<Map<String, Any>>, policyLabelMap: Map<Str
                     // Inline policy - render directly (without label, as it's typically auto-generated)
                     let (policyType = policy.getPropertyOrNull("Type") as String?)
                     if (policyType == "ttl")
-                        let (ttlSeconds = policy.getPropertyOrNull("TTLSeconds") as Number? ?? 0)
+                        let (expiresAt = policy.getPropertyOrNull("ExpiresAt") as String?)
                         let (onDependents = policy.getPropertyOrNull("OnDependents") as String? ?? "abort")
-                        """
-                        new formae.TTLPolicy {
-                                    ttl = \(ttlSeconds).s
-                                    onDependents = "\(onDependents)"
-                                }
-                        """
+                        // A TTL policy carries either an absolute deadline or a
+                        // duration; emit back the one it was stored with, so
+                        // extract -> apply -> extract is stable.
+                        if (expiresAt != null)
+                            """
+                            new formae.TTLPolicy {
+                                        expiresAt = "\(expiresAt)"
+                                        onDependents = "\(onDependents)"
+                                    }
+                            """
+                        else
+                            let (ttlSeconds = policy.getPropertyOrNull("TTLSeconds") as Number? ?? 0)
+                            """
+                            new formae.TTLPolicy {
+                                        ttl = \(ttlSeconds).s
+                                        onDependents = "\(onDependents)"
+                                    }
+                            """
                     else if (policyType == "auto-reconcile")
                         let (intervalSeconds = policy.getPropertyOrNull("IntervalSeconds") as Number? ?? 0)
                         """
@@ -201,9 +213,21 @@ function parsePolicies(policiesData: List<Map<String, Any>>): String =
         let (camelCaseLabel = toCamelCase(label))
 
         if (policyType == "ttl")
-            let (ttlSeconds = policyData["TTLSeconds"] as Number)
+            let (expiresAt = policyData.getOrNull("ExpiresAt") as String?)
             let (onDependents = policyData.getOrNull("OnDependents") as String? ?? "abort")
-            """
+            if (expiresAt != null)
+                """
+
+      local \(camelCaseLabel) = new formae.TTLPolicy {
+        label = "\(label)"
+        expiresAt = "\(expiresAt)"
+        onDependents = "\(onDependents)"
+      }
+      \(camelCaseLabel)
+      """
+            else
+                let (ttlSeconds = policyData["TTLSeconds"] as Number)
+                """
 
       local \(camelCaseLabel) = new formae.TTLPolicy {
         label = "\(label)"
@@ -359,6 +383,7 @@ function generateFormaFile(parsed: json.Value): String =
             "Type", policy.Type,
             "Label", policy.Label,
             "TTLSeconds", policy.getPropertyOrNull("TTLSeconds"),
+            "ExpiresAt", policy.getPropertyOrNull("ExpiresAt"),
             "OnDependents", policy.getPropertyOrNull("OnDependents")
             )
         )

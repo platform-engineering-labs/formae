@@ -387,6 +387,26 @@ local testTargetNoConfig = new formae.Target {
     discoverable = false
 }
 
+local relativeTTL = new formae.TTLPolicy {
+    label = "relative-ttl"
+    ttl = 1.h
+}
+
+local absoluteTTL = new formae.TTLPolicy {
+    label = "absolute-ttl"
+    expiresAt = "2026-08-07T12:00:00Z"
+}
+
+local bothVariantsTTL = new formae.TTLPolicy {
+    label = "both-ttl"
+    ttl = 1.h
+    expiresAt = "2026-08-07T12:00:00Z"
+}
+
+local neitherVariantTTL = new formae.TTLPolicy {
+    label = "neither-ttl"
+}
+
 examples {
     ["Basic Resolvable"] {
         resolvable
@@ -487,9 +507,29 @@ examples {
     ["Fq - type"] {
         formae.fq.type(reflect.Class(TestBucket))
     }
+
+    ["TTL policy with both ttl and expiresAt is rejected"] {
+        module.catch(() -> bothVariantsTTL.render())
+    }
+
+    ["TTL policy with neither ttl nor expiresAt is rejected"] {
+        module.catch(() -> neitherVariantTTL.render())
+    }
 }
 
 facts {
+    ["Relative TTL policy renders TTLSeconds and no ExpiresAt"] {
+        relativeTTL.render().toMap().containsKey("TTLSeconds") &&
+        !relativeTTL.render().toMap().containsKey("ExpiresAt") &&
+        relativeTTL.render().TTLSeconds == 3600
+    }
+
+    ["Absolute TTL policy renders ExpiresAt and no TTLSeconds"] {
+        absoluteTTL.render().toMap().containsKey("ExpiresAt") &&
+        !absoluteTTL.render().toMap().containsKey("TTLSeconds") &&
+        absoluteTTL.render().ExpiresAt == "2026-08-07T12:00:00Z"
+    }
+
     ["Stack resolvable inherits from Resolvable"] {
         stackResolvable is formae.Resolvable
     }
