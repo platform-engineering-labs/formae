@@ -140,6 +140,23 @@ type ExpiredStackInfo struct {
 	TTLSeconds *int64
 }
 
+// HasUnreadableDeadline reports whether this stack was reported expired on an
+// absolute deadline that is not actually a readable instant.
+//
+// The expiry queries compare absolute deadlines as fixed-width strings, on
+// purpose: a cast would let one corrupt row abort the whole scan and stop every
+// stack from ever expiring. The cost is that a string comparison cannot tell a
+// real calendar date from an impossible one — "2025-02-30T12:00:00Z" has the
+// right shape and sorts like a date. Expiry destroys real resources, so a real
+// parse gets the last word before anything is acted on.
+func (e ExpiredStackInfo) HasUnreadableDeadline() bool {
+	if e.ExpiresAt == "" {
+		return false
+	}
+	_, err := pkgmodel.CanonicalizeExpiresAt(e.ExpiresAt)
+	return err != nil
+}
+
 // Deadline renders the instant this stack was due to be destroyed, for logging.
 func (e ExpiredStackInfo) Deadline() string {
 	if e.ExpiresAt != "" {

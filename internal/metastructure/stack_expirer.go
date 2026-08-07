@@ -6,6 +6,7 @@ package metastructure
 
 import (
 	"fmt"
+	"log/slog"
 	"time"
 
 	"ergo.services/ergo/act"
@@ -168,6 +169,15 @@ type destroyExpiredResult struct {
 // when expiration is aborted due to external dependents, or when no updates are needed.
 // The caller is responsible for persisting the command and starting the changeset execution.
 func prepareDestroyExpiredStack(ds datastore.Datastore, stackInfo datastore.ExpiredStackInfo, clientID string, cleanupClientID string) (*destroyExpiredResult, error) {
+	// The query matches absolute deadlines by string comparison, which cannot
+	// reject an impossible calendar date. Re-check with a real parse before
+	// destroying anything: a deadline nobody can read is not a deadline.
+	if stackInfo.HasUnreadableDeadline() {
+		slog.Warn("Refusing to expire stack: its deadline is not a readable instant",
+			"stack", stackInfo.StackLabel, "expiresAt", stackInfo.ExpiresAt)
+		return nil, nil
+	}
+
 	// Load all resources in the stack
 	resources, err := ds.LoadResourcesByStack(stackInfo.StackLabel)
 	if err != nil {

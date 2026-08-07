@@ -14,6 +14,34 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// The expiry queries compare absolute deadlines as strings, which cannot tell a
+// real calendar date from an impossible one. Whatever they report is therefore
+// re-checked against a real parse before anything is destroyed.
+func TestExpiredStackInfo_HasUnreadableDeadline(t *testing.T) {
+	tests := []struct {
+		name      string
+		expiresAt string
+		want      bool
+	}{
+		{name: "canonical", expiresAt: "2026-08-07T12:00:00Z", want: false},
+		{name: "relative policy carries no deadline string", expiresAt: "", want: false},
+		// Shape-valid but not a real date: the string comparison lets this
+		// through, a real parse does not.
+		{name: "impossible calendar date", expiresAt: "2025-02-30T12:00:00Z", want: true},
+		{name: "impossible month", expiresAt: "2026-13-01T12:00:00Z", want: true},
+		{name: "impossible hour", expiresAt: "2026-08-07T25:00:00Z", want: true},
+		{name: "not a timestamp", expiresAt: "not-a-timestamp", want: true},
+		{name: "below the supported floor", expiresAt: "1999-12-31T23:59:59Z", want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			info := ExpiredStackInfo{StackLabel: "s", ExpiresAt: tt.expiresAt}
+			assert.Equal(t, tt.want, info.HasUnreadableDeadline())
+		})
+	}
+}
+
 func TestTTLPolicyData_RelativeWritesOnlyTTLSeconds(t *testing.T) {
 	data := TTLPolicyData(&pkgmodel.TTLPolicy{
 		Type:         "ttl",
