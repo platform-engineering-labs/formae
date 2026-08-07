@@ -164,6 +164,7 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunGetExpiredStacks_MalformedExpiresAt(t, newDS)
 	RunGetExpiredStacks_MalformedExpiresAtSortingLow(t, newDS)
 	RunGetExpiredStacks_BothVariantsSet(t, newDS)
+	RunGetExpiredStacks_OneRowPerStack(t, newDS)
 	RunGetExpiredStacks_LegacyRelative(t, newDS)
 	RunGetExpiredStacks_ReportsAnchorAndDeadline(t, newDS)
 	RunTTLPolicyVariantRoundTrip(t, newDS)

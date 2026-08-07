@@ -31,6 +31,35 @@ func TTLPolicyData(p *pkgmodel.TTLPolicy) map[string]any {
 	return data
 }
 
+// DedupeExpiredStacks reduces expiry-scan rows to one per stack.
+//
+// A stack can carry several TTL policies — an inline one and an attached
+// standalone one — and the scan yields a row per expired policy. Callers destroy
+// once per entry, so returning both would start two concurrent destroys of the
+// same stack. The earliest deadline wins, which is the one that actually expired
+// the stack; the scan is ordered by anchor, so the choice is stable within a
+// scan. Which policy's OnDependents should govern when they disagree is a
+// separate question this does not try to answer.
+func DedupeExpiredStacks(stacks []ExpiredStackInfo) []ExpiredStackInfo {
+	if len(stacks) < 2 {
+		return stacks
+	}
+
+	seen := make(map[string]int, len(stacks))
+	deduped := make([]ExpiredStackInfo, 0, len(stacks))
+	for _, stack := range stacks {
+		if at, ok := seen[stack.StackID]; ok {
+			if stack.Deadline() < deduped[at].Deadline() {
+				deduped[at] = stack
+			}
+			continue
+		}
+		seen[stack.StackID] = len(deduped)
+		deduped = append(deduped, stack)
+	}
+	return deduped
+}
+
 // TTLPolicyFromData rebuilds a TTL policy from a stored policy_data payload.
 //
 // It is deliberately lenient where TTLPolicyData's counterpart in ParsePolicy is

@@ -2857,7 +2857,7 @@ func (d DatastorePostgres) GetExpiredStacks() ([]datastore.ExpiredStackInfo, err
 		return nil, err
 	}
 
-	return result, nil
+	return datastore.DedupeExpiredStacks(result), nil
 }
 
 func (d DatastorePostgres) GetStacksWithAutoReconcilePolicy() ([]datastore.StackReconcileInfo, error) {

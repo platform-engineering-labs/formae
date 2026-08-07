@@ -42,6 +42,44 @@ func TestExpiredStackInfo_HasUnreadableDeadline(t *testing.T) {
 	}
 }
 
+func TestDedupeExpiredStacks(t *testing.T) {
+	t.Run("keeps the earliest deadline per stack", func(t *testing.T) {
+		got := DedupeExpiredStacks([]ExpiredStackInfo{
+			{StackID: "s1", StackLabel: "one", ExpiresAt: "2026-08-07T12:00:00Z"},
+			{StackID: "s1", StackLabel: "one", ExpiresAt: "2026-08-01T12:00:00Z"},
+			{StackID: "s2", StackLabel: "two", ExpiresAt: "2026-08-05T12:00:00Z"},
+		})
+
+		require.Len(t, got, 2)
+		assert.Equal(t, "s1", got[0].StackID)
+		assert.Equal(t, "2026-08-01T12:00:00Z", got[0].ExpiresAt)
+		assert.Equal(t, "s2", got[1].StackID)
+	})
+
+	t.Run("mixes the relative and absolute forms", func(t *testing.T) {
+		createdAt := time.Date(2026, 8, 7, 0, 0, 0, 0, time.UTC)
+		ttl := int64(3600)
+
+		got := DedupeExpiredStacks([]ExpiredStackInfo{
+			{StackID: "s1", ExpiresAt: "2026-08-07T12:00:00Z"},
+			{StackID: "s1", StackCreatedAt: createdAt, TTLSeconds: &ttl},
+		})
+
+		require.Len(t, got, 1)
+		assert.Equal(t, "2026-08-07T01:00:00Z", got[0].Deadline())
+	})
+
+	t.Run("leaves distinct stacks and short inputs alone", func(t *testing.T) {
+		assert.Empty(t, DedupeExpiredStacks(nil))
+
+		one := []ExpiredStackInfo{{StackID: "s1"}}
+		assert.Equal(t, one, DedupeExpiredStacks(one))
+
+		two := []ExpiredStackInfo{{StackID: "s1"}, {StackID: "s2"}}
+		assert.Len(t, DedupeExpiredStacks(two), 2)
+	})
+}
+
 func TestTTLPolicyData_RelativeWritesOnlyTTLSeconds(t *testing.T) {
 	data := TTLPolicyData(&pkgmodel.TTLPolicy{
 		Type:         "ttl",

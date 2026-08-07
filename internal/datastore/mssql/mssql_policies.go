@@ -710,7 +710,7 @@ func (d *DatastoreMSSQL) GetExpiredStacks() ([]datastore.ExpiredStackInfo, error
 		return nil, err
 	}
 
-	return result, nil
+	return datastore.DedupeExpiredStacks(result), nil
 }
 
 func (d *DatastoreMSSQL) GetStacksWithAutoReconcilePolicy() ([]datastore.StackReconcileInfo, error) {

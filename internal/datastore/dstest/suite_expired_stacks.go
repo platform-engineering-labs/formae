@@ -239,6 +239,55 @@ func RunGetExpiredStacks_MalformedExpiresAtSortingLow(t *testing.T, newDS func(t
 	})
 }
 
+// RunGetExpiredStacks_OneRowPerStack guards the contract the expirer relies on:
+// it destroys once per reported entry, so a stack carrying more than one expired
+// policy must still be reported once, however the policies differ.
+func RunGetExpiredStacks_OneRowPerStack(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("GetExpiredStacks_OneRowPerStack", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		if td.SetStackValidFromForTest == nil {
+			t.Skip("backend does not expose SetStackValidFromForTest")
+		}
+
+		stack := &pkgmodel.Stack{Label: "double-policy-stack"}
+		_, err := ds.CreateStack(stack, "cmd-1")
+		require.NoError(t, err)
+		stored, err := ds.GetStackByLabel("double-policy-stack")
+		require.NoError(t, err)
+
+		// An inline relative policy and an attached standalone absolute policy,
+		// both overdue, with different deadlines.
+		_, err = ds.CreatePolicy(&pkgmodel.TTLPolicy{
+			Type: "ttl", Label: "inline-ttl", TTLSeconds: 3600,
+			OnDependents: "abort", StackID: stored.ID,
+		}, "cmd-1")
+		require.NoError(t, err)
+
+		_, err = ds.CreatePolicy(&pkgmodel.TTLPolicy{
+			Type: "ttl", Label: "shared-deadline",
+			ExpiresAt:    time.Now().UTC().Add(-2 * time.Hour),
+			OnDependents: "abort",
+		}, "cmd-1")
+		require.NoError(t, err)
+		require.NoError(t, ds.AttachPolicyToStack(stored.ID, "shared-deadline"))
+
+		require.NoError(t, td.SetStackValidFromForTest("double-policy-stack", []time.Time{
+			time.Now().UTC().Add(-4 * time.Hour),
+		}))
+
+		var count int
+		for _, label := range expiredLabels(t, ds) {
+			if label == "double-policy-stack" {
+				count++
+			}
+		}
+		assert.Equal(t, 1, count, "a stack must be reported once however many of its policies expired")
+	})
+}
+
 // RunGetExpiredStacks_BothVariantsSet pins the defensive resolution of a row
 // that is outside the one-of: ExpiresAt wins, and the scan stays intact. Not
 // reachable through any accepted input — only through corrupt or hand-edited

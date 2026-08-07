@@ -5718,7 +5718,7 @@ func (d *DatastoreAuroraDataAPI) GetExpiredStacks() ([]datastore.ExpiredStackInf
 		result = append(result, info)
 	}
 
-	return result, nil
+	return datastore.DedupeExpiredStacks(result), nil
 }
 
 func (d *DatastoreAuroraDataAPI) GetStacksWithAutoReconcilePolicy() ([]datastore.StackReconcileInfo, error) {

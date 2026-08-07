@@ -2781,7 +2781,7 @@ func (d DatastoreSQLite) GetExpiredStacks() ([]datastore.ExpiredStackInfo, error
 		return nil, err
 	}
 
-	return result, nil
+	return datastore.DedupeExpiredStacks(result), nil
 }
 
 func (d DatastoreSQLite) GetStacksWithAutoReconcilePolicy() ([]datastore.StackReconcileInfo, error) {
