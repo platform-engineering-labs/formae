@@ -196,6 +196,49 @@ func RunGetExpiredStacks_MalformedExpiresAt(t *testing.T, newDS func(t *testing.
 	})
 }
 
+// RunGetExpiredStacks_MalformedExpiresAtSortingLow is the sharp edge of
+// comparing deadlines as strings: a value that is not a timestamp at all can
+// still sort before now, and "sorts before now" is what triggers a destroy.
+// Failing safe has to mean "not a canonical deadline", not "sorts high".
+func RunGetExpiredStacks_MalformedExpiresAtSortingLow(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("GetExpiredStacks_MalformedExpiresAtSortingLow", func(t *testing.T) {
+		// Every one of these sorts before a current canonical timestamp.
+		for _, malformed := range []string{``, `0000`, `0000-00-00T00:00:00Z`, `1`, `2026-08-07`} {
+			t.Run(malformed, func(t *testing.T) {
+				td := newDS(t)
+				ds := td.Datastore
+				defer td.CleanUpFn() //nolint:errcheck
+
+				if td.SetPolicyDataForTest == nil {
+					t.Skip("backend does not expose SetPolicyDataForTest")
+				}
+
+				stack := &pkgmodel.Stack{Label: "low-sorting-stack"}
+				_, err := ds.CreateStack(stack, "cmd-1")
+				require.NoError(t, err)
+				stored, err := ds.GetStackByLabel("low-sorting-stack")
+				require.NoError(t, err)
+
+				_, err = ds.CreatePolicy(&pkgmodel.TTLPolicy{
+					Type: "ttl", Label: "low-sorting-ttl",
+					ExpiresAt:    time.Now().UTC().Add(time.Hour),
+					OnDependents: "abort", StackID: stored.ID,
+				}, "cmd-1")
+				require.NoError(t, err)
+
+				payload, err := json.Marshal(map[string]any{
+					"ExpiresAt": malformed, "OnDependents": "abort",
+				})
+				require.NoError(t, err)
+				require.NoError(t, td.SetPolicyDataForTest("low-sorting-ttl", string(payload)))
+
+				assert.NotContains(t, expiredLabels(t, ds), "low-sorting-stack",
+					"a value that is not a canonical deadline must never expire a stack")
+			})
+		}
+	})
+}
+
 // RunGetExpiredStacks_BothVariantsSet pins the defensive resolution of a row
 // that is outside the one-of: ExpiresAt wins, and the scan stays intact. Not
 // reachable through any accepted input — only through corrupt or hand-edited

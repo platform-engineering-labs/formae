@@ -47,6 +47,37 @@ func (p *TTLPolicy) SetLabel(label string) { p.Label = label }
 // than a duration relative to stack creation.
 func (p *TTLPolicy) IsAbsolute() bool { return !p.ExpiresAt.IsZero() }
 
+// MarshalJSON emits the key for the variant that is set and only that key.
+//
+// The struct tags cannot express this on their own: TTLSeconds has no value
+// that means "absent" — 0 and negative are both legal deadlines — so a plain
+// marshal of an absolute policy would emit TTLSeconds 0 alongside ExpiresAt.
+// That payload sets both variants, which ParsePolicy rejects, and policies are
+// marshaled and re-parsed on the extract path.
+func (p TTLPolicy) MarshalJSON() ([]byte, error) {
+	type fields struct {
+		Type         string  `json:"Type"`
+		Label        string  `json:"Label,omitempty"`
+		TTLSeconds   *int64  `json:"TTLSeconds,omitempty"`
+		ExpiresAt    *string `json:"ExpiresAt,omitempty"`
+		OnDependents string  `json:"OnDependents"`
+	}
+
+	out := fields{
+		Type:         "ttl",
+		Label:        p.Label,
+		OnDependents: p.OnDependents,
+	}
+	if p.IsAbsolute() {
+		expiresAt := p.CanonicalExpiresAt()
+		out.ExpiresAt = &expiresAt
+	} else {
+		seconds := p.TTLSeconds
+		out.TTLSeconds = &seconds
+	}
+	return json.Marshal(out)
+}
+
 // CanonicalExpiresAt renders the absolute deadline in the stored form, or ""
 // for a relative policy. It normalises to UTC whole seconds itself rather than
 // trusting the field, so a policy built in Go — not only one that came through

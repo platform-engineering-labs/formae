@@ -162,6 +162,66 @@ func TestParsePolicy_TTLExpiresAtCanonicalises(t *testing.T) {
 	}
 }
 
+// Policies are marshaled back to JSON on the extract path and handed to
+// ParsePolicy again, so the marshaled form has to satisfy the one-of: emitting
+// a zero TTLSeconds next to an ExpiresAt would make an absolute policy
+// unreadable on the way back in.
+func TestTTLPolicy_MarshalEmitsOnlyTheSetVariant(t *testing.T) {
+	tests := []struct {
+		name        string
+		policy      *TTLPolicy
+		wantKey     string
+		wantMissing string
+	}{
+		{
+			name:        "relative",
+			policy:      &TTLPolicy{Type: "ttl", Label: "e", TTLSeconds: 3600, OnDependents: "abort"},
+			wantKey:     "TTLSeconds",
+			wantMissing: "ExpiresAt",
+		},
+		{
+			name: "absolute",
+			policy: &TTLPolicy{
+				Type: "ttl", Label: "t",
+				ExpiresAt:    time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC),
+				OnDependents: "abort",
+			},
+			wantKey:     "ExpiresAt",
+			wantMissing: "TTLSeconds",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			encoded, err := json.Marshal(tt.policy)
+			require.NoError(t, err)
+
+			var keys map[string]any
+			require.NoError(t, json.Unmarshal(encoded, &keys))
+			assert.Contains(t, keys, tt.wantKey)
+			assert.NotContains(t, keys, tt.wantMissing)
+
+			// And the marshaled form must be readable again.
+			parsed, err := ParsePolicy(encoded)
+			require.NoError(t, err)
+			roundTripped, ok := parsed.(*TTLPolicy)
+			require.True(t, ok)
+			assert.Equal(t, tt.policy.IsAbsolute(), roundTripped.IsAbsolute())
+			assert.Equal(t, tt.policy.TTLSeconds, roundTripped.TTLSeconds)
+			assert.Equal(t, tt.policy.ExpiresAt, roundTripped.ExpiresAt)
+			assert.Equal(t, tt.policy.OnDependents, roundTripped.OnDependents)
+		})
+	}
+}
+
+// A canonical value is fixed width and always ends in Z. Storage relies on that
+// to order deadlines as plain strings, so the shape is worth asserting directly.
+func TestTTLPolicy_CanonicalExpiresAtIsFixedWidth(t *testing.T) {
+	p := &TTLPolicy{Type: "ttl", ExpiresAt: time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)}
+	assert.Len(t, p.CanonicalExpiresAt(), 20)
+	assert.Equal(t, "2026-08-07T12:00:00Z", p.CanonicalExpiresAt())
+}
+
 func TestTTLPolicy_CanonicalExpiresAtEmptyWhenRelative(t *testing.T) {
 	p := &TTLPolicy{Type: "ttl", TTLSeconds: 3600}
 	assert.False(t, p.IsAbsolute())

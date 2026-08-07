@@ -5587,11 +5587,22 @@ func isNullField(field types.Field) bool {
 // ever expiring. Compared as a string, a malformed value simply never sorts
 // before now — that one policy fails safe and the rest of the scan is unaffected.
 //
+// Comparing as a string cuts both ways, though, so the value is guarded before
+// it is compared. A malformed value that happens to sort ABOVE now is harmless —
+// it simply never expires. One that sorts BELOW now ("", "0000", a zero
+// timestamp) would read as a deadline long past and destroy the stack on the
+// next poll. The guard is therefore what makes "fails safe" true: the value must
+// match the canonical fixed-width shape and be no earlier than a date this
+// system could plausibly have written. Neither check is a cast, so neither can
+// abort the scan.
+//
 // A row carrying both keys is not reachable through any accepted input, but is
 // resolved here in favour of ExpiresAt rather than left to chance.
 const ttlExpiredPredicatePgAurora = `CASE
 				WHEN p.policy_data->>'ExpiresAt' IS NOT NULL
-				THEN (p.policy_data->>'ExpiresAt') COLLATE "C" < to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+				THEN p.policy_data->>'ExpiresAt' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
+				     AND (p.policy_data->>'ExpiresAt') COLLATE "C" >= '2000-01-01T00:00:00Z'
+				     AND (p.policy_data->>'ExpiresAt') COLLATE "C" < to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
 				ELSE s.created_at + ((p.policy_data->>'TTLSeconds')::bigint * interval '1 second') < now()
 			END`
 

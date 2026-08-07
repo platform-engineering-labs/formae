@@ -2659,11 +2659,22 @@ func deserializePolicy(label, policyType, policyDataStr, stackID string) (pkgmod
 // malformed value therefore never sorts before now: that one policy fails safe
 // instead of taking the rest of the scan down with it.
 //
+// Comparing as a string cuts both ways, though, so the value is guarded before
+// it is compared. A malformed value that happens to sort ABOVE now is harmless —
+// it simply never expires. One that sorts BELOW now ("", "0000", a zero
+// timestamp) would read as a deadline long past and destroy the stack on the
+// next poll. The guard is therefore what makes "fails safe" true: the value must
+// match the canonical fixed-width shape and be no earlier than a date this
+// system could plausibly have written. Neither check is a cast, so neither can
+// abort the scan.
+//
 // A row carrying both keys is not reachable through any accepted input, but is
 // resolved here in favour of ExpiresAt rather than left to chance.
 const ttlExpiredPredicateSQLite = `CASE
 				WHEN json_extract(p.policy_data, '$.ExpiresAt') IS NOT NULL
-				THEN json_extract(p.policy_data, '$.ExpiresAt') < strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+				THEN json_extract(p.policy_data, '$.ExpiresAt') GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z'
+				     AND json_extract(p.policy_data, '$.ExpiresAt') >= '2000-01-01T00:00:00Z'
+				     AND json_extract(p.policy_data, '$.ExpiresAt') < strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
 				ELSE datetime(s.created_at, '+' || json_extract(p.policy_data, '$.TTLSeconds') || ' seconds') < datetime('now')
 			END`
 

@@ -599,11 +599,22 @@ func (d *DatastoreMSSQL) DeletePoliciesForStack(stackID string, commandID string
 // before now — that one policy fails safe and the rest of the scan is unaffected.
 // TRY_CAST guards the relative branch for the same reason.
 //
+// Comparing as a string cuts both ways, though, so the value is guarded before
+// it is compared. A malformed value that happens to sort ABOVE now is harmless —
+// it simply never expires. One that sorts BELOW now ("", "0000", a zero
+// timestamp) would read as a deadline long past and destroy the stack on the
+// next poll. The guard is therefore what makes "fails safe" true: the value must
+// match the canonical fixed-width shape and be no earlier than a date this
+// system could plausibly have written. Neither check is a cast, so neither can
+// abort the scan.
+//
 // A row carrying both keys is not reachable through any accepted input, but is
 // resolved here in favour of ExpiresAt rather than left to chance.
 const ttlExpiredPredicateMSSQL = `CASE
 				WHEN JSON_VALUE(p.policy_data, '$.ExpiresAt') IS NOT NULL
-				THEN CASE WHEN JSON_VALUE(p.policy_data, '$.ExpiresAt') COLLATE Latin1_General_BIN2 < CONVERT(VARCHAR(19), SYSUTCDATETIME(), 126) + 'Z' THEN 1 ELSE 0 END
+				THEN CASE WHEN JSON_VALUE(p.policy_data, '$.ExpiresAt') LIKE '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z'
+				               AND JSON_VALUE(p.policy_data, '$.ExpiresAt') COLLATE Latin1_General_BIN2 >= '2000-01-01T00:00:00Z'
+				               AND JSON_VALUE(p.policy_data, '$.ExpiresAt') COLLATE Latin1_General_BIN2 < CONVERT(VARCHAR(19), SYSUTCDATETIME(), 126) + 'Z' THEN 1 ELSE 0 END
 				ELSE CASE WHEN DATEADD(SECOND, TRY_CAST(JSON_VALUE(p.policy_data, '$.TTLSeconds') AS INT), s.created_at) < SYSUTCDATETIME() THEN 1 ELSE 0 END
 			END = 1`
 
