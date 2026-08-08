@@ -155,6 +155,78 @@ local class SkippedDefaultResource extends formae.Resource {
     holder: UnsafeDefaultHolder|StrHolder
 }
 
+/// Two nested carriers with disjoint required properties. A value carrying one
+/// of the two properties fits exactly one of them, so which member a union
+/// resolves to is observable.
+local class EmailSettings {
+    addresses: String
+}
+
+local class WebhookSettings {
+    url: String
+}
+
+@formae.ResourceHint
+local class EmailThenWebhookResource extends formae.Resource {
+    type = "FakePlugin::Union::EmailThenWebhook"
+
+    @formae.FieldHint
+    settings: EmailSettings|WebhookSettings
+}
+
+@formae.ResourceHint
+local class WebhookThenEmailResource extends formae.Resource {
+    type = "FakePlugin::Union::WebhookThenEmail"
+
+    @formae.FieldHint
+    settings: WebhookSettings|EmailSettings
+}
+
+/// A carrier whose only property is non-nullable but carries a schema default,
+/// so an absent property still leaves it usable.
+local class DefaultedHolder {
+    retries: Int = 3
+}
+
+@formae.ResourceHint
+local class StrThenDefaultedResource extends formae.Resource {
+    type = "FakePlugin::Union::StrThenDefaulted"
+
+    @formae.FieldHint
+    holder: StrHolder|DefaultedHolder
+}
+
+/// A carrier with no property a value has to supply.
+local class AllOptionalHolder {
+    a: String?
+    b: Int?
+}
+
+@formae.ResourceHint
+local class AllOptionalThenStrResource extends formae.Resource {
+    type = "FakePlugin::Union::AllOptionalThenStr"
+
+    @formae.FieldHint
+    holder: AllOptionalHolder|StrHolder
+}
+
+/// A base contributing a property its subclasses do not declare themselves.
+local open class KindedBase {
+    kind: String
+}
+
+local class KindedHolder extends KindedBase {
+    n: String
+}
+
+@formae.ResourceHint
+local class KindedThenStrResource extends formae.Resource {
+    type = "FakePlugin::Union::KindedThenStr"
+
+    @formae.FieldHint
+    holder: KindedHolder|StrHolder
+}
+
 /// A scalar-or-reference field: the shape a schema gives a property that either
 /// holds a literal or points at another resource.
 @formae.ResourceHint
@@ -724,6 +796,86 @@ facts {
         (result as SkippedDefaultResource).holder is UnsafeDefaultHolder
     }
 
+    ["A union member missing a required property falls through to the member that has it"] {
+        let (result = gen.attemptApply(EmailThenWebhookResource, new Dynamic {
+            settings = new Dynamic { url = "https://example.test/hook" }
+            label = "notify"
+        }))
+        !(result is gen.GenerationFailure) &&
+        (result as EmailThenWebhookResource).settings is WebhookSettings
+    }
+
+    ["Reordering a union whose first member has the required property selects the same member"] {
+        let (result = gen.attemptApply(WebhookThenEmailResource, new Dynamic {
+            settings = new Dynamic { url = "https://example.test/hook" }
+            label = "notify"
+        }))
+        !(result is gen.GenerationFailure) &&
+        (result as WebhookThenEmailResource).settings is WebhookSettings
+    }
+
+    ["A union selects the member whose required property the value carries"] {
+        let (result = gen.attemptApply(EmailThenWebhookResource, new Dynamic {
+            settings = new Dynamic { addresses = "a@b" }
+            label = "notify"
+        }))
+        !(result is gen.GenerationFailure) &&
+        (result as EmailThenWebhookResource).settings is EmailSettings
+    }
+
+    ["Reordering a union whose second member has the required property selects the same member"] {
+        let (result = gen.attemptApply(WebhookThenEmailResource, new Dynamic {
+            settings = new Dynamic { addresses = "a@b" }
+            label = "notify"
+        }))
+        !(result is gen.GenerationFailure) &&
+        (result as WebhookThenEmailResource).settings is EmailSettings
+    }
+
+    ["A union member whose absent property has a schema default still fits an empty value"] {
+        // The default is what the property resolves to, so nothing is missing
+        // and the member stays in the running.
+        let (result = gen.attemptApply(StrThenDefaultedResource, new Dynamic {
+            holder = new Dynamic {}
+            label = "defaulted"
+        }))
+        !(result is gen.GenerationFailure) &&
+        (result as StrThenDefaultedResource).holder is DefaultedHolder &&
+        ((result as StrThenDefaultedResource).holder as DefaultedHolder).retries == 3
+    }
+
+    ["A union member with only optional properties fits an empty value"] {
+        let (result = gen.attemptApply(AllOptionalThenStrResource, new Dynamic {
+            holder = new Dynamic {}
+            label = "optional"
+        }))
+        !(result is gen.GenerationFailure) &&
+        (result as AllOptionalThenStrResource).holder is AllOptionalHolder &&
+        ((result as AllOptionalThenStrResource).holder as AllOptionalHolder).a == null &&
+        ((result as AllOptionalThenStrResource).holder as AllOptionalHolder).b == null
+    }
+
+    ["A union member missing a property it inherits falls through to the member that fits"] {
+        // `kind` comes from the base class, and counts exactly as a declared
+        // property does.
+        let (result = gen.attemptApply(KindedThenStrResource, new Dynamic {
+            holder = new Dynamic { n = "abc" }
+            label = "kinded"
+        }))
+        !(result is gen.GenerationFailure) &&
+        (result as KindedThenStrResource).holder is StrHolder
+    }
+
+    ["A union member carrying its inherited property is selected"] {
+        let (result = gen.attemptApply(KindedThenStrResource, new Dynamic {
+            holder = new Dynamic { n = "abc"; kind = "email" }
+            label = "kinded"
+        }))
+        !(result is gen.GenerationFailure) &&
+        (result as KindedThenStrResource).holder is KindedHolder &&
+        ((result as KindedThenStrResource).holder as KindedHolder).kind == "email"
+    }
+
     // --- Resource references in union-typed fields ---
 
     ["A resource reference in a union-typed field selects the resolvable member"] {
@@ -831,6 +983,20 @@ facts {
         message.contains("Cannot render resource \"map\" in stack \"default\"") &&
         message.contains("counts[\"a\"]") &&
         message.contains("cannot be parsed as Int")
+    }
+
+    ["A resource missing a property the schema requires is still rendered, partially"] {
+        // A resource is rendered on its own, with no alternative to fall
+        // through to, so an absent property is simply left out of the result.
+        // A union member missing one is rejected instead, because there the
+        // absence is what tells the members apart.
+        let (rendered = gen.applyResource(TestResource, new Dynamic {
+            size = 1024
+            label = "my-bucket"
+        }, "Cannot render resource \"my-bucket\" in stack \"default\""))
+        !rendered.containsKey("bucketName") &&
+        rendered["size"] == 1024 &&
+        rendered["label"] == "my-bucket"
     }
 
     // --- Malformed envelopes report a failure instead of aborting ---
