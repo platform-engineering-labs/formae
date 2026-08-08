@@ -145,7 +145,7 @@ func RunStatsResourceErrors_Empty(t *testing.T, newDS func(t *testing.T) TestDat
 		defer td.CleanUpFn() //nolint:errcheck
 
 		s, err := td.Stats()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Empty(t, s.ResourceErrors)
 	})
 }
@@ -170,7 +170,7 @@ func RunStatsResourceErrors_StillFailedCounted(t *testing.T, newDS func(t *testi
 		assert.NoError(t, td.StoreFormaCommand(failed, failed.ID))
 
 		s, err := td.Stats()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, map[string]int{"AWS::S3::Bucket": 1}, s.ResourceErrors)
 	})
 }
@@ -206,7 +206,7 @@ func RunStatsResourceErrors_FailedThenSucceededNotCounted(t *testing.T, newDS fu
 		assert.NoError(t, td.StoreFormaCommand(succeeded, succeeded.ID))
 
 		s, err := td.Stats()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Empty(t, s.ResourceErrors, "a later success must clear the earlier failure")
 	})
 }
@@ -236,7 +236,7 @@ func RunStatsResourceErrors_RepeatedFailuresCountOnce(t *testing.T, newDS func(t
 		}
 
 		s, err := td.Stats()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, map[string]int{"AWS::S3::Bucket": 1}, s.ResourceErrors,
 			"three failed attempts on one resource are one erroring resource")
 	})
@@ -272,7 +272,7 @@ func RunStatsResourceErrors_SucceededThenFailedCounted(t *testing.T, newDS func(
 		assert.NoError(t, td.StoreFormaCommand(failed, failed.ID))
 
 		s, err := td.Stats()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, map[string]int{"AWS::S3::Bucket": 1}, s.ResourceErrors)
 	})
 }
@@ -307,7 +307,7 @@ func RunStatsResourceErrors_InFlightRetryDoesNotClear(t *testing.T, newDS func(t
 		assert.NoError(t, td.StoreFormaCommand(inFlight, inFlight.ID))
 
 		s, err := td.Stats()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, map[string]int{"AWS::S3::Bucket": 1}, s.ResourceErrors,
 			"an in-flight retry has no outcome yet and must not clear the failure")
 	})
@@ -344,7 +344,7 @@ func RunStatsResourceErrors_CanceledDoesNotClear(t *testing.T, newDS func(t *tes
 		assert.NoError(t, td.StoreFormaCommand(canceled, canceled.ID))
 
 		s, err := td.Stats()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, map[string]int{"AWS::S3::Bucket": 1}, s.ResourceErrors,
 			"a canceled update must not clear the failure")
 	})
@@ -382,7 +382,7 @@ func RunStatsResourceErrors_RejectedDoesNotClear(t *testing.T, newDS func(t *tes
 		assert.NoError(t, td.StoreFormaCommand(rejected, rejected.ID))
 
 		s, err := td.Stats()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, map[string]int{"AWS::S3::Bucket": 1}, s.ResourceErrors,
 			"a rejected update must not clear the failure")
 	})
@@ -421,7 +421,7 @@ func RunStatsResourceErrors_LatestSuccessWithEmptyTypeClearsFailure(t *testing.T
 		assert.NoError(t, td.StoreFormaCommand(succeeded, succeeded.ID))
 
 		s, err := td.Stats()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Empty(t, s.ResourceErrors,
 			"a typeless later success is still the latest outcome and must clear the failure")
 	})
@@ -454,7 +454,7 @@ func RunStatsResourceErrors_ReplaceDeleteFailedThenCreateSucceeds(t *testing.T, 
 		assert.NoError(t, td.StoreFormaCommand(replace, replace.ID))
 
 		s, err := td.Stats()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Empty(t, s.ResourceErrors, "the later successful create side is the latest outcome")
 	})
 }
@@ -485,7 +485,7 @@ func RunStatsResourceErrors_ReplaceDeleteSucceedsThenCreateFailed(t *testing.T, 
 		assert.NoError(t, td.StoreFormaCommand(replace, replace.ID))
 
 		s, err := td.Stats()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, map[string]int{"AWS::S3::Bucket": 1}, s.ResourceErrors)
 	})
 }
@@ -518,7 +518,7 @@ func RunStatsResourceErrors_ReplaceSameTimestampFailedWins(t *testing.T, newDS f
 		assert.NoError(t, td.StoreFormaCommand(replace, replace.ID))
 
 		s, err := td.Stats()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, map[string]int{"AWS::S3::Bucket": 1}, s.ResourceErrors,
 			"an unresolvable tie must report the failure rather than hide it")
 	})
@@ -550,7 +550,7 @@ func RunStatsResourceErrors_ReplaceSameTimestampBothFailedCountsOnce(t *testing.
 		assert.NoError(t, td.StoreFormaCommand(replace, replace.ID))
 
 		s, err := td.Stats()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, map[string]int{"AWS::S3::Bucket": 1}, s.ResourceErrors,
 			"two failed rows for one resource are one error, not two")
 	})
@@ -595,7 +595,7 @@ func RunStatsResourceErrors_NullTimestampFailureClearedBySuccess(t *testing.T, n
 		assert.NoError(t, td.StoreFormaCommand(recovered, recovered.ID))
 
 		s, err := td.Stats()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Empty(t, s.ResourceErrors,
 			"a timestamped success supersedes a failure that carries no timestamp")
 	})
@@ -629,7 +629,7 @@ func RunStatsResourceErrors_NullTimestampRepeatedFailuresCountOnce(t *testing.T,
 		assert.NoError(t, td.NullResourceUpdateModifiedTsForTest("ksuid-1"))
 
 		s, err := td.Stats()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, map[string]int{"AWS::S3::Bucket": 1}, s.ResourceErrors,
 			"one resource is one error however many untimestamped failures it has")
 	})
@@ -677,7 +677,7 @@ func RunStatsResourceErrors_MigratedTimestampSpellingClearedBySuccess(t *testing
 		assert.NoError(t, td.StoreFormaCommand(recovered, recovered.ID))
 
 		s, err := td.Stats()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Empty(t, s.ResourceErrors,
 			"a later success supersedes an earlier failure however its timestamp is spelled")
 	})
@@ -723,7 +723,7 @@ func RunStatsResourceErrors_LaterCommandWinsOnTimestampTie(t *testing.T, newDS f
 		assert.NoError(t, td.StoreFormaCommand(later, later.ID))
 
 		s, err := td.Stats()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Empty(t, s.ResourceErrors,
 			"with timestamps tied the later command's success is the latest outcome")
 	})
@@ -762,7 +762,7 @@ func RunStatsResourceErrors_FailedDeleteCounted(t *testing.T, newDS func(t *test
 		assert.NoError(t, td.StoreFormaCommand(failedDelete, failedDelete.ID))
 
 		s, err := td.Stats()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, map[string]int{"AWS::S3::Bucket": 1}, s.ResourceErrors,
 			"a failed delete leaves the resource in error")
 	})
@@ -810,7 +810,7 @@ func RunStatsResourceErrors_GroupedByType(t *testing.T, newDS func(t *testing.T)
 		assert.NoError(t, td.StoreFormaCommand(repaired, repaired.ID))
 
 		s, err := td.Stats()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, map[string]int{"AWS::S3::Bucket": 1, "AWS::SQS::Queue": 1}, s.ResourceErrors)
 	})
 }
@@ -844,7 +844,7 @@ func RunStatsResourceErrors_DeletedResourceNotCounted(t *testing.T, newDS func(t
 		tombstoneResource(t, td, res)
 
 		s, err := td.Stats()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Empty(t, s.ResourceErrors,
 			"a deleted resource's failure must not stay on the gauge")
 	})
@@ -882,7 +882,7 @@ func RunStatsResourceErrors_ReapedResourceNotCounted(t *testing.T, newDS func(t 
 		require.NoError(t, td.MarkResourceReapedForTest(string(res.URI())))
 
 		s, err := td.Stats()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Empty(t, s.ResourceErrors,
 			"a reaped resource's failure must not stay on the gauge")
 	})
@@ -912,7 +912,7 @@ func RunStatsResourceErrors_UntrackedKsuidNotCounted(t *testing.T, newDS func(t 
 			"setup: a failed create must leave no inventory row")
 
 		s, err := td.Stats()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Empty(t, s.ResourceErrors,
 			"a ksuid with no inventory row has nothing to report")
 	})
@@ -945,7 +945,7 @@ func RunStatsResourceErrors_ReplaceDeleteSucceededCreateFailedNotCounted(t *test
 		assert.NoError(t, td.StoreFormaCommand(replace, replace.ID))
 
 		s, err := td.Stats()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Empty(t, s.ResourceErrors,
 			"a replace that deleted the row and failed to recreate it leaves nothing live to count")
 	})
@@ -976,7 +976,7 @@ func RunStatsResourceErrors_FailedDeleteStillCounted(t *testing.T, newDS func(t 
 			"setup: a failed delete must leave the row live")
 
 		s, err := td.Stats()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, map[string]int{"AWS::S3::Bucket": 1}, s.ResourceErrors,
 			"a delete operation that failed must not be mistaken for a tombstone")
 	})
@@ -1013,7 +1013,7 @@ func RunStatsResourceErrors_FailedUpdateOnLiveResourceCounted(t *testing.T, newD
 		assert.NoError(t, td.StoreFormaCommand(failedUpdate, failedUpdate.ID))
 
 		s, err := td.Stats()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, map[string]int{"AWS::S3::Bucket": 1}, s.ResourceErrors)
 	})
 }
@@ -1042,7 +1042,7 @@ func RunStatsResourceErrors_UnmanagedResourceCounted(t *testing.T, newDS func(t 
 		assert.NoError(t, td.StoreFormaCommand(failed, failed.ID))
 
 		s, err := td.Stats()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, map[string]int{"AWS::S3::Bucket": 1}, s.ResourceTypes,
 			"the live-resource count includes unmanaged resources")
 		assert.Equal(t, map[string]int{"AWS::S3::Bucket": 1}, s.ResourceErrors)
@@ -1089,7 +1089,7 @@ func RunStatsResourceErrors_TombstonedKsuidWithLaterSuccessNotCounted(t *testing
 		assert.NoError(t, td.StoreFormaCommand(succeeded, succeeded.ID))
 
 		s, err := td.Stats()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Empty(t, s.ResourceErrors,
 			"a resource that is live again and succeeding must not report its pre-delete failure")
 	})
@@ -1119,7 +1119,7 @@ func RunStatsResourceErrors_TombstonedKsuidWithNoLaterRowNotCounted(t *testing.T
 		assert.NoError(t, td.StoreFormaCommand(failedRebind, failedRebind.ID))
 
 		s, err := td.Stats()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Empty(t, s.ResourceErrors,
 			"a tombstoned ksuid with no later row has nothing live to report")
 	})
@@ -1162,7 +1162,7 @@ func RunStatsResourceErrors_NewKsuidForSameTripletClearsGauge(t *testing.T, newD
 		assert.NoError(t, td.StoreFormaCommand(succeeded, succeeded.ID))
 
 		s, err := td.Stats()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Empty(t, s.ResourceErrors,
 			"the retired ksuid's failure must not outlive its inventory row")
 	})
@@ -1198,7 +1198,7 @@ func RunStatsResourceErrors_LabelledFromLiveRowOnCaseOnlyTypeChange(t *testing.T
 		assert.NoError(t, td.StoreFormaCommand(failed, failed.ID))
 
 		s, err := td.Stats()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, map[string]int{liveType: 2}, s.ResourceErrors,
 			"failures recorded under different spellings of a type aggregate under the live one")
 	})
@@ -1238,7 +1238,7 @@ func RunStatsResourceErrors_OneKsuidUnderTwoLiveUrisCountedOnce(t *testing.T, ne
 		assert.NoError(t, td.StoreFormaCommand(failed, failed.ID))
 
 		s, err := td.Stats()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, map[string]int{"AWS::SNS::Topic": 1}, s.ResourceErrors,
 			"one ksuid is one erroring resource however many live rows carry it")
 	})
@@ -1281,7 +1281,7 @@ func RunStatsResourceErrors_OneKsuidUnderTwoLiveUrisAtSameVersionCountedOnce(t *
 		assert.NoError(t, td.StoreFormaCommand(failed, failed.ID))
 
 		s, err := td.Stats()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		reported := 0
 		for resourceType, count := range s.ResourceErrors {
@@ -1331,7 +1331,7 @@ func RunStatsResourceErrors_EmptyTypeNotBackfilledFromOlderLiveRow(t *testing.T,
 		assert.NoError(t, td.StoreFormaCommand(failed, failed.ID))
 
 		s, err := td.Stats()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Empty(t, s.ResourceErrors,
 			"a ksuid whose current row is typeless must not be reported under an older row's type")
 	})
@@ -1372,7 +1372,7 @@ func RunStatsResourceErrors_TypedCurrentRowCountedDespiteTypelessOlderRow(t *tes
 		assert.NoError(t, td.StoreFormaCommand(failed, failed.ID))
 
 		s, err := td.Stats()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, map[string]int{"AWS::SQS::Queue": 1}, s.ResourceErrors,
 			"a ksuid whose current row is typed is reported under it, whatever an older row carries")
 	})
@@ -1400,7 +1400,7 @@ func RunStatsResourceErrors_TypeComesFromLiveResourceRow(t *testing.T, newDS fun
 		assert.NoError(t, td.StoreFormaCommand(failed, failed.ID))
 
 		s, err := td.Stats()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, map[string]int{"AWS::SQS::Queue": 1}, s.ResourceErrors,
 			"the label is the live row's type, not the one the failure was recorded under")
 	})
@@ -1427,7 +1427,7 @@ func RunStatsResourceErrors_LiveResourceWithEmptyTypeNotCounted(t *testing.T, ne
 		assert.NoError(t, td.StoreFormaCommand(failed, failed.ID))
 
 		s, err := td.Stats()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.NotContains(t, s.ResourceErrors, "", "a typeless live row must not produce an empty-string key")
 		assert.Empty(t, s.ResourceErrors)
 	})
@@ -1486,7 +1486,7 @@ func RunStatsResourceErrors_ErrorsNeverExceedLiveResourcesOfThatType(t *testing.
 		tombstoneResource(t, td, gone2)
 
 		s, err := td.Stats()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		assert.Equal(t, map[string]int{"AWS::S3::Bucket": 3, "AWS::SQS::Queue": 1}, s.ResourceTypes,
 			"setup: the live inventory is three buckets and one queue")
