@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
@@ -198,6 +199,22 @@ func getOperationTimeout() time.Duration {
 		}
 	}
 	return 5 * time.Minute // Default timeout
+}
+
+// getCLIInvocationTimeout returns the bound for a single formae CLI
+// invocation. Every CLI call the harness makes either submits work and
+// returns or reads state, so none runs legitimately for minutes; the bound
+// exists so a CLI process that never exits surfaces as a test failure with a
+// diagnostic instead of a silent stall until the go-test deadline.
+// It reads from the FORMAE_TEST_CLI_TIMEOUT environment variable (in minutes).
+// Default is 5 minutes.
+func getCLIInvocationTimeout() time.Duration {
+	if val := os.Getenv("FORMAE_TEST_CLI_TIMEOUT"); val != "" {
+		if minutes, err := strconv.Atoi(val); err == nil && minutes > 0 {
+			return time.Duration(minutes) * time.Minute
+		}
+	}
+	return 5 * time.Minute
 }
 
 // getDiscoveryTimeout returns the timeout duration for discovery inventory polling.
@@ -1340,32 +1357,27 @@ func compareProperties(r testReporter, expectedProperties map[string]any, actual
 // Narrowing it keeps the sub-step unit-testable with a fake, mirroring the
 // testReporter seam used by the comparison helpers.
 type reapplyHarness interface {
-	ApplyWithMode(pklFile string, mode string) (string, error)
-	PollStatus(commandID string, timeout time.Duration) (string, error)
-	Inventory(query string) (*InventoryResponse, error)
-	Destroy(pklFile string) (string, error)
+	SimulateApply(pklFile string, mode string) (*model.Simulation, error)
 }
 
-// verifyExtractReapply applies the forma that `formae extract` just produced and
-// asserts it feeds back in: the apply succeeds, exactly one resource of the type
-// remains, its identity triplet is unchanged, and its properties still match. A
-// faithful extract makes this a zero-operation apply; a lossy one diffs, which is
-// what drives the plugin's handler and surfaces rejections that evaluating the
-// extracted file alone cannot catch.
+// verifyExtractReapply simulates a patch-mode apply of the forma that
+// `formae extract` just produced and asserts the agent plans no changes. A
+// faithful extract describes state that already exists, so the simulation must
+// come back empty; a lossy one diffs, and the planned operations name exactly
+// what the re-apply would touch. Simulating rather than applying asserts the
+// round-trip property directly, keeps the resource pristine for the phases
+// that follow, and avoids waiting on a command the agent never stores for
+// zero-change applies.
 //
-// Reporting is non-fatal so the lifecycle still reaches Destroy. Every check
-// returns immediately on failure, so no check runs on the output of a failed one.
-// Returns whether the round trip passed.
+// Reporting is non-fatal so the lifecycle still reaches Destroy. Returns
+// whether the round trip passed.
 func (rc *ResultCollector) verifyExtractReapply(
 	t *testing.T,
 	idx int,
 	harness reapplyHarness,
 	extractFile string,
-	resourceType string,
 	extractedResource map[string]any,
 	createdResource map[string]any,
-	expectedProperties map[string]any,
-	providerDefaults map[string]providerDefault,
 ) bool {
 	// Secret fields are hashed at rest, so extract emits an opaque envelope rather
 	// than the authored plaintext. Re-applying that would either be refused as a
@@ -1377,94 +1389,44 @@ func (rc *ResultCollector) verifyExtractReapply(
 		return true
 	}
 
-	t.Log("Re-applying extracted forma in patch mode...")
-	reapplyCommandID, err := harness.ApplyWithMode(extractFile, "patch")
+	t.Log("Simulating a patch-mode apply of the extracted forma...")
+	simulation, err := harness.SimulateApply(extractFile, "patch")
 	if err != nil {
-		rc.CRUDErrorf(t, idx, PhaseExtract, "Re-apply of extracted forma failed: %v", err)
+		rc.CRUDErrorf(t, idx, PhaseExtract, "Simulated re-apply of extracted forma failed: %v", err)
 		return false
 	}
-	if reapplyCommandID == "" {
-		rc.CRUDErrorf(t, idx, PhaseExtract, "Re-apply of extracted forma should return a command ID")
+	if simulation == nil {
+		rc.CRUDErrorf(t, idx, PhaseExtract, "Simulated re-apply of extracted forma should return a simulation")
 		return false
 	}
-
-	// A command that was submitted may have created resources before it failed or
-	// timed out, so these paths clean up too — not just the identity anomalies below.
-	reapplyStatus, err := harness.PollStatus(reapplyCommandID, getOperationTimeout())
-	if err != nil {
-		rc.CRUDErrorf(t, idx, PhaseExtract, "Re-apply command should complete successfully: %v", err)
-		destroyExtractedForma(t, harness, extractFile)
-		return false
-	}
-	if reapplyStatus != "Success" {
-		rc.CRUDErrorf(t, idx, PhaseExtract, "Re-apply command should reach Success state, got: %s", reapplyStatus)
-		destroyExtractedForma(t, harness, extractFile)
+	if simulation.ChangesRequired {
+		rc.CRUDErrorf(t, idx, PhaseExtract,
+			"Re-applying the extracted forma should be a zero-operation apply, but the agent plans changes: %s",
+			describePlannedChanges(&simulation.Command))
 		return false
 	}
 
-	inventoryAfterReapply, err := harness.Inventory(fmt.Sprintf("type: %s", resourceType))
-	if err != nil {
-		rc.CRUDErrorf(t, idx, PhaseExtract, "Inventory command failed after re-apply: %v", err)
-		destroyExtractedForma(t, harness, extractFile)
-		return false
-	}
-	if inventoryAfterReapply == nil {
-		rc.CRUDErrorf(t, idx, PhaseExtract, "Inventory should return a response after re-apply")
-		destroyExtractedForma(t, harness, extractFile)
-		return false
-	}
-	if len(inventoryAfterReapply.Resources) != 1 {
-		rc.CRUDErrorf(t, idx, PhaseExtract, "Inventory should contain exactly 1 resource after re-apply, got %d", len(inventoryAfterReapply.Resources))
-		destroyExtractedForma(t, harness, extractFile)
-		return false
-	}
-
-	// An unchanged NativeID means the re-apply did not silently replace the
-	// resource; an unchanged Label and Stack mean the extract did not fabricate a
-	// second identity triplet, which would leave a resource the fixture-driven
-	// Destroy step never reclaims.
-	resourceAfterReapply := inventoryAfterReapply.Resources[0]
-	for _, field := range []string{"Label", "Stack", "NativeID"} {
-		actualValue, ok := resourceAfterReapply[field].(string)
-		if !ok {
-			rc.CRUDErrorf(t, idx, PhaseExtract, "Resource should have a string %s after re-apply, got: %v", field, resourceAfterReapply[field])
-			destroyExtractedForma(t, harness, extractFile)
-			return false
-		}
-		expectedValue, _ := createdResource[field].(string)
-		if actualValue != expectedValue {
-			rc.CRUDErrorf(t, idx, PhaseExtract, "Re-apply of extracted forma should not change %s: expected %s, got %s", field, expectedValue, actualValue)
-			destroyExtractedForma(t, harness, extractFile)
-			return false
-		}
-	}
-
-	if !rc.compareCRUDProperties(t, idx, PhaseExtract, expectedProperties, resourceAfterReapply, "after extract re-apply", providerDefaults) {
-		return false
-	}
-
-	t.Log("Extract re-apply validation completed!")
+	t.Log("Extract re-apply simulation confirmed a zero-operation apply!")
 	return true
 }
 
-// destroyExtractedForma makes a best-effort attempt to destroy whatever the
-// extracted forma names, so anything the re-apply created under an identity the
-// fixture does not name is not leaked. Runs inline rather than through the
-// harness cleanup registry, because the extract step removes the file's temp
-// directory before registered cleanups unwind. Errors are logged and ignored.
-func destroyExtractedForma(t *testing.T, harness reapplyHarness, extractFile string) {
-	t.Log("Re-apply did not complete cleanly; destroying the extracted forma to avoid leaking a resource...")
-	destroyCommandID, err := harness.Destroy(extractFile)
-	if err != nil {
-		t.Logf("Best-effort destroy of extracted forma failed: %v", err)
-		return
+// describePlannedChanges renders the operations a simulation would perform, so
+// a failed round trip names exactly what the re-apply would touch.
+func describePlannedChanges(cmd *model.Command) string {
+	var ops []string
+	for _, ru := range cmd.ResourceUpdates {
+		ops = append(ops, fmt.Sprintf("%s %s (%s)", ru.Operation, ru.ResourceLabel, ru.ResourceType))
 	}
-	status, err := harness.PollStatus(destroyCommandID, getOperationTimeout())
-	if err != nil {
-		t.Logf("Best-effort destroy of extracted forma did not complete: %v", err)
-		return
+	for _, tu := range cmd.TargetUpdates {
+		ops = append(ops, fmt.Sprintf("%s target %s", tu.Operation, tu.TargetLabel))
 	}
-	t.Logf("Best-effort destroy of extracted forma finished with status: %s", status)
+	for _, su := range cmd.StackUpdates {
+		ops = append(ops, fmt.Sprintf("%s stack %s", su.Operation, su.StackLabel))
+	}
+	if len(ops) == 0 {
+		return "(the simulation reported changes but listed no operations)"
+	}
+	return strings.Join(ops, "; ")
 }
 
 // runCRUDTest runs the full CRUD lifecycle for a single test case.
@@ -1641,8 +1603,8 @@ func runCRUDTest(t *testing.T, tc TestCase, rc *ResultCollector) {
 		// known-bad properties would mutate the resource for no extra signal.
 		if !rc.compareCRUDProperties(t, idx, PhaseExtract, expectedProperties, extractedResource, "after extract", providerDefaults) {
 			allPropertiesMatched = false
-		} else if rc.verifyExtractReapply(t, idx, harness, extractFile, actualResourceType,
-			extractedResource, actualResource, expectedProperties, providerDefaults) {
+		} else if rc.verifyExtractReapply(t, idx, harness, extractFile,
+			extractedResource, actualResource) {
 			rc.SetCRUDPhase(idx, PhaseExtract, StepPassed)
 		} else {
 			allPropertiesMatched = false

@@ -60,6 +60,7 @@ type resolvablePath struct {
 type TestHarness struct {
 	t                       *testing.T
 	formaeBinary            string
+	cliTimeout              time.Duration // bound for a single CLI invocation; 0 means getCLIInvocationTimeout()
 	agentCmd                *exec.Cmd
 	agentCtx                context.Context
 	agentCancel             context.CancelFunc
@@ -833,6 +834,38 @@ func (h *TestHarness) GetTempDir() string {
 	return h.tempDir
 }
 
+// runCLI runs one formae CLI invocation with the given arguments, bounded by
+// the harness CLI timeout so a CLI process that never exits surfaces as an
+// error rather than blocking the suite until the go-test deadline. Stdout and
+// stderr are captured separately so stderr (ANSI codes, warnings) cannot
+// corrupt output a caller parses.
+func (h *TestHarness) runCLI(args ...string) (string, string, error) {
+	timeout := h.cliTimeout
+	if timeout <= 0 {
+		timeout = getCLIInvocationTimeout()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, h.formaeBinary, args...)
+	h.setCommandEnv(cmd)
+
+	// Without a WaitDelay, a child the CLI spawned (pkl, a shell) that outlives
+	// it holds the stdout/stderr pipes open and Wait blocks on them even after
+	// the deadline killed the CLI itself.
+	cmd.WaitDelay = time.Second
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		err = fmt.Errorf("formae %s timed out after %s", args[0], timeout)
+	}
+	return stdout.String(), stderr.String(), err
+}
+
 // Apply runs `formae apply` with the given PKL file in reconcile mode and returns the command ID
 func (h *TestHarness) Apply(pklFile string) (string, error) {
 	return h.ApplyWithMode(pklFile, "reconcile")
@@ -842,8 +875,7 @@ func (h *TestHarness) Apply(pklFile string) (string, error) {
 func (h *TestHarness) ApplyWithMode(pklFile string, mode string) (string, error) {
 	h.t.Logf("Running formae apply with %s (mode: %s)", pklFile, mode)
 
-	cmd := exec.Command(
-		h.formaeBinary,
+	stdout, stderr, err := h.runCLI(
 		"apply",
 		pklFile,
 		"--config", h.configFile,
@@ -851,76 +883,91 @@ func (h *TestHarness) ApplyWithMode(pklFile string, mode string) (string, error)
 		"--output-consumer", "machine",
 		"--output-schema", "json",
 	)
-	h.setCommandEnv(cmd)
-
-	// Capture stdout and stderr separately to prevent stderr (ANSI codes, warnings)
-	// from corrupting the JSON output that we need to parse
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
 	if err != nil {
-		return "", fmt.Errorf("apply command failed: %w\nStderr: %s\nStdout: %s", err, stderr.String(), stdout.String())
+		return "", fmt.Errorf("apply command failed: %w\nStderr: %s\nStdout: %s", err, stderr, stdout)
 	}
 
 	// Log stderr if there was any output (for debugging purposes)
-	if stderr.Len() > 0 {
-		h.t.Logf("Apply stderr (ignored for parsing): %s", stderr.String())
+	if stderr != "" {
+		h.t.Logf("Apply stderr (ignored for parsing): %s", stderr)
 	}
 
 	// Parse JSON response from stdout only
 	var response model.SubmitCommandResponse
-	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
-		return "", fmt.Errorf("failed to parse apply response: %w\nStdout: %s", err, stdout.String())
+	if err := json.Unmarshal([]byte(stdout), &response); err != nil {
+		return "", fmt.Errorf("failed to parse apply response: %w\nStdout: %s", err, stdout)
 	}
 
 	if response.CommandID == "" {
-		return "", fmt.Errorf("no command ID in response: %s", stdout.String())
+		return "", fmt.Errorf("no command ID in response: %s", stdout)
 	}
 
 	h.t.Logf("Apply command submitted, CommandID: %s", response.CommandID)
 	return response.CommandID, nil
 }
 
+// SimulateApply runs `formae apply --simulate` with the given PKL file and
+// mode, and returns the agent's simulation of the changes the apply would
+// perform. Nothing is submitted and no state is mutated; a forma that matches
+// current state comes back with ChangesRequired = false.
+func (h *TestHarness) SimulateApply(pklFile string, mode string) (*model.Simulation, error) {
+	h.t.Logf("Running formae apply --simulate with %s (mode: %s)", pklFile, mode)
+
+	stdout, stderr, err := h.runCLI(
+		"apply",
+		pklFile,
+		"--config", h.configFile,
+		"--mode", mode,
+		"--simulate",
+		"--output-consumer", "machine",
+		"--output-schema", "json",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("simulate command failed: %w\nStderr: %s\nStdout: %s", err, stderr, stdout)
+	}
+
+	// Log stderr if there was any output (for debugging purposes)
+	if stderr != "" {
+		h.t.Logf("Simulate stderr (ignored for parsing): %s", stderr)
+	}
+
+	// Parse JSON response from stdout only
+	var simulation model.Simulation
+	if err := json.Unmarshal([]byte(stdout), &simulation); err != nil {
+		return nil, fmt.Errorf("failed to parse simulate response: %w\nStdout: %s", err, stdout)
+	}
+
+	return &simulation, nil
+}
+
 // Destroy runs `formae destroy` with the given PKL file and returns the command ID
 func (h *TestHarness) Destroy(pklFile string) (string, error) {
 	h.t.Logf("Running formae destroy with %s", pklFile)
 
-	cmd := exec.Command(
-		h.formaeBinary,
+	stdout, stderr, err := h.runCLI(
 		"destroy",
 		pklFile,
 		"--config", h.configFile,
 		"--output-consumer", "machine",
 		"--output-schema", "json",
 	)
-	h.setCommandEnv(cmd)
-
-	// Capture stdout and stderr separately to prevent stderr (ANSI codes, warnings)
-	// from corrupting the JSON output that we need to parse
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
 	if err != nil {
-		return "", fmt.Errorf("destroy command failed: %w\nStderr: %s\nStdout: %s", err, stderr.String(), stdout.String())
+		return "", fmt.Errorf("destroy command failed: %w\nStderr: %s\nStdout: %s", err, stderr, stdout)
 	}
 
 	// Log stderr if there was any output (for debugging purposes)
-	if stderr.Len() > 0 {
-		h.t.Logf("Destroy stderr (ignored for parsing): %s", stderr.String())
+	if stderr != "" {
+		h.t.Logf("Destroy stderr (ignored for parsing): %s", stderr)
 	}
 
 	// Parse JSON response from stdout only
 	var response model.SubmitCommandResponse
-	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
-		return "", fmt.Errorf("failed to parse destroy response: %w\nStdout: %s", err, stdout.String())
+	if err := json.Unmarshal([]byte(stdout), &response); err != nil {
+		return "", fmt.Errorf("failed to parse destroy response: %w\nStdout: %s", err, stdout)
 	}
 
 	if response.CommandID == "" {
-		return "", fmt.Errorf("no command ID in response: %s", stdout.String())
+		return "", fmt.Errorf("no command ID in response: %s", stdout)
 	}
 
 	h.t.Logf("Destroy command submitted, CommandID: %s", response.CommandID)
@@ -931,33 +978,23 @@ func (h *TestHarness) Destroy(pklFile string) (string, error) {
 func (h *TestHarness) Eval(pklFile string) (string, error) {
 	h.t.Logf("Running formae eval with %s", pklFile)
 
-	cmd := exec.Command(
-		h.formaeBinary,
+	stdout, stderr, err := h.runCLI(
 		"eval",
 		pklFile,
 		"--config", h.configFile,
 		"--output-consumer", "machine",
 		"--output-schema", "json",
 	)
-	h.setCommandEnv(cmd)
-
-	// Capture stdout and stderr separately to prevent stderr (warnings, etc.)
-	// from corrupting the JSON output that we need to parse
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
 	if err != nil {
-		return "", fmt.Errorf("eval command failed: %w\nStderr: %s\nStdout: %s", err, stderr.String(), stdout.String())
+		return "", fmt.Errorf("eval command failed: %w\nStderr: %s\nStdout: %s", err, stderr, stdout)
 	}
 
 	// Log stderr if there was any output (for debugging purposes)
-	if stderr.Len() > 0 {
-		h.t.Logf("Eval stderr (ignored for parsing): %s", stderr.String())
+	if stderr != "" {
+		h.t.Logf("Eval stderr (ignored for parsing): %s", stderr)
 	}
 
-	return stdout.String(), nil
+	return stdout, nil
 }
 
 // Extract runs `formae extract` with the given query and output file.
@@ -977,30 +1014,20 @@ func (h *TestHarness) Eval(pklFile string) (string, error) {
 func (h *TestHarness) Extract(query string, outputFile string) error {
 	h.t.Logf("Running formae extract with query '%s' to %s", query, outputFile)
 
-	cmd := exec.Command(
-		h.formaeBinary,
+	stdout, stderr, err := h.runCLI(
 		"extract",
 		"--config", h.configFile,
 		"--schema-location", "local",
 		"--query", query,
 		outputFile,
 	)
-	h.setCommandEnv(cmd)
-
-	// Capture stdout and stderr separately to prevent stderr (ANSI codes, warnings)
-	// from corrupting the output
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
 	if err != nil {
-		return fmt.Errorf("extract command failed: %w\nStderr: %s\nStdout: %s", err, stderr.String(), stdout.String())
+		return fmt.Errorf("extract command failed: %w\nStderr: %s\nStdout: %s", err, stderr, stdout)
 	}
 
 	// Log stderr if there was any output (for debugging purposes)
-	if stderr.Len() > 0 {
-		h.t.Logf("Extract stderr (ignored): %s", stderr.String())
+	if stderr != "" {
+		h.t.Logf("Extract stderr (ignored): %s", stderr)
 	}
 
 	h.t.Logf("Extract completed successfully")
@@ -1017,8 +1044,7 @@ type InventoryResponse struct {
 func (h *TestHarness) Inventory(query string) (*InventoryResponse, error) {
 	h.t.Logf("Running formae inventory with query: %s", query)
 
-	cmd := exec.Command(
-		h.formaeBinary,
+	stdout, stderr, err := h.runCLI(
 		"inventory",
 		"resources", // Need to specify the subcommand
 		"--config", h.configFile,
@@ -1026,27 +1052,19 @@ func (h *TestHarness) Inventory(query string) (*InventoryResponse, error) {
 		"--output-consumer", "machine",
 		"--output-schema", "json",
 	)
-
-	// Capture stdout and stderr separately to prevent stderr (ANSI codes, warnings)
-	// from corrupting the JSON output that we need to parse
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
 	if err != nil {
-		return nil, fmt.Errorf("inventory command failed: %w\nStderr: %s\nStdout: %s", err, stderr.String(), stdout.String())
+		return nil, fmt.Errorf("inventory command failed: %w\nStderr: %s\nStdout: %s", err, stderr, stdout)
 	}
 
 	// Log stderr if there was any output (for debugging purposes)
-	if stderr.Len() > 0 {
-		h.t.Logf("Inventory stderr (ignored for parsing): %s", stderr.String())
+	if stderr != "" {
+		h.t.Logf("Inventory stderr (ignored for parsing): %s", stderr)
 	}
 
 	// Parse JSON response from stdout only
 	var response InventoryResponse
-	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
-		return nil, fmt.Errorf("failed to parse inventory response: %w\nStdout: %s", err, stdout.String())
+	if err := json.Unmarshal([]byte(stdout), &response); err != nil {
+		return nil, fmt.Errorf("failed to parse inventory response: %w\nStdout: %s", err, stdout)
 	}
 
 	h.t.Logf("Inventory returned %d resource(s)", len(response.Resources))
@@ -2193,8 +2211,7 @@ func (h *TestHarness) PollStatus(commandID string, timeout time.Duration) (strin
 
 // GetStatus gets the current status of a command
 func (h *TestHarness) GetStatus(commandID string) (string, error) {
-	cmd := exec.Command(
-		h.formaeBinary,
+	stdout, stderr, err := h.runCLI(
 		"status",
 		"command",
 		"--config", h.configFile,
@@ -2202,22 +2219,14 @@ func (h *TestHarness) GetStatus(commandID string) (string, error) {
 		"--output-consumer", "machine",
 		"--output-schema", "json",
 	)
-
-	// Capture stdout and stderr separately to prevent stderr (ANSI codes, warnings)
-	// from corrupting the JSON output that we need to parse
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
 	if err != nil {
-		return "", fmt.Errorf("status command failed: %w\nStderr: %s\nStdout: %s", err, stderr.String(), stdout.String())
+		return "", fmt.Errorf("status command failed: %w\nStderr: %s\nStdout: %s", err, stderr, stdout)
 	}
 
 	// Parse JSON response from stdout only
 	var response model.ListCommandStatusResponse
-	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
-		return "", fmt.Errorf("failed to parse status response: %w\nStdout: %s", err, stdout.String())
+	if err := json.Unmarshal([]byte(stdout), &response); err != nil {
+		return "", fmt.Errorf("failed to parse status response: %w\nStdout: %s", err, stdout)
 	}
 
 	if len(response.Commands) == 0 {

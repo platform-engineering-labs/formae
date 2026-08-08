@@ -8,9 +8,11 @@ import (
 	"errors"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
@@ -631,32 +633,13 @@ func TestContainsOpaqueValue(t *testing.T) {
 type fakeReapplyHarness struct {
 	calls []string
 
-	applyCommandID string
-	applyErr       error
-	pollStatus     string
-	pollErr        error
-	inventory      *InventoryResponse
-	inventoryErr   error
+	simulation  *model.Simulation
+	simulateErr error
 }
 
-func (f *fakeReapplyHarness) ApplyWithMode(pklFile string, mode string) (string, error) {
-	f.calls = append(f.calls, "ApplyWithMode:"+mode)
-	return f.applyCommandID, f.applyErr
-}
-
-func (f *fakeReapplyHarness) PollStatus(commandID string, timeout time.Duration) (string, error) {
-	f.calls = append(f.calls, "PollStatus")
-	return f.pollStatus, f.pollErr
-}
-
-func (f *fakeReapplyHarness) Inventory(query string) (*InventoryResponse, error) {
-	f.calls = append(f.calls, "Inventory")
-	return f.inventory, f.inventoryErr
-}
-
-func (f *fakeReapplyHarness) Destroy(pklFile string) (string, error) {
-	f.calls = append(f.calls, "Destroy")
-	return "cmd-destroy", nil
+func (f *fakeReapplyHarness) SimulateApply(pklFile string, mode string) (*model.Simulation, error) {
+	f.calls = append(f.calls, "SimulateApply:"+mode)
+	return f.simulation, f.simulateErr
 }
 
 // reapplyResource builds an inventory-shaped resource with the given identity.
@@ -675,10 +658,6 @@ func TestVerifyExtractReapply(t *testing.T) {
 	created := reapplyResource("my-bucket", "default", "bucket-1", properties)
 	extracted := reapplyResource("my-bucket", "default", "bucket-1", properties)
 
-	inventoryWith := func(resources ...map[string]any) *InventoryResponse {
-		return &InventoryResponse{Resources: resources}
-	}
-
 	tests := []struct {
 		name          string
 		harness       *fakeReapplyHarness
@@ -686,149 +665,40 @@ func TestVerifyExtractReapply(t *testing.T) {
 		created       map[string]any
 		expectedPass  bool
 		expectedCalls []string
+		expectedError string
 	}{
 		{
-			name: "faithful extract re-applies cleanly",
-			harness: &fakeReapplyHarness{
-				applyCommandID: "cmd-1",
-				pollStatus:     "Success",
-				inventory:      inventoryWith(reapplyResource("my-bucket", "default", "bucket-1", properties)),
-			},
+			name:          "faithful extract simulates to a zero-operation apply",
+			harness:       &fakeReapplyHarness{simulation: &model.Simulation{ChangesRequired: false}},
 			expectedPass:  true,
-			expectedCalls: []string{"ApplyWithMode:patch", "PollStatus", "Inventory"},
+			expectedCalls: []string{"SimulateApply:patch"},
 		},
 		{
-			name:          "apply returns an error",
-			harness:       &fakeReapplyHarness{applyErr: errors.New("provider rejected the request")},
+			name:          "simulate returns an error",
+			harness:       &fakeReapplyHarness{simulateErr: errors.New("agent unreachable")},
 			expectedPass:  false,
-			expectedCalls: []string{"ApplyWithMode:patch"},
+			expectedCalls: []string{"SimulateApply:patch"},
+			expectedError: "agent unreachable",
 		},
 		{
-			name:          "apply returns an empty command id",
-			harness:       &fakeReapplyHarness{applyCommandID: ""},
+			name:          "simulate returns no simulation",
+			harness:       &fakeReapplyHarness{},
 			expectedPass:  false,
-			expectedCalls: []string{"ApplyWithMode:patch"},
+			expectedCalls: []string{"SimulateApply:patch"},
 		},
 		{
-			name:          "poll returns an error",
-			harness:       &fakeReapplyHarness{applyCommandID: "cmd-1", pollErr: errors.New("timed out")},
+			name: "lossy extract plans a change",
+			harness: &fakeReapplyHarness{simulation: &model.Simulation{
+				ChangesRequired: true,
+				Command: model.Command{ResourceUpdates: []model.ResourceUpdate{{
+					Operation:     model.OperationUpdate,
+					ResourceLabel: "my-bucket",
+					ResourceType:  "NS::Storage::Bucket",
+				}}},
+			}},
 			expectedPass:  false,
-			expectedCalls: []string{"ApplyWithMode:patch", "PollStatus", "Destroy", "PollStatus"},
-		},
-		{
-			name:          "poll reaches a non-success terminal state",
-			harness:       &fakeReapplyHarness{applyCommandID: "cmd-1", pollStatus: "Failed"},
-			expectedPass:  false,
-			expectedCalls: []string{"ApplyWithMode:patch", "PollStatus", "Destroy", "PollStatus"},
-		},
-		{
-			name: "inventory returns an error",
-			harness: &fakeReapplyHarness{
-				applyCommandID: "cmd-1",
-				pollStatus:     "Success",
-				inventoryErr:   errors.New("inventory unavailable"),
-			},
-			expectedPass:  false,
-			expectedCalls: []string{"ApplyWithMode:patch", "PollStatus", "Inventory", "Destroy", "PollStatus"},
-		},
-		{
-			name: "inventory returns no response",
-			harness: &fakeReapplyHarness{
-				applyCommandID: "cmd-1",
-				pollStatus:     "Success",
-				inventory:      nil,
-			},
-			expectedPass:  false,
-			expectedCalls: []string{"ApplyWithMode:patch", "PollStatus", "Inventory", "Destroy", "PollStatus"},
-		},
-		{
-			name: "inventory returns no resources",
-			harness: &fakeReapplyHarness{
-				applyCommandID: "cmd-1",
-				pollStatus:     "Success",
-				inventory:      inventoryWith(),
-			},
-			expectedPass:  false,
-			expectedCalls: []string{"ApplyWithMode:patch", "PollStatus", "Inventory", "Destroy", "PollStatus"},
-		},
-		{
-			name: "inventory returns two resources",
-			harness: &fakeReapplyHarness{
-				applyCommandID: "cmd-1",
-				pollStatus:     "Success",
-				inventory: inventoryWith(
-					reapplyResource("my-bucket", "default", "bucket-1", properties),
-					reapplyResource("my-bucket-copy", "default", "bucket-2", properties),
-				),
-			},
-			expectedPass:  false,
-			expectedCalls: []string{"ApplyWithMode:patch", "PollStatus", "Inventory", "Destroy", "PollStatus"},
-		},
-		{
-			name: "native id is missing",
-			harness: &fakeReapplyHarness{
-				applyCommandID: "cmd-1",
-				pollStatus:     "Success",
-				inventory: inventoryWith(map[string]any{
-					"Label": "my-bucket", "Stack": "default", "Properties": properties,
-				}),
-			},
-			expectedPass:  false,
-			expectedCalls: []string{"ApplyWithMode:patch", "PollStatus", "Inventory", "Destroy", "PollStatus"},
-		},
-		{
-			name: "native id is not a string",
-			harness: &fakeReapplyHarness{
-				applyCommandID: "cmd-1",
-				pollStatus:     "Success",
-				inventory: inventoryWith(map[string]any{
-					"Label": "my-bucket", "Stack": "default", "NativeID": 42, "Properties": properties,
-				}),
-			},
-			expectedPass:  false,
-			expectedCalls: []string{"ApplyWithMode:patch", "PollStatus", "Inventory", "Destroy", "PollStatus"},
-		},
-		{
-			name: "native id changed",
-			harness: &fakeReapplyHarness{
-				applyCommandID: "cmd-1",
-				pollStatus:     "Success",
-				inventory:      inventoryWith(reapplyResource("my-bucket", "default", "bucket-2", properties)),
-			},
-			expectedPass:  false,
-			expectedCalls: []string{"ApplyWithMode:patch", "PollStatus", "Inventory", "Destroy", "PollStatus"},
-		},
-		{
-			name: "label changed",
-			harness: &fakeReapplyHarness{
-				applyCommandID: "cmd-1",
-				pollStatus:     "Success",
-				inventory:      inventoryWith(reapplyResource("my-bucket-2", "default", "bucket-1", properties)),
-			},
-			expectedPass:  false,
-			expectedCalls: []string{"ApplyWithMode:patch", "PollStatus", "Inventory", "Destroy", "PollStatus"},
-		},
-		{
-			name: "stack changed",
-			harness: &fakeReapplyHarness{
-				applyCommandID: "cmd-1",
-				pollStatus:     "Success",
-				inventory:      inventoryWith(reapplyResource("my-bucket", "other", "bucket-1", properties)),
-			},
-			expectedPass:  false,
-			expectedCalls: []string{"ApplyWithMode:patch", "PollStatus", "Inventory", "Destroy", "PollStatus"},
-		},
-		{
-			name: "properties changed by the re-apply",
-			harness: &fakeReapplyHarness{
-				applyCommandID: "cmd-1",
-				pollStatus:     "Success",
-				inventory: inventoryWith(reapplyResource("my-bucket", "default", "bucket-1", map[string]any{
-					"BucketName": "a-different-bucket",
-				})),
-			},
-			expectedPass:  false,
-			expectedCalls: []string{"ApplyWithMode:patch", "PollStatus", "Inventory"},
+			expectedCalls: []string{"SimulateApply:patch"},
+			expectedError: "update my-bucket (NS::Storage::Bucket)",
 		},
 		{
 			name:          "skipped when the extracted properties carry an opaque secret",
@@ -861,8 +731,8 @@ func TestVerifyExtractReapply(t *testing.T) {
 			idx := rc.NewCRUDResult("NS::Storage::Bucket")
 			fakeT := &testing.T{}
 
-			passed := rc.verifyExtractReapply(fakeT, idx, tt.harness, "/tmp/extracted.pkl", "NS::Storage::Bucket",
-				extractedResource, createdResource, properties, map[string]providerDefault{})
+			passed := rc.verifyExtractReapply(fakeT, idx, tt.harness, "/tmp/extracted.pkl",
+				extractedResource, createdResource)
 
 			if passed != tt.expectedPass {
 				t.Errorf("verifyExtractReapply() = %v, want %v", passed, tt.expectedPass)
@@ -875,6 +745,17 @@ func TestVerifyExtractReapply(t *testing.T) {
 			defer rc.mu.Unlock()
 			phase := rc.crudResults[idx].Phases[int(PhaseExtract)]
 			errCount := len(rc.crudResults[idx].Errors)
+			if tt.expectedError != "" {
+				found := false
+				for _, e := range rc.crudResults[idx].Errors {
+					if strings.Contains(e.Msg, tt.expectedError) {
+						found = true
+					}
+				}
+				if !found {
+					t.Errorf("recorded errors %v should contain %q", rc.crudResults[idx].Errors, tt.expectedError)
+				}
+			}
 			if tt.expectedPass {
 				if phase == StepFailed {
 					t.Error("Extract phase should not be failed when the re-apply passes")
