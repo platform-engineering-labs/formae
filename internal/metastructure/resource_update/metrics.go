@@ -44,15 +44,26 @@ func setupResourceUpdateMetrics(data *ResourceUpdateData, mp otelmetric.MeterPro
 }
 
 // recordOperationFailure counts one resource update reaching terminal failure.
-// oldState is the state the update failed out of, which distinguishes a
-// provider rejecting the operation (creating, updating, deleting) from a
-// failure that never reached the plugin at all (resolving, synchronizing).
+//
+// The failure stage distinguishes a provider rejecting the operation
+// (creating, updating, deleting) from a failure that never reached the plugin
+// at all (resolving, synchronizing). It is the deepest stage the update
+// recorded, not the state machine's oldState: a resource update runs its whole
+// chain inside a single message handler, so the intermediate states are never
+// committed and oldState would report 'initializing' for every synchronous
+// failure — including a provider-rejected create. oldState is the fallback for
+// a terminal failure raised before any stage ran.
 //
 // The counter is nil when instrument creation failed; a metrics problem must
 // never fail a resource update, so the emission is skipped instead.
 func recordOperationFailure(oldState gen.Atom, data ResourceUpdateData, proc gen.Process) {
 	if data.operationFailures == nil || data.resourceUpdate == nil {
 		return
+	}
+
+	failureStage := data.stage
+	if failureStage == "" {
+		failureStage = oldState
 	}
 
 	resourceType := data.resourceUpdate.DesiredState.Type
@@ -63,12 +74,12 @@ func recordOperationFailure(oldState gen.Atom, data ResourceUpdateData, proc gen
 	plugin := data.resourceUpdate.DesiredState.Namespace()
 
 	proc.Log().Debug("ResourceUpdater: counting terminal failure type=%s operation=%s stage=%s commandID=%s",
-		resourceType, data.resourceUpdate.Operation, oldState, data.commandID)
+		resourceType, data.resourceUpdate.Operation, failureStage, data.commandID)
 
 	data.operationFailures.Add(context.Background(), 1, otelmetric.WithAttributes(
 		attribute.String("resource_type", resourceType),
 		attribute.String("operation", string(data.resourceUpdate.Operation)),
 		attribute.String("plugin", plugin),
-		attribute.String("failure_stage", string(oldState)),
+		attribute.String("failure_stage", string(failureStage)),
 	))
 }

@@ -109,15 +109,24 @@ func withCounter(t *testing.T, data ResourceUpdateData, mp *sdkmetric.MeterProvi
 	return data
 }
 
+// atStage records the deepest stage the update reached, as the stage functions
+// do while the chain runs inside a single message handler.
+func atStage(data ResourceUpdateData, stage gen.Atom) ResourceUpdateData {
+	data.stage = stage
+	return data
+}
+
 // TestResourceUpdater_TerminalFailureIncrementsOperationFailureCounter asserts a
 // create that reaches terminal failure emits one count labelled with the
 // resource type, the operation, the plugin namespace and the stage it failed in.
 func TestResourceUpdater_TerminalFailureIncrementsOperationFailureCounter(t *testing.T) {
 	mp, reader := newTestMeterProvider()
-	data := withCounter(t, newFailureData(OperationCreate, "FakeAWS::S3::Bucket"), mp)
+	data := withCounter(t, atStage(newFailureData(OperationCreate, "FakeAWS::S3::Bucket"), StateCreating), mp)
 
+	// oldState is initializing because the chain never commits the intermediate
+	// states; the stage is what attributes the failure to the create.
 	proc := newMetricsProcess()
-	_, _, err := onStateChange(StateCreating, StateFinishedWithError, data, proc)
+	_, _, err := onStateChange(StateInitializing, StateFinishedWithError, data, proc)
 	require.NoError(t, err)
 
 	dp := requireSinglePoint(t, reader)
@@ -136,10 +145,10 @@ func TestResourceUpdater_TerminalFailureIncrementsOperationFailureCounter(t *tes
 // provider rejecting the create.
 func TestResourceUpdater_FailureBeforeThePluginIsCalledCarriesItsOwnStage(t *testing.T) {
 	mp, reader := newTestMeterProvider()
-	data := withCounter(t, newFailureData(OperationCreate, "FakeAWS::S3::Bucket"), mp)
+	data := withCounter(t, atStage(newFailureData(OperationCreate, "FakeAWS::S3::Bucket"), StateResolving), mp)
 
 	proc := newMetricsProcess()
-	_, _, err := onStateChange(StateResolving, StateFinishedWithError, data, proc)
+	_, _, err := onStateChange(StateInitializing, StateFinishedWithError, data, proc)
 	require.NoError(t, err)
 
 	dp := requireSinglePoint(t, reader)
@@ -152,10 +161,10 @@ func TestResourceUpdater_FailureBeforeThePluginIsCalledCarriesItsOwnStage(t *tes
 // separable at query time rather than silently dropped.
 func TestResourceUpdater_SyncReadFailureLabelledRead(t *testing.T) {
 	mp, reader := newTestMeterProvider()
-	data := withCounter(t, newFailureData(OperationRead, "FakeAWS::S3::Bucket"), mp)
+	data := withCounter(t, atStage(newFailureData(OperationRead, "FakeAWS::S3::Bucket"), StateSynchronizing), mp)
 
 	proc := newMetricsProcess()
-	_, _, err := onStateChange(StateSynchronizing, StateFinishedWithError, data, proc)
+	_, _, err := onStateChange(StateInitializing, StateFinishedWithError, data, proc)
 	require.NoError(t, err)
 
 	dp := requireSinglePoint(t, reader)
@@ -169,12 +178,12 @@ func TestResourceUpdater_SyncReadFailureLabelledRead(t *testing.T) {
 func TestResourceUpdater_ReplaceHalvesReportDeleteAndCreate(t *testing.T) {
 	mp, reader := newTestMeterProvider()
 
-	deleteHalf := withCounter(t, newFailureData(OperationDelete, "FakeAWS::S3::Bucket"), mp)
-	_, _, err := onStateChange(StateDeleting, StateFinishedWithError, deleteHalf, newMetricsProcess())
+	deleteHalf := withCounter(t, atStage(newFailureData(OperationDelete, "FakeAWS::S3::Bucket"), StateDeleting), mp)
+	_, _, err := onStateChange(StateInitializing, StateFinishedWithError, deleteHalf, newMetricsProcess())
 	require.NoError(t, err)
 
-	createHalf := withCounter(t, newFailureData(OperationCreate, "FakeAWS::S3::Bucket"), mp)
-	_, _, err = onStateChange(StateCreating, StateFinishedWithError, createHalf, newMetricsProcess())
+	createHalf := withCounter(t, atStage(newFailureData(OperationCreate, "FakeAWS::S3::Bucket"), StateCreating), mp)
+	_, _, err = onStateChange(StateInitializing, StateFinishedWithError, createHalf, newMetricsProcess())
 	require.NoError(t, err)
 
 	points := collectOperationFailures(t, reader)
@@ -186,6 +195,39 @@ func TestResourceUpdater_ReplaceHalvesReportDeleteAndCreate(t *testing.T) {
 		seen[attrs(dp)["operation"]] = attrs(dp)["failure_stage"]
 	}
 	assert.Equal(t, map[string]string{"delete": "deleting", "create": "creating"}, seen)
+}
+
+// TestResourceUpdater_FailureStagePrefersTheDeepestStageReached asserts the
+// stage the update recorded wins over the state machine's oldState. A resource
+// update runs synchronize, resolve and the plugin operation inside a single
+// message handler, so the intermediate states are never committed and oldState
+// stays 'initializing' — labelling from it would report a provider-rejected
+// create as a failure that never started.
+func TestResourceUpdater_FailureStagePrefersTheDeepestStageReached(t *testing.T) {
+	mp, reader := newTestMeterProvider()
+	data := withCounter(t, atStage(newFailureData(OperationCreate, "FakeAWS::S3::Bucket"), StateCreating), mp)
+
+	_, _, err := onStateChange(StateInitializing, StateFinishedWithError, data, newMetricsProcess())
+	require.NoError(t, err)
+
+	dp := requireSinglePoint(t, reader)
+	assert.Equal(t, "creating", attrs(dp)["failure_stage"],
+		"the recorded stage must win over the uncommitted oldState")
+}
+
+// TestResourceUpdater_FailureStageFallsBackToOldStateWhenNoStageRecorded asserts
+// a terminal failure raised before any stage ran is still attributed, using the
+// state machine's oldState.
+func TestResourceUpdater_FailureStageFallsBackToOldStateWhenNoStageRecorded(t *testing.T) {
+	mp, reader := newTestMeterProvider()
+	data := withCounter(t, newFailureData(OperationCreate, "FakeAWS::S3::Bucket"), mp)
+	require.Empty(t, data.stage, "no stage recorded")
+
+	_, _, err := onStateChange(StateInitializing, StateFinishedWithError, data, newMetricsProcess())
+	require.NoError(t, err)
+
+	dp := requireSinglePoint(t, reader)
+	assert.Equal(t, "initializing", attrs(dp)["failure_stage"])
 }
 
 // TestResourceUpdater_SuccessDoesNotIncrement asserts a successful terminal
@@ -386,9 +428,9 @@ func TestResourceUpdater_FailureStageCoversEveryNonTerminalState(t *testing.T) {
 	for _, stage := range stages {
 		t.Run(string(stage), func(t *testing.T) {
 			mp, reader := newTestMeterProvider()
-			data := withCounter(t, newFailureData(OperationCreate, "FakeAWS::S3::Bucket"), mp)
+			data := withCounter(t, atStage(newFailureData(OperationCreate, "FakeAWS::S3::Bucket"), stage), mp)
 
-			_, _, err := onStateChange(stage, StateFinishedWithError, data, newMetricsProcess())
+			_, _, err := onStateChange(StateInitializing, StateFinishedWithError, data, newMetricsProcess())
 			require.NoError(t, err)
 
 			dp := requireSinglePoint(t, reader)
