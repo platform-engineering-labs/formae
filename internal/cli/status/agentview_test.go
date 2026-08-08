@@ -67,9 +67,6 @@ func makeFullStats() apimodel.Stats {
 			"AWS::Lambda::Function": 12,
 			"AWS::IAM::Role":        9,
 		},
-		ResourceErrors: map[string]int{
-			"AWS::RDS::DBInstance": 1,
-		},
 		Plugins: []apimodel.PluginInfo{
 			{Namespace: "AWS", Version: "2.1.0"},
 		},
@@ -116,7 +113,6 @@ func TestRenderAgentStats_TopNTruncation(t *testing.T) {
 		types[fmt.Sprintf("AWS::Type%02d::Resource", i)] = i + 1
 	}
 	stats.ResourceTypes = types
-	stats.ResourceErrors = nil // suppress errors panel
 
 	out := renderAgentStats(th, stats, 120)
 	plain := stripANSIAgent(out)
@@ -135,40 +131,19 @@ func TestRenderAgentStats_TopNTruncation(t *testing.T) {
 	assert.Equal(t, 10, typeRows, "exactly 10 resource type rows expected")
 }
 
-func TestRenderAgentStats_ErrorsPanelCapsAtTen(t *testing.T) {
+func TestRenderAgentStats_NoResourceErrorsPanel(t *testing.T) {
 	th := theme.New("formae")
 	stats := makeFullStats()
-	// Build 13 resource error entries
-	errs := map[string]int{}
-	for i := range 13 {
-		errs[fmt.Sprintf("AWS::Type%02d::Error", i)] = i + 1
-	}
-	stats.ResourceErrors = errs
 
 	out := renderAgentStats(th, stats, 120)
 	plain := stripANSIAgent(out)
 
-	// Should contain "and 3 more errors"
-	assert.Contains(t, plain, "and 3 more errors", "truncation footer expected for errors panel")
-
-	// Count error type rows (lines containing "AWS::Type" inside errors panel)
-	lines := strings.Split(plain, "\n")
-	typeRows := 0
-	for _, l := range lines {
-		if strings.Contains(l, "AWS::Type") && strings.Contains(l, "Error") {
-			typeRows++
-		}
-	}
-	assert.Equal(t, 10, typeRows, "exactly 10 error rows expected")
-}
-
-func TestRenderAgentStats_NoErrorsPanelElided(t *testing.T) {
-	th := theme.New("formae")
-	stats := makeFullStats()
-	stats.ResourceErrors = nil // or empty map
-	out := renderAgentStats(th, stats, 120)
-	plain := stripANSIAgent(out)
-	assert.NotContains(t, plain, "Resource Errors", "errors panel should not appear when empty")
+	// Per-type failure counts are published as a metric, not on the stats API,
+	// so the agent view renders Resource Types and Plugins only.
+	assert.NotContains(t, plain, "Resource Errors")
+	assert.NotContains(t, plain, "Total Errors")
+	assert.Contains(t, plain, "Resource Types")
+	assert.Contains(t, plain, "Plugins")
 }
 
 func TestRenderAgentStats_NarrowStacksVertically(t *testing.T) {
@@ -209,7 +184,6 @@ func TestRenderAgentStats_UnmanagedThresholds(t *testing.T) {
 			stats := makeFullStats()
 			stats.ManagedResources = map[string]int{"AWS": tc.managed}
 			stats.UnmanagedResources = map[string]int{"AWS": tc.unmanaged}
-			stats.ResourceErrors = nil
 
 			out := renderAgentStats(th, stats, 120)
 			plain := stripANSIAgent(out)

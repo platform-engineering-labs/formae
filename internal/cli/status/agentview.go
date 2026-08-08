@@ -134,13 +134,10 @@ func renderAgentStats(th *theme.Theme, stats apimodel.Stats, width int) string {
 	))
 	sb.WriteString("\n")
 
-	// ── Row 2: Resource Types / Plugins / Resource Errors (if non-empty) ─────
+	// ── Row 2: Resource Types / Plugins ──────────────────────────────────────
 	row2 := []panelSpec{
 		buildResourceTypesPanel(th, stats),
 		buildPluginsPanel(th, stats),
-	}
-	if len(stats.ResourceErrors) > 0 {
-		row2 = append(row2, buildResourceErrorsPanel(th, stats))
 	}
 	sb.WriteString(renderPanelRow(th, width, panelWidth, gap, row2...))
 
@@ -303,44 +300,6 @@ func buildPluginsPanel(th *theme.Theme, stats apimodel.Stats) panelSpec {
 		lines = append(lines, moreStyle.Render(fmt.Sprintf("... and %d more plugins", overflow)))
 	}
 	return panelSpec{title: "Plugins", color: th.Palette.Border, lines: lines}
-}
-
-func buildResourceErrorsPanel(th *theme.Theme, stats apimodel.Stats) panelSpec {
-	type errCount struct {
-		name  string
-		count int
-	}
-	errs := make([]errCount, 0, len(stats.ResourceErrors))
-	for name, count := range stats.ResourceErrors {
-		errs = append(errs, errCount{name, count})
-	}
-	sort.Slice(errs, func(i, j int) bool {
-		if errs[i].count != errs[j].count {
-			return errs[i].count > errs[j].count
-		}
-		return errs[i].name < errs[j].name
-	})
-
-	const maxRows = 10
-	shown := errs
-	overflow := 0
-	if len(errs) > maxRows {
-		overflow = len(errs) - maxRows
-		shown = errs[:maxRows]
-	}
-
-	totalErrors := sumMap(stats.ResourceErrors)
-	lines := []string{
-		fieldLine(th, "Total Errors", fmt.Sprintf("%d", totalErrors)),
-	}
-	for _, ec := range shown {
-		lines = append(lines, fieldLine(th, ec.name, fmt.Sprintf("%d", ec.count)))
-	}
-	if overflow > 0 {
-		moreStyle := lipgloss.NewStyle().Foreground(th.Palette.TextSubtle)
-		lines = append(lines, moreStyle.Render(fmt.Sprintf("... and %d more errors", overflow)))
-	}
-	return panelSpec{title: "Resource Errors", color: th.Palette.Error, lines: lines}
 }
 
 // fieldLine renders a plain label + plain value pair as a styled line.
