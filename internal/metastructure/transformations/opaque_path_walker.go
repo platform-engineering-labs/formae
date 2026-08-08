@@ -112,7 +112,6 @@ type OpaqueWalk struct {
 	// matched it. Only diagnostics accumulate during the walk; values are
 	// replaced in place.
 	segmentations map[string]map[string]bool
-	diagnostics   []Diagnostic
 }
 
 // WalkProperties walks a decoded property map from the root prefix.
@@ -211,20 +210,17 @@ func describeSegmentation(steps []string) string {
 	return strings.Join(quoted, "/")
 }
 
-// addDiagnostic records a condition found outside the walk itself (an
-// undecodable patch pointer, a candidate-prefix bound).
-func (w *OpaqueWalk) addDiagnostic(d Diagnostic) {
-	w.diagnostics = append(w.diagnostics, d)
-}
-
-// Diagnostics returns the walk's diagnostics: every hint that matched under two
-// or more distinct segmentations, plus anything recorded by addDiagnostic.
-// Consuming them is mandatory at every production caller — over-matching is
-// only observable if someone surfaces it. A hint matched at many concrete paths
-// under ONE segmentation (an ordinary Listing<SubResource>) is not ambiguous
-// and is not reported.
+// Diagnostics returns every hint that matched under two or more distinct
+// segmentations. Consuming them is mandatory at every production caller —
+// over-matching is only observable if someone surfaces it. A hint matched at
+// many concrete paths under ONE segmentation (an ordinary Listing<SubResource>)
+// is not ambiguous and is not reported.
+//
+// Conditions found outside the walk — an undecodable patch pointer, an exceeded
+// candidate bound — are raised by the caller that detects them, since the walk
+// never sees the input that caused them.
 func (w *OpaqueWalk) Diagnostics() []Diagnostic {
-	out := slices.Clone(w.diagnostics)
+	var out []Diagnostic
 	for hint, segs := range w.segmentations {
 		if len(segs) < 2 {
 			continue
