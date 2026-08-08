@@ -14,6 +14,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/theory/jsonpath"
 	"github.com/theory/jsonpath/registry"
+	"go.opentelemetry.io/otel"
+	otelmetric "go.opentelemetry.io/otel/metric"
 
 	"github.com/platform-engineering-labs/formae/internal/constants"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
@@ -200,6 +202,10 @@ type ResourceUpdateData struct {
 	// executor.
 	// Once we switch out the URI for a stable KSUID we can remove this field.
 	originalResourceKsuidURI pkgmodel.FormaeURI
+
+	// operationFailures counts resource updates that reach terminal failure.
+	// Nil when instrument creation failed, which must not fail the update.
+	operationFailures otelmetric.Int64Counter
 }
 
 func (r *ResourceUpdater) Init(args ...any) (statemachine.StateMachineSpec[ResourceUpdateData], error) {
@@ -231,6 +237,21 @@ func (r *ResourceUpdater) Init(args ...any) (statemachine.StateMachineSpec[Resou
 		return statemachine.StateMachineSpec[ResourceUpdateData]{}, fmt.Errorf("resourceUpdater: missing 'Datastore' environment variable")
 	}
 	data.resourceLabeler = NewResourceLabeler(ds.(ResourceDataLookup))
+
+	// The MeterProvider is injected so tests get their own reader; production
+	// resolves the global here, at spawn time, rather than capturing it at
+	// metastructure construction — the OTel provider is installed later, during
+	// API server startup.
+	meterProvider := otel.GetMeterProvider()
+	if mp, ok := r.Env("MeterProvider"); ok {
+		if provider, ok := mp.(otelmetric.MeterProvider); ok {
+			meterProvider = provider
+		}
+	}
+	if err := setupResourceUpdateMetrics(&data, meterProvider); err != nil {
+		r.Log().Error("Failed to setup resource update metrics: %v", err)
+		// Don't fail initialization if metrics setup fails
+	}
 
 	r.Log().Debug("ResourceUpdater %s initialized", r.Name())
 
@@ -284,6 +305,15 @@ func shutdown(from gen.PID, state gen.Atom, data ResourceUpdateData, shutdown Sh
 }
 
 func onStateChange(oldState gen.Atom, newState gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom, ResourceUpdateData, error) {
+	// Counted before the blocking persister call below: the failure has already
+	// happened by the time this callback runs, and that call tolerates its own
+	// failure by logging, so the metric must not be more fragile than the
+	// bookkeeping beside it. A rejection is deliberately not counted here — the
+	// update's state becomes Rejected, not Failed.
+	if newState == StateFinishedWithError {
+		recordOperationFailure(oldState, data, proc)
+	}
+
 	if newState == StateFinishedSuccessfully || newState == StateFinishedWithError || newState == StateRejected {
 		proc.Log().Debug("ResourceUpdater: sending completion message to forma command persister state=%s commandID=%s", newState, data.commandID)
 		_, err := proc.Call(
