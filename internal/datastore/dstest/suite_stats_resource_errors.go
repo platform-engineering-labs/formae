@@ -560,6 +560,52 @@ func RunStatsResourceErrors_NullTimestampRepeatedFailuresCountOnce(t *testing.T,
 	})
 }
 
+// RunStatsResourceErrors_MigratedTimestampSpellingClearedBySuccess verifies
+// that recency is decided on the instant, not on the characters. A failure
+// carrying the RFC 3339 spelling the normalizing migration copies out of the
+// JSON blob must still be superseded by a later success written in the
+// driver's own layout. Compared as text the migrated spelling sorts after the
+// driver's on the same day — 'T' outranks ' ' — which would latch the failure.
+func RunStatsResourceErrors_MigratedTimestampSpellingClearedBySuccess(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("StatsResourceErrors_MigratedTimestampSpellingClearedBySuccess", func(t *testing.T) {
+		td := newDS(t)
+		defer td.CleanUpFn() //nolint:errcheck
+
+		if td.SetResourceUpdateModifiedTsRawForTest == nil {
+			t.Skip("backend does not store modified_ts as text")
+		}
+
+		failed := outcomeCommand(
+			forma_command.CommandStateFailed,
+			-20*time.Minute,
+			[]resource_update.ResourceUpdate{
+				outcomeUpdate("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket",
+					types.OperationCreate, resource_update.ResourceUpdateStateFailed, -20*time.Minute),
+			},
+		)
+		assert.NoError(t, td.StoreFormaCommand(failed, failed.ID))
+
+		// Restate the earlier failure the way the migration would have left it.
+		migrated := util.TimeNow().Add(-20 * time.Minute).UTC().Format(time.RFC3339Nano)
+		assert.NoError(t, td.SetResourceUpdateModifiedTsRawForTest("ksuid-1", migrated))
+
+		recovered := outcomeCommand(
+			forma_command.CommandStateSuccess,
+			-5*time.Minute,
+			[]resource_update.ResourceUpdate{
+				outcomeUpdate("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket",
+					types.OperationUpdate, resource_update.ResourceUpdateStateSuccess, -5*time.Minute),
+			},
+		)
+		assert.NoError(t, td.StoreFormaCommand(recovered, recovered.ID))
+
+		s, err := td.Stats()
+		assert.NoError(t, err)
+		assert.Empty(t, s.ResourceErrors,
+			"a later success supersedes an earlier failure however its timestamp is spelled")
+	})
+}
+
 // RunStatsResourceErrors_LaterCommandWinsOnTimestampTie verifies that when two
 // commands carry a row for the same resource with an identical timestamp, the
 // later command's row is the latest outcome: its success clears the earlier

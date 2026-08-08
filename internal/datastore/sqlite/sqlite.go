@@ -4376,6 +4376,19 @@ func (d DatastoreSQLite) Stats() (*stats.Stats, error) {
 	// make them UNKNOWN, so nothing could ever supersede an untimestamped
 	// failure and every one of them would count separately.
 	//
+	// Timestamps are compared through julianday() (as PersistTargetReap and
+	// UpdateTargetHealth do) because this column is text and holds more than
+	// one spelling: the migration copies RFC 3339 out of the JSON blob, while
+	// the driver writes its own layout. Compared as characters the migrated
+	// spelling sorts after the driver's on the same day, which would let a
+	// stale failure outrank every later success. julianday() also returns NULL
+	// for a value it cannot parse, which the IS NULL branches then treat as
+	// the oldest — the same conservative direction.
+	//
+	// Two instants closer together than julianday()'s resolution compare equal
+	// and fall through to the command and operation tiebreaks, so the order
+	// stays total and each resource is still counted once.
+	//
 	// The anti-join is what keeps this off the whole table: the outer query is
 	// driven by the state index and each probe stops at the first superseding
 	// row, so a resource that failed and recovered costs one lookup. Ranking
@@ -4395,8 +4408,8 @@ func (d DatastoreSQLite) Stats() (*stats.Stats, error) {
 			        AND s.state IN (?, ?)
 			        AND (
 			              (ru.modified_ts IS NULL AND s.modified_ts IS NOT NULL)
-			           OR s.modified_ts > ru.modified_ts
-			           OR ((s.modified_ts = ru.modified_ts
+			           OR julianday(s.modified_ts) > julianday(ru.modified_ts)
+			           OR ((julianday(s.modified_ts) = julianday(ru.modified_ts)
 			                OR (s.modified_ts IS NULL AND ru.modified_ts IS NULL))
 			               AND (
 			                     s.command_id > ru.command_id

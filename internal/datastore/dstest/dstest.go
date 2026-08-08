@@ -74,6 +74,15 @@ type TestDatastore struct {
 	// Backends that don't provide it leave it nil and the relevant tests
 	// t.Skip().
 	NullResourceUpdateModifiedTsForTest func(ksuid string) error
+	// SetResourceUpdateModifiedTsRawForTest writes raw text into modified_ts on
+	// every resource_updates row for the given ksuid. Backends that store the
+	// column as text can hold more than one timestamp spelling — the
+	// normalizing migration copies RFC 3339 straight out of the JSON blob,
+	// while the driver writes its own layout — and no public API produces the
+	// migrated spelling. Used to prove the comparison is on instants rather
+	// than on characters. Backends storing a real timestamp type leave it nil
+	// and the relevant tests t.Skip().
+	SetResourceUpdateModifiedTsRawForTest func(ksuid, raw string) error
 }
 
 // RunAll runs the full datastore test suite against the provided factory.
@@ -148,6 +157,7 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunStatsResourceErrors_ReplaceSameTimestampBothFailedCountsOnce(t, newDS)
 	RunStatsResourceErrors_NullTimestampFailureClearedBySuccess(t, newDS)
 	RunStatsResourceErrors_NullTimestampRepeatedFailuresCountOnce(t, newDS)
+	RunStatsResourceErrors_MigratedTimestampSpellingClearedBySuccess(t, newDS)
 	RunStatsResourceErrors_LaterCommandWinsOnTimestampTie(t, newDS)
 	RunStatsResourceErrors_FailedDeleteCounted(t, newDS)
 	RunStatsResourceErrors_GroupedByType(t, newDS)
