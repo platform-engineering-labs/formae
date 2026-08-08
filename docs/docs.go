@@ -1455,13 +1455,6 @@ const docTemplate = `{
                         "$ref": "#/definitions/model.PluginInfo"
                     }
                 },
-                "ResourceErrors": {
-                    "description": "key: resource type",
-                    "type": "object",
-                    "additionalProperties": {
-                        "type": "integer"
-                    }
-                },
                 "ResourceTypes": {
                     "description": "key: resource type (e.g., \"AWS::S3::Bucket\")",
                     "type": "object",

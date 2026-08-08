@@ -561,11 +561,6 @@ definitions:
         items:
           $ref: '#/definitions/model.PluginInfo'
         type: array
-      ResourceErrors:
-        additionalProperties:
-          type: integer
-        description: 'key: resource type'
-        type: object
       ResourceTypes:
         additionalProperties:
           type: integer
