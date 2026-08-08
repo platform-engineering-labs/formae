@@ -154,8 +154,10 @@ func (d *DatastoreMSSQL) Stats() (*stats.Stats, error) {
 	// column, and costs an index probe instead of a JSON extraction over the
 	// stored resource blob.
 	//
-	// Only Failed and Success rows carry an outcome, so an in-flight, canceled
-	// or rejected row never clears a standing failure.
+	// Only completed outcomes (Failed, Success) take part in the ordering.
+	// In-flight, canceled, rejected and unknown rows carry no verdict on
+	// whether the resource converged, so they must not displace — and thereby
+	// clear — a standing failure.
 	//
 	// The empty-type filter is applied at the counting stage, to the row the
 	// collapse already picked, and never inside the live relation: a resource
