@@ -65,9 +65,15 @@ func (d *DatastoreMSSQL) Stats() (*stats.Stats, error) {
 		return nil, err
 	}
 
+	// The namespace is the part of the type before the first '::'. The
+	// separator is appended to the searched value so that a type carrying none
+	// — including the empty type a resource can be stored with — still matches
+	// at a position that yields a non-negative length; LEFT rejects a negative
+	// one outright, which would fail the whole stats call rather than report
+	// such a row under the empty namespace as the other backends do.
 	res.ManagedResources = make(map[string]int)
 	if err := d.scanCountMap(ctx, fmt.Sprintf(`
-		SELECT SUBSTRING(type, 1, CHARINDEX('::', type) - 1) AS namespace, COUNT(*)
+		SELECT LEFT(type, CHARINDEX('::', type + '::') - 1) AS namespace, COUNT(*)
 		FROM resources r1
 		WHERE stack IS NOT NULL
 		AND stack != '%s'
@@ -77,7 +83,7 @@ func (d *DatastoreMSSQL) Stats() (*stats.Stats, error) {
 			WHERE r1.uri = r2.uri
 			AND r2.version COLLATE Latin1_General_BIN2 > r1.version COLLATE Latin1_General_BIN2
 		)
-		GROUP BY SUBSTRING(type, 1, CHARINDEX('::', type) - 1)`, constants.UnmanagedStack),
+		GROUP BY LEFT(type, CHARINDEX('::', type + '::') - 1)`, constants.UnmanagedStack),
 		res.ManagedResources, string(types.OperationDelete),
 	); err != nil {
 		return nil, err
@@ -85,7 +91,7 @@ func (d *DatastoreMSSQL) Stats() (*stats.Stats, error) {
 
 	res.UnmanagedResources = make(map[string]int)
 	if err := d.scanCountMap(ctx, fmt.Sprintf(`
-		SELECT SUBSTRING(type, 1, CHARINDEX('::', type) - 1) AS namespace, COUNT(*)
+		SELECT LEFT(type, CHARINDEX('::', type + '::') - 1) AS namespace, COUNT(*)
 		FROM resources r1
 		WHERE stack = '%s'
 		AND operation != @p1 AND operation != 'reaped'
@@ -94,7 +100,7 @@ func (d *DatastoreMSSQL) Stats() (*stats.Stats, error) {
 			WHERE r1.uri = r2.uri
 			AND r2.version COLLATE Latin1_General_BIN2 > r1.version COLLATE Latin1_General_BIN2
 		)
-		GROUP BY SUBSTRING(type, 1, CHARINDEX('::', type) - 1)`, constants.UnmanagedStack),
+		GROUP BY LEFT(type, CHARINDEX('::', type + '::') - 1)`, constants.UnmanagedStack),
 		res.UnmanagedResources, string(types.OperationDelete),
 	); err != nil {
 		return nil, err
