@@ -13,6 +13,7 @@ import (
 	"github.com/platform-engineering-labs/formae/pkg/plugin/schema/lib/registry"
 
 	_ "github.com/platform-engineering-labs/formae/pkg/plugin/schema/lib/modules/bcrypt"
+	_ "github.com/platform-engineering-labs/formae/pkg/plugin/schema/lib/modules/crypto"
 	_ "github.com/platform-engineering-labs/formae/pkg/plugin/schema/lib/modules/random"
 )
 
