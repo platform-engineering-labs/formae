@@ -3872,6 +3872,13 @@ func (d *DatastoreAuroraDataAPI) Stats() (*stats.Stats, error) {
 	// is what keeps a replace whose delete and create sides both failed at the
 	// same instant from counting the one resource twice.
 	//
+	// modified_ts is nullable and the normalizing migration writes NULL for a
+	// migrated command that carried none, so rows without a timestamp exist.
+	// They are ordered as the oldest: a NULL cannot outrank anything, and any
+	// timestamped row outranks it. Leaving that to the bare comparisons would
+	// make them UNKNOWN, so nothing could ever supersede an untimestamped
+	// failure and every one of them would count separately.
+	//
 	// command_id is a KSUID, collated byte-wise so its ordering matches the
 	// other backends.
 	res.ResourceErrors = make(map[string]int)
@@ -3887,12 +3894,15 @@ func (d *DatastoreAuroraDataAPI) Stats() (*stats.Stats, error) {
 		      WHERE s.ksuid = ru.ksuid
 		        AND s.state IN (:failed, :success)
 		        AND (
-		              s.modified_ts > ru.modified_ts
-		           OR (s.modified_ts = ru.modified_ts
-		               AND s.command_id COLLATE "C" > ru.command_id COLLATE "C")
-		           OR (s.modified_ts = ru.modified_ts
-		               AND s.command_id COLLATE "C" = ru.command_id COLLATE "C"
-		               AND s.state = :failed AND s.operation < ru.operation)
+		              (ru.modified_ts IS NULL AND s.modified_ts IS NOT NULL)
+		           OR s.modified_ts > ru.modified_ts
+		           OR ((s.modified_ts = ru.modified_ts
+		                OR (s.modified_ts IS NULL AND ru.modified_ts IS NULL))
+		               AND (
+		                     s.command_id COLLATE "C" > ru.command_id COLLATE "C"
+		                  OR (s.command_id COLLATE "C" = ru.command_id COLLATE "C"
+		                      AND s.state = :failed AND s.operation < ru.operation)
+		               ))
 		        )
 		  )
 	) latest_failures
@@ -6215,6 +6225,20 @@ func (d *DatastoreAuroraDataAPI) SetPolicyDataForTesting(label, policyData strin
 	params := []types.SqlParameter{
 		{Name: aws.String("policy_data"), Value: &types.FieldMemberStringValue{Value: policyData}},
 		{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: label}},
+	}
+	_, err := d.executeStatement(ctx, query, params)
+	return err
+}
+
+// NullResourceUpdateModifiedTsForTesting clears the modified_ts of every
+// resource_updates row for a ksuid, so tests can stage the untimestamped rows
+// the normalizing migration leaves behind — stored state no public API
+// produces, since a Go time.Time is always a value.
+func (d *DatastoreAuroraDataAPI) NullResourceUpdateModifiedTsForTesting(ksuid string) error {
+	ctx := context.Background()
+	query := `UPDATE resource_updates SET modified_ts = NULL WHERE ksuid = :ksuid`
+	params := []types.SqlParameter{
+		{Name: aws.String("ksuid"), Value: &types.FieldMemberStringValue{Value: ksuid}},
 	}
 	_, err := d.executeStatement(ctx, query, params)
 	return err

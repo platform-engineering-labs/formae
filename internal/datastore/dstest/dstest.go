@@ -65,6 +65,15 @@ type TestDatastore struct {
 	// expiry query's defensive behaviour can be asserted. Backends that don't
 	// provide it leave it nil and the relevant tests t.Skip().
 	SetPolicyDataForTest func(label, policyData string) error
+	// NullResourceUpdateModifiedTsForTest sets modified_ts to SQL NULL on every
+	// resource_updates row for the given ksuid. The column is nullable and the
+	// normalizing migration writes NULL whenever the migrated command carried no
+	// ModifiedTs, so such rows exist in datastores that predate that migration —
+	// but no public API produces one, since a Go time.Time is always a value.
+	// Used to assert that a row with no timestamp cannot latch a failure.
+	// Backends that don't provide it leave it nil and the relevant tests
+	// t.Skip().
+	NullResourceUpdateModifiedTsForTest func(ksuid string) error
 }
 
 // RunAll runs the full datastore test suite against the provided factory.
@@ -137,6 +146,8 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunStatsResourceErrors_ReplaceDeleteSucceedsThenCreateFailed(t, newDS)
 	RunStatsResourceErrors_ReplaceSameTimestampFailedWins(t, newDS)
 	RunStatsResourceErrors_ReplaceSameTimestampBothFailedCountsOnce(t, newDS)
+	RunStatsResourceErrors_NullTimestampFailureClearedBySuccess(t, newDS)
+	RunStatsResourceErrors_NullTimestampRepeatedFailuresCountOnce(t, newDS)
 	RunStatsResourceErrors_LaterCommandWinsOnTimestampTie(t, newDS)
 	RunStatsResourceErrors_FailedDeleteCounted(t, newDS)
 	RunStatsResourceErrors_GroupedByType(t, newDS)

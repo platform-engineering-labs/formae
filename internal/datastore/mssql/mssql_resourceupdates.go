@@ -144,6 +144,13 @@ func (d *DatastoreMSSQL) Stats() (*stats.Stats, error) {
 	// is what keeps a replace whose delete and create sides both failed at the
 	// same instant from counting the one resource twice.
 	//
+	// modified_ts is nullable and the normalizing migration writes NULL for a
+	// migrated command that carried none, so rows without a timestamp exist.
+	// They are ordered as the oldest: a NULL cannot outrank anything, and any
+	// timestamped row outranks it. Leaving that to the bare comparisons would
+	// make them UNKNOWN, so nothing could ever supersede an untimestamped
+	// failure and every one of them would count separately.
+	//
 	// command_id is a KSUID, collated byte-wise so its ordering matches the
 	// other backends.
 	res.ResourceErrors = make(map[string]int)
@@ -159,12 +166,15 @@ func (d *DatastoreMSSQL) Stats() (*stats.Stats, error) {
 			      WHERE s.ksuid = ru.ksuid
 			        AND s.state IN (@p1, @p2)
 			        AND (
-			              s.modified_ts > ru.modified_ts
-			           OR (s.modified_ts = ru.modified_ts
-			               AND s.command_id COLLATE Latin1_General_BIN2 > ru.command_id COLLATE Latin1_General_BIN2)
-			           OR (s.modified_ts = ru.modified_ts
-			               AND s.command_id COLLATE Latin1_General_BIN2 = ru.command_id COLLATE Latin1_General_BIN2
-			               AND s.state = @p1 AND s.operation < ru.operation)
+			              (ru.modified_ts IS NULL AND s.modified_ts IS NOT NULL)
+			           OR s.modified_ts > ru.modified_ts
+			           OR ((s.modified_ts = ru.modified_ts
+			                OR (s.modified_ts IS NULL AND ru.modified_ts IS NULL))
+			               AND (
+			                     s.command_id COLLATE Latin1_General_BIN2 > ru.command_id COLLATE Latin1_General_BIN2
+			                  OR (s.command_id COLLATE Latin1_General_BIN2 = ru.command_id COLLATE Latin1_General_BIN2
+			                      AND s.state = @p1 AND s.operation < ru.operation)
+			               ))
 			        )
 			  )
 		) latest_failures

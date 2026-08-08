@@ -4369,6 +4369,13 @@ func (d DatastoreSQLite) Stats() (*stats.Stats, error) {
 	// Success on the state tiebreak, which is why that term collapses into
 	// "another Failed row with a lower operation".
 	//
+	// modified_ts is nullable and the normalizing migration writes NULL for a
+	// migrated command that carried none, so rows without a timestamp exist.
+	// They are ordered as the oldest: a NULL cannot outrank anything, and any
+	// timestamped row outranks it. Leaving that to the bare comparisons would
+	// make them UNKNOWN, so nothing could ever supersede an untimestamped
+	// failure and every one of them would count separately.
+	//
 	// The anti-join is what keeps this off the whole table: the outer query is
 	// driven by the state index and each probe stops at the first superseding
 	// row, so a resource that failed and recovered costs one lookup. Ranking
@@ -4387,10 +4394,15 @@ func (d DatastoreSQLite) Stats() (*stats.Stats, error) {
 			      WHERE s.ksuid = ru.ksuid
 			        AND s.state IN (?, ?)
 			        AND (
-			              s.modified_ts > ru.modified_ts
-			           OR (s.modified_ts = ru.modified_ts AND s.command_id > ru.command_id)
-			           OR (s.modified_ts = ru.modified_ts AND s.command_id = ru.command_id
-			               AND s.state = ? AND s.operation < ru.operation)
+			              (ru.modified_ts IS NULL AND s.modified_ts IS NOT NULL)
+			           OR s.modified_ts > ru.modified_ts
+			           OR ((s.modified_ts = ru.modified_ts
+			                OR (s.modified_ts IS NULL AND ru.modified_ts IS NULL))
+			               AND (
+			                     s.command_id > ru.command_id
+			                  OR (s.command_id = ru.command_id
+			                      AND s.state = ? AND s.operation < ru.operation)
+			               ))
 			        )
 			  )
 		) latest_failures

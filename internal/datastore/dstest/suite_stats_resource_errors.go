@@ -485,6 +485,81 @@ func RunStatsResourceErrors_ReplaceSameTimestampBothFailedCountsOnce(t *testing.
 	})
 }
 
+// RunStatsResourceErrors_NullTimestampFailureClearedBySuccess verifies that a
+// failure carrying no modified_ts — the shape the normalizing migration leaves
+// behind for commands that had none — is still superseded by a later success.
+// A row with no timestamp is the oldest thing there is, not the newest; if it
+// outranked real outcomes it would latch its resource type on the gauge for
+// the lifetime of the datastore.
+func RunStatsResourceErrors_NullTimestampFailureClearedBySuccess(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("StatsResourceErrors_NullTimestampFailureClearedBySuccess", func(t *testing.T) {
+		td := newDS(t)
+		defer td.CleanUpFn() //nolint:errcheck
+
+		if td.NullResourceUpdateModifiedTsForTest == nil {
+			t.Skip("backend does not provide NullResourceUpdateModifiedTsForTest")
+		}
+
+		failed := outcomeCommand(
+			forma_command.CommandStateFailed,
+			-20*time.Minute,
+			[]resource_update.ResourceUpdate{
+				outcomeUpdate("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket",
+					types.OperationCreate, resource_update.ResourceUpdateStateFailed, -20*time.Minute),
+			},
+		)
+		assert.NoError(t, td.StoreFormaCommand(failed, failed.ID))
+		assert.NoError(t, td.NullResourceUpdateModifiedTsForTest("ksuid-1"))
+
+		recovered := outcomeCommand(
+			forma_command.CommandStateSuccess,
+			-5*time.Minute,
+			[]resource_update.ResourceUpdate{
+				outcomeUpdate("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket",
+					types.OperationUpdate, resource_update.ResourceUpdateStateSuccess, -5*time.Minute),
+			},
+		)
+		assert.NoError(t, td.StoreFormaCommand(recovered, recovered.ID))
+
+		s, err := td.Stats()
+		assert.NoError(t, err)
+		assert.Empty(t, s.ResourceErrors,
+			"a timestamped success supersedes a failure that carries no timestamp")
+	})
+}
+
+// RunStatsResourceErrors_NullTimestampRepeatedFailuresCountOnce verifies the
+// count-once contract still holds when none of a resource's failures carries a
+// modified_ts, so recency cannot separate them.
+func RunStatsResourceErrors_NullTimestampRepeatedFailuresCountOnce(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("StatsResourceErrors_NullTimestampRepeatedFailuresCountOnce", func(t *testing.T) {
+		td := newDS(t)
+		defer td.CleanUpFn() //nolint:errcheck
+
+		if td.NullResourceUpdateModifiedTsForTest == nil {
+			t.Skip("backend does not provide NullResourceUpdateModifiedTsForTest")
+		}
+
+		for _, offset := range []time.Duration{-20 * time.Minute, -10 * time.Minute} {
+			cmd := outcomeCommand(
+				forma_command.CommandStateFailed,
+				offset,
+				[]resource_update.ResourceUpdate{
+					outcomeUpdate("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket",
+						types.OperationCreate, resource_update.ResourceUpdateStateFailed, offset),
+				},
+			)
+			assert.NoError(t, td.StoreFormaCommand(cmd, cmd.ID))
+		}
+		assert.NoError(t, td.NullResourceUpdateModifiedTsForTest("ksuid-1"))
+
+		s, err := td.Stats()
+		assert.NoError(t, err)
+		assert.Equal(t, map[string]int{"AWS::S3::Bucket": 1}, s.ResourceErrors,
+			"one resource is one error however many untimestamped failures it has")
+	})
+}
+
 // RunStatsResourceErrors_LaterCommandWinsOnTimestampTie verifies that when two
 // commands carry a row for the same resource with an identical timestamp, the
 // later command's row is the latest outcome: its success clears the earlier

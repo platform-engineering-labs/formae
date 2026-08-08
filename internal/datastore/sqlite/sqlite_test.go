@@ -99,6 +99,13 @@ func TestDatastore(t *testing.T) {
 				)
 				return err
 			},
+			NullResourceUpdateModifiedTsForTest: func(ksuid string) error {
+				conn := d.Conn()
+				_, err := conn.Exec(
+					`UPDATE resource_updates SET modified_ts = NULL WHERE ksuid = ?`, ksuid,
+				)
+				return err
+			},
 		}
 	})
 }
