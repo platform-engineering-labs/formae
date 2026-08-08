@@ -2064,7 +2064,6 @@ func (m *Metastructure) Stats() (*apimodel.Stats, error) {
 		UnmanagedResources: stats.UnmanagedResources,
 		Targets:            stats.Targets,
 		ResourceTypes:      stats.ResourceTypes,
-		ResourceErrors:     stats.ResourceErrors,
 		Plugins:            plugins,
 		ReapPendingTargets: reapPending,
 		ReapedTargets:      reaped,

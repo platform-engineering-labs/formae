@@ -462,15 +462,6 @@ func StartFormaeMetrics(statsProvider StatsProvider) error {
 		return fmt.Errorf("failed to create resources by type gauge: %w", err)
 	}
 
-	// Resource errors by type
-	resourceErrors, err := meter.Int64ObservableGauge(
-		"formae.resource.errors",
-		otelmetric.WithDescription("Resources whose latest completed outcome failed, by type"),
-	)
-	if err != nil {
-		return fmt.Errorf("failed to create resource errors gauge: %w", err)
-	}
-
 	// Register callback to collect all formae metrics
 	_, err = meter.RegisterCallback(
 		func(ctx context.Context, observer otelmetric.Observer) error {
@@ -526,16 +517,6 @@ func StartFormaeMetrics(statsProvider StatsProvider) error {
 					))
 			}
 
-			// Resource errors by type
-			for resourceType, count := range stats.ResourceErrors {
-				plugin := extractNamespace(resourceType)
-				observer.ObserveInt64(resourceErrors, int64(count),
-					otelmetric.WithAttributes(
-						attribute.String("plugin", plugin),
-						attribute.String("resource_type", resourceType),
-					))
-			}
-
 			return nil
 		},
 		clientsConnected,
@@ -546,7 +527,6 @@ func StartFormaeMetrics(statsProvider StatsProvider) error {
 		resourcesUnmanaged,
 		targetsTotal,
 		resourcesByType,
-		resourceErrors,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to register formae metrics callback: %w", err)

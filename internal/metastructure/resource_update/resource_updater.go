@@ -14,6 +14,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/theory/jsonpath"
 	"github.com/theory/jsonpath/registry"
+	"go.opentelemetry.io/otel"
+	otelmetric "go.opentelemetry.io/otel/metric"
 
 	"github.com/platform-engineering-labs/formae/internal/constants"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
@@ -200,6 +202,18 @@ type ResourceUpdateData struct {
 	// executor.
 	// Once we switch out the URI for a stable KSUID we can remove this field.
 	originalResourceKsuidURI pkgmodel.FormaeURI
+
+	// operationFailures counts resource updates that reach terminal failure.
+	// Nil when instrument creation failed, which must not fail the update.
+	operationFailures otelmetric.Int64Counter
+
+	// stage is the deepest state the update reached. A single resource update
+	// runs its whole synchronize/resolve/operate chain inside one message
+	// handler, so the intermediate states are never committed to the state
+	// machine — the enter callback's oldState stays 'initializing'. Each stage
+	// function records the state it represents here so a terminal failure can
+	// be attributed to the step that actually failed.
+	stage gen.Atom
 }
 
 func (r *ResourceUpdater) Init(args ...any) (statemachine.StateMachineSpec[ResourceUpdateData], error) {
@@ -231,6 +245,21 @@ func (r *ResourceUpdater) Init(args ...any) (statemachine.StateMachineSpec[Resou
 		return statemachine.StateMachineSpec[ResourceUpdateData]{}, fmt.Errorf("resourceUpdater: missing 'Datastore' environment variable")
 	}
 	data.resourceLabeler = NewResourceLabeler(ds.(ResourceDataLookup))
+
+	// The MeterProvider is injected so tests get their own reader; production
+	// resolves the global here, at spawn time, rather than capturing it at
+	// metastructure construction — the OTel provider is installed later, during
+	// API server startup.
+	meterProvider := otel.GetMeterProvider()
+	if mp, ok := r.Env("MeterProvider"); ok {
+		if provider, ok := mp.(otelmetric.MeterProvider); ok {
+			meterProvider = provider
+		}
+	}
+	if err := setupResourceUpdateMetrics(&data, meterProvider); err != nil {
+		r.Log().Error("Failed to setup resource update metrics: %v", err)
+		// Don't fail initialization if metrics setup fails
+	}
 
 	r.Log().Debug("ResourceUpdater %s initialized", r.Name())
 
@@ -284,6 +313,15 @@ func shutdown(from gen.PID, state gen.Atom, data ResourceUpdateData, shutdown Sh
 }
 
 func onStateChange(oldState gen.Atom, newState gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom, ResourceUpdateData, error) {
+	// Counted before the blocking persister call below: the failure has already
+	// happened by the time this callback runs, and that call tolerates its own
+	// failure by logging, so the metric must not be more fragile than the
+	// bookkeeping beside it. A rejection is deliberately not counted here — the
+	// update's state becomes Rejected, not Failed.
+	if newState == StateFinishedWithError {
+		recordOperationFailure(oldState, data, proc)
+	}
+
 	if newState == StateFinishedSuccessfully || newState == StateFinishedWithError || newState == StateRejected {
 		proc.Log().Debug("ResourceUpdater: sending completion message to forma command persister state=%s commandID=%s", newState, data.commandID)
 		_, err := proc.Call(
@@ -364,6 +402,7 @@ func start(from gen.PID, state gen.Atom, data ResourceUpdateData, message StartR
 }
 
 func synchronize(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
+	data.stage = state
 	// When a resource's target has been deleted (e.g., unmanaged resources
 	// orphaned after a destroy), the target config will be nil. We can't
 	// call the plugin without a target config, so short-circuit to NotFound.
@@ -425,6 +464,7 @@ func synchronize(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen
 }
 
 func delete(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
+	data.stage = state
 	// Convert properties to plugin format (extracts $value from opaque structures).
 	// A delete only ever needs identity (NativeID/TargetConfig) — it never writes
 	// DesiredState's property values to the cloud — so use the Read-safe (unguarded)
@@ -484,6 +524,7 @@ func resolvingTimeout(cfg pkgmodel.RetryConfig) time.Duration {
 }
 
 func resolve(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
+	data.stage = state
 	if len(data.resourceUpdate.RemainingResolvables) == 0 {
 		return nextState(state, data, proc)
 	}
@@ -523,6 +564,7 @@ func resourceResolved(from gen.PID, state gen.Atom, data ResourceUpdateData, mes
 }
 
 func create(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
+	data.stage = state
 	// Convert properties to plugin format (extracts $value from opaque structures)
 	convertedResource, err := convertResourceForPlugin(data.resourceUpdate.DesiredState)
 	if err != nil {
@@ -559,6 +601,7 @@ func create(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 }
 
 func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
+	data.stage = state
 	// When bringing a resource under management without property changes, skip the plugin
 	// Update call since there are no actual changes to make in the cloud. Instead, create
 	// a synthetic ProgressResult using the existing resource's properties.
@@ -699,6 +742,7 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 }
 
 func recoverFromPreviousProgress(state gen.Atom, data ResourceUpdateData, lastKnownProgress *plugin.TrackedProgress, operation plugin.StatusCheck, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
+	data.stage = state
 	// If the lastKnownProgress was finished, we can let the progress handler process the result and determine next steps.
 	if lastKnownProgress.HasFinished() {
 		return handleProgressUpdate(gen.PID{}, state, data, *lastKnownProgress, proc)
@@ -747,6 +791,7 @@ func resumeWaitingForResource(state gen.Atom, data ResourceUpdateData, progress 
 // state machine to the next state when the plugin operation finished successfully. After the last plugin operation, or
 // after the first error, it reports the final state to the stack updater and exits.
 func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData, message plugin.TrackedProgress, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
+	data.stage = state
 	err := data.resourceUpdate.RecordProgress(&message)
 	if err != nil {
 		proc.Log().Error("failed to record progress for resource update: %v", err)
