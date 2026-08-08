@@ -4122,6 +4122,121 @@ func (d DatastoreSQLite) LatestLabelForResource(label string) (string, error) {
 	return latestLabel, nil
 }
 
+// resourceErrorsQuery counts resources that are still in the live inventory and
+// whose LATEST completed outcome is a failure, once per resource (ksuid) and
+// grouped by the type the inventory currently records. Counting every failed row
+// instead would accumulate for the lifetime of the datastore: each retry adds a
+// row and a later success never removes one, so the count could only ever grow.
+//
+// The live relation is the same current-inventory shape the resource-type count
+// in Stats uses: the greatest version of each uri, with delete and reaped rows
+// excluded. Joining the standing failures to it drops every ksuid the inventory
+// no longer holds — deleted, reaped, or never created at all — which otherwise
+// keep reporting an error for a resource that is gone.
+//
+// A ksuid can hold several live rows at once (a rename leaves the old uri live
+// alongside the new one), so the live relation is collapsed to one row per ksuid
+// before the join: the row with the greatest version, ties broken on the greatest
+// uri. Without that collapse a renamed resource is counted once per live uri.
+//
+// The label comes from resources.type rather than the type stored on the failing
+// update, so a resource whose type was rewritten after the failure was recorded
+// is reported under the type it has now. It also keeps the counts consistent with
+// the resource-type gauge, which reads the same column, and costs an index probe
+// instead of a JSON extraction over the stored resource blob.
+//
+// Only completed outcomes (Failed, Success) take part in the ordering.
+// In-flight, canceled, rejected and unknown rows carry no verdict on whether the
+// resource converged, so they must not displace — and thereby clear — a standing
+// failure.
+//
+// The empty-type filter is applied at the counting stage, to the row the collapse
+// already picked, and never inside the live relation: a resource whose current
+// row carries no type has nothing to report it under, but filtering typeless rows
+// out earlier would promote an older live row and report the resource under a
+// type it no longer has. It also keeps rows that cannot scan into a string out of
+// the result.
+//
+// Both "latest" rules are expressed as anti-joins rather than ranking windows: a
+// row qualifies when no other row outranks it. A window has to materialise and
+// sort every candidate — the whole failure history for the supersession rule, the
+// whole resources table for the per-ksuid collapse — whether or not anything
+// failed, while the anti-joins stay driven by the state index and stop at the
+// first outranking row.
+//
+// Failure recency is modified_ts, then command_id, then Failed ahead of Success
+// on an exact tie (so a replace pair completing in the same instant reports the
+// error rather than hiding it), then operation. That last key makes the order
+// total within a ksuid — the primary key is (command_id, ksuid, operation) — so
+// exactly one row survives and each resource is counted once. Because the outer
+// row is always Failed it already sorts ahead of every Success on the state
+// tiebreak, which is why that term collapses into "another Failed row with a
+// lower operation".
+//
+// modified_ts is nullable and the normalizing migration writes NULL for a
+// migrated command that carried none, so rows without a timestamp exist. They are
+// ordered as the oldest: a NULL cannot outrank anything, and any timestamped row
+// outranks it. Leaving that to the bare comparisons would make them UNKNOWN, so
+// nothing could ever supersede an untimestamped failure and every one of them
+// would count separately.
+//
+// Timestamps are compared through julianday() (as PersistTargetReap and
+// UpdateTargetHealth do) because this column is text and holds more than one
+// spelling: the migration copies RFC 3339 out of the JSON blob, while the driver
+// writes its own layout. Compared as characters the migrated spelling sorts after
+// the driver's on the same day, which would let a stale failure outrank every
+// later success. julianday() also returns NULL for a value it cannot parse, which
+// the IS NULL branches then treat as the oldest — the same conservative
+// direction.
+//
+// Two instants closer together than julianday()'s resolution compare equal and
+// fall through to the command and operation tiebreaks, so the order stays total
+// and each resource is still counted once.
+const resourceErrorsQuery = `
+	WITH live AS (
+		SELECT r1.ksuid, r1.uri, r1.version, r1.type
+		FROM resources r1
+		WHERE r1.operation != ? AND r1.operation != 'reaped'
+		AND NOT EXISTS (
+			SELECT 1
+			FROM resources r2
+			WHERE r1.uri = r2.uri
+			AND r2.version > r1.version
+		)
+	)
+	SELECT l.type, COUNT(*)
+	FROM resource_updates ru
+	JOIN live l ON l.ksuid = ru.ksuid
+	WHERE ru.state = ?
+	  AND NOT EXISTS (
+	      SELECT 1
+	      FROM resource_updates s
+	      WHERE s.ksuid = ru.ksuid
+	        AND s.state IN (?, ?)
+	        AND (
+	              (ru.modified_ts IS NULL AND s.modified_ts IS NOT NULL)
+	           OR julianday(s.modified_ts) > julianday(ru.modified_ts)
+	           OR ((julianday(s.modified_ts) = julianday(ru.modified_ts)
+	                OR (s.modified_ts IS NULL AND ru.modified_ts IS NULL))
+	               AND (
+	                     s.command_id > ru.command_id
+	                  OR (s.command_id = ru.command_id
+	                      AND s.state = ? AND s.operation < ru.operation)
+	               ))
+	        )
+	  )
+	  AND NOT EXISTS (
+	      SELECT 1
+	      FROM live o
+	      WHERE o.ksuid = l.ksuid
+	        AND (o.version > l.version
+	             OR (o.version = l.version AND o.uri > l.uri))
+	  )
+	  AND l.type IS NOT NULL
+	  AND l.type <> ''
+	GROUP BY l.type
+`
+
 func (d DatastoreSQLite) Stats() (*stats.Stats, error) {
 	_, span := sqliteTracer.Start(context.Background(), "Stats")
 	defer span.End()
@@ -4336,94 +4451,8 @@ func (d DatastoreSQLite) Stats() (*stats.Stats, error) {
 	}
 
 	res.ResourceErrors = make(map[string]int)
-	// Resources whose LATEST completed outcome is a failure, counted once per
-	// resource (ksuid) and grouped by type. Counting every failed row instead
-	// would accumulate for the lifetime of the datastore: each retry adds a
-	// row and a later success never removes one, so the count could only ever
-	// grow.
-	//
-	// Only completed outcomes (Failed, Success) take part in the ordering.
-	// In-flight, canceled, rejected and unknown rows carry no verdict on
-	// whether the resource converged, so they must not displace — and thereby
-	// clear — a standing failure.
-	//
-	// The type filter belongs in the outer SELECT only. A later Success row
-	// whose stored resource has no Type still supersedes an earlier failure;
-	// filtering it out of the ordering set would leave that failure reported
-	// forever.
-	//
-	// The resource_type IS NOT NULL filter is load-bearing: it drops rows whose
-	// stored resource carries no type, which would otherwise fail to scan into
-	// a string.
-	//
-	// "Latest" is expressed as an anti-join rather than a ranking window: a
-	// failed row counts when no other completed row for the same resource
-	// outranks it. Recency is modified_ts, then command_id, then Failed ahead
-	// of Success on an exact tie (so a replace pair completing in the same
-	// instant reports the error rather than hiding it), then operation. That
-	// last key makes the order total within a ksuid — the primary key is
-	// (command_id, ksuid, operation) — so exactly one row survives and each
-	// resource is counted once.
-	//
-	// Because the outer row is always Failed it already sorts ahead of every
-	// Success on the state tiebreak, which is why that term collapses into
-	// "another Failed row with a lower operation".
-	//
-	// modified_ts is nullable and the normalizing migration writes NULL for a
-	// migrated command that carried none, so rows without a timestamp exist.
-	// They are ordered as the oldest: a NULL cannot outrank anything, and any
-	// timestamped row outranks it. Leaving that to the bare comparisons would
-	// make them UNKNOWN, so nothing could ever supersede an untimestamped
-	// failure and every one of them would count separately.
-	//
-	// Timestamps are compared through julianday() (as PersistTargetReap and
-	// UpdateTargetHealth do) because this column is text and holds more than
-	// one spelling: the migration copies RFC 3339 out of the JSON blob, while
-	// the driver writes its own layout. Compared as characters the migrated
-	// spelling sorts after the driver's on the same day, which would let a
-	// stale failure outrank every later success. julianday() also returns NULL
-	// for a value it cannot parse, which the IS NULL branches then treat as
-	// the oldest — the same conservative direction.
-	//
-	// Two instants closer together than julianday()'s resolution compare equal
-	// and fall through to the command and operation tiebreaks, so the order
-	// stays total and each resource is still counted once.
-	//
-	// The anti-join is what keeps this off the whole table: the outer query is
-	// driven by the state index and each probe stops at the first superseding
-	// row, so a resource that failed and recovered costs one lookup. Ranking
-	// every completed row in a window instead sorts the full history of every
-	// resource that has ever failed, which measured an order of magnitude
-	// slower on a seeded history and degrades with history depth.
-	resourceErrorsQuery := `
-		SELECT resource_type, COUNT(*)
-		FROM (
-			SELECT json_extract(ru.resource,'$.Type') AS resource_type
-			FROM resource_updates ru
-			WHERE ru.state = ?
-			  AND NOT EXISTS (
-			      SELECT 1
-			      FROM resource_updates s
-			      WHERE s.ksuid = ru.ksuid
-			        AND s.state IN (?, ?)
-			        AND (
-			              (ru.modified_ts IS NULL AND s.modified_ts IS NOT NULL)
-			           OR julianday(s.modified_ts) > julianday(ru.modified_ts)
-			           OR ((julianday(s.modified_ts) = julianday(ru.modified_ts)
-			                OR (s.modified_ts IS NULL AND ru.modified_ts IS NULL))
-			               AND (
-			                     s.command_id > ru.command_id
-			                  OR (s.command_id = ru.command_id
-			                      AND s.state = ? AND s.operation < ru.operation)
-			               ))
-			        )
-			  )
-		) latest_failures
-		WHERE resource_type IS NOT NULL
-		  AND resource_type <> ''
-		GROUP BY resource_type
-	`
 	rows, err = d.conn.Query(resourceErrorsQuery,
+		resource_update.OperationDelete,
 		types.ResourceUpdateStateFailed,
 		types.ResourceUpdateStateFailed,
 		types.ResourceUpdateStateSuccess,
