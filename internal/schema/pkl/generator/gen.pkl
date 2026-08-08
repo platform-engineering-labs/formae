@@ -38,14 +38,33 @@ function Fail(_message: String): GenerationFailure = new {
   message = _message
 }
 
+/// A map key recorded as a step of a failure's path. A key is content the
+/// converted value carried, so it is marked as it is recorded: a bare step
+/// reads as a property name the schema declares, which a key is not.
+local class MapKey {
+  key: Any
+}
+
+/// Marks `_key` as a map key, for a caller recording it as a step of a path.
+local function MapKeyStep(_key: Any): MapKey = new { key = _key }
+
+/// Renders one step of a path: a property name or a String map key quoted, a
+/// list position or a scalar map key as it stands, and any other map key as the
+/// name of its type — a key can be an object of any shape, and a diagnostic
+/// names types, never values.
+local function renderStep(step: Any): String =
+  if (step is MapKey) renderStep((step as MapKey).key)
+  else if (step is String) #""\#(step)""#
+  else if (step is Number|Boolean|Duration|DataSize) step.toString()
+  else typeNameOf(step)
+
 /// Renders the path a failure carries: the outermost property name bare, then
 /// each further step as `[index]` for a list position or `["key"]` for a map
 /// key.
 local function renderPath(path: List): String =
   path.foldIndexed("", (idx: Int, acc: String, step) ->
     if (idx == 0 && step is String) acc + step
-    else if (step is String) acc + #"["\#(step)"]"#
-    else acc + "[\(step)]"
+    else acc + "[\(renderStep(step))]"
   )
 
 /// Renders a failure as a diagnostic: where the value sat, then why it failed.
@@ -184,9 +203,9 @@ hidden classHandlers: Mapping<Class, (List<reflect.Type>, Any) -> Any|Generation
           )
           let (convertedValue = applyType(valueType, val))
             if (convertedKey is GenerationFailure)
-              convertedKey.inside(key)
+              convertedKey.inside(MapKeyStep(key))
             else if (convertedValue is GenerationFailure)
-              convertedValue.inside(key)
+              convertedValue.inside(MapKeyStep(key))
             else
               acc.put(convertedKey, convertedValue)
         ))

@@ -431,6 +431,16 @@ local class IntMapResource extends formae.Resource {
     counts: Mapping<String, Int>
 }
 
+/// A map-typed field whose keys carry a type other than String, so a key that
+/// is a whole object reaches the key branch of the conversion.
+@formae.ResourceHint
+local class IntKeyMapResource extends formae.Resource {
+    type = "FakePlugin::Map::IntKeyMap"
+
+    @formae.FieldHint
+    keyed: Mapping<Int, String>
+}
+
 /// A list-typed field whose elements are maps, so an entry of an element that
 /// cannot be converted is observable together with the element's position.
 @formae.ResourceHint
@@ -703,6 +713,30 @@ local class DeeperUnionResource extends formae.Resource {
 
     @formae.FieldHint
     setting: ScalarsE|ScalarsD|ScalarsC
+}
+
+/// A union whose first member is a map, so a failure a member reports carries a
+/// map key as the outermost step of its path.
+@formae.ResourceHint
+local class MapThenIntResource extends formae.Resource {
+    type = "FakePlugin::Union::MapThenInt"
+
+    @formae.FieldHint
+    setting: Mapping<String, Int>|Int
+}
+
+/// A union whose members are named at length and reject a value for one shared
+/// reason, so the members named on that reason exceed what a message carries.
+local typealias LongLabelledIntAlpha = Int
+local typealias LongLabelledIntBravo = Int
+local typealias LongLabelledIntCharlie = Int
+
+@formae.ResourceHint
+local class LongLabelUnionResource extends formae.Resource {
+    type = "FakePlugin::Union::LongLabel"
+
+    @formae.FieldHint
+    setting: LongLabelledIntAlpha|LongLabelledIntBravo|LongLabelledIntCharlie
 }
 
 /// More members than a message reports, each rejecting a value for a reason of
@@ -1853,13 +1887,44 @@ facts {
     ["A union member rejected by a deferred check reports it without the value it carried"] {
         // PKL's own diagnostic for a violated constraint quotes the value that
         // violated it, and that diagnostic is what the read-ahead catches.
-        !failureFor(XorThenStrResource, new Dynamic {
+        let (message = failureFor(XorThenStrResource, new Dynamic {
             step = new Dynamic {
                 run = sentinel
                 uses = "actions/checkout@v4"
             }
             label = "step"
-        }).contains(sentinel)
+        }))
+        message.contains("does not satisfy its declared property types or constraints") &&
+        !message.contains(sentinel)
+    }
+
+    ["A map key that is not a scalar locates a failure by its type, not its content"] {
+        let (message = failureFor(IntKeyMapResource, new Dynamic {
+            keyed = new Dynamic {
+                [new Dynamic { secretPart = sentinel }] = "x"
+            }
+            label = "keyed"
+        }))
+        message == "keyed[Dynamic]: Expected \"Int\" but got \"Dynamic\"" &&
+        !message.contains(sentinel)
+    }
+
+    ["A map key a union member reports is bracketed, not read as a property name"] {
+        failureFor(MapThenIntResource, new Dynamic {
+            setting = new Dynamic { [sentinel] = "abc" }
+            label = "scalar"
+        }) ==
+            "setting: No member of this union accepted a Dynamic value. "
+            + "Mapping<String, Int>: [\"\(sentinel)\"]: "
+            + "Expected \"Int\" but got \"String that cannot be parsed as Int\"; "
+            + "Int: Expected \"Int\" but got \"Dynamic\""
+    }
+
+    ["A reason more members share than a message names is reported shortened"] {
+        settingFailure(LongLabelUnionResource) ==
+            "setting: No member of this union accepted a String value. "
+            + "LongLabelledIntAlpha, LongLabelledIntBravo, LongLabelledIntC...: "
+            + "Expected \"Int\" but got \"String that cannot be parsed as Int\""
     }
 
     ["A scalar handler names the type it could not parse, never the text it was given"] {
