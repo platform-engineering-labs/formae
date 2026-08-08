@@ -185,6 +185,25 @@ local class IntMapResource extends formae.Resource {
     counts: Mapping<String, Int>
 }
 
+/// A list-typed field whose elements are maps, so an entry of an element that
+/// cannot be converted is observable together with the element's position.
+@formae.ResourceHint
+local class MapListResource extends formae.Resource {
+    type = "FakePlugin::List::MapList"
+
+    @formae.FieldHint
+    groups: Listing<Mapping<String, String>>
+}
+
+/// The same shape with typed elements.
+@formae.ResourceHint
+local class HolderListResource extends formae.Resource {
+    type = "FakePlugin::List::HolderList"
+
+    @formae.FieldHint
+    holders: Listing<StrHolder>
+}
+
 @formae.ResourceHint
 local class DefaultsResource extends formae.Resource {
     type = "FakePlugin::Defaults::Resource"
@@ -761,11 +780,57 @@ facts {
 
     ["A map value that converts is still coerced to the declared value type"] {
         let (result = gen.attemptApply(IntMapResource, new Dynamic {
-            counts = new Mapping { ["a"] = "5" }
+            counts = new Mapping { ["a"] = "5"; ["b"] = "6" }
             label = "map"
         }))
         !(result is gen.GenerationFailure) &&
-        (result as IntMapResource).counts.toMap() == Map("a", 5)
+        (result as IntMapResource).counts.toMap() == Map("a", 5, "b", 6)
+    }
+
+    ["A map entry that cannot be converted names the key it came from"] {
+        let (result = gen.attemptApply(IntMapResource, new Dynamic {
+            counts = new Mapping { ["a"] = "5"; ["b"] = "abc" }
+            label = "map"
+        }))
+        result is gen.GenerationFailure &&
+        gen.failureMessage(result as gen.GenerationFailure).contains("counts[\"b\"]")
+    }
+
+    // --- List conversion ---
+
+    ["A map element of a list that cannot be converted names the element index"] {
+        let (result = gen.attemptApply(MapListResource, new Dynamic {
+            groups = new Listing {
+                new Mapping {
+                    ["Name"] = "web"
+                    ["enabled"] = true
+                }
+            }
+            label = "list"
+        }))
+        result is gen.GenerationFailure &&
+        gen.failureMessage(result as gen.GenerationFailure).contains("groups[0][\"enabled\"]")
+    }
+
+    ["A typed element of a list that cannot be converted names the element index"] {
+        let (result = gen.attemptApply(HolderListResource, new Dynamic {
+            holders = new Listing { new Dynamic { n = true } }
+            label = "list"
+        }))
+        result is gen.GenerationFailure &&
+        gen.failureMessage(result as gen.GenerationFailure).contains("holders[0][\"n\"]")
+    }
+
+    // --- Rendering a resource reports what failed ---
+
+    ["Rendering a resource whose property cannot be converted names the resource and the property"] {
+        let (message = module.catch(() -> gen.applyResource(IntMapResource, new Dynamic {
+            counts = new Mapping { ["a"] = "abc" }
+            label = "map"
+        }, "Cannot render resource \"map\" in stack \"default\"")))
+        message.contains("Cannot render resource \"map\" in stack \"default\"") &&
+        message.contains("counts[\"a\"]") &&
+        message.contains("cannot be parsed as Int")
     }
 
     // --- Malformed envelopes report a failure instead of aborting ---
