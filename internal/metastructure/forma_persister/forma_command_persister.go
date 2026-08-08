@@ -434,10 +434,11 @@ func (f *FormaCommandPersister) updateCommandFromProgress(progress *messages.Upd
 		// hashed at final state (hashSensitiveDataIfComplete) so a resumed command can
 		// still execute with the real secret value.
 		if tracked.ResourceProperties != nil {
-			hashedProps, err := hashReadActualProps(tracked.ResourceProperties, res.DesiredState.Schema, res.DesiredState.Type)
+			hashedProps, diagnostics, err := hashReadActualProps(tracked.ResourceProperties, res.DesiredState.Schema, res.DesiredState.Type)
 			if err != nil {
 				return false, fmt.Errorf("failed to hash progress properties commandID=%s: %w", progress.CommandID, err)
 			}
+			f.logOpaqueDiagnostics(progress.CommandID, &res.DesiredState, diagnostics)
 			tracked.ResourceProperties = hashedProps
 		}
 
@@ -996,19 +997,21 @@ func (f *FormaCommandPersister) markResourceUpdateAsComplete(msg *messages.MarkR
 		// hashSensitiveDataIfComplete ever runs, so without hashing here a schema-opaque
 		// field's live (Read-enriched) value would be persisted as plaintext.
 		if msg.ResourceProperties != nil {
-			hashedProps, hashErr := hashReadActualProps(msg.ResourceProperties, res.DesiredState.Schema, res.DesiredState.Type)
+			hashedProps, diagnostics, hashErr := hashReadActualProps(msg.ResourceProperties, res.DesiredState.Schema, res.DesiredState.Type)
 			if hashErr != nil {
 				f.Log().Error("Failed to hash resource properties on completion commandID=%s: %v", msg.CommandID, hashErr)
 				return false, fmt.Errorf("failed to hash resource properties on completion: %w", hashErr)
 			}
+			f.logOpaqueDiagnostics(msg.CommandID, &res.DesiredState, diagnostics)
 			res.DesiredState.Properties = hashedProps
 		}
 		if msg.ResourceReadOnlyProperties != nil {
-			hashedReadOnly, hashErr := hashReadActualProps(msg.ResourceReadOnlyProperties, res.DesiredState.Schema, res.DesiredState.Type)
+			hashedReadOnly, diagnostics, hashErr := hashReadActualProps(msg.ResourceReadOnlyProperties, res.DesiredState.Schema, res.DesiredState.Type)
 			if hashErr != nil {
 				f.Log().Error("Failed to hash resource read-only properties on completion commandID=%s: %v", msg.CommandID, hashErr)
 				return false, fmt.Errorf("failed to hash resource read-only properties on completion: %w", hashErr)
 			}
+			f.logOpaqueDiagnostics(msg.CommandID, &res.DesiredState, diagnostics)
 			res.DesiredState.ReadOnlyProperties = hashedReadOnly
 		}
 		if msg.Version != "" {
@@ -1272,18 +1275,31 @@ func hasOpaqueValues(props json.RawMessage) bool {
 // a plugin poll or Read) before they are persisted. Unlike DesiredState input, these
 // values are not needed in plaintext to resume execution, so they are hashed immediately
 // at their write choke point rather than deferred to final state.
-func hashReadActualProps(props json.RawMessage, schema pkgmodel.Schema, resourceType string) (json.RawMessage, error) {
+func hashReadActualProps(props json.RawMessage, schema pkgmodel.Schema, resourceType string) (json.RawMessage, []transformations.Diagnostic, error) {
 	if len(props) == 0 {
-		return props, nil
+		return props, nil, nil
 	}
 	// Type is set so the transformer's known-opaque table fires for plugins whose
 	// schema drops FieldHint.Opaque — otherwise a Read-enriched secret persists plaintext.
 	tmp := &pkgmodel.Resource{Type: resourceType, Schema: schema, Properties: props}
-	out, err := transformations.NewPersistValueTransformer().ApplyToResource(tmp)
+	out, diagnostics, err := transformations.NewPersistValueTransformer().ApplyToResource(tmp)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return out.Properties, nil
+	return out.Properties, diagnostics, nil
+}
+
+// logOpaqueDiagnostics surfaces what the opaque-path match could not resolve
+// cleanly, with the resource identity the transformer does not have. A dotted
+// hint name is ambiguous between a structural path and a key that genuinely
+// contains a dot; matching every reading keeps secrets from leaking, at the cost
+// of possibly hashing a value that is not one. That cost is only actionable if
+// it is reported, so these are never dropped.
+func (f *FormaCommandPersister) logOpaqueDiagnostics(commandID string, resource *pkgmodel.Resource, diagnostics []transformations.Diagnostic) {
+	for _, d := range diagnostics {
+		f.Log().Warning("Ambiguous opaque field hint commandID=%s resourceLabel=%s resourceType=%s: %s",
+			commandID, resource.Label, resource.Type, d.String())
+	}
 }
 
 // hashSensitiveDataIfComplete checks if the command is in a final state and hashes sensitive data if so.
@@ -1310,12 +1326,13 @@ func (f *FormaCommandPersister) hashSensitiveDataIfComplete(command *forma_comma
 			!hasOpaqueValues(resourceUpdate.DesiredState.Properties) {
 			continue
 		}
-		transformed, err := t.ApplyToResource(&resourceUpdate.DesiredState)
+		transformed, diagnostics, err := t.ApplyToResource(&resourceUpdate.DesiredState)
 		if err != nil {
 			f.Log().Error("Failed to hash resource update during final cleanup commandID=%s resourceLabel=%s: %v",
 				command.ID, resourceUpdate.DesiredState.Label, err)
 			return false, fmt.Errorf("failed to hash resource update %s during final cleanup: %w", resourceUpdate.DesiredState.Label, err)
 		}
+		f.logOpaqueDiagnostics(command.ID, &resourceUpdate.DesiredState, diagnostics)
 		command.ResourceUpdates[i].DesiredState = *transformed
 		hashedCount++
 	}

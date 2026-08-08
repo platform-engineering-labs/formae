@@ -34,7 +34,11 @@ func EnforceSetOnceAndCompareResourceForUpdate(existing, new *pkgmodel.Resource,
 	// re-submitted desired plaintext and produces a spurious update.
 	transformer := transformations.NewPersistValueTransformer()
 	tempResource := &pkgmodel.Resource{Type: new.Type, Schema: new.Schema, Properties: filteredRawProps}
-	hashedForComparison, err := transformer.ApplyToResource(tempResource)
+	// Comparison-only: nothing here is persisted, and the same values are hashed
+	// again on the persist path, which surfaces the opaque-match diagnostics with
+	// the resource identity attached. Reporting them here too would only double
+	// every warning.
+	hashedForComparison, _, err := transformer.ApplyToResource(tempResource)
 	if err != nil {
 		return false, nil, err
 	}
@@ -123,7 +127,9 @@ func SuppressUnchangedOpaqueValues(existing, desired json.RawMessage, schema pkg
 	// it is invisible to this function and its stored hash slips through to
 	// ConvertToPluginFormat, which rejects it (the plugin-boundary guard).
 	transformer := transformations.NewPersistValueTransformer()
-	hashed, err := transformer.ApplyToResource(&pkgmodel.Resource{Type: resourceType, Schema: schema, Properties: desired})
+	// Comparison-only, as in EnforceSetOnceAndCompareResourceForUpdate: the
+	// persist path hashes the same values and surfaces the diagnostics.
+	hashed, _, err := transformer.ApplyToResource(&pkgmodel.Resource{Type: resourceType, Schema: schema, Properties: desired})
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to hash desired properties for opaque comparison: %w", err)
 	}

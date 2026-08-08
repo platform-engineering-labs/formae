@@ -38,7 +38,7 @@ func TestPersistValueTransformer_HashesOpaqueValuesInProperties(t *testing.T) {
         }`),
 	}
 
-	result, err := transformer.ApplyToResource(input)
+	result, _, err := transformer.ApplyToResource(input)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -69,7 +69,7 @@ func TestPersistValueTransformer_EmptyResource(t *testing.T) {
 		Type:  "test.resource",
 	}
 
-	result, err := transformer.ApplyToResource(input)
+	result, _, err := transformer.ApplyToResource(input)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -92,7 +92,7 @@ func TestPersistValueTransformer_NonOpaqueValues(t *testing.T) {
         }`),
 	}
 
-	result, err := transformer.ApplyToResource(input)
+	result, _, err := transformer.ApplyToResource(input)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -104,7 +104,7 @@ func TestPersistValueTransformer_NonOpaqueValues(t *testing.T) {
 
 func TestPersistValueTransformer_NilResource(t *testing.T) {
 	transformer := NewPersistValueTransformer()
-	result, err := transformer.ApplyToResource(nil)
+	result, _, err := transformer.ApplyToResource(nil)
 	assert.Error(t, err)
 	assert.Nil(t, result)
 	assert.Contains(t, err.Error(), "resource cannot be nil")
@@ -131,10 +131,10 @@ func TestPersistValueTransformer_ConsistentHashing(t *testing.T) {
         }`),
 	}
 
-	result1, err1 := transformer.ApplyToResource(resource1)
+	result1, _, err1 := transformer.ApplyToResource(resource1)
 	require.NoError(t, err1)
 
-	result2, err2 := transformer.ApplyToResource(resource2)
+	result2, _, err2 := transformer.ApplyToResource(resource2)
 	require.NoError(t, err2)
 
 	parsed1 := gjson.Parse(string(result1.Properties))
@@ -168,10 +168,10 @@ func TestPersistValueTransformer_DifferentValuesProduceDifferentHashes(t *testin
         }`),
 	}
 
-	result1, err1 := transformer.ApplyToResource(resource1)
+	result1, _, err1 := transformer.ApplyToResource(resource1)
 	require.NoError(t, err1)
 
-	result2, err2 := transformer.ApplyToResource(resource2)
+	result2, _, err2 := transformer.ApplyToResource(resource2)
 	require.NoError(t, err2)
 
 	parsed1 := gjson.Parse(string(result1.Properties))
@@ -228,7 +228,7 @@ func TestPersistValueTransformer_HashesHexShapedValueWithoutMarker(t *testing.T)
         }`, knownHash)),
 	}
 
-	result, err := transformer.ApplyToResource(input)
+	result, _, err := transformer.ApplyToResource(input)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -253,7 +253,7 @@ func TestApplyToResource_HashesBareStringAtSchemaOpaquePath(t *testing.T) {
 		Schema:     schemaWithOpaque("SecretString"),
 		Properties: json.RawMessage(`{"Name":"n","SecretString":"super-secret-password"}`),
 	}
-	out, err := NewPersistValueTransformer().ApplyToResource(r)
+	out, _, err := NewPersistValueTransformer().ApplyToResource(r)
 	require.NoError(t, err)
 
 	var props map[string]any
@@ -278,7 +278,7 @@ func TestApplyToResource_HashesEnvelopedOpaque(t *testing.T) {
 		Schema:     pkgmodel.Schema{},
 		Properties: json.RawMessage(`{"SecretString":{"$value":"s","$visibility":"Opaque","$strategy":"Update"}}`),
 	}
-	out, err := NewPersistValueTransformer().ApplyToResource(r)
+	out, _, err := NewPersistValueTransformer().ApplyToResource(r)
 	require.NoError(t, err)
 	var props map[string]any
 	require.NoError(t, json.Unmarshal(out.Properties, &props))
@@ -295,7 +295,7 @@ func TestApplyToResource_HashesMapValuedSchemaOpaqueField(t *testing.T) {
 		Schema:     schemaWithOpaque("decodedData"),
 		Properties: json.RawMessage(`{"Name":"n","decodedData":{"username":"admin","password":"s3cr3t"}}`),
 	}
-	out, err := NewPersistValueTransformer().ApplyToResource(r)
+	out, _, err := NewPersistValueTransformer().ApplyToResource(r)
 	require.NoError(t, err)
 
 	var props map[string]any
@@ -324,7 +324,7 @@ func TestApplyToResource_MapSecretWithValueKeyIsNotMistakenForEnvelope(t *testin
 		Schema:     schemaWithOpaque("decodedData"),
 		Properties: json.RawMessage(`{"decodedData":{"password":"s3cr3t","$value":"not-an-envelope"}}`),
 	}
-	out, err := NewPersistValueTransformer().ApplyToResource(r)
+	out, _, err := NewPersistValueTransformer().ApplyToResource(r)
 	require.NoError(t, err)
 
 	var props map[string]any
@@ -345,7 +345,7 @@ func TestApplyToResource_IdempotentAndSkipsClear(t *testing.T) {
 		Schema:     schemaWithOpaque("SecretString"),
 		Properties: json.RawMessage(`{"Public":"64charsofhexbutclear0000000000000000000000000000000000000000","SecretString":{"$value":"abc","$visibility":"Opaque","$hashed":true}}`),
 	}
-	out, err := NewPersistValueTransformer().ApplyToResource(r)
+	out, _, err := NewPersistValueTransformer().ApplyToResource(r)
 	require.NoError(t, err)
 	var props map[string]any
 	require.NoError(t, json.Unmarshal(out.Properties, &props))
@@ -358,7 +358,7 @@ func TestApplyToResource_HashesTopLevelScalarPatchOpValue(t *testing.T) {
 		Schema:        schemaWithOpaque("SecretString"),
 		PatchDocument: json.RawMessage(`[{"op":"replace","path":"/SecretString","value":"super-secret-password"}]`),
 	}
-	out, err := NewPersistValueTransformer().ApplyToResource(r)
+	out, _, err := NewPersistValueTransformer().ApplyToResource(r)
 	require.NoError(t, err)
 	var ops []map[string]any
 	require.NoError(t, json.Unmarshal(out.PatchDocument, &ops))
@@ -382,7 +382,7 @@ func TestApplyToResource_EnvelopeWithoutStrategyGetsCanonicalStrategy(t *testing
 		Schema:     schemaWithOpaque("SecretString"),
 		Properties: json.RawMessage(`{"SecretString":{"$value":"plaintext","$visibility":"Opaque"}}`),
 	}
-	out, err := NewPersistValueTransformer().ApplyToResource(r)
+	out, _, err := NewPersistValueTransformer().ApplyToResource(r)
 	require.NoError(t, err)
 	var props map[string]any
 	require.NoError(t, json.Unmarshal(out.Properties, &props))
@@ -398,7 +398,7 @@ func TestApplyToResource_EnvelopePreservesExplicitSetOnce(t *testing.T) {
 		Schema:     schemaWithOpaque("SecretString"),
 		Properties: json.RawMessage(`{"SecretString":{"$value":"plaintext","$visibility":"Opaque","$strategy":"SetOnce"}}`),
 	}
-	out, err := NewPersistValueTransformer().ApplyToResource(r)
+	out, _, err := NewPersistValueTransformer().ApplyToResource(r)
 	require.NoError(t, err)
 	var props map[string]any
 	require.NoError(t, json.Unmarshal(out.Properties, &props))
@@ -421,7 +421,7 @@ func TestApplyToResource_PatchOpNonSecretValueCollidingWithSecretPlaintextIsUnto
         }`),
 		PatchDocument: json.RawMessage(`[{"op":"replace","path":"/Description","value":"same"}]`),
 	}
-	out, err := NewPersistValueTransformer().ApplyToResource(r)
+	out, _, err := NewPersistValueTransformer().ApplyToResource(r)
 	require.NoError(t, err)
 
 	var ops []map[string]any
@@ -441,7 +441,7 @@ func TestApplyToResource_HashesOpaqueEnvelopePatchOpValue(t *testing.T) {
 		PatchDocument: json.RawMessage(`[{"op":"replace","path":"/Whatever","value":{"$value":"s","$visibility":"Opaque"}}]`),
 	}
 
-	firstRun, err := NewPersistValueTransformer().ApplyToResource(r)
+	firstRun, _, err := NewPersistValueTransformer().ApplyToResource(r)
 	require.NoError(t, err)
 
 	var ops []map[string]any
@@ -453,7 +453,7 @@ func TestApplyToResource_HashesOpaqueEnvelopePatchOpValue(t *testing.T) {
 	assert.NotEqual(t, "s", value["$value"])
 	assert.Len(t, value["$value"].(string), 64)
 
-	secondRun, err := NewPersistValueTransformer().ApplyToResource(firstRun)
+	secondRun, _, err := NewPersistValueTransformer().ApplyToResource(firstRun)
 	require.NoError(t, err)
 	assert.Equal(t, string(firstRun.PatchDocument), string(secondRun.PatchDocument),
 		"re-hashing an already-hashed envelope patch-op value must be a byte-identical no-op")
@@ -469,7 +469,7 @@ func TestApplyToResource_PatchOpHashingIsIdempotent(t *testing.T) {
 		PatchDocument: json.RawMessage(`[{"op":"replace","path":"/SecretString","value":"super-secret-password"}]`),
 	}
 
-	firstRun, err := NewPersistValueTransformer().ApplyToResource(r)
+	firstRun, _, err := NewPersistValueTransformer().ApplyToResource(r)
 	require.NoError(t, err)
 
 	var ops []map[string]any
@@ -482,7 +482,7 @@ func TestApplyToResource_PatchOpHashingIsIdempotent(t *testing.T) {
 
 	// Re-run against the already-hashed output (as boot-time BackfillHashedSecrets
 	// or a resumed completion pass would).
-	secondRun, err := NewPersistValueTransformer().ApplyToResource(firstRun)
+	secondRun, _, err := NewPersistValueTransformer().ApplyToResource(firstRun)
 	require.NoError(t, err)
 
 	assert.Equal(t, string(firstRun.PatchDocument), string(secondRun.PatchDocument),
@@ -500,7 +500,7 @@ func TestApplyToResource_HashesKnownTypeFieldWithoutSchemaOpaque(t *testing.T) {
 		Schema:     pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{"SecretString": {Opaque: false}}},
 		Properties: json.RawMessage(`{"Name":"n","SecretString":"super-secret-discovered"}`),
 	}
-	out, err := NewPersistValueTransformer().ApplyToResource(r)
+	out, _, err := NewPersistValueTransformer().ApplyToResource(r)
 	require.NoError(t, err)
 
 	var props map[string]any
@@ -523,9 +523,158 @@ func TestApplyToResource_LeavesUnknownTypeBareStringAlone(t *testing.T) {
 		Schema:     pkgmodel.Schema{},
 		Properties: json.RawMessage(`{"BucketName":"my-bucket"}`),
 	}
-	out, err := NewPersistValueTransformer().ApplyToResource(r)
+	out, _, err := NewPersistValueTransformer().ApplyToResource(r)
 	require.NoError(t, err)
 	var props map[string]any
 	require.NoError(t, json.Unmarshal(out.Properties, &props))
 	assert.Equal(t, "my-bucket", props["BucketName"])
+}
+
+func schemaWithOpaqueFields(fields ...string) pkgmodel.Schema {
+	hints := make(map[string]pkgmodel.FieldHint, len(fields))
+	for _, f := range fields {
+		hints[f] = pkgmodel.FieldHint{Opaque: true}
+	}
+	return pkgmodel.Schema{Hints: hints}
+}
+
+// A SecretValue-typed property inside a SubResource is emitted as a dotted hint
+// name. It must be hashed at rest exactly as a top-level one is.
+func TestApplyToResource_HashesNestedOpaqueField(t *testing.T) {
+	r := &pkgmodel.Resource{
+		Schema:     schemaWithOpaqueFields("settings.password"),
+		Properties: json.RawMessage(`{"name":"cp","settings":{"host":"smtp.example.com","password":"hunter2"}}`),
+	}
+	out, _, err := NewPersistValueTransformer().ApplyToResource(r)
+	require.NoError(t, err)
+
+	var props map[string]any
+	require.NoError(t, json.Unmarshal(out.Properties, &props))
+	assert.Equal(t, "cp", props["name"])
+
+	settings := props["settings"].(map[string]any)
+	assert.Equal(t, "smtp.example.com", settings["host"], "non-secret sibling untouched")
+
+	pw := settings["password"].(map[string]any)
+	assert.Equal(t, "Opaque", pw["$visibility"])
+	assert.Equal(t, "Update", pw["$strategy"])
+	assert.Equal(t, true, pw["$hashed"])
+	assert.Len(t, pw["$value"].(string), 64)
+	assert.NotContains(t, string(out.Properties), "hunter2")
+}
+
+// A provider payload may return a flat key that genuinely contains a dot. It
+// must match the hint as itself — a gjson-based implementation would read it as
+// a nested path and leave the secret in cleartext.
+func TestApplyToResource_HashesFlatDotContainingOpaqueKey(t *testing.T) {
+	r := &pkgmodel.Resource{
+		Schema:     schemaWithOpaqueFields("hmacConfig.secret"),
+		Properties: json.RawMessage(`{"url":"https://example.com","hmacConfig.secret":"s3cr3t"}`),
+	}
+	out, _, err := NewPersistValueTransformer().ApplyToResource(r)
+	require.NoError(t, err)
+
+	var props map[string]any
+	require.NoError(t, json.Unmarshal(out.Properties, &props))
+	assert.Equal(t, "https://example.com", props["url"])
+
+	secret := props["hmacConfig.secret"].(map[string]any)
+	assert.Equal(t, true, secret["$hashed"])
+	assert.NotContains(t, string(out.Properties), "s3cr3t")
+}
+
+// Hint names for a Listing<SubResource> carry no index, so every element is
+// covered by the one hint.
+func TestApplyToResource_HashesNestedOpaqueFieldInEveryListElement(t *testing.T) {
+	r := &pkgmodel.Resource{
+		Schema:     schemaWithOpaqueFields("webhooks.password"),
+		Properties: json.RawMessage(`{"webhooks":[{"url":"u1","password":"a"},{"url":"u2","password":"b"}]}`),
+	}
+	out, _, err := NewPersistValueTransformer().ApplyToResource(r)
+	require.NoError(t, err)
+
+	parsed := gjson.ParseBytes(out.Properties)
+	for i, plaintext := range []string{"a", "b"} {
+		hook := parsed.Get(fmt.Sprintf("webhooks.%d", i))
+		assert.True(t, hook.Get("password.$hashed").Bool(), "element %d hashed", i)
+		assert.Len(t, hook.Get("password.$value").String(), 64)
+		assert.NotEqual(t, plaintext, hook.Get("password.$value").String())
+		assert.Equal(t, fmt.Sprintf("u%d", i+1), hook.Get("url").String(), "non-secret sibling untouched")
+	}
+}
+
+// A read-only payload's structure can differ from the writable one, so it needs
+// its own coverage rather than inheriting the Properties test.
+func TestApplyToResource_HashesNestedOpaqueFieldInReadOnlyProperties(t *testing.T) {
+	r := &pkgmodel.Resource{
+		Schema:             schemaWithOpaqueFields("status.token"),
+		ReadOnlyProperties: json.RawMessage(`{"status":{"phase":"Ready","token":"t0ken"}}`),
+	}
+	out, _, err := NewPersistValueTransformer().ApplyToResource(r)
+	require.NoError(t, err)
+
+	parsed := gjson.ParseBytes(out.ReadOnlyProperties)
+	assert.Equal(t, "Ready", parsed.Get("status.phase").String())
+	assert.True(t, parsed.Get("status.token.$hashed").Bool())
+	assert.NotContains(t, string(out.ReadOnlyProperties), "t0ken")
+}
+
+func TestApplyToResource_IsIdempotentForNestedOpaqueField(t *testing.T) {
+	transformer := NewPersistValueTransformer()
+	r := &pkgmodel.Resource{
+		Schema:     schemaWithOpaqueFields("settings.password"),
+		Properties: json.RawMessage(`{"settings":{"password":"hunter2"}}`),
+	}
+
+	first, _, err := transformer.ApplyToResource(r)
+	require.NoError(t, err)
+	second, _, err := transformer.ApplyToResource(&pkgmodel.Resource{Schema: r.Schema, Properties: first.Properties})
+	require.NoError(t, err)
+
+	assert.JSONEq(t, string(first.Properties), string(second.Properties), "a stored hash is never re-hashed")
+}
+
+// An inline $visibility=Opaque envelope is discovered structurally, at any
+// depth, with no hint at all — that branch is separate from name matching and
+// must survive the move onto the shared walker.
+func TestApplyToResource_HashesNestedInlineOpaqueEnvelopeWithoutAnyHint(t *testing.T) {
+	r := &pkgmodel.Resource{
+		Schema:     pkgmodel.Schema{},
+		Properties: json.RawMessage(`{"a":{"b":{"secret":{"$value":"s","$visibility":"Opaque","$strategy":"Update"}}}}`),
+	}
+	out, _, err := NewPersistValueTransformer().ApplyToResource(r)
+	require.NoError(t, err)
+
+	parsed := gjson.ParseBytes(out.Properties)
+	assert.True(t, parsed.Get("a.b.secret.$hashed").Bool())
+	assert.Len(t, parsed.Get("a.b.secret.$value").String(), 64)
+}
+
+// Over-matching is the accepted cost of prefix concatenation, so it has to be
+// observable: a hint that matched under two distinct readings is reported.
+func TestApplyToResource_ReportsAmbiguousNestedHint(t *testing.T) {
+	r := &pkgmodel.Resource{
+		Schema:     schemaWithOpaqueFields("a.b.c"),
+		Properties: json.RawMessage(`{"a":{"b":{"c":"s1"}},"a.b":{"c":"s2"}}`),
+	}
+	out, diags, err := NewPersistValueTransformer().ApplyToResource(r)
+	require.NoError(t, err)
+
+	require.Len(t, diags, 1)
+	assert.Equal(t, DiagnosticWarn, diags[0].Severity)
+	assert.Equal(t, "a.b.c", diags[0].Hint)
+	assert.NotContains(t, string(out.Properties), "s1", "matching is still fail-safe under ambiguity")
+	assert.NotContains(t, string(out.Properties), "s2")
+}
+
+// An ordinary list produces many concrete matches under ONE reading, which is
+// not ambiguous — reporting it would make the diagnostic worthless.
+func TestApplyToResource_ListOfSubResourcesReportsNoAmbiguity(t *testing.T) {
+	r := &pkgmodel.Resource{
+		Schema:     schemaWithOpaqueFields("webhooks.password"),
+		Properties: json.RawMessage(`{"webhooks":[{"password":"a"},{"password":"b"},{"password":"c"}]}`),
+	}
+	_, diags, err := NewPersistValueTransformer().ApplyToResource(r)
+	require.NoError(t, err)
+	assert.Empty(t, diags)
 }
