@@ -407,6 +407,98 @@ local neitherVariantTTL = new formae.TTLPolicy {
     label = "neither-ttl"
 }
 
+// Schema classes that sit under an intermediate base rather than extending
+// formae.SubResource / formae.Resource directly. The subclasses inherit the
+// base's annotated fields, redeclare one of them (narrowing String? to String),
+// redeclare another under a different outputField, and add their own.
+@formae.SubResourceHint {
+    outputKeyTransformation = (it) -> it.capitalize()
+}
+open local class TestBaseSetting extends formae.SubResource {
+    @formae.FieldHint
+    name: String
+
+    @formae.FieldHint
+    description: String?
+
+    @formae.FieldHint {
+        outputField = "BaseKey"
+    }
+    key: String?
+}
+
+@formae.SubResourceHint {
+    outputKeyTransformation = (it) -> it.capitalize()
+}
+local class TestDerivedSetting extends TestBaseSetting {
+    @formae.FieldHint
+    description: String
+
+    @formae.FieldHint {
+        outputField = "DerivedKey"
+    }
+    key: String?
+
+    @formae.FieldHint
+    extra: String?
+}
+
+local derivedSetting = new TestDerivedSetting {
+    name = "derived"
+    description = "narrowed on the subclass"
+    key = "derived-key"
+    extra = "child-only"
+}
+
+@formae.ResourceHint {
+    type = "Test::BaseWidget"
+    identifier = "Ref"
+    outputKeyTransformation = (it) -> it.capitalize()
+}
+open local class TestBaseWidget extends formae.Resource {
+    @formae.FieldHint
+    widgetName: String
+
+    @formae.FieldHint {
+        createOnly = true
+    }
+    zone: String?
+}
+
+@formae.ResourceHint {
+    type = "Test::DerivedWidget"
+    identifier = "Ref"
+    outputKeyTransformation = (it) -> it.capitalize()
+}
+local class TestDerivedWidget extends TestBaseWidget {
+    @formae.FieldHint
+    size: Int?
+}
+
+local derivedWidget = new TestDerivedWidget {
+    label = "derived-widget"
+    widgetName = "my-widget"
+    zone = "eu-west-1"
+    size = 3
+}
+
+// A provider secret: its chain runs TestProviderSecret -> formae.Secret ->
+// formae.Resource, so formae.Secret is an intermediate base too.
+@formae.ResourceHint {
+    type = "Test::ProviderSecret"
+    identifier = "Ref"
+    outputKeyTransformation = (it) -> it.capitalize()
+}
+local class TestProviderSecret extends formae.Secret {
+    hidden valueProperty = "secretValue"
+
+    @formae.FieldHint
+    secretName: String
+
+    @formae.FieldHint
+    secretValue: (String|formae.SecretValue)?
+}
+
 examples {
     ["Basic Resolvable"] {
         resolvable
@@ -806,6 +898,68 @@ facts {
     }
     ["whole-value rendering is unchanged (still the envelope object)"] {
         embedResolvable.$res == true && embedResolvable.$label == "kvs"
+    }
+
+    ["Sub-resource under an intermediate base renders inherited and own properties"] {
+        let (props = derivedSetting.props().toMap())
+        props["Name"] == "derived" &&
+        props["Description"] == "narrowed on the subclass" &&
+        props["Extra"] == "child-only"
+    }
+
+    ["Sub-resource inherited properties render parent-first with overrides in place"] {
+        derivedSetting.props().toMap().keys.toList() ==
+            List("Name", "Description", "DerivedKey", "Extra")
+    }
+
+    ["Sub-resource redeclaring a property renders under the subclass output field"] {
+        let (props = derivedSetting.props().toMap())
+        // "Name" comes from the base only, so its presence is what makes the
+        // absence of "BaseKey" mean the subclass won rather than that the base
+        // was skipped altogether.
+        props.containsKey("Name") &&
+        props["DerivedKey"] == "derived-key" &&
+        !props.containsKey("BaseKey")
+    }
+
+    ["Resource under an intermediate base renders its inherited annotated fields"] {
+        let (props = derivedWidget.render().Properties.toMap())
+        props["WidgetName"] == "my-widget" &&
+        props["Zone"] == "eu-west-1" &&
+        props["Size"] == 3
+    }
+
+    ["allProperties stops at Resource for a direct subclass"] {
+        formae.fq.allProperties(reflect.Class(TestBucket)).keys.toList() ==
+            List("bucketName", "region", "tags")
+    }
+
+    ["allProperties walks the intermediate base of a Resource subclass"] {
+        formae.fq.allProperties(reflect.Class(TestDerivedWidget)).keys.toList() ==
+            List("widgetName", "zone", "size")
+    }
+
+    // The helper collects valueProperty from formae.Secret; dropping it from
+    // the rendered schema is the job of the `hidden` filter downstream.
+    ["allProperties collects a Secret's valueProperty and stops at Resource"] {
+        formae.fq.allProperties(reflect.Class(TestProviderSecret)).keys.toList() ==
+            List("valueProperty", "secretName", "secretValue")
+    }
+
+    ["allProperties stops at SubResource for a direct subclass"] {
+        formae.fq.allProperties(reflect.Class(TestBaseSetting)).keys.toList() ==
+            List("name", "description", "key")
+    }
+
+    ["allProperties walks the intermediate base of a SubResource subclass"] {
+        formae.fq.allProperties(reflect.Class(TestDerivedSetting)).keys.toList() ==
+            List("name", "description", "key", "extra")
+    }
+
+    ["allProperties yields only own properties outside the resource hierarchy"] {
+        formae.fq.allProperties(reflect.Class(TestConfig)).keys.toList() ==
+            List("type", "region", "profile", "accountId",
+                 "Type", "Region", "Profile", "AccountId")
     }
 }
 

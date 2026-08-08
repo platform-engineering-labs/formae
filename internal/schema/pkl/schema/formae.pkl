@@ -751,6 +751,33 @@ class Fq {
         }
     }
 
+    /// Collects `cls`'s own properties together with every property it inherits
+    /// from an intermediate schema base. `reflect.Class.properties` is
+    /// direct-only, so a class that extends another schema class rather than a
+    /// root would otherwise expose only what it redeclares.
+    ///
+    /// The walk stops at — and excludes — the `Resource` and `SubResource`
+    /// roots: their own members (`label`, `group`, `target`, `stack`, `alias`,
+    /// `managed`) are framework plumbing, not schema fields, and collecting them
+    /// would inject six unannotated fields into every resource's schema. It also
+    /// stops at `Typed`/`Module` so a class that extends neither root cannot drag
+    /// in Pkl's own members. The roots are matched by class identity rather than
+    /// by name: a name test would reject a genuine subclass sitting under an
+    /// intermediate base and accept an unrelated provider-local class that merely
+    /// shares the name.
+    ///
+    /// Parent entries come first; a redeclaration in a subclass replaces the
+    /// parent's entry in place, keeping the parent's position.
+    function allProperties(cls: reflect.Class?): Map<String, reflect.Property> =
+        if (cls == null
+            || cls.reflectee == module.Resource
+            || cls.reflectee == module.SubResource
+            || cls.reflectee == Typed
+            || cls.reflectee == Module)
+            Map()
+        else
+            allProperties(cls.superclass) + cls.properties
+
     function findResourceHint(resourceClass: reflect.Class?): ResourceHint =
       resourceClass.annotations.filterIsInstance(ResourceHint).firstOrNull ?? findResourceHint(resourceClass.superclass)
 
@@ -929,7 +956,7 @@ class Fq {
 
     function subresourceProps(resourceClass: reflect.Class, subResource: SubResource): Dynamic =
         let(subResourceHint = findSubResourceHint(resourceClass))
-        resourceClass.properties
+        allProperties(resourceClass)
             .filter((k, v) ->
                 !v.modifiers.contains("hidden")
                 && !isUnsetNullableCollection(v.type, subResource.getPropertyOrNull(k))
@@ -950,7 +977,7 @@ class Fq {
 
     function resourceProps(resourceClass: reflect.Class, resource: Resource): Dynamic =
         let(resourceHint = findResourceHint(resourceClass))
-        resourceClass.properties
+        allProperties(resourceClass)
             .filter((k, v) ->
                 v.allAnnotations.filterIsInstance(FieldHint).length > 0
                 && !isUnsetNullableCollection(v.type, resource.getPropertyOrNull(k))
