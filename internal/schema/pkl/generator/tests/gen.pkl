@@ -175,6 +175,16 @@ local class RefOrMapResource extends formae.Resource {
     target: formae.Resolvable|Mapping<String, String>
 }
 
+/// A map-typed field whose values carry a type, so an entry whose value cannot
+/// be converted is observable.
+@formae.ResourceHint
+local class IntMapResource extends formae.Resource {
+    type = "FakePlugin::Map::IntMap"
+
+    @formae.FieldHint
+    counts: Mapping<String, Int>
+}
+
 @formae.ResourceHint
 local class DefaultsResource extends formae.Resource {
     type = "FakePlugin::Defaults::Resource"
@@ -727,7 +737,7 @@ facts {
 
     // --- Map conversion ---
 
-    ["A map key of the wrong type is skipped instead of aborting the conversion"] {
+    ["A map key of the wrong type yields a failure value instead of dropping the entry"] {
         let (result = gen.attemptApply(ComplexBar, new Dynamic {
             items = new Listing { "a" }
             metadata = new Mapping {
@@ -736,8 +746,26 @@ facts {
             }
             label = "map"
         }))
+        result is gen.GenerationFailure &&
+        (result as gen.GenerationFailure).message.contains("Expected \"String\"")
+    }
+
+    ["A map value that cannot be converted yields a failure value instead of dropping the entry"] {
+        let (result = gen.attemptApply(IntMapResource, new Dynamic {
+            counts = new Mapping { ["a"] = "abc" }
+            label = "map"
+        }))
+        result is gen.GenerationFailure &&
+        (result as gen.GenerationFailure).message.contains("cannot be parsed as Int")
+    }
+
+    ["A map value that converts is still coerced to the declared value type"] {
+        let (result = gen.attemptApply(IntMapResource, new Dynamic {
+            counts = new Mapping { ["a"] = "5" }
+            label = "map"
+        }))
         !(result is gen.GenerationFailure) &&
-        (result as ComplexBar).metadata.toMap() == Map("ok", "two")
+        (result as IntMapResource).counts.toMap() == Map("a", 5)
     }
 
     // --- Malformed envelopes report a failure instead of aborting ---
