@@ -8,6 +8,7 @@ module generator
 
 import "pkl:json"
 import "pkl:reflect"
+import "pkl:test"
 import "@formae/formae.pkl"
 import "./resolvables.pkl"
 import "./jsonhelper.pkl"
@@ -168,6 +169,35 @@ local function applyList(type: reflect.Type, value: Dynamic|Collection): List|Ge
         acc.add(_v)
   )
 
+/// Reports the error a converted value defers until something reads it, or
+/// `null` when reading it raises nothing.
+///
+/// PKL checks a property's declared type and its constraints when the property
+/// is first read, not when the enclosing object is built. A union member can
+/// therefore produce an object that looks converted and only raises later, while
+/// the forma is rendered — by which time the fold that could have tried the next
+/// member is gone, and the error is unrecoverable. Reading the value here turns
+/// that deferred error into something union selection can act on.
+///
+/// Only union selection reads ahead like this. Conversion everywhere else keeps
+/// PKL's lazy behaviour, so a value converted outside a union is unaffected.
+local function deferredFailure(value: Any): String? =
+  test.catchOrNull(() -> readDeeply(value))
+
+/// Reads every property and element of `value`, recursively. The result is
+/// discarded — only the reading matters.
+local function readDeeply(value: Any): Boolean =
+  if (value is Map)
+    value.fold(true, (acc: Boolean, _key, element) -> readDeeply(element) && acc)
+  else if (value is Typed|Dynamic|Mapping)
+    readDeeply(value.toMap())
+  else if (value is Listing)
+    readDeeply(value.toList())
+  else if (value is Collection)
+    value.fold(true, (acc: Boolean, element) -> readDeeply(element) && acc)
+  else
+    true
+
 hidden reflectTypeHandlers: Mapping<Class, (reflect.Type, Any) -> Any|GenerationFailure> = new Mapping {
   [reflect.NullableType] = (type, value) ->
     if (value == null) null else applyType((type as reflect.NullableType).member, value)
@@ -198,7 +228,10 @@ hidden reflectTypeHandlers: Mapping<Class, (reflect.Type, Any) -> Any|Generation
       (acc, _type) ->
         if (acc is GenerationFailure)
           let (attempt = applyType(_type, value))
-            if (attempt is GenerationFailure) acc else attempt
+            // A member counts as matched only once its deferred checks have run:
+            // a converted object that raises the moment anything reads it does
+            // not belong to this member.
+            if (attempt is GenerationFailure || deferredFailure(attempt) != null) acc else attempt
         else
           acc
     )
@@ -362,6 +395,12 @@ local function referenceContext(label: Any, stack: Any): String =
 /// guessed or omitted import yields a forma file that looks fine and applies
 /// the wrong thing. Fail loudly instead, naming both the type and the reference
 /// that carried it.
+///
+/// Throwing is safe here because this runs only while a resource is rendered —
+/// its callers are `parseValueEnhanced` and `formatValueWithTypes`, reached from
+/// `genPklToMap`/`genMapToPklStringWithTypes` after conversion has finished.
+/// Nothing on the `applyType` path calls it, so it cannot abort a union member
+/// attempt.
 local function requireResolvableInfo(typeUri: String?, context: String): resolvables.Resolvable =
     if (typeUri == null)
         throw("Cannot render a resource reference \(context): the reference carries no resource type.")
@@ -381,33 +420,42 @@ local function applyDynamicOrMapping(type: reflect.Class, value: Dynamic|Mapping
         let (refType = valueAsMap.getOrNull("$type"))
         let (typeName = valueAsMap.getOrNull("$type"))
         let (property = valueAsMap.getOrNull("$property"))
-        let (resolvableMapping = getResolvablePropertyMapping(typeName))
-        let (mappedProperty =
-            if (property == null)
-                null
-            else if (resolvableMapping.containsKey(property))
-                // Direct match — simple scalar property
-                resolvableMapping[property]
-            else if (property.contains("."))
-                // Collection path — map the base segment, keep the rest
-                let (segments = splitGjsonPath(property))
-                let (base = segments[0])
-                let (rest = segments.drop(1))
-                let (mappedBase = if (resolvableMapping.containsKey(base)) resolvableMapping[base] else base)
-                mappedBase + rest.fold("", (acc, seg) -> acc + "." + seg)
-            else
-                property
-        )
-        let (r = new FakeResolvable {
-            stack = s
-            label = l
-            RealValue = valueAsMap.getOrNull("$value")
-            type = refType
-            FakeType = typeName
-            FakeProperty = mappedProperty
-        })
+        // Both carriers are handled as text — the type keys the resolvable
+        // lookup, the property is split on dots and matched. Reject any other
+        // shape here: further down they reach a lookup that takes a String and
+        // a String method call, neither of which can report a failure.
+        if (!(typeName is String))
+            Fail("A resource reference's $type must be a String, but got \(typeName.getClass().simpleName)")
+        else if (property != null && !(property is String))
+            Fail("A resource reference's $property must be a String, but got \(property.getClass().simpleName)")
+        else
+            let (resolvableMapping = getResolvablePropertyMapping(typeName))
+            let (mappedProperty =
+                if (property == null)
+                    null
+                else if (resolvableMapping.containsKey(property))
+                    // Direct match — simple scalar property
+                    resolvableMapping[property]
+                else if (property.contains("."))
+                    // Collection path — map the base segment, keep the rest
+                    let (segments = splitGjsonPath(property))
+                    let (base = segments[0])
+                    let (rest = segments.drop(1))
+                    let (mappedBase = if (resolvableMapping.containsKey(base)) resolvableMapping[base] else base)
+                    mappedBase + rest.fold("", (acc, seg) -> acc + "." + seg)
+                else
+                    property
+            )
+            let (r = new FakeResolvable {
+                stack = s
+                label = l
+                RealValue = valueAsMap.getOrNull("$value")
+                type = refType
+                FakeType = typeName
+                FakeProperty = mappedProperty
+            })
 
-        r
+            r
     else if (valueAsMap.containsKey("$value") && valueAsMap.containsKey("$visibility") && valueAsMap.containsKey("$strategy"))
 
         let (fakeValue = valueAsMap.getOrNull("$value"))
@@ -425,12 +473,17 @@ local function applyDynamicOrMapping(type: reflect.Class, value: Dynamic|Mapping
         // $templateParts arrives as a Listing when parsed from JSON (the real
         // extract flow), but may be a List/Dynamic in other construction paths.
         let (rawParts = valueAsMap["$templateParts"])
-        new FakeEmbed {
-            FakeParts =
-                if (rawParts is Listing) rawParts.toList()
-                else if (rawParts is List) rawParts
-                else (rawParts as Dynamic).toList()
-        }
+        // Anything outside those three shapes reaches a cast that cannot report
+        // a failure, so reject it here instead.
+        if (!(rawParts is Listing|List|Dynamic))
+            Unexpected("Listing|List|Dynamic", rawParts.getClass().simpleName)
+        else
+            new FakeEmbed {
+                FakeParts =
+                    if (rawParts is Listing) rawParts.toList()
+                    else if (rawParts is List) rawParts
+                    else (rawParts as Dynamic).toList()
+            }
     else
         // Get the reverse mapping for this class
         let (reverseMapping =
@@ -454,12 +507,20 @@ local function applyDynamicOrMapping(type: reflect.Class, value: Dynamic|Mapping
                 else
                     let (result = applyPropertyWithMapping(valueAsMap, prop, reverseMapping))
                     if (result is GenerationFailure)
-                        throw(result.message)
+                        result
                     else
                         acc.put(name, result)
             )
         )
-            converted.toTyped(type.reflectee)
+            if (converted is GenerationFailure)
+                converted
+            else
+                // toTyped does not evaluate the class's property types or their
+                // constraints; PKL defers both to the first read of each
+                // property. A violation therefore cannot surface here —
+                // deferredFailure is what brings it forward, during union
+                // selection.
+                converted.toTyped(type.reflectee)
 
 
 local function doesNotInherit(clazz: reflect.Class) =

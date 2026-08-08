@@ -87,6 +87,59 @@ local class WorkflowResource extends formae.Resource {
     steps: Listing<XorStep>
 }
 
+/// Two nested carriers that differ only in the type of their single property.
+/// A value fits exactly one of them, so which member a union resolves to is
+/// observable.
+local class IntHolder {
+    n: Int
+}
+
+local class StrHolder {
+    n: String
+}
+
+@formae.ResourceHint
+local class IntThenStrResource extends formae.Resource {
+    type = "FakePlugin::Union::IntThenStr"
+
+    @formae.FieldHint
+    holder: IntHolder|StrHolder
+}
+
+@formae.ResourceHint
+local class StrThenIntResource extends formae.Resource {
+    type = "FakePlugin::Union::StrThenInt"
+
+    @formae.FieldHint
+    holder: StrHolder|IntHolder
+}
+
+@formae.ResourceHint
+local class XorThenStrResource extends formae.Resource {
+    type = "FakePlugin::Union::XorThenStr"
+
+    @formae.FieldHint
+    step: XorStep|StrHolder
+}
+
+@formae.ResourceHint
+local class StrThenXorResource extends formae.Resource {
+    type = "FakePlugin::Union::StrThenXor"
+
+    @formae.FieldHint
+    step: StrHolder|XorStep
+}
+
+/// Holds a nested class, so a malformed envelope offered in its place reaches
+/// the envelope branches of the conversion.
+@formae.ResourceHint
+local class HolderResource extends formae.Resource {
+    type = "FakePlugin::Union::Holder"
+
+    @formae.FieldHint
+    holder: StrHolder
+}
+
 @formae.ResourceHint
 local class DefaultsResource extends formae.Resource {
     type = "FakePlugin::Defaults::Resource"
@@ -149,6 +202,25 @@ local workflowProperties: Dynamic = new Dynamic {
 
 local defaultsProperties: Dynamic = new Dynamic {
     label = "defaults"
+}
+
+// A string-valued `n` fits StrHolder and no other member.
+local stringHolderProperties: Dynamic = new Dynamic {
+    holder = new Dynamic { n = "abc" }
+    label = "holder"
+}
+
+// Neither `run` nor `uses` is present, so XorStep's mutual-exclusivity
+// constraint cannot hold; only StrHolder fits.
+local stringStepProperties: Dynamic = new Dynamic {
+    step = new Dynamic { n = "abc" }
+    label = "step"
+}
+
+// A listing fits neither Int nor String, so no member of the union fits.
+local unmatchableHolderProperties: Dynamic = new Dynamic {
+    holder = new Dynamic { n = new Listing { "abc" } }
+    label = "holder"
 }
 
 examples {
@@ -511,6 +583,71 @@ facts {
         // schema default, so extract -> reapply does not change the value.
         let (reapplied = new DefaultsResource { label = "roundtrip" })
         !renderedRes.containsKey("mode") && renderedRes["retries"] == 3 && reapplied.mode == "auto"
+    }
+
+    // --- Union member selection ---
+
+    ["Union member whose property cannot convert falls through to the member that fits"] {
+        let (result = gen.attemptApply(IntThenStrResource, stringHolderProperties))
+        !(result is gen.GenerationFailure) &&
+        (result as IntThenStrResource).holder is StrHolder
+    }
+
+    ["Reordering a union whose first member cannot convert selects the same member"] {
+        let (result = gen.attemptApply(StrThenIntResource, stringHolderProperties))
+        !(result is gen.GenerationFailure) &&
+        (result as StrThenIntResource).holder is StrHolder
+    }
+
+    ["Union member whose constraint is violated falls through to the member that fits"] {
+        let (result = gen.attemptApply(XorThenStrResource, stringStepProperties))
+        !(result is gen.GenerationFailure) &&
+        (result as XorThenStrResource).step is StrHolder
+    }
+
+    ["Reordering a union with a constrained member selects the same member"] {
+        let (result = gen.attemptApply(StrThenXorResource, stringStepProperties))
+        !(result is gen.GenerationFailure) &&
+        (result as StrThenXorResource).step is StrHolder
+    }
+
+    ["A value fitting no union member yields a failure value, not a hard error"] {
+        gen.attemptApply(IntThenStrResource, unmatchableHolderProperties) is gen.GenerationFailure
+    }
+
+    // --- Malformed envelopes report a failure instead of aborting ---
+
+    ["A resource reference carrying no resource type yields a failure value"] {
+        gen.attemptApply(HolderResource, new Dynamic {
+            holder = new Dynamic {
+                ["$res"] = true
+                ["$label"] = "vpc"
+                ["$property"] = "VpcId"
+            }
+            label = "ref"
+        }) is gen.GenerationFailure
+    }
+
+    ["A resource reference whose property path is not a String yields a failure value"] {
+        gen.attemptApply(HolderResource, new Dynamic {
+            holder = new Dynamic {
+                ["$res"] = true
+                ["$label"] = "vpc"
+                ["$type"] = "TestProvider::EC2::VPC"
+                ["$property"] = 5
+            }
+            label = "ref"
+        }) is gen.GenerationFailure
+    }
+
+    ["An embedded template whose parts are not a list yields a failure value"] {
+        gen.attemptApply(HolderResource, new Dynamic {
+            holder = new Dynamic {
+                ["$embed"] = true
+                ["$templateParts"] = "cf.kvs('...')"
+            }
+            label = "embed"
+        }) is gen.GenerationFailure
     }
 
 }
