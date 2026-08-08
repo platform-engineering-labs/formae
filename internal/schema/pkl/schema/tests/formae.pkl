@@ -499,6 +499,67 @@ local class TestProviderSecret extends formae.Secret {
     secretValue: (String|formae.SecretValue)?
 }
 
+// A sub-resource whose nested sub-resource field is declared on an
+// intermediate base, so the subclass reaches it only through the superclass
+// chain.
+@formae.SubResourceHint {
+    outputKeyTransformation = (it) -> it.capitalize()
+}
+open local class TestBaseContainer extends formae.SubResource {
+    @formae.FieldHint
+    containerName: String
+
+    @formae.FieldHint
+    inner: TestBaseSetting?
+}
+
+@formae.SubResourceHint {
+    outputKeyTransformation = (it) -> it.capitalize()
+}
+local class TestDerivedContainer extends TestBaseContainer {
+    @formae.FieldHint
+    weight: Int?
+}
+
+// A resource whose scalar and sub-resource-typed fields are declared on an
+// intermediate base. The subclass redeclares one of them, narrowing String? to
+// String, and adds its own.
+@formae.ResourceHint {
+    type = "Test::BaseGadget"
+    identifier = "Ref"
+    outputKeyTransformation = (it) -> it.capitalize()
+}
+open local class TestBaseGadget extends formae.Resource {
+    @formae.FieldHint
+    gadgetName: String
+
+    @formae.FieldHint
+    tone: String?
+
+    @formae.FieldHint
+    setting: TestDerivedContainer?
+}
+
+@formae.ResourceHint {
+    type = "Test::DerivedGadget"
+    identifier = "Ref"
+    outputKeyTransformation = (it) -> it.capitalize()
+}
+local class TestDerivedGadget extends TestBaseGadget {
+    @formae.FieldHint
+    tone: String
+
+    @formae.FieldHint
+    speed: Int?
+}
+
+local derivedGadget = new TestDerivedGadget {
+    label = "derived-gadget"
+    gadgetName = "my-gadget"
+    tone = "bright"
+    speed = 2
+}
+
 examples {
     ["Basic Resolvable"] {
         resolvable
@@ -960,6 +1021,56 @@ facts {
         formae.fq.allProperties(reflect.Class(TestConfig)).keys.toList() ==
             List("type", "region", "profile", "accountId",
                  "Type", "Region", "Profile", "AccountId")
+    }
+
+    ["Resource hints and fields cover properties inherited from an intermediate base"] {
+        let (hints = derivedGadget.hints())
+        let (fields = derivedGadget.fields())
+        hints.containsKey("GadgetName") &&
+        hints.containsKey("Tone") &&
+        hints.containsKey("Speed") &&
+        fields.contains("GadgetName") &&
+        fields.contains("Tone") &&
+        fields.contains("Speed")
+    }
+
+    ["Required on a redeclared property comes from the subclass's narrowed type"] {
+        let (hints = derivedGadget.hints())
+        // GadgetName is declared on the base only, so its presence is what
+        // makes Tone's Required a statement about which declaration won rather
+        // than about the subclass's own declaration being read on its own.
+        hints.containsKey("GadgetName") &&
+        hints["GadgetName"].Required == true &&
+        hints["Tone"].Required == true &&
+        hints["Speed"].Required == false
+    }
+
+    ["Inherited sub-resource field contributes nested hints"] {
+        let (hints = derivedGadget.hints())
+        hints.containsKey("Setting") &&
+        hints.containsKey("Setting.ContainerName") &&
+        hints.containsKey("Setting.Weight") &&
+        hints.containsKey("Setting.Inner.Name") &&
+        hints.containsKey("Setting.Inner.BaseKey")
+    }
+
+    ["Sub-resource hints cover inherited direct and nested fields"] {
+        let (hints = formae.fq.subHints(reflect.Class(TestDerivedContainer)))
+        hints.containsKey("ContainerName") &&
+        hints.containsKey("Weight") &&
+        hints.containsKey("Inner") &&
+        hints.containsKey("Inner.Name") &&
+        hints.containsKey("Inner.BaseKey")
+    }
+
+    ["Resource hints exclude the members declared on Resource itself"] {
+        let (rootMembers = List("label", "group", "target", "stack", "alias", "managed"))
+        let (derivedHints = derivedGadget.hints().toMap())
+        let (directHints = testBucket.hints().toMap())
+        derivedHints.containsKey("GadgetName") &&
+        derivedHints.keys.every((k) -> !rootMembers.contains(k.toLowerCase())) &&
+        directHints.containsKey("bucketName") &&
+        directHints.keys.every((k) -> !rootMembers.contains(k.toLowerCase()))
     }
 }
 

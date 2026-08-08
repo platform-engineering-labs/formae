@@ -789,7 +789,7 @@ class Fq {
 
     function hints(resourceClass: reflect.Class): Mapping<String, FieldHint> =
         let(resourceHint = findResourceHint(resourceClass))
-        let(directHints = resourceClass.properties.filter((_, v) -> !v.modifiers.contains("hidden")).map((k, v) ->
+        let(directHints = allProperties(resourceClass).filter((_, v) -> !v.modifiers.contains("hidden")).map((k, v) ->
             let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull ?? new FieldHint {})
             let(key = if(fieldHint.outputField != null) fieldHint.outputField else resourceHint.outputKeyTransformation.apply(k))
             let(baseHint = (fieldHint) {
@@ -798,7 +798,7 @@ class Fq {
             })
             Pair(key, baseHint)
         ))
-        let(nestedHints = resourceClass.properties.filter((_, v) -> isSubResourceType(v.type)).flatMap((k, v) ->
+        let(nestedHints = allProperties(resourceClass).filter((_, v) -> isSubResourceType(v.type)).flatMap((k, v) ->
             let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
             let(parentKey = if(fieldHint != null && fieldHint.outputField != null) fieldHint.outputField else resourceHint.outputKeyTransformation.apply(k))
             let(subResourceClass = getSubResourceClass(v.type))
@@ -824,7 +824,7 @@ class Fq {
         let(nextVisited = visited.add(className))
         let(subResourceHint = findSubResourceHint(subResourceClass))
         let(outputKeyTransformation = if (subResourceHint != null) subResourceHint.outputKeyTransformation else (it) -> it)
-        let(directHints = subResourceClass.properties.filter((_, v) -> !v.modifiers.contains("hidden")).map((k, v) ->
+        let(directHints = allProperties(subResourceClass).filter((_, v) -> !v.modifiers.contains("hidden")).map((k, v) ->
             let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull ?? new FieldHint {})
             let(key = if(fieldHint.outputField != null) fieldHint.outputField else outputKeyTransformation.apply(k))
             let(baseHint = (fieldHint) {
@@ -833,7 +833,7 @@ class Fq {
             })
             Pair(key, baseHint)
         ))
-        let(nestedHints = subResourceClass.properties.filter((_, v) -> isSubResourceType(v.type)).flatMap((k, v) ->
+        let(nestedHints = allProperties(subResourceClass).filter((_, v) -> isSubResourceType(v.type)).flatMap((k, v) ->
             let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
             let(parentKey = if(fieldHint != null && fieldHint.outputField != null) fieldHint.outputField else outputKeyTransformation.apply(k))
             let(nestedSubResourceClass = getSubResourceClass(v.type))
