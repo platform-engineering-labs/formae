@@ -150,6 +150,7 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunQueryTargetsVersioning(t, newDS)
 	RunReapedTargetsInvisibleToQuery(t, newDS)
 	RunStatsExcludesReapedTargets(t, newDS)
+	RunStatsNamespaces_TypelessLiveResourceReportedUnderEmptyNamespace(t, newDS)
 	RunStatsResourceErrors_Empty(t, newDS)
 	RunStatsResourceErrors_StillFailedCounted(t, newDS)
 	RunStatsResourceErrors_FailedThenSucceededNotCounted(t, newDS)
