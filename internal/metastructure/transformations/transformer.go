@@ -13,6 +13,10 @@ import (
 // engine); it stays an interface so callers such as ResourcePersister can hold
 // it as a field and swap it in tests.
 type ResourceTransformer interface {
-	// ApplyToResource returns a copy of resource with opaque secret values hashed.
-	ApplyToResource(resource *pkgmodel.Resource) (*pkgmodel.Resource, error)
+	// ApplyToResource returns a copy of resource with opaque secret values
+	// hashed, plus any diagnostics the opaque-path match raised. Diagnostics are
+	// returned rather than logged because the transformer has no logger and no
+	// resource identity to attach; every persistence caller must surface them,
+	// since over-matching a dotted hint name is only observable if someone does.
+	ApplyToResource(resource *pkgmodel.Resource) (*pkgmodel.Resource, []Diagnostic, error)
 }

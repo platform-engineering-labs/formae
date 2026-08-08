@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 
 	"github.com/platform-engineering-labs/formae/internal/datastore"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/transformations"
@@ -85,7 +86,7 @@ func backfillFormaCommands(ds datastore.Datastore, t *transformations.PersistVal
 			// PreviousProperties is a read-back snapshot only ever used for
 			// logging and API diff display, so it's always safe to hash —
 			// regardless of the owning command's state.
-			changed, err := hashPropsInPlace(t, ru.DesiredState.Schema, rt, &ru.PreviousProperties)
+			changed, err := hashPropsInPlace(t, ru.DesiredState.Label, ru.DesiredState.Schema, rt, &ru.PreviousProperties)
 			if err != nil {
 				return fmt.Errorf("backfill: hash previous properties for %s: %w", ru.DesiredState.Label, err)
 			}
@@ -99,7 +100,7 @@ func backfillFormaCommands(ds datastore.Datastore, t *transformations.PersistVal
 				continue
 			}
 
-			changed, err = hashPropsInPlace(t, ru.DesiredState.Schema, rt, &ru.PriorState.Properties)
+			changed, err = hashPropsInPlace(t, ru.DesiredState.Label, ru.DesiredState.Schema, rt, &ru.PriorState.Properties)
 			if err != nil {
 				return fmt.Errorf("backfill: hash prior state for %s: %w", ru.DesiredState.Label, err)
 			}
@@ -182,10 +183,11 @@ func hashResourceValuesInPlace(t *transformations.PersistValueTransformer, res *
 		ReadOnlyProperties: res.ReadOnlyProperties,
 		PatchDocument:      res.PatchDocument,
 	}
-	out, err := t.ApplyToResource(tmp)
+	out, diagnostics, err := t.ApplyToResource(tmp)
 	if err != nil {
 		return false, err
 	}
+	logOpaqueDiagnostics(res.Label, res.Type, diagnostics)
 	if !resourceChanged(tmp, out) {
 		return false, nil
 	}
@@ -201,20 +203,32 @@ func hashResourceValuesInPlace(t *transformations.PersistValueTransformer, res *
 // separately because PriorState/PreviousProperties don't carry their own —
 // the authoritative schema and type for a ResourceUpdate live on DesiredState.
 // It mutates *props only when hashing actually changed something.
-func hashPropsInPlace(t *transformations.PersistValueTransformer, schema pkgmodel.Schema, resourceType string, props *json.RawMessage) (bool, error) {
+func hashPropsInPlace(t *transformations.PersistValueTransformer, label string, schema pkgmodel.Schema, resourceType string, props *json.RawMessage) (bool, error) {
 	if len(*props) == 0 {
 		return false, nil
 	}
 	tmp := &pkgmodel.Resource{Type: resourceType, Schema: schema, Properties: *props}
-	out, err := t.ApplyToResource(tmp)
+	out, diagnostics, err := t.ApplyToResource(tmp)
 	if err != nil {
 		return false, err
 	}
+	logOpaqueDiagnostics(label, resourceType, diagnostics)
 	if bytes.Equal(out.Properties, *props) {
 		return false, nil
 	}
 	*props = out.Properties
 	return true, nil
+}
+
+// logOpaqueDiagnostics surfaces what the opaque-path match could not resolve
+// cleanly. It matters most here: the sweep rewrites values already at rest, and
+// a provider-populated or read-only value that is over-matched has no forma to
+// be re-supplied from, so its only retained representation is the digest.
+func logOpaqueDiagnostics(label, resourceType string, diagnostics []transformations.Diagnostic) {
+	for _, d := range diagnostics {
+		slog.Warn("backfill: ambiguous opaque field hint",
+			"resource", label, "resourceType", resourceType, "diagnostic", d.String())
+	}
 }
 
 // resourceChanged reports whether any of the transformable fields differ

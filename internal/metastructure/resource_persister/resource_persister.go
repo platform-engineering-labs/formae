@@ -383,13 +383,20 @@ func (rp *ResourcePersister) processResourceUpdate(commandID string, rc resource
 	var storeResourceErr error
 
 	// Create secret-safe version of the resource for storage
-	secretSafeResource, err := rp.persistValueTransformer.ApplyToResource(&rc.DesiredState)
+	secretSafeResource, diagnostics, err := rp.persistValueTransformer.ApplyToResource(&rc.DesiredState)
 	if err != nil {
 		slog.Error("Failed to transform resource to secret-safe format",
 			"stackLabel", stackLabel,
 			"resourceLabel", rc.DesiredState.Label,
 			"error", err)
 		return "", fmt.Errorf("failed to transform resource %s for secret-safe storage: %w", rc.DesiredState.Label, err)
+	}
+	for _, d := range diagnostics {
+		slog.Warn("Ambiguous opaque field hint while storing resource",
+			"stackLabel", stackLabel,
+			"resourceLabel", rc.DesiredState.Label,
+			"resourceType", rc.DesiredState.Type,
+			"diagnostic", d.String())
 	}
 
 	switch rc.Operation {
