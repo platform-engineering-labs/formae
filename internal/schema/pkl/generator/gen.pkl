@@ -297,8 +297,11 @@ local function envelopeMarkerOfClass(clazz: reflect.Class): String? =
     null
 
 /// The same, for a union member's declared type. A nullable member is unwrapped
-/// to its member type and a type alias to its referent, so `formae.Resolvable?`
-/// and an alias of it are recognised as reference members too.
+/// to its member type, a type alias to its referent, and a member that is itself
+/// a union to the family of the first of its own members that has one — a
+/// parenthesised member stays a union of its own rather than being folded into
+/// the union around it. So `formae.Resolvable?`, an alias of it and
+/// `(formae.Resolvable|String)` are all recognised as reference members.
 local function envelopeMarkerOfType(type: reflect.Type): String? =
   if (type is reflect.NullableType)
     envelopeMarkerOfType((type as reflect.NullableType).member)
@@ -306,6 +309,10 @@ local function envelopeMarkerOfType(type: reflect.Type): String? =
     let (reflectee = (type as reflect.DeclaredType).referent.reflectee)
       if (reflectee is Class) envelopeMarkerOfClass(reflect.Class(reflectee))
       else envelopeMarkerOfType(reflect.TypeAlias(reflectee).referent)
+  else if (type is reflect.UnionType)
+    (type as reflect.UnionType).members
+      .map((member) -> envelopeMarkerOfType(member))
+      .findOrNull((marker) -> marker != null)
   else
     null
 
@@ -568,25 +575,23 @@ local function requireResolvableInfo(typeUri: String?, context: String): resolva
     else
         resolvables.MapResolvableResourceUri()[typeUri]
 
-/// Converts an `$embed` envelope into the carrier the renderer reads.
+/// Converts an `$embed` envelope, in each of the shapes that reach this module.
 ///
-/// Two shapes reach this module. The agent's extract pre-processing rewrites
-/// `{$embed, $template}` into `{$embed, $templateParts}`, splitting the template
-/// into alternating literal segments and reference envelopes; that rewritten
-/// shape is the one converted here. When the template cannot be split the
-/// pre-processing logs it and passes the value through untouched, so the
-/// unsplit `{$embed, $template}` shape — and, when `$template` is not text, an
-/// envelope carrying neither key — arrive here as well. Neither has parts to
-/// convert, so both are reported rather than converted as data.
-local function applyEmbedEnvelope(valueAsMap: Map): Typed|GenerationFailure =
-    if (!valueAsMap.containsKey("$templateParts"))
-        Fail("An embedded template must carry the $templateParts its literal segments "
-            + "and references were split into")
-    // $templateParts arrives as a Listing when parsed from JSON (the real
-    // extract flow), but may be a List/Dynamic in other construction paths.
-    // Anything outside those three shapes reaches a cast that cannot report a
-    // failure, so reject it here instead.
-    else
+/// The agent's extract pre-processing rewrites `{$embed, $template}` into
+/// `{$embed, $templateParts}`, splitting the template into alternating literal
+/// segments and reference envelopes; those parts become the carrier the
+/// renderer reads. When the template cannot be split the pre-processing logs it
+/// and passes the value through untouched, so the unsplit `{$embed, $template}`
+/// shape arrives here too — it has no parts to convert and is converted as the
+/// envelope class itself, which reproduces the envelope it arrived as. An
+/// envelope carrying neither key, which the pre-processing leaves alone when
+/// `$template` is not text, has nothing to reproduce either and is reported.
+local function applyEmbedEnvelope(type: reflect.Class, valueAsMap: Map): Typed|GenerationFailure|Any =
+    if (valueAsMap.containsKey("$templateParts"))
+        // $templateParts arrives as a Listing when parsed from JSON (the real
+        // extract flow), but may be a List/Dynamic in other construction paths.
+        // Anything outside those three shapes reaches a cast that cannot report
+        // a failure, so reject it here instead.
         let (rawParts = valueAsMap["$templateParts"])
         if (!(rawParts is Listing|List|Dynamic))
             Unexpected("Listing|List|Dynamic", rawParts.getClass().simpleName)
@@ -597,6 +602,12 @@ local function applyEmbedEnvelope(valueAsMap: Map): Typed|GenerationFailure =
                     else if (rawParts is List) rawParts
                     else (rawParts as Dynamic).toList()
             }
+    else if (valueAsMap.containsKey("$template"))
+        applyTypedProperties(type, valueAsMap)
+    else
+        Fail("An embedded template must carry either the $templateParts its literal "
+            + "segments and references were split into, or the $template they are "
+            + "split from")
 
 local function applyDynamicOrMapping(type: reflect.Class, value: Dynamic|Mapping): Typed|GenerationFailure|Any =
     let (valueAsMap = value.toMap())
@@ -657,50 +668,58 @@ local function applyDynamicOrMapping(type: reflect.Class, value: Dynamic|Mapping
             FakeHashed = hashed
         }
     else if (marker == "$embed")
-        applyEmbedEnvelope(valueAsMap)
+        applyEmbedEnvelope(type, valueAsMap)
     else if (classMarker != null)
         // An envelope class is built from its envelope and from nothing else.
         // Converting plain data as one yields an object with every part of the
         // reference — or of the recorded value — left null, which renders as a
-        // reference to nothing.
-        Fail("\(type.name) is built from a \(classMarker) envelope, but the value carries no \(classMarker) marker")
+        // reference to nothing. The class is named through its enclosing
+        // declaration, because a simple name is ambiguous — a provider's
+        // `Secret` and `formae.Secret` share one.
+        Fail("\(type.enclosingDeclaration.name).\(type.name) is built from a \(classMarker) envelope, "
+            + "but the value carries no \(classMarker) marker")
     else
-        // Get the reverse mapping for this class
-        let (reverseMapping =
-            if (type.isSubclassOf(reflect.Class(formae.SubResource)) && !type.annotations.filterIsInstance(formae.SubResourceHint).isEmpty)
-                formae.fq.reverseSubResourceFieldMapping(type)
-            else if (type.isSubclassOf(reflect.Class(formae.Resource)) && !type.annotations.filterIsInstance(formae.ResourceHint).isEmpty)
-                formae.fq.reverseFieldMapping(type)
-            else if (type.name == "Tag")
-                // Special case for Tag class: map lowercase JSON keys to uppercase PKL properties
-                Map("key", "Key", "value", "Value").toMapping()
+        applyTypedProperties(type, valueAsMap)
+
+/// Converts a map into an instance of `type`, property by property, matching
+/// each of the class's properties against the key it was extracted under.
+local function applyTypedProperties(type: reflect.Class, valueAsMap: Map): Typed|GenerationFailure =
+    // Get the reverse mapping for this class
+    let (reverseMapping =
+        if (type.isSubclassOf(reflect.Class(formae.SubResource)) && !type.annotations.filterIsInstance(formae.SubResourceHint).isEmpty)
+            formae.fq.reverseSubResourceFieldMapping(type)
+        else if (type.isSubclassOf(reflect.Class(formae.Resource)) && !type.annotations.filterIsInstance(formae.ResourceHint).isEmpty)
+            formae.fq.reverseFieldMapping(type)
+        else if (type.name == "Tag")
+            // Special case for Tag class: map lowercase JSON keys to uppercase PKL properties
+            Map("key", "Key", "value", "Value").toMapping()
+        else
+            // For other classes, use empty mapping - will fall back to direct property name matching
+            Map().toMapping()
+    )
+    let (converted = getAllProperties(type)
+        .fold(Map(), (acc: Map|GenerationFailure, name: String, prop: reflect.Property) ->
+            if (acc is GenerationFailure)
+                acc
+            else if (shouldSkipPropertyName(prop.name))
+                acc
             else
-                // For other classes, use empty mapping - will fall back to direct property name matching
-                Map().toMapping()
-        )
-        let (converted = getAllProperties(type)
-            .fold(Map(), (acc: Map|GenerationFailure, name: String, prop: reflect.Property) ->
-                if (acc is GenerationFailure)
-                    acc
-                else if (shouldSkipPropertyName(prop.name))
-                    acc
+                let (result = applyPropertyWithMapping(valueAsMap, prop, reverseMapping))
+                if (result is GenerationFailure)
+                    result.inside(name)
                 else
-                    let (result = applyPropertyWithMapping(valueAsMap, prop, reverseMapping))
-                    if (result is GenerationFailure)
-                        result.inside(name)
-                    else
-                        acc.put(name, result)
-            )
+                    acc.put(name, result)
         )
-            if (converted is GenerationFailure)
-                converted
-            else
-                // toTyped does not evaluate the class's property types or their
-                // constraints; PKL defers both to the first read of each
-                // property. A violation therefore cannot surface here —
-                // deferredFailure is what brings it forward, during union
-                // selection.
-                converted.toTyped(type.reflectee)
+    )
+        if (converted is GenerationFailure)
+            converted
+        else
+            // toTyped does not evaluate the class's property types or their
+            // constraints; PKL defers both to the first read of each
+            // property. A violation therefore cannot surface here —
+            // deferredFailure is what brings it forward, during union
+            // selection.
+            converted.toTyped(type.reflectee)
 
 
 local function doesNotInherit(clazz: reflect.Class) =

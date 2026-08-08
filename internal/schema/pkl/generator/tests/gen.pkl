@@ -276,6 +276,65 @@ local class RefThenAnyMapResource extends formae.Resource {
     target: formae.Resolvable|Mapping<String, Any>
 }
 
+/// A reference member reached through a nullable member, and one reached
+/// through a type alias.
+@formae.ResourceHint
+local class MapThenNullableRefResource extends formae.Resource {
+    type = "FakePlugin::Union::MapThenNullableRef"
+
+    @formae.FieldHint
+    target: Mapping<String, Any>|(formae.Resolvable?)
+}
+
+local typealias RefAlias = formae.Resolvable
+
+@formae.ResourceHint
+local class MapThenAliasedRefResource extends formae.Resource {
+    type = "FakePlugin::Union::MapThenAliasedRef"
+
+    @formae.FieldHint
+    target: Mapping<String, Any>|RefAlias
+}
+
+/// A reference member nested inside a parenthesised member of the union, in
+/// both member orders, and the same nesting reached through a type alias.
+@formae.ResourceHint
+local class MapThenNestedRefResource extends formae.Resource {
+    type = "FakePlugin::Union::MapThenNestedRef"
+
+    @formae.FieldHint
+    target: Mapping<String, Any>|(formae.Resolvable|String)
+}
+
+@formae.ResourceHint
+local class NestedRefThenMapResource extends formae.Resource {
+    type = "FakePlugin::Union::NestedRefThenMap"
+
+    @formae.FieldHint
+    target: (String|formae.Resolvable)|Mapping<String, Any>
+}
+
+local typealias RefOrText = formae.Resolvable|String
+
+@formae.ResourceHint
+local class MapThenAliasedUnionResource extends formae.Resource {
+    type = "FakePlugin::Union::MapThenAliasedUnion"
+
+    @formae.FieldHint
+    target: Mapping<String, Any>|RefOrText
+}
+
+/// The shape a schema gives a field holding either a literal or a secret the
+/// agent recorded — the union a reference to another resource's secret arrives
+/// at.
+@formae.ResourceHint
+local class TextOrSecretResource extends formae.Resource {
+    type = "FakePlugin::Union::TextOrSecret"
+
+    @formae.FieldHint
+    target: (String|formae.SecretValue)?
+}
+
 /// A recorded-value-or-map field, in both member orders.
 @formae.ResourceHint
 local class MapThenValueResource extends formae.Resource {
@@ -537,13 +596,11 @@ local function renderFailure(res: Class, env: Any): String? =
     module.catchOrNull(() -> renderedTarget(res, env))
 
 /// Applies an envelope to a union-typed field and names the member the union
-/// resolved to.
+/// resolved to. A value no member converts raises out of `applyResource`, so
+/// the diagnostic itself is what the caller sees; `renderFailure` is what reads
+/// that diagnostic.
 local function selectedMember(res: Class, env: Any): String =
-    let (failure = renderFailure(res, env))
-    if (failure != null)
-        "GenerationFailure"
-    else
-        renderedTarget(res, env).getClass().simpleName
+    renderedTarget(res, env).getClass().simpleName
 
 examples {
     ["Apply simple class"] {
@@ -1095,6 +1152,20 @@ facts {
         selectedMember(RefThenAnyMapResource, reference(null)) == "FakeResolvable"
     }
 
+    ["A reference member declared nullable or through a type alias is still a reference member"] {
+        selectedMember(MapThenNullableRefResource, reference(null)) == "FakeResolvable" &&
+        selectedMember(MapThenAliasedRefResource, reference(null)) == "FakeResolvable"
+    }
+
+    ["A reference nested inside a union member selects the reference"] {
+        // A parenthesised member stays a union of its own rather than being
+        // folded into the union around it, so the reference sits one level below
+        // the members preference looks at.
+        selectedMember(MapThenNestedRefResource, reference(null)) == "FakeResolvable" &&
+        selectedMember(NestedRefThenMapResource, reference(null)) == "FakeResolvable" &&
+        selectedMember(MapThenAliasedUnionResource, reference(null)) == "FakeResolvable"
+    }
+
     ["A reference missing an optional part still selects the reference member over a map member"] {
         selectedMember(MapThenRefResource, reference("$value")) == "FakeResolvable" &&
         selectedMember(MapThenRefResource, reference("$stack")) == "FakeResolvable" &&
@@ -1178,13 +1249,39 @@ facts {
         message != null && message.contains("$embed")
     }
 
-    ["An embedded template that was never split into parts reports a failure"] {
+    ["An envelope-class field still accepts an envelope of another family"] {
+        // The marker a field's class is built from is required, but which family
+        // the marker belongs to is not checked: a target typed as one family
+        // converts an envelope of another exactly as it always has.
+        selectedMember(RefFieldResource, recordedValue(null)) == "FakeValue"
+    }
+
+    ["A reference to another resource's secret resolves in a text-or-secret field"] {
+        // The shape a schema gives a field holding either a literal or a secret.
+        // A reference is not the family that field's class belongs to, and still
+        // has to render as a reference rather than be rejected.
+        selectedMember(TextOrSecretResource, reference(null)) == "FakeResolvable"
+    }
+
+    ["An embedded template that was never split into parts renders as the envelope it arrived as"] {
         // Extract pre-processing rewrites {$embed, $template} into
         // {$embed, $templateParts}, but passes a template it cannot split
-        // through unchanged, so the unsplit shape still arrives here.
+        // through unchanged, so the unsplit shape still arrives here — and has
+        // to render back into a forma that reproduces the envelope.
         let (unsplit = new Mapping { ["$embed"] = true; ["$template"] = "echo vpc=" })
-        let (message = renderFailure(EmbedFieldResource, unsplit))
-        message != null && message.contains("$templateParts")
+        let (rendered = gen.genMapToPklStringWithTypes(
+            "EmbedFieldResource",
+            gen.genPklToMap(new Dynamic { target = renderedTarget(EmbedFieldResource, unsplit) }),
+            "test"))
+        rendered.contains("new formae.Embedded {") &&
+        rendered.contains("$embed = true") &&
+        rendered.contains("$template = \"echo vpc=\"")
+    }
+
+    ["An unsplit embedded template selects the embedded member of a union"] {
+        let (unsplit = new Mapping { ["$embed"] = true; ["$template"] = "echo vpc=" })
+        selectedMember(MapThenEmbedResource, unsplit) == "Embedded" &&
+        selectedMember(EmbedThenMapResource, unsplit) == "Embedded"
     }
 
     ["An embedded template carrying no parts at all reports a failure"] {
