@@ -1632,11 +1632,16 @@ func runCRUDTest(t *testing.T, tc TestCase, rc *ResultCollector) {
 		// Get the extracted resource
 		extractedResource := extractedResult.Resources[0]
 
-		// Compare properties using the same logic as inventory comparison
+		// Compare properties using the same logic as inventory comparison.
+		// Only re-apply once the extracted properties are known good — applying
+		// known-bad properties would mutate the resource for no extra signal.
 		if !rc.compareCRUDProperties(t, idx, PhaseExtract, expectedProperties, extractedResource, "after extract", providerDefaults) {
 			allPropertiesMatched = false
-		} else {
+		} else if rc.verifyExtractReapply(t, idx, harness, extractFile, actualResourceType,
+			extractedResource, actualResource, expectedProperties, providerDefaults) {
 			rc.SetCRUDPhase(idx, PhaseExtract, StepPassed)
+		} else {
+			allPropertiesMatched = false
 		}
 		t.Log("Extract validation completed!")
 	} else {

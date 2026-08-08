@@ -83,7 +83,11 @@ lifecycle and asserts that:
 3. `formae inventory` reports the resource with the properties from the base
    Pkl file.
 4. If the resource type is extractable, `formae extract` round-trips back to
-   an equivalent Pkl declaration.
+   an equivalent Pkl declaration, and patch-applying that declaration succeeds
+   and leaves the resource unchanged — same `Label`, `Stack`, `NativeID` and
+   properties. Resources carrying an opaque secret skip the re-apply, because
+   extract emits a hashed envelope for those fields rather than the authored
+   plaintext.
 5. A forced sync leaves the resource untouched (idempotency).
 6. If `-update.pkl` exists, patch-mode apply updates the resource without
    changing its `NativeID`.
