@@ -491,6 +491,32 @@ local function attemptMember(type: reflect.Type, value: Any): Any|GenerationFail
     else
       Fail("Converted \(typeLabel(type)) does not satisfy its declared property types or constraints")
 
+/// Converts `value` as the first member of `members` that accepts it.
+///
+/// Each member's reason is kept as it is tried, so that a value no member
+/// accepts is reported with every member's account of why.
+local function resolveInOrder(members: List<reflect.Type>, value: Any): Any|GenerationFailure =
+  let (selection = members.fold(
+    new UnionSelection { reasons = List(); converted = null },
+    (acc: UnionSelection, _type) ->
+      if (acc.reasons == null)
+        acc
+      else
+        // A member counts as matched only once its deferred checks have run: a
+        // converted object that raises the moment anything reads it does not
+        // belong to this member.
+        let (attempt = attemptMember(_type, value))
+          if (attempt is GenerationFailure)
+            new UnionSelection {
+              reasons = acc.reasons.add(Pair(typeLabel(_type), failureMessage(attempt)))
+              converted = null
+            }
+          else
+            new UnionSelection { reasons = null; converted = attempt }
+  ))
+    if (selection.reasons == null) selection.converted
+    else Fail(unionFailureMessage(selection.reasons, value))
+
 hidden reflectTypeHandlers: Mapping<Class, (reflect.Type, Any) -> Any|GenerationFailure> = new Mapping {
   [reflect.NullableType] = (type, value) ->
     if (value == null) null else applyType((type as reflect.NullableType).member, value)
@@ -523,7 +549,9 @@ hidden reflectTypeHandlers: Mapping<Class, (reflect.Type, Any) -> Any|Generation
       // An envelope is a reference, a recorded value or an embedded template —
       // never the data it stands for. A sibling data member would convert it
       // into a literal copy of the envelope, so the member of its own family is
-      // chosen outright instead of being tried in declaration order.
+      // chosen outright instead of being tried in declaration order. A malformed
+      // envelope is reported rather than converted as data, which is why this
+      // member is the only one tried.
       if (envelopeMember != null)
         attemptMember(envelopeMember, value)
       else
@@ -534,31 +562,14 @@ hidden reflectTypeHandlers: Mapping<Class, (reflect.Type, Any) -> Any|Generation
           // rejected by the provider it was extracted from. A member the value
           // already is takes precedence, and only a value belonging to none of
           // them is converted in declaration order.
-          if (exactMember != null)
-            attemptMember(exactMember, value)
-          else
-            // Each member's reason is kept as it is tried, so that a value no
-            // member accepts is reported with every member's account of why.
-            let (selection = members.fold(
-              new UnionSelection { reasons = List(); converted = null },
-              (acc: UnionSelection, _type) ->
-                if (acc.reasons == null)
-                  acc
-                else
-                  // A member counts as matched only once its deferred checks
-                  // have run: a converted object that raises the moment
-                  // anything reads it does not belong to this member.
-                  let (attempt = attemptMember(_type, value))
-                    if (attempt is GenerationFailure)
-                      new UnionSelection {
-                        reasons = acc.reasons.add(Pair(typeLabel(_type), failureMessage(attempt)))
-                        converted = null
-                      }
-                    else
-                      new UnionSelection { reasons = null; converted = attempt }
-            ))
-              if (selection.reasons == null) selection.converted
-              else Fail(unionFailureMessage(selection.reasons, value))
+          let (exact = if (exactMember == null) null else attemptMember(exactMember, value))
+            // Preferring that member is not a commitment to it: one that turns
+            // out not to take the value is no different from any other that does
+            // not, so conversion carries on in declaration order.
+            if (exactMember != null && !(exact is GenerationFailure))
+              exact
+            else
+              resolveInOrder(members, value)
 
     [reflect.UnknownType] = (_, value) ->
       value
