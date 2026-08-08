@@ -3781,12 +3781,12 @@ func (d DatastorePostgres) Stats() (*stats.Stats, error) {
 	// never clears a standing failure. The type filter sits in the outer SELECT
 	// only, so a later typeless success still supersedes an earlier failure.
 	// command_id is a KSUID, ordered byte-wise like the other backends.
+	// Restricting to resources that have ever failed keeps the window off the
+	// whole table; an IN subquery lets the planner drive that from the state
+	// index, where a materialized CTE is built by scanning every row.
 	res.ResourceErrors = make(map[string]int)
 	errorQuery := `
-	WITH failed_ksuids AS (
-		SELECT DISTINCT ksuid FROM resource_updates WHERE state = $1
-	),
-	outcomes AS (
+	WITH outcomes AS (
 		SELECT ru.ksuid,
 		       ru.state,
 		       ru.resource::jsonb->>'Type' AS resource_type,
@@ -3798,8 +3798,10 @@ func (d DatastorePostgres) Stats() (*stats.Stats, error) {
 		                    ru.operation
 		       ) AS rn
 		FROM resource_updates ru
-		JOIN failed_ksuids f ON f.ksuid = ru.ksuid
 		WHERE ru.state IN ($1, $2)
+		  AND ru.ksuid IN (
+		      SELECT f.ksuid FROM resource_updates f WHERE f.state = $1
+		  )
 	)
 	SELECT resource_type, COUNT(*)
 	FROM outcomes

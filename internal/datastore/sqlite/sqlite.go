@@ -4360,11 +4360,13 @@ func (d DatastoreSQLite) Stats() (*stats.Stats, error) {
 	// (the primary key includes operation), making ROW_NUMBER deterministic.
 	// The state tiebreak comes first: when a replace pair's delete and create
 	// rows share a timestamp, the failure is reported rather than hidden.
+	//
+	// Restricting to resources that have ever failed keeps the window off the
+	// whole table. It is written as an IN subquery rather than a joined CTE so
+	// the planner drives it from the state index: a materialized CTE is built
+	// by scanning every row, which costs more than the window it saves.
 	resourceErrorsQuery := `
-		WITH failed_ksuids AS (
-			SELECT DISTINCT ksuid FROM resource_updates WHERE state = ?
-		),
-		outcomes AS (
+		WITH outcomes AS (
 			SELECT ru.ksuid,
 			       ru.state,
 			       json_extract(ru.resource,'$.Type') AS resource_type,
@@ -4376,8 +4378,10 @@ func (d DatastoreSQLite) Stats() (*stats.Stats, error) {
 			                    ru.operation
 			       ) AS rn
 			FROM resource_updates ru
-			JOIN failed_ksuids f ON f.ksuid = ru.ksuid
 			WHERE ru.state IN (?, ?)
+			  AND ru.ksuid IN (
+			      SELECT f.ksuid FROM resource_updates f WHERE f.state = ?
+			  )
 		)
 		SELECT resource_type, COUNT(*)
 		FROM outcomes
@@ -4390,8 +4394,8 @@ func (d DatastoreSQLite) Stats() (*stats.Stats, error) {
 	rows, err = d.conn.Query(resourceErrorsQuery,
 		types.ResourceUpdateStateFailed,
 		types.ResourceUpdateStateFailed,
-		types.ResourceUpdateStateFailed,
 		types.ResourceUpdateStateSuccess,
+		types.ResourceUpdateStateFailed,
 		types.ResourceUpdateStateFailed,
 	)
 	if err != nil {
