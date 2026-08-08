@@ -1336,6 +1336,133 @@ func compareProperties(r testReporter, expectedProperties map[string]any, actual
 	return !hasErrors
 }
 
+// reapplyHarness is the subset of TestHarness the extract re-apply sub-step drives.
+// Narrowing it keeps the sub-step unit-testable with a fake, mirroring the
+// testReporter seam used by the comparison helpers.
+type reapplyHarness interface {
+	ApplyWithMode(pklFile string, mode string) (string, error)
+	PollStatus(commandID string, timeout time.Duration) (string, error)
+	Inventory(query string) (*InventoryResponse, error)
+	Destroy(pklFile string) (string, error)
+}
+
+// verifyExtractReapply applies the forma that `formae extract` just produced and
+// asserts it feeds back in: the apply succeeds, exactly one resource of the type
+// remains, its identity triplet is unchanged, and its properties still match. A
+// faithful extract makes this a zero-operation apply; a lossy one diffs, which is
+// what drives the plugin's handler and surfaces rejections that evaluating the
+// extracted file alone cannot catch.
+//
+// Reporting is non-fatal so the lifecycle still reaches Destroy. Every check
+// returns immediately on failure, so no check runs on the output of a failed one.
+// Returns whether the round trip passed.
+func (rc *ResultCollector) verifyExtractReapply(
+	t *testing.T,
+	idx int,
+	harness reapplyHarness,
+	extractFile string,
+	resourceType string,
+	extractedResource map[string]any,
+	createdResource map[string]any,
+	expectedProperties map[string]any,
+	providerDefaults map[string]providerDefault,
+) bool {
+	// Secret fields are hashed at rest, so extract emits an opaque envelope rather
+	// than the authored plaintext. Re-applying that would either be refused as a
+	// hashed value or write a digest to the provider; neither is a plugin defect.
+	// Opacity is read off what formae produced, never off the authored fixture,
+	// which normally holds plaintext.
+	if containsOpaqueValue(extractedResource["Properties"]) || containsOpaqueValue(createdResource["Properties"]) {
+		t.Logf("Skipping extract re-apply: resource carries an opaque secret value, which extract cannot round-trip")
+		return true
+	}
+
+	t.Log("Re-applying extracted forma in patch mode...")
+	reapplyCommandID, err := harness.ApplyWithMode(extractFile, "patch")
+	if err != nil {
+		rc.CRUDErrorf(t, idx, PhaseExtract, "Re-apply of extracted forma failed: %v", err)
+		return false
+	}
+	if reapplyCommandID == "" {
+		rc.CRUDErrorf(t, idx, PhaseExtract, "Re-apply of extracted forma should return a command ID")
+		return false
+	}
+
+	reapplyStatus, err := harness.PollStatus(reapplyCommandID, getOperationTimeout())
+	if err != nil {
+		rc.CRUDErrorf(t, idx, PhaseExtract, "Re-apply command should complete successfully: %v", err)
+		return false
+	}
+	if reapplyStatus != "Success" {
+		rc.CRUDErrorf(t, idx, PhaseExtract, "Re-apply command should reach Success state, got: %s", reapplyStatus)
+		return false
+	}
+
+	inventoryAfterReapply, err := harness.Inventory(fmt.Sprintf("type: %s", resourceType))
+	if err != nil {
+		rc.CRUDErrorf(t, idx, PhaseExtract, "Inventory command failed after re-apply: %v", err)
+		destroyExtractedForma(t, harness, extractFile)
+		return false
+	}
+	if inventoryAfterReapply == nil {
+		rc.CRUDErrorf(t, idx, PhaseExtract, "Inventory should return a response after re-apply")
+		destroyExtractedForma(t, harness, extractFile)
+		return false
+	}
+	if len(inventoryAfterReapply.Resources) != 1 {
+		rc.CRUDErrorf(t, idx, PhaseExtract, "Inventory should contain exactly 1 resource after re-apply, got %d", len(inventoryAfterReapply.Resources))
+		destroyExtractedForma(t, harness, extractFile)
+		return false
+	}
+
+	// An unchanged NativeID means the re-apply did not silently replace the
+	// resource; an unchanged Label and Stack mean the extract did not fabricate a
+	// second identity triplet, which would leave a resource the fixture-driven
+	// Destroy step never reclaims.
+	resourceAfterReapply := inventoryAfterReapply.Resources[0]
+	for _, field := range []string{"Label", "Stack", "NativeID"} {
+		actualValue, ok := resourceAfterReapply[field].(string)
+		if !ok {
+			rc.CRUDErrorf(t, idx, PhaseExtract, "Resource should have a string %s after re-apply, got: %v", field, resourceAfterReapply[field])
+			destroyExtractedForma(t, harness, extractFile)
+			return false
+		}
+		expectedValue, _ := createdResource[field].(string)
+		if actualValue != expectedValue {
+			rc.CRUDErrorf(t, idx, PhaseExtract, "Re-apply of extracted forma should not change %s: expected %s, got %s", field, expectedValue, actualValue)
+			destroyExtractedForma(t, harness, extractFile)
+			return false
+		}
+	}
+
+	if !rc.compareCRUDProperties(t, idx, PhaseExtract, expectedProperties, resourceAfterReapply, "after extract re-apply", providerDefaults) {
+		return false
+	}
+
+	t.Log("Extract re-apply validation completed!")
+	return true
+}
+
+// destroyExtractedForma makes a best-effort attempt to destroy whatever the
+// extracted forma names, so a re-apply that landed under an identity the fixture
+// does not name is not leaked. Runs inline rather than through the harness
+// cleanup registry, because the extract step removes the file's temp directory
+// before registered cleanups unwind. Errors are logged and ignored.
+func destroyExtractedForma(t *testing.T, harness reapplyHarness, extractFile string) {
+	t.Log("Identity anomaly after re-apply; destroying the extracted forma to avoid leaking a resource...")
+	destroyCommandID, err := harness.Destroy(extractFile)
+	if err != nil {
+		t.Logf("Best-effort destroy of extracted forma failed: %v", err)
+		return
+	}
+	status, err := harness.PollStatus(destroyCommandID, getOperationTimeout())
+	if err != nil {
+		t.Logf("Best-effort destroy of extracted forma did not complete: %v", err)
+		return
+	}
+	t.Logf("Best-effort destroy of extracted forma finished with status: %s", status)
+}
+
 // runCRUDTest runs the full CRUD lifecycle for a single test case.
 // This matches the structure of formae-internal's runLifecycleTest exactly.
 //
