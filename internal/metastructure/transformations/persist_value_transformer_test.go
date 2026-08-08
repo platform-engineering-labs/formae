@@ -678,3 +678,280 @@ func TestApplyToResource_ListOfSubResourcesReportsNoAmbiguity(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, diags)
 }
+
+// patchOpsAfterTransform runs the transformer over a patch document and returns
+// the decoded ops, so a test can assert on one op's value directly.
+func patchOpsAfterTransform(t *testing.T, schema pkgmodel.Schema, patchDoc string) ([]map[string]any, []Diagnostic) {
+	t.Helper()
+
+	out, diags, err := NewPersistValueTransformer().ApplyToResource(&pkgmodel.Resource{
+		Schema:        schema,
+		PatchDocument: json.RawMessage(patchDoc),
+	})
+	require.NoError(t, err)
+
+	var ops []map[string]any
+	require.NoError(t, json.Unmarshal(out.PatchDocument, &ops))
+	return ops, diags
+}
+
+func assertHashedEnvelope(t *testing.T, v any, plaintext string) {
+	t.Helper()
+	env, ok := v.(map[string]any)
+	require.True(t, ok, "expected a hashed envelope, got %T", v)
+	assert.Equal(t, "Opaque", env["$visibility"])
+	assert.Equal(t, "Update", env["$strategy"])
+	assert.Equal(t, true, env["$hashed"])
+	require.Len(t, env["$value"].(string), 64)
+	if plaintext != "" {
+		assert.NotEqual(t, plaintext, env["$value"])
+	}
+}
+
+// A rotation of a nested secret writes the new plaintext into the patch
+// document, which is persisted — the same leak at a different at-rest location.
+func TestTransformPatchDocument_HashesNestedOpaqueLeaf(t *testing.T) {
+	ops, _ := patchOpsAfterTransform(t, schemaWithOpaqueFields("settings.password"),
+		`[{"op":"replace","path":"/settings/password","value":"hunter2"}]`)
+
+	require.Len(t, ops, 1)
+	assertHashedEnvelope(t, ops[0]["value"], "hunter2")
+}
+
+func TestTransformPatchDocument_HashesNestedOpaqueLeafUnderAnIndex(t *testing.T) {
+	ops, _ := patchOpsAfterTransform(t, schemaWithOpaqueFields("webhooks.password"),
+		`[{"op":"replace","path":"/webhooks/0/password","value":"hunter2"}]`)
+
+	require.Len(t, ops, 1)
+	assertHashedEnvelope(t, ops[0]["value"], "hunter2")
+}
+
+func TestTransformPatchDocument_LeavesNonOpaqueNestedPathAlone(t *testing.T) {
+	ops, _ := patchOpsAfterTransform(t, schemaWithOpaqueFields("settings.password"),
+		`[{"op":"replace","path":"/settings/host","value":"smtp.example.com"}]`)
+
+	require.Len(t, ops, 1)
+	assert.Equal(t, "smtp.example.com", ops[0]["value"])
+}
+
+// Atomic and EntitySet update methods emit ops that replace a whole object or
+// array element, so leaf matching alone leaves the nested secret in cleartext.
+func TestTransformPatchDocument_HashesNestedSecretInWholeContainerOps(t *testing.T) {
+	tests := map[string]struct {
+		hint  string
+		op    string
+		probe func(t *testing.T, value any)
+	}{
+		"replace a whole object": {
+			"settings.password",
+			`{"op":"replace","path":"/settings","value":{"host":"h","password":"hunter2"}}`,
+			func(t *testing.T, value any) {
+				m := value.(map[string]any)
+				assert.Equal(t, "h", m["host"])
+				assertHashedEnvelope(t, m["password"], "hunter2")
+			},
+		},
+		"add a whole array": {
+			"webhooks.password",
+			`{"op":"add","path":"/webhooks","value":[{"url":"u","password":"hunter2"}]}`,
+			func(t *testing.T, value any) {
+				elem := value.([]any)[0].(map[string]any)
+				assert.Equal(t, "u", elem["url"])
+				assertHashedEnvelope(t, elem["password"], "hunter2")
+			},
+		},
+		"replace a whole array element": {
+			"webhooks.password",
+			`{"op":"replace","path":"/webhooks/0","value":{"url":"u","password":"hunter2"}}`,
+			func(t *testing.T, value any) {
+				m := value.(map[string]any)
+				assert.Equal(t, "u", m["url"])
+				assertHashedEnvelope(t, m["password"], "hunter2")
+			},
+		},
+		"append to an array": {
+			"webhooks.password",
+			`{"op":"add","path":"/webhooks/-","value":{"password":"hunter2"}}`,
+			func(t *testing.T, value any) {
+				assertHashedEnvelope(t, value.(map[string]any)["password"], "hunter2")
+			},
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			ops, _ := patchOpsAfterTransform(t, schemaWithOpaqueFields(tc.hint), "["+tc.op+"]")
+			require.Len(t, ops, 1)
+			tc.probe(t, ops[0]["value"])
+			assert.NotContains(t, name+"", "hunter2")
+		})
+	}
+}
+
+// A nested inline opaque envelope inside a container op is only reached by
+// running the full node handler over the value, not by inspecting its top.
+func TestTransformPatchDocument_HashesNestedEnvelopeInsideContainerOp(t *testing.T) {
+	ops, _ := patchOpsAfterTransform(t, pkgmodel.Schema{},
+		`[{"op":"replace","path":"/settings","value":{"password":{"$value":"hunter2","$visibility":"Opaque","$strategy":"Update"}}}]`)
+
+	require.Len(t, ops, 1)
+	pw := ops[0]["value"].(map[string]any)["password"].(map[string]any)
+	assert.Equal(t, true, pw["$hashed"])
+	assert.Len(t, pw["$value"].(string), 64)
+	assert.NotEqual(t, "hunter2", pw["$value"])
+}
+
+// The reading that matches keeps the first index and drops the second, so
+// neither "elide every index" nor "retain every index" alone would find it.
+func TestTransformPatchDocument_MatchesMixedRetainAndElideOfIndices(t *testing.T) {
+	ops, _ := patchOpsAfterTransform(t, schemaWithOpaqueFields("accounts.0.webhooks.password"),
+		`[{"op":"replace","path":"/accounts/0/webhooks/1/password","value":"hunter2"}]`)
+
+	require.Len(t, ops, 1)
+	assertHashedEnvelope(t, ops[0]["value"], "hunter2")
+}
+
+func TestTransformPatchDocument_HashesEveryValueKind(t *testing.T) {
+	tests := map[string]string{
+		"string": `"hunter2"`,
+		"number": `12345`,
+		"bool":   `true`,
+		"map":    `{"user":"admin","password":"hunter2"}`,
+	}
+
+	for name, value := range tests {
+		t.Run(name, func(t *testing.T) {
+			ops, _ := patchOpsAfterTransform(t, schemaWithOpaqueFields("settings.secret"),
+				`[{"op":"replace","path":"/settings/secret","value":`+value+`}]`)
+
+			require.Len(t, ops, 1)
+			assertHashedEnvelope(t, ops[0]["value"], "")
+			assert.NotContains(t, mustJSON(t, ops[0]["value"]), "hunter2",
+				"a map-shaped secret is hashed whole, not left with plaintext keys")
+		})
+	}
+}
+
+// null carries no secret material, so hashing it would fabricate a digest for a
+// value that is not there.
+func TestTransformPatchDocument_LeavesNullAlone(t *testing.T) {
+	ops, _ := patchOpsAfterTransform(t, schemaWithOpaqueFields("settings.secret"),
+		`[{"op":"replace","path":"/settings/secret","value":null}]`)
+
+	require.Len(t, ops, 1)
+	assert.Nil(t, ops[0]["value"])
+}
+
+func TestTransformPatchDocument_IsIdempotent(t *testing.T) {
+	schema := schemaWithOpaqueFields("settings.password")
+	doc := `[{"op":"replace","path":"/settings/password","value":"hunter2"}]`
+
+	first, _, err := NewPersistValueTransformer().ApplyToResource(&pkgmodel.Resource{
+		Schema: schema, PatchDocument: json.RawMessage(doc),
+	})
+	require.NoError(t, err)
+	second, _, err := NewPersistValueTransformer().ApplyToResource(&pkgmodel.Resource{
+		Schema: schema, PatchDocument: first.PatchDocument,
+	})
+	require.NoError(t, err)
+
+	assert.JSONEq(t, string(first.PatchDocument), string(second.PatchDocument))
+}
+
+// The rule keys on the presence of a value, not on the op name: a test op
+// carries plaintext and is persisted exactly like an add or a replace, while
+// copy and move carry only a from.
+func TestTransformPatchDocument_KeysOnValuePresenceNotOpName(t *testing.T) {
+	ops, _ := patchOpsAfterTransform(t, schemaWithOpaqueFields("settings.password"),
+		`[{"op":"test","path":"/settings/password","value":"hunter2"},
+		  {"op":"move","from":"/settings/password","path":"/settings/old"},
+		  {"op":"copy","from":"/settings/password","path":"/settings/copy"}]`)
+
+	require.Len(t, ops, 3)
+	assertHashedEnvelope(t, ops[0]["value"], "hunter2")
+	_, moveHasValue := ops[1]["value"]
+	_, copyHasValue := ops[2]["value"]
+	assert.False(t, moveHasValue)
+	assert.False(t, copyHasValue)
+}
+
+func TestTransformPatchDocument_HonoursPointerEscaping(t *testing.T) {
+	ops, _ := patchOpsAfterTransform(t, schemaWithOpaqueFields("a/b.password"),
+		`[{"op":"replace","path":"/a~1b/password","value":"hunter2"}]`)
+
+	require.Len(t, ops, 1)
+	assertHashedEnvelope(t, ops[0]["value"], "hunter2")
+}
+
+// "/a.b/c" and "/a/b.c" concatenate to the same hint name. Both match — the
+// enumerated collision that prefix concatenation accepts by design.
+func TestTransformPatchDocument_DottedSegmentCollisionMatchesBothReadings(t *testing.T) {
+	for _, pointer := range []string{"/a.b/c", "/a/b.c", "/a.b.c"} {
+		t.Run(pointer, func(t *testing.T) {
+			ops, _ := patchOpsAfterTransform(t, schemaWithOpaqueFields("a.b.c"),
+				`[{"op":"replace","path":"`+pointer+`","value":"hunter2"}]`)
+
+			require.Len(t, ops, 1)
+			assertHashedEnvelope(t, ops[0]["value"], "hunter2")
+		})
+	}
+}
+
+func TestTransformPatchDocument_HashesWholeDocumentRootOp(t *testing.T) {
+	ops, _ := patchOpsAfterTransform(t, schemaWithOpaqueFields("settings.password"),
+		`[{"op":"replace","path":"","value":{"settings":{"password":"hunter2"}}}]`)
+
+	require.Len(t, ops, 1)
+	settings := ops[0]["value"].(map[string]any)["settings"].(map[string]any)
+	assertHashedEnvelope(t, settings["password"], "hunter2")
+}
+
+func TestTransformPatchDocument_HandlesValidEmptySegments(t *testing.T) {
+	ops, _ := patchOpsAfterTransform(t, schemaWithOpaqueFields("a..password"),
+		`[{"op":"replace","path":"/a//password","value":"hunter2"}]`)
+
+	require.Len(t, ops, 1)
+	assertHashedEnvelope(t, ops[0]["value"], "hunter2")
+}
+
+// An undecodable pointer is an internal defect. Failing persistence of an
+// already-completed command would be worse than over-hashing, so the op is
+// processed in the most conservative mode instead of being skipped.
+func TestTransformPatchDocument_UndecodablePointerOverHashesRatherThanSkipping(t *testing.T) {
+	ops, diags := patchOpsAfterTransform(t, schemaWithOpaqueFields("settings.password"),
+		`[{"op":"replace","path":"settings/password","value":{"deep":{"settings":{"password":"hunter2"}}}}]`)
+
+	require.Len(t, ops, 1)
+	nested := ops[0]["value"].(map[string]any)["deep"].(map[string]any)["settings"].(map[string]any)
+	assertHashedEnvelope(t, nested["password"], "hunter2")
+
+	require.NotEmpty(t, diags)
+	assert.Equal(t, DiagnosticError, diags[0].Severity)
+}
+
+func TestTransformPatchDocument_UndecodablePointerHashesABareScalarValue(t *testing.T) {
+	ops, diags := patchOpsAfterTransform(t, schemaWithOpaqueFields("settings.password"),
+		`[{"op":"replace","path":"settings/password","value":"hunter2"}]`)
+
+	require.Len(t, ops, 1)
+	assertHashedEnvelope(t, ops[0]["value"], "hunter2")
+	require.NotEmpty(t, diags)
+}
+
+func TestTransformPatchDocument_ExceedingTheCandidateBoundReportsADiagnostic(t *testing.T) {
+	ops, diags := patchOpsAfterTransform(t, schemaWithOpaqueFields("a.b.c.d.e.f.g.password"),
+		`[{"op":"replace","path":"/a/0/b/1/c/2/d/3/e/4/f/5/g/password","value":"hunter2"}]`)
+
+	require.Len(t, ops, 1)
+	assertHashedEnvelope(t, ops[0]["value"], "hunter2")
+
+	require.NotEmpty(t, diags)
+	assert.Equal(t, DiagnosticError, diags[0].Severity)
+}
+
+func mustJSON(t *testing.T, v any) string {
+	t.Helper()
+	b, err := json.Marshal(v)
+	require.NoError(t, err)
+	return string(b)
+}

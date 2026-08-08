@@ -166,6 +166,11 @@ func (pv *PersistValueTransformer) hashInlineEnvelope(v any) (any, bool) {
 // hashOpaqueField hashes a schema-opaque property value. It accepts a bare scalar
 // (wrapping it into a hashed opaque envelope) or an existing envelope map.
 func (pv *PersistValueTransformer) hashOpaqueField(v any) (map[string]any, bool) {
+	if v == nil {
+		// null carries no secret material, so hashing it would fabricate a
+		// digest for a value that is not there.
+		return nil, false
+	}
 	if m, ok := v.(map[string]any); ok {
 		// A formae opaque envelope carries BOTH $value and $visibility — hash it in
 		// place. A raw map is itself the secret value (a map-shaped secret field,
@@ -229,11 +234,17 @@ func (pv *PersistValueTransformer) hashEnvelope(val map[string]any) (map[string]
 	return val, true
 }
 
-// transformPatchDocument hashes patch-op values purely structurally:
-//   - if the op's path names a schema-opaque field, hash a bare scalar value (or leave an
-//     already-$hashed envelope alone);
-//   - if the op's value is itself an opaque envelope ({"$visibility":"Opaque",...}), hash it
-//     in place unless it already carries $hashed:true.
+// transformPatchDocument hashes patch-op values purely structurally. A patch
+// document is persisted, so a rotation that writes a new secret into one is the
+// same leak as an unhashed property, at a different at-rest location.
+//
+// Each op's path is decoded as a JSON pointer into typed segments, from which
+// every reading that could correspond to a hint name is generated. If one of
+// those readings is itself an opaque name the value IS the secret and is hashed
+// whole; otherwise the same node handler the property walk uses runs over the
+// value, rooted at those readings — which is what reaches a secret nested
+// inside a whole-container op, and what reaches an opaque envelope nested
+// inside one.
 //
 // We deliberately do NOT substitute values by content match against other hashed properties:
 // that both corrupted non-secret fields that happened to collide with a secret's plaintext and
@@ -249,42 +260,46 @@ func (pv *PersistValueTransformer) transformPatchDocument(patchDoc json.RawMessa
 		return nil, nil, fmt.Errorf("failed to unmarshal patch document: %w", err)
 	}
 
-	opaqueFields := make(map[string]bool)
-	for f := range opaqueFieldSet(schema, resourceType) {
-		opaqueFields["/"+f] = true
-	}
+	opaqueFields := opaqueFieldSet(schema, resourceType)
+	walk := pv.newWalk(opaqueFields)
+	var diagnostics []Diagnostic
+
 	for i, op := range patchOps {
+		// Keyed on the presence of a value, NOT on the op name: a "test" op
+		// carries plaintext exactly as "add" and "replace" do and is persisted
+		// the same way, while "copy" and "move" carry only a "from".
 		value, hasValue := op["value"]
 		if !hasValue {
 			continue
 		}
-		if path, _ := op["path"].(string); opaqueFields[path] {
-			if m, ok := value.(map[string]any); ok {
-				if h, ok := m["$hashed"].(bool); ok && h {
-					// Already a hashed envelope — idempotent, leave as-is.
-					continue
-				}
-			}
-			if s, ok := value.(string); ok {
-				hashed := (&pkgmodel.Value{Value: s, Visibility: pkgmodel.VisibilityOpaque, Strategy: pkgmodel.StrategyUpdate}).Hash()
-				patchOps[i]["value"] = map[string]any{
-					"$value":      hashed.Value,
-					"$visibility": pkgmodel.VisibilityOpaque,
-					"$strategy":   hashed.Strategy,
-					"$hashed":     true,
-				}
-				continue
-			}
+
+		path, _ := op["path"].(string)
+		pointer, err := decodeJSONPointer(path)
+		if err != nil {
+			// An undecodable pointer is an internal defect, not untrusted input.
+			// Skipping the op would leak and failing would abort persistence of
+			// an already-completed command, so the value is processed in the
+			// most conservative mode available instead.
+			transformed, diags := pv.transformPatchValueConservatively(opaqueFields, value)
+			patchOps[i]["value"] = transformed
+			diagnostics = append(diagnostics, Diagnostic{
+				Severity: DiagnosticError,
+				Detail: fmt.Sprintf("patch path %q could not be decoded as a JSON pointer (%v); its value was processed conservatively, which may hash values that are not secrets",
+					path, err),
+			})
+			diagnostics = append(diagnostics, diags...)
+			continue
 		}
-		// Not a schema-opaque path, but the value itself may be an explicit opaque
-		// envelope (e.g. a patch op targeting a non-top-level opaque field).
-		if m, ok := value.(map[string]any); ok {
-			if visibility, ok := m["$visibility"].(string); ok && visibility == "Opaque" {
-				if hashed, done := pv.hashEnvelope(m); done {
-					patchOps[i]["value"] = hashed
-				}
-			}
+
+		candidates, bounded := candidatePrefixes(pointer.Segments)
+		if bounded {
+			diagnostics = append(diagnostics, Diagnostic{
+				Severity: DiagnosticError,
+				Detail: fmt.Sprintf("patch path %q addresses more than %d collection positions; only the reading that elides all of them was tested",
+					path, maxCandidateCollectionSegments),
+			})
 		}
+		patchOps[i]["value"] = pv.transformPatchValue(walk, candidates, value)
 	}
 
 	transformedPatchDoc, err := json.Marshal(patchOps)
@@ -292,5 +307,67 @@ func (pv *PersistValueTransformer) transformPatchDocument(patchDoc json.RawMessa
 		return nil, nil, fmt.Errorf("failed to marshal transformed patch document: %w", err)
 	}
 
-	return json.RawMessage(transformedPatchDoc), nil, nil
+	return json.RawMessage(transformedPatchDoc), append(diagnostics, walk.Diagnostics()...), nil
+}
+
+// transformPatchValue applies the same node handler the property walk uses to a
+// patch op's value, rooted at the op's path.
+//
+// Running the full handler over the VALUE — rather than matching the op's path
+// against leaf hint names — is what covers whole-container ops. The Atomic and
+// EntitySet update methods emit ops that replace an entire object or array
+// element ("replace /settings", "add /webhooks", "replace /webhooks/0"), and
+// every one of those would keep its nested secret in cleartext under leaf
+// matching. Walking the value also distinguishes a numeric object key from an
+// array index structurally, because it inspects what is actually there.
+func (pv *PersistValueTransformer) transformPatchValue(walk *OpaqueWalk, candidates []prefix, value any) any {
+	// A candidate reading of the path that is itself an opaque name means the
+	// op's value IS the secret — the exact-match/stop-descent rule.
+	for _, p := range candidates {
+		if walk.Opaque[p.name()] {
+			walk.recordSegmentation(p.name(), p.steps)
+			return pv.hashPatchValue(value)
+		}
+	}
+	// Otherwise the value may itself be an inline opaque envelope, or carry the
+	// secret somewhere inside it.
+	if hashed, claimed := pv.hashInlineEnvelope(value); claimed {
+		return hashed
+	}
+	return walk.walkValueAt(value, candidates)
+}
+
+// transformPatchValueConservatively processes an op whose path could not be
+// decoded. Containers are walked with every hint name testable at any depth; a
+// bare scalar has no keys to match, so the only way not to leak it is to hash
+// it. Both over-hash on a path that should never occur.
+func (pv *PersistValueTransformer) transformPatchValueConservatively(opaqueFields map[string]bool, value any) (any, []Diagnostic) {
+	switch value.(type) {
+	case map[string]any, []any:
+		walk := pv.newWalk(opaqueFields)
+		walk.MatchAtAnyDepth = true
+		return walk.walkValueAt(value, []prefix{{}}), walk.Diagnostics()
+	}
+	if len(opaqueFields) == 0 {
+		return value, nil
+	}
+	return pv.hashPatchValue(value), nil
+}
+
+// hashPatchValue hashes a patch value the op's path named as opaque. A string,
+// number or bool is wrapped into a canonical opaque envelope; a map is hashed
+// WHOLE, matching the map-shaped-secret rule on the property path (hashing it
+// in place would digest one key and leave its siblings in cleartext); an
+// already-hashed value is left alone, as is null.
+func (pv *PersistValueTransformer) hashPatchValue(value any) any {
+	if m, ok := value.(map[string]any); ok {
+		if h, ok := m["$hashed"].(bool); ok && h {
+			return value
+		}
+	}
+	hashed, changed := pv.hashOpaqueField(value)
+	if !changed {
+		return value
+	}
+	return hashed
 }
