@@ -685,7 +685,7 @@ class FormaRender {
 
     function validateResourceResolvables(resource: Resource): Boolean =
         let (resourceClass = reflect.Class(resource.getClass()))
-        let (resolvableProperties = resourceClass.properties.filter((_, prop) ->
+        let (resolvableProperties = module.fq.allProperties(resourceClass).filter((_, prop) ->
             prop.type.toString().contains("Resolvable")
         ))
         resolvableProperties.every((propName, prop) ->
@@ -1060,12 +1060,12 @@ class Fq {
 
     function reverseFieldMapping(resourceClass: reflect.Class): Mapping<String, String> =
         let(resourceHint = findResourceHint(resourceClass))
-        let(directMapping = resourceClass.properties.filter((_, v) -> v.allAnnotations.filterIsInstance(FieldHint).length > 0).map((k, v) ->
+        let(directMapping = allProperties(resourceClass).filter((_, v) -> v.allAnnotations.filterIsInstance(FieldHint).length > 0).map((k, v) ->
             let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
             let(outputKey = if(fieldHint.outputField != null) fieldHint.outputField else resourceHint.outputKeyTransformation.apply(k))
             Pair(outputKey, k)
         ))
-        let(nestedMapping = resourceClass.properties.filter((_, v) ->
+        let(nestedMapping = allProperties(resourceClass).filter((_, v) ->
             v.allAnnotations.filterIsInstance(FieldHint).length > 0 &&
             isSubResourceType(v.type)
         ).flatMap((k, v) ->
@@ -1095,7 +1095,7 @@ class Fq {
         let(subResourceHint = findSubResourceHint(resourceClass))
         let(outputKeyTransformation = if (subResourceHint != null) subResourceHint.outputKeyTransformation else (it) -> it)
         // Include ALL properties, not just those with @FieldHint
-        let(directMapping = resourceClass.properties.filter((_, v) -> !v.modifiers.contains("hidden")).map((k, v) ->
+        let(directMapping = allProperties(resourceClass).filter((_, v) -> !v.modifiers.contains("hidden")).map((k, v) ->
             let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
             let(outputKey =
                 if (fieldHint != null && fieldHint.outputField != null)
@@ -1105,7 +1105,7 @@ class Fq {
             )
             Pair(outputKey, k)
         ))
-        let(nestedMapping = resourceClass.properties.filter((_, v) ->
+        let(nestedMapping = allProperties(resourceClass).filter((_, v) ->
             !v.modifiers.contains("hidden") &&
             isSubResourceType(v.type)
         ).flatMap((k, v) ->

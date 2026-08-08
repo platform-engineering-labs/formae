@@ -560,6 +560,38 @@ local derivedGadget = new TestDerivedGadget {
     speed = 2
 }
 
+// A resource whose Resolvable-typed field is declared on an intermediate base,
+// so resolvable validation reaches the field only through the superclass chain.
+@formae.ResourceHint {
+    type = "Test::BaseLink"
+    identifier = "Ref"
+    outputKeyTransformation = (it) -> it.capitalize()
+}
+open local class TestBaseLink extends formae.Resource {
+    @formae.FieldHint
+    linkTarget: String|formae.Resolvable
+}
+
+@formae.ResourceHint {
+    type = "Test::DerivedLink"
+    identifier = "Ref"
+    outputKeyTransformation = (it) -> it.capitalize()
+}
+local class TestDerivedLink extends TestBaseLink {
+    @formae.FieldHint
+    note: String?
+}
+
+local derivedLinkWithUnlabelledResolvable = new TestDerivedLink {
+    label = "derived-link"
+    linkTarget = new formae.Resolvable {
+        type = "Test::Other::Thing"
+        stack = "default"
+    }
+}
+
+local emptyForma = new formae.FormaRender {}
+
 examples {
     ["Basic Resolvable"] {
         resolvable
@@ -1071,6 +1103,41 @@ facts {
         derivedHints.keys.every((k) -> !rootMembers.contains(k.toLowerCase())) &&
         directHints.containsKey("bucketName") &&
         directHints.keys.every((k) -> !rootMembers.contains(k.toLowerCase()))
+    }
+
+    ["Reverse sub-resource field mapping resolves an inherited field"] {
+        let (mapping = formae.fq.reverseSubResourceFieldMapping(reflect.Class(TestDerivedSetting)))
+        // "Name" is declared on the base only and its wire key differs from the
+        // Pkl name, so it is present only if the inherited property was read.
+        mapping.containsKey("Name") &&
+        mapping["Name"] == "name" &&
+        mapping["DerivedKey"] == "key" &&
+        !mapping.containsKey("BaseKey")
+    }
+
+    ["Reverse field mapping resolves an inherited field"] {
+        let (mapping = formae.fq.reverseFieldMapping(reflect.Class(TestDerivedGadget)))
+        mapping.containsKey("GadgetName") &&
+        mapping["GadgetName"] == "gadgetName" &&
+        mapping["Tone"] == "tone" &&
+        mapping["Speed"] == "speed"
+    }
+
+    ["Reverse field mapping resolves nested keys under an inherited sub-resource field"] {
+        let (mapping = formae.fq.reverseFieldMapping(reflect.Class(TestDerivedGadget)))
+        mapping.containsKey("Setting.ContainerName") &&
+        mapping["Setting"] == "setting" &&
+        mapping["Setting.ContainerName"] == "setting.containerName" &&
+        mapping["Setting.Inner.BaseKey"] == "setting.inner.key"
+    }
+
+    ["Unlabelled resolvable in an inherited property is rejected"] {
+        let (error = module.catch(() ->
+            emptyForma.validateResourceResolvables(derivedLinkWithUnlabelledResolvable)))
+        // The inherited property is named in the diagnostic, so the rejection
+        // comes from that property rather than from anything the subclass owns.
+        error.contains("property 'linkTarget'") &&
+        error.contains("missing required label")
     }
 }
 
