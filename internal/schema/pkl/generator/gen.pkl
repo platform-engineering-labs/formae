@@ -345,13 +345,15 @@ local scalarClasses: List<Class> = List(Int, Float, Number, String, Boolean, Dur
 ///
 /// The test is answered for the scalar members of a union and for its string
 /// literals, and only for them: those are the members whose handlers convert
-/// one another's values. Every other member is left to conversion, which for a
-/// container or a class already reports a value that does not fit it.
+/// one another's values. Every other member is left to conversion.
 ///
-/// A nullable member is unwrapped to the type it wraps, and a member declared
-/// through a type alias to the type the alias refers to, so `Int?` and an alias
-/// of `Int` are matched by an `Int` exactly as `Int` itself is. A string
-/// literal is matched only by the text it declares.
+/// A nullable member is unwrapped to the type it wraps, a member declared
+/// through a type alias to the type the alias refers to, and a member that is
+/// itself a union to its own members — a parenthesised member declares scalars
+/// of its own, which convert one another's values just as the members around it
+/// do. So `Int?`, an alias of `Int` and `(Int|Boolean)` are all matched by an
+/// `Int` exactly as `Int` itself is. A string literal is matched only by the
+/// text it declares.
 local function isExactly(type: reflect.Type, value: Any): Boolean =
   if (type is reflect.NullableType)
     isExactly((type as reflect.NullableType).member, value)
@@ -364,6 +366,8 @@ local function isExactly(type: reflect.Type, value: Any): Boolean =
           reflect.Class(value.getClass()).isSubclassOf(reflect.Class(reflectee))
       else
         isExactly(reflect.TypeAlias(reflectee).referent, value)
+  else if (type is reflect.UnionType)
+    (type as reflect.UnionType).members.any((member) -> isExactly(member, value))
   else
     false
 

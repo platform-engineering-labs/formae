@@ -505,6 +505,14 @@ local class NumberThenIntResource extends formae.Resource {
     setting: Number|Int
 }
 
+@formae.ResourceHint
+local class TextThenNumberResource extends formae.Resource {
+    type = "FakePlugin::Union::TextThenNumber"
+
+    @formae.FieldHint
+    setting: String|Number
+}
+
 /// A scalar union that is itself nullable, and one whose first member is.
 @formae.ResourceHint
 local class NullableScalarUnionResource extends formae.Resource {
@@ -522,6 +530,14 @@ local class NullableIntThenTextResource extends formae.Resource {
     setting: (Int?)|String
 }
 
+@formae.ResourceHint
+local class TextThenNullableIntResource extends formae.Resource {
+    type = "FakePlugin::Union::TextThenNullableInt"
+
+    @formae.FieldHint
+    setting: String|(Int?)
+}
+
 /// A scalar member declared through a type alias.
 local typealias Year = Int
 
@@ -531,6 +547,14 @@ local class AliasedIntThenTextResource extends formae.Resource {
 
     @formae.FieldHint
     setting: Year|String
+}
+
+@formae.ResourceHint
+local class TextThenAliasedIntResource extends formae.Resource {
+    type = "FakePlugin::Union::TextThenAliasedInt"
+
+    @formae.FieldHint
+    setting: String|Year
 }
 
 /// The shape a schema gives a field holding either structured data or the text
@@ -550,6 +574,41 @@ local class IntThenLiteralResource extends formae.Resource {
 
     @formae.FieldHint
     setting: Int|"2026"|String
+}
+
+@formae.ResourceHint
+local class BoolThenLiteralResource extends formae.Resource {
+    type = "FakePlugin::Union::BoolThenLiteral"
+
+    @formae.FieldHint
+    setting: Boolean|"true"
+}
+
+/// A union of two container members, neither of which is a scalar.
+@formae.ResourceHint
+local class MapThenDynamicResource extends formae.Resource {
+    type = "FakePlugin::Union::MapThenDynamic"
+
+    @formae.FieldHint
+    setting: Mapping<String, String>|Dynamic
+}
+
+/// A parenthesised union of scalars as a member of a union, in both member
+/// orders.
+@formae.ResourceHint
+local class NestedScalarUnionThenTextResource extends formae.Resource {
+    type = "FakePlugin::Union::NestedScalarUnionThenText"
+
+    @formae.FieldHint
+    setting: (Int|Boolean)|String
+}
+
+@formae.ResourceHint
+local class TextThenNestedScalarUnionResource extends formae.Resource {
+    type = "FakePlugin::Union::TextThenNestedScalarUnion"
+
+    @formae.FieldHint
+    setting: String|(Int|Boolean)
 }
 
 // Test data
@@ -1226,12 +1285,24 @@ facts {
 
     ["A nullable member of a scalar union matches only what it wraps"] {
         convertedSetting(NullableIntThenTextResource, "2026") is String &&
-        convertedSetting(NullableIntThenTextResource, 5) is Int
+        convertedSetting(NullableIntThenTextResource, 5) is Int &&
+        // Declared after the text member, so only unwrapping it keeps the
+        // number a number.
+        convertedSetting(TextThenNullableIntResource, 5) is Int
     }
 
     ["A scalar member declared through a type alias matches what the alias refers to"] {
         convertedSetting(AliasedIntThenTextResource, "2026") is String &&
-        convertedSetting(AliasedIntThenTextResource, 5) is Int
+        convertedSetting(AliasedIntThenTextResource, 5) is Int &&
+        // Declared after the text member, so only following the alias to its
+        // referent keeps the number a number.
+        convertedSetting(TextThenAliasedIntResource, 5) is Int
+    }
+
+    ["A value matches a member of a class it is a kind of"] {
+        // An Int is a Number, and the Number member holds it as it stands
+        // rather than the text member declared before it reading it as text.
+        convertedSetting(TextThenNumberResource, 5) is Int
     }
 
     ["Text in a structured-or-text field stays the text it was stored as"] {
@@ -1244,7 +1315,21 @@ facts {
     ["A string literal member matches the text it declares"] {
         convertedSetting(IntThenLiteralResource, "2026") == "2026" &&
         convertedSetting(IntThenLiteralResource, "auto") == "auto" &&
-        convertedSetting(IntThenLiteralResource, 5) is Int
+        convertedSetting(IntThenLiteralResource, 5) is Int &&
+        // Declared after the boolean member, which would otherwise parse the
+        // literal's own text into a boolean.
+        convertedSetting(BoolThenLiteralResource, "true") == "true"
+    }
+
+    ["A union of members that convert nothing of one another resolves in declaration order"] {
+        // Neither member reads its own type out of the other's values, so the
+        // structured value is left to the member declared first.
+        convertedSetting(MapThenDynamicResource, new Dynamic { a = "1" }) is Mapping
+    }
+
+    ["A member that is itself a union matches what its own members match"] {
+        convertedSetting(NestedScalarUnionThenTextResource, 5) is Int &&
+        convertedSetting(TextThenNestedScalarUnionResource, 5) is Int
     }
 
     // --- Conversion outside a union still coerces between scalar types ---
