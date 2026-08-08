@@ -172,7 +172,8 @@ func (d *DatastoreMSSQL) Stats() (*stats.Stats, error) {
 }
 
 // scanCountMap runs a "SELECT k, COUNT(*) ... GROUP BY k" and fills dst.
-// NULL keys scan into "" (callers strip them when needed).
+// NULL keys scan into "", so queries must exclude NULL and empty keys
+// themselves rather than leaving an unlabelled entry in dst.
 func (d *DatastoreMSSQL) scanCountMap(ctx context.Context, query string, dst map[string]int, args ...any) error {
 	rows, err := d.conn.QueryContext(ctx, query, args...)
 	if err != nil {
