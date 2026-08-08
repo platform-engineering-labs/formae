@@ -247,6 +247,121 @@ local class RefOrMapResource extends formae.Resource {
     target: formae.Resolvable|Mapping<String, String>
 }
 
+/// The reported shape: the map arm is declared first, and its value type admits
+/// anything, so an envelope converts as a literal copy unless selection prefers
+/// the reference member.
+@formae.ResourceHint
+local class MapThenRefResource extends formae.Resource {
+    type = "FakePlugin::Union::MapThenRef"
+
+    @formae.FieldHint
+    target: Mapping<String, Any>|formae.Resolvable
+}
+
+/// The same order with a strictly-typed map arm.
+@formae.ResourceHint
+local class StrMapThenRefResource extends formae.Resource {
+    type = "FakePlugin::Union::StrMapThenRef"
+
+    @formae.FieldHint
+    target: Mapping<String, String>|formae.Resolvable
+}
+
+/// The reference arm first, over a map arm that admits anything.
+@formae.ResourceHint
+local class RefThenAnyMapResource extends formae.Resource {
+    type = "FakePlugin::Union::RefThenAnyMap"
+
+    @formae.FieldHint
+    target: formae.Resolvable|Mapping<String, Any>
+}
+
+/// A recorded-value-or-map field, in both member orders.
+@formae.ResourceHint
+local class MapThenValueResource extends formae.Resource {
+    type = "FakePlugin::Union::MapThenValue"
+
+    @formae.FieldHint
+    target: Mapping<String, Any>|formae.Value
+}
+
+@formae.ResourceHint
+local class ValueThenMapResource extends formae.Resource {
+    type = "FakePlugin::Union::ValueThenMap"
+
+    @formae.FieldHint
+    target: formae.Value|Mapping<String, Any>
+}
+
+/// An embedded-template-or-map field, in both member orders.
+@formae.ResourceHint
+local class MapThenEmbedResource extends formae.Resource {
+    type = "FakePlugin::Union::MapThenEmbed"
+
+    @formae.FieldHint
+    target: Mapping<String, Any>|formae.Embedded
+}
+
+@formae.ResourceHint
+local class EmbedThenMapResource extends formae.Resource {
+    type = "FakePlugin::Union::EmbedThenMap"
+
+    @formae.FieldHint
+    target: formae.Embedded|Mapping<String, Any>
+}
+
+/// Envelope-class fields with no sibling to fall through to, so what the
+/// conversion itself makes of a value is observable.
+@formae.ResourceHint
+local class RefFieldResource extends formae.Resource {
+    type = "FakePlugin::Field::Ref"
+
+    @formae.FieldHint
+    target: formae.Resolvable
+}
+
+@formae.ResourceHint
+local class ValueFieldResource extends formae.Resource {
+    type = "FakePlugin::Field::Value"
+
+    @formae.FieldHint
+    target: formae.Value
+}
+
+@formae.ResourceHint
+local class EmbedFieldResource extends formae.Resource {
+    type = "FakePlugin::Field::Embed"
+
+    @formae.FieldHint
+    target: formae.Embedded
+}
+
+/// The three handlers whose contract is to pass a map through as data. An
+/// envelope handed to one of them stays what it was.
+@formae.ResourceHint
+local class AnyFieldResource extends formae.Resource {
+    type = "FakePlugin::Field::Any"
+
+    @formae.FieldHint
+    target: Any
+}
+
+@formae.ResourceHint
+local class DynamicFieldResource extends formae.Resource {
+    type = "FakePlugin::Field::Dynamic"
+
+    @formae.FieldHint
+    target: Dynamic
+}
+
+@formae.ResourceHint
+local class MapFieldResource extends formae.Resource {
+    type = "FakePlugin::Field::Map"
+
+    @formae.FieldHint
+    target: Mapping<String, Any>
+}
+
 /// A map-typed field whose values carry a type, so an entry whose value cannot
 /// be converted is observable.
 @formae.ResourceHint
@@ -383,17 +498,52 @@ local function reference(omitted: String?): Mapping =
 local function referenceValued(recorded: Any): Mapping =
     reference("$value").toMap().put("$value", recorded).toMapping()
 
-/// Applies an envelope to a union-typed field and names the member the union
-/// resolved to.
-local function selectedMember(res: Class, env: Mapping): String =
-    let (result = gen.attemptApply(res, new Dynamic {
+/// The same envelope with one of its keys replaced, for the shapes that carry a
+/// `$res` key without being a reference.
+local function referenceWith(key: String, replacement: Any): Mapping =
+    reference(null).toMap().put(key, replacement).toMapping()
+
+/// The envelope the agent records for a value it holds itself, rather than a
+/// reference to one another resource holds.
+local function recordedValue(omitted: String?): Mapping =
+    let (env = Map(
+        "$value", "s3cret",
+        "$visibility", "Clear",
+        "$strategy", "Update"
+    ))
+    (if (omitted == null) env else env.remove(omitted)).toMapping()
+
+/// The envelope the agent's extract pre-processing produces for a template
+/// carrying references: alternating literal segments and reference envelopes.
+local function embedded(parts: Listing?): Mapping =
+    let (env = Map("$embed", true))
+    (if (parts == null) env else env.put("$templateParts", parts)).toMapping()
+
+/// Renders a resource whose `target` field carries `env`, and returns what that
+/// field rendered to.
+///
+/// Rendering a resource yields a map, so the converted value is returned as it
+/// stands: an envelope converts to a carrier that is not always an instance of
+/// the declared field type — `FakeEmbed` does not extend `formae.Embedded` —
+/// and only the renderer ever reads it.
+local function renderedTarget(res: Class, env: Any): Any =
+    gen.applyResource(res, new Dynamic {
         target = env
         label = "ref"
-    }))
-    if (result is gen.GenerationFailure)
+    }, "Cannot render resource \"ref\" in stack \"default\"").getOrNull("target")
+
+/// The diagnostic rendering that resource raises, or `null` when it renders.
+local function renderFailure(res: Class, env: Any): String? =
+    module.catchOrNull(() -> renderedTarget(res, env))
+
+/// Applies an envelope to a union-typed field and names the member the union
+/// resolved to.
+local function selectedMember(res: Class, env: Any): String =
+    let (failure = renderFailure(res, env))
+    if (failure != null)
         "GenerationFailure"
     else
-        (result as Typed).getPropertyOrNull("target").getClass().simpleName
+        renderedTarget(res, env).getClass().simpleName
 
 examples {
     ["Apply simple class"] {
@@ -904,6 +1054,142 @@ facts {
         selectedMember(RefOrMapResource, reference("$value")) == "FakeResolvable" &&
         selectedMember(RefOrMapResource, reference("$stack")) == "FakeResolvable" &&
         selectedMember(RefOrMapResource, reference("$property")) == "FakeResolvable"
+    }
+
+    // --- Envelopes handed to the handlers that pass a map through as data ---
+
+    ["An Any-typed field keeps a reference envelope as it stands"] {
+        let (target = renderedTarget(AnyFieldResource, reference(null)))
+        target.toMap()["$res"] == true &&
+        target.toMap()["$label"] == "vpc" &&
+        target.toMap()["$type"] == "TestProvider::EC2::VPC"
+    }
+
+    ["An Any-typed field still unwraps a recorded value to the value itself"] {
+        renderedTarget(AnyFieldResource, recordedValue(null)) == "s3cret"
+    }
+
+    ["A Dynamic-typed field keeps an envelope as it stands"] {
+        renderedTarget(DynamicFieldResource, reference(null)).toMap()["$res"] == true &&
+        renderedTarget(DynamicFieldResource, recordedValue(null)).toMap()["$value"] == "s3cret" &&
+        renderedTarget(DynamicFieldResource, embedded(new Listing { "a" })).toMap()["$embed"] == true
+    }
+
+    ["A Mapping-typed field converts an envelope entry by entry"] {
+        renderedTarget(MapFieldResource, reference(null)).toMap()["$res"] == true &&
+        renderedTarget(MapFieldResource, recordedValue(null)).toMap()["$strategy"] == "Update" &&
+        renderedTarget(MapFieldResource, embedded(new Listing { "a" })).toMap()["$embed"] == true
+    }
+
+    // --- An envelope selects the union member of its own family ---
+
+    ["A reference in a map-or-reference field selects the reference, not a copy of the envelope"] {
+        // The map member converts an envelope into a literal copy of itself, so
+        // the reference would be frozen into data and re-applied as settings
+        // named $label and $res.
+        selectedMember(MapThenRefResource, reference(null)) == "FakeResolvable"
+    }
+
+    ["A reference selects the reference member however the union orders its members"] {
+        selectedMember(StrMapThenRefResource, reference(null)) == "FakeResolvable" &&
+        selectedMember(RefThenAnyMapResource, reference(null)) == "FakeResolvable"
+    }
+
+    ["A reference missing an optional part still selects the reference member over a map member"] {
+        selectedMember(MapThenRefResource, reference("$value")) == "FakeResolvable" &&
+        selectedMember(MapThenRefResource, reference("$stack")) == "FakeResolvable" &&
+        selectedMember(MapThenRefResource, reference("$property")) == "FakeResolvable" &&
+        selectedMember(MapThenRefResource, reference("$label")) == "FakeResolvable"
+    }
+
+    ["A recorded value selects the value member however the union orders its members"] {
+        selectedMember(MapThenValueResource, recordedValue(null)) == "FakeValue" &&
+        selectedMember(ValueThenMapResource, recordedValue(null)) == "FakeValue"
+    }
+
+    ["An embedded template selects the embedded member however the union orders its members"] {
+        let (env = embedded(new Listing { "echo vpc="; reference(null); " done" }))
+        selectedMember(MapThenEmbedResource, env) == "FakeEmbed" &&
+        selectedMember(EmbedThenMapResource, env) == "FakeEmbed"
+    }
+
+    // --- Data that only looks like an envelope stays data ---
+
+    ["Plain nested data in a reference-or-map field extracts as data"] {
+        // The reference member is declared first, and an object it cannot be
+        // built from must not become a reference with nothing to point at.
+        renderedTarget(RefOrMapResource, new Mapping { ["recipient"] = "#alerts" }).toMap() ==
+            Map("recipient", "#alerts")
+    }
+
+    ["Plain nested data extracts as data however the union orders its members"] {
+        renderedTarget(MapThenRefResource, new Mapping { ["recipient"] = "#alerts" }).toMap() ==
+            Map("recipient", "#alerts") &&
+        renderedTarget(RefThenAnyMapResource, new Mapping { ["recipient"] = "#alerts" }).toMap() ==
+            Map("recipient", "#alerts")
+    }
+
+    ["A map carrying a $res key that is not the marker extracts as data"] {
+        // Only the boolean true marks a reference; a map of the author's own
+        // with a key of that name is data, in a union and on its own.
+        let (odd = new Mapping { ["$res"] = "yes"; ["region"] = "eu-west-1" })
+        let (asData = Map("$res", "yes", "region", "eu-west-1"))
+        renderedTarget(MapFieldResource, odd).toMap() == asData &&
+        renderedTarget(MapThenRefResource, odd).toMap() == asData &&
+        renderedTarget(RefThenAnyMapResource, odd).toMap() == asData
+    }
+
+    ["A $res key holding false or text is not a reference"] {
+        selectedMember(MapThenRefResource, referenceWith("$res", false)) == "Mapping" &&
+        selectedMember(MapThenRefResource, referenceWith("$res", "x")) == "Mapping" &&
+        selectedMember(RefThenAnyMapResource, referenceWith("$res", false)) == "Mapping" &&
+        selectedMember(RefThenAnyMapResource, referenceWith("$res", "x")) == "Mapping"
+    }
+
+    ["A recorded value missing its visibility or strategy is not a value envelope"] {
+        selectedMember(MapThenValueResource, recordedValue("$visibility")) == "Mapping" &&
+        selectedMember(MapThenValueResource, recordedValue("$strategy")) == "Mapping" &&
+        selectedMember(ValueThenMapResource, recordedValue("$visibility")) == "Mapping" &&
+        selectedMember(ValueThenMapResource, recordedValue("$strategy")) == "Mapping"
+    }
+
+    ["An envelope is never preferred over a member of another family"] {
+        // Preference is family-scoped: a recorded value does not select a
+        // reference member, and a reference does not select a value member.
+        selectedMember(MapThenValueResource, reference(null)) == "Mapping" &&
+        selectedMember(MapThenEmbedResource, reference(null)) == "Mapping" &&
+        selectedMember(MapThenRefResource, recordedValue(null)) == "Mapping"
+    }
+
+    // --- An envelope-class field requires its envelope ---
+
+    ["A reference-typed field given plain data reports a failure instead of a reference with no target"] {
+        let (message = renderFailure(RefFieldResource, new Mapping { ["recipient"] = "#alerts" }))
+        message != null && message.contains("$res")
+    }
+
+    ["A value-typed field given plain data reports a failure"] {
+        let (message = renderFailure(ValueFieldResource, new Mapping { ["recipient"] = "#alerts" }))
+        message != null && message.contains("$value")
+    }
+
+    ["An embedded-typed field given plain data reports a failure"] {
+        let (message = renderFailure(EmbedFieldResource, new Mapping { ["recipient"] = "#alerts" }))
+        message != null && message.contains("$embed")
+    }
+
+    ["An embedded template that was never split into parts reports a failure"] {
+        // Extract pre-processing rewrites {$embed, $template} into
+        // {$embed, $templateParts}, but passes a template it cannot split
+        // through unchanged, so the unsplit shape still arrives here.
+        let (unsplit = new Mapping { ["$embed"] = true; ["$template"] = "echo vpc=" })
+        let (message = renderFailure(EmbedFieldResource, unsplit))
+        message != null && message.contains("$templateParts")
+    }
+
+    ["An embedded template carrying no parts at all reports a failure"] {
+        let (message = renderFailure(EmbedFieldResource, embedded(null)))
+        message != null && message.contains("$templateParts")
     }
 
     // --- Map conversion ---

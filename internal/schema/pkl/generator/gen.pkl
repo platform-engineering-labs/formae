@@ -255,6 +255,86 @@ local function readDeeply(value: Any): Boolean =
   else
     true
 
+/// The envelope marker a map carries, or `null` when the map is plain data.
+///
+/// A map is a reference only when `$res` is exactly the boolean `true`, and an
+/// embedded template only when `$embed` is exactly the boolean `true`. A map of
+/// the author's own that merely has a key of that name holding something else
+/// is data and converts as data.
+///
+/// The marker alone decides this. The remaining parts of a reference — the
+/// label, stack, property and recorded value — are optional: `formae.Resolvable`
+/// declares them nullable and the agent records only the ones it has, so their
+/// absence must not stop a reference being recognised. Whether the parts that
+/// *are* present can be used is a separate question, answered by
+/// `applyDynamicOrMapping`, which reports an unusable part as a failure rather
+/// than quietly treating the envelope as data.
+///
+/// A recorded value has no marker of its own, so all three of the keys it is
+/// written from have to be present before a map is one.
+local function envelopeMarkerOf(valueAsMap: Map): String? =
+  if (valueAsMap.getOrNull("$res") == true)
+    "$res"
+  else if (valueAsMap.containsKey("$value") && valueAsMap.containsKey("$visibility") && valueAsMap.containsKey("$strategy"))
+    "$value"
+  else if (valueAsMap.getOrNull("$embed") == true)
+    "$embed"
+  else
+    null
+
+/// The envelope marker values of `clazz` carry, or `null` when `clazz` is not
+/// an envelope class. The test walks the superclass chain, so a provider's
+/// specialisation of `formae.Resolvable` and `formae.SecretValue` are matched
+/// alongside the bases themselves.
+local function envelopeMarkerOfClass(clazz: reflect.Class): String? =
+  if (clazz.isSubclassOf(reflect.Class(formae.Resolvable)))
+    "$res"
+  else if (clazz.isSubclassOf(reflect.Class(formae.Value)))
+    "$value"
+  else if (clazz.isSubclassOf(reflect.Class(formae.Embedded)))
+    "$embed"
+  else
+    null
+
+/// The same, for a union member's declared type. A nullable member is unwrapped
+/// to its member type and a type alias to its referent, so `formae.Resolvable?`
+/// and an alias of it are recognised as reference members too.
+local function envelopeMarkerOfType(type: reflect.Type): String? =
+  if (type is reflect.NullableType)
+    envelopeMarkerOfType((type as reflect.NullableType).member)
+  else if (type is reflect.DeclaredType)
+    let (reflectee = (type as reflect.DeclaredType).referent.reflectee)
+      if (reflectee is Class) envelopeMarkerOfClass(reflect.Class(reflectee))
+      else envelopeMarkerOfType(reflect.TypeAlias(reflectee).referent)
+  else
+    null
+
+/// The first union member belonging to the envelope family of `value`, or
+/// `null` when `value` is not an envelope or the union declares no member of
+/// its family.
+///
+/// A member of another family is never returned: an envelope offered to a union
+/// that cannot hold it converts in declaration order, exactly as any other value
+/// does.
+local function envelopeMemberOf(members: List<reflect.Type>, value: Any): reflect.Type? =
+  if (!(value is Dynamic|Mapping))
+    null
+  else
+    let (marker = envelopeMarkerOf(value.toMap()))
+      if (marker == null) null
+      else members.findOrNull((member) -> envelopeMarkerOfType(member) == marker)
+
+/// Converts `value` as one member of a union, reporting an error the conversion
+/// defers as a failure value rather than leaving it to surface while the forma
+/// is rendered.
+local function attemptMember(type: reflect.Type, value: Any): Any|GenerationFailure =
+  let (attempt = applyType(type, value))
+    if (attempt is GenerationFailure)
+      attempt
+    else
+      let (deferred = deferredFailure(attempt))
+        if (deferred == null) attempt else Fail(deferred)
+
 hidden reflectTypeHandlers: Mapping<Class, (reflect.Type, Any) -> Any|GenerationFailure> = new Mapping {
   [reflect.NullableType] = (type, value) ->
     if (value == null) null else applyType((type as reflect.NullableType).member, value)
@@ -280,18 +360,27 @@ hidden reflectTypeHandlers: Mapping<Class, (reflect.Type, Any) -> Any|Generation
           Unexpected(expected, value.getClass().simpleName)
 
    [reflect.UnionType] = (type, value) ->
-    (type as reflect.UnionType).members.fold(
-      Fail("No member of union type matched value '\(value)' \(type)"),
-      (acc, _type) ->
-        if (acc is GenerationFailure)
-          let (attempt = applyType(_type, value))
-            // A member counts as matched only once its deferred checks have run:
-            // a converted object that raises the moment anything reads it does
-            // not belong to this member.
-            if (attempt is GenerationFailure || deferredFailure(attempt) != null) acc else attempt
-        else
-          acc
-    )
+    let (members = (type as reflect.UnionType).members)
+    let (envelopeMember = envelopeMemberOf(members, value))
+      // An envelope is a reference, a recorded value or an embedded template —
+      // never the data it stands for. A sibling data member would convert it
+      // into a literal copy of the envelope, so the member of its own family is
+      // chosen outright instead of being tried in declaration order.
+      if (envelopeMember != null)
+        attemptMember(envelopeMember, value)
+      else
+        members.fold(
+          Fail("No member of union type matched value '\(value)' \(type)"),
+          (acc, _type) ->
+            if (acc is GenerationFailure)
+              // A member counts as matched only once its deferred checks have
+              // run: a converted object that raises the moment anything reads it
+              // does not belong to this member.
+              let (attempt = attemptMember(_type, value))
+                if (attempt is GenerationFailure) acc else attempt
+            else
+              acc
+        )
 
     [reflect.UnknownType] = (_, value) ->
       value
@@ -479,10 +568,41 @@ local function requireResolvableInfo(typeUri: String?, context: String): resolva
     else
         resolvables.MapResolvableResourceUri()[typeUri]
 
+/// Converts an `$embed` envelope into the carrier the renderer reads.
+///
+/// Two shapes reach this module. The agent's extract pre-processing rewrites
+/// `{$embed, $template}` into `{$embed, $templateParts}`, splitting the template
+/// into alternating literal segments and reference envelopes; that rewritten
+/// shape is the one converted here. When the template cannot be split the
+/// pre-processing logs it and passes the value through untouched, so the
+/// unsplit `{$embed, $template}` shape — and, when `$template` is not text, an
+/// envelope carrying neither key — arrive here as well. Neither has parts to
+/// convert, so both are reported rather than converted as data.
+local function applyEmbedEnvelope(valueAsMap: Map): Typed|GenerationFailure =
+    if (!valueAsMap.containsKey("$templateParts"))
+        Fail("An embedded template must carry the $templateParts its literal segments "
+            + "and references were split into")
+    // $templateParts arrives as a Listing when parsed from JSON (the real
+    // extract flow), but may be a List/Dynamic in other construction paths.
+    // Anything outside those three shapes reaches a cast that cannot report a
+    // failure, so reject it here instead.
+    else
+        let (rawParts = valueAsMap["$templateParts"])
+        if (!(rawParts is Listing|List|Dynamic))
+            Unexpected("Listing|List|Dynamic", rawParts.getClass().simpleName)
+        else
+            new FakeEmbed {
+                FakeParts =
+                    if (rawParts is Listing) rawParts.toList()
+                    else if (rawParts is List) rawParts
+                    else (rawParts as Dynamic).toList()
+            }
+
 local function applyDynamicOrMapping(type: reflect.Class, value: Dynamic|Mapping): Typed|GenerationFailure|Any =
     let (valueAsMap = value.toMap())
-    if (valueAsMap.containsKey("$res"))
-        let (res = valueAsMap.getOrNull("$res"))
+    let (marker = envelopeMarkerOf(valueAsMap))
+    let (classMarker = envelopeMarkerOfClass(type))
+    if (marker == "$res")
         let (s = valueAsMap.getOrNull("$stack"))
         let (l = valueAsMap.getOrNull("$label"))
         let (refType = valueAsMap.getOrNull("$type"))
@@ -524,8 +644,7 @@ local function applyDynamicOrMapping(type: reflect.Class, value: Dynamic|Mapping
             })
 
             r
-    else if (valueAsMap.containsKey("$value") && valueAsMap.containsKey("$visibility") && valueAsMap.containsKey("$strategy"))
-
+    else if (marker == "$value")
         let (fakeValue = valueAsMap.getOrNull("$value"))
         let (visibility = valueAsMap.getOrNull("$visibility"))
         let (strategy = valueAsMap.getOrNull("$strategy"))
@@ -537,21 +656,14 @@ local function applyDynamicOrMapping(type: reflect.Class, value: Dynamic|Mapping
             FakeStrategy = strategy
             FakeHashed = hashed
         }
-    else if (valueAsMap.containsKey("$embed") && valueAsMap.containsKey("$templateParts"))
-        // $templateParts arrives as a Listing when parsed from JSON (the real
-        // extract flow), but may be a List/Dynamic in other construction paths.
-        let (rawParts = valueAsMap["$templateParts"])
-        // Anything outside those three shapes reaches a cast that cannot report
-        // a failure, so reject it here instead.
-        if (!(rawParts is Listing|List|Dynamic))
-            Unexpected("Listing|List|Dynamic", rawParts.getClass().simpleName)
-        else
-            new FakeEmbed {
-                FakeParts =
-                    if (rawParts is Listing) rawParts.toList()
-                    else if (rawParts is List) rawParts
-                    else (rawParts as Dynamic).toList()
-            }
+    else if (marker == "$embed")
+        applyEmbedEnvelope(valueAsMap)
+    else if (classMarker != null)
+        // An envelope class is built from its envelope and from nothing else.
+        // Converting plain data as one yields an object with every part of the
+        // reference — or of the recorded value — left null, which renders as a
+        // reference to nothing.
+        Fail("\(type.name) is built from a \(classMarker) envelope, but the value carries no \(classMarker) marker")
     else
         // Get the reverse mapping for this class
         let (reverseMapping =
