@@ -110,12 +110,14 @@ func resourceIsLive(t *testing.T, td TestDatastore, ksuid string) bool {
 
 // storeLiveResource writes the resources row a successful create leaves behind
 // and proves the resource is live, so a case that expects it counted cannot
-// pass for the wrong reason. It returns the resource so a caller can tombstone
-// it later.
-func storeLiveResource(t *testing.T, td TestDatastore, res *pkgmodel.Resource) *pkgmodel.Resource {
+// pass for the wrong reason. The command the write is attributed to is the
+// caller's, so a case staging two inventory versions of one ksuid can record
+// them under the two commands that actually produced them. It returns the
+// resource so a caller can tombstone it later.
+func storeLiveResource(t *testing.T, td TestDatastore, res *pkgmodel.Resource, commandID string) *pkgmodel.Resource {
 	t.Helper()
 
-	_, err := td.StoreResource(res, "cmd-create-"+res.Ksuid)
+	_, err := td.StoreResource(res, commandID)
 	require.NoError(t, err)
 	require.True(t, resourceIsLive(t, td, res.Ksuid),
 		"setup: %s must be in the live inventory", res.Ksuid)
@@ -155,7 +157,7 @@ func RunStatsResourceErrors_StillFailedCounted(t *testing.T, newDS func(t *testi
 		td := newDS(t)
 		defer td.CleanUpFn() //nolint:errcheck
 
-		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"))
+		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"), "cmd-create-bucket-1")
 
 		failed := outcomeCommand(
 			forma_command.CommandStateFailed,
@@ -181,7 +183,7 @@ func RunStatsResourceErrors_FailedThenSucceededNotCounted(t *testing.T, newDS fu
 		td := newDS(t)
 		defer td.CleanUpFn() //nolint:errcheck
 
-		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"))
+		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"), "cmd-create-bucket-1")
 
 		failed := outcomeCommand(
 			forma_command.CommandStateFailed,
@@ -219,7 +221,7 @@ func RunStatsResourceErrors_RepeatedFailuresCountOnce(t *testing.T, newDS func(t
 
 		// The create succeeded and left an inventory row; every later update
 		// attempt against that row failed.
-		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"))
+		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"), "cmd-create-bucket-1")
 
 		for i, offset := range []time.Duration{-15 * time.Minute, -10 * time.Minute, -5 * time.Minute} {
 			cmd := outcomeCommand(
@@ -247,7 +249,7 @@ func RunStatsResourceErrors_SucceededThenFailedCounted(t *testing.T, newDS func(
 		td := newDS(t)
 		defer td.CleanUpFn() //nolint:errcheck
 
-		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"))
+		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"), "cmd-create-bucket-1")
 
 		succeeded := outcomeCommand(
 			forma_command.CommandStateSuccess,
@@ -282,7 +284,7 @@ func RunStatsResourceErrors_InFlightRetryDoesNotClear(t *testing.T, newDS func(t
 		td := newDS(t)
 		defer td.CleanUpFn() //nolint:errcheck
 
-		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"))
+		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"), "cmd-create-bucket-1")
 
 		failed := outcomeCommand(
 			forma_command.CommandStateFailed,
@@ -319,7 +321,7 @@ func RunStatsResourceErrors_CanceledDoesNotClear(t *testing.T, newDS func(t *tes
 		td := newDS(t)
 		defer td.CleanUpFn() //nolint:errcheck
 
-		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"))
+		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"), "cmd-create-bucket-1")
 
 		failed := outcomeCommand(
 			forma_command.CommandStateFailed,
@@ -355,7 +357,7 @@ func RunStatsResourceErrors_RejectedDoesNotClear(t *testing.T, newDS func(t *tes
 		td := newDS(t)
 		defer td.CleanUpFn() //nolint:errcheck
 
-		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"))
+		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"), "cmd-create-bucket-1")
 
 		failed := outcomeCommand(
 			forma_command.CommandStateFailed,
@@ -396,7 +398,7 @@ func RunStatsResourceErrors_LatestSuccessWithEmptyTypeClearsFailure(t *testing.T
 		td := newDS(t)
 		defer td.CleanUpFn() //nolint:errcheck
 
-		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"))
+		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"), "cmd-create-bucket-1")
 
 		failed := outcomeCommand(
 			forma_command.CommandStateFailed,
@@ -435,7 +437,7 @@ func RunStatsResourceErrors_ReplaceDeleteFailedThenCreateSucceeds(t *testing.T, 
 		td := newDS(t)
 		defer td.CleanUpFn() //nolint:errcheck
 
-		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"))
+		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"), "cmd-create-bucket-1")
 
 		// A replace emits a delete and a create row for the same ksuid; they
 		// complete at different times within the one command.
@@ -468,7 +470,7 @@ func RunStatsResourceErrors_ReplaceDeleteSucceedsThenCreateFailed(t *testing.T, 
 		td := newDS(t)
 		defer td.CleanUpFn() //nolint:errcheck
 
-		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"))
+		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"), "cmd-create-bucket-1")
 
 		replace := outcomeCommand(
 			forma_command.CommandStateFailed,
@@ -497,7 +499,7 @@ func RunStatsResourceErrors_ReplaceSameTimestampFailedWins(t *testing.T, newDS f
 		td := newDS(t)
 		defer td.CleanUpFn() //nolint:errcheck
 
-		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"))
+		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"), "cmd-create-bucket-1")
 
 		// The failure is on the delete side, which sorts after the create side
 		// by operation, so only the state tiebreak can select it.
@@ -531,7 +533,7 @@ func RunStatsResourceErrors_ReplaceSameTimestampBothFailedCountsOnce(t *testing.
 		td := newDS(t)
 		defer td.CleanUpFn() //nolint:errcheck
 
-		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"))
+		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"), "cmd-create-bucket-1")
 
 		sameTs := -10 * time.Minute
 		deleteSide := outcomeUpdate("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket",
@@ -569,7 +571,7 @@ func RunStatsResourceErrors_NullTimestampFailureClearedBySuccess(t *testing.T, n
 			t.Skip("backend does not provide NullResourceUpdateModifiedTsForTest")
 		}
 
-		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"))
+		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"), "cmd-create-bucket-1")
 
 		failed := outcomeCommand(
 			forma_command.CommandStateFailed,
@@ -611,7 +613,7 @@ func RunStatsResourceErrors_NullTimestampRepeatedFailuresCountOnce(t *testing.T,
 			t.Skip("backend does not provide NullResourceUpdateModifiedTsForTest")
 		}
 
-		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"))
+		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"), "cmd-create-bucket-1")
 
 		for _, offset := range []time.Duration{-20 * time.Minute, -10 * time.Minute} {
 			cmd := outcomeCommand(
@@ -648,7 +650,7 @@ func RunStatsResourceErrors_MigratedTimestampSpellingClearedBySuccess(t *testing
 			t.Skip("backend does not store modified_ts as text")
 		}
 
-		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"))
+		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"), "cmd-create-bucket-1")
 
 		failed := outcomeCommand(
 			forma_command.CommandStateFailed,
@@ -690,7 +692,7 @@ func RunStatsResourceErrors_LaterCommandWinsOnTimestampTie(t *testing.T, newDS f
 		td := newDS(t)
 		defer td.CleanUpFn() //nolint:errcheck
 
-		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"))
+		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"), "cmd-create-bucket-1")
 
 		sameTs := -10 * time.Minute
 		failedRow := outcomeUpdate("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket",
@@ -737,7 +739,7 @@ func RunStatsResourceErrors_FailedDeleteCounted(t *testing.T, newDS func(t *test
 
 		// The create succeeded and wrote the inventory row; the delete failed,
 		// so no tombstone was written and the row stays live.
-		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"))
+		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"), "cmd-create-bucket-1")
 
 		created := outcomeCommand(
 			forma_command.CommandStateSuccess,
@@ -773,10 +775,10 @@ func RunStatsResourceErrors_GroupedByType(t *testing.T, newDS func(t *testing.T)
 		td := newDS(t)
 		defer td.CleanUpFn() //nolint:errcheck
 
-		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"))
-		storeLiveResource(t, td, liveResource("stack-a", "ksuid-2", "bucket-2", "AWS::S3::Bucket"))
-		storeLiveResource(t, td, liveResource("stack-a", "ksuid-3", "queue-1", "AWS::SQS::Queue"))
-		storeLiveResource(t, td, liveResource("stack-a", "ksuid-4", "queue-2", "AWS::SQS::Queue"))
+		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"), "cmd-create-bucket-1")
+		storeLiveResource(t, td, liveResource("stack-a", "ksuid-2", "bucket-2", "AWS::S3::Bucket"), "cmd-create-bucket-2")
+		storeLiveResource(t, td, liveResource("stack-a", "ksuid-3", "queue-1", "AWS::SQS::Queue"), "cmd-create-queue-1")
+		storeLiveResource(t, td, liveResource("stack-a", "ksuid-4", "queue-2", "AWS::SQS::Queue"), "cmd-create-queue-2")
 
 		failed := outcomeCommand(
 			forma_command.CommandStateFailed,
@@ -822,7 +824,7 @@ func RunStatsResourceErrors_DeletedResourceNotCounted(t *testing.T, newDS func(t
 		td := newDS(t)
 		defer td.CleanUpFn() //nolint:errcheck
 
-		res := storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"))
+		res := storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"), "cmd-create-bucket-1")
 
 		failed := outcomeCommand(
 			forma_command.CommandStateFailed,
@@ -860,7 +862,7 @@ func RunStatsResourceErrors_ReapedResourceNotCounted(t *testing.T, newDS func(t 
 			t.Skip("backend does not expose MarkResourceReapedForTest")
 		}
 
-		res := storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"))
+		res := storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"), "cmd-create-bucket-1")
 
 		failed := outcomeCommand(
 			forma_command.CommandStateFailed,
@@ -871,6 +873,11 @@ func RunStatsResourceErrors_ReapedResourceNotCounted(t *testing.T, newDS func(t 
 			},
 		)
 		assert.NoError(t, td.StoreFormaCommand(failed, failed.ID))
+
+		before, err := td.Stats()
+		require.NoError(t, err)
+		require.Equal(t, map[string]int{"AWS::S3::Bucket": 1}, before.ResourceErrors,
+			"setup: the failure must be reported while the resource is live")
 
 		require.NoError(t, td.MarkResourceReapedForTest(string(res.URI())))
 
@@ -922,7 +929,7 @@ func RunStatsResourceErrors_ReplaceDeleteSucceededCreateFailedNotCounted(t *test
 		td := newDS(t)
 		defer td.CleanUpFn() //nolint:errcheck
 
-		res := storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"))
+		res := storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"), "cmd-create-bucket-1")
 		tombstoneResource(t, td, res)
 
 		replace := outcomeCommand(
@@ -953,7 +960,7 @@ func RunStatsResourceErrors_FailedDeleteStillCounted(t *testing.T, newDS func(t 
 		td := newDS(t)
 		defer td.CleanUpFn() //nolint:errcheck
 
-		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"))
+		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"), "cmd-create-bucket-1")
 
 		failedDelete := outcomeCommand(
 			forma_command.CommandStateFailed,
@@ -983,7 +990,7 @@ func RunStatsResourceErrors_FailedUpdateOnLiveResourceCounted(t *testing.T, newD
 		td := newDS(t)
 		defer td.CleanUpFn() //nolint:errcheck
 
-		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"))
+		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"), "cmd-create-bucket-1")
 
 		created := outcomeCommand(
 			forma_command.CommandStateSuccess,
@@ -1022,7 +1029,7 @@ func RunStatsResourceErrors_UnmanagedResourceCounted(t *testing.T, newDS func(t 
 
 		unmanaged := liveResource(constants.UnmanagedStack, "ksuid-1", "bucket-1", "AWS::S3::Bucket")
 		unmanaged.Managed = false
-		storeLiveResource(t, td, unmanaged)
+		storeLiveResource(t, td, unmanaged, "cmd-discover-bucket-1")
 
 		failed := outcomeCommand(
 			forma_command.CommandStateFailed,
@@ -1051,7 +1058,7 @@ func RunStatsResourceErrors_TombstonedKsuidWithLaterSuccessNotCounted(t *testing
 		td := newDS(t)
 		defer td.CleanUpFn() //nolint:errcheck
 
-		res := storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"))
+		res := storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"), "cmd-create-bucket-1")
 
 		failed := outcomeCommand(
 			forma_command.CommandStateFailed,
@@ -1069,7 +1076,7 @@ func RunStatsResourceErrors_TombstonedKsuidWithLaterSuccessNotCounted(t *testing
 		// resource's current row.
 		recreated := liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket")
 		recreated.Properties = json.RawMessage(`{"foo":"v2"}`)
-		storeLiveResource(t, td, recreated)
+		storeLiveResource(t, td, recreated, "cmd-recreate-bucket-1")
 
 		succeeded := outcomeCommand(
 			forma_command.CommandStateSuccess,
@@ -1098,7 +1105,7 @@ func RunStatsResourceErrors_TombstonedKsuidWithNoLaterRowNotCounted(t *testing.T
 		td := newDS(t)
 		defer td.CleanUpFn() //nolint:errcheck
 
-		res := storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"))
+		res := storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket"), "cmd-create-bucket-1")
 		tombstoneResource(t, td, res)
 
 		failedRebind := outcomeCommand(
@@ -1127,7 +1134,7 @@ func RunStatsResourceErrors_NewKsuidForSameTripletClearsGauge(t *testing.T, newD
 		td := newDS(t)
 		defer td.CleanUpFn() //nolint:errcheck
 
-		retired := storeLiveResource(t, td, liveResource("stack-a", "ksuid-old", "bucket-1", "AWS::S3::Bucket"))
+		retired := storeLiveResource(t, td, liveResource("stack-a", "ksuid-old", "bucket-1", "AWS::S3::Bucket"), "cmd-create-bucket-1")
 
 		failed := outcomeCommand(
 			forma_command.CommandStateFailed,
@@ -1142,7 +1149,7 @@ func RunStatsResourceErrors_NewKsuidForSameTripletClearsGauge(t *testing.T, newD
 		tombstoneResource(t, td, retired)
 
 		// The same stack/label/type comes back under a fresh ksuid.
-		storeLiveResource(t, td, liveResource("stack-a", "ksuid-new", "bucket-1", "AWS::S3::Bucket"))
+		storeLiveResource(t, td, liveResource("stack-a", "ksuid-new", "bucket-1", "AWS::S3::Bucket"), "cmd-rebind-bucket-1")
 
 		succeeded := outcomeCommand(
 			forma_command.CommandStateSuccess,
@@ -1175,8 +1182,8 @@ func RunStatsResourceErrors_LabelledFromLiveRowOnCaseOnlyTypeChange(t *testing.T
 		const liveType = "GRAFANA::Core::Dashboard"
 		const recordedType = "Grafana::Core::Dashboard"
 
-		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "dashboard-1", liveType))
-		storeLiveResource(t, td, liveResource("stack-a", "ksuid-2", "dashboard-2", liveType))
+		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "dashboard-1", liveType), "cmd-create-dashboard-1")
+		storeLiveResource(t, td, liveResource("stack-a", "ksuid-2", "dashboard-2", liveType), "cmd-create-dashboard-2")
 
 		failed := outcomeCommand(
 			forma_command.CommandStateFailed,
@@ -1237,6 +1244,99 @@ func RunStatsResourceErrors_OneKsuidUnderTwoLiveUrisCountedOnce(t *testing.T, ne
 	})
 }
 
+// RunStatsResourceErrors_OneKsuidUnderTwoLiveUrisAtSameVersionCountedOnce
+// verifies the collapse to one row per ksuid happens even when the versions of
+// its live rows are equal. Selecting the greatest version alone leaves both
+// rows of a tie standing and reports the resource twice; the uri tiebreak is
+// what reduces them to one. The case asserts the resource is reported once
+// under one of the two live rows' types, not which of them wins, so it holds
+// whichever way the tiebreak is ordered.
+func RunStatsResourceErrors_OneKsuidUnderTwoLiveUrisAtSameVersionCountedOnce(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("StatsResourceErrors_OneKsuidUnderTwoLiveUrisAtSameVersionCountedOnce", func(t *testing.T) {
+		td := newDS(t)
+		defer td.CleanUpFn() //nolint:errcheck
+
+		if td.RawInsertResourceRow == nil {
+			t.Skip("backend does not expose RawInsertResourceRow")
+		}
+
+		// Two live rows for one ksuid under different uris and different types,
+		// carrying the same version so recency cannot separate them.
+		const sameVersion = "AAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+		require.NoError(t, td.RawInsertResourceRow(
+			"formae://ksuid-1#", sameVersion, "ksuid-1",
+			"AWS::SQS::Queue", "default-target", string(types.OperationCreate)))
+		require.NoError(t, td.RawInsertResourceRow(
+			"formae://ksuid-1-alias#", sameVersion, "ksuid-1",
+			"AWS::SNS::Topic", "default-target", string(types.OperationCreate)))
+
+		failed := outcomeCommand(
+			forma_command.CommandStateFailed,
+			-5*time.Minute,
+			[]resource_update.ResourceUpdate{
+				outcomeUpdate("stack-a", "ksuid-1", "thing-1", "AWS::S3::Bucket",
+					types.OperationUpdate, resource_update.ResourceUpdateStateFailed, -5*time.Minute),
+			},
+		)
+		assert.NoError(t, td.StoreFormaCommand(failed, failed.ID))
+
+		s, err := td.Stats()
+		assert.NoError(t, err)
+
+		reported := 0
+		for resourceType, count := range s.ResourceErrors {
+			reported += count
+			assert.Contains(t, []string{"AWS::SQS::Queue", "AWS::SNS::Topic"}, resourceType,
+				"the surviving row labels the count, whichever side of the tie survives")
+		}
+		assert.Len(t, s.ResourceErrors, 1,
+			"one erroring resource lands under exactly one type")
+		assert.Equal(t, 1, reported,
+			"tied versions must still collapse to one row, not report the resource twice")
+	})
+}
+
+// RunStatsResourceErrors_EmptyTypeNotBackfilledFromOlderLiveRow verifies a
+// typeless row is dropped after the collapse to one row per ksuid, not before
+// it. A resource whose current row carries no type and whose older row carries
+// a real one must not be reported under the older row's type: excluding
+// typeless rows up front would promote the older row and report the resource
+// under a type it no longer has.
+func RunStatsResourceErrors_EmptyTypeNotBackfilledFromOlderLiveRow(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("StatsResourceErrors_EmptyTypeNotBackfilledFromOlderLiveRow", func(t *testing.T) {
+		td := newDS(t)
+		defer td.CleanUpFn() //nolint:errcheck
+
+		if td.RawInsertResourceRow == nil {
+			t.Skip("backend does not expose RawInsertResourceRow")
+		}
+
+		// Two live rows for one ksuid: the lesser version carries a real type,
+		// the greatest version carries none.
+		require.NoError(t, td.RawInsertResourceRow(
+			"formae://ksuid-1#", "AAAAAAAAAAAAAAAAAAAAAAAAAAAA", "ksuid-1",
+			"AWS::S3::Bucket", "default-target", string(types.OperationCreate)))
+		require.NoError(t, td.RawInsertResourceRow(
+			"formae://ksuid-1-alias#", "BBBBBBBBBBBBBBBBBBBBBBBBBBBB", "ksuid-1",
+			"", "default-target", string(types.OperationCreate)))
+
+		failed := outcomeCommand(
+			forma_command.CommandStateFailed,
+			-5*time.Minute,
+			[]resource_update.ResourceUpdate{
+				outcomeUpdate("stack-a", "ksuid-1", "thing-1", "AWS::S3::Bucket",
+					types.OperationUpdate, resource_update.ResourceUpdateStateFailed, -5*time.Minute),
+			},
+		)
+		assert.NoError(t, td.StoreFormaCommand(failed, failed.ID))
+
+		s, err := td.Stats()
+		assert.NoError(t, err)
+		assert.Empty(t, s.ResourceErrors,
+			"a ksuid whose current row is typeless must not be reported under an older row's type")
+	})
+}
+
 // RunStatsResourceErrors_TypeComesFromLiveResourceRow verifies the reported
 // type is the live inventory row's type, not the type stored on the failing
 // update. The two disagree whenever a resource's type was rewritten after the
@@ -1246,7 +1346,7 @@ func RunStatsResourceErrors_TypeComesFromLiveResourceRow(t *testing.T, newDS fun
 		td := newDS(t)
 		defer td.CleanUpFn() //nolint:errcheck
 
-		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "thing-1", "AWS::SQS::Queue"))
+		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "thing-1", "AWS::SQS::Queue"), "cmd-create-thing-1")
 
 		failed := outcomeCommand(
 			forma_command.CommandStateFailed,
@@ -1273,7 +1373,7 @@ func RunStatsResourceErrors_LiveResourceWithEmptyTypeNotCounted(t *testing.T, ne
 		td := newDS(t)
 		defer td.CleanUpFn() //nolint:errcheck
 
-		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "thing-1", ""))
+		storeLiveResource(t, td, liveResource("stack-a", "ksuid-1", "thing-1", ""), "cmd-create-thing-1")
 
 		failed := outcomeCommand(
 			forma_command.CommandStateFailed,
@@ -1308,15 +1408,15 @@ func RunStatsResourceErrors_ErrorsNeverExceedLiveResourcesOfThatType(t *testing.
 		defer td.CleanUpFn() //nolint:errcheck
 
 		// Three live buckets, one of which is failing.
-		storeLiveResource(t, td, liveResource("stack-a", "ksuid-b1", "bucket-1", "AWS::S3::Bucket"))
-		storeLiveResource(t, td, liveResource("stack-a", "ksuid-b2", "bucket-2", "AWS::S3::Bucket"))
-		storeLiveResource(t, td, liveResource("stack-a", "ksuid-b3", "bucket-3", "AWS::S3::Bucket"))
+		storeLiveResource(t, td, liveResource("stack-a", "ksuid-b1", "bucket-1", "AWS::S3::Bucket"), "cmd-create-bucket-1")
+		storeLiveResource(t, td, liveResource("stack-a", "ksuid-b2", "bucket-2", "AWS::S3::Bucket"), "cmd-create-bucket-2")
+		storeLiveResource(t, td, liveResource("stack-a", "ksuid-b3", "bucket-3", "AWS::S3::Bucket"), "cmd-create-bucket-3")
 
 		// One live, healthy queue — and two queues that were deleted while
 		// failing.
-		storeLiveResource(t, td, liveResource("stack-a", "ksuid-q1", "queue-1", "AWS::SQS::Queue"))
-		gone1 := storeLiveResource(t, td, liveResource("stack-a", "ksuid-q2", "queue-2", "AWS::SQS::Queue"))
-		gone2 := storeLiveResource(t, td, liveResource("stack-a", "ksuid-q3", "queue-3", "AWS::SQS::Queue"))
+		storeLiveResource(t, td, liveResource("stack-a", "ksuid-q1", "queue-1", "AWS::SQS::Queue"), "cmd-create-queue-1")
+		gone1 := storeLiveResource(t, td, liveResource("stack-a", "ksuid-q2", "queue-2", "AWS::SQS::Queue"), "cmd-create-queue-2")
+		gone2 := storeLiveResource(t, td, liveResource("stack-a", "ksuid-q3", "queue-3", "AWS::SQS::Queue"), "cmd-create-queue-3")
 
 		history := outcomeCommand(
 			forma_command.CommandStateFailed,

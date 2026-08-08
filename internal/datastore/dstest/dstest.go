@@ -181,6 +181,8 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunStatsResourceErrors_NewKsuidForSameTripletClearsGauge(t, newDS)
 	RunStatsResourceErrors_LabelledFromLiveRowOnCaseOnlyTypeChange(t, newDS)
 	RunStatsResourceErrors_OneKsuidUnderTwoLiveUrisCountedOnce(t, newDS)
+	RunStatsResourceErrors_OneKsuidUnderTwoLiveUrisAtSameVersionCountedOnce(t, newDS)
+	RunStatsResourceErrors_EmptyTypeNotBackfilledFromOlderLiveRow(t, newDS)
 	RunStatsResourceErrors_TypeComesFromLiveResourceRow(t, newDS)
 	RunStatsResourceErrors_LiveResourceWithEmptyTypeNotCounted(t, newDS)
 	RunStatsResourceErrors_ErrorsNeverExceedLiveResourcesOfThatType(t, newDS)
