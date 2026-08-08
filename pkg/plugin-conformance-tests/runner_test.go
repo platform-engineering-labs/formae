@@ -565,6 +565,65 @@ func TestCompareOpaqueValue_NoDigestAccepted(t *testing.T) {
 	}
 }
 
+func TestContainsOpaqueValue(t *testing.T) {
+	tests := []struct {
+		name     string
+		value    any
+		expected bool
+	}{
+		{
+			name:     "no opaque values",
+			value:    map[string]any{"Name": "my-bucket", "Tags": map[string]any{"env": "test"}},
+			expected: false,
+		},
+		{
+			name:     "envelope at the top level",
+			value:    map[string]any{"$visibility": pkgmodel.VisibilityOpaque, "$hashed": true, "$value": "abc123"},
+			expected: true,
+		},
+		{
+			name: "envelope nested in a map",
+			value: map[string]any{
+				"Name": "my-db",
+				"Credentials": map[string]any{
+					"MasterUserPassword": map[string]any{"$visibility": pkgmodel.VisibilityOpaque, "$hashed": true, "$value": "abc123"},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "envelope nested inside an array",
+			value: map[string]any{
+				"Receivers": []any{
+					map[string]any{"Type": "webhook"},
+					map[string]any{"Token": map[string]any{"$hashed": true, "$value": "abc123"}},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "envelope with $visibility only",
+			value: map[string]any{
+				"Secret": map[string]any{"$visibility": pkgmodel.VisibilityOpaque},
+			},
+			expected: true,
+		},
+		{
+			name:     "resolvable is not opaque",
+			value:    map[string]any{"VpcId": map[string]any{"$ref": "vpc", "$type": "AWS::EC2::VPC"}},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := containsOpaqueValue(tt.value); got != tt.expected {
+				t.Errorf("containsOpaqueValue() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
 // recordingReporter captures errors without failing the test (for negative cases).
 type recordingReporter struct{ errors int }
 

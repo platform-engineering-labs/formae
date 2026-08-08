@@ -464,6 +464,29 @@ func isOpaqueValue(value any) bool {
 	return ok && hashed
 }
 
+// containsOpaqueValue reports whether an opaque secret envelope appears anywhere
+// in value, walking nested maps and arrays.
+func containsOpaqueValue(value any) bool {
+	if isOpaqueValue(value) {
+		return true
+	}
+	switch v := value.(type) {
+	case map[string]any:
+		for _, elem := range v {
+			if containsOpaqueValue(elem) {
+				return true
+			}
+		}
+	case []any:
+		for _, elem := range v {
+			if containsOpaqueValue(elem) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // compareOpaqueValue validates an actual opaque secret value against the authored
 // expected value. Because formae hashes secret values at rest (unsalted SHA-256)
 // and cannot recover the plaintext, we never compare plaintext directly. Instead:
