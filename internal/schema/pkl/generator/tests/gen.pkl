@@ -611,6 +611,110 @@ local class TextThenNestedScalarUnionResource extends formae.Resource {
     setting: String|(Int|Boolean)
 }
 
+/// A union of two scalars that text belongs to neither of, so every member has
+/// a reason to report, in both member orders.
+@formae.ResourceHint
+local class IntThenBoolResource extends formae.Resource {
+    type = "FakePlugin::Union::IntThenBool"
+
+    @formae.FieldHint
+    setting: Int|Boolean
+}
+
+@formae.ResourceHint
+local class BoolThenIntResource extends formae.Resource {
+    type = "FakePlugin::Union::BoolThenInt"
+
+    @formae.FieldHint
+    setting: Boolean|Int
+}
+
+/// A union whose two members are the same type under two names, so they reject
+/// a value for the same reason.
+@formae.ResourceHint
+local class IntThenAliasedIntResource extends formae.Resource {
+    type = "FakePlugin::Union::IntThenAliasedInt"
+
+    @formae.FieldHint
+    setting: Int|Year
+}
+
+/// Every scalar field type whose handler reads its own type out of text.
+@formae.ResourceHint
+local class ScalarFieldsResource extends formae.Resource {
+    type = "FakePlugin::Scalar::Fields"
+
+    @formae.FieldHint
+    count: Int?
+
+    @formae.FieldHint
+    ratio: Float?
+
+    @formae.FieldHint
+    amount: Number?
+
+    @formae.FieldHint
+    enabled: Boolean?
+
+    @formae.FieldHint
+    timeout: Duration?
+
+    @formae.FieldHint
+    capacity: DataSize?
+}
+
+/// A field a schema pins to one exact text.
+@formae.ResourceHint
+local class LiteralFieldResource extends formae.Resource {
+    type = "FakePlugin::Scalar::Literal"
+
+    @formae.FieldHint
+    setting: "2026"
+}
+
+/// A field whose declared class no handler converts to.
+@formae.ResourceHint
+local class UnsupportedFieldResource extends formae.Resource {
+    type = "FakePlugin::Scalar::Unsupported"
+
+    @formae.FieldHint
+    span: IntSeq?
+}
+
+/// Unions of unions, so that a member's reason is itself a union's reasons and
+/// the message grows with every level of nesting.
+local typealias ScalarsA = Int|Boolean|Duration
+local typealias ScalarsB = DataSize|Float|Number
+local typealias ScalarsC = ScalarsA|ScalarsB
+local typealias ScalarsD = ScalarsC|ScalarsA
+local typealias ScalarsE = ScalarsD|ScalarsB
+
+@formae.ResourceHint
+local class NestedUnionResource extends formae.Resource {
+    type = "FakePlugin::Union::Nested"
+
+    @formae.FieldHint
+    setting: ScalarsC|ScalarsA|ScalarsB
+}
+
+@formae.ResourceHint
+local class DeeperUnionResource extends formae.Resource {
+    type = "FakePlugin::Union::Deeper"
+
+    @formae.FieldHint
+    setting: ScalarsE|ScalarsD|ScalarsC
+}
+
+/// More members than a message reports, each rejecting a value for a reason of
+/// its own.
+@formae.ResourceHint
+local class ManyMemberUnionResource extends formae.Resource {
+    type = "FakePlugin::Union::ManyMember"
+
+    @formae.FieldHint
+    setting: Int|Boolean|Float|Number|Duration|DataSize|"a"|"b"|"c"|"d"
+}
+
 // Test data
 local simpleProperties: Dynamic = new Dynamic {
    x = 42
@@ -762,6 +866,22 @@ local function convertedSetting(res: Class, stored: Any): Any =
     }))
         if (result is gen.GenerationFailure) throw(gen.failureMessage(result))
         else (result as Typed).getPropertyOrNull("setting")
+
+/// A value distinctive enough that finding it in a diagnostic can only mean the
+/// diagnostic quoted the value it was given. It parses as none of the scalar
+/// types and equals none of the string literals any test class declares.
+local sentinel = "s3cr3t-sentinel-19f4c2"
+
+/// The diagnostic a resource's conversion yields for `properties`.
+local function failureFor(res: Class, properties: Dynamic): String =
+    gen.failureMessage(gen.attemptApply(res, properties) as gen.GenerationFailure)
+
+/// The diagnostic a `setting` field yields for a value it cannot convert.
+local function settingFailure(res: Class): String =
+    failureFor(res, new Dynamic {
+        setting = sentinel
+        label = "scalar"
+    })
 
 examples {
     ["Apply simple class"] {
@@ -1680,6 +1800,94 @@ facts {
         }))
         result is gen.GenerationFailure &&
         (result as gen.GenerationFailure).message.contains("Expected \"Listing|List|Dynamic\"")
+    }
+
+    // --- A diagnostic names types, never the value it was given ---
+
+    ["A union no member accepts names every member, its reason and the value's type"] {
+        settingFailure(IntThenBoolResource) ==
+            "setting: No member of this union accepted a String value. "
+            + "Int: Expected \"Int\" but got \"String that cannot be parsed as Int\"; "
+            + "Boolean: Expected \"Boolean\" but got \"String that cannot be parsed as Boolean\"" &&
+        !settingFailure(IntThenBoolResource).contains(sentinel)
+    }
+
+    ["A union reports its members in the order the schema declares them"] {
+        settingFailure(BoolThenIntResource) ==
+            "setting: No member of this union accepted a String value. "
+            + "Boolean: Expected \"Boolean\" but got \"String that cannot be parsed as Boolean\"; "
+            + "Int: Expected \"Int\" but got \"String that cannot be parsed as Int\""
+    }
+
+    ["Members that reject a value for the same reason are reported once, together"] {
+        settingFailure(IntThenAliasedIntResource) ==
+            "setting: No member of this union accepted a String value. "
+            + "Int, Year: Expected \"Int\" but got \"String that cannot be parsed as Int\""
+    }
+
+    ["A union failure names the class of the value and locates the member reasons"] {
+        failureFor(IntThenStrResource, unmatchableHolderProperties) ==
+            "holder: No member of this union accepted a Dynamic value. "
+            + "IntHolder: n: Expected \"Int\" but got \"Listing\"; "
+            + "StrHolder: n: Expected \"String\" but got \"Listing\""
+    }
+
+    ["A union of unions keeps its failure bounded"] {
+        // Every member's reason is itself a union's reasons, so without a bound
+        // the message grows with every level of nesting.
+        settingFailure(NestedUnionResource).length < 600 &&
+        settingFailure(DeeperUnionResource).length <= settingFailure(NestedUnionResource).length &&
+        settingFailure(NestedUnionResource).startsWith(
+            "setting: No member of this union accepted a String value. ") &&
+        !settingFailure(NestedUnionResource).contains(sentinel)
+    }
+
+    ["A union with more members than a message reports says how many it left out"] {
+        // Ten members reject the value for ten different reasons.
+        settingFailure(ManyMemberUnionResource).endsWith("; and 2 more") &&
+        settingFailure(ManyMemberUnionResource).contains("Int: ") &&
+        settingFailure(ManyMemberUnionResource).contains("\"b\": ") &&
+        !settingFailure(ManyMemberUnionResource).contains("\"d\": ")
+    }
+
+    ["A union member rejected by a deferred check reports it without the value it carried"] {
+        // PKL's own diagnostic for a violated constraint quotes the value that
+        // violated it, and that diagnostic is what the read-ahead catches.
+        !failureFor(XorThenStrResource, new Dynamic {
+            step = new Dynamic {
+                run = sentinel
+                uses = "actions/checkout@v4"
+            }
+            label = "step"
+        }).contains(sentinel)
+    }
+
+    ["A scalar handler names the type it could not parse, never the text it was given"] {
+        let (messages = List(
+            failureFor(ScalarFieldsResource, new Dynamic { count = sentinel; label = "s" }),
+            failureFor(ScalarFieldsResource, new Dynamic { ratio = sentinel; label = "s" }),
+            failureFor(ScalarFieldsResource, new Dynamic { amount = sentinel; label = "s" }),
+            failureFor(ScalarFieldsResource, new Dynamic { enabled = sentinel; label = "s" }),
+            failureFor(ScalarFieldsResource, new Dynamic { timeout = sentinel; label = "s" }),
+            failureFor(ScalarFieldsResource, new Dynamic { capacity = sentinel; label = "s" })
+        ))
+        messages.every((message) -> message.contains("cannot be parsed as")) &&
+        messages.every((message) -> !message.contains(sentinel))
+    }
+
+    ["A field pinned to one text reports a different text without quoting it"] {
+        settingFailure(LiteralFieldResource) ==
+            "setting: Expected \"2026\" but got \"a different String\""
+    }
+
+    ["A field whose class no handler converts to names the value's type, not the value"] {
+        let (message = failureFor(UnsupportedFieldResource, new Dynamic {
+            span = sentinel
+            label = "unsupported"
+        }))
+        message.contains("IntSeq") &&
+        message.contains("String") &&
+        !message.contains(sentinel)
     }
 
 }

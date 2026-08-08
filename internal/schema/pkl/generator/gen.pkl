@@ -57,6 +57,17 @@ function failureMessage(failure: GenerationFailure): String =
 
 const importPlaceholder = "_import.placeholder_"
 
+/// Names the type of a value, for a diagnostic to report it by.
+///
+/// Failure messages name types, never values: an extracted value can be a
+/// secret, and a message reaches an operator's terminal, a build log and every
+/// report either is pasted into.
+local function typeNameOf(value: Any): String = value.getClass().simpleName
+
+/// Reports a value that does not fit `expected`.
+///
+/// `actual` describes what arrived — its type, or the way its type did not fit
+/// — and never the value itself.
 function Unexpected(expected: String, actual: String): GenerationFailure =
   Fail(#"Expected "\#(expected)" but got "\#(actual)""#)
 
@@ -67,7 +78,7 @@ hidden classHandlers: Mapping<Class, (List<reflect.Type>, Any) -> Any|Generation
       // Try to parse string as integer
       let (parsed = value.toIntOrNull())
         if (parsed != null) parsed
-        else Unexpected("Int", "String('\(value)') that cannot be parsed as Int")
+        else Unexpected("Int", "String that cannot be parsed as Int")
     else Unexpected("Int", value.getClass().simpleName)
 
   [String] = (_, value) ->
@@ -84,7 +95,7 @@ hidden classHandlers: Mapping<Class, (List<reflect.Type>, Any) -> Any|Generation
     else if (value is String)
       if (value == "true") true
       else if (value == "false") false
-      else Unexpected("Boolean", "String('\(value)') that cannot be parsed as Boolean")
+      else Unexpected("Boolean", "String that cannot be parsed as Boolean")
     else Unexpected("Boolean", value.getClass().simpleName)
 
   [Listing] = (typeArguments, value) ->
@@ -105,7 +116,7 @@ hidden classHandlers: Mapping<Class, (List<reflect.Type>, Any) -> Any|Generation
     else if (value is String)
       let (parsed = value.toFloatOrNull())
         if (parsed != null) parsed
-        else Unexpected("Float", "String('\(value)') that cannot be parsed as Float")
+        else Unexpected("Float", "String that cannot be parsed as Float")
     else Unexpected("Float", value.getClass().simpleName)
 
   [Number] = (_, value) ->
@@ -113,7 +124,7 @@ hidden classHandlers: Mapping<Class, (List<reflect.Type>, Any) -> Any|Generation
     else if (value is String)
       let (parsed = value.toFloatOrNull())
         if (parsed != null) parsed
-        else Unexpected("Number", "String('\(value)') that cannot be parsed as Number")
+        else Unexpected("Number", "String that cannot be parsed as Number")
     else Unexpected("Number", value.getClass().simpleName)
 
   [Duration] = (_, value) ->
@@ -124,7 +135,7 @@ hidden classHandlers: Mapping<Class, (List<reflect.Type>, Any) -> Any|Generation
     else if (value is String)
       let (parsed = value.toIntOrNull())
         if (parsed != null) parsed.toDuration("s")
-        else Unexpected("Duration|Int", "String('\(value)') that cannot be parsed as Duration")
+        else Unexpected("Duration|Int", "String that cannot be parsed as Duration")
     else
       Unexpected("Duration|Int|String", value.getClass().simpleName)
 
@@ -136,7 +147,7 @@ hidden classHandlers: Mapping<Class, (List<reflect.Type>, Any) -> Any|Generation
     else if (value is String)
       let (parsed = value.toIntOrNull())
         if (parsed != null) parsed.toDataSize("b")
-        else Unexpected("DataSize|Int", "String('\(value)') that cannot be parsed as DataSize")
+        else Unexpected("DataSize|Int", "String that cannot be parsed as DataSize")
     else
       Unexpected("DataSize|Int|String", value.getClass().simpleName)
 
@@ -385,16 +396,81 @@ local function exactMemberOf(members: List<reflect.Type>, value: Any): reflect.T
   if (value == null) null
   else members.findOrNull((member) -> isExactly(member, value))
 
+/// The label a union member is reported under: the member as the schema
+/// declares it, built from the declaration alone so that nothing of the value
+/// being converted can reach it.
+local function typeLabel(type: reflect.Type): String =
+  if (type is reflect.NullableType)
+    typeLabel((type as reflect.NullableType).member) + "?"
+  else if (type is reflect.StringLiteralType)
+    #""\#((type as reflect.StringLiteralType).value)""#
+  else if (type is reflect.DeclaredType)
+    let (declared = type as reflect.DeclaredType)
+      if (declared.typeArguments.isEmpty)
+        declared.referent.name
+      else
+        declared.referent.name + "<"
+          + declared.typeArguments.map((argument) -> typeLabel(argument)).join(", ") + ">"
+  else if (type is reflect.UnionType)
+    "(" + (type as reflect.UnionType).members.map((member) -> typeLabel(member)).join("|") + ")"
+  else
+    type.getClass().simpleName
+
+/// How much of a union's failure its message carries. A member can itself be a
+/// union, so both a member's label and its reason nest: without these bounds a
+/// few levels of nesting produce a message no reader can use and no log wants.
+local maxReportedReasons: Int = 8
+local maxLabelLength: Int = 60
+local maxReasonLength: Int = 160
+
+/// Shortens `text` to `limit` characters, marking where it was shortened.
+local function bounded(text: String, limit: Int): String =
+  if (text.length <= limit) text else text.take(limit) + "..."
+
+/// Renders why no member of a union accepted `value`: the type of the value,
+/// then each distinct reason with the members that gave it, in the order the
+/// schema declares them.
+///
+/// Members that rejected the value for the same reason are reported once,
+/// together — a union of a type and its aliases would otherwise repeat one
+/// reason for every name the type is declared under.
+local function unionFailureMessage(reasons: List<Pair<String, String>>, value: Any): String =
+  let (grouped = reasons.map((reason) -> reason.second).distinct.map((reason) ->
+      bounded(reasons.filter((r) -> r.second == reason).map((r) -> r.first).join(", "), maxLabelLength)
+        + ": " + bounded(reason, maxReasonLength)
+    ))
+  let (reported = grouped.take(maxReportedReasons))
+  let (omitted = grouped.length - reported.length)
+    "No member of this union accepted a \(typeNameOf(value)) value. "
+      + reported.join("; ")
+      + (if (omitted == 0) "" else "; and \(omitted) more")
+
+/// One pass of union selection: either the value a member converted, or the
+/// reason each member tried so far gave for rejecting it.
+local class UnionSelection {
+  /// Each member's label paired with its reason, in declaration order, and
+  /// `null` once a member has converted the value.
+  reasons: List<Pair<String, String>>?
+
+  /// What that member converted the value to.
+  converted: Any
+}
+
 /// Converts `value` as one member of a union, reporting an error the conversion
 /// defers as a failure value rather than leaving it to surface while the forma
 /// is rendered.
+///
+/// PKL's own diagnostic for a deferred check quotes the value that failed it,
+/// so none of that diagnostic is carried into the failure: failure messages
+/// name types, never values.
 local function attemptMember(type: reflect.Type, value: Any): Any|GenerationFailure =
   let (attempt = applyType(type, value))
     if (attempt is GenerationFailure)
       attempt
+    else if (deferredFailure(attempt) == null)
+      attempt
     else
-      let (deferred = deferredFailure(attempt))
-        if (deferred == null) attempt else Fail(deferred)
+      Fail("Converted \(typeLabel(type)) does not satisfy its declared property types or constraints")
 
 hidden reflectTypeHandlers: Mapping<Class, (reflect.Type, Any) -> Any|GenerationFailure> = new Mapping {
   [reflect.NullableType] = (type, value) ->
@@ -416,9 +492,11 @@ hidden reflectTypeHandlers: Mapping<Class, (reflect.Type, Any) -> Any|Generation
           if (value == expected)
             value
           else
-            Unexpected(expected, value)
+            // The literal a schema declares is schema, so it is named; the text
+            // that arrived instead is the value, so only its type is.
+            Unexpected(expected, "a different String")
         else
-          Unexpected(expected, value.getClass().simpleName)
+          Unexpected(expected, typeNameOf(value))
 
    [reflect.UnionType] = (type, value) ->
     let (members = (type as reflect.UnionType).members)
@@ -440,18 +518,28 @@ hidden reflectTypeHandlers: Mapping<Class, (reflect.Type, Any) -> Any|Generation
           if (exactMember != null)
             attemptMember(exactMember, value)
           else
-            members.fold(
-              Fail("No member of union type matched value '\(value)' \(type)"),
-              (acc, _type) ->
-                if (acc is GenerationFailure)
+            // Each member's reason is kept as it is tried, so that a value no
+            // member accepts is reported with every member's account of why.
+            let (selection = members.fold(
+              new UnionSelection { reasons = List(); converted = null },
+              (acc: UnionSelection, _type) ->
+                if (acc.reasons == null)
+                  acc
+                else
                   // A member counts as matched only once its deferred checks
                   // have run: a converted object that raises the moment
                   // anything reads it does not belong to this member.
                   let (attempt = attemptMember(_type, value))
-                    if (attempt is GenerationFailure) acc else attempt
-                else
-                  acc
-            )
+                    if (attempt is GenerationFailure)
+                      new UnionSelection {
+                        reasons = acc.reasons.add(Pair(typeLabel(_type), failureMessage(attempt)))
+                        converted = null
+                      }
+                    else
+                      new UnionSelection { reasons = null; converted = attempt }
+            ))
+              if (selection.reasons == null) selection.converted
+              else Fail(unionFailureMessage(selection.reasons, value))
 
     [reflect.UnknownType] = (_, value) ->
       value
@@ -480,7 +568,9 @@ local function applyClass(type: reflect.Class, typeArguments: List<reflect.Type>
   else if (type is Dynamic)
     Fail("type is Dynamic")
   else
-    Fail("applyClass - Unsupported class: \(clazz.simpleName) for type: \(type) and value: \(value)")
+    // The reflected type is not interpolated either: it renders its whole
+    // graph, which reaches the schema's doc comments and every superclass.
+    Fail("applyClass - Unsupported class: \(clazz.simpleName) for a \(typeNameOf(value)) value")
 
 
 local function applyTyped(type: reflect.Class, value: Any): Typed|GenerationFailure|Any =
