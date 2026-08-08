@@ -130,23 +130,68 @@ func (d *DatastoreMSSQL) Stats() (*stats.Stats, error) {
 		return nil, err
 	}
 
+	// Resources whose latest completed outcome is a failure, counted once per
+	// resource (ksuid). Only Failed and Success rows carry an outcome, so an
+	// in-flight, canceled or rejected row never clears a standing failure. The
+	// type filter sits outside the anti-join, so a later typeless success still
+	// supersedes an earlier failure.
+	//
+	// A failed row counts when no other completed row for the same resource
+	// outranks it: later modified_ts, then later command_id, then — on an exact
+	// tie — Failed ahead of Success, then lower operation. The outer row is
+	// always Failed, so the state tiebreak can only be lost to another Failed
+	// row, which is why that term collapses into the operation comparison. It
+	// is what keeps a replace whose delete and create sides both failed at the
+	// same instant from counting the one resource twice.
+	//
+	// modified_ts is nullable and the normalizing migration writes NULL for a
+	// migrated command that carried none, so rows without a timestamp exist.
+	// They are ordered as the oldest: a NULL cannot outrank anything, and any
+	// timestamped row outranks it. Leaving that to the bare comparisons would
+	// make them UNKNOWN, so nothing could ever supersede an untimestamped
+	// failure and every one of them would count separately.
+	//
+	// command_id is a KSUID, collated byte-wise so its ordering matches the
+	// other backends.
 	res.ResourceErrors = make(map[string]int)
 	if err := d.scanCountMap(ctx, `
-		SELECT JSON_VALUE(resource, '$.Type') AS resource_type, COUNT(*)
-		FROM resource_updates
-		WHERE state = @p1
-		AND resource IS NOT NULL
-		GROUP BY JSON_VALUE(resource, '$.Type')`, res.ResourceErrors, string(types.ResourceUpdateStateFailed),
+		SELECT resource_type, COUNT(*)
+		FROM (
+			SELECT JSON_VALUE(ru.resource, '$.Type') AS resource_type
+			FROM resource_updates ru
+			WHERE ru.state = @p1
+			  AND NOT EXISTS (
+			      SELECT 1
+			      FROM resource_updates s
+			      WHERE s.ksuid = ru.ksuid
+			        AND s.state IN (@p1, @p2)
+			        AND (
+			              (ru.modified_ts IS NULL AND s.modified_ts IS NOT NULL)
+			           OR s.modified_ts > ru.modified_ts
+			           OR ((s.modified_ts = ru.modified_ts
+			                OR (s.modified_ts IS NULL AND ru.modified_ts IS NULL))
+			               AND (
+			                     s.command_id COLLATE Latin1_General_BIN2 > ru.command_id COLLATE Latin1_General_BIN2
+			                  OR (s.command_id COLLATE Latin1_General_BIN2 = ru.command_id COLLATE Latin1_General_BIN2
+			                      AND s.state = @p1 AND s.operation < ru.operation)
+			               ))
+			        )
+			  )
+		) latest_failures
+		WHERE resource_type IS NOT NULL
+		  AND resource_type <> ''
+		GROUP BY resource_type`, res.ResourceErrors,
+		string(types.ResourceUpdateStateFailed), string(types.ResourceUpdateStateSuccess),
 	); err != nil {
 		return nil, err
 	}
-	delete(res.ResourceErrors, "")
 
 	return &res, nil
 }
 
 // scanCountMap runs a "SELECT k, COUNT(*) ... GROUP BY k" and fills dst.
-// NULL keys scan into "" (callers strip them when needed).
+// NULL keys scan into "", so queries must exclude NULL and empty keys
+// themselves rather than leaving an unlabelled entry in dst.
 func (d *DatastoreMSSQL) scanCountMap(ctx context.Context, query string, dst map[string]int, args ...any) error {
 	rows, err := d.conn.QueryContext(ctx, query, args...)
 	if err != nil {

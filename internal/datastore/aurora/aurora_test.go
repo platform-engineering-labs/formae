@@ -70,6 +70,9 @@ func TestDatastore(t *testing.T) {
 			SetPolicyDataForTest: func(label, policyData string) error {
 				return d.SetPolicyDataForTesting(label, policyData)
 			},
+			NullResourceUpdateModifiedTsForTest: func(ksuid string) error {
+				return d.NullResourceUpdateModifiedTsForTesting(ksuid)
+			},
 		}
 	})
 }

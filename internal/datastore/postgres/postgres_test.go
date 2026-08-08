@@ -419,6 +419,12 @@ func TestDatastore(t *testing.T) {
 				)
 				return err
 			},
+			NullResourceUpdateModifiedTsForTest: func(ksuid string) error {
+				_, err := d.Pool().Exec(context.Background(),
+					`UPDATE resource_updates SET modified_ts = NULL WHERE ksuid = $1`, ksuid,
+				)
+				return err
+			},
 		}
 	})
 }

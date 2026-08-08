@@ -126,6 +126,12 @@ func TestDatastore(t *testing.T) {
 				)
 				return err
 			},
+			NullResourceUpdateModifiedTsForTest: func(ksuid string) error {
+				_, err := conn.Exec(
+					`UPDATE resource_updates SET modified_ts = NULL WHERE ksuid = @p1`, ksuid,
+				)
+				return err
+			},
 			CleanUpFn: func() error {
 				ds.Close()
 				m, err := sql.Open("sqlserver", dstestMSSQLBase+"&database=master")

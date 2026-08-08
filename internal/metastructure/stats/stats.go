@@ -13,5 +13,9 @@ type Stats struct {
 	UnmanagedResources map[string]int `json:"UnmanagedResources"` // key: namespace
 	Targets            map[string]int `json:"Targets"`            // key: namespace
 	ResourceTypes      map[string]int `json:"ResourceTypes"`      // key: resource type (e.g., "AWS::S3::Bucket")
-	ResourceErrors     map[string]int `json:"ResourceErrors"`     // key: resource type
+	// ResourceErrors counts resources whose latest completed outcome was a
+	// failure, so a resource that later succeeds stops being counted. A
+	// retry that is still in flight does not clear the failure: only a
+	// completed outcome supersedes an earlier one.
+	ResourceErrors map[string]int `json:"ResourceErrors"` // key: resource type
 }
