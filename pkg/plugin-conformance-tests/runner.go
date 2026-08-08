@@ -1388,13 +1388,17 @@ func (rc *ResultCollector) verifyExtractReapply(
 		return false
 	}
 
+	// A command that was submitted may have created resources before it failed or
+	// timed out, so these paths clean up too — not just the identity anomalies below.
 	reapplyStatus, err := harness.PollStatus(reapplyCommandID, getOperationTimeout())
 	if err != nil {
 		rc.CRUDErrorf(t, idx, PhaseExtract, "Re-apply command should complete successfully: %v", err)
+		destroyExtractedForma(t, harness, extractFile)
 		return false
 	}
 	if reapplyStatus != "Success" {
 		rc.CRUDErrorf(t, idx, PhaseExtract, "Re-apply command should reach Success state, got: %s", reapplyStatus)
+		destroyExtractedForma(t, harness, extractFile)
 		return false
 	}
 
@@ -1444,12 +1448,12 @@ func (rc *ResultCollector) verifyExtractReapply(
 }
 
 // destroyExtractedForma makes a best-effort attempt to destroy whatever the
-// extracted forma names, so a re-apply that landed under an identity the fixture
-// does not name is not leaked. Runs inline rather than through the harness
-// cleanup registry, because the extract step removes the file's temp directory
-// before registered cleanups unwind. Errors are logged and ignored.
+// extracted forma names, so anything the re-apply created under an identity the
+// fixture does not name is not leaked. Runs inline rather than through the
+// harness cleanup registry, because the extract step removes the file's temp
+// directory before registered cleanups unwind. Errors are logged and ignored.
 func destroyExtractedForma(t *testing.T, harness reapplyHarness, extractFile string) {
-	t.Log("Identity anomaly after re-apply; destroying the extracted forma to avoid leaking a resource...")
+	t.Log("Re-apply did not complete cleanly; destroying the extracted forma to avoid leaking a resource...")
 	destroyCommandID, err := harness.Destroy(extractFile)
 	if err != nil {
 		t.Logf("Best-effort destroy of extracted forma failed: %v", err)

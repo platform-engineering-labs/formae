@@ -713,13 +713,13 @@ func TestVerifyExtractReapply(t *testing.T) {
 			name:          "poll returns an error",
 			harness:       &fakeReapplyHarness{applyCommandID: "cmd-1", pollErr: errors.New("timed out")},
 			expectedPass:  false,
-			expectedCalls: []string{"ApplyWithMode:patch", "PollStatus"},
+			expectedCalls: []string{"ApplyWithMode:patch", "PollStatus", "Destroy", "PollStatus"},
 		},
 		{
 			name:          "poll reaches a non-success terminal state",
 			harness:       &fakeReapplyHarness{applyCommandID: "cmd-1", pollStatus: "Failed"},
 			expectedPass:  false,
-			expectedCalls: []string{"ApplyWithMode:patch", "PollStatus"},
+			expectedCalls: []string{"ApplyWithMode:patch", "PollStatus", "Destroy", "PollStatus"},
 		},
 		{
 			name: "inventory returns an error",
