@@ -123,6 +123,10 @@ func TestMetastructure_Stats(t *testing.T) {
 
 		assert.Equal(t, 1, len(stats.ResourceTypes))
 
+		// The apply failed one of its two resources, but a failed create writes
+		// no inventory row, so there is nothing live to report an error against.
+		assert.Equal(t, map[string]int{}, stats.ResourceErrors)
+
 		_, err = m.DestroyForma(formaInitial, &config.FormaCommandConfig{}, "test-client-id2")
 
 		assert.NoError(t, err)
@@ -151,9 +155,9 @@ func TestMetastructure_Stats(t *testing.T) {
 
 		assert.Equal(t, 1, stats.Targets["FakeAWS"]) // plain targets (no $ref) survive destroy
 
-		// ResourceErrors are now keyed by resource type, not error message
-		assert.Equal(t, 1, len(stats.ResourceErrors))
-		assert.Contains(t, stats.ResourceErrors, "FakeAWS::S3::Bucket")
+		// The failed resource was destroyed along with the rest of the stack, so
+		// it is no longer in the live inventory and reports no error.
+		assert.Equal(t, map[string]int{}, stats.ResourceErrors)
 	})
 }
 

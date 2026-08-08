@@ -23,6 +23,15 @@ type TestDatastore struct {
 	// strings (e.g. byte-order vs case-insensitive comparison) use it.
 	// Backends that don't provide it leave it nil and the test t.Skip()s.
 	RawInsertResource func(uri, version, target, operation string) error
+	// RawInsertResourceRow writes a resources row directly with the exact
+	// (uri, version, ksuid, type, target, operation) provided, bypassing the
+	// Datastore's uri derivation and version generation. The uri is derived
+	// from the ksuid in Go and nothing in the schema enforces it — the primary
+	// key is (uri, version) and ksuid carries a non-unique index — so one ksuid
+	// can hold several simultaneously-live rows, a shape no public Datastore
+	// API produces. Backends that don't provide it leave it nil and the
+	// relevant tests t.Skip().
+	RawInsertResourceRow func(uri, version, ksuid, resourceType, target, operation string) error
 	// SetTargetHealthStateForTest forces the health_state column of the current
 	// (max-version) targets row for the given label to the supplied value.
 	// Used to set up guard conditions (e.g. 'reaped') that cannot be reached
@@ -141,6 +150,7 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunQueryTargetsVersioning(t, newDS)
 	RunReapedTargetsInvisibleToQuery(t, newDS)
 	RunStatsExcludesReapedTargets(t, newDS)
+	RunStatsNamespaces_TypelessLiveResourceReportedUnderEmptyNamespace(t, newDS)
 	RunStatsResourceErrors_Empty(t, newDS)
 	RunStatsResourceErrors_StillFailedCounted(t, newDS)
 	RunStatsResourceErrors_FailedThenSucceededNotCounted(t, newDS)
@@ -150,7 +160,6 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunStatsResourceErrors_CanceledDoesNotClear(t, newDS)
 	RunStatsResourceErrors_RejectedDoesNotClear(t, newDS)
 	RunStatsResourceErrors_LatestSuccessWithEmptyTypeClearsFailure(t, newDS)
-	RunStatsResourceErrors_LatestFailedWithMissingTypeNotCounted(t, newDS)
 	RunStatsResourceErrors_ReplaceDeleteFailedThenCreateSucceeds(t, newDS)
 	RunStatsResourceErrors_ReplaceDeleteSucceedsThenCreateFailed(t, newDS)
 	RunStatsResourceErrors_ReplaceSameTimestampFailedWins(t, newDS)
@@ -161,6 +170,24 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunStatsResourceErrors_LaterCommandWinsOnTimestampTie(t, newDS)
 	RunStatsResourceErrors_FailedDeleteCounted(t, newDS)
 	RunStatsResourceErrors_GroupedByType(t, newDS)
+	RunStatsResourceErrors_DeletedResourceNotCounted(t, newDS)
+	RunStatsResourceErrors_ReapedResourceNotCounted(t, newDS)
+	RunStatsResourceErrors_UntrackedKsuidNotCounted(t, newDS)
+	RunStatsResourceErrors_ReplaceDeleteSucceededCreateFailedNotCounted(t, newDS)
+	RunStatsResourceErrors_FailedDeleteStillCounted(t, newDS)
+	RunStatsResourceErrors_FailedUpdateOnLiveResourceCounted(t, newDS)
+	RunStatsResourceErrors_UnmanagedResourceCounted(t, newDS)
+	RunStatsResourceErrors_TombstonedKsuidWithLaterSuccessNotCounted(t, newDS)
+	RunStatsResourceErrors_TombstonedKsuidWithNoLaterRowNotCounted(t, newDS)
+	RunStatsResourceErrors_NewKsuidForSameTripletClearsGauge(t, newDS)
+	RunStatsResourceErrors_LabelledFromLiveRowOnCaseOnlyTypeChange(t, newDS)
+	RunStatsResourceErrors_OneKsuidUnderTwoLiveUrisCountedOnce(t, newDS)
+	RunStatsResourceErrors_OneKsuidUnderTwoLiveUrisAtSameVersionCountedOnce(t, newDS)
+	RunStatsResourceErrors_EmptyTypeNotBackfilledFromOlderLiveRow(t, newDS)
+	RunStatsResourceErrors_TypedCurrentRowCountedDespiteTypelessOlderRow(t, newDS)
+	RunStatsResourceErrors_TypeComesFromLiveResourceRow(t, newDS)
+	RunStatsResourceErrors_LiveResourceWithEmptyTypeNotCounted(t, newDS)
+	RunStatsResourceErrors_ErrorsNeverExceedLiveResourcesOfThatType(t, newDS)
 	RunCountResourcesInTarget(t, newDS)
 	RunCountResourcesInTargetUsesByteOrderForVersionComparison(t, newDS)
 	RunDeleteTargetSuccess(t, newDS)

@@ -65,9 +65,15 @@ func (d *DatastoreMSSQL) Stats() (*stats.Stats, error) {
 		return nil, err
 	}
 
+	// The namespace is the part of the type before the first '::'. The
+	// separator is appended to the searched value so that a type carrying none
+	// — including the empty type a resource can be stored with — still matches
+	// at a position that yields a non-negative length; LEFT rejects a negative
+	// one outright, which would fail the whole stats call rather than report
+	// such a row under the empty namespace as the other backends do.
 	res.ManagedResources = make(map[string]int)
 	if err := d.scanCountMap(ctx, fmt.Sprintf(`
-		SELECT SUBSTRING(type, 1, CHARINDEX('::', type) - 1) AS namespace, COUNT(*)
+		SELECT LEFT(type, CHARINDEX('::', type + '::') - 1) AS namespace, COUNT(*)
 		FROM resources r1
 		WHERE stack IS NOT NULL
 		AND stack != '%s'
@@ -77,7 +83,7 @@ func (d *DatastoreMSSQL) Stats() (*stats.Stats, error) {
 			WHERE r1.uri = r2.uri
 			AND r2.version COLLATE Latin1_General_BIN2 > r1.version COLLATE Latin1_General_BIN2
 		)
-		GROUP BY SUBSTRING(type, 1, CHARINDEX('::', type) - 1)`, constants.UnmanagedStack),
+		GROUP BY LEFT(type, CHARINDEX('::', type + '::') - 1)`, constants.UnmanagedStack),
 		res.ManagedResources, string(types.OperationDelete),
 	); err != nil {
 		return nil, err
@@ -85,7 +91,7 @@ func (d *DatastoreMSSQL) Stats() (*stats.Stats, error) {
 
 	res.UnmanagedResources = make(map[string]int)
 	if err := d.scanCountMap(ctx, fmt.Sprintf(`
-		SELECT SUBSTRING(type, 1, CHARINDEX('::', type) - 1) AS namespace, COUNT(*)
+		SELECT LEFT(type, CHARINDEX('::', type + '::') - 1) AS namespace, COUNT(*)
 		FROM resources r1
 		WHERE stack = '%s'
 		AND operation != @p1 AND operation != 'reaped'
@@ -94,7 +100,7 @@ func (d *DatastoreMSSQL) Stats() (*stats.Stats, error) {
 			WHERE r1.uri = r2.uri
 			AND r2.version COLLATE Latin1_General_BIN2 > r1.version COLLATE Latin1_General_BIN2
 		)
-		GROUP BY SUBSTRING(type, 1, CHARINDEX('::', type) - 1)`, constants.UnmanagedStack),
+		GROUP BY LEFT(type, CHARINDEX('::', type + '::') - 1)`, constants.UnmanagedStack),
 		res.UnmanagedResources, string(types.OperationDelete),
 	); err != nil {
 		return nil, err
@@ -130,11 +136,50 @@ func (d *DatastoreMSSQL) Stats() (*stats.Stats, error) {
 		return nil, err
 	}
 
-	// Resources whose latest completed outcome is a failure, counted once per
-	// resource (ksuid). Only Failed and Success rows carry an outcome, so an
-	// in-flight, canceled or rejected row never clears a standing failure. The
-	// type filter sits outside the anti-join, so a later typeless success still
-	// supersedes an earlier failure.
+	// Resources that are still in the live inventory and whose latest completed
+	// outcome is a failure, counted once per resource (ksuid) and grouped by the
+	// type the inventory currently records. Counting every failed row instead
+	// would accumulate for the lifetime of the datastore: each retry adds a row
+	// and a later success never removes one, so the count could only ever grow.
+	//
+	// The live relation is the same current-inventory shape the resource-type
+	// count above uses: the greatest version of each uri, with delete and reaped
+	// rows excluded. Joining the standing failures to it drops every ksuid the
+	// inventory no longer holds — deleted, reaped, or never created at all —
+	// which otherwise keep reporting an error for a resource that is gone.
+	//
+	// A ksuid can hold several live rows at once (a rename leaves the old uri
+	// live alongside the new one), so the live relation is collapsed to one row
+	// per ksuid: the row with the greatest version, ties broken on the greatest
+	// uri. Without that collapse a renamed resource is counted once per live uri.
+	//
+	// The label comes from resources.type rather than the type stored on the
+	// failing update, so a resource whose type was rewritten after the failure
+	// was recorded is reported under the type it has now. It also keeps the
+	// counts consistent with the resource-type gauge, which reads the same
+	// column, and costs an index probe instead of a JSON extraction over the
+	// stored resource blob.
+	//
+	// Only completed outcomes (Failed, Success) take part in the ordering.
+	// In-flight, canceled, rejected and unknown rows carry no verdict on
+	// whether the resource converged, so they must not displace — and thereby
+	// clear — a standing failure.
+	//
+	// The empty-type filter is applied at the counting stage, to the row the
+	// collapse already picked, and never inside the live relation: a resource
+	// whose current row carries no type has nothing to report it under, but
+	// filtering typeless rows out earlier would promote an older live row and
+	// report the resource under a type it no longer has. It is also what keeps
+	// scanCountMap from leaving an unlabelled entry in the map.
+	//
+	// Both "latest" rules are expressed as anti-joins rather than ranking
+	// windows: a row qualifies when no other row outranks it. A window has to
+	// materialise and sort every candidate — the whole failure history for the
+	// supersession rule, the whole resources table for the per-ksuid collapse —
+	// whether or not anything failed, while the anti-joins stay driven by the
+	// state index and stop at the first outranking row. The live relation is a
+	// common table expression, which SQL Server always expands in place, so both
+	// of its references stay part of that same driven plan.
 	//
 	// A failed row counts when no other completed row for the same resource
 	// outranks it: later modified_ts, then later command_id, then — on an exact
@@ -152,35 +197,53 @@ func (d *DatastoreMSSQL) Stats() (*stats.Stats, error) {
 	// failure and every one of them would count separately.
 	//
 	// command_id is a KSUID, collated byte-wise so its ordering matches the
-	// other backends.
+	// other backends; version and uri are compared the same way, so the collapse
+	// settles on the same live row everywhere.
 	res.ResourceErrors = make(map[string]int)
 	if err := d.scanCountMap(ctx, `
-		SELECT resource_type, COUNT(*)
-		FROM (
-			SELECT JSON_VALUE(ru.resource, '$.Type') AS resource_type
-			FROM resource_updates ru
-			WHERE ru.state = @p1
-			  AND NOT EXISTS (
-			      SELECT 1
-			      FROM resource_updates s
-			      WHERE s.ksuid = ru.ksuid
-			        AND s.state IN (@p1, @p2)
-			        AND (
-			              (ru.modified_ts IS NULL AND s.modified_ts IS NOT NULL)
-			           OR s.modified_ts > ru.modified_ts
-			           OR ((s.modified_ts = ru.modified_ts
-			                OR (s.modified_ts IS NULL AND ru.modified_ts IS NULL))
-			               AND (
-			                     s.command_id COLLATE Latin1_General_BIN2 > ru.command_id COLLATE Latin1_General_BIN2
-			                  OR (s.command_id COLLATE Latin1_General_BIN2 = ru.command_id COLLATE Latin1_General_BIN2
-			                      AND s.state = @p1 AND s.operation < ru.operation)
-			               ))
-			        )
-			  )
-		) latest_failures
-		WHERE resource_type IS NOT NULL
-		  AND resource_type <> ''
-		GROUP BY resource_type`, res.ResourceErrors,
+		WITH live AS (
+			SELECT r1.ksuid, r1.uri, r1.version, r1.type
+			FROM resources r1
+			WHERE r1.operation != @p1 AND r1.operation != 'reaped'
+			AND NOT EXISTS (
+				SELECT 1 FROM resources r2
+				WHERE r1.uri = r2.uri
+				AND r2.version COLLATE Latin1_General_BIN2 > r1.version COLLATE Latin1_General_BIN2
+			)
+		)
+		SELECT l.type, COUNT(*)
+		FROM resource_updates ru
+		JOIN live l ON l.ksuid = ru.ksuid
+		WHERE ru.state = @p2
+		  AND NOT EXISTS (
+		      SELECT 1
+		      FROM resource_updates s
+		      WHERE s.ksuid = ru.ksuid
+		        AND s.state IN (@p2, @p3)
+		        AND (
+		              (ru.modified_ts IS NULL AND s.modified_ts IS NOT NULL)
+		           OR s.modified_ts > ru.modified_ts
+		           OR ((s.modified_ts = ru.modified_ts
+		                OR (s.modified_ts IS NULL AND ru.modified_ts IS NULL))
+		               AND (
+		                     s.command_id COLLATE Latin1_General_BIN2 > ru.command_id COLLATE Latin1_General_BIN2
+		                  OR (s.command_id COLLATE Latin1_General_BIN2 = ru.command_id COLLATE Latin1_General_BIN2
+		                      AND s.state = @p2 AND s.operation < ru.operation)
+		               ))
+		        )
+		  )
+		  AND NOT EXISTS (
+		      SELECT 1
+		      FROM live o
+		      WHERE o.ksuid = l.ksuid
+		        AND (o.version COLLATE Latin1_General_BIN2 > l.version COLLATE Latin1_General_BIN2
+		             OR (o.version COLLATE Latin1_General_BIN2 = l.version COLLATE Latin1_General_BIN2
+		                 AND o.uri COLLATE Latin1_General_BIN2 > l.uri COLLATE Latin1_General_BIN2))
+		  )
+		  AND l.type IS NOT NULL
+		  AND l.type <> ''
+		GROUP BY l.type`, res.ResourceErrors,
+		string(types.OperationDelete),
 		string(types.ResourceUpdateStateFailed), string(types.ResourceUpdateStateSuccess),
 	); err != nil {
 		return nil, err

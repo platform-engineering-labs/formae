@@ -3775,12 +3775,55 @@ func (d DatastorePostgres) Stats() (*stats.Stats, error) {
 		res.ResourceTypes[resourceType] = count
 	}
 
-	// Count resource errors by resource type: resources whose latest completed
-	// outcome is a failure, counted once per resource (ksuid). Only Failed and
-	// Success rows carry an outcome, so an in-flight, canceled or rejected row
-	// never clears a standing failure. The type filter sits outside the
-	// anti-join, so a later typeless success still supersedes an earlier
-	// failure.
+	// Count resource errors by resource type: resources that are still in the
+	// live inventory and whose latest completed outcome is a failure, counted
+	// once per resource (ksuid) and grouped by the type the inventory currently
+	// records. Counting every failed row instead would accumulate for the
+	// lifetime of the datastore: each retry adds a row and a later success never
+	// removes one, so the count could only ever grow.
+	//
+	// The live relation is the same current-inventory shape the resource-type
+	// count above uses: the greatest version of each uri, with delete and reaped
+	// rows excluded. Joining the standing failures to it drops every ksuid the
+	// inventory no longer holds — deleted, reaped, or never created at all —
+	// which otherwise keep reporting an error for a resource that is gone.
+	//
+	// A ksuid can hold several live rows at once (a rename leaves the old uri
+	// live alongside the new one), so the live relation is collapsed to one row
+	// per ksuid: the row with the greatest version, ties broken on the greatest
+	// uri. Without that collapse a renamed resource is counted once per live uri.
+	//
+	// The label comes from resources.type rather than the type stored on the
+	// failing update, so a resource whose type was rewritten after the failure
+	// was recorded is reported under the type it has now. It also keeps the
+	// counts consistent with the resource-type gauge, which reads the same
+	// column, and costs an index probe instead of a JSON extraction over the
+	// stored resource blob.
+	//
+	// Only completed outcomes (Failed, Success) take part in the ordering.
+	// In-flight, canceled, rejected and unknown rows carry no verdict on
+	// whether the resource converged, so they must not displace — and thereby
+	// clear — a standing failure.
+	//
+	// The empty-type filter is applied at the counting stage, to the row the
+	// collapse already picked, and never inside the live relation: a resource
+	// whose current row carries no type has nothing to report it under, but
+	// filtering typeless rows out earlier would promote an older live row and
+	// report the resource under a type it no longer has. It also keeps rows that
+	// cannot scan into a string out of the result.
+	//
+	// Both "latest" rules are expressed as anti-joins rather than ranking
+	// windows: a row qualifies when no other row outranks it. A window has to
+	// materialise and sort every candidate — the whole failure history for the
+	// supersession rule, the whole resources table for the per-ksuid collapse —
+	// whether or not anything failed, while the anti-joins stay driven by the
+	// state index and stop at the first outranking row. The live relation is
+	// declared NOT MATERIALIZED for the same reason: PostgreSQL inlines a common
+	// table expression only when it is referenced exactly once, and this one is
+	// referenced twice, so left to the default it would be materialised — which
+	// scans and sorts the whole resources table however few resources failed.
+	// NOT MATERIALIZED is PostgreSQL 12 syntax, so this query sets the server
+	// version floor for this backend.
 	//
 	// A failed row counts when no other completed row for the same resource
 	// outranks it: later modified_ts, then later command_id, then — on an exact
@@ -3798,37 +3841,56 @@ func (d DatastorePostgres) Stats() (*stats.Stats, error) {
 	// failure and every one of them would count separately.
 	//
 	// command_id is a KSUID, collated byte-wise so its ordering matches the
-	// other backends.
+	// other backends; version and uri are compared the same way, so the collapse
+	// settles on the same live row everywhere.
 	res.ResourceErrors = make(map[string]int)
 	errorQuery := `
-	SELECT resource_type, COUNT(*)
-	FROM (
-		SELECT ru.resource::jsonb->>'Type' AS resource_type
-		FROM resource_updates ru
-		WHERE ru.state = $1
-		  AND NOT EXISTS (
-		      SELECT 1
-		      FROM resource_updates s
-		      WHERE s.ksuid = ru.ksuid
-		        AND s.state IN ($1, $2)
-		        AND (
-		              (ru.modified_ts IS NULL AND s.modified_ts IS NOT NULL)
-		           OR s.modified_ts > ru.modified_ts
-		           OR ((s.modified_ts = ru.modified_ts
-		                OR (s.modified_ts IS NULL AND ru.modified_ts IS NULL))
-		               AND (
-		                     s.command_id COLLATE "C" > ru.command_id COLLATE "C"
-		                  OR (s.command_id COLLATE "C" = ru.command_id COLLATE "C"
-		                      AND s.state = $1 AND s.operation < ru.operation)
-		               ))
-		        )
-		  )
-	) latest_failures
-	WHERE resource_type IS NOT NULL
-	  AND resource_type <> ''
-	GROUP BY resource_type
+	WITH live AS NOT MATERIALIZED (
+		SELECT r1.ksuid, r1.uri, r1.version, r1.type
+		FROM resources r1
+		WHERE r1.operation != $1 AND r1.operation != 'reaped'
+		AND NOT EXISTS (
+			SELECT 1
+			FROM resources r2
+			WHERE r1.uri = r2.uri
+			AND r2.version COLLATE "C" > r1.version COLLATE "C"
+		)
+	)
+	SELECT l.type, COUNT(*)
+	FROM resource_updates ru
+	JOIN live l ON l.ksuid = ru.ksuid
+	WHERE ru.state = $2
+	  AND NOT EXISTS (
+	      SELECT 1
+	      FROM resource_updates s
+	      WHERE s.ksuid = ru.ksuid
+	        AND s.state IN ($2, $3)
+	        AND (
+	              (ru.modified_ts IS NULL AND s.modified_ts IS NOT NULL)
+	           OR s.modified_ts > ru.modified_ts
+	           OR ((s.modified_ts = ru.modified_ts
+	                OR (s.modified_ts IS NULL AND ru.modified_ts IS NULL))
+	               AND (
+	                     s.command_id COLLATE "C" > ru.command_id COLLATE "C"
+	                  OR (s.command_id COLLATE "C" = ru.command_id COLLATE "C"
+	                      AND s.state = $2 AND s.operation < ru.operation)
+	               ))
+	        )
+	  )
+	  AND NOT EXISTS (
+	      SELECT 1
+	      FROM live o
+	      WHERE o.ksuid = l.ksuid
+	        AND (o.version COLLATE "C" > l.version COLLATE "C"
+	             OR (o.version COLLATE "C" = l.version COLLATE "C"
+	                 AND o.uri COLLATE "C" > l.uri COLLATE "C"))
+	  )
+	  AND l.type IS NOT NULL
+	  AND l.type <> ''
+	GROUP BY l.type
 	`
 	rows, err = d.pool.Query(ctx, errorQuery,
+		resource_update.OperationDelete,
 		types.ResourceUpdateStateFailed,
 		types.ResourceUpdateStateSuccess,
 	)

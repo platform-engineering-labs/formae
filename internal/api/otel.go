@@ -465,7 +465,7 @@ func StartFormaeMetrics(statsProvider StatsProvider) error {
 	// Resource errors by type
 	resourceErrors, err := meter.Int64ObservableGauge(
 		"formae.resource.errors",
-		otelmetric.WithDescription("Resources whose latest completed outcome failed, by type"),
+		otelmetric.WithDescription("Live resources whose latest completed operation failed, by type"),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create resource errors gauge: %w", err)

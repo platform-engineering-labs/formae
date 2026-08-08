@@ -77,6 +77,13 @@ func TestDatastore(t *testing.T) {
 				)
 				return err
 			},
+			RawInsertResourceRow: func(uri, version, ksuid, resourceType, target, operation string) error {
+				_, err := conn.Exec(
+					"INSERT INTO resources (uri, version, ksuid, type, target, operation) VALUES (@p1, @p2, @p3, @p4, @p5, @p6)",
+					uri, version, ksuid, resourceType, target, operation,
+				)
+				return err
+			},
 			SetTargetHealthStateForTest: func(label, state string) error {
 				_, err := conn.Exec(
 					`UPDATE targets SET health_state = @p1 WHERE label = @p2 AND version = (SELECT MAX(version) FROM targets WHERE label = @p2)`,
