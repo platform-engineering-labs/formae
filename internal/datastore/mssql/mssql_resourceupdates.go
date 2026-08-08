@@ -133,36 +133,42 @@ func (d *DatastoreMSSQL) Stats() (*stats.Stats, error) {
 	// Resources whose latest completed outcome is a failure, counted once per
 	// resource (ksuid). Only Failed and Success rows carry an outcome, so an
 	// in-flight, canceled or rejected row never clears a standing failure. The
-	// type filter sits in the outer SELECT only, so a later typeless success
-	// still supersedes an earlier failure. command_id is a KSUID, collated
-	// byte-wise so its ordering matches the other backends. Restricting to
-	// resources that have ever failed keeps the window off the whole table; an
-	// IN subquery lets the planner drive that from the state index, where a
-	// materialized CTE is built by scanning every row.
+	// type filter sits outside the anti-join, so a later typeless success still
+	// supersedes an earlier failure.
+	//
+	// A failed row counts when no other completed row for the same resource
+	// outranks it: later modified_ts, then later command_id, then — on an exact
+	// tie — Failed ahead of Success, then lower operation. The outer row is
+	// always Failed, so the state tiebreak can only be lost to another Failed
+	// row, which is why that term collapses into the operation comparison. It
+	// is what keeps a replace whose delete and create sides both failed at the
+	// same instant from counting the one resource twice.
+	//
+	// command_id is a KSUID, collated byte-wise so its ordering matches the
+	// other backends.
 	res.ResourceErrors = make(map[string]int)
 	if err := d.scanCountMap(ctx, `
-		WITH outcomes AS (
-			SELECT ru.ksuid,
-			       ru.state,
-			       JSON_VALUE(ru.resource, '$.Type') AS resource_type,
-			       ROW_NUMBER() OVER (
-			           PARTITION BY ru.ksuid
-			           ORDER BY ru.modified_ts DESC,
-			                    ru.command_id COLLATE Latin1_General_BIN2 DESC,
-			                    CASE WHEN ru.state = @p1 THEN 0 ELSE 1 END,
-			                    ru.operation
-			       ) AS rn
-			FROM resource_updates ru
-			WHERE ru.state IN (@p1, @p2)
-			  AND ru.ksuid IN (
-			      SELECT f.ksuid FROM resource_updates f WHERE f.state = @p1
-			  )
-		)
 		SELECT resource_type, COUNT(*)
-		FROM outcomes
-		WHERE rn = 1
-		  AND state = @p1
-		  AND resource_type IS NOT NULL
+		FROM (
+			SELECT JSON_VALUE(ru.resource, '$.Type') AS resource_type
+			FROM resource_updates ru
+			WHERE ru.state = @p1
+			  AND NOT EXISTS (
+			      SELECT 1
+			      FROM resource_updates s
+			      WHERE s.ksuid = ru.ksuid
+			        AND s.state IN (@p1, @p2)
+			        AND (
+			              s.modified_ts > ru.modified_ts
+			           OR (s.modified_ts = ru.modified_ts
+			               AND s.command_id COLLATE Latin1_General_BIN2 > ru.command_id COLLATE Latin1_General_BIN2)
+			           OR (s.modified_ts = ru.modified_ts
+			               AND s.command_id COLLATE Latin1_General_BIN2 = ru.command_id COLLATE Latin1_General_BIN2
+			               AND s.state = @p1 AND s.operation < ru.operation)
+			        )
+			  )
+		) latest_failures
+		WHERE resource_type IS NOT NULL
 		  AND resource_type <> ''
 		GROUP BY resource_type`, res.ResourceErrors,
 		string(types.ResourceUpdateStateFailed), string(types.ResourceUpdateStateSuccess),

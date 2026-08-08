@@ -4356,38 +4356,45 @@ func (d DatastoreSQLite) Stats() (*stats.Stats, error) {
 	// stored resource carries no type, which would otherwise fail to scan into
 	// a string.
 	//
-	// ORDER BY ends with operation so the ordering is total within a ksuid
-	// (the primary key includes operation), making ROW_NUMBER deterministic.
-	// The state tiebreak comes first: when a replace pair's delete and create
-	// rows share a timestamp, the failure is reported rather than hidden.
+	// "Latest" is expressed as an anti-join rather than a ranking window: a
+	// failed row counts when no other completed row for the same resource
+	// outranks it. Recency is modified_ts, then command_id, then Failed ahead
+	// of Success on an exact tie (so a replace pair completing in the same
+	// instant reports the error rather than hiding it), then operation. That
+	// last key makes the order total within a ksuid — the primary key is
+	// (command_id, ksuid, operation) — so exactly one row survives and each
+	// resource is counted once.
 	//
-	// Restricting to resources that have ever failed keeps the window off the
-	// whole table. It is written as an IN subquery rather than a joined CTE so
-	// the planner drives it from the state index: a materialized CTE is built
-	// by scanning every row, which costs more than the window it saves.
+	// Because the outer row is always Failed it already sorts ahead of every
+	// Success on the state tiebreak, which is why that term collapses into
+	// "another Failed row with a lower operation".
+	//
+	// The anti-join is what keeps this off the whole table: the outer query is
+	// driven by the state index and each probe stops at the first superseding
+	// row, so a resource that failed and recovered costs one lookup. Ranking
+	// every completed row in a window instead sorts the full history of every
+	// resource that has ever failed, which measured an order of magnitude
+	// slower on a seeded history and degrades with history depth.
 	resourceErrorsQuery := `
-		WITH outcomes AS (
-			SELECT ru.ksuid,
-			       ru.state,
-			       json_extract(ru.resource,'$.Type') AS resource_type,
-			       ROW_NUMBER() OVER (
-			           PARTITION BY ru.ksuid
-			           ORDER BY ru.modified_ts DESC,
-			                    ru.command_id DESC,
-			                    CASE WHEN ru.state = ? THEN 0 ELSE 1 END,
-			                    ru.operation
-			       ) AS rn
-			FROM resource_updates ru
-			WHERE ru.state IN (?, ?)
-			  AND ru.ksuid IN (
-			      SELECT f.ksuid FROM resource_updates f WHERE f.state = ?
-			  )
-		)
 		SELECT resource_type, COUNT(*)
-		FROM outcomes
-		WHERE rn = 1
-		  AND state = ?
-		  AND resource_type IS NOT NULL
+		FROM (
+			SELECT json_extract(ru.resource,'$.Type') AS resource_type
+			FROM resource_updates ru
+			WHERE ru.state = ?
+			  AND NOT EXISTS (
+			      SELECT 1
+			      FROM resource_updates s
+			      WHERE s.ksuid = ru.ksuid
+			        AND s.state IN (?, ?)
+			        AND (
+			              s.modified_ts > ru.modified_ts
+			           OR (s.modified_ts = ru.modified_ts AND s.command_id > ru.command_id)
+			           OR (s.modified_ts = ru.modified_ts AND s.command_id = ru.command_id
+			               AND s.state = ? AND s.operation < ru.operation)
+			        )
+			  )
+		) latest_failures
+		WHERE resource_type IS NOT NULL
 		  AND resource_type <> ''
 		GROUP BY resource_type
 	`
@@ -4395,7 +4402,6 @@ func (d DatastoreSQLite) Stats() (*stats.Stats, error) {
 		types.ResourceUpdateStateFailed,
 		types.ResourceUpdateStateFailed,
 		types.ResourceUpdateStateSuccess,
-		types.ResourceUpdateStateFailed,
 		types.ResourceUpdateStateFailed,
 	)
 	if err != nil {

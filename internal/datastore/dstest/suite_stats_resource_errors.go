@@ -455,6 +455,36 @@ func RunStatsResourceErrors_ReplaceSameTimestampFailedWins(t *testing.T, newDS f
 	})
 }
 
+// RunStatsResourceErrors_ReplaceSameTimestampBothFailedCountsOnce verifies the
+// count-once contract when a tie cannot be broken by state: a replace whose
+// delete and create sides both failed at the same instant in the same command
+// is one broken resource, not two.
+func RunStatsResourceErrors_ReplaceSameTimestampBothFailedCountsOnce(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("StatsResourceErrors_ReplaceSameTimestampBothFailedCountsOnce", func(t *testing.T) {
+		td := newDS(t)
+		defer td.CleanUpFn() //nolint:errcheck
+
+		sameTs := -10 * time.Minute
+		deleteSide := outcomeUpdate("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket",
+			types.OperationDelete, resource_update.ResourceUpdateStateFailed, sameTs)
+		createSide := outcomeUpdate("stack-a", "ksuid-1", "bucket-1", "AWS::S3::Bucket",
+			types.OperationCreate, resource_update.ResourceUpdateStateFailed, sameTs)
+		createSide.ModifiedTs = deleteSide.ModifiedTs
+
+		replace := outcomeCommand(
+			forma_command.CommandStateFailed,
+			sameTs,
+			[]resource_update.ResourceUpdate{deleteSide, createSide},
+		)
+		assert.NoError(t, td.StoreFormaCommand(replace, replace.ID))
+
+		s, err := td.Stats()
+		assert.NoError(t, err)
+		assert.Equal(t, map[string]int{"AWS::S3::Bucket": 1}, s.ResourceErrors,
+			"two failed rows for one resource are one error, not two")
+	})
+}
+
 // RunStatsResourceErrors_LaterCommandWinsOnTimestampTie verifies that when two
 // commands carry a row for the same resource with an identical timestamp, the
 // later command's row is the latest outcome: its success clears the earlier
