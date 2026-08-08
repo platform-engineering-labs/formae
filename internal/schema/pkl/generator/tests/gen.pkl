@@ -87,6 +87,379 @@ local class WorkflowResource extends formae.Resource {
     steps: Listing<XorStep>
 }
 
+/// Two nested carriers that differ only in the type of their single property.
+/// A value fits exactly one of them, so which member a union resolves to is
+/// observable.
+local class IntHolder {
+    n: Int
+}
+
+local class StrHolder {
+    n: String
+}
+
+@formae.ResourceHint
+local class IntThenStrResource extends formae.Resource {
+    type = "FakePlugin::Union::IntThenStr"
+
+    @formae.FieldHint
+    holder: IntHolder|StrHolder
+}
+
+@formae.ResourceHint
+local class StrThenIntResource extends formae.Resource {
+    type = "FakePlugin::Union::StrThenInt"
+
+    @formae.FieldHint
+    holder: StrHolder|IntHolder
+}
+
+@formae.ResourceHint
+local class XorThenStrResource extends formae.Resource {
+    type = "FakePlugin::Union::XorThenStr"
+
+    @formae.FieldHint
+    step: XorStep|StrHolder
+}
+
+@formae.ResourceHint
+local class StrThenXorResource extends formae.Resource {
+    type = "FakePlugin::Union::StrThenXor"
+
+    @formae.FieldHint
+    step: StrHolder|XorStep
+}
+
+/// Holds a nested class, so a malformed envelope offered in its place reaches
+/// the envelope branches of the conversion.
+@formae.ResourceHint
+local class HolderResource extends formae.Resource {
+    type = "FakePlugin::Union::Holder"
+
+    @formae.FieldHint
+    holder: StrHolder
+}
+
+/// A member carrying a property that conversion skips, whose schema default
+/// cannot be evaluated. Reading it is what a converted value must not do.
+local class UnsafeDefaultHolder {
+    n: String
+    output: String = throw("the skipped property was evaluated")
+}
+
+@formae.ResourceHint
+local class SkippedDefaultResource extends formae.Resource {
+    type = "FakePlugin::Union::SkippedDefault"
+
+    @formae.FieldHint
+    holder: UnsafeDefaultHolder|StrHolder
+}
+
+/// Two nested carriers with disjoint required properties. A value carrying one
+/// of the two properties fits exactly one of them, so which member a union
+/// resolves to is observable.
+local class EmailSettings {
+    addresses: String
+}
+
+local class WebhookSettings {
+    url: String
+}
+
+@formae.ResourceHint
+local class EmailThenWebhookResource extends formae.Resource {
+    type = "FakePlugin::Union::EmailThenWebhook"
+
+    @formae.FieldHint
+    settings: EmailSettings|WebhookSettings
+}
+
+@formae.ResourceHint
+local class WebhookThenEmailResource extends formae.Resource {
+    type = "FakePlugin::Union::WebhookThenEmail"
+
+    @formae.FieldHint
+    settings: WebhookSettings|EmailSettings
+}
+
+/// A carrier whose only property is non-nullable but carries a schema default,
+/// so an absent property still leaves it usable.
+local class DefaultedHolder {
+    retries: Int = 3
+}
+
+@formae.ResourceHint
+local class StrThenDefaultedResource extends formae.Resource {
+    type = "FakePlugin::Union::StrThenDefaulted"
+
+    @formae.FieldHint
+    holder: StrHolder|DefaultedHolder
+}
+
+/// A carrier with no property a value has to supply.
+local class AllOptionalHolder {
+    a: String?
+    b: Int?
+}
+
+@formae.ResourceHint
+local class AllOptionalThenStrResource extends formae.Resource {
+    type = "FakePlugin::Union::AllOptionalThenStr"
+
+    @formae.FieldHint
+    holder: AllOptionalHolder|StrHolder
+}
+
+/// A base contributing a property its subclasses do not declare themselves.
+local open class KindedBase {
+    kind: String
+}
+
+local class KindedHolder extends KindedBase {
+    n: String
+}
+
+@formae.ResourceHint
+local class KindedThenStrResource extends formae.Resource {
+    type = "FakePlugin::Union::KindedThenStr"
+
+    @formae.FieldHint
+    holder: KindedHolder|StrHolder
+}
+
+/// A scalar-or-reference field: the shape a schema gives a property that either
+/// holds a literal or points at another resource.
+@formae.ResourceHint
+local class ScalarOrRefResource extends formae.Resource {
+    type = "FakePlugin::Union::ScalarOrRef"
+
+    @formae.FieldHint
+    target: String|formae.Resolvable
+}
+
+/// The same union with a structured sibling, so a reference that loses
+/// selection degrades into literal data rather than failing outright.
+@formae.ResourceHint
+local class RefOrMapResource extends formae.Resource {
+    type = "FakePlugin::Union::RefOrMap"
+
+    @formae.FieldHint
+    target: formae.Resolvable|Mapping<String, String>
+}
+
+/// The reported shape: the map arm is declared first, and its value type admits
+/// anything, so an envelope converts as a literal copy unless selection prefers
+/// the reference member.
+@formae.ResourceHint
+local class MapThenRefResource extends formae.Resource {
+    type = "FakePlugin::Union::MapThenRef"
+
+    @formae.FieldHint
+    target: Mapping<String, Any>|formae.Resolvable
+}
+
+/// The same order with a strictly-typed map arm.
+@formae.ResourceHint
+local class StrMapThenRefResource extends formae.Resource {
+    type = "FakePlugin::Union::StrMapThenRef"
+
+    @formae.FieldHint
+    target: Mapping<String, String>|formae.Resolvable
+}
+
+/// The reference arm first, over a map arm that admits anything.
+@formae.ResourceHint
+local class RefThenAnyMapResource extends formae.Resource {
+    type = "FakePlugin::Union::RefThenAnyMap"
+
+    @formae.FieldHint
+    target: formae.Resolvable|Mapping<String, Any>
+}
+
+/// A reference member reached through a nullable member, and one reached
+/// through a type alias.
+@formae.ResourceHint
+local class MapThenNullableRefResource extends formae.Resource {
+    type = "FakePlugin::Union::MapThenNullableRef"
+
+    @formae.FieldHint
+    target: Mapping<String, Any>|(formae.Resolvable?)
+}
+
+local typealias RefAlias = formae.Resolvable
+
+@formae.ResourceHint
+local class MapThenAliasedRefResource extends formae.Resource {
+    type = "FakePlugin::Union::MapThenAliasedRef"
+
+    @formae.FieldHint
+    target: Mapping<String, Any>|RefAlias
+}
+
+/// A reference member nested inside a parenthesised member of the union, in
+/// both member orders, and the same nesting reached through a type alias.
+@formae.ResourceHint
+local class MapThenNestedRefResource extends formae.Resource {
+    type = "FakePlugin::Union::MapThenNestedRef"
+
+    @formae.FieldHint
+    target: Mapping<String, Any>|(formae.Resolvable|String)
+}
+
+@formae.ResourceHint
+local class NestedRefThenMapResource extends formae.Resource {
+    type = "FakePlugin::Union::NestedRefThenMap"
+
+    @formae.FieldHint
+    target: (String|formae.Resolvable)|Mapping<String, Any>
+}
+
+local typealias RefOrText = formae.Resolvable|String
+
+@formae.ResourceHint
+local class MapThenAliasedUnionResource extends formae.Resource {
+    type = "FakePlugin::Union::MapThenAliasedUnion"
+
+    @formae.FieldHint
+    target: Mapping<String, Any>|RefOrText
+}
+
+/// The shape a schema gives a field holding either a literal or a secret the
+/// agent recorded — the union a reference to another resource's secret arrives
+/// at.
+@formae.ResourceHint
+local class TextOrSecretResource extends formae.Resource {
+    type = "FakePlugin::Union::TextOrSecret"
+
+    @formae.FieldHint
+    target: (String|formae.SecretValue)?
+}
+
+/// A recorded-value-or-map field, in both member orders.
+@formae.ResourceHint
+local class MapThenValueResource extends formae.Resource {
+    type = "FakePlugin::Union::MapThenValue"
+
+    @formae.FieldHint
+    target: Mapping<String, Any>|formae.Value
+}
+
+@formae.ResourceHint
+local class ValueThenMapResource extends formae.Resource {
+    type = "FakePlugin::Union::ValueThenMap"
+
+    @formae.FieldHint
+    target: formae.Value|Mapping<String, Any>
+}
+
+/// An embedded-template-or-map field, in both member orders.
+@formae.ResourceHint
+local class MapThenEmbedResource extends formae.Resource {
+    type = "FakePlugin::Union::MapThenEmbed"
+
+    @formae.FieldHint
+    target: Mapping<String, Any>|formae.Embedded
+}
+
+@formae.ResourceHint
+local class EmbedThenMapResource extends formae.Resource {
+    type = "FakePlugin::Union::EmbedThenMap"
+
+    @formae.FieldHint
+    target: formae.Embedded|Mapping<String, Any>
+}
+
+/// Envelope-class fields with no sibling to fall through to, so what the
+/// conversion itself makes of a value is observable.
+@formae.ResourceHint
+local class RefFieldResource extends formae.Resource {
+    type = "FakePlugin::Field::Ref"
+
+    @formae.FieldHint
+    target: formae.Resolvable
+}
+
+@formae.ResourceHint
+local class ValueFieldResource extends formae.Resource {
+    type = "FakePlugin::Field::Value"
+
+    @formae.FieldHint
+    target: formae.Value
+}
+
+@formae.ResourceHint
+local class EmbedFieldResource extends formae.Resource {
+    type = "FakePlugin::Field::Embed"
+
+    @formae.FieldHint
+    target: formae.Embedded
+}
+
+/// The three handlers whose contract is to pass a map through as data. An
+/// envelope handed to one of them stays what it was.
+@formae.ResourceHint
+local class AnyFieldResource extends formae.Resource {
+    type = "FakePlugin::Field::Any"
+
+    @formae.FieldHint
+    target: Any
+}
+
+@formae.ResourceHint
+local class DynamicFieldResource extends formae.Resource {
+    type = "FakePlugin::Field::Dynamic"
+
+    @formae.FieldHint
+    target: Dynamic
+}
+
+@formae.ResourceHint
+local class MapFieldResource extends formae.Resource {
+    type = "FakePlugin::Field::Map"
+
+    @formae.FieldHint
+    target: Mapping<String, Any>
+}
+
+/// A map-typed field whose values carry a type, so an entry whose value cannot
+/// be converted is observable.
+@formae.ResourceHint
+local class IntMapResource extends formae.Resource {
+    type = "FakePlugin::Map::IntMap"
+
+    @formae.FieldHint
+    counts: Mapping<String, Int>
+}
+
+/// A map-typed field whose keys carry a type other than String, so a key that
+/// is a whole object reaches the key branch of the conversion.
+@formae.ResourceHint
+local class IntKeyMapResource extends formae.Resource {
+    type = "FakePlugin::Map::IntKeyMap"
+
+    @formae.FieldHint
+    keyed: Mapping<Int, String>
+}
+
+/// A list-typed field whose elements are maps, so an entry of an element that
+/// cannot be converted is observable together with the element's position.
+@formae.ResourceHint
+local class MapListResource extends formae.Resource {
+    type = "FakePlugin::List::MapList"
+
+    @formae.FieldHint
+    groups: Listing<Mapping<String, String>>
+}
+
+/// The same shape with typed elements.
+@formae.ResourceHint
+local class HolderListResource extends formae.Resource {
+    type = "FakePlugin::List::HolderList"
+
+    @formae.FieldHint
+    holders: Listing<StrHolder>
+}
+
 @formae.ResourceHint
 local class DefaultsResource extends formae.Resource {
     type = "FakePlugin::Defaults::Resource"
@@ -96,6 +469,284 @@ local class DefaultsResource extends formae.Resource {
 
     @formae.FieldHint
     mode: String? = "auto"
+}
+
+/// Scalar unions whose members convert one another's values, in both member
+/// orders. Which member selection resolves to is observable in the class the
+/// field comes out as.
+@formae.ResourceHint
+local class IntThenTextResource extends formae.Resource {
+    type = "FakePlugin::Union::IntThenText"
+
+    @formae.FieldHint
+    setting: Int|String
+}
+
+@formae.ResourceHint
+local class TextThenIntResource extends formae.Resource {
+    type = "FakePlugin::Union::TextThenInt"
+
+    @formae.FieldHint
+    setting: String|Int
+}
+
+@formae.ResourceHint
+local class BoolThenTextResource extends formae.Resource {
+    type = "FakePlugin::Union::BoolThenText"
+
+    @formae.FieldHint
+    setting: Boolean|String
+}
+
+@formae.ResourceHint
+local class TextThenBoolResource extends formae.Resource {
+    type = "FakePlugin::Union::TextThenBool"
+
+    @formae.FieldHint
+    setting: String|Boolean
+}
+
+/// Overlapping members: an Int is an instance of both of them.
+@formae.ResourceHint
+local class NumberThenIntResource extends formae.Resource {
+    type = "FakePlugin::Union::NumberThenInt"
+
+    @formae.FieldHint
+    setting: Number|Int
+}
+
+@formae.ResourceHint
+local class TextThenNumberResource extends formae.Resource {
+    type = "FakePlugin::Union::TextThenNumber"
+
+    @formae.FieldHint
+    setting: String|Number
+}
+
+/// A scalar union that is itself nullable, and one whose first member is.
+@formae.ResourceHint
+local class NullableScalarUnionResource extends formae.Resource {
+    type = "FakePlugin::Union::NullableScalar"
+
+    @formae.FieldHint
+    setting: (Int|String)?
+}
+
+@formae.ResourceHint
+local class NullableIntThenTextResource extends formae.Resource {
+    type = "FakePlugin::Union::NullableIntThenText"
+
+    @formae.FieldHint
+    setting: (Int?)|String
+}
+
+@formae.ResourceHint
+local class TextThenNullableIntResource extends formae.Resource {
+    type = "FakePlugin::Union::TextThenNullableInt"
+
+    @formae.FieldHint
+    setting: String|(Int?)
+}
+
+/// A scalar member declared through a type alias.
+local typealias Year = Int
+
+@formae.ResourceHint
+local class AliasedIntThenTextResource extends formae.Resource {
+    type = "FakePlugin::Union::AliasedIntThenText"
+
+    @formae.FieldHint
+    setting: Year|String
+}
+
+@formae.ResourceHint
+local class TextThenAliasedIntResource extends formae.Resource {
+    type = "FakePlugin::Union::TextThenAliasedInt"
+
+    @formae.FieldHint
+    setting: String|Year
+}
+
+/// The shape a schema gives a field holding either structured data or the text
+/// it was stored as.
+@formae.ResourceHint
+local class DynamicThenTextResource extends formae.Resource {
+    type = "FakePlugin::Union::DynamicThenText"
+
+    @formae.FieldHint
+    setting: Dynamic|String
+}
+
+/// A string literal alongside the scalar members whose values overlap it.
+@formae.ResourceHint
+local class IntThenLiteralResource extends formae.Resource {
+    type = "FakePlugin::Union::IntThenLiteral"
+
+    @formae.FieldHint
+    setting: Int|"2026"|String
+}
+
+@formae.ResourceHint
+local class BoolThenLiteralResource extends formae.Resource {
+    type = "FakePlugin::Union::BoolThenLiteral"
+
+    @formae.FieldHint
+    setting: Boolean|"true"
+}
+
+/// A union of two container members, neither of which is a scalar.
+@formae.ResourceHint
+local class MapThenDynamicResource extends formae.Resource {
+    type = "FakePlugin::Union::MapThenDynamic"
+
+    @formae.FieldHint
+    setting: Mapping<String, String>|Dynamic
+}
+
+/// A parenthesised union of scalars as a member of a union, in both member
+/// orders.
+@formae.ResourceHint
+local class NestedScalarUnionThenTextResource extends formae.Resource {
+    type = "FakePlugin::Union::NestedScalarUnionThenText"
+
+    @formae.FieldHint
+    setting: (Int|Boolean)|String
+}
+
+@formae.ResourceHint
+local class TextThenNestedScalarUnionResource extends formae.Resource {
+    type = "FakePlugin::Union::TextThenNestedScalarUnion"
+
+    @formae.FieldHint
+    setting: String|(Int|Boolean)
+}
+
+/// A union of two scalars that text belongs to neither of, so every member has
+/// a reason to report, in both member orders.
+@formae.ResourceHint
+local class IntThenBoolResource extends formae.Resource {
+    type = "FakePlugin::Union::IntThenBool"
+
+    @formae.FieldHint
+    setting: Int|Boolean
+}
+
+@formae.ResourceHint
+local class BoolThenIntResource extends formae.Resource {
+    type = "FakePlugin::Union::BoolThenInt"
+
+    @formae.FieldHint
+    setting: Boolean|Int
+}
+
+/// A union whose two members are the same type under two names, so they reject
+/// a value for the same reason.
+@formae.ResourceHint
+local class IntThenAliasedIntResource extends formae.Resource {
+    type = "FakePlugin::Union::IntThenAliasedInt"
+
+    @formae.FieldHint
+    setting: Int|Year
+}
+
+/// Every scalar field type whose handler reads its own type out of text.
+@formae.ResourceHint
+local class ScalarFieldsResource extends formae.Resource {
+    type = "FakePlugin::Scalar::Fields"
+
+    @formae.FieldHint
+    count: Int?
+
+    @formae.FieldHint
+    ratio: Float?
+
+    @formae.FieldHint
+    amount: Number?
+
+    @formae.FieldHint
+    enabled: Boolean?
+
+    @formae.FieldHint
+    timeout: Duration?
+
+    @formae.FieldHint
+    capacity: DataSize?
+}
+
+/// A field a schema pins to one exact text.
+@formae.ResourceHint
+local class LiteralFieldResource extends formae.Resource {
+    type = "FakePlugin::Scalar::Literal"
+
+    @formae.FieldHint
+    setting: "2026"
+}
+
+/// A field whose declared class no handler converts to.
+@formae.ResourceHint
+local class UnsupportedFieldResource extends formae.Resource {
+    type = "FakePlugin::Scalar::Unsupported"
+
+    @formae.FieldHint
+    span: IntSeq?
+}
+
+/// Unions of unions, so that a member's reason is itself a union's reasons and
+/// the message grows with every level of nesting.
+local typealias ScalarsA = Int|Boolean|Duration
+local typealias ScalarsB = DataSize|Float|Number
+local typealias ScalarsC = ScalarsA|ScalarsB
+local typealias ScalarsD = ScalarsC|ScalarsA
+local typealias ScalarsE = ScalarsD|ScalarsB
+
+@formae.ResourceHint
+local class NestedUnionResource extends formae.Resource {
+    type = "FakePlugin::Union::Nested"
+
+    @formae.FieldHint
+    setting: ScalarsC|ScalarsA|ScalarsB
+}
+
+@formae.ResourceHint
+local class DeeperUnionResource extends formae.Resource {
+    type = "FakePlugin::Union::Deeper"
+
+    @formae.FieldHint
+    setting: ScalarsE|ScalarsD|ScalarsC
+}
+
+/// A union whose first member is a map, so a failure a member reports carries a
+/// map key as the outermost step of its path.
+@formae.ResourceHint
+local class MapThenIntResource extends formae.Resource {
+    type = "FakePlugin::Union::MapThenInt"
+
+    @formae.FieldHint
+    setting: Mapping<String, Int>|Int
+}
+
+/// A union whose members are named at length and reject a value for one shared
+/// reason, so the members named on that reason exceed what a message carries.
+local typealias LongLabelledIntAlpha = Int
+local typealias LongLabelledIntBravo = Int
+local typealias LongLabelledIntCharlie = Int
+
+@formae.ResourceHint
+local class LongLabelUnionResource extends formae.Resource {
+    type = "FakePlugin::Union::LongLabel"
+
+    @formae.FieldHint
+    setting: LongLabelledIntAlpha|LongLabelledIntBravo|LongLabelledIntCharlie
+}
+
+/// More members than a message reports, each rejecting a value for a reason of
+/// its own.
+@formae.ResourceHint
+local class ManyMemberUnionResource extends formae.Resource {
+    type = "FakePlugin::Union::ManyMember"
+
+    @formae.FieldHint
+    setting: Int|Boolean|Float|Number|Duration|DataSize|"a"|"b"|"c"|"d"
 }
 
 // Test data
@@ -150,6 +801,121 @@ local workflowProperties: Dynamic = new Dynamic {
 local defaultsProperties: Dynamic = new Dynamic {
     label = "defaults"
 }
+
+// A string-valued `n` fits StrHolder and no other member.
+local stringHolderProperties: Dynamic = new Dynamic {
+    holder = new Dynamic { n = "abc" }
+    label = "holder"
+}
+
+// Neither `run` nor `uses` is present, so XorStep's mutual-exclusivity
+// constraint cannot hold; only StrHolder fits.
+local stringStepProperties: Dynamic = new Dynamic {
+    step = new Dynamic { n = "abc" }
+    label = "step"
+}
+
+// A listing fits neither Int nor String, so no member of the union fits.
+local unmatchableHolderProperties: Dynamic = new Dynamic {
+    holder = new Dynamic { n = new Listing { "abc" } }
+    label = "holder"
+}
+
+// A member that fits the value, whose skipped property carries an
+// unevaluatable default.
+local skippedDefaultProperties: Dynamic = new Dynamic {
+    holder = new Dynamic { n = "abc" }
+    label = "skipped"
+}
+
+/// Builds the $res envelope the agent records for a reference to another
+/// resource's property, optionally omitting one of its keys.
+local function reference(omitted: String?): Mapping =
+    let (env = Map(
+        "$res", true,
+        "$label", "vpc",
+        "$stack", "network",
+        "$type", "TestProvider::EC2::VPC",
+        "$property", "VpcId",
+        "$value", "vpc-0123456789"
+    ))
+    (if (omitted == null) env else env.remove(omitted)).toMapping()
+
+/// The same envelope carrying a recorded value of the caller's choosing.
+local function referenceValued(recorded: Any): Mapping =
+    reference("$value").toMap().put("$value", recorded).toMapping()
+
+/// The same envelope with one of its keys replaced, for the shapes that carry a
+/// `$res` key without being a reference.
+local function referenceWith(key: String, replacement: Any): Mapping =
+    reference(null).toMap().put(key, replacement).toMapping()
+
+/// The envelope the agent records for a value it holds itself, rather than a
+/// reference to one another resource holds.
+local function recordedValue(omitted: String?): Mapping =
+    let (env = Map(
+        "$value", "s3cret",
+        "$visibility", "Clear",
+        "$strategy", "Update"
+    ))
+    (if (omitted == null) env else env.remove(omitted)).toMapping()
+
+/// The envelope the agent's extract pre-processing produces for a template
+/// carrying references: alternating literal segments and reference envelopes.
+local function embedded(parts: Listing?): Mapping =
+    let (env = Map("$embed", true))
+    (if (parts == null) env else env.put("$templateParts", parts)).toMapping()
+
+/// Renders a resource whose `target` field carries `env`, and returns what that
+/// field rendered to.
+///
+/// Rendering a resource yields a map, so the converted value is returned as it
+/// stands: an envelope converts to a carrier that is not always an instance of
+/// the declared field type — `FakeEmbed` does not extend `formae.Embedded` —
+/// and only the renderer ever reads it.
+local function renderedTarget(res: Class, env: Any): Any =
+    gen.applyResource(res, new Dynamic {
+        target = env
+        label = "ref"
+    }, "Cannot render resource \"ref\" in stack \"default\"").getOrNull("target")
+
+/// The diagnostic rendering that resource raises, or `null` when it renders.
+local function renderFailure(res: Class, env: Any): String? =
+    module.catchOrNull(() -> renderedTarget(res, env))
+
+/// Applies an envelope to a union-typed field and names the member the union
+/// resolved to. A value no member converts raises out of `applyResource`, so
+/// the diagnostic itself is what the caller sees; `renderFailure` is what reads
+/// that diagnostic.
+local function selectedMember(res: Class, env: Any): String =
+    renderedTarget(res, env).getClass().simpleName
+
+/// Applies `setting` to a resource's union-typed `setting` field and returns
+/// what that field came out as, so the member the union resolved to is
+/// observable in the class of the result.
+local function convertedSetting(res: Class, stored: Any): Any =
+    let (result = gen.attemptApply(res, new Dynamic {
+        setting = stored
+        label = "scalar"
+    }))
+        if (result is gen.GenerationFailure) throw(gen.failureMessage(result))
+        else (result as Typed).getPropertyOrNull("setting")
+
+/// A value distinctive enough that finding it in a diagnostic can only mean the
+/// diagnostic quoted the value it was given. It parses as none of the scalar
+/// types and equals none of the string literals any test class declares.
+local sentinel = "s3cr3t-sentinel-19f4c2"
+
+/// The diagnostic a resource's conversion yields for `properties`.
+local function failureFor(res: Class, properties: Dynamic): String =
+    gen.failureMessage(gen.attemptApply(res, properties) as gen.GenerationFailure)
+
+/// The diagnostic a `setting` field yields for a value it cannot convert.
+local function settingFailure(res: Class): String =
+    failureFor(res, new Dynamic {
+        setting = sentinel
+        label = "scalar"
+    })
 
 examples {
     ["Apply simple class"] {
@@ -511,6 +1277,682 @@ facts {
         // schema default, so extract -> reapply does not change the value.
         let (reapplied = new DefaultsResource { label = "roundtrip" })
         !renderedRes.containsKey("mode") && renderedRes["retries"] == 3 && reapplied.mode == "auto"
+    }
+
+    // --- Union member selection ---
+
+    ["Union member whose property cannot convert falls through to the member that fits"] {
+        let (result = gen.attemptApply(IntThenStrResource, stringHolderProperties))
+        !(result is gen.GenerationFailure) &&
+        (result as IntThenStrResource).holder is StrHolder
+    }
+
+    ["Reordering a union whose first member cannot convert selects the same member"] {
+        let (result = gen.attemptApply(StrThenIntResource, stringHolderProperties))
+        !(result is gen.GenerationFailure) &&
+        (result as StrThenIntResource).holder is StrHolder
+    }
+
+    ["Union member whose constraint is violated falls through to the member that fits"] {
+        let (result = gen.attemptApply(XorThenStrResource, stringStepProperties))
+        !(result is gen.GenerationFailure) &&
+        (result as XorThenStrResource).step is StrHolder
+    }
+
+    ["Reordering a union with a constrained member selects the same member"] {
+        let (result = gen.attemptApply(StrThenXorResource, stringStepProperties))
+        !(result is gen.GenerationFailure) &&
+        (result as StrThenXorResource).step is StrHolder
+    }
+
+    ["A value fitting no union member yields a failure value, not a hard error"] {
+        gen.attemptApply(IntThenStrResource, unmatchableHolderProperties) is gen.GenerationFailure
+    }
+
+    ["A property conversion skips is not evaluated while selecting a union member"] {
+        // UnsafeDefaultHolder fits the value; only its skipped `output` property
+        // is unevaluatable. Selection must scope itself to what conversion
+        // populated, so the member still wins.
+        let (result = gen.attemptApply(SkippedDefaultResource, skippedDefaultProperties))
+        !(result is gen.GenerationFailure) &&
+        (result as SkippedDefaultResource).holder is UnsafeDefaultHolder
+    }
+
+    ["A union member missing a required property falls through to the member that has it"] {
+        let (result = gen.attemptApply(EmailThenWebhookResource, new Dynamic {
+            settings = new Dynamic { url = "https://example.test/hook" }
+            label = "notify"
+        }))
+        !(result is gen.GenerationFailure) &&
+        (result as EmailThenWebhookResource).settings is WebhookSettings
+    }
+
+    ["Reordering a union whose first member has the required property selects the same member"] {
+        let (result = gen.attemptApply(WebhookThenEmailResource, new Dynamic {
+            settings = new Dynamic { url = "https://example.test/hook" }
+            label = "notify"
+        }))
+        !(result is gen.GenerationFailure) &&
+        (result as WebhookThenEmailResource).settings is WebhookSettings
+    }
+
+    ["A union selects the member whose required property the value carries"] {
+        let (result = gen.attemptApply(EmailThenWebhookResource, new Dynamic {
+            settings = new Dynamic { addresses = "a@b" }
+            label = "notify"
+        }))
+        !(result is gen.GenerationFailure) &&
+        (result as EmailThenWebhookResource).settings is EmailSettings
+    }
+
+    ["Reordering a union whose second member has the required property selects the same member"] {
+        let (result = gen.attemptApply(WebhookThenEmailResource, new Dynamic {
+            settings = new Dynamic { addresses = "a@b" }
+            label = "notify"
+        }))
+        !(result is gen.GenerationFailure) &&
+        (result as WebhookThenEmailResource).settings is EmailSettings
+    }
+
+    ["A union member whose absent property has a schema default still fits an empty value"] {
+        // The default is what the property resolves to, so nothing is missing
+        // and the member stays in the running.
+        let (result = gen.attemptApply(StrThenDefaultedResource, new Dynamic {
+            holder = new Dynamic {}
+            label = "defaulted"
+        }))
+        !(result is gen.GenerationFailure) &&
+        (result as StrThenDefaultedResource).holder is DefaultedHolder &&
+        ((result as StrThenDefaultedResource).holder as DefaultedHolder).retries == 3
+    }
+
+    ["A union member with only optional properties fits an empty value"] {
+        let (result = gen.attemptApply(AllOptionalThenStrResource, new Dynamic {
+            holder = new Dynamic {}
+            label = "optional"
+        }))
+        !(result is gen.GenerationFailure) &&
+        (result as AllOptionalThenStrResource).holder is AllOptionalHolder &&
+        ((result as AllOptionalThenStrResource).holder as AllOptionalHolder).a == null &&
+        ((result as AllOptionalThenStrResource).holder as AllOptionalHolder).b == null
+    }
+
+    ["A union member missing a property it inherits falls through to the member that fits"] {
+        // `kind` comes from the base class, and counts exactly as a declared
+        // property does.
+        let (result = gen.attemptApply(KindedThenStrResource, new Dynamic {
+            holder = new Dynamic { n = "abc" }
+            label = "kinded"
+        }))
+        !(result is gen.GenerationFailure) &&
+        (result as KindedThenStrResource).holder is StrHolder
+    }
+
+    ["A union member carrying its inherited property is selected"] {
+        let (result = gen.attemptApply(KindedThenStrResource, new Dynamic {
+            holder = new Dynamic { n = "abc"; kind = "email" }
+            label = "kinded"
+        }))
+        !(result is gen.GenerationFailure) &&
+        (result as KindedThenStrResource).holder is KindedHolder &&
+        ((result as KindedThenStrResource).holder as KindedHolder).kind == "email"
+    }
+
+    // --- A scalar union keeps the member the value already belongs to ---
+
+    ["Text in a number-or-text field stays text however the union orders its members"] {
+        // Re-applying a title extracted as a number is rejected by the provider
+        // the field came from, so the member the value already is decides.
+        convertedSetting(IntThenTextResource, "2026") is String &&
+        convertedSetting(TextThenIntResource, "2026") is String
+    }
+
+    ["A number in a text-or-number field stays a number however the union orders its members"] {
+        convertedSetting(TextThenIntResource, 5) is Int &&
+        convertedSetting(IntThenTextResource, 5) is Int
+    }
+
+    ["Text in a boolean-or-text field stays text however the union orders its members"] {
+        convertedSetting(BoolThenTextResource, "true") is String &&
+        convertedSetting(TextThenBoolResource, "true") is String
+    }
+
+    ["A boolean in a text-or-boolean field stays a boolean however the union orders its members"] {
+        convertedSetting(TextThenBoolResource, true) is Boolean &&
+        convertedSetting(BoolThenTextResource, true) is Boolean
+    }
+
+    ["Overlapping scalar members resolve to the one declared first"] {
+        // An Int is an instance of both members, and the first declared wins:
+        // the Number member returns it unchanged rather than a member being
+        // scored as the closer fit.
+        convertedSetting(NumberThenIntResource, 5) is Int &&
+        // Text is an instance of neither, so it converts in declaration order
+        // and comes out as the first member's conversion of it.
+        convertedSetting(NumberThenIntResource, "5") is Float
+    }
+
+    ["A nullable scalar union keeps an absent value null and text text"] {
+        convertedSetting(NullableScalarUnionResource, null) == null &&
+        convertedSetting(NullableScalarUnionResource, "2026") is String
+    }
+
+    ["A nullable member of a scalar union matches only what it wraps"] {
+        convertedSetting(NullableIntThenTextResource, "2026") is String &&
+        convertedSetting(NullableIntThenTextResource, 5) is Int &&
+        // Declared after the text member, so only unwrapping it keeps the
+        // number a number.
+        convertedSetting(TextThenNullableIntResource, 5) is Int
+    }
+
+    ["A scalar member declared through a type alias matches what the alias refers to"] {
+        convertedSetting(AliasedIntThenTextResource, "2026") is String &&
+        convertedSetting(AliasedIntThenTextResource, 5) is Int &&
+        // Declared after the text member, so only following the alias to its
+        // referent keeps the number a number.
+        convertedSetting(TextThenAliasedIntResource, 5) is Int
+    }
+
+    ["A value matches a member of a class it is a kind of"] {
+        // An Int is a Number, and the Number member holds it as it stands
+        // rather than the text member declared before it reading it as text.
+        convertedSetting(TextThenNumberResource, 5) is Int
+    }
+
+    ["Text in a structured-or-text field stays the text it was stored as"] {
+        // The structured member reads data out of text that looks like JSON, so
+        // text a provider stored as text would come back as an object and be
+        // re-applied as one.
+        convertedSetting(DynamicThenTextResource, "{\"a\": 1}") == "{\"a\": 1}"
+    }
+
+    ["A string literal member matches the text it declares"] {
+        convertedSetting(IntThenLiteralResource, "2026") == "2026" &&
+        convertedSetting(IntThenLiteralResource, "auto") == "auto" &&
+        convertedSetting(IntThenLiteralResource, 5) is Int &&
+        // Declared after the boolean member, which would otherwise parse the
+        // literal's own text into a boolean.
+        convertedSetting(BoolThenLiteralResource, "true") == "true"
+    }
+
+    ["A union of members that convert nothing of one another resolves in declaration order"] {
+        // Neither member reads its own type out of the other's values, so the
+        // structured value is left to the member declared first.
+        convertedSetting(MapThenDynamicResource, new Dynamic { a = "1" }) is Mapping
+    }
+
+    ["A member that is itself a union matches what its own members match"] {
+        convertedSetting(NestedScalarUnionThenTextResource, 5) is Int &&
+        convertedSetting(TextThenNestedScalarUnionResource, 5) is Int
+    }
+
+    // --- Conversion outside a union still coerces between scalar types ---
+
+    ["A number-typed field outside a union still converts text into a number"] {
+        gen.apply(SimpleFoo, new Dynamic { x = "5"; name = "n"; label = "coerce" }).x == 5
+    }
+
+    ["A text-typed field outside a union still converts a number into text"] {
+        gen.apply(SimpleFoo, new Dynamic { x = 1; name = 5; label = "coerce" }).name == "5"
+    }
+
+    // --- Resource references in union-typed fields ---
+
+    ["A resource reference in a union-typed field selects the resolvable member"] {
+        selectedMember(ScalarOrRefResource, reference(null)) == "FakeResolvable"
+    }
+
+    ["A resource reference still selects the resolvable member when the envelope omits a carrier"] {
+        // The recorded value, the stack and the property are all optional parts
+        // of the envelope; none of them decides whether the value is a reference.
+        selectedMember(ScalarOrRefResource, reference("$value")) == "FakeResolvable" &&
+        selectedMember(ScalarOrRefResource, reference("$stack")) == "FakeResolvable" &&
+        selectedMember(ScalarOrRefResource, reference("$property")) == "FakeResolvable"
+    }
+
+    ["A resource reference still selects the resolvable member when the recorded value is not text"] {
+        // The recorded value is a copy of whatever the referenced property
+        // holds, so it takes that property's type — it never decides the member.
+        selectedMember(ScalarOrRefResource, referenceValued(8080)) == "FakeResolvable" &&
+        selectedMember(ScalarOrRefResource, referenceValued(true)) == "FakeResolvable"
+    }
+
+    ["A resource reference wins over a structured sibling member"] {
+        // Losing here would turn the reference into literal map data, which
+        // renders as a copy of the referenced value instead of a reference.
+        selectedMember(RefOrMapResource, reference(null)) == "FakeResolvable" &&
+        selectedMember(RefOrMapResource, reference("$value")) == "FakeResolvable" &&
+        selectedMember(RefOrMapResource, reference("$stack")) == "FakeResolvable" &&
+        selectedMember(RefOrMapResource, reference("$property")) == "FakeResolvable"
+    }
+
+    // --- Envelopes handed to the handlers that pass a map through as data ---
+
+    ["An Any-typed field keeps a reference envelope as it stands"] {
+        let (target = renderedTarget(AnyFieldResource, reference(null)))
+        target.toMap()["$res"] == true &&
+        target.toMap()["$label"] == "vpc" &&
+        target.toMap()["$type"] == "TestProvider::EC2::VPC"
+    }
+
+    ["An Any-typed field still unwraps a recorded value to the value itself"] {
+        renderedTarget(AnyFieldResource, recordedValue(null)) == "s3cret"
+    }
+
+    ["A Dynamic-typed field keeps an envelope as it stands"] {
+        renderedTarget(DynamicFieldResource, reference(null)).toMap()["$res"] == true &&
+        renderedTarget(DynamicFieldResource, recordedValue(null)).toMap()["$value"] == "s3cret" &&
+        renderedTarget(DynamicFieldResource, embedded(new Listing { "a" })).toMap()["$embed"] == true
+    }
+
+    ["A Mapping-typed field converts an envelope entry by entry"] {
+        renderedTarget(MapFieldResource, reference(null)).toMap()["$res"] == true &&
+        renderedTarget(MapFieldResource, recordedValue(null)).toMap()["$strategy"] == "Update" &&
+        renderedTarget(MapFieldResource, embedded(new Listing { "a" })).toMap()["$embed"] == true
+    }
+
+    // --- An envelope selects the union member of its own family ---
+
+    ["A reference in a map-or-reference field selects the reference, not a copy of the envelope"] {
+        // The map member converts an envelope into a literal copy of itself, so
+        // the reference would be frozen into data and re-applied as settings
+        // named $label and $res.
+        selectedMember(MapThenRefResource, reference(null)) == "FakeResolvable"
+    }
+
+    ["A reference selects the reference member however the union orders its members"] {
+        selectedMember(StrMapThenRefResource, reference(null)) == "FakeResolvable" &&
+        selectedMember(RefThenAnyMapResource, reference(null)) == "FakeResolvable"
+    }
+
+    ["A reference member declared nullable or through a type alias is still a reference member"] {
+        selectedMember(MapThenNullableRefResource, reference(null)) == "FakeResolvable" &&
+        selectedMember(MapThenAliasedRefResource, reference(null)) == "FakeResolvable"
+    }
+
+    ["A reference nested inside a union member selects the reference"] {
+        // A parenthesised member stays a union of its own rather than being
+        // folded into the union around it, so the reference sits one level below
+        // the members preference looks at.
+        selectedMember(MapThenNestedRefResource, reference(null)) == "FakeResolvable" &&
+        selectedMember(NestedRefThenMapResource, reference(null)) == "FakeResolvable" &&
+        selectedMember(MapThenAliasedUnionResource, reference(null)) == "FakeResolvable"
+    }
+
+    ["A reference missing an optional part still selects the reference member over a map member"] {
+        selectedMember(MapThenRefResource, reference("$value")) == "FakeResolvable" &&
+        selectedMember(MapThenRefResource, reference("$stack")) == "FakeResolvable" &&
+        selectedMember(MapThenRefResource, reference("$property")) == "FakeResolvable" &&
+        selectedMember(MapThenRefResource, reference("$label")) == "FakeResolvable"
+    }
+
+    ["A recorded value selects the value member however the union orders its members"] {
+        selectedMember(MapThenValueResource, recordedValue(null)) == "FakeValue" &&
+        selectedMember(ValueThenMapResource, recordedValue(null)) == "FakeValue"
+    }
+
+    ["An embedded template selects the embedded member however the union orders its members"] {
+        let (env = embedded(new Listing { "echo vpc="; reference(null); " done" }))
+        selectedMember(MapThenEmbedResource, env) == "FakeEmbed" &&
+        selectedMember(EmbedThenMapResource, env) == "FakeEmbed"
+    }
+
+    // --- Data that only looks like an envelope stays data ---
+
+    ["Plain nested data in a reference-or-map field extracts as data"] {
+        // The reference member is declared first, and an object it cannot be
+        // built from must not become a reference with nothing to point at.
+        renderedTarget(RefOrMapResource, new Mapping { ["recipient"] = "#alerts" }).toMap() ==
+            Map("recipient", "#alerts")
+    }
+
+    ["Plain nested data extracts as data however the union orders its members"] {
+        renderedTarget(MapThenRefResource, new Mapping { ["recipient"] = "#alerts" }).toMap() ==
+            Map("recipient", "#alerts") &&
+        renderedTarget(RefThenAnyMapResource, new Mapping { ["recipient"] = "#alerts" }).toMap() ==
+            Map("recipient", "#alerts")
+    }
+
+    ["A map carrying a $res key that is not the marker extracts as data"] {
+        // Only the boolean true marks a reference; a map of the author's own
+        // with a key of that name is data, in a union and on its own.
+        let (odd = new Mapping { ["$res"] = "yes"; ["region"] = "eu-west-1" })
+        let (asData = Map("$res", "yes", "region", "eu-west-1"))
+        renderedTarget(MapFieldResource, odd).toMap() == asData &&
+        renderedTarget(MapThenRefResource, odd).toMap() == asData &&
+        renderedTarget(RefThenAnyMapResource, odd).toMap() == asData
+    }
+
+    ["A $res key holding false or text is not a reference"] {
+        selectedMember(MapThenRefResource, referenceWith("$res", false)) == "Mapping" &&
+        selectedMember(MapThenRefResource, referenceWith("$res", "x")) == "Mapping" &&
+        selectedMember(RefThenAnyMapResource, referenceWith("$res", false)) == "Mapping" &&
+        selectedMember(RefThenAnyMapResource, referenceWith("$res", "x")) == "Mapping"
+    }
+
+    ["A recorded value missing its visibility or strategy is not a value envelope"] {
+        selectedMember(MapThenValueResource, recordedValue("$visibility")) == "Mapping" &&
+        selectedMember(MapThenValueResource, recordedValue("$strategy")) == "Mapping" &&
+        selectedMember(ValueThenMapResource, recordedValue("$visibility")) == "Mapping" &&
+        selectedMember(ValueThenMapResource, recordedValue("$strategy")) == "Mapping"
+    }
+
+    ["An envelope is never preferred over a member of another family"] {
+        // Preference is family-scoped: a recorded value does not select a
+        // reference member, and a reference does not select a value member.
+        selectedMember(MapThenValueResource, reference(null)) == "Mapping" &&
+        selectedMember(MapThenEmbedResource, reference(null)) == "Mapping" &&
+        selectedMember(MapThenRefResource, recordedValue(null)) == "Mapping"
+    }
+
+    // --- An envelope-class field requires its envelope ---
+
+    ["A reference-typed field given plain data reports a failure instead of a reference with no target"] {
+        let (message = renderFailure(RefFieldResource, new Mapping { ["recipient"] = "#alerts" }))
+        message != null && message.contains("$res")
+    }
+
+    ["A value-typed field given plain data reports a failure"] {
+        let (message = renderFailure(ValueFieldResource, new Mapping { ["recipient"] = "#alerts" }))
+        message != null && message.contains("$value")
+    }
+
+    ["An embedded-typed field given plain data reports a failure"] {
+        let (message = renderFailure(EmbedFieldResource, new Mapping { ["recipient"] = "#alerts" }))
+        message != null && message.contains("$embed")
+    }
+
+    ["An envelope-class field still accepts an envelope of another family"] {
+        // The marker a field's class is built from is required, but which family
+        // the marker belongs to is not checked: a target typed as one family
+        // converts an envelope of another exactly as it always has.
+        selectedMember(RefFieldResource, recordedValue(null)) == "FakeValue"
+    }
+
+    ["A reference to another resource's secret resolves in a text-or-secret field"] {
+        // The shape a schema gives a field holding either a literal or a secret.
+        // A reference is not the family that field's class belongs to, and still
+        // has to render as a reference rather than be rejected.
+        selectedMember(TextOrSecretResource, reference(null)) == "FakeResolvable"
+    }
+
+    ["An embedded template that was never split into parts renders as the envelope it arrived as"] {
+        // Extract pre-processing rewrites {$embed, $template} into
+        // {$embed, $templateParts}, but passes a template it cannot split
+        // through unchanged, so the unsplit shape still arrives here — and has
+        // to render back into a forma that reproduces the envelope.
+        let (unsplit = new Mapping { ["$embed"] = true; ["$template"] = "echo vpc=" })
+        let (rendered = gen.genMapToPklStringWithTypes(
+            "EmbedFieldResource",
+            gen.genPklToMap(new Dynamic { target = renderedTarget(EmbedFieldResource, unsplit) }),
+            "test"))
+        rendered.contains("new formae.Embedded {") &&
+        rendered.contains("$embed = true") &&
+        rendered.contains("$template = \"echo vpc=\"")
+    }
+
+    ["An unsplit embedded template selects the embedded member of a union"] {
+        let (unsplit = new Mapping { ["$embed"] = true; ["$template"] = "echo vpc=" })
+        selectedMember(MapThenEmbedResource, unsplit) == "Embedded" &&
+        selectedMember(EmbedThenMapResource, unsplit) == "Embedded"
+    }
+
+    ["An embedded template carrying no parts at all reports a failure"] {
+        let (message = renderFailure(EmbedFieldResource, embedded(null)))
+        message != null && message.contains("$templateParts")
+    }
+
+    // --- Map conversion ---
+
+    ["A map key of the wrong type yields a failure value instead of dropping the entry"] {
+        let (result = gen.attemptApply(ComplexBar, new Dynamic {
+            items = new Listing { "a" }
+            metadata = new Mapping {
+                [1] = "one"
+                ["ok"] = "two"
+            }
+            label = "map"
+        }))
+        result is gen.GenerationFailure &&
+        (result as gen.GenerationFailure).message.contains("Expected \"String\"")
+    }
+
+    ["A map value that cannot be converted yields a failure value instead of dropping the entry"] {
+        let (result = gen.attemptApply(IntMapResource, new Dynamic {
+            counts = new Mapping { ["a"] = "abc" }
+            label = "map"
+        }))
+        result is gen.GenerationFailure &&
+        (result as gen.GenerationFailure).message.contains("cannot be parsed as Int")
+    }
+
+    ["A map value that converts is still coerced to the declared value type"] {
+        let (result = gen.attemptApply(IntMapResource, new Dynamic {
+            counts = new Mapping { ["a"] = "5"; ["b"] = "6" }
+            label = "map"
+        }))
+        !(result is gen.GenerationFailure) &&
+        (result as IntMapResource).counts.toMap() == Map("a", 5, "b", 6)
+    }
+
+    ["A map entry that cannot be converted names the key it came from"] {
+        let (result = gen.attemptApply(IntMapResource, new Dynamic {
+            counts = new Mapping { ["a"] = "5"; ["b"] = "abc" }
+            label = "map"
+        }))
+        result is gen.GenerationFailure &&
+        gen.failureMessage(result as gen.GenerationFailure).contains("counts[\"b\"]")
+    }
+
+    // --- List conversion ---
+
+    ["A map element of a list that cannot be converted names the element index"] {
+        let (result = gen.attemptApply(MapListResource, new Dynamic {
+            groups = new Listing {
+                new Mapping {
+                    ["Name"] = "web"
+                    ["enabled"] = true
+                }
+            }
+            label = "list"
+        }))
+        result is gen.GenerationFailure &&
+        gen.failureMessage(result as gen.GenerationFailure).contains("groups[0][\"enabled\"]")
+    }
+
+    ["A typed element of a list that cannot be converted names the element index"] {
+        let (result = gen.attemptApply(HolderListResource, new Dynamic {
+            holders = new Listing { new Dynamic { n = true } }
+            label = "list"
+        }))
+        result is gen.GenerationFailure &&
+        gen.failureMessage(result as gen.GenerationFailure).contains("holders[0][\"n\"]")
+    }
+
+    // --- Rendering a resource reports what failed ---
+
+    ["Rendering a resource whose property cannot be converted names the resource and the property"] {
+        let (message = module.catch(() -> gen.applyResource(IntMapResource, new Dynamic {
+            counts = new Mapping { ["a"] = "abc" }
+            label = "map"
+        }, "Cannot render resource \"map\" in stack \"default\"")))
+        message.contains("Cannot render resource \"map\" in stack \"default\"") &&
+        message.contains("counts[\"a\"]") &&
+        message.contains("cannot be parsed as Int")
+    }
+
+    ["A resource missing a property the schema requires is still rendered, partially"] {
+        // A resource is rendered on its own, with no alternative to fall
+        // through to, so an absent property is simply left out of the result.
+        // A union member missing one is rejected instead, because there the
+        // absence is what tells the members apart.
+        let (rendered = gen.applyResource(TestResource, new Dynamic {
+            size = 1024
+            label = "my-bucket"
+        }, "Cannot render resource \"my-bucket\" in stack \"default\""))
+        !rendered.containsKey("bucketName") &&
+        rendered["size"] == 1024 &&
+        rendered["label"] == "my-bucket"
+    }
+
+    // --- Malformed envelopes report a failure instead of aborting ---
+
+    ["A resource reference carrying no resource type yields a failure value"] {
+        let (result = gen.attemptApply(HolderResource, new Dynamic {
+            holder = new Dynamic {
+                ["$res"] = true
+                ["$label"] = "vpc"
+                ["$property"] = "VpcId"
+            }
+            label = "ref"
+        }))
+        result is gen.GenerationFailure &&
+        (result as gen.GenerationFailure).message.contains("$type must be a String")
+    }
+
+    ["A resource reference whose property path is not a String yields a failure value"] {
+        let (result = gen.attemptApply(HolderResource, new Dynamic {
+            holder = new Dynamic {
+                ["$res"] = true
+                ["$label"] = "vpc"
+                ["$type"] = "TestProvider::EC2::VPC"
+                ["$property"] = 5
+            }
+            label = "ref"
+        }))
+        result is gen.GenerationFailure &&
+        (result as gen.GenerationFailure).message.contains("$property must be a String")
+    }
+
+    ["An embedded template whose parts are not a list yields a failure value"] {
+        let (result = gen.attemptApply(HolderResource, new Dynamic {
+            holder = new Dynamic {
+                ["$embed"] = true
+                ["$templateParts"] = "cf.kvs('...')"
+            }
+            label = "embed"
+        }))
+        result is gen.GenerationFailure &&
+        (result as gen.GenerationFailure).message.contains("Expected \"Listing|List|Dynamic\"")
+    }
+
+    // --- A diagnostic names types, never the value it was given ---
+
+    ["A union no member accepts names every member, its reason and the value's type"] {
+        settingFailure(IntThenBoolResource) ==
+            "setting: No member of this union accepted a String value. "
+            + "Int: Expected \"Int\" but got \"String that cannot be parsed as Int\"; "
+            + "Boolean: Expected \"Boolean\" but got \"String that cannot be parsed as Boolean\"" &&
+        !settingFailure(IntThenBoolResource).contains(sentinel)
+    }
+
+    ["A union reports its members in the order the schema declares them"] {
+        settingFailure(BoolThenIntResource) ==
+            "setting: No member of this union accepted a String value. "
+            + "Boolean: Expected \"Boolean\" but got \"String that cannot be parsed as Boolean\"; "
+            + "Int: Expected \"Int\" but got \"String that cannot be parsed as Int\""
+    }
+
+    ["Members that reject a value for the same reason are reported once, together"] {
+        settingFailure(IntThenAliasedIntResource) ==
+            "setting: No member of this union accepted a String value. "
+            + "Int, Year: Expected \"Int\" but got \"String that cannot be parsed as Int\""
+    }
+
+    ["A union failure names the class of the value and locates the member reasons"] {
+        failureFor(IntThenStrResource, unmatchableHolderProperties) ==
+            "holder: No member of this union accepted a Dynamic value. "
+            + "IntHolder: n: Expected \"Int\" but got \"Listing\"; "
+            + "StrHolder: n: Expected \"String\" but got \"Listing\""
+    }
+
+    ["A union of unions keeps its failure bounded"] {
+        // Every member's reason is itself a union's reasons, so without a bound
+        // the message grows with every level of nesting.
+        settingFailure(NestedUnionResource).length < 600 &&
+        settingFailure(DeeperUnionResource).length <= settingFailure(NestedUnionResource).length &&
+        settingFailure(NestedUnionResource).startsWith(
+            "setting: No member of this union accepted a String value. ") &&
+        !settingFailure(NestedUnionResource).contains(sentinel)
+    }
+
+    ["A union with more members than a message reports says how many it left out"] {
+        // Ten members reject the value for ten different reasons.
+        settingFailure(ManyMemberUnionResource).endsWith("; and 2 more") &&
+        settingFailure(ManyMemberUnionResource).contains("Int: ") &&
+        settingFailure(ManyMemberUnionResource).contains("\"b\": ") &&
+        !settingFailure(ManyMemberUnionResource).contains("\"d\": ")
+    }
+
+    ["A union member rejected by a deferred check reports it without the value it carried"] {
+        // PKL's own diagnostic for a violated constraint quotes the value that
+        // violated it, and that diagnostic is what the read-ahead catches.
+        let (message = failureFor(XorThenStrResource, new Dynamic {
+            step = new Dynamic {
+                run = sentinel
+                uses = "actions/checkout@v4"
+            }
+            label = "step"
+        }))
+        message.contains("does not satisfy its declared property types or constraints") &&
+        !message.contains(sentinel)
+    }
+
+    ["A map key that is not a scalar locates a failure by its type, not its content"] {
+        let (message = failureFor(IntKeyMapResource, new Dynamic {
+            keyed = new Dynamic {
+                [new Dynamic { secretPart = sentinel }] = "x"
+            }
+            label = "keyed"
+        }))
+        message == "keyed[Dynamic]: Expected \"Int\" but got \"Dynamic\"" &&
+        !message.contains(sentinel)
+    }
+
+    ["A map key a union member reports is bracketed, not read as a property name"] {
+        failureFor(MapThenIntResource, new Dynamic {
+            setting = new Dynamic { [sentinel] = "abc" }
+            label = "scalar"
+        }) ==
+            "setting: No member of this union accepted a Dynamic value. "
+            + "Mapping<String, Int>: [\"\(sentinel)\"]: "
+            + "Expected \"Int\" but got \"String that cannot be parsed as Int\"; "
+            + "Int: Expected \"Int\" but got \"Dynamic\""
+    }
+
+    ["A reason more members share than a message names is reported shortened"] {
+        settingFailure(LongLabelUnionResource) ==
+            "setting: No member of this union accepted a String value. "
+            + "LongLabelledIntAlpha, LongLabelledIntBravo, LongLabelledIntC...: "
+            + "Expected \"Int\" but got \"String that cannot be parsed as Int\""
+    }
+
+    ["A scalar handler names the type it could not parse, never the text it was given"] {
+        let (messages = List(
+            failureFor(ScalarFieldsResource, new Dynamic { count = sentinel; label = "s" }),
+            failureFor(ScalarFieldsResource, new Dynamic { ratio = sentinel; label = "s" }),
+            failureFor(ScalarFieldsResource, new Dynamic { amount = sentinel; label = "s" }),
+            failureFor(ScalarFieldsResource, new Dynamic { enabled = sentinel; label = "s" }),
+            failureFor(ScalarFieldsResource, new Dynamic { timeout = sentinel; label = "s" }),
+            failureFor(ScalarFieldsResource, new Dynamic { capacity = sentinel; label = "s" })
+        ))
+        messages.every((message) -> message.contains("cannot be parsed as")) &&
+        messages.every((message) -> !message.contains(sentinel))
+    }
+
+    ["A field pinned to one text reports a different text without quoting it"] {
+        settingFailure(LiteralFieldResource) ==
+            "setting: Expected \"2026\" but got \"a different String\""
+    }
+
+    ["A field whose class no handler converts to names the value's type, not the value"] {
+        let (message = failureFor(UnsupportedFieldResource, new Dynamic {
+            span = sentinel
+            label = "unsupported"
+        }))
+        message.contains("IntSeq") &&
+        message.contains("String") &&
+        !message.contains(sentinel)
     }
 
 }
