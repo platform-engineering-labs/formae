@@ -120,11 +120,14 @@ hidden classHandlers: Mapping<Class, (List<reflect.Type>, Any) -> Any|Generation
       let (keyType = typeArguments.getOrNull(0) ?? reflect.unknownType)
       let (valueType = typeArguments.getOrNull(1) ?? reflect.unknownType)
       let (sourceMap = value.toMap())
-        sourceMap.fold(Map(), (acc: Map, key: String, val: Any) ->
+        // The key is left untyped: a source map can carry a key of any type, and
+        // annotating it as String turns a mismatch into an error no caller can
+        // report on.
+        sourceMap.fold(Map(), (acc: Map, key: Any, val: Any) ->
           let (convertedKey =
             if (keyType.getClass().simpleName == "DeclaredType" &&
                 (keyType as reflect.DeclaredType).referent.reflectee == String)
-              key
+              if (key is String) key else Unexpected("String", key.getClass().simpleName)
             else
               applyType(keyType, key)
           )
@@ -184,12 +187,22 @@ local function applyList(type: reflect.Type, value: Dynamic|Collection): List|Ge
 local function deferredFailure(value: Any): String? =
   test.catchOrNull(() -> readDeeply(value))
 
-/// Reads every property and element of `value`, recursively. The result is
+/// Reads the properties and entries of `value`, recursively. The result is
 /// discarded — only the reading matters.
+///
+/// A `Typed` is walked property by property, skipping the hidden ones and the
+/// ones conversion skips, so that reading stays scoped to what conversion
+/// actually populated. Its `toMap()` cannot be used for this: it evaluates
+/// every property before any of them can be filtered out, and the schema
+/// defaults behind the skipped ones are not always safe to evaluate.
 local function readDeeply(value: Any): Boolean =
   if (value is Map)
     value.fold(true, (acc: Boolean, _key, element) -> readDeeply(element) && acc)
-  else if (value is Typed|Dynamic|Mapping)
+  else if (value is Typed)
+    reflect.Class(value.getClass()).allProperties
+      .filter((name, prop) -> !prop.modifiers.contains("hidden") && !shouldSkipPropertyName(name))
+      .fold(true, (acc: Boolean, name: String, _prop) -> readDeeply(value.getPropertyOrNull(name)) && acc)
+  else if (value is Dynamic|Mapping)
     readDeeply(value.toMap())
   else if (value is Listing)
     readDeeply(value.toList())
@@ -287,12 +300,23 @@ class FakeValue extends formae.Value {
   isHashed = FakeHashed
 }
 
+/// Carrier for a decoded $res envelope.
+///
+/// Every carrier is nullable because the envelope carries each part optionally:
+/// the label, stack and property come from `formae.Resolvable`'s own nullable
+/// properties, and the recorded value is absent whenever the agent has none.
+/// Only the presence of the envelope makes a value a reference, so a missing
+/// part must not stop one being built.
+///
+/// RealValue is a copy of whatever the referenced property holds, so it takes
+/// that property's type — a port is an Int, a flag a Boolean. It is only ever
+/// rendered into a trailing comment, so it is carried untyped.
 class FakeResolvable extends formae.Resolvable {
-  FakeLabel: String = label
-  FakeStack: String = stack
-  FakeType: String
-  RealValue: String
-  FakeProperty: String
+  FakeLabel: String? = label
+  FakeStack: String? = stack
+  FakeType: String?
+  RealValue: Any?
+  FakeProperty: String?
 }
 
 /// Carrier for a pre-processed $embed field.

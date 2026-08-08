@@ -140,6 +140,41 @@ local class HolderResource extends formae.Resource {
     holder: StrHolder
 }
 
+/// A member carrying a property that conversion skips, whose schema default
+/// cannot be evaluated. Reading it is what a converted value must not do.
+local class UnsafeDefaultHolder {
+    n: String
+    output: String = throw("the skipped property was evaluated")
+}
+
+@formae.ResourceHint
+local class SkippedDefaultResource extends formae.Resource {
+    type = "FakePlugin::Union::SkippedDefault"
+
+    @formae.FieldHint
+    holder: UnsafeDefaultHolder|StrHolder
+}
+
+/// A scalar-or-reference field: the shape a schema gives a property that either
+/// holds a literal or points at another resource.
+@formae.ResourceHint
+local class ScalarOrRefResource extends formae.Resource {
+    type = "FakePlugin::Union::ScalarOrRef"
+
+    @formae.FieldHint
+    target: String|formae.Resolvable
+}
+
+/// The same union with a structured sibling, so a reference that loses
+/// selection degrades into literal data rather than failing outright.
+@formae.ResourceHint
+local class RefOrMapResource extends formae.Resource {
+    type = "FakePlugin::Union::RefOrMap"
+
+    @formae.FieldHint
+    target: formae.Resolvable|Mapping<String, String>
+}
+
 @formae.ResourceHint
 local class DefaultsResource extends formae.Resource {
     type = "FakePlugin::Defaults::Resource"
@@ -222,6 +257,42 @@ local unmatchableHolderProperties: Dynamic = new Dynamic {
     holder = new Dynamic { n = new Listing { "abc" } }
     label = "holder"
 }
+
+// A member that fits the value, whose skipped property carries an
+// unevaluatable default.
+local skippedDefaultProperties: Dynamic = new Dynamic {
+    holder = new Dynamic { n = "abc" }
+    label = "skipped"
+}
+
+/// Builds the $res envelope the agent records for a reference to another
+/// resource's property, optionally omitting one of its keys.
+local function reference(omitted: String?): Mapping =
+    let (env = Map(
+        "$res", true,
+        "$label", "vpc",
+        "$stack", "network",
+        "$type", "TestProvider::EC2::VPC",
+        "$property", "VpcId",
+        "$value", "vpc-0123456789"
+    ))
+    (if (omitted == null) env else env.remove(omitted)).toMapping()
+
+/// The same envelope carrying a recorded value of the caller's choosing.
+local function referenceValued(recorded: Any): Mapping =
+    reference("$value").toMap().put("$value", recorded).toMapping()
+
+/// Applies an envelope to a union-typed field and names the member the union
+/// resolved to.
+local function selectedMember(res: Class, env: Mapping): String =
+    let (result = gen.attemptApply(res, new Dynamic {
+        target = env
+        label = "ref"
+    }))
+    if (result is gen.GenerationFailure)
+        "GenerationFailure"
+    else
+        (result as Typed).getPropertyOrNull("target").getClass().simpleName
 
 examples {
     ["Apply simple class"] {
@@ -615,21 +686,77 @@ facts {
         gen.attemptApply(IntThenStrResource, unmatchableHolderProperties) is gen.GenerationFailure
     }
 
+    ["A property conversion skips is not evaluated while selecting a union member"] {
+        // UnsafeDefaultHolder fits the value; only its skipped `output` property
+        // is unevaluatable. Selection must scope itself to what conversion
+        // populated, so the member still wins.
+        let (result = gen.attemptApply(SkippedDefaultResource, skippedDefaultProperties))
+        !(result is gen.GenerationFailure) &&
+        (result as SkippedDefaultResource).holder is UnsafeDefaultHolder
+    }
+
+    // --- Resource references in union-typed fields ---
+
+    ["A resource reference in a union-typed field selects the resolvable member"] {
+        selectedMember(ScalarOrRefResource, reference(null)) == "FakeResolvable"
+    }
+
+    ["A resource reference still selects the resolvable member when the envelope omits a carrier"] {
+        // The recorded value, the stack and the property are all optional parts
+        // of the envelope; none of them decides whether the value is a reference.
+        selectedMember(ScalarOrRefResource, reference("$value")) == "FakeResolvable" &&
+        selectedMember(ScalarOrRefResource, reference("$stack")) == "FakeResolvable" &&
+        selectedMember(ScalarOrRefResource, reference("$property")) == "FakeResolvable"
+    }
+
+    ["A resource reference still selects the resolvable member when the recorded value is not text"] {
+        // The recorded value is a copy of whatever the referenced property
+        // holds, so it takes that property's type — it never decides the member.
+        selectedMember(ScalarOrRefResource, referenceValued(8080)) == "FakeResolvable" &&
+        selectedMember(ScalarOrRefResource, referenceValued(true)) == "FakeResolvable"
+    }
+
+    ["A resource reference wins over a structured sibling member"] {
+        // Losing here would turn the reference into literal map data, which
+        // renders as a copy of the referenced value instead of a reference.
+        selectedMember(RefOrMapResource, reference(null)) == "FakeResolvable" &&
+        selectedMember(RefOrMapResource, reference("$value")) == "FakeResolvable" &&
+        selectedMember(RefOrMapResource, reference("$stack")) == "FakeResolvable" &&
+        selectedMember(RefOrMapResource, reference("$property")) == "FakeResolvable"
+    }
+
+    // --- Map conversion ---
+
+    ["A map key of the wrong type is skipped instead of aborting the conversion"] {
+        let (result = gen.attemptApply(ComplexBar, new Dynamic {
+            items = new Listing { "a" }
+            metadata = new Mapping {
+                [1] = "one"
+                ["ok"] = "two"
+            }
+            label = "map"
+        }))
+        !(result is gen.GenerationFailure) &&
+        (result as ComplexBar).metadata.toMap() == Map("ok", "two")
+    }
+
     // --- Malformed envelopes report a failure instead of aborting ---
 
     ["A resource reference carrying no resource type yields a failure value"] {
-        gen.attemptApply(HolderResource, new Dynamic {
+        let (result = gen.attemptApply(HolderResource, new Dynamic {
             holder = new Dynamic {
                 ["$res"] = true
                 ["$label"] = "vpc"
                 ["$property"] = "VpcId"
             }
             label = "ref"
-        }) is gen.GenerationFailure
+        }))
+        result is gen.GenerationFailure &&
+        (result as gen.GenerationFailure).message.contains("$type must be a String")
     }
 
     ["A resource reference whose property path is not a String yields a failure value"] {
-        gen.attemptApply(HolderResource, new Dynamic {
+        let (result = gen.attemptApply(HolderResource, new Dynamic {
             holder = new Dynamic {
                 ["$res"] = true
                 ["$label"] = "vpc"
@@ -637,17 +764,21 @@ facts {
                 ["$property"] = 5
             }
             label = "ref"
-        }) is gen.GenerationFailure
+        }))
+        result is gen.GenerationFailure &&
+        (result as gen.GenerationFailure).message.contains("$property must be a String")
     }
 
     ["An embedded template whose parts are not a list yields a failure value"] {
-        gen.attemptApply(HolderResource, new Dynamic {
+        let (result = gen.attemptApply(HolderResource, new Dynamic {
             holder = new Dynamic {
                 ["$embed"] = true
                 ["$templateParts"] = "cf.kvs('...')"
             }
             label = "embed"
-        }) is gen.GenerationFailure
+        }))
+        result is gen.GenerationFailure &&
+        (result as gen.GenerationFailure).message.contains("Expected \"Listing|List|Dynamic\"")
     }
 
 }
