@@ -294,7 +294,7 @@ func (r *PackageResolver) SchemaManifestForNamespace(namespace string) *SchemaMa
 	}
 	var versions []string
 	for _, e := range entries {
-		if e.IsDir() && strings.HasPrefix(e.Name(), "v") {
+		if e.IsDir() && isSchemaVersionDir(e.Name()) {
 			versions = append(versions, e.Name())
 		}
 	}
@@ -306,6 +306,17 @@ func (r *PackageResolver) SchemaManifestForNamespace(namespace string) *SchemaMa
 		Versions: versions,
 		Default:  versions[len(versions)-1],
 	}
+}
+
+// isSchemaVersionDir reports whether a schema/pkl subdirectory name denotes a
+// schema version rather than a resource/service directory. Version keys are
+// always "v" followed by a digit (v1.30, v0.1.13, v2024-01-01). Service
+// directories that merely start with "v" — e.g. GCP's "vpcaccess" — are not
+// versions; treating one as a version narrows the extract import glob to that
+// single subtree and makes every other resource type fail with
+// "Cannot find key".
+func isSchemaVersionDir(name string) bool {
+	return len(name) >= 2 && name[0] == 'v' && name[1] >= '0' && name[1] <= '9'
 }
 
 // sortVersionKeys sorts in-place. When every key parses as semver,
