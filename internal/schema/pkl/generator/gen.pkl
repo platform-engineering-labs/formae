@@ -331,6 +331,56 @@ local function envelopeMemberOf(members: List<reflect.Type>, value: Any): reflec
       if (marker == null) null
       else members.findOrNull((member) -> envelopeMarkerOfType(member) == marker)
 
+/// The classes whose handlers convert a value of one of them into another: a
+/// number is read out of text, text is written from a number, a boolean is
+/// parsed from text. Those conversions are what an extracted value needs when
+/// the field declares a single type, and they are why declaration order alone
+/// decides which of them a union resolves to.
+local scalarClasses: List<Class> = List(Int, Float, Number, String, Boolean, Duration, DataSize)
+
+/// Whether `value` is already an instance of `type`, tested without converting
+/// it. Conversion would answer the question by producing the very coerced value
+/// the test exists to avoid, and would repeat the work the selected member goes
+/// on to do.
+///
+/// The test is answered for the scalar members of a union and for its string
+/// literals, and only for them: those are the members whose handlers convert
+/// one another's values. Every other member is left to conversion, which for a
+/// container or a class already reports a value that does not fit it.
+///
+/// A nullable member is unwrapped to the type it wraps, and a member declared
+/// through a type alias to the type the alias refers to, so `Int?` and an alias
+/// of `Int` are matched by an `Int` exactly as `Int` itself is. A string
+/// literal is matched only by the text it declares.
+local function isExactly(type: reflect.Type, value: Any): Boolean =
+  if (type is reflect.NullableType)
+    isExactly((type as reflect.NullableType).member, value)
+  else if (type is reflect.StringLiteralType)
+    value == (type as reflect.StringLiteralType).value
+  else if (type is reflect.DeclaredType)
+    let (reflectee = (type as reflect.DeclaredType).referent.reflectee)
+      if (reflectee is Class)
+        scalarClasses.contains(reflectee) &&
+          reflect.Class(value.getClass()).isSubclassOf(reflect.Class(reflectee))
+      else
+        isExactly(reflect.TypeAlias(reflectee).referent, value)
+  else
+    false
+
+/// The first union member `value` is already an instance of, or `null` when no
+/// member is a type it already has.
+///
+/// Members overlap: an `Int` is an instance of both `Number` and `Int`, and a
+/// string literal is matched by the same text a `String` member is. The member
+/// declared first wins such a tie — selection reports which members a value
+/// belongs to, not which of them fits it most closely.
+///
+/// A null value belongs to no member here; the nullable member that accepts it
+/// converts it in declaration order like any other value.
+local function exactMemberOf(members: List<reflect.Type>, value: Any): reflect.Type? =
+  if (value == null) null
+  else members.findOrNull((member) -> isExactly(member, value))
+
 /// Converts `value` as one member of a union, reporting an error the conversion
 /// defers as a failure value rather than leaving it to surface while the forma
 /// is rendered.
@@ -376,18 +426,28 @@ hidden reflectTypeHandlers: Mapping<Class, (reflect.Type, Any) -> Any|Generation
       if (envelopeMember != null)
         attemptMember(envelopeMember, value)
       else
-        members.fold(
-          Fail("No member of union type matched value '\(value)' \(type)"),
-          (acc, _type) ->
-            if (acc is GenerationFailure)
-              // A member counts as matched only once its deferred checks have
-              // run: a converted object that raises the moment anything reads it
-              // does not belong to this member.
-              let (attempt = attemptMember(_type, value))
-                if (attempt is GenerationFailure) acc else attempt
-            else
-              acc
-        )
+        let (exactMember = exactMemberOf(members, value))
+          // A scalar handler reads its own type out of any of the others, so a
+          // union of them resolves by declaration order alone: text stored for
+          // a `String|Int` field comes back a number, and re-applying it is
+          // rejected by the provider it was extracted from. A member the value
+          // already is takes precedence, and only a value belonging to none of
+          // them is converted in declaration order.
+          if (exactMember != null)
+            attemptMember(exactMember, value)
+          else
+            members.fold(
+              Fail("No member of union type matched value '\(value)' \(type)"),
+              (acc, _type) ->
+                if (acc is GenerationFailure)
+                  // A member counts as matched only once its deferred checks
+                  // have run: a converted object that raises the moment
+                  // anything reads it does not belong to this member.
+                  let (attempt = attemptMember(_type, value))
+                    if (attempt is GenerationFailure) acc else attempt
+                else
+                  acc
+            )
 
     [reflect.UnknownType] = (_, value) ->
       value

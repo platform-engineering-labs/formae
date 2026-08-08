@@ -461,6 +461,97 @@ local class DefaultsResource extends formae.Resource {
     mode: String? = "auto"
 }
 
+/// Scalar unions whose members convert one another's values, in both member
+/// orders. Which member selection resolves to is observable in the class the
+/// field comes out as.
+@formae.ResourceHint
+local class IntThenTextResource extends formae.Resource {
+    type = "FakePlugin::Union::IntThenText"
+
+    @formae.FieldHint
+    setting: Int|String
+}
+
+@formae.ResourceHint
+local class TextThenIntResource extends formae.Resource {
+    type = "FakePlugin::Union::TextThenInt"
+
+    @formae.FieldHint
+    setting: String|Int
+}
+
+@formae.ResourceHint
+local class BoolThenTextResource extends formae.Resource {
+    type = "FakePlugin::Union::BoolThenText"
+
+    @formae.FieldHint
+    setting: Boolean|String
+}
+
+@formae.ResourceHint
+local class TextThenBoolResource extends formae.Resource {
+    type = "FakePlugin::Union::TextThenBool"
+
+    @formae.FieldHint
+    setting: String|Boolean
+}
+
+/// Overlapping members: an Int is an instance of both of them.
+@formae.ResourceHint
+local class NumberThenIntResource extends formae.Resource {
+    type = "FakePlugin::Union::NumberThenInt"
+
+    @formae.FieldHint
+    setting: Number|Int
+}
+
+/// A scalar union that is itself nullable, and one whose first member is.
+@formae.ResourceHint
+local class NullableScalarUnionResource extends formae.Resource {
+    type = "FakePlugin::Union::NullableScalar"
+
+    @formae.FieldHint
+    setting: (Int|String)?
+}
+
+@formae.ResourceHint
+local class NullableIntThenTextResource extends formae.Resource {
+    type = "FakePlugin::Union::NullableIntThenText"
+
+    @formae.FieldHint
+    setting: (Int?)|String
+}
+
+/// A scalar member declared through a type alias.
+local typealias Year = Int
+
+@formae.ResourceHint
+local class AliasedIntThenTextResource extends formae.Resource {
+    type = "FakePlugin::Union::AliasedIntThenText"
+
+    @formae.FieldHint
+    setting: Year|String
+}
+
+/// The shape a schema gives a field holding either structured data or the text
+/// it was stored as.
+@formae.ResourceHint
+local class DynamicThenTextResource extends formae.Resource {
+    type = "FakePlugin::Union::DynamicThenText"
+
+    @formae.FieldHint
+    setting: Dynamic|String
+}
+
+/// A string literal alongside the scalar members whose values overlap it.
+@formae.ResourceHint
+local class IntThenLiteralResource extends formae.Resource {
+    type = "FakePlugin::Union::IntThenLiteral"
+
+    @formae.FieldHint
+    setting: Int|"2026"|String
+}
+
 // Test data
 local simpleProperties: Dynamic = new Dynamic {
    x = 42
@@ -601,6 +692,17 @@ local function renderFailure(res: Class, env: Any): String? =
 /// that diagnostic.
 local function selectedMember(res: Class, env: Any): String =
     renderedTarget(res, env).getClass().simpleName
+
+/// Applies `setting` to a resource's union-typed `setting` field and returns
+/// what that field came out as, so the member the union resolved to is
+/// observable in the class of the result.
+local function convertedSetting(res: Class, stored: Any): Any =
+    let (result = gen.attemptApply(res, new Dynamic {
+        setting = stored
+        label = "scalar"
+    }))
+        if (result is gen.GenerationFailure) throw(gen.failureMessage(result))
+        else (result as Typed).getPropertyOrNull("setting")
 
 examples {
     ["Apply simple class"] {
@@ -1081,6 +1183,78 @@ facts {
         !(result is gen.GenerationFailure) &&
         (result as KindedThenStrResource).holder is KindedHolder &&
         ((result as KindedThenStrResource).holder as KindedHolder).kind == "email"
+    }
+
+    // --- A scalar union keeps the member the value already belongs to ---
+
+    ["Text in a number-or-text field stays text however the union orders its members"] {
+        // Re-applying a title extracted as a number is rejected by the provider
+        // the field came from, so the member the value already is decides.
+        convertedSetting(IntThenTextResource, "2026") is String &&
+        convertedSetting(TextThenIntResource, "2026") is String
+    }
+
+    ["A number in a text-or-number field stays a number however the union orders its members"] {
+        convertedSetting(TextThenIntResource, 5) is Int &&
+        convertedSetting(IntThenTextResource, 5) is Int
+    }
+
+    ["Text in a boolean-or-text field stays text however the union orders its members"] {
+        convertedSetting(BoolThenTextResource, "true") is String &&
+        convertedSetting(TextThenBoolResource, "true") is String
+    }
+
+    ["A boolean in a text-or-boolean field stays a boolean however the union orders its members"] {
+        convertedSetting(TextThenBoolResource, true) is Boolean &&
+        convertedSetting(BoolThenTextResource, true) is Boolean
+    }
+
+    ["Overlapping scalar members resolve to the one declared first"] {
+        // An Int is an instance of both members, and the first declared wins:
+        // the Number member returns it unchanged rather than a member being
+        // scored as the closer fit.
+        convertedSetting(NumberThenIntResource, 5) is Int &&
+        // Text is an instance of neither, so it converts in declaration order
+        // and comes out as the first member's conversion of it.
+        convertedSetting(NumberThenIntResource, "5") is Float
+    }
+
+    ["A nullable scalar union keeps an absent value null and text text"] {
+        convertedSetting(NullableScalarUnionResource, null) == null &&
+        convertedSetting(NullableScalarUnionResource, "2026") is String
+    }
+
+    ["A nullable member of a scalar union matches only what it wraps"] {
+        convertedSetting(NullableIntThenTextResource, "2026") is String &&
+        convertedSetting(NullableIntThenTextResource, 5) is Int
+    }
+
+    ["A scalar member declared through a type alias matches what the alias refers to"] {
+        convertedSetting(AliasedIntThenTextResource, "2026") is String &&
+        convertedSetting(AliasedIntThenTextResource, 5) is Int
+    }
+
+    ["Text in a structured-or-text field stays the text it was stored as"] {
+        // The structured member reads data out of text that looks like JSON, so
+        // text a provider stored as text would come back as an object and be
+        // re-applied as one.
+        convertedSetting(DynamicThenTextResource, "{\"a\": 1}") == "{\"a\": 1}"
+    }
+
+    ["A string literal member matches the text it declares"] {
+        convertedSetting(IntThenLiteralResource, "2026") == "2026" &&
+        convertedSetting(IntThenLiteralResource, "auto") == "auto" &&
+        convertedSetting(IntThenLiteralResource, 5) is Int
+    }
+
+    // --- Conversion outside a union still coerces between scalar types ---
+
+    ["A number-typed field outside a union still converts text into a number"] {
+        gen.apply(SimpleFoo, new Dynamic { x = "5"; name = "n"; label = "coerce" }).x == 5
+    }
+
+    ["A text-typed field outside a union still converts a number into text"] {
+        gen.apply(SimpleFoo, new Dynamic { x = 1; name = 5; label = "coerce" }).name == "5"
     }
 
     // --- Resource references in union-typed fields ---
