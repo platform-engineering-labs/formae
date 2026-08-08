@@ -14,6 +14,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 
+	"github.com/platform-engineering-labs/formae/internal/metastructure/transformations"
+
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
@@ -182,4 +184,21 @@ func TestStripOpaqueFieldsForPriorProperties_RedactsConvertedPriorState(t *testi
 	assert.NotContains(t, string(stripped), envelope.Value.(string),
 		"the bare digest conversion leaves behind must not reach the plugin")
 	assert.Equal(t, "h", gjson.GetBytes(stripped, "settings.host").String())
+}
+
+// Redaction over-matches for the same reason hashing does, so it returns the
+// same diagnostics for its caller to surface rather than resolving them
+// silently.
+func TestStripOpaqueFieldsForPriorProperties_ReturnsAmbiguityDiagnostics(t *testing.T) {
+	props := json.RawMessage(`{"a":{"b":{"c":"d1"}},"a.b":{"c":"d2"}}`)
+	schema := opaqueSchema("a.b.c")
+
+	stripped, diags, err := StripOpaqueFieldsForPriorProperties(props, schema, schema, "")
+	require.NoError(t, err)
+
+	require.Len(t, diags, 1)
+	assert.Equal(t, transformations.DiagnosticWarn, diags[0].Severity)
+	assert.Equal(t, "a.b.c", diags[0].Hint)
+	assert.NotContains(t, string(stripped), "d1", "redaction is still fail-safe under ambiguity")
+	assert.NotContains(t, string(stripped), "d2")
 }
