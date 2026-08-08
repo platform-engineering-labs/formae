@@ -369,8 +369,11 @@ func TestMSSQLResourceUpdatesStats(t *testing.T) {
 
 	now := time.Now().UTC().Truncate(time.Millisecond)
 
-	// Two apply commands (one with a failed RU), seeded resources for stack/type counts.
-	store := func(id, client string, ruState resource_update.ResourceUpdateState) {
+	// Two apply commands (one with a failed RU), seeded resources for stack/type
+	// counts. The updates carry the seeded ksuids because the error count is
+	// taken against the live inventory: a ksuid with no live resources row is
+	// not an erroring resource.
+	store := func(id, client, ksuid string, ruState resource_update.ResourceUpdateState) {
 		fc := &forma_command.FormaCommand{
 			ID:         id,
 			State:      forma_command.CommandStateSuccess,
@@ -386,7 +389,7 @@ func TestMSSQLResourceUpdatesStats(t *testing.T) {
 					StartTs:      now,
 					ModifiedTs:   now,
 					StackLabel:   "stk",
-					DesiredState: pkgmodel.Resource{Ksuid: "k-" + id, Label: "r-" + id, Type: "AWS::S3::Bucket", Stack: "stk"},
+					DesiredState: pkgmodel.Resource{Ksuid: ksuid, Label: "r-" + id, Type: "AWS::S3::Bucket", Stack: "stk"},
 				},
 			},
 		}
@@ -394,8 +397,8 @@ func TestMSSQLResourceUpdatesStats(t *testing.T) {
 			t.Fatalf("StoreFormaCommand %s: %v", id, err)
 		}
 	}
-	store("cmd-ok", "client-1", resource_update.ResourceUpdateStateSuccess)
-	store("cmd-fail", "client-2", resource_update.ResourceUpdateStateFailed)
+	store("cmd-ok", "client-1", "rk2", resource_update.ResourceUpdateStateSuccess)
+	store("cmd-fail", "client-2", "rk1", resource_update.ResourceUpdateStateFailed)
 
 	seedResource(t, raw, "rk1", "stack-a", "lbl-1", "AWS::S3::Bucket", "001", "create", true)
 	seedResource(t, raw, "rk2", "stack-b", "lbl-2", "AWS::EC2::Instance", "001", "create", true)
