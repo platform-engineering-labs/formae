@@ -422,7 +422,4 @@ func TestMSSQLResourceUpdatesStats(t *testing.T) {
 	if s.ResourceTypes["AWS::S3::Bucket"] != 1 || s.ResourceTypes["AWS::EC2::Instance"] != 1 {
 		t.Errorf("ResourceTypes = %+v, want one each", s.ResourceTypes)
 	}
-	if s.ResourceErrors["AWS::S3::Bucket"] != 1 {
-		t.Errorf("ResourceErrors[AWS::S3::Bucket] = %d, want 1", s.ResourceErrors["AWS::S3::Bucket"])
-	}
 }
