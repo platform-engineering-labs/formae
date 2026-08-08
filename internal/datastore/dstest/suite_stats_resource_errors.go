@@ -1337,6 +1337,47 @@ func RunStatsResourceErrors_EmptyTypeNotBackfilledFromOlderLiveRow(t *testing.T,
 	})
 }
 
+// RunStatsResourceErrors_TypedCurrentRowCountedDespiteTypelessOlderRow is the
+// mirror of RunStatsResourceErrors_EmptyTypeNotBackfilledFromOlderLiveRow: the
+// typeless row is the older one and the current row carries a real type, so the
+// resource must be reported under that type. Only the collapsed row's type
+// decides whether a resource is reported; an implementation that excludes every
+// ksuid holding any typeless live row would drop this one.
+func RunStatsResourceErrors_TypedCurrentRowCountedDespiteTypelessOlderRow(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("StatsResourceErrors_TypedCurrentRowCountedDespiteTypelessOlderRow", func(t *testing.T) {
+		td := newDS(t)
+		defer td.CleanUpFn() //nolint:errcheck
+
+		if td.RawInsertResourceRow == nil {
+			t.Skip("backend does not expose RawInsertResourceRow")
+		}
+
+		// Two live rows for one ksuid: the lesser version carries no type, the
+		// greatest version carries a real one.
+		require.NoError(t, td.RawInsertResourceRow(
+			"formae://ksuid-1#", "AAAAAAAAAAAAAAAAAAAAAAAAAAAA", "ksuid-1",
+			"", "default-target", string(types.OperationCreate)))
+		require.NoError(t, td.RawInsertResourceRow(
+			"formae://ksuid-1-alias#", "BBBBBBBBBBBBBBBBBBBBBBBBBBBB", "ksuid-1",
+			"AWS::SQS::Queue", "default-target", string(types.OperationCreate)))
+
+		failed := outcomeCommand(
+			forma_command.CommandStateFailed,
+			-5*time.Minute,
+			[]resource_update.ResourceUpdate{
+				outcomeUpdate("stack-a", "ksuid-1", "thing-1", "AWS::S3::Bucket",
+					types.OperationUpdate, resource_update.ResourceUpdateStateFailed, -5*time.Minute),
+			},
+		)
+		assert.NoError(t, td.StoreFormaCommand(failed, failed.ID))
+
+		s, err := td.Stats()
+		assert.NoError(t, err)
+		assert.Equal(t, map[string]int{"AWS::SQS::Queue": 1}, s.ResourceErrors,
+			"a ksuid whose current row is typed is reported under it, whatever an older row carries")
+	})
+}
+
 // RunStatsResourceErrors_TypeComesFromLiveResourceRow verifies the reported
 // type is the live inventory row's type, not the type stored on the failing
 // update. The two disagree whenever a resource's type was rewritten after the
