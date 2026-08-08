@@ -61,6 +61,14 @@ func TestDatastore(t *testing.T) {
 				)
 				return err
 			},
+			RawInsertResourceRow: func(uri, version, ksuid, resourceType, target, operation string) error {
+				conn := d.Conn()
+				_, err := conn.Exec(
+					`INSERT INTO resources (uri, version, ksuid, type, target, operation) VALUES (?, ?, ?, ?, ?, ?)`,
+					uri, version, ksuid, resourceType, target, operation,
+				)
+				return err
+			},
 			MarkResourceReapedForTest: func(uri string) error {
 				conn := d.Conn()
 				_, err := conn.Exec(

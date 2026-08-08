@@ -372,6 +372,13 @@ func TestDatastore(t *testing.T) {
 				d.Close()
 				return d.CleanUp()
 			},
+			RawInsertResourceRow: func(uri, version, ksuid, resourceType, target, operation string) error {
+				_, err := d.Pool().Exec(context.Background(),
+					`INSERT INTO resources (uri, version, ksuid, type, target, operation) VALUES ($1, $2, $3, $4, $5, $6)`,
+					uri, version, ksuid, resourceType, target, operation,
+				)
+				return err
+			},
 			SetTargetHealthStateForTest: func(label, state string) error {
 				_, err := d.Pool().Exec(context.Background(),
 					`UPDATE targets SET health_state = $1 WHERE label = $2 AND version = (SELECT MAX(version) FROM targets WHERE label = $2)`,
