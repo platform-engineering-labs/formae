@@ -2935,20 +2935,42 @@ func TestGeneratePatch_RefResolutionDiffersFromApplied_PlansUpdate(t *testing.T)
 	assert.Equal(t, newArn, ops[0].Value)
 }
 
-// An unresolvable reference (no fresh resolution, no cached $value) with an
-// $applied-carrying stored counterpart at the same URI flattens to the
-// stored echo instead of the empty string.
-func TestGeneratePatch_UnresolvableRefWithApplied_UsesStoredEcho(t *testing.T) {
+// An unresolvable reference (no fresh resolution) with an $applied-carrying
+// stored counterpart flattens to the stored echo value, preserving the last
+// known state across a transient resolution gap.
+func TestFlattenAndResolveRefs_UnresolvableRefWithApplied_UsesStoredEcho(t *testing.T) {
 	ksuid := util.NewID()
+	echoVal := "47110862-aaaa"
+	appliedVal := "arn:aws:kms:us-east-1:111122223333:key/47110862-aaaa"
 	document := []byte(`{"TargetKeyId": "47110862-aaaa"}`)
-	stored := fmt.Appendf(nil, `{"TargetKeyId": {"$ref": "formae://%s#/Arn", "$value": "47110862-aaaa", "$applied": "arn:aws:kms:us-east-1:111122223333:key/47110862-aaaa"}}`, ksuid)
+	stored := fmt.Appendf(nil, `{"TargetKeyId": {"$ref": "formae://%s#/Arn", "$value": %q, "$applied": %q}}`, ksuid, echoVal, appliedVal)
 	patch := fmt.Appendf(nil, `{"TargetKeyId": {"$ref": "formae://%s#/Arn"}}`, ksuid)
-	schema := pkgmodel.Schema{Fields: []string{"TargetKeyId"}}
 
-	patchDoc, createOnlyPatch, err := generatePatch(document, patch, stored, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModeReconcile)
+	_, flatPatch, err := flattenAndResolveRefs(document, patch, stored, resolver.NewResolvableProperties())
 	require.NoError(t, err)
-	assert.Empty(t, createOnlyPatch)
-	assert.Nil(t, patchDoc)
+
+	var flatMap map[string]any
+	require.NoError(t, json.Unmarshal(flatPatch, &flatMap))
+	assert.Equal(t, echoVal, flatMap["TargetKeyId"], "unresolvable ref with $applied must flatten to stored echo")
+}
+
+// An unresolvable reference without $applied flattens to empty string, the
+// pre-provenance behavior.
+func TestFlattenAndResolveRefs_UnresolvableRefWithoutApplied_FlattenToEmpty(t *testing.T) {
+	ksuid := util.NewID()
+	echoVal := "47110862-aaaa"
+	document := []byte(`{"TargetKeyId": "47110862-aaaa"}`)
+	stored := fmt.Appendf(nil, `{"TargetKeyId": {"$ref": "formae://%s#/Arn", "$value": %q}}`, ksuid, echoVal)
+	patch := fmt.Appendf(nil, `{"TargetKeyId": {"$ref": "formae://%s#/Arn"}}`, ksuid)
+
+	_, flatPatch, err := flattenAndResolveRefs(document, patch, stored, resolver.NewResolvableProperties())
+	require.NoError(t, err)
+
+	var flatMap map[string]any
+	require.NoError(t, json.Unmarshal(flatPatch, &flatMap))
+	val, exists := flatMap["TargetKeyId"]
+	assert.True(t, exists, "field should exist in flattened patch")
+	assert.Equal(t, "", val, "legacy unresolvable ref must flatten to empty string")
 }
 
 // A legacy stored row without $applied keeps the pre-provenance behavior:
@@ -2987,4 +3009,43 @@ func TestGeneratePatch_OpaqueRefIgnoresApplied(t *testing.T) {
 	require.NoError(t, json.Unmarshal(patchDoc, &ops))
 	require.Len(t, ops, 1, "opaque envelopes keep pre-provenance diffing")
 	assert.Equal(t, "sent", ops[0].Value)
+}
+
+// A numeric $applied value that matches the fresh resolution (numeric
+// reference like a Port) must reconcile to a no-op, same as string references.
+func TestGeneratePatch_NumericRefMatchesApplied_NoPatch(t *testing.T) {
+	ksuid := util.NewID()
+	portNum := 443.0
+	document := []byte(`{"Port": 443}`)
+	stored := fmt.Appendf(nil, `{"Port": {"$ref": "formae://%s#/Port", "$value": 443, "$applied": %g}}`, ksuid, portNum)
+	patch := fmt.Appendf(nil, `{"Port": {"$ref": "formae://%s#/Port"}}`, ksuid)
+	schema := pkgmodel.Schema{Fields: []string{"Port"}}
+	props := resolver.NewResolvableProperties()
+	props.Add(ksuid, "Port", "443")
+
+	patchDoc, createOnlyPatch, err := generatePatch(document, patch, stored, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Empty(t, createOnlyPatch)
+	assert.Nil(t, patchDoc, "numeric ref matching $applied must reconcile to no-op")
+}
+
+// A numeric $applied value that differs from the fresh resolution plans an
+// update with the new value.
+func TestGeneratePatch_NumericRefDiffersFromApplied_PlansUpdate(t *testing.T) {
+	ksuid := util.NewID()
+	oldPort := 443.0
+	document := []byte(`{"Port": 443}`)
+	stored := fmt.Appendf(nil, `{"Port": {"$ref": "formae://%s#/Port", "$value": 443, "$applied": %g}}`, ksuid, oldPort)
+	patch := fmt.Appendf(nil, `{"Port": {"$ref": "formae://%s#/Port"}}`, ksuid)
+	schema := pkgmodel.Schema{Fields: []string{"Port"}}
+	props := resolver.NewResolvableProperties()
+	props.Add(ksuid, "Port", "8443")
+
+	patchDoc, createOnlyPatch, err := generatePatch(document, patch, stored, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Empty(t, createOnlyPatch)
+	var ops []jsonpatch.JsonPatchOperation
+	require.NoError(t, json.Unmarshal(patchDoc, &ops))
+	require.Len(t, ops, 1)
+	assert.Equal(t, "8443", ops[0].Value)
 }

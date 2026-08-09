@@ -910,13 +910,18 @@ func storedRefCounterpart(storedNode any, modVal map[string]any) map[string]any 
 // appliedMatches reports whether a fresh reference resolution equals the
 // value the last formae-originated write sent. The fresh value arrives as a
 // string (ResolvableProperties stores raw JSON text for structured values);
-// $applied holds the JSON-native form that was sent, so structured values
-// are compared after parsing the string into the same shape.
+// $applied holds the JSON-native form that was sent (native JSON scalars,
+// arrays, or objects). Comparison parses the string into the same JSON shape,
+// handling numeric, boolean, and structured values uniformly.
 func appliedMatches(fresh string, applied any) bool {
 	if s, ok := applied.(string); ok {
 		return fresh == s
 	}
-	return reflect.DeepEqual(normalizeResolvedValue(fresh, applied), applied)
+	var parsed any
+	if err := json.Unmarshal([]byte(fresh), &parsed); err != nil {
+		return false
+	}
+	return reflect.DeepEqual(parsed, applied)
 }
 
 // resolveRefs uses properties to resolve references in the patch document
