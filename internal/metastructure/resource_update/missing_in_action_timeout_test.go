@@ -21,7 +21,7 @@ import (
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
 
-// shippedRetryConfig mirrors the RetryConfig defaults the agent ships with.
+// shippedRetryConfig holds the default RetryConfig values as defined in Config.pkl.
 func shippedRetryConfig() pkgmodel.RetryConfig {
 	return pkgmodel.RetryConfig{
 		StatusCheckInterval: 20 * time.Second,
@@ -113,13 +113,17 @@ func TestMissingInActionTimeout_SmallAndDegenerateConfigs(t *testing.T) {
 	})
 }
 
-// TestPluginCallTimeouts_OperatorDeadlineExpiresFirst pins the ordering between
-// the deadline the agent hands the operator for a single plugin call and the
-// deadline the agent puts on its own call to the operator: the operator's must
-// expire first so its attributable failure progress wins the race.
+// TestPluginCallTimeouts_OperatorDeadlineExpiresFirst pins both deadlines: the
+// one the agent hands the operator for a single plugin call, and the one the
+// agent puts on its own call to the operator. The operator's must expire first
+// so its attributable failure progress wins the race, and it must equal the
+// operator's compiled defaultPluginCallTimeout fallback (pkg/plugin), which it
+// stands in for whenever the deadline is not supplied.
 func TestPluginCallTimeouts_OperatorDeadlineExpiresFirst(t *testing.T) {
-	assert.Greater(t, time.Duration(PluginOperationCallTimeout)*time.Second, PluginCallTimeout,
-		"the agent's call timeout must outlast the operator's own plugin call deadline")
+	assert.Equal(t, 60*time.Second, PluginCallTimeout,
+		"must track the plugin operator's compiled defaultPluginCallTimeout")
+	assert.Equal(t, 70, PluginOperationCallTimeout,
+		"the agent's call timeout is the operator's deadline plus a margin, in seconds")
 }
 
 // armingProcess is a gen.Process double for the two watchdog-arming handlers.
