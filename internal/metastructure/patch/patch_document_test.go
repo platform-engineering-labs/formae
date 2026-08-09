@@ -3049,3 +3049,54 @@ func TestGeneratePatch_NumericRefDiffersFromApplied_PlansUpdate(t *testing.T) {
 	require.Len(t, ops, 1)
 	assert.Equal(t, "8443", ops[0].Value)
 }
+
+// Stored arrays are persisted in plugin-returned order, so an element's
+// provenance counterpart is located by its reference URI, not its index.
+func TestGeneratePatch_ArrayRefCounterpartMatchedByURI_NotIndex(t *testing.T) {
+	ksuid := util.NewID()
+	arnA := "arn:aws:sns:us-east-1:111122223333:topic-a"
+	arnB := "arn:aws:sns:us-east-1:111122223333:topic-b"
+	document := []byte(`{"Topics": ["name-b", "name-a"]}`)
+	stored := fmt.Appendf(nil, `{"Topics": [
+		{"$ref": "formae://%s#/ArnB", "$value": "name-b", "$applied": %q},
+		{"$ref": "formae://%s#/ArnA", "$value": "name-a", "$applied": %q}
+	]}`, ksuid, arnB, ksuid, arnA)
+	patch := fmt.Appendf(nil, `{"Topics": [
+		{"$ref": "formae://%s#/ArnA"},
+		{"$ref": "formae://%s#/ArnB"}
+	]}`, ksuid, ksuid)
+	schema := pkgmodel.Schema{Fields: []string{"Topics"}}
+	props := resolver.NewResolvableProperties()
+	props.Add(ksuid, "ArnA", arnA)
+	props.Add(ksuid, "ArnB", arnB)
+
+	patchDoc, createOnlyPatch, err := generatePatch(document, patch, stored, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Empty(t, createOnlyPatch)
+	assert.Nil(t, patchDoc, "reordered echoes of unchanged references must reconcile to a no-op")
+}
+
+// Duplicate reference URIs in a stored array are ambiguous: fail closed to
+// pre-provenance behavior rather than guessing a counterpart.
+func TestGeneratePatch_ArrayRefDuplicateURIs_FailsClosed(t *testing.T) {
+	ksuid := util.NewID()
+	arn := "arn:aws:sns:us-east-1:111122223333:topic-a"
+	document := []byte(`{"Topics": ["name-a", "name-a"]}`)
+	stored := fmt.Appendf(nil, `{"Topics": [
+		{"$ref": "formae://%s#/ArnA", "$value": "name-a", "$applied": %q},
+		{"$ref": "formae://%s#/ArnA", "$value": "name-a", "$applied": %q}
+	]}`, ksuid, arn, ksuid, arn)
+	patch := fmt.Appendf(nil, `{"Topics": [
+		{"$ref": "formae://%s#/ArnA"},
+		{"$ref": "formae://%s#/ArnA"}
+	]}`, ksuid, ksuid)
+	schema := pkgmodel.Schema{Fields: []string{"Topics"}}
+	props := resolver.NewResolvableProperties()
+	props.Add(ksuid, "ArnA", arn)
+
+	patchDoc, _, err := generatePatch(document, patch, stored, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	var ops []jsonpatch.JsonPatchOperation
+	require.NoError(t, json.Unmarshal(patchDoc, &ops))
+	assert.NotEmpty(t, ops, "ambiguous counterparts must not silently equal")
+}

@@ -924,6 +924,24 @@ func appliedMatches(fresh string, applied any) bool {
 	return reflect.DeepEqual(parsed, applied)
 }
 
+// storedRefElementByURI finds the stored array element whose $ref equals uri.
+// Ambiguity (zero or multiple matches) returns nil: with no unique
+// counterpart the element gets no provenance treatment.
+func storedRefElementByURI(storedArr []any, uri any) map[string]any {
+	var match map[string]any
+	for _, elem := range storedArr {
+		m, ok := elem.(map[string]any)
+		if !ok || m["$ref"] != uri {
+			continue
+		}
+		if match != nil {
+			return nil
+		}
+		match = m
+	}
+	return match
+}
+
 // resolveRefs uses properties to resolve references in the patch document
 func resolveRefs(current, mod, stored map[string]any, resolvableProperties resolver.ResolvableProperties) error {
 	for k, v := range mod {
@@ -1011,7 +1029,15 @@ func resolveRefs(current, mod, stored map[string]any, resolvableProperties resol
 					wrappedElem := map[string]any{k: elemMap}
 					wrappedCurrent := map[string]any{k: currElem}
 					var wrappedStored map[string]any
-					if len(storedArr) > i {
+
+					// For ref-carrying elements, match the stored counterpart by URI;
+					// otherwise thread by index.
+					if ref, hasRef := elemMap["$ref"]; hasRef && len(storedArr) > 0 {
+						storedElem := storedRefElementByURI(storedArr, ref)
+						if storedElem != nil {
+							wrappedStored = map[string]any{k: storedElem}
+						}
+					} else if len(storedArr) > i {
 						storedElem := storedArr[i]
 						wrappedStored = map[string]any{k: storedElem}
 					}
