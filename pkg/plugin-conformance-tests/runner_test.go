@@ -701,6 +701,21 @@ func TestVerifyExtractReapply(t *testing.T) {
 			expectedError: "update my-bucket (NS::Storage::Bucket)",
 		},
 		{
+			name: "lossy extract failure names the diffing properties",
+			harness: &fakeReapplyHarness{simulation: &model.Simulation{
+				ChangesRequired: true,
+				Command: model.Command{ResourceUpdates: []model.ResourceUpdate{{
+					Operation:     model.OperationUpdate,
+					ResourceLabel: "my-alias",
+					ResourceType:  "NS::KMS::Alias",
+					PatchDocument: []byte(`[{"op":"replace","path":"/TargetKeyId","value":"abc123"}]`),
+				}}},
+			}},
+			expectedPass:  false,
+			expectedCalls: []string{"SimulateApply:patch"},
+			expectedError: `update my-alias (NS::KMS::Alias) patch: [{"op":"replace","path":"/TargetKeyId","value":"abc123"}]`,
+		},
+		{
 			name:          "skipped when the extracted properties carry an opaque secret",
 			harness:       &fakeReapplyHarness{},
 			extracted:     reapplyResource("my-db", "default", "db-1", map[string]any{"Password": map[string]any{"$visibility": pkgmodel.VisibilityOpaque}}),

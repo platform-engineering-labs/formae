@@ -1421,7 +1421,13 @@ func (rc *ResultCollector) verifyExtractReapply(
 func describePlannedChanges(cmd *model.Command) string {
 	var ops []string
 	for _, ru := range cmd.ResourceUpdates {
-		ops = append(ops, fmt.Sprintf("%s %s (%s)", ru.Operation, ru.ResourceLabel, ru.ResourceType))
+		op := fmt.Sprintf("%s %s (%s)", ru.Operation, ru.ResourceLabel, ru.ResourceType)
+		// The patch document names the exact properties that diff, which is
+		// the difference between "some property is lossy" and a fixable report.
+		if len(ru.PatchDocument) > 0 {
+			op += " patch: " + string(ru.PatchDocument)
+		}
+		ops = append(ops, op)
 	}
 	for _, tu := range cmd.TargetUpdates {
 		ops = append(ops, fmt.Sprintf("%s target %s", tu.Operation, tu.TargetLabel))
