@@ -2868,3 +2868,123 @@ func TestGeneratePatch_ArrayPathNeverDropped(t *testing.T) {
 		t.Fatalf("array-element change must survive, got %s", string(mutable))
 	}
 }
+
+// A reference whose fresh resolution equals the value the last write sent
+// ($applied) is unchanged intent: the desired side flattens to the stored
+// echo and the diff is empty, even though echo and resolution are two
+// spellings of one identity (ARN vs bare ID).
+func TestGeneratePatch_RefResolutionMatchesApplied_NoPatch(t *testing.T) {
+	ksuid := util.NewID()
+	arn := "arn:aws:kms:us-east-1:111122223333:key/47110862-aaaa"
+	document := []byte(`{"TargetKeyId": "47110862-aaaa"}`)
+	stored := fmt.Appendf(nil, `{"TargetKeyId": {"$ref": "formae://%s#/Arn", "$value": "47110862-aaaa", "$applied": %q}}`, ksuid, arn)
+	patch := fmt.Appendf(nil, `{"TargetKeyId": {"$ref": "formae://%s#/Arn"}}`, ksuid)
+	schema := pkgmodel.Schema{Fields: []string{"TargetKeyId"}}
+	props := resolver.NewResolvableProperties()
+	props.Add(ksuid, "Arn", arn)
+
+	patchDoc, createOnlyPatch, err := generatePatch(document, patch, stored, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Empty(t, createOnlyPatch)
+	assert.Nil(t, patchDoc, "an unchanged reference must reconcile to a no-op regardless of echo form")
+}
+
+// A createOnly reference whose fresh resolution equals $applied must not
+// plan a replacement.
+func TestGeneratePatch_CreateOnlyRefMatchesApplied_NoReplacement(t *testing.T) {
+	ksuid := util.NewID()
+	arn := "arn:aws:lambda:us-east-1:111122223333:function:fn"
+	document := []byte(`{"TargetFunctionArn": "fn", "Cors": "old"}`)
+	stored := fmt.Appendf(nil, `{"TargetFunctionArn": {"$ref": "formae://%s#/Arn", "$value": "fn", "$applied": %q}, "Cors": "old"}`, ksuid, arn)
+	patch := fmt.Appendf(nil, `{"TargetFunctionArn": {"$ref": "formae://%s#/Arn"}, "Cors": "new"}`, ksuid)
+	schema := pkgmodel.Schema{
+		Fields: []string{"TargetFunctionArn", "Cors"},
+		Hints:  map[string]pkgmodel.FieldHint{"TargetFunctionArn": {CreateOnly: true}},
+	}
+	props := resolver.NewResolvableProperties()
+	props.Add(ksuid, "Arn", arn)
+
+	patchDoc, createOnlyPatch, err := generatePatch(document, patch, stored, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Empty(t, createOnlyPatch, "unchanged createOnly reference must not trigger replacement")
+	var ops []jsonpatch.JsonPatchOperation
+	require.NoError(t, json.Unmarshal(patchDoc, &ops))
+	require.Len(t, ops, 1)
+	assert.Equal(t, "/Cors", ops[0].Path)
+}
+
+// A fresh resolution that differs from $applied is a genuine repoint (the
+// referenced resource changed): the update is planned with the fresh value.
+func TestGeneratePatch_RefResolutionDiffersFromApplied_PlansUpdate(t *testing.T) {
+	ksuid := util.NewID()
+	oldArn := "arn:aws:kms:us-east-1:111122223333:key/47110862-aaaa"
+	newArn := "arn:aws:kms:us-east-1:111122223333:key/99887766-bbbb"
+	document := []byte(`{"TargetKeyId": "47110862-aaaa"}`)
+	stored := fmt.Appendf(nil, `{"TargetKeyId": {"$ref": "formae://%s#/Arn", "$value": "47110862-aaaa", "$applied": %q}}`, ksuid, oldArn)
+	patch := fmt.Appendf(nil, `{"TargetKeyId": {"$ref": "formae://%s#/Arn"}}`, ksuid)
+	schema := pkgmodel.Schema{Fields: []string{"TargetKeyId"}}
+	props := resolver.NewResolvableProperties()
+	props.Add(ksuid, "Arn", newArn)
+
+	patchDoc, createOnlyPatch, err := generatePatch(document, patch, stored, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Empty(t, createOnlyPatch)
+	var ops []jsonpatch.JsonPatchOperation
+	require.NoError(t, json.Unmarshal(patchDoc, &ops))
+	require.Len(t, ops, 1)
+	assert.Equal(t, newArn, ops[0].Value)
+}
+
+// An unresolvable reference (no fresh resolution, no cached $value) with an
+// $applied-carrying stored counterpart at the same URI flattens to the
+// stored echo instead of the empty string.
+func TestGeneratePatch_UnresolvableRefWithApplied_UsesStoredEcho(t *testing.T) {
+	ksuid := util.NewID()
+	document := []byte(`{"TargetKeyId": "47110862-aaaa"}`)
+	stored := fmt.Appendf(nil, `{"TargetKeyId": {"$ref": "formae://%s#/Arn", "$value": "47110862-aaaa", "$applied": "arn:aws:kms:us-east-1:111122223333:key/47110862-aaaa"}}`, ksuid)
+	patch := fmt.Appendf(nil, `{"TargetKeyId": {"$ref": "formae://%s#/Arn"}}`, ksuid)
+	schema := pkgmodel.Schema{Fields: []string{"TargetKeyId"}}
+
+	patchDoc, createOnlyPatch, err := generatePatch(document, patch, stored, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Empty(t, createOnlyPatch)
+	assert.Nil(t, patchDoc)
+}
+
+// A legacy stored row without $applied keeps the pre-provenance behavior:
+// fresh resolution vs echo, planning the corrective write that backfills.
+func TestGeneratePatch_LegacyRowWithoutApplied_KeepsFreshVsEcho(t *testing.T) {
+	ksuid := util.NewID()
+	arn := "arn:aws:kms:us-east-1:111122223333:key/47110862-aaaa"
+	document := []byte(`{"TargetKeyId": "47110862-aaaa"}`)
+	stored := fmt.Appendf(nil, `{"TargetKeyId": {"$ref": "formae://%s#/Arn", "$value": "47110862-aaaa"}}`, ksuid)
+	patch := fmt.Appendf(nil, `{"TargetKeyId": {"$ref": "formae://%s#/Arn"}}`, ksuid)
+	schema := pkgmodel.Schema{Fields: []string{"TargetKeyId"}}
+	props := resolver.NewResolvableProperties()
+	props.Add(ksuid, "Arn", arn)
+
+	patchDoc, _, err := generatePatch(document, patch, stored, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	var ops []jsonpatch.JsonPatchOperation
+	require.NoError(t, json.Unmarshal(patchDoc, &ops))
+	require.Len(t, ops, 1, "legacy rows converge through one corrective write")
+}
+
+// An Opaque envelope is exempt from provenance rules even when it carries
+// $applied-shaped data.
+func TestGeneratePatch_OpaqueRefIgnoresApplied(t *testing.T) {
+	ksuid := util.NewID()
+	document := []byte(`{"Secret": "echoed"}`)
+	stored := fmt.Appendf(nil, `{"Secret": {"$ref": "formae://%s#/Value", "$value": "echoed", "$applied": "sent", "$visibility": "Opaque"}}`, ksuid)
+	patch := fmt.Appendf(nil, `{"Secret": {"$ref": "formae://%s#/Value", "$visibility": "Opaque"}}`, ksuid)
+	schema := pkgmodel.Schema{Fields: []string{"Secret"}}
+	props := resolver.NewResolvableProperties()
+	props.Add(ksuid, "Value", "sent")
+
+	patchDoc, _, err := generatePatch(document, patch, stored, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	var ops []jsonpatch.JsonPatchOperation
+	require.NoError(t, json.Unmarshal(patchDoc, &ops))
+	require.Len(t, ops, 1, "opaque envelopes keep pre-provenance diffing")
+	assert.Equal(t, "sent", ops[0].Value)
+}

@@ -7,6 +7,7 @@ package patch
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/canonicalize"
@@ -888,6 +889,36 @@ func normalizeResolvedValue(resolved string, current any) any {
 	return resolved
 }
 
+// storedRefCounterpart returns the stored envelope that corresponds to a
+// desired-side reference node: a map carrying the same $ref URI, not marked
+// Opaque on either side. Opaque envelopes are handled by the dedicated
+// opaque-suppression path and never participate in provenance comparison.
+func storedRefCounterpart(storedNode any, modVal map[string]any) map[string]any {
+	storedMap, ok := storedNode.(map[string]any)
+	if !ok {
+		return nil
+	}
+	if storedMap["$ref"] != modVal["$ref"] {
+		return nil
+	}
+	if storedMap["$visibility"] == pkgmodel.VisibilityOpaque || modVal["$visibility"] == pkgmodel.VisibilityOpaque {
+		return nil
+	}
+	return storedMap
+}
+
+// appliedMatches reports whether a fresh reference resolution equals the
+// value the last formae-originated write sent. The fresh value arrives as a
+// string (ResolvableProperties stores raw JSON text for structured values);
+// $applied holds the JSON-native form that was sent, so structured values
+// are compared after parsing the string into the same shape.
+func appliedMatches(fresh string, applied any) bool {
+	if s, ok := applied.(string); ok {
+		return fresh == s
+	}
+	return reflect.DeepEqual(normalizeResolvedValue(fresh, applied), applied)
+}
+
 // resolveRefs uses properties to resolve references in the patch document
 func resolveRefs(current, mod, stored map[string]any, resolvableProperties resolver.ResolvableProperties) error {
 	for k, v := range mod {
@@ -897,6 +928,8 @@ func resolveRefs(current, mod, stored map[string]any, resolvableProperties resol
 				uri := pkgmodel.FormaeURI(ref.(string))
 				ksuid := uri.KSUID()
 				property := uri.PropertyPath()
+
+				counterpart := storedRefCounterpart(stored[k], modVal)
 
 				val, found := resolvableProperties.Get(ksuid, property)
 				if found {
@@ -908,9 +941,28 @@ func resolveRefs(current, mod, stored map[string]any, resolvableProperties resol
 						}
 						resolved = extracted
 					}
-					modVal["$value"] = normalizeResolvedValue(resolved, current[k])
+					if counterpart != nil {
+						if applied, hasApplied := counterpart["$applied"]; hasApplied && appliedMatches(resolved, applied) {
+							// The reference still resolves to what the last write sent;
+							// flatten to the stored echo so the diff compares within the
+							// observed domain and sees no change.
+							modVal["$value"] = counterpart["$value"]
+						} else {
+							modVal["$value"] = normalizeResolvedValue(resolved, current[k])
+						}
+					} else {
+						modVal["$value"] = normalizeResolvedValue(resolved, current[k])
+					}
+				} else if counterpart != nil {
+					if _, hasApplied := counterpart["$applied"]; hasApplied {
+						if _, hasVal := modVal["$value"]; !hasVal {
+							// No resolution available but a prior write attests this exact
+							// reference; treat the gap as transient, not as a change.
+							modVal["$value"] = counterpart["$value"]
+						}
+					}
 				}
-				// If not found, keep the $ref as-is for late-binding resolution
+				// Otherwise keep the $ref as-is for late-binding resolution
 				// at execution time (forward references to new resources).
 			}
 			var currNested map[string]any
@@ -920,12 +972,10 @@ func resolveRefs(current, mod, stored map[string]any, resolvableProperties resol
 				currNested = map[string]any{}
 			}
 			var storedNested map[string]any
-			if stored != nil {
-				if s, ok := stored[k].(map[string]any); ok {
-					storedNested = s
-				} else {
-					storedNested = map[string]any{}
-				}
+			if s, ok := stored[k].(map[string]any); ok {
+				storedNested = s
+			} else {
+				storedNested = map[string]any{}
 			}
 			if err := resolveRefs(currNested, modVal, storedNested, resolvableProperties); err != nil {
 				return err
