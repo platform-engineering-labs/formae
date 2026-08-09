@@ -5,7 +5,9 @@
 package conformance
 
 import (
+	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -128,6 +130,71 @@ func TestResolveFormaeCandidate(t *testing.T) {
 		_, _, err := resolveFormaeCandidate(query, min)
 		if err == nil {
 			t.Fatal("expected an error when no channel has a release >= 0.86.0, got nil")
+		}
+	})
+}
+
+func TestRetryResolve(t *testing.T) {
+	pkg := pkgAt(t, "0.89.0")
+
+	t.Run("returns immediately on success without sleeping", func(t *testing.T) {
+		var sleeps []time.Duration
+		got, channel, err := retryResolve(func() (*records.Package, string, error) {
+			return pkg, "dev", nil
+		}, 6, func(d time.Duration) { sleeps = append(sleeps, d) })
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != pkg || channel != "dev" {
+			t.Errorf("retryResolve() = (%v, %q), want the resolved package on dev", got, channel)
+		}
+		if len(sleeps) != 0 {
+			t.Errorf("slept %d times on immediate success, want 0", len(sleeps))
+		}
+	})
+
+	t.Run("retries through transient failures until the channel recovers", func(t *testing.T) {
+		var sleeps []time.Duration
+		calls := 0
+		got, channel, err := retryResolve(func() (*records.Package, string, error) {
+			calls++
+			if calls < 3 {
+				return nil, "", errors.New("querying dev channel for formae versions: no available packages for: formae")
+			}
+			return pkg, "dev", nil
+		}, 6, func(d time.Duration) { sleeps = append(sleeps, d) })
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != pkg || channel != "dev" {
+			t.Errorf("retryResolve() = (%v, %q), want the resolved package on dev", got, channel)
+		}
+		if calls != 3 {
+			t.Errorf("resolve called %d times, want 3", calls)
+		}
+		if len(sleeps) != 2 {
+			t.Errorf("slept %d times, want 2 (one before each retry)", len(sleeps))
+		}
+	})
+
+	t.Run("gives up with the last error once attempts are exhausted", func(t *testing.T) {
+		var sleeps []time.Duration
+		calls := 0
+		_, _, err := retryResolve(func() (*records.Package, string, error) {
+			calls++
+			return nil, "", fmt.Errorf("attempt %d failed", calls)
+		}, 4, func(d time.Duration) { sleeps = append(sleeps, d) })
+		if err == nil {
+			t.Fatal("expected an error after exhausting attempts")
+		}
+		if calls != 4 {
+			t.Errorf("resolve called %d times, want 4", calls)
+		}
+		if len(sleeps) != 3 {
+			t.Errorf("slept %d times, want 3", len(sleeps))
+		}
+		if !strings.Contains(err.Error(), "attempt 4 failed") {
+			t.Errorf("error %q should be the last attempt's error", err)
 		}
 	})
 }

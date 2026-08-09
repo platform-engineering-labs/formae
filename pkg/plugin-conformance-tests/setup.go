@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/platform-engineering-labs/orbital/mgr"
 	"github.com/platform-engineering-labs/orbital/opm/records"
@@ -219,22 +220,29 @@ func selectFormaeCandidate(t *testing.T, queryChannel func(channel string) (*rec
 			cleanup()
 			t.Fatalf("failed to parse FORMAE_VERSION %q: %v", version, err)
 		}
-		for _, channel := range []string{"stable", "dev"} {
-			available, err := queryChannel(channel)
-			if err != nil {
-				cleanup()
-				t.Fatalf("failed to query available formae versions (%s channel): %v", channel, err)
+		candidate, channel, err := retryResolve(func() (*records.Package, string, error) {
+			for _, channel := range []string{"stable", "dev"} {
+				available, err := queryChannel(channel)
+				if err != nil {
+					return nil, "", fmt.Errorf("failed to query available formae versions (%s channel): %w", channel, err)
+				}
+				if found, candidate := available.HasVersion(want); found {
+					return candidate, channel, nil
+				}
 			}
-			if found, candidate := available.HasVersion(want); found {
-				return candidate, channel
-			}
+			return nil, "", fmt.Errorf("formae version %s not found in the stable or dev channel", version)
+		}, resolveAttempts, time.Sleep)
+		if err != nil {
+			cleanup()
+			t.Fatalf("%v", err)
 		}
-		cleanup()
-		t.Fatalf("formae version %s not found in the stable or dev channel", version)
+		return candidate, channel
 	}
 
 	minVersion := readMinFormaeVersion(t, cleanup)
-	candidate, channel, err := resolveFormaeCandidate(queryChannel, minVersion)
+	candidate, channel, err := retryResolve(func() (*records.Package, string, error) {
+		return resolveFormaeCandidate(queryChannel, minVersion)
+	}, resolveAttempts, time.Sleep)
 	if err != nil {
 		cleanup()
 		t.Fatalf("%v", err)
@@ -261,6 +269,35 @@ func readMinFormaeVersion(t *testing.T, cleanup func()) *ops.Version {
 		t.Fatalf("failed to parse minFormaeVersion %q from formae-plugin.pkl: %v", raw, err)
 	}
 	return v
+}
+
+// A release publish rewrites a channel's package index, and a resolver that
+// reads during that window sees an error ("no available packages for: formae")
+// or a partial listing. Both are transient, so resolution retries across a
+// window that outlasts a publish before giving up.
+const (
+	resolveAttempts   = 6
+	resolveRetryDelay = 20 * time.Second
+)
+
+// retryResolve runs resolve until it succeeds, sleeping between attempts,
+// and returns the last error once attempts are exhausted.
+func retryResolve(resolve func() (*records.Package, string, error), attempts int, sleep func(time.Duration)) (*records.Package, string, error) {
+	var (
+		pkg     *records.Package
+		channel string
+		err     error
+	)
+	for i := 0; i < attempts; i++ {
+		if i > 0 {
+			sleep(resolveRetryDelay)
+		}
+		pkg, channel, err = resolve()
+		if err == nil {
+			return pkg, channel, nil
+		}
+	}
+	return nil, "", err
 }
 
 // resolveFormaeCandidate picks the formae package to install by preferring the
