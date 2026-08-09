@@ -37,9 +37,7 @@ const watchdogMarginFloor = 10 * time.Second
 func findResourceUpdateByLabel(t *testing.T, ds datastore.Datastore, commandID string, label string) (resource_update.ResourceUpdate, bool) {
 	t.Helper()
 	commands, err := ds.LoadFormaCommands()
-	if err != nil {
-		return resource_update.ResourceUpdate{}, false
-	}
+	require.NoError(t, err, "loading the stored forma commands must not fail")
 	for _, cmd := range commands {
 		if cmd.ID != commandID {
 			continue
@@ -65,11 +63,15 @@ func findResourceUpdateByLabel(t *testing.T, ds datastore.Datastore, commandID s
 // cadence, whose fixed margin alone outlasts the gap. So under the old rule the
 // create is failed mid-flight with a missing-in-action error while the plugin is
 // still working; under the derived window it runs to completion.
+//
+// The slow call finishes well inside the deadline the agent hands the operator,
+// so what is under test is a provider call that was slow and then reported, not
+// one that outran its deadline.
 func TestSlowHeartbeatIsNotDeclaredMissingInAction(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		const (
 			statusCheckInterval = 1 * time.Second
-			pluginCallTimeout   = 3 * time.Second
+			pluginCallTimeout   = 5 * time.Second
 			slowStatusCall      = 2500 * time.Millisecond
 		)
 
@@ -78,8 +80,10 @@ func TestSlowHeartbeatIsNotDeclaredMissingInAction(t *testing.T) {
 			"the gap must outlast the flat twice-the-interval window, or the old rule would not have fired")
 		require.Less(t, heartbeatGap, watchdogMarginFloor,
 			"the gap must stay inside the derived window, of which the fixed margin is only one term")
-		require.Less(t, slowStatusCall, pluginCallTimeout,
-			"the slow call must stay inside the deadline the agent hands the operator")
+		require.LessOrEqual(t, slowStatusCall, pluginCallTimeout/2,
+			"the slow call must leave as much headroom again inside the deadline the agent hands the "+
+				"operator, or a loaded runner turns this into a call that outran its deadline instead of "+
+				"a slow one that reported")
 
 		// Create parks the operator in its status-check loop. The first status
 		// check is the slow provider call and still reports in progress, so it is
