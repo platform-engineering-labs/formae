@@ -182,10 +182,19 @@ const (
 	StateRejected             = gen.Atom("rejected")
 )
 
+// PluginCallTimeout is the deadline the agent hands each plugin operator for a
+// single watched plugin call. It matches the operator's own compiled fallback,
+// so the watchdog window derived from it holds whether the operator runs on the
+// supplied deadline or on its fallback. Exposed as a variable so tests can
+// reduce it.
+var PluginCallTimeout = 60 * time.Second
+
 // PluginOperationCallTimeout is the maximum time (in seconds) to wait for a
-// plugin operator to respond to a resource operation. Exposed as a variable
-// so tests can reduce it.
-var PluginOperationCallTimeout = 60
+// plugin operator to respond to a resource operation. It outlasts
+// PluginCallTimeout so the operator's own deadline expires first and its
+// attributable failure progress wins the race with this call. Exposed as a
+// variable so tests can reduce it.
+var PluginOperationCallTimeout = int((PluginCallTimeout + 10*time.Second) / time.Second)
 
 type ResourceUpdateData struct {
 	resourceUpdate  *ResourceUpdate
@@ -523,6 +532,33 @@ func resolvingTimeout(cfg pkgmodel.RetryConfig) time.Duration {
 	return time.Duration(cfg.MaxRetries+1)*perAttempt + strategy.MaxTotalDelay() + resolveCacheMargin
 }
 
+// missingInActionMargin covers everything the watchdog window must absorb on
+// top of the operator's own cadence.
+const missingInActionMargin = 10 * time.Second
+
+// missingInActionTimeout sizes the plugin-operator watchdog to outlive the
+// longest legitimate gap between two progress reports: one scheduled sleep plus
+// one plugin call plus a margin. The sleep is whichever of the operator's own
+// delays is longest — the status-check interval it parks on while an operation
+// is in progress, the flat RetryDelay it sleeps after a recoverable error, or
+// the largest exponential backoff it can schedule for a throttled attempt. That
+// backoff is Backoff(MaxRetries+1) because attempts are 1-based and a retry is
+// still scheduled on the last allowed attempt, and the flat RetryDelay stays a
+// term of its own because Backoff returns the base delay uncapped for the first
+// attempt, so a RetryDelay above the backoff cap outlasts every backoff. The
+// zero term keeps a negative duration in config from shrinking the window.
+// The margin budgets the ResourceUpdater's mailbox delay, actor scheduling on
+// both sides, cross-node transport, and the synchronous UpdateResourceProgress
+// persister call the updater makes before it processes the re-arm action.
+// RetryStrategy.MaxTotalDelay is deliberately not used: it budgets the whole
+// retry ladder, which is right for an end-to-end wait but would delay detecting
+// a genuinely dead operator by the sum of every backoff rather than one gap.
+func missingInActionTimeout(cfg pkgmodel.RetryConfig) time.Duration {
+	strategy := resource.RetryStrategy{MaxRetries: cfg.MaxRetries, BaseDelay: cfg.RetryDelay}
+	longestSleep := max(cfg.StatusCheckInterval, cfg.RetryDelay, strategy.Backoff(cfg.MaxRetries+1), 0)
+	return longestSleep + PluginCallTimeout + missingInActionMargin
+}
+
 func resolve(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
 	data.stage = state
 	if len(data.resourceUpdate.RemainingResolvables) == 0 {
@@ -763,9 +799,10 @@ func recoverFromPreviousProgress(state gen.Atom, data ResourceUpdateData, lastKn
 	}
 
 	// If not, this means that the plugin operator is waiting for the operation to be completed, so we stay in the
-	// deleting state and wait for the next progress update.
+	// deleting state and wait for the next progress update. We wait out the longest gap the operator's own retry
+	// cadence can put between two progress reports before we give up on it.
 	timeout := statemachine.StateTimeout{
-		Duration: data.retryConfig.StatusCheckInterval * 2, // We generously wait twice the interval before we give up.
+		Duration: missingInActionTimeout(data.retryConfig),
 		Message:  PluginOperatorMissingInAction{},
 	}
 
@@ -934,9 +971,10 @@ func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData,
 	}
 
 	// If the plugin operation is still in progress, we stay in the current state and wait for the next progress update. We set up
-	// a state timeout in case the plugin operator crashes.
+	// a state timeout in case the plugin operator crashes, sized to the longest gap its own retry cadence can put between two
+	// progress reports.
 	timeout := statemachine.StateTimeout{
-		Duration: data.retryConfig.StatusCheckInterval * 2,
+		Duration: missingInActionTimeout(data.retryConfig),
 		Message:  PluginOperatorMissingInAction{},
 	}
 

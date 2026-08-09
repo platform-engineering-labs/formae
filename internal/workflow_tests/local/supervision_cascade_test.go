@@ -596,8 +596,9 @@ func TestResourceUpdaterTerminationCascadesToPluginOperator(t *testing.T) {
 //
 // Failure injection: the vpc PluginOperator receives Create → returns InProgress
 // (the operator parks in StateWaitingForResource) and then is force-killed.
-// The ResourceUpdater is left waiting; after 2 × StatusCheckInterval it fires
-// PluginOperatorMissingInAction → StateFinishedWithError → CommandStateFailed.
+// The ResourceUpdater is left waiting; once the watchdog window derived from the
+// operator's retry cadence elapses it fires PluginOperatorMissingInAction →
+// StateFinishedWithError → CommandStateFailed.
 // The bucket PluginOperator is not killed and its Create returns Success.
 func TestPluginOperatorCrashConvergesViaTimeout(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
@@ -632,10 +633,16 @@ func TestPluginOperatorCrashConvergesViaTimeout(t *testing.T) {
 			},
 		}
 
-		// Use a short StatusCheckInterval so the PluginOperatorMissingInAction
-		// timeout (2 × interval) fires quickly in the test.
+		// Shorten every term the PluginOperatorMissingInAction window is derived
+		// from — the operator's retry cadence and the plugin call deadline — so
+		// the watchdog fires quickly in the test.
+		origCallTimeout := resource_update.PluginCallTimeout
+		resource_update.PluginCallTimeout = 100 * time.Millisecond
+		t.Cleanup(func() { resource_update.PluginCallTimeout = origCallTimeout })
+
 		cfg := test_helpers.NewTestMetastructureConfig()
 		cfg.Agent.Retry.StatusCheckInterval = 1 * time.Second
+		cfg.Agent.Retry.RetryDelay = 100 * time.Millisecond
 
 		m, def, err := test_helpers.NewTestMetastructureWithConfig(t, overrides, cfg)
 		defer def()
@@ -749,7 +756,7 @@ func TestPluginOperatorCrashConvergesViaTimeout(t *testing.T) {
 			"sibling (bucket) resource update must complete successfully (crash must not kill siblings)")
 
 		// ── Step 6: the vpc resource update must reach Failed via the
-		//   PluginOperatorMissingInAction timeout (2 × 1 s = 2 s). ──
+		//   PluginOperatorMissingInAction timeout. ──
 		assert.Eventually(t, func() bool {
 			cmds, err := m.Datastore.LoadFormaCommands()
 			if err != nil {
@@ -766,7 +773,7 @@ func TestPluginOperatorCrashConvergesViaTimeout(t *testing.T) {
 				}
 			}
 			return false
-		}, 15*time.Second, 100*time.Millisecond,
+		}, 30*time.Second, 100*time.Millisecond,
 			"vpc resource update must converge to Failed via PluginOperatorMissingInAction timeout")
 
 		// ── Step 7: the FormaCommand must reach a terminal state (Failed) without
@@ -782,7 +789,7 @@ func TestPluginOperatorCrashConvergesViaTimeout(t *testing.T) {
 				}
 			}
 			return false
-		}, 20*time.Second, 100*time.Millisecond,
+		}, 30*time.Second, 100*time.Millisecond,
 			"FormaCommand must reach terminal Failed state — no hang after PluginOperator crash")
 
 		// ── Step 8: the ChangesetExecutor must self-terminate after the command

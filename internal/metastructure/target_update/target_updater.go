@@ -147,9 +147,9 @@ func handleStartTargetUpdate(from gen.PID, state gen.Atom, data TargetUpdaterDat
 // ResolveCache reads, so a tuned policy cannot cause the two to drift and trip
 // this timeout mid-retry.
 func resolvingTimeout(proc gen.Process) time.Duration {
-	// perAttempt mirrors resource_update.PluginOperationCallTimeout (60s). It is
-	// duplicated as a local const because target_update must not import
-	// resource_update (which imports target_update).
+	// perAttempt mirrors resource_update.PluginCallTimeout (60s), the deadline a
+	// single plugin call runs under. It is duplicated as a local const because
+	// target_update must not import resource_update (which imports target_update).
 	const perAttempt = 60 * time.Second
 	const margin = 30 * time.Second
 
