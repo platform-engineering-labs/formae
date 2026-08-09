@@ -29,8 +29,8 @@ var defaultIgnoredFields = []jsonpatch.Path{}
 //     these immutable properties changed: …") and are never sent to plugins.
 //
 // The two slices are disjoint. Either can be nil.
-func GeneratePatch(document []byte, patch []byte, properties resolver.ResolvableProperties, schema pkgmodel.Schema, mode pkgmodel.FormaApplyMode) (json.RawMessage, json.RawMessage, error) {
-	return generatePatch(document, patch, properties, schema, mode)
+func GeneratePatch(document []byte, patch []byte, storedEnvelopes []byte, properties resolver.ResolvableProperties, schema pkgmodel.Schema, mode pkgmodel.FormaApplyMode) (json.RawMessage, json.RawMessage, error) {
+	return generatePatch(document, patch, storedEnvelopes, properties, schema, mode)
 }
 
 func collectionSemanticsFromFieldHints(hints map[string]pkgmodel.FieldHint) jsonpatch.Collections {
@@ -65,8 +65,8 @@ func entitySetProviderDefaultsFromHints(hints map[string]pkgmodel.FieldHint) map
 	return result
 }
 
-func generatePatch(document []byte, patch []byte, properties resolver.ResolvableProperties, schema pkgmodel.Schema, mode pkgmodel.FormaApplyMode) (json.RawMessage, json.RawMessage, error) {
-	flattenedDocument, flattenedPatch, err := flattenAndResolveRefs(document, patch, properties)
+func generatePatch(document []byte, patch []byte, storedEnvelopes []byte, properties resolver.ResolvableProperties, schema pkgmodel.Schema, mode pkgmodel.FormaApplyMode) (json.RawMessage, json.RawMessage, error) {
+	flattenedDocument, flattenedPatch, err := flattenAndResolveRefs(document, patch, storedEnvelopes, properties)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to flatten and resolve refs: %w", err)
 	}
@@ -889,7 +889,7 @@ func normalizeResolvedValue(resolved string, current any) any {
 }
 
 // resolveRefs uses properties to resolve references in the patch document
-func resolveRefs(current, mod map[string]any, resolvableProperties resolver.ResolvableProperties) error {
+func resolveRefs(current, mod, stored map[string]any, resolvableProperties resolver.ResolvableProperties) error {
 	for k, v := range mod {
 		switch modVal := v.(type) {
 		case map[string]any:
@@ -919,13 +919,27 @@ func resolveRefs(current, mod map[string]any, resolvableProperties resolver.Reso
 			} else {
 				currNested = map[string]any{}
 			}
-			if err := resolveRefs(currNested, modVal, resolvableProperties); err != nil {
+			var storedNested map[string]any
+			if stored != nil {
+				if s, ok := stored[k].(map[string]any); ok {
+					storedNested = s
+				} else {
+					storedNested = map[string]any{}
+				}
+			}
+			if err := resolveRefs(currNested, modVal, storedNested, resolvableProperties); err != nil {
 				return err
 			}
 		case []any:
 			var currArr []any
 			if c, ok := current[k].([]any); ok {
 				currArr = c
+			}
+			var storedArr []any
+			if stored != nil {
+				if s, ok := stored[k].([]any); ok {
+					storedArr = s
+				}
 			}
 			for i, elem := range modVal {
 				var currElem any
@@ -941,7 +955,12 @@ func resolveRefs(current, mod map[string]any, resolvableProperties resolver.Reso
 					// otherwise normalize against a nil current and diff forever.
 					wrappedElem := map[string]any{k: elemMap}
 					wrappedCurrent := map[string]any{k: currElem}
-					if err := resolveRefs(wrappedCurrent, wrappedElem, resolvableProperties); err != nil {
+					var wrappedStored map[string]any
+					if len(storedArr) > i {
+						storedElem := storedArr[i]
+						wrappedStored = map[string]any{k: storedElem}
+					}
+					if err := resolveRefs(wrappedCurrent, wrappedElem, wrappedStored, resolvableProperties); err != nil {
 						return err
 					}
 					if resolvedElem, ok := wrappedElem[k].(map[string]any); ok {
@@ -1071,7 +1090,7 @@ func normalizeToFlattenedKeys(m map[string]any) {
 	}
 }
 
-func flattenAndResolveRefs(document []byte, patch []byte, resolvableProperties resolver.ResolvableProperties) ([]byte, []byte, error) {
+func flattenAndResolveRefs(document []byte, patch []byte, storedEnvelopes []byte, resolvableProperties resolver.ResolvableProperties) ([]byte, []byte, error) {
 	var current, mod map[string]any
 	if err := json.Unmarshal(document, &current); err != nil {
 		return nil, nil, err
@@ -1079,7 +1098,13 @@ func flattenAndResolveRefs(document []byte, patch []byte, resolvableProperties r
 	if err := json.Unmarshal(patch, &mod); err != nil {
 		return nil, nil, err
 	}
-	if err := resolveRefs(current, mod, resolvableProperties); err != nil {
+	var stored map[string]any
+	if storedEnvelopes != nil {
+		if err := json.Unmarshal(storedEnvelopes, &stored); err != nil {
+			return nil, nil, err
+		}
+	}
+	if err := resolveRefs(current, mod, stored, resolvableProperties); err != nil {
 		return nil, nil, err
 	}
 	flattenRefs(current)

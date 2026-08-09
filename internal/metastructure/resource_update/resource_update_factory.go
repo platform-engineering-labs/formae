@@ -88,6 +88,7 @@ func NewResourceUpdateForExisting(
 		patchDocument, createOnlyPatch, err = patch.GeneratePatch(
 			existingPluginProps,
 			newPluginProps,
+			existingForPatch,
 			resolvableProperties,
 			newResource.Schema,
 			mode,
