@@ -134,11 +134,18 @@ type armingProcess struct {
 	*stubUpdaterProcess
 
 	operatorProgress plugin.TrackedProgress
+
+	// spawnRetryConfig is the retry config the PluginCoordinator double reports
+	// the spawned operator was given. Nil means it supplied none.
+	spawnRetryConfig *pkgmodel.RetryConfig
 }
 
 func (p *armingProcess) Call(_ any, message any) (any, error) {
 	if _, ok := message.(messages.SpawnPluginOperator); ok {
-		return messages.SpawnPluginOperatorResult{PID: gen.PID{Node: "test-node", ID: 2}}, nil
+		return messages.SpawnPluginOperatorResult{
+			PID:         gen.PID{Node: "test-node", ID: 2},
+			RetryConfig: p.spawnRetryConfig,
+		}, nil
 	}
 	return nil, nil
 }
@@ -203,6 +210,91 @@ func TestHandleProgressUpdate_ArmsCadenceDerivedWatchdog(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, StateCreating, state, "an in-progress report keeps the state machine waiting")
 	assert.Equal(t, missingInActionTimeout(cfg), armedMissingInActionTimeout(t, actions))
+}
+
+// perPluginRetryConfig is a retry config that differs from the shipped defaults
+// in every term the watchdog window is derived from, standing in for a
+// per-plugin retry override the operator was spawned with.
+func perPluginRetryConfig() pkgmodel.RetryConfig {
+	return pkgmodel.RetryConfig{
+		StatusCheckInterval: 90 * time.Second,
+		MaxRetries:          3,
+		RetryDelay:          30 * time.Second,
+	}
+}
+
+// windowSource is one case of the config the watchdog window must be sized
+// from: supplied is what the operator was spawned with (nil when the
+// coordinator supplied none), want is the config the window must come from.
+type windowSource struct {
+	name     string
+	supplied *pkgmodel.RetryConfig
+	want     pkgmodel.RetryConfig
+}
+
+// windowSourceCases enumerates which retry config must size the watchdog
+// window: the one the spawned operator was given when the coordinator supplied
+// it, the node-global one when it did not. A supplied config whose fields are
+// all zero is a legitimate config, not an absent one, so it must size the
+// window too rather than fall back.
+func windowSourceCases(global pkgmodel.RetryConfig) []windowSource {
+	perPlugin := perPluginRetryConfig()
+	zero := pkgmodel.RetryConfig{}
+	return []windowSource{
+		{name: "operator config supplied", supplied: &perPlugin, want: perPlugin},
+		{name: "no operator config supplied", supplied: nil, want: global},
+		{name: "operator config supplied with zero fields", supplied: &zero, want: zero},
+	}
+}
+
+// TestHandleProgressUpdate_SizesWindowFromOperatorConfig asserts the progress
+// handler sizes the watchdog from the retry config the watched operator was
+// spawned with, and only falls back to the node-global config when none was
+// supplied.
+func TestHandleProgressUpdate_SizesWindowFromOperatorConfig(t *testing.T) {
+	global := shippedRetryConfig()
+	require.NotEqual(t, missingInActionTimeout(global), missingInActionTimeout(perPluginRetryConfig()),
+		"the per-plugin config must yield a different window than the node-global one")
+
+	for _, tc := range windowSourceCases(global) {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := &armingProcess{stubUpdaterProcess: &stubUpdaterProcess{}}
+			data := armingTestData(global)
+			data.operatorRetryConfig = tc.supplied
+
+			_, _, actions, err := handleProgressUpdate(gen.PID{}, StateCreating, data, inProgressCreate(global), proc)
+
+			require.NoError(t, err)
+			assert.Equal(t, missingInActionTimeout(tc.want), armedMissingInActionTimeout(t, actions))
+		})
+	}
+}
+
+// TestRecoverFromPreviousProgress_SizesWindowFromSpawnedOperatorConfig asserts
+// the recovery path carries the retry config the spawn result reported all the
+// way to the armed watchdog, so the window tracks the cadence the operator
+// actually polls on.
+func TestRecoverFromPreviousProgress_SizesWindowFromSpawnedOperatorConfig(t *testing.T) {
+	global := shippedRetryConfig()
+	require.NotEqual(t, missingInActionTimeout(global), missingInActionTimeout(pkgmodel.RetryConfig{}),
+		"a zero-field config must yield a different window than the node-global one, or the fallback would be invisible")
+
+	for _, tc := range windowSourceCases(global) {
+		t.Run(tc.name, func(t *testing.T) {
+			lastKnownProgress := inProgressCreate(global)
+			proc := &armingProcess{
+				stubUpdaterProcess: &stubUpdaterProcess{},
+				operatorProgress:   inProgressCreate(global),
+				spawnRetryConfig:   tc.supplied,
+			}
+			operation := plugin.CreateResource{ResourceType: "FakeAWS::EC2::Subnet", Label: "r"}
+
+			_, _, actions, err := recoverFromPreviousProgress(StateCreating, armingTestData(global), &lastKnownProgress, operation, proc)
+
+			require.NoError(t, err)
+			assert.Equal(t, missingInActionTimeout(tc.want), armedMissingInActionTimeout(t, actions))
+		})
+	}
 }
 
 // TestRecoverFromPreviousProgress_ArmsCadenceDerivedWatchdog asserts the
