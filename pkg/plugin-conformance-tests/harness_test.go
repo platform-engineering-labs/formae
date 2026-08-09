@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 )
 
@@ -409,6 +410,117 @@ func TestTempDirRetention(t *testing.T) {
 				if !strings.Contains(out, s) {
 					t.Errorf("child output does not contain %q\n%s", s, out)
 				}
+			}
+		})
+	}
+}
+
+// stubFormaeBinary writes an executable shell script standing in for the
+// formae CLI. It records its argv (one arg per line) to argsFile when that
+// path is non-empty, then runs the given body.
+func stubFormaeBinary(t *testing.T, argsFile, body string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "formae")
+	script := "#!/bin/sh\n"
+	if argsFile != "" {
+		script += fmt.Sprintf("printf '%%s\\n' \"$@\" > %q\n", argsFile)
+	}
+	script += body + "\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("failed to write stub formae binary: %v", err)
+	}
+	return path
+}
+
+func TestSimulateApplyParsesSimulation(t *testing.T) {
+	argsFile := filepath.Join(t.TempDir(), "args")
+	stdout := `{"ChangesRequired":true,"Command":{"CommandId":"cmd-1","Command":"Apply","State":"Simulated"}}`
+	h := &TestHarness{
+		t:            t,
+		formaeBinary: stubFormaeBinary(t, argsFile, "printf '%s' '"+stdout+"'"),
+		configFile:   "/tmp/config.pkl",
+	}
+
+	sim, err := h.SimulateApply("/tmp/extracted.pkl", "patch")
+	if err != nil {
+		t.Fatalf("SimulateApply() error = %v", err)
+	}
+	if !sim.ChangesRequired {
+		t.Error("SimulateApply() should parse ChangesRequired = true")
+	}
+
+	raw, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatalf("stub did not record its args: %v", err)
+	}
+	args := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	for _, want := range [][]string{
+		{"apply", "/tmp/extracted.pkl"},
+		{"--mode", "patch"},
+		{"--simulate"},
+		{"--output-consumer", "machine"},
+		{"--output-schema", "json"},
+	} {
+		if !containsSubsequence(args, want) {
+			t.Errorf("CLI args %v should contain %v in order", args, want)
+		}
+	}
+}
+
+// containsSubsequence reports whether want appears in args as a contiguous run.
+func containsSubsequence(args, want []string) bool {
+	for i := 0; i+len(want) <= len(args); i++ {
+		matched := true
+		for j, w := range want {
+			if args[i+j] != w {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return true
+		}
+	}
+	return false
+}
+
+// TestCLIInvocationsAreBounded pins that every formae CLI invocation the
+// harness makes carries a deadline: a CLI process that never exits must
+// surface as an error instead of blocking the suite until the go-test
+// deadline.
+func TestCLIInvocationsAreBounded(t *testing.T) {
+	h := &TestHarness{
+		t:            t,
+		formaeBinary: stubFormaeBinary(t, "", "sleep 60"),
+		configFile:   "/tmp/config.pkl",
+		cliTimeout:   100 * time.Millisecond,
+	}
+
+	invocations := map[string]func() error{
+		"ApplyWithMode": func() error { _, err := h.ApplyWithMode("/tmp/x.pkl", "patch"); return err },
+		"SimulateApply": func() error { _, err := h.SimulateApply("/tmp/x.pkl", "patch"); return err },
+		"Destroy":       func() error { _, err := h.Destroy("/tmp/x.pkl"); return err },
+		"Eval":          func() error { _, err := h.Eval("/tmp/x.pkl"); return err },
+		"Extract":       func() error { return h.Extract("type:NS::Storage::Bucket", "/tmp/out.pkl") },
+		"Inventory":     func() error { _, err := h.Inventory("type: NS::Storage::Bucket"); return err },
+		"GetStatus":     func() error { _, err := h.GetStatus("cmd-1"); return err },
+	}
+
+	for name, invoke := range invocations {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			start := time.Now()
+			err := invoke()
+			elapsed := time.Since(start)
+			if err == nil {
+				t.Fatal("a CLI invocation that never exits should return an error")
+			}
+			if elapsed > 10*time.Second {
+				t.Fatalf("invocation took %s, want it bounded by the CLI timeout", elapsed)
+			}
+			if !strings.Contains(err.Error(), "timed out") {
+				t.Errorf("error %q should say the invocation timed out", err)
 			}
 		})
 	}

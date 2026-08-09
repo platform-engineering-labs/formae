@@ -83,10 +83,12 @@ lifecycle and asserts that:
 3. `formae inventory` reports the resource with the properties from the base
    Pkl file.
 4. If the resource type is extractable, `formae extract` round-trips back to
-   an equivalent Pkl declaration, and patch-applying that declaration succeeds
-   and leaves the resource unchanged — same `Label`, `Stack`, `NativeID` and
-   properties. Resources carrying an opaque secret skip the re-apply, because
-   extract emits a hashed envelope for those fields rather than the authored
+   an equivalent Pkl declaration, and a simulated patch-mode apply of that
+   declaration plans zero changes. A faithful extract describes state that
+   already exists, so the simulation must come back empty; a lossy one diffs,
+   and the failure names the operations the re-apply would have performed.
+   Resources carrying an opaque secret skip the re-apply, because extract
+   emits a hashed envelope for those fields rather than the authored
    plaintext.
 5. A forced sync leaves the resource untouched (idempotency).
 6. If `-update.pkl` exists, patch-mode apply updates the resource without
@@ -122,6 +124,7 @@ exercised.
 | `FORMAE_TEST_TESTDATA_DIR` | Override the testdata directory. Relative paths resolve against the plugin directory. |
 | `FORMAE_TEST_EXTRA_DISCOVERY_TYPES` | Extra resource types (comma-separated) to add to the discovery scan, beyond those declared in test data. |
 | `FORMAE_TEST_KEEP_TEMP` | Set truthy (e.g. `true`, `1`) to keep each test's temp directory even when the test passes. Failing tests keep theirs regardless. |
+| `FORMAE_TEST_CLI_TIMEOUT` | Bound, in minutes, for a single formae CLI invocation (default 5). A CLI process that never exits fails the test with a diagnostic instead of stalling until the go-test deadline. |
 | `FORMAE_BINARY` | Absolute path to a specific `formae` binary. Skips the channel-aware resolver. |
 | `FORMAE_VERSION` | Pin a specific formae version. The resolver searches stable then dev channels for an exact match. |
 | `FORMAE_TEST_RUN_ID` | Set by the harness for each run; available to Pkl fixtures for unique resource naming. |
