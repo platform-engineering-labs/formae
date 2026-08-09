@@ -445,16 +445,41 @@ func (data PluginUpdateData) terminalCallError(operation resource.Operation, err
 	return progress
 }
 
-// statusCheckAfterCallDeadline returns the check to feed back into
-// handlePluginResult when a status call itself outran its per-call deadline.
+// statusCheckAfterFailedCall returns the check to feed back into
+// handlePluginResult when a status call itself failed.
 // handlePluginResult re-issues the operation that started a check whenever the
 // check still carries it, so clearing Request guarantees the retry is another
-// status poll: only the poll timed out, and a mutation that may already have
+// status poll: only the poll failed, and a mutation that may already have
 // reached the provider must never be issued twice. Every identifier survives,
 // because a check's own StatusCheck is the identity.
-func statusCheckAfterCallDeadline(check PluginOperatorCheckStatus) PluginOperatorCheckStatus {
+func statusCheckAfterFailedCall(check PluginOperatorCheckStatus) PluginOperatorCheckStatus {
 	check.Request = nil
 	return check
+}
+
+// statusCallFailure builds the failure progress for a status call that returned
+// an error instead of a result. A call that outran its deadline or was throttled
+// is safe to repeat, so it widens into a recoverable code; every other error
+// stays terminal. The check's identifiers are carried over because the retry
+// ladder rebuilds the next poll from the progress.
+func (data PluginUpdateData) statusCallFailure(check PluginOperatorCheckStatus, err error) *resource.ProgressResult {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return data.callDeadlineProgress(check)
+	}
+
+	errorCode := resource.OperationErrorCodeUnforeseenError
+	if isThrottlingError(err) {
+		errorCode = resource.OperationErrorCodeThrottling
+	}
+
+	return &resource.ProgressResult{
+		Operation:       check.ResourceOperation,
+		OperationStatus: resource.OperationStatusFailure,
+		RequestID:       check.RequestID,
+		NativeID:        check.NativeID,
+		ErrorCode:       errorCode,
+		StatusMessage:   err.Error(),
+	}
 }
 
 func (o *PluginOperator) Init(args ...any) (statemachine.StateMachineSpec[PluginUpdateData], error) {
@@ -735,6 +760,9 @@ func delete(from gen.PID, state gen.Atom, data PluginUpdateData, operation Delet
 
 func status(from gen.PID, state gen.Atom, data PluginUpdateData, operation PluginOperatorCheckStatus, proc gen.Process) (gen.Atom, PluginUpdateData, []statemachine.Action, error) {
 	if !validateNamespace(data, operation.Namespace, proc) {
+		if sendErr := proc.Send(data.requestedBy, data.newNamespaceMismatchError()); sendErr != nil {
+			proc.Log().Error("PluginOperator: failed to send namespace mismatch result: %v", sendErr)
+		}
 		return StateFinishedWithError, data, nil, nil
 	}
 
@@ -751,18 +779,15 @@ func status(from gen.PID, state gen.Atom, data PluginUpdateData, operation Plugi
 	})
 
 	var checkResult *resource.ProgressResult
-	switch {
-	case err == nil:
+	if err != nil {
+		// A status call that returned no result leaves the operation's outcome
+		// unknown, so it travels the normal ladder as a failure of the check and
+		// only another check may follow it.
+		operation = statusCheckAfterFailedCall(operation)
+		checkResult = data.statusCallFailure(operation, err)
+		proc.Log().Error("PluginOperator: status check of resource %s failed with error code %s: %v", operation.RequestID, checkResult.ErrorCode, err)
+	} else {
 		checkResult = result.ProgressResult
-	case errors.Is(err, context.DeadlineExceeded):
-		proc.Log().Error("PluginOperator: status check of resource %s exceeded its %s call deadline: %v", operation.RequestID, data.callTimeout, err)
-		// A status check is safe to repeat, so it stays recoverable and is
-		// rescheduled as another check.
-		operation = statusCheckAfterCallDeadline(operation)
-		checkResult = data.callDeadlineProgress(operation)
-	default:
-		proc.Log().Error("PluginOperator: failed to get status of resource: %v", err)
-		return StateFinishedWithError, data, nil, nil
 	}
 
 	nextState, data, progress, actions, pluginErr := handlePluginResult(data, operation, proc, checkResult)
@@ -795,6 +820,12 @@ func retry(from gen.PID, state gen.Atom, data PluginUpdateData, operation Plugin
 		nextState, newData, progress, actions, pluginErr = update(data.requestedBy, state, data, operation.Request.(UpdateResource), proc)
 	case resource.OperationDelete:
 		nextState, newData, progress, actions, pluginErr = delete(data.requestedBy, state, data, operation.Request.(DeleteResource), proc)
+	default:
+		proc.Log().Error("PluginOperator: cannot retry unsupported operation %s", operation.ResourceOperation)
+		nextState, newData = StateFinishedWithError, data
+		progress = data.newUnforeseenError()
+		progress.Operation = operation.ResourceOperation
+		progress.StatusMessage = fmt.Sprintf("cannot retry unsupported operation %s", operation.ResourceOperation)
 	}
 
 	proc.Log().Debug("PluginOperator: sending progress update to resource updater %v", data.requestedBy)
@@ -830,7 +861,7 @@ func resume(from gen.PID, state gen.Atom, data PluginUpdateData, operation Resum
 			proc.Log().Error("PluginOperator: resumed status check of resource %s exceeded its %s call deadline: %v", operation.Request.RequestID, data.callTimeout, err)
 			// A status check is safe to repeat, so it stays recoverable and is
 			// rescheduled as another check.
-			check := statusCheckAfterCallDeadline(operation.Request)
+			check := statusCheckAfterFailedCall(operation.Request)
 			return handlePluginResult(data, check, proc, data.callDeadlineProgress(check))
 		}
 		proc.Log().Error("PluginOperator: failed to get resume waiting for resource: %v", err)
