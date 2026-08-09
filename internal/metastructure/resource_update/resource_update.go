@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"time"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/patch"
@@ -646,6 +647,13 @@ func (m *propertyMerger) mergeRefObject(path string, userVal, pluginVal gjson.Re
 			if userValue.Exists() && userValue.Value() != nil {
 				updatedRef, _ = sjson.Set(updatedRef, "$applied", userValue.Value())
 			}
+		} else if userVal.Get("$applied").Exists() &&
+			!m.keptUserValue(userValue, pluginVal) &&
+			!reflect.DeepEqual(valueToSet, userValue.Value()) {
+			// The merger adopted a plugin echo that differs from the absorbed
+			// one: out-of-band drift in the observed domain. Drop the baseline
+			// so the next plan runs the corrective fresh-vs-echo diff.
+			updatedRef, _ = sjson.Delete(updatedRef, "$applied")
 		}
 	}
 
@@ -706,6 +714,13 @@ func (m *propertyMerger) mergeResObject(path string, userVal, pluginVal gjson.Re
 			if userValue.Exists() && userValue.Value() != nil {
 				updatedRes, _ = sjson.Set(updatedRes, "$applied", userValue.Value())
 			}
+		} else if userVal.Get("$applied").Exists() &&
+			!keptUser &&
+			!reflect.DeepEqual(valueToSet, userValue.Value()) {
+			// The merger adopted a plugin echo that differs from the absorbed
+			// one: out-of-band drift in the observed domain. Drop the baseline
+			// so the next plan runs the corrective fresh-vs-echo diff.
+			updatedRes, _ = sjson.Delete(updatedRes, "$applied")
 		}
 	}
 

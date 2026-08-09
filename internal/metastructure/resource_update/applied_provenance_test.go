@@ -76,3 +76,58 @@ func TestMergeRefs_WriteOrigin_NoSentValue_NoApplied(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, gjson.GetBytes(merged, "TargetKeyId.$applied").Exists())
 }
+
+// A sync read that echoes the same value leaves $applied untouched.
+func TestMergeRefs_ReadOrigin_SameEcho_PreservesApplied(t *testing.T) {
+	user := json.RawMessage(`{"TargetKeyId": {"$ref": "formae://abc#/Arn", "$value": "4711", "$applied": "arn:aws:kms:us-east-1:111122223333:key/4711"}}`)
+	plugin := json.RawMessage(`{"TargetKeyId": "4711"}`)
+
+	merged, err := mergeRefsPreservingUserRefs(user, plugin, pkgmodel.Schema{Fields: []string{"TargetKeyId"}}, false)
+	require.NoError(t, err)
+	assert.True(t, gjson.GetBytes(merged, "TargetKeyId.$applied").Exists())
+}
+
+// A sync read that adopts a DIFFERENT echo is real out-of-band drift on the
+// path: the baseline is invalidated so the next plan falls back to the
+// corrective fresh-vs-echo diff.
+func TestMergeRefs_ReadOrigin_ChangedEcho_InvalidatesApplied(t *testing.T) {
+	user := json.RawMessage(`{"TargetKeyId": {"$ref": "formae://abc#/Arn", "$value": "4711", "$applied": "arn:aws:kms:us-east-1:111122223333:key/4711"}}`)
+	plugin := json.RawMessage(`{"TargetKeyId": "9988"}`)
+
+	merged, err := mergeRefsPreservingUserRefs(user, plugin, pkgmodel.Schema{Fields: []string{"TargetKeyId"}}, false)
+	require.NoError(t, err)
+	env := gjson.GetBytes(merged, "TargetKeyId")
+	assert.Equal(t, "9988", env.Get("$value").String())
+	assert.False(t, env.Get("$applied").Exists(), "a differing adopted echo must invalidate the baseline")
+}
+
+// A plugin that omits the path (or returns null/empty) is an unobservable
+// read, not drift: the stored value is kept and $applied survives.
+func TestMergeRefs_ReadOrigin_OmittedEcho_PreservesApplied(t *testing.T) {
+	user := json.RawMessage(`{"TargetKeyId": {"$ref": "formae://abc#/Arn", "$value": "4711", "$applied": "arn:aws:kms:us-east-1:111122223333:key/4711"}}`)
+
+	for _, plugin := range []json.RawMessage{
+		json.RawMessage(`{}`),
+		json.RawMessage(`{"TargetKeyId": null}`),
+		json.RawMessage(`{"TargetKeyId": ""}`),
+	} {
+		merged, err := mergeRefsPreservingUserRefs(user, plugin, pkgmodel.Schema{Fields: []string{"TargetKeyId"}}, false)
+		require.NoError(t, err)
+		env := gjson.GetBytes(merged, "TargetKeyId")
+		assert.Equal(t, "4711", env.Get("$value").String())
+		assert.True(t, env.Get("$applied").Exists(), "unobservable reads must not invalidate: %s", plugin)
+	}
+}
+
+// A write-origin merge refreshes $applied rather than invalidating it, even
+// though the echo differs from the pre-merge $value.
+func TestMergeRefs_WriteOrigin_RestampsOverInvalidation(t *testing.T) {
+	user := json.RawMessage(`{"TargetKeyId": {"$ref": "formae://abc#/Arn", "$value": "arn:aws:kms:us-east-1:111122223333:key/9988", "$applied": "arn:aws:kms:us-east-1:111122223333:key/4711"}}`)
+	plugin := json.RawMessage(`{"TargetKeyId": "9988"}`)
+
+	merged, err := mergeRefsPreservingUserRefs(user, plugin, pkgmodel.Schema{Fields: []string{"TargetKeyId"}}, true)
+	require.NoError(t, err)
+	env := gjson.GetBytes(merged, "TargetKeyId")
+	assert.Equal(t, "9988", env.Get("$value").String())
+	assert.Equal(t, "arn:aws:kms:us-east-1:111122223333:key/9988", env.Get("$applied").String())
+}
