@@ -20,8 +20,6 @@ import (
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
 
-const progressTestCallTimeout = 90 * time.Second
-
 // statusCheckFor builds the check the operator polls with while it waits for a
 // create to finish, carrying the create that started it.
 func statusCheckFor(request any) PluginOperatorCheckStatus {
@@ -36,6 +34,8 @@ func statusCheckFor(request any) PluginOperatorCheckStatus {
 }
 
 func TestStatus_NamespaceMismatchReportsBeforeTerminating(t *testing.T) {
+	const callTimeout = 90 * time.Second
+
 	plugin := newRecordingPlugin()
 	proc := newOperatorProcess(nil, nil)
 
@@ -43,7 +43,7 @@ func TestStatus_NamespaceMismatchReportsBeforeTerminating(t *testing.T) {
 	check.Namespace = "other"
 
 	state, _, _, err := status(gen.PID{}, StateWaitingForResource,
-		deadlineTestData(plugin, progressTestCallTimeout), check, proc)
+		deadlineTestData(plugin, callTimeout), check, proc)
 
 	require.NoError(t, err)
 	assert.Equal(t, StateFinishedWithError, state)
@@ -53,9 +53,15 @@ func TestStatus_NamespaceMismatchReportsBeforeTerminating(t *testing.T) {
 	assert.Equal(t, resource.OperationStatusFailure, sent[0].OperationStatus)
 	assert.Equal(t, resource.OperationErrorCodePluginNotFound, sent[0].ErrorCode)
 	assert.True(t, sent[0].Failed())
+
+	assert.Equal(t, check.RequestID, sent[0].RequestID, "the requester needs the identifiers it polls with")
+	assert.Equal(t, check.NativeID, sent[0].NativeID, "the requester must not lose the native id it already recorded")
+	assert.Equal(t, check.ResourceOperation, sent[0].Operation)
 }
 
 func TestStatus_ClassifiesStatusCallError(t *testing.T) {
+	const callTimeout = 90 * time.Second
+
 	tests := []struct {
 		name         string
 		err          error
@@ -101,7 +107,7 @@ func TestStatus_ClassifiesStatusCallError(t *testing.T) {
 
 			check := statusCheckFor(nil)
 			state, _, _, err := status(gen.PID{}, StateWaitingForResource,
-				deadlineTestData(plugin, progressTestCallTimeout), check, proc)
+				deadlineTestData(plugin, callTimeout), check, proc)
 
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantState, state)
@@ -120,42 +126,70 @@ func TestStatus_ClassifiesStatusCallError(t *testing.T) {
 	}
 }
 
-// TestStatus_RecoverableCallErrorNeverReissuesTheOriginalOperation covers a
-// status check that carries the create that started it. A create that may
-// already have reached the provider must never be sent again, so a status call
-// that fails recoverably reschedules another status check.
-func TestStatus_RecoverableCallErrorNeverReissuesTheOriginalOperation(t *testing.T) {
+// TestStatus_FailingCallConsumesTheRetryLadder covers a status API that keeps
+// failing: every failed call must count as an attempt, so the ladder escalates
+// its backoff and eventually gives up, and every attempt must report its own
+// error rather than repeating the first one.
+func TestStatus_FailingCallConsumesTheRetryLadder(t *testing.T) {
+	const callTimeout = 90 * time.Second
+
 	plugin := newRecordingPlugin()
-	plugin.err = errors.New("ThrottlingException: Rate exceeded")
 	proc := newOperatorProcess(nil, nil)
+	check := statusCheckFor(nil)
 
-	check := statusCheckFor(CreateResource{Namespace: deadlineTestNamespace, ResourceType: "Test::Resource"})
+	plugin.err = errors.New("ThrottlingException: Rate exceeded polling for the first time")
+	_, data, _, err := status(gen.PID{}, StateWaitingForResource,
+		deadlineTestData(plugin, callTimeout), check, proc)
+	require.NoError(t, err)
 
-	state, _, _, err := status(gen.PID{}, StateWaitingForResource,
-		deadlineTestData(plugin, progressTestCallTimeout), check, proc)
-
+	plugin.err = errors.New("ThrottlingException: Rate exceeded polling for the second time")
+	state, _, _, err := status(gen.PID{}, StateWaitingForResource, data, check, proc)
 	require.NoError(t, err)
 	assert.Equal(t, StateWaitingForResource, state)
 
-	scheduled := proc.scheduled()
-	require.Len(t, scheduled, 1)
-	rescheduledCheck, ok := scheduled[0].(PluginOperatorCheckStatus)
-	require.True(t, ok, "a failed status call must reschedule a status check, got %T", scheduled[0])
-	assert.Nil(t, rescheduledCheck.Request, "the rescheduled check must not carry the request that would re-issue the operation")
-	assert.Equal(t, check.RequestID, rescheduledCheck.RequestID)
-	assert.Equal(t, check.NativeID, rescheduledCheck.NativeID)
-	assert.Equal(t, check.ResourceType, rescheduledCheck.ResourceType)
-	assert.Equal(t, check.ResourceOperation, rescheduledCheck.ResourceOperation)
+	sent := proc.sentProgress()
+	require.Len(t, sent, 2)
+	assert.Greater(t, sent[1].Attempts, sent[0].Attempts, "a failing status call must consume an attempt")
+	assert.Contains(t, sent[1].StatusMessage, "second time", "every attempt must report its own failure")
+	assert.NotContains(t, sent[1].StatusMessage, "first time")
+}
 
-	_, called := plugin.ctxs[resource.OperationCreate]
-	assert.False(t, called, "the mutating operation must never be re-issued")
+// TestStatus_FailingCallsExhaustTheRetryLadder covers a status API that never
+// recovers: the operation must give up once its attempts are spent instead of
+// polling forever.
+func TestStatus_FailingCallsExhaustTheRetryLadder(t *testing.T) {
+	const callTimeout = 90 * time.Second
+
+	plugin := newRecordingPlugin()
+	plugin.err = errors.New("ThrottlingException: Rate exceeded")
+	proc := newOperatorProcess(nil, nil)
+	check := statusCheckFor(nil)
+
+	data := deadlineTestData(plugin, callTimeout)
+	maxAttempts := int(data.config.MaxRetries) + 1
+
+	var state gen.Atom
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		var err error
+		state, data, _, err = status(gen.PID{}, StateWaitingForResource, data, check, proc)
+		require.NoError(t, err)
+	}
+
+	assert.Equal(t, StateFinishedWithError, state, "a status call that never succeeds must not poll forever")
+
+	sent := proc.sentProgress()
+	require.Len(t, sent, maxAttempts)
+	assert.True(t, sent[maxAttempts-1].Failed(), "the resource updater must be told the operation failed")
+	assert.Len(t, proc.scheduled(), maxAttempts-1, "the exhausted ladder must not schedule another check")
 }
 
 func TestRetry_UnsupportedOperationReportsTerminalFailure(t *testing.T) {
+	const callTimeout = 90 * time.Second
+
 	plugin := newRecordingPlugin()
 	proc := newOperatorProcess(nil, nil)
 
-	state, _, _, err := retry(gen.PID{}, StateRetrying, deadlineTestData(plugin, progressTestCallTimeout),
+	state, _, _, err := retry(gen.PID{}, StateRetrying, deadlineTestData(plugin, callTimeout),
 		PluginOperatorRetry{ResourceOperation: resource.OperationNotSupported}, proc)
 
 	require.NoError(t, err)

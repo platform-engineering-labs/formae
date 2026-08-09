@@ -9,6 +9,7 @@ package plugin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -520,12 +521,12 @@ func TestStatus_ClassifiesDeadlineAsServiceTimeout(t *testing.T) {
 	assert.Contains(t, sent[0].StatusMessage, callTimeout.String())
 }
 
-// TestStatusDeadlineNeverReissuesTheOriginalOperation covers a status check that
-// carries the request that started it — the local-path shape, where the retry
-// ladder would otherwise re-issue that request. A create that may already have
-// reached the provider must never be sent again, so a status call that outran
-// its deadline reschedules another status check instead.
-func TestStatusDeadlineNeverReissuesTheOriginalOperation(t *testing.T) {
+// TestFailedStatusCallNeverReissuesTheOriginalOperation covers a status check
+// that carries the request that started it — the local-path shape, where the
+// retry ladder would otherwise re-issue that request. A create that may already
+// have reached the provider must never be sent again, so a status call that
+// fails recoverably reschedules another status check instead.
+func TestFailedStatusCallNeverReissuesTheOriginalOperation(t *testing.T) {
 	const callTimeout = 90 * time.Second
 
 	originalCreate := CreateResource{Namespace: deadlineTestNamespace, ResourceType: "Test::Resource"}
@@ -540,17 +541,28 @@ func TestStatusDeadlineNeverReissuesTheOriginalOperation(t *testing.T) {
 
 	tests := []struct {
 		name   string
+		err    error
 		invoke func(data PluginUpdateData, proc gen.Process) gen.Atom
 	}{
 		{
-			name: "status",
+			name: "status past its deadline",
+			err:  fmt.Errorf("calling the cloud API: %w", context.DeadlineExceeded),
 			invoke: func(data PluginUpdateData, proc gen.Process) gen.Atom {
 				state, _, _, _ := status(gen.PID{}, StateWaitingForResource, data, check, proc)
 				return state
 			},
 		},
 		{
-			name: "resume",
+			name: "throttled status",
+			err:  errors.New("ThrottlingException: Rate exceeded"),
+			invoke: func(data PluginUpdateData, proc gen.Process) gen.Atom {
+				state, _, _, _ := status(gen.PID{}, StateWaitingForResource, data, check, proc)
+				return state
+			},
+		},
+		{
+			name: "resume past its deadline",
+			err:  fmt.Errorf("calling the cloud API: %w", context.DeadlineExceeded),
 			invoke: func(data PluginUpdateData, proc gen.Process) gen.Atom {
 				state, _, _, _, _ := resume(gen.PID{}, StateNotStarted, data, ResumeWaitingForResource{
 					Namespace:         deadlineTestNamespace,
@@ -566,7 +578,7 @@ func TestStatusDeadlineNeverReissuesTheOriginalOperation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			plugin := newRecordingPlugin()
-			plugin.err = fmt.Errorf("calling the cloud API: %w", context.DeadlineExceeded)
+			plugin.err = tt.err
 			proc := newOperatorProcess(nil, nil)
 
 			state := tt.invoke(deadlineTestData(plugin, callTimeout), proc)

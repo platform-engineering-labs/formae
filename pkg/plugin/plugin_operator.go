@@ -760,7 +760,13 @@ func delete(from gen.PID, state gen.Atom, data PluginUpdateData, operation Delet
 
 func status(from gen.PID, state gen.Atom, data PluginUpdateData, operation PluginOperatorCheckStatus, proc gen.Process) (gen.Atom, PluginUpdateData, []statemachine.Action, error) {
 	if !validateNamespace(data, operation.Namespace, proc) {
-		if sendErr := proc.Send(data.requestedBy, data.newNamespaceMismatchError()); sendErr != nil {
+		mismatch := data.newNamespaceMismatchError()
+		// The requester tracks this update by the identifiers it polls with, so
+		// they travel with the failure.
+		mismatch.Operation = operation.ResourceOperation
+		mismatch.RequestID = operation.RequestID
+		mismatch.NativeID = operation.NativeID
+		if sendErr := proc.Send(data.requestedBy, mismatch); sendErr != nil {
 			proc.Log().Error("PluginOperator: failed to send namespace mismatch result: %v", sendErr)
 		}
 		return StateFinishedWithError, data, nil, nil
@@ -786,6 +792,12 @@ func status(from gen.PID, state gen.Atom, data PluginUpdateData, operation Plugi
 		operation = statusCheckAfterFailedCall(operation)
 		checkResult = data.statusCallFailure(operation, err)
 		proc.Log().Error("PluginOperator: status check of resource %s failed with error code %s: %v", operation.RequestID, checkResult.ErrorCode, err)
+		// A failed call spends an attempt, unlike a poll that reports progress:
+		// it escalates the backoff and eventually ends the operation instead of
+		// polling a failing API forever. The message travels with the attempt so
+		// this failure is the one the requester reads, not an earlier one.
+		data.attempts++
+		data.LastStatusMessage = checkResult.StatusMessage
 	} else {
 		checkResult = result.ProgressResult
 	}
