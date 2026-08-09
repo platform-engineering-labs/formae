@@ -297,6 +297,30 @@ func TestRecoverFromPreviousProgress_SizesWindowFromSpawnedOperatorConfig(t *tes
 	}
 }
 
+// TestCreate_SizesWindowFromSpawnedOperatorConfig asserts the forward create
+// path carries the retry config the spawn result reported into the update data,
+// so the watchdog it arms from the first progress report is already sized from
+// the cadence the spawned operator polls on rather than the node-global one.
+func TestCreate_SizesWindowFromSpawnedOperatorConfig(t *testing.T) {
+	global := shippedRetryConfig()
+
+	for _, tc := range windowSourceCases(global) {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := &armingProcess{
+				stubUpdaterProcess: &stubUpdaterProcess{},
+				operatorProgress:   inProgressCreate(global),
+				spawnRetryConfig:   tc.supplied,
+			}
+
+			state, _, actions, err := create(StateCreating, armingTestData(global), proc)
+
+			require.NoError(t, err)
+			assert.Equal(t, StateCreating, state, "an in-progress create keeps the state machine waiting")
+			assert.Equal(t, missingInActionTimeout(tc.want), armedMissingInActionTimeout(t, actions))
+		})
+	}
+}
+
 // TestRecoverFromPreviousProgress_ArmsCadenceDerivedWatchdog asserts the
 // recovery path arms the same cadence-derived watchdog when the resumed plugin
 // operator reports the operation is still in progress.
