@@ -1412,6 +1412,12 @@ func (rc *ResultCollector) verifyExtractReapply(
 
 // describePlannedChanges renders the operations a simulation would perform, so
 // a failed round trip names exactly what the re-apply would touch.
+//
+// Only fields present in the released pkg/api/model module may be used here:
+// plugin repos build this SDK as a dependency, where the local replace on
+// ../api/model does not apply. Command.StackUpdates, for instance, is not in
+// the released module; a stack-only plan still fails the round trip through
+// ChangesRequired and falls back to the no-operations text below.
 func describePlannedChanges(cmd *model.Command) string {
 	var ops []string
 	for _, ru := range cmd.ResourceUpdates {
@@ -1419,9 +1425,6 @@ func describePlannedChanges(cmd *model.Command) string {
 	}
 	for _, tu := range cmd.TargetUpdates {
 		ops = append(ops, fmt.Sprintf("%s target %s", tu.Operation, tu.TargetLabel))
-	}
-	for _, su := range cmd.StackUpdates {
-		ops = append(ops, fmt.Sprintf("%s stack %s", su.Operation, su.StackLabel))
 	}
 	if len(ops) == 0 {
 		return "(the simulation reported changes but listed no operations)"
