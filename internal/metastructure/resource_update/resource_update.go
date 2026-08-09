@@ -279,7 +279,10 @@ func (ru *ResourceUpdate) updateResourceUpdateFromProgress(progress *resource.Pr
 			return err
 		}
 	} else {
-		err := ru.updateResourceProperties(string(progress.ResourceProperties))
+		// The echo of our own write is a Create or Update progress; every
+		// other Read-shaped merge (sync, discovery) is read-origin.
+		writeOrigin := progress.Operation == resource.OperationCreate || progress.Operation == resource.OperationUpdate
+		err := ru.updateResourceProperties(string(progress.ResourceProperties), writeOrigin)
 		if err != nil {
 			slog.Error("Failed to update resource properties", "error", err)
 			return err
@@ -395,18 +398,20 @@ func (ru *ResourceUpdate) requiredOperations() []resource.Operation {
 	}
 }
 
-func (ru *ResourceUpdate) updateResourceProperties(incomingProperties string) error {
-	return ru.updateProperties(incomingProperties, &ru.DesiredState.Properties, &ru.DesiredState.ReadOnlyProperties)
+func (ru *ResourceUpdate) updateResourceProperties(incomingProperties string, writeOrigin bool) error {
+	return ru.updateProperties(incomingProperties, &ru.DesiredState.Properties, &ru.DesiredState.ReadOnlyProperties, writeOrigin)
 }
 
 func (ru *ResourceUpdate) updateExistingResourceProperties(incomingProperties string) error {
-	return ru.updateProperties(incomingProperties, &ru.PriorState.Properties, &ru.PriorState.ReadOnlyProperties)
+	// Always read-origin: this absorbs the pre-update out-of-band Read into
+	// PriorState, never the echo of formae's own write.
+	return ru.updateProperties(incomingProperties, &ru.PriorState.Properties, &ru.PriorState.ReadOnlyProperties, false)
 }
 
 // updateProperties splits the properties from the plugin read result into regular and read-only,
 // based on the resource schema fields, and merges $ref structures from the existing target properties.
 // This preserves $ref structures needed for destroy dependency tracking and PKL extraction.
-func (ru *ResourceUpdate) updateProperties(incomingProperties string, targetProperties, targetReadOnlyProperties *json.RawMessage) error {
+func (ru *ResourceUpdate) updateProperties(incomingProperties string, targetProperties, targetReadOnlyProperties *json.RawMessage, writeOrigin bool) error {
 	if incomingProperties == "" {
 		slog.Debug("No properties to split for resource", "uri", ru.URI())
 		incomingProperties = "{}"
@@ -442,7 +447,7 @@ func (ru *ResourceUpdate) updateProperties(incomingProperties string, targetProp
 	}
 
 	// Merge refs from user-provided properties to preserve $ref structures
-	mergedProps, mergeErr := mergeRefsPreservingUserRefs(*targetProperties, propertiesJson, ru.DesiredState.Schema)
+	mergedProps, mergeErr := mergeRefsPreservingUserRefs(*targetProperties, propertiesJson, ru.DesiredState.Schema, writeOrigin)
 	if mergeErr != nil {
 		slog.Error("Failed to merge refs into properties", "error", mergeErr)
 		return mergeErr
@@ -472,7 +477,7 @@ func (ru *ResourceUpdate) updateProperties(incomingProperties string, targetProp
 // - Default/Set: elements are matched by value (JSON equality after flattening $refs)
 // - Array: elements are matched by index position
 // - EntitySet: elements are matched by a key field (e.g., Tags by "Key")
-func mergeRefsPreservingUserRefs(userProperties, pluginProperties json.RawMessage, schema pkgmodel.Schema) (json.RawMessage, error) {
+func mergeRefsPreservingUserRefs(userProperties, pluginProperties json.RawMessage, schema pkgmodel.Schema, writeOrigin bool) (json.RawMessage, error) {
 	if userProperties == nil {
 		userProperties = []byte("{}")
 	}
@@ -487,10 +492,11 @@ func mergeRefsPreservingUserRefs(userProperties, pluginProperties json.RawMessag
 	result := string(pluginProperties)
 
 	merger := &propertyMerger{
-		userRoot:   userParsed,
-		pluginRoot: pluginParsed,
-		result:     &result,
-		schema:     schema,
+		userRoot:    userParsed,
+		pluginRoot:  pluginParsed,
+		result:      &result,
+		schema:      schema,
+		writeOrigin: writeOrigin,
 	}
 
 	merger.mergeValue("", userParsed, pluginParsed)
@@ -521,6 +527,11 @@ type propertyMerger struct {
 	pluginRoot gjson.Result
 	result     *string
 	schema     pkgmodel.Schema
+	// writeOrigin is true when this merge absorbs the echo of formae's own
+	// successful Create/Update (as opposed to a Read-shaped merge: sync,
+	// discovery, or the pre-update out-of-band read). It gates whether
+	// $ref/$res envelopes get an $applied provenance baseline stamped.
+	writeOrigin bool
 }
 
 // mergeValue recursively merges a value at the given path
@@ -625,6 +636,19 @@ func (m *propertyMerger) mergeRefObject(path string, userVal, pluginVal gjson.Re
 		updatedRef, _ = sjson.Delete(updatedRef, "$hashed")
 	}
 
+	// Provenance baseline: on the echo-merge of formae's own successful
+	// write, the envelope's pre-merge $value is the resolution that was
+	// actually sent; keep it as $applied so later diffs can compare the
+	// written domain against itself. Opaque envelopes are exempt: their
+	// value is hashed at rest and has a dedicated suppression path.
+	if userVal.Get("$visibility").String() != pkgmodel.VisibilityOpaque {
+		if m.writeOrigin {
+			if userValue.Exists() && userValue.Value() != nil {
+				updatedRef, _ = sjson.Set(updatedRef, "$applied", userValue.Value())
+			}
+		}
+	}
+
 	*m.result, _ = sjson.SetRaw(*m.result, cleanPath, updatedRef)
 }
 
@@ -670,6 +694,19 @@ func (m *propertyMerger) mergeResObject(path string, userVal, pluginVal gjson.Re
 	if userVal.Get("$visibility").String() == pkgmodel.VisibilityOpaque &&
 		userVal.Get("$hashed").Bool() && !keptUser {
 		updatedRes, _ = sjson.Delete(updatedRes, "$hashed")
+	}
+
+	// Provenance baseline: on the echo-merge of formae's own successful
+	// write, the envelope's pre-merge $value is the resolution that was
+	// actually sent; keep it as $applied so later diffs can compare the
+	// written domain against itself. Opaque envelopes are exempt: their
+	// value is hashed at rest and has a dedicated suppression path.
+	if userVal.Get("$visibility").String() != pkgmodel.VisibilityOpaque {
+		if m.writeOrigin {
+			if userValue.Exists() && userValue.Value() != nil {
+				updatedRes, _ = sjson.Set(updatedRes, "$applied", userValue.Value())
+			}
+		}
 	}
 
 	*m.result, _ = sjson.SetRaw(*m.result, cleanPath, updatedRes)
