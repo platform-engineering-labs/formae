@@ -211,6 +211,14 @@ func (p *stubOperatorProcess) sentProgress() []TrackedProgress {
 	return out
 }
 
+// scheduled returns all messages the operator rescheduled via proc.SendAfter,
+// in order.
+func (p *stubOperatorProcess) scheduled() []any {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]any(nil), p.sendsAfter...)
+}
+
 // sentListings returns all Listing messages sent via proc.Send, in order.
 func (p *stubOperatorProcess) sentListings() []Listing {
 	p.mu.Lock()
@@ -415,27 +423,50 @@ func TestReadOnlyOperationsClassifyDeadlineAsServiceTimeout(t *testing.T) {
 	const callTimeout = 90 * time.Second
 
 	tests := []struct {
-		name   string
-		invoke func(data PluginUpdateData, proc gen.Process) TrackedProgress
+		name          string
+		wantState     gen.Atom
+		wantOperation resource.Operation
+		wantScheduled any
+		invoke        func(data PluginUpdateData, proc gen.Process) (gen.Atom, TrackedProgress)
 	}{
 		{
-			name: "read",
-			invoke: func(data PluginUpdateData, proc gen.Process) TrackedProgress {
-				_, _, progress, _, _ := read(gen.PID{}, StateNotStarted, data,
+			name:          "read",
+			wantState:     StateRetrying,
+			wantOperation: resource.OperationRead,
+			// A read carries no provider side effect, so the ladder re-issues it.
+			wantScheduled: PluginOperatorRetry{
+				ResourceOperation: resource.OperationRead,
+				Request:           ReadResource{Namespace: deadlineTestNamespace, NativeID: "resource-1"},
+			},
+			invoke: func(data PluginUpdateData, proc gen.Process) (gen.Atom, TrackedProgress) {
+				state, _, progress, _, _ := read(gen.PID{}, StateNotStarted, data,
 					ReadResource{Namespace: deadlineTestNamespace, NativeID: "resource-1"}, proc)
-				return progress
+				return state, progress
 			},
 		},
 		{
-			name: "resume",
-			invoke: func(data PluginUpdateData, proc gen.Process) TrackedProgress {
-				_, _, progress, _, _ := resume(gen.PID{}, StateNotStarted, data, ResumeWaitingForResource{
+			name:          "resume",
+			wantState:     StateWaitingForResource,
+			wantOperation: resource.OperationCreate,
+			wantScheduled: PluginOperatorCheckStatus{
+				Namespace:         deadlineTestNamespace,
+				RequestID:         "request-1",
+				NativeID:          "resource-1",
+				ResourceOperation: resource.OperationCreate,
+			},
+			invoke: func(data PluginUpdateData, proc gen.Process) (gen.Atom, TrackedProgress) {
+				state, _, progress, _, _ := resume(gen.PID{}, StateNotStarted, data, ResumeWaitingForResource{
 					Namespace:         deadlineTestNamespace,
 					ResourceOperation: resource.OperationCreate,
-					Request:           PluginOperatorCheckStatus{Namespace: deadlineTestNamespace, RequestID: "request-1"},
-					PreviousAttempts:  1,
+					Request: PluginOperatorCheckStatus{
+						Namespace:         deadlineTestNamespace,
+						RequestID:         "request-1",
+						NativeID:          "resource-1",
+						ResourceOperation: resource.OperationCreate,
+					},
+					PreviousAttempts: 1,
 				}, proc)
-				return progress
+				return state, progress
 			},
 		},
 	}
@@ -446,13 +477,18 @@ func TestReadOnlyOperationsClassifyDeadlineAsServiceTimeout(t *testing.T) {
 			plugin.err = fmt.Errorf("calling the cloud API: %w", context.DeadlineExceeded)
 			proc := newOperatorProcess(nil, nil)
 
-			progress := tt.invoke(deadlineTestData(plugin, callTimeout), proc)
+			state, progress := tt.invoke(deadlineTestData(plugin, callTimeout), proc)
 
+			assert.Equal(t, tt.wantState, state)
+			assert.Equal(t, tt.wantOperation, progress.Operation)
 			assert.Equal(t, resource.OperationStatusFailure, progress.OperationStatus)
 			assert.Equal(t, resource.OperationErrorCodeServiceTimeout, progress.ErrorCode)
-			assert.True(t, resource.IsRecoverable(progress.ErrorCode), "a per-call deadline must stay recoverable so the retry ladder heartbeats")
 			assert.False(t, progress.Failed(), "retries remain, so the operation must not be terminal")
 			assert.Contains(t, progress.StatusMessage, callTimeout.String())
+
+			scheduled := proc.scheduled()
+			require.Len(t, scheduled, 1, "the retry ladder must reschedule the operation so every attempt heartbeats")
+			assert.Equal(t, tt.wantScheduled, scheduled[0])
 		})
 	}
 }
@@ -473,14 +509,84 @@ func TestStatus_ClassifiesDeadlineAsServiceTimeout(t *testing.T) {
 		}, proc)
 
 	require.NoError(t, err)
-	assert.NotEqual(t, StateFinishedWithError, state, "a status check that outran its deadline must not fail the operation")
+	assert.Equal(t, StateWaitingForResource, state, "a status check that outran its deadline must not fail the operation")
 
 	sent := proc.sentProgress()
 	require.Len(t, sent, 1, "the resource updater must be told the status check outran its deadline")
+	assert.Equal(t, resource.OperationCreate, sent[0].Operation)
 	assert.Equal(t, resource.OperationStatusFailure, sent[0].OperationStatus)
 	assert.Equal(t, resource.OperationErrorCodeServiceTimeout, sent[0].ErrorCode)
 	assert.False(t, sent[0].Failed(), "retries remain, so the operation must not be terminal")
 	assert.Contains(t, sent[0].StatusMessage, callTimeout.String())
+}
+
+// TestStatusDeadlineNeverReissuesTheOriginalOperation covers a status check that
+// carries the request that started it — the local-path shape, where the retry
+// ladder would otherwise re-issue that request. A create that may already have
+// reached the provider must never be sent again, so a status call that outran
+// its deadline reschedules another status check instead.
+func TestStatusDeadlineNeverReissuesTheOriginalOperation(t *testing.T) {
+	const callTimeout = 90 * time.Second
+
+	originalCreate := CreateResource{Namespace: deadlineTestNamespace, ResourceType: "Test::Resource"}
+	check := PluginOperatorCheckStatus{
+		Namespace:         deadlineTestNamespace,
+		RequestID:         "request-1",
+		NativeID:          "resource-1",
+		ResourceType:      "Test::Resource",
+		ResourceOperation: resource.OperationCreate,
+		Request:           originalCreate,
+	}
+
+	tests := []struct {
+		name   string
+		invoke func(data PluginUpdateData, proc gen.Process) gen.Atom
+	}{
+		{
+			name: "status",
+			invoke: func(data PluginUpdateData, proc gen.Process) gen.Atom {
+				state, _, _, _ := status(gen.PID{}, StateWaitingForResource, data, check, proc)
+				return state
+			},
+		},
+		{
+			name: "resume",
+			invoke: func(data PluginUpdateData, proc gen.Process) gen.Atom {
+				state, _, _, _, _ := resume(gen.PID{}, StateNotStarted, data, ResumeWaitingForResource{
+					Namespace:         deadlineTestNamespace,
+					ResourceOperation: resource.OperationCreate,
+					Request:           check,
+					PreviousAttempts:  1,
+				}, proc)
+				return state
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			plugin := newRecordingPlugin()
+			plugin.err = fmt.Errorf("calling the cloud API: %w", context.DeadlineExceeded)
+			proc := newOperatorProcess(nil, nil)
+
+			state := tt.invoke(deadlineTestData(plugin, callTimeout), proc)
+
+			assert.Equal(t, StateWaitingForResource, state)
+
+			scheduled := proc.scheduled()
+			require.Len(t, scheduled, 1)
+			rescheduledCheck, ok := scheduled[0].(PluginOperatorCheckStatus)
+			require.True(t, ok, "a status check that outran its deadline must reschedule a status check, got %T", scheduled[0])
+			assert.Nil(t, rescheduledCheck.Request, "the rescheduled check must not carry the request that would re-issue the operation")
+			assert.Equal(t, check.RequestID, rescheduledCheck.RequestID)
+			assert.Equal(t, check.NativeID, rescheduledCheck.NativeID)
+			assert.Equal(t, check.ResourceType, rescheduledCheck.ResourceType)
+			assert.Equal(t, check.ResourceOperation, rescheduledCheck.ResourceOperation)
+
+			_, called := plugin.ctxs[resource.OperationCreate]
+			assert.False(t, called, "the mutating operation must never be re-issued")
+		})
+	}
 }
 
 func TestMutatingOperationsClassifyDeadlineAsTerminal(t *testing.T) {
@@ -528,6 +634,7 @@ func TestMutatingOperationsClassifyDeadlineAsTerminal(t *testing.T) {
 			assert.Equal(t, resource.OperationErrorCodeUnforeseenError, progress.ErrorCode)
 			assert.True(t, progress.Failed())
 			assert.Contains(t, progress.StatusMessage, callTimeout.String())
+			assert.Contains(t, progress.StatusMessage, "calling the cloud API", "the plugin's own error text must stay diagnosable")
 			assert.Empty(t, proc.sendsAfter, "no retry may be scheduled for a mutating call that outran its deadline")
 		})
 	}
