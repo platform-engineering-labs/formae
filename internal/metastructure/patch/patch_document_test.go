@@ -2935,6 +2935,27 @@ func TestGeneratePatch_RefResolutionDiffersFromApplied_PlansUpdate(t *testing.T)
 	assert.Equal(t, newArn, ops[0].Value)
 }
 
+// A stored counterpart whose $applied matches the fresh resolution but is
+// missing $value (a corrupt or hand-edited row) must not flatten the desired
+// side to a nil echo: it falls back to the fresh resolution instead.
+func TestGeneratePatch_AppliedWithoutStoredEcho_FallsBackToFresh(t *testing.T) {
+	ksuid := util.NewID()
+	arn := "arn:aws:kms:us-east-1:111122223333:key/47110862-aaaa"
+	document := []byte(`{"TargetKeyId": "47110862-aaaa"}`)
+	stored := fmt.Appendf(nil, `{"TargetKeyId": {"$ref": "formae://%s#/Arn", "$applied": %q}}`, ksuid, arn)
+	patch := fmt.Appendf(nil, `{"TargetKeyId": {"$ref": "formae://%s#/Arn"}}`, ksuid)
+	schema := pkgmodel.Schema{Fields: []string{"TargetKeyId"}}
+	props := resolver.NewResolvableProperties()
+	props.Add(ksuid, "Arn", arn)
+
+	patchDoc, _, err := generatePatch(document, patch, stored, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	var ops []jsonpatch.JsonPatchOperation
+	require.NoError(t, json.Unmarshal(patchDoc, &ops))
+	require.Len(t, ops, 1, "missing stored echo must not be masked as a no-op")
+	assert.Equal(t, arn, ops[0].Value, "missing stored echo must fall back to the fresh resolution, not nil")
+}
+
 // An unresolvable reference (no fresh resolution) with an $applied-carrying
 // stored counterpart flattens to the stored echo value, preserving the last
 // known state across a transient resolution gap.
@@ -2971,6 +2992,26 @@ func TestFlattenAndResolveRefs_UnresolvableRefWithoutApplied_FlattenToEmpty(t *t
 	val, exists := flatMap["TargetKeyId"]
 	assert.True(t, exists, "field should exist in flattened patch")
 	assert.Equal(t, "", val, "legacy unresolvable ref must flatten to empty string")
+}
+
+// An unresolvable reference whose stored counterpart carries $applied but is
+// missing $value (a corrupt or hand-edited row) must not flatten to JSON
+// null: it falls through to the pre-provenance empty-string default.
+func TestFlattenAndResolveRefs_UnresolvableRefAppliedWithoutStoredEcho_FlattensToEmpty(t *testing.T) {
+	ksuid := util.NewID()
+	appliedVal := "arn:aws:kms:us-east-1:111122223333:key/47110862-aaaa"
+	document := []byte(`{"TargetKeyId": "47110862-aaaa"}`)
+	stored := fmt.Appendf(nil, `{"TargetKeyId": {"$ref": "formae://%s#/Arn", "$applied": %q}}`, ksuid, appliedVal)
+	patch := fmt.Appendf(nil, `{"TargetKeyId": {"$ref": "formae://%s#/Arn"}}`, ksuid)
+
+	_, flatPatch, err := flattenAndResolveRefs(document, patch, stored, resolver.NewResolvableProperties())
+	require.NoError(t, err)
+
+	var flatMap map[string]any
+	require.NoError(t, json.Unmarshal(flatPatch, &flatMap))
+	val, exists := flatMap["TargetKeyId"]
+	assert.True(t, exists, "field should exist in flattened patch")
+	assert.Equal(t, "", val, "missing stored echo must not flatten to JSON null")
 }
 
 // A legacy stored row without $applied keeps the pre-provenance behavior:

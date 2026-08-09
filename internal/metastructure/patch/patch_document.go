@@ -965,7 +965,7 @@ func resolveRefs(current, mod, stored map[string]any, resolvableProperties resol
 						resolved = extracted
 					}
 					if counterpart != nil {
-						if applied, hasApplied := counterpart["$applied"]; hasApplied && appliedMatches(resolved, applied) {
+						if applied, hasApplied := counterpart["$applied"]; hasApplied && appliedMatches(resolved, applied) && counterpart["$value"] != nil {
 							// The reference still resolves to what the last write sent;
 							// flatten to the stored echo so the diff compares within the
 							// observed domain and sees no change.
@@ -977,7 +977,7 @@ func resolveRefs(current, mod, stored map[string]any, resolvableProperties resol
 						modVal["$value"] = normalizeResolvedValue(resolved, current[k])
 					}
 				} else if counterpart != nil {
-					if _, hasApplied := counterpart["$applied"]; hasApplied {
+					if _, hasApplied := counterpart["$applied"]; hasApplied && counterpart["$value"] != nil {
 						if _, hasVal := modVal["$value"]; !hasVal {
 							// No resolution available but a prior write attests this exact
 							// reference; treat the gap as transient, not as a change.
