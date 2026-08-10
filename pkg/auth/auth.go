@@ -28,6 +28,10 @@ const (
 // Method signatures are net/rpc compatible (two args: request pointer, response pointer; returns error).
 type AuthPlugin interface {
 	Init(req *InitRequest, resp *InitResponse) error
+	// Validate: return nil with Valid: false to deny a credential. Reserve a
+	// non-nil error for the plugin being genuinely unable to answer: the
+	// host maps any error from this call to plugin-unavailable, not to a
+	// rejected credential.
 	Validate(req *ValidateRequest, resp *ValidateResponse) error
 	// GetAuthHeader: to fail closed on every host version, return a non-nil
 	// error rather than relying on GetAuthHeaderResponse's typed fields,
@@ -60,9 +64,9 @@ type ValidateResponse struct {
 	CacheKey string // retained for SOURCE compatibility with existing plugins; the host never reads it
 	CacheTTL time.Duration
 
-	Subject     string // verified stable subject id; empty when the plugin has no notion of one
-	SubjectName string // display hint only; never used for authorization
-	ErrorCode   ErrorCode
+	Subject     string    // verified stable subject id; empty when the plugin has no notion of one
+	SubjectName string    // display hint only; never used for authorization
+	ErrorCode   ErrorCode // reserved; not currently surfaced to clients, so put the rejection reason on the plugin's stderr
 }
 
 // GetAuthHeaderRequest requests auth headers for outgoing requests (CLI side).
@@ -80,7 +84,7 @@ type GetAuthHeaderRequest struct {
 // additive information for hosts new enough to read them, not a
 // substitute for that error.
 type GetAuthHeaderResponse struct {
-	Headers   map[string][]string
+	Headers   map[string][]string // the client attaches only the canonical "Authorization" header; return the credential under that exact key
 	Error     string
 	ErrorCode ErrorCode
 }
