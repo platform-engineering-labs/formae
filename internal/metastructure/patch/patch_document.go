@@ -1035,7 +1035,14 @@ func substituteResolvedRef(desiredNode, storedNode, modNode, currentNode any, re
 	// The value formae would write is returned either way. When the reference is
 	// unchanged the caller aligns the comparison side instead of rewriting this
 	// one, so an operation covering this path still carries the written form.
-	return resolvedRefDecision{Value: effective, Echo: storedEnv["$value"], Matched: matchesApplied}, true, nil
+	//
+	// For an unchanged reference that value is the record itself, which keeps
+	// the JSON type that was written: a resolution arrives as text, so a number
+	// or boolean would otherwise be written back as a string.
+	if matchesApplied {
+		return resolvedRefDecision{Value: storedEnv["$applied"], Echo: storedEnv["$value"], Matched: true}, true, nil
+	}
+	return resolvedRefDecision{Value: effective, Echo: storedEnv["$value"], Matched: false}, true, nil
 }
 
 // resolvedRefDecision carries what the desired side should hold for an
@@ -1199,14 +1206,20 @@ func resolveRefs(current, mod, stored, desired map[string]any, resolvablePropert
 					native := normalizeResolvedValue(resolved, current[k])
 					modVal["$value"] = native
 					if counterpart != nil {
-						if applied, hasApplied := counterpart["$applied"]; hasApplied && appliedMatches(resolved, applied) && counterpart["$value"] != nil {
+						if applied, hasApplied := counterpart["$applied"]; hasApplied && applied != nil && appliedMatches(resolved, applied) && counterpart["$value"] != nil {
+							// Carry the recorded value itself rather than the
+							// freshly resolved text. Resolution yields text, while
+							// the record keeps the JSON type that was written, so
+							// a number or boolean would otherwise be written back
+							// as a string.
+							modVal["$value"] = applied
 							// The reference still resolves to what the last write
 							// sent, so it is unchanged. Align the comparison side
 							// rather than the desired side: the desired side is
 							// where operation values come from, and rewriting it
 							// to the provider's spelling would send that spelling
 							// back inside any operation covering this path.
-							alignComparisonValue(current, k, counterpart["$value"], native)
+							alignComparisonValue(current, k, counterpart["$value"], applied)
 						}
 					}
 				} else if counterpart != nil {

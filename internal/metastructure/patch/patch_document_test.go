@@ -3820,3 +3820,95 @@ func TestGeneratePatch_UnresolvableRefUnchanged_NoPatch(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, patchDoc, "an unchanged reference must still reconcile to a no-op")
 }
+
+// A reference to a numeric property: resolution yields text, while the record
+// keeps the number that was written. An unchanged reference must neither be
+// rewritten nor have its type changed.
+func TestGeneratePatch_NumericArrayRefsUnchanged_NoPatch(t *testing.T) {
+	ksuid := util.NewID()
+	document := []byte(`{"Ports": [443, 8080]}`)
+	stored := fmt.Appendf(nil, `{"Ports": [
+		{"$ref": "formae://%s#/PortA", "$value": 443, "$applied": 443},
+		{"$ref": "formae://%s#/PortB", "$value": 8080, "$applied": 8080}
+	]}`, ksuid, ksuid)
+	desired := fmt.Appendf(nil, `{"Ports": [
+		{"$ref": "formae://%s#/PortA"},
+		{"$ref": "formae://%s#/PortB"}
+	]}`, ksuid, ksuid)
+	patch := desired
+	schema := pkgmodel.Schema{Fields: []string{"Ports"}}
+	props := resolver.NewResolvableProperties()
+	props.Add(ksuid, "PortA", "443")
+	props.Add(ksuid, "PortB", "8080")
+
+	patchDoc, _, err := generatePatch(document, patch, stored, desired, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Nil(t, patchDoc, "unchanged numeric references must not be rewritten")
+}
+
+// The same list under ordered semantics, where a reorder emits an operation per
+// position: the emitted values must stay numbers.
+func TestGeneratePatch_NumericOrderedArrayRefsReordered_EmitNumbers(t *testing.T) {
+	ksuid := util.NewID()
+	document := []byte(`{"Ports": [443, 8080]}`)
+	stored := fmt.Appendf(nil, `{"Ports": [
+		{"$ref": "formae://%s#/PortA", "$value": 443, "$applied": 443},
+		{"$ref": "formae://%s#/PortB", "$value": 8080, "$applied": 8080}
+	]}`, ksuid, ksuid)
+	desired := fmt.Appendf(nil, `{"Ports": [
+		{"$ref": "formae://%s#/PortB"},
+		{"$ref": "formae://%s#/PortA"}
+	]}`, ksuid, ksuid)
+	patch := desired
+	schema := pkgmodel.Schema{
+		Fields: []string{"Ports"},
+		Hints:  map[string]pkgmodel.FieldHint{"Ports": {UpdateMethod: pkgmodel.FieldUpdateMethodArray}},
+	}
+	props := resolver.NewResolvableProperties()
+	props.Add(ksuid, "PortA", "443")
+	props.Add(ksuid, "PortB", "8080")
+
+	patchDoc, _, err := generatePatch(document, patch, stored, desired, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	require.NotNil(t, patchDoc, "reordering an ordered list is a change")
+	assert.NotContains(t, string(patchDoc), `"443"`, "a numeric reference must not be written back as text")
+	assert.NotContains(t, string(patchDoc), `"8080"`, "a numeric reference must not be written back as text")
+}
+
+// A boolean-valued reference behaves the same way.
+func TestGeneratePatch_BooleanRefUnchanged_NoPatch(t *testing.T) {
+	ksuid := util.NewID()
+	document := []byte(`{"Enabled": true}`)
+	stored := fmt.Appendf(nil, `{"Enabled": {"$ref": "formae://%s#/Flag", "$value": true, "$applied": true}}`, ksuid)
+	desired := fmt.Appendf(nil, `{"Enabled": {"$ref": "formae://%s#/Flag"}}`, ksuid)
+	patch := desired
+	schema := pkgmodel.Schema{Fields: []string{"Enabled"}}
+	props := resolver.NewResolvableProperties()
+	props.Add(ksuid, "Flag", "true")
+
+	patchDoc, _, err := generatePatch(document, patch, stored, desired, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Nil(t, patchDoc, "an unchanged boolean reference must not be rewritten")
+}
+
+// A numeric reference inside an Atomic-hinted object, where a sibling change
+// forces the whole object to be emitted.
+func TestGeneratePatch_AtomicObjectWithNumericRef_EmitsNumber(t *testing.T) {
+	ksuid := util.NewID()
+	document := []byte(`{"Cfg": {"Note": "a", "Port": 443}}`)
+	stored := fmt.Appendf(nil, `{"Cfg": {"Note": "a", "Port": {"$ref": "formae://%s#/PortA", "$value": 443, "$applied": 443}}}`, ksuid)
+	desired := fmt.Appendf(nil, `{"Cfg": {"Note": "b", "Port": {"$ref": "formae://%s#/PortA"}}}`, ksuid)
+	patch := desired
+	schema := pkgmodel.Schema{
+		Fields: []string{"Cfg"},
+		Hints:  map[string]pkgmodel.FieldHint{"Cfg": {UpdateMethod: pkgmodel.FieldUpdateMethodAtomic}},
+	}
+	props := resolver.NewResolvableProperties()
+	props.Add(ksuid, "PortA", "443")
+
+	patchDoc, _, err := generatePatch(document, patch, stored, desired, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	require.NotNil(t, patchDoc, "the sibling change must be planned")
+	assert.Contains(t, string(patchDoc), "443")
+	assert.NotContains(t, string(patchDoc), `"443"`, "a numeric reference must not be written back as text")
+}
