@@ -8,6 +8,7 @@ package target_update
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -1177,25 +1178,104 @@ func TestGenerateTargetUpdates_RefWithCachedValue_UnresolvableRef(t *testing.T) 
 	assert.Equal(t, TargetOperationUpdate, updates[0].Operation)
 }
 
-// A target credential sourced from a secret persists $visibility:"Opaque" (so
-// reference-don't-store drops its $value) while the forma renders the same ref
-// $visibility:"Clear". The source resource is PRESENT but exposes no readable
-// value at the ref path (the secret value is a single hash at rest). Unlike a
-// dangling ref, this must not produce an update on every re-apply.
-func TestGenerateTargetUpdates_OpaqueCredRef_PresentButUnreadable_NoChange(t *testing.T) {
+// Every shape an opaque credential can take at rest must survive an identical
+// re-apply without producing a target update. Held fixed across the cases: the
+// stored config carries the opacity-stamped $ref with no $value (reference-
+// don't-store), while the re-rendered forma carries the same $ref stamped
+// Clear. What varies is how the source resource holds the secret, which decides
+// whether the $ref reads back a value at all — a whole map-shaped secret hashed
+// into a single envelope exposes nothing at a sub-key, whereas a property
+// hashed in place reads back as an envelope whose $value is a digest. A digest
+// can never compare equal to the stored side's bare $ref, so any shape that
+// feeds one into the comparison reports a change on every apply.
+func TestGenerateTargetUpdates_OpaqueCredRef_IdempotentAcrossAtRestShapes(t *testing.T) {
+	const digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+	tests := []struct {
+		name        string
+		refPath     string
+		sourceProps string
+	}{
+		{
+			name:        "sub-key of a map-shaped secret hashed whole",
+			refPath:     "decodedData.admin-password",
+			sourceProps: `{"decodedData":{"$value":"` + digest + `","$visibility":"Opaque","$strategy":"Update","$hashed":true}}`,
+		},
+		{
+			name:        "top-level opaque property hashed in place",
+			refPath:     "SecretString",
+			sourceProps: `{"SecretString":{"$value":"` + digest + `","$visibility":"Opaque","$strategy":"Update","$hashed":true}}`,
+		},
+		{
+			name:        "nested opaque property hashed in place",
+			refPath:     "settings.password",
+			sourceProps: `{"settings":{"password":{"$value":"` + digest + `","$visibility":"Opaque","$strategy":"Update","$hashed":true}}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stored := fmt.Sprintf(
+				`{"Type":"Grafana","Username":"admin","Password":{"$ref":"formae://sec1#/%s","$strategy":"Update","$visibility":"Opaque"}}`, tt.refPath)
+			desired := fmt.Sprintf(
+				`{"Type":"Grafana","Username":"admin","Password":{"$ref":"formae://sec1#/%s","$visibility":"Clear"}}`, tt.refPath)
+
+			mockDS := &mockTargetDatastore{
+				targets: map[string]*pkgmodel.Target{
+					"grafana-target": {
+						Label:     "grafana-target",
+						Namespace: "GRAFANA",
+						Config:    json.RawMessage(stored),
+					},
+				},
+				resources: map[string]*pkgmodel.Resource{
+					"sec1": {Ksuid: "sec1", Properties: json.RawMessage(tt.sourceProps)},
+				},
+			}
+			generator := NewTargetUpdateGenerator(mockDS)
+
+			targets := []pkgmodel.Target{
+				{Label: "grafana-target", Namespace: "GRAFANA", Config: json.RawMessage(desired)},
+			}
+
+			updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
+			require.NoError(t, err)
+			assert.Empty(t, updates, "an opaque credential ref must be idempotent, not update on every re-apply")
+		})
+	}
+}
+
+// The full target-config shape a secret-backed target actually persists: the
+// opaque credential sits nested inside an Auth object, and a SIBLING clear $ref
+// carries the cached $value a successful apply wrote. The sibling matters — it
+// is the field whose cached $value has no counterpart in a freshly rendered
+// forma, so it is what a comparison falling through to raw configs would trip
+// over. An identical re-declare of the whole config must still be a no-op.
+func TestGenerateTargetUpdates_SecretSourcedCredRef_HashedEnvelopeAtRest_NoChange(t *testing.T) {
 	mockDS := &mockTargetDatastore{
 		targets: map[string]*pkgmodel.Target{
 			"grafana-target": {
 				Label:     "grafana-target",
 				Namespace: "GRAFANA",
-				Config:    json.RawMessage(`{"Type":"Grafana","Username":"admin","Password":{"$ref":"formae://sec1#/decodedData.admin-password","$visibility":"Opaque"}}`),
+				Config: json.RawMessage(`{
+					"Url":{"$ref":"formae://svc1#/Endpoint","$value":"http://lb.example.com:80"},
+					"Auth":{"Type":"Token","Token":{"$ref":"formae://sec1#/SecretString","$strategy":"Update","$visibility":"Opaque"}}
+				}`),
+				ConfigSchema: pkgmodel.ConfigSchema{
+					Hints: map[string]pkgmodel.ConfigFieldHint{
+						"Auth": {CreateOnly: false},
+					},
+				},
 			},
 		},
 		resources: map[string]*pkgmodel.Resource{
+			"svc1": {
+				Ksuid:              "svc1",
+				ReadOnlyProperties: json.RawMessage(`{"Endpoint":"http://lb.example.com:80"}`),
+			},
 			"sec1": {
-				Ksuid: "sec1",
-				// decodedData is one hashed envelope; the sub-key is not readable.
-				Properties: json.RawMessage(`{"decodedData":{"$value":"deadbeef","$visibility":"Opaque","$hashed":true}}`),
+				Ksuid:      "sec1",
+				Properties: json.RawMessage(`{"SecretString":{"$value":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","$visibility":"Opaque","$strategy":"Update","$hashed":true}}`),
 			},
 		},
 	}
@@ -1205,13 +1285,97 @@ func TestGenerateTargetUpdates_OpaqueCredRef_PresentButUnreadable_NoChange(t *te
 		{
 			Label:     "grafana-target",
 			Namespace: "GRAFANA",
-			Config:    json.RawMessage(`{"Type":"Grafana","Username":"admin","Password":{"$ref":"formae://sec1#/decodedData.admin-password","$visibility":"Clear"}}`),
+			Config: json.RawMessage(`{
+				"Url":{"$ref":"formae://svc1#/Endpoint"},
+				"Auth":{"Type":"Token","Token":{"$ref":"formae://sec1#/SecretString"}}
+			}`),
+			ConfigSchema: pkgmodel.ConfigSchema{
+				Hints: map[string]pkgmodel.ConfigFieldHint{
+					"Auth": {CreateOnly: false},
+				},
+			},
 		},
 	}
 
 	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
 	require.NoError(t, err)
-	assert.Empty(t, updates, "an opaque credential ref (present source, unreadable hashed value, Opaque->Clear) must be idempotent, not update every re-apply")
+	assert.Empty(t, updates, "a ref to a hashed-at-rest opaque property must compare by ref identity, not update every re-apply")
+}
+
+// Falling back to ref identity for a hashed-at-rest credential must not swallow
+// a real change elsewhere in the config: a mutable plain field that differs, and
+// a credential ref repointed at a different secret, both still produce an update.
+func TestGenerateTargetUpdates_SecretSourcedCredRef_RealChangeStillDetected(t *testing.T) {
+	storedConfig := `{
+		"OrgId":"1",
+		"Auth":{"Type":"Token","Token":{"$ref":"formae://sec1#/SecretString","$strategy":"Update","$visibility":"Opaque"}}
+	}`
+	newDS := func() *mockTargetDatastore {
+		return &mockTargetDatastore{
+			targets: map[string]*pkgmodel.Target{
+				"grafana-target": {
+					Label:     "grafana-target",
+					Namespace: "GRAFANA",
+					Config:    json.RawMessage(storedConfig),
+					ConfigSchema: pkgmodel.ConfigSchema{
+						Hints: map[string]pkgmodel.ConfigFieldHint{
+							"Auth":  {CreateOnly: false},
+							"OrgId": {CreateOnly: false},
+						},
+					},
+				},
+			},
+			resources: map[string]*pkgmodel.Resource{
+				"sec1": {
+					Ksuid:      "sec1",
+					Properties: json.RawMessage(`{"SecretString":{"$value":"aaaa","$visibility":"Opaque","$strategy":"Update","$hashed":true}}`),
+				},
+				"sec2": {
+					Ksuid:      "sec2",
+					Properties: json.RawMessage(`{"SecretString":{"$value":"bbbb","$visibility":"Opaque","$strategy":"Update","$hashed":true}}`),
+				},
+			},
+		}
+	}
+
+	tests := []struct {
+		name      string
+		newConfig string
+	}{
+		{
+			name:      "plain field changed",
+			newConfig: `{"OrgId":"2","Auth":{"Type":"Token","Token":{"$ref":"formae://sec1#/SecretString"}}}`,
+		},
+		{
+			name:      "credential repointed at another secret",
+			newConfig: `{"OrgId":"1","Auth":{"Type":"Token","Token":{"$ref":"formae://sec2#/SecretString"}}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			generator := NewTargetUpdateGenerator(newDS())
+
+			targets := []pkgmodel.Target{
+				{
+					Label:     "grafana-target",
+					Namespace: "GRAFANA",
+					Config:    json.RawMessage(tt.newConfig),
+					ConfigSchema: pkgmodel.ConfigSchema{
+						Hints: map[string]pkgmodel.ConfigFieldHint{
+							"Auth":  {CreateOnly: false},
+							"OrgId": {CreateOnly: false},
+						},
+					},
+				},
+			}
+
+			updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
+			require.NoError(t, err)
+			require.Len(t, updates, 1)
+			assert.Equal(t, TargetOperationUpdate, updates[0].Operation)
+		})
+	}
 }
 
 // Mirrors a real K8s target Config shape: $refs are nested under Auth, alongside
