@@ -525,3 +525,42 @@ func TestCLIInvocationsAreBounded(t *testing.T) {
 		})
 	}
 }
+
+func TestPluginNamespaceFromForma(t *testing.T) {
+	forma := `{"Resources":[
+		{"Label":"vpc","Type":"AWS::EC2::VPC"},
+		{"Label":"db","Type":"AWS::RDS::Database"}
+	]}`
+
+	ns, err := pluginNamespaceFromForma(forma)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ns != "AWS" {
+		t.Errorf("namespace = %q, want %q", ns, "AWS")
+	}
+}
+
+func TestPluginNamespaceFromForma_NoCloudResources(t *testing.T) {
+	if _, err := pluginNamespaceFromForma(`{"Resources":[]}`); err == nil {
+		t.Fatal("a forma with no cloud resources should be an error")
+	}
+}
+
+// The discovery test launches the plugin early so it can read a resource
+// descriptor before creating anything out of band; the create path then calls
+// EnsurePluginLaunched again. The second call must be a no-op, or the create
+// path would relaunch a plugin that is already running.
+func TestEnsurePluginLaunchedIsIdempotent(t *testing.T) {
+	h := &TestHarness{
+		t:                    t,
+		lastPluginNamespace:  "AWS",
+		lastPluginBinaryPath: "/nonexistent/aws-plugin",
+	}
+
+	// No Ergo node has been started here, so any attempt to actually launch
+	// the plugin would fail — proving the call short-circuited.
+	if err := h.EnsurePluginLaunched(`{"Resources":[{"Label":"db","Type":"AWS::RDS::Database"}]}`); err != nil {
+		t.Fatalf("second EnsurePluginLaunched should be a no-op, got: %v", err)
+	}
+}
