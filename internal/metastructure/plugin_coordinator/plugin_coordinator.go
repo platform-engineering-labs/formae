@@ -17,6 +17,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/canonicalize"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/changeset"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
@@ -268,15 +269,20 @@ func (c *PluginCoordinator) spawnPluginOperator(req messages.SpawnPluginOperator
 		req.OperationID,
 	)
 
+	// Resolve the retry config once and hand the same value to the operator and
+	// back to the requester, so the cadence the operator polls on and the
+	// cadence the requester sizes its watchdog from cannot diverge.
+	retryConfig := c.resolveRetryConfig(req.Namespace)
+
 	// 1. Check if plugin is registered (distributed mode)
 	if registeredPlugin, ok := c.findPluginByNamespace(req.Namespace); ok {
-		pid, err := c.remoteSpawn(req.Namespace, registeredPlugin.NodeName, registerName, req.RequestedBy)
+		pid, err := c.remoteSpawn(registeredPlugin.NodeName, registerName, req.RequestedBy, retryConfig)
 		if err != nil {
 			c.Log().Error("Failed to remote spawn PluginOperator for namespace %s on node %s: %v", req.Namespace, registeredPlugin.NodeName, err)
 			return messages.SpawnPluginOperatorResult{Error: err.Error()}
 		}
 		c.Log().Debug("Remote spawned PluginOperator for namespace %s on node %s: pid=%s", req.Namespace, registeredPlugin.NodeName, pid)
-		return messages.SpawnPluginOperatorResult{PID: pid}
+		return messages.SpawnPluginOperatorResult{PID: pid, RetryConfig: &retryConfig}
 	}
 
 	// 2. Fallback: Check test plugin / legacy PluginManager
@@ -297,13 +303,13 @@ func (c *PluginCoordinator) spawnPluginOperator(req messages.SpawnPluginOperator
 			}
 		}
 
-		pid, err := c.localSpawn(req.Namespace, localPlugin, registerName, req.RequestedBy)
+		pid, err := c.localSpawn(localPlugin, registerName, req.RequestedBy, retryConfig)
 		if err != nil {
 			c.Log().Error("Failed to local spawn PluginOperator for namespace %s: %v", req.Namespace, err)
 			return messages.SpawnPluginOperatorResult{Error: err.Error()}
 		}
 		c.Log().Debug("Local spawned PluginOperator for namespace %s: pid=%s", req.Namespace, pid)
-		return messages.SpawnPluginOperatorResult{PID: pid}
+		return messages.SpawnPluginOperatorResult{PID: pid, RetryConfig: &retryConfig}
 	}
 
 	// 3. Plugin not found
@@ -312,8 +318,21 @@ func (c *PluginCoordinator) spawnPluginOperator(req messages.SpawnPluginOperator
 	return messages.SpawnPluginOperatorResult{Error: err.Error()}
 }
 
-// remoteSpawn spawns a PluginOperator on a remote plugin node
-func (c *PluginCoordinator) remoteSpawn(namespace string, nodeName gen.Atom, registerName gen.Atom, requestedBy gen.PID) (gen.PID, error) {
+// pluginOperatorEnv is the environment every PluginOperator is spawned with,
+// local or remote: the retry config resolved for its namespace, the deadline it
+// bounds each watched plugin call by — the same value the requesting
+// ResourceUpdater sizes its watchdog window from — and the requesting process.
+func pluginOperatorEnv(retryConfig model.RetryConfig, requestedBy gen.PID) map[gen.Env]any {
+	return map[gen.Env]any{
+		gen.Env("RetryConfig"):       retryConfig,
+		gen.Env("PluginCallTimeout"): resource_update.PluginCallTimeout,
+		gen.Env("RequestedBy"):       requestedBy,
+	}
+}
+
+// remoteSpawn spawns a PluginOperator on a remote plugin node with the retry
+// config resolved for its namespace.
+func (c *PluginCoordinator) remoteSpawn(nodeName gen.Atom, registerName gen.Atom, requestedBy gen.PID, retryConfig model.RetryConfig) (gen.PID, error) {
 	// Get connection to remote node
 	remoteNode, err := c.Node().Network().GetNode(nodeName)
 	if err != nil {
@@ -323,12 +342,7 @@ func (c *PluginCoordinator) remoteSpawn(namespace string, nodeName gen.Atom, reg
 	// Remote spawn with registration
 	// The remote node's environment already has Plugin, Context, and OTelConfig set
 	// (configured in pkg/plugin/run.go)
-	opts := gen.ProcessOptions{
-		Env: map[gen.Env]any{
-			gen.Env("RetryConfig"): c.resolveRetryConfig(namespace),
-			gen.Env("RequestedBy"): requestedBy,
-		},
-	}
+	opts := gen.ProcessOptions{Env: pluginOperatorEnv(retryConfig, requestedBy)}
 	start := time.Now()
 	pid, err := remoteNode.SpawnRegister(registerName, plugin.PluginOperatorFactoryName, opts)
 	elapsed := time.Since(start)
@@ -339,23 +353,20 @@ func (c *PluginCoordinator) remoteSpawn(namespace string, nodeName gen.Atom, reg
 	return pid, nil
 }
 
-// localSpawn spawns a PluginOperator locally with the given plugin
-func (c *PluginCoordinator) localSpawn(namespace string, localPlugin plugin.FullResourcePlugin, registerName gen.Atom, requestedBy gen.PID) (gen.PID, error) {
-	// Get context and retry config from environment
+// localSpawn spawns a PluginOperator locally with the given plugin and the
+// retry config resolved for its namespace.
+func (c *PluginCoordinator) localSpawn(localPlugin plugin.FullResourcePlugin, registerName gen.Atom, requestedBy gen.PID, retryConfig model.RetryConfig) (gen.PID, error) {
+	// Get context from environment
 	ctx := context.Background()
 	if envCtx, ok := c.Env("Context"); ok {
 		ctx = envCtx.(context.Context)
 	}
 
 	// Spawn locally with plugin passed via Env
-	opts := gen.ProcessOptions{
-		Env: map[gen.Env]any{
-			gen.Env("Plugin"):      localPlugin,
-			gen.Env("Context"):     ctx,
-			gen.Env("RetryConfig"): c.resolveRetryConfig(namespace),
-			gen.Env("RequestedBy"): requestedBy,
-		},
-	}
+	env := pluginOperatorEnv(retryConfig, requestedBy)
+	env[gen.Env("Plugin")] = localPlugin
+	env[gen.Env("Context")] = ctx
+	opts := gen.ProcessOptions{Env: env}
 
 	pid, err := c.SpawnRegister(registerName, plugin.NewPluginOperator, opts)
 	if err != nil {

@@ -6,10 +6,13 @@ package plugin_coordinator
 
 import (
 	"testing"
+	"time"
 
 	"ergo.services/ergo/gen"
 	"ergo.services/ergo/testing/unit"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
+	"github.com/platform-engineering-labs/formae/internal/testplugin/fakeaws"
 	"github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"github.com/stretchr/testify/assert"
@@ -157,4 +160,107 @@ func TestPluginCoordinator_RegistersValidFieldHintFormat(t *testing.T) {
 	reg, ok := c.plugins["grafana"]
 	require.True(t, ok, "plugin with valid FieldHint.Format must be registered")
 	assert.Equal(t, "grafana", reg.Namespace)
+}
+
+// globalRetryConfig is the node-wide retry config the coordinator falls back to.
+func globalRetryConfig() model.RetryConfig {
+	return model.RetryConfig{StatusCheckInterval: 20 * time.Second, MaxRetries: 9, RetryDelay: 10 * time.Second}
+}
+
+// perPluginRetryConfig is a per-plugin retry override, differing from the global
+// config in every term the operator's polling cadence is built from.
+func perPluginRetryConfig() model.RetryConfig {
+	return model.RetryConfig{StatusCheckInterval: 90 * time.Second, MaxRetries: 3, RetryDelay: 30 * time.Second}
+}
+
+func spawnPluginOperatorRequest(namespace string, requestedBy gen.PID) messages.SpawnPluginOperator {
+	return messages.SpawnPluginOperator{
+		Namespace:   namespace,
+		ResourceURI: "formae://stack/default/" + namespace + "/resource",
+		Operation:   "create",
+		OperationID: "operation-1",
+		RequestedBy: requestedBy,
+	}
+}
+
+func spawnResult(t *testing.T, result *unit.CallResult) messages.SpawnPluginOperatorResult {
+	t.Helper()
+	require.NoError(t, result.Error)
+	spawned, ok := result.Response.(messages.SpawnPluginOperatorResult)
+	require.True(t, ok, "expected a SpawnPluginOperatorResult, got %T", result.Response)
+	require.Empty(t, spawned.Error)
+	return spawned
+}
+
+// TestPluginCoordinator_SpawnReportsResolvedRetryConfig asserts the spawn result
+// reports the retry config the operator was spawned with — the per-plugin
+// override where one is configured, the global config otherwise — so the
+// requesting ResourceUpdater can size its watchdog from the operator's own
+// cadence rather than the node-wide default.
+func TestPluginCoordinator_SpawnReportsResolvedRetryConfig(t *testing.T) {
+	perPlugin := perPluginRetryConfig()
+	tests := []struct {
+		name        string
+		userConfigs []model.ResourcePluginUserConfig
+		want        model.RetryConfig
+	}{
+		{
+			name:        "per-plugin override",
+			userConfigs: []model.ResourcePluginUserConfig{{Type: "grafana", Enabled: true, Retry: &perPlugin}},
+			want:        perPlugin,
+		},
+		{
+			name:        "no per-plugin override",
+			userConfigs: nil,
+			want:        globalRetryConfig(),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			listener, err := unit.Spawn(t, NewPluginCoordinator, unit.WithEnv(map[gen.Env]any{
+				gen.Env("RetryConfig"):           globalRetryConfig(),
+				gen.Env("ResourcePluginConfigs"): tc.userConfigs,
+			}))
+			require.NoError(t, err)
+			sender := gen.PID{Node: "plugin-node", ID: 100}
+			listener.SendMessage(sender, announcement("grafana", nil))
+
+			spawned := spawnResult(t, listener.Call(sender, spawnPluginOperatorRequest("grafana", sender)))
+
+			require.NotNil(t, spawned.RetryConfig, "the spawn result must report the config the operator was given")
+			assert.Equal(t, tc.want, *spawned.RetryConfig)
+		})
+	}
+}
+
+// TestPluginCoordinator_LocalSpawnEnvMatchesReportedConfig asserts a spawned
+// operator is handed the same retry config the spawn result reports, plus the
+// plugin call deadline the agent sizes its watchdog window from. It drives the
+// local path, which is the observable one; the remote path spawns with the same
+// environment.
+func TestPluginCoordinator_LocalSpawnEnvMatchesReportedConfig(t *testing.T) {
+	listener, err := unit.Spawn(t, NewPluginCoordinator, unit.WithEnv(map[gen.Env]any{
+		gen.Env("RetryConfig"):        globalRetryConfig(),
+		gen.Env("TestResourcePlugin"): plugin.FullResourcePlugin(fakeaws.NewFakeAWS()),
+	}))
+	require.NoError(t, err)
+	sender := gen.PID{Node: "test", ID: 100}
+
+	spawned := spawnResult(t, listener.Call(sender, spawnPluginOperatorRequest("FakeAWS", sender)))
+
+	require.NotNil(t, spawned.RetryConfig)
+	assert.Equal(t, globalRetryConfig(), *spawned.RetryConfig)
+
+	var env map[gen.Env]any
+	for _, event := range listener.Events() {
+		if spawnEvent, ok := event.(unit.SpawnEvent); ok {
+			env = spawnEvent.Options.Env
+		}
+	}
+	require.NotNil(t, env, "the coordinator must have spawned a plugin operator")
+	assert.Equal(t, *spawned.RetryConfig, env[gen.Env("RetryConfig")],
+		"the operator must poll on the config the result reports")
+	assert.Equal(t, resource_update.PluginCallTimeout, env[gen.Env("PluginCallTimeout")],
+		"the operator must bound its plugin calls by the deadline the watchdog window is built from")
 }

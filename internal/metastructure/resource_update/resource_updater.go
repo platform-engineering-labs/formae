@@ -182,10 +182,19 @@ const (
 	StateRejected             = gen.Atom("rejected")
 )
 
+// PluginCallTimeout is the deadline the agent hands each plugin operator for a
+// single watched plugin call. It matches the operator's own compiled fallback,
+// so the watchdog window derived from it holds whether the operator runs on the
+// supplied deadline or on its fallback. Exposed as a variable so tests can
+// reduce it.
+var PluginCallTimeout = 60 * time.Second
+
 // PluginOperationCallTimeout is the maximum time (in seconds) to wait for a
-// plugin operator to respond to a resource operation. Exposed as a variable
-// so tests can reduce it.
-var PluginOperationCallTimeout = 60
+// plugin operator to respond to a resource operation. It outlasts
+// PluginCallTimeout so the operator's own deadline expires first and its
+// attributable failure progress wins the race with this call. Exposed as a
+// variable so tests can reduce it.
+var PluginOperationCallTimeout = int((PluginCallTimeout + 10*time.Second) / time.Second)
 
 type ResourceUpdateData struct {
 	resourceUpdate  *ResourceUpdate
@@ -196,6 +205,11 @@ type ResourceUpdateData struct {
 	retryConfig     pkgmodel.RetryConfig
 	requestedBy     gen.PID
 	commandSource   FormaCommandSource
+
+	// operatorRetryConfig is the retry config the PluginCoordinator spawned the
+	// watched plugin operator with, which is the per-plugin override wherever
+	// one is configured. It is nil until a spawn result reports one.
+	operatorRetryConfig *pkgmodel.RetryConfig
 
 	// Because the discovery process can alter the resource URI (by changing the resource label), we need to keep
 	// track of the original resource URI for notifying both the forma_command_persister as well as the changeset
@@ -443,7 +457,7 @@ func synchronize(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen
 		return StateFinishedWithError, data, nil, nil
 	}
 
-	progress, err := doPluginOperation(data.resourceUpdate.DesiredState.URI(), plugin.ReadResource{
+	progress, operatorRetryConfig, err := doPluginOperation(data.resourceUpdate.DesiredState.URI(), plugin.ReadResource{
 		Namespace:         convertedExisting.Namespace(),
 		ResourceType:      convertedResource.Type,
 		ResourceNamespace: convertedResource.Namespace(),
@@ -459,6 +473,7 @@ func synchronize(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen
 		data.resourceUpdate.MarkAsFailed()
 		return StateFinishedWithError, data, nil, nil
 	}
+	data.operatorRetryConfig = operatorRetryConfig
 
 	return handleProgressUpdate(gen.PID{}, state, data, *progress, proc)
 }
@@ -495,7 +510,7 @@ func delete(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 	}
 
 	// If no progress was made yet, we start a new delete operation.
-	result, err := doPluginOperation(
+	result, operatorRetryConfig, err := doPluginOperation(
 		data.resourceUpdate.DesiredState.URI(),
 		deleteOperation,
 		proc)
@@ -504,6 +519,7 @@ func delete(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 		data.resourceUpdate.MarkAsFailed()
 		return StateFinishedWithError, data, nil, nil
 	}
+	data.operatorRetryConfig = operatorRetryConfig
 
 	return handleProgressUpdate(gen.PID{}, state, data, *result, proc)
 }
@@ -521,6 +537,46 @@ func resolvingTimeout(cfg pkgmodel.RetryConfig) time.Duration {
 	perAttempt := time.Duration(PluginOperationCallTimeout) * time.Second
 	strategy := resource.RetryStrategy{MaxRetries: cfg.MaxRetries, BaseDelay: cfg.RetryDelay}
 	return time.Duration(cfg.MaxRetries+1)*perAttempt + strategy.MaxTotalDelay() + resolveCacheMargin
+}
+
+// missingInActionMargin covers everything the watchdog window must absorb on
+// top of the operator's own cadence.
+const missingInActionMargin = 10 * time.Second
+
+// missingInActionTimeout sizes the plugin-operator watchdog to outlive the
+// longest legitimate gap between two progress reports: one scheduled sleep plus
+// one plugin call plus a margin. The sleep is whichever of the operator's own
+// delays is longest — the status-check interval it parks on while an operation
+// is in progress, the flat RetryDelay it sleeps after a recoverable error, or
+// the largest exponential backoff it can schedule for a throttled attempt. That
+// backoff is Backoff(MaxRetries+1) because attempts are 1-based and a retry is
+// still scheduled on the last allowed attempt, and the flat RetryDelay stays a
+// term of its own because Backoff returns the base delay uncapped for the first
+// attempt, so a RetryDelay above the backoff cap outlasts every backoff. The
+// zero term keeps a negative duration in config from shrinking the window.
+// The margin budgets the ResourceUpdater's mailbox delay, actor scheduling on
+// both sides, cross-node transport, and the synchronous UpdateResourceProgress
+// persister call the updater makes before it processes the re-arm action.
+// RetryStrategy.MaxTotalDelay is deliberately not used: it budgets the whole
+// retry ladder, which is right for an end-to-end wait but would delay detecting
+// a genuinely dead operator by the sum of every backoff rather than one gap.
+func missingInActionTimeout(cfg pkgmodel.RetryConfig) time.Duration {
+	strategy := resource.RetryStrategy{MaxRetries: cfg.MaxRetries, BaseDelay: cfg.RetryDelay}
+	longestSleep := max(cfg.StatusCheckInterval, cfg.RetryDelay, strategy.Backoff(cfg.MaxRetries+1), 0)
+	return longestSleep + PluginCallTimeout + missingInActionMargin
+}
+
+// watchdogRetryConfig returns the config the watchdog window is derived from:
+// the one the watched plugin operator was spawned with, which is the per-plugin
+// override wherever one is configured. The node-global config is only a
+// fallback for a spawn result that reported none — both arming sites run after
+// an operator has been spawned and its result received, so that fallback is
+// defensive rather than a normal path.
+func (data ResourceUpdateData) watchdogRetryConfig() pkgmodel.RetryConfig {
+	if data.operatorRetryConfig != nil {
+		return *data.operatorRetryConfig
+	}
+	return data.retryConfig
 }
 
 func resolve(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
@@ -587,7 +643,7 @@ func create(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 		return recoverFromPreviousProgress(StateCreating, data, lastKnownProgress, createOperation, proc)
 	}
 
-	result, err := doPluginOperation(
+	result, operatorRetryConfig, err := doPluginOperation(
 		data.resourceUpdate.DesiredState.URI(),
 		createOperation,
 		proc)
@@ -596,6 +652,7 @@ func create(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 		data.resourceUpdate.MarkAsFailed()
 		return StateFinishedWithError, data, nil, nil
 	}
+	data.operatorRetryConfig = operatorRetryConfig
 
 	return handleProgressUpdate(gen.PID{}, state, data, *result, proc)
 }
@@ -728,7 +785,7 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 		return recoverFromPreviousProgress(StateUpdating, data, lastKnownProgress, updateOperation, proc)
 	}
 
-	result, err := doPluginOperation(
+	result, operatorRetryConfig, err := doPluginOperation(
 		data.resourceUpdate.DesiredState.URI(),
 		updateOperation,
 		proc)
@@ -737,6 +794,7 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 		data.resourceUpdate.MarkAsFailed()
 		return StateFinishedWithError, data, nil, nil
 	}
+	data.operatorRetryConfig = operatorRetryConfig
 
 	return handleProgressUpdate(gen.PID{}, state, data, *result, proc)
 }
@@ -750,12 +808,13 @@ func recoverFromPreviousProgress(state gen.Atom, data ResourceUpdateData, lastKn
 
 	// Otherwise we retrieve the actual progress by spawning a plugin operator in the WaitingForResource state.
 	// Pass the previous attempts count so the PluginOperator can continue from where it left off.
-	actualProgress, err := resumeWaitingForResource(state, data, lastKnownProgress.ProgressResult, lastKnownProgress.Attempts, operation, proc)
+	actualProgress, operatorRetryConfig, err := resumeWaitingForResource(state, data, lastKnownProgress.ProgressResult, lastKnownProgress.Attempts, operation, proc)
 	if err != nil {
 		proc.Log().Error("failed to resume waiting for resource: %v", err)
 		data.resourceUpdate.MarkAsFailed()
 		return StateFinishedWithError, data, nil, nil
 	}
+	data.operatorRetryConfig = operatorRetryConfig
 
 	// If the actual progress is finished, again we let the progress handler process the result and determine next steps.
 	if actualProgress.HasFinished() {
@@ -763,17 +822,18 @@ func recoverFromPreviousProgress(state gen.Atom, data ResourceUpdateData, lastKn
 	}
 
 	// If not, this means that the plugin operator is waiting for the operation to be completed, so we stay in the
-	// deleting state and wait for the next progress update.
+	// deleting state and wait for the next progress update. We wait out the longest gap the operator's own retry
+	// cadence can put between two progress reports before we give up on it.
 	timeout := statemachine.StateTimeout{
-		Duration: data.retryConfig.StatusCheckInterval * 2, // We generously wait twice the interval before we give up.
+		Duration: missingInActionTimeout(data.watchdogRetryConfig()),
 		Message:  PluginOperatorMissingInAction{},
 	}
 
 	return state, data, []statemachine.Action{timeout}, nil
 }
 
-func resumeWaitingForResource(state gen.Atom, data ResourceUpdateData, progress resource.ProgressResult, previousAttempts int, operation plugin.StatusCheck, proc gen.Process) (*plugin.TrackedProgress, error) {
-	actualProgress, err := doPluginOperation(data.resourceUpdate.DesiredState.URI(), plugin.ResumeWaitingForResource{
+func resumeWaitingForResource(state gen.Atom, data ResourceUpdateData, progress resource.ProgressResult, previousAttempts int, operation plugin.StatusCheck, proc gen.Process) (*plugin.TrackedProgress, *pkgmodel.RetryConfig, error) {
+	actualProgress, operatorRetryConfig, err := doPluginOperation(data.resourceUpdate.DesiredState.URI(), plugin.ResumeWaitingForResource{
 		Namespace:         data.resourceUpdate.DesiredState.Namespace(),
 		ResourceOperation: currentOperation(state),
 		Request:           operation.StatusCheck(&progress),
@@ -781,10 +841,10 @@ func resumeWaitingForResource(state gen.Atom, data ResourceUpdateData, progress 
 	}, proc)
 	if err != nil {
 		proc.Log().Error("failed to resume waiting for resource: %v", err)
-		return nil, fmt.Errorf("failed to resume waiting for resource: %w", err)
+		return nil, nil, fmt.Errorf("failed to resume waiting for resource: %w", err)
 	}
 
-	return actualProgress, nil
+	return actualProgress, operatorRetryConfig, nil
 }
 
 // handleProgressUpdate handles progress updates from th plugin operator. It persists any progress made, and moves the
@@ -934,9 +994,10 @@ func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData,
 	}
 
 	// If the plugin operation is still in progress, we stay in the current state and wait for the next progress update. We set up
-	// a state timeout in case the plugin operator crashes.
+	// a state timeout in case the plugin operator crashes, sized to the longest gap its own retry cadence can put between two
+	// progress reports.
 	timeout := statemachine.StateTimeout{
-		Duration: data.retryConfig.StatusCheckInterval * 2,
+		Duration: missingInActionTimeout(data.watchdogRetryConfig()),
 		Message:  PluginOperatorMissingInAction{},
 	}
 
@@ -995,7 +1056,12 @@ func nextState(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.A
 	}
 }
 
-func doPluginOperation(resourceURI pkgmodel.FormaeURI, operation plugin.PluginOperation, proc gen.Process) (*plugin.TrackedProgress, error) {
+// doPluginOperation spawns a PluginOperator for the operation and runs it to its
+// next progress report. Alongside the progress it returns the retry config the
+// coordinator spawned that operator with, so the caller can size its watchdog
+// from the cadence the operator actually polls on. That config is nil when the
+// coordinator reported none.
+func doPluginOperation(resourceURI pkgmodel.FormaeURI, operation plugin.PluginOperation, proc gen.Process) (*plugin.TrackedProgress, *pkgmodel.RetryConfig, error) {
 	// Generate a random operationID based on UUID
 	operationID := uuid.New().String()
 
@@ -1014,15 +1080,15 @@ func doPluginOperation(resourceURI pkgmodel.FormaeURI, operation plugin.PluginOp
 		})
 	if err != nil {
 		proc.Log().Error("failed to spawn plugin operator: %v", err)
-		return nil, fmt.Errorf("failed to spawn plugin operator: %w", err)
+		return nil, nil, fmt.Errorf("failed to spawn plugin operator: %w", err)
 	}
 
 	result, ok := spawnResult.(messages.SpawnPluginOperatorResult)
 	if !ok {
-		return nil, fmt.Errorf("expected SpawnPluginOperatorResult, got %T", spawnResult)
+		return nil, nil, fmt.Errorf("expected SpawnPluginOperatorResult, got %T", spawnResult)
 	}
 	if result.Error != "" {
-		return nil, fmt.Errorf("spawn plugin operator failed: %s", result.Error)
+		return nil, nil, fmt.Errorf("spawn plugin operator failed: %s", result.Error)
 	}
 
 	// Call the spawned PluginOperator with the operation
@@ -1031,15 +1097,15 @@ func doPluginOperation(resourceURI pkgmodel.FormaeURI, operation plugin.PluginOp
 
 	response, err := proc.CallWithTimeout(result.PID, operation, PluginOperationCallTimeout)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	progressResult, ok := response.(plugin.TrackedProgress)
 	if !ok {
-		return nil, fmt.Errorf("expected TrackedProgress, got %T", response)
+		return nil, nil, fmt.Errorf("expected TrackedProgress, got %T", response)
 	}
 
-	return &progressResult, nil
+	return &progressResult, result.RetryConfig, nil
 }
 
 func pluginOperationMissingInAction(from gen.PID, state gen.Atom, data ResourceUpdateData, message PluginOperatorMissingInAction, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {

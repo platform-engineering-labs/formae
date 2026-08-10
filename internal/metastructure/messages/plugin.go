@@ -30,10 +30,15 @@ type SpawnPluginOperator struct {
 	RequestedBy gen.PID
 }
 
-// SpawnPluginOperatorResult is the response from PluginCoordinator after spawning a PluginOperator
+// SpawnPluginOperatorResult is the response from PluginCoordinator after spawning a PluginOperator.
+// RetryConfig is the config the spawned operator polls on — the per-plugin
+// override where one is configured, the global config otherwise. It is a
+// pointer so an absent config is distinguishable from a config whose fields are
+// legitimately zero.
 type SpawnPluginOperatorResult struct {
-	PID   gen.PID
-	Error string
+	PID         gen.PID
+	Error       string
+	RetryConfig *model.RetryConfig
 }
 
 // GetPluginNode is sent to PluginCoordinator to get the node name for a plugin namespace.

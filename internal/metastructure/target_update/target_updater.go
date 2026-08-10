@@ -147,10 +147,11 @@ func handleStartTargetUpdate(from gen.PID, state gen.Atom, data TargetUpdaterDat
 // ResolveCache reads, so a tuned policy cannot cause the two to drift and trip
 // this timeout mid-retry.
 func resolvingTimeout(proc gen.Process) time.Duration {
-	// perAttempt mirrors resource_update.PluginOperationCallTimeout (60s). It is
-	// duplicated as a local const because target_update must not import
-	// resource_update (which imports target_update).
-	const perAttempt = 60 * time.Second
+	// perAttempt mirrors resource_update.PluginOperationCallTimeout (70s), the
+	// call budget each ResolveCache read runs under. It is duplicated as a local
+	// const because target_update must not import resource_update (which imports
+	// target_update); the envelope only holds while the two agree.
+	const perAttempt = 70 * time.Second
 	const margin = 30 * time.Second
 
 	env, _ := proc.Env("RetryConfig")

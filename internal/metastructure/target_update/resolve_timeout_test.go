@@ -17,6 +17,13 @@ import (
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
 
+// pluginReadCallTimeout is the per-read call budget the ResolveCache's plugin
+// reads actually run under — resource_update.PluginOperationCallTimeout, which
+// bounds resource_update.ReadResourceViaPlugin. It is restated here because
+// target_update cannot import resource_update (that package imports this one),
+// and the resolve envelope is only sound while the two agree.
+const pluginReadCallTimeout = 70 * time.Second
+
 // timeoutEnvProcess is a gen.Process double that serves a RetryConfig from its
 // environment, so resolvingTimeout can be exercised in isolation.
 type timeoutEnvProcess struct {
@@ -37,7 +44,7 @@ func TestResolveTimeoutTimeout_CoversExponentialBackoff(t *testing.T) {
 	cfg := pkgmodel.RetryConfig{MaxRetries: 8, RetryDelay: 1 * time.Second}
 	proc := &timeoutEnvProcess{env: map[gen.Env]any{"RetryConfig": cfg}}
 
-	const perAttempt = 60 * time.Second
+	const perAttempt = pluginReadCallTimeout
 	strategy := resource.RetryStrategy{MaxRetries: cfg.MaxRetries, BaseDelay: cfg.RetryDelay}
 	// The retry loop performs MaxRetries+1 reads (the initial read plus MaxRetries
 	// retries), so the envelope must budget one read per attempt, not per retry.
@@ -56,10 +63,26 @@ func TestResolveTimeoutTimeout_CoversExponentialBackoff(t *testing.T) {
 		"budget-aware timeout must exceed the old flat estimate")
 }
 
+// TestResolveTimeoutTimeout_CoversEveryReadAtTheCallTimeout asserts the envelope
+// budgets one full plugin-read call budget per attempt at the timeout those reads
+// actually run under, plus the whole backoff budget. A per-attempt budget below
+// that ceiling fires ResolveTimedOut mid-retry on a resolve that legitimately
+// exhausts its retries, failing the target update spuriously.
+func TestResolveTimeoutTimeout_CoversEveryReadAtTheCallTimeout(t *testing.T) {
+	// The shipped RetryConfig defaults, as defined in Config.pkl.
+	cfg := pkgmodel.RetryConfig{MaxRetries: 9, RetryDelay: 10 * time.Second}
+	proc := &timeoutEnvProcess{env: map[gen.Env]any{"RetryConfig": cfg}}
+
+	strategy := resource.RetryStrategy{MaxRetries: cfg.MaxRetries, BaseDelay: cfg.RetryDelay}
+	assert.GreaterOrEqual(t, resolvingTimeout(proc),
+		time.Duration(cfg.MaxRetries+1)*pluginReadCallTimeout+strategy.MaxTotalDelay(),
+		"the envelope must budget every read at the call timeout the reads run under")
+}
+
 // TestResolveTimeoutTimeout_NoEnvFallback asserts that without a RetryConfig in
 // the environment (a bare unit harness) the timeout falls back to a fixed,
 // generous default rather than a zero-length timeout.
 func TestResolveTimeoutTimeout_NoEnvFallback(t *testing.T) {
 	proc := &timeoutEnvProcess{env: map[gen.Env]any{}}
-	assert.Equal(t, 60*time.Second+30*time.Second, resolvingTimeout(proc))
+	assert.Equal(t, pluginReadCallTimeout+30*time.Second, resolvingTimeout(proc))
 }
