@@ -11,7 +11,6 @@ import (
 	"ergo.services/ergo/gen"
 	"ergo.services/ergo/testing/unit"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/testplugin/fakeaws"
 	"github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
@@ -235,8 +234,8 @@ func TestPluginCoordinator_SpawnReportsResolvedRetryConfig(t *testing.T) {
 }
 
 // TestPluginCoordinator_LocalSpawnEnvMatchesReportedConfig asserts a spawned
-// operator is handed the same retry config the spawn result reports, plus the
-// plugin call deadline the agent sizes its watchdog window from. It drives the
+// operator is handed the same retry config the spawn result reports, which is
+// the config the agent sizes its watchdog window from. It drives the
 // local path, which is the observable one; the remote path spawns with the same
 // environment.
 func TestPluginCoordinator_LocalSpawnEnvMatchesReportedConfig(t *testing.T) {
@@ -261,6 +260,4 @@ func TestPluginCoordinator_LocalSpawnEnvMatchesReportedConfig(t *testing.T) {
 	require.NotNil(t, env, "the coordinator must have spawned a plugin operator")
 	assert.Equal(t, *spawned.RetryConfig, env[gen.Env("RetryConfig")],
 		"the operator must poll on the config the result reports")
-	assert.Equal(t, resource_update.PluginCallTimeout, env[gen.Env("PluginCallTimeout")],
-		"the operator must bound its plugin calls by the deadline the watchdog window is built from")
 }

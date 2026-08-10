@@ -182,19 +182,18 @@ const (
 	StateRejected             = gen.Atom("rejected")
 )
 
-// PluginCallTimeout is the deadline the agent hands each plugin operator for a
-// single watched plugin call. It matches the operator's own compiled fallback,
-// so the watchdog window derived from it holds whether the operator runs on the
-// supplied deadline or on its fallback. Exposed as a variable so tests can
-// reduce it.
-var PluginCallTimeout = 60 * time.Second
-
 // PluginOperationCallTimeout is the maximum time (in seconds) to wait for a
-// plugin operator to respond to a resource operation. It outlasts
-// PluginCallTimeout so the operator's own deadline expires first and its
-// attributable failure progress wins the race with this call. Exposed as a
-// variable so tests can reduce it.
-var PluginOperationCallTimeout = int((PluginCallTimeout + 10*time.Second) / time.Second)
+// plugin operator to respond to a resource operation. Exposed as a variable so
+// tests can reduce it.
+var PluginOperationCallTimeout = 60
+
+// PluginCallAllowance is how long a single plugin call may take before the
+// watchdog stops treating an operator's silence as work in progress. Nothing
+// enforces it: a plugin call runs to completion inside the plugin's own
+// process, so this is the silence the agent tolerates, not a bound on the call.
+// It matches the outer call timeout above, which is the longest the updater
+// itself waits for a reply. Exposed as a variable so tests can reduce it.
+var PluginCallAllowance = 60 * time.Second
 
 type ResourceUpdateData struct {
 	resourceUpdate  *ResourceUpdate
@@ -563,7 +562,7 @@ const missingInActionMargin = 10 * time.Second
 func missingInActionTimeout(cfg pkgmodel.RetryConfig) time.Duration {
 	strategy := resource.RetryStrategy{MaxRetries: cfg.MaxRetries, BaseDelay: cfg.RetryDelay}
 	longestSleep := max(cfg.StatusCheckInterval, cfg.RetryDelay, strategy.Backoff(cfg.MaxRetries+1), 0)
-	return longestSleep + PluginCallTimeout + missingInActionMargin
+	return longestSleep + PluginCallAllowance + missingInActionMargin
 }
 
 // watchdogRetryConfig returns the config the watchdog window is derived from:

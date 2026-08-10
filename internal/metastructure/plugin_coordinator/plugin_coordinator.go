@@ -17,7 +17,6 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/canonicalize"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/changeset"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
@@ -325,7 +324,6 @@ func (c *PluginCoordinator) spawnPluginOperator(req messages.SpawnPluginOperator
 func pluginOperatorEnv(retryConfig model.RetryConfig, requestedBy gen.PID) map[gen.Env]any {
 	return map[gen.Env]any{
 		gen.Env("RetryConfig"):       retryConfig,
-		gen.Env("PluginCallTimeout"): resource_update.PluginCallTimeout,
 		gen.Env("RequestedBy"):       requestedBy,
 	}
 }

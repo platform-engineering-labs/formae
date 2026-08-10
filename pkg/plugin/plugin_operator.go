@@ -7,7 +7,6 @@ package plugin
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -61,10 +60,6 @@ type PluginOperator struct {
 
 // PluginOperatorFactoryName is the factory name for remote spawning
 const PluginOperatorFactoryName = "PluginOperator"
-
-// defaultPluginCallTimeout bounds a single watched plugin call when the agent
-// supplies no 'PluginCallTimeout' environment variable.
-const defaultPluginCallTimeout = 60 * time.Second
 
 func NewPluginOperator() gen.ProcessBehavior {
 	return &PluginOperator{}
@@ -367,10 +362,6 @@ type PluginUpdateData struct {
 	context     context.Context
 	requestedBy gen.PID
 
-	// callTimeout bounds a single watched plugin call. The agent supplies it via
-	// the process environment so a plugin that retries internally still has to
-	// report back within a known budget.
-	callTimeout time.Duration
 
 	// Metrics
 	operationStartTime time.Time
@@ -407,41 +398,12 @@ func (data PluginUpdateData) newUnforeseenError() TrackedProgress {
 	}
 }
 
-// callContext derives the context for a single watched plugin call, bounded by
-// the deadline the agent supplied. Callers must invoke the returned cancel.
-func (data PluginUpdateData) callContext() (context.Context, context.CancelFunc) {
-	return context.WithTimeout(data.context, data.callTimeout)
-}
-
-// callDeadlineMessage describes a plugin call that outran its per-call deadline.
-func (data PluginUpdateData) callDeadlineMessage(operation resource.Operation) string {
-	return fmt.Sprintf("plugin %s call exceeded its %s deadline", operation, data.callTimeout)
-}
-
-// callDeadlineProgress builds the failure for a read-only plugin call that
-// outran its per-call deadline. ServiceTimeout is recoverable, so the operation
-// goes back through the retry ladder and heartbeats on every attempt.
-func (data PluginUpdateData) callDeadlineProgress(check PluginOperatorCheckStatus) *resource.ProgressResult {
-	return &resource.ProgressResult{
-		Operation:       check.ResourceOperation,
-		OperationStatus: resource.OperationStatusFailure,
-		RequestID:       check.RequestID,
-		NativeID:        check.NativeID,
-		ErrorCode:       resource.OperationErrorCodeServiceTimeout,
-		StatusMessage:   data.callDeadlineMessage(resource.OperationCheckStatus),
-	}
-}
-
 // terminalCallError builds the terminal progress for a failed mutating plugin
-// call. A call that outran its per-call deadline may already have reached the
+// call. A create, update or delete that failed may already have reached the
 // provider, so it is reported as terminal rather than retried.
 func (data PluginUpdateData) terminalCallError(operation resource.Operation, err error) TrackedProgress {
 	progress := data.newUnforeseenError()
-	if errors.Is(err, context.DeadlineExceeded) {
-		progress.StatusMessage = fmt.Sprintf("%s: %v", data.callDeadlineMessage(operation), err)
-	} else {
-		progress.StatusMessage = err.Error()
-	}
+	progress.StatusMessage = err.Error()
 	return progress
 }
 
@@ -463,10 +425,6 @@ func statusCheckAfterFailedCall(check PluginOperatorCheckStatus) PluginOperatorC
 // stays terminal. The check's identifiers are carried over because the retry
 // ladder rebuilds the next poll from the progress.
 func (data PluginUpdateData) statusCallFailure(check PluginOperatorCheckStatus, err error) *resource.ProgressResult {
-	if errors.Is(err, context.DeadlineExceeded) {
-		return data.callDeadlineProgress(check)
-	}
-
 	errorCode := resource.OperationErrorCodeUnforeseenError
 	if isThrottlingError(err) {
 		errorCode = resource.OperationErrorCodeThrottling
@@ -519,19 +477,6 @@ func (o *PluginOperator) Init(args ...any) (statemachine.StateMachineSpec[Plugin
 		return statemachine.StateMachineSpec[PluginUpdateData]{}, fmt.Errorf("pluginOperator: missing 'RetryConfig' environment variable")
 	}
 	data.config = cfg.(model.RetryConfig)
-
-	// PluginCallTimeout bounds every watched plugin call. An absent, non-positive
-	// or non-duration value falls back to the compiled default.
-	data.callTimeout = defaultPluginCallTimeout
-	callTimeout, ok := o.Env("PluginCallTimeout")
-	if !ok {
-		callTimeout, ok = o.Node().Env("PluginCallTimeout")
-	}
-	if ok {
-		if timeout, isDuration := callTimeout.(time.Duration); isDuration && timeout > 0 {
-			data.callTimeout = timeout
-		}
-	}
 
 	// RequestedBy: the requesting ResourceUpdater's PID, threaded in via Env so
 	// we can establish the operator→RU link asynchronously (off the operation
@@ -646,10 +591,7 @@ func read(from gen.PID, state gen.Atom, data PluginUpdateData, operation ReadRes
 	}
 	proc.Log().Debug("PluginOperator: starting read operation for %s", operation.NativeID)
 
-	callCtx, cancel := data.callContext()
-	defer cancel()
-
-	result, err := data.plugin.Read(callCtx, &resource.ReadRequest{
+	result, err := data.plugin.Read(data.context, &resource.ReadRequest{
 		NativeID:        operation.NativeID,
 		ResourceType:    operation.ResourceType,
 		TargetConfig:    operation.TargetConfig,
@@ -658,14 +600,8 @@ func read(from gen.PID, state gen.Atom, data PluginUpdateData, operation ReadRes
 	if err != nil {
 		proc.Log().Debug("PluginOperator: failed to read resource: %v", err)
 		progressResult.OperationStatus = resource.OperationStatusFailure
-		if errors.Is(err, context.DeadlineExceeded) {
-			// A read is safe to repeat, so it stays recoverable.
-			progressResult.ErrorCode = resource.OperationErrorCodeServiceTimeout
-			progressResult.StatusMessage = data.callDeadlineMessage(resource.OperationRead)
-		} else {
-			progressResult.ErrorCode = resource.OperationErrorCodeUnforeseenError
-			progressResult.StatusMessage = err.Error()
-		}
+		progressResult.ErrorCode = resource.OperationErrorCodeUnforeseenError
+		progressResult.StatusMessage = err.Error()
 	} else if result.ErrorCode != "" && !(operation.TreatNotFoundAsSuccess() && result.ErrorCode == resource.OperationErrorCodeNotFound) {
 		progressResult.OperationStatus = resource.OperationStatusFailure
 		progressResult.ErrorCode = result.ErrorCode
@@ -690,11 +626,8 @@ func create(from gen.PID, state gen.Atom, data PluginUpdateData, operation Creat
 
 	proc.Log().Debug("PluginOperator: starting create operation for %s", operation.ResourceType)
 
-	callCtx, cancel := data.callContext()
-	defer cancel()
-
 	// Properties are expected to be pre-resolved by ResourceUpdater
-	result, err := data.plugin.Create(callCtx, &resource.CreateRequest{
+	result, err := data.plugin.Create(data.context, &resource.CreateRequest{
 		ResourceType: operation.ResourceType,
 		Label:        operation.Label,
 		Properties:   operation.Properties,
@@ -715,10 +648,7 @@ func update(from gen.PID, state gen.Atom, data PluginUpdateData, operation Updat
 		return StateFinishedWithError, data, data.newNamespaceMismatchError(), nil, nil
 	}
 
-	callCtx, cancel := data.callContext()
-	defer cancel()
-
-	result, err := data.plugin.Update(callCtx, &resource.UpdateRequest{
+	result, err := data.plugin.Update(data.context, &resource.UpdateRequest{
 		NativeID:          operation.NativeID,
 		ResourceType:      operation.ResourceType,
 		Label:             operation.Label,
@@ -742,10 +672,7 @@ func delete(from gen.PID, state gen.Atom, data PluginUpdateData, operation Delet
 		return StateFinishedWithError, data, data.newNamespaceMismatchError(), nil, nil
 	}
 
-	callCtx, cancel := data.callContext()
-	defer cancel()
-
-	result, err := data.plugin.Delete(callCtx, &resource.DeleteRequest{
+	result, err := data.plugin.Delete(data.context, &resource.DeleteRequest{
 		NativeID:     operation.NativeID,
 		ResourceType: operation.ResourceType,
 		TargetConfig: operation.TargetConfig,
@@ -774,10 +701,7 @@ func status(from gen.PID, state gen.Atom, data PluginUpdateData, operation Plugi
 
 	proc.Log().Debug("PluginOperator: checking status of resource %s", operation.RequestID)
 
-	callCtx, cancel := data.callContext()
-	defer cancel()
-
-	result, err := data.plugin.Status(callCtx, &resource.StatusRequest{
+	result, err := data.plugin.Status(data.context, &resource.StatusRequest{
 		RequestID:    operation.RequestID,
 		NativeID:     operation.NativeID,
 		ResourceType: operation.ResourceType,
@@ -859,23 +783,13 @@ func resume(from gen.PID, state gen.Atom, data PluginUpdateData, operation Resum
 	data.attempts = operation.PreviousAttempts
 	proc.Log().Debug("PluginOperator: resume waiting for resource %s", operation.Request.RequestID)
 
-	callCtx, cancel := data.callContext()
-	defer cancel()
-
-	result, err := data.plugin.Status(callCtx, &resource.StatusRequest{
+	result, err := data.plugin.Status(data.context, &resource.StatusRequest{
 		RequestID:    operation.Request.RequestID,
 		NativeID:     operation.Request.NativeID,
 		ResourceType: operation.Request.ResourceType,
 		TargetConfig: operation.Request.TargetConfig,
 	})
 	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			proc.Log().Error("PluginOperator: resumed status check of resource %s exceeded its %s call deadline: %v", operation.Request.RequestID, data.callTimeout, err)
-			// A status check is safe to repeat, so it stays recoverable and is
-			// rescheduled as another check.
-			check := statusCheckAfterFailedCall(operation.Request)
-			return handlePluginResult(data, check, proc, data.callDeadlineProgress(check))
-		}
 		proc.Log().Error("PluginOperator: failed to get resume waiting for resource: %v", err)
 		errProgress := data.newUnforeseenError()
 		errProgress.StatusMessage = err.Error()
@@ -1002,9 +916,6 @@ func list(from gen.PID, state gen.Atom, data PluginUpdateData, operation ListRes
 
 		// Retry loop with exponential backoff for throttling
 		for attempt := 1; attempt <= maxListAttempts; attempt++ {
-			// Discovery has no operator watchdog and owns an intentionally long
-			// paging and retry budget, so a list call is not bounded by the
-			// agent-supplied per-call deadline.
 			result, err = data.plugin.List(data.context, &resource.ListRequest{
 				ResourceType:         operation.ResourceType,
 				TargetConfig:         operation.TargetConfig,

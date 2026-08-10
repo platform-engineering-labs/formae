@@ -71,7 +71,7 @@ func TestSlowHeartbeatIsNotDeclaredMissingInAction(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		const (
 			statusCheckInterval = 1 * time.Second
-			pluginCallTimeout   = 5 * time.Second
+			pluginCallAllowance = 5 * time.Second
 			slowStatusCall      = 2500 * time.Millisecond
 		)
 
@@ -80,7 +80,7 @@ func TestSlowHeartbeatIsNotDeclaredMissingInAction(t *testing.T) {
 			"the gap must outlast the flat twice-the-interval window, or the old rule would not have fired")
 		require.Less(t, heartbeatGap, watchdogMarginFloor,
 			"the gap must stay inside the derived window, of which the fixed margin is only one term")
-		require.LessOrEqual(t, slowStatusCall, pluginCallTimeout/2,
+		require.LessOrEqual(t, slowStatusCall, pluginCallAllowance/2,
 			"the slow call must leave as much headroom again inside the deadline the agent hands the "+
 				"operator, or a loaded runner turns this into a call that outran its deadline instead of "+
 				"a slow one that reported")
@@ -125,9 +125,9 @@ func TestSlowHeartbeatIsNotDeclaredMissingInAction(t *testing.T) {
 			},
 		}
 
-		origCallTimeout := resource_update.PluginCallTimeout
-		resource_update.PluginCallTimeout = pluginCallTimeout
-		t.Cleanup(func() { resource_update.PluginCallTimeout = origCallTimeout })
+		origCallAllowance := resource_update.PluginCallAllowance
+		resource_update.PluginCallAllowance = pluginCallAllowance
+		t.Cleanup(func() { resource_update.PluginCallAllowance = origCallAllowance })
 
 		cfg := test_helpers.NewTestMetastructureConfig()
 		cfg.Agent.Retry.StatusCheckInterval = statusCheckInterval
