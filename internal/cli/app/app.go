@@ -656,40 +656,66 @@ func (a *App) calculateNags(stats *apimodel.Stats) []string {
 	return nags
 }
 
+// NoAuthPluginError indicates the active profile carries no cli.auth block,
+// so there is no auth plugin to discover or start.
+type NoAuthPluginError struct{}
+
+func (*NoAuthPluginError) Error() string {
+	return "no auth plugin configured for the active profile"
+}
+
+// AuthClient returns the App's auth plugin client, discovering and starting
+// the plugin subprocess on first use and caching it for subsequent calls.
+// It returns a *NoAuthPluginError when the active profile has no cli.auth
+// block, so callers that need a plugin outright — such as `formae login` —
+// can fail with a clear message instead of dereferencing a nil client.
+func (a *App) AuthClient() (*pkgauth.Client, error) {
+	if a.Config.Cli.Auth == nil {
+		return nil, &NoAuthPluginError{}
+	}
+
+	if a.authClient == nil {
+		authType := gjson.GetBytes(a.Config.Cli.Auth, "type").String()
+		devPluginDir := util.ExpandHomePath(a.Config.PluginDir)
+		binPath, err := os.Executable()
+		if err != nil {
+			return nil, fmt.Errorf("failed to determine binary path: %w", err)
+		}
+		systemPluginDir := discovery.SystemPluginDir(binPath)
+		authPlugins := discovery.DiscoverPluginsMulti(
+			[]string{devPluginDir, systemPluginDir}, discovery.Auth,
+		)
+		var matched *discovery.PluginInfo
+		for i, p := range authPlugins {
+			if p.Name == authType {
+				matched = &authPlugins[i]
+				break
+			}
+		}
+		if matched == nil {
+			return nil, fmt.Errorf("auth plugin %q not installed", authType)
+		}
+		client, err := pkgauth.NewClient(matched.BinaryPath, a.Config.Cli.Auth)
+		if err != nil {
+			return nil, fmt.Errorf("failed to start auth plugin: %w", err)
+		}
+		a.authClient = client
+	}
+
+	return a.authClient, nil
+}
+
 func (a *App) getAuthAndNetHandlers() (http.Header, *http.Client, error) {
 	var authHeader http.Header
 	var net *http.Client
 
 	if a.Config.Cli.Auth != nil {
-		if a.authClient == nil {
-			authType := gjson.GetBytes(a.Config.Cli.Auth, "type").String()
-			devPluginDir := util.ExpandHomePath(a.Config.PluginDir)
-			binPath, err := os.Executable()
-			if err != nil {
-				return nil, nil, fmt.Errorf("failed to determine binary path: %w", err)
-			}
-			systemPluginDir := discovery.SystemPluginDir(binPath)
-			authPlugins := discovery.DiscoverPluginsMulti(
-				[]string{devPluginDir, systemPluginDir}, discovery.Auth,
-			)
-			var matched *discovery.PluginInfo
-			for i, p := range authPlugins {
-				if p.Name == authType {
-					matched = &authPlugins[i]
-					break
-				}
-			}
-			if matched == nil {
-				return nil, nil, fmt.Errorf("auth plugin %q not installed", authType)
-			}
-			client, err := pkgauth.NewClient(matched.BinaryPath, a.Config.Cli.Auth)
-			if err != nil {
-				return nil, nil, fmt.Errorf("failed to start auth plugin: %w", err)
-			}
-			a.authClient = client
+		client, err := a.AuthClient()
+		if err != nil {
+			return nil, nil, err
 		}
 
-		resp, err := a.authClient.GetAuthHeader(false)
+		resp, err := client.GetAuthHeader(false)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to get auth header: %w", err)
 		}
