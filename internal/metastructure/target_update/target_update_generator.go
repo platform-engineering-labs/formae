@@ -10,6 +10,8 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/tidwall/gjson"
+
 	"github.com/platform-engineering-labs/formae/internal/metastructure/reaping"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
@@ -261,6 +263,19 @@ func (tp *TargetUpdateGenerator) resolveTargetReaping(target *pkgmodel.Target) e
 	return nil
 }
 
+// isHashedAtRest reports whether a property value read from the datastore is an
+// opaque envelope whose $value is a SHA-256 digest rather than the plaintext.
+// Only a top-level envelope counts: a container that merely holds a hashed value
+// somewhere inside still has clear fields whose change must be detected, so it
+// is resolved normally.
+func isHashedAtRest(raw string) bool {
+	parsed := gjson.Parse(raw)
+	if !parsed.IsObject() {
+		return false
+	}
+	return parsed.Get("$hashed").Bool()
+}
+
 // configSchemasEqual returns true if two ConfigSchemas have identical hints.
 func configSchemasEqual(a, b pkgmodel.ConfigSchema) bool {
 	if len(a.Hints) != len(b.Hints) {
@@ -322,10 +337,27 @@ func (tp *TargetUpdateGenerator) resolvedConfigs(existingConfig, newConfig json.
 		strVal, ok := resource.GetProperty(propertyPath)
 		if !ok {
 			// The source is present but exposes no readable value at this path
-			// (e.g. an opaque credential hashed at rest, or an unsynced status
-			// field). The reference is valid, so this is not a change — compare
-			// by $ref identity rather than treating it as dangling.
+			// (e.g. an opaque credential nested inside a hashed envelope, or an
+			// unsynced status field). The reference is valid, so this is not a
+			// change — compare by $ref identity rather than treating it as
+			// dangling.
 			slog.Debug("Referenced property not readable, comparing by ref identity",
+				"uri", uri, "propertyPath", propertyPath)
+			allResolved = false
+			continue
+		}
+
+		if isHashedAtRest(strVal) {
+			// The property IS readable, but what it holds is a digest, not the
+			// value: an opaque field is persisted as a whole hashed envelope, so
+			// GetProperty hands back that envelope's raw JSON. Resolving it would
+			// compare the desired side's digest against a stored side that carries
+			// no $value at all (reference-don't-store strips it), so a target with
+			// a secret-sourced credential would report a change on every re-apply.
+			// A digest can never participate in a value comparison, so fall back to
+			// $ref identity — the same treatment as an unreadable property, and
+			// explicitly NOT dangling.
+			slog.Debug("Referenced property is hashed at rest, comparing by ref identity",
 				"uri", uri, "propertyPath", propertyPath)
 			allResolved = false
 			continue
