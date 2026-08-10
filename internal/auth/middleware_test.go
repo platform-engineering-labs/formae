@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/rpc"
+	"reflect"
 	"sort"
 	"testing"
 	"time"
@@ -298,11 +299,9 @@ func TestComputeCacheKey_Injective(t *testing.T) {
 
 // TestMiddleware_PluginNeverObservesExcludedHeaders covers every header in
 // the production nonAuthHeaders exclusion set (read from the package
-// variable itself, not restated here) and, for each one, proves the plugin
-// never sees it: a request carrying that header, with a plugin mock that
-// would report a different subject if it could see the header, still gets
-// the configured subject, and the header is absent from what the plugin
-// actually received.
+// variable itself, not restated here) and, for each one, proves two
+// properties: the plugin never sees it, and varying its value does not bust
+// the cache — the entire reason the exclusion set exists.
 func TestMiddleware_PluginNeverObservesExcludedHeaders(t *testing.T) {
 	headers := make([]string, 0, len(nonAuthHeaders))
 	for header := range nonAuthHeaders {
@@ -321,22 +320,70 @@ func TestMiddleware_PluginNeverObservesExcludedHeaders(t *testing.T) {
 			mock.leakOnHeader = canonical
 			mock.leakSubject = "leaked"
 
-			req := httptest.NewRequest(http.MethodGet, "/test", nil)
-			req.Header.Set("Authorization", "Basic dGVzdDp0ZXN0")
-			req.Header.Set(header, "excluded-value")
-			rec := httptest.NewRecorder()
-			e.ServeHTTP(rec, req)
+			// First request: cache miss, calls Validate.
+			req1 := httptest.NewRequest(http.MethodGet, "/test", nil)
+			req1.Header.Set("Authorization", "Basic dGVzdDp0ZXN0")
+			req1.Header.Set(header, "excluded-value-one")
+			rec1 := httptest.NewRecorder()
+			e.ServeHTTP(rec1, req1)
 
-			if rec.Code != http.StatusOK {
-				t.Fatalf("expected 200, got %d", rec.Code)
+			if rec1.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d", rec1.Code)
 			}
-			if rec.Body.String() != "s" {
-				t.Fatalf("expected subject %q, got %q (the excluded header %q reached the plugin)", "s", rec.Body.String(), canonical)
+			if rec1.Body.String() != "s" {
+				t.Fatalf("expected subject %q, got %q (the excluded header %q reached the plugin)", "s", rec1.Body.String(), canonical)
 			}
 			if _, present := mock.lastHeaders[canonical]; present {
 				t.Fatalf("expected the plugin to never observe the excluded header %q, got %v", canonical, mock.lastHeaders)
 			}
+
+			// Second request: identical auth-relevant headers, a different
+			// value for the excluded header. This must still be a cache hit —
+			// varying only an excluded header must not bust the cache.
+			req2 := httptest.NewRequest(http.MethodGet, "/test", nil)
+			req2.Header.Set("Authorization", "Basic dGVzdDp0ZXN0")
+			req2.Header.Set(header, "excluded-value-two")
+			rec2 := httptest.NewRecorder()
+			e.ServeHTTP(rec2, req2)
+
+			if rec2.Code != http.StatusOK {
+				t.Fatalf("second request: expected 200, got %d", rec2.Code)
+			}
+			if rec2.Body.String() != "s" {
+				t.Fatalf("second request: expected subject %q, got %q", "s", rec2.Body.String())
+			}
+			if mock.callCount != 1 {
+				t.Fatalf("expected 1 Validate call total for header %q (second request should be a cache hit), got %d", canonical, mock.callCount)
+			}
 		})
+	}
+}
+
+// TestNonAuthHeaders_PinnedMembership pins the exact contents of the
+// production exclusion set against a literal written here. Unlike the
+// table above, which is generated from nonAuthHeaders and so cannot see
+// membership changes in either direction, this comparison is against a
+// fixed value: removing a header silently weakens caching, and adding one
+// — Authorization above all — would silently keep it from ever reaching the
+// plugin. Either requires a deliberate update to the literal below.
+func TestNonAuthHeaders_PinnedMembership(t *testing.T) {
+	want := map[string]bool{
+		"accept":           true,
+		"accept-encoding":  true,
+		"accept-language":  true,
+		"cache-control":    true,
+		"connection":       true,
+		"content-length":   true,
+		"content-type":     true,
+		"date":             true,
+		"host":             true,
+		"user-agent":       true,
+		"x-correlation-id": true,
+		"x-request-id":     true,
+	}
+
+	if !reflect.DeepEqual(nonAuthHeaders, want) {
+		t.Fatalf("expected nonAuthHeaders to equal %v, got %v", want, nonAuthHeaders)
 	}
 }
 
