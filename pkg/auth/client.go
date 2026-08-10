@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/rpc"
 	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -110,12 +111,74 @@ func (c *Client) Validate(req *ValidateRequest) (*ValidateResponse, error) {
 }
 
 // GetAuthHeader requests auth headers from the plugin for outgoing requests.
-func (c *Client) GetAuthHeader() (*GetAuthHeaderResponse, error) {
+// forceRefresh asks the plugin to skip freshness checks and refresh the
+// credential now.
+func (c *Client) GetAuthHeader(forceRefresh bool) (*GetAuthHeaderResponse, error) {
 	var resp GetAuthHeaderResponse
-	if err := c.rpcClient.Call("AuthPlugin.GetAuthHeader", &GetAuthHeaderRequest{}, &resp); err != nil {
-		return nil, fmt.Errorf("auth client: get auth header: %w", err)
+	if err := c.call("GetAuthHeader", &GetAuthHeaderRequest{ForceRefresh: forceRefresh}, &resp); err != nil {
+		return nil, err
 	}
 	return &resp, nil
+}
+
+// LoginStart begins an interactive login flow on the plugin.
+func (c *Client) LoginStart(req *LoginStartRequest) (*LoginStartResponse, error) {
+	var resp LoginStartResponse
+	if err := c.call("LoginStart", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// LoginWait polls the plugin for completion of a login flow started by
+// LoginStart. It carries no client-side timeout: the plugin owns the bound
+// on how long the flow may take.
+func (c *Client) LoginWait(req *LoginWaitRequest) (*LoginWaitResponse, error) {
+	var resp LoginWaitResponse
+	if err := c.call("LoginWait", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// Logout ends the current session on the plugin.
+func (c *Client) Logout() (*LogoutResponse, error) {
+	var resp LogoutResponse
+	if err := c.call("Logout", &LogoutRequest{}, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// errorCoded is implemented by response types that carry an ErrorCode field,
+// letting call set it uniformly when a verb turns out to be unsupported.
+type errorCoded interface {
+	setUnsupported()
+}
+
+func (r *GetAuthHeaderResponse) setUnsupported() { r.ErrorCode = ErrorCodeUnsupported }
+func (r *LoginStartResponse) setUnsupported()    { r.ErrorCode = ErrorCodeUnsupported }
+func (r *LoginWaitResponse) setUnsupported()     { r.ErrorCode = ErrorCodeUnsupported }
+func (r *LogoutResponse) setUnsupported()        { r.ErrorCode = ErrorCodeUnsupported }
+
+// methodNotFoundPrefix is the text net/rpc prefixes to the error it returns
+// when the server has no registered method for the requested name.
+const methodNotFoundPrefix = "rpc: can't find method"
+
+// call invokes an AuthPlugin RPC method and translates net/rpc's
+// method-not-found transport error into the typed unsupported contract, so
+// an old already-built plugin binary that lacks a verb is indistinguishable
+// from a new one that declines it.
+func (c *Client) call(method string, req any, resp errorCoded) error {
+	err := c.rpcClient.Call("AuthPlugin."+method, req, resp)
+	if err == nil {
+		return nil
+	}
+	if strings.HasPrefix(err.Error(), methodNotFoundPrefix) {
+		resp.setUnsupported()
+		return nil
+	}
+	return fmt.Errorf("auth client: %s: %w", method, err)
 }
 
 // Close shuts down the RPC client, closes the connection, and kills the subprocess.
