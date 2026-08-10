@@ -6,6 +6,7 @@ package auth
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"net/http"
 	"sort"
@@ -14,6 +15,14 @@ import (
 	"github.com/labstack/echo/v4"
 
 	pkgauth "github.com/platform-engineering-labs/formae/pkg/auth"
+)
+
+// Context keys under which the authenticated subject is stored on the echo
+// request context for downstream handlers, set on every allowed request
+// whether the verdict came fresh from the plugin or from the cache.
+const (
+	ContextKeySubject     = "auth.subject"
+	ContextKeySubjectName = "auth.subjectName"
 )
 
 // skipPaths are endpoints that don't require authentication.
@@ -39,8 +48,10 @@ func NewAuthMiddleware(handle *AuthPluginHandle, cache *AuthCache) echo.Middlewa
 			headers := map[string][]string(c.Request().Header)
 			cacheKey := computeCacheKey(headers)
 
-			if valid, found := cache.Get(cacheKey); found {
-				if valid {
+			if v, found := cache.Get(cacheKey); found {
+				if v.Valid {
+					c.Set(ContextKeySubject, v.Subject)
+					c.Set(ContextKeySubjectName, v.SubjectName)
 					return next(c)
 				}
 				return echo.NewHTTPError(http.StatusUnauthorized, "unauthorized")
@@ -55,12 +66,15 @@ func NewAuthMiddleware(handle *AuthPluginHandle, cache *AuthCache) echo.Middlewa
 			}
 
 			if resp.CacheTTL > 0 {
-				cache.Set(cacheKey, resp.Valid, resp.CacheTTL)
+				cache.Set(cacheKey, Verdict{Valid: resp.Valid, Subject: resp.Subject, SubjectName: resp.SubjectName}, resp.CacheTTL)
 			}
 
 			if !resp.Valid {
 				return echo.NewHTTPError(http.StatusUnauthorized, "unauthorized")
 			}
+
+			c.Set(ContextKeySubject, resp.Subject)
+			c.Set(ContextKeySubjectName, resp.SubjectName)
 
 			return next(c)
 		}
@@ -87,6 +101,11 @@ var nonAuthHeaders = map[string]bool{
 
 // computeCacheKey derives a cache key from auth-relevant request headers by
 // hashing their sorted key-value pairs, excluding known volatile headers.
+//
+// Each key and each value is written with a big-endian uint64 length prefix
+// so the encoding is injective: without delimiters, header shapes that
+// distribute the same bytes differently across keys and values (e.g. one
+// value "AB" vs. two values "A", "B") would hash identically.
 func computeCacheKey(headers map[string][]string) string {
 	h := sha256.New()
 	keys := make([]string, 0, len(headers))
@@ -96,10 +115,18 @@ func computeCacheKey(headers map[string][]string) string {
 		}
 	}
 	sort.Strings(keys)
+
+	var lenPrefix [8]byte
+	writeLengthDelimited := func(s string) {
+		binary.BigEndian.PutUint64(lenPrefix[:], uint64(len(s)))
+		h.Write(lenPrefix[:])
+		h.Write([]byte(s))
+	}
+
 	for _, k := range keys {
+		writeLengthDelimited(k)
 		for _, v := range headers[k] {
-			h.Write([]byte(k))
-			h.Write([]byte(v))
+			writeLengthDelimited(v)
 		}
 	}
 	return fmt.Sprintf("%x", h.Sum(nil)[:16])

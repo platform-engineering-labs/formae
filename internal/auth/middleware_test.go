@@ -22,6 +22,8 @@ import (
 type testMiddlewarePlugin struct {
 	pkgauth.UnimplementedAuthPlugin
 	validResponse bool
+	subject       string
+	subjectName   string
 	callCount     int
 }
 
@@ -32,6 +34,8 @@ func (p *testMiddlewarePlugin) Init(req *pkgauth.InitRequest, resp *pkgauth.Init
 func (p *testMiddlewarePlugin) Validate(req *pkgauth.ValidateRequest, resp *pkgauth.ValidateResponse) error {
 	p.callCount++
 	resp.Valid = p.validResponse
+	resp.Subject = p.subject
+	resp.SubjectName = p.subjectName
 	resp.CacheTTL = time.Minute
 	return nil
 }
@@ -62,7 +66,8 @@ func setupMiddleware(t *testing.T, validResponse bool) (*echo.Echo, *AuthPluginH
 	e := echo.New()
 	e.Use(NewAuthMiddleware(handle, cache))
 	e.GET("/test", func(c echo.Context) error {
-		return c.String(http.StatusOK, "ok")
+		subject, _ := c.Get(ContextKeySubject).(string)
+		return c.String(http.StatusOK, subject)
 	})
 
 	return e, handle, cache, mock
@@ -146,6 +151,68 @@ func TestMiddleware_CacheHit(t *testing.T) {
 	}
 	if mock.callCount != 1 {
 		t.Fatalf("second request: expected still 1 call (cache hit), got %d", mock.callCount)
+	}
+}
+
+func TestMiddleware_FreshResponseSetsSubjectOnContext(t *testing.T) {
+	e, _, _, mock := setupMiddleware(t, true)
+	mock.subject = "s"
+
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req.Header.Set("Authorization", "Basic dGVzdDp0ZXN0")
+	rec := httptest.NewRecorder()
+
+	e.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if rec.Body.String() != "s" {
+		t.Fatalf("expected subject %q on context, got %q", "s", rec.Body.String())
+	}
+}
+
+func TestMiddleware_CacheHitPopulatesSubjectOnContext(t *testing.T) {
+	e, _, _, mock := setupMiddleware(t, true)
+	mock.subject = "s"
+
+	// First request: cache miss → calls Validate, subject comes from the fresh response.
+	req1 := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req1.Header.Set("Authorization", "Basic dGVzdDp0ZXN0")
+	rec1 := httptest.NewRecorder()
+	e.ServeHTTP(rec1, req1)
+
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("first request: expected 200, got %d", rec1.Code)
+	}
+	if rec1.Body.String() != "s" {
+		t.Fatalf("first request: expected subject %q, got %q", "s", rec1.Body.String())
+	}
+
+	// Second request with the same credentials: cache hit, but the subject must
+	// still land on the context, and the plugin must not be called again.
+	req2 := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req2.Header.Set("Authorization", "Basic dGVzdDp0ZXN0")
+	rec2 := httptest.NewRecorder()
+	e.ServeHTTP(rec2, req2)
+
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("second request: expected 200, got %d", rec2.Code)
+	}
+	if rec2.Body.String() != "s" {
+		t.Fatalf("second request (cache hit): expected subject %q on context, got %q", "s", rec2.Body.String())
+	}
+	if mock.callCount != 1 {
+		t.Fatalf("expected 1 Validate call (second request served from cache), got %d", mock.callCount)
+	}
+}
+
+func TestComputeCacheKey_Injective(t *testing.T) {
+	oneValue := map[string][]string{"Authorization": {"Bearer secretAuthorizationXYZ"}}
+	twoValues := map[string][]string{"Authorization": {"Bearer secret", "XYZ"}}
+
+	if computeCacheKey(oneValue) == computeCacheKey(twoValues) {
+		t.Fatal("expected different cache keys for header sets whose values concatenate to the same bytes")
 	}
 }
 
