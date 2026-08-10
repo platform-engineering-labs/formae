@@ -3421,3 +3421,77 @@ func TestGeneratePatch_ResolvedArrayRefWithStaleValue_PlansFreshResolution(t *te
 	assert.Contains(t, string(patchDoc), arnBMoved, "the moved element carries its current resolution")
 	assert.NotContains(t, string(patchDoc), arnA, "the unchanged element is not rewritten")
 }
+
+// A reference whose source resolves but cannot be read through its path is
+// broken, not absent. Falling back to the value recorded on the envelope would
+// compare as unchanged and leave the resource on its old value with nothing
+// reported, so the failure is surfaced instead.
+func TestGeneratePatch_ResolvedRefWithUnreadableJSONPath_Fails(t *testing.T) {
+	ksuid := util.NewID()
+	applied := "10.0.0.1"
+	document := []byte(`{"Endpoint": "10.0.0.1"}`)
+	stored := fmt.Appendf(nil, `{"Endpoint": {"$ref": "formae://%s#/Config", "$json": "address", "$value": "10.0.0.1", "$applied": %q}}`, ksuid, applied)
+	desired := fmt.Appendf(nil, `{"Endpoint": {"$ref": "formae://%s#/Config", "$json": "address", "$value": %q}}`, ksuid, applied)
+	patch := fmt.Appendf(nil, `{"Endpoint": %q}`, applied)
+	schema := pkgmodel.Schema{Fields: []string{"Endpoint"}}
+	props := resolver.NewResolvableProperties()
+	// The source resolves, but no longer carries the path the reference reads.
+	props.Add(ksuid, "Config", `{"host":"10.0.0.2"}`)
+
+	_, _, err := generatePatch(document, patch, stored, desired, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.Error(t, err, "a reference that cannot be read through its path must not be treated as unchanged")
+	assert.Contains(t, err.Error(), "address")
+}
+
+// The same on an immutable field, where silently comparing as unchanged would
+// also swallow the replacement.
+func TestGeneratePatch_CreateOnlyResolvedRefWithUnreadableJSONPath_Fails(t *testing.T) {
+	ksuid := util.NewID()
+	applied := "fn-v1"
+	document := []byte(`{"TargetFunctionArn": "fn-v1"}`)
+	stored := fmt.Appendf(nil, `{"TargetFunctionArn": {"$ref": "formae://%s#/Config", "$json": "arn", "$value": "fn-v1", "$applied": %q}}`, ksuid, applied)
+	desired := fmt.Appendf(nil, `{"TargetFunctionArn": {"$ref": "formae://%s#/Config", "$json": "arn", "$value": %q}}`, ksuid, applied)
+	patch := fmt.Appendf(nil, `{"TargetFunctionArn": %q}`, applied)
+	schema := pkgmodel.Schema{
+		Fields: []string{"TargetFunctionArn"},
+		Hints:  map[string]pkgmodel.FieldHint{"TargetFunctionArn": {CreateOnly: true}},
+	}
+	props := resolver.NewResolvableProperties()
+	props.Add(ksuid, "Config", `{"name":"fn-v2"}`)
+
+	_, _, err := generatePatch(document, patch, stored, desired, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.Error(t, err, "an unreadable reference on an immutable field must not silently suppress the replacement")
+}
+
+// The array path surfaces the same failure.
+func TestGeneratePatch_ResolvedArrayRefWithUnreadableJSONPath_Fails(t *testing.T) {
+	ksuid := util.NewID()
+	applied := "10.0.0.1"
+	document := []byte(`{"Endpoints": ["10.0.0.1"]}`)
+	stored := fmt.Appendf(nil, `{"Endpoints": [{"$ref": "formae://%s#/Config", "$json": "address", "$value": "10.0.0.1", "$applied": %q}]}`, ksuid, applied)
+	desired := fmt.Appendf(nil, `{"Endpoints": [{"$ref": "formae://%s#/Config", "$json": "address", "$value": %q}]}`, ksuid, applied)
+	patch := fmt.Appendf(nil, `{"Endpoints": [%q]}`, applied)
+	schema := pkgmodel.Schema{Fields: []string{"Endpoints"}}
+	props := resolver.NewResolvableProperties()
+	props.Add(ksuid, "Config", `{"host":"10.0.0.2"}`)
+
+	_, _, err := generatePatch(document, patch, stored, desired, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.Error(t, err, "an unreadable array reference must not be treated as unchanged")
+}
+
+// A reference whose source is not resolvable at all is a different situation:
+// nothing is broken, the value simply is not available yet, so the recorded
+// resolution still stands and the reference is not rewritten.
+func TestGeneratePatch_ResolvedRefWithUnresolvableSource_UsesRecordedValue(t *testing.T) {
+	ksuid := util.NewID()
+	applied := "10.0.0.1"
+	document := []byte(`{"Endpoint": "echo-10.0.0.1"}`)
+	stored := fmt.Appendf(nil, `{"Endpoint": {"$ref": "formae://%s#/Config", "$json": "address", "$value": "echo-10.0.0.1", "$applied": %q}}`, ksuid, applied)
+	desired := fmt.Appendf(nil, `{"Endpoint": {"$ref": "formae://%s#/Config", "$json": "address", "$value": %q}}`, ksuid, applied)
+	patch := fmt.Appendf(nil, `{"Endpoint": %q}`, applied)
+	schema := pkgmodel.Schema{Fields: []string{"Endpoint"}}
+
+	patchDoc, _, err := generatePatch(document, patch, stored, desired, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Nil(t, patchDoc, "an unavailable source leaves the recorded resolution standing")
+}

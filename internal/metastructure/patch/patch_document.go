@@ -984,21 +984,25 @@ func resolvedDesiredEnvelope(desiredNode, modNode any) (map[string]any, bool) {
 // current one is available it is the authority: trusting the cached value would
 // let a reference that now points somewhere else compare as unchanged and drop
 // the update, or miss a replacement on an immutable field.
-func freshResolution(env map[string]any, current any, resolvableProperties resolver.ResolvableProperties) (any, string, bool) {
+func freshResolution(env map[string]any, current any, resolvableProperties resolver.ResolvableProperties) (any, string, bool, error) {
 	ref, _ := env["$ref"].(string)
 	uri := pkgmodel.FormaeURI(ref)
 	val, found := resolvableProperties.Get(uri.KSUID(), uri.PropertyPath())
 	if !found {
-		return nil, "", false
+		return nil, "", false, nil
 	}
 	if jsonPath, ok := env["$json"].(string); ok && jsonPath != "" {
 		extracted, err := resolver.ExtractJSONPath(val, jsonPath)
 		if err != nil {
-			return nil, "", false
+			// A source that resolves but cannot be read through its path is a
+			// broken reference, not a missing one. Surfacing it matches the
+			// structured path; falling back to the recorded value would leave
+			// the resource on its old value with nothing reported.
+			return nil, "", false, err
 		}
 		val = extracted
 	}
-	return normalizeResolvedValue(val, current), val, true
+	return normalizeResolvedValue(val, current), val, true, nil
 }
 
 // substituteResolvedRef decides what the desired side should carry for a
@@ -1010,33 +1014,37 @@ func freshResolution(env map[string]any, current any, resolvableProperties resol
 // and the reference is not rewritten in the provider's own spelling. Otherwise
 // the desired side carries the current resolution, so a genuine repoint is
 // planned (and, on an immutable field, still forces a replacement).
-func substituteResolvedRef(desiredNode, storedNode, modNode, currentNode any, resolvableProperties resolver.ResolvableProperties) (any, bool) {
+func substituteResolvedRef(desiredNode, storedNode, modNode, currentNode any, resolvableProperties resolver.ResolvableProperties) (any, bool, error) {
 	desiredEnv, ok := resolvedDesiredEnvelope(desiredNode, modNode)
 	if !ok {
-		return nil, false
+		return nil, false, nil
 	}
 	storedEnv := storedAppliedEnvelope(storedNode)
 	sameRef := storedEnv != nil && storedEnv["$ref"] == desiredEnv["$ref"]
 
 	effective := desiredEnv["$value"]
 	matchesApplied := sameRef && reflect.DeepEqual(storedEnv["$applied"], effective)
-	if native, raw, found := freshResolution(desiredEnv, currentNode, resolvableProperties); found {
+	native, raw, found, err := freshResolution(desiredEnv, currentNode, resolvableProperties)
+	if err != nil {
+		return nil, false, err
+	}
+	if found {
 		effective = native
 		matchesApplied = sameRef && appliedMatches(raw, storedEnv["$applied"])
 	}
 	if matchesApplied {
-		return storedEnv["$value"], true
+		return storedEnv["$value"], true, nil
 	}
-	return effective, true
+	return effective, true, nil
 }
 
 // substituteResolvedRefInArray applies substituteResolvedRef to one array
 // element, locating the stored counterpart by the reference the desired element
 // names rather than by position: the provider may return elements in any order.
-func substituteResolvedRefInArray(desiredElem any, storedArr []any, modElem, currentElem any, resolvableProperties resolver.ResolvableProperties) (any, bool) {
+func substituteResolvedRefInArray(desiredElem any, storedArr []any, modElem, currentElem any, resolvableProperties resolver.ResolvableProperties) (any, bool, error) {
 	desiredEnv, ok := desiredElem.(map[string]any)
 	if !ok {
-		return nil, false
+		return nil, false, nil
 	}
 	var storedElem any
 	if match := storedRefElementByURI(storedArr, desiredEnv["$ref"]); match != nil {
@@ -1069,7 +1077,11 @@ func resolveRefs(current, mod, stored, desired map[string]any, resolvablePropert
 		// A reference the executor already resolved: the desired side holds the
 		// resolved value alone, and the envelope it came from lives in the
 		// unconverted desired properties.
-		if value, handled := substituteResolvedRef(desired[k], stored[k], v, current[k], resolvableProperties); handled {
+		value, handled, err := substituteResolvedRef(desired[k], stored[k], v, current[k], resolvableProperties)
+		if err != nil {
+			return err
+		}
+		if handled {
 			mod[k] = value
 			continue
 		}
@@ -1202,7 +1214,11 @@ func resolveRefs(current, mod, stored, desired map[string]any, resolvablePropert
 				if len(desiredArr) > i {
 					desiredElem = desiredArr[i]
 				}
-				if value, handled := substituteResolvedRefInArray(desiredElem, storedArr, elem, currElem, resolvableProperties); handled {
+				value, handled, err := substituteResolvedRefInArray(desiredElem, storedArr, elem, currElem, resolvableProperties)
+				if err != nil {
+					return err
+				}
+				if handled {
 					modVal[i] = value
 				}
 			}
