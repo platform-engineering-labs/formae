@@ -4,10 +4,19 @@
 
 package auth
 
+import "errors"
+
 // UnimplementedAuthPlugin can be embedded in an AuthPlugin implementation to
-// satisfy verbs the plugin does not support. Every stub returns a nil error
+// satisfy verbs the plugin does not support. Most stubs return a nil error
 // with ErrorCode set to ErrorCodeUnsupported, letting existing plugins adopt
 // the widened AuthPlugin interface without implementing every verb.
+//
+// GetAuthHeader is the exception: it returns a Go error instead. A host
+// built against the pre-widening GetAuthHeaderResponse (Headers only, no
+// Error or ErrorCode) cannot observe those fields, so a nil-error response
+// with empty Headers reads as successful, unauthenticated access. Signaling
+// through the RPC error instead makes an agent-only plugin fail closed on
+// every host version, old or new.
 //
 // Init is deliberately absent: every plugin implements it.
 type UnimplementedAuthPlugin struct{}
@@ -19,10 +28,12 @@ func (UnimplementedAuthPlugin) Validate(req *ValidateRequest, resp *ValidateResp
 	return nil
 }
 
-// GetAuthHeader reports the verb as unsupported.
+// GetAuthHeader returns an RPC error rather than a typed response field: a
+// host running against the older GetAuthHeaderResponse shape (Headers only)
+// cannot see ErrorCode, and a nil error there is indistinguishable from a
+// successful, empty-headers response.
 func (UnimplementedAuthPlugin) GetAuthHeader(req *GetAuthHeaderRequest, resp *GetAuthHeaderResponse) error {
-	resp.ErrorCode = ErrorCodeUnsupported
-	return nil
+	return errors.New("auth plugin does not support GetAuthHeader")
 }
 
 // LoginStart reports the verb as unsupported.

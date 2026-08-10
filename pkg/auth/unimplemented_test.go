@@ -21,6 +21,12 @@ func (o *onlyInit) Init(req *InitRequest, resp *InitResponse) error {
 
 var _ AuthPlugin = (*onlyInit)(nil)
 
+// TestUnimplementedAuthPlugin_StubsReturnUnsupported covers the four verbs
+// that report "unsupported" through the response's ErrorCode field with a
+// nil RPC error: Validate, LoginStart, LoginWait, Logout. These verbs did
+// not exist (or, for Validate, already fail closed via Valid=false) on
+// hosts predating the widened interface, so a typed field in the response
+// is safe.
 func TestUnimplementedAuthPlugin_StubsReturnUnsupported(t *testing.T) {
 	plugin := &onlyInit{}
 	clientConn, serverConn := pipeConn()
@@ -43,18 +49,6 @@ func TestUnimplementedAuthPlugin_StubsReturnUnsupported(t *testing.T) {
 				}
 				if resp.Valid {
 					t.Fatal("expected Valid=false")
-				}
-				if resp.ErrorCode != ErrorCodeUnsupported {
-					t.Fatalf("expected ErrorCode %q, got %q", ErrorCodeUnsupported, resp.ErrorCode)
-				}
-			},
-		},
-		{
-			name: "GetAuthHeader",
-			run: func(t *testing.T) {
-				var resp GetAuthHeaderResponse
-				if err := client.Call("AuthPlugin.GetAuthHeader", &GetAuthHeaderRequest{}, &resp); err != nil {
-					t.Fatalf("GetAuthHeader call failed: %v", err)
 				}
 				if resp.ErrorCode != ErrorCodeUnsupported {
 					t.Fatalf("expected ErrorCode %q, got %q", ErrorCodeUnsupported, resp.ErrorCode)
@@ -101,5 +95,28 @@ func TestUnimplementedAuthPlugin_StubsReturnUnsupported(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, tt.run)
+	}
+}
+
+// TestUnimplementedAuthPlugin_GetAuthHeaderFailsClosed exercises the one
+// stub that must signal unsupported through the RPC error channel instead
+// of a response field: a host built against the pre-widening
+// GetAuthHeaderResponse (Headers only) cannot see ErrorCode, so a nil-error
+// response with empty Headers would read as successful, unauthenticated
+// access. The call must come back with a non-nil error over the real
+// net/rpc round trip, not merely from the Go method in isolation.
+func TestUnimplementedAuthPlugin_GetAuthHeaderFailsClosed(t *testing.T) {
+	plugin := &onlyInit{}
+	clientConn, serverConn := pipeConn()
+
+	go Serve(plugin, serverConn)
+
+	client := rpc.NewClient(clientConn)
+	defer client.Close()
+
+	var resp GetAuthHeaderResponse
+	err := client.Call("AuthPlugin.GetAuthHeader", &GetAuthHeaderRequest{}, &resp)
+	if err == nil {
+		t.Fatal("expected a non-nil error from GetAuthHeader")
 	}
 }
