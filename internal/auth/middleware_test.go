@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/rpc"
+	"sort"
 	"testing"
 	"time"
 
@@ -89,6 +90,11 @@ func setupMiddleware(t *testing.T, validResponse bool) (*echo.Echo, *AuthPluginH
 	e.Use(NewAuthMiddleware(handle, cache))
 	e.GET("/test", func(c echo.Context) error {
 		subject, _ := c.Get(ContextKeySubject).(string)
+		subjectName, _ := c.Get(ContextKeySubjectName).(string)
+		// The response body carries the subject (existing assertions key off
+		// it) and this header carries the subject name, so tests can assert
+		// on both context values independently.
+		c.Response().Header().Set("X-Test-Subject-Name", subjectName)
 		return c.String(http.StatusOK, subject)
 	})
 
@@ -179,6 +185,7 @@ func TestMiddleware_CacheHit(t *testing.T) {
 func TestMiddleware_FreshResponseSetsSubjectOnContext(t *testing.T) {
 	e, _, _, mock := setupMiddleware(t, true)
 	mock.subject = "s"
+	mock.subjectName = "Sam Sample"
 
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
 	req.Header.Set("Authorization", "Basic dGVzdDp0ZXN0")
@@ -192,11 +199,15 @@ func TestMiddleware_FreshResponseSetsSubjectOnContext(t *testing.T) {
 	if rec.Body.String() != "s" {
 		t.Fatalf("expected subject %q on context, got %q", "s", rec.Body.String())
 	}
+	if got := rec.Header().Get("X-Test-Subject-Name"); got != "Sam Sample" {
+		t.Fatalf("expected subject name %q on context, got %q", "Sam Sample", got)
+	}
 }
 
 func TestMiddleware_CacheHitPopulatesSubjectOnContext(t *testing.T) {
 	e, _, _, mock := setupMiddleware(t, true)
 	mock.subject = "s"
+	mock.subjectName = "Sam Sample"
 
 	// First request: cache miss → calls Validate, subject comes from the fresh response.
 	req1 := httptest.NewRequest(http.MethodGet, "/test", nil)
@@ -210,9 +221,13 @@ func TestMiddleware_CacheHitPopulatesSubjectOnContext(t *testing.T) {
 	if rec1.Body.String() != "s" {
 		t.Fatalf("first request: expected subject %q, got %q", "s", rec1.Body.String())
 	}
+	if got := rec1.Header().Get("X-Test-Subject-Name"); got != "Sam Sample" {
+		t.Fatalf("first request: expected subject name %q, got %q", "Sam Sample", got)
+	}
 
-	// Second request with the same credentials: cache hit, but the subject must
-	// still land on the context, and the plugin must not be called again.
+	// Second request with the same credentials: cache hit, but the subject and
+	// subject name must still land on the context, reconstructed from the
+	// cache entry, and the plugin must not be called again.
 	req2 := httptest.NewRequest(http.MethodGet, "/test", nil)
 	req2.Header.Set("Authorization", "Basic dGVzdDp0ZXN0")
 	rec2 := httptest.NewRecorder()
@@ -223,6 +238,9 @@ func TestMiddleware_CacheHitPopulatesSubjectOnContext(t *testing.T) {
 	}
 	if rec2.Body.String() != "s" {
 		t.Fatalf("second request (cache hit): expected subject %q on context, got %q", "s", rec2.Body.String())
+	}
+	if got := rec2.Header().Get("X-Test-Subject-Name"); got != "Sam Sample" {
+		t.Fatalf("second request (cache hit): expected subject name %q on context, got %q", "Sam Sample", got)
 	}
 	if mock.callCount != 1 {
 		t.Fatalf("expected 1 Validate call (second request served from cache), got %d", mock.callCount)
@@ -253,50 +271,72 @@ func TestComputeCacheKey_Injective(t *testing.T) {
 	if computeCacheKey(map[string][]string(twoHeaders)) == computeCacheKey(map[string][]string(oneHeaderThreeValues)) {
 		t.Fatal("expected different cache keys when the same bytes are distributed across a different number of headers and values")
 	}
+
+	// The same headers, assigned into two maps in opposite order, must hash
+	// to the same key: the key must not depend on map iteration order. Go
+	// randomizes iteration order per range, independently for each map, so
+	// the comparison is repeated many times to make an order-dependent
+	// implementation overwhelmingly likely to disagree at least once.
+	ascending := map[string][]string{}
+	ascending["Accept-Charset"] = []string{"utf-8"}
+	ascending["Authorization"] = []string{"Bearer token"}
+	ascending["X-Custom-Auth"] = []string{"one", "two"}
+	ascending["X-Signature"] = []string{"sig"}
+
+	descending := map[string][]string{}
+	descending["X-Signature"] = []string{"sig"}
+	descending["X-Custom-Auth"] = []string{"one", "two"}
+	descending["Authorization"] = []string{"Bearer token"}
+	descending["Accept-Charset"] = []string{"utf-8"}
+
+	for i := 0; i < 50; i++ {
+		if computeCacheKey(ascending) != computeCacheKey(descending) {
+			t.Fatalf("expected the same cache key regardless of map iteration order (repetition %d)", i)
+		}
+	}
 }
 
+// TestMiddleware_PluginNeverObservesExcludedHeaders covers every header in
+// the production nonAuthHeaders exclusion set (read from the package
+// variable itself, not restated here) and, for each one, proves the plugin
+// never sees it: a request carrying that header, with a plugin mock that
+// would report a different subject if it could see the header, still gets
+// the configured subject, and the header is absent from what the plugin
+// actually received.
 func TestMiddleware_PluginNeverObservesExcludedHeaders(t *testing.T) {
-	e, _, _, mock := setupMiddleware(t, true)
-	mock.subject = "s"
-	// If the plugin could see the excluded X-Request-Id header, it would
-	// report this subject instead of the configured one.
-	mock.leakOnHeader = "X-Request-Id"
-	mock.leakSubject = "leaked"
+	headers := make([]string, 0, len(nonAuthHeaders))
+	for header := range nonAuthHeaders {
+		headers = append(headers, header)
+	}
+	sort.Strings(headers)
 
-	// First request: cache miss, calls Validate.
-	req1 := httptest.NewRequest(http.MethodGet, "/test", nil)
-	req1.Header.Set("Authorization", "Basic dGVzdDp0ZXN0")
-	req1.Header.Set("X-Request-Id", "request-one")
-	rec1 := httptest.NewRecorder()
-	e.ServeHTTP(rec1, req1)
+	for _, header := range headers {
+		header := header
+		t.Run(header, func(t *testing.T) {
+			e, _, _, mock := setupMiddleware(t, true)
+			mock.subject = "s"
+			canonical := http.CanonicalHeaderKey(header)
+			// If the plugin could see this excluded header, it would report
+			// this subject instead of the configured one.
+			mock.leakOnHeader = canonical
+			mock.leakSubject = "leaked"
 
-	if rec1.Code != http.StatusOK {
-		t.Fatalf("first request: expected 200, got %d", rec1.Code)
-	}
-	if rec1.Body.String() != "s" {
-		t.Fatalf("first request: expected subject %q, got %q (the excluded header reached the plugin)", "s", rec1.Body.String())
-	}
-	if _, present := mock.lastHeaders["X-Request-Id"]; present {
-		t.Fatalf("expected the plugin to never observe the excluded X-Request-Id header, got %v", mock.lastHeaders)
-	}
+			req := httptest.NewRequest(http.MethodGet, "/test", nil)
+			req.Header.Set("Authorization", "Basic dGVzdDp0ZXN0")
+			req.Header.Set(header, "excluded-value")
+			rec := httptest.NewRecorder()
+			e.ServeHTTP(rec, req)
 
-	// Second request: identical auth-relevant headers, a different value for
-	// the excluded header. Same cache key, so this is a cache hit and
-	// Validate is not called again.
-	req2 := httptest.NewRequest(http.MethodGet, "/test", nil)
-	req2.Header.Set("Authorization", "Basic dGVzdDp0ZXN0")
-	req2.Header.Set("X-Request-Id", "request-two")
-	rec2 := httptest.NewRecorder()
-	e.ServeHTTP(rec2, req2)
-
-	if rec2.Code != http.StatusOK {
-		t.Fatalf("second request: expected 200, got %d", rec2.Code)
-	}
-	if rec2.Body.String() != "s" {
-		t.Fatalf("second request: expected subject %q, got %q", "s", rec2.Body.String())
-	}
-	if mock.callCount != 1 {
-		t.Fatalf("expected 1 Validate call total (second request served from cache), got %d", mock.callCount)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d", rec.Code)
+			}
+			if rec.Body.String() != "s" {
+				t.Fatalf("expected subject %q, got %q (the excluded header %q reached the plugin)", "s", rec.Body.String(), canonical)
+			}
+			if _, present := mock.lastHeaders[canonical]; present {
+				t.Fatalf("expected the plugin to never observe the excluded header %q, got %v", canonical, mock.lastHeaders)
+			}
+		})
 	}
 }
 
