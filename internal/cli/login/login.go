@@ -95,7 +95,7 @@ func runLogin(c authClient, out io.Writer, force, device bool) error {
 	}
 
 	if startResp.Status == "already_authenticated" {
-		_, _ = fmt.Fprintf(out, "already signed in as %s\n", startResp.SubjectName)
+		printSignedIn(out, "already signed in", startResp.SubjectName, startResp.Subject)
 		return nil
 	}
 
@@ -113,6 +113,24 @@ func runLogin(c authClient, out io.Writer, force, device bool) error {
 		return fmt.Errorf("%s", authmsg.DescribeAuthError(waitResp.ErrorCode, waitResp.Error))
 	}
 
-	_, _ = fmt.Fprintf(out, "signed in as %s\n", waitResp.SubjectName)
+	printSignedIn(out, "signed in", waitResp.SubjectName, waitResp.Subject)
 	return nil
+}
+
+// printSignedIn prints verb ("signed in" / "already signed in") followed by
+// the best available identity label. Both SubjectName (a display hint) and
+// Subject (a stable id) are documented as optional in pkg/auth — nothing
+// obliges a plugin to set either — so this falls back from SubjectName to
+// Subject and, if neither is set, drops the "as <name>" clause entirely
+// rather than printing a message with nothing after "as ".
+func printSignedIn(out io.Writer, verb, subjectName, subject string) {
+	name := subjectName
+	if name == "" {
+		name = subject
+	}
+	if name == "" {
+		_, _ = fmt.Fprintf(out, "%s\n", verb)
+		return
+	}
+	_, _ = fmt.Fprintf(out, "%s as %s\n", verb, name)
 }

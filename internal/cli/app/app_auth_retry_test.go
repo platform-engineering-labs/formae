@@ -279,7 +279,11 @@ func TestWithAuthRetry_ForcedAuthClientFailureSurfacesRealError(t *testing.T) {
 // GetAuthHeader response with no ErrorCode and no Error, but no usable
 // credential in Headers either, is NOT treated as success on the initial
 // fetch: no HTTP request is issued, and the error names the real cause
-// instead of silently attaching an empty Authorization header.
+// instead of silently attaching an empty Authorization header. This
+// includes a credential returned under any key other than the canonical
+// "Authorization" one — internal/api.NewClient only ever transmits that
+// key, so a value under any other name (or spelling) is one the CLI can
+// never actually send.
 func TestWithAuthRetry_NoCredentialOnInitialFetchFailsClosed(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -288,6 +292,8 @@ func TestWithAuthRetry_NoCredentialOnInitialFetchFailsClosed(t *testing.T) {
 		{name: "nil headers", headers: nil},
 		{name: "empty headers map", headers: map[string][]string{}},
 		{name: "map with only an empty value", headers: map[string][]string{"Authorization": {""}}},
+		{name: "credential under a different header entirely", headers: map[string][]string{"X-Api-Key": {"secret-key"}}},
+		{name: "credential under a non-canonical lowercase key", headers: map[string][]string{"authorization": {"secret-key"}}},
 	}
 
 	for _, tt := range tests {
@@ -303,6 +309,35 @@ func TestWithAuthRetry_NoCredentialOnInitialFetchFailsClosed(t *testing.T) {
 			require.Error(t, err)
 			assert.Equal(t, "the auth plugin returned no credential", err.Error())
 			assert.Equal(t, 0, op.calls, "no request may be sent with an unusable credential")
+		})
+	}
+}
+
+// TestHasCredential pins hasCredential's exact semantics directly: it must
+// test the credential value the CLI will actually transmit — the canonical
+// "Authorization" header as http.Header.Get would resolve it — rather than
+// crediting any non-empty value found under any key. http.Header.Get
+// canonicalises the key it looks up, not the keys already stored in the
+// map, so a plain-map "authorization" (lowercase) entry is NOT the same as
+// a canonical "Authorization" one; this test asserts that real behavior
+// rather than an assumption about it.
+func TestHasCredential(t *testing.T) {
+	tests := []struct {
+		name    string
+		headers map[string][]string
+		want    bool
+	}{
+		{name: "nil map", headers: nil, want: false},
+		{name: "empty map", headers: map[string][]string{}, want: false},
+		{name: "canonical Authorization with a value", headers: map[string][]string{"Authorization": {"secret"}}, want: true},
+		{name: "canonical Authorization with only an empty value", headers: map[string][]string{"Authorization": {""}}, want: false},
+		{name: "credential under a different header entirely", headers: map[string][]string{"X-Api-Key": {"secret"}}, want: false},
+		{name: "non-canonical lowercase authorization key", headers: map[string][]string{"authorization": {"secret"}}, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, hasCredential(tt.headers))
 		})
 	}
 }

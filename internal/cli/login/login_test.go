@@ -145,6 +145,86 @@ func TestRunLogin_AlreadyAuthenticatedShortCircuits(t *testing.T) {
 	assert.False(t, c.loginWaitCalled, "LoginWait must not be called when already authenticated")
 }
 
+// TestRunLogin_SignedInFallsBackToSubjectWhenNameEmpty verifies that when a
+// plugin leaves SubjectName empty after LoginWait — both it and Subject are
+// documented as optional — the success message falls back to the stable
+// Subject id rather than printing "signed in as " with nothing after it.
+func TestRunLogin_SignedInFallsBackToSubjectWhenNameEmpty(t *testing.T) {
+	c := &stubAuthClient{
+		loginStartResp: &pkgauth.LoginStartResponse{
+			Status:     "started",
+			Method:     "browser",
+			BrowserURL: "https://issuer.example/authorize?req=abc",
+			SessionID:  "sess-1",
+		},
+		loginWaitResp: &pkgauth.LoginWaitResponse{
+			Subject: "subj-123",
+		},
+	}
+
+	var out bytes.Buffer
+	err := runLogin(c, &out, false, false)
+	require.NoError(t, err)
+
+	assert.Equal(t, "Open this URL to sign in:\n  https://issuer.example/authorize?req=abc\nsigned in as subj-123\n", out.String())
+}
+
+// TestRunLogin_SignedInOmitsIdentityWhenNeitherSet verifies that when a
+// plugin sets neither SubjectName nor Subject after LoginWait, the success
+// message drops the "as <name>" clause entirely rather than printing a
+// blank name.
+func TestRunLogin_SignedInOmitsIdentityWhenNeitherSet(t *testing.T) {
+	c := &stubAuthClient{
+		loginStartResp: &pkgauth.LoginStartResponse{
+			Status:     "started",
+			Method:     "browser",
+			BrowserURL: "https://issuer.example/authorize?req=abc",
+			SessionID:  "sess-1",
+		},
+		loginWaitResp: &pkgauth.LoginWaitResponse{},
+	}
+
+	var out bytes.Buffer
+	err := runLogin(c, &out, false, false)
+	require.NoError(t, err)
+
+	assert.Equal(t, "Open this URL to sign in:\n  https://issuer.example/authorize?req=abc\nsigned in\n", out.String())
+}
+
+// TestRunLogin_AlreadyAuthenticatedFallsBackToSubjectWhenNameEmpty verifies
+// the same SubjectName-to-Subject fallback on the already-authenticated
+// short-circuit path.
+func TestRunLogin_AlreadyAuthenticatedFallsBackToSubjectWhenNameEmpty(t *testing.T) {
+	c := &stubAuthClient{
+		loginStartResp: &pkgauth.LoginStartResponse{
+			Status:  "already_authenticated",
+			Subject: "subj-456",
+		},
+	}
+
+	var out bytes.Buffer
+	err := runLogin(c, &out, false, false)
+	require.NoError(t, err)
+
+	assert.Equal(t, "already signed in as subj-456\n", out.String())
+}
+
+// TestRunLogin_AlreadyAuthenticatedOmitsIdentityWhenNeitherSet verifies the
+// same no-identity fallback on the already-authenticated short-circuit path.
+func TestRunLogin_AlreadyAuthenticatedOmitsIdentityWhenNeitherSet(t *testing.T) {
+	c := &stubAuthClient{
+		loginStartResp: &pkgauth.LoginStartResponse{
+			Status: "already_authenticated",
+		},
+	}
+
+	var out bytes.Buffer
+	err := runLogin(c, &out, false, false)
+	require.NoError(t, err)
+
+	assert.Equal(t, "already signed in\n", out.String())
+}
+
 // TestRunLogin_UnsupportedOnLoginStart verifies that a plugin declining
 // LoginStart with the unsupported code fails the command with the shared
 // unsupported copy, without proceeding to LoginWait.

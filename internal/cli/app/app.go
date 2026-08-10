@@ -932,18 +932,19 @@ func (a *App) forceRefreshAuthHeader() (http.Header, error) {
 // eliminate.
 const noCredentialMessage = "the auth plugin returned no credential"
 
-// hasCredential reports whether headers carries an actual credential value,
-// not merely a non-nil map: a map present but holding only empty-string
-// values is the same failure as no map at all.
+// hasCredential reports whether headers carries the credential the CLI will
+// actually transmit. internal/api.NewClient attaches exactly one outgoing
+// header — Authorization — read via http.Header.Get, which canonicalises
+// the key it looks up but not the keys already stored in the map (see
+// pkg/auth.GetAuthHeaderResponse.Headers: "the client attaches only the
+// canonical 'Authorization' header"). So a plugin that returns its
+// credential under a different name entirely, or even as a non-canonical
+// "authorization" key, produces a value this CLI can never send — the same
+// failure as an empty or absent header — and must fail closed the same way,
+// rather than being read as success by a scan that credits any non-empty
+// value under any key.
 func hasCredential(headers map[string][]string) bool {
-	for _, values := range headers {
-		for _, v := range values {
-			if v != "" {
-				return true
-			}
-		}
-	}
-	return false
+	return http.Header(headers).Get("Authorization") != ""
 }
 
 func (a *App) getAuthAndNetHandlers() (http.Header, *http.Client, error) {
