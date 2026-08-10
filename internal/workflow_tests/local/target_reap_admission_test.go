@@ -75,7 +75,7 @@ func TestApplyForma_ReapedTargetResourceOnlyRejected(t *testing.T) {
 			},
 			Targets: []pkgmodel.Target{{Label: "reap-admit-target"}},
 		}
-		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client")
+		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client", "", "")
 		r.NoError(err)
 
 		r.Eventually(func() bool {
@@ -94,7 +94,7 @@ func TestApplyForma_ReapedTargetResourceOnlyRejected(t *testing.T) {
 				{Label: "res1", Type: "FakeAWS::Resource", Properties: v1, Schema: schema, Stack: "reap-admit-stack", Target: "reap-admit-target"},
 			},
 		}
-		_, err = m.ApplyForma(resourceOnly, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModePatch}, "rejected-client")
+		_, err = m.ApplyForma(resourceOnly, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModePatch}, "rejected-client", "", "")
 		r.Error(err, "an apply that touches a reaped target without re-declaring it must be rejected")
 
 		var reapedErr apimodel.TargetReapedError
@@ -131,7 +131,7 @@ func TestDestroyForma_ReapedTargetNotRejected(t *testing.T) {
 			},
 			Targets: []pkgmodel.Target{{Label: "reap-destroy-admit-target"}},
 		}
-		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client")
+		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client", "", "")
 		r.NoError(err)
 
 		r.Eventually(func() bool {
@@ -144,7 +144,7 @@ func TestDestroyForma_ReapedTargetNotRejected(t *testing.T) {
 		targetOnly := &pkgmodel.Forma{
 			Targets: []pkgmodel.Target{{Label: "reap-destroy-admit-target"}},
 		}
-		_, err = m.DestroyForma(targetOnly, &config.FormaCommandConfig{}, "test-client")
+		_, err = m.DestroyForma(targetOnly, &config.FormaCommandConfig{}, "test-client", "", "")
 		r.NoError(err, "destroy against a reaped target must not be rejected")
 
 		var reapedErr apimodel.TargetReapedError

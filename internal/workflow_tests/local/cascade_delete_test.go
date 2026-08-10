@@ -52,7 +52,7 @@ func TestMetastructure_DestroyWithCascade_SimulateShowsCascades(t *testing.T) {
 
 		_, err = m.ApplyForma(parentForma, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test")
+		}, "test", "", "")
 		require.NoError(t, err)
 
 		// Wait for parent to be created
@@ -112,7 +112,7 @@ func TestMetastructure_DestroyWithCascade_SimulateShowsCascades(t *testing.T) {
 		resp, err := m.DestroyForma(destroyParentOnlyForma, &config.FormaCommandConfig{
 			Mode:     pkgmodel.FormaApplyModeReconcile,
 			Simulate: true,
-		}, "test")
+		}, "test", "", "")
 		require.NoError(t, err)
 
 		// Step 4: Verify cascade detection in the simulation response
@@ -176,7 +176,7 @@ func TestDestroyWithCascade_SimulateShowsCascadeTargets(t *testing.T) {
 
 		_, err = m.ApplyForma(providerForma, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test")
+		}, "test", "", "")
 		require.NoError(t, err)
 
 		// Step 2: Wait for apply to complete
@@ -206,7 +206,7 @@ func TestDestroyWithCascade_SimulateShowsCascadeTargets(t *testing.T) {
 		resp, err := m.DestroyForma(providerForma, &config.FormaCommandConfig{
 			Mode:     pkgmodel.FormaApplyModeReconcile,
 			Simulate: true,
-		}, "test")
+		}, "test", "", "")
 		require.NoError(t, err)
 
 		// Step 6: Assert — simulation response includes a target update for "consumer" with IsCascade=true
@@ -256,7 +256,7 @@ func TestDestroyWithCascade_CascadeDeletesDependentTargetAndResources(t *testing
 
 		_, err = m.ApplyForma(providerForma, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test")
+		}, "test", "", "")
 		require.NoError(t, err)
 
 		// Step 2: Wait for apply to complete, get cluster KSUID
@@ -309,7 +309,7 @@ func TestDestroyWithCascade_CascadeDeletesDependentTargetAndResources(t *testing
 		_, err = m.DestroyForma(providerForma, &config.FormaCommandConfig{
 			Mode:         pkgmodel.FormaApplyModeReconcile,
 			OnDependents: "cascade",
-		}, "test")
+		}, "test", "", "")
 		require.NoError(t, err)
 
 		// Step 6: Wait for destroy to complete
@@ -366,7 +366,7 @@ func TestDestroyWithCascade_TargetDependentsAbortByDefault(t *testing.T) {
 
 		_, err = m.ApplyForma(providerForma, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test")
+		}, "test", "", "")
 		require.NoError(t, err)
 
 		assert.Eventually(t, func() bool {
@@ -394,7 +394,7 @@ func TestDestroyWithCascade_TargetDependentsAbortByDefault(t *testing.T) {
 		// consumer target, and no command is executed.
 		_, err = m.DestroyForma(providerForma, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test")
+		}, "test", "", "")
 		require.Error(t, err, "default destroy must abort when a dependent target exists")
 
 		var depErr apimodel.FormaTargetHasDependentsError
@@ -412,7 +412,7 @@ func TestDestroyWithCascade_TargetDependentsAbortByDefault(t *testing.T) {
 		_, err = m.DestroyForma(providerForma, &config.FormaCommandConfig{
 			Mode:         pkgmodel.FormaApplyModeReconcile,
 			OnDependents: "cascade",
-		}, "test")
+		}, "test", "", "")
 		require.NoError(t, err, "on-dependents=cascade must be accepted")
 
 		assert.Eventually(t, func() bool {
@@ -451,7 +451,7 @@ func TestDestroyWithCascade_ResourceDependentsAbortByDefault(t *testing.T) {
 		}
 		_, err = m.ApplyForma(providerForma, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test")
+		}, "test", "", "")
 		require.NoError(t, err)
 
 		assert.Eventually(t, func() bool {
@@ -482,7 +482,7 @@ func TestDestroyWithCascade_ResourceDependentsAbortByDefault(t *testing.T) {
 		// cross-stack dependent, and nothing runs.
 		_, err = m.DestroyForma(providerForma, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test")
+		}, "test", "", "")
 		require.Error(t, err, "default destroy must abort when a dependent resource exists")
 
 		var depErr apimodel.FormaResourceHasDependentsError
@@ -501,7 +501,7 @@ func TestDestroyWithCascade_ResourceDependentsAbortByDefault(t *testing.T) {
 		_, err = m.DestroyForma(providerForma, &config.FormaCommandConfig{
 			Mode:         pkgmodel.FormaApplyModeReconcile,
 			OnDependents: "cascade",
-		}, "test")
+		}, "test", "", "")
 		require.NoError(t, err, "on-dependents=cascade must be accepted")
 	})
 }

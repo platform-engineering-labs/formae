@@ -128,7 +128,7 @@ func TestMetastructure_ApplyFormaWithRes(t *testing.T) {
 
 		m.ApplyForma(bucketForma, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModePatch,
-		}, "test")
+		}, "test", "", "")
 
 		assert.Eventually(t, func() bool {
 			fas, err := m.Datastore.LoadFormaCommands()

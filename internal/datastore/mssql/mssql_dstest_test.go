@@ -132,6 +132,12 @@ func TestDatastore(t *testing.T) {
 				)
 				return err
 			},
+			NullFormaCommandSubjectForTest: func(commandID string) error {
+				_, err := conn.Exec(
+					`UPDATE forma_commands SET subject = NULL, subject_name = NULL WHERE command_id = @p1`, commandID,
+				)
+				return err
+			},
 			CleanUpFn: func() error {
 				ds.Close()
 				m, err := sql.Open("sqlserver", dstestMSSQLBase+"&database=master")

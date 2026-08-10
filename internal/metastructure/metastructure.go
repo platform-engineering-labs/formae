@@ -51,9 +51,9 @@ const (
 )
 
 type MetastructureAPI interface {
-	ApplyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error)
-	DestroyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error)
-	DestroyByQuery(query string, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error)
+	ApplyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string, subject string, subjectName string) (*apimodel.SubmitCommandResponse, error)
+	DestroyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string, subject string, subjectName string) (*apimodel.SubmitCommandResponse, error)
+	DestroyByQuery(query string, config *config.FormaCommandConfig, clientID string, subject string, subjectName string) (*apimodel.SubmitCommandResponse, error)
 	CancelCommand(commandID string, force bool, clientID string) (*changeset.CancelResponse, error)
 	CancelCommandsByQuery(query string, force bool, clientID string) (*apimodel.CancelCommandResponse, error)
 	ListFormaCommandStatus(query string, clientID string, n int) (*apimodel.ListCommandStatusResponse, error)
@@ -65,7 +65,7 @@ type MetastructureAPI interface {
 	ExtractPolicies() ([]apimodel.PolicyInventoryItem, error)
 	ForceSync() error
 	ForceDiscovery() error
-	ForceAutoReconcile(stackLabel string) (*apimodel.ForceReconcileResponse, error)
+	ForceAutoReconcile(stackLabel string, subject string, subjectName string) (*apimodel.ForceReconcileResponse, error)
 	ForceCheckTTL() (*apimodel.ForceCheckTTLResponse, error)
 	ForceReap() error
 	ListDrift(stack string) (*apimodel.ModifiedStack, error)
@@ -295,7 +295,7 @@ func (m *Metastructure) callActor(targetPID gen.ProcessID, message any) (any, er
 	}
 }
 
-func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error) {
+func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string, subject string, subjectName string) (*apimodel.SubmitCommandResponse, error) {
 	m.commandMu.Lock()
 	defer m.commandMu.Unlock()
 
@@ -321,7 +321,7 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 		}
 	}
 
-	fa, err := FormaCommandFromForma(forma, config, pkgmodel.CommandApply, m.Datastore, clientID, resource_update.FormaCommandSourceUser, m.Cfg.Agent.Synchronization.Interval)
+	fa, err := FormaCommandFromForma(forma, config, pkgmodel.CommandApply, m.Datastore, clientID, subject, subjectName, resource_update.FormaCommandSourceUser, m.Cfg.Agent.Synchronization.Interval)
 	if err != nil {
 		if requiredFieldsErr, ok := err.(apimodel.RequiredFieldMissingOnCreateError); ok {
 			return nil, requiredFieldsErr
@@ -596,13 +596,15 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 
 func translateToAPICommand(fa *forma_command.FormaCommand) apimodel.Command {
 	apiCommand := apimodel.Command{
-		CommandID: fa.ID,
-		Command:   string(fa.Command),
-		Mode:      string(fa.Config.Mode),
-		Source:    string(fa.Source),
-		State:     string(fa.State),
-		StartTs:   fa.StartTs,
-		EndTs:     fa.ModifiedTs,
+		CommandID:   fa.ID,
+		Command:     string(fa.Command),
+		Mode:        string(fa.Config.Mode),
+		Source:      string(fa.Source),
+		Subject:     fa.Subject,
+		SubjectName: fa.SubjectName,
+		State:       string(fa.State),
+		StartTs:     fa.StartTs,
+		EndTs:       fa.ModifiedTs,
 	}
 	for _, ru := range fa.ResourceUpdates {
 		var dur time.Duration = 0
@@ -730,7 +732,7 @@ func translateToAPICommand(fa *forma_command.FormaCommand) apimodel.Command {
 	return apiCommand
 }
 
-func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error) {
+func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string, subject string, subjectName string) (*apimodel.SubmitCommandResponse, error) {
 	m.commandMu.Lock()
 	defer m.commandMu.Unlock()
 
@@ -750,7 +752,7 @@ func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.Forma
 		}
 	}
 
-	fa, err := FormaCommandFromForma(forma, config, pkgmodel.CommandDestroy, m.Datastore, clientID, resource_update.FormaCommandSourceUser, m.Cfg.Agent.Synchronization.Interval)
+	fa, err := FormaCommandFromForma(forma, config, pkgmodel.CommandDestroy, m.Datastore, clientID, subject, subjectName, resource_update.FormaCommandSourceUser, m.Cfg.Agent.Synchronization.Interval)
 	if err != nil {
 		slog.Error("Failed to create destroy from forma", "error", err)
 		return nil, err
@@ -861,7 +863,7 @@ func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.Forma
 	}, nil
 }
 
-func (m *Metastructure) DestroyByQuery(query string, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error) {
+func (m *Metastructure) DestroyByQuery(query string, config *config.FormaCommandConfig, clientID string, subject string, subjectName string) (*apimodel.SubmitCommandResponse, error) {
 	q := querier.NewBlugeQuerier(m.Datastore)
 	resources, err := q.QueryResourcesForDestroy(query)
 	if err != nil {
@@ -878,7 +880,7 @@ func (m *Metastructure) DestroyByQuery(query string, config *config.FormaCommand
 
 	forma := pkgmodel.FormaFromResources(managedResources)
 
-	return m.DestroyForma(forma, config, clientID)
+	return m.DestroyForma(forma, config, clientID, subject, subjectName)
 }
 
 func (m *Metastructure) CancelCommand(commandID string, force bool, clientID string) (*changeset.CancelResponse, error) {
@@ -1127,7 +1129,7 @@ func (m *Metastructure) ForceReap() error {
 	return nil
 }
 
-func (m *Metastructure) ForceAutoReconcile(stackLabel string) (*apimodel.ForceReconcileResponse, error) {
+func (m *Metastructure) ForceAutoReconcile(stackLabel string, subject string, subjectName string) (*apimodel.ForceReconcileResponse, error) {
 	m.commandMu.Lock()
 	defer m.commandMu.Unlock()
 
@@ -1173,7 +1175,7 @@ func (m *Metastructure) ForceAutoReconcile(stackLabel string) (*apimodel.ForceRe
 	}
 
 	// Prepare the reconcile command and changeset
-	result, err := prepareReconcile(m.Datastore, stackLabel, "force-reconcile")
+	result, err := prepareReconcile(m.Datastore, stackLabel, "force-reconcile", subject, subjectName)
 	if err != nil {
 		return nil, err
 	}
@@ -1837,6 +1839,8 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 	command pkgmodel.Command,
 	ds datastore.Datastore,
 	clientID string,
+	subject string,
+	subjectName string,
 	source resource_update.FormaCommandSource,
 	syncInterval time.Duration) (*forma_command.FormaCommand, error) {
 
@@ -1999,6 +2003,8 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 		stackUpdates,
 		policyUpdates,
 		clientID,
+		subject,
+		subjectName,
 		forma_command.SourceUser,
 	), nil
 }

@@ -169,7 +169,7 @@ func TestExecutorTerminationCascadesToResourceUpdaters(t *testing.T) {
 		respB, err := m.ApplyForma(
 			formaWithOneResource("stack-b", "b-vpc"),
 			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
-			"test-client",
+			"test-client", "", "",
 		)
 		require.NoError(t, err)
 		commandIDB := respB.CommandID
@@ -212,7 +212,7 @@ func TestExecutorTerminationCascadesToResourceUpdaters(t *testing.T) {
 		respA, err := m.ApplyForma(
 			formaWithOneResource("stack-a", "a-vpc"),
 			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
-			"test-client",
+			"test-client", "", "",
 		)
 		require.NoError(t, err)
 		commandIDA := respA.CommandID
@@ -295,7 +295,7 @@ func TestExecutorTerminationCascadesToResolveCache(t *testing.T) {
 		resp, err := m.ApplyForma(
 			formaWithOneResource("stack-rc", "rc-vpc"),
 			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
-			"test-client",
+			"test-client", "", "",
 		)
 		require.NoError(t, err)
 		commandID := resp.CommandID
@@ -387,7 +387,7 @@ func TestExecutorTerminationCascadesToTargetUpdaters(t *testing.T) {
 
 		seedResp, err := m.ApplyForma(seedForma,
 			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
-			"test-client")
+			"test-client", "", "")
 		require.NoError(t, err)
 
 		// Wait for the seed command to complete successfully.
@@ -412,7 +412,7 @@ func TestExecutorTerminationCascadesToTargetUpdaters(t *testing.T) {
 				Targets: []pkgmodel.Target{{Label: "consumer-b", Namespace: "FakeAWS", Config: consumerConfig}},
 			},
 			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
-			"test-client",
+			"test-client", "", "",
 		)
 		require.NoError(t, err)
 		commandIDB := respB.CommandID
@@ -440,7 +440,7 @@ func TestExecutorTerminationCascadesToTargetUpdaters(t *testing.T) {
 				Targets: []pkgmodel.Target{{Label: "consumer-a", Namespace: "FakeAWS", Config: consumerConfig}},
 			},
 			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
-			"test-client",
+			"test-client", "", "",
 		)
 		require.NoError(t, err)
 		commandIDA := respA.CommandID
@@ -515,7 +515,7 @@ func TestResourceUpdaterTerminationCascadesToPluginOperator(t *testing.T) {
 		resp, err := m.ApplyForma(
 			formaWithOneResource("stack-op", "op-vpc"),
 			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
-			"test-client",
+			"test-client", "", "",
 		)
 		require.NoError(t, err)
 		commandID := resp.CommandID
@@ -675,7 +675,7 @@ func TestPluginOperatorCrashConvergesViaTimeout(t *testing.T) {
 
 		resp, err := m.ApplyForma(forma, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test-client")
+		}, "test-client", "", "")
 		require.NoError(t, err)
 		commandID := resp.CommandID
 

@@ -29,13 +29,13 @@ import (
 // resource that references it via a $res envelope carrying a $json dotted path.
 //
 // The test verifies three invariants that together define the .json() contract:
-//   1. The consumer's resolved property value equals the EXTRACTED scalar (the
-//      leaf at the $json path), not the whole JSON document.
-//   2. The secret's own stored SecretString is hashed at rest ($hashed:true),
-//      so no plaintext of the JSON document (including the inner password it
-//      contains) survives in the resources table.
-//   3. No plaintext of the extracted scalar nor the outer JSON document appears
-//      in any resource_updates column (DesiredState/PriorState/progress).
+//  1. The consumer's resolved property value equals the EXTRACTED scalar (the
+//     leaf at the $json path), not the whole JSON document.
+//  2. The secret's own stored SecretString is hashed at rest ($hashed:true),
+//     so no plaintext of the JSON document (including the inner password it
+//     contains) survives in the resources table.
+//  3. No plaintext of the extracted scalar nor the outer JSON document appears
+//     in any resource_updates column (DesiredState/PriorState/progress).
 func TestSecretJSON_RefWithJSONPathResolvesToExtractedScalar(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		// The secret value is a JSON document. The inner password is what the
@@ -102,9 +102,9 @@ func TestSecretJSON_RefWithJSONPathResolvesToExtractedScalar(t *testing.T) {
 		// $visibility:Opaque propagates to the resolved Value, so the extracted
 		// scalar is also hashed at rest in the consumer's stored properties.
 		consumer := pkgmodel.Resource{
-			Label: "my-bucket",
-			Type:  "FakeAWS::S3::Bucket",
-			Stack: stack,
+			Label:  "my-bucket",
+			Type:   "FakeAWS::S3::Bucket",
+			Stack:  stack,
 			Target: "test-target",
 			Properties: json.RawMessage(`{
 				"BucketName": "my-bucket",
@@ -126,7 +126,7 @@ func TestSecretJSON_RefWithJSONPathResolvesToExtractedScalar(t *testing.T) {
 			Targets:   []pkgmodel.Target{{Label: "test-target", Namespace: "test-namespace"}},
 		}
 
-		_, err = m.ApplyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id")
+		_, err = m.ApplyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
 		require.NoError(t, err)
 		waitForApplyComplete(t, m)
 

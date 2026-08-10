@@ -113,6 +113,13 @@ func TestDatastore(t *testing.T) {
 				)
 				return err
 			},
+			NullFormaCommandSubjectForTest: func(commandID string) error {
+				conn := d.Conn()
+				_, err := conn.Exec(
+					`UPDATE forma_commands SET subject = NULL, subject_name = NULL WHERE command_id = ?`, commandID,
+				)
+				return err
+			},
 		}
 	})
 }

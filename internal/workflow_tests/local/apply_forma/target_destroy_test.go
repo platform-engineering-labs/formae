@@ -107,7 +107,7 @@ func TestDestroyForma_TargetOnly(t *testing.T) {
 			},
 		}
 
-		_, err = m.ApplyForma(applyForma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id")
+		_, err = m.ApplyForma(applyForma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
 		require.NoError(t, err)
 		waitForCommands(t, m, 1)
 
@@ -123,7 +123,7 @@ func TestDestroyForma_TargetOnly(t *testing.T) {
 			},
 		}
 
-		_, err = m.DestroyForma(destroyForma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id")
+		_, err = m.DestroyForma(destroyForma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
 		require.NoError(t, err)
 		waitForCommands(t, m, 2)
 
@@ -184,14 +184,14 @@ func TestDestroyForma_TargetWithResourcesInSameTarget(t *testing.T) {
 		}
 
 		// Step 1: Apply
-		_, err = m.ApplyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id")
+		_, err = m.ApplyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
 		require.NoError(t, err)
 		waitForCommands(t, m, 1)
 
 		// Step 2: Destroy the same forma (target + resources in that target).
 		// The resource is deleted but the plain target (no $ref) survives
 		// because the forma has resources — plain targets persist independently.
-		_, err = m.DestroyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id")
+		_, err = m.DestroyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
 		require.NoError(t, err)
 		waitForCommands(t, m, 2)
 
@@ -263,7 +263,7 @@ func TestDestroyForma_TargetWithResourcesInDifferentTarget(t *testing.T) {
 			},
 		}
 
-		_, err = m.ApplyForma(applyForma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id")
+		_, err = m.ApplyForma(applyForma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
 		require.NoError(t, err)
 		waitForCommands(t, m, 1)
 
@@ -292,7 +292,7 @@ func TestDestroyForma_TargetWithResourcesInDifferentTarget(t *testing.T) {
 			},
 		}
 
-		_, err = m.DestroyForma(destroyForma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id")
+		_, err = m.DestroyForma(destroyForma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
 		require.NoError(t, err)
 		waitForCommands(t, m, 2)
 

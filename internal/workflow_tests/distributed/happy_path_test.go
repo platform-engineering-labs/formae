@@ -19,16 +19,16 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	dssqlite "github.com/platform-engineering-labs/formae/internal/datastore/sqlite"
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	"github.com/platform-engineering-labs/formae/internal/metastructure"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
-	dssqlite "github.com/platform-engineering-labs/formae/internal/datastore/sqlite"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/testutil"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
-	plugindiscovery "github.com/platform-engineering-labs/formae/pkg/plugin/discovery"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
+	plugindiscovery "github.com/platform-engineering-labs/formae/pkg/plugin/discovery"
 )
 
 // TestMetastructure_ExternalPlugin_Registration tests the distributed plugin workflow
@@ -131,7 +131,7 @@ func TestMetastructure_ExternalPlugin_ApplyForma_HappyPath(t *testing.T) {
 		_, err := m.ApplyForma(
 			forma,
 			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: false},
-			"test-client-id",
+			"test-client-id", "", "",
 		)
 		require.NoError(t, err, "ApplyForma should not return an error")
 

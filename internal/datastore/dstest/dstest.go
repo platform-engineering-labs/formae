@@ -83,6 +83,14 @@ type TestDatastore struct {
 	// than on characters. Backends storing a real timestamp type leave it nil
 	// and the relevant tests t.Skip().
 	SetResourceUpdateModifiedTsRawForTest func(ksuid, raw string) error
+	// NullFormaCommandSubjectForTest sets subject and subject_name to SQL NULL
+	// on the forma_commands row for the given commandID, so tests can stage the
+	// unattributed rows a pre-migration command leaves behind — stored state no
+	// public API produces, since a Go string is always a value (at worst "").
+	// Used to assert that such a row reads back Subject/SubjectName as "".
+	// Backends that don't provide it leave it nil and the relevant tests
+	// t.Skip().
+	NullFormaCommandSubjectForTest func(commandID string) error
 }
 
 // RunAll runs the full datastore test suite against the provided factory.
@@ -94,6 +102,8 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunLoadIncompleteFormaCommandsTest(t, newDS)
 	RunGetFormaApplyByFormaHash(t, newDS)
 	RunStoreAndLoadFormaCommandOptionalFields(t, newDS)
+	RunStoreAndLoadFormaCommandEmptySubject(t, newDS)
+	RunFormaCommandSubjectNullRoundTrip(t, newDS)
 	RunStoreFormaCommandSyncSkipsResourceUpdates(t, newDS)
 	RunCommandSourceRoundTrip(t, newDS)
 	RunGetMostRecentFormaCommandByClientID(t, newDS)

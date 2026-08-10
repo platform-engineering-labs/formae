@@ -61,7 +61,7 @@ func TestTargetReap_EmptiedStackIsCleanedUp(t *testing.T) {
 		}
 
 		// Apply: the stack exists and holds its one resource.
-		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client")
+		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client", "", "")
 		r.NoError(err)
 		r.Eventually(func() bool {
 			resources, err := m.Datastore.LoadResourcesByStack("reap-cleanup-stack")

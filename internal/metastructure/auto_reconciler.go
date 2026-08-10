@@ -267,7 +267,7 @@ type reconcileResult struct {
 // prepareReconcile builds a reconcile FormaCommand and Changeset from the stack's last-reconcile snapshot.
 // It returns nil (with no error) when no drift is detected. The caller is responsible for persisting
 // the command and starting the changeset execution.
-func prepareReconcile(ds datastore.Datastore, stackLabel string, clientID string) (*reconcileResult, error) {
+func prepareReconcile(ds datastore.Datastore, stackLabel string, clientID string, subject string, subjectName string) (*reconcileResult, error) {
 	// Get resources at last reconcile as full Resource objects
 	snapshots, err := ds.GetResourcesAtLastReconcile(stackLabel)
 	if err != nil {
@@ -360,6 +360,8 @@ func prepareReconcile(ds datastore.Datastore, stackLabel string, clientID string
 		nil, // No stack updates
 		nil, // No policy updates
 		clientID,
+		subject,
+		subjectName,
 		forma_command.SourceAutoReconciler,
 	)
 
@@ -393,7 +395,7 @@ func startReconcile(proc gen.Process, data *AutoReconcilerData, stackLabel strin
 		return "", nil // Not an error - just skip and reschedule
 	}
 
-	result, err := prepareReconcile(data.datastore, stackLabel, "auto-reconciler")
+	result, err := prepareReconcile(data.datastore, stackLabel, "auto-reconciler", "", "")
 	if err != nil {
 		return "", err
 	}

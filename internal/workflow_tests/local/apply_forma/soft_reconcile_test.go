@@ -143,7 +143,7 @@ func TestApplyForma_SoftReconcile_ReturnsMostRecentChangesPerStack(t *testing.T)
 		_, err = m.ApplyForma(
 			initial,
 			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: false},
-			"test-client-id")
+			"test-client-id", "", "")
 		assert.NoError(t, err)
 
 		var commands []*forma_command.FormaCommand
@@ -187,7 +187,7 @@ func TestApplyForma_SoftReconcile_ReturnsMostRecentChangesPerStack(t *testing.T)
 		_, err = m.ApplyForma(
 			firstPatch,
 			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModePatch, Simulate: false},
-			"test-client-id")
+			"test-client-id", "", "")
 		assert.NoError(t, err)
 
 		assert.Eventually(t, func() bool {
@@ -243,7 +243,7 @@ func TestApplyForma_SoftReconcile_ReturnsMostRecentChangesPerStack(t *testing.T)
 		_, err = m.ApplyForma(
 			secondPatch,
 			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModePatch, Simulate: false},
-			"test-client-id")
+			"test-client-id", "", "")
 		assert.NoError(t, err)
 
 		assert.Eventually(t, func() bool {
@@ -299,7 +299,7 @@ func TestApplyForma_SoftReconcile_ReturnsMostRecentChangesPerStack(t *testing.T)
 		_, err = m.ApplyForma(
 			reconcile,
 			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: true}, // '--force' should be false by default
-			"test-client-id")
+			"test-client-id", "", "")
 		assert.Error(t, err)
 
 		var rejectedErr apimodel.FormaReconcileRejectedError
@@ -461,7 +461,7 @@ func TestApplyForma_SoftReconcile_ReturnsEmtpyFormaCommandNoChangesAreDetected(t
 		_, err = m.ApplyForma(
 			initial,
 			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: false},
-			"test-client-id")
+			"test-client-id", "", "")
 		assert.NoError(t, err)
 
 		var commands []*forma_command.FormaCommand
@@ -504,7 +504,7 @@ func TestApplyForma_SoftReconcile_ReturnsEmtpyFormaCommandNoChangesAreDetected(t
 		_, err = m.ApplyForma(
 			patch,
 			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModePatch, Simulate: false},
-			"test-client-id")
+			"test-client-id", "", "")
 		assert.NoError(t, err)
 
 		assert.Eventually(t, func() bool {
@@ -558,7 +558,7 @@ func TestApplyForma_SoftReconcile_ReturnsEmtpyFormaCommandNoChangesAreDetected(t
 		_, err = m.ApplyForma(
 			reconcile,
 			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: true}, // '--force' should be false by default
-			"test-client-id")
+			"test-client-id", "", "")
 		assert.NoError(t, err)
 
 		// The command should not have been executed or stored

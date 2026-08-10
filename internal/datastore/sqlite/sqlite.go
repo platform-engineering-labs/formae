@@ -180,12 +180,12 @@ func (d DatastoreSQLite) StoreFormaCommand(fa *forma_command.FormaCommand, comma
 	query := fmt.Sprintf(`INSERT OR REPLACE INTO %s
 		(command_id, timestamp, command, state, agent_version, client_id, agent_id,
 		 description_text, description_confirm, config_mode, config_force, config_simulate,
-		 target_updates, stack_updates, policy_updates, modified_ts, source)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, datastore.CommandsTable)
+		 target_updates, stack_updates, policy_updates, modified_ts, source, subject, subject_name)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, datastore.CommandsTable)
 
 	_, err = d.conn.Exec(query, commandID, startTsUTC, fa.Command, fa.State, formae.Version, fa.ClientID, d.agentID,
 		fa.Description.Text, descriptionConfirm, fa.Config.Mode, configForce, configSimulate,
-		targetUpdatesJSON, stackUpdatesJSON, policyUpdatesJSON, modifiedTsUTC, string(fa.Source))
+		targetUpdatesJSON, stackUpdatesJSON, policyUpdatesJSON, modifiedTsUTC, string(fa.Source), fa.Subject, fa.SubjectName)
 	if err != nil {
 		slog.Error("Query", "query", query, "error", err)
 		return err
@@ -210,7 +210,7 @@ const formaCommandWithResourceUpdatesQueryBase = `
 SELECT
 	fc.command_id, fc.timestamp, fc.command, fc.state, fc.client_id,
 	fc.description_text, fc.description_confirm, fc.config_mode, fc.config_force, fc.config_simulate,
-	fc.target_updates, fc.stack_updates, fc.policy_updates, fc.modified_ts, fc.source,
+	fc.target_updates, fc.stack_updates, fc.policy_updates, fc.modified_ts, fc.source, fc.subject, fc.subject_name,
 	ru.ksuid, ru.operation, ru.state, ru.start_ts, ru.modified_ts,
 	ru.retries, ru.remaining, ru.version, ru.stack_label, ru.group_id, ru.source,
 	ru.resource, ru.resource_target, ru.existing_resource, ru.existing_target,
@@ -238,6 +238,7 @@ func scanJoinedRow(rows *sql.Rows) (*forma_command.FormaCommand, *resource_updat
 	var policyUpdatesJSON []byte
 	var fcModifiedTs sql.NullString
 	var fcSource sql.NullString
+	var fcSubject, fcSubjectName sql.NullString
 
 	// ResourceUpdate fields (all nullable due to LEFT JOIN)
 	var ruKsuid, ruOperation, ruState sql.NullString
@@ -254,7 +255,7 @@ func scanJoinedRow(rows *sql.Rows) (*forma_command.FormaCommand, *resource_updat
 		// FormaCommand columns
 		&commandID, &fcTimestamp, &command, &fcState, &clientID,
 		&descriptionText, &descriptionConfirm, &configMode, &configForce, &configSimulate,
-		&targetUpdatesJSON, &stackUpdatesJSON, &policyUpdatesJSON, &fcModifiedTs, &fcSource,
+		&targetUpdatesJSON, &stackUpdatesJSON, &policyUpdatesJSON, &fcModifiedTs, &fcSource, &fcSubject, &fcSubjectName,
 		// ResourceUpdate columns
 		&ruKsuid, &ruOperation, &ruState, &ruStartTs, &ruModifiedTs,
 		&ruRetries, &ruRemaining, &ruVersion, &ruStackLabel, &ruGroupID, &ruSource,
@@ -289,6 +290,12 @@ func scanJoinedRow(rows *sql.Rows) (*forma_command.FormaCommand, *resource_updat
 	cmd.Config.Simulate = configSimulate.Valid && configSimulate.Int64 == 1
 	if fcSource.Valid {
 		cmd.Source = forma_command.Source(fcSource.String)
+	}
+	if fcSubject.Valid {
+		cmd.Subject = fcSubject.String
+	}
+	if fcSubjectName.Valid {
+		cmd.SubjectName = fcSubjectName.String
 	}
 
 	// Parse timestamp - convert to UTC
@@ -535,7 +542,7 @@ func (d DatastoreSQLite) GetMostRecentFormaCommandByClientID(clientID string) (*
 		SELECT
 			fc.command_id, fc.timestamp, fc.command, fc.state, fc.client_id,
 			fc.description_text, fc.description_confirm, fc.config_mode, fc.config_force, fc.config_simulate,
-			fc.target_updates, fc.stack_updates, fc.policy_updates, fc.modified_ts, fc.source,
+			fc.target_updates, fc.stack_updates, fc.policy_updates, fc.modified_ts, fc.source, fc.subject, fc.subject_name,
 			ru.ksuid, ru.operation, ru.state, ru.start_ts, ru.modified_ts,
 			ru.retries, ru.remaining, ru.version, ru.stack_label, ru.group_id, ru.source,
 			ru.resource, ru.resource_target, ru.existing_resource, ru.existing_target,
@@ -911,7 +918,7 @@ func (d DatastoreSQLite) QueryFormaCommands(query *datastore.StatusQuery) ([]*fo
 		SELECT
 			fc.command_id, fc.timestamp, fc.command, fc.state, fc.client_id,
 			fc.description_text, fc.description_confirm, fc.config_mode, fc.config_force, fc.config_simulate,
-			fc.target_updates, fc.stack_updates, fc.policy_updates, fc.modified_ts, fc.source,
+			fc.target_updates, fc.stack_updates, fc.policy_updates, fc.modified_ts, fc.source, fc.subject, fc.subject_name,
 			ru.ksuid, ru.operation, ru.state, ru.start_ts, ru.modified_ts,
 			ru.retries, ru.remaining, ru.version, ru.stack_label, ru.group_id, ru.source,
 			ru.resource, ru.resource_target, ru.existing_resource, ru.existing_target,

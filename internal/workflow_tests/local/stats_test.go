@@ -157,7 +157,7 @@ func TestMetastructure_Stats(t *testing.T) {
 
 		_, err = m.ApplyForma(formaInitial, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test-client-id")
+		}, "test-client-id", "", "")
 
 		assert.NoError(t, err)
 
@@ -194,7 +194,7 @@ func TestMetastructure_Stats(t *testing.T) {
 		}, 10*time.Second, 100*time.Millisecond,
 			"the failed create must be counted once at the resource-update tier")
 
-		_, err = m.DestroyForma(formaInitial, &config.FormaCommandConfig{}, "test-client-id2")
+		_, err = m.DestroyForma(formaInitial, &config.FormaCommandConfig{}, "test-client-id2", "", "")
 
 		assert.NoError(t, err)
 

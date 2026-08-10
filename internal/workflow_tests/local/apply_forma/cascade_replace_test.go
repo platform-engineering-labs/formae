@@ -158,7 +158,7 @@ func TestApplyForma_ParentReplace_NonCreateOnlyRef_DependentIsUpdated(t *testing
 
 		_, err = m.ApplyForma(v1Forma, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test")
+		}, "test", "", "")
 		require.NoError(t, err)
 
 		require.Eventually(t, func() bool {
@@ -217,7 +217,7 @@ func TestApplyForma_ParentReplace_NonCreateOnlyRef_DependentIsUpdated(t *testing
 		simResp, err := m.ApplyForma(v2Forma, &config.FormaCommandConfig{
 			Mode:     pkgmodel.FormaApplyModeReconcile,
 			Simulate: true,
-		}, "test")
+		}, "test", "", "")
 		require.NoError(t, err)
 		require.True(t, simResp.Simulation.ChangesRequired, "v2 should produce changes")
 
@@ -252,7 +252,7 @@ func TestApplyForma_ParentReplace_NonCreateOnlyRef_DependentIsUpdated(t *testing
 		// re-derives the patch, and the provider's Update receives it.
 		_, err = m.ApplyForma(v2Forma, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test")
+		}, "test", "", "")
 		require.NoError(t, err)
 
 		require.Eventually(t, func() bool {

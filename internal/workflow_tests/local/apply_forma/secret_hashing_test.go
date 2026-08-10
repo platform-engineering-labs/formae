@@ -167,7 +167,7 @@ func TestSecretHashing_EnrichedReadBareSecretHashedEverywhere(t *testing.T) {
 			Targets: []pkgmodel.Target{{Label: "test-target", Namespace: "test-namespace"}},
 		}
 
-		_, err = m.ApplyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id")
+		_, err = m.ApplyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
 		require.NoError(t, err)
 		waitForApplyComplete(t, m)
 
@@ -267,7 +267,7 @@ func TestSecretHashing_NoPerpetualDrift(t *testing.T) {
 			Targets: []pkgmodel.Target{{Label: "test-target", Namespace: "test-namespace"}},
 		}
 
-		_, err = m.ApplyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id")
+		_, err = m.ApplyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
 		require.NoError(t, err)
 		waitForApplyComplete(t, m)
 
@@ -347,7 +347,7 @@ func TestSecretHashing_UpdateNonSecretFieldOnSecretResourceSucceeds(t *testing.T
 			Targets: []pkgmodel.Target{{Label: "test-target", Namespace: "test-namespace"}},
 		}
 
-		_, err = m.ApplyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id")
+		_, err = m.ApplyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
 		require.NoError(t, err)
 		waitForApplyComplete(t, m)
 
@@ -371,7 +371,7 @@ func TestSecretHashing_UpdateNonSecretFieldOnSecretResourceSucceeds(t *testing.T
 			}},
 			Targets: []pkgmodel.Target{},
 		}
-		_, err = m.ApplyForma(formaUpdate, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id")
+		_, err = m.ApplyForma(formaUpdate, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
 		require.NoError(t, err)
 		waitForApplyComplete(t, m)
 
@@ -453,7 +453,7 @@ func TestSecretHashing_ResolveCacheDoesNotLogSecret(t *testing.T) {
 			},
 		}
 
-		_, err = m.ApplyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id")
+		_, err = m.ApplyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
 		require.NoError(t, err)
 		waitForApplyComplete(t, m)
 
@@ -510,7 +510,7 @@ func TestSecretHashing_TargetConfigResolvedSecretStoredAsReference(t *testing.T)
 			},
 		}
 
-		_, err = m.ApplyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id")
+		_, err = m.ApplyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
 		require.NoError(t, err)
 		waitForApplyComplete(t, m)
 

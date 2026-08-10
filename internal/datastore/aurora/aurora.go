@@ -747,10 +747,10 @@ func (d *DatastoreAuroraDataAPI) StoreFormaCommand(fa *forma_command.FormaComman
 	query := fmt.Sprintf(`
 	INSERT INTO %s (command_id, timestamp, command, state, agent_version, client_id, agent_id,
 		description_text, description_confirm, config_mode, config_force, config_simulate,
-		target_updates, stack_updates, policy_updates, modified_ts, source)
+		target_updates, stack_updates, policy_updates, modified_ts, source, subject, subject_name)
 	VALUES (:command_id, :timestamp::timestamp, :command, :state, :agent_version, :client_id, :agent_id,
 		:description_text, :description_confirm, :config_mode, :config_force, :config_simulate,
-		:target_updates, :stack_updates, :policy_updates, :modified_ts::timestamp, :source)
+		:target_updates, :stack_updates, :policy_updates, :modified_ts::timestamp, :source, :subject, :subject_name)
 	ON CONFLICT (command_id) DO UPDATE
 	SET timestamp = EXCLUDED.timestamp,
 	command = EXCLUDED.command,
@@ -767,7 +767,9 @@ func (d *DatastoreAuroraDataAPI) StoreFormaCommand(fa *forma_command.FormaComman
 	stack_updates = EXCLUDED.stack_updates,
 	policy_updates = EXCLUDED.policy_updates,
 	modified_ts = EXCLUDED.modified_ts,
-	source = EXCLUDED.source
+	source = EXCLUDED.source,
+	subject = EXCLUDED.subject,
+	subject_name = EXCLUDED.subject_name
 	`, datastore.CommandsTable)
 
 	params := []types.SqlParameter{
@@ -788,6 +790,8 @@ func (d *DatastoreAuroraDataAPI) StoreFormaCommand(fa *forma_command.FormaComman
 		{Name: aws.String("policy_updates"), Value: &types.FieldMemberStringValue{Value: string(policyUpdatesJSON)}},
 		{Name: aws.String("modified_ts"), Value: &types.FieldMemberStringValue{Value: fa.ModifiedTs.UTC().Format(time.RFC3339Nano)}},
 		{Name: aws.String("source"), Value: &types.FieldMemberStringValue{Value: string(fa.Source)}},
+		{Name: aws.String("subject"), Value: &types.FieldMemberStringValue{Value: fa.Subject}},
+		{Name: aws.String("subject_name"), Value: &types.FieldMemberStringValue{Value: fa.SubjectName}},
 	}
 
 	_, err = d.executeStatement(ctx, query, params)
@@ -813,7 +817,7 @@ func (d *DatastoreAuroraDataAPI) LoadFormaCommands() ([]*forma_command.FormaComm
 	query := `
 	SELECT command_id, timestamp, command, state, client_id,
 		description_text, description_confirm, config_mode, config_force, config_simulate,
-		target_updates, stack_updates, policy_updates, modified_ts, source
+		target_updates, stack_updates, policy_updates, modified_ts, source, subject, subject_name
 	FROM forma_commands
 	ORDER BY timestamp DESC
 	`
@@ -849,7 +853,7 @@ func (d *DatastoreAuroraDataAPI) LoadIncompleteFormaCommands() ([]*forma_command
 	query := `
 	SELECT command_id, timestamp, command, state, client_id,
 		description_text, description_confirm, config_mode, config_force, config_simulate,
-		target_updates, stack_updates, policy_updates, modified_ts, source
+		target_updates, stack_updates, policy_updates, modified_ts, source, subject, subject_name
 	FROM forma_commands
 	WHERE command != :sync_command AND state IN (:state_not_started, :state_in_progress)
 	ORDER BY timestamp DESC
@@ -887,7 +891,7 @@ func (d *DatastoreAuroraDataAPI) LoadIncompleteFormaCommands() ([]*forma_command
 
 // parseFormaCommandRecord parses a single forma_commands row into a FormaCommand.
 func (d *DatastoreAuroraDataAPI) parseFormaCommandRecord(record []types.Field) (*forma_command.FormaCommand, error) {
-	if len(record) < 15 {
+	if len(record) < 17 {
 		return nil, fmt.Errorf("unexpected record length: %d", len(record))
 	}
 
@@ -906,6 +910,8 @@ func (d *DatastoreAuroraDataAPI) parseFormaCommandRecord(record []types.Field) (
 	policyUpdatesJSON, _ := getStringField(record[12])
 	modifiedTs, _ := getTimestampField(record[13])
 	source, _ := getStringField(record[14])
+	subject, _ := getStringField(record[15])
+	subjectName, _ := getStringField(record[16])
 
 	var targetUpdates []target_update.TargetUpdate
 	if targetUpdatesJSON != "" {
@@ -942,6 +948,8 @@ func (d *DatastoreAuroraDataAPI) parseFormaCommandRecord(record []types.Field) (
 		PolicyUpdates: policyUpdates,
 		ModifiedTs:    modifiedTs,
 		Source:        forma_command.Source(source),
+		Subject:       subject,
+		SubjectName:   subjectName,
 	}, nil
 }
 
@@ -970,7 +978,7 @@ func (d *DatastoreAuroraDataAPI) GetFormaCommandByCommandID(commandID string) (*
 	query := `
 	SELECT command_id, timestamp, command, state, client_id,
 		description_text, description_confirm, config_mode, config_force, config_simulate,
-		target_updates, stack_updates, policy_updates, modified_ts, source
+		target_updates, stack_updates, policy_updates, modified_ts, source, subject, subject_name
 	FROM forma_commands
 	WHERE command_id = :command_id
 	`
@@ -1008,7 +1016,7 @@ func (d *DatastoreAuroraDataAPI) GetMostRecentFormaCommandByClientID(clientID st
 	query := `
 	SELECT command_id, timestamp, command, state, client_id,
 		description_text, description_confirm, config_mode, config_force, config_simulate,
-		target_updates, stack_updates, policy_updates, modified_ts, source
+		target_updates, stack_updates, policy_updates, modified_ts, source, subject, subject_name
 	FROM forma_commands
 	WHERE client_id = :client_id
 	ORDER BY timestamp DESC
@@ -1201,7 +1209,7 @@ func (d *DatastoreAuroraDataAPI) QueryFormaCommands(statusQuery *datastore.Statu
 	queryStr := `
 	SELECT command_id, timestamp, command, state, client_id,
 		description_text, description_confirm, config_mode, config_force, config_simulate,
-		target_updates, stack_updates, policy_updates, modified_ts, source
+		target_updates, stack_updates, policy_updates, modified_ts, source, subject, subject_name
 	FROM forma_commands
 	WHERE 1=1
 	`
@@ -6169,6 +6177,20 @@ func (d *DatastoreAuroraDataAPI) NullResourceUpdateModifiedTsForTesting(ksuid st
 	query := `UPDATE resource_updates SET modified_ts = NULL WHERE ksuid = :ksuid`
 	params := []types.SqlParameter{
 		{Name: aws.String("ksuid"), Value: &types.FieldMemberStringValue{Value: ksuid}},
+	}
+	_, err := d.executeStatement(ctx, query, params)
+	return err
+}
+
+// NullFormaCommandSubjectForTesting clears subject and subject_name on the
+// forma_commands row for a command_id, so tests can stage the unattributed
+// rows a pre-migration command leaves behind — stored state no public API
+// produces, since a Go string is always a value (at worst "").
+func (d *DatastoreAuroraDataAPI) NullFormaCommandSubjectForTesting(commandID string) error {
+	ctx := context.Background()
+	query := `UPDATE forma_commands SET subject = NULL, subject_name = NULL WHERE command_id = :command_id`
+	params := []types.SqlParameter{
+		{Name: aws.String("command_id"), Value: &types.FieldMemberStringValue{Value: commandID}},
 	}
 	_, err := d.executeStatement(ctx, query, params)
 	return err
