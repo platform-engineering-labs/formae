@@ -45,7 +45,7 @@ func NewAuthMiddleware(handle *AuthPluginHandle, cache *AuthCache) echo.Middlewa
 				}
 			}
 
-			headers := map[string][]string(c.Request().Header)
+			headers := authRelevantHeaders(map[string][]string(c.Request().Header))
 			cacheKey := computeCacheKey(headers)
 
 			if v, found := cache.Get(cacheKey); found {
@@ -83,7 +83,8 @@ func NewAuthMiddleware(handle *AuthPluginHandle, cache *AuthCache) echo.Middlewa
 
 // nonAuthHeaders are headers known to be volatile or unrelated to authentication.
 // Excluding them prevents per-request variance (User-Agent, X-Request-Id, etc.)
-// from defeating the auth cache.
+// from defeating the auth cache. This is the same exclusion set that gates
+// what the auth plugin is allowed to see; see authRelevantHeaders.
 var nonAuthHeaders = map[string]bool{
 	"accept":           true,
 	"accept-encoding":  true,
@@ -99,8 +100,27 @@ var nonAuthHeaders = map[string]bool{
 	"x-request-id":     true,
 }
 
-// computeCacheKey derives a cache key from auth-relevant request headers by
-// hashing their sorted key-value pairs, excluding known volatile headers.
+// authRelevantHeaders returns the subset of headers not excluded by
+// nonAuthHeaders. It is the single source of truth for what enters both the
+// plugin's Validate call and computeCacheKey: the middleware filters once
+// and feeds the same map to each, so the plugin can never see a header the
+// cache key doesn't already cover, and the two can never drift apart. That
+// alignment is what makes a cached verdict trustworthy: it cannot outlive a
+// change in anything the plugin was able to authenticate on, because the
+// plugin was never able to authenticate on anything outside the cache key.
+func authRelevantHeaders(headers map[string][]string) map[string][]string {
+	filtered := make(map[string][]string, len(headers))
+	for k, v := range headers {
+		if !nonAuthHeaders[strings.ToLower(k)] {
+			filtered[k] = v
+		}
+	}
+	return filtered
+}
+
+// computeCacheKey derives a cache key from headers by hashing their sorted
+// key-value pairs. Callers pass authRelevantHeaders' output, not raw
+// request headers, so the key only ever reflects auth-relevant headers.
 //
 // The encoding is unambiguously decodable: each header contributes its
 // length-prefixed key, then a fixed-width big-endian uint64 count of how
@@ -114,9 +134,7 @@ func computeCacheKey(headers map[string][]string) string {
 	h := sha256.New()
 	keys := make([]string, 0, len(headers))
 	for k := range headers {
-		if !nonAuthHeaders[strings.ToLower(k)] {
-			keys = append(keys, k)
-		}
+		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 

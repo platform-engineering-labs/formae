@@ -25,6 +25,17 @@ type testMiddlewarePlugin struct {
 	subject       string
 	subjectName   string
 	callCount     int
+
+	// lastHeaders captures exactly what the most recent Validate call
+	// received, so tests can assert on the plugin's actual observed input.
+	lastHeaders map[string][]string
+
+	// leakOnHeader, when non-empty, makes Validate respond with leakSubject
+	// whenever req.Headers contains this header — used to prove a header
+	// never reaches the plugin by showing what the plugin would report if
+	// it did.
+	leakOnHeader string
+	leakSubject  string
 }
 
 func (p *testMiddlewarePlugin) Init(req *pkgauth.InitRequest, resp *pkgauth.InitResponse) error {
@@ -33,6 +44,17 @@ func (p *testMiddlewarePlugin) Init(req *pkgauth.InitRequest, resp *pkgauth.Init
 
 func (p *testMiddlewarePlugin) Validate(req *pkgauth.ValidateRequest, resp *pkgauth.ValidateResponse) error {
 	p.callCount++
+	p.lastHeaders = req.Headers
+
+	if p.leakOnHeader != "" {
+		if _, leaked := req.Headers[p.leakOnHeader]; leaked {
+			resp.Valid = true
+			resp.Subject = p.leakSubject
+			resp.CacheTTL = time.Minute
+			return nil
+		}
+	}
+
 	resp.Valid = p.validResponse
 	resp.Subject = p.subject
 	resp.SubjectName = p.subjectName
@@ -230,6 +252,51 @@ func TestComputeCacheKey_Injective(t *testing.T) {
 
 	if computeCacheKey(map[string][]string(twoHeaders)) == computeCacheKey(map[string][]string(oneHeaderThreeValues)) {
 		t.Fatal("expected different cache keys when the same bytes are distributed across a different number of headers and values")
+	}
+}
+
+func TestMiddleware_PluginNeverObservesExcludedHeaders(t *testing.T) {
+	e, _, _, mock := setupMiddleware(t, true)
+	mock.subject = "s"
+	// If the plugin could see the excluded X-Request-Id header, it would
+	// report this subject instead of the configured one.
+	mock.leakOnHeader = "X-Request-Id"
+	mock.leakSubject = "leaked"
+
+	// First request: cache miss, calls Validate.
+	req1 := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req1.Header.Set("Authorization", "Basic dGVzdDp0ZXN0")
+	req1.Header.Set("X-Request-Id", "request-one")
+	rec1 := httptest.NewRecorder()
+	e.ServeHTTP(rec1, req1)
+
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("first request: expected 200, got %d", rec1.Code)
+	}
+	if rec1.Body.String() != "s" {
+		t.Fatalf("first request: expected subject %q, got %q (the excluded header reached the plugin)", "s", rec1.Body.String())
+	}
+	if _, present := mock.lastHeaders["X-Request-Id"]; present {
+		t.Fatalf("expected the plugin to never observe the excluded X-Request-Id header, got %v", mock.lastHeaders)
+	}
+
+	// Second request: identical auth-relevant headers, a different value for
+	// the excluded header. Same cache key, so this is a cache hit and
+	// Validate is not called again.
+	req2 := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req2.Header.Set("Authorization", "Basic dGVzdDp0ZXN0")
+	req2.Header.Set("X-Request-Id", "request-two")
+	rec2 := httptest.NewRecorder()
+	e.ServeHTTP(rec2, req2)
+
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("second request: expected 200, got %d", rec2.Code)
+	}
+	if rec2.Body.String() != "s" {
+		t.Fatalf("second request: expected subject %q, got %q", "s", rec2.Body.String())
+	}
+	if mock.callCount != 1 {
+		t.Fatalf("expected 1 Validate call total (second request served from cache), got %d", mock.callCount)
 	}
 }
 
