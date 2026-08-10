@@ -20,7 +20,7 @@ import (
 func TestMerge_PreservesEmbedEnvelope(t *testing.T) {
 	user := json.RawMessage(`{"functionCode":{"$embed":true,"$template":"cf.kvs('X')"}}`)
 	plugin := json.RawMessage(`{"functionCode":"cf.kvs('KV-7H9X')"}`) // assembled scalar from cloud
-	out, err := mergeRefsPreservingUserRefs(user, plugin, pkgmodel.Schema{})
+	out, err := mergeRefsPreservingUserRefs(user, plugin, pkgmodel.Schema{}, false)
 	require.NoError(t, err)
 	// The merged result must be an object (the user's envelope), not the plugin scalar
 	assert.True(t, gjson.GetBytes(out, "functionCode").IsObject(),
@@ -40,7 +40,7 @@ func TestMerge_PreservesEmbedEnvelope_PluginReturnsObject(t *testing.T) {
 	// Plugin returns an object at functionCode — without an explicit guard, the recursive
 	// merge would descend into this object and clobber the user's $embed:true.
 	plugin := json.RawMessage(`{"functionCode":{"$embed":false,"$template":"stale"}}`)
-	out, err := mergeRefsPreservingUserRefs(user, plugin, pkgmodel.Schema{})
+	out, err := mergeRefsPreservingUserRefs(user, plugin, pkgmodel.Schema{}, false)
 	require.NoError(t, err)
 	assert.True(t, gjson.GetBytes(out, "functionCode").IsObject())
 	assert.True(t, gjson.GetBytes(out, "functionCode.$embed").Bool(),

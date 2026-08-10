@@ -7,6 +7,7 @@ package patch
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/canonicalize"
@@ -29,8 +30,8 @@ var defaultIgnoredFields = []jsonpatch.Path{}
 //     these immutable properties changed: …") and are never sent to plugins.
 //
 // The two slices are disjoint. Either can be nil.
-func GeneratePatch(document []byte, patch []byte, properties resolver.ResolvableProperties, schema pkgmodel.Schema, mode pkgmodel.FormaApplyMode) (json.RawMessage, json.RawMessage, error) {
-	return generatePatch(document, patch, properties, schema, mode)
+func GeneratePatch(document []byte, patch []byte, storedEnvelopes []byte, properties resolver.ResolvableProperties, schema pkgmodel.Schema, mode pkgmodel.FormaApplyMode) (json.RawMessage, json.RawMessage, error) {
+	return generatePatch(document, patch, storedEnvelopes, properties, schema, mode)
 }
 
 func collectionSemanticsFromFieldHints(hints map[string]pkgmodel.FieldHint) jsonpatch.Collections {
@@ -65,8 +66,8 @@ func entitySetProviderDefaultsFromHints(hints map[string]pkgmodel.FieldHint) map
 	return result
 }
 
-func generatePatch(document []byte, patch []byte, properties resolver.ResolvableProperties, schema pkgmodel.Schema, mode pkgmodel.FormaApplyMode) (json.RawMessage, json.RawMessage, error) {
-	flattenedDocument, flattenedPatch, err := flattenAndResolveRefs(document, patch, properties)
+func generatePatch(document []byte, patch []byte, storedEnvelopes []byte, properties resolver.ResolvableProperties, schema pkgmodel.Schema, mode pkgmodel.FormaApplyMode) (json.RawMessage, json.RawMessage, error) {
+	flattenedDocument, flattenedPatch, err := flattenAndResolveRefs(document, patch, storedEnvelopes, properties)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to flatten and resolve refs: %w", err)
 	}
@@ -888,8 +889,61 @@ func normalizeResolvedValue(resolved string, current any) any {
 	return resolved
 }
 
+// storedRefCounterpart returns the stored envelope that corresponds to a
+// desired-side reference node: a map carrying the same $ref URI, not marked
+// Opaque on either side. Opaque envelopes are handled by the dedicated
+// opaque-suppression path and never participate in provenance comparison.
+func storedRefCounterpart(storedNode any, modVal map[string]any) map[string]any {
+	storedMap, ok := storedNode.(map[string]any)
+	if !ok {
+		return nil
+	}
+	if storedMap["$ref"] != modVal["$ref"] {
+		return nil
+	}
+	if storedMap["$visibility"] == pkgmodel.VisibilityOpaque || modVal["$visibility"] == pkgmodel.VisibilityOpaque {
+		return nil
+	}
+	return storedMap
+}
+
+// appliedMatches reports whether a fresh reference resolution equals the
+// value the last formae-originated write sent. The fresh value arrives as a
+// string (ResolvableProperties stores raw JSON text for structured values);
+// $applied holds the JSON-native form that was sent (native JSON scalars,
+// arrays, or objects). Comparison parses the string into the same JSON shape,
+// handling numeric, boolean, and structured values uniformly.
+func appliedMatches(fresh string, applied any) bool {
+	if s, ok := applied.(string); ok {
+		return fresh == s
+	}
+	var parsed any
+	if err := json.Unmarshal([]byte(fresh), &parsed); err != nil {
+		return false
+	}
+	return reflect.DeepEqual(parsed, applied)
+}
+
+// storedRefElementByURI finds the stored array element whose $ref equals uri.
+// Ambiguity (zero or multiple matches) returns nil: with no unique
+// counterpart the element gets no provenance treatment.
+func storedRefElementByURI(storedArr []any, uri any) map[string]any {
+	var match map[string]any
+	for _, elem := range storedArr {
+		m, ok := elem.(map[string]any)
+		if !ok || m["$ref"] != uri {
+			continue
+		}
+		if match != nil {
+			return nil
+		}
+		match = m
+	}
+	return match
+}
+
 // resolveRefs uses properties to resolve references in the patch document
-func resolveRefs(current, mod map[string]any, resolvableProperties resolver.ResolvableProperties) error {
+func resolveRefs(current, mod, stored map[string]any, resolvableProperties resolver.ResolvableProperties) error {
 	for k, v := range mod {
 		switch modVal := v.(type) {
 		case map[string]any:
@@ -897,6 +951,8 @@ func resolveRefs(current, mod map[string]any, resolvableProperties resolver.Reso
 				uri := pkgmodel.FormaeURI(ref.(string))
 				ksuid := uri.KSUID()
 				property := uri.PropertyPath()
+
+				counterpart := storedRefCounterpart(stored[k], modVal)
 
 				val, found := resolvableProperties.Get(ksuid, property)
 				if found {
@@ -908,9 +964,28 @@ func resolveRefs(current, mod map[string]any, resolvableProperties resolver.Reso
 						}
 						resolved = extracted
 					}
-					modVal["$value"] = normalizeResolvedValue(resolved, current[k])
+					if counterpart != nil {
+						if applied, hasApplied := counterpart["$applied"]; hasApplied && appliedMatches(resolved, applied) && counterpart["$value"] != nil {
+							// The reference still resolves to what the last write sent;
+							// flatten to the stored echo so the diff compares within the
+							// observed domain and sees no change.
+							modVal["$value"] = counterpart["$value"]
+						} else {
+							modVal["$value"] = normalizeResolvedValue(resolved, current[k])
+						}
+					} else {
+						modVal["$value"] = normalizeResolvedValue(resolved, current[k])
+					}
+				} else if counterpart != nil {
+					if _, hasApplied := counterpart["$applied"]; hasApplied && counterpart["$value"] != nil {
+						if _, hasVal := modVal["$value"]; !hasVal {
+							// No resolution available but a prior write attests this exact
+							// reference; treat the gap as transient, not as a change.
+							modVal["$value"] = counterpart["$value"]
+						}
+					}
 				}
-				// If not found, keep the $ref as-is for late-binding resolution
+				// Otherwise keep the $ref as-is for late-binding resolution
 				// at execution time (forward references to new resources).
 			}
 			var currNested map[string]any
@@ -919,13 +994,25 @@ func resolveRefs(current, mod map[string]any, resolvableProperties resolver.Reso
 			} else {
 				currNested = map[string]any{}
 			}
-			if err := resolveRefs(currNested, modVal, resolvableProperties); err != nil {
+			var storedNested map[string]any
+			if s, ok := stored[k].(map[string]any); ok {
+				storedNested = s
+			} else {
+				storedNested = map[string]any{}
+			}
+			if err := resolveRefs(currNested, modVal, storedNested, resolvableProperties); err != nil {
 				return err
 			}
 		case []any:
 			var currArr []any
 			if c, ok := current[k].([]any); ok {
 				currArr = c
+			}
+			var storedArr []any
+			if stored != nil {
+				if s, ok := stored[k].([]any); ok {
+					storedArr = s
+				}
 			}
 			for i, elem := range modVal {
 				var currElem any
@@ -941,7 +1028,20 @@ func resolveRefs(current, mod map[string]any, resolvableProperties resolver.Reso
 					// otherwise normalize against a nil current and diff forever.
 					wrappedElem := map[string]any{k: elemMap}
 					wrappedCurrent := map[string]any{k: currElem}
-					if err := resolveRefs(wrappedCurrent, wrappedElem, resolvableProperties); err != nil {
+					var wrappedStored map[string]any
+
+					// For ref-carrying elements, match the stored counterpart by URI;
+					// otherwise thread by index.
+					if ref, hasRef := elemMap["$ref"]; hasRef && len(storedArr) > 0 {
+						storedElem := storedRefElementByURI(storedArr, ref)
+						if storedElem != nil {
+							wrappedStored = map[string]any{k: storedElem}
+						}
+					} else if len(storedArr) > i {
+						storedElem := storedArr[i]
+						wrappedStored = map[string]any{k: storedElem}
+					}
+					if err := resolveRefs(wrappedCurrent, wrappedElem, wrappedStored, resolvableProperties); err != nil {
 						return err
 					}
 					if resolvedElem, ok := wrappedElem[k].(map[string]any); ok {
@@ -1071,7 +1171,7 @@ func normalizeToFlattenedKeys(m map[string]any) {
 	}
 }
 
-func flattenAndResolveRefs(document []byte, patch []byte, resolvableProperties resolver.ResolvableProperties) ([]byte, []byte, error) {
+func flattenAndResolveRefs(document []byte, patch []byte, storedEnvelopes []byte, resolvableProperties resolver.ResolvableProperties) ([]byte, []byte, error) {
 	var current, mod map[string]any
 	if err := json.Unmarshal(document, &current); err != nil {
 		return nil, nil, err
@@ -1079,7 +1179,13 @@ func flattenAndResolveRefs(document []byte, patch []byte, resolvableProperties r
 	if err := json.Unmarshal(patch, &mod); err != nil {
 		return nil, nil, err
 	}
-	if err := resolveRefs(current, mod, resolvableProperties); err != nil {
+	var stored map[string]any
+	if storedEnvelopes != nil {
+		if err := json.Unmarshal(storedEnvelopes, &stored); err != nil {
+			return nil, nil, err
+		}
+	}
+	if err := resolveRefs(current, mod, stored, resolvableProperties); err != nil {
 		return nil, nil, err
 	}
 	flattenRefs(current)

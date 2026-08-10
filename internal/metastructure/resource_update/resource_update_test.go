@@ -254,7 +254,7 @@ func Test_mergeRefsPreservingUserRefs_preservesResolvableValues(t *testing.T) {
         "Type": "A"
     }`, distributionKsuid, hostedZoneKsuid)
 
-	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{})
+	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{}, false)
 	require.NoError(t, err)
 
 	var mergedMap map[string]any
@@ -407,7 +407,7 @@ func Test_mergeRefsPreservingUserRefs_preservesResolvableValuesWithVisibilityWit
         "Type": "A"
     }`)
 
-	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{})
+	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{}, false)
 	require.NoError(t, err)
 
 	var mergedMap map[string]any
@@ -458,7 +458,7 @@ func Test_mergeRefsPreservingUserRefs_preservesResolvableValuesWithVisibilityAnd
         "Type": "A"
     }`)
 
-	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{})
+	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{}, false)
 	require.NoError(t, err)
 
 	var mergedMap map[string]any
@@ -510,7 +510,7 @@ func Test_mergeRefsPreservingUserRefs_OpaqueEnvelope_ReplacesHashWithLiveReadVal
 
 	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{
 		Hints: map[string]pkgmodel.FieldHint{"SecretString": {Opaque: true}},
-	})
+	}, false)
 	require.NoError(t, err)
 
 	var mergedMap map[string]any
@@ -545,7 +545,7 @@ func Test_mergeRefsPreservingUserRefs_ResEnvelope_EmptyPluginEchoPreservesHash(t
         "consumes": {"$res":true,"$label":"the-secret","$type":"FakeAWS::Resource","$stack":"s","$property":"secret"}
     }`)
 
-	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{})
+	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{}, false)
 	require.NoError(t, err)
 
 	var mergedMap map[string]any
@@ -580,7 +580,7 @@ func Test_mergeRefsPreservingUserRefs_RemovesArrayElements(t *testing.T) {
         "Type": "A"
     }`)
 
-	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{})
+	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{}, false)
 	require.NoError(t, err)
 
 	var mergedMap map[string]any
@@ -797,11 +797,13 @@ func TestRecordProgress_MergePreservesRefStructuresInArrays(t *testing.T) {
 		"networkInterfaces": [{"name": "nic0", "network": "network-1", "subnetwork": "subnet-1"}]
 	}`
 
-	// Expected: plugin fields merged with $ref structures preserved from user
+	// Expected: plugin fields merged with $ref structures preserved from user.
+	// Operation is Create, so this is a write-origin merge — each $ref's
+	// pre-merge $value (the resolution formae sent) is also kept as $applied.
 	expectedProps := `{
 		"name": "my-instance",
-		"disks": [{"boot": true, "size": "20GB", "source": {"$ref": "formae://disk-ksuid#/selfLink", "$value": "disk-1"}}],
-		"networkInterfaces": [{"name": "nic0", "network": {"$ref": "formae://network-ksuid#/selfLink", "$value": "network-1"}, "subnetwork": {"$ref": "formae://subnet-ksuid#/selfLink", "$value": "subnet-1"}}]
+		"disks": [{"boot": true, "size": "20GB", "source": {"$ref": "formae://disk-ksuid#/selfLink", "$value": "disk-1", "$applied": "disk-1"}}],
+		"networkInterfaces": [{"name": "nic0", "network": {"$ref": "formae://network-ksuid#/selfLink", "$value": "network-1", "$applied": "network-1"}, "subnetwork": {"$ref": "formae://subnet-ksuid#/selfLink", "$value": "subnet-1", "$applied": "subnet-1"}}]
 	}`
 
 	resourceUpdate := &ResourceUpdate{
@@ -850,10 +852,12 @@ func TestRecordProgress_MergeArrays_UserHasMoreElementsThanPlugin(t *testing.T) 
 		"networkInterfaces": [{"name": "nic0", "network": "network-1", "subnetwork": "subnet-1"}]
 	}`
 
-	// Expected: only 1 networkInterface with $ref preserved from user's first element
+	// Expected: only 1 networkInterface with $ref preserved from user's first
+	// element. Operation is Create, so this is a write-origin merge — each
+	// $ref's pre-merge $value is also kept as $applied.
 	expectedProps := `{
 		"name": "my-instance",
-		"networkInterfaces": [{"name": "nic0", "network": {"$ref": "formae://network1-ksuid#/selfLink", "$value": "network-1"}, "subnetwork": {"$ref": "formae://subnet1-ksuid#/selfLink", "$value": "subnet-1"}}]
+		"networkInterfaces": [{"name": "nic0", "network": {"$ref": "formae://network1-ksuid#/selfLink", "$value": "network-1", "$applied": "network-1"}, "subnetwork": {"$ref": "formae://subnet1-ksuid#/selfLink", "$value": "subnet-1", "$applied": "subnet-1"}}]
 	}`
 
 	resourceUpdate := &ResourceUpdate{
@@ -946,7 +950,7 @@ func Test_mergeRefsPreservingUserRefs_ECSEnvLiteralDoesNotInheritSiblingRef(t *t
 		},
 	}
 
-	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, schema)
+	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, schema, false)
 	require.NoError(t, err)
 	byName := envByName(t, merged)
 
@@ -983,7 +987,7 @@ func Test_mergeRefsPreservingUserRefs_Phase2DoesNotGraftSiblingRefOntoLiteral(t 
 	}`)
 
 	// No hint on Environment → default/Set path.
-	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{})
+	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{}, false)
 	require.NoError(t, err)
 
 	var props map[string]any
@@ -1024,7 +1028,7 @@ func Test_mergeRefsPreservingUserRefs_OrderedArrayPairsByIndex(t *testing.T) {
 		},
 	}
 
-	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, schema)
+	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, schema, false)
 	require.NoError(t, err)
 
 	var props map[string]any
@@ -1062,12 +1066,14 @@ func TestRecordProgress_MergeArrays_PluginReturnsReorderedElements(t *testing.T)
 		]
 	}`
 
-	// Expected: plugin order preserved (2, 1) with correct $ref matched by value
+	// Expected: plugin order preserved (2, 1) with correct $ref matched by
+	// value. Operation is Create, so this is a write-origin merge — each
+	// $ref's pre-merge $value is also kept as $applied.
 	expectedProps := `{
 		"name": "my-instance",
 		"networkInterfaces": [
-			{"name": "nic1", "network": {"$ref": "formae://network2-ksuid#/selfLink", "$value": "network-2"}, "subnetwork": {"$ref": "formae://subnet2-ksuid#/selfLink", "$value": "subnet-2"}},
-			{"name": "nic0", "network": {"$ref": "formae://network1-ksuid#/selfLink", "$value": "network-1"}, "subnetwork": {"$ref": "formae://subnet1-ksuid#/selfLink", "$value": "subnet-1"}}
+			{"name": "nic1", "network": {"$ref": "formae://network2-ksuid#/selfLink", "$value": "network-2", "$applied": "network-2"}, "subnetwork": {"$ref": "formae://subnet2-ksuid#/selfLink", "$value": "subnet-2", "$applied": "subnet-2"}},
+			{"name": "nic0", "network": {"$ref": "formae://network1-ksuid#/selfLink", "$value": "network-1", "$applied": "network-1"}, "subnetwork": {"$ref": "formae://subnet1-ksuid#/selfLink", "$value": "subnet-1", "$applied": "subnet-1"}}
 		]
 	}`
 
