@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/patch"
@@ -605,7 +606,7 @@ func (m *propertyMerger) mergeObject(path string, userVal, pluginVal gjson.Resul
 	// Not a $ref or $embed object - recursively merge each field
 	userVal.ForEach(func(key, val gjson.Result) bool {
 		childPath := m.buildChildPath(path, key.String())
-		pluginChildVal := pluginVal.Get(key.String())
+		pluginChildVal := pluginVal.Get(escapePathKey(key.String()))
 		m.mergeValue(childPath, val, pluginChildVal)
 		return true
 	})
@@ -990,7 +991,7 @@ func (m *propertyMerger) concreteFieldsMatchPlugin(userElem, pluginElem gjson.Re
 		if m.isUnresolvedRef(userVal) {
 			return true // ignore unresolved-$ref fields
 		}
-		pluginVal := pluginElem.Get(key.String())
+		pluginVal := pluginElem.Get(escapePathKey(key.String()))
 		if !pluginVal.Exists() || !m.valuesMatch(userVal, pluginVal) {
 			allMatch = false
 			return false
@@ -1023,7 +1024,7 @@ func (m *propertyMerger) userElementMatchesPlugin(userElem, pluginElem gjson.Res
 	allFieldsMatch := true
 	userElem.ForEach(func(key, userVal gjson.Result) bool {
 		keyStr := key.String()
-		pluginVal := pluginElem.Get(keyStr)
+		pluginVal := pluginElem.Get(escapePathKey(keyStr))
 
 		// If plugin doesn't have this field, it's not a match
 		if !pluginVal.Exists() {
@@ -1094,12 +1095,23 @@ func (m *propertyMerger) mergePrimitive(path string, userVal gjson.Result) {
 	}
 }
 
-// buildChildPath constructs a JSON path for a child field
+// buildChildPath constructs a JSON path for a child field. The field name is a
+// literal JSON key, so path-special characters in it must be escaped — K8s
+// label/annotation keys like "app.kubernetes.io/name" would otherwise be
+// interpreted as nested paths and exploded into object trees on write.
 func (m *propertyMerger) buildChildPath(parentPath, fieldName string) string {
+	escaped := escapePathKey(fieldName)
 	if parentPath == "" {
-		return fieldName
+		return escaped
 	}
-	return parentPath + "." + fieldName
+	return parentPath + "." + escaped
+}
+
+// escapePathKey escapes a literal JSON key for use in a gjson/sjson path.
+var pathKeyEscaper = strings.NewReplacer(`\`, `\\`, `.`, `\.`, `*`, `\*`, `?`, `\?`, `:`, `\:`)
+
+func escapePathKey(key string) string {
+	return pathKeyEscaper.Replace(key)
 }
 
 // cleanPath removes leading dot from a path if present
