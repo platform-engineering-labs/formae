@@ -951,31 +951,21 @@ func storedAppliedEnvelope(storedNode any) map[string]any {
 	return storedMap
 }
 
-// storedEchoForResolvedRef reports the echo to compare against when the desired
-// side no longer carries a reference envelope.
-//
-// The executor resolves references before calling a provider and re-derives the
-// patch from the resolved properties, so on that path the desired value arrives
-// as the resolved value alone. The unconverted desired properties still hold the
-// envelope it came from, which is what establishes that the value IS a resolved
-// reference rather than a literal the user wrote: matching on the value alone
-// cannot tell those apart, and suppressing a literal would silently drop the
-// user's edit.
-//
-// It returns the stored echo when the desired envelope names the same reference
-// as the stored one and resolves to what the last write applied. Opaque
-// envelopes and envelopes with no recorded baseline are excluded.
-func storedEchoForResolvedRef(desiredNode, storedNode, modNode any) (any, bool) {
+// resolvedDesiredEnvelope returns the desired-side envelope for a value that has
+// already been resolved: the converted desired document holds the resolved value
+// alone, while the unconverted desired properties still hold the envelope it came
+// from. That envelope is what establishes the value IS a resolved reference
+// rather than a literal the user wrote in its place, which matching on the value
+// alone cannot tell apart.
+func resolvedDesiredEnvelope(desiredNode, modNode any) (map[string]any, bool) {
 	desiredEnv, ok := desiredNode.(map[string]any)
 	if !ok || desiredEnv["$visibility"] == pkgmodel.VisibilityOpaque {
 		return nil, false
 	}
-	desiredRef, ok := desiredEnv["$ref"].(string)
-	if !ok || desiredRef == "" {
+	if ref, ok := desiredEnv["$ref"].(string); !ok || ref == "" {
 		return nil, false
 	}
-	desiredValue, resolved := desiredEnv["$value"]
-	if !resolved || desiredValue == nil {
+	if value, resolved := desiredEnv["$value"]; !resolved || value == nil {
 		return nil, false
 	}
 	// A desired side that still carries its envelope is handled by the
@@ -985,29 +975,74 @@ func storedEchoForResolvedRef(desiredNode, storedNode, modNode any) (any, bool) 
 			return nil, false
 		}
 	}
-	storedEnv := storedAppliedEnvelope(storedNode)
-	if storedEnv == nil || storedEnv["$ref"] != desiredRef {
-		return nil, false
-	}
-	if !reflect.DeepEqual(storedEnv["$applied"], desiredValue) {
-		return nil, false
-	}
-	return storedEnv["$value"], true
+	return desiredEnv, true
 }
 
-// storedEchoForResolvedRefInArray applies storedEchoForResolvedRef to one array
+// freshResolution returns what a reference resolves to now, both normalized to
+// the live value's JSON shape and as the raw resolved text. A cached $value on
+// the desired envelope is only a record of an earlier resolution, so whenever a
+// current one is available it is the authority: trusting the cached value would
+// let a reference that now points somewhere else compare as unchanged and drop
+// the update, or miss a replacement on an immutable field.
+func freshResolution(env map[string]any, current any, resolvableProperties resolver.ResolvableProperties) (any, string, bool) {
+	ref, _ := env["$ref"].(string)
+	uri := pkgmodel.FormaeURI(ref)
+	val, found := resolvableProperties.Get(uri.KSUID(), uri.PropertyPath())
+	if !found {
+		return nil, "", false
+	}
+	if jsonPath, ok := env["$json"].(string); ok && jsonPath != "" {
+		extracted, err := resolver.ExtractJSONPath(val, jsonPath)
+		if err != nil {
+			return nil, "", false
+		}
+		val = extracted
+	}
+	return normalizeResolvedValue(val, current), val, true
+}
+
+// substituteResolvedRef decides what the desired side should carry for a
+// reference that has already been resolved. It reports whether it handled the
+// node at all.
+//
+// When the reference still resolves to what the last write applied, the desired
+// side takes the stored echo so the comparison stays within the observed domain
+// and the reference is not rewritten in the provider's own spelling. Otherwise
+// the desired side carries the current resolution, so a genuine repoint is
+// planned (and, on an immutable field, still forces a replacement).
+func substituteResolvedRef(desiredNode, storedNode, modNode, currentNode any, resolvableProperties resolver.ResolvableProperties) (any, bool) {
+	desiredEnv, ok := resolvedDesiredEnvelope(desiredNode, modNode)
+	if !ok {
+		return nil, false
+	}
+	storedEnv := storedAppliedEnvelope(storedNode)
+	sameRef := storedEnv != nil && storedEnv["$ref"] == desiredEnv["$ref"]
+
+	effective := desiredEnv["$value"]
+	matchesApplied := sameRef && reflect.DeepEqual(storedEnv["$applied"], effective)
+	if native, raw, found := freshResolution(desiredEnv, currentNode, resolvableProperties); found {
+		effective = native
+		matchesApplied = sameRef && appliedMatches(raw, storedEnv["$applied"])
+	}
+	if matchesApplied {
+		return storedEnv["$value"], true
+	}
+	return effective, true
+}
+
+// substituteResolvedRefInArray applies substituteResolvedRef to one array
 // element, locating the stored counterpart by the reference the desired element
 // names rather than by position: the provider may return elements in any order.
-func storedEchoForResolvedRefInArray(desiredElem any, storedArr []any, modElem any) (any, bool) {
+func substituteResolvedRefInArray(desiredElem any, storedArr []any, modElem, currentElem any, resolvableProperties resolver.ResolvableProperties) (any, bool) {
 	desiredEnv, ok := desiredElem.(map[string]any)
 	if !ok {
 		return nil, false
 	}
-	storedElem := storedRefElementByURI(storedArr, desiredEnv["$ref"])
-	if storedElem == nil {
-		return nil, false
+	var storedElem any
+	if match := storedRefElementByURI(storedArr, desiredEnv["$ref"]); match != nil {
+		storedElem = match
 	}
-	return storedEchoForResolvedRef(desiredElem, storedElem, modElem)
+	return substituteResolvedRef(desiredElem, storedElem, modElem, currentElem, resolvableProperties)
 }
 
 // storedRefElementByURI finds the stored array element whose $ref equals uri.
@@ -1034,8 +1069,8 @@ func resolveRefs(current, mod, stored, desired map[string]any, resolvablePropert
 		// A reference the executor already resolved: the desired side holds the
 		// resolved value alone, and the envelope it came from lives in the
 		// unconverted desired properties.
-		if echo, ok := storedEchoForResolvedRef(desired[k], stored[k], v); ok {
-			mod[k] = echo
+		if value, handled := substituteResolvedRef(desired[k], stored[k], v, current[k], resolvableProperties); handled {
+			mod[k] = value
 			continue
 		}
 		switch modVal := v.(type) {
@@ -1167,8 +1202,8 @@ func resolveRefs(current, mod, stored, desired map[string]any, resolvablePropert
 				if len(desiredArr) > i {
 					desiredElem = desiredArr[i]
 				}
-				if echo, ok := storedEchoForResolvedRefInArray(desiredElem, storedArr, elem); ok {
-					modVal[i] = echo
+				if value, handled := substituteResolvedRefInArray(desiredElem, storedArr, elem, currElem, resolvableProperties); handled {
+					modVal[i] = value
 				}
 			}
 		}

@@ -3326,3 +3326,98 @@ func TestGeneratePatch_ResolvedArrayRefsAmbiguousStored_FailsClosed(t *testing.T
 	require.NoError(t, json.Unmarshal(patchDoc, &ops))
 	assert.NotEmpty(t, ops, "ambiguous counterparts must not silently compare equal")
 }
+
+// A $value on the desired envelope records an earlier resolution. When the
+// reference resolves to something else now, that current resolution is what
+// gets planned: trusting the cached value would compare a moved reference as
+// unchanged and drop the update entirely.
+func TestGeneratePatch_ResolvedRefWithStaleValue_PlansFreshResolution(t *testing.T) {
+	ksuid := util.NewID()
+	appliedArn := "arn:aws:kms:us-east-1:111122223333:key/47110862-aaaa"
+	freshArn := "arn:aws:kms:us-east-1:111122223333:key/99887766-bbbb"
+	document := []byte(`{"TargetKeyId": "47110862-aaaa"}`)
+	stored := fmt.Appendf(nil, `{"TargetKeyId": {"$ref": "formae://%s#/Arn", "$value": "47110862-aaaa", "$applied": %q}}`, ksuid, appliedArn)
+	// The desired envelope still carries the previously applied resolution.
+	desired := fmt.Appendf(nil, `{"TargetKeyId": {"$ref": "formae://%s#/Arn", "$value": %q}}`, ksuid, appliedArn)
+	patch := fmt.Appendf(nil, `{"TargetKeyId": %q}`, appliedArn)
+	schema := pkgmodel.Schema{Fields: []string{"TargetKeyId"}}
+	props := resolver.NewResolvableProperties()
+	props.Add(ksuid, "Arn", freshArn)
+
+	patchDoc, _, err := generatePatch(document, patch, stored, desired, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	var ops []jsonpatch.JsonPatchOperation
+	require.NoError(t, json.Unmarshal(patchDoc, &ops))
+	require.Len(t, ops, 1, "a reference that resolves somewhere new must be planned")
+	assert.Equal(t, freshArn, ops[0].Value, "the plan must carry the current resolution, not the cached one")
+}
+
+// The same on an immutable field must still force a replacement.
+func TestGeneratePatch_CreateOnlyResolvedRefWithStaleValue_PlansReplacement(t *testing.T) {
+	ksuid := util.NewID()
+	appliedArn := "arn:aws:lambda:us-east-1:111122223333:function:fn-v1"
+	freshArn := "arn:aws:lambda:us-east-1:111122223333:function:fn-v2"
+	document := []byte(`{"TargetFunctionArn": "fn-v1"}`)
+	stored := fmt.Appendf(nil, `{"TargetFunctionArn": {"$ref": "formae://%s#/Arn", "$value": "fn-v1", "$applied": %q}}`, ksuid, appliedArn)
+	desired := fmt.Appendf(nil, `{"TargetFunctionArn": {"$ref": "formae://%s#/Arn", "$value": %q}}`, ksuid, appliedArn)
+	patch := fmt.Appendf(nil, `{"TargetFunctionArn": %q}`, appliedArn)
+	schema := pkgmodel.Schema{
+		Fields: []string{"TargetFunctionArn"},
+		Hints:  map[string]pkgmodel.FieldHint{"TargetFunctionArn": {CreateOnly: true}},
+	}
+	props := resolver.NewResolvableProperties()
+	props.Add(ksuid, "Arn", freshArn)
+
+	_, createOnlyPatch, err := generatePatch(document, patch, stored, desired, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	require.NotEmpty(t, createOnlyPatch, "a moved reference on an immutable field must still force a replacement")
+	assert.Contains(t, string(createOnlyPatch), freshArn)
+}
+
+// A resolution matching the baseline stays suppressed even when it arrives from
+// a fresh lookup rather than the envelope's cached value.
+func TestGeneratePatch_ResolvedRefFreshlyMatchingApplied_NoPatch(t *testing.T) {
+	ksuid := util.NewID()
+	arn := "arn:aws:kms:us-east-1:111122223333:key/47110862-aaaa"
+	document := []byte(`{"TargetKeyId": "47110862-aaaa"}`)
+	stored := fmt.Appendf(nil, `{"TargetKeyId": {"$ref": "formae://%s#/Arn", "$value": "47110862-aaaa", "$applied": %q}}`, ksuid, arn)
+	desired := fmt.Appendf(nil, `{"TargetKeyId": {"$ref": "formae://%s#/Arn", "$value": %q}}`, ksuid, arn)
+	patch := fmt.Appendf(nil, `{"TargetKeyId": %q}`, arn)
+	schema := pkgmodel.Schema{Fields: []string{"TargetKeyId"}}
+	props := resolver.NewResolvableProperties()
+	props.Add(ksuid, "Arn", arn)
+
+	patchDoc, createOnlyPatch, err := generatePatch(document, patch, stored, desired, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Empty(t, createOnlyPatch)
+	assert.Nil(t, patchDoc, "an unchanged reference stays suppressed under fresh resolution")
+}
+
+// An array element whose reference moved is written with its current
+// resolution while its unchanged sibling stays suppressed.
+func TestGeneratePatch_ResolvedArrayRefWithStaleValue_PlansFreshResolution(t *testing.T) {
+	ksuid := util.NewID()
+	arnA := "arn:aws:sns:us-east-1:111122223333:topic-a"
+	arnB := "arn:aws:sns:us-east-1:111122223333:topic-b"
+	arnBMoved := "arn:aws:sns:us-east-1:111122223333:topic-b2"
+	document := []byte(`{"Topics": ["name-a", "name-b"]}`)
+	stored := fmt.Appendf(nil, `{"Topics": [
+		{"$ref": "formae://%s#/ArnA", "$value": "name-a", "$applied": %q},
+		{"$ref": "formae://%s#/ArnB", "$value": "name-b", "$applied": %q}
+	]}`, ksuid, arnA, ksuid, arnB)
+	desired := fmt.Appendf(nil, `{"Topics": [
+		{"$ref": "formae://%s#/ArnA", "$value": %q},
+		{"$ref": "formae://%s#/ArnB", "$value": %q}
+	]}`, ksuid, arnA, ksuid, arnB)
+	patch := fmt.Appendf(nil, `{"Topics": [%q, %q]}`, arnA, arnB)
+	schema := pkgmodel.Schema{Fields: []string{"Topics"}}
+	props := resolver.NewResolvableProperties()
+	props.Add(ksuid, "ArnA", arnA)
+	props.Add(ksuid, "ArnB", arnBMoved)
+
+	patchDoc, _, err := generatePatch(document, patch, stored, desired, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	require.NotNil(t, patchDoc, "a moved array reference must be planned")
+	assert.Contains(t, string(patchDoc), arnBMoved, "the moved element carries its current resolution")
+	assert.NotContains(t, string(patchDoc), arnA, "the unchanged element is not rewritten")
+}
