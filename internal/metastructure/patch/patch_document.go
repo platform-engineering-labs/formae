@@ -1014,10 +1014,10 @@ func freshResolution(env map[string]any, current any, resolvableProperties resol
 // and the reference is not rewritten in the provider's own spelling. Otherwise
 // the desired side carries the current resolution, so a genuine repoint is
 // planned (and, on an immutable field, still forces a replacement).
-func substituteResolvedRef(desiredNode, storedNode, modNode, currentNode any, resolvableProperties resolver.ResolvableProperties) (any, bool, bool, error) {
+func substituteResolvedRef(desiredNode, storedNode, modNode, currentNode any, resolvableProperties resolver.ResolvableProperties) (resolvedRefDecision, bool, error) {
 	desiredEnv, ok := resolvedDesiredEnvelope(desiredNode, modNode)
 	if !ok {
-		return nil, false, false, nil
+		return resolvedRefDecision{}, false, nil
 	}
 	storedEnv := storedAppliedEnvelope(storedNode)
 	sameRef := storedEnv != nil && storedEnv["$ref"] == desiredEnv["$ref"]
@@ -1026,7 +1026,7 @@ func substituteResolvedRef(desiredNode, storedNode, modNode, currentNode any, re
 	matchesApplied := sameRef && reflect.DeepEqual(storedEnv["$applied"], effective)
 	native, raw, found, err := freshResolution(desiredEnv, currentNode, resolvableProperties)
 	if err != nil {
-		return nil, false, false, err
+		return resolvedRefDecision{}, false, err
 	}
 	if found {
 		effective = native
@@ -1035,7 +1035,16 @@ func substituteResolvedRef(desiredNode, storedNode, modNode, currentNode any, re
 	// The value formae would write is returned either way. When the reference is
 	// unchanged the caller aligns the comparison side instead of rewriting this
 	// one, so an operation covering this path still carries the written form.
-	return effective, matchesApplied, true, nil
+	return resolvedRefDecision{Value: effective, Echo: storedEnv["$value"], Matched: matchesApplied}, true, nil
+}
+
+// resolvedRefDecision carries what the desired side should hold for an
+// already-resolved reference, the provider spelling recorded with it, and
+// whether it still resolves to what the last write applied.
+type resolvedRefDecision struct {
+	Value   any
+	Echo    any
+	Matched bool
 }
 
 // desiredEnvRef reports the reference a desired array element names, if any.
@@ -1045,6 +1054,31 @@ func desiredEnvRef(desiredElem any) any {
 		return nil
 	}
 	return env["$ref"]
+}
+
+// alignComparisonElementForRef aligns the actual-state element for one array
+// reference, when that reference still resolves to what the last write applied.
+func alignComparisonElementForRef(currentArr []any, storedElem map[string]any, desiredElem any) {
+	if storedElem == nil || storedElem["$applied"] == nil || storedElem["$value"] == nil {
+		return
+	}
+	// An element still carrying its envelope holds the resolution under $value;
+	// an already-converted element IS the resolution, which may itself be an
+	// object and must not be mistaken for an envelope.
+	resolved := desiredElem
+	if env, isEnv := desiredElem.(map[string]any); isEnv {
+		if _, isEnvelope := env["$ref"]; isEnvelope {
+			value, hasValue := env["$value"]
+			if !hasValue {
+				return
+			}
+			resolved = value
+		}
+	}
+	if !reflect.DeepEqual(storedElem["$applied"], resolved) {
+		return
+	}
+	alignComparisonElement(currentArr, storedElem["$value"], resolved)
 }
 
 // alignComparisonElement rewrites the actual-state array element the provider
@@ -1076,11 +1110,18 @@ func alignComparisonElement(currentArr []any, echo, value any) {
 //
 // It only rewrites a path the provider actually reported: inventing one would
 // turn an addition into a no-op.
-func alignComparisonValue(current map[string]any, key string, value any) {
+func alignComparisonValue(current map[string]any, key string, echo, value any) {
 	if current == nil {
 		return
 	}
-	if _, reported := current[key]; !reported {
+	reported, exists := current[key]
+	if !exists {
+		return
+	}
+	// Only align a value that still matches what the provider echoed when the
+	// reference was written. A live value that has moved since is drift, and
+	// overwriting it here would compare it away and leave it unrepaired.
+	if !reflect.DeepEqual(reported, echo) {
 		return
 	}
 	current[key] = value
@@ -1089,10 +1130,10 @@ func alignComparisonValue(current map[string]any, key string, value any) {
 // substituteResolvedRefInArray applies substituteResolvedRef to one array
 // element, locating the stored counterpart by the reference the desired element
 // names rather than by position: the provider may return elements in any order.
-func substituteResolvedRefInArray(desiredElem any, storedArr []any, modElem, currentElem any, resolvableProperties resolver.ResolvableProperties) (any, bool, bool, error) {
+func substituteResolvedRefInArray(desiredElem any, storedArr []any, modElem, currentElem any, resolvableProperties resolver.ResolvableProperties) (resolvedRefDecision, bool, error) {
 	desiredEnv, ok := desiredElem.(map[string]any)
 	if !ok {
-		return nil, false, false, nil
+		return resolvedRefDecision{}, false, nil
 	}
 	var storedElem any
 	if match := storedRefElementByURI(storedArr, desiredEnv["$ref"]); match != nil {
@@ -1125,14 +1166,14 @@ func resolveRefs(current, mod, stored, desired map[string]any, resolvablePropert
 		// A reference the executor already resolved: the desired side holds the
 		// resolved value alone, and the envelope it came from lives in the
 		// unconverted desired properties.
-		value, matched, handled, err := substituteResolvedRef(desired[k], stored[k], v, current[k], resolvableProperties)
+		decision, handled, err := substituteResolvedRef(desired[k], stored[k], v, current[k], resolvableProperties)
 		if err != nil {
 			return err
 		}
 		if handled {
-			mod[k] = value
-			if matched {
-				alignComparisonValue(current, k, value)
+			mod[k] = decision.Value
+			if decision.Matched {
+				alignComparisonValue(current, k, decision.Echo, decision.Value)
 			}
 			continue
 		}
@@ -1165,7 +1206,7 @@ func resolveRefs(current, mod, stored, desired map[string]any, resolvablePropert
 							// where operation values come from, and rewriting it
 							// to the provider's spelling would send that spelling
 							// back inside any operation covering this path.
-							alignComparisonValue(current, k, native)
+							alignComparisonValue(current, k, counterpart["$value"], native)
 						}
 					}
 				} else if counterpart != nil {
@@ -1258,21 +1299,19 @@ func resolveRefs(current, mod, stored, desired map[string]any, resolvablePropert
 					// to a scalar or a list now, and dropping that would leave
 					// the stale object in place.
 					modVal[i] = wrappedElem[k]
-					// The recursion aligns the comparison side inside a wrapper
-					// keyed by position. Re-apply it to the element the provider
-					// actually reported for this reference, found by the echo
-					// recorded with it, since positions need not correspond.
-					if aligned, ok := wrappedCurrent[k]; ok && !reflect.DeepEqual(aligned, currElem) {
-						// A converted element carries no reference of its own, so
-						// fall back to the one the desired element names.
-						ref := elemMap["$ref"]
-						if ref == nil && len(desiredArr) > i {
-							ref = desiredEnvRef(desiredArr[i])
-						}
-						if storedElem := storedRefElementByURI(storedArr, ref); storedElem != nil {
-							alignComparisonElement(currArr, storedElem["$value"], aligned)
-						}
+					// Alignment for an element happens here rather than in the
+					// recursion: the recursion only sees a wrapper keyed by
+					// position, while the provider may report elements in any
+					// order, so the element to align is found by the echo
+					// recorded with the reference.
+					//
+					// A converted element carries no reference of its own, so
+					// fall back to the one the desired element names.
+					ref := elemMap["$ref"]
+					if ref == nil && len(desiredArr) > i {
+						ref = desiredEnvRef(desiredArr[i])
 					}
+					alignComparisonElementForRef(currArr, storedRefElementByURI(storedArr, ref), wrappedElem[k])
 					continue
 				}
 				// An already-resolved element. The unconverted desired array is
@@ -1283,18 +1322,18 @@ func resolveRefs(current, mod, stored, desired map[string]any, resolvablePropert
 				if len(desiredArr) > i {
 					desiredElem = desiredArr[i]
 				}
-				value, matched, handled, err := substituteResolvedRefInArray(desiredElem, storedArr, elem, currElem, resolvableProperties)
+				decision, handled, err := substituteResolvedRefInArray(desiredElem, storedArr, elem, currElem, resolvableProperties)
 				if err != nil {
 					return err
 				}
 				if handled {
-					modVal[i] = value
-					if matched {
+					modVal[i] = decision.Value
+					if decision.Matched {
 						// Locate the element the provider reported for this
 						// reference by the echo recorded alongside it, since the
 						// provider may return elements in any order.
 						if storedElem := storedRefElementByURI(storedArr, desiredEnvRef(desiredElem)); storedElem != nil {
-							alignComparisonElement(currArr, storedElem["$value"], value)
+							alignComparisonElement(currArr, storedElem["$value"], decision.Value)
 						}
 					}
 				}

@@ -3654,3 +3654,93 @@ func TestGeneratePatch_AtomicObjectFullyUnchanged_NoPatch(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, patchDoc, "an unchanged atomic object must still reconcile to a no-op")
 }
+
+// A reference that still resolves to what was applied, on a field whose live
+// value has since moved out of band, is drift: the live value no longer matches
+// the spelling the provider reported when the reference was written, and the
+// repair must still be planned.
+func TestGeneratePatch_UnchangedRefWithDriftedLiveValue_PlansRepair(t *testing.T) {
+	ksuid := util.NewID()
+	arn := "arn:aws:kms:us-east-1:111122223333:key/47110862-aaaa"
+	document := []byte(`{"TargetKeyId": "somebody-else-set-this"}`)
+	stored := fmt.Appendf(nil, `{"TargetKeyId": {"$ref": "formae://%s#/Arn", "$value": "47110862-aaaa", "$applied": %q}}`, ksuid, arn)
+	desired := fmt.Appendf(nil, `{"TargetKeyId": {"$ref": "formae://%s#/Arn"}}`, ksuid)
+	patch := desired
+	schema := pkgmodel.Schema{Fields: []string{"TargetKeyId"}}
+	props := resolver.NewResolvableProperties()
+	props.Add(ksuid, "Arn", arn)
+
+	patchDoc, _, err := generatePatch(document, patch, stored, desired, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	var ops []jsonpatch.JsonPatchOperation
+	require.NoError(t, json.Unmarshal(patchDoc, &ops))
+	require.Len(t, ops, 1, "drift on a reference-fed field must still be repaired")
+	assert.Equal(t, arn, ops[0].Value)
+}
+
+// The same on an immutable field, where swallowing the drift would also swallow
+// the replacement it requires.
+func TestGeneratePatch_CreateOnlyUnchangedRefWithDriftedLiveValue_PlansReplacement(t *testing.T) {
+	ksuid := util.NewID()
+	arn := "arn:aws:lambda:us-east-1:111122223333:function:fn"
+	document := []byte(`{"TargetFunctionArn": "somebody-else-set-this"}`)
+	stored := fmt.Appendf(nil, `{"TargetFunctionArn": {"$ref": "formae://%s#/Arn", "$value": "fn", "$applied": %q}}`, ksuid, arn)
+	desired := fmt.Appendf(nil, `{"TargetFunctionArn": {"$ref": "formae://%s#/Arn"}}`, ksuid)
+	patch := desired
+	schema := pkgmodel.Schema{
+		Fields: []string{"TargetFunctionArn"},
+		Hints:  map[string]pkgmodel.FieldHint{"TargetFunctionArn": {CreateOnly: true}},
+	}
+	props := resolver.NewResolvableProperties()
+	props.Add(ksuid, "Arn", arn)
+
+	_, createOnlyPatch, err := generatePatch(document, patch, stored, desired, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	require.NotEmpty(t, createOnlyPatch, "drift on an immutable reference-fed field must still force a replacement")
+}
+
+// The execution path, where the desired side arrives already resolved, must
+// surface drift too.
+func TestGeneratePatch_ResolvedRefWithDriftedLiveValue_PlansRepair(t *testing.T) {
+	ksuid := util.NewID()
+	arn := "arn:aws:kms:us-east-1:111122223333:key/47110862-aaaa"
+	document := []byte(`{"TargetKeyId": "somebody-else-set-this"}`)
+	stored := fmt.Appendf(nil, `{"TargetKeyId": {"$ref": "formae://%s#/Arn", "$value": "47110862-aaaa", "$applied": %q}}`, ksuid, arn)
+	desired := fmt.Appendf(nil, `{"TargetKeyId": {"$ref": "formae://%s#/Arn", "$value": %q}}`, ksuid, arn)
+	patch := fmt.Appendf(nil, `{"TargetKeyId": %q}`, arn)
+	schema := pkgmodel.Schema{Fields: []string{"TargetKeyId"}}
+
+	patchDoc, _, err := generatePatch(document, patch, stored, desired, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	var ops []jsonpatch.JsonPatchOperation
+	require.NoError(t, json.Unmarshal(patchDoc, &ops))
+	require.Len(t, ops, 1, "drift must be repaired on the execution path too")
+	assert.Equal(t, arn, ops[0].Value)
+}
+
+// An array element that drifted out of band is repaired while its unchanged
+// siblings stay suppressed.
+func TestGeneratePatch_ArrayRefWithDriftedLiveElement_PlansRepair(t *testing.T) {
+	ksuid := util.NewID()
+	arnA := "arn:aws:sns:us-east-1:111122223333:topic-a"
+	arnB := "arn:aws:sns:us-east-1:111122223333:topic-b"
+	document := []byte(`{"Topics": ["name-a", "somebody-else-set-this"]}`)
+	stored := fmt.Appendf(nil, `{"Topics": [
+		{"$ref": "formae://%s#/ArnA", "$value": "name-a", "$applied": %q},
+		{"$ref": "formae://%s#/ArnB", "$value": "name-b", "$applied": %q}
+	]}`, ksuid, arnA, ksuid, arnB)
+	desired := fmt.Appendf(nil, `{"Topics": [
+		{"$ref": "formae://%s#/ArnA"},
+		{"$ref": "formae://%s#/ArnB"}
+	]}`, ksuid, ksuid)
+	patch := desired
+	schema := pkgmodel.Schema{Fields: []string{"Topics"}}
+	props := resolver.NewResolvableProperties()
+	props.Add(ksuid, "ArnA", arnA)
+	props.Add(ksuid, "ArnB", arnB)
+
+	patchDoc, _, err := generatePatch(document, patch, stored, desired, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	require.NotNil(t, patchDoc, "a drifted array element must be repaired")
+	assert.Contains(t, string(patchDoc), arnB, "the repair carries the written form")
+}
