@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/rpc"
 	"os/exec"
-	"strings"
 	"time"
 )
 
@@ -161,20 +160,26 @@ func (r *LoginStartResponse) setUnsupported()    { r.ErrorCode = ErrorCodeUnsupp
 func (r *LoginWaitResponse) setUnsupported()     { r.ErrorCode = ErrorCodeUnsupported }
 func (r *LogoutResponse) setUnsupported()        { r.ErrorCode = ErrorCodeUnsupported }
 
-// methodNotFoundPrefix is the text net/rpc prefixes to the error it returns
-// when the server has no registered method for the requested name.
-const methodNotFoundPrefix = "rpc: can't find method"
-
 // call invokes an AuthPlugin RPC method and translates net/rpc's
 // method-not-found transport error into the typed unsupported contract, so
 // an old already-built plugin binary that lacks a verb is indistinguishable
 // from a new one that declines it.
+//
+// The match is against the exact canonical error text net/rpc's server
+// produces for the specific method being called ("rpc: can't find method " +
+// serviceMethod), not a bare prefix. net/rpc surfaces both its own dispatch
+// failures and errors returned by an invoked method through the same
+// unstructured error channel, so a registered method that fails with an
+// error string that happens to start with that same prefix (e.g. a plugin
+// propagating a downstream RPC failure verbatim) must NOT be mistaken for an
+// absent method.
 func (c *Client) call(method string, req any, resp errorCoded) error {
-	err := c.rpcClient.Call("AuthPlugin."+method, req, resp)
+	serviceMethod := "AuthPlugin." + method
+	err := c.rpcClient.Call(serviceMethod, req, resp)
 	if err == nil {
 		return nil
 	}
-	if strings.HasPrefix(err.Error(), methodNotFoundPrefix) {
+	if err.Error() == "rpc: can't find method "+serviceMethod {
 		resp.setUnsupported()
 		return nil
 	}

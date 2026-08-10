@@ -5,6 +5,7 @@
 package auth
 
 import (
+	"errors"
 	"net/rpc"
 	"testing"
 	"time"
@@ -253,6 +254,44 @@ func TestClient_UnsupportedVerbTranslation(t *testing.T) {
 				t.Fatalf("expected ErrorCode %q, got %q", tc.wantCode, code)
 			}
 		})
+	}
+}
+
+// confusingErrorPlugin implements the full AuthPlugin interface, but its
+// LoginStart method itself fails, returning an error whose text happens to
+// share the "rpc: can't find method" prefix net/rpc uses for its own
+// method-not-found error — for a different service and method than the one
+// invoked, as could occur when a plugin propagates a downstream RPC failure
+// verbatim (e.g. its own call to an issuer's RPC surface).
+type confusingErrorPlugin struct {
+	UnimplementedAuthPlugin
+}
+
+func (confusingErrorPlugin) Init(req *InitRequest, resp *InitResponse) error {
+	return nil
+}
+
+func (confusingErrorPlugin) LoginStart(req *LoginStartRequest, resp *LoginStartResponse) error {
+	return errors.New("rpc: can't find method Issuer.Refresh")
+}
+
+// TestClient_Call_DoesNotMisclassifyDownstreamError exercises a method that
+// IS registered but whose own implementation fails with an error string that
+// happens to start with the same text net/rpc uses for a genuinely absent
+// method. call must surface this as a real, non-nil error rather than
+// translating it into ErrorCodeUnsupported.
+func TestClient_Call_DoesNotMisclassifyDownstreamError(t *testing.T) {
+	plugin := &confusingErrorPlugin{}
+	client := newTestClient(t, plugin)
+	defer client.Close()
+
+	var resp LoginStartResponse
+	err := client.call("LoginStart", &LoginStartRequest{Mode: "browser"}, &resp)
+	if err == nil {
+		t.Fatal("expected a non-nil error, got nil")
+	}
+	if resp.ErrorCode == ErrorCodeUnsupported {
+		t.Fatal("expected the downstream error not to be misclassified as ErrorCodeUnsupported")
 	}
 }
 
