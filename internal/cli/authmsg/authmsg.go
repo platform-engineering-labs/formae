@@ -10,6 +10,8 @@
 package authmsg
 
 import (
+	"fmt"
+
 	pkgauth "github.com/platform-engineering-labs/formae/pkg/auth"
 )
 
@@ -17,6 +19,12 @@ import (
 // the user. An empty or unrecognised code — including one from a plugin
 // built against a newer SDK than this CLI knows about — degrades to
 // fallback, the plugin's own error text, rather than failing or going blank.
+// When the code is unrecognised AND fallback is itself empty — a plugin may
+// legitimately set only ErrorCode and leave Error blank — that degradation
+// would otherwise produce an empty message, defeating the point of a
+// version-skew fallback; in that case a generic message naming the unknown
+// code (or, if even the code is empty, a generic message with no code) is
+// returned instead.
 func DescribeAuthError(code pkgauth.ErrorCode, fallback string) string {
 	switch code {
 	case pkgauth.ErrorCodeUnsupported:
@@ -28,6 +36,12 @@ func DescribeAuthError(code pkgauth.ErrorCode, fallback string) string {
 	case pkgauth.ErrorCodeIssuerUnreachable:
 		return "the identity provider is unreachable — try again shortly"
 	default:
-		return fallback
+		if fallback != "" {
+			return fallback
+		}
+		if code == "" {
+			return "the active profile's auth plugin reported an error with no further detail"
+		}
+		return fmt.Sprintf("the active profile's auth plugin reported an unrecognized error (code: %s)", code)
 	}
 }

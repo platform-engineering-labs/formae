@@ -61,6 +61,18 @@ func TestDescribeAuthError(t *testing.T) {
 			fallback: "a generic message",
 			want:     "a generic message",
 		},
+		{
+			name:     "unknown non-empty code with an empty fallback names the code",
+			code:     pkgauth.ErrorCode("some_future_code"),
+			fallback: "",
+			want:     "the active profile's auth plugin reported an unrecognized error (code: some_future_code)",
+		},
+		{
+			name:     "empty code with an empty fallback still produces a non-blank message",
+			code:     "",
+			fallback: "",
+			want:     "the active profile's auth plugin reported an error with no further detail",
+		},
 	}
 
 	for _, tt := range tests {

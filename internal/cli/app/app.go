@@ -34,6 +34,7 @@ import (
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/discovery"
 	"github.com/tidwall/gjson"
+	"golang.org/x/sync/singleflight"
 )
 
 type App struct {
@@ -69,6 +70,15 @@ type App struct {
 	// and nil because no network plugin is configured".
 	netClient       *http.Client
 	netClientLoaded bool
+
+	// refreshGroup coalesces concurrent forced-refresh requests into a
+	// single GetAuthHeader(true) call. Several operations can observe the
+	// same stale credential at once (the same Bubbletea overlap described
+	// above), and each independently forcing a refresh would be actively
+	// harmful for a plugin backed by rotating refresh tokens: one refresh
+	// would consume the token another is mid-use of, tripping reuse
+	// detection and killing the session. Its zero value is ready to use.
+	refreshGroup singleflight.Group
 
 	// authClientFactory returns the auth plugin client used to obtain and,
 	// on a 401, force-refresh the credential attached to outgoing API
@@ -866,20 +876,12 @@ func (a *App) withAuthRetry(op func(authHeader http.Header, net *http.Client) er
 	// which means the agent saw and rejected a credential we did manage to
 	// get. Mirrors how the initial (unforced) fetch in
 	// getAuthAndNetHandlers reports the same two failure classes.
-	provider, provErr := a.authProvider()
-	if provErr != nil {
-		return provErr
+	refreshedHeader, refreshErr := a.forceRefreshAuthHeader()
+	if refreshErr != nil {
+		return refreshErr
 	}
 
-	resp, headerErr := provider.GetAuthHeader(true)
-	if headerErr != nil {
-		return fmt.Errorf("failed to get auth header: %w", headerErr)
-	}
-	if resp.ErrorCode != "" || resp.Error != "" {
-		return errors.New(authmsg.DescribeAuthError(resp.ErrorCode, resp.Error))
-	}
-
-	err = op(http.Header(resp.Headers), net)
+	err = op(refreshedHeader, net)
 	if err == nil {
 		return nil
 	}
@@ -887,6 +889,61 @@ func (a *App) withAuthRetry(op func(authHeader http.Header, net *http.Client) er
 		return api.AuthorizationDeniedError{}
 	}
 	return err
+}
+
+// forceRefreshAuthHeader asks the auth plugin to force-refresh the
+// credential, coalescing concurrent callers into a single underlying
+// GetAuthHeader(true) call via refreshGroup: every caller that arrives
+// while a refresh is already in flight shares its result instead of
+// starting its own. The singleflight group's own lock is released before
+// the request function runs (see golang.org/x/sync/singleflight), so
+// calling into a.authProvider() — which takes memoMu — here cannot deadlock
+// against it.
+func (a *App) forceRefreshAuthHeader() (http.Header, error) {
+	v, err, _ := a.refreshGroup.Do("refresh", func() (any, error) {
+		provider, provErr := a.authProvider()
+		if provErr != nil {
+			return nil, provErr
+		}
+
+		resp, headerErr := provider.GetAuthHeader(true)
+		if headerErr != nil {
+			return nil, fmt.Errorf("failed to get auth header: %w", headerErr)
+		}
+		if resp.ErrorCode != "" || resp.Error != "" {
+			return nil, errors.New(authmsg.DescribeAuthError(resp.ErrorCode, resp.Error))
+		}
+		if !hasCredential(resp.Headers) {
+			return nil, errors.New(noCredentialMessage)
+		}
+		return http.Header(resp.Headers), nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.(http.Header), nil
+}
+
+// noCredentialMessage is returned when the auth plugin reports success — no
+// ErrorCode, no Error — but the header it returned carries nothing usable.
+// Treating that as success would hand the API client an empty Authorization
+// header and send the request unauthenticated: an apparent success hiding a
+// real failure, exactly the shape this whole retry mechanism exists to
+// eliminate.
+const noCredentialMessage = "the auth plugin returned no credential"
+
+// hasCredential reports whether headers carries an actual credential value,
+// not merely a non-nil map: a map present but holding only empty-string
+// values is the same failure as no map at all.
+func hasCredential(headers map[string][]string) bool {
+	for _, values := range headers {
+		for _, v := range values {
+			if v != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (a *App) getAuthAndNetHandlers() (http.Header, *http.Client, error) {
@@ -904,6 +961,9 @@ func (a *App) getAuthAndNetHandlers() (http.Header, *http.Client, error) {
 		}
 		if resp.ErrorCode != "" || resp.Error != "" {
 			return nil, nil, errors.New(authmsg.DescribeAuthError(resp.ErrorCode, resp.Error))
+		}
+		if !hasCredential(resp.Headers) {
+			return nil, nil, errors.New(noCredentialMessage)
 		}
 		authHeader = http.Header(resp.Headers)
 	}

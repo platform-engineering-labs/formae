@@ -29,24 +29,29 @@ import (
 
 // stubAuthProvider is a test double for authHeaderProvider. It returns
 // initialResp/initialErr on an unforced GetAuthHeader call and
-// forcedResp/forcedErr on a forced one, and counts each kind separately so
-// tests can assert on exactly how many times a forced refresh was requested.
+// forcedResp/forcedErr on a forced one. Call counts use atomics and
+// forcedDelay is honored before returning, so the same stub is safe to
+// drive concurrently from a test that overlaps forced refreshes.
 type stubAuthProvider struct {
 	initialResp *pkgauth.GetAuthHeaderResponse
 	initialErr  error
 	forcedResp  *pkgauth.GetAuthHeaderResponse
 	forcedErr   error
+	forcedDelay time.Duration
 
-	initialCalls int
-	forcedCalls  int
+	initialCalls atomic.Int32
+	forcedCalls  atomic.Int32
 }
 
 func (s *stubAuthProvider) GetAuthHeader(forceRefresh bool) (*pkgauth.GetAuthHeaderResponse, error) {
 	if forceRefresh {
-		s.forcedCalls++
+		s.forcedCalls.Add(1)
+		if s.forcedDelay > 0 {
+			time.Sleep(s.forcedDelay)
+		}
 		return s.forcedResp, s.forcedErr
 	}
-	s.initialCalls++
+	s.initialCalls.Add(1)
 	return s.initialResp, s.initialErr
 }
 
@@ -54,6 +59,8 @@ func (s *stubAuthProvider) GetAuthHeader(forceRefresh bool) (*pkgauth.GetAuthHea
 // consumes the next entry in behaviors (the last entry repeats once
 // exhausted), and calls is the count of invocations — standing in for "HTTP
 // requests issued" in tests that must prove a retry did or did not happen.
+// Use this when the test's pass/fail condition doesn't depend on which
+// credential op actually received; use credentialOp when it must.
 type stubOp struct {
 	behaviors []error
 	calls     int
@@ -66,6 +73,27 @@ func (s *stubOp) run(http.Header, *http.Client) error {
 	}
 	s.calls++
 	return s.behaviors[i]
+}
+
+// credentialOp is a test double that only succeeds when given exactly the
+// accepted Authorization value, failing with AuthenticationError for
+// anything else — modeling an agent that actually checks the credential
+// rather than merely counting requests. It exists so a test asserting
+// success also proves the REFRESHED header, not the original one, is what
+// reached the operation: a stubOp with canned pass/fail behaviors would
+// stay green even if withAuthRetry retried with the stale header.
+type credentialOp struct {
+	accept string
+	calls  []string
+}
+
+func (c *credentialOp) run(h http.Header, _ *http.Client) error {
+	got := h.Get("Authorization")
+	c.calls = append(c.calls, got)
+	if got != c.accept {
+		return api.AuthenticationError{}
+	}
+	return nil
 }
 
 func headerResp(value string) *pkgauth.GetAuthHeaderResponse {
@@ -84,20 +112,21 @@ func appWithAuthPlugin(provider authHeaderProvider) *App {
 }
 
 // (a) op 401s once, forced refresh succeeds, second op succeeds → nil error,
-// exactly one forced GetAuthHeader call.
+// exactly one forced GetAuthHeader call, and the operation actually receives
+// the REFRESHED credential (not the stale one it was first given).
 func TestWithAuthRetry_RecoversAfterForcedRefresh(t *testing.T) {
 	provider := &stubAuthProvider{
 		initialResp: headerResp("stale"),
 		forcedResp:  headerResp("fresh"),
 	}
 	a := appWithAuthPlugin(provider)
-	op := &stubOp{behaviors: []error{api.AuthenticationError{}, nil}}
+	op := &credentialOp{accept: "fresh"}
 
 	err := a.withAuthRetry(op.run)
 
 	require.NoError(t, err)
-	assert.Equal(t, 2, op.calls)
-	assert.Equal(t, 1, provider.forcedCalls)
+	assert.Equal(t, []string{"stale", "fresh"}, op.calls)
+	assert.Equal(t, int32(1), provider.forcedCalls.Load())
 }
 
 // (b) both attempts 401 → AuthorizationDeniedError, whose message tells the
@@ -117,7 +146,7 @@ func TestWithAuthRetry_BothAttempts401ReturnsAuthorizationDenied(t *testing.T) {
 	require.True(t, errors.As(err, &denied))
 	assert.Contains(t, err.Error(), "check with your org admin")
 	assert.Equal(t, 2, op.calls)
-	assert.Equal(t, 1, provider.forcedCalls)
+	assert.Equal(t, int32(1), provider.forcedCalls.Load())
 }
 
 // (c) a non-auth error returns unchanged with zero forced refreshes.
@@ -132,7 +161,7 @@ func TestWithAuthRetry_NonAuthErrorSkipsRetry(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, boom, err)
 	assert.Equal(t, 1, op.calls)
-	assert.Equal(t, 0, provider.forcedCalls)
+	assert.Equal(t, int32(0), provider.forcedCalls.Load())
 }
 
 // (d) no auth plugin configured → no retry, the original AuthenticationError
@@ -169,7 +198,7 @@ func TestWithAuthRetry_TypedGetAuthHeaderFailureSkipsRequestEntirely(t *testing.
 	require.Error(t, err)
 	assert.Equal(t, "not signed in — run 'formae login'", err.Error())
 	assert.Equal(t, 0, op.calls)
-	assert.Equal(t, 0, provider.forcedCalls)
+	assert.Equal(t, int32(0), provider.forcedCalls.Load())
 }
 
 // TestWithAuthRetry_ForcedTypedFailureSkipsRetry verifies that a typed
@@ -189,7 +218,7 @@ func TestWithAuthRetry_ForcedTypedFailureSkipsRetry(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, "the identity provider is unreachable — try again shortly", err.Error())
 	assert.Equal(t, 1, op.calls, "op must not be retried after a typed forced-refresh failure")
-	assert.Equal(t, 1, provider.forcedCalls)
+	assert.Equal(t, int32(1), provider.forcedCalls.Load())
 }
 
 // TestWithAuthRetry_ForcedRPCFailureSurfacesRealError verifies that when the
@@ -215,7 +244,7 @@ func TestWithAuthRetry_ForcedRPCFailureSurfacesRealError(t *testing.T) {
 	var denied api.AuthorizationDeniedError
 	assert.False(t, errors.As(err, &denied))
 	assert.Equal(t, 1, op.calls, "op must not be retried when no fresh credential was obtained")
-	assert.Equal(t, 1, provider.forcedCalls)
+	assert.Equal(t, int32(1), provider.forcedCalls.Load())
 }
 
 // TestWithAuthRetry_ForcedAuthClientFailureSurfacesRealError verifies that
@@ -244,6 +273,100 @@ func TestWithAuthRetry_ForcedAuthClientFailureSurfacesRealError(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, boom, err)
 	assert.Equal(t, 1, op.calls, "op must not be retried when the auth client itself is unavailable")
+}
+
+// TestWithAuthRetry_NoCredentialOnInitialFetchFailsClosed verifies that a
+// GetAuthHeader response with no ErrorCode and no Error, but no usable
+// credential in Headers either, is NOT treated as success on the initial
+// fetch: no HTTP request is issued, and the error names the real cause
+// instead of silently attaching an empty Authorization header.
+func TestWithAuthRetry_NoCredentialOnInitialFetchFailsClosed(t *testing.T) {
+	tests := []struct {
+		name    string
+		headers map[string][]string
+	}{
+		{name: "nil headers", headers: nil},
+		{name: "empty headers map", headers: map[string][]string{}},
+		{name: "map with only an empty value", headers: map[string][]string{"Authorization": {""}}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider := &stubAuthProvider{
+				initialResp: &pkgauth.GetAuthHeaderResponse{Headers: tt.headers},
+			}
+			a := appWithAuthPlugin(provider)
+			op := &stubOp{behaviors: []error{nil}}
+
+			err := a.withAuthRetry(op.run)
+
+			require.Error(t, err)
+			assert.Equal(t, "the auth plugin returned no credential", err.Error())
+			assert.Equal(t, 0, op.calls, "no request may be sent with an unusable credential")
+		})
+	}
+}
+
+// TestWithAuthRetry_NoCredentialOnForcedRefreshFailsClosed verifies the same
+// fail-closed behavior on the FORCED refresh: op 401s once, the forced
+// GetAuthHeader call reports success but returns no usable credential, and
+// the operation must not be retried with that empty header — nor must the
+// result be confused with AuthorizationDeniedError, since no credential was
+// ever obtained for the agent to deny.
+func TestWithAuthRetry_NoCredentialOnForcedRefreshFailsClosed(t *testing.T) {
+	provider := &stubAuthProvider{
+		initialResp: headerResp("stale"),
+		forcedResp:  &pkgauth.GetAuthHeaderResponse{Headers: map[string][]string{}},
+	}
+	a := appWithAuthPlugin(provider)
+	op := &stubOp{behaviors: []error{api.AuthenticationError{}, nil}}
+
+	err := a.withAuthRetry(op.run)
+
+	require.Error(t, err)
+	assert.Equal(t, "the auth plugin returned no credential", err.Error())
+	var denied api.AuthorizationDeniedError
+	assert.False(t, errors.As(err, &denied), "an unusable credential must not be reported as a denial")
+	assert.Equal(t, 1, op.calls, "the second attempt must not be sent with an unusable credential")
+}
+
+// TestWithAuthRetry_ConcurrentForcedRefreshesCoalesce drives several
+// overlapping 401s through withAuthRetry on the same App at once — the
+// shape Bubbletea's overlapping status polls can produce — and asserts that
+// only one forced GetAuthHeader(true) call reaches the plugin, with every
+// caller still recovering successfully using the shared refreshed
+// credential. Concurrent independent refreshes would be actively harmful
+// against a plugin with rotating refresh tokens: one refresh would consume
+// the token another caller's refresh is mid-use of.
+func TestWithAuthRetry_ConcurrentForcedRefreshesCoalesce(t *testing.T) {
+	provider := &stubAuthProvider{
+		initialResp: headerResp("stale"),
+		forcedResp:  headerResp("fresh"),
+		forcedDelay: 20 * time.Millisecond,
+	}
+	a := appWithAuthPlugin(provider)
+
+	const callers = 10
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	errs := make([]error, callers)
+
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			op := &credentialOp{accept: "fresh"}
+			errs[i] = a.withAuthRetry(op.run)
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	for i, err := range errs {
+		assert.NoError(t, err, "caller %d must recover using the shared refreshed credential", i)
+	}
+	assert.Equal(t, int32(1), provider.forcedCalls.Load(), "concurrent callers must coalesce into a single forced refresh")
 }
 
 // countingNetPlugin is a test double for network.NetworkPlugin that counts
@@ -350,15 +473,17 @@ func agentStatsJSONFor(t *testing.T, version string) []byte {
 }
 
 // TestWithAuthRetry_HTTPIntegration drives withAuthRetry through the real
-// API client against an httptest server that 401s the first request and
-// 200s the second, proving the retry happens at the individual-request
-// boundary (exactly two server hits) rather than replaying a whole command.
+// API client against an httptest server that authorizes purely on the
+// Authorization header value it receives — rejecting the stale credential
+// and accepting only the refreshed one — proving the retry happens at the
+// individual-request boundary with the genuinely refreshed credential
+// reaching the server, not merely that a second request was sent.
 func TestWithAuthRetry_HTTPIntegration(t *testing.T) {
 	var hits int32
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/stats", func(w http.ResponseWriter, r *http.Request) {
-		n := atomic.AddInt32(&hits, 1)
-		if n == 1 {
+		atomic.AddInt32(&hits, 1)
+		if r.Header.Get("Authorization") != "fresh" {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
@@ -392,5 +517,5 @@ func TestWithAuthRetry_HTTPIntegration(t *testing.T) {
 	require.NotNil(t, stats)
 	assert.Equal(t, "test-version", stats.Version)
 	assert.Equal(t, int32(2), atomic.LoadInt32(&hits))
-	assert.Equal(t, 1, provider.forcedCalls)
+	assert.Equal(t, int32(1), provider.forcedCalls.Load())
 }

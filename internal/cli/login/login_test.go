@@ -17,8 +17,9 @@ import (
 )
 
 // stubAuthClient is a test double for authClient. It returns canned
-// responses and records whether LoginWait was invoked, so tests can assert
-// on the short-circuit behavior without a plugin subprocess.
+// responses and records whether LoginWait was invoked, and the LoginStart
+// request it received, so tests can assert on the short-circuit behavior
+// and on the flags actually passed through, without a plugin subprocess.
 type stubAuthClient struct {
 	loginStartResp *pkgauth.LoginStartResponse
 	loginStartErr  error
@@ -27,11 +28,13 @@ type stubAuthClient struct {
 	logoutResp     *pkgauth.LogoutResponse
 	logoutErr      error
 
+	loginStartReq   *pkgauth.LoginStartRequest
 	loginWaitCalled bool
 	loginWaitReq    *pkgauth.LoginWaitRequest
 }
 
 func (s *stubAuthClient) LoginStart(req *pkgauth.LoginStartRequest) (*pkgauth.LoginStartResponse, error) {
+	s.loginStartReq = req
 	return s.loginStartResp, s.loginStartErr
 }
 
@@ -68,6 +71,10 @@ func TestRunLogin_BrowserPath(t *testing.T) {
 	assert.True(t, c.loginWaitCalled)
 	require.NotNil(t, c.loginWaitReq)
 	assert.Equal(t, "sess-1", c.loginWaitReq.SessionID)
+
+	require.NotNil(t, c.loginStartReq)
+	assert.Equal(t, "browser", c.loginStartReq.Mode)
+	assert.False(t, c.loginStartReq.Force)
 }
 
 // TestRunLogin_DevicePath exercises the device-code flow: the verification
@@ -92,6 +99,30 @@ func TestRunLogin_DevicePath(t *testing.T) {
 
 	assert.Equal(t, "Visit https://issuer.example/device and enter code: ABCD-1234\nsigned in as jane\n", out.String())
 	assert.True(t, c.loginWaitCalled)
+
+	require.NotNil(t, c.loginStartReq)
+	assert.Equal(t, "device", c.loginStartReq.Mode)
+	assert.False(t, c.loginStartReq.Force)
+}
+
+// TestRunLogin_ForceFlagPassedThrough verifies that --force is carried
+// through to the LoginStart request unchanged, so a silently dropped or
+// swapped flag would be caught rather than passing unnoticed.
+func TestRunLogin_ForceFlagPassedThrough(t *testing.T) {
+	c := &stubAuthClient{
+		loginStartResp: &pkgauth.LoginStartResponse{
+			Status:      "already_authenticated",
+			SubjectName: "jane",
+		},
+	}
+
+	var out bytes.Buffer
+	err := runLogin(c, &out, true, false)
+	require.NoError(t, err)
+
+	require.NotNil(t, c.loginStartReq)
+	assert.True(t, c.loginStartReq.Force)
+	assert.Equal(t, "browser", c.loginStartReq.Mode)
 }
 
 // TestRunLogin_AlreadyAuthenticatedShortCircuits verifies that when
