@@ -924,6 +924,51 @@ func appliedMatches(fresh string, applied any) bool {
 	return reflect.DeepEqual(parsed, applied)
 }
 
+// storedAppliedEnvelope returns the stored node as a provenance-carrying
+// envelope: a reference envelope that records what the last write applied and
+// still holds the value the provider echoed for it. Opaque envelopes are
+// excluded, matching the rest of the provenance rules.
+//
+// This is the counterpart lookup for a desired side that is no longer
+// structured. The executor resolves references before calling a provider and
+// re-derives the patch from the resolved properties, so on that path the
+// desired value arrives as the bare resolved scalar with no envelope to match
+// a reference URI against; the applied baseline is what identifies it.
+func storedAppliedEnvelope(storedNode any) map[string]any {
+	storedMap, ok := storedNode.(map[string]any)
+	if !ok {
+		return nil
+	}
+	if storedMap["$ref"] == nil && storedMap["$res"] == nil {
+		return nil
+	}
+	if storedMap["$visibility"] == pkgmodel.VisibilityOpaque {
+		return nil
+	}
+	if storedMap["$applied"] == nil || storedMap["$value"] == nil {
+		return nil
+	}
+	return storedMap
+}
+
+// storedAppliedElementByValue finds the stored array element whose applied
+// baseline equals want. Ambiguity (zero or multiple matches) returns nil, so
+// an element with no unique counterpart keeps its existing behavior.
+func storedAppliedElementByValue(storedArr []any, want any) map[string]any {
+	var match map[string]any
+	for _, elem := range storedArr {
+		m := storedAppliedEnvelope(elem)
+		if m == nil || !reflect.DeepEqual(m["$applied"], want) {
+			continue
+		}
+		if match != nil {
+			return nil
+		}
+		match = m
+	}
+	return match
+}
+
 // storedRefElementByURI finds the stored array element whose $ref equals uri.
 // Ambiguity (zero or multiple matches) returns nil: with no unique
 // counterpart the element gets no provenance treatment.
@@ -1047,7 +1092,24 @@ func resolveRefs(current, mod, stored map[string]any, resolvableProperties resol
 					if resolvedElem, ok := wrappedElem[k].(map[string]any); ok {
 						modVal[i] = resolvedElem
 					}
+					continue
 				}
+				// An already-resolved element: compare it against the applied
+				// baselines rather than by position, since a resolved element
+				// carries nothing that ties it to one stored slot.
+				if counterpart := storedAppliedElementByValue(storedArr, elem); counterpart != nil {
+					modVal[i] = counterpart["$value"]
+				}
+			}
+		default:
+			// An already-resolved reference: the desired side holds the value
+			// the reference resolves to, with no envelope left to match. When
+			// it equals what the last write applied, the reference is unchanged
+			// and the diff must compare within the observed domain, exactly as
+			// it does for a structured reference.
+			if counterpart := storedAppliedEnvelope(stored[k]); counterpart != nil &&
+				reflect.DeepEqual(modVal, counterpart["$applied"]) {
+				mod[k] = counterpart["$value"]
 			}
 		}
 	}

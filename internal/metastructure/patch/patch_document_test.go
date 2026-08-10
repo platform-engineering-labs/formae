@@ -3141,3 +3141,97 @@ func TestGeneratePatch_ArrayRefDuplicateURIs_FailsClosed(t *testing.T) {
 	require.NoError(t, json.Unmarshal(patchDoc, &ops))
 	assert.NotEmpty(t, ops, "ambiguous counterparts must not silently equal")
 }
+
+// The executor re-resolves references before calling a provider and re-derives
+// the patch from the resolved properties, so by then the desired side carries
+// the resolved value as a bare scalar rather than an envelope. A scalar that
+// equals what the last write applied is still an unchanged reference and must
+// not be rewritten.
+func TestGeneratePatch_FlattenedRefMatchingApplied_NoPatch(t *testing.T) {
+	ksuid := util.NewID()
+	arn := "arn:aws:kms:us-east-1:111122223333:key/47110862-aaaa"
+	document := []byte(`{"TargetKeyId": "47110862-aaaa"}`)
+	stored := fmt.Appendf(nil, `{"TargetKeyId": {"$ref": "formae://%s#/Arn", "$value": "47110862-aaaa", "$applied": %q}}`, ksuid, arn)
+	patch := fmt.Appendf(nil, `{"TargetKeyId": %q}`, arn)
+	schema := pkgmodel.Schema{Fields: []string{"TargetKeyId"}}
+
+	patchDoc, createOnlyPatch, err := generatePatch(document, patch, stored, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Empty(t, createOnlyPatch)
+	assert.Nil(t, patchDoc, "a resolved reference matching the applied baseline must not be rewritten")
+}
+
+// A resolved scalar that differs from the applied baseline is a genuine
+// repoint and must still be written.
+func TestGeneratePatch_FlattenedRefDifferingFromApplied_PlansUpdate(t *testing.T) {
+	ksuid := util.NewID()
+	oldArn := "arn:aws:kms:us-east-1:111122223333:key/47110862-aaaa"
+	newArn := "arn:aws:kms:us-east-1:111122223333:key/99887766-bbbb"
+	document := []byte(`{"TargetKeyId": "47110862-aaaa"}`)
+	stored := fmt.Appendf(nil, `{"TargetKeyId": {"$ref": "formae://%s#/Arn", "$value": "47110862-aaaa", "$applied": %q}}`, ksuid, oldArn)
+	patch := fmt.Appendf(nil, `{"TargetKeyId": %q}`, newArn)
+	schema := pkgmodel.Schema{Fields: []string{"TargetKeyId"}}
+
+	patchDoc, _, err := generatePatch(document, patch, stored, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	var ops []jsonpatch.JsonPatchOperation
+	require.NoError(t, json.Unmarshal(patchDoc, &ops))
+	require.Len(t, ops, 1)
+	assert.Equal(t, newArn, ops[0].Value)
+}
+
+// Opaque envelopes stay outside the provenance rules on this path too.
+func TestGeneratePatch_FlattenedOpaqueRefIgnoresApplied(t *testing.T) {
+	ksuid := util.NewID()
+	document := []byte(`{"Secret": "echoed"}`)
+	stored := fmt.Appendf(nil, `{"Secret": {"$ref": "formae://%s#/Value", "$value": "echoed", "$applied": "sent", "$visibility": "Opaque"}}`, ksuid)
+	patch := []byte(`{"Secret": "sent"}`)
+	schema := pkgmodel.Schema{Fields: []string{"Secret"}}
+
+	patchDoc, _, err := generatePatch(document, patch, stored, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	var ops []jsonpatch.JsonPatchOperation
+	require.NoError(t, json.Unmarshal(patchDoc, &ops))
+	require.Len(t, ops, 1, "opaque envelopes keep their existing behavior")
+	assert.Equal(t, "sent", ops[0].Value)
+}
+
+// Resolved array elements carry no reference URI, so their stored counterpart
+// is located by the applied baseline itself. Provider ordering must not matter.
+func TestGeneratePatch_FlattenedArrayRefsMatchingApplied_NoPatch(t *testing.T) {
+	ksuid := util.NewID()
+	arnA := "arn:aws:sns:us-east-1:111122223333:topic-a"
+	arnB := "arn:aws:sns:us-east-1:111122223333:topic-b"
+	document := []byte(`{"Topics": ["name-b", "name-a"]}`)
+	stored := fmt.Appendf(nil, `{"Topics": [
+		{"$ref": "formae://%s#/ArnB", "$value": "name-b", "$applied": %q},
+		{"$ref": "formae://%s#/ArnA", "$value": "name-a", "$applied": %q}
+	]}`, ksuid, arnB, ksuid, arnA)
+	patch := fmt.Appendf(nil, `{"Topics": [%q, %q]}`, arnA, arnB)
+	schema := pkgmodel.Schema{Fields: []string{"Topics"}}
+
+	patchDoc, createOnlyPatch, err := generatePatch(document, patch, stored, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Empty(t, createOnlyPatch)
+	assert.Nil(t, patchDoc, "resolved array references matching their baselines must not be rewritten")
+}
+
+// Two stored elements sharing one applied baseline give no unique counterpart,
+// so the elements keep their pre-provenance behavior.
+func TestGeneratePatch_FlattenedArrayRefsAmbiguousApplied_FailsClosed(t *testing.T) {
+	ksuid := util.NewID()
+	arn := "arn:aws:sns:us-east-1:111122223333:topic-a"
+	document := []byte(`{"Topics": ["name-a", "name-a"]}`)
+	stored := fmt.Appendf(nil, `{"Topics": [
+		{"$ref": "formae://%s#/ArnA", "$value": "name-a", "$applied": %q},
+		{"$ref": "formae://%s#/ArnA", "$value": "name-a", "$applied": %q}
+	]}`, ksuid, arn, ksuid, arn)
+	patch := fmt.Appendf(nil, `{"Topics": [%q, %q]}`, arn, arn)
+	schema := pkgmodel.Schema{Fields: []string{"Topics"}}
+
+	patchDoc, _, err := generatePatch(document, patch, stored, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	var ops []jsonpatch.JsonPatchOperation
+	require.NoError(t, json.Unmarshal(patchDoc, &ops))
+	assert.NotEmpty(t, ops, "ambiguous counterparts must not silently compare equal")
+}
