@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/platform-engineering-labs/formae/internal/cli/authmsg"
 	clicmd "github.com/platform-engineering-labs/formae/internal/cli/cmd"
 	"github.com/platform-engineering-labs/formae/internal/cli/config"
 	"github.com/platform-engineering-labs/formae/internal/logging"
@@ -56,6 +57,7 @@ login again while already signed in is a no-op unless --force is given.`,
 			if err != nil {
 				return err
 			}
+			a.PrintBanner()
 
 			client, err := a.AuthClient()
 			if err != nil {
@@ -89,7 +91,7 @@ func runLogin(c authClient, out io.Writer, force, device bool) error {
 		return err
 	}
 	if startResp.ErrorCode != "" || startResp.Error != "" {
-		return fmt.Errorf("%s", describeAuthError(startResp.ErrorCode, startResp.Error))
+		return fmt.Errorf("%s", authmsg.DescribeAuthError(startResp.ErrorCode, startResp.Error))
 	}
 
 	if startResp.Status == "already_authenticated" {
@@ -108,28 +110,9 @@ func runLogin(c authClient, out io.Writer, force, device bool) error {
 		return err
 	}
 	if waitResp.ErrorCode != "" || waitResp.Error != "" {
-		return fmt.Errorf("%s", describeAuthError(waitResp.ErrorCode, waitResp.Error))
+		return fmt.Errorf("%s", authmsg.DescribeAuthError(waitResp.ErrorCode, waitResp.Error))
 	}
 
 	_, _ = fmt.Fprintf(out, "signed in as %s\n", waitResp.SubjectName)
 	return nil
-}
-
-// describeAuthError maps an auth plugin ErrorCode to the copy formae shows
-// the user. An empty or unrecognised code — including one from a plugin
-// built against a newer SDK than this CLI knows about — degrades to
-// fallback, the plugin's own error text, rather than failing or going blank.
-func describeAuthError(code pkgauth.ErrorCode, fallback string) string {
-	switch code {
-	case pkgauth.ErrorCodeUnsupported:
-		return "the active profile's auth plugin does not support this operation"
-	case pkgauth.ErrorCodeNotLoggedIn:
-		return "not signed in — run 'formae login'"
-	case pkgauth.ErrorCodeSessionExpired:
-		return "your session expired — run 'formae login'"
-	case pkgauth.ErrorCodeIssuerUnreachable:
-		return "the identity provider is unreachable — try again shortly"
-	default:
-		return fallback
-	}
 }

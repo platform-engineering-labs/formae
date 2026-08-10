@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/platform-engineering-labs/formae/internal/cli/authmsg"
 	clicmd "github.com/platform-engineering-labs/formae/internal/cli/cmd"
 	"github.com/platform-engineering-labs/formae/internal/cli/config"
 	"github.com/platform-engineering-labs/formae/internal/logging"
@@ -35,6 +36,7 @@ func LogoutCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			a.PrintBanner()
 
 			client, err := a.AuthClient()
 			if err != nil {
@@ -58,7 +60,7 @@ func runLogout(c authClient, out io.Writer) error {
 		return err
 	}
 	if resp.ErrorCode != "" || resp.Error != "" {
-		return fmt.Errorf("%s", describeAuthError(resp.ErrorCode, resp.Error))
+		return fmt.Errorf("%s", authmsg.DescribeAuthError(resp.ErrorCode, resp.Error))
 	}
 
 	_, _ = fmt.Fprintln(out, "signed out")
