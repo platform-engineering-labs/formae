@@ -29,6 +29,9 @@ const (
 type AuthPlugin interface {
 	Init(req *InitRequest, resp *InitResponse) error
 	Validate(req *ValidateRequest, resp *ValidateResponse) error
+	// GetAuthHeader: to fail closed on every host version, return a non-nil
+	// error rather than relying on GetAuthHeaderResponse's typed fields,
+	// which a host built against an earlier SDK cannot read.
 	GetAuthHeader(req *GetAuthHeaderRequest, resp *GetAuthHeaderResponse) error
 	LoginStart(req *LoginStartRequest, resp *LoginStartResponse) error
 	LoginWait(req *LoginWaitRequest, resp *LoginWaitResponse) error
@@ -68,6 +71,14 @@ type GetAuthHeaderRequest struct {
 }
 
 // GetAuthHeaderResponse contains the headers to attach to outgoing requests.
+//
+// Error and ErrorCode were added in SDK 0.3.0. A host built against an
+// earlier SDK decodes only Headers and cannot observe either field, so a
+// nil error paired with empty Headers reads as successful authentication.
+// A plugin that must fail closed regardless of host version returns a
+// non-nil Go error from GetAuthHeader instead; these typed fields are
+// additive information for hosts new enough to read them, not a
+// substitute for that error.
 type GetAuthHeaderResponse struct {
 	Headers   map[string][]string
 	Error     string
