@@ -273,6 +273,28 @@ func TestApplyToResource_HashesBareStringAtSchemaOpaquePath(t *testing.T) {
 	assert.Equal(t, "Update", sv["$strategy"], "hashed bare-scalar opaque value must carry the default $strategy")
 }
 
+func TestApplyToResource_HashesDatabaseRolePasswordWithoutSchemaHint(t *testing.T) {
+	// The agent-side guarantee: a role password is hashed at rest even when the
+	// plugin's runtime schema carries no FieldHint.Opaque for it.
+	r := &pkgmodel.Resource{
+		Type:       "AWS::RDS::DatabaseRole",
+		Schema:     pkgmodel.Schema{},
+		Properties: json.RawMessage(`{"RoleName":"app","Password":"super-secret-password"}`),
+	}
+	out, _, err := NewPersistValueTransformer().ApplyToResource(r)
+	require.NoError(t, err)
+
+	var props map[string]any
+	require.NoError(t, json.Unmarshal(out.Properties, &props))
+	assert.Equal(t, "app", props["RoleName"], "non-secret field untouched")
+
+	pw := props["Password"].(map[string]any)
+	assert.Equal(t, "Opaque", pw["$visibility"])
+	assert.Equal(t, true, pw["$hashed"])
+	assert.Len(t, pw["$value"].(string), 64)
+	assert.NotEqual(t, "super-secret-password", pw["$value"])
+}
+
 func TestApplyToResource_HashesEnvelopedOpaque(t *testing.T) {
 	r := &pkgmodel.Resource{
 		Schema:     pkgmodel.Schema{},
