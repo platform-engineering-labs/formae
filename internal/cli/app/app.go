@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/charmbracelet/lipgloss"
@@ -42,6 +43,18 @@ type App struct {
 	Projects Projects
 
 	Usage usage.Sender
+
+	// memoMu guards authClient and netClient/netClientLoaded below. Both are
+	// lazily built on first use and then reused for the App's lifetime, and
+	// both are reachable from more than one goroutine in practice: Bubbletea
+	// (internal/cli/tui/statuswatch) batches a status fetch and the next
+	// tick's command together, and if one fetch hasn't returned before the
+	// next tick fires, two goroutines can race through AuthClient() or
+	// netHTTPClient() on the same App concurrently. The lock is held across
+	// the whole check-build-store sequence for each field, not just the
+	// store, so two concurrent first-callers share one client/transport
+	// instead of racing to build two.
+	memoMu sync.Mutex
 
 	authClient *pkgauth.Client
 
@@ -81,8 +94,12 @@ type authHeaderProvider interface {
 
 // Close cleans up resources held by the App, including any auth plugin subprocess.
 func (a *App) Close() {
-	if a.authClient != nil {
-		_ = a.authClient.Close()
+	a.memoMu.Lock()
+	client := a.authClient
+	a.memoMu.Unlock()
+
+	if client != nil {
+		_ = client.Close()
 	}
 }
 
@@ -759,6 +776,9 @@ func (a *App) AuthClient() (*pkgauth.Client, error) {
 		return nil, &NoAuthPluginError{}
 	}
 
+	a.memoMu.Lock()
+	defer a.memoMu.Unlock()
+
 	if a.authClient == nil {
 		authType := gjson.GetBytes(a.Config.Cli.Auth, "type").String()
 		devPluginDir := util.ExpandHomePath(a.Config.PluginDir)
@@ -902,6 +922,9 @@ func (a *App) getAuthAndNetHandlers() (http.Header, *http.Client, error) {
 // own, so a Tailscale-backed profile stands up one tsnet.Server per App
 // rather than one per HTTP operation.
 func (a *App) netHTTPClient() (*http.Client, error) {
+	a.memoMu.Lock()
+	defer a.memoMu.Unlock()
+
 	if a.netClientLoaded {
 		return a.netClient, nil
 	}

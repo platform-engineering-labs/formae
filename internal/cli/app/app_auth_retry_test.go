@@ -12,8 +12,10 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -246,16 +248,19 @@ func TestWithAuthRetry_ForcedAuthClientFailureSurfacesRealError(t *testing.T) {
 
 // countingNetPlugin is a test double for network.NetworkPlugin that counts
 // how many times Client is called, so tests can prove the network transport
-// is built at most once per App.
+// is built at most once per App. The counter and a short delay inside Client
+// are both there so a concurrent-access test can actually land two callers
+// inside construction at once, rather than merely hoping a race exists.
 type countingNetPlugin struct {
 	name  string
-	calls int
+	calls atomic.Int32
 }
 
 func (p *countingNetPlugin) Name() string { return p.name }
 
 func (p *countingNetPlugin) Client(json.RawMessage) (*http.Client, error) {
-	p.calls++
+	p.calls.Add(1)
+	time.Sleep(time.Millisecond)
 	return &http.Client{}, nil
 }
 
@@ -286,7 +291,53 @@ func TestNetHTTPClient_MemoizedAcrossWithAuthRetryClosures(t *testing.T) {
 	require.NoError(t, a.withAuthRetry(op.run))
 	require.NoError(t, a.withAuthRetry(op.run))
 
-	assert.Equal(t, 1, plugin.calls, "the network transport must be built once per App, not once per withAuthRetry closure")
+	assert.Equal(t, int32(1), plugin.calls.Load(), "the network transport must be built once per App, not once per withAuthRetry closure")
+}
+
+// TestNetHTTPClient_ConcurrentCallersBuildTransportOnce drives netHTTPClient
+// from many goroutines released at once — modeling two Bubbletea-driven
+// status fetches racing on the same App, which happens whenever a fetch
+// hasn't returned before the next tick's command batch fires — and asserts
+// the network plugin's Client is invoked exactly once, with every goroutine
+// observing the identical *http.Client instance. Run under -race, this fails
+// on an unsynchronized memoization even when the assertions below would
+// otherwise pass, since the race detector flags the unsynchronized
+// check-then-act itself.
+func TestNetHTTPClient_ConcurrentCallersBuildTransportOnce(t *testing.T) {
+	plugin := &countingNetPlugin{name: "concurrent-stub-net-" + t.Name()}
+	network.DefaultRegistry.Register(plugin)
+
+	a := &App{
+		Config: &pkgmodel.Config{
+			Network: &pkgmodel.NetworkConfig{Type: plugin.name},
+		},
+	}
+
+	const goroutines = 20
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	results := make([]*http.Client, goroutines)
+	errs := make([]error, goroutines)
+
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			c, err := a.netHTTPClient()
+			results[i] = c
+			errs[i] = err
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	for i := 0; i < goroutines; i++ {
+		require.NoError(t, errs[i])
+		require.NotNil(t, results[i])
+		assert.Same(t, results[0], results[i], "every concurrent caller must observe the same memoized transport")
+	}
+	assert.Equal(t, int32(1), plugin.calls.Load(), "the network transport must be built exactly once under concurrent access")
 }
 
 // agentStatsJSONFor returns a minimal JSON stats body reporting the given
