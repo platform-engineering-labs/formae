@@ -45,6 +45,18 @@ type App struct {
 
 	authClient *pkgauth.Client
 
+	// netClient and netClientLoaded memoize the network plugin's *http.Client
+	// (e.g. Tailscale's tsnet-backed transport) for the lifetime of the App,
+	// the same way authClient memoizes the auth plugin subprocess. Building
+	// it is expensive (a Tailscale client stands up its own tsnet.Server and
+	// re-authenticates to the tailnet), so it must happen once per App, not
+	// once per withAuthRetry closure — unlike the auth header, which is
+	// meant to be re-fetched on a forced refresh, the transport underneath
+	// it is not. netClientLoaded distinguishes "not built yet" from "built,
+	// and nil because no network plugin is configured".
+	netClient       *http.Client
+	netClientLoaded bool
+
 	// authClientFactory returns the auth plugin client used to obtain and,
 	// on a 401, force-refresh the credential attached to outgoing API
 	// requests. Nil in the real constructor, where it defaults to
@@ -827,14 +839,21 @@ func (a *App) withAuthRetry(op func(authHeader http.Header, net *http.Client) er
 		return err
 	}
 
+	// From here on, a failure to obtain a fresh credential is a distinct
+	// class of problem from the AuthenticationError that triggered the
+	// retry, and must be surfaced as itself — not masked behind the
+	// now-stale original error, and not conflated with AuthorizationDenied,
+	// which means the agent saw and rejected a credential we did manage to
+	// get. Mirrors how the initial (unforced) fetch in
+	// getAuthAndNetHandlers reports the same two failure classes.
 	provider, provErr := a.authProvider()
 	if provErr != nil {
-		return err
+		return provErr
 	}
 
 	resp, headerErr := provider.GetAuthHeader(true)
 	if headerErr != nil {
-		return err
+		return fmt.Errorf("failed to get auth header: %w", headerErr)
 	}
 	if resp.ErrorCode != "" || resp.Error != "" {
 		return errors.New(authmsg.DescribeAuthError(resp.ErrorCode, resp.Error))
@@ -852,7 +871,6 @@ func (a *App) withAuthRetry(op func(authHeader http.Header, net *http.Client) er
 
 func (a *App) getAuthAndNetHandlers() (http.Header, *http.Client, error) {
 	var authHeader http.Header
-	var net *http.Client
 
 	if a.Config.Cli.Auth != nil {
 		client, err := a.authProvider()
@@ -870,30 +888,53 @@ func (a *App) getAuthAndNetHandlers() (http.Header, *http.Client, error) {
 		authHeader = http.Header(resp.Headers)
 	}
 
-	if a.Config.Network != nil {
-		netPlugin, err := network.DefaultRegistry.Get(a.Config.Network.Type)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		var configJSON []byte
-		if len(a.Config.Network.LegacyRawJSON) > 0 {
-			configJSON = a.Config.Network.LegacyRawJSON
-		} else {
-			var marshalErr error
-			configJSON, marshalErr = json.Marshal(a.Config.Network.Tailscale)
-			if marshalErr != nil {
-				return nil, nil, fmt.Errorf("failed to marshal network config: %w", marshalErr)
-			}
-		}
-
-		net, err = netPlugin.Client(configJSON)
-		if err != nil {
-			return nil, nil, err
-		}
+	net, err := a.netHTTPClient()
+	if err != nil {
+		return nil, nil, err
 	}
 
 	return authHeader, net, nil
+}
+
+// netHTTPClient returns the App's network plugin transport, building and
+// caching it on first use. Every caller — including every withAuthRetry
+// closure — shares this single instance instead of each constructing its
+// own, so a Tailscale-backed profile stands up one tsnet.Server per App
+// rather than one per HTTP operation.
+func (a *App) netHTTPClient() (*http.Client, error) {
+	if a.netClientLoaded {
+		return a.netClient, nil
+	}
+
+	if a.Config.Network == nil {
+		a.netClientLoaded = true
+		return nil, nil
+	}
+
+	netPlugin, err := network.DefaultRegistry.Get(a.Config.Network.Type)
+	if err != nil {
+		return nil, err
+	}
+
+	var configJSON []byte
+	if len(a.Config.Network.LegacyRawJSON) > 0 {
+		configJSON = a.Config.Network.LegacyRawJSON
+	} else {
+		var marshalErr error
+		configJSON, marshalErr = json.Marshal(a.Config.Network.Tailscale)
+		if marshalErr != nil {
+			return nil, fmt.Errorf("failed to marshal network config: %w", marshalErr)
+		}
+	}
+
+	net, err := netPlugin.Client(configJSON)
+	if err != nil {
+		return nil, err
+	}
+
+	a.netClient = net
+	a.netClientLoaded = true
+	return a.netClient, nil
 }
 
 func (a *App) Evaluate(path string, props map[string]string, mode pkgmodel.FormaApplyMode) (*pkgmodel.Forma, error) {

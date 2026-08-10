@@ -9,6 +9,7 @@ package app
 import (
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -18,19 +19,21 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/platform-engineering-labs/formae/internal/api"
+	"github.com/platform-engineering-labs/formae/internal/network"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgauth "github.com/platform-engineering-labs/formae/pkg/auth"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
 // stubAuthProvider is a test double for authHeaderProvider. It returns
-// initialResp on an unforced GetAuthHeader call and forcedResp on a forced
-// one, and counts each kind separately so tests can assert on exactly how
-// many times a forced refresh was requested.
+// initialResp/initialErr on an unforced GetAuthHeader call and
+// forcedResp/forcedErr on a forced one, and counts each kind separately so
+// tests can assert on exactly how many times a forced refresh was requested.
 type stubAuthProvider struct {
 	initialResp *pkgauth.GetAuthHeaderResponse
+	initialErr  error
 	forcedResp  *pkgauth.GetAuthHeaderResponse
-	err         error
+	forcedErr   error
 
 	initialCalls int
 	forcedCalls  int
@@ -39,10 +42,10 @@ type stubAuthProvider struct {
 func (s *stubAuthProvider) GetAuthHeader(forceRefresh bool) (*pkgauth.GetAuthHeaderResponse, error) {
 	if forceRefresh {
 		s.forcedCalls++
-		return s.forcedResp, s.err
+		return s.forcedResp, s.forcedErr
 	}
 	s.initialCalls++
-	return s.initialResp, s.err
+	return s.initialResp, s.initialErr
 }
 
 // stubOp is a test double for the op closure withAuthRetry drives. Each call
@@ -165,6 +168,125 @@ func TestWithAuthRetry_TypedGetAuthHeaderFailureSkipsRequestEntirely(t *testing.
 	assert.Equal(t, "not signed in — run 'formae login'", err.Error())
 	assert.Equal(t, 0, op.calls)
 	assert.Equal(t, 0, provider.forcedCalls)
+}
+
+// TestWithAuthRetry_ForcedTypedFailureSkipsRetry verifies that a typed
+// failure on the FORCED GetAuthHeader call (op already 401'd once) gets the
+// same treatment as one on the initial call: the operation is not attempted
+// a second time, and the error is the mapper's copy for that code.
+func TestWithAuthRetry_ForcedTypedFailureSkipsRetry(t *testing.T) {
+	provider := &stubAuthProvider{
+		initialResp: headerResp("stale"),
+		forcedResp:  &pkgauth.GetAuthHeaderResponse{ErrorCode: pkgauth.ErrorCodeIssuerUnreachable},
+	}
+	a := appWithAuthPlugin(provider)
+	op := &stubOp{behaviors: []error{api.AuthenticationError{}, nil}}
+
+	err := a.withAuthRetry(op.run)
+
+	require.Error(t, err)
+	assert.Equal(t, "the identity provider is unreachable — try again shortly", err.Error())
+	assert.Equal(t, 1, op.calls, "op must not be retried after a typed forced-refresh failure")
+	assert.Equal(t, 1, provider.forcedCalls)
+}
+
+// TestWithAuthRetry_ForcedRPCFailureSurfacesRealError verifies that when the
+// forced GetAuthHeader call itself fails at the RPC layer (e.g. a crashed
+// plugin subprocess), the real failure is returned — distinct from both the
+// stale AuthenticationError that triggered the retry and from
+// AuthorizationDeniedError, since no credential was ever obtained to be
+// denied.
+func TestWithAuthRetry_ForcedRPCFailureSurfacesRealError(t *testing.T) {
+	boom := errors.New("auth plugin subprocess is not responding")
+	provider := &stubAuthProvider{
+		initialResp: headerResp("stale"),
+		forcedErr:   boom,
+	}
+	a := appWithAuthPlugin(provider)
+	op := &stubOp{behaviors: []error{api.AuthenticationError{}}}
+
+	err := a.withAuthRetry(op.run)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, boom)
+	assert.NotEqual(t, api.AuthenticationError{}, err)
+	var denied api.AuthorizationDeniedError
+	assert.False(t, errors.As(err, &denied))
+	assert.Equal(t, 1, op.calls, "op must not be retried when no fresh credential was obtained")
+	assert.Equal(t, 1, provider.forcedCalls)
+}
+
+// TestWithAuthRetry_ForcedAuthClientFailureSurfacesRealError verifies that
+// when the auth plugin client itself cannot be obtained for the forced
+// refresh (e.g. the plugin binary is gone), that failure is returned as
+// itself rather than masked behind the original AuthenticationError.
+func TestWithAuthRetry_ForcedAuthClientFailureSurfacesRealError(t *testing.T) {
+	boom := errors.New("auth plugin binary not found")
+	calls := 0
+	a := &App{
+		Config: &pkgmodel.Config{
+			Cli: pkgmodel.CliConfig{Auth: json.RawMessage(`{"type":"stub"}`)},
+		},
+		authClientFactory: func() (authHeaderProvider, error) {
+			calls++
+			if calls == 1 {
+				return &stubAuthProvider{initialResp: headerResp("stale")}, nil
+			}
+			return nil, boom
+		},
+	}
+	op := &stubOp{behaviors: []error{api.AuthenticationError{}}}
+
+	err := a.withAuthRetry(op.run)
+
+	require.Error(t, err)
+	assert.Equal(t, boom, err)
+	assert.Equal(t, 1, op.calls, "op must not be retried when the auth client itself is unavailable")
+}
+
+// countingNetPlugin is a test double for network.NetworkPlugin that counts
+// how many times Client is called, so tests can prove the network transport
+// is built at most once per App.
+type countingNetPlugin struct {
+	name  string
+	calls int
+}
+
+func (p *countingNetPlugin) Name() string { return p.name }
+
+func (p *countingNetPlugin) Client(json.RawMessage) (*http.Client, error) {
+	p.calls++
+	return &http.Client{}, nil
+}
+
+func (p *countingNetPlugin) Listen(json.RawMessage, int) (net.Listener, error) {
+	return nil, errors.New("not implemented")
+}
+
+// TestNetHTTPClient_MemoizedAcrossWithAuthRetryClosures verifies that the
+// network plugin transport is built at most once per App and shared by
+// every withAuthRetry closure, rather than rebuilt on each one — the auth
+// header is meant to be re-fetched per operation (and force-refreshed on
+// retry), but the transport underneath it is not.
+func TestNetHTTPClient_MemoizedAcrossWithAuthRetryClosures(t *testing.T) {
+	plugin := &countingNetPlugin{name: "counting-stub-net-" + t.Name()}
+	network.DefaultRegistry.Register(plugin)
+
+	a := &App{
+		Config: &pkgmodel.Config{
+			Network: &pkgmodel.NetworkConfig{Type: plugin.name},
+		},
+	}
+
+	// Two independent withAuthRetry calls stand in for two conversion-point
+	// closures within a single command (e.g. the Stats preflight and the
+	// command's own operation), each of which fetches its own auth
+	// header/net pair via getAuthAndNetHandlers.
+	op := &stubOp{behaviors: []error{nil}}
+	require.NoError(t, a.withAuthRetry(op.run))
+	require.NoError(t, a.withAuthRetry(op.run))
+
+	assert.Equal(t, 1, plugin.calls, "the network transport must be built once per App, not once per withAuthRetry closure")
 }
 
 // agentStatsJSONFor returns a minimal JSON stats body reporting the given
