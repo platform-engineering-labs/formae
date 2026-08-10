@@ -2959,7 +2959,7 @@ func TestGeneratePatch_AppliedWithoutStoredEcho_FallsBackToFresh(t *testing.T) {
 // An unresolvable reference (no fresh resolution) with an $applied-carrying
 // stored counterpart flattens to the stored echo value, preserving the last
 // known state across a transient resolution gap.
-func TestFlattenAndResolveRefs_UnresolvableRefWithApplied_UsesStoredEcho(t *testing.T) {
+func TestFlattenAndResolveRefs_UnresolvableRefWithApplied_UsesWrittenForm(t *testing.T) {
 	ksuid := util.NewID()
 	echoVal := "47110862-aaaa"
 	appliedVal := "arn:aws:kms:us-east-1:111122223333:key/47110862-aaaa"
@@ -2967,12 +2967,21 @@ func TestFlattenAndResolveRefs_UnresolvableRefWithApplied_UsesStoredEcho(t *test
 	stored := fmt.Appendf(nil, `{"TargetKeyId": {"$ref": "formae://%s#/Arn", "$value": %q, "$applied": %q}}`, ksuid, echoVal, appliedVal)
 	patch := fmt.Appendf(nil, `{"TargetKeyId": {"$ref": "formae://%s#/Arn"}}`, ksuid)
 
-	_, flatPatch, err := flattenAndResolveRefs(document, patch, stored, nil, resolver.NewResolvableProperties())
+	flatDocument, flatPatch, err := flattenAndResolveRefs(document, patch, stored, nil, resolver.NewResolvableProperties())
 	require.NoError(t, err)
 
 	var flatMap map[string]any
 	require.NoError(t, json.Unmarshal(flatPatch, &flatMap))
-	assert.Equal(t, echoVal, flatMap["TargetKeyId"], "unresolvable ref with $applied must flatten to stored echo")
+	assert.Equal(t, appliedVal, flatMap["TargetKeyId"],
+		"an unresolvable reference carries the value its last write sent, which is what an operation would have to write")
+
+	// The two sides still agree, so nothing is planned for the reference: the
+	// actual-state side is what absorbs the difference in spelling.
+	var flatDoc map[string]any
+	require.NoError(t, json.Unmarshal(flatDocument, &flatDoc))
+	assert.Equal(t, appliedVal, flatDoc["TargetKeyId"],
+		"the actual-state side is aligned instead, so the reference compares equal")
+	_ = echoVal
 }
 
 // An unresolvable reference without $applied flattens to empty string, the
@@ -3743,4 +3752,71 @@ func TestGeneratePatch_ArrayRefWithDriftedLiveElement_PlansRepair(t *testing.T) 
 	require.NoError(t, err)
 	require.NotNil(t, patchDoc, "a drifted array element must be repaired")
 	assert.Contains(t, string(patchDoc), arnB, "the repair carries the written form")
+}
+
+// A reference that cannot be resolved right now still has a last-written form
+// recorded with it. When a sibling change makes the diff emit the whole object,
+// that operation must carry the written form, never the provider's spelling.
+func TestGeneratePatch_AtomicObjectWithUnresolvableRef_EmitsWriteForm(t *testing.T) {
+	ksuid := util.NewID()
+	arn := "arn:aws:sns:us-east-1:111122223333:topic-a"
+	document := []byte(`{"Cfg": {"Note": "a", "Ref": "name-a"}}`)
+	stored := fmt.Appendf(nil, `{"Cfg": {"Note": "a", "Ref": {"$ref": "formae://%s#/Arn", "$value": "name-a", "$applied": %q}}}`, ksuid, arn)
+	desired := fmt.Appendf(nil, `{"Cfg": {"Note": "b", "Ref": {"$ref": "formae://%s#/Arn"}}}`, ksuid)
+	patch := desired
+	schema := pkgmodel.Schema{
+		Fields: []string{"Cfg"},
+		Hints:  map[string]pkgmodel.FieldHint{"Cfg": {UpdateMethod: pkgmodel.FieldUpdateMethodAtomic}},
+	}
+
+	patchDoc, _, err := generatePatch(document, patch, stored, desired, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	require.NotNil(t, patchDoc, "the sibling change must be planned")
+	assert.Contains(t, string(patchDoc), arn, "the emitted object must carry the last written form")
+	assert.NotContains(t, string(patchDoc), "name-a", "the provider's read form must not be sent back as a write")
+}
+
+// The same for an ordered list whose references cannot be resolved right now.
+func TestGeneratePatch_OrderedArrayUnresolvableRefsReordered_EmitWriteForm(t *testing.T) {
+	ksuid := util.NewID()
+	arnA := "arn:aws:sns:us-east-1:111122223333:topic-a"
+	arnB := "arn:aws:sns:us-east-1:111122223333:topic-b"
+	document := []byte(`{"Topics": ["name-a", "name-b"]}`)
+	stored := fmt.Appendf(nil, `{"Topics": [
+		{"$ref": "formae://%s#/ArnA", "$value": "name-a", "$applied": %q},
+		{"$ref": "formae://%s#/ArnB", "$value": "name-b", "$applied": %q}
+	]}`, ksuid, arnA, ksuid, arnB)
+	desired := fmt.Appendf(nil, `{"Topics": [
+		{"$ref": "formae://%s#/ArnB"},
+		{"$ref": "formae://%s#/ArnA"}
+	]}`, ksuid, ksuid)
+	patch := desired
+	schema := pkgmodel.Schema{
+		Fields: []string{"Topics"},
+		Hints:  map[string]pkgmodel.FieldHint{"Topics": {UpdateMethod: pkgmodel.FieldUpdateMethodArray}},
+	}
+
+	patchDoc, _, err := generatePatch(document, patch, stored, desired, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	require.NotNil(t, patchDoc, "reordering an ordered list is a change")
+	assert.NotContains(t, string(patchDoc), "name-a", "the provider's read form must not be sent back as a write")
+	assert.NotContains(t, string(patchDoc), "name-b", "the provider's read form must not be sent back as a write")
+	assert.Contains(t, string(patchDoc), arnA)
+	assert.Contains(t, string(patchDoc), arnB)
+}
+
+// An unresolvable reference that has not otherwise changed still produces
+// nothing, so carrying the written form does not reintroduce churn.
+func TestGeneratePatch_UnresolvableRefUnchanged_NoPatch(t *testing.T) {
+	ksuid := util.NewID()
+	arn := "arn:aws:kms:us-east-1:111122223333:key/47110862-aaaa"
+	document := []byte(`{"TargetKeyId": "47110862-aaaa"}`)
+	stored := fmt.Appendf(nil, `{"TargetKeyId": {"$ref": "formae://%s#/Arn", "$value": "47110862-aaaa", "$applied": %q}}`, ksuid, arn)
+	desired := fmt.Appendf(nil, `{"TargetKeyId": {"$ref": "formae://%s#/Arn"}}`, ksuid)
+	patch := desired
+	schema := pkgmodel.Schema{Fields: []string{"TargetKeyId"}}
+
+	patchDoc, _, err := generatePatch(document, patch, stored, desired, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Nil(t, patchDoc, "an unchanged reference must still reconcile to a no-op")
 }

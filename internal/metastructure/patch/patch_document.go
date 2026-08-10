@@ -1210,11 +1210,15 @@ func resolveRefs(current, mod, stored, desired map[string]any, resolvablePropert
 						}
 					}
 				} else if counterpart != nil {
-					if _, hasApplied := counterpart["$applied"]; hasApplied && counterpart["$value"] != nil {
+					if applied, hasApplied := counterpart["$applied"]; hasApplied && applied != nil && counterpart["$value"] != nil {
 						if _, hasVal := modVal["$value"]; !hasVal {
-							// No resolution available but a prior write attests this exact
-							// reference; treat the gap as transient, not as a change.
-							modVal["$value"] = counterpart["$value"]
+							// No resolution available, but a prior write attests
+							// this exact reference, so the gap is transient rather
+							// than a change. Carry the value that write sent: the
+							// desired side is what operations are built from, and
+							// the provider's spelling must never be written back.
+							modVal["$value"] = applied
+							alignComparisonValue(current, k, counterpart["$value"], applied)
 						}
 					}
 				}
