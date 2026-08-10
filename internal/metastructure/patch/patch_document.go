@@ -1201,9 +1201,11 @@ func resolveRefs(current, mod, stored, desired map[string]any, resolvablePropert
 					if err := resolveRefs(wrappedCurrent, wrappedElem, wrappedStored, wrappedDesired, resolvableProperties); err != nil {
 						return err
 					}
-					if resolvedElem, ok := wrappedElem[k].(map[string]any); ok {
-						modVal[i] = resolvedElem
-					}
+					// Copy back whatever the recursion produced, not only a map:
+					// a reference whose recorded value was an object can resolve
+					// to a scalar or a list now, and dropping that would leave
+					// the stale object in place.
+					modVal[i] = wrappedElem[k]
 					continue
 				}
 				// An already-resolved element. The unconverted desired array is

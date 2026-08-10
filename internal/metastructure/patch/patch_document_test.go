@@ -3495,3 +3495,59 @@ func TestGeneratePatch_ResolvedRefWithUnresolvableSource_UsesRecordedValue(t *te
 	require.NoError(t, err)
 	assert.Nil(t, patchDoc, "an unavailable source leaves the recorded resolution standing")
 }
+
+// An array element's reference whose recorded value was an object can resolve
+// to a scalar now. The current resolution has to survive back into the desired
+// side; keeping the recorded object would compare as unchanged and drop the
+// update.
+func TestGeneratePatch_ResolvedArrayRefChangingShape_PlansFreshResolution(t *testing.T) {
+	ksuid := util.NewID()
+	document := []byte(`{"Backends": [{"host":"h1"}]}`)
+	stored := fmt.Appendf(nil, `{"Backends": [{"$ref": "formae://%s#/Cfg", "$value": {"host":"h1"}, "$applied": {"host":"h1"}}]}`, ksuid)
+	desired := fmt.Appendf(nil, `{"Backends": [{"$ref": "formae://%s#/Cfg", "$value": {"host":"h1"}}]}`, ksuid)
+	patch := []byte(`{"Backends": [{"host":"h1"}]}`)
+	schema := pkgmodel.Schema{Fields: []string{"Backends"}}
+	props := resolver.NewResolvableProperties()
+	props.Add(ksuid, "Cfg", "h2")
+
+	patchDoc, _, err := generatePatch(document, patch, stored, desired, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	require.NotNil(t, patchDoc, "a reference resolving to a new shape must be planned")
+	assert.Contains(t, string(patchDoc), "h2", "the plan must carry the current resolution")
+}
+
+// The same on an immutable field must still force a replacement.
+func TestGeneratePatch_CreateOnlyResolvedArrayRefChangingShape_PlansReplacement(t *testing.T) {
+	ksuid := util.NewID()
+	document := []byte(`{"Backends": [{"host":"h1"}]}`)
+	stored := fmt.Appendf(nil, `{"Backends": [{"$ref": "formae://%s#/Cfg", "$value": {"host":"h1"}, "$applied": {"host":"h1"}}]}`, ksuid)
+	desired := fmt.Appendf(nil, `{"Backends": [{"$ref": "formae://%s#/Cfg", "$value": {"host":"h1"}}]}`, ksuid)
+	patch := []byte(`{"Backends": [{"host":"h1"}]}`)
+	schema := pkgmodel.Schema{
+		Fields: []string{"Backends"},
+		Hints:  map[string]pkgmodel.FieldHint{"Backends": {CreateOnly: true}},
+	}
+	props := resolver.NewResolvableProperties()
+	props.Add(ksuid, "Cfg", "h2")
+
+	_, createOnlyPatch, err := generatePatch(document, patch, stored, desired, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	require.NotEmpty(t, createOnlyPatch, "a shape-changing reference on an immutable field must still force a replacement")
+}
+
+// An object-valued array reference that still resolves to its recorded value
+// stays suppressed, so the write-back does not reintroduce churn.
+func TestGeneratePatch_ResolvedArrayRefObjectMatchingApplied_NoPatch(t *testing.T) {
+	ksuid := util.NewID()
+	document := []byte(`{"Backends": [{"host":"echo-h1"}]}`)
+	stored := fmt.Appendf(nil, `{"Backends": [{"$ref": "formae://%s#/Cfg", "$value": {"host":"echo-h1"}, "$applied": {"host":"h1"}}]}`, ksuid)
+	desired := fmt.Appendf(nil, `{"Backends": [{"$ref": "formae://%s#/Cfg", "$value": {"host":"h1"}}]}`, ksuid)
+	patch := []byte(`{"Backends": [{"host":"h1"}]}`)
+	schema := pkgmodel.Schema{Fields: []string{"Backends"}}
+	props := resolver.NewResolvableProperties()
+	props.Add(ksuid, "Cfg", `{"host":"h1"}`)
+
+	patchDoc, _, err := generatePatch(document, patch, stored, desired, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Nil(t, patchDoc, "an unchanged object-valued reference must not be rewritten")
+}
