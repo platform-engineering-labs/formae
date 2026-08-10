@@ -14,9 +14,10 @@ import (
 
 // fakePlugin is a test double implementing the AuthPlugin interface.
 type fakePlugin struct {
-	initCalled    bool
-	receivedCfg   json.RawMessage
-	validateUsers map[string]string // username -> password (plaintext for testing)
+	initCalled       bool
+	receivedCfg      json.RawMessage
+	validateUsers    map[string]string // username -> password (plaintext for testing)
+	lastForceRefresh bool
 }
 
 func (f *fakePlugin) Init(req *InitRequest, resp *InitResponse) error {
@@ -40,9 +41,26 @@ func (f *fakePlugin) Validate(req *ValidateRequest, resp *ValidateResponse) erro
 }
 
 func (f *fakePlugin) GetAuthHeader(req *GetAuthHeaderRequest, resp *GetAuthHeaderResponse) error {
+	f.lastForceRefresh = req.ForceRefresh
 	resp.Headers = map[string][]string{
 		"X-Api-Key": {"secret-key"},
 	}
+	return nil
+}
+
+func (f *fakePlugin) LoginStart(req *LoginStartRequest, resp *LoginStartResponse) error {
+	resp.Status = "started"
+	resp.SessionID = "s-1"
+	return nil
+}
+
+func (f *fakePlugin) LoginWait(req *LoginWaitRequest, resp *LoginWaitResponse) error {
+	resp.Subject = "11111111-1111-4111-8111-111111111111"
+	resp.SubjectName = "dpanders"
+	return nil
+}
+
+func (f *fakePlugin) Logout(req *LogoutRequest, resp *LogoutResponse) error {
 	return nil
 }
 
@@ -144,7 +162,7 @@ func TestServerAndClient_GetAuthHeader(t *testing.T) {
 	defer client.Close()
 
 	var resp GetAuthHeaderResponse
-	err := client.Call("AuthPlugin.GetAuthHeader", &GetAuthHeaderRequest{}, &resp)
+	err := client.Call("AuthPlugin.GetAuthHeader", &GetAuthHeaderRequest{ForceRefresh: true}, &resp)
 	if err != nil {
 		t.Fatalf("GetAuthHeader call failed: %v", err)
 	}
@@ -152,5 +170,75 @@ func TestServerAndClient_GetAuthHeader(t *testing.T) {
 	keys := resp.Headers["X-Api-Key"]
 	if len(keys) != 1 || keys[0] != "secret-key" {
 		t.Fatalf("expected X-Api-Key header with 'secret-key', got %v", resp.Headers)
+	}
+
+	if !plugin.lastForceRefresh {
+		t.Fatal("expected ForceRefresh to round-trip to the plugin")
+	}
+}
+
+func TestServerAndClient_LoginStart(t *testing.T) {
+	plugin := &fakePlugin{}
+	clientConn, serverConn := pipeConn()
+
+	go Serve(plugin, serverConn)
+
+	client := rpc.NewClient(clientConn)
+	defer client.Close()
+
+	var resp LoginStartResponse
+	err := client.Call("AuthPlugin.LoginStart", &LoginStartRequest{Mode: "browser"}, &resp)
+	if err != nil {
+		t.Fatalf("LoginStart call failed: %v", err)
+	}
+	if resp.Status != "started" {
+		t.Fatalf("expected Status 'started', got %q", resp.Status)
+	}
+	if resp.SessionID != "s-1" {
+		t.Fatalf("expected SessionID 's-1', got %q", resp.SessionID)
+	}
+}
+
+func TestServerAndClient_LoginWait(t *testing.T) {
+	plugin := &fakePlugin{}
+	clientConn, serverConn := pipeConn()
+
+	go Serve(plugin, serverConn)
+
+	client := rpc.NewClient(clientConn)
+	defer client.Close()
+
+	var resp LoginWaitResponse
+	err := client.Call("AuthPlugin.LoginWait", &LoginWaitRequest{SessionID: "s-1"}, &resp)
+	if err != nil {
+		t.Fatalf("LoginWait call failed: %v", err)
+	}
+	if resp.Subject != "11111111-1111-4111-8111-111111111111" {
+		t.Fatalf("expected Subject '11111111-1111-4111-8111-111111111111', got %q", resp.Subject)
+	}
+	if resp.SubjectName != "dpanders" {
+		t.Fatalf("expected SubjectName 'dpanders', got %q", resp.SubjectName)
+	}
+}
+
+func TestServerAndClient_Logout(t *testing.T) {
+	plugin := &fakePlugin{}
+	clientConn, serverConn := pipeConn()
+
+	go Serve(plugin, serverConn)
+
+	client := rpc.NewClient(clientConn)
+	defer client.Close()
+
+	var resp LogoutResponse
+	err := client.Call("AuthPlugin.Logout", &LogoutRequest{}, &resp)
+	if err != nil {
+		t.Fatalf("Logout call failed: %v", err)
+	}
+	if resp.Error != "" {
+		t.Fatalf("expected no error, got %q", resp.Error)
+	}
+	if resp.ErrorCode != "" {
+		t.Fatalf("expected no error code, got %q", resp.ErrorCode)
 	}
 }

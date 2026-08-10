@@ -20,6 +20,7 @@ import (
 
 // testMiddlewarePlugin is a configurable mock for middleware tests.
 type testMiddlewarePlugin struct {
+	pkgauth.UnimplementedAuthPlugin
 	validResponse bool
 	callCount     int
 }
