@@ -3551,3 +3551,106 @@ func TestGeneratePatch_ResolvedArrayRefObjectMatchingApplied_NoPatch(t *testing.
 	require.NoError(t, err)
 	assert.Nil(t, patchDoc, "an unchanged object-valued reference must not be rewritten")
 }
+
+// An unchanged reference sitting inside an Atomic-hinted object: a change to a
+// sibling makes the diff emit the whole object, and the emitted value must
+// carry the reference the way formae writes it, not the way the provider
+// reports it.
+func TestGeneratePatch_AtomicObjectWithUnchangedRef_EmitsWriteForm(t *testing.T) {
+	ksuid := util.NewID()
+	arn := "arn:aws:sns:us-east-1:111122223333:topic-a"
+	document := []byte(`{"Cfg": {"Note": "a", "Ref": "name-a"}}`)
+	stored := fmt.Appendf(nil, `{"Cfg": {"Note": "a", "Ref": {"$ref": "formae://%s#/Arn", "$value": "name-a", "$applied": %q}}}`, ksuid, arn)
+	desired := fmt.Appendf(nil, `{"Cfg": {"Note": "b", "Ref": {"$ref": "formae://%s#/Arn"}}}`, ksuid)
+	patch := fmt.Appendf(nil, `{"Cfg": {"Note": "b", "Ref": {"$ref": "formae://%s#/Arn"}}}`, ksuid)
+	schema := pkgmodel.Schema{
+		Fields: []string{"Cfg"},
+		Hints:  map[string]pkgmodel.FieldHint{"Cfg": {UpdateMethod: pkgmodel.FieldUpdateMethodAtomic}},
+	}
+	props := resolver.NewResolvableProperties()
+	props.Add(ksuid, "Arn", arn)
+
+	patchDoc, _, err := generatePatch(document, patch, stored, desired, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	require.NotNil(t, patchDoc, "the sibling change must be planned")
+	assert.Contains(t, string(patchDoc), arn,
+		"the emitted object must carry the reference in the form formae writes")
+	assert.NotContains(t, string(patchDoc), "name-a",
+		"the provider's read form must not be sent back as a write")
+}
+
+// An ordered list of references compares position by position, so reordering
+// emits an operation per position. Those operations must carry the references
+// the way formae writes them.
+func TestGeneratePatch_OrderedArrayReorderedRefs_EmitWriteForm(t *testing.T) {
+	ksuid := util.NewID()
+	arnA := "arn:aws:sns:us-east-1:111122223333:topic-a"
+	arnB := "arn:aws:sns:us-east-1:111122223333:topic-b"
+	document := []byte(`{"Topics": ["name-a", "name-b"]}`)
+	stored := fmt.Appendf(nil, `{"Topics": [
+		{"$ref": "formae://%s#/ArnA", "$value": "name-a", "$applied": %q},
+		{"$ref": "formae://%s#/ArnB", "$value": "name-b", "$applied": %q}
+	]}`, ksuid, arnA, ksuid, arnB)
+	desired := fmt.Appendf(nil, `{"Topics": [
+		{"$ref": "formae://%s#/ArnB"},
+		{"$ref": "formae://%s#/ArnA"}
+	]}`, ksuid, ksuid)
+	patch := desired
+	schema := pkgmodel.Schema{
+		Fields: []string{"Topics"},
+		Hints:  map[string]pkgmodel.FieldHint{"Topics": {UpdateMethod: pkgmodel.FieldUpdateMethodArray}},
+	}
+	props := resolver.NewResolvableProperties()
+	props.Add(ksuid, "ArnA", arnA)
+	props.Add(ksuid, "ArnB", arnB)
+
+	patchDoc, _, err := generatePatch(document, patch, stored, desired, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	require.NotNil(t, patchDoc, "reordering an ordered list is a change")
+	assert.Contains(t, string(patchDoc), arnA)
+	assert.Contains(t, string(patchDoc), arnB)
+	assert.NotContains(t, string(patchDoc), "name-a", "the provider's read form must not be sent back as a write")
+	assert.NotContains(t, string(patchDoc), "name-b", "the provider's read form must not be sent back as a write")
+}
+
+// The same guarantee on the execution path, where the desired side arrives with
+// its references already resolved.
+func TestGeneratePatch_AtomicObjectWithResolvedRef_EmitsWriteForm(t *testing.T) {
+	ksuid := util.NewID()
+	arn := "arn:aws:sns:us-east-1:111122223333:topic-a"
+	document := []byte(`{"Cfg": {"Note": "a", "Ref": "name-a"}}`)
+	stored := fmt.Appendf(nil, `{"Cfg": {"Note": "a", "Ref": {"$ref": "formae://%s#/Arn", "$value": "name-a", "$applied": %q}}}`, ksuid, arn)
+	desired := fmt.Appendf(nil, `{"Cfg": {"Note": "b", "Ref": {"$ref": "formae://%s#/Arn", "$value": %q}}}`, ksuid, arn)
+	patch := fmt.Appendf(nil, `{"Cfg": {"Note": "b", "Ref": %q}}`, arn)
+	schema := pkgmodel.Schema{
+		Fields: []string{"Cfg"},
+		Hints:  map[string]pkgmodel.FieldHint{"Cfg": {UpdateMethod: pkgmodel.FieldUpdateMethodAtomic}},
+	}
+
+	patchDoc, _, err := generatePatch(document, patch, stored, desired, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	require.NotNil(t, patchDoc, "the sibling change must be planned")
+	assert.Contains(t, string(patchDoc), arn)
+	assert.NotContains(t, string(patchDoc), "name-a")
+}
+
+// An unchanged reference on its own still produces nothing, which is what makes
+// aligning the comparison side rather than the desired side safe.
+func TestGeneratePatch_AtomicObjectFullyUnchanged_NoPatch(t *testing.T) {
+	ksuid := util.NewID()
+	arn := "arn:aws:sns:us-east-1:111122223333:topic-a"
+	document := []byte(`{"Cfg": {"Note": "a", "Ref": "name-a"}}`)
+	stored := fmt.Appendf(nil, `{"Cfg": {"Note": "a", "Ref": {"$ref": "formae://%s#/Arn", "$value": "name-a", "$applied": %q}}}`, ksuid, arn)
+	desired := fmt.Appendf(nil, `{"Cfg": {"Note": "a", "Ref": {"$ref": "formae://%s#/Arn"}}}`, ksuid)
+	patch := desired
+	schema := pkgmodel.Schema{
+		Fields: []string{"Cfg"},
+		Hints:  map[string]pkgmodel.FieldHint{"Cfg": {UpdateMethod: pkgmodel.FieldUpdateMethodAtomic}},
+	}
+	props := resolver.NewResolvableProperties()
+	props.Add(ksuid, "Arn", arn)
+
+	patchDoc, _, err := generatePatch(document, patch, stored, desired, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Nil(t, patchDoc, "an unchanged atomic object must still reconcile to a no-op")
+}
