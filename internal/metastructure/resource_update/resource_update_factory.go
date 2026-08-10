@@ -89,6 +89,7 @@ func NewResourceUpdateForExisting(
 			existingPluginProps,
 			newPluginProps,
 			existingForPatch,
+			desiredForPatch,
 			resolvableProperties,
 			newResource.Schema,
 			mode,

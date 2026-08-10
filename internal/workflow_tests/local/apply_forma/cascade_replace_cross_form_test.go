@@ -38,6 +38,12 @@ import (
 // referenced resource is replaced: the planner reaches it through the
 // dependency pass rather than its own diff, and the executor re-resolves the
 // reference after the replacement completes.
+//
+// This guards behavior that already holds: the dependency pass is what keeps
+// the repointing correct once a dependent's own diff falls silent. It is here
+// because nothing else pins that interaction, and a change to either half
+// would otherwise strand dependents pointing at a resource that no longer
+// exists.
 func TestApplyForma_ParentReplace_CrossFormRef_DependentIsRepointed(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		// The parent's identity as the cloud reports it; flipped between the

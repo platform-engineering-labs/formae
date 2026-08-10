@@ -177,6 +177,7 @@ func (ru *ResourceUpdate) regeneratePatchDocument() (json.RawMessage, error) {
 		existingPluginProps,
 		newPluginProps,
 		existingForPatch,
+		desiredForPatch,
 		resolver.NewResolvableProperties(),
 		ru.DesiredState.Schema,
 		pkgmodel.FormaApplyModePatch,

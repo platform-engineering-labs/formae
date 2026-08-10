@@ -30,8 +30,8 @@ var defaultIgnoredFields = []jsonpatch.Path{}
 //     these immutable properties changed: …") and are never sent to plugins.
 //
 // The two slices are disjoint. Either can be nil.
-func GeneratePatch(document []byte, patch []byte, storedEnvelopes []byte, properties resolver.ResolvableProperties, schema pkgmodel.Schema, mode pkgmodel.FormaApplyMode) (json.RawMessage, json.RawMessage, error) {
-	return generatePatch(document, patch, storedEnvelopes, properties, schema, mode)
+func GeneratePatch(document []byte, patch []byte, storedEnvelopes []byte, desiredEnvelopes []byte, properties resolver.ResolvableProperties, schema pkgmodel.Schema, mode pkgmodel.FormaApplyMode) (json.RawMessage, json.RawMessage, error) {
+	return generatePatch(document, patch, storedEnvelopes, desiredEnvelopes, properties, schema, mode)
 }
 
 func collectionSemanticsFromFieldHints(hints map[string]pkgmodel.FieldHint) jsonpatch.Collections {
@@ -66,8 +66,8 @@ func entitySetProviderDefaultsFromHints(hints map[string]pkgmodel.FieldHint) map
 	return result
 }
 
-func generatePatch(document []byte, patch []byte, storedEnvelopes []byte, properties resolver.ResolvableProperties, schema pkgmodel.Schema, mode pkgmodel.FormaApplyMode) (json.RawMessage, json.RawMessage, error) {
-	flattenedDocument, flattenedPatch, err := flattenAndResolveRefs(document, patch, storedEnvelopes, properties)
+func generatePatch(document []byte, patch []byte, storedEnvelopes []byte, desiredEnvelopes []byte, properties resolver.ResolvableProperties, schema pkgmodel.Schema, mode pkgmodel.FormaApplyMode) (json.RawMessage, json.RawMessage, error) {
+	flattenedDocument, flattenedPatch, err := flattenAndResolveRefs(document, patch, storedEnvelopes, desiredEnvelopes, properties)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to flatten and resolve refs: %w", err)
 	}
@@ -951,22 +951,63 @@ func storedAppliedEnvelope(storedNode any) map[string]any {
 	return storedMap
 }
 
-// storedAppliedElementByValue finds the stored array element whose applied
-// baseline equals want. Ambiguity (zero or multiple matches) returns nil, so
-// an element with no unique counterpart keeps its existing behavior.
-func storedAppliedElementByValue(storedArr []any, want any) map[string]any {
-	var match map[string]any
-	for _, elem := range storedArr {
-		m := storedAppliedEnvelope(elem)
-		if m == nil || !reflect.DeepEqual(m["$applied"], want) {
-			continue
-		}
-		if match != nil {
-			return nil
-		}
-		match = m
+// storedEchoForResolvedRef reports the echo to compare against when the desired
+// side no longer carries a reference envelope.
+//
+// The executor resolves references before calling a provider and re-derives the
+// patch from the resolved properties, so on that path the desired value arrives
+// as the resolved value alone. The unconverted desired properties still hold the
+// envelope it came from, which is what establishes that the value IS a resolved
+// reference rather than a literal the user wrote: matching on the value alone
+// cannot tell those apart, and suppressing a literal would silently drop the
+// user's edit.
+//
+// It returns the stored echo when the desired envelope names the same reference
+// as the stored one and resolves to what the last write applied. Opaque
+// envelopes and envelopes with no recorded baseline are excluded.
+func storedEchoForResolvedRef(desiredNode, storedNode, modNode any) (any, bool) {
+	desiredEnv, ok := desiredNode.(map[string]any)
+	if !ok || desiredEnv["$visibility"] == pkgmodel.VisibilityOpaque {
+		return nil, false
 	}
-	return match
+	desiredRef, ok := desiredEnv["$ref"].(string)
+	if !ok || desiredRef == "" {
+		return nil, false
+	}
+	desiredValue, resolved := desiredEnv["$value"]
+	if !resolved || desiredValue == nil {
+		return nil, false
+	}
+	// A desired side that still carries its envelope is handled by the
+	// structured path, which resolves it fresh.
+	if modEnv, isEnv := modNode.(map[string]any); isEnv {
+		if _, hasRef := modEnv["$ref"]; hasRef {
+			return nil, false
+		}
+	}
+	storedEnv := storedAppliedEnvelope(storedNode)
+	if storedEnv == nil || storedEnv["$ref"] != desiredRef {
+		return nil, false
+	}
+	if !reflect.DeepEqual(storedEnv["$applied"], desiredValue) {
+		return nil, false
+	}
+	return storedEnv["$value"], true
+}
+
+// storedEchoForResolvedRefInArray applies storedEchoForResolvedRef to one array
+// element, locating the stored counterpart by the reference the desired element
+// names rather than by position: the provider may return elements in any order.
+func storedEchoForResolvedRefInArray(desiredElem any, storedArr []any, modElem any) (any, bool) {
+	desiredEnv, ok := desiredElem.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	storedElem := storedRefElementByURI(storedArr, desiredEnv["$ref"])
+	if storedElem == nil {
+		return nil, false
+	}
+	return storedEchoForResolvedRef(desiredElem, storedElem, modElem)
 }
 
 // storedRefElementByURI finds the stored array element whose $ref equals uri.
@@ -988,8 +1029,15 @@ func storedRefElementByURI(storedArr []any, uri any) map[string]any {
 }
 
 // resolveRefs uses properties to resolve references in the patch document
-func resolveRefs(current, mod, stored map[string]any, resolvableProperties resolver.ResolvableProperties) error {
+func resolveRefs(current, mod, stored, desired map[string]any, resolvableProperties resolver.ResolvableProperties) error {
 	for k, v := range mod {
+		// A reference the executor already resolved: the desired side holds the
+		// resolved value alone, and the envelope it came from lives in the
+		// unconverted desired properties.
+		if echo, ok := storedEchoForResolvedRef(desired[k], stored[k], v); ok {
+			mod[k] = echo
+			continue
+		}
 		switch modVal := v.(type) {
 		case map[string]any:
 			if ref, hasRef := modVal["$ref"]; hasRef {
@@ -1045,7 +1093,13 @@ func resolveRefs(current, mod, stored map[string]any, resolvableProperties resol
 			} else {
 				storedNested = map[string]any{}
 			}
-			if err := resolveRefs(currNested, modVal, storedNested, resolvableProperties); err != nil {
+			var desiredNested map[string]any
+			if d, ok := desired[k].(map[string]any); ok {
+				desiredNested = d
+			} else {
+				desiredNested = map[string]any{}
+			}
+			if err := resolveRefs(currNested, modVal, storedNested, desiredNested, resolvableProperties); err != nil {
 				return err
 			}
 		case []any:
@@ -1058,6 +1112,13 @@ func resolveRefs(current, mod, stored map[string]any, resolvableProperties resol
 				if s, ok := stored[k].([]any); ok {
 					storedArr = s
 				}
+			}
+			// The unconverted desired properties are the same document in the
+			// same order, so desired elements are matched by index; stored
+			// elements are a different document and are matched by reference.
+			var desiredArr []any
+			if d, ok := desired[k].([]any); ok {
+				desiredArr = d
 			}
 			for i, elem := range modVal {
 				var currElem any
@@ -1086,7 +1147,11 @@ func resolveRefs(current, mod, stored map[string]any, resolvableProperties resol
 						storedElem := storedArr[i]
 						wrappedStored = map[string]any{k: storedElem}
 					}
-					if err := resolveRefs(wrappedCurrent, wrappedElem, wrappedStored, resolvableProperties); err != nil {
+					var wrappedDesired map[string]any
+					if len(desiredArr) > i {
+						wrappedDesired = map[string]any{k: desiredArr[i]}
+					}
+					if err := resolveRefs(wrappedCurrent, wrappedElem, wrappedStored, wrappedDesired, resolvableProperties); err != nil {
 						return err
 					}
 					if resolvedElem, ok := wrappedElem[k].(map[string]any); ok {
@@ -1094,22 +1159,17 @@ func resolveRefs(current, mod, stored map[string]any, resolvableProperties resol
 					}
 					continue
 				}
-				// An already-resolved element: compare it against the applied
-				// baselines rather than by position, since a resolved element
-				// carries nothing that ties it to one stored slot.
-				if counterpart := storedAppliedElementByValue(storedArr, elem); counterpart != nil {
-					modVal[i] = counterpart["$value"]
+				// An already-resolved element. The unconverted desired array is
+				// the same document in the same order, so its element at this
+				// index names the reference this value came from; the stored
+				// counterpart is then found by that reference.
+				var desiredElem any
+				if len(desiredArr) > i {
+					desiredElem = desiredArr[i]
 				}
-			}
-		default:
-			// An already-resolved reference: the desired side holds the value
-			// the reference resolves to, with no envelope left to match. When
-			// it equals what the last write applied, the reference is unchanged
-			// and the diff must compare within the observed domain, exactly as
-			// it does for a structured reference.
-			if counterpart := storedAppliedEnvelope(stored[k]); counterpart != nil &&
-				reflect.DeepEqual(modVal, counterpart["$applied"]) {
-				mod[k] = counterpart["$value"]
+				if echo, ok := storedEchoForResolvedRefInArray(desiredElem, storedArr, elem); ok {
+					modVal[i] = echo
+				}
 			}
 		}
 	}
@@ -1233,7 +1293,7 @@ func normalizeToFlattenedKeys(m map[string]any) {
 	}
 }
 
-func flattenAndResolveRefs(document []byte, patch []byte, storedEnvelopes []byte, resolvableProperties resolver.ResolvableProperties) ([]byte, []byte, error) {
+func flattenAndResolveRefs(document []byte, patch []byte, storedEnvelopes []byte, desiredEnvelopes []byte, resolvableProperties resolver.ResolvableProperties) ([]byte, []byte, error) {
 	var current, mod map[string]any
 	if err := json.Unmarshal(document, &current); err != nil {
 		return nil, nil, err
@@ -1247,7 +1307,13 @@ func flattenAndResolveRefs(document []byte, patch []byte, storedEnvelopes []byte
 			return nil, nil, err
 		}
 	}
-	if err := resolveRefs(current, mod, stored, resolvableProperties); err != nil {
+	var desired map[string]any
+	if len(desiredEnvelopes) > 0 {
+		if err := json.Unmarshal(desiredEnvelopes, &desired); err != nil {
+			return nil, nil, err
+		}
+	}
+	if err := resolveRefs(current, mod, stored, desired, resolvableProperties); err != nil {
 		return nil, nil, err
 	}
 	flattenRefs(current)
