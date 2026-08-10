@@ -102,10 +102,14 @@ var nonAuthHeaders = map[string]bool{
 // computeCacheKey derives a cache key from auth-relevant request headers by
 // hashing their sorted key-value pairs, excluding known volatile headers.
 //
-// Each key and each value is written with a big-endian uint64 length prefix
-// so the encoding is injective: without delimiters, header shapes that
-// distribute the same bytes differently across keys and values (e.g. one
-// value "AB" vs. two values "A", "B") would hash identically.
+// The encoding is unambiguously decodable: each header contributes its
+// length-prefixed key, then a fixed-width big-endian uint64 count of how
+// many values it has, then each value with its own length prefix. The count
+// is what marks where one key's values end and the next key begins, so no
+// two distinct header sets can serialize to the same byte stream: not by
+// splitting a value's bytes differently (closed by the length prefixes),
+// and not by redistributing values across a different number of keys
+// (closed by the count).
 func computeCacheKey(headers map[string][]string) string {
 	h := sha256.New()
 	keys := make([]string, 0, len(headers))
@@ -116,16 +120,21 @@ func computeCacheKey(headers map[string][]string) string {
 	}
 	sort.Strings(keys)
 
-	var lenPrefix [8]byte
+	var buf [8]byte
+	writeUint64 := func(n uint64) {
+		binary.BigEndian.PutUint64(buf[:], n)
+		h.Write(buf[:])
+	}
 	writeLengthDelimited := func(s string) {
-		binary.BigEndian.PutUint64(lenPrefix[:], uint64(len(s)))
-		h.Write(lenPrefix[:])
+		writeUint64(uint64(len(s)))
 		h.Write([]byte(s))
 	}
 
 	for _, k := range keys {
 		writeLengthDelimited(k)
-		for _, v := range headers[k] {
+		values := headers[k]
+		writeUint64(uint64(len(values)))
+		for _, v := range values {
 			writeLengthDelimited(v)
 		}
 	}

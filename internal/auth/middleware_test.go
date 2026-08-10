@@ -214,6 +214,23 @@ func TestComputeCacheKey_Injective(t *testing.T) {
 	if computeCacheKey(oneValue) == computeCacheKey(twoValues) {
 		t.Fatal("expected different cache keys for header sets whose values concatenate to the same bytes")
 	}
+
+	// Two headers with one value each vs. one header with three values: build
+	// both through http.Header, the same canonicalizing constructor the
+	// middleware uses when it reads c.Request().Header, so the header keys
+	// here match what computeCacheKey actually receives on the request path.
+	twoHeaders := http.Header{}
+	twoHeaders.Set("A", "X")
+	twoHeaders.Set("Ab", "Y")
+
+	oneHeaderThreeValues := http.Header{}
+	oneHeaderThreeValues.Set("A", "X")
+	oneHeaderThreeValues.Add("A", "Ab")
+	oneHeaderThreeValues.Add("A", "Y")
+
+	if computeCacheKey(map[string][]string(twoHeaders)) == computeCacheKey(map[string][]string(oneHeaderThreeValues)) {
+		t.Fatal("expected different cache keys when the same bytes are distributed across a different number of headers and values")
+	}
 }
 
 func TestMiddleware_DifferentCredentialsDifferentCacheKeys(t *testing.T) {
