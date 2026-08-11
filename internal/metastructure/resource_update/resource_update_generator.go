@@ -2369,6 +2369,27 @@ func markOpaqueResolvablesInProps(propsJSON string, opaqueByTriplet map[pkgmodel
 	return result, true
 }
 
+// referencesOpaqueProperty reports whether propertyName names an opaque property
+// of the source, given the source's set of opaque property names.
+//
+// A reference into a MAP-shaped secret selects one key and carries the key folded
+// into the property path (e.g. "data.token", produced by
+// secret.res.secretValue.at("token")). The opaque name is the parent field, since
+// the field is stored as a single envelope with no per-key sub-structure, so the
+// leaf path is never in the set and matching it alone would leave the reference
+// un-marked and its resolved value unhashed at rest. Test the top-level field too,
+// mirroring resolver.isSourcePropertyOpaque.
+func referencesOpaqueProperty(opaque map[string]bool, propertyName string) bool {
+	if propertyName == "" {
+		return false
+	}
+	if opaque[propertyName] {
+		return true
+	}
+	root, _, nested := strings.Cut(propertyName, ".")
+	return nested && opaque[root]
+}
+
 // collectOpaqueResolvablePaths records the gjson/sjson path of every $res envelope
 // that references a known Opaque property and does not already carry $visibility.
 func collectOpaqueResolvablePaths(basePath string, value gjson.Result, opaqueByTriplet map[pkgmodel.TripletKey]map[string]bool, paths *[]string) {
@@ -2385,7 +2406,7 @@ func collectOpaqueResolvablePaths(basePath string, value gjson.Result, opaqueByT
 			Type:  value.Get("$type").String(),
 		}
 		property := value.Get("$property").String()
-		if set, ok := opaqueByTriplet[triplet]; ok && property != "" && set[property] {
+		if set, ok := opaqueByTriplet[triplet]; ok && referencesOpaqueProperty(set, property) {
 			*paths = append(*paths, basePath)
 		}
 		return
