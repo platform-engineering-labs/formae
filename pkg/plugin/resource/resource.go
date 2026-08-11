@@ -20,13 +20,57 @@ type CreateResult struct {
 }
 
 type UpdateRequest struct {
-	NativeID          string
-	ResourceType      string
-	Label             string // Resource label for identification (used by Azure as fallback, useful for testing)
-	PriorProperties   json.RawMessage
+	NativeID     string
+	ResourceType string
+	Label        string // Resource label for identification (used by Azure as fallback, useful for testing)
+
+	// PriorProperties carries the caller's last-known model for this resource
+	// as comparison CONTEXT. It is not authoritative replayable state, and an
+	// opaque property's prior value is NOT available in it.
+	//
+	// It is not forbidden as a basis for the write: reconstructing the body to
+	// send from PriorProperties plus PatchDocument is a legitimate strategy.
+	// The rule is that a redacted property must be HANDLED, not that the
+	// document must not be used.
+	//
+	// A redacted opaque property is present but unusable, and may be
+	// non-scalar: do not read it, and do not assert it to the type the schema
+	// declares — that assertion fails. Its presence is meaningful (redacted is
+	// distinguishable from unset, which a plugin reconstructing a whole
+	// document needs) but its value is not, and the encoding is deliberately
+	// unspecified: do not branch on it.
+	//
+	// Redaction covers the union of the opaque hints on BOTH the prior and the
+	// desired schema — a hint removed or renamed between the two would
+	// otherwise expose a value that was opaque when it was stored — plus the
+	// caller-side known-opaque table keyed on resource type, matched at every
+	// level including dotted/nested names. A property opaque only via an inline
+	// $visibility envelope, carrying no schema hint, is not redacted here.
+	//
+	// A secret value comes from DesiredProperties, never from here.
+	PriorProperties json.RawMessage
+
+	// DesiredProperties is the full desired document, not a delta: every
+	// property being applied is present on every update. It is where a write
+	// reads its values from, including a property whose prior value is redacted
+	// from PriorProperties. It can carry live opaque plaintext and must never
+	// be logged.
 	DesiredProperties json.RawMessage
-	PatchDocument     *string
-	TargetConfig      json.RawMessage
+
+	// PatchDocument is an RFC 6902-shaped document reporting what THIS planned
+	// change touches. It is not a general "did this property change" oracle: it
+	// carries only what was planned, a change to an opaque property may be
+	// suppressed from it, and a value that moves in place behind an otherwise
+	// unchanged reference may plan no update at all.
+	//
+	// A plugin deciding whether one of its properties is affected must treat an
+	// op at that property's path OR at any ANCESTOR of it as affecting it — a
+	// parent-object or whole-document replacement carries the property — rather
+	// than matching the exact path. Like DesiredProperties it can carry live
+	// opaque plaintext and must never be logged.
+	PatchDocument *string
+
+	TargetConfig json.RawMessage
 }
 
 type UpdateResult struct {
