@@ -59,7 +59,7 @@ func ackLine(w io.Writer, tty bool, th *theme.Theme, m components.AckMarker, tex
 
 // LoginCmd signs in through the active profile's auth plugin.
 func LoginCmd() *cobra.Command {
-	var force, device bool
+	var device bool
 
 	command := &cobra.Command{
 		Use:   "login",
@@ -68,7 +68,8 @@ func LoginCmd() *cobra.Command {
 
 The auth plugin decides how the flow works: opening a browser (the default)
 or, with --device, printing a code to enter on another device. Running
-login again while already signed in is a no-op unless --force is given.`,
+login again while already signed in is a no-op. To sign in as someone else,
+run logout first.`,
 		Annotations: map[string]string{
 			"type":     "Auth",
 			"examples": "{{.Name}} {{.Command}}|{{.Name}} {{.Command}} --device",
@@ -91,11 +92,10 @@ login again while already signed in is a no-op unless --force is given.`,
 				return err
 			}
 
-			return runLogin(client, os.Stdout, themeFor(a), force, device)
+			return runLogin(client, os.Stdout, themeFor(a), device)
 		},
 	}
 
-	command.Flags().BoolVar(&force, "force", false, "re-authenticate even if already signed in")
 	command.Flags().BoolVar(&device, "device", false, "use a device code instead of opening a browser")
 	command.SetUsageTemplate(clicmd.SimpleCmdUsageTemplate)
 	clicmd.AddConfigFlags(command)
@@ -111,7 +111,7 @@ login again while already signed in is a no-op unless --force is given.`,
 // they print plain — formae has no established styling convention for that
 // kind of prose (compare plugin/init.go's plain numbered next-steps); only
 // the completion lines (the sign-in acknowledgments) carry an ack marker.
-func runLogin(c authClient, out io.Writer, th *theme.Theme, force, device bool) error {
+func runLogin(c authClient, out io.Writer, th *theme.Theme, device bool) error {
 	tty := loginIsTerminal(out)
 
 	mode := "browser"
@@ -119,7 +119,7 @@ func runLogin(c authClient, out io.Writer, th *theme.Theme, force, device bool) 
 		mode = "device"
 	}
 
-	startResp, err := c.LoginStart(&pkgauth.LoginStartRequest{Mode: mode, Force: force})
+	startResp, err := c.LoginStart(&pkgauth.LoginStartRequest{Mode: mode})
 	if err != nil {
 		return err
 	}

@@ -91,8 +91,7 @@ type GetAuthHeaderResponse struct {
 
 // LoginStartRequest begins an interactive login flow.
 type LoginStartRequest struct {
-	Mode  string // "browser" | "device"
-	Force bool
+	Mode string // "browser" | "device"
 }
 
 // LoginStartResponse describes how the caller should carry out (or skip) the login flow.

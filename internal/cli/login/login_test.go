@@ -73,7 +73,7 @@ func TestRunLogin_BrowserPath(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err := runLogin(c, &out, testTheme, false, false)
+	err := runLogin(c, &out, testTheme, false)
 	require.NoError(t, err)
 
 	assert.Equal(t, "Open this URL to sign in:\n  https://issuer.example/authorize?req=abc\n✓ signed in as jane\n", out.String())
@@ -83,7 +83,6 @@ func TestRunLogin_BrowserPath(t *testing.T) {
 
 	require.NotNil(t, c.loginStartReq)
 	assert.Equal(t, "browser", c.loginStartReq.Mode)
-	assert.False(t, c.loginStartReq.Force)
 }
 
 // TestRunLogin_DevicePath exercises the device-code flow: the plain
@@ -105,7 +104,7 @@ func TestRunLogin_DevicePath(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err := runLogin(c, &out, testTheme, false, true)
+	err := runLogin(c, &out, testTheme, true)
 	require.NoError(t, err)
 
 	assert.Equal(t, "Visit https://issuer.example/device and enter code: ABCD-1234\n✓ signed in as jane\n", out.String())
@@ -113,27 +112,6 @@ func TestRunLogin_DevicePath(t *testing.T) {
 
 	require.NotNil(t, c.loginStartReq)
 	assert.Equal(t, "device", c.loginStartReq.Mode)
-	assert.False(t, c.loginStartReq.Force)
-}
-
-// TestRunLogin_ForceFlagPassedThrough verifies that --force is carried
-// through to the LoginStart request unchanged, so a silently dropped or
-// swapped flag would be caught rather than passing unnoticed.
-func TestRunLogin_ForceFlagPassedThrough(t *testing.T) {
-	c := &stubAuthClient{
-		loginStartResp: &pkgauth.LoginStartResponse{
-			Status:      "already_authenticated",
-			SubjectName: "jane",
-		},
-	}
-
-	var out bytes.Buffer
-	err := runLogin(c, &out, testTheme, true, false)
-	require.NoError(t, err)
-
-	require.NotNil(t, c.loginStartReq)
-	assert.True(t, c.loginStartReq.Force)
-	assert.Equal(t, "browser", c.loginStartReq.Mode)
 }
 
 // TestRunLogin_AlreadyAuthenticatedShortCircuits verifies that when
@@ -149,7 +127,7 @@ func TestRunLogin_AlreadyAuthenticatedShortCircuits(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err := runLogin(c, &out, testTheme, false, false)
+	err := runLogin(c, &out, testTheme, false)
 	require.NoError(t, err)
 
 	assert.Equal(t, "✓ already signed in as jane\n", out.String())
@@ -174,7 +152,7 @@ func TestRunLogin_SignedInFallsBackToSubjectWhenNameEmpty(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err := runLogin(c, &out, testTheme, false, false)
+	err := runLogin(c, &out, testTheme, false)
 	require.NoError(t, err)
 
 	assert.Equal(t, "Open this URL to sign in:\n  https://issuer.example/authorize?req=abc\n✓ signed in as subj-123\n", out.String())
@@ -196,7 +174,7 @@ func TestRunLogin_SignedInOmitsIdentityWhenNeitherSet(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err := runLogin(c, &out, testTheme, false, false)
+	err := runLogin(c, &out, testTheme, false)
 	require.NoError(t, err)
 
 	assert.Equal(t, "Open this URL to sign in:\n  https://issuer.example/authorize?req=abc\n✓ signed in\n", out.String())
@@ -214,7 +192,7 @@ func TestRunLogin_AlreadyAuthenticatedFallsBackToSubjectWhenNameEmpty(t *testing
 	}
 
 	var out bytes.Buffer
-	err := runLogin(c, &out, testTheme, false, false)
+	err := runLogin(c, &out, testTheme, false)
 	require.NoError(t, err)
 
 	assert.Equal(t, "✓ already signed in as subj-456\n", out.String())
@@ -230,7 +208,7 @@ func TestRunLogin_AlreadyAuthenticatedOmitsIdentityWhenNeitherSet(t *testing.T) 
 	}
 
 	var out bytes.Buffer
-	err := runLogin(c, &out, testTheme, false, false)
+	err := runLogin(c, &out, testTheme, false)
 	require.NoError(t, err)
 
 	assert.Equal(t, "✓ already signed in\n", out.String())
@@ -247,7 +225,7 @@ func TestRunLogin_UnsupportedOnLoginStart(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err := runLogin(c, &out, testTheme, false, false)
+	err := runLogin(c, &out, testTheme, false)
 	require.Error(t, err)
 	assert.Equal(t, "the active profile's auth plugin does not support this operation", err.Error())
 	assert.False(t, c.loginWaitCalled)
@@ -271,7 +249,7 @@ func TestRunLogin_PipedOutputHasNoANSI(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err := runLogin(c, &out, testTheme, false, false)
+	err := runLogin(c, &out, testTheme, false)
 	require.NoError(t, err)
 
 	assert.NotContains(t, out.String(), "\x1b[", "piped output must be ANSI-free")
