@@ -1555,6 +1555,19 @@ func (h *TestHarness) CreateAllUnmanagedResources(evaluatedJSON string) ([]Creat
 			NativeID:     finalProgress.NativeID,
 			Properties:   finalProgress.ResourceProperties,
 		})
+
+		// Register the deletion as soon as the resource exists, not once the
+		// whole set does: a later resource can fail to create or to resolve its
+		// references, and anything already created is a real cloud resource that
+		// must still be cleaned up. Cleanups run in reverse registration order,
+		// so dependents are deleted before what they depend on.
+		created := createdResources[len(createdResources)-1]
+		h.RegisterCleanup(func() {
+			h.t.Logf("Deleting unmanaged resource: type=%s, label=%s, nativeID=%s", created.ResourceType, created.Label, created.NativeID)
+			if err := h.DeleteUnmanagedResource(created.ResourceType, created.NativeID, &target); err != nil {
+				h.t.Logf("Warning: failed to delete unmanaged resource %s: %v", created.Label, err)
+			}
+		})
 	}
 
 	h.t.Logf("Successfully created %d resource(s)", len(createdResources))
@@ -1713,10 +1726,11 @@ func (h *TestHarness) resolveResolvablesInProperties(properties json.RawMessage,
 				res.Path, res.Property, res.Label, err)
 		}
 
+		// Read off the envelope before it is replaced by the value.
+		opaque := referenceIsOpaque(propsStr, res)
+
 		// A $json reference names a path INTO the resolved value, so the field
 		// takes the scalar at that path rather than the document holding it.
-		// Only a secret's value is addressed this way, so what it resolves to
-		// is reported by path alone and never printed.
 		if res.JSONPath != "" {
 			resolvedValue, err = extractJSONPath(resolvedValue, res.JSONPath)
 			if err != nil {
@@ -1724,7 +1738,12 @@ func (h *TestHarness) resolveResolvablesInProperties(properties json.RawMessage,
 					"could not resolve reference at %s: property %q of resource %q: %w",
 					res.Path, res.Property, res.Label, err)
 			}
-			h.t.Logf("Resolved %s.%s (%s) -> (redacted)", res.Label, res.Property, res.JSONPath)
+		}
+
+		// A resolved secret must never reach the test log, so an opaque
+		// reference is reported by what it points at and never by its value.
+		if opaque {
+			h.t.Logf("Resolved %s.%s -> (redacted)", res.Label, res.Property)
 		} else {
 			h.t.Logf("Resolved %s.%s -> %s", res.Label, res.Property, resolvedValue)
 		}
@@ -1748,6 +1767,18 @@ func (h *TestHarness) resolveResolvablesInProperties(properties json.RawMessage,
 	}
 
 	return json.RawMessage(propsStr), nil
+}
+
+// referenceIsOpaque reports whether what a reference resolves to is a secret,
+// read from the envelope still standing at its path in properties. A reference
+// declares its own visibility — the resolvable itself carries none — and a
+// $json path counts regardless, because only a secret's value is addressed
+// that way.
+func referenceIsOpaque(properties string, res pkgmodel.ResolvableObject) bool {
+	if res.JSONPath != "" {
+		return true
+	}
+	return gjson.Get(properties, res.Path).Get("$visibility").String() == pkgmodel.VisibilityOpaque
 }
 
 // extractJSONPath returns the scalar at a gjson dotted path within resolved,

@@ -2075,28 +2075,9 @@ func runDiscoveryTest(t *testing.T, tc TestCase, rc *ResultCollector) {
 	}
 	t.Logf("Created %d resource(s), main resource NativeID: %s (type: %s)", len(createdResources), nativeID, resourceType)
 
-	// Parse target from eval output for cleanup
-	var forma pkgmodel.Forma
-	if err := json.Unmarshal([]byte(evalOutput), &forma); err != nil {
-		rc.DiscoveryFatalf(t, idx, PhaseCreateOOB, "failed to parse forma for cleanup: %v", err)
-	}
-	if len(forma.Targets) == 0 {
-		rc.DiscoveryFatalf(t, idx, PhaseCreateOOB, "no targets found in forma for cleanup")
-	}
-	target := forma.Targets[0]
-
-	// Register cleanup to delete all created resources (in reverse order - dependents before dependencies).
-	// DeleteUnmanagedResource handles retries on recoverable errors internally.
-	harness.RegisterCleanup(func() {
-		t.Logf("Cleaning up %d unmanaged resource(s)...", len(createdResources))
-		for i := len(createdResources) - 1; i >= 0; i-- {
-			res := createdResources[i]
-			t.Logf("Deleting unmanaged resource: type=%s, label=%s, nativeID=%s", res.ResourceType, res.Label, res.NativeID)
-			if err := harness.DeleteUnmanagedResource(res.ResourceType, res.NativeID, &target); err != nil {
-				t.Logf("Warning: failed to delete unmanaged resource %s: %v", res.Label, err)
-			}
-		}
-	})
+	// Deletion of each created resource is registered by
+	// CreateAllUnmanagedResources as soon as that resource exists, so a create
+	// that fails partway still cleans up what it made.
 
 	// Extract all unique resource types from created resources for discovery configuration.
 	// This includes both the main resource type and any parent/dependency types.

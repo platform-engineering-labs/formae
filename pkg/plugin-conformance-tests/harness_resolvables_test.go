@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
 // resolvableProps is a consumer's properties: one plain field plus one field
@@ -27,6 +29,50 @@ func resolvableProps(property, jsonPath string) json.RawMessage {
 			"$property": "` + property + `"` + jsonKey + `
 		}
 	}`)
+}
+
+// opaqueResolvableProps is the same consumer, with the reference declaring the
+// value it points at as a secret and taking it whole (no $json path).
+func opaqueResolvableProps(property string) json.RawMessage {
+	return json.RawMessage(`{
+		"Name": "consumer",
+		"Password": {
+			"$res": true,
+			"$label": "the-secret",
+			"$type": "Test::Secret",
+			"$stack": "default",
+			"$property": "` + property + `",
+			"$visibility": "Opaque"
+		}
+	}`)
+}
+
+// TestReferenceIsOpaque covers the decision that keeps a resolved secret out of
+// the test log: a reference is treated as pointing at a secret when it declares
+// itself Opaque, or when it selects a field with $json, which only a secret's
+// value is addressed with.
+func TestReferenceIsOpaque(t *testing.T) {
+	cases := []struct {
+		name  string
+		props json.RawMessage
+		want  bool
+	}{
+		{"opaque envelope, no $json", opaqueResolvableProps("SecretString"), true},
+		{"$json with no visibility", resolvableProps("SecretString", "db.password"), true},
+		{"plain reference", resolvableProps("Arn", ""), false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			found := pkgmodel.FindResolvablesFromProperties(string(tc.props))
+			if len(found) != 1 {
+				t.Fatalf("expected exactly one resolvable, got %d", len(found))
+			}
+			if got := referenceIsOpaque(string(tc.props), found[0]); got != tc.want {
+				t.Errorf("referenceIsOpaque = %v, want %v", got, tc.want)
+			}
+		})
+	}
 }
 
 // createdSecret is the harness's record of the source resource after its
