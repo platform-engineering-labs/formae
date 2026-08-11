@@ -5,8 +5,14 @@
 package auth
 
 import (
+	"encoding/json"
 	"errors"
+	"io"
 	"net/rpc"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -315,5 +321,74 @@ func TestClient_Close(t *testing.T) {
 	_, err = client.Validate(&ValidateRequest{})
 	if err == nil {
 		t.Fatal("expected error after Close")
+	}
+}
+
+// stderrMarker must match the constant of the same name in
+// testdata/stderrplugin/main.go.
+const stderrMarker = "stderrplugin: init reached"
+
+// buildStderrPlugin compiles the testdata/stderrplugin fixture into a real
+// binary in t.TempDir() and returns its path. Unlike the other tests in this
+// file, this exercises NewClient against an actual subprocess rather than an
+// in-process pipe, because the behavior under test is what NewClient does
+// with the child's OS-level stderr descriptor.
+func buildStderrPlugin(t *testing.T) string {
+	t.Helper()
+
+	bin := filepath.Join(t.TempDir(), "stderrplugin")
+	cmd := exec.Command("go", "build", "-o", bin, "./testdata/stderrplugin")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build stderrplugin: %v\n%s", err, out)
+	}
+	return bin
+}
+
+// TestNewClient_ConnectsPluginStderrToHostStderr spawns a real plugin
+// subprocess whose Init method writes a marker line to its own stderr, with
+// the host's os.Stderr swapped for a pipe, and checks that the marker
+// arrives on the host side. The child's write happens concurrently with
+// NewClient's own Init call, so the read end is drained in a goroutine
+// rather than read after everything else completes.
+func TestNewClient_ConnectsPluginStderrToHostStderr(t *testing.T) {
+	bin := buildStderrPlugin(t)
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	origStderr := os.Stderr
+	os.Stderr = w
+	t.Cleanup(func() {
+		os.Stderr = origStderr
+		w.Close()
+		r.Close()
+	})
+
+	captured := make(chan string, 1)
+	go func() {
+		data, _ := io.ReadAll(r)
+		captured <- string(data)
+	}()
+
+	client, err := NewClient(bin, json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	client.Close()
+
+	// Restore stderr and close the write end now: the child has already
+	// been reaped by Close, so this is the last writer and the draining
+	// goroutine will observe EOF.
+	os.Stderr = origStderr
+	w.Close()
+
+	select {
+	case out := <-captured:
+		if !strings.Contains(out, stderrMarker) {
+			t.Fatalf("expected host stderr to contain %q, got %q", stderrMarker, out)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for plugin stderr to arrive")
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/rpc"
+	"os"
 	"os/exec"
 	"time"
 )
@@ -27,7 +28,7 @@ type Client struct {
 // It calls Init with the provided config before returning.
 func NewClient(binaryPath string, config json.RawMessage) (*Client, error) {
 	cmd := exec.Command(binaryPath)
-	cmd.Stderr = nil // let plugin stderr go to parent stderr
+	cmd.Stderr = os.Stderr // connect plugin stderr to the host's stderr
 	setSysProcAttr(cmd)
 
 	stdin, err := cmd.StdinPipe()
