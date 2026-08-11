@@ -554,3 +554,33 @@ func TestWithAuthRetry_HTTPIntegration(t *testing.T) {
 	assert.Equal(t, int32(2), atomic.LoadInt32(&hits))
 	assert.Equal(t, int32(1), provider.forcedCalls.Load())
 }
+
+// TestRunBeforeCommand_StylesAuthorizationDeniedError verifies that when the
+// Stats preflight exhausts its forced-refresh retry and withAuthRetry
+// returns AuthorizationDeniedError, runBeforeCommand renders it at the call
+// site like its sibling branches in the same switch (ECONNREFUSED,
+// AuthenticationError, version mismatch), rather than passing it through as
+// flat text. The frozen error text itself must still be present verbatim —
+// only the presentation changes.
+func TestRunBeforeCommand_StylesAuthorizationDeniedError(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/stats", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+
+	provider := &stubAuthProvider{
+		initialResp: headerResp("stale"),
+		forcedResp:  headerResp("still-stale"),
+	}
+	a := newAppWithServer(ts.URL)
+	a.Config.Cli.Auth = json.RawMessage(`{"type":"stub"}`)
+	a.authClientFactory = func() (authHeaderProvider, error) { return provider, nil }
+
+	compatible, _, _, err := a.runBeforeCommand(true)
+
+	assert.False(t, compatible)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "the agent denied access for this installation; check with your org admin")
+}

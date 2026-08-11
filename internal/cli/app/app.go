@@ -724,7 +724,14 @@ func (a *App) runBeforeCommand(transmitStats bool) (bool, *apimodel.Stats, []str
 		}
 		var denied api.AuthorizationDeniedError
 		if errors.As(err, &denied) {
-			return false, nil, nil, denied
+			// denied.Error()'s text is design-pinned and must not change; it
+			// already reads as a single headline+action sentence, so unlike
+			// the AuthenticationError branch below there is no natural place
+			// to split it into a separate two-tone headline/action pair
+			// without slicing the frozen string itself. Style it as one run
+			// instead, consistent in kind (though not in structure) with its
+			// siblings in this switch.
+			return false, nil, nil, fmt.Errorf("%s", errStyle.Render(denied.Error()))
 		}
 		if errors.Is(err, api.AuthenticationError{}) {
 			return false, nil, nil, fmt.Errorf("%s\n\n%s",

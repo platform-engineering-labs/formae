@@ -12,6 +12,8 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/authmsg"
 	clicmd "github.com/platform-engineering-labs/formae/internal/cli/cmd"
 	"github.com/platform-engineering-labs/formae/internal/cli/config"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	"github.com/spf13/cobra"
 )
@@ -43,7 +45,7 @@ func LogoutCmd() *cobra.Command {
 				return err
 			}
 
-			return runLogout(client, os.Stdout)
+			return runLogout(client, os.Stdout, themeFor(a))
 		},
 	}
 
@@ -53,8 +55,9 @@ func LogoutCmd() *cobra.Command {
 	return command
 }
 
-// runLogout ends the current session on c and reports the outcome.
-func runLogout(c authClient, out io.Writer) error {
+// runLogout ends the current session on c and reports the outcome as a
+// completion ack line.
+func runLogout(c authClient, out io.Writer, th *theme.Theme) error {
 	resp, err := c.Logout()
 	if err != nil {
 		return err
@@ -63,6 +66,6 @@ func runLogout(c authClient, out io.Writer) error {
 		return fmt.Errorf("%s", authmsg.DescribeAuthError(resp.ErrorCode, resp.Error))
 	}
 
-	_, _ = fmt.Fprintln(out, "signed out")
+	ackLine(out, loginIsTerminal(out), th, components.AckDone, "signed out")
 	return nil
 }

@@ -13,9 +13,13 @@ import (
 	"io"
 	"os"
 
+	"github.com/platform-engineering-labs/formae/internal/cli/app"
 	"github.com/platform-engineering-labs/formae/internal/cli/authmsg"
 	clicmd "github.com/platform-engineering-labs/formae/internal/cli/cmd"
 	"github.com/platform-engineering-labs/formae/internal/cli/config"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	pkgauth "github.com/platform-engineering-labs/formae/pkg/auth"
 	"github.com/spf13/cobra"
@@ -28,6 +32,29 @@ type authClient interface {
 	LoginStart(*pkgauth.LoginStartRequest) (*pkgauth.LoginStartResponse, error)
 	LoginWait(*pkgauth.LoginWaitRequest) (*pkgauth.LoginWaitResponse, error)
 	Logout() (*pkgauth.LogoutResponse, error)
+}
+
+// loginIsTerminal is a package seam so tests can force piped (non-TTY) behavior.
+var loginIsTerminal = tui.IsTerminal
+
+// themeFor resolves the active theme from the app config.
+// The name falls back to "formae" for nil configs (theme.New nil-guards internally).
+func themeFor(a *app.App) *theme.Theme {
+	name := ""
+	if a != nil && a.Config != nil {
+		name = a.Config.Cli.Theme
+	}
+	return theme.New(name)
+}
+
+// ackLine emits a single acknowledgment line to w. On a TTY it renders with
+// lipgloss styling; when piped it writes plain text so output stays ANSI-free.
+func ackLine(w io.Writer, tty bool, th *theme.Theme, m components.AckMarker, text string) {
+	if tty {
+		_, _ = fmt.Fprintln(w, components.AckLine(th, m, text))
+		return
+	}
+	_, _ = fmt.Fprintln(w, components.AckLinePlain(m, text))
 }
 
 // LoginCmd signs in through the active profile's auth plugin.
@@ -64,7 +91,7 @@ login again while already signed in is a no-op unless --force is given.`,
 				return err
 			}
 
-			return runLogin(client, os.Stdout, force, device)
+			return runLogin(client, os.Stdout, themeFor(a), force, device)
 		},
 	}
 
@@ -79,8 +106,14 @@ login again while already signed in is a no-op unless --force is given.`,
 // runLogin drives the two-call login flow against c: LoginStart returns
 // either an already-authenticated identity (short-circuiting before any
 // LoginWait call) or the URL/code to render, then LoginWait blocks until the
-// flow completes and returns the signed-in identity.
-func runLogin(c authClient, out io.Writer, force, device bool) error {
+// flow completes and returns the signed-in identity. The browser URL and
+// device-code lines are instructions ("do this next"), not completions, so
+// they print plain — formae has no established styling convention for that
+// kind of prose (compare plugin/init.go's plain numbered next-steps); only
+// the completion lines (the sign-in acknowledgments) carry an ack marker.
+func runLogin(c authClient, out io.Writer, th *theme.Theme, force, device bool) error {
+	tty := loginIsTerminal(out)
+
 	mode := "browser"
 	if device {
 		mode = "device"
@@ -95,7 +128,7 @@ func runLogin(c authClient, out io.Writer, force, device bool) error {
 	}
 
 	if startResp.Status == "already_authenticated" {
-		printSignedIn(out, "already signed in", startResp.SubjectName, startResp.Subject)
+		printSignedIn(out, tty, th, "already signed in", startResp.SubjectName, startResp.Subject)
 		return nil
 	}
 
@@ -113,24 +146,25 @@ func runLogin(c authClient, out io.Writer, force, device bool) error {
 		return fmt.Errorf("%s", authmsg.DescribeAuthError(waitResp.ErrorCode, waitResp.Error))
 	}
 
-	printSignedIn(out, "signed in", waitResp.SubjectName, waitResp.Subject)
+	printSignedIn(out, tty, th, "signed in", waitResp.SubjectName, waitResp.Subject)
 	return nil
 }
 
-// printSignedIn prints verb ("signed in" / "already signed in") followed by
-// the best available identity label. Both SubjectName (a display hint) and
-// Subject (a stable id) are documented as optional in pkg/auth — nothing
-// obliges a plugin to set either — so this falls back from SubjectName to
-// Subject and, if neither is set, drops the "as <name>" clause entirely
-// rather than printing a message with nothing after "as ".
-func printSignedIn(out io.Writer, verb, subjectName, subject string) {
+// printSignedIn renders verb ("signed in" / "already signed in") followed by
+// the best available identity label as a completion ack line. Both
+// SubjectName (a display hint) and Subject (a stable id) are documented as
+// optional in pkg/auth — nothing obliges a plugin to set either — so this
+// falls back from SubjectName to Subject and, if neither is set, drops the
+// "as <name>" clause entirely rather than printing a message with nothing
+// after "as ".
+func printSignedIn(out io.Writer, tty bool, th *theme.Theme, verb, subjectName, subject string) {
 	name := subjectName
 	if name == "" {
 		name = subject
 	}
-	if name == "" {
-		_, _ = fmt.Fprintf(out, "%s\n", verb)
-		return
+	text := verb
+	if name != "" {
+		text = fmt.Sprintf("%s as %s", verb, name)
 	}
-	_, _ = fmt.Fprintf(out, "%s as %s\n", verb, name)
+	ackLine(out, tty, th, components.AckDone, text)
 }

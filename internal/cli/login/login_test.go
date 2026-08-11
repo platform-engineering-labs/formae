@@ -13,8 +13,16 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	pkgauth "github.com/platform-engineering-labs/formae/pkg/auth"
 )
+
+// testTheme is the theme every test renders against. Tests assert the plain
+// (non-TTY) rendering — loginIsTerminal (like refresh's and plugin's
+// analogous seams) returns false for a *bytes.Buffer, since it isn't an
+// *os.File, so the theme's actual palette never reaches the output; it only
+// needs to be non-nil.
+var testTheme = theme.New("formae")
 
 // stubAuthClient is a test double for authClient. It returns canned
 // responses and records whether LoginWait was invoked, and the LoginStart
@@ -48,8 +56,9 @@ func (s *stubAuthClient) Logout() (*pkgauth.LogoutResponse, error) {
 	return s.logoutResp, s.logoutErr
 }
 
-// TestRunLogin_BrowserPath exercises the browser flow: the URL to open is
-// rendered before LoginWait is called, then the resolved identity is printed.
+// TestRunLogin_BrowserPath exercises the browser flow: the plain instruction
+// line naming the URL to open is rendered before LoginWait is called, then
+// the resolved identity is printed as a ✓ completion line.
 func TestRunLogin_BrowserPath(t *testing.T) {
 	c := &stubAuthClient{
 		loginStartResp: &pkgauth.LoginStartResponse{
@@ -64,10 +73,10 @@ func TestRunLogin_BrowserPath(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err := runLogin(c, &out, false, false)
+	err := runLogin(c, &out, testTheme, false, false)
 	require.NoError(t, err)
 
-	assert.Equal(t, "Open this URL to sign in:\n  https://issuer.example/authorize?req=abc\nsigned in as jane\n", out.String())
+	assert.Equal(t, "Open this URL to sign in:\n  https://issuer.example/authorize?req=abc\n✓ signed in as jane\n", out.String())
 	assert.True(t, c.loginWaitCalled)
 	require.NotNil(t, c.loginWaitReq)
 	assert.Equal(t, "sess-1", c.loginWaitReq.SessionID)
@@ -77,8 +86,10 @@ func TestRunLogin_BrowserPath(t *testing.T) {
 	assert.False(t, c.loginStartReq.Force)
 }
 
-// TestRunLogin_DevicePath exercises the device-code flow: the verification
-// URI and code are rendered before LoginWait is called.
+// TestRunLogin_DevicePath exercises the device-code flow: the plain
+// instruction line naming the verification URI and code is rendered before
+// LoginWait is called, then the resolved identity is printed as a ✓
+// completion line.
 func TestRunLogin_DevicePath(t *testing.T) {
 	c := &stubAuthClient{
 		loginStartResp: &pkgauth.LoginStartResponse{
@@ -94,10 +105,10 @@ func TestRunLogin_DevicePath(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err := runLogin(c, &out, false, true)
+	err := runLogin(c, &out, testTheme, false, true)
 	require.NoError(t, err)
 
-	assert.Equal(t, "Visit https://issuer.example/device and enter code: ABCD-1234\nsigned in as jane\n", out.String())
+	assert.Equal(t, "Visit https://issuer.example/device and enter code: ABCD-1234\n✓ signed in as jane\n", out.String())
 	assert.True(t, c.loginWaitCalled)
 
 	require.NotNil(t, c.loginStartReq)
@@ -117,7 +128,7 @@ func TestRunLogin_ForceFlagPassedThrough(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err := runLogin(c, &out, true, false)
+	err := runLogin(c, &out, testTheme, true, false)
 	require.NoError(t, err)
 
 	require.NotNil(t, c.loginStartReq)
@@ -126,9 +137,9 @@ func TestRunLogin_ForceFlagPassedThrough(t *testing.T) {
 }
 
 // TestRunLogin_AlreadyAuthenticatedShortCircuits verifies that when
-// LoginStart reports an existing session, runLogin prints the identity and
-// returns without ever calling LoginWait — the property repeated invocation
-// depends on.
+// LoginStart reports an existing session, runLogin prints the identity as a
+// ✓ completion line and returns without ever calling LoginWait — the
+// property repeated invocation depends on.
 func TestRunLogin_AlreadyAuthenticatedShortCircuits(t *testing.T) {
 	c := &stubAuthClient{
 		loginStartResp: &pkgauth.LoginStartResponse{
@@ -138,10 +149,10 @@ func TestRunLogin_AlreadyAuthenticatedShortCircuits(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err := runLogin(c, &out, false, false)
+	err := runLogin(c, &out, testTheme, false, false)
 	require.NoError(t, err)
 
-	assert.Equal(t, "already signed in as jane\n", out.String())
+	assert.Equal(t, "✓ already signed in as jane\n", out.String())
 	assert.False(t, c.loginWaitCalled, "LoginWait must not be called when already authenticated")
 }
 
@@ -163,10 +174,10 @@ func TestRunLogin_SignedInFallsBackToSubjectWhenNameEmpty(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err := runLogin(c, &out, false, false)
+	err := runLogin(c, &out, testTheme, false, false)
 	require.NoError(t, err)
 
-	assert.Equal(t, "Open this URL to sign in:\n  https://issuer.example/authorize?req=abc\nsigned in as subj-123\n", out.String())
+	assert.Equal(t, "Open this URL to sign in:\n  https://issuer.example/authorize?req=abc\n✓ signed in as subj-123\n", out.String())
 }
 
 // TestRunLogin_SignedInOmitsIdentityWhenNeitherSet verifies that when a
@@ -185,10 +196,10 @@ func TestRunLogin_SignedInOmitsIdentityWhenNeitherSet(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err := runLogin(c, &out, false, false)
+	err := runLogin(c, &out, testTheme, false, false)
 	require.NoError(t, err)
 
-	assert.Equal(t, "Open this URL to sign in:\n  https://issuer.example/authorize?req=abc\nsigned in\n", out.String())
+	assert.Equal(t, "Open this URL to sign in:\n  https://issuer.example/authorize?req=abc\n✓ signed in\n", out.String())
 }
 
 // TestRunLogin_AlreadyAuthenticatedFallsBackToSubjectWhenNameEmpty verifies
@@ -203,10 +214,10 @@ func TestRunLogin_AlreadyAuthenticatedFallsBackToSubjectWhenNameEmpty(t *testing
 	}
 
 	var out bytes.Buffer
-	err := runLogin(c, &out, false, false)
+	err := runLogin(c, &out, testTheme, false, false)
 	require.NoError(t, err)
 
-	assert.Equal(t, "already signed in as subj-456\n", out.String())
+	assert.Equal(t, "✓ already signed in as subj-456\n", out.String())
 }
 
 // TestRunLogin_AlreadyAuthenticatedOmitsIdentityWhenNeitherSet verifies the
@@ -219,10 +230,10 @@ func TestRunLogin_AlreadyAuthenticatedOmitsIdentityWhenNeitherSet(t *testing.T) 
 	}
 
 	var out bytes.Buffer
-	err := runLogin(c, &out, false, false)
+	err := runLogin(c, &out, testTheme, false, false)
 	require.NoError(t, err)
 
-	assert.Equal(t, "already signed in\n", out.String())
+	assert.Equal(t, "✓ already signed in\n", out.String())
 }
 
 // TestRunLogin_UnsupportedOnLoginStart verifies that a plugin declining
@@ -236,22 +247,48 @@ func TestRunLogin_UnsupportedOnLoginStart(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err := runLogin(c, &out, false, false)
+	err := runLogin(c, &out, testTheme, false, false)
 	require.Error(t, err)
 	assert.Equal(t, "the active profile's auth plugin does not support this operation", err.Error())
 	assert.False(t, c.loginWaitCalled)
 }
 
-// TestRunLogout_Success verifies the plain success message.
+// TestRunLogin_PipedOutputHasNoANSI verifies that the non-TTY rendering
+// path — the one every test above exercises, since loginIsTerminal reports
+// false for a *bytes.Buffer — never emits an ANSI escape sequence, so
+// redirected/piped output stays plain text.
+func TestRunLogin_PipedOutputHasNoANSI(t *testing.T) {
+	c := &stubAuthClient{
+		loginStartResp: &pkgauth.LoginStartResponse{
+			Status:     "started",
+			Method:     "browser",
+			BrowserURL: "https://issuer.example/authorize?req=abc",
+			SessionID:  "sess-1",
+		},
+		loginWaitResp: &pkgauth.LoginWaitResponse{
+			SubjectName: "jane",
+		},
+	}
+
+	var out bytes.Buffer
+	err := runLogin(c, &out, testTheme, false, false)
+	require.NoError(t, err)
+
+	assert.NotContains(t, out.String(), "\x1b[", "piped output must be ANSI-free")
+}
+
+// TestRunLogout_Success verifies the success message renders as a ✓
+// completion line.
 func TestRunLogout_Success(t *testing.T) {
 	c := &stubAuthClient{
 		logoutResp: &pkgauth.LogoutResponse{},
 	}
 
 	var out bytes.Buffer
-	err := runLogout(c, &out)
+	err := runLogout(c, &out, testTheme)
 	require.NoError(t, err)
-	assert.Equal(t, "signed out\n", out.String())
+	assert.Equal(t, "✓ signed out\n", out.String())
+	assert.NotContains(t, out.String(), "\x1b[", "piped output must be ANSI-free")
 }
 
 // TestRunLogout_Unsupported verifies that an unsupported Logout maps to the
@@ -262,7 +299,7 @@ func TestRunLogout_Unsupported(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err := runLogout(c, &out)
+	err := runLogout(c, &out, testTheme)
 	require.Error(t, err)
 	assert.Equal(t, "the active profile's auth plugin does not support this operation", err.Error())
 }
