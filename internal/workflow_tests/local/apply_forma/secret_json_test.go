@@ -29,13 +29,13 @@ import (
 // resource that references it via a $res envelope carrying a $json dotted path.
 //
 // The test verifies three invariants that together define the .json() contract:
-//   1. The consumer's resolved property value equals the EXTRACTED scalar (the
-//      leaf at the $json path), not the whole JSON document.
-//   2. The secret's own stored SecretString is hashed at rest ($hashed:true),
-//      so no plaintext of the JSON document (including the inner password it
-//      contains) survives in the resources table.
-//   3. No plaintext of the extracted scalar nor the outer JSON document appears
-//      in any resource_updates column (DesiredState/PriorState/progress).
+//  1. The consumer's resolved property value equals the EXTRACTED scalar (the
+//     leaf at the $json path), not the whole JSON document.
+//  2. The secret's own stored SecretString is hashed at rest ($hashed:true),
+//     so no plaintext of the JSON document (including the inner password it
+//     contains) survives in the resources table.
+//  3. No plaintext of the extracted scalar nor the outer JSON document appears
+//     in any resource_updates column (DesiredState/PriorState/progress).
 func TestSecretJSON_RefWithJSONPathResolvesToExtractedScalar(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		// The secret value is a JSON document. The inner password is what the
@@ -102,9 +102,9 @@ func TestSecretJSON_RefWithJSONPathResolvesToExtractedScalar(t *testing.T) {
 		// $visibility:Opaque propagates to the resolved Value, so the extracted
 		// scalar is also hashed at rest in the consumer's stored properties.
 		consumer := pkgmodel.Resource{
-			Label: "my-bucket",
-			Type:  "FakeAWS::S3::Bucket",
-			Stack: stack,
+			Label:  "my-bucket",
+			Type:   "FakeAWS::S3::Bucket",
+			Stack:  stack,
 			Target: "test-target",
 			Properties: json.RawMessage(`{
 				"BucketName": "my-bucket",
@@ -189,6 +189,299 @@ func TestSecretJSON_RefWithJSONPathResolvesToExtractedScalar(t *testing.T) {
 		// (the Create override returns nil) so no progress sink leaks the scalar.
 		assertNoPlaintextInResourceUpdates(t, m, applyCmd.ID, innerPassword)
 		assertNoPlaintextInResourceUpdates(t, m, applyCmd.ID, secretJSONDoc)
+	})
+}
+
+// TestSecretJSON_RefWithJSONPathResolvesOnUpdate exercises the same $json
+// reference across a SECOND apply: the stack is re-applied with an unrelated
+// field on the consumer changed, so the consumer is planned as an update rather
+// than a create.
+//
+// The reference must resolve the same way it does on the create path. Planning
+// an update resolves a reference from the source resource's PERSISTED state,
+// where an opaque field is a SHA-256 digest rather than the live value, so a
+// $json extraction over it has no valid JSON to read. The value handed to the
+// plugin must still be the extracted scalar, and the apply must not be rejected
+// while generating the patch document.
+func TestSecretJSON_RefWithJSONPathResolvesOnUpdate(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		const innerPassword = "db-pass-9x-secret"
+		const secretJSONDoc = `{"db":{"password":"db-pass-9x-secret"}}`
+
+		// What the consumer plugin receives as the new value on the update.
+		var consumerUpdateProps json.RawMessage
+
+		overrides := &plugin.ResourcePluginOverrides{
+			Create: func(req *resource.CreateRequest) (*resource.CreateResult, error) {
+				if req.ResourceType == "FakeAWS::S3::Bucket" {
+					return &resource.CreateResult{
+						ProgressResult: &resource.ProgressResult{
+							Operation:       resource.OperationCreate,
+							OperationStatus: resource.OperationStatusSuccess,
+							RequestID:       "consumer-create-1",
+							NativeID:        "bucket-native-1",
+						},
+					}, nil
+				}
+				return nil, nil
+			},
+			Update: func(req *resource.UpdateRequest) (*resource.UpdateResult, error) {
+				if req.ResourceType != "FakeAWS::S3::Bucket" {
+					return nil, nil
+				}
+				consumerUpdateProps = req.DesiredProperties
+				return &resource.UpdateResult{
+					ProgressResult: &resource.ProgressResult{
+						Operation:       resource.OperationUpdate,
+						OperationStatus: resource.OperationStatusSuccess,
+						RequestID:       "consumer-update-1",
+						NativeID:        "bucket-native-1",
+					},
+				}, nil
+			},
+		}
+
+		cfg := test_helpers.NewTestMetastructureConfig()
+		cfg.Agent.Synchronization.Enabled = false
+		m, def, err := test_helpers.NewTestMetastructureWithConfig(t, overrides, cfg)
+		defer def()
+		require.NoError(t, err)
+
+		stack := "test-stack-" + util.NewID()
+
+		secret := pkgmodel.Resource{
+			Label:  "my-json-secret",
+			Type:   "FakeAWS::SecretsManager::Secret",
+			Stack:  stack,
+			Target: "test-target",
+			Schema: secretSchema(),
+			Properties: json.RawMessage(
+				`{"Name":"my-json-secret","SecretString":` + jsonQuote(secretJSONDoc) + `}`,
+			),
+		}
+
+		// consumerWith builds the consumer resource with the given AccessControl
+		// value; everything else, including the $json reference, is identical
+		// across both applies.
+		consumerWith := func(accessControl string) pkgmodel.Resource {
+			return pkgmodel.Resource{
+				Label:  "my-bucket",
+				Type:   "FakeAWS::S3::Bucket",
+				Stack:  stack,
+				Target: "test-target",
+				// The consumer needs a schema for the update path: patch
+				// generation only emits ops for declared fields. DbPassword
+				// carries no Opaque hint — its opacity comes from the $visibility
+				// on the reference envelope.
+				Schema: pkgmodel.Schema{
+					Identifier: "BucketName",
+					Fields:     []string{"BucketName", "AccessControl", "DbPassword"},
+				},
+				Properties: json.RawMessage(`{
+					"BucketName": "my-bucket",
+					"AccessControl": "` + accessControl + `",
+					"DbPassword": {
+						"$res":      true,
+						"$label":    "my-json-secret",
+						"$type":     "FakeAWS::SecretsManager::Secret",
+						"$stack":    "` + stack + `",
+						"$property": "SecretString",
+						"$visibility": "Opaque",
+						"$json":    "db.password"
+					}
+				}`),
+			}
+		}
+
+		targets := []pkgmodel.Target{{Label: "test-target", Namespace: "test-namespace"}}
+
+		createForma := &pkgmodel.Forma{
+			Stacks:    []pkgmodel.Stack{{Label: stack}},
+			Resources: []pkgmodel.Resource{secret, consumerWith("Private")},
+			Targets:   targets,
+		}
+		_, err = m.ApplyForma(createForma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id")
+		require.NoError(t, err)
+		waitForApplyComplete(t, m)
+
+		cmds, err := m.Datastore.LoadFormaCommands()
+		require.NoError(t, err)
+		createCmd := findCommandByType(cmds, pkgmodel.CommandApply)
+		require.NotNil(t, createCmd)
+		require.Equal(t, forma_command.CommandStateSuccess, createCmd.State,
+			"precondition: the create apply must succeed")
+
+		// Precondition: the secret's value is a digest at rest, so planning the
+		// update cannot read the live JSON document out of the resources table.
+		resources, err := m.Datastore.LoadResourcesByStack(stack)
+		require.NoError(t, err)
+		require.Len(t, resources, 2)
+		for _, r := range resources {
+			if r.Type == "FakeAWS::SecretsManager::Secret" {
+				require.Contains(t, string(r.Properties), hashedMarker,
+					"precondition: the secret must be hashed at rest before the update apply")
+			}
+		}
+
+		// Second apply: only AccessControl differs, so the consumer is an update
+		// and the $json reference is planned from persisted state.
+		updateForma := &pkgmodel.Forma{
+			Stacks:    []pkgmodel.Stack{{Label: stack}},
+			Resources: []pkgmodel.Resource{secret, consumerWith("PublicRead")},
+			Targets:   targets,
+		}
+		_, err = m.ApplyForma(updateForma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id")
+		require.NoError(t, err,
+			"re-applying a stack whose resource takes a $json value from a secret must be admitted")
+		waitForCommands(t, m, 2)
+
+		cmds, err = m.Datastore.LoadFormaCommands()
+		require.NoError(t, err)
+		var updateCmd *forma_command.FormaCommand
+		applyCount := 0
+		for _, c := range cmds {
+			if c.Command == pkgmodel.CommandApply {
+				applyCount++
+				if applyCount == 2 {
+					updateCmd = c
+				}
+			}
+		}
+		require.NotNil(t, updateCmd, "the second (update) apply command should exist")
+		require.Equal(t, forma_command.CommandStateSuccess, updateCmd.State,
+			"the update apply must succeed")
+
+		require.NotNil(t, consumerUpdateProps, "the consumer plugin's Update should have been called")
+		assert.Equal(t, innerPassword, gjson.GetBytes(consumerUpdateProps, "DbPassword").String(),
+			"on update the consumer plugin must receive the extracted scalar, the same value the create path resolved")
+		assert.NotContains(t, string(consumerUpdateProps), secretJSONDoc,
+			"the consumer plugin must not receive the whole JSON document as the field value")
+		assertNoDigestOrHashedMarker(t, consumerUpdateProps, "DesiredProperties")
+	})
+}
+
+// TestSecret_BareRefResolvesOnUpdate is the same update path as
+// TestSecretJSON_RefWithJSONPathResolvesOnUpdate for a reference with no $json:
+// the consumer takes the secret's whole value.
+//
+// Nothing parses the value on this path, so a digest read out of persisted
+// state is not rejected the way an unparseable $json source is — it is simply
+// planned as the value. The patch the plugin receives, and the value it is
+// given to write, must both be the live secret.
+func TestSecret_BareRefResolvesOnUpdate(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		const plaintextSecret = "bare-ref-super-secret"
+
+		var consumerUpdateProps json.RawMessage
+		var consumerPatchDoc string
+
+		overrides := &plugin.ResourcePluginOverrides{
+			Create: func(req *resource.CreateRequest) (*resource.CreateResult, error) {
+				if req.ResourceType == "FakeAWS::S3::Bucket" {
+					return &resource.CreateResult{
+						ProgressResult: &resource.ProgressResult{
+							Operation:       resource.OperationCreate,
+							OperationStatus: resource.OperationStatusSuccess,
+							RequestID:       "consumer-create-1",
+							NativeID:        "bucket-native-1",
+						},
+					}, nil
+				}
+				return nil, nil
+			},
+			Update: func(req *resource.UpdateRequest) (*resource.UpdateResult, error) {
+				if req.ResourceType != "FakeAWS::S3::Bucket" {
+					return nil, nil
+				}
+				consumerUpdateProps = req.DesiredProperties
+				if req.PatchDocument != nil {
+					consumerPatchDoc = *req.PatchDocument
+				}
+				return &resource.UpdateResult{
+					ProgressResult: &resource.ProgressResult{
+						Operation:       resource.OperationUpdate,
+						OperationStatus: resource.OperationStatusSuccess,
+						RequestID:       "consumer-update-1",
+						NativeID:        "bucket-native-1",
+					},
+				}, nil
+			},
+		}
+
+		cfg := test_helpers.NewTestMetastructureConfig()
+		cfg.Agent.Synchronization.Enabled = false
+		m, def, err := test_helpers.NewTestMetastructureWithConfig(t, overrides, cfg)
+		defer def()
+		require.NoError(t, err)
+
+		stack := "test-stack-" + util.NewID()
+
+		secret := pkgmodel.Resource{
+			Label:      "my-secret",
+			Type:       "FakeAWS::SecretsManager::Secret",
+			Stack:      stack,
+			Target:     "test-target",
+			Schema:     secretSchema(),
+			Properties: json.RawMessage(`{"Name":"my-secret","SecretString":"` + plaintextSecret + `"}`),
+		}
+
+		consumerWith := func(accessControl string) pkgmodel.Resource {
+			return pkgmodel.Resource{
+				Label:  "my-bucket",
+				Type:   "FakeAWS::S3::Bucket",
+				Stack:  stack,
+				Target: "test-target",
+				Schema: pkgmodel.Schema{
+					Identifier: "BucketName",
+					Fields:     []string{"BucketName", "AccessControl", "DbPassword"},
+				},
+				Properties: json.RawMessage(`{
+					"BucketName": "my-bucket",
+					"AccessControl": "` + accessControl + `",
+					"DbPassword": {
+						"$res":      true,
+						"$label":    "my-secret",
+						"$type":     "FakeAWS::SecretsManager::Secret",
+						"$stack":    "` + stack + `",
+						"$property": "SecretString",
+						"$visibility": "Opaque"
+					}
+				}`),
+			}
+		}
+
+		targets := []pkgmodel.Target{{Label: "test-target", Namespace: "test-namespace"}}
+
+		createForma := &pkgmodel.Forma{
+			Stacks:    []pkgmodel.Stack{{Label: stack}},
+			Resources: []pkgmodel.Resource{secret, consumerWith("Private")},
+			Targets:   targets,
+		}
+		_, err = m.ApplyForma(createForma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id")
+		require.NoError(t, err)
+		waitForApplyComplete(t, m)
+
+		cmds, err := m.Datastore.LoadFormaCommands()
+		require.NoError(t, err)
+		createCmd := findCommandByType(cmds, pkgmodel.CommandApply)
+		require.NotNil(t, createCmd)
+		require.Equal(t, forma_command.CommandStateSuccess, createCmd.State,
+			"precondition: the create apply must succeed")
+
+		updateForma := &pkgmodel.Forma{
+			Stacks:    []pkgmodel.Stack{{Label: stack}},
+			Resources: []pkgmodel.Resource{secret, consumerWith("PublicRead")},
+			Targets:   targets,
+		}
+		_, err = m.ApplyForma(updateForma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id")
+		require.NoError(t, err)
+		waitForCommands(t, m, 2)
+
+		require.NotNil(t, consumerUpdateProps, "the consumer plugin's Update should have been called")
+		assert.Equal(t, plaintextSecret, gjson.GetBytes(consumerUpdateProps, "DbPassword").String(),
+			"on update the consumer plugin must receive the live secret value")
+		assertNoDigestOrHashedMarker(t, consumerUpdateProps, "DesiredProperties")
+		assertNoDigestOrHashedMarker(t, json.RawMessage(consumerPatchDoc), "PatchDocument")
 	})
 }
 

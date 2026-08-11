@@ -5,6 +5,7 @@
 package resolver
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 
@@ -63,25 +64,20 @@ func LoadResolvablePropertiesFromStacks(resource pkgmodel.Resource, allResources
 			return res, fmt.Errorf("resource with KSUID %s not found", ksuid)
 		}
 
-		if targetResource.ReadOnlyProperties != nil {
-			extracted := gjson.GetBytes(targetResource.ReadOnlyProperties, propertyPath)
-			if extracted.Exists() {
-				res.Add(ksuid, propertyPath, ExtractPropertyValue(extracted))
-				continue
-			}
+		if value, ok := resolvableValueFrom(targetResource.ReadOnlyProperties, propertyPath); ok {
+			res.Add(ksuid, propertyPath, value)
+			continue
 		}
 
-		if targetResource.Properties != nil {
-			extracted := gjson.GetBytes(targetResource.Properties, propertyPath)
-			if extracted.Exists() {
-				res.Add(ksuid, propertyPath, ExtractPropertyValue(extracted))
-				continue
-			}
+		if value, ok := resolvableValueFrom(targetResource.Properties, propertyPath); ok {
+			res.Add(ksuid, propertyPath, value)
+			continue
 		}
 
 		// Property not available yet — this happens for forward references to
-		// new resources whose read-only properties are assigned at creation time.
-		// The value will be resolved at execution time via RemainingResolvables.
+		// new resources whose read-only properties are assigned at creation time,
+		// and for a secret, whose value is only ever read live. The value will be
+		// resolved at execution time via RemainingResolvables.
 		slog.Debug("Skipping unresolvable property (will resolve at execution time)",
 			"property", propertyPath,
 			"resource", targetResource.Label,
@@ -90,6 +86,29 @@ func LoadResolvablePropertiesFromStacks(resource pkgmodel.Resource, allResources
 	}
 
 	return res, nil
+}
+
+// resolvableValueFrom reads propertyPath out of one persisted property
+// collection and reports whether it yields a value a reference may resolve to.
+//
+// A value stored hashed at rest is a SHA-256 digest, not the value the source
+// holds, so it can never stand in for a resolution: it would be compared, and
+// on a $json reference parsed, as if it were the live value. Refusing it here
+// leaves the reference to execution-time resolution (RemainingResolvables),
+// which reads the source live through its plugin — the same way the create path
+// resolves it, and the only way a secret is ever read.
+func resolvableValueFrom(properties json.RawMessage, propertyPath string) (string, bool) {
+	if properties == nil {
+		return "", false
+	}
+	extracted := gjson.GetBytes(properties, propertyPath)
+	if !extracted.Exists() {
+		return "", false
+	}
+	if extracted.Get("$hashed").Bool() {
+		return "", false
+	}
+	return ExtractPropertyValue(extracted), true
 }
 
 // ExtractPropertyValue extracts the actual value from a gjson.Result.
