@@ -91,12 +91,20 @@ func LoadResolvablePropertiesFromStacks(resource pkgmodel.Resource, allResources
 // resolvableValueFrom reads propertyPath out of one persisted property
 // collection and reports whether it yields a value a reference may resolve to.
 //
-// A value stored hashed at rest is a SHA-256 digest, not the value the source
-// holds, so it can never stand in for a resolution: it would be compared, and
-// on a $json reference parsed, as if it were the live value. Refusing it here
-// leaves the reference to execution-time resolution (RemainingResolvables),
-// which reads the source live through its plugin — the same way the create path
-// resolves it, and the only way a secret is ever read.
+// Two shapes at rest are NOT values, and admitting either would have a
+// reference resolve to something the source does not hold — compared, and on a
+// $json reference parsed, as if it were live:
+//
+//   - a value stored hashed at rest, which is a SHA-256 digest. It is refused
+//     wherever it sits, including inside a structure the reference names as a
+//     whole, since a digest buried in an object is no more a value than one at
+//     the top.
+//   - a reference envelope that carries no value of its own, which is what
+//     reference-don't-store leaves at rest. Its raw text is not a value either.
+//
+// Refusing both leaves the reference to execution-time resolution
+// (RemainingResolvables), which reads the source live through its plugin — the
+// same way the create path resolves it, and the only way a secret is ever read.
 func resolvableValueFrom(properties json.RawMessage, propertyPath string) (string, bool) {
 	if properties == nil {
 		return "", false
@@ -105,10 +113,42 @@ func resolvableValueFrom(properties json.RawMessage, propertyPath string) (strin
 	if !extracted.Exists() {
 		return "", false
 	}
-	if extracted.Get("$hashed").Bool() {
+	if containsHashedValue(extracted) {
+		return "", false
+	}
+	if isReferenceEnvelope(extracted) && !extracted.Get("$value").Exists() {
 		return "", false
 	}
 	return ExtractPropertyValue(extracted), true
+}
+
+// containsHashedValue reports whether value is, or contains anywhere within it,
+// a value stored hashed at rest.
+func containsHashedValue(value gjson.Result) bool {
+	if !value.IsObject() && !value.IsArray() {
+		return false
+	}
+	if value.Get("$hashed").Bool() {
+		return true
+	}
+	found := false
+	value.ForEach(func(_, child gjson.Result) bool {
+		if containsHashedValue(child) {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+// isReferenceEnvelope reports whether value is a reference rather than a value:
+// the persisted ($ref) or source ($res) spelling of one.
+func isReferenceEnvelope(value gjson.Result) bool {
+	if !value.IsObject() {
+		return false
+	}
+	return value.Get("$ref").Exists() || value.Get("$res").Exists()
 }
 
 // ExtractPropertyValue extracts the actual value from a gjson.Result.
