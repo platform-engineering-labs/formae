@@ -47,15 +47,6 @@ type CreatedResourceInfo struct {
 	Properties   json.RawMessage // Properties from the plugin after creation
 }
 
-// resolvablePath tracks a resolvable reference found in resource properties
-type resolvablePath struct {
-	path       string
-	label      string
-	resType    string
-	property   string
-	fullObject gjson.Result
-}
-
 // TestHarness manages the lifecycle of formae agent and CLI commands for testing
 type TestHarness struct {
 	t                       *testing.T
@@ -1660,15 +1651,13 @@ func (h *TestHarness) extractDependencyLabels(properties json.RawMessage) []stri
 		return nil
 	}
 
-	var resolvables []resolvablePath
-	result := gjson.ParseBytes(properties)
-	h.findResolvablesRecursive("", result, &resolvables)
+	resolvables := pkgmodel.FindResolvablesFromProperties(string(properties))
 
 	// Extract unique labels
 	labelSet := make(map[string]struct{})
 	for _, res := range resolvables {
-		if res.label != "" {
-			labelSet[res.label] = struct{}{}
+		if res.Label != "" {
+			labelSet[res.Label] = struct{}{}
 		}
 	}
 
@@ -1687,11 +1676,9 @@ func (h *TestHarness) resolveResolvablesInProperties(properties json.RawMessage,
 	}
 
 	propsStr := string(properties)
-	result := gjson.Parse(propsStr)
 
 	// Find all resolvables in the properties
-	var resolvables []resolvablePath
-	h.findResolvablesRecursive("", result, &resolvables)
+	resolvables := pkgmodel.FindResolvablesFromProperties(propsStr)
 
 	if len(resolvables) == 0 {
 		return properties, nil
@@ -1704,76 +1691,87 @@ func (h *TestHarness) resolveResolvablesInProperties(properties json.RawMessage,
 		createdByKey[key] = created
 	}
 
-	// Resolve each resolvable
+	// Resolve each resolvable. A reference that cannot be resolved is fatal:
+	// leaving it in place hands the plugin the envelope itself where it expects
+	// a value, and the plugin then fails for a reason unrelated to the actual
+	// problem.
 	for _, res := range resolvables {
 		// Look up the created resource by label and type
-		key := res.label + "::" + res.resType
+		key := res.Label + "::" + res.Type
 		created, found := createdByKey[key]
 		if !found {
-			h.t.Logf("Warning: could not find created resource for resolvable: label=%s, type=%s", res.label, res.resType)
-			continue
+			return properties, fmt.Errorf(
+				"could not resolve reference at %s: no created resource with label %q and type %q",
+				res.Path, res.Label, res.Type)
 		}
 
 		// Extract the property value from the created resource's properties
-		resolvedValue, err := h.extractPropertyValue(created.Properties, res.property)
+		resolvedValue, err := h.extractPropertyValue(created.Properties, res.Property)
 		if err != nil {
-			h.t.Logf("Warning: could not extract property %s from created resource %s: %v", res.property, res.label, err)
-			continue
+			return properties, fmt.Errorf(
+				"could not resolve reference at %s: property %q of resource %q: %w",
+				res.Path, res.Property, res.Label, err)
 		}
 
-		h.t.Logf("Resolved %s.%s -> %s", res.label, res.property, resolvedValue)
+		// A $json reference names a path INTO the resolved value, so the field
+		// takes the scalar at that path rather than the document holding it.
+		// Only a secret's value is addressed this way, so what it resolves to
+		// is reported by path alone and never printed.
+		if res.JSONPath != "" {
+			resolvedValue, err = extractJSONPath(resolvedValue, res.JSONPath)
+			if err != nil {
+				return properties, fmt.Errorf(
+					"could not resolve reference at %s: property %q of resource %q: %w",
+					res.Path, res.Property, res.Label, err)
+			}
+			h.t.Logf("Resolved %s.%s (%s) -> (redacted)", res.Label, res.Property, res.JSONPath)
+		} else {
+			h.t.Logf("Resolved %s.%s -> %s", res.Label, res.Property, resolvedValue)
+		}
 
 		// Replace the resolvable object with the resolved value in the properties JSON
-		propsStr, err = sjson.Set(propsStr, res.path, resolvedValue)
+		propsStr, err = sjson.Set(propsStr, res.Path, resolvedValue)
 		if err != nil {
-			return properties, fmt.Errorf("failed to set resolved value at path %s: %w", res.path, err)
+			return properties, fmt.Errorf("failed to set resolved value at path %s: %w", res.Path, err)
 		}
+	}
+
+	// Nothing may reach a plugin still carrying an envelope: a resolvable that
+	// survived the loop above would be presented as a value.
+	if remaining := pkgmodel.FindResolvablesFromProperties(propsStr); len(remaining) > 0 {
+		paths := make([]string, 0, len(remaining))
+		for _, r := range remaining {
+			paths = append(paths, r.Path)
+		}
+		return properties, fmt.Errorf("unresolved reference(s) remain after resolution at: %s",
+			strings.Join(paths, ", "))
 	}
 
 	return json.RawMessage(propsStr), nil
 }
 
-// findResolvablesRecursive recursively finds all resolvable objects in a JSON structure
-func (h *TestHarness) findResolvablesRecursive(basePath string, value gjson.Result, resolvables *[]resolvablePath) {
-	if value.IsObject() {
-		// Check if this object is a resolvable ($res: true)
-		resField := value.Get("$res")
-		if resField.Exists() && resField.Bool() {
-			*resolvables = append(*resolvables, resolvablePath{
-				path:       basePath,
-				label:      value.Get("$label").String(),
-				resType:    value.Get("$type").String(),
-				property:   value.Get("$property").String(),
-				fullObject: value,
-			})
-			return
+// extractJSONPath returns the scalar at a gjson dotted path within resolved,
+// which must itself be a JSON document. Errors name only the path and the JSON
+// type — never the value, which for a $json reference is typically a secret.
+func extractJSONPath(resolved, path string) (string, error) {
+	if !gjson.Valid(resolved) {
+		return "", fmt.Errorf("$json path %q: resolved value is not valid JSON", path)
+	}
+	result := gjson.Get(resolved, path)
+	if !result.Exists() {
+		return "", fmt.Errorf("$json path %q not found", path)
+	}
+	switch result.Type {
+	case gjson.Null:
+		return "", fmt.Errorf("$json path %q resolved to null", path)
+	case gjson.String, gjson.Number, gjson.True, gjson.False:
+		return result.String(), nil
+	default:
+		kind := "object"
+		if result.IsArray() {
+			kind = "array"
 		}
-
-		// Recurse into object properties
-		value.ForEach(func(key, val gjson.Result) bool {
-			var newPath string
-			if basePath == "" {
-				newPath = key.String()
-			} else {
-				newPath = basePath + "." + key.String()
-			}
-			h.findResolvablesRecursive(newPath, val, resolvables)
-			return true
-		})
-	} else if value.IsArray() {
-		// Recurse into array elements
-		idx := 0
-		value.ForEach(func(_, val gjson.Result) bool {
-			var newPath string
-			if basePath == "" {
-				newPath = fmt.Sprintf("%d", idx)
-			} else {
-				newPath = fmt.Sprintf("%s.%d", basePath, idx)
-			}
-			h.findResolvablesRecursive(newPath, val, resolvables)
-			idx++
-			return true
-		})
+		return "", fmt.Errorf("$json path %q resolved to a JSON %s, expected a scalar", path, kind)
 	}
 }
 
