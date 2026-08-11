@@ -1439,6 +1439,68 @@ func (h *TestHarness) CreateUnmanagedResource(evaluatedJSON string) (string, err
 // directly, handling dependencies and resolvable references between resources.
 // Resources are created in dependency order (resources without resolvables first).
 // Returns a slice of CreatedResourceInfo for all created resources (for cleanup).
+// pluginNamespaceFromForma returns the plugin namespace shared by the forma's
+// cloud resources (the segment before the first "::"), e.g. "AWS" for
+// "AWS::RDS::Database".
+func pluginNamespaceFromForma(evaluatedJSON string) (string, error) {
+	var forma pkgmodel.Forma
+	if err := json.Unmarshal([]byte(evaluatedJSON), &forma); err != nil {
+		return "", fmt.Errorf("failed to parse forma JSON: %w", err)
+	}
+
+	for i := range forma.Resources {
+		if strings.Contains(forma.Resources[i].Type, "::") {
+			return strings.Split(forma.Resources[i].Type, "::")[0], nil
+		}
+	}
+
+	return "", fmt.Errorf("no cloud resources found in forma")
+}
+
+// EnsurePluginLaunched launches the resource plugin for the forma's namespace on
+// the harness's own Ergo node and waits for it to announce itself, so the plugin
+// can be queried before any resource is created. It is idempotent: once the
+// plugin is running, further calls return immediately.
+//
+// The discovery test relies on this to read a resource descriptor — and skip a
+// type that is not discoverable — before provisioning the fixture's
+// infrastructure out of band.
+func (h *TestHarness) EnsurePluginLaunched(evaluatedJSON string) error {
+	if h.lastPluginNamespace != "" {
+		return nil
+	}
+
+	namespace, err := pluginNamespaceFromForma(evaluatedJSON)
+	if err != nil {
+		return err
+	}
+	h.t.Logf("Using plugin namespace: %s", namespace)
+
+	pluginBinaryPath, err := h.GetPluginBinaryPath(namespace)
+	if err != nil {
+		return fmt.Errorf("failed to get plugin binary path: %w", err)
+	}
+
+	if err := h.InitErgoNode(); err != nil {
+		return fmt.Errorf("failed to initialize Ergo node: %w", err)
+	}
+
+	if err := h.LaunchPluginDirect(pluginBinaryPath, namespace); err != nil {
+		return fmt.Errorf("failed to launch plugin: %w", err)
+	}
+
+	if err := h.WaitForPluginReady(namespace, 30*time.Second); err != nil {
+		return fmt.Errorf("plugin not ready: %w", err)
+	}
+
+	// Recorded only once the plugin is ready, so a failed launch does not make a
+	// retry look like an already-running plugin.
+	h.lastPluginBinaryPath = pluginBinaryPath
+	h.lastPluginNamespace = namespace
+
+	return nil
+}
+
 func (h *TestHarness) CreateAllUnmanagedResources(evaluatedJSON string) ([]CreatedResourceInfo, error) {
 	h.t.Log("Creating unmanaged resources via external plugin")
 
@@ -1467,34 +1529,10 @@ func (h *TestHarness) CreateAllUnmanagedResources(evaluatedJSON string) ([]Creat
 	// Sort resources by dependency order (resources without resolvables first)
 	sortedResources := h.sortResourcesByDependency(cloudResources)
 
-	// Extract namespace from the first resource type (all resources should be in same namespace)
-	namespace := strings.Split(sortedResources[0].Type, "::")[0]
-	h.t.Logf("Using plugin namespace: %s", namespace)
-
-	// Get plugin binary path
-	pluginBinaryPath, err := h.GetPluginBinaryPath(namespace)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get plugin binary path: %w", err)
+	if err := h.EnsurePluginLaunched(evaluatedJSON); err != nil {
+		return nil, err
 	}
-
-	// Store for later cleanup
-	h.lastPluginBinaryPath = pluginBinaryPath
-	h.lastPluginNamespace = namespace
-
-	// Initialize Ergo node if needed
-	if err := h.InitErgoNode(); err != nil {
-		return nil, fmt.Errorf("failed to initialize Ergo node: %w", err)
-	}
-
-	// Launch the plugin
-	if err := h.LaunchPluginDirect(pluginBinaryPath, namespace); err != nil {
-		return nil, fmt.Errorf("failed to launch plugin: %w", err)
-	}
-
-	// Wait for plugin to be ready
-	if err := h.WaitForPluginReady(namespace, 30*time.Second); err != nil {
-		return nil, fmt.Errorf("plugin not ready: %w", err)
-	}
+	namespace := h.lastPluginNamespace
 
 	// Find the target
 	if len(forma.Targets) == 0 {

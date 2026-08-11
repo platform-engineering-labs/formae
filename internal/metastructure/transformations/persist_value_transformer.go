@@ -22,6 +22,7 @@ var knownOpaqueFields = map[string][]string{
 	"AWS::SecretsManager::Secret": {"SecretString"},
 	"AWS::RDS::DBInstance":        {"MasterUserPassword", "TdeCredentialPassword"},
 	"AWS::RDS::DBCluster":         {"MasterUserPassword"},
+	"AWS::RDS::DatabaseRole":      {"Password"},
 }
 
 // opaqueFieldSet returns the union of the schema's opaque fields and the hard-coded
