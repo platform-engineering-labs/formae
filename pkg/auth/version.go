@@ -10,4 +10,4 @@ const MinFormaeVersion = "0.84.0"
 
 // SDKVersion is the version of this auth SDK package.
 // Used in compatibility error messages to tell plugin authors which version to upgrade to.
-const SDKVersion = "0.2.1"
+const SDKVersion = "0.3.0"

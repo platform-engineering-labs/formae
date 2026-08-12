@@ -689,7 +689,7 @@ func (a *App) getAuthAndNetHandlers() (http.Header, *http.Client, error) {
 			a.authClient = client
 		}
 
-		resp, err := a.authClient.GetAuthHeader()
+		resp, err := a.authClient.GetAuthHeader(false)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to get auth header: %w", err)
 		}
