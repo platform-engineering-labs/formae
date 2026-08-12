@@ -77,13 +77,18 @@ func mapOmarchyPalette(oc omarchyColors) paletteFile {
 	secondary := pick(oc.Color5, oc.Accent)
 
 	return paletteFile{
-		Base:            mirror(oc.Background),
-		Surface:         mirror(oc.Background),
-		TextPrimary:     mirror(oc.Foreground),
-		TextSecondary:   mirror(textSecondary),
-		TextSubtle:      mirror(textSubtle),
-		Border:          mirror(border),
-		Selection:       mirror(pick(oc.SelectionBackground, oc.Color8)),
+		Base:          mirror(oc.Background),
+		Surface:       mirror(oc.Background),
+		TextPrimary:   mirror(oc.Foreground),
+		TextSecondary: mirror(textSecondary),
+		TextSubtle:    mirror(textSubtle),
+		Border:        mirror(border),
+		// The cursor row keeps each cell's own foreground and draws this band behind
+		// it, so the band must sit next to the background, not next to the text.
+		// selection_background is a terminal text-selection color, meaningful only
+		// when paired with selection_foreground (which replaces the text color too),
+		// so it is deliberately not mapped here.
+		Selection:       mirror(selectionBand(oc.Background, oc.Foreground, primary)),
 		PrimaryAccent:   mirror(primary),
 		SecondaryAccent: mirror(secondary),
 		Error:           mirror(oc.Color1),

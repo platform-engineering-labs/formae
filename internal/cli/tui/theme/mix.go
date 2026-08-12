@@ -157,3 +157,49 @@ func towardsText(bg, fg string) string {
 	}
 	return "#000000"
 }
+
+// selectionBand derives the cursor-row selection band from the theme's own
+// background, guarded by a contrast check against the foreground text that
+// keeps its own color on that row. It tries, in order: the background tinted
+// with the theme's accent; a neutral background mix moved away from the
+// text; and a neutral background mix moved towards the text (for a
+// background already at an extreme, where "away" has nowhere left to go).
+// The first candidate that is both readable and visible wins; failing that,
+// the first that is at least readable; failing that, whichever candidate is
+// most readable, so the band and the background always come from the same
+// theme.
+func selectionBand(bg, fg, accent string) string {
+	candidates := []string{
+		mix(bg, accent, bandMix),               // 1. tinted with the theme's own accent
+		mix(bg, awayFromText(bg, fg), bandMix), // 2. neutral, moved away from the text
+		mix(bg, towardsText(bg, fg), bandMix),  // 3. for a background already at an extreme
+	}
+	// readable and visible
+	for _, c := range candidates {
+		if contrast(c, fg) >= minBandText && contrast(c, bg) >= minBandVisible {
+			return c
+		}
+	}
+	// readable — the enforced invariant; a weak band beats unreadable text
+	for _, c := range candidates {
+		if contrast(c, fg) >= minBandText {
+			return c
+		}
+	}
+	// best available, so the band and the background always come from the same theme
+	return maxContrastAgainst(fg, candidates)
+}
+
+// maxContrastAgainst returns whichever candidate has the highest contrast
+// against fg. Ties (including an all-unparseable candidate list, where every
+// contrast is 0) keep the first candidate.
+func maxContrastAgainst(fg string, candidates []string) string {
+	best := ""
+	bestContrast := -1.0
+	for _, c := range candidates {
+		if cc := contrast(c, fg); cc > bestContrast {
+			best, bestContrast = c, cc
+		}
+	}
+	return best
+}
