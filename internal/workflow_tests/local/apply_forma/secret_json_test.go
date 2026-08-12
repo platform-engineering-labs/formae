@@ -300,7 +300,7 @@ func TestSecretJSON_RefWithJSONPathResolvesOnUpdate(t *testing.T) {
 			Resources: []pkgmodel.Resource{secret, consumerWith("Private")},
 			Targets:   targets,
 		}
-		_, err = m.ApplyForma(createForma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id")
+		_, err = m.ApplyForma(createForma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
 		require.NoError(t, err)
 		waitForApplyComplete(t, m)
 
@@ -330,7 +330,7 @@ func TestSecretJSON_RefWithJSONPathResolvesOnUpdate(t *testing.T) {
 			Resources: []pkgmodel.Resource{secret, consumerWith("PublicRead")},
 			Targets:   targets,
 		}
-		_, err = m.ApplyForma(updateForma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id")
+		_, err = m.ApplyForma(updateForma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
 		require.NoError(t, err,
 			"re-applying a stack whose resource takes a $json value from a secret must be admitted")
 		waitForCommands(t, m, 2)
@@ -473,7 +473,7 @@ func TestSecretJSON_ChangedJSONPathResolvesToExtractedScalarInPatch(t *testing.T
 			Resources: []pkgmodel.Resource{secret, consumerWith("Private", "db.password")},
 			Targets:   targets,
 		}
-		_, err = m.ApplyForma(createForma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id")
+		_, err = m.ApplyForma(createForma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
 		require.NoError(t, err)
 		waitForApplyComplete(t, m)
 
@@ -490,7 +490,7 @@ func TestSecretJSON_ChangedJSONPathResolvesToExtractedScalarInPatch(t *testing.T
 			Resources: []pkgmodel.Resource{secret, consumerWith("PublicRead", "db.altPassword")},
 			Targets:   targets,
 		}
-		_, err = m.ApplyForma(updateForma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id")
+		_, err = m.ApplyForma(updateForma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
 		require.NoError(t, err,
 			"moving a $json extraction to another leaf must be admitted")
 		waitForCommands(t, m, 2)
@@ -653,7 +653,7 @@ func TestSecretJSON_PriorPropertiesRedactSchemaOpaqueField(t *testing.T) {
 			Resources: []pkgmodel.Resource{secret, consumerWith("Private")},
 			Targets:   targets,
 		}
-		_, err = m.ApplyForma(createForma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id")
+		_, err = m.ApplyForma(createForma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
 		require.NoError(t, err)
 		waitForApplyComplete(t, m)
 
@@ -669,7 +669,7 @@ func TestSecretJSON_PriorPropertiesRedactSchemaOpaqueField(t *testing.T) {
 			Resources: []pkgmodel.Resource{secret, consumerWith("PublicRead")},
 			Targets:   targets,
 		}
-		_, err = m.ApplyForma(updateForma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id")
+		_, err = m.ApplyForma(updateForma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
 		require.NoError(t, err)
 		waitForCommands(t, m, 2)
 
@@ -797,7 +797,7 @@ func TestSecret_BareRefResolvesOnUpdate(t *testing.T) {
 			Resources: []pkgmodel.Resource{secret, consumerWith("Private")},
 			Targets:   targets,
 		}
-		_, err = m.ApplyForma(createForma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id")
+		_, err = m.ApplyForma(createForma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
 		require.NoError(t, err)
 		waitForApplyComplete(t, m)
 
@@ -813,7 +813,7 @@ func TestSecret_BareRefResolvesOnUpdate(t *testing.T) {
 			Resources: []pkgmodel.Resource{secret, consumerWith("PublicRead")},
 			Targets:   targets,
 		}
-		_, err = m.ApplyForma(updateForma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id")
+		_, err = m.ApplyForma(updateForma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
 		require.NoError(t, err)
 		waitForCommands(t, m, 2)
 
