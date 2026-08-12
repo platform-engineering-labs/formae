@@ -88,6 +88,10 @@ func mapOmarchyPalette(oc omarchyColors) paletteFile {
 		// selection_background is a terminal text-selection color, meaningful only
 		// when paired with selection_foreground (which replaces the text color too),
 		// so it is deliberately not mapped here.
+		//
+		// Derivation needs a parseable background. A palette whose background is
+		// not hex (termenv also accepts a bare ANSI index) leaves this unset, and
+		// merge inherits the base theme's hand-authored band instead.
 		Selection:       mirror(selectionBand(oc.Background, oc.Foreground, primary)),
 		PrimaryAccent:   mirror(primary),
 		SecondaryAccent: mirror(secondary),
