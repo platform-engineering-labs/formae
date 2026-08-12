@@ -13,11 +13,13 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/platform-engineering-labs/formae"
 	"github.com/platform-engineering-labs/formae/internal/api"
+	"github.com/platform-engineering-labs/formae/internal/cli/authmsg"
 	"github.com/platform-engineering-labs/formae/internal/cli/banner"
 	"github.com/platform-engineering-labs/formae/internal/cli/config"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
@@ -32,6 +34,7 @@ import (
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/discovery"
 	"github.com/tidwall/gjson"
+	"golang.org/x/sync/singleflight"
 )
 
 type App struct {
@@ -42,13 +45,71 @@ type App struct {
 
 	Usage usage.Sender
 
+	// memoMu guards authClient and netClient/netClientLoaded below. Both are
+	// lazily built on first use and then reused for the App's lifetime, and
+	// both are reachable from more than one goroutine in practice: Bubbletea
+	// (internal/cli/tui/statuswatch) batches a status fetch and the next
+	// tick's command together, and if one fetch hasn't returned before the
+	// next tick fires, two goroutines can race through AuthClient() or
+	// netHTTPClient() on the same App concurrently. The lock is held across
+	// the whole check-build-store sequence for each field, not just the
+	// store, so two concurrent first-callers share one client/transport
+	// instead of racing to build two.
+	memoMu sync.Mutex
+
 	authClient *pkgauth.Client
+
+	// netClient and netClientLoaded memoize the network plugin's *http.Client
+	// (e.g. Tailscale's tsnet-backed transport) for the lifetime of the App,
+	// the same way authClient memoizes the auth plugin subprocess. Building
+	// it is expensive (a Tailscale client stands up its own tsnet.Server and
+	// re-authenticates to the tailnet), so it must happen once per App, not
+	// once per withAuthRetry closure — unlike the auth header, which is
+	// meant to be re-fetched on a forced refresh, the transport underneath
+	// it is not. netClientLoaded distinguishes "not built yet" from "built,
+	// and nil because no network plugin is configured".
+	netClient       *http.Client
+	netClientLoaded bool
+
+	// refreshGroup coalesces concurrent forced-refresh requests into a
+	// single GetAuthHeader(true) call. Several operations can observe the
+	// same stale credential at once (the same Bubbletea overlap described
+	// above), and each independently forcing a refresh would be actively
+	// harmful for a plugin backed by rotating refresh tokens: one refresh
+	// would consume the token another is mid-use of, tripping reuse
+	// detection and killing the session. Its zero value is ready to use.
+	refreshGroup singleflight.Group
+
+	// authClientFactory returns the auth plugin client used to obtain and,
+	// on a 401, force-refresh the credential attached to outgoing API
+	// requests. Nil in the real constructor, where it defaults to
+	// a.AuthClient; tests inject a stub so they can drive withAuthRetry
+	// without spawning a plugin subprocess.
+	authClientFactory func() (authHeaderProvider, error)
+
+	// newAPIClient constructs the API client used for a single retried
+	// operation. Nil in the real constructor, where it defaults to
+	// api.NewClient against a.Config.Cli.API; tests inject a stub pointed at
+	// an httptest server.
+	newAPIClient func(authHeader http.Header, net *http.Client) *api.Client
+}
+
+// authHeaderProvider is the subset of *pkgauth.Client withAuthRetry needs to
+// obtain (and force-refresh) the header attached to outgoing API requests.
+// Depending on this narrow interface, rather than the concrete client, lets
+// tests exercise the retry logic against a stub with no plugin subprocess.
+type authHeaderProvider interface {
+	GetAuthHeader(forceRefresh bool) (*pkgauth.GetAuthHeaderResponse, error)
 }
 
 // Close cleans up resources held by the App, including any auth plugin subprocess.
 func (a *App) Close() {
-	if a.authClient != nil {
-		_ = a.authClient.Close()
+	a.memoMu.Lock()
+	client := a.authClient
+	a.memoMu.Unlock()
+
+	if client != nil {
+		_ = client.Close()
 	}
 }
 
@@ -214,13 +275,7 @@ func (a *App) IsSupportedOutputSchema(contentType string) bool {
 }
 
 func (a *App) Apply(path string, props map[string]string, mode pkgmodel.FormaApplyMode, simulate bool, force bool) (*apimodel.SubmitCommandResponse, []string, error) {
-	auth, net, err := a.getAuthAndNetHandlers()
-	if err != nil {
-		return nil, nil, err
-	}
-	client := api.NewClient(a.Config.Cli.API, auth, net)
-
-	compatible, _, nags, err := a.runBeforeCommand(client, true)
+	compatible, _, nags, err := a.runBeforeCommand(true)
 	if !compatible {
 		return nil, nil, err
 	}
@@ -243,7 +298,22 @@ func (a *App) Apply(path string, props map[string]string, mode pkgmodel.FormaApp
 	if err != nil {
 		return nil, nil, err
 	}
-	resp, err := client.ApplyForma(forma, mode, simulate, clientID, force)
+
+	// This is its own withAuthRetry closure, separate from the Stats
+	// preflight above: wrapping Apply as a whole would replay the preflight
+	// and re-submit the mutation on retry. The forma is []byte-marshaled
+	// fresh by ApplyForma on every call, so replaying just this closure is
+	// safe.
+	var resp *apimodel.SubmitCommandResponse
+	err = a.withAuthRetry(func(authHeader http.Header, net *http.Client) error {
+		client := a.apiClient(authHeader, net)
+		r, err := client.ApplyForma(forma, mode, simulate, clientID, force)
+		if err != nil {
+			return err
+		}
+		resp = r
+		return nil
+	})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -252,13 +322,7 @@ func (a *App) Apply(path string, props map[string]string, mode pkgmodel.FormaApp
 }
 
 func (a *App) Destroy(path string, query string, props map[string]string, simulate bool, onDependents string) (*apimodel.SubmitCommandResponse, []string, error) {
-	auth, net, err := a.getAuthAndNetHandlers()
-	if err != nil {
-		return nil, nil, err
-	}
-	client := api.NewClient(a.Config.Cli.API, auth, net)
-
-	compatible, _, nags, err := a.runBeforeCommand(client, true)
+	compatible, _, nags, err := a.runBeforeCommand(true)
 	if !compatible {
 		return nil, nil, err
 	}
@@ -285,12 +349,28 @@ func (a *App) Destroy(path string, query string, props map[string]string, simula
 			)
 		}
 
-		resp, err = client.DestroyForma(forma, simulate, onDependents, clientID)
+		err = a.withAuthRetry(func(authHeader http.Header, net *http.Client) error {
+			client := a.apiClient(authHeader, net)
+			r, err := client.DestroyForma(forma, simulate, onDependents, clientID)
+			if err != nil {
+				return err
+			}
+			resp = r
+			return nil
+		})
 		if err != nil {
 			return nil, nil, err
 		}
 	} else {
-		resp, err = client.DestroyByQuery(query, simulate, onDependents, clientID)
+		err = a.withAuthRetry(func(authHeader http.Header, net *http.Client) error {
+			client := a.apiClient(authHeader, net)
+			r, err := client.DestroyByQuery(query, simulate, onDependents, clientID)
+			if err != nil {
+				return err
+			}
+			resp = r
+			return nil
+		})
 		if err != nil {
 			return nil, nil, err
 		}
@@ -300,13 +380,7 @@ func (a *App) Destroy(path string, query string, props map[string]string, simula
 }
 
 func (a *App) CancelCommand(query string, force bool) (*apimodel.CancelCommandResponse, error) {
-	auth, net, err := a.getAuthAndNetHandlers()
-	if err != nil {
-		return nil, err
-	}
-	client := api.NewClient(a.Config.Cli.API, auth, net)
-
-	compatible, _, _, err := a.runBeforeCommand(client, true)
+	compatible, _, _, err := a.runBeforeCommand(true)
 	if !compatible {
 		return nil, err
 	}
@@ -316,7 +390,16 @@ func (a *App) CancelCommand(query string, force bool) (*apimodel.CancelCommandRe
 		return nil, err
 	}
 
-	res, err := client.CancelCommands(query, force, clientID)
+	var res *apimodel.CancelCommandResponse
+	err = a.withAuthRetry(func(authHeader http.Header, net *http.Client) error {
+		client := a.apiClient(authHeader, net)
+		r, err := client.CancelCommands(query, force, clientID)
+		if err != nil {
+			return err
+		}
+		res = r
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -325,13 +408,7 @@ func (a *App) CancelCommand(query string, force bool) (*apimodel.CancelCommandRe
 }
 
 func (a *App) GetCommandsStatus(query string, n int, fromWatch bool) (*apimodel.ListCommandStatusResponse, []string, error) {
-	auth, net, err := a.getAuthAndNetHandlers()
-	if err != nil {
-		return nil, nil, err
-	}
-	client := api.NewClient(a.Config.Cli.API, auth, net)
-
-	compatible, _, nags, err := a.runBeforeCommand(client, !fromWatch)
+	compatible, _, nags, err := a.runBeforeCommand(!fromWatch)
 	if !compatible {
 		return nil, nil, err
 	}
@@ -341,7 +418,16 @@ func (a *App) GetCommandsStatus(query string, n int, fromWatch bool) (*apimodel.
 		return nil, nil, err
 	}
 
-	res, err := client.GetFormaCommandsStatus(query, clientID, n)
+	var res *apimodel.ListCommandStatusResponse
+	err = a.withAuthRetry(func(authHeader http.Header, net *http.Client) error {
+		client := a.apiClient(authHeader, net)
+		r, err := client.GetFormaCommandsStatus(query, clientID, n)
+		if err != nil {
+			return err
+		}
+		res = r
+		return nil
+	})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -356,19 +442,21 @@ func (a *App) GetCommandsStatus(query string, n int, fromWatch bool) (*apimodel.
 }
 
 func (a *App) ExtractResources(query string, fromTUI bool) (*pkgmodel.Forma, []string, error) {
-	auth, net, err := a.getAuthAndNetHandlers()
-	if err != nil {
-		return nil, nil, err
-	}
-	client := api.NewClient(a.Config.Cli.API, auth, net)
-
-	compatible, _, nags, err := a.runBeforeCommand(client, !fromTUI)
+	compatible, _, nags, err := a.runBeforeCommand(!fromTUI)
 	if !compatible {
 		return nil, nil, err
 	}
 
-	f, err := client.ExtractResources(query)
-
+	var f *pkgmodel.Forma
+	err = a.withAuthRetry(func(authHeader http.Header, net *http.Client) error {
+		client := a.apiClient(authHeader, net)
+		res, err := client.ExtractResources(query)
+		if err != nil {
+			return err
+		}
+		f = res
+		return nil
+	})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -380,25 +468,28 @@ func (a *App) ExtractResources(query string, fromTUI bool) (*pkgmodel.Forma, []s
 		}
 	}
 
-	return f, nags, err
+	return f, nags, nil
 }
 
 // ListResourceSummaries fetches lightweight resource summaries from the agent,
 // alongside any nag messages from the compatibility gate. Detail is fetched
 // lazily by ksuid via ResourceDetailByKsuid.
 func (a *App) ListResourceSummaries(query string, fromTUI bool) ([]pkgmodel.ResourceSummary, []string, error) {
-	auth, net, err := a.getAuthAndNetHandlers()
-	if err != nil {
-		return nil, nil, err
-	}
-	client := api.NewClient(a.Config.Cli.API, auth, net)
-
-	compatible, _, nags, err := a.runBeforeCommand(client, !fromTUI)
+	compatible, _, nags, err := a.runBeforeCommand(!fromTUI)
 	if !compatible {
 		return nil, nil, err
 	}
 
-	summaries, err := client.ListResourceSummaries(query)
+	var summaries []pkgmodel.ResourceSummary
+	err = a.withAuthRetry(func(authHeader http.Header, net *http.Client) error {
+		client := a.apiClient(authHeader, net)
+		s, err := client.ListResourceSummaries(query)
+		if err != nil {
+			return err
+		}
+		summaries = s
+		return nil
+	})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -411,18 +502,21 @@ func (a *App) ListResourceSummaries(query string, fromTUI bool) ([]pkgmodel.Reso
 // ResourceDetailByKsuid fetches a single resource by its ksuid from the agent.
 // Returns (nil, nags, nil) when the agent reports no resource for the ksuid.
 func (a *App) ResourceDetailByKsuid(ksuid string, fromTUI bool) (*pkgmodel.Resource, []string, error) {
-	auth, net, err := a.getAuthAndNetHandlers()
-	if err != nil {
-		return nil, nil, err
-	}
-	client := api.NewClient(a.Config.Cli.API, auth, net)
-
-	compatible, _, nags, err := a.runBeforeCommand(client, !fromTUI)
+	compatible, _, nags, err := a.runBeforeCommand(!fromTUI)
 	if !compatible {
 		return nil, nil, err
 	}
 
-	resource, err := client.GetResourceByKsuid(ksuid)
+	var resource *pkgmodel.Resource
+	err = a.withAuthRetry(func(authHeader http.Header, net *http.Client) error {
+		client := a.apiClient(authHeader, net)
+		r, err := client.GetResourceByKsuid(ksuid)
+		if err != nil {
+			return err
+		}
+		resource = r
+		return nil
+	})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -430,59 +524,67 @@ func (a *App) ResourceDetailByKsuid(ksuid string, fromTUI bool) (*pkgmodel.Resou
 }
 
 func (a *App) ForceSync() error {
-	auth, net, err := a.getAuthAndNetHandlers()
-	if err != nil {
-		return err
-	}
-	client := api.NewClient(a.Config.Cli.API, auth, net)
-
-	if compatible, _, _, err := a.runBeforeCommand(client, true); !compatible {
+	if compatible, _, _, err := a.runBeforeCommand(true); !compatible {
 		return err
 	}
 
-	return client.ForceSync()
+	return a.withAuthRetry(func(authHeader http.Header, net *http.Client) error {
+		client := a.apiClient(authHeader, net)
+		return client.ForceSync()
+	})
 }
 
 func (a *App) ForceDiscover() error {
-	auth, net, err := a.getAuthAndNetHandlers()
-	if err != nil {
-		return err
-	}
-	client := api.NewClient(a.Config.Cli.API, auth, net)
-
-	if compatible, _, _, err := a.runBeforeCommand(client, true); !compatible {
+	if compatible, _, _, err := a.runBeforeCommand(true); !compatible {
 		return err
 	}
 
-	return client.ForceDiscover()
+	return a.withAuthRetry(func(authHeader http.Header, net *http.Client) error {
+		client := a.apiClient(authHeader, net)
+		return client.ForceDiscover()
+	})
 }
 
 func (a *App) InstallPlugins(req apimodel.InstallPluginsRequest) (*apimodel.InstallPluginsResponse, error) {
-	auth, net, err := a.getAuthAndNetHandlers()
+	if compatible, _, _, err := a.runBeforeCommand(true); !compatible {
+		return nil, err
+	}
+
+	var resp *apimodel.InstallPluginsResponse
+	err := a.withAuthRetry(func(authHeader http.Header, net *http.Client) error {
+		client := a.apiClient(authHeader, net)
+		r, err := client.InstallPlugins(req)
+		if err != nil {
+			return err
+		}
+		resp = r
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	client := api.NewClient(a.Config.Cli.API, auth, net)
-
-	if compatible, _, _, err := a.runBeforeCommand(client, true); !compatible {
-		return nil, err
-	}
-
-	return client.InstallPlugins(req)
+	return resp, nil
 }
 
 func (a *App) UninstallPlugins(req apimodel.UninstallPluginsRequest) (*apimodel.UninstallPluginsResponse, error) {
-	auth, net, err := a.getAuthAndNetHandlers()
+	if compatible, _, _, err := a.runBeforeCommand(true); !compatible {
+		return nil, err
+	}
+
+	var resp *apimodel.UninstallPluginsResponse
+	err := a.withAuthRetry(func(authHeader http.Header, net *http.Client) error {
+		client := a.apiClient(authHeader, net)
+		r, err := client.UninstallPlugins(req)
+		if err != nil {
+			return err
+		}
+		resp = r
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	client := api.NewClient(a.Config.Cli.API, auth, net)
-
-	if compatible, _, _, err := a.runBeforeCommand(client, true); !compatible {
-		return nil, err
-	}
-
-	return client.UninstallPlugins(req)
+	return resp, nil
 }
 
 // InstalledResourcePluginVersions queries the agent for installed resource
@@ -524,13 +626,16 @@ func (a *App) InstalledResourcePlugins() (map[string]PluginInfo, error) {
 }
 
 func (a *App) installedResourcePlugins() (map[string]PluginInfo, error) {
-	auth, net, err := a.getAuthAndNetHandlers()
-	if err != nil {
-		return nil, err
-	}
-	client := api.NewClient(a.Config.Cli.API, auth, net)
-
-	resp, err := client.ListPlugins("installed", "", "", "", "")
+	var resp *apimodel.ListPluginsResponse
+	err := a.withAuthRetry(func(authHeader http.Header, net *http.Client) error {
+		client := a.apiClient(authHeader, net)
+		r, err := client.ListPlugins("installed", "", "", "", "")
+		if err != nil {
+			return err
+		}
+		resp = r
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -553,17 +658,24 @@ func (a *App) installedResourcePlugins() (map[string]PluginInfo, error) {
 }
 
 func (a *App) UpdatePlugins(req apimodel.UpdatePluginsRequest) (*apimodel.UpdatePluginsResponse, error) {
-	auth, net, err := a.getAuthAndNetHandlers()
+	if compatible, _, _, err := a.runBeforeCommand(true); !compatible {
+		return nil, err
+	}
+
+	var resp *apimodel.UpdatePluginsResponse
+	err := a.withAuthRetry(func(authHeader http.Header, net *http.Client) error {
+		client := a.apiClient(authHeader, net)
+		r, err := client.UpdatePlugins(req)
+		if err != nil {
+			return err
+		}
+		resp = r
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	client := api.NewClient(a.Config.Cli.API, auth, net)
-
-	if compatible, _, _, err := a.runBeforeCommand(client, true); !compatible {
-		return nil, err
-	}
-
-	return client.UpdatePlugins(req)
+	return resp, nil
 }
 
 // Preflight verifies the agent is reachable and version-compatible before an
@@ -572,47 +684,54 @@ func (a *App) UpdatePlugins(req apimodel.UpdatePluginsRequest) (*apimodel.Update
 // rendered inside the alt-screen TUI. transmitStats is false so a preflight
 // check doesn't double-report usage stats.
 func (a *App) Preflight() error {
-	auth, net, err := a.getAuthAndNetHandlers()
-	if err != nil {
-		return err
-	}
-	client := api.NewClient(a.Config.Cli.API, auth, net)
-
-	if compatible, _, _, err := a.runBeforeCommand(client, false); !compatible {
+	if compatible, _, _, err := a.runBeforeCommand(false); !compatible {
 		return err
 	}
 	return nil
 }
 
 func (a *App) Stats() (*apimodel.Stats, []string, error) {
-	auth, net, err := a.getAuthAndNetHandlers()
-	if err != nil {
+	compatible, stats, nags, err := a.runBeforeCommand(true)
+	if !compatible {
 		return nil, nil, err
 	}
-	client := api.NewClient(a.Config.Cli.API, auth, net)
-
-	if compatible, stats, nags, err := a.runBeforeCommand(client, true); !compatible {
-		return nil, nil, err
-	} else {
-		if err == syscall.ECONNREFUSED {
-			return nil, nil, fmt.Errorf("agent is not running; please start the agent and try again\n\n%s %s", docLabelStyle().Render("Getting started:"), banner.DocRoot)
-
-		} else if err != nil {
-			return nil, nil, fmt.Errorf("error fetching stats from agent: %v", err)
-		}
-
-		return stats, nags, nil
-	}
+	return stats, nags, nil
 }
 
-func (a *App) runBeforeCommand(client *api.Client, transmitStats bool) (bool, *apimodel.Stats, []string, error) {
-	stats, err := client.Stats()
+// runBeforeCommand fetches Stats as its own withAuthRetry closure — the one
+// enumerated conversion point that every command runs before its own work —
+// then checks version compatibility and reports usage. It no longer takes a
+// pre-built client: retrying Stats independently means a stale credential
+// caught here does not also poison whichever client the caller goes on to
+// build for its own operation.
+func (a *App) runBeforeCommand(transmitStats bool) (bool, *apimodel.Stats, []string, error) {
+	var stats *apimodel.Stats
+	err := a.withAuthRetry(func(authHeader http.Header, net *http.Client) error {
+		client := a.apiClient(authHeader, net)
+		s, err := client.Stats()
+		if err != nil {
+			return err
+		}
+		stats = s
+		return nil
+	})
 	if err != nil {
 		th := theme.New("formae")
 		goldStyle := lipgloss.NewStyle().Foreground(th.Palette.Warning)
 		errStyle := lipgloss.NewStyle().Foreground(th.Palette.Error)
-		if err == syscall.ECONNREFUSED {
+		if errors.Is(err, syscall.ECONNREFUSED) {
 			return false, nil, nil, fmt.Errorf("agent is not running; please start the agent and try again\n\n%s %s", docLabelStyle().Render("Getting started:"), banner.DocRoot)
+		}
+		var denied api.AuthorizationDeniedError
+		if errors.As(err, &denied) {
+			// denied.Error()'s text is design-pinned and must not change; it
+			// already reads as a single headline+action sentence, so unlike
+			// the AuthenticationError branch below there is no natural place
+			// to split it into a separate two-tone headline/action pair
+			// without slicing the frozen string itself. Style it as one run
+			// instead, consistent in kind (though not in structure) with its
+			// siblings in this switch.
+			return false, nil, nil, fmt.Errorf("%s", errStyle.Render(denied.Error()))
 		}
 		if errors.Is(err, api.AuthenticationError{}) {
 			return false, nil, nil, fmt.Errorf("%s\n\n%s",
@@ -656,70 +775,257 @@ func (a *App) calculateNags(stats *apimodel.Stats) []string {
 	return nags
 }
 
-func (a *App) getAuthAndNetHandlers() (http.Header, *http.Client, error) {
-	var authHeader http.Header
-	var net *http.Client
+// NoAuthPluginError indicates the active profile carries no cli.auth block,
+// so there is no auth plugin to discover or start.
+type NoAuthPluginError struct{}
 
-	if a.Config.Cli.Auth != nil {
-		if a.authClient == nil {
-			authType := gjson.GetBytes(a.Config.Cli.Auth, "type").String()
-			devPluginDir := util.ExpandHomePath(a.Config.PluginDir)
-			binPath, err := os.Executable()
-			if err != nil {
-				return nil, nil, fmt.Errorf("failed to determine binary path: %w", err)
+func (*NoAuthPluginError) Error() string {
+	return "no auth plugin configured for the active profile"
+}
+
+// AuthClient returns the App's auth plugin client, discovering and starting
+// the plugin subprocess on first use and caching it for subsequent calls.
+// It returns a *NoAuthPluginError when the active profile has no cli.auth
+// block, so callers that need a plugin outright — such as `formae login` —
+// can fail with a clear message instead of dereferencing a nil client.
+func (a *App) AuthClient() (*pkgauth.Client, error) {
+	if a.Config.Cli.Auth == nil {
+		return nil, &NoAuthPluginError{}
+	}
+
+	a.memoMu.Lock()
+	defer a.memoMu.Unlock()
+
+	if a.authClient == nil {
+		authType := gjson.GetBytes(a.Config.Cli.Auth, "type").String()
+		devPluginDir := util.ExpandHomePath(a.Config.PluginDir)
+		binPath, err := os.Executable()
+		if err != nil {
+			return nil, fmt.Errorf("failed to determine binary path: %w", err)
+		}
+		systemPluginDir := discovery.SystemPluginDir(binPath)
+		authPlugins := discovery.DiscoverPluginsMulti(
+			[]string{devPluginDir, systemPluginDir}, discovery.Auth,
+		)
+		var matched *discovery.PluginInfo
+		for i, p := range authPlugins {
+			if p.Name == authType {
+				matched = &authPlugins[i]
+				break
 			}
-			systemPluginDir := discovery.SystemPluginDir(binPath)
-			authPlugins := discovery.DiscoverPluginsMulti(
-				[]string{devPluginDir, systemPluginDir}, discovery.Auth,
-			)
-			var matched *discovery.PluginInfo
-			for i, p := range authPlugins {
-				if p.Name == authType {
-					matched = &authPlugins[i]
-					break
-				}
-			}
-			if matched == nil {
-				return nil, nil, fmt.Errorf("auth plugin %q not installed", authType)
-			}
-			client, err := pkgauth.NewClient(matched.BinaryPath, a.Config.Cli.Auth)
-			if err != nil {
-				return nil, nil, fmt.Errorf("failed to start auth plugin: %w", err)
-			}
-			a.authClient = client
+		}
+		if matched == nil {
+			return nil, fmt.Errorf("auth plugin %q not installed", authType)
+		}
+		client, err := pkgauth.NewClient(matched.BinaryPath, a.Config.Cli.Auth)
+		if err != nil {
+			return nil, fmt.Errorf("failed to start auth plugin: %w", err)
+		}
+		a.authClient = client
+	}
+
+	return a.authClient, nil
+}
+
+// authProvider returns the auth plugin client used to obtain the request
+// header, preferring the injectable authClientFactory (set by tests) and
+// falling back to the real AuthClient.
+func (a *App) authProvider() (authHeaderProvider, error) {
+	if a.authClientFactory != nil {
+		return a.authClientFactory()
+	}
+	return a.AuthClient()
+}
+
+// apiClient constructs an API client for a single operation from the given
+// auth header and network client, preferring the injectable newAPIClient
+// (set by tests) and falling back to api.NewClient against a.Config.Cli.API.
+func (a *App) apiClient(authHeader http.Header, net *http.Client) *api.Client {
+	if a.newAPIClient != nil {
+		return a.newAPIClient(authHeader, net)
+	}
+	return api.NewClient(a.Config.Cli.API, authHeader, net)
+}
+
+// withAuthRetry runs op once with the current auth header. When op fails
+// with api.AuthenticationError and an auth plugin is configured, it asks the
+// plugin to force-refresh the credential and retries op exactly once with
+// the refreshed header — recovering from a credential that looks fresh to
+// the CLI but is actually stale (e.g. a backward clock jump masking an
+// expired token, or a token signed by a just-revoked key) without treating a
+// genuine denial as a transient error. A non-auth error, or an auth error
+// with no auth plugin configured, is returned unchanged with no retry.
+//
+// op must perform exactly one HTTP operation with a replayable, []byte-backed
+// request body — never a whole command (e.g. a preflight followed by a
+// mutating submission). Retrying a multi-step sequence would replay every
+// step, which for a mutation means submitting it twice.
+func (a *App) withAuthRetry(op func(authHeader http.Header, net *http.Client) error) error {
+	authHeader, net, err := a.getAuthAndNetHandlers()
+	if err != nil {
+		return err
+	}
+
+	err = op(authHeader, net)
+	if err == nil {
+		return nil
+	}
+
+	var authErr api.AuthenticationError
+	if !errors.As(err, &authErr) || a.Config.Cli.Auth == nil {
+		return err
+	}
+
+	// From here on, a failure to obtain a fresh credential is a distinct
+	// class of problem from the AuthenticationError that triggered the
+	// retry, and must be surfaced as itself — not masked behind the
+	// now-stale original error, and not conflated with AuthorizationDenied,
+	// which means the agent saw and rejected a credential we did manage to
+	// get. Mirrors how the initial (unforced) fetch in
+	// getAuthAndNetHandlers reports the same two failure classes.
+	refreshedHeader, refreshErr := a.forceRefreshAuthHeader()
+	if refreshErr != nil {
+		return refreshErr
+	}
+
+	err = op(refreshedHeader, net)
+	if err == nil {
+		return nil
+	}
+	if errors.As(err, &authErr) {
+		return api.AuthorizationDeniedError{}
+	}
+	return err
+}
+
+// forceRefreshAuthHeader asks the auth plugin to force-refresh the
+// credential, coalescing concurrent callers into a single underlying
+// GetAuthHeader(true) call via refreshGroup: every caller that arrives
+// while a refresh is already in flight shares its result instead of
+// starting its own. The singleflight group's own lock is released before
+// the request function runs (see golang.org/x/sync/singleflight), so
+// calling into a.authProvider() — which takes memoMu — here cannot deadlock
+// against it.
+func (a *App) forceRefreshAuthHeader() (http.Header, error) {
+	v, err, _ := a.refreshGroup.Do("refresh", func() (any, error) {
+		provider, provErr := a.authProvider()
+		if provErr != nil {
+			return nil, provErr
 		}
 
-		resp, err := a.authClient.GetAuthHeader(false)
+		resp, headerErr := provider.GetAuthHeader(true)
+		if headerErr != nil {
+			return nil, fmt.Errorf("failed to get auth header: %w", headerErr)
+		}
+		if resp.ErrorCode != "" || resp.Error != "" {
+			return nil, errors.New(authmsg.DescribeAuthError(resp.ErrorCode, resp.Error))
+		}
+		if !hasCredential(resp.Headers) {
+			return nil, errors.New(noCredentialMessage)
+		}
+		return http.Header(resp.Headers), nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.(http.Header), nil
+}
+
+// noCredentialMessage is returned when the auth plugin reports success — no
+// ErrorCode, no Error — but the header it returned carries nothing usable.
+// Treating that as success would hand the API client an empty Authorization
+// header and send the request unauthenticated: an apparent success hiding a
+// real failure, exactly the shape this whole retry mechanism exists to
+// eliminate.
+const noCredentialMessage = "the auth plugin returned no credential"
+
+// hasCredential reports whether headers carries the credential the CLI will
+// actually transmit. internal/api.NewClient attaches exactly one outgoing
+// header — Authorization — read via http.Header.Get, which canonicalises
+// the key it looks up but not the keys already stored in the map (see
+// pkg/auth.GetAuthHeaderResponse.Headers: "the client attaches only the
+// canonical 'Authorization' header"). So a plugin that returns its
+// credential under a different name entirely, or even as a non-canonical
+// "authorization" key, produces a value this CLI can never send — the same
+// failure as an empty or absent header — and must fail closed the same way,
+// rather than being read as success by a scan that credits any non-empty
+// value under any key.
+func hasCredential(headers map[string][]string) bool {
+	return http.Header(headers).Get("Authorization") != ""
+}
+
+func (a *App) getAuthAndNetHandlers() (http.Header, *http.Client, error) {
+	var authHeader http.Header
+
+	if a.Config.Cli.Auth != nil {
+		client, err := a.authProvider()
+		if err != nil {
+			return nil, nil, err
+		}
+
+		resp, err := client.GetAuthHeader(false)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to get auth header: %w", err)
+		}
+		if resp.ErrorCode != "" || resp.Error != "" {
+			return nil, nil, errors.New(authmsg.DescribeAuthError(resp.ErrorCode, resp.Error))
+		}
+		if !hasCredential(resp.Headers) {
+			return nil, nil, errors.New(noCredentialMessage)
 		}
 		authHeader = http.Header(resp.Headers)
 	}
 
-	if a.Config.Network != nil {
-		netPlugin, err := network.DefaultRegistry.Get(a.Config.Network.Type)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		var configJSON []byte
-		if len(a.Config.Network.LegacyRawJSON) > 0 {
-			configJSON = a.Config.Network.LegacyRawJSON
-		} else {
-			var marshalErr error
-			configJSON, marshalErr = json.Marshal(a.Config.Network.Tailscale)
-			if marshalErr != nil {
-				return nil, nil, fmt.Errorf("failed to marshal network config: %w", marshalErr)
-			}
-		}
-
-		net, err = netPlugin.Client(configJSON)
-		if err != nil {
-			return nil, nil, err
-		}
+	net, err := a.netHTTPClient()
+	if err != nil {
+		return nil, nil, err
 	}
 
 	return authHeader, net, nil
+}
+
+// netHTTPClient returns the App's network plugin transport, building and
+// caching it on first use. Every caller — including every withAuthRetry
+// closure — shares this single instance instead of each constructing its
+// own, so a Tailscale-backed profile stands up one tsnet.Server per App
+// rather than one per HTTP operation.
+func (a *App) netHTTPClient() (*http.Client, error) {
+	a.memoMu.Lock()
+	defer a.memoMu.Unlock()
+
+	if a.netClientLoaded {
+		return a.netClient, nil
+	}
+
+	if a.Config.Network == nil {
+		a.netClientLoaded = true
+		return nil, nil
+	}
+
+	netPlugin, err := network.DefaultRegistry.Get(a.Config.Network.Type)
+	if err != nil {
+		return nil, err
+	}
+
+	var configJSON []byte
+	if len(a.Config.Network.LegacyRawJSON) > 0 {
+		configJSON = a.Config.Network.LegacyRawJSON
+	} else {
+		var marshalErr error
+		configJSON, marshalErr = json.Marshal(a.Config.Network.Tailscale)
+		if marshalErr != nil {
+			return nil, fmt.Errorf("failed to marshal network config: %w", marshalErr)
+		}
+	}
+
+	net, err := netPlugin.Client(configJSON)
+	if err != nil {
+		return nil, err
+	}
+
+	a.netClient = net
+	a.netClientLoaded = true
+	return a.netClient, nil
 }
 
 func (a *App) Evaluate(path string, props map[string]string, mode pkgmodel.FormaApplyMode) (*pkgmodel.Forma, error) {
@@ -848,18 +1154,21 @@ func (a *App) buildDependencyStrings(forma *pkgmodel.Forma, location schema.Sche
 }
 
 func (a *App) ExtractTargets(query string, fromTUI bool) ([]*pkgmodel.Target, []string, error) {
-	auth, net, err := a.getAuthAndNetHandlers()
-	if err != nil {
-		return nil, nil, err
-	}
-	client := api.NewClient(a.Config.Cli.API, auth, net)
-
-	compatible, _, nags, err := a.runBeforeCommand(client, !fromTUI)
+	compatible, _, nags, err := a.runBeforeCommand(!fromTUI)
 	if !compatible {
 		return nil, nil, err
 	}
 
-	targets, err := client.ListTargets(query)
+	var targets []*pkgmodel.Target
+	err = a.withAuthRetry(func(authHeader http.Header, net *http.Client) error {
+		client := a.apiClient(authHeader, net)
+		t, err := client.ListTargets(query)
+		if err != nil {
+			return err
+		}
+		targets = t
+		return nil
+	})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -872,18 +1181,21 @@ func (a *App) ExtractTargets(query string, fromTUI bool) ([]*pkgmodel.Target, []
 }
 
 func (a *App) ExtractStacks(fromTUI bool) ([]*pkgmodel.Stack, []string, error) {
-	auth, net, err := a.getAuthAndNetHandlers()
-	if err != nil {
-		return nil, nil, err
-	}
-	client := api.NewClient(a.Config.Cli.API, auth, net)
-
-	compatible, _, nags, err := a.runBeforeCommand(client, !fromTUI)
+	compatible, _, nags, err := a.runBeforeCommand(!fromTUI)
 	if !compatible {
 		return nil, nil, err
 	}
 
-	stacks, err := client.ListStacks()
+	var stacks []*pkgmodel.Stack
+	err = a.withAuthRetry(func(authHeader http.Header, net *http.Client) error {
+		client := a.apiClient(authHeader, net)
+		s, err := client.ListStacks()
+		if err != nil {
+			return err
+		}
+		stacks = s
+		return nil
+	})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -896,18 +1208,21 @@ func (a *App) ExtractStacks(fromTUI bool) ([]*pkgmodel.Stack, []string, error) {
 }
 
 func (a *App) ExtractPolicies(fromTUI bool) ([]apimodel.PolicyInventoryItem, []string, error) {
-	auth, net, err := a.getAuthAndNetHandlers()
-	if err != nil {
-		return nil, nil, err
-	}
-	client := api.NewClient(a.Config.Cli.API, auth, net)
-
-	compatible, _, nags, err := a.runBeforeCommand(client, !fromTUI)
+	compatible, _, nags, err := a.runBeforeCommand(!fromTUI)
 	if !compatible {
 		return nil, nil, err
 	}
 
-	policies, err := client.ListPolicies()
+	var policies []apimodel.PolicyInventoryItem
+	err = a.withAuthRetry(func(authHeader http.Header, net *http.Client) error {
+		client := a.apiClient(authHeader, net)
+		p, err := client.ListPolicies()
+		if err != nil {
+			return err
+		}
+		policies = p
+		return nil
+	})
 	if err != nil {
 		return nil, nil, err
 	}
