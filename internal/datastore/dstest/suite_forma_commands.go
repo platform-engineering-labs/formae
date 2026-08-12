@@ -206,6 +206,8 @@ func RunStoreAndLoadFormaCommandOptionalFields(t *testing.T, newDS func(t *testi
 		cmd := &forma_command.FormaCommand{
 			ID:          util.NewID(),
 			ClientID:    "synchronizer",
+			Subject:     "11111111-1111-4111-8111-111111111111",
+			SubjectName: "dpanders",
 			Command:     pkgmodel.CommandApply,
 			State:       forma_command.CommandStatePending,
 			Description: pkgmodel.Description{Text: "deploy production stack"},
@@ -225,8 +227,88 @@ func RunStoreAndLoadFormaCommandOptionalFields(t *testing.T, newDS func(t *testi
 		loaded, err := ds.GetFormaCommandByCommandID(cmd.ID)
 		assert.NoError(t, err)
 		assert.Equal(t, "synchronizer", loaded.ClientID)
+		assert.Equal(t, "11111111-1111-4111-8111-111111111111", loaded.Subject)
+		assert.Equal(t, "dpanders", loaded.SubjectName)
 		assert.Equal(t, "deploy production stack", loaded.Description.Text)
 		assert.Equal(t, pkgmodel.FormaApplyModePatch, loaded.Config.Mode)
+	})
+}
+
+// RunStoreAndLoadFormaCommandEmptySubject verifies that a command stored with
+// no authenticated subject (the classic-mode / internal-origin case) reads
+// both Subject and SubjectName back as "".
+func RunStoreAndLoadFormaCommandEmptySubject(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("StoreAndLoad_FormaCommand_EmptySubject", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		cmd := &forma_command.FormaCommand{
+			ID:          util.NewID(),
+			ClientID:    "stack-expirer",
+			Subject:     "",
+			SubjectName: "",
+			Command:     pkgmodel.CommandDestroy,
+			State:       forma_command.CommandStatePending,
+			ResourceUpdates: []resource_update.ResourceUpdate{
+				{
+					DesiredState:   pkgmodel.Resource{Properties: json.RawMessage("{}")},
+					ResourceTarget: pkgmodel.Target{Label: "t", Namespace: "default", Config: json.RawMessage("{}")},
+					State:          resource_update.ResourceUpdateStateNotStarted,
+				},
+			},
+		}
+
+		err := ds.StoreFormaCommand(cmd, cmd.ID)
+		assert.NoError(t, err)
+
+		loaded, err := ds.GetFormaCommandByCommandID(cmd.ID)
+		assert.NoError(t, err)
+		assert.Equal(t, "", loaded.Subject)
+		assert.Equal(t, "", loaded.SubjectName)
+	})
+}
+
+// RunFormaCommandSubjectNullRoundTrip verifies that a forma_commands row whose
+// subject/subject_name columns are SQL NULL — the state every row written
+// before this migration is in — reads back through the normal Datastore API
+// as "", not as an error or a literal "NULL" string. Skips on backends that
+// don't provide the raw NULL-setting hook.
+func RunFormaCommandSubjectNullRoundTrip(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("FormaCommandSubject_NullRoundTrip", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		if td.NullFormaCommandSubjectForTest == nil {
+			t.Skip("backend does not provide NullFormaCommandSubjectForTest")
+		}
+
+		cmd := &forma_command.FormaCommand{
+			ID:          util.NewID(),
+			ClientID:    "synchronizer",
+			Subject:     "11111111-1111-4111-8111-111111111111",
+			SubjectName: "dpanders",
+			Command:     pkgmodel.CommandApply,
+			State:       forma_command.CommandStatePending,
+			ResourceUpdates: []resource_update.ResourceUpdate{
+				{
+					DesiredState:   pkgmodel.Resource{Properties: json.RawMessage("{}")},
+					ResourceTarget: pkgmodel.Target{Label: "t", Namespace: "default", Config: json.RawMessage("{}")},
+					State:          resource_update.ResourceUpdateStateNotStarted,
+				},
+			},
+		}
+		err := ds.StoreFormaCommand(cmd, cmd.ID)
+		assert.NoError(t, err)
+
+		err = td.NullFormaCommandSubjectForTest(cmd.ID)
+		assert.NoError(t, err)
+
+		loaded, err := ds.GetFormaCommandByCommandID(cmd.ID)
+		assert.NoError(t, err)
+		assert.Equal(t, "", loaded.Subject, "a NULL subject column must read back as \"\"")
+		assert.Equal(t, "", loaded.SubjectName, "a NULL subject_name column must read back as \"\"")
 	})
 }
 

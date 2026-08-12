@@ -118,6 +118,17 @@ func (s *Server) configureAuth() {
 	}
 }
 
+// subjectFromContext reads the verified subject and its display-name hint off
+// the echo request context, where the auth middleware puts them on every
+// allowed request. Neither key is set when no auth plugin is configured
+// (classic mode), so the type assertions fall through to "" rather than
+// failing the request.
+func subjectFromContext(c echo.Context) (subject string, subjectName string) {
+	subject, _ = c.Get(auth.ContextKeySubject).(string)
+	subjectName, _ = c.Get(auth.ContextKeySubjectName).(string)
+	return subject, subjectName
+}
+
 // configureNetwork sets up the network listener by loading the appropriate network plugin based on the configuration.
 func (s *Server) configureNetwork() (string, error) {
 	if s.networkConfig != nil {
@@ -291,6 +302,7 @@ func (s *Server) SubmitFormaCommand(c echo.Context) error {
 	if clientID == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "Client-ID header is required")
 	}
+	subject, subjectName := subjectFromContext(c)
 	command := c.FormValue("command")
 	if command == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "command is required")
@@ -315,7 +327,7 @@ func (s *Server) SubmitFormaCommand(c echo.Context) error {
 			Mode:     mode,
 			Simulate: simulate,
 			Force:    force,
-		}, clientID)
+		}, clientID, subject, subjectName)
 		if err != nil {
 			return mapError(c, err)
 		}
@@ -328,7 +340,7 @@ func (s *Server) SubmitFormaCommand(c echo.Context) error {
 		query := c.FormValue("query")
 		if query != "" {
 			// If query is provided, use it
-			response, err = s.metastructure.DestroyByQuery(query, &config.FormaCommandConfig{Simulate: simulate, OnDependents: onDependents}, clientID)
+			response, err = s.metastructure.DestroyByQuery(query, &config.FormaCommandConfig{Simulate: simulate, OnDependents: onDependents}, clientID, subject, subjectName)
 		} else {
 			// Otherwise, expect a Forma file
 			if !hasFormaFile(c) {
@@ -338,7 +350,7 @@ func (s *Server) SubmitFormaCommand(c echo.Context) error {
 			if getFormaErr != nil {
 				return echo.NewHTTPError(http.StatusInternalServerError, getFormaErr.Error())
 			}
-			response, err = s.metastructure.DestroyForma(forma, &config.FormaCommandConfig{Simulate: simulate, OnDependents: onDependents}, clientID)
+			response, err = s.metastructure.DestroyForma(forma, &config.FormaCommandConfig{Simulate: simulate, OnDependents: onDependents}, clientID, subject, subjectName)
 		}
 		if err != nil {
 			return mapError(c, err)
@@ -595,7 +607,8 @@ func (s *Server) ListDrift(c echo.Context) error {
 // @Router /stacks/{stack}/reconcile [post]
 func (s *Server) ForceReconcile(c echo.Context) error {
 	stackLabel := c.Param("stack")
-	result, err := s.metastructure.ForceAutoReconcile(stackLabel)
+	subject, subjectName := subjectFromContext(c)
+	result, err := s.metastructure.ForceAutoReconcile(stackLabel, subject, subjectName)
 	if err != nil {
 		return mapError(c, err)
 	}

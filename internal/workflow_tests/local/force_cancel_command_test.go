@@ -115,7 +115,7 @@ func TestMetastructure_ForceCancelCommand_ReachesCanceledImmediately(t *testing.
 
 		resp, err := m.ApplyForma(twoBucketForma(), &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test-client")
+		}, "test-client", "", "")
 		require.NoError(t, err)
 		require.NotNil(t, resp)
 		commandID := resp.CommandID
@@ -195,7 +195,7 @@ func TestMetastructure_ForceCancelCommand_ConvergesWhereNonForceHangs(t *testing
 
 		resp, err := m.ApplyForma(twoBucketForma(), &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test-client")
+		}, "test-client", "", "")
 		require.NoError(t, err)
 		commandID := resp.CommandID
 
@@ -292,7 +292,7 @@ func TestMetastructure_ForceCancelCommand_PersisterFailureTerminatesNoActors(t *
 
 		resp, err := m.ApplyForma(twoBucketForma(), &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test-client")
+		}, "test-client", "", "")
 		require.NoError(t, err)
 		commandID := resp.CommandID
 
@@ -352,7 +352,7 @@ func TestMetastructure_ForceCancelCommand_CommandWritePersistFailureSurfaces(t *
 
 		resp, err := m.ApplyForma(twoBucketForma(), &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test-client")
+		}, "test-client", "", "")
 		require.NoError(t, err)
 		commandID := resp.CommandID
 
@@ -402,7 +402,7 @@ func TestMetastructure_ForceCancelCommand_ResourceStatesAttributeCommandID(t *te
 
 		resp, err := m.ApplyForma(twoBucketForma(), &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test-client")
+		}, "test-client", "", "")
 		require.NoError(t, err)
 		require.NotNil(t, resp)
 		canceledCommandID := resp.CommandID
@@ -453,7 +453,7 @@ func TestMetastructure_ForceCancelCommand_WriteFenceDropsLateMessages(t *testing
 
 		resp, err := m.ApplyForma(twoBucketForma(), &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test-client")
+		}, "test-client", "", "")
 		require.NoError(t, err)
 		commandID := resp.CommandID
 

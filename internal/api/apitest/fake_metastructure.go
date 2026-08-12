@@ -24,6 +24,14 @@ type WrappedCommandResponse struct {
 	Error                 error
 }
 
+// RecordedSubject captures the subject and subjectName a command-creating
+// method was called with, so seam tests can assert the request's
+// authenticated identity actually reached the metastructure call.
+type RecordedSubject struct {
+	Subject     string
+	SubjectName string
+}
+
 type WrappedExtractResponse struct {
 	Forma *pkgmodel.Forma
 	Error error
@@ -97,23 +105,34 @@ type FakeMetastructure struct {
 	RecordedExtractQueries   []string
 	RecordedSummaryQueries   []string
 	RecordedKsuidLookups     []string
+
+	// RecordedApplySubjects, RecordedDestroySubjects, RecordedDestroyByQuerySubjects,
+	// and RecordedReconcileSubjects capture the subject/subjectName each
+	// command-creating call was made with, one entry appended per call.
+	RecordedApplySubjects          []RecordedSubject
+	RecordedDestroySubjects        []RecordedSubject
+	RecordedDestroyByQuerySubjects []RecordedSubject
+	RecordedReconcileSubjects      []RecordedSubject
 }
 
-func (m *FakeMetastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error) {
+func (m *FakeMetastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string, subject string, subjectName string) (*apimodel.SubmitCommandResponse, error) {
+	m.RecordedApplySubjects = append(m.RecordedApplySubjects, RecordedSubject{Subject: subject, SubjectName: subjectName})
 	nextResponse := m.ApplyResponses[0]
 	m.ApplyResponses = m.ApplyResponses[1:]
 
 	return nextResponse.SubmitCommandResponse, nextResponse.Error
 }
 
-func (m *FakeMetastructure) DestroyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error) {
+func (m *FakeMetastructure) DestroyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string, subject string, subjectName string) (*apimodel.SubmitCommandResponse, error) {
+	m.RecordedDestroySubjects = append(m.RecordedDestroySubjects, RecordedSubject{Subject: subject, SubjectName: subjectName})
 	nextResponse := m.DestroyResponses[0]
 	m.DestroyResponses = m.DestroyResponses[1:]
 
 	return nextResponse.SubmitCommandResponse, nextResponse.Error
 }
 
-func (m *FakeMetastructure) DestroyByQuery(query string, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error) {
+func (m *FakeMetastructure) DestroyByQuery(query string, config *config.FormaCommandConfig, clientID string, subject string, subjectName string) (*apimodel.SubmitCommandResponse, error) {
+	m.RecordedDestroyByQuerySubjects = append(m.RecordedDestroyByQuerySubjects, RecordedSubject{Subject: subject, SubjectName: subjectName})
 	nextResponse := m.DestroyResponses[0]
 	m.DestroyResponses = m.DestroyResponses[1:]
 
@@ -255,7 +274,8 @@ func (m *FakeMetastructure) ForceReap() error {
 	return nil
 }
 
-func (m *FakeMetastructure) ForceAutoReconcile(stackLabel string) (*apimodel.ForceReconcileResponse, error) {
+func (m *FakeMetastructure) ForceAutoReconcile(stackLabel string, subject string, subjectName string) (*apimodel.ForceReconcileResponse, error) {
+	m.RecordedReconcileSubjects = append(m.RecordedReconcileSubjects, RecordedSubject{Subject: subject, SubjectName: subjectName})
 	nextResponse := m.ReconcileResponses[0]
 	m.ReconcileResponses = m.ReconcileResponses[1:]
 

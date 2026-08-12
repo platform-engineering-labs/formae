@@ -234,7 +234,7 @@ func TestSynchronizer_SecretConsumerOutOfBandDrift(t *testing.T) {
 		}
 
 		// ───────────────────────── STEP 1: APPLY ─────────────────────────
-		_, err = m.ApplyForma(buildForma("v1"), &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id")
+		_, err = m.ApplyForma(buildForma("v1"), &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
 		require.NoError(t, err)
 		waitForApplyComplete(t, m)
 		t.Log("########## STEP 1: initial apply (S.secret=v1, R.consumes=$res->S.secret) ##########")
@@ -292,7 +292,7 @@ func TestSynchronizer_SecretConsumerOutOfBandDrift(t *testing.T) {
 
 		// ─────── STEP 3: reconcile SAME forma (desired S=v1) ──────────────
 		t.Log("########## STEP 3: reconcile re-apply SAME forma (desired S.secret=v1) ##########")
-		_, err3 := m.ApplyForma(buildForma("v1"), &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id")
+		_, err3 := m.ApplyForma(buildForma("v1"), &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
 		// Plain reconcile with the OLD desired (v1) is rejected because the OOB drift
 		// (S.secret is now v2 at rest) makes the stack "modified since the last
 		// reconcile". This is legitimate drift protection — desired v1 genuinely
@@ -315,7 +315,7 @@ func TestSynchronizer_SecretConsumerOutOfBandDrift(t *testing.T) {
 		updateReceived = map[string]json.RawMessage{} // isolate this apply's writes
 		mu.Unlock()
 		t.Log("########## STEP 4a: absorb via PLAIN reconcile — desired S.secret=v2 ##########")
-		_, err4 := m.ApplyForma(buildForma("v2"), &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id")
+		_, err4 := m.ApplyForma(buildForma("v2"), &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
 		// With R.consumes correctly hashed(v2) at rest, the absorbed desired (v2,
 		// matching the live/ingested value) is now accepted — R is no longer
 		// perpetually "unabsorbed", so the guard clears WITHOUT Force. A corrupted
@@ -512,7 +512,7 @@ func TestSynchronizer_SecretConsumer_ResEnvelope_OutOfBandDrift(t *testing.T) {
 		// starts as a plain opaque-secret-carrying field; we then rewrite it, at
 		// rest, into the STRUCTURED $res envelope that a non-translating path
 		// would have persisted.
-		_, err = m.ApplyForma(buildForma("v1"), &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id")
+		_, err = m.ApplyForma(buildForma("v1"), &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
 		require.NoError(t, err)
 		waitForApplyComplete(t, m)
 		dumpState("after STEP 1 apply")

@@ -102,7 +102,7 @@ func TestAutoReconciler_ReconcileAfterSyncChange(t *testing.T) {
 		// Apply the forma (initial reconcile)
 		m.ApplyForma(f, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test-client")
+		}, "test-client", "", "")
 
 		// Wait for the initial apply to complete
 		r := require.New(t)
@@ -193,7 +193,7 @@ func TestForceReconcile_RejectedWithoutPolicy(t *testing.T) {
 
 		m.ApplyForma(f, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test-client")
+		}, "test-client", "", "")
 
 		// Wait for the apply to complete
 		r := require.New(t)
@@ -208,7 +208,7 @@ func TestForceReconcile_RejectedWithoutPolicy(t *testing.T) {
 		)
 
 		// Attempt force-reconcile — should be rejected
-		resp, err := m.ForceAutoReconcile("no-policy-stack")
+		resp, err := m.ForceAutoReconcile("no-policy-stack", "", "")
 		r.Error(err, "ForceAutoReconcile should return an error when no auto-reconcile policy is attached")
 		r.Nil(resp)
 
@@ -309,7 +309,7 @@ func TestAutoReconciler_RetriesFailedUpdate(t *testing.T) {
 
 		m.ApplyForma(f, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test-client")
+		}, "test-client", "", "")
 
 		r := require.New(t)
 
@@ -458,7 +458,7 @@ func TestAutoReconciler_RetriesFailureAndRevertsOOBDriftSimultaneously(t *testin
 			},
 			Targets: targets,
 		}
-		m.ApplyForma(f1, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client")
+		m.ApplyForma(f1, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client", "", "")
 
 		r := require.New(t)
 		r.Eventually(func() bool {
@@ -477,7 +477,7 @@ func TestAutoReconciler_RetriesFailureAndRevertsOOBDriftSimultaneously(t *testin
 			},
 			Targets: targets,
 		}
-		m.ApplyForma(f2, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client")
+		m.ApplyForma(f2, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client", "", "")
 
 		// Wait for the second reconcile to settle: A and C at v2, B still at v1.
 		r.Eventually(func() bool {
@@ -636,7 +636,7 @@ func TestAutoReconciler_RevertsInterveningPatch(t *testing.T) {
 			Resources: []pkgmodel.Resource{resourceTemplate(v1)},
 			Targets:   targets,
 		}
-		m.ApplyForma(f1, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client")
+		m.ApplyForma(f1, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client", "", "")
 
 		r := require.New(t)
 		r.Eventually(func() bool {
@@ -655,7 +655,7 @@ func TestAutoReconciler_RevertsInterveningPatch(t *testing.T) {
 			Resources: []pkgmodel.Resource{resourceTemplate(vPatched)},
 			Targets:   targets,
 		}
-		m.ApplyForma(fPatch, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModePatch}, "test-client")
+		m.ApplyForma(fPatch, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModePatch}, "test-client", "", "")
 
 		r.Eventually(func() bool {
 			resources, err := m.Datastore.LoadResourcesByStack("patch-undo-stack")
@@ -765,7 +765,7 @@ func TestAutoReconciler_PreservesUnchangedResourcesAfterPartialFailure(t *testin
 			},
 			Targets: targets,
 		}
-		m.ApplyForma(f1, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client")
+		m.ApplyForma(f1, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client", "", "")
 
 		r := require.New(t)
 		r.Eventually(func() bool {
@@ -784,7 +784,7 @@ func TestAutoReconciler_PreservesUnchangedResourcesAfterPartialFailure(t *testin
 			},
 			Targets: targets,
 		}
-		m.ApplyForma(f2, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client")
+		m.ApplyForma(f2, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client", "", "")
 
 		// Wait for the second reconcile to settle: A still at v1 (its
 		// update failed), B and C still at v1 (untouched). All three
@@ -915,7 +915,7 @@ func TestAutoReconciler_DestroyedResourcesStayDestroyed(t *testing.T) {
 			},
 			Targets: targets,
 		}
-		m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client")
+		m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client", "", "")
 
 		r := require.New(t)
 		r.Eventually(func() bool {
@@ -932,7 +932,7 @@ func TestAutoReconciler_DestroyedResourcesStayDestroyed(t *testing.T) {
 		createCount.Store(0)
 
 		// Phase 2: destroy the stack.
-		m.DestroyForma(f, &config.FormaCommandConfig{}, "test-client")
+		m.DestroyForma(f, &config.FormaCommandConfig{}, "test-client", "", "")
 		r.Eventually(func() bool {
 			resources, err := m.Datastore.LoadResourcesByStack("destroy-stack")
 			return err == nil && len(resources) == 0

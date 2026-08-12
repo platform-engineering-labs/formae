@@ -233,6 +233,8 @@ func TestReapCandidates_SkipsTargetWithIncompleteCommand(t *testing.T) {
 		},
 		nil, nil, nil,
 		"test-client",
+		"",
+		"",
 		forma_command.SourceUser,
 	)
 	require.NoError(t, ds.StoreFormaCommand(cmd, cmd.ID))

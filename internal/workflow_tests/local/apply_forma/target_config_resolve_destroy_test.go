@@ -148,7 +148,7 @@ func TestTargetConfigResolve_DestroyResolvesSecretBackedTarget(t *testing.T) {
 		}
 
 		// ── Apply: stand up all three pieces ──────────────────────────────────────
-		_, err = m.ApplyForma(forma, defaultApplyConfig(), "test-client-id")
+		_, err = m.ApplyForma(forma, defaultApplyConfig(), "test-client-id", "", "")
 		require.NoError(t, err)
 		waitForApplyComplete(t, m)
 
@@ -173,7 +173,7 @@ func TestTargetConfigResolve_DestroyResolvesSecretBackedTarget(t *testing.T) {
 		// suppressing the synthetic Resolve — so the bucket Delete received the raw
 		// $ref. After the fix the synthetic Resolve is always synthesized when the
 		// persisted config carries opaque refs, regardless of the Delete TU.
-		_, err = m.DestroyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id")
+		_, err = m.DestroyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
 		require.NoError(t, err)
 		waitForApplyComplete(t, m)
 

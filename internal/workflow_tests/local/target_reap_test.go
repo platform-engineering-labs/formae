@@ -140,7 +140,7 @@ func TestAutoReconciler_ReapedTargetNotResurrected(t *testing.T) {
 			},
 			Targets: targets,
 		}
-		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client")
+		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client", "", "")
 		r.NoError(err)
 
 		r.Eventually(func() bool {
@@ -312,7 +312,7 @@ func TestDestroyForma_ReapedTargetCleansUpTombstones(t *testing.T) {
 			},
 			Targets: []pkgmodel.Target{{Label: "reap-destroy-target"}},
 		}
-		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client")
+		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client", "", "")
 		r.NoError(err)
 
 		r.Eventually(func() bool {
@@ -331,7 +331,7 @@ func TestDestroyForma_ReapedTargetCleansUpTombstones(t *testing.T) {
 		targetOnly := &pkgmodel.Forma{
 			Targets: []pkgmodel.Target{{Label: "reap-destroy-target"}},
 		}
-		_, err = m.DestroyForma(targetOnly, &config.FormaCommandConfig{}, "test-client")
+		_, err = m.DestroyForma(targetOnly, &config.FormaCommandConfig{}, "test-client", "", "")
 		r.NoError(err)
 
 		r.Eventually(func() bool {
@@ -384,7 +384,7 @@ func TestTargetReap_NestedTargetsReapIndependently(t *testing.T) {
 			},
 			Targets: []pkgmodel.Target{{Label: "nested-parent-target"}},
 		}
-		_, err = m.ApplyForma(parentForma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client")
+		_, err = m.ApplyForma(parentForma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client", "", "")
 		r.NoError(err)
 		r.Eventually(func() bool {
 			resources, err := m.Datastore.LoadResourcesByStack("nested-stack")

@@ -154,7 +154,7 @@ func TestDiscoveryResolve_TargetConfigOpaqueRefIsResolvedBeforeList(t *testing.T
 			},
 		}
 
-		_, err = m.ApplyForma(applyOne, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "discovery-resolve-client")
+		_, err = m.ApplyForma(applyOne, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "discovery-resolve-client", "", "")
 		require.NoError(t, err)
 
 		// Wait for the apply to complete before triggering discovery.

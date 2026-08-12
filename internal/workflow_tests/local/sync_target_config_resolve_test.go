@@ -175,7 +175,7 @@ func TestSyncResolve_TargetConfigOpaqueRefIsResolvedBeforeRead(t *testing.T) {
 			},
 		}
 
-		_, err = m.ApplyForma(applyOne, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "sync-resolve-client")
+		_, err = m.ApplyForma(applyOne, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "sync-resolve-client", "", "")
 		require.NoError(t, err)
 		waitForApplyComplete(t, m)
 

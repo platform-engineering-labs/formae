@@ -425,6 +425,12 @@ func TestDatastore(t *testing.T) {
 				)
 				return err
 			},
+			NullFormaCommandSubjectForTest: func(commandID string) error {
+				_, err := d.Pool().Exec(context.Background(),
+					`UPDATE forma_commands SET subject = NULL, subject_name = NULL WHERE command_id = $1`, commandID,
+				)
+				return err
+			},
 		}
 	})
 }

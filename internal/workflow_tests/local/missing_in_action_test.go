@@ -154,7 +154,7 @@ func TestSlowHeartbeatIsNotDeclaredMissingInAction(t *testing.T) {
 
 		resp, err := m.ApplyForma(forma, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test-client")
+		}, "test-client", "", "")
 		require.NoError(t, err)
 
 		// A failed resource update is terminal, so reaching Success is proof the
@@ -230,7 +230,7 @@ func TestFailedStatusCheckReportsThePluginError(t *testing.T) {
 
 		resp, err := m.ApplyForma(forma, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test-client")
+		}, "test-client", "", "")
 		require.NoError(t, err)
 
 		require.Eventually(t, func() bool {

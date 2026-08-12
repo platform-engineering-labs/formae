@@ -159,7 +159,7 @@ func TestNonEnrichingSecretGuard_DestroySucceeds(t *testing.T) {
 			Targets: []pkgmodel.Target{{Label: "test-target", Namespace: "test-namespace"}},
 		}
 
-		_, err = m.ApplyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id")
+		_, err = m.ApplyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
 		require.NoError(t, err)
 		waitForApplyComplete(t, m)
 
@@ -176,7 +176,7 @@ func TestNonEnrichingSecretGuard_DestroySucceeds(t *testing.T) {
 		assert.Contains(t, string(resources[0].Properties), hashedMarker,
 			"precondition: the secret must be hashed at rest before destroy")
 
-		_, err = m.DestroyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id")
+		_, err = m.DestroyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
 		require.NoError(t, err)
 		waitForApplyComplete(t, m)
 
@@ -257,7 +257,7 @@ func TestNonEnrichingSecretGuard_UpdateNonSecretFieldSucceeds(t *testing.T) {
 			Targets: []pkgmodel.Target{{Label: "test-target", Namespace: "test-namespace"}},
 		}
 
-		_, err = m.ApplyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id")
+		_, err = m.ApplyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
 		require.NoError(t, err)
 		waitForApplyComplete(t, m)
 
@@ -290,7 +290,7 @@ func TestNonEnrichingSecretGuard_UpdateNonSecretFieldSucceeds(t *testing.T) {
 			}},
 			Targets: []pkgmodel.Target{},
 		}
-		_, err = m.ApplyForma(formaUpdate, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id")
+		_, err = m.ApplyForma(formaUpdate, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
 		require.NoError(t, err)
 		waitForApplyComplete(t, m)
 

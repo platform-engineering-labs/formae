@@ -73,6 +73,9 @@ func TestDatastore(t *testing.T) {
 			NullResourceUpdateModifiedTsForTest: func(ksuid string) error {
 				return d.NullResourceUpdateModifiedTsForTesting(ksuid)
 			},
+			NullFormaCommandSubjectForTest: func(commandID string) error {
+				return d.NullFormaCommandSubjectForTesting(commandID)
+			},
 		}
 	})
 }

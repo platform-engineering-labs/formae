@@ -158,7 +158,7 @@ func TestTargetConfigResolve_UnchangedTargetWithOpaqueRef(t *testing.T) {
 			},
 		}
 
-		_, err = m.ApplyForma(applyOne, defaultApplyConfig(), "test-client-id")
+		_, err = m.ApplyForma(applyOne, defaultApplyConfig(), "test-client-id", "", "")
 		require.NoError(t, err)
 		waitForApplyComplete(t, m)
 
@@ -210,7 +210,7 @@ func TestTargetConfigResolve_UnchangedTargetWithOpaqueRef(t *testing.T) {
 			Targets: []pkgmodel.Target{},
 		}
 
-		_, err = m.ApplyForma(applyTwo, defaultApplyConfig(), "test-client-id")
+		_, err = m.ApplyForma(applyTwo, defaultApplyConfig(), "test-client-id", "", "")
 		require.NoError(t, err)
 		waitForApplyComplete(t, m)
 

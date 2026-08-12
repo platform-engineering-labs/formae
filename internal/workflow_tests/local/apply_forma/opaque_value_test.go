@@ -69,7 +69,7 @@ func TestMetastructure_ApplyFormaHashesOpaqueValues(t *testing.T) {
 
 		_, err = m.ApplyForma(forma, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test-client-id")
+		}, "test-client-id", "", "")
 		require.NoError(t, err)
 
 		assert.Eventually(t, func() bool {

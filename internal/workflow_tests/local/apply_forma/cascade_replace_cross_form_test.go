@@ -171,7 +171,7 @@ func TestApplyForma_ParentReplace_CrossFormRef_DependentIsRepointed(t *testing.T
 
 		_, err = m.ApplyForma(formaFor("parent-v1"), &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test")
+		}, "test", "", "")
 		require.NoError(t, err)
 
 		require.Eventually(t, func() bool {
@@ -208,7 +208,7 @@ func TestApplyForma_ParentReplace_CrossFormRef_DependentIsRepointed(t *testing.T
 
 		_, err = m.ApplyForma(formaFor("parent-v2"), &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test")
+		}, "test", "", "")
 		require.NoError(t, err)
 
 		require.Eventually(t, func() bool {
