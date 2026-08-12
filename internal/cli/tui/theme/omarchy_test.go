@@ -83,8 +83,38 @@ func TestMapOmarchyPalette(t *testing.T) {
 	if got := p.Warning; got == nil || got.Dark != "#e0af68" {
 		t.Errorf("Warning = %+v, want #e0af68 (color3)", got)
 	}
-	if got := p.Selection; got == nil || got.Dark != "#33467c" {
-		t.Errorf("Selection = %+v, want #33467c", got)
+	// Derived from the background and accent (bandMix), not selection_background
+	// — see TestMapOmarchyPalette_SelectionBandIsDerivedFromBackground.
+	if got := p.Selection; got == nil || got.Dark != "#2f3954" {
+		t.Errorf("Selection = %+v, want #2f3954", got)
+	}
+}
+
+// TestMapOmarchyPalette_SelectionBandIsDerivedFromBackground covers a
+// palette where selection_background carries the same color as foreground —
+// a real Omarchy theme shape. formae keeps each cell's own foreground on the
+// cursor row, so mapping selection_background straight onto the band would
+// put the band directly behind text of the identical color: 1:1 contrast,
+// unreadable. The band must be derived from the background instead.
+func TestMapOmarchyPalette_SelectionBandIsDerivedFromBackground(t *testing.T) {
+	const reportedForeground = "#FAFCFB"
+	oc := omarchyColors{
+		Background:          "#1d2021",
+		Foreground:          reportedForeground,
+		Accent:              "#fe8019",
+		SelectionForeground: "#1d2021",
+		SelectionBackground: reportedForeground,
+	}
+	p := mapOmarchyPalette(oc)
+
+	if p.Selection == nil {
+		t.Fatal("Selection is nil")
+	}
+	if p.Selection.Dark == reportedForeground {
+		t.Errorf("Selection.Dark = %q, must not be the selection_background/foreground value", p.Selection.Dark)
+	}
+	if got := contrast(p.Selection.Dark, p.TextPrimary.Dark); got < minBandText {
+		t.Errorf("contrast(band, foreground) = %v, want >= %v", got, minBandText)
 	}
 }
 
