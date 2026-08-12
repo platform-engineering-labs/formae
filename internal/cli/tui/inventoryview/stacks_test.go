@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/platform-engineering-labs/formae/internal/datastore"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
@@ -131,6 +132,39 @@ func TestStackRow_Cells_TTLPolicy_AbsoluteMalformed(t *testing.T) {
 	}
 	got := stackRow(s, stacksNow)
 	assert.Equal(t, "TTL", got.cells[2])
+}
+
+// The absolute arm must be selected from the policy form the store actually
+// round-trips, not from hand-written JSON. The fixture is built by walking that
+// chain — the stored policy_data payload, read back the way a backend reads it,
+// then marshalled as the inventory response carries it — so a change to the
+// key the model writes breaks this test instead of silently falling through to
+// the relative arm. It covers store shape → read → marshal → render and stops
+// short of the HTTP hop, which marshals and decodes the same type on both sides.
+func TestStackRow_Cells_TTLPolicy_AbsoluteThroughStoredForm(t *testing.T) {
+	policy := &pkgmodel.TTLPolicy{
+		Type:         "ttl",
+		Label:        "trial-expiry",
+		ExpiresAt:    stacksNow.Add(23 * time.Hour),
+		OnDependents: "abort",
+	}
+
+	storedJSON, err := json.Marshal(datastore.TTLPolicyData(policy))
+	require.NoError(t, err)
+	stored, err := datastore.TTLPolicyFromData(policy.Label, string(storedJSON), "stack-1")
+	require.NoError(t, err)
+	policyJSON, err := json.Marshal(stored)
+	require.NoError(t, err)
+
+	s := &pkgmodel.Stack{
+		Label: "trial-stack",
+		// Long past, so a mis-selected arm renders "0s (expired)" rather than
+		// merely a different remaining time.
+		CreatedAt: stacksNow.Add(-100 * time.Hour),
+		Policies:  []json.RawMessage{policyJSON},
+	}
+	got := stackRow(s, stacksNow)
+	assert.Equal(t, "TTL: expires in 23h0m (trial-expiry)", got.cells[2])
 }
 
 func TestStackRow_Cells_TTLPolicy_NoCreatedAt(t *testing.T) {
