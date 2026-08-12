@@ -7,13 +7,16 @@
 package pkl
 
 import (
+	"context"
 	"encoding/json"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 
+	pklgo "github.com/apple/pkl-go/pkl"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -324,6 +327,166 @@ func TestFormatVersionsForProperty_DropsBlankEntries(t *testing.T) {
 		"":    "v9",
 		"aws": "",
 	}))
+}
+
+func TestFormatSubdirsForProperty_Empty(t *testing.T) {
+	assert.Equal(t, "", formatSubdirsForProperty(nil))
+	assert.Equal(t, "", formatSubdirsForProperty(map[string][]string{}))
+	assert.Equal(t, "", formatSubdirsForProperty(map[string][]string{"k8s": {}}),
+		"a package with no non-version subdirs contributes nothing")
+}
+
+func TestFormatSubdirsForProperty_SingleEntry(t *testing.T) {
+	assert.Equal(t, "k8s=helm", formatSubdirsForProperty(map[string][]string{"k8s": {"helm"}}))
+}
+
+func TestFormatSubdirsForProperty_StableOrderAcrossKeysAndDirs(t *testing.T) {
+	// Packages sorted, dirs sorted within a package: the property string is
+	// deterministic so imports.pkl output is reproducible.
+	assert.Equal(t, "aws=extras,k8s=crds;helm", formatSubdirsForProperty(map[string][]string{
+		"k8s": {"helm", "crds"},
+		"aws": {"extras"},
+	}))
+}
+
+func TestFormatSubdirsForProperty_LowercasesNamespace(t *testing.T) {
+	assert.Equal(t, "k8s=helm", formatSubdirsForProperty(map[string][]string{"K8S": {"helm"}}),
+		"namespace is lowercased so ImportsGenerator's pkg-name comparison hits regardless of casing")
+}
+
+func TestFormatSubdirsForProperty_DropsBlankEntries(t *testing.T) {
+	assert.Equal(t, "k8s=helm", formatSubdirsForProperty(map[string][]string{
+		"k8s": {"helm", ""},
+		"":    {"nope"},
+	}))
+}
+
+// A pinned version narrows the import glob to that subtree; version-independent
+// resource dirs alongside it (k8s' helm/) must be reported so ImportsGenerator
+// can glob them too.
+func TestResolveSchemaSubdirs_ReportsNonVersionDirsForPinnedPackage(t *testing.T) {
+	tmpDir := installVersionedPlugin(t, "K8S", "k8s", []string{"v1.30", "v1.33", "helm"})
+
+	got := resolveSchemaSubdirs(map[string]string{"k8s": "v1.33"}, &schema.SerializeOptions{
+		LocalPluginDir: tmpDir,
+	})
+	assert.Equal(t, map[string][]string{"k8s": {"helm"}}, got)
+}
+
+func TestResolveSchemaSubdirs_NoVersionsIsNil(t *testing.T) {
+	tmpDir := installVersionedPlugin(t, "K8S", "k8s", []string{"v1.30", "helm"})
+
+	assert.Nil(t, resolveSchemaSubdirs(nil, &schema.SerializeOptions{LocalPluginDir: tmpDir}),
+		"nothing is narrowed without a pinned version, so the unrestricted glob already covers every subdir")
+}
+
+func TestResolveSchemaSubdirs_PurelyVersionedLayoutIsNil(t *testing.T) {
+	tmpDir := installVersionedPlugin(t, "K8S", "k8s", []string{"v1.30", "v1.33"})
+
+	assert.Nil(t, resolveSchemaSubdirs(map[string]string{"k8s": "v1.33"}, &schema.SerializeOptions{
+		LocalPluginDir: tmpDir,
+	}))
+}
+
+// --- ImportsGenerator glob emission ---
+//
+// Which globs get emitted for a given directory listing is the whole seam this
+// narrowing lives on, and it is pure text generation — no cluster, no installed
+// plugin. Evaluated against the checked-in generator project, whose deps
+// include "fakeaws" (requires `make gen-pkl` to have resolved PklProject).
+
+func evalImportsGenerator(t *testing.T, props map[string]string) string {
+	t.Helper()
+	genDir, err := filepath.Abs("generator")
+	require.NoError(t, err)
+	evaluator, cleanup, err := newSafeProjectEvaluator(
+		context.Background(),
+		&url.URL{Scheme: "file", Path: genDir},
+		pklgo.PreconfiguredOptions,
+		func(opts *pklgo.EvaluatorOptions) {
+			opts.Logger = pklgo.NoopLogger
+			opts.Properties = props
+		},
+	)
+	require.NoError(t, err)
+	defer cleanup()
+
+	out, err := evaluator.EvaluateOutputText(
+		context.Background(),
+		pklgo.FileSource(filepath.Join(genDir, "ImportsGenerator.pkl")),
+	)
+	require.NoError(t, err)
+	return out
+}
+
+// The gap this closes: a resource module in a root-level subdirectory of a
+// version-pinned plugin matched neither the root-files glob nor the pinned
+// version glob, so its type was absent from the extract typeMap.
+//
+// Every narrowed directory needs BOTH "<dir>/*.pkl" and "<dir>/**/*.pkl" —
+// Pkl's "**" matches one or more intervening segments, so the "**" form alone
+// skips a module sitting directly in <dir>. Proven end-to-end in
+// serialize_versioned_subtree_test.go; asserted here per glob.
+func TestImportsGenerator_PinnedVersionAlsoGlobsNonVersionSubdirs(t *testing.T) {
+	got := evalImportsGenerator(t, map[string]string{
+		"schemaVersions": "fakeaws=v1.33",
+		"schemaSubdirs":  "fakeaws=helm",
+	})
+
+	assert.Contains(t, got, `...import*("@fakeaws/*.pkl")`)
+	assert.Contains(t, got, `...import*("@fakeaws/helm/*.pkl")`)
+	assert.Contains(t, got, `...import*("@fakeaws/helm/**/*.pkl")`)
+	assert.Contains(t, got, `...import*("@fakeaws/v1.33/*.pkl")`)
+	assert.Contains(t, got, `...import*("@fakeaws/v1.33/**/*.pkl")`)
+	assert.NotContains(t, got, `...import*("@fakeaws/**/*.pkl")`,
+		"the narrowing is load-bearing: a versioned plugin ships one near-identical "+
+			"copy of every type per minor, and ResourcesGenerator's last-writer-wins "+
+			"fold would otherwise pick an arbitrary minor's class")
+}
+
+// Multiple non-version subtrees each get their own pair of globs.
+func TestImportsGenerator_PinnedVersionGlobsEveryNonVersionSubdir(t *testing.T) {
+	got := evalImportsGenerator(t, map[string]string{
+		"schemaVersions": "fakeaws=v1.33",
+		"schemaSubdirs":  "fakeaws=crds;helm",
+	})
+
+	for _, glob := range []string{
+		`...import*("@fakeaws/crds/*.pkl")`,
+		`...import*("@fakeaws/crds/**/*.pkl")`,
+		`...import*("@fakeaws/helm/*.pkl")`,
+		`...import*("@fakeaws/helm/**/*.pkl")`,
+	} {
+		assert.Contains(t, got, glob)
+	}
+	assert.Less(t,
+		strings.Index(got, `...import*("@fakeaws/helm/**/*.pkl")`),
+		strings.Index(got, `...import*("@fakeaws/v1.33/*.pkl")`),
+		"the pinned version subtree is imported last so it wins ResourcesGenerator's "+
+			"last-writer-wins fold if a type is defined in both")
+}
+
+// A package with no non-version subdirs gets only the root and version globs.
+func TestImportsGenerator_PinnedVersionWithoutSubdirsIsUnchanged(t *testing.T) {
+	got := evalImportsGenerator(t, map[string]string{
+		"schemaVersions": "fakeaws=v1.33",
+	})
+
+	assert.Contains(t, got,
+		`["@fakeaws"] = new Mapping { ...import*("@fakeaws/*.pkl"); `+
+			`...import*("@fakeaws/v1.33/*.pkl"); ...import*("@fakeaws/v1.33/**/*.pkl") }`)
+}
+
+// An unpinned package keeps the unrestricted glob; subdirs listed for it are
+// redundant and must not add a second, overlapping import.
+func TestImportsGenerator_UnpinnedPackageIgnoresSubdirs(t *testing.T) {
+	got := evalImportsGenerator(t, map[string]string{
+		"schemaSubdirs": "fakeaws=helm",
+	})
+
+	assert.Contains(t, got,
+		`["@fakeaws"] = new Mapping { ...import*("@fakeaws/*.pkl"); ...import*("@fakeaws/**/*.pkl") }`)
+	assert.NotContains(t, got, `@fakeaws/helm/`)
 }
 
 // Regression: when caller pre-resolves an include as `local:k8s:<path>` (e.g.

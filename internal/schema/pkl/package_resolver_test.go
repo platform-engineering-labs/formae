@@ -493,6 +493,33 @@ func TestPackageResolver_SchemaManifest_VLetterDirsExcludedFromVersions(t *testi
 		"only v<digit> dirs are versions; 'vpcaccess' and 'validators' are not")
 }
 
+// A versioned plugin may also ship version-independent resource subtrees
+// (e.g. k8s' helm/, whose fields don't depend on the apiserver minor). Those
+// dirs are not versions, but the narrowed extract import glob still has to
+// reach them, so the manifest reports them alongside the version list.
+func TestPackageResolver_SchemaManifest_ReportsNonVersionDirs(t *testing.T) {
+	tmpDir := installVersionedPlugin(t, "K8S", "k8s",
+		[]string{"v1.30", "v1.33", "helm", "crds"})
+	resolver := NewPackageResolver().WithLocalSchemas(tmpDir)
+
+	m := resolver.SchemaManifestForNamespace("k8s")
+	require.NotNil(t, m)
+	assert.Equal(t, []string{"v1.30", "v1.33"}, m.Versions)
+	assert.Equal(t, []string{"crds", "helm"}, m.NonVersionDirs,
+		"non-version top-level subdirs are reported sorted so the pinned "+
+			"import glob can include them next to the version subtree")
+}
+
+// A purely versioned layout has no extra subtrees to import.
+func TestPackageResolver_SchemaManifest_NoNonVersionDirsIsEmpty(t *testing.T) {
+	tmpDir := installVersionedPlugin(t, "K8S", "k8s", []string{"v1.30", "v1.33"})
+	resolver := NewPackageResolver().WithLocalSchemas(tmpDir)
+
+	m := resolver.SchemaManifestForNamespace("k8s")
+	require.NotNil(t, m)
+	assert.Empty(t, m.NonVersionDirs)
+}
+
 func TestPackageResolver_WithLocalSchemas_FollowsSymlinkedPluginDir(t *testing.T) {
 	wrapperDir := t.TempDir()
 	systemRoot := t.TempDir()

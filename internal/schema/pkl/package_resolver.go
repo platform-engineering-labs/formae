@@ -21,6 +21,11 @@ import (
 type SchemaManifest struct {
 	Versions []string
 	Default  string
+	// NonVersionDirs are the remaining top-level subdirectories — resource
+	// subtrees that are deliberately version-independent (e.g. k8s' helm/).
+	// Pinning a version narrows the extract import glob to `<ver>/**`, which
+	// would skip these, so callers must glob them explicitly. Sorted.
+	NonVersionDirs []string
 }
 
 // Package represents a PKL schema package dependency
@@ -292,19 +297,26 @@ func (r *PackageResolver) SchemaManifestForNamespace(namespace string) *SchemaMa
 	if err != nil {
 		return nil
 	}
-	var versions []string
+	var versions, nonVersionDirs []string
 	for _, e := range entries {
-		if e.IsDir() && isSchemaVersionDir(e.Name()) {
+		if !e.IsDir() {
+			continue
+		}
+		if isSchemaVersionDir(e.Name()) {
 			versions = append(versions, e.Name())
+		} else {
+			nonVersionDirs = append(nonVersionDirs, e.Name())
 		}
 	}
 	if len(versions) == 0 {
 		return nil
 	}
 	sortVersionKeys(versions)
+	sort.Strings(nonVersionDirs)
 	return &SchemaManifest{
-		Versions: versions,
-		Default:  versions[len(versions)-1],
+		Versions:       versions,
+		Default:        versions[len(versions)-1],
+		NonVersionDirs: nonVersionDirs,
 	}
 }
 
