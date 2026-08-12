@@ -155,6 +155,25 @@ func (rp *ResourcePersister) storeResourceUpdate(commandID string, resourceOpera
 
 	resourceUpdate.Operation = resourceOperationFromPluginOperation(resourceOperation, pluginOperation, relevantProgress)
 
+	// A NotFound Read is converted into a delete above so out-of-band deletions
+	// get absorbed. That conversion is only sound while the record still
+	// describes the object the Read probed. A sync cycle plans against a
+	// snapshot and can execute its reads minutes later, by which time an apply
+	// may have replaced the resource and moved the record onto a new identity;
+	// the Read then probes the old one, truthfully reports NotFound, and acting
+	// on it would tombstone a live resource's record. Dropping the update is the
+	// safe direction: the next sync cycle plans afresh, so a genuine deletion is
+	// still absorbed one cycle later.
+	if pluginOperation == pkgresource.OperationRead &&
+		resourceUpdate.Operation == resource_update.OperationDelete &&
+		rp.recordMovedSinceGenerated(resourceUpdate) {
+		slog.Debug("Skipping delete from a stale NotFound read; the record moved since the read was planned",
+			"resourceLabel", resourceUpdate.DesiredState.Label,
+			"stackLabel", resourceUpdate.StackLabel,
+			"probedNativeID", resourceUpdate.PriorState.NativeID)
+		return "", nil
+	}
+
 	// This can cause a validation error when the delete op is in fact valid.
 	// Subsequently no delete is persisted and the system doesn't work as expected.
 	// To avoid this, we skip the validation when the operation is a delete.
@@ -346,6 +365,42 @@ func formaCommandFromOperation(operation pkgresource.Operation) pkgmodel.Command
 	default:
 		return pkgmodel.CommandApply
 	}
+}
+
+// recordMovedSinceGenerated reports whether the stored record has been written
+// by another command since this update was generated. PriorState is the
+// snapshot the generator captured (see NewResourceUpdateForSyncWithFilter), so
+// comparing it against the current row answers "did the record move under me".
+// An absent snapshot identity or an absent row means there is nothing to
+// contradict, so the caller proceeds.
+func (rp *ResourcePersister) recordMovedSinceGenerated(resourceUpdate *resource_update.ResourceUpdate) bool {
+	generated := resourceUpdate.PriorState
+	if generated.NativeID == "" {
+		return false
+	}
+
+	current, err := rp.datastore.LoadResource(generated.URI())
+	if err != nil {
+		slog.Error("Failed to load resource while checking read staleness",
+			"resourceLabel", generated.Label,
+			"error", err)
+		return false
+	}
+	if current == nil || current.NativeID == "" {
+		return false
+	}
+
+	if current.NativeID != generated.NativeID {
+		return true
+	}
+
+	// The identity is unchanged, but the record can still have been rewritten
+	// under it — a replace recreates a resource whose native id is a stable
+	// name under that same name. Compare against PreviousProperties, the
+	// generator's copy of the stored properties; PriorState.Properties is not
+	// usable here, having been converted for Read use.
+	return len(resourceUpdate.PreviousProperties) > 0 &&
+		!util.JsonEqualRaw(current.Properties, resourceUpdate.PreviousProperties)
 }
 
 func resourceOperationFromPluginOperation(resourceOperation resource_update.OperationType, pluginOperation pkgresource.Operation, progress *plugin.TrackedProgress) resource_update.OperationType {
