@@ -102,3 +102,54 @@ func TestThemeDegrades(t *testing.T) {
 		}
 	}
 }
+
+// selectionRowProbe renders role as a Background the same way the inventory
+// view's own cursor-row probe does (highlightCursorRow), so this test's
+// escape-sequence comparison matches what that probe actually inspects.
+func selectionRowProbe(role lipgloss.AdaptiveColor) string {
+	return lipgloss.NewStyle().Background(role).Render("x")
+}
+
+// TestSelectionDiffersFromBaseWhenDegraded is a byte-identity guard for the
+// inventory view's cursor-row probe: highlightCursorRow locates the selected
+// row by searching each rendered line for the raw SGR escape sequence
+// Background(Selection) produces. If Selection and Base ever degraded to the
+// identical escape sequence at a given color profile, that search could match
+// the wrong row — or every row sharing the panel background — instead of
+// uniquely identifying the cursor row.
+//
+// This is a byte-identity check, not a claim about perceptual separation on a
+// real 16-color terminal: the terminal's actual color mapping is unknowable
+// to us. It only pins that termenv's own degradation keeps the two escape
+// sequences distinct at each profile the probe relies on.
+func TestSelectionDiffersFromBaseWhenDegraded(t *testing.T) {
+	// Save and restore the global lipgloss color profile so this test does not
+	// bleed into other tests running in the same process.
+	originalProfile := termenv.ColorProfile()
+	t.Cleanup(func() {
+		lipgloss.SetColorProfile(originalProfile)
+	})
+
+	profiles := []struct {
+		name    string
+		profile termenv.Profile
+	}{
+		{"ANSI256", termenv.ANSI256},
+		{"ANSI", termenv.ANSI},
+	}
+
+	for _, themeName := range builtinNames() {
+		th := New(themeName)
+		for _, prof := range profiles {
+			t.Run(themeName+"/"+prof.name, func(t *testing.T) {
+				lipgloss.SetColorProfile(prof.profile)
+
+				selection := selectionRowProbe(th.Palette.Selection)
+				base := selectionRowProbe(th.Palette.Base)
+
+				assert.NotEqual(t, base, selection,
+					"Selection and Base degrade to the identical escape sequence at %s — the inventory view's cursor-row probe could no longer tell them apart", prof.name)
+			})
+		}
+	}
+}
