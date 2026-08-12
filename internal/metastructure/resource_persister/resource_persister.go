@@ -371,8 +371,10 @@ func formaCommandFromOperation(operation pkgresource.Operation) pkgmodel.Command
 // by another command since this update was generated. PriorState is the
 // snapshot the generator captured (see NewResourceUpdateForSyncWithFilter), so
 // comparing it against the current row answers "did the record move under me".
-// An absent snapshot identity or an absent row means there is nothing to
-// contradict, so the caller proceeds.
+// An absent snapshot identity or an absent row means there is nothing for the
+// record to have moved away from, so the caller proceeds; a lookup that fails
+// is indeterminate and reports moved, so the delete is dropped rather than
+// risked.
 func (rp *ResourcePersister) recordMovedSinceGenerated(resourceUpdate *resource_update.ResourceUpdate) bool {
 	generated := resourceUpdate.PriorState
 	if generated.NativeID == "" {
@@ -381,10 +383,16 @@ func (rp *ResourcePersister) recordMovedSinceGenerated(resourceUpdate *resource_
 
 	current, err := rp.datastore.LoadResource(generated.URI())
 	if err != nil {
-		slog.Error("Failed to load resource while checking read staleness",
+		// Fail closed. Reporting "not moved" here would hand the delete to a
+		// caller that performs its own load; if that one succeeds it finds the
+		// replacement row and tombstones it, which is the data loss this guard
+		// exists to prevent. A lookup we could not complete is no evidence that
+		// the record still matches, so treat it as moved and let the next sync
+		// cycle decide on fresh state.
+		slog.Warn("Treating a NotFound read as stale: the staleness lookup failed",
 			"resourceLabel", generated.Label,
 			"error", err)
-		return false
+		return true
 	}
 	if current == nil || current.NativeID == "" {
 		return false

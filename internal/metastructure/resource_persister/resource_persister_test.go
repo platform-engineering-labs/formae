@@ -9,6 +9,7 @@ package resource_persister
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -2371,4 +2372,80 @@ func TestResourcePersister_StaleSyncReadDoesNotDeleteRecordChangedUnderSameNativ
 	resources, err := ds.LoadResourcesByStack("test-stack")
 	require.NoError(t, err)
 	require.Len(t, resources, 1, "a NotFound read must not delete a record rewritten since the read was planned")
+}
+
+// loadResourceFlakyDatastore fails the next LoadResource for one URI a single
+// time and serves every other call from the real datastore, reproducing a
+// transient lookup failure.
+type loadResourceFlakyDatastore struct {
+	datastore.Datastore
+	failURI pkgmodel.FormaeURI
+	armed   bool
+}
+
+func (d *loadResourceFlakyDatastore) LoadResource(uri pkgmodel.FormaeURI) (*pkgmodel.Resource, error) {
+	if d.armed && uri == d.failURI {
+		d.armed = false
+		return nil, errors.New("transient datastore failure")
+	}
+	return d.Datastore.LoadResource(uri)
+}
+
+func newResourcePersisterWithDatastore(t *testing.T, ds datastore.Datastore) (*unit.TestActor, gen.PID, error) {
+	env := map[gen.Env]any{
+		"Datastore": ds,
+		"DiscoveryConfig": pkgmodel.DiscoveryConfig{
+			Enabled:  true,
+			Interval: 10 * time.Minute,
+		},
+	}
+
+	actor, err := unit.Spawn(t, NewResourcePersister, unit.WithEnv(env))
+	if err != nil {
+		return nil, gen.PID{}, err
+	}
+
+	return actor, gen.PID{Node: "test", ID: 100}, nil
+}
+
+func TestResourcePersister_StaleReadGuardFailsClosedWhenLookupErrors(t *testing.T) {
+	realDatastore, err := newTestDatastore()
+	require.NoError(t, err)
+
+	flaky := &loadResourceFlakyDatastore{Datastore: realDatastore}
+	persister, sender, err := newResourcePersisterWithDatastore(t, flaky)
+	require.NoError(t, err)
+
+	atRevision4 := pkgmodel.Resource{
+		Label:      "task-def",
+		Type:       "FakeAWS::ECS::TaskDefinition",
+		Stack:      "test-stack",
+		Ksuid:      util.NewID(),
+		Managed:    true,
+		NativeID:   "arn:task-definition/app:4",
+		Properties: json.RawMessage(`{"memory":"512"}`),
+	}
+	persistCreateForTest(t, persister, sender, atRevision4, "cmd-plan")
+
+	atRevision5 := atRevision4
+	atRevision5.NativeID = "arn:task-definition/app:5"
+	atRevision5.Properties = json.RawMessage(`{"memory":"1024"}`)
+	persistCreateForTest(t, persister, sender, atRevision5, "cmd-apply")
+
+	// Fail the staleness lookup only. The delete path's own lookup still
+	// succeeds, so nothing else stops the tombstone from landing.
+	flaky.failURI = atRevision4.URI()
+	flaky.armed = true
+
+	result := persister.Call(sender, resource_update.PersistResourceUpdate{
+		CommandID:         "cmd-sync",
+		ResourceOperation: resource_update.OperationRead,
+		PluginOperation:   resource.OperationRead,
+		ResourceUpdate:    syncReadNotFoundForTest(atRevision4, "arn:task-definition/app:4"),
+	})
+	require.NoError(t, result.Error)
+
+	resources, err := realDatastore.LoadResourcesByStack("test-stack")
+	require.NoError(t, err)
+	require.Len(t, resources, 1, "a staleness lookup that errors must not let the delete through")
 }
