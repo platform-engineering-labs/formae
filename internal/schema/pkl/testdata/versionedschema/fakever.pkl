@@ -1,0 +1,41 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+/*
+ * FakeVer — a minimal plugin schema in the *versioned* layout: per-apiserver
+ * version subtrees (v1.0/, v1.1/) plus a deliberately version-independent
+ * resource subtree (helm/) alongside them.
+ *
+ * Exists so the extract pipeline can be driven over that structure without an
+ * installed plugin or a live cluster. Kept as small as a schema can be while
+ * still passing through gen.pkl.
+ */
+module fakever
+
+import "@formae/formae.pkl"
+import "types.pkl"
+
+typealias Tag = types.Tag
+
+open class Config {
+  hidden fixed type: String = "FakeVer"
+
+  @formae.ConfigFieldHint { createOnly = true }
+  hidden apiVersion: String?
+
+  fixed Type: String = type
+  fixed ApiVersion: String? = apiVersion
+}
+
+class FieldHint extends formae.FieldHint {}
+
+class ResourceHint extends formae.ResourceHint {
+  hidden outputKeyTransformation: (String) -> String = (it) -> it.capitalize()
+}
+
+class SubResourceHint extends formae.SubResourceHint {
+  hidden outputKeyTransformation: (String) -> String = (it) -> it.capitalize()
+}

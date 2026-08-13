@@ -21,6 +21,11 @@ import (
 type SchemaManifest struct {
 	Versions []string
 	Default  string
+	// NonVersionDirs are the remaining top-level subdirectories — resource
+	// subtrees that are deliberately version-independent (e.g. k8s' helm/).
+	// Pinning a version narrows the extract import glob to `<ver>/**`, which
+	// would skip these, so callers must glob them explicitly. Sorted.
+	NonVersionDirs []string
 }
 
 // Package represents a PKL schema package dependency
@@ -292,20 +297,38 @@ func (r *PackageResolver) SchemaManifestForNamespace(namespace string) *SchemaMa
 	if err != nil {
 		return nil
 	}
-	var versions []string
+	var versions, nonVersionDirs []string
 	for _, e := range entries {
-		if e.IsDir() && strings.HasPrefix(e.Name(), "v") {
+		if !e.IsDir() {
+			continue
+		}
+		if isSchemaVersionDir(e.Name()) {
 			versions = append(versions, e.Name())
+		} else {
+			nonVersionDirs = append(nonVersionDirs, e.Name())
 		}
 	}
 	if len(versions) == 0 {
 		return nil
 	}
 	sortVersionKeys(versions)
+	sort.Strings(nonVersionDirs)
 	return &SchemaManifest{
-		Versions: versions,
-		Default:  versions[len(versions)-1],
+		Versions:       versions,
+		Default:        versions[len(versions)-1],
+		NonVersionDirs: nonVersionDirs,
 	}
+}
+
+// isSchemaVersionDir reports whether a schema/pkl subdirectory name denotes a
+// schema version rather than a resource/service directory. Version keys are
+// always "v" followed by a digit (v1.30, v0.1.13, v2024-01-01). Service
+// directories that merely start with "v" — e.g. GCP's "vpcaccess" — are not
+// versions; treating one as a version narrows the extract import glob to that
+// single subtree and makes every other resource type fail with
+// "Cannot find key".
+func isSchemaVersionDir(name string) bool {
+	return len(name) >= 2 && name[0] == 'v' && name[1] >= '0' && name[1] <= '9'
 }
 
 // sortVersionKeys sorts in-place. When every key parses as semver,

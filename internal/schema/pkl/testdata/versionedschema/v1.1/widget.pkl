@@ -1,0 +1,29 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+/*
+ * FakeVer::Core::Widget as of v1.1 — same type as v1.0/widget.pkl, plus
+ * `replicas`. A forma pinned to v1.1 must resolve THIS module.
+ */
+module fakever.v1_1.widget
+
+import "@formae/formae.pkl"
+import "../fakever.pkl"
+
+const type = "FakeVer::Core::Widget"
+
+@fakever.ResourceHint {
+    type = module.type
+    identifier = "Name"
+    portable = true
+}
+open class Widget extends formae.Resource {
+    @fakever.FieldHint
+    name: String?
+
+    @fakever.FieldHint
+    replicas: Int?
+}

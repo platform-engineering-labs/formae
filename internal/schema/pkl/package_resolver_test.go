@@ -459,7 +459,65 @@ func TestPackageResolver_SchemaManifest_NonVersionDirsIgnored(t *testing.T) {
 	m := resolver.SchemaManifestForNamespace("k8s")
 	require.NotNil(t, m)
 	assert.Equal(t, []string{"v1.21", "v1.30", "v1.34"}, m.Versions,
-		"Only `v*` prefixed subdirs are treated as schema versions")
+		"Only `v<digit>` prefixed subdirs are treated as schema versions")
+}
+
+// Regression: a flat, unversioned plugin (services directly under
+// schema/pkl/) that happens to have a service directory whose name starts
+// with "v" — e.g. GCP's "vpcaccess" — must NOT be mistaken for a versioned
+// schema. Version keys always have a digit after the "v" (v1.30,
+// v2024-01-01); service names have a letter. Treating "vpcaccess" as a
+// version collapses the extract import glob to @gcp/vpcaccess/** and makes
+// every other resource type fail with `Cannot find key`.
+func TestPackageResolver_SchemaManifest_VPrefixedServiceDirIsNotAVersion(t *testing.T) {
+	tmpDir := installVersionedPlugin(t, "GCP", "gcp",
+		[]string{"compute", "storage", "vpcaccess"})
+	resolver := NewPackageResolver().WithLocalSchemas(tmpDir)
+
+	assert.Nil(t, resolver.SchemaManifestForNamespace("gcp"),
+		"a plugin with no v<digit> subdirs ships an unversioned schema; the "+
+			"v-prefixed service dir 'vpcaccess' is not a version, so the resolver "+
+			"must report no versions and let the unrestricted import glob fire")
+}
+
+// Real version subdirs and a v-prefixed service dir can coexist in principle;
+// only the digit-prefixed ones count as versions.
+func TestPackageResolver_SchemaManifest_VLetterDirsExcludedFromVersions(t *testing.T) {
+	tmpDir := installVersionedPlugin(t, "K8S", "k8s",
+		[]string{"v1.30", "vpcaccess", "validators"})
+	resolver := NewPackageResolver().WithLocalSchemas(tmpDir)
+
+	m := resolver.SchemaManifestForNamespace("k8s")
+	require.NotNil(t, m)
+	assert.Equal(t, []string{"v1.30"}, m.Versions,
+		"only v<digit> dirs are versions; 'vpcaccess' and 'validators' are not")
+}
+
+// A versioned plugin may also ship version-independent resource subtrees
+// (e.g. k8s' helm/, whose fields don't depend on the apiserver minor). Those
+// dirs are not versions, but the narrowed extract import glob still has to
+// reach them, so the manifest reports them alongside the version list.
+func TestPackageResolver_SchemaManifest_ReportsNonVersionDirs(t *testing.T) {
+	tmpDir := installVersionedPlugin(t, "K8S", "k8s",
+		[]string{"v1.30", "v1.33", "helm", "crds"})
+	resolver := NewPackageResolver().WithLocalSchemas(tmpDir)
+
+	m := resolver.SchemaManifestForNamespace("k8s")
+	require.NotNil(t, m)
+	assert.Equal(t, []string{"v1.30", "v1.33"}, m.Versions)
+	assert.Equal(t, []string{"crds", "helm"}, m.NonVersionDirs,
+		"non-version top-level subdirs are reported sorted so the pinned "+
+			"import glob can include them next to the version subtree")
+}
+
+// A purely versioned layout has no extra subtrees to import.
+func TestPackageResolver_SchemaManifest_NoNonVersionDirsIsEmpty(t *testing.T) {
+	tmpDir := installVersionedPlugin(t, "K8S", "k8s", []string{"v1.30", "v1.33"})
+	resolver := NewPackageResolver().WithLocalSchemas(tmpDir)
+
+	m := resolver.SchemaManifestForNamespace("k8s")
+	require.NotNil(t, m)
+	assert.Empty(t, m.NonVersionDirs)
 }
 
 func TestPackageResolver_WithLocalSchemas_FollowsSymlinkedPluginDir(t *testing.T) {

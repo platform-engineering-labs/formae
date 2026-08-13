@@ -1,0 +1,15 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module fakever.types
+
+open class Tag {
+    hidden key: String
+    hidden value: Any
+
+    fixed Key: String = key
+    fixed Value: Any = value
+}
