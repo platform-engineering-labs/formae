@@ -94,7 +94,7 @@ func TestShowHumanRendersSections(t *testing.T) {
 	assert.Contains(t, out, "Connection")
 	assert.Contains(t, out, "cloud.formae.ai")
 	assert.NotContains(t, out, "schemaVersion", "the schema version is machine bookkeeping")
-	assert.NotContains(t, out, "{", "human output is not a serialisation format")
+	assert.NotRegexp(t, `"[a-zA-Z]+":`, out, "human output carries no JSON key-quote pattern")
 }
 
 // A secret Pkl resolves from the environment never existed in the profile

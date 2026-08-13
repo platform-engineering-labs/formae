@@ -85,13 +85,6 @@ func sameOriginRedirectPolicy(endpoint string) resty.RedirectPolicy {
 					"and installation routing", want, got,
 			)
 		}
-		// Same origin: carry the original headers across, which is what
-		// resty's own policies do for a same-host redirect.
-		for k, v := range via[0].Header {
-			if _, exists := req.Header[k]; !exists {
-				req.Header[k] = v
-			}
-		}
 		return nil
 	})
 }

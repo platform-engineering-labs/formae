@@ -196,10 +196,10 @@ func datastoreView(d pkgmodel.DatastoreConfig, mask string) map[string]any {
 func artifactsView(a pkgmodel.ArtifactConfig, mask string) map[string]any {
 	repos := make([]any, 0, len(a.Repositories))
 	for _, r := range a.Repositories {
-		repos = append(repos, map[string]any{"uri": r.URI.String(), "type": string(r.Type)})
+		repos = append(repos, map[string]any{"uri": r.URI.Redacted(), "type": string(r.Type)})
 	}
 	return map[string]any{
-		"url":          a.URL.String(),
+		"url":          a.URL.Redacted(),
 		"repositories": repos,
 		"username":     maskIfSet(a.Username, mask),
 		"password":     maskIfSet(a.Password, mask),
