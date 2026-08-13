@@ -1,0 +1,14 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "formae:/Config.pkl"
+
+cli {
+    api {
+        url = "http://agent.example"
+        port = 8080
+    }
+}

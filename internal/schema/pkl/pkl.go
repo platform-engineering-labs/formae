@@ -74,6 +74,16 @@ func (p PKL) SupportsExtract() bool {
 }
 
 func (p PKL) FormaeConfig(path string) (*pkgmodel.Config, error) {
+	config, err := p.rawConfig(path)
+	if err != nil {
+		return nil, err
+	}
+	return translateConfig(config), nil
+}
+
+// rawConfig evaluates the Pkl configuration at path into the decode model,
+// without translating it into the runtime model.
+func (p PKL) rawConfig(path string) (*pklmodel.Config, error) {
 	formaeFs, err := fs.Sub(assets, "assets/formae")
 	if err != nil {
 		return nil, err
@@ -160,7 +170,7 @@ func (p PKL) FormaeConfig(path string) (*pkgmodel.Config, error) {
 		return nil, fmt.Errorf("failed to evaluate PKL configuration file '%s': %w", path, err)
 	}
 
-	return translateConfig(config), nil
+	return config, nil
 }
 
 func translateConfig(config *pklmodel.Config) *pkgmodel.Config {
@@ -250,10 +260,12 @@ func translateConfig(config *pklmodel.Config) *pkgmodel.Config {
 		},
 		Artifacts: translateArtifactConfig(&config.Artifacts),
 		Cli: pkgmodel.CliConfig{
-			API: pkgmodel.APIConfig{
-				URL:  config.Cli.API.URL,
-				Port: int(config.Cli.API.Port),
-			},
+			API: func() pkgmodel.APIConfig {
+				if config.Cli.API == nil {
+					return pkgmodel.APIConfig{URL: "http://localhost", Port: 49684}
+				}
+				return pkgmodel.APIConfig{URL: config.Cli.API.URL, Port: int(config.Cli.API.Port)}
+			}(),
 			DisableUsageReporting: config.Cli.DisableUsageReporting,
 			Auth:                  translateAuthConfig(&config.Cli.Auth),
 			Theme:                 config.Cli.Theme,
