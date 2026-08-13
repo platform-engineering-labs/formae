@@ -63,6 +63,7 @@ func ProfileCmd() *cobra.Command {
 	command.AddCommand(
 		newListCmd(),
 		newCurrentCmd(),
+		newShowCmd(),
 		newUseCmd(),
 		newSaveCmd(),
 		newCreateCmd(),
