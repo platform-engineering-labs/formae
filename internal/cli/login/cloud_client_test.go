@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -65,6 +66,7 @@ type capture struct {
 	mu       sync.Mutex
 	requests int
 	header   http.Header
+	method   string
 	path     string
 }
 
@@ -73,13 +75,14 @@ func (c *capture) record(r *http.Request) {
 	defer c.mu.Unlock()
 	c.requests++
 	c.header = r.Header.Clone()
+	c.method = r.Method
 	c.path = r.URL.Path
 }
 
-func (c *capture) snapshot() (int, http.Header, string) {
+func (c *capture) snapshot() (int, http.Header, string, string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.requests, c.header, c.path
+	return c.requests, c.header, c.method, c.path
 }
 
 // serveBody starts a server answering every request with the given status,
@@ -131,8 +134,9 @@ func TestListInstallations_SendsTheBearerAndNothingElse(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, snapshot.Authoritative)
 
-	requests, header, path := seen.snapshot()
+	requests, header, method, path := seen.snapshot()
 	require.Equal(t, 1, requests)
+	assert.Equal(t, http.MethodGet, method, "reading the caller's grants must not be a write")
 	assert.Equal(t, "/api/v1/me/installations", path)
 	assert.Equal(t, testBearer, header.Get("Authorization"))
 
@@ -159,10 +163,12 @@ func TestListInstallations_RefusesARedirectAndDoesNotForwardTheBearer(t *testing
 	assert.Empty(t, snapshot.Installations)
 	assert.False(t, snapshot.Authoritative)
 
-	requests, header, _ := targetSeen.snapshot()
+	requests, header, _, _ := targetSeen.snapshot()
 	assert.Zero(t, requests, "the redirect target must never be contacted")
 	assert.Empty(t, header.Get("Authorization"), "the bearer must not be forwarded")
 	assert.NotContains(t, err.Error(), "test-token-value", "the bearer must not appear in an error")
+	assert.Contains(t, err.Error(), fmt.Sprintf("to %q", target.URL+"/api/v1/me/installations"),
+		"the location the far end named is quoted, so it cannot rewrite the line it lands in")
 }
 
 // TestListInstallations_RejectsABodyOverTheCapBeforeParsing pins that the size
@@ -199,7 +205,8 @@ func TestListInstallations_RejectsABodyOverTheCapBeforeParsing(t *testing.T) {
 
 // TestListInstallations_AcceptsABodyExactlyAtTheCap pins the boundary from the
 // other side: the cap is the largest body the client will read, not one byte
-// less.
+// less. It also pins what makes the over-cap fixture above dangerous — read on
+// its own, that prefix is a complete, authoritative list.
 func TestListInstallations_AcceptsABodyExactlyAtTheCap(t *testing.T) {
 	srv, _ := serveBody(t, http.StatusOK, nil, paddedBody(t, maxResponseBytes))
 
@@ -207,17 +214,21 @@ func TestListInstallations_AcceptsABodyExactlyAtTheCap(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{testUUIDA}, installationIDs(snapshot.Installations))
+	assert.True(t, snapshot.Authoritative, "the padding must not be what decides authority")
 }
 
 // paddedBody returns a valid single-record envelope padded to exactly size
-// bytes with an extra top-level key.
+// bytes.
+//
+// The padding is trailing whitespace rather than an extra field, so the body
+// keeps its authority: a fixture that lost authority to its own padding could
+// not show what a truncated prefix costs, which is that it reads as a complete
+// answer.
 func paddedBody(t *testing.T, size int) string {
 	t.Helper()
-	head := `{"results":[` + marshalJSON(t, validInstallation(testUUIDA)) + `],"pad":"`
-	tail := `"}`
-	padding := size - len(head) - len(tail)
-	require.GreaterOrEqual(t, padding, 0)
-	return head + strings.Repeat("x", padding) + tail
+	body := `{"results":[` + marshalJSON(t, validInstallation(testUUIDA)) + `]}`
+	require.LessOrEqual(t, len(body), size)
+	return body + strings.Repeat(" ", size-len(body))
 }
 
 // TestListInstallations_RejectsMoreInstallationsThanTheCap pins that a body
@@ -357,20 +368,53 @@ func TestListInstallations_DecodesAWellFormedResponse(t *testing.T) {
 	}, snapshot.Installations[0])
 }
 
-// TestListInstallations_CanonicalisesTheEndpoint pins that an endpoint comes
-// back in the same spelling the ledger records a control plane in, so the two
-// compare equal as strings rather than by luck of spelling.
-func TestListInstallations_CanonicalisesTheEndpoint(t *testing.T) {
-	record := validInstallation(testUUIDA)
-	record["endpoint"] = "HTTPS://Cloud.Formae.IO:443/"
-	srv, _ := serveInstallations(t, record)
+// TestListInstallations_AcceptsAndCanonicalisesAnEndpoint pins the endpoints a
+// record may carry and the spelling they come back in. One origin gets one
+// representation, so two records naming it in different spellings are one
+// installation's endpoint and not two.
+//
+// The loopback row is the same rule the rest of the command applies to an
+// origin: a bearer sent over plain http can be read by anything on the path,
+// so http is confined to the hosts where there is no path off the machine. A
+// record naming one is a development endpoint, not a broken one.
+func TestListInstallations_AcceptsAndCanonicalisesAnEndpoint(t *testing.T) {
+	tests := []struct {
+		name     string
+		endpoint string
+		want     string
+	}{
+		{
+			name:     "a mixed-case https origin with a redundant port and trailing slash",
+			endpoint: "HTTPS://Cloud.Formae.IO:443/",
+			want:     testOrigin,
+		},
+		{
+			name:     "a loopback http origin",
+			endpoint: "http://127.0.0.1:9999",
+			want:     "http://127.0.0.1:9999",
+		},
+		{
+			name:     "a loopback http origin named by hostname",
+			endpoint: "HTTP://LocalHost:8080/",
+			want:     "http://localhost:8080",
+		},
+	}
 
-	snapshot, err := listFrom(t, srv)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			record := validInstallation(testUUIDA)
+			record["endpoint"] = tc.endpoint
+			srv, _ := serveInstallations(t, record)
 
-	require.NoError(t, err)
-	assert.True(t, snapshot.Authoritative)
-	require.Len(t, snapshot.Installations, 1)
-	assert.Equal(t, testOrigin, snapshot.Installations[0].Endpoint)
+			snapshot, err := listFrom(t, srv)
+
+			require.NoError(t, err)
+			assert.True(t, snapshot.Authoritative, "a usable endpoint costs the run nothing")
+			assert.Empty(t, snapshot.Warnings)
+			require.Len(t, snapshot.Installations, 1)
+			assert.Equal(t, tc.want, snapshot.Installations[0].Endpoint)
+		})
+	}
 }
 
 // TestListInstallations_AnEmptyArrayIsAnAuthoritativeEmptyList pins the one
@@ -433,6 +477,45 @@ func TestListInstallations_ARepeatedResultsKeyLosesAuthority(t *testing.T) {
 	assert.False(t, snapshot.Authoritative, "a list we may only have half of removes nothing")
 	require.NotEmpty(t, snapshot.Warnings)
 	assert.Contains(t, snapshot.Warnings[0], "results")
+}
+
+// TestListInstallations_TheEnvelopeWalkOnlyReadsTheTopLevel pins that the
+// token walk that reads the envelope reads the envelope and nothing else. It
+// decodes each member's value whole, so a record's own keys are never mistaken
+// for the response's: both rows are records that are present and identifiable,
+// and a run that can see them can still decide every installation's presence.
+func TestListInstallations_TheEnvelopeWalkOnlyReadsTheTopLevel(t *testing.T) {
+	record := marshalJSON(t, validInstallation(testUUIDA))
+	withField := func(field, value string) string {
+		return record[:len(record)-1] + `,` + strconv.Quote(field) + `:` + value + `}`
+	}
+
+	tests := []struct {
+		name   string
+		record string
+	}{
+		{
+			name:   "a key repeated inside a record",
+			record: withField("orgName", `"acme-inc"`),
+		},
+		{
+			name:   "a nested object whose key is the envelope's",
+			record: withField("features", `{"results":[{"beta":true}]}`),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, _ := serveBody(t, http.StatusOK, nil, `{"results":[`+tc.record+`]}`)
+
+			snapshot, err := listFrom(t, srv)
+
+			require.NoError(t, err)
+			assert.True(t, snapshot.Authoritative, "what a record carries says nothing about the list being complete")
+			assert.Empty(t, snapshot.Warnings)
+			assert.Equal(t, []string{testUUIDA}, installationIDs(snapshot.Installations))
+		})
+	}
 }
 
 // TestListInstallations_RefusesAnythingAfterTheTopLevelObject pins that the
@@ -643,6 +726,8 @@ func TestListInstallations_ATypeErrorInOneRecordDoesNotAbortTheBody(t *testing.T
 	assert.Equal(t, []string{testUUIDA, testUUIDC}, installationIDs(snapshot.Installations),
 		"the siblings of a wrongly typed record survive it")
 	require.Len(t, snapshot.Warnings, 1)
+	assert.Contains(t, snapshot.Warnings[0], `("`,
+		"the decode error is quoted, so text the far end reached cannot rewrite the line it lands in")
 }
 
 // TestListInstallations_WarningsAreBoundedAndLeakNothing pins what a warning

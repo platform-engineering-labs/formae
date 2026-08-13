@@ -68,12 +68,16 @@ const (
 	// answering the way its contract says it does.
 	maxInstallations = 500
 
-	// maxRecordBytes is a generous budget for one record, well above the size
-	// of the fields this client reads.
+	// maxRecordBytes is the per-record allowance the body cap is sized from: a
+	// generous budget, well above the size of the fields this client reads. No
+	// record is measured against it.
 	maxRecordBytes = 2 << 10
 
-	// maxResponseBytes bounds the body, and is derived from the two above so
-	// the byte cap can never refuse a response the record cap would accept.
+	// maxResponseBytes bounds the body as a resource limit, so a body is
+	// refused before anything parses it. Its size is the two above multiplied
+	// out, but nothing holds a record to maxRecordBytes: the two caps are
+	// independent bounds on the same response and either may be the one that
+	// trips.
 	maxResponseBytes = maxInstallations * maxRecordBytes
 
 	// maxWarnedRunes bounds any value from the response that a warning repeats
@@ -156,7 +160,7 @@ func newCloudClient(baseURL string) CloudClient {
 			// API has no legitimate reason to redirect, so any redirect is
 			// refused rather than filtered.
 			CheckRedirect: func(req *http.Request, _ []*http.Request) error {
-				return fmt.Errorf("%w to %s", errUnexpectedRedirect, clip(req.URL.Redacted(), maxWarnedRunes))
+				return fmt.Errorf("%w to %q", errUnexpectedRedirect, clip(req.URL.Redacted(), maxWarnedRunes))
 			},
 		},
 	}
@@ -400,7 +404,11 @@ func decodeInstallation(raw json.RawMessage) (Installation, error) {
 	// growing, not the response admitting it is partial.
 	var installation Installation
 	if err := json.Unmarshal(raw, &installation); err != nil {
-		return Installation{}, fmt.Errorf("it could not be read (%s)", clip(err.Error(), maxWarnedRunes))
+		// The decode error is quoted as well as clipped. encoding/json repeats
+		// the input literal back for a numeric target or a map key, so quoting
+		// keeps text the far end chose from rewriting the line around it the
+		// day a field on this struct stops being a string.
+		return Installation{}, fmt.Errorf("it could not be read (%q)", clip(err.Error(), maxWarnedRunes))
 	}
 	if !installationRE.MatchString(installation.InstallationID) {
 		// Without a canonical id the record cannot be matched against a
@@ -409,12 +417,15 @@ func decodeInstallation(raw json.RawMessage) (Installation, error) {
 	}
 	endpoint, err := canonicalOrigin(installation.Endpoint)
 	if err != nil {
-		return Installation{}, errors.New("its endpoint is not a bare https origin")
+		// The rule is the one every origin in this command is held to, so a
+		// record naming a loopback http endpoint is accepted like any other.
+		return Installation{}, errors.New(
+			"its endpoint is not a bare https origin, or a bare http one on a loopback host")
 	}
 
-	// The endpoint is stored canonically, in the same spelling the ledger
-	// records a control plane in, so two spellings of one origin compare equal
-	// as strings rather than by luck.
+	// The endpoint is stored canonically so that one origin has one
+	// representation: two records spelling the same endpoint differently
+	// describe one place to reach an installation, not two.
 	installation.Endpoint = endpoint
 	return installation, nil
 }
