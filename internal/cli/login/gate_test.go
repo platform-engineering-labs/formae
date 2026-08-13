@@ -87,6 +87,9 @@ type gateCase struct {
 	name string
 	conn pkgmodel.Connection
 	hdr  http.Header
+	// wantReason is the field or condition name the refusal must mention,
+	// following the decode test's wantField.
+	wantReason string
 }
 
 // refusalCases enumerates every shape that must not reach the control plane.
@@ -96,19 +99,22 @@ func refusalCases(t *testing.T) []gateCase {
 	t.Helper()
 	return []gateCase{
 		{
-			name: "no connection at all",
-			conn: nil,
-			hdr:  bearerHeader("Bearer " + testToken),
+			name:       "no connection at all",
+			conn:       nil,
+			hdr:        bearerHeader("Bearer " + testToken),
+			wantReason: "hosted connection",
 		},
 		{
-			name: "a typed nil hosted connection",
-			conn: (*pkgmodel.HostedConnection)(nil),
-			hdr:  bearerHeader("Bearer " + testToken),
+			name:       "a typed nil hosted connection",
+			conn:       (*pkgmodel.HostedConnection)(nil),
+			hdr:        bearerHeader("Bearer " + testToken),
+			wantReason: "hosted connection",
 		},
 		{
-			name: "a classic connection carrying our own oidc block",
-			conn: &pkgmodel.ClassicConnection{URL: "https://agent.example", Port: 443, Auth: oidcAuth(t, nil)},
-			hdr:  bearerHeader("Bearer " + testToken),
+			name:       "a classic connection carrying our own oidc block",
+			conn:       &pkgmodel.ClassicConnection{URL: "https://agent.example", Port: 443, Auth: oidcAuth(t, nil)},
+			hdr:        bearerHeader("Bearer " + testToken),
+			wantReason: "hosted connection",
 		},
 		{
 			name: "hosted with a basic-auth block",
@@ -117,142 +123,170 @@ func refusalCases(t *testing.T) []gateCase {
 				"username": "admin",
 				"password": testPassword,
 			})),
-			hdr: bearerHeader("Bearer " + testToken),
+			hdr:        bearerHeader("Bearer " + testToken),
+			wantReason: "oidc auth plugin in its type field",
 		},
 		{
-			name: "hosted with no auth block",
-			conn: hosted(nil),
-			hdr:  bearerHeader("Bearer " + testToken),
+			name:       "hosted with no auth block",
+			conn:       hosted(nil),
+			hdr:        bearerHeader("Bearer " + testToken),
+			wantReason: "carries no auth block",
 		},
 		{
-			name: "hosted with an empty auth block",
-			conn: hosted(rawAuth(t, map[string]any{})),
-			hdr:  bearerHeader("Bearer " + testToken),
+			name:       "hosted with an empty auth block",
+			conn:       hosted(rawAuth(t, map[string]any{})),
+			hdr:        bearerHeader("Bearer " + testToken),
+			wantReason: "oidc auth plugin in its type field",
 		},
 		{
-			name: "hosted with an auth block that is not an object",
-			conn: hosted(json.RawMessage(`["oidc"]`)),
-			hdr:  bearerHeader("Bearer " + testToken),
+			name:       "hosted with an auth block that is not an object",
+			conn:       hosted(json.RawMessage(`["oidc"]`)),
+			hdr:        bearerHeader("Bearer " + testToken),
+			wantReason: "JSON object of string fields",
 		},
 		{
-			name: "hosted with an auth block that is not JSON",
-			conn: hosted(json.RawMessage(`{`)),
-			hdr:  bearerHeader("Bearer " + testToken),
+			name:       "hosted with an auth block that is not JSON",
+			conn:       hosted(json.RawMessage(`{`)),
+			hdr:        bearerHeader("Bearer " + testToken),
+			wantReason: "JSON object of string fields",
 		},
 		{
-			name: "oidc against a foreign issuer",
-			conn: hosted(oidcAuth(t, map[string]any{"issuer": testOtherIssuer})),
-			hdr:  bearerHeader("Bearer " + testToken),
+			name:       "oidc against a foreign issuer",
+			conn:       hosted(oidcAuth(t, map[string]any{"issuer": testOtherIssuer})),
+			hdr:        bearerHeader("Bearer " + testToken),
+			wantReason: "issuer other than",
 		},
 		{
-			name: "oidc against an issuer that only shares our host's suffix",
-			conn: hosted(oidcAuth(t, map[string]any{"issuer": "https://evil-auth.formae.ai"})),
-			hdr:  bearerHeader("Bearer " + testToken),
+			name:       "oidc against an issuer that only shares our host's suffix",
+			conn:       hosted(oidcAuth(t, map[string]any{"issuer": "https://evil-auth.formae.ai"})),
+			hdr:        bearerHeader("Bearer " + testToken),
+			wantReason: "issuer other than",
 		},
 		{
-			name: "oidc with no issuer",
-			conn: hosted(oidcAuth(t, map[string]any{"issuer": nil})),
-			hdr:  bearerHeader("Bearer " + testToken),
+			name:       "oidc with no issuer",
+			conn:       hosted(oidcAuth(t, map[string]any{"issuer": nil})),
+			hdr:        bearerHeader("Bearer " + testToken),
+			wantReason: "usable issuer origin",
 		},
 		{
-			name: "oidc with an issuer that is not an origin",
-			conn: hosted(oidcAuth(t, map[string]any{"issuer": "auth.formae.ai"})),
-			hdr:  bearerHeader("Bearer " + testToken),
+			name:       "oidc with an issuer that is not an origin",
+			conn:       hosted(oidcAuth(t, map[string]any{"issuer": "auth.formae.ai"})),
+			hdr:        bearerHeader("Bearer " + testToken),
+			wantReason: "usable issuer origin",
 		},
 		{
-			name: "oidc with an issuer carrying a path",
-			conn: hosted(oidcAuth(t, map[string]any{"issuer": testIssuer + "/realms/formae"})),
-			hdr:  bearerHeader("Bearer " + testToken),
+			name:       "oidc with an issuer carrying a path",
+			conn:       hosted(oidcAuth(t, map[string]any{"issuer": testIssuer + "/realms/formae"})),
+			hdr:        bearerHeader("Bearer " + testToken),
+			wantReason: "usable issuer origin",
 		},
 		{
-			name: "the agent role",
-			conn: hosted(oidcAuth(t, map[string]any{"role": "agent"})),
-			hdr:  bearerHeader("Bearer " + testToken),
+			name:       "the agent role",
+			conn:       hosted(oidcAuth(t, map[string]any{"role": "agent"})),
+			hdr:        bearerHeader("Bearer " + testToken),
+			wantReason: "role other than",
 		},
 		{
-			name: "no role at all",
-			conn: hosted(oidcAuth(t, map[string]any{"role": nil})),
-			hdr:  bearerHeader("Bearer " + testToken),
+			name:       "no role at all",
+			conn:       hosted(oidcAuth(t, map[string]any{"role": nil})),
+			hdr:        bearerHeader("Bearer " + testToken),
+			wantReason: "sets no role",
 		},
 		{
-			name: "an empty role",
-			conn: hosted(oidcAuth(t, map[string]any{"role": ""})),
-			hdr:  bearerHeader("Bearer " + testToken),
+			name:       "an empty role",
+			conn:       hosted(oidcAuth(t, map[string]any{"role": ""})),
+			hdr:        bearerHeader("Bearer " + testToken),
+			wantReason: "sets no role",
 		},
 		{
-			name: "a role in another case",
-			conn: hosted(oidcAuth(t, map[string]any{"role": "CLI"})),
-			hdr:  bearerHeader("Bearer " + testToken),
+			name:       "a role in another case",
+			conn:       hosted(oidcAuth(t, map[string]any{"role": "CLI"})),
+			hdr:        bearerHeader("Bearer " + testToken),
+			wantReason: "role other than",
 		},
 		{
-			name: "another plugin's type",
-			conn: hosted(oidcAuth(t, map[string]any{"type": "basic"})),
-			hdr:  bearerHeader("Bearer " + testToken),
+			name:       "another plugin's type",
+			conn:       hosted(oidcAuth(t, map[string]any{"type": "basic"})),
+			hdr:        bearerHeader("Bearer " + testToken),
+			wantReason: "oidc auth plugin in its type field",
 		},
 		{
-			name: "no type at all",
-			conn: hosted(oidcAuth(t, map[string]any{"type": nil})),
-			hdr:  bearerHeader("Bearer " + testToken),
+			name:       "no type at all",
+			conn:       hosted(oidcAuth(t, map[string]any{"type": nil})),
+			hdr:        bearerHeader("Bearer " + testToken),
+			wantReason: "oidc auth plugin in its type field",
 		},
 		{
-			name: "a type in another case",
-			conn: hosted(oidcAuth(t, map[string]any{"type": "OIDC"})),
-			hdr:  bearerHeader("Bearer " + testToken),
+			name:       "a type in another case",
+			conn:       hosted(oidcAuth(t, map[string]any{"type": "OIDC"})),
+			hdr:        bearerHeader("Bearer " + testToken),
+			wantReason: "oidc auth plugin in its type field",
 		},
 		{
-			name: "clientId as a JSON number",
-			conn: hosted(oidcAuth(t, map[string]any{"clientId": 42})),
-			hdr:  bearerHeader("Bearer " + testToken),
+			name:       "clientId as a JSON number",
+			conn:       hosted(oidcAuth(t, map[string]any{"clientId": 42})),
+			hdr:        bearerHeader("Bearer " + testToken),
+			wantReason: "\"clientId\" field is not a string",
 		},
 		{
-			name: "scopes as a JSON array",
-			conn: hosted(oidcAuth(t, map[string]any{"scopes": []string{"openid", "profile"}})),
-			hdr:  bearerHeader("Bearer " + testToken),
+			name:       "scopes as a JSON array",
+			conn:       hosted(oidcAuth(t, map[string]any{"scopes": []string{"openid", "profile"}})),
+			hdr:        bearerHeader("Bearer " + testToken),
+			wantReason: "\"scopes\" field is not a string",
 		},
 		{
-			name: "type as a JSON number",
-			conn: hosted(oidcAuth(t, map[string]any{"type": 1})),
-			hdr:  bearerHeader("Bearer " + testToken),
+			name:       "type as a JSON number",
+			conn:       hosted(oidcAuth(t, map[string]any{"type": 1})),
+			hdr:        bearerHeader("Bearer " + testToken),
+			wantReason: "\"type\" field is not a string",
 		},
 		{
-			name: "a non-Bearer credential",
-			conn: hosted(oidcAuth(t, nil)),
-			hdr:  bearerHeader("Basic YWRtaW46" + testPassword),
+			name:       "a non-Bearer credential",
+			conn:       hosted(oidcAuth(t, nil)),
+			hdr:        bearerHeader("Basic YWRtaW46" + testPassword),
+			wantReason: "Bearer credential",
 		},
 		{
-			name: "the credential under a non-canonical key",
-			conn: hosted(oidcAuth(t, nil)),
-			hdr:  http.Header{"authorization": []string{"Bearer " + testToken}},
+			name:       "the credential under a non-canonical key",
+			conn:       hosted(oidcAuth(t, nil)),
+			hdr:        http.Header{"authorization": []string{"Bearer " + testToken}},
+			wantReason: "Bearer credential",
 		},
 		{
-			name: "the credential under another header entirely",
-			conn: hosted(oidcAuth(t, nil)),
-			hdr:  bearerHeaderNamed("X-Formae-Token", "Bearer "+testToken),
+			name:       "the credential under another header entirely",
+			conn:       hosted(oidcAuth(t, nil)),
+			hdr:        bearerHeaderNamed("X-Formae-Token", "Bearer "+testToken),
+			wantReason: "Bearer credential",
 		},
 		{
-			name: "no credential",
-			conn: hosted(oidcAuth(t, nil)),
-			hdr:  http.Header{},
+			name:       "no credential",
+			conn:       hosted(oidcAuth(t, nil)),
+			hdr:        http.Header{},
+			wantReason: "Bearer credential",
 		},
 		{
-			name: "a nil header",
-			conn: hosted(oidcAuth(t, nil)),
-			hdr:  nil,
+			name:       "a nil header",
+			conn:       hosted(oidcAuth(t, nil)),
+			hdr:        nil,
+			wantReason: "Bearer credential",
 		},
 		{
-			name: "an empty credential",
-			conn: hosted(oidcAuth(t, nil)),
-			hdr:  bearerHeader(""),
+			name:       "an empty credential",
+			conn:       hosted(oidcAuth(t, nil)),
+			hdr:        bearerHeader(""),
+			wantReason: "Bearer credential",
 		},
 		{
-			name: "a Bearer scheme with no token",
-			conn: hosted(oidcAuth(t, nil)),
-			hdr:  bearerHeader("Bearer"),
+			name:       "a Bearer scheme with no token",
+			conn:       hosted(oidcAuth(t, nil)),
+			hdr:        bearerHeader("Bearer"),
+			wantReason: "Bearer credential",
 		},
 		{
-			name: "a Bearer scheme with a blank token",
-			conn: hosted(oidcAuth(t, nil)),
-			hdr:  bearerHeader("Bearer   "),
+			name:       "a Bearer scheme with a blank token",
+			conn:       hosted(oidcAuth(t, nil)),
+			hdr:        bearerHeader("Bearer   "),
+			wantReason: "Bearer credential",
 		},
 	}
 }
@@ -339,6 +373,7 @@ func TestGateSync_Refuses(t *testing.T) {
 
 			assert.False(t, got.OK)
 			assert.NotEmpty(t, got.Reason, "a refusal explains itself to a user who has just signed in")
+			assert.Contains(t, got.Reason, tc.wantReason, "a refusal names the field or condition that failed")
 			assert.Empty(t, got.Bearer, "a refusal carries no credential")
 			assert.Equal(t, cliAuthBlock{}, got.Auth, "a refusal carries no block to render from")
 		})
@@ -348,7 +383,9 @@ func TestGateSync_Refuses(t *testing.T) {
 // TestGateSync_RefusalNeverRepeatsASecretFromTheAuthBlock pins that a refusal
 // names the field or condition that failed and never a value: the block that
 // failed the gate is exactly the one that may hold a credential for some other
-// system.
+// system. Formatting got with %+v now goes through gateResult.String, so this
+// also exercises that the redaction it does for a successful result does not
+// somehow make a refusal's Reason less careful about the same thing.
 func TestGateSync_RefusalNeverRepeatsASecretFromTheAuthBlock(t *testing.T) {
 	tests := []struct {
 		name string
@@ -393,6 +430,26 @@ func TestGateSync_RefusalNeverRepeatsASecretFromTheAuthBlock(t *testing.T) {
 			assert.NotContains(t, rendered, testOtherIssuer, "not even a non-secret value is repeated back")
 			assert.NotContains(t, rendered, testToken, "the credential never appears either")
 		})
+	}
+}
+
+// TestGateResult_StringNeverPrintsTheBearer pins the hazard the other test
+// cannot: every refusal already carries a zero Bearer, so it proves nothing
+// about a result that passed. A caller that logs or prints a successful
+// gateResult with %v or %+v must still never see the credential, even though
+// the field itself carries it for the caller that sends the request; the
+// formatted form must still say enough to be useful for diagnosing a decision.
+func TestGateResult_StringNeverPrintsTheBearer(t *testing.T) {
+	got := gateSync(hosted(oidcAuth(t, nil)), testPlatform(), bearerHeader("Bearer "+testToken))
+	require.True(t, got.OK, "reason: %s", got.Reason)
+	require.NotEmpty(t, got.Bearer, "the test is meaningless without a bearer to redact")
+
+	for _, format := range []string{"%v", "%+v"} {
+		rendered := fmt.Sprintf(format, got)
+
+		assert.NotContains(t, rendered, testToken, "the bearer must never reach a formatted result (%s)", format)
+		assert.Contains(t, rendered, "OK:true", "the formatted form still says whether the gate passed (%s)", format)
+		assert.Contains(t, rendered, oidcAuthType, "the formatted form still identifies the auth block it validated (%s)", format)
 	}
 }
 

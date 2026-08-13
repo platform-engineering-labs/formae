@@ -92,6 +92,16 @@ var errAuthBlockUndecodable = errors.New("the auth block is not the oidc plugin'
 // not name is ignored rather than refused, mirroring how a record from the
 // control plane is decoded — an unfamiliar field is the plugin's config
 // growing, not evidence that this is some other plugin's block.
+//
+// That tolerance is not unconditionally safe. Today CliConfig names nothing
+// beyond who the token is for — where it was fetched from comes entirely from
+// the issuer's own discovery document, so an unrecognised field cannot change
+// that. But if CliConfig ever grows a field that does — a token- or
+// discovery-endpoint override — a block could name our issuer while the
+// plugin minted the bearer somewhere else entirely, and this decode would
+// carry that field through unseen because it is not one gateSync inspects.
+// Whoever adds such a field to the plugin schema must also teach the gate to
+// look at it.
 func decodeCliAuthBlock(raw json.RawMessage) (cliAuthBlock, error) {
 	if len(raw) == 0 {
 		return cliAuthBlock{}, fmt.Errorf("%w: the connection carries no auth block", errAuthBlockUndecodable)
@@ -154,6 +164,24 @@ type gateResult struct {
 	Bearer string       // the credential, never logged or printed
 	OK     bool         // false means no request is made and nothing is written
 	Reason string       // why sync does not apply, for the notice
+}
+
+// String implements fmt.Stringer so that "never logged or printed" holds for
+// Bearer by construction: any caller that formats a gateResult with %v or
+// %+v, rather than reading Bearer directly, gets a redaction marker instead of
+// the credential. Everything else useful for diagnosing a decision — whether
+// it passed, why not, and the non-secret auth fields the gate validated —
+// stays visible.
+//
+// The receiver is a value, not a pointer, because gateSync returns and every
+// caller holds a gateResult by value; a pointer receiver would leave that
+// value unformatted by this method.
+func (g gateResult) String() string {
+	bearer := ""
+	if g.Bearer != "" {
+		bearer = pkgmodel.RedactedForLog
+	}
+	return fmt.Sprintf("gateResult{Auth:%+v Bearer:%s OK:%v Reason:%q}", g.Auth, bearer, g.OK, g.Reason)
 }
 
 // gateSync reports whether profile sync may run against p.
