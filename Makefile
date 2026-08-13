@@ -105,12 +105,16 @@ test-build:
 		go test -c -tags="property e2e" "$$pkg" || exit 1; \
 		done
 
-test-all: test-build test-pkl
+test-all: test-build test-pkl test-scripts
 	go test -C ./pkg/auth -tags="unit integration" -count=1 -failfast ./...
 	go test -C ./pkg/model -tags="unit integration" -count=1 -failfast ./...
 	go test -C ./pkg/plugin -tags="unit integration" -count=1 -failfast ./...
 	go test -C ./pkg/plugin-conformance-tests -tags="unit integration" -count=1 -failfast ./...
 	go test -tags="unit integration" -count=1 -failfast ./...
+
+## test-scripts: Run the tests for the shell scripts in scripts/
+test-scripts:
+	./scripts/tests/mutation-test-changed_test.sh
 
 test-unit:
 	go test -C ./pkg/auth -tags=unit -failfast ./...
@@ -307,4 +311,4 @@ add-license:
 
 all: clean build gen-pkl api-docs
 
-.PHONY: api-docs clean build install-gremlins build-debug pkg-bin bundle-examples verify-examples-opkg publish-bin gen-pkl pkg-pkl publish-pkl run tidy-all test-build test-all test-unit test-unit-postgres test-unit-auroradataapi test-unit-summary test-integration test-e2e test-property mutation-test test-descriptors-pkl verify-schema-fakeaws version full-e2e lint lint-reuse add-license postgres-up postgres-down mssql-up mssql-down local-data-api-up local-data-api-down all
+.PHONY: api-docs clean build install-gremlins build-debug pkg-bin bundle-examples verify-examples-opkg publish-bin gen-pkl pkg-pkl publish-pkl run tidy-all test-build test-all test-scripts test-unit test-unit-postgres test-unit-auroradataapi test-unit-summary test-integration test-e2e test-property mutation-test test-descriptors-pkl verify-schema-fakeaws version full-e2e lint lint-reuse add-license postgres-up postgres-down mssql-up mssql-down local-data-api-up local-data-api-down all
