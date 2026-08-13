@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/gofrs/flock"
@@ -88,25 +89,78 @@ type ledgerEntry struct {
 	quarantined bool
 }
 
-// ledger is the whole file: every entry to write back, quarantined ones
-// included. Entries is the write-back set, not a set of permissions — only
-// Authoritative names entries that may act on a file.
-type ledger struct {
+// ledgerFile is the ledger as it appears on disk. It exists so the ledger
+// itself need not expose its entries: the wire shape is read by loadLedger
+// and written by save, and nothing else sees it.
+type ledgerFile struct {
 	SchemaVersion int            `json:"schemaVersion"`
 	Entries       []*ledgerEntry `json:"entries"`
+}
+
+// ledger is the whole file: every entry to write back, quarantined ones
+// included. The entries are unexported because holding one is authority over
+// a file, and ranging over all of them would hand that authority to exactly
+// the entries quarantine exists to strip it from. Authoritative is the only
+// way to obtain an entry that may act on a file.
+type ledger struct {
+	entries []*ledgerEntry
 }
 
 // Authoritative returns only the entries that grant authority over a file.
 // Everything that reads the ledger to decide whether it may remove, replace,
 // or rename a profile must go through it.
 func (l *ledger) Authoritative() []*ledgerEntry {
-	out := make([]*ledgerEntry, 0, len(l.Entries))
-	for _, e := range l.Entries {
+	out := make([]*ledgerEntry, 0, len(l.entries))
+	for _, e := range l.entries {
 		if !e.quarantined {
 			out = append(out, e)
 		}
 	}
 	return out
+}
+
+// carriedForward returns every entry the next save will write, quarantined
+// ones included. It is the write-back set and not a set of permissions:
+// nothing deciding whether it may remove, replace, or rename a profile may
+// read it.
+func (l *ledger) carriedForward() []*ledgerEntry {
+	return slices.Clone(l.entries)
+}
+
+// upsert records e, replacing the entry for the same (controlPlane,
+// installationId) when there is one and appending otherwise, so one
+// installation never accumulates two records.
+//
+// Quarantined entries are invisible to it, as they are to remove: a
+// conflicting set is carried forward exactly as it was found, and resolving
+// a conflict by replacing one of its members is the choice quarantine exists
+// to refuse. An entry appended alongside one joins the conflict, which costs
+// a run nothing and grants nobody authority.
+func (l *ledger) upsert(e *ledgerEntry) {
+	for i, existing := range l.entries {
+		if existing.quarantined {
+			continue
+		}
+		if existing.ControlPlane == e.ControlPlane && existing.InstallationID == e.InstallationID {
+			l.entries[i] = e
+			return
+		}
+	}
+	l.entries = append(l.entries, e)
+}
+
+// remove drops the entry for (controlPlane, installationId), so the file it
+// named stops being ours. Absent that entry it does nothing.
+func (l *ledger) remove(controlPlane, installationID string) {
+	for i, e := range l.entries {
+		if e.quarantined {
+			continue
+		}
+		if e.ControlPlane == controlPlane && e.InstallationID == installationID {
+			l.entries = slices.Delete(l.entries, i, i+1)
+			return
+		}
+	}
 }
 
 // loadLedger reads, validates, and quarantines the ledger at path, returning
@@ -123,7 +177,7 @@ func (l *ledger) Authoritative() []*ledgerEntry {
 func loadLedger(path string) (*ledger, []string, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return &ledger{SchemaVersion: ledgerSchemaVersion}, nil, nil
+		return &ledger{}, nil, nil
 	}
 	if err != nil {
 		// An unreadable file is not an empty one: continuing would overwrite
@@ -131,9 +185,9 @@ func loadLedger(path string) (*ledger, []string, error) {
 		return nil, nil, fmt.Errorf("read managed-profile ledger %s: %w", path, err)
 	}
 
-	var file ledger
+	var file ledgerFile
 	if err := json.Unmarshal(data, &file); err != nil {
-		return &ledger{SchemaVersion: ledgerSchemaVersion}, []string{fmt.Sprintf(
+		return &ledger{}, []string{fmt.Sprintf(
 			"managed-profile ledger %s could not be read (%v); continuing as if it were empty, "+
 				"so no profile will be removed by this run", path, err)}, nil
 	}
@@ -142,7 +196,7 @@ func loadLedger(path string) (*ledger, []string, error) {
 			errUnknownSchemaVersion, path, file.SchemaVersion, ledgerSchemaVersion)
 	}
 
-	l := &ledger{SchemaVersion: ledgerSchemaVersion}
+	l := &ledger{}
 	var warnings []string
 	for _, e := range file.Entries {
 		if e == nil {
@@ -157,7 +211,7 @@ func loadLedger(path string) (*ledger, []string, error) {
 					"it authorises nothing and has been dropped", e.Name, e.InstallationID, err))
 			continue
 		}
-		l.Entries = append(l.Entries, e)
+		l.entries = append(l.entries, e)
 	}
 
 	return l, append(warnings, l.quarantineConflicts(path)...), nil
@@ -220,10 +274,10 @@ func (e *ledgerEntry) normalize() error {
 // believed, because picking a winner would hand delete authority to whichever
 // entry the file happened to list first.
 func (l *ledger) quarantineConflicts(path string) []string {
-	sets := newDisjointSets(len(l.Entries))
-	firstByName := make(map[string]int, len(l.Entries))
-	firstByInstallation := make(map[string]int, len(l.Entries))
-	for i, e := range l.Entries {
+	sets := newDisjointSets(len(l.entries))
+	firstByName := make(map[string]int, len(l.entries))
+	firstByInstallation := make(map[string]int, len(l.entries))
+	for i, e := range l.entries {
 		// A NUL separator cannot occur in a validated origin, name, or UUID,
 		// so no pair of fields can be concatenated into another pair's key.
 		nameKey := e.ControlPlane + "\x00" + e.Name
@@ -240,28 +294,28 @@ func (l *ledger) quarantineConflicts(path string) []string {
 		}
 	}
 
-	members := make(map[int][]int, len(l.Entries))
-	for i := range l.Entries {
+	members := make(map[int][]int, len(l.entries))
+	for i := range l.entries {
 		root := sets.find(i)
 		members[root] = append(members[root], i)
 	}
 
 	var warnings []string
-	for i := range l.Entries {
+	for i := range l.entries {
 		set := members[sets.find(i)]
 		if len(set) < 2 || set[0] != i {
 			continue // report each set once, at its first entry in file order.
 		}
 		labels := make([]string, 0, len(set))
 		for _, m := range set {
-			l.Entries[m].quarantined = true
-			labels = append(labels, fmt.Sprintf("%q (installation %s)", l.Entries[m].Name, l.Entries[m].InstallationID))
+			l.entries[m].quarantined = true
+			labels = append(labels, fmt.Sprintf("%q (installation %s)", l.entries[m].Name, l.entries[m].InstallationID))
 		}
 		warnings = append(warnings, fmt.Sprintf(
 			"managed-profile ledger entries for %s share a name or an installation id: %s. "+
 				"None of them authorises removing or replacing a profile while they conflict; "+
 				"remove %s to reset the ledger, which deletes no profile.",
-			l.Entries[i].ControlPlane, strings.Join(labels, ", "), path))
+			l.entries[i].ControlPlane, strings.Join(labels, ", "), path))
 	}
 	return warnings
 }
@@ -302,11 +356,11 @@ func (d *disjointSets) union(a, b int) {
 // included — a sync against one control plane must not disturb another's
 // records.
 func (l *ledger) save(path string) error {
-	entries := l.Entries
+	entries := l.entries
 	if entries == nil {
 		entries = []*ledgerEntry{}
 	}
-	data, err := json.MarshalIndent(ledger{SchemaVersion: ledgerSchemaVersion, Entries: entries}, "", "  ")
+	data, err := json.MarshalIndent(ledgerFile{SchemaVersion: ledgerSchemaVersion, Entries: entries}, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode managed-profile ledger: %w", err)
 	}
