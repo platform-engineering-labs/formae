@@ -13,6 +13,7 @@ import (
 
 	"github.com/platform-engineering-labs/formae/internal/cli/profile/store"
 	"github.com/platform-engineering-labs/formae/internal/schema/pkl"
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -27,8 +28,10 @@ func TestStubTemplate_ParsesWithEmptyPluginDir(t *testing.T) {
 
 	cfg, err := pkl.PKL{}.FormaeConfig(path)
 	require.NoError(t, err, "stub must parse with no plugins installed")
-	assert.Equal(t, "http://localhost", cfg.Cli.API.URL)
-	assert.Equal(t, 49684, cfg.Cli.API.Port)
+	classic, ok := cfg.Cli.Connection.(*pkgmodel.ClassicConnection)
+	require.True(t, ok)
+	assert.Equal(t, "http://localhost", classic.URL)
+	assert.Equal(t, 49684, classic.Port)
 }
 
 // A minimal config that only `amends` the schema — materializing no cli/agent
@@ -44,8 +47,10 @@ func TestSchemaDefaults_BareAmendsYieldsLocalhost(t *testing.T) {
 
 	cfg, err := pkl.PKL{}.FormaeConfig(path)
 	require.NoError(t, err, "a bare amends must evaluate from schema defaults alone")
-	assert.Equal(t, "http://localhost", cfg.Cli.API.URL)
-	assert.Equal(t, 49684, cfg.Cli.API.Port)
+	classic, ok := cfg.Cli.Connection.(*pkgmodel.ClassicConnection)
+	require.True(t, ok)
+	assert.Equal(t, "http://localhost", classic.URL)
+	assert.Equal(t, 49684, classic.Port)
 	assert.Equal(t, "localhost", cfg.Agent.Server.Hostname)
 	assert.Equal(t, 49684, cfg.Agent.Server.Port)
 }

@@ -104,7 +104,11 @@ func appWithAuthPlugin(provider authHeaderProvider) *App {
 	return &App{
 		Config: &pkgmodel.Config{
 			Cli: pkgmodel.CliConfig{
-				Auth: json.RawMessage(`{"type":"stub"}`),
+				Connection: &pkgmodel.ClassicConnection{
+					URL:  "http://localhost",
+					Port: 49684,
+					Auth: json.RawMessage(`{"type":"stub"}`),
+				},
 			},
 		},
 		authClientFactory: func() (authHeaderProvider, error) { return provider, nil },
@@ -256,7 +260,13 @@ func TestWithAuthRetry_ForcedAuthClientFailureSurfacesRealError(t *testing.T) {
 	calls := 0
 	a := &App{
 		Config: &pkgmodel.Config{
-			Cli: pkgmodel.CliConfig{Auth: json.RawMessage(`{"type":"stub"}`)},
+			Cli: pkgmodel.CliConfig{
+				Connection: &pkgmodel.ClassicConnection{
+					URL:  "http://localhost",
+					Port: 49684,
+					Auth: json.RawMessage(`{"type":"stub"}`),
+				},
+			},
 		},
 		authClientFactory: func() (authHeaderProvider, error) {
 			calls++
@@ -534,7 +544,7 @@ func TestWithAuthRetry_HTTPIntegration(t *testing.T) {
 		forcedResp:  headerResp("fresh"),
 	}
 	a := newAppWithServer(ts.URL)
-	a.Config.Cli.Auth = json.RawMessage(`{"type":"stub"}`)
+	a.Config.Cli.Connection.(*pkgmodel.ClassicConnection).Auth = json.RawMessage(`{"type":"stub"}`)
 	a.authClientFactory = func() (authHeaderProvider, error) { return provider, nil }
 
 	var stats *apimodel.Stats
@@ -575,7 +585,7 @@ func TestRunBeforeCommand_StylesAuthorizationDeniedError(t *testing.T) {
 		forcedResp:  headerResp("still-stale"),
 	}
 	a := newAppWithServer(ts.URL)
-	a.Config.Cli.Auth = json.RawMessage(`{"type":"stub"}`)
+	a.Config.Cli.Connection.(*pkgmodel.ClassicConnection).Auth = json.RawMessage(`{"type":"stub"}`)
 	a.authClientFactory = func() (authHeaderProvider, error) { return provider, nil }
 
 	compatible, _, _, err := a.runBeforeCommand(true)

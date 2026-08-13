@@ -234,11 +234,6 @@ type AgentConfig struct {
 	ResourcePlugins []ResourcePluginUserConfig
 }
 
-type APIConfig struct {
-	URL  string
-	Port int
-}
-
 // Connection is where the CLI sends commands. It has exactly two arms, so a
 // configuration cannot be both classic and hosted, and a hosted connection
 // cannot exist without the installation it addresses.
@@ -294,12 +289,6 @@ type ArtifactConfig struct {
 
 type CliConfig struct {
 	Connection Connection
-
-	// API and Auth are the pre-connection view of the same settings, kept
-	// while callers migrate to Connection. Both are derived from Connection
-	// by the config loader; nothing else should write them.
-	API  APIConfig
-	Auth json.RawMessage
 
 	DisableUsageReporting bool
 	Theme                 string

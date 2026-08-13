@@ -789,7 +789,7 @@ func (*NoAuthPluginError) Error() string {
 // block, so callers that need a plugin outright — such as `formae login` —
 // can fail with a clear message instead of dereferencing a nil client.
 func (a *App) AuthClient() (*pkgauth.Client, error) {
-	if a.Config.Cli.Auth == nil {
+	if a.Config.Cli.AuthConfig() == nil {
 		return nil, &NoAuthPluginError{}
 	}
 
@@ -797,7 +797,7 @@ func (a *App) AuthClient() (*pkgauth.Client, error) {
 	defer a.memoMu.Unlock()
 
 	if a.authClient == nil {
-		authType := gjson.GetBytes(a.Config.Cli.Auth, "type").String()
+		authType := gjson.GetBytes(a.Config.Cli.AuthConfig(), "type").String()
 		devPluginDir := util.ExpandHomePath(a.Config.PluginDir)
 		binPath, err := os.Executable()
 		if err != nil {
@@ -817,7 +817,7 @@ func (a *App) AuthClient() (*pkgauth.Client, error) {
 		if matched == nil {
 			return nil, fmt.Errorf("auth plugin %q not installed", authType)
 		}
-		client, err := pkgauth.NewClient(matched.BinaryPath, a.Config.Cli.Auth)
+		client, err := pkgauth.NewClient(matched.BinaryPath, a.Config.Cli.AuthConfig())
 		if err != nil {
 			return nil, fmt.Errorf("failed to start auth plugin: %w", err)
 		}
@@ -873,7 +873,7 @@ func (a *App) withAuthRetry(op func(authHeader http.Header, net *http.Client) er
 	}
 
 	var authErr api.AuthenticationError
-	if !errors.As(err, &authErr) || a.Config.Cli.Auth == nil {
+	if !errors.As(err, &authErr) || a.Config.Cli.AuthConfig() == nil {
 		return err
 	}
 
@@ -958,7 +958,7 @@ func hasCredential(headers map[string][]string) bool {
 func (a *App) getAuthAndNetHandlers() (http.Header, *http.Client, error) {
 	var authHeader http.Header
 
-	if a.Config.Cli.Auth != nil {
+	if a.Config.Cli.AuthConfig() != nil {
 		client, err := a.authProvider()
 		if err != nil {
 			return nil, nil, err

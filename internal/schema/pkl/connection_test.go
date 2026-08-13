@@ -84,15 +84,6 @@ func TestConnectionWithALegacyFieldIsALoadError(t *testing.T) {
 	}
 }
 
-func TestLegacyFieldsAlsoPopulateTheCompatibilityView(t *testing.T) {
-	cfg, err := loadConfig(t, "testdata/config/connection_hosted.pkl")
-	require.NoError(t, err)
-
-	assert.NotNil(t, cfg.Cli.AuthConfig())
-	assert.Equal(t, cfg.Cli.AuthConfig(), cfg.Cli.Auth,
-		"the legacy view is derived from the connection while callers migrate")
-}
-
 func TestHostedEndpointMustBeHTTPS(t *testing.T) {
 	_, err := loadConfig(t, "testdata/config/hosted_bad_endpoint.pkl")
 

@@ -279,16 +279,6 @@ func translateConfig(config *pklmodel.Config) (*pkgmodel.Config, error) {
 	}
 	translated.Cli.Connection = conn
 
-	// Derived compatibility view, removed once every caller reads Connection.
-	switch c := conn.(type) {
-	case *pkgmodel.ClassicConnection:
-		translated.Cli.API = pkgmodel.APIConfig{URL: c.URL, Port: c.Port}
-		translated.Cli.Auth = c.Auth
-	case *pkgmodel.HostedConnection:
-		translated.Cli.API = pkgmodel.APIConfig{URL: c.Endpoint, Port: 443}
-		translated.Cli.Auth = c.Auth
-	}
-
 	// Warn when global settings conflict with per-plugin overrides
 	checkResourcePluginDeprecations(&translated)
 
