@@ -384,6 +384,17 @@ func formaCommandFromOperation(operation pkgresource.Operation) pkgmodel.Command
 func (rp *ResourcePersister) recordMovedSinceGenerated(resourceUpdate *resource_update.ResourceUpdate) bool {
 	generated := resourceUpdate.PriorState
 	if generated.Version == "" {
+		// Only a synchronize snapshot is planned off a loaded row and so is
+		// expected to carry a version; a missing one there means the command
+		// was rebuilt after a restart, which is indeterminate. Discovery builds
+		// its updates from the forma instead (see generateResourceUpdatesForSync),
+		// so its reads never carry a version and their NotFound is a real
+		// signal — including the sentinel-target path that cleans up rows whose
+		// target has been deleted. Reading that as staleness would strand those
+		// rows forever.
+		if resourceUpdate.Source != resource_update.FormaCommandSourceSynchronize {
+			return false
+		}
 		slog.Debug("Treating a NotFound read as stale: the snapshot carries no row version",
 			"resourceLabel", generated.Label)
 		return true

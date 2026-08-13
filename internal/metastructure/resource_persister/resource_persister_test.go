@@ -2249,6 +2249,7 @@ func syncReadNotFoundForTest(generatedFrom pkgmodel.Resource, probedNativeID str
 		ResourceTarget:     pkgmodel.Target{Label: "test-target", Namespace: "test-namespace"},
 		Operation:          resource_update.OperationRead,
 		State:              resource_update.ResourceUpdateStateSuccess,
+		Source:             resource_update.FormaCommandSourceSynchronize,
 		StackLabel:         generatedFrom.Stack,
 		PreviousProperties: generatedFrom.Properties,
 		ProgressResult: []plugin.TrackedProgress{
@@ -2524,6 +2525,42 @@ func (d *loadResourceFlakyDatastore) LoadResource(uri pkgmodel.FormaeURI) (*pkgm
 		return nil, errors.New("transient datastore failure")
 	}
 	return d.Datastore.LoadResource(uri)
+}
+
+func TestResourcePersister_DiscoveryReadNotFoundStillDeletesOrphanedRow(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+
+	orphan := pkgmodel.Resource{
+		Label:      "orphan",
+		Type:       "FakeAWS::S3::Bucket",
+		Stack:      "test-stack",
+		Ksuid:      util.NewID(),
+		Managed:    true,
+		NativeID:   "orphan-bucket",
+		Properties: json.RawMessage(`{"versioning":"Enabled"}`),
+	}
+	persistCreateForTest(t, persister, sender, orphan, "cmd-create")
+
+	// Discovery builds its updates straight from the forma rather than from a
+	// loaded row, so they carry no row version. The sentinel-target path relies
+	// on that NotFound to clean up a row whose target is gone, so an absent
+	// version must not be read as staleness here.
+	update := syncReadNotFoundForTest(orphan, "orphan-bucket")
+	update.Source = resource_update.FormaCommandSourceDiscovery
+	require.Empty(t, update.PriorState.Version)
+
+	result := persister.Call(sender, resource_update.PersistResourceUpdate{
+		CommandID:         "cmd-discovery",
+		ResourceOperation: resource_update.OperationRead,
+		PluginOperation:   resource.OperationRead,
+		ResourceUpdate:    update,
+	})
+	require.NoError(t, result.Error)
+
+	resources, err := ds.LoadResourcesByStack("test-stack")
+	require.NoError(t, err)
+	require.Empty(t, resources, "discovery must still be able to clean up an orphaned row")
 }
 
 func TestResourcePersister_StaleReadGuardFailsClosedWhenLiveRowIsHidden(t *testing.T) {
