@@ -175,6 +175,94 @@ func TestCreate_LivePlaintextSecret_ReachesPlugin(t *testing.T) {
 	assert.Equal(t, "d", properties["Description"], "the rest of the desired properties must reach the provider unchanged")
 }
 
+// A dispatch failure takes two shapes: the coordinator never returns an
+// operator, so nothing was sent, and the call to an operator that was spawned
+// does not complete, so the create may already be running at the provider. They
+// are one category and must report one text, and that text is the one the second
+// shape forces: it may not tell an operator the create never started.
+func TestCreate_DispatchFailure_RecordsConservativeFailureReason(t *testing.T) {
+	cases := map[string]struct {
+		// shape returns the double, the log it captures, and a check on what the
+		// double did with the plugin request before failing.
+		shape func() (gen.Process, *capturingLog, func(*testing.T))
+	}{
+		"the coordinator never returned an operator": {
+			shape: func() (gen.Process, *capturingLog, func(*testing.T)) {
+				proc := newSpawnFailingProcess()
+				return proc, proc.log, func(t *testing.T) {
+					t.Helper()
+					require.Contains(t, strings.Join(proc.log.all(), "\n"), errSpawnRefused.Error(),
+						"this shape must fail before the create request is sent")
+				}
+			},
+		},
+		"the create was sent and the call did not complete": {
+			shape: func() (gen.Process, *capturingLog, func(*testing.T)) {
+				proc := newOperationCapturingProcess()
+				return proc, proc.log, func(t *testing.T) {
+					t.Helper()
+					proc.capturedCreate(t)
+				}
+			},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			data := createForOpaqueSecret(`{"$visibility":"Opaque","$value":"brand-new-secret"}`)
+			proc, log, checkRequest := tc.shape()
+
+			state, _, _, err := create(StateCreating, data, proc)
+			require.NoError(t, err)
+			require.Equal(t, StateFinishedWithError, state, "dispatching the plugin request must fail")
+			require.Contains(t, strings.Join(log.all(), "\n"), "failed to start create operation",
+				"the intended failure site must be the one that fired")
+			checkRequest(t)
+
+			message := data.resourceUpdate.MostRecentFailureMessage()
+			require.NotEmpty(t, message, "a dispatch failure must still surface a reason")
+			assert.Equal(t, failureReasonPluginDispatchOnCreate, message,
+				"both shapes must report the fixed dispatch text, with no error detail appended")
+			assert.Contains(t, message, "may or may not have been created",
+				"the reason must leave open that the provider already created the resource")
+			assert.Contains(t, message, "check the provider before retrying",
+				"the reason must tell an operator what to do before a retry")
+		})
+	}
+}
+
+// A reason belongs to the pass that recorded it. The pass that follows records
+// its own, and a pass that succeeds records none, so an operator never reads a
+// reason describing an attempt that is over.
+func TestCreate_StaleFailureReason_DoesNotOutliveItsPass(t *testing.T) {
+	const stale = "cannot create this resource: an earlier attempt could not build the provider request for it."
+
+	t.Run("a failing pass reports its own reason", func(t *testing.T) {
+		data := createForOpaqueSecret(`{"$visibility":"Opaque","$value":"brand-new-secret"}`)
+		data.resourceUpdate.FailureReason = stale
+		proc := newOperationCapturingProcess()
+
+		state, _, _, err := create(StateCreating, data, proc)
+		require.NoError(t, err)
+		require.Equal(t, StateFinishedWithError, state, "dispatching the plugin request must fail")
+
+		message := data.resourceUpdate.MostRecentFailureMessage()
+		assert.Equal(t, failureReasonPluginDispatchOnCreate, message,
+			"the failure an operator reads must be the one this pass hit")
+		assert.NotEqual(t, stale, message, "a reason from an earlier attempt must not be reported")
+	})
+
+	t.Run("a succeeding pass reports no failure", func(t *testing.T) {
+		data := createForOpaqueSecret(`{"$visibility":"Opaque","$value":"brand-new-secret"}`)
+		data.resourceUpdate.FailureReason = stale
+
+		data.resourceUpdate.MarkAsSuccess()
+
+		assert.Empty(t, data.resourceUpdate.MostRecentFailureMessage(),
+			"a create that succeeded must report no failure")
+	})
+}
+
 // Every site that fails while preparing the plugin Create request records its
 // reason through one mapping, so the two categories must be right at the
 // mapping. Create is worded for creating a resource: its texts must not be the

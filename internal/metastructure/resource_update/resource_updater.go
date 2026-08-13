@@ -655,6 +655,7 @@ func create(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 		proc)
 	if err != nil {
 		proc.Log().Error("failed to start create operation: %v", err)
+		data.resourceUpdate.FailureReason = failureReasonPluginDispatchOnCreate
 		data.resourceUpdate.MarkAsFailed()
 		return StateFinishedWithError, data, nil, nil
 	}
@@ -676,9 +677,11 @@ const (
 
 	failureReasonUnrecoverableOpaqueValueOnCreate = "cannot create this resource: the desired value of one of its secret properties is a stored hash, which formae cannot send to the provider as the live value. Re-supply the value in your forma."
 	failureReasonPluginRequestPreparationOnCreate = "cannot create this resource: formae could not build the provider request for it."
-	// A dispatch failure can happen after the create was handed to the plugin,
-	// so the text must not tell an operator the create never started.
-	failureReasonPluginDispatchOnCreate = "cannot create this resource: formae lost contact with the provider plugin while starting the create, so the resource may or may not have been created — check the provider before retrying."
+	// Dispatching covers both a coordinator that never returned an operator and
+	// a call that did not complete after the create was handed to the plugin, so
+	// the text asserts neither that a plugin was reached nor that the create
+	// never started.
+	failureReasonPluginDispatchOnCreate = "cannot create this resource: formae could not complete the request to the provider plugin, so the resource may or may not have been created — check the provider before retrying."
 )
 
 // isUnrecoverableOpaqueValue reports whether preparing a plugin request failed
