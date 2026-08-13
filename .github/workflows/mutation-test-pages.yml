@@ -49,7 +49,7 @@ jobs:
         run: echo "/opt/pel/bin" >> $GITHUB_PATH
 
       - name: Install gremlins
-        run: go install github.com/go-gremlins/gremlins/cmd/gremlins@latest
+        run: make install-gremlins
 
       - name: Build
         run: make build

@@ -5,10 +5,17 @@ on:
     branches: [main]
 
 jobs:
+  # Contract: green means gremlins completed on every changed package —
+  # surviving mutants are allowed, since the content of the result is
+  # advisory. Red means at least one changed package produced no usable
+  # result. This check is advisory because it is not a required status
+  # check, not because of a `continue-on-error` flag: job-level
+  # `continue-on-error` only suppresses the workflow-run conclusion, not
+  # the check run itself, so it would have bought a green run over a red
+  # job rather than making the failure advisory.
   mutation-test:
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
         with:
@@ -27,7 +34,7 @@ jobs:
         run: echo "/opt/pel/bin" >> $GITHUB_PATH
 
       - name: Install gremlins
-        run: go install github.com/go-gremlins/gremlins/cmd/gremlins@latest
+        run: make install-gremlins
 
       - name: Run mutation tests on changed packages
         run: ./scripts/mutation-test-changed.sh

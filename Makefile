@@ -25,6 +25,13 @@ CHANNEL := $(shell echo "$(RAW_VERSION)" | grep -q -- '-' && echo dev || echo st
 # Override per-build with HELM_READER_VERSION=<ver>.
 HELM_READER_VERSION ?= 0.1.2
 
+# Pinned gremlins mutation-testing version. mutation-test-changed.sh's
+# classifier depends on this tool's observed failure semantics (a
+# cancelled run exits 0 and writes no report, and the report is a single
+# write at the end of the run), so the version must not float on
+# `@latest`. Override per-build with GREMLINS_VERSION=<ver>.
+GREMLINS_VERSION ?= v0.6.0
+
 clean:
 	rm -rf .out/
 	rm -rf dist/
@@ -57,7 +64,7 @@ dev-install: build
 
 ## install-gremlins: Install the gremlins mutation testing tool
 install-gremlins:
-	go install github.com/go-gremlins/gremlins/cmd/gremlins@latest
+	go install github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION)
 
 build-debug:
 	go build ${DEBUG_GOFLAGS} -o formae cmd/formae/main.go
@@ -105,12 +112,18 @@ test-build:
 		go test -c -tags="property e2e" "$$pkg" || exit 1; \
 		done
 
-test-all: test-build test-pkl
+test-all: test-build test-pkl test-scripts
 	go test -C ./pkg/auth -tags="unit integration" -count=1 -failfast ./...
 	go test -C ./pkg/model -tags="unit integration" -count=1 -failfast ./...
 	go test -C ./pkg/plugin -tags="unit integration" -count=1 -failfast ./...
 	go test -C ./pkg/plugin-conformance-tests -tags="unit integration" -count=1 -failfast ./...
 	go test -tags="unit integration" -count=1 -failfast ./...
+
+## test-scripts: Run the tests for the shell scripts in scripts/
+test-scripts:
+	@for t in scripts/tests/*_test.sh; do \
+		"$$t" || exit 1; \
+		done
 
 test-unit:
 	go test -C ./pkg/auth -tags=unit -failfast ./...
@@ -307,4 +320,4 @@ add-license:
 
 all: clean build gen-pkl api-docs
 
-.PHONY: api-docs clean build install-gremlins build-debug pkg-bin bundle-examples verify-examples-opkg publish-bin gen-pkl pkg-pkl publish-pkl run tidy-all test-build test-all test-unit test-unit-postgres test-unit-auroradataapi test-unit-summary test-integration test-e2e test-property mutation-test test-descriptors-pkl verify-schema-fakeaws version full-e2e lint lint-reuse add-license postgres-up postgres-down mssql-up mssql-down local-data-api-up local-data-api-down all
+.PHONY: api-docs clean build install-gremlins build-debug pkg-bin bundle-examples verify-examples-opkg publish-bin gen-pkl pkg-pkl publish-pkl run tidy-all test-build test-all test-scripts test-unit test-unit-postgres test-unit-auroradataapi test-unit-summary test-integration test-e2e test-property mutation-test test-descriptors-pkl verify-schema-fakeaws version full-e2e lint lint-reuse add-license postgres-up postgres-down mssql-up mssql-down local-data-api-up local-data-api-down all
