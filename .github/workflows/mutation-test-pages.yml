@@ -63,6 +63,9 @@ jobs:
           FORMAE_TEST_AURORA_SECRET_ARN: arn:aws:secretsmanager:us-east-1:123456789012:secret:local
           FORMAE_TEST_AURORA_DATABASE: postgres
           FORMAE_TEST_AURORA_ENDPOINT: http://localhost:80
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+          AWS_REGION: us-east-1
         run: ./scripts/mutation-test.sh
 
       - name: Generate coverage diff

@@ -17,7 +17,6 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/rdsdata"
 	"github.com/aws/aws-sdk-go-v2/service/rdsdata/types"
 	"github.com/demula/mksuid/v2"
@@ -195,31 +194,38 @@ type DatastoreAuroraDataAPI struct {
 	ctx        context.Context
 }
 
-func NewDatastoreAuroraDataAPI(ctx context.Context, cfg *pkgmodel.DatastoreConfig, agentID string) (datastore.Datastore, error) {
-	var opts []func(*config.LoadOptions) error
-
-	// When using a custom endpoint (e.g. local-data-api for testing),
-	// use static dummy creds to avoid requiring real AWS creds
-	if cfg.AuroraDataAPI.Endpoint != "" {
-		opts = append(opts, config.WithCredentialsProvider(
-			credentials.NewStaticCredentialsProvider("test", "test", ""),
-		))
-	}
-
-	awsCfg, err := config.LoadDefaultConfig(ctx, opts...)
+// loadAuroraAWSConfig loads the AWS configuration for the Data API client,
+// overriding the region resolved from the environment when one is configured.
+func loadAuroraAWSConfig(ctx context.Context, cfg *pkgmodel.AuroraDataAPIConfig) (aws.Config, error) {
+	awsCfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load AWS config: %w", err)
+		return aws.Config{}, fmt.Errorf("failed to load AWS config: %w", err)
 	}
 
-	if cfg.AuroraDataAPI.Region != "" {
-		awsCfg.Region = cfg.AuroraDataAPI.Region
+	if cfg.Region != "" {
+		awsCfg.Region = cfg.Region
 	}
 
-	client := rdsdata.NewFromConfig(awsCfg, func(o *rdsdata.Options) {
-		if cfg.AuroraDataAPI.Endpoint != "" {
-			o.BaseEndpoint = aws.String(cfg.AuroraDataAPI.Endpoint)
+	return awsCfg, nil
+}
+
+// auroraClientOptions applies the configured Data API endpoint to the client.
+// An empty endpoint leaves the SDK's default endpoint resolution in place.
+func auroraClientOptions(cfg *pkgmodel.AuroraDataAPIConfig) func(*rdsdata.Options) {
+	return func(o *rdsdata.Options) {
+		if cfg.Endpoint != "" {
+			o.BaseEndpoint = aws.String(cfg.Endpoint)
 		}
-	})
+	}
+}
+
+func NewDatastoreAuroraDataAPI(ctx context.Context, cfg *pkgmodel.DatastoreConfig, agentID string) (datastore.Datastore, error) {
+	awsCfg, err := loadAuroraAWSConfig(ctx, &cfg.AuroraDataAPI)
+	if err != nil {
+		return nil, err
+	}
+
+	client := rdsdata.NewFromConfig(awsCfg, auroraClientOptions(&cfg.AuroraDataAPI))
 
 	d := &DatastoreAuroraDataAPI{
 		client:     client,

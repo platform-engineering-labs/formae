@@ -206,6 +206,7 @@ func translateConfig(config *pklmodel.Config) (*pkgmodel.Config, error) {
 					SecretARN:  config.Agent.Datastore.AuroraDataAPI.SecretArn,
 					Database:   config.Agent.Datastore.AuroraDataAPI.Database,
 					Region:     config.Agent.Datastore.AuroraDataAPI.Region,
+					Endpoint:   config.Agent.Datastore.AuroraDataAPI.Endpoint,
 				},
 				MSSQL: pkgmodel.MSSQLConfig{
 					Host:                   config.Agent.Datastore.MSSQL.Host,
