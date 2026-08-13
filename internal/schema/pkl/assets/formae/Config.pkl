@@ -71,6 +71,11 @@ class AuroraDataAPIConfig {
     database: String = ""
 
     region: String = ""
+
+    /// The RDS Data API endpoint to connect to. Empty means the SDK's default
+    /// endpoint for the resolved region. Credentials always come from the
+    /// standard AWS credential chain, independent of this setting.
+    endpoint: String = ""
 }
 
 class MSSQLConfig {
