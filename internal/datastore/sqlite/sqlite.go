@@ -902,6 +902,8 @@ func (d DatastoreSQLite) QueryFormaCommands(query *datastore.StatusQuery) ([]*fo
 	// Stack filter uses the normalized resource_updates table
 	subqueryStr = extendSQLiteQueryString(subqueryStr, query.Stack, " AND EXISTS (SELECT 1 FROM resource_updates ru WHERE ru.command_id = forma_commands.command_id AND ru.stack_label %s ?{esc})", &args)
 	subqueryStr = extendSQLiteQueryString(subqueryStr, query.Status, " AND LOWER(state) %s LOWER(?){esc}", &args)
+	subqueryStr = extendSQLiteQueryString(subqueryStr, query.Subject, " AND subject %s ?{esc}", &args)
+	subqueryStr = extendSQLiteQueryString(subqueryStr, query.SubjectName, " AND subject_name %s ?{esc}", &args)
 
 	subqueryStr += " ORDER BY timestamp DESC"
 	if query.N > 0 {

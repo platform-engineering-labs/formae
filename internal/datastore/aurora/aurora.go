@@ -1238,7 +1238,9 @@ func (d *DatastoreAuroraDataAPI) QueryFormaCommands(statusQuery *datastore.Statu
 		)
 	}
 
-	queryStr, params, _ = appendAuroraStringClause(queryStr, params, paramIdx, "state", "status", true, statusQuery.Status)
+	queryStr, params, paramIdx = appendAuroraStringClause(queryStr, params, paramIdx, "state", "status", true, statusQuery.Status)
+	queryStr, params, paramIdx = appendAuroraStringClause(queryStr, params, paramIdx, "subject", "subject", false, statusQuery.Subject)
+	queryStr, params, _ = appendAuroraStringClause(queryStr, params, paramIdx, "subject_name", "subject_name", false, statusQuery.SubjectName)
 
 	queryStr += " ORDER BY timestamp DESC"
 

@@ -48,12 +48,14 @@ type QueryItem[T any] struct {
 }
 
 type StatusQuery struct {
-	CommandID *QueryItem[string]
-	ClientID  *QueryItem[string]
-	Command   *QueryItem[string]
-	Status    *QueryItem[string]
-	Stack     *QueryItem[string]
-	Managed   *QueryItem[bool]
+	CommandID   *QueryItem[string]
+	ClientID    *QueryItem[string]
+	Command     *QueryItem[string]
+	Status      *QueryItem[string]
+	Stack       *QueryItem[string]
+	Managed     *QueryItem[bool]
+	Subject     *QueryItem[string]
+	SubjectName *QueryItem[string]
 	// Source restricts results to a FormaCommand source (forma_command.Source,
 	// e.g. "user"). Set by ListFormaCommandStatus, never parsed from a user
 	// query string, so a caller cannot ask to see scheduler bookkeeping.

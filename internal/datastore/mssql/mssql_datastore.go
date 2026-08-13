@@ -764,6 +764,8 @@ func (d *DatastoreMSSQL) QueryFormaCommands(query *datastore.StatusQuery) ([]*fo
 	subqueryStr = extendMSSQLQueryString(subqueryStr, query.Source, " AND source %s @p%d{esc}", &args)
 	subqueryStr = extendMSSQLQueryString(subqueryStr, query.Stack, " AND EXISTS (SELECT 1 FROM resource_updates ru WHERE ru.command_id = forma_commands.command_id AND ru.stack_label %s @p%d{esc})", &args)
 	subqueryStr = extendMSSQLQueryString(subqueryStr, query.Status, " AND LOWER(state) %s LOWER(@p%d){esc}", &args)
+	subqueryStr = extendMSSQLQueryString(subqueryStr, query.Subject, " AND subject %s @p%d{esc}", &args)
+	subqueryStr = extendMSSQLQueryString(subqueryStr, query.SubjectName, " AND subject_name %s @p%d{esc}", &args)
 	subqueryStr += " ORDER BY timestamp DESC"
 
 	queryStr := formaCommandWithResourceUpdatesQueryBase + fmt.Sprintf(`

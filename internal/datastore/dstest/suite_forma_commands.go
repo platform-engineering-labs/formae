@@ -958,6 +958,133 @@ func RunQueryFormaCommands_StackWildcardEscape(t *testing.T, newDS func(t *testi
 	})
 }
 
+// RunQueryFormaCommandsBySubject verifies that StatusQuery.Subject and
+// StatusQuery.SubjectName filter independently: a query for one column
+// matches only rows carrying that value, does not match rows that instead
+// carry the value under the other column, and a query with neither set is
+// unaffected by either column.
+func RunQueryFormaCommandsBySubject(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("QueryFormaCommandsBySubject", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		bySubject := &forma_command.FormaCommand{
+			ID:          fmt.Sprintf("cmd-subject-%s", util.NewID()),
+			Description: pkgmodel.Description{},
+			ClientID:    "client-subject",
+			Subject:     "11111111-1111-4111-8111-111111111111",
+			SubjectName: "",
+			Command:     pkgmodel.CommandApply,
+			State:       forma_command.CommandStateInProgress,
+			ResourceUpdates: []resource_update.ResourceUpdate{
+				{
+					DesiredState: pkgmodel.Resource{Stack: "stack-subject", Properties: json.RawMessage(`{}`)},
+					StackLabel:   "stack-subject",
+					State:        resource_update.ResourceUpdateStateSuccess,
+				},
+			},
+		}
+		bySubjectName := &forma_command.FormaCommand{
+			ID:          fmt.Sprintf("cmd-subjectname-%s", util.NewID()),
+			Description: pkgmodel.Description{},
+			ClientID:    "client-subjectname",
+			Subject:     "",
+			SubjectName: "dpanders",
+			Command:     pkgmodel.CommandApply,
+			State:       forma_command.CommandStateInProgress,
+			ResourceUpdates: []resource_update.ResourceUpdate{
+				{
+					DesiredState: pkgmodel.Resource{Stack: "stack-subjectname", Properties: json.RawMessage(`{}`)},
+					StackLabel:   "stack-subjectname",
+					State:        resource_update.ResourceUpdateStateSuccess,
+				},
+			},
+		}
+		neither := &forma_command.FormaCommand{
+			ID:          fmt.Sprintf("cmd-neither-%s", util.NewID()),
+			Description: pkgmodel.Description{},
+			ClientID:    "client-neither",
+			Subject:     "",
+			SubjectName: "",
+			Command:     pkgmodel.CommandApply,
+			State:       forma_command.CommandStateInProgress,
+			ResourceUpdates: []resource_update.ResourceUpdate{
+				{
+					DesiredState: pkgmodel.Resource{Stack: "stack-neither", Properties: json.RawMessage(`{}`)},
+					StackLabel:   "stack-neither",
+					State:        resource_update.ResourceUpdateStateSuccess,
+				},
+			},
+		}
+
+		for _, c := range []*forma_command.FormaCommand{bySubject, bySubjectName, neither} {
+			err := ds.StoreFormaCommand(c, c.ID)
+			assert.NoError(t, err)
+		}
+
+		// Filtering on Subject returns only the row carrying that subject.
+		results, err := ds.QueryFormaCommands(&datastore.StatusQuery{
+			Subject: &datastore.QueryItem[string]{
+				Item:       bySubject.Subject,
+				Constraint: datastore.Required,
+			},
+		})
+		assert.NoError(t, err)
+		assert.Len(t, results, 1)
+		if len(results) == 1 {
+			assert.Equal(t, bySubject.ID, results[0].ID)
+			assert.Equal(t, bySubject.Subject, results[0].Subject)
+		}
+
+		// Filtering on SubjectName returns only the row carrying that name.
+		results, err = ds.QueryFormaCommands(&datastore.StatusQuery{
+			SubjectName: &datastore.QueryItem[string]{
+				Item:       bySubjectName.SubjectName,
+				Constraint: datastore.Required,
+			},
+		})
+		assert.NoError(t, err)
+		assert.Len(t, results, 1)
+		if len(results) == 1 {
+			assert.Equal(t, bySubjectName.ID, results[0].ID)
+			assert.Equal(t, bySubjectName.SubjectName, results[0].SubjectName)
+		}
+
+		// The two filters are independent: a row matching on Subject does not
+		// match a query for SubjectName, and vice versa.
+		results, err = ds.QueryFormaCommands(&datastore.StatusQuery{
+			SubjectName: &datastore.QueryItem[string]{
+				Item:       bySubject.Subject,
+				Constraint: datastore.Required,
+			},
+		})
+		assert.NoError(t, err)
+		assert.Empty(t, results)
+
+		results, err = ds.QueryFormaCommands(&datastore.StatusQuery{
+			Subject: &datastore.QueryItem[string]{
+				Item:       bySubjectName.SubjectName,
+				Constraint: datastore.Required,
+			},
+		})
+		assert.NoError(t, err)
+		assert.Empty(t, results)
+
+		// A StatusQuery with neither Subject nor SubjectName set is unaffected
+		// by either column: all three seeded commands come back.
+		results, err = ds.QueryFormaCommands(&datastore.StatusQuery{N: 10})
+		assert.NoError(t, err)
+		ids := make(map[string]bool, len(results))
+		for _, r := range results {
+			ids[r.ID] = true
+		}
+		assert.True(t, ids[bySubject.ID])
+		assert.True(t, ids[bySubjectName.ID])
+		assert.True(t, ids[neither.ID])
+	})
+}
+
 // RunTerminalStatesLiteralsTest asserts that the SQL IN-list literals used by the
 // datastore backends exactly match types.TerminalStates.
 func RunTerminalStatesLiteralsTest(t *testing.T, _ func(t *testing.T) TestDatastore) {
@@ -1136,12 +1263,12 @@ func RunForceCancelResourceUpdatesTest(t *testing.T, newDS func(t *testing.T) Te
 			MostRecentProgressJSON: mostRecentJSON,
 		}
 		notStartedRef := datastore.ResourceUpdateRef{
-			KSUID:      notStartedKsuid,
-			Operation:  resource_update.OperationCreate,
+			KSUID:     notStartedKsuid,
+			Operation: resource_update.OperationCreate,
 		}
 		successRef := datastore.ResourceUpdateRef{
-			KSUID:      successKsuid,
-			Operation:  resource_update.OperationCreate,
+			KSUID:     successKsuid,
+			Operation: resource_update.OperationCreate,
 		}
 
 		now := time.Now()

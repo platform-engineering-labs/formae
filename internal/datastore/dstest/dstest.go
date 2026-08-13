@@ -119,6 +119,7 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunQueryFormaCommands(t, newDS)
 	RunQueryFormaCommandsUserOnly(t, newDS)
 	RunQueryFormaCommands_StackWildcardEscape(t, newDS)
+	RunQueryFormaCommandsBySubject(t, newDS)
 	RunTerminalStatesLiteralsTest(t, newDS)
 	RunUpdateResourceUpdateProgressPersistsStartTs(t, newDS)
 	RunMonotonicTerminalityTest(t, newDS)
