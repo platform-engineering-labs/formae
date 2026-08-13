@@ -55,6 +55,15 @@ func TestStorePaths(t *testing.T) {
 	if got, want := s.ProfilePath("local-dev"), filepath.Join("/root", "profiles", "local-dev.pkl"); got != want {
 		t.Errorf("ProfilePath = %q, want %q", got, want)
 	}
+	if got, want := s.ProfilesDir(), filepath.Join("/root", "profiles"); got != want {
+		t.Errorf("ProfilesDir = %q, want %q", got, want)
+	}
+	if got, want := s.ManagedLedgerPath(), filepath.Join("/root", "managed.json"); got != want {
+		t.Errorf("ManagedLedgerPath = %q, want %q", got, want)
+	}
+	if got, want := s.ManagedLockPath(), filepath.Join("/root", "managed.lock"); got != want {
+		t.Errorf("ManagedLockPath = %q, want %q", got, want)
+	}
 }
 
 func TestActive_ReadsPointer(t *testing.T) {
