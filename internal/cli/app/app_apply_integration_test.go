@@ -59,7 +59,7 @@ func TestApply_PreflightAndSubmissionAreSeparateHits(t *testing.T) {
 	a := &App{
 		Config: &pkgmodel.Config{
 			Cli: pkgmodel.CliConfig{
-				API:                   pkgmodel.APIConfig{URL: ts.URL, Port: 80},
+				Connection:            &pkgmodel.ClassicConnection{URL: ts.URL, Port: 80},
 				DisableUsageReporting: true,
 			},
 		},

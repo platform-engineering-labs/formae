@@ -89,8 +89,8 @@ type App struct {
 
 	// newAPIClient constructs the API client used for a single retried
 	// operation. Nil in the real constructor, where it defaults to
-	// api.NewClient against a.Config.Cli.API; tests inject a stub pointed at
-	// an httptest server.
+	// api.NewClient against a.Config.Cli.Connection; tests inject a stub
+	// pointed at an httptest server.
 	newAPIClient func(authHeader http.Header, net *http.Client) *api.Client
 }
 
@@ -120,7 +120,7 @@ func (a *App) NewClient() (*api.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return api.NewClient(a.Config.Cli.API, auth, net), nil
+	return api.NewClient(a.Config.Cli.Connection, auth, net), nil
 }
 
 // Theme resolves the active CLI theme from config, falling back to quiet when
@@ -839,12 +839,13 @@ func (a *App) authProvider() (authHeaderProvider, error) {
 
 // apiClient constructs an API client for a single operation from the given
 // auth header and network client, preferring the injectable newAPIClient
-// (set by tests) and falling back to api.NewClient against a.Config.Cli.API.
+// (set by tests) and falling back to api.NewClient against
+// a.Config.Cli.Connection.
 func (a *App) apiClient(authHeader http.Header, net *http.Client) *api.Client {
 	if a.newAPIClient != nil {
 		return a.newAPIClient(authHeader, net)
 	}
-	return api.NewClient(a.Config.Cli.API, authHeader, net)
+	return api.NewClient(a.Config.Cli.Connection, authHeader, net)
 }
 
 // withAuthRetry runs op once with the current auth header. When op fails

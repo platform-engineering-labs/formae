@@ -683,7 +683,7 @@ func (h *TestHarness) startAgent(t *testing.T, timeout time.Duration, openGate b
 	require.NoError(t, err, "Failed to start agent")
 	h.agentCmd = cmd
 
-	h.client = api.NewClient(pkgmodel.APIConfig{
+	h.client = api.NewClient(&pkgmodel.ClassicConnection{
 		URL:  "http://localhost",
 		Port: h.port,
 	}, nil, nil)

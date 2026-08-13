@@ -66,7 +66,7 @@ func TestCancelE2E_PerIDSubmit(t *testing.T) {
 	// Real API server wrapping the fake metastructure; real client against it.
 	srv := api.NewServer(t.Context(), fake, nil, nil, nil, nil)
 	baseURL := apitest.NewTestServer(t, srv.Handler())
-	client := api.NewClient(pkgmodel.APIConfig{URL: baseURL, Port: 80}, nil, nil)
+	client := api.NewClient(&pkgmodel.ClassicConnection{URL: baseURL, Port: 80}, nil, nil)
 
 	// Stub seams to route through the real HTTP stack
 	origGetStatus := getCommandsStatusFn
@@ -154,7 +154,7 @@ func TestCancelE2E_ForceWatch_AbandonedInView(t *testing.T) {
 
 	srv := api.NewServer(t.Context(), fake, nil, nil, nil, nil)
 	baseURL := apitest.NewTestServer(t, srv.Handler())
-	client := api.NewClient(pkgmodel.APIConfig{URL: baseURL, Port: 80}, nil, nil)
+	client := api.NewClient(&pkgmodel.ClassicConnection{URL: baseURL, Port: 80}, nil, nil)
 
 	origGetStatus := getCommandsStatusFn
 	origCancel := cancelCommandFn
