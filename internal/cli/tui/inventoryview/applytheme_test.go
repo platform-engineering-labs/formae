@@ -8,6 +8,7 @@ package inventoryview
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
@@ -42,42 +43,38 @@ func TestUpdate_ApplyThemeMsgApplies(t *testing.T) {
 	}
 }
 
-// TestApplyTheme_RebuildsTabStyledCells covers a live theme swap while a tab
-// holds cached per-cell styled replacements. tabModel.sync builds
-// styledCells ONCE per fetch/sort/filter event from the tabModel's own th
-// field (see tab.go's styleCell application), and loadedView/applyCellStyles
-// (tabview.go) reuse those cached strings verbatim every frame. If ApplyTheme
-// swaps tabs[i].th but never re-runs sync, a cell already on screen (e.g. the
-// "⚠ unmanaged" Stack cell, styled red via th.Styles.StatusFailed) stays
-// rendered in the OLD theme's color until the next unrelated fetch/sort/filter
-// happens to call sync again. This proves the styled replacement is actually
-// re-rendered, not just that th changed.
+// TestApplyTheme_RestylesRenderedCells covers a live theme swap while a tab is
+// on screen. Per-cell styling (e.g. the "⚠ unmanaged" Stack cell, red via
+// th.Styles.Unmanaged) is applied post-render by loadedView/applyCellStyles
+// from the theme handed to view(). If ApplyTheme swaps the theme but the
+// rendered cells keep the old colours, a resource list left on screen across a
+// theme change stays in the previous palette.
 //
-// quiet and rich have different Error colors (light #DC2626 vs #FF0000, dark
-// #F87171 vs #FF0000), so StatusFailed's rendering genuinely differs between
-// them.
-func TestApplyTheme_RebuildsTabStyledCells(t *testing.T) {
+// quiet and rich have different Unmanaged colours, so the rendering genuinely
+// differs between them.
+func TestApplyTheme_RestylesRenderedCells(t *testing.T) {
 	quiet := theme.New("quiet")
 	m := New(quiet, nil, Options{})
+	m.tabs[TabResources].state = tabLoaded
 	m.tabs[TabResources].allRows = []row{
 		{cells: []string{"web-1", "⚠ unmanaged", "AWS::EC2::Instance", "i-123"}, title: "web-1"},
 	}
-	m.tabs[TabResources] = m.tabs[TabResources].sync(0)
+	m.tabs[TabResources] = m.tabs[TabResources].setSize(100, 12).sync(0)
 
-	before := m.tabs[TabResources].styledCells[0][1]
-	if before.styled == before.plain {
-		t.Fatalf("precondition: styleCell must style col 1 under quiet, got styled == plain (%q)", before.plain)
-	}
+	quietCell := quiet.Styles.Unmanaged.Render("⚠ unmanaged")
+	require.NotEqual(t, "⚠ unmanaged", quietCell,
+		"precondition: quiet must style the unmanaged Stack cell")
+	before := strings.Join(m.tabs[TabResources].view(quiet, 0, "⠋"), "\n")
+	require.Contains(t, before, quietCell, "quiet rendering must carry the quiet Unmanaged style")
 
-	m2 := m.ApplyTheme(theme.New("rich"))
+	rich := theme.New("rich")
+	m2 := m.ApplyTheme(rich)
+	after := strings.Join(m2.tabs[TabResources].view(m2.th, 0, "⠋"), "\n")
 
-	after := m2.tabs[TabResources].styledCells[0][1]
-	if after.plain != "⚠ unmanaged" {
-		t.Errorf("styledCells data lost across ApplyTheme: plain = %q, want %q", after.plain, "⚠ unmanaged")
-	}
-	if after.styled == before.styled {
-		t.Errorf("styledCells not rebuilt: styled output identical to the stale quiet-theme rendering (%q)", after.styled)
-	}
+	richCell := rich.Styles.Unmanaged.Render("⚠ unmanaged")
+	require.NotEqual(t, quietCell, richCell, "precondition: the two themes must differ")
+	assert.Contains(t, after, richCell, "rendered cells must pick up the new theme")
+	assert.NotContains(t, after, quietCell, "stale quiet-theme colours must be gone")
 }
 
 func TestCloseWatcher_NilSafe(t *testing.T) {
@@ -143,4 +140,3 @@ func TestApplyTheme_RecolorsOpenDetailScreen(t *testing.T) {
 	assert.Equal(t, offsetBefore, m2.detailViewport.YOffset,
 		"re-theming the open detail screen must not reset scroll position")
 }
-
