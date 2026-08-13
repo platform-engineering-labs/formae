@@ -15,6 +15,15 @@ set -euo pipefail
 TESTS_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 SCRIPT_UNDER_TEST="$TESTS_DIR/../mutation-test-changed.sh"
 
+# Bounds for the signalled runs, so a regression fails a test instead of
+# hanging the suite. A healthy run reaches readiness in milliseconds. The kill
+# delay is what makes the timeout a bound: the script under test ignores further
+# signals while its handler runs, so a SIGTERM alone would never end the run.
+READY_INTERVAL=0.01
+READY_ATTEMPTS=1000
+RUN_TIMEOUT=10
+RUN_KILL_DELAY=2
+
 TMP_ROOT=$(mktemp -d)
 trap 'rm -rf "$TMP_ROOT"' EXIT
 
@@ -53,6 +62,15 @@ assert_status_nonzero() {
   local description="$1"
   if [[ "$script_status" == "0" ]]; then
     fail "$description (want a non-zero exit status, got 0)"
+  fi
+}
+
+# assert_output_count <extended-regex> <expected-count> <description>
+assert_output_count() {
+  local pattern="$1" expected="$2" description="$3" actual
+  actual=$(grep -cE "$pattern" <<< "$script_output" || true)
+  if [[ "$actual" != "$expected" ]]; then
+    fail "$description (want $expected line(s) matching /$pattern/, got $actual)"
   fi
 }
 
@@ -176,6 +194,25 @@ exit 0"
   stub_gremlins "$bin_dir" "$body"
 }
 
+# stub_gremlins_waiting <bin_dir> <report> <ready_file> <target>: installs a
+# stub that writes <report> for every package except <target>, where it prints a
+# line, creates <ready_file> and then waits — the shape of a run still in
+# progress when the job is cancelled.
+stub_gremlins_waiting() {
+  local bin_dir="$1" report="$2" ready_file="$3" target="$4" body
+  body="case \"\$target\" in
+  $target)
+    echo 'in-flight gremlins output'
+    : > '$ready_file'
+    sleep 30
+    exit 0
+    ;;
+esac
+printf '%s' '$report' > \"\$report_path\"
+exit 0"
+  stub_gremlins "$bin_dir" "$body"
+}
+
 # run_script <repo> <bin_dir> [summary_file]: runs the script under test inside
 # the fixture repo with the stub first on PATH, capturing output and exit
 # status. With <summary_file> the script sees it as $GITHUB_STEP_SUMMARY.
@@ -192,6 +229,69 @@ run_script() {
   script_output=$(cd "$repo" && env -u GITHUB_STEP_SUMMARY \
     GITHUB_BASE_REF=main PATH="$bin_dir:$PATH" \
     bash "$SCRIPT_UNDER_TEST" 2>&1) || script_status=$?
+}
+
+# wait_for_file <path>: waits for <path> to appear, bounded by READY_ATTEMPTS.
+wait_for_file() {
+  local path="$1" attempt=0
+  while [[ ! -e "$path" ]]; do
+    attempt=$((attempt + 1))
+    if [[ "$attempt" -gt "$READY_ATTEMPTS" ]]; then
+      return 1
+    fi
+    sleep "$READY_INTERVAL"
+  done
+}
+
+# kill_run_group <pgid_file>: kills every process in the session a signalled run
+# was started in, so neither the script under test nor its stub gremlins can
+# outlive the test. The run's own timeout escalates to the process it started,
+# not to the session that process created, so a run that is killed for taking
+# too long can still leave the session behind.
+kill_run_group() {
+  local pgid_file="$1" pgid
+  pgid=$(cat "$pgid_file" 2>/dev/null || echo)
+  if [[ -n "$pgid" ]]; then
+    kill -s KILL -- "-$pgid" 2>/dev/null || true
+  fi
+}
+
+# run_script_signalled <repo> <bin_dir> <ready_file> <signal>: runs the script
+# under test in a session of its own, waits for the stub gremlins to report that
+# it is running, then sends <signal> to the whole process group the way a
+# cancelled job does — so the stub takes the signal directly and bash runs the
+# script's deferred handler. The run is capped by RUN_TIMEOUT, and the script is
+# the session leader, so the status waited on is the script's own. The session is
+# killed once the run is over however it ended.
+run_script_signalled() {
+  local repo="$1" bin_dir="$2" ready_file="$3" signal="$4"
+  local work out_file pgid_file pgid runner_pid
+  work=$(new_workdir)
+  out_file="$work/output"
+  pgid_file="$work/pgid"
+  script_output=""
+  script_status=0
+  rm -f "$ready_file"
+
+  timeout -k "$RUN_KILL_DELAY" "$RUN_TIMEOUT" setsid --wait bash -c '
+    echo "$$" > "$1"
+    cd "$2" || exit 1
+    exec env -u GITHUB_STEP_SUMMARY GITHUB_BASE_REF=main PATH="$3:$PATH" \
+      bash "$4"
+  ' _ "$pgid_file" "$repo" "$bin_dir" "$SCRIPT_UNDER_TEST" > "$out_file" 2>&1 &
+  runner_pid=$!
+
+  if wait_for_file "$ready_file"; then
+    pgid=$(cat "$pgid_file")
+    kill -s "$signal" -- "-$pgid" 2>/dev/null || true
+  else
+    fail "the stub gremlins never reported that it was running"
+    kill_run_group "$pgid_file"
+  fi
+
+  wait "$runner_pid" || script_status=$?
+  kill_run_group "$pgid_file"
+  script_output=$(cat "$out_file")
 }
 
 # classify_report_with_path <path> <report>: writes <report> to a throwaway
@@ -608,6 +708,89 @@ test_a_failing_summary_write_fails_the_run() {
   assert_status_nonzero "an unwritable summary fails the run"
 }
 
+# A job summary that took the table is where the table belongs: repeating it in
+# the step log would print it twice on every healthy run.
+test_a_written_summary_is_not_repeated_in_the_step_log() {
+  local work repo bin summary
+  work=$(new_workdir)
+  repo="$work/repo"
+  bin="$work/bin"
+  summary="$work/summary.md"
+
+  make_fixture_repo "$repo"
+  add_changed_package "$repo" "example/pkg"
+  stub_gremlins_writing "$bin" 0 "$(mutation_report KILLED)"
+
+  run_script "$repo" "$bin" "$summary"
+
+  assert_output_matches 'Summary written to job summary' \
+    "the script says where the table went"
+  assert_output_count '^\| `example/pkg` \|' 0 \
+    "the table is not repeated in the step log"
+  if ! grep -qE '^\| `example/pkg` \| ok \|' "$summary"; then
+    fail "the row is missing from the job summary"
+  fi
+  assert_status 0 "a written summary passes"
+}
+
+# The end of the run and a signal arriving before it exits both ask for the
+# table, so the second ask has to print nothing.
+test_the_table_is_printed_once() {
+  script_output=$(
+    unset GITHUB_STEP_SUMMARY
+    # shellcheck disable=SC1090
+    source "$SCRIPT_UNDER_TEST"
+    summary_rows=("## Mutation Testing (changed packages)" "| \`example/a\` | ok |")
+    flush_summary
+    flush_summary
+  )
+  script_status=0
+
+  assert_output_count '^## Mutation Testing' 1 \
+    "the table header is printed once"
+  assert_output_count '^\| `example/a` \|' 1 \
+    "the rows are printed once"
+}
+
+# assert_interrupted_by <signal> <expected-status>: drives one cancelled run and
+# asserts what the annotation has to say about it.
+assert_interrupted_by() {
+  local signal="$1" expected_status="$2"
+  local work repo bin ready
+  work=$(new_workdir)
+  repo="$work/repo"
+  bin="$work/bin"
+  ready="$work/ready"
+
+  make_fixture_repo "$repo"
+  add_changed_package "$repo" "example/a"
+  add_changed_package "$repo" "example/b"
+  stub_gremlins_waiting "$bin" "$(mutation_report KILLED)" "$ready" ./example/b
+
+  run_script_signalled "$repo" "$bin" "$ready" "$signal"
+
+  assert_output_matches "\\| \`example/b\` \\| interrupted \\| signal SIG$signal \\|" \
+    "SIG$signal: the package that was running is marked interrupted"
+  assert_output_matches 'in-flight gremlins output' \
+    "SIG$signal: the output of the running package reaches the log"
+  assert_output_matches '\| `example/a` \| ok \| - \| 100\.0% \|' \
+    "SIG$signal: the package that finished keeps its result"
+  assert_output_count '^\| `example/a` \|' 1 \
+    "SIG$signal: a package that already reported gets no second row"
+  assert_output_count '^\| `example/b` \|' 1 \
+    "SIG$signal: the interrupted package gets exactly one row"
+  assert_status "$expected_status" "SIG$signal: the script exits 128 plus the signal"
+}
+
+# A cancelled job signals the whole process group. The package that was running
+# is the one that lost its result, so it is the one annotated — with the output
+# it produced before it died, which lives in a directory the script is about to
+# delete. A package that already reported keeps its single row.
+test_an_interrupted_package_is_annotated_and_its_output_kept() {
+  assert_interrupted_by INT 130
+  assert_interrupted_by TERM 143
+}
+
 # ── 4. Runner ───────────────────────────────────────────────────────────────
 run_test() {
   local test_name="$1"
@@ -645,6 +828,9 @@ main() {
   run_test test_no_changed_go_files_is_a_no_op
   run_test test_packages_without_unit_tests_are_a_no_op
   run_test test_a_failing_summary_write_fails_the_run
+  run_test test_a_written_summary_is_not_repeated_in_the_step_log
+  run_test test_the_table_is_printed_once
+  run_test test_an_interrupted_package_is_annotated_and_its_output_kept
 
   echo ""
   if [[ "$tests_failed" -gt 0 ]]; then
