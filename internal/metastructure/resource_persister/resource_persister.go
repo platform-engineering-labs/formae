@@ -403,7 +403,13 @@ func (rp *ResourcePersister) recordMovedSinceGenerated(resourceUpdate *resource_
 		return true
 	}
 	if current == nil {
-		return false
+		// No live row to compare against, which is also what a row hidden by
+		// reaping looks like. The delete branch performs its own lookup, so
+		// reporting "not moved" here would let a row that reappears between the
+		// two calls be tombstoned, shadowing one that target recovery could
+		// otherwise restore. Nothing is lost by declining: with no live row the
+		// delete had nothing to remove anyway.
+		return true
 	}
 
 	return current.Version != generated.Version

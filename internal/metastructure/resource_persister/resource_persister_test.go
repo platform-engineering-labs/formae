@@ -2510,14 +2510,63 @@ type loadResourceFlakyDatastore struct {
 	datastore.Datastore
 	failURI pkgmodel.FormaeURI
 	armed   bool
+	// hide makes the single armed call report the row as absent rather than
+	// failing, which is what a reaped row looks like to LoadResource.
+	hide bool
 }
 
 func (d *loadResourceFlakyDatastore) LoadResource(uri pkgmodel.FormaeURI) (*pkgmodel.Resource, error) {
 	if d.armed && uri == d.failURI {
 		d.armed = false
+		if d.hide {
+			return nil, nil
+		}
 		return nil, errors.New("transient datastore failure")
 	}
 	return d.Datastore.LoadResource(uri)
+}
+
+func TestResourcePersister_StaleReadGuardFailsClosedWhenLiveRowIsHidden(t *testing.T) {
+	realDatastore, err := newTestDatastore()
+	require.NoError(t, err)
+
+	flaky := &loadResourceFlakyDatastore{Datastore: realDatastore, hide: true}
+	persister, sender, err := newResourcePersisterWithDatastore(t, flaky)
+	require.NoError(t, err)
+
+	res := pkgmodel.Resource{
+		Label:      "task-def",
+		Type:       "FakeAWS::ECS::TaskDefinition",
+		Stack:      "test-stack",
+		Ksuid:      util.NewID(),
+		Managed:    true,
+		NativeID:   "arn:task-definition/app:4",
+		Properties: json.RawMessage(`{"memory":"512"}`),
+	}
+	persistCreateForTest(t, persister, sender, res, "cmd-plan")
+
+	generatedFrom, err := realDatastore.LoadResource(res.URI())
+	require.NoError(t, err)
+	require.NotNil(t, generatedFrom)
+
+	// The staleness lookup sees no live row, as it would for a row hidden by
+	// reaping, while the delete path's own lookup still finds one. Without a
+	// guard the tombstone lands and shadows a row that recovery could have
+	// restored.
+	flaky.failURI = res.URI()
+	flaky.armed = true
+
+	result := persister.Call(sender, resource_update.PersistResourceUpdate{
+		CommandID:         "cmd-sync",
+		ResourceOperation: resource_update.OperationRead,
+		PluginOperation:   resource.OperationRead,
+		ResourceUpdate:    syncReadNotFoundForTest(*generatedFrom, "arn:task-definition/app:4"),
+	})
+	require.NoError(t, result.Error)
+
+	resources, err := realDatastore.LoadResourcesByStack("test-stack")
+	require.NoError(t, err)
+	require.Len(t, resources, 1, "a staleness lookup that finds no live row must not let the delete through")
 }
 
 func newResourcePersisterWithDatastore(t *testing.T, ds datastore.Datastore) (*unit.TestActor, gen.PID, error) {
