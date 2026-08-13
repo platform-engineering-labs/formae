@@ -92,9 +92,14 @@ type ledgerEntry struct {
 // ledgerFile is the ledger as it appears on disk. It exists so the ledger
 // itself need not expose its entries: the wire shape is read by loadLedger
 // and written by save, and nothing else sees it.
+//
+// The entries stay raw so each one can be decoded on its own. Decoding them
+// in one piece would let a single wrongly typed field fail the whole file,
+// which reads as an empty ledger and lets the next save destroy every record
+// in it, including records for control planes this run never touched.
 type ledgerFile struct {
-	SchemaVersion int            `json:"schemaVersion"`
-	Entries       []*ledgerEntry `json:"entries"`
+	SchemaVersion int               `json:"schemaVersion"`
+	Entries       []json.RawMessage `json:"entries"`
 }
 
 // ledger is the whole file: every entry to write back, quarantined ones
@@ -198,11 +203,12 @@ func loadLedger(path string) (*ledger, []string, error) {
 
 	l := &ledger{}
 	var warnings []string
-	for _, e := range file.Entries {
-		if e == nil {
+	for _, raw := range file.Entries {
+		e := &ledgerEntry{}
+		if err := json.Unmarshal(raw, e); err != nil {
 			warnings = append(warnings, fmt.Sprintf(
-				"ignoring an empty managed-profile ledger entry in %s; it authorises nothing "+
-					"and has been dropped", path))
+				"ignoring a managed-profile ledger entry in %s that could not be read (%v); "+
+					"it authorises nothing and has been dropped", path, err))
 			continue
 		}
 		if err := e.normalize(); err != nil {
@@ -253,7 +259,17 @@ func (e *ledgerEntry) normalize() error {
 		return fmt.Errorf("tempName %q is not a publication temp file name", e.TempName)
 	}
 	switch e.State {
-	case entryPending, entryOwned, entryDeleting:
+	case entryPending:
+		// A pending entry names a file that need not exist yet, so it is the
+		// one state with nothing to hash.
+	case entryOwned, entryDeleting:
+		// Both states name a file the entry expects to hash to fingerprint,
+		// and the fingerprint is the whole proof that the file is ours.
+		// Without one the entry would license removing or replacing a file on
+		// its name alone.
+		if e.Fingerprint == "" {
+			return fmt.Errorf("state %q requires a fingerprint", e.State)
+		}
 	default:
 		return fmt.Errorf("state %q is not one of %q, %q, %q", e.State, entryPending, entryOwned, entryDeleting)
 	}
@@ -355,10 +371,26 @@ func (d *disjointSets) union(a, b int) {
 // entry is written, quarantined ones and entries for other control planes
 // included — a sync against one control plane must not disturb another's
 // records.
+//
+// Every entry's control plane is canonicalised before it is written, so the
+// invariants the conflict scan relies on hold by construction and not by the
+// convention that callers build entries correctly. An entry whose control
+// plane will not canonicalise is refused outright rather than written: the
+// next load would drop it, leaving a profile file recorded by nothing and so
+// managed by nobody.
 func (l *ledger) save(path string) error {
-	entries := l.entries
-	if entries == nil {
-		entries = []*ledgerEntry{}
+	entries := make([]json.RawMessage, 0, len(l.entries))
+	for _, e := range l.entries {
+		origin, err := canonicalOrigin(e.ControlPlane)
+		if err != nil {
+			return fmt.Errorf("managed-profile ledger entry for profile %q: controlPlane: %w", e.Name, err)
+		}
+		e.ControlPlane = origin
+		raw, err := json.Marshal(e)
+		if err != nil {
+			return fmt.Errorf("encode managed-profile ledger entry for profile %q: %w", e.Name, err)
+		}
+		entries = append(entries, raw)
 	}
 	data, err := json.MarshalIndent(ledgerFile{SchemaVersion: ledgerSchemaVersion, Entries: entries}, "", "  ")
 	if err != nil {

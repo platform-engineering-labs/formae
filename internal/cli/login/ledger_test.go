@@ -50,10 +50,10 @@ func validRaw(name, installationID string) rawEntry {
 
 // writeLedgerFile writes a ledger file with the given schema version and
 // entries, and returns its path.
-func writeLedgerFile(t *testing.T, version int, entries ...rawEntry) string {
+func writeLedgerFile(t *testing.T, version int, entries ...any) string {
 	t.Helper()
 	if entries == nil {
-		entries = []rawEntry{}
+		entries = []any{}
 	}
 	data, err := json.Marshal(map[string]any{"schemaVersion": version, "entries": entries})
 	require.NoError(t, err)
@@ -76,6 +76,20 @@ func savedSchemaVersion(t *testing.T, path string) int {
 	var file ledgerFile
 	require.NoError(t, json.Unmarshal(data, &file))
 	return file.SchemaVersion
+}
+
+// savedEntries returns the entries recorded in the file at path, decoded
+// without validation, so a test can assert what save actually wrote rather
+// than what a later load makes of it.
+func savedEntries(t *testing.T, path string) []*ledgerEntry {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	var file struct {
+		Entries []*ledgerEntry `json:"entries"`
+	}
+	require.NoError(t, json.Unmarshal(data, &file))
+	return file.Entries
 }
 
 // names returns the Name of every entry, in order.
@@ -134,7 +148,9 @@ func TestLoadLedger_UnknownSchemaVersionRefusesToLoad(t *testing.T) {
 }
 
 // TestLoadLedger_ValidEntriesAreAuthoritative covers the happy path over
-// every entry state and every optional field.
+// every entry state and every optional field. A pending entry names a file
+// that need not exist yet, so it is the one state that carries no
+// fingerprint.
 func TestLoadLedger_ValidEntriesAreAuthoritative(t *testing.T) {
 	pending := validRaw("acme-pending", testUUIDA)
 	pending["state"] = string(entryPending)
@@ -175,9 +191,12 @@ func TestLoadLedger_DropsMalformedEntries(t *testing.T) {
 
 	tests := []struct {
 		name string
-		bad  rawEntry
+		bad  any
 	}{
 		{name: "null entry", bad: nil},
+		{name: "entry that is not an object", bad: 7},
+		{name: "type error in state", bad: mutate(func(e rawEntry) { e["state"] = 1 })},
+		{name: "type error in name", bad: mutate(func(e rawEntry) { e["name"] = []string{"acme"} })},
 		{name: "empty entry", bad: rawEntry{}},
 		{name: "traversal in name", bad: mutate(func(e rawEntry) { e["name"] = "../../etc/passwd" })},
 		{name: "empty name", bad: mutate(func(e rawEntry) { e["name"] = "" })},
@@ -190,6 +209,12 @@ func TestLoadLedger_DropsMalformedEntries(t *testing.T) {
 		{name: "malformed fingerprint", bad: mutate(func(e rawEntry) { e["fingerprint"] = "sha256:nothex" })},
 		{name: "unprefixed fingerprint", bad: mutate(func(e rawEntry) { e["fingerprint"] = strings.TrimPrefix(testFingerprintA, "sha256:") })},
 		{name: "malformed altFingerprint", bad: mutate(func(e rawEntry) { e["altFingerprint"] = "sha256:zz" })},
+		{name: "owned entry with an empty fingerprint", bad: mutate(func(e rawEntry) { e["fingerprint"] = "" })},
+		{name: "owned entry with no fingerprint at all", bad: mutate(func(e rawEntry) { delete(e, "fingerprint") })},
+		{name: "deleting entry with an empty fingerprint", bad: mutate(func(e rawEntry) {
+			e["state"] = string(entryDeleting)
+			e["fingerprint"] = ""
+		})},
 		{name: "unknown state", bad: mutate(func(e rawEntry) { e["state"] = "adopted" })},
 		{name: "empty state", bad: mutate(func(e rawEntry) { e["state"] = "" })},
 		{name: "bogus controlPlane", bad: mutate(func(e rawEntry) { e["controlPlane"] = "not a url" })},
@@ -221,6 +246,36 @@ func TestLoadLedger_DropsMalformedEntries(t *testing.T) {
 			assert.Equal(t, []string{"acme-good"}, names(reloaded.carriedForward()))
 		})
 	}
+}
+
+// TestLoadLedger_ConfinesATypeErrorToItsOwnEntry pins the blast radius of a
+// single bad record. Decoding the file in one piece would make one wrongly
+// typed field read the whole ledger as empty, and the next save would then
+// destroy every record in it — including records for control planes this run
+// never touched. Each entry is decoded on its own, so a type error is the
+// same dropped, warned entry as any other malformed one.
+func TestLoadLedger_ConfinesATypeErrorToItsOwnEntry(t *testing.T) {
+	broken := validRaw("acme-broken", testUUIDB)
+	broken["state"] = 1 // a number where a string belongs.
+
+	other := validRaw("staging-one", testUUIDC)
+	other["controlPlane"] = testOtherOrigin
+
+	path := writeLedgerFile(t, ledgerSchemaVersion, validRaw("acme-prod", testUUIDA), broken, other)
+
+	l, warnings, err := loadLedger(path)
+
+	require.NoError(t, err)
+	require.Len(t, warnings, 1)
+	assert.Equal(t, []string{"acme-prod", "staging-one"}, names(l.carriedForward()),
+		"the siblings of a wrongly typed entry survive")
+
+	require.NoError(t, l.save(path))
+	reloaded, warnings, err := loadLedger(path)
+	require.NoError(t, err)
+	assert.Empty(t, warnings)
+	assert.Equal(t, []string{"acme-prod", "staging-one"}, names(reloaded.Authoritative()))
+	assert.Equal(t, testOtherOrigin, reloaded.Authoritative()[1].ControlPlane)
 }
 
 // TestLoadLedger_QuarantinesEntriesSharingAName pins the other half of the
@@ -498,6 +553,30 @@ func TestLedgerSave_LeavesOtherControlPlanesUntouched(t *testing.T) {
 	assert.Equal(t, testUUIDC, reloaded.carriedForward()[1].InstallationID)
 }
 
+// TestLedgerSave_CanonicalisesTheEntriesItWrites pins that the file's
+// invariants are true by construction rather than by convention: an entry
+// added during a run is written under the same origin spelling as one read
+// from the file, so two spellings of one control plane cannot slip a
+// duplicate past the conflict scan.
+func TestLedgerSave_CanonicalisesTheEntriesItWrites(t *testing.T) {
+	path := writeLedgerFile(t, ledgerSchemaVersion, validRaw("acme-prod", testUUIDA))
+
+	l, _, err := loadLedger(path)
+	require.NoError(t, err)
+	l.upsert(&ledgerEntry{
+		ControlPlane:   "HTTPS://Cloud.Formae.IO:443/",
+		InstallationID: testUUIDB,
+		Name:           "acme-dev",
+		State:          entryOwned,
+		Fingerprint:    testFingerprintA,
+	})
+	require.NoError(t, l.save(path))
+
+	written := savedEntries(t, path)
+	require.Len(t, written, 2)
+	assert.Equal(t, testOrigin, written[1].ControlPlane, "the written record carries the canonical origin")
+}
+
 // TestLedgerSave_WritesAtomicallyThroughAUniqueTempFile drives concurrent
 // saves against one path while reading it: with a unique temp file plus a
 // rename, every observer sees a complete ledger, never a truncated one, and
@@ -550,29 +629,79 @@ func TestLedgerSave_WritesAtomicallyThroughAUniqueTempFile(t *testing.T) {
 }
 
 // TestLedgerSave_FailureLeavesTheExistingLedgerIntact pins that a save that
-// cannot complete never truncates the records already on disk.
+// cannot complete never truncates the records already on disk, whether it
+// gives up before writing anything or fails at the rename. Both failures are
+// injected without permission bits, so the assertion holds for every user,
+// root included.
 func TestLedgerSave_FailureLeavesTheExistingLedgerIntact(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("root ignores directory permissions, so the write cannot be made to fail this way")
-	}
-	dir := t.TempDir()
-	path := filepath.Join(dir, "managed.json")
 	original, err := json.Marshal(map[string]any{
 		"schemaVersion": ledgerSchemaVersion,
-		"entries":       []rawEntry{validRaw("acme-prod", testUUIDA)},
+		"entries":       []any{validRaw("acme-prod", testUUIDA)},
 	})
 	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(path, original, 0o600))
 
-	require.NoError(t, os.Chmod(dir, 0o500))
-	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	validEntry := func() *ledgerEntry {
+		return &ledgerEntry{
+			ControlPlane:   testOrigin,
+			InstallationID: testUUIDB,
+			Name:           "acme-dev",
+			State:          entryOwned,
+			Fingerprint:    testFingerprintA,
+		}
+	}
 
-	l := &ledger{}
-	assert.Error(t, l.save(path))
+	tests := []struct {
+		name string
+		// setUp returns the ledger to save, the path to save it to, and the
+		// file whose bytes must still be the original records afterwards.
+		setUp func(t *testing.T, dir string) (l *ledger, path, witness string)
+	}{
+		{
+			name: "an entry whose control plane will not canonicalise",
+			setUp: func(t *testing.T, dir string) (*ledger, string, string) {
+				path := filepath.Join(dir, "managed.json")
+				require.NoError(t, os.WriteFile(path, original, 0o600))
+				l := &ledger{}
+				e := validEntry()
+				e.ControlPlane = "not a url"
+				l.upsert(e)
+				return l, path, path
+			},
+		},
+		{
+			name: "a destination that cannot be replaced",
+			setUp: func(t *testing.T, dir string) (*ledger, string, string) {
+				// A directory at the destination makes the rename fail for
+				// every user, so the temp file has to be cleaned up and the
+				// records it was to replace left where they are.
+				path := filepath.Join(dir, "managed.json")
+				require.NoError(t, os.Mkdir(path, 0o755))
+				witness := filepath.Join(path, "records.json")
+				require.NoError(t, os.WriteFile(witness, original, 0o600))
+				l := &ledger{}
+				l.upsert(validEntry())
+				return l, path, witness
+			},
+		},
+	}
 
-	after, err := os.ReadFile(path)
-	require.NoError(t, err)
-	assert.Equal(t, string(original), string(after))
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			l, path, witness := tc.setUp(t, dir)
+
+			assert.Error(t, l.save(path))
+
+			after, err := os.ReadFile(witness)
+			require.NoError(t, err)
+			assert.Equal(t, string(original), string(after))
+
+			left, err := os.ReadDir(dir)
+			require.NoError(t, err)
+			require.Len(t, left, 1, "no temp file may be left behind")
+			assert.Equal(t, "managed.json", left[0].Name())
+		})
+	}
 }
 
 // TestLockLedger_ExcludesASecondHolder pins that the lock actually excludes,
