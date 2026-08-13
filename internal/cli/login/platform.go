@@ -5,10 +5,91 @@
 package login
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"strings"
 )
+
+// DefaultCloudURL and DefaultCloudIssuer are the built-in control-plane
+// origin and issuer used when neither is overridden.
+const (
+	DefaultCloudURL    = "https://formae.ai"
+	DefaultCloudIssuer = "https://auth.formae.ai"
+)
+
+// platform is a control-plane origin and the issuer that must have signed a
+// profile's auth block before the CLI will sync against that origin. The two
+// are resolved together by resolvePlatform so one can never be swapped in
+// without the other.
+type platform struct {
+	Origin string
+	Issuer string
+}
+
+// errPlatformHalfSet is wrapped into the error resolvePlatform returns when
+// exactly one of the origin/issuer overrides is set. A request built from a
+// mismatched pair — a custom control plane paired with the default issuer, or
+// the reverse — is exactly the state the sync gate exists to catch, so it
+// must not be constructible.
+var errPlatformHalfSet = errors.New("the cloud URL and cloud issuer overrides must be set together, or neither")
+
+// resolvePlatform resolves the control-plane origin and issuer as a pair.
+// Each half is resolved independently with flag beats env var beats built-in
+// default (mirroring resolveHubURL in internal/cli/plugin/init.go), then both
+// halves are canonicalised through canonicalOrigin. The two halves may come
+// from different sources — a flag for one and an env var for the other is a
+// complete pair — but exactly one of them being overridden while the other
+// is left at its default is refused rather than silently completed, and an
+// override that fails to canonicalise is an error rather than a fallback to
+// the default.
+//
+// An env var present but set to the empty string counts as set. os.Getenv
+// cannot tell absent from empty, so resolveHalf uses os.LookupEnv instead:
+// treating a present override as unset would let it be silently ignored,
+// which is the one thing this function must never do to an override the
+// caller (or its environment) actually specified.
+func resolvePlatform(cloudFlag, issuerFlag string) (platform, error) {
+	cloudRaw, cloudSet := resolveHalf(cloudFlag, "FORMAE_CLOUD_URL")
+	issuerRaw, issuerSet := resolveHalf(issuerFlag, "FORMAE_CLOUD_ISSUER")
+
+	switch {
+	case cloudSet && !issuerSet:
+		return platform{}, fmt.Errorf(
+			"--cloud (or FORMAE_CLOUD_URL) is set without --cloud-issuer (or FORMAE_CLOUD_ISSUER): %w", errPlatformHalfSet)
+	case issuerSet && !cloudSet:
+		return platform{}, fmt.Errorf(
+			"--cloud-issuer (or FORMAE_CLOUD_ISSUER) is set without --cloud (or FORMAE_CLOUD_URL): %w", errPlatformHalfSet)
+	case !cloudSet && !issuerSet:
+		cloudRaw = DefaultCloudURL
+		issuerRaw = DefaultCloudIssuer
+	}
+
+	origin, err := canonicalOrigin(cloudRaw)
+	if err != nil {
+		return platform{}, fmt.Errorf("cloud URL: %w", err)
+	}
+	issuer, err := canonicalOrigin(issuerRaw)
+	if err != nil {
+		return platform{}, fmt.Errorf("cloud issuer: %w", err)
+	}
+	return platform{Origin: origin, Issuer: issuer}, nil
+}
+
+// resolveHalf returns the flag-vs-env-vs-default candidate for one half of
+// the platform pair, and whether it was set at all (by flag or by env var).
+// The default is never returned here; the caller substitutes it only once it
+// has confirmed the other half is unset too.
+func resolveHalf(flagVal, envName string) (candidate string, set bool) {
+	if flagVal != "" {
+		return flagVal, true
+	}
+	if envVal, ok := os.LookupEnv(envName); ok {
+		return envVal, true
+	}
+	return "", false
+}
 
 // loopbackHosts are the hosts a plain http origin is accepted for. A bearer
 // token sent over http can be read by anything on the path, so http is
