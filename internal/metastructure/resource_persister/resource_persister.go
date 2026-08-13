@@ -423,7 +423,16 @@ func (rp *ResourcePersister) recordMovedSinceGenerated(resourceUpdate *resource_
 		return true
 	}
 
-	return current.Version != generated.Version
+	if current.Version != generated.Version {
+		return true
+	}
+
+	// The version alone is not a complete witness: storeResource reuses it when
+	// only ReadOnlyProperties changed, rewriting that row in place. Compare
+	// those too, so a refresh confined to read-only state still counts as a
+	// rewrite. (Both sides are the stored representation, so they differ only
+	// if something actually wrote.)
+	return !util.JsonEqualRaw(current.ReadOnlyProperties, generated.ReadOnlyProperties)
 }
 
 func resourceOperationFromPluginOperation(resourceOperation resource_update.OperationType, pluginOperation pkgresource.Operation, progress *plugin.TrackedProgress) resource_update.OperationType {

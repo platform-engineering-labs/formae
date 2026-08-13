@@ -2527,6 +2527,54 @@ func (d *loadResourceFlakyDatastore) LoadResource(uri pkgmodel.FormaeURI) (*pkgm
 	return d.Datastore.LoadResource(uri)
 }
 
+func TestResourcePersister_StaleSyncReadDoesNotDeleteAfterReadOnlyRewrite(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+
+	res := pkgmodel.Resource{
+		Label:              "task-def",
+		Type:               "FakeAWS::ECS::TaskDefinition",
+		Stack:              "test-stack",
+		Ksuid:              util.NewID(),
+		Managed:            true,
+		NativeID:           "arn:task-definition/app:4",
+		Properties:         json.RawMessage(`{"memory":"512"}`),
+		ReadOnlyProperties: json.RawMessage(`{"status":"ACTIVE"}`),
+	}
+	persistCreateForTest(t, persister, sender, res, "cmd-plan")
+
+	byStack, err := ds.LoadResourcesByStack("test-stack")
+	require.NoError(t, err)
+	require.Len(t, byStack, 1)
+	generatedFrom := byStack[0]
+	require.NotEmpty(t, generatedFrom.Version)
+
+	// Another command refreshes only read-only state. The datastore rewrites
+	// that row in place and deliberately reuses its version, so the version
+	// alone cannot witness this rewrite.
+	refreshed := res
+	refreshed.ReadOnlyProperties = json.RawMessage(`{"status":"INACTIVE"}`)
+	persistCreateForTest(t, persister, sender, refreshed, "cmd-refresh")
+
+	afterRefresh, err := ds.LoadResourcesByStack("test-stack")
+	require.NoError(t, err)
+	require.Len(t, afterRefresh, 1)
+	require.Equal(t, generatedFrom.Version, afterRefresh[0].Version,
+		"premise: a read-only-only rewrite reuses the row version")
+
+	result := persister.Call(sender, resource_update.PersistResourceUpdate{
+		CommandID:         "cmd-sync",
+		ResourceOperation: resource_update.OperationRead,
+		PluginOperation:   resource.OperationRead,
+		ResourceUpdate:    syncReadNotFoundForTest(*generatedFrom, "arn:task-definition/app:4"),
+	})
+	require.NoError(t, result.Error)
+
+	resources, err := ds.LoadResourcesByStack("test-stack")
+	require.NoError(t, err)
+	require.Len(t, resources, 1, "a record rewritten since the read was planned must survive, even when the rewrite reused the version")
+}
+
 func TestResourcePersister_DiscoveryReadNotFoundStillDeletesOrphanedRow(t *testing.T) {
 	persister, sender, ds, err := newResourcePersisterForTest(t)
 	require.NoError(t, err)
