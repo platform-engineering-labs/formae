@@ -114,7 +114,9 @@ test-all: test-build test-pkl test-scripts
 
 ## test-scripts: Run the tests for the shell scripts in scripts/
 test-scripts:
-	./scripts/tests/mutation-test-changed_test.sh
+	@for t in scripts/tests/*_test.sh; do \
+		"$$t" || exit 1; \
+		done
 
 test-unit:
 	go test -C ./pkg/auth -tags=unit -failfast ./...

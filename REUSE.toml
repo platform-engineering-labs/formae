@@ -8,7 +8,7 @@ SPDX-License-Identifier = "FSL-1.1-ALv2"
 
 # Shell scripts in scripts/ directory
 [[annotations]]
-path = ["scripts/*.sh", "scripts/**/*.sh"]
+path = ["scripts/*.sh"]
 SPDX-FileCopyrightText = "© 2025 Platform Engineering Labs Inc."
 SPDX-License-Identifier = "FSL-1.1-ALv2"
 
