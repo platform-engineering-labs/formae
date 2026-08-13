@@ -20,6 +20,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          fetch-tags: true
 
       - name: Set up Go
         uses: actions/setup-go@v4
@@ -35,6 +36,12 @@ jobs:
 
       - name: Install gremlins
         run: make install-gremlins
+
+      # The PKL schema project reads its package version from this file, so a
+      # package that evaluates the schema cannot be mutated without it. This
+      # job needs the stamp and not the binary, so it stamps rather than builds.
+      - name: Stamp the version
+        run: make version-semver
 
       - name: Run mutation tests on changed packages
         run: ./scripts/mutation-test-changed.sh
