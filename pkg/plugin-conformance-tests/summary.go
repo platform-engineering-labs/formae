@@ -285,10 +285,14 @@ func (rc *ResultCollector) MarkRemainingDiscoverySkipped(idx int) {
 func countResults(results []TestResult, phaseCount int) (passed, failed, skipped int) {
 	for _, r := range results {
 		hasFailed := false
+		allNotRun := true
 		allSkipped := true
 		for i := 0; i < phaseCount; i++ {
 			if r.Phases[i] == StepFailed {
 				hasFailed = true
+			}
+			if r.Phases[i] != StepNotRun {
+				allNotRun = false
 			}
 			if r.Phases[i] != StepSkipped {
 				allSkipped = false
@@ -299,6 +303,12 @@ func countResults(results []TestResult, phaseCount int) (passed, failed, skipped
 			failed++
 		case allSkipped:
 			skipped++
+		// A suite where nothing ran at all is not a suite that passed. Setup
+		// can die before the first phase (an unresolvable Pkl project, a plugin
+		// that will not start), and counting that as a pass makes the summary
+		// report success for a run that tested nothing.
+		case allNotRun:
+			failed++
 		default:
 			passed++
 		}
