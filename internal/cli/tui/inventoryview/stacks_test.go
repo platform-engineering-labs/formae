@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/platform-engineering-labs/formae/internal/datastore"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
@@ -246,6 +247,172 @@ func TestStackRow_Cells_UnparsablePolicy_NoPanic(t *testing.T) {
 	// Should not panic and should produce "none" (no valid parts)
 	got := stackRow(s, stacksNow)
 	assert.Equal(t, "none", got.cells[2])
+}
+
+// ---------------------------------------------------------------------------
+// stackRow: absolute timestamps beyond the 24h horizon
+//
+// Past 24h the summary drops the relative form and prints an instant. That
+// instant is rendered in UTC with a trailing Z so it reads the same for every
+// operator and cannot be mistaken for local wall-clock.
+// ---------------------------------------------------------------------------
+
+// pinLocalZone points time.Local at a fixed non-UTC zone for the duration of a
+// test, so an assertion on a rendered instant distinguishes UTC from local
+// time. On a UTC host the two are identical and such an assertion would hold
+// either way.
+//
+// time.Local is process-global, so this is only safe while no test in this
+// package calls t.Parallel(). Adding t.Parallel() here must be a conscious
+// decision that accounts for these tests.
+func pinLocalZone(t *testing.T) {
+	t.Helper()
+	saved := time.Local
+	time.Local = time.FixedZone("PDT", -7*60*60)
+	t.Cleanup(func() { time.Local = saved })
+}
+
+// The deadline must render as the stored UTC instant no matter where the
+// operator sits. Reading a local wall-clock time off this cell and passing it
+// back as an absolute deadline would move the deadline by the operator's
+// offset.
+func TestStackRow_Cells_TTLPolicy_AbsoluteBeyond24h_RendersUTCUnderLocalZone(t *testing.T) {
+	pinLocalZone(t)
+
+	expiresAt := stacksNow.Add(9 * 24 * time.Hour)
+	ttlJSON, err := json.Marshal(map[string]any{
+		"Type":      "ttl",
+		"Label":     "trial-expiry",
+		"ExpiresAt": expiresAt.Format(time.RFC3339),
+	})
+	require.NoError(t, err)
+
+	s := &pkgmodel.Stack{
+		Label:     "trial-stack",
+		CreatedAt: stacksNow.Add(-100 * time.Hour),
+		Policies:  []json.RawMessage{ttlJSON},
+	}
+	got := stackRow(s, stacksNow)
+	assert.Equal(t, "TTL: expires Jul 26 12:00Z (trial-expiry)", got.cells[2])
+}
+
+// Documents the rendered format independently of the zone guard. This one holds
+// on a UTC host regardless of which zone the formatter uses, so it pins the
+// shape rather than guarding the conversion.
+func TestStackRow_Cells_TTLPolicy_AbsoluteBeyond24h_CarriesUTCQualifier(t *testing.T) {
+	expiresAt := stacksNow.Add(9 * 24 * time.Hour)
+	ttlJSON, err := json.Marshal(map[string]any{
+		"Type":      "ttl",
+		"ExpiresAt": expiresAt.Format(time.RFC3339),
+	})
+	require.NoError(t, err)
+
+	s := &pkgmodel.Stack{
+		Label:     "trial-stack",
+		CreatedAt: stacksNow.Add(-100 * time.Hour),
+		Policies:  []json.RawMessage{ttlJSON},
+	}
+	got := stackRow(s, stacksNow)
+	assert.Equal(t, "TTL: expires Jul 26 12:00Z", got.cells[2])
+}
+
+// A duration-based TTL reaches the same formatter through createdAt+duration,
+// so it carries the qualifier too.
+func TestStackRow_Cells_TTLPolicy_DurationBeyond24h_RendersUTC(t *testing.T) {
+	pinLocalZone(t)
+
+	ttlJSON := json.RawMessage(`{"Type":"ttl","TTLSeconds":604800}`)
+	s := &pkgmodel.Stack{
+		Label:     "week-stack",
+		CreatedAt: stacksNow,
+		Policies:  []json.RawMessage{ttlJSON},
+	}
+	got := stackRow(s, stacksNow)
+	assert.Equal(t, "TTL: 7d, expires Jul 24 12:00Z", got.cells[2])
+}
+
+// The auto-reconcile last-run timestamp shares the cell with the TTL deadline
+// and the same absolute-time branch, so it is qualified the same way.
+func TestStackRow_Cells_AutoReconcile_LastRunBeyond24h_RendersUTC(t *testing.T) {
+	pinLocalZone(t)
+
+	lastRun := stacksNow.Add(-30 * time.Hour)
+	arJSON, err := json.Marshal(map[string]any{
+		"Type":            "auto-reconcile",
+		"IntervalSeconds": float64(300),
+		"LastReconcileAt": lastRun.Format(time.RFC3339),
+	})
+	require.NoError(t, err)
+
+	s := &pkgmodel.Stack{
+		Label:    "ar-stack",
+		Policies: []json.RawMessage{arJSON},
+	}
+	got := stackRow(s, stacksNow)
+	assert.Equal(t, "Auto-reconcile: every 5m, last Jul 16 06:00Z", got.cells[2])
+}
+
+// Pins which side of the 24h horizon each boundary value falls on, so a later
+// refactor cannot move the switch between the relative and absolute forms
+// without a test noticing.
+func TestStackRow_Cells_TTLPolicy_Absolute24hBoundary(t *testing.T) {
+	pinLocalZone(t)
+
+	tests := []struct {
+		name      string
+		remaining time.Duration
+		want      string
+	}{
+		{"exactly 24h renders the instant", 24 * time.Hour, "TTL: expires Jul 18 12:00Z"},
+		{"one minute under renders relative", 23*time.Hour + 59*time.Minute, "TTL: expires in 23h59m"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ttlJSON, err := json.Marshal(map[string]any{
+				"Type":      "ttl",
+				"ExpiresAt": stacksNow.Add(tt.remaining).Format(time.RFC3339),
+			})
+			require.NoError(t, err)
+
+			s := &pkgmodel.Stack{
+				Label:     "boundary-stack",
+				CreatedAt: stacksNow.Add(-100 * time.Hour),
+				Policies:  []json.RawMessage{ttlJSON},
+			}
+			got := stackRow(s, stacksNow)
+			assert.Equal(t, tt.want, got.cells[2])
+		})
+	}
+}
+
+// The Policies column is a fixed width and hard-truncates from the right, so
+// asserting on the cell alone does not prove an operator ever sees the
+// qualifier. This goes through the entry point both the TUI tab and the
+// non-TTY table share, at the real column width, and pins the budget the
+// format depends on: a longer format that pushes the Z past the column fails
+// here rather than in production.
+func TestRenderStacks_AbsoluteDeadlineKeepsUTCQualifierAtColumnWidth(t *testing.T) {
+	pinLocalZone(t)
+
+	expiresAt := stacksNow.Add(9 * 24 * time.Hour)
+	ttlJSON, err := json.Marshal(map[string]any{
+		"Type":      "ttl",
+		"Label":     "trial-expiry",
+		"ExpiresAt": expiresAt.Format(time.RFC3339),
+	})
+	require.NoError(t, err)
+
+	s := &pkgmodel.Stack{
+		Label:       "trial-stack",
+		Description: "A hosted trial installation",
+		CreatedAt:   stacksNow.Add(-100 * time.Hour),
+		Policies:    []json.RawMessage{ttlJSON},
+	}
+
+	out := RenderStacks(theme.New("quiet"), []*pkgmodel.Stack{s}, stacksNow, 10, 120)
+	assert.Contains(t, out, "TTL: expires Jul 26 12:00Z",
+		"the qualifier must survive truncation of the Policies column")
 }
 
 // ---------------------------------------------------------------------------

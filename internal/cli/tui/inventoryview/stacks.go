@@ -187,7 +187,7 @@ func formatExpiryTimeInj(expiresAt time.Time, now time.Time) string {
 		return fmt.Sprintf("in %dh%dm", int(remaining.Hours()), int(remaining.Minutes())%60)
 	}
 
-	return expiresAt.Local().Format("Jan 2 15:04")
+	return formatUTCInstant(expiresAt)
 }
 
 // formatLastReconcileTimeInj is formatLastReconcileTime from the renderer but
@@ -203,7 +203,18 @@ func formatLastReconcileTimeInj(t time.Time, now time.Time) string {
 	if ago < 24*time.Hour {
 		return fmt.Sprintf("%dh%dm ago", int(ago.Hours()), int(ago.Minutes())%60)
 	}
-	return t.Local().Format("Jan 2 15:04")
+	return formatUTCInstant(t)
+}
+
+// formatUTCInstant renders an absolute timestamp for the summary cell. The
+// trailing Z marks the value as UTC, so it reads the same for every operator
+// and cannot be mistaken for local wall-clock.
+//
+// The Z is concatenated rather than folded into the layout: a layout-leading Z
+// introduces an offset verb (Z07:00), and a bare trailing Z is only kept as a
+// literal by falling through that check.
+func formatUTCInstant(t time.Time) string {
+	return t.UTC().Format("Jan 2 15:04") + "Z"
 }
 
 // formatTTLDur formats a duration in a human-friendly way.
