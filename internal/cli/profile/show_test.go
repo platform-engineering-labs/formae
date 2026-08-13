@@ -9,13 +9,19 @@ package profile
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 )
 
 const hostedProfilePkl = `amends "formae:/Config.pkl"
@@ -131,4 +137,42 @@ func TestShowRejectsUnknownProfile(t *testing.T) {
 
 	require.Error(t, err)
 	assert.True(t, strings.Contains(err.Error(), "nope"), "the error names the profile asked for")
+}
+
+// The theme follows the active profile rather than the one being displayed:
+// it is the user's environment, the same as for every other command in this
+// group. Showing a profile must not adopt that profile's theme.
+func TestShowRendersInTheActiveProfilesTheme(t *testing.T) {
+	seedProfileBodies(t, "prod", map[string]string{
+		"prod": hostedProfilePkl,
+		"demo": hostedProfilePkl,
+	})
+
+	origTTY := isTerminal
+	isTerminal = func(_ io.Writer) bool { return true }
+	t.Cleanup(func() { isTerminal = origTTY })
+
+	// The built-in palettes share a section-header colour, so the resolved
+	// theme is given a distinctive one: without it the assertions below would
+	// hold no matter which theme the command picked.
+	resolved := *theme.New("quiet")
+	resolved.Palette.SecondaryAccent = lipgloss.AdaptiveColor{Light: "#123456", Dark: "#123456"}
+
+	origApply := applyTheme
+	called := false
+	applyTheme = func(_ *cobra.Command) *theme.Theme {
+		called = true
+		return &resolved
+	}
+	t.Cleanup(func() { applyTheme = origApply })
+
+	out := runShow(t, "demo")
+
+	assert.True(t, called, "show must resolve the theme from the active profile")
+
+	want := components.SectionHeader(&resolved, "Connection")
+	def := components.SectionHeader(theme.New("formae"), "Connection")
+	require.NotEqual(t, def, want, "the two themes must render differently for this assertion to mean anything")
+	assert.Contains(t, out, want, "show must render in the resolved active-profile theme")
+	assert.NotContains(t, out, def, "show must not fall back to the default theme")
 }

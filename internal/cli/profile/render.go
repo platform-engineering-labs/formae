@@ -6,6 +6,7 @@ package profile
 
 import (
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 
@@ -65,6 +66,20 @@ func renderCurrentHuman(th *theme.Theme, active string, tty bool) string {
 // components.AckLine helper.
 func renderAck(th *theme.Theme, text string) string {
 	return components.AckLine(th, components.AckDone, text)
+}
+
+// printConfigWarnings writes a config's warnings, one per line, in the same
+// shape App.PrintBanner uses. It takes the writer rather than reaching for
+// os.Stderr so the caller decides the stream and tests can read it back.
+func printConfigWarnings(w io.Writer, th *theme.Theme, warnings []string) {
+	if len(warnings) == 0 {
+		return
+	}
+	label := lipgloss.NewStyle().Foreground(th.Palette.Warning).Render("Warning:")
+	for _, warning := range warnings {
+		_, _ = fmt.Fprintf(w, "%s %s\n", label, warning)
+	}
+	_, _ = fmt.Fprintln(w)
 }
 
 // renderConfigView renders a config view as themed sections in a fixed order,

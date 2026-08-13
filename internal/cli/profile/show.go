@@ -10,9 +10,11 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
+	"github.com/platform-engineering-labs/formae/internal/cli/banner"
 	"github.com/platform-engineering-labs/formae/internal/cli/printer"
 	"github.com/platform-engineering-labs/formae/internal/cli/profile/configview"
 	"github.com/platform-engineering-labs/formae/internal/cli/profile/store"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 )
 
 func newShowCmd() *cobra.Command {
@@ -51,11 +53,23 @@ func newShowCmd() *cobra.Command {
 				return p.Print(&view)
 			}
 
-			// PrintBanner also surfaces the loaded profile's config warnings,
-			// including its deprecation notices, on stderr.
-			a.PrintBanner()
+			// The theme follows the active profile, like every other command:
+			// it is the user's environment, not a property of the profile
+			// being displayed. Resolved only on a TTY, so piped output stays a
+			// pure read of the named profile.
+			w := cc.OutOrStdout()
+			th := theme.New("formae")
+			if isTerminal(w) {
+				th = applyTheme(cc)
+			}
+			banner.PrintBanner()
+
+			// The shown profile's own warnings, including its deprecation
+			// notices, go to stderr so they never enter piped output.
+			printConfigWarnings(cc.ErrOrStderr(), th, a.Config.Warnings)
+
 			view := configview.From(name, a.Config, configview.HumanMask)
-			_, _ = fmt.Fprintln(cc.OutOrStdout(), renderConfigView(a.Theme(), view))
+			_, _ = fmt.Fprintln(w, renderConfigView(th, view))
 			return nil
 		},
 	}
