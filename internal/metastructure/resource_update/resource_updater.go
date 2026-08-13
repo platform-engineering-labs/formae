@@ -622,10 +622,15 @@ func resourceResolved(from gen.PID, state gen.Atom, data ResourceUpdateData, mes
 
 func create(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
 	data.stage = state
+	// A reason recorded by an earlier attempt must not outlive it: MarkAsFailed
+	// does not clear it, so a retried or resumed create would otherwise report a
+	// failure that no longer describes it.
+	data.resourceUpdate.FailureReason = ""
 	// Convert properties to plugin format (extracts $value from opaque structures)
 	convertedResource, err := convertResourceForPlugin(data.resourceUpdate.DesiredState)
 	if err != nil {
 		proc.Log().Error("failed to convert resource properties for plugin: %v", err)
+		data.resourceUpdate.FailureReason = createRequestFailureReason(err)
 		data.resourceUpdate.MarkAsFailed()
 		return StateFinishedWithError, data, nil, nil
 	}
@@ -658,32 +663,54 @@ func create(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 	return handleProgressUpdate(gen.PID{}, state, data, *result, proc)
 }
 
-// Failures while building the plugin Update request precede any plugin
-// operation, so nothing records them as progress and the resource update would
-// otherwise report an empty ErrorMessage — leaving the reason discoverable only
-// in the agent's own log. These are the operator-facing texts for that boundary.
+// Failures while building or dispatching a plugin request precede any recorded
+// plugin progress, so the resource update would otherwise report an empty
+// ErrorMessage — leaving the reason discoverable only in the agent's own log.
+// These are the operator-facing texts for that boundary, worded per operation.
 //
 // They are fixed, never the underlying error: it names the property that failed,
 // and a property path can carry user-authored map keys.
 const (
-	failureReasonUnrecoverableOpaqueValue = "cannot update this resource: formae holds only a stored hash of one of its secret properties, so it cannot send that value to the provider. Re-supply the value in your forma, or leave the provider's current value in place."
-	failureReasonPluginRequestPreparation = "cannot update this resource: formae could not build the provider request from its recorded state."
+	failureReasonUnrecoverableOpaqueValueOnUpdate = "cannot update this resource: formae holds only a stored hash of one of its secret properties, so it cannot send that value to the provider. Re-supply the value in your forma, or leave the provider's current value in place."
+	failureReasonPluginRequestPreparationOnUpdate = "cannot update this resource: formae could not build the provider request from its recorded state."
+
+	failureReasonUnrecoverableOpaqueValueOnCreate = "cannot create this resource: the desired value of one of its secret properties is a stored hash, which formae cannot send to the provider as the live value. Re-supply the value in your forma."
+	failureReasonPluginRequestPreparationOnCreate = "cannot create this resource: formae could not build the provider request for it."
+	// A dispatch failure can happen after the create was handed to the plugin,
+	// so the text must not tell an operator the create never started.
+	failureReasonPluginDispatchOnCreate = "cannot create this resource: formae lost contact with the provider plugin while starting the create, so the resource may or may not have been created — check the provider before retrying."
 )
+
+// isUnrecoverableOpaqueValue reports whether preparing a plugin request failed
+// because formae holds only a stored hash of an opaque value.
+func isUnrecoverableOpaqueValue(err error) bool {
+	return errors.Is(err, resolver.ErrHashedValueNotWritable)
+}
 
 // updateRequestFailureReason maps a plugin-request preparation error to the
 // fixed reason recorded on the resource update.
 func updateRequestFailureReason(err error) string {
-	if errors.Is(err, resolver.ErrHashedValueNotWritable) {
-		return failureReasonUnrecoverableOpaqueValue
+	if isUnrecoverableOpaqueValue(err) {
+		return failureReasonUnrecoverableOpaqueValueOnUpdate
 	}
-	return failureReasonPluginRequestPreparation
+	return failureReasonPluginRequestPreparationOnUpdate
+}
+
+// createRequestFailureReason is updateRequestFailureReason's counterpart for a
+// create, whose remedies differ: there is no provider-side current value to
+// leave in place.
+func createRequestFailureReason(err error) string {
+	if isUnrecoverableOpaqueValue(err) {
+		return failureReasonUnrecoverableOpaqueValueOnCreate
+	}
+	return failureReasonPluginRequestPreparationOnCreate
 }
 
 func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
 	data.stage = state
-	// A reason recorded by an earlier attempt must not outlive it: neither
-	// MarkAsFailed nor MarkAsSuccess clears it, so a retried or resumed update
-	// would otherwise report a failure that no longer describes it.
+	// A reason recorded by an earlier attempt must not outlive it: MarkAsFailed
+	// does not clear it, so a retried or resumed update would otherwise report a
+	// failure that no longer describes it.
 	data.resourceUpdate.FailureReason = ""
 	// When bringing a resource under management without property changes, skip the plugin
 	// Update call since there are no actual changes to make in the cloud. Instead, create

@@ -28,8 +28,8 @@ import (
 // assembled without driving progress handling.
 var errPluginUnreachable = errors.New("plugin operator unreachable")
 
-// operationCapturingProcess drives update() far enough to observe the
-// plugin.UpdateResource it builds: Call answers the coordinator's spawn request,
+// operationCapturingProcess drives a state function far enough to observe the
+// plugin operation it builds: Call answers the coordinator's spawn request,
 // CallWithTimeout records the operation and then fails, ending the state
 // function immediately after the request is assembled.
 type operationCapturingProcess struct {
@@ -420,9 +420,9 @@ func TestUpdate_PrePluginFailure_RecordsRedactedFailureReason(t *testing.T) {
 func TestUpdateRequestFailureReason_Categories(t *testing.T) {
 	wrapped := fmt.Errorf("converting properties: %w", resolver.ErrHashedValueNotWritable)
 
-	assert.Equal(t, failureReasonUnrecoverableOpaqueValue, updateRequestFailureReason(wrapped),
+	assert.Equal(t, failureReasonUnrecoverableOpaqueValueOnUpdate, updateRequestFailureReason(wrapped),
 		"an unrecoverable stored opaque value must be reported as such however deeply it is wrapped")
-	assert.Equal(t, failureReasonPluginRequestPreparation, updateRequestFailureReason(errors.New("malformed document")),
+	assert.Equal(t, failureReasonPluginRequestPreparationOnUpdate, updateRequestFailureReason(errors.New("malformed document")),
 		"any other preparation failure falls back to the generic reason")
 }
 
