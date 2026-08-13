@@ -311,6 +311,26 @@ func TestOmarchyThemeDir_StateDirDefaultsUnderHome(t *testing.T) {
 	}
 }
 
+// The XDG spec calls a relative base directory invalid and says to ignore it,
+// which is what os.UserConfigDir does for XDG_CONFIG_HOME. The state dir has to
+// agree, or a relative value silently probes (and then names in the warning) a
+// working-directory-relative path.
+func TestOmarchyThemeDir_RelativeStateHomeIsIgnored(t *testing.T) {
+	for _, stateHome := range []string{"relative/path", "   "} {
+		t.Run(stateHome, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("XDG_STATE_HOME", stateHome)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+			want := installOmarchyTheme(t, filepath.Join(home, ".local", "state"))
+
+			if got := omarchyThemeDir(); got != want {
+				t.Errorf("omarchyThemeDir() = %q, want the HOME default %q", got, want)
+			}
+		})
+	}
+}
+
 // With no Omarchy install at all the resolver still needs a path to name in its
 // warning, and the current generation is the one to name.
 func TestOmarchyThemeDir_NoInstallNamesStateDir(t *testing.T) {

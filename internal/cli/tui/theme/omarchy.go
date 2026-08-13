@@ -159,7 +159,10 @@ func mapOmarchyPalette(oc omarchyColors) paletteFile {
 // the second. Either entry is omitted when the environment cannot name it.
 func omarchyThemeDirs() []string {
 	var dirs []string
-	if state := os.Getenv("XDG_STATE_HOME"); state != "" {
+	// A relative XDG base directory is invalid per the spec and is ignored, which
+	// is what os.UserConfigDir does for XDG_CONFIG_HOME below. Without the same
+	// check here a relative value would probe a working-directory-relative path.
+	if state := os.Getenv("XDG_STATE_HOME"); filepath.IsAbs(state) {
 		dirs = append(dirs, filepath.Join(state, "omarchy", "current", "theme"))
 	} else if home, err := os.UserHomeDir(); err == nil {
 		dirs = append(dirs, filepath.Join(home, ".local", "state", "omarchy", "current", "theme"))
