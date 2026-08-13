@@ -234,10 +234,35 @@ type AgentConfig struct {
 	ResourcePlugins []ResourcePluginUserConfig
 }
 
-type APIConfig struct {
+// Connection is where the CLI sends commands. It has exactly two arms, so a
+// configuration cannot be both classic and hosted, and a hosted connection
+// cannot exist without the installation it addresses.
+type Connection interface {
+	isConnection()
+}
+
+// ClassicConnection addresses a self-hosted agent.
+type ClassicConnection struct {
 	URL  string
 	Port int
+	// Auth is the opaque per-plugin auth configuration, nil when the agent
+	// needs no credential.
+	Auth json.RawMessage
 }
+
+func (*ClassicConnection) isConnection() {}
+
+// HostedConnection addresses one installation behind the hosted endpoint.
+// Endpoint is a canonical https origin and Installation a canonical lowercase
+// UUID: both are validated when the configuration is loaded, so consumers can
+// use them directly.
+type HostedConnection struct {
+	Endpoint     string
+	Installation string
+	Auth         json.RawMessage
+}
+
+func (*HostedConnection) isConnection() {}
 
 // RepositoryType discriminates orbital repositories by purpose.
 type RepositoryType string
@@ -263,11 +288,23 @@ type ArtifactConfig struct {
 }
 
 type CliConfig struct {
-	API                   APIConfig
+	Connection Connection
+
 	DisableUsageReporting bool
-	Auth                  json.RawMessage
 	Theme                 string
 	Appearance            string
+}
+
+// AuthConfig returns the auth plugin configuration carried by the connection,
+// or nil when the profile configures no auth plugin.
+func (c CliConfig) AuthConfig() json.RawMessage {
+	switch conn := c.Connection.(type) {
+	case *ClassicConnection:
+		return conn.Auth
+	case *HostedConnection:
+		return conn.Auth
+	}
+	return nil
 }
 
 type Config struct {

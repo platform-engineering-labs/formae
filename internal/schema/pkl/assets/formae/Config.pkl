@@ -264,6 +264,28 @@ class ApiConfig {
     port: Port = 49684
 }
 
+/// A connection to a self-hosted formae agent.
+class Classic {
+    url: String = "http://localhost"
+
+    port: Port = 49684
+
+    /// Optional: a self-hosted agent may be protected by an auth plugin.
+    auth: (BaseCliAuthConfig|Dynamic)?
+}
+
+/// A connection to a hosted formae installation.
+class Hosted {
+    /// Absolute https origin. Validated when the configuration is loaded.
+    endpoint: String
+
+    /// The installation this client addresses, as a canonical lowercase UUID.
+    installation: String
+
+    /// Required: a hosted installation always authenticates.
+    auth: (BaseCliAuthConfig|Dynamic)
+}
+
 class Repository {
   /// Orbital repository URI (optionally with #channel fragment).
   uri: Uri
@@ -297,10 +319,20 @@ class ArtifactConfig {
 }
 
 class CliConfig {
-    api: ApiConfig
+    /// Where this client sends commands. Exactly one of the two forms, by
+    /// construction: a connection is either classic or hosted, never both.
+    connection: (Classic|Hosted)?
+
+    /// Deprecated: use `connection = new Classic { ... }`.
+    ///
+    /// Declared nullable with no default on purpose. Writing `= null` here
+    /// breaks the nested `cli { api { ... } }` form this property exists to
+    /// keep working.
+    api: ApiConfig?
 
     disableUsageReporting: Boolean = false
 
+    /// Deprecated: set `auth` inside `connection`.
     auth: (BaseCliAuthConfig|Dynamic)?
 
     // Theme name: a built-in (quiet, rich, colorblind, omarchy) or the stem of

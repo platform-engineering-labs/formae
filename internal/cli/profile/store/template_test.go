@@ -13,6 +13,7 @@ import (
 
 	"github.com/platform-engineering-labs/formae/internal/cli/profile/store"
 	"github.com/platform-engineering-labs/formae/internal/schema/pkl"
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -27,15 +28,19 @@ func TestStubTemplate_ParsesWithEmptyPluginDir(t *testing.T) {
 
 	cfg, err := pkl.PKL{}.FormaeConfig(path)
 	require.NoError(t, err, "stub must parse with no plugins installed")
-	assert.Equal(t, "http://localhost", cfg.Cli.API.URL)
-	assert.Equal(t, 49684, cfg.Cli.API.Port)
+	classic, ok := cfg.Cli.Connection.(*pkgmodel.ClassicConnection)
+	require.True(t, ok)
+	assert.Equal(t, "http://localhost", classic.URL)
+	assert.Equal(t, 49684, classic.Port)
 }
 
 // A minimal config that only `amends` the schema — materializing no cli/agent
 // values — must still evaluate to a complete, working localhost setup purely
 // from schema defaults. This is what lets the clean-install stub stay minimal
-// (no materialized snapshot to drift from the schema): cli.api must carry a
-// default of its own, not be a required property the user has to fill in.
+// (no materialized snapshot to drift from the schema): the schema declares
+// cli.connection as an optional `(Classic|Hosted)?` with no default of its
+// own, and the localhost fallback is supplied in Go, by buildConnection in
+// internal/schema/pkl/connection.go, when cli.connection is unset.
 func TestSchemaDefaults_BareAmendsYieldsLocalhost(t *testing.T) {
 	t.Setenv("FORMAE_PLUGIN_DIR", t.TempDir()) // empty: no plugin wrappers
 	dir := t.TempDir()
@@ -44,8 +49,10 @@ func TestSchemaDefaults_BareAmendsYieldsLocalhost(t *testing.T) {
 
 	cfg, err := pkl.PKL{}.FormaeConfig(path)
 	require.NoError(t, err, "a bare amends must evaluate from schema defaults alone")
-	assert.Equal(t, "http://localhost", cfg.Cli.API.URL)
-	assert.Equal(t, 49684, cfg.Cli.API.Port)
+	classic, ok := cfg.Cli.Connection.(*pkgmodel.ClassicConnection)
+	require.True(t, ok)
+	assert.Equal(t, "http://localhost", classic.URL)
+	assert.Equal(t, 49684, classic.Port)
 	assert.Equal(t, "localhost", cfg.Agent.Server.Hostname)
 	assert.Equal(t, 49684, cfg.Agent.Server.Port)
 }

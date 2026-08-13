@@ -89,8 +89,8 @@ type App struct {
 
 	// newAPIClient constructs the API client used for a single retried
 	// operation. Nil in the real constructor, where it defaults to
-	// api.NewClient against a.Config.Cli.API; tests inject a stub pointed at
-	// an httptest server.
+	// api.NewClient against a.Config.Cli.Connection; tests inject a stub
+	// pointed at an httptest server.
 	newAPIClient func(authHeader http.Header, net *http.Client) *api.Client
 }
 
@@ -120,7 +120,7 @@ func (a *App) NewClient() (*api.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return api.NewClient(a.Config.Cli.API, auth, net), nil
+	return api.NewClient(a.Config.Cli.Connection, auth, net), nil
 }
 
 // Theme resolves the active CLI theme from config, falling back to quiet when
@@ -789,7 +789,7 @@ func (*NoAuthPluginError) Error() string {
 // block, so callers that need a plugin outright — such as `formae login` —
 // can fail with a clear message instead of dereferencing a nil client.
 func (a *App) AuthClient() (*pkgauth.Client, error) {
-	if a.Config.Cli.Auth == nil {
+	if a.Config.Cli.AuthConfig() == nil {
 		return nil, &NoAuthPluginError{}
 	}
 
@@ -797,7 +797,7 @@ func (a *App) AuthClient() (*pkgauth.Client, error) {
 	defer a.memoMu.Unlock()
 
 	if a.authClient == nil {
-		authType := gjson.GetBytes(a.Config.Cli.Auth, "type").String()
+		authType := gjson.GetBytes(a.Config.Cli.AuthConfig(), "type").String()
 		devPluginDir := util.ExpandHomePath(a.Config.PluginDir)
 		binPath, err := os.Executable()
 		if err != nil {
@@ -817,7 +817,7 @@ func (a *App) AuthClient() (*pkgauth.Client, error) {
 		if matched == nil {
 			return nil, fmt.Errorf("auth plugin %q not installed", authType)
 		}
-		client, err := pkgauth.NewClient(matched.BinaryPath, a.Config.Cli.Auth)
+		client, err := pkgauth.NewClient(matched.BinaryPath, a.Config.Cli.AuthConfig())
 		if err != nil {
 			return nil, fmt.Errorf("failed to start auth plugin: %w", err)
 		}
@@ -839,12 +839,13 @@ func (a *App) authProvider() (authHeaderProvider, error) {
 
 // apiClient constructs an API client for a single operation from the given
 // auth header and network client, preferring the injectable newAPIClient
-// (set by tests) and falling back to api.NewClient against a.Config.Cli.API.
+// (set by tests) and falling back to api.NewClient against
+// a.Config.Cli.Connection.
 func (a *App) apiClient(authHeader http.Header, net *http.Client) *api.Client {
 	if a.newAPIClient != nil {
 		return a.newAPIClient(authHeader, net)
 	}
-	return api.NewClient(a.Config.Cli.API, authHeader, net)
+	return api.NewClient(a.Config.Cli.Connection, authHeader, net)
 }
 
 // withAuthRetry runs op once with the current auth header. When op fails
@@ -872,7 +873,7 @@ func (a *App) withAuthRetry(op func(authHeader http.Header, net *http.Client) er
 	}
 
 	var authErr api.AuthenticationError
-	if !errors.As(err, &authErr) || a.Config.Cli.Auth == nil {
+	if !errors.As(err, &authErr) || a.Config.Cli.AuthConfig() == nil {
 		return err
 	}
 
@@ -957,7 +958,7 @@ func hasCredential(headers map[string][]string) bool {
 func (a *App) getAuthAndNetHandlers() (http.Header, *http.Client, error) {
 	var authHeader http.Header
 
-	if a.Config.Cli.Auth != nil {
+	if a.Config.Cli.AuthConfig() != nil {
 		client, err := a.authProvider()
 		if err != nil {
 			return nil, nil, err

@@ -121,7 +121,7 @@ func TestDestroyTUI_EndToEnd(t *testing.T) {
 	// Port 80 + http URL passes the httptest URL through formatEndpoint unmodified.
 	srv := api.NewServer(t.Context(), fake, nil, nil, nil, nil)
 	baseURL := apitest.NewTestServer(t, srv.Handler())
-	client := api.NewClient(pkgmodel.APIConfig{URL: baseURL, Port: 80}, nil, nil)
+	client := api.NewClient(&pkgmodel.ClassicConnection{URL: baseURL, Port: 80}, nil, nil)
 
 	// Stub the seams: destroyFn posts through the REAL HTTP stack; simview is
 	// stubbed to Confirmed; launchWatch runs the REAL statuswatch model via
@@ -217,7 +217,7 @@ func TestDestroyTUI_EndToEnd_CascadeAbort(t *testing.T) {
 
 	srv := api.NewServer(t.Context(), fake, nil, nil, nil, nil)
 	baseURL := apitest.NewTestServer(t, srv.Handler())
-	client := api.NewClient(pkgmodel.APIConfig{URL: baseURL, Port: 80}, nil, nil)
+	client := api.NewClient(&pkgmodel.ClassicConnection{URL: baseURL, Port: 80}, nil, nil)
 
 	stubSeams(t)
 

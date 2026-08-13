@@ -39,7 +39,7 @@ func newAppWithServer(baseURL string) *App {
 	return &App{
 		Config: &pkgmodel.Config{
 			Cli: pkgmodel.CliConfig{
-				API: pkgmodel.APIConfig{
+				Connection: &pkgmodel.ClassicConnection{
 					URL:  baseURL,
 					Port: 80,
 				},

@@ -314,7 +314,7 @@ agent {
 }
 
 cli {
-    api {
+    connection = new Classic {
         port = %d
     }
 	disableUsageReporting = true
@@ -668,7 +668,7 @@ agent {
 }
 
 cli {
-    api {
+    connection = new Classic {
         port = %%d
     }
 	disableUsageReporting = true
