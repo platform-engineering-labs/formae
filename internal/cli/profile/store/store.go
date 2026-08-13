@@ -133,6 +133,13 @@ func (s *Store) Resolve() (string, error) {
 
 // List returns all profile names in sorted order. An absent profiles/ dir
 // yields an empty slice (a clean store is not an error for introspection).
+//
+// A .pkl file whose stem is not a valid profile name is not listed: no
+// command can use, save, or delete it by name, so reporting it as a profile
+// only invites a user to try. The files this excludes in practice are the
+// dotfile temporaries `formae login` writes beside the profiles it
+// publishes, which exist for the length of one publication and are not
+// profiles at any point.
 func (s *Store) List() ([]string, error) {
 	entries, err := os.ReadDir(s.ProfilesDir())
 	if err != nil {
@@ -150,7 +157,11 @@ func (s *Store) List() ([]string, error) {
 		if !strings.HasSuffix(n, profileExt) {
 			continue
 		}
-		names = append(names, strings.TrimSuffix(n, profileExt))
+		name := strings.TrimSuffix(n, profileExt)
+		if ValidateName(name) != nil {
+			continue
+		}
+		names = append(names, name)
 	}
 	sort.Strings(names)
 	return names, nil

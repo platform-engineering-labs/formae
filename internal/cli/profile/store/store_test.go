@@ -194,6 +194,9 @@ func TestList_SortedAndFiltered(t *testing.T) {
 		writeFile(t, root, filepath.Join("profiles", n+".pkl"), "x")
 	}
 	writeFile(t, root, filepath.Join("profiles", "README.md"), "x")
+	// A .pkl file whose stem is not a valid profile name is not a profile:
+	// `formae login` writes its publication temporaries in this directory.
+	writeFile(t, root, filepath.Join("profiles", ".tmp-0123456789abcdef.pkl"), "x")
 	got, err := store.New(root).List()
 	if err != nil {
 		t.Fatalf("List: %v", err)
