@@ -25,6 +25,13 @@ CHANNEL := $(shell echo "$(RAW_VERSION)" | grep -q -- '-' && echo dev || echo st
 # Override per-build with HELM_READER_VERSION=<ver>.
 HELM_READER_VERSION ?= 0.1.2
 
+# Pinned gremlins mutation-testing version. mutation-test-changed.sh's
+# classifier depends on this tool's observed failure semantics (a
+# cancelled run exits 0 and writes no report, and the report is a single
+# write at the end of the run), so the version must not float on
+# `@latest`. Override per-build with GREMLINS_VERSION=<ver>.
+GREMLINS_VERSION ?= v0.6.0
+
 clean:
 	rm -rf .out/
 	rm -rf dist/
@@ -57,7 +64,7 @@ dev-install: build
 
 ## install-gremlins: Install the gremlins mutation testing tool
 install-gremlins:
-	go install github.com/go-gremlins/gremlins/cmd/gremlins@latest
+	go install github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION)
 
 build-debug:
 	go build ${DEBUG_GOFLAGS} -o formae cmd/formae/main.go
