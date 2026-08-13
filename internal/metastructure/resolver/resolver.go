@@ -6,6 +6,7 @@ package resolver
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -113,6 +114,12 @@ func convertToPluginFormatUnguarded(properties json.RawMessage) (json.RawMessage
 	return resolver.toPluginFormat(resolved)
 }
 
+// ErrHashedValueNotWritable reports a property whose value formae holds only as
+// a stored hash, so it cannot be sent to a provider as the live value. Match it
+// with errors.Is to report the condition without echoing the wrapped message,
+// which names the offending property path.
+var ErrHashedValueNotWritable = errors.New("unrecoverable stored opaque value")
+
 // guardNoHashedValues rejects any property carrying a $hashed:true marker.
 // Hashed values are terminal: once a secret has been hashed at rest, its
 // stored digest must never be sent to a plugin as if it were the live
@@ -132,7 +139,7 @@ func scanHashed(v any, path string) error {
 	switch val := v.(type) {
 	case map[string]any:
 		if h, ok := val["$hashed"].(bool); ok && h {
-			return fmt.Errorf("cannot write secret field %q: its value is stored hashed and formae cannot recover the plaintext to send to the provider — re-supply the value in your forma, or accept the current out-of-band value instead of overwriting", path)
+			return fmt.Errorf("%w: cannot write secret field %q: its value is stored hashed and formae cannot recover the plaintext to send to the provider — re-supply the value in your forma, or accept the current out-of-band value instead of overwriting", ErrHashedValueNotWritable, path)
 		}
 		for k, child := range val {
 			if err := scanHashed(child, path+"/"+k); err != nil {

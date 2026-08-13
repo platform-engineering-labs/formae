@@ -6,6 +6,7 @@ package resource_update
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -657,8 +658,33 @@ func create(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 	return handleProgressUpdate(gen.PID{}, state, data, *result, proc)
 }
 
+// Failures while building the plugin Update request precede any plugin
+// operation, so nothing records them as progress and the resource update would
+// otherwise report an empty ErrorMessage — leaving the reason discoverable only
+// in the agent's own log. These are the operator-facing texts for that boundary.
+//
+// They are fixed, never the underlying error: it names the property that failed,
+// and a property path can carry user-authored map keys.
+const (
+	failureReasonUnrecoverableOpaqueValue = "cannot update this resource: formae holds only a stored hash of one of its secret properties, so it cannot send that value to the provider. Re-supply the value in your forma, or leave the provider's current value in place."
+	failureReasonPluginRequestPreparation = "cannot update this resource: formae could not build the provider request from its recorded state."
+)
+
+// updateRequestFailureReason maps a plugin-request preparation error to the
+// fixed reason recorded on the resource update.
+func updateRequestFailureReason(err error) string {
+	if errors.Is(err, resolver.ErrHashedValueNotWritable) {
+		return failureReasonUnrecoverableOpaqueValue
+	}
+	return failureReasonPluginRequestPreparation
+}
+
 func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
 	data.stage = state
+	// A reason recorded by an earlier attempt must not outlive it: neither
+	// MarkAsFailed nor MarkAsSuccess clears it, so a retried or resumed update
+	// would otherwise report a failure that no longer describes it.
+	data.resourceUpdate.FailureReason = ""
 	// When bringing a resource under management without property changes, skip the plugin
 	// Update call since there are no actual changes to make in the cloud. Instead, create
 	// a synthetic ProgressResult using the existing resource's properties.
@@ -719,14 +745,38 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 		return handleProgressUpdate(proc.PID(), state, data, syntheticResult, proc)
 	}
 
+	// setOnce keeps a value by substituting the STORED one into the desired
+	// properties, which for an opaque field is a digest. Swap such a leaf for a
+	// present-but-unusable sentinel before the guarded conversion below, so the
+	// guard that protects the value stops freezing every other property on the
+	// resource. Only this copy changes; DesiredState.Properties stays the
+	// durable record of the stored hash.
+	desiredForPlugin := data.resourceUpdate.DesiredState
+	frozenProperties, err := FreezeUnrecoverableOpaqueValues(
+		data.resourceUpdate.PriorState.Properties,
+		desiredForPlugin.Properties,
+		data.resourceUpdate.PriorState.Schema,
+		desiredForPlugin.Schema,
+		desiredForPlugin.Type,
+	)
+	if err != nil {
+		proc.Log().Error("failed to prepare desired resource properties for plugin: %v", err)
+		data.resourceUpdate.FailureReason = updateRequestFailureReason(err)
+		data.resourceUpdate.MarkAsFailed()
+		return StateFinishedWithError, data, nil, nil
+	}
+	desiredForPlugin.Properties = frozenProperties
+
 	// Convert properties to plugin format (extracts $value from opaque structures).
 	// DesiredState is the NEW value being written to the cloud as DesiredProperties,
 	// so this stays guarded: a stored hash must never be sent to a plugin in place
 	// of the live secret. SuppressUnchangedOpaqueValues plus fresh forma input keep
-	// this plaintext-or-suppressed by the time we get here.
-	convertedResource, err := convertResourceForPlugin(data.resourceUpdate.DesiredState)
+	// this plaintext-or-suppressed by the time we get here, and a stored hash that
+	// survives is one the freeze above deliberately declined to rewrite.
+	convertedResource, err := convertResourceForPlugin(desiredForPlugin)
 	if err != nil {
 		proc.Log().Error("failed to convert resource properties for plugin: %v", err)
+		data.resourceUpdate.FailureReason = updateRequestFailureReason(err)
 		data.resourceUpdate.MarkAsFailed()
 		return StateFinishedWithError, data, nil, nil
 	}
@@ -740,6 +790,7 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 	convertedExisting, err := convertResourceForPluginRead(data.resourceUpdate.PriorState)
 	if err != nil {
 		proc.Log().Error("failed to convert existing resource properties for plugin: %v", err)
+		data.resourceUpdate.FailureReason = updateRequestFailureReason(err)
 		data.resourceUpdate.MarkAsFailed()
 		return StateFinishedWithError, data, nil, nil
 	}
@@ -760,6 +811,7 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 	)
 	if err != nil {
 		proc.Log().Error("failed to strip opaque fields from prior properties: %v", err)
+		data.resourceUpdate.FailureReason = updateRequestFailureReason(err)
 		data.resourceUpdate.MarkAsFailed()
 		return StateFinishedWithError, data, nil, nil
 	}
