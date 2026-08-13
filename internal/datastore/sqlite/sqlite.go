@@ -1240,7 +1240,7 @@ func (d DatastoreSQLite) LoadResource(uri pkgmodel.FormaeURI) (*pkgmodel.Resourc
 	defer span.End()
 
 	query := `
-	SELECT data, ksuid
+	SELECT data, ksuid, version
 	FROM resources
 	WHERE uri = ?
 	AND operation != ? AND operation != 'reaped'
@@ -1251,7 +1251,8 @@ func (d DatastoreSQLite) LoadResource(uri pkgmodel.FormaeURI) (*pkgmodel.Resourc
 
 	var jsonData string
 	var ksuid string
-	if err := row.Scan(&jsonData, &ksuid); err != nil {
+	var version string
+	if err := row.Scan(&jsonData, &ksuid, &version); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil // Resource not found, return nil without error
 		}
@@ -1264,6 +1265,7 @@ func (d DatastoreSQLite) LoadResource(uri pkgmodel.FormaeURI) (*pkgmodel.Resourc
 	}
 
 	loadedResource.Ksuid = ksuid
+	loadedResource.Version = version
 
 	return &loadedResource, nil
 }
@@ -1495,7 +1497,7 @@ func (d DatastoreSQLite) LoadAllResourcesByStack() (map[string][]*pkgmodel.Resou
 	defer span.End()
 
 	query := `
-	SELECT data, ksuid
+	SELECT data, ksuid, version
 	FROM resources r1
 	WHERE NOT EXISTS (
 	SELECT 1
@@ -1514,8 +1516,8 @@ func (d DatastoreSQLite) LoadAllResourcesByStack() (map[string][]*pkgmodel.Resou
 
 	var allResources []*pkgmodel.Resource
 	for rows.Next() {
-		var jsonData, ksuid string
-		if err := rows.Scan(&jsonData, &ksuid); err != nil {
+		var jsonData, ksuid, version string
+		if err := rows.Scan(&jsonData, &ksuid, &version); err != nil {
 			return nil, err
 		}
 
@@ -1525,6 +1527,7 @@ func (d DatastoreSQLite) LoadAllResourcesByStack() (map[string][]*pkgmodel.Resou
 		}
 
 		resource.Ksuid = ksuid
+		resource.Version = version
 		allResources = append(allResources, &resource)
 	}
 

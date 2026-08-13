@@ -369,15 +369,19 @@ func formaCommandFromOperation(operation pkgresource.Operation) pkgmodel.Command
 
 // recordMovedSinceGenerated reports whether the stored record has been written
 // by another command since this update was generated. PriorState is the
-// snapshot the generator captured (see NewResourceUpdateForSyncWithFilter), so
-// comparing it against the current row answers "did the record move under me".
-// An absent snapshot identity or an absent row means there is nothing for the
-// record to have moved away from, so the caller proceeds; a lookup that fails
-// is indeterminate and reports moved, so the delete is dropped rather than
-// risked.
+// snapshot the generator captured (see NewResourceUpdateForSyncWithFilter) and
+// carries the row version it was loaded from, which is monotonic per URI, so an
+// inequality against the current row is exact: it catches a replace that keeps
+// the native id and the properties byte-identical just as readily as one that
+// changes them.
+//
+// An absent snapshot version (a resource that did not come from a loader) or an
+// absent row means there is nothing to compare, so the caller proceeds. A lookup
+// that fails is indeterminate and reports moved, so the delete is dropped rather
+// than risked.
 func (rp *ResourcePersister) recordMovedSinceGenerated(resourceUpdate *resource_update.ResourceUpdate) bool {
 	generated := resourceUpdate.PriorState
-	if generated.NativeID == "" {
+	if generated.Version == "" {
 		return false
 	}
 
@@ -394,21 +398,11 @@ func (rp *ResourcePersister) recordMovedSinceGenerated(resourceUpdate *resource_
 			"error", err)
 		return true
 	}
-	if current == nil || current.NativeID == "" {
+	if current == nil {
 		return false
 	}
 
-	if current.NativeID != generated.NativeID {
-		return true
-	}
-
-	// The identity is unchanged, but the record can still have been rewritten
-	// under it — a replace recreates a resource whose native id is a stable
-	// name under that same name. Compare against PreviousProperties, the
-	// generator's copy of the stored properties; PriorState.Properties is not
-	// usable here, having been converted for Read use.
-	return len(resourceUpdate.PreviousProperties) > 0 &&
-		!util.JsonEqualRaw(current.Properties, resourceUpdate.PreviousProperties)
+	return current.Version != generated.Version
 }
 
 func resourceOperationFromPluginOperation(resourceOperation resource_update.OperationType, pluginOperation pkgresource.Operation, progress *plugin.TrackedProgress) resource_update.OperationType {

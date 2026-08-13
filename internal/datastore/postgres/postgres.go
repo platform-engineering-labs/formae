@@ -1240,7 +1240,7 @@ func (d DatastorePostgres) LoadAllResourcesByStack() (map[string][]*pkgmodel.Res
 	defer span.End()
 
 	query := `
-	SELECT data, ksuid
+	SELECT data, ksuid, version
 	FROM resources r1
 	WHERE NOT EXISTS (
 		SELECT 1
@@ -1259,8 +1259,8 @@ func (d DatastorePostgres) LoadAllResourcesByStack() (map[string][]*pkgmodel.Res
 
 	var allResources []*pkgmodel.Resource
 	for rows.Next() {
-		var jsonData, ksuid string
-		if err := rows.Scan(&jsonData, &ksuid); err != nil {
+		var jsonData, ksuid, version string
+		if err := rows.Scan(&jsonData, &ksuid, &version); err != nil {
 			return nil, err
 		}
 
@@ -1270,6 +1270,7 @@ func (d DatastorePostgres) LoadAllResourcesByStack() (map[string][]*pkgmodel.Res
 		}
 
 		resource.Ksuid = ksuid
+		resource.Version = version
 		allResources = append(allResources, &resource)
 	}
 
@@ -1371,7 +1372,7 @@ func (d DatastorePostgres) LoadResource(uri pkgmodel.FormaeURI) (*pkgmodel.Resou
 	defer span.End()
 
 	query := `
-	SELECT data, ksuid
+	SELECT data, ksuid, version
 	FROM resources
 	WHERE uri = $1
 	AND operation != $2 AND operation != 'reaped'
@@ -1382,7 +1383,8 @@ func (d DatastorePostgres) LoadResource(uri pkgmodel.FormaeURI) (*pkgmodel.Resou
 
 	var jsonData string
 	var ksuid string
-	if err := row.Scan(&jsonData, &ksuid); err != nil {
+	var version string
+	if err := row.Scan(&jsonData, &ksuid, &version); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil // Resource not found, return nil without error
 		}
@@ -1395,6 +1397,7 @@ func (d DatastorePostgres) LoadResource(uri pkgmodel.FormaeURI) (*pkgmodel.Resou
 	}
 
 	resource.Ksuid = ksuid
+	resource.Version = version
 	return &resource, nil
 }
 
