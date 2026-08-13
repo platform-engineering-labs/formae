@@ -194,6 +194,20 @@ exit 0"
   stub_gremlins "$bin_dir" "$body"
 }
 
+# stub_gremlins_breaking_summary_for <bin_dir> <report> <target>: installs a stub
+# that writes <report> for every package and, at <target>, also takes write
+# permission away from $GITHUB_STEP_SUMMARY — the shape of a job summary that
+# stops accepting writes part way through the run.
+stub_gremlins_breaking_summary_for() {
+  local bin_dir="$1" report="$2" target="$3" body
+  body="case \"\$target\" in
+  $target) chmod 000 \"\$GITHUB_STEP_SUMMARY\" ;;
+esac
+printf '%s' '$report' > \"\$report_path\"
+exit 0"
+  stub_gremlins "$bin_dir" "$body"
+}
+
 # stub_gremlins_waiting <bin_dir> <report> <ready_file> <target>: installs a
 # stub that writes <report> for every package except <target>, where it prints a
 # line, creates <ready_file> and then waits — the shape of a run still in
@@ -661,6 +675,8 @@ test_no_changed_go_files_is_a_no_op() {
 
   assert_output_matches 'No Go source files changed' \
     "the script says there is nothing to mutate"
+  assert_output_count '^## Mutation Testing' 0 \
+    "a no-op run prints no table"
   assert_status 0 "an unrelated change passes"
 }
 
@@ -678,7 +694,36 @@ test_packages_without_unit_tests_are_a_no_op() {
 
   assert_output_matches 'no unit-tagged tests' \
     "the script says the packages are not mutable"
+  assert_output_count '^## Mutation Testing' 0 \
+    "a no-op run prints no table"
   assert_status 0 "a package with no unit tests passes"
+}
+
+# A run with nothing to mutate has no table for the job summary to take, so it
+# must not report one either. Both ways of having nothing to mutate are checked,
+# because each leaves the run at a different point.
+test_a_no_op_run_reports_no_job_summary() {
+  local work repo bin
+  work=$(new_workdir)
+  repo="$work/repo"
+  bin="$work/bin"
+
+  make_fixture_repo "$repo"
+  stub_gremlins "$bin" 'echo "gremlins must not run"; exit 1'
+
+  run_script "$repo" "$bin" "$work/no-changes.md"
+
+  assert_output_count 'Summary written to job summary' 0 \
+    "a run with no changed Go files reports no job summary"
+  assert_status 0 "a run with no changed Go files passes"
+
+  add_untested_package "$repo" "example/pkg"
+
+  run_script "$repo" "$bin" "$work/no-unit-tests.md"
+
+  assert_output_count 'Summary written to job summary' 0 \
+    "a run with no unit-tagged tests reports no job summary"
+  assert_status 0 "a run with no unit-tagged tests passes"
 }
 
 # A summary that cannot be written is a reporting failure of its own. It still
@@ -706,6 +751,34 @@ test_a_failing_summary_write_fails_the_run() {
   assert_output_matches 'The job summary could not be written' \
     "the script says the summary was lost"
   assert_status_nonzero "an unwritable summary fails the run"
+}
+
+# A summary that takes the first rows and then stops accepting writes still owes
+# the step log a whole table: the header and the rows it did take have to come
+# back too, not just the rows written after the failure.
+test_a_summary_write_that_fails_part_way_keeps_the_whole_table() {
+  local work repo bin summary
+  work=$(new_workdir)
+  repo="$work/repo"
+  bin="$work/bin"
+  summary="$work/summary.md"
+
+  make_fixture_repo "$repo"
+  add_changed_package "$repo" "example/a"
+  add_changed_package "$repo" "example/b"
+  stub_gremlins_breaking_summary_for "$bin" "$(mutation_report KILLED)" ./example/b
+
+  run_script "$repo" "$bin" "$summary"
+
+  assert_output_matches '^## Mutation Testing' \
+    "the fallback table keeps its header"
+  assert_output_matches '^\| `example/a` \| ok \| - \| 100\.0% \|' \
+    "the row the summary took is in the fallback table"
+  assert_output_matches '^\| `example/b` \| ok \| - \| 100\.0% \|' \
+    "the row the summary refused is in the fallback table"
+  assert_output_matches 'The job summary could not be written' \
+    "the script says the summary was lost"
+  assert_status_nonzero "a summary that stops accepting writes fails the run"
 }
 
 # A job summary that took the table is where the table belongs: repeating it in
@@ -827,7 +900,9 @@ main() {
   run_test test_colliding_package_paths_do_not_share_a_report
   run_test test_no_changed_go_files_is_a_no_op
   run_test test_packages_without_unit_tests_are_a_no_op
+  run_test test_a_no_op_run_reports_no_job_summary
   run_test test_a_failing_summary_write_fails_the_run
+  run_test test_a_summary_write_that_fails_part_way_keeps_the_whole_table
   run_test test_a_written_summary_is_not_repeated_in_the_step_log
   run_test test_the_table_is_printed_once
   run_test test_an_interrupted_package_is_annotated_and_its_output_kept
