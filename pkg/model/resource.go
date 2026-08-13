@@ -37,10 +37,13 @@ type Resource struct {
 	// by the loaders that read it out of the resources table alongside Ksuid.
 	// It is monotonic per URI (a KSUID minted on every write), so comparing it
 	// against a later read answers whether the record was rewritten in between.
-	// Only meaningful on a resource that came from one of those loaders: it is
-	// empty on resources you construct, and any value embedded in a stored row
-	// is superseded by the column on load.
-	Version string `json:"Version,omitempty"`
+	//
+	// Deliberately not serialized: it describes the row, not the resource. That
+	// keeps it out of the stored payload, so a stale value can never be read
+	// back out of one, and out of generated forma and JSON output. It is
+	// therefore empty on any resource that did not come straight from a loader,
+	// which callers must read as "unknown" rather than "unchanged".
+	Version string `json:"-"`
 }
 
 // ResourceSummary is a lightweight projection of a resource row that carries only

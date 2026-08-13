@@ -1688,7 +1688,7 @@ func (d *DatastoreAuroraDataAPI) LoadResourcesByStack(stackLabel string) ([]*pkg
 	ctx := context.Background()
 
 	query := `
-		SELECT data, ksuid
+		SELECT data, ksuid, version
 		FROM resources r1
 		WHERE stack = :stack
 		AND NOT EXISTS (
@@ -1711,7 +1711,7 @@ func (d *DatastoreAuroraDataAPI) LoadResourcesByStack(stackLabel string) ([]*pkg
 
 	var resources []*pkgmodel.Resource
 	for _, record := range output.Records {
-		if len(record) < 2 {
+		if len(record) < 3 {
 			continue
 		}
 
@@ -1723,6 +1723,10 @@ func (d *DatastoreAuroraDataAPI) LoadResourcesByStack(stackLabel string) ([]*pkg
 		if err != nil {
 			return nil, err
 		}
+		version, err := getStringField(record[2])
+		if err != nil {
+			return nil, err
+		}
 
 		var resource pkgmodel.Resource
 		if err := json.Unmarshal([]byte(jsonData), &resource); err != nil {
@@ -1730,6 +1734,7 @@ func (d *DatastoreAuroraDataAPI) LoadResourcesByStack(stackLabel string) ([]*pkg
 		}
 
 		resource.Ksuid = ksuid
+		resource.Version = version
 		resources = append(resources, &resource)
 	}
 

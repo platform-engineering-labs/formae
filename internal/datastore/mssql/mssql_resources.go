@@ -828,7 +828,7 @@ func (d *DatastoreMSSQL) LoadResourcesByStack(stackLabel string) ([]*pkgmodel.Re
 	defer span.End()
 
 	query := fmt.Sprintf(`
-	SELECT data, ksuid
+	SELECT data, ksuid, version
 	FROM resources r1
 	WHERE stack = @p1
 	AND NOT EXISTS (
@@ -848,8 +848,8 @@ func (d *DatastoreMSSQL) LoadResourcesByStack(stackLabel string) ([]*pkgmodel.Re
 
 	var resources []*pkgmodel.Resource
 	for rows.Next() {
-		var jsonData, ksuid string
-		if err := rows.Scan(&jsonData, &ksuid); err != nil {
+		var jsonData, ksuid, version string
+		if err := rows.Scan(&jsonData, &ksuid, &version); err != nil {
 			return nil, err
 		}
 
@@ -858,6 +858,7 @@ func (d *DatastoreMSSQL) LoadResourcesByStack(stackLabel string) ([]*pkgmodel.Re
 			return nil, err
 		}
 		resource.Ksuid = ksuid
+		resource.Version = version
 		resources = append(resources, &resource)
 	}
 

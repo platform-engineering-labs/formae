@@ -1552,7 +1552,7 @@ func (d DatastoreSQLite) LoadResourcesByStack(stackLabel string) ([]*pkgmodel.Re
 	defer span.End()
 
 	query := `
-	SELECT data, ksuid
+	SELECT data, ksuid, version
 	FROM resources r1
 	WHERE stack = ?
 	AND NOT EXISTS (
@@ -1572,8 +1572,8 @@ func (d DatastoreSQLite) LoadResourcesByStack(stackLabel string) ([]*pkgmodel.Re
 
 	var resources []*pkgmodel.Resource
 	for rows.Next() {
-		var jsonData, ksuid string
-		if err := rows.Scan(&jsonData, &ksuid); err != nil {
+		var jsonData, ksuid, version string
+		if err := rows.Scan(&jsonData, &ksuid, &version); err != nil {
 			return nil, err
 		}
 
@@ -1583,6 +1583,7 @@ func (d DatastoreSQLite) LoadResourcesByStack(stackLabel string) ([]*pkgmodel.Re
 		}
 
 		resource.Ksuid = ksuid
+		resource.Version = version
 		resources = append(resources, &resource)
 	}
 

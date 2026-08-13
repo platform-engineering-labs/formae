@@ -1714,7 +1714,7 @@ func (d DatastorePostgres) LoadResourcesByStack(stackLabel string) ([]*pkgmodel.
 	defer span.End()
 
 	query := `
-	SELECT data, ksuid
+	SELECT data, ksuid, version
 	FROM resources r1
 	WHERE stack = $1
 	AND NOT EXISTS (
@@ -1734,8 +1734,8 @@ func (d DatastorePostgres) LoadResourcesByStack(stackLabel string) ([]*pkgmodel.
 
 	var resources []*pkgmodel.Resource
 	for rows.Next() {
-		var jsonData, ksuid string
-		if err := rows.Scan(&jsonData, &ksuid); err != nil {
+		var jsonData, ksuid, version string
+		if err := rows.Scan(&jsonData, &ksuid, &version); err != nil {
 			return nil, err
 		}
 
@@ -1745,6 +1745,7 @@ func (d DatastorePostgres) LoadResourcesByStack(stackLabel string) ([]*pkgmodel.
 		}
 
 		resource.Ksuid = ksuid
+		resource.Version = version
 		resources = append(resources, &resource)
 	}
 

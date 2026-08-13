@@ -2438,11 +2438,14 @@ func TestResourcePersister_StaleSyncReadDoesNotDeleteContentIdenticalRecreation(
 	}
 	persistCreateForTest(t, persister, sender, res, "cmd-initial")
 
-	// The snapshot the sync cycle plans from, taken the way the generator
-	// takes it: straight off the stored record.
-	generatedFrom, err := ds.LoadResource(res.URI())
+	// The snapshot the sync cycle plans from, taken through the same loader
+	// the sync generator uses (LoadResourcesByStack), not a more convenient
+	// one — the guard is only real if it works on that path.
+	byStack, err := ds.LoadResourcesByStack("test-stack")
 	require.NoError(t, err)
-	require.NotNil(t, generatedFrom)
+	require.Len(t, byStack, 1)
+	generatedFrom := byStack[0]
+	require.NotEmpty(t, generatedFrom.Version, "the sync generator's loader must supply the row version")
 
 	// A target-driven replace destroys and recreates the resource with
 	// identical content, so neither the identity nor the properties change.
