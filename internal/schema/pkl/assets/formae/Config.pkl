@@ -305,8 +305,10 @@ class CliConfig {
 
     // Theme name: a built-in (quiet, rich, colorblind, omarchy) or the stem of
     // a TOML file in ~/.config/formae/themes/. "omarchy" derives its palette
-    // live from ~/.config/omarchy/current/theme/colors.toml. "formae" is an
-    // alias for quiet. Unknown names fall back to quiet at runtime.
+    // live from the active Omarchy theme's colors.toml, found under
+    // ~/.local/state/omarchy/current/theme (Omarchy 4) or
+    // ~/.config/omarchy/current/theme (Omarchy 3). "formae" is an alias for
+    // quiet. Unknown names fall back to quiet at runtime.
     theme: String = "quiet"
 
     // Appearance selects which side of every adaptive color the CLI renders:
