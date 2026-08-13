@@ -2247,7 +2247,7 @@ func (h *TestHarness) PollStatus(commandID string, timeout time.Duration) (strin
 	pollInterval := 2 * time.Second
 
 	for time.Now().Before(deadline) {
-		status, err := h.GetStatus(commandID)
+		cmd, err := h.getCommand(commandID)
 		if err != nil {
 			// Retry on all errors — the command may not be visible yet (e.g.,
 			// the agent is still processing the apply request). Permanent
@@ -2257,6 +2257,7 @@ func (h *TestHarness) PollStatus(commandID string, timeout time.Duration) (strin
 			continue
 		}
 
+		status := cmd.State
 		h.t.Logf("Command %s state: %s", commandID, status)
 
 		// Check for terminal states
@@ -2264,7 +2265,7 @@ func (h *TestHarness) PollStatus(commandID string, timeout time.Duration) (strin
 		case "Success", "Completed":
 			return status, nil
 		case "Failed", "Canceled":
-			return status, fmt.Errorf("command reached terminal state: %s", status)
+			return status, commandFailureError(cmd)
 		case "NotStarted", "InProgress", "Pending", "Canceling":
 			// Continue polling
 			time.Sleep(pollInterval)
@@ -2276,8 +2277,18 @@ func (h *TestHarness) PollStatus(commandID string, timeout time.Duration) (strin
 	return "", fmt.Errorf("timeout waiting for command %s to complete", commandID)
 }
 
-// GetStatus gets the current status of a command
+// GetStatus gets the current state of a command
 func (h *TestHarness) GetStatus(commandID string) (string, error) {
+	cmd, err := h.getCommand(commandID)
+	if err != nil {
+		return "", err
+	}
+	return cmd.State, nil
+}
+
+// getCommand fetches a command's full status record, including the per-update
+// error messages that explain a failure.
+func (h *TestHarness) getCommand(commandID string) (model.Command, error) {
 	stdout, stderr, err := h.runCLI(
 		"status",
 		"command",
@@ -2287,20 +2298,20 @@ func (h *TestHarness) GetStatus(commandID string) (string, error) {
 		"--output-schema", "json",
 	)
 	if err != nil {
-		return "", fmt.Errorf("status command failed: %w\nStderr: %s\nStdout: %s", err, stderr, stdout)
+		return model.Command{}, fmt.Errorf("status command failed: %w\nStderr: %s\nStdout: %s", err, stderr, stdout)
 	}
 
 	// Parse JSON response from stdout only
 	var response model.ListCommandStatusResponse
 	if err := json.Unmarshal([]byte(stdout), &response); err != nil {
-		return "", fmt.Errorf("failed to parse status response: %w\nStdout: %s", err, stdout)
+		return model.Command{}, fmt.Errorf("failed to parse status response: %w\nStdout: %s", err, stdout)
 	}
 
 	if len(response.Commands) == 0 {
-		return "", fmt.Errorf("no commands in status response")
+		return model.Command{}, fmt.Errorf("no commands in status response")
 	}
 
-	return response.Commands[0].State, nil
+	return response.Commands[0], nil
 }
 
 // DeleteResourceOOB deletes a resource directly via the plugin, bypassing formae.
