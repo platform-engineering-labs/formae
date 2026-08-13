@@ -303,6 +303,9 @@ func (ru *ResourceUpdate) Reject() {
 func (ru *ResourceUpdate) MarkAsSuccess() {
 	ru.State = ResourceUpdateStateSuccess
 	ru.ModifiedTs = util.TimeNow()
+	// A reason left over from an earlier attempt would otherwise surface as the
+	// ErrorMessage of an update that succeeded.
+	ru.FailureReason = ""
 }
 
 func (ru *ResourceUpdate) MarkAsFailed() {

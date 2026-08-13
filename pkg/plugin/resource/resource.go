@@ -55,6 +55,13 @@ type UpdateRequest struct {
 	// reads its values from, including a property whose prior value is redacted
 	// from PriorProperties. It can carry live opaque plaintext and must never
 	// be logged.
+	//
+	// A property can arrive here in the same present-but-unusable form
+	// documented above for PriorProperties: an opaque property the caller holds
+	// only as a stored hash, and therefore cannot recover the value of. For that
+	// property alone no value is available in EITHER document, and its planned
+	// change, if any, is in PatchDocument — a preserved property has no op
+	// there, which means leave it as the provider currently holds it.
 	DesiredProperties json.RawMessage
 
 	// PatchDocument is an RFC 6902-shaped document reporting what THIS planned
