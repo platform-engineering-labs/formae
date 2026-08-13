@@ -2465,6 +2465,44 @@ func TestResourcePersister_StaleSyncReadDoesNotDeleteContentIdenticalRecreation(
 	require.Len(t, resources, 1, "a NotFound read must not delete a record recreated since the read was planned, even when the recreation is content-identical")
 }
 
+func TestResourcePersister_StaleSyncReadDoesNotDeleteWhenSnapshotVersionIsUnknown(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+
+	atRevision4 := pkgmodel.Resource{
+		Label:      "task-def",
+		Type:       "FakeAWS::ECS::TaskDefinition",
+		Stack:      "test-stack",
+		Ksuid:      util.NewID(),
+		Managed:    true,
+		NativeID:   "arn:task-definition/app:4",
+		Properties: json.RawMessage(`{"memory":"512"}`),
+	}
+	persistCreateForTest(t, persister, sender, atRevision4, "cmd-plan")
+
+	atRevision5 := atRevision4
+	atRevision5.NativeID = "arn:task-definition/app:5"
+	persistCreateForTest(t, persister, sender, atRevision5, "cmd-apply")
+
+	// A command resumed after an agent restart rebuilds its updates from the
+	// serialized snapshot, which does not carry the row version. The guard
+	// cannot tell whether the record moved, and must not gamble on it.
+	resumed := syncReadNotFoundForTest(atRevision4, "arn:task-definition/app:4")
+	require.Empty(t, resumed.PriorState.Version)
+
+	result := persister.Call(sender, resource_update.PersistResourceUpdate{
+		CommandID:         "cmd-sync-resumed",
+		ResourceOperation: resource_update.OperationRead,
+		PluginOperation:   resource.OperationRead,
+		ResourceUpdate:    resumed,
+	})
+	require.NoError(t, result.Error)
+
+	resources, err := ds.LoadResourcesByStack("test-stack")
+	require.NoError(t, err)
+	require.Len(t, resources, 1, "an unknown snapshot version must not be read as unchanged")
+}
+
 // loadResourceFlakyDatastore fails the next LoadResource for one URI a single
 // time and serves every other call from the real datastore, reproducing a
 // transient lookup failure.

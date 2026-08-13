@@ -375,14 +375,18 @@ func formaCommandFromOperation(operation pkgresource.Operation) pkgmodel.Command
 // the native id and the properties byte-identical just as readily as one that
 // changes them.
 //
-// An absent snapshot version (a resource that did not come from a loader) or an
-// absent row means there is nothing to compare, so the caller proceeds. A lookup
-// that fails is indeterminate and reports moved, so the delete is dropped rather
-// than risked.
+// Everything indeterminate reports moved, so the delete is dropped rather than
+// risked. That covers a lookup that failed and a snapshot with no version — the
+// latter is what a command resumed after a restart rebuilds, since the version
+// describes a row and is not serialized with the resource. The cost is bounded:
+// the resource keeps its record until a later cycle plans afresh against a
+// versioned snapshot, and a genuine deletion is absorbed then.
 func (rp *ResourcePersister) recordMovedSinceGenerated(resourceUpdate *resource_update.ResourceUpdate) bool {
 	generated := resourceUpdate.PriorState
 	if generated.Version == "" {
-		return false
+		slog.Debug("Treating a NotFound read as stale: the snapshot carries no row version",
+			"resourceLabel", generated.Label)
+		return true
 	}
 
 	current, err := rp.datastore.LoadResource(generated.URI())
