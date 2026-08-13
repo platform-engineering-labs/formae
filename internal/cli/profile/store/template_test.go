@@ -37,8 +37,9 @@ func TestStubTemplate_ParsesWithEmptyPluginDir(t *testing.T) {
 // A minimal config that only `amends` the schema — materializing no cli/agent
 // values — must still evaluate to a complete, working localhost setup purely
 // from schema defaults. This is what lets the clean-install stub stay minimal
-// (no materialized snapshot to drift from the schema): cli.api must carry a
-// default of its own, not be a required property the user has to fill in.
+// (no materialized snapshot to drift from the schema): cli.connection must
+// carry a default of its own, not be a required property the user has to
+// fill in.
 func TestSchemaDefaults_BareAmendsYieldsLocalhost(t *testing.T) {
 	t.Setenv("FORMAE_PLUGIN_DIR", t.TempDir()) // empty: no plugin wrappers
 	dir := t.TempDir()

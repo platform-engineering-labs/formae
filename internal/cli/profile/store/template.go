@@ -23,7 +23,7 @@ const StubTemplate = `amends "formae:/Config.pkl"   // the formae config schema 
 //
 //   // Point the CLI at a remote agent:
 //   cli {
-//       api {
+//       connection = new Classic {
 //           url  = "http://my-agent.example.com"
 //           port = 49684
 //       }

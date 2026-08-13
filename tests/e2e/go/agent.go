@@ -142,11 +142,11 @@ func StartAgent(t *testing.T, binaryPath string, opts ...AgentOption) *Agent {
         }
     }`, options.authUsername, options.authBcryptHash)
 		cliAuthBlock = fmt.Sprintf(`
-    auth {
-        type = "auth-basic"
-        username = %q
-        password = %q
-    }`, options.authUsername, options.authPassword)
+        auth = new Dynamic {
+            type = "auth-basic"
+            username = %q
+            password = %q
+        }`, options.authUsername, options.authPassword)
 	}
 
 	// Intentionally no pluginDir override. cfg.PluginDir defaults to
@@ -189,10 +189,10 @@ agent {
 }
 
 cli {
-    api {
-        port = %d
+    connection = new Classic {
+        port = %d%s
     }
-    disableUsageReporting = true%s
+    disableUsageReporting = true
 }
 `, options.pklImports, pluginDirBlock, port, dbPath, discoveryEnabled, options.discoveryInterval, resourceTypesBlock, logPath, agentAuthBlock, options.resourcePluginsBlock, port, cliAuthBlock)
 

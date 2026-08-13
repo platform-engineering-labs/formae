@@ -24,7 +24,7 @@ func minimalProfile(host string, port int) string {
 	return fmt.Sprintf(`amends "formae:/Config.pkl"
 
 cli {
-    api {
+    connection = new Classic {
         url  = %q
         port = %d
     }

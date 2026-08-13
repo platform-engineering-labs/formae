@@ -54,13 +54,13 @@ func closedPortE2E(t *testing.T) (string, int) {
 }
 
 // writeProfilePKL writes a minimal formae PKL profile that points the CLI at
-// the given url and port. No agent block or plugins — just the cli.api section.
+// the given url and port. No agent block or plugins — just cli.connection.
 func writeProfilePKL(t *testing.T, path, url string, port int) {
 	t.Helper()
 	content := fmt.Sprintf(`amends "formae:/Config.pkl"
 
 cli {
-    api {
+    connection = new Classic {
         url  = %q
         port = %d
     }
