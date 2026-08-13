@@ -33,6 +33,17 @@ type Resource struct {
 	Managed            bool            `json:"Managed,omitempty"` // Whether the resource is managed by Formae or not
 	Ksuid              string          `json:"Ksuid,omitempty"`
 	Alias              string          `json:"Alias,omitempty"` // previous label, used to rename in place
+	// Version is the datastore row version this resource was loaded from, set
+	// by the loaders that read it out of the resources table alongside Ksuid.
+	// It is monotonic per URI (a KSUID minted on every write), so comparing it
+	// against a later read answers whether the record was rewritten in between.
+	//
+	// Deliberately not serialized: it describes the row, not the resource. That
+	// keeps it out of the stored payload, so a stale value can never be read
+	// back out of one, and out of generated forma and JSON output. It is
+	// therefore empty on any resource that did not come straight from a loader,
+	// which callers must read as "unknown" rather than "unchanged".
+	Version string `json:"-"`
 }
 
 // ResourceSummary is a lightweight projection of a resource row that carries only
