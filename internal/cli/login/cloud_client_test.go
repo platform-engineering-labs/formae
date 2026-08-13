@@ -435,6 +435,54 @@ func TestListInstallations_ARepeatedResultsKeyLosesAuthority(t *testing.T) {
 	assert.Contains(t, snapshot.Warnings[0], "results")
 }
 
+// TestListInstallations_RefusesAnythingAfterTheTopLevelObject pins that the
+// body ends where the object it opened with ends. Anything after it means the
+// body is not the single answer it claims to be, and there is no telling which
+// part of it to believe — so believing the first part would let a body whose
+// later half carries the rest of the list read as a complete one.
+//
+// The rows are the bytes that end a JSON value: a decoder asked only whether
+// more values follow reads a `}` or a `]` as the end of the stream, so those
+// are the shapes a bare "is there more?" check waves through.
+func TestListInstallations_RefusesAnythingAfterTheTopLevelObject(t *testing.T) {
+	first := marshalJSON(t, validInstallation(testUUIDA))
+	rest := fmt.Sprintf(`{"results":[%s,%s]}`,
+		marshalJSON(t, validInstallation(testUUIDB)),
+		marshalJSON(t, validInstallation(testUUIDC)))
+
+	tests := []struct {
+		name     string
+		trailing string
+		accepted bool
+	}{
+		{name: "a stray closing brace", trailing: "}"},
+		{name: "a stray closing bracket", trailing: "]junk-after"},
+		{name: "junk text", trailing: "junk-after"},
+		{name: "a second object", trailing: `{"results":[]}`},
+		{name: "a closing brace hiding a second object", trailing: "} " + rest},
+		{name: "a closing bracket hiding a second object", trailing: "] " + rest},
+		{name: "trailing whitespace and a newline", trailing: " \n\t ", accepted: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, _ := serveBody(t, http.StatusOK, nil, `{"results":[`+first+`]}`+tc.trailing)
+
+			snapshot, err := listFrom(t, srv)
+
+			if tc.accepted {
+				require.NoError(t, err, "a body may end with whitespace")
+				assert.True(t, snapshot.Authoritative)
+				assert.Equal(t, []string{testUUIDA}, installationIDs(snapshot.Installations))
+				return
+			}
+			require.Error(t, err)
+			assert.Empty(t, snapshot.Installations, "nothing may be salvaged from a body carrying more than one value")
+			assert.False(t, snapshot.Authoritative)
+		})
+	}
+}
+
 // TestListInstallations_PaginationTripwiresDropAuthorityButKeepRecords pins
 // the asymmetry that keeps a future paginated endpoint from reading as "all
 // your grants vanished": anything at the top level or in the headers that we

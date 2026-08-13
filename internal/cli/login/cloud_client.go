@@ -372,8 +372,15 @@ func decodeEnvelope(data []byte) (map[string]json.RawMessage, []string, error) {
 		return nil, nil, fmt.Errorf("the installations response is not valid JSON: %w", err)
 	}
 	// Anything after the object means the body is not the one answer it claims
-	// to be, and there is no telling which part of it to believe.
-	if dec.More() {
+	// to be, and there is no telling which part of it to believe. The end of
+	// the body is required outright, rather than asked whether another value
+	// follows: a decoder answers that question by peeking for a byte that could
+	// open one, so a stray `}` or `]` reads as the end of the stream and would
+	// wave through everything behind it. Reading a token instead reports the
+	// end of the body as io.EOF and every one of those bytes as a parse error,
+	// while still allowing the trailing whitespace or newline a server may
+	// legitimately send.
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
 		return nil, nil, fmt.Errorf("the installations response carries more than one JSON value")
 	}
 
