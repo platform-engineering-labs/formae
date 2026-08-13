@@ -78,7 +78,7 @@ func (p PKL) FormaeConfig(path string) (*pkgmodel.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	return translateConfig(config), nil
+	return translateConfig(config)
 }
 
 // rawConfig evaluates the Pkl configuration at path into the decode model,
@@ -173,7 +173,7 @@ func (p PKL) rawConfig(path string) (*pklmodel.Config, error) {
 	return config, nil
 }
 
-func translateConfig(config *pklmodel.Config) *pkgmodel.Config {
+func translateConfig(config *pklmodel.Config) (*pkgmodel.Config, error) {
 	translated := pkgmodel.Config{
 		Agent: pkgmodel.AgentConfig{
 			Server: pkgmodel.ServerConfig{
@@ -260,14 +260,7 @@ func translateConfig(config *pklmodel.Config) *pkgmodel.Config {
 		},
 		Artifacts: translateArtifactConfig(&config.Artifacts),
 		Cli: pkgmodel.CliConfig{
-			API: func() pkgmodel.APIConfig {
-				if config.Cli.API == nil {
-					return pkgmodel.APIConfig{URL: "http://localhost", Port: 49684}
-				}
-				return pkgmodel.APIConfig{URL: config.Cli.API.URL, Port: int(config.Cli.API.Port)}
-			}(),
 			DisableUsageReporting: config.Cli.DisableUsageReporting,
-			Auth:                  translateAuthConfig(&config.Cli.Auth),
 			Theme:                 config.Cli.Theme,
 			Appearance:            config.Cli.Appearance,
 		},
@@ -277,7 +270,24 @@ func translateConfig(config *pklmodel.Config) *pkgmodel.Config {
 	translated.Network = translateNetworkConfig(config.Network)
 
 	// Backwards compatibility: fall back to deprecated plugins block
-	applyDeprecatedPluginsConfig(config.Plugins, &translated)
+	var legacyCliAuth json.RawMessage
+	applyDeprecatedPluginsConfig(config.Plugins, &translated, &legacyCliAuth)
+
+	conn, err := buildConnection(&config.Cli, legacyCliAuth, &translated.Warnings)
+	if err != nil {
+		return nil, err
+	}
+	translated.Cli.Connection = conn
+
+	// Derived compatibility view, removed once every caller reads Connection.
+	switch c := conn.(type) {
+	case *pkgmodel.ClassicConnection:
+		translated.Cli.API = pkgmodel.APIConfig{URL: c.URL, Port: c.Port}
+		translated.Cli.Auth = c.Auth
+	case *pkgmodel.HostedConnection:
+		translated.Cli.API = pkgmodel.APIConfig{URL: c.Endpoint, Port: 443}
+		translated.Cli.Auth = c.Auth
+	}
 
 	// Warn when global settings conflict with per-plugin overrides
 	checkResourcePluginDeprecations(&translated)
@@ -285,7 +295,7 @@ func translateConfig(config *pklmodel.Config) *pkgmodel.Config {
 	// Synthesize Repositories from legacy flat fields and emit deprecation warnings
 	emitArtifactDeprecationWarnings(&translated)
 
-	return &translated
+	return &translated, nil
 }
 
 // emitArtifactDeprecationWarnings synthesizes a canonical Repositories entry from
@@ -355,7 +365,11 @@ func checkResourcePluginDeprecations(translated *pkgmodel.Config) {
 // applyDeprecatedPluginsConfig copies values from the deprecated plugins block
 // to their new locations, emitting deprecation warnings. New paths take precedence.
 // Warnings are collected in translated.Warnings so callers (CLI) can display them.
-func applyDeprecatedPluginsConfig(plugins *pklmodel.PluginConfig, translated *pkgmodel.Config) {
+func applyDeprecatedPluginsConfig(
+	plugins *pklmodel.PluginConfig,
+	translated *pkgmodel.Config,
+	legacyCliAuth *json.RawMessage,
+) {
 	if plugins == nil {
 		return
 	}
@@ -367,13 +381,18 @@ func applyDeprecatedPluginsConfig(plugins *pklmodel.PluginConfig, translated *pk
 		translated.PluginDir = plugins.PluginDir
 	}
 
-	if plugins.Authentication != nil && translated.Agent.Auth == nil {
-		w := "Your configuration file uses deprecated 'plugins.authentication' — migrate to 'agent.auth' and 'cli.auth'"
+	if plugins.Authentication != nil {
+		w := "Your configuration file uses deprecated 'plugins.authentication' - migrate to 'agent.auth' and 'cli.auth'"
 		slog.Warn(w)
 		translated.Warnings = append(translated.Warnings, w)
 		authJSON := translateDynamic(plugins.Authentication)
-		translated.Agent.Auth = authJSON
-		translated.Cli.Auth = authJSON
+		// The agent keeps its explicit setting when it has one; the CLI's
+		// legacy credential is resolved separately, so an explicit agent.auth
+		// no longer silently leaves the CLI unauthenticated.
+		if translated.Agent.Auth == nil {
+			translated.Agent.Auth = authJSON
+		}
+		*legacyCliAuth = authJSON
 	}
 
 	if plugins.Network != nil && translated.Network == nil {
