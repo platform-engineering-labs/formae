@@ -64,8 +64,11 @@ const (
 const fingerprintPrefix = "sha256:"
 
 // renderedAuthKeys is exactly the set of keys a generated auth block carries,
-// in the order it writes them. It is also the set unknownAuthKeysWarning
-// measures a source block against, so the two can never drift apart.
+// in the order it writes them, and the set unknownAuthKeysWarning measures a
+// source block against. Nothing in profileTemplate refers to this list, so
+// adding a key to one and not the other would have the warning name a key the
+// profile does carry; what holds them in step is a test that loads a rendered
+// profile and compares its keys against both, not the code.
 var renderedAuthKeys = []string{"type", "role", "issuer", "clientId", "scopes"}
 
 // profileTemplate is the whole of a generated profile. Its comment is the
@@ -229,41 +232,56 @@ func fingerprint(b []byte) string {
 // can tell "this is not a file we could ever own" from a filesystem failure.
 var errNotRegularFile = errors.New("not a regular file")
 
-// statAndDigest opens path once and returns its FileInfo and fingerprint from
-// that single descriptor, so the bytes hashed and the file identified are the
-// same file. Identifying a file through one path lookup and hashing it
-// through another leaves a window for the two to be different files.
+// openRegular opens path and returns the handle together with the FileInfo
+// of the file that handle actually refers to, so everything done afterwards
+// is done to one identified file rather than to whatever the name resolves
+// to at the moment it is used.
 //
 // Only a regular file is accepted. The check is made twice against the one
 // open handle: an Lstat before the open refuses a symlink outright rather
 // than following it to a regular file, and the handle's own Stat refuses
 // anything else. Requiring the two to describe the same file closes the gap
-// between them, so a path swapped after the Lstat is refused rather than read.
-func statAndDigest(path string) (os.FileInfo, string, error) {
+// between them, so a path swapped after the Lstat is refused rather than used.
+func openRegular(path string) (*os.File, os.FileInfo, error) {
 	linkInfo, err := os.Lstat(path)
 	if err != nil {
-		return nil, "", fmt.Errorf("stat %s: %w", path, err)
+		return nil, nil, fmt.Errorf("stat %s: %w", path, err)
 	}
 	if !linkInfo.Mode().IsRegular() {
-		return nil, "", fmt.Errorf("%s is %w", path, errNotRegularFile)
+		return nil, nil, fmt.Errorf("%s is %w", path, errNotRegularFile)
 	}
 
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, "", fmt.Errorf("open %s: %w", path, err)
+		return nil, nil, fmt.Errorf("open %s: %w", path, err)
 	}
-	defer func() { _ = f.Close() }()
 
 	info, err := f.Stat()
+	switch {
+	case err != nil:
+		err = fmt.Errorf("stat %s: %w", path, err)
+	case !info.Mode().IsRegular():
+		err = fmt.Errorf("%s is %w", path, errNotRegularFile)
+	case !os.SameFile(linkInfo, info):
+		err = fmt.Errorf("%s changed while it was being opened", path)
+	}
 	if err != nil {
-		return nil, "", fmt.Errorf("stat %s: %w", path, err)
+		_ = f.Close()
+		return nil, nil, err
 	}
-	if !info.Mode().IsRegular() {
-		return nil, "", fmt.Errorf("%s is %w", path, errNotRegularFile)
+	return f, info, nil
+}
+
+// statAndDigest opens path once and returns its FileInfo and fingerprint from
+// that single descriptor, so the bytes hashed and the file identified are the
+// same file. Identifying a file through one path lookup and hashing it
+// through another leaves a window for the two to be different files.
+func statAndDigest(path string) (os.FileInfo, string, error) {
+	f, info, err := openRegular(path)
+	if err != nil {
+		return nil, "", err
 	}
-	if !os.SameFile(linkInfo, info) {
-		return nil, "", fmt.Errorf("%s changed while it was being read", path)
-	}
+	defer func() { _ = f.Close() }()
 
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
@@ -282,6 +300,38 @@ var errNameTaken = errors.New("a file already exists at that profile name")
 // production always runs os.Link.
 var linkFile = os.Link
 
+// writeFile is a package seam so a test can exercise a publication
+// interrupted partway through the fallback's write, which cannot otherwise be
+// reached without filling a filesystem. Nothing but a test ever assigns it,
+// so production always runs (*os.File).Write.
+var writeFile = (*os.File).Write
+
+// removeIfCreated removes destPath, but only while what is at that name is
+// still created — the file this publication made a moment ago.
+//
+// A fallback write that fails partway through has otherwise wedged the name:
+// what is left there is a truncated profile that matches no recorded
+// fingerprint, so no later run adopts it and no later run removes it, and
+// the user has to delete it by hand before that profile name works again.
+// Removing by path alone would trade that for something worse, since a file
+// that appeared at the name in the meantime belongs to someone else, so the
+// identity comes from the descriptor — the same reasoning that sets the mode
+// through the descriptor rather than the path. The window between the check
+// and the removal cannot be closed with the portable filesystem API; it is
+// narrower than removing unconditionally, which is the point. A crash cannot
+// run this cleanup at all, so a truncated file at a managed name stays
+// possible on the fallback path.
+func removeIfCreated(created os.FileInfo, destPath string) {
+	if created == nil {
+		return
+	}
+	atName, err := os.Lstat(destPath)
+	if err != nil || !os.SameFile(created, atName) {
+		return
+	}
+	_ = os.Remove(destPath)
+}
+
 // publish puts content at destPath by linking tempPath onto it, and returns
 // errNameTaken when the name is already occupied.
 //
@@ -299,23 +349,47 @@ var linkFile = os.Link
 //
 // The fallback does cost something, and it is only the link path that is free
 // of it: linking publishes a file that is already complete, so the
-// destination never exists half-written, whereas a crash midway through the
-// fallback's write can leave a truncated file at a managed name. That is
-// contained rather than harmless — such a file matches no fingerprint any
-// ledger entry records, so no later run adopts it and no later run removes
-// it, and it is the user's to delete — but it is not a guarantee the fallback
-// path can make.
+// destination never exists half-written, whereas the fallback's write reaches
+// the destination byte by byte. A write that fails removes what it created,
+// by identity rather than by name, but a crash cannot run that cleanup — so a
+// truncated file at a managed name stays possible on this path. Such a file
+// matches no fingerprint any ledger entry records, so no later run adopts it
+// and no later run removes it: it is contained, and it is the user's to
+// delete.
 //
-// The temp file is left where it is on both paths. It is the witness a
-// resumed run needs: a temp file that is still the same file as the
-// destination is proof that this publication happened, which is the one thing
-// a crash between linking and recording the result would otherwise destroy.
-// Removing it is the ledger's business, once the record it belongs to says so.
+// The temp file is retained on both paths, but it is only a witness on the
+// link path. There the destination and the temp are the same file, so a run
+// resuming after a crash can prove by os.SameFile that this publication
+// happened — the one thing a crash between linking and recording the result
+// would otherwise destroy. The fallback writes a second file rather than a
+// link, so the two share no inode and no such proof exists. A fallback
+// publication interrupted before its result was recorded therefore cannot be
+// promoted: the entry is dropped, the file is left alone, and the user is
+// told which one to remove, which wedges that profile name until they do. A
+// matching fingerprint is not a substitute for the missing witness and must
+// never be treated as one — bytes cannot tell a file this command wrote from
+// an identical one the user already had, so promoting on a digest alone would
+// claim the authority to delete a file nothing here created. Retaining the
+// temp is right on both paths regardless; removing it is the ledger's
+// business, once the record it belongs to says so.
 func publish(tempPath, destPath string, content []byte, mode os.FileMode) error {
 	// The destination shares the temp file's inode, and so its permissions:
-	// setting the mode here is what makes it hold on the published file.
-	if err := os.Chmod(tempPath, mode); err != nil {
-		return fmt.Errorf("set mode on %s: %w", tempPath, err)
+	// setting the mode here is what makes it hold on the published file. It
+	// is set through a descriptor on an identified regular file rather than
+	// through the path, so it cannot land on a symlink's target and cannot
+	// land on whatever appears at that name afterwards — the same rule the
+	// fallback's write below follows.
+	temp, _, err := openRegular(tempPath)
+	if err != nil {
+		return err
+	}
+	chmodErr := temp.Chmod(mode)
+	closeErr := temp.Close()
+	if chmodErr != nil {
+		return fmt.Errorf("set mode on %s: %w", tempPath, chmodErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close %s: %w", tempPath, closeErr)
 	}
 
 	linkErr := linkFile(tempPath, destPath)
@@ -333,18 +407,29 @@ func publish(tempPath, destPath string, content []byte, mode os.FileMode) error 
 		}
 		return fmt.Errorf("write %s (hard links are unavailable here: %v): %w", destPath, linkErr, err)
 	}
+	// The identity of the file just created, taken from the descriptor while
+	// it is open so that a failure below can be cleaned up without trusting
+	// the name to still mean this file.
+	created, err := f.Stat()
+	if err != nil {
+		created = nil
+	}
+
 	// Set through the descriptor rather than the path, so the mode lands on
 	// the file just created whatever the process umask stripped from it and
 	// whatever appears at that name afterwards.
 	if err := f.Chmod(mode); err != nil {
 		_ = f.Close()
+		removeIfCreated(created, destPath)
 		return fmt.Errorf("set mode on %s: %w", destPath, err)
 	}
-	if _, err := f.Write(content); err != nil {
+	if _, err := writeFile(f, content); err != nil {
 		_ = f.Close()
+		removeIfCreated(created, destPath)
 		return fmt.Errorf("write %s: %w", destPath, err)
 	}
 	if err := f.Close(); err != nil {
+		removeIfCreated(created, destPath)
 		return fmt.Errorf("close %s: %w", destPath, err)
 	}
 	return nil

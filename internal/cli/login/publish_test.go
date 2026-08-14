@@ -9,6 +9,7 @@ package login
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -102,6 +103,27 @@ func refuseLinks(t *testing.T, err error) {
 	}
 }
 
+// interruptWrites points the write seam at a descriptor that writes half of
+// what it was given and then fails, which is what a publication interrupted
+// partway through the fallback's write leaves behind. between runs after the
+// destination exists and before the failure is reported, so a test can change
+// what is at that name in exactly the window a cleanup has to survive.
+func interruptWrites(t *testing.T, between func()) {
+	t.Helper()
+	original := writeFile
+	t.Cleanup(func() { writeFile = original })
+	writeFile = func(f *os.File, content []byte) (int, error) {
+		n, err := original(f, content[:len(content)/2])
+		if err != nil {
+			return n, err
+		}
+		if between != nil {
+			between()
+		}
+		return n, io.ErrShortWrite
+	}
+}
+
 func TestRenderedProfileResolvesToTheIntendedHostedConnection(t *testing.T) {
 	path := writeRendered(t, testEndpoint, testUUIDA, cliAuth("", ""))
 
@@ -116,9 +138,14 @@ func TestRenderedAuthBlockCarriesExactlyTheFiveKeys(t *testing.T) {
 
 	fields := loadAuth(t, path)
 
-	assert.ElementsMatch(t, []string{"type", "role", "issuer", "clientId", "scopes"}, keysOf(fields))
+	want := []string{"type", "role", "issuer", "clientId", "scopes"}
+	assert.ElementsMatch(t, want, keysOf(fields))
+	// The warning about dropped keys is measured against renderedAuthKeys,
+	// which the template does not derive from: this is what keeps the list
+	// the warning quotes and the keys the profile carries in step.
+	assert.ElementsMatch(t, want, renderedAuthKeys)
 	assert.Equal(t, oidcAuthType, fields["type"])
-	assert.Equal(t, cliAuthRole, fields["role"])
+	assert.Equal(t, "cli", fields["role"])
 	assert.Equal(t, testIssuer, fields["issuer"])
 
 	// The plugin's wire struct types scopes as a string, so a Listing — which
@@ -342,6 +369,25 @@ func TestPublishLinksTheTempFileIntoPlace(t *testing.T) {
 	assert.True(t, os.SameFile(tempInfo, published), "the destination is a link to the temp file")
 }
 
+func TestPublishRefusesASymlinkedTempFile(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.pkl")
+	theirs := []byte("a file the user wrote\n")
+	require.NoError(t, os.WriteFile(target, theirs, 0o644))
+	temp := filepath.Join(dir, ".tmp-0123456789abcdef.pkl")
+	require.NoError(t, os.Symlink(target, temp))
+	dest := filepath.Join(dir, "generated.pkl")
+
+	err := publish(temp, dest, []byte("profile bytes\n"), generatedProfileMode)
+
+	require.ErrorIs(t, err, errNotRegularFile)
+	targetInfo, statErr := os.Stat(target)
+	require.NoError(t, statErr)
+	assert.Equal(t, os.FileMode(0o644), targetInfo.Mode().Perm(), "the mode never lands on a symlink's target")
+	_, statErr = os.Lstat(dest)
+	assert.ErrorIs(t, statErr, os.ErrNotExist, "nothing is published")
+}
+
 func TestPublishRefusesADestinationTakenAfterTheCollisionScan(t *testing.T) {
 	dir := t.TempDir()
 	content := []byte("profile bytes\n")
@@ -394,6 +440,46 @@ func TestPublishFallbackRefusesAnOccupiedDestination(t *testing.T) {
 	onDisk, readErr := os.ReadFile(dest)
 	require.NoError(t, readErr)
 	assert.Equal(t, theirs, onDisk, "the user's file is untouched")
+}
+
+func TestPublishFallbackCleansUpOnlyTheFileItCreated(t *testing.T) {
+	tests := []struct {
+		name    string
+		replace bool
+	}{
+		{name: "an interrupted write leaves nothing at the destination"},
+		{name: "a file that replaced the destination is left alone", replace: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			content := []byte("profile bytes\n")
+			temp := writeTempFile(t, dir, content)
+			dest := filepath.Join(dir, "generated.pkl")
+			theirs := []byte("a profile the user wrote\n")
+			refuseLinks(t, syscall.EPERM)
+			interruptWrites(t, func() {
+				if !tt.replace {
+					return
+				}
+				require.NoError(t, os.Remove(dest))
+				require.NoError(t, os.WriteFile(dest, theirs, 0o644))
+			})
+
+			err := publish(temp, dest, content, generatedProfileMode)
+
+			require.Error(t, err)
+			onDisk, readErr := os.ReadFile(dest)
+			if !tt.replace {
+				assert.ErrorIs(t, readErr, os.ErrNotExist,
+					"a half-written profile is removed rather than left wedging the name")
+				return
+			}
+			require.NoError(t, readErr)
+			assert.Equal(t, theirs, onDisk, "only the file this publication created is removed")
+		})
+	}
 }
 
 func TestPublishDoesNotFallBackWhenTheNameIsTaken(t *testing.T) {
