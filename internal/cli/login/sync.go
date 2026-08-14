@@ -333,22 +333,27 @@ func (r *syncRun) activeFile() (os.FileInfo, error) {
 		return r.activeInfo, r.activeErr
 	}
 	r.activeResolved = true
+	r.activeInfo, r.activeErr = activeProfileFile(r.d.Store)
+	return r.activeInfo, r.activeErr
+}
 
-	name, err := r.d.Store.Active()
+// activeProfileFile identifies the active profile, and is the one place the
+// rules for doing so live: everything that decides whether it may act on a
+// managed file compares against what this returns, so a second reading of
+// "which file is the active one" cannot appear.
+func activeProfileFile(s *store.Store) (os.FileInfo, error) {
+	name, err := s.Active()
 	if err != nil {
-		r.activeErr = fmt.Errorf("the active profile could not be identified: %w", err)
-		return nil, r.activeErr
+		return nil, fmt.Errorf("the active profile could not be identified: %w", err)
 	}
 	// Stat, not Lstat: the active profile may legitimately be reached through
 	// a symlink, and it is the file at the end of it that a managed path would
 	// be the same file as.
-	info, err := os.Stat(r.d.Store.ProfilePath(name))
+	info, err := os.Stat(s.ProfilePath(name))
 	if err != nil {
-		r.activeErr = fmt.Errorf("the active profile %q could not be identified: %w", name, err)
-		return nil, r.activeErr
+		return nil, fmt.Errorf("the active profile %q could not be identified: %w", name, err)
 	}
-	r.activeInfo = info
-	return r.activeInfo, nil
+	return info, nil
 }
 
 // protectsActive reports why the file described by info must not be renamed or

@@ -44,6 +44,10 @@ type stubAuthClient struct {
 	loginStartReq   *pkgauth.LoginStartRequest
 	loginWaitCalled bool
 	loginWaitReq    *pkgauth.LoginWaitRequest
+
+	// onLogout runs before the answer is returned, so a test can observe the
+	// state of the world at the moment the tokens are dropped.
+	onLogout func()
 }
 
 func (s *stubAuthClient) LoginStart(req *pkgauth.LoginStartRequest) (*pkgauth.LoginStartResponse, error) {
@@ -58,6 +62,9 @@ func (s *stubAuthClient) LoginWait(req *pkgauth.LoginWaitRequest) (*pkgauth.Logi
 }
 
 func (s *stubAuthClient) Logout() (*pkgauth.LogoutResponse, error) {
+	if s.onLogout != nil {
+		s.onLogout()
+	}
 	return s.logoutResp, s.logoutErr
 }
 
