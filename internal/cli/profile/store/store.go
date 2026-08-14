@@ -299,6 +299,56 @@ func (s *Store) Delete(name string) error {
 	return nil
 }
 
+// activeIsUsable reports whether the active pointer names a profile that
+// exists, which is the state ensureInitialized is trying to reach.
+func (s *Store) activeIsUsable() bool {
+	name, err := s.Active()
+	if err != nil {
+		return false
+	}
+	_, statErr := os.Stat(s.ProfilePath(name))
+	return statErr == nil
+}
+
+// writeStubProfile creates a starter profile, appearing complete or not at all.
+// A concurrent formae writing the same stub first is success: the profile this
+// step wanted exists. Staging through a temp file keeps a racing reader from
+// loading a half-written profile, which a plain write would allow.
+func (s *Store) writeStubProfile(name string) error {
+	f, err := os.CreateTemp(s.ProfilesDir(), "."+name+"-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp profile: %w", err)
+	}
+	tmp := f.Name()
+	defer func() { _ = os.Remove(tmp) }() // no-op once linked away
+	if _, err := f.WriteString(StubTemplate); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("write default profile: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("write default profile: %w", err)
+	}
+	if err := os.Chmod(tmp, 0o644); err != nil {
+		return fmt.Errorf("write default profile: %w", err)
+	}
+	// Link rather than rename: it fails when the destination exists, so a
+	// racing bootstrap can never overwrite a profile.
+	if err := os.Link(tmp, s.ProfilePath(name)); err != nil && !errors.Is(err, os.ErrExist) {
+		return fmt.Errorf("write default profile: %w", err)
+	}
+	return nil
+}
+
+// removeMigratedLegacy deletes a legacy config whose contents have been
+// migrated. A concurrent formae removing it first is success: the file being
+// gone is the whole point of the step.
+func removeMigratedLegacy(path string) error {
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
 func copyFile(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
@@ -326,6 +376,12 @@ func copyFile(src, dst string) error {
 // file, write of the active pointer) are atomic. Returns ErrNotInitialized for
 // the two states that need user action (stale active; orphaned profiles with no
 // default).
+//
+// Concurrent callers are not serialised, and deliberately so: every mutation
+// here is idempotent, and losing a race means the state this call wanted was
+// produced by the winner. Each step therefore treats "already done" as done.
+// Several formae processes starting at once is ordinary, so a lost race must
+// not surface as a startup failure.
 func (s *Store) ensureInitialized() error {
 	// Step 1/2: an active pointer already exists.
 	if data, err := os.ReadFile(s.activePath()); err == nil {
@@ -351,7 +407,7 @@ func (s *Store) ensureInitialized() error {
 			if err := s.writeActive(name); err != nil {
 				return err
 			}
-			return os.Remove(cfg) // Step 3.
+			return removeMigratedLegacy(cfg) // Step 3.
 		}
 		// Step 4: broken/invalid symlink — leave it, warn, fall through.
 		slog.Warn("ignoring broken legacy config symlink", "path", cfg)
@@ -363,7 +419,12 @@ func (s *Store) ensureInitialized() error {
 				return fmt.Errorf("mkdir profiles: %w", err)
 			}
 			if err := os.Rename(cfg, dst); err != nil { // Step 5a.
-				return fmt.Errorf("move legacy config: %w", err)
+				// A concurrent formae may have moved the same file first. That
+				// is the outcome this step wanted, so adopt it instead of
+				// failing a startup that merely raced.
+				if _, statErr := os.Lstat(dst); !errors.Is(err, os.ErrNotExist) || statErr != nil {
+					return fmt.Errorf("move legacy config: %w", err)
+				}
 			}
 			return s.writeActive("default")
 		} else if err != nil {
@@ -376,11 +437,27 @@ func (s *Store) ensureInitialized() error {
 		return fmt.Errorf("stat legacy config: %w", lerr)
 	}
 
-	// No usable formae.conf.pkl beyond this point.
+	// No usable formae.conf.pkl beyond this point. A concurrent formae may have
+	// initialised the store since the check at the top of this function, so ask
+	// again before deciding: adopting the winner's result beats racing it to a
+	// second, possibly different, decision.
+	if s.activeIsUsable() {
+		return nil
+	}
 	if _, err := os.Stat(s.ProfilePath("default")); err == nil {
 		return s.writeActive("default") // Step 6: orphaned default (crash recovery).
 	}
 	if names, err := s.List(); err == nil && len(names) > 0 {
+		// The listing itself is evidence another formae is mid-flight: it may
+		// have finished, or created the default but not yet pointed at it.
+		// Either is Step 1 or Step 6 arriving late, not a store needing the
+		// user's hand.
+		if s.activeIsUsable() {
+			return nil
+		}
+		if _, statErr := os.Stat(s.ProfilePath("default")); statErr == nil {
+			return s.writeActive("default")
+		}
 		// Step 7: other orphaned profiles, no default.
 		return fmt.Errorf("%w: no active profile — run `formae profile use <name>` (available: %s)", ErrNotInitialized, strings.Join(names, ", "))
 	}
@@ -388,8 +465,8 @@ func (s *Store) ensureInitialized() error {
 	if err := os.MkdirAll(s.ProfilesDir(), 0o755); err != nil {
 		return fmt.Errorf("mkdir profiles: %w", err)
 	}
-	if err := os.WriteFile(s.ProfilePath("default"), []byte(StubTemplate), 0o644); err != nil {
-		return fmt.Errorf("write default profile: %w", err)
+	if err := s.writeStubProfile("default"); err != nil {
+		return err
 	}
 	return s.writeActive("default")
 }

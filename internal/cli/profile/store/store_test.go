@@ -571,3 +571,59 @@ func TestSave_ForceDoesNotFollowSymlink(t *testing.T) {
 		t.Errorf("snap content = %q, want %q", string(data), activeContent)
 	}
 }
+
+// Several formae processes can start at once — an assistant firing concurrent
+// tool calls on a fresh machine is the ordinary case, not a contrived one — and
+// they all load configuration through Resolve. Whichever loses the race must
+// still succeed: the store it wanted already exists, made by the winner.
+func TestResolveIsSafeWhenAnotherProcessWinsTheMigration(t *testing.T) {
+	const racers = 8
+
+	for _, tc := range []struct {
+		name  string
+		setup func(t *testing.T, root string)
+	}{
+		{
+			"legacy config file",
+			func(t *testing.T, root string) {
+				writeFile(t, root, "formae.conf.pkl", "amends \"formae:/Config.pkl\"\n")
+			},
+		},
+		{
+			"legacy symlink",
+			func(t *testing.T, root string) {
+				writeFile(t, root, filepath.Join("profiles", "prod.pkl"), "amends \"formae:/Config.pkl\"\n")
+				if err := os.Symlink(filepath.Join(root, "profiles", "prod.pkl"),
+					filepath.Join(root, "formae.conf.pkl")); err != nil {
+					t.Fatalf("symlink: %v", err)
+				}
+			},
+		},
+		{
+			"clean install",
+			func(t *testing.T, root string) {},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			tc.setup(t, root)
+
+			start := make(chan struct{})
+			errs := make(chan error, racers)
+			for i := 0; i < racers; i++ {
+				go func() {
+					<-start
+					_, err := store.New(root).Resolve()
+					errs <- err
+				}()
+			}
+			close(start)
+
+			for i := 0; i < racers; i++ {
+				if err := <-errs; err != nil {
+					t.Fatalf("racer %d: %v", i, err)
+				}
+			}
+		})
+	}
+}
