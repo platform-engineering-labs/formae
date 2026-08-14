@@ -9,19 +9,25 @@
 package login
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
+	"strings"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
 	"github.com/platform-engineering-labs/formae/internal/cli/authmsg"
 	clicmd "github.com/platform-engineering-labs/formae/internal/cli/cmd"
 	"github.com/platform-engineering-labs/formae/internal/cli/config"
+	"github.com/platform-engineering-labs/formae/internal/cli/profile/store"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	pkgauth "github.com/platform-engineering-labs/formae/pkg/auth"
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/spf13/cobra"
 )
 
@@ -32,6 +38,14 @@ type authClient interface {
 	LoginStart(*pkgauth.LoginStartRequest) (*pkgauth.LoginStartResponse, error)
 	LoginWait(*pkgauth.LoginWaitRequest) (*pkgauth.LoginWaitResponse, error)
 	Logout() (*pkgauth.LogoutResponse, error)
+}
+
+// credentialProvider is the subset of *pkgauth.Client that yields the
+// credential a completed sign-in produced. It is a second narrow interface
+// rather than a widening of authClient because it is a second concern:
+// authClient drives the flow, this one reads its result.
+type credentialProvider interface {
+	GetAuthHeader(forceRefresh bool) (*pkgauth.GetAuthHeaderResponse, error)
 }
 
 // loginIsTerminal is a package seam so tests can force piped (non-TTY) behavior.
@@ -60,6 +74,7 @@ func ackLine(w io.Writer, tty bool, th *theme.Theme, m components.AckMarker, tex
 // LoginCmd signs in through the active profile's auth plugin.
 func LoginCmd() *cobra.Command {
 	var device bool
+	var cloud, cloudIssuer string
 
 	command := &cobra.Command{
 		Use:   "login",
@@ -69,7 +84,12 @@ func LoginCmd() *cobra.Command {
 The auth plugin decides how the flow works: opening a browser (the default)
 or, with --device, printing a code to enter on another device. Running
 login again while already signed in is a no-op. To sign in as someone else,
-run logout first.`,
+run logout first.
+
+On a hosted profile, a successful sign-in is followed by a profile per
+installation your grants cover: profiles are created, brought up to date,
+and removed once a grant is gone. Profiles you wrote yourself are never
+touched.`,
 		Annotations: map[string]string{
 			"type":     "Auth",
 			"examples": "{{.Name}} {{.Command}}|{{.Name}} {{.Command}} --device",
@@ -92,15 +112,44 @@ run logout first.`,
 				return err
 			}
 
-			return runLogin(client, os.Stdout, themeFor(a), device)
+			return runLoginAndSync(cmd.Context(), client, syncStep{
+				Creds:      client,
+				Conn:       a.Config.Cli.Connection,
+				ConfigDir:  store.ResolveConfigDir,
+				NewClient:  newCloudClient,
+				Verifier:   newProfileVerifier(),
+				Out:        os.Stdout,
+				Theme:      themeFor(a),
+				CloudFlag:  cloud,
+				IssuerFlag: cloudIssuer,
+			}, device)
 		},
 	}
 
 	command.Flags().BoolVar(&device, "device", false, "use a device code instead of opening a browser")
+	command.Flags().StringVar(&cloud, "cloud", "",
+		fmt.Sprintf("control plane base URL (default: $FORMAE_CLOUD_URL or %s)", DefaultCloudURL))
+	command.Flags().StringVar(&cloudIssuer, "cloud-issuer", "",
+		fmt.Sprintf("control plane issuer URL (default: $FORMAE_CLOUD_ISSUER or %s)", DefaultCloudIssuer))
 	command.SetUsageTemplate(clicmd.SimpleCmdUsageTemplate)
 	clicmd.AddConfigFlags(command)
 
 	return command
+}
+
+// runLoginAndSync signs in and then brings the profiles this formae derived
+// into line with the installations the caller's grants cover.
+//
+// The two are separate steps because a sign-in that completed a flow and one
+// that found a session already open are equally successful sign-ins: the sync
+// runs after either. Writing it this way rather than inside runLogin is what
+// keeps the short-circuit from skipping it — the branch that returns early
+// returns success, and success is exactly what the sync follows.
+func runLoginAndSync(ctx context.Context, c authClient, s syncStep, device bool) error {
+	if err := runLogin(c, s.Out, s.Theme, device); err != nil {
+		return err
+	}
+	return runSync(ctx, s)
 }
 
 // runLogin drives the two-call login flow against c: LoginStart returns
@@ -167,4 +216,214 @@ func printSignedIn(out io.Writer, tty bool, th *theme.Theme, verb, subjectName, 
 		text = fmt.Sprintf("%s as %s", verb, name)
 	}
 	ackLine(out, tty, th, components.AckDone, text)
+}
+
+// syncStep is everything the sync half of a login needs from the command. It
+// is a struct rather than a longer parameter list because the sync's own
+// dependencies are already expressed that way (syncDeps), and because two of
+// these cannot be resolved until the sync knows it applies: the control-plane
+// client needs the origin the platform resolves to, and the config directory
+// is not read at all for a profile that cannot sync.
+type syncStep struct {
+	Creds      credentialProvider
+	Conn       pkgmodel.Connection
+	ConfigDir  func() (string, error)
+	NewClient  func(origin string) CloudClient
+	Verifier   profileVerifier
+	Out        io.Writer
+	Theme      *theme.Theme
+	CloudFlag  string
+	IssuerFlag string
+}
+
+// runSync derives and maintains one profile per installation the caller's
+// grants cover, and reports the outcome as this command's exit status.
+//
+// A sign-in and a sync are separate facts, and every message here keeps them
+// apart: the user is signed in whatever the sync did, so nothing this function
+// prints may read as a login that failed.
+func runSync(ctx context.Context, s syncStep) error {
+	tty := loginIsTerminal(s.Out)
+
+	p, err := resolvePlatform(s.CloudFlag, s.IssuerFlag)
+	if err != nil {
+		// Resolved first, and reported whatever the profile turns out to be:
+		// an override the user (or their environment) actually set is worth a
+		// word even on a profile that would not have synced anyway.
+		notApplicable(s.Out, tty, s.Theme, err.Error())
+		return nil
+	}
+
+	hostedConn, isHosted := s.Conn.(*pkgmodel.HostedConnection)
+	if !isHosted || hostedConn == nil {
+		// A classic profile addresses the user's own agent, so its sign-in
+		// covers no hosted installations. That is the ordinary case, and the
+		// user asked for nothing that did not happen, so it is silent: a
+		// notice here would print on the most common login there is.
+		return nil
+	}
+
+	hdr, err := credential(s.Creds)
+	if err != nil {
+		return fmt.Errorf("%s: %w", syncIncomplete(""), err)
+	}
+
+	gate := gateSync(s.Conn, p, hdr)
+	if !gate.OK {
+		notApplicable(s.Out, tty, s.Theme, gate.Reason)
+		return nil
+	}
+
+	dir, err := s.ConfigDir()
+	if err != nil {
+		return fmt.Errorf("%s: %w", syncIncomplete(""), err)
+	}
+
+	// The raw auth block is the one the gate just validated. It travels
+	// alongside the decoded block so the sync can name the keys a generated
+	// profile does not carry; its values are never printed.
+	result := syncProfiles(ctx, syncDeps{
+		Client:   s.NewClient(p.Origin),
+		Store:    store.New(dir),
+		Verifier: s.Verifier,
+		Out:      s.Out,
+		TTY:      tty,
+		Theme:    s.Theme,
+	}, p, gate.Bearer, gate.Auth, hostedConn.Auth)
+
+	for _, warning := range result.Warnings {
+		ackLine(s.Out, tty, s.Theme, components.AckWarn, warning)
+	}
+	return syncExit(result)
+}
+
+// credential returns the header carrying the credential the sign-in produced,
+// or the reason there is none to send.
+//
+// The refresh is not forced: the sign-in this follows has just produced a
+// credential, and forcing one would spend a round trip to replace something
+// already fresh. A plugin that reports success while returning nothing the
+// CLI can transmit fails here rather than being carried forward as an
+// unauthenticated request — the same fail-closed reading of a header the API
+// path takes, and for the same reason. Only the canonical Authorization key
+// is read, because it is the only key this CLI ever sends.
+func credential(c credentialProvider) (http.Header, error) {
+	resp, err := c.GetAuthHeader(false)
+	if err != nil {
+		return nil, fmt.Errorf("ask the auth plugin for the credential this sign-in produced: %w", err)
+	}
+	if resp == nil {
+		return nil, errors.New(noCredentialMessage)
+	}
+	if resp.ErrorCode != "" || resp.Error != "" {
+		return nil, errors.New(authmsg.DescribeAuthError(resp.ErrorCode, resp.Error))
+	}
+	hdr := http.Header(resp.Headers)
+	if hdr.Get("Authorization") == "" {
+		return nil, errors.New(noCredentialMessage)
+	}
+	return hdr, nil
+}
+
+// noCredentialMessage is reported when the auth plugin says the sign-in
+// worked but hands back nothing the CLI could send.
+const noCredentialMessage = "the auth plugin returned no credential"
+
+// syncExit maps a completed sync onto the command's exit status.
+//
+// The rules overlap — an all-skipped run is both "records were skipped" and
+// "nothing in the desired set was satisfied", and a snapshot too incomplete to
+// license a removal can also have published nothing — so they are evaluated in
+// a fixed order and the first match wins. The order is written out here rather
+// than left to emerge from where the conditions happen to sit:
+//
+//  1. the sign-in failed — the caller returns before the sync runs;
+//  2. the sync did not complete: no credential, a failed enumeration, a lock
+//     held elsewhere, a ledger that could not be written, or a filesystem
+//     error while acting on a profile;
+//  3. the desired set is non-empty and no installation in it ended the run
+//     with a profile this formae owns;
+//  4. the snapshot was not authoritative — a warning, and a zero exit;
+//  5. individual records were skipped — a warning each, and a zero exit;
+//  6. the sync did not apply — a notice, and a zero exit;
+//  7. otherwise zero.
+//
+// Rows 4 to 7 are all zero exits whose reporting has already happened by the
+// time this is reached, which is why they collapse into one branch here.
+func syncExit(r syncResult) error {
+	switch {
+	case r.Fatal != nil:
+		return syncIncompleteError(r)
+
+	case r.DesiredCount > 0 && r.DesiredSatisfied == 0:
+		// A profile kept for an unrelated reason does not satisfy a grant this
+		// run covers, so the count is of what this run published or verified.
+		return fmt.Errorf(
+			"you are signed in, but formae wrote no profile for any of the %s your grants cover",
+			quantity(r.DesiredCount, "installation"))
+
+	default:
+		return nil
+	}
+}
+
+// syncIncompleteError phrases a sync that did not complete. A single record
+// this formae could not read is enough to reach it, so the changes the run did
+// make are named alongside the failure rather than left to read as though
+// nothing happened.
+func syncIncompleteError(r syncResult) error {
+	msg := syncIncomplete(changesMade(r))
+	if errors.Is(r.Fatal, errLedgerLocked) {
+		// The lock's path is not something the user can act on; the other
+		// process is.
+		return fmt.Errorf("%s: another formae process is updating them, so run formae login again when it has finished", msg)
+	}
+	return fmt.Errorf("%s: %w", msg, r.Fatal)
+}
+
+// syncIncomplete states the two facts a failed sync has to state together:
+// the sign-in worked, and the profiles were not brought up to date. made, when
+// non-empty, names what the run managed before it stopped.
+func syncIncomplete(made string) string {
+	if made == "" {
+		return "you are signed in, but formae could not finish updating your hosted profiles"
+	}
+	return fmt.Sprintf("you are signed in, but formae could not finish updating your hosted profiles (%s)", made)
+}
+
+// changesMade summarises what a run changed, for a message that reports a
+// failure without denying the work that preceded it.
+func changesMade(r syncResult) string {
+	counts := []struct {
+		verb string
+		n    int
+	}{
+		{"created", r.Created},
+		{"updated", r.Updated},
+		{"renamed", r.Renamed},
+		{"removed", r.Pruned},
+	}
+	var parts []string
+	for _, c := range counts {
+		if c.n > 0 {
+			parts = append(parts, fmt.Sprintf("%s %s", c.verb, quantity(c.n, "profile")))
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+// quantity renders a count with its noun, singular or plural.
+func quantity(n int, noun string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, noun)
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
+}
+
+// notApplicable reports that no profiles were synced, and why. It carries the
+// no-op marker rather than the warning one because nothing was left in a state
+// the user has to repair: the sign-in succeeded and the filesystem is
+// untouched.
+func notApplicable(w io.Writer, tty bool, th *theme.Theme, reason string) {
+	ackLine(w, tty, th, components.AckSkip, "no hosted profiles were synced: "+reason)
 }
