@@ -255,7 +255,7 @@ func origins(entries []*ledgerEntry) []string {
 }
 
 // printWarnings renders each warning as its own line, in the same
-// acknowledgment idiom as the sign-out line above it.
+// acknowledgment idiom as the sign-in or sign-out line above it.
 func printWarnings(w io.Writer, tty bool, th *theme.Theme, warnings []string) {
 	for _, warning := range warnings {
 		ackLine(w, tty, th, components.AckWarn, warning)

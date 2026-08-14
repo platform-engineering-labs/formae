@@ -291,9 +291,7 @@ func runSync(ctx context.Context, s syncStep) error {
 		Theme:    s.Theme,
 	}, p, gate.Bearer, gate.Auth, hostedConn.Auth)
 
-	for _, warning := range result.Warnings {
-		ackLine(s.Out, tty, s.Theme, components.AckWarn, warning)
-	}
+	printWarnings(s.Out, tty, s.Theme, result.Warnings)
 	return syncExit(result)
 }
 
