@@ -600,6 +600,8 @@ func TestLoginFailsWhenAnotherProcessHoldsTheLedger(t *testing.T) {
 	err = runLoginAndSync(context.Background(), signedIn(), f.loginStep(), false)
 
 	require.Error(t, err)
+	assert.ErrorIs(t, err, errLedgerLocked,
+		"a caller telling a contended ledger from a real failure has the sentinel to test against")
 	assert.Contains(t, err.Error(), "another formae process")
 	assert.NotContains(t, err.Error(), f.store.ManagedLockPath(), "a lock path is not something the user can act on")
 	assert.Zero(t, f.client.calls)

@@ -386,6 +386,8 @@ func TestLogoutFailsWhenAnotherProcessIsUpdatingTheProfiles(t *testing.T) {
 	err = runLogoutAndPrune(signedOut(), f.logoutStep(installOne))
 
 	require.Error(t, err)
+	assert.ErrorIs(t, err, errLedgerLocked,
+		"a caller telling a contended ledger from a real failure has the sentinel to test against")
 	assert.Contains(t, err.Error(), "you are signed out")
 	assert.Contains(t, err.Error(), "another formae process")
 	assert.NotContains(t, err.Error(), f.store.ManagedLockPath(), "a lock path is not something the user can act on")

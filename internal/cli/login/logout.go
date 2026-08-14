@@ -272,8 +272,12 @@ func pruneExit(r syncResult) error {
 	msg := logoutIncomplete(changesMade(r))
 	if errors.Is(r.Fatal, errLedgerLocked) {
 		// The lock's path is not something the user can act on; the other
-		// process is.
-		return fmt.Errorf("%s: another formae process is updating them, so run formae logout again when it has finished", msg)
+		// process is. The failure stays in the chain all the same, so a caller
+		// can still tell a contended ledger from a run that really failed; the
+		// zero precision is what keeps its text out of the message.
+		return fmt.Errorf(
+			"%s: another formae process is updating them, so run formae logout again when it has finished%.0w",
+			msg, r.Fatal)
 	}
 	return fmt.Errorf("%s: %w", msg, r.Fatal)
 }
