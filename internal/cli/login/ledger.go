@@ -124,14 +124,6 @@ func (l *ledger) Authoritative() []*ledgerEntry {
 	return out
 }
 
-// carriedForward returns every entry the next save will write, quarantined
-// ones included. It is the write-back set and not a set of permissions:
-// nothing deciding whether it may remove, replace, or rename a profile may
-// read it.
-func (l *ledger) carriedForward() []*ledgerEntry {
-	return slices.Clone(l.entries)
-}
-
 // upsert records e, replacing the entry for the same (controlPlane,
 // installationId) when there is one and appending otherwise, so one
 // installation never accumulates two records.

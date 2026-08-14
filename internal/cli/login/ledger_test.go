@@ -109,7 +109,7 @@ func TestLoadLedger_AbsentFileIsEmptyAndSilent(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, l)
 	assert.Empty(t, warnings)
-	assert.Empty(t, l.carriedForward())
+	assert.Empty(t, l.entries)
 	assert.Empty(t, l.Authoritative())
 }
 
@@ -124,7 +124,7 @@ func TestLoadLedger_UnparseableIsEmptyWithOneWarning(t *testing.T) {
 
 		require.NoError(t, err)
 		require.NotNil(t, l)
-		assert.Empty(t, l.carriedForward())
+		assert.Empty(t, l.entries)
 		assert.Empty(t, l.Authoritative())
 		require.Len(t, warnings, 1)
 		assert.Contains(t, warnings[0], path)
@@ -170,13 +170,13 @@ func TestLoadLedger_ValidEntriesAreAuthoritative(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Empty(t, warnings)
-	assert.Equal(t, []string{"acme-pending", "acme-owned", "acme-deleting"}, names(l.carriedForward()))
-	assert.Equal(t, names(l.carriedForward()), names(l.Authoritative()))
-	assert.Equal(t, entryPending, l.carriedForward()[0].State)
-	assert.Equal(t, ".tmp-0123456789abcdef.pkl", l.carriedForward()[0].TempName)
-	assert.Equal(t, testFingerprintB, l.carriedForward()[1].AltFingerprint)
-	assert.Equal(t, "acme-old-name", l.carriedForward()[1].SupersedesName)
-	assert.Equal(t, entryDeleting, l.carriedForward()[2].State)
+	assert.Equal(t, []string{"acme-pending", "acme-owned", "acme-deleting"}, names(l.entries))
+	assert.Equal(t, names(l.entries), names(l.Authoritative()))
+	assert.Equal(t, entryPending, l.entries[0].State)
+	assert.Equal(t, ".tmp-0123456789abcdef.pkl", l.entries[0].TempName)
+	assert.Equal(t, testFingerprintB, l.entries[1].AltFingerprint)
+	assert.Equal(t, "acme-old-name", l.entries[1].SupersedesName)
+	assert.Equal(t, entryDeleting, l.entries[2].State)
 }
 
 // TestLoadLedger_DropsMalformedEntries walks every field that eventually
@@ -234,7 +234,7 @@ func TestLoadLedger_DropsMalformedEntries(t *testing.T) {
 			l, warnings, err := loadLedger(path)
 
 			require.NoError(t, err)
-			assert.Equal(t, []string{"acme-good"}, names(l.carriedForward()), "the malformed entry must not be carried forward")
+			assert.Equal(t, []string{"acme-good"}, names(l.entries), "the malformed entry must not be carried forward")
 			assert.Equal(t, []string{"acme-good"}, names(l.Authoritative()))
 			require.Len(t, warnings, 1)
 
@@ -243,7 +243,7 @@ func TestLoadLedger_DropsMalformedEntries(t *testing.T) {
 			reloaded, warnings, err := loadLedger(path)
 			require.NoError(t, err)
 			assert.Empty(t, warnings)
-			assert.Equal(t, []string{"acme-good"}, names(reloaded.carriedForward()))
+			assert.Equal(t, []string{"acme-good"}, names(reloaded.entries))
 		})
 	}
 }
@@ -267,7 +267,7 @@ func TestLoadLedger_ConfinesATypeErrorToItsOwnEntry(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Len(t, warnings, 1)
-	assert.Equal(t, []string{"acme-prod", "staging-one"}, names(l.carriedForward()),
+	assert.Equal(t, []string{"acme-prod", "staging-one"}, names(l.entries),
 		"the siblings of a wrongly typed entry survive")
 
 	require.NoError(t, l.save(path))
@@ -291,14 +291,14 @@ func TestLoadLedger_QuarantinesEntriesSharingAName(t *testing.T) {
 	l, warnings, err := loadLedger(path)
 
 	require.NoError(t, err)
-	assert.Len(t, l.carriedForward(), 2, "quarantined entries are carried forward")
+	assert.Len(t, l.entries, 2, "quarantined entries are carried forward")
 	assert.Empty(t, l.Authoritative(), "no member of a conflicting set grants authority")
 	require.Len(t, warnings, 1)
 
 	require.NoError(t, l.save(path))
 	reloaded, _, err := loadLedger(path)
 	require.NoError(t, err)
-	assert.Len(t, reloaded.carriedForward(), 2, "quarantined entries survive a save")
+	assert.Len(t, reloaded.entries, 2, "quarantined entries survive a save")
 	assert.Empty(t, reloaded.Authoritative())
 }
 
@@ -313,14 +313,14 @@ func TestLoadLedger_QuarantinesEntriesSharingAnInstallationID(t *testing.T) {
 	l, warnings, err := loadLedger(path)
 
 	require.NoError(t, err)
-	assert.Len(t, l.carriedForward(), 2)
+	assert.Len(t, l.entries, 2)
 	assert.Empty(t, l.Authoritative())
 	require.Len(t, warnings, 1)
 
 	require.NoError(t, l.save(path))
 	reloaded, _, err := loadLedger(path)
 	require.NoError(t, err)
-	assert.Len(t, reloaded.carriedForward(), 2)
+	assert.Len(t, reloaded.entries, 2)
 	assert.Empty(t, reloaded.Authoritative())
 }
 
@@ -340,7 +340,7 @@ func TestLoadLedger_QuarantinesTheWholeConnectedComponent(t *testing.T) {
 	l, warnings, err := loadLedger(path)
 
 	require.NoError(t, err)
-	assert.Len(t, l.carriedForward(), 4)
+	assert.Len(t, l.entries, 4)
 	assert.Equal(t, []string{"unrelated"}, names(l.Authoritative()),
 		"every member of the connected component is quarantined; the unrelated entry is not")
 	require.Len(t, warnings, 1, "one warning for the one conflicting set")
@@ -401,7 +401,7 @@ func TestLoadLedger_CanonicalisesControlPlane(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, warnings)
 	require.Len(t, l.Authoritative(), 1)
-	assert.Equal(t, testOrigin, l.carriedForward()[0].ControlPlane)
+	assert.Equal(t, testOrigin, l.entries[0].ControlPlane)
 }
 
 // TestLoadLedger_ConflictSurvivesADifferentSpellingOfTheSameOrigin makes the
@@ -416,7 +416,7 @@ func TestLoadLedger_ConflictSurvivesADifferentSpellingOfTheSameOrigin(t *testing
 	l, warnings, err := loadLedger(path)
 
 	require.NoError(t, err)
-	assert.Len(t, l.carriedForward(), 2)
+	assert.Len(t, l.entries, 2)
 	assert.Empty(t, l.Authoritative())
 	assert.Len(t, warnings, 1)
 }
@@ -439,7 +439,7 @@ func TestLedgerUpsert_ReplacesTheRecordForAnInstallation(t *testing.T) {
 		Fingerprint:    testFingerprintB,
 	})
 
-	assert.Equal(t, []string{"acme-renamed"}, names(l.carriedForward()))
+	assert.Equal(t, []string{"acme-renamed"}, names(l.entries))
 	require.NoError(t, l.save(path))
 
 	reloaded, _, err := loadLedger(path)
@@ -464,7 +464,7 @@ func TestLedgerRemove_DropsTheRecordForAnInstallation(t *testing.T) {
 
 	reloaded, _, err := loadLedger(path)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"staging-one"}, names(reloaded.carriedForward()))
+	assert.Equal(t, []string{"staging-one"}, names(reloaded.entries))
 }
 
 // TestLedgerMutation_NeverTouchesAQuarantinedEntry pins that a conflicting
@@ -488,7 +488,7 @@ func TestLedgerMutation_NeverTouchesAQuarantinedEntry(t *testing.T) {
 		Fingerprint:    testFingerprintA,
 	})
 
-	assert.Equal(t, []string{"acme-prod", "acme-staging", "acme-new"}, names(l.carriedForward()),
+	assert.Equal(t, []string{"acme-prod", "acme-staging", "acme-new"}, names(l.entries),
 		"neither member of the conflicting set is replaced or dropped")
 	require.NoError(t, l.save(path))
 
@@ -521,7 +521,9 @@ func TestLedgerSave_CarriesForwardEveryEntryUnchanged(t *testing.T) {
 
 	reloaded, _, err := loadLedger(path)
 	require.NoError(t, err)
-	assert.Equal(t, l.carriedForward(), reloaded.carriedForward())
+	assert.Equal(t, l.entries, reloaded.entries)
+	assert.Equal(t, []string{"shared-name", "shared-name", "staging-one"}, names(savedEntries(t, path)),
+		"a quarantined entry grants no authority, and is still written back")
 	assert.Equal(t, ledgerSchemaVersion, savedSchemaVersion(t, path))
 	assert.Equal(t, []string{"staging-one"}, names(reloaded.Authoritative()))
 }
@@ -548,9 +550,9 @@ func TestLedgerSave_LeavesOtherControlPlanesUntouched(t *testing.T) {
 	reloaded, warnings, err := loadLedger(path)
 	require.NoError(t, err)
 	assert.Empty(t, warnings)
-	assert.Equal(t, []string{"acme-prod", "staging-one", "acme-dev"}, names(reloaded.carriedForward()))
-	assert.Equal(t, testOtherOrigin, reloaded.carriedForward()[1].ControlPlane)
-	assert.Equal(t, testUUIDC, reloaded.carriedForward()[1].InstallationID)
+	assert.Equal(t, []string{"acme-prod", "staging-one", "acme-dev"}, names(reloaded.entries))
+	assert.Equal(t, testOtherOrigin, reloaded.entries[1].ControlPlane)
+	assert.Equal(t, testUUIDC, reloaded.entries[1].InstallationID)
 }
 
 // TestLedgerSave_CanonicalisesTheEntriesItWrites pins that the file's
