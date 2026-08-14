@@ -252,6 +252,31 @@ func TestLogoutRemovesNothingWhenTwoControlPlanesRecordTheActiveProfile(t *testi
 	assert.Contains(t, warnings[0], testOtherOrigin)
 }
 
+// TestLogoutRemovesNothingWhenTheActiveProfileCannotBeIdentified covers the
+// pointer that names nothing. Without the file the user is signed in through,
+// no entry can be bound to it, so nothing says which control plane was signed
+// out of — and profiles were left behind, so the reason is worth acting on
+// rather than the no-op a profile of the user's own is.
+func TestLogoutRemovesNothingWhenTheActiveProfileCannotBeIdentified(t *testing.T) {
+	f := newSyncFixture(t)
+	f.writeLedger(
+		f.derive(testOrigin, nameOne, installOne),
+		f.derive(testOrigin, nameTwo, installTwo),
+	)
+	f.pointActiveAt("nothing-is-here")
+
+	require.NoError(t, runLogoutAndPrune(signedOut(), f.logoutStep(installOne)))
+
+	assert.True(t, f.exists(nameOne))
+	assert.True(t, f.exists(nameTwo), "an unidentifiable active profile licenses no removal")
+	assert.Len(t, f.entries(), 2)
+
+	warnings := outputMarked(f, "! ")
+	require.Len(t, warnings, 1)
+	assert.Contains(t, warnings[0], "no profiles were removed")
+	assert.Contains(t, warnings[0], "could not tell which of its profiles you signed out of")
+}
+
 // TestLogoutSaysNothingAboutProfilesWhenThereWereNeverAny verifies that a
 // sign-out on a hosted profile formae never derived anything for is exactly a
 // sign-out: a user who has just signed out is not told about profiles when

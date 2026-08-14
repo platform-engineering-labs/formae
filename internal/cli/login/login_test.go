@@ -627,6 +627,8 @@ func TestLoginFailsWhenNoDesiredInstallationGotAProfile(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "you are signed in")
+	assert.Contains(t, err.Error(), "wrote no profile for any of the 1 installation your grants cover",
+		"the row this exercises is the desired set nothing satisfied, not a sync that did not complete")
 	assert.True(t, f.exists(nameTwo), "the retained profile is not one this run's grants were satisfied by")
 	assert.False(t, f.exists(nameOne))
 }
@@ -644,6 +646,8 @@ func TestLoginFailsWhenEveryDesiredRecordWasSkipped(t *testing.T) {
 	err := runLoginAndSync(context.Background(), signedIn(), f.loginStep(), false)
 
 	require.Error(t, err)
+	assert.Contains(t, err.Error(), "wrote no profile for any of the 1 installation your grants cover",
+		"a taken name is a skip, so this ends on the desired-set row and never on an incomplete sync")
 	assert.Equal(t, mine, f.read(nameOne), "the name was taken, and a taken name is a skip and not a write")
 	assert.Contains(t, f.out.String(), "! ")
 }
@@ -701,6 +705,8 @@ func TestLoginFailsWhenANonAuthoritativeRunPublishedNothing(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "you are signed in")
+	assert.Contains(t, err.Error(), "wrote no profile for any of the 1 installation your grants cover",
+		"an incomplete snapshot is not a failure to complete: the row is the desired set nothing satisfied")
 }
 
 // TestLoginSucceedsOnACleanRun verifies the ordinary case: profiles written,
