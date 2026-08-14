@@ -556,7 +556,7 @@ func (r *syncRun) publishProfile(record desiredRecord, auth cliAuthBlock) {
 // it derives has not changed.
 func (r *syncRun) maintainProfile(e *ledgerEntry, record desiredRecord, auth cliAuthBlock) {
 	path := r.d.Store.ProfilePath(e.Name)
-	_, digest, err := statAndDigest(path)
+	info, digest, err := statAndDigest(path)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
 		r.publishProfile(record, auth) // repair.
@@ -575,17 +575,20 @@ func (r *syncRun) maintainProfile(e *ledgerEntry, record desiredRecord, auth cli
 		r.adopted(e)
 		return
 	}
-	r.applyContent(e, record, auth, digest)
+	r.applyContent(e, record, auth, info, digest)
 }
 
 // applyContent replaces the file an entry owns when the rendered bytes differ
-// from what is on disk, and counts the profile as satisfied either way.
+// from what is on disk, and counts the profile as satisfied either way. info
+// and digest are the identity and the contents the caller established its
+// authority over the destination from.
 //
 // The replacement is a rename of the verified temp file over the destination,
 // which is the atomic replace we do want here: the file being replaced is one
 // this formae already owns, and the name it is published under does not move,
 // so the active pointer stays valid whether or not this is the active profile.
-func (r *syncRun) applyContent(e *ledgerEntry, record desiredRecord, auth cliAuthBlock, digest string) {
+func (r *syncRun) applyContent(e *ledgerEntry, record desiredRecord, auth cliAuthBlock,
+	info os.FileInfo, digest string) {
 	content := r.render(record, auth)
 	updated := fingerprint(content)
 	if updated == digest {
@@ -616,7 +619,48 @@ func (r *syncRun) applyContent(e *ledgerEntry, record desiredRecord, auth cliAut
 		r.abandonChange(e, restore, fmt.Sprintf("profile %q was not updated: %v", e.Name, err))
 		return
 	}
-	if err := os.Rename(tempPath, r.d.Store.ProfilePath(e.Name)); err != nil {
+
+	// The destination is identified and hashed again immediately before it is
+	// replaced. The authority to replace it was established before the profile
+	// was rendered, before the ledger was written, and before the temp file was
+	// loaded back through the config loader — the slowest step of the run — and
+	// a save from the user's editor anywhere in that window puts different
+	// bytes, usually a whole new file, at the name. os.Rename would destroy
+	// them without a trace, so the file this is about to replace must still be
+	// the one whose contents authorised it: same bytes and same file, never one
+	// or the other. Anything else abandons the update, exactly as a file the
+	// user edited before the run started does. The removal paths re-read their
+	// file immediately before removing it for the same reason.
+	//
+	// What is left is the window between these two syscalls, which the portable
+	// filesystem API cannot close — there is no rename-if-still-this-file — so
+	// this is the last thing done before the rename and nothing slow sits
+	// between them.
+	path := r.d.Store.ProfilePath(e.Name)
+	nowInfo, nowDigest, err := statAndDigest(path)
+	switch {
+	case err != nil:
+		// The name is no longer established as the file the update was
+		// authorised against, so nothing is written over it. The entry is
+		// restored to the file it described and a later run repairs or adopts
+		// whatever it finds there then. A name that went empty or stopped being
+		// a regular file is a skip; an error that establishes nothing is also a
+		// failure to complete, as it is everywhere else in this file.
+		if unreadable(err) {
+			r.fail(err)
+		}
+		r.abandonChange(e, restore, fmt.Sprintf(
+			"profile %q was not updated: what is at that name is no longer the file formae was about to "+
+				"replace (%v)", e.Name, err))
+		return
+	case nowDigest != digest, !os.SameFile(info, nowInfo):
+		temp := e.TempName
+		r.adopted(e)
+		r.removeTemp(temp)
+		return
+	}
+
+	if err := os.Rename(tempPath, path); err != nil {
 		r.fail(err)
 		r.abandonChange(e, restore, fmt.Sprintf("profile %q was not updated: %v", e.Name, err))
 		return
@@ -672,7 +716,7 @@ func (r *syncRun) renameProfile(e *ledgerEntry, record desiredRecord, auth cliAu
 				"profile %q could not be told apart from the active profile (%v), so formae did not rename it to %q",
 				from, err, record.name))
 		}
-		r.applyContent(e, record, auth, digest)
+		r.applyContent(e, record, auth, info, digest)
 		return
 	}
 
@@ -739,6 +783,15 @@ func (r *syncRun) removeSuperseded(e *ledgerEntry) {
 	switch {
 	case errors.Is(err, os.ErrNotExist):
 		return // already gone.
+	case unreadable(err):
+		// Whether the old name still holds the file this entry wrote was not
+		// established, so it is left in place and nothing is claimed about it.
+		r.fail(err)
+		r.warn(fmt.Sprintf(
+			"profile %q was renamed to %q, but the file at the old name could not be read (%v), "+
+				"so it was left in place; remove it by hand if you do not want it",
+			e.SupersedesName, e.Name, err))
+		return
 	case err != nil, !e.records(digest):
 		r.warn(fmt.Sprintf(
 			"profile %q was renamed to %q, but the file at the old name is no longer one formae wrote, "+
@@ -929,7 +982,7 @@ func (r *syncRun) recoverPending(e *ledgerEntry) {
 			e.Name))
 		return
 	case err != nil:
-		r.unsettled(e, err)
+		r.unsettled(e.Name, err)
 		return
 	}
 
@@ -975,16 +1028,35 @@ func (r *syncRun) recoverUnpublished(e *ledgerEntry) {
 
 // revertRename returns an entry to the name it still owns, after a rename that
 // published nothing.
+//
+// "The old name is gone, or holds something this formae did not write" and "the
+// old name could not be read at all" are different answers. The first is an
+// established fact and forfeits both names. The second establishes nothing, so
+// the entry is left exactly as it is for the next run: forfeiting on it would
+// orphan a profile this formae still owns, at a name nothing would ever manage
+// or remove again.
 func (r *syncRun) revertRename(e *ledgerEntry) {
-	_, digest, err := statAndDigest(r.d.Store.ProfilePath(e.SupersedesName))
-	if err != nil || !e.records(digest) {
+	oldName := e.SupersedesName
+	_, digest, err := statAndDigest(r.d.Store.ProfilePath(oldName))
+	switch {
+	case unreadable(err):
+		r.unsettled(oldName, err)
+	case err != nil, !e.records(digest):
 		r.abandonPending(e, fmt.Sprintf(
 			"formae was renaming profile %q to %q when it was interrupted, and the file at the old name is no "+
-				"longer one it wrote, so it no longer manages either name", e.SupersedesName, e.Name))
-		return
+				"longer one it wrote, so it no longer manages either name", oldName, e.Name))
+	default:
+		e.Name = oldName
+		r.settle(e, digest)
 	}
-	e.Name = e.SupersedesName
-	r.settle(e, digest)
+}
+
+// unreadable reports an error that establishes nothing about a path: neither
+// that there is no file there nor that what is there is not one this formae
+// could own, but that it could not be read well enough to decide. Every
+// decision this file takes resolves such an error toward doing nothing.
+func unreadable(err error) bool {
+	return err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, errNotRegularFile)
 }
 
 // settle records that an entry owns the file at its name, holding the content
@@ -1017,12 +1089,13 @@ func (r *syncRun) abandonPending(e *ledgerEntry, warning string) {
 	}
 }
 
-// unsettled leaves an entry exactly as it is, because what is at its name
-// could not be established. Acting on it later would act on an unestablished
-// fact, so the entry stays for the next run.
-func (r *syncRun) unsettled(e *ledgerEntry, err error) {
+// unsettled leaves an entry exactly as it is, because what is at the named
+// path could not be established. Acting on it later would act on an
+// unestablished fact, so the entry stays for the next run. name is the profile
+// the unreadable path belongs to, which is not always the entry's own name.
+func (r *syncRun) unsettled(name string, err error) {
 	r.fail(err)
-	r.warn(fmt.Sprintf("profile %q could not be read, so formae left it alone: %v", e.Name, err))
+	r.warn(fmt.Sprintf("profile %q could not be read, so formae left it alone: %v", name, err))
 }
 
 // witnesses reports whether the file at an entry's name is the same file as
@@ -1056,7 +1129,7 @@ func (r *syncRun) recoverDeleting(e *ledgerEntry) {
 		r.drop(e)
 		return
 	case err != nil:
-		r.unsettled(e, err)
+		r.unsettled(e.Name, err)
 		return
 	}
 

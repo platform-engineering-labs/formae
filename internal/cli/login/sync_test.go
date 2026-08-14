@@ -42,6 +42,13 @@ const (
 	stateActive = "active"
 )
 
+// unreadableName is a valid profile name whose path is longer than one
+// filesystem component may be, so every stat of it fails with an error that is
+// neither "it is not there" nor "it is not a regular file" — the third answer,
+// "this could not be read at all". It is a length rather than a permission bit
+// because a permission bit is readable by root, and a test may run as one.
+var unreadableName = strings.Repeat("u", 300)
+
 // stubCloudClient answers with a fixed snapshot, so a sync test exercises the
 // algorithm rather than the HTTP client the client's own tests already cover.
 type stubCloudClient struct {
@@ -66,10 +73,17 @@ func (c *stubCloudClient) ListInstallations(_ context.Context, _ string) (Snapsh
 type stubVerifier struct {
 	err   error
 	paths []string
+	// onVerify runs before the answer is returned, so a test can change the
+	// world during the slowest step of a publication — the window between a
+	// destination being identified and the rendered profile reaching it.
+	onVerify func()
 }
 
 func (v *stubVerifier) Verify(path, _, _ string) error {
 	v.paths = append(v.paths, path)
+	if v.onVerify != nil {
+		v.onVerify()
+	}
 	return v.err
 }
 
@@ -159,6 +173,16 @@ func (f *syncFixture) exists(name string) bool {
 func (f *syncFixture) writeProfile(name string, content []byte) {
 	f.t.Helper()
 	require.NoError(f.t, os.WriteFile(f.store.ProfilePath(name), content, 0o644))
+}
+
+// replaceProfile puts content at a profile name the way an editor that saves
+// through a temp file does: a whole new file is renamed over the name, so a
+// different file answers to it afterwards.
+func (f *syncFixture) replaceProfile(name string, content []byte) {
+	f.t.Helper()
+	temp := filepath.Join(f.root, "editor-save")
+	require.NoError(f.t, os.WriteFile(temp, content, 0o644))
+	require.NoError(f.t, os.Rename(temp, f.store.ProfilePath(name)))
 }
 
 // pointActiveAt writes the active pointer directly, so a test can express a
@@ -970,6 +994,52 @@ func TestSyncRecoversEveryInterruptedState(t *testing.T) {
 			},
 		},
 		{
+			name: "a rename whose old name cannot be read leaves the entry alone",
+			setUp: func(f *syncFixture) {
+				f.writeLedger(managedEntry(entryPending, renamedName, installOne, rawEntry{
+					"fingerprint":    fingerprint(newContent),
+					"altFingerprint": fingerprint(oldContent),
+					"supersedesName": unreadableName,
+					"tempName":       tempName,
+				}))
+				f.writeTempFileNamed(tempName, newContent)
+			},
+			assert: func(t *testing.T, f *syncFixture, result syncResult) {
+				e := f.entryFor(installOne)
+				require.NotNil(t, e, "what is at the old name was not established, so nothing is forfeited")
+				assert.Equal(t, entryPending, e.State)
+				assert.Equal(t, renamedName, e.Name)
+				assert.Equal(t, unreadableName, e.SupersedesName)
+				assert.True(t, f.tempExists(tempName))
+				warnings := warningsContaining(result, "could not be read")
+				require.Len(t, warnings, 1)
+				assert.NotContains(t, warnings[0], "no longer",
+					"an unreadable file was not edited, and is never described as if it had been")
+			},
+		},
+		{
+			name: "a rename published the new name but cannot read the old one",
+			setUp: func(f *syncFixture) {
+				f.writeLedger(managedEntry(entryPending, renamedName, installOne, rawEntry{
+					"fingerprint":    fingerprint(newContent),
+					"altFingerprint": fingerprint(oldContent),
+					"supersedesName": unreadableName,
+					"tempName":       tempName,
+				}))
+				f.linkTemp(tempName, renamedName, newContent)
+			},
+			assert: func(t *testing.T, f *syncFixture, result syncResult) {
+				e := f.entryFor(installOne)
+				require.NotNil(t, e)
+				assert.Equal(t, entryOwned, e.State, "the witness proves the new name is ours")
+				assert.Equal(t, renamedName, e.Name)
+				warnings := warningsContaining(result, "could not be read")
+				require.Len(t, warnings, 1)
+				assert.NotContains(t, warnings[0], "no longer one formae wrote",
+					"an unreadable file was not edited, and is never described as if it had been")
+			},
+		},
+		{
 			name: "an update was interrupted before the replacement",
 			setUp: func(f *syncFixture) {
 				f.writeLedger(managedEntry(entryPending, nameOne, installOne, rawEntry{
@@ -1203,6 +1273,132 @@ func TestSyncNeverOverwritesAFileAtTheDerivedName(t *testing.T) {
 	assert.Zero(t, result.DesiredSatisfied)
 	assert.NotEmpty(t, warningsContaining(result, nameOne))
 	assert.Empty(t, f.tempFiles())
+}
+
+func TestSyncDoesNotReplaceAProfileThatChangedWhileItWasBeingUpdated(t *testing.T) {
+	theirs := []byte("a profile the user wrote\n")
+
+	tests := []struct {
+		name string
+		// change alters the file the update was authorised against and returns
+		// the bytes that must survive.
+		change func(f *syncFixture) []byte
+	}{
+		{
+			name: "an editor saved a new file over the name",
+			change: func(f *syncFixture) []byte {
+				f.replaceProfile(nameOne, theirs)
+				return theirs
+			},
+		},
+		{
+			name: "the file was edited in place",
+			change: func(f *syncFixture) []byte {
+				f.writeProfile(nameOne, theirs)
+				return theirs
+			},
+		},
+		{
+			name: "a different file holding the same bytes took the name",
+			change: func(f *syncFixture) []byte {
+				content := f.content(installOne)
+				f.replaceProfile(nameOne, content)
+				return content
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newSyncFixture(t)
+			f.answer(installation(installOne, "prod", stateActive))
+			require.NoError(t, f.sync().Fatal)
+
+			moved := installation(installOne, "prod", stateActive)
+			moved.Endpoint = testOtherOrigin
+			f.answer(moved)
+
+			// The change lands while the replacement is being verified, which
+			// is inside the window between the destination being identified
+			// and the replacement being renamed over it.
+			var want []byte
+			var changed os.FileInfo
+			f.verifier.onVerify = func() {
+				want = tt.change(f)
+				info, err := os.Stat(f.store.ProfilePath(nameOne))
+				require.NoError(t, err)
+				changed = info
+			}
+
+			result := f.sync()
+
+			assert.Equal(t, want, f.read(nameOne), "the file that took the name is never written over")
+			now, err := os.Stat(f.store.ProfilePath(nameOne))
+			require.NoError(t, err)
+			assert.True(t, os.SameFile(changed, now), "and it is still the same file")
+			assert.Zero(t, result.Updated)
+			assert.Zero(t, result.DesiredSatisfied)
+			assert.Nil(t, f.entryFor(installOne), "formae stopped managing it rather than replacing it")
+			warnings := warningsContaining(result, nameOne)
+			require.Len(t, warnings, 1)
+			assert.Empty(t, f.tempFiles())
+		})
+	}
+}
+
+func TestSyncDoesNotUpdateAProfileThatStoppedBeingOneWhileItWasBeingUpdated(t *testing.T) {
+	tests := []struct {
+		name       string
+		change     func(f *syncFixture)
+		assertFile func(t *testing.T, f *syncFixture)
+	}{
+		{
+			name:   "the name went empty",
+			change: func(f *syncFixture) { require.NoError(f.t, os.Remove(f.store.ProfilePath(nameOne))) },
+			assertFile: func(t *testing.T, f *syncFixture) {
+				assert.False(t, f.exists(nameOne), "nothing was written at a name this run no longer owned")
+			},
+		},
+		{
+			name: "a symlink took the name",
+			change: func(f *syncFixture) {
+				require.NoError(f.t, os.Remove(f.store.ProfilePath(nameOne)))
+				require.NoError(f.t, os.Symlink(f.store.ProfilePath("default"), f.store.ProfilePath(nameOne)))
+			},
+			assertFile: func(t *testing.T, f *syncFixture) {
+				assert.Equal(t, []byte(store.StubTemplate), f.read("default"),
+					"a symlink's target is never written through")
+				info, err := os.Lstat(f.store.ProfilePath(nameOne))
+				require.NoError(t, err)
+				assert.Equal(t, os.ModeSymlink, info.Mode()&os.ModeSymlink, "and the symlink itself is not replaced")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newSyncFixture(t)
+			f.answer(installation(installOne, "prod", stateActive))
+			require.NoError(t, f.sync().Fatal)
+			before := f.entryFor(installOne)
+
+			moved := installation(installOne, "prod", stateActive)
+			moved.Endpoint = testOtherOrigin
+			f.answer(moved)
+			f.verifier.onVerify = func() { tt.change(f) }
+
+			result := f.sync()
+
+			assert.NoError(t, result.Fatal, "a name that is no longer ours is a skip, not a failure")
+			tt.assertFile(t, f)
+			assert.Zero(t, result.Updated)
+			assert.Zero(t, result.DesiredSatisfied)
+			assert.Equal(t, before, f.entryFor(installOne),
+				"the entry still describes the file it described before the update was attempted")
+			assert.NotEmpty(t, warningsContaining(result, nameOne))
+			assert.Empty(t, f.tempFiles())
+		})
+	}
 }
 
 func TestSyncStopsManagingAHandEditedProfile(t *testing.T) {
