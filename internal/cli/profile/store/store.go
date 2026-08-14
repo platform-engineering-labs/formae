@@ -9,6 +9,8 @@
 //	root/
 //	  formae.conf.pkl        (plain file; legacy symlink migrated by ensureInitialized)
 //	  active                 (plain text pointer file: contains the active profile name)
+//	  managed.json           (ledger of the profiles `formae login` wrote)
+//	  managed.lock           (lock file serialising ledger updates)
 //	  profiles/
 //	    <name>.pkl
 package store
@@ -30,6 +32,9 @@ const (
 	profilesSubdir = "profiles"
 	profileExt     = ".pkl"
 	activeFileName = "active"
+
+	managedLedgerFileName = "managed.json"
+	managedLockFileName   = "managed.lock"
 )
 
 // Error sentinels returned by Store methods. Callers should match using errors.Is.
@@ -72,8 +77,22 @@ func (s *Store) ProfilePath(name string) string {
 	return filepath.Join(s.root, profilesSubdir, name+profileExt)
 }
 
-func (s *Store) profilesDir() string {
+// ProfilesDir returns the directory holding the profile files.
+func (s *Store) ProfilesDir() string {
 	return filepath.Join(s.root, profilesSubdir)
+}
+
+// ManagedLedgerPath returns the path to the managed-profile ledger, the record
+// of the profiles `formae login` wrote. It sits beside profiles/ rather than
+// inside it so it is never mistaken for a profile.
+func (s *Store) ManagedLedgerPath() string {
+	return filepath.Join(s.root, managedLedgerFileName)
+}
+
+// ManagedLockPath returns the path to the lock file that serialises updates to
+// the managed-profile ledger.
+func (s *Store) ManagedLockPath() string {
+	return filepath.Join(s.root, managedLockFileName)
 }
 
 func (s *Store) activePath() string {
@@ -114,8 +133,15 @@ func (s *Store) Resolve() (string, error) {
 
 // List returns all profile names in sorted order. An absent profiles/ dir
 // yields an empty slice (a clean store is not an error for introspection).
+//
+// A .pkl file whose stem is not a valid profile name is not listed: no
+// command can use, save, or delete it by name, so reporting it as a profile
+// only invites a user to try. The files this excludes in practice are the
+// dotfile temporaries `formae login` writes beside the profiles it
+// publishes, which exist for the length of one publication and are not
+// profiles at any point.
 func (s *Store) List() ([]string, error) {
-	entries, err := os.ReadDir(s.profilesDir())
+	entries, err := os.ReadDir(s.ProfilesDir())
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return []string{}, nil
@@ -131,7 +157,11 @@ func (s *Store) List() ([]string, error) {
 		if !strings.HasSuffix(n, profileExt) {
 			continue
 		}
-		names = append(names, strings.TrimSuffix(n, profileExt))
+		name := strings.TrimSuffix(n, profileExt)
+		if ValidateName(name) != nil {
+			continue
+		}
+		names = append(names, name)
 	}
 	sort.Strings(names)
 	return names, nil
@@ -239,7 +269,7 @@ func (s *Store) Create(name string, force bool) error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("stat target: %w", err)
 	}
-	if err := os.MkdirAll(s.profilesDir(), 0o755); err != nil {
+	if err := os.MkdirAll(s.ProfilesDir(), 0o755); err != nil {
 		return fmt.Errorf("mkdir profiles: %w", err)
 	}
 	return os.WriteFile(dst, []byte(StubTemplate), 0o644)
@@ -329,7 +359,7 @@ func (s *Store) ensureInitialized() error {
 		// Step 5: bare regular file.
 		dst := s.ProfilePath("default")
 		if _, err := os.Lstat(dst); errors.Is(err, os.ErrNotExist) {
-			if err := os.MkdirAll(s.profilesDir(), 0o755); err != nil {
+			if err := os.MkdirAll(s.ProfilesDir(), 0o755); err != nil {
 				return fmt.Errorf("mkdir profiles: %w", err)
 			}
 			if err := os.Rename(cfg, dst); err != nil { // Step 5a.
@@ -355,7 +385,7 @@ func (s *Store) ensureInitialized() error {
 		return fmt.Errorf("%w: no active profile — run `formae profile use <name>` (available: %s)", ErrNotInitialized, strings.Join(names, ", "))
 	}
 	// Step 8: clean install — bootstrap from the stub.
-	if err := os.MkdirAll(s.profilesDir(), 0o755); err != nil {
+	if err := os.MkdirAll(s.ProfilesDir(), 0o755); err != nil {
 		return fmt.Errorf("mkdir profiles: %w", err)
 	}
 	if err := os.WriteFile(s.ProfilePath("default"), []byte(StubTemplate), 0o644); err != nil {
@@ -381,7 +411,7 @@ func (s *Store) validSymlinkTarget() (string, bool) {
 		return "", false
 	}
 	// Confirm the target is under profiles/ and exists.
-	if filepath.Dir(target) != profilesSubdir && filepath.Dir(target) != s.profilesDir() {
+	if filepath.Dir(target) != profilesSubdir && filepath.Dir(target) != s.ProfilesDir() {
 		return "", false
 	}
 	if _, err := os.Stat(s.ProfilePath(name)); err != nil {

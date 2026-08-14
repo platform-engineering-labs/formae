@@ -55,6 +55,15 @@ func TestStorePaths(t *testing.T) {
 	if got, want := s.ProfilePath("local-dev"), filepath.Join("/root", "profiles", "local-dev.pkl"); got != want {
 		t.Errorf("ProfilePath = %q, want %q", got, want)
 	}
+	if got, want := s.ProfilesDir(), filepath.Join("/root", "profiles"); got != want {
+		t.Errorf("ProfilesDir = %q, want %q", got, want)
+	}
+	if got, want := s.ManagedLedgerPath(), filepath.Join("/root", "managed.json"); got != want {
+		t.Errorf("ManagedLedgerPath = %q, want %q", got, want)
+	}
+	if got, want := s.ManagedLockPath(), filepath.Join("/root", "managed.lock"); got != want {
+		t.Errorf("ManagedLockPath = %q, want %q", got, want)
+	}
 }
 
 func TestActive_ReadsPointer(t *testing.T) {
@@ -185,6 +194,14 @@ func TestList_SortedAndFiltered(t *testing.T) {
 		writeFile(t, root, filepath.Join("profiles", n+".pkl"), "x")
 	}
 	writeFile(t, root, filepath.Join("profiles", "README.md"), "x")
+	// A .pkl file whose stem is not a valid profile name is not a profile:
+	// no command can use, save or delete it by the name it would be listed
+	// under. That covers the publication temporaries `formae login` writes in
+	// this directory, and the files a user makes by hand — a copy that kept
+	// the shell's name for it, or a name carrying a second dot.
+	for _, n := range []string{".tmp-0123456789abcdef", "prod copy", "staging.v2"} {
+		writeFile(t, root, filepath.Join("profiles", n+".pkl"), "x")
+	}
 	got, err := store.New(root).List()
 	if err != nil {
 		t.Fatalf("List: %v", err)
