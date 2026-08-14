@@ -96,6 +96,16 @@ func TestLogoutRemovesTheProfilesLoginDerived(t *testing.T) {
 	kept := outputMarked(f, "! ")
 	require.Len(t, kept, 1)
 	assert.Contains(t, kept[0], nameOne, "the profile that survives is the one still in use, and says so")
+	assert.NotContains(t, kept[0], "is gone",
+		"a sign-out revokes nothing upstream, so nothing about the user's access has changed")
+	assert.Contains(t, kept[0], "formae profile delete "+nameOne,
+		"the remedy is one that removes this profile, rather than a sign-in that derives them all again")
+
+	// The remedy exactly as the message writes it, so the advice is a route the
+	// user can actually take.
+	require.NoError(t, f.store.Use("default"))
+	require.NoError(t, f.store.Delete(nameOne))
+	assert.False(t, f.exists(nameOne))
 }
 
 // TestLogoutRemovesProfilesForTheOriginTheLedgerRecords pins the rule a

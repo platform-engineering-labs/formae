@@ -121,7 +121,7 @@ var saveLedger = (*ledger).save
 // emitted where the profiles are written. Its values are never printed.
 func syncProfiles(ctx context.Context, d syncDeps, p platform, bearer string,
 	auth cliAuthBlock, rawAuth json.RawMessage) syncResult {
-	r := &syncRun{d: d, origin: p.Origin}
+	r := &syncRun{d: d, origin: p.Origin, keptActive: keptActiveAfterLostAccess}
 	if !r.open() {
 		return r.result
 	}
@@ -163,7 +163,7 @@ func syncProfiles(ctx context.Context, d syncDeps, p platform, bearer string,
 // user's explicit sign-out is the authority here, so no control plane is
 // asked: an empty desired set makes every entry for the origin absent.
 func pruneAll(d syncDeps, origin string) syncResult {
-	r := &syncRun{d: d, origin: origin}
+	r := &syncRun{d: d, origin: origin, keptActive: keptActiveAfterSignOut}
 	if !r.open() {
 		return r.result
 	}
@@ -185,6 +185,14 @@ type syncRun struct {
 	lock   *flock.Flock
 	ledger *ledger
 	result syncResult
+
+	// keptActive phrases the profile a prune leaves alone because it is the
+	// active one. It is the caller's, because why that profile was due for
+	// removal is the caller's fact and not something this run can see: a
+	// sign-in found the grant gone, a sign-out gave the credential up. Saying
+	// the wrong one tells the user their access vanished when it did not, and
+	// sends them to a remedy that cannot remove the file.
+	keptActive func(e *ledgerEntry) string
 
 	// stopped means the run cannot continue safely — the ledger could not be
 	// written, so nothing more may be acted on. A failure to act on one
@@ -1222,10 +1230,7 @@ func (r *syncRun) pruneEntry(e *ledgerEntry) {
 		// The file *and* the entry are kept, so a later login removes it once
 		// the user has switched away.
 		if errors.Is(err, errIsActiveProfile) {
-			r.warn(fmt.Sprintf(
-				"profile %q is the active profile, so formae did not remove it even though your access to "+
-					"installation %s is gone. Run `formae profile use <name>` to switch away, "+
-					"then sign in again to remove it", e.Name, e.InstallationID))
+			r.warn(r.keptActive(e))
 		} else {
 			r.warn(fmt.Sprintf(
 				"profile %q could not be told apart from the active profile (%v), so formae left it in place",
@@ -1252,4 +1257,28 @@ func (r *syncRun) pruneEntry(e *ledgerEntry) {
 	}
 	r.result.Pruned++
 	r.ack("removed profile " + name)
+}
+
+// keptActiveAfterLostAccess phrases the profile a sign-in's prune kept because
+// it is the active one. The grant behind it is gone, so the file is due for
+// removal, and the next sign-in takes it once the user has switched away.
+func keptActiveAfterLostAccess(e *ledgerEntry) string {
+	return fmt.Sprintf(
+		"profile %q is the active profile, so formae did not remove it even though your access to "+
+			"installation %s is gone. Run `formae profile use <name>` to switch away, "+
+			"then sign in again to remove it", e.Name, e.InstallationID)
+}
+
+// keptActiveAfterSignOut phrases the same profile after a sign-out, where both
+// halves of the other wording would be wrong. Nothing was revoked — the user
+// gave a credential up and the grant is still theirs — and signing in again
+// would derive every profile the sign-out has just removed while keeping this
+// one anyway. Keeping it is the point of the sign-out's design: it is the
+// profile there is left to sign back in with, so what the message offers is a
+// way to be rid of it rather than a way to have it removed for you.
+func keptActiveAfterSignOut(e *ledgerEntry) string {
+	return fmt.Sprintf(
+		"profile %q is the active profile, so formae did not remove it: it is what you have left to "+
+			"sign back in with. Run `formae profile use <name>` to switch away, "+
+			"then `formae profile delete %s` if you do not want it", e.Name, e.Name)
 }

@@ -714,6 +714,10 @@ func TestSyncKeepsAPrunableActiveProfileUntilTheUserSwitchesAway(t *testing.T) {
 	warnings := warningsContaining(kept, nameOne)
 	require.Len(t, warnings, 1)
 	assert.Contains(t, warnings[0], "formae profile use")
+	assert.Contains(t, warnings[0], "your access to installation "+installOne+" is gone",
+		"on this path the grant really has vanished, which is why the profile is due for removal")
+	assert.Contains(t, warnings[0], "sign in again to remove it",
+		"the next sign-in is what removes it here, and it derives nothing this run has not already")
 
 	require.NoError(t, f.store.Use("default"))
 	pruned := f.sync()
