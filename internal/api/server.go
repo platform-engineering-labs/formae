@@ -24,6 +24,7 @@ import (
 
 	_ "github.com/platform-engineering-labs/formae/docs"
 	"github.com/platform-engineering-labs/formae/internal/auth"
+	"github.com/platform-engineering-labs/formae/internal/datastore"
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	"github.com/platform-engineering-labs/formae/internal/metastructure"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
@@ -411,6 +412,9 @@ func (s *Server) ListCommandStatus(c echo.Context) error {
 	n, err := strconv.Atoi(maxResults)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "N must be an integer")
+	}
+	if n > datastore.MaxFormaCommandsQueryLimit {
+		n = datastore.MaxFormaCommandsQueryLimit
 	}
 
 	return s.getCommandStatus(c, clientID, query, n)

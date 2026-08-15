@@ -24,6 +24,12 @@ const (
 	Excluded
 )
 
+// MaxFormaCommandsQueryLimit is the hard ceiling on how many forma commands a
+// single status/list query may request, regardless of the caller-supplied
+// page size. The API server clamps to this value before querying the
+// datastore.
+const MaxFormaCommandsQueryLimit = 200
+
 type QueryItemConstraint int
 
 // QueryItem is one filter clause in a query.

@@ -532,7 +532,11 @@ func (c *Client) GetFormaCommandsStatus(query string, clientID string, n int) (*
 	case http.StatusBadRequest:
 		return c.parseListCommandStatusErrorResponse(resp.Body)
 	case http.StatusNotFound:
-		return nil, nil
+		// The server represents "no matching commands" as a 404. Resolve it
+		// to a concrete, well-formed empty result rather than a bare nil, so
+		// callers can tell "no matches" apart from "no response" without
+		// having to nil-check the pointer themselves.
+		return &apimodel.ListCommandStatusResponse{Commands: []apimodel.Command{}}, nil
 	default:
 		return nil, fmt.Errorf("error getting status: %v", resp.Status())
 	}

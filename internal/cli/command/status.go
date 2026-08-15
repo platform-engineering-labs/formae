@@ -41,6 +41,9 @@ func StatusCmd() *cobra.Command {
 			if len(args) == 1 {
 				opts.CommandID = args[0]
 				opts.Query = "id:" + args[0]
+				// An explicitly-named id must exist: fail loudly rather than
+				// silently printing "(no commands)" for a typo'd or unknown id.
+				opts.FailIfNotFound = true
 			}
 
 			configFile, _ := command.Flags().GetString("config")

@@ -64,6 +64,18 @@ type StatusOptions struct {
 	// discovered from the fetched result (a bare `command status` with no
 	// argument) so the TUI can focus it.
 	CommandID string
+	// FailIfNotFound marks an explicitly-named CommandID as one that must
+	// exist: if the fetch matches nothing, RunStatus returns a not-found
+	// error instead of the graceful empty-result behavior. Only `command
+	// status <id>` (an explicit, user-named id) sets this. It is left false
+	// for a bare `command status` with no id (zero commands ever run is a
+	// legitimate empty answer, not a not-found error) and for the deprecated
+	// `status command --query id:X` alias (which keeps its pre-existing
+	// tolerant behavior for the compatibility window: callers that poll a
+	// just-submitted command by id, including a no-op command the server
+	// never persisted, must keep seeing an empty result rather than an
+	// error).
+	FailIfNotFound bool
 }
 
 // RunStatus is the shared entry point the `command status` and `command
@@ -272,6 +284,9 @@ func runStatusForHumans(a *app.App, opts *StatusOptions) error {
 				}
 				return fmt.Errorf("%s", msg)
 			}
+			if err := checkCommandFound(opts, status); err != nil {
+				return err
+			}
 			if !anyCommandRunning(status) {
 				printBanner(a)
 				_, _ = fmt.Print(renderStatusList(themeFor(a), status, opts.OutputLayout == StatusOutputDetailed, termWidth(os.Stdout)))
@@ -297,6 +312,9 @@ func runStatusForHumans(a *app.App, opts *StatusOptions) error {
 			return fmt.Errorf("error rendering error message: %v", renderErr)
 		}
 		return fmt.Errorf("%s", msg)
+	}
+	if err := checkCommandFound(opts, status); err != nil {
+		return err
 	}
 
 	// Render summary or detailed layout via the lipgloss print function.
@@ -326,14 +344,37 @@ func anyCommandRunning(status *apimodel.ListCommandStatusResponse) bool {
 	return false
 }
 
+// checkCommandFound reports a not-found error when the caller explicitly
+// named one command id (opts.FailIfNotFound, set only by `command status
+// <id>`) and the fetch matched nothing. A bare `command status` with no id,
+// and the deprecated `status command` alias, never set FailIfNotFound, so
+// their empty-result behavior is unchanged: "give me the most recent
+// command" legitimately returns zero commands when none have ever run, and
+// the alias must keep tolerating an empty result for callers polling a
+// just-submitted command by id (including a no-op command the server never
+// persisted). A command whose *state* is Failed is unaffected either way:
+// status is a query, not an assertion about the command's outcome.
+func checkCommandFound(opts *StatusOptions, status *apimodel.ListCommandStatusResponse) error {
+	if !opts.FailIfNotFound || opts.CommandID == "" {
+		return nil
+	}
+	if status != nil && len(status.Commands) > 0 {
+		return nil
+	}
+	return fmt.Errorf("command not found: %s", opts.CommandID)
+}
+
 func runStatusForMachines(app *app.App, opts *StatusOptions) error {
-	status, _, err := app.GetCommandsStatus(opts.Query, opts.MaxResults, false)
+	status, _, err := fetchCommandsStatus(app, opts.Query, opts.MaxResults)
 	if err != nil {
 		msg, renderErr := errfmt.Render(err)
 		if renderErr != nil {
 			return fmt.Errorf("error rendering error message: %v", renderErr)
 		}
 		return fmt.Errorf("%s", msg)
+	}
+	if err := checkCommandFound(opts, status); err != nil {
+		return err
 	}
 
 	p := printer.NewMachineReadablePrinter[apimodel.ListCommandStatusResponse](os.Stdout, opts.OutputSchema)

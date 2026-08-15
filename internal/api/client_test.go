@@ -8,9 +8,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -40,6 +43,24 @@ func TestParseSubmitCommandErrorResponse_ResourceHasDependents(t *testing.T) {
 	assert.Equal(t, "child-subnet", got.Data.Dependents[0].ResourceLabel)
 	assert.Equal(t, "consumer-stack", got.Data.Dependents[0].Stack)
 	assert.Equal(t, "parent-vpc", got.Data.Dependents[0].CascadeSource)
+}
+
+// TestGetFormaCommandsStatusNotFoundReturnsConcreteEmptyResult verifies a 404
+// from the commands/status endpoint resolves to a well-formed empty result
+// (non-nil, zero Commands), not a bare nil that forces every caller to
+// nil-check the response before it can tell "no matches" from "no response".
+func TestGetFormaCommandsStatusNotFoundReturnsConcreteEmptyResult(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewClient(&pkgmodel.ClassicConnection{URL: srv.URL}, nil, srv.Client())
+
+	resp, err := c.GetFormaCommandsStatus("id:unknown", "test-client", 1)
+	require.NoError(t, err)
+	require.NotNil(t, resp, "a 404 must resolve to a concrete empty result, not a bare nil")
+	assert.Empty(t, resp.Commands)
 }
 
 func TestFormatEndpointStandardPort(t *testing.T) {

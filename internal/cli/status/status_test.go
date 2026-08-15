@@ -248,6 +248,148 @@ func TestCompatDispatch_OtherQuery(t *testing.T) {
 	assert.Equal(t, 25, opts.MaxResults, "list mode must honor --max-results, not collapse it")
 }
 
+// TestRunStatusForHumans_TTYUnknownIDIsNotFound verifies that on a TTY, a
+// `command status <id>` query for a nonexistent command exits with a
+// not-found error instead of printing "(no commands)" and succeeding.
+func TestRunStatusForHumans_TTYUnknownIDIsNotFound(t *testing.T) {
+	origIsTerminal := isTerminal
+	origFetch := fetchCommandsStatus
+	origLaunch := launchTUI
+	origBanner := printBanner
+	t.Cleanup(func() {
+		isTerminal = origIsTerminal
+		fetchCommandsStatus = origFetch
+		launchTUI = origLaunch
+		printBanner = origBanner
+	})
+	isTerminal = func(_ io.Writer) bool { return true }
+	printBanner = func(_ *app.App) {}
+	fetchCommandsStatus = func(_ *app.App, _ string, _ int) (*apimodel.ListCommandStatusResponse, []string, error) {
+		return &apimodel.ListCommandStatusResponse{Commands: []apimodel.Command{}}, nil, nil
+	}
+	tuiCalls := 0
+	launchTUI = func(_ *app.App, _ *StatusOptions) error { tuiCalls++; return nil }
+
+	opts := &StatusOptions{
+		Single:         true,
+		CommandID:      "unknown-id",
+		Query:          "id:unknown-id",
+		MaxResults:     1,
+		OutputLayout:   StatusOutputSummary,
+		FailIfNotFound: true,
+	}
+	err := runStatusForHumans(&app.App{}, opts)
+	require.Error(t, err, "an unknown command id must exit non-zero, not print '(no commands)'")
+	assert.Contains(t, err.Error(), "unknown-id")
+	assert.Equal(t, 0, tuiCalls, "the not-found error must be returned instead of opening the TUI")
+}
+
+// TestRunStatusForHumans_NonTTYUnknownIDIsNotFound verifies the same
+// not-found behavior on the non-TTY (print-and-exit) path.
+func TestRunStatusForHumans_NonTTYUnknownIDIsNotFound(t *testing.T) {
+	origIsTerminal := isTerminal
+	origFetch := fetchCommandsStatus
+	origBanner := printBanner
+	t.Cleanup(func() {
+		isTerminal = origIsTerminal
+		fetchCommandsStatus = origFetch
+		printBanner = origBanner
+	})
+	isTerminal = func(_ io.Writer) bool { return false }
+	printBanner = func(_ *app.App) {}
+	fetchCommandsStatus = func(_ *app.App, _ string, _ int) (*apimodel.ListCommandStatusResponse, []string, error) {
+		return &apimodel.ListCommandStatusResponse{Commands: []apimodel.Command{}}, nil, nil
+	}
+
+	opts := &StatusOptions{
+		Single:         true,
+		CommandID:      "unknown-id",
+		Query:          "id:unknown-id",
+		MaxResults:     1,
+		OutputLayout:   StatusOutputSummary,
+		FailIfNotFound: true,
+	}
+	err := runStatusForHumans(&app.App{}, opts)
+	require.Error(t, err, "an unknown command id must exit non-zero, not print '(no commands)'")
+	assert.Contains(t, err.Error(), "unknown-id")
+}
+
+// TestRunStatusForHumans_DeprecatedAliasToleratesUnmatchedID verifies the
+// deprecated `status command --query id:X` alias (which never sets
+// FailIfNotFound) keeps its pre-existing tolerant behavior: an id that
+// matches nothing still prints "(no commands)" and succeeds. Callers poll a
+// just-submitted command by id this way, including a no-op command the
+// server never persisted, and must not see that turned into an error.
+func TestRunStatusForHumans_DeprecatedAliasToleratesUnmatchedID(t *testing.T) {
+	origIsTerminal := isTerminal
+	origFetch := fetchCommandsStatus
+	origBanner := printBanner
+	t.Cleanup(func() {
+		isTerminal = origIsTerminal
+		fetchCommandsStatus = origFetch
+		printBanner = origBanner
+	})
+	isTerminal = func(_ io.Writer) bool { return false }
+	printBanner = func(_ *app.App) {}
+	fetchCommandsStatus = func(_ *app.App, _ string, _ int) (*apimodel.ListCommandStatusResponse, []string, error) {
+		return &apimodel.ListCommandStatusResponse{Commands: []apimodel.Command{}}, nil, nil
+	}
+
+	opts := compatDispatch("id:not-yet-persisted", 10)
+	require.False(t, opts.FailIfNotFound,
+		"the deprecated alias must never set FailIfNotFound")
+	opts.OutputLayout = StatusOutputSummary
+	err := runStatusForHumans(&app.App{}, opts)
+	require.NoError(t, err, "the deprecated alias must keep tolerating an unmatched id")
+}
+
+// TestRunStatusForHumans_NoCommandsEverIsNotAnError verifies a bare `command
+// status` with no id, when nothing has ever run, stays a legitimate empty
+// result (prints "(no commands)", exits 0) rather than a not-found error:
+// only an explicitly-requested, unmatched id is an error.
+func TestRunStatusForHumans_NoCommandsEverIsNotAnError(t *testing.T) {
+	origIsTerminal := isTerminal
+	origFetch := fetchCommandsStatus
+	origBanner := printBanner
+	t.Cleanup(func() {
+		isTerminal = origIsTerminal
+		fetchCommandsStatus = origFetch
+		printBanner = origBanner
+	})
+	isTerminal = func(_ io.Writer) bool { return false }
+	printBanner = func(_ *app.App) {}
+	fetchCommandsStatus = func(_ *app.App, _ string, _ int) (*apimodel.ListCommandStatusResponse, []string, error) {
+		return &apimodel.ListCommandStatusResponse{Commands: []apimodel.Command{}}, nil, nil
+	}
+
+	opts := &StatusOptions{Single: true, MaxResults: 1, OutputLayout: StatusOutputSummary}
+	err := runStatusForHumans(&app.App{}, opts)
+	require.NoError(t, err, "no commands ever run is a legitimate empty result, not a not-found error")
+}
+
+// TestRunStatusForMachines_UnknownIDIsNotFound verifies the machine-output
+// path also fails loudly on an unknown command id rather than printing an
+// empty result and exiting 0.
+func TestRunStatusForMachines_UnknownIDIsNotFound(t *testing.T) {
+	origFetch := fetchCommandsStatus
+	t.Cleanup(func() { fetchCommandsStatus = origFetch })
+	fetchCommandsStatus = func(_ *app.App, _ string, _ int) (*apimodel.ListCommandStatusResponse, []string, error) {
+		return &apimodel.ListCommandStatusResponse{Commands: []apimodel.Command{}}, nil, nil
+	}
+
+	opts := &StatusOptions{
+		CommandID:      "unknown-id",
+		Query:          "id:unknown-id",
+		OutputConsumer: printer.ConsumerMachine,
+		OutputSchema:   "json",
+		OutputLayout:   StatusOutputSummary,
+		FailIfNotFound: true,
+	}
+	err := runStatusForMachines(&app.App{}, opts)
+	require.Error(t, err, "an unknown command id must exit non-zero for machine consumers too")
+	assert.Contains(t, err.Error(), "unknown-id")
+}
+
 // TestCompatDispatch_WildcardIDQueryIsNotBare verifies a wildcarded id query
 // (which cannot single out one command) is not mistaken for the bare-id
 // case, so it still routes to list semantics.
