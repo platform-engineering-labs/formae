@@ -21,6 +21,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/clean"
 	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
 	"github.com/platform-engineering-labs/formae/internal/cli/config"
+	"github.com/platform-engineering-labs/formae/internal/cli/connection"
 	"github.com/platform-engineering-labs/formae/internal/cli/destroy"
 	"github.com/platform-engineering-labs/formae/internal/cli/dev"
 	"github.com/platform-engineering-labs/formae/internal/cli/eval"
@@ -257,6 +258,7 @@ func init() {
 	rootCmd.AddCommand(login.LoginCmd())
 	rootCmd.AddCommand(login.LogoutCmd())
 	rootCmd.AddCommand(plugin.PluginCmd())
+	rootCmd.AddCommand(connection.ConnectionCmd())
 	rootCmd.AddCommand(profile.ProfileCmd())
 	rootCmd.AddCommand(project.ProjectCmd())
 	rootCmd.AddCommand(destroy.DestroyCmd())
