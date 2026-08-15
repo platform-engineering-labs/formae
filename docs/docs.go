@@ -61,6 +61,26 @@ const docTemplate = `{
                 }
             }
         },
+        "/admin/reap": {
+            "post": {
+                "description": "Triggers a single, immediate TargetReaper tick: advances the unreachability-accrual\nclock for every currently-unreachable target, detects reap candidates that have\nreached their reap-after duration, and reaps (tombstones) the eligible ones, subject\nto the per-tick rate cap.",
+                "tags": [
+                    "admin"
+                ],
+                "summary": "Force a target-reaper tick",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "500": {
+                        "description": "Internal Server Error.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/admin/synchronize": {
             "post": {
                 "description": "Triggers an immediate synchronization of the resource state with the actual infrastructure.",
@@ -182,6 +202,12 @@ const docTemplate = `{
                         "in": "formData"
                     },
                     {
+                        "type": "string",
+                        "description": "Only applies to destroy commands. Behavior when a delete would cascade onto dependent targets: abort (default) or cascade.",
+                        "name": "on-dependents",
+                        "in": "formData"
+                    },
+                    {
                         "type": "file",
                         "description": "A valid Forma file.",
                         "name": "file",
@@ -295,13 +321,23 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "The query string to select the commands. If empty, retrieves the status of the most recent command.",
+                        "description": "The query string to select the commands. If empty, the scope parameter decides what is returned.",
                         "name": "query",
                         "in": "query"
                     },
                     {
+                        "enum": [
+                            "client",
+                            "agent"
+                        ],
                         "type": "string",
-                        "description": "The maximum number of command statuses to return (default is 10).",
+                        "description": "How an empty query is answered: 'client' (default) returns the calling client's most recent command; 'agent' returns every client's commands, newest first. Ignored when query is set.",
+                        "name": "scope",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "The maximum number of command statuses to return (default is 10, capped at 200).",
                         "name": "max_results",
                         "in": "query"
                     }
@@ -315,6 +351,12 @@ const docTemplate = `{
                     },
                     "400": {
                         "description": "Bad Request: Missing or invalid parameters.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found: No commands matched.",
                         "schema": {
                             "type": "string"
                         }
@@ -424,6 +466,96 @@ const docTemplate = `{
                     },
                     "406": {
                         "description": "Not Acceptable: The request is not supported.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/resources/by-ksuid/{ksuid}": {
+            "get": {
+                "description": "Retrieves a single resource by its ksuid identifier.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "resources"
+                ],
+                "summary": "Get a resource by ksuid",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "The ksuid of the resource.",
+                        "name": "ksuid",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK: The resource.",
+                        "schema": {
+                            "$ref": "#/definitions/model.Resource"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request: Malformed ksuid.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found: No resource found for the given ksuid.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/resources/summary": {
+            "get": {
+                "description": "Lists lightweight resource summaries (label, stack, type, native ID, ksuid) based on an optional query string.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "resources"
+                ],
+                "summary": "List resource summaries",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "The query string to filter resources.",
+                        "name": "query",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK: The resource summaries.",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/model.ResourceSummary"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request: Invalid query.",
                         "schema": {
                             "type": "string"
                         }
@@ -678,6 +810,10 @@ const docTemplate = `{
                 "EndTs": {
                     "type": "string"
                 },
+                "Mode": {
+                    "description": "\"reconcile\" | \"patch\"",
+                    "type": "string"
+                },
                 "PolicyUpdates": {
                     "type": "array",
                     "items": {
@@ -689,6 +825,9 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/model.ResourceUpdate"
                     }
+                },
+                "Source": {
+                    "type": "string"
                 },
                 "StackUpdates": {
                     "type": "array",
@@ -707,6 +846,12 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/model.TargetUpdate"
                     }
+                },
+                "subject": {
+                    "type": "string"
+                },
+                "subjectName": {
+                    "type": "string"
                 }
             }
         },
@@ -756,6 +901,10 @@ const docTemplate = `{
         "model.CancelResourceState": {
             "type": "object",
             "properties": {
+                "CommandId": {
+                    "description": "CommandID attributes this update to the canceled command it belongs to;\nthe ResourceUpdateStates map is flat across all canceled commands.",
+                    "type": "string"
+                },
                 "ForceCanceled": {
                     "description": "ForceCanceled is true when this resource update was force-canceled while an\noperation was actually in progress (it carries an OperationStatusCanceled\nprogress entry). These are the resources whose cloud-side state may be\norphaned and need manual verification.",
                     "type": "boolean"
@@ -816,11 +965,19 @@ const docTemplate = `{
                         }
                     ]
                 },
+                "Format": {
+                    "description": "\"\" = opaque String; \"json\" = serialized JSON document",
+                    "type": "string"
+                },
                 "HasProviderDefault": {
                     "type": "boolean"
                 },
                 "IndexField": {
                     "type": "string"
+                },
+                "Opaque": {
+                    "description": "NEW: this property is the resource's secret value",
+                    "type": "boolean"
                 },
                 "Required": {
                     "type": "boolean"
@@ -1148,7 +1305,7 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "Alias": {
-                    "description": "RFC-0041: previous label, used to rename in place",
+                    "description": "previous label, used to rename in place",
                     "type": "string"
                 },
                 "Group": {
@@ -1206,7 +1363,48 @@ const docTemplate = `{
                 "Label": {
                     "type": "string"
                 },
+                "OldProperties": {
+                    "description": "properties at last reconcile — update ops only",
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
                 "Operation": {
+                    "type": "string"
+                },
+                "PatchDocument": {
+                    "description": "JSON-patch diff between OldProperties and Properties — update ops only",
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "Properties": {
+                    "description": "current (cloud) properties — update ops only",
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "Stack": {
+                    "type": "string"
+                },
+                "Type": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.ResourceSummary": {
+            "type": "object",
+            "properties": {
+                "Ksuid": {
+                    "type": "string"
+                },
+                "Label": {
+                    "type": "string"
+                },
+                "NativeID": {
                     "type": "string"
                 },
                 "Stack": {
@@ -1234,7 +1432,7 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "Duration": {
-                    "description": "milliseconds",
+                    "description": "milliseconds (final, set on completion)",
                     "type": "integer"
                 },
                 "ErrorMessage": {
@@ -1253,7 +1451,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "OldLabel": {
-                    "description": "OldLabel is the resource's previous label. Populated only when a\nlabel rename is part of this update (RFC-0041 alias path); empty\notherwise. The renderer uses it to surface the rename to the user.",
+                    "description": "OldLabel is the resource's previous label. Populated only when a\nlabel rename is part of this update (via the alias path); empty\notherwise. The renderer uses it to surface the rename to the user.",
                     "type": "string"
                 },
                 "OldProperties": {
@@ -1296,6 +1494,10 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "StackName": {
+                    "type": "string"
+                },
+                "StartedAt": {
+                    "description": "when the update began (for live elapsed)",
                     "type": "string"
                 },
                 "State": {
@@ -1384,6 +1586,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "Description": {
+                    "description": "optional; empty means \"unset\" (never overwrites a stored description)",
                     "type": "string"
                 },
                 "ID": {
@@ -1454,6 +1657,14 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/model.PluginInfo"
                     }
+                },
+                "ReapPendingTargets": {
+                    "description": "ReapPendingTargets counts targets that are still 'unreachable' but have\nalready accrued at least their configured reap-after duration — they\nare due to be reaped (on an upcoming reaper tick, or held back by the\nrate cap or an in-flight command). Surfaced so an over-threshold target\nis visible before any tombstone.",
+                    "type": "integer"
+                },
+                "ReapedTargets": {
+                    "description": "ReapedTargets counts targets whose current health state is 'reaped'.",
+                    "type": "integer"
                 },
                 "ResourceTypes": {
                     "description": "key: resource type (e.g., \"AWS::S3::Bucket\")",
@@ -1531,6 +1742,13 @@ const docTemplate = `{
                 },
                 "Namespace": {
                     "type": "string"
+                },
+                "Reaping": {
+                    "description": "Reaping holds the target's reaping behaviour. It is stored as a raw\nJSON message (not the ReapingBehaviour interface) because Target is\nembedded in structs that round-trip through json.Marshal/Unmarshal for\npersistence, and encoding/json cannot unmarshal a present JSON object\ninto a nil interface field. Use ParseReaping to decode it.",
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
                 },
                 "Version": {
                     "type": "integer"
