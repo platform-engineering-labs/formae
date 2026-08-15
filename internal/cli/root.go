@@ -20,6 +20,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/cancel"
 	"github.com/platform-engineering-labs/formae/internal/cli/clean"
 	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
+	"github.com/platform-engineering-labs/formae/internal/cli/command"
 	"github.com/platform-engineering-labs/formae/internal/cli/config"
 	"github.com/platform-engineering-labs/formae/internal/cli/destroy"
 	"github.com/platform-engineering-labs/formae/internal/cli/dev"
@@ -261,6 +262,7 @@ func init() {
 	rootCmd.AddCommand(project.ProjectCmd())
 	rootCmd.AddCommand(destroy.DestroyCmd())
 	rootCmd.AddCommand(status.StatusCmd())
+	rootCmd.AddCommand(command.CommandCmd())
 	rootCmd.AddCommand(extract.ExtractCmd())
 	rootCmd.AddCommand(update.UpdateCmd())
 	rootCmd.AddCommand(refresh.RefreshCmd())

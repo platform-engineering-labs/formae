@@ -60,27 +60,27 @@ func TestRunStatusForHumans_TTYInteractiveOnlyWhenRunning(t *testing.T) {
 			}, nil, nil
 		}
 	}
-	run := func(query string) int {
+	run := func(query string, single bool) int {
 		calls := 0
 		launchTUI = func(_ *app.App, _ *StatusOptions) error { calls++; return nil }
-		err := runStatusForHumans(nil, &StatusOptions{Query: query, OutputLayout: StatusOutputSummary})
+		err := runStatusForHumans(nil, &StatusOptions{Query: query, Single: single, OutputLayout: StatusOutputSummary})
 		require.NoError(t, err)
 		return calls
 	}
 
-	t.Run("bare id, running → live TUI", func(t *testing.T) {
+	t.Run("single, running → live TUI", func(t *testing.T) {
 		stubFetch("InProgress")
-		assert.Equal(t, 1, run("id:c1"), "a running re-attach should open the TUI")
+		assert.Equal(t, 1, run("id:c1", true), "a running re-attach should open the TUI")
 	})
 
-	t.Run("bare id, terminal → static, no TUI", func(t *testing.T) {
+	t.Run("single, terminal → static, no TUI", func(t *testing.T) {
 		stubFetch("Success")
-		assert.Equal(t, 0, run("id:c1"), "a finished re-attach should print static, not open the TUI")
+		assert.Equal(t, 0, run("id:c1", true), "a finished re-attach should print static, not open the TUI")
 	})
 
 	t.Run("broad query → always the interactive list", func(t *testing.T) {
-		stubFetch("Success") // terminal, but a browse query still opens the list
-		assert.Equal(t, 1, run("client:me"), "a browse query should always open the TUI")
+		stubFetch("Success") // terminal, but a browse (non-single) query still opens the list
+		assert.Equal(t, 1, run("client:me", false), "a browse query should always open the TUI")
 	})
 }
 
@@ -124,15 +124,34 @@ func TestRunStatusForHumans_NonTTY_SkipsTUI(t *testing.T) {
 	assert.Equal(t, []string{"printBanner"}, callOrder)
 }
 
-func TestMaxResults_TUIKeepsFlagValue(t *testing.T) {
-	// The RunE currently collapses MaxResults to 1 when no query is set;
-	// the TUI path must keep the real flag value (default 10) so the
-	// multi-command view has content. Assert via resolveMaxResults.
-	assert.Equal(t, 10, resolveMaxResults("", 10, true /*tty human*/))
-	assert.Equal(t, 1, resolveMaxResults("", 10, false /*machine or non-tty human*/))
-	assert.Equal(t, 10, resolveMaxResults("state:InProgress", 10, false))
-	// With a query, TTY or not, the flag value is respected.
-	assert.Equal(t, 5, resolveMaxResults("foo", 5, true))
+func TestRunStatusForHumans_SingleDiscoversCommandIDWhenRunning(t *testing.T) {
+	// When Single is set without an explicit CommandID (the no-argument
+	// `command status` case), a running match must have its id captured onto
+	// opts.CommandID so the TUI can focus it, even though the caller never
+	// supplied one up front.
+	origLaunch := launchTUI
+	origIsTerminal := isTerminal
+	origFetch := fetchCommandsStatus
+	t.Cleanup(func() {
+		isTerminal = origIsTerminal
+		launchTUI = origLaunch
+		fetchCommandsStatus = origFetch
+	})
+	isTerminal = func(_ io.Writer) bool { return true }
+	fetchCommandsStatus = func(_ *app.App, _ string, _ int) (*apimodel.ListCommandStatusResponse, []string, error) {
+		return &apimodel.ListCommandStatusResponse{
+			Commands: []apimodel.Command{{CommandID: "discovered-1", State: "InProgress"}},
+		}, nil, nil
+	}
+	var gotOpts *StatusOptions
+	launchTUI = func(_ *app.App, opts *StatusOptions) error { gotOpts = opts; return nil }
+
+	opts := &StatusOptions{Single: true, MaxResults: 1, OutputLayout: StatusOutputSummary}
+	require.NoError(t, runStatusForHumans(nil, opts))
+
+	require.NotNil(t, gotOpts)
+	assert.Equal(t, "discovered-1", gotOpts.CommandID,
+		"the fetched single command's id must be captured for the TUI to focus")
 }
 
 func TestValidateStatusOptions(t *testing.T) {
@@ -164,4 +183,33 @@ func TestValidateStatusOptions(t *testing.T) {
 		assert.Error(t, err)
 		assert.Equal(t, "output layout must be either 'detailed' or 'summary'", err.Error())
 	})
+}
+
+// TestRunStatus_ExportedEntryPointValidates verifies the exported RunStatus
+// seam (the entry point the command package's `status` and `list`
+// subcommands call into) applies the same option validation as the
+// unexported RunE previously did inline.
+func TestRunStatus_ExportedEntryPointValidates(t *testing.T) {
+	opts := &StatusOptions{
+		OutputConsumer: printer.Consumer("bogus"),
+		OutputLayout:   StatusOutputSummary,
+	}
+	err := RunStatus(nil, opts)
+	assert.Error(t, err)
+	assert.Equal(t, "output consumer must be either 'human' or 'machine'", err.Error())
+}
+
+// TestExportedAgentStatsSeams verifies the small set of helpers the agent
+// package's `agent status` subcommand reuses (rather than re-implementing
+// the panel rendering) are exported and behave like their unexported
+// counterparts.
+func TestExportedAgentStatsSeams(t *testing.T) {
+	th := ThemeFor(&app.App{})
+	require.NotNil(t, th)
+
+	stats := apimodel.Stats{Version: "1.2.3"}
+	out := RenderAgentStats(th, stats, 120)
+	assert.Contains(t, out, "1.2.3")
+
+	assert.Equal(t, 100, TermWidth(io.Discard), "non-TTY writers fall back to width 100")
 }

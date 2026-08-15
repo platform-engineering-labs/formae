@@ -7,6 +7,7 @@ package status
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -53,6 +54,47 @@ type StatusOptions struct {
 	Query          string
 	OutputLayout   StatusOutput
 	MaxResults     int
+	// Single marks a query as targeting exactly one command (the `command
+	// status` path): on a TTY it re-attaches the live view while the match is
+	// still running and prints a static summary once it's terminal, rather
+	// than always opening the multi-command browse list.
+	Single bool
+	// CommandID optionally names the single command Single mode targets. It
+	// may be supplied up front (an explicit `command status <id>`) or
+	// discovered from the fetched result (a bare `command status` with no
+	// argument) so the TUI can focus it.
+	CommandID string
+}
+
+// RunStatus is the shared entry point the `command status` and `command
+// list` subcommands (internal/cli/command) call into: it validates opts and
+// dispatches to the human or machine rendering path.
+func RunStatus(app *app.App, opts *StatusOptions) error {
+	return runStatus(app, opts)
+}
+
+// ThemeFor exposes themeFor to callers outside this package (the `agent
+// status` subcommand reuses it to theme the stats panels).
+func ThemeFor(a *app.App) *theme.Theme {
+	return themeFor(a)
+}
+
+// RenderAgentStats exposes renderAgentStats to callers outside this package
+// (the `agent status` subcommand reuses it rather than re-implementing the
+// panel layout).
+func RenderAgentStats(th *theme.Theme, stats apimodel.Stats, width int) string {
+	return renderAgentStats(th, stats, width)
+}
+
+// TermWidth exposes termWidth to callers outside this package.
+func TermWidth(w io.Writer) int {
+	return termWidth(w)
+}
+
+// WatchStats exposes watchStats to callers outside this package (the `agent
+// status --watch` path reuses the same refresh loop).
+func WatchStats(app *app.App) error {
+	return watchStats(app)
 }
 
 func CommandCmd() *cobra.Command {
@@ -70,9 +112,7 @@ func CommandCmd() *cobra.Command {
 			query, _ := command.Flags().GetString("query")
 			maxResults, _ := command.Flags().GetInt("max-results")
 			opts.Query = strings.TrimSpace(query)
-
-			humanTTY := opts.OutputConsumer == printer.ConsumerHuman && isTerminal(os.Stdout)
-			opts.MaxResults = resolveMaxResults(opts.Query, maxResults, humanTTY)
+			opts.MaxResults = maxResults
 
 			outputLayout, _ := command.Flags().GetString("output-layout")
 			opts.OutputLayout = StatusOutput(outputLayout)
@@ -90,6 +130,10 @@ func CommandCmd() *cobra.Command {
 				" | formae status command --query 'client:me command:apply'" +
 				" | formae status command --query 'stack:prod status:Success'",
 		},
+		// This verb moved to `formae command list` (and `formae command
+		// status` for a single result). Kept as a working alias for one
+		// release so existing scripts and muscle memory keep functioning.
+		Deprecated:    "use `formae command list` instead",
 		SilenceErrors: true,
 	}
 
@@ -97,7 +141,7 @@ func CommandCmd() *cobra.Command {
 
 	command.Flags().String("output-consumer", string(printer.ConsumerHuman), "Consumer of the command result (human | machine)")
 	command.Flags().String("output-schema", "json", "The schema to use for the machine output (json | yaml)")
-	command.Flags().String("query", " ", "Query that allows to find past and current commands by their attributes. Use * as a wildcard anywhere (e.g. foo*, *foo, *foo*, foo*bar). ? and regex are not yet supported.")
+	command.Flags().String("query", "", "Query that allows to find past and current commands by their attributes. Use * as a wildcard anywhere (e.g. foo*, *foo, *foo*, foo*bar). ? and regex are not yet supported.")
 	command.Flags().String("output-layout", string(StatusOutputSummary), fmt.Sprintf("What to print as status output (%s | %s)", StatusOutputSummary, StatusOutputDetailed))
 	command.Flags().Int("max-results", 10, "Maximum number of command results to return when using a query")
 	cmd.AddConfigFlags(command)
@@ -132,18 +176,6 @@ func validateStatusOptions(options *StatusOptions) error {
 	return nil
 }
 
-// resolveMaxResults returns the correct page-size for the given context.
-// When the caller is a human with a TTY (humanTTY == true), or when a query
-// string is provided, the full flagValue is used so the multi-command view is
-// populated. Otherwise (non-TTY or machine consumer) we collapse to 1 to
-// preserve the pre-TUI behaviour of showing only the most-recent command.
-func resolveMaxResults(query string, flagValue int, humanTTY bool) int {
-	if humanTTY || strings.TrimSpace(query) != "" {
-		return flagValue
-	}
-	return 1
-}
-
 // themeFor resolves the active theme from the app config.
 // The name falls back to "formae" for nil configs (theme.New nil-guards internally).
 func themeFor(a *app.App) *theme.Theme {
@@ -169,37 +201,27 @@ func launchStatusTUI(a *app.App, opts *StatusOptions) error {
 		MaxResults: opts.MaxResults,
 		Version:    formae.Version,
 	}
-	// If the query targets a single command by exact id (e.g. `status command
-	// --query 'id:<ksuid>'`), drill straight into its detail view instead of
-	// dropping the user in a one-row list they must "enter" into.
-	if id := bareCommandID(opts.Query); id != "" {
-		swOpts.FocusCommandID = id
+	// Single mode (`command status`) already knows which command it targets —
+	// either the caller supplied it up front, or runStatusForHumans discovered
+	// it from the fetch below — so drill straight into its detail view instead
+	// of dropping the user in a one-row list they must "enter" into.
+	if opts.Single && opts.CommandID != "" {
+		swOpts.FocusCommandID = opts.CommandID
 	}
 	model := statuswatch.New(th, a, swOpts)
 	_, err := tui.Run(model, tui.DefaultRunOptions())
 	return err
 }
 
-// bareCommandID returns the command id when query is exactly "id:<value>" with
-// no wildcards or additional terms; otherwise it returns "".
-func bareCommandID(query string) string {
-	rest, ok := strings.CutPrefix(strings.TrimSpace(query), "id:")
-	if !ok || rest == "" || strings.ContainsAny(rest, " *?") {
-		return ""
-	}
-	return rest
-}
-
 func runStatusForHumans(a *app.App, opts *StatusOptions) error {
 	// Human + TTY:
-	//   - A broad query (browse history) always opens the interactive list so
+	//   - A browse query (`command list`) always opens the interactive list so
 	//     you can navigate and drill into past commands.
-	//   - A bare single-command id query is the "re-attach" path: open the live
-	//     view only while it's still running; once it's terminal, print a static
-	//     one-shot summary instead of taking over the screen.
-	// (There is no --watch flag — the query shape + running-ness decide.)
+	//   - Single mode (`command status`) is the "re-attach" path: open the live
+	//     view only while the match is still running; once it's terminal, print
+	//     a static one-shot summary instead of taking over the screen.
 	if isTerminal(os.Stdout) {
-		if bareCommandID(opts.Query) != "" {
+		if opts.Single {
 			status, nags, err := fetchCommandsStatus(a, opts.Query, opts.MaxResults)
 			if err != nil {
 				msg, renderErr := errfmt.Render(err)
@@ -213,6 +235,11 @@ func runStatusForHumans(a *app.App, opts *StatusOptions) error {
 				_, _ = fmt.Print(renderStatusList(themeFor(a), status, opts.OutputLayout == StatusOutputDetailed, termWidth(os.Stdout)))
 				nag.MaybePrintNags(themeFor(a), nags)
 				return nil
+			}
+			// Still running: capture the matched command's id (it may not have
+			// been supplied up front) so launchTUI can focus it.
+			if opts.CommandID == "" && len(status.Commands) == 1 {
+				opts.CommandID = status.Commands[0].CommandID
 			}
 		}
 		return launchTUI(a, opts)
@@ -330,7 +357,11 @@ func AgentCmd() *cobra.Command {
 
 			return nil
 		},
-		Annotations:   map[string]string{},
+		Annotations: map[string]string{},
+		// This verb moved to `formae agent status`. Kept as a working alias
+		// for one release so existing scripts and muscle memory keep
+		// functioning.
+		Deprecated:    "use `formae agent status` instead",
 		SilenceErrors: true,
 	}
 
@@ -416,6 +447,13 @@ func StatusCmd() *cobra.Command {
 				" | formae status command --query 'status:InProgress'" +
 				" | formae status command --query 'client:me'",
 		},
+		// This noun split into `formae command` (status/list) and `formae
+		// agent status`. Kept as a working alias for one release so existing
+		// scripts and muscle memory keep functioning. Cobra does not
+		// propagate Deprecated to children, so `status command` and `status
+		// agent` each carry their own Deprecated string too (see CommandCmd
+		// and AgentCmd).
+		Deprecated:    "use `formae command` or `formae agent status` instead",
 		SilenceErrors: true,
 	}
 
