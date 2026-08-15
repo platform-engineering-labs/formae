@@ -1024,7 +1024,7 @@ func (d *DatastoreAuroraDataAPI) GetMostRecentFormaCommandByClientID(clientID st
 		description_text, description_confirm, config_mode, config_force, config_simulate,
 		target_updates, stack_updates, policy_updates, modified_ts, source, subject, subject_name
 	FROM forma_commands
-	WHERE client_id = :client_id
+	WHERE client_id = :client_id AND source = 'user'
 	ORDER BY timestamp DESC
 	LIMIT 1
 	`
@@ -1225,11 +1225,8 @@ func (d *DatastoreAuroraDataAPI) QueryFormaCommands(statusQuery *datastore.Statu
 	queryStr, params, paramIdx = appendAuroraStringClause(queryStr, params, paramIdx, "command_id", "command_id", false, statusQuery.CommandID)
 	queryStr, params, paramIdx = appendAuroraStringClause(queryStr, params, paramIdx, "client_id", "client_id", false, statusQuery.ClientID)
 
-	if statusQuery.Command != nil {
-		queryStr, params, paramIdx = appendAuroraStringClause(queryStr, params, paramIdx, "command", "command", true, statusQuery.Command)
-	} else {
-		queryStr += fmt.Sprintf(" AND command != '%s'", pkgmodel.CommandSync)
-	}
+	queryStr, params, paramIdx = appendAuroraStringClause(queryStr, params, paramIdx, "command", "command", true, statusQuery.Command)
+	queryStr, params, paramIdx = appendAuroraStringClause(queryStr, params, paramIdx, "source", "source", false, statusQuery.Source)
 
 	// stack filter routes through a sub-EXISTS against resource_updates.
 	if statusQuery.Stack != nil {

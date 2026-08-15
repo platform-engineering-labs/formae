@@ -41,6 +41,19 @@ func (b *BlugeQuerier) QueryStatus(queryString string, clientID string, n int) (
 	return b.datastore.QueryFormaCommands(statusQuery)
 }
 
+// BuildStatusQuery parses queryString into a *datastore.StatusQuery without
+// executing it, so a caller (ListFormaCommandStatus) can add filters of its
+// own — such as restricting Source — before running the query. An empty
+// queryString returns an unconstrained query (matching QueryStatus's
+// match-everything behavior).
+func (b *BlugeQuerier) BuildStatusQuery(queryString string, clientID string, n int) (*datastore.StatusQuery, error) {
+	if queryString == "" {
+		return &datastore.StatusQuery{N: n}, nil
+	}
+
+	return b.statusQuery(queryString, clientID, n)
+}
+
 func (b *BlugeQuerier) statusQuery(queryString string, clientID string, n int) (*datastore.StatusQuery, error) {
 	q, err := querystr.ParseQueryString(queryString, querystr.QueryStringOptions{})
 	if err != nil {

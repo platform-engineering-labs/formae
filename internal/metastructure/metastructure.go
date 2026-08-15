@@ -988,7 +988,22 @@ func (m *Metastructure) CancelCommandsByQuery(query string, force bool, clientID
 func (m *Metastructure) ListFormaCommandStatus(query string, clientID string, n int) (*apimodel.ListCommandStatusResponse, error) {
 	if query != "" {
 		q := querier.NewBlugeQuerier(m.Datastore)
-		formaCommands, err := q.QueryStatus(query, clientID, n)
+		statusQuery, err := q.BuildStatusQuery(query, clientID, n)
+		if err != nil {
+			slog.Debug("Cannot get forma commands from query", "error", err)
+			return nil, err
+		}
+
+		// Command status is a user-facing surface: never show scheduler
+		// bookkeeping (sync, discovery, auto-reconcile, stack expiry), even
+		// if it shares a command type with user work. Source is set here,
+		// not parsed from the query grammar, so a caller cannot ask for it.
+		statusQuery.Source = &datastore.QueryItem[string]{
+			Item:       string(forma_command.SourceUser),
+			Constraint: datastore.Required,
+		}
+
+		formaCommands, err := m.Datastore.QueryFormaCommands(statusQuery)
 		if err != nil {
 			slog.Debug("Cannot get forma commands from query", "error", err)
 			return nil, err
