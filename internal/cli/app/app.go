@@ -5,7 +5,6 @@
 package app
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -1008,15 +1007,9 @@ func (a *App) netHTTPClient() (*http.Client, error) {
 		return nil, err
 	}
 
-	var configJSON []byte
-	if len(a.Config.Network.LegacyRawJSON) > 0 {
-		configJSON = a.Config.Network.LegacyRawJSON
-	} else {
-		var marshalErr error
-		configJSON, marshalErr = json.Marshal(a.Config.Network.Tailscale)
-		if marshalErr != nil {
-			return nil, fmt.Errorf("failed to marshal network config: %w", marshalErr)
-		}
+	configJSON, err := a.Config.Network.PluginConfigJSON()
+	if err != nil {
+		return nil, err
 	}
 
 	net, err := netPlugin.Client(configJSON)

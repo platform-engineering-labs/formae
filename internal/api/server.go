@@ -137,17 +137,9 @@ func (s *Server) configureNetwork() (string, error) {
 			return "", err
 		}
 
-		// Use legacy raw JSON if present (from deprecated plugins.network),
-		// otherwise marshal the typed tailscale config.
-		var configJSON []byte
-		if len(s.networkConfig.LegacyRawJSON) > 0 {
-			configJSON = s.networkConfig.LegacyRawJSON
-		} else {
-			var marshalErr error
-			configJSON, marshalErr = json.Marshal(s.networkConfig.Tailscale)
-			if marshalErr != nil {
-				return "", fmt.Errorf("failed to marshal network config: %w", marshalErr)
-			}
+		configJSON, err := s.networkConfig.PluginConfigJSON()
+		if err != nil {
+			return "", err
 		}
 
 		s.echo.Listener, err = netPlugin.Listen(configJSON, s.serverConfig.Port)
