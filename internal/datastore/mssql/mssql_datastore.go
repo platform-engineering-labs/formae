@@ -969,7 +969,9 @@ func (d *DatastoreMSSQL) UpdateFormaCommandTargetUpdates(commandID string, targe
 }
 
 // RecordAgentBoot appends one agent_boots row for this process start.
-func (d *DatastoreMSSQL) RecordAgentBoot(ctx context.Context, version string) error {
+func (d *DatastoreMSSQL) RecordAgentBoot(version string) error {
+	ctx, cancel := datastore.AgentBootContext(d.ctx)
+	defer cancel()
 	ctx, span := mssqlTracer.Start(ctx, "RecordAgentBoot")
 	defer span.End()
 

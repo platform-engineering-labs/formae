@@ -5,7 +5,6 @@
 package datastore
 
 import (
-	"context"
 	"encoding/json"
 	"time"
 
@@ -523,5 +522,5 @@ type Datastore interface {
 	// out-of-process reader that needs the running version for an installation
 	// which has not yet run any command, a question the command history cannot
 	// answer because agent_version only exists on a command row.
-	RecordAgentBoot(ctx context.Context, version string) error
+	RecordAgentBoot(version string) error
 }
