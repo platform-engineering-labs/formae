@@ -9,6 +9,8 @@ package forma_persister
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -582,6 +584,18 @@ func TestBuildResourceUpdateIndex_DuplicateKsuids(t *testing.T) {
 	assert.Len(t, ksuidOpToIndex, 2)
 	assert.Equal(t, 0, ksuidOpToIndex[resourceUpdateKey(ksuid1, resource_update.OperationDelete)])
 	assert.Equal(t, 1, ksuidOpToIndex[resourceUpdateKey(ksuid1, resource_update.OperationCreate)])
+}
+
+func TestCommandStateLogFieldsIncludeSource(t *testing.T) {
+	cmd := &forma_command.FormaCommand{
+		ID:     "abc",
+		State:  forma_command.CommandStateFailed,
+		Source: forma_command.SourceSynchronizer,
+	}
+	got := fmt.Sprint(commandStateLogFields(cmd, 3))
+	if !strings.Contains(got, "source") || !strings.Contains(got, "synchronizer") {
+		t.Fatalf("log fields must carry the command source, got: %s", got)
+	}
 }
 
 func TestCachedCommand_FindResourceUpdateIndex(t *testing.T) {
