@@ -8,6 +8,7 @@ package blackbox
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -192,7 +193,7 @@ func (h *TestHarness) TryWaitForCommandDone(commandID string, timeout time.Durat
 func (h *TestHarness) waitForCommand(commandID string, timeout time.Duration) (*apimodel.Command, bool) {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		statusResp, err := h.client.GetFormaCommandsStatus("id:"+commandID, clientID, 1)
+		statusResp, err := h.client.GetFormaCommandsStatus("id:"+commandID, clientID, 1, apimodel.CommandScopeAgent)
 		if err == nil && statusResp != nil && len(statusResp.Commands) > 0 {
 			cmd := statusResp.Commands[0]
 			h.ObserveCommandState(h.t, cmd.CommandID, cmd.State)
@@ -205,21 +206,154 @@ func (h *TestHarness) waitForCommand(commandID string, timeout time.Duration) (*
 	return nil, false
 }
 
-func (h *TestHarness) latestSyncCommand() (*apimodel.Command, error) {
-	statusResp, err := h.client.GetFormaCommandsStatus("", "", 20)
+// --- Direct datastore observation of scheduler commands ---
+//
+// The command-status API deliberately exposes only user-initiated commands:
+// a user should not have to know that sync, discovery, auto-reconcile and
+// stack-expiry commands exist. The harness does have to see them — it waits
+// for the agent to go quiet before resetting state, and it waits on a sync
+// it just triggered — so it reads those straight out of the agent's sqlite
+// datastore. That keeps a test-only need out of the product's query grammar
+// and off its HTTP surface. Everything a user could observe (by-id lookups,
+// user-command polling) still goes through the API.
+
+// openAgentDB opens the agent's sqlite datastore read-only. The harness
+// config pins datastoreType = "sqlite" with a file path, so this is always
+// available.
+func (h *TestHarness) openAgentDB() (*sql.DB, error) {
+	if h.dbPath == "" || h.dbPath == ":memory:" {
+		return nil, fmt.Errorf("agent datastore is not a file (%q); the harness config must pin a sqlite file path", h.dbPath)
+	}
+	return sql.Open("sqlite3", h.dbPath+"?mode=ro")
+}
+
+// commandRowsFromDB reads command rows (id, type, state), newest first,
+// matching an optional extra WHERE clause. Rows carry no resource updates;
+// use commandFromDB when those are needed.
+func (h *TestHarness) commandRowsFromDB(where string, args ...any) ([]apimodel.Command, error) {
+	db, err := h.openAgentDB()
 	if err != nil {
 		return nil, err
 	}
-	if statusResp == nil || len(statusResp.Commands) == 0 {
+	defer db.Close() //nolint:errcheck
+
+	query := "SELECT command_id, command, state FROM forma_commands"
+	if where != "" {
+		query += " WHERE " + where
+	}
+	query += " ORDER BY timestamp DESC"
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var commands []apimodel.Command
+	for rows.Next() {
+		var cmd apimodel.Command
+		if err := rows.Scan(&cmd.CommandID, &cmd.Command, &cmd.State); err != nil {
+			return nil, err
+		}
+		commands = append(commands, cmd)
+	}
+	return commands, rows.Err()
+}
+
+// nonTerminalCommandsFromDB returns every command that has not reached a
+// terminal state, whatever its source. This is the quiescence check: the
+// harness must not declare the agent idle while a scheduler command is still
+// mid-flight.
+func (h *TestHarness) nonTerminalCommandsFromDB() ([]apimodel.Command, error) {
+	return h.commandRowsFromDB("state NOT IN ('Success', 'Failed', 'Canceled')")
+}
+
+// commandFromDB loads one command together with its resource updates, shaped
+// like the API representation so the state model can consume it.
+func (h *TestHarness) commandFromDB(commandID string) (*apimodel.Command, error) {
+	commands, err := h.commandRowsFromDB("command_id = ?", commandID)
+	if err != nil {
+		return nil, err
+	}
+	if len(commands) == 0 {
 		return nil, nil
 	}
-	for _, cmd := range statusResp.Commands {
-		if cmd.Command == "sync" {
-			copy := cmd
-			return &copy, nil
-		}
+	cmd := commands[0]
+
+	db, err := h.openAgentDB()
+	if err != nil {
+		return nil, err
 	}
-	return nil, nil
+	defer db.Close() //nolint:errcheck
+
+	rows, err := db.Query(
+		"SELECT state, operation, stack_label, resource FROM resource_updates WHERE command_id = ? ORDER BY ksuid ASC",
+		commandID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+
+	for rows.Next() {
+		var state, operation, stackLabel string
+		var resourceJSON []byte
+		if err := rows.Scan(&state, &operation, &stackLabel, &resourceJSON); err != nil {
+			return nil, err
+		}
+		var desired pkgmodel.Resource
+		if len(resourceJSON) > 0 {
+			if err := json.Unmarshal(resourceJSON, &desired); err != nil {
+				return nil, fmt.Errorf("decoding resource update of command %s: %w", commandID, err)
+			}
+		}
+		cmd.ResourceUpdates = append(cmd.ResourceUpdates, apimodel.ResourceUpdate{
+			ResourceID:    desired.Ksuid,
+			ResourceType:  desired.Type,
+			ResourceLabel: desired.Label,
+			StackName:     stackLabel,
+			NativeID:      desired.NativeID,
+			Properties:    desired.Properties,
+			Operation:     operation,
+			State:         state,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return &cmd, nil
+}
+
+// waitForCommandInDB polls the agent's datastore until commandID reaches a
+// terminal state, then returns it with its resource updates. It is the
+// scheduler-command counterpart of waitForCommand, which polls the API and
+// therefore only ever sees user commands.
+func (h *TestHarness) waitForCommandInDB(commandID string, timeout time.Duration) (*apimodel.Command, bool) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		cmd, err := h.commandFromDB(commandID)
+		if err == nil && cmd != nil {
+			h.ObserveCommandState(h.t, cmd.CommandID, cmd.State)
+			if isTerminalCommandState(cmd.State) {
+				return cmd, true
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return nil, false
+}
+
+// latestSyncCommand returns the most recent sync command, whatever its
+// source. Sync is scheduler bookkeeping and never appears in the
+// command-status API, so this reads the datastore directly.
+func (h *TestHarness) latestSyncCommand() (*apimodel.Command, error) {
+	commands, err := h.commandRowsFromDB("command = ?", "sync")
+	if err != nil {
+		return nil, err
+	}
+	if len(commands) == 0 {
+		return nil, nil
+	}
+	return &commands[0], nil
 }
 
 // WaitForNextSyncCommand waits for a new sync command created after the current
@@ -239,7 +373,7 @@ func (h *TestHarness) WaitForNextSyncCommand(timeout time.Duration) (*apimodel.C
 	for time.Now().Before(deadline) {
 		current, err := h.latestSyncCommand()
 		if err == nil && current != nil && current.CommandID != "" && current.CommandID != beforeID {
-			return h.waitForCommand(current.CommandID, time.Until(deadline))
+			return h.waitForCommandInDB(current.CommandID, time.Until(deadline))
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
