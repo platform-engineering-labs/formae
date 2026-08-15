@@ -627,3 +627,66 @@ func TestResolveIsSafeWhenAnotherProcessWinsTheMigration(t *testing.T) {
 		})
 	}
 }
+
+// A successful `profile use` is the user's explicit choice of environment, so
+// nothing may quietly undo it. An initializer racing that switch decides only
+// whether a pointer should exist at all, never which one wins: it observed the
+// pointer absent, so its write means "set one if there is none".
+func TestResolveDoesNotUndoAConcurrentUse(t *testing.T) {
+	const racers = 8
+
+	for _, tc := range []struct {
+		name  string
+		setup func(t *testing.T, root string)
+	}{
+		{
+			"legacy config file",
+			func(t *testing.T, root string) {
+				writeFile(t, root, "formae.conf.pkl", "amends \"formae:/Config.pkl\"\n")
+			},
+		},
+		{
+			"orphaned default, no pointer",
+			func(t *testing.T, root string) {
+				writeFile(t, root, filepath.Join("profiles", "default.pkl"), "amends \"formae:/Config.pkl\"\n")
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeFile(t, root, filepath.Join("profiles", "prod.pkl"), "amends \"formae:/Config.pkl\"\n")
+			tc.setup(t, root)
+
+			start := make(chan struct{})
+			done := make(chan struct{}, racers)
+			for i := 0; i < racers; i++ {
+				go func() {
+					<-start
+					_, _ = store.New(root).Resolve()
+					done <- struct{}{}
+				}()
+			}
+			useErr := make(chan error, 1)
+			go func() {
+				<-start
+				useErr <- store.New(root).Use("prod")
+			}()
+
+			close(start)
+			for i := 0; i < racers; i++ {
+				<-done
+			}
+			if err := <-useErr; err != nil {
+				t.Fatalf("Use: %v", err)
+			}
+
+			active, err := store.New(root).Active()
+			if err != nil {
+				t.Fatalf("Active: %v", err)
+			}
+			if active != "prod" {
+				t.Fatalf("active = %q after a successful Use, want prod", active)
+			}
+		})
+	}
+}

@@ -186,29 +186,58 @@ func (s *Store) Use(name string) error {
 	return s.writeActive(name)
 }
 
-// writeActive atomically writes the active pointer file using a unique temp
-// file so concurrent calls cannot clobber each other's temp before rename.
-func (s *Store) writeActive(name string) error {
+// stageActive writes name to a unique temp file beside the active pointer, so
+// concurrent callers cannot clobber each other's temp before publishing it.
+// Callers publish it with rename (replace) or link (create only).
+func (s *Store) stageActive(name string) (string, error) {
 	if err := os.MkdirAll(s.root, 0o755); err != nil {
-		return fmt.Errorf("mkdir config dir: %w", err)
+		return "", fmt.Errorf("mkdir config dir: %w", err)
 	}
 	f, err := os.CreateTemp(s.root, "active-*.tmp")
 	if err != nil {
-		return fmt.Errorf("create temp active: %w", err)
+		return "", fmt.Errorf("create temp active: %w", err)
 	}
 	tmp := f.Name()
 	if _, err := f.WriteString(name + "\n"); err != nil {
 		_ = f.Close()
 		_ = os.Remove(tmp)
-		return fmt.Errorf("write temp active: %w", err)
+		return "", fmt.Errorf("write temp active: %w", err)
 	}
 	if err := f.Close(); err != nil {
 		_ = os.Remove(tmp)
-		return fmt.Errorf("close temp active: %w", err)
+		return "", fmt.Errorf("close temp active: %w", err)
+	}
+	return tmp, nil
+}
+
+// writeActive atomically points the active pointer at name, replacing whatever
+// it named before. This is someone choosing a profile, so it wins.
+func (s *Store) writeActive(name string) error {
+	tmp, err := s.stageActive(name)
+	if err != nil {
+		return err
 	}
 	if err := os.Rename(tmp, s.activePath()); err != nil {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("rename active: %w", err)
+	}
+	return nil
+}
+
+// setActiveIfAbsent points the active pointer at name only when there is none.
+// Every initialization branch that writes the pointer got there by observing it
+// absent, so the write means "there should be a pointer", never "it should be
+// this one". Link fails when the destination exists, which makes that an atomic
+// test rather than a check followed by a write: an explicit profile choice
+// racing initialization always wins, and never gets quietly undone.
+func (s *Store) setActiveIfAbsent(name string) error {
+	tmp, err := s.stageActive(name)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(tmp) }()
+	if err := os.Link(tmp, s.activePath()); err != nil && !errors.Is(err, os.ErrExist) {
+		return fmt.Errorf("write active: %w", err)
 	}
 	return nil
 }
@@ -404,7 +433,7 @@ func (s *Store) ensureInitialized() error {
 	case lerr == nil && info.Mode()&os.ModeSymlink != 0:
 		// Steps 3/4: legacy symlink.
 		if name, ok := s.validSymlinkTarget(); ok {
-			if err := s.writeActive(name); err != nil {
+			if err := s.setActiveIfAbsent(name); err != nil {
 				return err
 			}
 			return removeMigratedLegacy(cfg) // Step 3.
@@ -426,13 +455,13 @@ func (s *Store) ensureInitialized() error {
 					return fmt.Errorf("move legacy config: %w", err)
 				}
 			}
-			return s.writeActive("default")
+			return s.setActiveIfAbsent("default")
 		} else if err != nil {
 			return fmt.Errorf("stat default profile: %w", err)
 		}
 		// Step 5b: collision — adopt existing default, keep bare file, warn.
 		slog.Warn("formae.conf.pkl left untouched; profiles/default.pkl already exists — reconcile manually", "path", cfg)
-		return s.writeActive("default")
+		return s.setActiveIfAbsent("default")
 	case !errors.Is(lerr, os.ErrNotExist):
 		return fmt.Errorf("stat legacy config: %w", lerr)
 	}
@@ -445,7 +474,7 @@ func (s *Store) ensureInitialized() error {
 		return nil
 	}
 	if _, err := os.Stat(s.ProfilePath("default")); err == nil {
-		return s.writeActive("default") // Step 6: orphaned default (crash recovery).
+		return s.setActiveIfAbsent("default") // Step 6: orphaned default (crash recovery).
 	}
 	if names, err := s.List(); err == nil && len(names) > 0 {
 		// The listing itself is evidence another formae is mid-flight: it may
@@ -456,7 +485,7 @@ func (s *Store) ensureInitialized() error {
 			return nil
 		}
 		if _, statErr := os.Stat(s.ProfilePath("default")); statErr == nil {
-			return s.writeActive("default")
+			return s.setActiveIfAbsent("default")
 		}
 		// Step 7: other orphaned profiles, no default.
 		return fmt.Errorf("%w: no active profile — run `formae profile use <name>` (available: %s)", ErrNotInitialized, strings.Join(names, ", "))
@@ -468,7 +497,7 @@ func (s *Store) ensureInitialized() error {
 	if err := s.writeStubProfile("default"); err != nil {
 		return err
 	}
-	return s.writeActive("default")
+	return s.setActiveIfAbsent("default")
 }
 
 // validSymlinkTarget returns the profile name a valid legacy symlink points at.
