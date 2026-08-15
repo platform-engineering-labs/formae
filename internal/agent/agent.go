@@ -164,10 +164,6 @@ func (a *Agent) Start() error {
 			return
 		}
 
-		// Append this process start to the agent's own boot history. Best-effort
-		// and never fatal; see recordBoot.
-		recordBoot(a.ctx, ms.Datastore, formae.Version)
-
 		// Pass auth handle to metastructure for supervisor injection
 		if authHandle != nil {
 			ms.AuthPluginHandle = authHandle
@@ -179,6 +175,14 @@ func (a *Agent) Start() error {
 			slog.Error("Failed to start metastructure", "error", err)
 			return
 		}
+
+		// Append this process start to the agent's own boot history. Deliberately
+		// after ms.Start(): the SQLite backend runs on a single connection
+		// (SetMaxOpenConns(1)), so a stalled boot write issued beforehand would
+		// hold the only connection while startup's own database work queued behind
+		// it. Best-effort, cancellable and off the startup goroutine; see
+		// recordBoot.
+		recordBoot(a.ctx, ms.Datastore, formae.Version)
 
 		// Start Ergo actor metrics collection (only if OTel is enabled)
 		if a.cfg.Agent.OTel.Enabled {
