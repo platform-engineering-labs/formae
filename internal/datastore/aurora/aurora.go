@@ -6296,3 +6296,18 @@ func (d *DatastoreAuroraDataAPI) ForceCancelResourceUpdates(commandID string, in
 
 	return result, nil
 }
+
+// RecordAgentBoot appends one agent_boots row for this process start.
+func (d *DatastoreAuroraDataAPI) RecordAgentBoot(ctx context.Context, version string) error {
+	query := `INSERT INTO agent_boots (boot_id, version, booted_at) VALUES (:boot_id, :version, :booted_at::timestamp)`
+	params := []types.SqlParameter{
+		{Name: aws.String("boot_id"), Value: &types.FieldMemberStringValue{Value: mksuid.New().String()}},
+		{Name: aws.String("version"), Value: &types.FieldMemberStringValue{Value: version}},
+		{Name: aws.String("booted_at"), Value: &types.FieldMemberStringValue{Value: time.Now().UTC().Format(time.RFC3339Nano)}},
+	}
+
+	if _, err := d.executeStatement(ctx, query, params); err != nil {
+		return fmt.Errorf("failed to record agent boot: %w", err)
+	}
+	return nil
+}

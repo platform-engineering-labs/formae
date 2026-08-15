@@ -176,6 +176,14 @@ func (a *Agent) Start() error {
 			return
 		}
 
+		// Append this process start to the agent's own boot history. Deliberately
+		// after ms.Start(): the SQLite backend runs on a single connection
+		// (SetMaxOpenConns(1)), so a stalled boot write issued beforehand would
+		// hold the only connection while startup's own database work queued behind
+		// it. Best-effort, cancellable and off the startup goroutine; see
+		// recordBoot.
+		recordBoot(a.ctx, ms.Datastore, formae.Version)
+
 		// Start Ergo actor metrics collection (only if OTel is enabled)
 		if a.cfg.Agent.OTel.Enabled {
 			if err := api.StartErgoMetrics(ms.Node); err != nil {

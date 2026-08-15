@@ -5,6 +5,7 @@
 package metastructure
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -448,4 +449,8 @@ func TestExtractResourceByKsuid_DeletedReturnsNil(t *testing.T) {
 	assert.Equal(t, 1, ds.loadLatestByKsuidCalls)
 	assert.Equal(t, 0, ds.batchGetTripletsCalls, "must not call BatchGetTripletsByKSUIDs for deleted resource")
 	assert.Equal(t, 0, ds.loadResourceByIdCalls, "must not fall back to LoadResourceById")
+}
+
+func (m *mockSummaryDatastore) RecordAgentBoot(_ context.Context, _ string) error {
+	return nil
 }

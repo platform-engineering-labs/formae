@@ -5,6 +5,7 @@
 package metastructure
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -575,4 +576,8 @@ func TestExtractResources_BatchedPolicyLookups(t *testing.T) {
 		"GetStandalonePolicy must not be called (N+1 avoided)")
 	assert.Equal(t, 1, ds.loadStacksByLabelsCalls, "LoadStacksByLabels must be called exactly once")
 	assert.Equal(t, 0, ds.getStackByLabelCalls, "GetStackByLabel must not be called (N+1 avoided)")
+}
+
+func (m *mockExtractDatastore) RecordAgentBoot(_ context.Context, _ string) error {
+	return nil
 }

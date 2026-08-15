@@ -5355,3 +5355,31 @@ func (d DatastoreSQLite) CleanUp() error {
 // Conn returns the underlying database connection. Used by test helpers that
 // need direct SQL access (e.g. forcing health_state for guard assertions).
 func (d DatastoreSQLite) Conn() *sql.DB { return d.conn }
+
+// RecordAgentBoot appends one agent_boots row for this process start.
+// agentBootTimestampLayout is RFC 3339 with a fixed-width nanosecond fraction.
+// SQLite stores booted_at as text and the reader orders by it, so the format
+// has to sort lexicographically in chronological order. time.RFC3339Nano does
+// not qualify: it strips trailing zeros, so ".5Z" compares greater than the
+// later ".500000001Z".
+const agentBootTimestampLayout = "2006-01-02T15:04:05.000000000Z07:00"
+
+// agentBootTimestamp renders a boot time for storage and comparison in SQLite.
+func agentBootTimestamp(t time.Time) string {
+	return t.UTC().Format(agentBootTimestampLayout)
+}
+
+func (d DatastoreSQLite) RecordAgentBoot(ctx context.Context, version string) error {
+	ctx, span := sqliteTracer.Start(ctx, "RecordAgentBoot")
+	defer span.End()
+
+	_, err := d.conn.ExecContext(
+		ctx,
+		`INSERT INTO agent_boots (boot_id, version, booted_at) VALUES (?, ?, ?)`,
+		mksuid.New().String(), version, agentBootTimestamp(time.Now().UTC()),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to record agent boot: %w", err)
+	}
+	return nil
+}
