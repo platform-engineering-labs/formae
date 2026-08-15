@@ -9,7 +9,9 @@ package login
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	pkgauth "github.com/platform-engineering-labs/formae/pkg/auth"
 	"net/http"
 	"strings"
 	"testing"
@@ -687,18 +689,100 @@ func TestGateProfileDecidesWithoutACredential(t *testing.T) {
 	}
 }
 
-// CheckHostedIssuer is the entry point for callers outside this package that
-// must make the same decision, so the trust anchor has one definition.
-func TestCheckHostedIssuer(t *testing.T) {
-	if err := CheckHostedIssuer(hostedConnWithAuth(t, "https://auth.formae.ai"), "", ""); err != nil {
-		t.Fatalf("trusted issuer: %v", err)
+// The credential cannot be minted for a connection the gate did not clear,
+// because minting is a method on the value only the gate produces. The ordering
+// is a property of the type rather than a rule a caller has to remember, so a
+// future caller cannot reintroduce the bug by forgetting a predicate.
+func TestCredentialCannotBeMintedForAnUntrustedIssuer(t *testing.T) {
+	creds := &countingCreds{}
+
+	if _, err := ValidateHosted(hostedConnWithAuth(t, "https://auth.evil.example"), "", ""); err == nil {
+		t.Fatal("an untrusted issuer must not validate")
 	}
-	if err := CheckHostedIssuer(hostedConnWithAuth(t, "https://auth.evil.example"), "", ""); err == nil {
-		t.Fatal("an untrusted issuer must be refused")
+	if creds.calls != 0 {
+		t.Fatalf("the auth plugin was driven %d times for a connection that never validated", creds.calls)
 	}
-	if err := CheckHostedIssuer(&pkgmodel.ClassicConnection{URL: "http://localhost", Port: 1}, "", ""); err == nil {
+
+	v, err := ValidateHosted(hostedConnWithAuth(t, "https://auth.formae.ai"), "", "")
+	if err != nil {
+		t.Fatalf("a trusted issuer should validate: %v", err)
+	}
+	if v.Connection().Installation != "3f2b8c14-0000-4000-8000-000000000000" {
+		t.Errorf("the validated connection should be the one checked: %#v", v.Connection())
+	}
+}
+
+func TestValidateHostedRefusesAClassicConnection(t *testing.T) {
+	if _, err := ValidateHosted(&pkgmodel.ClassicConnection{URL: "http://localhost", Port: 1}, "", ""); err == nil {
 		t.Fatal("a classic connection is not a hosted profile and must be refused")
 	}
+}
+
+func TestCredential(t *testing.T) {
+	v, err := ValidateHosted(hostedConnWithAuth(t, "https://auth.formae.ai"), "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("returns the credential with its scheme", func(t *testing.T) {
+		got, err := v.Credential(&countingCreds{
+			resp: &pkgauth.GetAuthHeaderResponse{
+				Headers: map[string][]string{"Authorization": {"Bearer abc.def"}},
+			},
+		}, false)
+		if err != nil {
+			t.Fatalf("Credential: %v", err)
+		}
+		if got != "Bearer abc.def" {
+			t.Fatalf("credential = %q, want the value including its scheme", got)
+		}
+	})
+
+	t.Run("force refresh reaches the plugin", func(t *testing.T) {
+		c := &countingCreds{resp: &pkgauth.GetAuthHeaderResponse{
+			Headers: map[string][]string{"Authorization": {"Bearer x.y"}},
+		}}
+		if _, err := v.Credential(c, true); err != nil {
+			t.Fatal(err)
+		}
+		if !c.sawForce {
+			t.Fatal("force refresh must be passed through")
+		}
+	})
+
+	t.Run("surfaces the plugin's own code", func(t *testing.T) {
+		_, err := v.Credential(&countingCreds{resp: &pkgauth.GetAuthHeaderResponse{
+			ErrorCode: "session_expired", Error: "run formae login",
+		}}, false)
+		var ae *AuthError
+		if !errors.As(err, &ae) {
+			t.Fatalf("want an AuthError, got %#v", err)
+		}
+		if ae.Code != "session_expired" {
+			t.Fatalf("plugin code lost: %#v", ae)
+		}
+	})
+
+	t.Run("refuses a response carrying nothing we could send", func(t *testing.T) {
+		if _, err := v.Credential(&countingCreds{resp: &pkgauth.GetAuthHeaderResponse{
+			Headers: map[string][]string{"X-Token": {"Bearer nope"}},
+		}}, false); err == nil {
+			t.Fatal("a credential under a key the client never sends must fail closed")
+		}
+	})
+}
+
+type countingCreds struct {
+	resp     *pkgauth.GetAuthHeaderResponse
+	err      error
+	calls    int
+	sawForce bool
+}
+
+func (c *countingCreds) GetAuthHeader(force bool) (*pkgauth.GetAuthHeaderResponse, error) {
+	c.calls++
+	c.sawForce = c.sawForce || force
+	return c.resp, c.err
 }
 
 // hostedConnWithAuth builds a hosted connection whose auth block names issuer.

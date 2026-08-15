@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/platform-engineering-labs/formae/internal/cli/authmsg"
 	"net/http"
 	"strings"
 
@@ -275,20 +276,67 @@ func refuse(reason string) gateResult {
 	return gateResult{Reason: reason}
 }
 
-// CheckHostedIssuer reports whether conn is a hosted profile whose auth block
-// was issued by the platform this build trusts. It reads configuration only, so
-// callers can and should run it before minting a credential.
-//
-// It exists so the trust anchor has exactly one definition: a second comparison
-// elsewhere would be a second thing to keep correct, and the failure mode of
-// getting it wrong is driving an auth plugin at an endpoint a profile named.
-func CheckHostedIssuer(conn pkgmodel.Connection, cloudFlag, issuerFlag string) error {
+// ValidatedHosted is a hosted connection that has passed the issuer gate. Its
+// fields are unexported and this package alone constructs it, so a credential
+// cannot be minted for a connection nothing checked: the ordering is a property
+// of the type rather than a rule every caller has to remember.
+type ValidatedHosted struct {
+	conn *pkgmodel.HostedConnection
+	plat platform
+}
+
+// Connection returns the connection that was validated.
+func (v ValidatedHosted) Connection() *pkgmodel.HostedConnection { return v.conn }
+
+// ValidateHosted checks that conn is a hosted profile whose auth block names
+// the platform this build trusts, reading configuration only. Callers must run
+// it before minting a credential: a profile a model wrote controls the issuer,
+// so driving the auth plugin first would send it at whatever token endpoint the
+// profile named.
+func ValidateHosted(conn pkgmodel.Connection, cloudFlag, issuerFlag string) (ValidatedHosted, error) {
 	p, err := resolvePlatform(cloudFlag, issuerFlag)
 	if err != nil {
-		return err
+		return ValidatedHosted{}, err
 	}
-	if g := gateProfile(conn, p); !g.OK {
-		return errors.New(g.Reason)
+	g := gateProfile(conn, p)
+	if !g.OK {
+		return ValidatedHosted{}, errors.New(g.Reason)
 	}
-	return nil
+	// gateProfile has already established the arm.
+	return ValidatedHosted{conn: conn.(*pkgmodel.HostedConnection), plat: p}, nil
+}
+
+// AuthError is a refusal from the auth plugin, carrying the plugin's own code
+// so a caller can report why rather than only that.
+type AuthError struct {
+	Code    string
+	Message string
+}
+
+func (e *AuthError) Error() string { return e.Message }
+
+// Credential drives the auth plugin and returns the credential to send, scheme
+// included. It is a method on ValidatedHosted because minting for an unchecked
+// connection must not be expressible.
+//
+// A response carrying nothing under the canonical Authorization header fails
+// closed: the client attaches only that header, so anything else is a value
+// this formae could never send, and reading it as success would defer the
+// failure to an opaque rejection at the far end.
+func (v ValidatedHosted) Credential(creds credentialProvider, forceRefresh bool) (string, error) {
+	resp, err := creds.GetAuthHeader(forceRefresh)
+	if err != nil {
+		return "", err
+	}
+	if resp.ErrorCode != "" || resp.Error != "" {
+		return "", &AuthError{
+			Code:    string(resp.ErrorCode),
+			Message: authmsg.DescribeAuthError(resp.ErrorCode, resp.Error),
+		}
+	}
+	g := gateCredential(gateResult{OK: true}, v.plat, http.Header(resp.Headers))
+	if !g.OK {
+		return "", &AuthError{Message: g.Reason}
+	}
+	return g.Bearer, nil
 }
