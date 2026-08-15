@@ -309,6 +309,7 @@ func runCancelInteractive(a *app.App, opts *CancelOptions) error {
 			FocusCommandID:     merged.CommandIDs[0],
 			ExitWhenDone:       true,
 			AbandonedResources: abandonedKsuids,
+			HeaderCommand:      "cancel",
 		})
 	}
 	idTerms := make([]string, len(merged.CommandIDs))
@@ -325,6 +326,7 @@ func runCancelInteractive(a *app.App, opts *CancelOptions) error {
 		MaxResults:         len(merged.CommandIDs),
 		ExitWhenDone:       len(merged.CommandIDs) <= cancelWatchPageLimit,
 		AbandonedResources: abandonedKsuids,
+		HeaderCommand:      "cancel",
 	})
 }
 

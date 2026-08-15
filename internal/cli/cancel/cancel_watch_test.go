@@ -89,6 +89,8 @@ func TestCancelWatch_Single_LaunchCancelWatchOptions(t *testing.T) {
 	assert.Equal(t, "id:cmd-single", capturedOpts.Query, "single command: query must be id:<cmdID>")
 	assert.Equal(t, "cmd-single", capturedOpts.FocusCommandID, "single command: FocusCommandID must be set")
 	assert.True(t, capturedOpts.ExitWhenDone, "ExitWhenDone must be true")
+	assert.Equal(t, "cancel", capturedOpts.HeaderCommand,
+		"the watch view must show the verb the user actually typed, not fall back to the deprecated status command alias's name")
 
 	// Only ksuid-force-1 has ForceCanceled=true; ksuid-force-2 does not.
 	sort.Strings(capturedOpts.AbandonedResources)
@@ -168,6 +170,9 @@ func TestCancelWatch_Multi_LaunchCancelWatchOptions(t *testing.T) {
 
 	sort.Strings(capturedOpts.AbandonedResources)
 	assert.Equal(t, []string{"ksuid-cmd-alpha", "ksuid-cmd-beta"}, capturedOpts.AbandonedResources, "both force-canceled ksuids must be in abandoned list")
+
+	assert.Equal(t, "cancel", capturedOpts.HeaderCommand,
+		"the watch view must show the verb the user actually typed, not fall back to the deprecated status command alias's name")
 }
 
 // TestCancelWatch_NoForce_EmptyAbandoned verifies that when not --force,

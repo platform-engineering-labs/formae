@@ -81,10 +81,11 @@ func TestWatchEntryPointKeepsUrgencySort(t *testing.T) {
 }
 
 // The TUI header must always name the verb the user actually typed to invoke
-// it, not a hardcoded default: `command list` and `command status` must show
-// their own names, and the deprecated `status command` alias must keep
-// showing its own name (it still routes to one of the two new subcommands'
-// semantics underneath, but the header names what was actually typed).
+// it, not a hardcoded default: `command list`, `command status`, and `cancel`
+// must show their own names, and the deprecated `status command` alias must
+// keep showing its own name (it still routes to one of the two new
+// subcommands' semantics underneath, but the header names what was actually
+// typed).
 func TestHeaderCommand_NamesTheVerbActuallyTyped(t *testing.T) {
 	list := New(theme.New("formae"), &fakeClient{}, Options{HeaderCommand: "command list"})
 	if got := list.headerCommand(); got != "command list" {
@@ -94,6 +95,11 @@ func TestHeaderCommand_NamesTheVerbActuallyTyped(t *testing.T) {
 	single := New(theme.New("formae"), &fakeClient{}, Options{HeaderCommand: "command status"})
 	if got := single.headerCommand(); got != "command status" {
 		t.Fatalf("command status header = %q, want %q", got, "command status")
+	}
+
+	cancel := New(theme.New("formae"), &fakeClient{}, Options{HeaderCommand: "cancel"})
+	if got := cancel.headerCommand(); got != "cancel" {
+		t.Fatalf("cancel header = %q, want %q", got, "cancel")
 	}
 
 	compat := New(theme.New("formae"), &fakeClient{}, Options{HeaderCommand: "status command"})
