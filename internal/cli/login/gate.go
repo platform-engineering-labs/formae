@@ -324,6 +324,14 @@ func (e *AuthError) Error() string { return e.Message }
 // this formae could never send, and reading it as success would defer the
 // failure to an opaque rejection at the far end.
 func (v ValidatedHosted) Credential(creds credentialProvider, forceRefresh bool) (string, error) {
+	// The type is exported so callers can hold one, which means another package
+	// can write ValidatedHosted{} even though it cannot fill the fields. Refuse
+	// that here, before the provider is touched: a zero value has passed no
+	// gate, and minting for it would drive the auth plugin at whatever the
+	// caller had in mind rather than at an issuer we checked.
+	if v.conn == nil {
+		return "", errors.New("this connection has not been validated, so no credential may be minted for it")
+	}
 	resp, err := creds.GetAuthHeader(forceRefresh)
 	if err != nil {
 		return "", err
