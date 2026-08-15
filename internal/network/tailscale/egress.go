@@ -77,12 +77,12 @@ func (t *Tailscale) StartEgressProxy(ctx context.Context, config json.RawMessage
 		return nil, nil
 	}
 
-	if cfg.EgressProxyPort < 0 || cfg.EgressProxyPort > maxPort {
-		return nil, fmt.Errorf("tailscale: egress proxy port %d is not a valid port", cfg.EgressProxyPort)
-	}
-
 	if ctx.Err() != nil {
 		return nil, nil
+	}
+
+	if cfg.EgressProxyPort < 0 || cfg.EgressProxyPort > maxPort {
+		return nil, fmt.Errorf("tailscale: egress proxy port %d is not a valid port", cfg.EgressProxyPort)
 	}
 
 	n, err := t.sharedNode(cfg)
@@ -129,6 +129,8 @@ func (t *Tailscale) StartEgressProxy(ctx context.Context, config json.RawMessage
 // of it. The node applies no timeout of its own, so one attempt against a node
 // that never registers would otherwise consume every retry.
 func acceptRoutes(ctx context.Context, n node, policy retryPolicy) error {
+	started := time.Now()
+
 	budgetCtx, cancel := context.WithTimeout(ctx, policy.budget)
 	defer cancel()
 
@@ -154,7 +156,7 @@ func acceptRoutes(ctx context.Context, n node, policy retryPolicy) error {
 		}
 	}
 
-	return fmt.Errorf("tailscale: gave up accepting subnet routes after %s: %w", policy.budget, err)
+	return fmt.Errorf("tailscale: gave up accepting subnet routes after %s: %w", time.Since(started), err)
 }
 
 // wait blocks for d, and reports false as soon as ctx is done instead.
@@ -285,6 +287,10 @@ var _ network.Proxy = (*egressProxy)(nil)
 // error: a proxy that stops serving is reported where it happens, the way the
 // API server reports its own.
 func (p *egressProxy) Serve() {
+	// Idempotent teardown: a no-op if the proxy was already stopped, and the
+	// path that tears it down if the accept loop returned on its own.
+	defer p.Stop(false)
+
 	server := &socks5.Server{
 		Dialer: p.dialTailnet,
 		Logf: func(format string, args ...any) {
