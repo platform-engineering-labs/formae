@@ -91,7 +91,7 @@ func awaitRunning(ctx context.Context, client *local.Client) error {
 	if err != nil {
 		return fmt.Errorf("tailscale: error watching the local node: %w", err)
 	}
-	defer watcher.Close()
+	defer func() { _ = watcher.Close() }()
 
 	for {
 		notification, err := watcher.Next()
