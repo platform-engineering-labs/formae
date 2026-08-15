@@ -28,10 +28,14 @@ import (
 // human output masks the credential.
 func ConnectionCmd() *cobra.Command {
 	command := &cobra.Command{
-		Use:           "connection",
-		Short:         "Inspect the connection formae would use",
-		Hidden:        true,
+		Use:    "connection",
+		Short:  "Inspect the connection formae would use",
+		Hidden: true,
+		// Matching the root: errors are reported by the top level, which decides
+		// for itself whether a failure is a usage error worth printing usage for.
+		// Left unset these would print usage over a machine-readable envelope.
 		SilenceErrors: true,
+		SilenceUsage:  true,
 	}
 	command.AddCommand(newResolveCmd())
 	command.SetUsageTemplate(clicmd.SimpleCmdUsageTemplate)
@@ -43,9 +47,11 @@ func newResolveCmd() *cobra.Command {
 	var cloud, cloudIssuer string
 
 	c := &cobra.Command{
-		Use:   "resolve",
-		Short: "Resolve the connection and credential for a profile",
-		Args:  cobra.NoArgs,
+		Use:           "resolve",
+		Short:         "Resolve the connection and credential for a profile",
+		Args:          cobra.NoArgs,
+		SilenceErrors: true,
+		SilenceUsage:  true,
 		RunE: func(cc *cobra.Command, args []string) error {
 			consumer, schema, err := clicmd.ResolveOutput(cc)
 			if err != nil {
