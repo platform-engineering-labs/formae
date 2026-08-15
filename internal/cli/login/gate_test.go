@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -661,5 +662,52 @@ func TestBearerFrom(t *testing.T) {
 			assert.Equal(t, tc.wantOK, ok)
 			assert.Equal(t, tc.want, got)
 		})
+	}
+}
+
+// The issuer check reads configuration only, so it can run before a credential
+// is minted. That ordering is the point: a profile a model wrote controls the
+// issuer, so driving the auth plugin first would send it at whatever token
+// endpoint the profile named, and refusing afterwards would be too late.
+func TestGateProfileDecidesWithoutACredential(t *testing.T) {
+	p := platform{Origin: "https://formae.ai", Issuer: "https://auth.formae.ai"}
+
+	trusted := hostedConnWithAuth(t, "https://auth.formae.ai")
+	if g := gateProfile(trusted, p); !g.OK {
+		t.Fatalf("a trusted issuer should pass the config gate: %s", g.Reason)
+	}
+
+	foreign := hostedConnWithAuth(t, "https://auth.evil.example")
+	g := gateProfile(foreign, p)
+	if g.OK {
+		t.Fatal("an untrusted issuer must be refused before auth is invoked")
+	}
+	if !strings.Contains(g.Reason, "auth.formae.ai") {
+		t.Errorf("the refusal should name the issuer we do trust: %s", g.Reason)
+	}
+}
+
+// CheckHostedIssuer is the entry point for callers outside this package that
+// must make the same decision, so the trust anchor has one definition.
+func TestCheckHostedIssuer(t *testing.T) {
+	if err := CheckHostedIssuer(hostedConnWithAuth(t, "https://auth.formae.ai"), "", ""); err != nil {
+		t.Fatalf("trusted issuer: %v", err)
+	}
+	if err := CheckHostedIssuer(hostedConnWithAuth(t, "https://auth.evil.example"), "", ""); err == nil {
+		t.Fatal("an untrusted issuer must be refused")
+	}
+	if err := CheckHostedIssuer(&pkgmodel.ClassicConnection{URL: "http://localhost", Port: 1}, "", ""); err == nil {
+		t.Fatal("a classic connection is not a hosted profile and must be refused")
+	}
+}
+
+// hostedConnWithAuth builds a hosted connection whose auth block names issuer.
+func hostedConnWithAuth(t *testing.T, issuer string) *pkgmodel.HostedConnection {
+	t.Helper()
+	auth := fmt.Sprintf(`{"type":%q,"role":%q,"issuer":%q}`, oidcAuthType, cliAuthRole, issuer)
+	return &pkgmodel.HostedConnection{
+		Endpoint:     "https://cloud.formae.ai",
+		Installation: "3f2b8c14-0000-4000-8000-000000000000",
+		Auth:         json.RawMessage(auth),
 	}
 }

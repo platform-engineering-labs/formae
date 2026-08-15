@@ -191,6 +191,22 @@ func (g gateResult) String() string {
 // so that https://Auth.Formae.AI:443 and https://auth.formae.ai are one issuer
 // while nothing else is.
 func gateSync(conn pkgmodel.Connection, p platform, hdr http.Header) gateResult {
+	g := gateProfile(conn, p)
+	if !g.OK {
+		return g
+	}
+	return gateCredential(g, p, hdr)
+}
+
+// gateProfile decides everything that can be decided from configuration alone:
+// that this is a hosted profile, that its auth block names the plugin and role
+// we can re-render, and that its issuer is the platform's.
+//
+// Split out from the credential half so it can run *before* an auth plugin is
+// invoked. A profile a model wrote controls the issuer, so driving the plugin
+// first would send it at whatever token endpoint the profile named; refusing
+// afterwards would be too late. The order is the protection.
+func gateProfile(conn pkgmodel.Connection, p platform) gateResult {
 	hostedConn, isHosted := conn.(*pkgmodel.HostedConnection)
 	if !isHosted || hostedConn == nil {
 		return refuse("this profile does not use a hosted connection, so its sign-in covers no hosted installations")
@@ -235,18 +251,44 @@ func gateSync(conn pkgmodel.Connection, p platform, hdr http.Header) gateResult 
 				"was not issued for %s", p.Issuer, p.Origin))
 	}
 
+	return gateResult{Auth: auth, OK: true}
+}
+
+// gateCredential adds the credential the sign-in produced to an already-gated
+// profile. It runs after the auth plugin, which is why it is not part of
+// gateProfile: by this point the plugin has been driven, and the only question
+// left is whether it handed back something we can actually send.
+func gateCredential(g gateResult, p platform, hdr http.Header) gateResult {
 	bearer, ok := bearerFrom(hdr)
 	if !ok {
 		return refuse(fmt.Sprintf(
 			"this sign-in produced no Bearer credential under the canonical Authorization header, "+
 				"so there is nothing to authenticate a request to %s with", p.Origin))
 	}
-
-	return gateResult{Auth: auth, Bearer: bearer, OK: true}
+	g.Bearer = bearer
+	return g
 }
 
 // refuse returns the decision that stops sync, carrying the reason and
 // nothing else: no block and no credential leave the gate when it refuses.
 func refuse(reason string) gateResult {
 	return gateResult{Reason: reason}
+}
+
+// CheckHostedIssuer reports whether conn is a hosted profile whose auth block
+// was issued by the platform this build trusts. It reads configuration only, so
+// callers can and should run it before minting a credential.
+//
+// It exists so the trust anchor has exactly one definition: a second comparison
+// elsewhere would be a second thing to keep correct, and the failure mode of
+// getting it wrong is driving an auth plugin at an endpoint a profile named.
+func CheckHostedIssuer(conn pkgmodel.Connection, cloudFlag, issuerFlag string) error {
+	p, err := resolvePlatform(cloudFlag, issuerFlag)
+	if err != nil {
+		return err
+	}
+	if g := gateProfile(conn, p); !g.OK {
+		return errors.New(g.Reason)
+	}
+	return nil
 }
