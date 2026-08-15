@@ -37,6 +37,16 @@ type Tailscale struct {
 	// tests inject a fake so no test ever joins a tailnet.
 	newNode func(cfg *Config) node
 
+	// listen binds the egress proxy's loopback listener. Nil in the
+	// registered plugin, where it falls back to net.Listen; tests inject a
+	// listener on a port the operating system picks.
+	listen func(network, addr string) (net.Listener, error)
+
+	// routeRetry bounds the retry loop that asks the node to accept its
+	// peers' subnet routes. The zero value is the production budget; tests
+	// shrink it so the retry path costs no real time.
+	routeRetry retryPolicy
+
 	mu   sync.Mutex
 	node node
 	// hostname and advertiseTags are the identity the running node was
@@ -120,6 +130,10 @@ func (t *Tailscale) sharedNode(cfg *Config) (node, error) {
 // auth key is deliberately not compared: it is consumed only while the node
 // starts, so a second caller carrying a different (or rotated) key still
 // describes the same node.
+//
+// The egress proxy port is not compared either: it names a loopback listener
+// this plugin binds, not a property of the node. Two configs differing only in
+// it describe the same node, and each gets its own proxy on its own port.
 //
 // The error names the differing fields but never their values — a config
 // value must not be able to reach a log line by way of an error message.

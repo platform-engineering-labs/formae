@@ -52,6 +52,10 @@ func newTsnetNode(cfg *Config) node {
 
 // AcceptRoutes asks the node to use the subnet routes its peers advertise, so
 // traffic dialled through it can reach addresses behind a subnet router.
+//
+// The caller must give ctx a deadline: there is no timeout of its own here,
+// and a node that never registers — an expired auth key, say — never reaches
+// the running state this waits for.
 func (n *tsnetNode) AcceptRoutes(ctx context.Context) error {
 	client, err := n.LocalClient() // starts the node if it is not running yet
 	if err != nil {

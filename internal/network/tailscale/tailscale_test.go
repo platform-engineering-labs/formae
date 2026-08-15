@@ -7,6 +7,7 @@ package tailscale
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"sync"
@@ -30,34 +31,88 @@ type listenCall struct {
 	addr    string
 }
 
+// dialCall records one Dial call made on a fake node.
+type dialCall struct {
+	network string
+	addr    string
+}
+
 // fakeNode stands in for the tsnet-backed node so tests never join a tailnet.
 type fakeNode struct {
 	cfg        Config
 	httpClient *http.Client
 
+	// startErr, acceptRoutes and dialTo drive the egress paths. The zero
+	// values give a node that starts, accepts routes, and cannot dial.
+	startErr     error
+	acceptRoutes func(ctx context.Context) error
+	dialTo       string
+
 	mu          sync.Mutex
 	listenCalls []listenCall
+	dialCalls   []dialCall
+	startCalls  int
+	routeCalls  int
+	closeCalls  int
 }
 
 func (n *fakeNode) Listen(network, addr string) (net.Listener, error) {
 	n.record(listenCall{tls: false, network: network, addr: addr})
-	return &stubListener{}, nil
+	return newStubListener(), nil
 }
 
 func (n *fakeNode) ListenTLS(network, addr string) (net.Listener, error) {
 	n.record(listenCall{tls: true, network: network, addr: addr})
-	return &stubListener{}, nil
+	return newStubListener(), nil
 }
 
 func (n *fakeNode) HTTPClient() *http.Client { return n.httpClient }
 
-func (n *fakeNode) Dial(_ context.Context, _, _ string) (net.Conn, error) {
-	panic("not implemented")
+// Dial records the call and serves it from the address the node was built
+// with, so a tunnel through the proxy stays inside the test process.
+func (n *fakeNode) Dial(ctx context.Context, network, addr string) (net.Conn, error) {
+	n.mu.Lock()
+	n.dialCalls = append(n.dialCalls, dialCall{network: network, addr: addr})
+	dialTo := n.dialTo
+	n.mu.Unlock()
+
+	if dialTo == "" {
+		return nil, fmt.Errorf("fake node has no destination for %s", addr)
+	}
+
+	var dialer net.Dialer
+
+	return dialer.DialContext(ctx, "tcp", dialTo)
 }
 
-func (n *fakeNode) Start() error                         { return nil }
-func (n *fakeNode) AcceptRoutes(_ context.Context) error { return nil }
-func (n *fakeNode) Close() error                         { return nil }
+func (n *fakeNode) Start() error {
+	n.mu.Lock()
+	n.startCalls++
+	n.mu.Unlock()
+
+	return n.startErr
+}
+
+func (n *fakeNode) AcceptRoutes(ctx context.Context) error {
+	n.mu.Lock()
+	n.routeCalls++
+	acceptRoutes := n.acceptRoutes
+	n.mu.Unlock()
+
+	if acceptRoutes == nil {
+		return nil
+	}
+
+	return acceptRoutes(ctx)
+}
+
+func (n *fakeNode) Close() error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.closeCalls++
+
+	return nil
+}
 
 func (n *fakeNode) record(call listenCall) {
 	n.mu.Lock()
@@ -71,11 +126,62 @@ func (n *fakeNode) calls() []listenCall {
 	return append([]listenCall(nil), n.listenCalls...)
 }
 
-// stubListener satisfies net.Listener for tests that only check identity.
-type stubListener struct{ net.Listener }
+func (n *fakeNode) dials() []dialCall {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return append([]dialCall(nil), n.dialCalls...)
+}
 
-// nodeFactory hands out fake nodes and records how many were constructed.
+func (n *fakeNode) starts() int {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.startCalls
+}
+
+func (n *fakeNode) routes() int {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.routeCalls
+}
+
+func (n *fakeNode) closes() int {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.closeCalls
+}
+
+// stubListener satisfies net.Listener without binding anything: Accept blocks
+// until Close, the way a real listener's would.
+type stubListener struct {
+	closed chan struct{}
+	once   sync.Once
+}
+
+func newStubListener() *stubListener {
+	return &stubListener{closed: make(chan struct{})}
+}
+
+func (l *stubListener) Accept() (net.Conn, error) {
+	<-l.closed
+	return nil, net.ErrClosed
+}
+
+func (l *stubListener) Close() error {
+	l.once.Do(func() { close(l.closed) })
+	return nil
+}
+
+func (l *stubListener) Addr() net.Addr {
+	return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)}
+}
+
+// nodeFactory hands out fake nodes and records how many were constructed. The
+// behaviour fields are handed to every node it builds.
 type nodeFactory struct {
+	startErr     error
+	acceptRoutes func(ctx context.Context) error
+	dialTo       string
+
 	mu    sync.Mutex
 	nodes []*fakeNode
 }
@@ -84,7 +190,13 @@ func (f *nodeFactory) newNode(cfg *Config) node {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	n := &fakeNode{cfg: *cfg, httpClient: &http.Client{}}
+	n := &fakeNode{
+		cfg:          *cfg,
+		httpClient:   &http.Client{},
+		startErr:     f.startErr,
+		acceptRoutes: f.acceptRoutes,
+		dialTo:       f.dialTo,
+	}
 	f.nodes = append(f.nodes, n)
 
 	return n
@@ -349,6 +461,13 @@ func TestMissingAuthKeyErrorsOnEveryEntryPoint(t *testing.T) {
 				return err
 			},
 		},
+		{
+			name: "StartEgressProxy",
+			call: func(plugin *Tailscale, config json.RawMessage) error {
+				_, err := plugin.StartEgressProxy(context.Background(), config)
+				return err
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -379,6 +498,13 @@ func TestInvalidConfigErrorsOnEveryEntryPoint(t *testing.T) {
 			name: "Listen",
 			call: func(plugin *Tailscale, config json.RawMessage) error {
 				_, err := plugin.Listen(config, 8080)
+				return err
+			},
+		},
+		{
+			name: "StartEgressProxy",
+			call: func(plugin *Tailscale, config json.RawMessage) error {
+				_, err := plugin.StartEgressProxy(context.Background(), config)
 				return err
 			},
 		},
