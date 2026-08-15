@@ -71,6 +71,11 @@ func TestListEntryPointSortsByAgeDescending(t *testing.T) {
 	if m.multi.sortCol != colAge || m.multi.sortDir != components.SortDesc {
 		t.Fatalf("list default sort = (%d,%v), want age descending", m.multi.sortCol, m.multi.sortDir)
 	}
+	// sortHi drives the header highlight: it must name the column actually
+	// sorted on, or the header points at a different column than the order.
+	if m.multi.sortHi != colAge {
+		t.Fatalf("list header highlight = %d, want the sorted column %d", m.multi.sortHi, colAge)
+	}
 }
 
 func TestWatchEntryPointKeepsUrgencySort(t *testing.T) {
@@ -108,13 +113,14 @@ func TestHeaderCommand_NamesTheVerbActuallyTyped(t *testing.T) {
 	}
 }
 
-// TestHeaderCommand_EmptyOptionFallsBackToDeprecatedName locks the fallback
-// used when a caller leaves HeaderCommand unset. It exists so that fallback
-// cannot silently change without a deliberate, reviewed edit to this test.
-func TestHeaderCommand_EmptyOptionFallsBackToDeprecatedName(t *testing.T) {
+// TestHeaderCommand_EmptyOptionFallsBackToARealVerb locks the fallback used
+// when a caller leaves HeaderCommand unset. It must name a verb that still
+// exists once the deprecated aliases are removed, and it cannot silently
+// change without a deliberate, reviewed edit to this test.
+func TestHeaderCommand_EmptyOptionFallsBackToARealVerb(t *testing.T) {
 	m := New(theme.New("formae"), &fakeClient{}, Options{})
-	if got := m.headerCommand(); got != "status command" {
-		t.Fatalf("empty HeaderCommand fallback = %q, want %q", got, "status command")
+	if got := m.headerCommand(); got != "command status" {
+		t.Fatalf("empty HeaderCommand fallback = %q, want %q", got, "command status")
 	}
 }
 

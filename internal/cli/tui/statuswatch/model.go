@@ -111,12 +111,14 @@ type exitNowMsg struct{}
 func (m Model) Finished() bool { return m.exitScheduled }
 
 // headerCommand returns the command verb shown after the "formae" wordmark in
-// the header, defaulting to "status command" for the standalone status TUI.
+// the header. Every caller sets opts.HeaderCommand to the verb the user
+// actually typed; the fallback exists only so a caller that forgets still
+// shows a real command name.
 func (m Model) headerCommand() string {
 	if m.opts.HeaderCommand != "" {
 		return m.opts.HeaderCommand
 	}
-	return "status command"
+	return "command status"
 }
 
 // New constructs a Model with sensible defaults applied to opts.

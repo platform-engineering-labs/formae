@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
 // Package statuswatch implements the live status/watch TUI — the shared view
-// run by `formae status command` and handed off to by apply, destroy and
-// cancel for their watch phase.
+// run by `formae command status` / `formae command list` and handed off to by
+// apply, destroy and cancel for their watch phase.
 package statuswatch
 
 import (
