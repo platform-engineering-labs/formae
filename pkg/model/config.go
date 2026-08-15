@@ -6,6 +6,7 @@ package model
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/url"
 	"time"
@@ -192,10 +193,11 @@ type StackExpirerConfig struct {
 }
 
 type TailscaleConfig struct {
-	TLS           bool
-	AuthKey       string
-	Hostname      string
-	AdvertiseTags []string
+	TLS             bool
+	AuthKey         string
+	Hostname        string
+	AdvertiseTags   []string
+	EgressProxyPort int
 }
 
 type NetworkConfig struct {
@@ -206,6 +208,22 @@ type NetworkConfig struct {
 	// When set, the server passes this directly to the network registry instead
 	// of marshaling the typed Tailscale config.
 	LegacyRawJSON json.RawMessage `json:"-"`
+}
+
+// PluginConfigJSON returns the JSON to hand the network plugin: the legacy
+// raw JSON if present (from the deprecated plugins.network config), otherwise
+// the typed Tailscale config marshaled to JSON.
+func (c *NetworkConfig) PluginConfigJSON() ([]byte, error) {
+	if len(c.LegacyRawJSON) > 0 {
+		return c.LegacyRawJSON, nil
+	}
+
+	configJSON, err := json.Marshal(c.Tailscale)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal network config: %w", err)
+	}
+
+	return configJSON, nil
 }
 
 // ResourcePluginUserConfig holds per-plugin configuration from the user's

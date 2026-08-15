@@ -21,6 +21,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/imconc"
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	"github.com/platform-engineering-labs/formae/internal/metastructure"
+	"github.com/platform-engineering-labs/formae/internal/network"
 	_ "github.com/platform-engineering-labs/formae/internal/network/all"
 	_ "github.com/platform-engineering-labs/formae/internal/schema/all"
 	"github.com/platform-engineering-labs/formae/internal/util"
@@ -203,6 +204,17 @@ func (a *Agent) Start() error {
 		imwg.Go(func() {
 			apiServer.Start()
 		})
+
+		// Egress starts after the inbound listener is on its way up, and a
+		// failure here is non-fatal: the API listener is how the CLI and MCP
+		// reach the agent, so an egress misconfiguration must not take it down.
+		egress, err := network.StartEgressProxy(a.ctx, a.cfg.Network)
+		if err != nil {
+			slog.Error("Failed to start network egress proxy", "error", err)
+		} else if egress != nil {
+			imwg.Add(egress)
+			imwg.Go(egress.Serve)
+		}
 
 		// Handle signals and shutdown
 		go func() {

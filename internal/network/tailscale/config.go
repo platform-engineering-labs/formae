@@ -6,10 +6,11 @@ package tailscale
 
 // Config holds the Tailscale network plugin configuration.
 type Config struct {
-	Hostname      string
-	Tls           bool
-	AuthKey       string
-	AdvertiseTags []string
+	Hostname        string
+	Tls             bool
+	AuthKey         string
+	AdvertiseTags   []string
+	EgressProxyPort int
 }
 
 func valueOrDefault(value string, def string) string {
