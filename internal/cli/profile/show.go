@@ -7,6 +7,8 @@ package profile
 import (
 	"fmt"
 
+	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
+
 	"github.com/spf13/cobra"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
@@ -23,7 +25,7 @@ func newShowCmd() *cobra.Command {
 		Short: "Print a profile's resolved configuration",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cc *cobra.Command, args []string) error {
-			consumer, schema, err := resolveOutput(cc)
+			consumer, schema, err := cmd.ResolveOutput(cc)
 			if err != nil {
 				return err
 			}
@@ -85,6 +87,6 @@ func newShowCmd() *cobra.Command {
 			return nil
 		},
 	}
-	addOutputFlags(c)
+	cmd.AddOutputFlags(c)
 	return c
 }
