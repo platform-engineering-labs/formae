@@ -27,6 +27,9 @@ import (
 	"ergo.services/ergo"
 	"ergo.services/ergo/gen"
 	"ergo.services/ergo/net/handshake"
+	// Registers the sqlite3 driver used to read the agent's datastore directly.
+	// Without it every sql.Open here fails at runtime while still compiling.
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/require"
 
 	"github.com/platform-engineering-labs/formae/internal/api"
