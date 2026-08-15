@@ -32,7 +32,10 @@ const (
 	CodeUntrustedIssuer Code = "untrusted_issuer"
 	// CodeNoConnection: the profile resolved no connection we can use.
 	CodeNoConnection Code = "no_connection"
-	// CodeInternal: everything else, so the namespace stays closed.
+	// CodeInternal: everything else. A command rendering machine output is
+	// responsible for mapping errors it did not declare onto this, so a
+	// consumer parses one protocol on every path; PrintFailure only reports
+	// that it did not recognise them.
 	CodeInternal Code = "internal"
 )
 
