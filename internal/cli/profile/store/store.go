@@ -16,6 +16,7 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -25,6 +26,10 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"time"
+
+	"github.com/gofrs/flock"
 )
 
 const (
@@ -35,6 +40,7 @@ const (
 
 	managedLedgerFileName = "managed.json"
 	managedLockFileName   = "managed.lock"
+	initLockFileName      = "init.lock"
 )
 
 // Error sentinels returned by Store methods. Callers should match using errors.Is.
@@ -44,6 +50,13 @@ var (
 	ErrNotFound       = errors.New("profile not found")
 	ErrAlreadyExists  = errors.New("profile already exists")
 	ErrIsActive       = errors.New("profile is active")
+)
+
+// initLockWait bounds how long initialization waits for a peer holding the
+// lock; initLockRetry is how often it re-checks while waiting.
+var (
+	initLockWait  = 5 * time.Second
+	initLockRetry = 10 * time.Millisecond
 )
 
 var nameRE = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
@@ -87,6 +100,14 @@ func (s *Store) ProfilesDir() string {
 // inside it so it is never mistaken for a profile.
 func (s *Store) ManagedLedgerPath() string {
 	return filepath.Join(s.root, managedLedgerFileName)
+}
+
+// initLockPath returns the lock file that serialises store initialization. It
+// is deliberately not the managed-profile lock: `formae login` holds that one
+// while it publishes profiles, and it would deadlock the moment initialization
+// ran underneath it.
+func (s *Store) initLockPath() string {
+	return filepath.Join(s.root, initLockFileName)
 }
 
 // ManagedLockPath returns the path to the lock file that serialises updates to
@@ -186,113 +207,29 @@ func (s *Store) Use(name string) error {
 	return s.writeActive(name)
 }
 
-// linkFile is os.Link, replaced in tests to exercise the fallback below.
-var linkFile = os.Link
-
-// createIfAbsent publishes content at path unless something is already there,
-// and reports success either way: the caller wants the file to exist, not to be
-// the one who made it.
-//
-// Hard-linking a staged file is the atomic test-and-create — it fails when the
-// destination exists, so a concurrent explicit write always wins and a reader
-// never sees a half-written file. The config dir can live wherever
-// FORMAE_CONFIG_DIR points, including filesystems with no hard links (FAT, some
-// FUSE mounts), so any other link failure falls back to an exclusive create.
-// That is universal, at the cost of a brief window in which a racing reader
-// could see an empty file. Refusing to start there is the worse trade.
-func createIfAbsent(path string, content []byte, mode os.FileMode) error {
-	tmp, err := stageTemp(filepath.Dir(path), content, mode)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = os.Remove(tmp) }()
-
-	if err := linkFile(tmp, path); err == nil || errors.Is(err, os.ErrExist) {
-		return nil
-	}
-
-	f, err := createExclusive(path, mode)
-	if err != nil {
-		if errors.Is(err, os.ErrExist) {
-			return nil
-		}
-		return err
-	}
-	// The destination exists from here on, so any failure has to take it back
-	// out. Leaving a half-written file would be worse than failing: the next
-	// run sees it, treats "already there" as another process's work, and adopts
-	// debris that nothing ever repairs.
-	if _, err := f.Write(content); err != nil {
-		_ = f.Close()
-		_ = os.Remove(path)
-		return err
-	}
-	if err := f.Close(); err != nil {
-		_ = os.Remove(path)
-		return err
-	}
-	return nil
-}
-
-// createExclusive creates path and fails if it already exists. It is a variable
-// so tests can exercise the write failure that must not leave debris behind.
-var createExclusive = func(path string, mode os.FileMode) (*os.File, error) {
-	return os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
-}
-
-// stageTemp writes content to a unique temp file in dir and returns its path,
-// so publishing it is a single atomic step.
-func stageTemp(dir string, content []byte, mode os.FileMode) (string, error) {
-	f, err := os.CreateTemp(dir, ".staged-*.tmp")
-	if err != nil {
-		return "", err
-	}
-	tmp := f.Name()
-	cleanup := func(err error) (string, error) {
-		_ = os.Remove(tmp)
-		return "", err
-	}
-	if _, err := f.Write(content); err != nil {
-		_ = f.Close()
-		return cleanup(err)
-	}
-	if err := f.Close(); err != nil {
-		return cleanup(err)
-	}
-	if err := os.Chmod(tmp, mode); err != nil {
-		return cleanup(err)
-	}
-	return tmp, nil
-}
-
-// writeActive atomically points the active pointer at name, replacing whatever
-// it named before. This is someone choosing a profile, so it wins.
+// writeActive atomically writes the active pointer file using a unique temp
+// file so concurrent calls cannot clobber each other's temp before rename.
 func (s *Store) writeActive(name string) error {
 	if err := os.MkdirAll(s.root, 0o755); err != nil {
 		return fmt.Errorf("mkdir config dir: %w", err)
 	}
-	tmp, err := stageTemp(s.root, []byte(name+"\n"), 0o600)
+	f, err := os.CreateTemp(s.root, "active-*.tmp")
 	if err != nil {
+		return fmt.Errorf("create temp active: %w", err)
+	}
+	tmp := f.Name()
+	if _, err := f.WriteString(name + "\n"); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
 		return fmt.Errorf("write temp active: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("close temp active: %w", err)
 	}
 	if err := os.Rename(tmp, s.activePath()); err != nil {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("rename active: %w", err)
-	}
-	return nil
-}
-
-// setActiveIfAbsent points the active pointer at name only when there is none.
-// Every initialization branch that writes the pointer got there by observing it
-// absent, so the write means "there should be a pointer", never "it should be
-// this one". An explicit profile choice racing initialization therefore always
-// wins, and is never quietly undone.
-func (s *Store) setActiveIfAbsent(name string) error {
-	if err := os.MkdirAll(s.root, 0o755); err != nil {
-		return fmt.Errorf("mkdir config dir: %w", err)
-	}
-	if err := createIfAbsent(s.activePath(), []byte(name+"\n"), 0o600); err != nil {
-		return fmt.Errorf("write active: %w", err)
 	}
 	return nil
 }
@@ -383,37 +320,6 @@ func (s *Store) Delete(name string) error {
 	return nil
 }
 
-// activeIsUsable reports whether the active pointer names a profile that
-// exists, which is the state ensureInitialized is trying to reach.
-func (s *Store) activeIsUsable() bool {
-	name, err := s.Active()
-	if err != nil {
-		return false
-	}
-	_, statErr := os.Stat(s.ProfilePath(name))
-	return statErr == nil
-}
-
-// writeStubProfile creates a starter profile if the machine has none. It
-// appears complete or not at all, so a racing reader cannot load a half-written
-// profile, and it never replaces an existing one.
-func (s *Store) writeStubProfile(name string) error {
-	if err := createIfAbsent(s.ProfilePath(name), []byte(StubTemplate), 0o644); err != nil {
-		return fmt.Errorf("write default profile: %w", err)
-	}
-	return nil
-}
-
-// removeMigratedLegacy deletes a legacy config whose contents have been
-// migrated. A concurrent formae removing it first is success: the file being
-// gone is the whole point of the step.
-func removeMigratedLegacy(path string) error {
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	return nil
-}
-
 func copyFile(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
@@ -441,13 +347,43 @@ func copyFile(src, dst string) error {
 // file, write of the active pointer) are atomic. Returns ErrNotInitialized for
 // the two states that need user action (stale active; orphaned profiles with no
 // default).
-//
-// Concurrent callers are not serialised, and deliberately so: every mutation
-// here is idempotent, and losing a race means the state this call wanted was
-// produced by the winner. Each step therefore treats "already done" as done.
-// Several formae processes starting at once is ordinary, so a lost race must
-// not surface as a startup failure.
 func (s *Store) ensureInitialized() error {
+	// Several formae can start at once — an assistant issuing a batch of tool
+	// calls on a fresh machine is the ordinary case, not a contrived one — and
+	// they all load configuration through here. Deciding and then mutating
+	// without serialising lets one lose a race it had in fact won: a migration
+	// completed by the winner reads as a failure, and a pointer written by the
+	// winner reads as a store that needs the user's hand.
+	//
+	// Best-effort by design. Where the lock cannot be taken — a read-only dir, a
+	// filesystem without locking, a peer that outlives the wait — initialization
+	// proceeds anyway. That is exactly the behaviour before this lock existed,
+	// so a machine that cannot lock is never worse off than it was.
+	if unlock, ok := s.lockInit(); ok {
+		defer unlock()
+	}
+	return s.initialize()
+}
+
+// lockInit takes the initialization lock, waiting briefly for a peer that is
+// already initializing: the work behind it is a handful of syscalls, so waiting
+// beats racing. Reports whether the lock was taken.
+func (s *Store) lockInit() (func(), bool) {
+	if err := os.MkdirAll(s.root, 0o755); err != nil {
+		return nil, false
+	}
+	lock := flock.New(s.initLockPath())
+	ctx, cancel := context.WithTimeout(context.Background(), initLockWait)
+	defer cancel()
+	locked, err := lock.TryLockContext(ctx, initLockRetry)
+	if err != nil || !locked {
+		return nil, false
+	}
+	return func() { _ = lock.Unlock() }, true
+}
+
+// initialize is ensureInitialized's decision, run under the lock above.
+func (s *Store) initialize() error {
 	// Step 1/2: an active pointer already exists.
 	if data, err := os.ReadFile(s.activePath()); err == nil {
 		name := strings.TrimSpace(string(data))
@@ -469,10 +405,10 @@ func (s *Store) ensureInitialized() error {
 	case lerr == nil && info.Mode()&os.ModeSymlink != 0:
 		// Steps 3/4: legacy symlink.
 		if name, ok := s.validSymlinkTarget(); ok {
-			if err := s.setActiveIfAbsent(name); err != nil {
+			if err := s.writeActive(name); err != nil {
 				return err
 			}
-			return removeMigratedLegacy(cfg) // Step 3.
+			return os.Remove(cfg) // Step 3.
 		}
 		// Step 4: broken/invalid symlink — leave it, warn, fall through.
 		slog.Warn("ignoring broken legacy config symlink", "path", cfg)
@@ -484,45 +420,24 @@ func (s *Store) ensureInitialized() error {
 				return fmt.Errorf("mkdir profiles: %w", err)
 			}
 			if err := os.Rename(cfg, dst); err != nil { // Step 5a.
-				// A concurrent formae may have moved the same file first. That
-				// is the outcome this step wanted, so adopt it instead of
-				// failing a startup that merely raced.
-				if _, statErr := os.Lstat(dst); !errors.Is(err, os.ErrNotExist) || statErr != nil {
-					return fmt.Errorf("move legacy config: %w", err)
-				}
+				return fmt.Errorf("move legacy config: %w", err)
 			}
-			return s.setActiveIfAbsent("default")
+			return s.writeActive("default")
 		} else if err != nil {
 			return fmt.Errorf("stat default profile: %w", err)
 		}
 		// Step 5b: collision — adopt existing default, keep bare file, warn.
 		slog.Warn("formae.conf.pkl left untouched; profiles/default.pkl already exists — reconcile manually", "path", cfg)
-		return s.setActiveIfAbsent("default")
+		return s.writeActive("default")
 	case !errors.Is(lerr, os.ErrNotExist):
 		return fmt.Errorf("stat legacy config: %w", lerr)
 	}
 
-	// No usable formae.conf.pkl beyond this point. A concurrent formae may have
-	// initialised the store since the check at the top of this function, so ask
-	// again before deciding: adopting the winner's result beats racing it to a
-	// second, possibly different, decision.
-	if s.activeIsUsable() {
-		return nil
-	}
+	// No usable formae.conf.pkl beyond this point.
 	if _, err := os.Stat(s.ProfilePath("default")); err == nil {
-		return s.setActiveIfAbsent("default") // Step 6: orphaned default (crash recovery).
+		return s.writeActive("default") // Step 6: orphaned default (crash recovery).
 	}
 	if names, err := s.List(); err == nil && len(names) > 0 {
-		// The listing itself is evidence another formae is mid-flight: it may
-		// have finished, or created the default but not yet pointed at it.
-		// Either is Step 1 or Step 6 arriving late, not a store needing the
-		// user's hand.
-		if s.activeIsUsable() {
-			return nil
-		}
-		if _, statErr := os.Stat(s.ProfilePath("default")); statErr == nil {
-			return s.setActiveIfAbsent("default")
-		}
 		// Step 7: other orphaned profiles, no default.
 		return fmt.Errorf("%w: no active profile — run `formae profile use <name>` (available: %s)", ErrNotInitialized, strings.Join(names, ", "))
 	}
@@ -530,10 +445,10 @@ func (s *Store) ensureInitialized() error {
 	if err := os.MkdirAll(s.ProfilesDir(), 0o755); err != nil {
 		return fmt.Errorf("mkdir profiles: %w", err)
 	}
-	if err := s.writeStubProfile("default"); err != nil {
-		return err
+	if err := os.WriteFile(s.ProfilePath("default"), []byte(StubTemplate), 0o644); err != nil {
+		return fmt.Errorf("write default profile: %w", err)
 	}
-	return s.setActiveIfAbsent("default")
+	return s.writeActive("default")
 }
 
 // validSymlinkTarget returns the profile name a valid legacy symlink points at.
