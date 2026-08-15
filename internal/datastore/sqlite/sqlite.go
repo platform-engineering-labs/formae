@@ -5370,7 +5370,7 @@ func agentBootTimestamp(t time.Time) string {
 }
 
 func (d DatastoreSQLite) RecordAgentBoot(version string) error {
-	ctx, cancel := datastore.AgentBootContext()
+	ctx, cancel := datastore.AgentBootContext(d.ctx)
 	defer cancel()
 	ctx, span := sqliteTracer.Start(ctx, "RecordAgentBoot")
 	defer span.End()

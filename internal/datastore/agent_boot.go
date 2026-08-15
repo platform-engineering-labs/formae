@@ -25,7 +25,17 @@ const AgentBootWriteTimeout = 10 * time.Second
 // write, so all four share one definition of how long that write may take
 // rather than each inventing its own.
 //
+// parent is the backend's own stored lifecycle context, which every backend
+// already holds. Deriving from it rather than from context.Background() means a
+// stop cancels an in-flight write immediately instead of leaving shutdown to
+// wait out the timeout: that wait is close enough to the stop grace period to
+// turn a graceful stop into a force-kill. The timeout still bounds a stall that
+// happens while the agent is otherwise healthy.
+//
 // The caller must call the returned cancel function.
-func AgentBootContext() (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.Background(), AgentBootWriteTimeout)
+func AgentBootContext(parent context.Context) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	return context.WithTimeout(parent, AgentBootWriteTimeout)
 }

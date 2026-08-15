@@ -7,6 +7,7 @@
 package datastore
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -24,7 +25,7 @@ import (
 // checked out and closing the pool waits for it, turning an ordinary stop into
 // a hang.
 func TestAgentBootContextIsBounded(t *testing.T) {
-	ctx, cancel := AgentBootContext()
+	ctx, cancel := AgentBootContext(context.Background())
 	defer cancel()
 
 	deadline, ok := ctx.Deadline()
@@ -46,7 +47,7 @@ func TestAgentBootWriteTimeoutIsShort(t *testing.T) {
 }
 
 func TestAgentBootContextIsCancellable(t *testing.T) {
-	ctx, cancel := AgentBootContext()
+	ctx, cancel := AgentBootContext(context.Background())
 
 	cancel()
 
@@ -55,4 +56,32 @@ func TestAgentBootContextIsCancellable(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("cancel must release the context")
 	}
+}
+
+// A stop cancels the write immediately rather than leaving shutdown to wait out
+// the timeout. Without this the wait is close enough to the stop grace period
+// to turn a graceful stop into a force-kill.
+func TestAgentBootContextFollowsItsParent(t *testing.T) {
+	parent, stop := context.WithCancel(context.Background())
+	ctx, cancel := AgentBootContext(parent)
+	defer cancel()
+
+	stop()
+
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("cancelling the parent must cancel the boot write immediately")
+	}
+	assert.ErrorIs(t, ctx.Err(), context.Canceled)
+}
+
+// A backend constructed without a lifecycle context still gets a bounded one
+// rather than a panic.
+func TestAgentBootContextToleratesNilParent(t *testing.T) {
+	ctx, cancel := AgentBootContext(nil) //nolint:staticcheck // explicitly covering the nil case
+	defer cancel()
+
+	_, ok := ctx.Deadline()
+	assert.True(t, ok, "a nil parent must still yield a bounded context")
 }

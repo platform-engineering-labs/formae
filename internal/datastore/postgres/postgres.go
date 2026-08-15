@@ -5089,7 +5089,7 @@ func (d DatastorePostgres) ForceCancelResourceUpdates(commandID string, inProgre
 
 // RecordAgentBoot appends one agent_boots row for this process start.
 func (d DatastorePostgres) RecordAgentBoot(version string) error {
-	ctx, cancel := datastore.AgentBootContext()
+	ctx, cancel := datastore.AgentBootContext(d.ctx)
 	defer cancel()
 	ctx, span := tracer.Start(ctx, "RecordAgentBoot")
 	defer span.End()
