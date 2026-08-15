@@ -117,3 +117,42 @@ func writeTestFile(t *testing.T, path, body string) {
 		t.Fatal(err)
 	}
 }
+
+// A failure partway through the fallback must take the destination back out.
+// Leaving an empty file behind would be worse than failing: the next run sees
+// it, reads "already there" as another process's work, and adopts debris that
+// nothing repairs — so one transient error would make every config-loading
+// command fail until someone deleted the file by hand.
+func TestCreateIfAbsentLeavesNoDebrisWhenTheWriteFails(t *testing.T) {
+	prevLink, prevCreate := linkFile, createExclusive
+	linkFile = func(string, string) error { return errors.ErrUnsupported }
+	// Hand back a read-only handle: the destination is created, and writing to
+	// it then fails, which is the shape of a disk error partway through.
+	createExclusive = func(path string, mode os.FileMode) (*os.File, error) {
+		return os.OpenFile(path, os.O_RDONLY|os.O_CREATE|os.O_EXCL, mode)
+	}
+	t.Cleanup(func() { linkFile, createExclusive = prevLink, prevCreate })
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "active")
+
+	if err := createIfAbsent(path, []byte("default\n"), 0o600); err == nil {
+		t.Fatal("expected the write failure to surface")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("a failed create left the destination behind: stat err = %v", err)
+	}
+
+	// And the next attempt, on a healthy filesystem, still succeeds.
+	createExclusive = prevCreate
+	if err := createIfAbsent(path, []byte("default\n"), 0o600); err != nil {
+		t.Fatalf("retry after a failed create: %v", err)
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "default\n" {
+		t.Fatalf("retry wrote %q", body)
+	}
+}

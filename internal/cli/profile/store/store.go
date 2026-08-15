@@ -211,18 +211,33 @@ func createIfAbsent(path string, content []byte, mode os.FileMode) error {
 		return nil
 	}
 
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	f, err := createExclusive(path, mode)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return nil
 		}
 		return err
 	}
+	// The destination exists from here on, so any failure has to take it back
+	// out. Leaving a half-written file would be worse than failing: the next
+	// run sees it, treats "already there" as another process's work, and adopts
+	// debris that nothing ever repairs.
 	if _, err := f.Write(content); err != nil {
 		_ = f.Close()
+		_ = os.Remove(path)
 		return err
 	}
-	return f.Close()
+	if err := f.Close(); err != nil {
+		_ = os.Remove(path)
+		return err
+	}
+	return nil
+}
+
+// createExclusive creates path and fails if it already exists. It is a variable
+// so tests can exercise the write failure that must not leave debris behind.
+var createExclusive = func(path string, mode os.FileMode) (*os.File, error) {
+	return os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
 }
 
 // stageTemp writes content to a unique temp file in dir and returns its path,
