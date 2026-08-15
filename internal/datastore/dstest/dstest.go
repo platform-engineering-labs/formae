@@ -53,6 +53,12 @@ type TestDatastore struct {
 	// and none on a rejected/no-op reap. Backends that don't provide it leave it
 	// nil and the relevant assertions are skipped.
 	CountReapAuditRowsForTest func(label string) (int, error)
+	// LoadAgentBootsForTest returns every agent_boots row ordered by
+	// (booted_at, boot_id) ascending. The agent has no read path for these rows
+	// by design (the reader is a separate process), so the suite needs a direct
+	// accessor to prove they were written and that they accumulate. Backends
+	// that don't provide it leave it nil and the relevant tests t.Skip().
+	LoadAgentBootsForTest func() ([]datastore.AgentBoot, error)
 	// SetStackValidFromForTest rewrites the valid_from of the named stack's
 	// versions, in ascending version order, to the supplied timestamps. Used to
 	// age a stack deterministically instead of sleeping, so TTL expiry can be
@@ -115,6 +121,10 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunMonotonicTerminalityTest(t, newDS)
 	RunMonotonicTerminalityRaceTest(t, newDS)
 	RunForceCancelResourceUpdatesTest(t, newDS)
+
+	RunRecordAgentBoot(t, newDS)
+	RunAgentBootsAreAppendOnly(t, newDS)
+	RunRecordAgentBootEmptyVersion(t, newDS)
 
 	RunStoreResource(t, newDS)
 	RunUpdateResource(t, newDS)

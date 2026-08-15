@@ -449,3 +449,7 @@ func TestExtractResourceByKsuid_DeletedReturnsNil(t *testing.T) {
 	assert.Equal(t, 0, ds.batchGetTripletsCalls, "must not call BatchGetTripletsByKSUIDs for deleted resource")
 	assert.Equal(t, 0, ds.loadResourceByIdCalls, "must not fall back to LoadResourceById")
 }
+
+func (m *mockSummaryDatastore) RecordAgentBoot(_ string) error {
+	return nil
+}

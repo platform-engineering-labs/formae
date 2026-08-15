@@ -104,6 +104,14 @@ type ResourceVersion struct {
 	Resource *pkgmodel.Resource
 }
 
+// AgentBoot is one recorded agent process start. Append-only; see
+// Datastore.RecordAgentBoot.
+type AgentBoot struct {
+	BootID   string
+	Version  string
+	BootedAt time.Time
+}
+
 // ForceCancelRow is an in-progress resource update that should be force-canceled.
 // It carries the progress JSON to append to the row's progress_result, and the
 // serialized most-recent-progress entry to store as most_recent_progress.
@@ -505,4 +513,14 @@ type Datastore interface {
 	// (split by prior state) and the intended rows that were already terminal (Skipped). Idempotent:
 	// a retry affects zero rows and returns the same Skipped set.
 	ForceCancelResourceUpdates(commandID string, inProgress []ForceCancelRow, notStarted []ResourceUpdateRef, modifiedTs time.Time) (ForceCancelResult, error)
+
+	// RecordAgentBoot appends one row recording that this agent process started
+	// and which build it is running. Append-only: rows are never updated or
+	// deleted, so the sequence is the agent's start history.
+	//
+	// Nothing in the agent reads these rows back. They exist for an
+	// out-of-process reader that needs the running version for an installation
+	// which has not yet run any command, a question the command history cannot
+	// answer because agent_version only exists on a command row.
+	RecordAgentBoot(version string) error
 }

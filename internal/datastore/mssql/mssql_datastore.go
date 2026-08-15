@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/XSAM/otelsql"
+	"github.com/demula/mksuid/v2"
 	json "github.com/goccy/go-json"
 	_ "github.com/microsoft/go-mssqldb"
 	_ "github.com/microsoft/go-mssqldb/azuread"
@@ -963,6 +964,21 @@ func (d *DatastoreMSSQL) UpdateFormaCommandTargetUpdates(commandID string, targe
 	}
 	if rowsAffected == 0 {
 		return fmt.Errorf("forma command not found: %s", commandID)
+	}
+	return nil
+}
+
+// RecordAgentBoot appends one agent_boots row for this process start.
+func (d *DatastoreMSSQL) RecordAgentBoot(version string) error {
+	ctx, span := mssqlTracer.Start(context.Background(), "RecordAgentBoot")
+	defer span.End()
+
+	_, err := d.conn.ExecContext(ctx,
+		"INSERT INTO agent_boots (boot_id, version, booted_at) VALUES (@p1, @p2, @p3)",
+		mksuid.New().String(), version, time.Now().UTC(),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to record agent boot: %w", err)
 	}
 	return nil
 }

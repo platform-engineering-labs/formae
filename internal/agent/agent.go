@@ -164,6 +164,10 @@ func (a *Agent) Start() error {
 			return
 		}
 
+		// Append this process start to the agent's own boot history. Best-effort
+		// and never fatal; see recordBoot.
+		recordBoot(ms.Datastore, formae.Version)
+
 		// Pass auth handle to metastructure for supervisor injection
 		if authHandle != nil {
 			ms.AuthPluginHandle = authHandle

@@ -5086,3 +5086,15 @@ func (d DatastorePostgres) ForceCancelResourceUpdates(commandID string, inProgre
 
 	return result, nil
 }
+
+// RecordAgentBoot appends one agent_boots row for this process start.
+func (d DatastorePostgres) RecordAgentBoot(version string) error {
+	ctx, span := tracer.Start(context.Background(), "RecordAgentBoot")
+	defer span.End()
+
+	query := `INSERT INTO agent_boots (boot_id, version, booted_at) VALUES ($1, $2, $3)`
+	if _, err := d.pool.Exec(ctx, query, mksuid.New().String(), version, time.Now().UTC()); err != nil {
+		return fmt.Errorf("failed to record agent boot: %w", err)
+	}
+	return nil
+}

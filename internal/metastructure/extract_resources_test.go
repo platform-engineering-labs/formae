@@ -576,3 +576,7 @@ func TestExtractResources_BatchedPolicyLookups(t *testing.T) {
 	assert.Equal(t, 1, ds.loadStacksByLabelsCalls, "LoadStacksByLabels must be called exactly once")
 	assert.Equal(t, 0, ds.getStackByLabelCalls, "GetStackByLabel must not be called (N+1 avoided)")
 }
+
+func (m *mockExtractDatastore) RecordAgentBoot(_ string) error {
+	return nil
+}

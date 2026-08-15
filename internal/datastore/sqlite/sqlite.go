@@ -5355,3 +5355,19 @@ func (d DatastoreSQLite) CleanUp() error {
 // Conn returns the underlying database connection. Used by test helpers that
 // need direct SQL access (e.g. forcing health_state for guard assertions).
 func (d DatastoreSQLite) Conn() *sql.DB { return d.conn }
+
+// RecordAgentBoot appends one agent_boots row for this process start.
+func (d DatastoreSQLite) RecordAgentBoot(version string) error {
+	_, span := sqliteTracer.Start(context.Background(), "RecordAgentBoot")
+	defer span.End()
+
+	bootedAt := time.Now().UTC()
+	_, err := d.conn.Exec(
+		`INSERT INTO agent_boots (boot_id, version, booted_at) VALUES (?, ?, ?)`,
+		mksuid.New().String(), version, bootedAt.Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to record agent boot: %w", err)
+	}
+	return nil
+}
