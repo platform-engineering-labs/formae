@@ -16,6 +16,7 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -25,6 +26,10 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"time"
+
+	"github.com/gofrs/flock"
 )
 
 const (
@@ -35,6 +40,7 @@ const (
 
 	managedLedgerFileName = "managed.json"
 	managedLockFileName   = "managed.lock"
+	initLockFileName      = "init.lock"
 )
 
 // Error sentinels returned by Store methods. Callers should match using errors.Is.
@@ -44,6 +50,13 @@ var (
 	ErrNotFound       = errors.New("profile not found")
 	ErrAlreadyExists  = errors.New("profile already exists")
 	ErrIsActive       = errors.New("profile is active")
+)
+
+// initLockWait bounds how long initialization waits for a peer holding the
+// lock; initLockRetry is how often it re-checks while waiting.
+var (
+	initLockWait  = 5 * time.Second
+	initLockRetry = 10 * time.Millisecond
 )
 
 var nameRE = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
@@ -87,6 +100,14 @@ func (s *Store) ProfilesDir() string {
 // inside it so it is never mistaken for a profile.
 func (s *Store) ManagedLedgerPath() string {
 	return filepath.Join(s.root, managedLedgerFileName)
+}
+
+// initLockPath returns the lock file that serialises store initialization. It
+// is deliberately not the managed-profile lock: `formae login` holds that one
+// while it publishes profiles, and it would deadlock the moment initialization
+// ran underneath it.
+func (s *Store) initLockPath() string {
+	return filepath.Join(s.root, initLockFileName)
 }
 
 // ManagedLockPath returns the path to the lock file that serialises updates to
@@ -327,6 +348,42 @@ func copyFile(src, dst string) error {
 // the two states that need user action (stale active; orphaned profiles with no
 // default).
 func (s *Store) ensureInitialized() error {
+	// Several formae can start at once — an assistant issuing a batch of tool
+	// calls on a fresh machine is the ordinary case, not a contrived one — and
+	// they all load configuration through here. Deciding and then mutating
+	// without serialising lets one lose a race it had in fact won: a migration
+	// completed by the winner reads as a failure, and a pointer written by the
+	// winner reads as a store that needs the user's hand.
+	//
+	// Best-effort by design. Where the lock cannot be taken — a read-only dir, a
+	// filesystem without locking, a peer that outlives the wait — initialization
+	// proceeds anyway. That is exactly the behaviour before this lock existed,
+	// so a machine that cannot lock is never worse off than it was.
+	if unlock, ok := s.lockInit(); ok {
+		defer unlock()
+	}
+	return s.initialize()
+}
+
+// lockInit takes the initialization lock, waiting briefly for a peer that is
+// already initializing: the work behind it is a handful of syscalls, so waiting
+// beats racing. Reports whether the lock was taken.
+func (s *Store) lockInit() (func(), bool) {
+	if err := os.MkdirAll(s.root, 0o755); err != nil {
+		return nil, false
+	}
+	lock := flock.New(s.initLockPath())
+	ctx, cancel := context.WithTimeout(context.Background(), initLockWait)
+	defer cancel()
+	locked, err := lock.TryLockContext(ctx, initLockRetry)
+	if err != nil || !locked {
+		return nil, false
+	}
+	return func() { _ = lock.Unlock() }, true
+}
+
+// initialize is ensureInitialized's decision, run under the lock above.
+func (s *Store) initialize() error {
 	// Step 1/2: an active pointer already exists.
 	if data, err := os.ReadFile(s.activePath()); err == nil {
 		name := strings.TrimSpace(string(data))
