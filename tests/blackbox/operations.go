@@ -95,6 +95,19 @@ type Operation struct {
 	// nil map means no failure injection (all succeed).
 	DrawnOutcomes map[string]DrawnOutcome
 
+	// For OpApply: optional rename overlay. When RenameSlotIndex >= 0 and
+	// the slot is currently StateExists, the apply additionally renames the
+	// slot — the constructed forma carries Label=RenameNewLabel and
+	// Alias=<slot's current label> for that one resource. Combined with the
+	// usual property-template path this lets a single apply model:
+	//   - property change only (RenameSlotIndex = -1)
+	//   - label change only (RenameSlotIndex set, Properties left at the
+	//     same template that produced the current state)
+	//   - both (RenameSlotIndex set, Properties template changed)
+	// (RFC-0041.)
+	RenameSlotIndex int
+	RenameNewLabel  string
+
 	// Set during execution to track ordering.
 	SequenceNum int
 }
@@ -133,6 +146,12 @@ type ResourceSnapshot struct {
 	SlotIndex  int
 	State      ResourceState
 	Properties string
+	// CurrentLabel/PreviousLabel capture the rename overlay at snapshot time
+	// so a failed/canceled OpRename can be unwound. Without these a rename
+	// that was accepted then rejected during execution would leave the
+	// model's CurrentLabel pointing at a label the engine never persisted.
+	CurrentLabel  string
+	PreviousLabel string
 }
 
 // AcceptedCommand tracks a command that was accepted by the agent during the chaos phase.
@@ -185,6 +204,10 @@ type PropertyTestConfig struct {
 
 	// EnableCrashInjection allows OpCrashAgent operations (kill -9 + restart).
 	EnableCrashInjection bool
+
+	// EnableRename allows OpRename operations (RFC-0041). When set the
+	// generator may draw a rename for any slot currently in StateExists.
+	EnableRename bool
 
 	// StackCount is the number of independent stacks (1 for sequential tests, 2-3 for concurrent).
 	StackCount int
