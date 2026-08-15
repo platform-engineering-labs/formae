@@ -7,6 +7,9 @@ package connection
 import (
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -77,11 +80,19 @@ func newResolveCmd() *cobra.Command {
 
 // report renders err and returns it so the process still exits non-zero.
 //
-// In machine mode every error becomes an envelope, not only the ones this
-// command declares: a consumer parses one protocol or it parses none, and the
-// paths where that matters most are the degraded ones nobody anticipated. An
-// error we did not declare is reported as internal rather than given a code
-// that would imply we understood it.
+// Every error raised while the command runs becomes an envelope, not only the
+// ones resolution declares: a consumer parses one protocol or it parses none,
+// and the paths where that matters most are the degraded ones nobody
+// anticipated. An error we did not declare is reported as internal rather than
+// given a code that would imply we understood it.
+//
+// The limit is argv itself. An unknown flag, a bad argument count, or an
+// unreadable --output-consumer fails before this runs, and exits non-zero with
+// a plain message: the flags that say how to render a failure have not been
+// established yet, so there is nothing to render it as. Those are caller bugs
+// rather than runtime conditions — a consumer builds one fixed command line —
+// and a consumer that cannot parse what it got should report the exit status
+// rather than guess.
 func report(w io.Writer, consumer printer.Consumer, schema string, err error) error {
 	if consumer != printer.ConsumerMachine {
 		return err
@@ -100,25 +111,29 @@ func report(w io.Writer, consumer printer.Consumer, schema string, err error) er
 }
 
 // runResolve gathers what resolution decides from and runs it.
+//
+// The selection is made once and the configuration is then evaluated from that
+// exact path. Resolving the path and re-reading the active pointer separately
+// would let the pointer move between them, so the connection and credential
+// would come from one profile while the reported name and the ambiguity
+// decision described another — which is the very skew this command exists to
+// rule out.
 func runResolve(cc *cobra.Command, forceRefresh bool, cloud, issuer string) (view, error) {
-	configFile, _ := cc.Flags().GetString("config")
-	named, _ := cc.Flags().GetString("profile")
-
-	a, err := clicmd.AppFromContext(cc.Context(), configFile, "", cc)
+	sel, err := selectProfile(cc)
 	if err != nil {
 		return view{}, err
 	}
 
-	effective, profiles, err := profileContext(named)
-	if err != nil {
+	a := &app.App{}
+	if err := a.LoadConfig(sel.Path, ""); err != nil {
 		return view{}, err
 	}
 
 	return resolve(input{
 		Conn:         a.Config.Cli.Connection,
-		Profile:      effective,
-		Explicit:     named != "",
-		Profiles:     profiles,
+		Profile:      sel.Name,
+		Explicit:     sel.Explicit,
+		Profiles:     sel.Profiles,
 		Creds:        &lazyCreds{app: a},
 		ForceRefresh: forceRefresh,
 		CloudFlag:    cloud,
@@ -126,28 +141,62 @@ func runResolve(cc *cobra.Command, forceRefresh bool, cloud, issuer string) (vie
 	})
 }
 
-// profileContext reports the effective profile name and every profile that
-// exists. The effective name is part of the contract: a consumer never has to
-// reason about what "active" meant at the time of the call.
-func profileContext(named string) (string, []string, error) {
+// selection is one immutable choice of what to evaluate: which file, what to
+// call it, whether the caller named it, and what else existed at that moment.
+type selection struct {
+	Path     string
+	Name     string
+	Explicit bool
+	Profiles []string
+}
+
+// selectProfile decides what to evaluate, reading the store once.
+//
+// A named profile and an explicit config file are both explicit selections and
+// neither can be ambiguous. A config file is not a profile at all, so it
+// reports no name rather than borrowing the active one, which would describe an
+// unrelated profile and could refuse a resolution as ambiguous that the caller
+// had in fact pinned.
+func selectProfile(cc *cobra.Command) (selection, error) {
+	configFlag, _ := cc.Flags().GetString("config")
+	profileFlag, _ := cc.Flags().GetString("profile")
+
 	root, err := store.ResolveConfigDir()
 	if err != nil {
-		return "", nil, err
+		return selection{}, err
 	}
 	s := store.New(root)
 
 	names, err := s.List()
 	if err != nil {
-		return "", nil, err
+		return selection{}, err
 	}
-	if named != "" {
-		return named, names, nil
+
+	switch {
+	case profileFlag != "":
+		if err := store.ValidateName(profileFlag); err != nil {
+			return selection{}, err
+		}
+		path := s.ProfilePath(profileFlag)
+		if _, err := os.Stat(path); err != nil {
+			return selection{}, fmt.Errorf("%w: %s", store.ErrNotFound, profileFlag)
+		}
+		return selection{Path: path, Name: profileFlag, Explicit: true, Profiles: names}, nil
+
+	case configFlag != "":
+		return selection{Path: configFlag, Explicit: true, Profiles: names}, nil
+
+	default:
+		// Resolve bootstraps and migrates, and returns the path of the profile
+		// it settled on. The name is taken from that same answer rather than by
+		// reading the pointer again, so both describe one moment.
+		path, err := s.Resolve()
+		if err != nil {
+			return selection{}, err
+		}
+		name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+		return selection{Path: path, Name: name, Profiles: names}, nil
 	}
-	active, err := s.Active()
-	if err != nil {
-		return "", nil, err
-	}
-	return active, names, nil
 }
 
 // lazyCreds builds the auth client only if a credential is actually wanted.
