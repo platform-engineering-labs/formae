@@ -11,12 +11,104 @@ import (
 	"testing"
 
 	"ergo.services/ergo/gen"
+	"github.com/platform-engineering-labs/formae/internal/datastore"
 	_ "github.com/platform-engineering-labs/formae/internal/datastore/all"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
+
+// newSQLiteTestDatastore creates a throwaway in-memory sqlite datastore for
+// tests that exercise real Metastructure query methods end to end (as
+// opposed to a fake/mock Datastore), so the production wiring between
+// Metastructure, the querier, and the datastore is what's actually under
+// test.
+func newSQLiteTestDatastore(t *testing.T) datastore.Datastore {
+	t.Helper()
+	cfg := &pkgmodel.DatastoreConfig{
+		DatastoreType: pkgmodel.SqliteDatastore,
+		Sqlite:        pkgmodel.SqliteConfig{FilePath: ":memory:"},
+	}
+	ds, err := datastore.DefaultRegistry.Create("sqlite", context.Background(), cfg, "test")
+	require.NoError(t, err)
+	return ds
+}
+
+// TestListFormaCommandStatus_ExcludesSchedulerCommands exercises the real
+// ListFormaCommandStatus production path end to end: BuildStatusQuery, the
+// statusQuery.Source = SourceUser assignment, and QueryFormaCommands against
+// a real datastore. It fails if that Source assignment is ever removed from
+// ListFormaCommandStatus — without it this query would return both the user
+// and the scheduler command below instead of only the user one.
+func TestListFormaCommandStatus_ExcludesSchedulerCommands(t *testing.T) {
+	ds := newSQLiteTestDatastore(t)
+
+	userApply := &forma_command.FormaCommand{
+		ID:      util.NewID(),
+		Command: pkgmodel.CommandApply,
+		State:   forma_command.CommandStateSuccess,
+		Source:  forma_command.SourceUser,
+	}
+	autoReconcilerApply := &forma_command.FormaCommand{
+		ID:      util.NewID(),
+		Command: pkgmodel.CommandApply,
+		State:   forma_command.CommandStateSuccess,
+		Source:  forma_command.SourceAutoReconciler,
+	}
+	require.NoError(t, ds.StoreFormaCommand(userApply, userApply.ID))
+	require.NoError(t, ds.StoreFormaCommand(autoReconcilerApply, autoReconcilerApply.ID))
+
+	m := &Metastructure{Datastore: ds}
+	resp, err := m.ListFormaCommandStatus("command:apply", "client-1", 10)
+	require.NoError(t, err)
+	require.Len(t, resp.Commands, 1, "scheduler command must not appear alongside the user command")
+	assert.Equal(t, userApply.ID, resp.Commands[0].CommandID)
+}
+
+// TestCommandsForCancelQuery_UnfilteredQueryExcludesSyncButExplicitQueryReachesIt
+// exercises the real commandsForCancelQuery production path (used by
+// CancelCommandsByQuery) end to end against a real datastore. An unfiltered
+// query must not surface a sync command as a cancel candidate (mirroring the
+// exclusion QueryFormaCommands itself used to apply implicitly), but an
+// operator explicitly asking for `command:sync` — e.g. to drain scheduler
+// bookkeeping ahead of an agent restart — must still reach it.
+func TestCommandsForCancelQuery_UnfilteredQueryExcludesSyncButExplicitQueryReachesIt(t *testing.T) {
+	ds := newSQLiteTestDatastore(t)
+
+	userApply := &forma_command.FormaCommand{
+		ID:      util.NewID(),
+		Command: pkgmodel.CommandApply,
+		State:   forma_command.CommandStateInProgress,
+		Source:  forma_command.SourceUser,
+	}
+	syncCommand := &forma_command.FormaCommand{
+		ID:      util.NewID(),
+		Command: pkgmodel.CommandSync,
+		State:   forma_command.CommandStateInProgress,
+		Source:  forma_command.SourceSynchronizer,
+	}
+	require.NoError(t, ds.StoreFormaCommand(userApply, userApply.ID))
+	require.NoError(t, ds.StoreFormaCommand(syncCommand, syncCommand.ID))
+
+	m := &Metastructure{Datastore: ds}
+
+	unfiltered, err := m.commandsForCancelQuery("status:InProgress", "client-1")
+	require.NoError(t, err)
+	gotIDs := make([]string, 0, len(unfiltered))
+	for _, cmd := range unfiltered {
+		gotIDs = append(gotIDs, cmd.ID)
+	}
+	assert.Contains(t, gotIDs, userApply.ID, "unfiltered query must still surface the user command")
+	assert.NotContains(t, gotIDs, syncCommand.ID, "unfiltered query must not surface the sync command as a cancel candidate")
+
+	explicit, err := m.commandsForCancelQuery("command:sync", "client-1")
+	require.NoError(t, err)
+	require.Len(t, explicit, 1, "an explicit command:sync query must still be able to target sync commands")
+	assert.Equal(t, syncCommand.ID, explicit[0].ID)
+}
 
 func TestReplaceKSUIDs_NestedRefInArrays(t *testing.T) {
 	// This test verifies that $ref objects nested inside arrays are properly

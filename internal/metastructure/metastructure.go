@@ -915,26 +915,51 @@ func (m *Metastructure) CancelCommand(commandID string, force bool, clientID str
 	return &cancelResp, nil
 }
 
-func (m *Metastructure) CancelCommandsByQuery(query string, force bool, clientID string) (*apimodel.CancelCommandResponse, error) {
-	var commandsToCancel []*forma_command.FormaCommand
-	var err error
-
-	if query != "" {
-		// Cancel by query
-		q := querier.NewBlugeQuerier(m.Datastore)
-		commandsToCancel, err = q.QueryStatus(query, clientID, 100) // limit to 100 commands
-		if err != nil {
-			slog.Debug("Cannot get forma commands from query", "error", err)
-			return nil, err
-		}
-	} else {
-		// Cancel most recent command
+// commandsForCancelQuery resolves the candidate FormaCommands for a
+// cancel-by-query request.
+//
+// Unlike ListFormaCommandStatus (a user-facing surface that hard-restricts
+// to Source=user), this deliberately does NOT restrict by Source: an
+// operator draining scheduler bookkeeping (sync, discovery) ahead of an
+// agent restart must still be able to target those commands by an explicit
+// query, e.g. `command:sync`.
+//
+// The one exclusion preserved here is the one QueryFormaCommands itself used
+// to apply implicitly, before Source-based filtering replaced it for the
+// status-listing path: an *unfiltered* query (no explicit `command:` term)
+// must not surface sync/discovery bookkeeping by accident, since both use
+// the "sync" command type. A caller who explicitly asks for `command:sync`
+// still reaches them — only the implicit, no-command-filter case is
+// protected.
+func (m *Metastructure) commandsForCancelQuery(query, clientID string) ([]*forma_command.FormaCommand, error) {
+	if query == "" {
 		command, err := m.Datastore.GetMostRecentFormaCommandByClientID(clientID)
 		if err != nil {
-			slog.Debug("Cannot get most recent forma command", "error", err)
 			return nil, err
 		}
-		commandsToCancel = []*forma_command.FormaCommand{command}
+		return []*forma_command.FormaCommand{command}, nil
+	}
+
+	q := querier.NewBlugeQuerier(m.Datastore)
+	statusQuery, err := q.BuildStatusQuery(query, clientID, 100) // limit to 100 commands
+	if err != nil {
+		return nil, err
+	}
+	if statusQuery.Command == nil {
+		statusQuery.Command = &datastore.QueryItem[string]{
+			Item:       string(pkgmodel.CommandSync),
+			Constraint: datastore.Excluded,
+		}
+	}
+
+	return m.Datastore.QueryFormaCommands(statusQuery)
+}
+
+func (m *Metastructure) CancelCommandsByQuery(query string, force bool, clientID string) (*apimodel.CancelCommandResponse, error) {
+	commandsToCancel, err := m.commandsForCancelQuery(query, clientID)
+	if err != nil {
+		slog.Debug("Cannot get forma commands from query", "error", err)
+		return nil, err
 	}
 
 	// Filter to only InProgress commands
