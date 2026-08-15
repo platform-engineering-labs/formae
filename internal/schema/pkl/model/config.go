@@ -163,10 +163,11 @@ type OTelConfig struct {
 }
 
 type TailscaleConfig struct {
-	TLS           bool     `pkl:"tls"`
-	AuthKey       string   `pkl:"authKey"`
-	Hostname      string   `pkl:"hostname"`
-	AdvertiseTags []string `pkl:"advertiseTags"`
+	TLS             bool     `pkl:"tls"`
+	AuthKey         string   `pkl:"authKey"`
+	Hostname        string   `pkl:"hostname"`
+	AdvertiseTags   []string `pkl:"advertiseTags"`
+	EgressProxyPort int      `pkl:"egressProxyPort"`
 }
 
 type NetworkConfig struct {

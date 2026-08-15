@@ -193,10 +193,11 @@ type StackExpirerConfig struct {
 }
 
 type TailscaleConfig struct {
-	TLS           bool
-	AuthKey       string
-	Hostname      string
-	AdvertiseTags []string
+	TLS             bool
+	AuthKey         string
+	Hostname        string
+	AdvertiseTags   []string
+	EgressProxyPort int
 }
 
 type NetworkConfig struct {

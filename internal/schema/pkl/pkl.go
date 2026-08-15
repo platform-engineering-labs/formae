@@ -424,10 +424,11 @@ func translateNetworkConfig(nc *pklmodel.NetworkConfig) *pkgmodel.NetworkConfig 
 	result := &pkgmodel.NetworkConfig{Type: nc.Type}
 	if nc.Tailscale != nil {
 		result.Tailscale = &pkgmodel.TailscaleConfig{
-			TLS:           nc.Tailscale.TLS,
-			AuthKey:       nc.Tailscale.AuthKey,
-			Hostname:      nc.Tailscale.Hostname,
-			AdvertiseTags: nc.Tailscale.AdvertiseTags,
+			TLS:             nc.Tailscale.TLS,
+			AuthKey:         nc.Tailscale.AuthKey,
+			Hostname:        nc.Tailscale.Hostname,
+			AdvertiseTags:   nc.Tailscale.AdvertiseTags,
+			EgressProxyPort: nc.Tailscale.EgressProxyPort,
 		}
 	}
 	return result

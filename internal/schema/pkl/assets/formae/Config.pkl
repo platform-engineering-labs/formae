@@ -194,6 +194,7 @@ class TailscaleConfig {
     authKey: String
     hostname: String?
     advertiseTags: Listing<String>?
+    egressProxyPort: Port = 0
 }
 
 class NetworkConfig {
