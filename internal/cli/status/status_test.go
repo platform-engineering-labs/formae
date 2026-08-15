@@ -213,3 +213,46 @@ func TestExportedAgentStatsSeams(t *testing.T) {
 
 	assert.Equal(t, 100, TermWidth(io.Discard), "non-TTY writers fall back to width 100")
 }
+
+// TestCompatDispatch_NoQuery verifies the deprecated `status command` alias,
+// invoked with no --query at all, reproduces `command status` semantics: a
+// single result, collapsed to one for non-TTY/machine callers exactly like
+// the old verb's "most recent command" duty.
+func TestCompatDispatch_NoQuery(t *testing.T) {
+	opts := compatDispatch("", 10)
+	assert.True(t, opts.Single, "no query must route to single-command semantics")
+	assert.Equal(t, "", opts.Query)
+	assert.Equal(t, "", opts.CommandID)
+	assert.Equal(t, 1, opts.MaxResults, "no query must collapse to one result")
+}
+
+// TestCompatDispatch_BareIDQuery verifies `--query 'id:<ksuid>'` alone routes
+// to `command status <id>` semantics: single-command mode with the id
+// preserved, so the reattach/static-print shortcut still applies.
+func TestCompatDispatch_BareIDQuery(t *testing.T) {
+	opts := compatDispatch("id:3Hrx15wROBJnYK2T5oEXKErKMVf", 10)
+	assert.True(t, opts.Single, "a bare id query must route to single-command semantics")
+	assert.Equal(t, "id:3Hrx15wROBJnYK2T5oEXKErKMVf", opts.Query)
+	assert.Equal(t, "3Hrx15wROBJnYK2T5oEXKErKMVf", opts.CommandID,
+		"the id must be extracted so the TUI can focus it")
+	assert.Equal(t, 1, opts.MaxResults)
+}
+
+// TestCompatDispatch_OtherQuery verifies any other query routes to `command
+// list` semantics: browse mode, honoring the caller's --max-results.
+func TestCompatDispatch_OtherQuery(t *testing.T) {
+	opts := compatDispatch("client:me status:InProgress", 25)
+	assert.False(t, opts.Single, "a non-bare-id query must route to list semantics")
+	assert.Equal(t, "client:me status:InProgress", opts.Query)
+	assert.Equal(t, "", opts.CommandID)
+	assert.Equal(t, 25, opts.MaxResults, "list mode must honor --max-results, not collapse it")
+}
+
+// TestCompatDispatch_WildcardIDQueryIsNotBare verifies a wildcarded id query
+// (which cannot single out one command) is not mistaken for the bare-id
+// case, so it still routes to list semantics.
+func TestCompatDispatch_WildcardIDQueryIsNotBare(t *testing.T) {
+	opts := compatDispatch("id:abc*", 10)
+	assert.False(t, opts.Single, "a wildcarded id query must route to list semantics")
+	assert.Equal(t, 10, opts.MaxResults)
+}

@@ -102,10 +102,13 @@ func TestDeprecatedAliasesAreMarkedIndividually(t *testing.T) {
 	assert.Empty(t, agentStatus.Deprecated, "the new `agent status` must not be deprecated")
 }
 
-// TestStatusCommandCompatQueryStillWorks verifies the deprecated `status
-// command` alias still accepts --query, routing it to the new list-style
-// status path instead of failing with an unknown-flag error.
-func TestStatusCommandCompatQueryStillWorks(t *testing.T) {
+// TestStatusCommandCompatQueryFlagStillPresent verifies the deprecated
+// `status command` alias still accepts --query as a flag (so it never fails
+// with an unknown-flag error). The actual routing behavior driven by the
+// flag's value (single-command vs. list semantics) is covered by
+// compatDispatch's own tests in internal/cli/status, since that is the
+// package that owns and executes the routing decision.
+func TestStatusCommandCompatQueryFlagStillPresent(t *testing.T) {
 	sub, _, err := status.StatusCmd().Find([]string{"command"})
 	require.NoError(t, err)
 	require.NoError(t, sub.Flags().Set("query", "id:X"))

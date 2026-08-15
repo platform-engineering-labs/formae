@@ -105,14 +105,14 @@ func CommandCmd() *cobra.Command {
 			logging.SetupClientLogging(fmt.Sprintf("%s/log/client.log", config.Config.DataDirectory()))
 		},
 		RunE: func(command *cobra.Command, args []string) error {
-			opts := &StatusOptions{}
+			query, _ := command.Flags().GetString("query")
+			maxResults, _ := command.Flags().GetInt("max-results")
+
+			opts := compatDispatch(query, maxResults)
+
 			consumer, _ := command.Flags().GetString("output-consumer")
 			opts.OutputConsumer = printer.Consumer(consumer)
 			opts.OutputSchema, _ = command.Flags().GetString("output-schema")
-			query, _ := command.Flags().GetString("query")
-			maxResults, _ := command.Flags().GetInt("max-results")
-			opts.Query = strings.TrimSpace(query)
-			opts.MaxResults = maxResults
 
 			outputLayout, _ := command.Flags().GetString("output-layout")
 			opts.OutputLayout = StatusOutput(outputLayout)
@@ -130,10 +130,14 @@ func CommandCmd() *cobra.Command {
 				" | formae status command --query 'client:me command:apply'" +
 				" | formae status command --query 'stack:prod status:Success'",
 		},
-		// This verb moved to `formae command list` (and `formae command
-		// status` for a single result). Kept as a working alias for one
-		// release so existing scripts and muscle memory keep functioning.
-		Deprecated:    "use `formae command list` instead",
+		// This verb split into `formae command status` (no query, or a bare
+		// `id:<value>` query — the old "single/most-recent command" duty) and
+		// `formae command list` (any other query — the old "browse many"
+		// duty). Kept as a working alias for one release so existing scripts
+		// and muscle memory keep functioning; compatDispatch reproduces the
+		// old query-dependent branching so both duties still work correctly
+		// through this single alias.
+		Deprecated:    "use `formae command status` (no query / a bare id query) or `formae command list` (any other query) instead",
 		SilenceErrors: true,
 	}
 
@@ -147,6 +151,44 @@ func CommandCmd() *cobra.Command {
 	cmd.AddConfigFlags(command)
 
 	return command
+}
+
+// compatDispatch reproduces the old `status command` verb's query-dependent
+// dual duty, now that it's a deprecated alias mapping onto two different new
+// subcommands:
+//   - no query at all -> `command status` semantics: a single result
+//     (the most recently executed command), collapsed to one for
+//     non-TTY/machine callers exactly as the old verb did.
+//   - a bare `id:<value>` query (no wildcards, no other terms) -> `command
+//     status <id>` semantics: single-command mode with the reattach/
+//     static-print shortcut intact.
+//   - any other query -> `command list` semantics: browse mode, honoring
+//     the caller's --max-results as-is.
+func compatDispatch(query string, maxResults int) *StatusOptions {
+	trimmed := strings.TrimSpace(query)
+
+	if trimmed == "" {
+		return &StatusOptions{Single: true, MaxResults: 1}
+	}
+
+	if id, ok := bareIDQuery(trimmed); ok {
+		return &StatusOptions{Single: true, Query: trimmed, CommandID: id, MaxResults: 1}
+	}
+
+	return &StatusOptions{Single: false, Query: trimmed, MaxResults: maxResults}
+}
+
+// bareIDQuery returns the command id when query is exactly "id:<value>" with
+// no wildcards or additional terms; otherwise ok is false. It exists solely
+// to let the deprecated `status command` alias (compatDispatch) recognize
+// the old verb's single-id shape; the new subcommands never need it since
+// they know structurally whether they're in single or list mode.
+func bareIDQuery(query string) (id string, ok bool) {
+	rest, matched := strings.CutPrefix(query, "id:")
+	if !matched || rest == "" || strings.ContainsAny(rest, " *?") {
+		return "", false
+	}
+	return rest, true
 }
 
 func runStatus(app *app.App, opts *StatusOptions) error {
