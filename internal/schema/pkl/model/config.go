@@ -167,7 +167,7 @@ type TailscaleConfig struct {
 	AuthKey         string   `pkl:"authKey"`
 	Hostname        string   `pkl:"hostname"`
 	AdvertiseTags   []string `pkl:"advertiseTags"`
-	EgressProxyPort int      `pkl:"egressProxyPort"`
+	EgressProxyPort int32    `pkl:"egressProxyPort"`
 }
 
 type NetworkConfig struct {

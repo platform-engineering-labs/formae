@@ -428,7 +428,7 @@ func translateNetworkConfig(nc *pklmodel.NetworkConfig) *pkgmodel.NetworkConfig 
 			AuthKey:         nc.Tailscale.AuthKey,
 			Hostname:        nc.Tailscale.Hostname,
 			AdvertiseTags:   nc.Tailscale.AdvertiseTags,
-			EgressProxyPort: nc.Tailscale.EgressProxyPort,
+			EgressProxyPort: int(nc.Tailscale.EgressProxyPort),
 		}
 	}
 	return result
