@@ -55,6 +55,12 @@ type Options struct {
 	// color. When ≥1 such row exists and the command is terminal, a reminder
 	// footer is shown in the detail view.
 	AbandonedResources []string
+	// SortNewestFirst selects the initial multi-command sort. Browsing history
+	// (`command list`) wants the newest commands first, so it sets this; the
+	// watch and detail entry points (`command status`, and the apply/destroy/
+	// cancel --watch handoff) leave it false to keep the default urgency
+	// ordering (in-progress and failed commands surfaced first).
+	SortNewestFirst bool
 }
 
 // viewMode controls which TUI panel is active.
@@ -128,12 +134,16 @@ func New(th *theme.Theme, client Client, opts Options) Model {
 	for _, id := range opts.AbandonedResources {
 		abandonedSet[id] = true
 	}
+	sortCol, sortDir := colStatus, components.SortAsc
+	if opts.SortNewestFirst {
+		sortCol, sortDir = colAge, components.SortDesc
+	}
 	model := Model{
 		th:           th,
 		client:       client,
 		opts:         opts,
 		keys:         tui.DefaultKeyMap(),
-		multi:        multiView{th: th, sortCol: colStatus, sortDir: components.SortAsc},
+		multi:        multiView{th: th, sortCol: sortCol, sortDir: sortDir, sortHi: sortCol},
 		detail:       newDetailModel(th, 80, 24), // placeholder; resized on WindowSizeMsg
 		query:        components.NewQueryBar(th, opts.Query),
 		spinner:      components.NewSpinner(th),

@@ -254,6 +254,11 @@ func launchStatusTUI(a *app.App, opts *StatusOptions) error {
 		Query:      opts.Query,
 		MaxResults: opts.MaxResults,
 		Version:    formae.Version,
+		// Browsing history (`command list`) defaults to newest-first; the
+		// single-command watch/reattach path (`command status`) keeps the
+		// urgency-first default so in-progress and failed commands surface
+		// first.
+		SortNewestFirst: !opts.Single,
 	}
 	// Single mode (`command status`) already knows which command it targets —
 	// either the caller supplied it up front, or runStatusForHumans discovered

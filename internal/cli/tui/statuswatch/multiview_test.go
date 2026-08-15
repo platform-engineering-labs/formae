@@ -64,6 +64,22 @@ func TestSortRows_ByAgeUsesRealTimestamp(t *testing.T) {
 	assert.Equal(t, "older", rows[0].cmd.CommandID)
 }
 
+// Browsing history wants the newest first; monitoring in-flight work wants the
+// most urgent first, so the two entry points differ deliberately.
+func TestListEntryPointSortsByAgeDescending(t *testing.T) {
+	m := New(theme.New("formae"), &fakeClient{}, Options{SortNewestFirst: true})
+	if m.multi.sortCol != colAge || m.multi.sortDir != components.SortDesc {
+		t.Fatalf("list default sort = (%d,%v), want age descending", m.multi.sortCol, m.multi.sortDir)
+	}
+}
+
+func TestWatchEntryPointKeepsUrgencySort(t *testing.T) {
+	m := New(theme.New("formae"), &fakeClient{}, Options{})
+	if m.multi.sortCol != colStatus {
+		t.Fatal("the watch view must keep urgency ordering")
+	}
+}
+
 func TestVisibleColumns_DropTiers(t *testing.T) {
 	wide := visibleColumns(120)
 	for c := 0; c < colCount; c++ {
