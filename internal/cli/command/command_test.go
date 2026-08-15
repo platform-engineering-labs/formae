@@ -102,6 +102,19 @@ func TestDeprecatedAliasesAreMarkedIndividually(t *testing.T) {
 	assert.Empty(t, agentStatus.Deprecated, "the new `agent status` must not be deprecated")
 }
 
+// TestNewStatusOptionsSetsHeaderCommand verifies `command status` sets the
+// TUI header to the verb the user actually typed ("command status"), both
+// with and without a positional id, so a future change to newStatusOptions
+// (or a revert to constructing StatusOptions inline without it) cannot make
+// `command status` silently fall back to displaying the deprecated `status
+// command` alias's name instead.
+func TestNewStatusOptionsSetsHeaderCommand(t *testing.T) {
+	assert.Equal(t, "command status", newStatusOptions(nil).HeaderCommand,
+		"a bare `command status` must show its own verb in the header")
+	assert.Equal(t, "command status", newStatusOptions([]string{"3Hrx15wROBJnYK2T5oEXKErKMVf"}).HeaderCommand,
+		"`command status <id>` must show its own verb in the header")
+}
+
 // TestStatusCommandCompatQueryFlagStillPresent verifies the deprecated
 // `status command` alias still accepts --query as a flag (so it never fails
 // with an unknown-flag error). The actual routing behavior driven by the

@@ -76,6 +76,12 @@ type StatusOptions struct {
 	// never persisted, must keep seeing an empty result rather than an
 	// error).
 	FailIfNotFound bool
+	// HeaderCommand is the verb shown in the TUI header — it must name the
+	// verb the user actually typed. Every entry point that can reach
+	// launchStatusTUI (command status, command list, and the deprecated
+	// status command alias) sets this explicitly; see newStatusOptions,
+	// newListOptions, and compatDispatch respectively.
+	HeaderCommand string
 }
 
 // RunStatus is the shared entry point the `command status` and `command
@@ -179,16 +185,24 @@ func CommandCmd() *cobra.Command {
 func compatDispatch(query string, maxResults int) *StatusOptions {
 	trimmed := strings.TrimSpace(query)
 
+	// HeaderCommand is always "status command": that is the verb the user
+	// actually typed to invoke this deprecated alias, regardless of which of
+	// the two new subcommands' semantics the query routes to underneath.
 	if trimmed == "" {
-		return &StatusOptions{Single: true, MaxResults: 1}
+		return &StatusOptions{Single: true, MaxResults: 1, HeaderCommand: compatHeaderCommand}
 	}
 
 	if id, ok := bareIDQuery(trimmed); ok {
-		return &StatusOptions{Single: true, Query: trimmed, CommandID: id, MaxResults: 1}
+		return &StatusOptions{Single: true, Query: trimmed, CommandID: id, MaxResults: 1, HeaderCommand: compatHeaderCommand}
 	}
 
-	return &StatusOptions{Single: false, Query: trimmed, MaxResults: maxResults}
+	return &StatusOptions{Single: false, Query: trimmed, MaxResults: maxResults, HeaderCommand: compatHeaderCommand}
 }
+
+// compatHeaderCommand is the TUI header shown for the deprecated `status
+// command` alias: the verb the user actually typed, which must keep showing
+// even though it routes to one of the two new subcommands underneath.
+const compatHeaderCommand = "status command"
 
 // bareIDQuery returns the command id when query is exactly "id:<value>" with
 // no wildcards or additional terms; otherwise ok is false. It exists solely
@@ -254,6 +268,9 @@ func launchStatusTUI(a *app.App, opts *StatusOptions) error {
 		Query:      opts.Query,
 		MaxResults: opts.MaxResults,
 		Version:    formae.Version,
+		// The header must name the verb the user actually typed, not a
+		// hardcoded default; every caller of RunStatus sets opts.HeaderCommand.
+		HeaderCommand: opts.HeaderCommand,
 		// Browsing history (`command list`) defaults to newest-first; the
 		// single-command watch/reattach path (`command status`) keeps the
 		// urgency-first default so in-progress and failed commands surface

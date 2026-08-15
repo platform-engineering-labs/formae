@@ -35,6 +35,15 @@ func TestListResolvesZeroToCeiling(t *testing.T) {
 	assert.Equal(t, datastore.MaxFormaCommandsQueryLimit, got)
 }
 
+// TestNewListOptionsSetsHeaderCommand verifies `command list` sets the TUI
+// header to the verb the user actually typed ("command list"), so a future
+// change to newListOptions (or a revert to constructing StatusOptions inline
+// without it) cannot make `command list` silently fall back to displaying
+// the deprecated `status command` alias's name instead.
+func TestNewListOptionsSetsHeaderCommand(t *testing.T) {
+	assert.Equal(t, "command list", newListOptions().HeaderCommand)
+}
+
 // TestListRejectsNegativeMaxResults verifies a negative page size is
 // rejected as a usage error rather than silently defaulted away.
 func TestListRejectsNegativeMaxResults(t *testing.T) {

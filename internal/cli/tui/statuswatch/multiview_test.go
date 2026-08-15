@@ -80,6 +80,38 @@ func TestWatchEntryPointKeepsUrgencySort(t *testing.T) {
 	}
 }
 
+// The TUI header must always name the verb the user actually typed to invoke
+// it, not a hardcoded default: `command list` and `command status` must show
+// their own names, and the deprecated `status command` alias must keep
+// showing its own name (it still routes to one of the two new subcommands'
+// semantics underneath, but the header names what was actually typed).
+func TestHeaderCommand_NamesTheVerbActuallyTyped(t *testing.T) {
+	list := New(theme.New("formae"), &fakeClient{}, Options{HeaderCommand: "command list"})
+	if got := list.headerCommand(); got != "command list" {
+		t.Fatalf("command list header = %q, want %q", got, "command list")
+	}
+
+	single := New(theme.New("formae"), &fakeClient{}, Options{HeaderCommand: "command status"})
+	if got := single.headerCommand(); got != "command status" {
+		t.Fatalf("command status header = %q, want %q", got, "command status")
+	}
+
+	compat := New(theme.New("formae"), &fakeClient{}, Options{HeaderCommand: "status command"})
+	if got := compat.headerCommand(); got != "status command" {
+		t.Fatalf("deprecated status command alias header = %q, want %q", got, "status command")
+	}
+}
+
+// TestHeaderCommand_EmptyOptionFallsBackToDeprecatedName locks the fallback
+// used when a caller leaves HeaderCommand unset. It exists so that fallback
+// cannot silently change without a deliberate, reviewed edit to this test.
+func TestHeaderCommand_EmptyOptionFallsBackToDeprecatedName(t *testing.T) {
+	m := New(theme.New("formae"), &fakeClient{}, Options{})
+	if got := m.headerCommand(); got != "status command" {
+		t.Fatalf("empty HeaderCommand fallback = %q, want %q", got, "status command")
+	}
+}
+
 func TestVisibleColumns_DropTiers(t *testing.T) {
 	wide := visibleColumns(120)
 	for c := 0; c < colCount; c++ {

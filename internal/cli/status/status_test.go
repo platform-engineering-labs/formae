@@ -224,6 +224,8 @@ func TestCompatDispatch_NoQuery(t *testing.T) {
 	assert.Equal(t, "", opts.Query)
 	assert.Equal(t, "", opts.CommandID)
 	assert.Equal(t, 1, opts.MaxResults, "no query must collapse to one result")
+	assert.Equal(t, "status command", opts.HeaderCommand,
+		"the deprecated alias must keep showing the verb the user actually typed")
 }
 
 // TestCompatDispatch_BareIDQuery verifies `--query 'id:<ksuid>'` alone routes
@@ -236,6 +238,8 @@ func TestCompatDispatch_BareIDQuery(t *testing.T) {
 	assert.Equal(t, "3Hrx15wROBJnYK2T5oEXKErKMVf", opts.CommandID,
 		"the id must be extracted so the TUI can focus it")
 	assert.Equal(t, 1, opts.MaxResults)
+	assert.Equal(t, "status command", opts.HeaderCommand,
+		"the deprecated alias must keep showing the verb the user actually typed")
 }
 
 // TestCompatDispatch_OtherQuery verifies any other query routes to `command
@@ -246,6 +250,8 @@ func TestCompatDispatch_OtherQuery(t *testing.T) {
 	assert.Equal(t, "client:me status:InProgress", opts.Query)
 	assert.Equal(t, "", opts.CommandID)
 	assert.Equal(t, 25, opts.MaxResults, "list mode must honor --max-results, not collapse it")
+	assert.Equal(t, "status command", opts.HeaderCommand,
+		"the deprecated alias must keep showing the verb the user actually typed, even though it routes to command list's semantics underneath")
 }
 
 // TestRunStatusForHumans_TTYUnknownIDIsNotFound verifies that on a TTY, a

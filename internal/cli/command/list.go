@@ -42,6 +42,18 @@ func resolveListMaxResults(n int) (int, error) {
 	return n, nil
 }
 
+// listHeaderCommand is the TUI header shown for `command list` — the verb
+// the user actually typed, distinct from the deprecated `status command`
+// alias's own header (internal/cli/status.compatHeaderCommand).
+const listHeaderCommand = "command list"
+
+// newListOptions builds the starting StatusOptions for `command list`,
+// carrying the TUI header so it can be exercised directly by tests without a
+// live agent. RunE fills in the remaining flag-derived fields on top.
+func newListOptions() *status.StatusOptions {
+	return &status.StatusOptions{HeaderCommand: listHeaderCommand}
+}
+
 // ListCmd is `command list`: a query-driven, potentially multi-result view
 // over past and current commands. It is the direct successor of the old
 // `status command` verb.
@@ -53,7 +65,7 @@ func ListCmd() *cobra.Command {
 			logging.SetupClientLogging(fmt.Sprintf("%s/log/client.log", config.Config.DataDirectory()))
 		},
 		RunE: func(command *cobra.Command, args []string) error {
-			opts := &status.StatusOptions{}
+			opts := newListOptions()
 
 			consumer, _ := command.Flags().GetString("output-consumer")
 			opts.OutputConsumer = printer.Consumer(consumer)

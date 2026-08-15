@@ -16,6 +16,29 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/logging"
 )
 
+// statusHeaderCommand is the TUI header shown for `command status` — the
+// verb the user actually typed, distinct from the deprecated `status command`
+// alias's own header (internal/cli/status.compatHeaderCommand).
+const statusHeaderCommand = "command status"
+
+// newStatusOptions builds the StatusOptions for `command status` from its
+// optional positional id argument. It is the single place that decides the
+// single-command semantics (id, query, FailIfNotFound) and the TUI header, so
+// it can be exercised directly by tests without a live agent.
+func newStatusOptions(args []string) *status.StatusOptions {
+	opts := &status.StatusOptions{Single: true, MaxResults: 1, HeaderCommand: statusHeaderCommand}
+
+	if len(args) == 1 {
+		opts.CommandID = args[0]
+		opts.Query = "id:" + args[0]
+		// An explicitly-named id must exist: fail loudly rather than
+		// silently printing "(no commands)" for a typo'd or unknown id.
+		opts.FailIfNotFound = true
+	}
+
+	return opts
+}
+
 // StatusCmd is `command status`: it returns a single command by definition,
 // so it takes an optional positional id instead of a query, and offers
 // neither --query nor --max-results. With no id it returns the most recently
@@ -29,7 +52,7 @@ func StatusCmd() *cobra.Command {
 			logging.SetupClientLogging(fmt.Sprintf("%s/log/client.log", config.Config.DataDirectory()))
 		},
 		RunE: func(command *cobra.Command, args []string) error {
-			opts := &status.StatusOptions{Single: true, MaxResults: 1}
+			opts := newStatusOptions(args)
 
 			consumer, _ := command.Flags().GetString("output-consumer")
 			opts.OutputConsumer = printer.Consumer(consumer)
@@ -37,14 +60,6 @@ func StatusCmd() *cobra.Command {
 
 			outputLayout, _ := command.Flags().GetString("output-layout")
 			opts.OutputLayout = status.StatusOutput(outputLayout)
-
-			if len(args) == 1 {
-				opts.CommandID = args[0]
-				opts.Query = "id:" + args[0]
-				// An explicitly-named id must exist: fail loudly rather than
-				// silently printing "(no commands)" for a typo'd or unknown id.
-				opts.FailIfNotFound = true
-			}
 
 			configFile, _ := command.Flags().GetString("config")
 			app, err := cmd.AppFromContext(command.Context(), configFile, "", command)
