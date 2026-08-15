@@ -54,7 +54,7 @@ func TestRunStatusForHumans_TTYInteractiveOnlyWhenRunning(t *testing.T) {
 	printBanner = func(_ *app.App) {}
 
 	stubFetch := func(state string) {
-		fetchCommandsStatus = func(_ *app.App, _ string, _ int) (*apimodel.ListCommandStatusResponse, []string, error) {
+		fetchCommandsStatus = func(_ *app.App, _ string, _ int, _ apimodel.CommandScope) (*apimodel.ListCommandStatusResponse, []string, error) {
 			return &apimodel.ListCommandStatusResponse{
 				Commands: []apimodel.Command{{CommandID: "c1", State: state}},
 			}, nil, nil
@@ -138,7 +138,7 @@ func TestRunStatusForHumans_SingleDiscoversCommandIDWhenRunning(t *testing.T) {
 		fetchCommandsStatus = origFetch
 	})
 	isTerminal = func(_ io.Writer) bool { return true }
-	fetchCommandsStatus = func(_ *app.App, _ string, _ int) (*apimodel.ListCommandStatusResponse, []string, error) {
+	fetchCommandsStatus = func(_ *app.App, _ string, _ int, _ apimodel.CommandScope) (*apimodel.ListCommandStatusResponse, []string, error) {
 		return &apimodel.ListCommandStatusResponse{
 			Commands: []apimodel.Command{{CommandID: "discovered-1", State: "InProgress"}},
 		}, nil, nil
@@ -270,7 +270,7 @@ func TestRunStatusForHumans_TTYUnknownIDIsNotFound(t *testing.T) {
 	})
 	isTerminal = func(_ io.Writer) bool { return true }
 	printBanner = func(_ *app.App) {}
-	fetchCommandsStatus = func(_ *app.App, _ string, _ int) (*apimodel.ListCommandStatusResponse, []string, error) {
+	fetchCommandsStatus = func(_ *app.App, _ string, _ int, _ apimodel.CommandScope) (*apimodel.ListCommandStatusResponse, []string, error) {
 		return &apimodel.ListCommandStatusResponse{Commands: []apimodel.Command{}}, nil, nil
 	}
 	tuiCalls := 0
@@ -303,7 +303,7 @@ func TestRunStatusForHumans_NonTTYUnknownIDIsNotFound(t *testing.T) {
 	})
 	isTerminal = func(_ io.Writer) bool { return false }
 	printBanner = func(_ *app.App) {}
-	fetchCommandsStatus = func(_ *app.App, _ string, _ int) (*apimodel.ListCommandStatusResponse, []string, error) {
+	fetchCommandsStatus = func(_ *app.App, _ string, _ int, _ apimodel.CommandScope) (*apimodel.ListCommandStatusResponse, []string, error) {
 		return &apimodel.ListCommandStatusResponse{Commands: []apimodel.Command{}}, nil, nil
 	}
 
@@ -337,7 +337,7 @@ func TestRunStatusForHumans_DeprecatedAliasToleratesUnmatchedID(t *testing.T) {
 	})
 	isTerminal = func(_ io.Writer) bool { return false }
 	printBanner = func(_ *app.App) {}
-	fetchCommandsStatus = func(_ *app.App, _ string, _ int) (*apimodel.ListCommandStatusResponse, []string, error) {
+	fetchCommandsStatus = func(_ *app.App, _ string, _ int, _ apimodel.CommandScope) (*apimodel.ListCommandStatusResponse, []string, error) {
 		return &apimodel.ListCommandStatusResponse{Commands: []apimodel.Command{}}, nil, nil
 	}
 
@@ -364,7 +364,7 @@ func TestRunStatusForHumans_NoCommandsEverIsNotAnError(t *testing.T) {
 	})
 	isTerminal = func(_ io.Writer) bool { return false }
 	printBanner = func(_ *app.App) {}
-	fetchCommandsStatus = func(_ *app.App, _ string, _ int) (*apimodel.ListCommandStatusResponse, []string, error) {
+	fetchCommandsStatus = func(_ *app.App, _ string, _ int, _ apimodel.CommandScope) (*apimodel.ListCommandStatusResponse, []string, error) {
 		return &apimodel.ListCommandStatusResponse{Commands: []apimodel.Command{}}, nil, nil
 	}
 
@@ -379,7 +379,7 @@ func TestRunStatusForHumans_NoCommandsEverIsNotAnError(t *testing.T) {
 func TestRunStatusForMachines_UnknownIDIsNotFound(t *testing.T) {
 	origFetch := fetchCommandsStatus
 	t.Cleanup(func() { fetchCommandsStatus = origFetch })
-	fetchCommandsStatus = func(_ *app.App, _ string, _ int) (*apimodel.ListCommandStatusResponse, []string, error) {
+	fetchCommandsStatus = func(_ *app.App, _ string, _ int, _ apimodel.CommandScope) (*apimodel.ListCommandStatusResponse, []string, error) {
 		return &apimodel.ListCommandStatusResponse{Commands: []apimodel.Command{}}, nil, nil
 	}
 
@@ -403,4 +403,87 @@ func TestCompatDispatch_WildcardIDQueryIsNotBare(t *testing.T) {
 	opts := compatDispatch("id:abc*", 10)
 	assert.False(t, opts.Single, "a wildcarded id query must route to list semantics")
 	assert.Equal(t, 10, opts.MaxResults)
+}
+
+// TestCommandListWithNoQueryAsksForAgentScope verifies a bare `formae
+// command list` asks the agent for every client's commands, so the list is
+// the agent's command history rather than just this client's.
+func TestCommandListWithNoQueryAsksForAgentScope(t *testing.T) {
+	origFetch := fetchCommandsStatus
+	t.Cleanup(func() { fetchCommandsStatus = origFetch })
+
+	var gotScope apimodel.CommandScope
+	var gotN int
+	fetchCommandsStatus = func(_ *app.App, _ string, n int, scope apimodel.CommandScope) (*apimodel.ListCommandStatusResponse, []string, error) {
+		gotScope, gotN = scope, n
+		return &apimodel.ListCommandStatusResponse{Commands: []apimodel.Command{}}, nil, nil
+	}
+
+	// The shape internal/cli/command.newListOptions produces for a bare
+	// `command list`: browse mode, no query, the caller's page size.
+	opts := &StatusOptions{
+		Single:         false,
+		MaxResults:     50,
+		OutputConsumer: printer.ConsumerMachine,
+		OutputSchema:   "json",
+		OutputLayout:   StatusOutputSummary,
+	}
+	require.NoError(t, runStatusForMachines(&app.App{}, opts))
+	assert.Equal(t, apimodel.CommandScopeAgent, gotScope)
+	assert.Equal(t, 50, gotN, "the requested page size must reach the agent even without a query")
+}
+
+// TestCommandStatusWithNoArgumentAsksForClientScope verifies a bare `formae
+// command status` stays scoped to the calling client: it answers with your
+// own most recent command, not whichever client's command happens to be
+// newest agent-wide.
+func TestCommandStatusWithNoArgumentAsksForClientScope(t *testing.T) {
+	origFetch := fetchCommandsStatus
+	t.Cleanup(func() { fetchCommandsStatus = origFetch })
+
+	var gotScope apimodel.CommandScope
+	fetchCommandsStatus = func(_ *app.App, _ string, _ int, scope apimodel.CommandScope) (*apimodel.ListCommandStatusResponse, []string, error) {
+		gotScope = scope
+		return &apimodel.ListCommandStatusResponse{Commands: []apimodel.Command{}}, nil, nil
+	}
+
+	// The shape internal/cli/command.newStatusOptions produces with no
+	// positional id.
+	opts := &StatusOptions{
+		Single:         true,
+		MaxResults:     1,
+		OutputConsumer: printer.ConsumerMachine,
+		OutputSchema:   "json",
+		OutputLayout:   StatusOutputSummary,
+	}
+	require.NoError(t, runStatusForMachines(&app.App{}, opts))
+	assert.Equal(t, apimodel.CommandScopeClient, gotScope)
+}
+
+// TestCommandStatusWithAnIDAsksForAgentScope verifies an explicitly named
+// command id is looked up agent-wide: an id you were handed identifies one
+// command regardless of which client submitted it.
+func TestCommandStatusWithAnIDAsksForAgentScope(t *testing.T) {
+	origFetch := fetchCommandsStatus
+	t.Cleanup(func() { fetchCommandsStatus = origFetch })
+
+	var gotScope apimodel.CommandScope
+	fetchCommandsStatus = func(_ *app.App, _ string, _ int, scope apimodel.CommandScope) (*apimodel.ListCommandStatusResponse, []string, error) {
+		gotScope = scope
+		return &apimodel.ListCommandStatusResponse{
+			Commands: []apimodel.Command{{CommandID: "c1", State: "Success"}},
+		}, nil, nil
+	}
+
+	opts := &StatusOptions{
+		Single:         true,
+		CommandID:      "c1",
+		Query:          "id:c1",
+		MaxResults:     1,
+		OutputConsumer: printer.ConsumerMachine,
+		OutputSchema:   "json",
+		OutputLayout:   StatusOutputSummary,
+	}
+	require.NoError(t, runStatusForMachines(&app.App{}, opts))
+	assert.Equal(t, apimodel.CommandScopeAgent, gotScope)
 }

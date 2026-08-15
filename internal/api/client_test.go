@@ -57,7 +57,7 @@ func TestGetFormaCommandsStatusNotFoundReturnsConcreteEmptyResult(t *testing.T) 
 
 	c := NewClient(&pkgmodel.ClassicConnection{URL: srv.URL}, nil, srv.Client())
 
-	resp, err := c.GetFormaCommandsStatus("id:unknown", "test-client", 1)
+	resp, err := c.GetFormaCommandsStatus("id:unknown", "test-client", 1, apimodel.CommandScopeAgent)
 	require.NoError(t, err)
 	require.NotNil(t, resp, "a 404 must resolve to a concrete empty result, not a bare nil")
 	assert.Empty(t, resp.Commands)

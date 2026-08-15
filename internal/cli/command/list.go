@@ -54,9 +54,13 @@ func newListOptions() *status.StatusOptions {
 	return &status.StatusOptions{HeaderCommand: listHeaderCommand}
 }
 
-// ListCmd is `command list`: a query-driven, potentially multi-result view
-// over past and current commands. It is the direct successor of the old
-// `status command` verb.
+// ListCmd is `command list`: a multi-result view over past and current
+// commands. It is the direct successor of the old `status command` verb.
+//
+// With no --query it lists the agent's most recent user commands, newest
+// first, across every client (`--query 'client:me'` narrows it to this
+// client's own). Only user-initiated commands are ever listed; scheduler
+// bookkeeping is not part of the user-facing command history.
 func ListCmd() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "list",
@@ -93,7 +97,8 @@ func ListCmd() *cobra.Command {
 			return status.RunStatus(app, opts)
 		},
 		Annotations: map[string]string{
-			"examples": "formae command list --query 'status:InProgress' --max-results 10" +
+			"examples": "formae command list" +
+				" | formae command list --query 'status:InProgress' --max-results 10" +
 				" | formae command list --query 'client:me command:apply'" +
 				" | formae command list --query 'stack:prod status:Success'",
 		},
@@ -106,7 +111,7 @@ func ListCmd() *cobra.Command {
 	command.Flags().String("output-schema", "json", "The schema to use for the machine output (json | yaml)")
 	command.Flags().String("query", "", "Query that allows to find past and current commands by their attributes. Use * as a wildcard anywhere (e.g. foo*, *foo, *foo*, foo*bar). ? and regex are not yet supported.")
 	command.Flags().String("output-layout", string(status.StatusOutputSummary), fmt.Sprintf("What to print as status output (%s | %s)", status.StatusOutputSummary, status.StatusOutputDetailed))
-	command.Flags().Int("max-results", defaultListMaxResults, "Maximum number of command results to return when using a query")
+	command.Flags().Int("max-results", defaultListMaxResults, "Maximum number of command results to return")
 	cmd.AddConfigFlags(command)
 
 	return command

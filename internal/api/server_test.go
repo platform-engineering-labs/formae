@@ -753,6 +753,45 @@ func TestServer_ListCommandStatusClampsMaxResultsToCeiling(t *testing.T) {
 	}
 }
 
+// TestServer_ListCommandStatusScopeParameter verifies how the endpoint maps
+// the scope parameter: 'agent' asks for every client's commands, while an
+// absent or unrecognized value keeps the client-scoped default so callers
+// written against the older API are unaffected.
+func TestServer_ListCommandStatusScopeParameter(t *testing.T) {
+	cases := []struct {
+		name string
+		url  string
+		want apimodel.CommandScope
+	}{
+		{"explicit agent scope", "/commands/status?scope=agent", apimodel.CommandScopeAgent},
+		{"explicit client scope", "/commands/status?scope=client", apimodel.CommandScopeClient},
+		{"absent scope", "/commands/status", apimodel.CommandScopeClient},
+		{"unrecognized scope", "/commands/status?scope=galaxy", apimodel.CommandScopeClient},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			meta := &apitest.FakeMetastructure{
+				ListResponses: []apitest.WrappedListResponse{{
+					ListCommandStatusResponse: &apimodel.ListCommandStatusResponse{
+						Commands: []apimodel.Command{{CommandID: "c1", State: "Success"}},
+					},
+				}},
+			}
+			server := NewServer(t.Context(), meta, nil, nil, nil, nil)
+
+			req := httptest.NewRequest("GET", tc.url, nil)
+			req.Header.Set("Client-ID", "test-client-id")
+			rec := httptest.NewRecorder()
+			c := server.echo.NewContext(req, rec)
+
+			require.NoError(t, server.ListCommandStatus(c))
+			require.Len(t, meta.RecordedListScopes, 1)
+			assert.Equal(t, tc.want, meta.RecordedListScopes[0])
+		})
+	}
+}
+
 func TestServer_CancelCommands_Success(t *testing.T) {
 	fakeMetastructure := &apitest.FakeMetastructure{
 		CancelResponses: []apitest.WrappedCancelResponse{

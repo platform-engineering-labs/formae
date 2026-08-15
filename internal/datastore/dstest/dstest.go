@@ -108,6 +108,7 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunCommandSourceRoundTrip(t, newDS)
 	RunGetMostRecentFormaCommandByClientID(t, newDS)
 	RunGetMostRecentFormaCommandByClientIDSkipsSchedulers(t, newDS)
+	RunGetMostRecentFormaCommandByClientIDIgnoresSourcelessRows(t, newDS)
 	RunGetMostRecentNonReconcileFormaCommandsByStack(t, newDS)
 	RunQueryFormaCommands(t, newDS)
 	RunQueryFormaCommandsUserOnly(t, newDS)

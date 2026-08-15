@@ -13,7 +13,6 @@ import (
 	querystr "github.com/blugelabs/query_string"
 
 	"github.com/platform-engineering-labs/formae/internal/datastore"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
@@ -28,24 +27,11 @@ func NewBlugeQuerier(datastore datastore.Datastore) *BlugeQuerier {
 	}
 }
 
-func (b *BlugeQuerier) QueryStatus(queryString string, clientID string, n int) ([]*forma_command.FormaCommand, error) {
-	if queryString == "" {
-		return b.datastore.QueryFormaCommands(&datastore.StatusQuery{N: n})
-	}
-
-	statusQuery, err := b.statusQuery(queryString, clientID, n)
-	if err != nil {
-		return nil, err
-	}
-
-	return b.datastore.QueryFormaCommands(statusQuery)
-}
-
 // BuildStatusQuery parses queryString into a *datastore.StatusQuery without
-// executing it, so a caller (ListFormaCommandStatus) can add filters of its
-// own — such as restricting Source — before running the query. An empty
-// queryString returns an unconstrained query (matching QueryStatus's
-// match-everything behavior).
+// executing it, so its caller (ListFormaCommandStatus) can add filters of its
+// own — restricting Source to user-initiated commands — before running the
+// query. An empty queryString returns an unconstrained query: every command
+// the caller's own filters allow, newest first, bounded by n.
 func (b *BlugeQuerier) BuildStatusQuery(queryString string, clientID string, n int) (*datastore.StatusQuery, error) {
 	if queryString == "" {
 		return &datastore.StatusQuery{N: n}, nil

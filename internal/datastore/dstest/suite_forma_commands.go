@@ -423,9 +423,39 @@ func RunGetMostRecentFormaCommandByClientID(t *testing.T, newDS func(t *testing.
 		// The most recent command should be the newer one
 		assert.Equal(t, newerCommand.StartTs, retrieved.StartTs)
 
-		// Test with non-existent client ID
-		_, err = ds.GetMostRecentFormaCommandByClientID("non-existent-client")
-		assert.Error(t, err)
+		// A client with no commands is an empty answer, not an error: the
+		// status path turns it into "no commands", and an error here would
+		// surface to the user as a 500.
+		missing, err := ds.GetMostRecentFormaCommandByClientID("non-existent-client")
+		assert.NoError(t, err)
+		assert.Nil(t, missing)
+	})
+}
+
+// RunGetMostRecentFormaCommandByClientIDIgnoresSourcelessRows verifies that
+// commands stored without a source (rows written before the column existed)
+// are not returned, and that a client whose history consists only of such
+// rows gets an empty answer rather than an error.
+func RunGetMostRecentFormaCommandByClientIDIgnoresSourcelessRows(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("GetMostRecentFormaCommandByClientIDIgnoresSourcelessRows", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		clientID := "legacy-client"
+		ts, _ := time.Parse(time.RFC3339, "2023-01-01T10:00:00Z")
+		sourceless := &forma_command.FormaCommand{
+			ID:       util.NewID(),
+			ClientID: clientID,
+			StartTs:  ts,
+			Command:  pkgmodel.CommandApply,
+			State:    forma_command.CommandStateSuccess,
+		}
+		assert.NoError(t, ds.StoreFormaCommand(sourceless, sourceless.ID))
+
+		got, err := ds.GetMostRecentFormaCommandByClientID(clientID)
+		assert.NoError(t, err)
+		assert.Nil(t, got)
 	})
 }
 

@@ -385,7 +385,7 @@ func (s *Server) CommandStatus(c echo.Context) error {
 	}
 	query := fmt.Sprintf("id:%s", id)
 
-	return s.getCommandStatus(c, clientID, query, 1)
+	return s.getCommandStatus(c, clientID, query, 1, apimodel.CommandScopeAgent)
 }
 
 // @Summary Get the status of multiple Forma commands
@@ -393,10 +393,12 @@ func (s *Server) CommandStatus(c echo.Context) error {
 // @Tags commands
 // @Produce json
 // @Param Client-ID header string true "Unique identifier for the client."
-// @Param query query string false "The query string to select the commands. If empty, retrieves the status of the most recent command."
-// @Param max_results query string false "The maximum number of command statuses to return (default is 10)."
+// @Param query query string false "The query string to select the commands. If empty, the scope parameter decides what is returned."
+// @Param scope query string false "How an empty query is answered: 'client' (default) returns the calling client's most recent command; 'agent' returns every client's commands, newest first. Ignored when query is set." Enums(client, agent)
+// @Param max_results query string false "The maximum number of command statuses to return (default is 10, capped at 200)."
 // @Success 200 {object} apimodel.ListCommandStatusResponse "OK: The commands' execution statuses."
 // @Failure 400 {string} string "Bad Request: Missing or invalid parameters."
+// @Failure 404 {string} string "Not Found: No commands matched."
 // @Failure 500 {string} string "Internal Server Error."
 // @Router /commands/status [get]
 func (s *Server) ListCommandStatus(c echo.Context) error {
@@ -417,7 +419,15 @@ func (s *Server) ListCommandStatus(c echo.Context) error {
 		n = datastore.MaxFormaCommandsQueryLimit
 	}
 
-	return s.getCommandStatus(c, clientID, query, n)
+	// An absent or unrecognized scope keeps the historical empty-query
+	// behavior (the calling client's most recent command), so callers written
+	// against the older API are unaffected.
+	scope := apimodel.CommandScopeClient
+	if apimodel.CommandScope(c.QueryParam("scope")) == apimodel.CommandScopeAgent {
+		scope = apimodel.CommandScopeAgent
+	}
+
+	return s.getCommandStatus(c, clientID, query, n, scope)
 }
 
 // @Summary List resources
@@ -703,8 +713,8 @@ func (s *Server) ForceReap(c echo.Context) error {
 }
 
 // getCommandStatus is a helper to retrieve command status and handle common error/status logic
-func (s *Server) getCommandStatus(c echo.Context, clientID, query string, n int) error {
-	result, err := s.metastructure.ListFormaCommandStatus(query, clientID, n)
+func (s *Server) getCommandStatus(c echo.Context, clientID, query string, n int, scope apimodel.CommandScope) error {
+	result, err := s.metastructure.ListFormaCommandStatus(query, clientID, n, scope)
 	if err != nil {
 		return mapError(c, err)
 	}

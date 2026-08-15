@@ -615,7 +615,7 @@ func (d *DatastoreMSSQL) GetMostRecentFormaCommandByClientID(clientID string) (*
 		return nil, err
 	}
 	if len(commands) == 0 {
-		return nil, fmt.Errorf("no forma commands found for client: %v", clientID)
+		return nil, nil
 	}
 	return commands[0], nil
 }

@@ -267,7 +267,16 @@ type reconcileResult struct {
 // prepareReconcile builds a reconcile FormaCommand and Changeset from the stack's last-reconcile snapshot.
 // It returns nil (with no error) when no drift is detected. The caller is responsible for persisting
 // the command and starting the changeset execution.
-func prepareReconcile(ds datastore.Datastore, stackLabel string, clientID string, subject string, subjectName string) (*reconcileResult, error) {
+//
+// source records who initiated the command, which is what decides whether it
+// is part of the user-facing command history: a user asking for a
+// force-reconcile passes forma_command.SourceUser and can then follow the
+// returned command id through `formae command status`, while the scheduled
+// reconcile beat passes forma_command.SourceAutoReconciler and stays out of
+// the way. It is distinct from the resource updates' own source below, which
+// records the mechanism that produced them (an auto-reconcile) either way,
+// and which decides what counts as the stack's reconcile baseline.
+func prepareReconcile(ds datastore.Datastore, stackLabel string, clientID string, subject string, subjectName string, source forma_command.Source) (*reconcileResult, error) {
 	// Get resources at last reconcile as full Resource objects
 	snapshots, err := ds.GetResourcesAtLastReconcile(stackLabel)
 	if err != nil {
@@ -362,7 +371,7 @@ func prepareReconcile(ds datastore.Datastore, stackLabel string, clientID string
 		clientID,
 		subject,
 		subjectName,
-		forma_command.SourceAutoReconciler,
+		source,
 	)
 
 	// Generate any synthetic Resolve target ops, then build the changeset.
@@ -395,7 +404,7 @@ func startReconcile(proc gen.Process, data *AutoReconcilerData, stackLabel strin
 		return "", nil // Not an error - just skip and reschedule
 	}
 
-	result, err := prepareReconcile(data.datastore, stackLabel, "auto-reconciler", "", "")
+	result, err := prepareReconcile(data.datastore, stackLabel, "auto-reconciler", "", "", forma_command.SourceAutoReconciler)
 	if err != nil {
 		return "", err
 	}

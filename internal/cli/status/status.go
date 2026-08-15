@@ -36,10 +36,24 @@ var (
 	printBanner = func(a *app.App) { a.PrintBanner() }
 	// fetchCommandsStatus is a seam so tests can drive the running/terminal
 	// decision (interactive vs static) without a live agent.
-	fetchCommandsStatus = func(a *app.App, query string, maxResults int) (*apimodel.ListCommandStatusResponse, []string, error) {
-		return a.GetCommandsStatus(query, maxResults, false)
+	fetchCommandsStatus = func(a *app.App, query string, maxResults int, scope apimodel.CommandScope) (*apimodel.ListCommandStatusResponse, []string, error) {
+		return a.GetCommandsStatusScoped(query, maxResults, false, scope)
 	}
 )
+
+// commandScopeFor picks how the agent should answer an empty query.
+//
+// `command status` with no id (Single mode, no query) means "my most recent
+// command", so it stays scoped to the calling client. Everything else —
+// notably a bare `command list` — browses the agent's command history, which
+// spans every client; `client:me` narrows it back down. A non-empty query
+// carries its own narrowing, so the scope is inert there.
+func commandScopeFor(opts *StatusOptions) apimodel.CommandScope {
+	if opts.Single && opts.Query == "" {
+		return apimodel.CommandScopeClient
+	}
+	return apimodel.CommandScopeAgent
+}
 
 type StatusOutput string
 
@@ -298,7 +312,7 @@ func runStatusForHumans(a *app.App, opts *StatusOptions) error {
 	//     a static one-shot summary instead of taking over the screen.
 	if isTerminal(os.Stdout) {
 		if opts.Single {
-			status, nags, err := fetchCommandsStatus(a, opts.Query, opts.MaxResults)
+			status, nags, err := fetchCommandsStatus(a, opts.Query, opts.MaxResults, commandScopeFor(opts))
 			if err != nil {
 				msg, renderErr := errfmt.Render(err)
 				if renderErr != nil {
@@ -316,9 +330,15 @@ func runStatusForHumans(a *app.App, opts *StatusOptions) error {
 				return nil
 			}
 			// Still running: capture the matched command's id (it may not have
-			// been supplied up front) so launchTUI can focus it.
+			// been supplied up front) so launchTUI can focus it, and pin the
+			// watch's polling query to that id. Without the pin a bare
+			// `command status` would keep re-asking "the most recent command"
+			// and could drift onto a different command mid-watch.
 			if opts.CommandID == "" && len(status.Commands) == 1 {
 				opts.CommandID = status.Commands[0].CommandID
+			}
+			if opts.Query == "" && opts.CommandID != "" {
+				opts.Query = "id:" + opts.CommandID
 			}
 		}
 		return launchTUI(a, opts)
@@ -327,7 +347,7 @@ func runStatusForHumans(a *app.App, opts *StatusOptions) error {
 	// Human + non-TTY → print-and-exit.
 	printBanner(a)
 
-	status, nags, err := fetchCommandsStatus(a, opts.Query, opts.MaxResults)
+	status, nags, err := fetchCommandsStatus(a, opts.Query, opts.MaxResults, commandScopeFor(opts))
 	if err != nil {
 		msg, renderErr := errfmt.Render(err)
 		if renderErr != nil {
@@ -387,7 +407,7 @@ func checkCommandFound(opts *StatusOptions, status *apimodel.ListCommandStatusRe
 }
 
 func runStatusForMachines(app *app.App, opts *StatusOptions) error {
-	status, _, err := fetchCommandsStatus(app, opts.Query, opts.MaxResults)
+	status, _, err := fetchCommandsStatus(app, opts.Query, opts.MaxResults, commandScopeFor(opts))
 	if err != nil {
 		msg, renderErr := errfmt.Render(err)
 		if renderErr != nil {

@@ -9,12 +9,17 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"ergo.services/ergo/gen"
 	"github.com/platform-engineering-labs/formae/internal/datastore"
 	_ "github.com/platform-engineering-labs/formae/internal/datastore/all"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/types"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
+	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -62,7 +67,7 @@ func TestListFormaCommandStatus_ExcludesSchedulerCommands(t *testing.T) {
 	require.NoError(t, ds.StoreFormaCommand(autoReconcilerApply, autoReconcilerApply.ID))
 
 	m := &Metastructure{Datastore: ds}
-	resp, err := m.ListFormaCommandStatus("command:apply", "client-1", 10)
+	resp, err := m.ListFormaCommandStatus("command:apply", "client-1", 10, apimodel.CommandScopeAgent)
 	require.NoError(t, err)
 	require.Len(t, resp.Commands, 1, "scheduler command must not appear alongside the user command")
 	assert.Equal(t, userApply.ID, resp.Commands[0].CommandID)
@@ -108,6 +113,95 @@ func TestCommandsForCancelQuery_UnfilteredQueryExcludesSyncButExplicitQueryReach
 	require.NoError(t, err)
 	require.Len(t, explicit, 1, "an explicit command:sync query must still be able to target sync commands")
 	assert.Equal(t, syncCommand.ID, explicit[0].ID)
+}
+
+// storeUserCommand persists a terminal user-initiated apply attributed to
+// clientID and returns its id, so scope tests can compose a multi-client
+// command history.
+func storeUserCommand(t *testing.T, ds datastore.Datastore, clientID string) string {
+	t.Helper()
+	cmd := &forma_command.FormaCommand{
+		ID:       util.NewID(),
+		Command:  pkgmodel.CommandApply,
+		State:    forma_command.CommandStateSuccess,
+		ClientID: clientID,
+		Source:   forma_command.SourceUser,
+	}
+	require.NoError(t, ds.StoreFormaCommand(cmd, cmd.ID))
+	return cmd.ID
+}
+
+// TestListFormaCommandStatus_AgentScopeSpansClients covers `formae command
+// list` with no query: it lists user commands agent-wide, so a command
+// submitted by another client is visible to the caller.
+func TestListFormaCommandStatus_AgentScopeSpansClients(t *testing.T) {
+	ds := newSQLiteTestDatastore(t)
+
+	mine := storeUserCommand(t, ds, "client-1")
+	theirs := storeUserCommand(t, ds, "client-2")
+
+	m := &Metastructure{Datastore: ds}
+	resp, err := m.ListFormaCommandStatus("", "client-1", 50, apimodel.CommandScopeAgent)
+	require.NoError(t, err)
+
+	gotIDs := make([]string, 0, len(resp.Commands))
+	for _, cmd := range resp.Commands {
+		gotIDs = append(gotIDs, cmd.CommandID)
+	}
+	assert.Contains(t, gotIDs, mine)
+	assert.Contains(t, gotIDs, theirs, "a command list must span every client, not just the caller")
+}
+
+// TestListFormaCommandStatus_AgentScopeReturnsAPage covers the page-size
+// contract of a bare `formae command list`: with more commands than one
+// stored, it returns a page of them (up to the requested count), not a
+// single most-recent command.
+func TestListFormaCommandStatus_AgentScopeReturnsAPage(t *testing.T) {
+	ds := newSQLiteTestDatastore(t)
+
+	for i := 0; i < 5; i++ {
+		storeUserCommand(t, ds, "client-1")
+	}
+
+	m := &Metastructure{Datastore: ds}
+	resp, err := m.ListFormaCommandStatus("", "client-1", 50, apimodel.CommandScopeAgent)
+	require.NoError(t, err)
+	assert.Len(t, resp.Commands, 5, "an unqueried list must return every matching command up to the requested count")
+
+	bounded, err := m.ListFormaCommandStatus("", "client-1", 2, apimodel.CommandScopeAgent)
+	require.NoError(t, err)
+	assert.Len(t, bounded.Commands, 2, "the requested count must bound the page")
+}
+
+// TestListFormaCommandStatus_ClientScopeReturnsOnlyCallersMostRecent covers
+// `formae command status` with no argument: it answers with the calling
+// client's own most recent command, never another client's, even when the
+// other client's command is newer.
+func TestListFormaCommandStatus_ClientScopeReturnsOnlyCallersMostRecent(t *testing.T) {
+	ds := newSQLiteTestDatastore(t)
+
+	mine := storeUserCommand(t, ds, "client-1")
+	theirs := storeUserCommand(t, ds, "client-2")
+
+	m := &Metastructure{Datastore: ds}
+	resp, err := m.ListFormaCommandStatus("", "client-1", 1, apimodel.CommandScopeClient)
+	require.NoError(t, err)
+	require.Len(t, resp.Commands, 1)
+	assert.Equal(t, mine, resp.Commands[0].CommandID)
+	assert.NotEqual(t, theirs, resp.Commands[0].CommandID)
+}
+
+// TestListFormaCommandStatus_ClientScopeWithNoCommandsIsEmptyNotAnError
+// covers a client that has never run a command (including an upgraded agent
+// whose stored history predates command sources): the answer is an empty
+// result, not an error the API would surface as a 500.
+func TestListFormaCommandStatus_ClientScopeWithNoCommandsIsEmptyNotAnError(t *testing.T) {
+	ds := newSQLiteTestDatastore(t)
+
+	m := &Metastructure{Datastore: ds}
+	resp, err := m.ListFormaCommandStatus("", "client-with-no-history", 1, apimodel.CommandScopeClient)
+	require.NoError(t, err)
+	assert.Empty(t, resp.Commands)
 }
 
 func TestReplaceKSUIDs_NestedRefInArrays(t *testing.T) {
@@ -448,4 +542,66 @@ func TestReplaceKSUIDs_RewritesMultipleEmbeddedSpans(t *testing.T) {
 		"template should end with ')suffix', got: %s", tmplOut)
 	assert.True(t, strings.Contains(tmplOut, ",between,"),
 		"template should contain ',between,' between spans, got: %s", tmplOut)
+}
+
+// storeReconcileBaseline persists a successful user reconcile for stackLabel
+// so prepareReconcile has a last-reconcile snapshot to enforce.
+func storeReconcileBaseline(t *testing.T, ds datastore.Datastore, stackLabel string) {
+	t.Helper()
+	baseline := &forma_command.FormaCommand{
+		ID:         util.NewID(),
+		Command:    pkgmodel.CommandApply,
+		Config:     config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
+		State:      forma_command.CommandStateSuccess,
+		Source:     forma_command.SourceUser,
+		StartTs:    util.TimeNow().Add(-5 * time.Minute),
+		ModifiedTs: util.TimeNow().Add(-5 * time.Minute),
+		ResourceUpdates: []resource_update.ResourceUpdate{{
+			Operation:  types.OperationCreate,
+			State:      resource_update.ResourceUpdateStateSuccess,
+			Source:     resource_update.FormaCommandSourceUser,
+			StackLabel: stackLabel,
+			DesiredState: pkgmodel.Resource{
+				Ksuid:      util.NewID(),
+				Label:      "bucket-1",
+				Type:       "AWS::S3::Bucket",
+				Stack:      stackLabel,
+				Target:     "default-target",
+				NativeID:   "native-bucket-1",
+				Properties: json.RawMessage(`{"foo":"v1"}`),
+				Schema:     pkgmodel.Schema{Fields: []string{"foo"}},
+			},
+		}},
+	}
+	require.NoError(t, ds.StoreFormaCommand(baseline, baseline.ID))
+}
+
+// TestForceReconcileCommandIsVisibleThroughCommandStatus covers the command
+// id ForceAutoReconcile hands back: it names a user-initiated command, so
+// looking it up through the ordinary status-by-id path finds it. The
+// scheduled reconcile beat stays scheduler-sourced and out of the
+// user-facing history.
+func TestForceReconcileCommandIsVisibleThroughCommandStatus(t *testing.T) {
+	ds := newSQLiteTestDatastore(t)
+	storeReconcileBaseline(t, ds, "stack-a")
+
+	forced, err := prepareReconcile(ds, "stack-a", "force-reconcile", "", "", forma_command.SourceUser)
+	require.NoError(t, err)
+	require.NotNil(t, forced, "the stored baseline must produce something to reconcile")
+	require.NoError(t, ds.StoreFormaCommand(forced.command, forced.command.ID))
+
+	m := &Metastructure{Datastore: ds}
+	resp, err := m.ListFormaCommandStatus("id:"+forced.command.ID, "cli-client", 1, apimodel.CommandScopeAgent)
+	require.NoError(t, err)
+	require.Len(t, resp.Commands, 1, "the id returned by a force-reconcile must resolve through command status")
+	assert.Equal(t, forced.command.ID, resp.Commands[0].CommandID)
+
+	scheduled, err := prepareReconcile(ds, "stack-a", "auto-reconciler", "", "", forma_command.SourceAutoReconciler)
+	require.NoError(t, err)
+	require.NotNil(t, scheduled)
+	require.NoError(t, ds.StoreFormaCommand(scheduled.command, scheduled.command.ID))
+
+	hidden, err := m.ListFormaCommandStatus("id:"+scheduled.command.ID, "cli-client", 1, apimodel.CommandScopeAgent)
+	require.NoError(t, err)
+	assert.Empty(t, hidden.Commands, "a scheduled reconcile stays out of the user-facing command history")
 }

@@ -1038,7 +1038,7 @@ func (d *DatastoreAuroraDataAPI) GetMostRecentFormaCommandByClientID(clientID st
 	}
 
 	if len(output.Records) == 0 {
-		return nil, fmt.Errorf("no forma commands found for client: %v", clientID)
+		return nil, nil
 	}
 
 	cmd, err := d.parseFormaCommandRecord(output.Records[0])

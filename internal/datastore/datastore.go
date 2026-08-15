@@ -245,6 +245,8 @@ type Datastore interface {
 	// GetMostRecentFormaCommandByClientID returns the most recent user command
 	// for a given client, skipping any scheduler bookkeeping (sync,
 	// discovery, auto-reconcile, stack expiry) that ran more recently.
+	// A client with no such command yields (nil, nil): having run nothing is
+	// an empty answer, not a failure, and callers render it as "no commands".
 	GetMostRecentFormaCommandByClientID(clientID string) (*forma_command.FormaCommand, error)
 	// GetResourceModificationsSinceLastReconcile returns resources modified since the last reconcile
 	GetResourceModificationsSinceLastReconcile(stack string) ([]ResourceModification, error)
