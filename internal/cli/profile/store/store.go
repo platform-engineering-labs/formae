@@ -186,26 +186,66 @@ func (s *Store) Use(name string) error {
 	return s.writeActive(name)
 }
 
-// stageActive writes name to a unique temp file beside the active pointer, so
-// concurrent callers cannot clobber each other's temp before publishing it.
-// Callers publish it with rename (replace) or link (create only).
-func (s *Store) stageActive(name string) (string, error) {
-	if err := os.MkdirAll(s.root, 0o755); err != nil {
-		return "", fmt.Errorf("mkdir config dir: %w", err)
-	}
-	f, err := os.CreateTemp(s.root, "active-*.tmp")
+// linkFile is os.Link, replaced in tests to exercise the fallback below.
+var linkFile = os.Link
+
+// createIfAbsent publishes content at path unless something is already there,
+// and reports success either way: the caller wants the file to exist, not to be
+// the one who made it.
+//
+// Hard-linking a staged file is the atomic test-and-create — it fails when the
+// destination exists, so a concurrent explicit write always wins and a reader
+// never sees a half-written file. The config dir can live wherever
+// FORMAE_CONFIG_DIR points, including filesystems with no hard links (FAT, some
+// FUSE mounts), so any other link failure falls back to an exclusive create.
+// That is universal, at the cost of a brief window in which a racing reader
+// could see an empty file. Refusing to start there is the worse trade.
+func createIfAbsent(path string, content []byte, mode os.FileMode) error {
+	tmp, err := stageTemp(filepath.Dir(path), content, mode)
 	if err != nil {
-		return "", fmt.Errorf("create temp active: %w", err)
+		return err
+	}
+	defer func() { _ = os.Remove(tmp) }()
+
+	if err := linkFile(tmp, path); err == nil || errors.Is(err, os.ErrExist) {
+		return nil
+	}
+
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return nil
+		}
+		return err
+	}
+	if _, err := f.Write(content); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
+}
+
+// stageTemp writes content to a unique temp file in dir and returns its path,
+// so publishing it is a single atomic step.
+func stageTemp(dir string, content []byte, mode os.FileMode) (string, error) {
+	f, err := os.CreateTemp(dir, ".staged-*.tmp")
+	if err != nil {
+		return "", err
 	}
 	tmp := f.Name()
-	if _, err := f.WriteString(name + "\n"); err != nil {
-		_ = f.Close()
+	cleanup := func(err error) (string, error) {
 		_ = os.Remove(tmp)
-		return "", fmt.Errorf("write temp active: %w", err)
+		return "", err
+	}
+	if _, err := f.Write(content); err != nil {
+		_ = f.Close()
+		return cleanup(err)
 	}
 	if err := f.Close(); err != nil {
-		_ = os.Remove(tmp)
-		return "", fmt.Errorf("close temp active: %w", err)
+		return cleanup(err)
+	}
+	if err := os.Chmod(tmp, mode); err != nil {
+		return cleanup(err)
 	}
 	return tmp, nil
 }
@@ -213,9 +253,12 @@ func (s *Store) stageActive(name string) (string, error) {
 // writeActive atomically points the active pointer at name, replacing whatever
 // it named before. This is someone choosing a profile, so it wins.
 func (s *Store) writeActive(name string) error {
-	tmp, err := s.stageActive(name)
+	if err := os.MkdirAll(s.root, 0o755); err != nil {
+		return fmt.Errorf("mkdir config dir: %w", err)
+	}
+	tmp, err := stageTemp(s.root, []byte(name+"\n"), 0o600)
 	if err != nil {
-		return err
+		return fmt.Errorf("write temp active: %w", err)
 	}
 	if err := os.Rename(tmp, s.activePath()); err != nil {
 		_ = os.Remove(tmp)
@@ -227,16 +270,13 @@ func (s *Store) writeActive(name string) error {
 // setActiveIfAbsent points the active pointer at name only when there is none.
 // Every initialization branch that writes the pointer got there by observing it
 // absent, so the write means "there should be a pointer", never "it should be
-// this one". Link fails when the destination exists, which makes that an atomic
-// test rather than a check followed by a write: an explicit profile choice
-// racing initialization always wins, and never gets quietly undone.
+// this one". An explicit profile choice racing initialization therefore always
+// wins, and is never quietly undone.
 func (s *Store) setActiveIfAbsent(name string) error {
-	tmp, err := s.stageActive(name)
-	if err != nil {
-		return err
+	if err := os.MkdirAll(s.root, 0o755); err != nil {
+		return fmt.Errorf("mkdir config dir: %w", err)
 	}
-	defer func() { _ = os.Remove(tmp) }()
-	if err := os.Link(tmp, s.activePath()); err != nil && !errors.Is(err, os.ErrExist) {
+	if err := createIfAbsent(s.activePath(), []byte(name+"\n"), 0o600); err != nil {
 		return fmt.Errorf("write active: %w", err)
 	}
 	return nil
@@ -339,30 +379,11 @@ func (s *Store) activeIsUsable() bool {
 	return statErr == nil
 }
 
-// writeStubProfile creates a starter profile, appearing complete or not at all.
-// A concurrent formae writing the same stub first is success: the profile this
-// step wanted exists. Staging through a temp file keeps a racing reader from
-// loading a half-written profile, which a plain write would allow.
+// writeStubProfile creates a starter profile if the machine has none. It
+// appears complete or not at all, so a racing reader cannot load a half-written
+// profile, and it never replaces an existing one.
 func (s *Store) writeStubProfile(name string) error {
-	f, err := os.CreateTemp(s.ProfilesDir(), "."+name+"-*.tmp")
-	if err != nil {
-		return fmt.Errorf("create temp profile: %w", err)
-	}
-	tmp := f.Name()
-	defer func() { _ = os.Remove(tmp) }() // no-op once linked away
-	if _, err := f.WriteString(StubTemplate); err != nil {
-		_ = f.Close()
-		return fmt.Errorf("write default profile: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("write default profile: %w", err)
-	}
-	if err := os.Chmod(tmp, 0o644); err != nil {
-		return fmt.Errorf("write default profile: %w", err)
-	}
-	// Link rather than rename: it fails when the destination exists, so a
-	// racing bootstrap can never overwrite a profile.
-	if err := os.Link(tmp, s.ProfilePath(name)); err != nil && !errors.Is(err, os.ErrExist) {
+	if err := createIfAbsent(s.ProfilePath(name), []byte(StubTemplate), 0o644); err != nil {
 		return fmt.Errorf("write default profile: %w", err)
 	}
 	return nil
