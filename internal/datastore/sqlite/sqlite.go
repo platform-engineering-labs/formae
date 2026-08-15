@@ -5357,12 +5357,13 @@ func (d DatastoreSQLite) CleanUp() error {
 func (d DatastoreSQLite) Conn() *sql.DB { return d.conn }
 
 // RecordAgentBoot appends one agent_boots row for this process start.
-func (d DatastoreSQLite) RecordAgentBoot(version string) error {
-	_, span := sqliteTracer.Start(context.Background(), "RecordAgentBoot")
+func (d DatastoreSQLite) RecordAgentBoot(ctx context.Context, version string) error {
+	ctx, span := sqliteTracer.Start(ctx, "RecordAgentBoot")
 	defer span.End()
 
 	bootedAt := time.Now().UTC()
-	_, err := d.conn.Exec(
+	_, err := d.conn.ExecContext(
+		ctx,
 		`INSERT INTO agent_boots (boot_id, version, booted_at) VALUES (?, ?, ?)`,
 		mksuid.New().String(), version, bootedAt.Format(time.RFC3339Nano),
 	)

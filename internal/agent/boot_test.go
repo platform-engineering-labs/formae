@@ -7,6 +7,7 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"testing"
@@ -21,11 +22,25 @@ type stubBootRecorder struct {
 	calls   []string
 	err     error
 	release chan struct{} // when non-nil, RecordAgentBoot blocks until closed
+	gotCtx  context.Context
 }
 
-func (s *stubBootRecorder) RecordAgentBoot(version string) error {
+func (s *stubBootRecorder) context() context.Context {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.gotCtx
+}
+
+func (s *stubBootRecorder) RecordAgentBoot(ctx context.Context, version string) error {
+	s.mu.Lock()
+	s.gotCtx = ctx
+	s.mu.Unlock()
 	if s.release != nil {
-		<-s.release
+		select {
+		case <-s.release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -42,7 +57,7 @@ func (s *stubBootRecorder) recorded() []string {
 func TestRecordBootWritesOnce(t *testing.T) {
 	rec := &stubBootRecorder{}
 
-	<-recordBoot(rec, "0.89.0")
+	<-recordBoot(context.Background(), rec, "0.89.0")
 
 	require.Len(t, rec.recorded(), 1, "exactly one boot row per process start")
 	assert.Equal(t, []string{"0.89.0"}, rec.recorded())
@@ -56,7 +71,7 @@ func TestRecordBootSwallowsFailure(t *testing.T) {
 	rec := &stubBootRecorder{err: errors.New("datastore unavailable")}
 
 	assert.NotPanics(t, func() {
-		<-recordBoot(rec, "0.89.0")
+		<-recordBoot(context.Background(), rec, "0.89.0")
 	}, "a failed boot record must never propagate or panic")
 
 	assert.Len(t, rec.recorded(), 1, "the failure is not retried in-line")
@@ -73,7 +88,7 @@ func TestRecordBootDoesNotBlockStartup(t *testing.T) {
 
 	returned := make(chan struct{})
 	go func() {
-		recordBoot(rec, "0.89.0")
+		recordBoot(context.Background(), rec, "0.89.0")
 		close(returned)
 	}()
 
@@ -84,4 +99,28 @@ func TestRecordBootDoesNotBlockStartup(t *testing.T) {
 	}
 
 	assert.Empty(t, rec.recorded(), "the write is still in flight, and startup carried on regardless")
+}
+
+// Running off the startup goroutine stops a stalled write delaying startup, but
+// it hands the same stall to shutdown: the insert keeps a pooled connection
+// checked out, and closing the pool waits for it. The write must therefore be
+// cancellable by the agent's own context, or a database that stops responding
+// turns an ordinary stop into a hang.
+func TestRecordBootIsCancelledWithTheAgent(t *testing.T) {
+	rec := &stubBootRecorder{release: make(chan struct{})}
+	defer close(rec.release)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := recordBoot(ctx, rec, "0.89.0")
+
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancelling the agent context must abandon the in-flight boot write")
+	}
+
+	require.NotNil(t, rec.context(), "the recorder must be handed a cancellable context")
+	assert.ErrorIs(t, rec.context().Err(), context.Canceled)
 }

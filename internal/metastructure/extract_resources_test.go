@@ -5,6 +5,7 @@
 package metastructure
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -577,6 +578,6 @@ func TestExtractResources_BatchedPolicyLookups(t *testing.T) {
 	assert.Equal(t, 0, ds.getStackByLabelCalls, "GetStackByLabel must not be called (N+1 avoided)")
 }
 
-func (m *mockExtractDatastore) RecordAgentBoot(_ string) error {
+func (m *mockExtractDatastore) RecordAgentBoot(_ context.Context, _ string) error {
 	return nil
 }

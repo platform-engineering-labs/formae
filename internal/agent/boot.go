@@ -4,12 +4,15 @@
 
 package agent
 
-import "log/slog"
+import (
+	"context"
+	"log/slog"
+)
 
 // bootRecorder is the slice of the datastore this file needs: appending one row
 // per agent start.
 type bootRecorder interface {
-	RecordAgentBoot(version string) error
+	RecordAgentBoot(ctx context.Context, version string) error
 }
 
 // recordBoot appends the boot row for this process start, off the startup path.
@@ -25,6 +28,11 @@ type bootRecorder interface {
 // with no deadline, so an unresponsive database blocks in the driver rather
 // than returning, and a synchronous call would hold up startup indefinitely.
 //
+// The context is the agent's own, so a stop cancels an in-flight write. Without
+// that, the goroutine keeps a pooled connection checked out and closing the pool
+// waits for it, which turns the stalled-database case into a hung shutdown
+// instead of a hung startup.
+//
 // The returned channel closes once the attempt finishes. Startup ignores it;
 // tests wait on it rather than sleeping.
 //
@@ -32,11 +40,11 @@ type bootRecorder interface {
 // background one is a backoff and a lifecycle to get right for a version
 // string. The cost is that a transient failure leaves the reader on the
 // previous boot's version until the next start.
-func recordBoot(ds bootRecorder, version string) <-chan struct{} {
+func recordBoot(ctx context.Context, ds bootRecorder, version string) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		if err := ds.RecordAgentBoot(version); err != nil {
+		if err := ds.RecordAgentBoot(ctx, version); err != nil {
 			slog.Warn("Failed to record agent boot; continuing startup", "error", err)
 		}
 	}()
