@@ -29,7 +29,15 @@ HELM_READER_VERSION ?= 0.1.2
 # classifier depends on this tool's observed failure semantics (a
 # cancelled run exits 0 and writes no report, and the report is a single
 # write at the end of the run), so the version must not float on
-# `@latest`. Override per-build with GREMLINS_VERSION=<ver>.
+# `@latest`. The pin also holds still the meaning of --exclude-files,
+# which the script relies on to keep a run inside the package it names: a
+# Go regex, matched unanchored against slash-separated paths relative to
+# the invoked directory. v0.6.0 is the newest release, so the pin cannot
+# be lifted by bumping — and it carries a known defect worth knowing
+# about before reading a crashed job: a second signal during shutdown
+# panics with `send on closed channel` in the tool's own signal
+# handling, taking the report with it.
+# Override per-build with GREMLINS_VERSION=<ver>.
 GREMLINS_VERSION ?= v0.6.0
 
 clean:
