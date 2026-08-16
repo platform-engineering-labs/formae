@@ -18,20 +18,28 @@ set -euo pipefail
 # is a single write after the run — so a version bump means re-checking them.
 
 # ── 1. Classify one package's result ────────────────────────────────────────
-# classify_result <report-path>
+# classify_result <report-path> <exit-status>
 # Prints "status|reason|score|killed|lived|timed_out" for a single package.
 #
-# Only the report decides the verdict; gremlins' exit status is a diagnostic the
-# caller logs. A report that is missing, unreadable, or not shaped like a
-# gremlins report is a classification outcome, never an abort.
+# Only the report decides the verdict. With no report, gremlins' exit status
+# names the reason, because it is all there is to tell a cancelled run — which
+# exits 0 and writes nothing — from one that ended before it could write.
+# Nothing is read from gremlins' output: it carries the coverage run's own
+# output when coverage fails, so a unit test that panics puts panic text there
+# without gremlins having died. A report that is missing, unreadable, or not
+# shaped like a gremlins report is a classification outcome, never an abort.
 classify_result() {
-  local report_path="$1" result
+  local report_path="$1" status="$2" result
 
   if [[ ! -f "$report_path" ]]; then
+    # A gremlins that is not installed leaves the shell exiting 127, so the tool
+    # is checked before the status of the run that never happened.
     if ! command -v gremlins > /dev/null 2>&1; then
       echo "failed|gremlins not found|n/a|0|0|0"
-    else
+    elif [[ "$status" == 0 ]]; then
       echo "failed|no output|n/a|0|0|0"
+    else
+      echo "failed|gremlins exited $status without a report|n/a|0|0|0"
     fi
     return 0
   fi
@@ -340,7 +348,8 @@ main() {
     #
     # No pipeline, so the exit status is gremlins' own and set -e cannot end the
     # run here. gremlins may exit non-zero when mutants survive — that's expected
-    # and not a failure; the status is a diagnostic, never the verdict.
+    # and not a failure; the status never overrules a report, it only says how a
+    # run that wrote none ended.
     status=0
     (cd "$module_root" && gremlins unleash \
       --tags unit \
@@ -350,7 +359,7 @@ main() {
       -o "$report_file" \
       "./$rel_pkg") > "$log_file" 2>&1 || status=$?
 
-    result=$(classify_result "$report_file")
+    result=$(classify_result "$report_file" "$status")
     IFS='|' read -r result_status reason score killed lived timed_out <<< "$result"
 
     if [[ "$result_status" == "ok" ]]; then

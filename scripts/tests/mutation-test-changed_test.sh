@@ -348,13 +348,14 @@ run_script_signalled() {
   script_output=$(cat "$out_file")
 }
 
-# classify_report_with_path <path> <report>: writes <report> to a throwaway
-# file and puts classify_result's verdict for it in $classify_output, with
-# $PATH set to <path> for the classification. Pass the literal ABSENT for a
-# report gremlins never wrote. The script is sourced in a subshell, so its own
-# definitions cannot leak into the test run.
+# classify_report_with_path <path> <report> [exit-status]: writes <report> to a
+# throwaway file and puts classify_result's verdict for it in $classify_output,
+# with $PATH set to <path> for the classification. Pass the literal ABSENT for a
+# report gremlins never wrote, and <exit-status> for a run that ended with
+# anything other than the 0 assumed here. The script is sourced in a subshell,
+# so its own definitions cannot leak into the test run.
 classify_report_with_path() {
-  local path="$1" report="$2" report_file
+  local path="$1" report="$2" exit_status="${3:-0}" report_file
   report_file="$(new_workdir)/report.json"
   if [[ "$report" != "ABSENT" ]]; then
     printf '%s' "$report" > "$report_file"
@@ -364,13 +365,14 @@ classify_report_with_path() {
   classify_output=$(
     PATH="$path"
     source "$SCRIPT_UNDER_TEST"
-    classify_result "$report_file"
+    classify_result "$report_file" "$exit_status"
   ) || true
 }
 
-# classify_report <report>: classify_report_with_path on the test's own PATH.
+# classify_report <report> [exit-status]: classify_report_with_path on the
+# test's own PATH.
 classify_report() {
-  classify_report_with_path "$PATH" "$1"
+  classify_report_with_path "$PATH" "$@"
 }
 
 # ── 3. Tests ────────────────────────────────────────────────────────────────
@@ -391,6 +393,28 @@ test_exit_zero_without_report_is_a_failure() {
   assert_output_matches '\| `example/pkg` \| failed \| no output \|' \
     "the package row reports the failure"
   assert_status_nonzero "the script fails when a package produced no result"
+}
+
+# A gremlins that dies leaves no report either, but it exits non-zero doing it.
+# The row names the status, so a run that died is not read as a cancelled one.
+test_a_non_zero_exit_without_a_report_names_the_status() {
+  local work repo bin
+  work=$(new_workdir)
+  repo="$work/repo"
+  bin="$work/bin"
+
+  make_fixture_repo "$repo"
+  add_changed_package "$repo" "example/pkg"
+  stub_gremlins "$bin" 'echo "Gathering coverage"; exit 2'
+
+  run_script "$repo" "$bin"
+
+  assert_output_matches \
+    '\| `example/pkg` \| failed \| gremlins exited 2 without a report \|' \
+    "the package row names the exit status"
+  assert_output_matches 'gremlins exit status: 2' \
+    "the exit status is recorded in the step log"
+  assert_status_nonzero "a run that produced no report fails the run"
 }
 
 # A completed run is reported with its score whatever gremlins exited with.
@@ -447,6 +471,32 @@ test_an_unknown_non_zero_exit_with_a_report_is_ok() {
   assert_output_matches 'gremlins exit status: 42' \
     "the exit status is recorded in the step log"
   assert_status 0 "an unknown exit status alone does not fail the run"
+}
+
+# gremlins prints the coverage run's own output when coverage fails, so a unit
+# test that panics puts panic text in gremlins' output without gremlins having
+# died. The output is never read for a verdict: a run that wrote a report is a
+# result whatever it printed and whatever it exited with.
+test_panic_text_beside_a_report_is_still_ok() {
+  local work repo bin
+  work=$(new_workdir)
+  repo="$work/repo"
+  bin="$work/bin"
+
+  make_fixture_repo "$repo"
+  add_changed_package "$repo" "example/pkg"
+  stub_gremlins "$bin" "echo 'panic: send on closed channel'
+echo 'goroutine 1 [running]:'
+printf '%s' '$(mutation_report KILLED)' > \"\$report_path\"
+exit 1"
+
+  run_script "$repo" "$bin"
+
+  assert_output_matches '\| `example/pkg` \| ok \| - \| 100\.0% \| 1 \| 0 \| 0 \|' \
+    "a panicking test does not cost the package its result"
+  assert_output_matches 'panic: send on closed channel' \
+    "the panic text is still there for a reader to find"
+  assert_status 0 "panic text in the output does not fail the run"
 }
 
 # A package with no mutants is the only legitimate source of an n/a score.
@@ -602,10 +652,12 @@ test_a_report_that_is_not_a_gremlins_report_fails_the_package() {
   assert_status_nonzero "an unusable report fails the run"
 }
 
-# With no report it is the presence of the tool, not the exit status of the run,
-# that names the reason: a gremlins that ran and wrote nothing produced no
-# output, and one that is not installed at all is named.
-test_a_missing_report_is_named_from_the_tool_on_path() {
+# With no report the tool on PATH is checked before the exit status, because a
+# gremlins that is not installed leaves the shell exiting 127 and that status
+# says nothing about a run that never happened. An installed gremlins is named
+# from its status: 0 is the shape of a cancelled run, non-zero one that ended
+# before it could write.
+test_a_missing_report_is_named_from_the_tool_and_the_exit_status() {
   local work bin
   work=$(new_workdir)
   bin="$work/bin"
@@ -615,9 +667,17 @@ test_a_missing_report_is_named_from_the_tool_on_path() {
   assert_classification "failed|no output|n/a|0|0|0" \
     "a gremlins that wrote nothing is a failure"
 
+  classify_report_with_path "$bin" ABSENT 2
+  assert_classification "failed|gremlins exited 2 without a report|n/a|0|0|0" \
+    "a gremlins that ended without writing is named by its status"
+
   classify_report_with_path "" ABSENT
   assert_classification "failed|gremlins not found|n/a|0|0|0" \
     "an uninstalled gremlins is named"
+
+  classify_report_with_path "" ABSENT 127
+  assert_classification "failed|gremlins not found|n/a|0|0|0" \
+    "an uninstalled gremlins is named whatever status the shell left behind"
 }
 
 # A report the script cannot read for want of an interpreter is a broken
@@ -948,9 +1008,11 @@ run_test() {
 
 main() {
   run_test test_exit_zero_without_report_is_a_failure
+  run_test test_a_non_zero_exit_without_a_report_names_the_status
   run_test test_a_report_with_a_zero_exit_is_ok
   run_test test_surviving_mutants_are_not_a_failure
   run_test test_an_unknown_non_zero_exit_with_a_report_is_ok
+  run_test test_panic_text_beside_a_report_is_still_ok
   run_test test_a_zero_mutant_report_is_ok_without_a_score
   run_test test_a_report_with_no_scored_mutants_says_why_it_has_no_score
   run_test test_an_n_a_score_always_names_its_cause
@@ -959,7 +1021,7 @@ main() {
   run_test test_a_missing_gremlins_is_reported_by_name
   run_test test_invalid_reports_are_classified_as_invalid_output
   run_test test_a_report_that_is_not_a_gremlins_report_fails_the_package
-  run_test test_a_missing_report_is_named_from_the_tool_on_path
+  run_test test_a_missing_report_is_named_from_the_tool_and_the_exit_status
   run_test test_a_missing_interpreter_is_reported_by_name
   run_test test_every_package_runs_when_the_first_one_fails
   run_test test_two_failures_produce_two_rows
