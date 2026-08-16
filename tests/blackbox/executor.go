@@ -212,48 +212,44 @@ func (h *TestHarness) cleanupOrphanedCloudState(t *testing.T) int {
 	return cleaned
 }
 
-// waitForAllCommandsTerminal polls until no commands (from any client) are
-// in a non-terminal state (InProgress, Pending). This prevents the next
-// rapid iteration from racing with leftover commands from a prior iteration
-// or background commands (auto-reconcile, sync).
+// waitForAllCommandsTerminal polls until no command is in a non-terminal
+// state. This prevents the next rapid iteration from racing with leftover
+// commands from a prior iteration or with background scheduler commands
+// (sync, discovery, auto-reconcile, stack expiry).
+//
+// It reads the agent's datastore rather than the command-status API on
+// purpose: the API shows only user-initiated commands, so an API-based check
+// would declare quiescence while a scheduler command is still mid-flight —
+// exactly the commands that conflict with cleanup.
 func (h *TestHarness) waitForAllCommandsTerminal(t *testing.T, timeout time.Duration) {
 	t.Helper()
 
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		// Check for ANY non-terminal commands, including background
-		// auto-reconcile and sync commands that can conflict with cleanup.
-		allDone := true
-		for _, status := range []string{"InProgress", "Pending"} {
-			resp, err := h.client.GetFormaCommandsStatus("status:"+status, clientID, 100)
-			if err != nil {
-				// API error — transient, retry.
-				allDone = false
-				break
-			}
-			if resp != nil && len(resp.Commands) > 0 {
-				allDone = false
-				break
-			}
-		}
-		if allDone {
+		inFlight, err := h.nonTerminalCommandsFromDB()
+		if err == nil && len(inFlight) == 0 {
 			return
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
 
 	// Log which commands are still running for diagnostics.
-	for _, status := range []string{"InProgress", "Pending"} {
-		resp, _ := h.client.GetFormaCommandsStatus("status:"+status, clientID, 100)
-		if resp != nil {
-			for _, cmd := range resp.Commands {
-				t.Logf("waitForAllCommandsTerminal: stuck command %s state=%s command=%s resourceUpdates=%d",
-					cmd.CommandID, cmd.State, cmd.Command, len(cmd.ResourceUpdates))
-				for _, ru := range cmd.ResourceUpdates {
-					t.Logf("  resource %s (%s/%s) operation=%s state=%s",
-						ru.ResourceID, ru.StackName, ru.ResourceLabel, ru.Operation, ru.State)
-				}
-			}
+	inFlight, err := h.nonTerminalCommandsFromDB()
+	if err != nil {
+		t.Logf("waitForAllCommandsTerminal: could not read in-flight commands: %v", err)
+	}
+	for _, stuck := range inFlight {
+		cmd, err := h.commandFromDB(stuck.CommandID)
+		if err != nil || cmd == nil {
+			t.Logf("waitForAllCommandsTerminal: stuck command %s state=%s command=%s",
+				stuck.CommandID, stuck.State, stuck.Command)
+			continue
+		}
+		t.Logf("waitForAllCommandsTerminal: stuck command %s state=%s command=%s resourceUpdates=%d",
+			cmd.CommandID, cmd.State, cmd.Command, len(cmd.ResourceUpdates))
+		for _, ru := range cmd.ResourceUpdates {
+			t.Logf("  resource %s (%s/%s) operation=%s state=%s",
+				ru.ResourceID, ru.StackName, ru.ResourceLabel, ru.Operation, ru.State)
 		}
 	}
 	require.Fail(t, "ResetAgentState: timed out waiting for all commands to reach terminal state")
@@ -326,7 +322,7 @@ func (h *TestHarness) reconcileCompletedAcceptedCommands(t *testing.T, model *St
 	var completed []completedCmd
 	remaining := make([]AcceptedCommand, 0, len(model.AcceptedCommands))
 	for _, ac := range model.AcceptedCommands {
-		statusResp, err := h.client.GetFormaCommandsStatus("id:"+ac.CommandID, clientID, 1)
+		statusResp, err := h.client.GetFormaCommandsStatus("id:"+ac.CommandID, clientID, 1, apimodel.CommandScopeAgent)
 		if err != nil || statusResp == nil || len(statusResp.Commands) == 0 {
 			remaining = append(remaining, ac)
 			continue
@@ -525,25 +521,21 @@ func (h *TestHarness) extractManagedAndUnmanagedInventory() ([]pkgmodel.Resource
 
 // waitAndCheckCommandCompleteness polls until all commands from this client are
 // in a terminal state, returning any remaining violations if the deadline expires.
+//
+// The query is spelled out as `client:me` rather than left empty: this check
+// is about the commands this client submitted, and an empty query means
+// something else entirely (the agent's whole command history, or a single
+// most-recent command, depending on scope). A client that has submitted
+// nothing yields an empty result, which is vacuously terminal.
 func (h *TestHarness) waitAndCheckCommandCompleteness(t *testing.T, timeout time.Duration) []Violation {
 	t.Helper()
 
 	deadline := time.Now().Add(timeout)
-	sawCommands := false
 	for time.Now().Before(deadline) {
-		statusResp, err := h.client.GetFormaCommandsStatus("", clientID, 100)
+		statusResp, err := h.client.GetFormaCommandsStatus("client:me", clientID, 100, apimodel.CommandScopeAgent)
 		if err != nil {
-			if !sawCommands {
-				// The API returns 500 when no commands exist for the client.
-				// Treat as vacuously terminal.
-				return nil
-			}
 			time.Sleep(200 * time.Millisecond)
 			continue
-		}
-
-		if len(statusResp.Commands) > 0 {
-			sawCommands = true
 		}
 
 		var commands []CommandState
@@ -562,7 +554,7 @@ func (h *TestHarness) waitAndCheckCommandCompleteness(t *testing.T, timeout time
 	}
 
 	// Timed out — dump details of stuck commands for diagnosis
-	statusResp, err := h.client.GetFormaCommandsStatus("", clientID, 100)
+	statusResp, err := h.client.GetFormaCommandsStatus("client:me", clientID, 100, apimodel.CommandScopeAgent)
 	if err != nil {
 		return nil // Can't query commands — assume terminal
 	}
@@ -1488,8 +1480,11 @@ func (h *TestHarness) executeCancel(t *testing.T, op *Operation, model *StateMod
 	t.Logf("[op %d] Cancel command %s → accepted", op.SequenceNum, target.CommandID)
 
 	// Wait for the canceled command to reach a terminal state so we can read
-	// per-resource-update outcomes.
-	cmd, ok := h.TryWaitForCommandDone(target.CommandID, defaultCommandTimeout)
+	// per-resource-update outcomes. The most recent accepted command may be
+	// a stack-expirer destroy tracked by executeCheckTTL, which never
+	// appears over the user-only command-status API, so observe it via the
+	// datastore instead.
+	cmd, ok := h.waitForCommandInDB(target.CommandID, defaultCommandTimeout)
 	if !ok {
 		t.Logf("[op %d] Cancel command %s → timed out waiting for completion", op.SequenceNum, target.CommandID)
 		return
@@ -1921,9 +1916,13 @@ func (h *TestHarness) DrainPendingCommands(t *testing.T, model *StateModel, time
 	// Step 1: Collect all command outcomes. Commands marked Resolved were
 	// already handled by the cancel handler but are kept in AcceptedCommands
 	// so their corrections take precedence during reverse-order processing.
+	// AcceptedCommands can include a stack-expirer destroy tracked by
+	// executeCheckTTL alongside user commands, and that command never
+	// appears over the user-only command-status API, so observe every
+	// accepted command via the datastore instead.
 	var drained []drainedCommand
 	for _, ac := range model.AcceptedCommands {
-		cmd, ok := h.TryWaitForCommandDone(ac.CommandID, timeout)
+		cmd, ok := h.waitForCommandInDB(ac.CommandID, timeout)
 		if !ok {
 			t.Logf("DrainPendingCommands: command %s timed out", ac.CommandID)
 			drained = append(drained, drainedCommand{ac: ac, cmd: nil})
@@ -2142,8 +2141,10 @@ func (h *TestHarness) ForceCheckTTLAndWait(t *testing.T, model *StateModel) {
 			continue
 		}
 
-		// Wait for the destroy command and apply outcomes to the model.
-		cmd, ok := h.TryWaitForCommandDone(commandID, defaultCommandTimeout)
+		// Wait for the destroy command and apply outcomes to the model. This
+		// command is stack-expirer sourced, so it never appears over the
+		// user-only command-status API; observe it via the datastore instead.
+		cmd, ok := h.waitForCommandInDB(commandID, defaultCommandTimeout)
 		if !ok {
 			t.Logf("ForceCheckTTLAndWait: command %s timed out", commandID)
 			continue

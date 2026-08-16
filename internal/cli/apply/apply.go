@@ -96,7 +96,7 @@ var legacyWidth = func(w io.Writer) int {
 // q/esc/ctrl+c). Not printed when the watch TUI closed because the command
 // already reached a terminal state.
 func printAsyncNotice(commandID string) {
-	fmt.Printf("\nStill running asynchronously on the agent. Check its status with:\n\n  formae status command --query='id:%s'\n", commandID)
+	fmt.Printf("\nStill running asynchronously on the agent. Check its status with:\n\n  formae command status %s\n", commandID)
 }
 
 type ApplyCommand struct {
@@ -363,10 +363,9 @@ func runApplyLegacy(a *app.App, opts *ApplyOptions) error {
 		return nil
 	}
 
-	fmt.Printf("\nRun the following command to check the status of this command:\n\n  %s%s%s\n",
-		lipgloss.NewStyle().Foreground(a.Theme().Palette.TextSubtle).Render("formae status command --query='id:"),
-		lipgloss.NewStyle().Foreground(a.Theme().Palette.PrimaryAccent).Render(res.CommandID),
-		lipgloss.NewStyle().Foreground(a.Theme().Palette.TextSubtle).Render("'"))
+	fmt.Printf("\nRun the following command to check the status of this command:\n\n  %s%s\n",
+		lipgloss.NewStyle().Foreground(a.Theme().Palette.TextSubtle).Render("formae command status "),
+		lipgloss.NewStyle().Foreground(a.Theme().Palette.PrimaryAccent).Render(res.CommandID))
 
 	nag.MaybePrintNags(a.Theme(), nags)
 
