@@ -799,6 +799,52 @@ test_packages_without_unit_tests_are_a_no_op() {
   assert_status 0 "a package with no unit tests passes"
 }
 
+# The filter is what puts a package in front of gremlins, so a package carrying
+# its own unit-tagged test has to come out of it and be run.
+test_a_package_with_its_own_unit_tests_is_selected() {
+  local work repo bin
+  work=$(new_workdir)
+  repo="$work/repo"
+  bin="$work/bin"
+
+  make_fixture_repo "$repo"
+  add_changed_package "$repo" "example/pkg"
+  stub_gremlins_writing "$bin" 0 "$(mutation_report KILLED)"
+
+  run_script "$repo" "$bin"
+
+  assert_output_matches '^Packages to test: example/pkg$' \
+    "the package with its own unit-tagged test is selected"
+  assert_output_matches '\| `example/pkg` \| ok \| - \| 100\.0% \| 1 \| 0 \| 0 \|' \
+    "the selected package is run and reported"
+  assert_status 0 "a package with its own unit tests passes"
+}
+
+# The unit-tagged tests that make a package mutable are the ones beside its own
+# source: a sub-package's tests run its code, not its parent's, so they must not
+# put the parent in front of gremlins.
+test_a_sub_packages_unit_tests_do_not_select_its_parent() {
+  local work repo bin
+  work=$(new_workdir)
+  repo="$work/repo"
+  bin="$work/bin"
+
+  make_fixture_repo "$repo"
+  add_untested_package "$repo" "example/pkg"
+  add_changed_package "$repo" "example/pkg/sub"
+  stub_gremlins_writing "$bin" 0 "$(mutation_report KILLED)"
+
+  run_script "$repo" "$bin"
+
+  assert_output_matches '^Packages to test: example/pkg/sub$' \
+    "only the package with its own unit-tagged test is selected"
+  assert_output_count '^\| `example/pkg` \|' 0 \
+    "the parent package is not run"
+  assert_output_matches '\| `example/pkg/sub` \| ok \| - \| 100\.0% \| 1 \| 0 \| 0 \|' \
+    "the sub-package is still run"
+  assert_status 0 "a parent package left unrun does not fail the run"
+}
+
 # A run with nothing to mutate has no table for the job summary to take, so it
 # must not report one either. Both ways of having nothing to mutate are checked,
 # because each leaves the run at a different point.
@@ -1028,6 +1074,8 @@ main() {
   run_test test_colliding_package_paths_do_not_share_a_report
   run_test test_no_changed_go_files_is_a_no_op
   run_test test_packages_without_unit_tests_are_a_no_op
+  run_test test_a_package_with_its_own_unit_tests_is_selected
+  run_test test_a_sub_packages_unit_tests_do_not_select_its_parent
   run_test test_a_no_op_run_reports_no_job_summary
   run_test test_a_failing_summary_write_fails_the_run
   run_test test_a_summary_write_that_fails_part_way_keeps_the_whole_table

@@ -148,7 +148,9 @@ PYEOF
   echo "$result"
 }
 
-# ── 2. Helper: find nearest go.mod by walking up from a directory ───────────
+# ── 2. Helpers ──────────────────────────────────────────────────────────────
+# find_module_root <pkg>: finds the nearest go.mod by walking up from a
+# directory.
 find_module_root() {
   local dir="$REPO_ROOT/$1"
   while [[ "$dir" != "$REPO_ROOT" && "$dir" != "/" ]]; do
@@ -160,6 +162,23 @@ find_module_root() {
   done
   # Fall back to repo root
   echo "$REPO_ROOT"
+}
+
+# has_own_unit_tests <dir>: true when a test file directly in <dir> carries the
+# unit build tag. The directory's own test files are listed and handed to grep
+# by name rather than letting grep walk the tree, because tests under a
+# sub-directory belong to another package and cannot make this one mutable. A
+# directory with no test files of its own — or no directory at all — is answered
+# before grep is reached, since a grep given a pattern and no file to read would
+# take the run's stdin. The glob runs in a subshell, the way the gremlins run
+# scopes its own cd, so nullglob stays out of the rest of the script.
+has_own_unit_tests() {
+  (
+    shopt -s nullglob
+    local test_files=("$1"/*_test.go)
+    [[ ${#test_files[@]} -gt 0 ]] \
+      && grep -q '//go:build unit' "${test_files[@]}" 2>/dev/null
+  )
 }
 
 # ── 3. Summary plumbing ─────────────────────────────────────────────────────
@@ -282,11 +301,10 @@ main() {
   # Map to unique package directories
   changed_packages=$(echo "$changed_files" | xargs -I{} dirname {} | sort -u)
 
-  # Filter to packages that have //go:build unit test files
+  # Filter to packages that have //go:build unit test files of their own
   testable_packages=()
   while IFS= read -r pkg; do
-    pkg_abs="$REPO_ROOT/$pkg"
-    if [[ -d "$pkg_abs" ]] && grep -qlr '//go:build unit' --include='*_test.go' "$pkg_abs" 2>/dev/null; then
+    if has_own_unit_tests "$REPO_ROOT/$pkg"; then
       testable_packages+=("$pkg")
     fi
   done <<< "$changed_packages"
