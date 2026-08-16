@@ -17,6 +17,8 @@ import (
 	"os"
 	"slices"
 	"time"
+
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
 // The hosted control plane's installations endpoint is the only thing that
@@ -410,10 +412,10 @@ func decodeInstallation(raw json.RawMessage) (Installation, error) {
 		// day a field on this struct stops being a string.
 		return Installation{}, fmt.Errorf("it could not be read (%q)", clip(err.Error(), maxWarnedRunes))
 	}
-	if !installationRE.MatchString(installation.InstallationID) {
+	if !pkgmodel.ValidInstallationID(installation.InstallationID) {
 		// Without a canonical id the record cannot be matched against a
 		// recorded profile at all, so it identifies no installation.
-		return Installation{}, errors.New("its installationId is not a canonical lowercase UUID")
+		return Installation{}, errors.New("its installationId is not a well-formed installation id")
 	}
 	endpoint, err := canonicalOrigin(installation.Endpoint)
 	if err != nil {

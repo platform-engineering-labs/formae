@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
-	"regexp"
 	"strings"
 
 	pklgo "github.com/apple/pkl-go/pkl"
@@ -23,11 +22,6 @@ const (
 	defaultClassicURL  = "http://localhost"
 	defaultClassicPort = 49684
 )
-
-// installationRE matches the canonical lowercase UUID text form. The
-// constraint is syntactic on purpose: it mirrors what the edge accepts as a
-// routing key, and says nothing about UUID version or variant bits.
-var installationRE = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // buildConnection resolves the CLI's connection, translating the deprecated
 // cli.api, cli.auth, and plugins.authentication settings when they are the
@@ -156,8 +150,8 @@ func canonicalHostedEndpoint(raw string) (string, error) {
 }
 
 func validateInstallation(id string) error {
-	if !installationRE.MatchString(id) {
-		return fmt.Errorf("cli.connection installation %q must be a canonical lowercase UUID", id)
+	if !pkgmodel.ValidInstallationID(id) {
+		return fmt.Errorf("cli.connection installation %q is not a well-formed installation id", id)
 	}
 	return nil
 }

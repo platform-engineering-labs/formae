@@ -127,7 +127,7 @@ func installationIDs(installations []Installation) []string {
 // client adds. Every extra header is another thing an origin can key off or a
 // proxy can cache on, and the bearer must reach the control plane unchanged.
 func TestListInstallations_SendsTheBearerAndNothingElse(t *testing.T) {
-	srv, seen := serveInstallations(t, validInstallation(testUUIDA))
+	srv, seen := serveInstallations(t, validInstallation(testInstallationA))
 
 	snapshot, err := listFrom(t, srv)
 
@@ -154,7 +154,7 @@ func TestListInstallations_SendsTheBearerAndNothingElse(t *testing.T) {
 // redirect is refused outright. Go forwards custom headers across a redirect,
 // so following one would hand the bearer to whatever host the response named.
 func TestListInstallations_RefusesARedirectAndDoesNotForwardTheBearer(t *testing.T) {
-	target, targetSeen := serveInstallations(t, validInstallation(testUUIDA))
+	target, targetSeen := serveInstallations(t, validInstallation(testInstallationA))
 	origin, _ := serveBody(t, http.StatusFound, map[string]string{"Location": target.URL + "/api/v1/me/installations"}, "")
 
 	snapshot, err := listFrom(t, origin)
@@ -213,7 +213,7 @@ func TestListInstallations_AcceptsABodyExactlyAtTheCap(t *testing.T) {
 	snapshot, err := listFrom(t, srv)
 
 	require.NoError(t, err)
-	assert.Equal(t, []string{testUUIDA}, installationIDs(snapshot.Installations))
+	assert.Equal(t, []string{testInstallationA}, installationIDs(snapshot.Installations))
 	assert.True(t, snapshot.Authoritative, "the padding must not be what decides authority")
 }
 
@@ -226,7 +226,7 @@ func TestListInstallations_AcceptsABodyExactlyAtTheCap(t *testing.T) {
 // answer.
 func paddedBody(t *testing.T, size int) string {
 	t.Helper()
-	body := `{"results":[` + marshalJSON(t, validInstallation(testUUIDA)) + `]}`
+	body := `{"results":[` + marshalJSON(t, validInstallation(testInstallationA)) + `]}`
 	require.LessOrEqual(t, len(body), size)
 	return body + strings.Repeat(" ", size-len(body))
 }
@@ -238,7 +238,7 @@ func paddedBody(t *testing.T, size int) string {
 func TestListInstallations_RejectsMoreInstallationsThanTheCap(t *testing.T) {
 	records := make([]any, 0, maxInstallations+1)
 	for i := 0; i <= maxInstallations; i++ {
-		records = append(records, validInstallation(fmt.Sprintf("3f2b8c14-0000-4000-8000-%012d", i)))
+		records = append(records, validInstallation(fmt.Sprintf("aaaaaaaaaaaaaaaaaaaa%07d", i)))
 	}
 	srv, _ := serveBody(t, http.StatusOK, nil, installationsBody(t, records...))
 
@@ -254,7 +254,7 @@ func TestListInstallations_RejectsMoreInstallationsThanTheCap(t *testing.T) {
 func TestListInstallations_AcceptsExactlyTheCap(t *testing.T) {
 	records := make([]any, 0, maxInstallations)
 	for i := 0; i < maxInstallations; i++ {
-		records = append(records, validInstallation(fmt.Sprintf("3f2b8c14-0000-4000-8000-%012d", i)))
+		records = append(records, validInstallation(fmt.Sprintf("aaaaaaaaaaaaaaaaaaaa%07d", i)))
 	}
 	srv, _ := serveBody(t, http.StatusOK, nil, installationsBody(t, records...))
 
@@ -347,7 +347,7 @@ func TestListInstallations_ClassifiesATimeoutAsTransient(t *testing.T) {
 // and a state it does not recognise: classifying states is not this client's
 // job, and an unknown one says nothing about whether the list is complete.
 func TestListInstallations_DecodesAWellFormedResponse(t *testing.T) {
-	record := validInstallation(testUUIDA)
+	record := validInstallation(testInstallationA)
 	record["state"] = "suspended-for-reasons-we-do-not-know"
 	srv, _ := serveInstallations(t, record)
 
@@ -358,7 +358,7 @@ func TestListInstallations_DecodesAWellFormedResponse(t *testing.T) {
 	assert.Empty(t, snapshot.Warnings)
 	require.Len(t, snapshot.Installations, 1)
 	assert.Equal(t, Installation{
-		InstallationID:   testUUIDA,
+		InstallationID:   testInstallationA,
 		InstallationName: "prod",
 		TenantName:       "acme",
 		OrgName:          "acme-inc",
@@ -402,7 +402,7 @@ func TestListInstallations_AcceptsAndCanonicalisesAnEndpoint(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			record := validInstallation(testUUIDA)
+			record := validInstallation(testInstallationA)
 			record["endpoint"] = tc.endpoint
 			srv, _ := serveInstallations(t, record)
 
@@ -442,7 +442,7 @@ func TestListInstallations_AMissingListIsNotAnEmptyList(t *testing.T) {
 	}{
 		{name: "no results key", body: `{}`},
 		{name: "null results", body: `{"results":null}`},
-		{name: "results under another name", body: `{"installations":[{"installationId":"` + testUUIDA + `"}]}`},
+		{name: "results under another name", body: `{"installations":[{"installationId":"` + testInstallationA + `"}]}`},
 		{name: "results that is not an array", body: `{"results":7}`},
 		{name: "results that is an object", body: `{"results":{"items":[]}}`},
 	}
@@ -467,8 +467,8 @@ func TestListInstallations_AMissingListIsNotAnEmptyList(t *testing.T) {
 // the body still looked like a complete, wholly recognised answer.
 func TestListInstallations_ARepeatedResultsKeyLosesAuthority(t *testing.T) {
 	body := fmt.Sprintf(`{"results":[%s],"results":[%s]}`,
-		marshalJSON(t, validInstallation(testUUIDA)),
-		marshalJSON(t, validInstallation(testUUIDB)))
+		marshalJSON(t, validInstallation(testInstallationA)),
+		marshalJSON(t, validInstallation(testInstallationB)))
 	srv, _ := serveBody(t, http.StatusOK, nil, body)
 
 	snapshot, err := listFrom(t, srv)
@@ -485,7 +485,7 @@ func TestListInstallations_ARepeatedResultsKeyLosesAuthority(t *testing.T) {
 // for the response's: both rows are records that are present and identifiable,
 // and a run that can see them can still decide every installation's presence.
 func TestListInstallations_TheEnvelopeWalkOnlyReadsTheTopLevel(t *testing.T) {
-	record := marshalJSON(t, validInstallation(testUUIDA))
+	record := marshalJSON(t, validInstallation(testInstallationA))
 	withField := func(field, value string) string {
 		return record[:len(record)-1] + `,` + strconv.Quote(field) + `:` + value + `}`
 	}
@@ -513,7 +513,7 @@ func TestListInstallations_TheEnvelopeWalkOnlyReadsTheTopLevel(t *testing.T) {
 			require.NoError(t, err)
 			assert.True(t, snapshot.Authoritative, "what a record carries says nothing about the list being complete")
 			assert.Empty(t, snapshot.Warnings)
-			assert.Equal(t, []string{testUUIDA}, installationIDs(snapshot.Installations))
+			assert.Equal(t, []string{testInstallationA}, installationIDs(snapshot.Installations))
 		})
 	}
 }
@@ -528,10 +528,10 @@ func TestListInstallations_TheEnvelopeWalkOnlyReadsTheTopLevel(t *testing.T) {
 // more values follow reads a `}` or a `]` as the end of the stream, so those
 // are the shapes a bare "is there more?" check waves through.
 func TestListInstallations_RefusesAnythingAfterTheTopLevelObject(t *testing.T) {
-	first := marshalJSON(t, validInstallation(testUUIDA))
+	first := marshalJSON(t, validInstallation(testInstallationA))
 	rest := fmt.Sprintf(`{"results":[%s,%s]}`,
-		marshalJSON(t, validInstallation(testUUIDB)),
-		marshalJSON(t, validInstallation(testUUIDC)))
+		marshalJSON(t, validInstallation(testInstallationB)),
+		marshalJSON(t, validInstallation(testInstallationC)))
 
 	tests := []struct {
 		name     string
@@ -556,7 +556,7 @@ func TestListInstallations_RefusesAnythingAfterTheTopLevelObject(t *testing.T) {
 			if tc.accepted {
 				require.NoError(t, err, "a body may end with whitespace")
 				assert.True(t, snapshot.Authoritative)
-				assert.Equal(t, []string{testUUIDA}, installationIDs(snapshot.Installations))
+				assert.Equal(t, []string{testInstallationA}, installationIDs(snapshot.Installations))
 				return
 			}
 			require.Error(t, err)
@@ -598,14 +598,14 @@ func TestListInstallations_PaginationTripwiresDropAuthorityButKeepRecords(t *tes
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			body := fmt.Sprintf(tc.body, marshalJSON(t, validInstallation(testUUIDA)))
+			body := fmt.Sprintf(tc.body, marshalJSON(t, validInstallation(testInstallationA)))
 			srv, _ := serveBody(t, http.StatusOK, tc.headers, body)
 
 			snapshot, err := listFrom(t, srv)
 
 			require.NoError(t, err, "an unrecognised marker does not fail the request")
 			assert.False(t, snapshot.Authoritative)
-			assert.Equal(t, []string{testUUIDA}, installationIDs(snapshot.Installations),
+			assert.Equal(t, []string{testInstallationA}, installationIDs(snapshot.Installations),
 				"partial knowledge still adds; only removal needs a complete answer")
 			require.NotEmpty(t, snapshot.Warnings)
 			assert.Contains(t, strings.Join(snapshot.Warnings, "\n"), tc.warning)
@@ -618,7 +618,7 @@ func TestListInstallations_PaginationTripwiresDropAuthorityButKeepRecords(t *tes
 // about whether the list is complete, and treating it as a pagination marker
 // would switch pruning off for every user the day one is added.
 func TestListInstallations_AnUnknownFieldInsideARecordKeepsAuthority(t *testing.T) {
-	record := validInstallation(testUUIDA)
+	record := validInstallation(testInstallationA)
 	record["region"] = "eu-west-1"
 	record["features"] = map[string]any{"beta": true}
 	srv, _ := serveInstallations(t, record)
@@ -628,7 +628,7 @@ func TestListInstallations_AnUnknownFieldInsideARecordKeepsAuthority(t *testing.
 	require.NoError(t, err)
 	assert.True(t, snapshot.Authoritative)
 	assert.Empty(t, snapshot.Warnings)
-	assert.Equal(t, []string{testUUIDA}, installationIDs(snapshot.Installations))
+	assert.Equal(t, []string{testInstallationA}, installationIDs(snapshot.Installations))
 }
 
 // TestListInstallations_DropsUnidentifiableRecordsAndLosesAuthority walks the
@@ -638,7 +638,7 @@ func TestListInstallations_AnUnknownFieldInsideARecordKeepsAuthority(t *testing.
 // non-destructive.
 func TestListInstallations_DropsUnidentifiableRecordsAndLosesAuthority(t *testing.T) {
 	mutate := func(f func(rawInstallation)) rawInstallation {
-		r := validInstallation(testUUIDB)
+		r := validInstallation(testInstallationB)
 		f(r)
 		return r
 	}
@@ -652,8 +652,11 @@ func TestListInstallations_DropsUnidentifiableRecordsAndLosesAuthority(t *testin
 		{name: "record that is an array", bad: []any{1, 2}},
 		{name: "type error in installationId", bad: mutate(func(r rawInstallation) { r["installationId"] = 1 })},
 		{name: "type error in endpoint", bad: mutate(func(r rawInstallation) { r["endpoint"] = []string{testOrigin} })},
-		{name: "malformed installationId", bad: mutate(func(r rawInstallation) { r["installationId"] = "not-a-uuid" })},
-		{name: "uppercase installationId", bad: mutate(func(r rawInstallation) { r["installationId"] = strings.ToUpper(testUUIDB) })},
+		{name: "malformed installationId", bad: mutate(func(r rawInstallation) { r["installationId"] = "not-an-installation" })},
+		{name: "over-long installationId", bad: mutate(func(r rawInstallation) { r["installationId"] = testInstallationB + "a" })},
+		// The identifier format installations used to carry. Nothing mints one
+		// any more, so a record naming one identifies no installation.
+		{name: "installationId in the retired form", bad: mutate(func(r rawInstallation) { r["installationId"] = "3f2b8c14-0000-4000-8000-000000000000" })},
 		{name: "empty installationId", bad: mutate(func(r rawInstallation) { r["installationId"] = "" })},
 		{name: "missing installationId", bad: mutate(func(r rawInstallation) { delete(r, "installationId") })},
 		{name: "plain http endpoint", bad: mutate(func(r rawInstallation) { r["endpoint"] = "http://cloud.formae.io" })},
@@ -668,13 +671,13 @@ func TestListInstallations_DropsUnidentifiableRecordsAndLosesAuthority(t *testin
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			srv, _ := serveInstallations(t, validInstallation(testUUIDA), tc.bad)
+			srv, _ := serveInstallations(t, validInstallation(testInstallationA), tc.bad)
 
 			snapshot, err := listFrom(t, srv)
 
 			require.NoError(t, err)
 			assert.False(t, snapshot.Authoritative)
-			assert.Equal(t, []string{testUUIDA}, installationIDs(snapshot.Installations),
+			assert.Equal(t, []string{testInstallationA}, installationIDs(snapshot.Installations),
 				"the valid sibling is still returned")
 			require.Len(t, snapshot.Warnings, 1)
 		})
@@ -686,12 +689,12 @@ func TestListInstallations_DropsUnidentifiableRecordsAndLosesAuthority(t *testin
 // to trust the set it returned, and picking one copy of a duplicated id would
 // write a profile from a record chosen by nothing but its position.
 func TestListInstallations_DropsEveryCopyOfADuplicatedID(t *testing.T) {
-	second := validInstallation(testUUIDB)
+	second := validInstallation(testInstallationB)
 	second["installationName"] = "staging"
 
 	srv, _ := serveInstallations(t,
-		validInstallation(testUUIDB),
-		validInstallation(testUUIDA),
+		validInstallation(testInstallationB),
+		validInstallation(testInstallationA),
 		second,
 	)
 
@@ -699,10 +702,10 @@ func TestListInstallations_DropsEveryCopyOfADuplicatedID(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.False(t, snapshot.Authoritative)
-	assert.Equal(t, []string{testUUIDA}, installationIDs(snapshot.Installations),
+	assert.Equal(t, []string{testInstallationA}, installationIDs(snapshot.Installations),
 		"no copy of a duplicated id is believed; the unrelated record survives")
 	require.Len(t, snapshot.Warnings, 1)
-	assert.Contains(t, snapshot.Warnings[0], testUUIDB)
+	assert.Contains(t, snapshot.Warnings[0], testInstallationB)
 }
 
 // TestListInstallations_ATypeErrorInOneRecordDoesNotAbortTheBody is the test
@@ -710,20 +713,20 @@ func TestListInstallations_DropsEveryCopyOfADuplicatedID(t *testing.T) {
 // element's type error would take the whole body down with it, and a body we
 // could not read is a body we return nothing from.
 func TestListInstallations_ATypeErrorInOneRecordDoesNotAbortTheBody(t *testing.T) {
-	broken := validInstallation(testUUIDB)
+	broken := validInstallation(testInstallationB)
 	broken["installationName"] = 42 // a number where a string belongs.
 
 	srv, _ := serveInstallations(t,
-		validInstallation(testUUIDA),
+		validInstallation(testInstallationA),
 		broken,
-		validInstallation(testUUIDC),
+		validInstallation(testInstallationC),
 	)
 
 	snapshot, err := listFrom(t, srv)
 
 	require.NoError(t, err)
 	assert.False(t, snapshot.Authoritative)
-	assert.Equal(t, []string{testUUIDA, testUUIDC}, installationIDs(snapshot.Installations),
+	assert.Equal(t, []string{testInstallationA, testInstallationC}, installationIDs(snapshot.Installations),
 		"the siblings of a wrongly typed record survive it")
 	require.Len(t, snapshot.Warnings, 1)
 	assert.Contains(t, snapshot.Warnings[0], `("`,
@@ -736,7 +739,7 @@ func TestListInstallations_ATypeErrorInOneRecordDoesNotAbortTheBody(t *testing.T
 // to — and never a credential.
 func TestListInstallations_WarningsAreBoundedAndLeakNothing(t *testing.T) {
 	longKey := strings.Repeat("k", 4000)
-	record := validInstallation(testUUIDA)
+	record := validInstallation(testInstallationA)
 	record["endpoint"] = "https://user:hunter2@cloud.formae.io"
 	body := fmt.Sprintf(`{"results":[%s],%q:1}`, marshalJSON(t, record), longKey)
 	srv, _ := serveBody(t, http.StatusOK, nil, body)

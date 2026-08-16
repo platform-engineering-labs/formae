@@ -22,7 +22,7 @@ const trustedIssuer = "https://auth.formae.ai"
 func hostedConn(issuer string) *pkgmodel.HostedConnection {
 	return &pkgmodel.HostedConnection{
 		Endpoint:     "https://cloud.formae.ai",
-		Installation: "3f2b8c14-0000-4000-8000-000000000000",
+		Installation: "3HzFPXfPDGhwLJJVtaHbmFs6vLa",
 		Auth: json.RawMessage(
 			`{"type":"oidc","role":"cli","issuer":"` + issuer + `"}`),
 	}
@@ -90,7 +90,7 @@ func TestResolveHostedCarriesTheCredential(t *testing.T) {
 	if got.Credential != "Bearer abc.def" {
 		t.Errorf("credential = %q", got.Credential)
 	}
-	if got.Connection["installation"] != "3f2b8c14-0000-4000-8000-000000000000" {
+	if got.Connection["installation"] != "3HzFPXfPDGhwLJJVtaHbmFs6vLa" {
 		t.Errorf("connection = %#v", got.Connection)
 	}
 }

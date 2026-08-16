@@ -11,10 +11,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	pkgauth "github.com/platform-engineering-labs/formae/pkg/auth"
 	"net/http"
 	"strings"
 	"testing"
+
+	pkgauth "github.com/platform-engineering-labs/formae/pkg/auth"
 
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/stretchr/testify/assert"
@@ -65,7 +66,7 @@ func oidcAuth(t *testing.T, overrides map[string]any) json.RawMessage {
 func hosted(auth json.RawMessage) *pkgmodel.HostedConnection {
 	return &pkgmodel.HostedConnection{
 		Endpoint:     testOrigin,
-		Installation: testUUIDA,
+		Installation: testInstallationA,
 		Auth:         auth,
 	}
 }
@@ -463,7 +464,7 @@ func TestGateResult_StringNeverPrintsTheBearer(t *testing.T) {
 func TestGateSync_ARefusalMakesNoControlPlaneRequest(t *testing.T) {
 	for _, tc := range refusalCases(t) {
 		t.Run(tc.name, func(t *testing.T) {
-			srv, seen := serveInstallations(t, validInstallation(testUUIDA))
+			srv, seen := serveInstallations(t, validInstallation(testInstallationA))
 
 			result := gateSync(tc.conn, platform{Origin: srv.URL, Issuer: testIssuer}, tc.hdr)
 			if result.OK {
@@ -481,7 +482,7 @@ func TestGateSync_ARefusalMakesNoControlPlaneRequest(t *testing.T) {
 // the same wiring, with a block that passes, reaches the control plane with
 // exactly the credential the gate returned.
 func TestGateSync_AnAllowedGateSendsTheCredentialItValidated(t *testing.T) {
-	srv, seen := serveInstallations(t, validInstallation(testUUIDA))
+	srv, seen := serveInstallations(t, validInstallation(testInstallationA))
 	credential := "Bearer " + testToken
 
 	result := gateSync(hosted(oidcAuth(t, nil)), platform{Origin: srv.URL, Issuer: testIssuer}, bearerHeader(credential))
@@ -707,7 +708,7 @@ func TestCredentialCannotBeMintedForAnUntrustedIssuer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a trusted issuer should validate: %v", err)
 	}
-	if v.Connection().Installation != "3f2b8c14-0000-4000-8000-000000000000" {
+	if v.Connection().Installation != "3HzFPXfPDGhwLJJVtaHbmFs6vLa" {
 		t.Errorf("the validated connection should be the one checked: %#v", v.Connection())
 	}
 }
@@ -791,7 +792,7 @@ func hostedConnWithAuth(t *testing.T, issuer string) *pkgmodel.HostedConnection 
 	auth := fmt.Sprintf(`{"type":%q,"role":%q,"issuer":%q}`, oidcAuthType, cliAuthRole, issuer)
 	return &pkgmodel.HostedConnection{
 		Endpoint:     "https://cloud.formae.ai",
-		Installation: "3f2b8c14-0000-4000-8000-000000000000",
+		Installation: "3HzFPXfPDGhwLJJVtaHbmFs6vLa",
 		Auth:         json.RawMessage(auth),
 	}
 }
