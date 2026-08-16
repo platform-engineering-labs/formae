@@ -1480,8 +1480,11 @@ func (h *TestHarness) executeCancel(t *testing.T, op *Operation, model *StateMod
 	t.Logf("[op %d] Cancel command %s → accepted", op.SequenceNum, target.CommandID)
 
 	// Wait for the canceled command to reach a terminal state so we can read
-	// per-resource-update outcomes.
-	cmd, ok := h.TryWaitForCommandDone(target.CommandID, defaultCommandTimeout)
+	// per-resource-update outcomes. The most recent accepted command may be
+	// a stack-expirer destroy tracked by executeCheckTTL, which never
+	// appears over the user-only command-status API, so observe it via the
+	// datastore instead.
+	cmd, ok := h.waitForCommandInDB(target.CommandID, defaultCommandTimeout)
 	if !ok {
 		t.Logf("[op %d] Cancel command %s → timed out waiting for completion", op.SequenceNum, target.CommandID)
 		return
@@ -1913,9 +1916,13 @@ func (h *TestHarness) DrainPendingCommands(t *testing.T, model *StateModel, time
 	// Step 1: Collect all command outcomes. Commands marked Resolved were
 	// already handled by the cancel handler but are kept in AcceptedCommands
 	// so their corrections take precedence during reverse-order processing.
+	// AcceptedCommands can include a stack-expirer destroy tracked by
+	// executeCheckTTL alongside user commands, and that command never
+	// appears over the user-only command-status API, so observe every
+	// accepted command via the datastore instead.
 	var drained []drainedCommand
 	for _, ac := range model.AcceptedCommands {
-		cmd, ok := h.TryWaitForCommandDone(ac.CommandID, timeout)
+		cmd, ok := h.waitForCommandInDB(ac.CommandID, timeout)
 		if !ok {
 			t.Logf("DrainPendingCommands: command %s timed out", ac.CommandID)
 			drained = append(drained, drainedCommand{ac: ac, cmd: nil})
@@ -2134,8 +2141,10 @@ func (h *TestHarness) ForceCheckTTLAndWait(t *testing.T, model *StateModel) {
 			continue
 		}
 
-		// Wait for the destroy command and apply outcomes to the model.
-		cmd, ok := h.TryWaitForCommandDone(commandID, defaultCommandTimeout)
+		// Wait for the destroy command and apply outcomes to the model. This
+		// command is stack-expirer sourced, so it never appears over the
+		// user-only command-status API; observe it via the datastore instead.
+		cmd, ok := h.waitForCommandInDB(commandID, defaultCommandTimeout)
 		if !ok {
 			t.Logf("ForceCheckTTLAndWait: command %s timed out", commandID)
 			continue
