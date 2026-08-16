@@ -7,10 +7,11 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"github.com/platform-engineering-labs/formae/internal/cli/printer"
 	"os"
 	"slices"
 	"strings"
+
+	"github.com/platform-engineering-labs/formae/internal/cli/printer"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"

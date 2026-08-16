@@ -8,9 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/platform-engineering-labs/formae/internal/cli/authmsg"
 	"net/http"
 	"strings"
+
+	"github.com/platform-engineering-labs/formae/internal/cli/authmsg"
 
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
