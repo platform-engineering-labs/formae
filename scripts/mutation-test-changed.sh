@@ -328,6 +328,16 @@ main() {
     in_flight_pkg="$pkg"
     in_flight_log="$log_file"
 
+    # gremlins mutates the whole directory subtree below the package it is
+    # invoked on, so a package with sub-packages under it is charged with
+    # mutants from code the run was never asked about. --exclude-files takes a
+    # regex matched unanchored against every path gremlins walks below the
+    # invoked directory, and those paths are always slash-separated whatever the
+    # platform — so a path holding a separator is by construction in a
+    # sub-directory, and excluding '/' leaves exactly the invoked package. This
+    # narrows what is mutated, not what is covered: coverage is still gathered
+    # over the whole subtree, and gremlins has no flag to narrow that.
+    #
     # No pipeline, so the exit status is gremlins' own and set -e cannot end the
     # run here. gremlins may exit non-zero when mutants survive — that's expected
     # and not a failure; the status is a diagnostic, never the verdict.
@@ -336,6 +346,7 @@ main() {
       --tags unit \
       --timeout-coefficient 10 \
       --workers 4 \
+      --exclude-files '/' \
       -o "$report_file" \
       "./$rel_pkg") > "$log_file" 2>&1 || status=$?
 

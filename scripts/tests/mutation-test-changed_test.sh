@@ -134,10 +134,21 @@ add_untested_package() {
   fixture_commit "$repo" "change $pkg"
 }
 
+# add_base_package <repo> <pkg>: adds a Go source file in <pkg> and folds it
+# into origin/main, so the package is in the tree the script runs over but out
+# of the diff the script reads. Moving origin/main takes every commit made so
+# far with it, so this comes before the changed packages a test wants in view.
+add_base_package() {
+  local repo="$1" pkg="$2"
+  add_untested_package "$repo" "$pkg"
+  git -C "$repo" update-ref refs/remotes/origin/main HEAD
+}
+
 # stub_gremlins <bin_dir> <body>: installs an executable `gremlins` in
 # <bin_dir> that runs <body> instead of the real tool. The body sees gremlins'
-# own arguments plus $report_path, the value passed to gremlins' -o flag, and
-# $target, the ./package argument, so a stub can behave differently per package.
+# own arguments plus $report_path, the value passed to gremlins' -o flag,
+# $target, the ./package argument, and $exclude_files, the value passed to
+# gremlins' --exclude-files flag, so a stub can behave differently per package.
 stub_gremlins() {
   local bin_dir="$1" body="$2"
   mkdir -p "$bin_dir"
@@ -145,9 +156,11 @@ stub_gremlins() {
     printf '#!/usr/bin/env bash\n'
     printf 'report_path=""\n'
     printf 'target=""\n'
+    printf 'exclude_files=""\n'
     printf 'while [[ $# -gt 0 ]]; do\n'
     printf '  case "$1" in\n'
     printf '    -o) report_path="$2"; shift 2 ;;\n'
+    printf '    --exclude-files) exclude_files="$2"; shift 2 ;;\n'
     printf '    ./*) target="$1"; shift ;;\n'
     printf '    *) shift ;;\n'
     printf '  esac\n'
@@ -225,6 +238,33 @@ esac
 printf '%s' '$report' > \"\$report_path\"
 exit 0"
   stub_gremlins "$bin_dir" "$body"
+}
+
+# stub_gremlins_walking <bin_dir>: installs a stub that emulates gremlins' file
+# selection — it walks the whole directory subtree below the target, drops every
+# walked path matching the --exclude-files regex it was given, names what is
+# left on stdout and writes a report carrying one killed mutant per named file.
+# The report names the files the stub selected, so it builds its own body rather
+# than taking one from mutation_report. The emulation goes as far as a single
+# pattern that means the same thing to grep as it does to the tool's own regex
+# engine, which is what the script passes and all this needs to tell apart.
+stub_gremlins_walking() {
+  local bin_dir="$1"
+  stub_gremlins "$bin_dir" '
+walked=$(cd "$target" && find . -name "*.go" ! -name "*_test.go" -printf "%P\n" | sort)
+if [[ -n "$exclude_files" ]]; then
+  walked=$(grep -Ev "$exclude_files" <<< "$walked" || true)
+fi
+entries=""
+separator=""
+while IFS= read -r file; do
+  [[ -n "$file" ]] || continue
+  echo "mutating $file"
+  entries+="$separator{\"file_name\": \"$file\", \"mutations\": [{\"status\": \"KILLED\"}]}"
+  separator=", "
+done <<< "$walked"
+printf "{\"files\": [%s]}" "$entries" > "$report_path"
+exit 0'
 }
 
 # run_script <repo> <bin_dir> [summary_file]: runs the script under test inside
@@ -864,6 +904,32 @@ test_an_interrupted_package_is_annotated_and_its_output_kept() {
   assert_interrupted_by TERM 143
 }
 
+# gremlins walks the whole directory subtree below the package it is invoked on,
+# so a package that has sub-packages under it would be charged with mutants from
+# code the run was never asked about. The run has to cover the invoked package's
+# own files and nothing below them.
+test_only_the_invoked_package_is_mutated() {
+  local work repo bin
+  work=$(new_workdir)
+  repo="$work/repo"
+  bin="$work/bin"
+
+  make_fixture_repo "$repo"
+  add_base_package "$repo" "example/pkg/sub"
+  add_changed_package "$repo" "example/pkg"
+  stub_gremlins_walking "$bin"
+
+  run_script "$repo" "$bin"
+
+  assert_output_matches '^mutating code\.go$' \
+    "the invoked package's own file is mutated"
+  assert_output_count '^mutating sub/code\.go$' 0 \
+    "the sub-package's file is not mutated"
+  assert_output_matches '\| `example/pkg` \| ok \| - \| 100\.0% \| 1 \| 0 \| 0 \|' \
+    "the report counts one mutant, from the one file that was selected"
+  assert_status 0 "a run confined to the invoked package passes"
+}
+
 # ── 4. Runner ───────────────────────────────────────────────────────────────
 run_test() {
   local test_name="$1"
@@ -906,6 +972,7 @@ main() {
   run_test test_a_written_summary_is_not_repeated_in_the_step_log
   run_test test_the_table_is_printed_once
   run_test test_an_interrupted_package_is_annotated_and_its_output_kept
+  run_test test_only_the_invoked_package_is_mutated
 
   echo ""
   if [[ "$tests_failed" -gt 0 ]]; then
