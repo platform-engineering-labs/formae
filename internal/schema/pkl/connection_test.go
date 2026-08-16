@@ -27,7 +27,7 @@ func TestHostedConnectionTranslates(t *testing.T) {
 	hosted, ok := cfg.Cli.Connection.(*pkgmodel.HostedConnection)
 	require.True(t, ok, "expected *HostedConnection, got %T", cfg.Cli.Connection)
 	assert.Equal(t, "https://cloud.formae.ai", hosted.Endpoint)
-	assert.Equal(t, "3f2b8c14-0000-4000-8000-000000000000", hosted.Installation)
+	assert.Equal(t, "3HzFPXfPDGhwLJJVtaHbmFs6vLa", hosted.Installation)
 	assert.JSONEq(t, `{"type":"oidc","issuer":"https://auth.formae.ai"}`, string(hosted.Auth))
 }
 
@@ -121,10 +121,11 @@ func TestCanonicalHostedEndpoint(t *testing.T) {
 }
 
 func TestValidateInstallation(t *testing.T) {
-	assert.NoError(t, validateInstallation("3f2b8c14-0000-4000-8000-000000000000"))
+	assert.NoError(t, validateInstallation("3HzFPXfPDGhwLJJVtaHbmFs6vLa"))
 	for _, bad := range []string{
-		"", "3F2B8C14-0000-4000-8000-000000000000", "3f2b8c14", "not-a-uuid",
-		" 3f2b8c14-0000-4000-8000-000000000000",
+		"", "3f2b8c14-0000-4000-8000-000000000000", "3HzFPXfPDGhwLJJVtaHbmFs6vL",
+		"3HzFPXfPDGhwLJJVtaHbmFs6vLaa", "not-an-installation",
+		" 3HzFPXfPDGhwLJJVtaHbmFs6vL",
 	} {
 		assert.Error(t, validateInstallation(bad), "expected %q to be rejected", bad)
 	}

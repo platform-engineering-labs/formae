@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"regexp"
 	"time"
 )
 
@@ -259,6 +260,28 @@ type Connection interface {
 	isConnection()
 }
 
+// installationRE is the routing-key grammar: 27 base62 characters, case
+// sensitive, which is the text form of a KSUID.
+var installationRE = regexp.MustCompile(`^[0-9A-Za-z]{27}$`)
+
+// ValidInstallationID reports whether id is well formed as an installation
+// identifier.
+//
+// This is a shape check and deliberately not a decode. 27 base62 digits span a
+// wider range than the 160 bits a KSUID encodes, so a few strings this accepts
+// would fail a KSUID parser. Refusing them here would make this client
+// stricter than the edge that does the routing, which validates the same
+// grammar: we would then refuse an identifier the router would have accepted,
+// and gain nothing, because nothing mints an identifier that cannot be
+// decoded. A value that is well formed but not routable is a 404 from the
+// edge, which says so far more usefully than a local guess would.
+//
+// One definition, exported, because this grammar had four copies in four
+// repositories and a format change reached only some of them: the edge routed
+// on the new shape while three validators still refused it, which made a real
+// installation unaddressable from either end.
+func ValidInstallationID(id string) bool { return installationRE.MatchString(id) }
+
 // ClassicConnection addresses a self-hosted agent.
 type ClassicConnection struct {
 	URL  string
@@ -271,9 +294,9 @@ type ClassicConnection struct {
 func (*ClassicConnection) isConnection() {}
 
 // HostedConnection addresses one installation behind the hosted endpoint.
-// Endpoint is a canonical https origin and Installation a canonical lowercase
-// UUID: both are validated when the configuration is loaded, so consumers can
-// use them directly.
+// Endpoint is a canonical https origin and Installation a canonical KSUID:
+// both are validated when the configuration is loaded, so consumers can use
+// them directly.
 type HostedConnection struct {
 	Endpoint     string
 	Installation string

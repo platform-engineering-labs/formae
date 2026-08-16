@@ -23,9 +23,14 @@ const (
 	testOrigin      = "https://cloud.formae.io"
 	testOtherOrigin = "https://staging.formae.io"
 
-	testUUIDA = "3f2b8c14-0000-4000-8000-00000000000a"
-	testUUIDB = "3f2b8c14-0000-4000-8000-00000000000b"
-	testUUIDC = "3f2b8c14-0000-4000-8000-00000000000c"
+	testInstallationA = "3HzFPXfPDGhwLJJVtaHbmFs6vLa"
+	testInstallationB = "2ZaBcDeFgHiJkLmNoPqRsTuVwXy"
+	testInstallationC = "1QrStUvWxYz0123456789AbCdEf"
+
+	// testInstallationCollidesWithA shares the first twelve characters of
+	// testInstallationA, which is the width a derived profile name carries, so
+	// the two derive one name from otherwise equal inputs.
+	testInstallationCollidesWithA = "3HzFPXfPDGhwZZZZZZZZZZZZZZZ"
 
 	testFingerprintA = "sha256:" +
 		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -137,7 +142,7 @@ func TestLoadLedger_UnparseableIsEmptyWithOneWarning(t *testing.T) {
 // manage afterwards.
 func TestLoadLedger_UnknownSchemaVersionRefusesToLoad(t *testing.T) {
 	for _, version := range []int{0, 2, 99, -1} {
-		path := writeLedgerFile(t, version, validRaw("acme-prod", testUUIDA))
+		path := writeLedgerFile(t, version, validRaw("acme-prod", testInstallationA))
 
 		l, warnings, err := loadLedger(path)
 
@@ -152,16 +157,16 @@ func TestLoadLedger_UnknownSchemaVersionRefusesToLoad(t *testing.T) {
 // that need not exist yet, so it is the one state that carries no
 // fingerprint.
 func TestLoadLedger_ValidEntriesAreAuthoritative(t *testing.T) {
-	pending := validRaw("acme-pending", testUUIDA)
+	pending := validRaw("acme-pending", testInstallationA)
 	pending["state"] = string(entryPending)
 	pending["fingerprint"] = ""
 	pending["tempName"] = ".tmp-0123456789abcdef.pkl"
 
-	owned := validRaw("acme-owned", testUUIDB)
+	owned := validRaw("acme-owned", testInstallationB)
 	owned["altFingerprint"] = testFingerprintB
 	owned["supersedesName"] = "acme-old-name"
 
-	deleting := validRaw("acme-deleting", testUUIDC)
+	deleting := validRaw("acme-deleting", testInstallationC)
 	deleting["state"] = string(entryDeleting)
 
 	path := writeLedgerFile(t, ledgerSchemaVersion, pending, owned, deleting)
@@ -184,7 +189,7 @@ func TestLoadLedger_ValidEntriesAreAuthoritative(t *testing.T) {
 // dropped, warned about, grants no authority, and is not written back.
 func TestLoadLedger_DropsMalformedEntries(t *testing.T) {
 	mutate := func(f func(rawEntry)) rawEntry {
-		e := validRaw("acme-bad", testUUIDB)
+		e := validRaw("acme-bad", testInstallationB)
 		f(e)
 		return e
 	}
@@ -203,8 +208,9 @@ func TestLoadLedger_DropsMalformedEntries(t *testing.T) {
 		{name: "name with a slash", bad: mutate(func(e rawEntry) { e["name"] = "sub/dir" })},
 		{name: "name with an extension", bad: mutate(func(e rawEntry) { e["name"] = "acme.pkl" })},
 		{name: "traversal in supersedesName", bad: mutate(func(e rawEntry) { e["supersedesName"] = "../evil" })},
-		{name: "non-uuid installationId", bad: mutate(func(e rawEntry) { e["installationId"] = "not-a-uuid" })},
-		{name: "uppercase installationId", bad: mutate(func(e rawEntry) { e["installationId"] = strings.ToUpper(testUUIDB) })},
+		{name: "malformed installationId", bad: mutate(func(e rawEntry) { e["installationId"] = "not-an-installation" })},
+		{name: "over-long installationId", bad: mutate(func(e rawEntry) { e["installationId"] = testInstallationB + "a" })},
+		{name: "installationId in the retired form", bad: mutate(func(e rawEntry) { e["installationId"] = "3f2b8c14-0000-4000-8000-000000000000" })},
 		{name: "empty installationId", bad: mutate(func(e rawEntry) { e["installationId"] = "" })},
 		{name: "malformed fingerprint", bad: mutate(func(e rawEntry) { e["fingerprint"] = "sha256:nothex" })},
 		{name: "unprefixed fingerprint", bad: mutate(func(e rawEntry) { e["fingerprint"] = strings.TrimPrefix(testFingerprintA, "sha256:") })},
@@ -228,7 +234,7 @@ func TestLoadLedger_DropsMalformedEntries(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			good := validRaw("acme-good", testUUIDA)
+			good := validRaw("acme-good", testInstallationA)
 			path := writeLedgerFile(t, ledgerSchemaVersion, good, tc.bad)
 
 			l, warnings, err := loadLedger(path)
@@ -255,13 +261,13 @@ func TestLoadLedger_DropsMalformedEntries(t *testing.T) {
 // never touched. Each entry is decoded on its own, so a type error is the
 // same dropped, warned entry as any other malformed one.
 func TestLoadLedger_ConfinesATypeErrorToItsOwnEntry(t *testing.T) {
-	broken := validRaw("acme-broken", testUUIDB)
+	broken := validRaw("acme-broken", testInstallationB)
 	broken["state"] = 1 // a number where a string belongs.
 
-	other := validRaw("staging-one", testUUIDC)
+	other := validRaw("staging-one", testInstallationC)
 	other["controlPlane"] = testOtherOrigin
 
-	path := writeLedgerFile(t, ledgerSchemaVersion, validRaw("acme-prod", testUUIDA), broken, other)
+	path := writeLedgerFile(t, ledgerSchemaVersion, validRaw("acme-prod", testInstallationA), broken, other)
 
 	l, warnings, err := loadLedger(path)
 
@@ -284,8 +290,8 @@ func TestLoadLedger_ConfinesATypeErrorToItsOwnEntry(t *testing.T) {
 // whichever entry the file happened to list first.
 func TestLoadLedger_QuarantinesEntriesSharingAName(t *testing.T) {
 	path := writeLedgerFile(t, ledgerSchemaVersion,
-		validRaw("acme-prod", testUUIDA),
-		validRaw("acme-prod", testUUIDB),
+		validRaw("acme-prod", testInstallationA),
+		validRaw("acme-prod", testInstallationB),
 	)
 
 	l, warnings, err := loadLedger(path)
@@ -306,8 +312,8 @@ func TestLoadLedger_QuarantinesEntriesSharingAName(t *testing.T) {
 // keyed on the installation rather than the file name.
 func TestLoadLedger_QuarantinesEntriesSharingAnInstallationID(t *testing.T) {
 	path := writeLedgerFile(t, ledgerSchemaVersion,
-		validRaw("acme-prod", testUUIDA),
-		validRaw("acme-staging", testUUIDA),
+		validRaw("acme-prod", testInstallationA),
+		validRaw("acme-staging", testInstallationA),
 	)
 
 	l, warnings, err := loadLedger(path)
@@ -330,10 +336,10 @@ func TestLoadLedger_QuarantinesEntriesSharingAnInstallationID(t *testing.T) {
 // A pairwise implementation clears A or C and hands it authority it has not
 // earned.
 func TestLoadLedger_QuarantinesTheWholeConnectedComponent(t *testing.T) {
-	a := validRaw("shared-name", testUUIDA)
-	b := validRaw("shared-name", testUUIDB)
-	c := validRaw("other-name", testUUIDB)
-	unrelated := validRaw("unrelated", testUUIDC)
+	a := validRaw("shared-name", testInstallationA)
+	b := validRaw("shared-name", testInstallationB)
+	c := validRaw("other-name", testInstallationB)
+	unrelated := validRaw("unrelated", testInstallationC)
 
 	path := writeLedgerFile(t, ledgerSchemaVersion, a, b, c, unrelated)
 
@@ -352,9 +358,9 @@ func TestLoadLedger_QuarantinesTheWholeConnectedComponent(t *testing.T) {
 // nothing and leaves every profile in place.
 func TestLoadLedger_QuarantineWarningNamesEveryMemberAndTheRemedy(t *testing.T) {
 	path := writeLedgerFile(t, ledgerSchemaVersion,
-		validRaw("shared-name", testUUIDA),
-		validRaw("shared-name", testUUIDB),
-		validRaw("other-name", testUUIDB),
+		validRaw("shared-name", testInstallationA),
+		validRaw("shared-name", testInstallationB),
+		validRaw("other-name", testInstallationB),
 	)
 
 	_, warnings, err := loadLedger(path)
@@ -364,8 +370,8 @@ func TestLoadLedger_QuarantineWarningNamesEveryMemberAndTheRemedy(t *testing.T) 
 	warning := warnings[0]
 	assert.Contains(t, warning, "shared-name")
 	assert.Contains(t, warning, "other-name")
-	assert.Contains(t, warning, testUUIDA)
-	assert.Contains(t, warning, testUUIDB)
+	assert.Contains(t, warning, testInstallationA)
+	assert.Contains(t, warning, testInstallationB)
 	assert.Contains(t, warning, path, "the remedy must name the file to remove")
 	assert.Contains(t, warning, "remove")
 }
@@ -374,10 +380,10 @@ func TestLoadLedger_QuarantineWarningNamesEveryMemberAndTheRemedy(t *testing.T) 
 // scoped to a control plane: the same profile name against two control planes
 // is a collision the sync step resolves, not a ledger conflict.
 func TestLoadLedger_DifferentControlPlanesDoNotConflict(t *testing.T) {
-	other := validRaw("acme-prod", testUUIDA)
+	other := validRaw("acme-prod", testInstallationA)
 	other["controlPlane"] = testOtherOrigin
 
-	path := writeLedgerFile(t, ledgerSchemaVersion, validRaw("acme-prod", testUUIDA), other)
+	path := writeLedgerFile(t, ledgerSchemaVersion, validRaw("acme-prod", testInstallationA), other)
 
 	l, warnings, err := loadLedger(path)
 
@@ -391,7 +397,7 @@ func TestLoadLedger_DifferentControlPlanesDoNotConflict(t *testing.T) {
 // both for the conflict scan and for later comparison against the origin a
 // run is syncing.
 func TestLoadLedger_CanonicalisesControlPlane(t *testing.T) {
-	noisy := validRaw("acme-prod", testUUIDA)
+	noisy := validRaw("acme-prod", testInstallationA)
 	noisy["controlPlane"] = "HTTPS://Cloud.Formae.IO:443/"
 
 	path := writeLedgerFile(t, ledgerSchemaVersion, noisy)
@@ -408,10 +414,10 @@ func TestLoadLedger_CanonicalisesControlPlane(t *testing.T) {
 // point above load-bearing: a second spelling must not slip a duplicate past
 // the conflict scan.
 func TestLoadLedger_ConflictSurvivesADifferentSpellingOfTheSameOrigin(t *testing.T) {
-	noisy := validRaw("acme-prod", testUUIDB)
+	noisy := validRaw("acme-prod", testInstallationB)
 	noisy["controlPlane"] = "https://CLOUD.formae.io:443"
 
-	path := writeLedgerFile(t, ledgerSchemaVersion, validRaw("acme-prod", testUUIDA), noisy)
+	path := writeLedgerFile(t, ledgerSchemaVersion, validRaw("acme-prod", testInstallationA), noisy)
 
 	l, warnings, err := loadLedger(path)
 
@@ -427,13 +433,13 @@ func TestLoadLedger_ConflictSurvivesADifferentSpellingOfTheSameOrigin(t *testing
 // entries for one installation would quarantine both and forfeit management
 // of the file.
 func TestLedgerUpsert_ReplacesTheRecordForAnInstallation(t *testing.T) {
-	path := writeLedgerFile(t, ledgerSchemaVersion, validRaw("acme-prod", testUUIDA))
+	path := writeLedgerFile(t, ledgerSchemaVersion, validRaw("acme-prod", testInstallationA))
 
 	l, _, err := loadLedger(path)
 	require.NoError(t, err)
 	l.upsert(&ledgerEntry{
 		ControlPlane:   testOrigin,
-		InstallationID: testUUIDA,
+		InstallationID: testInstallationA,
 		Name:           "acme-renamed",
 		State:          entryOwned,
 		Fingerprint:    testFingerprintB,
@@ -452,14 +458,14 @@ func TestLedgerUpsert_ReplacesTheRecordForAnInstallation(t *testing.T) {
 // removed record is gone from the file, so the file it named is no longer
 // ours to delete.
 func TestLedgerRemove_DropsTheRecordForAnInstallation(t *testing.T) {
-	other := validRaw("staging-one", testUUIDC)
+	other := validRaw("staging-one", testInstallationC)
 	other["controlPlane"] = testOtherOrigin
-	path := writeLedgerFile(t, ledgerSchemaVersion, validRaw("acme-prod", testUUIDA), other)
+	path := writeLedgerFile(t, ledgerSchemaVersion, validRaw("acme-prod", testInstallationA), other)
 
 	l, _, err := loadLedger(path)
 	require.NoError(t, err)
-	l.remove(testOrigin, testUUIDA)
-	l.remove(testOrigin, testUUIDB) // absent: nothing to drop.
+	l.remove(testOrigin, testInstallationA)
+	l.remove(testOrigin, testInstallationB) // absent: nothing to drop.
 	require.NoError(t, l.save(path))
 
 	reloaded, _, err := loadLedger(path)
@@ -473,16 +479,16 @@ func TestLedgerRemove_DropsTheRecordForAnInstallation(t *testing.T) {
 // the act quarantine exists to prevent.
 func TestLedgerMutation_NeverTouchesAQuarantinedEntry(t *testing.T) {
 	path := writeLedgerFile(t, ledgerSchemaVersion,
-		validRaw("acme-prod", testUUIDA),
-		validRaw("acme-staging", testUUIDA),
+		validRaw("acme-prod", testInstallationA),
+		validRaw("acme-staging", testInstallationA),
 	)
 
 	l, _, err := loadLedger(path)
 	require.NoError(t, err)
-	l.remove(testOrigin, testUUIDA)
+	l.remove(testOrigin, testInstallationA)
 	l.upsert(&ledgerEntry{
 		ControlPlane:   testOrigin,
-		InstallationID: testUUIDA,
+		InstallationID: testInstallationA,
 		Name:           "acme-new",
 		State:          entryOwned,
 		Fingerprint:    testFingerprintA,
@@ -502,14 +508,14 @@ func TestLedgerMutation_NeverTouchesAQuarantinedEntry(t *testing.T) {
 // including a quarantined pair and an entry recorded against another control
 // plane: a sync against staging must never disturb production's records.
 func TestLedgerSave_CarriesForwardEveryEntryUnchanged(t *testing.T) {
-	staging := validRaw("staging-one", testUUIDC)
+	staging := validRaw("staging-one", testInstallationC)
 	staging["controlPlane"] = testOtherOrigin
 	staging["state"] = string(entryPending)
 	staging["fingerprint"] = ""
 	staging["tempName"] = ".tmp-abcdef0123456789.pkl"
 
-	conflictA := validRaw("shared-name", testUUIDA)
-	conflictB := validRaw("shared-name", testUUIDB)
+	conflictA := validRaw("shared-name", testInstallationA)
+	conflictB := validRaw("shared-name", testInstallationB)
 	conflictB["supersedesName"] = "older-name"
 	conflictB["altFingerprint"] = testFingerprintB
 
@@ -532,15 +538,15 @@ func TestLedgerSave_CarriesForwardEveryEntryUnchanged(t *testing.T) {
 // actually performs: entries are added for one origin and written back, and
 // another origin's records must come through byte-identical.
 func TestLedgerSave_LeavesOtherControlPlanesUntouched(t *testing.T) {
-	other := validRaw("staging-one", testUUIDC)
+	other := validRaw("staging-one", testInstallationC)
 	other["controlPlane"] = testOtherOrigin
-	path := writeLedgerFile(t, ledgerSchemaVersion, validRaw("acme-prod", testUUIDA), other)
+	path := writeLedgerFile(t, ledgerSchemaVersion, validRaw("acme-prod", testInstallationA), other)
 
 	l, _, err := loadLedger(path)
 	require.NoError(t, err)
 	l.upsert(&ledgerEntry{
 		ControlPlane:   testOrigin,
-		InstallationID: testUUIDB,
+		InstallationID: testInstallationB,
 		Name:           "acme-dev",
 		State:          entryOwned,
 		Fingerprint:    testFingerprintA,
@@ -552,7 +558,7 @@ func TestLedgerSave_LeavesOtherControlPlanesUntouched(t *testing.T) {
 	assert.Empty(t, warnings)
 	assert.Equal(t, []string{"acme-prod", "staging-one", "acme-dev"}, names(reloaded.entries))
 	assert.Equal(t, testOtherOrigin, reloaded.entries[1].ControlPlane)
-	assert.Equal(t, testUUIDC, reloaded.entries[1].InstallationID)
+	assert.Equal(t, testInstallationC, reloaded.entries[1].InstallationID)
 }
 
 // TestLedgerSave_CanonicalisesTheEntriesItWrites pins that the file's
@@ -561,13 +567,13 @@ func TestLedgerSave_LeavesOtherControlPlanesUntouched(t *testing.T) {
 // from the file, so two spellings of one control plane cannot slip a
 // duplicate past the conflict scan.
 func TestLedgerSave_CanonicalisesTheEntriesItWrites(t *testing.T) {
-	path := writeLedgerFile(t, ledgerSchemaVersion, validRaw("acme-prod", testUUIDA))
+	path := writeLedgerFile(t, ledgerSchemaVersion, validRaw("acme-prod", testInstallationA))
 
 	l, _, err := loadLedger(path)
 	require.NoError(t, err)
 	l.upsert(&ledgerEntry{
 		ControlPlane:   "HTTPS://Cloud.Formae.IO:443/",
-		InstallationID: testUUIDB,
+		InstallationID: testInstallationB,
 		Name:           "acme-dev",
 		State:          entryOwned,
 		Fingerprint:    testFingerprintA,
@@ -592,7 +598,7 @@ func TestLedgerSave_WritesAtomicallyThroughAUniqueTempFile(t *testing.T) {
 		for i := 0; i < n; i++ {
 			l.upsert(&ledgerEntry{
 				ControlPlane:   testOrigin,
-				InstallationID: fmt.Sprintf("3f2b8c14-0000-4000-8000-%012d", i),
+				InstallationID: fmt.Sprintf("aaaaaaaaaaaaaaaaaaaa%07d", i),
 				Name:           fmt.Sprintf("acme-prod-%d", i),
 				State:          entryOwned,
 				Fingerprint:    testFingerprintA,
@@ -638,14 +644,14 @@ func TestLedgerSave_WritesAtomicallyThroughAUniqueTempFile(t *testing.T) {
 func TestLedgerSave_FailureLeavesTheExistingLedgerIntact(t *testing.T) {
 	original, err := json.Marshal(map[string]any{
 		"schemaVersion": ledgerSchemaVersion,
-		"entries":       []any{validRaw("acme-prod", testUUIDA)},
+		"entries":       []any{validRaw("acme-prod", testInstallationA)},
 	})
 	require.NoError(t, err)
 
 	validEntry := func() *ledgerEntry {
 		return &ledgerEntry{
 			ControlPlane:   testOrigin,
-			InstallationID: testUUIDB,
+			InstallationID: testInstallationB,
 			Name:           "acme-dev",
 			State:          entryOwned,
 			Fingerprint:    testFingerprintA,

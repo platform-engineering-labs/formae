@@ -32,7 +32,7 @@ func hostedConfig(t *testing.T) *pkgmodel.Config {
 		Cli: pkgmodel.CliConfig{
 			Connection: &pkgmodel.HostedConnection{
 				Endpoint:     "https://cloud.formae.ai",
-				Installation: "3f2b8c14-0000-4000-8000-000000000000",
+				Installation: "3HzFPXfPDGhwLJJVtaHbmFs6vLa",
 				Auth:         json.RawMessage(`{"type":"oidc","clientId":"formae-cli"}`),
 			},
 			Theme: "quiet",
@@ -70,7 +70,7 @@ func TestHostedConnectionIsTagged(t *testing.T) {
 	conn := v["cli"].(map[string]any)["connection"].(map[string]any)
 	assert.Equal(t, "hosted", conn["mode"])
 	assert.Equal(t, "https://cloud.formae.ai", conn["endpoint"])
-	assert.Equal(t, "3f2b8c14-0000-4000-8000-000000000000", conn["installation"])
+	assert.Equal(t, "3HzFPXfPDGhwLJJVtaHbmFs6vLa", conn["installation"])
 	assert.NotContains(t, conn, "url")
 }
 

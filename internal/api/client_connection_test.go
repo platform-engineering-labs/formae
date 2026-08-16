@@ -34,7 +34,7 @@ func TestHostedConnectionSendsInstallationHeaderOnEveryRequest(t *testing.T) {
 
 	conn := &pkgmodel.HostedConnection{
 		Endpoint:     srv.URL,
-		Installation: "3f2b8c14-0000-4000-8000-000000000000",
+		Installation: "3HzFPXfPDGhwLJJVtaHbmFs6vLa",
 	}
 	c := NewClient(conn, http.Header{"Authorization": []string{"Bearer t"}}, srv.Client())
 
@@ -45,7 +45,7 @@ func TestHostedConnectionSendsInstallationHeaderOnEveryRequest(t *testing.T) {
 
 	require.Len(t, seen, 2)
 	for _, h := range seen {
-		assert.Equal(t, []string{"3f2b8c14-0000-4000-8000-000000000000"}, h.Values(InstallationHeader),
+		assert.Equal(t, []string{"3HzFPXfPDGhwLJJVtaHbmFs6vLa"}, h.Values(InstallationHeader),
 			"the edge rejects the routing header duplicated or comma-joined")
 		assert.Equal(t, "Bearer t", h.Get("Authorization"))
 	}
@@ -95,7 +95,7 @@ func TestHostedConnectionRefusesCrossOriginRedirect(t *testing.T) {
 
 	conn := &pkgmodel.HostedConnection{
 		Endpoint:     redirector.URL,
-		Installation: "3f2b8c14-0000-4000-8000-000000000000",
+		Installation: "3HzFPXfPDGhwLJJVtaHbmFs6vLa",
 	}
 	c := NewClient(conn, http.Header{"Authorization": []string{"Bearer t"}}, redirector.Client())
 
@@ -118,13 +118,13 @@ func TestHostedConnectionFollowsSameOriginRedirect(t *testing.T) {
 
 	conn := &pkgmodel.HostedConnection{
 		Endpoint:     srv.URL,
-		Installation: "3f2b8c14-0000-4000-8000-000000000000",
+		Installation: "3HzFPXfPDGhwLJJVtaHbmFs6vLa",
 	}
 	c := NewClient(conn, http.Header{"Authorization": []string{"Bearer t"}}, srv.Client())
 
 	_, err := c.Stats()
 	require.NoError(t, err)
 	require.Len(t, seen, 1)
-	assert.Equal(t, "3f2b8c14-0000-4000-8000-000000000000", seen[0].Get(InstallationHeader))
+	assert.Equal(t, "3HzFPXfPDGhwLJJVtaHbmFs6vLa", seen[0].Get(InstallationHeader))
 	assert.Equal(t, "Bearer t", seen[0].Get("Authorization"))
 }

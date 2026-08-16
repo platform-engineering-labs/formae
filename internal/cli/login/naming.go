@@ -10,20 +10,22 @@ import "strings"
 // tenant, or installation name can dominate the derived profile name.
 const maxSlugRunes = 24
 
-// suffixHexLen is the fixed width of the installation-id suffix. It never
+// suffixLen is the fixed width of the installation-id suffix. It never
 // widens: a profile name must be derivable from its own installation alone,
 // never from which other installations happen to be visible at the time.
-const suffixHexLen = 12
+const suffixLen = 12
 
 // deriveProfileName returns the profile name for an installation. The caller
-// must have validated installationID as a canonical lowercase UUID first.
+// must have validated installationID as a canonical installation id first.
 //
 // The name is built entirely from characters store.ValidateName accepts
 // ([a-zA-Z0-9_-]), so it is always a valid profile name by construction: the
-// slugged components and the hex suffix can never combine into something
-// that escapes the profiles/ directory or collides with a reserved
-// filesystem basename. The installation UUID, not this name, is the stable
-// identity; the name is cosmetic.
+// slugged components and the suffix can never combine into something that
+// escapes the profiles/ directory or collides with a reserved filesystem
+// basename. The installation id, not this name, is the stable identity; the
+// name is cosmetic, which is why two ids agreeing on their first suffixLen
+// characters are a name collision the caller resolves rather than a loss of
+// identity.
 func deriveProfileName(orgName, tenantName, installationName, installationID string) string {
 	var parts []string
 	for _, s := range []string{orgName, tenantName, installationName} {
@@ -77,12 +79,13 @@ func isSlugRune(r rune) bool {
 	return (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
 }
 
-// suffix returns the first suffixHexLen hex characters of installationID
-// with its dashes stripped.
+// suffix returns the first suffixLen characters of installationID.
+//
+// Case is kept. Folding it would only fold two distinct installations onto one
+// name, and the name is cosmetic either way.
 func suffix(installationID string) string {
-	hex := strings.ReplaceAll(installationID, "-", "")
-	if len(hex) > suffixHexLen {
-		hex = hex[:suffixHexLen]
+	if len(installationID) > suffixLen {
+		return installationID[:suffixLen]
 	}
-	return hex
+	return installationID
 }

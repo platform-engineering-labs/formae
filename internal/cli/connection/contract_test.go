@@ -41,7 +41,7 @@ func hostedProfile(issuer string) string {
 cli {
     connection = new Hosted {
         endpoint = "https://cloud.formae.ai"
-        installation = "3f2b8c14-0000-4000-8000-000000000000"
+        installation = "3HzFPXfPDGhwLJJVtaHbmFs6vLa"
         auth = new Dynamic {
             type = "oidc"
             role = "cli"
