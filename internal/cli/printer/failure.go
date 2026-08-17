@@ -39,6 +39,11 @@ const (
 	// CodePluginMissing: the auth plugin a sign-in needs is not installed. Its
 	// own code because the remedy is specific and a consumer names it.
 	CodePluginMissing Code = "plugin_missing"
+	// CodeSyncIncomplete: the sign-in succeeded and the profiles that follow it
+	// did not get written. Its own code because the two halves have opposite
+	// remedies: the user is authenticated and must not be sent back through a
+	// sign-in, which is what any code meaning "login failed" would cause.
+	CodeSyncIncomplete Code = "sync_incomplete"
 	// CodeInternal: everything else. A command rendering machine output is
 	// responsible for mapping errors it did not declare onto this, so a
 	// consumer parses one protocol on every path; PrintFailure only reports
@@ -55,6 +60,7 @@ var registeredCodes = map[Code]bool{
 	CodeNoConnection:     true,
 	CodeLoginFailed:      true,
 	CodePluginMissing:    true,
+	CodeSyncIncomplete:   true,
 	CodeInternal:         true,
 }
 

@@ -225,7 +225,12 @@ func runLoginAndSync(ctx context.Context, c authClient, s syncStep, device bool)
 
 	result, active, syncErr := runSync(ctx, s)
 	if syncErr != nil {
-		return syncErr
+		// Typed, because a consumer has to tell this apart from a sign-in that
+		// failed: the user IS authenticated here, and their session is saved, so
+		// sending them back through a sign-in is the one response that cannot
+		// help. Every message in runSync already says "you are signed in, but";
+		// this carries that distinction across the protocol.
+		return &SyncIncompleteError{Cause: syncErr}
 	}
 
 	if s.Emit == nil {
@@ -245,6 +250,12 @@ func runLoginAndSync(ctx context.Context, c authClient, s syncStep, device bool)
 		Warnings: result.Warnings,
 	})
 }
+
+// SyncIncompleteError is a successful sign-in whose profile sync did not finish.
+type SyncIncompleteError struct{ Cause error }
+
+func (e *SyncIncompleteError) Error() string { return e.Cause.Error() }
+func (e *SyncIncompleteError) Unwrap() error { return e.Cause }
 
 // loginReport is who signed in, and whether a flow ran to do it.
 type loginReport struct {

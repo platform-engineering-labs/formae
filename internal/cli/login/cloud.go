@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/platform-engineering-labs/formae/internal/util"
@@ -237,6 +238,23 @@ func authPluginFor(authType string, raw json.RawMessage, pluginDir string) (auth
 		// One client in both roles: it drives the flow and it yields the
 		// credential that flow produced.
 		return client, client, nil
+	}
+
+	// "Not installed" is only one of two things this can mean, and naming the
+	// wrong one sends the user to a command that cannot help.
+	//
+	// Discovery classifies an auth plugin by evaluating its formae-plugin.pkl
+	// manifest, which shells out to `pkl` resolved from PATH, and it discards the
+	// error when that fails. So a tree where the plugin is present but pkl is not
+	// reachable looks exactly like a tree with no plugin in it. That is not
+	// hypothetical: pkl installs beside formae in the same bin directory, and a
+	// process whose PATH does not include it — anything launched from a shell that
+	// never added it — hits this.
+	if _, err := exec.LookPath("pkl"); err != nil {
+		return nil, nil, fmt.Errorf(
+			"signing in to the hosted platform needs the %s auth plugin, and formae cannot tell whether it is "+
+				"installed because `pkl` is not on PATH: reading a plugin's manifest requires it. "+
+				"pkl installs alongside formae, so add that bin directory to PATH and try again", authType)
 	}
 
 	return nil, nil, &pluginMissingError{Plugin: authType, Install: "pelmgr install " + authType}

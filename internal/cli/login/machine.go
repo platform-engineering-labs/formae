@@ -154,6 +154,11 @@ func asDeclaredFailure(err error) error {
 		return printer.Fail(printer.CodeAuthFailed, ae.Message, details)
 	}
 
+	var se *SyncIncompleteError
+	if errors.As(err, &se) {
+		return printer.Fail(printer.CodeSyncIncomplete, se.Error(), nil)
+	}
+
 	var pe *pluginMissingError
 	if errors.As(err, &pe) {
 		return printer.Fail(printer.CodePluginMissing, pe.Error(),
