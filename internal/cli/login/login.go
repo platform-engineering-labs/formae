@@ -376,20 +376,65 @@ func runSync(ctx context.Context, s syncStep) error {
 		return fmt.Errorf("%s: %w", syncIncomplete(""), err)
 	}
 
+	st := store.New(dir)
+
 	// The raw auth block is the one the gate just validated. It travels
 	// alongside the decoded block so the sync can name the keys a generated
 	// profile does not carry; its values are never printed.
 	result := syncProfiles(ctx, syncDeps{
 		Client:   s.NewClient(p.Origin),
-		Store:    store.New(dir),
+		Store:    st,
 		Verifier: s.Verifier,
 		Out:      s.Out,
 		TTY:      tty,
 		Theme:    s.Theme,
 	}, p, gate.Bearer, gate.Auth, s.Entry.sourceAuth())
 
+	activateFirstIfNone(st, result, s.Out, tty, s.Theme)
+
 	printWarnings(s.Out, tty, s.Theme, result.Warnings)
 	return syncExit(result)
+}
+
+// activateFirstIfNone points the active profile at one this run published, but
+// only when the store has no active profile at all.
+//
+// A machine that has just signed in for the first time has profiles and no
+// pointer, and nothing else in this package writes one — the sync reads the
+// active profile only to protect it from rename and prune. Left without one, the
+// next formae command bootstraps a classic localhost default beside the hosted
+// profile that was just created, which is the outcome the whole hosted sign-in
+// path exists to avoid.
+//
+// An existing pointer is never moved. A user with profiles already has an answer
+// to "which one", and signing in is not a request to change it; the rename path
+// refuses to touch the active profile for the same reason, and reaching around
+// that here would be the same mistake one level up.
+//
+// It runs after publication, and that ordering matters: store.Use runs the
+// store's initialization, which on a store with no profiles at all bootstraps
+// the very default this avoids. With a published profile present, initialization
+// stops at "orphaned profiles, no default" and only the pointer is written.
+//
+// Failing to write the pointer is a warning, never a failed sign-in. The user is
+// signed in and their profiles exist either way, which is the rule every message
+// in this file follows.
+func activateFirstIfNone(st *store.Store, result syncResult, out io.Writer, tty bool, th *theme.Theme) {
+	if len(result.Published) == 0 {
+		return // nothing to point at, and no pointer is better than a dangling one.
+	}
+	if _, err := st.Active(); err == nil {
+		return
+	}
+
+	name := result.Published[0]
+	if err := st.Use(name); err != nil {
+		ackLine(out, tty, th, components.AckSkip, fmt.Sprintf(
+			"profile %s was created but could not be made the active one (%v); "+
+				"run `formae profile use %s` to select it", name, err, name))
+		return
+	}
+	ackLine(out, tty, th, components.AckDone, "made profile "+name+" active")
 }
 
 // credential returns the header carrying the credential the sign-in produced,

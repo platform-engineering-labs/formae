@@ -75,6 +75,12 @@ type syncResult struct {
 	DesiredSatisfied                  int   // of those, published or verified this run
 	StaleManagedForOrigin             bool  // a managed profile we own still exists for this origin
 	Fatal                             error // set when the sync did not complete
+
+	// Published names the profiles this run wrote or brought up to date, in the
+	// order it acted on them. The counts above cannot answer "which one", which
+	// is what a store with no active pointer needs: something has to be pointed
+	// at, and it must be the same something on every repeat.
+	Published []string
 }
 
 // Installation states, exactly and lowercase, over the platform's own enum.
@@ -561,7 +567,7 @@ func (r *syncRun) publishProfile(record desiredRecord, auth cliAuthBlock) {
 		return
 	}
 	r.result.Created++
-	r.satisfied()
+	r.satisfied(record.name)
 	r.ack("created profile " + record.name)
 }
 
@@ -607,7 +613,7 @@ func (r *syncRun) applyContent(e *ledgerEntry, record desiredRecord, auth cliAut
 	if updated == digest {
 		// Byte-identical: there is nothing to write, and rewriting it anyway
 		// would churn a file the user may be watching.
-		r.satisfied()
+		r.satisfied(e.Name)
 		return
 	}
 
@@ -683,7 +689,7 @@ func (r *syncRun) applyContent(e *ledgerEntry, record desiredRecord, auth cliAut
 		return
 	}
 	r.result.Updated++
-	r.satisfied()
+	r.satisfied(e.Name)
 	r.ack("updated profile " + e.Name)
 }
 
@@ -779,7 +785,7 @@ func (r *syncRun) renameProfile(e *ledgerEntry, record desiredRecord, auth cliAu
 		return
 	}
 	r.result.Renamed++
-	r.satisfied()
+	r.satisfied(record.name)
 	r.ack(fmt.Sprintf("renamed profile %s to %s", from, record.name))
 }
 
@@ -927,9 +933,14 @@ func (r *syncRun) removeTemp(tempName string) {
 }
 
 // satisfied counts one installation of this run's desired set as having a
-// profile this run published or verified.
-func (r *syncRun) satisfied() {
+// profile this run published or verified, and records the name.
+//
+// Every call site has just established that the file at name is one this formae
+// owns and holds the content it recorded, so a name reaching here is always a
+// profile that exists and can be pointed at.
+func (r *syncRun) satisfied(name string) {
 	r.result.DesiredSatisfied++
+	r.result.Published = append(r.result.Published, name)
 }
 
 // records reports whether digest is one of the contents this entry says its
