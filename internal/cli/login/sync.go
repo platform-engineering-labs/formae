@@ -76,11 +76,53 @@ type syncResult struct {
 	StaleManagedForOrigin             bool  // a managed profile we own still exists for this origin
 	Fatal                             error // set when the sync did not complete
 
-	// Published names the profiles this run wrote or brought up to date, in the
-	// order it acted on them. The counts above cannot answer "which one", which
-	// is what a store with no active pointer needs: something has to be pointed
-	// at, and it must be the same something on every repeat.
-	Published []string
+	// Acted records what this run did to each profile, in the order it acted.
+	//
+	// The counts above cannot answer "which one", and two callers need that: a
+	// store with no active pointer has to be pointed at something, and it must be
+	// the same something on every repeat; and a driven sign-in reports the names
+	// it wrote, because a caller that has to name the profile it will use next
+	// cannot get it from a number.
+	Acted []profileAction
+}
+
+// profileAction is one profile and what happened to it.
+type profileAction struct {
+	Verb string // created | updated | renamed | removed
+	Name string
+}
+
+// The verbs an action can carry. They are the words the user already sees in the
+// acknowledgment lines, so a document and a terminal say the same thing.
+const (
+	verbCreated = "created"
+	verbUpdated = "updated"
+	verbRenamed = "renamed"
+	verbRemoved = "removed"
+)
+
+// published returns the profiles this run wrote or brought up to date, in order.
+// A removal is not a publication: pointing the active profile at a file this run
+// deleted is the one outcome worse than leaving no pointer at all.
+func (r syncResult) published() []string {
+	var names []string
+	for _, a := range r.Acted {
+		if a.Verb != verbRemoved {
+			names = append(names, a.Name)
+		}
+	}
+	return names
+}
+
+// named returns the profiles this run applied verb to.
+func (r syncResult) named(verb string) []string {
+	names := []string{}
+	for _, a := range r.Acted {
+		if a.Verb == verb {
+			names = append(names, a.Name)
+		}
+	}
+	return names
 }
 
 // Installation states, exactly and lowercase, over the platform's own enum.
@@ -567,7 +609,7 @@ func (r *syncRun) publishProfile(record desiredRecord, auth cliAuthBlock) {
 		return
 	}
 	r.result.Created++
-	r.satisfied(record.name)
+	r.satisfied(verbCreated, record.name)
 	r.ack("created profile " + record.name)
 }
 
@@ -613,7 +655,7 @@ func (r *syncRun) applyContent(e *ledgerEntry, record desiredRecord, auth cliAut
 	if updated == digest {
 		// Byte-identical: there is nothing to write, and rewriting it anyway
 		// would churn a file the user may be watching.
-		r.satisfied(e.Name)
+		r.satisfied("", e.Name)
 		return
 	}
 
@@ -689,7 +731,7 @@ func (r *syncRun) applyContent(e *ledgerEntry, record desiredRecord, auth cliAut
 		return
 	}
 	r.result.Updated++
-	r.satisfied(e.Name)
+	r.satisfied(verbUpdated, e.Name)
 	r.ack("updated profile " + e.Name)
 }
 
@@ -785,7 +827,7 @@ func (r *syncRun) renameProfile(e *ledgerEntry, record desiredRecord, auth cliAu
 		return
 	}
 	r.result.Renamed++
-	r.satisfied(record.name)
+	r.satisfied(verbRenamed, record.name)
 	r.ack(fmt.Sprintf("renamed profile %s to %s", from, record.name))
 }
 
@@ -933,14 +975,18 @@ func (r *syncRun) removeTemp(tempName string) {
 }
 
 // satisfied counts one installation of this run's desired set as having a
-// profile this run published or verified, and records the name.
+// profile this run published or verified.
+//
+// verb is empty for a profile that was already byte-identical: it is satisfied,
+// and it can be pointed at, but nothing was done to it and a document must not
+// claim otherwise.
 //
 // Every call site has just established that the file at name is one this formae
 // owns and holds the content it recorded, so a name reaching here is always a
-// profile that exists and can be pointed at.
-func (r *syncRun) satisfied(name string) {
+// profile that exists.
+func (r *syncRun) satisfied(verb, name string) {
 	r.result.DesiredSatisfied++
-	r.result.Published = append(r.result.Published, name)
+	r.result.Acted = append(r.result.Acted, profileAction{Verb: verb, Name: name})
 }
 
 // records reports whether digest is one of the contents this entry says its
@@ -1180,6 +1226,7 @@ func (r *syncRun) recoverDeleting(e *ledgerEntry) {
 		return
 	}
 	r.result.Pruned++
+	r.result.Acted = append(r.result.Acted, profileAction{Verb: verbRemoved, Name: name})
 	r.ack("removed profile " + name)
 }
 
@@ -1267,6 +1314,7 @@ func (r *syncRun) pruneEntry(e *ledgerEntry) {
 		return
 	}
 	r.result.Pruned++
+	r.result.Acted = append(r.result.Acted, profileAction{Verb: verbRemoved, Name: name})
 	r.ack("removed profile " + name)
 }
 

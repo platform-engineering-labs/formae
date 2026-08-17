@@ -22,6 +22,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/authmsg"
 	clicmd "github.com/platform-engineering-labs/formae/internal/cli/cmd"
 	"github.com/platform-engineering-labs/formae/internal/cli/config"
+	"github.com/platform-engineering-labs/formae/internal/cli/printer"
 	"github.com/platform-engineering-labs/formae/internal/cli/profile/store"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
@@ -100,6 +101,35 @@ touched.`,
 			logging.SetupClientLogging(fmt.Sprintf("%s/log/client.log", config.Config.DataDirectory()))
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			consumer, schema, err := clicmd.ResolveOutput(cmd)
+			if err != nil {
+				// The output flags decide how a failure is rendered, so a failure
+				// to read them cannot be rendered that way.
+				return err
+			}
+
+			// In machine mode the documents are the output, so the prose goes
+			// nowhere: a banner or an ack line interleaved with JSON makes the
+			// whole stream unparseable.
+			out := io.Writer(os.Stdout)
+			var emit emitter
+			if consumer == printer.ConsumerMachine {
+				emit = machineEmitter(os.Stdout, schema)
+				out = io.Discard
+			}
+
+			run := func(err error) error {
+				if err == nil || consumer != printer.ConsumerMachine {
+					return err
+				}
+				if _, perr := reportLogin(os.Stdout, schema, err); perr != nil {
+					return perr
+				}
+				// Returned so the process still exits non-zero: the envelope says
+				// what happened, the status says that something did.
+				return err
+			}
+
 			// The hosted branch is taken *before* the App is built, and that
 			// ordering is the point rather than a detail. AppFromContext resolves
 			// the active profile, and resolving it on a machine that has none
@@ -107,7 +137,7 @@ touched.`,
 			// come here precisely to use the hosted platform. Signing in cannot
 			// be reached through a step that decides the question it is asking.
 			if hosted {
-				return runCloudLoginAndSync(cmd.Context(), cloudLogin{
+				return run(runCloudLoginAndSync(cmd.Context(), cloudLogin{
 					Cloud:     cloud,
 					Issuer:    cloudIssuer,
 					Device:    device,
@@ -115,38 +145,42 @@ touched.`,
 					ConfigDir: store.ResolveConfigDir,
 					NewClient: newCloudAPI,
 					Verifier:  newVerifier(),
-					Out:       os.Stdout,
+					Out:       out,
 					// There is no config to read a theme from, and reading one
 					// would mean resolving a profile.
 					Theme:     theme.New("formae"),
 					NewPlugin: newAuthPlugin,
-				})
+					Emit:      emit,
+				}))
 			}
 
 			configFile, _ := cmd.Flags().GetString("config")
 
 			a, err := clicmd.AppFromContext(cmd.Context(), configFile, "", cmd)
 			if err != nil {
-				return err
+				return run(err)
 			}
-			a.PrintBanner()
+			if emit == nil {
+				a.PrintBanner()
+			}
 
 			client, err := a.AuthClient()
 			if err != nil {
-				return err
+				return run(err)
 			}
 
-			return runLoginAndSync(cmd.Context(), client, syncStep{
+			return run(runLoginAndSync(cmd.Context(), client, syncStep{
 				Creds:      client,
 				Entry:      syncFromProfile{conn: a.Config.Cli.Connection},
 				ConfigDir:  store.ResolveConfigDir,
 				NewClient:  newCloudClient,
 				Verifier:   newProfileVerifier(),
-				Out:        os.Stdout,
+				Out:        out,
 				Theme:      themeFor(a),
 				CloudFlag:  cloud,
 				IssuerFlag: cloudIssuer,
-			}, device)
+				Emit:       emit,
+			}, device))
 		},
 	}
 
@@ -163,24 +197,69 @@ touched.`,
 		fmt.Sprintf("control plane issuer URL (default: $FORMAE_CLOUD_ISSUER or %s)", DefaultCloudIssuer))
 	command.SetUsageTemplate(clicmd.SimpleCmdUsageTemplate)
 	clicmd.AddConfigFlags(command)
+	clicmd.AddOutputFlags(command)
 
 	return command
 }
 
-// runLoginAndSync signs in and then brings the profiles this formae derived
-// into line with the installations the caller's grants cover.
+// runLoginAndSync signs in, brings the profiles this formae derived into line
+// with the installations the caller's grants cover, and reports the outcome
+// through the step's emitter when it has one.
 //
-// The two are separate steps because a sign-in that completed a flow and one
-// that found a session already open are equally successful sign-ins: the sync
+// Sign-in and sync are separate steps because a sign-in that completed a flow and
+// one that found a session already open are equally successful sign-ins: the sync
 // runs after either. Writing it this way rather than inside runLogin is what
 // keeps the short-circuit from skipping it — the branch that returns early
 // returns success, and success is exactly what the sync follows.
+//
+// The identity and the sync result both have to survive their own steps to reach
+// the completion document, and neither used to: runLogin returned only an error
+// and discarded both identity responses, and runSync returned only the exit
+// status and discarded the result it had built. That is why driving a sign-in
+// was a change to signatures rather than to printing.
 func runLoginAndSync(ctx context.Context, c authClient, s syncStep, device bool) error {
-	if err := runLogin(c, s.Out, s.Theme, device); err != nil {
+	report, err := runLogin(c, s.Out, s.Theme, device, s.Emit)
+	if err != nil {
 		return err
 	}
-	return runSync(ctx, s)
+
+	result, active, syncErr := runSync(ctx, s)
+	if syncErr != nil {
+		return syncErr
+	}
+
+	if s.Emit == nil {
+		return nil
+	}
+	return s.Emit.complete(completeView{
+		Status:      report.Status,
+		Subject:     report.Subject,
+		SubjectName: report.SubjectName,
+		Profiles: profilesView{
+			Created: result.named(verbCreated),
+			Updated: result.named(verbUpdated),
+			Renamed: result.named(verbRenamed),
+			Removed: result.named(verbRemoved),
+		},
+		Active:   active,
+		Warnings: result.Warnings,
+	})
 }
+
+// loginReport is who signed in, and whether a flow ran to do it.
+type loginReport struct {
+	// Status is statusSignedIn or statusAlreadyAuthenticated. A caller driving
+	// setup more than once needs to tell them apart.
+	Status      string
+	Subject     string
+	SubjectName string
+}
+
+// The two outcomes of a sign-in, as a consumer sees them.
+const (
+	statusSignedIn             = "signed_in"
+	statusAlreadyAuthenticated = "already_authenticated"
+)
 
 // runLogin drives the two-call login flow against c: LoginStart returns
 // either an already-authenticated identity (short-circuiting before any
@@ -190,7 +269,7 @@ func runLoginAndSync(ctx context.Context, c authClient, s syncStep, device bool)
 // they print plain — formae has no established styling convention for that
 // kind of prose (compare plugin/init.go's plain numbered next-steps); only
 // the completion lines (the sign-in acknowledgments) carry an ack marker.
-func runLogin(c authClient, out io.Writer, th *theme.Theme, device bool) error {
+func runLogin(c authClient, out io.Writer, th *theme.Theme, device bool, emit emitter) (loginReport, error) {
 	tty := loginIsTerminal(out)
 
 	mode := "browser"
@@ -200,18 +279,29 @@ func runLogin(c authClient, out io.Writer, th *theme.Theme, device bool) error {
 
 	startResp, err := c.LoginStart(&pkgauth.LoginStartRequest{Mode: mode})
 	if err != nil {
-		return err
+		return loginReport{}, err
 	}
 	if startResp.ErrorCode != "" || startResp.Error != "" {
-		return fmt.Errorf("%s", authmsg.DescribeAuthError(startResp.ErrorCode, startResp.Error))
+		return loginReport{}, authRefusal(startResp.ErrorCode, startResp.Error)
 	}
 
 	if startResp.Status == "already_authenticated" {
 		printSignedIn(out, tty, th, "already signed in", startResp.SubjectName, startResp.Subject)
-		return nil
+		return loginReport{
+			Status:      statusAlreadyAuthenticated,
+			Subject:     startResp.Subject,
+			SubjectName: startResp.SubjectName,
+		}, nil
 	}
 
-	if startResp.Method == "device" {
+	// What the user has to do next, before the flow is waited on. For a person
+	// that is a line of prose; for a program it is the started document, and in
+	// both cases it has to be out before this blocks.
+	if emit != nil {
+		if err := emit.started(startResp); err != nil {
+			return loginReport{}, err
+		}
+	} else if startResp.Method == "device" {
 		_, _ = fmt.Fprintf(out, "Visit %s and enter code: %s\n", startResp.VerificationURI, startResp.UserCode)
 	} else {
 		_, _ = fmt.Fprintf(out, "Open this URL to sign in:\n  %s\n", startResp.BrowserURL)
@@ -219,14 +309,32 @@ func runLogin(c authClient, out io.Writer, th *theme.Theme, device bool) error {
 
 	waitResp, err := c.LoginWait(&pkgauth.LoginWaitRequest{SessionID: startResp.SessionID})
 	if err != nil {
-		return err
+		return loginReport{}, err
 	}
 	if waitResp.ErrorCode != "" || waitResp.Error != "" {
-		return fmt.Errorf("%s", authmsg.DescribeAuthError(waitResp.ErrorCode, waitResp.Error))
+		return loginReport{}, authRefusal(waitResp.ErrorCode, waitResp.Error)
 	}
 
 	printSignedIn(out, tty, th, "signed in", waitResp.SubjectName, waitResp.Subject)
-	return nil
+	return loginReport{
+		Status:      statusSignedIn,
+		Subject:     waitResp.Subject,
+		SubjectName: waitResp.SubjectName,
+	}, nil
+}
+
+// authRefusal keeps the auth plugin's own code alongside the message a person
+// reads.
+//
+// The message alone is not enough for a caller that has to decide what to do
+// next: not_logged_in and session_expired mean "sign in again", where
+// issuer_unreachable and unsupported do not, and collapsing all four into one
+// formatted string — which is what this did — makes them indistinguishable.
+func authRefusal(code pkgauth.ErrorCode, fallback string) error {
+	return &AuthError{
+		Code:    string(code),
+		Message: authmsg.DescribeAuthError(code, fallback),
+	}
 }
 
 // printSignedIn renders verb ("signed in" / "already signed in") followed by
@@ -264,6 +372,11 @@ type syncStep struct {
 	Theme      *theme.Theme
 	CloudFlag  string
 	IssuerFlag string
+
+	// Emit, when set, writes the machine documents a driven sign-in produces.
+	// Out then takes the prose nobody is reading, so the document stream holds
+	// documents and nothing else.
+	Emit emitter
 }
 
 // syncEntry is where a sync's authority comes from: the connection of the
@@ -333,7 +446,7 @@ func syncFromFlags(block cliAuthBlock) syncEntry { return syncFromFlagsEntry{blo
 // A sign-in and a sync are separate facts, and every message here keeps them
 // apart: the user is signed in whatever the sync did, so nothing this function
 // prints may read as a login that failed.
-func runSync(ctx context.Context, s syncStep) error {
+func runSync(ctx context.Context, s syncStep) (syncResult, string, error) {
 	tty := loginIsTerminal(s.Out)
 
 	p, err := resolvePlatform(s.CloudFlag, s.IssuerFlag)
@@ -342,7 +455,7 @@ func runSync(ctx context.Context, s syncStep) error {
 		// an override the user (or their environment) actually set is worth a
 		// word even on a profile that would not have synced anyway.
 		notApplicable(s.Out, tty, s.Theme, err.Error())
-		return nil
+		return syncResult{}, "", nil
 	}
 
 	if !s.Entry.applies() {
@@ -350,7 +463,7 @@ func runSync(ctx context.Context, s syncStep) error {
 		// covers no hosted installations. That is the ordinary case, and the
 		// user asked for nothing that did not happen, so it is silent: a
 		// notice here would print on the most common login there is.
-		return nil
+		return syncResult{}, "", nil
 	}
 
 	// The configuration half is decided before the auth plugin is asked for a
@@ -359,23 +472,23 @@ func runSync(ctx context.Context, s syncStep) error {
 	gate := s.Entry.gate(p)
 	if !gate.OK {
 		notApplicable(s.Out, tty, s.Theme, gate.Reason)
-		return nil
+		return syncResult{}, "", nil
 	}
 
 	hdr, err := credential(s.Creds)
 	if err != nil {
-		return fmt.Errorf("%s: %w", syncIncomplete(""), err)
+		return syncResult{}, "", fmt.Errorf("%s: %w", syncIncomplete(""), err)
 	}
 
 	gate = gateCredential(gate, p, hdr)
 	if !gate.OK {
 		notApplicable(s.Out, tty, s.Theme, gate.Reason)
-		return nil
+		return syncResult{}, "", nil
 	}
 
 	dir, err := s.ConfigDir()
 	if err != nil {
-		return fmt.Errorf("%s: %w", syncIncomplete(""), err)
+		return syncResult{}, "", fmt.Errorf("%s: %w", syncIncomplete(""), err)
 	}
 
 	st := store.New(dir)
@@ -392,10 +505,10 @@ func runSync(ctx context.Context, s syncStep) error {
 		Theme:    s.Theme,
 	}, p, gate.Bearer, gate.Auth, s.Entry.sourceAuth())
 
-	activateFirstIfNone(st, result, s.Out, tty, s.Theme)
+	active := activateFirstIfNone(st, result, s.Out, tty, s.Theme)
 
 	printWarnings(s.Out, tty, s.Theme, result.Warnings)
-	return syncExit(result)
+	return result, active, syncExit(result)
 }
 
 // activateFirstIfNone points the active profile at one this run published, but
@@ -421,22 +534,27 @@ func runSync(ctx context.Context, s syncStep) error {
 // Failing to write the pointer is a warning, never a failed sign-in. The user is
 // signed in and their profiles exist either way, which is the rule every message
 // in this file follows.
-func activateFirstIfNone(st *store.Store, result syncResult, out io.Writer, tty bool, th *theme.Theme) {
-	if len(result.Published) == 0 {
-		return // nothing to point at, and no pointer is better than a dangling one.
+// It returns the active profile a caller's next request would use, which is
+// whatever the pointer names when this is done — the one it just wrote, the one
+// that was already there, or empty when there is none.
+func activateFirstIfNone(st *store.Store, result syncResult, out io.Writer, tty bool, th *theme.Theme) string {
+	if existing, err := st.Active(); err == nil {
+		return existing
 	}
-	if _, err := st.Active(); err == nil {
-		return
+	published := result.published()
+	if len(published) == 0 {
+		return "" // nothing to point at, and no pointer is better than a dangling one.
 	}
 
-	name := result.Published[0]
+	name := published[0]
 	if err := st.Use(name); err != nil {
 		ackLine(out, tty, th, components.AckSkip, fmt.Sprintf(
 			"profile %s was created but could not be made the active one (%v); "+
 				"run `formae profile use %s` to select it", name, err, name))
-		return
+		return ""
 	}
 	ackLine(out, tty, th, components.AckDone, "made profile "+name+" active")
+	return name
 }
 
 // credential returns the header carrying the credential the sign-in produced,

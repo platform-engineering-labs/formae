@@ -155,6 +155,9 @@ type cloudLogin struct {
 	// caller needs, and because a test substituting a plugin has nothing it could
 	// return a *pkgauth.Client from.
 	NewPlugin func(authType string, raw json.RawMessage, pluginDir string) (authClient, credentialProvider, error)
+
+	// Emit, when set, writes the machine documents a driven sign-in produces.
+	Emit emitter
 }
 
 // runCloudLoginAndSync signs in to the hosted platform without reading or
@@ -188,6 +191,7 @@ func runCloudLoginAndSync(ctx context.Context, c cloudLogin) error {
 
 	return runLoginAndSync(ctx, flow, syncStep{
 		Creds:      creds,
+		Emit:       c.Emit,
 		Entry:      syncFromFlags(block),
 		ConfigDir:  c.ConfigDir,
 		NewClient:  c.NewClient,
@@ -235,7 +239,20 @@ func authPluginFor(authType string, raw json.RawMessage, pluginDir string) (auth
 		return client, client, nil
 	}
 
-	return nil, nil, fmt.Errorf(
+	return nil, nil, &pluginMissingError{Plugin: authType, Install: "pelmgr install " + authType}
+}
+
+// pluginMissingError is the auth plugin not being installed, typed so a machine
+// consumer gets its own code for it rather than a generic failure. The remedy is
+// specific enough to be worth naming, and a caller that can name it can offer to
+// run it.
+type pluginMissingError struct {
+	Plugin  string
+	Install string
+}
+
+func (e *pluginMissingError) Error() string {
+	return fmt.Sprintf(
 		"signing in to the hosted platform needs the %s auth plugin, which is not installed. "+
-			"Install it with `pelmgr install %s`", authType, authType)
+			"Install it with `%s`", e.Plugin, e.Install)
 }
