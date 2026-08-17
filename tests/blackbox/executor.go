@@ -1470,6 +1470,15 @@ func (h *TestHarness) executeCancel(t *testing.T, op *Operation, model *StateMod
 
 	t.Logf("[op %d] Cancel command %s → accepted", op.SequenceNum, target.CommandID)
 
+	// The canceled changeset's resources can stay registered as in-progress
+	// with the synchronizer for an unobservable time after the command reaches
+	// its terminal state, during which sync skips them. Drift injected on them
+	// could then never absorb, so take their stacks out of drift targeting for
+	// the rest of the iteration.
+	for _, ref := range target.RequestedSlots {
+		model.MarkDriftExcludedStack(ref.StackIndex)
+	}
+
 	// Wait for the canceled command to reach a terminal state so we can read
 	// per-resource-update outcomes. The most recent accepted command may be
 	// a stack-expirer destroy tracked by executeCheckTTL, which never

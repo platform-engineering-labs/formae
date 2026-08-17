@@ -483,6 +483,26 @@ func TestStateModel_DriftEligibilityCrossStackNeedsQuiescentProvider(t *testing.
 	assert.Equal(t, "test-9", nativeID)
 }
 
+// A canceled changeset can leave its resources registered as in-progress with
+// the synchronizer for an unobservable time, during which sync skips them and
+// drift on them cannot absorb. Stacks touched by a canceled command are
+// excluded from drift targeting for the rest of the iteration.
+func TestStateModel_DriftEligibilitySkipsCancelPoisonedStacks(t *testing.T) {
+	model := NewStateModel(2, 3)
+	model.ApplyCreated(0, []int{0}, `{"Name":"res-stack-0-a","Value":"v1"}`)
+	model.SetNativeID(0, 0, "test-1")
+	model.ApplyCreated(1, []int{0}, `{"Name":"res-stack-1-a","Value":"v1"}`)
+	model.SetNativeID(1, 0, "test-2")
+
+	model.MarkDriftExcludedStack(1)
+
+	for seq := range 4 {
+		stackIdx, _, _, _, _, _, ok := model.FindDriftEligibleResource(seq)
+		require.True(t, ok)
+		assert.Equal(t, 0, stackIdx, "stack 1 was touched by a canceled command and must be excluded")
+	}
+}
+
 // Eligible drift targets must be enumerated in a stable order: selection is
 // keyed off the generated sequence number, and map-iteration order would make
 // the picked resource nondeterministic across runs.

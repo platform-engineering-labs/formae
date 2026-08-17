@@ -72,6 +72,12 @@ type StateModel struct {
 	// Populated from command response ResourceUpdate.NativeID on successful
 	// creates/updates. Cleared on successful deletes.
 	NativeIDs map[string]string
+	// DriftExcludedStacks marks stacks whose resources are no longer valid
+	// drift targets this iteration: a canceled changeset can leave its
+	// resources registered as in-progress with the synchronizer for an
+	// unobservable time, during which sync skips them and drift on them
+	// cannot absorb deterministically.
+	DriftExcludedStacks map[int]bool
 }
 
 // NewStateModel creates a state model with the given number of stacks,
@@ -120,14 +126,21 @@ func NewStateModel(stackCount, resourcesPerStack int) *StateModel {
 		providerLabel = stacks[0].Label
 	}
 	return &StateModel{
-		Stacks:             stacks,
-		ResourcesPerStack:  resourcesPerStack,
-		Pool:               pool,
-		ProviderStackLabel: providerLabel,
-		UnmanagedResources: make(map[string]*ExpectedUnmanagedResource),
-		AuthoritativeSlots: make(map[string]bool),
-		NativeIDs:          make(map[string]string),
+		Stacks:              stacks,
+		ResourcesPerStack:   resourcesPerStack,
+		Pool:                pool,
+		ProviderStackLabel:  providerLabel,
+		UnmanagedResources:  make(map[string]*ExpectedUnmanagedResource),
+		AuthoritativeSlots:  make(map[string]bool),
+		NativeIDs:           make(map[string]string),
+		DriftExcludedStacks: make(map[int]bool),
 	}
+}
+
+// MarkDriftExcludedStack removes a stack's resources from drift targeting for
+// the rest of the iteration. See DriftExcludedStacks.
+func (m *StateModel) MarkDriftExcludedStack(stackIdx int) {
+	m.DriftExcludedStacks[stackIdx] = true
 }
 
 func slotKeyString(stackIdx, slotIdx int) string {
@@ -170,6 +183,9 @@ func (m *StateModel) FindDriftEligibleResource(sequenceNum int) (stackIdx, slotI
 		for _, ref := range ac.RequestedSlots {
 			busyStacks[ref.StackIndex] = true
 		}
+	}
+	for stackIdx := range m.DriftExcludedStacks {
+		busyStacks[stackIdx] = true
 	}
 
 	type candidate struct {
