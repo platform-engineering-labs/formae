@@ -359,28 +359,43 @@ func (h *TestHarness) latestSyncCommand() (*apimodel.Command, error) {
 	return &commands[0], nil
 }
 
-// WaitForNextSyncCommand waits for a new sync command created after the current
-// latest sync command, then waits for that command to reach a terminal state.
-// Returns nil,false if no new sync command appears within the timeout.
-func (h *TestHarness) WaitForNextSyncCommand(timeout time.Duration) (*apimodel.Command, bool) {
+// SyncCommandBaseline returns the ID of the most recent sync command, or ""
+// when none exists. Capture it BEFORE triggering a sync: the triggered sync
+// command can be persisted before the first post-trigger poll runs, and a
+// baseline taken after the trigger would then absorb the very command being
+// waited for.
+func (h *TestHarness) SyncCommandBaseline() string {
 	before, err := h.latestSyncCommand()
-	if err != nil {
-		return nil, false
+	if err != nil || before == nil {
+		return ""
 	}
-	beforeID := ""
-	if before != nil {
-		beforeID = before.CommandID
-	}
+	return before.CommandID
+}
 
+// WaitForSyncCommandAfter waits for a sync command different from the given
+// baseline ID, then waits for that command to reach a terminal state.
+// Returns nil,false if no such sync command appears within the timeout.
+func (h *TestHarness) WaitForSyncCommandAfter(baselineID string, timeout time.Duration) (*apimodel.Command, bool) {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		current, err := h.latestSyncCommand()
-		if err == nil && current != nil && current.CommandID != "" && current.CommandID != beforeID {
+		if err == nil && current != nil && current.CommandID != "" && current.CommandID != baselineID {
 			return h.waitForCommandInDB(current.CommandID, time.Until(deadline))
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
 	return nil, false
+}
+
+// WaitForNextSyncCommand waits for a new sync command created after the current
+// latest sync command, then waits for that command to reach a terminal state.
+// Returns nil,false if no new sync command appears within the timeout.
+//
+// The baseline is taken at call time, so this only observes syncs triggered
+// AFTER the call starts; when waiting on a sync you already triggered, use
+// SyncCommandBaseline + WaitForSyncCommandAfter around the trigger instead.
+func (h *TestHarness) WaitForNextSyncCommand(timeout time.Duration) (*apimodel.Command, bool) {
+	return h.WaitForSyncCommandAfter(h.SyncCommandBaseline(), timeout)
 }
 
 // --- TestController communication (via Ergo cross-node calls) ---
@@ -614,7 +629,7 @@ func (h *TestHarness) KillAgent(t *testing.T) {
 // RestartAgent starts a new agent subprocess with the same config (same SQLite DB).
 // Reconstructs the plugin's cloud state from the agent's inventory and the OOB
 // mirror, re-programs response sequences, then opens the gate.
-func (h *TestHarness) RestartAgent(t *testing.T, timeout time.Duration, model ...*StateModel) {
+func (h *TestHarness) RestartAgent(t *testing.T, timeout time.Duration) {
 	t.Helper()
 
 	// Start the agent but DON'T open the gate yet — ReRunIncompleteCommands
@@ -632,23 +647,12 @@ func (h *TestHarness) RestartAgent(t *testing.T, timeout time.Duration, model ..
 	// resolvables before re-injection, otherwise the plugin returns $res objects
 	// on Read, which corrupts the $ref.$value in mergeRefsPreservingUserRefs.
 	forma, err := h.client.ExtractResources("managed:true")
-	pendingManagedProps := map[string]string{}
-	pendingManagedDeletes := map[string]bool{}
-	if len(model) > 0 && model[0] != nil {
-		pendingManagedProps, pendingManagedDeletes = model[0].PendingManagedDriftCloudState()
-	}
 	if err == nil && forma != nil {
 		for _, res := range forma.Resources {
 			if res.NativeID == "" {
 				continue
 			}
-			if pendingManagedDeletes[res.NativeID] {
-				continue
-			}
 			flatProps := flattenPropertiesForCloud(res.Properties)
-			if driftProps, ok := pendingManagedProps[res.NativeID]; ok {
-				flatProps = driftProps
-			}
 			_, err := h.callTestController(testcontrol.PutCloudStateRequest{
 				NativeID:     res.NativeID,
 				ResourceType: res.Type,
@@ -662,12 +666,6 @@ func (h *TestHarness) RestartAgent(t *testing.T, timeout time.Duration, model ..
 
 	// Re-inject OOB cloud state from the mirror (resources not in inventory).
 	for _, entry := range h.cloudStateMirror {
-		if _, ok := pendingManagedProps[entry.NativeID]; ok {
-			continue
-		}
-		if pendingManagedDeletes[entry.NativeID] {
-			continue
-		}
 		_, err := h.callTestController(testcontrol.PutCloudStateRequest{
 			NativeID:     entry.NativeID,
 			ResourceType: entry.ResourceType,

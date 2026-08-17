@@ -171,7 +171,7 @@ func TestProperty_FullChaos(t *testing.T) {
 			// Sync cloud state with inventory. Chaos operations (cancel, crash,
 			// TTL cascade) can leave cloud entries that the ResourcePersister
 			// hasn't cleaned up yet, causing phantom violations.
-			h.TriggerSyncAndWait(t)
+			h.TriggerSyncAndWait(t, model)
 
 			h.AssertAllInvariants(t, model)
 		})
