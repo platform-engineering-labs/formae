@@ -186,19 +186,19 @@ func (g gateResult) String() string {
 	return fmt.Sprintf("gateResult{Auth:%+v Bearer:%s OK:%v Reason:%q}", g.Auth, bearer, g.OK, g.Reason)
 }
 
-// gateSync reports whether profile sync may run against p.
+// The gate is two halves, and nothing composes them here.
+//
+// runSync runs gateProfile before it asks the auth plugin for a credential and
+// gateCredential after, because the order is the protection: a profile a model
+// wrote controls the issuer, so driving the plugin first would send it at
+// whatever token endpoint the profile named. A convenience function taking a
+// connection and a header together would take both at once and so could only be
+// called after the plugin had already run.
 //
 // p is expected to come from resolvePlatform, which canonicalises both halves;
-// the block's issuer is canonicalised here and the two are compared as origins
-// so that https://Auth.Formae.AI:443 and https://auth.formae.ai are one issuer
-// while nothing else is.
-func gateSync(conn pkgmodel.Connection, p platform, hdr http.Header) gateResult {
-	g := gateProfile(conn, p)
-	if !g.OK {
-		return g
-	}
-	return gateCredential(g, p, hdr)
-}
+// a block's issuer is canonicalised in gateProfile and the two are compared as
+// origins, so that https://Auth.Formae.AI:443 and https://auth.formae.ai are one
+// issuer while nothing else is.
 
 // gateProfile decides everything that can be decided from configuration alone:
 // that this is a hosted profile, that its auth block names the plugin and role

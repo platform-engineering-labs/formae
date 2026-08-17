@@ -325,7 +325,7 @@ func bearerCredentials() *stubCredentials {
 func (f *syncFixture) loginStep() syncStep {
 	return syncStep{
 		Creds:      bearerCredentials(),
-		Conn:       hosted(oidcAuth(f.t, nil)),
+		Entry:      syncFromProfile{conn: hosted(oidcAuth(f.t, nil))},
 		ConfigDir:  func() (string, error) { return f.root, nil },
 		NewClient:  func(string) CloudClient { return f.client },
 		Verifier:   f.verifier,
@@ -436,7 +436,7 @@ func TestLoginOnAClassicProfileIsUnchanged(t *testing.T) {
 	f := newSyncFixture(t)
 	f.answer(installation(installOne, "prod", stateActive))
 	step := f.loginStep()
-	step.Conn = &pkgmodel.ClassicConnection{}
+	step.Entry = syncFromProfile{conn: &pkgmodel.ClassicConnection{}}
 
 	require.NoError(t, runLoginAndSync(context.Background(), signedIn(), step, false))
 
@@ -472,7 +472,7 @@ func TestLoginNoticesAGateRefusal(t *testing.T) {
 	f := newSyncFixture(t)
 	f.answer(installation(installOne, "prod", stateActive))
 	step := f.loginStep()
-	step.Conn = hosted(oidcAuth(f.t, map[string]any{"issuer": testOtherIssuer}))
+	step.Entry = syncFromProfile{conn: hosted(oidcAuth(f.t, map[string]any{"issuer": testOtherIssuer}))}
 
 	require.NoError(t, runLoginAndSync(context.Background(), signedIn(), step, false))
 

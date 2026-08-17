@@ -10,6 +10,7 @@ package login
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -73,7 +74,7 @@ func ackLine(w io.Writer, tty bool, th *theme.Theme, m components.AckMarker, tex
 
 // LoginCmd signs in through the active profile's auth plugin.
 func LoginCmd() *cobra.Command {
-	var device bool
+	var device, hosted bool
 	var cloud, cloudIssuer string
 
 	command := &cobra.Command{
@@ -99,6 +100,27 @@ touched.`,
 			logging.SetupClientLogging(fmt.Sprintf("%s/log/client.log", config.Config.DataDirectory()))
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// The hosted branch is taken *before* the App is built, and that
+			// ordering is the point rather than a detail. AppFromContext resolves
+			// the active profile, and resolving it on a machine that has none
+			// creates one — a classic localhost default, for a user who may have
+			// come here precisely to use the hosted platform. Signing in cannot
+			// be reached through a step that decides the question it is asking.
+			if hosted {
+				return runCloudLoginAndSync(cmd.Context(), cloudLogin{
+					Cloud:     cloud,
+					Issuer:    cloudIssuer,
+					Device:    device,
+					PluginDir: defaultCloudPluginDir,
+					ConfigDir: store.ResolveConfigDir,
+					NewClient: newCloudClient,
+					Verifier:  newProfileVerifier(),
+					Out:       os.Stdout,
+					Theme:     theme.New("formae"),
+					NewPlugin: authPluginFor,
+				})
+			}
+
 			configFile, _ := cmd.Flags().GetString("config")
 
 			a, err := clicmd.AppFromContext(cmd.Context(), configFile, "", cmd)
@@ -114,7 +136,7 @@ touched.`,
 
 			return runLoginAndSync(cmd.Context(), client, syncStep{
 				Creds:      client,
-				Conn:       a.Config.Cli.Connection,
+				Entry:      syncFromProfile{conn: a.Config.Cli.Connection},
 				ConfigDir:  store.ResolveConfigDir,
 				NewClient:  newCloudClient,
 				Verifier:   newProfileVerifier(),
@@ -127,6 +149,12 @@ touched.`,
 	}
 
 	command.Flags().BoolVar(&device, "device", false, "use a device code instead of opening a browser")
+	// A distinct flag, and never inferred from --cloud/--cloud-issuer having a
+	// value: those also read FORMAE_CLOUD_URL / FORMAE_CLOUD_ISSUER, so arming on
+	// value-presence would make a plain `formae login` on a classic profile start
+	// signing in to the hosted platform for anyone who has them exported.
+	command.Flags().BoolVar(&hosted, "hosted", false,
+		"sign in to the hosted platform rather than to the active profile")
 	command.Flags().StringVar(&cloud, "cloud", "",
 		fmt.Sprintf("control plane base URL (default: $FORMAE_CLOUD_URL or %s)", DefaultCloudURL))
 	command.Flags().StringVar(&cloudIssuer, "cloud-issuer", "",
@@ -226,7 +254,7 @@ func printSignedIn(out io.Writer, tty bool, th *theme.Theme, verb, subjectName, 
 // is not read at all for a profile that cannot sync.
 type syncStep struct {
 	Creds      credentialProvider
-	Conn       pkgmodel.Connection
+	Entry      syncEntry
 	ConfigDir  func() (string, error)
 	NewClient  func(origin string) CloudClient
 	Verifier   profileVerifier
@@ -235,6 +263,67 @@ type syncStep struct {
 	CloudFlag  string
 	IssuerFlag string
 }
+
+// syncEntry is where a sync's authority comes from: the connection of the
+// profile that was signed in to, or the flags of a profile-independent hosted
+// sign-in that had no profile to read.
+//
+// It is a sum rather than a nillable connection beside a nillable block because
+// the two are genuinely alternatives, and the shapes a pair of optional fields
+// would also permit — both set, neither set — have no meaning. Writing it this
+// way is what stops runSync's opening question ("is this hosted?") from being
+// answered by a nil check that a cloud sign-in silently fails.
+type syncEntry interface {
+	// gate decides everything knowable from configuration alone. The credential
+	// half is deliberately not here: every path reaches gateCredential, so no
+	// entry can skip the one condition that is only knowable once the auth plugin
+	// has answered.
+	gate(p platform) gateResult
+
+	// applies reports whether a sync is expected at all. A classic profile's
+	// sign-in covers no hosted installations, and that is the ordinary case
+	// rather than a refusal — it must stay silent, where a gate that fails
+	// prints a notice saying why.
+	applies() bool
+
+	// sourceAuth is the raw auth block a generated profile is compared against,
+	// so the sync can name keys it does not carry forward. It is nil for a
+	// synthesised block: that one is ours and has no unknown keys by
+	// construction, so there is nothing to warn about.
+	sourceAuth() json.RawMessage
+}
+
+// syncFromProfile is the entry for a sign-in through a profile.
+type syncFromProfile struct{ conn pkgmodel.Connection }
+
+func (s syncFromProfile) gate(p platform) gateResult { return gateProfile(s.conn, p) }
+
+func (s syncFromProfile) applies() bool {
+	hosted, ok := s.conn.(*pkgmodel.HostedConnection)
+	return ok && hosted != nil
+}
+
+func (s syncFromProfile) sourceAuth() json.RawMessage {
+	if hosted, ok := s.conn.(*pkgmodel.HostedConnection); ok && hosted != nil {
+		return hosted.Auth
+	}
+	return nil
+}
+
+// syncFromFlagsEntry is the entry for a hosted sign-in that had no profile: the
+// block was built from the resolved platform, so it is hosted by construction.
+type syncFromFlagsEntry struct{ block cliAuthBlock }
+
+func (s syncFromFlagsEntry) gate(p platform) gateResult { return gateSynthesised(s.block, p) }
+
+func (s syncFromFlagsEntry) applies() bool { return true }
+
+func (s syncFromFlagsEntry) sourceAuth() json.RawMessage { return nil }
+
+// syncFromFlags is the constructor the cloud path uses. It exists so the entry's
+// field can stay unexported: a caller that could assemble the struct itself
+// could pair a synthesised block with any platform.
+func syncFromFlags(block cliAuthBlock) syncEntry { return syncFromFlagsEntry{block: block} }
 
 // runSync derives and maintains one profile per installation the caller's
 // grants cover, and reports the outcome as this command's exit status.
@@ -254,12 +343,20 @@ func runSync(ctx context.Context, s syncStep) error {
 		return nil
 	}
 
-	hostedConn, isHosted := s.Conn.(*pkgmodel.HostedConnection)
-	if !isHosted || hostedConn == nil {
+	if !s.Entry.applies() {
 		// A classic profile addresses the user's own agent, so its sign-in
 		// covers no hosted installations. That is the ordinary case, and the
 		// user asked for nothing that did not happen, so it is silent: a
 		// notice here would print on the most common login there is.
+		return nil
+	}
+
+	// The configuration half is decided before the auth plugin is asked for a
+	// credential, so a block that would not pass never causes a request to the
+	// issuer it names.
+	gate := s.Entry.gate(p)
+	if !gate.OK {
+		notApplicable(s.Out, tty, s.Theme, gate.Reason)
 		return nil
 	}
 
@@ -268,7 +365,7 @@ func runSync(ctx context.Context, s syncStep) error {
 		return fmt.Errorf("%s: %w", syncIncomplete(""), err)
 	}
 
-	gate := gateSync(s.Conn, p, hdr)
+	gate = gateCredential(gate, p, hdr)
 	if !gate.OK {
 		notApplicable(s.Out, tty, s.Theme, gate.Reason)
 		return nil
@@ -289,7 +386,7 @@ func runSync(ctx context.Context, s syncStep) error {
 		Out:      s.Out,
 		TTY:      tty,
 		Theme:    s.Theme,
-	}, p, gate.Bearer, gate.Auth, hostedConn.Auth)
+	}, p, gate.Bearer, gate.Auth, s.Entry.sourceAuth())
 
 	printWarnings(s.Out, tty, s.Theme, result.Warnings)
 	return syncExit(result)
