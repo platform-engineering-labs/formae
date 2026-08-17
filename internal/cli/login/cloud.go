@@ -240,16 +240,20 @@ func authPluginFor(authType string, raw json.RawMessage, pluginDir string) (auth
 		return client, client, nil
 	}
 
-	// "Not installed" is only one of two things this can mean, and naming the
-	// wrong one sends the user to a command that cannot help.
+	// Absence here does not establish that the plugin is missing, and saying so
+	// outright sends people to a command that cannot help.
 	//
 	// Discovery classifies an auth plugin by evaluating its formae-plugin.pkl
-	// manifest, which shells out to `pkl` resolved from PATH, and it discards the
-	// error when that fails. So a tree where the plugin is present but pkl is not
-	// reachable looks exactly like a tree with no plugin in it. That is not
-	// hypothetical: pkl installs beside formae in the same bin directory, and a
-	// process whose PATH does not include it — anything launched from a shell that
-	// never added it — hits this.
+	// manifest, and it discards every error from that step. A plugin that is
+	// installed but whose manifest would not evaluate — no pkl on PATH, a pkl too
+	// old for the manifest, a manifest that fails for any other reason — is
+	// therefore indistinguishable from one that is not there at all.
+	//
+	// Only the first of those is worth telling apart by hand, because it is the one
+	// that happens by default: pkl installs into the same bin directory as formae,
+	// so any process whose PATH lacks that directory hits it. The rest share the
+	// message below, which is why it says the plugin could not be loaded rather
+	// than asserting it is absent.
 	if _, err := exec.LookPath("pkl"); err != nil {
 		return nil, nil, fmt.Errorf(
 			"signing in to the hosted platform needs the %s auth plugin, and formae cannot tell whether it is "+
@@ -270,7 +274,12 @@ type pluginMissingError struct {
 }
 
 func (e *pluginMissingError) Error() string {
+	// "could not be loaded" rather than "is not installed": discovery discards the
+	// errors that would tell the two apart, so claiming absence is a claim this
+	// code cannot support. The remedy is still named, because installing it is the
+	// answer in the common case.
 	return fmt.Sprintf(
-		"signing in to the hosted platform needs the %s auth plugin, which is not installed. "+
-			"Install it with `%s`", e.Plugin, e.Install)
+		"signing in to the hosted platform needs the %s auth plugin, which formae could not load. "+
+			"If it is not installed, install it with `%s`; if it is, the plugin's manifest could not be "+
+			"evaluated — check that `pkl` on PATH is the one that shipped with formae", e.Plugin, e.Install)
 }
