@@ -372,19 +372,55 @@ func (h *TestHarness) SyncCommandBaseline() string {
 	return before.CommandID
 }
 
-// WaitForSyncCommandAfter waits for a sync command different from the given
-// baseline ID, then waits for that command to reach a terminal state.
-// Returns nil,false if no such sync command appears within the timeout.
-func (h *TestHarness) WaitForSyncCommandAfter(baselineID string, timeout time.Duration) (*apimodel.Command, bool) {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
+// WaitForSyncCommandAfter waits up to `appearance` for a sync command
+// different from the given baseline ID to be persisted, then up to
+// `completion` for that command to finish. Returns nil,false if no new sync
+// command appears within the appearance window.
+//
+// A sync command whose reads produce no changes is DELETED from the datastore
+// on completion (the persister keeps only syncs that absorbed something), so
+// a command that appears and then vanishes has completed as a no-change sync:
+// that is reported as observed with a nil command. A no-change sync can also
+// complete and be deleted entirely between polls, in which case it is
+// indistinguishable from no sync at all — callers must only rely on a false
+// return where a no-op sync and no sync are equivalent.
+func (h *TestHarness) WaitForSyncCommandAfter(baselineID string, appearance, completion time.Duration) (*apimodel.Command, bool) {
+	appearDeadline := time.Now().Add(appearance)
+	for time.Now().Before(appearDeadline) {
 		current, err := h.latestSyncCommand()
 		if err == nil && current != nil && current.CommandID != "" && current.CommandID != baselineID {
-			return h.waitForCommandInDB(current.CommandID, time.Until(deadline))
+			return h.waitForSyncCommandDone(current.CommandID, completion)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
 	return nil, false
+}
+
+// waitForSyncCommandDone polls a known sync command until it reaches a
+// terminal state or is deleted as a no-change sync (both count as observed).
+func (h *TestHarness) waitForSyncCommandDone(commandID string, timeout time.Duration) (*apimodel.Command, bool) {
+	deadline := time.Now().Add(timeout)
+	seen := false
+	for time.Now().Before(deadline) {
+		cmd, err := h.commandFromDB(commandID)
+		if err == nil {
+			if cmd == nil {
+				if seen {
+					return nil, true // deleted on completion: a no-change sync
+				}
+			} else {
+				seen = true
+				h.ObserveCommandState(h.t, cmd.CommandID, cmd.State)
+				if isTerminalCommandState(cmd.State) {
+					return cmd, true
+				}
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	// The row was observed at least once (latestSyncCommand returned it), so
+	// its disappearance without a terminal read still means it completed.
+	return nil, !seen
 }
 
 // WaitForNextSyncCommand waits for a new sync command created after the current
@@ -395,7 +431,7 @@ func (h *TestHarness) WaitForSyncCommandAfter(baselineID string, timeout time.Du
 // AFTER the call starts; when waiting on a sync you already triggered, use
 // SyncCommandBaseline + WaitForSyncCommandAfter around the trigger instead.
 func (h *TestHarness) WaitForNextSyncCommand(timeout time.Duration) (*apimodel.Command, bool) {
-	return h.WaitForSyncCommandAfter(h.SyncCommandBaseline(), timeout)
+	return h.WaitForSyncCommandAfter(h.SyncCommandBaseline(), timeout, timeout)
 }
 
 // --- TestController communication (via Ergo cross-node calls) ---

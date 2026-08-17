@@ -1569,7 +1569,7 @@ func (h *TestHarness) executeTriggerSync(t *testing.T, model *StateModel) {
 	//
 	// An unobserved sync is tolerable here: with no drift pending by
 	// construction, the sync's model transition is a no-op either way.
-	if h.forceSyncAndAwait(t, model) {
+	if h.forceSyncAndAwait(t, model, 2*time.Second) {
 		t.Logf("TriggerSync: fired")
 	} else {
 		t.Logf("TriggerSync: no sync command observed (nothing to synchronize)")
@@ -1582,25 +1582,28 @@ func (h *TestHarness) executeTriggerSync(t *testing.T, model *StateModel) {
 // As in executeTriggerSync, an unobserved sync is a model no-op.
 func (h *TestHarness) TriggerSyncAndWait(t *testing.T, model *StateModel) {
 	t.Helper()
-	if !h.forceSyncAndAwait(t, model) {
+	if !h.forceSyncAndAwait(t, model, 2*time.Second) {
 		t.Logf("TriggerSyncAndWait: no sync command observed (nothing to synchronize)")
 	}
 }
 
-// forceSyncAndAwait triggers a sync and waits for its command to reach a
-// terminal state. When observed, it applies the model's own predicted sync
-// transition for unmanaged rows (sync reads every idle inventory row, so
-// out-of-band changes to discovered unmanaged resources absorb at each sync)
-// and returns true. It returns false when no sync command appeared: the
-// synchronizer creates none when it finds nothing to synchronize (empty
-// inventory, or every row filtered by an in-flight exclusion or a transient
-// plugin-availability miss). The baseline is captured before the trigger so
-// the triggered command cannot be mistaken for a pre-existing one.
-func (h *TestHarness) forceSyncAndAwait(t *testing.T, model *StateModel) bool {
+// forceSyncAndAwait triggers a sync and waits for its command to complete.
+// When observed, it applies the model's own predicted sync transition for
+// unmanaged rows (sync reads every idle inventory row, so out-of-band changes
+// to discovered unmanaged resources absorb at each sync) and returns true.
+//
+// It returns false when no sync command was observed within the appearance
+// window. That covers both a sync that never ran (empty inventory, transient
+// plugin-availability miss, synchronizer busy) and a no-change sync that
+// completed and was deleted between polls — the two are indistinguishable, so
+// callers may only treat false as tolerable where a no-op sync and no sync
+// are equivalent. The baseline is captured before the trigger so the
+// triggered command cannot be mistaken for a pre-existing one.
+func (h *TestHarness) forceSyncAndAwait(t *testing.T, model *StateModel, appearance time.Duration) bool {
 	t.Helper()
 	baseline := h.SyncCommandBaseline()
 	require.NoError(t, h.client.ForceSync(), "ForceSync failed")
-	_, ok := h.WaitForSyncCommandAfter(baseline, 15*time.Second)
+	_, ok := h.WaitForSyncCommandAfter(baseline, appearance, 30*time.Second)
 	if !ok {
 		return false
 	}
@@ -1612,18 +1615,16 @@ func (h *TestHarness) forceSyncAndAwait(t *testing.T, model *StateModel) bool {
 
 func (h *TestHarness) executeTriggerDiscovery(t *testing.T, model *StateModel) {
 	t.Helper()
-	err := h.client.ForceDiscover()
-	if err != nil {
+	// The suite's formas never mark the target Discoverable, so discovery
+	// finds no discoverable targets and ingests nothing: the deterministic
+	// model transition is no transition at all. Fire it to exercise the
+	// path; any surprise ingestion surfaces as an unexpected unmanaged row
+	// in CheckUnmanagedModelVsInventory.
+	if err := h.client.ForceDiscover(); err != nil {
 		t.Logf("TriggerDiscovery error (may be expected): %v", err)
 		return
 	}
-	if _, ok := h.WaitForNextSyncCommand(10 * time.Second); !ok {
-		t.Logf("TriggerDiscovery: no new discovery/sync command observed")
-		return
-	} else if model != nil {
-		model.ApplyDiscoveryToUnmanaged()
-	}
-	t.Logf("TriggerDiscovery: fired")
+	t.Logf("TriggerDiscovery: fired (no discoverable targets, ingests nothing)")
 }
 
 func (h *TestHarness) executeCloudModify(t *testing.T, op *Operation, model *StateModel) {
@@ -1742,7 +1743,7 @@ func (h *TestHarness) absorbManagedDrift(t *testing.T, model *StateModel, native
 	t.Helper()
 	const maxSyncAttempts = 3
 	for attempt := range maxSyncAttempts {
-		if !h.forceSyncAndAwait(t, model) {
+		if !h.forceSyncAndAwait(t, model, 10*time.Second) {
 			// The drifted row is in inventory, so a healthy sync must include
 			// it; an unobserved sync command here is a transient miss — retry.
 			t.Logf("absorbManagedDrift: no sync command observed (attempt %d)", attempt+1)
@@ -1763,7 +1764,7 @@ func (h *TestHarness) absorbUnmanagedDrift(t *testing.T, model *StateModel, nati
 	t.Helper()
 	const maxSyncAttempts = 3
 	for attempt := range maxSyncAttempts {
-		if !h.forceSyncAndAwait(t, model) {
+		if !h.forceSyncAndAwait(t, model, 10*time.Second) {
 			t.Logf("absorbUnmanagedDrift: no sync command observed (attempt %d)", attempt+1)
 			continue
 		}
