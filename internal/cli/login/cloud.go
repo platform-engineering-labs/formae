@@ -114,6 +114,23 @@ func gateSynthesised(block cliAuthBlock, p platform) gateResult {
 	return gateResult{Auth: block, OK: true}
 }
 
+// The dependencies a hosted sign-in reaches the outside world through, as
+// package seams.
+//
+// They exist for one test that cannot be written any other way: the promise that
+// a hosted sign-in creates no classic default profile is a property of the
+// *command*, because what would create one is the profile resolution inside
+// AppFromContext that the command's RunE has to skip. Substituting these at the
+// cloudLogin struct would test a function that never runs in production and
+// would still pass if someone put an AppFromContext call back into RunE.
+//
+// Nothing but a test ever assigns them.
+var (
+	newAuthPlugin = authPluginFor
+	newCloudAPI   = newCloudClient
+	newVerifier   = newProfileVerifier
+)
+
 // cloudLogin is everything a profile-independent sign-in needs from the command.
 // It is a struct for the same reason syncStep is: several of these are seams a
 // test substitutes, and threading them positionally through two calls would make
@@ -132,7 +149,12 @@ type cloudLogin struct {
 
 	// NewPlugin is the auth-plugin factory, injectable so a test can drive a
 	// whole sign-in without a plugin subprocess on disk.
-	NewPlugin func(authType string, raw json.RawMessage, pluginDir string) (*pkgauth.Client, error)
+	//
+	// It yields the two narrow interfaces rather than the concrete client — one
+	// drives the flow, the other reads its result — because that is all either
+	// caller needs, and because a test substituting a plugin has nothing it could
+	// return a *pkgauth.Client from.
+	NewPlugin func(authType string, raw json.RawMessage, pluginDir string) (authClient, credentialProvider, error)
 }
 
 // runCloudLoginAndSync signs in to the hosted platform without reading or
@@ -159,13 +181,13 @@ func runCloudLoginAndSync(ctx context.Context, c cloudLogin) error {
 		return errors.New(g.Reason)
 	}
 
-	client, err := c.NewPlugin(block.Type, raw, c.PluginDir)
+	flow, creds, err := c.NewPlugin(block.Type, raw, c.PluginDir)
 	if err != nil {
 		return err
 	}
 
-	return runLoginAndSync(ctx, client, syncStep{
-		Creds:      client,
+	return runLoginAndSync(ctx, flow, syncStep{
+		Creds:      creds,
 		Entry:      syncFromFlags(block),
 		ConfigDir:  c.ConfigDir,
 		NewClient:  c.NewClient,
@@ -193,10 +215,10 @@ func runCloudLoginAndSync(ctx context.Context, c cloudLogin) error {
 //
 // No part of raw reaches the error. It is the configuration that may hold a
 // credential for another system, and a refusal has no reason to repeat it.
-func authPluginFor(authType string, raw json.RawMessage, pluginDir string) (*pkgauth.Client, error) {
+func authPluginFor(authType string, raw json.RawMessage, pluginDir string) (authClient, credentialProvider, error) {
 	binPath, err := os.Executable()
 	if err != nil {
-		return nil, fmt.Errorf("determine the running formae's location: %w", err)
+		return nil, nil, fmt.Errorf("determine the running formae's location: %w", err)
 	}
 
 	dirs := []string{util.ExpandHomePath(pluginDir), discovery.SystemPluginDir(binPath)}
@@ -206,12 +228,14 @@ func authPluginFor(authType string, raw json.RawMessage, pluginDir string) (*pkg
 		}
 		client, err := pkgauth.NewClient(p.BinaryPath, raw)
 		if err != nil {
-			return nil, fmt.Errorf("start the %s auth plugin: %w", authType, err)
+			return nil, nil, fmt.Errorf("start the %s auth plugin: %w", authType, err)
 		}
-		return client, nil
+		// One client in both roles: it drives the flow and it yields the
+		// credential that flow produced.
+		return client, client, nil
 	}
 
-	return nil, fmt.Errorf(
+	return nil, nil, fmt.Errorf(
 		"signing in to the hosted platform needs the %s auth plugin, which is not installed. "+
 			"Install it with `pelmgr install %s`", authType, authType)
 }

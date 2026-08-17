@@ -115,7 +115,7 @@ func TestCloudAuthBlock_RefusesAnUnusableIssuer(t *testing.T) {
 // upgraded formae by name still has the bundle they had. The refusal therefore
 // names the command that fixes it.
 func TestAuthPluginFor_MissingPluginNamesTheRemedy(t *testing.T) {
-	_, err := authPluginFor(oidcAuthType, json.RawMessage(`{"type":"oidc"}`), t.TempDir())
+	_, _, err := authPluginFor(oidcAuthType, json.RawMessage(`{"type":"oidc"}`), t.TempDir())
 	require.Error(t, err)
 
 	assert.Contains(t, err.Error(), oidcAuthType)
@@ -127,7 +127,7 @@ func TestAuthPluginFor_MissingPluginNamesTheRemedy(t *testing.T) {
 // credential for another system.
 func TestAuthPluginFor_MissingPluginRevealsNothingFromTheBlock(t *testing.T) {
 	raw := json.RawMessage(`{"type":"oidc","clientSecret":"s3cr3t-do-not-print"}`)
-	_, err := authPluginFor(oidcAuthType, raw, t.TempDir())
+	_, _, err := authPluginFor(oidcAuthType, raw, t.TempDir())
 	require.Error(t, err)
 
 	assert.NotContains(t, err.Error(), "s3cr3t-do-not-print")

@@ -113,11 +113,13 @@ touched.`,
 					Device:    device,
 					PluginDir: defaultCloudPluginDir,
 					ConfigDir: store.ResolveConfigDir,
-					NewClient: newCloudClient,
-					Verifier:  newProfileVerifier(),
+					NewClient: newCloudAPI,
+					Verifier:  newVerifier(),
 					Out:       os.Stdout,
+					// There is no config to read a theme from, and reading one
+					// would mean resolving a profile.
 					Theme:     theme.New("formae"),
-					NewPlugin: authPluginFor,
+					NewPlugin: newAuthPlugin,
 				})
 			}
 
