@@ -48,6 +48,11 @@ type stubAuthClient struct {
 	// onLogout runs before the answer is returned, so a test can observe the
 	// state of the world at the moment the tokens are dropped.
 	onLogout func()
+
+	// onLoginWait runs before the wait answers, so a test can observe what had
+	// already reached the caller at the moment the flow began waiting — which is
+	// where the "the URL is out before this blocks" promise lives.
+	onLoginWait func()
 }
 
 func (s *stubAuthClient) LoginStart(req *pkgauth.LoginStartRequest) (*pkgauth.LoginStartResponse, error) {
@@ -58,6 +63,9 @@ func (s *stubAuthClient) LoginStart(req *pkgauth.LoginStartRequest) (*pkgauth.Lo
 func (s *stubAuthClient) LoginWait(req *pkgauth.LoginWaitRequest) (*pkgauth.LoginWaitResponse, error) {
 	s.loginWaitCalled = true
 	s.loginWaitReq = req
+	if s.onLoginWait != nil {
+		s.onLoginWait()
+	}
 	return s.loginWaitResp, s.loginWaitErr
 }
 
@@ -85,7 +93,7 @@ func TestRunLogin_BrowserPath(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err := runLogin(c, &out, testTheme, false)
+	_, err := runLogin(c, &out, testTheme, false, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, "Open this URL to sign in:\n  https://issuer.example/authorize?req=abc\n✓ signed in as jane\n", out.String())
@@ -116,7 +124,7 @@ func TestRunLogin_DevicePath(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err := runLogin(c, &out, testTheme, true)
+	_, err := runLogin(c, &out, testTheme, true, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, "Visit https://issuer.example/device and enter code: ABCD-1234\n✓ signed in as jane\n", out.String())
@@ -139,7 +147,7 @@ func TestRunLogin_AlreadyAuthenticatedShortCircuits(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err := runLogin(c, &out, testTheme, false)
+	_, err := runLogin(c, &out, testTheme, false, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, "✓ already signed in as jane\n", out.String())
@@ -164,7 +172,7 @@ func TestRunLogin_SignedInFallsBackToSubjectWhenNameEmpty(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err := runLogin(c, &out, testTheme, false)
+	_, err := runLogin(c, &out, testTheme, false, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, "Open this URL to sign in:\n  https://issuer.example/authorize?req=abc\n✓ signed in as subj-123\n", out.String())
@@ -186,7 +194,7 @@ func TestRunLogin_SignedInOmitsIdentityWhenNeitherSet(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err := runLogin(c, &out, testTheme, false)
+	_, err := runLogin(c, &out, testTheme, false, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, "Open this URL to sign in:\n  https://issuer.example/authorize?req=abc\n✓ signed in\n", out.String())
@@ -204,7 +212,7 @@ func TestRunLogin_AlreadyAuthenticatedFallsBackToSubjectWhenNameEmpty(t *testing
 	}
 
 	var out bytes.Buffer
-	err := runLogin(c, &out, testTheme, false)
+	_, err := runLogin(c, &out, testTheme, false, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, "✓ already signed in as subj-456\n", out.String())
@@ -220,7 +228,7 @@ func TestRunLogin_AlreadyAuthenticatedOmitsIdentityWhenNeitherSet(t *testing.T) 
 	}
 
 	var out bytes.Buffer
-	err := runLogin(c, &out, testTheme, false)
+	_, err := runLogin(c, &out, testTheme, false, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, "✓ already signed in\n", out.String())
@@ -237,7 +245,7 @@ func TestRunLogin_UnsupportedOnLoginStart(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err := runLogin(c, &out, testTheme, false)
+	_, err := runLogin(c, &out, testTheme, false, nil)
 	require.Error(t, err)
 	assert.Equal(t, "the active profile's auth plugin does not support this operation", err.Error())
 	assert.False(t, c.loginWaitCalled)
@@ -261,7 +269,7 @@ func TestRunLogin_PipedOutputHasNoANSI(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err := runLogin(c, &out, testTheme, false)
+	_, err := runLogin(c, &out, testTheme, false, nil)
 	require.NoError(t, err)
 
 	assert.NotContains(t, out.String(), "\x1b[", "piped output must be ANSI-free")
@@ -325,7 +333,7 @@ func bearerCredentials() *stubCredentials {
 func (f *syncFixture) loginStep() syncStep {
 	return syncStep{
 		Creds:      bearerCredentials(),
-		Conn:       hosted(oidcAuth(f.t, nil)),
+		Entry:      syncFromProfile{conn: hosted(oidcAuth(f.t, nil))},
 		ConfigDir:  func() (string, error) { return f.root, nil },
 		NewClient:  func(string) CloudClient { return f.client },
 		Verifier:   f.verifier,
@@ -436,7 +444,7 @@ func TestLoginOnAClassicProfileIsUnchanged(t *testing.T) {
 	f := newSyncFixture(t)
 	f.answer(installation(installOne, "prod", stateActive))
 	step := f.loginStep()
-	step.Conn = &pkgmodel.ClassicConnection{}
+	step.Entry = syncFromProfile{conn: &pkgmodel.ClassicConnection{}}
 
 	require.NoError(t, runLoginAndSync(context.Background(), signedIn(), step, false))
 
@@ -472,7 +480,7 @@ func TestLoginNoticesAGateRefusal(t *testing.T) {
 	f := newSyncFixture(t)
 	f.answer(installation(installOne, "prod", stateActive))
 	step := f.loginStep()
-	step.Conn = hosted(oidcAuth(f.t, map[string]any{"issuer": testOtherIssuer}))
+	step.Entry = syncFromProfile{conn: hosted(oidcAuth(f.t, map[string]any{"issuer": testOtherIssuer}))}
 
 	require.NoError(t, runLoginAndSync(context.Background(), signedIn(), step, false))
 
@@ -614,7 +622,8 @@ func TestLoginFailsWhenAnotherProcessHoldsTheLedger(t *testing.T) {
 func TestLoginFailsWhenNoDesiredInstallationGotAProfile(t *testing.T) {
 	f := newSyncFixture(t)
 	f.answer(installation(installTwo, "staging", stateActive))
-	require.NoError(t, runSync(context.Background(), f.loginStep()))
+	_, _, syncErr := runSync(context.Background(), f.loginStep())
+	require.NoError(t, syncErr)
 	require.True(t, f.exists(nameTwo))
 
 	f.verifier.err = errors.New("the generated profile does not load")
@@ -623,7 +632,7 @@ func TestLoginFailsWhenNoDesiredInstallationGotAProfile(t *testing.T) {
 		installation(installTwo, "staging", "warping"),
 	)
 
-	err := runSync(context.Background(), f.loginStep())
+	_, _, err := runSync(context.Background(), f.loginStep())
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "you are signed in")

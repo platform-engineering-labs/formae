@@ -308,7 +308,7 @@ func bearerHeaderNamed(name, value string) http.Header {
 func TestGateSync_AllowsOurOwnHostedOidcProfile(t *testing.T) {
 	credential := "Bearer " + testToken
 
-	got := gateSync(hosted(oidcAuth(t, nil)), testPlatform(), bearerHeader(credential))
+	got := gateBoth(hosted(oidcAuth(t, nil)), testPlatform(), bearerHeader(credential))
 
 	require.True(t, got.OK, "reason: %s", got.Reason)
 	assert.Empty(t, got.Reason, "an allowed sync has nothing to explain")
@@ -338,7 +338,7 @@ func TestGateSync_ComparesIssuersCanonically(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := gateSync(
+			got := gateBoth(
 				hosted(oidcAuth(t, map[string]any{"issuer": tc.issuer})),
 				testPlatform(),
 				bearerHeader("Bearer "+testToken),
@@ -356,7 +356,7 @@ func TestGateSync_ComparesIssuersCanonically(t *testing.T) {
 // defaulted, and defaulting them is the renderer's job — synthesising them
 // here would hide from the renderer that the profile never named them.
 func TestGateSync_LeavesTheOptionalFieldsAsTheyCame(t *testing.T) {
-	got := gateSync(
+	got := gateBoth(
 		hosted(oidcAuth(t, map[string]any{"clientId": nil, "scopes": nil})),
 		testPlatform(),
 		bearerHeader("Bearer "+testToken),
@@ -373,7 +373,7 @@ func TestGateSync_LeavesTheOptionalFieldsAsTheyCame(t *testing.T) {
 func TestGateSync_Refuses(t *testing.T) {
 	for _, tc := range refusalCases(t) {
 		t.Run(tc.name, func(t *testing.T) {
-			got := gateSync(tc.conn, testPlatform(), tc.hdr)
+			got := gateBoth(tc.conn, testPlatform(), tc.hdr)
 
 			assert.False(t, got.OK)
 			assert.NotEmpty(t, got.Reason, "a refusal explains itself to a user who has just signed in")
@@ -426,7 +426,7 @@ func TestGateSync_RefusalNeverRepeatsASecretFromTheAuthBlock(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := gateSync(hosted(tc.auth), testPlatform(), bearerHeader("Bearer "+testToken))
+			got := gateBoth(hosted(tc.auth), testPlatform(), bearerHeader("Bearer "+testToken))
 
 			require.False(t, got.OK)
 			rendered := fmt.Sprintf("%+v", got)
@@ -444,7 +444,7 @@ func TestGateSync_RefusalNeverRepeatsASecretFromTheAuthBlock(t *testing.T) {
 // the field itself carries it for the caller that sends the request; the
 // formatted form must still say enough to be useful for diagnosing a decision.
 func TestGateResult_StringNeverPrintsTheBearer(t *testing.T) {
-	got := gateSync(hosted(oidcAuth(t, nil)), testPlatform(), bearerHeader("Bearer "+testToken))
+	got := gateBoth(hosted(oidcAuth(t, nil)), testPlatform(), bearerHeader("Bearer "+testToken))
 	require.True(t, got.OK, "reason: %s", got.Reason)
 	require.NotEmpty(t, got.Bearer, "the test is meaningless without a bearer to redact")
 
@@ -466,7 +466,7 @@ func TestGateSync_ARefusalMakesNoControlPlaneRequest(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, seen := serveInstallations(t, validInstallation(testInstallationA))
 
-			result := gateSync(tc.conn, platform{Origin: srv.URL, Issuer: testIssuer}, tc.hdr)
+			result := gateBoth(tc.conn, platform{Origin: srv.URL, Issuer: testIssuer}, tc.hdr)
 			if result.OK {
 				_, err := newCloudClient(srv.URL).ListInstallations(context.Background(), result.Bearer)
 				require.NoError(t, err)
@@ -485,7 +485,7 @@ func TestGateSync_AnAllowedGateSendsTheCredentialItValidated(t *testing.T) {
 	srv, seen := serveInstallations(t, validInstallation(testInstallationA))
 	credential := "Bearer " + testToken
 
-	result := gateSync(hosted(oidcAuth(t, nil)), platform{Origin: srv.URL, Issuer: testIssuer}, bearerHeader(credential))
+	result := gateBoth(hosted(oidcAuth(t, nil)), platform{Origin: srv.URL, Issuer: testIssuer}, bearerHeader(credential))
 	require.True(t, result.OK, "reason: %s", result.Reason)
 
 	_, err := newCloudClient(srv.URL).ListInstallations(context.Background(), result.Bearer)
@@ -795,4 +795,18 @@ func hostedConnWithAuth(t *testing.T, issuer string) *pkgmodel.HostedConnection 
 		Installation: "3HzFPXfPDGhwLJJVtaHbmFs6vLa",
 		Auth:         json.RawMessage(auth),
 	}
+}
+
+// gateBoth runs the two halves of the gate in the order runSync runs them, so a
+// test can assert on the whole decision for a profile. It lives here rather than
+// in the package because production never has a connection and a credential in
+// hand at the same moment: gateProfile runs before the auth plugin is driven and
+// gateCredential after, and that ordering is what stops a profile from choosing
+// the issuer a credential is minted against.
+func gateBoth(conn pkgmodel.Connection, p platform, hdr http.Header) gateResult {
+	g := gateProfile(conn, p)
+	if !g.OK {
+		return g
+	}
+	return gateCredential(g, p, hdr)
 }

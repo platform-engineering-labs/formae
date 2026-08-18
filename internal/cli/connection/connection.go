@@ -108,8 +108,13 @@ func report(w io.Writer, consumer printer.Consumer, schema string, err error) er
 		return perr
 	}
 	if !handled {
-		if _, perr := printer.PrintFailure(w, schema,
-			printer.Fail(printer.CodeInternal, err.Error(), nil)); perr != nil {
+		// err.Error() deliberately does not travel. An undeclared error here is
+		// usually a configuration load, and a Pkl failure quotes the source line it
+		// failed on — which can be the line holding an inline password. No consumer
+		// reads this field; the human path below returns the error unchanged.
+		if _, perr := printer.PrintFailure(w, schema, printer.Fail(printer.CodeInternal,
+			"formae could not resolve the connection; run it without --output-consumer machine to see why",
+			nil)); perr != nil {
 			return perr
 		}
 	}
