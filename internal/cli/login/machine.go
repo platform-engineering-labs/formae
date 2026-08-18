@@ -139,6 +139,18 @@ func reportLogin(w io.Writer, schema string, err error) (bool, error) {
 }
 
 // asDeclaredFailure gives err a code, if it does not already carry one.
+//
+// The envelope carries only text this repository wrote. Nothing derived from an
+// error we did not author reaches it — not an auth plugin's error string, and
+// above all not an err.Error() from configuration loading, because a Pkl failure
+// quotes the source line it failed on and that line can be the one holding an
+// inline password. Measured: a profile with a bad escape in its password put the
+// password itself onto stdout.
+//
+// Consumers lose nothing, because none of them read this field: they branch on the
+// code and on the details declared beside it. A person reading the raw envelope
+// keeps a sentence that says what happened, and the human output path — which
+// never goes through here — still shows them the underlying error in full.
 func asDeclaredFailure(err error) error {
 	var already *printer.Failure
 	if errors.As(err, &already) {
@@ -151,19 +163,24 @@ func asDeclaredFailure(err error) error {
 		if ae.Code != "" {
 			details = map[string]any{"pluginCode": ae.Code}
 		}
-		return printer.Fail(printer.CodeAuthFailed, ae.Message, details)
+		// The plugin's own code travels in details; its prose does not.
+		return printer.Fail(printer.CodeAuthFailed,
+			"the auth plugin refused this sign-in", details)
 	}
 
 	var se *SyncIncompleteError
 	if errors.As(err, &se) {
-		return printer.Fail(printer.CodeSyncIncomplete, se.Error(), nil)
+		return printer.Fail(printer.CodeSyncIncomplete,
+			"the sign-in succeeded and the hosted profiles could not be brought up to date", nil)
 	}
 
+	// pluginMissingError's text is this package's own, so it travels as written.
 	var pe *pluginMissingError
 	if errors.As(err, &pe) {
 		return printer.Fail(printer.CodePluginMissing, pe.Error(),
 			map[string]any{"plugin": pe.Plugin, "install": pe.Install})
 	}
 
-	return printer.Fail(printer.CodeInternal, err.Error(), nil)
+	return printer.Fail(printer.CodeInternal,
+		"formae could not complete this command; run it without --output-consumer machine to see why", nil)
 }

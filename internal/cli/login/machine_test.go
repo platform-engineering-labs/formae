@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -282,4 +283,50 @@ func TestMachine_SyncWarningsReachTheCompletionDocument(t *testing.T) {
 	warnings, ok := docs[1]["warnings"].([]any)
 	require.True(t, ok, "no warnings on the completion document")
 	assert.NotEmpty(t, warnings)
+}
+
+// Nothing this repository did not write reaches a failure envelope.
+//
+// Measured before this was enforced: a profile whose password line carried a bad
+// escape put the password itself onto stdout, because Pkl quotes the source line
+// it failed on and the envelope carried err.Error() verbatim. A consumer never
+// reads that field — it branches on the code — so the text was pure exposure.
+func TestMachine_AnUndeclaredErrorRevealsNothingItWasGiven(t *testing.T) {
+	secret := "SYNTHETIC-SECRET-abc123"
+	pklish := "failed to evaluate PKL configuration file: –– Pkl Error ––\n" +
+		"Invalid character escape sequence `\\q`.\n\n" +
+		"7 | [\"password\"] = \"" + secret + "\\q\"\n    ^^^^^^^^^^^^"
+
+	out := &bytes.Buffer{}
+	_, err := reportLogin(out, "json", errors.New(pklish))
+	require.NoError(t, err)
+
+	assert.NotContains(t, out.String(), secret,
+		"an inline password reached the failure envelope")
+	assert.NotContains(t, out.String(), "Pkl Error",
+		"the producer's own error text reached the failure envelope")
+
+	// And it is still a usable envelope: the code is what a consumer reads.
+	var doc map[string]any
+	require.NoError(t, json.Unmarshal(out.Bytes(), &doc))
+	assert.Equal(t, "internal", doc["code"])
+}
+
+// An auth refusal carries the plugin's code and not its prose.
+func TestMachine_AnAuthRefusalCarriesTheCodeNotThePluginsWords(t *testing.T) {
+	out := &bytes.Buffer{}
+	_, err := reportLogin(out, "json", &AuthError{
+		Code:    "session_expired",
+		Message: "PLUGIN-PROSE-do-not-forward",
+	})
+	require.NoError(t, err)
+
+	assert.NotContains(t, out.String(), "PLUGIN-PROSE-do-not-forward")
+
+	var doc map[string]any
+	require.NoError(t, json.Unmarshal(out.Bytes(), &doc))
+	assert.Equal(t, "auth_failed", doc["code"])
+	details, ok := doc["details"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "session_expired", details["pluginCode"])
 }

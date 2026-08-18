@@ -132,7 +132,9 @@ func authFailure(err error) error {
 		if ae.Code != "" {
 			details = map[string]any{"pluginCode": ae.Code}
 		}
-		return printer.Fail(printer.CodeAuthFailed, ae.Message, details)
+		// The plugin's code is what a consumer acts on; its prose stays out of the
+		// envelope, since it is text we did not write.
+		return printer.Fail(printer.CodeAuthFailed, "the auth plugin could not produce a credential", details)
 	}
-	return printer.Fail(printer.CodeAuthFailed, err.Error(), nil)
+	return printer.Fail(printer.CodeAuthFailed, "the auth plugin could not produce a credential", nil)
 }
