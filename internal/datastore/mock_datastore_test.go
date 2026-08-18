@@ -5,7 +5,6 @@
 package datastore
 
 import (
-	"context"
 	"encoding/json"
 	"time"
 
@@ -204,6 +203,6 @@ func (m *mockDatastore) ForceCancelResourceUpdates(_ string, _ []ForceCancelRow,
 	return ForceCancelResult{}, nil
 }
 
-func (m *mockDatastore) RecordAgentBoot(_ context.Context, _ string) error {
+func (m *mockDatastore) RecordAgentBoot(_ string) error {
 	return nil
 }

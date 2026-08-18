@@ -112,8 +112,9 @@ func TestRenderCancelResult_Forced_Piped(t *testing.T) {
 	assert.Contains(t, plain, "Force-cancel abandons in-progress work", "must contain force-cancel warning")
 	assert.Contains(t, plain, "synchronizer", "must contain synchronizer mention")
 
-	// Status hint
-	assert.Contains(t, plain, "formae status", "must contain status hint")
+	// Status hint, naming the canceled commands
+	assert.Contains(t, plain, "formae command status cmd-abc123", "must contain a runnable status hint")
+	assert.Contains(t, plain, "formae command status cmd-def456", "must name every canceled command in the hint")
 }
 
 // TestRenderCancelResult_Normal_Piped tests the non-force cancel output.
@@ -135,8 +136,8 @@ func TestRenderCancelResult_Normal_Piped(t *testing.T) {
 	// Force-cancel warning must NOT appear
 	assert.NotContains(t, plain, "Force-cancel abandons", "non-force output must not contain force-cancel warning")
 
-	// Status hint
-	assert.Contains(t, plain, "formae status", "must contain status hint")
+	// Status hint, naming the canceled command
+	assert.Contains(t, plain, "formae command status cmd-abc123", "must contain a runnable status hint")
 }
 
 // TestRenderCancelResult_Empty tests the empty response (no commands canceled).

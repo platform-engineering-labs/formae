@@ -1024,7 +1024,7 @@ func (d *DatastoreAuroraDataAPI) GetMostRecentFormaCommandByClientID(clientID st
 		description_text, description_confirm, config_mode, config_force, config_simulate,
 		target_updates, stack_updates, policy_updates, modified_ts, source, subject, subject_name
 	FROM forma_commands
-	WHERE client_id = :client_id
+	WHERE client_id = :client_id AND source = 'user'
 	ORDER BY timestamp DESC
 	LIMIT 1
 	`
@@ -1038,7 +1038,7 @@ func (d *DatastoreAuroraDataAPI) GetMostRecentFormaCommandByClientID(clientID st
 	}
 
 	if len(output.Records) == 0 {
-		return nil, fmt.Errorf("no forma commands found for client: %v", clientID)
+		return nil, nil
 	}
 
 	cmd, err := d.parseFormaCommandRecord(output.Records[0])
@@ -1225,11 +1225,8 @@ func (d *DatastoreAuroraDataAPI) QueryFormaCommands(statusQuery *datastore.Statu
 	queryStr, params, paramIdx = appendAuroraStringClause(queryStr, params, paramIdx, "command_id", "command_id", false, statusQuery.CommandID)
 	queryStr, params, paramIdx = appendAuroraStringClause(queryStr, params, paramIdx, "client_id", "client_id", false, statusQuery.ClientID)
 
-	if statusQuery.Command != nil {
-		queryStr, params, paramIdx = appendAuroraStringClause(queryStr, params, paramIdx, "command", "command", true, statusQuery.Command)
-	} else {
-		queryStr += fmt.Sprintf(" AND command != '%s'", pkgmodel.CommandSync)
-	}
+	queryStr, params, paramIdx = appendAuroraStringClause(queryStr, params, paramIdx, "command", "command", true, statusQuery.Command)
+	queryStr, params, paramIdx = appendAuroraStringClause(queryStr, params, paramIdx, "source", "source", false, statusQuery.Source)
 
 	// stack filter routes through a sub-EXISTS against resource_updates.
 	if statusQuery.Stack != nil {
@@ -6298,7 +6295,9 @@ func (d *DatastoreAuroraDataAPI) ForceCancelResourceUpdates(commandID string, in
 }
 
 // RecordAgentBoot appends one agent_boots row for this process start.
-func (d *DatastoreAuroraDataAPI) RecordAgentBoot(ctx context.Context, version string) error {
+func (d *DatastoreAuroraDataAPI) RecordAgentBoot(version string) error {
+	ctx, cancel := datastore.AgentBootContext(d.ctx)
+	defer cancel()
 	query := `INSERT INTO agent_boots (boot_id, version, booted_at) VALUES (:boot_id, :version, :booted_at::timestamp)`
 	params := []types.SqlParameter{
 		{Name: aws.String("boot_id"), Value: &types.FieldMemberStringValue{Value: mksuid.New().String()}},

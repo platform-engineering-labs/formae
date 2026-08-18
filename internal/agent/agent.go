@@ -182,7 +182,7 @@ func (a *Agent) Start() error {
 		// hold the only connection while startup's own database work queued behind
 		// it. Best-effort, cancellable and off the startup goroutine; see
 		// recordBoot.
-		recordBoot(a.ctx, ms.Datastore, formae.Version)
+		recordBoot(ms.Datastore, formae.Version)
 
 		// Start Ergo actor metrics collection (only if OTel is enabled)
 		if a.cfg.Agent.OTel.Enabled {

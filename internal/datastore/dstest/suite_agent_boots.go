@@ -7,7 +7,6 @@
 package dstest
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -29,7 +28,7 @@ func RunRecordAgentBoot(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 		}
 
 		before := time.Now().UTC().Add(-time.Second)
-		require.NoError(t, ds.RecordAgentBoot(context.Background(), "0.89.0"))
+		require.NoError(t, ds.RecordAgentBoot("0.89.0"))
 		after := time.Now().UTC().Add(time.Second)
 
 		boots, err := td.LoadAgentBootsForTest()
@@ -59,7 +58,7 @@ func RunAgentBootsAreAppendOnly(t *testing.T, newDS func(t *testing.T) TestDatas
 
 		versions := []string{"0.88.0", "0.89.0", "0.89.1"}
 		for _, v := range versions {
-			require.NoError(t, ds.RecordAgentBoot(context.Background(), v))
+			require.NoError(t, ds.RecordAgentBoot(v))
 		}
 
 		boots, err := td.LoadAgentBootsForTest()
@@ -91,7 +90,7 @@ func RunRecordAgentBootEmptyVersion(t *testing.T, newDS func(t *testing.T) TestD
 			t.Skip("backend does not provide LoadAgentBootsForTest")
 		}
 
-		require.NoError(t, ds.RecordAgentBoot(context.Background(), ""))
+		require.NoError(t, ds.RecordAgentBoot(""))
 
 		boots, err := td.LoadAgentBootsForTest()
 		require.NoError(t, err)

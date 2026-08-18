@@ -85,7 +85,7 @@ func TestCancelE2E_PerIDSubmit(t *testing.T) {
 
 	// Route through the real HTTP stack
 	getCommandsStatusFn = func(a *app.App, query string, n int, fromWatch bool) (*apimodel.ListCommandStatusResponse, []string, error) {
-		resp, err := client.GetFormaCommandsStatus(query, "e2e-client", n)
+		resp, err := client.GetFormaCommandsStatus(query, "e2e-client", n, apimodel.CommandScopeAgent)
 		return resp, nil, err
 	}
 
@@ -173,7 +173,7 @@ func TestCancelE2E_ForceWatch_AbandonedInView(t *testing.T) {
 	confirmForceCancel = func(th *theme.Theme, summary string) (bool, error) { return true, nil }
 
 	getCommandsStatusFn = func(a *app.App, query string, n int, fromWatch bool) (*apimodel.ListCommandStatusResponse, []string, error) {
-		resp, err := client.GetFormaCommandsStatus(query, "e2e-client", n)
+		resp, err := client.GetFormaCommandsStatus(query, "e2e-client", n, apimodel.CommandScopeAgent)
 		return resp, nil, err
 	}
 	cancelCommandFn = func(a *app.App, query string, force bool) (*apimodel.CancelCommandResponse, error) {

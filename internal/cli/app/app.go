@@ -406,7 +406,21 @@ func (a *App) CancelCommand(query string, force bool) (*apimodel.CancelCommandRe
 	return res, nil
 }
 
+// GetCommandsStatus lists user-initiated commands matching query. An empty
+// query lists every client's commands, newest first, bounded by n. Callers
+// that specifically want the calling client's own most recent command (a
+// bare `formae command status`, a bare `formae cancel`) must use
+// GetCommandsStatusScoped with apimodel.CommandScopeClient.
+//
+// This signature is what the statuswatch TUI's Client interface requires, so
+// it stays three-argument.
 func (a *App) GetCommandsStatus(query string, n int, fromWatch bool) (*apimodel.ListCommandStatusResponse, []string, error) {
+	return a.GetCommandsStatusScoped(query, n, fromWatch, apimodel.CommandScopeAgent)
+}
+
+// GetCommandsStatusScoped is GetCommandsStatus with an explicit scope for the
+// empty-query case; see apimodel.CommandScope.
+func (a *App) GetCommandsStatusScoped(query string, n int, fromWatch bool, scope apimodel.CommandScope) (*apimodel.ListCommandStatusResponse, []string, error) {
 	compatible, _, nags, err := a.runBeforeCommand(!fromWatch)
 	if !compatible {
 		return nil, nil, err
@@ -420,7 +434,7 @@ func (a *App) GetCommandsStatus(query string, n int, fromWatch bool) (*apimodel.
 	var res *apimodel.ListCommandStatusResponse
 	err = a.withAuthRetry(func(authHeader http.Header, net *http.Client) error {
 		client := a.apiClient(authHeader, net)
-		r, err := client.GetFormaCommandsStatus(query, clientID, n)
+		r, err := client.GetFormaCommandsStatus(query, clientID, n, scope)
 		if err != nil {
 			return err
 		}

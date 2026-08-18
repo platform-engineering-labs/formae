@@ -11,4 +11,6 @@
 [38;2;153;153;153mA still-running Create may orphan a resource: verify the resources above in your[0m
 [38;2;153;153;153mcloud provider and clean up manually, or let discovery pick them up.[0m
 
-[38;2;153;153;153mUse 'formae status' to check the cancellation progress.[0m
+[38;2;153;153;153mTo check the cancellation progress:[0m
+  [38;2;153;153;153mformae command status cmd-abc123[0m
+  [38;2;153;153;153mformae command status cmd-def456[0m
