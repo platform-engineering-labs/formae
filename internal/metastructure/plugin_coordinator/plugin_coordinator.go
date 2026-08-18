@@ -323,8 +323,8 @@ func (c *PluginCoordinator) spawnPluginOperator(req messages.SpawnPluginOperator
 // ResourceUpdater sizes its watchdog window from — and the requesting process.
 func pluginOperatorEnv(retryConfig model.RetryConfig, requestedBy gen.PID) map[gen.Env]any {
 	return map[gen.Env]any{
-		gen.Env("RetryConfig"):       retryConfig,
-		gen.Env("RequestedBy"):       requestedBy,
+		gen.Env("RetryConfig"): retryConfig,
+		gen.Env("RequestedBy"): requestedBy,
 	}
 }
 
