@@ -359,28 +359,79 @@ func (h *TestHarness) latestSyncCommand() (*apimodel.Command, error) {
 	return &commands[0], nil
 }
 
-// WaitForNextSyncCommand waits for a new sync command created after the current
-// latest sync command, then waits for that command to reach a terminal state.
-// Returns nil,false if no new sync command appears within the timeout.
-func (h *TestHarness) WaitForNextSyncCommand(timeout time.Duration) (*apimodel.Command, bool) {
+// SyncCommandBaseline returns the ID of the most recent sync command, or ""
+// when none exists. Capture it BEFORE triggering a sync: the triggered sync
+// command can be persisted before the first post-trigger poll runs, and a
+// baseline taken after the trigger would then absorb the very command being
+// waited for.
+func (h *TestHarness) SyncCommandBaseline() string {
 	before, err := h.latestSyncCommand()
-	if err != nil {
-		return nil, false
+	if err != nil || before == nil {
+		return ""
 	}
-	beforeID := ""
-	if before != nil {
-		beforeID = before.CommandID
-	}
+	return before.CommandID
+}
 
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
+// WaitForSyncCommandAfter waits up to `appearance` for a sync command
+// different from the given baseline ID to be persisted, then up to
+// `completion` for that command to finish. Returns nil,false if no new sync
+// command appears within the appearance window.
+//
+// A sync command whose reads produce no changes is DELETED from the datastore
+// on completion (the persister keeps only syncs that absorbed something), so
+// a command that appears and then vanishes has completed as a no-change sync:
+// that is reported as observed with a nil command. A no-change sync can also
+// complete and be deleted entirely between polls, in which case it is
+// indistinguishable from no sync at all — callers must only rely on a false
+// return where a no-op sync and no sync are equivalent.
+func (h *TestHarness) WaitForSyncCommandAfter(baselineID string, appearance, completion time.Duration) (*apimodel.Command, bool) {
+	appearDeadline := time.Now().Add(appearance)
+	for time.Now().Before(appearDeadline) {
 		current, err := h.latestSyncCommand()
-		if err == nil && current != nil && current.CommandID != "" && current.CommandID != beforeID {
-			return h.waitForCommandInDB(current.CommandID, time.Until(deadline))
+		if err == nil && current != nil && current.CommandID != "" && current.CommandID != baselineID {
+			return h.waitForSyncCommandDone(current.CommandID, completion)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
 	return nil, false
+}
+
+// waitForSyncCommandDone polls a known sync command until it reaches a
+// terminal state or is deleted as a no-change sync (both count as observed).
+func (h *TestHarness) waitForSyncCommandDone(commandID string, timeout time.Duration) (*apimodel.Command, bool) {
+	deadline := time.Now().Add(timeout)
+	seen := false
+	for time.Now().Before(deadline) {
+		cmd, err := h.commandFromDB(commandID)
+		if err == nil {
+			if cmd == nil {
+				if seen {
+					return nil, true // deleted on completion: a no-change sync
+				}
+			} else {
+				seen = true
+				h.ObserveCommandState(h.t, cmd.CommandID, cmd.State)
+				if isTerminalCommandState(cmd.State) {
+					return cmd, true
+				}
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	// The row was observed at least once (latestSyncCommand returned it), so
+	// its disappearance without a terminal read still means it completed.
+	return nil, !seen
+}
+
+// WaitForNextSyncCommand waits for a new sync command created after the current
+// latest sync command, then waits for that command to reach a terminal state.
+// Returns nil,false if no new sync command appears within the timeout.
+//
+// The baseline is taken at call time, so this only observes syncs triggered
+// AFTER the call starts; when waiting on a sync you already triggered, use
+// SyncCommandBaseline + WaitForSyncCommandAfter around the trigger instead.
+func (h *TestHarness) WaitForNextSyncCommand(timeout time.Duration) (*apimodel.Command, bool) {
+	return h.WaitForSyncCommandAfter(h.SyncCommandBaseline(), timeout, timeout)
 }
 
 // --- TestController communication (via Ergo cross-node calls) ---
@@ -614,7 +665,7 @@ func (h *TestHarness) KillAgent(t *testing.T) {
 // RestartAgent starts a new agent subprocess with the same config (same SQLite DB).
 // Reconstructs the plugin's cloud state from the agent's inventory and the OOB
 // mirror, re-programs response sequences, then opens the gate.
-func (h *TestHarness) RestartAgent(t *testing.T, timeout time.Duration, model ...*StateModel) {
+func (h *TestHarness) RestartAgent(t *testing.T, timeout time.Duration) {
 	t.Helper()
 
 	// Start the agent but DON'T open the gate yet — ReRunIncompleteCommands
@@ -632,23 +683,12 @@ func (h *TestHarness) RestartAgent(t *testing.T, timeout time.Duration, model ..
 	// resolvables before re-injection, otherwise the plugin returns $res objects
 	// on Read, which corrupts the $ref.$value in mergeRefsPreservingUserRefs.
 	forma, err := h.client.ExtractResources("managed:true")
-	pendingManagedProps := map[string]string{}
-	pendingManagedDeletes := map[string]bool{}
-	if len(model) > 0 && model[0] != nil {
-		pendingManagedProps, pendingManagedDeletes = model[0].PendingManagedDriftCloudState()
-	}
 	if err == nil && forma != nil {
 		for _, res := range forma.Resources {
 			if res.NativeID == "" {
 				continue
 			}
-			if pendingManagedDeletes[res.NativeID] {
-				continue
-			}
 			flatProps := flattenPropertiesForCloud(res.Properties)
-			if driftProps, ok := pendingManagedProps[res.NativeID]; ok {
-				flatProps = driftProps
-			}
 			_, err := h.callTestController(testcontrol.PutCloudStateRequest{
 				NativeID:     res.NativeID,
 				ResourceType: res.Type,
@@ -662,12 +702,6 @@ func (h *TestHarness) RestartAgent(t *testing.T, timeout time.Duration, model ..
 
 	// Re-inject OOB cloud state from the mirror (resources not in inventory).
 	for _, entry := range h.cloudStateMirror {
-		if _, ok := pendingManagedProps[entry.NativeID]; ok {
-			continue
-		}
-		if pendingManagedDeletes[entry.NativeID] {
-			continue
-		}
 		_, err := h.callTestController(testcontrol.PutCloudStateRequest{
 			NativeID:     entry.NativeID,
 			ResourceType: entry.ResourceType,
