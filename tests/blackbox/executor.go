@@ -102,6 +102,7 @@ func (h *TestHarness) ResetAgentState(t *testing.T) {
 		forma, err := h.client.ExtractResources("managed:true")
 		if err != nil || forma == nil || len(forma.Resources) == 0 {
 			t.Logf("ResetAgentState: inventory clean (attempt %d)", attempt+1)
+			h.resetOutOfBandState(t)
 			return
 		}
 
@@ -166,13 +167,60 @@ func (h *TestHarness) ResetAgentState(t *testing.T) {
 		require.Fail(t, "ResetAgentState: inventory not empty after %d cleanup attempts", maxCleanupAttempts)
 	}
 
-	// Phase 3: Best-effort cleanup of orphaned cloud state entries.
-	// A partially-failed command can leave resources in the cloud that were
-	// never persisted to inventory. The agent destroy above only targets
-	// inventory-tracked resources, so orphans survive. Remove them directly.
+	// Phase 3: Best-effort cleanup of out-of-band leftovers.
 	// Note: stale ResourceUpdaters from a prior rapid iteration may create
 	// cloud resources AFTER this cleanup (see checkResourceInvariantsWithRetry).
-	h.cleanupOrphanedCloudState(t)
+	h.resetOutOfBandState(t)
+}
+
+// resetOutOfBandState clears everything a previous iteration's out-of-band
+// activity can leave behind, so each iteration starts from a clean slate:
+//
+//   - cloud entries with no managed inventory row: a partially-failed command
+//     can leave resources in the cloud that were never persisted, and an
+//     out-of-band create the iteration never discovered stays cloud-only. With
+//     discovery live, a leftover would otherwise be ingested next iteration as
+//     an unexpected unmanaged resource.
+//   - unmanaged inventory rows: discovery ingests out-of-band resources into
+//     the $unmanaged stack, and the managed-only destroy above cannot remove
+//     them. Their cloud entries were just swept, so a forced sync absorbs the
+//     deletions and drops the rows.
+func (h *TestHarness) resetOutOfBandState(t *testing.T) {
+	t.Helper()
+	h.cleanupOrphanedCloudState(t, nil)
+
+	const maxPurgeAttempts = 3
+	for attempt := range maxPurgeAttempts {
+		_, unmanaged, err := h.extractManagedAndUnmanagedInventory()
+		if err != nil {
+			t.Logf("resetOutOfBandState: could not read unmanaged inventory: %v", err)
+			return
+		}
+		if len(unmanaged) == 0 {
+			return
+		}
+		baseline := h.SyncCommandBaseline()
+		if err := h.client.ForceSync(); err != nil {
+			t.Logf("resetOutOfBandState: ForceSync failed: %v", err)
+			return
+		}
+		if _, ok := h.WaitForSyncCommandAfter(baseline, 10*time.Second, 30*time.Second); !ok {
+			t.Logf("resetOutOfBandState: no sync command observed (attempt %d)", attempt+1)
+		}
+		deadline := time.Now().Add(10 * time.Second)
+		for time.Now().Before(deadline) {
+			_, unmanaged, err = h.extractManagedAndUnmanagedInventory()
+			if err == nil && len(unmanaged) == 0 {
+				return
+			}
+			time.Sleep(150 * time.Millisecond)
+		}
+	}
+	_, unmanaged, _ := h.extractManagedAndUnmanagedInventory()
+	for _, res := range unmanaged {
+		t.Logf("  remaining unmanaged resource: %s (nativeID=%s)", res.Label, res.NativeID)
+	}
+	require.Fail(t, "ResetAgentState: unmanaged inventory not empty after purge attempts")
 }
 
 // cleanupOrphanedCloudState removes cloud state entries that have no
@@ -181,7 +229,14 @@ func (h *TestHarness) ResetAgentState(t *testing.T) {
 // leaves resources in the cloud that were never persisted to inventory (e.g.
 // a sibling failed after the plugin created the resource but before the
 // ResourcePersister stored it).
-func (h *TestHarness) cleanupOrphanedCloudState(t *testing.T) int {
+//
+// spareNativeIDs names cloud entries that are not in inventory by design and
+// must survive the sweep: out-of-band unmanaged resources the model tracks
+// and expects discovery to ingest later. ResetAgentState passes nil (a new
+// iteration starts clean); mid-iteration callers pass the model's tracked
+// set, or the sweep would delete resources a later discovery is expected to
+// find.
+func (h *TestHarness) cleanupOrphanedCloudState(t *testing.T, spareNativeIDs map[string]bool) int {
 	t.Helper()
 
 	cloudState, err := h.TryGetCloudStateSnapshot()
@@ -203,6 +258,9 @@ func (h *TestHarness) cleanupOrphanedCloudState(t *testing.T) int {
 	// Delete cloud state entries not in inventory
 	cleaned := 0
 	for nativeID := range cloudState {
+		if spareNativeIDs[nativeID] {
+			continue
+		}
 		if !inventoryNativeIDs[nativeID] {
 			h.DeleteCloudState(t, nativeID)
 			t.Logf("ResetAgentState: cleaned up orphaned cloud resource %s", nativeID)
@@ -485,7 +543,7 @@ func (h *TestHarness) checkResourceInvariantsWithRetry(t *testing.T, ignoreNativ
 		// All violations are orphans — likely stale operations completing.
 		// Clean up and wait before retrying.
 		t.Logf("checkResourceInvariants: found %d orphans (attempt %d), cleaning up and retrying", len(resourceViolations), attempt+1)
-		h.cleanupOrphanedCloudState(t)
+		h.cleanupOrphanedCloudState(t, ignoreNativeIDs)
 		time.Sleep(3 * time.Second)
 	}
 
@@ -635,10 +693,10 @@ func inventoryFingerprint(managed []pkgmodel.Resource, unmanaged []pkgmodel.Reso
 	return b.String()
 }
 
-func (h *TestHarness) waitForUnmanagedInventoryExpectations(t *testing.T, model *StateModel, timeout time.Duration) {
+func (h *TestHarness) waitForUnmanagedInventoryExpectations(t *testing.T, model *StateModel, timeout time.Duration) bool {
 	t.Helper()
 	if model == nil {
-		return
+		return true
 	}
 
 	hasExpected := false
@@ -649,18 +707,19 @@ func (h *TestHarness) waitForUnmanagedInventoryExpectations(t *testing.T, model 
 		}
 	}
 	if !hasExpected {
-		return
+		return true
 	}
 
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		_, unmanagedInventory, err := h.extractManagedAndUnmanagedInventory()
 		if err == nil && len(CheckUnmanagedModelVsInventory(model, unmanagedInventory)) == 0 {
-			return
+			return true
 		}
 		time.Sleep(150 * time.Millisecond)
 	}
 	t.Logf("waitForUnmanagedInventoryExpectations: timed out after %v", timeout)
+	return false
 }
 
 // applyCommandOutcomeToModel uses per-resource-update status from a completed
@@ -1638,16 +1697,76 @@ func (h *TestHarness) forceSyncAndAwait(t *testing.T, model *StateModel, appeara
 
 func (h *TestHarness) executeTriggerDiscovery(t *testing.T, model *StateModel) {
 	t.Helper()
-	// The suite's formas never mark the target Discoverable, so discovery
-	// finds no discoverable targets and ingests nothing: the deterministic
-	// model transition is no transition at all. Fire it to exercise the
-	// path; any surprise ingestion surfaces as an unexpected unmanaged row
-	// in CheckUnmanagedModelVsInventory.
-	if err := h.client.ForceDiscover(); err != nil {
-		t.Logf("TriggerDiscovery error (may be expected): %v", err)
+	// The model knows exactly what discovery will ingest: cloud resources it
+	// created out-of-band that are not yet in inventory. Everything else the
+	// plugin lists is either already tracked (known native id) or absent.
+	expectIngest := false
+	if model != nil {
+		for _, res := range model.UnmanagedResources {
+			if res.PresentInCloud && !res.PresentInInventory {
+				expectIngest = true
+				break
+			}
+		}
+	}
+
+	// Discovery ingests every cloud entry inventory does not know, which
+	// includes orphans a failed or canceled command left behind (created in
+	// the cloud, never persisted). An ingested orphan is not derivable from
+	// generated inputs, so discovery only runs when no commands are in
+	// flight, after sweeping every cloud entry that is neither in inventory
+	// nor a tracked out-of-band resource. What remains for discovery to find
+	// is then exactly the model's tracked set.
+	if model != nil && len(model.AcceptedCommands) > 0 {
+		t.Logf("TriggerDiscovery: skipped (commands in flight)")
 		return
 	}
-	t.Logf("TriggerDiscovery: fired (no discoverable targets, ingests nothing)")
+	var spare map[string]bool
+	if model != nil {
+		spare = model.UnmanagedPresentInCloudNativeIDs()
+	}
+	h.waitForInventoryStabilization(t, 5*time.Second)
+	h.cleanupOrphanedCloudState(t, spare)
+
+	if !expectIngest {
+		// Nothing to ingest: discovery completes without a surviving command
+		// (a command that absorbs nothing is deleted on completion), and the
+		// model transition is a no-op either way.
+		baseline := h.SyncCommandBaseline()
+		if err := h.client.ForceDiscover(); err != nil {
+			t.Logf("TriggerDiscovery error (may be expected): %v", err)
+			return
+		}
+		if _, ok := h.WaitForSyncCommandAfter(baseline, 2*time.Second, 30*time.Second); ok {
+			t.Logf("TriggerDiscovery: fired")
+		} else {
+			t.Logf("TriggerDiscovery: fired (nothing to ingest)")
+		}
+		return
+	}
+
+	// Ingestion is expected and deterministic: discovery lists the cloud,
+	// ingests the native ids inventory does not know, and the command that
+	// absorbs them survives completion. Discovery pauses while a user
+	// changeset runs, so a trigger can be swallowed — retry until inventory
+	// converges on the model's expectations.
+	model.ApplyDiscoveryToUnmanaged()
+	const maxDiscoverAttempts = 3
+	for attempt := range maxDiscoverAttempts {
+		baseline := h.SyncCommandBaseline()
+		require.NoError(t, h.client.ForceDiscover(), "ForceDiscover failed")
+		if _, ok := h.WaitForSyncCommandAfter(baseline, 10*time.Second, 60*time.Second); !ok {
+			t.Logf("TriggerDiscovery: no ingestion command observed (attempt %d)", attempt+1)
+			continue
+		}
+		if h.waitForUnmanagedInventoryExpectations(t, model, 10*time.Second) {
+			t.Logf("TriggerDiscovery: ingested")
+			return
+		}
+		t.Logf("TriggerDiscovery: inventory not converged (attempt %d)", attempt+1)
+	}
+	require.Failf(t, "discovery did not ingest",
+		"expected unmanaged resources were not ingested after %d attempts", maxDiscoverAttempts)
 }
 
 func (h *TestHarness) executeCloudModify(t *testing.T, op *Operation, model *StateModel) {
@@ -2457,8 +2576,9 @@ func FormaFromStackResources(stackLabel string, ids []int, propsTemplate ...stri
 		Resources: resources,
 		Targets: []pkgmodel.Target{
 			{
-				Label:     "test-target",
-				Namespace: "Test",
+				Label:        "test-target",
+				Namespace:    "Test",
+				Discoverable: true,
 			},
 		},
 	}
@@ -2555,8 +2675,9 @@ func FormaFromPoolResources(pool *ResourcePool, stackLabel string, providerStack
 		Resources: resources,
 		Targets: []pkgmodel.Target{
 			{
-				Label:     "test-target",
-				Namespace: "Test",
+				Label:        "test-target",
+				Namespace:    "Test",
+				Discoverable: true,
 			},
 		},
 	}
