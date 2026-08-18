@@ -503,13 +503,6 @@ func CheckModelVsInventory(model *StateModel, inventory []pkgmodel.Resource) []V
 	for s := range model.Stacks {
 		stack := &model.Stacks[s]
 		for idx, res := range stack.Resources {
-			// Cross-stack slots in failed/canceled commands have
-			// non-deterministic persistence behavior — the command response
-			// alone can't tell us whether they were persisted. Skip them
-			// in model-vs-inventory assertions.
-			if model.Pool != nil && model.Pool.IsCrossStack(idx) {
-				continue
-			}
 			label := model.LabelForResource(s, idx)
 			resourceType := model.TypeForResource(idx)
 
@@ -570,10 +563,6 @@ func CheckModelVsInventory(model *StateModel, inventory []pkgmodel.Resource) []V
 	for _, res := range inventory {
 		key := res.Stack + "/" + res.Label
 		if expectedExistingKeys[key] {
-			continue
-		}
-		_, slotIdx, ok := model.findResourceSlot(res.Stack, res.Label)
-		if ok && model.Pool != nil && model.Pool.IsCrossStack(slotIdx) {
 			continue
 		}
 		violations = append(violations, Violation{
