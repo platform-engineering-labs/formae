@@ -349,6 +349,54 @@ func TestStateModel_CheckModelVsInventory_PropertiesAndType(t *testing.T) {
 	assert.NotEmpty(t, violations)
 }
 
+// A patch is not a reconcile: the agent computes a per-field diff against the
+// current resource, so the model's patch prediction must apply the same field
+// semantics instead of storing the drawn properties verbatim. An empty array
+// means "not specified" (the agent strips empty arrays), set-typed fields are
+// additive, entity-set fields upsert by their key field, array-typed fields
+// replace wholesale, and scalars replace.
+func TestStateModel_PatchPredictionAppliesFieldSemantics(t *testing.T) {
+	model := NewStateModel(1, 3)
+	model.ApplyCreated(0, []int{0}, `{"Name":"res-stack-0-a","Value":"v1","SetTags":["alpha","beta"],"EntityTags":[{"Key":"env","Value":"a"},{"Key":"team","Value":"b"}],"OrderedItems":["first","second"]}`)
+
+	patch := `{"Name":"NAME","Value":"v2","SetTags":["gamma","alpha"],"EntityTags":[{"Key":"env","Value":"c"}],"OrderedItems":[]}`
+	resolved := model.ResolvePatchPropertiesForResources(0, []int{0}, patch, "")
+
+	assert.JSONEq(t,
+		`{"Name":"res-stack-0-a","Value":"v2","SetTags":["alpha","beta","gamma"],"EntityTags":[{"Key":"env","Value":"c"},{"Key":"team","Value":"b"}],"OrderedItems":["first","second"]}`,
+		resolved[0],
+		"scalar replaces, set unions, entity-set upserts by Key, empty array keeps current")
+}
+
+// A patch whose fields are all no-ops against the current resource must
+// predict exactly the current properties: the agent computes an empty diff
+// and issues no resource update, so no later correction will fix a wrong
+// prediction.
+func TestStateModel_PatchPredictionNoOpPatchKeepsCurrentProperties(t *testing.T) {
+	model := NewStateModel(1, 3)
+	current := `{"Name":"res-stack-0-a","Value":"v2","SetTags":["gamma","delta","alpha","epsilon"],"EntityTags":[],"OrderedItems":["first","third","fourth"]}`
+	model.ApplyCreated(0, []int{0}, current)
+
+	patch := `{"Name":"NAME","Value":"v2","SetTags":[],"EntityTags":[],"OrderedItems":["first","third","fourth"]}`
+	resolved := model.ResolvePatchPropertiesForResources(0, []int{0}, patch, "")
+
+	assert.JSONEq(t, current, resolved[0],
+		"an all-no-op patch predicts the current properties unchanged")
+}
+
+// A patch that targets a resource the model does not have yet is a create:
+// the drawn properties are the created state, exactly as before.
+func TestStateModel_PatchPredictionCreateUsesDrawnProperties(t *testing.T) {
+	model := NewStateModel(1, 3)
+
+	patch := `{"Name":"NAME","Value":"v1","SetTags":["alpha"],"EntityTags":[],"OrderedItems":[]}`
+	resolved := model.ResolvePatchPropertiesForResources(0, []int{1}, patch, "")
+
+	assert.JSONEq(t, `{"Name":"res-stack-0-b","Value":"v1","SetTags":["alpha"],"EntityTags":[],"OrderedItems":[]}`,
+		resolved[1],
+		"patch-creates take the drawn properties verbatim")
+}
+
 func TestStateModel_ResolvePropertiesForResources_WithPool(t *testing.T) {
 	model := NewStateModel(2, 5)
 	resolved := model.ResolvePropertiesForResources(

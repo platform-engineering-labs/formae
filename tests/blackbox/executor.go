@@ -1150,7 +1150,15 @@ func (h *TestHarness) executeApply(t *testing.T, op *Operation, model *StateMode
 	// Immediate model update: predict outcomes at submission time.
 	successIDs := successfulResourceIDs(op, op.StackIndex, op.ResourceIDs, model.Pool, false, model)
 	if len(successIDs) > 0 {
-		resolvedProps := model.ResolvePropertiesForResources(op.StackIndex, successIDs, op.Properties, op.ChildProperties)
+		// Reconcile declares complete state; patch is a per-field diff whose
+		// prediction must apply the agent's field semantics (a no-op patch
+		// yields no resource update, so a wrong prediction is never corrected).
+		var resolvedProps map[int]string
+		if op.ApplyMode == "reconcile" {
+			resolvedProps = model.ResolvePropertiesForResources(op.StackIndex, successIDs, op.Properties, op.ChildProperties)
+		} else {
+			resolvedProps = model.ResolvePatchPropertiesForResources(op.StackIndex, successIDs, op.Properties, op.ChildProperties)
+		}
 		model.ApplyCreatedResolved(op.StackIndex, resolvedProps)
 	}
 	if op.ApplyMode == "reconcile" {
