@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
 // ResourceState represents whether a resource is expected to exist.
@@ -597,6 +599,129 @@ func (m *StateModel) ResolvePropertiesForResource(stackIndex, id int, properties
 	resolved := strings.Replace(childProperties, `"NAME"`, `"`+label+`"`, 1)
 	parentLabel := m.parentIdentifierForResource(stackIndex, id)
 	return strings.Replace(resolved, `"PARENT_ID"`, `"`+parentLabel+`"`, 1)
+}
+
+// ResolvePatchPropertiesForResources expands per-operation property templates
+// into the exact expected post-patch properties for the given resource IDs.
+// A patch is a per-field diff against the current resource, not a declaration
+// of complete state, so for slots that already exist the drawn properties are
+// merged with the current ones under the agent's field semantics: an empty
+// array means "not specified" (the agent strips empty arrays), set-typed
+// fields are additive, entity-set fields upsert by their key field,
+// array-typed fields replace wholesale, and scalars replace. A patch whose
+// fields are all no-ops therefore predicts the current properties exactly,
+// matching the empty diff for which the agent issues no resource update.
+// Slots that do not exist yet are created with the drawn properties verbatim.
+func (m *StateModel) ResolvePatchPropertiesForResources(stackIndex int, resourceIDs []int, properties, childProperties string) map[int]string {
+	propertiesByID := make(map[int]string, len(resourceIDs))
+	for _, id := range resourceIDs {
+		resolved := m.ResolvePropertiesForResource(stackIndex, id, properties, childProperties)
+		if res := m.Resource(stackIndex, id); res != nil && res.State == StateExists && res.Properties != "" {
+			resolved = mergePatchProperties(res.Properties, resolved, testResourceSchema.Hints)
+		}
+		propertiesByID[id] = resolved
+	}
+	return propertiesByID
+}
+
+func mergePatchProperties(currentJSON, patchJSON string, hints map[string]pkgmodel.FieldHint) string {
+	var current, patch map[string]any
+	if err := json.Unmarshal([]byte(currentJSON), &current); err != nil {
+		return patchJSON
+	}
+	if err := json.Unmarshal([]byte(patchJSON), &patch); err != nil {
+		return patchJSON
+	}
+	merged := make(map[string]any, len(current)+len(patch))
+	for k, v := range current {
+		merged[k] = v
+	}
+	for k, v := range patch {
+		arr, isArr := v.([]any)
+		if !isArr {
+			merged[k] = v
+			continue
+		}
+		if len(arr) == 0 {
+			continue
+		}
+		cur, _ := merged[k].([]any)
+		switch hints[k].UpdateMethod {
+		case pkgmodel.FieldUpdateMethodArray:
+			merged[k] = arr
+		case pkgmodel.FieldUpdateMethodEntitySet:
+			merged[k] = upsertByEntityKey(cur, arr, hints[k].IndexField)
+		default:
+			merged[k] = unionByValue(cur, arr)
+		}
+	}
+	b, err := json.Marshal(merged)
+	if err != nil {
+		return patchJSON
+	}
+	return string(b)
+}
+
+// unionByValue keeps the current elements in order and appends patch elements
+// not already present (JSON equality).
+func unionByValue(current, patch []any) []any {
+	out := append([]any(nil), current...)
+	for _, p := range patch {
+		if !containsJSONValue(out, p) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func containsJSONValue(arr []any, target any) bool {
+	tb, err := json.Marshal(target)
+	if err != nil {
+		return false
+	}
+	for _, e := range arr {
+		eb, err := json.Marshal(e)
+		if err != nil {
+			continue
+		}
+		if string(eb) == string(tb) {
+			return true
+		}
+	}
+	return false
+}
+
+// upsertByEntityKey replaces current elements whose key field matches a patch
+// element in place and appends patch elements with new keys.
+func upsertByEntityKey(current, patch []any, keyField string) []any {
+	keyOf := func(e any) (string, bool) {
+		m, ok := e.(map[string]any)
+		if !ok {
+			return "", false
+		}
+		k, ok := m[keyField].(string)
+		return k, ok
+	}
+	out := append([]any(nil), current...)
+	usedKeys := make(map[string]bool)
+	for i, e := range out {
+		ek, ok := keyOf(e)
+		if !ok {
+			continue
+		}
+		for _, p := range patch {
+			if pk, ok := keyOf(p); ok && pk == ek {
+				out[i] = p
+				usedKeys[pk] = true
+			}
+		}
+	}
+	for _, p := range patch {
+		if pk, ok := keyOf(p); ok && !usedKeys[pk] {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // NormalizePropertiesForResource rewrites a resource properties blob into the
