@@ -301,3 +301,23 @@ func TestCloudAuthBlock_IsNotAConnection(t *testing.T) {
 	}
 	assert.False(t, strings.Contains(string(raw), "installation"))
 }
+
+// The built-in platform is the pair a sign-in uses when nobody overrides it, so
+// its two halves are pinned rather than left to a rename.
+//
+// The origin is the console host: the apex serves the marketing site and answers
+// the installations path with a stock HTML 404, so a build carrying it could not
+// enumerate anyone's grants. The issuer is the identity provider, which is a
+// different host again, and the pair is refused if only one is overridden.
+func TestDefaultPlatform_PointsAtTheControlPlaneAndNotTheApex(t *testing.T) {
+	assert.Equal(t, "https://console.formae.ai", DefaultCloudURL,
+		"the apex serves no API; enumerating grants against it 404s")
+	assert.Equal(t, "https://auth.formae.ai", DefaultCloudIssuer)
+
+	clearCloudEnv(t)
+	p, err := resolvePlatform("", "")
+	require.NoError(t, err)
+	assert.Equal(t, DefaultCloudURL, p.Origin)
+	assert.Equal(t, DefaultCloudIssuer, p.Issuer)
+	assert.NotEqual(t, p.Origin, p.Issuer, "the control plane and the issuer are different hosts")
+}
