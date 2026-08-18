@@ -26,8 +26,8 @@ const (
 	// installThree and nameThree stand for a profile derived from a second
 	// control plane, so a test can prove one origin's sign-out leaves the
 	// other's profiles alone.
-	installThree = "33333333-3333-4333-8333-333333333333"
-	nameThree    = "acme-default-dev-333333333333"
+	installThree = "1QrStUvWxYz0123456789AbCdEf"
+	nameThree    = "acme-default-dev-1QrStUvWxYz0"
 )
 
 // signedOut is the ordinary successful sign-out.

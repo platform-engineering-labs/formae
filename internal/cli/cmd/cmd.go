@@ -11,6 +11,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/platform-engineering-labs/formae/internal/cli/printer"
+
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
@@ -349,4 +351,26 @@ func PropertiesFromCmd(cmd *cobra.Command) map[string]string {
 	}
 
 	return result
+}
+
+// AddOutputFlags registers the standard --output-consumer / --output-schema
+// flags used across the CLI for commands that can emit machine-readable output.
+func AddOutputFlags(c *cobra.Command) {
+	c.Flags().String("output-consumer", string(printer.ConsumerHuman), "Consumer of the command result (human | machine)")
+	c.Flags().String("output-schema", "json", "The schema to use for the result output (json | yaml)")
+}
+
+// ResolveOutput reads and validates the output flags, matching the convention
+// used by the agent-connecting commands (plugin, status, inventory, …).
+func ResolveOutput(c *cobra.Command) (printer.Consumer, string, error) {
+	consumerFlag, _ := c.Flags().GetString("output-consumer")
+	schema, _ := c.Flags().GetString("output-schema")
+	consumer := printer.Consumer(consumerFlag)
+	if consumer != printer.ConsumerHuman && consumer != printer.ConsumerMachine {
+		return "", "", FlagErrorf("output-consumer must be 'human' or 'machine'")
+	}
+	if consumer == printer.ConsumerMachine && schema != "json" && schema != "yaml" {
+		return "", "", FlagErrorf("output-schema must be either 'json' or 'yaml' for machine consumer")
+	}
+	return consumer, schema, nil
 }

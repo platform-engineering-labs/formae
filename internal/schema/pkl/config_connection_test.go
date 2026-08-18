@@ -28,7 +28,7 @@ func TestConnectionDecodesHostedArm(t *testing.T) {
 	hosted, ok := cfg.Cli.Connection.(*pklmodel.HostedConnection)
 	require.True(t, ok, "expected *HostedConnection, got %T", cfg.Cli.Connection)
 	assert.Equal(t, "https://cloud.formae.ai", hosted.Endpoint)
-	assert.Equal(t, "3f2b8c14-0000-4000-8000-000000000000", hosted.Installation)
+	assert.Equal(t, "3HzFPXfPDGhwLJJVtaHbmFs6vLa", hosted.Installation)
 	require.NotNil(t, hosted.Auth)
 	assert.Equal(t, "oidc", hosted.Auth.Properties["type"])
 }

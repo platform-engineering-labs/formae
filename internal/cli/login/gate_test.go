@@ -9,9 +9,13 @@ package login
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
+
+	pkgauth "github.com/platform-engineering-labs/formae/pkg/auth"
 
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/stretchr/testify/assert"
@@ -62,7 +66,7 @@ func oidcAuth(t *testing.T, overrides map[string]any) json.RawMessage {
 func hosted(auth json.RawMessage) *pkgmodel.HostedConnection {
 	return &pkgmodel.HostedConnection{
 		Endpoint:     testOrigin,
-		Installation: testUUIDA,
+		Installation: testInstallationA,
 		Auth:         auth,
 	}
 }
@@ -460,7 +464,7 @@ func TestGateResult_StringNeverPrintsTheBearer(t *testing.T) {
 func TestGateSync_ARefusalMakesNoControlPlaneRequest(t *testing.T) {
 	for _, tc := range refusalCases(t) {
 		t.Run(tc.name, func(t *testing.T) {
-			srv, seen := serveInstallations(t, validInstallation(testUUIDA))
+			srv, seen := serveInstallations(t, validInstallation(testInstallationA))
 
 			result := gateSync(tc.conn, platform{Origin: srv.URL, Issuer: testIssuer}, tc.hdr)
 			if result.OK {
@@ -478,7 +482,7 @@ func TestGateSync_ARefusalMakesNoControlPlaneRequest(t *testing.T) {
 // the same wiring, with a block that passes, reaches the control plane with
 // exactly the credential the gate returned.
 func TestGateSync_AnAllowedGateSendsTheCredentialItValidated(t *testing.T) {
-	srv, seen := serveInstallations(t, validInstallation(testUUIDA))
+	srv, seen := serveInstallations(t, validInstallation(testInstallationA))
 	credential := "Bearer " + testToken
 
 	result := gateSync(hosted(oidcAuth(t, nil)), platform{Origin: srv.URL, Issuer: testIssuer}, bearerHeader(credential))
@@ -661,5 +665,134 @@ func TestBearerFrom(t *testing.T) {
 			assert.Equal(t, tc.wantOK, ok)
 			assert.Equal(t, tc.want, got)
 		})
+	}
+}
+
+// The issuer check reads configuration only, so it can run before a credential
+// is minted. That ordering is the point: a profile a model wrote controls the
+// issuer, so driving the auth plugin first would send it at whatever token
+// endpoint the profile named, and refusing afterwards would be too late.
+func TestGateProfileDecidesWithoutACredential(t *testing.T) {
+	p := platform{Origin: "https://formae.ai", Issuer: "https://auth.formae.ai"}
+
+	trusted := hostedConnWithAuth(t, "https://auth.formae.ai")
+	if g := gateProfile(trusted, p); !g.OK {
+		t.Fatalf("a trusted issuer should pass the config gate: %s", g.Reason)
+	}
+
+	foreign := hostedConnWithAuth(t, "https://auth.evil.example")
+	g := gateProfile(foreign, p)
+	if g.OK {
+		t.Fatal("an untrusted issuer must be refused before auth is invoked")
+	}
+	if !strings.Contains(g.Reason, "auth.formae.ai") {
+		t.Errorf("the refusal should name the issuer we do trust: %s", g.Reason)
+	}
+}
+
+// The credential cannot be minted for a connection the gate did not clear,
+// because minting is a method on the value only the gate produces. The ordering
+// is a property of the type rather than a rule a caller has to remember, so a
+// future caller cannot reintroduce the bug by forgetting a predicate.
+func TestCredentialCannotBeMintedForAnUntrustedIssuer(t *testing.T) {
+	creds := &countingCreds{}
+
+	if _, err := ValidateHosted(hostedConnWithAuth(t, "https://auth.evil.example"), "", ""); err == nil {
+		t.Fatal("an untrusted issuer must not validate")
+	}
+	if creds.calls != 0 {
+		t.Fatalf("the auth plugin was driven %d times for a connection that never validated", creds.calls)
+	}
+
+	v, err := ValidateHosted(hostedConnWithAuth(t, "https://auth.formae.ai"), "", "")
+	if err != nil {
+		t.Fatalf("a trusted issuer should validate: %v", err)
+	}
+	if v.Connection().Installation != "3HzFPXfPDGhwLJJVtaHbmFs6vLa" {
+		t.Errorf("the validated connection should be the one checked: %#v", v.Connection())
+	}
+}
+
+func TestValidateHostedRefusesAClassicConnection(t *testing.T) {
+	if _, err := ValidateHosted(&pkgmodel.ClassicConnection{URL: "http://localhost", Port: 1}, "", ""); err == nil {
+		t.Fatal("a classic connection is not a hosted profile and must be refused")
+	}
+}
+
+func TestCredential(t *testing.T) {
+	v, err := ValidateHosted(hostedConnWithAuth(t, "https://auth.formae.ai"), "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("returns the credential with its scheme", func(t *testing.T) {
+		got, err := v.Credential(&countingCreds{
+			resp: &pkgauth.GetAuthHeaderResponse{
+				Headers: map[string][]string{"Authorization": {"Bearer abc.def"}},
+			},
+		}, false)
+		if err != nil {
+			t.Fatalf("Credential: %v", err)
+		}
+		if got != "Bearer abc.def" {
+			t.Fatalf("credential = %q, want the value including its scheme", got)
+		}
+	})
+
+	t.Run("force refresh reaches the plugin", func(t *testing.T) {
+		c := &countingCreds{resp: &pkgauth.GetAuthHeaderResponse{
+			Headers: map[string][]string{"Authorization": {"Bearer x.y"}},
+		}}
+		if _, err := v.Credential(c, true); err != nil {
+			t.Fatal(err)
+		}
+		if !c.sawForce {
+			t.Fatal("force refresh must be passed through")
+		}
+	})
+
+	t.Run("surfaces the plugin's own code", func(t *testing.T) {
+		_, err := v.Credential(&countingCreds{resp: &pkgauth.GetAuthHeaderResponse{
+			ErrorCode: "session_expired", Error: "run formae login",
+		}}, false)
+		var ae *AuthError
+		if !errors.As(err, &ae) {
+			t.Fatalf("want an AuthError, got %#v", err)
+		}
+		if ae.Code != "session_expired" {
+			t.Fatalf("plugin code lost: %#v", ae)
+		}
+	})
+
+	t.Run("refuses a response carrying nothing we could send", func(t *testing.T) {
+		if _, err := v.Credential(&countingCreds{resp: &pkgauth.GetAuthHeaderResponse{
+			Headers: map[string][]string{"X-Token": {"Bearer nope"}},
+		}}, false); err == nil {
+			t.Fatal("a credential under a key the client never sends must fail closed")
+		}
+	})
+}
+
+type countingCreds struct {
+	resp     *pkgauth.GetAuthHeaderResponse
+	err      error
+	calls    int
+	sawForce bool
+}
+
+func (c *countingCreds) GetAuthHeader(force bool) (*pkgauth.GetAuthHeaderResponse, error) {
+	c.calls++
+	c.sawForce = c.sawForce || force
+	return c.resp, c.err
+}
+
+// hostedConnWithAuth builds a hosted connection whose auth block names issuer.
+func hostedConnWithAuth(t *testing.T, issuer string) *pkgmodel.HostedConnection {
+	t.Helper()
+	auth := fmt.Sprintf(`{"type":%q,"role":%q,"issuer":%q}`, oidcAuthType, cliAuthRole, issuer)
+	return &pkgmodel.HostedConnection{
+		Endpoint:     "https://cloud.formae.ai",
+		Installation: "3HzFPXfPDGhwLJJVtaHbmFs6vLa",
+		Auth:         json.RawMessage(auth),
 	}
 }

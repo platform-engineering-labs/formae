@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
+
 	"github.com/platform-engineering-labs/formae/internal/cli/banner"
 	"github.com/platform-engineering-labs/formae/internal/cli/printer"
 	"github.com/platform-engineering-labs/formae/internal/cli/profile/store"
@@ -25,7 +27,7 @@ func newCurrentCmd() *cobra.Command {
 		Short: "Print the active profile name",
 		Args:  cobra.NoArgs,
 		RunE: func(cc *cobra.Command, args []string) error {
-			consumer, schema, err := resolveOutput(cc)
+			consumer, schema, err := cmd.ResolveOutput(cc)
 			if err != nil {
 				return err
 			}
@@ -61,6 +63,6 @@ func newCurrentCmd() *cobra.Command {
 			return nil
 		},
 	}
-	addOutputFlags(c)
+	cmd.AddOutputFlags(c)
 	return c
 }

@@ -29,7 +29,7 @@ const hostedProfilePkl = `amends "formae:/Config.pkl"
 cli {
     connection = new Hosted {
         endpoint = "https://cloud.formae.ai"
-        installation = "3f2b8c14-0000-4000-8000-000000000000"
+        installation = "3HzFPXfPDGhwLJJVtaHbmFs6vLa"
         auth = new Dynamic { type = "oidc" }
     }
 }
@@ -71,7 +71,7 @@ func TestShowMachineJSONEmitsTheTaggedConnection(t *testing.T) {
 	assert.EqualValues(t, 1, got["schemaVersion"])
 	conn := got["cli"].(map[string]any)["connection"].(map[string]any)
 	assert.Equal(t, "hosted", conn["mode"])
-	assert.Equal(t, "3f2b8c14-0000-4000-8000-000000000000", conn["installation"])
+	assert.Equal(t, "3HzFPXfPDGhwLJJVtaHbmFs6vLa", conn["installation"])
 	assert.NotContains(t, out, "\x1b[", "machine output carries no ANSI")
 }
 
@@ -215,7 +215,7 @@ func TestShowWithNoArgumentMigratesALegacyConfig(t *testing.T) {
 	out := runShow(t, "--output-consumer", "machine", "--output-schema", "json")
 
 	assert.Contains(t, out, `"profile":"default"`)
-	assert.Contains(t, out, "3f2b8c14-0000-4000-8000-000000000000",
+	assert.Contains(t, out, "3HzFPXfPDGhwLJJVtaHbmFs6vLa",
 		"the migrated profile is what gets shown")
 	assert.FileExists(t, filepath.Join(dir, "profiles", "default.pkl"))
 	assert.NoFileExists(t, filepath.Join(dir, "formae.conf.pkl"),
