@@ -22,6 +22,17 @@ type RunOptions struct {
 	// Output overrides the output writer (default: os.Stdout).
 	// Useful for testing.
 	Output io.Writer
+
+	// Mouse enables mouse tracking (cell motion). Opt-in per TUI: it is only
+	// worth the cost for models that actually handle tea.MouseMsg, because
+	// tracking takes click-drag text selection away from the terminal (most
+	// terminals still select with shift held).
+	//
+	// The win is on wheel input: without tracking, a terminal in the alternate
+	// screen translates one wheel notch into several arrow keys, so a fast flick
+	// floods the event queue and the list keeps moving after the user stops. With
+	// tracking, one notch is one event the model can size itself.
+	Mouse bool
 }
 
 // DefaultRunOptions returns RunOptions suitable for interactive TUI commands.
@@ -53,6 +64,10 @@ func buildProgramOptions(opts RunOptions) []tea.ProgramOption {
 
 	if opts.AltScreen {
 		progOpts = append(progOpts, tea.WithAltScreen())
+	}
+
+	if opts.Mouse {
+		progOpts = append(progOpts, tea.WithMouseCellMotion())
 	}
 
 	if opts.Output != nil {

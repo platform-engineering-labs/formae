@@ -114,6 +114,23 @@ func (t tabModel) visible(maxRows int) (vis []row, total int) {
 	return vis, total
 }
 
+// filteredCount returns the post-filter row count — the same number visible()
+// reports as total, but without the sort and cap work. The view path only needs
+// the count, and it runs on every frame, so it must not pay for a full sort.
+func (t tabModel) filteredCount() int {
+	if t.spec.serverQuery || t.query == "" {
+		return len(t.allRows)
+	}
+	needle := strings.ToLower(t.query)
+	n := 0
+	for _, r := range t.allRows {
+		if rowMatchesFilter(r, needle) {
+			n++
+		}
+	}
+	return n
+}
+
 // rowMatchesFilter reports whether any cell in r contains needle (already lower-cased).
 func rowMatchesFilter(r row, needle string) bool {
 	for _, cell := range r.cells {

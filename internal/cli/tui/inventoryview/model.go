@@ -7,6 +7,7 @@ package inventoryview
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -61,6 +62,20 @@ type Model struct {
 	detailReqSeq uint64
 	// helpOpen tracks whether the help overlay is currently displayed.
 	helpOpen bool
+	// wheelPending is scroll travel (in rows, signed) accumulated from wheel
+	// events that has not been applied yet; wheelArmed says a settle tick is
+	// already on its way. See handleMouse.
+	wheelPending int
+	wheelArmed   bool
+	// frame caches the last rendered frame so View can hand back the previous
+	// paint while a wheel burst is still draining. Pointer, so the cache is
+	// shared by the model values bubbletea copies around.
+	frame *frameCache
+}
+
+// frameCache holds the last frame View produced. See View / handleMouse.
+type frameCache struct {
+	s string
 }
 
 // New constructs a Model with the four tab specs and sane defaults.
@@ -92,6 +107,7 @@ func New(th *theme.Theme, client Client, opts Options) Model {
 		spinner: components.NewSpinner(th),
 		nagSeen: make(map[string]struct{}),
 		query:   components.NewQueryBar(th, opts.Query),
+		frame:   &frameCache{},
 	}
 	if th.Name == "omarchy" {
 		if w, err := theme.NewOmarchyWatcher(); err == nil {
@@ -165,6 +181,15 @@ func (m Model) Init() tea.Cmd {
 
 // Update handles all incoming messages and key events.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Any message that is not part of a wheel burst ends the burst: apply the
+	// accumulated travel now so the message is handled against the position the
+	// user actually scrolled to.
+	switch msg.(type) {
+	case tea.MouseMsg, wheelSettleMsg:
+	default:
+		m = m.flushWheel()
+	}
+
 	switch msg := msg.(type) {
 
 	case tea.WindowSizeMsg:
@@ -209,6 +234,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 
+	case wheelSettleMsg:
+		m.wheelArmed = false
+		return m.flushWheel(), nil
+
+	case tea.MouseMsg:
+		return m.handleMouse(msg)
+
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 	}
@@ -246,6 +278,87 @@ func (m Model) handleTabLoaded(msg tabLoadedMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+// wheelStep is how many rows one mouse-wheel notch moves. Mouse tracking
+// delivers exactly one event per notch, so the step is ours to pick: 1 row,
+// so a single notch nudges the list by a single row. (A terminal left to
+// translate notches into arrow keys itself sends ~3 per notch, which is both
+// coarser and three times the work.)
+const wheelStep = 1
+
+// handleMouse routes wheel events. Every other mouse event is ignored — mouse
+// tracking is enabled for scrolling only, not for clicking.
+func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if msg.Action != tea.MouseActionPress {
+		return m, nil
+	}
+
+	var up bool
+	switch msg.Button {
+	case tea.MouseButtonWheelUp:
+		up = true
+	case tea.MouseButtonWheelDown:
+		up = false
+	default:
+		return m, nil
+	}
+
+	// The help overlay is modal and does not scroll.
+	if m.helpOpen {
+		return m, nil
+	}
+
+	// Accumulate the travel instead of applying it here, and let the settle tick
+	// apply the total. Bubbletea renders after every message, so applying (and
+	// therefore repainting) per notch means a fast flick queues more work than
+	// the renderer can retire — the list then keeps moving after the wheel
+	// stopped, draining the backlog. Accumulating makes each queued notch cost an
+	// integer add (View reuses the cached frame while wheelPending is non-zero),
+	// so the queue empties at once and the travel lands in one move.
+	if up {
+		m.wheelPending -= wheelStep
+	} else {
+		m.wheelPending += wheelStep
+	}
+
+	if m.wheelArmed {
+		return m, nil
+	}
+	m.wheelArmed = true
+	return m, tea.Tick(wheelSettle, func(time.Time) tea.Msg { return wheelSettleMsg{} })
+}
+
+// wheelSettleMsg marks the end of a wheel burst — see handleMouse.
+type wheelSettleMsg struct{}
+
+// wheelSettle is how long accumulated wheel travel waits before it is applied.
+// Short enough that a single notch still feels immediate, long enough that a
+// flick's worth of notches collapses into one move and one repaint.
+const wheelSettle = 8 * time.Millisecond
+
+// flushWheel applies accumulated wheel travel to whichever surface is scrolling
+// (the detail viewport when open, otherwise the active tab's table). It is a
+// no-op when nothing is pending, so it is safe to call on every message.
+func (m Model) flushWheel() Model {
+	n := m.wheelPending
+	if n == 0 {
+		return m
+	}
+	m.wheelPending = 0
+
+	if m.detailOpen {
+		if n < 0 {
+			m.detailViewport.ScrollUp(-n)
+		} else {
+			m.detailViewport.ScrollDown(n)
+		}
+		return m
+	}
+
+	t := m.active
+	m.tabs[t].table = m.tabs[t].table.MoveCursor(n)
+	return m
 }
 
 // handleKey routes keyboard input.
@@ -601,12 +714,19 @@ func (m Model) refreshActive() (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// delegateNav passes navigation keys to the active tab's table and re-syncs.
+// delegateNav passes navigation keys to the active tab's table.
+//
+// It deliberately does NOT re-sync: navigation only moves the table cursor, and
+// sync's inputs (allRows, query, sortCol/sortDir, effectiveCols) are all
+// unchanged by a cursor move — so a sync here would redo the whole
+// filter→sort→style pipeline for an identical result. That cost is paid per
+// key event, and terminals expand one mouse-wheel notch into several arrow
+// keys, so the queue outran the pipeline and the list kept moving after the
+// user stopped scrolling.
 func (m Model) delegateNav(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	t := m.active
 	newTable, cmd := m.tabs[t].table.Update(msg)
 	m.tabs[t].table = newTable
-	m.tabs[t] = m.tabs[t].sync(m.opts.MaxRows)
 	return m, cmd
 }
 
@@ -695,6 +815,14 @@ func (m Model) viewDetail() string {
 	return strings.Join(lines, "\n")
 }
 
+// cache stores the frame View just produced (see View) and returns it unchanged.
+func (m Model) cache(frame string) string {
+	if m.frame != nil {
+		m.frame.s = frame
+	}
+	return frame
+}
+
 // narrowFooterThreshold is the terminal width below which the footer hint line
 // and status bar switch to abbreviated forms. Matches the statuswatch
 // convention (no analogous constant exists in statuswatch — it uses full hints
@@ -708,13 +836,21 @@ func (m Model) View() string {
 		return ""
 	}
 
+	// Mid-burst: hand back the last paint. Bubbletea calls View once per message,
+	// so rendering every queued wheel notch is what let the input queue outrun
+	// the renderer. The pending travel is applied — and a fresh frame produced —
+	// by the settle tick a few milliseconds later.
+	if m.wheelPending != 0 && m.frame != nil && m.frame.s != "" {
+		return m.frame.s
+	}
+
 	// Help overlay: render over whatever the current screen is.
 	if m.helpOpen {
-		return m.viewHelp()
+		return m.cache(m.viewHelp())
 	}
 
 	if m.detailOpen {
-		return m.viewDetail()
+		return m.cache(m.viewDetail())
 	}
 
 	header := components.HeaderBarBranded(m.th, "inventory", "", m.width)
@@ -767,7 +903,7 @@ func (m Model) View() string {
 	if len(lines) > m.height {
 		lines = lines[:m.height]
 	}
-	return strings.Join(lines, "\n")
+	return m.cache(strings.Join(lines, "\n"))
 }
 
 // viewHelp renders the help overlay centered on the screen, over the header
