@@ -74,6 +74,16 @@ func (p PKL) SupportsExtract() bool {
 }
 
 func (p PKL) FormaeConfig(path string) (*pkgmodel.Config, error) {
+	config, err := p.rawConfig(path)
+	if err != nil {
+		return nil, err
+	}
+	return translateConfig(config)
+}
+
+// rawConfig evaluates the Pkl configuration at path into the decode model,
+// without translating it into the runtime model.
+func (p PKL) rawConfig(path string) (*pklmodel.Config, error) {
 	formaeFs, err := fs.Sub(assets, "assets/formae")
 	if err != nil {
 		return nil, err
@@ -160,10 +170,10 @@ func (p PKL) FormaeConfig(path string) (*pkgmodel.Config, error) {
 		return nil, fmt.Errorf("failed to evaluate PKL configuration file '%s': %w", path, err)
 	}
 
-	return translateConfig(config), nil
+	return config, nil
 }
 
-func translateConfig(config *pklmodel.Config) *pkgmodel.Config {
+func translateConfig(config *pklmodel.Config) (*pkgmodel.Config, error) {
 	translated := pkgmodel.Config{
 		Agent: pkgmodel.AgentConfig{
 			Server: pkgmodel.ServerConfig{
@@ -196,6 +206,7 @@ func translateConfig(config *pklmodel.Config) *pkgmodel.Config {
 					SecretARN:  config.Agent.Datastore.AuroraDataAPI.SecretArn,
 					Database:   config.Agent.Datastore.AuroraDataAPI.Database,
 					Region:     config.Agent.Datastore.AuroraDataAPI.Region,
+					Endpoint:   config.Agent.Datastore.AuroraDataAPI.Endpoint,
 				},
 				MSSQL: pkgmodel.MSSQLConfig{
 					Host:                   config.Agent.Datastore.MSSQL.Host,
@@ -250,12 +261,7 @@ func translateConfig(config *pklmodel.Config) *pkgmodel.Config {
 		},
 		Artifacts: translateArtifactConfig(&config.Artifacts),
 		Cli: pkgmodel.CliConfig{
-			API: pkgmodel.APIConfig{
-				URL:  config.Cli.API.URL,
-				Port: int(config.Cli.API.Port),
-			},
 			DisableUsageReporting: config.Cli.DisableUsageReporting,
-			Auth:                  translateAuthConfig(&config.Cli.Auth),
 			Theme:                 config.Cli.Theme,
 			Appearance:            config.Cli.Appearance,
 		},
@@ -265,7 +271,14 @@ func translateConfig(config *pklmodel.Config) *pkgmodel.Config {
 	translated.Network = translateNetworkConfig(config.Network)
 
 	// Backwards compatibility: fall back to deprecated plugins block
-	applyDeprecatedPluginsConfig(config.Plugins, &translated)
+	var legacyCliAuth json.RawMessage
+	applyDeprecatedPluginsConfig(config.Plugins, &translated, &legacyCliAuth)
+
+	conn, err := buildConnection(&config.Cli, legacyCliAuth, &translated.Warnings)
+	if err != nil {
+		return nil, err
+	}
+	translated.Cli.Connection = conn
 
 	// Warn when global settings conflict with per-plugin overrides
 	checkResourcePluginDeprecations(&translated)
@@ -273,7 +286,7 @@ func translateConfig(config *pklmodel.Config) *pkgmodel.Config {
 	// Synthesize Repositories from legacy flat fields and emit deprecation warnings
 	emitArtifactDeprecationWarnings(&translated)
 
-	return &translated
+	return &translated, nil
 }
 
 // emitArtifactDeprecationWarnings synthesizes a canonical Repositories entry from
@@ -343,7 +356,11 @@ func checkResourcePluginDeprecations(translated *pkgmodel.Config) {
 // applyDeprecatedPluginsConfig copies values from the deprecated plugins block
 // to their new locations, emitting deprecation warnings. New paths take precedence.
 // Warnings are collected in translated.Warnings so callers (CLI) can display them.
-func applyDeprecatedPluginsConfig(plugins *pklmodel.PluginConfig, translated *pkgmodel.Config) {
+func applyDeprecatedPluginsConfig(
+	plugins *pklmodel.PluginConfig,
+	translated *pkgmodel.Config,
+	legacyCliAuth *json.RawMessage,
+) {
 	if plugins == nil {
 		return
 	}
@@ -355,13 +372,18 @@ func applyDeprecatedPluginsConfig(plugins *pklmodel.PluginConfig, translated *pk
 		translated.PluginDir = plugins.PluginDir
 	}
 
-	if plugins.Authentication != nil && translated.Agent.Auth == nil {
-		w := "Your configuration file uses deprecated 'plugins.authentication' — migrate to 'agent.auth' and 'cli.auth'"
+	if plugins.Authentication != nil {
+		w := "Your configuration file uses deprecated 'plugins.authentication' - migrate to 'agent.auth' and 'cli.auth'"
 		slog.Warn(w)
 		translated.Warnings = append(translated.Warnings, w)
 		authJSON := translateDynamic(plugins.Authentication)
-		translated.Agent.Auth = authJSON
-		translated.Cli.Auth = authJSON
+		// The agent keeps its explicit setting when it has one; the CLI's
+		// legacy credential is resolved separately, so an explicit agent.auth
+		// no longer silently leaves the CLI unauthenticated.
+		if translated.Agent.Auth == nil {
+			translated.Agent.Auth = authJSON
+		}
+		*legacyCliAuth = authJSON
 	}
 
 	if plugins.Network != nil && translated.Network == nil {
@@ -402,10 +424,11 @@ func translateNetworkConfig(nc *pklmodel.NetworkConfig) *pkgmodel.NetworkConfig 
 	result := &pkgmodel.NetworkConfig{Type: nc.Type}
 	if nc.Tailscale != nil {
 		result.Tailscale = &pkgmodel.TailscaleConfig{
-			TLS:           nc.Tailscale.TLS,
-			AuthKey:       nc.Tailscale.AuthKey,
-			Hostname:      nc.Tailscale.Hostname,
-			AdvertiseTags: nc.Tailscale.AdvertiseTags,
+			TLS:             nc.Tailscale.TLS,
+			AuthKey:         nc.Tailscale.AuthKey,
+			Hostname:        nc.Tailscale.Hostname,
+			AdvertiseTags:   nc.Tailscale.AdvertiseTags,
+			EgressProxyPort: int(nc.Tailscale.EgressProxyPort),
 		}
 	}
 	return result

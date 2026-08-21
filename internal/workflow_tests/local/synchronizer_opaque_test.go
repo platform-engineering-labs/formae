@@ -81,7 +81,7 @@ func TestSynchronizer_OpaqueSecretOutOfBandDrift(t *testing.T) {
 			Targets: []pkgmodel.Target{{Label: "test-target", Namespace: "test-namespace"}},
 		}
 
-		_, err = m.ApplyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id")
+		_, err = m.ApplyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
 		require.NoError(t, err)
 		waitForApplyComplete(t, m)
 

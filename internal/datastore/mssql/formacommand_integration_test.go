@@ -89,6 +89,7 @@ func TestMSSQLFormaCommandRoundTrip(t *testing.T) {
 		ModifiedTs:  now,
 		Command:     pkgmodel.CommandApply,
 		ClientID:    "client-abc",
+		Source:      forma_command.SourceUser,
 		Description: pkgmodel.Description{Text: "round trip", Confirm: true},
 		Config:      fcconfig.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Force: true, Simulate: false},
 		ResourceUpdates: []resource_update.ResourceUpdate{
@@ -179,6 +180,9 @@ func TestMSSQLFormaCommandRoundTrip(t *testing.T) {
 	recent, err := ds.GetMostRecentFormaCommandByClientID("client-abc")
 	if err != nil {
 		t.Fatalf("GetMostRecentFormaCommandByClientID: %v", err)
+	}
+	if recent == nil {
+		t.Fatalf("GetMostRecentFormaCommandByClientID returned no command for client-abc")
 	}
 	if recent.ID != commandID {
 		t.Errorf("recent.ID = %q, want %q", recent.ID, commandID)

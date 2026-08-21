@@ -119,7 +119,7 @@ func TestTargetReaper_ForceReap_PostReapNoResurrection(t *testing.T) {
 			},
 			Targets: []pkgmodel.Target{{Label: "force-reap-target"}},
 		}
-		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client")
+		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client", "", "")
 		r.NoError(err)
 		r.Eventually(func() bool {
 			resources, err := m.Datastore.LoadResourcesByStack("force-reap-stack")
@@ -149,7 +149,7 @@ func TestTargetReaper_ForceReap_PostReapNoResurrection(t *testing.T) {
 				{Label: "doomed", Type: "FakeAWS::Resource", Properties: v1, Schema: schema, Stack: "force-reap-stack", Target: "force-reap-target"},
 			},
 		}
-		_, err = m.ApplyForma(resourceOnly, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModePatch}, "rejected-client")
+		_, err = m.ApplyForma(resourceOnly, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModePatch}, "rejected-client", "", "")
 		r.Error(err, "an apply touching a really-reaped target without re-declaring it must be rejected")
 		var reapedErr apimodel.TargetReapedError
 		r.True(errors.As(err, &reapedErr), "error must be a TargetReapedError, got %T: %v", err, err)

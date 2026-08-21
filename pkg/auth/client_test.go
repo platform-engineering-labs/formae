@@ -5,7 +5,14 @@
 package auth
 
 import (
+	"encoding/json"
+	"errors"
+	"io"
 	"net/rpc"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -71,7 +78,7 @@ func TestClient_GetAuthHeader(t *testing.T) {
 	client := newTestClient(t, plugin)
 	defer client.Close()
 
-	resp, err := client.GetAuthHeader()
+	resp, err := client.GetAuthHeader(false)
 	if err != nil {
 		t.Fatalf("GetAuthHeader failed: %v", err)
 	}
@@ -79,6 +86,218 @@ func TestClient_GetAuthHeader(t *testing.T) {
 	keys := resp.Headers["X-Api-Key"]
 	if len(keys) != 1 || keys[0] != "secret-key" {
 		t.Fatalf("expected X-Api-Key='secret-key', got %v", resp.Headers)
+	}
+}
+
+func TestClient_GetAuthHeader_ForceRefresh(t *testing.T) {
+	plugin := &fakePlugin{}
+	client := newTestClient(t, plugin)
+	defer client.Close()
+
+	if _, err := client.GetAuthHeader(true); err != nil {
+		t.Fatalf("GetAuthHeader failed: %v", err)
+	}
+
+	if !plugin.lastForceRefresh {
+		t.Fatal("expected ForceRefresh=true to transmit to the plugin")
+	}
+}
+
+func TestClient_LoginStart(t *testing.T) {
+	plugin := &fakePlugin{}
+	client := newTestClient(t, plugin)
+	defer client.Close()
+
+	resp, err := client.LoginStart(&LoginStartRequest{Mode: "browser"})
+	if err != nil {
+		t.Fatalf("LoginStart failed: %v", err)
+	}
+	if resp.Status != "started" {
+		t.Fatalf("expected Status 'started', got %q", resp.Status)
+	}
+	if resp.SessionID != "s-1" {
+		t.Fatalf("expected SessionID 's-1', got %q", resp.SessionID)
+	}
+}
+
+func TestClient_LoginWait(t *testing.T) {
+	plugin := &fakePlugin{}
+	client := newTestClient(t, plugin)
+	defer client.Close()
+
+	resp, err := client.LoginWait(&LoginWaitRequest{SessionID: "s-1"})
+	if err != nil {
+		t.Fatalf("LoginWait failed: %v", err)
+	}
+	if resp.Subject != "11111111-1111-4111-8111-111111111111" {
+		t.Fatalf("expected Subject '11111111-1111-4111-8111-111111111111', got %q", resp.Subject)
+	}
+	if resp.SubjectName != "dpanders" {
+		t.Fatalf("expected SubjectName 'dpanders', got %q", resp.SubjectName)
+	}
+}
+
+func TestClient_Logout(t *testing.T) {
+	plugin := &fakePlugin{}
+	client := newTestClient(t, plugin)
+	defer client.Close()
+
+	resp, err := client.Logout()
+	if err != nil {
+		t.Fatalf("Logout failed: %v", err)
+	}
+	if resp.Error != "" {
+		t.Fatalf("expected no error, got %q", resp.Error)
+	}
+	if resp.ErrorCode != "" {
+		t.Fatalf("expected no error code, got %q", resp.ErrorCode)
+	}
+}
+
+// legacyAuthPlugin implements only the pre-login-verb surface (Init,
+// Validate, GetAuthHeader), modelling an already-built plugin binary that
+// predates the LoginStart/LoginWait/Logout verbs.
+type legacyAuthPlugin struct{}
+
+func (legacyAuthPlugin) Init(req *InitRequest, resp *InitResponse) error {
+	return nil
+}
+
+func (legacyAuthPlugin) Validate(req *ValidateRequest, resp *ValidateResponse) error {
+	resp.Valid = true
+	return nil
+}
+
+func (legacyAuthPlugin) GetAuthHeader(req *GetAuthHeaderRequest, resp *GetAuthHeaderResponse) error {
+	resp.Headers = map[string][]string{"X-Api-Key": {"legacy-key"}}
+	return nil
+}
+
+// newLegacyTestClient wires a Client to an RPC server that registers only
+// the given legacy-shaped plugin, bypassing Serve (which requires the full
+// AuthPlugin interface) so the server genuinely lacks the login verbs.
+func newLegacyTestClient(t *testing.T, plugin any) *Client {
+	t.Helper()
+
+	clientConn, serverConn := pipeConn()
+
+	srv := rpc.NewServer()
+	if err := srv.RegisterName("AuthPlugin", plugin); err != nil {
+		t.Fatalf("RegisterName: %v", err)
+	}
+	go srv.ServeConn(serverConn)
+
+	rpcClient := rpc.NewClient(clientConn)
+
+	return &Client{
+		rpcClient: rpcClient,
+		conn:      clientConn,
+	}
+}
+
+func TestClient_UnsupportedVerbTranslation(t *testing.T) {
+	client := newLegacyTestClient(t, &legacyAuthPlugin{})
+	defer client.Close()
+
+	cases := []struct {
+		name     string
+		call     func() (ErrorCode, error)
+		wantCode ErrorCode
+	}{
+		{
+			name: "GetAuthHeader",
+			call: func() (ErrorCode, error) {
+				resp, err := client.GetAuthHeader(false)
+				if err != nil {
+					return "", err
+				}
+				return resp.ErrorCode, nil
+			},
+			wantCode: "",
+		},
+		{
+			name: "LoginStart",
+			call: func() (ErrorCode, error) {
+				resp, err := client.LoginStart(&LoginStartRequest{Mode: "browser"})
+				if err != nil {
+					return "", err
+				}
+				return resp.ErrorCode, nil
+			},
+			wantCode: ErrorCodeUnsupported,
+		},
+		{
+			name: "LoginWait",
+			call: func() (ErrorCode, error) {
+				resp, err := client.LoginWait(&LoginWaitRequest{SessionID: "s-1"})
+				if err != nil {
+					return "", err
+				}
+				return resp.ErrorCode, nil
+			},
+			wantCode: ErrorCodeUnsupported,
+		},
+		{
+			name: "Logout",
+			call: func() (ErrorCode, error) {
+				resp, err := client.Logout()
+				if err != nil {
+					return "", err
+				}
+				return resp.ErrorCode, nil
+			},
+			wantCode: ErrorCodeUnsupported,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			code, err := tc.call()
+			if err != nil {
+				t.Fatalf("expected nil error, got %v", err)
+			}
+			if code != tc.wantCode {
+				t.Fatalf("expected ErrorCode %q, got %q", tc.wantCode, code)
+			}
+		})
+	}
+}
+
+// confusingErrorPlugin implements the full AuthPlugin interface, but its
+// LoginStart method itself fails, returning an error whose text happens to
+// share the "rpc: can't find method" prefix net/rpc uses for its own
+// method-not-found error — for a different service and method than the one
+// invoked, as could occur when a plugin propagates a downstream RPC failure
+// verbatim (e.g. its own call to an issuer's RPC surface).
+type confusingErrorPlugin struct {
+	UnimplementedAuthPlugin
+}
+
+func (confusingErrorPlugin) Init(req *InitRequest, resp *InitResponse) error {
+	return nil
+}
+
+func (confusingErrorPlugin) LoginStart(req *LoginStartRequest, resp *LoginStartResponse) error {
+	return errors.New("rpc: can't find method Issuer.Refresh")
+}
+
+// TestClient_Call_DoesNotMisclassifyDownstreamError exercises a method that
+// IS registered but whose own implementation fails with an error string that
+// happens to start with the same text net/rpc uses for a genuinely absent
+// method. call must surface this as a real, non-nil error rather than
+// translating it into ErrorCodeUnsupported.
+func TestClient_Call_DoesNotMisclassifyDownstreamError(t *testing.T) {
+	plugin := &confusingErrorPlugin{}
+	client := newTestClient(t, plugin)
+	defer client.Close()
+
+	var resp LoginStartResponse
+	err := client.call("LoginStart", &LoginStartRequest{Mode: "browser"}, &resp)
+	if err == nil {
+		t.Fatal("expected a non-nil error, got nil")
+	}
+	if resp.ErrorCode == ErrorCodeUnsupported {
+		t.Fatal("expected the downstream error not to be misclassified as ErrorCodeUnsupported")
 	}
 }
 
@@ -102,5 +321,74 @@ func TestClient_Close(t *testing.T) {
 	_, err = client.Validate(&ValidateRequest{})
 	if err == nil {
 		t.Fatal("expected error after Close")
+	}
+}
+
+// stderrMarker must match the constant of the same name in
+// testdata/stderrplugin/main.go.
+const stderrMarker = "stderrplugin: init reached"
+
+// buildStderrPlugin compiles the testdata/stderrplugin fixture into a real
+// binary in t.TempDir() and returns its path. Unlike the other tests in this
+// file, this exercises NewClient against an actual subprocess rather than an
+// in-process pipe, because the behavior under test is what NewClient does
+// with the child's OS-level stderr descriptor.
+func buildStderrPlugin(t *testing.T) string {
+	t.Helper()
+
+	bin := filepath.Join(t.TempDir(), "stderrplugin")
+	cmd := exec.Command("go", "build", "-o", bin, "./testdata/stderrplugin")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build stderrplugin: %v\n%s", err, out)
+	}
+	return bin
+}
+
+// TestNewClient_ConnectsPluginStderrToHostStderr spawns a real plugin
+// subprocess whose Init method writes a marker line to its own stderr, with
+// the host's os.Stderr swapped for a pipe, and checks that the marker
+// arrives on the host side. The child's write happens concurrently with
+// NewClient's own Init call, so the read end is drained in a goroutine
+// rather than read after everything else completes.
+func TestNewClient_ConnectsPluginStderrToHostStderr(t *testing.T) {
+	bin := buildStderrPlugin(t)
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	origStderr := os.Stderr
+	os.Stderr = w
+	t.Cleanup(func() {
+		os.Stderr = origStderr
+		w.Close()
+		r.Close()
+	})
+
+	captured := make(chan string, 1)
+	go func() {
+		data, _ := io.ReadAll(r)
+		captured <- string(data)
+	}()
+
+	client, err := NewClient(bin, json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	client.Close()
+
+	// Restore stderr and close the write end now: the child has already
+	// been reaped by Close, so this is the last writer and the draining
+	// goroutine will observe EOF.
+	os.Stderr = origStderr
+	w.Close()
+
+	select {
+	case out := <-captured:
+		if !strings.Contains(out, stderrMarker) {
+			t.Fatalf("expected host stderr to contain %q, got %q", stderrMarker, out)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for plugin stderr to arrive")
 	}
 }

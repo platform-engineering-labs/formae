@@ -53,6 +53,12 @@ type TestDatastore struct {
 	// and none on a rejected/no-op reap. Backends that don't provide it leave it
 	// nil and the relevant assertions are skipped.
 	CountReapAuditRowsForTest func(label string) (int, error)
+	// LoadAgentBootsForTest returns every agent_boots row ordered by
+	// (booted_at, boot_id) ascending. The agent has no read path for these rows
+	// by design (the reader is a separate process), so the suite needs a direct
+	// accessor to prove they were written and that they accumulate. Backends
+	// that don't provide it leave it nil and the relevant tests t.Skip().
+	LoadAgentBootsForTest func() ([]datastore.AgentBoot, error)
 	// SetStackValidFromForTest rewrites the valid_from of the named stack's
 	// versions, in ascending version order, to the supplied timestamps. Used to
 	// age a stack deterministically instead of sleeping, so TTL expiry can be
@@ -83,6 +89,14 @@ type TestDatastore struct {
 	// than on characters. Backends storing a real timestamp type leave it nil
 	// and the relevant tests t.Skip().
 	SetResourceUpdateModifiedTsRawForTest func(ksuid, raw string) error
+	// NullFormaCommandSubjectForTest sets subject and subject_name to SQL NULL
+	// on the forma_commands row for the given commandID, so tests can stage the
+	// unattributed rows a pre-migration command leaves behind — stored state no
+	// public API produces, since a Go string is always a value (at worst "").
+	// Used to assert that such a row reads back Subject/SubjectName as "".
+	// Backends that don't provide it leave it nil and the relevant tests
+	// t.Skip().
+	NullFormaCommandSubjectForTest func(commandID string) error
 }
 
 // RunAll runs the full datastore test suite against the provided factory.
@@ -94,17 +108,26 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunLoadIncompleteFormaCommandsTest(t, newDS)
 	RunGetFormaApplyByFormaHash(t, newDS)
 	RunStoreAndLoadFormaCommandOptionalFields(t, newDS)
+	RunStoreAndLoadFormaCommandEmptySubject(t, newDS)
+	RunFormaCommandSubjectNullRoundTrip(t, newDS)
 	RunStoreFormaCommandSyncSkipsResourceUpdates(t, newDS)
 	RunCommandSourceRoundTrip(t, newDS)
 	RunGetMostRecentFormaCommandByClientID(t, newDS)
+	RunGetMostRecentFormaCommandByClientIDSkipsSchedulers(t, newDS)
+	RunGetMostRecentFormaCommandByClientIDIgnoresSourcelessRows(t, newDS)
 	RunGetMostRecentNonReconcileFormaCommandsByStack(t, newDS)
 	RunQueryFormaCommands(t, newDS)
+	RunQueryFormaCommandsUserOnly(t, newDS)
 	RunQueryFormaCommands_StackWildcardEscape(t, newDS)
 	RunTerminalStatesLiteralsTest(t, newDS)
 	RunUpdateResourceUpdateProgressPersistsStartTs(t, newDS)
 	RunMonotonicTerminalityTest(t, newDS)
 	RunMonotonicTerminalityRaceTest(t, newDS)
 	RunForceCancelResourceUpdatesTest(t, newDS)
+
+	RunRecordAgentBoot(t, newDS)
+	RunAgentBootsAreAppendOnly(t, newDS)
+	RunRecordAgentBootEmptyVersion(t, newDS)
 
 	RunStoreResource(t, newDS)
 	RunUpdateResource(t, newDS)

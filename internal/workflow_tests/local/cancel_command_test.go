@@ -156,7 +156,7 @@ func TestMetastructure_CancelCommand(t *testing.T) {
 		// Apply the forma
 		resp, err := m.ApplyForma(forma, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test-client")
+		}, "test-client", "", "")
 		require.NoError(t, err)
 		require.NotNil(t, resp)
 

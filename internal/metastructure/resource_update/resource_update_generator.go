@@ -17,6 +17,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/constants"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/transformations"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -1614,6 +1615,14 @@ func synthesizeCascadeUpdatePatch(
 		}
 		path := jsonPointerFromDotPath(ref.TargetPath)
 
+		// A secret never travels in this document. What is synthesized here is
+		// presentation data — it reaches simulate output, the CLI, the stored
+		// changeset and the logs — and it is built from the incoming forma,
+		// which has not been through the persist-time hashing, so a secret
+		// written as a literal arrives in cleartext. The change is still
+		// named: only the value is withheld.
+		opaqueSource := cascadeSourceIsOpaque(dep, ref, formaByKsuid[ksuid])
+
 		// Try to recover the new value from the forma's parent state.
 		// For REPLACE'd parents, the recovered value is only trustworthy
 		// for user-provided source fields. Provider-assigned fields
@@ -1622,7 +1631,7 @@ func synthesizeCascadeUpdatePatch(
 		// cached one — emit the marker so the renderer uses the friendly
 		// "to point at the new <source>" phrasing instead of misleading
 		// the operator with a stale concrete value.
-		if parent, ok := formaByKsuid[ksuid]; ok && parent != nil && ref.SourcePropertyName != "" && len(parent.Properties) > 0 {
+		if parent, ok := formaByKsuid[ksuid]; ok && !opaqueSource && parent != nil && ref.SourcePropertyName != "" && len(parent.Properties) > 0 {
 			sourceFieldIsProviderAssigned := false
 			if replacedKsuids[ksuid] {
 				if hint, hintOk := parent.Schema.Hints[stripArrayIndicesForHintLookup(ref.SourcePropertyName)]; hintOk && hint.HasProviderDefault {
@@ -1638,15 +1647,21 @@ func synthesizeCascadeUpdatePatch(
 			}
 		}
 
-		// Provider-assigned source on a REPLACE'd parent (or no recoverable
-		// value at all): emit a marker the CLI renderer recognises.
+		// Provider-assigned source on a REPLACE'd parent, an opaque source, or
+		// no recoverable value at all: emit a marker the CLI renderer
+		// recognises. An opaque source carries no current value; the renderer
+		// omits the "(current: …)" clause and still names the source.
+		currentValue := ref.CurrentValue
+		if opaqueSource {
+			currentValue = ""
+		}
 		ops = append(ops, op{
 			Op:   "replace",
 			Path: path,
 			Value: map[string]any{
 				"$cascade-resolvable": true,
 				"$source-label":       ksuidToLabel[ksuid],
-				"$current-value":      ref.CurrentValue,
+				"$current-value":      currentValue,
 			},
 		})
 	}
@@ -1654,6 +1669,30 @@ func synthesizeCascadeUpdatePatch(
 		return nil, nil
 	}
 	return json.Marshal(ops)
+}
+
+// cascadeSourceIsOpaque reports whether the value a cascade op would carry for
+// this reference is a secret, asking all three places that can know it.
+//
+// The consumer's own envelope is asked first because it is the only one always
+// present: the parent may be absent from the forma entirely, and a reference
+// into a secret carries the visibility it inherited from the source's schema.
+// The parent, when present, is asked both by schema (the declaration, via the
+// same union of schema hints and the agent-side known-opaque table that
+// persistence hashes on) and by value (an inline opaque envelope), since a
+// value can be opaque either way.
+func cascadeSourceIsOpaque(dep pkgmodel.Resource, ref resolver.ResolvableRef, parent *pkgmodel.Resource) bool {
+	if gjson.GetBytes(dep.Properties, ref.TargetPath).Get("$visibility").String() == pkgmodel.VisibilityOpaque {
+		return true
+	}
+	if parent == nil || ref.SourcePropertyName == "" {
+		return false
+	}
+	property := stripArrayIndicesForHintLookup(ref.SourcePropertyName)
+	if referencesOpaqueProperty(transformations.OpaqueFields(parent.Schema, parent.Type), property) {
+		return true
+	}
+	return gjson.GetBytes(parent.Properties, ref.SourcePropertyName).Get("$visibility").String() == pkgmodel.VisibilityOpaque
 }
 
 // looksLikeResolvable reports whether a gjson Result is itself a $ref/$value
@@ -2369,6 +2408,27 @@ func markOpaqueResolvablesInProps(propsJSON string, opaqueByTriplet map[pkgmodel
 	return result, true
 }
 
+// referencesOpaqueProperty reports whether propertyName names an opaque property
+// of the source, given the source's set of opaque property names.
+//
+// A reference into a MAP-shaped secret selects one key and carries the key folded
+// into the property path (e.g. "data.token", produced by
+// secret.res.secretValue.at("token")). The opaque name is the parent field, since
+// the field is stored as a single envelope with no per-key sub-structure, so the
+// leaf path is never in the set and matching it alone would leave the reference
+// un-marked and its resolved value unhashed at rest. Test the top-level field too,
+// mirroring resolver.isSourcePropertyOpaque.
+func referencesOpaqueProperty(opaque map[string]bool, propertyName string) bool {
+	if propertyName == "" {
+		return false
+	}
+	if opaque[propertyName] {
+		return true
+	}
+	root, _, nested := strings.Cut(propertyName, ".")
+	return nested && opaque[root]
+}
+
 // collectOpaqueResolvablePaths records the gjson/sjson path of every $res envelope
 // that references a known Opaque property and does not already carry $visibility.
 func collectOpaqueResolvablePaths(basePath string, value gjson.Result, opaqueByTriplet map[pkgmodel.TripletKey]map[string]bool, paths *[]string) {
@@ -2385,7 +2445,7 @@ func collectOpaqueResolvablePaths(basePath string, value gjson.Result, opaqueByT
 			Type:  value.Get("$type").String(),
 		}
 		property := value.Get("$property").String()
-		if set, ok := opaqueByTriplet[triplet]; ok && property != "" && set[property] {
+		if set, ok := opaqueByTriplet[triplet]; ok && referencesOpaqueProperty(set, property) {
 			*paths = append(*paths, basePath)
 		}
 		return

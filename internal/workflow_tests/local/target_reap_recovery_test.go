@@ -71,7 +71,7 @@ func TestApplyForma_RecoversReapedTargetWithResource(t *testing.T) {
 			},
 			Targets: []pkgmodel.Target{{Label: "recover-target"}},
 		}
-		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client")
+		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client", "", "")
 		r.NoError(err)
 
 		r.Eventually(func() bool {
@@ -92,7 +92,7 @@ func TestApplyForma_RecoversReapedTargetWithResource(t *testing.T) {
 		r.Len(reaped, 1, "the resource must be reaped before recovery")
 
 		// Re-apply the SAME unchanged forma (re-declares the target) → recovery.
-		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client")
+		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client", "", "")
 		r.NoError(err, "recovery re-apply must be admitted")
 
 		// The target recovers with a FRESH incarnation and is no longer reaped.

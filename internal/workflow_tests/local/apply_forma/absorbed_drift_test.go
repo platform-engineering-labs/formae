@@ -119,7 +119,7 @@ func TestApplyForma_SoftReconcile_AbsorbedDriftDoesNotBlockNewResources(t *testi
 		_, err = m.ApplyForma(
 			initial,
 			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: false},
-			"test-client-id")
+			"test-client-id", "", "")
 		require.NoError(t, err)
 
 		var commands []*forma_command.FormaCommand
@@ -157,7 +157,7 @@ func TestApplyForma_SoftReconcile_AbsorbedDriftDoesNotBlockNewResources(t *testi
 		_, err = m.ApplyForma(
 			patch,
 			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModePatch, Simulate: false},
-			"test-client-id")
+			"test-client-id", "", "")
 		require.NoError(t, err)
 
 		require.Eventually(t, func() bool {
@@ -215,7 +215,7 @@ func TestApplyForma_SoftReconcile_AbsorbedDriftDoesNotBlockNewResources(t *testi
 		_, err = m.ApplyForma(
 			reconcileWithNewResource,
 			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: false},
-			"test-client-id")
+			"test-client-id", "", "")
 		assert.NoError(t, err, "reconcile with absorbed drift and new resource should not be rejected")
 
 		require.Eventually(t, func() bool {

@@ -26,7 +26,7 @@ import (
 type clientAdapter struct{ c *api.Client }
 
 func (a clientAdapter) GetCommandsStatus(query string, n int, _ bool) (*apimodel.ListCommandStatusResponse, []string, error) {
-	resp, err := a.c.GetFormaCommandsStatus(query, "e2e-client", n)
+	resp, err := a.c.GetFormaCommandsStatus(query, "e2e-client", n, apimodel.CommandScopeAgent)
 	return resp, nil, err
 }
 
@@ -130,7 +130,7 @@ func TestStatusWatchTUI_EndToEnd(t *testing.T) {
 	baseURL := apitest.NewTestServer(t, srv.Handler())
 
 	// Construct the real API client pointing at the test server.
-	client := api.NewClient(pkgmodel.APIConfig{URL: baseURL, Port: 80}, nil, nil)
+	client := api.NewClient(&pkgmodel.ClassicConnection{URL: baseURL, Port: 80}, nil, nil)
 
 	m := statuswatch.New(theme.New("formae"), clientAdapter{client}, statuswatch.Options{
 		MaxResults:   10,

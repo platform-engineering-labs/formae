@@ -100,7 +100,7 @@ func TestApplyForma_RecoveryReAdoptSurvivesCrash(t *testing.T) {
 			},
 			Targets: []pkgmodel.Target{{Label: "crash-target"}},
 		}
-		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client")
+		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client", "", "")
 		r.NoError(err)
 
 		r.Eventually(func() bool {
@@ -119,7 +119,7 @@ func TestApplyForma_RecoveryReAdoptSurvivesCrash(t *testing.T) {
 		// update runs first and commits (fresh incarnation + un-reaped resources);
 		// the resource re-adopt hangs as InProgress.
 		recoveryPhase.Store(true)
-		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client")
+		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client", "", "")
 		r.NoError(err, "recovery re-apply must be admitted")
 
 		// Wait until the recover target update has committed: fresh incarnation and

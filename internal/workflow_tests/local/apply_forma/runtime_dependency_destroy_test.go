@@ -219,7 +219,7 @@ func TestRuntimeDependency_DestroyOrder(t *testing.T) {
 		_, err = m.ApplyForma(
 			forma,
 			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: false},
-			"test-client-id")
+			"test-client-id", "", "")
 		require.NoError(t, err, "ApplyForma should not error")
 
 		assert.Eventually(t, func() bool {
@@ -236,7 +236,7 @@ func TestRuntimeDependency_DestroyOrder(t *testing.T) {
 		_, err = m.DestroyForma(
 			forma,
 			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
-			"test-client-id")
+			"test-client-id", "", "")
 		require.NoError(t, err, "DestroyForma should not error")
 
 		assert.Eventually(t, func() bool {

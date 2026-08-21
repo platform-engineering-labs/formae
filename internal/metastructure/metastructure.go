@@ -51,12 +51,12 @@ const (
 )
 
 type MetastructureAPI interface {
-	ApplyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error)
-	DestroyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error)
-	DestroyByQuery(query string, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error)
+	ApplyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string, subject string, subjectName string) (*apimodel.SubmitCommandResponse, error)
+	DestroyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string, subject string, subjectName string) (*apimodel.SubmitCommandResponse, error)
+	DestroyByQuery(query string, config *config.FormaCommandConfig, clientID string, subject string, subjectName string) (*apimodel.SubmitCommandResponse, error)
 	CancelCommand(commandID string, force bool, clientID string) (*changeset.CancelResponse, error)
 	CancelCommandsByQuery(query string, force bool, clientID string) (*apimodel.CancelCommandResponse, error)
-	ListFormaCommandStatus(query string, clientID string, n int) (*apimodel.ListCommandStatusResponse, error)
+	ListFormaCommandStatus(query string, clientID string, n int, scope apimodel.CommandScope) (*apimodel.ListCommandStatusResponse, error)
 	ExtractResources(query string) (*pkgmodel.Forma, error)
 	ListResourceSummaries(query string) ([]pkgmodel.ResourceSummary, error)
 	ExtractResourceByKsuid(ksuid string) (*pkgmodel.Resource, error)
@@ -65,7 +65,7 @@ type MetastructureAPI interface {
 	ExtractPolicies() ([]apimodel.PolicyInventoryItem, error)
 	ForceSync() error
 	ForceDiscovery() error
-	ForceAutoReconcile(stackLabel string) (*apimodel.ForceReconcileResponse, error)
+	ForceAutoReconcile(stackLabel string, subject string, subjectName string) (*apimodel.ForceReconcileResponse, error)
 	ForceCheckTTL() (*apimodel.ForceCheckTTLResponse, error)
 	ForceReap() error
 	ListDrift(stack string) (*apimodel.ModifiedStack, error)
@@ -295,7 +295,7 @@ func (m *Metastructure) callActor(targetPID gen.ProcessID, message any) (any, er
 	}
 }
 
-func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error) {
+func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string, subject string, subjectName string) (*apimodel.SubmitCommandResponse, error) {
 	m.commandMu.Lock()
 	defer m.commandMu.Unlock()
 
@@ -321,7 +321,7 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 		}
 	}
 
-	fa, err := FormaCommandFromForma(forma, config, pkgmodel.CommandApply, m.Datastore, clientID, resource_update.FormaCommandSourceUser, m.Cfg.Agent.Synchronization.Interval)
+	fa, err := FormaCommandFromForma(forma, config, pkgmodel.CommandApply, m.Datastore, clientID, subject, subjectName, resource_update.FormaCommandSourceUser, m.Cfg.Agent.Synchronization.Interval)
 	if err != nil {
 		if requiredFieldsErr, ok := err.(apimodel.RequiredFieldMissingOnCreateError); ok {
 			return nil, requiredFieldsErr
@@ -596,13 +596,15 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 
 func translateToAPICommand(fa *forma_command.FormaCommand) apimodel.Command {
 	apiCommand := apimodel.Command{
-		CommandID: fa.ID,
-		Command:   string(fa.Command),
-		Mode:      string(fa.Config.Mode),
-		Source:    string(fa.Source),
-		State:     string(fa.State),
-		StartTs:   fa.StartTs,
-		EndTs:     fa.ModifiedTs,
+		CommandID:   fa.ID,
+		Command:     string(fa.Command),
+		Mode:        string(fa.Config.Mode),
+		Source:      string(fa.Source),
+		Subject:     fa.Subject,
+		SubjectName: fa.SubjectName,
+		State:       string(fa.State),
+		StartTs:     fa.StartTs,
+		EndTs:       fa.ModifiedTs,
 	}
 	for _, ru := range fa.ResourceUpdates {
 		var dur time.Duration = 0
@@ -730,7 +732,7 @@ func translateToAPICommand(fa *forma_command.FormaCommand) apimodel.Command {
 	return apiCommand
 }
 
-func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error) {
+func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string, subject string, subjectName string) (*apimodel.SubmitCommandResponse, error) {
 	m.commandMu.Lock()
 	defer m.commandMu.Unlock()
 
@@ -750,7 +752,7 @@ func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.Forma
 		}
 	}
 
-	fa, err := FormaCommandFromForma(forma, config, pkgmodel.CommandDestroy, m.Datastore, clientID, resource_update.FormaCommandSourceUser, m.Cfg.Agent.Synchronization.Interval)
+	fa, err := FormaCommandFromForma(forma, config, pkgmodel.CommandDestroy, m.Datastore, clientID, subject, subjectName, resource_update.FormaCommandSourceUser, m.Cfg.Agent.Synchronization.Interval)
 	if err != nil {
 		slog.Error("Failed to create destroy from forma", "error", err)
 		return nil, err
@@ -861,7 +863,7 @@ func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.Forma
 	}, nil
 }
 
-func (m *Metastructure) DestroyByQuery(query string, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error) {
+func (m *Metastructure) DestroyByQuery(query string, config *config.FormaCommandConfig, clientID string, subject string, subjectName string) (*apimodel.SubmitCommandResponse, error) {
 	q := querier.NewBlugeQuerier(m.Datastore)
 	resources, err := q.QueryResourcesForDestroy(query)
 	if err != nil {
@@ -878,7 +880,7 @@ func (m *Metastructure) DestroyByQuery(query string, config *config.FormaCommand
 
 	forma := pkgmodel.FormaFromResources(managedResources)
 
-	return m.DestroyForma(forma, config, clientID)
+	return m.DestroyForma(forma, config, clientID, subject, subjectName)
 }
 
 func (m *Metastructure) CancelCommand(commandID string, force bool, clientID string) (*changeset.CancelResponse, error) {
@@ -913,26 +915,54 @@ func (m *Metastructure) CancelCommand(commandID string, force bool, clientID str
 	return &cancelResp, nil
 }
 
-func (m *Metastructure) CancelCommandsByQuery(query string, force bool, clientID string) (*apimodel.CancelCommandResponse, error) {
-	var commandsToCancel []*forma_command.FormaCommand
-	var err error
-
-	if query != "" {
-		// Cancel by query
-		q := querier.NewBlugeQuerier(m.Datastore)
-		commandsToCancel, err = q.QueryStatus(query, clientID, 100) // limit to 100 commands
-		if err != nil {
-			slog.Debug("Cannot get forma commands from query", "error", err)
-			return nil, err
-		}
-	} else {
-		// Cancel most recent command
+// commandsForCancelQuery resolves the candidate FormaCommands for a
+// cancel-by-query request.
+//
+// Unlike ListFormaCommandStatus (a user-facing surface that hard-restricts
+// to Source=user), this deliberately does NOT restrict by Source: an
+// operator draining scheduler bookkeeping (sync, discovery) ahead of an
+// agent restart must still be able to target those commands by an explicit
+// query, e.g. `command:sync`.
+//
+// The one exclusion preserved here is the one QueryFormaCommands itself used
+// to apply implicitly, before Source-based filtering replaced it for the
+// status-listing path: an *unfiltered* query (no explicit `command:` term)
+// must not surface sync/discovery bookkeeping by accident, since both use
+// the "sync" command type. A caller who explicitly asks for `command:sync`
+// still reaches them — only the implicit, no-command-filter case is
+// protected.
+func (m *Metastructure) commandsForCancelQuery(query, clientID string) ([]*forma_command.FormaCommand, error) {
+	if query == "" {
 		command, err := m.Datastore.GetMostRecentFormaCommandByClientID(clientID)
 		if err != nil {
-			slog.Debug("Cannot get most recent forma command", "error", err)
 			return nil, err
 		}
-		commandsToCancel = []*forma_command.FormaCommand{command}
+		if command == nil {
+			return nil, nil
+		}
+		return []*forma_command.FormaCommand{command}, nil
+	}
+
+	q := querier.NewBlugeQuerier(m.Datastore)
+	statusQuery, err := q.BuildStatusQuery(query, clientID, 100) // limit to 100 commands
+	if err != nil {
+		return nil, err
+	}
+	if statusQuery.Command == nil {
+		statusQuery.Command = &datastore.QueryItem[string]{
+			Item:       string(pkgmodel.CommandSync),
+			Constraint: datastore.Excluded,
+		}
+	}
+
+	return m.Datastore.QueryFormaCommands(statusQuery)
+}
+
+func (m *Metastructure) CancelCommandsByQuery(query string, force bool, clientID string) (*apimodel.CancelCommandResponse, error) {
+	commandsToCancel, err := m.commandsForCancelQuery(query, clientID)
+	if err != nil {
+		slog.Debug("Cannot get forma commands from query", "error", err)
+		return nil, err
 	}
 
 	// Filter to only InProgress commands
@@ -983,32 +1013,62 @@ func (m *Metastructure) CancelCommandsByQuery(query string, force bool, clientID
 	}, nil
 }
 
-func (m *Metastructure) ListFormaCommandStatus(query string, clientID string, n int) (*apimodel.ListCommandStatusResponse, error) {
-	if query != "" {
-		q := querier.NewBlugeQuerier(m.Datastore)
-		formaCommands, err := q.QueryStatus(query, clientID, n)
-		if err != nil {
-			slog.Debug("Cannot get forma commands from query", "error", err)
-			return nil, err
-		}
-
-		res := &apimodel.ListCommandStatusResponse{}
-		for _, fa := range formaCommands {
-			res.Commands = append(res.Commands, translateToAPICommand(fa))
-		}
-
-		return res, nil
-	} else {
+// ListFormaCommandStatus answers a command-status listing.
+//
+// An empty query is answered according to scope:
+//   - CommandScopeClient (the default) — the calling client's single most
+//     recent command, which is what a bare `formae command status` asks for.
+//   - CommandScopeAgent — every client's commands, newest first, bounded by
+//     n. This is what a bare `formae command list` asks for; it runs through
+//     the querier's unconstrained query rather than the client-scoped route.
+//
+// A non-empty query ignores scope: the query itself expresses the narrowing
+// (`client:me` for the caller's own commands).
+//
+// Every path is restricted to user-initiated commands. Source is applied
+// here, not parsed from the query grammar, so a caller cannot ask for
+// scheduler bookkeeping (sync, discovery, auto-reconcile, stack expiry) even
+// when it shares a command type with user work.
+func (m *Metastructure) ListFormaCommandStatus(query string, clientID string, n int, scope apimodel.CommandScope) (*apimodel.ListCommandStatusResponse, error) {
+	if query == "" && scope != apimodel.CommandScopeAgent {
 		fa, err := m.Datastore.GetMostRecentFormaCommandByClientID(clientID)
 		if err != nil {
 			slog.Debug("Cannot get forma command from client ID", "error", err)
 			return nil, err
+		}
+		if fa == nil {
+			return &apimodel.ListCommandStatusResponse{Commands: []apimodel.Command{}}, nil
 		}
 
 		return &apimodel.ListCommandStatusResponse{
 			Commands: []apimodel.Command{translateToAPICommand(fa)},
 		}, nil
 	}
+
+	q := querier.NewBlugeQuerier(m.Datastore)
+	statusQuery, err := q.BuildStatusQuery(query, clientID, n)
+	if err != nil {
+		slog.Debug("Cannot get forma commands from query", "error", err)
+		return nil, err
+	}
+
+	statusQuery.Source = &datastore.QueryItem[string]{
+		Item:       string(forma_command.SourceUser),
+		Constraint: datastore.Required,
+	}
+
+	formaCommands, err := m.Datastore.QueryFormaCommands(statusQuery)
+	if err != nil {
+		slog.Debug("Cannot get forma commands from query", "error", err)
+		return nil, err
+	}
+
+	res := &apimodel.ListCommandStatusResponse{}
+	for _, fa := range formaCommands {
+		res.Commands = append(res.Commands, translateToAPICommand(fa))
+	}
+
+	return res, nil
 }
 
 func (m *Metastructure) ExtractPolicies() ([]apimodel.PolicyInventoryItem, error) {
@@ -1127,7 +1187,7 @@ func (m *Metastructure) ForceReap() error {
 	return nil
 }
 
-func (m *Metastructure) ForceAutoReconcile(stackLabel string) (*apimodel.ForceReconcileResponse, error) {
+func (m *Metastructure) ForceAutoReconcile(stackLabel string, subject string, subjectName string) (*apimodel.ForceReconcileResponse, error) {
 	m.commandMu.Lock()
 	defer m.commandMu.Unlock()
 
@@ -1173,7 +1233,11 @@ func (m *Metastructure) ForceAutoReconcile(stackLabel string) (*apimodel.ForceRe
 	}
 
 	// Prepare the reconcile command and changeset
-	result, err := prepareReconcile(m.Datastore, stackLabel, "force-reconcile")
+	// A force-reconcile is user-initiated: stamping it SourceUser is what
+	// keeps the CommandID returned below resolvable through the ordinary
+	// `command status` / get-command-status path, which only shows
+	// user-initiated commands.
+	result, err := prepareReconcile(m.Datastore, stackLabel, "force-reconcile", subject, subjectName, forma_command.SourceUser)
 	if err != nil {
 		return nil, err
 	}
@@ -1837,6 +1901,8 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 	command pkgmodel.Command,
 	ds datastore.Datastore,
 	clientID string,
+	subject string,
+	subjectName string,
 	source resource_update.FormaCommandSource,
 	syncInterval time.Duration) (*forma_command.FormaCommand, error) {
 
@@ -1999,6 +2065,8 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 		stackUpdates,
 		policyUpdates,
 		clientID,
+		subject,
+		subjectName,
 		forma_command.SourceUser,
 	), nil
 }

@@ -94,8 +94,12 @@ func renderCancelResult(th *theme.Theme, resp *apimodel.CancelCommandResponse, _
 		fmt.Fprintf(&b, "%s\n", hint.Render("cloud provider and clean up manually, or let discovery pick them up."))
 	}
 
-	// Status hint footer (col 0).
-	fmt.Fprintf(&b, "\n%s\n", hint.Render("Use 'formae status' to check the cancellation progress."))
+	// Status hint footer (col 0), naming the ids just canceled so the hint is
+	// runnable as printed.
+	fmt.Fprintf(&b, "\n%s\n", hint.Render("To check the cancellation progress:"))
+	for _, cmdID := range resp.CommandIDs {
+		fmt.Fprintf(&b, "  %s\n", hint.Render(fmt.Sprintf("formae command status %s", cmdID)))
+	}
 
 	return b.String()
 }

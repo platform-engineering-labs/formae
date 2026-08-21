@@ -8,6 +8,7 @@ package blackbox
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -26,6 +27,9 @@ import (
 	"ergo.services/ergo"
 	"ergo.services/ergo/gen"
 	"ergo.services/ergo/net/handshake"
+	// Registers the sqlite3 driver used to read the agent's datastore directly.
+	// Without it every sql.Open here fails at runtime while still compiling.
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/require"
 
 	"github.com/platform-engineering-labs/formae/internal/api"
@@ -192,7 +196,7 @@ func (h *TestHarness) TryWaitForCommandDone(commandID string, timeout time.Durat
 func (h *TestHarness) waitForCommand(commandID string, timeout time.Duration) (*apimodel.Command, bool) {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		statusResp, err := h.client.GetFormaCommandsStatus("id:"+commandID, clientID, 1)
+		statusResp, err := h.client.GetFormaCommandsStatus("id:"+commandID, clientID, 1, apimodel.CommandScopeAgent)
 		if err == nil && statusResp != nil && len(statusResp.Commands) > 0 {
 			cmd := statusResp.Commands[0]
 			h.ObserveCommandState(h.t, cmd.CommandID, cmd.State)
@@ -205,45 +209,229 @@ func (h *TestHarness) waitForCommand(commandID string, timeout time.Duration) (*
 	return nil, false
 }
 
-func (h *TestHarness) latestSyncCommand() (*apimodel.Command, error) {
-	statusResp, err := h.client.GetFormaCommandsStatus("", "", 20)
+// --- Direct datastore observation of scheduler commands ---
+//
+// The command-status API deliberately exposes only user-initiated commands:
+// a user should not have to know that sync, discovery, auto-reconcile and
+// stack-expiry commands exist. The harness does have to see them — it waits
+// for the agent to go quiet before resetting state, and it waits on a sync
+// it just triggered — so it reads those straight out of the agent's sqlite
+// datastore. That keeps a test-only need out of the product's query grammar
+// and off its HTTP surface. Everything a user could observe (by-id lookups,
+// user-command polling) still goes through the API.
+
+// openAgentDB opens the agent's sqlite datastore read-only. The harness
+// config pins datastoreType = "sqlite" with a file path, so this is always
+// available.
+func (h *TestHarness) openAgentDB() (*sql.DB, error) {
+	if h.dbPath == "" || h.dbPath == ":memory:" {
+		return nil, fmt.Errorf("agent datastore is not a file (%q); the harness config must pin a sqlite file path", h.dbPath)
+	}
+	return sql.Open("sqlite3", h.dbPath+"?mode=ro")
+}
+
+// commandRowsFromDB reads command rows (id, type, state), newest first,
+// matching an optional extra WHERE clause. Rows carry no resource updates;
+// use commandFromDB when those are needed.
+func (h *TestHarness) commandRowsFromDB(where string, args ...any) ([]apimodel.Command, error) {
+	db, err := h.openAgentDB()
 	if err != nil {
 		return nil, err
 	}
-	if statusResp == nil || len(statusResp.Commands) == 0 {
+	defer db.Close() //nolint:errcheck
+
+	query := "SELECT command_id, command, state FROM forma_commands"
+	if where != "" {
+		query += " WHERE " + where
+	}
+	query += " ORDER BY timestamp DESC"
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var commands []apimodel.Command
+	for rows.Next() {
+		var cmd apimodel.Command
+		if err := rows.Scan(&cmd.CommandID, &cmd.Command, &cmd.State); err != nil {
+			return nil, err
+		}
+		commands = append(commands, cmd)
+	}
+	return commands, rows.Err()
+}
+
+// nonTerminalCommandsFromDB returns every command that has not reached a
+// terminal state, whatever its source. This is the quiescence check: the
+// harness must not declare the agent idle while a scheduler command is still
+// mid-flight.
+func (h *TestHarness) nonTerminalCommandsFromDB() ([]apimodel.Command, error) {
+	return h.commandRowsFromDB("state NOT IN ('Success', 'Failed', 'Canceled')")
+}
+
+// commandFromDB loads one command together with its resource updates, shaped
+// like the API representation so the state model can consume it.
+func (h *TestHarness) commandFromDB(commandID string) (*apimodel.Command, error) {
+	commands, err := h.commandRowsFromDB("command_id = ?", commandID)
+	if err != nil {
+		return nil, err
+	}
+	if len(commands) == 0 {
 		return nil, nil
 	}
-	for _, cmd := range statusResp.Commands {
-		if cmd.Command == "sync" {
-			copy := cmd
-			return &copy, nil
-		}
+	cmd := commands[0]
+
+	db, err := h.openAgentDB()
+	if err != nil {
+		return nil, err
 	}
-	return nil, nil
+	defer db.Close() //nolint:errcheck
+
+	rows, err := db.Query(
+		"SELECT state, operation, stack_label, resource FROM resource_updates WHERE command_id = ? ORDER BY ksuid ASC",
+		commandID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+
+	for rows.Next() {
+		var state, operation, stackLabel string
+		var resourceJSON []byte
+		if err := rows.Scan(&state, &operation, &stackLabel, &resourceJSON); err != nil {
+			return nil, err
+		}
+		var desired pkgmodel.Resource
+		if len(resourceJSON) > 0 {
+			if err := json.Unmarshal(resourceJSON, &desired); err != nil {
+				return nil, fmt.Errorf("decoding resource update of command %s: %w", commandID, err)
+			}
+		}
+		cmd.ResourceUpdates = append(cmd.ResourceUpdates, apimodel.ResourceUpdate{
+			ResourceID:    desired.Ksuid,
+			ResourceType:  desired.Type,
+			ResourceLabel: desired.Label,
+			StackName:     stackLabel,
+			NativeID:      desired.NativeID,
+			Properties:    desired.Properties,
+			Operation:     operation,
+			State:         state,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return &cmd, nil
+}
+
+// waitForCommandInDB polls the agent's datastore until commandID reaches a
+// terminal state, then returns it with its resource updates. It is the
+// scheduler-command counterpart of waitForCommand, which polls the API and
+// therefore only ever sees user commands.
+func (h *TestHarness) waitForCommandInDB(commandID string, timeout time.Duration) (*apimodel.Command, bool) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		cmd, err := h.commandFromDB(commandID)
+		if err == nil && cmd != nil {
+			h.ObserveCommandState(h.t, cmd.CommandID, cmd.State)
+			if isTerminalCommandState(cmd.State) {
+				return cmd, true
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return nil, false
+}
+
+// latestSyncCommand returns the most recent sync command, whatever its
+// source. Sync is scheduler bookkeeping and never appears in the
+// command-status API, so this reads the datastore directly.
+func (h *TestHarness) latestSyncCommand() (*apimodel.Command, error) {
+	commands, err := h.commandRowsFromDB("command = ?", "sync")
+	if err != nil {
+		return nil, err
+	}
+	if len(commands) == 0 {
+		return nil, nil
+	}
+	return &commands[0], nil
+}
+
+// SyncCommandBaseline returns the ID of the most recent sync command, or ""
+// when none exists. Capture it BEFORE triggering a sync: the triggered sync
+// command can be persisted before the first post-trigger poll runs, and a
+// baseline taken after the trigger would then absorb the very command being
+// waited for.
+func (h *TestHarness) SyncCommandBaseline() string {
+	before, err := h.latestSyncCommand()
+	if err != nil || before == nil {
+		return ""
+	}
+	return before.CommandID
+}
+
+// WaitForSyncCommandAfter waits up to `appearance` for a sync command
+// different from the given baseline ID to be persisted, then up to
+// `completion` for that command to finish. Returns nil,false if no new sync
+// command appears within the appearance window.
+//
+// A sync command whose reads produce no changes is DELETED from the datastore
+// on completion (the persister keeps only syncs that absorbed something), so
+// a command that appears and then vanishes has completed as a no-change sync:
+// that is reported as observed with a nil command. A no-change sync can also
+// complete and be deleted entirely between polls, in which case it is
+// indistinguishable from no sync at all — callers must only rely on a false
+// return where a no-op sync and no sync are equivalent.
+func (h *TestHarness) WaitForSyncCommandAfter(baselineID string, appearance, completion time.Duration) (*apimodel.Command, bool) {
+	appearDeadline := time.Now().Add(appearance)
+	for time.Now().Before(appearDeadline) {
+		current, err := h.latestSyncCommand()
+		if err == nil && current != nil && current.CommandID != "" && current.CommandID != baselineID {
+			return h.waitForSyncCommandDone(current.CommandID, completion)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return nil, false
+}
+
+// waitForSyncCommandDone polls a known sync command until it reaches a
+// terminal state or is deleted as a no-change sync (both count as observed).
+func (h *TestHarness) waitForSyncCommandDone(commandID string, timeout time.Duration) (*apimodel.Command, bool) {
+	deadline := time.Now().Add(timeout)
+	seen := false
+	for time.Now().Before(deadline) {
+		cmd, err := h.commandFromDB(commandID)
+		if err == nil {
+			if cmd == nil {
+				if seen {
+					return nil, true // deleted on completion: a no-change sync
+				}
+			} else {
+				seen = true
+				h.ObserveCommandState(h.t, cmd.CommandID, cmd.State)
+				if isTerminalCommandState(cmd.State) {
+					return cmd, true
+				}
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	// The row was observed at least once (latestSyncCommand returned it), so
+	// its disappearance without a terminal read still means it completed.
+	return nil, !seen
 }
 
 // WaitForNextSyncCommand waits for a new sync command created after the current
 // latest sync command, then waits for that command to reach a terminal state.
 // Returns nil,false if no new sync command appears within the timeout.
+//
+// The baseline is taken at call time, so this only observes syncs triggered
+// AFTER the call starts; when waiting on a sync you already triggered, use
+// SyncCommandBaseline + WaitForSyncCommandAfter around the trigger instead.
 func (h *TestHarness) WaitForNextSyncCommand(timeout time.Duration) (*apimodel.Command, bool) {
-	before, err := h.latestSyncCommand()
-	if err != nil {
-		return nil, false
-	}
-	beforeID := ""
-	if before != nil {
-		beforeID = before.CommandID
-	}
-
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		current, err := h.latestSyncCommand()
-		if err == nil && current != nil && current.CommandID != "" && current.CommandID != beforeID {
-			return h.waitForCommand(current.CommandID, time.Until(deadline))
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	return nil, false
+	return h.WaitForSyncCommandAfter(h.SyncCommandBaseline(), timeout, timeout)
 }
 
 // --- TestController communication (via Ergo cross-node calls) ---
@@ -477,7 +665,7 @@ func (h *TestHarness) KillAgent(t *testing.T) {
 // RestartAgent starts a new agent subprocess with the same config (same SQLite DB).
 // Reconstructs the plugin's cloud state from the agent's inventory and the OOB
 // mirror, re-programs response sequences, then opens the gate.
-func (h *TestHarness) RestartAgent(t *testing.T, timeout time.Duration, model ...*StateModel) {
+func (h *TestHarness) RestartAgent(t *testing.T, timeout time.Duration) {
 	t.Helper()
 
 	// Start the agent but DON'T open the gate yet — ReRunIncompleteCommands
@@ -495,23 +683,12 @@ func (h *TestHarness) RestartAgent(t *testing.T, timeout time.Duration, model ..
 	// resolvables before re-injection, otherwise the plugin returns $res objects
 	// on Read, which corrupts the $ref.$value in mergeRefsPreservingUserRefs.
 	forma, err := h.client.ExtractResources("managed:true")
-	pendingManagedProps := map[string]string{}
-	pendingManagedDeletes := map[string]bool{}
-	if len(model) > 0 && model[0] != nil {
-		pendingManagedProps, pendingManagedDeletes = model[0].PendingManagedDriftCloudState()
-	}
 	if err == nil && forma != nil {
 		for _, res := range forma.Resources {
 			if res.NativeID == "" {
 				continue
 			}
-			if pendingManagedDeletes[res.NativeID] {
-				continue
-			}
 			flatProps := flattenPropertiesForCloud(res.Properties)
-			if driftProps, ok := pendingManagedProps[res.NativeID]; ok {
-				flatProps = driftProps
-			}
 			_, err := h.callTestController(testcontrol.PutCloudStateRequest{
 				NativeID:     res.NativeID,
 				ResourceType: res.Type,
@@ -525,12 +702,6 @@ func (h *TestHarness) RestartAgent(t *testing.T, timeout time.Duration, model ..
 
 	// Re-inject OOB cloud state from the mirror (resources not in inventory).
 	for _, entry := range h.cloudStateMirror {
-		if _, ok := pendingManagedProps[entry.NativeID]; ok {
-			continue
-		}
-		if pendingManagedDeletes[entry.NativeID] {
-			continue
-		}
 		_, err := h.callTestController(testcontrol.PutCloudStateRequest{
 			NativeID:     entry.NativeID,
 			ResourceType: entry.ResourceType,
@@ -683,7 +854,7 @@ func (h *TestHarness) startAgent(t *testing.T, timeout time.Duration, openGate b
 	require.NoError(t, err, "Failed to start agent")
 	h.agentCmd = cmd
 
-	h.client = api.NewClient(pkgmodel.APIConfig{
+	h.client = api.NewClient(&pkgmodel.ClassicConnection{
 		URL:  "http://localhost",
 		Port: h.port,
 	}, nil, nil)

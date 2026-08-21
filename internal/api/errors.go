@@ -16,3 +16,15 @@ type AuthenticationError struct{}
 func (e AuthenticationError) Error() string {
 	return "authentication failed — check your cli.auth configuration"
 }
+
+// AuthorizationDeniedError is returned when a forced-refresh retry still
+// fails authentication: the CLI obtained a fresh credential from the auth
+// plugin and the agent rejected it anyway. Unlike AuthenticationError, this
+// is not a local configuration problem — the identity is valid but the
+// agent has refused it — so the message does not point the user at their
+// cli.auth configuration.
+type AuthorizationDeniedError struct{}
+
+func (e AuthorizationDeniedError) Error() string {
+	return "the agent denied access for this installation; check with your org admin"
+}

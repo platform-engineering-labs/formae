@@ -39,8 +39,8 @@ func TestMetastructure_RejectsOpaqueEmbed(t *testing.T) {
 		framedSpan := pkgmodel.FrameEnvelope(opaqueEnvelope)
 
 		embedField := map[string]any{
-			"$embed":     true,
-			"$template":  "prefix-" + framedSpan + "-suffix",
+			"$embed":    true,
+			"$template": "prefix-" + framedSpan + "-suffix",
 		}
 		embedFieldJSON, err := json.Marshal(embedField)
 		require.NoError(t, err)
@@ -68,7 +68,7 @@ func TestMetastructure_RejectsOpaqueEmbed(t *testing.T) {
 
 		_, err = m.ApplyForma(forma, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test-client-id")
+		}, "test-client-id", "", "")
 
 		require.Error(t, err, "apply should be rejected when an opaque resolvable is embedded in a string field")
 		assert.Contains(t, err.Error(), "opaque")
@@ -132,7 +132,7 @@ func TestMetastructure_RejectsOpaqueEmbed_InArray(t *testing.T) {
 
 		_, err = m.ApplyForma(forma, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test-client-id")
+		}, "test-client-id", "", "")
 
 		require.Error(t, err, "apply should be rejected when an opaque resolvable is embedded inside an array element")
 		assert.Contains(t, err.Error(), "opaque")
@@ -268,7 +268,7 @@ func TestEmbed_ResolvesToPluginInOneApply(t *testing.T) {
 
 		_, err = m.ApplyForma(forma, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test")
+		}, "test", "", "")
 		require.NoError(t, err)
 
 		require.Eventually(t, func() bool {
@@ -411,7 +411,7 @@ func TestEmbed_PersistedStateStaysStructured(t *testing.T) {
 
 		_, err = m.ApplyForma(forma, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test")
+		}, "test", "", "")
 		require.NoError(t, err)
 
 		require.Eventually(t, func() bool {
@@ -563,7 +563,7 @@ func TestEmbed_SyncPreservesEnvelope(t *testing.T) {
 
 		_, err = m.ApplyForma(forma, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test")
+		}, "test", "", "")
 		require.NoError(t, err)
 
 		// Wait for the apply to complete.

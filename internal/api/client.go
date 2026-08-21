@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"syscall"
 	"time"
@@ -25,7 +26,14 @@ type Client struct {
 	resty    *resty.Client
 }
 
-func NewClient(cfg pkgmodel.APIConfig, auth http.Header, net *http.Client) *Client {
+// InstallationHeader routes a request to one hosted installation. The edge
+// rejects it duplicated or comma-joined, so it is set once on the client.
+const InstallationHeader = "Formae-Installation"
+
+// NewClient builds an API client for a resolved connection. The arm decides
+// both the endpoint and the headers: a hosted connection always carries the
+// installation routing header, a classic one never does.
+func NewClient(conn pkgmodel.Connection, auth http.Header, net *http.Client) *Client {
 	client := resty.New()
 
 	if net != nil {
@@ -34,6 +42,16 @@ func NewClient(cfg pkgmodel.APIConfig, auth http.Header, net *http.Client) *Clie
 
 	if auth != nil {
 		client.SetHeader("Authorization", auth.Get("Authorization"))
+	}
+
+	endpoint := ""
+	switch c := conn.(type) {
+	case *pkgmodel.HostedConnection:
+		endpoint = c.Endpoint
+		client.SetHeader(InstallationHeader, c.Installation)
+		client.SetRedirectPolicy(sameOriginRedirectPolicy(c.Endpoint))
+	case *pkgmodel.ClassicConnection:
+		endpoint = formatEndpoint(c.URL, c.Port)
 	}
 
 	// Return a clear error for 401 responses instead of letting each method
@@ -45,17 +63,52 @@ func NewClient(cfg pkgmodel.APIConfig, auth http.Header, net *http.Client) *Clie
 		return nil
 	})
 
-	return &Client{
-		endpoint: formatEndpoint(cfg.URL, cfg.Port),
-		resty:    client,
+	return &Client{endpoint: endpoint, resty: client}
+}
+
+// sameOriginRedirectPolicy refuses any redirect that leaves the configured
+// origin. Go strips Authorization across a cross-host redirect but forwards
+// custom headers, so without this the installation routing header would
+// follow the redirect to another server. resty's DomainCheckRedirectPolicy is
+// not enough here: it compares hostnames and ignores the port.
+func sameOriginRedirectPolicy(endpoint string) resty.RedirectPolicy {
+	configured, err := url.Parse(endpoint)
+	if err != nil {
+		return resty.NoRedirectPolicy()
 	}
+	want := originOf(configured)
+
+	return resty.RedirectPolicyFunc(func(req *http.Request, via []*http.Request) error {
+		if got := originOf(req.URL); got != want {
+			return fmt.Errorf(
+				"refusing to follow a redirect from %s to %s: hosted requests carry a credential "+
+					"and installation routing", want, got,
+			)
+		}
+		return nil
+	})
+}
+
+// originOf renders scheme://host:port with the scheme's default port made
+// explicit, so the same host on another port is a different origin.
+func originOf(u *url.URL) string {
+	port := u.Port()
+	if port == "" {
+		port = "80"
+		if strings.EqualFold(u.Scheme, "https") {
+			port = "443"
+		}
+	}
+	return strings.ToLower(u.Scheme+"://"+u.Hostname()) + ":" + port
 }
 
 // formatEndpoint builds the API endpoint string. It omits the port when it
 // matches the scheme default (443 for HTTPS, 80 for HTTP) so that Go's HTTP
-// client does not include a redundant port in the Host header.
+// client does not include a redundant port in the Host header, and when the
+// port is zero, which means the URL already carries one.
 func formatEndpoint(url string, port int) string {
-	if (port == 443 && strings.HasPrefix(url, "https://")) ||
+	if port == 0 ||
+		(port == 443 && strings.HasPrefix(url, "https://")) ||
 		(port == 80 && strings.HasPrefix(url, "http://")) {
 		return url
 	}
@@ -459,12 +512,17 @@ func (c *Client) parseCancelCommandsErrorResponse(body io.ReadCloser) (*apimodel
 	}
 }
 
-func (c *Client) GetFormaCommandsStatus(query string, clientID string, n int) (*apimodel.ListCommandStatusResponse, error) {
+// GetFormaCommandsStatus lists user-initiated commands. scope only matters
+// when query is empty: apimodel.CommandScopeClient asks for the calling
+// client's most recent command, apimodel.CommandScopeAgent for every
+// client's commands newest-first, bounded by n.
+func (c *Client) GetFormaCommandsStatus(query string, clientID string, n int, scope apimodel.CommandScope) (*apimodel.ListCommandStatusResponse, error) {
 	var status apimodel.ListCommandStatusResponse
 	resp, err := c.resty.R().
 		SetResult(&status).
 		SetHeader("Client-ID", clientID).
 		SetQueryParam("query", query).
+		SetQueryParam("scope", string(scope)).
 		SetQueryParam("max_results", fmt.Sprintf("%d", n)).
 		Get(c.endpoint + "/api/v1/commands/status")
 	if err != nil {
@@ -479,7 +537,11 @@ func (c *Client) GetFormaCommandsStatus(query string, clientID string, n int) (*
 	case http.StatusBadRequest:
 		return c.parseListCommandStatusErrorResponse(resp.Body)
 	case http.StatusNotFound:
-		return nil, nil
+		// The server represents "no matching commands" as a 404. Resolve it
+		// to a concrete, well-formed empty result rather than a bare nil, so
+		// callers can tell "no matches" apart from "no response" without
+		// having to nil-check the pointer themselves.
+		return &apimodel.ListCommandStatusResponse{Commands: []apimodel.Command{}}, nil
 	default:
 		return nil, fmt.Errorf("error getting status: %v", resp.Status())
 	}

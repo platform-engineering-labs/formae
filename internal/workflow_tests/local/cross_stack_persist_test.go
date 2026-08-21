@@ -79,7 +79,7 @@ func TestMetastructure_SuccessfulCreatePersistedInFailedCommand(t *testing.T) {
 
 		_, err = m.ApplyForma(forma, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test")
+		}, "test", "", "")
 		require.NoError(t, err)
 
 		// Wait for command to complete (should fail due to res-b)

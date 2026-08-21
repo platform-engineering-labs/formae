@@ -32,11 +32,32 @@ type ListCommandStatusResponse struct {
 	Commands []Command `json:"Commands"`
 }
 
+// CommandScope selects which commands an *empty* command-status query
+// covers. It has no effect on a non-empty query: there the query itself
+// decides (`client:me` narrows to the caller), and the scope is redundant.
+//
+//   - CommandScopeClient — the calling client's single most recent command.
+//     This is the default when the parameter is absent, so callers written
+//     against the older API keep their behavior.
+//   - CommandScopeAgent — every client's commands, newest first, up to the
+//     requested page size. This is what `formae command list` asks for.
+//
+// Either way only user-initiated commands are visible; scheduler bookkeeping
+// (sync, discovery, auto-reconcile, stack expiry) is never returned.
+type CommandScope string
+
+const (
+	CommandScopeClient CommandScope = "client"
+	CommandScopeAgent  CommandScope = "agent"
+)
+
 type Command struct {
 	CommandID       string           `json:"CommandId"`
 	Command         string           `json:"Command"`
 	Mode            string           `json:"Mode,omitempty"` // "reconcile" | "patch"
 	Source          string           `json:"Source,omitempty"`
+	Subject         string           `json:",omitempty"`
+	SubjectName     string           `json:",omitempty"`
 	State           string           `json:"State"`
 	StartTs         time.Time        `json:"StartTs,omitempty"`
 	EndTs           time.Time        `json:"EndTs,omitempty"`

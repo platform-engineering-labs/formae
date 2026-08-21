@@ -2057,7 +2057,23 @@ func runDiscoveryTest(t *testing.T, tc TestCase, rc *ResultCollector) {
 	}
 	t.Logf("Extracted plugin namespace: %s, resource type: %s", namespace, resourceType)
 
-	t.Log("Step 1: Creating resource out-of-band via plugin...")
+	// Launch the plugin before anything is created so the descriptor below can be
+	// read first: a type that is not discoverable must skip without provisioning
+	// the fixture's infrastructure out of band.
+	if err := harness.EnsurePluginLaunched(evalOutput); err != nil {
+		rc.DiscoveryFatalf(t, idx, PhaseCreateOOB, "failed to launch plugin: %v", err)
+	}
+
+	t.Log("Step 1: Checking if resource type is discoverable...")
+	descriptor, err := harness.GetResourceDescriptorFromCoordinator(resourceType)
+	if err != nil {
+		t.Skipf("Skipping discovery test: failed to get resource descriptor for %s: %v", resourceType, err)
+	}
+	if !descriptor.Discoverable {
+		t.Skipf("Skipping discovery test: resource type %s has discoverable=false", resourceType)
+	}
+
+	t.Log("Step 2: Creating resource out-of-band via plugin...")
 
 	// Create all resources directly via the plugin (bypassing formae)
 	// Use CreateAllUnmanagedResources to get all created resources for cleanup
@@ -2075,28 +2091,9 @@ func runDiscoveryTest(t *testing.T, tc TestCase, rc *ResultCollector) {
 	}
 	t.Logf("Created %d resource(s), main resource NativeID: %s (type: %s)", len(createdResources), nativeID, resourceType)
 
-	// Parse target from eval output for cleanup
-	var forma pkgmodel.Forma
-	if err := json.Unmarshal([]byte(evalOutput), &forma); err != nil {
-		rc.DiscoveryFatalf(t, idx, PhaseCreateOOB, "failed to parse forma for cleanup: %v", err)
-	}
-	if len(forma.Targets) == 0 {
-		rc.DiscoveryFatalf(t, idx, PhaseCreateOOB, "no targets found in forma for cleanup")
-	}
-	target := forma.Targets[0]
-
-	// Register cleanup to delete all created resources (in reverse order - dependents before dependencies).
-	// DeleteUnmanagedResource handles retries on recoverable errors internally.
-	harness.RegisterCleanup(func() {
-		t.Logf("Cleaning up %d unmanaged resource(s)...", len(createdResources))
-		for i := len(createdResources) - 1; i >= 0; i-- {
-			res := createdResources[i]
-			t.Logf("Deleting unmanaged resource: type=%s, label=%s, nativeID=%s", res.ResourceType, res.Label, res.NativeID)
-			if err := harness.DeleteUnmanagedResource(res.ResourceType, res.NativeID, &target); err != nil {
-				t.Logf("Warning: failed to delete unmanaged resource %s: %v", res.Label, err)
-			}
-		}
-	})
+	// Deletion of each created resource is registered by
+	// CreateAllUnmanagedResources as soon as that resource exists, so a create
+	// that fails partway still cleans up what it made.
 
 	// Extract all unique resource types from created resources for discovery configuration.
 	// This includes both the main resource type and any parent/dependency types.
@@ -2134,28 +2131,18 @@ func runDiscoveryTest(t *testing.T, tc TestCase, rc *ResultCollector) {
 	}
 	rc.SetDiscoveryPhase(idx, PhaseCreateOOB, StepPassed)
 
-	// Step 2: Register target for discovery
-	t.Log("Step 2: Registering target for discovery...")
+	// Step 3: Register target for discovery
+	t.Log("Step 3: Registering target for discovery...")
 	if err := harness.RegisterTargetForDiscovery([]byte(evalOutput)); err != nil {
 		rc.DiscoveryFatalf(t, idx, PhaseRegister, "failed to register target: %v", err)
 	}
 
-	// Step 3: Wait for plugin to register (using extracted namespace, not directory name)
-	t.Log("Step 3: Waiting for plugin to register...")
+	// Step 4: Wait for plugin to register (using extracted namespace, not directory name)
+	t.Log("Step 4: Waiting for plugin to register...")
 	if err := harness.WaitForPluginRegistered(namespace, 60*time.Second); err != nil {
 		rc.DiscoveryFatalf(t, idx, PhaseRegister, "plugin did not register: %v", err)
 	}
 	rc.SetDiscoveryPhase(idx, PhaseRegister, StepPassed)
-
-	// Step 4: Check if resource is discoverable before continuing
-	t.Log("Step 4: Checking if resource type is discoverable...")
-	descriptor, err := harness.GetResourceDescriptorFromCoordinator(resourceType)
-	if err != nil {
-		t.Skipf("Skipping discovery test: failed to get resource descriptor for %s: %v", resourceType, err)
-	}
-	if !descriptor.Discoverable {
-		t.Skipf("Skipping discovery test: resource type %s has discoverable=false", resourceType)
-	}
 
 	// Step 5: Re-trigger discovery across the timeout while polling inventory.
 	// The wait loop triggers the first scan itself, so there is no separate

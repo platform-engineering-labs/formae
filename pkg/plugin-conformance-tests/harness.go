@@ -47,15 +47,6 @@ type CreatedResourceInfo struct {
 	Properties   json.RawMessage // Properties from the plugin after creation
 }
 
-// resolvablePath tracks a resolvable reference found in resource properties
-type resolvablePath struct {
-	path       string
-	label      string
-	resType    string
-	property   string
-	fullObject gjson.Result
-}
-
 // TestHarness manages the lifecycle of formae agent and CLI commands for testing
 type TestHarness struct {
 	t                       *testing.T
@@ -323,7 +314,7 @@ agent {
 }
 
 cli {
-    api {
+    connection = new Classic {
         port = %d
     }
 	disableUsageReporting = true
@@ -677,7 +668,7 @@ agent {
 }
 
 cli {
-    api {
+    connection = new Classic {
         port = %%d
     }
 	disableUsageReporting = true
@@ -1439,6 +1430,68 @@ func (h *TestHarness) CreateUnmanagedResource(evaluatedJSON string) (string, err
 // directly, handling dependencies and resolvable references between resources.
 // Resources are created in dependency order (resources without resolvables first).
 // Returns a slice of CreatedResourceInfo for all created resources (for cleanup).
+// pluginNamespaceFromForma returns the plugin namespace shared by the forma's
+// cloud resources (the segment before the first "::"), e.g. "AWS" for
+// "AWS::RDS::Database".
+func pluginNamespaceFromForma(evaluatedJSON string) (string, error) {
+	var forma pkgmodel.Forma
+	if err := json.Unmarshal([]byte(evaluatedJSON), &forma); err != nil {
+		return "", fmt.Errorf("failed to parse forma JSON: %w", err)
+	}
+
+	for i := range forma.Resources {
+		if strings.Contains(forma.Resources[i].Type, "::") {
+			return strings.Split(forma.Resources[i].Type, "::")[0], nil
+		}
+	}
+
+	return "", fmt.Errorf("no cloud resources found in forma")
+}
+
+// EnsurePluginLaunched launches the resource plugin for the forma's namespace on
+// the harness's own Ergo node and waits for it to announce itself, so the plugin
+// can be queried before any resource is created. It is idempotent: once the
+// plugin is running, further calls return immediately.
+//
+// The discovery test relies on this to read a resource descriptor — and skip a
+// type that is not discoverable — before provisioning the fixture's
+// infrastructure out of band.
+func (h *TestHarness) EnsurePluginLaunched(evaluatedJSON string) error {
+	if h.lastPluginNamespace != "" {
+		return nil
+	}
+
+	namespace, err := pluginNamespaceFromForma(evaluatedJSON)
+	if err != nil {
+		return err
+	}
+	h.t.Logf("Using plugin namespace: %s", namespace)
+
+	pluginBinaryPath, err := h.GetPluginBinaryPath(namespace)
+	if err != nil {
+		return fmt.Errorf("failed to get plugin binary path: %w", err)
+	}
+
+	if err := h.InitErgoNode(); err != nil {
+		return fmt.Errorf("failed to initialize Ergo node: %w", err)
+	}
+
+	if err := h.LaunchPluginDirect(pluginBinaryPath, namespace); err != nil {
+		return fmt.Errorf("failed to launch plugin: %w", err)
+	}
+
+	if err := h.WaitForPluginReady(namespace, 30*time.Second); err != nil {
+		return fmt.Errorf("plugin not ready: %w", err)
+	}
+
+	// Recorded only once the plugin is ready, so a failed launch does not make a
+	// retry look like an already-running plugin.
+	h.lastPluginBinaryPath = pluginBinaryPath
+	h.lastPluginNamespace = namespace
+
+	return nil
+}
+
 func (h *TestHarness) CreateAllUnmanagedResources(evaluatedJSON string) ([]CreatedResourceInfo, error) {
 	h.t.Log("Creating unmanaged resources via external plugin")
 
@@ -1467,34 +1520,10 @@ func (h *TestHarness) CreateAllUnmanagedResources(evaluatedJSON string) ([]Creat
 	// Sort resources by dependency order (resources without resolvables first)
 	sortedResources := h.sortResourcesByDependency(cloudResources)
 
-	// Extract namespace from the first resource type (all resources should be in same namespace)
-	namespace := strings.Split(sortedResources[0].Type, "::")[0]
-	h.t.Logf("Using plugin namespace: %s", namespace)
-
-	// Get plugin binary path
-	pluginBinaryPath, err := h.GetPluginBinaryPath(namespace)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get plugin binary path: %w", err)
+	if err := h.EnsurePluginLaunched(evaluatedJSON); err != nil {
+		return nil, err
 	}
-
-	// Store for later cleanup
-	h.lastPluginBinaryPath = pluginBinaryPath
-	h.lastPluginNamespace = namespace
-
-	// Initialize Ergo node if needed
-	if err := h.InitErgoNode(); err != nil {
-		return nil, fmt.Errorf("failed to initialize Ergo node: %w", err)
-	}
-
-	// Launch the plugin
-	if err := h.LaunchPluginDirect(pluginBinaryPath, namespace); err != nil {
-		return nil, fmt.Errorf("failed to launch plugin: %w", err)
-	}
-
-	// Wait for plugin to be ready
-	if err := h.WaitForPluginReady(namespace, 30*time.Second); err != nil {
-		return nil, fmt.Errorf("plugin not ready: %w", err)
-	}
+	namespace := h.lastPluginNamespace
 
 	// Find the target
 	if len(forma.Targets) == 0 {
@@ -1563,6 +1592,19 @@ func (h *TestHarness) CreateAllUnmanagedResources(evaluatedJSON string) ([]Creat
 			Label:        res.Label,
 			NativeID:     finalProgress.NativeID,
 			Properties:   finalProgress.ResourceProperties,
+		})
+
+		// Register the deletion as soon as the resource exists, not once the
+		// whole set does: a later resource can fail to create or to resolve its
+		// references, and anything already created is a real cloud resource that
+		// must still be cleaned up. Cleanups run in reverse registration order,
+		// so dependents are deleted before what they depend on.
+		created := createdResources[len(createdResources)-1]
+		h.RegisterCleanup(func() {
+			h.t.Logf("Deleting unmanaged resource: type=%s, label=%s, nativeID=%s", created.ResourceType, created.Label, created.NativeID)
+			if err := h.DeleteUnmanagedResource(created.ResourceType, created.NativeID, &target); err != nil {
+				h.t.Logf("Warning: failed to delete unmanaged resource %s: %v", created.Label, err)
+			}
 		})
 	}
 
@@ -1660,15 +1702,13 @@ func (h *TestHarness) extractDependencyLabels(properties json.RawMessage) []stri
 		return nil
 	}
 
-	var resolvables []resolvablePath
-	result := gjson.ParseBytes(properties)
-	h.findResolvablesRecursive("", result, &resolvables)
+	resolvables := pkgmodel.FindResolvablesFromProperties(string(properties))
 
 	// Extract unique labels
 	labelSet := make(map[string]struct{})
 	for _, res := range resolvables {
-		if res.label != "" {
-			labelSet[res.label] = struct{}{}
+		if res.Label != "" {
+			labelSet[res.Label] = struct{}{}
 		}
 	}
 
@@ -1687,11 +1727,9 @@ func (h *TestHarness) resolveResolvablesInProperties(properties json.RawMessage,
 	}
 
 	propsStr := string(properties)
-	result := gjson.Parse(propsStr)
 
 	// Find all resolvables in the properties
-	var resolvables []resolvablePath
-	h.findResolvablesRecursive("", result, &resolvables)
+	resolvables := pkgmodel.FindResolvablesFromProperties(propsStr)
 
 	if len(resolvables) == 0 {
 		return properties, nil
@@ -1704,76 +1742,105 @@ func (h *TestHarness) resolveResolvablesInProperties(properties json.RawMessage,
 		createdByKey[key] = created
 	}
 
-	// Resolve each resolvable
+	// Resolve each resolvable. A reference that cannot be resolved is fatal:
+	// leaving it in place hands the plugin the envelope itself where it expects
+	// a value, and the plugin then fails for a reason unrelated to the actual
+	// problem.
 	for _, res := range resolvables {
 		// Look up the created resource by label and type
-		key := res.label + "::" + res.resType
+		key := res.Label + "::" + res.Type
 		created, found := createdByKey[key]
 		if !found {
-			h.t.Logf("Warning: could not find created resource for resolvable: label=%s, type=%s", res.label, res.resType)
-			continue
+			return properties, fmt.Errorf(
+				"could not resolve reference at %s: no created resource with label %q and type %q",
+				res.Path, res.Label, res.Type)
 		}
 
 		// Extract the property value from the created resource's properties
-		resolvedValue, err := h.extractPropertyValue(created.Properties, res.property)
+		resolvedValue, err := h.extractPropertyValue(created.Properties, res.Property)
 		if err != nil {
-			h.t.Logf("Warning: could not extract property %s from created resource %s: %v", res.property, res.label, err)
-			continue
+			return properties, fmt.Errorf(
+				"could not resolve reference at %s: property %q of resource %q: %w",
+				res.Path, res.Property, res.Label, err)
 		}
 
-		h.t.Logf("Resolved %s.%s -> %s", res.label, res.property, resolvedValue)
+		// Read off the envelope before it is replaced by the value.
+		opaque := referenceIsOpaque(propsStr, res)
+
+		// A $json reference names a path INTO the resolved value, so the field
+		// takes the scalar at that path rather than the document holding it.
+		if res.JSONPath != "" {
+			resolvedValue, err = extractJSONPath(resolvedValue, res.JSONPath)
+			if err != nil {
+				return properties, fmt.Errorf(
+					"could not resolve reference at %s: property %q of resource %q: %w",
+					res.Path, res.Property, res.Label, err)
+			}
+		}
+
+		// A resolved secret must never reach the test log, so an opaque
+		// reference is reported by what it points at and never by its value.
+		if opaque {
+			h.t.Logf("Resolved %s.%s -> (redacted)", res.Label, res.Property)
+		} else {
+			h.t.Logf("Resolved %s.%s -> %s", res.Label, res.Property, resolvedValue)
+		}
 
 		// Replace the resolvable object with the resolved value in the properties JSON
-		propsStr, err = sjson.Set(propsStr, res.path, resolvedValue)
+		propsStr, err = sjson.Set(propsStr, res.Path, resolvedValue)
 		if err != nil {
-			return properties, fmt.Errorf("failed to set resolved value at path %s: %w", res.path, err)
+			return properties, fmt.Errorf("failed to set resolved value at path %s: %w", res.Path, err)
 		}
+	}
+
+	// Nothing may reach a plugin still carrying an envelope: a resolvable that
+	// survived the loop above would be presented as a value.
+	if remaining := pkgmodel.FindResolvablesFromProperties(propsStr); len(remaining) > 0 {
+		paths := make([]string, 0, len(remaining))
+		for _, r := range remaining {
+			paths = append(paths, r.Path)
+		}
+		return properties, fmt.Errorf("unresolved reference(s) remain after resolution at: %s",
+			strings.Join(paths, ", "))
 	}
 
 	return json.RawMessage(propsStr), nil
 }
 
-// findResolvablesRecursive recursively finds all resolvable objects in a JSON structure
-func (h *TestHarness) findResolvablesRecursive(basePath string, value gjson.Result, resolvables *[]resolvablePath) {
-	if value.IsObject() {
-		// Check if this object is a resolvable ($res: true)
-		resField := value.Get("$res")
-		if resField.Exists() && resField.Bool() {
-			*resolvables = append(*resolvables, resolvablePath{
-				path:       basePath,
-				label:      value.Get("$label").String(),
-				resType:    value.Get("$type").String(),
-				property:   value.Get("$property").String(),
-				fullObject: value,
-			})
-			return
-		}
+// referenceIsOpaque reports whether what a reference resolves to is a secret,
+// read from the envelope still standing at its path in properties. A reference
+// declares its own visibility — the resolvable itself carries none — and a
+// $json path counts regardless, because only a secret's value is addressed
+// that way.
+func referenceIsOpaque(properties string, res pkgmodel.ResolvableObject) bool {
+	if res.JSONPath != "" {
+		return true
+	}
+	return gjson.Get(properties, res.Path).Get("$visibility").String() == pkgmodel.VisibilityOpaque
+}
 
-		// Recurse into object properties
-		value.ForEach(func(key, val gjson.Result) bool {
-			var newPath string
-			if basePath == "" {
-				newPath = key.String()
-			} else {
-				newPath = basePath + "." + key.String()
-			}
-			h.findResolvablesRecursive(newPath, val, resolvables)
-			return true
-		})
-	} else if value.IsArray() {
-		// Recurse into array elements
-		idx := 0
-		value.ForEach(func(_, val gjson.Result) bool {
-			var newPath string
-			if basePath == "" {
-				newPath = fmt.Sprintf("%d", idx)
-			} else {
-				newPath = fmt.Sprintf("%s.%d", basePath, idx)
-			}
-			h.findResolvablesRecursive(newPath, val, resolvables)
-			idx++
-			return true
-		})
+// extractJSONPath returns the scalar at a gjson dotted path within resolved,
+// which must itself be a JSON document. Errors name only the path and the JSON
+// type — never the value, which for a $json reference is typically a secret.
+func extractJSONPath(resolved, path string) (string, error) {
+	if !gjson.Valid(resolved) {
+		return "", fmt.Errorf("$json path %q: resolved value is not valid JSON", path)
+	}
+	result := gjson.Get(resolved, path)
+	if !result.Exists() {
+		return "", fmt.Errorf("$json path %q not found", path)
+	}
+	switch result.Type {
+	case gjson.Null:
+		return "", fmt.Errorf("$json path %q resolved to null", path)
+	case gjson.String, gjson.Number, gjson.True, gjson.False:
+		return result.String(), nil
+	default:
+		kind := "object"
+		if result.IsArray() {
+			kind = "array"
+		}
+		return "", fmt.Errorf("$json path %q resolved to a JSON %s, expected a scalar", path, kind)
 	}
 }
 
@@ -2180,7 +2247,7 @@ func (h *TestHarness) PollStatus(commandID string, timeout time.Duration) (strin
 	pollInterval := 2 * time.Second
 
 	for time.Now().Before(deadline) {
-		status, err := h.GetStatus(commandID)
+		cmd, err := h.getCommand(commandID)
 		if err != nil {
 			// Retry on all errors — the command may not be visible yet (e.g.,
 			// the agent is still processing the apply request). Permanent
@@ -2190,6 +2257,7 @@ func (h *TestHarness) PollStatus(commandID string, timeout time.Duration) (strin
 			continue
 		}
 
+		status := cmd.State
 		h.t.Logf("Command %s state: %s", commandID, status)
 
 		// Check for terminal states
@@ -2197,7 +2265,7 @@ func (h *TestHarness) PollStatus(commandID string, timeout time.Duration) (strin
 		case "Success", "Completed":
 			return status, nil
 		case "Failed", "Canceled":
-			return status, fmt.Errorf("command reached terminal state: %s", status)
+			return status, commandFailureError(cmd)
 		case "NotStarted", "InProgress", "Pending", "Canceling":
 			// Continue polling
 			time.Sleep(pollInterval)
@@ -2209,8 +2277,18 @@ func (h *TestHarness) PollStatus(commandID string, timeout time.Duration) (strin
 	return "", fmt.Errorf("timeout waiting for command %s to complete", commandID)
 }
 
-// GetStatus gets the current status of a command
+// GetStatus gets the current state of a command
 func (h *TestHarness) GetStatus(commandID string) (string, error) {
+	cmd, err := h.getCommand(commandID)
+	if err != nil {
+		return "", err
+	}
+	return cmd.State, nil
+}
+
+// getCommand fetches a command's full status record, including the per-update
+// error messages that explain a failure.
+func (h *TestHarness) getCommand(commandID string) (model.Command, error) {
 	stdout, stderr, err := h.runCLI(
 		"status",
 		"command",
@@ -2220,20 +2298,20 @@ func (h *TestHarness) GetStatus(commandID string) (string, error) {
 		"--output-schema", "json",
 	)
 	if err != nil {
-		return "", fmt.Errorf("status command failed: %w\nStderr: %s\nStdout: %s", err, stderr, stdout)
+		return model.Command{}, fmt.Errorf("status command failed: %w\nStderr: %s\nStdout: %s", err, stderr, stdout)
 	}
 
 	// Parse JSON response from stdout only
 	var response model.ListCommandStatusResponse
 	if err := json.Unmarshal([]byte(stdout), &response); err != nil {
-		return "", fmt.Errorf("failed to parse status response: %w\nStdout: %s", err, stdout)
+		return model.Command{}, fmt.Errorf("failed to parse status response: %w\nStdout: %s", err, stdout)
 	}
 
 	if len(response.Commands) == 0 {
-		return "", fmt.Errorf("no commands in status response")
+		return model.Command{}, fmt.Errorf("no commands in status response")
 	}
 
-	return response.Commands[0].State, nil
+	return response.Commands[0], nil
 }
 
 // DeleteResourceOOB deletes a resource directly via the plugin, bypassing formae.

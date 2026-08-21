@@ -141,7 +141,7 @@ func TestAttachesToInvertDestroyOrder(t *testing.T) {
 		_, err = m.ApplyForma(
 			forma,
 			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: false},
-			"test-client-id")
+			"test-client-id", "", "")
 		require.NoError(t, err, "ApplyForma should not error")
 
 		// Wait for apply to complete
@@ -160,7 +160,7 @@ func TestAttachesToInvertDestroyOrder(t *testing.T) {
 		_, err = m.DestroyForma(
 			forma,
 			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
-			"test-client-id")
+			"test-client-id", "", "")
 		require.NoError(t, err, "DestroyForma should not error")
 
 		// Wait for destroy to complete

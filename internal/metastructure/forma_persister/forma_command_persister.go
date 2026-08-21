@@ -1059,9 +1059,7 @@ func (f *FormaCommandPersister) markResourceUpdateAsComplete(msg *messages.MarkR
 		// Calculate new command state
 		cmd.State = overallCommandState(cmd)
 		f.Log().Debug("MarkResourceUpdateAsComplete: computed overallCommandState",
-			"commandID", msg.CommandID,
-			"newState", cmd.State,
-			"pendingCompletions", cached.pendingCompletions)
+			commandStateLogFields(cmd, cached.pendingCompletions)...)
 
 		// If command is in final state, do full finalization (hash sensitive data, potentially delete, etc.)
 		// Otherwise just update command meta for performance
@@ -1199,6 +1197,18 @@ func (f *FormaCommandPersister) bulkUpdateResourceState(
 	}
 
 	return true, nil
+}
+
+// commandStateLogFields returns the structured fields logged when a command's
+// overall state is recomputed. Source is included so consumers can tell user
+// commands from scheduler bookkeeping.
+func commandStateLogFields(cmd *forma_command.FormaCommand, pending int) []any {
+	return []any{
+		"commandID", cmd.ID,
+		"newState", cmd.State,
+		"pendingCompletions", pending,
+		"source", cmd.Source,
+	}
 }
 
 func overallCommandState(command *forma_command.FormaCommand) forma_command.CommandState {

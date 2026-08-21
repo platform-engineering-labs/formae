@@ -29,7 +29,7 @@ func TestCheckInvariants_FlagsDuplicateNativeID(t *testing.T) {
 		{Ksuid: "K_B", NativeID: "i-0abc1234", Label: "new-vpc", Type: "AWS::EC2::Instance"},
 	}
 
-	violations := CheckInvariants(inventory, cloudState, nil, nil)
+	violations := CheckInvariants(inventory, cloudState, nil)
 
 	var foundDup bool
 	for _, v := range violations {
@@ -53,7 +53,7 @@ func TestCheckInvariants_SingleRowPerNativeID_OK(t *testing.T) {
 		{Ksuid: "K_A", NativeID: "i-0abc1234", Label: "app-server", Type: "AWS::EC2::Instance"},
 	}
 
-	violations := CheckInvariants(inventory, cloudState, nil, nil)
+	violations := CheckInvariants(inventory, cloudState, nil)
 
 	for _, v := range violations {
 		if v.Kind == ViolationDuplicateNativeID {

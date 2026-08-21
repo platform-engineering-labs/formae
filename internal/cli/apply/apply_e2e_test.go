@@ -32,7 +32,7 @@ import (
 type e2eClientAdapter struct{ c *api.Client }
 
 func (a e2eClientAdapter) GetCommandsStatus(query string, n int, _ bool) (*apimodel.ListCommandStatusResponse, []string, error) {
-	resp, err := a.c.GetFormaCommandsStatus(query, "e2e-client", n)
+	resp, err := a.c.GetFormaCommandsStatus(query, "e2e-client", n, apimodel.CommandScopeAgent)
 	return resp, nil, err
 }
 
@@ -122,7 +122,7 @@ func TestApplyTUI_EndToEnd(t *testing.T) {
 	// Port 80 + http URL passes the httptest URL through formatEndpoint unmodified.
 	srv := api.NewServer(t.Context(), fake, nil, nil, nil, nil)
 	baseURL := apitest.NewTestServer(t, srv.Handler())
-	client := api.NewClient(pkgmodel.APIConfig{URL: baseURL, Port: 80}, nil, nil)
+	client := api.NewClient(&pkgmodel.ClassicConnection{URL: baseURL, Port: 80}, nil, nil)
 
 	// Stub the seams: applyFn posts through the REAL HTTP stack; simview is
 	// stubbed to Confirmed; launchWatch runs the REAL statuswatch model via

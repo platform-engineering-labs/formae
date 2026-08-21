@@ -80,6 +80,28 @@ func TestDatastore(t *testing.T) {
 				}
 				return op, err
 			},
+			LoadAgentBootsForTest: func() ([]datastore.AgentBoot, error) {
+				conn := d.Conn()
+				rows, err := conn.Query(`SELECT boot_id, version, booted_at FROM agent_boots ORDER BY booted_at, boot_id`)
+				if err != nil {
+					return nil, err
+				}
+				defer rows.Close() //nolint:errcheck
+				var out []datastore.AgentBoot
+				for rows.Next() {
+					var b datastore.AgentBoot
+					var ts string
+					if err := rows.Scan(&b.BootID, &b.Version, &ts); err != nil {
+						return nil, err
+					}
+					b.BootedAt, err = time.Parse(time.RFC3339Nano, ts)
+					if err != nil {
+						return nil, err
+					}
+					out = append(out, b)
+				}
+				return out, rows.Err()
+			},
 			CountReapAuditRowsForTest: func(label string) (int, error) {
 				conn := d.Conn()
 				var n int
@@ -110,6 +132,13 @@ func TestDatastore(t *testing.T) {
 				conn := d.Conn()
 				_, err := conn.Exec(
 					`UPDATE resource_updates SET modified_ts = ? WHERE ksuid = ?`, raw, ksuid,
+				)
+				return err
+			},
+			NullFormaCommandSubjectForTest: func(commandID string) error {
+				conn := d.Conn()
+				_, err := conn.Exec(
+					`UPDATE forma_commands SET subject = NULL, subject_name = NULL WHERE command_id = ?`, commandID,
 				)
 				return err
 			},

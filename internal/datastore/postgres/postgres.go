@@ -211,8 +211,8 @@ func (d DatastorePostgres) StoreFormaCommand(fa *forma_command.FormaCommand, com
 	query := fmt.Sprintf(`
 	INSERT INTO %s (command_id, timestamp, command, state, agent_version, client_id, agent_id,
 		description_text, description_confirm, config_mode, config_force, config_simulate,
-		target_updates, stack_updates, policy_updates, modified_ts, source)
-	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+		target_updates, stack_updates, policy_updates, modified_ts, source, subject, subject_name)
+	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
 	ON CONFLICT (command_id) DO UPDATE
 	SET timestamp = EXCLUDED.timestamp,
 	command = EXCLUDED.command,
@@ -229,12 +229,14 @@ func (d DatastorePostgres) StoreFormaCommand(fa *forma_command.FormaCommand, com
 	stack_updates = EXCLUDED.stack_updates,
 	policy_updates = EXCLUDED.policy_updates,
 	modified_ts = EXCLUDED.modified_ts,
-	source = EXCLUDED.source
+	source = EXCLUDED.source,
+	subject = EXCLUDED.subject,
+	subject_name = EXCLUDED.subject_name
 	`, datastore.CommandsTable)
 
 	_, err = d.pool.Exec(ctx, query, commandID, fa.StartTs.UTC(), fa.Command, fa.State, formae.Version, fa.ClientID, d.agentID,
 		fa.Description.Text, fa.Description.Confirm, fa.Config.Mode, fa.Config.Force, fa.Config.Simulate,
-		targetUpdatesJSON, stackUpdatesJSON, policyUpdatesJSON, fa.ModifiedTs.UTC(), string(fa.Source))
+		targetUpdatesJSON, stackUpdatesJSON, policyUpdatesJSON, fa.ModifiedTs.UTC(), string(fa.Source), fa.Subject, fa.SubjectName)
 	if err != nil {
 		slog.Error("failed to store FormaCommand", "query", query, "error", err)
 		return err
@@ -258,7 +260,7 @@ const formaCommandWithResourceUpdatesQueryBasePostgres = `
 SELECT
 	fc.command_id, fc.timestamp, fc.command, fc.state, fc.client_id,
 	fc.description_text, fc.description_confirm, fc.config_mode, fc.config_force, fc.config_simulate,
-	fc.target_updates, fc.stack_updates, fc.policy_updates, fc.modified_ts, fc.source,
+	fc.target_updates, fc.stack_updates, fc.policy_updates, fc.modified_ts, fc.source, fc.subject, fc.subject_name,
 	ru.ksuid, ru.operation, ru.state, ru.start_ts, ru.modified_ts,
 	ru.retries, ru.remaining, ru.version, ru.stack_label, ru.group_id, ru.source,
 	ru.resource, ru.resource_target, ru.existing_resource, ru.existing_target,
@@ -286,6 +288,7 @@ func scanJoinedRowPostgres(rows pgx.Rows) (*forma_command.FormaCommand, *resourc
 	var policyUpdatesJSON []byte
 	var fcModifiedTs *time.Time
 	var fcSource *string
+	var fcSubject, fcSubjectName *string
 
 	// ResourceUpdate fields (all nullable due to LEFT JOIN)
 	var ruKsuid, ruOperation, ruState *string
@@ -302,7 +305,7 @@ func scanJoinedRowPostgres(rows pgx.Rows) (*forma_command.FormaCommand, *resourc
 		// FormaCommand columns
 		&commandID, &fcTimestamp, &fcCommand, &fcState, &fcClientID,
 		&descriptionText, &descriptionConfirm, &configMode, &configForce, &configSimulate,
-		&targetUpdatesJSON, &stackUpdatesJSON, &policyUpdatesJSON, &fcModifiedTs, &fcSource,
+		&targetUpdatesJSON, &stackUpdatesJSON, &policyUpdatesJSON, &fcModifiedTs, &fcSource, &fcSubject, &fcSubjectName,
 		// ResourceUpdate columns
 		&ruKsuid, &ruOperation, &ruState, &ruStartTs, &ruModifiedTs,
 		&ruRetries, &ruRemaining, &ruVersion, &ruStackLabel, &ruGroupID, &ruSource,
@@ -342,6 +345,12 @@ func scanJoinedRowPostgres(rows pgx.Rows) (*forma_command.FormaCommand, *resourc
 	}
 	if fcSource != nil {
 		cmd.Source = forma_command.Source(*fcSource)
+	}
+	if fcSubject != nil {
+		cmd.Subject = *fcSubject
+	}
+	if fcSubjectName != nil {
+		cmd.SubjectName = *fcSubjectName
 	}
 
 	if len(targetUpdatesJSON) > 0 {
@@ -548,7 +557,7 @@ func (d DatastorePostgres) GetMostRecentFormaCommandByClientID(clientID string) 
 	// Use subquery to find the most recent command_id first, then fetch all its resource_updates
 	// LIMIT 1 on the joined query would only return 1 row, not 1 command
 	query := formaCommandWithResourceUpdatesQueryBasePostgres +
-		" WHERE fc.command_id = (SELECT command_id FROM forma_commands WHERE client_id = $1 ORDER BY timestamp DESC LIMIT 1)" +
+		" WHERE fc.command_id = (SELECT command_id FROM forma_commands WHERE client_id = $1 AND source = 'user' ORDER BY timestamp DESC LIMIT 1)" +
 		resourceUpdateOrderByPostgres
 	rows, err := d.pool.Query(ctx, query, clientID)
 	if err != nil {
@@ -561,7 +570,7 @@ func (d DatastorePostgres) GetMostRecentFormaCommandByClientID(clientID string) 
 	}
 
 	if len(commands) == 0 {
-		return nil, fmt.Errorf("no forma commands found for client: %v", clientID)
+		return nil, nil
 	}
 
 	return commands[0], nil
@@ -674,9 +683,7 @@ func (d DatastorePostgres) QueryFormaCommands(query *datastore.StatusQuery) ([]*
 	subqueryStr = extendPostgresQueryString(subqueryStr, query.CommandID, " AND command_id %s $%d", &args)
 	subqueryStr = extendPostgresQueryString(subqueryStr, query.ClientID, " AND client_id %s $%d", &args)
 	subqueryStr = extendPostgresQueryString(subqueryStr, query.Command, " AND LOWER(command) %s LOWER($%d)", &args)
-	if query.Command == nil {
-		subqueryStr += fmt.Sprintf(" AND command != '%s'", pkgmodel.CommandSync)
-	}
+	subqueryStr = extendPostgresQueryString(subqueryStr, query.Source, " AND source %s $%d", &args)
 
 	// Stack filter uses the normalized resource_updates table
 	subqueryStr = extendPostgresQueryString(subqueryStr, query.Stack, " AND EXISTS (SELECT 1 FROM resource_updates ru WHERE ru.command_id = forma_commands.command_id AND ru.stack_label %s $%d)", &args)
@@ -695,7 +702,7 @@ func (d DatastorePostgres) QueryFormaCommands(query *datastore.StatusQuery) ([]*
 		SELECT
 			fc.command_id, fc.timestamp, fc.command, fc.state, fc.client_id,
 			fc.description_text, fc.description_confirm, fc.config_mode, fc.config_force, fc.config_simulate,
-			fc.target_updates, fc.stack_updates, fc.policy_updates, fc.modified_ts, fc.source,
+			fc.target_updates, fc.stack_updates, fc.policy_updates, fc.modified_ts, fc.source, fc.subject, fc.subject_name,
 			ru.ksuid, ru.operation, ru.state, ru.start_ts, ru.modified_ts,
 			ru.retries, ru.remaining, ru.version, ru.stack_label, ru.group_id, ru.source,
 			ru.resource, ru.resource_target, ru.existing_resource, ru.existing_target,
@@ -1231,7 +1238,7 @@ func (d DatastorePostgres) LoadAllResourcesByStack() (map[string][]*pkgmodel.Res
 	defer span.End()
 
 	query := `
-	SELECT data, ksuid
+	SELECT data, ksuid, version
 	FROM resources r1
 	WHERE NOT EXISTS (
 		SELECT 1
@@ -1250,8 +1257,8 @@ func (d DatastorePostgres) LoadAllResourcesByStack() (map[string][]*pkgmodel.Res
 
 	var allResources []*pkgmodel.Resource
 	for rows.Next() {
-		var jsonData, ksuid string
-		if err := rows.Scan(&jsonData, &ksuid); err != nil {
+		var jsonData, ksuid, version string
+		if err := rows.Scan(&jsonData, &ksuid, &version); err != nil {
 			return nil, err
 		}
 
@@ -1261,6 +1268,7 @@ func (d DatastorePostgres) LoadAllResourcesByStack() (map[string][]*pkgmodel.Res
 		}
 
 		resource.Ksuid = ksuid
+		resource.Version = version
 		allResources = append(allResources, &resource)
 	}
 
@@ -1362,7 +1370,7 @@ func (d DatastorePostgres) LoadResource(uri pkgmodel.FormaeURI) (*pkgmodel.Resou
 	defer span.End()
 
 	query := `
-	SELECT data, ksuid
+	SELECT data, ksuid, version
 	FROM resources
 	WHERE uri = $1
 	AND operation != $2 AND operation != 'reaped'
@@ -1373,7 +1381,8 @@ func (d DatastorePostgres) LoadResource(uri pkgmodel.FormaeURI) (*pkgmodel.Resou
 
 	var jsonData string
 	var ksuid string
-	if err := row.Scan(&jsonData, &ksuid); err != nil {
+	var version string
+	if err := row.Scan(&jsonData, &ksuid, &version); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil // Resource not found, return nil without error
 		}
@@ -1386,6 +1395,7 @@ func (d DatastorePostgres) LoadResource(uri pkgmodel.FormaeURI) (*pkgmodel.Resou
 	}
 
 	resource.Ksuid = ksuid
+	resource.Version = version
 	return &resource, nil
 }
 
@@ -1702,7 +1712,7 @@ func (d DatastorePostgres) LoadResourcesByStack(stackLabel string) ([]*pkgmodel.
 	defer span.End()
 
 	query := `
-	SELECT data, ksuid
+	SELECT data, ksuid, version
 	FROM resources r1
 	WHERE stack = $1
 	AND NOT EXISTS (
@@ -1722,8 +1732,8 @@ func (d DatastorePostgres) LoadResourcesByStack(stackLabel string) ([]*pkgmodel.
 
 	var resources []*pkgmodel.Resource
 	for rows.Next() {
-		var jsonData, ksuid string
-		if err := rows.Scan(&jsonData, &ksuid); err != nil {
+		var jsonData, ksuid, version string
+		if err := rows.Scan(&jsonData, &ksuid, &version); err != nil {
 			return nil, err
 		}
 
@@ -1733,6 +1743,7 @@ func (d DatastorePostgres) LoadResourcesByStack(stackLabel string) ([]*pkgmodel.
 		}
 
 		resource.Ksuid = ksuid
+		resource.Version = version
 		resources = append(resources, &resource)
 	}
 
@@ -5072,4 +5083,18 @@ func (d DatastorePostgres) ForceCancelResourceUpdates(commandID string, inProgre
 	}
 
 	return result, nil
+}
+
+// RecordAgentBoot appends one agent_boots row for this process start.
+func (d DatastorePostgres) RecordAgentBoot(version string) error {
+	ctx, cancel := datastore.AgentBootContext(d.ctx)
+	defer cancel()
+	ctx, span := tracer.Start(ctx, "RecordAgentBoot")
+	defer span.End()
+
+	query := `INSERT INTO agent_boots (boot_id, version, booted_at) VALUES ($1, $2, $3)`
+	if _, err := d.pool.Exec(ctx, query, mksuid.New().String(), version, time.Now().UTC()); err != nil {
+		return fmt.Errorf("failed to record agent boot: %w", err)
+	}
+	return nil
 }

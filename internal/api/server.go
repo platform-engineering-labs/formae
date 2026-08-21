@@ -24,6 +24,7 @@ import (
 
 	_ "github.com/platform-engineering-labs/formae/docs"
 	"github.com/platform-engineering-labs/formae/internal/auth"
+	"github.com/platform-engineering-labs/formae/internal/datastore"
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	"github.com/platform-engineering-labs/formae/internal/metastructure"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
@@ -118,6 +119,17 @@ func (s *Server) configureAuth() {
 	}
 }
 
+// subjectFromContext reads the verified subject and its display-name hint off
+// the echo request context, where the auth middleware puts them on every
+// allowed request. Neither key is set when no auth plugin is configured
+// (classic mode), so the type assertions fall through to "" rather than
+// failing the request.
+func subjectFromContext(c echo.Context) (subject string, subjectName string) {
+	subject, _ = c.Get(auth.ContextKeySubject).(string)
+	subjectName, _ = c.Get(auth.ContextKeySubjectName).(string)
+	return subject, subjectName
+}
+
 // configureNetwork sets up the network listener by loading the appropriate network plugin based on the configuration.
 func (s *Server) configureNetwork() (string, error) {
 	if s.networkConfig != nil {
@@ -126,17 +138,9 @@ func (s *Server) configureNetwork() (string, error) {
 			return "", err
 		}
 
-		// Use legacy raw JSON if present (from deprecated plugins.network),
-		// otherwise marshal the typed tailscale config.
-		var configJSON []byte
-		if len(s.networkConfig.LegacyRawJSON) > 0 {
-			configJSON = s.networkConfig.LegacyRawJSON
-		} else {
-			var marshalErr error
-			configJSON, marshalErr = json.Marshal(s.networkConfig.Tailscale)
-			if marshalErr != nil {
-				return "", fmt.Errorf("failed to marshal network config: %w", marshalErr)
-			}
+		configJSON, err := s.networkConfig.PluginConfigJSON()
+		if err != nil {
+			return "", err
 		}
 
 		s.echo.Listener, err = netPlugin.Listen(configJSON, s.serverConfig.Port)
@@ -291,6 +295,7 @@ func (s *Server) SubmitFormaCommand(c echo.Context) error {
 	if clientID == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "Client-ID header is required")
 	}
+	subject, subjectName := subjectFromContext(c)
 	command := c.FormValue("command")
 	if command == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "command is required")
@@ -315,7 +320,7 @@ func (s *Server) SubmitFormaCommand(c echo.Context) error {
 			Mode:     mode,
 			Simulate: simulate,
 			Force:    force,
-		}, clientID)
+		}, clientID, subject, subjectName)
 		if err != nil {
 			return mapError(c, err)
 		}
@@ -328,7 +333,7 @@ func (s *Server) SubmitFormaCommand(c echo.Context) error {
 		query := c.FormValue("query")
 		if query != "" {
 			// If query is provided, use it
-			response, err = s.metastructure.DestroyByQuery(query, &config.FormaCommandConfig{Simulate: simulate, OnDependents: onDependents}, clientID)
+			response, err = s.metastructure.DestroyByQuery(query, &config.FormaCommandConfig{Simulate: simulate, OnDependents: onDependents}, clientID, subject, subjectName)
 		} else {
 			// Otherwise, expect a Forma file
 			if !hasFormaFile(c) {
@@ -338,7 +343,7 @@ func (s *Server) SubmitFormaCommand(c echo.Context) error {
 			if getFormaErr != nil {
 				return echo.NewHTTPError(http.StatusInternalServerError, getFormaErr.Error())
 			}
-			response, err = s.metastructure.DestroyForma(forma, &config.FormaCommandConfig{Simulate: simulate, OnDependents: onDependents}, clientID)
+			response, err = s.metastructure.DestroyForma(forma, &config.FormaCommandConfig{Simulate: simulate, OnDependents: onDependents}, clientID, subject, subjectName)
 		}
 		if err != nil {
 			return mapError(c, err)
@@ -380,7 +385,7 @@ func (s *Server) CommandStatus(c echo.Context) error {
 	}
 	query := fmt.Sprintf("id:%s", id)
 
-	return s.getCommandStatus(c, clientID, query, 1)
+	return s.getCommandStatus(c, clientID, query, 1, apimodel.CommandScopeAgent)
 }
 
 // @Summary Get the status of multiple Forma commands
@@ -388,10 +393,12 @@ func (s *Server) CommandStatus(c echo.Context) error {
 // @Tags commands
 // @Produce json
 // @Param Client-ID header string true "Unique identifier for the client."
-// @Param query query string false "The query string to select the commands. If empty, retrieves the status of the most recent command."
-// @Param max_results query string false "The maximum number of command statuses to return (default is 10)."
+// @Param query query string false "The query string to select the commands. If empty, the scope parameter decides what is returned."
+// @Param scope query string false "How an empty query is answered: 'client' (default) returns the calling client's most recent command; 'agent' returns every client's commands, newest first. Ignored when query is set." Enums(client, agent)
+// @Param max_results query string false "The maximum number of command statuses to return (default is 10, capped at 200)."
 // @Success 200 {object} apimodel.ListCommandStatusResponse "OK: The commands' execution statuses."
 // @Failure 400 {string} string "Bad Request: Missing or invalid parameters."
+// @Failure 404 {string} string "Not Found: No commands matched."
 // @Failure 500 {string} string "Internal Server Error."
 // @Router /commands/status [get]
 func (s *Server) ListCommandStatus(c echo.Context) error {
@@ -408,8 +415,19 @@ func (s *Server) ListCommandStatus(c echo.Context) error {
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "N must be an integer")
 	}
+	if n > datastore.MaxFormaCommandsQueryLimit {
+		n = datastore.MaxFormaCommandsQueryLimit
+	}
 
-	return s.getCommandStatus(c, clientID, query, n)
+	// An absent or unrecognized scope keeps the historical empty-query
+	// behavior (the calling client's most recent command), so callers written
+	// against the older API are unaffected.
+	scope := apimodel.CommandScopeClient
+	if apimodel.CommandScope(c.QueryParam("scope")) == apimodel.CommandScopeAgent {
+		scope = apimodel.CommandScopeAgent
+	}
+
+	return s.getCommandStatus(c, clientID, query, n, scope)
 }
 
 // @Summary List resources
@@ -595,7 +613,8 @@ func (s *Server) ListDrift(c echo.Context) error {
 // @Router /stacks/{stack}/reconcile [post]
 func (s *Server) ForceReconcile(c echo.Context) error {
 	stackLabel := c.Param("stack")
-	result, err := s.metastructure.ForceAutoReconcile(stackLabel)
+	subject, subjectName := subjectFromContext(c)
+	result, err := s.metastructure.ForceAutoReconcile(stackLabel, subject, subjectName)
 	if err != nil {
 		return mapError(c, err)
 	}
@@ -694,8 +713,8 @@ func (s *Server) ForceReap(c echo.Context) error {
 }
 
 // getCommandStatus is a helper to retrieve command status and handle common error/status logic
-func (s *Server) getCommandStatus(c echo.Context, clientID, query string, n int) error {
-	result, err := s.metastructure.ListFormaCommandStatus(query, clientID, n)
+func (s *Server) getCommandStatus(c echo.Context, clientID, query string, n int, scope apimodel.CommandScope) error {
+	result, err := s.metastructure.ListFormaCommandStatus(query, clientID, n, scope)
 	if err != nil {
 		return mapError(c, err)
 	}

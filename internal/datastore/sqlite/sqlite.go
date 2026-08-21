@@ -180,12 +180,12 @@ func (d DatastoreSQLite) StoreFormaCommand(fa *forma_command.FormaCommand, comma
 	query := fmt.Sprintf(`INSERT OR REPLACE INTO %s
 		(command_id, timestamp, command, state, agent_version, client_id, agent_id,
 		 description_text, description_confirm, config_mode, config_force, config_simulate,
-		 target_updates, stack_updates, policy_updates, modified_ts, source)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, datastore.CommandsTable)
+		 target_updates, stack_updates, policy_updates, modified_ts, source, subject, subject_name)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, datastore.CommandsTable)
 
 	_, err = d.conn.Exec(query, commandID, startTsUTC, fa.Command, fa.State, formae.Version, fa.ClientID, d.agentID,
 		fa.Description.Text, descriptionConfirm, fa.Config.Mode, configForce, configSimulate,
-		targetUpdatesJSON, stackUpdatesJSON, policyUpdatesJSON, modifiedTsUTC, string(fa.Source))
+		targetUpdatesJSON, stackUpdatesJSON, policyUpdatesJSON, modifiedTsUTC, string(fa.Source), fa.Subject, fa.SubjectName)
 	if err != nil {
 		slog.Error("Query", "query", query, "error", err)
 		return err
@@ -210,7 +210,7 @@ const formaCommandWithResourceUpdatesQueryBase = `
 SELECT
 	fc.command_id, fc.timestamp, fc.command, fc.state, fc.client_id,
 	fc.description_text, fc.description_confirm, fc.config_mode, fc.config_force, fc.config_simulate,
-	fc.target_updates, fc.stack_updates, fc.policy_updates, fc.modified_ts, fc.source,
+	fc.target_updates, fc.stack_updates, fc.policy_updates, fc.modified_ts, fc.source, fc.subject, fc.subject_name,
 	ru.ksuid, ru.operation, ru.state, ru.start_ts, ru.modified_ts,
 	ru.retries, ru.remaining, ru.version, ru.stack_label, ru.group_id, ru.source,
 	ru.resource, ru.resource_target, ru.existing_resource, ru.existing_target,
@@ -238,6 +238,7 @@ func scanJoinedRow(rows *sql.Rows) (*forma_command.FormaCommand, *resource_updat
 	var policyUpdatesJSON []byte
 	var fcModifiedTs sql.NullString
 	var fcSource sql.NullString
+	var fcSubject, fcSubjectName sql.NullString
 
 	// ResourceUpdate fields (all nullable due to LEFT JOIN)
 	var ruKsuid, ruOperation, ruState sql.NullString
@@ -254,7 +255,7 @@ func scanJoinedRow(rows *sql.Rows) (*forma_command.FormaCommand, *resource_updat
 		// FormaCommand columns
 		&commandID, &fcTimestamp, &command, &fcState, &clientID,
 		&descriptionText, &descriptionConfirm, &configMode, &configForce, &configSimulate,
-		&targetUpdatesJSON, &stackUpdatesJSON, &policyUpdatesJSON, &fcModifiedTs, &fcSource,
+		&targetUpdatesJSON, &stackUpdatesJSON, &policyUpdatesJSON, &fcModifiedTs, &fcSource, &fcSubject, &fcSubjectName,
 		// ResourceUpdate columns
 		&ruKsuid, &ruOperation, &ruState, &ruStartTs, &ruModifiedTs,
 		&ruRetries, &ruRemaining, &ruVersion, &ruStackLabel, &ruGroupID, &ruSource,
@@ -289,6 +290,12 @@ func scanJoinedRow(rows *sql.Rows) (*forma_command.FormaCommand, *resource_updat
 	cmd.Config.Simulate = configSimulate.Valid && configSimulate.Int64 == 1
 	if fcSource.Valid {
 		cmd.Source = forma_command.Source(fcSource.String)
+	}
+	if fcSubject.Valid {
+		cmd.Subject = fcSubject.String
+	}
+	if fcSubjectName.Valid {
+		cmd.SubjectName = fcSubjectName.String
 	}
 
 	// Parse timestamp - convert to UTC
@@ -535,7 +542,7 @@ func (d DatastoreSQLite) GetMostRecentFormaCommandByClientID(clientID string) (*
 		SELECT
 			fc.command_id, fc.timestamp, fc.command, fc.state, fc.client_id,
 			fc.description_text, fc.description_confirm, fc.config_mode, fc.config_force, fc.config_simulate,
-			fc.target_updates, fc.stack_updates, fc.policy_updates, fc.modified_ts, fc.source,
+			fc.target_updates, fc.stack_updates, fc.policy_updates, fc.modified_ts, fc.source, fc.subject, fc.subject_name,
 			ru.ksuid, ru.operation, ru.state, ru.start_ts, ru.modified_ts,
 			ru.retries, ru.remaining, ru.version, ru.stack_label, ru.group_id, ru.source,
 			ru.resource, ru.resource_target, ru.existing_resource, ru.existing_target,
@@ -546,7 +553,7 @@ func (d DatastoreSQLite) GetMostRecentFormaCommandByClientID(clientID string) (*
 		LEFT JOIN resource_updates ru ON fc.command_id = ru.command_id
 		WHERE fc.command_id = (
 			SELECT command_id FROM forma_commands
-			WHERE client_id = ?
+			WHERE client_id = ? AND source = 'user'
 			ORDER BY timestamp DESC
 			LIMIT 1
 		)
@@ -561,7 +568,7 @@ func (d DatastoreSQLite) GetMostRecentFormaCommandByClientID(clientID string) (*
 		return nil, err
 	}
 	if len(commands) == 0 {
-		return nil, fmt.Errorf("no forma commands found for client: %v", clientID)
+		return nil, nil
 	}
 	return commands[0], nil
 }
@@ -890,9 +897,7 @@ func (d DatastoreSQLite) QueryFormaCommands(query *datastore.StatusQuery) ([]*fo
 	subqueryStr = extendSQLiteQueryString(subqueryStr, query.CommandID, " AND command_id %s ?{esc}", &args)
 	subqueryStr = extendSQLiteQueryString(subqueryStr, query.ClientID, " AND client_id %s ?{esc}", &args)
 	subqueryStr = extendSQLiteQueryString(subqueryStr, query.Command, " AND LOWER(command) %s LOWER(?){esc}", &args)
-	if query.Command == nil {
-		subqueryStr += fmt.Sprintf(" AND command != '%s'", pkgmodel.CommandSync)
-	}
+	subqueryStr = extendSQLiteQueryString(subqueryStr, query.Source, " AND source %s ?{esc}", &args)
 
 	// Stack filter uses the normalized resource_updates table
 	subqueryStr = extendSQLiteQueryString(subqueryStr, query.Stack, " AND EXISTS (SELECT 1 FROM resource_updates ru WHERE ru.command_id = forma_commands.command_id AND ru.stack_label %s ?{esc})", &args)
@@ -911,7 +916,7 @@ func (d DatastoreSQLite) QueryFormaCommands(query *datastore.StatusQuery) ([]*fo
 		SELECT
 			fc.command_id, fc.timestamp, fc.command, fc.state, fc.client_id,
 			fc.description_text, fc.description_confirm, fc.config_mode, fc.config_force, fc.config_simulate,
-			fc.target_updates, fc.stack_updates, fc.policy_updates, fc.modified_ts, fc.source,
+			fc.target_updates, fc.stack_updates, fc.policy_updates, fc.modified_ts, fc.source, fc.subject, fc.subject_name,
 			ru.ksuid, ru.operation, ru.state, ru.start_ts, ru.modified_ts,
 			ru.retries, ru.remaining, ru.version, ru.stack_label, ru.group_id, ru.source,
 			ru.resource, ru.resource_target, ru.existing_resource, ru.existing_target,
@@ -1233,7 +1238,7 @@ func (d DatastoreSQLite) LoadResource(uri pkgmodel.FormaeURI) (*pkgmodel.Resourc
 	defer span.End()
 
 	query := `
-	SELECT data, ksuid
+	SELECT data, ksuid, version
 	FROM resources
 	WHERE uri = ?
 	AND operation != ? AND operation != 'reaped'
@@ -1244,7 +1249,8 @@ func (d DatastoreSQLite) LoadResource(uri pkgmodel.FormaeURI) (*pkgmodel.Resourc
 
 	var jsonData string
 	var ksuid string
-	if err := row.Scan(&jsonData, &ksuid); err != nil {
+	var version string
+	if err := row.Scan(&jsonData, &ksuid, &version); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil // Resource not found, return nil without error
 		}
@@ -1257,6 +1263,7 @@ func (d DatastoreSQLite) LoadResource(uri pkgmodel.FormaeURI) (*pkgmodel.Resourc
 	}
 
 	loadedResource.Ksuid = ksuid
+	loadedResource.Version = version
 
 	return &loadedResource, nil
 }
@@ -1488,7 +1495,7 @@ func (d DatastoreSQLite) LoadAllResourcesByStack() (map[string][]*pkgmodel.Resou
 	defer span.End()
 
 	query := `
-	SELECT data, ksuid
+	SELECT data, ksuid, version
 	FROM resources r1
 	WHERE NOT EXISTS (
 	SELECT 1
@@ -1507,8 +1514,8 @@ func (d DatastoreSQLite) LoadAllResourcesByStack() (map[string][]*pkgmodel.Resou
 
 	var allResources []*pkgmodel.Resource
 	for rows.Next() {
-		var jsonData, ksuid string
-		if err := rows.Scan(&jsonData, &ksuid); err != nil {
+		var jsonData, ksuid, version string
+		if err := rows.Scan(&jsonData, &ksuid, &version); err != nil {
 			return nil, err
 		}
 
@@ -1518,6 +1525,7 @@ func (d DatastoreSQLite) LoadAllResourcesByStack() (map[string][]*pkgmodel.Resou
 		}
 
 		resource.Ksuid = ksuid
+		resource.Version = version
 		allResources = append(allResources, &resource)
 	}
 
@@ -1542,7 +1550,7 @@ func (d DatastoreSQLite) LoadResourcesByStack(stackLabel string) ([]*pkgmodel.Re
 	defer span.End()
 
 	query := `
-	SELECT data, ksuid
+	SELECT data, ksuid, version
 	FROM resources r1
 	WHERE stack = ?
 	AND NOT EXISTS (
@@ -1562,8 +1570,8 @@ func (d DatastoreSQLite) LoadResourcesByStack(stackLabel string) ([]*pkgmodel.Re
 
 	var resources []*pkgmodel.Resource
 	for rows.Next() {
-		var jsonData, ksuid string
-		if err := rows.Scan(&jsonData, &ksuid); err != nil {
+		var jsonData, ksuid, version string
+		if err := rows.Scan(&jsonData, &ksuid, &version); err != nil {
 			return nil, err
 		}
 
@@ -1573,6 +1581,7 @@ func (d DatastoreSQLite) LoadResourcesByStack(stackLabel string) ([]*pkgmodel.Re
 		}
 
 		resource.Ksuid = ksuid
+		resource.Version = version
 		resources = append(resources, &resource)
 	}
 
@@ -5344,3 +5353,33 @@ func (d DatastoreSQLite) CleanUp() error {
 // Conn returns the underlying database connection. Used by test helpers that
 // need direct SQL access (e.g. forcing health_state for guard assertions).
 func (d DatastoreSQLite) Conn() *sql.DB { return d.conn }
+
+// RecordAgentBoot appends one agent_boots row for this process start.
+// agentBootTimestampLayout is RFC 3339 with a fixed-width nanosecond fraction.
+// SQLite stores booted_at as text and the reader orders by it, so the format
+// has to sort lexicographically in chronological order. time.RFC3339Nano does
+// not qualify: it strips trailing zeros, so ".5Z" compares greater than the
+// later ".500000001Z".
+const agentBootTimestampLayout = "2006-01-02T15:04:05.000000000Z07:00"
+
+// agentBootTimestamp renders a boot time for storage and comparison in SQLite.
+func agentBootTimestamp(t time.Time) string {
+	return t.UTC().Format(agentBootTimestampLayout)
+}
+
+func (d DatastoreSQLite) RecordAgentBoot(version string) error {
+	ctx, cancel := datastore.AgentBootContext(d.ctx)
+	defer cancel()
+	ctx, span := sqliteTracer.Start(ctx, "RecordAgentBoot")
+	defer span.End()
+
+	_, err := d.conn.ExecContext(
+		ctx,
+		`INSERT INTO agent_boots (boot_id, version, booted_at) VALUES (?, ?, ?)`,
+		mksuid.New().String(), version, agentBootTimestamp(time.Now().UTC()),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to record agent boot: %w", err)
+	}
+	return nil
+}

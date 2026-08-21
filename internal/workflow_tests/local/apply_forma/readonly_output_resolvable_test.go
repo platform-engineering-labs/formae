@@ -117,7 +117,7 @@ func TestMetastructure_ReconcileResolvesReadOnlyOutputReference(t *testing.T) {
 
 		m.ApplyForma(forma, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test")
+		}, "test", "", "")
 
 		var bucketUpdate resource_update.ResourceUpdate
 		require.Eventually(t, func() bool {

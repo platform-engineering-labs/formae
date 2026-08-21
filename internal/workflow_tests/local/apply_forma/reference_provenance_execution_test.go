@@ -147,7 +147,7 @@ func TestApplyForma_UnchangedReference_IsAbsentFromTheExecutedPatch(t *testing.T
 
 		_, err = m.ApplyForma(formaFor("note-v1"), &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test")
+		}, "test", "", "")
 		require.NoError(t, err)
 		require.Eventually(t, func() bool {
 			fas, _ := m.Datastore.LoadFormaCommands()
@@ -164,7 +164,7 @@ func TestApplyForma_UnchangedReference_IsAbsentFromTheExecutedPatch(t *testing.T
 		simResp, err := m.ApplyForma(v2, &config.FormaCommandConfig{
 			Mode:     pkgmodel.FormaApplyModeReconcile,
 			Simulate: true,
-		}, "test")
+		}, "test", "", "")
 		require.NoError(t, err)
 		require.True(t, simResp.Simulation.ChangesRequired, "changing the note should produce a change")
 		var plannedPatch string
@@ -179,7 +179,7 @@ func TestApplyForma_UnchangedReference_IsAbsentFromTheExecutedPatch(t *testing.T
 
 		_, err = m.ApplyForma(v2, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test")
+		}, "test", "", "")
 		require.NoError(t, err)
 		require.Eventually(t, func() bool {
 			fas, _ := m.Datastore.LoadFormaCommands()

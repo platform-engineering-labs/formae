@@ -6,8 +6,10 @@ package model
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/url"
+	"regexp"
 	"time"
 )
 
@@ -192,10 +194,11 @@ type StackExpirerConfig struct {
 }
 
 type TailscaleConfig struct {
-	TLS           bool
-	AuthKey       string
-	Hostname      string
-	AdvertiseTags []string
+	TLS             bool
+	AuthKey         string
+	Hostname        string
+	AdvertiseTags   []string
+	EgressProxyPort int
 }
 
 type NetworkConfig struct {
@@ -206,6 +209,22 @@ type NetworkConfig struct {
 	// When set, the server passes this directly to the network registry instead
 	// of marshaling the typed Tailscale config.
 	LegacyRawJSON json.RawMessage `json:"-"`
+}
+
+// PluginConfigJSON returns the JSON to hand the network plugin: the legacy
+// raw JSON if present (from the deprecated plugins.network config), otherwise
+// the typed Tailscale config marshaled to JSON.
+func (c *NetworkConfig) PluginConfigJSON() ([]byte, error) {
+	if len(c.LegacyRawJSON) > 0 {
+		return c.LegacyRawJSON, nil
+	}
+
+	configJSON, err := json.Marshal(c.Tailscale)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal network config: %w", err)
+	}
+
+	return configJSON, nil
 }
 
 // ResourcePluginUserConfig holds per-plugin configuration from the user's
@@ -234,10 +253,57 @@ type AgentConfig struct {
 	ResourcePlugins []ResourcePluginUserConfig
 }
 
-type APIConfig struct {
+// Connection is where the CLI sends commands. It has exactly two arms, so a
+// configuration cannot be both classic and hosted, and a hosted connection
+// cannot exist without the installation it addresses.
+type Connection interface {
+	isConnection()
+}
+
+// installationRE is the routing-key grammar: 27 base62 characters, case
+// sensitive, which is the text form of a KSUID.
+var installationRE = regexp.MustCompile(`^[0-9A-Za-z]{27}$`)
+
+// ValidInstallationID reports whether id is well formed as an installation
+// identifier.
+//
+// This is a shape check and deliberately not a decode. 27 base62 digits span a
+// wider range than the 160 bits a KSUID encodes, so a few strings this accepts
+// would fail a KSUID parser. Refusing them here would make this client
+// stricter than the edge that does the routing, which validates the same
+// grammar: we would then refuse an identifier the router would have accepted,
+// and gain nothing, because nothing mints an identifier that cannot be
+// decoded. A value that is well formed but not routable is a 404 from the
+// edge, which says so far more usefully than a local guess would.
+//
+// One definition, exported, because this grammar had four copies in four
+// repositories and a format change reached only some of them: the edge routed
+// on the new shape while three validators still refused it, which made a real
+// installation unaddressable from either end.
+func ValidInstallationID(id string) bool { return installationRE.MatchString(id) }
+
+// ClassicConnection addresses a self-hosted agent.
+type ClassicConnection struct {
 	URL  string
 	Port int
+	// Auth is the opaque per-plugin auth configuration, nil when the agent
+	// needs no credential.
+	Auth json.RawMessage
 }
+
+func (*ClassicConnection) isConnection() {}
+
+// HostedConnection addresses one installation behind the hosted endpoint.
+// Endpoint is a canonical https origin and Installation a canonical KSUID:
+// both are validated when the configuration is loaded, so consumers can use
+// them directly.
+type HostedConnection struct {
+	Endpoint     string
+	Installation string
+	Auth         json.RawMessage
+}
+
+func (*HostedConnection) isConnection() {}
 
 // RepositoryType discriminates orbital repositories by purpose.
 type RepositoryType string
@@ -263,11 +329,23 @@ type ArtifactConfig struct {
 }
 
 type CliConfig struct {
-	API                   APIConfig
+	Connection Connection
+
 	DisableUsageReporting bool
-	Auth                  json.RawMessage
 	Theme                 string
 	Appearance            string
+}
+
+// AuthConfig returns the auth plugin configuration carried by the connection,
+// or nil when the profile configures no auth plugin.
+func (c CliConfig) AuthConfig() json.RawMessage {
+	switch conn := c.Connection.(type) {
+	case *ClassicConnection:
+		return conn.Auth
+	case *HostedConnection:
+		return conn.Auth
+	}
+	return nil
 }
 
 type Config struct {

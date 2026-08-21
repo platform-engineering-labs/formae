@@ -68,7 +68,7 @@ func TestMetastructure_StoreNewStack(t *testing.T) {
 
 		m.ApplyForma(formaInitial, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test")
+		}, "test", "", "")
 
 		require.Eventually(t, func() bool {
 			fas, _ := m.Datastore.LoadFormaCommands()
@@ -161,7 +161,7 @@ func TestMetastructure_StorePatchStack(t *testing.T) {
 
 		m.ApplyForma(formaInitial, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test")
+		}, "test", "", "")
 
 		require.Eventually(t, func() bool {
 			fas, _ := m.Datastore.LoadFormaCommands()
@@ -196,7 +196,7 @@ func TestMetastructure_StorePatchStack(t *testing.T) {
 
 		m.ApplyForma(formaPatch, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModePatch,
-		}, "test")
+		}, "test", "", "")
 
 		require.Eventually(t, func() bool {
 			fas, _ := m.Datastore.LoadFormaCommands()
@@ -278,7 +278,7 @@ func TestMetastructure_StorePatchAddResourceToStack(t *testing.T) {
 
 		m.ApplyForma(formaInitial, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test")
+		}, "test", "", "")
 
 		time.Sleep(2 * time.Second)
 
@@ -304,7 +304,7 @@ func TestMetastructure_StorePatchAddResourceToStack(t *testing.T) {
 
 		m.ApplyForma(formaPatch, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModePatch,
-		}, "test")
+		}, "test", "", "")
 
 		time.Sleep(2 * time.Second)
 
@@ -357,7 +357,7 @@ func TestMetastructure_StackForApplyImplicitReplaceModeWithRemoveOfOneResource(t
 
 		formaCommand, _ := FormaCommandFromForma(forma, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, pkgmodel.CommandApply, m.Datastore, "test", resource_update.FormaCommandSourceUser, m.Cfg.Agent.Synchronization.Interval)
+		}, pkgmodel.CommandApply, m.Datastore, "test", "", "", resource_update.FormaCommandSourceUser, m.Cfg.Agent.Synchronization.Interval)
 
 		assert.Equal(t, formaCommand.ResourceUpdates[0].State, forma_command.CommandStateNotStarted)
 
@@ -406,7 +406,7 @@ func TestMetastructure_StackForApplyImplicitReplaceModeWithRenameLabelOfResource
 
 		formaCommand, _ := FormaCommandFromForma(forma, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, pkgmodel.CommandApply, m.Datastore, "test", resource_update.FormaCommandSourceUser, m.Cfg.Agent.Synchronization.Interval)
+		}, pkgmodel.CommandApply, m.Datastore, "test", "", "", resource_update.FormaCommandSourceUser, m.Cfg.Agent.Synchronization.Interval)
 
 		assert.Equal(t, formaCommand.ResourceUpdates[0].State, resource_update.ResourceUpdateStateNotStarted)
 
@@ -444,7 +444,7 @@ func TestMetastructure_StackOnlyForma_RejectsEmptyStackCreation(t *testing.T) {
 
 		_, err = m.ApplyForma(stackOnlyForma, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModePatch,
-		}, "test-client")
+		}, "test-client", "", "")
 
 		// Should be rejected with FormaEmptyStackRejectedError
 		require.Error(t, err)
@@ -482,7 +482,7 @@ func TestMetastructure_StackOnlyForma_RejectsEmptyStackCreation_ReconcileMode(t 
 
 		_, err = m.ApplyForma(stackOnlyForma, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test-client")
+		}, "test-client", "", "")
 
 		// Should be rejected with FormaEmptyStackRejectedError
 		require.Error(t, err)
@@ -538,7 +538,7 @@ func TestMetastructure_StackOnlyForma_UpdateDescription(t *testing.T) {
 
 		m.ApplyForma(initialForma, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test-client")
+		}, "test-client", "", "")
 
 		// Wait for initial apply to complete
 		require.Eventually(t, func() bool {
@@ -571,7 +571,7 @@ func TestMetastructure_StackOnlyForma_UpdateDescription(t *testing.T) {
 
 		m.ApplyForma(updateForma, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModePatch,
-		}, "test-client-2")
+		}, "test-client-2", "", "")
 
 		// The update command should complete with Success state
 		require.Eventually(t, func() bool {

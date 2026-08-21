@@ -9,6 +9,7 @@ package resource_persister
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -2198,4 +2199,520 @@ func TestResourcePersister_DetachNotifiesAutoReconcilerWhenNoPolicyRemains(t *te
 		Message(messages.PolicyRemoved{StackLabel: stack.Label}).
 		Once().
 		Assert()
+}
+
+// persistCreateForTest stores a resource through the persister the way a
+// successful create does, so a test can seed the record at a given NativeID.
+func persistCreateForTest(t *testing.T, persister *unit.TestActor, sender gen.PID, res pkgmodel.Resource, commandID string) {
+	t.Helper()
+
+	result := persister.Call(sender, resource_update.PersistResourceUpdate{
+		CommandID:         commandID,
+		ResourceOperation: resource_update.OperationCreate,
+		PluginOperation:   resource.OperationCreate,
+		ResourceUpdate: resource_update.ResourceUpdate{
+			DesiredState:   res,
+			ResourceTarget: pkgmodel.Target{Label: "test-target", Namespace: "test-namespace"},
+			State:          resource_update.ResourceUpdateStateSuccess,
+			StackLabel:     res.Stack,
+			ProgressResult: []plugin.TrackedProgress{
+				{
+					ProgressResult: resource.ProgressResult{
+						Operation:          resource.OperationCreate,
+						OperationStatus:    resource.OperationStatusSuccess,
+						NativeID:           res.NativeID,
+						ResourceProperties: res.Properties,
+					},
+					ResourceType: res.Type,
+					StartTs:      util.TimeNow(),
+					ModifiedTs:   util.TimeNow(),
+					Attempts:     1,
+				},
+			},
+		},
+	})
+	require.NoError(t, result.Error)
+}
+
+// syncReadNotFoundForTest builds the ResourceUpdate a sync cycle produces for a
+// resource whose Read came back NotFound. generatedFrom is the record as it
+// stood when the sync planned the read; probedNativeID is the id the Read
+// actually asked the plugin about, which the ResourceUpdater copies onto
+// DesiredState from the progress before the persist call.
+func syncReadNotFoundForTest(generatedFrom pkgmodel.Resource, probedNativeID string) resource_update.ResourceUpdate {
+	desired := generatedFrom
+	desired.NativeID = probedNativeID
+
+	return resource_update.ResourceUpdate{
+		PriorState:         generatedFrom,
+		DesiredState:       desired,
+		ResourceTarget:     pkgmodel.Target{Label: "test-target", Namespace: "test-namespace"},
+		Operation:          resource_update.OperationRead,
+		State:              resource_update.ResourceUpdateStateSuccess,
+		Source:             resource_update.FormaCommandSourceSynchronize,
+		StackLabel:         generatedFrom.Stack,
+		PreviousProperties: generatedFrom.Properties,
+		ProgressResult: []plugin.TrackedProgress{
+			{
+				ProgressResult: resource.ProgressResult{
+					Operation:       resource.OperationRead,
+					OperationStatus: resource.OperationStatusSuccess,
+					ErrorCode:       resource.OperationErrorCodeNotFound,
+					NativeID:        probedNativeID,
+				},
+				ResourceType: generatedFrom.Type,
+				StartTs:      util.TimeNow(),
+				ModifiedTs:   util.TimeNow(),
+				Attempts:     1,
+			},
+		},
+	}
+}
+
+func TestResourcePersister_StaleSyncReadDoesNotDeleteMovedRecord(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+
+	ksuid := util.NewID()
+
+	// The record as the sync cycle saw it when it planned its read.
+	atRevision4 := pkgmodel.Resource{
+		Label:      "task-def",
+		Type:       "FakeAWS::ECS::TaskDefinition",
+		Stack:      "test-stack",
+		Ksuid:      ksuid,
+		Managed:    true,
+		NativeID:   "arn:task-definition/app:4",
+		Properties: json.RawMessage(`{"memory":"512"}`),
+	}
+	persistCreateForTest(t, persister, sender, atRevision4, "cmd-plan")
+
+	// The snapshot the sync plans from, taken off the stored record the way
+	// the generator takes it.
+	generatedFrom, err := ds.LoadResource(atRevision4.URI())
+	require.NoError(t, err)
+	require.NotNil(t, generatedFrom)
+
+	// An apply replaces the resource; the record now points at :5 and the
+	// cloud has deregistered :4.
+	atRevision5 := atRevision4
+	atRevision5.NativeID = "arn:task-definition/app:5"
+	atRevision5.Properties = json.RawMessage(`{"memory":"1024"}`)
+	persistCreateForTest(t, persister, sender, atRevision5, "cmd-apply")
+
+	// The sync's queued read finally runs, against the deregistered :4.
+	result := persister.Call(sender, resource_update.PersistResourceUpdate{
+		CommandID:         "cmd-sync",
+		ResourceOperation: resource_update.OperationRead,
+		PluginOperation:   resource.OperationRead,
+		ResourceUpdate:    syncReadNotFoundForTest(*generatedFrom, "arn:task-definition/app:4"),
+	})
+	require.NoError(t, result.Error)
+
+	resources, err := ds.LoadResourcesByStack("test-stack")
+	require.NoError(t, err)
+	require.Len(t, resources, 1, "a NotFound read of an identity the record has moved past must not delete it")
+	assert.Equal(t, "arn:task-definition/app:5", resources[0].NativeID)
+}
+
+func TestResourcePersister_SyncReadNotFoundDeletesUnchangedRecord(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+
+	current := pkgmodel.Resource{
+		Label:      "task-def",
+		Type:       "FakeAWS::ECS::TaskDefinition",
+		Stack:      "test-stack",
+		Ksuid:      util.NewID(),
+		Managed:    true,
+		NativeID:   "arn:task-definition/app:5",
+		Properties: json.RawMessage(`{"memory":"1024"}`),
+	}
+	persistCreateForTest(t, persister, sender, current, "cmd-apply")
+
+	generatedFrom, err := ds.LoadResource(current.URI())
+	require.NoError(t, err)
+	require.NotNil(t, generatedFrom)
+
+	// The resource was deleted out of band: the sync planned against the
+	// current record, nothing has rewritten it since, and its read of that
+	// same identity came back NotFound.
+	result := persister.Call(sender, resource_update.PersistResourceUpdate{
+		CommandID:         "cmd-sync",
+		ResourceOperation: resource_update.OperationRead,
+		PluginOperation:   resource.OperationRead,
+		ResourceUpdate:    syncReadNotFoundForTest(*generatedFrom, "arn:task-definition/app:5"),
+	})
+	require.NoError(t, result.Error)
+
+	resources, err := ds.LoadResourcesByStack("test-stack")
+	require.NoError(t, err)
+	assert.Empty(t, resources, "an out-of-band delete must still be absorbed")
+}
+
+func TestResourcePersister_StaleSyncReadDoesNotDeleteRecordChangedUnderSameNativeID(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+
+	// A resource whose identity is a stable name, so a replace recreates it
+	// under the same NativeID.
+	asPlanned := pkgmodel.Resource{
+		Label:      "assets-bucket",
+		Type:       "FakeAWS::S3::Bucket",
+		Stack:      "test-stack",
+		Ksuid:      util.NewID(),
+		Managed:    true,
+		NativeID:   "assets-bucket",
+		Properties: json.RawMessage(`{"versioning":"Suspended"}`),
+	}
+	persistCreateForTest(t, persister, sender, asPlanned, "cmd-plan")
+
+	generatedFrom, err := ds.LoadResource(asPlanned.URI())
+	require.NoError(t, err)
+	require.NotNil(t, generatedFrom)
+
+	// An apply rewrites the record under that same identity.
+	rewritten := asPlanned
+	rewritten.Properties = json.RawMessage(`{"versioning":"Enabled"}`)
+	persistCreateForTest(t, persister, sender, rewritten, "cmd-apply")
+
+	// The sync's queued read runs against the snapshot it planned from.
+	result := persister.Call(sender, resource_update.PersistResourceUpdate{
+		CommandID:         "cmd-sync",
+		ResourceOperation: resource_update.OperationRead,
+		PluginOperation:   resource.OperationRead,
+		ResourceUpdate:    syncReadNotFoundForTest(*generatedFrom, "assets-bucket"),
+	})
+	require.NoError(t, result.Error)
+
+	resources, err := ds.LoadResourcesByStack("test-stack")
+	require.NoError(t, err)
+	require.Len(t, resources, 1, "a NotFound read must not delete a record rewritten since the read was planned")
+}
+
+// persistDeleteForTest tombstones a resource through the persister the way a
+// successful cloud delete does.
+func persistDeleteForTest(t *testing.T, persister *unit.TestActor, sender gen.PID, res pkgmodel.Resource, commandID string) {
+	t.Helper()
+
+	result := persister.Call(sender, resource_update.PersistResourceUpdate{
+		CommandID:         commandID,
+		ResourceOperation: resource_update.OperationDelete,
+		PluginOperation:   resource.OperationDelete,
+		ResourceUpdate: resource_update.ResourceUpdate{
+			DesiredState:   res,
+			ResourceTarget: pkgmodel.Target{Label: "test-target", Namespace: "test-namespace"},
+			State:          resource_update.ResourceUpdateStateSuccess,
+			StackLabel:     res.Stack,
+			ProgressResult: []plugin.TrackedProgress{
+				{
+					ProgressResult: resource.ProgressResult{
+						Operation:       resource.OperationDelete,
+						OperationStatus: resource.OperationStatusSuccess,
+						NativeID:        res.NativeID,
+					},
+					ResourceType: res.Type,
+					StartTs:      util.TimeNow(),
+					ModifiedTs:   util.TimeNow(),
+					Attempts:     1,
+				},
+			},
+		},
+	})
+	require.NoError(t, result.Error)
+}
+
+func TestResourcePersister_StaleSyncReadDoesNotDeleteContentIdenticalRecreation(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+
+	// A resource whose identity is a stable name, so a replace recreates it
+	// under the same NativeID with byte-identical stored properties.
+	res := pkgmodel.Resource{
+		Label:      "assets-bucket",
+		Type:       "FakeAWS::S3::Bucket",
+		Stack:      "test-stack",
+		Ksuid:      util.NewID(),
+		Managed:    true,
+		NativeID:   "assets-bucket",
+		Properties: json.RawMessage(`{"versioning":"Enabled"}`),
+	}
+	persistCreateForTest(t, persister, sender, res, "cmd-initial")
+
+	// The snapshot the sync cycle plans from, taken through the same loader
+	// the sync generator uses (LoadResourcesByStack), not a more convenient
+	// one — the guard is only real if it works on that path.
+	byStack, err := ds.LoadResourcesByStack("test-stack")
+	require.NoError(t, err)
+	require.Len(t, byStack, 1)
+	generatedFrom := byStack[0]
+	require.NotEmpty(t, generatedFrom.Version, "the sync generator's loader must supply the row version")
+
+	// A target-driven replace destroys and recreates the resource with
+	// identical content, so neither the identity nor the properties change.
+	persistDeleteForTest(t, persister, sender, res, "cmd-replace")
+	persistCreateForTest(t, persister, sender, res, "cmd-replace")
+
+	result := persister.Call(sender, resource_update.PersistResourceUpdate{
+		CommandID:         "cmd-sync",
+		ResourceOperation: resource_update.OperationRead,
+		PluginOperation:   resource.OperationRead,
+		ResourceUpdate:    syncReadNotFoundForTest(*generatedFrom, "assets-bucket"),
+	})
+	require.NoError(t, result.Error)
+
+	resources, err := ds.LoadResourcesByStack("test-stack")
+	require.NoError(t, err)
+	require.Len(t, resources, 1, "a NotFound read must not delete a record recreated since the read was planned, even when the recreation is content-identical")
+}
+
+func TestResourcePersister_StaleSyncReadDoesNotDeleteWhenSnapshotVersionIsUnknown(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+
+	atRevision4 := pkgmodel.Resource{
+		Label:      "task-def",
+		Type:       "FakeAWS::ECS::TaskDefinition",
+		Stack:      "test-stack",
+		Ksuid:      util.NewID(),
+		Managed:    true,
+		NativeID:   "arn:task-definition/app:4",
+		Properties: json.RawMessage(`{"memory":"512"}`),
+	}
+	persistCreateForTest(t, persister, sender, atRevision4, "cmd-plan")
+
+	atRevision5 := atRevision4
+	atRevision5.NativeID = "arn:task-definition/app:5"
+	persistCreateForTest(t, persister, sender, atRevision5, "cmd-apply")
+
+	// A command resumed after an agent restart rebuilds its updates from the
+	// serialized snapshot, which does not carry the row version. The guard
+	// cannot tell whether the record moved, and must not gamble on it.
+	resumed := syncReadNotFoundForTest(atRevision4, "arn:task-definition/app:4")
+	require.Empty(t, resumed.PriorState.Version)
+
+	result := persister.Call(sender, resource_update.PersistResourceUpdate{
+		CommandID:         "cmd-sync-resumed",
+		ResourceOperation: resource_update.OperationRead,
+		PluginOperation:   resource.OperationRead,
+		ResourceUpdate:    resumed,
+	})
+	require.NoError(t, result.Error)
+
+	resources, err := ds.LoadResourcesByStack("test-stack")
+	require.NoError(t, err)
+	require.Len(t, resources, 1, "an unknown snapshot version must not be read as unchanged")
+}
+
+// loadResourceFlakyDatastore fails the next LoadResource for one URI a single
+// time and serves every other call from the real datastore, reproducing a
+// transient lookup failure.
+type loadResourceFlakyDatastore struct {
+	datastore.Datastore
+	failURI pkgmodel.FormaeURI
+	armed   bool
+	// hide makes the single armed call report the row as absent rather than
+	// failing, which is what a reaped row looks like to LoadResource.
+	hide bool
+}
+
+func (d *loadResourceFlakyDatastore) LoadResource(uri pkgmodel.FormaeURI) (*pkgmodel.Resource, error) {
+	if d.armed && uri == d.failURI {
+		d.armed = false
+		if d.hide {
+			return nil, nil
+		}
+		return nil, errors.New("transient datastore failure")
+	}
+	return d.Datastore.LoadResource(uri)
+}
+
+func TestResourcePersister_StaleSyncReadDoesNotDeleteAfterReadOnlyRewrite(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+
+	res := pkgmodel.Resource{
+		Label:              "task-def",
+		Type:               "FakeAWS::ECS::TaskDefinition",
+		Stack:              "test-stack",
+		Ksuid:              util.NewID(),
+		Managed:            true,
+		NativeID:           "arn:task-definition/app:4",
+		Properties:         json.RawMessage(`{"memory":"512"}`),
+		ReadOnlyProperties: json.RawMessage(`{"status":"ACTIVE"}`),
+	}
+	persistCreateForTest(t, persister, sender, res, "cmd-plan")
+
+	byStack, err := ds.LoadResourcesByStack("test-stack")
+	require.NoError(t, err)
+	require.Len(t, byStack, 1)
+	generatedFrom := byStack[0]
+	require.NotEmpty(t, generatedFrom.Version)
+
+	// Another command refreshes only read-only state. The datastore rewrites
+	// that row in place and deliberately reuses its version, so the version
+	// alone cannot witness this rewrite.
+	refreshed := res
+	refreshed.ReadOnlyProperties = json.RawMessage(`{"status":"INACTIVE"}`)
+	persistCreateForTest(t, persister, sender, refreshed, "cmd-refresh")
+
+	afterRefresh, err := ds.LoadResourcesByStack("test-stack")
+	require.NoError(t, err)
+	require.Len(t, afterRefresh, 1)
+	require.Equal(t, generatedFrom.Version, afterRefresh[0].Version,
+		"premise: a read-only-only rewrite reuses the row version")
+
+	result := persister.Call(sender, resource_update.PersistResourceUpdate{
+		CommandID:         "cmd-sync",
+		ResourceOperation: resource_update.OperationRead,
+		PluginOperation:   resource.OperationRead,
+		ResourceUpdate:    syncReadNotFoundForTest(*generatedFrom, "arn:task-definition/app:4"),
+	})
+	require.NoError(t, result.Error)
+
+	resources, err := ds.LoadResourcesByStack("test-stack")
+	require.NoError(t, err)
+	require.Len(t, resources, 1, "a record rewritten since the read was planned must survive, even when the rewrite reused the version")
+}
+
+func TestResourcePersister_DiscoveryReadNotFoundStillDeletesOrphanedRow(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+
+	orphan := pkgmodel.Resource{
+		Label:      "orphan",
+		Type:       "FakeAWS::S3::Bucket",
+		Stack:      "test-stack",
+		Ksuid:      util.NewID(),
+		Managed:    true,
+		NativeID:   "orphan-bucket",
+		Properties: json.RawMessage(`{"versioning":"Enabled"}`),
+	}
+	persistCreateForTest(t, persister, sender, orphan, "cmd-create")
+
+	// Discovery builds its updates straight from the forma rather than from a
+	// loaded row, so they carry no row version. The sentinel-target path relies
+	// on that NotFound to clean up a row whose target is gone, so an absent
+	// version must not be read as staleness here.
+	update := syncReadNotFoundForTest(orphan, "orphan-bucket")
+	update.Source = resource_update.FormaCommandSourceDiscovery
+	require.Empty(t, update.PriorState.Version)
+
+	result := persister.Call(sender, resource_update.PersistResourceUpdate{
+		CommandID:         "cmd-discovery",
+		ResourceOperation: resource_update.OperationRead,
+		PluginOperation:   resource.OperationRead,
+		ResourceUpdate:    update,
+	})
+	require.NoError(t, result.Error)
+
+	resources, err := ds.LoadResourcesByStack("test-stack")
+	require.NoError(t, err)
+	require.Empty(t, resources, "discovery must still be able to clean up an orphaned row")
+}
+
+func TestResourcePersister_StaleReadGuardFailsClosedWhenLiveRowIsHidden(t *testing.T) {
+	realDatastore, err := newTestDatastore()
+	require.NoError(t, err)
+
+	flaky := &loadResourceFlakyDatastore{Datastore: realDatastore, hide: true}
+	persister, sender, err := newResourcePersisterWithDatastore(t, flaky)
+	require.NoError(t, err)
+
+	res := pkgmodel.Resource{
+		Label:      "task-def",
+		Type:       "FakeAWS::ECS::TaskDefinition",
+		Stack:      "test-stack",
+		Ksuid:      util.NewID(),
+		Managed:    true,
+		NativeID:   "arn:task-definition/app:4",
+		Properties: json.RawMessage(`{"memory":"512"}`),
+	}
+	persistCreateForTest(t, persister, sender, res, "cmd-plan")
+
+	generatedFrom, err := realDatastore.LoadResource(res.URI())
+	require.NoError(t, err)
+	require.NotNil(t, generatedFrom)
+
+	// The staleness lookup sees no live row, as it would for a row hidden by
+	// reaping, while the delete path's own lookup still finds one. Without a
+	// guard the tombstone lands and shadows a row that recovery could have
+	// restored.
+	flaky.failURI = res.URI()
+	flaky.armed = true
+
+	result := persister.Call(sender, resource_update.PersistResourceUpdate{
+		CommandID:         "cmd-sync",
+		ResourceOperation: resource_update.OperationRead,
+		PluginOperation:   resource.OperationRead,
+		ResourceUpdate:    syncReadNotFoundForTest(*generatedFrom, "arn:task-definition/app:4"),
+	})
+	require.NoError(t, result.Error)
+
+	resources, err := realDatastore.LoadResourcesByStack("test-stack")
+	require.NoError(t, err)
+	require.Len(t, resources, 1, "a staleness lookup that finds no live row must not let the delete through")
+}
+
+func newResourcePersisterWithDatastore(t *testing.T, ds datastore.Datastore) (*unit.TestActor, gen.PID, error) {
+	env := map[gen.Env]any{
+		"Datastore": ds,
+		"DiscoveryConfig": pkgmodel.DiscoveryConfig{
+			Enabled:  true,
+			Interval: 10 * time.Minute,
+		},
+	}
+
+	actor, err := unit.Spawn(t, NewResourcePersister, unit.WithEnv(env))
+	if err != nil {
+		return nil, gen.PID{}, err
+	}
+
+	return actor, gen.PID{Node: "test", ID: 100}, nil
+}
+
+func TestResourcePersister_StaleReadGuardFailsClosedWhenLookupErrors(t *testing.T) {
+	realDatastore, err := newTestDatastore()
+	require.NoError(t, err)
+
+	flaky := &loadResourceFlakyDatastore{Datastore: realDatastore}
+	persister, sender, err := newResourcePersisterWithDatastore(t, flaky)
+	require.NoError(t, err)
+
+	atRevision4 := pkgmodel.Resource{
+		Label:      "task-def",
+		Type:       "FakeAWS::ECS::TaskDefinition",
+		Stack:      "test-stack",
+		Ksuid:      util.NewID(),
+		Managed:    true,
+		NativeID:   "arn:task-definition/app:4",
+		Properties: json.RawMessage(`{"memory":"512"}`),
+	}
+	persistCreateForTest(t, persister, sender, atRevision4, "cmd-plan")
+
+	generatedFrom, err := realDatastore.LoadResource(atRevision4.URI())
+	require.NoError(t, err)
+	require.NotNil(t, generatedFrom)
+
+	atRevision5 := atRevision4
+	atRevision5.NativeID = "arn:task-definition/app:5"
+	atRevision5.Properties = json.RawMessage(`{"memory":"1024"}`)
+	persistCreateForTest(t, persister, sender, atRevision5, "cmd-apply")
+
+	// Fail the staleness lookup only. The delete path's own lookup still
+	// succeeds, so nothing else stops the tombstone from landing.
+	flaky.failURI = atRevision4.URI()
+	flaky.armed = true
+
+	result := persister.Call(sender, resource_update.PersistResourceUpdate{
+		CommandID:         "cmd-sync",
+		ResourceOperation: resource_update.OperationRead,
+		PluginOperation:   resource.OperationRead,
+		ResourceUpdate:    syncReadNotFoundForTest(*generatedFrom, "arn:task-definition/app:4"),
+	})
+	require.NoError(t, result.Error)
+
+	resources, err := realDatastore.LoadResourcesByStack("test-stack")
+	require.NoError(t, err)
+	require.Len(t, resources, 1, "a staleness lookup that errors must not let the delete through")
 }

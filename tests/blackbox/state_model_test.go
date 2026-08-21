@@ -7,6 +7,7 @@
 package blackbox
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -150,7 +151,7 @@ func TestStateModel_Verify_HappyPath(t *testing.T) {
 		"native-1": {NativeID: "native-1", ResourceType: "Test::Generic::Resource", Properties: `{"Name":"a","Value":"v1"}`},
 	}
 
-	violations := CheckInvariants(inventory, cloudState, nil, nil)
+	violations := CheckInvariants(inventory, cloudState, nil)
 	assert.Empty(t, violations)
 }
 
@@ -161,7 +162,7 @@ func TestStateModel_Verify_PhantomResource(t *testing.T) {
 	}
 	cloudState := map[string]testcontrol.CloudStateEntry{}
 
-	violations := CheckInvariants(inventory, cloudState, nil, nil)
+	violations := CheckInvariants(inventory, cloudState, nil)
 	assert.NotEmpty(t, violations)
 
 	hasPhantom := false
@@ -180,7 +181,7 @@ func TestStateModel_Verify_OrphanedResource(t *testing.T) {
 		"native-0": {NativeID: "native-0", ResourceType: "Test::Generic::Resource"},
 	}
 
-	violations := CheckInvariants(inventory, cloudState, nil, nil)
+	violations := CheckInvariants(inventory, cloudState, nil)
 	assert.NotEmpty(t, violations)
 
 	hasOrphan := false
@@ -202,7 +203,7 @@ func TestStateModel_Verify_PropertyMismatch(t *testing.T) {
 			Properties: `{"Name":"a","Value":"v2"}`},
 	}
 
-	violations := CheckInvariants(inventory, cloudState, nil, nil)
+	violations := CheckInvariants(inventory, cloudState, nil)
 	assert.NotEmpty(t, violations)
 
 	hasMismatch := false
@@ -224,7 +225,7 @@ func TestStateModel_Verify_PropertyMatch(t *testing.T) {
 			Properties: `{"Name":"a","Value":"v1"}`},
 	}
 
-	violations := CheckInvariants(inventory, cloudState, nil, nil)
+	violations := CheckInvariants(inventory, cloudState, nil)
 	assert.Empty(t, violations)
 }
 
@@ -348,6 +349,54 @@ func TestStateModel_CheckModelVsInventory_PropertiesAndType(t *testing.T) {
 	assert.NotEmpty(t, violations)
 }
 
+// A patch is not a reconcile: the agent computes a per-field diff against the
+// current resource, so the model's patch prediction must apply the same field
+// semantics instead of storing the drawn properties verbatim. An empty array
+// means "not specified" (the agent strips empty arrays), set-typed fields are
+// additive, entity-set fields upsert by their key field, array-typed fields
+// replace wholesale, and scalars replace.
+func TestStateModel_PatchPredictionAppliesFieldSemantics(t *testing.T) {
+	model := NewStateModel(1, 3)
+	model.ApplyCreated(0, []int{0}, `{"Name":"res-stack-0-a","Value":"v1","SetTags":["alpha","beta"],"EntityTags":[{"Key":"env","Value":"a"},{"Key":"team","Value":"b"}],"OrderedItems":["first","second"]}`)
+
+	patch := `{"Name":"NAME","Value":"v2","SetTags":["gamma","alpha"],"EntityTags":[{"Key":"env","Value":"c"}],"OrderedItems":[]}`
+	resolved := model.ResolvePatchPropertiesForResources(0, []int{0}, patch, "")
+
+	assert.JSONEq(t,
+		`{"Name":"res-stack-0-a","Value":"v2","SetTags":["alpha","beta","gamma"],"EntityTags":[{"Key":"env","Value":"c"},{"Key":"team","Value":"b"}],"OrderedItems":["first","second"]}`,
+		resolved[0],
+		"scalar replaces, set unions, entity-set upserts by Key, empty array keeps current")
+}
+
+// A patch whose fields are all no-ops against the current resource must
+// predict exactly the current properties: the agent computes an empty diff
+// and issues no resource update, so no later correction will fix a wrong
+// prediction.
+func TestStateModel_PatchPredictionNoOpPatchKeepsCurrentProperties(t *testing.T) {
+	model := NewStateModel(1, 3)
+	current := `{"Name":"res-stack-0-a","Value":"v2","SetTags":["gamma","delta","alpha","epsilon"],"EntityTags":[],"OrderedItems":["first","third","fourth"]}`
+	model.ApplyCreated(0, []int{0}, current)
+
+	patch := `{"Name":"NAME","Value":"v2","SetTags":[],"EntityTags":[],"OrderedItems":["first","third","fourth"]}`
+	resolved := model.ResolvePatchPropertiesForResources(0, []int{0}, patch, "")
+
+	assert.JSONEq(t, current, resolved[0],
+		"an all-no-op patch predicts the current properties unchanged")
+}
+
+// A patch that targets a resource the model does not have yet is a create:
+// the drawn properties are the created state, exactly as before.
+func TestStateModel_PatchPredictionCreateUsesDrawnProperties(t *testing.T) {
+	model := NewStateModel(1, 3)
+
+	patch := `{"Name":"NAME","Value":"v1","SetTags":["alpha"],"EntityTags":[],"OrderedItems":[]}`
+	resolved := model.ResolvePatchPropertiesForResources(0, []int{1}, patch, "")
+
+	assert.JSONEq(t, `{"Name":"res-stack-0-b","Value":"v1","SetTags":["alpha"],"EntityTags":[],"OrderedItems":[]}`,
+		resolved[1],
+		"patch-creates take the drawn properties verbatim")
+}
+
 func TestStateModel_ResolvePropertiesForResources_WithPool(t *testing.T) {
 	model := NewStateModel(2, 5)
 	resolved := model.ResolvePropertiesForResources(
@@ -389,23 +438,140 @@ func TestStateModel_UnmanagedLifecycle(t *testing.T) {
 	assert.False(t, res.PresentInCloud)
 }
 
-func TestStateModel_ManagedDriftLifecycle(t *testing.T) {
+// An out-of-band modify of a managed resource is absorbed by sync: inventory
+// converges on the cloud properties. The model computes that end state
+// directly at the drift operation.
+func TestStateModel_ManagedCloudModifyComputesAbsorbedState(t *testing.T) {
 	model := NewStateModel(1, 1)
 	model.ApplyCreated(0, []int{0}, `{"Name":"res-stack-0-a","Value":"v1"}`)
-	model.ApplyManagedCloudModify("stack-0", "res-stack-0-a", "Test::Generic::Resource", "test-1", `{"Name":"res-stack-0-a","Value":"drift"}`)
+	model.SetNativeID(0, 0, "test-1")
 
-	// Sync picks up the drift and applies it to the model.
-	model.ApplySyncToManagedDrift()
+	model.ApplyManagedCloudModify(0, 0, `{"Name":"cloud-res-7","Value":"drift"}`)
 
 	res := model.Resource(0, 0)
 	assert.Equal(t, StateExists, res.State)
-	assert.JSONEq(t, `{"Name":"res-stack-0-a","Value":"drift"}`, res.Properties)
-	assert.Empty(t, model.ManagedDriftedResources)
+	assert.JSONEq(t, `{"Name":"cloud-res-7","Value":"drift"}`, res.Properties)
+	assert.Equal(t, "test-1", model.GetNativeID(0, 0), "modify keeps the native id")
+}
 
-	model.ApplyManagedCloudDelete("stack-0", "res-stack-0-a", "Test::Generic::Resource", "test-1")
-	model.ApplySyncToManagedDrift()
-	assert.Equal(t, StateNotExist, model.Resource(0, 0).State)
-	assert.Empty(t, model.ManagedDriftedResources)
+// An out-of-band delete of a managed resource is absorbed by sync: the agent
+// drops the resource from inventory. The model computes that end state
+// directly at the drift operation.
+func TestStateModel_ManagedCloudDeleteComputesAbsorbedState(t *testing.T) {
+	model := NewStateModel(1, 1)
+	model.ApplyCreated(0, []int{0}, `{"Name":"res-stack-0-a","Value":"v1"}`)
+	model.SetNativeID(0, 0, "test-1")
+
+	model.ApplyManagedCloudDelete(0, 0)
+
+	res := model.Resource(0, 0)
+	assert.Equal(t, StateNotExist, res.State)
+	assert.Empty(t, res.Properties)
+	assert.Empty(t, model.GetNativeID(0, 0), "delete clears the native id")
+}
+
+// Drift targets must not be touched by in-flight commands: a command on a
+// stack can create, update, or (via the reconcile guarantee) delete any slot
+// on that stack, so drift on such a slot would race the command.
+func TestStateModel_DriftEligibilitySkipsStacksWithInFlightCommands(t *testing.T) {
+	model := NewStateModel(2, 3)
+	model.ApplyCreated(0, []int{0}, `{"Name":"res-stack-0-a","Value":"v1"}`)
+	model.SetNativeID(0, 0, "test-1")
+	model.ApplyCreated(1, []int{0}, `{"Name":"res-stack-1-a","Value":"v1"}`)
+	model.SetNativeID(1, 0, "test-2")
+
+	model.TrackAcceptedCommand("cmd-1", nil, []ResourceSlotRef{{StackIndex: 1, SlotIndex: 0}}, 0, false)
+
+	for seq := range 4 {
+		stackIdx, _, _, _, _, nativeID, ok := model.FindDriftEligibleResource(seq)
+		require.True(t, ok)
+		assert.Equal(t, 0, stackIdx, "stack 1 has an in-flight command and must be excluded")
+		assert.Equal(t, "test-1", nativeID)
+	}
+
+	model.AcceptedCommands = nil
+	seen := make(map[int]bool)
+	for seq := range 4 {
+		stackIdx, _, _, _, _, _, ok := model.FindDriftEligibleResource(seq)
+		require.True(t, ok)
+		seen[stackIdx] = true
+	}
+	assert.True(t, seen[0] && seen[1], "with no in-flight commands both stacks are eligible")
+}
+
+// Cross-stack slots reference a parent on the provider stack (stack 0), so an
+// in-flight command on the provider stack can cascade onto them. They are only
+// eligible for drift while the provider stack is quiescent too.
+func TestStateModel_DriftEligibilityCrossStackNeedsQuiescentProvider(t *testing.T) {
+	model := NewStateModel(2, 10)
+	require.NotNil(t, model.Pool)
+
+	crossIdx := -1
+	for i := range model.Pool.Slots {
+		if model.Pool.IsCrossStack(i) {
+			crossIdx = i
+			break
+		}
+	}
+	require.GreaterOrEqual(t, crossIdx, 0)
+
+	model.ApplyCreated(1, []int{crossIdx}, `{"Name":"x","ParentId":"p","Value":"v1"}`)
+	model.SetNativeID(1, crossIdx, "test-9")
+
+	// A command on the provider stack (slot 0 there) excludes cross-stack slots.
+	model.TrackAcceptedCommand("cmd-1", nil, []ResourceSlotRef{{StackIndex: 0, SlotIndex: 0}}, 0, false)
+	_, _, _, _, _, _, ok := model.FindDriftEligibleResource(0)
+	assert.False(t, ok, "the only existing resource is cross-stack and the provider stack is busy")
+
+	model.AcceptedCommands = nil
+	stackIdx, slotIdx, _, _, _, nativeID, ok := model.FindDriftEligibleResource(0)
+	require.True(t, ok)
+	assert.Equal(t, 1, stackIdx)
+	assert.Equal(t, crossIdx, slotIdx)
+	assert.Equal(t, "test-9", nativeID)
+}
+
+// A canceled changeset can leave its resources registered as in-progress with
+// the synchronizer for an unobservable time, during which sync skips them and
+// drift on them cannot absorb. Stacks touched by a canceled command are
+// excluded from drift targeting for the rest of the iteration.
+func TestStateModel_DriftEligibilitySkipsCancelPoisonedStacks(t *testing.T) {
+	model := NewStateModel(2, 3)
+	model.ApplyCreated(0, []int{0}, `{"Name":"res-stack-0-a","Value":"v1"}`)
+	model.SetNativeID(0, 0, "test-1")
+	model.ApplyCreated(1, []int{0}, `{"Name":"res-stack-1-a","Value":"v1"}`)
+	model.SetNativeID(1, 0, "test-2")
+
+	model.MarkDriftExcludedStack(1)
+
+	for seq := range 4 {
+		stackIdx, _, _, _, _, _, ok := model.FindDriftEligibleResource(seq)
+		require.True(t, ok)
+		assert.Equal(t, 0, stackIdx, "stack 1 was touched by a canceled command and must be excluded")
+	}
+}
+
+// Eligible drift targets must be enumerated in a stable order: selection is
+// keyed off the generated sequence number, and map-iteration order would make
+// the picked resource nondeterministic across runs.
+func TestStateModel_DriftEligibilityOrderIsDeterministic(t *testing.T) {
+	model := NewStateModel(2, 3)
+	for s := range 2 {
+		for i := range 3 {
+			model.ApplyCreated(s, []int{i}, `{"Name":"n","Value":"v1"}`)
+			model.SetNativeID(s, i, fmt.Sprintf("test-%d%d", s, i))
+		}
+	}
+
+	for seq := range 6 {
+		_, _, _, _, _, first, ok := model.FindDriftEligibleResource(seq)
+		require.True(t, ok)
+		for range 20 {
+			_, _, _, _, _, again, ok := model.FindDriftEligibleResource(seq)
+			require.True(t, ok)
+			require.Equal(t, first, again)
+		}
+	}
 }
 
 func TestStateModel_Stack(t *testing.T) {

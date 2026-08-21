@@ -15,6 +15,7 @@ import (
 
 	_ "github.com/microsoft/go-mssqldb"
 
+	"github.com/platform-engineering-labs/formae/internal/datastore"
 	"github.com/platform-engineering-labs/formae/internal/datastore/dstest"
 	"github.com/platform-engineering-labs/formae/internal/datastore/mssql"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -77,6 +78,22 @@ func TestDatastore(t *testing.T) {
 				)
 				return err
 			},
+			LoadAgentBootsForTest: func() ([]datastore.AgentBoot, error) {
+				rows, err := conn.Query(`SELECT boot_id, version, booted_at FROM agent_boots ORDER BY booted_at, boot_id`)
+				if err != nil {
+					return nil, err
+				}
+				defer rows.Close() //nolint:errcheck
+				var out []datastore.AgentBoot
+				for rows.Next() {
+					var b datastore.AgentBoot
+					if err := rows.Scan(&b.BootID, &b.Version, &b.BootedAt); err != nil {
+						return nil, err
+					}
+					out = append(out, b)
+				}
+				return out, rows.Err()
+			},
 			SetTargetHealthStateForTest: func(label, state string) error {
 				_, err := conn.Exec(
 					`UPDATE targets SET health_state = @p1 WHERE label = @p2 AND version = (SELECT MAX(version) FROM targets WHERE label = @p2)`,
@@ -129,6 +146,12 @@ func TestDatastore(t *testing.T) {
 			NullResourceUpdateModifiedTsForTest: func(ksuid string) error {
 				_, err := conn.Exec(
 					`UPDATE resource_updates SET modified_ts = NULL WHERE ksuid = @p1`, ksuid,
+				)
+				return err
+			},
+			NullFormaCommandSubjectForTest: func(commandID string) error {
+				_, err := conn.Exec(
+					`UPDATE forma_commands SET subject = NULL, subject_name = NULL WHERE command_id = @p1`, commandID,
 				)
 				return err
 			},

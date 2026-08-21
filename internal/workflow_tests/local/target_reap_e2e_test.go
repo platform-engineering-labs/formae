@@ -92,7 +92,7 @@ func TestTargetReap_FullLifecycleAndRecovery(t *testing.T) {
 		}
 
 		// Stage 1: initial apply creates the resource; the target is healthy.
-		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client")
+		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client", "", "")
 		r.NoError(err)
 		r.Eventually(func() bool {
 			resources, err := m.Datastore.LoadResourcesByStack("lifecycle-stack")
@@ -151,7 +151,7 @@ func TestTargetReap_FullLifecycleAndRecovery(t *testing.T) {
 				{Label: "svc", Type: "FakeAWS::Resource", Properties: v1, Schema: schema, Stack: "lifecycle-stack", Target: "lifecycle-target"},
 			},
 		}
-		_, err = m.ApplyForma(resourceOnly, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModePatch}, "rejected-client")
+		_, err = m.ApplyForma(resourceOnly, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModePatch}, "rejected-client", "", "")
 		r.Error(err, "an apply touching a reaped target without re-declaring it must be rejected")
 		var reapedErr apimodel.TargetReapedError
 		r.True(errors.As(err, &reapedErr), "error must be a TargetReapedError, got %T: %v", err, err)
@@ -159,7 +159,7 @@ func TestTargetReap_FullLifecycleAndRecovery(t *testing.T) {
 		// Stage 5: re-applying the SAME forma re-declares the target and
 		// recovers it: fresh incarnation, resource re-adopted, reachable again,
 		// accrual reset to zero.
-		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client")
+		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client", "", "")
 		r.NoError(err, "recovery re-apply must be admitted")
 
 		r.Eventually(func() bool {
@@ -253,7 +253,7 @@ func TestTargetReap_SyncRaceDoesNotResurrect(t *testing.T) {
 			},
 			Targets: []pkgmodel.Target{{Label: "sync-race-target"}},
 		}
-		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client")
+		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client", "", "")
 		r.NoError(err)
 		r.Eventually(func() bool {
 			resources, err := m.Datastore.LoadResourcesByStack("sync-race-stack")

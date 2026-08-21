@@ -54,6 +54,8 @@ type FormaCommand struct {
 	Config          config.FormaCommandConfig        `json:"Config"`
 	Command         pkgmodel.Command                 `json:"Command"`
 	ClientID        string                           `json:"ClientId,omitempty"`
+	Subject         string                           `json:"Subject,omitempty"`
+	SubjectName     string                           `json:"SubjectName,omitempty"`
 	Source          Source                           `json:"Source,omitempty"`
 }
 
@@ -75,6 +77,8 @@ func NewFormaCommand(
 	stackUpdates []stack_update.StackUpdate,
 	policyUpdates []policy_update.PolicyUpdate,
 	clientID string,
+	subject string,
+	subjectName string,
 	source Source,
 ) *FormaCommand {
 	return &FormaCommand{
@@ -90,6 +94,8 @@ func NewFormaCommand(
 		Description:     forma.Description,
 		State:           CommandStateNotStarted,
 		ClientID:        clientID,
+		Subject:         subject,
+		SubjectName:     subjectName,
 		Source:          source,
 	}
 }

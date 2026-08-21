@@ -66,7 +66,7 @@ func TestCancelE2E_PerIDSubmit(t *testing.T) {
 	// Real API server wrapping the fake metastructure; real client against it.
 	srv := api.NewServer(t.Context(), fake, nil, nil, nil, nil)
 	baseURL := apitest.NewTestServer(t, srv.Handler())
-	client := api.NewClient(pkgmodel.APIConfig{URL: baseURL, Port: 80}, nil, nil)
+	client := api.NewClient(&pkgmodel.ClassicConnection{URL: baseURL, Port: 80}, nil, nil)
 
 	// Stub seams to route through the real HTTP stack
 	origGetStatus := getCommandsStatusFn
@@ -85,7 +85,7 @@ func TestCancelE2E_PerIDSubmit(t *testing.T) {
 
 	// Route through the real HTTP stack
 	getCommandsStatusFn = func(a *app.App, query string, n int, fromWatch bool) (*apimodel.ListCommandStatusResponse, []string, error) {
-		resp, err := client.GetFormaCommandsStatus(query, "e2e-client", n)
+		resp, err := client.GetFormaCommandsStatus(query, "e2e-client", n, apimodel.CommandScopeAgent)
 		return resp, nil, err
 	}
 
@@ -154,7 +154,7 @@ func TestCancelE2E_ForceWatch_AbandonedInView(t *testing.T) {
 
 	srv := api.NewServer(t.Context(), fake, nil, nil, nil, nil)
 	baseURL := apitest.NewTestServer(t, srv.Handler())
-	client := api.NewClient(pkgmodel.APIConfig{URL: baseURL, Port: 80}, nil, nil)
+	client := api.NewClient(&pkgmodel.ClassicConnection{URL: baseURL, Port: 80}, nil, nil)
 
 	origGetStatus := getCommandsStatusFn
 	origCancel := cancelCommandFn
@@ -173,7 +173,7 @@ func TestCancelE2E_ForceWatch_AbandonedInView(t *testing.T) {
 	confirmForceCancel = func(th *theme.Theme, summary string) (bool, error) { return true, nil }
 
 	getCommandsStatusFn = func(a *app.App, query string, n int, fromWatch bool) (*apimodel.ListCommandStatusResponse, []string, error) {
-		resp, err := client.GetFormaCommandsStatus(query, "e2e-client", n)
+		resp, err := client.GetFormaCommandsStatus(query, "e2e-client", n, apimodel.CommandScopeAgent)
 		return resp, nil, err
 	}
 	cancelCommandFn = func(a *app.App, query string, force bool) (*apimodel.CancelCommandResponse, error) {

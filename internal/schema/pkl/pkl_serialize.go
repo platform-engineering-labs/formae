@@ -120,6 +120,7 @@ func (p PKL) serializeWithPKL(data *model.Forma, options *schema.SerializeOption
 	// Step 2: Generate imports.pkl from PklProject dependencies.
 	importsProps := map[string]string{
 		"schemaVersions": formatVersionsForProperty(versions),
+		"schemaSubdirs":  formatSubdirsForProperty(resolveSchemaSubdirs(versions, options)),
 	}
 	if err := p.generatePklFileWithProps(generatorDir, "ImportsGenerator.pkl", "imports.pkl", importsProps); err != nil {
 		return "", fmt.Errorf("failed to generate imports.pkl: %w", err)
@@ -247,14 +248,7 @@ func resolveSchemaVersions(data *model.Forma, options *schema.SerializeOptions) 
 		firstTargetLabel[ns] = t.Label
 	}
 
-	pluginDir := ""
-	if options != nil {
-		pluginDir = options.LocalPluginDir
-	}
-	if pluginDir == "" {
-		pluginDir = defaultPluginDir()
-	}
-	if pluginDir != "" {
+	if pluginDir := pluginDirFor(options); pluginDir != "" {
 		resolver := NewPackageResolver().WithLocalSchemas(pluginDir)
 		for ns := range extractNamespaces(data) {
 			if _, ok := out[ns]; ok {
@@ -270,6 +264,55 @@ func resolveSchemaVersions(data *model.Forma, options *schema.SerializeOptions) 
 		return nil, nil
 	}
 	return out, nil
+}
+
+// pluginDirFor returns the local plugin install root to scan: the caller's
+// explicit override when set, else the default install location. Empty when
+// neither is available (no local plugin tree to inspect).
+func pluginDirFor(options *schema.SerializeOptions) string {
+	if options != nil && options.LocalPluginDir != "" {
+		return options.LocalPluginDir
+	}
+	return defaultPluginDir()
+}
+
+// resolveSchemaSubdirs returns, per pinned namespace, the top-level schema/pkl/
+// subdirectories that are NOT version dirs.
+//
+// Pinning a version narrows ImportsGenerator's glob to
+// "@<pkg>/*.pkl" + "@<pkg>/<ver>/**/*.pkl". A resource module in a root-level
+// *subdirectory* — a subtree the plugin deliberately keeps version-independent,
+// e.g. k8s' helm/ — matches neither, so its type never lands in the extract
+// typeMap and extract dies with `Cannot find key "K8S::Helm::Release"`. These
+// dirs are globbed explicitly to close that gap; dropping the narrowing instead
+// is not an option, since versioned plugins ship one near-identical copy of
+// every type per minor and ResourcesGenerator's last-writer-wins fold would
+// then pick an arbitrary one.
+//
+// Pkl cannot list directories, so the list has to reach the generator as a
+// property — the same route `schemaVersions` takes.
+//
+// Returns nil when nothing is pinned (unrestricted glob already covers every
+// subdir) or when no pinned package ships a non-version subtree.
+func resolveSchemaSubdirs(versions map[string]string, options *schema.SerializeOptions) map[string][]string {
+	if len(versions) == 0 {
+		return nil
+	}
+	pluginDir := pluginDirFor(options)
+	if pluginDir == "" {
+		return nil
+	}
+	resolver := NewPackageResolver().WithLocalSchemas(pluginDir)
+	out := map[string][]string{}
+	for ns := range versions {
+		if m := resolver.SchemaManifestForNamespace(ns); m != nil && len(m.NonVersionDirs) > 0 {
+			out[strings.ToLower(ns)] = m.NonVersionDirs
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // swapVersionedDepsToLocal rewrites the PklProject dep specs so that any
@@ -290,13 +333,7 @@ func swapVersionedDepsToLocal(includes []string, versions map[string]string, opt
 	if len(versions) == 0 {
 		return includes
 	}
-	pluginDir := ""
-	if options != nil {
-		pluginDir = options.LocalPluginDir
-	}
-	if pluginDir == "" {
-		pluginDir = defaultPluginDir()
-	}
+	pluginDir := pluginDirFor(options)
 	if pluginDir == "" {
 		return includes
 	}
@@ -393,6 +430,35 @@ func formatVersionsForProperty(versions map[string]string) string {
 			continue
 		}
 		parts = append(parts, strings.ToLower(k)+"="+v)
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, ",")
+}
+
+// formatSubdirsForProperty encodes a per-package non-version subdir map as
+// "pkg=dir;dir,pkg=dir" for the ImportsGenerator Pkl property. Returns the
+// empty string when there is nothing to add; ImportsGenerator then emits only
+// the root-file and pinned-version globs.
+func formatSubdirsForProperty(subdirs map[string][]string) string {
+	if len(subdirs) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(subdirs))
+	for pkg, dirs := range subdirs {
+		if pkg == "" {
+			continue
+		}
+		kept := make([]string, 0, len(dirs))
+		for _, d := range dirs {
+			if d != "" {
+				kept = append(kept, d)
+			}
+		}
+		if len(kept) == 0 {
+			continue
+		}
+		sort.Strings(kept)
+		parts = append(parts, strings.ToLower(pkg)+"="+strings.Join(kept, ";"))
 	}
 	sort.Strings(parts)
 	return strings.Join(parts, ",")

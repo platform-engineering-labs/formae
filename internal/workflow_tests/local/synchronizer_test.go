@@ -123,7 +123,7 @@ func TestSynchronizer_ApplyThenChangeThenSyncStack(t *testing.T) {
 
 		m.ApplyForma(f, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test")
+		}, "test", "", "")
 
 		require := require.New(t)
 		require.Eventually(
@@ -236,7 +236,7 @@ func TestSynchronizer_ApplyThenDestroyThenSyncStack(t *testing.T) {
 
 		m.ApplyForma(f, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test")
+		}, "test", "", "")
 
 		require := require.New(t)
 		require.Eventually(
@@ -319,7 +319,7 @@ func TestSynchronizer_SynchronizeOnce(t *testing.T) {
 			},
 		}
 
-		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test")
+		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test", "", "")
 		assert.NoError(t, err)
 		waitForApplyComplete(t, m)
 
@@ -405,7 +405,7 @@ func TestSynchronizer_SyncHandlesResourceNotFound(t *testing.T) {
 			},
 		}
 
-		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test")
+		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test", "", "")
 
 		assert.Eventually(t, func() bool {
 			fas, err := m.Datastore.LoadFormaCommands()
@@ -533,7 +533,7 @@ func TestSynchronizer_OverlapProtection(t *testing.T) {
 			Targets: []pkgmodel.Target{{Label: "test-target"}},
 		}
 
-		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test")
+		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test", "", "")
 		require.NoError(t, err)
 
 		// Wait for resources to be created
@@ -677,7 +677,7 @@ func TestSynchronizer_ExcludesResourcesBeingUpdatedByApply(t *testing.T) {
 			Targets: []pkgmodel.Target{{Label: "test-target"}},
 		}
 
-		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test")
+		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test", "", "")
 		require.NoError(t, err)
 
 		// Wait for initial resource creation
@@ -710,7 +710,7 @@ func TestSynchronizer_ExcludesResourcesBeingUpdatedByApply(t *testing.T) {
 				},
 				Targets: []pkgmodel.Target{}, // Empty - target already exists and hasn't changed
 			}
-			_, err := m.ApplyForma(fUpdate, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test")
+			_, err := m.ApplyForma(fUpdate, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test", "", "")
 			assert.NoError(t, err)
 		}()
 
@@ -893,7 +893,7 @@ func TestSynchronizer_SyncDoesNotOverwriteApplyStackChange(t *testing.T) {
 			}},
 			Targets: []pkgmodel.Target{},
 		}
-		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test")
+		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test", "", "")
 		require.NoError(t, err)
 
 		require.Eventually(t, func() bool {
@@ -993,7 +993,7 @@ func TestSynchronizer_UnregistersResourcesAfterFailedChangeset(t *testing.T) {
 			Targets: []pkgmodel.Target{{Label: "test-target"}},
 		}
 
-		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test")
+		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test", "", "")
 		require.NoError(t, err)
 
 		// Wait for resource creation to complete
@@ -1032,7 +1032,7 @@ func TestSynchronizer_UnregistersResourcesAfterFailedChangeset(t *testing.T) {
 			Targets: []pkgmodel.Target{},
 		}
 
-		_, err = m.ApplyForma(fUpdate, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test")
+		_, err = m.ApplyForma(fUpdate, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test", "", "")
 		require.NoError(t, err)
 
 		// Wait for the update command to reach a terminal state
@@ -1152,7 +1152,7 @@ func TestSynchronizer_SyncPicksUpNewSchemaFields(t *testing.T) {
 			Targets: []pkgmodel.Target{{Label: "test-target"}},
 		}
 
-		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test")
+		_, err = m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test", "", "")
 		require.NoError(t, err)
 		waitForApplyComplete(t, m)
 
@@ -1323,7 +1323,7 @@ func TestSynchronizer_TargetDeleteCleanupIsIdempotentWithSync(t *testing.T) {
 		}
 
 		_, err = m.ApplyForma(forma,
-			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test")
+			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test", "", "")
 		require.NoError(t, err)
 
 		assert.Eventually(t, func() bool {
@@ -1362,7 +1362,7 @@ func TestSynchronizer_TargetDeleteCleanupIsIdempotentWithSync(t *testing.T) {
 		// - provider target (no $ref → survives)
 		// - unmanaged discovered resource (not in forma → not destroyed)
 		_, err = m.DestroyForma(forma,
-			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test")
+			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test", "", "")
 		require.NoError(t, err)
 
 		assert.Eventually(t, func() bool {
@@ -1517,7 +1517,7 @@ func TestTargetDelete_ForgetsUnmanagedResourcesImmediately(t *testing.T) {
 		}
 
 		_, err = m.ApplyForma(forma,
-			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test")
+			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test", "", "")
 		require.NoError(t, err)
 
 		assert.Eventually(t, func() bool {
@@ -1543,7 +1543,7 @@ func TestTargetDelete_ForgetsUnmanagedResourcesImmediately(t *testing.T) {
 
 		// ── Destroy: deletes managed resources + the consumer target ──
 		_, err = m.DestroyForma(forma,
-			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test")
+			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test", "", "")
 		require.NoError(t, err)
 
 		assert.Eventually(t, func() bool {

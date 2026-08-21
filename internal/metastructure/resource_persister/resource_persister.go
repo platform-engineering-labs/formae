@@ -155,6 +155,25 @@ func (rp *ResourcePersister) storeResourceUpdate(commandID string, resourceOpera
 
 	resourceUpdate.Operation = resourceOperationFromPluginOperation(resourceOperation, pluginOperation, relevantProgress)
 
+	// A NotFound Read is converted into a delete above so out-of-band deletions
+	// get absorbed. That conversion is only sound while the record still
+	// describes the object the Read probed. A sync cycle plans against a
+	// snapshot and can execute its reads minutes later, by which time an apply
+	// may have replaced the resource and moved the record onto a new identity;
+	// the Read then probes the old one, truthfully reports NotFound, and acting
+	// on it would tombstone a live resource's record. Dropping the update is the
+	// safe direction: the next sync cycle plans afresh, so a genuine deletion is
+	// still absorbed one cycle later.
+	if pluginOperation == pkgresource.OperationRead &&
+		resourceUpdate.Operation == resource_update.OperationDelete &&
+		rp.recordMovedSinceGenerated(resourceUpdate) {
+		slog.Debug("Skipping delete from a stale NotFound read; the record moved since the read was planned",
+			"resourceLabel", resourceUpdate.DesiredState.Label,
+			"stackLabel", resourceUpdate.StackLabel,
+			"probedNativeID", resourceUpdate.PriorState.NativeID)
+		return "", nil
+	}
+
 	// This can cause a validation error when the delete op is in fact valid.
 	// Subsequently no delete is persisted and the system doesn't work as expected.
 	// To avoid this, we skip the validation when the operation is a delete.
@@ -346,6 +365,74 @@ func formaCommandFromOperation(operation pkgresource.Operation) pkgmodel.Command
 	default:
 		return pkgmodel.CommandApply
 	}
+}
+
+// recordMovedSinceGenerated reports whether the stored record has been written
+// by another command since this update was generated. PriorState is the
+// snapshot the generator captured (see NewResourceUpdateForSyncWithFilter) and
+// carries the row version it was loaded from, which is monotonic per URI, so an
+// inequality against the current row is exact: it catches a replace that keeps
+// the native id and the properties byte-identical just as readily as one that
+// changes them.
+//
+// Everything indeterminate reports moved, so the delete is dropped rather than
+// risked. That covers a lookup that failed and a snapshot with no version — the
+// latter is what a command resumed after a restart rebuilds, since the version
+// describes a row and is not serialized with the resource. The cost is bounded:
+// the resource keeps its record until a later cycle plans afresh against a
+// versioned snapshot, and a genuine deletion is absorbed then.
+func (rp *ResourcePersister) recordMovedSinceGenerated(resourceUpdate *resource_update.ResourceUpdate) bool {
+	generated := resourceUpdate.PriorState
+	if generated.Version == "" {
+		// Only a synchronize snapshot is planned off a loaded row and so is
+		// expected to carry a version; a missing one there means the command
+		// was rebuilt after a restart, which is indeterminate. Discovery builds
+		// its updates from the forma instead (see generateResourceUpdatesForSync),
+		// so its reads never carry a version and their NotFound is a real
+		// signal — including the sentinel-target path that cleans up rows whose
+		// target has been deleted. Reading that as staleness would strand those
+		// rows forever.
+		if resourceUpdate.Source != resource_update.FormaCommandSourceSynchronize {
+			return false
+		}
+		slog.Debug("Treating a NotFound read as stale: the snapshot carries no row version",
+			"resourceLabel", generated.Label)
+		return true
+	}
+
+	current, err := rp.datastore.LoadResource(generated.URI())
+	if err != nil {
+		// Fail closed. Reporting "not moved" here would hand the delete to a
+		// caller that performs its own load; if that one succeeds it finds the
+		// replacement row and tombstones it, which is the data loss this guard
+		// exists to prevent. A lookup we could not complete is no evidence that
+		// the record still matches, so treat it as moved and let the next sync
+		// cycle decide on fresh state.
+		slog.Warn("Treating a NotFound read as stale: the staleness lookup failed",
+			"resourceLabel", generated.Label,
+			"error", err)
+		return true
+	}
+	if current == nil {
+		// No live row to compare against, which is also what a row hidden by
+		// reaping looks like. The delete branch performs its own lookup, so
+		// reporting "not moved" here would let a row that reappears between the
+		// two calls be tombstoned, shadowing one that target recovery could
+		// otherwise restore. Nothing is lost by declining: with no live row the
+		// delete had nothing to remove anyway.
+		return true
+	}
+
+	if current.Version != generated.Version {
+		return true
+	}
+
+	// The version alone is not a complete witness: storeResource reuses it when
+	// only ReadOnlyProperties changed, rewriting that row in place. Compare
+	// those too, so a refresh confined to read-only state still counts as a
+	// rewrite. (Both sides are the stored representation, so they differ only
+	// if something actually wrote.)
+	return !util.JsonEqualRaw(current.ReadOnlyProperties, generated.ReadOnlyProperties)
 }
 
 func resourceOperationFromPluginOperation(resourceOperation resource_update.OperationType, pluginOperation pkgresource.Operation, progress *plugin.TrackedProgress) resource_update.OperationType {
