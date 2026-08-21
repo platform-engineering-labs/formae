@@ -57,6 +57,7 @@ require (
 	github.com/masterminds/semver v1.5.0 // indirect
 	github.com/miekg/dns v1.1.72 // indirect
 	github.com/naegelejd/go-acl v0.0.0-20260323030528-42e4d61407df // indirect
+	github.com/platform-engineering-labs/formae/pkg/credential v0.0.0-00010101000000-000000000000 // indirect
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
 	github.com/segmentio/ksuid v1.0.4 // indirect
 	github.com/shirou/gopsutil/v4 v4.26.1 // indirect
@@ -97,6 +98,7 @@ require (
 
 replace (
 	github.com/platform-engineering-labs/formae/pkg/api/model => ../api/model
+	github.com/platform-engineering-labs/formae/pkg/credential => ../credential
 	github.com/platform-engineering-labs/formae/pkg/model => ../model
 	github.com/platform-engineering-labs/formae/pkg/plugin => ../plugin
 )
