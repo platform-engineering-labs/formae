@@ -8,6 +8,7 @@ package plugin
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -201,4 +202,40 @@ func TestMsgpackTagFallsBackToJSONTag(t *testing.T) {
 
 	assert.Equal(t, original.FieldA, decoded.FieldA)
 	assert.Equal(t, original.FieldB, decoded.FieldB)
+}
+
+// oidcIdentityTokenRequestShape mirrors pkg/credential's
+// OidcIdentityTokenRequest field-for-field (same names, same json tags, same
+// declaration order). It exists so this package's codec can be exercised
+// against the identical wire shape without importing pkg/credential.
+type oidcIdentityTokenRequestShape struct {
+	Audience  string `json:"audience"`
+	RequestID string `json:"requestId"`
+}
+
+// credentialGoldenFixtureHex is the hex-encoded, msgpack+zstd-encoded form
+// of an OidcIdentityTokenRequest{Audience: "sts.amazonaws.com", RequestID:
+// "golden-fixture-1"}. It is mirrored verbatim in
+// pkg/credential/msgpack_test.go's
+// TestMarshalEDF_MatchesPluginCodecGoldenFixture, which encodes the same
+// field values through that type's own MarshalEDF hook.
+// The two codecs must be byte-identical for this to pass on both sides: it
+// proves the agent (pkg/plugin) and an oidc-credential broker
+// (pkg/credential) speak the same wire format despite living in separate Go
+// modules with independently-vendored dependencies.
+const credentialGoldenFixtureHex = "28b52ffd0400b9010082a861756469656e6365b17374" +
+	"732e616d617a6f6e6177732e636f6da9726571756573744964b0676f6c64656e2d6669787475" +
+	"72652d31c410421f"
+
+func TestEncodeMsgpack_MatchesCredentialGoldenFixture(t *testing.T) {
+	req := &oidcIdentityTokenRequestShape{Audience: "sts.amazonaws.com", RequestID: "golden-fixture-1"}
+
+	var buf bytes.Buffer
+	err := encodeMsgpack(&buf, req)
+	require.NoError(t, err)
+
+	got := hex.EncodeToString(buf.Bytes())
+	t.Logf("golden hex: %s", got)
+
+	require.Equal(t, credentialGoldenFixtureHex, got)
 }

@@ -9,6 +9,7 @@ import (
 
 	"ergo.services/ergo/gen"
 	"ergo.services/ergo/net/edf"
+	"github.com/platform-engineering-labs/formae/pkg/credential"
 	"github.com/platform-engineering-labs/formae/pkg/model"
 )
 
@@ -19,7 +20,15 @@ import (
 //
 // Additionally, types passed via Ergo process Env during remote spawns must be
 // registered since they go through EDF directly (not wrapped in a message type).
+//
+// It also registers pkg/credential's types: a resource plugin is the party
+// that calls an oidc-credential broker, so its process needs the identity-token
+// request and response registered even though it never links the broker SDK.
 func RegisterSharedEDFTypes() error {
+	if err := credential.RegisterEDFTypes(); err != nil {
+		return err
+	}
+
 	types := []any{
 		// Types passed via Ergo Env during remote spawn (not in message types)
 		time.Duration(0),

@@ -25,6 +25,9 @@ module PluginManifest
 /// Example: "aws", "aws-govcloud", "localstack"
 name: String(matches(Regex(#"^[a-z][a-z0-9-]*$"#)))
 
+/// Plugin type: "resource" (default), "auth", or "oidc-credential".
+type: String = "resource"
+
 /// Semantic version of the plugin.
 /// Example: "1.0.0", "0.5.0-beta.1"
 version: String(matches(Regex(#"^\d+\.\d+\.\d+(-[a-zA-Z0-9.-]+)?$"#)))
@@ -34,7 +37,16 @@ version: String(matches(Regex(#"^\d+\.\d+\.\d+(-[a-zA-Z0-9.-]+)?$"#)))
 /// Multiple plugins can share a namespace (e.g., localstack uses "AWS"), but
 /// cannot claim the same resource type.
 /// Must be uppercase, start with a letter.
-namespace: String(matches(Regex(#"^[A-Z][A-Za-z0-9]*$"#)))
+/// Required unless `type` is "auth" or "oidc-credential".
+namespace: (String(matches(Regex(#"^[A-Z][A-Za-z0-9]*$"#)))|Null)(
+    this != null || type == "auth" || type == "oidc-credential"
+) = null
+
+/// Credential namespaces this plugin issues (e.g. "AWS", "GCP").
+/// Required and non-empty when `type` is "oidc-credential"; unused otherwise.
+namespaces: (Listing<String>|Null)(
+    type != "oidc-credential" || (this != null && !this.isEmpty)
+) = null
 
 /// SPDX license identifier.
 /// Example: "Apache-2.0", "MIT", "FSL-1.1-ALv2"

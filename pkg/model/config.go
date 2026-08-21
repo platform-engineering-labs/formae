@@ -240,17 +240,28 @@ type ResourcePluginUserConfig struct {
 	PluginConfig            json.RawMessage
 }
 
+// OidcCredentialPluginUserConfig holds per-broker configuration from the
+// user's formae.conf.pkl. PluginConfig is the broker's own opaque payload:
+// everything the user declared beyond the two base fields, handed to the
+// broker process verbatim.
+type OidcCredentialPluginUserConfig struct {
+	Type         string
+	Enabled      bool
+	PluginConfig json.RawMessage
+}
+
 type AgentConfig struct {
-	Server          ServerConfig
-	Datastore       DatastoreConfig
-	Retry           RetryConfig
-	Synchronization SynchronizationConfig
-	Discovery       DiscoveryConfig
-	Logging         LoggingConfig
-	OTel            OTelConfig
-	StackExpirer    StackExpirerConfig
-	Auth            json.RawMessage
-	ResourcePlugins []ResourcePluginUserConfig
+	Server                ServerConfig
+	Datastore             DatastoreConfig
+	Retry                 RetryConfig
+	Synchronization       SynchronizationConfig
+	Discovery             DiscoveryConfig
+	Logging               LoggingConfig
+	OTel                  OTelConfig
+	StackExpirer          StackExpirerConfig
+	Auth                  json.RawMessage
+	ResourcePlugins       []ResourcePluginUserConfig
+	OidcCredentialPlugins []OidcCredentialPluginUserConfig
 }
 
 // Connection is where the CLI sends commands. It has exactly two arms, so a

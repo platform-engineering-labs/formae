@@ -186,6 +186,8 @@ type AgentConfig struct {
 	StackExpirer    StackExpirerConfig    `pkl:"stackExpirer"`
 	Auth            pkl.Object            `pkl:"auth"`
 	ResourcePlugins []pkl.Object          `pkl:"resourcePlugins"`
+
+	OidcCredentialPlugins []pkl.Object `pkl:"oidcCredentialPlugins"`
 }
 
 type APIConfig struct {

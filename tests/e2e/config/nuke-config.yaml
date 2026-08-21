@@ -152,6 +152,14 @@ presets:
     # resources). Conformance resources are named formae-sdk-test-* /
     # plugin-sdk-test-* and are therefore preserved. New conformance
     # resource types are protected by default (allowlist semantics).
+    #
+    # The same allowlist is what keeps the standing oidc-credential fixtures
+    # alive: the static issuer bucket, its IAM OIDC provider, the role the
+    # e2e assumes, and the Secrets Manager secret holding the signing key are
+    # all named e2e-oidc-*, contain no "formae-e2e", and are therefore never
+    # removed. They are provisioned once, out of band, from the forma in
+    # tests/e2e/config/oidc-standing/. Do not turn this preset into a
+    # denylist without re-homing them first.
     filters:
       __global__:
         - property: Name

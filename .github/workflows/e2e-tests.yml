@@ -176,6 +176,13 @@ jobs:
             system_plugins: auth-basic
           - test: TestPluginConfig
             system_plugins: sftp
+          # Installs no cloud plugin: the oidc-credential fixtures (a stub
+          # broker and a resource plugin that exchanges the token it is
+          # handed) are built from this repo and staged by `make test-e2e`
+          # itself. It does need AWS credentials — the broker reads its
+          # signing key from Secrets Manager and the plugin calls
+          # sts:AssumeRoleWithWebIdentity against the standing issuer.
+          - test: TestOidcCredential
 
     steps:
       - uses: actions/checkout@v4

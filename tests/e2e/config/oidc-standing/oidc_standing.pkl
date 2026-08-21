@@ -1,0 +1,212 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+/// The standing resources the oidc-credential e2e exchanges a token against.
+///
+/// These are NOT created by the test run: the e2e assumes they already exist
+/// in the e2e account, and the aws-nuke pre-cleanup preserves them (their
+/// names carry no "formae-e2e", which is what the nuke config's allowlist
+/// keys on). This forma is how they were made and how they are re-made.
+///
+/// The signing key is read from the environment of the process that
+/// EVALUATES this file — the CLI, not the agent — so the private half never
+/// enters this repository. Generate a keypair, put the public half in
+/// jwks.json below, and apply:
+///
+///     openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 \
+///         -out e2e-oidc-key.pem
+///     export AWS_PROFILE=<a profile on the e2e account>
+///     export E2E_OIDC_SIGNING_KEY="$(cat e2e-oidc-key.pem)"
+///     formae apply --mode reconcile tests/e2e/config/oidc-standing/oidc_standing.pkl
+///
+/// The agent needs the same AWS_PROFILE on its own environment, since it is
+/// what actually talks to AWS.
+///
+/// The private key is written once (`setOnce`) and is opaque, so a later
+/// reconcile neither reads it back nor rewrites it. The public half lives in
+/// jwks.json below; regenerating the key means replacing both halves.
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+import "@aws/aws.pkl"
+import "@aws/iam/oidcprovider.pkl"
+import "@aws/iam/role.pkl"
+import "@aws/s3/bucket.pkl"
+import "@aws/s3/bucketpolicy.pkl"
+import "@aws/s3/object.pkl"
+import "@aws/secretsmanager/secret.pkl"
+
+/// The e2e account. Pinned rather than derived: the trust policy names it and
+/// the test asserts on the role ARN it produces.
+local accountId = "942849037363"
+
+local awsRegion = "us-west-2"
+
+/// Bucket name doubles as the issuer host, so it must stay globally unique.
+local issuerBucketName = "e2e-oidc-issuer-\(accountId)"
+
+/// The issuer, byte-identical in three places: this document's `issuer`
+/// claim, the IAM provider URL, and the `iss` of every token the e2e broker
+/// mints. IAM compares them as strings — no trailing slash, no path.
+local issuerHost = "\(issuerBucketName).s3.\(awsRegion).amazonaws.com"
+local issuerUrl = "https://\(issuerHost)"
+
+/// Pinned in the JWKS and in the header of every minted token.
+local keyId = "e2e-oidc-key-1"
+
+/// The only subject the role trusts, and the only audience it accepts.
+local subject = "e2e-oidc-subject"
+local audience = "sts.amazonaws.com"
+
+local assumeRoleName = "e2e-oidc-assume-role"
+local secretName = "e2e-oidc-signing-key"
+
+/// SHA-1 fingerprint of Amazon Root CA 1, which terminates the chain for every
+/// s3.<region>.amazonaws.com endpoint.
+local issuerThumbprint = "06b25927c42a721631c1efd9431e648fa62e1e39"
+
+local issuerBucket = new bucket.Bucket {
+  label = "e2e-oidc-issuer-bucket"
+  bucketName = issuerBucketName
+  // The two discovery documents are fetched anonymously by IAM, so the
+  // account-wide public-policy block has to be off for this bucket. ACLs stay
+  // blocked: the bucket policy below grants the only public access there is.
+  publicAccessBlockConfiguration = new bucket.PublicAccessBlockConfiguration {
+    blockPublicAcls = true
+    blockPublicPolicy = false
+    ignorePublicAcls = true
+    restrictPublicBuckets = false
+  }
+}
+
+/// Public read for exactly the two discovery documents, named individually
+/// rather than by prefix or wildcard.
+local issuerBucketPolicy = new bucketpolicy.BucketPolicy {
+  label = "e2e-oidc-issuer-bucket-policy"
+  bucket = issuerBucket.res.bucketName
+  policyDocument = new Dynamic {
+    ["Version"] = "2012-10-17"
+    ["Statement"] = new Listing {
+      new Dynamic {
+        ["Sid"] = "PublicReadIssuerDocuments"
+        ["Effect"] = "Allow"
+        ["Principal"] = "*"
+        ["Action"] = "s3:GetObject"
+        ["Resource"] = new Listing {
+          "arn:aws:s3:::\(issuerBucketName)/.well-known/openid-configuration"
+          "arn:aws:s3:::\(issuerBucketName)/jwks.json"
+        }
+      }
+    }
+  }
+}
+
+local discoveryDocument = new object.Object {
+  label = "e2e-oidc-openid-configuration"
+  bucket = issuerBucket.res.bucketName
+  key = ".well-known/openid-configuration"
+  contentType = "application/json"
+  content = """
+    {
+      "issuer": "\(issuerUrl)",
+      "jwks_uri": "\(issuerUrl)/jwks.json",
+      "authorization_endpoint": "\(issuerUrl)/authorize",
+      "response_types_supported": ["id_token"],
+      "subject_types_supported": ["public"],
+      "id_token_signing_alg_values_supported": ["RS256"],
+      "claims_supported": ["iss", "sub", "aud", "exp", "iat"]
+    }
+    """
+}
+
+/// The public half of the e2e signing key. Its private half is in Secrets
+/// Manager below; the two are generated together and replaced together.
+local jwks = new object.Object {
+  label = "e2e-oidc-jwks"
+  bucket = issuerBucket.res.bucketName
+  key = "jwks.json"
+  contentType = "application/json"
+  content = """
+    {
+      "keys": [
+        {
+          "kty": "RSA",
+          "use": "sig",
+          "alg": "RS256",
+          "kid": "\(keyId)",
+          "n": "1bQ5FeCRFbLL4Ujyq-3B3sEudjuokakE3g3rybWVuIvtELMiwlUwdvqwfP1YmUX-2x99D9_nDMo6DeIqFQw_ANSdV41AzDXxwP6ZAL1391cpqjmoUFk8bWZnSrN1gmWUQPoFMjFJFjCCeNrt8BFVvASEuFiNr9-JBkZ3bWeDANqQlNvanCYtRlta9tvBy8yzPky7Y6_CncWDz-G1X1kjJwzbKC2Zxu3WoqJjCk2ro0P44LxtlxR3zd7Cawr43uZXyyxYAv1oYkBs6hUZhEkU1gRJV5zGfljdTx7TL2Afk8IosD_-v3j3vDQDXhrvisqMky1MNOzwxmR00uLW-SHSmQ",
+          "e": "AQAB"
+        }
+      ]
+    }
+    """
+}
+
+local issuerProvider = new oidcprovider.OIDCProvider {
+  label = "e2e-oidc-provider"
+  url = issuerUrl
+  clientIdList = new Listing { audience }
+  thumbprintList = new Listing { issuerThumbprint }
+}
+
+/// The role the e2e assumes. It grants nothing: what the test proves is that
+/// STS accepts the token and hands back credentials, not what they can do.
+local assumeRole = new role.Role {
+  label = "e2e-oidc-assume-role"
+  roleName = assumeRoleName
+  description = "Assumed by the oidc-credential e2e via web identity"
+  maxSessionDuration = 3600
+  assumeRolePolicyDocument = new Dynamic {
+    ["Version"] = "2012-10-17"
+    ["Statement"] = new Listing {
+      new Dynamic {
+        ["Effect"] = "Allow"
+        ["Principal"] = new Dynamic {
+          ["Federated"] = "arn:aws:iam::\(accountId):oidc-provider/\(issuerHost)"
+        }
+        ["Action"] = "sts:AssumeRoleWithWebIdentity"
+        ["Condition"] = new Dynamic {
+          ["StringEquals"] = new Dynamic {
+            ["\(issuerHost):sub"] = subject
+            ["\(issuerHost):aud"] = audience
+          }
+        }
+      }
+    }
+  }
+}
+
+/// The private half, read from the agent's environment so it never lands in
+/// the tree. Opaque and set-once: formae writes it at create and thereafter
+/// neither reads it back nor diffs it.
+local signingKey = new secret.Secret {
+  label = "e2e-oidc-signing-key"
+  name = secretName
+  description = "RS256 private key the oidc-credential e2e broker signs with"
+  secretString = formae.value(read("env:E2E_OIDC_SIGNING_KEY")).opaque.setOnce
+}
+
+forma {
+  new formae.Stack {
+    label = "e2e-oidc-standing"
+    description = "Standing issuer, provider, role and key for the oidc-credential e2e"
+  }
+
+  new formae.Target {
+    label = "e2e-oidc-target"
+    config = new aws.Config {
+      region = awsRegion
+    }
+  }
+
+  issuerBucket
+  issuerBucketPolicy
+  discoveryDocument
+  jwks
+  issuerProvider
+  assumeRole
+  signingKey
+}

@@ -274,6 +274,7 @@ func newDistributedMetastructure(t *testing.T, cfg *pkgmodel.Config, pluginsDir 
 		ctx,
 		cfg,
 		externalResourcePlugins,
+		nil,
 		db,
 		"test",
 	)

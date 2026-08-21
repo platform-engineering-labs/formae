@@ -328,6 +328,29 @@ func TestTranslateResourcePluginConfig_CustomFields(t *testing.T) {
 	assert.Contains(t, string(rpc.PluginConfig), "0755")
 }
 
+func TestTranslateOidcCredentialPluginConfig_CustomFieldsAndDisabled(t *testing.T) {
+	p := PKL{}
+	config, err := p.FormaeConfig("./testdata/config/test_oidc_credential_plugin_custom.pkl")
+	require.NoError(t, err)
+	require.NotNil(t, config)
+
+	require.Len(t, config.Agent.OidcCredentialPlugins, 2)
+
+	fai := config.Agent.OidcCredentialPlugins[0]
+	assert.Equal(t, "fai", fai.Type)
+	assert.True(t, fai.Enabled)
+	require.NotNil(t, fai.PluginConfig)
+	assert.Contains(t, string(fai.PluginConfig), "issuer")
+	assert.Contains(t, string(fai.PluginConfig), "https://issuer.example.com")
+	assert.Contains(t, string(fai.PluginConfig), "audience")
+	assert.NotContains(t, string(fai.PluginConfig), "enabled")
+
+	other := config.Agent.OidcCredentialPlugins[1]
+	assert.Equal(t, "other", other.Type)
+	assert.False(t, other.Enabled)
+	assert.Empty(t, other.PluginConfig)
+}
+
 func TestDeprecationWarning_GlobalRetryWithPerPlugin(t *testing.T) {
 	p := PKL{}
 	config, err := p.FormaeConfig("./testdata/config/test_deprecation_retry.pkl")

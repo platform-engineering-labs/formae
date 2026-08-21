@@ -1,0 +1,68 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+/// Tests for the plugin manifest's `type`/`namespace`/`namespaces` shape.
+/// Run with: pkl test internal/schema/pkl/schema/tests/plugin_manifest_test.pkl
+amends "pkl:test"
+
+import "../plugin-manifest.pkl" as manifest
+
+local base = new Mapping<String, String> {
+    ["name"] = "test-plugin"
+    ["version"] = "1.0.0"
+    ["license"] = "Apache-2.0"
+    ["minFormaeVersion"] = "0.80.0"
+}
+
+local resourceDefault = (manifest) {
+    name = base["name"]
+    version = base["version"]
+    license = base["license"]
+    minFormaeVersion = base["minFormaeVersion"]
+    namespace = "Test"
+}
+
+local resourceMissingNamespace = (manifest) {
+    name = base["name"]
+    version = base["version"]
+    license = base["license"]
+    minFormaeVersion = base["minFormaeVersion"]
+}
+
+local oidcCredentialValid = (manifest) {
+    name = base["name"]
+    version = base["version"]
+    license = base["license"]
+    minFormaeVersion = base["minFormaeVersion"]
+    type = "oidc-credential"
+    namespaces = new Listing { "AWS" }
+}
+
+local oidcCredentialEmptyNamespaces = (manifest) {
+    name = base["name"]
+    version = base["version"]
+    license = base["license"]
+    minFormaeVersion = base["minFormaeVersion"]
+    type = "oidc-credential"
+    namespaces = new Listing {}
+}
+
+facts {
+    ["resource default type requires namespace"] {
+        resourceDefault.type == "resource"
+        resourceDefault.namespace == "Test"
+        module.catch(() -> resourceMissingNamespace.namespace) != null
+    }
+
+    ["oidc-credential is valid with no namespace and non-empty namespaces"] {
+        oidcCredentialValid.namespace == null
+        oidcCredentialValid.namespaces.toList() == List("AWS")
+    }
+
+    ["oidc-credential with empty namespaces is rejected"] {
+        module.catch(() -> oidcCredentialEmptyNamespaces.namespaces) != null
+    }
+}

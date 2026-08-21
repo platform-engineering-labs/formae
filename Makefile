@@ -129,6 +129,7 @@ test-build:
 
 test-all: test-build test-pkl test-scripts
 	go test -C ./pkg/auth -tags="unit integration" -count=1 -failfast ./...
+	go test -C ./pkg/credential -tags="unit integration" -count=1 -failfast ./...
 	go test -C ./pkg/model -tags="unit integration" -count=1 -failfast ./...
 	go test -C ./pkg/plugin -tags="unit integration" -count=1 -failfast ./...
 	go test -C ./pkg/plugin-conformance-tests -tags="unit integration" -count=1 -failfast ./...
@@ -142,6 +143,7 @@ test-scripts:
 
 test-unit:
 	go test -C ./pkg/auth -tags=unit -failfast ./...
+	go test -C ./pkg/credential -tags=unit -failfast ./...
 	go test -C ./pkg/model -tags=unit -failfast ./...
 	go test -C ./pkg/plugin -tags=unit -failfast ./...
 	go test -C ./pkg/plugin-conformance-tests -tags=unit -failfast ./...
@@ -255,14 +257,44 @@ test-unit-summary:
 test-integration:
 	go test -tags=integration -failfast ./...
 
-test-e2e: build
+test-e2e: build stage-oidc-fixtures
 	echo "Setting up e2e PKL dependencies..."
 	bash ./tests/e2e/go/setup_pkl.sh
 	echo "Staging formae binary in installer-shaped tree (.../bin/formae + .../.ops)..."
 	mkdir -p $(CURDIR)/dist/e2e/bin $(CURDIR)/dist/e2e/.ops
 	cp $(CURDIR)/formae $(CURDIR)/dist/e2e/bin/formae
 	echo "Running e2e tests..."
-	E2E_FORMAE_BINARY=$(CURDIR)/dist/e2e/bin/formae go test -C ./tests/e2e/go -tags=e2e -timeout 30m -v ./... $(E2E_RUN_FLAGS)
+	E2E_FORMAE_BINARY=$(CURDIR)/dist/e2e/bin/formae \
+	E2E_OIDC_PLUGIN_DIR=$(OIDC_STAGE_DIR) \
+	E2E_OIDC_PLUGIN_DIR_NO_BROKER=$(OIDC_STAGE_DIR_NO_BROKER) \
+		go test -C ./tests/e2e/go -tags=e2e -timeout 30m -v ./... $(E2E_RUN_FLAGS)
+
+# The hermetic oidc-credential fixtures: a stub credential broker and a resource
+# plugin that echoes the token the broker mints. Staged into two plugin trees
+# the e2e agent can be pointed at — one where the broker sits beside the echo
+# plugin, one where the echo plugin is alone — in the layout plugin discovery
+# expects (<dir>/<name>/v<version>/<name> beside the manifest).
+OIDC_FIXTURE_DIR := $(CURDIR)/tests/e2e/go/fixtures
+OIDC_STAGE_DIR := $(CURDIR)/dist/e2e/oidc-plugins
+OIDC_STAGE_DIR_NO_BROKER := $(CURDIR)/dist/e2e/oidc-plugins-no-broker
+
+stage-oidc-fixtures:
+	@echo "Staging e2e oidc-credential fixtures..."
+	rm -rf $(OIDC_STAGE_DIR) $(OIDC_STAGE_DIR_NO_BROKER)
+	mkdir -p $(OIDC_STAGE_DIR)/oidc-credential-stub/v0.0.1
+	go build -C $(OIDC_FIXTURE_DIR)/oidc-credential-stub \
+		-o $(OIDC_STAGE_DIR)/oidc-credential-stub/v0.0.1/oidc-credential-stub .
+	cp $(OIDC_FIXTURE_DIR)/oidc-credential-stub/formae-plugin.pkl \
+		$(OIDC_STAGE_DIR)/oidc-credential-stub/v0.0.1/formae-plugin.pkl
+	mkdir -p $(OIDC_STAGE_DIR)/oidc-echo/v0.0.1/schema
+	go build -C $(OIDC_FIXTURE_DIR)/oidc-echo-plugin \
+		-o $(OIDC_STAGE_DIR)/oidc-echo/v0.0.1/oidc-echo .
+	cp $(OIDC_FIXTURE_DIR)/oidc-echo-plugin/formae-plugin.pkl \
+		$(OIDC_STAGE_DIR)/oidc-echo/v0.0.1/formae-plugin.pkl
+	cp -R $(OIDC_FIXTURE_DIR)/oidc-echo-plugin/schema/pkl \
+		$(OIDC_STAGE_DIR)/oidc-echo/v0.0.1/schema/pkl
+	mkdir -p $(OIDC_STAGE_DIR_NO_BROKER)
+	cp -R $(OIDC_STAGE_DIR)/oidc-echo $(OIDC_STAGE_DIR_NO_BROKER)/oidc-echo
 
 ## test-property: Run property tests (FullChaos 100 iterations, others 50)
 test-property:
@@ -281,6 +313,7 @@ test-schema-pkl:
 	cd internal/schema/pkl/schema && pkl test tests/formae.pkl
 	cd internal/schema/pkl/schema && pkl test tests/collection_resolvable_test.pkl
 	cd internal/schema/pkl/schema && pkl test tests/secret_resolvable_test.pkl
+	cd internal/schema/pkl/schema && pkl test tests/plugin_manifest_test.pkl
 	cd internal/schema/pkl/assets && pkl test tests/PklProjectTemplate_test.pkl
 
 test-generator-pkl:
@@ -314,6 +347,7 @@ test-pkl: gen-pkl test-schema-pkl test-generator-pkl test-descriptors-pkl
 tidy-all:
 	go mod tidy
 	cd ./pkg/auth && go mod tidy
+	cd ./pkg/credential && go mod tidy
 	cd ./pkg/model && go mod tidy
 	cd ./pkg/plugin && go mod tidy
 
@@ -338,4 +372,4 @@ add-license:
 
 all: clean build gen-pkl api-docs
 
-.PHONY: api-docs clean build install-gremlins build-debug pkg-bin bundle-examples verify-examples-opkg publish-bin version-semver gen-pkl pkg-pkl publish-pkl run tidy-all test-build test-all test-scripts test-unit test-unit-postgres test-unit-auroradataapi test-unit-summary test-integration test-e2e test-property mutation-test test-descriptors-pkl verify-schema-fakeaws version full-e2e lint lint-reuse add-license postgres-up postgres-down mssql-up mssql-down local-data-api-up local-data-api-down all
+.PHONY: stage-oidc-fixtures api-docs clean build install-gremlins build-debug pkg-bin bundle-examples verify-examples-opkg publish-bin version-semver gen-pkl pkg-pkl publish-pkl run tidy-all test-build test-all test-scripts test-unit test-unit-postgres test-unit-auroradataapi test-unit-summary test-integration test-e2e test-property mutation-test test-descriptors-pkl verify-schema-fakeaws version full-e2e lint lint-reuse add-license postgres-up postgres-down mssql-up mssql-down local-data-api-up local-data-api-down all
