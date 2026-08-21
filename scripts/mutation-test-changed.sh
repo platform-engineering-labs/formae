@@ -18,20 +18,28 @@ set -euo pipefail
 # is a single write after the run — so a version bump means re-checking them.
 
 # ── 1. Classify one package's result ────────────────────────────────────────
-# classify_result <report-path>
+# classify_result <report-path> <exit-status>
 # Prints "status|reason|score|killed|lived|timed_out" for a single package.
 #
-# Only the report decides the verdict; gremlins' exit status is a diagnostic the
-# caller logs. A report that is missing, unreadable, or not shaped like a
-# gremlins report is a classification outcome, never an abort.
+# Only the report decides the verdict. With no report, gremlins' exit status
+# names the reason, because it is all there is to tell a cancelled run — which
+# exits 0 and writes nothing — from one that ended before it could write.
+# Nothing is read from gremlins' output: it carries the coverage run's own
+# output when coverage fails, so a unit test that panics puts panic text there
+# without gremlins having died. A report that is missing, unreadable, or not
+# shaped like a gremlins report is a classification outcome, never an abort.
 classify_result() {
-  local report_path="$1" result
+  local report_path="$1" status="$2" result
 
   if [[ ! -f "$report_path" ]]; then
+    # A gremlins that is not installed leaves the shell exiting 127, so the tool
+    # is checked before the status of the run that never happened.
     if ! command -v gremlins > /dev/null 2>&1; then
       echo "failed|gremlins not found|n/a|0|0|0"
-    else
+    elif [[ "$status" == 0 ]]; then
       echo "failed|no output|n/a|0|0|0"
+    else
+      echo "failed|gremlins exited $status without a report|n/a|0|0|0"
     fi
     return 0
   fi
@@ -140,7 +148,9 @@ PYEOF
   echo "$result"
 }
 
-# ── 2. Helper: find nearest go.mod by walking up from a directory ───────────
+# ── 2. Helpers ──────────────────────────────────────────────────────────────
+# find_module_root <pkg>: finds the nearest go.mod by walking up from a
+# directory.
 find_module_root() {
   local dir="$REPO_ROOT/$1"
   while [[ "$dir" != "$REPO_ROOT" && "$dir" != "/" ]]; do
@@ -152,6 +162,23 @@ find_module_root() {
   done
   # Fall back to repo root
   echo "$REPO_ROOT"
+}
+
+# has_own_unit_tests <dir>: true when a test file directly in <dir> carries the
+# unit build tag. The directory's own test files are listed and handed to grep
+# by name rather than letting grep walk the tree, because tests under a
+# sub-directory belong to another package and cannot make this one mutable. A
+# directory with no test files of its own — or no directory at all — is answered
+# before grep is reached, since a grep given a pattern and no file to read would
+# take the run's stdin. The glob runs in a subshell, the way the gremlins run
+# scopes its own cd, so nullglob stays out of the rest of the script.
+has_own_unit_tests() {
+  (
+    shopt -s nullglob
+    local test_files=("$1"/*_test.go)
+    [[ ${#test_files[@]} -gt 0 ]] \
+      && grep -q '//go:build unit' "${test_files[@]}" 2>/dev/null
+  )
 }
 
 # ── 3. Summary plumbing ─────────────────────────────────────────────────────
@@ -274,11 +301,10 @@ main() {
   # Map to unique package directories
   changed_packages=$(echo "$changed_files" | xargs -I{} dirname {} | sort -u)
 
-  # Filter to packages that have //go:build unit test files
+  # Filter to packages that have //go:build unit test files of their own
   testable_packages=()
   while IFS= read -r pkg; do
-    pkg_abs="$REPO_ROOT/$pkg"
-    if [[ -d "$pkg_abs" ]] && grep -qlr '//go:build unit' --include='*_test.go' "$pkg_abs" 2>/dev/null; then
+    if has_own_unit_tests "$REPO_ROOT/$pkg"; then
       testable_packages+=("$pkg")
     fi
   done <<< "$changed_packages"
@@ -335,18 +361,30 @@ main() {
     in_flight_pkg="$pkg"
     in_flight_log="$log_file"
 
+    # gremlins mutates the whole directory subtree below the package it is
+    # invoked on, so a package with sub-packages under it is charged with
+    # mutants from code the run was never asked about. --exclude-files takes a
+    # regex matched unanchored against every path gremlins walks below the
+    # invoked directory, and those paths are always slash-separated whatever the
+    # platform — so a path holding a separator is by construction in a
+    # sub-directory, and excluding '/' leaves exactly the invoked package. This
+    # narrows what is mutated, not what is covered: coverage is still gathered
+    # over the whole subtree, and gremlins has no flag to narrow that.
+    #
     # No pipeline, so the exit status is gremlins' own and set -e cannot end the
     # run here. gremlins may exit non-zero when mutants survive — that's expected
-    # and not a failure; the status is a diagnostic, never the verdict.
+    # and not a failure; the status never overrules a report, it only says how a
+    # run that wrote none ended.
     status=0
     (cd "$module_root" && gremlins unleash \
       --tags unit \
       --timeout-coefficient 10 \
       --workers 4 \
+      --exclude-files '/' \
       -o "$report_file" \
       "./$rel_pkg") > "$log_file" 2>&1 || status=$?
 
-    result=$(classify_result "$report_file")
+    result=$(classify_result "$report_file" "$status")
     IFS='|' read -r result_status reason score killed lived timed_out <<< "$result"
 
     if [[ "$result_status" == "ok" ]]; then
