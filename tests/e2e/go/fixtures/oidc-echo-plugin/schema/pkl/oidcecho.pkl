@@ -19,9 +19,10 @@ open class Config {
 
 /// One identity-token probe.
 ///
-/// `token` and `tokenError` are deliberately absent as fields: the plugin
-/// returns them from Create and the agent, finding them outside the schema,
-/// files them under the resource's read-only properties.
+/// The token, the STS exchange outcome, and the errors of either are
+/// deliberately absent as fields: the plugin returns them from Create and the
+/// agent, finding them outside the schema, files them under the resource's
+/// read-only properties.
 @formae.ResourceHint {
     type = "OidcEcho::Tokens::Token"
     identifier = "$.probeLabel"

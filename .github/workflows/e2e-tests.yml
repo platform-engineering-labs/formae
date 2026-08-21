@@ -176,12 +176,13 @@ jobs:
             system_plugins: auth-basic
           - test: TestPluginConfig
             system_plugins: sftp
-          # Hermetic: no cloud plugins and no cloud credentials. The
-          # oidc-credential fixtures (a stub broker and a resource plugin that
-          # echoes the token it is handed) are built from this repo and staged
-          # by `make test-e2e` itself.
+          # Installs no cloud plugin: the oidc-credential fixtures (a stub
+          # broker and a resource plugin that exchanges the token it is
+          # handed) are built from this repo and staged by `make test-e2e`
+          # itself. It does need AWS credentials — the broker reads its
+          # signing key from Secrets Manager and the plugin calls
+          # sts:AssumeRoleWithWebIdentity against the standing issuer.
           - test: TestOidcCredential
-            hermetic: true
 
     steps:
       - uses: actions/checkout@v4
@@ -206,10 +207,7 @@ jobs:
         with:
           go-version: '1.26.2'
 
-      # A hermetic entry touches no cloud account, so it neither needs nor
-      # takes cloud credentials.
       - name: Configure AWS Credentials
-        if: ${{ !matrix.hermetic }}
         # Fail fast instead of hanging on a stalled STS call (see above).
         timeout-minutes: 5
         id: creds
@@ -221,7 +219,6 @@ jobs:
           output-credentials: true
 
       - name: Add profile credentials to ~/.aws/credentials
-        if: ${{ !matrix.hermetic }}
         run: |
           mkdir -p ~/.aws
           aws configure set aws_access_key_id ${{ steps.creds.outputs.aws-access-key-id }} --profile e2e-test
@@ -229,11 +226,10 @@ jobs:
           aws configure set region us-west-2 --profile e2e-test
 
       - name: Test AWS Access
-        if: ${{ !matrix.hermetic }}
         run: aws sts get-caller-identity
 
       - name: Configure Azure Credentials
-        if: ${{ !matrix.hermetic && env.AZURE_CLIENT_ID != '' }}
+        if: ${{ env.AZURE_CLIENT_ID != '' }}
         uses: azure/login@v2
         env:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
