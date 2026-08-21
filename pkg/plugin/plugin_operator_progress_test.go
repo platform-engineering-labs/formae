@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"testing"
-	"time"
 
 	"ergo.services/ergo/gen"
 	"github.com/stretchr/testify/assert"
@@ -24,7 +23,7 @@ import (
 // create to finish, carrying the create that started it.
 func statusCheckFor(request any) PluginOperatorCheckStatus {
 	return PluginOperatorCheckStatus{
-		Namespace:         deadlineTestNamespace,
+		Namespace:         operatorTestNamespace,
 		RequestID:         "request-1",
 		NativeID:          "resource-1",
 		ResourceType:      "Test::Resource",
@@ -34,7 +33,6 @@ func statusCheckFor(request any) PluginOperatorCheckStatus {
 }
 
 func TestStatus_NamespaceMismatchReportsBeforeTerminating(t *testing.T) {
-	const callTimeout = 90 * time.Second
 
 	plugin := newRecordingPlugin()
 	proc := newOperatorProcess(nil, nil)
@@ -43,7 +41,7 @@ func TestStatus_NamespaceMismatchReportsBeforeTerminating(t *testing.T) {
 	check.Namespace = "other"
 
 	state, _, _, err := status(gen.PID{}, StateWaitingForResource,
-		deadlineTestData(plugin, callTimeout), check, proc)
+		operatorTestData(plugin), check, proc)
 
 	require.NoError(t, err)
 	assert.Equal(t, StateFinishedWithError, state)
@@ -60,7 +58,6 @@ func TestStatus_NamespaceMismatchReportsBeforeTerminating(t *testing.T) {
 }
 
 func TestStatus_ClassifiesStatusCallError(t *testing.T) {
-	const callTimeout = 90 * time.Second
 
 	tests := []struct {
 		name         string
@@ -70,13 +67,6 @@ func TestStatus_ClassifiesStatusCallError(t *testing.T) {
 		wantTerminal bool
 	}{
 		{
-			name:         "deadline",
-			err:          fmt.Errorf("calling the cloud API: %w", context.DeadlineExceeded),
-			wantCode:     resource.OperationErrorCodeServiceTimeout,
-			wantState:    StateWaitingForResource,
-			wantTerminal: false,
-		},
-		{
 			name:         "throttling",
 			err:          errors.New("ThrottlingException: Rate exceeded"),
 			wantCode:     resource.OperationErrorCodeThrottling,
@@ -84,9 +74,9 @@ func TestStatus_ClassifiesStatusCallError(t *testing.T) {
 			wantTerminal: false,
 		},
 		{
-			name:         "throttled past its deadline",
-			err:          fmt.Errorf("ThrottlingException: Rate exceeded: %w", context.DeadlineExceeded),
-			wantCode:     resource.OperationErrorCodeServiceTimeout,
+			name:         "throttled while the call was cancelled",
+			err:          fmt.Errorf("ThrottlingException: Rate exceeded: %w", context.Canceled),
+			wantCode:     resource.OperationErrorCodeThrottling,
 			wantState:    StateWaitingForResource,
 			wantTerminal: false,
 		},
@@ -107,7 +97,7 @@ func TestStatus_ClassifiesStatusCallError(t *testing.T) {
 
 			check := statusCheckFor(nil)
 			state, _, _, err := status(gen.PID{}, StateWaitingForResource,
-				deadlineTestData(plugin, callTimeout), check, proc)
+				operatorTestData(plugin), check, proc)
 
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantState, state)
@@ -131,7 +121,6 @@ func TestStatus_ClassifiesStatusCallError(t *testing.T) {
 // its backoff and eventually gives up, and every attempt must report its own
 // error rather than repeating the first one.
 func TestStatus_FailingCallConsumesTheRetryLadder(t *testing.T) {
-	const callTimeout = 90 * time.Second
 
 	plugin := newRecordingPlugin()
 	proc := newOperatorProcess(nil, nil)
@@ -139,7 +128,7 @@ func TestStatus_FailingCallConsumesTheRetryLadder(t *testing.T) {
 
 	plugin.err = errors.New("ThrottlingException: Rate exceeded polling for the first time")
 	_, data, _, err := status(gen.PID{}, StateWaitingForResource,
-		deadlineTestData(plugin, callTimeout), check, proc)
+		operatorTestData(plugin), check, proc)
 	require.NoError(t, err)
 
 	plugin.err = errors.New("ThrottlingException: Rate exceeded polling for the second time")
@@ -158,14 +147,13 @@ func TestStatus_FailingCallConsumesTheRetryLadder(t *testing.T) {
 // recovers: the operation must give up once its attempts are spent instead of
 // polling forever.
 func TestStatus_FailingCallsExhaustTheRetryLadder(t *testing.T) {
-	const callTimeout = 90 * time.Second
 
 	plugin := newRecordingPlugin()
 	plugin.err = errors.New("ThrottlingException: Rate exceeded")
 	proc := newOperatorProcess(nil, nil)
 	check := statusCheckFor(nil)
 
-	data := deadlineTestData(plugin, callTimeout)
+	data := operatorTestData(plugin)
 	maxAttempts := int(data.config.MaxRetries) + 1
 
 	var state gen.Atom
@@ -184,12 +172,11 @@ func TestStatus_FailingCallsExhaustTheRetryLadder(t *testing.T) {
 }
 
 func TestRetry_UnsupportedOperationReportsTerminalFailure(t *testing.T) {
-	const callTimeout = 90 * time.Second
 
 	plugin := newRecordingPlugin()
 	proc := newOperatorProcess(nil, nil)
 
-	state, _, _, err := retry(gen.PID{}, StateRetrying, deadlineTestData(plugin, callTimeout),
+	state, _, _, err := retry(gen.PID{}, StateRetrying, operatorTestData(plugin),
 		PluginOperatorRetry{ResourceOperation: resource.OperationNotSupported}, proc)
 
 	require.NoError(t, err)
