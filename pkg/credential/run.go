@@ -224,10 +224,18 @@ func startNodeStep(cfg nodeConfig) (node, error) {
 	options.Log.DefaultLogger.Disable = true
 	options.Log.DefaultLogger.DisableBanner = true
 
+	// Port is always 0 (auto-select), exactly like pkg/plugin/run.go:138.
+	// cfg.ergoPort (FORMAE_ERGO_PORT) is NOT used here: that env var carries
+	// the AGENT's own acceptor port, passed through to every plugin
+	// process unmodified (see plugin_process_supervisor.go). Binding to it
+	// would make the broker fight the agent for the same localhost port.
+	// Agent<->broker addressing goes by node name through the shared
+	// registrar (below), so the broker's own listen port never needs to be
+	// predictable. Do not "fix" this back to cfg.ergoPort.
 	options.Network.Acceptors = []gen.AcceptorOptions{
 		{
 			Host: "localhost",
-			Port: uint16(cfg.ergoPort),
+			Port: 0,
 		},
 	}
 
