@@ -43,5 +43,18 @@ jobs:
       - name: Stamp the version
         run: make version-semver
 
+      # A mutant can turn a bounded loop into one that allocates without
+      # bound, exhausting the VM before gremlins' per-mutant timeout can
+      # fire; the runner is then torn down mid-run and gremlins exits 0
+      # without a report. Confining the run to a memory-capped cgroup makes
+      # the kernel kill the runaway test process instead: gremlins records
+      # the mutant as killed and the run completes. The cap leaves the
+      # 16 GB runner room for the runner agent; swap is denied so a runaway
+      # dies quickly instead of thrashing.
       - name: Run mutation tests on changed packages
-        run: ./scripts/mutation-test-changed.sh
+        run: |
+          sudo mkdir /sys/fs/cgroup/mutation
+          echo 12G | sudo tee /sys/fs/cgroup/mutation/memory.max
+          echo 0 | sudo tee /sys/fs/cgroup/mutation/memory.swap.max
+          echo $$ | sudo tee /sys/fs/cgroup/mutation/cgroup.procs
+          ./scripts/mutation-test-changed.sh
