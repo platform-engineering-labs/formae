@@ -54,6 +54,12 @@ type TestHarness struct {
 	cancel     context.CancelFunc
 	pluginsDir string
 
+	// RenamesAccepted counts renames the agent accepted across all rapid
+	// iterations. Tests that enable rename assert it is non-zero after
+	// rapid.Check so a broken rename path cannot pass vacuously (a rejected
+	// or no-op rename executes no rename at all).
+	RenamesAccepted int
+
 	// Agent subprocess
 	agentCmd     *exec.Cmd
 	agentLogFile *os.File

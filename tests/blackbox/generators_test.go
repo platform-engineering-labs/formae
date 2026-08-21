@@ -326,7 +326,7 @@ func TestResponseSequenceGen(t *testing.T) {
 				StackCount:     2,
 			}
 			op := Operation{Kind: OpApply}
-			fillOperationFields(rt, &op, config)
+			fillOperationFields(rt, &op, config, 0)
 
 			require.NotNil(t, op.DrawnOutcomes, "DrawnOutcomes should be non-nil when EnableFailures=true")
 			// Should have entries for all resource slots in the target stack.
@@ -347,7 +347,7 @@ func TestResponseSequenceGen(t *testing.T) {
 				StackCount:     2,
 			}
 			op := Operation{Kind: OpApply}
-			fillOperationFields(rt, &op, config)
+			fillOperationFields(rt, &op, config, 0)
 
 			assert.Nil(t, op.DrawnOutcomes, "DrawnOutcomes should be nil when EnableFailures=false")
 		})
@@ -368,7 +368,7 @@ func TestResponseSequenceGen(t *testing.T) {
 
 			// We need a pool for onDependents to be set.
 			op := Operation{Kind: OpDestroy}
-			fillOperationFields(rt, &op, config)
+			fillOperationFields(rt, &op, config, 0)
 
 			require.NotNil(t, op.DrawnOutcomes, "DrawnOutcomes should be non-nil for OpDestroy with EnableFailures")
 

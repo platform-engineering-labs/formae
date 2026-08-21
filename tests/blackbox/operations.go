@@ -154,13 +154,25 @@ type ResourceSnapshot struct {
 	PreviousLabel string
 }
 
+// PendingRename records that a command carried a rename overlay: the forma
+// declared the slot under NewLabel with Alias set to OldLabel. On a
+// successful command the engine must have performed it as an in-place update
+// (an update RU carrying OldLabel); the drain asserts that.
+type PendingRename struct {
+	StackIndex int
+	SlotIndex  int
+	OldLabel   string
+	NewLabel   string
+}
+
 // AcceptedCommand tracks a command that was accepted by the agent during the chaos phase.
 type AcceptedCommand struct {
 	CommandID      string
 	Snapshots      []ResourceSnapshot // pre-command state for revert on cancel
 	OpLogSize      int                // operation log length immediately after acceptance
 	RequestedSlots []ResourceSlotRef
-	IsReconcile    bool // true if the command was reconcile mode (properties = full desired state)
+	IsReconcile    bool           // true if the command was reconcile mode (properties = full desired state)
+	Rename         *PendingRename // set when the command carried a rename overlay
 	// Resolved is true when the cancel handler has already processed this
 	// command. The command remains in AcceptedCommands so that
 	// DrainPendingCommands can include its outcome when resolving conflicts

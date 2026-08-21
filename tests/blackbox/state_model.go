@@ -84,6 +84,14 @@ type StateModel struct {
 	// Populated from command response ResourceUpdate.NativeID on successful
 	// creates/updates. Cleared on successful deletes.
 	NativeIDs map[string]string
+	// Ksuids maps "stackIdx:slotIdx" → the resource's KSUID, populated from
+	// command response ResourceUpdate.ResourceID the same way as NativeIDs.
+	// A rename must keep both stable; the correction path checks that.
+	Ksuids map[string]string
+	// PendingViolations collects violations detected while correcting the
+	// model from command outcomes (e.g. an update RU that changed a
+	// resource's identity). Drained and asserted by AssertAllInvariants.
+	PendingViolations []Violation
 	// DriftExcludedStacks marks stacks whose resources are no longer valid
 	// drift targets this iteration: a canceled changeset can leave its
 	// resources registered as in-progress with the synchronizer for an
@@ -145,6 +153,7 @@ func NewStateModel(stackCount, resourcesPerStack int) *StateModel {
 		UnmanagedResources:  make(map[string]*ExpectedUnmanagedResource),
 		AuthoritativeSlots:  make(map[string]bool),
 		NativeIDs:           make(map[string]string),
+		Ksuids:              make(map[string]string),
 		DriftExcludedStacks: make(map[int]bool),
 	}
 }
@@ -194,6 +203,27 @@ func (m *StateModel) SupersedeSlots(refs []ResourceSlotRef) {
 			m.AcceptedCommands[i].SupersededSlots[ref] = true
 		}
 	}
+}
+
+func (m *StateModel) SetKsuid(stackIdx, slotIdx int, ksuid string) {
+	if ksuid != "" {
+		m.Ksuids[nativeIDKey(stackIdx, slotIdx)] = ksuid
+	}
+}
+
+func (m *StateModel) GetKsuid(stackIdx, slotIdx int) string {
+	return m.Ksuids[nativeIDKey(stackIdx, slotIdx)]
+}
+
+func (m *StateModel) ClearKsuid(stackIdx, slotIdx int) {
+	delete(m.Ksuids, nativeIDKey(stackIdx, slotIdx))
+}
+
+// AddPendingViolation records a violation detected outside the invariant
+// checks (e.g. during command-outcome correction). Asserted and cleared by
+// AssertAllInvariants.
+func (m *StateModel) AddPendingViolation(v Violation) {
+	m.PendingViolations = append(m.PendingViolations, v)
 }
 
 // FindDriftEligibleResource finds a managed resource that exists in the model,
@@ -261,21 +291,6 @@ func (m *StateModel) FindDriftEligibleResource(sequenceNum int) (stackIdx, slotI
 	}
 	c := eligible[sequenceNum%len(eligible)]
 	return c.stackIdx, c.slotIdx, c.stackLabel, c.label, c.rType, c.nativeID, true
-}
-
-// NativeIDsByLabel returns a map of "stackLabel:resourceLabel" → NativeID for
-// all tracked native IDs. This matches the format expected by
-// buildPluginOpSequences and resolveReadMatchKey.
-func (m *StateModel) NativeIDsByLabel() map[string]string {
-	result := make(map[string]string, len(m.NativeIDs))
-	for key, nativeID := range m.NativeIDs {
-		var stackIdx, slotIdx int
-		fmt.Sscanf(key, "%d:%d", &stackIdx, &slotIdx)
-		stackLabel := m.Stacks[stackIdx].Label
-		label := m.LabelForResource(stackIdx, slotIdx)
-		result[stackLabel+":"+label] = nativeID
-	}
-	return result
 }
 
 func (m *StateModel) MarkAuthoritativeSlot(stackIdx, slotIdx int) {
@@ -530,6 +545,11 @@ func (m *StateModel) ApplyCreatedResolved(stackIndex int, propertiesByID map[int
 }
 
 // ApplyDestroyed marks the given resources on the given stack as not existing.
+// The rename overlay is deliberately kept: a destroyed slot's label stays at
+// its renamed value, so a later recreate targets the same label the engine
+// last knew the slot by. Clearing it would make a recreate after a FAILED
+// destroy (real resource still alive under the renamed label) declare a
+// second resource under the default label.
 func (m *StateModel) ApplyDestroyed(stackIndex int, resourceIDs []int) {
 	stack := &m.Stacks[stackIndex]
 	for _, id := range resourceIDs {

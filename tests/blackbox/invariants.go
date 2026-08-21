@@ -18,15 +18,17 @@ import (
 type ViolationKind int
 
 const (
-	ViolationPhantomResource        ViolationKind = iota // in inventory but not in cloud
-	ViolationOrphanedResource                            // in cloud but not in inventory
-	ViolationPropertyMismatch                            // inventory and cloud properties differ
-	ViolationCommandNotTerminal                          // command not in terminal state
-	ViolationResolvableNotResolved                       // resolvable $ref not properly resolved
-	ViolationModelInventoryMismatch                      // model expected state doesn't match inventory
-	ViolationDuplicateNativeID                           // two or more inventory rows share a NativeID (RFC-0041)
-	ViolationRenameOldLabelStillPresent                  // after rename, inventory still has a row at the old label (RFC-0041)
-	ViolationRenameLabelDriftFromNativeID                // inventory row's label diverges from the slot's CurrentLabel for the same NativeID (RFC-0041)
+	ViolationPhantomResource              ViolationKind = iota // in inventory but not in cloud
+	ViolationOrphanedResource                                  // in cloud but not in inventory
+	ViolationPropertyMismatch                                  // inventory and cloud properties differ
+	ViolationCommandNotTerminal                                // command not in terminal state
+	ViolationResolvableNotResolved                             // resolvable $ref not properly resolved
+	ViolationModelInventoryMismatch                            // model expected state doesn't match inventory
+	ViolationDuplicateNativeID                                 // two or more inventory rows share a NativeID (RFC-0041)
+	ViolationRenameOldLabelStillPresent                        // after rename, inventory still has a row at the old label (RFC-0041)
+	ViolationRenameLabelDriftFromNativeID                      // inventory row's label diverges from the slot's CurrentLabel for the same NativeID (RFC-0041)
+	ViolationRenameIdentityChanged                             // a successful update RU changed the resource's NativeID or KSUID (RFC-0041)
+	ViolationRenameRecreatedResource                           // a renamed slot was fulfilled by a create — rename must be an in-place update (RFC-0041)
 )
 
 // Violation describes a single invariant violation.
@@ -731,19 +733,18 @@ func CheckOperationLogInvariants(opLog []testcontrol.OperationLogEntry) []Violat
 
 // CheckRenameInvariants verifies RFC-0041 invariants after one or more
 // renames. For every slot whose PreviousLabel is non-empty (a rename
-// landed on it), the inventory must NOT carry a current row at the old
-// (Stack, Type, PreviousLabel) tuple — that would mean the rename either
-// failed silently or produced a duplicate row instead of renaming the
-// existing one.
+// landed on it), the inventory must NOT carry a row at the old
+// (Stack, Type, PreviousLabel) tuple with that slot's identity — that
+// would mean the rename left the old row behind instead of renaming the
+// existing one. The identity guard (NativeID/KSUID match) keeps a
+// different slot legitimately renamed onto the freed label from being
+// flagged.
 //
 // Also: for every managed inventory row whose NativeID the model tracks
-// (via SetNativeID), the row's Label must equal the slot's current label.
-// This is the positive identity-preservation check: rename keeps the
-// (NativeID, KSUID) pair stable, and the slot's CurrentLabel overlay must
-// match what's in cloud. Used by TestProperty_RenameUnderChaos which
-// asserts identity preservation under the full chaos surface without
-// reaching for the harness's expected-State/Properties prediction (which
-// has independent drift modes that aren't rename-specific).
+// (via SetNativeID), the row's Label must equal the slot's current label,
+// and its KSUID must match the tracked KSUID. This is the positive
+// identity-preservation check: rename keeps the (NativeID, KSUID) pair
+// stable, and the slot's CurrentLabel overlay must match what's in cloud.
 func CheckRenameInvariants(model *StateModel, inventory []pkgmodel.Resource) []Violation {
 	var violations []Violation
 	if model == nil {
@@ -769,15 +770,27 @@ func CheckRenameInvariants(model *StateModel, inventory []pkgmodel.Resource) []V
 				resType = model.Pool.Slots[slotIdx].Type
 			}
 			oldKey := key{stack: stack.Label, typ: resType, label: res.PreviousLabel}
-			if hit, present := rows[oldKey]; present && hit.Managed {
-				violations = append(violations, Violation{
-					Kind: ViolationRenameOldLabelStillPresent,
-					Message: fmt.Sprintf(
-						"slot %d (stack %s, type %s) was renamed away from %q but a managed inventory row still carries that label (ksuid=%s, nativeID=%s)",
-						slotIdx, stack.Label, resType, res.PreviousLabel, hit.Ksuid, hit.NativeID,
-					),
-				})
+			hit, present := rows[oldKey]
+			if !present || !hit.Managed {
+				continue
 			}
+			// Identity guard: only flag the row if it belongs to this slot's
+			// lineage. A different slot renamed onto the freed label is legal.
+			stackIdx := model.StackIndexByLabel(stack.Label)
+			trackedNativeID := model.GetNativeID(stackIdx, slotIdx)
+			trackedKsuid := model.GetKsuid(stackIdx, slotIdx)
+			sameLineage := (trackedNativeID != "" && hit.NativeID == trackedNativeID) ||
+				(trackedKsuid != "" && hit.Ksuid == trackedKsuid)
+			if !sameLineage {
+				continue
+			}
+			violations = append(violations, Violation{
+				Kind: ViolationRenameOldLabelStillPresent,
+				Message: fmt.Sprintf(
+					"slot %d (stack %s, type %s) was renamed away from %q but a managed inventory row still carries that label (ksuid=%s, nativeID=%s)",
+					slotIdx, stack.Label, resType, res.PreviousLabel, hit.Ksuid, hit.NativeID,
+				),
+			})
 		}
 	}
 
@@ -806,6 +819,18 @@ func CheckRenameInvariants(model *StateModel, inventory []pkgmodel.Resource) []V
 				Message: fmt.Sprintf(
 					"inventory row NativeID=%s carries label=%q but the model expects label=%q for slot (stack %d, slot %d)",
 					r.NativeID, r.Label, expectedLabel, slot[0], slot[1],
+				),
+			})
+		}
+		// KSUID stability: the row for a tracked NativeID must carry the
+		// KSUID the model recorded for that slot. A fresh KSUID under the
+		// same NativeID means a rename minted a new resource identity.
+		if trackedKsuid := model.GetKsuid(slot[0], slot[1]); trackedKsuid != "" && r.Ksuid != "" && r.Ksuid != trackedKsuid {
+			violations = append(violations, Violation{
+				Kind: ViolationRenameIdentityChanged,
+				Message: fmt.Sprintf(
+					"inventory row NativeID=%s label=%q carries ksuid=%s but the model tracked ksuid=%s for slot (stack %d, slot %d)",
+					r.NativeID, r.Label, r.Ksuid, trackedKsuid, slot[0], slot[1],
 				),
 			})
 		}
