@@ -151,17 +151,7 @@ func TestProperty_FullChaos(t *testing.T) {
 				EnableForceReconcile: true,
 				EnableTTL:            true,
 				EnableCrashInjection: true,
-				// EnableRename intentionally off here. With rename folded into
-				// the OpApply path (RFC-0041) a rename rides inside an Update
-				// — the same prediction model that already drifts under chaos
-				// (cancel × ForceReconcile × partial-success applies on
-				// non-renamed slots). Leaving rename off keeps FullChaos
-				// focused on the existing prediction-correctness story until
-				// the harness's expected-State/Properties prediction is
-				// hardened. Identity-only coverage for rename lives in the
-				// LabelForResource-aware invariants (CheckRenameInvariants)
-				// and the duplicate-NativeID guard, which both fire under
-				// AssertAllInvariants for any test that turns EnableRename on.
+				EnableRename:         true,
 			}
 
 			h.ResetAgentState(t)
@@ -221,11 +211,22 @@ func TestProperty_RenameViaApply(t *testing.T) {
 			for i, op := range ops {
 				op.SequenceNum = i
 				h.ExecuteOperation(t, &op, model)
+				// Drain after every operation: with a single stack, a second
+				// apply submitted while the first is in flight is rejected by
+				// the agent's stack-overlap admission check. Rename needs the
+				// slot to already exist, i.e. exactly those later applies —
+				// serializing keeps them (and their renames) landing.
+				h.DrainPendingCommands(t, model, 30*time.Second)
 			}
 
-			h.DrainPendingCommands(t, model, 30*time.Second)
-			h.TriggerSyncAndWait(t)
+			h.TriggerSyncAndWait(t, model)
 			h.AssertAllInvariants(t, model)
 		})
+
+		// Whether any generated sequence exercises a rename depends on the
+		// draws (the slot must already exist when the rename-carrying apply
+		// executes), so the count is informational here. Guaranteed rename
+		// coverage lives in TestRenameViaApply_Deterministic.
+		t.Logf("TestProperty_RenameViaApply: %d renames accepted across the run", h.RenamesAccepted)
 	})
 }
