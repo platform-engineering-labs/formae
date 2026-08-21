@@ -4,6 +4,8 @@ go 1.26.0
 
 replace github.com/platform-engineering-labs/formae/pkg/plugin => ./pkg/plugin
 
+replace github.com/platform-engineering-labs/formae/pkg/credential => ./pkg/credential
+
 replace github.com/platform-engineering-labs/formae/pkg/model => ./pkg/model
 
 replace github.com/platform-engineering-labs/formae/pkg/api/model => ./pkg/api/model
@@ -54,6 +56,7 @@ require (
 	github.com/muesli/termenv v0.16.0
 	github.com/platform-engineering-labs/formae/pkg/api/model v0.1.1
 	github.com/platform-engineering-labs/formae/pkg/auth v0.0.0-00010101000000-000000000000
+	github.com/platform-engineering-labs/formae/pkg/credential v0.0.0-00010101000000-000000000000
 	github.com/platform-engineering-labs/formae/pkg/model v0.1.6
 	github.com/platform-engineering-labs/formae/pkg/plugin v0.0.0-00010101000000-000000000000
 	github.com/platform-engineering-labs/formae/tests/testcontrol v0.0.0-00010101000000-000000000000
