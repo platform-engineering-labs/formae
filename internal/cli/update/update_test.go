@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
+	"github.com/platform-engineering-labs/formae/internal/opsmgr"
 	"github.com/platform-engineering-labs/orbital/opm/records"
 	"github.com/platform-engineering-labs/orbital/ops"
 )
@@ -131,42 +132,19 @@ func TestUpdateFlow_ConsequenceBeforeConfirm(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// D8 gate tests — runInitConfirmDecision
+// no-root policy: update must refuse, never initialize
 // ----------------------------------------------------------------------------
 
-// Non-TTY without --yes must error with "interactive input requires a TTY".
-func TestInitConfirm_NonTTY_NoYes(t *testing.T) {
-	stub := &stubInstaller{}
-	var buf captureWriter
-	th := theme.New("formae")
-
-	_, err := runInitConfirmDecision(&buf, th, seamsFor(stub, false, false), "/some/path", false)
+// The resolved tree path is derived from the running binary's location, so a
+// formae reached through a foreign prefix resolves to that prefix. `update`
+// must refuse with actionable guidance instead of initializing a tree there —
+// orbital's force-init wipes the root it is handed.
+func TestErrNoRoot_RefusesAndGuides(t *testing.T) {
+	err := errNoRoot("/opt/homebrew")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "interactive input requires a TTY")
-}
-
-// Non-TTY with --yes must proceed (return true, nil) without calling confirm.
-func TestInitConfirm_NonTTY_WithYes(t *testing.T) {
-	stub := &stubInstaller{}
-	var confirmCalled bool
-
-	seams := updateSeams{
-		isInteractiveFn: func() bool { return false },
-		runConfirmFn: func(_ *theme.Theme, _, _ string) (bool, error) {
-			confirmCalled = true
-			return true, nil
-		},
-		stopAgentFn: stub.stop,
-		installFn:   stub.install,
-	}
-
-	var buf captureWriter
-	th := theme.New("formae")
-
-	result, err := runInitConfirmDecision(&buf, th, seams, "/some/path", true)
-	require.NoError(t, err)
-	assert.True(t, result, "should proceed when --yes on non-TTY")
-	assert.False(t, confirmCalled, "confirm must not be called with --yes")
+	assert.Contains(t, err.Error(), "/opt/homebrew")
+	assert.Contains(t, err.Error(), "never creates one")
+	assert.Contains(t, err.Error(), opsmgr.FormaePelRootEnv)
 }
 
 // ----------------------------------------------------------------------------
