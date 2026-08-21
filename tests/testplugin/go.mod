@@ -41,7 +41,7 @@ require (
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.7 // indirect
 	github.com/klauspost/compress v1.18.5 // indirect
 	github.com/lufia/plan9stats v0.0.0-20251013123823-9fd1530e3ec3 // indirect
-	github.com/platform-engineering-labs/formae/pkg/credential v0.0.0-00010101000000-000000000000 // indirect
+	github.com/platform-engineering-labs/formae/pkg/credential v0.0.0-20260821213704-ba68bacf6dd6 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
 	github.com/shirou/gopsutil/v4 v4.26.1 // indirect

@@ -55,7 +55,7 @@ require (
 	github.com/muesli/termenv v0.16.0
 	github.com/platform-engineering-labs/formae/pkg/api/model v0.1.1
 	github.com/platform-engineering-labs/formae/pkg/auth v0.0.0-00010101000000-000000000000
-	github.com/platform-engineering-labs/formae/pkg/credential v0.0.0-00010101000000-000000000000
+	github.com/platform-engineering-labs/formae/pkg/credential v0.0.0-20260821213704-ba68bacf6dd6
 	github.com/platform-engineering-labs/formae/pkg/model v0.1.6
 	github.com/platform-engineering-labs/formae/pkg/plugin v0.0.0-00010101000000-000000000000
 	github.com/platform-engineering-labs/formae/tests/testcontrol v0.0.0-00010101000000-000000000000

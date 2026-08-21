@@ -18,7 +18,7 @@ require (
 	github.com/hashicorp/hcl/v2 v2.24.0
 	github.com/klauspost/compress v1.18.5
 	github.com/masterminds/semver v1.5.0
-	github.com/platform-engineering-labs/formae/pkg/credential v0.0.0-00010101000000-000000000000
+	github.com/platform-engineering-labs/formae/pkg/credential v0.0.0-20260821213704-ba68bacf6dd6 // re-pin to a real tag at release time
 	github.com/platform-engineering-labs/formae/pkg/model v0.1.6
 	github.com/stretchr/testify v1.11.1
 	github.com/vmihailenco/msgpack/v5 v5.4.1
