@@ -37,14 +37,6 @@ func createFakePlugin(t *testing.T, baseDir, name, version, manifestPkl string) 
 	}
 }
 
-// createFakePluginWithManifest is createFakePlugin with an explicit manifest
-// body, for tests that need full control over manifest content beyond what
-// resourceManifest/authManifest cover (e.g. oidc-credential's namespaces list).
-func createFakePluginWithManifest(t *testing.T, baseDir, name, version, manifestPkl string) {
-	t.Helper()
-	createFakePlugin(t, baseDir, name, version, manifestPkl)
-}
-
 func resourceManifest(name, namespace string) string {
 	return `name = "` + name + `"
 version = "1.0.0"
@@ -183,7 +175,7 @@ func TestDiscoverPlugins_Auth_SkipsPluginsWithoutManifest(t *testing.T) {
 
 func TestDiscoverPlugins_OidcCredentialClassifiesOnlyToItsOwnScan(t *testing.T) {
 	dir := t.TempDir()
-	createFakePluginWithManifest(t, dir, "fai", "0.1.0", `name = "fai"
+	createFakePlugin(t, dir, "fai", "0.1.0", `name = "fai"
 type = "oidc-credential"
 version = "0.1.0"
 namespaces { "aws"; "Azure" }
