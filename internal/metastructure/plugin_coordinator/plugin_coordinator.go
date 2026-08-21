@@ -294,9 +294,20 @@ func (c *PluginCoordinator) HandleMessage(from gen.PID, message any) error {
 // of token - this covers a broker restarting with a fresh spawn token). A
 // namespace already served by a DIFFERENT Name is rejected: the first
 // registration stands.
+//
+// The announcement is authoritative for its own broker's namespace set: any
+// existing entry for msg.Name whose namespace is absent from this
+// announcement is pruned. Without this, a broker that restarts serving fewer
+// namespaces than before (manifest shrunk) would leave the dropped
+// namespace's entry orphaned under its old spawn token forever - the
+// supervisor's unregister-before-respawn ordinarily clears it first, but a
+// failed unregister Send (logged, not fatal) would otherwise strand it.
 func (c *PluginCoordinator) handleOidcCredentialAnnouncement(from gen.PID, msg messages.OidcCredentialPluginAnnouncement) {
+	announced := make(map[string]bool, len(msg.Namespaces))
+
 	for _, namespace := range msg.Namespaces {
 		key := strings.ToUpper(namespace)
+		announced[key] = true
 
 		if existing, ok := c.oidcCredentialBrokers[key]; ok && existing.Name != msg.Name {
 			c.Log().Error("Oidc credential broker rejected: namespace=%s already served by name=%s, rejecting name=%s node=%s",
@@ -311,6 +322,13 @@ func (c *PluginCoordinator) handleOidcCredentialAnnouncement(from gen.PID, msg m
 			RegisteredAt: time.Now(),
 		}
 		c.Log().Info("Oidc credential broker registered: namespace=%s node=%s name=%s", key, from.Node, msg.Name)
+	}
+
+	for key, broker := range c.oidcCredentialBrokers {
+		if broker.Name == msg.Name && !announced[key] {
+			delete(c.oidcCredentialBrokers, key)
+			c.Log().Debug("Oidc credential broker pruned: namespace=%s name=%s no longer announced", key, msg.Name)
+		}
 	}
 }
 

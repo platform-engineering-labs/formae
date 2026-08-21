@@ -315,6 +315,34 @@ func TestPluginCoordinator_OidcBroker_SameBrokerSupersedes(t *testing.T) {
 	assert.Equal(t, "tok-2", broker.SpawnToken, "the later announcement must supersede the earlier one")
 }
 
+// TestPluginCoordinator_OidcBroker_ReannouncementPrunesDroppedNamespaces
+// asserts that a broker's announcement is authoritative for its own
+// namespace set: re-announcing with a smaller namespace list removes the
+// entries for namespaces no longer announced, while a different broker's
+// entries are left untouched.
+func TestPluginCoordinator_OidcBroker_ReannouncementPrunesDroppedNamespaces(t *testing.T) {
+	listener, sender := newCoordinatorForTest(t)
+
+	listener.SendMessage(sender, oidcAnnouncement("other", []string{"gcp"}, "other-tok"))
+	listener.SendMessage(sender, oidcAnnouncement("fai", []string{"aws", "azure"}, "tok-1"))
+	listener.SendMessage(sender, oidcAnnouncement("fai", []string{"aws"}, "tok-2"))
+
+	c := listener.Behavior().(*PluginCoordinator)
+
+	_, ok := c.oidcCredentialBrokers["AZURE"]
+	assert.False(t, ok, "a namespace dropped from the re-announcement must be pruned")
+
+	broker, ok := c.oidcCredentialBrokers["AWS"]
+	require.True(t, ok, "a namespace still announced must remain registered")
+	assert.Equal(t, "fai", broker.Name)
+	assert.Equal(t, "tok-2", broker.SpawnToken, "the re-announcement's token must be the one carried forward")
+
+	other, ok := c.oidcCredentialBrokers["GCP"]
+	require.True(t, ok, "a different broker's entry must be untouched by fai's re-announcement")
+	assert.Equal(t, "other", other.Name)
+	assert.Equal(t, "other-tok", other.SpawnToken)
+}
+
 // TestPluginCoordinator_OidcBroker_DifferentBrokerRejected asserts that a
 // different broker Name announcing a namespace already served by another
 // broker is rejected: the first registration stands untouched.
