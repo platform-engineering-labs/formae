@@ -49,7 +49,8 @@ type panelSpec struct {
 	lines []string
 }
 
-// boxWidth returns the widest line of a rendered box.
+// boxWidth returns the widest line of a rendered box, measured as display
+// width rather than byte length.
 func boxWidth(box string) int {
 	maxW := 0
 	for _, l := range strings.Split(box, "\n") {
