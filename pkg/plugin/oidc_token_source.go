@@ -1,4 +1,4 @@
-// © 2026 Platform Engineering Labs Inc.
+// © 2025 Platform Engineering Labs Inc.
 //
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"ergo.services/ergo/gen"
 	"github.com/google/uuid"
@@ -16,13 +17,16 @@ import (
 )
 
 // oidcBrokerCallTimeoutSeconds bounds a call to the paired broker. It matches
-// the broker's own request budget; Process.Call's fixed 5s default would give
-// up before the broker does, so every call names this timeout explicitly.
+// the broker's own request budget, so a slow but successful mint is not
+// truncated: Process.Call's fixed 5s default would abandon a mint the broker is
+// still working on.
 const oidcBrokerCallTimeoutSeconds = 10
 
 // OidcTokenSource mints short-lived OIDC identity tokens for the audience a
 // resource plugin needs to authenticate to. A plugin receives one via
 // OidcAware and calls it with the context of the operation it is serving.
+// Concurrent calls within one operation are safe but serialized, so a fan-out
+// that needs several tokens pays for them one at a time.
 type OidcTokenSource interface {
 	IdentityToken(ctx context.Context, audience string) (string, error)
 }
@@ -50,6 +54,21 @@ type brokerCallFunc func(payload []byte) ([]byte, error)
 type oidcBrokerClient struct {
 	namespace string
 	call      brokerCallFunc
+
+	// callMu serializes calls through this client. Ergo's synchronous call is
+	// single-flight per process: a second call issued while the first is still
+	// waiting for its response is refused outright. The client belongs to one
+	// operator, hence one process, so serializing here is exactly the
+	// granularity the transport requires and a plugin fanning out over several
+	// goroutines still gets a token on each of them.
+	callMu sync.Mutex
+}
+
+// invoke carries payload to the broker, one call at a time.
+func (c *oidcBrokerClient) invoke(payload []byte) ([]byte, error) {
+	c.callMu.Lock()
+	defer c.callMu.Unlock()
+	return c.call(payload)
 }
 
 // newOidcBrokerClient builds the client for the broker the coordinator paired
@@ -126,7 +145,9 @@ func oidcBrokerClientFrom(ctx context.Context) (*oidcBrokerClient, bool) {
 type ctxOidcTokenSource struct{}
 
 // NewOidcTokenSource returns the token source the SDK installs on OidcAware
-// plugins. It resolves the paired broker from the per-call context.
+// plugins. It resolves the paired broker from the per-call context. Plugin
+// authors never call this: the SDK hands the source to SetOidcTokenSource at
+// startup.
 func NewOidcTokenSource() OidcTokenSource {
 	return &ctxOidcTokenSource{}
 }
@@ -148,7 +169,7 @@ func (s *ctxOidcTokenSource) IdentityToken(ctx context.Context, audience string)
 		return "", fmt.Errorf("encoding the identity token request for namespace %s: %w", client.namespace, err)
 	}
 
-	response, err := client.call(payload)
+	response, err := client.invoke(payload)
 	if err != nil {
 		return "", fmt.Errorf("calling the oidc-credential broker paired with namespace %s: %w", client.namespace, err)
 	}

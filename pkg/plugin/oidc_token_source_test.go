@@ -1,4 +1,4 @@
-// © 2026 Platform Engineering Labs Inc.
+// © 2025 Platform Engineering Labs Inc.
 //
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
@@ -9,6 +9,7 @@ package plugin
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -62,6 +63,58 @@ func TestCtxSource_GeneratesARequestIDPerCall(t *testing.T) {
 
 	require.Len(t, seen, 2)
 	assert.NotEqual(t, seen[0], seen[1])
+}
+
+// A plugin fanning an operation out over goroutines may ask for a token on each
+// of them; the transport only carries one call at a time, so the client
+// serializes them and every caller still gets its token.
+func TestCtxSource_SerializesConcurrentCallsThroughOneClient(t *testing.T) {
+	var mu sync.Mutex
+	inFlight := 0
+	maxInFlight := 0
+
+	c := &oidcBrokerClient{namespace: "AWS", call: func([]byte) ([]byte, error) {
+		mu.Lock()
+		inFlight++
+		if inFlight > maxInFlight {
+			maxInFlight = inFlight
+		}
+		mu.Unlock()
+
+		// Widen the window a genuinely concurrent call would overlap in.
+		time.Sleep(10 * time.Millisecond)
+
+		mu.Lock()
+		inFlight--
+		mu.Unlock()
+
+		return credential.Encode(&credential.IdentityTokenResponse{
+			Result: &credential.OidcIdentityTokenResult{Token: "jwt", ExpiresAt: time.Now().Add(time.Hour)},
+		})
+	}}
+	ctx := withOidcBrokerClient(context.Background(), c)
+	source := &ctxOidcTokenSource{}
+
+	const callers = 4
+	tokens := make([]string, callers)
+	errs := make([]error, callers)
+	var wg sync.WaitGroup
+	wg.Add(callers)
+	for i := range callers {
+		go func() {
+			defer wg.Done()
+			tokens[i], errs[i] = source.IdentityToken(ctx, "sts.amazonaws.com")
+		}()
+	}
+	wg.Wait()
+
+	for i := range callers {
+		require.NoError(t, errs[i])
+		assert.Equal(t, "jwt", tokens[i])
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, 1, maxInFlight, "the transport carries one broker call at a time")
 }
 
 func TestCtxSource_TypedEnvelopeErrors(t *testing.T) {
