@@ -557,7 +557,7 @@ func (d DatastorePostgres) GetMostRecentFormaCommandByClientID(clientID string) 
 	// Use subquery to find the most recent command_id first, then fetch all its resource_updates
 	// LIMIT 1 on the joined query would only return 1 row, not 1 command
 	query := formaCommandWithResourceUpdatesQueryBasePostgres +
-		" WHERE fc.command_id = (SELECT command_id FROM forma_commands WHERE client_id = $1 ORDER BY timestamp DESC LIMIT 1)" +
+		" WHERE fc.command_id = (SELECT command_id FROM forma_commands WHERE client_id = $1 AND source = 'user' ORDER BY timestamp DESC LIMIT 1)" +
 		resourceUpdateOrderByPostgres
 	rows, err := d.pool.Query(ctx, query, clientID)
 	if err != nil {
@@ -570,7 +570,7 @@ func (d DatastorePostgres) GetMostRecentFormaCommandByClientID(clientID string) 
 	}
 
 	if len(commands) == 0 {
-		return nil, fmt.Errorf("no forma commands found for client: %v", clientID)
+		return nil, nil
 	}
 
 	return commands[0], nil
@@ -683,9 +683,7 @@ func (d DatastorePostgres) QueryFormaCommands(query *datastore.StatusQuery) ([]*
 	subqueryStr = extendPostgresQueryString(subqueryStr, query.CommandID, " AND command_id %s $%d", &args)
 	subqueryStr = extendPostgresQueryString(subqueryStr, query.ClientID, " AND client_id %s $%d", &args)
 	subqueryStr = extendPostgresQueryString(subqueryStr, query.Command, " AND LOWER(command) %s LOWER($%d)", &args)
-	if query.Command == nil {
-		subqueryStr += fmt.Sprintf(" AND command != '%s'", pkgmodel.CommandSync)
-	}
+	subqueryStr = extendPostgresQueryString(subqueryStr, query.Source, " AND source %s $%d", &args)
 
 	// Stack filter uses the normalized resource_updates table
 	subqueryStr = extendPostgresQueryString(subqueryStr, query.Stack, " AND EXISTS (SELECT 1 FROM resource_updates ru WHERE ru.command_id = forma_commands.command_id AND ru.stack_label %s $%d)", &args)
@@ -5085,4 +5083,18 @@ func (d DatastorePostgres) ForceCancelResourceUpdates(commandID string, inProgre
 	}
 
 	return result, nil
+}
+
+// RecordAgentBoot appends one agent_boots row for this process start.
+func (d DatastorePostgres) RecordAgentBoot(version string) error {
+	ctx, cancel := datastore.AgentBootContext(d.ctx)
+	defer cancel()
+	ctx, span := tracer.Start(ctx, "RecordAgentBoot")
+	defer span.End()
+
+	query := `INSERT INTO agent_boots (boot_id, version, booted_at) VALUES ($1, $2, $3)`
+	if _, err := d.pool.Exec(ctx, query, mksuid.New().String(), version, time.Now().UTC()); err != nil {
+		return fmt.Errorf("failed to record agent boot: %w", err)
+	}
+	return nil
 }

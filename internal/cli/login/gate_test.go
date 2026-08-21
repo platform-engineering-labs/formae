@@ -9,9 +9,13 @@ package login
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
+
+	pkgauth "github.com/platform-engineering-labs/formae/pkg/auth"
 
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/stretchr/testify/assert"
@@ -62,7 +66,7 @@ func oidcAuth(t *testing.T, overrides map[string]any) json.RawMessage {
 func hosted(auth json.RawMessage) *pkgmodel.HostedConnection {
 	return &pkgmodel.HostedConnection{
 		Endpoint:     testOrigin,
-		Installation: testUUIDA,
+		Installation: testInstallationA,
 		Auth:         auth,
 	}
 }
@@ -304,7 +308,7 @@ func bearerHeaderNamed(name, value string) http.Header {
 func TestGateSync_AllowsOurOwnHostedOidcProfile(t *testing.T) {
 	credential := "Bearer " + testToken
 
-	got := gateSync(hosted(oidcAuth(t, nil)), testPlatform(), bearerHeader(credential))
+	got := gateBoth(hosted(oidcAuth(t, nil)), testPlatform(), bearerHeader(credential))
 
 	require.True(t, got.OK, "reason: %s", got.Reason)
 	assert.Empty(t, got.Reason, "an allowed sync has nothing to explain")
@@ -334,7 +338,7 @@ func TestGateSync_ComparesIssuersCanonically(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := gateSync(
+			got := gateBoth(
 				hosted(oidcAuth(t, map[string]any{"issuer": tc.issuer})),
 				testPlatform(),
 				bearerHeader("Bearer "+testToken),
@@ -352,7 +356,7 @@ func TestGateSync_ComparesIssuersCanonically(t *testing.T) {
 // defaulted, and defaulting them is the renderer's job — synthesising them
 // here would hide from the renderer that the profile never named them.
 func TestGateSync_LeavesTheOptionalFieldsAsTheyCame(t *testing.T) {
-	got := gateSync(
+	got := gateBoth(
 		hosted(oidcAuth(t, map[string]any{"clientId": nil, "scopes": nil})),
 		testPlatform(),
 		bearerHeader("Bearer "+testToken),
@@ -369,7 +373,7 @@ func TestGateSync_LeavesTheOptionalFieldsAsTheyCame(t *testing.T) {
 func TestGateSync_Refuses(t *testing.T) {
 	for _, tc := range refusalCases(t) {
 		t.Run(tc.name, func(t *testing.T) {
-			got := gateSync(tc.conn, testPlatform(), tc.hdr)
+			got := gateBoth(tc.conn, testPlatform(), tc.hdr)
 
 			assert.False(t, got.OK)
 			assert.NotEmpty(t, got.Reason, "a refusal explains itself to a user who has just signed in")
@@ -422,7 +426,7 @@ func TestGateSync_RefusalNeverRepeatsASecretFromTheAuthBlock(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := gateSync(hosted(tc.auth), testPlatform(), bearerHeader("Bearer "+testToken))
+			got := gateBoth(hosted(tc.auth), testPlatform(), bearerHeader("Bearer "+testToken))
 
 			require.False(t, got.OK)
 			rendered := fmt.Sprintf("%+v", got)
@@ -440,7 +444,7 @@ func TestGateSync_RefusalNeverRepeatsASecretFromTheAuthBlock(t *testing.T) {
 // the field itself carries it for the caller that sends the request; the
 // formatted form must still say enough to be useful for diagnosing a decision.
 func TestGateResult_StringNeverPrintsTheBearer(t *testing.T) {
-	got := gateSync(hosted(oidcAuth(t, nil)), testPlatform(), bearerHeader("Bearer "+testToken))
+	got := gateBoth(hosted(oidcAuth(t, nil)), testPlatform(), bearerHeader("Bearer "+testToken))
 	require.True(t, got.OK, "reason: %s", got.Reason)
 	require.NotEmpty(t, got.Bearer, "the test is meaningless without a bearer to redact")
 
@@ -460,9 +464,9 @@ func TestGateResult_StringNeverPrintsTheBearer(t *testing.T) {
 func TestGateSync_ARefusalMakesNoControlPlaneRequest(t *testing.T) {
 	for _, tc := range refusalCases(t) {
 		t.Run(tc.name, func(t *testing.T) {
-			srv, seen := serveInstallations(t, validInstallation(testUUIDA))
+			srv, seen := serveInstallations(t, validInstallation(testInstallationA))
 
-			result := gateSync(tc.conn, platform{Origin: srv.URL, Issuer: testIssuer}, tc.hdr)
+			result := gateBoth(tc.conn, platform{Origin: srv.URL, Issuer: testIssuer}, tc.hdr)
 			if result.OK {
 				_, err := newCloudClient(srv.URL).ListInstallations(context.Background(), result.Bearer)
 				require.NoError(t, err)
@@ -478,10 +482,10 @@ func TestGateSync_ARefusalMakesNoControlPlaneRequest(t *testing.T) {
 // the same wiring, with a block that passes, reaches the control plane with
 // exactly the credential the gate returned.
 func TestGateSync_AnAllowedGateSendsTheCredentialItValidated(t *testing.T) {
-	srv, seen := serveInstallations(t, validInstallation(testUUIDA))
+	srv, seen := serveInstallations(t, validInstallation(testInstallationA))
 	credential := "Bearer " + testToken
 
-	result := gateSync(hosted(oidcAuth(t, nil)), platform{Origin: srv.URL, Issuer: testIssuer}, bearerHeader(credential))
+	result := gateBoth(hosted(oidcAuth(t, nil)), platform{Origin: srv.URL, Issuer: testIssuer}, bearerHeader(credential))
 	require.True(t, result.OK, "reason: %s", result.Reason)
 
 	_, err := newCloudClient(srv.URL).ListInstallations(context.Background(), result.Bearer)
@@ -662,4 +666,147 @@ func TestBearerFrom(t *testing.T) {
 			assert.Equal(t, tc.want, got)
 		})
 	}
+}
+
+// The issuer check reads configuration only, so it can run before a credential
+// is minted. That ordering is the point: a profile a model wrote controls the
+// issuer, so driving the auth plugin first would send it at whatever token
+// endpoint the profile named, and refusing afterwards would be too late.
+func TestGateProfileDecidesWithoutACredential(t *testing.T) {
+	p := platform{Origin: "https://formae.ai", Issuer: "https://auth.formae.ai"}
+
+	trusted := hostedConnWithAuth(t, "https://auth.formae.ai")
+	if g := gateProfile(trusted, p); !g.OK {
+		t.Fatalf("a trusted issuer should pass the config gate: %s", g.Reason)
+	}
+
+	foreign := hostedConnWithAuth(t, "https://auth.evil.example")
+	g := gateProfile(foreign, p)
+	if g.OK {
+		t.Fatal("an untrusted issuer must be refused before auth is invoked")
+	}
+	if !strings.Contains(g.Reason, "auth.formae.ai") {
+		t.Errorf("the refusal should name the issuer we do trust: %s", g.Reason)
+	}
+}
+
+// The credential cannot be minted for a connection the gate did not clear,
+// because minting is a method on the value only the gate produces. The ordering
+// is a property of the type rather than a rule a caller has to remember, so a
+// future caller cannot reintroduce the bug by forgetting a predicate.
+func TestCredentialCannotBeMintedForAnUntrustedIssuer(t *testing.T) {
+	creds := &countingCreds{}
+
+	if _, err := ValidateHosted(hostedConnWithAuth(t, "https://auth.evil.example"), "", ""); err == nil {
+		t.Fatal("an untrusted issuer must not validate")
+	}
+	if creds.calls != 0 {
+		t.Fatalf("the auth plugin was driven %d times for a connection that never validated", creds.calls)
+	}
+
+	v, err := ValidateHosted(hostedConnWithAuth(t, "https://auth.formae.ai"), "", "")
+	if err != nil {
+		t.Fatalf("a trusted issuer should validate: %v", err)
+	}
+	if v.Connection().Installation != "3HzFPXfPDGhwLJJVtaHbmFs6vLa" {
+		t.Errorf("the validated connection should be the one checked: %#v", v.Connection())
+	}
+}
+
+func TestValidateHostedRefusesAClassicConnection(t *testing.T) {
+	if _, err := ValidateHosted(&pkgmodel.ClassicConnection{URL: "http://localhost", Port: 1}, "", ""); err == nil {
+		t.Fatal("a classic connection is not a hosted profile and must be refused")
+	}
+}
+
+func TestCredential(t *testing.T) {
+	v, err := ValidateHosted(hostedConnWithAuth(t, "https://auth.formae.ai"), "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("returns the credential with its scheme", func(t *testing.T) {
+		got, err := v.Credential(&countingCreds{
+			resp: &pkgauth.GetAuthHeaderResponse{
+				Headers: map[string][]string{"Authorization": {"Bearer abc.def"}},
+			},
+		}, false)
+		if err != nil {
+			t.Fatalf("Credential: %v", err)
+		}
+		if got != "Bearer abc.def" {
+			t.Fatalf("credential = %q, want the value including its scheme", got)
+		}
+	})
+
+	t.Run("force refresh reaches the plugin", func(t *testing.T) {
+		c := &countingCreds{resp: &pkgauth.GetAuthHeaderResponse{
+			Headers: map[string][]string{"Authorization": {"Bearer x.y"}},
+		}}
+		if _, err := v.Credential(c, true); err != nil {
+			t.Fatal(err)
+		}
+		if !c.sawForce {
+			t.Fatal("force refresh must be passed through")
+		}
+	})
+
+	t.Run("surfaces the plugin's own code", func(t *testing.T) {
+		_, err := v.Credential(&countingCreds{resp: &pkgauth.GetAuthHeaderResponse{
+			ErrorCode: "session_expired", Error: "run formae login",
+		}}, false)
+		var ae *AuthError
+		if !errors.As(err, &ae) {
+			t.Fatalf("want an AuthError, got %#v", err)
+		}
+		if ae.Code != "session_expired" {
+			t.Fatalf("plugin code lost: %#v", ae)
+		}
+	})
+
+	t.Run("refuses a response carrying nothing we could send", func(t *testing.T) {
+		if _, err := v.Credential(&countingCreds{resp: &pkgauth.GetAuthHeaderResponse{
+			Headers: map[string][]string{"X-Token": {"Bearer nope"}},
+		}}, false); err == nil {
+			t.Fatal("a credential under a key the client never sends must fail closed")
+		}
+	})
+}
+
+type countingCreds struct {
+	resp     *pkgauth.GetAuthHeaderResponse
+	err      error
+	calls    int
+	sawForce bool
+}
+
+func (c *countingCreds) GetAuthHeader(force bool) (*pkgauth.GetAuthHeaderResponse, error) {
+	c.calls++
+	c.sawForce = c.sawForce || force
+	return c.resp, c.err
+}
+
+// hostedConnWithAuth builds a hosted connection whose auth block names issuer.
+func hostedConnWithAuth(t *testing.T, issuer string) *pkgmodel.HostedConnection {
+	t.Helper()
+	auth := fmt.Sprintf(`{"type":%q,"role":%q,"issuer":%q}`, oidcAuthType, cliAuthRole, issuer)
+	return &pkgmodel.HostedConnection{
+		Endpoint:     "https://cloud.formae.ai",
+		Installation: "3HzFPXfPDGhwLJJVtaHbmFs6vLa",
+		Auth:         json.RawMessage(auth),
+	}
+}
+
+// gateBoth runs the two halves of the gate in the order runSync runs them, so a
+// test can assert on the whole decision for a profile. It lives here rather than
+// in the package because production never has a connection and a credential in
+// hand at the same moment: gateProfile runs before the auth plugin is driven and
+// gateCredential after, and that ordering is what stops a profile from choosing
+// the issuer a credential is minted against.
+func gateBoth(conn pkgmodel.Connection, p platform, hdr http.Header) gateResult {
+	g := gateProfile(conn, p)
+	if !g.OK {
+		return g
+	}
+	return gateCredential(g, p, hdr)
 }

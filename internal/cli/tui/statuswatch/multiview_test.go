@@ -64,6 +64,66 @@ func TestSortRows_ByAgeUsesRealTimestamp(t *testing.T) {
 	assert.Equal(t, "older", rows[0].cmd.CommandID)
 }
 
+// Browsing history wants the newest first; monitoring in-flight work wants the
+// most urgent first, so the two entry points differ deliberately.
+func TestListEntryPointSortsByAgeDescending(t *testing.T) {
+	m := New(theme.New("formae"), &fakeClient{}, Options{SortNewestFirst: true})
+	if m.multi.sortCol != colAge || m.multi.sortDir != components.SortDesc {
+		t.Fatalf("list default sort = (%d,%v), want age descending", m.multi.sortCol, m.multi.sortDir)
+	}
+	// sortHi drives the header highlight: it must name the column actually
+	// sorted on, or the header points at a different column than the order.
+	if m.multi.sortHi != colAge {
+		t.Fatalf("list header highlight = %d, want the sorted column %d", m.multi.sortHi, colAge)
+	}
+}
+
+func TestWatchEntryPointKeepsUrgencySort(t *testing.T) {
+	m := New(theme.New("formae"), &fakeClient{}, Options{})
+	if m.multi.sortCol != colStatus {
+		t.Fatal("the watch view must keep urgency ordering")
+	}
+}
+
+// The TUI header must always name the verb the user actually typed to invoke
+// it, not a hardcoded default: `command list`, `command status`, and `cancel`
+// must show their own names, and the deprecated `status command` alias must
+// keep showing its own name (it still routes to one of the two new
+// subcommands' semantics underneath, but the header names what was actually
+// typed).
+func TestHeaderCommand_NamesTheVerbActuallyTyped(t *testing.T) {
+	list := New(theme.New("formae"), &fakeClient{}, Options{HeaderCommand: "command list"})
+	if got := list.headerCommand(); got != "command list" {
+		t.Fatalf("command list header = %q, want %q", got, "command list")
+	}
+
+	single := New(theme.New("formae"), &fakeClient{}, Options{HeaderCommand: "command status"})
+	if got := single.headerCommand(); got != "command status" {
+		t.Fatalf("command status header = %q, want %q", got, "command status")
+	}
+
+	cancel := New(theme.New("formae"), &fakeClient{}, Options{HeaderCommand: "cancel"})
+	if got := cancel.headerCommand(); got != "cancel" {
+		t.Fatalf("cancel header = %q, want %q", got, "cancel")
+	}
+
+	compat := New(theme.New("formae"), &fakeClient{}, Options{HeaderCommand: "status command"})
+	if got := compat.headerCommand(); got != "status command" {
+		t.Fatalf("deprecated status command alias header = %q, want %q", got, "status command")
+	}
+}
+
+// TestHeaderCommand_EmptyOptionFallsBackToARealVerb locks the fallback used
+// when a caller leaves HeaderCommand unset. It must name a verb that still
+// exists once the deprecated aliases are removed, and it cannot silently
+// change without a deliberate, reviewed edit to this test.
+func TestHeaderCommand_EmptyOptionFallsBackToARealVerb(t *testing.T) {
+	m := New(theme.New("formae"), &fakeClient{}, Options{})
+	if got := m.headerCommand(); got != "command status" {
+		t.Fatalf("empty HeaderCommand fallback = %q, want %q", got, "command status")
+	}
+}
+
 func TestVisibleColumns_DropTiers(t *testing.T) {
 	wide := visibleColumns(120)
 	for c := 0; c < colCount; c++ {

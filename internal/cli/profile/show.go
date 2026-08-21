@@ -7,6 +7,8 @@ package profile
 import (
 	"fmt"
 
+	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
+
 	"github.com/spf13/cobra"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
@@ -23,7 +25,7 @@ func newShowCmd() *cobra.Command {
 		Short: "Print a profile's resolved configuration",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cc *cobra.Command, args []string) error {
-			consumer, schema, err := resolveOutput(cc)
+			consumer, schema, err := cmd.ResolveOutput(cc)
 			if err != nil {
 				return err
 			}
@@ -34,12 +36,24 @@ func newShowCmd() *cobra.Command {
 
 			name := ""
 			if len(args) == 1 {
+				// Naming a profile is a pure read of that profile, like list
+				// and current: it must not conjure one that does not exist.
 				name = args[0]
 				if err := store.ValidateName(name); err != nil {
 					return err
 				}
-			} else if name, err = s.Active(); err != nil {
-				return err
+			} else {
+				// With no name the question is "the configuration I would
+				// use", which is the config-load path. Resolve bootstraps a
+				// clean install and migrates a legacy formae.conf.pkl, exactly
+				// as every other config-loading command does, so a machine
+				// where formae has never run is answered rather than refused.
+				if _, err := s.Resolve(); err != nil {
+					return err
+				}
+				if name, err = s.Active(); err != nil {
+					return err
+				}
 			}
 
 			a := &app.App{}
@@ -73,6 +87,6 @@ func newShowCmd() *cobra.Command {
 			return nil
 		},
 	}
-	addOutputFlags(c)
+	cmd.AddOutputFlags(c)
 	return c
 }

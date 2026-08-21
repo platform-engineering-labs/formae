@@ -397,6 +397,7 @@ func RunGetMostRecentFormaCommandByClientID(t *testing.T, newDS func(t *testing.
 			ClientID:    clientID,
 			StartTs:     olderTime,
 			Command:     pkgmodel.CommandApply,
+			Source:      forma_command.SourceUser,
 		}
 
 		newerTime, _ := time.Parse(time.RFC3339, "2023-01-02T10:00:00Z")
@@ -405,6 +406,7 @@ func RunGetMostRecentFormaCommandByClientID(t *testing.T, newDS func(t *testing.
 			ClientID:    clientID,
 			StartTs:     newerTime,
 			Command:     pkgmodel.CommandApply,
+			Source:      forma_command.SourceUser,
 		}
 
 		// Store both commands
@@ -421,9 +423,84 @@ func RunGetMostRecentFormaCommandByClientID(t *testing.T, newDS func(t *testing.
 		// The most recent command should be the newer one
 		assert.Equal(t, newerCommand.StartTs, retrieved.StartTs)
 
-		// Test with non-existent client ID
-		_, err = ds.GetMostRecentFormaCommandByClientID("non-existent-client")
-		assert.Error(t, err)
+		// A client with no commands is an empty answer, not an error: the
+		// status path turns it into "no commands", and an error here would
+		// surface to the user as a 500.
+		missing, err := ds.GetMostRecentFormaCommandByClientID("non-existent-client")
+		assert.NoError(t, err)
+		assert.Nil(t, missing)
+	})
+}
+
+// RunGetMostRecentFormaCommandByClientIDIgnoresSourcelessRows verifies that
+// commands stored without a source (rows written before the column existed)
+// are not returned, and that a client whose history consists only of such
+// rows gets an empty answer rather than an error.
+func RunGetMostRecentFormaCommandByClientIDIgnoresSourcelessRows(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("GetMostRecentFormaCommandByClientIDIgnoresSourcelessRows", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		clientID := "legacy-client"
+		ts, _ := time.Parse(time.RFC3339, "2023-01-01T10:00:00Z")
+		sourceless := &forma_command.FormaCommand{
+			ID:       util.NewID(),
+			ClientID: clientID,
+			StartTs:  ts,
+			Command:  pkgmodel.CommandApply,
+			State:    forma_command.CommandStateSuccess,
+		}
+		assert.NoError(t, ds.StoreFormaCommand(sourceless, sourceless.ID))
+
+		got, err := ds.GetMostRecentFormaCommandByClientID(clientID)
+		assert.NoError(t, err)
+		assert.Nil(t, got)
+	})
+}
+
+// RunGetMostRecentFormaCommandByClientIDSkipsSchedulers verifies that the
+// no-argument status path returns the caller's most recent USER command,
+// skipping any scheduler command that ran more recently.
+func RunGetMostRecentFormaCommandByClientIDSkipsSchedulers(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("GetMostRecentFormaCommandByClientIDSkipsSchedulers", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		clientID := "test"
+		olderTime, _ := time.Parse(time.RFC3339, "2023-01-01T10:00:00Z")
+		userCommand := &forma_command.FormaCommand{
+			ID:       util.NewID(),
+			ClientID: clientID,
+			StartTs:  olderTime,
+			Command:  pkgmodel.CommandApply,
+			State:    forma_command.CommandStateSuccess,
+			Source:   forma_command.SourceUser,
+		}
+
+		newerTime, _ := time.Parse(time.RFC3339, "2023-01-02T10:00:00Z")
+		autoReconcilerCommand := &forma_command.FormaCommand{
+			ID:       util.NewID(),
+			ClientID: clientID,
+			StartTs:  newerTime,
+			Command:  pkgmodel.CommandApply,
+			State:    forma_command.CommandStateSuccess,
+			Source:   forma_command.SourceAutoReconciler,
+		}
+
+		err := ds.StoreFormaCommand(userCommand, userCommand.ID)
+		assert.NoError(t, err)
+		err = ds.StoreFormaCommand(autoReconcilerCommand, autoReconcilerCommand.ID)
+		assert.NoError(t, err)
+
+		got, err := ds.GetMostRecentFormaCommandByClientID(clientID)
+		if err != nil {
+			t.Fatalf("lookup failed: %v", err)
+		}
+		if got == nil || got.Source != forma_command.SourceUser {
+			t.Fatalf("expected the most recent user command, got %+v", got)
+		}
 	})
 }
 
@@ -746,6 +823,73 @@ func RunQueryFormaCommands(t *testing.T, newDS func(t *testing.T) TestDatastore)
 				}
 			}
 			assert.False(t, found)
+		}
+	})
+}
+
+// RunQueryFormaCommandsUserOnly verifies that only user-initiated commands are
+// returned. Scheduler bookkeeping (sync, discovery, auto-reconcile, stack
+// expiry) is never shown, including when it shares a command type with user
+// work.
+func RunQueryFormaCommandsUserOnly(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("QueryFormaCommandsUserOnly", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		userApply := &forma_command.FormaCommand{
+			ID:       util.NewID(),
+			ClientID: "client-1",
+			StartTs:  util.TimeNow(),
+			Command:  pkgmodel.CommandApply,
+			State:    forma_command.CommandStateSuccess,
+			Source:   forma_command.SourceUser,
+		}
+		autoReconcilerApply := &forma_command.FormaCommand{
+			ID:       util.NewID(),
+			ClientID: "client-1",
+			StartTs:  util.TimeNow(),
+			Command:  pkgmodel.CommandApply,
+			State:    forma_command.CommandStateSuccess,
+			Source:   forma_command.SourceAutoReconciler,
+		}
+		stackExpirerDestroy := &forma_command.FormaCommand{
+			ID:       util.NewID(),
+			ClientID: "client-1",
+			StartTs:  util.TimeNow(),
+			Command:  pkgmodel.CommandDestroy,
+			State:    forma_command.CommandStateSuccess,
+			Source:   forma_command.SourceStackExpirer,
+		}
+		synchronizerSync := &forma_command.FormaCommand{
+			ID:       util.NewID(),
+			ClientID: "client-1",
+			StartTs:  util.TimeNow(),
+			Command:  pkgmodel.CommandSync,
+			State:    forma_command.CommandStateSuccess,
+			Source:   forma_command.SourceSynchronizer,
+		}
+
+		for _, cmd := range []*forma_command.FormaCommand{userApply, autoReconcilerApply, stackExpirerDestroy, synchronizerSync} {
+			err := ds.StoreFormaCommand(cmd, cmd.ID)
+			assert.NoError(t, err)
+		}
+
+		got, err := ds.QueryFormaCommands(&datastore.StatusQuery{
+			N: 10,
+			Source: &datastore.QueryItem[string]{
+				Item:       string(forma_command.SourceUser),
+				Constraint: datastore.Required,
+			},
+		})
+		if err != nil {
+			t.Fatalf("query failed: %v", err)
+		}
+		if len(got) != 1 {
+			t.Fatalf("expected only the user command, got %d", len(got))
+		}
+		if got[0].Source != forma_command.SourceUser {
+			t.Fatalf("returned a %s command", got[0].Source)
 		}
 	})
 }

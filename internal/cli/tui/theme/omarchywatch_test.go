@@ -13,17 +13,32 @@ import (
 	"time"
 )
 
-// setupOmarchyHome builds a ~/.config/omarchy/current/theme -> themes/<name>
-// layout under a temp HOME and returns (home, root). This matches the
-// omarchyThemeDir() contract pinned by TestResolve_OmarchyRoutesToOmarchyResolver
-// (Phase A): "current" is a stable directory; "theme" is the symlink that
-// omarchy-theme-set atomically repoints.
+// setupOmarchyHome builds an Omarchy 3 layout: ~/.config/omarchy/current/theme
+// -> themes/<name>, under a temp HOME. Returns (home, root).
 func setupOmarchyHome(t *testing.T, initial string) (string, string) {
+	t.Helper()
+	return setupOmarchyHomeUnder(t, ".config", initial)
+}
+
+// setupQuattroOmarchyHome builds an Omarchy 4 layout, where the active theme
+// lives under ~/.local/state instead of ~/.config.
+func setupQuattroOmarchyHome(t *testing.T, initial string) (string, string) {
+	t.Helper()
+	return setupOmarchyHomeUnder(t, filepath.Join(".local", "state"), initial)
+}
+
+// setupOmarchyHomeUnder builds a <home>/<rel>/omarchy/current/theme ->
+// themes/<name> layout under a temp HOME and returns (home, root). "current" is
+// a stable directory; "theme" is the symlink that omarchy-theme-set atomically
+// repoints. Both XDG roots are pinned at the temp HOME so the ambient
+// environment cannot supply a competing Omarchy install.
+func setupOmarchyHomeUnder(t *testing.T, rel, initial string) (string, string) {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
-	root := filepath.Join(home, ".config", "omarchy")
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, ".local", "state"))
+	root := filepath.Join(home, rel, "omarchy")
 	themes := filepath.Join(root, "themes")
 	current := filepath.Join(root, "current")
 	if err := os.MkdirAll(filepath.Join(themes, initial), 0o755); err != nil {
@@ -85,6 +100,46 @@ func TestOmarchyWatcher_InPlaceEdit(t *testing.T) {
 	}
 	if th.Palette.PrimaryAccent.Dark != "#abcdef" {
 		t.Errorf("PrimaryAccent.Dark = %q, want #abcdef after edit", th.Palette.PrimaryAccent.Dark)
+	}
+}
+
+// Live theme following must work on the Omarchy 4 layout, where the active
+// theme lives under ~/.local/state and the ~/.config location no longer exists.
+// The watcher takes its roots from omarchyThemeDir(), so it follows a semantic
+// (colorN-free) palette through an atomic theme swap there.
+func TestOmarchyWatcher_SymlinkSwapUnderStateDir(t *testing.T) {
+	_, root := setupQuattroOmarchyHome(t, "alpha")
+	themes := filepath.Join(root, "themes")
+	if err := os.MkdirAll(filepath.Join(themes, "beta"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A Quattro palette: semantic names, no ANSI colorN keys.
+	if err := os.WriteFile(filepath.Join(themes, "beta", "colors.toml"),
+		[]byte("mode=\"dark\"\nbackground=\"#000000\"\nforeground=\"#ffffff\"\naccent=\"#beef00\"\nmuted=\"#888888\"\nred=\"#ff0000\"\ngreen=\"#00ff00\"\nyellow=\"#ffff00\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	w, err := NewOmarchyWatcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	tmp := filepath.Join(themes, "theme.tmp")
+	if err := os.Symlink(filepath.Join(themes, "beta"), tmp); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(tmp, filepath.Join(root, "current", "theme")); err != nil {
+		t.Fatal(err)
+	}
+
+	th := drainOne(t, w)
+	if th == nil || th.Palette.PrimaryAccent.Dark != "#beef00" {
+		t.Fatalf("after swap under the state dir, PrimaryAccent = %v, want #beef00", th)
+	}
+	// The semantic palette drove the status colors, not quiet's inherited ones.
+	if th.Palette.Error.Dark != "#ff0000" {
+		t.Errorf("Error = %q, want #ff0000 from the semantic red", th.Palette.Error.Dark)
 	}
 }
 

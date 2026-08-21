@@ -143,4 +143,3 @@ func TestApplyTheme_RecolorsOpenDetailScreen(t *testing.T) {
 	assert.Equal(t, offsetBefore, m2.detailViewport.YOffset,
 		"re-theming the open detail screen must not reset scroll position")
 }
-

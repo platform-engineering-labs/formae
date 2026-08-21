@@ -29,7 +29,7 @@ const hostedProfilePkl = `amends "formae:/Config.pkl"
 cli {
     connection = new Hosted {
         endpoint = "https://cloud.formae.ai"
-        installation = "3f2b8c14-0000-4000-8000-000000000000"
+        installation = "3HzFPXfPDGhwLJJVtaHbmFs6vLa"
         auth = new Dynamic { type = "oidc" }
     }
 }
@@ -71,7 +71,7 @@ func TestShowMachineJSONEmitsTheTaggedConnection(t *testing.T) {
 	assert.EqualValues(t, 1, got["schemaVersion"])
 	conn := got["cli"].(map[string]any)["connection"].(map[string]any)
 	assert.Equal(t, "hosted", conn["mode"])
-	assert.Equal(t, "3f2b8c14-0000-4000-8000-000000000000", conn["installation"])
+	assert.Equal(t, "3HzFPXfPDGhwLJJVtaHbmFs6vLa", conn["installation"])
 	assert.NotContains(t, out, "\x1b[", "machine output carries no ANSI")
 }
 
@@ -175,4 +175,63 @@ func TestShowRendersInTheActiveProfilesTheme(t *testing.T) {
 	require.NotEqual(t, def, want, "the two themes must render differently for this assertion to mean anything")
 	assert.Contains(t, out, want, "show must render in the resolved active-profile theme")
 	assert.NotContains(t, out, def, "show must not fall back to the default theme")
+}
+
+// cleanConfigDir points the store at an empty config dir: a machine where
+// formae has never run.
+func cleanConfigDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("FORMAE_CONFIG_DIR", dir)
+	return dir
+}
+
+// `show` with no name answers "the configuration I would use", so it takes the
+// config-load path: on a machine where formae has never run it bootstraps the
+// default profile exactly as every other config-loading command does, rather
+// than reporting a fresh install as an error.
+func TestShowWithNoArgumentBootstrapsACleanInstall(t *testing.T) {
+	dir := cleanConfigDir(t)
+
+	out := runShow(t, "--output-consumer", "machine", "--output-schema", "json")
+
+	var got map[string]any
+	require.NoError(t, json.Unmarshal([]byte(out), &got))
+	assert.Equal(t, "default", got["profile"])
+	conn := got["cli"].(map[string]any)["connection"].(map[string]any)
+	assert.Equal(t, "classic", conn["mode"], "the stub profile wires the local agent")
+
+	assert.FileExists(t, filepath.Join(dir, "profiles", "default.pkl"))
+	assert.FileExists(t, filepath.Join(dir, "active"))
+}
+
+// The same path performs the legacy migration, so a user still holding a bare
+// formae.conf.pkl is shown their own configuration rather than an error.
+func TestShowWithNoArgumentMigratesALegacyConfig(t *testing.T) {
+	dir := cleanConfigDir(t)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "formae.conf.pkl"), []byte(hostedProfilePkl), 0o600))
+
+	out := runShow(t, "--output-consumer", "machine", "--output-schema", "json")
+
+	assert.Contains(t, out, `"profile":"default"`)
+	assert.Contains(t, out, "3HzFPXfPDGhwLJJVtaHbmFs6vLa",
+		"the migrated profile is what gets shown")
+	assert.FileExists(t, filepath.Join(dir, "profiles", "default.pkl"))
+	assert.NoFileExists(t, filepath.Join(dir, "formae.conf.pkl"),
+		"the legacy file is moved, not copied")
+}
+
+// Only the no-name form takes the config-load path. `show <name>` stays a pure
+// read: naming a profile that does not exist must not conjure one.
+func TestShowWithANameDoesNotBootstrap(t *testing.T) {
+	dir := cleanConfigDir(t)
+
+	cmd := newShowCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetArgs([]string{"prod"})
+	require.Error(t, cmd.Execute())
+
+	assert.NoFileExists(t, filepath.Join(dir, "active"))
+	assert.NoDirExists(t, filepath.Join(dir, "profiles"))
 }

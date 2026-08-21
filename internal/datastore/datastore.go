@@ -24,6 +24,12 @@ const (
 	Excluded
 )
 
+// MaxFormaCommandsQueryLimit is the hard ceiling on how many forma commands a
+// single status/list query may request, regardless of the caller-supplied
+// page size. The API server clamps to this value before querying the
+// datastore.
+const MaxFormaCommandsQueryLimit = 200
+
 type QueryItemConstraint int
 
 // QueryItem is one filter clause in a query.
@@ -48,7 +54,11 @@ type StatusQuery struct {
 	Status    *QueryItem[string]
 	Stack     *QueryItem[string]
 	Managed   *QueryItem[bool]
-	N         int
+	// Source restricts results to a FormaCommand source (forma_command.Source,
+	// e.g. "user"). Set by ListFormaCommandStatus, never parsed from a user
+	// query string, so a caller cannot ask to see scheduler bookkeeping.
+	Source *QueryItem[string]
+	N      int
 }
 
 type ResourceQuery struct {
@@ -102,6 +112,14 @@ type ResourceVersion struct {
 	URI      string
 	Version  string
 	Resource *pkgmodel.Resource
+}
+
+// AgentBoot is one recorded agent process start. Append-only; see
+// Datastore.RecordAgentBoot.
+type AgentBoot struct {
+	BootID   string
+	Version  string
+	BootedAt time.Time
 }
 
 // ForceCancelRow is an in-progress resource update that should be force-canceled.
@@ -232,7 +250,11 @@ type Datastore interface {
 	DeleteFormaCommand(fa *forma_command.FormaCommand, commandID string) error
 	// GetFormaCommandByCommandID retrieves a single FormaCommand by its ID
 	GetFormaCommandByCommandID(commandID string) (*forma_command.FormaCommand, error)
-	// GetMostRecentFormaCommandByClientID returns the latest command for a given client
+	// GetMostRecentFormaCommandByClientID returns the most recent user command
+	// for a given client, skipping any scheduler bookkeeping (sync,
+	// discovery, auto-reconcile, stack expiry) that ran more recently.
+	// A client with no such command yields (nil, nil): having run nothing is
+	// an empty answer, not a failure, and callers render it as "no commands".
 	GetMostRecentFormaCommandByClientID(clientID string) (*forma_command.FormaCommand, error)
 	// GetResourceModificationsSinceLastReconcile returns resources modified since the last reconcile
 	GetResourceModificationsSinceLastReconcile(stack string) ([]ResourceModification, error)
@@ -505,4 +527,14 @@ type Datastore interface {
 	// (split by prior state) and the intended rows that were already terminal (Skipped). Idempotent:
 	// a retry affects zero rows and returns the same Skipped set.
 	ForceCancelResourceUpdates(commandID string, inProgress []ForceCancelRow, notStarted []ResourceUpdateRef, modifiedTs time.Time) (ForceCancelResult, error)
+
+	// RecordAgentBoot appends one row recording that this agent process started
+	// and which build it is running. Append-only: rows are never updated or
+	// deleted, so the sequence is the agent's start history.
+	//
+	// Nothing in the agent reads these rows back. They exist for an
+	// out-of-process reader that needs the running version for an installation
+	// which has not yet run any command, a question the command history cannot
+	// answer because agent_version only exists on a command row.
+	RecordAgentBoot(version string) error
 }
