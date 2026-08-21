@@ -1,0 +1,33 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+/// E2E test for the oidc-credential chain: creating this resource makes the
+/// echo plugin ask the agent for an identity token, and records what came
+/// back in its read-only outputs.
+amends "@formae/forma.pkl"
+
+import "@formae/formae.pkl"
+import "@oidcecho/oidcecho.pkl"
+
+local echoTarget = new formae.Target {
+  label = "e2e-oidc-echo-target"
+  config = new oidcecho.Config {}
+}
+
+forma {
+  new formae.Stack {
+    label = "e2e-oidc-echo"
+    description = "E2E test: oidc-credential broker to resource plugin"
+  }
+
+  echoTarget
+
+  new oidcecho.Token {
+    label = "e2e-oidc-token"
+    target = echoTarget.res
+    probeLabel = "probe"
+  }
+}

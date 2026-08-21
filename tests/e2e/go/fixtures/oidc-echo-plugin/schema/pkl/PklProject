@@ -1,0 +1,21 @@
+amends "pkl:Project"
+
+// Pinned to the hub-published formae schema, exactly as a real plugin pins it.
+// The pin must be a published version that is not newer than the formae the
+// e2e fixtures resolve, so pkl unifies both onto one formae package and the
+// nominal types in a forma match the ones this schema extends.
+dependencies {
+  ["formae"] {
+    uri = "package://hub.platform.engineering/plugins/pkl/schema/pkl/formae/formae@0.89.0"
+  }
+}
+
+// This package is never published: the fixtures and the plugin's own schema
+// extraction both import it from disk. The coordinates only give pkl a stable
+// identity for that import.
+package {
+  name = "oidcecho"
+  baseUri = "package://hub.platform.engineering/plugins/oidc-echo/schema/pkl/\(name)/\(name)"
+  version = "0.0.1"
+  packageZipUrl = "https://hub.platform.engineering/plugins/oidc-echo/schema/pkl/\(name)/\(name)@\(version).zip"
+}

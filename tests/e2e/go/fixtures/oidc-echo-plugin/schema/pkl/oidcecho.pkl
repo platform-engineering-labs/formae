@@ -1,0 +1,35 @@
+// © 2025 Platform Engineering Labs Inc.
+//
+// SPDX-License-Identifier: FSL-1.1-ALv2
+
+/// Schema for the e2e echo plugin: one resource type whose whole job is to
+/// record what the oidc-credential broker paired with this namespace returned.
+module oidcecho
+
+import "@formae/formae.pkl"
+
+/// Target config for this namespace. It carries nothing but the namespace
+/// discriminator: the plugin talks to no provider, it only asks the agent for
+/// an identity token.
+open class Config {
+    hidden fixed type: String = "OidcEcho"
+
+    fixed Type: String = type
+}
+
+/// One identity-token probe.
+///
+/// `token` and `tokenError` are deliberately absent as fields: the plugin
+/// returns them from Create and the agent, finding them outside the schema,
+/// files them under the resource's read-only properties.
+@formae.ResourceHint {
+    type = "OidcEcho::Tokens::Token"
+    identifier = "$.probeLabel"
+    discoverable = false
+    extractable = false
+}
+class Token extends formae.Resource {
+    /// Names this probe. The plugin returns it as the native id.
+    @formae.FieldHint { createOnly = true }
+    probeLabel: String
+}
