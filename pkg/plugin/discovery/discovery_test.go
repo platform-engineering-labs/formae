@@ -37,6 +37,14 @@ func createFakePlugin(t *testing.T, baseDir, name, version, manifestPkl string) 
 	}
 }
 
+// createFakePluginWithManifest is createFakePlugin with an explicit manifest
+// body, for tests that need full control over manifest content beyond what
+// resourceManifest/authManifest cover (e.g. oidc-credential's namespaces list).
+func createFakePluginWithManifest(t *testing.T, baseDir, name, version, manifestPkl string) {
+	t.Helper()
+	createFakePlugin(t, baseDir, name, version, manifestPkl)
+}
+
 func resourceManifest(name, namespace string) string {
 	return `name = "` + name + `"
 version = "1.0.0"
@@ -171,6 +179,21 @@ func TestDiscoverPlugins_Auth_SkipsPluginsWithoutManifest(t *testing.T) {
 	createFakePlugin(t, baseDir, "auth-basic", "v1.0.0", "")
 
 	assert.Nil(t, DiscoverPlugins(baseDir, Auth))
+}
+
+func TestDiscoverPlugins_OidcCredentialClassifiesOnlyToItsOwnScan(t *testing.T) {
+	dir := t.TempDir()
+	createFakePluginWithManifest(t, dir, "fai", "0.1.0", `name = "fai"
+type = "oidc-credential"
+version = "0.1.0"
+namespaces { "aws"; "Azure" }
+license = "FSL-1.1-ALv2"
+minFormaeVersion = "0.90.0"`)
+	oidc := DiscoverPlugins(dir, OidcCredential)
+	require.Len(t, oidc, 1)
+	require.Equal(t, []string{"AWS", "AZURE"}, oidc[0].Namespaces)
+	require.Empty(t, DiscoverPlugins(dir, Resource), "an oidc-credential binary must not classify as a resource plugin")
+	require.Empty(t, DiscoverPlugins(dir, Auth))
 }
 
 func TestDiscoverPluginsMulti_DevOverridesSystem(t *testing.T) {
