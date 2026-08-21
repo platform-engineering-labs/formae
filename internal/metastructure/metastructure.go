@@ -41,6 +41,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/target_reaper"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
+	"github.com/platform-engineering-labs/formae/pkg/credential"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
@@ -118,6 +119,10 @@ func NewMetastructureWithDataStoreAndContext(ctx context.Context, cfg *pkgmodel.
 
 	err := plugin.RegisterSharedEDFTypes()
 	if err != nil {
+		return nil, err
+	}
+
+	if err := credential.RegisterEDFTypes(); err != nil {
 		return nil, err
 	}
 

@@ -44,9 +44,7 @@ func oidcCredentialTagName(tag string) string {
 // coordinator can tell apart from the dead process's.
 type oidcBrokerEntry struct {
 	name          string
-	version       string
 	binaryPath    string
-	namespaces    []string
 	spawnToken    string
 	metaPortAlias gen.Alias
 	nodeName      gen.Atom
@@ -158,9 +156,7 @@ func (p *PluginProcessSupervisor) initOidcCredentialBrokers() {
 	for _, info := range spawn {
 		entry := &oidcBrokerEntry{
 			name:       info.Name,
-			version:    info.Version,
 			binaryPath: info.BinaryPath,
-			namespaces: info.Namespaces,
 		}
 		p.oidcBrokers[info.Name] = entry
 
@@ -266,6 +262,8 @@ func (p *PluginProcessSupervisor) unregisterOidcBroker(entry *oidcBrokerEntry, r
 		Reason:     reason,
 	})
 	if err != nil {
-		p.Log().Error("Failed to send UnregisterOidcCredentialPlugin message name=%s: %v", entry.name, err)
+		// Fires on normal shutdown once the coordinator is already gone -
+		// not an error worth alarming on.
+		p.Log().Debug("Failed to send UnregisterOidcCredentialPlugin message name=%s: %v", entry.name, err)
 	}
 }

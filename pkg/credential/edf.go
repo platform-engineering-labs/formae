@@ -11,8 +11,9 @@ import (
 
 // RegisterEDFTypes registers the message types the broker sends across the
 // Ergo network boundary. The broker calls this before announcing; the agent
-// calls the mirror of this from plugin.RegisterSharedEDFTypes so both sides
-// agree on the wire format.
+// calls it directly (beside plugin.RegisterSharedEDFTypes, in
+// internal/metastructure.NewMetastructureWithDataStoreAndContext) so both
+// sides agree on the wire format.
 func RegisterEDFTypes() error {
 	types := []any{
 		OidcCredentialPluginAnnouncement{},
