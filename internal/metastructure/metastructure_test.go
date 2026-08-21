@@ -438,7 +438,7 @@ func TestMetastructure_NetworkingEnabled(t *testing.T) {
 		},
 	}
 
-	m, err := NewMetastructure(context.Background(), cfg, nil, "test")
+	m, err := NewMetastructure(context.Background(), cfg, nil, nil, "test")
 	require.NoError(t, err)
 	require.NotNil(t, m)
 

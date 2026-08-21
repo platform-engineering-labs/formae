@@ -40,6 +40,12 @@ type PluginProcessSupervisor struct {
 	authPlugin    *authPluginEntry
 	shuttingDown  bool
 	pluginConfigs map[string]json.RawMessage // plugin-specific config keyed by type (lowercase)
+
+	// oidcBrokers holds the credential broker subprocesses, keyed by plugin
+	// name. oidcCredentialConfigs is their opaque config keyed by type
+	// (lowercase).
+	oidcBrokers           map[string]*oidcBrokerEntry
+	oidcCredentialConfigs map[string]json.RawMessage
 }
 
 // authPluginEntry wraps an AuthPluginHandle with supervisor-specific tracking state.
@@ -71,6 +77,7 @@ func NewPluginProcessSupervisor() gen.ProcessBehavior {
 
 func (p *PluginProcessSupervisor) Init(args ...any) error {
 	p.plugins = make(map[string]*PluginInfo)
+	p.oidcBrokers = make(map[string]*oidcBrokerEntry)
 	p.Log().Debug("PluginProcessSupervisor started")
 
 	// Read per-plugin custom configs before spawning plugins so the env vars are available
@@ -140,9 +147,11 @@ func (p *PluginProcessSupervisor) Init(args ...any) error {
 		}
 	}
 
+	p.initOidcCredentialBrokers()
+
 	authConfigured := p.authPlugin != nil
-	p.Log().Debug("PluginProcessSupervisor initialized with %d resource plugins, auth=%v",
-		len(p.plugins), authConfigured)
+	p.Log().Debug("PluginProcessSupervisor initialized with %d resource plugins, %d oidc-credential brokers, auth=%v",
+		len(p.plugins), len(p.oidcBrokers), authConfigured)
 	return nil
 }
 
@@ -196,11 +205,13 @@ func (p *PluginProcessSupervisor) HandleMessage(from gen.PID, message any) error
 	case meta.MessagePortText:
 		// Text output (stderr for auth plugins, stdout for resource plugins)
 		output := strings.TrimSpace(msg.Text)
-		if auth.IsAuthTag(msg.Tag) {
+		switch {
+		case auth.IsAuthTag(msg.Tag):
 			p.logPluginOutput(auth.AuthTagName(msg.Tag), output)
-		} else {
-			pluginName := p.getPluginName(msg.Tag)
-			p.logPluginOutput(pluginName, output)
+		case isOidcCredentialTag(msg.Tag):
+			p.logPluginOutput(oidcCredentialTagName(msg.Tag), output)
+		default:
+			p.logPluginOutput(p.getPluginName(msg.Tag), output)
 		}
 
 	case meta.MessagePortData:
@@ -220,6 +231,11 @@ func (p *PluginProcessSupervisor) HandleMessage(from gen.PID, message any) error
 			if p.authPlugin.conn != nil {
 				p.authPlugin.conn.Feed(msg.Data)
 			}
+		} else if isOidcCredentialTag(msg.Tag) {
+			// Brokers run in text mode, so binary data is unexpected — log it
+			// rather than dropping it silently.
+			output := strings.TrimSpace(string(msg.Data))
+			p.logPluginOutput(oidcCredentialTagName(msg.Tag), output)
 		} else if !auth.IsAuthTag(msg.Tag) {
 			// Resource plugin binary data - log it
 			output := strings.TrimSpace(string(msg.Data))
@@ -232,9 +248,12 @@ func (p *PluginProcessSupervisor) HandleMessage(from gen.PID, message any) error
 		p.Log().Error("Plugin error tag=%s: %v", msg.Tag, msg.Error)
 
 	case meta.MessagePortTerminate:
-		if auth.IsAuthTag(msg.Tag) {
+		switch {
+		case auth.IsAuthTag(msg.Tag):
 			p.handleAuthPluginTerminate(msg.Tag)
-		} else {
+		case isOidcCredentialTag(msg.Tag):
+			p.handleOidcCredentialBrokerTerminate(msg.Tag)
+		default:
 			p.handleResourcePluginTerminate(msg.Tag)
 		}
 
@@ -544,6 +563,19 @@ func (p *PluginProcessSupervisor) Terminate(reason error) {
 			if err := p.SendExitMeta(pluginInfo.metaPortAlias, reason); err != nil {
 				p.Log().Debug("Failed to send exit to resource plugin namespace=%s: %v", namespace, err)
 			}
+		}
+	}
+
+	// Terminate oidc-credential brokers, unregistering the launch that is
+	// going away so the coordinator stops routing to it.
+	for name, entry := range p.oidcBrokers {
+		if entry.metaPortAlias == zeroAlias {
+			continue
+		}
+		p.unregisterOidcBroker(entry, "shutdown")
+		p.Log().Debug("Terminating oidc-credential broker name=%s alias=%v", name, entry.metaPortAlias)
+		if err := p.SendExitMeta(entry.metaPortAlias, reason); err != nil {
+			p.Log().Debug("Failed to send exit to oidc-credential broker name=%s: %v", name, err)
 		}
 	}
 

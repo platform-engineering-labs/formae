@@ -256,8 +256,9 @@ func translateConfig(config *pklmodel.Config) (*pkgmodel.Config, error) {
 					Enabled: config.Agent.OTel.Prometheus.Enabled,
 				},
 			},
-			Auth:            translateAuthConfig(&config.Agent.Auth),
-			ResourcePlugins: translateResourcePluginConfigs(config.Agent.ResourcePlugins),
+			Auth:                  translateAuthConfig(&config.Agent.Auth),
+			ResourcePlugins:       translateResourcePluginConfigs(config.Agent.ResourcePlugins),
+			OidcCredentialPlugins: translateOidcCredentialPluginConfigs(config.Agent.OidcCredentialPlugins),
 		},
 		Artifacts: translateArtifactConfig(&config.Artifacts),
 		Cli: pkgmodel.CliConfig{
@@ -908,6 +909,43 @@ func translateResourcePluginConfig(obj *pklgo.Object) pkgmodel.ResourcePluginUse
 		"type": true, "enabled": true, "rateLimit": true, "labelConfig": true,
 		"discoveryFilters": true, "resourceTypesToDiscover": true, "retry": true,
 	}
+	extra := make(map[string]any)
+	for k, v := range props {
+		if !baseKeys[k] {
+			extra[k] = v
+		}
+	}
+	if len(extra) > 0 {
+		cfg.PluginConfig, _ = json.Marshal(sanitizeConfig(extra))
+	}
+
+	return cfg
+}
+
+func translateOidcCredentialPluginConfigs(objects []pklgo.Object) []pkgmodel.OidcCredentialPluginUserConfig {
+	if len(objects) == 0 {
+		return nil
+	}
+	var configs []pkgmodel.OidcCredentialPluginUserConfig
+	for i := range objects {
+		configs = append(configs, translateOidcCredentialPluginConfig(&objects[i]))
+	}
+	return configs
+}
+
+// translateOidcCredentialPluginConfig maps a BaseOidcCredentialPluginConfig
+// subclass onto the user config. The two base fields are read directly; every
+// other property the subclass declared is the broker's own and is marshaled
+// into PluginConfig for the broker process to interpret.
+func translateOidcCredentialPluginConfig(obj *pklgo.Object) pkgmodel.OidcCredentialPluginUserConfig {
+	props := obj.Properties
+
+	cfg := pkgmodel.OidcCredentialPluginUserConfig{
+		Type:    pklString(props, "type"),
+		Enabled: pklBool(props, "enabled", true),
+	}
+
+	baseKeys := map[string]bool{"type": true, "enabled": true}
 	extra := make(map[string]any)
 	for k, v := range props {
 		if !baseKeys[k] {

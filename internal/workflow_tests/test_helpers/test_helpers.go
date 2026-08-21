@@ -129,7 +129,7 @@ func NewTestMetastructure(t *testing.T, pluginOverrides *plugin.ResourcePluginOv
 
 func NewTestMetastructureWithEverything(t *testing.T, pluginOverrides *plugin.ResourcePluginOverrides, db datastore.Datastore, cfg *pkgmodel.Config) (*metastructure.Metastructure, func(), error) {
 	ctx, cancel := testutil.PluginOverridesContext(pluginOverrides)
-	m, err := metastructure.NewMetastructureWithDataStoreAndContext(ctx, cfg, nil, db, "test")
+	m, err := metastructure.NewMetastructureWithDataStoreAndContext(ctx, cfg, nil, nil, db, "test")
 	if err == nil {
 		m.TestResourcePlugin = fakeaws.NewFakeAWS()
 	}
