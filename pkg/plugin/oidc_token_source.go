@@ -83,24 +83,15 @@ func newOidcBrokerClient(proc gen.Process, namespace, brokerNode, brokerName str
 			if err != nil {
 				return credential.IdentityTokenResponse{}, err
 			}
-			// Ergo decodes a registered marshaler type into a value
-			// (net/edf/register.go builds the target with
-			// reflect.Indirect(reflect.New(T))), so the value arm is the one
-			// the network path takes. The pointer arm additionally accepts a
-			// broker that answers with the address of its envelope; anything
-			// else is a protocol error, not a mint failure, so it never
-			// reaches ResponseError's fail-closed mapping.
-			switch resp := response.(type) {
-			case credential.IdentityTokenResponse:
-				return resp, nil
-			case *credential.IdentityTokenResponse:
-				if resp == nil {
-					return credential.IdentityTokenResponse{}, fmt.Errorf("oidc-credential broker %s answered with a nil %T", target, resp)
-				}
-				return *resp, nil
-			default:
+			// Ergo decodes a registered marshaler type into a value, never a
+			// pointer, so the envelope arrives as one. Anything else is a
+			// protocol error, not a mint failure, so it never reaches
+			// ResponseError's fail-closed mapping.
+			resp, ok := response.(credential.IdentityTokenResponse)
+			if !ok {
 				return credential.IdentityTokenResponse{}, fmt.Errorf("oidc-credential broker %s answered with %T, want credential.IdentityTokenResponse", target, response)
 			}
+			return resp, nil
 		},
 	}
 }
