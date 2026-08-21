@@ -9,11 +9,14 @@
 //	root/
 //	  formae.conf.pkl        (plain file; legacy symlink migrated by ensureInitialized)
 //	  active                 (plain text pointer file: contains the active profile name)
+//	  managed.json           (ledger of the profiles `formae login` wrote)
+//	  managed.lock           (lock file serialising ledger updates)
 //	  profiles/
 //	    <name>.pkl
 package store
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -23,6 +26,10 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"time"
+
+	"github.com/gofrs/flock"
 )
 
 const (
@@ -30,6 +37,10 @@ const (
 	profilesSubdir = "profiles"
 	profileExt     = ".pkl"
 	activeFileName = "active"
+
+	managedLedgerFileName = "managed.json"
+	managedLockFileName   = "managed.lock"
+	initLockFileName      = "init.lock"
 )
 
 // Error sentinels returned by Store methods. Callers should match using errors.Is.
@@ -39,6 +50,13 @@ var (
 	ErrNotFound       = errors.New("profile not found")
 	ErrAlreadyExists  = errors.New("profile already exists")
 	ErrIsActive       = errors.New("profile is active")
+)
+
+// initLockWait bounds how long initialization waits for a peer holding the
+// lock; initLockRetry is how often it re-checks while waiting.
+var (
+	initLockWait  = 5 * time.Second
+	initLockRetry = 10 * time.Millisecond
 )
 
 var nameRE = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
@@ -72,8 +90,30 @@ func (s *Store) ProfilePath(name string) string {
 	return filepath.Join(s.root, profilesSubdir, name+profileExt)
 }
 
-func (s *Store) profilesDir() string {
+// ProfilesDir returns the directory holding the profile files.
+func (s *Store) ProfilesDir() string {
 	return filepath.Join(s.root, profilesSubdir)
+}
+
+// ManagedLedgerPath returns the path to the managed-profile ledger, the record
+// of the profiles `formae login` wrote. It sits beside profiles/ rather than
+// inside it so it is never mistaken for a profile.
+func (s *Store) ManagedLedgerPath() string {
+	return filepath.Join(s.root, managedLedgerFileName)
+}
+
+// initLockPath returns the lock file that serialises store initialization. It
+// is deliberately not the managed-profile lock: `formae login` holds that one
+// while it publishes profiles, and it would deadlock the moment initialization
+// ran underneath it.
+func (s *Store) initLockPath() string {
+	return filepath.Join(s.root, initLockFileName)
+}
+
+// ManagedLockPath returns the path to the lock file that serialises updates to
+// the managed-profile ledger.
+func (s *Store) ManagedLockPath() string {
+	return filepath.Join(s.root, managedLockFileName)
 }
 
 func (s *Store) activePath() string {
@@ -114,8 +154,15 @@ func (s *Store) Resolve() (string, error) {
 
 // List returns all profile names in sorted order. An absent profiles/ dir
 // yields an empty slice (a clean store is not an error for introspection).
+//
+// A .pkl file whose stem is not a valid profile name is not listed: no
+// command can use, save, or delete it by name, so reporting it as a profile
+// only invites a user to try. The files this excludes in practice are the
+// dotfile temporaries `formae login` writes beside the profiles it
+// publishes, which exist for the length of one publication and are not
+// profiles at any point.
 func (s *Store) List() ([]string, error) {
-	entries, err := os.ReadDir(s.profilesDir())
+	entries, err := os.ReadDir(s.ProfilesDir())
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return []string{}, nil
@@ -131,7 +178,11 @@ func (s *Store) List() ([]string, error) {
 		if !strings.HasSuffix(n, profileExt) {
 			continue
 		}
-		names = append(names, strings.TrimSuffix(n, profileExt))
+		name := strings.TrimSuffix(n, profileExt)
+		if ValidateName(name) != nil {
+			continue
+		}
+		names = append(names, name)
 	}
 	sort.Strings(names)
 	return names, nil
@@ -239,7 +290,7 @@ func (s *Store) Create(name string, force bool) error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("stat target: %w", err)
 	}
-	if err := os.MkdirAll(s.profilesDir(), 0o755); err != nil {
+	if err := os.MkdirAll(s.ProfilesDir(), 0o755); err != nil {
 		return fmt.Errorf("mkdir profiles: %w", err)
 	}
 	return os.WriteFile(dst, []byte(StubTemplate), 0o644)
@@ -297,6 +348,42 @@ func copyFile(src, dst string) error {
 // the two states that need user action (stale active; orphaned profiles with no
 // default).
 func (s *Store) ensureInitialized() error {
+	// Several formae can start at once — an assistant issuing a batch of tool
+	// calls on a fresh machine is the ordinary case, not a contrived one — and
+	// they all load configuration through here. Deciding and then mutating
+	// without serialising lets one lose a race it had in fact won: a migration
+	// completed by the winner reads as a failure, and a pointer written by the
+	// winner reads as a store that needs the user's hand.
+	//
+	// Best-effort by design. Where the lock cannot be taken — a read-only dir, a
+	// filesystem without locking, a peer that outlives the wait — initialization
+	// proceeds anyway. That is exactly the behaviour before this lock existed,
+	// so a machine that cannot lock is never worse off than it was.
+	if unlock, ok := s.lockInit(); ok {
+		defer unlock()
+	}
+	return s.initialize()
+}
+
+// lockInit takes the initialization lock, waiting briefly for a peer that is
+// already initializing: the work behind it is a handful of syscalls, so waiting
+// beats racing. Reports whether the lock was taken.
+func (s *Store) lockInit() (func(), bool) {
+	if err := os.MkdirAll(s.root, 0o755); err != nil {
+		return nil, false
+	}
+	lock := flock.New(s.initLockPath())
+	ctx, cancel := context.WithTimeout(context.Background(), initLockWait)
+	defer cancel()
+	locked, err := lock.TryLockContext(ctx, initLockRetry)
+	if err != nil || !locked {
+		return nil, false
+	}
+	return func() { _ = lock.Unlock() }, true
+}
+
+// initialize is ensureInitialized's decision, run under the lock above.
+func (s *Store) initialize() error {
 	// Step 1/2: an active pointer already exists.
 	if data, err := os.ReadFile(s.activePath()); err == nil {
 		name := strings.TrimSpace(string(data))
@@ -329,7 +416,7 @@ func (s *Store) ensureInitialized() error {
 		// Step 5: bare regular file.
 		dst := s.ProfilePath("default")
 		if _, err := os.Lstat(dst); errors.Is(err, os.ErrNotExist) {
-			if err := os.MkdirAll(s.profilesDir(), 0o755); err != nil {
+			if err := os.MkdirAll(s.ProfilesDir(), 0o755); err != nil {
 				return fmt.Errorf("mkdir profiles: %w", err)
 			}
 			if err := os.Rename(cfg, dst); err != nil { // Step 5a.
@@ -355,7 +442,7 @@ func (s *Store) ensureInitialized() error {
 		return fmt.Errorf("%w: no active profile — run `formae profile use <name>` (available: %s)", ErrNotInitialized, strings.Join(names, ", "))
 	}
 	// Step 8: clean install — bootstrap from the stub.
-	if err := os.MkdirAll(s.profilesDir(), 0o755); err != nil {
+	if err := os.MkdirAll(s.ProfilesDir(), 0o755); err != nil {
 		return fmt.Errorf("mkdir profiles: %w", err)
 	}
 	if err := os.WriteFile(s.ProfilePath("default"), []byte(StubTemplate), 0o644); err != nil {
@@ -381,7 +468,7 @@ func (s *Store) validSymlinkTarget() (string, bool) {
 		return "", false
 	}
 	// Confirm the target is under profiles/ and exists.
-	if filepath.Dir(target) != profilesSubdir && filepath.Dir(target) != s.profilesDir() {
+	if filepath.Dir(target) != profilesSubdir && filepath.Dir(target) != s.ProfilesDir() {
 		return "", false
 	}
 	if _, err := os.Stat(s.ProfilePath(name)); err != nil {

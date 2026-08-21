@@ -96,7 +96,7 @@ func hasUserConfig(dir string) bool {
 		}
 	}
 	// Any real profile file.
-	if entries, err := os.ReadDir(s.profilesDir()); err == nil {
+	if entries, err := os.ReadDir(s.ProfilesDir()); err == nil {
 		for _, e := range entries {
 			if e.Type().IsRegular() && strings.HasSuffix(e.Name(), profileExt) {
 				return true

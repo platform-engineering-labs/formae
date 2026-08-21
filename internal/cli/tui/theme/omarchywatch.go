@@ -18,7 +18,8 @@ type ApplyThemeMsg struct{ Theme *Theme }
 // OmarchyWatcher watches the Omarchy current-theme symlink and its parent dir
 // for changes and re-resolves the "omarchy" theme on any event. It handles both
 // the atomic symlink swap omarchy-theme-set performs (repointing
-// ~/.config/omarchy/current/theme) and an in-place colors.toml edit.
+// <omarchy root>/current/theme) and an in-place colors.toml edit. The root is
+// whichever generation's location omarchyThemeDir resolved.
 type OmarchyWatcher struct {
 	w    *fsnotify.Watcher
 	warn func(string)
@@ -29,7 +30,7 @@ type OmarchyWatcher struct {
 	watchedTarget string
 }
 
-// NewOmarchyWatcher starts watching ~/.config/omarchy/{current, current/theme}.
+// NewOmarchyWatcher starts watching <omarchy root>/{current, current/theme}.
 // The watch is best-effort: paths that do not exist yet are skipped (a later
 // create fires on the parent).
 func NewOmarchyWatcher() (*OmarchyWatcher, error) {
@@ -53,13 +54,13 @@ func NewOmarchyWatcher() (*OmarchyWatcher, error) {
 // across swaps and firing a spurious ApplyThemeMsg if the old (no-longer-
 // current) theme's colors.toml is later edited.
 func (o *OmarchyWatcher) arm() {
-	cfgRoot := omarchyThemeDir()     // .../omarchy/current/theme
-	current := filepath.Dir(cfgRoot) // .../omarchy/current
-	parent := filepath.Dir(current)  // .../omarchy
-	_ = o.w.Add(parent)              // ignore errors: not-yet-existing paths fire via parent
+	themeDir := omarchyThemeDir()     // .../omarchy/current/theme
+	current := filepath.Dir(themeDir) // .../omarchy/current
+	parent := filepath.Dir(current)   // .../omarchy
+	_ = o.w.Add(parent)               // ignore errors: not-yet-existing paths fire via parent
 	_ = o.w.Add(current)
 
-	target, err := filepath.EvalSymlinks(cfgRoot)
+	target, err := filepath.EvalSymlinks(themeDir)
 	if err != nil {
 		// No install yet, or a dangling symlink: leave watchedTarget as-is
 		// (best-effort; a later create fires on "current").

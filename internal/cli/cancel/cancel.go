@@ -41,8 +41,16 @@ var printBanner = func(a *app.App) { a.PrintBanner() }
 var isTerminal = tui.IsTerminal
 
 // getCommandsStatusFn is a seam so tests can stub the pre-fetch call.
+//
+// A cancel with no query targets the calling client's own most recent
+// command, so the pre-fetch is scoped the same way. Listing agent-wide here
+// would show the user commands the cancel is never going to touch.
 var getCommandsStatusFn = func(a *app.App, query string, n int, fromWatch bool) (*apimodel.ListCommandStatusResponse, []string, error) {
-	return a.GetCommandsStatus(query, n, fromWatch)
+	scope := apimodel.CommandScopeAgent
+	if query == "" {
+		scope = apimodel.CommandScopeClient
+	}
+	return a.GetCommandsStatusScoped(query, n, fromWatch, scope)
 }
 
 // cancelCommandFn is a seam so tests can stub the cancel call.
@@ -298,7 +306,7 @@ func runCancelInteractive(a *app.App, opts *CancelOptions) error {
 	// The watch TUI needs an interactive stdin to drive it. When stdout is a TTY
 	// but stdin is not (e.g. `formae cancel --yes </dev/null`), stay
 	// fire-and-forget: the cancels are already submitted and the summary prints
-	// how to follow progress via `formae status`.
+	// how to follow progress via `formae command status`.
 	if !isInteractive() {
 		return nil
 	}
@@ -309,6 +317,7 @@ func runCancelInteractive(a *app.App, opts *CancelOptions) error {
 			FocusCommandID:     merged.CommandIDs[0],
 			ExitWhenDone:       true,
 			AbandonedResources: abandonedKsuids,
+			HeaderCommand:      "cancel",
 		})
 	}
 	idTerms := make([]string, len(merged.CommandIDs))
@@ -325,6 +334,7 @@ func runCancelInteractive(a *app.App, opts *CancelOptions) error {
 		MaxResults:         len(merged.CommandIDs),
 		ExitWhenDone:       len(merged.CommandIDs) <= cancelWatchPageLimit,
 		AbandonedResources: abandonedKsuids,
+		HeaderCommand:      "cancel",
 	})
 }
 
@@ -434,7 +444,7 @@ func runCancelLegacy(a *app.App, opts *CancelOptions) error {
 	_, _ = fmt.Print(renderCancelResult(a.Theme(), res, cancelTermWidth(os.Stdout)))
 
 	// Non-TTY is fire-and-forget: the cancel is submitted and the result printed;
-	// the caller queries progress via `formae status` (watching is a TTY-only
+	// the caller queries progress via `formae command status` (watching is a TTY-only
 	// affordance).
 	return nil
 }

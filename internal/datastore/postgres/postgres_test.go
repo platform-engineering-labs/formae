@@ -15,6 +15,7 @@ import (
 
 	"github.com/demula/mksuid/v2"
 	"github.com/jackc/pgx/v5"
+	"github.com/platform-engineering-labs/formae/internal/datastore"
 	"github.com/platform-engineering-labs/formae/internal/datastore/dstest"
 	"github.com/platform-engineering-labs/formae/internal/datastore/postgres"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -371,6 +372,23 @@ func TestDatastore(t *testing.T) {
 				// exhausts Postgres's connection limit ("too many clients already").
 				d.Close()
 				return d.CleanUp()
+			},
+			LoadAgentBootsForTest: func() ([]datastore.AgentBoot, error) {
+				rows, err := d.Pool().Query(context.Background(),
+					`SELECT boot_id, version, booted_at FROM agent_boots ORDER BY booted_at, boot_id`)
+				if err != nil {
+					return nil, err
+				}
+				defer rows.Close()
+				var out []datastore.AgentBoot
+				for rows.Next() {
+					var b datastore.AgentBoot
+					if err := rows.Scan(&b.BootID, &b.Version, &b.BootedAt); err != nil {
+						return nil, err
+					}
+					out = append(out, b)
+				}
+				return out, rows.Err()
 			},
 			SetTargetHealthStateForTest: func(label, state string) error {
 				_, err := d.Pool().Exec(context.Background(),

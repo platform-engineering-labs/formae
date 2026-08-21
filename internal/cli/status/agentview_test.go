@@ -174,8 +174,8 @@ func TestRenderAgentStats_UnmanagedThresholds(t *testing.T) {
 		unmanaged int
 		pct       string
 	}{
-		{"zero-pct", 100, 0, "0%"},   // 0% → Done (green)
-		{"forty-pct", 60, 40, "40%"}, // 40% → Warning (yellow)
+		{"zero-pct", 100, 0, "0%"},    // 0% → Done (green)
+		{"forty-pct", 60, 40, "40%"},  // 40% → Warning (yellow)
 		{"eighty-pct", 20, 80, "80%"}, // 80% → Error (red)
 	}
 

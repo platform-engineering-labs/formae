@@ -89,6 +89,30 @@ func TestResolveConfigDir_XDGWhenLegacyUnpopulated(t *testing.T) {
 	}
 }
 
+// A directory holding only managed.json must not count as user config. The
+// ledger is written beside profiles, never before them, so treating it as
+// evidence of user config would let an otherwise empty directory win the
+// legacy-versus-XDG tie-break.
+func TestResolveConfigDir_ManagedLedgerAloneIsNotUserConfig(t *testing.T) {
+	home := t.TempDir()
+	xdg := t.TempDir()
+	t.Setenv("FORMAE_CONFIG_DIR", "")
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	legacy := filepath.Join(home, ".config", "formae")
+	writeFile(t, legacy, "managed.json", `{"schemaVersion":1,"entries":[]}`)
+	xdgFormae := filepath.Join(xdg, "formae")
+	writeFile(t, xdgFormae, filepath.Join("profiles", "default.pkl"), "x")
+
+	got, err := store.ResolveConfigDir()
+	if err != nil {
+		t.Fatalf("ResolveConfigDir: %v", err)
+	}
+	if got != xdgFormae {
+		t.Errorf("got %q, want xdg %q (managed.json alone is not user config)", got, xdgFormae)
+	}
+}
+
 func TestResolveConfigDir_FreshMachineHonorsXDG(t *testing.T) {
 	home := t.TempDir()
 	xdg := t.TempDir()

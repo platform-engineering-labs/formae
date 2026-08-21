@@ -17,7 +17,6 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/rdsdata"
 	"github.com/aws/aws-sdk-go-v2/service/rdsdata/types"
 	"github.com/demula/mksuid/v2"
@@ -195,31 +194,38 @@ type DatastoreAuroraDataAPI struct {
 	ctx        context.Context
 }
 
-func NewDatastoreAuroraDataAPI(ctx context.Context, cfg *pkgmodel.DatastoreConfig, agentID string) (datastore.Datastore, error) {
-	var opts []func(*config.LoadOptions) error
-
-	// When using a custom endpoint (e.g. local-data-api for testing),
-	// use static dummy creds to avoid requiring real AWS creds
-	if cfg.AuroraDataAPI.Endpoint != "" {
-		opts = append(opts, config.WithCredentialsProvider(
-			credentials.NewStaticCredentialsProvider("test", "test", ""),
-		))
-	}
-
-	awsCfg, err := config.LoadDefaultConfig(ctx, opts...)
+// loadAuroraAWSConfig loads the AWS configuration for the Data API client,
+// overriding the region resolved from the environment when one is configured.
+func loadAuroraAWSConfig(ctx context.Context, cfg *pkgmodel.AuroraDataAPIConfig) (aws.Config, error) {
+	awsCfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load AWS config: %w", err)
+		return aws.Config{}, fmt.Errorf("failed to load AWS config: %w", err)
 	}
 
-	if cfg.AuroraDataAPI.Region != "" {
-		awsCfg.Region = cfg.AuroraDataAPI.Region
+	if cfg.Region != "" {
+		awsCfg.Region = cfg.Region
 	}
 
-	client := rdsdata.NewFromConfig(awsCfg, func(o *rdsdata.Options) {
-		if cfg.AuroraDataAPI.Endpoint != "" {
-			o.BaseEndpoint = aws.String(cfg.AuroraDataAPI.Endpoint)
+	return awsCfg, nil
+}
+
+// auroraClientOptions applies the configured Data API endpoint to the client.
+// An empty endpoint leaves the SDK's default endpoint resolution in place.
+func auroraClientOptions(cfg *pkgmodel.AuroraDataAPIConfig) func(*rdsdata.Options) {
+	return func(o *rdsdata.Options) {
+		if cfg.Endpoint != "" {
+			o.BaseEndpoint = aws.String(cfg.Endpoint)
 		}
-	})
+	}
+}
+
+func NewDatastoreAuroraDataAPI(ctx context.Context, cfg *pkgmodel.DatastoreConfig, agentID string) (datastore.Datastore, error) {
+	awsCfg, err := loadAuroraAWSConfig(ctx, &cfg.AuroraDataAPI)
+	if err != nil {
+		return nil, err
+	}
+
+	client := rdsdata.NewFromConfig(awsCfg, auroraClientOptions(&cfg.AuroraDataAPI))
 
 	d := &DatastoreAuroraDataAPI{
 		client:     client,
@@ -1018,7 +1024,7 @@ func (d *DatastoreAuroraDataAPI) GetMostRecentFormaCommandByClientID(clientID st
 		description_text, description_confirm, config_mode, config_force, config_simulate,
 		target_updates, stack_updates, policy_updates, modified_ts, source, subject, subject_name
 	FROM forma_commands
-	WHERE client_id = :client_id
+	WHERE client_id = :client_id AND source = 'user'
 	ORDER BY timestamp DESC
 	LIMIT 1
 	`
@@ -1032,7 +1038,7 @@ func (d *DatastoreAuroraDataAPI) GetMostRecentFormaCommandByClientID(clientID st
 	}
 
 	if len(output.Records) == 0 {
-		return nil, fmt.Errorf("no forma commands found for client: %v", clientID)
+		return nil, nil
 	}
 
 	cmd, err := d.parseFormaCommandRecord(output.Records[0])
@@ -1219,11 +1225,8 @@ func (d *DatastoreAuroraDataAPI) QueryFormaCommands(statusQuery *datastore.Statu
 	queryStr, params, paramIdx = appendAuroraStringClause(queryStr, params, paramIdx, "command_id", "command_id", false, statusQuery.CommandID)
 	queryStr, params, paramIdx = appendAuroraStringClause(queryStr, params, paramIdx, "client_id", "client_id", false, statusQuery.ClientID)
 
-	if statusQuery.Command != nil {
-		queryStr, params, paramIdx = appendAuroraStringClause(queryStr, params, paramIdx, "command", "command", true, statusQuery.Command)
-	} else {
-		queryStr += fmt.Sprintf(" AND command != '%s'", pkgmodel.CommandSync)
-	}
+	queryStr, params, paramIdx = appendAuroraStringClause(queryStr, params, paramIdx, "command", "command", true, statusQuery.Command)
+	queryStr, params, paramIdx = appendAuroraStringClause(queryStr, params, paramIdx, "source", "source", false, statusQuery.Source)
 
 	// stack filter routes through a sub-EXISTS against resource_updates.
 	if statusQuery.Stack != nil {
@@ -6289,4 +6292,21 @@ func (d *DatastoreAuroraDataAPI) ForceCancelResourceUpdates(commandID string, in
 	}
 
 	return result, nil
+}
+
+// RecordAgentBoot appends one agent_boots row for this process start.
+func (d *DatastoreAuroraDataAPI) RecordAgentBoot(version string) error {
+	ctx, cancel := datastore.AgentBootContext(d.ctx)
+	defer cancel()
+	query := `INSERT INTO agent_boots (boot_id, version, booted_at) VALUES (:boot_id, :version, :booted_at::timestamp)`
+	params := []types.SqlParameter{
+		{Name: aws.String("boot_id"), Value: &types.FieldMemberStringValue{Value: mksuid.New().String()}},
+		{Name: aws.String("version"), Value: &types.FieldMemberStringValue{Value: version}},
+		{Name: aws.String("booted_at"), Value: &types.FieldMemberStringValue{Value: time.Now().UTC().Format(time.RFC3339Nano)}},
+	}
+
+	if _, err := d.executeStatement(ctx, query, params); err != nil {
+		return fmt.Errorf("failed to record agent boot: %w", err)
+	}
+	return nil
 }

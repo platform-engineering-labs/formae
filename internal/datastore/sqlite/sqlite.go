@@ -553,7 +553,7 @@ func (d DatastoreSQLite) GetMostRecentFormaCommandByClientID(clientID string) (*
 		LEFT JOIN resource_updates ru ON fc.command_id = ru.command_id
 		WHERE fc.command_id = (
 			SELECT command_id FROM forma_commands
-			WHERE client_id = ?
+			WHERE client_id = ? AND source = 'user'
 			ORDER BY timestamp DESC
 			LIMIT 1
 		)
@@ -568,7 +568,7 @@ func (d DatastoreSQLite) GetMostRecentFormaCommandByClientID(clientID string) (*
 		return nil, err
 	}
 	if len(commands) == 0 {
-		return nil, fmt.Errorf("no forma commands found for client: %v", clientID)
+		return nil, nil
 	}
 	return commands[0], nil
 }
@@ -897,9 +897,7 @@ func (d DatastoreSQLite) QueryFormaCommands(query *datastore.StatusQuery) ([]*fo
 	subqueryStr = extendSQLiteQueryString(subqueryStr, query.CommandID, " AND command_id %s ?{esc}", &args)
 	subqueryStr = extendSQLiteQueryString(subqueryStr, query.ClientID, " AND client_id %s ?{esc}", &args)
 	subqueryStr = extendSQLiteQueryString(subqueryStr, query.Command, " AND LOWER(command) %s LOWER(?){esc}", &args)
-	if query.Command == nil {
-		subqueryStr += fmt.Sprintf(" AND command != '%s'", pkgmodel.CommandSync)
-	}
+	subqueryStr = extendSQLiteQueryString(subqueryStr, query.Source, " AND source %s ?{esc}", &args)
 
 	// Stack filter uses the normalized resource_updates table
 	subqueryStr = extendSQLiteQueryString(subqueryStr, query.Stack, " AND EXISTS (SELECT 1 FROM resource_updates ru WHERE ru.command_id = forma_commands.command_id AND ru.stack_label %s ?{esc})", &args)
@@ -5355,3 +5353,33 @@ func (d DatastoreSQLite) CleanUp() error {
 // Conn returns the underlying database connection. Used by test helpers that
 // need direct SQL access (e.g. forcing health_state for guard assertions).
 func (d DatastoreSQLite) Conn() *sql.DB { return d.conn }
+
+// RecordAgentBoot appends one agent_boots row for this process start.
+// agentBootTimestampLayout is RFC 3339 with a fixed-width nanosecond fraction.
+// SQLite stores booted_at as text and the reader orders by it, so the format
+// has to sort lexicographically in chronological order. time.RFC3339Nano does
+// not qualify: it strips trailing zeros, so ".5Z" compares greater than the
+// later ".500000001Z".
+const agentBootTimestampLayout = "2006-01-02T15:04:05.000000000Z07:00"
+
+// agentBootTimestamp renders a boot time for storage and comparison in SQLite.
+func agentBootTimestamp(t time.Time) string {
+	return t.UTC().Format(agentBootTimestampLayout)
+}
+
+func (d DatastoreSQLite) RecordAgentBoot(version string) error {
+	ctx, cancel := datastore.AgentBootContext(d.ctx)
+	defer cancel()
+	ctx, span := sqliteTracer.Start(ctx, "RecordAgentBoot")
+	defer span.End()
+
+	_, err := d.conn.ExecContext(
+		ctx,
+		`INSERT INTO agent_boots (boot_id, version, booted_at) VALUES (?, ?, ?)`,
+		mksuid.New().String(), version, agentBootTimestamp(time.Now().UTC()),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to record agent boot: %w", err)
+	}
+	return nil
+}

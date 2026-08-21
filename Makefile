@@ -70,7 +70,7 @@ build-debug:
 	go build ${DEBUG_GOFLAGS} -o formae cmd/formae/main.go
 
 pkg-bin: clean build
-	echo '${VERSION}' > ./version.semver
+	$(MAKE) version-semver
 	mkdir -p ./dist/pel/bin
 	cp -Rp ./formae ./dist/pel/bin
 	cp -Rp ./pkl-reader-helm ./dist/pel/bin
@@ -89,8 +89,15 @@ bundle-examples:
 verify-examples-opkg:
 	go run ./cmd/bundle-examples --skip-stage --manifest ./.out/examples-manifest.json --opkg './*.opkg'
 
-gen-pkl:
+## version-semver: Write ./version.semver, which the PKL schema project reads
+## as its package version. Any job that evaluates the schema needs the file,
+## and nothing else about a build, so this is the cheap way to supply it. The
+## single writer keeps the stamp from drifting between the sites that need it.
+version-semver:
+	@test -n '${VERSION}' || { echo "cannot derive a version: no release tag reachable from HEAD" >&2; exit 1; }
 	echo '${VERSION}' > ./version.semver
+
+gen-pkl: version-semver
 	pkl project resolve internal/schema/pkl/schema
 	pkl project resolve internal/schema/pkl/generator
 	pkl project resolve internal/schema/pkl/testdata/forma
@@ -229,6 +236,9 @@ test-unit-auroradataapi:
 	FORMAE_TEST_AURORA_SECRET_ARN=arn:aws:secretsmanager:us-east-1:123456789012:secret:local \
 	FORMAE_TEST_AURORA_DATABASE=postgres \
 	FORMAE_TEST_AURORA_ENDPOINT=http://localhost:80 \
+	AWS_ACCESS_KEY_ID=test \
+	AWS_SECRET_ACCESS_KEY=test \
+	AWS_REGION=us-east-1 \
 		go test -v -tags=unit -count=1 -failfast ./internal/datastore/aurora
 
 test-unit-summary:
@@ -320,4 +330,4 @@ add-license:
 
 all: clean build gen-pkl api-docs
 
-.PHONY: api-docs clean build install-gremlins build-debug pkg-bin bundle-examples verify-examples-opkg publish-bin gen-pkl pkg-pkl publish-pkl run tidy-all test-build test-all test-scripts test-unit test-unit-postgres test-unit-auroradataapi test-unit-summary test-integration test-e2e test-property mutation-test test-descriptors-pkl verify-schema-fakeaws version full-e2e lint lint-reuse add-license postgres-up postgres-down mssql-up mssql-down local-data-api-up local-data-api-down all
+.PHONY: api-docs clean build install-gremlins build-debug pkg-bin bundle-examples verify-examples-opkg publish-bin version-semver gen-pkl pkg-pkl publish-pkl run tidy-all test-build test-all test-scripts test-unit test-unit-postgres test-unit-auroradataapi test-unit-summary test-integration test-e2e test-property mutation-test test-descriptors-pkl verify-schema-fakeaws version full-e2e lint lint-reuse add-license postgres-up postgres-down mssql-up mssql-down local-data-api-up local-data-api-down all

@@ -512,12 +512,17 @@ func (c *Client) parseCancelCommandsErrorResponse(body io.ReadCloser) (*apimodel
 	}
 }
 
-func (c *Client) GetFormaCommandsStatus(query string, clientID string, n int) (*apimodel.ListCommandStatusResponse, error) {
+// GetFormaCommandsStatus lists user-initiated commands. scope only matters
+// when query is empty: apimodel.CommandScopeClient asks for the calling
+// client's most recent command, apimodel.CommandScopeAgent for every
+// client's commands newest-first, bounded by n.
+func (c *Client) GetFormaCommandsStatus(query string, clientID string, n int, scope apimodel.CommandScope) (*apimodel.ListCommandStatusResponse, error) {
 	var status apimodel.ListCommandStatusResponse
 	resp, err := c.resty.R().
 		SetResult(&status).
 		SetHeader("Client-ID", clientID).
 		SetQueryParam("query", query).
+		SetQueryParam("scope", string(scope)).
 		SetQueryParam("max_results", fmt.Sprintf("%d", n)).
 		Get(c.endpoint + "/api/v1/commands/status")
 	if err != nil {
@@ -532,7 +537,11 @@ func (c *Client) GetFormaCommandsStatus(query string, clientID string, n int) (*
 	case http.StatusBadRequest:
 		return c.parseListCommandStatusErrorResponse(resp.Body)
 	case http.StatusNotFound:
-		return nil, nil
+		// The server represents "no matching commands" as a 404. Resolve it
+		// to a concrete, well-formed empty result rather than a bare nil, so
+		// callers can tell "no matches" apart from "no response" without
+		// having to nil-check the pointer themselves.
+		return &apimodel.ListCommandStatusResponse{Commands: []apimodel.Command{}}, nil
 	default:
 		return nil, fmt.Errorf("error getting status: %v", resp.Status())
 	}

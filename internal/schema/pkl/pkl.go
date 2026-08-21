@@ -206,6 +206,7 @@ func translateConfig(config *pklmodel.Config) (*pkgmodel.Config, error) {
 					SecretARN:  config.Agent.Datastore.AuroraDataAPI.SecretArn,
 					Database:   config.Agent.Datastore.AuroraDataAPI.Database,
 					Region:     config.Agent.Datastore.AuroraDataAPI.Region,
+					Endpoint:   config.Agent.Datastore.AuroraDataAPI.Endpoint,
 				},
 				MSSQL: pkgmodel.MSSQLConfig{
 					Host:                   config.Agent.Datastore.MSSQL.Host,
@@ -423,10 +424,11 @@ func translateNetworkConfig(nc *pklmodel.NetworkConfig) *pkgmodel.NetworkConfig 
 	result := &pkgmodel.NetworkConfig{Type: nc.Type}
 	if nc.Tailscale != nil {
 		result.Tailscale = &pkgmodel.TailscaleConfig{
-			TLS:           nc.Tailscale.TLS,
-			AuthKey:       nc.Tailscale.AuthKey,
-			Hostname:      nc.Tailscale.Hostname,
-			AdvertiseTags: nc.Tailscale.AdvertiseTags,
+			TLS:             nc.Tailscale.TLS,
+			AuthKey:         nc.Tailscale.AuthKey,
+			Hostname:        nc.Tailscale.Hostname,
+			AdvertiseTags:   nc.Tailscale.AdvertiseTags,
+			EgressProxyPort: int(nc.Tailscale.EgressProxyPort),
 		}
 	}
 	return result

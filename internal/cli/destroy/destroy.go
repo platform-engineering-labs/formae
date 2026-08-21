@@ -92,7 +92,7 @@ var legacyWidth = func(w io.Writer) int {
 // q/esc/ctrl+c). Not printed when the watch TUI closed because the command
 // already reached a terminal state.
 func printAsyncNotice(commandID string) {
-	fmt.Printf("\nStill running asynchronously on the agent. Check its status with:\n\n  formae status command --query='id:%s'\n", commandID)
+	fmt.Printf("\nStill running asynchronously on the agent. Check its status with:\n\n  formae command status %s\n", commandID)
 }
 
 // OnDependents defines the behavior when resources depend on those being deleted.
@@ -447,8 +447,8 @@ func runDestroyLegacy(app *app.App, opts *DestroyOptions) error {
 		th := app.Theme()
 		subtleStyle := lipgloss.NewStyle().Foreground(th.Palette.TextSubtle)
 		accentStyle := lipgloss.NewStyle().Foreground(th.Palette.PrimaryAccent)
-		fmt.Printf("\nRun the following command to check the status of this command:\n\n  %s%s%s\n",
-			subtleStyle.Render("formae status command --query='id:"), accentStyle.Render(res.CommandID), subtleStyle.Render("'"))
+		fmt.Printf("\nRun the following command to check the status of this command:\n\n  %s%s\n",
+			subtleStyle.Render("formae command status "), accentStyle.Render(res.CommandID))
 	}
 
 	nag.MaybePrintNags(app.Theme(), nags)
