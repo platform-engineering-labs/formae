@@ -44,9 +44,10 @@ type OidcAware interface {
 // broker at all.
 var ErrNoOidcBroker = errors.New("no oidc-credential broker paired")
 
-// brokerCallFunc carries an encoded OidcIdentityTokenRequest to the broker and
-// returns its encoded IdentityTokenResponse.
-type brokerCallFunc func(payload []byte) ([]byte, error)
+// brokerCallFunc carries an OidcIdentityTokenRequest to the broker and returns
+// its IdentityTokenResponse. Both are EDF-registered message types, so the
+// transport serializes them through their own marshaler hooks.
+type brokerCallFunc func(req credential.OidcIdentityTokenRequest) (credential.IdentityTokenResponse, error)
 
 // oidcBrokerClient is the broker an operation may call, put on the operation's
 // context by the PluginOperator. namespace is the resource plugin's namespace,
@@ -64,11 +65,11 @@ type oidcBrokerClient struct {
 	callMu sync.Mutex
 }
 
-// invoke carries payload to the broker, one call at a time.
-func (c *oidcBrokerClient) invoke(payload []byte) ([]byte, error) {
+// invoke carries req to the broker, one call at a time.
+func (c *oidcBrokerClient) invoke(req credential.OidcIdentityTokenRequest) (credential.IdentityTokenResponse, error) {
 	c.callMu.Lock()
 	defer c.callMu.Unlock()
-	return c.call(payload)
+	return c.call(req)
 }
 
 // newOidcBrokerClient builds the client for the broker the coordinator paired
@@ -77,16 +78,29 @@ func newOidcBrokerClient(proc gen.Process, namespace, brokerNode, brokerName str
 	target := gen.ProcessID{Name: gen.Atom(brokerName), Node: gen.Atom(brokerNode)}
 	return &oidcBrokerClient{
 		namespace: namespace,
-		call: func(payload []byte) ([]byte, error) {
-			response, err := proc.CallWithTimeout(target, payload, oidcBrokerCallTimeoutSeconds)
+		call: func(req credential.OidcIdentityTokenRequest) (credential.IdentityTokenResponse, error) {
+			response, err := proc.CallWithTimeout(target, req, oidcBrokerCallTimeoutSeconds)
 			if err != nil {
-				return nil, err
+				return credential.IdentityTokenResponse{}, err
 			}
-			data, ok := response.([]byte)
-			if !ok {
-				return nil, fmt.Errorf("oidc-credential broker %s answered with %T, want []byte", target, response)
+			// Ergo decodes a registered marshaler type into a value
+			// (net/edf/register.go builds the target with
+			// reflect.Indirect(reflect.New(T))), so the value arm is the one
+			// the network path takes. The pointer arm additionally accepts a
+			// broker that answers with the address of its envelope; anything
+			// else is a protocol error, not a mint failure, so it never
+			// reaches ResponseError's fail-closed mapping.
+			switch resp := response.(type) {
+			case credential.IdentityTokenResponse:
+				return resp, nil
+			case *credential.IdentityTokenResponse:
+				if resp == nil {
+					return credential.IdentityTokenResponse{}, fmt.Errorf("oidc-credential broker %s answered with a nil %T", target, resp)
+				}
+				return *resp, nil
+			default:
+				return credential.IdentityTokenResponse{}, fmt.Errorf("oidc-credential broker %s answered with %T, want credential.IdentityTokenResponse", target, response)
 			}
-			return data, nil
 		},
 	}
 }
@@ -161,20 +175,15 @@ func (s *ctxOidcTokenSource) IdentityToken(ctx context.Context, audience string)
 		return "", fmt.Errorf("%w: no broker is configured for this plugin's namespace, or the call was made outside an operation", ErrNoOidcBroker)
 	}
 
-	payload, err := credential.Encode(&credential.OidcIdentityTokenRequest{
+	response, err := client.invoke(credential.OidcIdentityTokenRequest{
 		Audience:  audience,
 		RequestID: uuid.NewString(),
 	})
 	if err != nil {
-		return "", fmt.Errorf("encoding the identity token request for namespace %s: %w", client.namespace, err)
-	}
-
-	response, err := client.invoke(payload)
-	if err != nil {
 		return "", fmt.Errorf("calling the oidc-credential broker paired with namespace %s: %w", client.namespace, err)
 	}
 
-	result, err := credential.DecodeResponse(response)
+	result, err := credential.ResponseError(response)
 	if err != nil {
 		return "", err
 	}

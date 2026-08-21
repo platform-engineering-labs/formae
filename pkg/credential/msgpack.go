@@ -43,18 +43,9 @@ func encodeMsgpack(w io.Writer, v any) error {
 	return err
 }
 
-// Encode serializes v with encodeMsgpack and returns the resulting bytes.
-func Encode(v any) ([]byte, error) {
-	var buf bytes.Buffer
-	if err := encodeMsgpack(&buf, v); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}
-
-// Decode decompresses zstd-compressed data and unmarshals the resulting
-// MessagePack bytes into v.
-func Decode(data []byte, v any) error {
+// decodeMsgpack decompresses zstd-compressed data and unmarshals the
+// resulting MessagePack bytes into v.
+func decodeMsgpack(data []byte, v any) error {
 	zr, err := zstd.NewReader(bytes.NewReader(data))
 	if err != nil {
 		return err

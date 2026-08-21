@@ -7,12 +7,14 @@
 package credential
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"testing"
 	"time"
 
+	"ergo.services/ergo/gen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -33,13 +35,6 @@ func (p *fakeIdentityPlugin) IdentityToken(ctx context.Context, req *OidcIdentit
 	return p.result, p.err
 }
 
-func decodeErrorCode(t *testing.T, data []byte) string {
-	t.Helper()
-	var resp IdentityTokenResponse
-	require.NoError(t, Decode(data, &resp))
-	return resp.ErrorCode
-}
-
 // fakeErrorLogger is the seam handle needs to be testable without a running
 // Ergo node: it satisfies errorLogger without implementing all of gen.Log.
 type fakeErrorLogger struct {
@@ -51,49 +46,36 @@ func (f *fakeErrorLogger) Error(format string, args ...any) {
 }
 
 func TestHandle_ErrorMapping(t *testing.T) {
-	validReq, err := Encode(OidcIdentityTokenRequest{Audience: "aws"})
-	require.NoError(t, err)
+	req := OidcIdentityTokenRequest{Audience: "aws"}
 
 	tests := []struct {
 		name         string
-		request      []byte
 		plugin       OidcCredentialPlugin
 		expectResult bool
 		expectCode   string
 	}{
 		{
-			name:       "decode failure maps to internal",
-			request:    []byte("not a valid encoded request"),
-			plugin:     &fakeIdentityPlugin{},
-			expectCode: ErrCodeInternal,
-		},
-		{
 			name:       "ErrInvalidAudience maps to invalid_audience",
-			request:    validReq,
 			plugin:     &fakeIdentityPlugin{err: ErrInvalidAudience},
 			expectCode: ErrCodeInvalidAudience,
 		},
 		{
 			name:       "wrapped ErrInvalidAudience still maps via errors.Is",
-			request:    validReq,
 			plugin:     &fakeIdentityPlugin{err: fmt.Errorf("upstream: %w", ErrInvalidAudience)},
 			expectCode: ErrCodeInvalidAudience,
 		},
 		{
 			name:       "other plugin error maps to mint_failed",
-			request:    validReq,
 			plugin:     &fakeIdentityPlugin{err: errors.New("upstream STS call failed")},
 			expectCode: ErrCodeMintFailed,
 		},
 		{
 			name:       "nil result and nil error maps to internal",
-			request:    validReq,
 			plugin:     &fakeIdentityPlugin{result: nil, err: nil},
 			expectCode: ErrCodeInternal,
 		},
 		{
 			name:         "success carries the result through, unmapped",
-			request:      validReq,
 			plugin:       &fakeIdentityPlugin{result: &OidcIdentityTokenResult{Token: "tok-123"}},
 			expectResult: true,
 		},
@@ -101,24 +83,22 @@ func TestHandle_ErrorMapping(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			out := handle(context.Background(), tt.plugin, tt.request, time.Second, nil)
-			require.NotNil(t, out)
+			resp := handle(context.Background(), tt.plugin, req, time.Second, nil)
 
 			if tt.expectResult {
-				result, err := DecodeResponse(out)
+				result, err := ResponseError(resp)
 				require.NoError(t, err)
 				assert.Equal(t, "tok-123", result.Token)
 				return
 			}
 
-			assert.Equal(t, tt.expectCode, decodeErrorCode(t, out))
+			assert.Equal(t, tt.expectCode, resp.ErrorCode)
 		})
 	}
 }
 
 func TestHandle_TimesOutAndMapsToInternal(t *testing.T) {
-	req, err := Encode(OidcIdentityTokenRequest{Audience: "aws"})
-	require.NoError(t, err)
+	req := OidcIdentityTokenRequest{Audience: "aws"}
 
 	plugin := &fakeIdentityPlugin{
 		unblock: make(chan struct{}), // never closed: IdentityToken blocks forever
@@ -126,21 +106,20 @@ func TestHandle_TimesOutAndMapsToInternal(t *testing.T) {
 	}
 
 	start := time.Now()
-	out := handle(context.Background(), plugin, req, 20*time.Millisecond, nil)
+	resp := handle(context.Background(), plugin, req, 20*time.Millisecond, nil)
 	elapsed := time.Since(start)
 
 	assert.Less(t, elapsed, time.Second, "handle must return once the timeout elapses, not wait for the plugin")
-	assert.Equal(t, ErrCodeInternal, decodeErrorCode(t, out))
+	assert.Equal(t, ErrCodeInternal, resp.ErrorCode)
 }
 
 func TestHandle_LogsMintFailureWithoutLeakingOntoTheWire(t *testing.T) {
-	req, err := Encode(OidcIdentityTokenRequest{Audience: "aws", RequestID: "req-42"})
-	require.NoError(t, err)
+	req := OidcIdentityTokenRequest{Audience: "aws", RequestID: "req-42"}
 
 	plugin := &fakeIdentityPlugin{err: errors.New("upstream STS call failed: token-shaped-secret-abc123")}
 	log := &fakeErrorLogger{}
 
-	out := handle(context.Background(), plugin, req, time.Second, log)
+	resp := handle(context.Background(), plugin, req, time.Second, log)
 
 	require.Len(t, log.calls, 1)
 	assert.Contains(t, log.calls[0], "req-42")
@@ -148,9 +127,35 @@ func TestHandle_LogsMintFailureWithoutLeakingOntoTheWire(t *testing.T) {
 	assert.Contains(t, log.calls[0], ErrCodeMintFailed)
 	assert.Contains(t, log.calls[0], "upstream STS call failed: token-shaped-secret-abc123")
 
-	var resp IdentityTokenResponse
-	require.NoError(t, Decode(out, &resp))
 	assert.Equal(t, ErrCodeMintFailed, resp.ErrorCode)
 	assert.Empty(t, resp.ErrorMessage, "plugin error text must never reach the wire envelope")
-	assert.NotContains(t, string(out), "token-shaped-secret-abc123", "plugin error text must never be encoded onto the wire")
+
+	var buf bytes.Buffer
+	require.NoError(t, resp.MarshalEDF(&buf))
+	assert.NotContains(t, buf.String(), "token-shaped-secret-abc123", "plugin error text must never be encoded onto the wire")
+}
+
+// HandleCall answers the registered request type with a typed envelope and
+// refuses anything else, so an unexpected message is a failed call rather
+// than a silently empty response.
+func TestHandleCall_TypeSwitch(t *testing.T) {
+	actor := &CredentialActor{plugin: &fakeIdentityPlugin{result: &OidcIdentityTokenResult{Token: "tok-123"}}}
+
+	answer, err := actor.HandleCall(gen.PID{}, gen.Ref{}, OidcIdentityTokenRequest{Audience: "aws"})
+
+	require.NoError(t, err)
+	resp, ok := answer.(IdentityTokenResponse)
+	require.True(t, ok, "HandleCall must answer with a typed IdentityTokenResponse, got %T", answer)
+	require.NotNil(t, resp.Result)
+	assert.Equal(t, "tok-123", resp.Result.Token)
+}
+
+func TestHandleCall_UnknownRequestTypeErrors(t *testing.T) {
+	actor := &CredentialActor{plugin: &fakeIdentityPlugin{}}
+
+	answer, err := actor.HandleCall(gen.PID{}, gen.Ref{}, "not a request")
+
+	assert.Nil(t, answer)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "string", "the error must name the unexpected type")
 }

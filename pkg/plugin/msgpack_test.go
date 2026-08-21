@@ -216,8 +216,9 @@ type oidcIdentityTokenRequestShape struct {
 // credentialGoldenFixtureHex is the hex-encoded, msgpack+zstd-encoded form
 // of an OidcIdentityTokenRequest{Audience: "sts.amazonaws.com", RequestID:
 // "golden-fixture-1"}. It is mirrored verbatim in
-// pkg/credential/msgpack_test.go's TestEncode_MatchesPluginCodecGoldenFixture,
-// which encodes the same field values through pkg/credential's own Encode.
+// pkg/credential/msgpack_test.go's
+// TestMarshalEDF_MatchesPluginCodecGoldenFixture, which encodes the same
+// field values through that type's own MarshalEDF hook.
 // The two codecs must be byte-identical for this to pass on both sides: it
 // proves the agent (pkg/plugin) and an oidc-credential broker
 // (pkg/credential) speak the same wire format despite living in separate Go

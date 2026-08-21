@@ -41,7 +41,6 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/target_reaper"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
-	"github.com/platform-engineering-labs/formae/pkg/credential"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
@@ -117,12 +116,10 @@ func NewMetastructureWithDataStoreAndContext(ctx context.Context, cfg *pkgmodel.
 	metastructure.Datastore = datastore
 	metastructure.Cfg = cfg
 
+	// Registers pkg/credential's types too, so the agent, every resource
+	// plugin, and every oidc-credential broker agree on the wire format.
 	err := plugin.RegisterSharedEDFTypes()
 	if err != nil {
-		return nil, err
-	}
-
-	if err := credential.RegisterEDFTypes(); err != nil {
 		return nil, err
 	}
 

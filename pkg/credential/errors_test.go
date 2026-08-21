@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDecodeResponse_FailClosedMapping(t *testing.T) {
+func TestResponseError_FailClosedMapping(t *testing.T) {
 	cases := map[string]struct {
 		resp IdentityTokenResponse
 		want error
@@ -26,9 +26,7 @@ func TestDecodeResponse_FailClosedMapping(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			b, err := Encode(&tc.resp)
-			require.NoError(t, err)
-			_, err = DecodeResponse(b)
+			_, err := ResponseError(tc.resp)
 			require.ErrorIs(t, err, tc.want)
 		})
 	}

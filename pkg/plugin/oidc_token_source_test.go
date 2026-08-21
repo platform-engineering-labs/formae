@@ -25,14 +25,12 @@ func TestCtxSource_NoClientInCtx_ErrorsIsNoBroker(t *testing.T) {
 }
 
 func TestCtxSource_RoundTripsThroughCallFunc(t *testing.T) {
-	c := &oidcBrokerClient{namespace: "AWS", call: func(payload []byte) ([]byte, error) {
-		var req credential.OidcIdentityTokenRequest
-		require.NoError(t, credential.Decode(payload, &req))
+	c := &oidcBrokerClient{namespace: "AWS", call: func(req credential.OidcIdentityTokenRequest) (credential.IdentityTokenResponse, error) {
 		require.Equal(t, "sts.amazonaws.com", req.Audience)
 		require.NotEmpty(t, req.RequestID)
-		return credential.Encode(&credential.IdentityTokenResponse{
+		return credential.IdentityTokenResponse{
 			Result: &credential.OidcIdentityTokenResult{Token: "jwt", ExpiresAt: time.Now().Add(time.Hour)},
-		})
+		}, nil
 	}}
 
 	tok, err := (&ctxOidcTokenSource{}).IdentityToken(withOidcBrokerClient(context.Background(), c), "sts.amazonaws.com")
@@ -45,13 +43,11 @@ func TestCtxSource_RoundTripsThroughCallFunc(t *testing.T) {
 // are distinguishable on the broker side.
 func TestCtxSource_GeneratesARequestIDPerCall(t *testing.T) {
 	var seen []string
-	c := &oidcBrokerClient{namespace: "AWS", call: func(payload []byte) ([]byte, error) {
-		var req credential.OidcIdentityTokenRequest
-		require.NoError(t, credential.Decode(payload, &req))
+	c := &oidcBrokerClient{namespace: "AWS", call: func(req credential.OidcIdentityTokenRequest) (credential.IdentityTokenResponse, error) {
 		seen = append(seen, req.RequestID)
-		return credential.Encode(&credential.IdentityTokenResponse{
+		return credential.IdentityTokenResponse{
 			Result: &credential.OidcIdentityTokenResult{Token: "jwt", ExpiresAt: time.Now().Add(time.Hour)},
-		})
+		}, nil
 	}}
 	ctx := withOidcBrokerClient(context.Background(), c)
 	source := &ctxOidcTokenSource{}
@@ -73,7 +69,7 @@ func TestCtxSource_SerializesConcurrentCallsThroughOneClient(t *testing.T) {
 	inFlight := 0
 	maxInFlight := 0
 
-	c := &oidcBrokerClient{namespace: "AWS", call: func([]byte) ([]byte, error) {
+	c := &oidcBrokerClient{namespace: "AWS", call: func(credential.OidcIdentityTokenRequest) (credential.IdentityTokenResponse, error) {
 		mu.Lock()
 		inFlight++
 		if inFlight > maxInFlight {
@@ -88,9 +84,9 @@ func TestCtxSource_SerializesConcurrentCallsThroughOneClient(t *testing.T) {
 		inFlight--
 		mu.Unlock()
 
-		return credential.Encode(&credential.IdentityTokenResponse{
+		return credential.IdentityTokenResponse{
 			Result: &credential.OidcIdentityTokenResult{Token: "jwt", ExpiresAt: time.Now().Add(time.Hour)},
-		})
+		}, nil
 	}}
 	ctx := withOidcBrokerClient(context.Background(), c)
 	source := &ctxOidcTokenSource{}
@@ -118,11 +114,11 @@ func TestCtxSource_SerializesConcurrentCallsThroughOneClient(t *testing.T) {
 }
 
 func TestCtxSource_TypedEnvelopeErrors(t *testing.T) {
-	c := &oidcBrokerClient{namespace: "AWS", call: func([]byte) ([]byte, error) {
-		return credential.Encode(&credential.IdentityTokenResponse{
+	c := &oidcBrokerClient{namespace: "AWS", call: func(credential.OidcIdentityTokenRequest) (credential.IdentityTokenResponse, error) {
+		return credential.IdentityTokenResponse{
 			ErrorCode:    credential.ErrCodeInvalidAudience,
 			ErrorMessage: "audience sts.amazonaws.com is not allowed",
-		})
+		}, nil
 	}}
 
 	_, err := (&ctxOidcTokenSource{}).IdentityToken(withOidcBrokerClient(context.Background(), c), "sts.amazonaws.com")
@@ -132,8 +128,8 @@ func TestCtxSource_TypedEnvelopeErrors(t *testing.T) {
 
 func TestCtxSource_TransportFailureNamesTheNamespace(t *testing.T) {
 	callErr := errors.New("no route to broker node")
-	c := &oidcBrokerClient{namespace: "AWS", call: func([]byte) ([]byte, error) {
-		return nil, callErr
+	c := &oidcBrokerClient{namespace: "AWS", call: func(credential.OidcIdentityTokenRequest) (credential.IdentityTokenResponse, error) {
+		return credential.IdentityTokenResponse{}, callErr
 	}}
 
 	_, err := (&ctxOidcTokenSource{}).IdentityToken(withOidcBrokerClient(context.Background(), c), "sts.amazonaws.com")

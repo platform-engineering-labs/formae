@@ -9,14 +9,21 @@ import (
 	"ergo.services/ergo/net/edf"
 )
 
-// RegisterEDFTypes registers the message types the broker sends across the
-// Ergo network boundary. The broker calls this before announcing; the agent
-// calls it directly (beside plugin.RegisterSharedEDFTypes, in
-// internal/metastructure.NewMetastructureWithDataStoreAndContext) so both
-// sides agree on the wire format.
+// RegisterEDFTypes registers the message types that cross the Ergo network
+// boundary between the agent and an oidc-credential broker: the broker's
+// announcement, and both halves of the IdentityToken call.
+//
+// Three processes have to agree on these: the broker (which calls this from
+// startNodeStep), the agent, and the resource plugin that actually issues the
+// IdentityToken call. The latter two get it through
+// plugin.RegisterSharedEDFTypes, which calls this. Each type carries its own
+// MarshalEDF/UnmarshalEDF (msgpack_edf.go), so their nested types need no
+// separate registration.
 func RegisterEDFTypes() error {
 	types := []any{
 		OidcCredentialPluginAnnouncement{},
+		OidcIdentityTokenRequest{},
+		IdentityTokenResponse{},
 	}
 
 	for _, t := range types {

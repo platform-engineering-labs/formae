@@ -9,7 +9,7 @@ import (
 	"fmt"
 )
 
-// Sentinel errors callers test with errors.Is. DecodeResponse wraps them
+// Sentinel errors callers test with errors.Is. ResponseError wraps them
 // with the wire ErrorMessage, when one was sent.
 var (
 	ErrBrokerUnavailable = errors.New("oidc-credential broker unavailable")
@@ -26,19 +26,14 @@ var errorSentinels = map[string]error{
 	ErrCodeInternal:          ErrInternal,
 }
 
-// DecodeResponse decodes an encoded IdentityTokenResponse envelope and maps
-// it fail-closed:
+// ResponseError maps an IdentityTokenResponse envelope to a result or an
+// error, fail-closed:
 //
 //   - nil Result + empty ErrorCode -> ErrInternal
 //   - unknown non-empty ErrorCode  -> ErrInternal (message wrapped)
 //   - known ErrorCode              -> the matching sentinel (message wrapped)
 //   - Result with an empty Token   -> ErrInternal
-func DecodeResponse(data []byte) (*OidcIdentityTokenResult, error) {
-	var resp IdentityTokenResponse
-	if err := Decode(data, &resp); err != nil {
-		return nil, err
-	}
-
+func ResponseError(resp IdentityTokenResponse) (*OidcIdentityTokenResult, error) {
 	if resp.ErrorCode != "" {
 		sentinel, ok := errorSentinels[resp.ErrorCode]
 		if !ok {

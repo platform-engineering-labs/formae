@@ -23,12 +23,18 @@ const ServerActorName = "oidc_credential_server"
 const requestTimeout = 10 * time.Second
 
 // CredentialActor serves IdentityToken requests over Ergo's synchronous
-// call. The carrier is []byte in, []byte out - both Encode'd wire types -
-// which is EDF-native and needs no type registration.
+// call. Request and response are the registered wire types themselves
+// (RegisterEDFTypes), each carrying its own MarshalEDF/UnmarshalEDF, so the
+// transport does the serializing and this actor only ever sees typed values.
 type CredentialActor struct {
 	act.Actor
 
 	plugin OidcCredentialPlugin
+
+	// log is the actor's own gen.Log, captured in Init. Holding it as the
+	// narrow errorLogger seam keeps HandleCall callable without a running
+	// Ergo node, which act.Actor.Log() requires.
+	log errorLogger
 }
 
 func factoryCredentialActor() gen.ProcessBehavior {
@@ -47,21 +53,34 @@ func (a *CredentialActor) Init(args ...any) error {
 		return fmt.Errorf("CredentialActor: 'Plugin' has wrong type (expected OidcCredentialPlugin)")
 	}
 	a.plugin = plugin
+	a.log = a.Log()
 	return nil
 }
 
-// HandleCall decodes the request, mints (or fails to mint) the token, and
-// always answers with an Encode'd IdentityTokenResponse - errors are
-// carried in that envelope, never as the second return value, so a caller
-// always gets bytes back to run through DecodeResponse.
+// HandleCall mints (or fails to mint) the token and always answers a known
+// request with an IdentityTokenResponse - a mint failure is carried in that
+// envelope, never as the second return value, so the caller always gets an
+// envelope to run through ResponseError. An unknown request type is the
+// only case answered with an error, following the coordinator's arm-plus-
+// default shape.
+//
+// Ergo delivers a registered marshaler type as a VALUE (net/edf/register.go
+// builds the decode target with reflect.Indirect(reflect.New(T))), which is
+// why the announcement arm in the plugin coordinator matches on the value
+// type too.
 func (a *CredentialActor) HandleCall(from gen.PID, ref gen.Ref, request any) (any, error) {
-	data, _ := request.([]byte)
-	return handle(context.Background(), a.plugin, data, requestTimeout, a.Log()), nil
+	switch req := request.(type) {
+	case OidcIdentityTokenRequest:
+		return handle(context.Background(), a.plugin, req, requestTimeout, a.log), nil
+
+	default:
+		return nil, fmt.Errorf("unknown request: %T", request)
+	}
 }
 
 // errorLogger is the minimal logging surface handle needs. gen.Log satisfies
-// it structurally, so the actor can pass a.Log() straight through while
-// tests supply a small stub instead of implementing all of gen.Log.
+// it structurally, so the actor stores a.Log() as one while tests supply a
+// small stub instead of implementing all of gen.Log.
 type errorLogger interface {
 	Error(format string, args ...any)
 }
@@ -70,24 +89,22 @@ type errorLogger interface {
 // factored out so it's testable without a running Ergo node.
 //
 // Error mapping is fail-closed:
-//   - the request doesn't decode                                -> ErrCodeInternal
 //   - errors.Is(err, ErrInvalidAudience)                         -> ErrCodeInvalidAudience
 //   - any other plugin error                                    -> ErrCodeMintFailed
 //   - nil result and nil error (including a timeout, which
 //     callWithTimeout reports as nil/nil since the plugin never
 //     actually answered)                                        -> ErrCodeInternal
 //
+// An undecodable payload is not a case at this layer: UnmarshalEDF runs
+// before HandleCall, so a request that doesn't decode never reaches the
+// actor and Ergo fails the caller's call outright.
+//
 // On a plugin error, the failure is logged broker-side via log (naming the
 // requestId, audience, and mapped code) but the plugin's error text is never
-// placed on the wire: encodeErrorResponse only ever carries ErrorCode, never
-// ErrorMessage, so nothing token-shaped can leak through an error string to
-// the caller.
-func handle(ctx context.Context, plugin OidcCredentialPlugin, data []byte, timeout time.Duration, log errorLogger) []byte {
-	var req OidcIdentityTokenRequest
-	if err := Decode(data, &req); err != nil {
-		return encodeErrorResponse(ErrCodeInternal)
-	}
-
+// placed on the wire: the failure envelope only ever carries ErrorCode,
+// never ErrorMessage, so nothing token-shaped can leak through an error
+// string to the caller.
+func handle(ctx context.Context, plugin OidcCredentialPlugin, req OidcIdentityTokenRequest, timeout time.Duration, log errorLogger) IdentityTokenResponse {
 	result, err := callWithTimeout(ctx, plugin, &req, timeout)
 
 	switch {
@@ -99,15 +116,11 @@ func handle(ctx context.Context, plugin OidcCredentialPlugin, data []byte, timeo
 		if log != nil {
 			log.Error("oidc-credential mint failed: requestId=%s audience=%s code=%s err=%q", req.RequestID, req.Audience, code, err)
 		}
-		return encodeErrorResponse(code)
+		return IdentityTokenResponse{ErrorCode: code}
 	case result == nil:
-		return encodeErrorResponse(ErrCodeInternal)
+		return IdentityTokenResponse{ErrorCode: ErrCodeInternal}
 	default:
-		encoded, encErr := Encode(IdentityTokenResponse{Result: result})
-		if encErr != nil {
-			return encodeErrorResponse(ErrCodeInternal)
-		}
-		return encoded
+		return IdentityTokenResponse{Result: result}
 	}
 }
 
@@ -136,16 +149,4 @@ func callWithTimeout(ctx context.Context, plugin OidcCredentialPlugin, req *Oidc
 	case <-ctx.Done():
 		return nil, nil
 	}
-}
-
-// encodeErrorResponse builds the wire envelope for a failed request. Encode
-// of this small, static struct is not expected to fail; if it somehow does,
-// there's nothing more fail-closed to return than empty bytes, which
-// DecodeResponse's Decode call will itself reject.
-func encodeErrorResponse(code string) []byte {
-	data, err := Encode(IdentityTokenResponse{ErrorCode: code})
-	if err != nil {
-		return nil
-	}
-	return data
 }

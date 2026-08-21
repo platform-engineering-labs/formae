@@ -5,7 +5,7 @@
 // Package credential defines the wire contract between the formae agent and
 // an oidc-credential broker plugin: the OidcCredentialPlugin interface, the
 // request/response types carried over that boundary, and the msgpack+zstd
-// codec used to serialize them.
+// codec their Ergo marshaler hooks serialize them with.
 package credential
 
 import (
@@ -41,7 +41,7 @@ type OidcIdentityTokenResult struct {
 
 // IdentityTokenResponse is the wire envelope for an IdentityToken call: on
 // success Result is populated, on failure ErrorCode (and optionally
-// ErrorMessage) is populated. See DecodeResponse for the fail-closed mapping
+// ErrorMessage) is populated. See ResponseError for the fail-closed mapping
 // from this envelope to a Go error.
 type IdentityTokenResponse struct {
 	Result       *OidcIdentityTokenResult `json:"result,omitempty"`
