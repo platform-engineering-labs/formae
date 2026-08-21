@@ -158,7 +158,7 @@ func NewOidcTokenSource() OidcTokenSource {
 func (s *ctxOidcTokenSource) IdentityToken(ctx context.Context, audience string) (string, error) {
 	client, ok := oidcBrokerClientFrom(ctx)
 	if !ok {
-		return "", fmt.Errorf("%w (unavailable outside an operation)", ErrNoOidcBroker)
+		return "", fmt.Errorf("%w: no broker is configured for this plugin's namespace, or the call was made outside an operation", ErrNoOidcBroker)
 	}
 
 	payload, err := credential.Encode(&credential.OidcIdentityTokenRequest{

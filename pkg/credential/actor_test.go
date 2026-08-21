@@ -40,6 +40,16 @@ func decodeErrorCode(t *testing.T, data []byte) string {
 	return resp.ErrorCode
 }
 
+// fakeErrorLogger is the seam handle needs to be testable without a running
+// Ergo node: it satisfies errorLogger without implementing all of gen.Log.
+type fakeErrorLogger struct {
+	calls []string
+}
+
+func (f *fakeErrorLogger) Error(format string, args ...any) {
+	f.calls = append(f.calls, fmt.Sprintf(format, args...))
+}
+
 func TestHandle_ErrorMapping(t *testing.T) {
 	validReq, err := Encode(OidcIdentityTokenRequest{Audience: "aws"})
 	require.NoError(t, err)
@@ -91,7 +101,7 @@ func TestHandle_ErrorMapping(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			out := handle(context.Background(), tt.plugin, tt.request, time.Second)
+			out := handle(context.Background(), tt.plugin, tt.request, time.Second, nil)
 			require.NotNil(t, out)
 
 			if tt.expectResult {
@@ -116,9 +126,31 @@ func TestHandle_TimesOutAndMapsToInternal(t *testing.T) {
 	}
 
 	start := time.Now()
-	out := handle(context.Background(), plugin, req, 20*time.Millisecond)
+	out := handle(context.Background(), plugin, req, 20*time.Millisecond, nil)
 	elapsed := time.Since(start)
 
 	assert.Less(t, elapsed, time.Second, "handle must return once the timeout elapses, not wait for the plugin")
 	assert.Equal(t, ErrCodeInternal, decodeErrorCode(t, out))
+}
+
+func TestHandle_LogsMintFailureWithoutLeakingOntoTheWire(t *testing.T) {
+	req, err := Encode(OidcIdentityTokenRequest{Audience: "aws", RequestID: "req-42"})
+	require.NoError(t, err)
+
+	plugin := &fakeIdentityPlugin{err: errors.New("upstream STS call failed: token-shaped-secret-abc123")}
+	log := &fakeErrorLogger{}
+
+	out := handle(context.Background(), plugin, req, time.Second, log)
+
+	require.Len(t, log.calls, 1)
+	assert.Contains(t, log.calls[0], "req-42")
+	assert.Contains(t, log.calls[0], "aws")
+	assert.Contains(t, log.calls[0], ErrCodeMintFailed)
+	assert.Contains(t, log.calls[0], "upstream STS call failed: token-shaped-secret-abc123")
+
+	var resp IdentityTokenResponse
+	require.NoError(t, Decode(out, &resp))
+	assert.Equal(t, ErrCodeMintFailed, resp.ErrorCode)
+	assert.Empty(t, resp.ErrorMessage, "plugin error text must never reach the wire envelope")
+	assert.NotContains(t, string(out), "token-shaped-secret-abc123", "plugin error text must never be encoded onto the wire")
 }

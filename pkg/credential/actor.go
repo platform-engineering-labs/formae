@@ -56,7 +56,14 @@ func (a *CredentialActor) Init(args ...any) error {
 // always gets bytes back to run through DecodeResponse.
 func (a *CredentialActor) HandleCall(from gen.PID, ref gen.Ref, request any) (any, error) {
 	data, _ := request.([]byte)
-	return handle(context.Background(), a.plugin, data, requestTimeout), nil
+	return handle(context.Background(), a.plugin, data, requestTimeout, a.Log()), nil
+}
+
+// errorLogger is the minimal logging surface handle needs. gen.Log satisfies
+// it structurally, so the actor can pass a.Log() straight through while
+// tests supply a small stub instead of implementing all of gen.Log.
+type errorLogger interface {
+	Error(format string, args ...any)
 }
 
 // handle is the pure request/response mapping at the heart of HandleCall,
@@ -69,7 +76,13 @@ func (a *CredentialActor) HandleCall(from gen.PID, ref gen.Ref, request any) (an
 //   - nil result and nil error (including a timeout, which
 //     callWithTimeout reports as nil/nil since the plugin never
 //     actually answered)                                        -> ErrCodeInternal
-func handle(ctx context.Context, plugin OidcCredentialPlugin, data []byte, timeout time.Duration) []byte {
+//
+// On a plugin error, the failure is logged broker-side via log (naming the
+// requestId, audience, and mapped code) but the plugin's error text is never
+// placed on the wire: encodeErrorResponse only ever carries ErrorCode, never
+// ErrorMessage, so nothing token-shaped can leak through an error string to
+// the caller.
+func handle(ctx context.Context, plugin OidcCredentialPlugin, data []byte, timeout time.Duration, log errorLogger) []byte {
 	var req OidcIdentityTokenRequest
 	if err := Decode(data, &req); err != nil {
 		return encodeErrorResponse(ErrCodeInternal)
@@ -78,10 +91,15 @@ func handle(ctx context.Context, plugin OidcCredentialPlugin, data []byte, timeo
 	result, err := callWithTimeout(ctx, plugin, &req, timeout)
 
 	switch {
-	case err != nil && errors.Is(err, ErrInvalidAudience):
-		return encodeErrorResponse(ErrCodeInvalidAudience)
 	case err != nil:
-		return encodeErrorResponse(ErrCodeMintFailed)
+		code := ErrCodeMintFailed
+		if errors.Is(err, ErrInvalidAudience) {
+			code = ErrCodeInvalidAudience
+		}
+		if log != nil {
+			log.Error("oidc-credential mint failed: requestId=%s audience=%s code=%s err=%q", req.RequestID, req.Audience, code, err)
+		}
+		return encodeErrorResponse(code)
 	case result == nil:
 		return encodeErrorResponse(ErrCodeInternal)
 	default:
