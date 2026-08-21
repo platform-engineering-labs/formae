@@ -57,6 +57,8 @@ jobs:
       - name: Setup local-data-api
         run: make local-data-api-ci
 
+      # Same confinement as mutation-test-pr.yml: a mutant that allocates
+      # without bound must OOM its own test process, not the runner VM.
       - name: Run full mutation test suite
         env:
           FORMAE_TEST_AURORA_CLUSTER_ARN: arn:aws:rds:us-east-1:123456789012:cluster:local
@@ -66,7 +68,12 @@ jobs:
           AWS_ACCESS_KEY_ID: test
           AWS_SECRET_ACCESS_KEY: test
           AWS_REGION: us-east-1
-        run: ./scripts/mutation-test.sh
+        run: |
+          sudo mkdir /sys/fs/cgroup/mutation
+          echo 12G | sudo tee /sys/fs/cgroup/mutation/memory.max
+          echo 0 | sudo tee /sys/fs/cgroup/mutation/memory.swap.max
+          echo $$ | sudo tee /sys/fs/cgroup/mutation/cgroup.procs
+          ./scripts/mutation-test.sh
 
       - name: Generate coverage diff
         run: ./scripts/coverage-diff.sh
