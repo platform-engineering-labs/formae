@@ -4,6 +4,8 @@ go 1.26
 
 toolchain go1.26.2
 
+replace github.com/platform-engineering-labs/formae/pkg/credential => ../credential
+
 replace github.com/platform-engineering-labs/formae/pkg/model => ../model
 
 replace ergo.services/actor/statemachine => github.com/JeroenSoeters/actor/statemachine v0.0.0-20260205190926-8b1b2eaf30f4
@@ -12,9 +14,11 @@ require (
 	ergo.services/actor/statemachine v0.0.0-00010101000000-000000000000
 	ergo.services/ergo v1.999.320
 	github.com/apple/pkl-go v0.12.0
+	github.com/google/uuid v1.6.0
 	github.com/hashicorp/hcl/v2 v2.24.0
 	github.com/klauspost/compress v1.18.5
 	github.com/masterminds/semver v1.5.0
+	github.com/platform-engineering-labs/formae/pkg/credential v0.0.0-00010101000000-000000000000
 	github.com/platform-engineering-labs/formae/pkg/model v0.1.6
 	github.com/stretchr/testify v1.11.1
 	github.com/vmihailenco/msgpack/v5 v5.4.1
@@ -41,7 +45,6 @@ require (
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.7 // indirect
 	github.com/lufia/plan9stats v0.0.0-20251013123823-9fd1530e3ec3 // indirect
 	github.com/mitchellh/go-wordwrap v1.0.1 // indirect

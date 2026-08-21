@@ -26,6 +26,7 @@ import (
 	_ "github.com/platform-engineering-labs/formae/internal/schema/all"
 	"github.com/platform-engineering-labs/formae/internal/util"
 	pkgauth "github.com/platform-engineering-labs/formae/pkg/auth"
+	"github.com/platform-engineering-labs/formae/pkg/credential"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	plugindiscovery "github.com/platform-engineering-labs/formae/pkg/plugin/discovery"
@@ -112,6 +113,19 @@ func (a *Agent) Start() error {
 			externalResourcePlugins[i] = p.ToResourcePluginInfo()
 		}
 
+		// Credential brokers are gated against the credential SDK's own
+		// compatibility floor, not the resource SDK's: they link pkg/credential.
+		brokerInfos := plugindiscovery.DiscoverPluginsMulti(
+			[]string{devPluginDir, systemPluginDir}, plugindiscovery.OidcCredential,
+		)
+		brokerInfos = plugindiscovery.FilterCompatiblePlugins(
+			brokerInfos, formae.Version, credential.MinFormaeVersion, credential.SDKVersion,
+		)
+		oidcCredentialPlugins := make([]plugin.OidcCredentialPluginInfo, len(brokerInfos))
+		for i, p := range brokerInfos {
+			oidcCredentialPlugins[i] = p.ToOidcCredentialPluginInfo()
+		}
+
 		// Create auth plugin handle if auth is configured and a matching
 		// external auth plugin binary was discovered.
 		// If auth is explicitly configured but cannot be loaded, the agent
@@ -158,7 +172,7 @@ func (a *Agent) Start() error {
 
 		slog.Info("Starting agent", "id", a.id)
 
-		ms, err := metastructure.NewMetastructure(a.ctx, a.cfg, externalResourcePlugins, a.id)
+		ms, err := metastructure.NewMetastructure(a.ctx, a.cfg, externalResourcePlugins, oidcCredentialPlugins, a.id)
 		if err != nil {
 			slog.Error("Failed to create ms", "error", err)
 			return

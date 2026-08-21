@@ -43,6 +43,7 @@ plugin end-to-end.
 | ---- | ------- |
 | `plugin.go`, `type.go`, `version.go` | Base `Plugin` interface, plugin `Type` ("resource"), `SDKVersion` and `MinFormaeVersion` constants. |
 | `resource.go` | The `ResourcePlugin` interface that plugin authors implement, plus the optional `ObservablePlugin` and `Configurable` interfaces. |
+| `oidc_token_source.go` | The optional `OidcAware` interface and the `OidcTokenSource` it receives, for plugins that authenticate with short-lived OIDC identity tokens. |
 | `resource/` | Request and result types for the CRUD methods (`CreateRequest`, `ReadResult`, `ProgressResult`, `OperationStatus`, error codes, …). |
 | `sdk/` | The external-plugin entry point. `sdk.RunWithManifest(p, sdk.RunConfig{})` is the one call a plugin's `main` makes. |
 | `manifest.go` | `Manifest` type and parser for `formae-plugin.pkl` (name, namespace, version, license, `minFormaeVersion`). |
@@ -94,6 +95,27 @@ Implement these on the same struct to opt in to extra SDK features:
 - **`Configurable`** — receive plugin-specific configuration as
   `json.RawMessage`, sourced from the user's `formae.conf.pkl`. Called once
   during startup, before the plugin announces itself to the agent.
+- **`OidcAware`** — receive an `OidcTokenSource` for minting short-lived OIDC
+  identity tokens, so your plugin can authenticate to a provider without any
+  long-lived secret. The SDK installs the source once at startup; store it on
+  your struct and call it from your CRUD methods:
+
+  ```go
+  func (p *MyPlugin) SetOidcTokenSource(src plugin.OidcTokenSource) { p.oidc = src }
+
+  func (p *MyPlugin) Create(ctx context.Context, req *resource.CreateRequest) (*resource.CreateResult, error) {
+      token, err := p.oidc.IdentityToken(ctx, "sts.amazonaws.com")
+      // ... exchange the token for provider credentials
+  }
+  ```
+
+  Always pass the `ctx` your method received: the source resolves the broker
+  paired with your namespace from it, so a token minted on a stale or
+  background context fails with `plugin.ErrNoOidcBroker`. The same error means
+  no broker serves your namespace, which is the normal state when the user has
+  configured none. Calls are safe from several goroutines within one operation,
+  but they are serialized, so prefer minting once per operation over minting
+  inside a fan-out.
 
 ## Async operations and progress
 

@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
+//go:build unit
+
 package plugin_coordinator
 
 import (
@@ -13,6 +15,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/testplugin/fakeaws"
+	"github.com/platform-engineering-labs/formae/pkg/credential"
 	"github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"github.com/stretchr/testify/assert"
@@ -263,4 +266,199 @@ func TestPluginCoordinator_LocalSpawnEnvMatchesReportedConfig(t *testing.T) {
 		"the operator must poll on the config the result reports")
 	assert.Equal(t, resource_update.PluginCallTimeout, env[gen.Env("PluginCallTimeout")],
 		"the operator must bound its plugin calls by the deadline the watchdog window is built from")
+}
+
+// oidcAnnouncement builds an OidcCredentialPluginAnnouncement for the given
+// broker name/namespaces/spawn token, mirroring what a broker sends the
+// coordinator on startup.
+func oidcAnnouncement(name string, namespaces []string, spawnToken string) messages.OidcCredentialPluginAnnouncement {
+	return messages.OidcCredentialPluginAnnouncement{
+		Name:       name,
+		Version:    "1.0.0",
+		Namespaces: namespaces,
+		SpawnToken: spawnToken,
+	}
+}
+
+// TestPluginCoordinator_OidcBroker_PairsEveryNamespaceUppercased asserts that
+// announcing multiple namespaces registers one entry per namespace, keyed by
+// the uppercased namespace regardless of the casing the broker announced.
+func TestPluginCoordinator_OidcBroker_PairsEveryNamespaceUppercased(t *testing.T) {
+	listener, sender := newCoordinatorForTest(t)
+
+	listener.SendMessage(sender, oidcAnnouncement("fai", []string{"aws", "Gcp"}, "tok-1"))
+
+	c := listener.Behavior().(*PluginCoordinator)
+	require.Len(t, c.oidcCredentialBrokers, 2)
+
+	for _, key := range []string{"AWS", "GCP"} {
+		broker, ok := c.oidcCredentialBrokers[key]
+		require.True(t, ok, "expected an entry for namespace %s", key)
+		assert.Equal(t, "fai", broker.Name)
+		assert.Equal(t, sender.Node, broker.NodeName)
+		assert.Equal(t, "tok-1", broker.SpawnToken)
+	}
+}
+
+// TestPluginCoordinator_OidcBroker_SameBrokerSupersedes asserts that a second
+// announcement from the same broker Name always overwrites the prior
+// registration for a namespace it already serves, regardless of the tokens
+// involved (e.g. a restarted broker announcing a fresh spawn token).
+func TestPluginCoordinator_OidcBroker_SameBrokerSupersedes(t *testing.T) {
+	listener, sender := newCoordinatorForTest(t)
+
+	listener.SendMessage(sender, oidcAnnouncement("fai", []string{"aws"}, "tok-1"))
+	listener.SendMessage(sender, oidcAnnouncement("fai", []string{"aws"}, "tok-2"))
+
+	c := listener.Behavior().(*PluginCoordinator)
+	broker, ok := c.oidcCredentialBrokers["AWS"]
+	require.True(t, ok)
+	assert.Equal(t, "fai", broker.Name)
+	assert.Equal(t, "tok-2", broker.SpawnToken, "the later announcement must supersede the earlier one")
+}
+
+// TestPluginCoordinator_OidcBroker_ReannouncementPrunesDroppedNamespaces
+// asserts that a broker's announcement is authoritative for its own
+// namespace set: re-announcing with a smaller namespace list removes the
+// entries for namespaces no longer announced, while a different broker's
+// entries are left untouched.
+func TestPluginCoordinator_OidcBroker_ReannouncementPrunesDroppedNamespaces(t *testing.T) {
+	listener, sender := newCoordinatorForTest(t)
+
+	listener.SendMessage(sender, oidcAnnouncement("other", []string{"gcp"}, "other-tok"))
+	listener.SendMessage(sender, oidcAnnouncement("fai", []string{"aws", "azure"}, "tok-1"))
+	listener.SendMessage(sender, oidcAnnouncement("fai", []string{"aws"}, "tok-2"))
+
+	c := listener.Behavior().(*PluginCoordinator)
+
+	_, ok := c.oidcCredentialBrokers["AZURE"]
+	assert.False(t, ok, "a namespace dropped from the re-announcement must be pruned")
+
+	broker, ok := c.oidcCredentialBrokers["AWS"]
+	require.True(t, ok, "a namespace still announced must remain registered")
+	assert.Equal(t, "fai", broker.Name)
+	assert.Equal(t, "tok-2", broker.SpawnToken, "the re-announcement's token must be the one carried forward")
+
+	other, ok := c.oidcCredentialBrokers["GCP"]
+	require.True(t, ok, "a different broker's entry must be untouched by fai's re-announcement")
+	assert.Equal(t, "other", other.Name)
+	assert.Equal(t, "other-tok", other.SpawnToken)
+}
+
+// TestPluginCoordinator_OidcBroker_DifferentBrokerRejected asserts that a
+// different broker Name announcing a namespace already served by another
+// broker is rejected: the first registration stands untouched.
+func TestPluginCoordinator_OidcBroker_DifferentBrokerRejected(t *testing.T) {
+	listener, sender := newCoordinatorForTest(t)
+
+	listener.SendMessage(sender, oidcAnnouncement("fai", []string{"aws"}, "tok-1"))
+	listener.SendMessage(sender, oidcAnnouncement("other", []string{"aws"}, "tok-2"))
+
+	require.False(t, listener.IsTerminated(),
+		"coordinator must not terminate on a conflicting broker announcement (reason: %v)", listener.TerminationReason())
+
+	c := listener.Behavior().(*PluginCoordinator)
+	broker, ok := c.oidcCredentialBrokers["AWS"]
+	require.True(t, ok)
+	assert.Equal(t, "fai", broker.Name, "the first broker to serve the namespace must stand")
+	assert.Equal(t, "tok-1", broker.SpawnToken)
+}
+
+// TestPluginCoordinator_OidcBroker_EqualTokenDeletes asserts that an
+// unregister message carrying the exact SpawnToken the entry was registered
+// with removes that namespace's entry.
+func TestPluginCoordinator_OidcBroker_EqualTokenDeletes(t *testing.T) {
+	listener, sender := newCoordinatorForTest(t)
+
+	listener.SendMessage(sender, oidcAnnouncement("fai", []string{"aws"}, "tok-1"))
+	listener.SendMessage(sender, messages.UnregisterOidcCredentialPlugin{
+		Name:       "fai",
+		SpawnToken: "tok-1",
+		Reason:     "shutdown",
+	})
+
+	c := listener.Behavior().(*PluginCoordinator)
+	_, ok := c.oidcCredentialBrokers["AWS"]
+	assert.False(t, ok, "an unregister with the matching spawn token must delete the entry")
+}
+
+// TestPluginCoordinator_OidcBroker_SupersededTokenNoop asserts that an
+// unregister carrying a stale (superseded) SpawnToken is a no-op: the current
+// registration, made under a newer token, is left in place.
+func TestPluginCoordinator_OidcBroker_SupersededTokenNoop(t *testing.T) {
+	listener, sender := newCoordinatorForTest(t)
+
+	listener.SendMessage(sender, oidcAnnouncement("fai", []string{"aws"}, "tok-1"))
+	listener.SendMessage(sender, oidcAnnouncement("fai", []string{"aws"}, "tok-2"))
+	listener.SendMessage(sender, messages.UnregisterOidcCredentialPlugin{
+		Name:       "fai",
+		SpawnToken: "tok-1", // stale: superseded by tok-2 above
+		Reason:     "crashed",
+	})
+
+	c := listener.Behavior().(*PluginCoordinator)
+	broker, ok := c.oidcCredentialBrokers["AWS"]
+	require.True(t, ok, "a stale-token unregister must not remove the current registration")
+	assert.Equal(t, "tok-2", broker.SpawnToken)
+}
+
+// TestPluginCoordinator_OidcBroker_OperatorEnvCarriesPairAtomically asserts
+// that spawning a PluginOperator for a namespace with a registered broker
+// injects both OidcCredentialBrokerNode and OidcCredentialBrokerName into the
+// spawn environment, and that a namespace with no registered broker gets
+// neither key - never just one.
+func TestPluginCoordinator_OidcBroker_OperatorEnvCarriesPairAtomically(t *testing.T) {
+	listener, err := unit.Spawn(t, NewPluginCoordinator, unit.WithEnv(map[gen.Env]any{
+		gen.Env("RetryConfig"):        globalRetryConfig(),
+		gen.Env("TestResourcePlugin"): plugin.FullResourcePlugin(fakeaws.NewFakeAWS()),
+	}))
+	require.NoError(t, err)
+	sender := gen.PID{Node: "test", ID: 100}
+	brokerNode := gen.PID{Node: "fai-oidccred@localhost", ID: 1}
+
+	listener.SendMessage(brokerNode, oidcAnnouncement("fai", []string{"FakeAWS"}, "tok-1"))
+
+	spawnResult(t, listener.Call(sender, spawnPluginOperatorRequest("FakeAWS", sender)))
+
+	var env map[gen.Env]any
+	for _, event := range listener.Events() {
+		if spawnEvent, ok := event.(unit.SpawnEvent); ok {
+			env = spawnEvent.Options.Env
+		}
+	}
+	require.NotNil(t, env, "the coordinator must have spawned a plugin operator")
+
+	node, hasNode := env[gen.Env("OidcCredentialBrokerNode")]
+	name, hasName := env[gen.Env("OidcCredentialBrokerName")]
+	require.True(t, hasNode, "a namespace with a registered broker must carry OidcCredentialBrokerNode")
+	require.True(t, hasName, "a namespace with a registered broker must carry OidcCredentialBrokerName")
+	assert.Equal(t, string(brokerNode.Node), node)
+	assert.Equal(t, credential.ServerActorName, name)
+}
+
+// TestPluginCoordinator_OidcBroker_OperatorEnvOmitsBothWhenUnpaired asserts
+// that a namespace with no registered broker carries neither
+// OidcCredentialBrokerNode nor OidcCredentialBrokerName.
+func TestPluginCoordinator_OidcBroker_OperatorEnvOmitsBothWhenUnpaired(t *testing.T) {
+	listener, err := unit.Spawn(t, NewPluginCoordinator, unit.WithEnv(map[gen.Env]any{
+		gen.Env("RetryConfig"):        globalRetryConfig(),
+		gen.Env("TestResourcePlugin"): plugin.FullResourcePlugin(fakeaws.NewFakeAWS()),
+	}))
+	require.NoError(t, err)
+	sender := gen.PID{Node: "test", ID: 100}
+
+	spawnResult(t, listener.Call(sender, spawnPluginOperatorRequest("FakeAWS", sender)))
+
+	var env map[gen.Env]any
+	for _, event := range listener.Events() {
+		if spawnEvent, ok := event.(unit.SpawnEvent); ok {
+			env = spawnEvent.Options.Env
+		}
+	}
+	require.NotNil(t, env, "the coordinator must have spawned a plugin operator")
+
+	_, hasNode := env[gen.Env("OidcCredentialBrokerNode")]
+	_, hasName := env[gen.Env("OidcCredentialBrokerName")]
+	assert.False(t, hasNode)
+	assert.False(t, hasName)
 }

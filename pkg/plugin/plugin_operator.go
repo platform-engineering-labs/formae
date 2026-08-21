@@ -547,6 +547,21 @@ func (o *PluginOperator) Init(args ...any) (statemachine.StateMachineSpec[Plugin
 		}
 	}
 
+	// OidcCredentialBroker{Node,Name}: the broker the coordinator paired with
+	// this plugin's namespace. The pair is injected atomically, so exactly one
+	// key present is a broken pairing - refuse to start rather than serve
+	// operations as if no broker existed. The client goes on the operator's
+	// context, which every per-call context (including discovery's long-lived
+	// list context) is derived from.
+	brokerClient, err := oidcBrokerClientFromEnv(o, data.plugin.Namespace())
+	if err != nil {
+		o.Log().Error("%v", err)
+		return statemachine.StateMachineSpec[PluginUpdateData]{}, err
+	}
+	if brokerClient != nil {
+		data.context = withOidcBrokerClient(data.context, brokerClient)
+	}
+
 	// Initialize OTel metrics
 	if err := setupPluginOperatorMetrics(&data); err != nil {
 		o.Log().Error("Failed to setup plugin operator metrics: %v", err)

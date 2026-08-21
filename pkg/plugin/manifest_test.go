@@ -163,6 +163,34 @@ func TestManifest_Validate_RequiresAllFields(t *testing.T) {
 	}
 }
 
+func TestManifestValidate_ResourceStillRequiresSingularNamespace(t *testing.T) {
+	m := Manifest{Name: "test", Version: "1.0.0", License: "MIT", MinFormaeVersion: "0.80.0"}
+	err := m.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "namespace is required")
+}
+
+func TestManifestValidate_OidcCredentialRequiresNamespaces(t *testing.T) {
+	m := Manifest{Name: "test", Type: PluginTypeOidcCredential, Version: "1.0.0", License: "MIT", MinFormaeVersion: "0.80.0"}
+	err := m.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "namespaces is required")
+
+	m.Namespaces = []string{"aws"}
+	assert.NoError(t, m.Validate())
+}
+
+func TestManifestValidate_OidcCredentialDoesNotRequireSingularNamespace(t *testing.T) {
+	m := Manifest{Name: "test", Type: PluginTypeOidcCredential, Version: "1.0.0", License: "MIT", MinFormaeVersion: "0.80.0", Namespaces: []string{"aws"}}
+	assert.NoError(t, m.Validate())
+	assert.True(t, m.IsOidcCredentialPlugin())
+}
+
+func TestNormalizedNamespaces_UppercasesEveryEntry(t *testing.T) {
+	m := Manifest{Namespaces: []string{"aws", "Gcp", "AZURE"}}
+	assert.Equal(t, []string{"AWS", "GCP", "AZURE"}, m.NormalizedNamespaces())
+}
+
 func TestManifest_DefaultReap_Absent(t *testing.T) {
 	var m Manifest
 	require.NoError(t, json.Unmarshal([]byte(`{"name":"x","version":"1","namespace":"X","license":"MIT","minFormaeVersion":"1"}`), &m))

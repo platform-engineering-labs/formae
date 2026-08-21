@@ -18,6 +18,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/changeset"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
+	"github.com/platform-engineering-labs/formae/pkg/credential"
 	"github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
@@ -34,6 +35,20 @@ type PluginCoordinator struct {
 	testPlugin                plugin.FullResourcePlugin    // test-only: directly injected plugin (e.g. FakeAWS) for workflow tests
 	retryConfig               model.RetryConfig
 	resourcePluginConfigs     map[string]model.ResourcePluginUserConfig // keyed by plugin name (lowercase)
+
+	// oidcCredentialBrokers pairs an oidc-credential broker to every
+	// namespace it serves, keyed by strings.ToUpper(namespace).
+	oidcCredentialBrokers map[string]*RegisteredOidcBroker
+}
+
+// RegisteredOidcBroker is the oidc-credential broker paired to a namespace:
+// the process a PluginOperator for that namespace should call into for
+// identity tokens.
+type RegisteredOidcBroker struct {
+	Name         string
+	NodeName     gen.Atom
+	SpawnToken   string
+	RegisteredAt time.Time
 }
 
 // RegisteredPlugin contains information about a registered plugin
@@ -70,6 +85,14 @@ func (c *PluginCoordinator) findPluginByNamespace(namespace string) (*Registered
 		}
 	}
 	return nil, false
+}
+
+// oidcBrokerFor returns the oidc-credential broker registered for namespace,
+// if any. Lookup is case-insensitive: entries are keyed by
+// strings.ToUpper(namespace).
+func (c *PluginCoordinator) oidcBrokerFor(namespace string) (*RegisteredOidcBroker, bool) {
+	b, ok := c.oidcCredentialBrokers[strings.ToUpper(namespace)]
+	return b, ok
 }
 
 // findTestPlugin returns the test plugin if it matches the given namespace (case-insensitive).
@@ -131,6 +154,7 @@ func NewPluginCoordinator() gen.ProcessBehavior {
 func (c *PluginCoordinator) Init(args ...any) error {
 	c.plugins = make(map[string]*RegisteredPlugin)
 	c.registeredLocalNamespaces = make(map[string]bool)
+	c.oidcCredentialBrokers = make(map[string]*RegisteredOidcBroker)
 
 	// Test-only: check for directly injected test plugin (e.g. FakeAWS for workflow tests)
 	if tp, ok := c.Env("TestResourcePlugin"); ok {
@@ -252,10 +276,72 @@ func (c *PluginCoordinator) HandleMessage(from gen.PID, message any) error {
 			c.Log().Debug("Plugin unregistered: namespace=%s reason=%s", msg.Namespace, msg.Reason)
 		}
 
+	case messages.OidcCredentialPluginAnnouncement:
+		c.handleOidcCredentialAnnouncement(from, msg)
+
+	case messages.UnregisterOidcCredentialPlugin:
+		c.handleUnregisterOidcCredentialPlugin(msg)
+
 	default:
 		c.Log().Debug("Received unknown message type: %T", message)
 	}
 	return nil
+}
+
+// handleOidcCredentialAnnouncement pairs a broker to every namespace it
+// announces. Namespaces are uppercased on ingest. A namespace already served
+// by the same broker Name is superseded (last announcement wins, regardless
+// of token - this covers a broker restarting with a fresh spawn token). A
+// namespace already served by a DIFFERENT Name is rejected: the first
+// registration stands.
+//
+// The announcement is authoritative for its own broker's namespace set: any
+// existing entry for msg.Name whose namespace is absent from this
+// announcement is pruned. Without this, a broker that restarts serving fewer
+// namespaces than before (manifest shrunk) would leave the dropped
+// namespace's entry orphaned under its old spawn token forever - the
+// supervisor's unregister-before-respawn ordinarily clears it first, but a
+// failed unregister Send (logged, not fatal) would otherwise strand it.
+func (c *PluginCoordinator) handleOidcCredentialAnnouncement(from gen.PID, msg messages.OidcCredentialPluginAnnouncement) {
+	announced := make(map[string]bool, len(msg.Namespaces))
+
+	for _, namespace := range msg.Namespaces {
+		key := strings.ToUpper(namespace)
+		announced[key] = true
+
+		if existing, ok := c.oidcCredentialBrokers[key]; ok && existing.Name != msg.Name {
+			c.Log().Error("Oidc credential broker rejected: namespace=%s already served by name=%s, rejecting name=%s node=%s",
+				key, existing.Name, msg.Name, from.Node)
+			continue
+		}
+
+		c.oidcCredentialBrokers[key] = &RegisteredOidcBroker{
+			Name:         msg.Name,
+			NodeName:     from.Node,
+			SpawnToken:   msg.SpawnToken,
+			RegisteredAt: time.Now(),
+		}
+		c.Log().Info("Oidc credential broker registered: namespace=%s node=%s name=%s", key, from.Node, msg.Name)
+	}
+
+	for key, broker := range c.oidcCredentialBrokers {
+		if broker.Name == msg.Name && !announced[key] {
+			delete(c.oidcCredentialBrokers, key)
+			c.Log().Debug("Oidc credential broker pruned: namespace=%s name=%s no longer announced", key, msg.Name)
+		}
+	}
+}
+
+// handleUnregisterOidcCredentialPlugin removes every namespace entry whose
+// stored SpawnToken equals msg.SpawnToken. A stale token (superseded by a
+// later announcement) matches nothing and is a no-op.
+func (c *PluginCoordinator) handleUnregisterOidcCredentialPlugin(msg messages.UnregisterOidcCredentialPlugin) {
+	for namespace, broker := range c.oidcCredentialBrokers {
+		if broker.SpawnToken == msg.SpawnToken {
+			delete(c.oidcCredentialBrokers, namespace)
+			c.Log().Debug("Oidc credential broker unregistered: namespace=%s name=%s reason=%s", namespace, msg.Name, msg.Reason)
+		}
+	}
 }
 
 // spawnPluginOperator spawns a PluginOperator for the given resource operation.
@@ -276,7 +362,7 @@ func (c *PluginCoordinator) spawnPluginOperator(req messages.SpawnPluginOperator
 
 	// 1. Check if plugin is registered (distributed mode)
 	if registeredPlugin, ok := c.findPluginByNamespace(req.Namespace); ok {
-		pid, err := c.remoteSpawn(registeredPlugin.NodeName, registerName, req.RequestedBy, retryConfig)
+		pid, err := c.remoteSpawn(registeredPlugin.NodeName, registerName, req.RequestedBy, retryConfig, req.Namespace)
 		if err != nil {
 			c.Log().Error("Failed to remote spawn PluginOperator for namespace %s on node %s: %v", req.Namespace, registeredPlugin.NodeName, err)
 			return messages.SpawnPluginOperatorResult{Error: err.Error()}
@@ -303,7 +389,7 @@ func (c *PluginCoordinator) spawnPluginOperator(req messages.SpawnPluginOperator
 			}
 		}
 
-		pid, err := c.localSpawn(localPlugin, registerName, req.RequestedBy, retryConfig)
+		pid, err := c.localSpawn(localPlugin, registerName, req.RequestedBy, retryConfig, req.Namespace)
 		if err != nil {
 			c.Log().Error("Failed to local spawn PluginOperator for namespace %s: %v", req.Namespace, err)
 			return messages.SpawnPluginOperatorResult{Error: err.Error()}
@@ -322,17 +408,27 @@ func (c *PluginCoordinator) spawnPluginOperator(req messages.SpawnPluginOperator
 // local or remote: the retry config resolved for its namespace, the deadline it
 // bounds each watched plugin call by — the same value the requesting
 // ResourceUpdater sizes its watchdog window from — and the requesting process.
-func pluginOperatorEnv(retryConfig model.RetryConfig, requestedBy gen.PID) map[gen.Env]any {
-	return map[gen.Env]any{
+// When an oidc-credential broker is registered for namespace, both
+// OidcCredentialBrokerNode and OidcCredentialBrokerName are added; when none
+// is, neither is - the operator either gets a complete pairing or none.
+func (c *PluginCoordinator) pluginOperatorEnv(retryConfig model.RetryConfig, requestedBy gen.PID, namespace string) map[gen.Env]any {
+	env := map[gen.Env]any{
 		gen.Env("RetryConfig"):       retryConfig,
 		gen.Env("PluginCallTimeout"): resource_update.PluginCallTimeout,
 		gen.Env("RequestedBy"):       requestedBy,
 	}
+
+	if broker, ok := c.oidcBrokerFor(namespace); ok {
+		env[gen.Env("OidcCredentialBrokerNode")] = string(broker.NodeName)
+		env[gen.Env("OidcCredentialBrokerName")] = credential.ServerActorName
+	}
+
+	return env
 }
 
 // remoteSpawn spawns a PluginOperator on a remote plugin node with the retry
 // config resolved for its namespace.
-func (c *PluginCoordinator) remoteSpawn(nodeName gen.Atom, registerName gen.Atom, requestedBy gen.PID, retryConfig model.RetryConfig) (gen.PID, error) {
+func (c *PluginCoordinator) remoteSpawn(nodeName gen.Atom, registerName gen.Atom, requestedBy gen.PID, retryConfig model.RetryConfig, namespace string) (gen.PID, error) {
 	// Get connection to remote node
 	remoteNode, err := c.Node().Network().GetNode(nodeName)
 	if err != nil {
@@ -342,7 +438,7 @@ func (c *PluginCoordinator) remoteSpawn(nodeName gen.Atom, registerName gen.Atom
 	// Remote spawn with registration
 	// The remote node's environment already has Plugin, Context, and OTelConfig set
 	// (configured in pkg/plugin/run.go)
-	opts := gen.ProcessOptions{Env: pluginOperatorEnv(retryConfig, requestedBy)}
+	opts := gen.ProcessOptions{Env: c.pluginOperatorEnv(retryConfig, requestedBy, namespace)}
 	start := time.Now()
 	pid, err := remoteNode.SpawnRegister(registerName, plugin.PluginOperatorFactoryName, opts)
 	elapsed := time.Since(start)
@@ -355,7 +451,7 @@ func (c *PluginCoordinator) remoteSpawn(nodeName gen.Atom, registerName gen.Atom
 
 // localSpawn spawns a PluginOperator locally with the given plugin and the
 // retry config resolved for its namespace.
-func (c *PluginCoordinator) localSpawn(localPlugin plugin.FullResourcePlugin, registerName gen.Atom, requestedBy gen.PID, retryConfig model.RetryConfig) (gen.PID, error) {
+func (c *PluginCoordinator) localSpawn(localPlugin plugin.FullResourcePlugin, registerName gen.Atom, requestedBy gen.PID, retryConfig model.RetryConfig, namespace string) (gen.PID, error) {
 	// Get context from environment
 	ctx := context.Background()
 	if envCtx, ok := c.Env("Context"); ok {
@@ -363,7 +459,7 @@ func (c *PluginCoordinator) localSpawn(localPlugin plugin.FullResourcePlugin, re
 	}
 
 	// Spawn locally with plugin passed via Env
-	env := pluginOperatorEnv(retryConfig, requestedBy)
+	env := c.pluginOperatorEnv(retryConfig, requestedBy, namespace)
 	env[gen.Env("Plugin")] = localPlugin
 	env[gen.Env("Context")] = ctx
 	opts := gen.ProcessOptions{Env: env}

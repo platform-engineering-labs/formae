@@ -232,6 +232,14 @@ open class BaseResourcePluginConfig {
     retry: RetryConfig?
 }
 
+/// Base class for an oidc-credential broker's configuration. A broker
+/// subclasses this to declare its own fields; everything beyond `type` and
+/// `enabled` reaches the broker process as its opaque config payload.
+open class BaseOidcCredentialPluginConfig {
+    type: String
+    enabled: Boolean = true
+}
+
 open class BaseAgentAuthConfig {
     type: String
 }
@@ -260,6 +268,10 @@ class AgentConfig {
     auth: (BaseAgentAuthConfig|Dynamic)?
 
     resourcePlugins: Listing<BaseResourcePluginConfig>(
+        this.toList().map((it) -> it.type).isDistinct
+    )?
+
+    oidcCredentialPlugins: Listing<BaseOidcCredentialPluginConfig>(
         this.toList().map((it) -> it.type).isDistinct
     )?
 }

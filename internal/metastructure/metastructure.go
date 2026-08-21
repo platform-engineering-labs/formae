@@ -96,7 +96,7 @@ type Metastructure struct {
 	commandMu sync.Mutex
 }
 
-func NewMetastructure(ctx context.Context, cfg *pkgmodel.Config, externalResourcePlugins []plugin.ResourcePluginInfo, agentID string) (*Metastructure, error) {
+func NewMetastructure(ctx context.Context, cfg *pkgmodel.Config, externalResourcePlugins []plugin.ResourcePluginInfo, oidcCredentialPlugins []plugin.OidcCredentialPluginInfo, agentID string) (*Metastructure, error) {
 	datastoreType := cfg.Agent.Datastore.DatastoreType
 	if datastoreType == "" {
 		datastoreType = "sqlite"
@@ -107,15 +107,17 @@ func NewMetastructure(ctx context.Context, cfg *pkgmodel.Config, externalResourc
 		return nil, err
 	}
 
-	return NewMetastructureWithDataStoreAndContext(ctx, cfg, externalResourcePlugins, ds, agentID)
+	return NewMetastructureWithDataStoreAndContext(ctx, cfg, externalResourcePlugins, oidcCredentialPlugins, ds, agentID)
 }
 
-func NewMetastructureWithDataStoreAndContext(ctx context.Context, cfg *pkgmodel.Config, externalResourcePlugins []plugin.ResourcePluginInfo, datastore datastore.Datastore, agentID string) (*Metastructure, error) {
+func NewMetastructureWithDataStoreAndContext(ctx context.Context, cfg *pkgmodel.Config, externalResourcePlugins []plugin.ResourcePluginInfo, oidcCredentialPlugins []plugin.OidcCredentialPluginInfo, datastore datastore.Datastore, agentID string) (*Metastructure, error) {
 	metastructure := &Metastructure{}
 
 	metastructure.Datastore = datastore
 	metastructure.Cfg = cfg
 
+	// Registers pkg/credential's types too, so the agent, every resource
+	// plugin, and every oidc-credential broker agree on the wire format.
 	err := plugin.RegisterSharedEDFTypes()
 	if err != nil {
 		return nil, err
@@ -137,20 +139,22 @@ func NewMetastructureWithDataStoreAndContext(ctx context.Context, cfg *pkgmodel.
 	metastructure.options.Applications = apps
 
 	metastructure.options.Env = map[gen.Env]any{
-		gen.Env("ExternalResourcePlugins"): externalResourcePlugins,
-		gen.Env("Datastore"):               metastructure.Datastore,
-		gen.Env("Context"):                 ctx,
-		gen.Env("disable_metrics"):         true,
-		gen.Env("ServerConfig"):            cfg.Agent.Server,
-		gen.Env("DatastoreConfig"):         cfg.Agent.Datastore,
-		gen.Env("RetryConfig"):             cfg.Agent.Retry,
-		gen.Env("SynchronizationConfig"):   cfg.Agent.Synchronization,
-		gen.Env("DiscoveryConfig"):         cfg.Agent.Discovery,
-		gen.Env("LoggingConfig"):           cfg.Agent.Logging,
-		gen.Env("OTelConfig"):              cfg.Agent.OTel,
-		gen.Env("StackExpirerConfig"):      cfg.Agent.StackExpirer,
-		gen.Env("AgentID"):                 agentID,
-		gen.Env("ResourcePluginConfigs"):   cfg.Agent.ResourcePlugins,
+		gen.Env("ExternalResourcePlugins"):     externalResourcePlugins,
+		gen.Env("OidcCredentialPlugins"):       oidcCredentialPlugins,
+		gen.Env("OidcCredentialPluginConfigs"): cfg.Agent.OidcCredentialPlugins,
+		gen.Env("Datastore"):                   metastructure.Datastore,
+		gen.Env("Context"):                     ctx,
+		gen.Env("disable_metrics"):             true,
+		gen.Env("ServerConfig"):                cfg.Agent.Server,
+		gen.Env("DatastoreConfig"):             cfg.Agent.Datastore,
+		gen.Env("RetryConfig"):                 cfg.Agent.Retry,
+		gen.Env("SynchronizationConfig"):       cfg.Agent.Synchronization,
+		gen.Env("DiscoveryConfig"):             cfg.Agent.Discovery,
+		gen.Env("LoggingConfig"):               cfg.Agent.Logging,
+		gen.Env("OTelConfig"):                  cfg.Agent.OTel,
+		gen.Env("StackExpirerConfig"):          cfg.Agent.StackExpirer,
+		gen.Env("AgentID"):                     agentID,
+		gen.Env("ResourcePluginConfigs"):       cfg.Agent.ResourcePlugins,
 	}
 
 	// Enable Ergo networking for distributed plugin architecture

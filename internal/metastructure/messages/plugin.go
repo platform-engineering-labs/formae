@@ -7,6 +7,7 @@ package messages
 import (
 	"ergo.services/ergo/gen"
 
+	"github.com/platform-engineering-labs/formae/pkg/credential"
 	"github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 )
@@ -14,10 +15,25 @@ import (
 // PluginAnnouncement is an alias for plugin.PluginAnnouncement
 type PluginAnnouncement = plugin.PluginAnnouncement
 
+// OidcCredentialPluginAnnouncement is an alias for
+// credential.OidcCredentialPluginAnnouncement: what a broker sends the
+// PluginCoordinator on startup.
+type OidcCredentialPluginAnnouncement = credential.OidcCredentialPluginAnnouncement
+
 // UnregisterPlugin is sent when a plugin becomes unavailable
 type UnregisterPlugin struct {
 	Namespace string
 	Reason    string // "crashed", "shutdown", "node_down"
+}
+
+// UnregisterOidcCredentialPlugin is sent when a credential broker becomes
+// unavailable. SpawnToken is the token the departing process was launched
+// with, so a registration made by a newer process of the same broker is not
+// torn down by a late unregister from the old one.
+type UnregisterOidcCredentialPlugin struct {
+	Name       string
+	SpawnToken string
+	Reason     string // "crashed", "shutdown"
 }
 
 // SpawnPluginOperator is sent to PluginCoordinator to spawn a PluginOperator for a resource operation.
