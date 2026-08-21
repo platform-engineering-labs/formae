@@ -55,6 +55,12 @@ type Options struct {
 	// color. When ≥1 such row exists and the command is terminal, a reminder
 	// footer is shown in the detail view.
 	AbandonedResources []string
+	// SortNewestFirst selects the initial multi-command sort. Browsing history
+	// (`command list`) wants the newest commands first, so it sets this; the
+	// watch and detail entry points (`command status`, and the apply/destroy/
+	// cancel --watch handoff) leave it false to keep the default urgency
+	// ordering (in-progress and failed commands surfaced first).
+	SortNewestFirst bool
 }
 
 // viewMode controls which TUI panel is active.
@@ -105,12 +111,14 @@ type exitNowMsg struct{}
 func (m Model) Finished() bool { return m.exitScheduled }
 
 // headerCommand returns the command verb shown after the "formae" wordmark in
-// the header, defaulting to "status command" for the standalone status TUI.
+// the header. Every caller sets opts.HeaderCommand to the verb the user
+// actually typed; the fallback exists only so a caller that forgets still
+// shows a real command name.
 func (m Model) headerCommand() string {
 	if m.opts.HeaderCommand != "" {
 		return m.opts.HeaderCommand
 	}
-	return "status command"
+	return "command status"
 }
 
 // New constructs a Model with sensible defaults applied to opts.
@@ -128,12 +136,16 @@ func New(th *theme.Theme, client Client, opts Options) Model {
 	for _, id := range opts.AbandonedResources {
 		abandonedSet[id] = true
 	}
+	sortCol, sortDir := colStatus, components.SortAsc
+	if opts.SortNewestFirst {
+		sortCol, sortDir = colAge, components.SortDesc
+	}
 	model := Model{
 		th:           th,
 		client:       client,
 		opts:         opts,
 		keys:         tui.DefaultKeyMap(),
-		multi:        multiView{th: th, sortCol: colStatus, sortDir: components.SortAsc},
+		multi:        multiView{th: th, sortCol: sortCol, sortDir: sortDir, sortHi: sortCol},
 		detail:       newDetailModel(th, 80, 24), // placeholder; resized on WindowSizeMsg
 		query:        components.NewQueryBar(th, opts.Query),
 		spinner:      components.NewSpinner(th),
@@ -209,7 +221,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		m.multi.now = m.opts.Now()
-		m.multi.rows = buildRows(filterUserCommands(msg.commands))
+		m.multi.rows = buildRows(msg.commands)
 		sortRows(m.multi.rows, m.multi.sortCol, m.multi.sortDir, m.multi.now)
 
 		// Re-anchor cursor to the same command ID (fall back to clamped index).

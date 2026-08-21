@@ -125,16 +125,16 @@ func interruptWrites(t *testing.T, between func()) {
 }
 
 func TestRenderedProfileResolvesToTheIntendedHostedConnection(t *testing.T) {
-	path := writeRendered(t, testEndpoint, testUUIDA, cliAuth("", ""))
+	path := writeRendered(t, testEndpoint, testInstallationA, cliAuth("", ""))
 
 	hosted := loadHosted(t, path)
 
 	assert.Equal(t, testEndpoint, hosted.Endpoint)
-	assert.Equal(t, testUUIDA, hosted.Installation)
+	assert.Equal(t, testInstallationA, hosted.Installation)
 }
 
 func TestRenderedAuthBlockCarriesExactlyTheFiveKeys(t *testing.T) {
-	path := writeRendered(t, testEndpoint, testUUIDA, cliAuth("", ""))
+	path := writeRendered(t, testEndpoint, testInstallationA, cliAuth("", ""))
 
 	fields := loadAuth(t, path)
 
@@ -190,7 +190,7 @@ func TestRenderedAuthBlockWritesTheDefaultsByValue(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			fields := loadAuth(t, writeRendered(t, testEndpoint, testUUIDA, tt.auth))
+			fields := loadAuth(t, writeRendered(t, testEndpoint, testInstallationA, tt.auth))
 
 			assert.Equal(t, tt.wantClientID, fields["clientId"])
 			assert.Equal(t, tt.wantScopes, fields["scopes"])
@@ -211,7 +211,7 @@ func TestRenderedProfileDropsUnknownSourceKeys(t *testing.T) {
 	auth, err := decodeCliAuthBlock(raw)
 	require.NoError(t, err)
 
-	fields := loadAuth(t, writeRendered(t, testEndpoint, testUUIDA, auth))
+	fields := loadAuth(t, writeRendered(t, testEndpoint, testInstallationA, auth))
 
 	assert.ElementsMatch(t, []string{"type", "role", "issuer", "clientId", "scopes"}, keysOf(fields))
 }
@@ -277,7 +277,7 @@ func TestEscapableValuesSurviveRenderAndReload(t *testing.T) {
 			auth := cliAuth(value, value)
 			auth.Issuer = value
 
-			fields := loadAuth(t, writeRendered(t, testEndpoint, testUUIDA, auth))
+			fields := loadAuth(t, writeRendered(t, testEndpoint, testInstallationA, auth))
 
 			assert.Equal(t, value, fields["issuer"])
 			assert.Equal(t, value, fields["clientId"])
@@ -521,7 +521,7 @@ func TestNewTempNameIsNeverAProfile(t *testing.T) {
 }
 
 func TestProfileVerifierChecksTheConnectionItResolvesTo(t *testing.T) {
-	rendered := writeRendered(t, testEndpoint, testUUIDA, cliAuth("", ""))
+	rendered := writeRendered(t, testEndpoint, testInstallationA, cliAuth("", ""))
 	classic := filepath.Join(t.TempDir(), "classic.pkl")
 	require.NoError(t, os.WriteFile(classic, []byte(store.StubTemplate), 0o600))
 	broken := filepath.Join(t.TempDir(), "broken.pkl")
@@ -534,14 +534,14 @@ func TestProfileVerifierChecksTheConnectionItResolvesTo(t *testing.T) {
 		installation string
 		wantErr      bool
 	}{
-		{name: "the intended connection", path: rendered, endpoint: testEndpoint, installation: testUUIDA},
-		{name: "another endpoint", path: rendered, endpoint: testOtherOrigin, installation: testUUIDA, wantErr: true},
-		{name: "another installation", path: rendered, endpoint: testEndpoint, installation: testUUIDB, wantErr: true},
-		{name: "not a hosted connection", path: classic, endpoint: testEndpoint, installation: testUUIDA, wantErr: true},
-		{name: "not loadable", path: broken, endpoint: testEndpoint, installation: testUUIDA, wantErr: true},
+		{name: "the intended connection", path: rendered, endpoint: testEndpoint, installation: testInstallationA},
+		{name: "another endpoint", path: rendered, endpoint: testOtherOrigin, installation: testInstallationA, wantErr: true},
+		{name: "another installation", path: rendered, endpoint: testEndpoint, installation: testInstallationB, wantErr: true},
+		{name: "not a hosted connection", path: classic, endpoint: testEndpoint, installation: testInstallationA, wantErr: true},
+		{name: "not loadable", path: broken, endpoint: testEndpoint, installation: testInstallationA, wantErr: true},
 		{
 			name: "absent", path: filepath.Join(t.TempDir(), "absent.pkl"),
-			endpoint: testEndpoint, installation: testUUIDA, wantErr: true,
+			endpoint: testEndpoint, installation: testInstallationA, wantErr: true,
 		},
 	}
 

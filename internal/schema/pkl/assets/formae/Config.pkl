@@ -285,7 +285,7 @@ class Hosted {
     /// Absolute https origin. Validated when the configuration is loaded.
     endpoint: String
 
-    /// The installation this client addresses, as a canonical lowercase UUID.
+    /// The installation this client addresses, as a canonical KSUID.
     installation: String
 
     /// Required: a hosted installation always authenticates.

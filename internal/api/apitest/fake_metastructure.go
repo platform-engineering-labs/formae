@@ -105,6 +105,14 @@ type FakeMetastructure struct {
 	RecordedExtractQueries   []string
 	RecordedSummaryQueries   []string
 	RecordedKsuidLookups     []string
+	// RecordedListN captures the n (max results) each ListFormaCommandStatus
+	// call was made with, one entry appended per call, so tests can assert
+	// what the server actually asked the datastore for after clamping.
+	RecordedListN []int
+	// RecordedListScopes captures the scope each ListFormaCommandStatus call
+	// was made with, one entry appended per call, so tests can assert which
+	// commands the server asked for.
+	RecordedListScopes []apimodel.CommandScope
 
 	// RecordedApplySubjects, RecordedDestroySubjects, RecordedDestroyByQuerySubjects,
 	// and RecordedReconcileSubjects capture the subject/subjectName each
@@ -151,7 +159,10 @@ func (m *FakeMetastructure) CancelCommandsByQuery(query string, force bool, clie
 	return nextResponse.CancelCommandResponse, nextResponse.Error
 }
 
-func (m *FakeMetastructure) ListFormaCommandStatus(commandID string, clientID string, n int) (*apimodel.ListCommandStatusResponse, error) {
+func (m *FakeMetastructure) ListFormaCommandStatus(commandID string, clientID string, n int, scope apimodel.CommandScope) (*apimodel.ListCommandStatusResponse, error) {
+	m.RecordedListN = append(m.RecordedListN, n)
+	m.RecordedListScopes = append(m.RecordedListScopes, scope)
+
 	// Handle empty queue: return nil response + nil error (safe zero behavior).
 	if len(m.ListResponses) == 0 {
 		return nil, nil

@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/platform-engineering-labs/formae/internal/cli/authmsg"
+
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
@@ -184,13 +186,29 @@ func (g gateResult) String() string {
 	return fmt.Sprintf("gateResult{Auth:%+v Bearer:%s OK:%v Reason:%q}", g.Auth, bearer, g.OK, g.Reason)
 }
 
-// gateSync reports whether profile sync may run against p.
+// The gate is two halves, and nothing composes them here.
+//
+// runSync runs gateProfile before it asks the auth plugin for a credential and
+// gateCredential after, because the order is the protection: a profile a model
+// wrote controls the issuer, so driving the plugin first would send it at
+// whatever token endpoint the profile named. A convenience function taking a
+// connection and a header together would take both at once and so could only be
+// called after the plugin had already run.
 //
 // p is expected to come from resolvePlatform, which canonicalises both halves;
-// the block's issuer is canonicalised here and the two are compared as origins
-// so that https://Auth.Formae.AI:443 and https://auth.formae.ai are one issuer
-// while nothing else is.
-func gateSync(conn pkgmodel.Connection, p platform, hdr http.Header) gateResult {
+// a block's issuer is canonicalised in gateProfile and the two are compared as
+// origins, so that https://Auth.Formae.AI:443 and https://auth.formae.ai are one
+// issuer while nothing else is.
+
+// gateProfile decides everything that can be decided from configuration alone:
+// that this is a hosted profile, that its auth block names the plugin and role
+// we can re-render, and that its issuer is the platform's.
+//
+// Split out from the credential half so it can run *before* an auth plugin is
+// invoked. A profile a model wrote controls the issuer, so driving the plugin
+// first would send it at whatever token endpoint the profile named; refusing
+// afterwards would be too late. The order is the protection.
+func gateProfile(conn pkgmodel.Connection, p platform) gateResult {
 	hostedConn, isHosted := conn.(*pkgmodel.HostedConnection)
 	if !isHosted || hostedConn == nil {
 		return refuse("this profile does not use a hosted connection, so its sign-in covers no hosted installations")
@@ -235,18 +253,99 @@ func gateSync(conn pkgmodel.Connection, p platform, hdr http.Header) gateResult 
 				"was not issued for %s", p.Issuer, p.Origin))
 	}
 
+	return gateResult{Auth: auth, OK: true}
+}
+
+// gateCredential adds the credential the sign-in produced to an already-gated
+// profile. It runs after the auth plugin, which is why it is not part of
+// gateProfile: by this point the plugin has been driven, and the only question
+// left is whether it handed back something we can actually send.
+func gateCredential(g gateResult, p platform, hdr http.Header) gateResult {
 	bearer, ok := bearerFrom(hdr)
 	if !ok {
 		return refuse(fmt.Sprintf(
 			"this sign-in produced no Bearer credential under the canonical Authorization header, "+
 				"so there is nothing to authenticate a request to %s with", p.Origin))
 	}
-
-	return gateResult{Auth: auth, Bearer: bearer, OK: true}
+	g.Bearer = bearer
+	return g
 }
 
 // refuse returns the decision that stops sync, carrying the reason and
 // nothing else: no block and no credential leave the gate when it refuses.
 func refuse(reason string) gateResult {
 	return gateResult{Reason: reason}
+}
+
+// ValidatedHosted is a hosted connection that has passed the issuer gate. Its
+// fields are unexported and this package alone constructs it, so a credential
+// cannot be minted for a connection nothing checked: the ordering is a property
+// of the type rather than a rule every caller has to remember.
+type ValidatedHosted struct {
+	conn *pkgmodel.HostedConnection
+	plat platform
+}
+
+// Connection returns the connection that was validated.
+func (v ValidatedHosted) Connection() *pkgmodel.HostedConnection { return v.conn }
+
+// ValidateHosted checks that conn is a hosted profile whose auth block names
+// the platform this build trusts, reading configuration only. Callers must run
+// it before minting a credential: a profile a model wrote controls the issuer,
+// so driving the auth plugin first would send it at whatever token endpoint the
+// profile named.
+func ValidateHosted(conn pkgmodel.Connection, cloudFlag, issuerFlag string) (ValidatedHosted, error) {
+	p, err := resolvePlatform(cloudFlag, issuerFlag)
+	if err != nil {
+		return ValidatedHosted{}, err
+	}
+	g := gateProfile(conn, p)
+	if !g.OK {
+		return ValidatedHosted{}, errors.New(g.Reason)
+	}
+	// gateProfile has already established the arm.
+	return ValidatedHosted{conn: conn.(*pkgmodel.HostedConnection), plat: p}, nil
+}
+
+// AuthError is a refusal from the auth plugin, carrying the plugin's own code
+// so a caller can report why rather than only that.
+type AuthError struct {
+	Code    string
+	Message string
+}
+
+func (e *AuthError) Error() string { return e.Message }
+
+// Credential drives the auth plugin and returns the credential to send, scheme
+// included. It is a method on ValidatedHosted because minting for an unchecked
+// connection must not be expressible.
+//
+// A response carrying nothing under the canonical Authorization header fails
+// closed: the client attaches only that header, so anything else is a value
+// this formae could never send, and reading it as success would defer the
+// failure to an opaque rejection at the far end.
+func (v ValidatedHosted) Credential(creds credentialProvider, forceRefresh bool) (string, error) {
+	// The type is exported so callers can hold one, which means another package
+	// can write ValidatedHosted{} even though it cannot fill the fields. Refuse
+	// that here, before the provider is touched: a zero value has passed no
+	// gate, and minting for it would drive the auth plugin at whatever the
+	// caller had in mind rather than at an issuer we checked.
+	if v.conn == nil {
+		return "", errors.New("this connection has not been validated, so no credential may be minted for it")
+	}
+	resp, err := creds.GetAuthHeader(forceRefresh)
+	if err != nil {
+		return "", err
+	}
+	if resp.ErrorCode != "" || resp.Error != "" {
+		return "", &AuthError{
+			Code:    string(resp.ErrorCode),
+			Message: authmsg.DescribeAuthError(resp.ErrorCode, resp.Error),
+		}
+	}
+	g := gateCredential(gateResult{OK: true}, v.plat, http.Header(resp.Headers))
+	if !g.OK {
+		return "", &AuthError{Message: g.Reason}
+	}
+	return g.Bearer, nil
 }

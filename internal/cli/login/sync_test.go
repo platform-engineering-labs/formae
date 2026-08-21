@@ -28,14 +28,14 @@ import (
 const (
 	// The installation ids are distinct in their first twelve hex characters,
 	// which is what a derived name carries, so two of them name two profiles.
-	installOne = "11111111-1111-4111-8111-111111111111"
-	installTwo = "22222222-2222-4222-8222-222222222222"
+	installOne = "3HzFPXfPDGhwLJJVtaHbmFs6vLa"
+	installTwo = "2ZaBcDeFgHiJkLmNoPqRsTuVwXy"
 
 	// The names those ids derive with the org, tenant, and installation names
 	// the fixtures use. They are written out rather than derived here, so a
 	// change to name derivation shows up as a failing sync test too.
-	nameOne = "acme-default-prod-111111111111"
-	nameTwo = "acme-default-staging-222222222222"
+	nameOne = "acme-default-prod-3HzFPXfPDGhw"
+	nameTwo = "acme-default-staging-2ZaBcDeFgHiJ"
 
 	// stateActive is the ordinary installation state; the rest of the enum is
 	// exercised by the classification table.
@@ -421,7 +421,7 @@ func TestSyncRenamesWhenTheDerivedNameChanges(t *testing.T) {
 	require.NoError(t, f.sync().Fatal)
 
 	f.answer(installation(installOne, "renamed", stateActive))
-	const renamed = "acme-default-renamed-111111111111"
+	const renamed = "acme-default-renamed-3HzFPXfPDGhw"
 
 	result := f.sync()
 
@@ -737,7 +737,7 @@ func TestSyncDoesNotRenameTheActiveProfileButKeepsItUpToDate(t *testing.T) {
 	moved := installation(installOne, "renamed", stateActive)
 	moved.Endpoint = testOtherOrigin
 	f.answer(moved)
-	const renamed = "acme-default-renamed-111111111111"
+	const renamed = "acme-default-renamed-3HzFPXfPDGhw"
 
 	kept := f.sync()
 
@@ -814,7 +814,7 @@ func TestSyncDeletesAndRenamesNothingWhenTheActiveProfileCannotBeIdentified(t *t
 			assert.Zero(t, result.Renamed)
 			assert.True(t, f.exists(nameOne), "no managed file is deleted")
 			assert.True(t, f.exists(nameTwo), "and none is renamed")
-			assert.False(t, f.exists("acme-default-renamed-222222222222"))
+			assert.False(t, f.exists("acme-default-renamed-2ZaBcDeFgHiJ"))
 			assert.NotEmpty(t, warningsContaining(result, nameOne))
 			assert.NotEmpty(t, warningsContaining(result, nameTwo))
 		})
@@ -826,7 +826,7 @@ func TestSyncDeletesAndRenamesNothingWhenTheActiveProfileCannotBeIdentified(t *t
 // this run's snapshot can happen and what is asserted is recovery alone.
 func TestSyncRecoversEveryInterruptedState(t *testing.T) {
 	const tempName = ".tmp-0123456789abcdef.pkl"
-	const renamedName = "acme-default-renamed-111111111111"
+	const renamedName = "acme-default-renamed-3HzFPXfPDGhw"
 	oldContent := renderProfile(testEndpoint, installOne, cliAuth("", ""))
 	newContent := renderProfile(testOtherOrigin, installOne, cliAuth("", ""))
 	theirs := []byte("a profile the user wrote\n")
@@ -1541,20 +1541,20 @@ func TestSyncNeverReplacesOrRemovesASymlink(t *testing.T) {
 
 func TestSyncSkipsBothSidesOfANameCollisionAndKeepsItsAuthority(t *testing.T) {
 	f := newSyncFixture(t)
-	// The two ids share the twelve hex characters a derived name carries, and
+	// The two ids share the twelve characters a derived name carries, and
 	// everything else about them is equal, so both derive one name.
-	const shared = "acme-default-prod-3f2b8c140000"
+	const shared = "acme-default-prod-3HzFPXfPDGhw"
 	theirs := []byte("a profile the user wrote\n")
 	f.writeProfile(shared, theirs)
 	f.answer(
-		installation(testUUIDA, "prod", stateActive),
-		installation(testUUIDB, "prod", stateActive),
+		installation(testInstallationA, "prod", stateActive),
+		installation(testInstallationCollidesWithA, "prod", stateActive),
 		installation(installTwo, "staging", stateActive),
 	)
 	require.NoError(t, f.sync().Fatal)
 	f.answer(
-		installation(testUUIDA, "prod", stateActive),
-		installation(testUUIDB, "prod", stateActive),
+		installation(testInstallationA, "prod", stateActive),
+		installation(testInstallationCollidesWithA, "prod", stateActive),
 		installation(installTwo, "staging", "destroyed"),
 	)
 
@@ -1562,14 +1562,14 @@ func TestSyncSkipsBothSidesOfANameCollisionAndKeepsItsAuthority(t *testing.T) {
 
 	require.NoError(t, result.Fatal)
 	assert.Equal(t, theirs, f.read(shared), "neither side of a collision is written")
-	assert.Nil(t, f.entryFor(testUUIDA))
-	assert.Nil(t, f.entryFor(testUUIDB))
+	assert.Nil(t, f.entryFor(testInstallationA))
+	assert.Nil(t, f.entryFor(testInstallationCollidesWithA))
 	assert.Equal(t, 1, result.Pruned, "a collision leaves the run authoritative")
 	assert.False(t, f.exists(nameTwo))
 	warnings := warningsContaining(result, shared)
 	require.Len(t, warnings, 1, "one warning per colliding name")
-	assert.Contains(t, warnings[0], testUUIDA)
-	assert.Contains(t, warnings[0], testUUIDB)
+	assert.Contains(t, warnings[0], testInstallationA)
+	assert.Contains(t, warnings[0], testInstallationCollidesWithA)
 }
 
 func TestSyncSerialisesWithAnotherProcess(t *testing.T) {

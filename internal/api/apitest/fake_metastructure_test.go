@@ -40,7 +40,7 @@ func TestFakeMetastructure_ListResponsesStickyTail(t *testing.T) {
 	}
 
 	// Call 1: should return response 1 (and pop it).
-	resp1, err1 := fake.ListFormaCommandStatus("", "", 0)
+	resp1, err1 := fake.ListFormaCommandStatus("", "", 0, apimodel.CommandScopeClient)
 	if err1 != nil {
 		t.Fatalf("call 1: unexpected error: %v", err1)
 	}
@@ -49,7 +49,7 @@ func TestFakeMetastructure_ListResponsesStickyTail(t *testing.T) {
 	}
 
 	// Call 2: should return response 2 (and pop it, leaving queue length 1).
-	resp2, err2 := fake.ListFormaCommandStatus("", "", 0)
+	resp2, err2 := fake.ListFormaCommandStatus("", "", 0, apimodel.CommandScopeClient)
 	if err2 != nil {
 		t.Fatalf("call 2: unexpected error: %v", err2)
 	}
@@ -59,7 +59,7 @@ func TestFakeMetastructure_ListResponsesStickyTail(t *testing.T) {
 
 	// Call 3: queue is empty, should return response 2 again (sticky tail).
 	// This should NOT panic; old code would index out of bounds.
-	resp3, err3 := fake.ListFormaCommandStatus("", "", 0)
+	resp3, err3 := fake.ListFormaCommandStatus("", "", 0, apimodel.CommandScopeClient)
 	if err3 != nil {
 		t.Fatalf("call 3: unexpected error: %v", err3)
 	}
@@ -68,7 +68,7 @@ func TestFakeMetastructure_ListResponsesStickyTail(t *testing.T) {
 	}
 
 	// Call 4: should still return response 2 (sticky tail).
-	resp4, err4 := fake.ListFormaCommandStatus("", "", 0)
+	resp4, err4 := fake.ListFormaCommandStatus("", "", 0, apimodel.CommandScopeClient)
 	if err4 != nil {
 		t.Fatalf("call 4: unexpected error: %v", err4)
 	}
@@ -114,7 +114,7 @@ func TestFakeMetastructure_ListResponsesEmpty(t *testing.T) {
 	}
 
 	// Calling when empty should not panic.
-	resp, err := fake.ListFormaCommandStatus("", "", 0)
+	resp, err := fake.ListFormaCommandStatus("", "", 0, apimodel.CommandScopeClient)
 	if resp != nil {
 		t.Fatalf("expected nil response for empty queue, got %v", resp)
 	}

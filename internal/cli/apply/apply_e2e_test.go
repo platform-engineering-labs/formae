@@ -32,7 +32,7 @@ import (
 type e2eClientAdapter struct{ c *api.Client }
 
 func (a e2eClientAdapter) GetCommandsStatus(query string, n int, _ bool) (*apimodel.ListCommandStatusResponse, []string, error) {
-	resp, err := a.c.GetFormaCommandsStatus(query, "e2e-client", n)
+	resp, err := a.c.GetFormaCommandsStatus(query, "e2e-client", n, apimodel.CommandScopeAgent)
 	return resp, nil, err
 }
 

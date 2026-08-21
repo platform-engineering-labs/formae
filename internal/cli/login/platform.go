@@ -14,8 +14,22 @@ import (
 
 // DefaultCloudURL and DefaultCloudIssuer are the built-in control-plane
 // origin and issuer used when neither is overridden.
+//
+// The origin is the console host and not the apex, because the apex serves the
+// marketing site and no API: measured, https://formae.ai/api/v1/me/installations
+// answers 404 with a stock HTML error page, while the console answers 401 with
+// {"error":{"code":"unauthorized"}} — a real API asking for the bearer. With the
+// apex here, enumerating a caller's grants failed for everyone and no hosted
+// profile could ever be written.
+//
+// Changing it was safe precisely because it never worked. This value is also
+// recorded in the managed-profile ledger as the control plane an entry belongs to,
+// and entries are matched on it exactly, so moving it would normally orphan every
+// profile a previous sign-in had written — but the enumeration 404s before
+// anything is written, so no entry against the apex exists to orphan. That window
+// closes the moment one sign-in succeeds against a released build.
 const (
-	DefaultCloudURL    = "https://formae.ai"
+	DefaultCloudURL    = "https://console.formae.ai"
 	DefaultCloudIssuer = "https://auth.formae.ai"
 )
 

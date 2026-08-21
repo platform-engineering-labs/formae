@@ -92,6 +92,7 @@ CLAUDE.md
 .plans/
 .handoffs/
 .research/
+.superpowers/
 docs/design/
 
 # Design mockups and throwaway prototype/calibration tools (dev-only, not shipped)

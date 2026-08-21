@@ -17,6 +17,7 @@ import (
 	"github.com/gofrs/flock"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/profile/store"
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
 // The managed-profile ledger records the profiles `formae login` wrote, and is
@@ -48,10 +49,6 @@ var (
 )
 
 var (
-	// installationRE matches the canonical lowercase UUID text form, the same
-	// syntactic shape the hosted connection schema accepts as a routing key.
-	installationRE = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
-
 	// fingerprintRE matches a content fingerprint: a sha256 digest in lowercase hex.
 	fingerprintRE = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
@@ -230,8 +227,8 @@ func (e *ledgerEntry) normalize() error {
 	if err != nil {
 		return fmt.Errorf("controlPlane: %w", err)
 	}
-	if !installationRE.MatchString(e.InstallationID) {
-		return fmt.Errorf("installationId %q is not a canonical lowercase UUID", e.InstallationID)
+	if !pkgmodel.ValidInstallationID(e.InstallationID) {
+		return fmt.Errorf("installationId %q is not a well-formed installation id", e.InstallationID)
 	}
 	if err := store.ValidateName(e.Name); err != nil {
 		return fmt.Errorf("name: %w", err)

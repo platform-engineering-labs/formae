@@ -54,16 +54,19 @@ func From(profile string, cfg *pkgmodel.Config, mask string) map[string]any {
 
 func cliView(cli pkgmodel.CliConfig) map[string]any {
 	return map[string]any{
-		"connection":            connectionView(cli.Connection),
+		"connection":            ConnectionView(cli.Connection),
 		"disableUsageReporting": cli.DisableUsageReporting,
 		"theme":                 cli.Theme,
 		"appearance":            cli.Appearance,
 	}
 }
 
-// connectionView tags the arm, so a consumer switches on mode rather than
+// ConnectionView tags the arm, so a consumer switches on mode rather than
 // probing for a field, and emits only that arm's fields.
-func connectionView(conn pkgmodel.Connection) map[string]any {
+//
+// Exported so callers outside this package render a connection identically: a
+// second renderer would be a second shape for consumers to keep up with.
+func ConnectionView(conn pkgmodel.Connection) map[string]any {
 	switch c := conn.(type) {
 	case *pkgmodel.HostedConnection:
 		return map[string]any{

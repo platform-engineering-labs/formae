@@ -603,7 +603,7 @@ func (d *DatastoreMSSQL) GetMostRecentFormaCommandByClientID(clientID string) (*
 	query := formaCommandWithResourceUpdatesQueryBase + `
 		WHERE fc.command_id = (
 			SELECT TOP (1) command_id FROM forma_commands
-			WHERE client_id = @p1
+			WHERE client_id = @p1 AND source = 'user'
 			ORDER BY timestamp DESC
 		)
 		ORDER BY ru.ksuid ASC`
@@ -616,7 +616,7 @@ func (d *DatastoreMSSQL) GetMostRecentFormaCommandByClientID(clientID string) (*
 		return nil, err
 	}
 	if len(commands) == 0 {
-		return nil, fmt.Errorf("no forma commands found for client: %v", clientID)
+		return nil, nil
 	}
 	return commands[0], nil
 }
@@ -761,9 +761,7 @@ func (d *DatastoreMSSQL) QueryFormaCommands(query *datastore.StatusQuery) ([]*fo
 	subqueryStr = extendMSSQLQueryString(subqueryStr, query.CommandID, " AND command_id %s @p%d{esc}", &args)
 	subqueryStr = extendMSSQLQueryString(subqueryStr, query.ClientID, " AND client_id %s @p%d{esc}", &args)
 	subqueryStr = extendMSSQLQueryString(subqueryStr, query.Command, " AND LOWER(command) %s LOWER(@p%d){esc}", &args)
-	if query.Command == nil {
-		subqueryStr += fmt.Sprintf(" AND command != '%s'", pkgmodel.CommandSync)
-	}
+	subqueryStr = extendMSSQLQueryString(subqueryStr, query.Source, " AND source %s @p%d{esc}", &args)
 	subqueryStr = extendMSSQLQueryString(subqueryStr, query.Stack, " AND EXISTS (SELECT 1 FROM resource_updates ru WHERE ru.command_id = forma_commands.command_id AND ru.stack_label %s @p%d{esc})", &args)
 	subqueryStr = extendMSSQLQueryString(subqueryStr, query.Status, " AND LOWER(state) %s LOWER(@p%d){esc}", &args)
 	subqueryStr += " ORDER BY timestamp DESC"

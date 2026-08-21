@@ -32,99 +32,99 @@ func TestDeriveProfileName_TableDriven(t *testing.T) {
 			orgName:          "acme",
 			tenantName:       "default",
 			installationName: "prod",
-			installationID:   "3f2b8c14-0000-4000-8000-000000000000",
-			want:             "acme-default-prod-3f2b8c140000",
+			installationID:   "3HzFPXfPDGhwLJJVtaHbmFs6vLa",
+			want:             "acme-default-prod-3HzFPXfPDGhw",
 		},
 		{
 			name:             "uppercase is lowercased",
 			orgName:          "ACME",
 			tenantName:       "Default",
 			installationName: "PROD",
-			installationID:   "3f2b8c14-0000-4000-8000-000000000000",
-			want:             "acme-default-prod-3f2b8c140000",
+			installationID:   "3HzFPXfPDGhwLJJVtaHbmFs6vLa",
+			want:             "acme-default-prod-3HzFPXfPDGhw",
 		},
 		{
 			name:             "dots and spaces become single hyphens",
 			orgName:          "acme corp.",
 			tenantName:       "default",
 			installationName: "prod",
-			installationID:   "3f2b8c14-0000-4000-8000-000000000000",
-			want:             "acme-corp-default-prod-3f2b8c140000",
+			installationID:   "3HzFPXfPDGhwLJJVtaHbmFs6vLa",
+			want:             "acme-corp-default-prod-3HzFPXfPDGhw",
 		},
 		{
 			name:             "non-ascii characters become hyphens and collapse",
 			orgName:          "Größe & Co.",
 			tenantName:       "default",
 			installationName: "prod",
-			installationID:   "3f2b8c14-0000-4000-8000-000000000000",
-			want:             "gr-e-co-default-prod-3f2b8c140000",
+			installationID:   "3HzFPXfPDGhwLJJVtaHbmFs6vLa",
+			want:             "gr-e-co-default-prod-3HzFPXfPDGhw",
 		},
 		{
 			name:             "leading and trailing punctuation trimmed",
 			orgName:          "--acme--",
 			tenantName:       "default",
 			installationName: "prod",
-			installationID:   "3f2b8c14-0000-4000-8000-000000000000",
-			want:             "acme-default-prod-3f2b8c140000",
+			installationID:   "3HzFPXfPDGhwLJJVtaHbmFs6vLa",
+			want:             "acme-default-prod-3HzFPXfPDGhw",
 		},
 		{
 			name:             "one empty component omitted",
 			orgName:          "",
 			tenantName:       "default",
 			installationName: "prod",
-			installationID:   "3f2b8c14-0000-4000-8000-000000000000",
-			want:             "default-prod-3f2b8c140000",
+			installationID:   "3HzFPXfPDGhwLJJVtaHbmFs6vLa",
+			want:             "default-prod-3HzFPXfPDGhw",
 		},
 		{
 			name:             "two empty components omitted",
 			orgName:          "",
 			tenantName:       "",
 			installationName: "prod",
-			installationID:   "3f2b8c14-0000-4000-8000-000000000000",
-			want:             "prod-3f2b8c140000",
+			installationID:   "3HzFPXfPDGhwLJJVtaHbmFs6vLa",
+			want:             "prod-3HzFPXfPDGhw",
 		},
 		{
 			name:             "all components empty falls back to formae",
 			orgName:          "",
 			tenantName:       "",
 			installationName: "",
-			installationID:   "3f2b8c14-0000-4000-8000-000000000000",
-			want:             "formae-3f2b8c140000",
+			installationID:   "3HzFPXfPDGhwLJJVtaHbmFs6vLa",
+			want:             "formae-3HzFPXfPDGhw",
 		},
 		{
 			name:             "all components non-alphanumeric falls back to formae",
 			orgName:          "***",
 			tenantName:       "...",
 			installationName: "///",
-			installationID:   "3f2b8c14-0000-4000-8000-000000000000",
-			want:             "formae-3f2b8c140000",
+			installationID:   "3HzFPXfPDGhwLJJVtaHbmFs6vLa",
+			want:             "formae-3HzFPXfPDGhw",
 		},
 		{
 			name:             "over-long component truncates to 24 runes",
 			orgName:          strings.Repeat("a", 40),
 			tenantName:       "default",
 			installationName: "prod",
-			installationID:   "3f2b8c14-0000-4000-8000-000000000000",
-			want:             strings.Repeat("a", 24) + "-default-prod-3f2b8c140000",
+			installationID:   "3HzFPXfPDGhwLJJVtaHbmFs6vLa",
+			want:             strings.Repeat("a", 24) + "-default-prod-3HzFPXfPDGhw",
 		},
 		{
 			name:             "truncation landing on a hyphen is re-trimmed",
 			orgName:          strings.Repeat("a", 23) + "-bbbb",
 			tenantName:       "default",
 			installationName: "prod",
-			installationID:   "3f2b8c14-0000-4000-8000-000000000000",
+			installationID:   "3HzFPXfPDGhwLJJVtaHbmFs6vLa",
 			// The 24th rune of "aaa...a(23)-bbbb" is the hyphen itself, so
 			// after truncation it must be re-trimmed away rather than kept
 			// as a trailing hyphen.
-			want: strings.Repeat("a", 23) + "-default-prod-3f2b8c140000",
+			want: strings.Repeat("a", 23) + "-default-prod-3HzFPXfPDGhw",
 		},
 		{
 			name:             "reserved windows basenames are unreachable",
 			orgName:          "con",
 			tenantName:       "",
 			installationName: "",
-			installationID:   "3f2b8c14-0000-4000-8000-000000000000",
-			want:             "con-3f2b8c140000",
+			installationID:   "3HzFPXfPDGhwLJJVtaHbmFs6vLa",
+			want:             "con-3HzFPXfPDGhw",
 		},
 	}
 
@@ -142,9 +142,9 @@ func TestDeriveProfileName_TableDriven(t *testing.T) {
 // only on the four inputs — never on anything else (e.g. other installations
 // that might also be named around the same time).
 func TestDeriveProfileName_Deterministic(t *testing.T) {
-	first := deriveProfileName("acme", "default", "prod", "3f2b8c14-0000-4000-8000-000000000000")
+	first := deriveProfileName("acme", "default", "prod", "3HzFPXfPDGhwLJJVtaHbmFs6vLa")
 	for i := 0; i < 5; i++ {
-		got := deriveProfileName("acme", "default", "prod", "3f2b8c14-0000-4000-8000-000000000000")
+		got := deriveProfileName("acme", "default", "prod", "3HzFPXfPDGhwLJJVtaHbmFs6vLa")
 		assert.Equal(t, first, got)
 	}
 }
@@ -154,8 +154,8 @@ func TestDeriveProfileName_Deterministic(t *testing.T) {
 // short enough that widening might seem tempting. A profile name must never
 // depend on what other installations happen to be visible.
 func TestDeriveProfileName_SuffixIsFixedWidth(t *testing.T) {
-	got := deriveProfileName("a", "", "", "3f2b8c14-0000-4000-8000-000000000000")
-	assert.Equal(t, "a-3f2b8c140000", got)
+	got := deriveProfileName("a", "", "", "3HzFPXfPDGhwLJJVtaHbmFs6vLa")
+	assert.Equal(t, "a-3HzFPXfPDGhw", got)
 }
 
 // TestDeriveProfileName_AdversarialCorpusAlwaysProducesValidNames throws a
@@ -186,7 +186,7 @@ func TestDeriveProfileName_AdversarialCorpusAlwaysProducesValidNames(t *testing.
 		"\t\n\r whitespace \t\n\r",
 	}
 
-	installationID := "3f2b8c14-0000-4000-8000-000000000000"
+	installationID := "3HzFPXfPDGhwLJJVtaHbmFs6vLa"
 
 	for _, org := range adversarial {
 		for _, tenant := range adversarial {
