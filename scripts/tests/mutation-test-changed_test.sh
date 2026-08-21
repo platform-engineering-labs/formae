@@ -371,6 +371,37 @@ test_a_report_with_a_zero_exit_is_ok() {
   assert_status 0 "a completed run passes"
 }
 
+# A changed package that is its own module root (it holds a go.mod) is invoked
+# on itself: gremlins runs in that directory targeting the directory, not a
+# path re-rooted below it.
+test_a_module_root_package_is_invoked_on_itself() {
+  local work repo bin invocation
+  work=$(new_workdir)
+  repo="$work/repo"
+  bin="$work/bin"
+  invocation="$work/invocation"
+
+  make_fixture_repo "$repo"
+  add_changed_package "$repo" "pkg/plugin"
+  printf 'module example/plugin\n\ngo 1.26\n' > "$repo/pkg/plugin/go.mod"
+  fixture_commit "$repo" "make pkg/plugin its own module"
+
+  stub_gremlins "$bin" "pwd > '$invocation'; echo \"\$target\" >> '$invocation'
+printf '%s' '$(mutation_report KILLED)' > \"\$report_path\"; exit 0"
+
+  run_script "$repo" "$bin"
+
+  assert_status 0 "a module-root package produces a usable result"
+  assert_output_matches '\| `pkg/plugin` \| ok \|' \
+    "the module-root package row is ok"
+  if [[ "$(sed -n 1p "$invocation" 2>/dev/null)" != "$repo/pkg/plugin" ]]; then
+    fail "gremlins did not run in the package's own module root (got '$(sed -n 1p "$invocation" 2>/dev/null)')"
+  fi
+  if [[ "$(sed -n 2p "$invocation" 2>/dev/null)" != "./." ]]; then
+    fail "gremlins was not invoked on the module root itself (got '$(sed -n 2p "$invocation" 2>/dev/null)')"
+  fi
+}
+
 # Surviving mutants make gremlins exit non-zero: advisory content, not a crash.
 test_surviving_mutants_are_not_a_failure() {
   local work repo bin
@@ -883,6 +914,7 @@ run_test() {
 main() {
   run_test test_exit_zero_without_report_is_a_failure
   run_test test_a_report_with_a_zero_exit_is_ok
+  run_test test_a_module_root_package_is_invoked_on_itself
   run_test test_surviving_mutants_are_not_a_failure
   run_test test_an_unknown_non_zero_exit_with_a_report_is_ok
   run_test test_a_zero_mutant_report_is_ok_without_a_score

@@ -307,9 +307,16 @@ main() {
   for pkg in "${testable_packages[@]}"; do
     pkg_index=$((pkg_index + 1))
     module_root=$(find_module_root "$pkg")
-    # Compute relative package path from the module root
+    # Compute relative package path from the module root. A package that is
+    # itself the module root has nothing to strip — the prefix pattern below
+    # carries a trailing slash and would leave the absolute path intact — so
+    # it is addressed as the current directory instead.
     rel_pkg="${REPO_ROOT}/${pkg#/}"
-    rel_pkg="${rel_pkg#"$module_root"/}"
+    if [[ "$rel_pkg" == "$module_root" ]]; then
+      rel_pkg="."
+    else
+      rel_pkg="${rel_pkg#"$module_root"/}"
+    fi
 
     echo ""
     echo "=== $pkg (module: ${module_root#"$REPO_ROOT"/}) ==="
