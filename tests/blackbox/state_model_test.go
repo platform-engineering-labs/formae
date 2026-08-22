@@ -42,7 +42,7 @@ func TestCorrectModelFromCommandOutcome_FailedCreateForcesNotExist(t *testing.T)
 	}
 
 	corrected := map[struct{ stackIdx, slotIdx int }]bool{}
-	correctModelFromCommandOutcome(t, cmd, model, nil, snapshots, corrected, true, nil)
+	correctModelFromCommandOutcome(t, cmd, model, nil, snapshots, corrected, true, nil, nil)
 
 	require.Equal(t, StateNotExist, model.Resource(0, 1).State,
 		"a failed create must leave the slot NotExist, not revert to a stale Exists snapshot")
@@ -68,7 +68,7 @@ func TestCorrectModelFromCommandOutcome_FailedDeleteRevertsToSnapshot(t *testing
 	}
 
 	corrected := map[struct{ stackIdx, slotIdx int }]bool{}
-	correctModelFromCommandOutcome(t, cmd, model, nil, snapshots, corrected, true, nil)
+	correctModelFromCommandOutcome(t, cmd, model, nil, snapshots, corrected, true, nil, nil)
 
 	require.Equal(t, StateExists, model.Resource(0, 1).State,
 		"a failed delete leaves the resource in place, reverting to its Exists snapshot")
@@ -95,8 +95,8 @@ func TestCorrectModelFromCommandOutcome_ReverseOrderFailedCreatesStayNotExist(t 
 	corrected := map[struct{ stackIdx, slotIdx int }]bool{}
 	newerSnap := []ResourceSnapshot{{StackIndex: 0, SlotIndex: 1, State: StateNotExist}}
 	olderSnap := []ResourceSnapshot{{StackIndex: 0, SlotIndex: 1, State: StateExists}} // stale
-	correctModelFromCommandOutcome(t, newerCmd, model, nil, newerSnap, corrected, true, nil)
-	correctModelFromCommandOutcome(t, olderCmd, model, nil, olderSnap, corrected, true, nil)
+	correctModelFromCommandOutcome(t, newerCmd, model, nil, newerSnap, corrected, true, nil, nil)
+	correctModelFromCommandOutcome(t, olderCmd, model, nil, olderSnap, corrected, true, nil, nil)
 
 	require.Equal(t, StateNotExist, model.Resource(0, 1).State,
 		"an older failed-create command must not resurrect a slot from its stale Exists snapshot")
@@ -579,7 +579,7 @@ func TestCorrectModelFromCommandOutcome_UnmentionedCrossStackSlotReverts(t *test
 		ResourceUpdates: nil, // the command died before reaching this slot
 	}
 	corrected := map[struct{ stackIdx, slotIdx int }]bool{}
-	correctModelFromCommandOutcome(t, cmd, model, model.Pool, snapshots, corrected, false, nil)
+	correctModelFromCommandOutcome(t, cmd, model, model.Pool, snapshots, corrected, false, nil, nil)
 
 	require.Equal(t, StateNotExist, model.Resource(1, crossIdx).State,
 		"an unmentioned cross-stack slot in a failed command reverts to its snapshot")
@@ -713,7 +713,7 @@ func TestCorrectModelFromCommandOutcome_TTLSupersededSlotStaysDestroyed(t *testi
 	}
 	corrected := map[struct{ stackIdx, slotIdx int }]bool{}
 	ac := model.AcceptedCommands[0]
-	correctModelFromCommandOutcome(t, cmd, model, model.Pool, ac.Snapshots, corrected, true, ac.SupersededSlots)
+	correctModelFromCommandOutcome(t, cmd, model, model.Pool, ac.Snapshots, corrected, true, ac.SupersededSlots, nil)
 
 	require.Equal(t, StateNotExist, model.Resource(2, xslot).State,
 		"a TTL-destroyed slot must not be resurrected by a stale command's create RU")
@@ -745,9 +745,116 @@ func TestCorrectModelFromCommandOutcome_UnmentionedSlotRevertsProperties(t *test
 		}},
 	}
 	corrected := map[struct{ stackIdx, slotIdx int }]bool{}
-	correctModelFromCommandOutcome(t, cmd, model, nil, snapshots, corrected, false, nil)
+	correctModelFromCommandOutcome(t, cmd, model, nil, snapshots, corrected, false, nil, nil)
 
 	require.Equal(t, StateExists, model.Resource(0, 1).State)
 	require.Equal(t, `{"Value":"v1"}`, model.Resource(0, 1).Properties,
 		"optimistic properties must revert to the snapshot when the failed command never touched the slot")
+}
+
+// A failed command whose renamed slot produced no resource update must have
+// the optimistic rename rolled back, even though the slot's State never
+// changed — the engine never persisted the new label, so keeping it would
+// let the model track a label that does not exist in inventory.
+func TestCorrectModelFromCommandOutcome_UnmentionedSlotRevertsLabels(t *testing.T) {
+	model := NewStateModel(1, 3)
+	model.ApplyCreated(0, []int{1}, "")
+	model.RecordRename(0, 1, "renamed-0") // optimistic: rename accepted
+
+	snapshots := []ResourceSnapshot{{StackIndex: 0, SlotIndex: 1, State: StateExists}} // pre-rename: no overlay
+	cmd := &apimodel.Command{
+		CommandID:       "cmd-failed-rename",
+		State:           "FinishedWithErrors",
+		ResourceUpdates: nil, // the renamed slot never got a resource update
+	}
+
+	corrected := map[struct{ stackIdx, slotIdx int }]bool{}
+	correctModelFromCommandOutcome(t, cmd, model, nil, snapshots, corrected, true, nil, nil)
+
+	require.Empty(t, model.Resource(0, 1).CurrentLabel,
+		"the optimistic rename must be rolled back when the slot is unmentioned in a failed command")
+	require.Empty(t, model.Resource(0, 1).PreviousLabel)
+	require.Equal(t, StateExists, model.Resource(0, 1).State)
+}
+
+// A successful command that carried a rename must contain a success update
+// RU at the renamed label — a destroy+recreate (or a dropped alias that made
+// the engine treat the new label as a fresh resource) produces a create RU
+// there instead.
+func TestCorrectModelFromCommandOutcome_RenameFulfilledByCreateIsViolation(t *testing.T) {
+	model := NewStateModel(1, 3)
+	model.ApplyCreated(0, []int{1}, "")
+	model.SetNativeID(0, 1, "test-42")
+	model.RecordRename(0, 1, "renamed-0")
+
+	cmd := &apimodel.Command{
+		CommandID: "cmd-recreated-rename",
+		State:     "Success",
+		ResourceUpdates: []apimodel.ResourceUpdate{{
+			StackName:     "stack-0",
+			ResourceLabel: "renamed-0",
+			Operation:     "create", // rename executed as destroy+recreate
+			State:         "Success",
+			NativeID:      "test-99",
+		}},
+	}
+
+	corrected := map[struct{ stackIdx, slotIdx int }]bool{}
+	rename := &PendingRename{StackIndex: 0, SlotIndex: 1, OldLabel: "res-stack-0-b", NewLabel: "renamed-0"}
+	correctModelFromCommandOutcome(t, cmd, model, nil, nil, corrected, false, nil, rename)
+
+	require.NotEmpty(t, model.PendingViolations)
+	require.Equal(t, ViolationRenameRecreatedResource, model.PendingViolations[0].Kind)
+
+	// The same command with an in-place update RU produces no violation.
+	model2 := NewStateModel(1, 3)
+	model2.ApplyCreated(0, []int{1}, "")
+	model2.SetNativeID(0, 1, "test-42")
+	model2.RecordRename(0, 1, "renamed-0")
+	cmd2 := &apimodel.Command{
+		CommandID: "cmd-genuine-rename",
+		State:     "Success",
+		ResourceUpdates: []apimodel.ResourceUpdate{{
+			StackName:     "stack-0",
+			ResourceLabel: "renamed-0",
+			Operation:     "update",
+			State:         "Success",
+			NativeID:      "test-42",
+		}},
+	}
+	correctModelFromCommandOutcome(t, cmd2, model2, nil, nil, map[struct{ stackIdx, slotIdx int }]bool{}, false, nil, rename)
+	require.Empty(t, model2.PendingViolations)
+}
+
+// An update RU never changes a resource's identity — a different NativeID or
+// KSUID in the response means the engine replaced the resource instead of
+// updating it in place. The check must fire BEFORE the model adopts the new
+// identity, or the final invariants compare against the adopted value and
+// pass vacuously.
+func TestCorrectModelFromCommandOutcome_UpdateChangingIdentityIsViolation(t *testing.T) {
+	model := NewStateModel(1, 3)
+	model.ApplyCreated(0, []int{1}, "")
+	model.SetNativeID(0, 1, "test-42")
+	model.SetKsuid(0, 1, "K_OLD")
+
+	cmd := &apimodel.Command{
+		CommandID: "cmd-identity-swap",
+		State:     "Success",
+		ResourceUpdates: []apimodel.ResourceUpdate{{
+			StackName:     "stack-0",
+			ResourceLabel: "res-stack-0-b",
+			Operation:     "update",
+			State:         "Success",
+			NativeID:      "test-99",
+			ResourceID:    "K_NEW",
+		}},
+	}
+
+	corrected := map[struct{ stackIdx, slotIdx int }]bool{}
+	correctModelFromCommandOutcome(t, cmd, model, nil, nil, corrected, false, nil, nil)
+
+	require.Len(t, model.PendingViolations, 2, "both the NativeID and the KSUID change must be flagged")
+	for _, v := range model.PendingViolations {
+		require.Equal(t, ViolationRenameIdentityChanged, v.Kind)
+	}
 }
