@@ -1755,9 +1755,12 @@ func (h *TestHarness) executeTriggerDiscovery(t *testing.T, model *StateModel) {
 	for attempt := range maxDiscoverAttempts {
 		baseline := h.SyncCommandBaseline()
 		require.NoError(t, h.client.ForceDiscover(), "ForceDiscover failed")
+		// Command observation is a hint, not the success criterion: the
+		// ingestion command can land outside the appearance window, and a
+		// follow-up trigger that absorbs nothing is deleted unobservably.
+		// Inventory convergence decides — check it regardless.
 		if _, ok := h.WaitForSyncCommandAfter(baseline, 10*time.Second, 60*time.Second); !ok {
 			t.Logf("TriggerDiscovery: no ingestion command observed (attempt %d)", attempt+1)
-			continue
 		}
 		if h.waitForUnmanagedInventoryExpectations(t, model, 10*time.Second) {
 			t.Logf("TriggerDiscovery: ingested")
