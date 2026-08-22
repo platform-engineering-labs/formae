@@ -298,7 +298,7 @@ stage-oidc-fixtures:
 
 ## test-property: Run property tests (FullChaos 100 iterations, others 50)
 test-property:
-	go test -C tests/blackbox -tags=property -run 'TestProperty_Sequential|TestProperty_Concurrent' -v -count=1 -rapid.checks=50 -timeout=60m
+	go test -C tests/blackbox -tags=property -run 'TestProperty_Sequential|TestProperty_Concurrent|TestProperty_RenameViaApply|TestRenameViaApply_Deterministic' -v -count=1 -rapid.checks=50 -timeout=60m
 	go test -C tests/blackbox -tags=property -run TestProperty_FullChaos -v -count=1 -rapid.checks=100 -timeout=60m
 
 ## mutation-test: Run mutation testing across all unit-tested packages and generate report
