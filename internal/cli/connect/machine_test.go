@@ -36,22 +36,21 @@ func TestLinksDocument_CarriesExactlyTheDeclaredFields(t *testing.T) {
 	require.NoError(t, emitLinks(&out, "json", linksDocument(plan, testAccount, testInstallation, []string{"careful"})))
 
 	got := decodeDoc(t, out.String())
-	assert.Equal(t, float64(1), got["schemaVersion"])
+	assert.Equal(t, float64(2), got["schemaVersion"])
 	assert.Equal(t, "links", got["phase"])
 	assert.Equal(t, "aws", got["cloud"])
 	assert.Equal(t, testAccount, got["account"])
 	assert.Equal(t, testInstallation, got["installation"])
-	assert.Equal(t, plan.ProviderStackURL, got["providerStackUrl"])
-	assert.Equal(t, plan.RoleStackURL, got["roleStackUrl"])
+	assert.Equal(t, plan.StackURL, got["stackUrl"])
 	assert.Equal(t, plan.ExpectedRoleArn, got["expectedRoleArn"])
-	assert.Equal(t, plan.ProviderDigest, got["providerTemplateSha256"])
-	assert.Equal(t, plan.RoleDigest, got["roleTemplateSha256"])
+	assert.Equal(t, plan.TemplateDigest, got["templateSha256"])
+	assert.Equal(t, true, got["createProvider"])
 	assert.Equal(t, plan.ResumeCommand, got["resumeCommand"])
 	assert.Equal(t, []any{"careful"}, got["warnings"])
 
 	// The declared keys and nothing else: prose this repo did not write never
 	// rides the stream.
-	assert.Len(t, got, 12)
+	assert.Len(t, got, 11)
 }
 
 func TestLinksDocument_OmitsEmptyWarnings(t *testing.T) {
@@ -75,7 +74,7 @@ func TestRegisteredDocument_PinsBothStatusValues(t *testing.T) {
 			registeredDocument(status, testAccount, roleArn, []string{"w"})))
 
 		got := decodeDoc(t, out.String())
-		assert.Equal(t, float64(1), got["schemaVersion"])
+		assert.Equal(t, float64(2), got["schemaVersion"])
 		assert.Equal(t, "registered", got["phase"])
 		assert.Equal(t, status, got["status"])
 		assert.Equal(t, "aws", got["cloud"])
@@ -93,7 +92,7 @@ func TestDocuments_SupportYAML(t *testing.T) {
 	require.NoError(t, emitRegistered(&out, "yaml",
 		registeredDocument(statusRegisteredUnverified, testAccount, "arn:aws:iam::"+testAccount+":role/r", nil)))
 	assert.Contains(t, out.String(), "phase: registered")
-	assert.Contains(t, out.String(), "schemaVersion: 1")
+	assert.Contains(t, out.String(), "schemaVersion: 2")
 }
 
 // An error the flow did not declare reaches the wire as internal, with a

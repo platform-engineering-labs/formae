@@ -27,14 +27,11 @@ import (
 // the values is a constants-only change. A releasecheck-tagged gate test
 // fails the release pipeline while any placeholder remains.
 const (
-	providerStackName         = "formae-oidc-provider"
-	providerTemplateKey       = "formae-oidc-provider.yaml"
-	providerTemplateVersionID = "GCkhsMGjUAKV_qs7m7uYl6j5879bUjgu"
-	providerTemplateSHA256    = "1104e93afd716ffbda670158f6a89d42e8869dbe38a466d79ccd473b5e30683d"
-
+	// Template 0.2.0: the shared OIDC provider rides in the role template
+	// behind CreateProvider, so quick-create emits exactly one link.
 	roleTemplateKey       = "formae-connect-role.yaml"
-	roleTemplateVersionID = "NpQAD3Vxf_JcswPJ4VuSSBoUp0gY2.uq"
-	roleTemplateSHA256    = "62b24a36898a9ecaf21c4869f617a8cc457eec61ea0bee32ce8426dcb87bf15e"
+	roleTemplateVersionID = "PINNED_AT_PUBLICATION"
+	roleTemplateSHA256    = "PINNED_AT_PUBLICATION"
 
 	quickCreateConsole = "https://us-east-1.console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/create/review"
 )
@@ -42,22 +39,23 @@ const (
 // quickCreatePlan is everything the emit step prints and the machine document
 // carries. Self-contained: a consumer needs no second command to act on it.
 type quickCreatePlan struct {
-	ProviderStackURL string
-	RoleStackURL     string
-	RoleStackName    string // formae-connect-<installation KSUID>
-	ExpectedRoleArn  string
-	ProviderDigest   string
-	RoleDigest       string
-	ResumeCommand    string
-	SkipStepOne      string
-	CapabilityNote   string
-	Warnings         []string
+	StackURL        string
+	StackName       string // formae-connect-<installation KSUID>
+	ExpectedRoleArn string
+	TemplateDigest  string
+	CreateProvider  bool
+	ResumeCommand   string
+	ProviderNote    string
+	CapabilityNote  string
+	Warnings        []string
 }
 
-// buildQuickCreatePlan assembles the two console links and the facts around
-// them. The console URL grammar is a query string carried inside the URL
-// fragment: everything after #/stacks/create/review is one opaque string to
-// the server and the console's client-side router reads it whole.
+// buildQuickCreatePlan assembles the console link and the facts around it.
+// The console URL grammar is a query string carried inside the URL fragment:
+// everything after #/stacks/create/review is one opaque string to the server
+// and the console's client-side router reads it whole. CreateProvider is
+// always explicit in the link, so the emitted URL never depends on the
+// template's default.
 func buildQuickCreatePlan(p connectPlatform, setup cloudapi.CloudConnectionSetup,
 	account, installationID string, opts options) quickCreatePlan {
 
@@ -72,32 +70,33 @@ func buildQuickCreatePlan(p connectPlatform, setup cloudapi.CloudConnectionSetup
 		}
 		return "&" + v.Encode()
 	}
-	roleStack := "formae-connect-" + installationID
+	stack := "formae-connect-" + installationID
+	createProvider := !opts.ProviderExists
 	return quickCreatePlan{
-		ProviderStackURL: quickCreateConsole +
-			"?templateURL=" + url.QueryEscape(templateURL(providerTemplateKey, providerTemplateVersionID)) +
-			frag(providerStackName, nil),
-		RoleStackURL: quickCreateConsole +
+		StackURL: quickCreateConsole +
 			"?templateURL=" + url.QueryEscape(templateURL(roleTemplateKey, roleTemplateVersionID)) +
-			frag(roleStack, map[string]string{
+			frag(stack, map[string]string{
 				"Subject":           setup.CloudSubject,
 				"RoleName":          setup.CloudRoleName,
 				"ExpectedAccountId": account,
+				"CreateProvider":    fmt.Sprintf("%t", createProvider),
 			}),
-		RoleStackName:   roleStack,
+		StackName:       stack,
 		ExpectedRoleArn: "arn:aws:iam::" + account + ":role/" + setup.CloudRoleName,
-		ProviderDigest:  providerTemplateSHA256,
-		RoleDigest:      roleTemplateSHA256,
+		TemplateDigest:  roleTemplateSHA256,
+		CreateProvider:  createProvider,
 		ResumeCommand:   resumeCommand(opts, account),
-		SkipStepOne:     "If this account was connected before, the identity provider already exists — skip step 1.",
-		CapabilityNote:  "Both stacks require the CAPABILITY_NAMED_IAM acknowledgement in the console.",
+		ProviderNote: "If this account was connected to formae before, re-run with --provider-exists: " +
+			"the shared identity provider already exists and the stack should create the role only.",
+		CapabilityNote: "The stack requires the CAPABILITY_NAMED_IAM acknowledgement in the console.",
 	}
 }
 
 // runQuickCreate is the --quick-create path: read the coordinates, assemble
-// the two console links, emit them, and stop. Nothing is registered — the
-// user comes back with the stack's RoleArn output and finishes with
-// --role-arn (or, interactively, pastes it into the in-sitting wait).
+// the console link, emit it, and — interactively — finish in the same
+// sitting: Enter registers the expected ARN once the stack is applied, a
+// pasted RoleArn wins when it differs. Non-interactively nothing is
+// registered; the user comes back with --role-arn.
 func runQuickCreate(cc *cobra.Command, opts options, consumer printer.Consumer, schema string) error {
 	if opts.Account == "" {
 		return clicmd.FlagErrorf("--quick-create requires --account")
@@ -124,11 +123,23 @@ func runQuickCreate(cc *cobra.Command, opts options, consumer printer.Consumer, 
 		return printLinksHuman(cc.OutOrStdout(), plan)
 	}
 
-	// The in-sitting completion: consent, print the links, wait for the
-	// pasted RoleArn, validate it exactly like --role-arn, and register.
+	// The in-sitting completion: consent, settle the provider question,
+	// print the link, wait for Enter or a pasted RoleArn, validate it exactly
+	// like --role-arn, and register.
 	th := clicmd.ResolveConfiguredTheme(cc)
 	if err := confirmInteractive(th, opts.Account, s.Setup.CloudSubject, permissionsProvisioned, elsewhere); err != nil {
 		return err
+	}
+	if !opts.ProviderExists && accountInHint(s.Setup.AccountsConnectedHint, opts.Account) {
+		exists, err := confirmProviderExistsFn(th, opts.Account)
+		if err != nil {
+			return err
+		}
+		if exists {
+			opts.ProviderExists = true
+			plan = buildQuickCreatePlan(s.Platform, s.Setup, opts.Account, s.InstallationID, opts)
+			plan.Warnings = warnings
+		}
 	}
 	if err := printLinksHuman(cc.OutOrStdout(), plan); err != nil {
 		return err
@@ -140,6 +151,11 @@ func runQuickCreate(cc *cobra.Command, opts options, consumer printer.Consumer, 
 		// the session from a fresh shell.
 		_, _ = fmt.Fprintln(cc.OutOrStdout(), "\nResume later with:\n  "+plan.ResumeCommand)
 		return err
+	}
+	if pasted == "" {
+		// Enter means "it applied and the output matches what you printed":
+		// register the expected ARN.
+		pasted = plan.ExpectedRoleArn
 	}
 	parsed, err := parseRoleArn(pasted, opts.Account)
 	if err != nil {
@@ -153,31 +169,31 @@ func runQuickCreate(cc *cobra.Command, opts options, consumer printer.Consumer, 
 	if err != nil {
 		return err
 	}
-	return printRegisteredHuman(cc.OutOrStdout(), registeredDocument(status, opts.Account, parsed.Arn, warnings), s.InstallationID)
+	return printRegisteredHuman(cc.OutOrStdout(), true, th, registeredDocument(status, opts.Account, parsed.Arn, warnings), s.InstallationID)
 }
 
-// printLinksHuman renders the plan as the two console steps.
+// printLinksHuman renders the plan as one console step.
 func printLinksHuman(w io.Writer, plan quickCreatePlan) error {
+	intro := "One CloudFormation stack establishes the trust. Open the link, review, and create the stack (" + plan.StackName + "):"
+	notes := []string{plan.CapabilityNote}
+	if plan.CreateProvider {
+		notes = append(notes, plan.ProviderNote)
+	}
 	lines := []string{
-		"Two CloudFormation stacks establish the trust. Open each link, review, and create the stack.",
+		intro,
+		"  " + plan.StackURL,
+		"  template sha256: " + plan.TemplateDigest,
 		"",
-		"Step 1 — the formae identity provider (once per account):",
-		"  " + plan.ProviderStackURL,
-		"  " + plan.SkipStepOne,
-		"  template sha256: " + plan.ProviderDigest,
+	}
+	lines = append(lines, notes...)
+	lines = append(lines,
 		"",
-		"Step 2 — the connect role (" + plan.RoleStackName + "):",
-		"  " + plan.RoleStackURL,
-		"  template sha256: " + plan.RoleDigest,
-		"",
-		plan.CapabilityNote,
-		"",
-		"When the role stack is applied, its RoleArn output should be:",
-		"  " + plan.ExpectedRoleArn,
+		"When the stack is applied, its RoleArn output should be:",
+		"  "+plan.ExpectedRoleArn,
 		"",
 		"Finish by registering it:",
-		"  " + plan.ResumeCommand,
-	}
+		"  "+plan.ResumeCommand,
+	)
 	for _, warning := range plan.Warnings {
 		lines = append(lines, "", "warning: "+warning)
 	}

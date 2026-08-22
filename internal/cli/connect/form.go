@@ -28,6 +28,24 @@ const (
 // consents are testable without a TTY.
 var confirmFn = components.RunConfirm
 
+// confirmProviderExistsFn asks whether the shared identity provider already
+// exists in the account. Asked only when the connection hint knows the
+// account — a fresh account skips the question and creates the provider. A
+// seam so the flow is testable without a TTY.
+var confirmProviderExistsFn = func(th *theme.Theme, account string) (bool, error) {
+	exists := true
+	confirm := huh.NewConfirm().
+		Title("Account " + account + " looks connected to formae already").
+		Description("IAM allows one formae identity provider per account. Does it already exist?").
+		Affirmative("It exists — create the role only").
+		Negative("First connection — create both").
+		Value(&exists)
+	if err := components.NewThemedForm(th, huh.NewGroup(confirm)).Run(); err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
 // promptRoleArnFn is the in-sitting quick-create wait: a paste prompt titled
 // with the RoleArn output name, not a poll — the CLI holds no AWS credentials
 // on the quick-create path, so it cannot watch CREATE_COMPLETE.
@@ -35,7 +53,9 @@ var promptRoleArnFn = func(th *theme.Theme, expectedArn string) (string, error) 
 	var arn string
 	input := huh.NewInput().
 		Title("RoleArn stack output").
-		Description("Apply both stacks in the console, then paste the role stack's RoleArn output here.\nExpected: " + expectedArn).
+		Description("Apply the stack in the console, then press Enter once it shows CREATE_COMPLETE.\n" +
+			"Expected: " + expectedArn + "\n" +
+			"Paste the RoleArn output only if it differs.").
 		Value(&arn)
 	if err := components.NewThemedForm(th, huh.NewGroup(input)).Run(); err != nil {
 		return "", err

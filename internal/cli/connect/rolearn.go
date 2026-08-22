@@ -12,6 +12,8 @@ import (
 
 	clicmd "github.com/platform-engineering-labs/formae/internal/cli/cmd"
 	"github.com/platform-engineering-labs/formae/internal/cli/printer"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 )
 
 // runRegisterOnly is the --role-arn path: trust already exists — an applied
@@ -56,26 +58,32 @@ func runRegisterOnly(cc *cobra.Command, opts options, consumer printer.Consumer,
 	if consumer == printer.ConsumerMachine {
 		return emitRegistered(cc.OutOrStdout(), schema, v)
 	}
-	return printRegisteredHuman(cc.OutOrStdout(), v, s.InstallationID)
+	return printRegisteredHuman(cc.OutOrStdout(), isInteractive(), clicmd.ResolveConfiguredTheme(cc), v, s.InstallationID)
 }
 
-// printRegisteredHuman renders the same facts as prose.
-func printRegisteredHuman(w io.Writer, v registeredView, installationID string) error {
+// printRegisteredHuman renders the same facts as prose. The outcome and
+// warning lines ride the shared ack idiom: styled on a TTY, plain when piped
+// so output stays ANSI-free.
+func printRegisteredHuman(w io.Writer, tty bool, th *theme.Theme, v registeredView, installationID string) error {
+	ack := func(m components.AckMarker, text string) string {
+		if tty {
+			return components.AckLine(th, m, text)
+		}
+		return components.AckLinePlain(m, text)
+	}
 	verb := "registered"
 	if v.Status == statusAlreadyRegistered {
 		verb = "already registered"
 	}
-	if _, err := fmt.Fprintf(w, "✓ %s aws account %s on installation %s\n", verb, v.Account, installationID); err != nil {
+	if _, err := fmt.Fprintln(w, ack(components.AckDone,
+		fmt.Sprintf("%s aws account %s on installation %s", verb, v.Account, installationID))); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintf(w, "  role: %s\n", v.RoleArn); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintln(w, "  The registration is declared by you, not verified by formae."); err != nil {
-		return err
-	}
 	for _, warning := range v.Warnings {
-		if _, err := fmt.Fprintf(w, "  warning: %s\n", warning); err != nil {
+		if _, err := fmt.Fprintln(w, ack(components.AckWarn, "warning: "+warning)); err != nil {
 			return err
 		}
 	}

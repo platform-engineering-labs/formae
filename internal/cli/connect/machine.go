@@ -20,7 +20,7 @@ import (
 // connectSchemaVersion identifies the shape of both documents. A consumer
 // reads it before any other field, so a document it cannot understand is an
 // error rather than a guess.
-const connectSchemaVersion = 1
+const connectSchemaVersion = 2
 
 // The registration statuses: registered_unverified always — the CLI cannot
 // verify the stack was applied and does not pretend otherwise — and
@@ -31,20 +31,21 @@ const (
 )
 
 // linksView is the quick-create emit: self-contained, so a consumer can drive
-// the console flow and come back with the RoleArn.
+// the console flow and come back with the RoleArn. CreateProvider echoes the
+// answer carried into the link, so a consumer sees which stack variant it is
+// driving.
 type linksView struct {
-	SchemaVersion          int      `json:"schemaVersion" yaml:"schemaVersion"`
-	Phase                  string   `json:"phase" yaml:"phase"` // "links"
-	Cloud                  string   `json:"cloud" yaml:"cloud"`
-	Account                string   `json:"account" yaml:"account"`
-	Installation           string   `json:"installation" yaml:"installation"`
-	ProviderStackURL       string   `json:"providerStackUrl" yaml:"providerStackUrl"`
-	RoleStackURL           string   `json:"roleStackUrl" yaml:"roleStackUrl"`
-	ExpectedRoleArn        string   `json:"expectedRoleArn" yaml:"expectedRoleArn"`
-	ProviderTemplateSha256 string   `json:"providerTemplateSha256" yaml:"providerTemplateSha256"`
-	RoleTemplateSha256     string   `json:"roleTemplateSha256" yaml:"roleTemplateSha256"`
-	ResumeCommand          string   `json:"resumeCommand" yaml:"resumeCommand"`
-	Warnings               []string `json:"warnings,omitempty" yaml:"warnings,omitempty"`
+	SchemaVersion   int      `json:"schemaVersion" yaml:"schemaVersion"`
+	Phase           string   `json:"phase" yaml:"phase"` // "links"
+	Cloud           string   `json:"cloud" yaml:"cloud"`
+	Account         string   `json:"account" yaml:"account"`
+	Installation    string   `json:"installation" yaml:"installation"`
+	StackURL        string   `json:"stackUrl" yaml:"stackUrl"`
+	ExpectedRoleArn string   `json:"expectedRoleArn" yaml:"expectedRoleArn"`
+	TemplateSha256  string   `json:"templateSha256" yaml:"templateSha256"`
+	CreateProvider  bool     `json:"createProvider" yaml:"createProvider"`
+	ResumeCommand   string   `json:"resumeCommand" yaml:"resumeCommand"`
+	Warnings        []string `json:"warnings,omitempty" yaml:"warnings,omitempty"`
 }
 
 // registeredView reports registration. Status is the two-value enum above.
@@ -62,18 +63,17 @@ type registeredView struct {
 // multi-installation and name-mismatch warnings ride Warnings.
 func linksDocument(plan quickCreatePlan, account, installationID string, warnings []string) linksView {
 	return linksView{
-		SchemaVersion:          connectSchemaVersion,
-		Phase:                  "links",
-		Cloud:                  "aws",
-		Account:                account,
-		Installation:           installationID,
-		ProviderStackURL:       plan.ProviderStackURL,
-		RoleStackURL:           plan.RoleStackURL,
-		ExpectedRoleArn:        plan.ExpectedRoleArn,
-		ProviderTemplateSha256: plan.ProviderDigest,
-		RoleTemplateSha256:     plan.RoleDigest,
-		ResumeCommand:          plan.ResumeCommand,
-		Warnings:               warnings,
+		SchemaVersion:   connectSchemaVersion,
+		Phase:           "links",
+		Cloud:           "aws",
+		Account:         account,
+		Installation:    installationID,
+		StackURL:        plan.StackURL,
+		ExpectedRoleArn: plan.ExpectedRoleArn,
+		TemplateSha256:  plan.TemplateDigest,
+		CreateProvider:  plan.CreateProvider,
+		ResumeCommand:   plan.ResumeCommand,
+		Warnings:        warnings,
 	}
 }
 

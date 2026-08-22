@@ -38,7 +38,8 @@ func awsCmd() *cobra.Command {
 		},
 	}
 	c.Flags().String("account", "", "AWS account id to connect (12 digits; always explicit, never inferred)")
-	c.Flags().Bool("quick-create", false, "Emit the two CloudFormation console links and stop; nothing is registered")
+	c.Flags().Bool("quick-create", false, "Emit the CloudFormation console link; interactively, finish by registering in the same sitting")
+	c.Flags().Bool("provider-exists", false, "The account was connected to formae before: the shared OIDC identity provider already exists, so the stack creates the role only")
 	c.Flags().String("role-arn", "", "Trust already exists (an applied quick-create stack, or a role you made yourself): validate and register only")
 	c.Flags().String("profile-aws", "", "Provision directly with a local AWS shared-config profile, then register")
 	c.Flags().String("region", "", "AWS region for the local path (flag > profile region; quick-create has no region input)")
@@ -57,6 +58,7 @@ func readOptions(cc *cobra.Command) (options, error) {
 	}
 	opts.Account, _ = cc.Flags().GetString("account")
 	opts.QuickCreate, _ = cc.Flags().GetBool("quick-create")
+	opts.ProviderExists, _ = cc.Flags().GetBool("provider-exists")
 	opts.ProfileAWS, _ = cc.Flags().GetString("profile-aws")
 	opts.RoleArn, _ = cc.Flags().GetString("role-arn")
 	opts.Region, _ = cc.Flags().GetString("region")

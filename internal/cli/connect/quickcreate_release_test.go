@@ -14,10 +14,8 @@ import "testing"
 // the publication is pending, and a release cannot.
 func TestTemplateCoordinatesArePinned(t *testing.T) {
 	for name, value := range map[string]string{
-		"providerTemplateVersionID": providerTemplateVersionID,
-		"providerTemplateSHA256":    providerTemplateSHA256,
-		"roleTemplateVersionID":     roleTemplateVersionID,
-		"roleTemplateSHA256":        roleTemplateSHA256,
+		"roleTemplateVersionID": roleTemplateVersionID,
+		"roleTemplateSHA256":    roleTemplateSHA256,
 	} {
 		if value == "PINNED_AT_PUBLICATION" {
 			t.Errorf("%s still holds the placeholder; pin it from the infrastructure repo's publication before releasing", name)

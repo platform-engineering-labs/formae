@@ -7,6 +7,8 @@
 package connect
 
 import (
+	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -37,42 +39,53 @@ func defaultPlatform(t *testing.T) connectPlatform {
 	return p
 }
 
-// The two console links, byte for byte. Everything after #/stacks/create/review
-// rides in the URL fragment, so the whole ?templateURL=...&stackName=... query
-// grammar is assembled inside the fragment string.
-func TestBuildQuickCreatePlan_GoldenURLs(t *testing.T) {
+// The single console link, byte for byte up to the pinned versionId (spliced
+// from the constant so pin swaps stay constants-only changes). Everything
+// after #/stacks/create/review rides in the URL fragment, so the whole
+// ?templateURL=...&stackName=... query grammar is assembled inside the
+// fragment string. CreateProvider is always explicit — the emitted link never
+// depends on the template's default.
+func TestBuildQuickCreatePlan_GoldenURL(t *testing.T) {
 	plan := buildQuickCreatePlan(defaultPlatform(t), testSetup(), testAccount, testInstallation, options{})
 
+	tplURL := "https://formae-connect-templates.s3.us-east-1.amazonaws.com/formae-connect-role.yaml?versionId=" +
+		url.QueryEscape(roleTemplateVersionID)
 	assert.Equal(t,
 		"https://us-east-1.console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/create/review"+
-			"?templateURL=https%3A%2F%2Fformae-connect-templates.s3.us-east-1.amazonaws.com"+
-			"%2Fformae-oidc-provider.yaml%3FversionId%3DGCkhsMGjUAKV_qs7m7uYl6j5879bUjgu"+
-			"&stackName=formae-oidc-provider",
-		plan.ProviderStackURL)
-
-	assert.Equal(t,
-		"https://us-east-1.console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/create/review"+
-			"?templateURL=https%3A%2F%2Fformae-connect-templates.s3.us-east-1.amazonaws.com"+
-			"%2Fformae-connect-role.yaml%3FversionId%3DNpQAD3Vxf_JcswPJ4VuSSBoUp0gY2.uq"+
+			"?templateURL="+url.QueryEscape(tplURL)+
+			"&param_CreateProvider=true"+
 			"&param_ExpectedAccountId="+testAccount+
 			"&param_RoleName=formae-connect-"+testInstallation+
 			"&param_Subject=fai%3Aacme%2F"+testInstallation+
 			"&stackName=formae-connect-"+testInstallation,
-		plan.RoleStackURL)
+		plan.StackURL)
+}
+
+// --provider-exists flips exactly the CreateProvider parameter.
+func TestBuildQuickCreatePlan_ProviderExistsFlipsTheParameter(t *testing.T) {
+	base := buildQuickCreatePlan(defaultPlatform(t), testSetup(), testAccount, testInstallation, options{})
+	flipped := buildQuickCreatePlan(defaultPlatform(t), testSetup(), testAccount, testInstallation,
+		options{ProviderExists: true})
+
+	assert.False(t, base.CreateProvider == flipped.CreateProvider)
+	assert.True(t, base.CreateProvider)
+	assert.False(t, flipped.CreateProvider)
+	assert.Equal(t,
+		strings.Replace(base.StackURL, "param_CreateProvider=true", "param_CreateProvider=false", 1),
+		flipped.StackURL)
 }
 
 func TestBuildQuickCreatePlan_CarriesTheFactsTheEmitNeeds(t *testing.T) {
 	plan := buildQuickCreatePlan(defaultPlatform(t), testSetup(), testAccount, testInstallation, options{})
 
-	assert.Equal(t, "formae-connect-"+testInstallation, plan.RoleStackName)
+	assert.Equal(t, "formae-connect-"+testInstallation, plan.StackName)
 	assert.Equal(t, "arn:aws:iam::"+testAccount+":role/"+testRoleName, plan.ExpectedRoleArn)
-	assert.Equal(t, providerTemplateSHA256, plan.ProviderDigest)
-	assert.Equal(t, roleTemplateSHA256, plan.RoleDigest)
-	assert.Contains(t, plan.SkipStepOne, "skip step 1")
+	assert.Equal(t, roleTemplateSHA256, plan.TemplateDigest)
+	assert.Contains(t, plan.ProviderNote, "--provider-exists")
 	assert.Contains(t, plan.CapabilityNote, "CAPABILITY_NAMED_IAM")
 }
 
-// The overridden template base flows into both links: the pair moves together.
+// The overridden template base flows into the link.
 func TestBuildQuickCreatePlan_UsesTheOverriddenBase(t *testing.T) {
 	clearConnectEnv(t)
 	t.Setenv("FORMAE_CONNECT_ISSUER", "https://oidc.test.example")
@@ -82,8 +95,7 @@ func TestBuildQuickCreatePlan_UsesTheOverriddenBase(t *testing.T) {
 
 	plan := buildQuickCreatePlan(p, testSetup(), testAccount, testInstallation, options{})
 
-	assert.Contains(t, plan.ProviderStackURL, "templates.test.example")
-	assert.Contains(t, plan.RoleStackURL, "templates.test.example")
+	assert.Contains(t, plan.StackURL, "templates.test.example")
 }
 
 // The resume hint carries the original profile selection verbatim: a fresh
@@ -124,4 +136,37 @@ func TestBuildQuickCreatePlan_ResumeCommandRidesThePlan(t *testing.T) {
 
 	assert.Contains(t, plan.ResumeCommand, "--profile staging")
 	assert.Contains(t, plan.ResumeCommand, "--account "+testAccount)
+}
+
+// The human emit is one step: a single link plus the provider note, never the
+// old two-step layout.
+func TestPrintLinksHuman_SingleStep(t *testing.T) {
+	plan := buildQuickCreatePlan(defaultPlatform(t), testSetup(), testAccount, testInstallation, options{})
+	var out strings.Builder
+
+	require.NoError(t, printLinksHuman(&out, plan))
+
+	got := out.String()
+	assert.Equal(t, 1, strings.Count(got, "#/stacks/create/review"), "exactly one console link")
+	assert.Contains(t, got, plan.StackURL)
+	assert.Contains(t, got, "--provider-exists")
+	assert.NotContains(t, got, "Step 1")
+	assert.NotContains(t, got, "Step 2")
+	assert.NotContains(t, got, "skip step 1")
+}
+
+// Registration success states the registration and nothing more: the
+// unverified nuance lives in the docs, not the happy-path output. The
+// outcome line rides the shared ack idiom (styled on a TTY, plain piped).
+func TestPrintRegisteredHuman_NoUnverifiedLine(t *testing.T) {
+	var out strings.Builder
+	v := registeredDocument(statusRegisteredUnverified, testAccount, "arn:aws:iam::"+testAccount+":role/r",
+		[]string{"careful"})
+
+	require.NoError(t, printRegisteredHuman(&out, false, nil, v, testInstallation))
+
+	assert.Contains(t, out.String(), "✓ registered aws account "+testAccount)
+	assert.Contains(t, out.String(), "! warning: careful")
+	assert.NotContains(t, out.String(), "not verified")
+	assert.NotContains(t, out.String(), "declared by you")
 }
