@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/platform-engineering-labs/formae/internal/cli/cloudapi"
 	"github.com/platform-engineering-labs/formae/internal/cli/profile/store"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 )
@@ -296,7 +297,7 @@ func (f *syncFixture) tempExists(tempName string) bool {
 // this run's snapshot happens and what is left is the recovery step alone.
 func (f *syncFixture) recoverOnly() syncResult {
 	f.t.Helper()
-	f.client.err = &cloudTransientError{Cause: errors.New("the control plane returned HTTP 503")}
+	f.client.err = &cloudapi.TransientError{Cause: errors.New("the control plane returned HTTP 503")}
 	f.client.snapshot = Snapshot{}
 	result := f.sync()
 	require.Error(f.t, result.Fatal, "the enumeration failed, so the run did not complete")
@@ -446,7 +447,7 @@ func TestSyncEnumerationFailureChangesNothing(t *testing.T) {
 	require.NoError(t, f.sync().Fatal)
 	before := f.entries()
 
-	f.client.err = &cloudTransientError{Cause: errors.New("the control plane returned HTTP 503")}
+	f.client.err = &cloudapi.TransientError{Cause: errors.New("the control plane returned HTTP 503")}
 	f.client.snapshot = Snapshot{}
 
 	result := f.sync()

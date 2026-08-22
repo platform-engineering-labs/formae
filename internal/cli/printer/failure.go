@@ -49,6 +49,37 @@ const (
 	// consumer parses one protocol on every path; PrintFailure only reports
 	// that it did not recognise them.
 	CodeInternal Code = "internal"
+	// CodeHostedRequired: connect ran against a classic profile; only a hosted
+	// installation can be connected to a cloud account.
+	CodeHostedRequired Code = "hosted_required"
+	// CodeAccountMismatch: the stated account is not the one the credentials
+	// (or the role ARN) belong to. Refused before any IAM call.
+	CodeAccountMismatch Code = "account_mismatch"
+	// CodeSSOLoginRequired: the shared-config profile's SSO token is expired;
+	// details carry the exact `aws sso login --profile <p>` command.
+	CodeSSOLoginRequired Code = "sso_login_required"
+	// CodeProvisionFailed: provisioning stopped partway; the message states
+	// what stands, because re-running converges.
+	CodeProvisionFailed Code = "provision_failed"
+	// CodeRoleCollision: the role exists and is not provx-owned for this
+	// subject; never treated as repairable drift.
+	CodeRoleCollision Code = "role_collision"
+	// CodeProviderConflict: the OIDC provider exists with an unexpected shape.
+	CodeProviderConflict Code = "provider_conflict"
+	// CodeRegistrationConflict: a different role ARN is already registered for
+	// this account on this installation.
+	CodeRegistrationConflict Code = "registration_conflict"
+	// CodeNotAuthorized: the control plane answered 403; the caller is not an
+	// admin of this installation. Terminal, not retried.
+	CodeNotAuthorized Code = "not_authorized"
+	// CodeUnsupportedPartition: a non-commercial region, ARN, or STS caller.
+	CodeUnsupportedPartition Code = "unsupported_partition"
+	// CodeControlPlaneTooOld: the installation is listed but the setup
+	// endpoint 404s, so the control plane predates connect.
+	CodeControlPlaneTooOld Code = "control_plane_too_old"
+	// CodeInstallationNotReady: the installation has not applied the
+	// split-key template version yet, or is destroying.
+	CodeInstallationNotReady Code = "installation_not_ready"
 )
 
 // registeredCodes is what may reach the wire. A code absent from here is a
@@ -62,6 +93,18 @@ var registeredCodes = map[Code]bool{
 	CodePluginMissing:    true,
 	CodeSyncIncomplete:   true,
 	CodeInternal:         true,
+
+	CodeHostedRequired:       true,
+	CodeAccountMismatch:      true,
+	CodeSSOLoginRequired:     true,
+	CodeProvisionFailed:      true,
+	CodeRoleCollision:        true,
+	CodeProviderConflict:     true,
+	CodeRegistrationConflict: true,
+	CodeNotAuthorized:        true,
+	CodeUnsupportedPartition: true,
+	CodeControlPlaneTooOld:   true,
+	CodeInstallationNotReady: true,
 }
 
 // Failure is an error a command declares, carrying a code a machine consumer
