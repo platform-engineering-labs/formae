@@ -167,6 +167,25 @@ func (m *StateModel) ClearNativeID(stackIdx, slotIdx int) {
 	delete(m.NativeIDs, nativeIDKey(stackIdx, slotIdx))
 }
 
+// SupersedeSlots marks the given slots as superseded on every currently
+// accepted command. Called when a TTL destroy is observed: every command
+// still in AcceptedCommands was accepted before that destroy, so whatever
+// those commands report for these slots is stale and corrections must not
+// apply it.
+func (m *StateModel) SupersedeSlots(refs []ResourceSlotRef) {
+	if len(refs) == 0 {
+		return
+	}
+	for i := range m.AcceptedCommands {
+		if m.AcceptedCommands[i].SupersededSlots == nil {
+			m.AcceptedCommands[i].SupersededSlots = make(map[ResourceSlotRef]bool, len(refs))
+		}
+		for _, ref := range refs {
+			m.AcceptedCommands[i].SupersededSlots[ref] = true
+		}
+	}
+}
+
 // FindDriftEligibleResource finds a managed resource that exists in the model,
 // has a tracked NativeID, and is untouched by in-flight commands. Used for
 // selecting OOB drift targets: drift is absorbed synchronously via a forced

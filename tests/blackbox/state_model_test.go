@@ -42,7 +42,7 @@ func TestCorrectModelFromCommandOutcome_FailedCreateForcesNotExist(t *testing.T)
 	}
 
 	corrected := map[struct{ stackIdx, slotIdx int }]bool{}
-	correctModelFromCommandOutcome(t, cmd, model, nil, snapshots, corrected, true)
+	correctModelFromCommandOutcome(t, cmd, model, nil, snapshots, corrected, true, nil)
 
 	require.Equal(t, StateNotExist, model.Resource(0, 1).State,
 		"a failed create must leave the slot NotExist, not revert to a stale Exists snapshot")
@@ -68,7 +68,7 @@ func TestCorrectModelFromCommandOutcome_FailedDeleteRevertsToSnapshot(t *testing
 	}
 
 	corrected := map[struct{ stackIdx, slotIdx int }]bool{}
-	correctModelFromCommandOutcome(t, cmd, model, nil, snapshots, corrected, true)
+	correctModelFromCommandOutcome(t, cmd, model, nil, snapshots, corrected, true, nil)
 
 	require.Equal(t, StateExists, model.Resource(0, 1).State,
 		"a failed delete leaves the resource in place, reverting to its Exists snapshot")
@@ -95,8 +95,8 @@ func TestCorrectModelFromCommandOutcome_ReverseOrderFailedCreatesStayNotExist(t 
 	corrected := map[struct{ stackIdx, slotIdx int }]bool{}
 	newerSnap := []ResourceSnapshot{{StackIndex: 0, SlotIndex: 1, State: StateNotExist}}
 	olderSnap := []ResourceSnapshot{{StackIndex: 0, SlotIndex: 1, State: StateExists}} // stale
-	correctModelFromCommandOutcome(t, newerCmd, model, nil, newerSnap, corrected, true)
-	correctModelFromCommandOutcome(t, olderCmd, model, nil, olderSnap, corrected, true)
+	correctModelFromCommandOutcome(t, newerCmd, model, nil, newerSnap, corrected, true, nil)
+	correctModelFromCommandOutcome(t, olderCmd, model, nil, olderSnap, corrected, true, nil)
 
 	require.Equal(t, StateNotExist, model.Resource(0, 1).State,
 		"an older failed-create command must not resurrect a slot from its stale Exists snapshot")
@@ -579,7 +579,7 @@ func TestCorrectModelFromCommandOutcome_UnmentionedCrossStackSlotReverts(t *test
 		ResourceUpdates: nil, // the command died before reaching this slot
 	}
 	corrected := map[struct{ stackIdx, slotIdx int }]bool{}
-	correctModelFromCommandOutcome(t, cmd, model, model.Pool, snapshots, corrected, false)
+	correctModelFromCommandOutcome(t, cmd, model, model.Pool, snapshots, corrected, false, nil)
 
 	require.Equal(t, StateNotExist, model.Resource(1, crossIdx).State,
 		"an unmentioned cross-stack slot in a failed command reverts to its snapshot")
@@ -668,4 +668,55 @@ func TestStateModel_Stack(t *testing.T) {
 	stack1 := model.Stack(1)
 	require.NotNil(t, stack1)
 	assert.Equal(t, "stack-1", stack1.Label)
+}
+
+// A TTL destroy observed via ForceCheckTTLAndWait supersedes every command
+// accepted before it. A stale command that finished Failed but carries a
+// create-Success RU for a cascade-destroyed cross-stack slot must not
+// resurrect that slot in the model: the create would otherwise clear the
+// destroy's authoritative mark and re-apply Exists while the inventory row
+// is gone.
+func TestCorrectModelFromCommandOutcome_TTLSupersededSlotStaysDestroyed(t *testing.T) {
+	model := NewStateModel(3, 10) // pool config with cross-stack slots
+	require.NotNil(t, model.Pool)
+	xslot := -1
+	for i := range model.Pool.Slots {
+		if model.Pool.IsCrossStack(i) {
+			xslot = i
+			break
+		}
+	}
+	require.NotEqual(t, -1, xslot, "pool must have a cross-stack slot")
+
+	// An apply optimistically created the cross-stack slot and was tracked.
+	model.ApplyCreated(2, []int{xslot}, "")
+	model.TrackAcceptedCommand("cmd-old", nil, []ResourceSlotRef{{StackIndex: 2, SlotIndex: xslot}}, 0, true)
+
+	// A TTL destroy of the provider stack is observed and modeled the way
+	// ForceCheckTTLAndWait does it: destroyed, authoritative, and superseding
+	// the outcomes of every command accepted before it.
+	model.ApplyDestroyed(2, []int{xslot})
+	model.MarkAuthoritativeSlot(2, xslot)
+	model.SupersedeSlots([]ResourceSlotRef{{StackIndex: 2, SlotIndex: xslot}})
+
+	// The stale command drains afterwards: Failed overall, but its RU for the
+	// cross-stack slot reported create Success (it completed before the TTL).
+	cmd := &apimodel.Command{
+		CommandID: "cmd-old",
+		State:     "Failed",
+		ResourceUpdates: []apimodel.ResourceUpdate{{
+			StackName:     "stack-2",
+			ResourceLabel: model.LabelForResource(2, xslot),
+			Operation:     "create",
+			State:         "Success",
+		}},
+	}
+	corrected := map[struct{ stackIdx, slotIdx int }]bool{}
+	ac := model.AcceptedCommands[0]
+	correctModelFromCommandOutcome(t, cmd, model, model.Pool, ac.Snapshots, corrected, true, ac.SupersededSlots)
+
+	require.Equal(t, StateNotExist, model.Resource(2, xslot).State,
+		"a TTL-destroyed slot must not be resurrected by a stale command's create RU")
+	require.True(t, model.IsAuthoritativeSlot(2, xslot),
+		"the TTL destroy's authoritative mark must survive the stale correction")
 }
