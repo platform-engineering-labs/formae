@@ -720,3 +720,34 @@ func TestCorrectModelFromCommandOutcome_TTLSupersededSlotStaysDestroyed(t *testi
 	require.True(t, model.IsAuthoritativeSlot(2, xslot),
 		"the TTL destroy's authoritative mark must survive the stale correction")
 }
+
+// A failed command's unmentioned slot was never touched by the agent, so an
+// optimistic property prediction for it must roll back even when the slot's
+// State never changed. A patch that fails on a sibling before reaching the
+// slot would otherwise leave the model expecting merged properties the
+// agent never wrote.
+func TestCorrectModelFromCommandOutcome_UnmentionedSlotRevertsProperties(t *testing.T) {
+	model := NewStateModel(1, 3)
+	model.ApplyCreated(0, []int{1}, `{"Value":"v1"}`)
+
+	// Snapshot at command submission, then the optimistic patch prediction.
+	snapshots := []ResourceSnapshot{{StackIndex: 0, SlotIndex: 1, State: StateExists, Properties: `{"Value":"v1"}`}}
+	model.Resource(0, 1).Properties = `{"Value":"v2"}` // optimistic merge
+
+	cmd := &apimodel.Command{
+		CommandID: "cmd-failed-before-slot",
+		State:     "Failed",
+		ResourceUpdates: []apimodel.ResourceUpdate{{
+			StackName:     "stack-0",
+			ResourceLabel: "res-stack-0-c", // slot 2 — the failing sibling
+			Operation:     "create",
+			State:         "Failed",
+		}},
+	}
+	corrected := map[struct{ stackIdx, slotIdx int }]bool{}
+	correctModelFromCommandOutcome(t, cmd, model, nil, snapshots, corrected, false, nil)
+
+	require.Equal(t, StateExists, model.Resource(0, 1).State)
+	require.Equal(t, `{"Value":"v1"}`, model.Resource(0, 1).Properties,
+		"optimistic properties must revert to the snapshot when the failed command never touched the slot")
+}
