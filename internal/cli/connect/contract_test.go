@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
+	"github.com/platform-engineering-labs/formae/internal/cli/connection"
 	"github.com/platform-engineering-labs/formae/internal/cli/profile/store"
 	pkgauth "github.com/platform-engineering-labs/formae/pkg/auth"
 )
@@ -264,6 +265,80 @@ func decodeOut(t *testing.T, out string) map[string]any {
 	var got map[string]any
 	require.NoError(t, json.Unmarshal([]byte(out), &got), "output is not json: %s", out)
 	return got
+}
+
+// The clean-machine property: a machine that has never been configured gets
+// hosted_required through the machine protocol, and deciding that never
+// manufactures a profile. Both env pairs are cleared, so this is the exact
+// state a new machine is in.
+func TestContractCleanMachineGetsHostedRequiredAndBootstrapsNothing(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("FORMAE_CONFIG_DIR", dir)
+	clearConnectEnv(t)
+	for _, k := range []string{"FORMAE_CLOUD_URL", "FORMAE_CLOUD_ISSUER"} {
+		k := k
+		if old, ok := os.LookupEnv(k); ok {
+			t.Cleanup(func() { _ = os.Setenv(k, old) })
+		}
+		require.NoError(t, os.Unsetenv(k))
+	}
+	stubCredentials(t, bearerAnswer("t1"))
+
+	out, err := runConnect(t, "aws", "--account", testAccount, "--quick-create", "--no-input",
+		"--output-consumer", "machine", "--output-schema", "json")
+
+	require.Error(t, err)
+	got := decodeOut(t, out)
+	assert.Equal(t, "hosted_required", got["code"])
+	assert.NoFileExists(t, store.New(dir).ProfilePath("default"),
+		"connect bootstrapped a classic localhost profile")
+}
+
+// The negative control that gives the property its teeth: a command that does
+// bootstrap creates the default on the very same directory, so the absence
+// above is about connect and not about a temp dir nothing ever wrote to.
+func TestContractCleanMachineNegativeControl(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("FORMAE_CONFIG_DIR", dir)
+
+	c := connection.ConnectionCmd()
+	c.SetOut(io.Discard)
+	c.SetErr(io.Discard)
+	c.SetArgs([]string{"resolve", "--output-consumer", "machine", "--output-schema", "json"})
+	_ = c.Execute()
+
+	assert.FileExists(t, store.New(dir).ProfilePath("default"),
+		"the bootstrapping path no longer bootstraps, so the clean-machine assertion proves nothing")
+}
+
+func TestContractYAMLVariant(t *testing.T) {
+	cp := newControlPlane(t)
+	seedProfile(t, cp, hostedProfile(contractInstallation))
+	stubCredentials(t, bearerAnswer("t1"))
+
+	out, err := runConnect(t, "aws", "--account", testAccount, "--role-arn", contractRoleArn, "--no-input",
+		"--output-consumer", "machine", "--output-schema", "yaml")
+
+	require.NoError(t, err, "out: %s", out)
+	assert.Contains(t, out, "phase: registered")
+	assert.Contains(t, out, "schemaVersion: 1")
+	assert.Contains(t, out, "status: registered_unverified")
+}
+
+// Human output renders the same facts as prose, never the machine document.
+func TestContractHumanOutputCarriesNoJSON(t *testing.T) {
+	cp := newControlPlane(t)
+	seedProfile(t, cp, hostedProfile(contractInstallation))
+	stubCredentials(t, bearerAnswer("t1"))
+
+	out, err := runConnect(t, "aws", "--account", testAccount, "--role-arn", contractRoleArn, "--no-input")
+
+	require.NoError(t, err, "out: %s", out)
+	assert.NotContains(t, out, "schemaVersion")
+	assert.NotContains(t, out, "{")
+	assert.Contains(t, out, "registered aws account "+testAccount)
+	assert.Contains(t, out, contractRoleArn)
+	assert.Contains(t, out, "not verified by formae")
 }
 
 func TestContractClassicProfileIsHostedRequired(t *testing.T) {
