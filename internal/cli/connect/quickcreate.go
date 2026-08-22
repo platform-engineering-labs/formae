@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -195,9 +196,19 @@ func resumeCommand(opts options, account string) string {
 	sel := ""
 	switch {
 	case opts.ProfileFlag != "":
-		sel = " --profile " + opts.ProfileFlag
+		sel = " --profile " + shellQuote(opts.ProfileFlag)
 	case opts.ConfigFlag != "":
-		sel = " --config " + opts.ConfigFlag
+		sel = " --config " + shellQuote(opts.ConfigFlag)
 	}
 	return "formae connect" + sel + " aws --account " + account + " --role-arn <RoleArn stack output>"
+}
+
+// shellQuote makes a value safe to paste into a POSIX shell. Plain
+// flag-safe values pass through untouched so the common case stays
+// readable; anything else is single-quoted with embedded quotes escaped.
+func shellQuote(s string) string {
+	if s != "" && !strings.ContainsAny(s, " \t\n'\"\\$`&|;()<>*?[]#~") {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
