@@ -486,6 +486,85 @@ func TestContractMultiInstallationHintWarnsAndProceeds(t *testing.T) {
 	require.Len(t, cp.posts(), 1, "the run proceeds to registration")
 }
 
+// A role ARN that fails validation is refused before any control-plane
+// request: no setup read, no registration, nothing for a stub to see.
+func TestContractRoleArnValidationPrecedesEveryWrite(t *testing.T) {
+	tests := []struct {
+		name string
+		arn  string
+		code string
+	}{
+		{name: "malformed", arn: "not-an-arn", code: "unsupported_partition"},
+		{name: "govcloud", arn: "arn:aws-us-gov:iam::" + testAccount + ":role/r", code: "unsupported_partition"},
+		{name: "china", arn: "arn:aws-cn:iam::" + testAccount + ":role/r", code: "unsupported_partition"},
+		{name: "wrong account", arn: "arn:aws:iam::999999999999:role/r", code: "account_mismatch"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cp := newControlPlane(t)
+			seedProfile(t, cp, hostedProfile(contractInstallation))
+			stubCredentials(t, bearerAnswer("t1"))
+
+			out, err := runConnect(t, "aws", "--account", testAccount, "--role-arn", tc.arn, "--no-input",
+				"--output-consumer", "machine", "--output-schema", "json")
+
+			require.Error(t, err)
+			got := decodeOut(t, out)
+			assert.Equal(t, tc.code, got["code"])
+			assert.Empty(t, cp.requests(), "validation must precede every control-plane request")
+		})
+	}
+}
+
+// A role name differing from the installation's cloudRoleName registers the
+// ARN the user named, with a warning naming both.
+func TestContractNameMismatchRegistersTheActualArnWithAWarning(t *testing.T) {
+	ownArn := "arn:aws:iam::" + testAccount + ":role/my-own-role"
+	cp := newControlPlane(t)
+	seedProfile(t, cp, hostedProfile(contractInstallation))
+	stubCredentials(t, bearerAnswer("t1"))
+
+	out, err := runConnect(t, "aws", "--account", testAccount, "--role-arn", ownArn, "--no-input",
+		"--output-consumer", "machine", "--output-schema", "json")
+
+	require.NoError(t, err, "out: %s", out)
+	got := decodeOut(t, out)
+	assert.Equal(t, ownArn, got["roleArn"], "the actual ARN is registered, not the expected one")
+	warnings, ok := got["warnings"].([]any)
+	require.True(t, ok, "the mismatch warning rides the document: %s", out)
+	joined := fmt.Sprintf("%v", warnings)
+	assert.Contains(t, joined, "my-own-role")
+	assert.Contains(t, joined, contractRoleName)
+
+	posts := cp.posts()
+	require.Len(t, posts, 1)
+	assert.Contains(t, posts[0].Body, ownArn)
+}
+
+// --quick-create --no-input emits the links document and registers nothing.
+func TestContractQuickCreateNoInputEmitsLinksAndRegistersNothing(t *testing.T) {
+	cp := newControlPlane(t)
+	seedProfile(t, cp, hostedProfile(contractInstallation))
+	stubCredentials(t, bearerAnswer("t1"))
+
+	out, err := runConnect(t, "aws", "--account", testAccount, "--quick-create", "--no-input",
+		"--output-consumer", "machine", "--output-schema", "json")
+
+	require.NoError(t, err, "out: %s", out)
+	got := decodeOut(t, out)
+	assert.Equal(t, float64(1), got["schemaVersion"])
+	assert.Equal(t, "links", got["phase"])
+	assert.Equal(t, "aws", got["cloud"])
+	assert.Equal(t, testAccount, got["account"])
+	assert.Equal(t, contractInstallation, got["installation"])
+	assert.Contains(t, got["providerStackUrl"], "formae-oidc-provider")
+	assert.Contains(t, got["roleStackUrl"], "formae-connect-"+contractInstallation)
+	assert.Equal(t, contractRoleArn, got["expectedRoleArn"])
+	assert.Contains(t, got["resumeCommand"], "--role-arn")
+	assert.Empty(t, cp.posts(), "quick-create registers nothing")
+}
+
 // 409 answers are disambiguated by reading the listing: the same ARN is the
 // idempotent success, a different one is a conflict naming both.
 func TestContractRegistrationConflict(t *testing.T) {

@@ -5,9 +5,15 @@
 package connect
 
 import (
+	"fmt"
+	"io"
 	"net/url"
 
+	"github.com/spf13/cobra"
+
 	"github.com/platform-engineering-labs/formae/internal/cli/cloudapi"
+	clicmd "github.com/platform-engineering-labs/formae/internal/cli/cmd"
+	"github.com/platform-engineering-labs/formae/internal/cli/printer"
 )
 
 // The published template coordinates: content-addressed keys AND pinned S3
@@ -85,6 +91,67 @@ func buildQuickCreatePlan(p connectPlatform, setup cloudapi.CloudConnectionSetup
 		SkipStepOne:     "If this account was connected before, the identity provider already exists — skip step 1.",
 		CapabilityNote:  "Both stacks require the CAPABILITY_NAMED_IAM acknowledgement in the console.",
 	}
+}
+
+// runQuickCreate is the --quick-create path: read the coordinates, assemble
+// the two console links, emit them, and stop. Nothing is registered — the
+// user comes back with the stack's RoleArn output and finishes with
+// --role-arn (or, interactively, pastes it into the in-sitting wait).
+func runQuickCreate(cc *cobra.Command, opts options, consumer printer.Consumer, schema string) error {
+	if opts.Account == "" {
+		return clicmd.FlagErrorf("--quick-create requires --account")
+	}
+
+	s, err := openSession(cc.Context(), opts)
+	if err != nil {
+		return err
+	}
+
+	warnings := s.Warnings
+	if elsewhere := connectedElsewhere(s.Setup.AccountsConnectedHint, opts.Account, s.InstallationID); len(elsewhere) > 0 {
+		warnings = append(warnings, multiInstallationWarning(opts.Account, elsewhere))
+	}
+
+	plan := buildQuickCreatePlan(s.Platform, s.Setup, opts.Account, s.InstallationID, opts)
+	plan.Warnings = warnings
+
+	if consumer == printer.ConsumerMachine {
+		return emitLinks(cc.OutOrStdout(), schema, linksDocument(plan, opts.Account, s.InstallationID, warnings))
+	}
+	return printLinksHuman(cc.OutOrStdout(), plan)
+}
+
+// printLinksHuman renders the plan as the two console steps.
+func printLinksHuman(w io.Writer, plan quickCreatePlan) error {
+	lines := []string{
+		"Two CloudFormation stacks establish the trust. Open each link, review, and create the stack.",
+		"",
+		"Step 1 — the formae identity provider (once per account):",
+		"  " + plan.ProviderStackURL,
+		"  " + plan.SkipStepOne,
+		"  template sha256: " + plan.ProviderDigest,
+		"",
+		"Step 2 — the connect role (" + plan.RoleStackName + "):",
+		"  " + plan.RoleStackURL,
+		"  template sha256: " + plan.RoleDigest,
+		"",
+		plan.CapabilityNote,
+		"",
+		"When the role stack is applied, its RoleArn output should be:",
+		"  " + plan.ExpectedRoleArn,
+		"",
+		"Finish by registering it:",
+		"  " + plan.ResumeCommand,
+	}
+	for _, warning := range plan.Warnings {
+		lines = append(lines, "", "warning: "+warning)
+	}
+	for _, line := range lines {
+		if _, err := fmt.Fprintln(w, line); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // resumeCommand prints the exact command that finishes an interrupted session,
