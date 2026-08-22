@@ -1042,8 +1042,9 @@ func SimpleForma(n int) *pkgmodel.Forma {
 		Resources: resources,
 		Targets: []pkgmodel.Target{
 			{
-				Label:     "test-target",
-				Namespace: "Test",
+				Label:        "test-target",
+				Namespace:    "Test",
+				Discoverable: true,
 			},
 		},
 	}
