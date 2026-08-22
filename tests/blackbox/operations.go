@@ -147,6 +147,14 @@ type AcceptedCommand struct {
 	// DrainPendingCommands can include its outcome when resolving conflicts
 	// between overlapping commands (reverse-order processing).
 	Resolved bool
+	// SupersededSlots marks slots whose outcome in THIS command has been
+	// overtaken by a later event the drain's per-pass corrected map cannot
+	// see (a TTL destroy observed via ForceCheckTTLAndWait, which folds its
+	// command into the model directly instead of leaving it in
+	// AcceptedCommands). Corrections skip these slots: the newer event is
+	// ground truth, and without this a stale create-Success RU would clear
+	// the destroy's authoritative mark and resurrect the slot in the model.
+	SupersededSlots map[ResourceSlotRef]bool
 }
 
 type ResourceSlotRef struct {

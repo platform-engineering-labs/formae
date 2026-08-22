@@ -345,7 +345,7 @@ func (h *TestHarness) reconcileCompletedAcceptedCommands(t *testing.T, model *St
 	for i := len(completed) - 1; i >= 0; i-- {
 		cc := completed[i]
 		t.Logf("reconcileCompletedAcceptedCommands: command %s completed early (state=%s)", cc.ac.CommandID, cc.cmd.State)
-		correctModelFromCommandOutcome(t, &cc.cmd, model, model.Pool, cc.ac.Snapshots, corrected, cc.ac.IsReconcile)
+		correctModelFromCommandOutcome(t, &cc.cmd, model, model.Pool, cc.ac.Snapshots, corrected, cc.ac.IsReconcile, cc.ac.SupersededSlots)
 	}
 
 	model.AcceptedCommands = remaining
@@ -866,7 +866,7 @@ func applyReconcileGuarantee(model *StateModel, stackIdx int, reconcileIDs []int
 // first) by DrainPendingCommands. The corrected map tracks which resources
 // have already been corrected by a later command — earlier commands skip
 // those resources so the latest outcome wins.
-func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *StateModel, pool *ResourcePool, snapshots []ResourceSnapshot, corrected map[struct{ stackIdx, slotIdx int }]bool, isReconcile bool) {
+func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *StateModel, pool *ResourcePool, snapshots []ResourceSnapshot, corrected map[struct{ stackIdx, slotIdx int }]bool, isReconcile bool, superseded map[ResourceSlotRef]bool) {
 	t.Helper()
 
 	if cmd == nil {
@@ -897,6 +897,15 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 		}
 
 		key := slotKey{stackIdx, slotIdx}
+
+		// Skip slots whose outcome in this command was superseded by a later
+		// event (a TTL destroy observed outside the drain's command list).
+		if superseded[ResourceSlotRef{StackIndex: stackIdx, SlotIndex: slotIdx}] {
+			t.Logf("correctModelFromCommandOutcome: skipping stack=%s slot=%d (superseded by TTL destroy)",
+				model.Stack(stackIdx).Label, slotIdx)
+			delete(snapBySlot, key)
+			continue
+		}
 
 		// Skip if a later command already corrected this resource.
 		if corrected[key] {
@@ -1003,6 +1012,9 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 	if cmd.State != "Success" {
 		for key, snap := range snapBySlot {
 			if corrected[key] {
+				continue
+			}
+			if superseded[ResourceSlotRef{StackIndex: key.stackIdx, SlotIndex: key.slotIdx}] {
 				continue
 			}
 			if model.IsAuthoritativeSlot(key.stackIdx, key.slotIdx) {
@@ -2056,7 +2068,7 @@ func (h *TestHarness) DrainPendingCommands(t *testing.T, model *StateModel, time
 	for i := len(drained) - 1; i >= 0; i-- {
 		dc := drained[i]
 		if dc.cmd != nil {
-			correctModelFromCommandOutcome(t, dc.cmd, model, model.Pool, dc.ac.Snapshots, corrected, dc.ac.IsReconcile)
+			correctModelFromCommandOutcome(t, dc.cmd, model, model.Pool, dc.ac.Snapshots, corrected, dc.ac.IsReconcile, dc.ac.SupersededSlots)
 		}
 	}
 	h.reconcileAmbiguousFailedCommands(t, model, drained)
@@ -2233,6 +2245,32 @@ func (h *TestHarness) ForceCheckTTLAndWait(t *testing.T, model *StateModel) {
 					}
 				}
 			}
+
+			// Every command still in AcceptedCommands was accepted before this
+			// destroy was observed, so its outcomes for the destroyed slots are
+			// stale. The drain's per-pass corrected map cannot express that (the
+			// TTL command is folded in here, not drained), and the authoritative
+			// mark alone does not survive a stale create-Success RU — the
+			// correction path lets creates clear authoritative status. Mark the
+			// destroyed slots superseded on the surviving commands so their
+			// corrections skip them.
+			var destroyedRefs []ResourceSlotRef
+			for slotIdx := range model.Stack(stackIdx).Resources {
+				destroyedRefs = append(destroyedRefs, ResourceSlotRef{StackIndex: stackIdx, SlotIndex: slotIdx})
+			}
+			if model.Pool != nil && expiredLabel == model.ProviderStackLabel {
+				for otherStackIdx := range model.Stacks {
+					if otherStackIdx == stackIdx {
+						continue
+					}
+					for slotIdx := range model.Stack(otherStackIdx).Resources {
+						if model.Pool.IsCrossStack(slotIdx) {
+							destroyedRefs = append(destroyedRefs, ResourceSlotRef{StackIndex: otherStackIdx, SlotIndex: slotIdx})
+						}
+					}
+				}
+			}
+			model.SupersedeSlots(destroyedRefs)
 		}
 		model.Stacks[stackIdx].TTLExpired = false
 		t.Logf("ForceCheckTTLAndWait: stack %s command %s completed: %s", expiredLabel, commandID, cmd.State)
