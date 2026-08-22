@@ -25,10 +25,6 @@ type platform struct {
 	Issuer string
 }
 
-// errPlatformHalfSet is wrapped into the error resolvePlatform returns when
-// exactly one of the origin/issuer overrides is set.
-var errPlatformHalfSet = cloudapi.ErrPlatformHalfSet
-
 // resolvePlatform resolves the control-plane origin and issuer as a pair,
 // delegating to cloudapi.ResolvePlatform (flag beats env var beats built-in
 // default; a half-set override pair is refused).

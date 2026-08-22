@@ -116,9 +116,9 @@ func (c *httpCloudClient) GetCloudConnectionSetup(ctx context.Context, bearer, i
 		return CloudConnectionSetup{}, err
 	}
 
-	switch {
-	case status == http.StatusOK:
-	case status == http.StatusConflict:
+	switch status {
+	case http.StatusOK:
+	case http.StatusConflict:
 		if e := decodeAPIError(data); e.Error.Code == "installation_not_ready" {
 			return CloudConnectionSetup{}, &NotReadyError{State: clip(e.Error.Details.State, maxWarnedRunes)}
 		}
@@ -207,12 +207,12 @@ func (c *httpCloudClient) RegisterCloudConnection(ctx context.Context, bearer, i
 		return RegisterOutcome{}, err
 	}
 
-	switch {
-	case status == http.StatusCreated:
+	switch status {
+	case http.StatusCreated:
 		// The created row is the registration echoed back; nothing in it is
 		// acted on, so nothing in it is parsed.
 		return RegisterOutcome{Created: true}, nil
-	case status == http.StatusConflict:
+	case http.StatusConflict:
 		return RegisterOutcome{}, &ConflictError{}
 	default:
 		if err := classifyStatus(status, "cloud-connection registration"); err != nil {
