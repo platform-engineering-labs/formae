@@ -1,0 +1,526 @@
+// © 2026 Platform Engineering Labs Inc.
+//
+// SPDX-License-Identifier: FSL-1.1-ALv2
+
+//go:build unit
+
+package connect
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/platform-engineering-labs/formae/internal/cli/app"
+	"github.com/platform-engineering-labs/formae/internal/cli/profile/store"
+	pkgauth "github.com/platform-engineering-labs/formae/pkg/auth"
+)
+
+// These exercise the command as a consumer meets it: real flag parsing, real
+// profile selection, real rendering, against an httptest control plane whose
+// stubs encode the shared contract byte for byte.
+
+const (
+	contractInstallation = "3HzFPXfPDGhwLJJVtaHbmFs6vLa"
+	otherInstallation    = "2ZaBcDeFgHiJkLmNoPqRsTuVwXy"
+	contractRoleName     = "formae-connect-" + contractInstallation
+	contractRoleArn      = "arn:aws:iam::" + testAccount + ":role/" + contractRoleName
+)
+
+const classicProfile = `amends "formae:/Config.pkl"
+
+cli {
+    connection = new Classic {
+        url = "http://localhost"
+        port = 49684
+    }
+}
+`
+
+func hostedProfile(installation string) string {
+	return `amends "formae:/Config.pkl"
+
+cli {
+    connection = new Hosted {
+        endpoint = "https://cloud.formae.ai"
+        installation = "` + installation + `"
+        auth = new Dynamic {
+            type = "oidc"
+            role = "cli"
+            issuer = "https://auth.formae.ai"
+        }
+    }
+}
+`
+}
+
+// cpRequest is one request the stub control plane saw.
+type cpRequest struct {
+	Method string
+	Path   string
+	Auth   string
+	Body   string
+}
+
+// controlPlane is a configurable stub of the endpoints connect drives.
+type controlPlane struct {
+	mu   sync.Mutex
+	reqs []cpRequest
+
+	setupStatus int
+	setupBody   string
+
+	registerStatus int
+	registerBody   string
+
+	connectionsBody string
+
+	meStatus int
+	meBody   string
+
+	srv *httptest.Server
+}
+
+func newControlPlane(t *testing.T) *controlPlane {
+	t.Helper()
+	cp := &controlPlane{
+		setupStatus:     http.StatusOK,
+		registerStatus:  http.StatusCreated,
+		registerBody:    `{"cloud":"aws","account":"` + testAccount + `","roleArn":"` + contractRoleArn + `"}`,
+		connectionsBody: `{"results":[]}`,
+		meStatus:        http.StatusOK,
+		meBody:          `{"results":[]}`,
+	}
+	cp.setupBody = defaultSetupBody(t, nil)
+
+	cp.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		cp.mu.Lock()
+		cp.reqs = append(cp.reqs, cpRequest{
+			Method: r.Method,
+			Path:   r.URL.Path,
+			Auth:   r.Header.Get("Authorization"),
+			Body:   string(body),
+		})
+		status, answer := cp.route(r)
+		cp.mu.Unlock()
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(answer))
+	}))
+	t.Cleanup(cp.srv.Close)
+	return cp
+}
+
+func (cp *controlPlane) route(r *http.Request) (int, string) {
+	switch {
+	case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/cloud-connection-setup"):
+		return cp.setupStatus, cp.setupBody
+	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/cloud-connections"):
+		return cp.registerStatus, cp.registerBody
+	case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/cloud-connections"):
+		return http.StatusOK, cp.connectionsBody
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/me/installations":
+		return cp.meStatus, cp.meBody
+	default:
+		return http.StatusNotFound, `{"error":{"code":"not_found"}}`
+	}
+}
+
+func (cp *controlPlane) requests() []cpRequest {
+	cp.mu.Lock()
+	defer cp.mu.Unlock()
+	return append([]cpRequest(nil), cp.reqs...)
+}
+
+func (cp *controlPlane) posts() []cpRequest {
+	var posts []cpRequest
+	for _, r := range cp.requests() {
+		if r.Method == http.MethodPost {
+			posts = append(posts, r)
+		}
+	}
+	return posts
+}
+
+func defaultSetupBody(t *testing.T, hints []map[string]any) string {
+	t.Helper()
+	if hints == nil {
+		hints = []map[string]any{}
+	}
+	data, err := json.Marshal(map[string]any{
+		"cloudSubject":          "fai:acme/" + contractInstallation,
+		"cloudRoleName":         contractRoleName,
+		"issuer":                "https://oidc.cloud.formae.ai",
+		"accountsConnectedHint": hints,
+	})
+	require.NoError(t, err)
+	return string(data)
+}
+
+func meBodyListing(t *testing.T, installations ...string) string {
+	t.Helper()
+	records := make([]map[string]any, 0, len(installations))
+	for _, id := range installations {
+		records = append(records, map[string]any{
+			"installationId":   id,
+			"installationName": "prod",
+			"tenantName":       "acme",
+			"orgName":          "acme-inc",
+			"endpoint":         "https://cloud.formae.ai",
+			"state":            "active",
+		})
+	}
+	data, err := json.Marshal(map[string]any{"results": records})
+	require.NoError(t, err)
+	return string(data)
+}
+
+// seedProfile writes a config dir holding one profile and points formae at it
+// and at the stub control plane.
+func seedProfile(t *testing.T, cp *controlPlane, body string) string {
+	t.Helper()
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "profiles"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "profiles", "prod.pkl"), []byte(body), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "active"), []byte("prod\n"), 0o600))
+	t.Setenv("FORMAE_CONFIG_DIR", dir)
+	pointEnvAt(t, cp)
+	return dir
+}
+
+func pointEnvAt(t *testing.T, cp *controlPlane) {
+	t.Helper()
+	clearConnectEnv(t)
+	if cp != nil {
+		t.Setenv("FORMAE_CLOUD_URL", cp.srv.URL)
+	} else {
+		t.Setenv("FORMAE_CLOUD_URL", "http://127.0.0.1:1")
+	}
+	t.Setenv("FORMAE_CLOUD_ISSUER", "https://auth.formae.ai")
+}
+
+// stubCreds answers GetAuthHeader from a script of bearers and errors, and
+// records the force flag of every call.
+type stubCreds struct {
+	mu      sync.Mutex
+	answers []func() (*pkgauth.GetAuthHeaderResponse, error)
+	forced  []bool
+	calls   int
+}
+
+func (s *stubCreds) GetAuthHeader(forceRefresh bool) (*pkgauth.GetAuthHeaderResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.forced = append(s.forced, forceRefresh)
+	i := s.calls
+	s.calls++
+	if i >= len(s.answers) {
+		i = len(s.answers) - 1
+	}
+	return s.answers[i]()
+}
+
+func bearerAnswer(token string) func() (*pkgauth.GetAuthHeaderResponse, error) {
+	return func() (*pkgauth.GetAuthHeaderResponse, error) {
+		return &pkgauth.GetAuthHeaderResponse{
+			Headers: map[string][]string{"Authorization": {"Bearer " + token}},
+		}, nil
+	}
+}
+
+func refusedAnswer() func() (*pkgauth.GetAuthHeaderResponse, error) {
+	return func() (*pkgauth.GetAuthHeaderResponse, error) {
+		return &pkgauth.GetAuthHeaderResponse{Error: "session expired", ErrorCode: "session_expired"}, nil
+	}
+}
+
+// stubCredentials installs creds as the credential provider for the run.
+func stubCredentials(t *testing.T, answers ...func() (*pkgauth.GetAuthHeaderResponse, error)) *stubCreds {
+	t.Helper()
+	creds := &stubCreds{answers: answers}
+	restore := newCredentials
+	newCredentials = func(_ *app.App) credentialProvider { return creds }
+	t.Cleanup(func() { newCredentials = restore })
+	return creds
+}
+
+func registerOnlyArgs() []string {
+	return []string{"aws", "--account", testAccount, "--role-arn", contractRoleArn, "--no-input",
+		"--output-consumer", "machine", "--output-schema", "json"}
+}
+
+func decodeOut(t *testing.T, out string) map[string]any {
+	t.Helper()
+	var got map[string]any
+	require.NoError(t, json.Unmarshal([]byte(out), &got), "output is not json: %s", out)
+	return got
+}
+
+func TestContractClassicProfileIsHostedRequired(t *testing.T) {
+	cp := newControlPlane(t)
+	seedProfile(t, cp, classicProfile)
+	stubCredentials(t, bearerAnswer("t1"))
+
+	out, err := runConnect(t, registerOnlyArgs()...)
+
+	require.Error(t, err)
+	got := decodeOut(t, out)
+	assert.Equal(t, "hosted_required", got["code"])
+	assert.Empty(t, cp.requests(), "a classic profile makes no control-plane request")
+}
+
+// A machine that has never been configured gets hosted_required, and the run
+// manufactures no classic default profile deciding it.
+func TestContractBareMachineIsHostedRequiredAndBootstrapsNothing(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("FORMAE_CONFIG_DIR", dir)
+	pointEnvAt(t, nil)
+	stubCredentials(t, bearerAnswer("t1"))
+
+	out, err := runConnect(t, registerOnlyArgs()...)
+
+	require.Error(t, err)
+	got := decodeOut(t, out)
+	assert.Equal(t, "hosted_required", got["code"])
+	assert.NoFileExists(t, store.New(dir).ProfilePath("default"),
+		"connect bootstrapped a classic localhost profile")
+}
+
+func TestContractSetupForbiddenIsNotAuthorized(t *testing.T) {
+	cp := newControlPlane(t)
+	cp.setupStatus = http.StatusForbidden
+	cp.setupBody = `{"error":{"code":"forbidden"}}`
+	seedProfile(t, cp, hostedProfile(contractInstallation))
+	stubCredentials(t, bearerAnswer("t1"))
+
+	out, err := runConnect(t, registerOnlyArgs()...)
+
+	require.Error(t, err)
+	got := decodeOut(t, out)
+	assert.Equal(t, "not_authorized", got["code"])
+	assert.Empty(t, cp.posts(), "a refused setup registers nothing")
+}
+
+// A 404 from the setup endpoint is ambiguous on its own; the listing the
+// caller can already fetch disambiguates it.
+func TestContractSetup404Disambiguation(t *testing.T) {
+	t.Run("listed installation means the control plane is too old", func(t *testing.T) {
+		cp := newControlPlane(t)
+		cp.setupStatus = http.StatusNotFound
+		cp.setupBody = `{"error":{"code":"not_found"}}`
+		cp.meBody = meBodyListing(t, contractInstallation)
+		seedProfile(t, cp, hostedProfile(contractInstallation))
+		stubCredentials(t, bearerAnswer("t1"))
+
+		out, err := runConnect(t, registerOnlyArgs()...)
+
+		require.Error(t, err)
+		got := decodeOut(t, out)
+		assert.Equal(t, "control_plane_too_old", got["code"])
+	})
+
+	t.Run("an authoritative listing without it means not visible", func(t *testing.T) {
+		cp := newControlPlane(t)
+		cp.setupStatus = http.StatusNotFound
+		cp.setupBody = `{"error":{"code":"not_found"}}`
+		cp.meBody = meBodyListing(t, otherInstallation)
+		seedProfile(t, cp, hostedProfile(contractInstallation))
+		stubCredentials(t, bearerAnswer("t1"))
+
+		out, err := runConnect(t, registerOnlyArgs()...)
+
+		require.Error(t, err)
+		got := decodeOut(t, out)
+		assert.Equal(t, "not_authorized", got["code"])
+		details, ok := got["details"].(map[string]any)
+		require.True(t, ok, "the refusal carries details: %s", out)
+		assert.Equal(t, "not_visible", details["reason"])
+		assert.Contains(t, got["message"], "login", "the guidance names refreshing the grants")
+	})
+
+	t.Run("a non-authoritative listing concludes nothing about authorization", func(t *testing.T) {
+		cp := newControlPlane(t)
+		cp.setupStatus = http.StatusNotFound
+		cp.setupBody = `{"error":{"code":"not_found"}}`
+		cp.meBody = `{"results":[],"nextPageToken":"abc"}` // one page of several
+		seedProfile(t, cp, hostedProfile(contractInstallation))
+		stubCredentials(t, bearerAnswer("t1"))
+
+		out, err := runConnect(t, registerOnlyArgs()...)
+
+		require.Error(t, err)
+		got := decodeOut(t, out)
+		assert.NotEqual(t, "not_authorized", got["code"],
+			"an incomplete listing licenses no claim about authorization: %s", out)
+		assert.NotEqual(t, "control_plane_too_old", got["code"])
+	})
+}
+
+func TestContractNotReadyCarriesTheState(t *testing.T) {
+	cp := newControlPlane(t)
+	cp.setupStatus = http.StatusConflict
+	cp.setupBody = `{"error":{"code":"installation_not_ready","message":"not ready","details":{"state":"provisioning"}}}`
+	seedProfile(t, cp, hostedProfile(contractInstallation))
+	stubCredentials(t, bearerAnswer("t1"))
+
+	out, err := runConnect(t, registerOnlyArgs()...)
+
+	require.Error(t, err)
+	got := decodeOut(t, out)
+	assert.Equal(t, "installation_not_ready", got["code"])
+	details, ok := got["details"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "provisioning", details["state"])
+}
+
+// The issuer the setup response names must be the pinned one; anything else
+// stops the run before any further step.
+func TestContractIssuerPin(t *testing.T) {
+	t.Run("a foreign issuer is refused", func(t *testing.T) {
+		cp := newControlPlane(t)
+		cp.setupBody = strings.Replace(defaultSetupBody(t, nil),
+			"https://oidc.cloud.formae.ai", "https://oidc.evil.example", 1)
+		seedProfile(t, cp, hostedProfile(contractInstallation))
+		stubCredentials(t, bearerAnswer("t1"))
+
+		out, err := runConnect(t, registerOnlyArgs()...)
+
+		require.Error(t, err)
+		got := decodeOut(t, out)
+		assert.Equal(t, "untrusted_issuer", got["code"])
+		assert.Empty(t, cp.posts(), "an untrusted issuer registers nothing")
+	})
+
+	t.Run("a slash-terminated spelling of the pinned issuer passes", func(t *testing.T) {
+		cp := newControlPlane(t)
+		cp.setupBody = strings.Replace(defaultSetupBody(t, nil),
+			"https://oidc.cloud.formae.ai", "https://oidc.cloud.formae.ai/", 1)
+		seedProfile(t, cp, hostedProfile(contractInstallation))
+		stubCredentials(t, bearerAnswer("t1"))
+
+		out, err := runConnect(t, registerOnlyArgs()...)
+
+		require.NoError(t, err, "out: %s", out)
+		got := decodeOut(t, out)
+		assert.Equal(t, "registered", got["phase"])
+	})
+}
+
+// The credential is force-refreshed at both control-plane boundaries, and a
+// credential that expires between them stops the run before the registration
+// POST: no request carries a stale bearer.
+func TestContractCredentialExpiryBetweenTheBoundaries(t *testing.T) {
+	cp := newControlPlane(t)
+	seedProfile(t, cp, hostedProfile(contractInstallation))
+	creds := stubCredentials(t, bearerAnswer("fresh-one"), refusedAnswer())
+
+	out, err := runConnect(t, registerOnlyArgs()...)
+
+	require.Error(t, err)
+	got := decodeOut(t, out)
+	assert.Equal(t, "auth_failed", got["code"])
+	assert.Empty(t, cp.posts(), "no registration POST may carry a stale bearer")
+	require.Equal(t, 2, creds.calls, "both boundaries mint their own credential")
+	assert.Equal(t, []bool{true, true}, creds.forced, "both boundaries force-refresh")
+}
+
+func TestContractRegisterSucceeds(t *testing.T) {
+	cp := newControlPlane(t)
+	seedProfile(t, cp, hostedProfile(contractInstallation))
+	stubCredentials(t, bearerAnswer("t1"))
+
+	out, err := runConnect(t, registerOnlyArgs()...)
+
+	require.NoError(t, err, "out: %s", out)
+	got := decodeOut(t, out)
+	assert.Equal(t, float64(1), got["schemaVersion"])
+	assert.Equal(t, "registered", got["phase"])
+	assert.Equal(t, "registered_unverified", got["status"])
+	assert.Equal(t, "aws", got["cloud"])
+	assert.Equal(t, testAccount, got["account"])
+	assert.Equal(t, contractRoleArn, got["roleArn"])
+
+	posts := cp.posts()
+	require.Len(t, posts, 1)
+	assert.Equal(t, "/api/v1/installations/"+contractInstallation+"/cloud-connections", posts[0].Path)
+	assert.JSONEq(t,
+		`{"cloud":"aws","account":"`+testAccount+`","roleArn":"`+contractRoleArn+`"}`,
+		posts[0].Body)
+	assert.Equal(t, "Bearer t1", posts[0].Auth)
+}
+
+// The hint naming this account on another installation warns and proceeds:
+// in --no-input the warning rides the machine document.
+func TestContractMultiInstallationHintWarnsAndProceeds(t *testing.T) {
+	cp := newControlPlane(t)
+	cp.setupBody = defaultSetupBody(t, []map[string]any{{
+		"cloud":            "aws",
+		"account":          testAccount,
+		"installationId":   otherInstallation,
+		"installationName": "staging",
+		"tenantName":       "acme",
+		"orgName":          "acme-inc",
+	}})
+	seedProfile(t, cp, hostedProfile(contractInstallation))
+	stubCredentials(t, bearerAnswer("t1"))
+
+	out, err := runConnect(t, registerOnlyArgs()...)
+
+	require.NoError(t, err, "out: %s", out)
+	got := decodeOut(t, out)
+	assert.Equal(t, "registered_unverified", got["status"])
+	warnings, ok := got["warnings"].([]any)
+	require.True(t, ok, "the warning rides the document: %s", out)
+	joined := fmt.Sprintf("%v", warnings)
+	assert.Contains(t, joined, "staging")
+	require.Len(t, cp.posts(), 1, "the run proceeds to registration")
+}
+
+// 409 answers are disambiguated by reading the listing: the same ARN is the
+// idempotent success, a different one is a conflict naming both.
+func TestContractRegistrationConflict(t *testing.T) {
+	t.Run("same arn is already_registered", func(t *testing.T) {
+		cp := newControlPlane(t)
+		cp.registerStatus = http.StatusConflict
+		cp.registerBody = `{"error":{"code":"cloud_connection_exists"}}`
+		cp.connectionsBody = `{"results":[{"cloud":"aws","account":"` + testAccount + `","roleArn":"` + contractRoleArn + `"}]}`
+		seedProfile(t, cp, hostedProfile(contractInstallation))
+		stubCredentials(t, bearerAnswer("t1"))
+
+		out, err := runConnect(t, registerOnlyArgs()...)
+
+		require.NoError(t, err, "out: %s", out)
+		got := decodeOut(t, out)
+		assert.Equal(t, "already_registered", got["status"])
+	})
+
+	t.Run("a different arn is registration_conflict naming both", func(t *testing.T) {
+		other := "arn:aws:iam::" + testAccount + ":role/some-other-role"
+		cp := newControlPlane(t)
+		cp.registerStatus = http.StatusConflict
+		cp.registerBody = `{"error":{"code":"cloud_connection_exists"}}`
+		cp.connectionsBody = `{"results":[{"cloud":"aws","account":"` + testAccount + `","roleArn":"` + other + `"}]}`
+		seedProfile(t, cp, hostedProfile(contractInstallation))
+		stubCredentials(t, bearerAnswer("t1"))
+
+		out, err := runConnect(t, registerOnlyArgs()...)
+
+		require.Error(t, err)
+		got := decodeOut(t, out)
+		assert.Equal(t, "registration_conflict", got["code"])
+		details, ok := got["details"].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, other, details["registeredRoleArn"])
+		assert.Equal(t, contractRoleArn, details["statedRoleArn"])
+	})
+}
