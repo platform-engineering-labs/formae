@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	clicmd "github.com/platform-engineering-labs/formae/internal/cli/cmd"
 	"github.com/platform-engineering-labs/formae/internal/cli/printer"
 )
 
@@ -52,8 +53,15 @@ func runLocal(cc *cobra.Command, opts options, consumer printer.Consumer, schema
 	}
 
 	warnings := s.Warnings
-	if elsewhere := connectedElsewhere(s.Setup.AccountsConnectedHint, opts.Account, s.InstallationID); len(elsewhere) > 0 {
+	elsewhere := connectedElsewhere(s.Setup.AccountsConnectedHint, opts.Account, s.InstallationID)
+	if len(elsewhere) > 0 {
 		warnings = append(warnings, multiInstallationWarning(opts.Account, elsewhere))
+	}
+	if interactiveRun(opts, consumer) {
+		th := clicmd.ResolveConfiguredTheme(cc)
+		if err := confirmInteractive(th, opts.Account, s.Setup.CloudSubject, permissionsProvisioned, elsewhere); err != nil {
+			return err
+		}
 	}
 
 	// The subject, role name, and issuer travel verbatim from the setup read;

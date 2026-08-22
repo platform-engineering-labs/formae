@@ -108,7 +108,8 @@ func runQuickCreate(cc *cobra.Command, opts options, consumer printer.Consumer, 
 	}
 
 	warnings := s.Warnings
-	if elsewhere := connectedElsewhere(s.Setup.AccountsConnectedHint, opts.Account, s.InstallationID); len(elsewhere) > 0 {
+	elsewhere := connectedElsewhere(s.Setup.AccountsConnectedHint, opts.Account, s.InstallationID)
+	if len(elsewhere) > 0 {
 		warnings = append(warnings, multiInstallationWarning(opts.Account, elsewhere))
 	}
 
@@ -118,7 +119,40 @@ func runQuickCreate(cc *cobra.Command, opts options, consumer printer.Consumer, 
 	if consumer == printer.ConsumerMachine {
 		return emitLinks(cc.OutOrStdout(), schema, linksDocument(plan, opts.Account, s.InstallationID, warnings))
 	}
-	return printLinksHuman(cc.OutOrStdout(), plan)
+	if !interactiveRun(opts, consumer) {
+		return printLinksHuman(cc.OutOrStdout(), plan)
+	}
+
+	// The in-sitting completion: consent, print the links, wait for the
+	// pasted RoleArn, validate it exactly like --role-arn, and register.
+	th := clicmd.ResolveConfiguredTheme(cc)
+	if err := confirmInteractive(th, opts.Account, s.Setup.CloudSubject, permissionsProvisioned, elsewhere); err != nil {
+		return err
+	}
+	if err := printLinksHuman(cc.OutOrStdout(), plan); err != nil {
+		return err
+	}
+
+	pasted, err := promptRoleArnFn(th, plan.ExpectedRoleArn)
+	if err != nil {
+		// An interrupt is a pause, not a loss: the resume command finishes
+		// the session from a fresh shell.
+		_, _ = fmt.Fprintln(cc.OutOrStdout(), "\nResume later with:\n  "+plan.ResumeCommand)
+		return err
+	}
+	parsed, err := parseRoleArn(pasted, opts.Account)
+	if err != nil {
+		return err
+	}
+	if w := warnOnNameMismatch(parsed.RoleName, s.Setup.CloudRoleName); w != "" {
+		warnings = append(warnings, w)
+	}
+
+	status, err := s.register(cc.Context(), opts.Account, parsed.Arn)
+	if err != nil {
+		return err
+	}
+	return printRegisteredHuman(cc.OutOrStdout(), registeredDocument(status, opts.Account, parsed.Arn, warnings), s.InstallationID)
 }
 
 // printLinksHuman renders the plan as the two console steps.

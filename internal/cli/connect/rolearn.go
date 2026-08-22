@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	clicmd "github.com/platform-engineering-labs/formae/internal/cli/cmd"
 	"github.com/platform-engineering-labs/formae/internal/cli/printer"
 )
 
@@ -33,10 +34,17 @@ func runRegisterOnly(cc *cobra.Command, opts options, consumer printer.Consumer,
 	if w := warnOnNameMismatch(parsed.RoleName, s.Setup.CloudRoleName); w != "" {
 		warnings = append(warnings, w)
 	}
-	if elsewhere := connectedElsewhere(s.Setup.AccountsConnectedHint, opts.Account, s.InstallationID); len(elsewhere) > 0 {
+	elsewhere := connectedElsewhere(s.Setup.AccountsConnectedHint, opts.Account, s.InstallationID)
+	if len(elsewhere) > 0 {
 		// In --no-input the warning rides the machine document and the run
-		// proceeds; the interactive form confirms it instead.
+		// proceeds; interactively it is confirmed below.
 		warnings = append(warnings, multiInstallationWarning(opts.Account, elsewhere))
+	}
+	if interactiveRun(opts, consumer) {
+		th := clicmd.ResolveConfiguredTheme(cc)
+		if err := confirmInteractive(th, opts.Account, s.Setup.CloudSubject, permissionsAsApplied, elsewhere); err != nil {
+			return err
+		}
 	}
 
 	status, err := s.register(cc.Context(), opts.Account, parsed.Arn)
