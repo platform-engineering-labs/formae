@@ -12,6 +12,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/platform-engineering-labs/formae/internal/cli/cloudapi"
 )
 
 // TestCanonicalOrigin_Accepted covers the shapes that canonicalise, including
@@ -204,7 +206,7 @@ func TestResolvePlatform_HalfSetIsError(t *testing.T) {
 
 			p, err := resolvePlatform(tc.cloudFlag, tc.issuerFlag)
 			require.Error(t, err)
-			assert.True(t, errors.Is(err, errPlatformHalfSet))
+			assert.True(t, errors.Is(err, cloudapi.ErrPlatformHalfSet))
 			assert.Equal(t, platform{}, p)
 		})
 	}
@@ -261,7 +263,7 @@ func TestResolvePlatform_EmptyEnvCountsAsSet(t *testing.T) {
 
 		p, err := resolvePlatform("", "https://issuer.example.com")
 		require.Error(t, err)
-		assert.False(t, errors.Is(err, errPlatformHalfSet))
+		assert.False(t, errors.Is(err, cloudapi.ErrPlatformHalfSet))
 		assert.Equal(t, platform{}, p)
 	})
 
@@ -270,7 +272,7 @@ func TestResolvePlatform_EmptyEnvCountsAsSet(t *testing.T) {
 
 		p, err := resolvePlatform("", "")
 		require.Error(t, err)
-		assert.True(t, errors.Is(err, errPlatformHalfSet))
+		assert.True(t, errors.Is(err, cloudapi.ErrPlatformHalfSet))
 		assert.Equal(t, platform{}, p)
 	})
 }

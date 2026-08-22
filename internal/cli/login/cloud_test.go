@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/platform-engineering-labs/formae/internal/cli/cloudapi"
 	pkgauth "github.com/platform-engineering-labs/formae/pkg/auth"
 )
 
@@ -143,11 +144,11 @@ func TestResolveCloudPlatform_RefusesAHalfSetPair(t *testing.T) {
 
 	_, err := resolvePlatform("https://cloud.example", "")
 	require.Error(t, err)
-	assert.ErrorIs(t, err, errPlatformHalfSet)
+	assert.ErrorIs(t, err, cloudapi.ErrPlatformHalfSet)
 
 	_, err = resolvePlatform("", "https://auth.example")
 	require.Error(t, err)
-	assert.ErrorIs(t, err, errPlatformHalfSet)
+	assert.ErrorIs(t, err, cloudapi.ErrPlatformHalfSet)
 }
 
 // With neither override the cloud path signs in against the built-in platform.
