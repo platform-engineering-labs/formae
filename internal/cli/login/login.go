@@ -16,6 +16,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
@@ -136,7 +137,7 @@ touched.`,
 			// creates one — a classic localhost default, for a user who may have
 			// come here precisely to use the hosted platform. Signing in cannot
 			// be reached through a step that decides the question it is asking.
-			if hosted {
+			runHosted := func() error {
 				return run(runCloudLoginAndSync(cmd.Context(), cloudLogin{
 					Cloud:     cloud,
 					Issuer:    cloudIssuer,
@@ -153,6 +154,9 @@ touched.`,
 					Emit:      emit,
 				}))
 			}
+			if hosted {
+				return runHosted()
+			}
 
 			configFile, _ := cmd.Flags().GetString("config")
 
@@ -166,6 +170,16 @@ touched.`,
 
 			client, err := a.AuthClient()
 			if err != nil {
+				// A profile with no auth plugin has exactly one sign-in formae
+				// offers: the hosted platform. Falling through beats a dead end
+				// that tells the user to re-run with a flag (decision
+				// 2026-08-22).
+				var noPlugin *app.NoAuthPluginError
+				if errors.As(err, &noPlugin) {
+					ackLine(out, loginIsTerminal(out), themeFor(a), components.AckSkip,
+						"the active profile has no auth plugin; signing in to the hosted platform")
+					return runHosted()
+				}
 				return run(err)
 			}
 
@@ -516,45 +530,47 @@ func runSync(ctx context.Context, s syncStep) (syncResult, string, error) {
 		Theme:    s.Theme,
 	}, p, gate.Bearer, gate.Auth, s.Entry.sourceAuth())
 
-	active := activateFirstIfNone(st, result, s.Out, tty, s.Theme)
+	active := activatePublished(st, result, s.Out, tty, s.Theme)
 
 	printWarnings(s.Out, tty, s.Theme, result.Warnings)
 	return result, active, syncExit(result)
 }
 
-// activateFirstIfNone points the active profile at one this run published, but
-// only when the store has no active profile at all.
+// activatePublished points the active profile at what this run published:
+// signing in is the request to use what you signed in to (decision 2026-08-22;
+// before this, a hosted sign-in on a machine with a classic active profile left
+// that profile active, and the next connect resolved the classic profile and
+// refused).
 //
-// A machine that has just signed in for the first time has profiles and no
-// pointer, and nothing else in this package writes one — the sync reads the
-// active profile only to protect it from rename and prune. Left without one, the
-// next formae command bootstraps a classic localhost default beside the hosted
-// profile that was just created, which is the outcome the whole hosted sign-in
-// path exists to avoid.
-//
-// An existing pointer is never moved. A user with profiles already has an answer
-// to "which one", and signing in is not a request to change it; the rename path
-// refuses to touch the active profile for the same reason, and reaching around
-// that here would be the same mistake one level up.
+// The pointer stays put only when it already names a profile this run
+// published — re-signing in to what you already use is a no-op, never a yank
+// to the run's first profile. A switch always names what it moved from, and
+// the profile left behind is untouched on disk; `formae profile use` reverses
+// it in one command.
 //
 // It runs after publication, and that ordering matters: store.Use runs the
 // store's initialization, which on a store with no profiles at all bootstraps
-// the very default this avoids. With a published profile present, initialization
-// stops at "orphaned profiles, no default" and only the pointer is written.
+// the classic localhost default this whole path exists to avoid. With a
+// published profile present, initialization stops at "orphaned profiles, no
+// default" and only the pointer is written.
 //
-// Failing to write the pointer is a warning, never a failed sign-in. The user is
-// signed in and their profiles exist either way, which is the rule every message
-// in this file follows.
-// It returns the active profile a caller's next request would use, which is
-// whatever the pointer names when this is done — the one it just wrote, the one
-// that was already there, or empty when there is none.
-func activateFirstIfNone(st *store.Store, result syncResult, out io.Writer, tty bool, th *theme.Theme) string {
-	if existing, err := st.Active(); err == nil {
-		return existing
-	}
+// Failing to write the pointer is a warning, never a failed sign-in. The user
+// is signed in and their profiles exist either way, which is the rule every
+// message in this file follows. It returns the active profile a caller's next
+// request would use: the one it just wrote, the published one that was
+// already active, or empty when nothing was published and no pointer exists.
+func activatePublished(st *store.Store, result syncResult, out io.Writer, tty bool, th *theme.Theme) string {
+	existing, existingErr := st.Active()
+
 	published := result.published()
 	if len(published) == 0 {
+		if existingErr == nil {
+			return existing
+		}
 		return "" // nothing to point at, and no pointer is better than a dangling one.
+	}
+	if existingErr == nil && slices.Contains(published, existing) {
+		return existing
 	}
 
 	name := published[0]
@@ -562,9 +578,16 @@ func activateFirstIfNone(st *store.Store, result syncResult, out io.Writer, tty 
 		ackLine(out, tty, th, components.AckSkip, fmt.Sprintf(
 			"profile %s was created but could not be made the active one (%v); "+
 				"run `formae profile use %s` to select it", name, err, name))
+		if existingErr == nil {
+			return existing
+		}
 		return ""
 	}
-	ackLine(out, tty, th, components.AckDone, "made profile "+name+" active")
+	switched := "made profile " + name + " active"
+	if existingErr == nil && existing != name {
+		switched += " (was " + existing + "; `formae profile use " + existing + "` switches back)"
+	}
+	ackLine(out, tty, th, components.AckDone, switched)
 	return name
 }
 
