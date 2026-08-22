@@ -1004,10 +1004,13 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 	}
 
 	// Step 2: Handle snapshotted slots not mentioned in the command response.
-	// If the command failed/canceled, unmentioned slots whose state changed
-	// from the snapshot must be reverted (implicit reconcile deletes or
-	// cascade descendants that never ran). Skip slots already corrected by a
-	// later command.
+	// If the command failed/canceled, an unmentioned slot was never touched
+	// by the agent, so every optimistic prediction for it (state from
+	// implicit reconcile deletes or cascade descendants that never ran, AND
+	// properties from a patch/update the agent never reached) must revert to
+	// its snapshot. Reverse-order processing makes stacked reverts converge
+	// on the oldest unmentioned snapshot, which is the last agent-confirmed
+	// state. Skip slots already corrected by a later command.
 	//
 	if cmd.State != "Success" {
 		for key, snap := range snapBySlot {
@@ -1021,7 +1024,7 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 				continue
 			}
 			res := model.Resource(key.stackIdx, key.slotIdx)
-			if res == nil || res.State == snap.State {
+			if res == nil || (res.State == snap.State && res.Properties == snap.Properties) {
 				continue
 			}
 			t.Logf("correctModelFromCommandOutcome: reverting unmentioned slot stack=%s slot=%d from %v to %v (command state=%s)",
