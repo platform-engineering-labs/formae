@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/platform-engineering-labs/formae/internal/cli/cloudapi"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	pkgauth "github.com/platform-engineering-labs/formae/pkg/auth"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -566,7 +567,7 @@ func TestLoginFailsWhenTheSignInProducedNoUsableCredential(t *testing.T) {
 // failed exits non-zero, and says both facts: signed in, sync incomplete.
 func TestLoginFailsWhenTheSyncDidNotComplete(t *testing.T) {
 	f := newSyncFixture(t)
-	f.client.err = &cloudTransientError{Cause: errors.New("the control plane returned HTTP 503")}
+	f.client.err = &cloudapi.TransientError{Cause: errors.New("the control plane returned HTTP 503")}
 
 	err := runLoginAndSync(context.Background(), signedIn(), f.loginStep(), false)
 
