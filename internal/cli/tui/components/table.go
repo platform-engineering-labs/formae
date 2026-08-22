@@ -41,6 +41,7 @@ type Table struct {
 	cols    []Column
 	rows    [][]string // master data (full column set), in current sort order
 	width   int
+	height  int // last height passed to SetSize (bubbles reports a header-adjusted one)
 	sortCol int
 	sortDir SortDirection
 }
@@ -101,11 +102,28 @@ func (t Table) SetRows(rows [][]string) Table {
 }
 
 // SetSize resizes the table and recomputes which columns fit.
+//
+// A same-size call is a no-op. That is not just a saved reprojection: reproject
+// rebuilds the wrapped table's rows, which resets its scroll offset while
+// keeping the cursor, so the selection ends up below the visible window. The
+// render path calls SetSize on every frame, so without this guard the selected
+// row disappears as soon as the cursor travels past one screen.
 func (t Table) SetSize(width, height int) Table {
-	t.width = width
+	if t.width == width && t.height == height {
+		return t
+	}
+	widthChanged := t.width != width
+	t.width, t.height = width, height
 	t.inner.SetWidth(width)
 	t.inner.SetHeight(height)
-	return t.reproject()
+	// Only a width change can change which columns fit, and reproject is not
+	// free of side effects: it rebuilds the wrapped table's rows, which resets
+	// its scroll offset while keeping the cursor — leaving the selection below
+	// the visible window. So reproject on width changes only.
+	if widthChanged {
+		t = t.reproject()
+	}
+	return t
 }
 
 // SortBy sorts rows by the given column and marks the header with a ▲/▼
@@ -136,6 +154,20 @@ func (t Table) Update(msg tea.Msg) (Table, tea.Cmd) {
 	var cmd tea.Cmd
 	t.inner, cmd = t.inner.Update(msg)
 	return t, cmd
+}
+
+// MoveCursor moves the selection n rows (negative = up) and re-renders the
+// table's viewport ONCE. Stepping with n Update calls instead costs n viewport
+// re-renders, which is the difference between a smooth wheel notch and a
+// backlog.
+func (t Table) MoveCursor(n int) Table {
+	switch {
+	case n > 0:
+		t.inner.MoveDown(n)
+	case n < 0:
+		t.inner.MoveUp(-n)
+	}
+	return t
 }
 
 // View renders the table.
