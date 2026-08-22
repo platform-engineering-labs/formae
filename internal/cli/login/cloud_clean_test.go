@@ -157,3 +157,23 @@ func TestCleanDirectory_WithoutHostedTheDefaultIsCreated(t *testing.T) {
 	assert.FileExists(t, store.New(dir).ProfilePath("default"),
 		"the profile path no longer bootstraps, so the hosted assertion proves nothing")
 }
+
+// A classic active profile with no auth plugin no longer dead-ends bare
+// `formae login`: the only sign-in formae offers in that state is the hosted
+// platform, so the command falls through to it — and the synced installation
+// profile becomes active, exactly as if --hosted had been passed.
+func TestCleanDirectory_BareLoginFallsThroughToHosted(t *testing.T) {
+	dir := stubCloudSignIn(t, installation(installOne, "prod", stateActive))
+
+	cmd := LoginCmd()
+	cmd.SetArgs(nil)
+	cmd.SilenceUsage = true
+	require.NoError(t, cmd.ExecuteContext(cliContext()))
+
+	s := store.New(dir)
+	assert.FileExists(t, s.ProfilePath(cloudProfileName()))
+
+	active, err := s.Active()
+	require.NoError(t, err)
+	assert.Equal(t, cloudProfileName(), active)
+}

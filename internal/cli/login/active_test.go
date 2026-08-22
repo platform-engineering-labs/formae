@@ -25,9 +25,12 @@ import (
 // finished sign-in with a profile on disk, no pointer, and the next command
 // bootstrapping a classic default beside it.
 //
-// The rule is narrow. An existing pointer is never moved — a user with profiles
-// already has an answer to "which one", and a sign-in is not a request to change
-// it.
+// The rule (2026-08-22): a sign-in that publishes profiles points the pointer at
+// what it published — signing in IS the request to use what you signed in to.
+// Before this, a hosted sign-in on a machine with a classic active profile left
+// that profile active, and the next connect resolved the classic profile and
+// refused. The pointer stays put only when it already names a published profile,
+// and a switch always says what it moved from.
 
 // cleanStoreFixture is a sync fixture whose store has no profiles and no active
 // pointer, which is the state a machine that has never run formae is in.
@@ -82,9 +85,10 @@ func TestActive_NoClassicDefaultIsCreated(t *testing.T) {
 	assert.NoFileExists(t, f.store.ProfilePath("default"))
 }
 
-// A pointer the user already has is not moved. Reaching around the rename path's
-// own refusal to touch the active profile would be the same mistake one level up.
-func TestActive_AnExistingPointerIsNeverMoved(t *testing.T) {
+// A sign-in moves the pointer onto what it published, naming what it moved
+// from: signing in is the request to use what you signed in to. The profile
+// the pointer left behind is untouched on disk.
+func TestActive_TheSignedInProfileBecomesActive(t *testing.T) {
 	f := cleanStoreFixture(t)
 	require.NoError(t, os.MkdirAll(f.store.ProfilesDir(), 0o755))
 	require.NoError(t, os.WriteFile(f.store.ProfilePath("mine"), []byte(store.StubTemplate), 0o644))
@@ -93,12 +97,41 @@ func TestActive_AnExistingPointerIsNeverMoved(t *testing.T) {
 	f.answer(installation(installOne, "prod", stateActive))
 	require.NoError(t, runLoginAndSync(context.Background(), signedIn(), cloudStep(t, f), false))
 
-	// The profile was still published; only the pointer stayed put.
-	assert.FileExists(t, f.store.ProfilePath(cloudProfileName()))
+	active, err := f.store.Active()
+	require.NoError(t, err)
+	assert.Equal(t, cloudProfileName(), active)
+	assert.Contains(t, f.out.String(), "was mine", "the switch names what it moved from")
+	assert.FileExists(t, f.store.ProfilePath("mine"), "the previous profile is untouched on disk")
+}
+
+// A pointer already naming a published profile stays put: re-signing in to what
+// you already use is a no-op, not a switch to the run's first published profile.
+func TestActive_AnActivePublishedProfileStaysActive(t *testing.T) {
+	f := cleanStoreFixture(t)
+	f.answer(
+		installation(installOne, "prod", stateActive),
+		installation(installTwo, "staging", stateActive),
+	)
+	require.NoError(t, runLoginAndSync(context.Background(), signedIn(), cloudStep(t, f), false))
+
+	// Point at the other published profile, then sign in again.
+	published, err := f.store.Active()
+	require.NoError(t, err)
+	other := nameTwo
+	if published == other {
+		other = nameOne
+	}
+	require.NoError(t, f.store.Use(other))
+
+	f.answer(
+		installation(installOne, "prod", stateActive),
+		installation(installTwo, "staging", stateActive),
+	)
+	require.NoError(t, runLoginAndSync(context.Background(), signedIn(), cloudStep(t, f), false))
 
 	active, err := f.store.Active()
 	require.NoError(t, err)
-	assert.Equal(t, "mine", active)
+	assert.Equal(t, other, active, "an active published profile is never yanked to the run's first")
 }
 
 // A run that published nothing writes no pointer. There is nothing to point at,

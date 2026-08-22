@@ -393,6 +393,7 @@ func TestLoginSyncsAfterASignIn(t *testing.T) {
 		"  https://issuer.example/authorize?req=abc",
 		"✓ signed in as jane",
 		"✓ created profile " + nameOne,
+		"✓ made profile " + nameOne + " active (was default; `formae profile use default` switches back)",
 	}, lines(f.out))
 	assert.Equal(t, 1, f.client.calls)
 	assert.True(t, f.exists(nameOne))
@@ -417,6 +418,7 @@ func TestLoginSyncsOnTheAlreadyAuthenticatedBranch(t *testing.T) {
 	assert.Equal(t, []string{
 		"✓ already signed in as jane",
 		"✓ created profile " + nameOne,
+		"✓ made profile " + nameOne + " active (was default; `formae profile use default` switches back)",
 	}, lines(f.out))
 }
 
