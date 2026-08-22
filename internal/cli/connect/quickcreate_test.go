@@ -102,6 +102,22 @@ func TestResumeCommand_RoundTripsTheSelection(t *testing.T) {
 		resumeCommand(options{ConfigFlag: "/tmp/x.pkl"}, testAccount))
 }
 
+// A pasted resume command must survive the shell: selections containing
+// spaces or metacharacters are quoted, and embedded single quotes escape.
+func TestResumeCommand_QuotesUnsafeSelections(t *testing.T) {
+	assert.Equal(t,
+		"formae connect --config '/tmp/my configs/x.pkl' aws --account "+testAccount+" --role-arn <RoleArn stack output>",
+		resumeCommand(options{ConfigFlag: "/tmp/my configs/x.pkl"}, testAccount))
+
+	assert.Equal(t,
+		`formae connect --config '/tmp/it'\''s.pkl' aws --account `+testAccount+" --role-arn <RoleArn stack output>",
+		resumeCommand(options{ConfigFlag: "/tmp/it's.pkl"}, testAccount))
+
+	assert.Equal(t,
+		"formae connect --profile 'two words' aws --account "+testAccount+" --role-arn <RoleArn stack output>",
+		resumeCommand(options{ProfileFlag: "two words"}, testAccount))
+}
+
 func TestBuildQuickCreatePlan_ResumeCommandRidesThePlan(t *testing.T) {
 	plan := buildQuickCreatePlan(defaultPlatform(t), testSetup(), testAccount, testInstallation,
 		options{ProfileFlag: "staging"})

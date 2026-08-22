@@ -92,6 +92,12 @@ func buildConnectForm(th *theme.Theme, v *formValues, awsProfiles []string) *huh
 		return huh.NewInput().
 			Title("AWS profile").
 			Description("No profiles found in the shared config; name one").
+			Validate(func(s string) error {
+				if strings.TrimSpace(s) == "" {
+					return errors.New("a profile name is required for the local path")
+				}
+				return nil
+			}).
 			Value(&v.ProfileAWS)
 	}
 	profileGroup := huh.NewGroup(profileQuestion()).
