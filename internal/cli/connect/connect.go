@@ -107,7 +107,10 @@ func readSelection(c *cobra.Command) (options, error) {
 	return options{ConfigFlag: configFlag, ProfileFlag: profileFlag}, nil
 }
 
-// awsProfileChoices returns the shared-config profiles the form offers. The
-// enumeration lands with the local path; until then the form has no choices
-// to offer.
-func awsProfileChoices() []string { return nil }
+// awsProfileChoices returns the shared-config profiles the form offers. An
+// unreadable shared config costs the form its choices, not the run: the
+// profile question falls back to free entry.
+func awsProfileChoices() []string {
+	profiles, _ := listAWSProfiles()
+	return profiles
+}
