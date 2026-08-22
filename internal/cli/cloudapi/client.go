@@ -117,6 +117,15 @@ type Snapshot struct {
 type Client interface {
 	// ListInstallations reads the installations the caller's grants cover.
 	ListInstallations(ctx context.Context, bearer string) (Snapshot, error)
+	// GetCloudConnectionSetup reads the coordinates for connecting a cloud
+	// account to the installation.
+	GetCloudConnectionSetup(ctx context.Context, bearer, installationID string) (CloudConnectionSetup, error)
+	// RegisterCloudConnection declares a cloud connection on the installation.
+	RegisterCloudConnection(ctx context.Context, bearer, installationID string,
+		registration CloudConnectionRegistration) (RegisterOutcome, error)
+	// ListCloudConnections reads the connections registered on the
+	// installation, with a warning for every record it had to drop.
+	ListCloudConnections(ctx context.Context, bearer, installationID string) ([]CloudConnection, []string, error)
 }
 
 // AuthError reports that the control plane refused the credentials
