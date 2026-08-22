@@ -29,12 +29,12 @@ import (
 const (
 	providerStackName         = "formae-oidc-provider"
 	providerTemplateKey       = "formae-oidc-provider.yaml"
-	providerTemplateVersionID = "PINNED_AT_PUBLICATION"
-	providerTemplateSHA256    = "PINNED_AT_PUBLICATION"
+	providerTemplateVersionID = "GCkhsMGjUAKV_qs7m7uYl6j5879bUjgu"
+	providerTemplateSHA256    = "1104e93afd716ffbda670158f6a89d42e8869dbe38a466d79ccd473b5e30683d"
 
 	roleTemplateKey       = "formae-connect-role.yaml"
-	roleTemplateVersionID = "PINNED_AT_PUBLICATION"
-	roleTemplateSHA256    = "PINNED_AT_PUBLICATION"
+	roleTemplateVersionID = "NpQAD3Vxf_JcswPJ4VuSSBoUp0gY2.uq"
+	roleTemplateSHA256    = "62b24a36898a9ecaf21c4869f617a8cc457eec61ea0bee32ce8426dcb87bf15e"
 
 	quickCreateConsole = "https://us-east-1.console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/create/review"
 )

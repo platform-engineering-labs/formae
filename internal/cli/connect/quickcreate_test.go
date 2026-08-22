@@ -46,14 +46,14 @@ func TestBuildQuickCreatePlan_GoldenURLs(t *testing.T) {
 	assert.Equal(t,
 		"https://us-east-1.console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/create/review"+
 			"?templateURL=https%3A%2F%2Fformae-connect-templates.s3.us-east-1.amazonaws.com"+
-			"%2Fformae-oidc-provider.yaml%3FversionId%3DPINNED_AT_PUBLICATION"+
+			"%2Fformae-oidc-provider.yaml%3FversionId%3DGCkhsMGjUAKV_qs7m7uYl6j5879bUjgu"+
 			"&stackName=formae-oidc-provider",
 		plan.ProviderStackURL)
 
 	assert.Equal(t,
 		"https://us-east-1.console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/create/review"+
 			"?templateURL=https%3A%2F%2Fformae-connect-templates.s3.us-east-1.amazonaws.com"+
-			"%2Fformae-connect-role.yaml%3FversionId%3DPINNED_AT_PUBLICATION"+
+			"%2Fformae-connect-role.yaml%3FversionId%3DNpQAD3Vxf_JcswPJ4VuSSBoUp0gY2.uq"+
 			"&param_ExpectedAccountId="+testAccount+
 			"&param_RoleName=formae-connect-"+testInstallation+
 			"&param_Subject=fai%3Aacme%2F"+testInstallation+
