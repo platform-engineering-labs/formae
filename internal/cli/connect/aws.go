@@ -96,6 +96,8 @@ func runMode(cc *cobra.Command, m mode, opts options, consumer printer.Consumer,
 	switch m {
 	case modeForm:
 		return runConnectForm(cc)
+	case modeRegisterOnly:
+		return runRegisterOnly(cc, opts, consumer, schema)
 	default:
 		return errors.New("this connect path is not implemented yet")
 	}
