@@ -1008,15 +1008,6 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 			if model.IsAuthoritativeSlot(key.stackIdx, key.slotIdx) {
 				continue
 			}
-			// Cross-stack slots in failed/canceled commands: the agent's
-			// behavior for cross-stack resources is non-deterministic from
-			// the command response alone (creates may or may not persist,
-			// reconcile deletes may or may not complete before cancel).
-			// Skip model updates for cross-stack slots and rely on the
-			// model-vs-inventory check excluding them (see CheckModelVsInventory).
-			if pool != nil && pool.IsCrossStack(key.slotIdx) {
-				continue
-			}
 			res := model.Resource(key.stackIdx, key.slotIdx)
 			if res == nil || res.State == snap.State {
 				continue

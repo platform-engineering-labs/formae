@@ -8,6 +8,7 @@ package blackbox
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -502,6 +503,88 @@ func TestStateModel_DriftEligibilitySkipsStacksWithInFlightCommands(t *testing.T
 // Cross-stack slots reference a parent on the provider stack (stack 0), so an
 // in-flight command on the provider stack can cascade onto them. They are only
 // eligible for drift while the provider stack is quiescent too.
+// findCrossStackSlot returns a cross-stack slot index of the model's pool.
+func findCrossStackSlot(t *testing.T, model *StateModel) int {
+	t.Helper()
+	require.NotNil(t, model.Pool)
+	for i := range model.Pool.Slots {
+		if model.Pool.IsCrossStack(i) {
+			return i
+		}
+	}
+	t.Fatal("pool has no cross-stack slot")
+	return -1
+}
+
+// Cross-stack slots are asserted against inventory like any other slot: a
+// slot the model expects to exist must have an inventory row.
+func TestCheckModelVsInventory_CrossStackSlotIsAsserted(t *testing.T) {
+	model := NewStateModel(2, 10)
+	crossIdx := findCrossStackSlot(t, model)
+	model.ApplyCreated(1, []int{crossIdx}, `{"Name":"x","ParentId":"p","Value":"v1"}`)
+
+	violations := CheckModelVsInventory(model, nil)
+
+	found := false
+	label := model.LabelForResource(1, crossIdx)
+	for _, v := range violations {
+		if v.Kind == ViolationModelInventoryMismatch && strings.Contains(v.Message, label) {
+			found = true
+		}
+	}
+	assert.True(t, found, "a missing cross-stack inventory row must be reported, not skipped")
+}
+
+// The reverse direction holds too: an inventory row for a cross-stack slot
+// the model does not expect is an unexpected managed resource.
+func TestCheckModelVsInventory_UnexpectedCrossStackRowIsAsserted(t *testing.T) {
+	model := NewStateModel(2, 10)
+	crossIdx := findCrossStackSlot(t, model)
+	label := model.LabelForResource(1, crossIdx)
+
+	inventory := []pkgmodel.Resource{{
+		Stack:      "stack-1",
+		Label:      label,
+		Type:       model.TypeForResource(crossIdx),
+		NativeID:   "test-9",
+		Managed:    true,
+		Properties: []byte(`{"Name":"x","ParentId":"p","Value":"v1"}`),
+	}}
+
+	violations := CheckModelVsInventory(model, inventory)
+
+	found := false
+	for _, v := range violations {
+		if v.Kind == ViolationModelInventoryMismatch && strings.Contains(v.Message, "unexpected managed resource") && strings.Contains(v.Message, label) {
+			found = true
+		}
+	}
+	assert.True(t, found, "an unexpected cross-stack inventory row must be reported, not skipped")
+}
+
+// A failed command's unmentioned cross-stack slot reverts to its snapshot
+// like any other slot: the optimistic prediction must not survive a command
+// that never reported an outcome for it.
+func TestCorrectModelFromCommandOutcome_UnmentionedCrossStackSlotReverts(t *testing.T) {
+	model := NewStateModel(2, 10)
+	crossIdx := findCrossStackSlot(t, model)
+
+	// Snapshot taken while the slot did not exist, then an optimistic create.
+	snapshots := []ResourceSnapshot{{StackIndex: 1, SlotIndex: crossIdx, State: StateNotExist}}
+	model.ApplyCreated(1, []int{crossIdx}, `{"Name":"x","ParentId":"p","Value":"v1"}`)
+
+	cmd := &apimodel.Command{
+		CommandID:       "cmd-failed",
+		State:           "Failed",
+		ResourceUpdates: nil, // the command died before reaching this slot
+	}
+	corrected := map[struct{ stackIdx, slotIdx int }]bool{}
+	correctModelFromCommandOutcome(t, cmd, model, model.Pool, snapshots, corrected, false)
+
+	require.Equal(t, StateNotExist, model.Resource(1, crossIdx).State,
+		"an unmentioned cross-stack slot in a failed command reverts to its snapshot")
+}
+
 func TestStateModel_DriftEligibilityCrossStackNeedsQuiescentProvider(t *testing.T) {
 	model := NewStateModel(2, 10)
 	require.NotNil(t, model.Pool)
