@@ -1768,6 +1768,11 @@ func (h *TestHarness) executeTriggerDiscovery(t *testing.T, model *StateModel) {
 		}
 		t.Logf("TriggerDiscovery: inventory not converged (attempt %d)", attempt+1)
 	}
+	if _, unmanagedInventory, err := h.extractManagedAndUnmanagedInventory(); err == nil {
+		for _, v := range CheckUnmanagedModelVsInventory(model, unmanagedInventory) {
+			t.Logf("TriggerDiscovery: unconverged: %s", v.Message)
+		}
+	}
 	require.Failf(t, "discovery did not ingest",
 		"expected unmanaged resources were not ingested after %d attempts", maxDiscoverAttempts)
 }
@@ -1954,6 +1959,16 @@ func (h *TestHarness) waitForAbsorbedInventory(t *testing.T, query, nativeID, ex
 
 func (h *TestHarness) executeCloudCreate(t *testing.T, op *Operation, model *StateModel) {
 	t.Helper()
+	// The generator draws native ids from a small pool, so an id can repeat
+	// within a sequence. Re-creating an entry the model already tracks as
+	// present is an out-of-band MODIFY of that resource, not a create:
+	// discovery only ingests unknown native ids, so it can never converge
+	// the model's fresh CloudProperties with the already-ingested row (that
+	// is sync absorption, which OpCloudModify exercises). Skip the op.
+	if res := model.UnmanagedResources[op.NativeID]; res != nil && (res.PresentInCloud || res.PresentInInventory) {
+		t.Logf("[op %d] CloudCreate: %s → skipped (already present out-of-band)", op.SequenceNum, op.NativeID)
+		return
+	}
 	h.putCloudStateWithRetry(t, op.NativeID, op.ResourceType, op.Properties)
 	model.ApplyUnmanagedCloudCreate(op.NativeID, op.ResourceType, op.Properties)
 	t.Logf("[op %d] CloudCreate: %s (%s)", op.SequenceNum, op.NativeID, op.ResourceType)
