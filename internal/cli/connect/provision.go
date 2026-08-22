@@ -11,37 +11,29 @@ import (
 
 	"github.com/spf13/cobra"
 
+	provxaws "github.com/platform-engineering-labs/oox/provx/aws"
+
 	clicmd "github.com/platform-engineering-labs/formae/internal/cli/cmd"
 	"github.com/platform-engineering-labs/formae/internal/cli/printer"
 )
 
 // provisioner is provx narrowed to the one call the local path makes.
 type provisioner interface {
-	Create(ctx context.Context) (*provisionResult, error)
+	Create(ctx context.Context) (*provxaws.Result, error)
 }
 
-// provisionResult is the slice of provx's result the local path consumes:
-// the role it stands behind, and the policies it had to detach to converge.
-type provisionResult struct {
-	RoleArn          string
-	DetachedPolicies []string
+// newProvisioner is the seam tests substitute; production constructs provx
+// with the server-produced subject and role name verbatim — connect has no
+// naming knowledge of its own. provx parses the issuer internally.
+var newProvisioner = func(ctx context.Context, caller verifiedCaller,
+	subject, roleName, issuer string) (provisioner, error) {
+	return provxaws.New(ctx, caller.Cfg.Credentials, caller.Cfg.Region,
+		caller.Account, subject, roleName, issuer)
 }
-
-// newProvisioner is the seam the provx integration fills: production will
-// construct provx with the server-produced subject and role name verbatim —
-// connect has no naming knowledge of its own. Nil until that module lands,
-// and the local path declares exactly that while it is.
-var newProvisioner func(ctx context.Context, caller verifiedCaller,
-	subject, roleName, issuer string) (provisioner, error)
 
 // runLocal is the --profile-aws path: verify the caller with STS, provision
 // the trust through provx, and register the resulting role.
 func runLocal(cc *cobra.Command, opts options, consumer printer.Consumer, schema string) error {
-	if newProvisioner == nil {
-		return printer.Fail(printer.CodeProvisionFailed,
-			"local provisioning lands with the provx integration; connect with --quick-create or --role-arn meanwhile", nil)
-	}
-
 	caller, err := verifyCaller(cc.Context(), opts.ProfileAWS, opts.Region, opts.Account)
 	if err != nil {
 		return err
@@ -64,8 +56,7 @@ func runLocal(cc *cobra.Command, opts options, consumer printer.Consumer, schema
 		}
 	}
 
-	// The subject, role name, and issuer travel verbatim from the setup read;
-	// provx parses the issuer internally.
+	// The subject, role name, and issuer travel verbatim from the setup read.
 	p, err := newProvisioner(cc.Context(), caller, s.Setup.CloudSubject, s.Setup.CloudRoleName, s.Platform.Issuer)
 	if err != nil {
 		return classifyProvision(err)
@@ -76,6 +67,9 @@ func runLocal(cc *cobra.Command, opts options, consumer printer.Consumer, schema
 	}
 	for _, policy := range result.DetachedPolicies {
 		warnings = append(warnings, fmt.Sprintf("detached the drifted policy %s while converging the role", policy))
+	}
+	for _, policy := range result.DeletedInline {
+		warnings = append(warnings, fmt.Sprintf("deleted the drifted inline policy %s while converging the role", policy))
 	}
 
 	// Non-atomicity accepted and stated: a provision-succeeded/registration-
@@ -93,15 +87,24 @@ func runLocal(cc *cobra.Command, opts options, consumer printer.Consumer, schema
 	return printRegisteredHuman(cc.OutOrStdout(), v, s.InstallationID)
 }
 
-// classifyProvision maps provisioning failures onto declared codes. The typed
-// provx errors (account mismatch, role collision, provider conflict) join
-// this classification with the provx integration; anything untyped is
-// provision_failed with the honest what-stands message: re-running converges,
-// so the message says so instead of promising a rollback.
+// classifyProvision maps provx's typed errors onto declared codes. Anything
+// untyped is provision_failed with the honest what-stands message: re-running
+// converges, so the message says so instead of promising a rollback.
 func classifyProvision(err error) error {
-	var f *printer.Failure
-	if errors.As(err, &f) {
-		return err
+	var mismatch *provxaws.AccountMismatchError
+	if errors.As(err, &mismatch) {
+		return printer.Fail(printer.CodeAccountMismatch,
+			"the credentials authenticate to a different account than the one stated", nil)
+	}
+	var collision *provxaws.RoleCollisionError
+	if errors.As(err, &collision) {
+		return printer.Fail(printer.CodeRoleCollision,
+			"a role with the expected name exists but is not one connect owns; delete it (or its stack) and re-run, or connect with --role-arn", nil)
+	}
+	var conflict *provxaws.ProviderConflictError
+	if errors.As(err, &conflict) {
+		return printer.Fail(printer.CodeProviderConflict,
+			"the formae OIDC identity provider exists with an unexpected configuration", nil)
 	}
 	return printer.Fail(printer.CodeProvisionFailed,
 		"provisioning did not complete; what was created stands, and re-running this command converges it", nil)
