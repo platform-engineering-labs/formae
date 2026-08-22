@@ -83,6 +83,11 @@ func runConnectAWS(cc *cobra.Command, opts options) error {
 		}
 		return report(cc.OutOrStdout(), consumer, schema, err)
 	}
+	if m == modeForm && consumer == printer.ConsumerMachine {
+		// Machine mode never reaches a form: flags are consent.
+		return errors.New("machine output cannot drive the interactive form; use --no-input with --account " +
+			"and one of --quick-create, --profile-aws, --role-arn")
+	}
 
 	if err := runMode(cc, m, opts, consumer, schema); err != nil {
 		return report(cc.OutOrStdout(), consumer, schema, err)
@@ -95,7 +100,7 @@ func runConnectAWS(cc *cobra.Command, opts options) error {
 func runMode(cc *cobra.Command, m mode, opts options, consumer printer.Consumer, schema string) error {
 	switch m {
 	case modeForm:
-		return runConnectForm(cc)
+		return runConnectForm(cc, opts, "aws")
 	case modeRegisterOnly:
 		return runRegisterOnly(cc, opts, consumer, schema)
 	case modeQuickCreate:
@@ -105,6 +110,12 @@ func runMode(cc *cobra.Command, m mode, opts options, consumer printer.Consumer,
 	default:
 		return errors.New("this connect path is not implemented yet")
 	}
+}
+
+// interactiveRun reports whether a run may prompt: a TTY, no --no-input, and
+// a human consumer.
+func interactiveRun(opts options, consumer printer.Consumer) bool {
+	return !opts.NoInput && consumer != printer.ConsumerMachine && isInteractive()
 }
 
 // resolveOutputOrHuman resolves the output flags where they exist. The form

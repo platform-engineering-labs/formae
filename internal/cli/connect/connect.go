@@ -6,6 +6,7 @@ package connect
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -31,7 +32,11 @@ func ConnectCmd() *cobra.Command {
 		SilenceUsage:  true,
 		RunE: func(c *cobra.Command, args []string) error {
 			// Bare connect is the interactive form, cloud asked first.
-			return runConnectForm(c)
+			opts, err := readSelection(c)
+			if err != nil {
+				return err
+			}
+			return runConnectForm(c, opts, "")
 		},
 	}
 	// --config/--profile are persistent so the resume hint's flag placement
@@ -58,33 +63,34 @@ type formValues struct {
 }
 
 // runConnectFormFn builds and runs the interactive form for the given values.
-// A seam so the dispatcher is testable without a TTY; the form itself lands
-// with the interactive slice, so until then the body says so.
+// A seam so the dispatcher is testable without a TTY.
 var runConnectFormFn = func(th *theme.Theme, v *formValues, awsProfiles []string) error {
-	return errors.New("the interactive connect form is not yet implemented; " +
-		"run `formae connect aws` with --account and one of --quick-create, --profile-aws, --role-arn")
+	return buildConnectForm(th, v, awsProfiles).Run()
 }
 
-// runConnectForm is the bare-connect dispatcher: it requires a TTY, runs the
-// form through the seam, and hands the answers to the same run the flag paths
-// use. Machine mode never reaches it — flags are consent.
-func runConnectForm(c *cobra.Command) error {
-	opts, err := readSelection(c)
-	if err != nil {
-		return err
-	}
+// runConnectForm is the interactive dispatcher: it requires a TTY, runs the
+// form through the seam with every flag-answered question pre-filled, and
+// hands the answers to the same run the flag paths use. Machine mode never
+// reaches it — flags are consent.
+//
+// cloud pins the cloud question: bare connect asks it first, while entering
+// through `connect aws` has already answered it.
+func runConnectForm(c *cobra.Command, opts options, cloud string) error {
 	if !isInteractive() {
 		return errors.New("connecting interactively requires a TTY; use `formae connect aws --no-input` " +
 			"with --account and one of --quick-create, --profile-aws, --role-arn")
 	}
 
 	th := clicmd.ResolveConfiguredTheme(c)
-	v := &formValues{Cloud: "aws"}
+	v := &formValues{Cloud: cloud, Account: opts.Account}
 	if err := runConnectFormFn(th, v, awsProfileChoices()); err != nil {
 		return err
 	}
 
-	opts.Account = v.Account
+	opts.Account = strings.TrimSpace(v.Account)
+	if err := validateAccount(opts.Account); err != nil {
+		return err
+	}
 	switch v.How {
 	case "quick-create":
 		opts.QuickCreate = true
@@ -92,6 +98,10 @@ func runConnectForm(c *cobra.Command) error {
 		opts.ProfileAWS = v.ProfileAWS
 	case "role-arn":
 		opts.RoleArn = v.RoleArn
+	default:
+		// A form that filled no path cannot dispatch; re-entering it would
+		// loop instead of asking anything new.
+		return errors.New("the form completed without choosing how to establish trust")
 	}
 	return runConnectAWSFn(c, opts)
 }
