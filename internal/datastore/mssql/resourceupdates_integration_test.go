@@ -296,16 +296,15 @@ func TestMSSQLResourceUpdatesKSUIDTriplet(t *testing.T) {
 		t.Errorf("GetKSUIDByTriplet = %q, want k1", got)
 	}
 
-	// k2's latest version is a delete, but GetKSUIDByTriplet (like
-	// postgres/sqlite) returns the latest NON-deleted version (v001 -> k2)
-	// rather than excluding the triplet entirely. The NOT-EXISTS-based Batch
-	// variant below is the one that drops it.
+	// k2's latest version is a delete: the triplet is excluded entirely, the
+	// same semantics as the Batch variant. Resolving through an older live
+	// version is how a dangling reference to a deleted resource is minted.
 	got, err = ds.GetKSUIDByTriplet("stack-a", "label-2", "AWS::EC2::Instance")
 	if err != nil {
 		t.Fatalf("GetKSUIDByTriplet(deleted): %v", err)
 	}
-	if got != "k2" {
-		t.Errorf("GetKSUIDByTriplet(deleted) = %q, want k2 (latest non-deleted)", got)
+	if got != "" {
+		t.Errorf("GetKSUIDByTriplet(deleted) = %q, want excluded (empty)", got)
 	}
 
 	// Missing triplet returns empty string, no error.
