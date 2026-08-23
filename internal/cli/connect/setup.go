@@ -274,13 +274,13 @@ func (s *session) register(ctx context.Context, account, roleArn string) (string
 
 	// 409: read the listing and compare. The same ARN is the idempotent
 	// success; a different one is a conflict the user has to resolve.
-	connections, warnings, lerr := s.client.ListCloudConnections(ctx, bearer, s.InstallationID)
-	s.Warnings = append(s.Warnings, warnings...)
+	snapshot, lerr := s.client.ListCloudConnections(ctx, bearer, s.InstallationID)
+	s.Warnings = append(s.Warnings, snapshot.Warnings...)
 	if lerr != nil {
 		return "", fmt.Errorf("a cloud connection for this account already exists, and the existing "+
 			"registration could not be read to compare: %w", lerr)
 	}
-	for _, connection := range connections {
+	for _, connection := range snapshot.Connections {
 		if connection.Cloud != "aws" || connection.Account != account {
 			continue
 		}

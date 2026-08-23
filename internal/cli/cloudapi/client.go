@@ -125,7 +125,7 @@ type Client interface {
 		registration CloudConnectionRegistration) (RegisterOutcome, error)
 	// ListCloudConnections reads the connections registered on the
 	// installation, with a warning for every record it had to drop.
-	ListCloudConnections(ctx context.Context, bearer, installationID string) ([]CloudConnection, []string, error)
+	ListCloudConnections(ctx context.Context, bearer, installationID string) (ConnectionsSnapshot, error)
 }
 
 // AuthError reports that the control plane refused the credentials

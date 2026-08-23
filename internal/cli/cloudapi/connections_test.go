@@ -368,7 +368,8 @@ func connectionsBody(t *testing.T, records ...any) string {
 
 func listConnectionsFrom(t *testing.T, srv *httptest.Server) ([]CloudConnection, []string, error) {
 	t.Helper()
-	return NewClient(srv.URL).ListCloudConnections(context.Background(), testBearer, testInstallationA)
+	snap, err := NewClient(srv.URL).ListCloudConnections(context.Background(), testBearer, testInstallationA)
+	return snap.Connections, snap.Warnings, err
 }
 
 func TestListCloudConnections_DecodesRecordsAndSendsTheBearerOnly(t *testing.T) {
@@ -409,8 +410,8 @@ func TestListCloudConnections_DropsABrokenRecordWithAWarning(t *testing.T) {
 func TestListCloudConnections_ClassifiesFailuresAndRefusesRedirects(t *testing.T) {
 	srv, _ := serveBody(t, http.StatusForbidden, nil, "")
 	_, _, err := listConnectionsFrom(t, srv)
-	var authErr *AuthError
-	require.True(t, errors.As(err, &authErr))
+	var forbidden *InstallationForbiddenError
+	require.True(t, errors.As(err, &forbidden))
 
 	srv2, _ := serveBody(t, http.StatusServiceUnavailable, nil, "")
 	_, _, err = listConnectionsFrom(t, srv2)
@@ -447,5 +448,87 @@ func TestConnectCalls_WarningsAreBoundedAndLeakNothing(t *testing.T) {
 	_, err = setupFrom(t, badIssuer)
 	if err != nil {
 		assert.Less(t, len(err.Error()), 1000, "an error must not flood the terminal with text the far end chose")
+	}
+}
+
+// listAgainst serves body as a connections listing and returns the snapshot.
+func listAgainst(t *testing.T, body string) ConnectionsSnapshot {
+	t.Helper()
+	srv, _ := serveBody(t, http.StatusOK, nil, body)
+	snap, err := NewClient(srv.URL).ListCloudConnections(context.Background(), testBearer, testInstallationA)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	return snap
+}
+
+// listStatus answers the listing with code and returns the resulting error.
+func listStatus(t *testing.T, code int) error {
+	t.Helper()
+	srv, _ := serveBody(t, code, nil, "")
+	_, err := NewClient(srv.URL).ListCloudConnections(context.Background(), testBearer, testInstallationA)
+	return err
+}
+
+// A clean empty listing is complete, which is the branch a consumer acts on.
+func TestListCloudConnections_EmptyIsComplete(t *testing.T) {
+	snap := listAgainst(t, `{"results":[]}`)
+	if !snap.Complete || len(snap.Connections) != 0 {
+		t.Fatalf("complete=%v n=%d", snap.Complete, len(snap.Connections))
+	}
+}
+
+// Each of these means the full set could not be established, so a caller must
+// not read the short list as "these are all of them".
+func TestListCloudConnections_IncompleteTriggers(t *testing.T) {
+	for _, tc := range []struct{ name, body string }{
+		{"missing results", `{}`},
+		{"null results", `{"results":null}`},
+		{"repeated results", `{"results":[],"results":[]}`},
+		{"dropped record", `{"results":[{"cloud":"aws","account":"1"}]}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			snap := listAgainst(t, tc.body)
+			if snap.Complete {
+				t.Error("reports complete when the full set was not established")
+			}
+			if len(snap.Warnings) == 0 {
+				t.Error("nothing told the caller why")
+			}
+		})
+	}
+}
+
+// GCP and Azure rows carry no role ARN and are valid. An AWS row without one is
+// not, an unknown cloud is not, a mis-cased one is not, and neither is a record
+// with no account.
+func TestListCloudConnections_ClosedUnion(t *testing.T) {
+	snap := listAgainst(t, `{"results":[
+		{"cloud":"gcp","account":"proj"},
+		{"cloud":"azure","account":"sub"},
+		{"cloud":"aws","account":"1","roleArn":"arn:aws:iam::1:role/r"},
+		{"cloud":"aws","account":"2"},
+		{"cloud":"AWS","account":"3"},
+		{"cloud":"future","account":"4"},
+		{"cloud":"gcp"}]}`)
+
+	if len(snap.Connections) != 3 {
+		t.Fatalf("kept %d records, want the three valid ones", len(snap.Connections))
+	}
+	if snap.Complete {
+		t.Error("records were dropped, so the snapshot is not complete")
+	}
+}
+
+// 401 and 403 mean different things to a user and must not collapse: 401 is a
+// lapsed session, 403 is a member whose tenant grant excludes this installation.
+func TestListCloudConnections_DistinguishesLapsedFromForbidden(t *testing.T) {
+	var lapsed *SessionLapsedError
+	if err := listStatus(t, http.StatusUnauthorized); !errors.As(err, &lapsed) {
+		t.Errorf("401 did not report a lapsed session: %v", err)
+	}
+	var denied *InstallationForbiddenError
+	if err := listStatus(t, http.StatusForbidden); !errors.As(err, &denied) {
+		t.Errorf("403 did not report denied access: %v", err)
 	}
 }
