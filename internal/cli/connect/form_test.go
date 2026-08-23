@@ -80,6 +80,18 @@ func stubConfirms(t *testing.T, answers ...bool) *confirmStub {
 	return stub
 }
 
+func stubProviderExistsPrompt(t *testing.T, exists bool, err error) *int {
+	t.Helper()
+	calls := new(int)
+	restore := confirmProviderExistsFn
+	confirmProviderExistsFn = func(_ *theme.Theme, _ string) (bool, error) {
+		*calls++
+		return exists, err
+	}
+	t.Cleanup(func() { confirmProviderExistsFn = restore })
+	return calls
+}
+
 func stubRoleArnPrompt(t *testing.T, arn string, err error) *int {
 	t.Helper()
 	calls := new(int)
@@ -200,7 +212,7 @@ func TestFormQuickCreateWaitsAndRegistersThePastedArn(t *testing.T) {
 	require.Len(t, confirms.prompts, 1)
 	assert.Contains(t, confirms.prompts[0], "PowerUserAccess + IAM management")
 	assert.Equal(t, 1, *waits)
-	assert.Contains(t, out, "formae-oidc-provider", "the links print before the wait")
+	assert.Contains(t, out, "param_CreateProvider=true", "the link prints before the wait")
 	assert.Contains(t, out, "registered")
 	posts := cp.posts()
 	require.Len(t, posts, 1)

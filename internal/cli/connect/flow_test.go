@@ -97,6 +97,23 @@ func TestDecideMode_RegionIsRefusedOffTheLocalPath(t *testing.T) {
 	assert.Equal(t, modeLocal, mode)
 }
 
+// --provider-exists answers a question only quick-create asks.
+func TestDecideMode_ProviderExistsIsRefusedOffQuickCreate(t *testing.T) {
+	for _, opts := range []options{
+		{Account: testAccount, RoleArn: "arn:aws:iam::" + testAccount + ":role/r", ProviderExists: true},
+		{Account: testAccount, ProfileAWS: "dev", ProviderExists: true},
+		{Account: testAccount, ProviderExists: true},
+	} {
+		_, err := decideMode(opts, true)
+		flagError(t, err)
+		assert.Contains(t, err.Error(), "--quick-create")
+	}
+
+	mode, err := decideMode(options{Account: testAccount, QuickCreate: true, ProviderExists: true}, true)
+	require.NoError(t, err)
+	assert.Equal(t, modeQuickCreate, mode)
+}
+
 func TestDecideMode_AccountMustBeTwelveDigits(t *testing.T) {
 	for _, account := range []string{"123", "1234567890123", "12345678901a", "  123456789012", "-23456789012"} {
 		_, err := decideMode(options{Account: account, QuickCreate: true}, true)
@@ -192,6 +209,20 @@ func TestWarnOnNameMismatch(t *testing.T) {
 // connectedElsewhere warns only about the same AWS account on a different
 // installation: a GCP account string equal to a 12-digit AWS id is not this
 // account, and the installation being connected is not "elsewhere".
+// Any aws hint entry for the account means the provider very likely exists —
+// including this installation's own prior connection. Other clouds never
+// match.
+func TestAccountInHint(t *testing.T) {
+	hint := []cloudapi.ConnectedAccount{
+		{Cloud: "gcp", Account: testAccount, InstallationID: "other"},
+		{Cloud: "aws", Account: "999999999999", InstallationID: "other"},
+	}
+	assert.False(t, accountInHint(hint, testAccount))
+
+	hint = append(hint, cloudapi.ConnectedAccount{Cloud: "aws", Account: testAccount, InstallationID: testInstallation})
+	assert.True(t, accountInHint(hint, testAccount))
+}
+
 func TestConnectedElsewhere(t *testing.T) {
 	self := "3HzFPXfPDGhwLJJVtaHbmFs6vLa"
 	other := "2ZaBcDeFgHiJkLmNoPqRsTuVwXy"

@@ -22,10 +22,14 @@ import (
 type options struct {
 	Account     string
 	QuickCreate bool
-	ProfileAWS  string
-	RoleArn     string
-	Region      string
-	NoInput     bool
+	// ProviderExists flips the link's CreateProvider parameter for an account
+	// that was connected before: the shared OIDC provider already exists and
+	// IAM allows only one per issuer.
+	ProviderExists bool
+	ProfileAWS     string
+	RoleArn        string
+	Region         string
+	NoInput        bool
 
 	// ConfigFlag and ProfileFlag are carried verbatim into the resume hint:
 	// a fresh shell may have a different active profile.
@@ -57,6 +61,9 @@ func decideMode(opts options, tty bool) (mode, error) {
 	}
 	if opts.Region != "" && opts.ProfileAWS == "" {
 		return 0, cmd.FlagErrorf("--region applies only to the local path; pass it with --profile-aws")
+	}
+	if opts.ProviderExists && !opts.QuickCreate {
+		return 0, cmd.FlagErrorf("--provider-exists answers a question only quick-create asks; pass it with --quick-create")
 	}
 	if opts.NoInput {
 		var missing []string
@@ -153,6 +160,19 @@ func warnOnNameMismatch(actual, expected string) string {
 	}
 	return fmt.Sprintf("the role is named %q where this installation's expected role name is %q; "+
 		"registering the role you named", actual, expected)
+}
+
+// accountInHint reports whether any aws hint entry names the account — on
+// any installation, including the one being connected. A known account means
+// the shared provider very likely exists, so the interactive flow asks
+// instead of assuming a first connection.
+func accountInHint(hint []cloudapi.ConnectedAccount, account string) bool {
+	for _, entry := range hint {
+		if entry.Cloud == "aws" && entry.Account == account {
+			return true
+		}
+	}
+	return false
 }
 
 // connectedElsewhere returns the hint entries naming the stated AWS account on

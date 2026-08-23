@@ -84,7 +84,7 @@ func runLocal(cc *cobra.Command, opts options, consumer printer.Consumer, schema
 	if consumer == printer.ConsumerMachine {
 		return emitRegistered(cc.OutOrStdout(), schema, v)
 	}
-	return printRegisteredHuman(cc.OutOrStdout(), v, s.InstallationID)
+	return printRegisteredHuman(cc.OutOrStdout(), isInteractive(), clicmd.ResolveConfiguredTheme(cc), v, s.InstallationID)
 }
 
 // classifyProvision maps provx's typed errors onto declared codes. Anything

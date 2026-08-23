@@ -49,7 +49,7 @@ func TestStructure_AwsFlagsLiveOnTheSubcommandOnly(t *testing.T) {
 	parent := ConnectCmd()
 	aws := findSub(t, parent, "aws")
 
-	for _, flag := range []string{"account", "quick-create", "profile-aws", "region", "role-arn", "no-input"} {
+	for _, flag := range []string{"account", "quick-create", "provider-exists", "profile-aws", "region", "role-arn", "no-input"} {
 		assert.NotNil(t, aws.Flags().Lookup(flag), "flag %q missing on connect aws", flag)
 		assert.Nil(t, parent.Flags().Lookup(flag), "flag %q must not exist on the parent", flag)
 	}

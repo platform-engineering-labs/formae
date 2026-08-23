@@ -321,7 +321,7 @@ func TestContractYAMLVariant(t *testing.T) {
 
 	require.NoError(t, err, "out: %s", out)
 	assert.Contains(t, out, "phase: registered")
-	assert.Contains(t, out, "schemaVersion: 1")
+	assert.Contains(t, out, "schemaVersion: 2")
 	assert.Contains(t, out, "status: registered_unverified")
 }
 
@@ -338,7 +338,7 @@ func TestContractHumanOutputCarriesNoJSON(t *testing.T) {
 	assert.NotContains(t, out, "{")
 	assert.Contains(t, out, "registered aws account "+testAccount)
 	assert.Contains(t, out, contractRoleArn)
-	assert.Contains(t, out, "not verified by formae")
+	assert.Contains(t, out, "registered aws account")
 }
 
 func TestContractClassicProfileIsHostedRequired(t *testing.T) {
@@ -518,7 +518,7 @@ func TestContractRegisterSucceeds(t *testing.T) {
 
 	require.NoError(t, err, "out: %s", out)
 	got := decodeOut(t, out)
-	assert.Equal(t, float64(1), got["schemaVersion"])
+	assert.Equal(t, float64(2), got["schemaVersion"])
 	assert.Equal(t, "registered", got["phase"])
 	assert.Equal(t, "registered_unverified", got["status"])
 	assert.Equal(t, "aws", got["cloud"])
@@ -628,16 +628,93 @@ func TestContractQuickCreateNoInputEmitsLinksAndRegistersNothing(t *testing.T) {
 
 	require.NoError(t, err, "out: %s", out)
 	got := decodeOut(t, out)
-	assert.Equal(t, float64(1), got["schemaVersion"])
+	assert.Equal(t, float64(2), got["schemaVersion"])
 	assert.Equal(t, "links", got["phase"])
 	assert.Equal(t, "aws", got["cloud"])
 	assert.Equal(t, testAccount, got["account"])
 	assert.Equal(t, contractInstallation, got["installation"])
-	assert.Contains(t, got["providerStackUrl"], "formae-oidc-provider")
-	assert.Contains(t, got["roleStackUrl"], "formae-connect-"+contractInstallation)
+	assert.Contains(t, got["stackUrl"], "formae-connect-"+contractInstallation)
+	assert.Contains(t, got["stackUrl"], "param_CreateProvider=true")
+	assert.Equal(t, true, got["createProvider"])
+	assert.NotContains(t, out, "providerStackUrl")
 	assert.Equal(t, contractRoleArn, got["expectedRoleArn"])
 	assert.Contains(t, got["resumeCommand"], "--role-arn")
 	assert.Empty(t, cp.posts(), "quick-create registers nothing")
+}
+
+// --provider-exists rides the machine document and flips the link parameter,
+// so a conversational harness can ask the question and pass the answer.
+func TestContractQuickCreateProviderExists(t *testing.T) {
+	cp := newControlPlane(t)
+	seedProfile(t, cp, hostedProfile(contractInstallation))
+	stubCredentials(t, bearerAnswer("t1"))
+
+	out, err := runConnect(t, "aws", "--account", testAccount, "--quick-create", "--provider-exists",
+		"--no-input", "--output-consumer", "machine", "--output-schema", "json")
+
+	require.NoError(t, err, "out: %s", out)
+	got := decodeOut(t, out)
+	assert.Contains(t, got["stackUrl"], "param_CreateProvider=false")
+	assert.Equal(t, false, got["createProvider"])
+}
+
+// When the hint knows the account, interactive quick-create asks whether the
+// provider already exists and carries the answer into the link.
+func TestContractQuickCreateAsksProviderQuestionWhenHintKnowsTheAccount(t *testing.T) {
+	interactiveTTY(t)
+	cp := newControlPlane(t)
+	cp.setupBody = defaultSetupBody(t, []map[string]any{{
+		"cloud": "aws", "account": testAccount,
+		"installationId": contractInstallation, "installationName": "inst",
+		"tenantName": "default", "orgName": "acme",
+	}})
+	seedProfile(t, cp, hostedProfile(contractInstallation))
+	stubCredentials(t, bearerAnswer("t1"))
+	stubConfirms(t, true)
+	asked := stubProviderExistsPrompt(t, true, nil)
+	stubRoleArnPrompt(t, "", nil)
+
+	out, err := runConnect(t, "aws", "--account", testAccount, "--quick-create")
+
+	require.NoError(t, err, "out: %s", out)
+	assert.Equal(t, 1, *asked, "the provider question is asked when the hint knows the account")
+	assert.Contains(t, out, "param_CreateProvider=false")
+}
+
+// A fresh account asks nothing: the common case stays one link, zero
+// questions, provider created by default.
+func TestContractQuickCreateSkipsProviderQuestionForFreshAccount(t *testing.T) {
+	interactiveTTY(t)
+	cp := newControlPlane(t)
+	seedProfile(t, cp, hostedProfile(contractInstallation))
+	stubCredentials(t, bearerAnswer("t1"))
+	stubConfirms(t, true)
+	asked := stubProviderExistsPrompt(t, true, nil)
+	stubRoleArnPrompt(t, "", nil)
+
+	out, err := runConnect(t, "aws", "--account", testAccount, "--quick-create")
+
+	require.NoError(t, err, "out: %s", out)
+	assert.Equal(t, 0, *asked, "no question for a fresh account")
+	assert.Contains(t, out, "param_CreateProvider=true")
+}
+
+// Interactive quick-create finishes on a bare Enter: the expected ARN is
+// registered without a paste. A pasted ARN still wins when it differs.
+func TestContractQuickCreateEnterRegistersExpectedArn(t *testing.T) {
+	interactiveTTY(t)
+	cp := newControlPlane(t)
+	seedProfile(t, cp, hostedProfile(contractInstallation))
+	stubCredentials(t, bearerAnswer("t1"))
+	stubConfirms(t, true)
+	stubRoleArnPrompt(t, "", nil)
+
+	out, err := runConnect(t, "aws", "--account", testAccount, "--quick-create")
+
+	require.NoError(t, err, "out: %s", out)
+	posts := cp.posts()
+	require.Len(t, posts, 1, "Enter registers the expected ARN")
+	assert.Contains(t, posts[0].Body, contractRoleArn)
 }
 
 // 409 answers are disambiguated by reading the listing: the same ARN is the
