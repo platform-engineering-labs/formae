@@ -7,6 +7,7 @@
 package connect
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -255,6 +256,27 @@ func stubCredentials(t *testing.T, answers ...func() (*pkgauth.GetAuthHeaderResp
 	newCredentials = func(_ *app.App) credentialProvider { return creds }
 	t.Cleanup(func() { newCredentials = restore })
 	return creds
+}
+
+// hostedOpts seeds a hosted profile against a stub control plane and stubs a
+// credential, returning the options an authenticated control-plane call
+// needs. The stub control plane and credential are not asserted on here; the
+// point is a run that authenticates cleanly.
+func hostedOpts(t *testing.T) options {
+	t.Helper()
+	cp := newControlPlane(t)
+	seedProfile(t, cp, hostedProfile(contractInstallation))
+	stubCredentials(t, bearerAnswer("t1"))
+	return options{}
+}
+
+// Listing is a control-plane read and must not depend on the AWS-side template
+// and issuer pin, which only the provisioning paths use.
+func TestOpenControlPlane_IgnoresConnectPlatformOverrides(t *testing.T) {
+	t.Setenv("FORMAE_CONNECT_ISSUER", "not a url")
+	if _, err := openControlPlane(context.Background(), hostedOpts(t)); err != nil {
+		t.Fatalf("a malformed AWS-side override broke a control-plane read: %v", err)
+	}
 }
 
 func registerOnlyArgs() []string {

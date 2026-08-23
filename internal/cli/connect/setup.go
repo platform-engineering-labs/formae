@@ -128,29 +128,31 @@ func selectWithoutBootstrap(configFlag, profileFlag string) (selection, error) {
 	}
 }
 
-// session is an authenticated connect run whose coordinates have been read
-// and whose issuer has passed the pin. Everything path-specific happens on
-// top of one of these.
-type session struct {
+// cpContext is an authenticated handle to the control plane: a profile has
+// been resolved, the login-issuer gate has passed, and a credential has been
+// force-refreshed. It touches nothing AWS-side, so a read that only lists or
+// looks up state can build on it without inheriting the provisioning paths'
+// template and issuer pin.
+type cpContext struct {
+	Client         cloudapi.Client
+	Bearer         string
 	InstallationID string
-	Setup          cloudapi.CloudConnectionSetup
-	Platform       connectPlatform
-	Warnings       []string
 
-	client    cloudapi.Client
-	validated login.ValidatedHosted
-	creds     credentialProvider
+	// Validated and Creds are not optional: openSession's registration path
+	// force-refreshes the credential a second time before registering
+	// (boundary two), and both are needed to do that without authenticating
+	// again from scratch.
+	Validated login.ValidatedHosted
+	Creds     credentialProvider
 }
 
-// openSession resolves the profile, force-refreshes the credential (boundary
-// one), reads the setup coordinates, and holds them against the issuer pin.
-func openSession(ctx context.Context, opts options) (*session, error) {
+// openControlPlane resolves the profile, requires it to be hosted, holds the
+// bearer to the login-issuer gate, and force-refreshes the credential
+// (boundary one). Nothing here depends on FORMAE_CONNECT_*: that pair governs
+// only the AWS-side trust artifacts, which a control-plane read never
+// touches.
+func openControlPlane(ctx context.Context, opts options) (*cpContext, error) {
 	conn, a, _, err := resolveHosted(opts.ConfigFlag, opts.ProfileFlag)
-	if err != nil {
-		return nil, err
-	}
-
-	p, err := resolveConnectPlatform()
 	if err != nil {
 		return nil, err
 	}
@@ -168,7 +170,7 @@ func openSession(ctx context.Context, opts options) (*session, error) {
 		return nil, authFailure(err)
 	}
 
-	// The control-plane origin comes from the login platform pair — that is
+	// The control-plane origin comes from the login platform pair: that is
 	// where the bearer goes; FORMAE_CONNECT_* governs only the AWS-side
 	// issuer/template pin.
 	origin, _, err := cloudapi.ResolvePlatform("", "")
@@ -177,9 +179,45 @@ func openSession(ctx context.Context, opts options) (*session, error) {
 	}
 	client := newCloudAPI(origin)
 
-	setup, err := client.GetCloudConnectionSetup(ctx, bearer, conn.Installation)
+	return &cpContext{
+		Client:         client,
+		Bearer:         bearer,
+		InstallationID: conn.Installation,
+		Validated:      validated,
+		Creds:          creds,
+	}, nil
+}
+
+// session is an authenticated connect run whose coordinates have been read
+// and whose issuer has passed the pin. Everything path-specific happens on
+// top of one of these.
+type session struct {
+	InstallationID string
+	Setup          cloudapi.CloudConnectionSetup
+	Platform       connectPlatform
+	Warnings       []string
+
+	client    cloudapi.Client
+	validated login.ValidatedHosted
+	creds     credentialProvider
+}
+
+// openSession resolves the profile, force-refreshes the credential (boundary
+// one), reads the setup coordinates, and holds them against the issuer pin.
+func openSession(ctx context.Context, opts options) (*session, error) {
+	cp, err := openControlPlane(ctx, opts)
 	if err != nil {
-		return nil, classifySetupError(ctx, client, bearer, conn.Installation, err)
+		return nil, err
+	}
+
+	p, err := resolveConnectPlatform()
+	if err != nil {
+		return nil, err
+	}
+
+	setup, err := cp.Client.GetCloudConnectionSetup(ctx, cp.Bearer, cp.InstallationID)
+	if err != nil {
+		return nil, classifySetupError(ctx, cp.Client, cp.Bearer, cp.InstallationID, err)
 	}
 
 	// F6: the server's spelling is canonicalised before the comparison, so a
@@ -191,13 +229,13 @@ func openSession(ctx context.Context, opts options) (*session, error) {
 	}
 
 	return &session{
-		InstallationID: conn.Installation,
+		InstallationID: cp.InstallationID,
 		Setup:          setup,
 		Platform:       p,
 		Warnings:       setup.Warnings,
-		client:         client,
-		validated:      validated,
-		creds:          creds,
+		client:         cp.Client,
+		validated:      cp.Validated,
+		creds:          cp.Creds,
 	}, nil
 }
 
