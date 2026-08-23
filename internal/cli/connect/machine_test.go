@@ -101,7 +101,7 @@ func TestDocuments_SupportYAML(t *testing.T) {
 func TestReport_MapsUndeclaredErrorsToInternal(t *testing.T) {
 	var out bytes.Buffer
 
-	err := report(&out, printer.ConsumerMachine, "json", errors.New("pkl: inline password hunter2"))
+	err := report(&out, printer.ConsumerMachine, "json", errors.New("pkl: inline password hunter2"), awsFallbackMessage)
 
 	require.Error(t, err)
 	got := decodeDoc(t, out.String())
@@ -113,7 +113,7 @@ func TestReport_PassesDeclaredFailuresThrough(t *testing.T) {
 	var out bytes.Buffer
 
 	err := report(&out, printer.ConsumerMachine, "json",
-		printer.Fail(printer.CodeHostedRequired, "only a hosted installation can be connected", nil))
+		printer.Fail(printer.CodeHostedRequired, "only a hosted installation can be connected", nil), awsFallbackMessage)
 
 	require.Error(t, err)
 	got := decodeDoc(t, out.String())
@@ -124,7 +124,7 @@ func TestReport_PassesDeclaredFailuresThrough(t *testing.T) {
 func TestReport_HumanConsumerGetsNoEnvelope(t *testing.T) {
 	var out bytes.Buffer
 
-	err := report(&out, printer.ConsumerHuman, "json", errors.New("plain"))
+	err := report(&out, printer.ConsumerHuman, "json", errors.New("plain"), awsFallbackMessage)
 
 	require.Error(t, err)
 	assert.Zero(t, out.Len())
