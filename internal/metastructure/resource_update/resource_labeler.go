@@ -133,19 +133,28 @@ func (l *ResourceLabeler) extractLabelFromLegacyTagKeys(properties json.RawMessa
 	return ""
 }
 
-// ensureUnique checks if a label already exists and increments the version if needed.
+// ensureUnique returns a label that no existing resource holds, incrementing
+// the version suffix as often as needed. A single increment is not enough:
+// when the base label itself ends in "-<number>" ("server-1"), incrementing it
+// lands on a neighboring label ("server-2") that another resource may already
+// hold as its natural name, and the minted variant is invisible to a later
+// lookup for the original base — so every candidate is re-checked until one
+// is free.
 func (l *ResourceLabeler) ensureUnique(label string) string {
-	res, err := l.datastore.LatestLabelForResource(label)
-	if err != nil {
-		return label
-	}
+	candidate := label
+	for {
+		res, err := l.datastore.LatestLabelForResource(candidate)
+		if err != nil {
+			return candidate
+		}
 
-	// No existing resource on the unmanaged stack with this label
-	if res == "" {
-		return label
-	}
+		// No existing resource with this label or a versioned variant of it
+		if res == "" {
+			return candidate
+		}
 
-	return incrementVersion(res)
+		candidate = incrementVersion(res)
+	}
 }
 
 func incrementVersion(version string) string {
