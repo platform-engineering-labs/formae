@@ -69,8 +69,12 @@ const (
 	// CodeRegistrationConflict: a different role ARN is already registered for
 	// this account on this installation.
 	CodeRegistrationConflict Code = "registration_conflict"
-	// CodeNotAuthorized: the control plane answered 403; the caller is not an
-	// admin of this installation. Terminal, not retried.
+	// CodeNotAuthorized: the caller lacks the access this operation needs on
+	// this installation. Provisioning uses it for a 403 meaning the caller is
+	// not an admin; listing uses it both for a 403 meaning a member's tenant
+	// grant excludes this installation, and for a 404 meaning the
+	// installation is not visible to the caller at all. Terminal, not
+	// retried.
 	CodeNotAuthorized Code = "not_authorized"
 	// CodeUnsupportedPartition: a non-commercial region, ARN, or STS caller.
 	CodeUnsupportedPartition Code = "unsupported_partition"

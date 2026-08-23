@@ -327,9 +327,9 @@ func TestConnectList_HumanOutputNamesTheInstallation(t *testing.T) {
 	out, err := runList(t)
 	require.NoError(t, err, "out: %s", out)
 	assert.Contains(t, out, contractInstallation)
-	assert.Contains(t, out, "aws")
-	assert.Contains(t, out, testAccount)
-	assert.Contains(t, out, roleArn)
+	// Assert the row's own shape, not just substrings the role ARN alone
+	// would also satisfy (it embeds both "aws" and the account number).
+	assert.Contains(t, out, "  aws  "+testAccount+"  "+roleArn)
 	assert.NotContains(t, out, "schemaVersion")
 	assert.NotContains(t, strings.ToLower(out), "verified")
 }

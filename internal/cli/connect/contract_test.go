@@ -273,8 +273,14 @@ func hostedOpts(t *testing.T) options {
 // Listing is a control-plane read and must not depend on the AWS-side template
 // and issuer pin, which only the provisioning paths use.
 func TestOpenControlPlane_IgnoresConnectPlatformOverrides(t *testing.T) {
+	opts := hostedOpts(t)
+	// Set after seeding: seedProfile clears the FORMAE_CONNECT_* pair, so
+	// setting it first would be wiped before openControlPlane ever runs.
+	// Both variables are set, not just the issuer, because a half-set pair
+	// is refused before either value is parsed as a URL.
 	t.Setenv("FORMAE_CONNECT_ISSUER", "not a url")
-	if _, err := openControlPlane(context.Background(), hostedOpts(t)); err != nil {
+	t.Setenv("FORMAE_CONNECT_TEMPLATE_BASE", "also not a url")
+	if _, err := openControlPlane(context.Background(), opts); err != nil {
 		t.Fatalf("a malformed AWS-side override broke a control-plane read: %v", err)
 	}
 }
