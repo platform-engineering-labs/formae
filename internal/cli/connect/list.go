@@ -143,10 +143,24 @@ func classifyListError(ctx context.Context, client cloudapi.Client, bearer, inst
 // printConnectionsHuman renders the listing as prose: one line per registered
 // connection, naming the installation so a run against a non-default profile
 // says which installation it read.
+//
+// Empty-and-complete gets the one required sentence and nothing else: no
+// header, no warning, because none was raised. Every other case (rows to
+// show, or a listing that could not be read in full) shares the general path
+// below, which never presents the rows it did read as though they were the
+// whole count: the count itself is never stated, complete or not.
 func printConnectionsHuman(w io.Writer, v connectionsView) error {
-	lines := []string{fmt.Sprintf("cloud connections registered on installation %s:", v.Installation)}
-	if len(v.Connections) == 0 {
-		lines = append(lines, "  (none)")
+	if len(v.Connections) == 0 && v.Complete {
+		_, err := fmt.Fprintf(w, "No cloud accounts are registered on %s.\n", v.Installation)
+		return err
+	}
+
+	var lines []string
+	if v.Complete {
+		lines = append(lines, fmt.Sprintf("cloud accounts registered on %s:", v.Installation))
+	} else {
+		lines = append(lines, fmt.Sprintf(
+			"cloud accounts registered on %s (this list is partial; it could not be read in full):", v.Installation))
 	}
 	for _, c := range v.Connections {
 		line := "  " + c.Cloud + "  " + c.Account
@@ -154,9 +168,6 @@ func printConnectionsHuman(w io.Writer, v connectionsView) error {
 			line += "  " + c.RoleArn
 		}
 		lines = append(lines, line)
-	}
-	if !v.Complete {
-		lines = append(lines, "", "warning: this listing could not be read in full; some connections may be missing")
 	}
 	for _, warning := range v.Warnings {
 		lines = append(lines, "warning: "+warning)

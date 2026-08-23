@@ -312,10 +312,14 @@ func TestConnectList_IncompleteListingReportsNotCompleteWithAWarning(t *testing.
 	assert.NotEmpty(t, warnings)
 }
 
-// Human output names the installation and never carries the machine document.
+// Human output names the installation, carries the cloud, account, and role
+// for an AWS row, never carries the machine document, and never claims a
+// connection was "verified" (formae never verifies that a registration's
+// trust is actually usable).
 func TestConnectList_HumanOutputNamesTheInstallation(t *testing.T) {
+	roleArn := "arn:aws:iam::" + testAccount + ":role/r"
 	stub := newListStub()
-	stub.connectionsBody = snapshotOf(conn("aws", testAccount, "arn:aws:iam::"+testAccount+":role/r"))
+	stub.connectionsBody = snapshotOf(conn("aws", testAccount, roleArn))
 	url := stub.start(t)
 	seedListProfile(t, url)
 	stubCredentials(t, bearerAnswer("t1"))
@@ -323,6 +327,49 @@ func TestConnectList_HumanOutputNamesTheInstallation(t *testing.T) {
 	out, err := runList(t)
 	require.NoError(t, err, "out: %s", out)
 	assert.Contains(t, out, contractInstallation)
+	assert.Contains(t, out, "aws")
 	assert.Contains(t, out, testAccount)
+	assert.Contains(t, out, roleArn)
 	assert.NotContains(t, out, "schemaVersion")
+	assert.NotContains(t, strings.ToLower(out), "verified")
+}
+
+// The spec pins the empty-and-complete sentence exactly: no more, no less,
+// and no claim hedged by an unrelated warning that was never raised.
+func TestConnectList_HumanOutputEmptyAndCompleteIsTheExactSentence(t *testing.T) {
+	stub := newListStub()
+	stub.connectionsBody = snapshotOf()
+	url := stub.start(t)
+	seedListProfile(t, url)
+	stubCredentials(t, bearerAnswer("t1"))
+
+	out, err := runList(t)
+	require.NoError(t, err, "out: %s", out)
+	assert.Equal(t, "No cloud accounts are registered on "+contractInstallation+".\n", out)
+}
+
+// An incomplete listing says plainly that it may be partial, prints the
+// warnings that explain why, and never presents the rows it did read as if
+// they were the whole count.
+func TestConnectList_HumanOutputIncompleteSaysPartialAndNeverACount(t *testing.T) {
+	stub := newListStub()
+	// One valid AWS row plus one record missing its role: the second is
+	// dropped with a warning, so the listing is one row short of complete.
+	stub.connectionsBody = `{"results":[` +
+		`{"cloud":"aws","account":"` + testAccount + `","roleArn":"arn:aws:iam::` + testAccount + `:role/r"},` +
+		`{"cloud":"aws","account":"999999999999"}]}`
+	url := stub.start(t)
+	seedListProfile(t, url)
+	stubCredentials(t, bearerAnswer("t1"))
+
+	out, err := runList(t)
+	require.NoError(t, err, "out: %s", out)
+
+	lower := strings.ToLower(out)
+	assert.Contains(t, lower, "partial", "an incomplete listing must say plainly that it may be partial")
+	assert.NotContains(t, lower, "no cloud accounts are registered",
+		"a partial listing must not read as the empty-and-complete sentence")
+	assert.NotRegexp(t, `\b1\s+(cloud account|connection)s?\b`, lower,
+		"the one row read must not be presented as if it were the total count")
+	assert.Contains(t, out, testAccount, "the row that was read is still shown")
 }
