@@ -46,6 +46,7 @@ func awsCmd() *cobra.Command {
 	c.Flags().Bool("no-input", false, "Disable prompts; requires --account and one of --quick-create, --profile-aws, --role-arn")
 	clicmd.AddOutputFlags(c)
 	c.SetUsageTemplate(clicmd.SimpleCmdUsageTemplate)
+	c.AddCommand(profilesCmd())
 	return c
 }
 
