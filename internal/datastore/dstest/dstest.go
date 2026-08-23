@@ -142,6 +142,7 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunLoadResourceByNativeIDDifferentTypes(t, newDS)
 	RunBatchGetKSUIDsByTriplets(t, newDS)
 	RunBatchGetKSUIDsByTripletsPatchScenario(t, newDS)
+	RunGetKSUIDByTriplet(t, newDS)
 	RunDifferentResourceTypesSameNativeId(t, newDS)
 	RunGetResourceModificationsSinceLastReconcile(t, newDS)
 	RunStoreResourceAfterDeleteWithSameNativeID(t, newDS)
