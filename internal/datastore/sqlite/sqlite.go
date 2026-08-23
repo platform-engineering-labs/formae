@@ -4643,12 +4643,19 @@ func (d DatastoreSQLite) GetKSUIDByTriplet(stack, label, resourceType string) (s
 	_, span := sqliteTracer.Start(context.Background(), "GetKSUIDByTriplet")
 	defer span.End()
 
+	// Only the triplet's latest version counts: a resource whose newest row is
+	// a delete/reaped tombstone is gone, and an older live version must not
+	// resurrect its ksuid. Mirrors BatchGetKSUIDsByTriplets.
 	query := `
 	SELECT ksuid
-	FROM resources
-	WHERE stack = ? AND label = ? AND LOWER(type) = LOWER(?)
-	AND operation != ? AND operation != 'reaped'
-	ORDER BY version DESC
+	FROM resources r1
+	WHERE r1.stack = ? AND r1.label = ? AND LOWER(r1.type) = LOWER(?)
+	AND r1.operation != ? AND r1.operation != 'reaped'
+	AND NOT EXISTS (
+		SELECT 1 FROM resources r2
+		WHERE r1.stack = r2.stack AND r1.label = r2.label AND r1.type = r2.type
+		AND r2.version > r1.version
+	)
 	LIMIT 1
 	`
 	row := d.conn.QueryRow(query, stack, label, resourceType, resource_update.OperationDelete)

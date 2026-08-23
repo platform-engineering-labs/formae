@@ -607,3 +607,48 @@ func TestForceReconcileCommandIsVisibleThroughCommandStatus(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, hidden.Commands, "a scheduled reconcile stays out of the user-facing command history")
 }
+
+// A client-submitted destroy forma carries no ksuids, only (stack, label,
+// type) triplets. The cascade-stack walk must resolve those triplets against
+// the datastore before seeding the dependents BFS; a walk seeded only from
+// forma-supplied ksuids finds nothing, and the admission conflict check never
+// sees the stacks a cascade delete will touch.
+func TestFindCascadeStackLabels_ResolvesKsuidlessFormaResources(t *testing.T) {
+	ds := newSQLiteTestDatastore(t)
+
+	parent := &pkgmodel.Resource{
+		Stack:      "stack-0",
+		Label:      "res-a",
+		Type:       "Test::Generic::Resource",
+		NativeID:   "native-parent",
+		Properties: json.RawMessage(`{"Name":"res-a"}`),
+		Managed:    true,
+	}
+	_, err := ds.StoreResource(parent, "create-parent")
+	require.NoError(t, err)
+	stored, err := ds.LoadResourceByNativeID("native-parent", "Test::Generic::Resource")
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+
+	child := &pkgmodel.Resource{
+		Stack:    "stack-1",
+		Label:    "child-xstack",
+		Type:     "Test::Generic::ChildResource",
+		NativeID: "native-child",
+		Properties: json.RawMessage(
+			`{"Name":"child-xstack","ParentId":{"$ref":"formae://` + stored.Ksuid + `#/Name"}}`),
+		Managed: true,
+	}
+	_, err = ds.StoreResource(child, "create-child")
+	require.NoError(t, err)
+
+	m := &Metastructure{Datastore: ds}
+	stacks, err := m.findCascadeStackLabels(&pkgmodel.Forma{
+		Resources: []pkgmodel.Resource{
+			{Stack: "stack-0", Label: "res-a", Type: "Test::Generic::Resource"},
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"stack-1"}, stacks,
+		"the cross-stack dependent's stack must surface for admission deconfliction")
+}

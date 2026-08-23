@@ -1564,10 +1564,27 @@ func stackLabelsFromForma(forma *pkgmodel.Forma) []string {
 // deletes for the given forma's resources. It queries the datastore for
 // cross-stack dependents of resources being destroyed.
 func (m *Metastructure) findCascadeStackLabels(forma *pkgmodel.Forma) ([]string, error) {
+	// Client-submitted formas carry no ksuids, only (stack, label, type)
+	// triplets — resolve those against the datastore so the dependents walk
+	// actually has roots. Without this the walk is empty for every destroy
+	// that arrives over the API, and the admission conflict check never sees
+	// the stacks a cascade delete will touch.
 	currentLevel := make([]string, 0)
+	var unresolved []pkgmodel.TripletKey
 	for _, r := range forma.Resources {
 		if r.Ksuid != "" {
 			currentLevel = append(currentLevel, r.Ksuid)
+			continue
+		}
+		unresolved = append(unresolved, pkgmodel.TripletKey{Stack: r.Stack, Label: r.Label, Type: r.Type})
+	}
+	if len(unresolved) > 0 {
+		resolved, err := m.Datastore.BatchGetKSUIDsByTriplets(unresolved)
+		if err != nil {
+			return nil, err
+		}
+		for _, ksuid := range resolved {
+			currentLevel = append(currentLevel, ksuid)
 		}
 	}
 	if len(currentLevel) == 0 {

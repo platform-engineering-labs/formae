@@ -675,6 +675,71 @@ func RunBatchGetKSUIDsByTriplets(t *testing.T, newDS func(t *testing.T) TestData
 	})
 }
 
+// GetKSUIDByTriplet must agree with BatchGetKSUIDsByTriplets on liveness: a
+// resource whose latest version is a delete tombstone is gone, and its triplet
+// must not resolve to the ksuid of an older version. A re-created resource
+// resolves to the new row's ksuid.
+func RunGetKSUIDByTriplet(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("GetKSUIDByTriplet", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		resource := &pkgmodel.Resource{
+			Stack:      "test-stack",
+			Label:      "resource-1",
+			Type:       "AWS::S3::Bucket",
+			NativeID:   "bucket-1",
+			Properties: json.RawMessage(`{"BucketName": "test-bucket-1"}`),
+			Managed:    true,
+		}
+		_, err := ds.StoreResource(resource, "test-command-1")
+		assert.NoError(t, err)
+
+		stored, err := ds.LoadResourceByNativeID("bucket-1", "AWS::S3::Bucket")
+		assert.NoError(t, err)
+		assert.NotNil(t, stored)
+
+		ksuid, err := ds.GetKSUIDByTriplet("test-stack", "resource-1", "AWS::S3::Bucket")
+		assert.NoError(t, err)
+		assert.Equal(t, stored.Ksuid, ksuid)
+
+		// Missing triplet resolves to nothing.
+		ksuid, err = ds.GetKSUIDByTriplet("test-stack", "no-such-resource", "AWS::S3::Bucket")
+		assert.NoError(t, err)
+		assert.Empty(t, ksuid)
+
+		// A deleted resource's triplet resolves to nothing: the latest version
+		// is the tombstone, and the older live version must not resurrect.
+		_, err = ds.DeleteResource(stored, "delete-command")
+		assert.NoError(t, err)
+
+		ksuid, err = ds.GetKSUIDByTriplet("test-stack", "resource-1", "AWS::S3::Bucket")
+		assert.NoError(t, err)
+		assert.Empty(t, ksuid, "a deleted resource must not resolve via an older version")
+
+		// Re-creating the triplet resolves to the new row's ksuid.
+		recreated := &pkgmodel.Resource{
+			Stack:      "test-stack",
+			Label:      "resource-1",
+			Type:       "AWS::S3::Bucket",
+			NativeID:   "bucket-2",
+			Properties: json.RawMessage(`{"BucketName": "test-bucket-2"}`),
+			Managed:    true,
+		}
+		_, err = ds.StoreResource(recreated, "recreate-command")
+		assert.NoError(t, err)
+
+		restored, err := ds.LoadResourceByNativeID("bucket-2", "AWS::S3::Bucket")
+		assert.NoError(t, err)
+		assert.NotNil(t, restored)
+
+		ksuid, err = ds.GetKSUIDByTriplet("test-stack", "resource-1", "AWS::S3::Bucket")
+		assert.NoError(t, err)
+		assert.Equal(t, restored.Ksuid, ksuid)
+	})
+}
+
 func RunBatchGetKSUIDsByTripletsPatchScenario(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	t.Run("BatchGetKSUIDsByTriplets_PatchScenario", func(t *testing.T) {
 		td := newDS(t)
