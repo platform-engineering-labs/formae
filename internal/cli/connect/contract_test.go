@@ -780,6 +780,46 @@ func TestContractRegistrationConflict(t *testing.T) {
 	})
 }
 
+// The connections document is pinned the same way links and registered are:
+// command-level, against the shared control-plane fixture, so the assertion
+// proves the command reads the fixture's connections route and selects the
+// machine emit, not merely that the serializer round-trips a struct. A
+// serializer-level test in machine_test.go could not prove either.
+func TestContractListEmitsTheConnectionsDocument(t *testing.T) {
+	cp := newControlPlane(t)
+	cp.connectionsBody = `{"results":[` +
+		`{"cloud":"aws","account":"` + testAccount + `","roleArn":"` + contractRoleArn + `"},` +
+		`{"cloud":"gcp","account":"some-gcp-project"}]}`
+	seedProfile(t, cp, hostedProfile(contractInstallation))
+	stubCredentials(t, bearerAnswer("t1"))
+
+	out, err := runConnect(t, "list", "--output-consumer", "machine", "--output-schema", "json")
+
+	require.NoError(t, err, "out: %s", out)
+	got := decodeOut(t, out)
+	assert.Equal(t, float64(2), got["schemaVersion"])
+	assert.Equal(t, "connections", got["phase"])
+	assert.Equal(t, contractInstallation, got["installation"])
+	assert.Equal(t, true, got["complete"])
+
+	rows, ok := got["connections"].([]any)
+	require.True(t, ok, "connections is not an array: %s", out)
+	require.Len(t, rows, 2)
+
+	aws, ok := rows[0].(map[string]any)
+	require.True(t, ok, "row 0 is not an object: %s", out)
+	assert.Equal(t, "aws", aws["cloud"])
+	assert.Equal(t, testAccount, aws["account"])
+	assert.Equal(t, contractRoleArn, aws["roleArn"])
+
+	gcp, ok := rows[1].(map[string]any)
+	require.True(t, ok, "row 1 is not an object: %s", out)
+	assert.Equal(t, "gcp", gcp["cloud"])
+	assert.Equal(t, "some-gcp-project", gcp["account"])
+	_, present := gcp["roleArn"]
+	assert.False(t, present, "a GCP row must not carry a roleArn key, empty or otherwise")
+}
+
 // registerAgainstConflict runs a registration the control plane refuses with
 // 409, against a connections listing built by one of the listingXWithout
 // helpers below, and returns the error the run finished with.
