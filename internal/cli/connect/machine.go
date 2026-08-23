@@ -124,3 +124,29 @@ func emitRegistered(w io.Writer, schema string, v registeredView) error {
 func emitConnections(w io.Writer, schema string, v connectionsView) error {
 	return printer.NewMachineReadablePrinter[connectionsView](w, schema).Print(&v)
 }
+
+// profileResolution is one local AWS profile's resolution: either the
+// account its credentials authenticate to, or why that could not be
+// determined. Never both, never neither.
+type profileResolution struct {
+	Name        string `json:"name" yaml:"name"`
+	Account     string `json:"account,omitempty" yaml:"account,omitempty"`
+	Unavailable string `json:"unavailable,omitempty" yaml:"unavailable,omitempty"`
+}
+
+// profilesView is the `connect aws profiles` emit: every profile the local
+// shared AWS config names, alongside the account it resolves to. Profiles is
+// always a slice, never nil, for the same reason Connections is on
+// connectionsView. Warnings is always present too, even empty: this document
+// carries no Complete flag to hedge against, so there is nothing else to
+// signal a partial read with.
+type profilesView struct {
+	SchemaVersion int                 `json:"schemaVersion" yaml:"schemaVersion"`
+	Phase         string              `json:"phase" yaml:"phase"` // "awsProfiles"
+	Profiles      []profileResolution `json:"profiles" yaml:"profiles"`
+	Warnings      []string            `json:"warnings" yaml:"warnings"`
+}
+
+func emitProfiles(w io.Writer, schema string, v profilesView) error {
+	return printer.NewMachineReadablePrinter[profilesView](w, schema).Print(&v)
+}

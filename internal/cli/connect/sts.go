@@ -45,12 +45,30 @@ var stsEndpoint string
 // verifyCaller confirms, before any IAM call, that the profile's credentials
 // authenticate to the stated account in the commercial partition.
 func verifyCaller(ctx context.Context, profile, region, statedAccount string) (verifiedCaller, error) {
+	cfg, account, arn, err := resolveCaller(ctx, profile, region)
+	if err != nil {
+		return verifiedCaller{}, err
+	}
+	if account != statedAccount {
+		return verifiedCaller{}, printer.Fail(printer.CodeAccountMismatch,
+			fmt.Sprintf("profile %q authenticates to account %s, not the stated %s",
+				profile, account, statedAccount), nil)
+	}
+	return verifiedCaller{Account: statedAccount, Arn: arn, Cfg: cfg}, nil
+}
+
+// resolveCaller loads the profile's config and asks STS who its credentials
+// belong to, without comparing against any stated account. It is the part
+// verifyCaller shares with a resolve-only reader (the profiles listing),
+// which reports the account rather than confirms it: the client construction
+// and the classification of what can go wrong along the way live here once.
+func resolveCaller(ctx context.Context, profile, region string) (aws.Config, string, string, error) {
 	cfg, err := loadAWSConfig(ctx, profile, region)
 	if err != nil {
-		return verifiedCaller{}, classifySSO(err, profile)
+		return aws.Config{}, "", "", classifySSO(err, profile)
 	}
 	if cfg.Region == "" {
-		return verifiedCaller{}, printer.Fail(printer.CodeProvisionFailed,
+		return aws.Config{}, "", "", printer.Fail(printer.CodeProvisionFailed,
 			"no region: pass --region or set one on the AWS profile", nil)
 	}
 	client := sts.NewFromConfig(cfg, func(o *sts.Options) {
@@ -60,18 +78,34 @@ func verifyCaller(ctx context.Context, profile, region, statedAccount string) (v
 	})
 	out, err := client.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
 	if err != nil {
-		return verifiedCaller{}, classifySSO(err, profile)
+		return aws.Config{}, "", "", classifySSO(err, profile)
 	}
 	if !strings.HasPrefix(aws.ToString(out.Arn), "arn:aws:") {
-		return verifiedCaller{}, printer.Fail(printer.CodeUnsupportedPartition,
+		return aws.Config{}, "", "", printer.Fail(printer.CodeUnsupportedPartition,
 			"the credentials belong to a non-commercial AWS partition, which connect does not support", nil)
 	}
-	if aws.ToString(out.Account) != statedAccount {
-		return verifiedCaller{}, printer.Fail(printer.CodeAccountMismatch,
-			fmt.Sprintf("profile %q authenticates to account %s, not the stated %s",
-				profile, aws.ToString(out.Account), statedAccount), nil)
+	return cfg, aws.ToString(out.Account), aws.ToString(out.Arn), nil
+}
+
+// unavailableReason turns a resolveCaller failure into the text the profiles
+// listing reports beside a profile it could not resolve. It is derived from
+// the failure's kind, never the failure's own message: the message on an
+// undeclared error can quote request detail from the AWS SDK, so only the
+// codes we ourselves classified get their own wording, and everything else
+// (including a resolution that timed out) shares one generic reason.
+func unavailableReason(err error) string {
+	var f *printer.Failure
+	if errors.As(err, &f) {
+		switch f.Code {
+		case printer.CodeSSOLoginRequired:
+			return "the SSO session has expired"
+		case printer.CodeProvisionFailed:
+			return "no region is configured for this profile"
+		case printer.CodeUnsupportedPartition:
+			return "the credentials belong to a non-commercial AWS partition"
+		}
 	}
-	return verifiedCaller{Account: statedAccount, Arn: aws.ToString(out.Arn), Cfg: cfg}, nil
+	return "could not resolve this profile's credentials"
 }
 
 // classifySSO turns an expired SSO session into the one failure whose remedy
