@@ -83,7 +83,7 @@ func runConnectAWS(cc *cobra.Command, opts options) error {
 			// one fixed command line and gets the exit status.
 			return err
 		}
-		return report(cc.OutOrStdout(), consumer, schema, err)
+		return report(cc.OutOrStdout(), consumer, schema, err, awsFallbackMessage)
 	}
 	if m == modeForm && consumer == printer.ConsumerMachine {
 		// Machine mode never reaches a form: flags are consent.
@@ -92,10 +92,14 @@ func runConnectAWS(cc *cobra.Command, opts options) error {
 	}
 
 	if err := runMode(cc, m, opts, consumer, schema); err != nil {
-		return report(cc.OutOrStdout(), consumer, schema, err)
+		return report(cc.OutOrStdout(), consumer, schema, err, awsFallbackMessage)
 	}
 	return nil
 }
+
+// awsFallbackMessage is the internal-code text an undeclared error gets on
+// the aws paths.
+const awsFallbackMessage = "formae could not connect the account; run it without --output-consumer machine to see why"
 
 // runMode runs the decided path. The paths land slice by slice; one that has
 // not landed yet says so rather than pretending.
@@ -137,8 +141,10 @@ func resolveOutputOrHuman(cc *cobra.Command) (printer.Consumer, string, error) {
 // ones the flow declares: a consumer parses one protocol or it parses none,
 // and the paths where that matters most are the degraded ones nobody
 // anticipated. An error we did not declare is reported as internal rather
-// than given a code that would imply we understood it.
-func report(w io.Writer, consumer printer.Consumer, schema string, err error) error {
+// than given a code that would imply we understood it. fallbackMessage is
+// the text for that case; each caller names its own, since "could not connect
+// the account" is wrong for a run that only reads.
+func report(w io.Writer, consumer printer.Consumer, schema string, err error, fallbackMessage string) error {
 	if consumer != printer.ConsumerMachine {
 		return err
 	}
@@ -151,8 +157,7 @@ func report(w io.Writer, consumer printer.Consumer, schema string, err error) er
 		// can quote configuration source, and a Pkl failure quotes the line it
 		// failed on — which can be the line holding an inline password.
 		if _, perr := printer.PrintFailure(w, schema, printer.Fail(printer.CodeInternal,
-			"formae could not connect the account; run it without --output-consumer machine to see why",
-			nil)); perr != nil {
+			fallbackMessage, nil)); perr != nil {
 			return perr
 		}
 	}

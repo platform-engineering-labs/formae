@@ -223,51 +223,141 @@ func (c *httpCloudClient) RegisterCloudConnection(ctx context.Context, bearer, i
 	}
 }
 
+// ConnectionsSnapshot is a connections listing and whether it may be believed
+// completely.
+//
+// Complete is the difference between "this installation has no connections" and
+// "this response could not be read", which a caller branching on absence cannot
+// otherwise tell apart. It mirrors Snapshot.Authoritative, for the same reason
+// and with the same discipline: a consumer that ignores it decides on a list it
+// only partly received.
+type ConnectionsSnapshot struct {
+	Connections []CloudConnection
+	Complete    bool
+	Warnings    []string
+}
+
+// knownClouds is the closed set the control plane's own discriminated union
+// admits. A record naming anything else is one this build cannot interpret, so
+// it is dropped rather than guessed at, and dropping it costs completeness.
+var knownClouds = map[string]bool{"aws": true, "gcp": true, "azure": true}
+
+// SessionLapsedError is a sign-in that is no longer good.
+type SessionLapsedError struct{ Cause error }
+
+func (e *SessionLapsedError) Error() string { return e.Cause.Error() }
+func (e *SessionLapsedError) Unwrap() error { return e.Cause }
+
+// InstallationForbiddenError is a caller the control plane knows and will not
+// serve for this installation.
+//
+// It says nothing about membership. The server answers a caller with no grant on
+// the owning organization with 404, so 403 means a member whose explicit tenant
+// list does not include this installation.
+type InstallationForbiddenError struct{ Cause error }
+
+func (e *InstallationForbiddenError) Error() string { return e.Cause.Error() }
+func (e *InstallationForbiddenError) Unwrap() error { return e.Cause }
+
 // ListCloudConnections reads the connections registered on the installation.
 // Broken records are dropped with a warning, never aborting the body: the
-// caller compares against what it can read.
-func (c *httpCloudClient) ListCloudConnections(ctx context.Context, bearer, installationID string) ([]CloudConnection, []string, error) {
+// caller compares against what it can read, and Complete tells it whether what
+// it read was everything.
+func (c *httpCloudClient) ListCloudConnections(ctx context.Context, bearer, installationID string) (ConnectionsSnapshot, error) {
 	status, data, err := c.request(ctx, http.MethodGet, bearer, nil,
 		"cloud connections response", "api", "v1", "installations", installationID, "cloud-connections")
 	if err != nil {
-		return nil, nil, err
+		return ConnectionsSnapshot{}, err
 	}
 	if status != http.StatusOK {
-		if err := classifyStatus(status, "cloud connections"); err != nil {
-			return nil, nil, err
+		// Split before classifyStatus, which collapses 401 and 403 into one
+		// AuthError that retains no status. The two mean different things to a
+		// user and only this layer still knows which happened.
+		switch status {
+		case http.StatusUnauthorized:
+			return ConnectionsSnapshot{}, &SessionLapsedError{Cause: errors.New(
+				"your formae session has lapsed; sign in again")}
+		case http.StatusForbidden:
+			return ConnectionsSnapshot{}, &InstallationForbiddenError{Cause: errors.New(
+				"you do not have access to this installation")}
 		}
-		return nil, nil, fmt.Errorf(
+		if err := classifyStatus(status, "cloud connections"); err != nil {
+			return ConnectionsSnapshot{}, err
+		}
+		return ConnectionsSnapshot{}, fmt.Errorf(
 			"the control plane returned unexpected HTTP %d for the cloud-connections request", status)
 	}
 
-	envelope, _, err := decodeEnvelope(data, "cloud connections response")
+	envelope, repeated, err := decodeEnvelope(data, "cloud connections response")
 	if err != nil {
-		return nil, nil, err
+		return ConnectionsSnapshot{}, err
 	}
+
+	snapshot := ConnectionsSnapshot{Complete: true}
+
+	for _, key := range repeated {
+		snapshot.Complete = false
+		snapshot.Warnings = append(snapshot.Warnings, fmt.Sprintf(
+			"the cloud connections response carries the %q field more than once, so this run has at most "+
+				"one of the lists it was sent", clip(key, maxWarnedRunes)))
+	}
+
+	// An absent or null list is not an empty one. Reading either as "there are
+	// none" is what turns an unreadable response into a decision.
+	raw, present := envelope["results"]
 	var results []json.RawMessage
-	if raw, ok := envelope["results"]; ok {
+	switch {
+	case !present:
+		snapshot.Complete = false
+		snapshot.Warnings = append(snapshot.Warnings,
+			"the cloud connections response carries no list where one was expected")
+	default:
 		if err := json.Unmarshal(raw, &results); err != nil {
-			return nil, nil, errors.New("the cloud connections response carries no list where one was expected")
+			return ConnectionsSnapshot{}, errors.New(
+				"the cloud connections response carries no list where one was expected")
+		}
+		if results == nil {
+			snapshot.Complete = false
+			snapshot.Warnings = append(snapshot.Warnings,
+				"the cloud connections response carries an empty list where one was expected")
 		}
 	}
-	var connections []CloudConnection
-	var warnings []string
+
 	for i, record := range results {
 		var connection CloudConnection
 		if err := json.Unmarshal(record, &connection); err != nil {
-			warnings = append(warnings, fmt.Sprintf(
+			snapshot.Complete = false
+			snapshot.Warnings = append(snapshot.Warnings, fmt.Sprintf(
 				"ignoring record %d of the cloud connections response: it could not be read (%q)",
 				i+1, clip(err.Error(), maxWarnedRunes)))
 			continue
 		}
-		if connection.Cloud == "" || connection.Account == "" || connection.RoleArn == "" {
-			warnings = append(warnings, fmt.Sprintf(
-				"ignoring record %d of the cloud connections response: it names no cloud, account, or role", i+1))
+		if reason := invalidConnection(connection); reason != "" {
+			snapshot.Complete = false
+			snapshot.Warnings = append(snapshot.Warnings, fmt.Sprintf(
+				"ignoring record %d of the cloud connections response: %s", i+1, reason))
 			continue
 		}
-		connections = append(connections, connection)
+		snapshot.Connections = append(snapshot.Connections, connection)
 	}
-	return connections, warnings, nil
+	return snapshot, nil
+}
+
+// invalidConnection names why a record cannot be used, or returns "".
+//
+// The role ARN is required of AWS alone. GCP and Azure carry their own trust
+// coordinates and no role, so requiring it of every cloud dropped valid records
+// and reported an installation that has connections as having none.
+func invalidConnection(c CloudConnection) string {
+	switch {
+	case !knownClouds[c.Cloud]:
+		return "it names a cloud this formae does not understand"
+	case c.Account == "":
+		return "it names no account"
+	case c.Cloud == "aws" && c.RoleArn == "":
+		return "it names no role"
+	}
+	return ""
 }
 
 // classifyStatus maps the statuses every connect call classifies the same way:

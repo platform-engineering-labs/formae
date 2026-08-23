@@ -7,7 +7,9 @@
 package connect
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -23,6 +25,7 @@ import (
 
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
 	"github.com/platform-engineering-labs/formae/internal/cli/connection"
+	"github.com/platform-engineering-labs/formae/internal/cli/printer"
 	"github.com/platform-engineering-labs/formae/internal/cli/profile/store"
 	pkgauth "github.com/platform-engineering-labs/formae/pkg/auth"
 )
@@ -253,6 +256,33 @@ func stubCredentials(t *testing.T, answers ...func() (*pkgauth.GetAuthHeaderResp
 	newCredentials = func(_ *app.App) credentialProvider { return creds }
 	t.Cleanup(func() { newCredentials = restore })
 	return creds
+}
+
+// hostedOpts seeds a hosted profile against a stub control plane and stubs a
+// credential, returning the options an authenticated control-plane call
+// needs. The stub control plane and credential are not asserted on here; the
+// point is a run that authenticates cleanly.
+func hostedOpts(t *testing.T) options {
+	t.Helper()
+	cp := newControlPlane(t)
+	seedProfile(t, cp, hostedProfile(contractInstallation))
+	stubCredentials(t, bearerAnswer("t1"))
+	return options{}
+}
+
+// Listing is a control-plane read and must not depend on the AWS-side template
+// and issuer pin, which only the provisioning paths use.
+func TestOpenControlPlane_IgnoresConnectPlatformOverrides(t *testing.T) {
+	opts := hostedOpts(t)
+	// Set after seeding: seedProfile clears the FORMAE_CONNECT_* pair, so
+	// setting it first would be wiped before openControlPlane ever runs.
+	// Both variables are set, not just the issuer, because a half-set pair
+	// is refused before either value is parsed as a URL.
+	t.Setenv("FORMAE_CONNECT_ISSUER", "not a url")
+	t.Setenv("FORMAE_CONNECT_TEMPLATE_BASE", "also not a url")
+	if _, err := openControlPlane(context.Background(), opts); err != nil {
+		t.Fatalf("a malformed AWS-side override broke a control-plane read: %v", err)
+	}
 }
 
 func registerOnlyArgs() []string {
@@ -754,4 +784,116 @@ func TestContractRegistrationConflict(t *testing.T) {
 		assert.Equal(t, other, details["registeredRoleArn"])
 		assert.Equal(t, contractRoleArn, details["statedRoleArn"])
 	})
+}
+
+// The connections document is pinned the same way links and registered are:
+// command-level, against the shared control-plane fixture, so the assertion
+// proves the command reads the fixture's connections route and selects the
+// machine emit, not merely that the serializer round-trips a struct. A
+// serializer-level test in machine_test.go could not prove either.
+func TestContractListEmitsTheConnectionsDocument(t *testing.T) {
+	cp := newControlPlane(t)
+	cp.connectionsBody = `{"results":[` +
+		`{"cloud":"aws","account":"` + testAccount + `","roleArn":"` + contractRoleArn + `"},` +
+		`{"cloud":"gcp","account":"some-gcp-project"}]}`
+	seedProfile(t, cp, hostedProfile(contractInstallation))
+	stubCredentials(t, bearerAnswer("t1"))
+
+	out, err := runConnect(t, "list", "--output-consumer", "machine", "--output-schema", "json")
+
+	require.NoError(t, err, "out: %s", out)
+	got := decodeOut(t, out)
+	assert.Equal(t, float64(2), got["schemaVersion"])
+	assert.Equal(t, "connections", got["phase"])
+	assert.Equal(t, contractInstallation, got["installation"])
+	assert.Equal(t, true, got["complete"])
+
+	rows, ok := got["connections"].([]any)
+	require.True(t, ok, "connections is not an array: %s", out)
+	require.Len(t, rows, 2)
+
+	aws, ok := rows[0].(map[string]any)
+	require.True(t, ok, "row 0 is not an object: %s", out)
+	assert.Equal(t, "aws", aws["cloud"])
+	assert.Equal(t, testAccount, aws["account"])
+	assert.Equal(t, contractRoleArn, aws["roleArn"])
+
+	gcp, ok := rows[1].(map[string]any)
+	require.True(t, ok, "row 1 is not an object: %s", out)
+	assert.Equal(t, "gcp", gcp["cloud"])
+	assert.Equal(t, "some-gcp-project", gcp["account"])
+	_, present := gcp["roleArn"]
+	assert.False(t, present, "a GCP row must not carry a roleArn key, empty or otherwise")
+}
+
+// registerAgainstConflict runs a registration the control plane refuses with
+// 409, against a connections listing built by one of the listingXWithout
+// helpers below, and returns the error the run finished with.
+func registerAgainstConflict(t *testing.T, connectionsBody string) error {
+	t.Helper()
+	cp := newControlPlane(t)
+	cp.registerStatus = http.StatusConflict
+	cp.registerBody = `{"error":{"code":"cloud_connection_exists"}}`
+	cp.connectionsBody = connectionsBody
+	seedProfile(t, cp, hostedProfile(contractInstallation))
+	stubCredentials(t, bearerAnswer("t1"))
+
+	_, err := runConnect(t, registerOnlyArgs()...)
+	return err
+}
+
+// listingIncompleteWithout is a connections listing that carries no
+// connection for account and dropped a record along the way, so Complete is
+// false: this run cannot tell "not registered" from "not fully read".
+func listingIncompleteWithout(account string) string {
+	other := otherAccount(account)
+	return `{"results":[{"cloud":"aws","account":"` + other + `","roleArn":"arn:aws:iam::` + other + `:role/other"},` +
+		`{"cloud":"digitalocean","account":"555555555555"}]}`
+}
+
+// listingCompleteWithout is a connections listing that was read in full (so
+// Complete is true) and still carries no connection for account.
+func listingCompleteWithout(account string) string {
+	other := otherAccount(account)
+	return `{"results":[{"cloud":"aws","account":"` + other + `","roleArn":"arn:aws:iam::` + other + `:role/other"}]}`
+}
+
+// otherAccount is any account distinct from the one passed in, so a listing
+// can carry a real, non-matching connection rather than an empty list.
+func otherAccount(account string) string {
+	if account == "999999999999" {
+		return "888888888888"
+	}
+	return "999999999999"
+}
+
+// Absence from a listing that is known to be partial settles nothing, so the
+// caller is told it could not compare rather than that the row conflicts. It
+// must not carry the registration_conflict code either: that code says the
+// control plane's refusal has been corroborated, which a partial listing
+// cannot do.
+func TestRegister_IncompleteAndUnmatchedCannotCompare(t *testing.T) {
+	err := registerAgainstConflict(t, listingIncompleteWithout("123456789012"))
+	if err == nil || !strings.Contains(err.Error(), "not visible to compare") {
+		t.Fatalf("got %v", err)
+	}
+	var fail *printer.Failure
+	if errors.As(err, &fail) {
+		t.Fatalf("an incomplete listing must not be reported as a corroborated conflict, got code %q", fail.Code)
+	}
+}
+
+// Absence from a complete listing is conclusive: the control plane refused the
+// registration as a duplicate and the existing row is genuinely not there. The
+// message must not claim it "could not compare": the listing was read in
+// full, so the absence is evidence, not a gap.
+func TestRegister_CompleteAndUnmatchedIsADuplicate(t *testing.T) {
+	err := registerAgainstConflict(t, listingCompleteWithout("123456789012"))
+	var fail *printer.Failure
+	if !errors.As(err, &fail) || fail.Code != printer.CodeRegistrationConflict {
+		t.Fatalf("got %v", err)
+	}
+	if strings.Contains(err.Error(), "not visible to compare") {
+		t.Fatalf("a complete listing settles the question; the message must not hedge: %v", err)
+	}
 }

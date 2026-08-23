@@ -60,6 +60,30 @@ func TestStructure_AwsFlagsLiveOnTheSubcommandOnly(t *testing.T) {
 	assert.NotNil(t, parent.PersistentFlags().Lookup("profile"))
 }
 
+// `connect list` is a member-readable listing, not a provisioning flow: it
+// owns the shared output flags, takes no positional arguments, and carries
+// none of the AWS-only flags that only `connect aws` needs.
+func TestStructure_ListIsRegisteredAndCarriesNoAWSOnlyFlags(t *testing.T) {
+	parent := ConnectCmd()
+	list := findSub(t, parent, "list")
+
+	assert.NotNil(t, list.Flags().Lookup("output-consumer"), "list must own the output-consumer flag")
+	assert.NotNil(t, list.Flags().Lookup("output-schema"), "list must own the output-schema flag")
+
+	for _, flag := range []string{"account", "quick-create", "provider-exists", "role-arn", "profile-aws", "region", "no-input"} {
+		assert.Nil(t, list.Flags().Lookup(flag), "flag %q must not exist on connect list", flag)
+	}
+}
+
+// A positional argument is rejected: list takes none.
+func TestStructure_ListTakesNoPositionalArguments(t *testing.T) {
+	out, err := runConnect(t, "list", "unexpected-arg")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unexpected-arg")
+	assert.NotContains(t, out, "schemaVersion")
+}
+
 func TestStructure_ConnectIsAnAuthCommand(t *testing.T) {
 	c := ConnectCmd()
 	assert.Equal(t, "Auth", c.Annotations["type"])

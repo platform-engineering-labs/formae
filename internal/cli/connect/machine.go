@@ -10,9 +10,10 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/printer"
 )
 
-// The machine protocol for a connect run: one stream, one document per run —
-// a `links` document when quick-create emits and stops, a `registered`
-// document when a registration happened — or a failure envelope through
+// The machine protocol for a connect run: one stream, one document per run,
+// either a `links` document when quick-create emits and stops, a
+// `registered` document when a registration happened, a `connections`
+// document when list reads what is registered, or a failure envelope through
 // printer.PrintFailure. No free prose crosses: a consumer gets the fields
 // declared here and renders its own text, and no document ever carries a
 // credential.
@@ -90,10 +91,36 @@ func registeredDocument(status, account, roleArn string, warnings []string) regi
 	}
 }
 
+// connectionView is one registered connection as reported to a consumer.
+// RoleArn is omitted for a cloud that carries no role (GCP, Azure), so a
+// consumer never mistakes an absent field for an empty one.
+type connectionView struct {
+	Cloud   string `json:"cloud" yaml:"cloud"`
+	Account string `json:"account" yaml:"account"`
+	RoleArn string `json:"roleArn,omitempty" yaml:"roleArn,omitempty"`
+}
+
+// connectionsView is the list emit. Connections is always a slice, never
+// nil: a consumer branches on empty versus absent, and a null value would
+// erase that distinction. Complete says whether the listing was read in
+// full, mirroring cloudapi.ConnectionsSnapshot.Complete.
+type connectionsView struct {
+	SchemaVersion int              `json:"schemaVersion" yaml:"schemaVersion"`
+	Phase         string           `json:"phase" yaml:"phase"` // "connections"
+	Installation  string           `json:"installation" yaml:"installation"`
+	Complete      bool             `json:"complete" yaml:"complete"`
+	Connections   []connectionView `json:"connections" yaml:"connections"`
+	Warnings      []string         `json:"warnings,omitempty" yaml:"warnings,omitempty"`
+}
+
 func emitLinks(w io.Writer, schema string, v linksView) error {
 	return printer.NewMachineReadablePrinter[linksView](w, schema).Print(&v)
 }
 
 func emitRegistered(w io.Writer, schema string, v registeredView) error {
 	return printer.NewMachineReadablePrinter[registeredView](w, schema).Print(&v)
+}
+
+func emitConnections(w io.Writer, schema string, v connectionsView) error {
+	return printer.NewMachineReadablePrinter[connectionsView](w, schema).Print(&v)
 }
