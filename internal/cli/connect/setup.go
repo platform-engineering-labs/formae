@@ -291,8 +291,13 @@ func (s *session) register(ctx context.Context, account, roleArn string) (string
 			"a different role is already registered for this account on this installation",
 			map[string]any{"registeredRoleArn": connection.RoleArn, "statedRoleArn": roleArn})
 	}
+	if !snapshot.Complete {
+		return "", fmt.Errorf("a cloud connection for this account already exists, and the connections listing " +
+			"used to compare it was incomplete, so the existing registration is not visible to compare")
+	}
 	return "", printer.Fail(printer.CodeRegistrationConflict,
-		"the control plane refused this registration as a duplicate, and the existing registration is not visible to compare",
+		"the control plane refused this registration as a duplicate, but no connection for this account "+
+			"appears in the installation's full listing",
 		map[string]any{"statedRoleArn": roleArn})
 }
 

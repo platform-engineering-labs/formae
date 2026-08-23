@@ -8,6 +8,7 @@ package connect
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -23,6 +24,7 @@ import (
 
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
 	"github.com/platform-engineering-labs/formae/internal/cli/connection"
+	"github.com/platform-engineering-labs/formae/internal/cli/printer"
 	"github.com/platform-engineering-labs/formae/internal/cli/profile/store"
 	pkgauth "github.com/platform-engineering-labs/formae/pkg/auth"
 )
@@ -754,4 +756,76 @@ func TestContractRegistrationConflict(t *testing.T) {
 		assert.Equal(t, other, details["registeredRoleArn"])
 		assert.Equal(t, contractRoleArn, details["statedRoleArn"])
 	})
+}
+
+// registerAgainstConflict runs a registration the control plane refuses with
+// 409, against a connections listing built by one of the listingXWithout
+// helpers below, and returns the error the run finished with.
+func registerAgainstConflict(t *testing.T, connectionsBody string) error {
+	t.Helper()
+	cp := newControlPlane(t)
+	cp.registerStatus = http.StatusConflict
+	cp.registerBody = `{"error":{"code":"cloud_connection_exists"}}`
+	cp.connectionsBody = connectionsBody
+	seedProfile(t, cp, hostedProfile(contractInstallation))
+	stubCredentials(t, bearerAnswer("t1"))
+
+	_, err := runConnect(t, registerOnlyArgs()...)
+	return err
+}
+
+// listingIncompleteWithout is a connections listing that carries no
+// connection for account and dropped a record along the way, so Complete is
+// false: this run cannot tell "not registered" from "not fully read".
+func listingIncompleteWithout(account string) string {
+	other := otherAccount(account)
+	return `{"results":[{"cloud":"aws","account":"` + other + `","roleArn":"arn:aws:iam::` + other + `:role/other"},` +
+		`{"cloud":"digitalocean","account":"555555555555"}]}`
+}
+
+// listingCompleteWithout is a connections listing that was read in full (so
+// Complete is true) and still carries no connection for account.
+func listingCompleteWithout(account string) string {
+	other := otherAccount(account)
+	return `{"results":[{"cloud":"aws","account":"` + other + `","roleArn":"arn:aws:iam::` + other + `:role/other"}]}`
+}
+
+// otherAccount is any account distinct from the one passed in, so a listing
+// can carry a real, non-matching connection rather than an empty list.
+func otherAccount(account string) string {
+	if account == "999999999999" {
+		return "888888888888"
+	}
+	return "999999999999"
+}
+
+// Absence from a listing that is known to be partial settles nothing, so the
+// caller is told it could not compare rather than that the row conflicts. It
+// must not carry the registration_conflict code either: that code says the
+// control plane's refusal has been corroborated, which a partial listing
+// cannot do.
+func TestRegister_IncompleteAndUnmatchedCannotCompare(t *testing.T) {
+	err := registerAgainstConflict(t, listingIncompleteWithout("123456789012"))
+	if err == nil || !strings.Contains(err.Error(), "not visible to compare") {
+		t.Fatalf("got %v", err)
+	}
+	var fail *printer.Failure
+	if errors.As(err, &fail) {
+		t.Fatalf("an incomplete listing must not be reported as a corroborated conflict, got code %q", fail.Code)
+	}
+}
+
+// Absence from a complete listing is conclusive: the control plane refused the
+// registration as a duplicate and the existing row is genuinely not there. The
+// message must not claim it "could not compare": the listing was read in
+// full, so the absence is evidence, not a gap.
+func TestRegister_CompleteAndUnmatchedIsADuplicate(t *testing.T) {
+	err := registerAgainstConflict(t, listingCompleteWithout("123456789012"))
+	var fail *printer.Failure
+	if !errors.As(err, &fail) || fail.Code != printer.CodeRegistrationConflict {
+		t.Fatalf("got %v", err)
+	}
+	if strings.Contains(err.Error(), "not visible to compare") {
+		t.Fatalf("a complete listing settles the question; the message must not hedge: %v", err)
+	}
 }
