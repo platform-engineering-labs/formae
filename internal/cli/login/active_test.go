@@ -184,3 +184,22 @@ func TestActive_AppliesToAProfileSignInToo(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, cloudProfileName(), active)
 }
+
+// The pointer pick is independent of the order the control plane returned
+// installations in: identical grants activate the same profile on every
+// machine, not whichever came first off the wire this time.
+func TestActive_PickIsIndependentOfPublicationOrder(t *testing.T) {
+	picks := map[string]bool{}
+	for _, order := range [][]Installation{
+		{installation(installOne, "prod", stateActive), installation(installTwo, "staging", stateActive)},
+		{installation(installTwo, "staging", stateActive), installation(installOne, "prod", stateActive)},
+	} {
+		f := cleanStoreFixture(t)
+		f.answer(order...)
+		require.NoError(t, runLoginAndSync(context.Background(), signedIn(), cloudStep(t, f), false))
+		active, err := f.store.Active()
+		require.NoError(t, err)
+		picks[active] = true
+	}
+	assert.Len(t, picks, 1, "the pick varied with response order: %v", picks)
+}
