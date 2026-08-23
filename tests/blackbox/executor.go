@@ -1837,12 +1837,15 @@ func (h *TestHarness) forceSyncAndAwait(t *testing.T, model *StateModel, appeara
 func (h *TestHarness) executeTriggerDiscovery(t *testing.T, model *StateModel) {
 	t.Helper()
 	// The model knows exactly what discovery will ingest: cloud resources it
-	// created out-of-band that are not yet in inventory. Everything else the
-	// plugin lists is either already tracked (known native id) or absent.
+	// created out-of-band that are not yet in inventory AND that discovery
+	// can reach (a child orphaned by a parent rename is not listable — see
+	// discoverableUnmanaged). Everything else the plugin lists is either
+	// already tracked (known native id) or absent.
 	expectIngest := false
 	if model != nil {
-		for _, res := range model.UnmanagedResources {
-			if res.PresentInCloud && !res.PresentInInventory {
+		discoverable := model.discoverableUnmanaged()
+		for nativeID, res := range model.UnmanagedResources {
+			if res.PresentInCloud && !res.PresentInInventory && discoverable[nativeID] {
 				expectIngest = true
 				break
 			}

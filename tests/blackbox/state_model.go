@@ -392,9 +392,65 @@ func (m *StateModel) ApplyUnmanagedCloudDelete(nativeID string) {
 	res.CloudProperties = ""
 }
 
-func (m *StateModel) ApplyDiscoveryToUnmanaged() {
+// unmanagedParentTypeOf mirrors the test plugin's parent-child list mapping:
+// child resources are listed by filtering their ParentId against a parent
+// row's current Name.
+var unmanagedParentTypeOf = map[string]string{
+	"Test::Generic::ChildResource":      "Test::Generic::Resource",
+	"Test::Generic::GrandchildResource": "Test::Generic::ChildResource",
+}
+
+// discoverableUnmanaged returns the native ids discovery can actually reach.
+// Top-level resources are always listable. A child or grandchild is listable
+// only while some already-ingested or reachable resource of its parent type
+// still carries the Name its ParentId references: the plugin lists children
+// by ParentId == parent.Name, so a parent renamed out-of-band before its
+// children were ingested orphans them (and their descendants, transitively).
+func (m *StateModel) discoverableUnmanaged() map[string]bool {
+	// Names offered per resource type by rows discovery can consult as parents.
+	availableNames := make(map[string]map[string]bool)
+	addName := func(resType, properties string) {
+		var p struct{ Name string }
+		if properties == "" || json.Unmarshal([]byte(properties), &p) != nil || p.Name == "" {
+			return
+		}
+		if availableNames[resType] == nil {
+			availableNames[resType] = make(map[string]bool)
+		}
+		availableNames[resType][p.Name] = true
+	}
 	for _, res := range m.UnmanagedResources {
-		if !res.PresentInCloud {
+		if res.PresentInInventory {
+			addName(res.ResourceType, res.InventoryProperties)
+		}
+	}
+
+	reachable := make(map[string]bool)
+	for changed := true; changed; {
+		changed = false
+		for nativeID, res := range m.UnmanagedResources {
+			if reachable[nativeID] || !res.PresentInCloud {
+				continue
+			}
+			if parentType, isChild := unmanagedParentTypeOf[res.ResourceType]; isChild {
+				var p struct{ ParentId string }
+				if json.Unmarshal([]byte(res.CloudProperties), &p) != nil ||
+					!availableNames[parentType][p.ParentId] {
+					continue
+				}
+			}
+			reachable[nativeID] = true
+			addName(res.ResourceType, res.CloudProperties)
+			changed = true
+		}
+	}
+	return reachable
+}
+
+func (m *StateModel) ApplyDiscoveryToUnmanaged() {
+	discoverable := m.discoverableUnmanaged()
+	for nativeID, res := range m.UnmanagedResources {
+		if !res.PresentInCloud || !discoverable[nativeID] {
 			continue
 		}
 		res.PresentInInventory = true

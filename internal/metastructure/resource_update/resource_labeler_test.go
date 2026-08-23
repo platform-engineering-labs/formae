@@ -190,6 +190,54 @@ func TestLabelForUnmanagedResource_IncrementsExistingVersion(t *testing.T) {
 	assert.Equal(t, "MyInstance-6", label)
 }
 
+// A discovered name that itself ends in "-<number>" must not be deduplicated
+// into a neighboring label that another resource already holds: incrementing
+// "server-1" lands on "server-2", which is a natural name in its own right.
+func TestLabelForUnmanagedResource_DoesNotMintTakenNumericNeighbor(t *testing.T) {
+	properties := json.RawMessage(`{"Tags":[{"Key":"Name","Value":"server-1"}]}`)
+	labelConfig := pkgmodel.LabelConfig{
+		DefaultQuery: `$.Tags[?(@.Key=='Name')].Value`,
+	}
+
+	l := newResourceLabelerForTest(t, func(ds datastore.Datastore) {
+		for _, label := range []string{"server-1", "server-2"} {
+			_, err := ds.StoreResource(&pkgmodel.Resource{Stack: "$unmanaged", Label: label, Type: "AWS::EC2::Instance"}, "test-command-id")
+			assert.NoError(t, err)
+		}
+	})
+
+	label := l.LabelForUnmanagedResource("i-00000000000000002", "AWS::EC2::Instance", properties, labelConfig, nil)
+	assert.NotEqual(t, "server-1", label)
+	assert.NotEqual(t, "server-2", label)
+}
+
+// The same name discovered repeatedly (each mint persisted before the next)
+// must yield a distinct label every time. The minted variant of a numeric
+// name ("server-1" -> "server-2") is not itself found by a later lookup for
+// the original name, so without an existence check on the minted label the
+// third discovery repeats the second's label.
+func TestLabelForUnmanagedResource_RepeatedDuplicateNamesStayUnique(t *testing.T) {
+	properties := json.RawMessage(`{"Tags":[{"Key":"Name","Value":"server-1"}]}`)
+	labelConfig := pkgmodel.LabelConfig{
+		DefaultQuery: `$.Tags[?(@.Key=='Name')].Value`,
+	}
+
+	var store datastore.Datastore
+	l := newResourceLabelerForTest(t, func(ds datastore.Datastore) {
+		store = ds
+	})
+
+	seen := make(map[string]bool)
+	for i := 0; i < 3; i++ {
+		label := l.LabelForUnmanagedResource("i-00000000000000000", "AWS::EC2::Instance", properties, labelConfig, nil)
+		assert.False(t, seen[label], "label %q minted twice", label)
+		seen[label] = true
+
+		_, err := store.StoreResource(&pkgmodel.Resource{Stack: "$unmanaged", Label: label, Type: "AWS::EC2::Instance"}, "test-command-id")
+		require.NoError(t, err)
+	}
+}
+
 // Tests for LabelConfig priority (JSONPath query takes precedence over legacy tag keys)
 
 func TestLabelForUnmanagedResource_JSONPathQueryTakesPrecedenceOverLegacyTagKeys(t *testing.T) {

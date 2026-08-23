@@ -439,6 +439,33 @@ func TestStateModel_UnmanagedLifecycle(t *testing.T) {
 	assert.False(t, res.PresentInCloud)
 }
 
+// Discovery reaches children by filtering ParentId against the parent's
+// current Name. Renaming a parent before its children were ingested makes
+// them (and their descendants) unreachable; renaming it back restores them.
+func TestStateModel_DiscoverySkipsChildrenOrphanedByParentRename(t *testing.T) {
+	model := NewStateModel(1, 1)
+	model.ApplyUnmanagedCloudCreate("cloud-1", "Test::Generic::Resource", `{"Name":"p1","Value":"v1"}`)
+	model.ApplyUnmanagedCloudCreate("cloud-1-child-0", "Test::Generic::ChildResource", `{"Name":"c1","ParentId":"p1","Value":"v1"}`)
+	model.ApplyUnmanagedCloudCreate("cloud-1-gc-0", "Test::Generic::GrandchildResource", `{"Name":"g1","ParentId":"c1","Value":"v1"}`)
+
+	model.ApplyUnmanagedCloudModify("cloud-1", `{"Name":"p1-renamed","Value":"v2"}`)
+	model.ApplyDiscoveryToUnmanaged()
+
+	assert.True(t, model.UnmanagedResources["cloud-1"].PresentInInventory)
+	assert.False(t, model.UnmanagedResources["cloud-1-child-0"].PresentInInventory,
+		"child pointing at the old parent name is unreachable")
+	assert.False(t, model.UnmanagedResources["cloud-1-gc-0"].PresentInInventory,
+		"grandchild under an unreachable child is transitively unreachable")
+
+	model.ApplyUnmanagedCloudModify("cloud-1", `{"Name":"p1","Value":"v3"}`)
+	model.ApplyDiscoveryToUnmanaged()
+
+	assert.True(t, model.UnmanagedResources["cloud-1-child-0"].PresentInInventory,
+		"renaming the parent back makes the child reachable again")
+	assert.True(t, model.UnmanagedResources["cloud-1-gc-0"].PresentInInventory,
+		"the grandchild follows once the child is reachable")
+}
+
 // An out-of-band modify of a managed resource is absorbed by sync: inventory
 // converges on the cloud properties. The model computes that end state
 // directly at the drift operation.

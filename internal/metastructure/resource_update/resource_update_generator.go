@@ -691,8 +691,14 @@ func generateResourceUpdatesForSync(
 		// envelopes so the merge drops any stale $hashed and persist re-hashes.
 		markInheritedOpaqueResolvables(existingResources)
 
-		// Normal sync - create read resource updates for existing resources
+		// Normal sync - create one read resource update per existing resource.
+		// The match against forma resources is by (stack, label, type), which is
+		// NOT unique: discovery labeling can leave two rows sharing a label. Emit
+		// at most one update per row — a second update for the same ksuid would
+		// collide downstream (the changeset DAG keeps one node per operation URI
+		// and the command never terminalizes the dropped duplicate).
 		for _, existingResource := range existingResources {
+			matched := false
 			for _, resource := range forma.Resources {
 				if resource.Stack == stack.SingleStackLabel() &&
 					resource.Label == existingResource.Label &&
@@ -701,26 +707,31 @@ func generateResourceUpdatesForSync(
 					// Use the schema from the forma resource (which may have been refreshed
 					// from the plugin) rather than the stale schema stored in the DB
 					existingResource.Schema = resource.Schema
-
-					// See comment above: pass empty sentinel when target is gone.
-					target := existingTargetMap[existingResource.Target]
-					if target == nil {
-						target = &pkgmodel.Target{Label: existingResource.Target}
-					}
-					if skipResurrectionForReapedTarget(source, target) {
-						continue
-					}
-					resourceUpdate, err := NewResourceUpdateForSync(
-						*existingResource,
-						*target,
-						source,
-					)
-					if err != nil {
-						return nil, fmt.Errorf("failed to create resource update sync for %s: %w", existingResource.Label, err)
-					}
-					resourceUpdates = append(resourceUpdates, resourceUpdate)
+					matched = true
+					break
 				}
 			}
+			if !matched {
+				continue
+			}
+
+			// See comment above: pass empty sentinel when target is gone.
+			target := existingTargetMap[existingResource.Target]
+			if target == nil {
+				target = &pkgmodel.Target{Label: existingResource.Target}
+			}
+			if skipResurrectionForReapedTarget(source, target) {
+				continue
+			}
+			resourceUpdate, err := NewResourceUpdateForSync(
+				*existingResource,
+				*target,
+				source,
+			)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create resource update sync for %s: %w", existingResource.Label, err)
+			}
+			resourceUpdates = append(resourceUpdates, resourceUpdate)
 		}
 	}
 
