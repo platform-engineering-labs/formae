@@ -173,12 +173,19 @@ touched.`,
 				// A profile with no auth plugin has exactly one sign-in formae
 				// offers: the hosted platform. Falling through beats a dead end
 				// that tells the user to re-run with a flag (decision
-				// 2026-08-22).
+				// 2026-08-22) — but only interactively and only for the default
+				// config: an explicit --config is an explicit scope the hosted
+				// flow's default-directory writes would escape, and a script
+				// without a TTY wants the prompt failure, not a process parked
+				// on a browser URL nobody is watching.
 				var noPlugin *app.NoAuthPluginError
 				if errors.As(err, &noPlugin) {
-					ackLine(out, loginIsTerminal(out), themeFor(a), components.AckSkip,
-						"the active profile has no auth plugin; signing in to the hosted platform")
-					return runHosted()
+					if configFile == "" && loginIsTerminal(out) {
+						ackLine(out, true, themeFor(a), components.AckSkip,
+							"the active profile has no auth plugin; signing in to the hosted platform")
+						return runHosted()
+					}
+					return run(fmt.Errorf("%w; run `formae login --hosted` to sign in to the hosted platform", err))
 				}
 				return run(err)
 			}
@@ -573,7 +580,10 @@ func activatePublished(st *store.Store, result syncResult, out io.Writer, tty bo
 		return existing
 	}
 
-	name := published[0]
+	// The lexicographic minimum, not published[0]: publication order follows
+	// the control plane's response order, and identical grants must activate
+	// the same profile on every machine.
+	name := slices.Min(published)
 	if err := st.Use(name); err != nil {
 		ackLine(out, tty, th, components.AckSkip, fmt.Sprintf(
 			"profile %s was created but could not be made the active one (%v); "+

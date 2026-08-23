@@ -17,6 +17,8 @@ import (
 
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
 	"github.com/platform-engineering-labs/formae/internal/cli/profile/store"
+	"io"
+	"path/filepath"
 )
 
 // The gate on the whole hosted sign-in path: a machine that has never been
@@ -158,12 +160,23 @@ func TestCleanDirectory_WithoutHostedTheDefaultIsCreated(t *testing.T) {
 		"the profile path no longer bootstraps, so the hosted assertion proves nothing")
 }
 
+// forceTTY makes the command believe it runs on a terminal: the fallthrough
+// is interactive-only, so its happy path needs one.
+func forceTTY(t *testing.T) {
+	t.Helper()
+	restore := loginIsTerminal
+	loginIsTerminal = func(io.Writer) bool { return true }
+	t.Cleanup(func() { loginIsTerminal = restore })
+}
+
 // A classic active profile with no auth plugin no longer dead-ends bare
-// `formae login`: the only sign-in formae offers in that state is the hosted
-// platform, so the command falls through to it — and the synced installation
-// profile becomes active, exactly as if --hosted had been passed.
+// `formae login` on a terminal: the only sign-in formae offers in that state
+// is the hosted platform, so the command falls through to it — and the
+// synced installation profile becomes active, exactly as if --hosted had
+// been passed.
 func TestCleanDirectory_BareLoginFallsThroughToHosted(t *testing.T) {
 	dir := stubCloudSignIn(t, installation(installOne, "prod", stateActive))
+	forceTTY(t)
 
 	cmd := LoginCmd()
 	cmd.SetArgs(nil)
@@ -176,4 +189,41 @@ func TestCleanDirectory_BareLoginFallsThroughToHosted(t *testing.T) {
 	active, err := s.Active()
 	require.NoError(t, err)
 	assert.Equal(t, cloudProfileName(), active)
+}
+
+// An explicitly selected --config is an explicit scope: falling through to
+// the hosted flow would write profiles and move the pointer in the default
+// config directory, outside what the caller named. The dead end stays, with
+// the remedy in the message.
+func TestCleanDirectory_ExplicitConfigDoesNotFallThrough(t *testing.T) {
+	dir := stubCloudSignIn(t, installation(installOne, "prod", stateActive))
+	cfg := filepath.Join(t.TempDir(), "authless.pkl")
+	require.NoError(t, os.WriteFile(cfg, []byte(store.StubTemplate), 0o644))
+
+	cmd := LoginCmd()
+	cmd.SetArgs([]string{"--config", cfg})
+	cmd.SilenceUsage = true
+	err := cmd.ExecuteContext(cliContext())
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--hosted")
+	assert.NoFileExists(t, store.New(dir).ProfilePath(cloudProfileName()),
+		"the fallthrough escaped the explicitly selected config scope")
+}
+
+// Without a TTY the fallthrough would turn a promptly detectable
+// configuration failure into a process waiting on a browser nobody is
+// watching. Scripts get the old immediate error, with the remedy named.
+func TestCleanDirectory_NoTTYDoesNotFallThrough(t *testing.T) {
+	// go test runs non-TTY by default; nothing to stub.
+	dir := stubCloudSignIn(t, installation(installOne, "prod", stateActive))
+
+	cmd := LoginCmd()
+	cmd.SetArgs(nil)
+	cmd.SilenceUsage = true
+	err := cmd.ExecuteContext(cliContext())
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--hosted")
+	assert.NoFileExists(t, store.New(dir).ProfilePath(cloudProfileName()))
 }
