@@ -244,7 +244,7 @@ func runLoginAndSync(ctx context.Context, c authClient, s syncStep, device bool)
 		return err
 	}
 
-	result, active, syncErr := runSync(ctx, s)
+	result, active, syncErr := runSync(ctx, s, report.Status == statusAlreadyAuthenticated)
 	if syncErr != nil {
 		// Typed, because a consumer has to tell this apart from a sign-in that
 		// failed: the user IS authenticated here, and their session is saved, so
@@ -478,7 +478,10 @@ func syncFromFlags(block cliAuthBlock) syncEntry { return syncFromFlagsEntry{blo
 // A sign-in and a sync are separate facts, and every message here keeps them
 // apart: the user is signed in whatever the sync did, so nothing this function
 // prints may read as a login that failed.
-func runSync(ctx context.Context, s syncStep) (syncResult, string, error) {
+// forceRefresh asks the auth plugin for a freshly minted credential rather
+// than the one it already holds. Set on the already-authenticated branch, and
+// only there: see credential's own comment for why the distinction matters.
+func runSync(ctx context.Context, s syncStep, forceRefresh bool) (syncResult, string, error) {
 	tty := loginIsTerminal(s.Out)
 
 	p, err := resolvePlatform(s.CloudFlag, s.IssuerFlag)
@@ -507,7 +510,7 @@ func runSync(ctx context.Context, s syncStep) (syncResult, string, error) {
 		return syncResult{}, "", nil
 	}
 
-	hdr, err := credential(s.Creds)
+	hdr, err := credential(s.Creds, forceRefresh)
 	if err != nil {
 		return syncResult{}, "", fmt.Errorf("%s: %w", syncIncomplete(""), err)
 	}
@@ -611,8 +614,21 @@ func activatePublished(st *store.Store, result syncResult, out io.Writer, tty bo
 // unauthenticated request — the same fail-closed reading of a header the API
 // path takes, and for the same reason. Only the canonical Authorization key
 // is read, because it is the only key this CLI ever sends.
-func credential(c credentialProvider) (http.Header, error) {
-	resp, err := c.GetAuthHeader(false)
+// credential asks the auth plugin for the credential this sign-in produced.
+//
+// forceRefresh is false after a flow has just completed: that credential is
+// current by construction and a refresh buys nothing. It is true on the
+// already-authenticated short-circuit, where no flow ran and the plugin is
+// holding a token of unknown age.
+//
+// The distinction is load-bearing rather than cosmetic. The credential carries
+// the caller's grants as claims, resolved by the control plane when the token
+// is minted, so a token minted before the user was granted an installation
+// keeps reporting that they have none for as long as it stays valid. Signing
+// in and only then being granted an installation is the ordinary onboarding
+// order, so this is the common path, not an edge case.
+func credential(c credentialProvider, forceRefresh bool) (http.Header, error) {
+	resp, err := c.GetAuthHeader(forceRefresh)
 	if err != nil {
 		return nil, fmt.Errorf("ask the auth plugin for the credential this sign-in produced: %w", err)
 	}

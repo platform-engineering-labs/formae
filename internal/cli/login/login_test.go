@@ -422,6 +422,31 @@ func TestLoginSyncsOnTheAlreadyAuthenticatedBranch(t *testing.T) {
 	}, lines(f.out))
 }
 
+// TestLoginForcesARefreshOnTheAlreadyAuthenticatedBranch verifies that a login
+// which short-circuits on an existing session asks the auth plugin to refresh
+// the credential rather than reusing the one it holds.
+//
+// The credential carries the caller's grants as claims, and the control plane
+// resolves them at mint time, so a token minted before the user's access
+// changed reports the old answer for as long as it stays valid. That is not a
+// hypothetical ordering: signing in and only then being granted an
+// installation is the ordinary onboarding sequence, and reusing the cached
+// token there enumerates nothing and writes no profile.
+//
+// This is the branch where no sign-in has just happened, which is what
+// separates it from TestLoginSyncsAfterASignIn: a credential a flow has only
+// now produced is current by construction and refreshing it buys nothing.
+func TestLoginForcesARefreshOnTheAlreadyAuthenticatedBranch(t *testing.T) {
+	f := newSyncFixture(t)
+	f.answer(installation(installOne, "prod", stateActive))
+	step := f.loginStep()
+
+	require.NoError(t, runLoginAndSync(context.Background(), alreadySignedIn(), step, false))
+
+	assert.Equal(t, []bool{true}, step.Creds.(*stubCredentials).forced,
+		"no sign-in produced this credential, so its grants may predate the user's access")
+}
+
 // TestLoginDoesNotSyncWhenTheSignInFails verifies that a failed sign-in ends
 // the command before anything is asked or written.
 func TestLoginDoesNotSyncWhenTheSignInFails(t *testing.T) {
@@ -625,7 +650,7 @@ func TestLoginFailsWhenAnotherProcessHoldsTheLedger(t *testing.T) {
 func TestLoginFailsWhenNoDesiredInstallationGotAProfile(t *testing.T) {
 	f := newSyncFixture(t)
 	f.answer(installation(installTwo, "staging", stateActive))
-	_, _, syncErr := runSync(context.Background(), f.loginStep())
+	_, _, syncErr := runSync(context.Background(), f.loginStep(), false)
 	require.NoError(t, syncErr)
 	require.True(t, f.exists(nameTwo))
 
@@ -635,7 +660,7 @@ func TestLoginFailsWhenNoDesiredInstallationGotAProfile(t *testing.T) {
 		installation(installTwo, "staging", "warping"),
 	)
 
-	_, _, err := runSync(context.Background(), f.loginStep())
+	_, _, err := runSync(context.Background(), f.loginStep(), false)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "you are signed in")
