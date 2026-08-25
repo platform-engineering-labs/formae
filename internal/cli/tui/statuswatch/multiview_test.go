@@ -144,6 +144,21 @@ func TestVisibleColumns_DropTiers(t *testing.T) {
 	}
 }
 
+// TestVisibleColumns_UserDropsBeforeOperationalColumns pins the ruling that
+// User (supplementary attribution) sheds before the tier-2 operational
+// columns (Mode, ◐, ○, Age): a 100-column terminal, which showed those
+// columns before User existed, must keep showing them — User only appears
+// once there is room left over after them.
+func TestVisibleColumns_UserDropsBeforeOperationalColumns(t *testing.T) {
+	narrowish := visibleColumns(100)
+	assert.False(t, narrowish[colUser], "User must drop at a width that predates it having room")
+	assert.True(t, narrowish[colMode], "Mode must stay visible at a width that showed it before this column existed")
+	assert.True(t, narrowish[colAge], "Age must stay visible at a width that showed it before this column existed")
+
+	wide := visibleColumns(130)
+	assert.True(t, wide[colUser], "User appears once there is genuinely room")
+}
+
 func TestBarWidth_ElasticWithFloor(t *testing.T) {
 	vis := visibleColumns(120)
 	assert.GreaterOrEqual(t, barWidth(120, vis), 10)
@@ -158,7 +173,8 @@ func TestMultiView_RowContent(t *testing.T) {
 		State: "Success", StartTs: now.Add(-10 * time.Minute), EndTs: now.Add(-10*time.Minute + 42*time.Second),
 		ResourceUpdates: []apimodel.ResourceUpdate{{State: "Success"}, {State: "Success"}},
 	}
-	v := multiView{th: theme.New("formae"), rows: buildRows([]apimodel.Command{c}), width: 110, now: now}
+	// Wide enough to keep every column visible, including the tier-2 Mode/Age.
+	v := multiView{th: theme.New("formae"), rows: buildRows([]apimodel.Command{c}), width: 130, now: now}
 	out := plain(strings.Join(v.renderRows(10), "\n"))
 
 	assert.Contains(t, out, "cmd-abc123")
@@ -192,7 +208,8 @@ func TestMultiView_RunningCommandShowsSegmentedBar(t *testing.T) {
 }
 
 func TestMultiView_HeaderShowsSortIndicator(t *testing.T) {
-	v := multiView{th: theme.New("formae"), width: 110, sortCol: colAge, sortDir: components.SortDesc, sortHi: colAge}
+	// Wide enough to keep every column visible, including the tier-2 Age.
+	v := multiView{th: theme.New("formae"), width: 130, sortCol: colAge, sortDir: components.SortDesc, sortHi: colAge}
 	h := plain(v.headerRow())
 	assert.Contains(t, h, "Age ▼")
 }
@@ -291,7 +308,9 @@ func TestMultiView_Golden(t *testing.T) {
 		cmdFix("cmd-ok1", "apply", "Success", now.Add(-3*time.Hour), 0),
 		cmdFix("cmd-fail1", "apply", "Failed", now.Add(-10*time.Minute), 1),
 	}
-	v := multiView{th: theme.New("formae"), rows: buildRows(cmds), width: 100, now: now}
+	// Wide enough to keep every column visible, including the tier-2 Mode/Age
+	// and the new User column, so the golden documents the full layout.
+	v := multiView{th: theme.New("formae"), rows: buildRows(cmds), width: 130, now: now}
 	tuitest.RequireGolden(t, []byte(v.headerRow()+"\n"+strings.Join(v.renderRows(10), "\n")))
 }
 
@@ -322,4 +341,77 @@ func TestModeLabel(t *testing.T) {
 		"destroy has no mode → -")
 	assert.Equal(t, "reconcile", modeLabel(apimodel.Command{Command: "apply", Mode: "reconcile"}))
 	assert.Equal(t, "patch", modeLabel(apimodel.Command{Command: "apply", Mode: "patch"}))
+}
+
+// TestUserLabel verifies the User column's display value: SubjectName wins
+// when present, a bare Subject is used verbatim (the caller truncates it to
+// a short prefix at render width), and a command carrying neither is blank.
+func TestUserLabel(t *testing.T) {
+	assert.Equal(t, "dpanders", userLabel(apimodel.Command{Subject: "11111111-1111-4111-8111-111111111111", SubjectName: "dpanders"}),
+		"SubjectName wins when present")
+	assert.Equal(t, "11111111-1111-4111-8111-111111111111", userLabel(apimodel.Command{Subject: "11111111-1111-4111-8111-111111111111"}),
+		"falls back to the raw Subject when there is no display name")
+	assert.Equal(t, "", userLabel(apimodel.Command{}), "no attribution at all is blank")
+}
+
+// colOffset returns the visible-rune start offset of column col within a
+// rendered row, given the columns actually shown and the elastic bar width —
+// mirrors the layout renderRows itself builds, so a test can slice out a
+// single cell.
+func colOffset(col int, vis map[int]bool, bw int) int {
+	off := 0
+	for c := 0; c < colCount; c++ {
+		if !vis[c] {
+			continue
+		}
+		if c == col {
+			return off
+		}
+		w := multiCols[c].width
+		if c == colProgress {
+			w = bw
+		}
+		off += w
+	}
+	return off
+}
+
+// TestMultiView_UserColumn covers the three-way rendering rule for the User
+// cell: SubjectName when present, a short prefix of Subject when only that is
+// set, and blank when the command carries no attribution at all.
+func TestMultiView_UserColumn(t *testing.T) {
+	now := time.Now()
+	subjectOnly := "22222222-2222-4222-8222-222222222222"
+	cmds := []apimodel.Command{
+		cmdFix("cmd-named", "apply", "Success", now, 0),
+		cmdFix("cmd-subj", "apply", "Success", now, 0),
+		cmdFix("cmd-none", "apply", "Success", now, 0),
+	}
+	cmds[0].Subject = "11111111-1111-4111-8111-111111111111"
+	cmds[0].SubjectName = "dpanders"
+	cmds[1].Subject = subjectOnly
+	// cmds[2] carries neither field.
+
+	// Wide enough to keep every column visible, including the tier-2 User column.
+	v := multiView{th: theme.New("formae"), rows: buildRows(cmds), width: 130, now: now}
+	rows := v.renderRows(10)
+	vis := v.visibleCols()
+	bw := barWidth(v.width, vis)
+	off := colOffset(colUser, vis, bw)
+	w := multiCols[colUser].width
+
+	cell := func(i int) string {
+		r := []rune(plain(rows[i]))
+		return strings.TrimRight(string(r[off:off+w]), " ")
+	}
+
+	assert.Equal(t, "dpanders", cell(0), "SubjectName wins when present")
+
+	got := cell(1)
+	assert.NotEqual(t, "", got, "a bare Subject still renders something")
+	assert.Less(t, len([]rune(got)), len([]rune(subjectOnly)), "renders a short prefix, not the full subject")
+	assert.True(t, strings.HasPrefix(subjectOnly, strings.TrimSuffix(got, "…")),
+		"the rendered prefix must actually be a prefix of Subject, got %q", got)
+
+	assert.Equal(t, "", cell(2), "no attribution at all renders blank")
 }

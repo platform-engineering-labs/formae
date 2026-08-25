@@ -31,6 +31,7 @@ const (
 	colID
 	colCommand
 	colMode
+	colUser
 	colProgress
 	colDone
 	colFailed
@@ -54,12 +55,19 @@ type colSpec struct {
 // Mode 11, counts 4 each, Time 7, Age 5); Progress is elastic with a floor
 // of 10 cells. ID is wide enough to show a full 27-char command ksuid plus a
 // trailing gap so the identifier is never truncated (users copy it for
-// `status command --query 'id:…'` and `cancel`).
+// `status command --query 'id:…'` and `cancel`). User is sized for a short
+// name/handle; a bare Subject (typically a UUID) is truncated to fit it,
+// same overflow idiom ID uses for an over-long ksuid. User's priority (3) is
+// its own tier, shed before Mode/◐/○/Age (2): it is supplementary
+// attribution, not operational state, so a terminal width that already
+// showed the operational columns must keep showing them — User only appears
+// once there is genuinely room left over.
 var multiCols = [colCount]colSpec{
 	colStatus:   {"", 5, 0, true},
 	colID:       {"ID", 28, 0, true},
 	colCommand:  {"Command", 10, 1, true},
 	colMode:     {"Mode", 12, 2, true},
+	colUser:     {"User", 12, 3, true},
 	colProgress: {"Progress", 0, 0, true},
 	colDone:     {"✓", 5, 0, false},
 	colFailed:   {"✗", 5, 0, false},
@@ -102,14 +110,16 @@ func buildRows(cmds []apimodel.Command) []row {
 	return rows
 }
 
-// visibleColumns drops priority-2 columns first (Mode, ◐, ○, Age), then
-// priority-1 (Command), until the fixed columns plus the bar floor fit.
+// visibleColumns drops priority-3 columns first (User — supplementary
+// attribution, never at the cost of operational columns a narrower terminal
+// already showed), then priority-2 (Mode, ◐, ○, Age), then priority-1
+// (Command), until the fixed columns plus the bar floor fit.
 func visibleColumns(termWidth int) map[int]bool {
 	vis := make(map[int]bool, colCount)
 	for c := 0; c < colCount; c++ {
 		vis[c] = true
 	}
-	for _, dropTier := range []int{2, 1} {
+	for _, dropTier := range []int{3, 2, 1} {
 		if fixedWidth(vis)+minBarWidth > termWidth {
 			for c := 0; c < colCount; c++ {
 				if multiCols[c].priority == dropTier {
@@ -162,6 +172,18 @@ func modeLabel(c apimodel.Command) string {
 	return c.Mode
 }
 
+// userLabel returns the display value for the User column: SubjectName when
+// present, otherwise the raw Subject (the caller truncates it to the column
+// width, which yields a short prefix), and blank when a command carries
+// neither — scheduler-originated commands (sync, discovery, auto-reconcile,
+// stack expiry) never populate either field.
+func userLabel(c apimodel.Command) string {
+	if c.SubjectName != "" {
+		return c.SubjectName
+	}
+	return c.Subject
+}
+
 // lessRows compares two rows for a given column. Returns true if row a
 // should sort before row b.
 func lessRows(a, b row, col int, now time.Time) bool {
@@ -174,6 +196,8 @@ func lessRows(a, b row, col int, now time.Time) bool {
 		return a.cmd.Command < b.cmd.Command
 	case colMode:
 		return a.cmd.Mode < b.cmd.Mode
+	case colUser:
+		return userLabel(a.cmd) < userLabel(b.cmd)
 	case colProgress:
 		return progressFraction(a.counts) < progressFraction(b.counts)
 	case colTime:
@@ -505,6 +529,11 @@ func (v multiView) renderRows(maxRows int) []string {
 				sb.WriteString(textStyle.Render(pad(r.cmd.Command, w)))
 			case colMode:
 				sb.WriteString(textStyle.Render(pad(modeLabel(r.cmd), w)))
+			case colUser:
+				// Truncate to w-1 so a bare Subject (typically a UUID, longer
+				// than the column) renders as a short prefix with a trailing
+				// gap before the next column, same idiom as colID.
+				sb.WriteString(textStyle.Render(pad(components.Truncate(userLabel(r.cmd), w-1), w)))
 			case colProgress:
 				if terminal {
 					verb := "completed"
