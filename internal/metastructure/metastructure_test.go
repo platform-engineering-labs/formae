@@ -118,6 +118,56 @@ func TestCommandsForCancelQuery_UnfilteredQueryExcludesSyncButExplicitQueryReach
 	assert.Equal(t, syncCommand.ID, explicit[0].ID)
 }
 
+// TestCommandsForCancelQuery_UserMeSelectsOnlyCallersCommands exercises the
+// real commandsForCancelQuery production path with a `user:me` query: it
+// shares BuildStatusQuery with the status-listing path, so the caller's
+// Subject must select only that caller's commands, never another subject's,
+// even when the other subject's command is also InProgress.
+func TestCommandsForCancelQuery_UserMeSelectsOnlyCallersCommands(t *testing.T) {
+	ds := newSQLiteTestDatastore(t)
+
+	mine := &forma_command.FormaCommand{
+		ID:      util.NewID(),
+		Command: pkgmodel.CommandApply,
+		State:   forma_command.CommandStateInProgress,
+		Source:  forma_command.SourceUser,
+		Subject: "caller-subject",
+	}
+	theirs := &forma_command.FormaCommand{
+		ID:      util.NewID(),
+		Command: pkgmodel.CommandApply,
+		State:   forma_command.CommandStateInProgress,
+		Source:  forma_command.SourceUser,
+		Subject: "other-subject",
+	}
+	require.NoError(t, ds.StoreFormaCommand(mine, mine.ID))
+	require.NoError(t, ds.StoreFormaCommand(theirs, theirs.ID))
+
+	m := &Metastructure{Datastore: ds}
+
+	got, err := m.commandsForCancelQuery("user:me", querier.Caller{ClientID: "client-1", Subject: "caller-subject"})
+	require.NoError(t, err)
+	require.Len(t, got, 1, "user:me must select only the caller's own command")
+	assert.Equal(t, mine.ID, got[0].ID)
+}
+
+// TestCommandsForCancelQuery_UserMeUnauthenticatedIsInvalidQuery covers a
+// cancel-by-query request with no authenticated identity: `user:me` must be
+// refused with the same InvalidQueryError the status-listing path returns,
+// not a silent no-op and not a different error type.
+func TestCommandsForCancelQuery_UserMeUnauthenticatedIsInvalidQuery(t *testing.T) {
+	ds := newSQLiteTestDatastore(t)
+
+	m := &Metastructure{Datastore: ds}
+
+	got, err := m.commandsForCancelQuery("user:me", querier.Caller{ClientID: "client-1"})
+	assert.Nil(t, got)
+	require.Error(t, err)
+
+	var invalidQueryErr apimodel.InvalidQueryError
+	assert.ErrorAs(t, err, &invalidQueryErr, "an unauthenticated user:me cancel query must fail with InvalidQueryError, not a different error type")
+}
+
 // storeUserCommand persists a terminal user-initiated apply attributed to
 // clientID and returns its id, so scope tests can compose a multi-client
 // command history.
