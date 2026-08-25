@@ -49,7 +49,7 @@ func TestStructure_AwsFlagsLiveOnTheSubcommandOnly(t *testing.T) {
 	parent := ConnectCmd()
 	aws := findSub(t, parent, "aws")
 
-	for _, flag := range []string{"account", "quick-create", "provider-exists", "profile-aws", "region", "role-arn", "no-input"} {
+	for _, flag := range []string{"account", "quick-create", "provider-exists", "profile-aws", "role-arn", "no-input"} {
 		assert.NotNil(t, aws.Flags().Lookup(flag), "flag %q missing on connect aws", flag)
 		assert.Nil(t, parent.Flags().Lookup(flag), "flag %q must not exist on the parent", flag)
 	}
@@ -70,7 +70,7 @@ func TestStructure_ListIsRegisteredAndCarriesNoAWSOnlyFlags(t *testing.T) {
 	assert.NotNil(t, list.Flags().Lookup("output-consumer"), "list must own the output-consumer flag")
 	assert.NotNil(t, list.Flags().Lookup("output-schema"), "list must own the output-schema flag")
 
-	for _, flag := range []string{"account", "quick-create", "provider-exists", "role-arn", "profile-aws", "region", "no-input"} {
+	for _, flag := range []string{"account", "quick-create", "provider-exists", "role-arn", "profile-aws", "no-input"} {
 		assert.Nil(t, list.Flags().Lookup(flag), "flag %q must not exist on connect list", flag)
 	}
 }

@@ -34,7 +34,7 @@ var newProvisioner = func(ctx context.Context, caller verifiedCaller,
 // runLocal is the --profile-aws path: verify the caller with STS, provision
 // the trust through provx, and register the resulting role.
 func runLocal(cc *cobra.Command, opts options, consumer printer.Consumer, schema string) error {
-	caller, err := verifyCaller(cc.Context(), opts.ProfileAWS, opts.Region, opts.Account)
+	caller, err := verifyCaller(cc.Context(), opts.ProfileAWS, opts.Account)
 	if err != nil {
 		return err
 	}

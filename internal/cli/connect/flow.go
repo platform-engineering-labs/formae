@@ -28,7 +28,6 @@ type options struct {
 	ProviderExists bool
 	ProfileAWS     string
 	RoleArn        string
-	Region         string
 	NoInput        bool
 
 	// ConfigFlag and ProfileFlag are carried verbatim into the resume hint:
@@ -58,9 +57,6 @@ func decideMode(opts options, tty bool) (mode, error) {
 	}
 	if set > 1 {
 		return 0, cmd.FlagErrorf("--quick-create, --profile-aws, and --role-arn are mutually exclusive; pass exactly one")
-	}
-	if opts.Region != "" && opts.ProfileAWS == "" {
-		return 0, cmd.FlagErrorf("--region applies only to the local path; pass it with --profile-aws")
 	}
 	if opts.ProviderExists && !opts.QuickCreate {
 		return 0, cmd.FlagErrorf("--provider-exists answers a question only quick-create asks; pass it with --quick-create")

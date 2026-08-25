@@ -109,7 +109,7 @@ func resolveAWSProfiles(ctx context.Context, names []string) []profileResolution
 func resolveOneAWSProfile(ctx context.Context, name string) profileResolution {
 	callCtx, cancel := context.WithTimeout(ctx, profileResolveTimeout)
 	defer cancel()
-	_, account, _, err := resolveCaller(callCtx, name, "")
+	_, account, _, err := resolveCaller(callCtx, name)
 	if err != nil {
 		return profileResolution{Name: name, Unavailable: unavailableReason(err)}
 	}

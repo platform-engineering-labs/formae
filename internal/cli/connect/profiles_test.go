@@ -67,11 +67,11 @@ func runAWSProfiles(t *testing.T, args ...string) (string, error) {
 	return runConnect(t, append([]string{"aws", "profiles"}, args...)...)
 }
 
-// The document a consumer branches on: three profiles, one resolved, one
-// unavailable for lacking a region, one unavailable for an expired SSO
-// session (simulated through the loadAWSConfig seam, since a real expired
-// token cache is not something a hermetic test can seed). Order mirrors
-// listAWSProfiles' own sort.
+// The document a consumer branches on: three profiles, one resolved with a
+// region of its own, one resolved without any region configured at all, and
+// one unavailable for an expired SSO session (simulated through the
+// loadAWSConfig seam, since a real expired token cache is not something a
+// hermetic test can seed). Order mirrors listAWSProfiles' own sort.
 func TestConnectAWSProfiles_MachineDocument(t *testing.T) {
 	seedProfilesConfig(t, `[profile blue-admin]
 region = eu-west-1
@@ -80,16 +80,16 @@ region = eu-west-1
 
 [profile sandbox]
 region = eu-west-1
-`, "blue-admin", "sandbox")
+`, "blue-admin", "no-region", "sandbox")
 
 	fakeSTS(t, testAccount, "arn:aws:iam::"+testAccount+":user/dev")
 
 	restoreLoad := loadAWSConfig
-	loadAWSConfig = func(ctx context.Context, profile, region string) (aws.Config, error) {
+	loadAWSConfig = func(ctx context.Context, profile string) (aws.Config, error) {
 		if profile == "sandbox" {
 			return aws.Config{}, &ssocreds.InvalidTokenError{}
 		}
-		return restoreLoad(ctx, profile, region)
+		return restoreLoad(ctx, profile)
 	}
 	t.Cleanup(func() { loadAWSConfig = restoreLoad })
 
@@ -113,9 +113,10 @@ region = eu-west-1
 
 	noRegion := rows[1].(map[string]any)
 	assert.Equal(t, "no-region", noRegion["name"])
-	assert.Equal(t, "no region is configured for this profile", noRegion["unavailable"])
-	_, accountPresent := noRegion["account"]
-	assert.False(t, accountPresent, "an unavailable profile must not carry an account key")
+	assert.Equal(t, testAccount, noRegion["account"],
+		"a profile with credentials resolves even with no region configured anywhere")
+	_, noRegionUnavailable := noRegion["unavailable"]
+	assert.False(t, noRegionUnavailable, "a resolved profile must not carry an unavailable key")
 
 	sandbox := rows[2].(map[string]any)
 	assert.Equal(t, "sandbox", sandbox["name"])
@@ -153,11 +154,11 @@ region = eu-west-1
 	fakeSTS(t, testAccount, "arn:aws:iam::"+testAccount+":user/dev")
 
 	restoreLoad := loadAWSConfig
-	loadAWSConfig = func(ctx context.Context, profile, region string) (aws.Config, error) {
+	loadAWSConfig = func(ctx context.Context, profile string) (aws.Config, error) {
 		if profile == "sandbox" {
 			return aws.Config{}, &ssocreds.InvalidTokenError{}
 		}
-		return restoreLoad(ctx, profile, region)
+		return restoreLoad(ctx, profile)
 	}
 	t.Cleanup(func() { loadAWSConfig = restoreLoad })
 
@@ -215,8 +216,6 @@ region = eu-west-1
 func TestUnavailableReason(t *testing.T) {
 	assert.Equal(t, "the SSO session has expired",
 		unavailableReason(printer.Fail(printer.CodeSSOLoginRequired, "the AWS SSO session for this profile has expired", nil)))
-	assert.Equal(t, "no region is configured for this profile",
-		unavailableReason(printer.Fail(printer.CodeProvisionFailed, "no region: pass --region or set one on the AWS profile", nil)))
 	assert.Equal(t, "the credentials belong to a non-commercial AWS partition",
 		unavailableReason(printer.Fail(printer.CodeUnsupportedPartition, "the credentials belong to a non-commercial AWS partition, which connect does not support", nil)))
 	assert.Equal(t, "could not resolve this profile's credentials",
@@ -225,7 +224,7 @@ func TestUnavailableReason(t *testing.T) {
 
 // The command is nested under `aws`, since profiles are AWS-specific while
 // connect itself is not, and it carries only the shared output flags: no
-// account/quick-create/role-arn/profile-aws/region/no-input, which belong to
+// account/quick-create/role-arn/profile-aws/no-input, which belong to
 // provisioning, not a local read.
 func TestStructure_ProfilesIsRegisteredUnderAWSAndCarriesNoProvisioningFlags(t *testing.T) {
 	parent := ConnectCmd()
@@ -235,7 +234,7 @@ func TestStructure_ProfilesIsRegisteredUnderAWSAndCarriesNoProvisioningFlags(t *
 	assert.NotNil(t, profiles.Flags().Lookup("output-consumer"), "profiles must own the output-consumer flag")
 	assert.NotNil(t, profiles.Flags().Lookup("output-schema"), "profiles must own the output-schema flag")
 
-	for _, flag := range []string{"account", "quick-create", "provider-exists", "role-arn", "profile-aws", "region", "no-input"} {
+	for _, flag := range []string{"account", "quick-create", "provider-exists", "role-arn", "profile-aws", "no-input"} {
 		assert.Nil(t, profiles.Flags().Lookup(flag), "flag %q must not exist on connect aws profiles", flag)
 	}
 }

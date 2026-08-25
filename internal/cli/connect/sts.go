@@ -26,26 +26,34 @@ type verifiedCaller struct {
 	Cfg     aws.Config // carried into the provisioner
 }
 
-// loadAWSConfig loads the shared config for the profile. The region option is
-// added only when the flag was passed: an unconditional WithRegion("") would
-// clobber the region the profile itself carries.
-var loadAWSConfig = func(ctx context.Context, profile, region string) (aws.Config, error) {
-	loadOptions := []func(*config.LoadOptions) error{
-		config.WithSharedConfigProfile(profile),
-	}
-	if region != "" {
-		loadOptions = append(loadOptions, config.WithRegion(region))
-	}
-	return config.LoadDefaultConfig(ctx, loadOptions...)
+// loadAWSConfig loads the shared config for the profile, region included when
+// the profile carries one.
+var loadAWSConfig = func(ctx context.Context, profile string) (aws.Config, error) {
+	return config.LoadDefaultConfig(ctx, config.WithSharedConfigProfile(profile))
 }
 
 // stsEndpoint overrides where GetCallerIdentity is sent; empty in production.
 var stsEndpoint string
 
+// defaultRegion is what the local path uses when the profile names no region.
+//
+// Nothing this path touches is regional. It asks STS which account the
+// credentials belong to, then creates an IAM role and the account-global OIDC
+// provider that role trusts: STS answers identically from any region, and IAM
+// has one global endpoint. A region is required only because an SDK client
+// cannot be constructed without one.
+//
+// So it is defaulted rather than demanded. Credentials in the shared
+// credentials file with no region beside them is an ordinary setup, and
+// refusing it reports every such profile as unavailable — which withdraws the
+// direct-provision path from the connect flow entirely and leaves the console
+// link as the only way through, for a preference nothing downstream reads.
+const defaultRegion = "us-east-1"
+
 // verifyCaller confirms, before any IAM call, that the profile's credentials
 // authenticate to the stated account in the commercial partition.
-func verifyCaller(ctx context.Context, profile, region, statedAccount string) (verifiedCaller, error) {
-	cfg, account, arn, err := resolveCaller(ctx, profile, region)
+func verifyCaller(ctx context.Context, profile, statedAccount string) (verifiedCaller, error) {
+	cfg, account, arn, err := resolveCaller(ctx, profile)
 	if err != nil {
 		return verifiedCaller{}, err
 	}
@@ -62,14 +70,13 @@ func verifyCaller(ctx context.Context, profile, region, statedAccount string) (v
 // verifyCaller shares with a resolve-only reader (the profiles listing),
 // which reports the account rather than confirms it: the client construction
 // and the classification of what can go wrong along the way live here once.
-func resolveCaller(ctx context.Context, profile, region string) (aws.Config, string, string, error) {
-	cfg, err := loadAWSConfig(ctx, profile, region)
+func resolveCaller(ctx context.Context, profile string) (aws.Config, string, string, error) {
+	cfg, err := loadAWSConfig(ctx, profile)
 	if err != nil {
 		return aws.Config{}, "", "", classifySSO(err, profile)
 	}
 	if cfg.Region == "" {
-		return aws.Config{}, "", "", printer.Fail(printer.CodeProvisionFailed,
-			"no region: pass --region or set one on the AWS profile", nil)
+		cfg.Region = defaultRegion
 	}
 	client := sts.NewFromConfig(cfg, func(o *sts.Options) {
 		if stsEndpoint != "" {
@@ -99,8 +106,6 @@ func unavailableReason(err error) string {
 		switch f.Code {
 		case printer.CodeSSOLoginRequired:
 			return "the SSO session has expired"
-		case printer.CodeProvisionFailed:
-			return "no region is configured for this profile"
 		case printer.CodeUnsupportedPartition:
 			return "the credentials belong to a non-commercial AWS partition"
 		}
