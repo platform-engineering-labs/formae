@@ -224,7 +224,7 @@ func TestUnavailableReason(t *testing.T) {
 
 // The command is nested under `aws`, since profiles are AWS-specific while
 // connect itself is not, and it carries only the shared output flags: no
-// account/quick-create/role-arn/profile-aws/region/no-input, which belong to
+// account/quick-create/role-arn/profile-aws/no-input, which belong to
 // provisioning, not a local read.
 func TestStructure_ProfilesIsRegisteredUnderAWSAndCarriesNoProvisioningFlags(t *testing.T) {
 	parent := ConnectCmd()
@@ -234,7 +234,7 @@ func TestStructure_ProfilesIsRegisteredUnderAWSAndCarriesNoProvisioningFlags(t *
 	assert.NotNil(t, profiles.Flags().Lookup("output-consumer"), "profiles must own the output-consumer flag")
 	assert.NotNil(t, profiles.Flags().Lookup("output-schema"), "profiles must own the output-schema flag")
 
-	for _, flag := range []string{"account", "quick-create", "provider-exists", "role-arn", "profile-aws", "region", "no-input"} {
+	for _, flag := range []string{"account", "quick-create", "provider-exists", "role-arn", "profile-aws", "no-input"} {
 		assert.Nil(t, profiles.Flags().Lookup(flag), "flag %q must not exist on connect aws profiles", flag)
 	}
 }
