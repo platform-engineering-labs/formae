@@ -73,22 +73,12 @@ func TestVerifyCaller_AcceptsAMatchingCommercialCaller(t *testing.T) {
 	seedAWSConfig(t, "[profile test]\nregion = eu-west-1\n")
 	fakeSTS(t, testAccount, "arn:aws:iam::"+testAccount+":user/dev")
 
-	caller, err := verifyCaller(context.Background(), "test", "", testAccount)
+	caller, err := verifyCaller(context.Background(), "test", testAccount)
 
 	require.NoError(t, err)
 	assert.Equal(t, testAccount, caller.Account)
 	assert.Equal(t, "arn:aws:iam::"+testAccount+":user/dev", caller.Arn)
-	assert.Equal(t, "eu-west-1", caller.Cfg.Region, "the profile's region loads when no flag is passed")
-}
-
-func TestVerifyCaller_TheRegionFlagBeatsTheProfileRegion(t *testing.T) {
-	seedAWSConfig(t, "[profile test]\nregion = eu-west-1\n")
-	fakeSTS(t, testAccount, "arn:aws:iam::"+testAccount+":user/dev")
-
-	caller, err := verifyCaller(context.Background(), "test", "us-east-1", testAccount)
-
-	require.NoError(t, err)
-	assert.Equal(t, "us-east-1", caller.Cfg.Region)
+	assert.Equal(t, "eu-west-1", caller.Cfg.Region, "the profile's own region is what loads")
 }
 
 // Credentials with no region configured anywhere is an ordinary AWS setup, and
@@ -100,7 +90,7 @@ func TestVerifyCaller_NoRegionAnywhereDefaultsRatherThanRefusing(t *testing.T) {
 	seedAWSConfig(t, "[profile test]\n")
 	fakeSTS(t, testAccount, "arn:aws:iam::"+testAccount+":user/dev")
 
-	caller, err := verifyCaller(context.Background(), "test", "", testAccount)
+	caller, err := verifyCaller(context.Background(), "test", testAccount)
 
 	require.NoError(t, err)
 	assert.Equal(t, testAccount, caller.Account)
@@ -111,7 +101,7 @@ func TestVerifyCaller_AMismatchNamesStatedAndActual(t *testing.T) {
 	seedAWSConfig(t, "[profile test]\nregion = eu-west-1\n")
 	fakeSTS(t, "999999999999", "arn:aws:iam::999999999999:user/dev")
 
-	_, err := verifyCaller(context.Background(), "test", "", testAccount)
+	_, err := verifyCaller(context.Background(), "test", testAccount)
 
 	failureCode(t, err, printer.CodeAccountMismatch)
 	assert.Contains(t, err.Error(), testAccount)
@@ -122,7 +112,7 @@ func TestVerifyCaller_ANonCommercialCallerIsRefused(t *testing.T) {
 	seedAWSConfig(t, "[profile test]\nregion = us-gov-west-1\n")
 	fakeSTS(t, testAccount, "arn:aws-us-gov:iam::"+testAccount+":user/dev")
 
-	_, err := verifyCaller(context.Background(), "test", "", testAccount)
+	_, err := verifyCaller(context.Background(), "test", testAccount)
 
 	failureCode(t, err, printer.CodeUnsupportedPartition)
 }

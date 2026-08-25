@@ -26,24 +26,16 @@ type verifiedCaller struct {
 	Cfg     aws.Config // carried into the provisioner
 }
 
-// loadAWSConfig loads the shared config for the profile. The region option is
-// added only when the flag was passed: an unconditional WithRegion("") would
-// clobber the region the profile itself carries.
-var loadAWSConfig = func(ctx context.Context, profile, region string) (aws.Config, error) {
-	loadOptions := []func(*config.LoadOptions) error{
-		config.WithSharedConfigProfile(profile),
-	}
-	if region != "" {
-		loadOptions = append(loadOptions, config.WithRegion(region))
-	}
-	return config.LoadDefaultConfig(ctx, loadOptions...)
+// loadAWSConfig loads the shared config for the profile, region included when
+// the profile carries one.
+var loadAWSConfig = func(ctx context.Context, profile string) (aws.Config, error) {
+	return config.LoadDefaultConfig(ctx, config.WithSharedConfigProfile(profile))
 }
 
 // stsEndpoint overrides where GetCallerIdentity is sent; empty in production.
 var stsEndpoint string
 
-// defaultRegion is what the local path uses when neither the flag nor the
-// profile names a region.
+// defaultRegion is what the local path uses when the profile names no region.
 //
 // Nothing this path touches is regional. It asks STS which account the
 // credentials belong to, then creates an IAM role and the account-global OIDC
@@ -60,8 +52,8 @@ const defaultRegion = "us-east-1"
 
 // verifyCaller confirms, before any IAM call, that the profile's credentials
 // authenticate to the stated account in the commercial partition.
-func verifyCaller(ctx context.Context, profile, region, statedAccount string) (verifiedCaller, error) {
-	cfg, account, arn, err := resolveCaller(ctx, profile, region)
+func verifyCaller(ctx context.Context, profile, statedAccount string) (verifiedCaller, error) {
+	cfg, account, arn, err := resolveCaller(ctx, profile)
 	if err != nil {
 		return verifiedCaller{}, err
 	}
@@ -78,8 +70,8 @@ func verifyCaller(ctx context.Context, profile, region, statedAccount string) (v
 // verifyCaller shares with a resolve-only reader (the profiles listing),
 // which reports the account rather than confirms it: the client construction
 // and the classification of what can go wrong along the way live here once.
-func resolveCaller(ctx context.Context, profile, region string) (aws.Config, string, string, error) {
-	cfg, err := loadAWSConfig(ctx, profile, region)
+func resolveCaller(ctx context.Context, profile string) (aws.Config, string, string, error) {
+	cfg, err := loadAWSConfig(ctx, profile)
 	if err != nil {
 		return aws.Config{}, "", "", classifySSO(err, profile)
 	}

@@ -79,24 +79,6 @@ func TestDecideMode_NoInputRequiresAccountAndExactlyOneTrustFlag(t *testing.T) {
 	assert.Equal(t, modeQuickCreate, mode)
 }
 
-// --region belongs to the local path alone: quick-create has no region input
-// and register-only touches no AWS API.
-func TestDecideMode_RegionIsRefusedOffTheLocalPath(t *testing.T) {
-	for _, opts := range []options{
-		{Account: testAccount, QuickCreate: true, Region: "eu-west-1"},
-		{Account: testAccount, RoleArn: "arn:aws:iam::" + testAccount + ":role/r", Region: "eu-west-1"},
-		{Account: testAccount, Region: "eu-west-1"},
-	} {
-		_, err := decideMode(opts, true)
-		flagError(t, err)
-		assert.Contains(t, err.Error(), "--profile-aws")
-	}
-
-	mode, err := decideMode(options{Account: testAccount, ProfileAWS: "dev", Region: "eu-west-1"}, true)
-	require.NoError(t, err)
-	assert.Equal(t, modeLocal, mode)
-}
-
 // --provider-exists answers a question only quick-create asks.
 func TestDecideMode_ProviderExistsIsRefusedOffQuickCreate(t *testing.T) {
 	for _, opts := range []options{

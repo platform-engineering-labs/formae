@@ -85,11 +85,11 @@ region = eu-west-1
 	fakeSTS(t, testAccount, "arn:aws:iam::"+testAccount+":user/dev")
 
 	restoreLoad := loadAWSConfig
-	loadAWSConfig = func(ctx context.Context, profile, region string) (aws.Config, error) {
+	loadAWSConfig = func(ctx context.Context, profile string) (aws.Config, error) {
 		if profile == "sandbox" {
 			return aws.Config{}, &ssocreds.InvalidTokenError{}
 		}
-		return restoreLoad(ctx, profile, region)
+		return restoreLoad(ctx, profile)
 	}
 	t.Cleanup(func() { loadAWSConfig = restoreLoad })
 
@@ -154,11 +154,11 @@ region = eu-west-1
 	fakeSTS(t, testAccount, "arn:aws:iam::"+testAccount+":user/dev")
 
 	restoreLoad := loadAWSConfig
-	loadAWSConfig = func(ctx context.Context, profile, region string) (aws.Config, error) {
+	loadAWSConfig = func(ctx context.Context, profile string) (aws.Config, error) {
 		if profile == "sandbox" {
 			return aws.Config{}, &ssocreds.InvalidTokenError{}
 		}
-		return restoreLoad(ctx, profile, region)
+		return restoreLoad(ctx, profile)
 	}
 	t.Cleanup(func() { loadAWSConfig = restoreLoad })
 

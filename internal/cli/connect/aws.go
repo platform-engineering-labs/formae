@@ -42,7 +42,6 @@ func awsCmd() *cobra.Command {
 	c.Flags().Bool("provider-exists", false, "The account was connected to formae before: the shared OIDC identity provider already exists, so the stack creates the role only")
 	c.Flags().String("role-arn", "", "Trust already exists (an applied quick-create stack, or a role you made yourself): validate and register only")
 	c.Flags().String("profile-aws", "", "Provision directly with a local AWS shared-config profile, then register")
-	c.Flags().String("region", "", "AWS region for the local path (flag > profile region > us-east-1; quick-create has no region input)")
 	c.Flags().Bool("no-input", false, "Disable prompts; requires --account and one of --quick-create, --profile-aws, --role-arn")
 	clicmd.AddOutputFlags(c)
 	c.SetUsageTemplate(clicmd.SimpleCmdUsageTemplate)
@@ -62,7 +61,6 @@ func readOptions(cc *cobra.Command) (options, error) {
 	opts.ProviderExists, _ = cc.Flags().GetBool("provider-exists")
 	opts.ProfileAWS, _ = cc.Flags().GetString("profile-aws")
 	opts.RoleArn, _ = cc.Flags().GetString("role-arn")
-	opts.Region, _ = cc.Flags().GetString("region")
 	opts.NoInput, _ = cc.Flags().GetBool("no-input")
 	return opts, nil
 }
