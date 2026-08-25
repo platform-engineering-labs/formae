@@ -42,6 +42,22 @@ var loadAWSConfig = func(ctx context.Context, profile, region string) (aws.Confi
 // stsEndpoint overrides where GetCallerIdentity is sent; empty in production.
 var stsEndpoint string
 
+// defaultRegion is what the local path uses when neither the flag nor the
+// profile names a region.
+//
+// Nothing this path touches is regional. It asks STS which account the
+// credentials belong to, then creates an IAM role and the account-global OIDC
+// provider that role trusts: STS answers identically from any region, and IAM
+// has one global endpoint. A region is required only because an SDK client
+// cannot be constructed without one.
+//
+// So it is defaulted rather than demanded. Credentials in the shared
+// credentials file with no region beside them is an ordinary setup, and
+// refusing it reports every such profile as unavailable — which withdraws the
+// direct-provision path from the connect flow entirely and leaves the console
+// link as the only way through, for a preference nothing downstream reads.
+const defaultRegion = "us-east-1"
+
 // verifyCaller confirms, before any IAM call, that the profile's credentials
 // authenticate to the stated account in the commercial partition.
 func verifyCaller(ctx context.Context, profile, region, statedAccount string) (verifiedCaller, error) {
@@ -68,8 +84,7 @@ func resolveCaller(ctx context.Context, profile, region string) (aws.Config, str
 		return aws.Config{}, "", "", classifySSO(err, profile)
 	}
 	if cfg.Region == "" {
-		return aws.Config{}, "", "", printer.Fail(printer.CodeProvisionFailed,
-			"no region: pass --region or set one on the AWS profile", nil)
+		cfg.Region = defaultRegion
 	}
 	client := sts.NewFromConfig(cfg, func(o *sts.Options) {
 		if stsEndpoint != "" {
@@ -99,8 +114,6 @@ func unavailableReason(err error) string {
 		switch f.Code {
 		case printer.CodeSSOLoginRequired:
 			return "the SSO session has expired"
-		case printer.CodeProvisionFailed:
-			return "no region is configured for this profile"
 		case printer.CodeUnsupportedPartition:
 			return "the credentials belong to a non-commercial AWS partition"
 		}

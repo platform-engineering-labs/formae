@@ -91,14 +91,20 @@ func TestVerifyCaller_TheRegionFlagBeatsTheProfileRegion(t *testing.T) {
 	assert.Equal(t, "us-east-1", caller.Cfg.Region)
 }
 
-func TestVerifyCaller_NoRegionAnywhereIsARefusal(t *testing.T) {
+// Credentials with no region configured anywhere is an ordinary AWS setup, and
+// nothing this path touches is regional: it asks STS who the credentials belong
+// to and then creates an IAM role, both global. A region is defaulted so such a
+// profile still resolves, rather than being refused over a preference no call
+// downstream ever reads.
+func TestVerifyCaller_NoRegionAnywhereDefaultsRatherThanRefusing(t *testing.T) {
 	seedAWSConfig(t, "[profile test]\n")
 	fakeSTS(t, testAccount, "arn:aws:iam::"+testAccount+":user/dev")
 
-	_, err := verifyCaller(context.Background(), "test", "", testAccount)
+	caller, err := verifyCaller(context.Background(), "test", "", testAccount)
 
-	failureCode(t, err, printer.CodeProvisionFailed)
-	assert.Contains(t, err.Error(), "region")
+	require.NoError(t, err)
+	assert.Equal(t, testAccount, caller.Account)
+	assert.Equal(t, defaultRegion, caller.Cfg.Region)
 }
 
 func TestVerifyCaller_AMismatchNamesStatedAndActual(t *testing.T) {
