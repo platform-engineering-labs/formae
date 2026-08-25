@@ -47,6 +47,7 @@ func ConnectCmd() *cobra.Command {
 	command.PersistentFlags().String("config", "", "Path to config file")
 	command.PersistentFlags().String("profile", "", "Named profile to use (see `formae profile list`)")
 	command.AddCommand(awsCmd())
+	command.AddCommand(gcpCmd())
 	command.AddCommand(listCmd())
 	command.SetUsageTemplate(clicmd.SimpleCmdUsageTemplate)
 	return command
@@ -55,8 +56,9 @@ func ConnectCmd() *cobra.Command {
 // formValues is what the interactive form fills. Cloud is asked first: it is
 // the discriminator every later question depends on.
 type formValues struct {
-	Cloud      string // "aws" is the only option today; the select still renders
-	Account    string
+	Cloud      string // "aws" or "gcp"
+	Account    string // AWS
+	Project    string // GCP
 	How        string // "quick-create" | "profile" | "role-arn"
 	ProfileAWS string
 	RoleArn    string
@@ -86,6 +88,16 @@ func runConnectForm(c *cobra.Command, opts options, cloud string) error {
 	v := &formValues{Cloud: cloud, Account: opts.Account}
 	if err := runConnectFormFn(th, v, awsProfileChoices()); err != nil {
 		return err
+	}
+
+	if v.Cloud == "gcp" {
+		// GCP has one path, so there is nothing else to ask: the project is
+		// the whole answer, and the local path takes it from here.
+		return runConnectGCPFn(c, gcpOptions{
+			Project:     strings.TrimSpace(v.Project),
+			ConfigFlag:  opts.ConfigFlag,
+			ProfileFlag: opts.ProfileFlag,
+		})
 	}
 
 	opts.Account = strings.TrimSpace(v.Account)

@@ -42,19 +42,29 @@ type ConnectedAccount struct {
 	OrgName          string `json:"orgName"`
 }
 
-// CloudConnectionRegistration is the registration request, exactly the three
-// fields the contract names.
+// CloudConnectionRegistration is the registration request: the cloud, the
+// account, and exactly that cloud's own trust coordinate.
+//
+// Both coordinates are omitempty because the control plane's schema is a
+// discriminated union that admits exactly one shape per cloud and rejects any
+// field belonging to another. Sending "roleArn": "" alongside a GCP
+// registration is not a harmless empty value, it is a field that variant does
+// not have.
 type CloudConnectionRegistration struct {
 	Cloud   string `json:"cloud"`
 	Account string `json:"account"`
-	RoleArn string `json:"roleArn"`
+	RoleArn string `json:"roleArn,omitempty"`
+	// WorkloadIdentityProvider is the GCP coordinate: the full resource name
+	// of the workload identity pool provider that trusts this installation.
+	WorkloadIdentityProvider string `json:"workloadIdentityProvider,omitempty"`
 }
 
 // CloudConnection is one registered connection as the control plane lists it.
 type CloudConnection struct {
-	Cloud   string `json:"cloud"`
-	Account string `json:"account"`
-	RoleArn string `json:"roleArn"`
+	Cloud                    string `json:"cloud"`
+	Account                  string `json:"account"`
+	RoleArn                  string `json:"roleArn"`
+	WorkloadIdentityProvider string `json:"workloadIdentityProvider"`
 }
 
 // RegisterOutcome reports what a registration did.
@@ -348,6 +358,14 @@ func (c *httpCloudClient) ListCloudConnections(ctx context.Context, bearer, inst
 // The role ARN is required of AWS alone. GCP and Azure carry their own trust
 // coordinates and no role, so requiring it of every cloud dropped valid records
 // and reported an installation that has connections as having none.
+//
+// Their own coordinates are deliberately not required either, for the same
+// reason: this listing is read from whatever control plane is deployed, and a
+// version that does not serve a field yet would have every connection of that
+// cloud vanish from a listing whose whole job is to be complete. Nothing
+// downstream needs the guard - the duplicate check compares coordinates as
+// strings, and an empty registered coordinate can only produce a refusal, never
+// a false "already registered".
 func invalidConnection(c CloudConnection) string {
 	switch {
 	case !knownClouds[c.Cloud]:

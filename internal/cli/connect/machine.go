@@ -50,14 +50,23 @@ type linksView struct {
 }
 
 // registeredView reports registration. Status is the two-value enum above.
+//
+// Each cloud carries exactly its own trust coordinate, and the others are
+// omitted rather than sent empty: a consumer reads the cloud first and then
+// the field that cloud has, and an empty roleArn on a GCP document would
+// invite it to read one that never existed. AWS documents are unchanged,
+// because an AWS registration always sets roleArn, which is why the schema
+// version does not move.
 type registeredView struct {
-	SchemaVersion int      `json:"schemaVersion" yaml:"schemaVersion"`
-	Phase         string   `json:"phase" yaml:"phase"` // "registered"
-	Status        string   `json:"status" yaml:"status"`
-	Cloud         string   `json:"cloud" yaml:"cloud"`
-	Account       string   `json:"account" yaml:"account"`
-	RoleArn       string   `json:"roleArn" yaml:"roleArn"`
-	Warnings      []string `json:"warnings,omitempty" yaml:"warnings,omitempty"`
+	SchemaVersion int    `json:"schemaVersion" yaml:"schemaVersion"`
+	Phase         string `json:"phase" yaml:"phase"` // "registered"
+	Status        string `json:"status" yaml:"status"`
+	Cloud         string `json:"cloud" yaml:"cloud"`
+	Account       string `json:"account" yaml:"account"`
+	RoleArn       string `json:"roleArn,omitempty" yaml:"roleArn,omitempty"`
+	// WorkloadIdentityProvider is the GCP coordinate.
+	WorkloadIdentityProvider string   `json:"workloadIdentityProvider,omitempty" yaml:"workloadIdentityProvider,omitempty"`
+	Warnings                 []string `json:"warnings,omitempty" yaml:"warnings,omitempty"`
 }
 
 // linksDocument builds the quick-create emit from the plan. The
@@ -75,6 +84,19 @@ func linksDocument(plan quickCreatePlan, account, installationID string, warning
 		CreateProvider:  plan.CreateProvider,
 		ResumeCommand:   plan.ResumeCommand,
 		Warnings:        warnings,
+	}
+}
+
+// gcpRegisteredDocument builds the registration report for a GCP project.
+func gcpRegisteredDocument(status, project, provider string, warnings []string) registeredView {
+	return registeredView{
+		SchemaVersion:            connectSchemaVersion,
+		Phase:                    "registered",
+		Status:                   status,
+		Cloud:                    "gcp",
+		Account:                  project,
+		WorkloadIdentityProvider: provider,
+		Warnings:                 warnings,
 	}
 }
 
@@ -98,6 +120,9 @@ type connectionView struct {
 	Cloud   string `json:"cloud" yaml:"cloud"`
 	Account string `json:"account" yaml:"account"`
 	RoleArn string `json:"roleArn,omitempty" yaml:"roleArn,omitempty"`
+	// WorkloadIdentityProvider is present for GCP and omitted elsewhere, for
+	// the same reason roleArn is.
+	WorkloadIdentityProvider string `json:"workloadIdentityProvider,omitempty" yaml:"workloadIdentityProvider,omitempty"`
 }
 
 // connectionsView is the list emit. Connections is always a slice, never

@@ -291,16 +291,28 @@ func classifySetupError(ctx context.Context, client cloudapi.Client, bearer, ins
 // (boundary two): provisioning can outlive a token, and a stale bearer must
 // never ride the registration.
 func (s *session) register(ctx context.Context, account, roleArn string) (string, error) {
+	return s.registerConnection(ctx, cloudapi.CloudConnectionRegistration{
+		Cloud:   "aws",
+		Account: account,
+		RoleArn: roleArn,
+	})
+}
+
+// registerConnection declares the connection, minting a fresh credential first
+// (boundary two): provisioning can outlive a token, and a stale bearer must
+// never ride the registration.
+//
+// registration carries whichever coordinate its cloud uses; the 409 comparison
+// below compares that same coordinate, because "the same connection" means a
+// different string per cloud.
+func (s *session) registerConnection(ctx context.Context, registration cloudapi.CloudConnectionRegistration) (string, error) {
+	account := registration.Account
 	bearer, err := s.validated.Credential(s.creds, true) // boundary 2: before registration
 	if err != nil {
 		return "", authFailure(err)
 	}
 
-	_, err = s.client.RegisterCloudConnection(ctx, bearer, s.InstallationID, cloudapi.CloudConnectionRegistration{
-		Cloud:   "aws",
-		Account: account,
-		RoleArn: roleArn,
-	})
+	_, err = s.client.RegisterCloudConnection(ctx, bearer, s.InstallationID, registration)
 	if err == nil {
 		return statusRegisteredUnverified, nil
 	}
@@ -319,15 +331,16 @@ func (s *session) register(ctx context.Context, account, roleArn string) (string
 			"registration could not be read to compare: %w", lerr)
 	}
 	for _, connection := range snapshot.Connections {
-		if connection.Cloud != "aws" || connection.Account != account {
+		if connection.Cloud != registration.Cloud || connection.Account != account {
 			continue
 		}
-		if connection.RoleArn == roleArn {
+		registered, stated := coordinateOf(connection), statedCoordinateOf(registration)
+		if registered == stated {
 			return statusAlreadyRegistered, nil
 		}
 		return "", printer.Fail(printer.CodeRegistrationConflict,
-			"a different role is already registered for this account on this installation",
-			map[string]any{"registeredRoleArn": connection.RoleArn, "statedRoleArn": roleArn})
+			conflictMessage(registration.Cloud),
+			conflictDetails(registration.Cloud, registered, stated))
 	}
 	if !snapshot.Complete {
 		return "", fmt.Errorf("a cloud connection for this account already exists, and the connections listing " +
@@ -336,7 +349,50 @@ func (s *session) register(ctx context.Context, account, roleArn string) (string
 	return "", printer.Fail(printer.CodeRegistrationConflict,
 		"the control plane refused this registration as a duplicate, but no connection for this account "+
 			"appears in the installation's full listing",
-		map[string]any{"statedRoleArn": roleArn})
+		conflictDetails(registration.Cloud, "", statedCoordinateOf(registration)))
+}
+
+// conflictMessage and conflictDetails name the coordinate in the words and
+// keys of the cloud in question.
+//
+// The AWS spellings are unchanged, deliberately: they are a declared part of
+// the machine protocol, and a consumer reading registeredRoleArn today must
+// keep reading it. GCP gets its own keys rather than a shared generic one, so
+// nothing has to guess which coordinate a value is.
+func conflictMessage(cloud string) string {
+	if cloud == "gcp" {
+		return "a different workload identity provider is already registered for this project on this installation"
+	}
+	return "a different role is already registered for this account on this installation"
+}
+
+func conflictDetails(cloud, registered, stated string) map[string]any {
+	registeredKey, statedKey := "registeredRoleArn", "statedRoleArn"
+	if cloud == "gcp" {
+		registeredKey, statedKey = "registeredWorkloadIdentityProvider", "statedWorkloadIdentityProvider"
+	}
+	details := map[string]any{statedKey: stated}
+	if registered != "" {
+		details[registeredKey] = registered
+	}
+	return details
+}
+
+// coordinateOf and statedCoordinateOf name the one trust coordinate a cloud
+// carries, so the duplicate comparison does not have to grow a switch at every
+// call site.
+func coordinateOf(c cloudapi.CloudConnection) string {
+	if c.Cloud == "gcp" {
+		return c.WorkloadIdentityProvider
+	}
+	return c.RoleArn
+}
+
+func statedCoordinateOf(r cloudapi.CloudConnectionRegistration) string {
+	if r.Cloud == "gcp" {
+		return r.WorkloadIdentityProvider
+	}
+	return r.RoleArn
 }
 
 // classifyRegisterError maps a registration failure onto the declared codes.
