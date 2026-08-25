@@ -392,7 +392,7 @@ func TestMultiView_UserColumn(t *testing.T) {
 	cmds[1].Subject = subjectOnly
 	// cmds[2] carries neither field.
 
-	// Wide enough to keep every column visible, including the tier-2 User column.
+	// Wide enough to keep every column visible, including the tier-3 User column.
 	v := multiView{th: theme.New("formae"), rows: buildRows(cmds), width: 130, now: now}
 	rows := v.renderRows(10)
 	vis := v.visibleCols()
@@ -410,6 +410,7 @@ func TestMultiView_UserColumn(t *testing.T) {
 	got := cell(1)
 	assert.NotEqual(t, "", got, "a bare Subject still renders something")
 	assert.Less(t, len([]rune(got)), len([]rune(subjectOnly)), "renders a short prefix, not the full subject")
+	assert.True(t, strings.HasSuffix(got, "…"), "bare Subject cell must end with truncation marker …")
 	assert.True(t, strings.HasPrefix(subjectOnly, strings.TrimSuffix(got, "…")),
 		"the rendered prefix must actually be a prefix of Subject, got %q", got)
 
