@@ -6,7 +6,6 @@ package connect
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -74,7 +73,7 @@ var runGcloudLogin = func(ctx context.Context, out io.Writer) error {
 	// Printed before it runs. formae is about to open a browser and ask for
 	// consent on the operator's behalf; the least it can do is say exactly
 	// what it is running.
-	fmt.Fprintf(out, "running %s\n", gcloudLoginCommand)
+	_, _ = fmt.Fprintf(out, "running %s\n", gcloudLoginCommand)
 
 	cmd := exec.CommandContext(ctx, path, "auth", "application-default", "login")
 	cmd.Stdout = out
@@ -128,8 +127,3 @@ func ensureCredentials(ctx context.Context, out io.Writer, mayPrompt bool) error
 	}
 	return nil
 }
-
-// errNoCredentials is what a provisioning call reports when the credentials
-// vanished between the check and the call. Kept distinct so the caller can
-// tell it apart from an authorization failure.
-var errNoCredentials = errors.New("no usable google credentials")
