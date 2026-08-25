@@ -75,11 +75,19 @@ func printRegisteredHuman(w io.Writer, tty bool, th *theme.Theme, v registeredVi
 	if v.Status == statusAlreadyRegistered {
 		verb = "already registered"
 	}
+	// Each cloud is named in its own words and reports its own coordinate. A
+	// shared line would print "aws account" over a GCP project and an empty
+	// role beneath it, which reads as a value that failed rather than one that
+	// never existed.
+	noun, label, coordinate := "account", "role", v.RoleArn
+	if v.Cloud == "gcp" {
+		noun, label, coordinate = "project", "workload identity provider", v.WorkloadIdentityProvider
+	}
 	if _, err := fmt.Fprintln(w, ack(components.AckDone,
-		fmt.Sprintf("%s aws account %s on installation %s", verb, v.Account, installationID))); err != nil {
+		fmt.Sprintf("%s %s %s %s on installation %s", verb, v.Cloud, noun, v.Account, installationID))); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(w, "  role: %s\n", v.RoleArn); err != nil {
+	if _, err := fmt.Fprintf(w, "  %s: %s\n", label, coordinate); err != nil {
 		return err
 	}
 	for _, warning := range v.Warnings {

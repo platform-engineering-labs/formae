@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -357,4 +358,25 @@ func TestRegisteredDocumentBytes(t *testing.T) {
 		"account": "`+testProject+`",
 		"workloadIdentityProvider": "`+testProviderName+`"
 	}`, string(gcpDoc))
+}
+
+// TestRegisteredHumanNamesEachCloudInItsOwnWords pins both renderings.
+//
+// The AWS line is unchanged, and the GCP line has to be: a shared line prints
+// "aws account" over a GCP project and an empty role beneath it, which reads
+// as a value that failed rather than one that never existed.
+func TestRegisteredHumanNamesEachCloudInItsOwnWords(t *testing.T) {
+	var aws, gcp strings.Builder
+	require.NoError(t, printRegisteredHuman(&aws, false, nil,
+		registeredDocument(statusRegisteredUnverified, testAccount, contractRoleArn, nil), contractInstallation))
+	require.NoError(t, printRegisteredHuman(&gcp, false, nil,
+		gcpRegisteredDocument(statusRegisteredUnverified, testProject, testProviderName, nil), contractInstallation))
+
+	assert.Contains(t, aws.String(), "aws account "+testAccount)
+	assert.Contains(t, aws.String(), "role: "+contractRoleArn)
+
+	assert.Contains(t, gcp.String(), "gcp project "+testProject)
+	assert.Contains(t, gcp.String(), "workload identity provider: "+testProviderName)
+	assert.NotContains(t, gcp.String(), "aws account", "a GCP run called the project an aws account")
+	assert.NotContains(t, gcp.String(), "role:", "a GCP run printed a role it does not have")
 }
