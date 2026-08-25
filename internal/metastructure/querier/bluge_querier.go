@@ -11,6 +11,7 @@ import (
 
 	"github.com/blugelabs/bluge"
 	querystr "github.com/blugelabs/query_string"
+	"github.com/google/uuid"
 
 	"github.com/platform-engineering-labs/formae/internal/datastore"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
@@ -143,6 +144,20 @@ func (b *BlugeQuerier) assignTermToStatusQuery(field string, value any, sq *data
 			value = caller.ClientID
 		}
 		sq.ClientID = appendStringValue(sq.ClientID, value.(string), constraint)
+	case "user":
+		userValue := value.(string)
+		if userValue == "me" {
+			if caller.Subject == "" {
+				return apimodel.InvalidQueryError{Reason: "'user:me' requires an authenticated identity, but this request has no authenticated identity"}
+			}
+			sq.Subject = appendStringValue(sq.Subject, caller.Subject, constraint)
+			return nil
+		}
+		if uuid.Validate(userValue) == nil {
+			sq.Subject = appendStringValue(sq.Subject, userValue, constraint)
+		} else {
+			sq.SubjectName = appendStringValue(sq.SubjectName, userValue, constraint)
+		}
 	case "command":
 		sq.Command = appendStringValue(sq.Command, value.(string), constraint)
 	case "status":

@@ -16,6 +16,7 @@ import (
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBlugeQuerier_statusQuery_SimpleOptional(t *testing.T) {
@@ -98,6 +99,90 @@ func TestBlugeQuerier_statusQuery_SimpleWithMeClientId(t *testing.T) {
 		ClientID: &datastore.QueryItem[string]{
 			Item:       "test-client-id",
 			Constraint: datastore.Optional,
+		},
+	}
+
+	statusQuery, err := querier.statusQuery(queryString, Caller{ClientID: "test-client-id"}, 0)
+	assert.NoError(t, err)
+	assert.Equal(t, expectedStatusQuery, statusQuery)
+}
+
+func TestBlugeQuerier_statusQuery_UserMeResolvesToCallerSubject(t *testing.T) {
+	querier := &BlugeQuerier{}
+
+	queryString := "user:me"
+	expectedStatusQuery := &datastore.StatusQuery{
+		Subject: &datastore.QueryItem[string]{
+			Item:       "caller-subject-id",
+			Constraint: datastore.Optional,
+		},
+	}
+
+	statusQuery, err := querier.statusQuery(queryString, Caller{ClientID: "test-client-id", Subject: "caller-subject-id"}, 0)
+	assert.NoError(t, err)
+	assert.Equal(t, expectedStatusQuery, statusQuery)
+}
+
+func TestBlugeQuerier_statusQuery_UserMeUnauthenticatedIsInvalidQuery(t *testing.T) {
+	querier := &BlugeQuerier{}
+
+	queryString := "user:me"
+
+	statusQuery, err := querier.statusQuery(queryString, Caller{ClientID: "test-client-id"}, 0)
+	assert.Nil(t, statusQuery)
+	assert.Error(t, err)
+
+	var invalidQueryErr apimodel.InvalidQueryError
+	assert.ErrorAs(t, err, &invalidQueryErr)
+	assert.Contains(t, invalidQueryErr.Reason, "no authenticated identity")
+}
+
+func TestBlugeQuerier_statusQuery_UserUUIDPopulatesSubject(t *testing.T) {
+	querier := &BlugeQuerier{}
+
+	queryString := "user:1F3D9A4C-6B2E-4E3F-9C1A-2D4E5F6A7B8C"
+	expectedStatusQuery := &datastore.StatusQuery{
+		Subject: &datastore.QueryItem[string]{
+			Item:       "1F3D9A4C-6B2E-4E3F-9C1A-2D4E5F6A7B8C",
+			Constraint: datastore.Optional,
+		},
+	}
+
+	statusQuery, err := querier.statusQuery(queryString, Caller{ClientID: "test-client-id"}, 0)
+	require.NoError(t, err)
+	assert.Equal(t, expectedStatusQuery, statusQuery)
+	assert.Nil(t, statusQuery.SubjectName)
+}
+
+func TestBlugeQuerier_statusQuery_UserNonUUIDPopulatesSubjectName(t *testing.T) {
+	querier := &BlugeQuerier{}
+
+	queryString := "user:JaneDoe"
+	expectedStatusQuery := &datastore.StatusQuery{
+		SubjectName: &datastore.QueryItem[string]{
+			Item:       "JaneDoe",
+			Constraint: datastore.Optional,
+		},
+	}
+
+	statusQuery, err := querier.statusQuery(queryString, Caller{ClientID: "test-client-id"}, 0)
+	require.NoError(t, err)
+	assert.Equal(t, expectedStatusQuery, statusQuery)
+	assert.Nil(t, statusQuery.Subject)
+}
+
+func TestBlugeQuerier_statusQuery_UserCombinesWithOtherFields(t *testing.T) {
+	querier := &BlugeQuerier{}
+
+	queryString := "user:JaneDoe +status:Success"
+	expectedStatusQuery := &datastore.StatusQuery{
+		SubjectName: &datastore.QueryItem[string]{
+			Item:       "JaneDoe",
+			Constraint: datastore.Optional,
+		},
+		Status: &datastore.QueryItem[string]{
+			Item:       string(forma_command.CommandStateSuccess),
+			Constraint: datastore.Required,
 		},
 	}
 
