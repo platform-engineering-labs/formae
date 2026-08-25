@@ -70,7 +70,7 @@ func buildConnectForm(th *theme.Theme, v *formValues, awsProfiles []string) *huh
 		huh.NewSelect[string]().
 			Title("Cloud").
 			Description("The cloud the account lives in").
-			Options(huh.NewOption("AWS", "aws")).
+			Options(huh.NewOption("AWS", "aws"), huh.NewOption("GCP", "gcp")).
 			Value(&v.Cloud),
 	).WithHideFunc(func() bool { return v.Cloud != "" })
 
@@ -85,7 +85,23 @@ func buildConnectForm(th *theme.Theme, v *formValues, awsProfiles []string) *huh
 				}
 				return nil
 			}),
-	).WithHideFunc(func() bool { return v.Account != "" })
+	).WithHideFunc(func() bool { return v.Cloud != "aws" || v.Account != "" })
+
+	// GCP asks for a project and nothing else. There is no "how" question,
+	// because GCP has one path: no console flow exists to offer as an
+	// alternative to provisioning with local credentials.
+	projectGroup := huh.NewGroup(
+		huh.NewInput().
+			Title("GCP project id").
+			Description("Always explicit, never inferred from credentials").
+			Value(&v.Project).
+			Validate(func(s string) error {
+				if strings.TrimSpace(s) == "" {
+					return errors.New("a project id is required")
+				}
+				return nil
+			}),
+	).WithHideFunc(func() bool { return v.Cloud != "gcp" || v.Project != "" })
 
 	howGroup := huh.NewGroup(
 		huh.NewSelect[string]().
@@ -96,7 +112,7 @@ func buildConnectForm(th *theme.Theme, v *formValues, awsProfiles []string) *huh
 				huh.NewOption("I already have a role: register it", "role-arn"),
 			).
 			Value(&v.How),
-	).WithHideFunc(func() bool { return v.How != "" })
+	).WithHideFunc(func() bool { return v.Cloud != "aws" || v.How != "" })
 
 	profileQuestion := func() huh.Field {
 		if len(awsProfiles) > 0 {
@@ -121,7 +137,7 @@ func buildConnectForm(th *theme.Theme, v *formValues, awsProfiles []string) *huh
 			Value(&v.ProfileAWS)
 	}
 	profileGroup := huh.NewGroup(profileQuestion()).
-		WithHideFunc(func() bool { return v.How != "profile" || v.ProfileAWS != "" })
+		WithHideFunc(func() bool { return v.Cloud != "aws" || v.How != "profile" || v.ProfileAWS != "" })
 
 	roleArnGroup := huh.NewGroup(
 		huh.NewInput().
@@ -134,9 +150,9 @@ func buildConnectForm(th *theme.Theme, v *formValues, awsProfiles []string) *huh
 				}
 				return nil
 			}),
-	).WithHideFunc(func() bool { return v.How != "role-arn" || v.RoleArn != "" })
+	).WithHideFunc(func() bool { return v.Cloud != "aws" || v.How != "role-arn" || v.RoleArn != "" })
 
-	return components.NewThemedForm(th, cloudGroup, accountGroup, howGroup, profileGroup, roleArnGroup)
+	return components.NewThemedForm(th, cloudGroup, accountGroup, projectGroup, howGroup, profileGroup, roleArnGroup)
 }
 
 // confirmInteractive runs the consents an interactive run needs before it

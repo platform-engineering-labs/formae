@@ -84,6 +84,24 @@ const (
 	// CodeInstallationNotReady: the installation has not applied the
 	// split-key template version yet, or is destroying.
 	CodeInstallationNotReady Code = "installation_not_ready"
+	// CodeGcloudMissing: the local path needs the gcloud CLI to obtain
+	// credentials and it is not on PATH. Its own code because the remedy is a
+	// specific install step and a consumer names it.
+	CodeGcloudMissing Code = "gcloud_missing"
+	// CodeCredentialsRequired: no usable Google credentials, in a run that may
+	// not prompt (--no-input, or machine output). Details carry the exact
+	// command to run.
+	CodeCredentialsRequired Code = "credentials_required"
+	// CodeProjectUnreachable: the stated project could not be read with these
+	// credentials — it does not exist, or this principal cannot see it.
+	// Deliberately distinct from a credential problem: signing in again
+	// returns the same principal and would overwrite deliberately configured
+	// credentials.
+	CodeProjectUnreachable Code = "project_unreachable"
+	// CodeApiDisabled: a Google API the connection needs is not enabled on the
+	// project. Details name it, because the remedy is one command and formae
+	// does not enable APIs on someone's project uninvited.
+	CodeApiDisabled Code = "api_disabled"
 )
 
 // registeredCodes is what may reach the wire. A code absent from here is a
@@ -109,6 +127,11 @@ var registeredCodes = map[Code]bool{
 	CodeUnsupportedPartition: true,
 	CodeControlPlaneTooOld:   true,
 	CodeInstallationNotReady: true,
+
+	CodeGcloudMissing:       true,
+	CodeCredentialsRequired: true,
+	CodeProjectUnreachable:  true,
+	CodeApiDisabled:         true,
 }
 
 // Failure is an error a command declares, carrying a code a machine consumer
