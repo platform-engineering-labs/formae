@@ -172,12 +172,17 @@ func modeLabel(c apimodel.Command) string {
 	return c.Mode
 }
 
-// userLabel returns the display value for the User column: SubjectName when
-// present, otherwise the raw Subject (the caller truncates it to the column
-// width, which yields a short prefix), and blank when a command carries
-// neither — scheduler-originated commands (sync, discovery, auto-reconcile,
-// stack expiry) never populate either field.
-func userLabel(c apimodel.Command) string {
+// UserLabel returns the display value for a command's attribution: SubjectName
+// when present, otherwise the raw Subject (a caller rendering it into a fixed
+// column, such as this package's own User column, truncates it — see
+// components.Truncate at the renderRows call site — which yields a short
+// prefix), and blank when a command carries neither — scheduler-originated
+// commands (sync, discovery, auto-reconcile, stack expiry) never populate
+// either field. Exported so the other renderers that show command
+// attribution (the detailed-list header in internal/cli/status and the
+// cancel confirmation summary in internal/cli/cancel) apply the same rule
+// without duplicating it.
+func UserLabel(c apimodel.Command) string {
 	if c.SubjectName != "" {
 		return c.SubjectName
 	}
@@ -197,7 +202,7 @@ func lessRows(a, b row, col int, now time.Time) bool {
 	case colMode:
 		return a.cmd.Mode < b.cmd.Mode
 	case colUser:
-		return userLabel(a.cmd) < userLabel(b.cmd)
+		return UserLabel(a.cmd) < UserLabel(b.cmd)
 	case colProgress:
 		return progressFraction(a.counts) < progressFraction(b.counts)
 	case colTime:
@@ -533,7 +538,7 @@ func (v multiView) renderRows(maxRows int) []string {
 				// Truncate to w-1 so a bare Subject (typically a UUID, longer
 				// than the column) renders as a short prefix with a trailing
 				// gap before the next column, same idiom as colID.
-				sb.WriteString(textStyle.Render(pad(components.Truncate(userLabel(r.cmd), w-1), w)))
+				sb.WriteString(textStyle.Render(pad(components.Truncate(UserLabel(r.cmd), w-1), w)))
 			case colProgress:
 				if terminal {
 					verb := "completed"

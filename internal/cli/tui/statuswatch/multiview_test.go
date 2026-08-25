@@ -347,11 +347,11 @@ func TestModeLabel(t *testing.T) {
 // when present, a bare Subject is used verbatim (the caller truncates it to
 // a short prefix at render width), and a command carrying neither is blank.
 func TestUserLabel(t *testing.T) {
-	assert.Equal(t, "dpanders", userLabel(apimodel.Command{Subject: "11111111-1111-4111-8111-111111111111", SubjectName: "dpanders"}),
+	assert.Equal(t, "dpanders", UserLabel(apimodel.Command{Subject: "11111111-1111-4111-8111-111111111111", SubjectName: "dpanders"}),
 		"SubjectName wins when present")
-	assert.Equal(t, "11111111-1111-4111-8111-111111111111", userLabel(apimodel.Command{Subject: "11111111-1111-4111-8111-111111111111"}),
+	assert.Equal(t, "11111111-1111-4111-8111-111111111111", UserLabel(apimodel.Command{Subject: "11111111-1111-4111-8111-111111111111"}),
 		"falls back to the raw Subject when there is no display name")
-	assert.Equal(t, "", userLabel(apimodel.Command{}), "no attribution at all is blank")
+	assert.Equal(t, "", UserLabel(apimodel.Command{}), "no attribution at all is blank")
 }
 
 // colOffset returns the visible-rune start offset of column col within a

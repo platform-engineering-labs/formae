@@ -185,6 +185,50 @@ func TestRenderCancelSummary_Force(t *testing.T) {
 	assert.NotContains(t, plain, "will finish")
 }
 
+// TestRenderCancelSummary_Attribution covers the three-way attribution rule
+// on the per-command cancel summary line: SubjectName wins when present, a
+// bare Subject renders when there is no display name, and a command with
+// neither field mentions no user at all in the line.
+func TestRenderCancelSummary_Attribution(t *testing.T) {
+	th := theme.New("formae")
+	now := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	start := now.Add(-42 * time.Second)
+	base := apimodel.Command{
+		CommandID:       "cmd-abc123",
+		Command:         "apply",
+		Mode:            "reconcile",
+		State:           "InProgress",
+		StartTs:         start,
+		ResourceUpdates: makeUpdates(8, "Success", 2, "InProgress", 5, "Pending"),
+	}
+	exps := map[string]expectation{"cmd-abc123": {Completed: 8, WillFinish: 2, WillCancel: 5}}
+
+	t.Run("SubjectName and Subject both set renders the name", func(t *testing.T) {
+		cmd := base
+		cmd.Subject = "11111111-1111-4111-8111-111111111111"
+		cmd.SubjectName = "dpanders"
+		plain := stripANSI(renderCancelSummary(th, []apimodel.Command{cmd}, exps, false, now))
+		assert.Contains(t, plain, "dpanders")
+		assert.NotContains(t, plain, cmd.Subject)
+	})
+
+	t.Run("Subject only renders the subject", func(t *testing.T) {
+		cmd := base
+		cmd.Subject = "11111111-1111-4111-8111-111111111111"
+		plain := stripANSI(renderCancelSummary(th, []apimodel.Command{cmd}, exps, false, now))
+		assert.Contains(t, plain, cmd.Subject)
+	})
+
+	t.Run("neither field set mentions no user", func(t *testing.T) {
+		attributed := base
+		attributed.SubjectName = "dpanders"
+		withUser := stripANSI(renderCancelSummary(th, []apimodel.Command{attributed}, exps, false, now))
+		without := stripANSI(renderCancelSummary(th, []apimodel.Command{base}, exps, false, now))
+		assert.NotContains(t, without, "dpanders")
+		assert.NotEqual(t, withUser, without, "the attributed and unattributed lines must differ")
+	})
+}
+
 // makeUpdates builds a ResourceUpdates slice: pairs of (count, state).
 func makeUpdates(pairs ...interface{}) []apimodel.ResourceUpdate {
 	var updates []apimodel.ResourceUpdate
