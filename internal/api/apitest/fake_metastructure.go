@@ -12,6 +12,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/changeset"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/querier"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
@@ -151,7 +152,7 @@ func (m *FakeMetastructure) CancelCommand(commandID string, force bool, clientID
 	return nil, nil
 }
 
-func (m *FakeMetastructure) CancelCommandsByQuery(query string, force bool, clientID string) (*apimodel.CancelCommandResponse, error) {
+func (m *FakeMetastructure) CancelCommandsByQuery(query string, force bool, caller querier.Caller) (*apimodel.CancelCommandResponse, error) {
 	m.RecordedCancelQueries = append(m.RecordedCancelQueries, query)
 	nextResponse := m.CancelResponses[0]
 	m.CancelResponses = m.CancelResponses[1:]
@@ -159,7 +160,7 @@ func (m *FakeMetastructure) CancelCommandsByQuery(query string, force bool, clie
 	return nextResponse.CancelCommandResponse, nextResponse.Error
 }
 
-func (m *FakeMetastructure) ListFormaCommandStatus(commandID string, clientID string, n int, scope apimodel.CommandScope) (*apimodel.ListCommandStatusResponse, error) {
+func (m *FakeMetastructure) ListFormaCommandStatus(commandID string, caller querier.Caller, n int, scope apimodel.CommandScope) (*apimodel.ListCommandStatusResponse, error) {
 	m.RecordedListN = append(m.RecordedListN, n)
 	m.RecordedListScopes = append(m.RecordedListScopes, scope)
 

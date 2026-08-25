@@ -29,7 +29,7 @@ func TestBlugeQuerier_statusQuery_SimpleOptional(t *testing.T) {
 		},
 	}
 
-	statusQuery, err := querier.statusQuery(queryString, "test-client-id", 0)
+	statusQuery, err := querier.statusQuery(queryString, Caller{ClientID: "test-client-id"}, 0)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedStatusQuery, statusQuery)
 }
@@ -45,7 +45,7 @@ func TestBlugeQuerier_statusQuery_SimpleRequired(t *testing.T) {
 		},
 	}
 
-	statusQuery, err := querier.statusQuery(queryString, "test-client-id", 0)
+	statusQuery, err := querier.statusQuery(queryString, Caller{ClientID: "test-client-id"}, 0)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedStatusQuery, statusQuery)
 }
@@ -61,7 +61,7 @@ func TestBlugeQuerier_statusQuery_SimpleExcluded(t *testing.T) {
 		},
 	}
 
-	statusQuery, err := querier.statusQuery(queryString, "test-client-id", 0)
+	statusQuery, err := querier.statusQuery(queryString, Caller{ClientID: "test-client-id"}, 0)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedStatusQuery, statusQuery)
 }
@@ -85,7 +85,7 @@ func TestBlugeQuerier_statusQuery_ComplexOptionalRequiredExcluded(t *testing.T) 
 		},
 	}
 
-	statusQuery, err := querier.statusQuery(queryString, "test-client-id", 0)
+	statusQuery, err := querier.statusQuery(queryString, Caller{ClientID: "test-client-id"}, 0)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedStatusQuery, statusQuery)
 }
@@ -101,7 +101,7 @@ func TestBlugeQuerier_statusQuery_SimpleWithMeClientId(t *testing.T) {
 		},
 	}
 
-	statusQuery, err := querier.statusQuery(queryString, "test-client-id", 0)
+	statusQuery, err := querier.statusQuery(queryString, Caller{ClientID: "test-client-id"}, 0)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedStatusQuery, statusQuery)
 }
@@ -117,7 +117,7 @@ func TestBlugeQuerier_statusQuery_SimpleStack(t *testing.T) {
 		},
 	}
 
-	statusQuery, err := querier.statusQuery(queryString, "test-client-id", 0)
+	statusQuery, err := querier.statusQuery(queryString, Caller{ClientID: "test-client-id"}, 0)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedStatusQuery, statusQuery)
 }
@@ -133,7 +133,7 @@ func TestBlugeQuerier_statusQuery_RequiredStack(t *testing.T) {
 		},
 	}
 
-	statusQuery, err := querier.statusQuery(queryString, "test-client-id", 0)
+	statusQuery, err := querier.statusQuery(queryString, Caller{ClientID: "test-client-id"}, 0)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedStatusQuery, statusQuery)
 }
@@ -149,7 +149,7 @@ func TestBlugeQuerier_statusQuery_ExcludedStack(t *testing.T) {
 		},
 	}
 
-	statusQuery, err := querier.statusQuery(queryString, "test-client-id", 0)
+	statusQuery, err := querier.statusQuery(queryString, Caller{ClientID: "test-client-id"}, 0)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedStatusQuery, statusQuery)
 }
@@ -173,7 +173,7 @@ func TestBlugeQuerier_statusQuery_ComplexStackWithOtherFields(t *testing.T) {
 		},
 	}
 
-	statusQuery, err := querier.statusQuery(queryString, "test-client-id", 0)
+	statusQuery, err := querier.statusQuery(queryString, Caller{ClientID: "test-client-id"}, 0)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedStatusQuery, statusQuery)
 }

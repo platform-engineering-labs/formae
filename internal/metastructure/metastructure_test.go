@@ -18,6 +18,7 @@ import (
 	_ "github.com/platform-engineering-labs/formae/internal/datastore/all"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/querier"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/types"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
@@ -69,7 +70,7 @@ func TestListFormaCommandStatus_ExcludesSchedulerCommands(t *testing.T) {
 	require.NoError(t, ds.StoreFormaCommand(autoReconcilerApply, autoReconcilerApply.ID))
 
 	m := &Metastructure{Datastore: ds}
-	resp, err := m.ListFormaCommandStatus("command:apply", "client-1", 10, apimodel.CommandScopeAgent)
+	resp, err := m.ListFormaCommandStatus("command:apply", querier.Caller{ClientID: "client-1"}, 10, apimodel.CommandScopeAgent)
 	require.NoError(t, err)
 	require.Len(t, resp.Commands, 1, "scheduler command must not appear alongside the user command")
 	assert.Equal(t, userApply.ID, resp.Commands[0].CommandID)
@@ -102,7 +103,7 @@ func TestCommandsForCancelQuery_UnfilteredQueryExcludesSyncButExplicitQueryReach
 
 	m := &Metastructure{Datastore: ds}
 
-	unfiltered, err := m.commandsForCancelQuery("status:InProgress", "client-1")
+	unfiltered, err := m.commandsForCancelQuery("status:InProgress", querier.Caller{ClientID: "client-1"})
 	require.NoError(t, err)
 	gotIDs := make([]string, 0, len(unfiltered))
 	for _, cmd := range unfiltered {
@@ -111,7 +112,7 @@ func TestCommandsForCancelQuery_UnfilteredQueryExcludesSyncButExplicitQueryReach
 	assert.Contains(t, gotIDs, userApply.ID, "unfiltered query must still surface the user command")
 	assert.NotContains(t, gotIDs, syncCommand.ID, "unfiltered query must not surface the sync command as a cancel candidate")
 
-	explicit, err := m.commandsForCancelQuery("command:sync", "client-1")
+	explicit, err := m.commandsForCancelQuery("command:sync", querier.Caller{ClientID: "client-1"})
 	require.NoError(t, err)
 	require.Len(t, explicit, 1, "an explicit command:sync query must still be able to target sync commands")
 	assert.Equal(t, syncCommand.ID, explicit[0].ID)
@@ -143,7 +144,7 @@ func TestListFormaCommandStatus_AgentScopeSpansClients(t *testing.T) {
 	theirs := storeUserCommand(t, ds, "client-2")
 
 	m := &Metastructure{Datastore: ds}
-	resp, err := m.ListFormaCommandStatus("", "client-1", 50, apimodel.CommandScopeAgent)
+	resp, err := m.ListFormaCommandStatus("", querier.Caller{ClientID: "client-1"}, 50, apimodel.CommandScopeAgent)
 	require.NoError(t, err)
 
 	gotIDs := make([]string, 0, len(resp.Commands))
@@ -166,11 +167,11 @@ func TestListFormaCommandStatus_AgentScopeReturnsAPage(t *testing.T) {
 	}
 
 	m := &Metastructure{Datastore: ds}
-	resp, err := m.ListFormaCommandStatus("", "client-1", 50, apimodel.CommandScopeAgent)
+	resp, err := m.ListFormaCommandStatus("", querier.Caller{ClientID: "client-1"}, 50, apimodel.CommandScopeAgent)
 	require.NoError(t, err)
 	assert.Len(t, resp.Commands, 5, "an unqueried list must return every matching command up to the requested count")
 
-	bounded, err := m.ListFormaCommandStatus("", "client-1", 2, apimodel.CommandScopeAgent)
+	bounded, err := m.ListFormaCommandStatus("", querier.Caller{ClientID: "client-1"}, 2, apimodel.CommandScopeAgent)
 	require.NoError(t, err)
 	assert.Len(t, bounded.Commands, 2, "the requested count must bound the page")
 }
@@ -186,7 +187,7 @@ func TestListFormaCommandStatus_ClientScopeReturnsOnlyCallersMostRecent(t *testi
 	theirs := storeUserCommand(t, ds, "client-2")
 
 	m := &Metastructure{Datastore: ds}
-	resp, err := m.ListFormaCommandStatus("", "client-1", 1, apimodel.CommandScopeClient)
+	resp, err := m.ListFormaCommandStatus("", querier.Caller{ClientID: "client-1"}, 1, apimodel.CommandScopeClient)
 	require.NoError(t, err)
 	require.Len(t, resp.Commands, 1)
 	assert.Equal(t, mine, resp.Commands[0].CommandID)
@@ -201,7 +202,7 @@ func TestListFormaCommandStatus_ClientScopeWithNoCommandsIsEmptyNotAnError(t *te
 	ds := newSQLiteTestDatastore(t)
 
 	m := &Metastructure{Datastore: ds}
-	resp, err := m.ListFormaCommandStatus("", "client-with-no-history", 1, apimodel.CommandScopeClient)
+	resp, err := m.ListFormaCommandStatus("", querier.Caller{ClientID: "client-with-no-history"}, 1, apimodel.CommandScopeClient)
 	require.NoError(t, err)
 	assert.Empty(t, resp.Commands)
 }
@@ -593,7 +594,7 @@ func TestForceReconcileCommandIsVisibleThroughCommandStatus(t *testing.T) {
 	require.NoError(t, ds.StoreFormaCommand(forced.command, forced.command.ID))
 
 	m := &Metastructure{Datastore: ds}
-	resp, err := m.ListFormaCommandStatus("id:"+forced.command.ID, "cli-client", 1, apimodel.CommandScopeAgent)
+	resp, err := m.ListFormaCommandStatus("id:"+forced.command.ID, querier.Caller{ClientID: "cli-client"}, 1, apimodel.CommandScopeAgent)
 	require.NoError(t, err)
 	require.Len(t, resp.Commands, 1, "the id returned by a force-reconcile must resolve through command status")
 	assert.Equal(t, forced.command.ID, resp.Commands[0].CommandID)
@@ -603,7 +604,7 @@ func TestForceReconcileCommandIsVisibleThroughCommandStatus(t *testing.T) {
 	require.NotNil(t, scheduled)
 	require.NoError(t, ds.StoreFormaCommand(scheduled.command, scheduled.command.ID))
 
-	hidden, err := m.ListFormaCommandStatus("id:"+scheduled.command.ID, "cli-client", 1, apimodel.CommandScopeAgent)
+	hidden, err := m.ListFormaCommandStatus("id:"+scheduled.command.ID, querier.Caller{ClientID: "cli-client"}, 1, apimodel.CommandScopeAgent)
 	require.NoError(t, err)
 	assert.Empty(t, hidden.Commands, "a scheduled reconcile stays out of the user-facing command history")
 }

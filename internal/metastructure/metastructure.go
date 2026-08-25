@@ -55,8 +55,8 @@ type MetastructureAPI interface {
 	DestroyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string, subject string, subjectName string) (*apimodel.SubmitCommandResponse, error)
 	DestroyByQuery(query string, config *config.FormaCommandConfig, clientID string, subject string, subjectName string) (*apimodel.SubmitCommandResponse, error)
 	CancelCommand(commandID string, force bool, clientID string) (*changeset.CancelResponse, error)
-	CancelCommandsByQuery(query string, force bool, clientID string) (*apimodel.CancelCommandResponse, error)
-	ListFormaCommandStatus(query string, clientID string, n int, scope apimodel.CommandScope) (*apimodel.ListCommandStatusResponse, error)
+	CancelCommandsByQuery(query string, force bool, caller querier.Caller) (*apimodel.CancelCommandResponse, error)
+	ListFormaCommandStatus(query string, caller querier.Caller, n int, scope apimodel.CommandScope) (*apimodel.ListCommandStatusResponse, error)
 	ExtractResources(query string) (*pkgmodel.Forma, error)
 	ListResourceSummaries(query string) ([]pkgmodel.ResourceSummary, error)
 	ExtractResourceByKsuid(ksuid string) (*pkgmodel.Resource, error)
@@ -935,9 +935,9 @@ func (m *Metastructure) CancelCommand(commandID string, force bool, clientID str
 // the "sync" command type. A caller who explicitly asks for `command:sync`
 // still reaches them — only the implicit, no-command-filter case is
 // protected.
-func (m *Metastructure) commandsForCancelQuery(query, clientID string) ([]*forma_command.FormaCommand, error) {
+func (m *Metastructure) commandsForCancelQuery(query string, caller querier.Caller) ([]*forma_command.FormaCommand, error) {
 	if query == "" {
-		command, err := m.Datastore.GetMostRecentFormaCommandByClientID(clientID)
+		command, err := m.Datastore.GetMostRecentFormaCommandByClientID(caller.ClientID)
 		if err != nil {
 			return nil, err
 		}
@@ -948,7 +948,7 @@ func (m *Metastructure) commandsForCancelQuery(query, clientID string) ([]*forma
 	}
 
 	q := querier.NewBlugeQuerier(m.Datastore)
-	statusQuery, err := q.BuildStatusQuery(query, clientID, 100) // limit to 100 commands
+	statusQuery, err := q.BuildStatusQuery(query, caller, 100) // limit to 100 commands
 	if err != nil {
 		return nil, err
 	}
@@ -962,8 +962,8 @@ func (m *Metastructure) commandsForCancelQuery(query, clientID string) ([]*forma
 	return m.Datastore.QueryFormaCommands(statusQuery)
 }
 
-func (m *Metastructure) CancelCommandsByQuery(query string, force bool, clientID string) (*apimodel.CancelCommandResponse, error) {
-	commandsToCancel, err := m.commandsForCancelQuery(query, clientID)
+func (m *Metastructure) CancelCommandsByQuery(query string, force bool, caller querier.Caller) (*apimodel.CancelCommandResponse, error) {
+	commandsToCancel, err := m.commandsForCancelQuery(query, caller)
 	if err != nil {
 		slog.Debug("Cannot get forma commands from query", "error", err)
 		return nil, err
@@ -975,7 +975,7 @@ func (m *Metastructure) CancelCommandsByQuery(query string, force bool, clientID
 	allResourceStates := make(map[string]apimodel.CancelResourceState)
 	for _, cmd := range commandsToCancel {
 		if cmd.State == forma_command.CommandStateInProgress {
-			cancelResp, err := m.CancelCommand(cmd.ID, force, clientID)
+			cancelResp, err := m.CancelCommand(cmd.ID, force, caller.ClientID)
 			if err != nil {
 				slog.Warn("Failed to cancel command", "commandID", cmd.ID, "error", err)
 				// A --force cancel that fails left the command running: the executor
@@ -1033,9 +1033,9 @@ func (m *Metastructure) CancelCommandsByQuery(query string, force bool, clientID
 // here, not parsed from the query grammar, so a caller cannot ask for
 // scheduler bookkeeping (sync, discovery, auto-reconcile, stack expiry) even
 // when it shares a command type with user work.
-func (m *Metastructure) ListFormaCommandStatus(query string, clientID string, n int, scope apimodel.CommandScope) (*apimodel.ListCommandStatusResponse, error) {
+func (m *Metastructure) ListFormaCommandStatus(query string, caller querier.Caller, n int, scope apimodel.CommandScope) (*apimodel.ListCommandStatusResponse, error) {
 	if query == "" && scope != apimodel.CommandScopeAgent {
-		fa, err := m.Datastore.GetMostRecentFormaCommandByClientID(clientID)
+		fa, err := m.Datastore.GetMostRecentFormaCommandByClientID(caller.ClientID)
 		if err != nil {
 			slog.Debug("Cannot get forma command from client ID", "error", err)
 			return nil, err
@@ -1050,7 +1050,7 @@ func (m *Metastructure) ListFormaCommandStatus(query string, clientID string, n 
 	}
 
 	q := querier.NewBlugeQuerier(m.Datastore)
-	statusQuery, err := q.BuildStatusQuery(query, clientID, n)
+	statusQuery, err := q.BuildStatusQuery(query, caller, n)
 	if err != nil {
 		slog.Debug("Cannot get forma commands from query", "error", err)
 		return nil, err
