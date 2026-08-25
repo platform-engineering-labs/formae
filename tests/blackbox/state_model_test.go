@@ -748,6 +748,69 @@ func TestCorrectModelFromCommandOutcome_TTLSupersededSlotStaysDestroyed(t *testi
 		"the TTL destroy's authoritative mark must survive the stale correction")
 }
 
+// Commands fold into the model in completion order, which can invert the
+// order the agent actually executed per-resource operations in. A cascade
+// delete that succeeded proves the deleted incarnation existed when it ran,
+// so a create RU carrying that same NativeID predates the delete no matter
+// which command completed first. When such a create drains after the delete
+// was already folded, it must not resurrect the slot: the deterministic end
+// state is NotExist.
+func TestCorrectModelFromCommandOutcome_CreateOfDeletedIncarnationDoesNotResurrect(t *testing.T) {
+	model := NewStateModel(3, 10)
+	require.NotNil(t, model.Pool)
+	xslot := -1
+	for i := range model.Pool.Slots {
+		if model.Pool.IsCrossStack(i) {
+			xslot = i
+			break
+		}
+	}
+	require.NotEqual(t, -1, xslot, "pool must have a cross-stack slot")
+
+	// An apply optimistically created the cross-stack slot.
+	model.ApplyCreated(1, []int{xslot}, "")
+	label := model.LabelForResource(1, xslot)
+
+	// A destroy of the provider stack cascade-deleted the slot and completed
+	// (Canceled overall) before the apply did, so its outcome folds first.
+	destroyCmd := &apimodel.Command{
+		CommandID: "cmd-destroy",
+		State:     "Canceled",
+		ResourceUpdates: []apimodel.ResourceUpdate{{
+			StackName:     "stack-1",
+			ResourceLabel: label,
+			Operation:     "delete",
+			State:         "Success",
+			IsCascade:     true,
+			NativeID:      "test-101",
+		}},
+	}
+	corrected := map[struct{ stackIdx, slotIdx int }]bool{}
+	correctModelFromCommandOutcome(t, destroyCmd, model, model.Pool, nil, corrected, false, nil, nil)
+	require.Equal(t, StateNotExist, model.Resource(1, xslot).State)
+
+	// The apply completes later (Failed overall) and drains with a create
+	// Success RU for the incarnation the cascade delete already removed.
+	applyCmd := &apimodel.Command{
+		CommandID: "cmd-apply",
+		State:     "Failed",
+		ResourceUpdates: []apimodel.ResourceUpdate{{
+			StackName:     "stack-1",
+			ResourceLabel: label,
+			Operation:     "create",
+			State:         "Success",
+			NativeID:      "test-101",
+		}},
+	}
+	corrected = map[struct{ stackIdx, slotIdx int }]bool{}
+	correctModelFromCommandOutcome(t, applyCmd, model, model.Pool, nil, corrected, true, nil, nil)
+
+	require.Equal(t, StateNotExist, model.Resource(1, xslot).State,
+		"a create RU for an incarnation a folded delete already removed must not resurrect the slot")
+	require.True(t, model.IsAuthoritativeSlot(1, xslot),
+		"the delete's authoritative mark must survive the stale create")
+}
+
 // A failed command's unmentioned slot was never touched by the agent, so an
 // optimistic property prediction for it must roll back even when the slot's
 // State never changed. A patch that fails on a sibling before reaching the

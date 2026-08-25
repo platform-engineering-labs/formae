@@ -80,6 +80,13 @@ type StateModel struct {
 	// expected to have been ingested into the unmanaged inventory.
 	UnmanagedResources map[string]*ExpectedUnmanagedResource
 	AuthoritativeSlots map[string]bool
+	// DeletedNativeIDs maps "stackIdx:slotIdx" → the NativeID of the
+	// incarnation whose folded delete RU made the slot authoritative. A
+	// create RU carrying the same NativeID predates that delete (a delete
+	// can only succeed on an incarnation that already existed), so it must
+	// not resurrect the slot however late its command drains. Cleared with
+	// the slot's authoritative mark.
+	DeletedNativeIDs map[string]string
 	// NativeIDs maps "stackIdx:slotIdx" → cloud native ID (e.g. "test-42").
 	// Populated from command response ResourceUpdate.NativeID on successful
 	// creates/updates. Cleared on successful deletes.
@@ -152,6 +159,7 @@ func NewStateModel(stackCount, resourcesPerStack int) *StateModel {
 		ProviderStackLabel:  providerLabel,
 		UnmanagedResources:  make(map[string]*ExpectedUnmanagedResource),
 		AuthoritativeSlots:  make(map[string]bool),
+		DeletedNativeIDs:    make(map[string]string),
 		NativeIDs:           make(map[string]string),
 		Ksuids:              make(map[string]string),
 		DriftExcludedStacks: make(map[int]bool),
@@ -299,6 +307,18 @@ func (m *StateModel) MarkAuthoritativeSlot(stackIdx, slotIdx int) {
 
 func (m *StateModel) ClearAuthoritativeSlot(stackIdx, slotIdx int) {
 	delete(m.AuthoritativeSlots, slotKeyString(stackIdx, slotIdx))
+	delete(m.DeletedNativeIDs, slotKeyString(stackIdx, slotIdx))
+}
+
+func (m *StateModel) SetDeletedNativeID(stackIdx, slotIdx int, nativeID string) {
+	if nativeID == "" {
+		return
+	}
+	m.DeletedNativeIDs[slotKeyString(stackIdx, slotIdx)] = nativeID
+}
+
+func (m *StateModel) DeletedNativeID(stackIdx, slotIdx int) string {
+	return m.DeletedNativeIDs[slotKeyString(stackIdx, slotIdx)]
 }
 
 func (m *StateModel) IsAuthoritativeSlot(stackIdx, slotIdx int) bool {

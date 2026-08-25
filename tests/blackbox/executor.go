@@ -1014,6 +1014,16 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 		if ru.State == "Success" {
 			switch ru.Operation {
 			case "create":
+				// A delete can only succeed on an incarnation that already
+				// existed, so a create RU carrying the NativeID a folded
+				// delete removed predates that delete — regardless of which
+				// command completed first. Folding it would resurrect a slot
+				// the agent has already destroyed.
+				if ru.NativeID != "" && model.DeletedNativeID(stackIdx, slotIdx) == ru.NativeID {
+					t.Logf("correctModelFromCommandOutcome: skipping stale create stack=%s slot=%d (incarnation %s already deleted by a previously folded command)",
+						model.Stack(stackIdx).Label, slotIdx, ru.NativeID)
+					goto markDone
+				}
 				model.ClearAuthoritativeSlot(stackIdx, slotIdx)
 				props := ""
 				if ru.Properties != nil {
@@ -1025,6 +1035,7 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 			case "delete":
 				model.ApplyDestroyed(stackIdx, []int{slotIdx})
 				model.MarkAuthoritativeSlot(stackIdx, slotIdx)
+				model.SetDeletedNativeID(stackIdx, slotIdx, ru.NativeID)
 				model.ClearNativeID(stackIdx, slotIdx)
 				model.ClearKsuid(stackIdx, slotIdx)
 			case "update":
@@ -2400,6 +2411,7 @@ func (h *TestHarness) SetupStacks(t *testing.T, model *StateModel, config Proper
 	// slots authoritative, which must be cleared before the new iteration
 	// creates resources on those slots.
 	model.AuthoritativeSlots = make(map[string]bool)
+	model.DeletedNativeIDs = make(map[string]string)
 
 	// Create a single resource on each stack to ensure the stack exists.
 	for stackIdx := range model.Stacks {
