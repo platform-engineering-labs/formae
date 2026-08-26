@@ -64,9 +64,21 @@ var findCredentials = func(ctx context.Context) (credentialState, error) {
 var runGcloudLogin = func(ctx context.Context, out io.Writer) error {
 	path, err := exec.LookPath(gcloudBinary)
 	if err != nil {
+		// Says what happens next, because "install gcloud" on its own reads as
+		// the first of an unknown number of steps. There is exactly one more:
+		// re-run, and formae does the sign-in. Nobody needs to run the login
+		// by hand.
+		//
+		// The restart hint is not padding. A gcloud installed after this
+		// process started is not on the PATH this process inherited, so the
+		// re-run finds nothing and repeats the same message, which reads as
+		// the install having failed.
 		return printer.Fail(printer.CodeGcloudMissing,
-			"the gcloud CLI is required to sign in to Google Cloud and is not on PATH; "+
-				"install it from https://cloud.google.com/sdk/docs/install and re-run",
+			"the gcloud CLI is required to sign in to Google Cloud and is not on PATH. "+
+				"Install it from https://cloud.google.com/sdk/docs/install, then run this again and "+
+				"formae will sign you in - there is no need to run the login yourself. "+
+				"If you have just installed it and this still says it is missing, restart the shell "+
+				"or session so the new PATH is picked up",
 			map[string]any{"command": gcloudLoginCommand})
 	}
 
