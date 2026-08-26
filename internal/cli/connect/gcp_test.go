@@ -11,8 +11,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -433,4 +436,102 @@ func TestRegisteredHumanNamesEachCloudInItsOwnWords(t *testing.T) {
 	assert.Contains(t, gcp.String(), "workload identity provider: "+testProviderName)
 	assert.NotContains(t, gcp.String(), "aws account", "a GCP run called the project an aws account")
 	assert.NotContains(t, gcp.String(), "role:", "a GCP run printed a role it does not have")
+}
+
+// A gcloud installed after a long-running process started is invisible to it
+// and to every child it spawns, because the environment was inherited once at
+// start. The login-shell probe is the way out, and it must actually be
+// consulted when PATH has nothing.
+func TestResolveGcloudFallsBackToTheLoginShell(t *testing.T) {
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "gcloud")
+	require.NoError(t, os.WriteFile(fake, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+
+	// A login shell that says its piece before answering, which is what a real
+	// one does: banners, motd, whatever the user's rc prints.
+	shell := filepath.Join(dir, "fakeshell")
+	script := "#!/bin/sh\nprintf 'welcome to the shell\\n'\nprintf '%s' \"__formae_gcloud_begin__" +
+		fake + "__formae_gcloud_end__\"\n"
+	require.NoError(t, os.WriteFile(shell, []byte(script), 0o755))
+
+	t.Setenv("PATH", dir+"-empty") // nothing on PATH
+	t.Setenv("SHELL", shell)
+	t.Setenv("CLOUDSDK_ROOT_DIR", "")
+
+	got, err := resolveGcloud(context.Background())
+	require.NoError(t, err, "the probe did not rescue a gcloud that is off PATH")
+	assert.Equal(t, fake, got)
+}
+
+// PATH answers for nearly everyone, and must be preferred: the probe runs the
+// user's shell rc and should not be paid for when there is nothing to fix.
+func TestResolveGcloudPrefersPath(t *testing.T) {
+	dir := t.TempDir()
+	onPath := filepath.Join(dir, "gcloud")
+	require.NoError(t, os.WriteFile(onPath, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+
+	probed := 0
+	restore := gcloudFromLoginShell
+	gcloudFromLoginShell = func(context.Context) string { probed++; return "/never/used" }
+	t.Cleanup(func() { gcloudFromLoginShell = restore })
+
+	t.Setenv("PATH", dir)
+	t.Setenv("CLOUDSDK_ROOT_DIR", "")
+
+	got, err := resolveGcloud(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, onPath, got)
+	assert.Zero(t, probed, "the login shell was run even though PATH answered")
+}
+
+// The probe's answer comes from the user's shell, so it is checked rather than
+// trusted: a path that is not an executable file is no answer at all.
+func TestResolveGcloudRejectsAnUnusableProbeAnswer(t *testing.T) {
+	dir := t.TempDir()
+	notExec := filepath.Join(dir, "gcloud")
+	require.NoError(t, os.WriteFile(notExec, []byte("not executable"), 0o644))
+
+	for _, answer := range []string{notExec, "relative/path", "/nonexistent/gcloud", dir, ""} {
+		restore := gcloudFromLoginShell
+		gcloudFromLoginShell = func(context.Context) string { return answer }
+		t.Setenv("PATH", dir+"-empty")
+		t.Setenv("CLOUDSDK_ROOT_DIR", "")
+
+		_, err := resolveGcloud(context.Background())
+		assert.ErrorIs(t, err, errGcloudNotFound, "probe answer %q was accepted", answer)
+		gcloudFromLoginShell = restore
+	}
+}
+
+// gcloud's own convention for an unusual layout: a fixed contract rather than
+// a guessed install location.
+func TestResolveGcloudHonoursCloudsdkRootDir(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "bin"), 0o755))
+	inRoot := filepath.Join(root, "bin", "gcloud")
+	require.NoError(t, os.WriteFile(inRoot, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+
+	t.Setenv("CLOUDSDK_ROOT_DIR", root)
+	t.Setenv("PATH", root+"-empty")
+
+	got, err := resolveGcloud(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, inRoot, got)
+}
+
+// A shell that never answers costs a bounded wait, not a hung command.
+func TestLoginShellProbeIsBounded(t *testing.T) {
+	dir := t.TempDir()
+	shell := filepath.Join(dir, "hangingshell")
+	require.NoError(t, os.WriteFile(shell, []byte("#!/bin/sh\nsleep 60\n"), 0o755))
+	t.Setenv("SHELL", shell)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	got := gcloudFromLoginShell(ctx)
+
+	assert.Empty(t, got)
+	assert.Less(t, time.Since(start), 30*time.Second, "the probe outlived its bound")
 }
