@@ -192,3 +192,70 @@ func TestResolvableProperties_AnswerAgreesWithGet(t *testing.T) {
 	assert.Equal(t, AnswerStable, a.Kind)
 	assert.Equal(t, "hello", a.Value)
 }
+
+// When the command declares the source and its effective desired document
+// carries a plain literal for the referenced property, that literal is the
+// plan-time resolution, not the persisted row's stale value.
+func TestLoadResolvableProperties_EffectiveDesiredLiteralWins(t *testing.T) {
+	source := &pkgmodel.Resource{
+		Label: "parent", Ksuid: "k-parent", Stack: "s",
+		Properties: json.RawMessage(`{"Name": "p", "Value": "hello"}`),
+	}
+	consumer := pkgmodel.Resource{
+		Label: "consumer", Ksuid: "k-consumer", Stack: "s",
+		Properties: json.RawMessage(`{
+			"ParentRef": {"$ref": "formae://k-parent#/Value", "$value": "hello"}
+		}`),
+	}
+	all := map[string][]*pkgmodel.Resource{"s": {source}}
+	effective := map[string]json.RawMessage{
+		"k-parent": json.RawMessage(`{"Name": "p", "Value": "world"}`),
+	}
+
+	props, err := LoadResolvablePropertiesFromStacks(consumer, all, effective)
+	require.NoError(t, err)
+
+	v, ok := props.Get("k-parent", "Value")
+	require.True(t, ok)
+	assert.Equal(t, "world", v, "the effective desired literal is the resolution")
+
+	a, _ := props.Answer("k-parent", "Value")
+	assert.Equal(t, AnswerResolved, a.Kind)
+}
+
+// An effective desired value that is a reference envelope, hashed at rest, or
+// opaque is never materialized by this rule: behavior stays byte-identical to
+// the persisted-row path (envelope: cached value; hashed/valueless: deferred).
+func TestLoadResolvableProperties_EnvelopeAndHashedKeepTodaysBehavior(t *testing.T) {
+	source := &pkgmodel.Resource{
+		Label: "parent", Ksuid: "k-parent", Stack: "s",
+		Properties: json.RawMessage(`{
+			"Chained": {"$ref": "formae://k-root#/V", "$value": "cached"},
+			"Secret":  {"$value": "digest-at-rest", "$hashed": true}
+		}`),
+	}
+	consumer := pkgmodel.Resource{
+		Label: "consumer", Ksuid: "k-consumer", Stack: "s",
+		Properties: json.RawMessage(`{
+			"A": {"$ref": "formae://k-parent#/Chained"},
+			"B": {"$ref": "formae://k-parent#/Secret"}
+		}`),
+	}
+	all := map[string][]*pkgmodel.Resource{"s": {source}}
+	effective := map[string]json.RawMessage{
+		"k-parent": json.RawMessage(`{
+			"Chained": {"$ref": "formae://k-root#/V"},
+			"Secret":  "raw-new-secret-plaintext"
+		}`),
+	}
+
+	props, err := LoadResolvablePropertiesFromStacks(consumer, all, effective)
+	require.NoError(t, err)
+
+	v, ok := props.Get("k-parent", "Chained")
+	require.True(t, ok)
+	assert.Equal(t, "cached", v, "an envelope source keeps the persisted cached value in this plan")
+
+	_, ok = props.Get("k-parent", "Secret")
+	assert.False(t, ok, "a hashed-at-rest source stays deferred; the raw desired plaintext must never be materialized")
+}
