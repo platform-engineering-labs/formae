@@ -44,7 +44,7 @@ func runRegisterOnly(cc *cobra.Command, opts options, consumer printer.Consumer,
 	}
 	if interactiveRun(opts, consumer) {
 		th := clicmd.ResolveConfiguredTheme(cc)
-		if err := confirmInteractive(th, opts.Account, s.Setup.CloudSubject, permissionsAsApplied, elsewhere); err != nil {
+		if err := confirmInteractive(th, "aws", "account", opts.Account, s.Setup.CloudSubject, permissionsAsApplied, elsewhere); err != nil {
 			return err
 		}
 	}

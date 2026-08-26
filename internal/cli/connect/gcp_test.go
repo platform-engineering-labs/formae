@@ -7,17 +7,23 @@
 package connect
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	provxgcp "github.com/platform-engineering-labs/oox/provx/gcp"
+
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 )
 
 const (
@@ -305,6 +311,60 @@ func TestGCPRegistrationFailureNamesTheStandingTrust(t *testing.T) {
 	_ = out
 }
 
+// TestGCPAllowLoginReachesTheSignIn is the case that was unreachable before:
+// the agent runs on the operator's machine, consumes machine output, and can
+// still have a browser completed by the person sitting there. Without an
+// explicit opt-in the render format was read as "nobody is present", which
+// made the sign-in impossible from the interface most people use.
+func TestGCPAllowLoginReachesTheSignIn(t *testing.T) {
+	logins := 0
+	stubCredentialState(t, credentialsMissing, &logins)
+	installGCPProvisioner(t, &stubGCPProvisioner{result: &provxgcp.Result{
+		ProviderName: testProviderName, ProjectNumber: testProjectNumber,
+	}}, nil)
+	seedGCPRun(t)
+
+	out, err := runConnect(t, "gcp", "--project", testProject, "--no-input", "--allow-login",
+		"--output-consumer", "machine", "--output-schema", "json")
+
+	require.NoError(t, err, "out: %s", out)
+	assert.Equal(t, 1, logins, "--allow-login did not reach the sign-in")
+	got := decodeOut(t, out)
+	assert.Equal(t, testProviderName, got["workloadIdentityProvider"])
+}
+
+// The default is unchanged: without the opt-in, machine output still refuses
+// and names the command, so a CI script is not handed a browser.
+func TestGCPWithoutAllowLoginMachineModeStillRefuses(t *testing.T) {
+	logins := 0
+	stubCredentialState(t, credentialsMissing, &logins)
+	seedGCPRun(t)
+
+	out, err := runConnect(t, "gcp", "--project", testProject,
+		"--output-consumer", "machine", "--output-schema", "json")
+
+	require.Error(t, err)
+	assert.Zero(t, logins)
+	assert.Equal(t, "credentials_required", decodeOut(t, out)["code"])
+}
+
+// --allow-login governs the browser, not this command's own prompts, so a
+// usable credential still means no sign-in.
+func TestGCPAllowLoginDoesNotSignInWhenCredentialsWork(t *testing.T) {
+	logins := 0
+	stubCredentialState(t, credentialsUsable, &logins)
+	installGCPProvisioner(t, &stubGCPProvisioner{result: &provxgcp.Result{
+		ProviderName: testProviderName, ProjectNumber: testProjectNumber,
+	}}, nil)
+	seedGCPRun(t)
+
+	_, err := runConnect(t, "gcp", "--project", testProject, "--no-input", "--allow-login",
+		"--output-consumer", "machine", "--output-schema", "json")
+
+	require.NoError(t, err)
+	assert.Zero(t, logins, "a usable credential was replaced by a sign-in")
+}
+
 func TestGCPProjectIsRequired(t *testing.T) {
 	_, err := decideGCPMode(gcpOptions{})
 	require.Error(t, err, "a run with no project must be refused rather than inferring one")
@@ -379,4 +439,214 @@ func TestRegisteredHumanNamesEachCloudInItsOwnWords(t *testing.T) {
 	assert.Contains(t, gcp.String(), "workload identity provider: "+testProviderName)
 	assert.NotContains(t, gcp.String(), "aws account", "a GCP run called the project an aws account")
 	assert.NotContains(t, gcp.String(), "role:", "a GCP run printed a role it does not have")
+}
+
+// A gcloud installed after a long-running process started is invisible to it
+// and to every child it spawns, because the environment was inherited once at
+// start. The login-shell probe is the way out, and it must actually be
+// consulted when PATH has nothing.
+func TestResolveGcloudFallsBackToTheLoginShell(t *testing.T) {
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "gcloud")
+	require.NoError(t, os.WriteFile(fake, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+
+	// A login shell that says its piece before answering, which is what a real
+	// one does: banners, motd, whatever the user's rc prints.
+	shell := filepath.Join(dir, "fakeshell")
+	script := "#!/bin/sh\nprintf 'welcome to the shell\\n'\nprintf '%s' \"__formae_gcloud_begin__" +
+		fake + "__formae_gcloud_end__\"\n"
+	require.NoError(t, os.WriteFile(shell, []byte(script), 0o755))
+
+	t.Setenv("PATH", dir+"-empty") // nothing on PATH
+	t.Setenv("SHELL", shell)
+	t.Setenv("CLOUDSDK_ROOT_DIR", "")
+
+	got, err := resolveGcloud(context.Background())
+	require.NoError(t, err, "the probe did not rescue a gcloud that is off PATH")
+	assert.Equal(t, fake, got)
+}
+
+// PATH answers for nearly everyone, and must be preferred: the probe runs the
+// user's shell rc and should not be paid for when there is nothing to fix.
+func TestResolveGcloudPrefersPath(t *testing.T) {
+	dir := t.TempDir()
+	onPath := filepath.Join(dir, "gcloud")
+	require.NoError(t, os.WriteFile(onPath, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+
+	probed := 0
+	restore := gcloudFromLoginShell
+	gcloudFromLoginShell = func(context.Context) string { probed++; return "/never/used" }
+	t.Cleanup(func() { gcloudFromLoginShell = restore })
+
+	t.Setenv("PATH", dir)
+	t.Setenv("CLOUDSDK_ROOT_DIR", "")
+
+	got, err := resolveGcloud(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, onPath, got)
+	assert.Zero(t, probed, "the login shell was run even though PATH answered")
+}
+
+// The probe's answer comes from the user's shell, so it is checked rather than
+// trusted: a path that is not an executable file is no answer at all.
+func TestResolveGcloudRejectsAnUnusableProbeAnswer(t *testing.T) {
+	dir := t.TempDir()
+	notExec := filepath.Join(dir, "gcloud")
+	require.NoError(t, os.WriteFile(notExec, []byte("not executable"), 0o644))
+
+	for _, answer := range []string{notExec, "relative/path", "/nonexistent/gcloud", dir, ""} {
+		restore := gcloudFromLoginShell
+		gcloudFromLoginShell = func(context.Context) string { return answer }
+		t.Setenv("PATH", dir+"-empty")
+		t.Setenv("CLOUDSDK_ROOT_DIR", "")
+
+		_, err := resolveGcloud(context.Background())
+		assert.ErrorIs(t, err, errGcloudNotFound, "probe answer %q was accepted", answer)
+		gcloudFromLoginShell = restore
+	}
+}
+
+// gcloud's own convention for an unusual layout: a fixed contract rather than
+// a guessed install location.
+func TestResolveGcloudHonoursCloudsdkRootDir(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "bin"), 0o755))
+	inRoot := filepath.Join(root, "bin", "gcloud")
+	require.NoError(t, os.WriteFile(inRoot, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+
+	t.Setenv("CLOUDSDK_ROOT_DIR", root)
+	t.Setenv("PATH", root+"-empty")
+
+	got, err := resolveGcloud(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, inRoot, got)
+}
+
+// A shell that never answers costs a bounded wait, not a hung command.
+func TestLoginShellProbeIsBounded(t *testing.T) {
+	dir := t.TempDir()
+	shell := filepath.Join(dir, "hangingshell")
+	require.NoError(t, os.WriteFile(shell, []byte("#!/bin/sh\nsleep 60\n"), 0o755))
+	t.Setenv("SHELL", shell)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	got := gcloudFromLoginShell(ctx)
+
+	assert.Empty(t, got)
+	assert.Less(t, time.Since(start), 30*time.Second, "the probe outlived its bound")
+}
+
+// Provisioning hands a near-owner grant to an installation in someone's
+// project. An interactive run says so and stops for an answer first, as all
+// three AWS paths have since they shipped.
+func TestGCPInteractiveRunConfirmsBeforeProvisioning(t *testing.T) {
+	restore := confirmFn
+	asked := 0
+	var gotTitle, gotBody string
+	confirmFn = func(_ *theme.Theme, title, body string) (bool, error) {
+		asked++
+		gotTitle, gotBody = title, body
+		return false, nil // decline: nothing may be created
+	}
+	t.Cleanup(func() { confirmFn = restore })
+
+	restoreTTY := isInteractive
+	isInteractive = func() bool { return true }
+	t.Cleanup(func() { isInteractive = restoreTTY })
+
+	stubCredentialState(t, credentialsUsable, nil)
+	stub := &stubGCPProvisioner{result: &provxgcp.Result{
+		ProviderName: testProviderName, ProjectNumber: testProjectNumber,
+	}}
+	installGCPProvisioner(t, stub, nil)
+	cp := seedGCPRun(t)
+
+	_, err := runConnect(t, "gcp", "--project", testProject)
+
+	require.Error(t, err, "declining the confirmation must abort")
+	assert.Equal(t, 1, asked, "the run did not ask before provisioning")
+	assert.Contains(t, gotTitle, "gcp project "+testProject, "the prompt does not name what is being connected")
+	assert.Contains(t, gotBody, "near-owner", "the prompt does not say what is being granted")
+	assert.Zero(t, stub.calls, "provisioning ran despite the user declining")
+	assert.Empty(t, cp.posts(), "a connection was registered despite the user declining")
+}
+
+// runConnectSplit runs the command with stdout and stderr separated, which is
+// the only way to state where a stream's content actually landed. runConnect
+// points both at one buffer, so a test built on it cannot tell the machine
+// document apart from anything printed beside it.
+func runConnectSplit(t *testing.T, args ...string) (string, string, error) {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+	c := ConnectCmd()
+	c.SetOut(&stdout)
+	c.SetErr(&stderr)
+	c.SetArgs(args)
+	err := c.Execute()
+	return stdout.String(), stderr.String(), err
+}
+
+// stubLoggingGcloudLogin stands in for the sign-in and, unlike
+// stubCredentialState's silent stub, writes to the writer it is handed - which
+// is what the real one does, both for its own "running ..." line and for
+// gcloud's stdout. A stub that writes nothing cannot observe where those bytes
+// go, which is the whole question here.
+func stubLoggingGcloudLogin(t *testing.T, state credentialState, logins *int) {
+	t.Helper()
+	restoreFind, restoreLogin := findCredentials, runGcloudLogin
+	findCredentials = func(_ context.Context) (credentialState, error) { return state, nil }
+	runGcloudLogin = func(_ context.Context, w io.Writer) error {
+		if logins != nil {
+			*logins++
+		}
+		_, _ = fmt.Fprintf(w, "running %s\n", gcloudLoginCommand)
+		_, _ = fmt.Fprintln(w, "Credentials saved to file: [/home/u/.config/gcloud/application_default_credentials.json]")
+		findCredentials = func(_ context.Context) (credentialState, error) { return credentialsUsable, nil }
+		return nil
+	}
+	t.Cleanup(func() { findCredentials, runGcloudLogin = restoreFind, restoreLogin })
+}
+
+// Under machine output the document is the whole of stdout. The sign-in prints
+// progress for a person to read, and the only caller that asks for it is an
+// agent parsing that same stream, so the two cannot share it: chatter ahead of
+// the JSON turns a successful connect into output the caller cannot read.
+func TestGCPAllowLoginKeepsTheMachineDocumentClean(t *testing.T) {
+	logins := 0
+	stubLoggingGcloudLogin(t, credentialsMissing, &logins)
+	installGCPProvisioner(t, &stubGCPProvisioner{result: &provxgcp.Result{
+		ProviderName: testProviderName, ProjectNumber: testProjectNumber,
+	}}, nil)
+	seedGCPRun(t)
+
+	stdout, stderr, err := runConnectSplit(t, "gcp", "--project", testProject, "--no-input",
+		"--allow-login", "--output-consumer", "machine", "--output-schema", "json")
+
+	require.NoError(t, err, "stdout: %s stderr: %s", stdout, stderr)
+	require.Equal(t, 1, logins, "--allow-login did not reach the sign-in")
+
+	got := decodeOut(t, stdout)
+	assert.Equal(t, testProviderName, got["workloadIdentityProvider"])
+	assert.Contains(t, stderr, gcloudLoginCommand,
+		"the sign-in left no trace for the operator on stderr")
+}
+
+// The human path is unchanged: there stdout is prose already, so the sign-in
+// belongs with the rest of what the operator is reading.
+func TestGCPHumanRunKeepsTheSignInOnStdout(t *testing.T) {
+	logins := 0
+	stubLoggingGcloudLogin(t, credentialsMissing, &logins)
+	installGCPProvisioner(t, &stubGCPProvisioner{result: &provxgcp.Result{
+		ProviderName: testProviderName, ProjectNumber: testProjectNumber,
+	}}, nil)
+	seedGCPRun(t)
+
+	stdout, _, err := runConnectSplit(t, "gcp", "--project", testProject, "--allow-login")
+
+	require.NoError(t, err)
+	require.Equal(t, 1, logins)
+	assert.Contains(t, stdout, gcloudLoginCommand)
 }

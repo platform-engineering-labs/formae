@@ -127,7 +127,7 @@ func runQuickCreate(cc *cobra.Command, opts options, consumer printer.Consumer, 
 	// print the link, wait for Enter or a pasted RoleArn, validate it exactly
 	// like --role-arn, and register.
 	th := clicmd.ResolveConfiguredTheme(cc)
-	if err := confirmInteractive(th, opts.Account, s.Setup.CloudSubject, permissionsProvisioned, elsewhere); err != nil {
+	if err := confirmInteractive(th, "aws", "account", opts.Account, s.Setup.CloudSubject, permissionsProvisioned, elsewhere); err != nil {
 		return err
 	}
 	if !opts.ProviderExists && accountInHint(s.Setup.AccountsConnectedHint, opts.Account) {
