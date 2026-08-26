@@ -18,15 +18,17 @@ import (
 type AnswerKind int
 
 const (
+	// AnswerDeferred: not derivable at plan time; execution-time resolution
+	// through RemainingResolvables answers it. Zero value on purpose: a
+	// missing or forgotten answer must read as the least-trusting kind, never
+	// the most.
+	AnswerDeferred AnswerKind = iota
 	// AnswerResolved: the value is derivable at plan time from effective
 	// desired state (a literal this command declares).
-	AnswerResolved AnswerKind = iota
+	AnswerResolved
 	// AnswerStable: the persisted value is valid because nothing this
 	// command does moves the source property.
 	AnswerStable
-	// AnswerDeferred: not derivable at plan time; execution-time resolution
-	// through RemainingResolvables answers it.
-	AnswerDeferred
 )
 
 // SourceAnswer is the resolver's answer for one property on one source
@@ -106,13 +108,15 @@ func LoadResolvablePropertiesFromStacks(resource pkgmodel.Resource, allResources
 		if effDoc, declared := effective[ksuid]; declared {
 			effVal := gjson.GetBytes(effDoc, propertyPath)
 			if effVal.Exists() && !isReferenceEnvelope(effVal) && !containsHashedValue(effVal) &&
-				!isSourcePropertyOpaque(targetResource, propertyPath) {
+				!containsOpaqueVisibility(effVal) && !isSourcePropertyOpaque(targetResource, propertyPath) {
 				res.AddAnswer(ksuid, propertyPath, SourceAnswer{Kind: AnswerResolved, Value: ExtractPropertyValue(effVal)})
 				continue
 			}
-			// Reference envelopes, hashed shapes, and opaque sources fall through to
-			// the persisted-row path unchanged: envelopes keep the cached value,
-			// opaque and hashed sources keep today's deferral.
+			// Reference envelopes, hashed shapes, and opaque sources — persisted,
+			// schema-declared, or only ever inline-marked in the desired document
+			// itself — fall through to the persisted-row path unchanged: envelopes
+			// keep the cached value, opaque and hashed sources keep today's
+			// deferral.
 		}
 
 		if value, ok := resolvableValueFrom(targetResource.ReadOnlyProperties, propertyPath); ok {
@@ -185,6 +189,31 @@ func containsHashedValue(value gjson.Result) bool {
 	found := false
 	value.ForEach(func(_, child gjson.Result) bool {
 		if containsHashedValue(child) {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+// containsOpaqueVisibility reports whether value is, or contains anywhere
+// within it, an inline $visibility: Opaque marker. This is the desired
+// document's own spelling of opacity — a plain {"$value": ..., "$visibility":
+// "Opaque"} envelope the command submits before that property has ever been
+// persisted or hashed, so neither a persisted shape check nor the
+// schema/known-opaque table sees it. The structural sibling of
+// containsHashedValue: same recursive shape, different marker.
+func containsOpaqueVisibility(value gjson.Result) bool {
+	if !value.IsObject() && !value.IsArray() {
+		return false
+	}
+	if value.Get("$visibility").String() == pkgmodel.VisibilityOpaque {
+		return true
+	}
+	found := false
+	value.ForEach(func(_, child gjson.Result) bool {
+		if containsOpaqueVisibility(child) {
 			found = true
 			return false
 		}

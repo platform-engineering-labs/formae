@@ -292,3 +292,28 @@ func TestLoadResolvableProperties_EffectiveDesiredSkipsSourceOpaqueOnlyInReadOnl
 	a, _ := props.Answer("k-parent", "Token")
 	assert.Equal(t, AnswerStable, a.Kind, "fallthrough resolves via the persisted-row path, not the case-1 rule")
 }
+
+// A property that is inline-opaque only in the effective desired document —
+// the persisted row lacks the property entirely, and the schema carries no
+// opaque hint — must still never be materialized: the case-1 rule refuses it
+// by the desired document's own $visibility marker.
+func TestLoadResolvableProperties_EffectiveDesiredSkipsInlineOpaqueNotYetPersisted(t *testing.T) {
+	source := &pkgmodel.Resource{
+		Label: "parent", Ksuid: "k-parent", Stack: "s",
+		Properties: json.RawMessage(`{"Name": "p"}`),
+	}
+	consumer := pkgmodel.Resource{
+		Label: "consumer", Ksuid: "k-consumer", Stack: "s",
+		Properties: json.RawMessage(`{"Ref": {"$ref": "formae://k-parent#/Secret"}}`),
+	}
+	all := map[string][]*pkgmodel.Resource{"s": {source}}
+	effective := map[string]json.RawMessage{
+		"k-parent": json.RawMessage(`{"Name": "p", "Secret": {"$value": "brand-new-plaintext", "$visibility": "Opaque"}}`),
+	}
+
+	props, err := LoadResolvablePropertiesFromStacks(consumer, all, effective)
+	require.NoError(t, err)
+
+	_, ok := props.Get("k-parent", "Secret")
+	assert.False(t, ok, "an inline-opaque value that exists only in the effective desired document must never be materialized")
+}
