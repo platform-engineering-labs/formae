@@ -21,6 +21,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	provxgcp "github.com/platform-engineering-labs/oox/provx/gcp"
+
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 )
 
 const (
@@ -534,4 +536,39 @@ func TestLoginShellProbeIsBounded(t *testing.T) {
 
 	assert.Empty(t, got)
 	assert.Less(t, time.Since(start), 30*time.Second, "the probe outlived its bound")
+}
+
+// Provisioning hands a near-owner grant to an installation in someone's
+// project. An interactive run says so and stops for an answer first, as all
+// three AWS paths have since they shipped.
+func TestGCPInteractiveRunConfirmsBeforeProvisioning(t *testing.T) {
+	restore := confirmFn
+	asked := 0
+	var gotTitle, gotBody string
+	confirmFn = func(_ *theme.Theme, title, body string) (bool, error) {
+		asked++
+		gotTitle, gotBody = title, body
+		return false, nil // decline: nothing may be created
+	}
+	t.Cleanup(func() { confirmFn = restore })
+
+	restoreTTY := isInteractive
+	isInteractive = func() bool { return true }
+	t.Cleanup(func() { isInteractive = restoreTTY })
+
+	stubCredentialState(t, credentialsUsable, nil)
+	stub := &stubGCPProvisioner{result: &provxgcp.Result{
+		ProviderName: testProviderName, ProjectNumber: testProjectNumber,
+	}}
+	installGCPProvisioner(t, stub, nil)
+	cp := seedGCPRun(t)
+
+	_, err := runConnect(t, "gcp", "--project", testProject)
+
+	require.Error(t, err, "declining the confirmation must abort")
+	assert.Equal(t, 1, asked, "the run did not ask before provisioning")
+	assert.Contains(t, gotTitle, "gcp project "+testProject, "the prompt does not name what is being connected")
+	assert.Contains(t, gotBody, "near-owner", "the prompt does not say what is being granted")
+	assert.Zero(t, stub.calls, "provisioning ran despite the user declining")
+	assert.Empty(t, cp.posts(), "a connection was registered despite the user declining")
 }

@@ -21,6 +21,11 @@ import (
 // user brought the role themselves.
 const (
 	permissionsProvisioned = "PowerUserAccess + IAM management — the same permissions a self-hosted formae agent runs with"
+	// The GCP equivalent, named the way the design insists on: near-owner. A
+	// principal that can edit resources and rewrite project IAM can grant
+	// itself more, so describing it as "editor" alone would undersell what is
+	// being handed over.
+	permissionsProvisionedGCP = "editor + project IAM admin — near-owner, and the same permissions a self-hosted formae agent runs with"
 	permissionsAsApplied   = "permissions as applied; not verified by the CLI"
 )
 
@@ -159,9 +164,14 @@ func buildConnectForm(th *theme.Theme, v *formValues, awsProfiles []string) *huh
 // touches anything: the multi-installation warning, when the hint raised one,
 // and the final confirmation stating the account, the subject, and what the
 // trust grants.
-func confirmInteractive(th *theme.Theme, account, subject, permissions string, elsewhere []cloudapi.ConnectedAccount) error {
+// cloud and noun name the thing being connected in its own words: an aws
+// account, a gcp project. Asking "Connect aws account my-project?" over a GCP
+// run is wrong in a prompt whose entire job is to state plainly what is about
+// to happen.
+func confirmInteractive(th *theme.Theme, cloud, noun, account, subject, permissions string,
+	elsewhere []cloudapi.ConnectedAccount) error {
 	if len(elsewhere) > 0 {
-		ok, err := confirmFn(th, "This account is already connected elsewhere. Connect it here too?",
+		ok, err := confirmFn(th, fmt.Sprintf("This %s is already connected elsewhere. Connect it here too?", noun),
 			multiInstallationWarning(account, elsewhere))
 		if err != nil {
 			return err
@@ -170,7 +180,7 @@ func confirmInteractive(th *theme.Theme, account, subject, permissions string, e
 			return errors.New("connect aborted: the account stays connected only where it already is")
 		}
 	}
-	ok, err := confirmFn(th, fmt.Sprintf("Connect aws account %s?", account),
+	ok, err := confirmFn(th, fmt.Sprintf("Connect %s %s %s?", cloud, noun, account),
 		fmt.Sprintf("subject: %s\npermissions: %s", subject, permissions))
 	if err != nil {
 		return err

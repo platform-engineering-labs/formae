@@ -233,6 +233,23 @@ func runGCPLocal(cc *cobra.Command, opts gcpOptions, consumer printer.Consumer, 
 		warnings = append(warnings, sharedTrustDomainWarning)
 	}
 
+	// The consent AWS has taken on all three of its paths since it shipped,
+	// and the design's own requirement that the confirmation say what is being
+	// granted in those terms. Provisioning hands a near-owner grant to another
+	// party's installation; an interactive run stops and says so before any of
+	// it happens.
+	//
+	// Gated on the strict interactivity test rather than on whether a sign-in
+	// was permitted: --allow-login says a person can complete a browser flow,
+	// not that this run can render a terminal prompt and read the answer.
+	if !opts.NoInput && consumer != printer.ConsumerMachine && isInteractive() {
+		th := clicmd.ResolveConfiguredTheme(cc)
+		if err := confirmInteractive(th, "gcp", "project", opts.Project, s.Setup.CloudSubject,
+			permissionsProvisionedGCP, elsewhere); err != nil {
+			return err
+		}
+	}
+
 	result, err := provisionGCP(ctx, opts.Project, s.Setup.CloudSubject, s.Platform.Issuer)
 	if err != nil {
 		return err
