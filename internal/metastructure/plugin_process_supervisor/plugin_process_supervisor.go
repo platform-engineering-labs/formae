@@ -164,40 +164,76 @@ func (p *PluginProcessSupervisor) getPluginName(namespace string) string {
 	return namespace
 }
 
-// logPluginOutput parses Ergo's log format and logs with appropriate level
-// Format: "timestamp [level] rest_of_message" e.g. "1764458575429677244 [info] <79F4473F.0.1004>: message"
-var pluginLogRegex = regexp.MustCompile(`^\d+\s+\[(trace|debug|info|warning|error)\]\s+(.*)$`)
+// Plugins do not agree on a log format, so two are recognised.
+//
+// Ergo's runtime writes "timestamp [level] rest_of_message", e.g.
+// "1764458575429677244 [info] <79F4473F.0.1004>: message". Anything built on
+// log/slog writes logfmt with an uppercase level, e.g.
+// `time=... level=WARN msg="rejected credential"`, which is what the auth
+// plugins emit. Reading only the first left every slog line unclassified.
+var (
+	pluginLogRegex = regexp.MustCompile(`^\d+\s+\[(trace|debug|info|warning|error)\]\s+(.*)$`)
+	// The level must start a token, so one quoted inside a message is not
+	// mistaken for the line's own.
+	pluginLogfmtLevelRegex = regexp.MustCompile(`(?:^|\s)level=([A-Za-z]+)`)
+)
+
+// pluginLevel reports the level a plugin gave one of its own log lines,
+// normalised to the names Log() uses, or "" when the line names none.
+func pluginLevel(output string) string {
+	if matches := pluginLogRegex.FindStringSubmatch(output); matches != nil {
+		return matches[1]
+	}
+	if matches := pluginLogfmtLevelRegex.FindStringSubmatch(output); matches != nil {
+		switch strings.ToLower(matches[1]) {
+		case "trace":
+			return "trace"
+		case "debug":
+			return "debug"
+		case "info":
+			return "info"
+		case "warn", "warning":
+			return "warning"
+		case "error":
+			return "error"
+		}
+	}
+	return ""
+}
+
+// logAtPluginLevel reports a plugin's line at the level the plugin chose,
+// deferring to fallback when it named none.
+//
+// The message travels as an argument, never as the format string: it is text
+// the plugin wrote, and a stray verb in it would garble the line.
+func (p *PluginProcessSupervisor) logAtPluginLevel(level, message string, fallback func(string, ...any)) {
+	switch level {
+	case "trace":
+		p.Log().Trace("%s", message)
+	case "debug":
+		p.Log().Debug("%s", message)
+	case "info":
+		p.Log().Info("%s", message)
+	case "warning":
+		p.Log().Warning("%s", message)
+	case "error":
+		p.Log().Error("%s", message)
+	default:
+		fallback("%s", message)
+	}
+}
 
 func (p *PluginProcessSupervisor) logPluginOutput(pluginName, output string) {
 	if output == "" {
 		return
 	}
 
-	matches := pluginLogRegex.FindStringSubmatch(output)
-	if matches == nil {
-		// No level found, log as info
-		p.Log().Info("[%s] %s", pluginName, output)
-		return
+	message := output
+	if matches := pluginLogRegex.FindStringSubmatch(output); matches != nil {
+		message = matches[2]
 	}
 
-	level := matches[1]
-	message := matches[2]
-	formattedMsg := fmt.Sprintf("[%s] %s", pluginName, message)
-
-	switch level {
-	case "trace":
-		p.Log().Trace(formattedMsg)
-	case "debug":
-		p.Log().Debug(formattedMsg)
-	case "info":
-		p.Log().Info(formattedMsg)
-	case "warning":
-		p.Log().Warning(formattedMsg)
-	case "error":
-		p.Log().Error(formattedMsg)
-	default:
-		p.Log().Info(formattedMsg)
-	}
+	p.logAtPluginLevel(pluginLevel(output), fmt.Sprintf("[%s] %s", pluginName, message), p.Log().Info)
 }
 
 func (p *PluginProcessSupervisor) HandleMessage(from gen.PID, message any) error {
@@ -244,8 +280,20 @@ func (p *PluginProcessSupervisor) HandleMessage(from gen.PID, message any) error
 		}
 
 	case meta.MessagePortError:
-		// Plugin error output
-		p.Log().Error("Plugin error tag=%s: %v", msg.Tag, msg.Error)
+		// The port is named for the channel, not the severity: a plugin's whole
+		// log stream arrives here at whatever level its author chose. Reporting
+		// all of it at Error made an ordinary rejected credential
+		// indistinguishable from a fault, and an installation's "error logs
+		// occurring" alert fired on a mistyped password.
+		//
+		// A line naming no level stays at Error: on the error port, assuming
+		// the worst is the right default. The wording is unchanged because it
+		// names the port, and operators filter alert queries on it.
+		p.logAtPluginLevel(
+			pluginLevel(fmt.Sprint(msg.Error)),
+			fmt.Sprintf("Plugin error tag=%s: %v", msg.Tag, msg.Error),
+			p.Log().Error,
+		)
 
 	case meta.MessagePortTerminate:
 		switch {
