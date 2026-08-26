@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/platform-engineering-labs/formae/internal/metastructure/transformations"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/tidwall/gjson"
 )
@@ -107,7 +106,7 @@ func LoadResolvablePropertiesFromStacks(resource pkgmodel.Resource, allResources
 		if effDoc, declared := effective[ksuid]; declared {
 			effVal := gjson.GetBytes(effDoc, propertyPath)
 			if effVal.Exists() && !isReferenceEnvelope(effVal) && !containsHashedValue(effVal) &&
-				!sourcePropertyIsOpaque(targetResource, propertyPath) {
+				!isSourcePropertyOpaque(targetResource, propertyPath) {
 				res.AddAnswer(ksuid, propertyPath, SourceAnswer{Kind: AnswerResolved, Value: ExtractPropertyValue(effVal)})
 				continue
 			}
@@ -138,18 +137,6 @@ func LoadResolvablePropertiesFromStacks(resource pkgmodel.Resource, allResources
 	}
 
 	return res, nil
-}
-
-// sourcePropertyIsOpaque reports whether the source marks propertyPath opaque:
-// an at-rest hashed shape, a $visibility marker, or the schema/known-opaque
-// table. An opaque source's desired plaintext is never materialized into the
-// plan-time lookup.
-func sourcePropertyIsOpaque(source *pkgmodel.Resource, propertyPath string) bool {
-	persisted := gjson.GetBytes(source.Properties, propertyPath)
-	if containsHashedValue(persisted) || persisted.Get("$visibility").String() == "Opaque" {
-		return true
-	}
-	return transformations.OpaqueFields(source.Schema, source.Type)[propertyPath]
 }
 
 // resolvableValueFrom reads propertyPath out of one persisted property

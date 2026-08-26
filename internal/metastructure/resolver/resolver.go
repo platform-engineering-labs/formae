@@ -14,6 +14,7 @@ import (
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 
+	"github.com/platform-engineering-labs/formae/internal/metastructure/transformations"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
@@ -249,11 +250,15 @@ func ExtractOpaqueResolvableURIsFromJSON(data json.RawMessage) []pkgmodel.Formae
 }
 
 // isSourcePropertyOpaque reports whether propertyName on a source resource is an
-// opaque value — a secret stored hashed-at-rest with Opaque visibility. Used to
-// decide, from the SOURCE side, whether an otherwise Clear consumer ref is really
-// a credential. It checks Properties first then ReadOnlyProperties, mirroring
-// Resource property precedence: an opaque value (e.g. a plugin-generated token)
-// may be persisted in either collection.
+// opaque value: a value stored hashed at rest, one carrying an Opaque
+// $visibility marker, or a field the schema (or the agent-side known-opaque
+// table) marks opaque even before anything is persisted. Used to decide, from
+// the SOURCE side, whether an otherwise Clear consumer ref is really a
+// credential — and, by the same rule, whether a plan-time literal drawn from
+// the source's effective desired state is safe to materialize. It checks
+// Properties first then ReadOnlyProperties, mirroring Resource property
+// precedence: an opaque value (e.g. a plugin-generated token) may be
+// persisted in either collection.
 func isSourcePropertyOpaque(source *pkgmodel.Resource, propertyName string) bool {
 	if source == nil || propertyName == "" {
 		return false
@@ -268,10 +273,27 @@ func isSourcePropertyOpaque(source *pkgmodel.Resource, propertyName string) bool
 		candidates = append(candidates, root)
 	}
 	for _, p := range candidates {
+		// A value stored hashed at rest is a SHA-256 digest; refused wherever it
+		// sits, including nested inside the structure a path names as a whole.
+		if containsHashedValue(gjson.GetBytes(source.Properties, p)) {
+			return true
+		}
+		if containsHashedValue(gjson.GetBytes(source.ReadOnlyProperties, p)) {
+			return true
+		}
 		if gjson.GetBytes(source.Properties, p).Get("$visibility").String() == pkgmodel.VisibilityOpaque {
 			return true
 		}
 		if gjson.GetBytes(source.ReadOnlyProperties, p).Get("$visibility").String() == pkgmodel.VisibilityOpaque {
+			return true
+		}
+	}
+	// Fall back to the schema/known-opaque table (the same union PersistValueTransformer
+	// hashes against): a property that has never been persisted yet — or whose
+	// plugin schema drops FieldHint.Opaque — still classifies as opaque here.
+	opaqueFields := transformations.OpaqueFields(source.Schema, source.Type)
+	for _, p := range candidates {
+		if opaqueFields[p] {
 			return true
 		}
 	}

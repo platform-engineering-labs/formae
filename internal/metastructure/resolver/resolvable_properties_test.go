@@ -259,3 +259,36 @@ func TestLoadResolvableProperties_EnvelopeAndHashedKeepTodaysBehavior(t *testing
 	_, ok = props.Get("k-parent", "Secret")
 	assert.False(t, ok, "a hashed-at-rest source stays deferred; the raw desired plaintext must never be materialized")
 }
+
+// A source that marks the referenced property Opaque only in ReadOnlyProperties
+// (never in Properties) must still be caught: the effective desired document's
+// plain literal is not materialized, and resolution falls through to the
+// persisted-row path instead.
+func TestLoadResolvableProperties_EffectiveDesiredSkipsSourceOpaqueOnlyInReadOnlyProperties(t *testing.T) {
+	source := &pkgmodel.Resource{
+		Label: "parent", Ksuid: "k-parent", Stack: "s",
+		Properties:         json.RawMessage(`{"Name": "p"}`),
+		ReadOnlyProperties: json.RawMessage(`{"Token": {"$value": "persisted-token", "$visibility": "Opaque"}}`),
+	}
+	consumer := pkgmodel.Resource{
+		Label: "consumer", Ksuid: "k-consumer", Stack: "s",
+		Properties: json.RawMessage(`{
+			"Ref": {"$ref": "formae://k-parent#/Token", "$value": "persisted-token"}
+		}`),
+	}
+	all := map[string][]*pkgmodel.Resource{"s": {source}}
+	effective := map[string]json.RawMessage{
+		"k-parent": json.RawMessage(`{"Name": "p", "Token": "resubmitted-token"}`),
+	}
+
+	props, err := LoadResolvablePropertiesFromStacks(consumer, all, effective)
+	require.NoError(t, err)
+
+	v, ok := props.Get("k-parent", "Token")
+	require.True(t, ok, "the persisted-row path still resolves the opaque-but-not-hashed value")
+	assert.Equal(t, "persisted-token", v,
+		"the resubmitted effective plaintext must never be materialized for a source opaque only in ReadOnlyProperties")
+
+	a, _ := props.Answer("k-parent", "Token")
+	assert.Equal(t, AnswerStable, a.Kind, "fallthrough resolves via the persisted-row path, not the case-1 rule")
+}
