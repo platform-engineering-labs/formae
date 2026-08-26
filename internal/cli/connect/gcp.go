@@ -7,6 +7,7 @@ package connect
 import (
 	"errors"
 	"fmt"
+	"io"
 
 	"github.com/spf13/cobra"
 
@@ -209,12 +210,26 @@ func runGCPRegisterOnly(cc *cobra.Command, opts gcpOptions, consumer printer.Con
 const unverifiedCoordinateWarning = "the coordinate was validated for shape only: formae did not check that this provider " +
 	"exists, that it trusts the formae issuer, or that it grants this installation access. The first use is where a wrong one shows up"
 
+// gcpLoginOutput is where the sign-in's own progress goes.
+//
+// Under machine output stdout carries the document and nothing else, so the
+// sign-in reports on stderr instead. The caller that opts into the browser is
+// the same one parsing stdout - the agent beside the operator - and gcloud's
+// chatter ahead of the JSON is the difference between a connect it can read
+// and one it cannot. In a human run stdout is prose already, so it stays put.
+func gcpLoginOutput(cc *cobra.Command, consumer printer.Consumer) io.Writer {
+	if consumer == printer.ConsumerMachine {
+		return cc.ErrOrStderr()
+	}
+	return cc.OutOrStdout()
+}
+
 // runGCPLocal is the default path: formae obtains credentials, verifies the
 // project, provisions the federation, and registers what it created.
 func runGCPLocal(cc *cobra.Command, opts gcpOptions, consumer printer.Consumer, schema string) error {
 	ctx := cc.Context()
 
-	if err := ensureCredentials(ctx, cc.OutOrStdout(), gcpMayPrompt(opts, consumer)); err != nil {
+	if err := ensureCredentials(ctx, gcpLoginOutput(cc, consumer), gcpMayPrompt(opts, consumer)); err != nil {
 		return err
 	}
 

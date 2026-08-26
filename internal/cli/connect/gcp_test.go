@@ -7,6 +7,7 @@
 package connect
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -571,4 +572,81 @@ func TestGCPInteractiveRunConfirmsBeforeProvisioning(t *testing.T) {
 	assert.Contains(t, gotBody, "near-owner", "the prompt does not say what is being granted")
 	assert.Zero(t, stub.calls, "provisioning ran despite the user declining")
 	assert.Empty(t, cp.posts(), "a connection was registered despite the user declining")
+}
+
+// runConnectSplit runs the command with stdout and stderr separated, which is
+// the only way to state where a stream's content actually landed. runConnect
+// points both at one buffer, so a test built on it cannot tell the machine
+// document apart from anything printed beside it.
+func runConnectSplit(t *testing.T, args ...string) (string, string, error) {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+	c := ConnectCmd()
+	c.SetOut(&stdout)
+	c.SetErr(&stderr)
+	c.SetArgs(args)
+	err := c.Execute()
+	return stdout.String(), stderr.String(), err
+}
+
+// stubLoggingGcloudLogin stands in for the sign-in and, unlike
+// stubCredentialState's silent stub, writes to the writer it is handed - which
+// is what the real one does, both for its own "running ..." line and for
+// gcloud's stdout. A stub that writes nothing cannot observe where those bytes
+// go, which is the whole question here.
+func stubLoggingGcloudLogin(t *testing.T, state credentialState, logins *int) {
+	t.Helper()
+	restoreFind, restoreLogin := findCredentials, runGcloudLogin
+	findCredentials = func(_ context.Context) (credentialState, error) { return state, nil }
+	runGcloudLogin = func(_ context.Context, w io.Writer) error {
+		if logins != nil {
+			*logins++
+		}
+		_, _ = fmt.Fprintf(w, "running %s\n", gcloudLoginCommand)
+		_, _ = fmt.Fprintln(w, "Credentials saved to file: [/home/u/.config/gcloud/application_default_credentials.json]")
+		findCredentials = func(_ context.Context) (credentialState, error) { return credentialsUsable, nil }
+		return nil
+	}
+	t.Cleanup(func() { findCredentials, runGcloudLogin = restoreFind, restoreLogin })
+}
+
+// Under machine output the document is the whole of stdout. The sign-in prints
+// progress for a person to read, and the only caller that asks for it is an
+// agent parsing that same stream, so the two cannot share it: chatter ahead of
+// the JSON turns a successful connect into output the caller cannot read.
+func TestGCPAllowLoginKeepsTheMachineDocumentClean(t *testing.T) {
+	logins := 0
+	stubLoggingGcloudLogin(t, credentialsMissing, &logins)
+	installGCPProvisioner(t, &stubGCPProvisioner{result: &provxgcp.Result{
+		ProviderName: testProviderName, ProjectNumber: testProjectNumber,
+	}}, nil)
+	seedGCPRun(t)
+
+	stdout, stderr, err := runConnectSplit(t, "gcp", "--project", testProject, "--no-input",
+		"--allow-login", "--output-consumer", "machine", "--output-schema", "json")
+
+	require.NoError(t, err, "stdout: %s stderr: %s", stdout, stderr)
+	require.Equal(t, 1, logins, "--allow-login did not reach the sign-in")
+
+	got := decodeOut(t, stdout)
+	assert.Equal(t, testProviderName, got["workloadIdentityProvider"])
+	assert.Contains(t, stderr, gcloudLoginCommand,
+		"the sign-in left no trace for the operator on stderr")
+}
+
+// The human path is unchanged: there stdout is prose already, so the sign-in
+// belongs with the rest of what the operator is reading.
+func TestGCPHumanRunKeepsTheSignInOnStdout(t *testing.T) {
+	logins := 0
+	stubLoggingGcloudLogin(t, credentialsMissing, &logins)
+	installGCPProvisioner(t, &stubGCPProvisioner{result: &provxgcp.Result{
+		ProviderName: testProviderName, ProjectNumber: testProjectNumber,
+	}}, nil)
+	seedGCPRun(t)
+
+	stdout, _, err := runConnectSplit(t, "gcp", "--project", testProject, "--allow-login")
+
+	require.NoError(t, err)
+	require.Equal(t, 1, logins)
+	assert.Contains(t, stdout, gcloudLoginCommand)
 }
