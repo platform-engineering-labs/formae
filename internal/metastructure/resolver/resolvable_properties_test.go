@@ -49,7 +49,7 @@ func TestLoadResolvableProperties_SkipsHashedValue(t *testing.T) {
 			`"$visibility":"Opaque","$strategy":"Update","$hashed":true}}`),
 	}
 
-	props, err := LoadResolvablePropertiesFromStacks(consumerOf("SecretString"), stacksWith(source))
+	props, err := LoadResolvablePropertiesFromStacks(consumerOf("SecretString"), stacksWith(source), nil)
 	require.NoError(t, err)
 
 	_, found := props.Get(sourceKsuid, "SecretString")
@@ -70,7 +70,7 @@ func TestLoadResolvableProperties_SkipsHashedReadOnlyValue(t *testing.T) {
 			`"$visibility":"Opaque","$hashed":true}}`),
 	}
 
-	props, err := LoadResolvablePropertiesFromStacks(consumerOf("GeneratedToken"), stacksWith(source))
+	props, err := LoadResolvablePropertiesFromStacks(consumerOf("GeneratedToken"), stacksWith(source), nil)
 	require.NoError(t, err)
 
 	_, found := props.Get(sourceKsuid, "GeneratedToken")
@@ -89,7 +89,7 @@ func TestLoadResolvableProperties_UsesOpaqueValueThatIsNotHashed(t *testing.T) {
 		Properties: json.RawMessage(`{"SecretString":{"$value":"live-value","$visibility":"Opaque"}}`),
 	}
 
-	props, err := LoadResolvablePropertiesFromStacks(consumerOf("SecretString"), stacksWith(source))
+	props, err := LoadResolvablePropertiesFromStacks(consumerOf("SecretString"), stacksWith(source), nil)
 	require.NoError(t, err)
 
 	value, found := props.Get(sourceKsuid, "SecretString")
@@ -111,7 +111,7 @@ func TestLoadResolvableProperties_SkipsStructureHoldingAHashedValue(t *testing.T
 			`"$visibility":"Opaque","$hashed":true}}}`),
 	}
 
-	props, err := LoadResolvablePropertiesFromStacks(consumerOf("Connection"), stacksWith(source))
+	props, err := LoadResolvablePropertiesFromStacks(consumerOf("Connection"), stacksWith(source), nil)
 	require.NoError(t, err)
 
 	_, found := props.Get(sourceKsuid, "Connection")
@@ -131,7 +131,7 @@ func TestLoadResolvableProperties_SkipsValuelessReferenceEnvelope(t *testing.T) 
 		Properties: json.RawMessage(`{"Token":{"$ref":"formae://someotherksuid#/Value","$visibility":"Opaque"}}`),
 	}
 
-	props, err := LoadResolvablePropertiesFromStacks(consumerOf("Token"), stacksWith(source))
+	props, err := LoadResolvablePropertiesFromStacks(consumerOf("Token"), stacksWith(source), nil)
 	require.NoError(t, err)
 
 	_, found := props.Get(sourceKsuid, "Token")
@@ -150,7 +150,7 @@ func TestLoadResolvableProperties_UsesResolvedReferenceEnvelope(t *testing.T) {
 		Properties: json.RawMessage(`{"VpcId":{"$ref":"formae://someotherksuid#/VpcId","$value":"vpc-123"}}`),
 	}
 
-	props, err := LoadResolvablePropertiesFromStacks(consumerOf("VpcId"), stacksWith(source))
+	props, err := LoadResolvablePropertiesFromStacks(consumerOf("VpcId"), stacksWith(source), nil)
 	require.NoError(t, err)
 
 	value, found := props.Get(sourceKsuid, "VpcId")
@@ -169,10 +169,26 @@ func TestLoadResolvableProperties_UsesPlainValue(t *testing.T) {
 		ReadOnlyProperties: json.RawMessage(`{"VpcId":"vpc-123"}`),
 	}
 
-	props, err := LoadResolvablePropertiesFromStacks(consumerOf("VpcId"), stacksWith(source))
+	props, err := LoadResolvablePropertiesFromStacks(consumerOf("VpcId"), stacksWith(source), nil)
 	require.NoError(t, err)
 
 	value, found := props.Get(sourceKsuid, "VpcId")
 	require.True(t, found)
 	assert.Equal(t, "vpc-123", value)
+}
+
+// A persisted literal the command does not move answers Stable and keeps the
+// same value the string lookup returns, so both surfaces agree.
+func TestResolvableProperties_AnswerAgreesWithGet(t *testing.T) {
+	props := NewResolvableProperties()
+	props.AddAnswer("k1", "Value", SourceAnswer{Kind: AnswerStable, Value: "hello"})
+
+	v, ok := props.Get("k1", "Value")
+	require.True(t, ok)
+	assert.Equal(t, "hello", v)
+
+	a, ok := props.Answer("k1", "Value")
+	require.True(t, ok)
+	assert.Equal(t, AnswerStable, a.Kind)
+	assert.Equal(t, "hello", a.Value)
 }

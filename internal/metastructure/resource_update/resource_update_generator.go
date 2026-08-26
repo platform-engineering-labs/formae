@@ -824,7 +824,7 @@ func generateResourceUpdatesForReconcile(
 					continue
 				}
 				if existingUnmanaged, ok := findUnmanagedResource(newResource, allResourcesByStack); ok {
-					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, resolvableLookup)
+					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, resolvableLookup, effectiveDesired)
 					if err != nil {
 						return nil, fmt.Errorf("failed to load resolvable properties: %w", err)
 					}
@@ -878,7 +878,7 @@ func generateResourceUpdatesForReconcile(
 
 					found = true
 
-					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, resolvableLookup)
+					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, resolvableLookup, effectiveDesired)
 
 					if err != nil {
 						return nil, fmt.Errorf("failed to load resolvable properties: %w", err)
@@ -957,7 +957,7 @@ func generateResourceUpdatesForReconcile(
 				}
 				// Check if this resource exists as an unmanaged resource
 				if existingUnmanaged, ok := findUnmanagedResource(newResource, allResourcesByStack); ok {
-					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, resolvableLookup)
+					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, resolvableLookup, effectiveDesired)
 					if err != nil {
 						return nil, fmt.Errorf("failed to load resolvable properties: %w", err)
 					}
@@ -1313,7 +1313,7 @@ func generateResourceUpdatesForPatch(
 
 			if matched != nil {
 				// Use NewResourceUpdateForExisting to handle all the logic
-				readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, resolvableLookup)
+				readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, resolvableLookup, effectiveDesired)
 				if err != nil {
 					return nil, fmt.Errorf("failed to load resolvable properties: %w", err)
 				}

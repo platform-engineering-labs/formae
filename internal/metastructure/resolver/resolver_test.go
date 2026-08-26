@@ -1119,7 +1119,7 @@ func TestLoadResolvablePropertiesFromStacks(t *testing.T) {
 			Resources: []pkgmodel.Resource{vpc, subnet},
 		}
 
-		resolvables, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma))
+		resolvables, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma), nil)
 
 		require.NoError(t, err)
 		value, found := resolvables.Get(vpcKsuid, "VpcId")
@@ -1164,7 +1164,7 @@ func TestLoadResolvablePropertiesFromStacks(t *testing.T) {
 			Resources: []pkgmodel.Resource{compartment, vcn, subnet},
 		}
 
-		resolvables, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma))
+		resolvables, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma), nil)
 
 		require.NoError(t, err)
 		value, found := resolvables.Get(vcnKsuid, "CompartmentId")
@@ -1196,7 +1196,7 @@ func TestLoadResolvablePropertiesFromStacks(t *testing.T) {
 			Resources: []pkgmodel.Resource{vpc, subnet},
 		}
 
-		resolvables, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma))
+		resolvables, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma), nil)
 
 		require.NoError(t, err)
 		value, found := resolvables.Get(vpcKsuid, "CidrBlock")
@@ -1222,7 +1222,7 @@ func TestLoadResolvablePropertiesFromStacks(t *testing.T) {
 			Resources: []pkgmodel.Resource{subnet},
 		}
 
-		_, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma))
+		_, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma), nil)
 
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "not found")
@@ -1252,7 +1252,7 @@ func TestLoadResolvablePropertiesFromStacks(t *testing.T) {
 			Resources: []pkgmodel.Resource{vpc, subnet},
 		}
 
-		props, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma))
+		props, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma), nil)
 
 		assert.NoError(t, err)
 		// Property not resolved — will be resolved at execution time
