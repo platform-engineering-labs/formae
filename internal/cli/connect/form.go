@@ -26,7 +26,7 @@ const (
 	// itself more, so describing it as "editor" alone would undersell what is
 	// being handed over.
 	permissionsProvisionedGCP = "editor + project IAM admin — near-owner, and the same permissions a self-hosted formae agent runs with"
-	permissionsAsApplied   = "permissions as applied; not verified by the CLI"
+	permissionsAsApplied      = "permissions as applied; not verified by the CLI"
 )
 
 // confirmFn runs one themed yes/no confirmation. A seam so the interactive
