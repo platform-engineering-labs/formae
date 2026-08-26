@@ -26,33 +26,44 @@ func EnforceSetOnceAndCompareResourceForUpdate(existing, new *pkgmodel.Resource,
 	if err != nil {
 		return false, nil, err
 	}
+	hasChanges, err := CompareFilteredResourceForUpdate(existing, new, schema, filteredRawProps)
+	if err != nil {
+		return false, nil, err
+	}
+	return hasChanges, filteredRawProps, nil
+}
 
+// CompareFilteredResourceForUpdate reports whether filteredProps - the
+// effective desired document, i.e. the forma declaration after SetOnce
+// filtering - meaningfully differs from the existing row. The caller supplies
+// the filtered document so the filtering is computed exactly once per command.
+func CompareFilteredResourceForUpdate(existing, new *pkgmodel.Resource, schema pkgmodel.Schema, filteredProps json.RawMessage) (bool, error) {
 	// Hash the filtered properties ONLY for comparison (like verses like).
 	// The temp resource carries the schema so schema-keyed opaque fields
 	// (PersistValueTransformer) are hashed here the same way they are hashed
 	// on persist — otherwise a stored-hashed secret compares unequal to the
 	// re-submitted desired plaintext and produces a spurious update.
 	transformer := transformations.NewPersistValueTransformer()
-	tempResource := &pkgmodel.Resource{Type: new.Type, Schema: new.Schema, Properties: filteredRawProps}
+	tempResource := &pkgmodel.Resource{Type: new.Type, Schema: new.Schema, Properties: filteredProps}
 	// Comparison-only: nothing here is persisted, and the same values are hashed
 	// again on the persist path, which surfaces the opaque-match diagnostics with
 	// the resource identity attached. Reporting them here too would only double
 	// every warning.
 	hashedForComparison, _, err := transformer.ApplyToResource(tempResource)
 	if err != nil {
-		return false, nil, err
+		return false, err
 	}
 
 	// Canonicalize Format-hinted serialized fields on BOTH sides, for comparison
-	// only — never feeds the returned filteredRawProps.
+	// only — never feeds the returned filteredProps.
 	existingForCompare := canonicalizeHintedFields(existing.Properties, schema)
 	newForCompare := canonicalizeHintedFields(hashedForComparison.Properties, schema)
 
 	equal, err := util.JsonEqualIgnoreArrayOrder(existingForCompare, newForCompare)
 	if err != nil {
-		return false, nil, fmt.Errorf("failed to compare properties: %w", err)
+		return false, fmt.Errorf("failed to compare properties: %w", err)
 	}
-	return !equal, filteredRawProps, nil
+	return !equal, nil
 }
 
 // canonicalizeHintedFields returns a copy of props in which each Format-hinted

@@ -45,7 +45,7 @@ func TestRename_PreservesExistingKsuidNotNewResourceKsuid(t *testing.T) {
 	newResource.Ksuid = strayKsuid // simulate a stale/wrong KSUID from upstream
 
 	target := pkgmodel.Target{Label: "test-target", Namespace: "aws", Config: json.RawMessage(`{}`)}
-	updates, err := NewResourceUpdateForExisting(resolver.ResolvableProperties{}, existing, newResource,
+	updates, err := NewResourceUpdateForExisting(resolver.ResolvableProperties{}, nil, existing, newResource,
 		target, target, pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser)
 	require.NoError(t, err)
 	require.Len(t, updates, 1)
@@ -80,7 +80,7 @@ func TestRename_PureLabelChange_AliasDriven(t *testing.T) {
 	newResource.Alias = "web-server"
 
 	target := pkgmodel.Target{Label: "test-target", Namespace: "aws", Config: json.RawMessage(`{}`)}
-	updates, err := NewResourceUpdateForExisting(resolver.ResolvableProperties{}, existing, newResource,
+	updates, err := NewResourceUpdateForExisting(resolver.ResolvableProperties{}, nil, existing, newResource,
 		target, target, pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser)
 	require.NoError(t, err)
 	require.Len(t, updates, 1, "pure label rename must emit one update, got %d", len(updates))
@@ -114,7 +114,7 @@ func TestRename_LabelAndProperties_AliasDriven(t *testing.T) {
 	newResource.Properties = json.RawMessage(`{"InstanceType": "t3.medium"}`)
 
 	target := pkgmodel.Target{Label: "test-target", Namespace: "aws", Config: json.RawMessage(`{}`)}
-	updates, err := NewResourceUpdateForExisting(resolver.ResolvableProperties{}, existing, newResource,
+	updates, err := NewResourceUpdateForExisting(resolver.ResolvableProperties{}, nil, existing, newResource,
 		target, target, pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser)
 	require.NoError(t, err)
 	require.Len(t, updates, 1)
@@ -141,7 +141,7 @@ func TestRename_LabelMismatchWithoutAlias_Rejected(t *testing.T) {
 	// no Alias
 
 	target := pkgmodel.Target{Label: "test-target", Namespace: "aws", Config: json.RawMessage(`{}`)}
-	_, err := NewResourceUpdateForExisting(resolver.ResolvableProperties{}, existing, newResource,
+	_, err := NewResourceUpdateForExisting(resolver.ResolvableProperties{}, nil, existing, newResource,
 		target, target, pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser)
 	require.Error(t, err, "label mismatch without alias must be a generator bug")
 }
@@ -161,7 +161,7 @@ func TestRename_AliasDoesNotMatchExisting_Rejected(t *testing.T) {
 	newResource.Alias = "some-unrelated-name"
 
 	target := pkgmodel.Target{Label: "test-target", Namespace: "aws", Config: json.RawMessage(`{}`)}
-	_, err := NewResourceUpdateForExisting(resolver.ResolvableProperties{}, existing, newResource,
+	_, err := NewResourceUpdateForExisting(resolver.ResolvableProperties{}, nil, existing, newResource,
 		target, target, pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser)
 	require.Error(t, err, "alias mismatch is a generator bug")
 }
@@ -197,7 +197,7 @@ func TestRename_BringingUnderManagementAndRename(t *testing.T) {
 	newResource.Managed = true
 
 	target := pkgmodel.Target{Label: "test-target", Namespace: "aws", Config: json.RawMessage(`{}`)}
-	updates, err := NewResourceUpdateForExisting(resolver.ResolvableProperties{}, existing, newResource,
+	updates, err := NewResourceUpdateForExisting(resolver.ResolvableProperties{}, nil, existing, newResource,
 		target, target, pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser)
 	require.NoError(t, err)
 	require.Len(t, updates, 1, "combined import+rename must emit one update")

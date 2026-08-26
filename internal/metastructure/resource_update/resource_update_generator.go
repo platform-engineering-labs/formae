@@ -805,6 +805,11 @@ func generateResourceUpdatesForReconcile(
 	// This allows forward references to new resources in the same command.
 	resolvableLookup := resourcesForResolvables(forma, allResourcesByStack)
 
+	effectiveDesired, err := ComputeEffectiveDesired(forma, allResourcesByStack)
+	if err != nil {
+		return nil, fmt.Errorf("failed to compute effective desired state: %w", err)
+	}
+
 	for _, stack := range forma.SplitByStack() {
 		existingResources, err := ds.LoadResourcesByStack(stack.SingleStackLabel())
 		if err != nil {
@@ -826,6 +831,7 @@ func generateResourceUpdatesForReconcile(
 
 					resourceUpdate, err := NewResourceUpdateForExisting(
 						readOnlyProperties,
+						effectiveDesired[existingUnmanaged.Ksuid],
 						existingUnmanaged,
 						newResource,
 						*existingTargetMap[existingUnmanaged.Target],
@@ -879,6 +885,7 @@ func generateResourceUpdatesForReconcile(
 					}
 					existingResourceUpdates, err := NewResourceUpdateForExisting(
 						readOnlyProperties,
+						effectiveDesired[existingResource.Ksuid],
 						*existingResource,
 						newResource,
 						*existingTargetMap[existingResource.Target],
@@ -957,6 +964,7 @@ func generateResourceUpdatesForReconcile(
 
 					resourceUpdate, err := NewResourceUpdateForExisting(
 						readOnlyProperties,
+						effectiveDesired[existingUnmanaged.Ksuid],
 						existingUnmanaged,
 						newResource,
 						*existingTargetMap[existingUnmanaged.Target],
@@ -1265,6 +1273,11 @@ func generateResourceUpdatesForPatch(
 	// This allows forward references to new resources in the same command.
 	resolvableLookup := resourcesForResolvables(forma, allResourcesByStack)
 
+	effectiveDesired, err := ComputeEffectiveDesired(forma, allResourcesByStack)
+	if err != nil {
+		return nil, fmt.Errorf("failed to compute effective desired state: %w", err)
+	}
+
 	for _, stack := range forma.SplitByStack() {
 		stackResources, err := ds.LoadResourcesByStack(stack.SingleStackLabel())
 		if err != nil {
@@ -1307,6 +1320,7 @@ func generateResourceUpdatesForPatch(
 
 				existingResourceUpdates, err := NewResourceUpdateForExisting(
 					readOnlyProperties,
+					effectiveDesired[matched.Ksuid],
 					*matched,
 					newResource,
 					*existingTargetMap[matched.Target],
