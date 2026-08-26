@@ -55,19 +55,20 @@ type colSpec struct {
 // Mode 11, counts 4 each, Time 7, Age 5); Progress is elastic with a floor
 // of 10 cells. ID is wide enough to show a full 27-char command ksuid plus a
 // trailing gap so the identifier is never truncated (users copy it for
-// `status command --query 'id:…'` and `cancel`). User is sized for a short
-// name/handle; a bare Subject (typically a UUID) is truncated to fit it,
-// same overflow idiom ID uses for an over-long ksuid. User's priority (3) is
-// its own tier, shed before Mode/◐/○/Age (2): it is supplementary
-// attribution, not operational state, so a terminal width that already
-// showed the operational columns must keep showing them — User only appears
-// once there is genuinely room left over.
+// `status command --query 'id:…'` and `cancel`). User's width entry is a
+// placeholder — the rendered width is computed per render by userColWidth,
+// not read from here — because a fixed width either truncates a real name
+// or wastes a gutter when unattributed; see userColWidth for the sizing
+// rule. User's priority (3) is its own tier, shed before Mode/◐/○/Age (2):
+// it is supplementary attribution, not operational state, so a terminal
+// width that already showed the operational columns must keep showing them
+// — User only appears once there is genuinely room left over.
 var multiCols = [colCount]colSpec{
 	colStatus:   {"", 5, 0, true},
 	colID:       {"ID", 28, 0, true},
 	colCommand:  {"Command", 10, 1, true},
 	colMode:     {"Mode", 12, 2, true},
-	colUser:     {"User", 12, 3, true},
+	colUser:     {"User", 0, 3, true},
 	colProgress: {"Progress", 0, 0, true},
 	colDone:     {"✓", 5, 0, false},
 	colFailed:   {"✗", 5, 0, false},
@@ -75,6 +76,40 @@ var multiCols = [colCount]colSpec{
 	colPending:  {"○", 5, 2, false},
 	colTime:     {"Time", 8, 0, true},
 	colAge:      {"Age", 6, 2, true},
+}
+
+// userColMaxWidth caps the User column's CONTENT width (excluding the
+// trailing gap added by userColWidth) so one unusually long display name
+// can't crowd the rest of the table off a narrow terminal.
+const userColMaxWidth = 24
+
+// userColContentWidth returns the widest content the User column needs to
+// show without truncation, for the given rows: the max rune-width of
+// UserLabel across them, or the "User" header's width when that's larger (so
+// an all-unattributed page collapses toward the header instead of holding a
+// wide, empty gutter), clamped to userColMaxWidth.
+func userColContentWidth(rows []row) int {
+	w := utf8.RuneCountInString(multiCols[colUser].title)
+	for _, r := range rows {
+		if l := utf8.RuneCountInString(UserLabel(r.cmd)); l > w {
+			w = l
+		}
+	}
+	if w > userColMaxWidth {
+		w = userColMaxWidth
+	}
+	return w
+}
+
+// userColWidth returns the User column's full render width: its content
+// width (userColContentWidth) plus the same 1-column trailing gap every
+// other fixed column in this table bakes into its own width (e.g. colID
+// reserves 27+1 for a full command ksuid) — so a label that exactly fills
+// the content width still never abuts the next column. Content at or under
+// userColMaxWidth never gets truncated; content beyond it is cut with the
+// same overflow-marker idiom colID uses for an over-long ksuid.
+func userColWidth(rows []row) int {
+	return userColContentWidth(rows) + 1
 }
 
 // headerGlyph returns the themed glyph for the four status-count column
@@ -113,14 +148,17 @@ func buildRows(cmds []apimodel.Command) []row {
 // visibleColumns drops priority-3 columns first (User — supplementary
 // attribution, never at the cost of operational columns a narrower terminal
 // already showed), then priority-2 (Mode, ◐, ○, Age), then priority-1
-// (Command), until the fixed columns plus the bar floor fit.
-func visibleColumns(termWidth int) map[int]bool {
+// (Command), until the fixed columns plus the bar floor fit. userWidth is
+// the caller's current User column width (see userColWidth) — it feeds the
+// same budget the other fixed columns do, so a wide name legitimately makes
+// User shed sooner on a narrow terminal.
+func visibleColumns(termWidth, userWidth int) map[int]bool {
 	vis := make(map[int]bool, colCount)
 	for c := 0; c < colCount; c++ {
 		vis[c] = true
 	}
 	for _, dropTier := range []int{3, 2, 1} {
-		if fixedWidth(vis)+minBarWidth > termWidth {
+		if fixedWidth(vis, userWidth)+minBarWidth > termWidth {
 			for c := 0; c < colCount; c++ {
 				if multiCols[c].priority == dropTier {
 					vis[c] = false
@@ -131,20 +169,27 @@ func visibleColumns(termWidth int) map[int]bool {
 	return vis
 }
 
-// fixedWidth computes the total width of non-elastic columns.
-func fixedWidth(vis map[int]bool) int {
+// fixedWidth computes the total width of non-elastic columns. userWidth
+// substitutes for multiCols[colUser].width, which is a placeholder — see
+// userColWidth.
+func fixedWidth(vis map[int]bool, userWidth int) int {
 	w := 0
 	for c := 0; c < colCount; c++ {
-		if vis[c] && c != colProgress {
-			w += multiCols[c].width
+		if !vis[c] || c == colProgress {
+			continue
 		}
+		if c == colUser {
+			w += userWidth
+			continue
+		}
+		w += multiCols[c].width
 	}
 	return w
 }
 
 // barWidth returns the width available for the progress bar, with a floor of minBarWidth.
-func barWidth(termWidth int, vis map[int]bool) int {
-	bw := termWidth - fixedWidth(vis)
+func barWidth(termWidth int, vis map[int]bool, userWidth int) int {
+	bw := termWidth - fixedWidth(vis, userWidth)
 	if bw < minBarWidth {
 		return minBarWidth
 	}
@@ -242,7 +287,7 @@ type multiView struct {
 // visibleCols returns the responsive column set, additionally dropping Age
 // when hideAge is set.
 func (v multiView) visibleCols() map[int]bool {
-	vis := visibleColumns(v.width)
+	vis := visibleColumns(v.width, userColWidth(v.rows))
 	if v.hideAge {
 		vis[colAge] = false
 	}
@@ -361,7 +406,8 @@ func padCenter(s string, w int) string {
 func (v multiView) headerRow() string {
 	p := v.th.Palette
 	vis := v.visibleCols()
-	bw := barWidth(v.width, vis)
+	uw := userColWidth(v.rows)
+	bw := barWidth(v.width, vis, uw)
 
 	dimStyle := lipgloss.NewStyle().
 		Foreground(p.TextSecondary).
@@ -399,8 +445,11 @@ func (v multiView) headerRow() string {
 		}
 		spec := multiCols[c]
 		w := spec.width
-		if c == colProgress {
+		switch c {
+		case colProgress:
 			w = bw
+		case colUser:
+			w = uw
 		}
 
 		title := headerGlyph(c, v.th.Glyphs, spec.title)
@@ -450,7 +499,8 @@ func (v multiView) renderRows(maxRows int) []string {
 		return nil
 	}
 	vis := v.visibleCols()
-	bw := barWidth(v.width, vis)
+	uw := userColWidth(v.rows)
+	bw := barWidth(v.width, vis, uw)
 	p := v.th.Palette
 
 	// Fixed-width count field for the Progress column: reserve the widest
@@ -519,8 +569,11 @@ func (v multiView) renderRows(maxRows int) []string {
 			}
 			spec := multiCols[c]
 			w := spec.width
-			if c == colProgress {
+			switch c {
+			case colProgress:
 				w = bw
+			case colUser:
+				w = uw
 			}
 
 			switch c {
@@ -535,9 +588,11 @@ func (v multiView) renderRows(maxRows int) []string {
 			case colMode:
 				sb.WriteString(textStyle.Render(pad(modeLabel(r.cmd), w)))
 			case colUser:
-				// Truncate to w-1 so a bare Subject (typically a UUID, longer
-				// than the column) renders as a short prefix with a trailing
-				// gap before the next column, same idiom as colID.
+				// Truncate to w-1 (the content width userColContentWidth
+				// computed, since w = content+1) so a bare Subject longer
+				// than userColMaxWidth still leaves the trailing gap, same
+				// idiom as colID. It never fires below the cap: w-1 already
+				// fits every row's label there.
 				sb.WriteString(textStyle.Render(pad(components.Truncate(UserLabel(r.cmd), w-1), w)))
 			case colProgress:
 				if terminal {

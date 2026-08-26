@@ -125,19 +125,20 @@ func TestHeaderCommand_EmptyOptionFallsBackToARealVerb(t *testing.T) {
 }
 
 func TestVisibleColumns_DropTiers(t *testing.T) {
-	wide := visibleColumns(120)
+	uw := userColWidth(nil) // no rows: User collapses to its header width
+	wide := visibleColumns(120, uw)
 	for c := 0; c < colCount; c++ {
 		assert.True(t, wide[c], "wide terminal shows all columns")
 	}
 
-	medium := visibleColumns(80)
+	medium := visibleColumns(80, uw)
 	assert.False(t, medium[colMode])
 	assert.False(t, medium[colInProg])
 	assert.False(t, medium[colPending])
 	assert.False(t, medium[colAge])
 	assert.True(t, medium[colCommand])
 
-	narrow := visibleColumns(56)
+	narrow := visibleColumns(56, uw)
 	assert.False(t, narrow[colCommand])
 	for _, c := range []int{colStatus, colID, colProgress, colDone, colFailed, colTime} {
 		assert.True(t, narrow[c], "always-on column %d", c)
@@ -150,20 +151,22 @@ func TestVisibleColumns_DropTiers(t *testing.T) {
 // columns before User existed, must keep showing them — User only appears
 // once there is room left over after them.
 func TestVisibleColumns_UserDropsBeforeOperationalColumns(t *testing.T) {
-	narrowish := visibleColumns(100)
+	uw := userColWidth(nil) // no rows: User collapses to its header width
+	narrowish := visibleColumns(100, uw)
 	assert.False(t, narrowish[colUser], "User must drop at a width that predates it having room")
 	assert.True(t, narrowish[colMode], "Mode must stay visible at a width that showed it before this column existed")
 	assert.True(t, narrowish[colAge], "Age must stay visible at a width that showed it before this column existed")
 
-	wide := visibleColumns(130)
+	wide := visibleColumns(130, uw)
 	assert.True(t, wide[colUser], "User appears once there is genuinely room")
 }
 
 func TestBarWidth_ElasticWithFloor(t *testing.T) {
-	vis := visibleColumns(120)
-	assert.GreaterOrEqual(t, barWidth(120, vis), 10)
-	assert.Greater(t, barWidth(160, vis), barWidth(120, vis))
-	assert.Equal(t, 10, barWidth(40, visibleColumns(40))) // floor
+	uw := userColWidth(nil)
+	vis := visibleColumns(120, uw)
+	assert.GreaterOrEqual(t, barWidth(120, vis, uw), 10)
+	assert.Greater(t, barWidth(160, vis, uw), barWidth(120, vis, uw))
+	assert.Equal(t, 10, barWidth(40, visibleColumns(40, uw), uw)) // floor
 }
 
 func TestMultiView_RowContent(t *testing.T) {
@@ -328,9 +331,10 @@ func TestMultiView_RowWidthMatchesSpec(t *testing.T) {
 		t.Fatal("expected at least one row")
 	}
 	stripped := plain(rendered[0])
-	vis := visibleColumns(termWidth)
-	bw := barWidth(termWidth, vis)
-	fw := fixedWidth(vis)
+	uw := userColWidth(v.rows)
+	vis := visibleColumns(termWidth, uw)
+	bw := barWidth(termWidth, vis, uw)
+	fw := fixedWidth(vis, uw)
 	assert.Equal(t, fw+bw, len([]rune(stripped)), "rendered row visible width must equal fixedWidth+barWidth")
 }
 
@@ -355,10 +359,10 @@ func TestUserLabel(t *testing.T) {
 }
 
 // colOffset returns the visible-rune start offset of column col within a
-// rendered row, given the columns actually shown and the elastic bar width —
-// mirrors the layout renderRows itself builds, so a test can slice out a
-// single cell.
-func colOffset(col int, vis map[int]bool, bw int) int {
+// rendered row, given the columns actually shown, the elastic bar width, and
+// the dynamic User column width — mirrors the layout renderRows itself
+// builds, so a test can slice out a single cell.
+func colOffset(col int, vis map[int]bool, bw, uw int) int {
 	off := 0
 	for c := 0; c < colCount; c++ {
 		if !vis[c] {
@@ -368,8 +372,11 @@ func colOffset(col int, vis map[int]bool, bw int) int {
 			return off
 		}
 		w := multiCols[c].width
-		if c == colProgress {
+		switch c {
+		case colProgress:
 			w = bw
+		case colUser:
+			w = uw
 		}
 		off += w
 	}
@@ -396,9 +403,10 @@ func TestMultiView_UserColumn(t *testing.T) {
 	v := multiView{th: theme.New("formae"), rows: buildRows(cmds), width: 130, now: now}
 	rows := v.renderRows(10)
 	vis := v.visibleCols()
-	bw := barWidth(v.width, vis)
-	off := colOffset(colUser, vis, bw)
-	w := multiCols[colUser].width
+	uw := userColWidth(v.rows)
+	bw := barWidth(v.width, vis, uw)
+	off := colOffset(colUser, vis, bw, uw)
+	w := uw
 
 	cell := func(i int) string {
 		r := []rune(plain(rows[i]))
@@ -415,4 +423,84 @@ func TestMultiView_UserColumn(t *testing.T) {
 		"the rendered prefix must actually be a prefix of Subject, got %q", got)
 
 	assert.Equal(t, "", cell(2), "no attribution at all renders blank")
+}
+
+// TestUserColWidth pins the User column's per-render sizing rule: its
+// content width fits the longest attributed label among the current rows (or
+// the "User" header, whichever is larger), clamped to userColMaxWidth; its
+// render width (userColWidth) adds the same 1-column trailing gap every
+// other fixed column in this table bakes into its own width (e.g. colID
+// reserves 27+1 for a full ksuid), so content that exactly fills the column
+// never abuts the next one.
+func TestUserColWidth(t *testing.T) {
+	now := time.Now()
+
+	cases := []struct {
+		name        string
+		label       string
+		wantContent int
+	}{
+		{"all rows unattributed collapses to the header width", "", 4},
+		{"a name shorter than the cap sizes the column exactly", "JeroenSoeters", 13}, // 13 runes
+		{"a name past the cap is clamped", strings.Repeat("x", 30), userColMaxWidth},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := cmdFix("cmd-x", "apply", "Success", now, 0)
+			cmd.SubjectName = tc.label
+			rows := buildRows([]apimodel.Command{cmd})
+			assert.Equal(t, tc.wantContent, userColContentWidth(rows))
+			assert.Equal(t, tc.wantContent+1, userColWidth(rows),
+				"render width must be content plus the standard 1-column trailing gap")
+		})
+	}
+}
+
+// TestMultiView_UserColumnWidthMatrix exercises the same three cases at
+// render time: the rendered cell must actually reflect the computed width,
+// including its trailing gap — no truncation marker below the cap, the
+// marker present once content is clamped, and in every case a single gap
+// column separating the cell from whatever follows.
+func TestMultiView_UserColumnWidthMatrix(t *testing.T) {
+	now := time.Now()
+
+	cellAt := func(v multiView, rendered string) string {
+		vis := v.visibleCols()
+		uw := userColWidth(v.rows)
+		bw := barWidth(v.width, vis, uw)
+		off := colOffset(colUser, vis, bw, uw)
+		return string([]rune(rendered)[off : off+uw])
+	}
+
+	t.Run("all rows unattributed collapses to the header width, plus the gap", func(t *testing.T) {
+		cmds := []apimodel.Command{cmdFix("cmd-blank", "apply", "Success", now, 0)}
+		v := multiView{th: theme.New("formae"), rows: buildRows(cmds), width: 130, now: now}
+		assert.Equal(t, 5, userColWidth(v.rows), "header width (4) plus the 1-column gap")
+		out := plain(v.headerRow())
+		assert.Contains(t, out, "User")
+	})
+
+	t.Run("a name shorter than the cap fits exactly with no ellipsis, plus the gap", func(t *testing.T) {
+		name := "JeroenSoeters" // 13 runes
+		cmds := []apimodel.Command{cmdFix("cmd-short", "apply", "Success", now, 0)}
+		cmds[0].SubjectName = name
+		v := multiView{th: theme.New("formae"), rows: buildRows(cmds), width: 130, now: now}
+		assert.Equal(t, len([]rune(name))+1, userColWidth(v.rows))
+		rendered := plain(strings.Join(v.renderRows(10), "\n"))
+		assert.NotContains(t, rendered, "…", "a name that fits within the cap must never be truncated")
+		assert.Equal(t, name+" ", cellAt(v, rendered),
+			"the cell must be the full name followed by exactly one gap column, never abutting the next column")
+	})
+
+	t.Run("a name past the cap is truncated to the cap with the overflow marker, plus the gap", func(t *testing.T) {
+		name := strings.Repeat("x", 30)
+		cmds := []apimodel.Command{cmdFix("cmd-long", "apply", "Success", now, 0)}
+		cmds[0].SubjectName = name
+		v := multiView{th: theme.New("formae"), rows: buildRows(cmds), width: 130, now: now}
+		assert.Equal(t, userColMaxWidth+1, userColWidth(v.rows))
+		rendered := plain(strings.Join(v.renderRows(10), "\n"))
+		assert.NotContains(t, rendered, name, "the full 30-char name must not appear unclamped")
+		want := strings.Repeat("x", userColMaxWidth-1) + "…" + " "
+		assert.Equal(t, want, cellAt(v, rendered))
+	})
 }
