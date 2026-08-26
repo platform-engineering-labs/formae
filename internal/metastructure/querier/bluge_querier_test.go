@@ -154,6 +154,46 @@ func TestBlugeQuerier_statusQuery_UserUUIDPopulatesSubject(t *testing.T) {
 	assert.Nil(t, statusQuery.SubjectName)
 }
 
+func TestBlugeQuerier_statusQuery_UserKSUIDPopulatesSubject(t *testing.T) {
+	querier := &BlugeQuerier{}
+
+	queryString := "user:3INMh7vkgy73jZXUJtPiTL1a0Nc"
+	expectedStatusQuery := &datastore.StatusQuery{
+		Subject: &datastore.QueryItem[string]{
+			Item:       "3INMh7vkgy73jZXUJtPiTL1a0Nc",
+			Constraint: datastore.Optional,
+		},
+	}
+
+	statusQuery, err := querier.statusQuery(queryString, Caller{ClientID: "test-client-id"}, 0)
+	require.NoError(t, err)
+	assert.Equal(t, expectedStatusQuery, statusQuery)
+	assert.Nil(t, statusQuery.SubjectName)
+}
+
+// A 27-character value with an embedded hyphen. ksuid.Parse only checks
+// length and the 160-bit numeric bound, not the base62 alphabet: this
+// exact value parses without error when the alphabet is not checked first,
+// because the hyphen's out-of-range digit does not push the decoded value
+// over the KSUID bound at this position. It must still resolve as a
+// display name, not a spurious subject id.
+func TestBlugeQuerier_statusQuery_UserHyphenatedTwentySevenCharValuePopulatesSubjectName(t *testing.T) {
+	querier := &BlugeQuerier{}
+
+	queryString := "user:A-AAAAAAAAAAAAAAAAAAAAAAAAA"
+	expectedStatusQuery := &datastore.StatusQuery{
+		SubjectName: &datastore.QueryItem[string]{
+			Item:       "A-AAAAAAAAAAAAAAAAAAAAAAAAA",
+			Constraint: datastore.Optional,
+		},
+	}
+
+	statusQuery, err := querier.statusQuery(queryString, Caller{ClientID: "test-client-id"}, 0)
+	require.NoError(t, err)
+	assert.Equal(t, expectedStatusQuery, statusQuery)
+	assert.Nil(t, statusQuery.Subject)
+}
+
 func TestBlugeQuerier_statusQuery_UserNonUUIDPopulatesSubjectName(t *testing.T) {
 	querier := &BlugeQuerier{}
 

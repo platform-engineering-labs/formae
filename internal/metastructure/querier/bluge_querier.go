@@ -12,6 +12,7 @@ import (
 	"github.com/blugelabs/bluge"
 	querystr "github.com/blugelabs/query_string"
 	"github.com/google/uuid"
+	"github.com/segmentio/ksuid"
 
 	"github.com/platform-engineering-labs/formae/internal/datastore"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
@@ -153,7 +154,7 @@ func (b *BlugeQuerier) assignTermToStatusQuery(field string, value any, sq *data
 			sq.Subject = appendStringValue(sq.Subject, caller.Subject, constraint)
 			return nil
 		}
-		if uuid.Validate(userValue) == nil {
+		if isSubjectID(userValue) {
 			sq.Subject = appendStringValue(sq.Subject, userValue, constraint)
 		} else {
 			sq.SubjectName = appendStringValue(sq.SubjectName, userValue, constraint)
@@ -170,6 +171,48 @@ func (b *BlugeQuerier) assignTermToStatusQuery(field string, value any, sq *data
 		return apimodel.InvalidQueryError{Reason: fmt.Sprintf("unknown field for StatusQuery: '%s'", field)}
 	}
 	return nil
+}
+
+// isSubjectID reports whether value is shaped like an identity platform
+// subject id, which routes a `user:` term to StatusQuery.Subject rather than
+// SubjectName. Subject ids are KSUIDs today: a KSUID is recognized by
+// length (exactly 27), the base62 alphabet, and a successful ksuid.Parse
+// (which itself only checks length and the 160-bit numeric bound —
+// ksuid.Parse does not validate the alphabet, so the explicit alphabet
+// check here is required, not redundant. A non-alphanumeric byte maps to
+// an out-of-range base62 digit that ksuid.Parse only rejects if it pushes
+// the decoded 160-bit value over the KSUID bound; whether that happens
+// depends on the byte's position and the magnitude of the surrounding
+// characters, not on position alone, so a fixed "safe" position range does
+// not exist — the alphabet must be checked explicitly rather than relied
+// on to fail parsing). UUIDs are recognized too, since subject ids were
+// UUIDs before the KSUID migration and other deployments may still mint
+// them.
+//
+// This leaves one accepted ambiguity: an exactly-27-character, strictly
+// alphanumeric display name (e.g. a GitHub username with no hyphen, padded
+// to 27 chars) is indistinguishable from a KSUID and routes to Subject,
+// where it matches nothing. A shorter or hyphenated name is unaffected.
+func isSubjectID(value string) bool {
+	if uuid.Validate(value) == nil {
+		return true
+	}
+	if !isBase62(value) {
+		return false
+	}
+	_, err := ksuid.Parse(value)
+	return err == nil
+}
+
+// isBase62 reports whether every byte of s is in [0-9A-Za-z].
+func isBase62(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'A' || c > 'Z') && (c < 'a' || c > 'z') {
+			return false
+		}
+	}
+	return true
 }
 
 func queryItem[T any](value T, constraint datastore.QueryItemConstraint) *datastore.QueryItem[T] {
