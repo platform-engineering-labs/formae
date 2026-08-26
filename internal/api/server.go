@@ -29,6 +29,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/plugin_manager"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/querier"
 	"github.com/platform-engineering-labs/formae/internal/network"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -714,7 +715,9 @@ func (s *Server) ForceReap(c echo.Context) error {
 
 // getCommandStatus is a helper to retrieve command status and handle common error/status logic
 func (s *Server) getCommandStatus(c echo.Context, clientID, query string, n int, scope apimodel.CommandScope) error {
-	result, err := s.metastructure.ListFormaCommandStatus(query, clientID, n, scope)
+	subject, _ := subjectFromContext(c)
+	caller := querier.Caller{ClientID: clientID, Subject: subject}
+	result, err := s.metastructure.ListFormaCommandStatus(query, caller, n, scope)
 	if err != nil {
 		return mapError(c, err)
 	}
@@ -893,7 +896,9 @@ func (s *Server) CancelCommands(c echo.Context) error {
 	query := c.QueryParam("query")
 	force := c.QueryParam("force") == "true"
 
-	result, err := s.metastructure.CancelCommandsByQuery(query, force, clientID)
+	subject, _ := subjectFromContext(c)
+	caller := querier.Caller{ClientID: clientID, Subject: subject}
+	result, err := s.metastructure.CancelCommandsByQuery(query, force, caller)
 	if err != nil {
 		return mapError(c, err)
 	}

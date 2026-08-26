@@ -688,6 +688,8 @@ func (d DatastorePostgres) QueryFormaCommands(query *datastore.StatusQuery) ([]*
 	// Stack filter uses the normalized resource_updates table
 	subqueryStr = extendPostgresQueryString(subqueryStr, query.Stack, " AND EXISTS (SELECT 1 FROM resource_updates ru WHERE ru.command_id = forma_commands.command_id AND ru.stack_label %s $%d)", &args)
 	subqueryStr = extendPostgresQueryString(subqueryStr, query.Status, " AND LOWER(state) %s LOWER($%d)", &args)
+	subqueryStr = extendPostgresQueryString(subqueryStr, query.Subject, " AND subject %s $%d", &args)
+	subqueryStr = extendPostgresQueryString(subqueryStr, query.SubjectName, " AND subject_name %s $%d", &args)
 
 	subqueryStr += " ORDER BY timestamp DESC"
 	if query.N > 0 {

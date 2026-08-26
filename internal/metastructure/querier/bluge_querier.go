@@ -11,6 +11,8 @@ import (
 
 	"github.com/blugelabs/bluge"
 	querystr "github.com/blugelabs/query_string"
+	"github.com/google/uuid"
+	"github.com/segmentio/ksuid"
 
 	"github.com/platform-engineering-labs/formae/internal/datastore"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
@@ -27,25 +29,39 @@ func NewBlugeQuerier(datastore datastore.Datastore) *BlugeQuerier {
 	}
 }
 
+// Caller identifies who asked a query to be run: the client that issued the
+// request (from the Client-ID header) and, when an auth plugin verified one,
+// the authenticated subject from the request's token. `client:me` resolves
+// against ClientID; `user:me` resolves against Subject. An empty Subject
+// means the request carried no authenticated identity (no auth plugin
+// configured, or classic mode) — `user:me` must refuse in that case rather
+// than silently matching nothing, since a query that quietly returns zero
+// rows reads as "you have no matching commands," not "you asked for an
+// identity that was never established."
+type Caller struct {
+	ClientID string
+	Subject  string
+}
+
 // BuildStatusQuery parses queryString into a *datastore.StatusQuery without
 // executing it, so its caller (ListFormaCommandStatus) can add filters of its
 // own — restricting Source to user-initiated commands — before running the
 // query. An empty queryString returns an unconstrained query: every command
 // the caller's own filters allow, newest first, bounded by n.
-func (b *BlugeQuerier) BuildStatusQuery(queryString string, clientID string, n int) (*datastore.StatusQuery, error) {
+func (b *BlugeQuerier) BuildStatusQuery(queryString string, caller Caller, n int) (*datastore.StatusQuery, error) {
 	if queryString == "" {
 		return &datastore.StatusQuery{N: n}, nil
 	}
 
-	return b.statusQuery(queryString, clientID, n)
+	return b.statusQuery(queryString, caller, n)
 }
 
-func (b *BlugeQuerier) statusQuery(queryString string, clientID string, n int) (*datastore.StatusQuery, error) {
+func (b *BlugeQuerier) statusQuery(queryString string, caller Caller, n int) (*datastore.StatusQuery, error) {
 	q, err := querystr.ParseQueryString(queryString, querystr.QueryStringOptions{})
 	if err != nil {
 		return nil, apimodel.InvalidQueryError{Reason: err.Error()}
 	}
-	statusQuery, err := b.translateToStatusQuery(q, clientID)
+	statusQuery, err := b.translateToStatusQuery(q, caller)
 	if err != nil {
 		return nil, apimodel.InvalidQueryError{Reason: err.Error()}
 	}
@@ -54,9 +70,9 @@ func (b *BlugeQuerier) statusQuery(queryString string, clientID string, n int) (
 	return statusQuery, nil
 }
 
-func (b *BlugeQuerier) translateToStatusQuery(blugeQuery bluge.Query, clientID string) (*datastore.StatusQuery, error) {
+func (b *BlugeQuerier) translateToStatusQuery(blugeQuery bluge.Query, caller Caller) (*datastore.StatusQuery, error) {
 	statusQuery := &datastore.StatusQuery{}
-	err := b.processStatusQueryNode(blugeQuery, statusQuery, clientID, datastore.Required)
+	err := b.processStatusQueryNode(blugeQuery, statusQuery, caller, datastore.Required)
 	if err != nil {
 		return nil, err
 	}
@@ -64,33 +80,33 @@ func (b *BlugeQuerier) translateToStatusQuery(blugeQuery bluge.Query, clientID s
 	return statusQuery, nil
 }
 
-func (b *BlugeQuerier) processStatusQueryNode(q bluge.Query, sq *datastore.StatusQuery, clientID string, constraint datastore.QueryItemConstraint) error {
+func (b *BlugeQuerier) processStatusQueryNode(q bluge.Query, sq *datastore.StatusQuery, caller Caller, constraint datastore.QueryItemConstraint) error {
 	switch v := q.(type) {
 	case *bluge.BooleanQuery:
 		for _, mustQuery := range v.Musts() {
-			if err := b.processStatusQueryNode(mustQuery, sq, clientID, datastore.Required); err != nil {
+			if err := b.processStatusQueryNode(mustQuery, sq, caller, datastore.Required); err != nil {
 				return err
 			}
 		}
 		for _, shouldQuery := range v.Shoulds() {
-			if err := b.processStatusQueryNode(shouldQuery, sq, clientID, datastore.Optional); err != nil {
+			if err := b.processStatusQueryNode(shouldQuery, sq, caller, datastore.Optional); err != nil {
 				return err
 			}
 		}
 		for _, mustNotQuery := range v.MustNots() {
-			if err := b.processStatusQueryNode(mustNotQuery, sq, clientID, datastore.Excluded); err != nil {
+			if err := b.processStatusQueryNode(mustNotQuery, sq, caller, datastore.Excluded); err != nil {
 				return err
 			}
 		}
 		return nil
 	case *bluge.MatchQuery:
-		return b.assignTermToStatusQuery(v.Field(), v.Match(), sq, clientID, constraint)
+		return b.assignTermToStatusQuery(v.Field(), v.Match(), sq, caller, constraint)
 	case *bluge.WildcardQuery:
 		field, value, err := unwrapWildcard(v)
 		if err != nil {
 			return err
 		}
-		return b.assignTermToStatusQuery(field, value, sq, clientID, constraint)
+		return b.assignTermToStatusQuery(field, value, sq, caller, constraint)
 	default:
 		return apimodel.InvalidQueryError{Reason: fmt.Sprintf("unsupported query type: %T", q)}
 	}
@@ -116,7 +132,7 @@ func unwrapWildcard(w *bluge.WildcardQuery) (string, string, error) {
 	return w.Field(), value, nil
 }
 
-func (b *BlugeQuerier) assignTermToStatusQuery(field string, value any, sq *datastore.StatusQuery, clientID string, constraint datastore.QueryItemConstraint) error {
+func (b *BlugeQuerier) assignTermToStatusQuery(field string, value any, sq *datastore.StatusQuery, caller Caller, constraint datastore.QueryItemConstraint) error {
 	if field == "" {
 		return apimodel.InvalidQueryError{Reason: fmt.Sprintf("query term '%s' must have an explicit field", value)}
 	}
@@ -126,9 +142,23 @@ func (b *BlugeQuerier) assignTermToStatusQuery(field string, value any, sq *data
 		sq.CommandID = appendStringValue(sq.CommandID, value.(string), constraint)
 	case "client":
 		if value == "me" {
-			value = clientID
+			value = caller.ClientID
 		}
 		sq.ClientID = appendStringValue(sq.ClientID, value.(string), constraint)
+	case "user":
+		userValue := value.(string)
+		if userValue == "me" {
+			if caller.Subject == "" {
+				return apimodel.InvalidQueryError{Reason: "'user:me' requires an authenticated identity, but this request has no authenticated identity"}
+			}
+			sq.Subject = appendStringValue(sq.Subject, caller.Subject, constraint)
+			return nil
+		}
+		if isSubjectID(userValue) {
+			sq.Subject = appendStringValue(sq.Subject, userValue, constraint)
+		} else {
+			sq.SubjectName = appendStringValue(sq.SubjectName, userValue, constraint)
+		}
 	case "command":
 		sq.Command = appendStringValue(sq.Command, value.(string), constraint)
 	case "status":
@@ -141,6 +171,48 @@ func (b *BlugeQuerier) assignTermToStatusQuery(field string, value any, sq *data
 		return apimodel.InvalidQueryError{Reason: fmt.Sprintf("unknown field for StatusQuery: '%s'", field)}
 	}
 	return nil
+}
+
+// isSubjectID reports whether value is shaped like an identity platform
+// subject id, which routes a `user:` term to StatusQuery.Subject rather than
+// SubjectName. Subject ids are KSUIDs today: a KSUID is recognized by
+// length (exactly 27), the base62 alphabet, and a successful ksuid.Parse
+// (which itself only checks length and the 160-bit numeric bound —
+// ksuid.Parse does not validate the alphabet, so the explicit alphabet
+// check here is required, not redundant. A non-alphanumeric byte maps to
+// an out-of-range base62 digit that ksuid.Parse only rejects if it pushes
+// the decoded 160-bit value over the KSUID bound; whether that happens
+// depends on the byte's position and the magnitude of the surrounding
+// characters, not on position alone, so a fixed "safe" position range does
+// not exist — the alphabet must be checked explicitly rather than relied
+// on to fail parsing). UUIDs are recognized too, since subject ids were
+// UUIDs before the KSUID migration and other deployments may still mint
+// them.
+//
+// This leaves one accepted ambiguity: an exactly-27-character, strictly
+// alphanumeric display name (e.g. a GitHub username with no hyphen, padded
+// to 27 chars) is indistinguishable from a KSUID and routes to Subject,
+// where it matches nothing. A shorter or hyphenated name is unaffected.
+func isSubjectID(value string) bool {
+	if uuid.Validate(value) == nil {
+		return true
+	}
+	if !isBase62(value) {
+		return false
+	}
+	_, err := ksuid.Parse(value)
+	return err == nil
+}
+
+// isBase62 reports whether every byte of s is in [0-9A-Za-z].
+func isBase62(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'A' || c > 'Z') && (c < 'a' || c > 'z') {
+			return false
+		}
+	}
+	return true
 }
 
 func queryItem[T any](value T, constraint datastore.QueryItemConstraint) *datastore.QueryItem[T] {
