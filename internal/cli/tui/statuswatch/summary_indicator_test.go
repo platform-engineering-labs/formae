@@ -75,8 +75,8 @@ func TestView_SummaryIndicator_SeverityTheme(t *testing.T) {
 		richBlue      = "38;2;96;165;250"  // rich PrimaryAccent.Dark #60A5FA
 	)
 
-	// Two+ commands keep the summary (multi) view; a single one auto-drills into
-	// detail, where the outcome indicator does not apply.
+	// Two commands exercise the mixed-outcome case; the summary indicator only
+	// applies to the multi (list) view.
 	failed := indicatorLine(renderSummaryView(t, theme.New("rich"),
 		[]apimodel.Command{cmdFix("c1", "apply", "Success", now, 0), cmdFix("c2", "apply", "Failed", now, 1)}))
 	assert.Contains(t, failed, richErrorRed, "rich summary indicator must be red when a command failed")
