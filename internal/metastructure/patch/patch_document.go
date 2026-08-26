@@ -82,15 +82,25 @@ func generatePatch(document []byte, patch []byte, storedEnvelopes []byte, desire
 		return nil, nil, fmt.Errorf("unable to generate patch document for apply mode: %s", mode)
 	}
 
-	// Strip fields that are both writeOnly AND createOnly from the desired
-	// state (patch) before comparison. writeOnly fields are never returned by
-	// the provider's Read, so they're always absent from the document. If the
-	// field is also createOnly, the "add" op that jsonpatch generates triggers
-	// a resource replacement even though nothing actually changed. Stripping
-	// them from the patch prevents phantom replacements on re-apply.
+	// Strip a field that is both writeOnly AND createOnly from the desired
+	// state (patch) before comparison, but only when the stored document holds
+	// no value for it. The provider's Read never returns writeOnly fields, so a
+	// document sourced from a Read alone (import, discovery) lacks them; the
+	// "add" op jsonpatch would generate for the declared value lands on a
+	// createOnly path and triggers a resource replacement even though nothing
+	// changed. When the document does hold a last-applied value, the ordinary
+	// comparison is the truth: an unchanged value converges to no op, and a
+	// changed value is a genuine createOnly change that must plan a
+	// replacement rather than be dropped.
 	writeOnlyCreateOnly := intersectFields(schema.WriteOnly(), schema.CreateOnly())
 	if len(writeOnlyCreateOnly) > 0 {
-		flattenedPatch, err = removeWriteOnlyFields(flattenedPatch, writeOnlyCreateOnly)
+		var withoutBaseline []string
+		for _, field := range writeOnlyCreateOnly {
+			if !gjson.GetBytes(flattenedDocument, field).Exists() {
+				withoutBaseline = append(withoutBaseline, field)
+			}
+		}
+		flattenedPatch, err = removeWriteOnlyFields(flattenedPatch, withoutBaseline)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to strip writeOnly+createOnly fields from desired state: %w", err)
 		}
