@@ -305,6 +305,60 @@ func TestGCPRegistrationFailureNamesTheStandingTrust(t *testing.T) {
 	_ = out
 }
 
+// TestGCPAllowLoginReachesTheSignIn is the case that was unreachable before:
+// the agent runs on the operator's machine, consumes machine output, and can
+// still have a browser completed by the person sitting there. Without an
+// explicit opt-in the render format was read as "nobody is present", which
+// made the sign-in impossible from the interface most people use.
+func TestGCPAllowLoginReachesTheSignIn(t *testing.T) {
+	logins := 0
+	stubCredentialState(t, credentialsMissing, &logins)
+	installGCPProvisioner(t, &stubGCPProvisioner{result: &provxgcp.Result{
+		ProviderName: testProviderName, ProjectNumber: testProjectNumber,
+	}}, nil)
+	seedGCPRun(t)
+
+	out, err := runConnect(t, "gcp", "--project", testProject, "--no-input", "--allow-login",
+		"--output-consumer", "machine", "--output-schema", "json")
+
+	require.NoError(t, err, "out: %s", out)
+	assert.Equal(t, 1, logins, "--allow-login did not reach the sign-in")
+	got := decodeOut(t, out)
+	assert.Equal(t, testProviderName, got["workloadIdentityProvider"])
+}
+
+// The default is unchanged: without the opt-in, machine output still refuses
+// and names the command, so a CI script is not handed a browser.
+func TestGCPWithoutAllowLoginMachineModeStillRefuses(t *testing.T) {
+	logins := 0
+	stubCredentialState(t, credentialsMissing, &logins)
+	seedGCPRun(t)
+
+	out, err := runConnect(t, "gcp", "--project", testProject,
+		"--output-consumer", "machine", "--output-schema", "json")
+
+	require.Error(t, err)
+	assert.Zero(t, logins)
+	assert.Equal(t, "credentials_required", decodeOut(t, out)["code"])
+}
+
+// --allow-login governs the browser, not this command's own prompts, so a
+// usable credential still means no sign-in.
+func TestGCPAllowLoginDoesNotSignInWhenCredentialsWork(t *testing.T) {
+	logins := 0
+	stubCredentialState(t, credentialsUsable, &logins)
+	installGCPProvisioner(t, &stubGCPProvisioner{result: &provxgcp.Result{
+		ProviderName: testProviderName, ProjectNumber: testProjectNumber,
+	}}, nil)
+	seedGCPRun(t)
+
+	_, err := runConnect(t, "gcp", "--project", testProject, "--no-input", "--allow-login",
+		"--output-consumer", "machine", "--output-schema", "json")
+
+	require.NoError(t, err)
+	assert.Zero(t, logins, "a usable credential was replaced by a sign-in")
+}
+
 func TestGCPProjectIsRequired(t *testing.T) {
 	_, err := decideGCPMode(gcpOptions{})
 	require.Error(t, err, "a run with no project must be refused rather than inferring one")

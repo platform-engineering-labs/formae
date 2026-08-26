@@ -22,6 +22,12 @@ type gcpOptions struct {
 	Project                  string
 	WorkloadIdentityProvider string
 	NoInput                  bool
+	// AllowLogin lets a machine-output caller opt into the interactive
+	// sign-in. It exists because "machine output" conflates two different
+	// consumers: a script that built one fixed command line and cannot answer
+	// a browser, and an agent running on the operator's own machine with the
+	// operator sitting in front of it. Only the first should be refused.
+	AllowLogin bool
 
 	ConfigFlag  string
 	ProfileFlag string
@@ -63,7 +69,10 @@ func gcpCmd() *cobra.Command {
 	c.Flags().String("project", "", "GCP project id to connect (always explicit, never inferred from ambient credentials)")
 	c.Flags().String("workload-identity-provider", "",
 		"Trust already exists (federation you provisioned yourself): validate the coordinate and register only")
-	c.Flags().Bool("no-input", false, "Disable prompts; requires --project, and will not sign in for you")
+	c.Flags().Bool("no-input", false,
+		"Disable prompts this command renders; on its own it also declines the Google sign-in (see --allow-login)")
+	c.Flags().Bool("allow-login", false,
+		"Permit the Google sign-in to open a browser even with machine output; for a caller running beside the operator")
 	clicmd.AddOutputFlags(c)
 	c.SetUsageTemplate(clicmd.SimpleCmdUsageTemplate)
 	return c
@@ -78,6 +87,7 @@ func readGCPOptions(cc *cobra.Command) (gcpOptions, error) {
 	opts.Project, _ = cc.Flags().GetString("project")
 	opts.WorkloadIdentityProvider, _ = cc.Flags().GetString("workload-identity-provider")
 	opts.NoInput, _ = cc.Flags().GetBool("no-input")
+	opts.AllowLogin, _ = cc.Flags().GetBool("allow-login")
 	return opts, nil
 }
 
@@ -128,10 +138,32 @@ func runGCPMode(cc *cobra.Command, mode gcpMode, opts gcpOptions, consumer print
 }
 
 // gcpMayPrompt reports whether this run may open a browser on the operator's
-// behalf. Machine output and --no-input both mean no: a caller that built one
-// fixed command line did not consent to an interactive sign-in.
+// behalf.
+//
+// --allow-login is the explicit answer and wins outright, including under
+// machine output. Without it the heuristic stands: a TTY, no --no-input, and a
+// human consumer.
+//
+// The two are separate because "machine output" says how results are rendered,
+// not whether a person is present. An agent running on the operator's own
+// machine consumes machine output and still has someone there to complete a
+// browser sign-in; a CI script does not. Reading the render format as an
+// answer to that question made the sign-in unreachable from the interface
+// most people use, which is the opposite of doing it for them.
+//
+// --allow-login also overrides --no-input, because the two govern different
+// things: --no-input means this command renders no prompts of its own and
+// reads nothing from stdin, while the sign-in is a browser gcloud opens. A
+// caller can coherently want both, and the agent does - it cannot answer a
+// terminal form but the person in front of it can click a consent screen.
 func gcpMayPrompt(opts gcpOptions, consumer printer.Consumer) bool {
-	return !opts.NoInput && consumer != printer.ConsumerMachine && isInteractive()
+	if opts.AllowLogin {
+		return true
+	}
+	if opts.NoInput {
+		return false
+	}
+	return consumer != printer.ConsumerMachine && isInteractive()
 }
 
 // runGCPRegisterOnly validates the supplied coordinate and registers it.
