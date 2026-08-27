@@ -55,6 +55,19 @@ const (
 	ResourceUpdateStateRejected   = types.ResourceUpdateStateRejected
 )
 
+// LateCreateOnlyChangeError reports that resolving a reference at execution
+// time produced a diff on createOnly fields that plan-time classification did
+// not declare. The update must fail rather than silently drop the diff or
+// escalate to an undeclared replacement.
+type LateCreateOnlyChangeError struct {
+	ResourceLabel string
+	Fields        []string
+}
+
+func (e LateCreateOnlyChangeError) Error() string {
+	return fmt.Sprintf("resolving references at execution time changed createOnly fields %v on %s; a replacement was not planned, refusing to proceed", e.Fields, e.ResourceLabel)
+}
+
 // ResourceUpdate represents an update to a resource in the system. A ResourceUpdate is a logical operation
 // that may involve multiple plugin operations. For example a replace operation will involve two plugin
 // operations: a delete and a create.
@@ -115,10 +128,15 @@ func (ru *ResourceUpdate) ListResolvables() []pkgmodel.FormaeURI {
 // plugin call sees a diff that matches reality. ResolveValue is the only
 // apply-time mutator of DesiredState.Properties, so it owns the regen.
 //
+// mode is the command's configured apply mode (reconcile vs patch), the
+// same mode planning used to derive the original patch — regeneration must
+// use identical semantics or a reconcile-planned removal can silently
+// vanish when a resolvable resolves at execution time.
+//
 // Only Updates need a fresh patch — Create/Delete/Replace carry full
 // desired/prior state to the provider rather than a diff. Patch regen is
 // also a no-op when no Schema is available (sync/discovery paths).
-func (ru *ResourceUpdate) ResolveValue(formaeUri pkgmodel.FormaeURI, value string) error {
+func (ru *ResourceUpdate) ResolveValue(formaeUri pkgmodel.FormaeURI, value string, mode pkgmodel.FormaApplyMode) error {
 	properties, err := resolver.ResolvePropertyReferences(formaeUri, ru.DesiredState.Properties, value)
 	if err != nil {
 		slog.Error("Failed to resolve dynamic properties", "error", err)
@@ -127,9 +145,16 @@ func (ru *ResourceUpdate) ResolveValue(formaeUri pkgmodel.FormaeURI, value strin
 	ru.DesiredState.Properties = properties
 
 	if ru.Operation == OperationUpdate && len(ru.DesiredState.Schema.Fields) > 0 {
-		patchDoc, derr := ru.regeneratePatchDocument()
+		patchDoc, createOnlyPatch, derr := ru.regeneratePatchDocument(mode)
 		if derr != nil {
 			return fmt.Errorf("failed to re-derive patch document after resolving %s: %w", formaeUri, derr)
+		}
+		if len(createOnlyPatch) > 0 {
+			fields, ferr := createOnlyPatchFields(createOnlyPatch)
+			if ferr != nil {
+				return fmt.Errorf("failed to inspect createOnly patch after resolving %s: %w", formaeUri, ferr)
+			}
+			return LateCreateOnlyChangeError{ResourceLabel: ru.DesiredState.Label, Fields: fields}
 		}
 		ru.DesiredState.PatchDocument = patchDoc
 	}
@@ -148,11 +173,17 @@ func (ru *ResourceUpdate) ResolveValue(formaeUri pkgmodel.FormaeURI, value strin
 // patch op, and resource_updater.go's update() forwards PatchDocument to the
 // plugin unconverted, so any hash material in it would reach the plugin
 // unguarded.
-func (ru *ResourceUpdate) regeneratePatchDocument() (json.RawMessage, error) {
+//
+// mode must match the apply mode the command was planned under (reconcile ->
+// ExactMatch, patch -> EnsureExists) — see patch.GeneratePatch — so a
+// reconcile-planned removal is not silently dropped by regenerating under
+// patch semantics. Returns (patch, createOnlyPatch, err); the caller decides
+// what to do with a createOnly diff surfaced this late.
+func (ru *ResourceUpdate) regeneratePatchDocument(mode pkgmodel.FormaApplyMode) (json.RawMessage, json.RawMessage, error) {
 	existingForPatch, desiredForPatch, err := SuppressUnchangedOpaqueValues(
 		ru.PriorState.Properties, ru.DesiredState.Properties, ru.DesiredState.Schema, ru.DesiredState.Type)
 	if err != nil {
-		return nil, fmt.Errorf("failed to suppress unchanged opaque values: %w", err)
+		return nil, nil, fmt.Errorf("failed to suppress unchanged opaque values: %w", err)
 	}
 
 	// Read-safe/comparison conversion: existingPluginProps is only used as the
@@ -162,7 +193,7 @@ func (ru *ResourceUpdate) regeneratePatchDocument() (json.RawMessage, error) {
 	// generation.
 	existingPluginProps, err := resolver.ConvertExistingStateForComparison(existingForPatch)
 	if err != nil {
-		return nil, fmt.Errorf("failed to convert existing properties to plugin format: %w", err)
+		return nil, nil, fmt.Errorf("failed to convert existing properties to plugin format: %w", err)
 	}
 
 	// Guarded conversion: desiredForPatch is the "after" side and, once an
@@ -171,23 +202,51 @@ func (ru *ResourceUpdate) regeneratePatchDocument() (json.RawMessage, error) {
 	// is broken, and that must fail loudly rather than silently reach a plugin.
 	newPluginProps, err := resolver.ConvertToPluginFormat(desiredForPatch)
 	if err != nil {
-		return nil, fmt.Errorf("failed to convert desired properties to plugin format: %w", err)
+		return nil, nil, fmt.Errorf("failed to convert desired properties to plugin format: %w", err)
 	}
 
-	patchDoc, _, err := patch.GeneratePatch(
+	patchDoc, createOnlyPatch, err := patch.GeneratePatch(
 		existingPluginProps,
 		newPluginProps,
 		existingForPatch,
 		desiredForPatch,
 		resolver.NewResolvableProperties(),
 		ru.DesiredState.Schema,
-		pkgmodel.FormaApplyModePatch,
+		mode,
 	)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return patchDoc, nil
+	return patchDoc, createOnlyPatch, nil
+}
+
+// createOnlyPatchFields extracts the distinct top-level field names touched
+// by a createOnly patch document, in first-seen order, so
+// LateCreateOnlyChangeError can name what changed without exposing the raw
+// JSON-patch op shape to callers.
+func createOnlyPatchFields(createOnlyPatch json.RawMessage) ([]string, error) {
+	var ops []struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(createOnlyPatch, &ops); err != nil {
+		return nil, fmt.Errorf("failed to parse createOnly patch ops: %w", err)
+	}
+
+	seen := make(map[string]struct{}, len(ops))
+	var fields []string
+	for _, op := range ops {
+		field, _, _ := strings.Cut(strings.TrimPrefix(op.Path, "/"), "/")
+		if field == "" {
+			continue
+		}
+		if _, ok := seen[field]; ok {
+			continue
+		}
+		seen[field] = struct{}{}
+		fields = append(fields, field)
+	}
+	return fields, nil
 }
 
 func (ru *ResourceUpdate) RequiresDelete() bool {

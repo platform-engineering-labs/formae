@@ -382,7 +382,7 @@ func prepareReconcile(ds datastore.Datastore, stackLabel string, clientID string
 	if err != nil {
 		return nil, fmt.Errorf("failed to create changeset: %w", err)
 	}
-	cs, err := changeset.NewChangeset(resourceUpdates, synth, reconcileCommand.ID, pkgmodel.CommandApply)
+	cs, err := changeset.NewChangeset(resourceUpdates, synth, reconcileCommand.ID, pkgmodel.CommandApply, reconcileCommand.Config.Mode)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create changeset: %w", err)
 	}

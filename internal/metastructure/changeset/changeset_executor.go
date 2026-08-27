@@ -320,7 +320,7 @@ func resume(from gen.PID, state gen.Atom, data ChangesetData, message Resume, pr
 			finished = false
 		}
 		updates := data.changeset.GetExecutableUpdates(namespace, n)
-		err = startUpdates(updates, data.changeset.CommandID, proc)
+		err = startUpdates(updates, data.changeset.CommandID, data.changeset.Mode, proc)
 		if err != nil {
 			proc.Log().Error("Failed to start executable updates for changeset commandID=%s: %v", data.changeset.CommandID, err)
 			return StateFinishedWithError, data, nil, nil
@@ -634,11 +634,11 @@ func handleUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, even
 	return resume(from, state, data, Resume{}, proc)
 }
 
-func startUpdates(updates []Update, commandID string, proc gen.Process) error {
+func startUpdates(updates []Update, commandID string, mode pkgmodel.FormaApplyMode, proc gen.Process) error {
 	for _, update := range updates {
 		switch u := update.(type) {
 		case *resource_update.ResourceUpdate:
-			if err := startResourceUpdate(u, commandID, proc); err != nil {
+			if err := startResourceUpdate(u, commandID, mode, proc); err != nil {
 				return err
 			}
 		case *target_update.TargetUpdate:
@@ -653,7 +653,7 @@ func startUpdates(updates []Update, commandID string, proc gen.Process) error {
 	return nil
 }
 
-func startResourceUpdate(ru *resource_update.ResourceUpdate, commandID string, proc gen.Process) error {
+func startResourceUpdate(ru *resource_update.ResourceUpdate, commandID string, mode pkgmodel.FormaApplyMode, proc gen.Process) error {
 	proc.Log().Debug("Starting resource updater uri=%v operation=%s", ru.URI(), ru.Operation)
 
 	// Sync exclusion is handled in bulk by registerAllResourcesWithSynchronizer
@@ -678,6 +678,7 @@ func startResourceUpdate(ru *resource_update.ResourceUpdate, commandID string, p
 		resource_update.StartResourceUpdate{
 			ResourceUpdate: *ru,
 			CommandID:      commandID,
+			Mode:           mode,
 		})
 	if err != nil {
 		proc.Log().Error("Failed to send start message to resource updater: %v", err)

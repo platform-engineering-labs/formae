@@ -40,8 +40,13 @@ type Update interface {
 }
 
 type Changeset struct {
-	CommandID      string
-	DAG            *ExecutionDAG
+	CommandID string
+	DAG       *ExecutionDAG
+	// Mode is the apply mode the owning command was planned under (reconcile
+	// vs patch). Execution-time patch regeneration (a resolvable resolving
+	// after planning) must derive its diff under this same mode, or a
+	// reconcile-planned removal can silently vanish under patch semantics.
+	Mode           pkgmodel.FormaApplyMode
 	trackedUpdates map[string]bool
 }
 
@@ -74,10 +79,12 @@ func NewChangeset(
 	targetUpdates []target_update.TargetUpdate,
 	commandID string,
 	command pkgmodel.Command,
+	mode pkgmodel.FormaApplyMode,
 ) (Changeset, error) {
 	changeset := Changeset{
 		CommandID:      commandID,
 		DAG:            NewExecutionDAG(),
+		Mode:           mode,
 		trackedUpdates: make(map[string]bool),
 	}
 

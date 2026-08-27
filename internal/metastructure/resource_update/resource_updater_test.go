@@ -92,7 +92,7 @@ func TestResolveValue_KeepsPatchDocumentInSync(t *testing.T) {
 		},
 	}
 
-	err := ru.ResolveValue(parentURI, "arn:aws:ecs:us-east-1:0:task-definition/test:2")
+	err := ru.ResolveValue(parentURI, "arn:aws:ecs:us-east-1:0:task-definition/test:2", pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	require.NotEmpty(t, ru.DesiredState.PatchDocument, "ResolveValue must populate PatchDocument when DesiredState changes")
 	patchStr := string(ru.DesiredState.PatchDocument)
@@ -132,7 +132,7 @@ func TestResolveValue_NoChangeProducesEmptyPatch(t *testing.T) {
 			Schema:     schema,
 		},
 	}
-	err := ru.ResolveValue(parentURI, "v1")
+	err := ru.ResolveValue(parentURI, "v1", pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	if len(ru.DesiredState.PatchDocument) > 0 {
 		assert.Equal(t, "[]", string(ru.DesiredState.PatchDocument),
@@ -164,7 +164,7 @@ func TestResolveValue_NonUpdateLeavesPatchDocumentUntouched(t *testing.T) {
 					PatchDocument: json.RawMessage(`["pre-existing-untouched"]`),
 				},
 			}
-			err := ru.ResolveValue(parentURI, "v2")
+			err := ru.ResolveValue(parentURI, "v2", pkgmodel.FormaApplyModeReconcile)
 			require.NoError(t, err)
 			assert.Equal(t, `["pre-existing-untouched"]`, string(ru.DesiredState.PatchDocument),
 				"non-Update operations must not re-derive PatchDocument")
@@ -221,7 +221,7 @@ func TestResolveValue_SuppressesUnchangedHashedOpaqueField(t *testing.T) {
 		},
 	}
 
-	err := ru.ResolveValue(parentURI, "v2")
+	err := ru.ResolveValue(parentURI, "v2", pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 
 	patchStr := string(ru.DesiredState.PatchDocument)

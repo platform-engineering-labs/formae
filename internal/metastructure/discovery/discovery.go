@@ -797,7 +797,7 @@ func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Ta
 		finalizeFailedSyncCommand(syncCommand, proc)
 		return "", fmt.Errorf("failed to build changeset: %w", err)
 	}
-	cs, err := changeset.NewChangeset(syncCommand.ResourceUpdates, synth, syncCommand.ID, pkgmodel.CommandSync)
+	cs, err := changeset.NewChangeset(syncCommand.ResourceUpdates, synth, syncCommand.ID, pkgmodel.CommandSync, syncCommand.Config.Mode)
 	if err != nil {
 		slog.Error("failed to build changeset for discovery sync command", "commandID", syncCommand.ID, "error", err)
 		finalizeFailedSyncCommand(syncCommand, proc)
