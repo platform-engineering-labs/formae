@@ -13,35 +13,76 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// ResolvableProperties is a map of KSUIDs to property names to values
+// AnswerKind classifies why a SourceAnswer's value may be trusted, or that it
+// carries none yet.
+type AnswerKind int
+
+const (
+	// AnswerDeferred: not derivable at plan time; execution-time resolution
+	// through RemainingResolvables answers it. Zero value on purpose: a
+	// missing or forgotten answer must read as the least-trusting kind, never
+	// the most.
+	AnswerDeferred AnswerKind = iota
+	// AnswerResolved: the value is derivable at plan time from effective
+	// desired state (a literal this command declares).
+	AnswerResolved
+	// AnswerStable: the persisted value is valid because nothing this
+	// command does moves the source property.
+	AnswerStable
+)
+
+// SourceAnswer is the resolver's answer for one property on one source
+// resource: whether, and why, a value is available at plan time.
+type SourceAnswer struct {
+	Kind   AnswerKind
+	Value  string // Resolved and Stable only
+	Opaque bool   // the source property is opaque; consumers of the seam decide what that means
+}
+
+// ResolvableProperties is a map of KSUIDs to property names to answers.
 // This can include resource.Properties and resource.ReadOnlyProperties
 type ResolvableProperties struct {
-	props map[string]map[string]string // ksuid -> property -> value
+	props map[string]map[string]SourceAnswer // ksuid -> property -> answer
 }
 
 func NewResolvableProperties() ResolvableProperties {
 	return ResolvableProperties{
-		props: make(map[string]map[string]string),
+		props: make(map[string]map[string]SourceAnswer),
 	}
 }
 
 func (p *ResolvableProperties) Add(ksuid, property, value string) {
+	p.AddAnswer(ksuid, property, SourceAnswer{Kind: AnswerStable, Value: value})
+}
+
+func (p *ResolvableProperties) AddAnswer(ksuid, property string, a SourceAnswer) {
 	if _, ok := p.props[ksuid]; !ok {
-		p.props[ksuid] = make(map[string]string)
+		p.props[ksuid] = make(map[string]SourceAnswer)
 	}
-	p.props[ksuid][property] = value
+	p.props[ksuid][property] = a
 }
 
 func (p *ResolvableProperties) Get(ksuid, property string) (string, bool) {
 	if resourceProps, ok := p.props[ksuid]; ok {
-		if value, ok := resourceProps[property]; ok {
-			return value, true
+		if answer, ok := resourceProps[property]; ok {
+			if answer.Kind == AnswerResolved || answer.Kind == AnswerStable {
+				return answer.Value, true
+			}
 		}
 	}
 	return "", false
 }
 
-func LoadResolvablePropertiesFromStacks(resource pkgmodel.Resource, allResources map[string][]*pkgmodel.Resource) (ResolvableProperties, error) {
+func (p *ResolvableProperties) Answer(ksuid, property string) (SourceAnswer, bool) {
+	if resourceProps, ok := p.props[ksuid]; ok {
+		if answer, ok := resourceProps[property]; ok {
+			return answer, true
+		}
+	}
+	return SourceAnswer{}, false
+}
+
+func LoadResolvablePropertiesFromStacks(resource pkgmodel.Resource, allResources map[string][]*pkgmodel.Resource, effective map[string]json.RawMessage) (ResolvableProperties, error) {
 	res := NewResolvableProperties()
 
 	resourcesByKsuid := make(map[string]*pkgmodel.Resource)
@@ -62,6 +103,20 @@ func LoadResolvablePropertiesFromStacks(resource pkgmodel.Resource, allResources
 		targetResource, exists := resourcesByKsuid[ksuid]
 		if !exists {
 			return res, fmt.Errorf("resource with KSUID %s not found", ksuid)
+		}
+
+		if effDoc, declared := effective[ksuid]; declared {
+			effVal := gjson.GetBytes(effDoc, propertyPath)
+			if effVal.Exists() && !isReferenceEnvelope(effVal) && !containsHashedValue(effVal) &&
+				!containsOpaqueVisibility(effVal) && !isSourcePropertyOpaque(targetResource, propertyPath) {
+				res.AddAnswer(ksuid, propertyPath, SourceAnswer{Kind: AnswerResolved, Value: ExtractPropertyValue(effVal)})
+				continue
+			}
+			// Reference envelopes, hashed shapes, and opaque sources — persisted,
+			// schema-declared, or only ever inline-marked in the desired document
+			// itself — fall through to the persisted-row path unchanged: envelopes
+			// keep the cached value, opaque and hashed sources keep today's
+			// deferral.
 		}
 
 		if value, ok := resolvableValueFrom(targetResource.ReadOnlyProperties, propertyPath); ok {
@@ -134,6 +189,31 @@ func containsHashedValue(value gjson.Result) bool {
 	found := false
 	value.ForEach(func(_, child gjson.Result) bool {
 		if containsHashedValue(child) {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+// containsOpaqueVisibility reports whether value is, or contains anywhere
+// within it, an inline $visibility: Opaque marker. This is the desired
+// document's own spelling of opacity — a plain {"$value": ..., "$visibility":
+// "Opaque"} envelope the command submits before that property has ever been
+// persisted or hashed, so neither a persisted shape check nor the
+// schema/known-opaque table sees it. The structural sibling of
+// containsHashedValue: same recursive shape, different marker.
+func containsOpaqueVisibility(value gjson.Result) bool {
+	if !value.IsObject() && !value.IsArray() {
+		return false
+	}
+	if value.Get("$visibility").String() == pkgmodel.VisibilityOpaque {
+		return true
+	}
+	found := false
+	value.ForEach(func(_, child gjson.Result) bool {
+		if containsOpaqueVisibility(child) {
 			found = true
 			return false
 		}

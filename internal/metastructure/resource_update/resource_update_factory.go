@@ -19,6 +19,7 @@ import (
 
 func NewResourceUpdateForExisting(
 	resolvableProperties resolver.ResolvableProperties,
+	effectiveDesired json.RawMessage,
 	existingResource pkgmodel.Resource,
 	newResource pkgmodel.Resource,
 	existingTarget pkgmodel.Target,
@@ -47,7 +48,15 @@ func NewResourceUpdateForExisting(
 	// the properties might be identical
 	stackChanged := existingResource.Stack != newResource.Stack
 
-	hasChanges, filteredProps, err := EnforceSetOnceAndCompareResourceForUpdate(&existingResource, &newResource, newResource.Schema)
+	var err error
+	filteredProps := effectiveDesired
+	if filteredProps == nil {
+		filteredProps, err = filterSetOnceProps(existingResource.Properties, newResource.Properties, newResource.Label)
+		if err != nil {
+			return nil, fmt.Errorf("failed to compute effective desired properties: %w", err)
+		}
+	}
+	hasChanges, err := CompareFilteredResourceForUpdate(&existingResource, &newResource, newResource.Schema, filteredProps)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compare resources: %w", err)
 	}

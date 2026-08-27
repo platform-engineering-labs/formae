@@ -1119,7 +1119,7 @@ func TestLoadResolvablePropertiesFromStacks(t *testing.T) {
 			Resources: []pkgmodel.Resource{vpc, subnet},
 		}
 
-		resolvables, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma))
+		resolvables, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma), nil)
 
 		require.NoError(t, err)
 		value, found := resolvables.Get(vpcKsuid, "VpcId")
@@ -1164,7 +1164,7 @@ func TestLoadResolvablePropertiesFromStacks(t *testing.T) {
 			Resources: []pkgmodel.Resource{compartment, vcn, subnet},
 		}
 
-		resolvables, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma))
+		resolvables, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma), nil)
 
 		require.NoError(t, err)
 		value, found := resolvables.Get(vcnKsuid, "CompartmentId")
@@ -1196,7 +1196,7 @@ func TestLoadResolvablePropertiesFromStacks(t *testing.T) {
 			Resources: []pkgmodel.Resource{vpc, subnet},
 		}
 
-		resolvables, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma))
+		resolvables, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma), nil)
 
 		require.NoError(t, err)
 		value, found := resolvables.Get(vpcKsuid, "CidrBlock")
@@ -1222,7 +1222,7 @@ func TestLoadResolvablePropertiesFromStacks(t *testing.T) {
 			Resources: []pkgmodel.Resource{subnet},
 		}
 
-		_, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma))
+		_, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma), nil)
 
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "not found")
@@ -1252,7 +1252,7 @@ func TestLoadResolvablePropertiesFromStacks(t *testing.T) {
 			Resources: []pkgmodel.Resource{vpc, subnet},
 		}
 
-		props, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma))
+		props, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma), nil)
 
 		assert.NoError(t, err)
 		// Property not resolved — will be resolved at execution time
@@ -1660,4 +1660,24 @@ func TestExtractSourceOpaqueResolvableURIsFromJSON(t *testing.T) {
 		json.RawMessage(`{"password":{"$ref":"`+string(missingURI)+`","$visibility":"Clear"}}`), load)
 	require.NoError(t, err)
 	assert.Empty(t, got)
+
+	// A schema-opaque source (FieldHint.Opaque) whose persisted value is still
+	// plain — no $hashed, no $visibility, never yet transformed at rest — is a
+	// credential by virtue of the schema/known-opaque table fallback.
+	schemaOpaqueKsuid := util.NewID()
+	schemaOpaqueURI := pkgmodel.NewFormaeURI(schemaOpaqueKsuid, "ApiKey")
+	sources[schemaOpaqueKsuid] = &pkgmodel.Resource{
+		Ksuid: schemaOpaqueKsuid,
+		Type:  "Test::SchemaOpaqueSource",
+		Schema: pkgmodel.Schema{
+			Fields: []string{"ApiKey"},
+			Hints:  map[string]pkgmodel.FieldHint{"ApiKey": {Opaque: true}},
+		},
+		Properties: json.RawMessage(`{"ApiKey":"plain-not-yet-hashed"}`),
+	}
+	got, err = ExtractSourceOpaqueResolvableURIsFromJSON(
+		json.RawMessage(`{"key":{"$ref":"`+string(schemaOpaqueURI)+`","$visibility":"Clear"}}`), load)
+	require.NoError(t, err)
+	assert.Equal(t, []pkgmodel.FormaeURI{schemaOpaqueURI}, got,
+		"a schema-declared Opaque field classifies opaque even when persisted as a plain value")
 }

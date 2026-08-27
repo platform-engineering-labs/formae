@@ -68,7 +68,7 @@ func TestNewResourceUpdateForExisting_ListResolvableMatchingLiveValue_NoUpdate(t
 
 	target := pkgmodel.Target{Label: "test-target", Namespace: "aws", Config: json.RawMessage(`{}`)}
 
-	updates, err := NewResourceUpdateForExisting(resolvableProps, existing, newResource, target, target,
+	updates, err := NewResourceUpdateForExisting(resolvableProps, nil, existing, newResource, target, target,
 		pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser)
 	require.NoError(t, err)
 	assert.Empty(t, updates, "an unchanged list-valued resolvable must reconcile to a no-op")

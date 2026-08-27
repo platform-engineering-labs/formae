@@ -102,7 +102,7 @@ func requireSingleUpdate(t *testing.T, existing, new pkgmodel.Resource) Resource
 	target := pkgmodel.Target{Label: "test-target", Namespace: "aws", Config: json.RawMessage(`{}`)}
 	resolvableProps := resolver.ResolvableProperties{}
 
-	updates, err := NewResourceUpdateForExisting(resolvableProps, existing, new, target, target,
+	updates, err := NewResourceUpdateForExisting(resolvableProps, nil, existing, new, target, target,
 		pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser)
 	require.NoError(t, err)
 

@@ -805,6 +805,11 @@ func generateResourceUpdatesForReconcile(
 	// This allows forward references to new resources in the same command.
 	resolvableLookup := resourcesForResolvables(forma, allResourcesByStack)
 
+	effectiveDesired, err := ComputeEffectiveDesired(forma, allResourcesByStack)
+	if err != nil {
+		return nil, fmt.Errorf("failed to compute effective desired state: %w", err)
+	}
+
 	for _, stack := range forma.SplitByStack() {
 		existingResources, err := ds.LoadResourcesByStack(stack.SingleStackLabel())
 		if err != nil {
@@ -819,13 +824,14 @@ func generateResourceUpdatesForReconcile(
 					continue
 				}
 				if existingUnmanaged, ok := findUnmanagedResource(newResource, allResourcesByStack); ok {
-					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, resolvableLookup)
+					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, resolvableLookup, effectiveDesired)
 					if err != nil {
 						return nil, fmt.Errorf("failed to load resolvable properties: %w", err)
 					}
 
 					resourceUpdate, err := NewResourceUpdateForExisting(
 						readOnlyProperties,
+						effectiveDesired[existingUnmanaged.Ksuid],
 						existingUnmanaged,
 						newResource,
 						*existingTargetMap[existingUnmanaged.Target],
@@ -872,13 +878,14 @@ func generateResourceUpdatesForReconcile(
 
 					found = true
 
-					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, resolvableLookup)
+					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, resolvableLookup, effectiveDesired)
 
 					if err != nil {
 						return nil, fmt.Errorf("failed to load resolvable properties: %w", err)
 					}
 					existingResourceUpdates, err := NewResourceUpdateForExisting(
 						readOnlyProperties,
+						effectiveDesired[existingResource.Ksuid],
 						*existingResource,
 						newResource,
 						*existingTargetMap[existingResource.Target],
@@ -950,13 +957,14 @@ func generateResourceUpdatesForReconcile(
 				}
 				// Check if this resource exists as an unmanaged resource
 				if existingUnmanaged, ok := findUnmanagedResource(newResource, allResourcesByStack); ok {
-					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, resolvableLookup)
+					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, resolvableLookup, effectiveDesired)
 					if err != nil {
 						return nil, fmt.Errorf("failed to load resolvable properties: %w", err)
 					}
 
 					resourceUpdate, err := NewResourceUpdateForExisting(
 						readOnlyProperties,
+						effectiveDesired[existingUnmanaged.Ksuid],
 						existingUnmanaged,
 						newResource,
 						*existingTargetMap[existingUnmanaged.Target],
@@ -1265,6 +1273,11 @@ func generateResourceUpdatesForPatch(
 	// This allows forward references to new resources in the same command.
 	resolvableLookup := resourcesForResolvables(forma, allResourcesByStack)
 
+	effectiveDesired, err := ComputeEffectiveDesired(forma, allResourcesByStack)
+	if err != nil {
+		return nil, fmt.Errorf("failed to compute effective desired state: %w", err)
+	}
+
 	for _, stack := range forma.SplitByStack() {
 		stackResources, err := ds.LoadResourcesByStack(stack.SingleStackLabel())
 		if err != nil {
@@ -1300,13 +1313,14 @@ func generateResourceUpdatesForPatch(
 
 			if matched != nil {
 				// Use NewResourceUpdateForExisting to handle all the logic
-				readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, resolvableLookup)
+				readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, resolvableLookup, effectiveDesired)
 				if err != nil {
 					return nil, fmt.Errorf("failed to load resolvable properties: %w", err)
 				}
 
 				existingResourceUpdates, err := NewResourceUpdateForExisting(
 					readOnlyProperties,
+					effectiveDesired[matched.Ksuid],
 					*matched,
 					newResource,
 					*existingTargetMap[matched.Target],
