@@ -38,12 +38,6 @@ import (
 // the shape that actually distinguishes reconcile from patch semantics; see
 // regenerate_mode_test.go in the resource_update package for the same
 // finding at the unit level.
-//
-// Before threading the command's apply mode into execution-time patch
-// regeneration, the live reference resolve regenerated the patch under
-// hardcoded patch-mode (EnsureExists) semantics regardless of how the
-// command was actually planned, so a reconcile-planned Tags removal never
-// reached the provider.
 func TestApplyForma_ReconcileRemoval_SurvivesLiveReferenceResolution(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		echoForm := func(name string) string { return "arn:fake:producer/" + name }

@@ -55,6 +55,19 @@ const (
 	ResourceUpdateStateRejected   = types.ResourceUpdateStateRejected
 )
 
+// LateCreateOnlyChangeError reports that resolving a reference at execution
+// time produced a diff on createOnly fields that plan-time classification did
+// not declare. The update must fail rather than silently drop the diff or
+// escalate to an undeclared replacement.
+type LateCreateOnlyChangeError struct {
+	ResourceLabel string
+	Fields        []string
+}
+
+func (e LateCreateOnlyChangeError) Error() string {
+	return fmt.Sprintf("resolving references at execution time changed createOnly fields %v on %s; a replacement was not planned, refusing to proceed", e.Fields, e.ResourceLabel)
+}
+
 // ResourceUpdate represents an update to a resource in the system. A ResourceUpdate is a logical operation
 // that may involve multiple plugin operations. For example a replace operation will involve two plugin
 // operations: a delete and a create.
@@ -136,10 +149,13 @@ func (ru *ResourceUpdate) ResolveValue(formaeUri pkgmodel.FormaeURI, value strin
 		if derr != nil {
 			return fmt.Errorf("failed to re-derive patch document after resolving %s: %w", formaeUri, derr)
 		}
-		// createOnlyPatch (ops against createOnly fields newly triggered by
-		// this resolve) is deliberately ignored here — loud failure on a late
-		// createOnly diff is handled by a follow-up change, not this one.
-		_ = createOnlyPatch
+		if len(createOnlyPatch) > 0 {
+			fields, ferr := createOnlyPatchFields(createOnlyPatch)
+			if ferr != nil {
+				return fmt.Errorf("failed to inspect createOnly patch after resolving %s: %w", formaeUri, ferr)
+			}
+			return LateCreateOnlyChangeError{ResourceLabel: ru.DesiredState.Label, Fields: fields}
+		}
 		ru.DesiredState.PatchDocument = patchDoc
 	}
 
@@ -203,6 +219,34 @@ func (ru *ResourceUpdate) regeneratePatchDocument(mode pkgmodel.FormaApplyMode) 
 	}
 
 	return patchDoc, createOnlyPatch, nil
+}
+
+// createOnlyPatchFields extracts the distinct top-level field names touched
+// by a createOnly patch document, in first-seen order, so
+// LateCreateOnlyChangeError can name what changed without exposing the raw
+// JSON-patch op shape to callers.
+func createOnlyPatchFields(createOnlyPatch json.RawMessage) ([]string, error) {
+	var ops []struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(createOnlyPatch, &ops); err != nil {
+		return nil, fmt.Errorf("failed to parse createOnly patch ops: %w", err)
+	}
+
+	seen := make(map[string]struct{}, len(ops))
+	var fields []string
+	for _, op := range ops {
+		field, _, _ := strings.Cut(strings.TrimPrefix(op.Path, "/"), "/")
+		if field == "" {
+			continue
+		}
+		if _, ok := seen[field]; ok {
+			continue
+		}
+		seen[field] = struct{}{}
+		fields = append(fields, field)
+	}
+	return fields, nil
 }
 
 func (ru *ResourceUpdate) RequiresDelete() bool {

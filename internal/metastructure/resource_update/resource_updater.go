@@ -625,6 +625,18 @@ func resourceResolved(from gen.PID, state gen.Atom, data ResourceUpdateData, mes
 	err := data.resourceUpdate.ResolveValue(message.ResourceURI, message.Value, data.applyMode)
 	if err != nil {
 		proc.Log().Error("failed to resolve value for resource update resourceURI=%v: %v", message.ResourceURI, err)
+		// LateCreateOnlyChangeError is already a fixed, redacted text (it names
+		// only the changed field, never a value) — record it verbatim. Every
+		// other resolve/regen failure can carry error detail built from
+		// user-authored property paths (see updateRequestFailureReason's
+		// doc), so it must route through the same redaction mapping the rest
+		// of the update path uses rather than recording the raw error.
+		var late LateCreateOnlyChangeError
+		if errors.As(err, &late) {
+			data.resourceUpdate.FailureReason = late.Error()
+		} else {
+			data.resourceUpdate.FailureReason = updateRequestFailureReason(err)
+		}
 		data.resourceUpdate.MarkAsFailed()
 		return StateFinishedWithError, data, nil, nil
 	}
