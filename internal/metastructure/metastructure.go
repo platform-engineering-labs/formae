@@ -361,7 +361,7 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 		if synthErr != nil {
 			return nil, synthErr
 		}
-		cs, err = changeset.NewChangeset(fa.ResourceUpdates, append(fa.TargetUpdates, synth...), fa.ID, fa.Command)
+		cs, err = changeset.NewChangeset(fa.ResourceUpdates, append(fa.TargetUpdates, synth...), fa.ID, fa.Command, config.Mode)
 		if err != nil {
 			return nil, err
 		}
@@ -831,7 +831,7 @@ func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.Forma
 		if synthErr != nil {
 			return nil, synthErr
 		}
-		cs, err := changeset.NewChangeset(fa.ResourceUpdates, append(fa.TargetUpdates, synth...), fa.ID, pkgmodel.CommandDestroy)
+		cs, err := changeset.NewChangeset(fa.ResourceUpdates, append(fa.TargetUpdates, synth...), fa.ID, pkgmodel.CommandDestroy, config.Mode)
 		if err != nil {
 			return nil, err
 		}
@@ -1431,7 +1431,7 @@ func (m *Metastructure) ReRunIncompleteCommands() error {
 			slog.Error("Failed to build changeset for incomplete forma command, skipping", "commandID", fa.ID, "error", synthErr)
 			continue
 		}
-		cs, err := changeset.NewChangeset(pendingUpdates, append(pendingTargetUpdates, synth...), fa.ID, pkgmodel.CommandApply)
+		cs, err := changeset.NewChangeset(pendingUpdates, append(pendingTargetUpdates, synth...), fa.ID, pkgmodel.CommandApply, fa.Config.Mode)
 		if err != nil {
 			slog.Error("Failed to build changeset for incomplete forma command, skipping", "commandID", fa.ID, "error", err)
 			continue

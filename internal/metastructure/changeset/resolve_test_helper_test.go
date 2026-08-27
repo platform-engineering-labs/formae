@@ -17,6 +17,11 @@ import (
 // call shape so the many existing tests port with a mechanical rename, and it
 // preserves their assertions: a reject error surfaces from the synthesis step,
 // a dependency-cycle error from NewChangeset.
+//
+// Mode is fixed at Reconcile: none of this package's tests exercise
+// ResolveValue/patch regeneration (they assert DAG structure), so no test
+// caller here has a command config to thread a real mode from, and the fixed
+// value has no effect on what they assert.
 func buildChangesetForTest(
 	resourceUpdates []resource_update.ResourceUpdate,
 	targetUpdates []target_update.TargetUpdate,
@@ -31,5 +36,5 @@ func buildChangesetForTest(
 	if err != nil {
 		return Changeset{}, err
 	}
-	return NewChangeset(resourceUpdates, append(targetUpdates, synth...), commandID, command)
+	return NewChangeset(resourceUpdates, append(targetUpdates, synth...), commandID, command, pkgmodel.FormaApplyModeReconcile)
 }

@@ -153,6 +153,11 @@ type StartResourceUpdate struct {
 	ResourceUpdate ResourceUpdate
 	CommandID      string
 	UpdateId       string
+	// Mode is the apply mode the owning command was planned under (reconcile
+	// vs patch). It flows into ResourceUpdateData.applyMode so a resolvable
+	// that resolves after planning regenerates its patch under the same
+	// semantics the command was planned with.
+	Mode pkgmodel.FormaApplyMode
 }
 
 type PluginOperatorMissingInAction struct{}
@@ -206,6 +211,12 @@ type ResourceUpdateData struct {
 	retryConfig     pkgmodel.RetryConfig
 	requestedBy     gen.PID
 	commandSource   FormaCommandSource
+
+	// applyMode is the apply mode the owning command was planned under
+	// (reconcile vs patch), set from StartResourceUpdate.Mode in start().
+	// resourceResolved passes it to ResolveValue so execution-time patch
+	// regeneration derives its diff under the same semantics planning used.
+	applyMode pkgmodel.FormaApplyMode
 
 	// operatorRetryConfig is the retry config the PluginCoordinator spawned the
 	// watched plugin operator with, which is the per-plugin override wherever
@@ -388,6 +399,7 @@ func start(from gen.PID, state gen.Atom, data ResourceUpdateData, message StartR
 	data.resourceUpdate = &message.ResourceUpdate
 	data.commandID = message.CommandID
 	data.commandSource = message.ResourceUpdate.Source
+	data.applyMode = message.Mode
 	data.resourceUpdate.StartTs = util.TimeNow()
 	data.resourceUpdate.ModifiedTs = data.resourceUpdate.StartTs
 	data.originalResourceKsuidURI = data.resourceUpdate.DesiredState.URI()
@@ -610,7 +622,7 @@ func resolve(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Ato
 }
 
 func resourceResolved(from gen.PID, state gen.Atom, data ResourceUpdateData, message messages.ValueResolved, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
-	err := data.resourceUpdate.ResolveValue(message.ResourceURI, message.Value)
+	err := data.resourceUpdate.ResolveValue(message.ResourceURI, message.Value, data.applyMode)
 	if err != nil {
 		proc.Log().Error("failed to resolve value for resource update resourceURI=%v: %v", message.ResourceURI, err)
 		data.resourceUpdate.MarkAsFailed()

@@ -278,7 +278,7 @@ func TestResolveValue_UpdatesResolvedValueInProperties(t *testing.T) {
 			Properties: json.RawMessage(fmt.Sprintf(`{"resolvable": {"$ref":"formae://%s#/Id"}}`, resourceKsuid)),
 		},
 	}
-	err := resourceUpdate.ResolveValue(resolvableUri, "12345")
+	err := resourceUpdate.ResolveValue(resolvableUri, "12345", pkgmodel.FormaApplyModeReconcile)
 	assert.NoError(t, err)
 
 	expectedJson := fmt.Sprintf(`{"resolvable":{"$ref":"formae://%s#/Id","$value":"12345"}}`, resourceKsuid)

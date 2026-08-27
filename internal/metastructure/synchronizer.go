@@ -343,7 +343,7 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 		finalizeFailedCommand(syncCommand, proc)
 		return StateIdle, data, rescheduleAction(data), nil
 	}
-	cs, err := changeset.NewChangeset(allResourceUpdates, synth, syncCommand.ID, pkgmodel.CommandSync)
+	cs, err := changeset.NewChangeset(allResourceUpdates, synth, syncCommand.ID, pkgmodel.CommandSync, syncCommand.Config.Mode)
 	if err != nil {
 		proc.Log().Error("Synchronizer: failed to build changeset, skipping sync cycle commandID=%s: %v", syncCommand.ID, err)
 		finalizeFailedCommand(syncCommand, proc)

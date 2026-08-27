@@ -115,10 +115,15 @@ func (ru *ResourceUpdate) ListResolvables() []pkgmodel.FormaeURI {
 // plugin call sees a diff that matches reality. ResolveValue is the only
 // apply-time mutator of DesiredState.Properties, so it owns the regen.
 //
+// mode is the command's configured apply mode (reconcile vs patch), the
+// same mode planning used to derive the original patch — regeneration must
+// use identical semantics or a reconcile-planned removal can silently
+// vanish when a resolvable resolves at execution time.
+//
 // Only Updates need a fresh patch — Create/Delete/Replace carry full
 // desired/prior state to the provider rather than a diff. Patch regen is
 // also a no-op when no Schema is available (sync/discovery paths).
-func (ru *ResourceUpdate) ResolveValue(formaeUri pkgmodel.FormaeURI, value string) error {
+func (ru *ResourceUpdate) ResolveValue(formaeUri pkgmodel.FormaeURI, value string, mode pkgmodel.FormaApplyMode) error {
 	properties, err := resolver.ResolvePropertyReferences(formaeUri, ru.DesiredState.Properties, value)
 	if err != nil {
 		slog.Error("Failed to resolve dynamic properties", "error", err)
@@ -127,10 +132,14 @@ func (ru *ResourceUpdate) ResolveValue(formaeUri pkgmodel.FormaeURI, value strin
 	ru.DesiredState.Properties = properties
 
 	if ru.Operation == OperationUpdate && len(ru.DesiredState.Schema.Fields) > 0 {
-		patchDoc, derr := ru.regeneratePatchDocument()
+		patchDoc, createOnlyPatch, derr := ru.regeneratePatchDocument(mode)
 		if derr != nil {
 			return fmt.Errorf("failed to re-derive patch document after resolving %s: %w", formaeUri, derr)
 		}
+		// createOnlyPatch (ops against createOnly fields newly triggered by
+		// this resolve) is deliberately ignored here — loud failure on a late
+		// createOnly diff is handled by a follow-up change, not this one.
+		_ = createOnlyPatch
 		ru.DesiredState.PatchDocument = patchDoc
 	}
 
@@ -148,11 +157,17 @@ func (ru *ResourceUpdate) ResolveValue(formaeUri pkgmodel.FormaeURI, value strin
 // patch op, and resource_updater.go's update() forwards PatchDocument to the
 // plugin unconverted, so any hash material in it would reach the plugin
 // unguarded.
-func (ru *ResourceUpdate) regeneratePatchDocument() (json.RawMessage, error) {
+//
+// mode must match the apply mode the command was planned under (reconcile ->
+// ExactMatch, patch -> EnsureExists) — see patch.GeneratePatch — so a
+// reconcile-planned removal is not silently dropped by regenerating under
+// patch semantics. Returns (patch, createOnlyPatch, err); the caller decides
+// what to do with a createOnly diff surfaced this late.
+func (ru *ResourceUpdate) regeneratePatchDocument(mode pkgmodel.FormaApplyMode) (json.RawMessage, json.RawMessage, error) {
 	existingForPatch, desiredForPatch, err := SuppressUnchangedOpaqueValues(
 		ru.PriorState.Properties, ru.DesiredState.Properties, ru.DesiredState.Schema, ru.DesiredState.Type)
 	if err != nil {
-		return nil, fmt.Errorf("failed to suppress unchanged opaque values: %w", err)
+		return nil, nil, fmt.Errorf("failed to suppress unchanged opaque values: %w", err)
 	}
 
 	// Read-safe/comparison conversion: existingPluginProps is only used as the
@@ -162,7 +177,7 @@ func (ru *ResourceUpdate) regeneratePatchDocument() (json.RawMessage, error) {
 	// generation.
 	existingPluginProps, err := resolver.ConvertExistingStateForComparison(existingForPatch)
 	if err != nil {
-		return nil, fmt.Errorf("failed to convert existing properties to plugin format: %w", err)
+		return nil, nil, fmt.Errorf("failed to convert existing properties to plugin format: %w", err)
 	}
 
 	// Guarded conversion: desiredForPatch is the "after" side and, once an
@@ -171,23 +186,23 @@ func (ru *ResourceUpdate) regeneratePatchDocument() (json.RawMessage, error) {
 	// is broken, and that must fail loudly rather than silently reach a plugin.
 	newPluginProps, err := resolver.ConvertToPluginFormat(desiredForPatch)
 	if err != nil {
-		return nil, fmt.Errorf("failed to convert desired properties to plugin format: %w", err)
+		return nil, nil, fmt.Errorf("failed to convert desired properties to plugin format: %w", err)
 	}
 
-	patchDoc, _, err := patch.GeneratePatch(
+	patchDoc, createOnlyPatch, err := patch.GeneratePatch(
 		existingPluginProps,
 		newPluginProps,
 		existingForPatch,
 		desiredForPatch,
 		resolver.NewResolvableProperties(),
 		ru.DesiredState.Schema,
-		pkgmodel.FormaApplyModePatch,
+		mode,
 	)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return patchDoc, nil
+	return patchDoc, createOnlyPatch, nil
 }
 
 func (ru *ResourceUpdate) RequiresDelete() bool {
