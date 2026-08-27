@@ -8,10 +8,23 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/tidwall/gjson"
 )
+
+// ReferenceCycleError reports that plan-time resolution followed a chain of
+// references back onto itself. The cycle is rejected when the lookup runs,
+// before any changeset exists, because the execution DAG's cycle detection
+// cannot see references that resolve within the lookup itself.
+type ReferenceCycleError struct {
+	Chain []string // "<ksuid>#/<propertyPath>" hops in traversal order, first repeated hop last
+}
+
+func (e ReferenceCycleError) Error() string {
+	return fmt.Sprintf("reference cycle detected at plan time: %s", strings.Join(e.Chain, " -> "))
+}
 
 // AnswerKind classifies why a SourceAnswer's value may be trusted, or that it
 // carries none yet.
@@ -82,6 +95,17 @@ func (p *ResolvableProperties) Answer(ksuid, property string) (SourceAnswer, boo
 	return SourceAnswer{}, false
 }
 
+// LoadResolvablePropertiesFromStacks answers, for each resolvable URI on
+// resource, whether a value is available at plan time and what it is.
+//
+// Classification is recursive over the desired reference graph: a declared
+// source's effective desired value that is itself a non-opaque reference
+// envelope is resolved by following that reference in turn (applying any
+// nested $json extraction in memory), so a chain of references converges to
+// the value its root will hold after this command in a single pass, however
+// many hops deep. An opaque marker anywhere on a hop stops the recursion
+// there and keeps the persisted-row fallthrough unchanged. A reference cycle
+// is rejected as a ReferenceCycleError naming the chain.
 func LoadResolvablePropertiesFromStacks(resource pkgmodel.Resource, allResources map[string][]*pkgmodel.Resource, effective map[string]json.RawMessage) (ResolvableProperties, error) {
 	res := NewResolvableProperties()
 
@@ -97,50 +121,98 @@ func LoadResolvablePropertiesFromStacks(resource pkgmodel.Resource, allResources
 	uris := ExtractResolvableURIs(resource)
 
 	for _, uri := range uris {
-		ksuid := uri.KSUID()
-		propertyPath := uri.PropertyPath()
-
-		targetResource, exists := resourcesByKsuid[ksuid]
-		if !exists {
-			return res, fmt.Errorf("resource with KSUID %s not found", ksuid)
+		answer, err := classifySourceProperty(uri.KSUID(), uri.PropertyPath(), resourcesByKsuid, effective, nil)
+		if err != nil {
+			return res, err
 		}
-
-		if effDoc, declared := effective[ksuid]; declared {
-			effVal := gjson.GetBytes(effDoc, propertyPath)
-			if effVal.Exists() && !isReferenceEnvelope(effVal) && !containsHashedValue(effVal) &&
-				!containsOpaqueVisibility(effVal) && !isSourcePropertyOpaque(targetResource, propertyPath) {
-				res.AddAnswer(ksuid, propertyPath, SourceAnswer{Kind: AnswerResolved, Value: ExtractPropertyValue(effVal)})
-				continue
-			}
-			// Reference envelopes, hashed shapes, and opaque sources — persisted,
-			// schema-declared, or only ever inline-marked in the desired document
-			// itself — fall through to the persisted-row path unchanged: envelopes
-			// keep the cached value, opaque and hashed sources keep today's
-			// deferral.
-		}
-
-		if value, ok := resolvableValueFrom(targetResource.ReadOnlyProperties, propertyPath); ok {
-			res.Add(ksuid, propertyPath, value)
+		if answer.Kind == AnswerDeferred {
+			// Property not available yet — this happens for forward references to
+			// new resources whose read-only properties are assigned at creation
+			// time, and for a secret, whose value is only ever read live. The
+			// value will be resolved at execution time via RemainingResolvables.
+			slog.Debug("Skipping unresolvable property (will resolve at execution time)",
+				"property", uri.PropertyPath(), "ksuid", uri.KSUID())
 			continue
 		}
-
-		if value, ok := resolvableValueFrom(targetResource.Properties, propertyPath); ok {
-			res.Add(ksuid, propertyPath, value)
-			continue
-		}
-
-		// Property not available yet — this happens for forward references to
-		// new resources whose read-only properties are assigned at creation time,
-		// and for a secret, whose value is only ever read live. The value will be
-		// resolved at execution time via RemainingResolvables.
-		slog.Debug("Skipping unresolvable property (will resolve at execution time)",
-			"property", propertyPath,
-			"resource", targetResource.Label,
-			"ksuid", ksuid)
-		continue
+		res.AddAnswer(uri.KSUID(), uri.PropertyPath(), answer)
 	}
 
 	return res, nil
+}
+
+// classifySourceProperty answers whether propertyPath on the resource named
+// by ksuid has a value available at plan time, following a chain of
+// references recursively when the value is itself a non-opaque reference.
+//
+// visiting is the ordered chain of hops currently being classified, used both
+// to detect a cycle (linear membership check; chains here are short) and, on
+// a cycle, as the error's Chain.
+func classifySourceProperty(ksuid, propertyPath string, resourcesByKsuid map[string]*pkgmodel.Resource, effective map[string]json.RawMessage, visiting []string) (SourceAnswer, error) {
+	key := ksuid + "#/" + propertyPath
+	for _, v := range visiting {
+		if v == key {
+			return SourceAnswer{}, ReferenceCycleError{Chain: append(append([]string{}, visiting...), key)}
+		}
+	}
+	visiting = append(visiting, key)
+
+	targetResource, exists := resourcesByKsuid[ksuid]
+	if !exists {
+		return SourceAnswer{}, fmt.Errorf("resource with KSUID %s not found", ksuid)
+	}
+
+	if effDoc, declared := effective[ksuid]; declared {
+		effVal := gjson.GetBytes(effDoc, propertyPath)
+		if effVal.Exists() {
+			refused := containsHashedValue(effVal) || containsOpaqueVisibility(effVal) ||
+				isSourcePropertyOpaque(targetResource, propertyPath)
+			if !refused && !isReferenceEnvelope(effVal) {
+				return SourceAnswer{Kind: AnswerResolved, Value: ExtractPropertyValue(effVal)}, nil
+			}
+			if !refused && isReferenceEnvelope(effVal) {
+				nested := pkgmodel.FormaeURI(effVal.Get("$ref").String())
+				if nested != "" && nested.KSUID() != "" {
+					sub, err := classifySourceProperty(nested.KSUID(), nested.PropertyPath(), resourcesByKsuid, effective, visiting)
+					if err != nil {
+						return SourceAnswer{}, err
+					}
+					if sub.Kind == AnswerDeferred {
+						return SourceAnswer{Kind: AnswerDeferred}, nil
+					}
+					if sub.Kind == AnswerResolved && !sub.Opaque {
+						value := sub.Value
+						derivable := true
+						if jsonPath := effVal.Get("$json").String(); jsonPath != "" {
+							extracted, jerr := ExtractJSONPath(value, jsonPath)
+							if jerr != nil {
+								derivable = false // underivable extraction: fall through, execution resolves live
+							} else {
+								value = extracted
+							}
+						}
+						if derivable {
+							return SourceAnswer{Kind: AnswerResolved, Value: value}, nil
+						}
+					}
+					// AnswerStable (transitive source unmoved): the cached value on
+					// this hop's persisted envelope is the last applied resolution
+					// and remains valid. Fall through to the persisted path, which
+					// answers exactly that (or defers for a value-less envelope),
+					// preserving prior behavior. Resolved-but-opaque and an
+					// underivable extraction fall through the same way.
+				}
+			}
+			// refused shapes fall through to the persisted path unchanged
+		}
+	}
+
+	if value, ok := resolvableValueFrom(targetResource.ReadOnlyProperties, propertyPath); ok {
+		return SourceAnswer{Kind: AnswerStable, Value: value}, nil
+	}
+	if value, ok := resolvableValueFrom(targetResource.Properties, propertyPath); ok {
+		return SourceAnswer{Kind: AnswerStable, Value: value}, nil
+	}
+	return SourceAnswer{Kind: AnswerDeferred}, nil
 }
 
 // resolvableValueFrom reads propertyPath out of one persisted property
