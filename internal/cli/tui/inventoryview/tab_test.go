@@ -235,3 +235,24 @@ func TestNewTabModel_InitialState(t *testing.T) {
 	assert.Empty(t, tm.allRows)
 	assert.Empty(t, tm.query)
 }
+
+// TestFilteredCount_MatchesVisibleTotal pins filteredCount to visible()'s total.
+// filteredCount exists so the render path skips visible()'s sort; the two filter
+// predicates must not drift, or the "Showing X of Y" count, the truncation
+// marker and the rendered rows would disagree.
+func TestFilteredCount_MatchesVisibleTotal(t *testing.T) {
+	specs := newSpecs(nil)
+	for _, spec := range specs {
+		tab := newTabModel(theme.New("formae"), spec)
+		tab.allRows = []row{
+			{cells: []string{"alpha", "production", "AWS::S3::Bucket", "arn:alpha"}},
+			{cells: []string{"beta", "staging", "AWS::EC2::Instance", "i-beta"}},
+			{cells: []string{"gamma", "production", "AWS::S3::Bucket", "arn:gamma"}},
+		}
+		for _, q := range []string{"", "production", "ALPHA", "s3", "nomatch"} {
+			tab.query = q
+			_, total := tab.visible(0)
+			assert.Equal(t, total, tab.filteredCount(), "tab %q query %q", spec.entity, q)
+		}
+	}
+}

@@ -319,8 +319,20 @@ func applyCellStyles(lines []string, cells [][]styledCell, tbl components.Table,
 
 	const headerLines = 2 // bubbles header row + separator row
 	dataStart := headerLines
-	for row, styledRow := range cells {
-		lineIdx := dataStart + row
+
+	// The rendered lines are a WINDOW over the row set — bubbles/table only
+	// renders around the cursor — while cells is indexed from row 0. Line up the
+	// two before replacing anything, or every style lands on the wrong row (and,
+	// failing its plain-text check, silently disappears) as soon as the table has
+	// scrolled.
+	first := 0
+	if len(colVisStart) > 0 {
+		first = windowFirstRow(out, cells, dataStart, colVisStart[0], colVisWidth[0])
+	}
+
+	for row := first; row < len(cells); row++ {
+		styledRow := cells[row]
+		lineIdx := dataStart + (row - first)
 		if lineIdx >= len(out) {
 			break
 		}
@@ -365,6 +377,37 @@ func applyCellStyles(lines []string, cells [][]styledCell, tbl components.Table,
 		out[lineIdx] = line
 	}
 	return out
+}
+
+// windowFirstRow reports which row of cells the first rendered data line shows,
+// by matching that line's leading column against each row's plain text for that
+// column. Returns 0 when there is nothing to match (no data lines, or no match —
+// in which case the caller behaves as it did before, aligning from row 0).
+func windowFirstRow(lines []string, cells [][]styledCell, dataStart, vStart, vWidth int) int {
+	if dataStart >= len(lines) || vWidth <= 0 {
+		return 0
+	}
+	runes := []rune(ansi.Strip(lines[dataStart]))
+	if vStart >= len(runes) {
+		return 0
+	}
+	vEnd := min(vStart+vWidth, len(runes))
+	head := strings.TrimSpace(string(runes[vStart:vEnd]))
+	if head == "" {
+		return 0
+	}
+	for row, styledRow := range cells {
+		for _, sc := range styledRow {
+			if sc.col != 0 {
+				continue
+			}
+			if strings.TrimSpace(sc.plain) == head {
+				return row
+			}
+			break
+		}
+	}
+	return 0
 }
 
 // replaceInAnsiLine replaces the runes at visual positions [visStart, visEnd)
@@ -541,7 +584,7 @@ func runeIndex(haystack, needle []rune) int {
 
 // loadedView renders the table and optional truncation marker.
 func (t tabModel) loadedView(th *theme.Theme, maxRows int) []string {
-	_, total := t.visible(maxRows)
+	total := t.filteredCount()
 	shown := total
 	if maxRows > 0 && shown > maxRows {
 		shown = maxRows
@@ -620,7 +663,7 @@ func (t tabModel) loadedView(th *theme.Theme, maxRows int) []string {
 // statusLine returns "Showing <shown> of <total> <entity>", with appropriate
 // suffix for filtered/truncated cases.
 func (t tabModel) statusLine(maxRows int) string {
-	_, total := t.visible(maxRows)
+	total := t.filteredCount()
 	shown := total
 	if maxRows > 0 && shown > maxRows {
 		shown = maxRows
@@ -641,7 +684,7 @@ func (t tabModel) statusLine(maxRows int) string {
 // (width < narrowFooterThreshold). It drops the entity noun and appends compact
 // key glyphs: "Showing N of M · ↑↓ enter / s q".
 func (t tabModel) statusLineNarrow(maxRows int) string {
-	_, total := t.visible(maxRows)
+	total := t.filteredCount()
 	shown := total
 	if maxRows > 0 && shown > maxRows {
 		shown = maxRows
