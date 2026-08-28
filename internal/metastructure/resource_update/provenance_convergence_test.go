@@ -160,3 +160,96 @@ func TestGenerateResourceUpdates_ForceBypassesSuppression(t *testing.T) {
 	_, consumerPlanned := planned["contact"]
 	assert.True(t, consumerPlanned, "force re-asserts the declared value")
 }
+
+// A legacy (bare-hex, unversioned) provenance value is unknown, never
+// comparable: the consumer converges once.
+func TestGenerateResourceUpdates_LegacyProvenance_ConvergesOnce(t *testing.T) {
+	ds, _ := GetDeps(t)
+	sourceKsuid := util.NewID()
+	consumerKsuid := util.NewID()
+	storedDigest := pkgmodel.ComputeValueHash("hunter2")
+
+	existingStack := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{{Label: "test-stack"}},
+		Resources: []pkgmodel.Resource{
+			{
+				Label: "secret", Type: "Test::Secret", Stack: "test-stack", Target: "test-target",
+				Schema: provenanceSecretSchema(), Ksuid: sourceKsuid,
+				Properties: json.RawMessage(`{"Name":"secret","SecretString":{"$value":"` + storedDigest + `","$visibility":"Opaque","$strategy":"Update","$hashed":true}}`),
+			},
+			{
+				Label: "contact", Type: "Test::Contact", Stack: "test-stack", Target: "test-target",
+				Schema: provenanceConsumerSchema(), Ksuid: consumerKsuid,
+				Properties: json.RawMessage(`{"Name":"contact","Settings":{"url":{"$ref":"formae://` + sourceKsuid + `#/SecretString","$value":"` + storedDigest + `","$hashed":true,"$visibility":"Opaque","$resolvedFrom":"` + storedDigest + `"}}}`),
+			},
+		},
+	}
+	_, err := ds.StoreStack(existingStack, "previous-command")
+	require.NoError(t, err)
+
+	forma := provenanceForma("")
+	planned := generateProvenance(t, ds, forma, false)
+	_, consumerPlanned := planned["contact"]
+	assert.True(t, consumerPlanned, "legacy provenance must converge once, not suppress")
+}
+
+// A createOnly destination whose occurrence has a written value but unknown
+// movement must never be replaced: replacement destroys the resource over a
+// question the classifier cannot answer.
+func TestGenerateResourceUpdates_CreateOnlyDestination_UnknownNeverReplaces(t *testing.T) {
+	createOnlyConsumerSchema := pkgmodel.Schema{
+		Identifier: "Name",
+		Fields:     []string{"Name", "Token"},
+		Hints:      map[string]pkgmodel.FieldHint{"Name": {CreateOnly: true}, "Token": {CreateOnly: true}},
+	}
+	consumerForma := func(sourceKsuid string) *pkgmodel.Forma {
+		return &pkgmodel.Forma{
+			Stacks:  []pkgmodel.Stack{{Label: "test-stack"}},
+			Targets: []pkgmodel.Target{{Label: "test-target", Namespace: "test", Config: json.RawMessage(`{}`)}},
+			Resources: []pkgmodel.Resource{
+				{
+					Label: "secret", Type: "Test::Secret", Stack: "test-stack", Target: "test-target",
+					Schema:     provenanceSecretSchema(),
+					Properties: json.RawMessage(`{"Name":"secret"}`),
+				},
+				{
+					Label: "consumer", Type: "Test::CreateOnlyConsumer", Stack: "test-stack", Target: "test-target",
+					Schema: createOnlyConsumerSchema,
+					Properties: json.RawMessage(`{
+						"Name": "consumer",
+						"Token": {"$res": true, "$label": "secret", "$type": "Test::Secret", "$stack": "test-stack", "$property": "SecretString"}
+					}`),
+				},
+			},
+		}
+	}
+
+	{
+		ds, _ := GetDeps(t)
+		sourceKsuid := util.NewID()
+		storedDigest := pkgmodel.ComputeValueHash("hunter2")
+		existingStack := &pkgmodel.Forma{
+			Stacks: []pkgmodel.Stack{{Label: "test-stack"}},
+			Resources: []pkgmodel.Resource{
+				{
+					Label: "secret", Type: "Test::Secret", Stack: "test-stack", Target: "test-target",
+					Schema: provenanceSecretSchema(), Ksuid: sourceKsuid,
+					Properties: json.RawMessage(`{"Name":"secret","SecretString":{"$value":"` + storedDigest + `","$visibility":"Opaque","$strategy":"Update","$hashed":true}}`),
+				},
+				{
+					Label: "consumer", Type: "Test::CreateOnlyConsumer", Stack: "test-stack", Target: "test-target",
+					Schema: createOnlyConsumerSchema, Ksuid: util.NewID(),
+					Properties: json.RawMessage(`{"Name":"consumer","Token":{"$ref":"formae://` + sourceKsuid + `#/SecretString","$value":"` + storedDigest + `","$hashed":true,"$visibility":"Opaque"}}`),
+				},
+			},
+		}
+		_, err := ds.StoreStack(existingStack, "previous-command")
+		require.NoError(t, err)
+
+		planned := generateProvenance(t, ds, consumerForma(sourceKsuid), false)
+		for label, u := range planned {
+			assert.NotEqual(t, OperationDelete, u.Operation,
+				"unknown provenance on a createOnly destination must never replace (got delete for %q)", label)
+		}
+	}
+}
