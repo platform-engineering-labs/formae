@@ -253,6 +253,42 @@ func (ru *ResourceUpdate) regeneratePatchDocument(mode pkgmodel.FormaApplyMode) 
 	return patchDoc, createOnlyPatch, nil
 }
 
+// ConvergenceOnly reports whether every op in this update's patch document
+// targets a reference occurrence the provenance classification requires to
+// converge: same source identity as what was last written, a written value on
+// record, and movement that is real or unknown. Such an update propagates a
+// source change the stored state has already absorbed; it does not assert a
+// desired state that differs from the current one, so drift-absorption checks
+// may treat the resource as unmodified by the user. A repoint (identity
+// change), a first declaration, or any op outside the classified occurrences
+// keeps the update a real change.
+func (ru *ResourceUpdate) ConvergenceOnly() bool {
+	if ru.Operation != OperationUpdate || len(ru.ProvenanceRecords) == 0 {
+		return false
+	}
+	converging := map[string]bool{}
+	for _, rec := range ru.ProvenanceRecords {
+		if rec.Class != OccurrenceStable && rec.HasStoredWritten && rec.DesiredIdentity == rec.StoredIdentity {
+			converging["/"+strings.ReplaceAll(rec.DestinationPath, ".", "/")] = true
+		}
+	}
+	if len(converging) == 0 {
+		return false
+	}
+	var ops []struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(ru.DesiredState.PatchDocument, &ops); err != nil || len(ops) == 0 {
+		return false
+	}
+	for _, op := range ops {
+		if !converging[op.Path] {
+			return false
+		}
+	}
+	return true
+}
+
 // createOnlyPatchFields extracts the distinct top-level field names touched
 // by a createOnly patch document, in first-seen order, so
 // LateCreateOnlyChangeError can name what changed without exposing the raw

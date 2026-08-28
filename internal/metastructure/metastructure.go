@@ -1805,6 +1805,13 @@ func filterUnabsorbedModifications(
 	}
 	resourcesWithUpdates := make(map[resourceKey]struct{})
 	for _, ru := range fa.ResourceUpdates {
+		// A convergence-only update propagates a source movement the stored
+		// state has already absorbed (e.g. a synced secret rotation reaching
+		// its consumer). It asserts no state differing from the current one,
+		// so it must not block absorbing the modification it follows from.
+		if ru.ConvergenceOnly() {
+			continue
+		}
 		resourcesWithUpdates[resourceKey{
 			stack:    ru.StackLabel,
 			typeName: ru.DesiredState.Type,

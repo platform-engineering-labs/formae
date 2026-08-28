@@ -78,12 +78,20 @@ type ResolvableProperties struct {
 	// is decided by the update generator's provenance classification; absence
 	// always means "do not suppress".
 	suppressed map[string]bool
+	// converging holds consumer-side destination paths whose occurrence the
+	// classification requires to plan (moved, repointed, forced, or unknown
+	// movement on a mutable destination). An unresolved reference flattens to
+	// an empty string, which the top-level empty-value filter treats as PKL
+	// rendering noise; these paths are exempted from that drop so the
+	// converging op survives. Absence means "no exemption".
+	converging map[string]bool
 }
 
 func NewResolvableProperties() ResolvableProperties {
 	return ResolvableProperties{
 		props:      make(map[string]map[string]SourceAnswer),
 		suppressed: make(map[string]bool),
+		converging: make(map[string]bool),
 	}
 }
 
@@ -99,6 +107,21 @@ func (p *ResolvableProperties) SuppressStableAt(destinationPath string) {
 // provably stable.
 func (p *ResolvableProperties) StableSuppressedAt(destinationPath string) bool {
 	return p.suppressed[destinationPath]
+}
+
+// MarkConvergeAt marks a consumer destination path as requiring a converging
+// update.
+func (p *ResolvableProperties) MarkConvergeAt(destinationPath string) {
+	if p.converging == nil {
+		p.converging = make(map[string]bool)
+	}
+	p.converging[destinationPath] = true
+}
+
+// ConvergeMarkedAt reports whether the destination path was classified as
+// requiring a converging update.
+func (p *ResolvableProperties) ConvergeMarkedAt(destinationPath string) bool {
+	return p.converging[destinationPath]
 }
 
 func (p *ResolvableProperties) Add(ksuid, property, value string) {

@@ -7,6 +7,7 @@
 package resource_update
 
 import (
+	"encoding/json"
 	"reflect"
 	"testing"
 
@@ -16,6 +17,7 @@ import (
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/provenance"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
 func occIdentity(t *testing.T, envelope string) OccurrenceIdentity {
@@ -181,4 +183,47 @@ func TestAPIProjectionCarriesNoProvenance(t *testing.T) {
 		_, found := typ.FieldByName(forbidden)
 		assert.False(t, found, "apimodel.ResourceUpdate must not carry %s", forbidden)
 	}
+}
+
+func TestConvergenceOnly(t *testing.T) {
+	occ := func(path string, class OccurrenceClass, repoint bool) OccurrenceRecord {
+		stored := OccurrenceIdentity{Ksuid: "2ABcDeFgHiJkLmNoPqRsTuVwXyZ", PropertyPath: "SecretString"}
+		desired := stored
+		if repoint {
+			desired.Ksuid = "9ZyXwVuTsRqPoNmLkJiHgFeDcBa"
+		}
+		return OccurrenceRecord{
+			DestinationPath: path, DesiredIdentity: desired, StoredIdentity: stored,
+			HasStoredWritten: true, Class: class,
+		}
+	}
+	update := func(patch string, recs ...OccurrenceRecord) *ResourceUpdate {
+		return &ResourceUpdate{
+			Operation:         OperationUpdate,
+			ProvenanceRecords: recs,
+			DesiredState:      pkgmodel.Resource{PatchDocument: json.RawMessage(patch)},
+		}
+	}
+
+	t.Run("all ops on converging occurrences", func(t *testing.T) {
+		u := update(`[{"op":"replace","path":"/Settings/url","value":""}]`, occ("Settings.url", OccurrenceConvergeUnknown, false))
+		assert.True(t, u.ConvergenceOnly())
+	})
+	t.Run("a repoint is a real change", func(t *testing.T) {
+		u := update(`[{"op":"replace","path":"/Settings/url","value":""}]`, occ("Settings.url", OccurrenceDeferredUpdate, true))
+		assert.False(t, u.ConvergenceOnly())
+	})
+	t.Run("an op outside the occurrences is a real change", func(t *testing.T) {
+		u := update(`[{"op":"replace","path":"/Settings/url","value":""},{"op":"replace","path":"/Settings/recipient","value":"#x"}]`,
+			occ("Settings.url", OccurrenceConvergeUnknown, false))
+		assert.False(t, u.ConvergenceOnly())
+	})
+	t.Run("a stable occurrence grants no exemption", func(t *testing.T) {
+		u := update(`[{"op":"replace","path":"/Settings/url","value":""}]`, occ("Settings.url", OccurrenceStable, false))
+		assert.False(t, u.ConvergenceOnly())
+	})
+	t.Run("no records means no exemption", func(t *testing.T) {
+		u := update(`[{"op":"replace","path":"/Name","value":"x"}]`)
+		assert.False(t, u.ConvergenceOnly())
+	})
 }

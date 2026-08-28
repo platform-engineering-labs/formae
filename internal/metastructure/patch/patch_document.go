@@ -66,6 +66,20 @@ func collectionSemanticsFromFieldHints(hints map[string]pkgmodel.FieldHint) json
 	return collections
 }
 
+// topLevelConvergeFields collects the schema fields whose destination path was
+// converge-marked by the provenance classification. Only whole top-level
+// fields are relevant: the empty-value drop this exemption bypasses filters
+// top-level fields alone, and nested occurrences survive it by construction.
+func topLevelConvergeFields(schemaFields []string, properties resolver.ResolvableProperties) map[string]bool {
+	fields := map[string]bool{}
+	for _, field := range schemaFields {
+		if properties.ConvergeMarkedAt(field) {
+			fields[field] = true
+		}
+	}
+	return fields
+}
+
 func entitySetProviderDefaultsFromHints(hints map[string]pkgmodel.FieldHint) map[string]string {
 	result := map[string]string{}
 	for field, hint := range hints {
@@ -98,7 +112,7 @@ func generatePatch(document []byte, patch []byte, storedEnvelopes []byte, desire
 	}
 
 	requiredOnUpdateFields := schema.RequiredOnUpdate()
-	patchOps, err := createPatchDocument(flattenedDocument, flattenedPatch, schema.Fields, requiredOnUpdateFields, schema.HasProviderDefault(), entitySetProviderDefaultsFromHints(schema.Hints), collectionSemanticsFromFieldHints(schema.Hints), defaultIgnoredFields, strategy)
+	patchOps, err := createPatchDocument(flattenedDocument, flattenedPatch, schema.Fields, requiredOnUpdateFields, schema.HasProviderDefault(), entitySetProviderDefaultsFromHints(schema.Hints), collectionSemanticsFromFieldHints(schema.Hints), defaultIgnoredFields, strategy, topLevelConvergeFields(schema.Fields, properties))
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("failed to create patch document: %w", err)
 	}
@@ -180,8 +194,8 @@ func generatePatch(document []byte, patch []byte, storedEnvelopes []byte, desire
 	return json.RawMessage(patchJson), createOnlyJson, onlyForceResent, nil
 }
 
-func createPatchDocument(document []byte, patch []byte, schemaFields []string, requiredOnUpdateFields []string, hasProviderDefaultFields []string, entitySetProviderDefaults map[string]string, collections jsonpatch.Collections, ignoredFields []jsonpatch.Path, strategy jsonpatch.PatchStrategy) ([]jsonpatch.JsonPatchOperation, error) {
-	patchWithSchemaFieldsOnly, err := removeNonSchemaFields(patch, schemaFields)
+func createPatchDocument(document []byte, patch []byte, schemaFields []string, requiredOnUpdateFields []string, hasProviderDefaultFields []string, entitySetProviderDefaults map[string]string, collections jsonpatch.Collections, ignoredFields []jsonpatch.Path, strategy jsonpatch.PatchStrategy, convergeFields map[string]bool) ([]jsonpatch.JsonPatchOperation, error) {
+	patchWithSchemaFieldsOnly, err := removeNonSchemaFields(patch, schemaFields, convergeFields)
 	if err != nil {
 		return nil, err
 	}
@@ -689,14 +703,20 @@ func fieldExistsInMap(obj map[string]any, path []string) bool {
 	return false
 }
 
-func removeNonSchemaFields(patch []byte, schemaFields []string) ([]byte, error) {
+// removeNonSchemaFields keeps only schema fields that carry a value. The
+// empty-string drop exists because PKL renders an unset nullable String field
+// as "": an unresolved reference occurrence flattens to the same "", so a
+// field in convergeFields (classified as requiring a converging update) is
+// kept regardless of value — for it, the "" is a resolution placeholder, not
+// rendering noise.
+func removeNonSchemaFields(patch []byte, schemaFields []string, convergeFields map[string]bool) ([]byte, error) {
 	var deserialized map[string]any
 	if err := json.Unmarshal(patch, &deserialized); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal resource properties: %w", err)
 	}
 	modified := make(map[string]any)
 	for _, field := range schemaFields {
-		if val, ok := deserialized[field]; ok && hasValue(val) {
+		if val, ok := deserialized[field]; ok && (hasValue(val) || convergeFields[field]) {
 			modified[field] = val
 		}
 	}

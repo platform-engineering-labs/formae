@@ -158,6 +158,13 @@ func buildProvenanceRecords(
 		ClassifyOccurrence(&rec, answer.Opaque, destinationIsCreateOnly(schema, occ.Path), force, leafDigest)
 		if rec.Class == OccurrenceStable {
 			answers.SuppressStableAt(occ.Path)
+		} else if answer.Opaque && rec.HasStoredWritten {
+			// The classification requires this occurrence to plan, but its
+			// unresolved reference flattens to an empty string that the
+			// top-level empty-value filter would drop as PKL rendering noise.
+			// The mark exempts it. Non-opaque occurrences and first
+			// declarations stay with normal diff semantics.
+			answers.MarkConvergeAt(occ.Path)
 		}
 		records = append(records, rec)
 	}
