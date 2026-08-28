@@ -7,6 +7,7 @@
 package resource_update
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -14,6 +15,7 @@ import (
 	"github.com/tidwall/gjson"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/provenance"
+	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 )
 
 func occIdentity(t *testing.T, envelope string) OccurrenceIdentity {
@@ -169,4 +171,14 @@ func TestClassifyOccurrence(t *testing.T) {
 		ClassifyOccurrence(rec, true, false, false, noLeaf)
 		assert.Equal(t, OccurrenceConvergeUnknown, rec.Class)
 	})
+}
+
+// The API projection is a positive exclusion boundary: provenance state never
+// reaches API consumers.
+func TestAPIProjectionCarriesNoProvenance(t *testing.T) {
+	typ := reflect.TypeOf(apimodel.ResourceUpdate{})
+	for _, forbidden := range []string{"ProvenanceRecords", "ResolvedRootDigests"} {
+		_, found := typ.FieldByName(forbidden)
+		assert.False(t, found, "apimodel.ResourceUpdate must not carry %s", forbidden)
+	}
 }

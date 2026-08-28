@@ -106,6 +106,19 @@ type ResourceUpdate struct {
 	// otherwise surface an empty ErrorMessage. MostRecentFailureMessage falls
 	// back to this when no progress-based failure message is available.
 	FailureReason string `json:"FailureReason,omitempty"`
+	// ProvenanceRecords is the per-occurrence provenance state computed at
+	// planning: identities, digests, and classes only, never values. It is
+	// written once with the row and IMMUTABLE thereafter; execution-time
+	// regeneration reads it back so suppression decisions survive recovery.
+	ProvenanceRecords []OccurrenceRecord `json:"ProvenanceRecords,omitempty"`
+	// ResolvedRootDigests maps a source URI to the canonical-domain digest of
+	// the pre-extraction value its reference resolved to at execution time.
+	// Populated as resolutions arrive and made durable through the progress
+	// write, so the write-origin merge can stamp $resolvedFrom even when
+	// recovery resumes persisted progress without re-resolving. A missing
+	// entry degrades to stamping nothing (provenance stays unknown), never to
+	// attesting a recomputed value.
+	ResolvedRootDigests map[string]string `json:"ResolvedRootDigests,omitempty"`
 }
 
 func (ru *ResourceUpdate) URI() pkgmodel.FormaeURI {

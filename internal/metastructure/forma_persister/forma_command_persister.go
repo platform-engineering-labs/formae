@@ -463,6 +463,9 @@ func (f *FormaCommandPersister) updateCommandFromProgress(progress *messages.Upd
 		if progress.Version != "" {
 			res.Version = progress.Version
 		}
+		if len(progress.ResolvedRootDigests) > 0 {
+			res.ResolvedRootDigests = progress.ResolvedRootDigests
+		}
 
 		// Update the normalized resource_updates table
 		// Skip for sync commands: resource updates are not stored upfront, progress tracked in-memory only
@@ -475,6 +478,7 @@ func (f *FormaCommandPersister) updateCommandFromProgress(progress *messages.Upd
 				progress.ResourceStartTs,
 				progress.ResourceModifiedTs,
 				tracked,
+				progress.ResolvedRootDigests,
 			); err != nil {
 				f.Log().Error("Failed to update resource update progress in normalized table commandID=%s: %v", progress.CommandID, err)
 				// Continue with command meta update even if normalized update fails

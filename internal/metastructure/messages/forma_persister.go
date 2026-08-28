@@ -42,6 +42,11 @@ type UpdateResourceProgress struct {
 	ResourceProperties         json.RawMessage
 	ResourceReadOnlyProperties json.RawMessage
 	Version                    string
+	// ResolvedRootDigests carries the update's resolution-provenance digests
+	// (source URI -> canonical digest) so they become durable exactly when
+	// progress does: recovery that resumes persisted progress skips
+	// resolution and must stamp from these, never recompute.
+	ResolvedRootDigests map[string]string
 }
 
 type MarkTargetUpdateAsComplete struct {
