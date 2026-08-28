@@ -13,6 +13,7 @@ import (
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/canonicalize"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/jsonpatch"
 	"github.com/tidwall/gjson"
@@ -943,11 +944,16 @@ func isCreateOnlyPath(path string, createOnlyFields []string) bool {
 
 // arrayCreateOnlyChangedFields returns the set of top-level fields whose
 // member-level ops must escalate to createOnly: fields with a createOnly
-// descendant hint reached through an array whose value multiset differs
-// between the stored document and the desired patch. Object-nested createOnly
-// paths are excluded — their changes surface at the subfield's own op path and
-// classify there, so escalating sibling ops under the same container would
-// over-trigger replacements.
+// descendant hint reached through an array whose values changed between the
+// stored document and the desired patch. Two signals, either escalates:
+// the hinted subfield's value multiset differs, or — with the multiset
+// unchanged — the two sides become EQUAL once the hinted leaves are stripped
+// while differing with them present, meaning the only change is which member
+// holds which createOnly value (values exchanged between members: an
+// immutable change per member, not a membership edit). Object-nested
+// createOnly paths are excluded — their changes surface at the subfield's own
+// op path and classify there, so escalating sibling ops under the same
+// container would over-trigger replacements.
 func arrayCreateOnlyChangedFields(document, patch []byte, createOnlyFields []string) map[string]bool {
 	changed := map[string]bool{}
 	if len(createOnlyFields) == 0 {
@@ -960,6 +966,7 @@ func arrayCreateOnlyChangedFields(document, patch []byte, createOnlyFields []str
 	if err := json.Unmarshal(patch, &patchMap); err != nil {
 		return changed
 	}
+	arrayFieldsByRoot := map[string][]string{}
 	for _, field := range createOnlyFields {
 		segments := strings.Split(field, ".")
 		if len(segments) < 2 {
@@ -970,11 +977,49 @@ func arrayCreateOnlyChangedFields(document, patch []byte, createOnlyFields []str
 		if !docViaArray && !patchViaArray {
 			continue
 		}
+		arrayFieldsByRoot[segments[0]] = append(arrayFieldsByRoot[segments[0]], field)
 		if multisetKey(docValues) != multisetKey(patchValues) {
 			changed[segments[0]] = true
 		}
 	}
+	for root, fields := range arrayFieldsByRoot {
+		if changed[root] {
+			continue
+		}
+		if createOnlyValuesExchanged(document, patch, root, fields) {
+			changed[root] = true
+		}
+	}
 	return changed
+}
+
+// createOnlyValuesExchanged reports whether the subtrees under root differ
+// with the createOnly leaves present but compare equal (order-insensitively)
+// once every such leaf is stripped from both sides: the re-association
+// signature. A genuine membership or sibling change leaves the stripped sides
+// different and stays mutable.
+func createOnlyValuesExchanged(document, patch []byte, root string, createOnlyArrayFields []string) bool {
+	docField := gjson.GetBytes(document, root)
+	patchField := gjson.GetBytes(patch, root)
+	if !docField.Exists() || !patchField.Exists() {
+		return false
+	}
+	same, err := util.JsonEqualIgnoreArrayOrder(json.RawMessage(docField.Raw), json.RawMessage(patchField.Raw))
+	if err != nil || same {
+		return false
+	}
+	strippedDoc, err := removeWriteOnlyFields(document, createOnlyArrayFields)
+	if err != nil {
+		return false
+	}
+	strippedPatch, err := removeWriteOnlyFields(patch, createOnlyArrayFields)
+	if err != nil {
+		return false
+	}
+	docResidual := gjson.GetBytes(strippedDoc, root)
+	patchResidual := gjson.GetBytes(strippedPatch, root)
+	residualSame, err := util.JsonEqualIgnoreArrayOrder(json.RawMessage(docResidual.Raw), json.RawMessage(patchResidual.Raw))
+	return err == nil && residualSame
 }
 
 // collectNestedFieldValues returns every value the dot-path resolves to in

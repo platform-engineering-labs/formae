@@ -989,12 +989,13 @@ func (f *FormaCommandPersister) markResourceUpdateAsComplete(msg *messages.MarkR
 		res.State = msg.FinalState
 		res.StartTs = msg.ResourceStartTs
 		res.ModifiedTs = msg.ResourceModifiedTs
-		// Guarded copy: a successful completion carries no reason (the updater
-		// clears it on success), and an empty incoming reason must not erase
-		// one already recorded for this row.
-		if msg.FailureReason != "" {
-			res.FailureReason = msg.FailureReason
-		}
+		// Unconditional copy: the updater owns the reason's lifecycle (it
+		// records one per failing pass and clears it on success), so the
+		// completion's value is authoritative either way. An empty value on a
+		// successful retry MUST overwrite a reason persisted by an earlier
+		// failed attempt, or a succeeded update keeps reporting an obsolete
+		// error.
+		res.FailureReason = msg.FailureReason
 
 		// Hash read/actual-state properties at this write choke point, same as
 		// updateCommandFromProgress does for intermediate progress. This matters most

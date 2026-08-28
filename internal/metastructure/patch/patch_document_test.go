@@ -3982,3 +3982,37 @@ func TestGeneratePatch_ArrayMemberSiblingChange_StaysMutable(t *testing.T) {
 	assert.Empty(t, createOnlyPatch, "a sibling-only member change must not trigger a replacement")
 	assert.NotEmpty(t, patchDoc)
 }
+
+func TestGeneratePatch_ArrayCreateOnlyValuesExchangedBetweenMembers_TriggersReplacement(t *testing.T) {
+	// The Token multiset is unchanged, but each member's immutable value
+	// changed: this is an immutable change per member, not a membership edit.
+	document := []byte(`{"Name":"x","Entries":[{"Id":"A","Token":"t1"},{"Id":"B","Token":"t2"}]}`)
+	desired := []byte(`{"Name":"x","Entries":[{"Id":"A","Token":"t2"},{"Id":"B","Token":"t1"}]}`)
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Entries"},
+		Hints:  map[string]pkgmodel.FieldHint{"Entries.Token": {WriteOnly: true, CreateOnly: true}},
+	}
+	props := resolver.NewResolvableProperties()
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, desired, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.NotEmpty(t, createOnlyPatch,
+		"createOnly values exchanged between members must classify as a createOnly diff")
+	assert.JSONEq(t, "[]", string(patchDoc))
+}
+
+func TestGeneratePatch_ArrayMembershipChange_StaysMutable(t *testing.T) {
+	// Replacing one member with a different member (same Token value carried
+	// by a new member identity) is a collection membership edit, not an
+	// immutable-field change.
+	document := []byte(`{"Name":"x","Entries":[{"Id":"A","Token":"t1"}]}`)
+	desired := []byte(`{"Name":"x","Entries":[{"Id":"C","Token":"t1"}]}`)
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Entries"},
+		Hints:  map[string]pkgmodel.FieldHint{"Entries.Token": {WriteOnly: true, CreateOnly: true}},
+	}
+	props := resolver.NewResolvableProperties()
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, desired, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Empty(t, createOnlyPatch, "a membership change must not trigger a replacement")
+	assert.NotEmpty(t, patchDoc)
+}
