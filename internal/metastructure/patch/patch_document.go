@@ -930,22 +930,6 @@ func isCreateOnlyPath(path string, createOnlyFields []string) bool {
 	return pathMatchesFieldThroughArrays(path, createOnlyFields)
 }
 
-// pathMatchesField reports whether a JSON Pointer path (without its leading
-// "/", see cleanPath) targets one of the given dot-separated schema field
-// paths, or a nested path within it. Schema Hints use dot-separated keys for
-// nested fields ("Spec.Selector"), while jsonpatch operation paths use slash
-// separators per RFC 6902 ("Spec/Selector/MatchLabels/foo"); the field side is
-// normalized to slash form before comparing.
-func pathMatchesField(path string, fields []string) bool {
-	for _, field := range fields {
-		f := strings.ReplaceAll(field, ".", "/")
-		if path == f || strings.HasPrefix(path, f+"/") {
-			return true
-		}
-	}
-	return false
-}
-
 // onlyForceResentNoops reports whether every op in ops is a force-resent
 // no-op: an "add" on a requiredOnUpdate path whose value merely restates what
 // originalDocument already held there before force-resend stripped it out (see
