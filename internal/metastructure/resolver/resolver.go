@@ -263,14 +263,19 @@ func isSourcePropertyOpaque(source *pkgmodel.Resource, propertyName string) bool
 	if source == nil || propertyName == "" {
 		return false
 	}
-	// Check the property path itself and its top-level field. A ref into a
+	// Check the property path itself and every ancestor prefix. A ref into a
 	// MAP-shaped opaque secret (e.g. "decodedData.password", produced by
 	// secret.res.secretValue.at("password")) is opaque by virtue of its opaque
 	// parent field: the field is stored as a single hashed envelope with no
 	// per-key sub-structure, so the leaf path has no $visibility of its own.
+	// The parent may itself be nested (a hint on "Config.Password" with a ref
+	// into "Config.Password.value"), so every ancestor is a candidate, not
+	// only the top-level root.
 	candidates := []string{propertyName}
-	if root, _, found := strings.Cut(propertyName, "."); found {
-		candidates = append(candidates, root)
+	for i := len(propertyName) - 1; i > 0; i-- {
+		if propertyName[i] == '.' {
+			candidates = append(candidates, propertyName[:i])
+		}
 	}
 	for _, p := range candidates {
 		// A value stored hashed at rest is a SHA-256 digest; refused wherever it

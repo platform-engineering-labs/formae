@@ -1827,6 +1827,8 @@ func TestReferencesOpaqueProperty_DescendantHint(t *testing.T) {
 		{"sibling under the same container", nested, "Config.User", false},
 		{"unrelated field", nested, "Name", false},
 		{"key into a map-shaped secret", mapSecret, "data.token", true},
+		{"key below a nested opaque hint", nested, "Config.Password.value", true},
+		{"key below a non-opaque sibling", nested, "Config.Other.sub", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

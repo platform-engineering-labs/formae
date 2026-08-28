@@ -2465,8 +2465,14 @@ func referencesOpaqueProperty(opaque map[string]bool, propertyName string) bool 
 			return true
 		}
 	}
-	root, _, nested := strings.Cut(propertyName, ".")
-	return nested && opaque[root]
+	// Every ancestor prefix, not only the top-level root: the opaque parent of
+	// a map-shaped secret may itself be nested.
+	for i := len(propertyName) - 1; i > 0; i-- {
+		if propertyName[i] == '.' && opaque[propertyName[:i]] {
+			return true
+		}
+	}
+	return false
 }
 
 // collectOpaqueResolvablePaths records the gjson/sjson path of every $res envelope

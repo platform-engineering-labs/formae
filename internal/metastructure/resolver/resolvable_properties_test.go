@@ -656,3 +656,58 @@ func TestLoadResolvableProperties_SiblingOfOpaqueDescendant_StillResolves(t *tes
 	require.True(t, found, "a sibling of an opaque descendant must still resolve")
 	assert.Equal(t, "new", value)
 }
+
+// A reference BELOW a nested opaque hint (the hint on Config.Password, the
+// reference into Config.Password.value) is a key into a nested map-shaped
+// secret: every ancestor of the referenced path must be consulted, not only
+// its top-level root.
+func TestLoadResolvableProperties_ReferenceBelowNestedOpaqueHint_Refused(t *testing.T) {
+	source := &pkgmodel.Resource{
+		Ksuid: sourceKsuid,
+		Label: "holder",
+		Type:  "Test::Config::Holder",
+		Stack: "default",
+		Schema: pkgmodel.Schema{
+			Fields: []string{"Name", "Config"},
+			Hints:  map[string]pkgmodel.FieldHint{"Config.Password": {Opaque: true}},
+		},
+		Properties: json.RawMessage(`{"Name":"s","Config":{"User":"u"}}`),
+	}
+	effective := map[string]json.RawMessage{
+		sourceKsuid: json.RawMessage(`{"Name":"s","Config":{"User":"u","Password":{"value":"hunter2"}}}`),
+	}
+
+	props, err := LoadResolvablePropertiesFromStacks(consumerOf("Config.Password.value"), stacksWith(source), effective)
+	require.NoError(t, err)
+
+	value, found := props.Get(sourceKsuid, "Config.Password.value")
+	if found {
+		assert.NotContains(t, value, "hunter2",
+			"a reference below a nested opaque hint must not materialize the secret")
+	}
+}
+
+// A reference below a NON-opaque sibling of the hinted field still resolves.
+func TestLoadResolvableProperties_ReferenceBelowNonOpaqueSibling_StillResolves(t *testing.T) {
+	source := &pkgmodel.Resource{
+		Ksuid: sourceKsuid,
+		Label: "holder",
+		Type:  "Test::Config::Holder",
+		Stack: "default",
+		Schema: pkgmodel.Schema{
+			Fields: []string{"Name", "Config"},
+			Hints:  map[string]pkgmodel.FieldHint{"Config.Password": {Opaque: true}},
+		},
+		Properties: json.RawMessage(`{"Name":"s","Config":{"Meta":{"region":"old"}}}`),
+	}
+	effective := map[string]json.RawMessage{
+		sourceKsuid: json.RawMessage(`{"Name":"s","Config":{"Meta":{"region":"new"},"Password":{"value":"hunter2"}}}`),
+	}
+
+	props, err := LoadResolvablePropertiesFromStacks(consumerOf("Config.Meta.region"), stacksWith(source), effective)
+	require.NoError(t, err)
+
+	value, found := props.Get(sourceKsuid, "Config.Meta.region")
+	require.True(t, found, "a reference below a non-opaque sibling must still resolve")
+	assert.Equal(t, "new", value)
+}
