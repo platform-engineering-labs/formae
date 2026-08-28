@@ -8,15 +8,20 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/platform-engineering-labs/formae/internal/metastructure/patch"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
 // EffectiveDesired maps an existing resource's KSUID to the desired properties
 // document this command will drive it to: the forma declaration after the same
-// SetOnce filtering that decides the resource's own patch. It is computed once
-// per command, ahead of the resolvable lookup, and the same artifact feeds both
-// the lookup and the update factory, so the filtering is never re-derived in
-// two places.
+// value-strategy filtering that decides the resource's own patch — SetOnce
+// substitution AND the no-baseline writeOnly+createOnly strip. The lookup must
+// never advertise a value the producer's pipeline will not write: a consumer
+// resolving such a value would be planned (and for a createOnly destination,
+// destructively replaced) against state that never materializes. It is
+// computed once per command, ahead of the resolvable lookup, and the same
+// artifact feeds both the lookup and the update factory, so the filtering is
+// never re-derived in two places.
 type EffectiveDesired map[string]json.RawMessage
 
 // ComputeEffectiveDesired builds the map for every forma resource whose KSUID
@@ -44,6 +49,14 @@ func ComputeEffectiveDesired(forma *pkgmodel.Forma, allResourcesByStack map[stri
 		filtered, err := filterSetOnceProps(row.Properties, r.Properties, r.Label)
 		if err != nil {
 			return nil, fmt.Errorf("failed to compute effective desired properties for %s: %w", r.Label, err)
+		}
+		// The baseline is probed against the persisted row's properties, while
+		// patch generation probes the flattened document; for the fields in
+		// question (writeOnly+createOnly, schema-hinted) presence in the
+		// persisted row is the baseline in both pipelines.
+		filtered, err = patch.StripFieldsWithoutBaseline(filtered, row.Properties, r.Schema)
+		if err != nil {
+			return nil, fmt.Errorf("failed to strip no-baseline fields from effective desired properties for %s: %w", r.Label, err)
 		}
 		eff[r.Ksuid] = filtered
 	}
