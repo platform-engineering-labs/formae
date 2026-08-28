@@ -410,3 +410,149 @@ func TestGenerateResourceUpdates_ForwardReferenceDefers(t *testing.T) {
 	}
 	assert.True(t, found, "the producer's Arn URI must remain as a resolvable, expected among: %v", consumer.RemainingResolvables)
 }
+
+// Removing a property together with the resource that references it is not a
+// dangling reference: both leave in the same command.
+func TestGenerateResourceUpdates_RemovedPropertyWithDeletedConsumer_NoError(t *testing.T) {
+	ds, _ := GetDeps(t)
+
+	producerSchema := pkgmodel.Schema{
+		Identifier: "Name",
+		Fields:     []string{"Name", "Tags"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"Name": {CreateOnly: true},
+			"Tags": {UpdateMethod: pkgmodel.FieldUpdateMethodEntitySet, IndexField: "Key"},
+		},
+	}
+	consumerSchema := pkgmodel.Schema{
+		Identifier: "Name",
+		Fields:     []string{"Name", "Ref"},
+	}
+
+	producerKsuid := util.NewID()
+	consumerKsuid := util.NewID()
+
+	existingStack := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{{Label: "test-stack"}},
+		Resources: []pkgmodel.Resource{
+			{
+				Label: "producer", Type: "FakeAWS::Absence::Producer",
+				Stack: "test-stack", Target: "test-target",
+				Schema: producerSchema, Ksuid: producerKsuid,
+				Properties: json.RawMessage(`{"Name": "p", "Tags": [{"Key": "team", "Value": "x"}]}`),
+			},
+			{
+				Label: "consumer", Type: "FakeAWS::Absence::Consumer",
+				Stack: "test-stack", Target: "test-target",
+				Schema: consumerSchema, Ksuid: consumerKsuid,
+				Properties: json.RawMessage(fmt.Sprintf(
+					`{"Name": "c", "Ref": {"$ref": "formae://%s#/Tags", "$value": "[{\"Key\":\"team\",\"Value\":\"x\"}]"}}`,
+					producerKsuid)),
+			},
+		},
+	}
+	_, err := ds.StoreStack(existingStack, "previous-command")
+	require.NoError(t, err)
+
+	// Reconcile: the producer no longer declares Tags at all, and the
+	// consumer is dropped from the forma entirely — it is being deleted in
+	// this same command, not left dangling.
+	forma := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{{Label: "test-stack"}},
+		Targets: []pkgmodel.Target{
+			{Label: "test-target", Config: json.RawMessage(`{"Region": "us-east-1"}`), Namespace: "test"},
+		},
+		Resources: []pkgmodel.Resource{
+			{
+				Label: "producer", Type: "FakeAWS::Absence::Producer",
+				Stack: "test-stack", Target: "test-target",
+				Schema:     producerSchema,
+				Properties: json.RawMessage(`{"Name": "p"}`),
+			},
+		},
+	}
+	existingTargets := []*pkgmodel.Target{
+		{Label: "test-target", Config: json.RawMessage(`{"Region": "us-east-1"}`), Namespace: "test"},
+	}
+
+	_, err = GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile,
+		FormaCommandSourceUser, existingTargets, ds, nil, nil)
+	require.NoError(t, err)
+}
+
+// Removing one member of a collection does not dangle a reference to the
+// collection itself.
+func TestGenerateResourceUpdates_MemberRemovalDoesNotDangleCollectionReference(t *testing.T) {
+	ds, _ := GetDeps(t)
+
+	producerSchema := pkgmodel.Schema{
+		Identifier: "Name",
+		Fields:     []string{"Name", "Tags"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"Name": {CreateOnly: true},
+			"Tags": {UpdateMethod: pkgmodel.FieldUpdateMethodEntitySet, IndexField: "Key"},
+		},
+	}
+	consumerSchema := pkgmodel.Schema{
+		Identifier: "Name",
+		Fields:     []string{"Name", "Ref"},
+	}
+
+	producerKsuid := util.NewID()
+	consumerKsuid := util.NewID()
+
+	existingStack := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{{Label: "test-stack"}},
+		Resources: []pkgmodel.Resource{
+			{
+				Label: "producer", Type: "FakeAWS::Absence::Producer",
+				Stack: "test-stack", Target: "test-target",
+				Schema: producerSchema, Ksuid: producerKsuid,
+				Properties: json.RawMessage(`{"Name": "p", "Tags": [{"Key": "team", "Value": "x"}, {"Key": "env", "Value": "prod"}]}`),
+			},
+			{
+				Label: "consumer", Type: "FakeAWS::Absence::Consumer",
+				Stack: "test-stack", Target: "test-target",
+				Schema: consumerSchema, Ksuid: consumerKsuid,
+				Properties: json.RawMessage(fmt.Sprintf(
+					`{"Name": "c", "Ref": {"$ref": "formae://%s#/Tags", "$value": "[{\"Key\":\"team\",\"Value\":\"x\"},{\"Key\":\"env\",\"Value\":\"prod\"}]"}}`,
+					producerKsuid)),
+			},
+		},
+	}
+	_, err := ds.StoreStack(existingStack, "previous-command")
+	require.NoError(t, err)
+
+	// Reconcile: Tags stays declared, but only one of the two persisted
+	// members survives — the other is dropped. The consumer references the
+	// collection root, not the dropped member.
+	forma := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{{Label: "test-stack"}},
+		Targets: []pkgmodel.Target{
+			{Label: "test-target", Config: json.RawMessage(`{"Region": "us-east-1"}`), Namespace: "test"},
+		},
+		Resources: []pkgmodel.Resource{
+			{
+				Label: "producer", Type: "FakeAWS::Absence::Producer",
+				Stack: "test-stack", Target: "test-target",
+				Schema:     producerSchema,
+				Properties: json.RawMessage(`{"Name": "p", "Tags": [{"Key": "team", "Value": "x"}]}`),
+			},
+			{
+				Label: "consumer", Type: "FakeAWS::Absence::Consumer",
+				Stack: "test-stack", Target: "test-target",
+				Schema: consumerSchema,
+				Properties: json.RawMessage(fmt.Sprintf(
+					`{"Name": "c", "Ref": {"$ref": "formae://%s#/Tags", "$value": "[{\"Key\":\"team\",\"Value\":\"x\"},{\"Key\":\"env\",\"Value\":\"prod\"}]"}}`,
+					producerKsuid)),
+			},
+		},
+	}
+	existingTargets := []*pkgmodel.Target{
+		{Label: "test-target", Config: json.RawMessage(`{"Region": "us-east-1"}`), Namespace: "test"},
+	}
+
+	_, err = GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile,
+		FormaCommandSourceUser, existingTargets, ds, nil, nil)
+	require.NoError(t, err)
+}
