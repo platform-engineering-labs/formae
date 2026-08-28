@@ -1102,6 +1102,11 @@ func generateResourceUpdatesForReconcile(
 	// represented by a user-driven update/create or by an existing
 	// delete (those paths already cover the dependent).
 	finalResourceUpdates = appendCascadeUpdatesIfAbsent(finalResourceUpdates, cascadeUpdates)
+
+	if err := validateReferencesAgainstRemovals(finalResourceUpdates, forma); err != nil {
+		return nil, err
+	}
+
 	return finalResourceUpdates, nil
 }
 
