@@ -125,6 +125,7 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunMonotonicTerminalityTest(t, newDS)
 	RunMonotonicTerminalityRaceTest(t, newDS)
 	RunForceCancelResourceUpdatesTest(t, newDS)
+	RunResourceUpdateFailureReasonRoundTrip(t, newDS)
 
 	RunRecordAgentBoot(t, newDS)
 	RunAgentBootsAreAppendOnly(t, newDS)

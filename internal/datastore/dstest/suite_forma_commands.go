@@ -1414,3 +1414,57 @@ func RunCommandSourceRoundTrip(t *testing.T, newDS func(t *testing.T) TestDatast
 			"Source must survive a store/load round-trip")
 	})
 }
+
+// RunResourceUpdateFailureReasonRoundTrip verifies that a failure reason
+// recorded on a resource update with no plugin progress survives both the
+// command store/load round trip and a bulk resource-update store, so the
+// persisted command's error message surfaces it instead of coming back blank.
+func RunResourceUpdateFailureReasonRoundTrip(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("ResourceUpdateFailureReasonRoundTrip", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		reason := "resource update failed before any plugin operation ran"
+		cmd := &forma_command.FormaCommand{
+			ID:          util.NewID(),
+			Description: pkgmodel.Description{},
+			ResourceUpdates: []resource_update.ResourceUpdate{
+				{
+					ResourceTarget: pkgmodel.Target{Label: "target1", Namespace: "default", Config: json.RawMessage("{}")},
+					DesiredState:   pkgmodel.Resource{Ksuid: util.NewID(), Properties: json.RawMessage("{}")},
+					Operation:      types.OperationUpdate,
+					State:          resource_update.ResourceUpdateStateFailed,
+					FailureReason:  reason,
+				},
+			},
+			Command: pkgmodel.CommandApply,
+			State:   forma_command.CommandStateFailed,
+		}
+		err := ds.StoreFormaCommand(cmd, cmd.ID)
+		assert.NoError(t, err)
+
+		commands, err := ds.LoadFormaCommands()
+		assert.NoError(t, err)
+		if !assert.Len(t, commands, 1) {
+			return
+		}
+		loaded := commands[0].ResourceUpdates[0]
+		assert.Equal(t, reason, loaded.FailureReason, "the failure reason must survive the command round trip")
+		assert.Equal(t, reason, loaded.MostRecentFailureMessage())
+
+		// The bulk path is the one completion handling actually writes through.
+		bulkReason := "a different reason recorded at completion"
+		loaded.FailureReason = bulkReason
+		err = ds.BulkStoreResourceUpdates(cmd.ID, []resource_update.ResourceUpdate{loaded})
+		assert.NoError(t, err)
+
+		commands, err = ds.LoadFormaCommands()
+		assert.NoError(t, err)
+		if !assert.Len(t, commands, 1) {
+			return
+		}
+		assert.Equal(t, bulkReason, commands[0].ResourceUpdates[0].FailureReason,
+			"the failure reason must survive the bulk resource-update store")
+	})
+}

@@ -989,6 +989,12 @@ func (f *FormaCommandPersister) markResourceUpdateAsComplete(msg *messages.MarkR
 		res.State = msg.FinalState
 		res.StartTs = msg.ResourceStartTs
 		res.ModifiedTs = msg.ResourceModifiedTs
+		// Guarded copy: a successful completion carries no reason (the updater
+		// clears it on success), and an empty incoming reason must not erase
+		// one already recorded for this row.
+		if msg.FailureReason != "" {
+			res.FailureReason = msg.FailureReason
+		}
 
 		// Hash read/actual-state properties at this write choke point, same as
 		// updateCommandFromProgress does for intermediate progress. This matters most

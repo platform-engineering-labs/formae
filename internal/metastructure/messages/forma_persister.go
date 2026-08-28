@@ -25,6 +25,10 @@ type MarkResourceUpdateAsComplete struct {
 	ResourceProperties         json.RawMessage
 	ResourceReadOnlyProperties json.RawMessage
 	Version                    string
+	// FailureReason carries a human-readable explanation for a failure that
+	// was not recorded as plugin progress (e.g. a terminal resolve miss), so
+	// the persisted command's error message survives a reload.
+	FailureReason string
 }
 
 type UpdateResourceProgress struct {

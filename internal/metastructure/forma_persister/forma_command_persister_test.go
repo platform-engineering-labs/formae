@@ -1460,3 +1460,40 @@ func newFormaCommandPersisterWithDatastore(t *testing.T, ds datastore.Datastore)
 
 	return operator, sender, nil
 }
+
+// A completion that carries a failure reason (a failure recorded before any
+// plugin operation ran, so no progress entry holds a message) must land on the
+// persisted resource update, where the command's error surfaces read it.
+func TestFormaCommandPersister_MarkCompleteRecordsFailureReason(t *testing.T) {
+	formaCommand := newFormaCommandWithCreateResourceUpdate()
+	formaPersister, sender, err := newFormaCommandPersisterForTest(t)
+	assert.NoError(t, err)
+
+	storeResult := formaPersister.Call(sender, StoreNewFormaCommand{Command: *formaCommand})
+	assert.NoError(t, storeResult.Error)
+	assert.True(t, storeResult.Response.(bool))
+
+	resourceURI := formaCommand.ResourceUpdates[0].DesiredState.URI()
+	reason := "resource update failed before any plugin operation ran"
+
+	markComplete := messages.MarkResourceUpdateAsComplete{
+		CommandID:          formaCommand.ID,
+		ResourceURI:        resourceURI,
+		Operation:          resource_update.OperationCreate,
+		FinalState:         resource_update.ResourceUpdateStateFailed,
+		ResourceStartTs:    util.TimeNow(),
+		ResourceModifiedTs: util.TimeNow(),
+		FailureReason:      reason,
+	}
+	markRes := formaPersister.Call(sender, markComplete)
+	assert.NoError(t, markRes.Error)
+	assert.True(t, markRes.Response.(bool))
+
+	loadResult := formaPersister.Call(sender, LoadFormaCommand{CommandID: formaCommand.ID})
+	assert.NoError(t, loadResult.Error)
+	loaded, ok := loadResult.Response.(*forma_command.FormaCommand)
+	assert.True(t, ok)
+
+	assert.Equal(t, reason, loaded.ResourceUpdates[0].FailureReason)
+	assert.Equal(t, reason, loaded.ResourceUpdates[0].MostRecentFailureMessage())
+}

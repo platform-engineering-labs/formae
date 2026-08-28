@@ -226,7 +226,7 @@ SELECT
 	ru.resource, ru.resource_target, ru.existing_resource, ru.existing_target,
 	ru.progress_result, ru.most_recent_progress,
 	ru.remaining_resolvables, ru.reference_labels, ru.previous_properties,
-	ru.is_cascade, ru.cascade_source
+	ru.is_cascade, ru.cascade_source, ru.failure_reason
 FROM forma_commands fc
 LEFT JOIN resource_updates ru ON fc.command_id = ru.command_id`
 
@@ -256,6 +256,7 @@ func scanJoinedRow(rows *sql.Rows) (*forma_command.FormaCommand, *resource_updat
 	var remainingResolvablesJSON, referenceLabelsJSON, previousPropertiesJSON []byte
 	var ruIsCascade *bool
 	var ruCascadeSource *string
+	var ruFailureReason *string
 
 	err := rows.Scan(
 		&commandID, &fcTimestamp, &fcCommand, &fcState, &fcClientID,
@@ -266,7 +267,7 @@ func scanJoinedRow(rows *sql.Rows) (*forma_command.FormaCommand, *resource_updat
 		&resourceJSON, &resourceTargetJSON, &existingResourceJSON, &existingTargetJSON,
 		&progressResultJSON, &mostRecentProgressJSON,
 		&remainingResolvablesJSON, &referenceLabelsJSON, &previousPropertiesJSON,
-		&ruIsCascade, &ruCascadeSource,
+		&ruIsCascade, &ruCascadeSource, &ruFailureReason,
 	)
 	if err != nil {
 		return nil, nil, err
@@ -403,6 +404,9 @@ func scanJoinedRow(rows *sql.Rows) (*forma_command.FormaCommand, *resource_updat
 	}
 	if ruCascadeSource != nil {
 		ru.CascadeSource = *ruCascadeSource
+	}
+	if ruFailureReason != nil {
+		ru.FailureReason = *ruFailureReason
 	}
 
 	return &cmd, &ru, nil
@@ -804,14 +808,14 @@ func (d *DatastoreMSSQL) BulkStoreResourceUpdates(commandID string, updates []re
 		return fmt.Errorf("failed to clear existing resource updates: %w", err)
 	}
 
-	const colsPerRow = 23
+	const colsPerRow = 24
 	insertPrefix := `INSERT INTO resource_updates (
 		command_id, ksuid, operation, state, start_ts, modified_ts,
 		retries, remaining, version, stack_label, group_id, source,
 		resource, resource_target, existing_resource, existing_target,
 		progress_result, most_recent_progress,
 		remaining_resolvables, reference_labels, previous_properties,
-		is_cascade, cascade_source
+		is_cascade, cascade_source, failure_reason
 	) VALUES `
 
 	// Dedupe by (ksuid, operation) keeping the last — last-wins, matching the
@@ -906,6 +910,7 @@ func (d *DatastoreMSSQL) BulkStoreResourceUpdates(commandID string, updates []re
 			previousProperties,
 			ru.IsCascade,
 			ru.CascadeSource,
+			ru.FailureReason,
 		}
 		stmt := insertPrefix + "(" + placeholders(1, colsPerRow) + ")"
 		if _, err = tx.ExecContext(ctx, stmt, args...); err != nil {
