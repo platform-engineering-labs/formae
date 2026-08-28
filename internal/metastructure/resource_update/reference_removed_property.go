@@ -100,7 +100,14 @@ func validateReferencesAgainstRemovals(updates []ResourceUpdate, forma *pkgmodel
 			if !ok {
 				continue
 			}
-			refPath := "/" + uri.PropertyPath()
+			// Reference property paths use the resolver's dotted nesting
+			// convention ("Config.Endpoint", "Subnets.0"), while removal paths
+			// are JSON Pointers ("/Config", "/Subnets/0"). Normalize dots to
+			// slashes before comparing so a nested or array-indexed reference
+			// into a removed path is recognized. This adopts the resolver's
+			// own convention, including its known ambiguity with a literal
+			// dotted key — the same trade the resolver already makes.
+			refPath := "/" + strings.ReplaceAll(uri.PropertyPath(), ".", "/")
 			for _, rp := range removed {
 				if refPath == rp.Path || strings.HasPrefix(refPath, rp.Path+"/") {
 					return ReferenceToRemovedPropertyError{
