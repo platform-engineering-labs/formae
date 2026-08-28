@@ -8,6 +8,7 @@ package resolver
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -227,6 +228,13 @@ func TestLoadResolvableProperties_EffectiveDesiredLiteralWins(t *testing.T) {
 // opaque is never materialized by this rule: behavior stays byte-identical to
 // the persisted-row path (envelope: cached value; hashed/valueless: deferred).
 func TestLoadResolvableProperties_EnvelopeAndHashedKeepTodaysBehavior(t *testing.T) {
+	// The transitive root the "Chained" envelope points to: not declared in
+	// effective, so the chain is unmoved and the outer envelope's own cached
+	// value is what must answer — exercised recursively now, same as before.
+	root := &pkgmodel.Resource{
+		Label: "root", Ksuid: "k-root", Stack: "s",
+		Properties: json.RawMessage(`{"V": "root-value"}`),
+	}
 	source := &pkgmodel.Resource{
 		Label: "parent", Ksuid: "k-parent", Stack: "s",
 		Properties: json.RawMessage(`{
@@ -241,7 +249,7 @@ func TestLoadResolvableProperties_EnvelopeAndHashedKeepTodaysBehavior(t *testing
 			"B": {"$ref": "formae://k-parent#/Secret"}
 		}`),
 	}
-	all := map[string][]*pkgmodel.Resource{"s": {source}}
+	all := map[string][]*pkgmodel.Resource{"s": {source, root}}
 	effective := map[string]json.RawMessage{
 		"k-parent": json.RawMessage(`{
 			"Chained": {"$ref": "formae://k-root#/V"},
@@ -316,4 +324,231 @@ func TestLoadResolvableProperties_EffectiveDesiredSkipsInlineOpaqueNotYetPersist
 
 	_, ok := props.Get("k-parent", "Secret")
 	assert.False(t, ok, "an inline-opaque value that exists only in the effective desired document must never be materialized")
+}
+
+// A consumer references B, and B's own value is a reference to A. When the
+// command changes A's literal, the consumer must resolve the value B will
+// hold after this command: A's new literal, not B's stale cached value.
+func TestLoadResolvableProperties_ChainRootLiteralWins(t *testing.T) {
+	root := pkgmodel.Resource{
+		Label: "root", Ksuid: "k-root", Stack: "s",
+		Properties: json.RawMessage(`{"Name": "r", "Value": "blue"}`),
+	}
+	middle := pkgmodel.Resource{
+		Label: "middle", Ksuid: "k-middle", Stack: "s",
+		Properties: json.RawMessage(`{
+			"Name": "m",
+			"Value": {"$ref": "formae://k-root#/Value", "$value": "blue"}
+		}`),
+	}
+	consumer := pkgmodel.Resource{
+		Label: "consumer", Ksuid: "k-consumer", Stack: "s",
+		Properties: json.RawMessage(`{
+			"Ref": {"$ref": "formae://k-middle#/Value", "$value": "blue"}
+		}`),
+	}
+	all := map[string][]*pkgmodel.Resource{"s": {&root, &middle}}
+	effective := map[string]json.RawMessage{
+		"k-root":   json.RawMessage(`{"Name": "r", "Value": "green"}`),
+		"k-middle": json.RawMessage(`{"Name": "m", "Value": {"$ref": "formae://k-root#/Value"}}`),
+	}
+
+	props, err := LoadResolvablePropertiesFromStacks(consumer, all, effective)
+	require.NoError(t, err)
+
+	v, ok := props.Get("k-middle", "Value")
+	require.True(t, ok)
+	assert.Equal(t, "green", v, "the chain root's new literal is the resolution, not the middle hop's stale cached value")
+
+	a, _ := props.Answer("k-middle", "Value")
+	assert.Equal(t, AnswerResolved, a.Kind)
+}
+
+// When nothing in the chain moves (the transitive root is not declared in the
+// command), the middle resource's cached value is the last applied resolution
+// and remains the answer.
+func TestLoadResolvableProperties_ChainUnmovedKeepsCachedValue(t *testing.T) {
+	root := pkgmodel.Resource{
+		Label: "root", Ksuid: "k-root", Stack: "s",
+		Properties: json.RawMessage(`{"Name": "r", "Value": "blue"}`),
+	}
+	middle := pkgmodel.Resource{
+		Label: "middle", Ksuid: "k-middle", Stack: "s",
+		Properties: json.RawMessage(`{
+			"Name": "m",
+			"Value": {"$ref": "formae://k-root#/Value", "$value": "blue"}
+		}`),
+	}
+	consumer := pkgmodel.Resource{
+		Label: "consumer", Ksuid: "k-consumer", Stack: "s",
+		Properties: json.RawMessage(`{
+			"Ref": {"$ref": "formae://k-middle#/Value", "$value": "blue"}
+		}`),
+	}
+	all := map[string][]*pkgmodel.Resource{"s": {&root, &middle}}
+	effective := map[string]json.RawMessage{
+		"k-middle": json.RawMessage(`{"Name": "m", "Value": {"$ref": "formae://k-root#/Value"}}`),
+	}
+
+	props, err := LoadResolvablePropertiesFromStacks(consumer, all, effective)
+	require.NoError(t, err)
+
+	v, ok := props.Get("k-middle", "Value")
+	require.True(t, ok)
+	assert.Equal(t, "blue", v, "the undeclared root means the middle hop's cached value remains the answer")
+
+	a, _ := props.Answer("k-middle", "Value")
+	assert.Equal(t, AnswerStable, a.Kind)
+}
+
+// An opaque marker anywhere on the hop keeps today's behavior: no recursion,
+// the persisted fallthrough answers (cached value if present), and the raw
+// desired plaintext of the transitive root is never consulted.
+func TestLoadResolvableProperties_ChainOpaqueHopKeepsTodaysBehavior(t *testing.T) {
+	root := pkgmodel.Resource{
+		Label: "root", Ksuid: "k-root", Stack: "s",
+		Properties: json.RawMessage(`{"Name": "r", "Secret": {"$value": "digest", "$hashed": true}}`),
+	}
+	middle := pkgmodel.Resource{
+		Label: "middle", Ksuid: "k-middle", Stack: "s",
+		Properties: json.RawMessage(`{
+			"Name": "m",
+			"Cred": {"$ref": "formae://k-root#/Secret", "$value": "cached-leaf", "$visibility": "Opaque"}
+		}`),
+	}
+	consumer := pkgmodel.Resource{
+		Label: "consumer", Ksuid: "k-consumer", Stack: "s",
+		Properties: json.RawMessage(`{
+			"Ref": {"$ref": "formae://k-middle#/Cred", "$value": "cached-leaf", "$visibility": "Opaque"}
+		}`),
+	}
+	all := map[string][]*pkgmodel.Resource{"s": {&root, &middle}}
+	effective := map[string]json.RawMessage{
+		"k-root":   json.RawMessage(`{"Name": "r", "Secret": "rotated-plaintext"}`),
+		"k-middle": json.RawMessage(`{"Name": "m", "Cred": {"$ref": "formae://k-root#/Secret", "$visibility": "Opaque"}}`),
+	}
+
+	props, err := LoadResolvablePropertiesFromStacks(consumer, all, effective)
+	require.NoError(t, err)
+
+	v, ok := props.Get("k-middle", "Cred")
+	require.True(t, ok)
+	assert.Equal(t, "cached-leaf", v)
+	assert.NotContains(t, v, "rotated-plaintext", "an opaque hop must never surface the transitive root's live plaintext")
+}
+
+// A middle hop that extracts a key from a JSON document resolves the
+// extracted leaf of the root's new value, entirely in memory.
+func TestLoadResolvableProperties_ChainJSONHopExtractsLeaf(t *testing.T) {
+	root := pkgmodel.Resource{
+		Label: "root", Ksuid: "k-root", Stack: "s",
+		Properties: json.RawMessage(`{"Name": "r", "Doc": "{\"db\":{\"host\":\"old-host\"}}"}`),
+	}
+	middle := pkgmodel.Resource{
+		Label: "middle", Ksuid: "k-middle", Stack: "s",
+		Properties: json.RawMessage(`{
+			"Name": "m",
+			"Host": {"$ref": "formae://k-root#/Doc", "$value": "old-host", "$json": "db.host"}
+		}`),
+	}
+	consumer := pkgmodel.Resource{
+		Label: "consumer", Ksuid: "k-consumer", Stack: "s",
+		Properties: json.RawMessage(`{
+			"Ref": {"$ref": "formae://k-middle#/Host", "$value": "old-host"}
+		}`),
+	}
+	all := map[string][]*pkgmodel.Resource{"s": {&root, &middle}}
+	effective := map[string]json.RawMessage{
+		"k-root":   json.RawMessage(`{"Name": "r", "Doc": "{\"db\":{\"host\":\"new-host\"}}"}`),
+		"k-middle": json.RawMessage(`{"Name": "m", "Host": {"$ref": "formae://k-root#/Doc", "$json": "db.host"}}`),
+	}
+
+	props, err := LoadResolvablePropertiesFromStacks(consumer, all, effective)
+	require.NoError(t, err)
+
+	v, ok := props.Get("k-middle", "Host")
+	require.True(t, ok)
+	assert.Equal(t, "new-host", v, "the JSON hop resolves the extracted leaf of the root's new value")
+}
+
+// Two references whose chains meet at the same root resolve independently: a
+// diamond is not a cycle.
+func TestLoadResolvableProperties_DiamondResolves(t *testing.T) {
+	root := pkgmodel.Resource{
+		Label: "root", Ksuid: "k-root", Stack: "s",
+		Properties: json.RawMessage(`{"Name": "r", "Value": "blue"}`),
+	}
+	left := pkgmodel.Resource{
+		Label: "left", Ksuid: "k-left", Stack: "s",
+		Properties: json.RawMessage(`{
+			"Name": "l",
+			"Value": {"$ref": "formae://k-root#/Value", "$value": "blue"}
+		}`),
+	}
+	right := pkgmodel.Resource{
+		Label: "right", Ksuid: "k-right", Stack: "s",
+		Properties: json.RawMessage(`{
+			"Name": "rr",
+			"Value": {"$ref": "formae://k-root#/Value", "$value": "blue"}
+		}`),
+	}
+	consumer := pkgmodel.Resource{
+		Label: "consumer", Ksuid: "k-consumer", Stack: "s",
+		Properties: json.RawMessage(`{
+			"Left":  {"$ref": "formae://k-left#/Value", "$value": "blue"},
+			"Right": {"$ref": "formae://k-right#/Value", "$value": "blue"}
+		}`),
+	}
+	all := map[string][]*pkgmodel.Resource{"s": {&root, &left, &right}}
+	effective := map[string]json.RawMessage{
+		"k-root":  json.RawMessage(`{"Name": "r", "Value": "green"}`),
+		"k-left":  json.RawMessage(`{"Name": "l", "Value": {"$ref": "formae://k-root#/Value"}}`),
+		"k-right": json.RawMessage(`{"Name": "rr", "Value": {"$ref": "formae://k-root#/Value"}}`),
+	}
+
+	props, err := LoadResolvablePropertiesFromStacks(consumer, all, effective)
+	require.NoError(t, err)
+
+	leftVal, ok := props.Get("k-left", "Value")
+	require.True(t, ok)
+	assert.Equal(t, "green", leftVal)
+
+	rightVal, ok := props.Get("k-right", "Value")
+	require.True(t, ok)
+	assert.Equal(t, "green", rightVal)
+}
+
+// A chain that loops back onto itself is a clean plan-time error naming the
+// cycle, not a hang and not a stale resolution.
+func TestLoadResolvableProperties_ReferenceCycleFails(t *testing.T) {
+	a := pkgmodel.Resource{
+		Label: "a", Ksuid: "k-a", Stack: "s",
+		Properties: json.RawMessage(`{
+			"Value": {"$ref": "formae://k-b#/Value", "$value": "x"}
+		}`),
+	}
+	b := pkgmodel.Resource{
+		Label: "b", Ksuid: "k-b", Stack: "s",
+		Properties: json.RawMessage(`{
+			"Value": {"$ref": "formae://k-a#/Value", "$value": "x"}
+		}`),
+	}
+	consumer := pkgmodel.Resource{
+		Label: "consumer", Ksuid: "k-consumer", Stack: "s",
+		Properties: json.RawMessage(`{
+			"Ref": {"$ref": "formae://k-a#/Value", "$value": "x"}
+		}`),
+	}
+	all := map[string][]*pkgmodel.Resource{"s": {&a, &b}}
+	effective := map[string]json.RawMessage{
+		"k-a": json.RawMessage(`{"Value": {"$ref": "formae://k-b#/Value"}}`),
+		"k-b": json.RawMessage(`{"Value": {"$ref": "formae://k-a#/Value"}}`),
+	}
+
+	_, err := LoadResolvablePropertiesFromStacks(consumer, all, effective)
+	require.Error(t, err)
+
+	var cycleErr ReferenceCycleError
+	require.True(t, errors.As(err, &cycleErr), "error must be a ReferenceCycleError")
+	assert.GreaterOrEqual(t, len(cycleErr.Chain), 2, "the chain must name at least the repeated hop and its first occurrence")
 }

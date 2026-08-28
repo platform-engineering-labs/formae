@@ -211,3 +211,145 @@ func TestGenerateResourceUpdates_ConsumerIgnoresResubmittedSetOnceProducerField(
 		}
 	}
 }
+
+// A literal move propagates through a two-hop chain in one command: the
+// root's field changes, the middle resource references it, and a consumer
+// references the middle resource. All three must be planned, with the
+// consumer's patch carrying the root's new value.
+func TestGenerateResourceUpdates_LiteralMovesThroughTwoHopChain(t *testing.T) {
+	ds, _ := GetDeps(t)
+
+	rootSchema := pkgmodel.Schema{
+		Identifier: "Name",
+		Fields:     []string{"Name", "Value"},
+		Hints:      map[string]pkgmodel.FieldHint{"Name": {CreateOnly: true}},
+	}
+	middleSchema := pkgmodel.Schema{
+		Identifier: "Name",
+		Fields:     []string{"Name", "ParentRef"},
+		Hints:      map[string]pkgmodel.FieldHint{},
+	}
+	consumerSchema := pkgmodel.Schema{
+		Identifier: "Name",
+		Fields:     []string{"Name", "ParentRef"},
+		Hints:      map[string]pkgmodel.FieldHint{},
+	}
+
+	rootKsuid := util.NewID()
+	middleKsuid := util.NewID()
+	consumerKsuid := util.NewID()
+
+	existingStack := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{{Label: "test-stack"}},
+		Resources: []pkgmodel.Resource{
+			{
+				Label:      "root",
+				Type:       "FakeAWS::Versioned::Parent",
+				Stack:      "test-stack",
+				Target:     "test-target",
+				Schema:     rootSchema,
+				Ksuid:      rootKsuid,
+				Properties: json.RawMessage(`{"Name": "root-1", "Value": "hello"}`),
+			},
+			{
+				Label:  "middle",
+				Type:   "FakeAWS::Versioned::Consumer",
+				Stack:  "test-stack",
+				Target: "test-target",
+				Schema: middleSchema,
+				Ksuid:  middleKsuid,
+				Properties: json.RawMessage(fmt.Sprintf(
+					`{"Name": "middle-1", "ParentRef": {"$ref": "formae://%s#/Value", "$value": "hello"}}`,
+					rootKsuid)),
+			},
+			{
+				Label:  "consumer",
+				Type:   "FakeAWS::Versioned::Consumer",
+				Stack:  "test-stack",
+				Target: "test-target",
+				Schema: consumerSchema,
+				Ksuid:  consumerKsuid,
+				Properties: json.RawMessage(fmt.Sprintf(
+					`{"Name": "consumer-1", "ParentRef": {"$ref": "formae://%s#/ParentRef", "$value": "hello"}}`,
+					middleKsuid)),
+			},
+		},
+	}
+
+	_, err := ds.StoreStack(existingStack, "previous-command")
+	require.NoError(t, err)
+
+	// Only the root's mutable field changes; its new value is a literal. The
+	// middle and consumer are resubmitted with the $res sugar, unchanged.
+	forma := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{{Label: "test-stack"}},
+		Targets: []pkgmodel.Target{
+			{Label: "test-target", Config: json.RawMessage(`{"Region": "us-east-1"}`), Namespace: "test"},
+		},
+		Resources: []pkgmodel.Resource{
+			{
+				Label:      "root",
+				Type:       "FakeAWS::Versioned::Parent",
+				Stack:      "test-stack",
+				Target:     "test-target",
+				Schema:     rootSchema,
+				Properties: json.RawMessage(`{"Name": "root-1", "Value": "world"}`),
+			},
+			{
+				Label:  "middle",
+				Type:   "FakeAWS::Versioned::Consumer",
+				Stack:  "test-stack",
+				Target: "test-target",
+				Schema: middleSchema,
+				Properties: json.RawMessage(`{
+					"Name": "middle-1",
+					"ParentRef": {
+						"$res":      true,
+						"$label":    "root",
+						"$type":     "FakeAWS::Versioned::Parent",
+						"$stack":    "test-stack",
+						"$property": "Value"
+					}
+				}`),
+			},
+			{
+				Label:  "consumer",
+				Type:   "FakeAWS::Versioned::Consumer",
+				Stack:  "test-stack",
+				Target: "test-target",
+				Schema: consumerSchema,
+				Properties: json.RawMessage(`{
+					"Name": "consumer-1",
+					"ParentRef": {
+						"$res":      true,
+						"$label":    "middle",
+						"$type":     "FakeAWS::Versioned::Consumer",
+						"$stack":    "test-stack",
+						"$property": "ParentRef"
+					}
+				}`),
+			},
+		},
+	}
+
+	existingTargets := []*pkgmodel.Target{
+		{Label: "test-target", Config: json.RawMessage(`{"Region": "us-east-1"}`), Namespace: "test"},
+	}
+
+	updates, err := GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile,
+		FormaCommandSourceUser, existingTargets, ds, nil, nil)
+	require.NoError(t, err)
+
+	planned := map[string]*ResourceUpdate{}
+	for i := range updates {
+		planned[updates[i].DesiredState.Label] = &updates[i]
+	}
+
+	require.Contains(t, planned, "root", "root whose field changed must be updated")
+	require.Contains(t, planned, "middle", "middle hop following the root's changed field must stay in the changeset")
+	require.Contains(t, planned, "consumer", "consumer at the end of the chain must stay in the changeset")
+
+	consumer := planned["consumer"]
+	assert.Contains(t, string(consumer.DesiredState.PatchDocument), "world",
+		"the consumer's patch must carry the root's new value through the two-hop chain")
+}
