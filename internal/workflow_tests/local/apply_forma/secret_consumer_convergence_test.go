@@ -185,20 +185,14 @@ func TestApplyForma_RotatedSecret_ConsumerReceivesValueWithoutSinkLeaks(t *testi
 		}
 		assert.True(t, plannedLabels["my-bucket"], "the rotation must plan the consumer, got %v", plannedLabels)
 
-		// The stored secret's plaintext must appear nowhere in the response,
-		// and the consumer's planned update must carry no plaintext at all:
-		// its value resolves only at execution.
+		// The response is presentation data: no plaintext (stored or newly
+		// declared) and no at-rest digest may appear anywhere in it.
 		simJSON, err := json.Marshal(simResp)
 		require.NoError(t, err)
 		assert.NotContains(t, string(simJSON), secretV1, "the simulate response must never carry the stored secret")
-		for _, ru := range simResp.Simulation.Command.ResourceUpdates {
-			if ru.ResourceLabel != "my-bucket" {
-				continue
-			}
-			ruJSON, err := json.Marshal(ru)
-			require.NoError(t, err)
-			assert.NotContains(t, string(ruJSON), secretV2, "the consumer's planned update must not carry plaintext")
-		}
+		assert.NotContains(t, string(simJSON), secretV2, "the simulate response must never carry the declared rotation")
+		assert.NotContains(t, string(simJSON), pkgmodel.ComputeValueHash(secretV1), "digests live at rest, never in a response")
+		assert.NotContains(t, string(simJSON), pkgmodel.ComputeValueHash(secretV2), "digests live at rest, never in a response")
 
 		_, err = m.ApplyForma(rotateForma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
 		require.NoError(t, err)

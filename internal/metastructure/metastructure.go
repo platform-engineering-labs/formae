@@ -40,6 +40,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/stack_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/target_reaper"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/transformations"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
@@ -621,6 +622,16 @@ func translateToAPICommand(fa *forma_command.FormaCommand) apimodel.Command {
 			oldLabel = ru.PriorState.Label
 		}
 
+		// Property and patch documents are redacted at this single projection
+		// point: everything downstream (simulate responses, command status,
+		// conflict listings, the CLI, API consumers) is presentation data, and
+		// neither opaque plaintext (pre-persist documents) nor at-rest digests
+		// belong in it.
+		opaque := transformations.OpaqueFields(ru.DesiredState.Schema, ru.DesiredState.Type)
+		for f := range transformations.OpaqueFields(ru.PriorState.Schema, ru.PriorState.Type) {
+			opaque[f] = true
+		}
+
 		apiCommand.ResourceUpdates = append(apiCommand.ResourceUpdates, apimodel.ResourceUpdate{
 			ResourceID:      ru.DesiredState.Ksuid,
 			ResourceType:    ru.DesiredState.Type,
@@ -628,10 +639,10 @@ func translateToAPICommand(fa *forma_command.FormaCommand) apimodel.Command {
 			OldLabel:        oldLabel,
 			StackName:       ru.StackLabel,
 			OldStackName:    ru.PriorState.Stack,
-			Properties:      ru.DesiredState.Properties,
-			OldProperties:   ru.PreviousProperties,
-			PatchDocument:   ru.DesiredState.PatchDocument,
-			CreateOnlyPatch: ru.CreateOnlyPatch,
+			Properties:      transformations.RedactPropertiesForDisplay(ru.DesiredState.Properties, opaque),
+			OldProperties:   transformations.RedactPropertiesForDisplay(ru.PreviousProperties, opaque),
+			PatchDocument:   transformations.RedactPatchDocumentForDisplay(ru.DesiredState.PatchDocument, opaque),
+			CreateOnlyPatch: transformations.RedactPatchDocumentForDisplay(ru.CreateOnlyPatch, opaque),
 			Operation:       string(ru.Operation),
 			State:           string(ru.State),
 			StartedAt:       ru.StartTs,
