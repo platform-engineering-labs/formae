@@ -4,7 +4,16 @@
  * SPDX-License-Identifier: FSL-1.1-ALv2
  */
 
-/// The standing resources the oidc-credential e2e exchanges a token against.
+/// The standing resources the oidc-credential e2e mints and exchanges a token
+/// against: the static issuer, its published keys, and the IAM identity
+/// provider that trusts it.
+///
+/// The role the token is exchanged for is deliberately NOT here. `formae
+/// connect` provisions it on every run, from the coordinates the e2e's stub
+/// control plane produces, which is how the suite proves the connect path
+/// instead of assuming its output. The identity provider stays standing
+/// because it is account-global and shared, and because connect validates and
+/// reuses an existing one rather than needing to create it.
 ///
 /// These are NOT created by the test run: the e2e assumes they already exist
 /// in the e2e account, and the aws-nuke pre-cleanup preserves them (their
@@ -33,7 +42,6 @@ import "@formae/formae.pkl"
 
 import "@aws/aws.pkl"
 import "@aws/iam/oidcprovider.pkl"
-import "@aws/iam/role.pkl"
 import "@aws/s3/bucket.pkl"
 import "@aws/s3/bucketpolicy.pkl"
 import "@aws/s3/object.pkl"
@@ -57,11 +65,12 @@ local issuerUrl = "https://\(issuerHost)"
 /// Pinned in the JWKS and in the header of every minted token.
 local keyId = "e2e-oidc-key-1"
 
-/// The only subject the role trusts, and the only audience it accepts.
-local subject = "e2e-oidc-subject"
+/// The audience the provider accepts. The subject the role trusts is not
+/// here: the role is provisioned per run by `formae connect`, from the subject
+/// the e2e's stub control plane hands it, which is what makes the e2e prove
+/// the connect path rather than assume it.
 local audience = "sts.amazonaws.com"
 
-local assumeRoleName = "e2e-oidc-assume-role"
 local secretName = "e2e-oidc-signing-key"
 
 /// SHA-1 fingerprint of Amazon Root CA 1, which terminates the chain for every
@@ -152,33 +161,6 @@ local issuerProvider = new oidcprovider.OIDCProvider {
   thumbprintList = new Listing { issuerThumbprint }
 }
 
-/// The role the e2e assumes. It grants nothing: what the test proves is that
-/// STS accepts the token and hands back credentials, not what they can do.
-local assumeRole = new role.Role {
-  label = "e2e-oidc-assume-role"
-  roleName = assumeRoleName
-  description = "Assumed by the oidc-credential e2e via web identity"
-  maxSessionDuration = 3600
-  assumeRolePolicyDocument = new Dynamic {
-    ["Version"] = "2012-10-17"
-    ["Statement"] = new Listing {
-      new Dynamic {
-        ["Effect"] = "Allow"
-        ["Principal"] = new Dynamic {
-          ["Federated"] = "arn:aws:iam::\(accountId):oidc-provider/\(issuerHost)"
-        }
-        ["Action"] = "sts:AssumeRoleWithWebIdentity"
-        ["Condition"] = new Dynamic {
-          ["StringEquals"] = new Dynamic {
-            ["\(issuerHost):sub"] = subject
-            ["\(issuerHost):aud"] = audience
-          }
-        }
-      }
-    }
-  }
-}
-
 /// The private half, read from the agent's environment so it never lands in
 /// the tree. Opaque and set-once: formae writes it at create and thereafter
 /// neither reads it back nor diffs it.
@@ -192,7 +174,7 @@ local signingKey = new secret.Secret {
 forma {
   new formae.Stack {
     label = "e2e-oidc-standing"
-    description = "Standing issuer, provider, role and key for the oidc-credential e2e"
+    description = "Standing issuer, provider and key for the oidc-credential e2e"
   }
 
   new formae.Target {
@@ -207,6 +189,5 @@ forma {
   discoveryDocument
   jwks
   issuerProvider
-  assumeRole
   signingKey
 }

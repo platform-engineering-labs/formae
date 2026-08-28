@@ -5,9 +5,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"os"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -18,26 +22,71 @@ import (
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
 
+// Every coordinate this fixture needs comes from the environment the agent
+// was started with, because none of them exist until the run that provisions
+// them. `formae connect` makes the trust, and only then is there an audience
+// to mint for or a role to assume.
 const (
-	// audience the plugin asks its broker for, and the audience the role's
-	// trust policy expects on the token it is handed.
-	audience = "sts.amazonaws.com"
+	// audienceEnv names the audience the plugin asks its broker to mint for.
+	// A token carries exactly one, and each cloud spells it differently: AWS
+	// wants sts.amazonaws.com, GCP wants the workload identity provider's own
+	// resource name.
+	audienceEnv = "E2E_OIDC_AUDIENCE"
+
+	// assumeRoleARNEnv and gcpProjectEnv each select one cloud's exchange, and
+	// carry the one coordinate that exchange needs beyond the audience.
+	assumeRoleARNEnv = "E2E_OIDC_ASSUME_ROLE_ARN"
+	gcpProjectEnv    = "E2E_OIDC_GCP_PROJECT"
 
 	// namespace this plugin serves, as its manifest declares it. Named in the
 	// recorded failure so a test can tell whose pairing was missing.
 	namespace = "OidcEcho"
 
-	// assumeRoleARN is the standing role the minted token is exchanged for.
-	// Its trust policy names the broker's issuer, subject, and audience.
-	assumeRoleARN = "arn:aws:iam::942849037363:role/e2e-oidc-assume-role"
-
 	// assumeRoleSessionName labels the STS session. Stable, so the assumed
 	// role ARN a test reads back is stable too.
 	assumeRoleSessionName = "e2e-oidc-echo"
 
-	// awsRegion is where the STS call is made.
+	// awsRegion is where the AWS STS call is made.
 	awsRegion = "us-west-2"
 )
+
+// exchange is the cloud-specific half of the probe: what the token is spent
+// on once the broker has minted it.
+//
+// An agent runs exactly one, chosen by which coordinates the test put in its
+// environment, because a token is minted for one audience and is accepted by
+// one exchange only.
+type exchange interface {
+	// Spend exchanges the identity token for real credentials and reports
+	// proof of it: who the caller became, and how long the credentials last.
+	//
+	// The credentials themselves are deliberately not returned. They would
+	// land in the resource's properties, which is not a place credentials
+	// belong.
+	Spend(ctx context.Context, token string) (identity, expiration string, err error)
+}
+
+// resolveExchange picks the exchange the environment configured. Naming both
+// variables in the failure matters: the symptom of setting neither is a token
+// that was minted and then not spent, which looks like the exchange failing
+// rather than never having been asked for.
+func resolveExchange() (exchange, error) {
+	roleARN := os.Getenv(assumeRoleARNEnv)
+	project := os.Getenv(gcpProjectEnv)
+
+	switch {
+	case roleARN != "" && project != "":
+		return nil, fmt.Errorf("%s and %s are both set, so which cloud to exchange at is ambiguous",
+			assumeRoleARNEnv, gcpProjectEnv)
+	case roleARN != "":
+		return awsExchange{roleARN: roleARN}, nil
+	case project != "":
+		return gcpExchange{audience: os.Getenv(audienceEnv), project: project}, nil
+	default:
+		return nil, fmt.Errorf("neither %s nor %s is set, so there is nothing to exchange the token at",
+			assumeRoleARNEnv, gcpProjectEnv)
+	}
+}
 
 // EchoPlugin serves OidcEcho::Tokens::Token. It holds no state beyond the
 // token source the SDK installs, which resolves the paired broker per call.
@@ -64,16 +113,18 @@ func (p *EchoPlugin) LabelConfig() pkgmodel.LabelConfig {
 	return pkgmodel.LabelConfig{DefaultQuery: "$.probeLabel"}
 }
 
-// tokenProperties asks the broker for a token, exchanges it at AWS STS, and
-// renders the resource's properties around both outcomes. A failure is
-// recorded in tokenError or stsError rather than failed outright, so a test
-// asserting the unpaired case reads an exact message instead of whatever an
-// operator error renders to. Real plugins fail closed here; this one is only
-// proving the wiring.
+// tokenProperties asks the broker for a token, spends it at the configured
+// exchange, and renders the resource's properties around both outcomes. A
+// failure is recorded in tokenError or exchangeError rather than failed
+// outright, so a test asserting the unpaired case reads an exact message
+// instead of whatever an operator error renders to. Real plugins fail closed
+// here; this one is only proving the wiring.
 func (p *EchoPlugin) tokenProperties(ctx context.Context, probeLabel string) (json.RawMessage, error) {
 	var token, tokenError string
 
-	switch {
+	switch audience := os.Getenv(audienceEnv); {
+	case audience == "":
+		tokenError = fmt.Sprintf("%s is not set, so there is no audience to mint for", audienceEnv)
 	case p.tokens == nil:
 		// The SDK installs the source on every OidcAware plugin, so this only
 		// fires if that wiring broke.
@@ -87,51 +138,95 @@ func (p *EchoPlugin) tokenProperties(ctx context.Context, probeLabel string) (js
 		}
 	}
 
-	// With no token there is nothing to exchange, so the STS outputs stay
+	// With no token there is nothing to spend, so the exchange outputs stay
 	// empty rather than carrying the error of a call that was never worth
 	// making.
-	var assumedRoleARN, expiration, stsError string
+	var identity, expiration, exchangeError string
 	if token != "" {
-		assumedRoleARN, expiration, stsError = assumeRoleWithToken(ctx, token)
+		identity, expiration, exchangeError = spend(ctx, token)
 	}
 
 	return json.Marshal(map[string]string{
-		"probeLabel":        probeLabel,
-		"token":             token,
-		"tokenError":        tokenError,
-		"stsAssumedRoleArn": assumedRoleARN,
-		"stsExpiration":     expiration,
-		"stsError":          stsError,
+		"probeLabel":         probeLabel,
+		"token":              token,
+		"tokenError":         tokenError,
+		"exchangeIdentity":   identity,
+		"exchangeExpiration": expiration,
+		"exchangeError":      exchangeError,
 	})
 }
 
-// assumeRoleWithToken exchanges an identity token for role credentials at
-// AWS STS and reports proof of the exchange: who the caller became and how
-// long the credentials last. The access key and secret are deliberately not
-// returned: they would land in the resource's properties, which is not a
-// place credentials belong.
-func assumeRoleWithToken(ctx context.Context, token string) (assumedRoleARN, expiration, stsError string) {
+// spend runs the configured exchange and flattens its outcome into the three
+// strings the properties document carries.
+func spend(ctx context.Context, token string) (identity, expiration, exchangeError string) {
+	ex, err := resolveExchange()
+	if err != nil {
+		return "", "", err.Error()
+	}
+	identity, expiration, err = ex.Spend(ctx, token)
+	if err != nil {
+		return "", "", err.Error()
+	}
+	return identity, expiration, ""
+}
+
+// awsExchange trades the identity token for role credentials at AWS STS. The
+// role is the one `formae connect` provisioned, and its trust policy pins the
+// broker's issuer, subject and audience, so a token STS accepts here is proof
+// the whole chain agrees.
+type awsExchange struct {
+	roleARN string
+}
+
+// assumeRolePropagation bounds how long the exchange keeps trying a role that
+// is not assumable yet, and how often.
+//
+// A role created moments ago is not immediately assumable: IAM propagates
+// asynchronously and STS answers AccessDenied in the meantime. That is the
+// ordinary state of a role `formae connect` made seconds earlier, so reporting
+// the first refusal would fail the run over a trust policy that is correct.
+//
+// The window is well inside the agent's 60s plugin call deadline, so this
+// gives up before the operator does and reports STS's own last refusal. A
+// genuinely wrong trust policy still fails, at the end of the window rather
+// than at the start of it.
+const (
+	assumeRolePropagationWindow   = 40 * time.Second
+	assumeRolePropagationInterval = 2 * time.Second
+)
+
+func (e awsExchange) Spend(ctx context.Context, token string) (identity, expiration string, err error) {
 	cfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(awsRegion))
 	if err != nil {
-		return "", "", fmt.Sprintf("loading aws config: %s", err)
+		return "", "", fmt.Errorf("loading aws config: %w", err)
 	}
+	client := sts.NewFromConfig(cfg)
 
-	out, err := sts.NewFromConfig(cfg).AssumeRoleWithWebIdentity(ctx, &sts.AssumeRoleWithWebIdentityInput{
-		RoleArn:          aws.String(assumeRoleARN),
-		RoleSessionName:  aws.String(assumeRoleSessionName),
-		WebIdentityToken: aws.String(token),
-	})
-	if err != nil {
-		return "", "", fmt.Sprintf("assume role with web identity: %s", err)
+	deadline := time.Now().Add(assumeRolePropagationWindow)
+	for {
+		out, err := client.AssumeRoleWithWebIdentity(ctx, &sts.AssumeRoleWithWebIdentityInput{
+			RoleArn:          aws.String(e.roleARN),
+			RoleSessionName:  aws.String(assumeRoleSessionName),
+			WebIdentityToken: aws.String(token),
+		})
+		if err == nil {
+			if out.AssumedRoleUser != nil && out.AssumedRoleUser.Arn != nil {
+				identity = *out.AssumedRoleUser.Arn
+			}
+			if out.Credentials != nil && out.Credentials.Expiration != nil {
+				expiration = out.Credentials.Expiration.Format(time.RFC3339)
+			}
+			return identity, expiration, nil
+		}
+		if time.Now().After(deadline) {
+			return "", "", fmt.Errorf("assume role with web identity: %w", err)
+		}
+		select {
+		case <-ctx.Done():
+			return "", "", fmt.Errorf("assume role with web identity: %w", ctx.Err())
+		case <-time.After(assumeRolePropagationInterval):
+		}
 	}
-
-	if out.AssumedRoleUser != nil && out.AssumedRoleUser.Arn != nil {
-		assumedRoleARN = *out.AssumedRoleUser.Arn
-	}
-	if out.Credentials != nil && out.Credentials.Expiration != nil {
-		expiration = out.Credentials.Expiration.Format(time.RFC3339)
-	}
-	return assumedRoleARN, expiration, ""
 }
 
 // probeLabelOf reads the probeLabel property out of a properties document.
@@ -242,4 +337,150 @@ func failure(operation resource.Operation, err error) *resource.ProgressResult {
 		ErrorCode:       resource.OperationErrorCodeInvalidRequest,
 		StatusMessage:   err.Error(),
 	}
+}
+
+// gcpExchange trades the identity token for a federated access token at
+// Google's STS, then spends that token reading the project.
+//
+// The two steps are both needed and prove different things. The exchange
+// proves the workload identity provider `formae connect` created trusts the
+// broker's issuer and accepts its subject and audience; the project read
+// proves connect also granted that federated principal something, which is
+// the half a successful exchange alone would not show.
+//
+// It is written against the REST endpoints rather than the Google SDK because
+// the SDK's federation support wants a credential-configuration file naming a
+// token source on disk, and the token here arrives in memory from the broker.
+type gcpExchange struct {
+	// audience is the workload identity provider's full resource name, which
+	// is both what the token was minted for and what the exchange is
+	// addressed to. Google pins the provider's allowed audiences to this same
+	// string, so the two cannot drift.
+	audience string
+	project  string
+}
+
+// gcpTokenExchangeURL and gcpProjectURL are Google's STS token endpoint and
+// the project read used as proof the exchanged credentials work.
+const (
+	gcpTokenExchangeURL = "https://sts.googleapis.com/v1/token"
+	gcpProjectURL       = "https://cloudresourcemanager.googleapis.com/v1/projects/"
+)
+
+func (e gcpExchange) Spend(ctx context.Context, token string) (identity, expiration string, err error) {
+	if e.audience == "" {
+		return "", "", fmt.Errorf("%s is not set, so there is no workload identity provider to exchange at", audienceEnv)
+	}
+
+	accessToken, lifetime, err := e.federate(ctx, token)
+	if err != nil {
+		return "", "", err
+	}
+
+	number, err := e.readProjectNumber(ctx, accessToken)
+	if err != nil {
+		return "", "", err
+	}
+
+	// The identity is reported as the project the credentials could actually
+	// read, for the same reason the AWS side reports the assumed role ARN:
+	// a token that exchanged but reaches nothing has not proven access.
+	return "projects/" + number, time.Now().Add(lifetime).UTC().Format(time.RFC3339), nil
+}
+
+// federate performs the RFC 8693 token exchange and returns the access token
+// and how long it lasts.
+func (e gcpExchange) federate(ctx context.Context, token string) (string, time.Duration, error) {
+	body, err := json.Marshal(map[string]string{
+		"audience":           e.audience,
+		"grantType":          "urn:ietf:params:oauth:grant-type:token-exchange",
+		"requestedTokenType": "urn:ietf:params:oauth:token-type:access_token",
+		"scope":              "https://www.googleapis.com/auth/cloud-platform",
+		"subjectTokenType":   "urn:ietf:params:oauth:token-type:jwt",
+		"subjectToken":       token,
+	})
+	if err != nil {
+		return "", 0, fmt.Errorf("building the token exchange request: %w", err)
+	}
+
+	data, err := gcpPost(ctx, gcpTokenExchangeURL, "", body)
+	if err != nil {
+		return "", 0, fmt.Errorf("exchanging the identity token: %w", err)
+	}
+
+	var exchanged struct {
+		AccessToken string `json:"access_token"`
+		ExpiresIn   int    `json:"expires_in"`
+	}
+	if err := json.Unmarshal(data, &exchanged); err != nil {
+		return "", 0, fmt.Errorf("parsing the token exchange response: %w", err)
+	}
+	if exchanged.AccessToken == "" {
+		return "", 0, fmt.Errorf("the token exchange returned no access token")
+	}
+	return exchanged.AccessToken, time.Duration(exchanged.ExpiresIn) * time.Second, nil
+}
+
+// readProjectNumber spends the federated access token on the one read that
+// shows it carries access, and returns what it read back.
+func (e gcpExchange) readProjectNumber(ctx context.Context, accessToken string) (string, error) {
+	data, err := gcpGet(ctx, gcpProjectURL+e.project, accessToken)
+	if err != nil {
+		return "", fmt.Errorf("reading project %s with the exchanged credentials: %w", e.project, err)
+	}
+
+	var project struct {
+		ProjectNumber string `json:"projectNumber"`
+	}
+	if err := json.Unmarshal(data, &project); err != nil {
+		return "", fmt.Errorf("parsing the project read response: %w", err)
+	}
+	if project.ProjectNumber == "" {
+		return "", fmt.Errorf("the project read returned no project number")
+	}
+	return project.ProjectNumber, nil
+}
+
+func gcpPost(ctx context.Context, url, accessToken string, body []byte) ([]byte, error) {
+	return gcpDo(ctx, http.MethodPost, url, accessToken, body)
+}
+
+func gcpGet(ctx context.Context, url, accessToken string) ([]byte, error) {
+	return gcpDo(ctx, http.MethodGet, url, accessToken, nil)
+}
+
+// gcpDo makes one call and returns the body. A non-2xx carries Google's own
+// error text, capped: the whole value of this fixture on a failing run is the
+// reason Google gave, and a refusal at the exchange and a refusal at the read
+// are different problems that read almost identically without it.
+func gcpDo(ctx context.Context, method, url, accessToken string, body []byte) ([]byte, error) {
+	var reader io.Reader
+	if body != nil {
+		reader = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, url, reader)
+	if err != nil {
+		return nil, err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if accessToken != "" {
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(data))
+	}
+	return data, nil
 }

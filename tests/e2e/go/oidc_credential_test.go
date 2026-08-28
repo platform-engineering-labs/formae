@@ -18,15 +18,37 @@ import (
 
 const (
 	// The audience the echo plugin asks for in Create, and the claims the
-	// stub broker signs into the token it mints for it. These name standing
-	// AWS resources: the static OIDC issuer registered as an IAM identity
-	// provider, the key in its published JWKS, and the subject and role its
-	// trust policy conditions on.
+	// stub broker signs into the token it mints for it. The issuer and key
+	// are standing AWS resources: a static OIDC issuer served from S3 and the
+	// key in its published JWKS. The subject is what the stub control plane
+	// hands connect, so it is also what the provisioned role's trust policy
+	// conditions on.
 	oidcEchoAudience = "sts.amazonaws.com"
 	oidcEchoIssuer   = "https://e2e-oidc-issuer-942849037363.s3.us-west-2.amazonaws.com"
 	oidcEchoKeyID    = "e2e-oidc-key-1"
-	oidcEchoSubject  = "e2e-oidc-subject"
-	oidcEchoRoleName = "e2e-oidc-assume-role"
+
+	// The subject the control plane produces, in the grammar it really uses:
+	// the `fai:` namespace, a tenant, and the installation being connected.
+	// Connect takes it verbatim into the trust it provisions and the GCP path
+	// parses it back apart, so a fixture subject of a made-up shape would
+	// exercise a string production never emits.
+	oidcEchoTenantID = "2eOidcConnectE2eTenant00001"
+	oidcEchoSubject  = "fai:" + oidcEchoTenantID + "/" + connectInstallationID
+
+	// The e2e account, pinned rather than derived: connect is told which
+	// account to connect and never infers one from ambient credentials, and
+	// the test asserts on the role ARN that produces.
+	oidcEchoAccount = "942849037363"
+
+	// The role connect provisions and the echo plugin then assumes. The name
+	// carries the suite's own prefix so the pre-cleanup purge reclaims it if
+	// a run dies before its teardown; a survivor is converged rather than
+	// refused, since it carries the ownership tags connect wrote.
+	oidcConnectRoleName = "formae-e2e-oidc-connect-role"
+
+	// The AWS shared-config profile connect provisions with, written by the
+	// e2e workflow's credentials step.
+	oidcConnectAWSProfile = "e2e-test"
 
 	oidcEchoStackQuery = "stack:e2e-oidc-echo"
 	oidcEchoLabel      = "e2e-oidc-token"
@@ -122,6 +144,22 @@ func decodeJWT(t *testing.T, token string) (header, claims map[string]any) {
 	return decodeJWTSegment(t, "header", segments[0]), decodeJWTSegment(t, "claims", segments[1])
 }
 
+// requireCredentialsOutlive holds the exchange's reported expiry to being a
+// real one: an RFC3339 instant still in the future. It is the difference
+// between an exchange that returned credentials and one that returned a
+// document shaped like credentials.
+func requireCredentialsOutlive(t *testing.T, expiration string) {
+	t.Helper()
+
+	expiresAt, err := time.Parse(time.RFC3339, expiration)
+	if err != nil {
+		t.Fatalf("exchangeExpiration %q is not RFC3339: %v", expiration, err)
+	}
+	if !expiresAt.After(time.Now()) {
+		t.Errorf("exchangeExpiration %q is not in the future", expiration)
+	}
+}
+
 // jwtString reads a string-valued entry out of a decoded token document.
 func jwtString(t *testing.T, doc map[string]any, key string) string {
 	t.Helper()
@@ -137,14 +175,87 @@ func jwtString(t *testing.T, doc map[string]any, key string) string {
 	return str
 }
 
-// TestOidcCredential_TokenExchangesForRealCredentials proves the whole chain:
-// the agent discovers and spawns the stub broker, pairs it with the echo
-// plugin's namespace, the signed token the broker mints for the audience the
-// plugin asks for arrives inside the plugin's Create, and AWS STS accepts
-// that token and exchanges it for credentials on the standing role.
+// connectProvisionsTrust drives `formae connect aws` against a stub control
+// plane and returns the ARN of the role it provisioned.
+//
+// This is the half of the chain that establishes trust. Connect reads the
+// subject, role name and issuer from the control plane and provisions against
+// them verbatim: the OIDC provider for the standing issuer (which already
+// exists, so it is validated and reused) and a role whose trust policy pins
+// that provider, that subject, and the STS audience. Nothing here is
+// hand-provisioned, and nothing is asserted from the CLI's prose — the
+// machine document and the registration the stub received are the evidence.
+func connectProvisionsTrust(t *testing.T, bin string) string {
+	t.Helper()
+
+	stub := StartConnectStub(t, connectSetup{
+		CloudSubject:  oidcEchoSubject,
+		CloudRoleName: oidcConnectRoleName,
+		Issuer:        oidcEchoIssuer,
+	})
+	configPath := WriteHostedConnectConfig(t, t.TempDir(),
+		stagedOidcPluginDir(t, oidcAuthPluginDirEnv), stub.URL)
+
+	// Registered before the run, not after it: a run that provisions the role
+	// and then fails to register still leaves the role standing.
+	t.Cleanup(func() { DeleteIAMRole(t, oidcConnectRoleName) })
+
+	doc := RunConnect(t, bin, ConnectEnv(stub.URL, oidcEchoIssuer),
+		"aws",
+		"--config", configPath,
+		"--account", oidcEchoAccount,
+		"--profile-aws", oidcConnectAWSProfile,
+		"--no-input",
+	)
+
+	if doc.Phase != "registered" {
+		t.Fatalf("connect phase: got %q, want %q", doc.Phase, "registered")
+	}
+	if doc.Cloud != "aws" {
+		t.Errorf("connect cloud: got %q, want %q", doc.Cloud, "aws")
+	}
+	if doc.Account != oidcEchoAccount {
+		t.Errorf("connect account: got %q, want %q", doc.Account, oidcEchoAccount)
+	}
+	if !strings.HasSuffix(doc.RoleArn, ":role/"+oidcConnectRoleName) {
+		t.Fatalf("connect roleArn %q does not name role %q", doc.RoleArn, oidcConnectRoleName)
+	}
+
+	// What the control plane was told, rather than what the CLI printed: the
+	// registration is the connection, and a run that provisioned without
+	// declaring it has not connected the account.
+	registrations := stub.Registrations()
+	if len(registrations) != 1 {
+		t.Fatalf("stub control plane received %d registrations, want 1: %+v", len(registrations), registrations)
+	}
+	if got := registrations[0]; got.Cloud != "aws" || got.Account != oidcEchoAccount || got.RoleArn != doc.RoleArn {
+		t.Errorf("registration: got %+v, want cloud aws, account %s, roleArn %s",
+			got, oidcEchoAccount, doc.RoleArn)
+	}
+
+	return doc.RoleArn
+}
+
+// TestOidcCredential_TokenExchangesForRealCredentials proves the whole chain,
+// from establishing trust to spending it: `formae connect` provisions the
+// identity provider and the role and registers them; then the agent discovers
+// and spawns the stub broker, pairs it with the echo plugin's namespace, the
+// signed token the broker mints for the audience the plugin asks for arrives
+// inside the plugin's Create, and AWS STS accepts that token against the role
+// connect just made.
 func TestOidcCredential_TokenExchangesForRealCredentials(t *testing.T) {
 	bin := FormaeBinary(t)
-	agent := StartAgent(t, bin, WithPluginDir(stagedOidcPluginDir(t, oidcPluginDirEnv)))
+
+	roleArn := connectProvisionsTrust(t, bin)
+
+	agent := StartAgent(t, bin,
+		WithPluginDir(stagedOidcPluginDir(t, oidcPluginDirEnv)),
+		WithEnv(
+			"E2E_OIDC_SUBJECT="+oidcEchoSubject,
+			"E2E_OIDC_AUDIENCE="+oidcEchoAudience,
+			"E2E_OIDC_ASSUME_ROLE_ARN="+roleArn,
+		),
+	)
 	agent.WaitForOidcBroker(t, oidcEchoNamespace, 60*time.Second)
 
 	echo := applyOidcEchoFixture(t, bin, agent)
@@ -170,21 +281,13 @@ func TestOidcCredential_TokenExchangesForRealCredentials(t *testing.T) {
 		}
 	}
 
-	if got := echoOutput(t, echo, "stsError"); got != "" {
-		t.Fatalf("stsError: got %q, want empty", got)
+	if got := echoOutput(t, echo, "exchangeError"); got != "" {
+		t.Fatalf("exchangeError: got %q, want empty", got)
 	}
-	if got := echoOutput(t, echo, "stsAssumedRoleArn"); !strings.Contains(got, oidcEchoRoleName) {
-		t.Errorf("stsAssumedRoleArn %q does not name role %q", got, oidcEchoRoleName)
+	if got := echoOutput(t, echo, "exchangeIdentity"); !strings.Contains(got, oidcConnectRoleName) {
+		t.Errorf("exchangeIdentity %q does not name role %q", got, oidcConnectRoleName)
 	}
-
-	expiration := echoOutput(t, echo, "stsExpiration")
-	expiresAt, err := time.Parse(time.RFC3339, expiration)
-	if err != nil {
-		t.Fatalf("stsExpiration %q is not RFC3339: %v", expiration, err)
-	}
-	if !expiresAt.After(time.Now()) {
-		t.Errorf("stsExpiration %q is not in the future", expiration)
-	}
+	requireCredentialsOutlive(t, echoOutput(t, echo, "exchangeExpiration"))
 }
 
 // TestOidcCredential_NoBrokerFailsClosed proves a plugin whose namespace has
@@ -193,7 +296,12 @@ func TestOidcCredential_TokenExchangesForRealCredentials(t *testing.T) {
 // both the missing pairing and its own namespace.
 func TestOidcCredential_NoBrokerFailsClosed(t *testing.T) {
 	bin := FormaeBinary(t)
-	agent := StartAgent(t, bin, WithPluginDir(stagedOidcPluginDir(t, oidcPluginDirNoBrokerEnv)))
+	agent := StartAgent(t, bin,
+		WithPluginDir(stagedOidcPluginDir(t, oidcPluginDirNoBrokerEnv)),
+		// An audience, but no exchange coordinates: the plugin gets far enough
+		// to ask for a token, which is where this test's failure has to happen.
+		WithEnv("E2E_OIDC_AUDIENCE="+oidcEchoAudience),
+	)
 
 	echo := applyOidcEchoFixture(t, bin, agent)
 

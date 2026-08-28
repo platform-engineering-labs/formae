@@ -267,20 +267,23 @@ test-e2e: build stage-oidc-fixtures
 	E2E_FORMAE_BINARY=$(CURDIR)/dist/e2e/bin/formae \
 	E2E_OIDC_PLUGIN_DIR=$(OIDC_STAGE_DIR) \
 	E2E_OIDC_PLUGIN_DIR_NO_BROKER=$(OIDC_STAGE_DIR_NO_BROKER) \
+	E2E_OIDC_AUTH_PLUGIN_DIR=$(OIDC_STAGE_DIR_AUTH) \
 		go test -C ./tests/e2e/go -tags=e2e -timeout 30m -v ./... $(E2E_RUN_FLAGS)
 
-# The hermetic oidc-credential fixtures: a stub credential broker and a resource
-# plugin that echoes the token the broker mints. Staged into two plugin trees
-# the e2e agent can be pointed at — one where the broker sits beside the echo
-# plugin, one where the echo plugin is alone — in the layout plugin discovery
-# expects (<dir>/<name>/v<version>/<name> beside the manifest).
+# The oidc-credential fixtures: a stub credential broker, a resource plugin that
+# echoes the token the broker mints, and a stub hosted auth plugin. Staged into
+# three plugin trees — one where the broker sits beside the echo plugin, one
+# where the echo plugin is alone, and one holding only the auth plugin, which the
+# CLI reads rather than the agent — in the layout plugin discovery expects
+# (<dir>/<name>/v<version>/<name> beside the manifest).
 OIDC_FIXTURE_DIR := $(CURDIR)/tests/e2e/go/fixtures
 OIDC_STAGE_DIR := $(CURDIR)/dist/e2e/oidc-plugins
 OIDC_STAGE_DIR_NO_BROKER := $(CURDIR)/dist/e2e/oidc-plugins-no-broker
+OIDC_STAGE_DIR_AUTH := $(CURDIR)/dist/e2e/oidc-auth-plugin
 
 stage-oidc-fixtures:
 	@echo "Staging e2e oidc-credential fixtures..."
-	rm -rf $(OIDC_STAGE_DIR) $(OIDC_STAGE_DIR_NO_BROKER)
+	rm -rf $(OIDC_STAGE_DIR) $(OIDC_STAGE_DIR_NO_BROKER) $(OIDC_STAGE_DIR_AUTH)
 	mkdir -p $(OIDC_STAGE_DIR)/oidc-credential-stub/v0.0.1
 	go build -C $(OIDC_FIXTURE_DIR)/oidc-credential-stub \
 		-o $(OIDC_STAGE_DIR)/oidc-credential-stub/v0.0.1/oidc-credential-stub .
@@ -295,6 +298,14 @@ stage-oidc-fixtures:
 		$(OIDC_STAGE_DIR)/oidc-echo/v0.0.1/schema/pkl
 	mkdir -p $(OIDC_STAGE_DIR_NO_BROKER)
 	cp -R $(OIDC_STAGE_DIR)/oidc-echo $(OIDC_STAGE_DIR_NO_BROKER)/oidc-echo
+	# Installed under the name `oidc` rather than the fixture directory's name:
+	# the CLI resolves an auth plugin by the `type` its profile's auth block
+	# names, and the connect gate admits only that one.
+	mkdir -p $(OIDC_STAGE_DIR_AUTH)/oidc/v0.0.1
+	go build -C $(OIDC_FIXTURE_DIR)/oidc-auth-stub \
+		-o $(OIDC_STAGE_DIR_AUTH)/oidc/v0.0.1/oidc .
+	cp $(OIDC_FIXTURE_DIR)/oidc-auth-stub/formae-plugin.pkl \
+		$(OIDC_STAGE_DIR_AUTH)/oidc/v0.0.1/formae-plugin.pkl
 
 ## test-property: Run property tests (FullChaos 100 iterations, others 50)
 test-property:
