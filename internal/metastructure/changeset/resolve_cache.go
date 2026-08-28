@@ -103,7 +103,6 @@ func resolveMissReason(resourceURI pkgmodel.FormaeURI, source *pkgmodel.Resource
 		string(resourceURI), property)
 }
 
-
 // rootDigestOf computes the canonical-domain root digest of a resolved value
 // while its gjson type is still known: the wrapped/enveloped forms are
 // unwrapped first, a string digests as the string it is, and everything else

@@ -604,10 +604,10 @@ func TestLoadResolvableProperties_ChainHopJSONExtraction_RefusesDescendantOpaque
 		Properties: json.RawMessage(`{"Name":"s","Config":{"User":"u"}}`),
 	}
 	middle := &pkgmodel.Resource{
-		Ksuid: middleKsuid,
-		Label: "middle",
-		Type:  "Test::Config::Middle",
-		Stack: "default",
+		Ksuid:      middleKsuid,
+		Label:      "middle",
+		Type:       "Test::Config::Middle",
+		Stack:      "default",
 		Properties: json.RawMessage(`{"Ref":{"$ref":"formae://` + sourceKsuid + `#/Config"}}`),
 	}
 	consumer := pkgmodel.Resource{

@@ -1682,7 +1682,6 @@ func normalizeToFlattenedKeys(m map[string]any) {
 	}
 }
 
-
 // substituteStableOccurrences copies the document-side value over the
 // desired-side value for every destination path marked provably stable,
 // walking dotted paths (numeric segments index arrays).
