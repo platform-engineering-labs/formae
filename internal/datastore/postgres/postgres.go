@@ -266,7 +266,7 @@ SELECT
 	ru.resource, ru.resource_target, ru.existing_resource, ru.existing_target,
 	ru.progress_result, ru.most_recent_progress,
 	ru.remaining_resolvables, ru.reference_labels, ru.previous_properties,
-	ru.is_cascade, ru.cascade_source
+	ru.is_cascade, ru.cascade_source, ru.failure_reason
 FROM forma_commands fc
 LEFT JOIN resource_updates ru ON fc.command_id = ru.command_id`
 
@@ -300,6 +300,7 @@ func scanJoinedRowPostgres(rows pgx.Rows) (*forma_command.FormaCommand, *resourc
 	var remainingResolvablesJSON, referenceLabelsJSON, previousPropertiesJSON []byte
 	var ruIsCascade *bool
 	var ruCascadeSource *string
+	var ruFailureReason *string
 
 	err := rows.Scan(
 		// FormaCommand columns
@@ -312,7 +313,7 @@ func scanJoinedRowPostgres(rows pgx.Rows) (*forma_command.FormaCommand, *resourc
 		&resourceJSON, &resourceTargetJSON, &existingResourceJSON, &existingTargetJSON,
 		&progressResultJSON, &mostRecentProgressJSON,
 		&remainingResolvablesJSON, &referenceLabelsJSON, &previousPropertiesJSON,
-		&ruIsCascade, &ruCascadeSource,
+		&ruIsCascade, &ruCascadeSource, &ruFailureReason,
 	)
 	if err != nil {
 		return nil, nil, err
@@ -457,6 +458,9 @@ func scanJoinedRowPostgres(rows pgx.Rows) (*forma_command.FormaCommand, *resourc
 	}
 	if ruCascadeSource != nil {
 		ru.CascadeSource = *ruCascadeSource
+	}
+	if ruFailureReason != nil {
+		ru.FailureReason = *ruFailureReason
 	}
 
 	return &cmd, &ru, nil
@@ -710,7 +714,7 @@ func (d DatastorePostgres) QueryFormaCommands(query *datastore.StatusQuery) ([]*
 			ru.resource, ru.resource_target, ru.existing_resource, ru.existing_target,
 			ru.progress_result, ru.most_recent_progress,
 			ru.remaining_resolvables, ru.reference_labels, ru.previous_properties,
-	ru.is_cascade, ru.cascade_source
+	ru.is_cascade, ru.cascade_source, ru.failure_reason
 		FROM forma_commands fc
 		LEFT JOIN resource_updates ru ON fc.command_id = ru.command_id
 		WHERE fc.command_id IN (%s)
@@ -4644,8 +4648,8 @@ func (d DatastorePostgres) BulkStoreResourceUpdates(commandID string, updates []
 				resource, resource_target, existing_resource, existing_target,
 				progress_result, most_recent_progress,
 				remaining_resolvables, reference_labels, previous_properties,
-				is_cascade, cascade_source
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
+				is_cascade, cascade_source, failure_reason
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
 			ON CONFLICT (command_id, ksuid, operation) DO UPDATE SET
 				state = EXCLUDED.state,
 				start_ts = EXCLUDED.start_ts,
@@ -4666,7 +4670,8 @@ func (d DatastorePostgres) BulkStoreResourceUpdates(commandID string, updates []
 				reference_labels = EXCLUDED.reference_labels,
 				previous_properties = EXCLUDED.previous_properties,
 				is_cascade = EXCLUDED.is_cascade,
-				cascade_source = EXCLUDED.cascade_source
+				cascade_source = EXCLUDED.cascade_source,
+				failure_reason = EXCLUDED.failure_reason
 		`,
 			commandID,
 			ru.DesiredState.Ksuid,
@@ -4691,6 +4696,7 @@ func (d DatastorePostgres) BulkStoreResourceUpdates(commandID string, updates []
 			ru.PreviousProperties,
 			ru.IsCascade,
 			ru.CascadeSource,
+			ru.FailureReason,
 		)
 		if err != nil {
 			return fmt.Errorf("failed to insert resource update: %w", err)
@@ -4716,7 +4722,7 @@ func (d DatastorePostgres) LoadResourceUpdates(commandID string) ([]resource_upd
 			resource, resource_target, existing_resource, existing_target,
 			progress_result, most_recent_progress,
 			remaining_resolvables, reference_labels, previous_properties,
-			is_cascade, cascade_source
+			is_cascade, cascade_source, failure_reason
 		FROM resource_updates
 		WHERE command_id = $1
 		ORDER BY ksuid ASC
@@ -4739,6 +4745,7 @@ func (d DatastorePostgres) LoadResourceUpdates(commandID string) ([]resource_upd
 		var remainingResolvablesJSON, referenceLabelsJSON, previousPropertiesJSON []byte
 		var ruIsCascade *bool
 		var ruCascadeSource *string
+		var ruFailureReason *string
 
 		err := rows.Scan(
 			&ksuid,
@@ -4763,6 +4770,7 @@ func (d DatastorePostgres) LoadResourceUpdates(commandID string) ([]resource_upd
 			&previousPropertiesJSON,
 			&ruIsCascade,
 			&ruCascadeSource,
+			&ruFailureReason,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan resource update: %w", err)
@@ -4829,6 +4837,9 @@ func (d DatastorePostgres) LoadResourceUpdates(commandID string) ([]resource_upd
 		}
 		if ruCascadeSource != nil {
 			ru.CascadeSource = *ruCascadeSource
+		}
+		if ruFailureReason != nil {
+			ru.FailureReason = *ruFailureReason
 		}
 
 		updates = append(updates, ru)

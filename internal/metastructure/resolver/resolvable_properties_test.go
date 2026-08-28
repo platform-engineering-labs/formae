@@ -552,3 +552,162 @@ func TestLoadResolvableProperties_ReferenceCycleFails(t *testing.T) {
 	require.True(t, errors.As(err, &cycleErr), "error must be a ReferenceCycleError")
 	assert.GreaterOrEqual(t, len(cycleErr.Chain), 2, "the chain must name at least the repeated hop and its first occurrence")
 }
+
+const middleKsuid = "2middleghijklmnopqrstuvwxyz"
+
+// A reference to a container field whose SCHEMA marks a nested descendant
+// opaque (e.g. a hint on Config.Password while the reference names Config)
+// must refuse plan-time materialization: the container holds a credential, so
+// the whole referenced subtree is a credential for materialization purposes.
+// This covers the first appearance of the value, before any inline
+// $hashed/$visibility markers exist for the value-level walks to catch.
+func TestLoadResolvableProperties_ContainerReference_RefusesDescendantOpaqueHint(t *testing.T) {
+	source := &pkgmodel.Resource{
+		Ksuid: sourceKsuid,
+		Label: "holder",
+		Type:  "Test::Config::Holder",
+		Stack: "default",
+		Schema: pkgmodel.Schema{
+			Fields: []string{"Name", "Config"},
+			Hints:  map[string]pkgmodel.FieldHint{"Config.Password": {Opaque: true}},
+		},
+		Properties: json.RawMessage(`{"Name":"s","Config":{"User":"u"}}`),
+	}
+	effective := map[string]json.RawMessage{
+		sourceKsuid: json.RawMessage(`{"Name":"s","Config":{"User":"u","Password":"hunter2"}}`),
+	}
+
+	props, err := LoadResolvablePropertiesFromStacks(consumerOf("Config"), stacksWith(source), effective)
+	require.NoError(t, err)
+
+	value, found := props.Get(sourceKsuid, "Config")
+	if found {
+		assert.NotContains(t, value, "hunter2",
+			"a reference to a container with an opaque descendant hint must not materialize the descendant's plaintext")
+	}
+}
+
+// The same rule one hop out: a middle resource's reference envelope resolves
+// the container and extracts the secret leaf via $json; the extracted
+// plaintext must not reach a consumer referencing the middle's property.
+func TestLoadResolvableProperties_ChainHopJSONExtraction_RefusesDescendantOpaqueHint(t *testing.T) {
+	source := &pkgmodel.Resource{
+		Ksuid: sourceKsuid,
+		Label: "holder",
+		Type:  "Test::Config::Holder",
+		Stack: "default",
+		Schema: pkgmodel.Schema{
+			Fields: []string{"Name", "Config"},
+			Hints:  map[string]pkgmodel.FieldHint{"Config.Password": {Opaque: true}},
+		},
+		Properties: json.RawMessage(`{"Name":"s","Config":{"User":"u"}}`),
+	}
+	middle := &pkgmodel.Resource{
+		Ksuid: middleKsuid,
+		Label: "middle",
+		Type:  "Test::Config::Middle",
+		Stack: "default",
+		Properties: json.RawMessage(`{"Ref":{"$ref":"formae://` + sourceKsuid + `#/Config"}}`),
+	}
+	consumer := pkgmodel.Resource{
+		Label:      "consumer",
+		Type:       "Test::Consumer",
+		Stack:      "default",
+		Properties: json.RawMessage(`{"Password":{"$ref":"formae://` + middleKsuid + `#/Ref"}}`),
+	}
+	all := map[string][]*pkgmodel.Resource{"default": {source, middle}}
+	effective := map[string]json.RawMessage{
+		sourceKsuid: json.RawMessage(`{"Name":"s","Config":{"User":"u","Password":"hunter2"}}`),
+		middleKsuid: json.RawMessage(`{"Ref":{"$ref":"formae://` + sourceKsuid + `#/Config","$json":"Password"}}`),
+	}
+
+	props, err := LoadResolvablePropertiesFromStacks(consumer, all, effective)
+	require.NoError(t, err)
+
+	value, found := props.Get(middleKsuid, "Ref")
+	if found {
+		assert.NotContains(t, value, "hunter2",
+			"a chain hop's JSON extraction must not isolate an opaque descendant's plaintext")
+	}
+}
+
+// A sibling field with no opaque descendant still resolves from effective
+// desired state: the descendant rule must not over-refuse.
+func TestLoadResolvableProperties_SiblingOfOpaqueDescendant_StillResolves(t *testing.T) {
+	source := &pkgmodel.Resource{
+		Ksuid: sourceKsuid,
+		Label: "holder",
+		Type:  "Test::Config::Holder",
+		Stack: "default",
+		Schema: pkgmodel.Schema{
+			Fields: []string{"Name", "Config"},
+			Hints:  map[string]pkgmodel.FieldHint{"Config.Password": {Opaque: true}},
+		},
+		Properties: json.RawMessage(`{"Name":"old","Config":{"User":"u"}}`),
+	}
+	effective := map[string]json.RawMessage{
+		sourceKsuid: json.RawMessage(`{"Name":"new","Config":{"User":"u","Password":"hunter2"}}`),
+	}
+
+	props, err := LoadResolvablePropertiesFromStacks(consumerOf("Name"), stacksWith(source), effective)
+	require.NoError(t, err)
+
+	value, found := props.Get(sourceKsuid, "Name")
+	require.True(t, found, "a sibling of an opaque descendant must still resolve")
+	assert.Equal(t, "new", value)
+}
+
+// A reference BELOW a nested opaque hint (the hint on Config.Password, the
+// reference into Config.Password.value) is a key into a nested map-shaped
+// secret: every ancestor of the referenced path must be consulted, not only
+// its top-level root.
+func TestLoadResolvableProperties_ReferenceBelowNestedOpaqueHint_Refused(t *testing.T) {
+	source := &pkgmodel.Resource{
+		Ksuid: sourceKsuid,
+		Label: "holder",
+		Type:  "Test::Config::Holder",
+		Stack: "default",
+		Schema: pkgmodel.Schema{
+			Fields: []string{"Name", "Config"},
+			Hints:  map[string]pkgmodel.FieldHint{"Config.Password": {Opaque: true}},
+		},
+		Properties: json.RawMessage(`{"Name":"s","Config":{"User":"u"}}`),
+	}
+	effective := map[string]json.RawMessage{
+		sourceKsuid: json.RawMessage(`{"Name":"s","Config":{"User":"u","Password":{"value":"hunter2"}}}`),
+	}
+
+	props, err := LoadResolvablePropertiesFromStacks(consumerOf("Config.Password.value"), stacksWith(source), effective)
+	require.NoError(t, err)
+
+	value, found := props.Get(sourceKsuid, "Config.Password.value")
+	if found {
+		assert.NotContains(t, value, "hunter2",
+			"a reference below a nested opaque hint must not materialize the secret")
+	}
+}
+
+// A reference below a NON-opaque sibling of the hinted field still resolves.
+func TestLoadResolvableProperties_ReferenceBelowNonOpaqueSibling_StillResolves(t *testing.T) {
+	source := &pkgmodel.Resource{
+		Ksuid: sourceKsuid,
+		Label: "holder",
+		Type:  "Test::Config::Holder",
+		Stack: "default",
+		Schema: pkgmodel.Schema{
+			Fields: []string{"Name", "Config"},
+			Hints:  map[string]pkgmodel.FieldHint{"Config.Password": {Opaque: true}},
+		},
+		Properties: json.RawMessage(`{"Name":"s","Config":{"Meta":{"region":"old"}}}`),
+	}
+	effective := map[string]json.RawMessage{
+		sourceKsuid: json.RawMessage(`{"Name":"s","Config":{"Meta":{"region":"new"},"Password":{"value":"hunter2"}}}`),
+	}
+
+	props, err := LoadResolvablePropertiesFromStacks(consumerOf("Config.Meta.region"), stacksWith(source), effective)
+	require.NoError(t, err)
+
+	value, found := props.Get(sourceKsuid, "Config.Meta.region")
+	require.True(t, found, "a reference below a non-opaque sibling must still resolve")
+	assert.Equal(t, "new", value)
+}

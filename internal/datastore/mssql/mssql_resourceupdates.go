@@ -293,7 +293,7 @@ func (d *DatastoreMSSQL) LoadResourceUpdates(commandID string) ([]resource_updat
 			resource, resource_target, existing_resource, existing_target,
 			progress_result, most_recent_progress,
 			remaining_resolvables, reference_labels, previous_properties,
-			is_cascade, cascade_source
+			is_cascade, cascade_source, failure_reason
 		FROM resource_updates
 		WHERE command_id = @p1
 		ORDER BY ksuid ASC`
@@ -316,6 +316,7 @@ func (d *DatastoreMSSQL) LoadResourceUpdates(commandID string) ([]resource_updat
 		var remainingResolvablesJSON, referenceLabelsJSON, previousPropertiesJSON []byte
 		var ruIsCascade *bool
 		var ruCascadeSource *string
+		var ruFailureReason *string
 
 		err := rows.Scan(
 			&ksuid, &operation, &state, &startTs, &modifiedTs,
@@ -323,7 +324,7 @@ func (d *DatastoreMSSQL) LoadResourceUpdates(commandID string) ([]resource_updat
 			&resourceJSON, &resourceTargetJSON, &existingResourceJSON, &existingTargetJSON,
 			&progressResultJSON, &mostRecentProgressJSON,
 			&remainingResolvablesJSON, &referenceLabelsJSON, &previousPropertiesJSON,
-			&ruIsCascade, &ruCascadeSource,
+			&ruIsCascade, &ruCascadeSource, &ruFailureReason,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan resource update: %w", err)
@@ -405,6 +406,9 @@ func (d *DatastoreMSSQL) LoadResourceUpdates(commandID string) ([]resource_updat
 		}
 		if ruCascadeSource != nil {
 			ru.CascadeSource = *ruCascadeSource
+		}
+		if ruFailureReason != nil {
+			ru.FailureReason = *ruFailureReason
 		}
 
 		updates = append(updates, ru)

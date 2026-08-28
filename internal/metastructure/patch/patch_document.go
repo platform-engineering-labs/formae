@@ -91,28 +91,9 @@ func generatePatch(document []byte, patch []byte, storedEnvelopes []byte, desire
 		return nil, nil, false, fmt.Errorf("unable to generate patch document for apply mode: %s", mode)
 	}
 
-	// Strip a field that is both writeOnly AND createOnly from the desired
-	// state (patch) before comparison, but only when the stored document holds
-	// no value for it. The provider's Read never returns writeOnly fields, so a
-	// document sourced from a Read alone (import, discovery) lacks them; the
-	// "add" op jsonpatch would generate for the declared value lands on a
-	// createOnly path and triggers a resource replacement even though nothing
-	// changed. When the document does hold a last-applied value, the ordinary
-	// comparison is the truth: an unchanged value converges to no op, and a
-	// changed value is a genuine createOnly change that must plan a
-	// replacement rather than be dropped.
-	writeOnlyCreateOnly := intersectFields(schema.WriteOnly(), schema.CreateOnly())
-	if len(writeOnlyCreateOnly) > 0 {
-		var withoutBaseline []string
-		for _, field := range writeOnlyCreateOnly {
-			if !gjson.GetBytes(flattenedDocument, field).Exists() {
-				withoutBaseline = append(withoutBaseline, field)
-			}
-		}
-		flattenedPatch, err = removeWriteOnlyFields(flattenedPatch, withoutBaseline)
-		if err != nil {
-			return nil, nil, false, fmt.Errorf("failed to strip writeOnly+createOnly fields from desired state: %w", err)
-		}
+	flattenedPatch, err = StripFieldsWithoutBaseline(flattenedPatch, flattenedDocument, schema)
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("failed to strip writeOnly+createOnly fields from desired state: %w", err)
 	}
 
 	requiredOnUpdateFields := schema.RequiredOnUpdate()
@@ -167,6 +148,16 @@ func generatePatch(document []byte, patch []byte, storedEnvelopes []byte, desire
 	createOnlyOps := extractCreateOnlyFields(patchOps, createOnlyFields)
 	mutableOps := filterCreateOnlyFields(patchOps, createOnlyFields)
 
+	// Member-level ops on an UNKEYED collection (whole-element remove/add
+	// pairs from set-based comparison) deliberately stay mutable, even when
+	// the element carries a createOnly-hinted subfield: without member
+	// identity, a changed immutable value is byte-identical to one member
+	// leaving and another arriving, and the provider-appropriate remedy for
+	// such collections is member replacement (e.g. detach/re-attach), not a
+	// whole-resource replacement. A collection whose members ARE identity-
+	// bearing declares an EntitySet indexField; its diff pairs members and
+	// emits subfield-level ops, which the index-transparent matching above
+	// classifies as createOnly and escalates correctly.
 	if len(mutableOps) == 0 && len(createOnlyOps) == 0 {
 		return nil, nil, false, nil
 	}
@@ -284,6 +275,75 @@ func intersectFields(a, b []string) []string {
 
 // removeWriteOnlyFields removes writeOnly fields from the document.
 // WriteOnly field paths can be nested (e.g., "LoginProfile.Password").
+// StripFieldsWithoutBaseline removes from desired every field that is both
+// writeOnly AND createOnly in the schema and for which storedDocument holds no
+// baseline value. The provider's Read never returns writeOnly fields, so a
+// document sourced from a Read alone (import, discovery) lacks them; keeping
+// the declared value would land an "add" op on a createOnly path and trigger a
+// resource replacement even though nothing changed. When the document does
+// hold a last-applied value, the ordinary comparison is the truth: an
+// unchanged value converges to no op, and a changed value is a genuine
+// createOnly change that must plan a replacement rather than be dropped.
+//
+// Exported because the effective-desired computation must apply the SAME strip
+// as patch generation: if the two decide differently, reference consumers are
+// planned against values the producer's own patch never writes.
+func StripFieldsWithoutBaseline(desired, storedDocument []byte, schema pkgmodel.Schema) ([]byte, error) {
+	writeOnlyCreateOnly := intersectFields(schema.WriteOnly(), schema.CreateOnly())
+	if len(writeOnlyCreateOnly) == 0 {
+		return desired, nil
+	}
+	var withoutBaseline []string
+	for _, field := range writeOnlyCreateOnly {
+		if !hasStoredBaseline(storedDocument, field) {
+			withoutBaseline = append(withoutBaseline, field)
+		}
+	}
+	return removeWriteOnlyFields(desired, withoutBaseline)
+}
+
+// hasStoredBaseline reports whether the dot-separated fieldPath resolves to at
+// least one value in document, traversing arrays the same way removeNestedField
+// does: at an array, the remaining path is probed in every map element, and any
+// hit counts. The predicate decides per FIELD, not per element — one member
+// holding a baseline keeps the whole field, and mixed-baseline members are left
+// to ordinary member comparison.
+func hasStoredBaseline(document []byte, fieldPath string) bool {
+	var deserialized map[string]any
+	if err := json.Unmarshal(document, &deserialized); err != nil {
+		return false
+	}
+	return nestedFieldExists(deserialized, strings.Split(fieldPath, "."))
+}
+
+// nestedFieldExists is hasStoredBaseline's traversal: the read-side mirror of
+// removeNestedField.
+func nestedFieldExists(obj map[string]any, path []string) bool {
+	if len(path) == 0 {
+		return false
+	}
+	val, exists := obj[path[0]]
+	if !exists {
+		return false
+	}
+	if len(path) == 1 {
+		return true
+	}
+	if nested, ok := val.(map[string]any); ok {
+		return nestedFieldExists(nested, path[1:])
+	}
+	if arr, ok := val.([]any); ok {
+		for _, elem := range arr {
+			if elemMap, ok := elem.(map[string]any); ok {
+				if nestedFieldExists(elemMap, path[1:]) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 func removeWriteOnlyFields(document []byte, writeOnlyFields []string) ([]byte, error) {
 	if len(writeOnlyFields) == 0 {
 		return document, nil
@@ -863,24 +923,11 @@ func extractCreateOnlyFields(patchOps []jsonpatch.JsonPatchOperation, createOnly
 // normalization the check silently no-ops for any path deeper than a
 // top-level field — which leaves createOnly violations on nested
 // fields undetected until the cloud API rejects them at apply time.
+// Matching is array-index-transparent for the same reason as the
+// requiredOnUpdate matcher: a hint on a field inside an array element
+// ("Items.Token") must catch the op at its indexed path ("/Items/0/Token").
 func isCreateOnlyPath(path string, createOnlyFields []string) bool {
-	return pathMatchesField(path, createOnlyFields)
-}
-
-// pathMatchesField reports whether a JSON Pointer path (without its leading
-// "/", see cleanPath) targets one of the given dot-separated schema field
-// paths, or a nested path within it. Schema Hints use dot-separated keys for
-// nested fields ("Spec.Selector"), while jsonpatch operation paths use slash
-// separators per RFC 6902 ("Spec/Selector/MatchLabels/foo"); the field side is
-// normalized to slash form before comparing.
-func pathMatchesField(path string, fields []string) bool {
-	for _, field := range fields {
-		f := strings.ReplaceAll(field, ".", "/")
-		if path == f || strings.HasPrefix(path, f+"/") {
-			return true
-		}
-	}
-	return false
+	return pathMatchesFieldThroughArrays(path, createOnlyFields)
 }
 
 // onlyForceResentNoops reports whether every op in ops is a force-resent

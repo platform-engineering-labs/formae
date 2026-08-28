@@ -3912,3 +3912,164 @@ func TestGeneratePatch_AtomicObjectWithNumericRef_EmitsNumber(t *testing.T) {
 	assert.Contains(t, string(patchDoc), "443")
 	assert.NotContains(t, string(patchDoc), `"443"`, "a numeric reference must not be written back as text")
 }
+
+func TestHasStoredBaseline_ProjectsThroughArrays(t *testing.T) {
+	doc := []byte(`{"Name":"x","Entries":[{"Token":"old"},{"Other":1}],"Nested":{"Deep":[{"Key":"v"}]}}`)
+	assert.True(t, hasStoredBaseline(doc, "Entries.Token"))
+	assert.True(t, hasStoredBaseline(doc, "Nested.Deep.Key"))
+	assert.True(t, hasStoredBaseline(doc, "Name"))
+	assert.False(t, hasStoredBaseline(doc, "Entries.Missing"))
+	assert.False(t, hasStoredBaseline(doc, "Absent"))
+	assert.False(t, hasStoredBaseline(doc, "Absent.Token"))
+}
+
+func TestGeneratePatch_ArrayNestedWriteOnlyCreateOnly_ChangeSurvivesTheStrip(t *testing.T) {
+	document := []byte(`{"Name": "x", "Entries": [{"Token": "old"}]}`)
+	desired := []byte(`{"Name": "x", "Entries": [{"Token": "new"}]}`)
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Entries"},
+		Hints:  map[string]pkgmodel.FieldHint{"Entries.Token": {WriteOnly: true, CreateOnly: true}},
+	}
+	props := resolver.NewResolvableProperties()
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, desired, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	combined := string(patchDoc) + string(createOnlyPatch)
+	assert.Contains(t, combined, "new",
+		"a genuine change to an array-nested writeOnly+createOnly field with a stored baseline must survive into the diff, not be silently stripped")
+}
+
+func TestGeneratePatch_ArrayNestedWriteOnlyCreateOnly_NoBaselineStillStripped(t *testing.T) {
+	// Import-shaped: the stored document has no Token anywhere; the declared
+	// value must be stripped so an add op cannot trigger a false replacement.
+	document := []byte(`{"Name": "x", "Entries": [{"Weight": 1}]}`)
+	desired := []byte(`{"Name": "x", "Entries": [{"Weight": 1, "Token": "t"}]}`)
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Entries"},
+		Hints:  map[string]pkgmodel.FieldHint{"Entries.Token": {WriteOnly: true, CreateOnly: true}},
+	}
+	props := resolver.NewResolvableProperties()
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, desired, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.NotContains(t, string(patchDoc)+string(createOnlyPatch), "Token")
+}
+
+func TestGeneratePatch_UnkeyedArrayCreateOnlyChange_DeliveredAsMemberSwap(t *testing.T) {
+	// Without member identity a changed immutable value is indistinguishable
+	// from one member leaving and another arriving; the collection remedy is
+	// member replacement, never a whole-resource replacement.
+	document := []byte(`{"Name": "x", "Entries": [{"Token": "old", "Weight": 1}]}`)
+	desired := []byte(`{"Name": "x", "Entries": [{"Token": "new", "Weight": 1}]}`)
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Entries"},
+		Hints:  map[string]pkgmodel.FieldHint{"Entries.Token": {WriteOnly: true, CreateOnly: true}},
+	}
+	props := resolver.NewResolvableProperties()
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, desired, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Empty(t, createOnlyPatch,
+		"an unkeyed member change must not trigger a resource replacement")
+	assert.Contains(t, string(patchDoc), "new",
+		"the member swap must carry the new value")
+	assert.Contains(t, string(patchDoc), `"add"`,
+		"the removed member must be re-added with the new value, not merely removed")
+}
+
+// A KEYED collection (EntitySet with an indexField) pairs members, so a
+// changed createOnly subfield surfaces at its own path and escalates to a
+// replacement, while a mutable sibling changed in the same edit stays in the
+// mutable patch.
+func TestGeneratePatch_EntitySetCreateOnlyChange_TriggersReplacement(t *testing.T) {
+	document := []byte(`{"Name":"x","Entries":[{"Id":"A","Token":"old","Weight":1}]}`)
+	desired := []byte(`{"Name":"x","Entries":[{"Id":"A","Token":"new","Weight":5}]}`)
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Entries"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"Entries":       {UpdateMethod: pkgmodel.FieldUpdateMethodEntitySet, IndexField: "Id"},
+			"Entries.Token": {CreateOnly: true},
+		},
+	}
+	props := resolver.NewResolvableProperties()
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, desired, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Contains(t, string(createOnlyPatch), "/Entries/0/Token",
+		"a changed createOnly subfield on a paired member must classify as a createOnly diff")
+	assert.Contains(t, string(patchDoc), "/Entries/0/Weight",
+		"the mutable sibling change stays in the mutable patch")
+}
+
+func TestGeneratePatch_ArrayMemberSiblingChange_StaysMutable(t *testing.T) {
+	document := []byte(`{"Name": "x", "Entries": [{"Token": "same", "Weight": 1}]}`)
+	desired := []byte(`{"Name": "x", "Entries": [{"Token": "same", "Weight": 2}]}`)
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Entries"},
+		Hints:  map[string]pkgmodel.FieldHint{"Entries.Token": {WriteOnly: true, CreateOnly: true}},
+	}
+	props := resolver.NewResolvableProperties()
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, desired, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Empty(t, createOnlyPatch, "a sibling-only member change must not trigger a replacement")
+	assert.NotEmpty(t, patchDoc)
+}
+
+func TestGeneratePatch_UnkeyedArrayCreateOnlyValuesExchanged_DeliveredAsMemberSwaps(t *testing.T) {
+	// Values exchanged between unkeyed members read as members leaving and
+	// arriving; the swap is delivered mutably like any other membership edit.
+	document := []byte(`{"Name":"x","Entries":[{"Id":"A","Token":"t1"},{"Id":"B","Token":"t2"}]}`)
+	desired := []byte(`{"Name":"x","Entries":[{"Id":"A","Token":"t2"},{"Id":"B","Token":"t1"}]}`)
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Entries"},
+		Hints:  map[string]pkgmodel.FieldHint{"Entries.Token": {WriteOnly: true, CreateOnly: true}},
+	}
+	props := resolver.NewResolvableProperties()
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, desired, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Empty(t, createOnlyPatch)
+	assert.NotEmpty(t, patchDoc)
+}
+
+func TestGeneratePatch_ArrayMembershipChange_StaysMutable(t *testing.T) {
+	// Replacing one member with a different member (same Token value carried
+	// by a new member identity) is a collection membership edit, not an
+	// immutable-field change.
+	document := []byte(`{"Name":"x","Entries":[{"Id":"A","Token":"t1"}]}`)
+	desired := []byte(`{"Name":"x","Entries":[{"Id":"C","Token":"t1"}]}`)
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Entries"},
+		Hints:  map[string]pkgmodel.FieldHint{"Entries.Token": {WriteOnly: true, CreateOnly: true}},
+	}
+	props := resolver.NewResolvableProperties()
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, desired, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Empty(t, createOnlyPatch, "a membership change must not trigger a replacement")
+	assert.NotEmpty(t, patchDoc)
+}
+
+func TestGeneratePatch_ArrayMemberAdded_StaysMutable(t *testing.T) {
+	// Adding a member (carrying its own createOnly value) is a membership
+	// edit: no existing member's immutable field changed.
+	document := []byte(`{"Name":"x","Entries":[{"Id":"A","Token":"t1"}]}`)
+	desired := []byte(`{"Name":"x","Entries":[{"Id":"A","Token":"t1"},{"Id":"B","Token":"t2"}]}`)
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Entries"},
+		Hints:  map[string]pkgmodel.FieldHint{"Entries.Token": {WriteOnly: true, CreateOnly: true}},
+	}
+	props := resolver.NewResolvableProperties()
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, desired, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Empty(t, createOnlyPatch, "adding a member must not trigger a resource replacement")
+	assert.NotEmpty(t, patchDoc)
+}
+
+func TestGeneratePatch_ArrayMemberRemoved_StaysMutable(t *testing.T) {
+	document := []byte(`{"Name":"x","Entries":[{"Id":"A","Token":"t1"},{"Id":"B","Token":"t2"}]}`)
+	desired := []byte(`{"Name":"x","Entries":[{"Id":"A","Token":"t1"}]}`)
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Entries"},
+		Hints:  map[string]pkgmodel.FieldHint{"Entries.Token": {WriteOnly: true, CreateOnly: true}},
+	}
+	props := resolver.NewResolvableProperties()
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, desired, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Empty(t, createOnlyPatch, "removing a member must not trigger a resource replacement")
+	assert.NotEmpty(t, patchDoc)
+}

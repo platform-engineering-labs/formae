@@ -362,6 +362,7 @@ func onStateChange(oldState gen.Atom, newState gen.Atom, data ResourceUpdateData
 				ResourceProperties:         data.resourceUpdate.DesiredState.Properties,
 				ResourceReadOnlyProperties: data.resourceUpdate.DesiredState.ReadOnlyProperties,
 				Version:                    data.resourceUpdate.Version,
+				FailureReason:              data.resourceUpdate.FailureReason,
 			},
 		)
 		if err != nil {
