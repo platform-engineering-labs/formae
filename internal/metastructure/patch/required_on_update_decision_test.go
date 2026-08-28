@@ -81,3 +81,31 @@ func TestGeneratePatch_ChangedFieldAlongsideRequiredOnUpdateField_KeepsForceRese
 	assert.Equal(t, "add", tokenOp.Operation, "requiredOnUpdate fields are force-resent as an add")
 	assert.Equal(t, "t1", tokenOp.Value)
 }
+
+// A genuine change to a requiredOnUpdate field plans an update like any other
+// change.
+func TestGeneratePatch_ChangedRequiredOnUpdateFieldItself_PlansUpdate(t *testing.T) {
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Token"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"Token": {RequiredOnUpdate: true},
+		},
+	}
+
+	document := []byte(`{"Name": "n1", "Token": "t1"}`)
+	desired := []byte(`{"Name": "n1", "Token": "t2"}`)
+
+	patchDoc, createOnlyPatch, err := generatePatch(document, desired, nil, nil,
+		resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModePatch)
+	require.NoError(t, err)
+	assert.Empty(t, createOnlyPatch)
+
+	var ops []jsonpatch.JsonPatchOperation
+	require.NoError(t, json.Unmarshal(patchDoc, &ops))
+	require.Len(t, ops, 1, "expected exactly one op for the genuine Token change")
+
+	tokenOp := ops[0]
+	assert.Equal(t, "/Token", tokenOp.Path)
+	assert.Equal(t, "add", tokenOp.Operation, "requiredOnUpdate fields are force-resent as an add")
+	assert.Equal(t, "t2", tokenOp.Value, "the op must carry the new value, not the stored one")
+}
