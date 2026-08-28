@@ -2153,15 +2153,18 @@ func translateFormaeReferencesToKsuid(forma *pkgmodel.Forma, ds ResourceDataLook
 
 // translatePropertiesJSON translates all resolvable objects to KSUID URIs
 
-// stripUntrustedProvenance deletes every $resolvedFrom key from a
-// user-authored properties document. Only STORED envelopes carry trusted
-// provenance; the desired side never does.
+// stripUntrustedProvenance deletes the $resolvedFrom key from every
+// REFERENCE ENVELOPE in a user-authored properties document. Only STORED
+// envelopes carry trusted provenance; the desired side never does. The strip
+// is scoped to envelopes ($ref/$res shaped maps) because that is the only
+// place provenance is ever read from: the same key inside an ordinary map is
+// user data and must round-trip.
 func stripUntrustedProvenance(properties string) (string, error) {
 	var v any
 	if err := json.Unmarshal([]byte(properties), &v); err != nil {
 		return properties, nil // not JSON we manage; translation will handle it
 	}
-	cleaned, changed := withoutKeyDeep(v, "$resolvedFrom")
+	cleaned, changed := withoutEnvelopeProvenance(v)
 	if !changed {
 		return properties, nil
 	}
@@ -2172,20 +2175,24 @@ func stripUntrustedProvenance(properties string) (string, error) {
 	return string(out), nil
 }
 
-// withoutKeyDeep returns v with key removed from every object, and whether
-// any removal happened. (Rebuilds rather than mutating: this package shadows
-// the delete builtin with an actor handler of the same name.)
-func withoutKeyDeep(v any, key string) (any, bool) {
+// withoutEnvelopeProvenance returns v with $resolvedFrom removed from every
+// reference envelope, and whether any removal happened. (Rebuilds rather than
+// mutating: this package shadows the delete builtin with an actor handler of
+// the same name.)
+func withoutEnvelopeProvenance(v any) (any, bool) {
 	switch t := v.(type) {
 	case map[string]any:
+		_, hasRef := t["$ref"]
+		_, hasRes := t["$res"]
+		isEnvelope := hasRef || hasRes
 		changed := false
 		out := make(map[string]any, len(t))
 		for k, child := range t {
-			if k == key {
+			if isEnvelope && k == "$resolvedFrom" {
 				changed = true
 				continue
 			}
-			cleanedChild, childChanged := withoutKeyDeep(child, key)
+			cleanedChild, childChanged := withoutEnvelopeProvenance(child)
 			out[k] = cleanedChild
 			changed = changed || childChanged
 		}
@@ -2194,7 +2201,7 @@ func withoutKeyDeep(v any, key string) (any, bool) {
 		changed := false
 		out := make([]any, len(t))
 		for i, child := range t {
-			cleanedChild, childChanged := withoutKeyDeep(child, key)
+			cleanedChild, childChanged := withoutEnvelopeProvenance(child)
 			out[i] = cleanedChild
 			changed = changed || childChanged
 		}

@@ -1863,3 +1863,27 @@ func TestTranslateFormaeReferences_StripsUntrustedProvenance(t *testing.T) {
 		"user-authored provenance must be stripped at ingestion")
 	assert.Contains(t, props, "$ref", "the reference itself is preserved")
 }
+
+// The strip is scoped to reference envelopes: an ordinary map property that
+// happens to contain a literal "$resolvedFrom" key is user data, not
+// provenance, and must round-trip untouched.
+func TestTranslateFormaeReferences_KeepsLiteralResolvedFromInPlainMaps(t *testing.T) {
+	ds, _ := GetDeps(t)
+	forma := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{{Label: "test-stack"}},
+		Resources: []pkgmodel.Resource{{
+			Label: "config", Type: "Test::Config", Stack: "test-stack",
+			Properties: json.RawMessage(`{
+				"Data": {"$resolvedFrom": "a-user-value", "other": "kept"}
+			}`),
+		}},
+	}
+
+	_, err := TranslateFormaeReferencesToKsuid(forma, ds)
+	require.NoError(t, err)
+
+	var props map[string]map[string]any
+	require.NoError(t, json.Unmarshal(forma.Resources[0].Properties, &props))
+	assert.Equal(t, "a-user-value", props["Data"]["$resolvedFrom"],
+		"a literal key in a plain map is user data and must survive")
+}
