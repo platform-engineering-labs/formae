@@ -253,3 +253,366 @@ func TestGenerateResourceUpdates_CreateOnlyDestination_UnknownNeverReplaces(t *t
 		}
 	}
 }
+
+// opsIn decodes a patch document into op-by-path form.
+func opsIn(t *testing.T, patchDoc json.RawMessage) map[string]any {
+	t.Helper()
+	var ops []struct {
+		Op    string `json:"op"`
+		Path  string `json:"path"`
+		Value any    `json:"value"`
+	}
+	if len(patchDoc) > 0 {
+		require.NoError(t, json.Unmarshal(patchDoc, &ops))
+	}
+	byPath := map[string]any{}
+	for _, op := range ops {
+		byPath[op.Path] = op.Value
+	}
+	return byPath
+}
+
+// A sibling edit next to a stable secret-sourced field plans only the sibling
+// op: the secret occurrence stays out of the patch, while the reference stays
+// listed as a resolvable so execution still writes it from the live source if
+// the patch regenerates.
+func TestGenerateResourceUpdates_StableSecretConsumer_SiblingEditPlansOnlySibling(t *testing.T) {
+	ds, _ := GetDeps(t)
+	sourceKsuid := util.NewID()
+	storedDigest := pkgmodel.ComputeValueHash("hunter2")
+	envelope := `{"$ref":"formae://` + sourceKsuid + `#/SecretString","$value":"` + storedDigest + `","$hashed":true,"$visibility":"Opaque","$resolvedFrom":"` + provenance.FromStored(storedDigest) + `"}`
+
+	existingStack := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{{Label: "test-stack"}},
+		Resources: []pkgmodel.Resource{
+			{
+				Label: "secret", Type: "Test::Secret", Stack: "test-stack", Target: "test-target",
+				Schema: provenanceSecretSchema(), Ksuid: sourceKsuid,
+				Properties: json.RawMessage(`{"Name":"secret","SecretString":{"$value":"` + storedDigest + `","$visibility":"Opaque","$strategy":"Update","$hashed":true}}`),
+			},
+			{
+				Label: "contact", Type: "Test::Contact", Stack: "test-stack", Target: "test-target",
+				Schema: provenanceConsumerSchema(), Ksuid: util.NewID(),
+				Properties: json.RawMessage(`{"Name":"contact","Settings":{"recipient":"#infra-notification","url":` + envelope + `}}`),
+			},
+		},
+	}
+	_, err := ds.StoreStack(existingStack, "previous-command")
+	require.NoError(t, err)
+
+	forma := &pkgmodel.Forma{
+		Stacks:  []pkgmodel.Stack{{Label: "test-stack"}},
+		Targets: []pkgmodel.Target{{Label: "test-target", Namespace: "test", Config: json.RawMessage(`{}`)}},
+		Resources: []pkgmodel.Resource{
+			{
+				Label: "secret", Type: "Test::Secret", Stack: "test-stack", Target: "test-target",
+				Schema:     provenanceSecretSchema(),
+				Properties: json.RawMessage(`{"Name":"secret"}`),
+			},
+			{
+				Label: "contact", Type: "Test::Contact", Stack: "test-stack", Target: "test-target",
+				Schema: provenanceConsumerSchema(),
+				Properties: json.RawMessage(`{
+					"Name": "contact",
+					"Settings": {
+						"recipient": "#platform-alerts",
+						"url": {"$res": true, "$label": "secret", "$type": "Test::Secret", "$stack": "test-stack", "$property": "SecretString"}
+					}
+				}`),
+			},
+		},
+	}
+
+	planned := generateProvenance(t, ds, forma, false)
+	consumer, ok := planned["contact"]
+	require.True(t, ok, "the sibling change must plan the consumer")
+	byPath := opsIn(t, consumer.DesiredState.PatchDocument)
+	assert.Contains(t, byPath, "/Settings/recipient", "the sibling change must produce an op")
+	assert.NotContains(t, byPath, "/Settings/url",
+		"a stable secret occurrence must not enter the patch alongside a sibling edit")
+	assert.Contains(t, consumer.RemainingResolvables, pkgmodel.FormaeURI("formae://"+sourceKsuid+"#/SecretString"),
+		"the reference must still resolve at execution time")
+}
+
+// A reference repointed at a DIFFERENT source is a real change and plans,
+// digests notwithstanding: suppressing every unresolved reference would
+// silently stop honouring a repoint.
+func TestGenerateResourceUpdates_RepointedSecretRef_PlansConsumer(t *testing.T) {
+	ds, _ := GetDeps(t)
+	sourceKsuid := util.NewID()
+	otherKsuid := util.NewID()
+	storedDigest := pkgmodel.ComputeValueHash("hunter2")
+	envelope := `{"$ref":"formae://` + sourceKsuid + `#/SecretString","$value":"` + storedDigest + `","$hashed":true,"$visibility":"Opaque","$resolvedFrom":"` + provenance.FromStored(storedDigest) + `"}`
+
+	existingStack := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{{Label: "test-stack"}},
+		Resources: []pkgmodel.Resource{
+			{
+				Label: "secret", Type: "Test::Secret", Stack: "test-stack", Target: "test-target",
+				Schema: provenanceSecretSchema(), Ksuid: sourceKsuid,
+				Properties: json.RawMessage(`{"Name":"secret","SecretString":{"$value":"` + storedDigest + `","$visibility":"Opaque","$strategy":"Update","$hashed":true}}`),
+			},
+			{
+				Label: "secret-b", Type: "Test::Secret", Stack: "test-stack", Target: "test-target",
+				Schema: provenanceSecretSchema(), Ksuid: otherKsuid,
+				Properties: json.RawMessage(`{"Name":"secret-b","SecretString":{"$value":"` + storedDigest + `","$visibility":"Opaque","$strategy":"Update","$hashed":true}}`),
+			},
+			{
+				Label: "contact", Type: "Test::Contact", Stack: "test-stack", Target: "test-target",
+				Schema: provenanceConsumerSchema(), Ksuid: util.NewID(),
+				Properties: json.RawMessage(`{"Name":"contact","Settings":{"url":` + envelope + `}}`),
+			},
+		},
+	}
+	_, err := ds.StoreStack(existingStack, "previous-command")
+	require.NoError(t, err)
+
+	forma := &pkgmodel.Forma{
+		Stacks:  []pkgmodel.Stack{{Label: "test-stack"}},
+		Targets: []pkgmodel.Target{{Label: "test-target", Namespace: "test", Config: json.RawMessage(`{}`)}},
+		Resources: []pkgmodel.Resource{
+			{
+				Label: "secret", Type: "Test::Secret", Stack: "test-stack", Target: "test-target",
+				Schema:     provenanceSecretSchema(),
+				Properties: json.RawMessage(`{"Name":"secret"}`),
+			},
+			{
+				Label: "secret-b", Type: "Test::Secret", Stack: "test-stack", Target: "test-target",
+				Schema:     provenanceSecretSchema(),
+				Properties: json.RawMessage(`{"Name":"secret-b"}`),
+			},
+			{
+				Label: "contact", Type: "Test::Contact", Stack: "test-stack", Target: "test-target",
+				Schema: provenanceConsumerSchema(),
+				Properties: json.RawMessage(`{
+					"Name": "contact",
+					"Settings": {"url": {"$res": true, "$label": "secret-b", "$type": "Test::Secret", "$stack": "test-stack", "$property": "SecretString"}}
+				}`),
+			},
+		},
+	}
+
+	planned := generateProvenance(t, ds, forma, false)
+	consumer, ok := planned["contact"]
+	require.True(t, ok, "a reference naming a new source must plan")
+	byPath := opsIn(t, consumer.DesiredState.PatchDocument)
+	assert.Contains(t, byPath, "/Settings/url", "the repointed reference must produce an op")
+}
+
+// The stability decision is a property of the occurrence and its provenance,
+// not of nesting depth: an unchanged top-level secret-sourced field plans
+// nothing, exactly like the nested case.
+func TestGenerateResourceUpdates_UnchangedTopLevelSecretConsumer_PlansNothing(t *testing.T) {
+	ds, _ := GetDeps(t)
+	sourceKsuid := util.NewID()
+	storedDigest := pkgmodel.ComputeValueHash("R0ABCDEF1234567890")
+	topLevelSchema := pkgmodel.Schema{
+		Identifier: "Name",
+		Fields:     []string{"Name", "IntegrationKey"},
+		Hints:      map[string]pkgmodel.FieldHint{"Name": {CreateOnly: true}},
+	}
+	envelope := `{"$ref":"formae://` + sourceKsuid + `#/SecretString","$value":"` + storedDigest + `","$hashed":true,"$visibility":"Opaque","$resolvedFrom":"` + provenance.FromStored(storedDigest) + `"}`
+
+	existingStack := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{{Label: "test-stack"}},
+		Resources: []pkgmodel.Resource{
+			{
+				Label: "secret", Type: "Test::Secret", Stack: "test-stack", Target: "test-target",
+				Schema: provenanceSecretSchema(), Ksuid: sourceKsuid,
+				Properties: json.RawMessage(`{"Name":"secret","SecretString":{"$value":"` + storedDigest + `","$visibility":"Opaque","$strategy":"Update","$hashed":true}}`),
+			},
+			{
+				Label: "integration", Type: "Test::Integration", Stack: "test-stack", Target: "test-target",
+				Schema: topLevelSchema, Ksuid: util.NewID(),
+				Properties: json.RawMessage(`{"Name":"integration","IntegrationKey":` + envelope + `}`),
+			},
+		},
+	}
+	_, err := ds.StoreStack(existingStack, "previous-command")
+	require.NoError(t, err)
+
+	forma := &pkgmodel.Forma{
+		Stacks:  []pkgmodel.Stack{{Label: "test-stack"}},
+		Targets: []pkgmodel.Target{{Label: "test-target", Namespace: "test", Config: json.RawMessage(`{}`)}},
+		Resources: []pkgmodel.Resource{
+			{
+				Label: "secret", Type: "Test::Secret", Stack: "test-stack", Target: "test-target",
+				Schema:     provenanceSecretSchema(),
+				Properties: json.RawMessage(`{"Name":"secret"}`),
+			},
+			{
+				Label: "integration", Type: "Test::Integration", Stack: "test-stack", Target: "test-target",
+				Schema: topLevelSchema,
+				Properties: json.RawMessage(`{
+					"Name": "integration",
+					"IntegrationKey": {"$res": true, "$label": "secret", "$type": "Test::Secret", "$stack": "test-stack", "$property": "SecretString"}
+				}`),
+			},
+		},
+	}
+
+	planned := generateProvenance(t, ds, forma, false)
+	_, consumerPlanned := planned["integration"]
+	assert.False(t, consumerPlanned, "an unchanged top-level secret-sourced field must not churn")
+}
+
+// A provider-side rotation absorbed by sync refreshes the source's stored
+// digest; the consumer's provenance now disagrees with it, so the next
+// reconcile plans the consumer. This is the second detectable rotation path
+// (the first is a rotation declared in-command).
+func TestGenerateResourceUpdates_SyncAbsorbedRotation_PlansConsumer(t *testing.T) {
+	ds, _ := GetDeps(t)
+	sourceKsuid := util.NewID()
+	writtenDigest := pkgmodel.ComputeValueHash("hunter2")
+	absorbedDigest := pkgmodel.ComputeValueHash("rotated-behind-formae")
+	envelope := `{"$ref":"formae://` + sourceKsuid + `#/SecretString","$value":"` + writtenDigest + `","$hashed":true,"$visibility":"Opaque","$resolvedFrom":"` + provenance.FromStored(writtenDigest) + `"}`
+
+	existingStack := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{{Label: "test-stack"}},
+		Resources: []pkgmodel.Resource{
+			{
+				Label: "secret", Type: "Test::Secret", Stack: "test-stack", Target: "test-target",
+				Schema: provenanceSecretSchema(), Ksuid: sourceKsuid,
+				Properties: json.RawMessage(`{"Name":"secret","SecretString":{"$value":"` + absorbedDigest + `","$visibility":"Opaque","$strategy":"Update","$hashed":true}}`),
+			},
+			{
+				Label: "contact", Type: "Test::Contact", Stack: "test-stack", Target: "test-target",
+				Schema: provenanceConsumerSchema(), Ksuid: util.NewID(),
+				Properties: json.RawMessage(`{"Name":"contact","Settings":{"url":` + envelope + `}}`),
+			},
+		},
+	}
+	_, err := ds.StoreStack(existingStack, "previous-command")
+	require.NoError(t, err)
+
+	planned := generateProvenance(t, ds, provenanceForma(""), false)
+	consumer, ok := planned["contact"]
+	require.True(t, ok, "a sync-absorbed rotation must plan the consumer on the next reconcile")
+	assert.NotEmpty(t, consumer.RemainingResolvables, "the rotated value resolves live at execution")
+}
+
+// A READABLE reference is outside this classifier's scope: formae holds a
+// comparable value on both sides, so the ordinary value comparison decides,
+// and a changed source value still plans an op carrying the new value.
+func TestGenerateResourceUpdates_ReadableRefValueChanged_PlansConsumer(t *testing.T) {
+	ds, _ := GetDeps(t)
+	sourceKsuid := util.NewID()
+	readableSourceSchema := pkgmodel.Schema{
+		Identifier: "Name",
+		Fields:     []string{"Name", "Endpoint"},
+		Hints:      map[string]pkgmodel.FieldHint{"Name": {CreateOnly: true}},
+	}
+	consumerSchema := pkgmodel.Schema{
+		Identifier: "Name",
+		Fields:     []string{"Name", "Url"},
+		Hints:      map[string]pkgmodel.FieldHint{"Name": {CreateOnly: true}},
+	}
+
+	existingStack := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{{Label: "test-stack"}},
+		Resources: []pkgmodel.Resource{
+			{
+				Label: "endpoint", Type: "Test::Endpoint", Stack: "test-stack", Target: "test-target",
+				Schema: readableSourceSchema, Ksuid: sourceKsuid,
+				Properties: json.RawMessage(`{"Name":"endpoint","Endpoint":"new-endpoint"}`),
+			},
+			{
+				Label: "client", Type: "Test::Client", Stack: "test-stack", Target: "test-target",
+				Schema: consumerSchema, Ksuid: util.NewID(),
+				Properties: json.RawMessage(`{"Name":"client","Url":{"$ref":"formae://` + sourceKsuid + `#/Endpoint","$value":"old-endpoint"}}`),
+			},
+		},
+	}
+	_, err := ds.StoreStack(existingStack, "previous-command")
+	require.NoError(t, err)
+
+	forma := &pkgmodel.Forma{
+		Stacks:  []pkgmodel.Stack{{Label: "test-stack"}},
+		Targets: []pkgmodel.Target{{Label: "test-target", Namespace: "test", Config: json.RawMessage(`{}`)}},
+		Resources: []pkgmodel.Resource{
+			{
+				Label: "endpoint", Type: "Test::Endpoint", Stack: "test-stack", Target: "test-target",
+				Schema:     readableSourceSchema,
+				Properties: json.RawMessage(`{"Name":"endpoint","Endpoint":"new-endpoint"}`),
+			},
+			{
+				Label: "client", Type: "Test::Client", Stack: "test-stack", Target: "test-target",
+				Schema: consumerSchema,
+				Properties: json.RawMessage(`{
+					"Name": "client",
+					"Url": {"$res": true, "$label": "endpoint", "$type": "Test::Endpoint", "$stack": "test-stack", "$property": "Endpoint"}
+				}`),
+			},
+		},
+	}
+
+	planned := generateProvenance(t, ds, forma, false)
+	consumer, ok := planned["client"]
+	require.True(t, ok, "a changed readable reference value must plan")
+	byPath := opsIn(t, consumer.DesiredState.PatchDocument)
+	require.Contains(t, byPath, "/Url")
+	assert.Equal(t, "new-endpoint", byPath["/Url"])
+}
+
+// A rotation must plan the consumer for a TOP-LEVEL destination exactly as it
+// does for a nested one. A top-level unresolved reference flattens to an empty
+// string, which the top-level empty-value filter would otherwise treat as PKL
+// rendering noise and silently drop; the converge classification must carry
+// the occurrence past that filter.
+func TestGenerateResourceUpdates_RotatedSecret_TopLevelDestination_PlansConsumer(t *testing.T) {
+	ds, _ := GetDeps(t)
+	sourceKsuid := util.NewID()
+	storedDigest := pkgmodel.ComputeValueHash("hunter2")
+	consumerSchema := pkgmodel.Schema{
+		Identifier: "BucketName",
+		Fields:     []string{"BucketName", "AccessControl", "DbPassword"},
+	}
+	envelope := `{"$hashed":true,"$ref":"formae://` + sourceKsuid + `#/SecretString","$resolvedFrom":"` + provenance.FromStored(storedDigest) + `","$strategy":"Update","$value":"` + storedDigest + `","$visibility":"Opaque"}`
+
+	existingStack := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{{Label: "test-stack"}},
+		Resources: []pkgmodel.Resource{
+			{
+				Label: "secret", Type: "Test::Secret", Stack: "test-stack", Target: "test-target",
+				Schema: provenanceSecretSchema(), Ksuid: sourceKsuid,
+				Properties: json.RawMessage(`{"Name":"secret","SecretString":{"$value":"` + storedDigest + `","$visibility":"Opaque","$strategy":"Update","$hashed":true}}`),
+			},
+			{
+				Label: "bucket", Type: "Test::Bucket", Stack: "test-stack", Target: "test-target",
+				Schema: consumerSchema, Ksuid: util.NewID(),
+				Properties: json.RawMessage(`{"AccessControl":"Private","BucketName":"bucket","DbPassword":` + envelope + `}`),
+			},
+		},
+	}
+	_, err := ds.StoreStack(existingStack, "previous-command")
+	require.NoError(t, err)
+
+	forma := &pkgmodel.Forma{
+		Stacks:  []pkgmodel.Stack{{Label: "test-stack"}},
+		Targets: []pkgmodel.Target{{Label: "test-target", Namespace: "test", Config: json.RawMessage(`{}`)}},
+		Resources: []pkgmodel.Resource{
+			{
+				Label: "secret", Type: "Test::Secret", Stack: "test-stack", Target: "test-target",
+				Schema:     provenanceSecretSchema(),
+				Properties: json.RawMessage(`{"Name":"secret","SecretString":"rotated-secret"}`),
+			},
+			{
+				Label: "bucket", Type: "Test::Bucket", Stack: "test-stack", Target: "test-target",
+				Schema: consumerSchema,
+				Properties: json.RawMessage(`{
+					"BucketName": "bucket",
+					"AccessControl": "Private",
+					"DbPassword": {"$res": true, "$label": "secret", "$type": "Test::Secret", "$stack": "test-stack", "$property": "SecretString"}
+				}`),
+			},
+		},
+	}
+
+	planned := generateProvenance(t, ds, forma, false)
+	consumer, ok := planned["bucket"]
+	require.True(t, ok, "a rotation must plan a top-level consumer")
+	byPath := opsIn(t, consumer.DesiredState.PatchDocument)
+	assert.Contains(t, byPath, "/DbPassword", "the rotated occurrence must produce an op")
+	assert.NotContains(t, string(consumer.DesiredState.PatchDocument), "rotated-secret")
+	assert.NotEmpty(t, consumer.RemainingResolvables, "the value resolves live at execution")
+}

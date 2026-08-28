@@ -248,6 +248,23 @@ func (s *FakeAWS) Update(context context.Context, request *resource.UpdateReques
 		}
 	}
 
+	if request.ResourceType == secretsManagerSecretType {
+		// Store the updated secret so a later Read enriches with the NEW bare
+		// value, the way AWS's GetSecretValue reflects a PutSecretValue.
+		s.mu.Lock()
+		s.secrets[request.NativeID] = request.DesiredProperties
+		s.mu.Unlock()
+		return &resource.UpdateResult{
+			ProgressResult: &resource.ProgressResult{
+				Operation:          resource.OperationUpdate,
+				OperationStatus:    resource.OperationStatusSuccess,
+				RequestID:          "secret-update-1",
+				NativeID:           request.NativeID,
+				ResourceProperties: request.DesiredProperties,
+			},
+		}, nil
+	}
+
 	return nil, nil
 }
 
