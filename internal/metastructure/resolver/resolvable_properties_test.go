@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/platform-engineering-labs/formae/internal/metastructure/provenance"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
@@ -710,4 +711,139 @@ func TestLoadResolvableProperties_ReferenceBelowNonOpaqueSibling_StillResolves(t
 	value, found := props.Get(sourceKsuid, "Config.Meta.region")
 	require.True(t, found, "a reference below a non-opaque sibling must still resolve")
 	assert.Equal(t, "new", value)
+}
+
+// Every opaque arm of plan-time classification must answer with a retained,
+// opacity-flagged, digest-carrying deferred answer: the value is still never
+// handed out (Get refuses), but downstream classification needs to know WHY
+// and against WHICH source digest to compare.
+func TestLoadResolvableProperties_OpaqueAnswersCarryDigests(t *testing.T) {
+	hex64 := pkgmodel.ComputeValueHash("stored-secret")
+
+	t.Run("declared bare schema-opaque value", func(t *testing.T) {
+		source := &pkgmodel.Resource{
+			Ksuid: sourceKsuid, Label: "s", Type: "Test::Secret", Stack: "default",
+			Schema: pkgmodel.Schema{
+				Fields: []string{"Name", "SecretString"},
+				Hints:  map[string]pkgmodel.FieldHint{"SecretString": {Opaque: true}},
+			},
+			Properties: json.RawMessage(`{"Name":"s"}`),
+		}
+		effective := map[string]json.RawMessage{
+			sourceKsuid: json.RawMessage(`{"Name":"s","SecretString":"hunter2"}`),
+		}
+		props, err := LoadResolvablePropertiesFromStacks(consumerOf("SecretString"), stacksWith(source), effective)
+		require.NoError(t, err)
+
+		_, found := props.Get(sourceKsuid, "SecretString")
+		assert.False(t, found, "opaque values are never handed out")
+
+		a, ok := props.Answer(sourceKsuid, "SecretString")
+		require.True(t, ok, "the deferred answer must be retained")
+		assert.Equal(t, AnswerDeferred, a.Kind)
+		assert.True(t, a.Opaque)
+		assert.Equal(t, provenance.DigestOfString("hunter2"), a.SourceRootDigest)
+		assert.NotEmpty(t, a.SourceRaw())
+	})
+
+	t.Run("declared opaque envelope unwraps before digesting", func(t *testing.T) {
+		source := &pkgmodel.Resource{
+			Ksuid: sourceKsuid, Label: "s", Type: "Test::Secret", Stack: "default",
+			Properties: json.RawMessage(`{"Name":"s"}`),
+		}
+		effective := map[string]json.RawMessage{
+			sourceKsuid: json.RawMessage(`{"SecretString":{"$value":"hunter2","$visibility":"Opaque","$strategy":"Update"}}`),
+		}
+		props, err := LoadResolvablePropertiesFromStacks(consumerOf("SecretString"), stacksWith(source), effective)
+		require.NoError(t, err)
+
+		a, ok := props.Answer(sourceKsuid, "SecretString")
+		require.True(t, ok)
+		assert.True(t, a.Opaque)
+		assert.Equal(t, provenance.DigestOfString("hunter2"), a.SourceRootDigest,
+			"the digest is of the unwrapped value, never the envelope")
+	})
+
+	t.Run("declared hashed envelope adapts the stored digest", func(t *testing.T) {
+		source := &pkgmodel.Resource{
+			Ksuid: sourceKsuid, Label: "s", Type: "Test::Secret", Stack: "default",
+			Properties: json.RawMessage(`{"Name":"s"}`),
+		}
+		effective := map[string]json.RawMessage{
+			sourceKsuid: json.RawMessage(`{"SecretString":{"$value":"` + hex64 + `","$visibility":"Opaque","$hashed":true}}`),
+		}
+		props, err := LoadResolvablePropertiesFromStacks(consumerOf("SecretString"), stacksWith(source), effective)
+		require.NoError(t, err)
+
+		a, ok := props.Answer(sourceKsuid, "SecretString")
+		require.True(t, ok)
+		assert.True(t, a.Opaque)
+		assert.Equal(t, provenance.FromStored(hex64), a.SourceRootDigest)
+	})
+
+	t.Run("undeclared source answers from the stored digest", func(t *testing.T) {
+		source := &pkgmodel.Resource{
+			Ksuid: sourceKsuid, Label: "s", Type: "Test::Secret", Stack: "default",
+			Properties: json.RawMessage(`{"SecretString":{"$value":"` + hex64 + `","$visibility":"Opaque","$strategy":"Update","$hashed":true}}`),
+		}
+		props, err := LoadResolvablePropertiesFromStacks(consumerOf("SecretString"), stacksWith(source), nil)
+		require.NoError(t, err)
+
+		a, ok := props.Answer(sourceKsuid, "SecretString")
+		require.True(t, ok)
+		assert.Equal(t, AnswerDeferred, a.Kind)
+		assert.True(t, a.Opaque)
+		assert.Equal(t, provenance.FromStored(hex64), a.SourceRootDigest)
+	})
+
+	t.Run("undeclared source with no stored digest is unknown", func(t *testing.T) {
+		source := &pkgmodel.Resource{
+			Ksuid: sourceKsuid, Label: "s", Type: "Test::Secret", Stack: "default",
+			Schema: pkgmodel.Schema{
+				Fields: []string{"SecretString"},
+				Hints:  map[string]pkgmodel.FieldHint{"SecretString": {Opaque: true}},
+			},
+			Properties: json.RawMessage(`{"Name":"s"}`),
+		}
+		props, err := LoadResolvablePropertiesFromStacks(consumerOf("SecretString"), stacksWith(source), nil)
+		require.NoError(t, err)
+
+		a, ok := props.Answer(sourceKsuid, "SecretString")
+		require.True(t, ok)
+		assert.True(t, a.Opaque)
+		assert.Empty(t, a.SourceRootDigest)
+	})
+
+	t.Run("chain to an opaque root carries the root digest", func(t *testing.T) {
+		source := &pkgmodel.Resource{
+			Ksuid: sourceKsuid, Label: "s", Type: "Test::Secret", Stack: "default",
+			Schema: pkgmodel.Schema{
+				Fields: []string{"SecretString"},
+				Hints:  map[string]pkgmodel.FieldHint{"SecretString": {Opaque: true}},
+			},
+			Properties: json.RawMessage(`{"Name":"s"}`),
+		}
+		middle := &pkgmodel.Resource{
+			Ksuid: middleKsuid, Label: "m", Type: "Test::Middle", Stack: "default",
+			Properties: json.RawMessage(`{"Ref":{"$ref":"formae://` + sourceKsuid + `#/SecretString"}}`),
+		}
+		consumer := pkgmodel.Resource{
+			Label: "consumer", Type: "Test::Consumer", Stack: "default",
+			Properties: json.RawMessage(`{"Password":{"$ref":"formae://` + middleKsuid + `#/Ref"}}`),
+		}
+		all := map[string][]*pkgmodel.Resource{"default": {source, middle}}
+		effective := map[string]json.RawMessage{
+			sourceKsuid: json.RawMessage(`{"SecretString":"hunter2"}`),
+			middleKsuid: json.RawMessage(`{"Ref":{"$ref":"formae://` + sourceKsuid + `#/SecretString"}}`),
+		}
+		props, err := LoadResolvablePropertiesFromStacks(consumer, all, effective)
+		require.NoError(t, err)
+
+		a, ok := props.Answer(middleKsuid, "Ref")
+		require.True(t, ok)
+		assert.True(t, a.Opaque, "opacity is inherited through the chain")
+		assert.Equal(t, provenance.DigestOfString("hunter2"), a.SourceRootDigest)
+		_, found := props.Get(middleKsuid, "Ref")
+		assert.False(t, found)
+	})
 }
