@@ -106,7 +106,8 @@ func generatePatch(document []byte, patch []byte, storedEnvelopes []byte, desire
 		}
 	}
 
-	patchOps, err := createPatchDocument(flattenedDocument, flattenedPatch, schema.Fields, schema.RequiredOnUpdate(), schema.HasProviderDefault(), entitySetProviderDefaultsFromHints(schema.Hints), collectionSemanticsFromFieldHints(schema.Hints), defaultIgnoredFields, strategy)
+	requiredOnUpdateFields := schema.RequiredOnUpdate()
+	patchOps, err := createPatchDocument(flattenedDocument, flattenedPatch, schema.Fields, requiredOnUpdateFields, schema.HasProviderDefault(), entitySetProviderDefaultsFromHints(schema.Hints), collectionSemanticsFromFieldHints(schema.Hints), defaultIgnoredFields, strategy)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create patch document: %w", err)
 	}
@@ -130,7 +131,17 @@ func generatePatch(document []byte, patch []byte, storedEnvelopes []byte, desire
 	// reaches the plugin nor triggers a replacement.
 	patchOps = dropCanonicallyEqualHintedOps(patchOps, flattenedDocument, flattenedPatch, schema)
 
-	if len(patchOps) == 0 {
+	// A requiredOnUpdate field is force-resent by stripping it from the document
+	// side before the diff (see the documentForceResent step in
+	// createPatchDocument), so its own "add" op reappears even when nothing
+	// changed. That reappearance must never itself decide that an update is
+	// sent — patch emptiness is never a decision input. If every remaining op
+	// is such a no-op restatement of the field's own stored value, there is no
+	// real change and no patch is planned, exactly as for a genuinely empty
+	// diff. When a real change is present alongside it, the force-resent op
+	// stays in the patch unchanged: the provider still requires the field in
+	// every update payload it actually receives.
+	if onlyForceResentNoops(patchOps, flattenedDocument, requiredOnUpdateFields) {
 		return nil, nil, nil
 	}
 
@@ -840,13 +851,58 @@ func extractCreateOnlyFields(patchOps []jsonpatch.JsonPatchOperation, createOnly
 // top-level field — which leaves createOnly violations on nested
 // fields undetected until the cloud API rejects them at apply time.
 func isCreateOnlyPath(path string, createOnlyFields []string) bool {
-	for _, field := range createOnlyFields {
+	return pathMatchesField(path, createOnlyFields)
+}
+
+// pathMatchesField reports whether a JSON Pointer path (without its leading
+// "/", see cleanPath) targets one of the given dot-separated schema field
+// paths, or a nested path within it. Schema Hints use dot-separated keys for
+// nested fields ("Spec.Selector"), while jsonpatch operation paths use slash
+// separators per RFC 6902 ("Spec/Selector/MatchLabels/foo"); the field side is
+// normalized to slash form before comparing.
+func pathMatchesField(path string, fields []string) bool {
+	for _, field := range fields {
 		f := strings.ReplaceAll(field, ".", "/")
 		if path == f || strings.HasPrefix(path, f+"/") {
 			return true
 		}
 	}
 	return false
+}
+
+// onlyForceResentNoops reports whether every op in ops is a force-resent
+// no-op: an "add" on a requiredOnUpdate path whose value merely restates what
+// originalDocument already held there before force-resend stripped it out (see
+// createPatchDocument). An empty ops slice trivially satisfies this, matching
+// the emptiness this check replaces.
+func onlyForceResentNoops(ops []jsonpatch.JsonPatchOperation, originalDocument []byte, requiredOnUpdateFields []string) bool {
+	for _, op := range ops {
+		if !isForceResentNoop(op, originalDocument, requiredOnUpdateFields) {
+			return false
+		}
+	}
+	return true
+}
+
+// isForceResentNoop reports whether op is an "add" operation on a
+// requiredOnUpdate path whose value equals what originalDocument already held
+// at that path — i.e. the op exists solely because createPatchDocument strips
+// requiredOnUpdate fields from the document side to guarantee they ride along
+// in a genuine update, not because the field's value actually changed.
+func isForceResentNoop(op jsonpatch.JsonPatchOperation, originalDocument []byte, requiredOnUpdateFields []string) bool {
+	if op.Operation != "add" || len(requiredOnUpdateFields) == 0 {
+		return false
+	}
+	path := cleanPath(op.Path)
+	if !pathMatchesField(path, requiredOnUpdateFields) {
+		return false
+	}
+	gjsonPath := strings.ReplaceAll(path, "/", ".")
+	original := gjson.GetBytes(originalDocument, gjsonPath)
+	if !original.Exists() {
+		return false
+	}
+	return reflect.DeepEqual(original.Value(), op.Value)
 }
 
 func hasValue(val any) bool {
