@@ -1985,7 +1985,10 @@ func TestRemoveProviderDefaultEntitySetElements_FiltersUnmatchedElements(t *test
 }
 
 func TestRemoveProviderDefaultEntitySetElements_DesiredFieldAbsent(t *testing.T) {
-	// When desired state doesn't have the field at all, remove entire array from document
+	// When desired state doesn't have the field at all, the filter leaves the
+	// document untouched: the omit case is owned by the field-level strip
+	// (removeProviderDefaultFieldsBoth), which runs first in the pipeline and
+	// deletes the field from both sides before this filter ever sees it.
 	document := []byte(`{
 		"Name": "test",
 		"Attributes": [
@@ -2007,8 +2010,39 @@ func TestRemoveProviderDefaultEntitySetElements_DesiredFieldAbsent(t *testing.T)
 	err = json.Unmarshal(result, &resultMap)
 	require.NoError(t, err)
 
-	_, hasAttrs := resultMap["Attributes"]
-	assert.False(t, hasAttrs, "Attributes should be removed when not in desired state")
+	attrs, hasAttrs := resultMap["Attributes"].([]any)
+	assert.True(t, hasAttrs, "Attributes should be left in place when absent from desired; the field-level strip owns the omit case")
+	assert.Len(t, attrs, 2)
+}
+
+func TestRemoveProviderDefaultEntitySetElements_ExplicitEmptyDesired_KeepsLiveEntries(t *testing.T) {
+	// An explicit empty array on the desired side means "user-initiated
+	// clear" (same semantics the field-level strip documents for explicit
+	// empty Listing/Mapping). The filter must NOT wipe the live entries:
+	// they stay in the document so jsonpatch emits a remove per entry.
+	document := []byte(`{
+		"Name": "test",
+		"Tags": [
+			{"Key": "oob", "Value": "added-out-of-band"}
+		]
+	}`)
+
+	patch := []byte(`{"Name": "test", "Tags": []}`)
+
+	entitySetDefaults := map[string]string{
+		"Tags": "Key",
+	}
+
+	result, err := removeProviderDefaultEntitySetElements(document, patch, entitySetDefaults)
+	require.NoError(t, err)
+
+	var resultMap map[string]any
+	err = json.Unmarshal(result, &resultMap)
+	require.NoError(t, err)
+
+	tags, hasTags := resultMap["Tags"].([]any)
+	assert.True(t, hasTags, "Tags should be kept when desired declares an explicit empty array")
+	assert.Len(t, tags, 1, "live entries must stay so the diff can emit removes")
 }
 
 func TestRemoveProviderDefaultEntitySetElements_EmptyMap(t *testing.T) {
@@ -2653,23 +2687,12 @@ func TestGeneratePatch_HasProviderDefault_PlainListing_PR269Rendering(t *testing
 }
 
 // TestGeneratePatch_EntitySetProviderDefault_OOBDrift_UserOmits_PostRevert
-// pins the current (post-revert) behavior of removeProviderDefaultEntitySetElements
-// when the user omits an EntitySet+hasProviderDefault field entirely.
-//
-// PR #337's filter has a branch (patch_document.go:320-326) that deletes the
-// entire docMap[field] when the desired-side has no array under that key. With
-// the revert, "user omits tags" produces a patch JSON with no "Tags" key, so
-// the entire live tag array is dropped before jsonpatch sees it — meaning
-// OOB-added tags are NOT removed during reconcile.
-//
-// PR #269 was originally justified by enabling exactly this remove. With this
-// test passing as written, the post-revert behavior matches pre-#269 behavior
-// (OOB tags persist when user omits the field).
-//
-// If we want OOB tag drift removal back, the fix is NOT in PKL rendering — it
-// requires either (a) removing hasProviderDefault from the Tags annotation in
-// the AWS plugin, (b) changing PR #337's empty-desired branch, or (c) a new
-// hint that distinguishes "API-limit suppression" from "drift tolerance."
+// pins the behavior when the user omits an EntitySet+hasProviderDefault field
+// entirely: the field-level strip (removeProviderDefaultFieldsBoth) deletes
+// the field from both sides before the diff, so OOB-added entries are
+// tolerated, not removed, during reconcile. Omitting the field means "the
+// cloud owns it"; a user who wants formae to drain entries declares an
+// explicit empty Listing instead (see the ExplicitEmpty tests).
 func TestGeneratePatch_EntitySetProviderDefault_OOBDrift_UserOmits_PostRevert(t *testing.T) {
 	document := []byte(`{
 		"Name": "my-tg",
@@ -2735,6 +2758,82 @@ func TestGeneratePatch_EntitySetProviderDefault_OOBDrift_UserDeclaresOne(t *test
 	patchDoc, _, _, err := generatePatch(document, patch, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Empty(t, patchDoc, "characterization: with hasProviderDefault on an EntitySet, OOB-added entries are tolerated even when user declares others")
+}
+
+// TestGeneratePatch_EntitySetProviderDefault_ExplicitEmpty_DrainsLiveEntries
+// pins the explicit-empty semantics for EntitySet+hasProviderDefault fields:
+// an explicit empty array on the desired side is a user-initiated clear (the
+// same meaning the field-level strip documents for explicit empty
+// Listing/Mapping), so live entries stay visible to the diff and reconcile
+// plans a remove per live entry.
+func TestGeneratePatch_EntitySetProviderDefault_ExplicitEmpty_DrainsLiveEntries(t *testing.T) {
+	document := []byte(`{
+		"Name": "my-tg",
+		"Tags": [
+			{"Key": "oob-tag", "Value": "added-out-of-band"}
+		]
+	}`)
+
+	// Explicit empty Listing renders as [] and means "clear my entries".
+	patch := []byte(`{
+		"Name": "my-tg",
+		"Tags": []
+	}`)
+
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Tags"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"Tags": {
+				HasProviderDefault: true,
+				UpdateMethod:       pkgmodel.FieldUpdateMethodEntitySet,
+				IndexField:         "Key",
+			},
+		},
+	}
+	props := resolver.NewResolvableProperties()
+
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Empty(t, createOnlyPatch)
+
+	require.NotEmpty(t, patchDoc, "explicit empty desired must drain live entries, not silently no-op")
+	var ops []jsonpatch.JsonPatchOperation
+	require.NoError(t, json.Unmarshal(patchDoc, &ops))
+	require.Len(t, ops, 1)
+	assert.Equal(t, "remove", ops[0].Operation)
+}
+
+// TestGeneratePatch_EntitySetProviderDefault_ExplicitEmpty_PatchMode_NoOps
+// pins the per-mode split: in Patch mode, PatchStrategyEnsureExists does not
+// emit removal ops for entries absent from desired, so an explicit empty
+// declaration drains nothing there. The drain is a reconcile-mode behavior.
+func TestGeneratePatch_EntitySetProviderDefault_ExplicitEmpty_PatchMode_NoOps(t *testing.T) {
+	document := []byte(`{
+		"Name": "my-tg",
+		"Tags": [
+			{"Key": "oob-tag", "Value": "added-out-of-band"}
+		]
+	}`)
+	patch := []byte(`{
+		"Name": "my-tg",
+		"Tags": []
+	}`)
+
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Tags"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"Tags": {
+				HasProviderDefault: true,
+				UpdateMethod:       pkgmodel.FieldUpdateMethodEntitySet,
+				IndexField:         "Key",
+			},
+		},
+	}
+	props := resolver.NewResolvableProperties()
+
+	patchDoc, _, _, err := generatePatch(document, patch, nil, nil, props, schema, pkgmodel.FormaApplyModePatch)
+	require.NoError(t, err)
+	assert.Empty(t, patchDoc, "Patch mode must not drain: EnsureExists emits no removes")
 }
 
 // TestGeneratePatch_AtomicNestedArrayProducesReplace guards atomic nested-array replacement:

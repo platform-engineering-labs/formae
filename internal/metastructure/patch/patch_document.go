@@ -598,6 +598,11 @@ func stripProviderDefaultInArrayElem(elem map[string]any, path []string) {
 // This handles cloud providers that populate EntitySet collections with many default elements
 // (e.g., AWS LoadBalancer returns ~22 default attributes). Without filtering, all defaults would
 // be included in the patch, potentially exceeding API limits.
+//
+// The filter only acts when the desired side declares one or more elements.
+// A field absent from desired is left alone (the field-level strip owns the
+// omit case), and an explicit empty array is a user-initiated clear: live
+// entries stay in the document so the diff emits a remove per entry.
 func removeProviderDefaultEntitySetElements(document []byte, patch []byte, entitySetProviderDefaults map[string]string) ([]byte, error) {
 	if len(entitySetProviderDefaults) == 0 {
 		return document, nil
@@ -621,8 +626,19 @@ func removeProviderDefaultEntitySetElements(document []byte, patch []byte, entit
 
 		patchArr, ok := patchMap[field].([]any)
 		if !ok {
-			// Desired state doesn't have this field at all — remove entire array from document
-			delete(docMap, field)
+			// Desired state doesn't have this field at all. The omit case is
+			// owned by the field-level strip (removeProviderDefaultFieldsBoth),
+			// which runs earlier and deletes the field from both sides, so
+			// there is nothing for this filter to decide here.
+			continue
+		}
+
+		if len(patchArr) == 0 {
+			// An explicit empty array is a user-initiated clear (the same
+			// meaning the field-level strip gives explicit empty
+			// Listing/Mapping). Keep the live entries so the diff emits a
+			// remove per entry; wiping them here would silently no-op the
+			// declared clear and hide out-of-band additions.
 			continue
 		}
 
