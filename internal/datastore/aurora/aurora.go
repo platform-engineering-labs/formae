@@ -4083,12 +4083,14 @@ func (d *DatastoreAuroraDataAPI) BulkStoreResourceUpdates(commandID string, upda
 				retries, remaining, version, stack_label, group_id, source,
 				resource, resource_target, existing_resource, existing_target,
 				progress_result, most_recent_progress,
-				remaining_resolvables, reference_labels, previous_properties
+				remaining_resolvables, reference_labels, previous_properties,
+				failure_reason
 			) VALUES (:command_id, :ksuid, :operation, :state, :start_ts::timestamp, :modified_ts::timestamp,
 				:retries, :remaining, :version, :stack_label, :group_id, :source,
 				:resource, :resource_target, :existing_resource, :existing_target,
 				:progress_result, :most_recent_progress,
-				:remaining_resolvables, :reference_labels, :previous_properties)
+				:remaining_resolvables, :reference_labels, :previous_properties,
+				:failure_reason)
 			ON CONFLICT (command_id, ksuid, operation) DO UPDATE SET
 				state = EXCLUDED.state,
 				modified_ts = EXCLUDED.modified_ts,
@@ -4096,7 +4098,8 @@ func (d *DatastoreAuroraDataAPI) BulkStoreResourceUpdates(commandID string, upda
 				existing_resource = EXCLUDED.existing_resource,
 				previous_properties = EXCLUDED.previous_properties,
 				progress_result = EXCLUDED.progress_result,
-				most_recent_progress = EXCLUDED.most_recent_progress
+				most_recent_progress = EXCLUDED.most_recent_progress,
+				failure_reason = EXCLUDED.failure_reason
 		`
 
 		params := []types.SqlParameter{
@@ -4121,6 +4124,7 @@ func (d *DatastoreAuroraDataAPI) BulkStoreResourceUpdates(commandID string, upda
 			{Name: aws.String("remaining_resolvables"), Value: &types.FieldMemberStringValue{Value: string(remainingResolvablesJSON)}},
 			{Name: aws.String("reference_labels"), Value: &types.FieldMemberStringValue{Value: string(referenceLabelsJSON)}},
 			{Name: aws.String("previous_properties"), Value: &types.FieldMemberStringValue{Value: string(previousPropertiesJSON)}},
+			{Name: aws.String("failure_reason"), Value: &types.FieldMemberStringValue{Value: ru.FailureReason}},
 		}
 
 		_, err = d.executeStatementInTransaction(ctx, txID, query, params)
@@ -4145,7 +4149,8 @@ func (d *DatastoreAuroraDataAPI) LoadResourceUpdates(commandID string) ([]resour
 		retries, remaining, version, stack_label, group_id, source,
 		resource, resource_target, existing_resource, existing_target,
 		progress_result, most_recent_progress,
-		remaining_resolvables, reference_labels, previous_properties
+		remaining_resolvables, reference_labels, previous_properties,
+		failure_reason
 	FROM resource_updates
 	WHERE command_id = :command_id
 	ORDER BY ksuid ASC
@@ -4185,6 +4190,10 @@ func (d *DatastoreAuroraDataAPI) LoadResourceUpdates(commandID string) ([]resour
 		remainingResolvablesJSON, _ := getStringField(record[17])
 		referenceLabelsJSON, _ := getStringField(record[18])
 		previousPropertiesJSON, _ := getStringField(record[19])
+		var failureReason string
+		if len(record) > 20 {
+			failureReason, _ = getStringField(record[20])
+		}
 
 		var desiredState pkgmodel.Resource
 		var resourceTarget pkgmodel.Target
@@ -4231,6 +4240,7 @@ func (d *DatastoreAuroraDataAPI) LoadResourceUpdates(commandID string) ([]resour
 			RemainingResolvables:     remainingResolvables,
 			ReferenceLabels:          referenceLabels,
 			PreviousProperties:       previousProperties,
+			FailureReason:            failureReason,
 		})
 	}
 
