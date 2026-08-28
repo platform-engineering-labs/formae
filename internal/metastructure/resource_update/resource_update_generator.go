@@ -2448,12 +2448,22 @@ func markOpaqueResolvablesInProps(propsJSON string, opaqueByTriplet map[pkgmodel
 // leaf path is never in the set and matching it alone would leave the reference
 // un-marked and its resolved value unhashed at rest. Test the top-level field too,
 // mirroring resolver.isSourcePropertyOpaque.
+//
+// The converse direction also holds: a hint nested under the referenced path
+// (an opaque descendant) makes the referenced container opaque, since resolving
+// the container would materialize the descendant. Same rule as the resolver's
+// oracle; keep the two in sync.
 func referencesOpaqueProperty(opaque map[string]bool, propertyName string) bool {
 	if propertyName == "" {
 		return false
 	}
 	if opaque[propertyName] {
 		return true
+	}
+	for key := range opaque {
+		if strings.HasPrefix(key, propertyName+".") {
+			return true
+		}
 	}
 	root, _, nested := strings.Cut(propertyName, ".")
 	return nested && opaque[root]

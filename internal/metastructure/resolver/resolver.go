@@ -297,6 +297,17 @@ func isSourcePropertyOpaque(source *pkgmodel.Resource, propertyName string) bool
 			return true
 		}
 	}
+	// A hint on a field nested under the referenced path makes the whole
+	// referenced subtree opaque: a container holding a credential is itself a
+	// credential for materialization purposes, whether the reference names the
+	// leaf, the container, or any ancestor. The value-level walks above already
+	// refuse persisted descendants ($hashed / $visibility inside the subtree);
+	// this covers the schema-declared case before anything is persisted.
+	for key := range opaqueFields {
+		if strings.HasPrefix(key, propertyName+".") {
+			return true
+		}
+	}
 	return false
 }
 

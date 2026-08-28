@@ -1808,3 +1808,29 @@ func TestSynthesizeCascadeUpdatePatch_ReplacedParentIndexedProviderField(t *test
 	assert.NotContains(t, patchStr, `"value":"arn:`,
 		"stale cached value must not be emitted as a bare concrete replace value outside the cascade marker")
 }
+
+// A reference names an opaque property when the opaque set holds the exact
+// path, the path's map-secret root, or any hint nested under the referenced
+// path: a container holding a credential is itself a credential.
+func TestReferencesOpaqueProperty_DescendantHint(t *testing.T) {
+	nested := map[string]bool{"Config.Password": true}
+	mapSecret := map[string]bool{"data": true}
+
+	cases := []struct {
+		name     string
+		opaque   map[string]bool
+		property string
+		want     bool
+	}{
+		{"container with opaque descendant", nested, "Config", true},
+		{"exact descendant path", nested, "Config.Password", true},
+		{"sibling under the same container", nested, "Config.User", false},
+		{"unrelated field", nested, "Name", false},
+		{"key into a map-shaped secret", mapSecret, "data.token", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, referencesOpaqueProperty(tc.opaque, tc.property))
+		})
+	}
+}
