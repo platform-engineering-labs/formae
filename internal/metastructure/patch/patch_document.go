@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/canonicalize"
@@ -147,6 +148,26 @@ func generatePatch(document []byte, patch []byte, storedEnvelopes []byte, desire
 	createOnlyFields := schema.CreateOnly()
 	createOnlyOps := extractCreateOnlyFields(patchOps, createOnlyFields)
 	mutableOps := filterCreateOnlyFields(patchOps, createOnlyFields)
+
+	// Member-level ops under an array are ambiguous between a member swap and
+	// an immutable-field change: set-based array comparison emits whole-element
+	// remove/add pairs, so a change to a createOnly subfield never appears at
+	// the subfield's own path. The hinted subfield's values are the
+	// disambiguator: when their multiset differs between stored and desired,
+	// the element ops under that field escalate to createOnly (a replacement);
+	// when it is unchanged, sibling-only member changes stay mutable.
+	if replacementFields := arrayCreateOnlyChangedFields(flattenedDocument, flattenedPatch, createOnlyFields); len(replacementFields) > 0 {
+		stillMutable := make([]jsonpatch.JsonPatchOperation, 0, len(mutableOps))
+		for _, op := range mutableOps {
+			root, _, _ := strings.Cut(cleanPath(op.Path), "/")
+			if replacementFields[root] {
+				createOnlyOps = append(createOnlyOps, op)
+			} else {
+				stillMutable = append(stillMutable, op)
+			}
+		}
+		mutableOps = stillMutable
+	}
 
 	if len(mutableOps) == 0 && len(createOnlyOps) == 0 {
 		return nil, nil, false, nil
@@ -913,8 +934,92 @@ func extractCreateOnlyFields(patchOps []jsonpatch.JsonPatchOperation, createOnly
 // normalization the check silently no-ops for any path deeper than a
 // top-level field — which leaves createOnly violations on nested
 // fields undetected until the cloud API rejects them at apply time.
+// Matching is array-index-transparent for the same reason as the
+// requiredOnUpdate matcher: a hint on a field inside an array element
+// ("Items.Token") must catch the op at its indexed path ("/Items/0/Token").
 func isCreateOnlyPath(path string, createOnlyFields []string) bool {
-	return pathMatchesField(path, createOnlyFields)
+	return pathMatchesFieldThroughArrays(path, createOnlyFields)
+}
+
+// arrayCreateOnlyChangedFields returns the set of top-level fields whose
+// member-level ops must escalate to createOnly: fields with a createOnly
+// descendant hint reached through an array whose value multiset differs
+// between the stored document and the desired patch. Object-nested createOnly
+// paths are excluded — their changes surface at the subfield's own op path and
+// classify there, so escalating sibling ops under the same container would
+// over-trigger replacements.
+func arrayCreateOnlyChangedFields(document, patch []byte, createOnlyFields []string) map[string]bool {
+	changed := map[string]bool{}
+	if len(createOnlyFields) == 0 {
+		return changed
+	}
+	var docMap, patchMap map[string]any
+	if err := json.Unmarshal(document, &docMap); err != nil {
+		return changed
+	}
+	if err := json.Unmarshal(patch, &patchMap); err != nil {
+		return changed
+	}
+	for _, field := range createOnlyFields {
+		segments := strings.Split(field, ".")
+		if len(segments) < 2 {
+			continue
+		}
+		docValues, docViaArray := collectNestedFieldValues(docMap, segments)
+		patchValues, patchViaArray := collectNestedFieldValues(patchMap, segments)
+		if !docViaArray && !patchViaArray {
+			continue
+		}
+		if multisetKey(docValues) != multisetKey(patchValues) {
+			changed[segments[0]] = true
+		}
+	}
+	return changed
+}
+
+// collectNestedFieldValues returns every value the dot-path resolves to in
+// obj, traversing arrays like removeNestedField (the remaining path is
+// applied to every map element), and whether the traversal crossed an array.
+func collectNestedFieldValues(obj map[string]any, path []string) ([]any, bool) {
+	if len(path) == 0 {
+		return nil, false
+	}
+	val, exists := obj[path[0]]
+	if !exists {
+		return nil, false
+	}
+	if len(path) == 1 {
+		return []any{val}, false
+	}
+	if nestedObj, ok := val.(map[string]any); ok {
+		return collectNestedFieldValues(nestedObj, path[1:])
+	}
+	if arr, ok := val.([]any); ok {
+		var out []any
+		for _, elem := range arr {
+			if elemMap, ok := elem.(map[string]any); ok {
+				vals, _ := collectNestedFieldValues(elemMap, path[1:])
+				out = append(out, vals...)
+			}
+		}
+		return out, true
+	}
+	return nil, false
+}
+
+// multisetKey renders values as an order-insensitive comparison key: the
+// sorted JSON forms joined with a separator that cannot appear in JSON.
+func multisetKey(values []any) string {
+	keys := make([]string, 0, len(values))
+	for _, v := range values {
+		b, err := json.Marshal(v)
+		if err != nil {
+			continue
+		}
+		keys = append(keys, string(b))
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, "\x00")
 }
 
 // pathMatchesField reports whether a JSON Pointer path (without its leading

@@ -3952,3 +3952,33 @@ func TestGeneratePatch_ArrayNestedWriteOnlyCreateOnly_NoBaselineStillStripped(t 
 	require.NoError(t, err)
 	assert.NotContains(t, string(patchDoc)+string(createOnlyPatch), "Token")
 }
+
+func TestGeneratePatch_ArrayNestedCreateOnlyChange_TriggersReplacement(t *testing.T) {
+	document := []byte(`{"Name": "x", "Entries": [{"Token": "old", "Weight": 1}]}`)
+	desired := []byte(`{"Name": "x", "Entries": [{"Token": "new", "Weight": 1}]}`)
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Entries"},
+		Hints:  map[string]pkgmodel.FieldHint{"Entries.Token": {WriteOnly: true, CreateOnly: true}},
+	}
+	props := resolver.NewResolvableProperties()
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, desired, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.NotEmpty(t, createOnlyPatch,
+		"a changed createOnly value nested under an array must classify as a createOnly diff")
+	assert.JSONEq(t, "[]", string(patchDoc),
+		"the member swap must not additionally be sent as a mutable patch")
+}
+
+func TestGeneratePatch_ArrayMemberSiblingChange_StaysMutable(t *testing.T) {
+	document := []byte(`{"Name": "x", "Entries": [{"Token": "same", "Weight": 1}]}`)
+	desired := []byte(`{"Name": "x", "Entries": [{"Token": "same", "Weight": 2}]}`)
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Entries"},
+		Hints:  map[string]pkgmodel.FieldHint{"Entries.Token": {WriteOnly: true, CreateOnly: true}},
+	}
+	props := resolver.NewResolvableProperties()
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, desired, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Empty(t, createOnlyPatch, "a sibling-only member change must not trigger a replacement")
+	assert.NotEmpty(t, patchDoc)
+}
