@@ -165,8 +165,6 @@ func (b *BlugeQuerier) assignTermToStatusQuery(field string, value any, sq *data
 		sq.Status = appendStringValue(sq.Status, value.(string), constraint)
 	case "stack":
 		sq.Stack = appendStringValue(sq.Stack, value.(string), constraint)
-	case "managed":
-		sq.Managed = queryItem(value.(bool), constraint)
 	default:
 		return apimodel.InvalidQueryError{Reason: fmt.Sprintf("unknown field for StatusQuery: '%s'", field)}
 	}

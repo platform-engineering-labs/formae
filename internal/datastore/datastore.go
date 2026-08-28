@@ -53,7 +53,6 @@ type StatusQuery struct {
 	Command     *QueryItem[string]
 	Status      *QueryItem[string]
 	Stack       *QueryItem[string]
-	Managed     *QueryItem[bool]
 	Subject     *QueryItem[string]
 	SubjectName *QueryItem[string]
 	// Source restricts results to a FormaCommand source (forma_command.Source,

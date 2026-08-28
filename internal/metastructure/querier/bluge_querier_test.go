@@ -303,6 +303,20 @@ func TestBlugeQuerier_statusQuery_ComplexStackWithOtherFields(t *testing.T) {
 	assert.Equal(t, expectedStatusQuery, statusQuery)
 }
 
+func TestBlugeQuerier_statusQuery_UnknownFieldIsInvalidQuery(t *testing.T) {
+	querier := &BlugeQuerier{}
+
+	queryString := "managed:true"
+
+	statusQuery, err := querier.statusQuery(queryString, Caller{ClientID: "test-client-id"}, 0)
+	assert.Nil(t, statusQuery)
+	require.Error(t, err)
+
+	var invalidQueryErr apimodel.InvalidQueryError
+	assert.ErrorAs(t, err, &invalidQueryErr)
+	assert.Contains(t, invalidQueryErr.Reason, "unknown field for StatusQuery: 'managed'")
+}
+
 func TestBlugeQuerier_resourceQuery_ManagedResources(t *testing.T) {
 	querier := &BlugeQuerier{}
 
