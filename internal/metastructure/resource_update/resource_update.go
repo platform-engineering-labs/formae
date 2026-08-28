@@ -205,7 +205,14 @@ func (ru *ResourceUpdate) regeneratePatchDocument(mode pkgmodel.FormaApplyMode) 
 		return nil, nil, fmt.Errorf("failed to convert desired properties to plugin format: %w", err)
 	}
 
-	patchDoc, createOnlyPatch, err := patch.GeneratePatch(
+	// The onlyForceResent decision is deliberately ignored here: this call
+	// regenerates the payload for an update that is already happening, so a
+	// requiredOnUpdate field's force-resent op must ride along in patchDoc as
+	// returned — dropping it would send the plugin an Update with the
+	// provider-mandated field missing. Only planning (whether to create this
+	// ResourceUpdate at all) may treat a force-resent-only patch as empty; see
+	// resource_update_factory.go.
+	patchDoc, createOnlyPatch, _, err := patch.GeneratePatch(
 		existingPluginProps,
 		newPluginProps,
 		existingForPatch,

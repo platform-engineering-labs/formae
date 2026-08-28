@@ -66,6 +66,7 @@ func NewResourceUpdateForExisting(
 
 	var patchDocument json.RawMessage
 	var createOnlyPatch json.RawMessage
+	var onlyForceResent bool
 
 	if hasChanges {
 		// Drop opaque values that are unchanged from what is stored so a sibling
@@ -94,7 +95,7 @@ func NewResourceUpdateForExisting(
 			return nil, fmt.Errorf("failed to convert new properties to plugin format: %w", err)
 		}
 
-		patchDocument, createOnlyPatch, err = patch.GeneratePatch(
+		patchDocument, createOnlyPatch, onlyForceResent, err = patch.GeneratePatch(
 			existingPluginProps,
 			newPluginProps,
 			existingForPatch,
@@ -107,7 +108,13 @@ func NewResourceUpdateForExisting(
 			return nil, fmt.Errorf("failed to create patch document for resource %s: %w", existingResource.Label, err)
 		}
 
-		if patchDocument == nil && len(createOnlyPatch) == 0 && !stackChanged && !labelChanged {
+		// A patch that is empty, or whose only ops are requiredOnUpdate fields
+		// force-resent to guarantee the provider sees them (no op reflecting an
+		// actual change), carries nothing for the plugin to do. Planning is the
+		// one place that decision is allowed to drop the update outright —
+		// regeneratePatchDocument at execution time must never do the same, or
+		// an in-flight update would lose the force-resent field from its payload.
+		if (patchDocument == nil || onlyForceResent) && len(createOnlyPatch) == 0 && !stackChanged && !labelChanged {
 			return []ResourceUpdate{}, nil
 		}
 	} else {

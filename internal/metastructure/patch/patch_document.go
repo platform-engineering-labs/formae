@@ -28,9 +28,18 @@ var defaultIgnoredFields = []jsonpatch.Path{}
 //     fields. When non-empty, the caller must plan a destroy+create rather
 //     than an update; the ops are used purely for CLI rendering ("because
 //     these immutable properties changed: …") and are never sent to plugins.
+//   - onlyForceResent reports whether patchDocument's ops (and any
+//     createOnlyPatch ops) consist ENTIRELY of requiredOnUpdate fields
+//     force-resent to guarantee the provider sees them, with no op reflecting
+//     an actual change. patchDocument itself is never stripped of these ops —
+//     content is never dropped here, only reported. A caller deciding whether
+//     to PLAN an update at all should treat this the same as an empty patch; a
+//     caller regenerating the payload for an update that is already happening
+//     must ignore this and send patchDocument as returned, because the
+//     provider still requires the force-resent field in that payload.
 //
 // The two slices are disjoint. Either can be nil.
-func GeneratePatch(document []byte, patch []byte, storedEnvelopes []byte, desiredEnvelopes []byte, properties resolver.ResolvableProperties, schema pkgmodel.Schema, mode pkgmodel.FormaApplyMode) (json.RawMessage, json.RawMessage, error) {
+func GeneratePatch(document []byte, patch []byte, storedEnvelopes []byte, desiredEnvelopes []byte, properties resolver.ResolvableProperties, schema pkgmodel.Schema, mode pkgmodel.FormaApplyMode) (json.RawMessage, json.RawMessage, bool, error) {
 	return generatePatch(document, patch, storedEnvelopes, desiredEnvelopes, properties, schema, mode)
 }
 
@@ -66,10 +75,10 @@ func entitySetProviderDefaultsFromHints(hints map[string]pkgmodel.FieldHint) map
 	return result
 }
 
-func generatePatch(document []byte, patch []byte, storedEnvelopes []byte, desiredEnvelopes []byte, properties resolver.ResolvableProperties, schema pkgmodel.Schema, mode pkgmodel.FormaApplyMode) (json.RawMessage, json.RawMessage, error) {
+func generatePatch(document []byte, patch []byte, storedEnvelopes []byte, desiredEnvelopes []byte, properties resolver.ResolvableProperties, schema pkgmodel.Schema, mode pkgmodel.FormaApplyMode) (json.RawMessage, json.RawMessage, bool, error) {
 	flattenedDocument, flattenedPatch, err := flattenAndResolveRefs(document, patch, storedEnvelopes, desiredEnvelopes, properties)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to flatten and resolve refs: %w", err)
+		return nil, nil, false, fmt.Errorf("failed to flatten and resolve refs: %w", err)
 	}
 
 	var strategy jsonpatch.PatchStrategy
@@ -79,7 +88,7 @@ func generatePatch(document []byte, patch []byte, storedEnvelopes []byte, desire
 	case pkgmodel.FormaApplyModePatch:
 		strategy = jsonpatch.PatchStrategyEnsureExists
 	default:
-		return nil, nil, fmt.Errorf("unable to generate patch document for apply mode: %s", mode)
+		return nil, nil, false, fmt.Errorf("unable to generate patch document for apply mode: %s", mode)
 	}
 
 	// Strip a field that is both writeOnly AND createOnly from the desired
@@ -102,13 +111,14 @@ func generatePatch(document []byte, patch []byte, storedEnvelopes []byte, desire
 		}
 		flattenedPatch, err = removeWriteOnlyFields(flattenedPatch, withoutBaseline)
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to strip writeOnly+createOnly fields from desired state: %w", err)
+			return nil, nil, false, fmt.Errorf("failed to strip writeOnly+createOnly fields from desired state: %w", err)
 		}
 	}
 
-	patchOps, err := createPatchDocument(flattenedDocument, flattenedPatch, schema.Fields, schema.RequiredOnUpdate(), schema.HasProviderDefault(), entitySetProviderDefaultsFromHints(schema.Hints), collectionSemanticsFromFieldHints(schema.Hints), defaultIgnoredFields, strategy)
+	requiredOnUpdateFields := schema.RequiredOnUpdate()
+	patchOps, err := createPatchDocument(flattenedDocument, flattenedPatch, schema.Fields, requiredOnUpdateFields, schema.HasProviderDefault(), entitySetProviderDefaultsFromHints(schema.Hints), collectionSemanticsFromFieldHints(schema.Hints), defaultIgnoredFields, strategy)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create patch document: %w", err)
+		return nil, nil, false, fmt.Errorf("failed to create patch document: %w", err)
 	}
 
 	// Remove spurious patch operations that add empty arrays or maps.
@@ -131,8 +141,22 @@ func generatePatch(document []byte, patch []byte, storedEnvelopes []byte, desire
 	patchOps = dropCanonicallyEqualHintedOps(patchOps, flattenedDocument, flattenedPatch, schema)
 
 	if len(patchOps) == 0 {
-		return nil, nil, nil
+		return nil, nil, false, nil
 	}
+
+	// A requiredOnUpdate field is force-resent by stripping it from the document
+	// side before the diff (see the documentForceResent step in
+	// createPatchDocument), so its own "add" op reappears even when nothing
+	// changed. That reappearance must never itself decide that an update is
+	// sent — patch emptiness is never a decision input. onlyForceResent reports
+	// whether every remaining op is such a no-op restatement of a field's own
+	// stored value, so a caller PLANNING whether to send an update at all can
+	// treat this the same as an empty patch. It must NOT be used to strip
+	// content here: a caller regenerating the payload for an update that is
+	// already happening still needs the force-resent op in what this function
+	// returns, because the provider requires the field in every update payload
+	// it actually receives.
+	onlyForceResent := onlyForceResentNoops(patchOps, flattenedDocument, requiredOnUpdateFields)
 
 	// Separate createOnly operations from mutable operations. CreateOnly
 	// fields cannot be updated in-place via the cloud API — if they changed,
@@ -144,24 +168,24 @@ func generatePatch(document []byte, patch []byte, storedEnvelopes []byte, desire
 	mutableOps := filterCreateOnlyFields(patchOps, createOnlyFields)
 
 	if len(mutableOps) == 0 && len(createOnlyOps) == 0 {
-		return nil, nil, nil
+		return nil, nil, false, nil
 	}
 
 	patchJson, err := json.Marshal(mutableOps)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to serialize patch document: %w", err)
+		return nil, nil, false, fmt.Errorf("failed to serialize patch document: %w", err)
 	}
 
 	var createOnlyJson json.RawMessage
 	if len(createOnlyOps) > 0 {
 		createOnlyBytes, err := json.Marshal(createOnlyOps)
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to serialize createOnly patch: %w", err)
+			return nil, nil, false, fmt.Errorf("failed to serialize createOnly patch: %w", err)
 		}
 		createOnlyJson = json.RawMessage(createOnlyBytes)
 	}
 
-	return json.RawMessage(patchJson), createOnlyJson, nil
+	return json.RawMessage(patchJson), createOnlyJson, onlyForceResent, nil
 }
 
 func createPatchDocument(document []byte, patch []byte, schemaFields []string, requiredOnUpdateFields []string, hasProviderDefaultFields []string, entitySetProviderDefaults map[string]string, collections jsonpatch.Collections, ignoredFields []jsonpatch.Path, strategy jsonpatch.PatchStrategy) ([]jsonpatch.JsonPatchOperation, error) {
@@ -840,13 +864,116 @@ func extractCreateOnlyFields(patchOps []jsonpatch.JsonPatchOperation, createOnly
 // top-level field — which leaves createOnly violations on nested
 // fields undetected until the cloud API rejects them at apply time.
 func isCreateOnlyPath(path string, createOnlyFields []string) bool {
-	for _, field := range createOnlyFields {
+	return pathMatchesField(path, createOnlyFields)
+}
+
+// pathMatchesField reports whether a JSON Pointer path (without its leading
+// "/", see cleanPath) targets one of the given dot-separated schema field
+// paths, or a nested path within it. Schema Hints use dot-separated keys for
+// nested fields ("Spec.Selector"), while jsonpatch operation paths use slash
+// separators per RFC 6902 ("Spec/Selector/MatchLabels/foo"); the field side is
+// normalized to slash form before comparing.
+func pathMatchesField(path string, fields []string) bool {
+	for _, field := range fields {
 		f := strings.ReplaceAll(field, ".", "/")
 		if path == f || strings.HasPrefix(path, f+"/") {
 			return true
 		}
 	}
 	return false
+}
+
+// onlyForceResentNoops reports whether every op in ops is a force-resent
+// no-op: an "add" on a requiredOnUpdate path whose value merely restates what
+// originalDocument already held there before force-resend stripped it out (see
+// createPatchDocument). An empty ops slice trivially satisfies this, matching
+// the emptiness this check replaces.
+func onlyForceResentNoops(ops []jsonpatch.JsonPatchOperation, originalDocument []byte, requiredOnUpdateFields []string) bool {
+	for _, op := range ops {
+		if !isForceResentNoop(op, originalDocument, requiredOnUpdateFields) {
+			return false
+		}
+	}
+	return true
+}
+
+// isForceResentNoop reports whether op is an "add" operation on a
+// requiredOnUpdate path whose value equals what originalDocument already held
+// at that path — i.e. the op exists solely because createPatchDocument strips
+// requiredOnUpdate fields from the document side to guarantee they ride along
+// in a genuine update, not because the field's value actually changed.
+func isForceResentNoop(op jsonpatch.JsonPatchOperation, originalDocument []byte, requiredOnUpdateFields []string) bool {
+	if op.Operation != "add" || len(requiredOnUpdateFields) == 0 {
+		return false
+	}
+	path := cleanPath(op.Path)
+	if !pathMatchesFieldThroughArrays(path, requiredOnUpdateFields) {
+		return false
+	}
+	gjsonPath := strings.ReplaceAll(path, "/", ".")
+	original := gjson.GetBytes(originalDocument, gjsonPath)
+	if !original.Exists() {
+		return false
+	}
+	return reflect.DeepEqual(original.Value(), op.Value)
+}
+
+// pathMatchesFieldThroughArrays is pathMatchesField's array-index-aware
+// counterpart, used only for matching a force-resent op's path against
+// requiredOnUpdate fields. A requiredOnUpdate hint on a field nested inside an
+// array (e.g. "Items.Token") is stripped from every array element by
+// removeNestedField, so its "add" op lands at an array-indexed path (e.g.
+// "/Items/0/Token") that plain segment-by-segment comparison against
+// "Items/Token" would never match. Mirrors removeNestedField's own traversal:
+// a numeric path segment is transparent (an array index, not a field name)
+// and is skipped rather than consumed against the field's segments.
+func pathMatchesFieldThroughArrays(path string, fields []string) bool {
+	pathSegments := strings.Split(path, "/")
+	for _, field := range fields {
+		if matchesFieldThroughArrays(pathSegments, strings.Split(field, ".")) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchesFieldThroughArrays reports whether pathSegments targets fieldSegments
+// (or a nested path within it), skipping any pathSegments entry that is a
+// numeric array index rather than consuming it against a field segment.
+func matchesFieldThroughArrays(pathSegments, fieldSegments []string) bool {
+	fi := 0
+	for _, segment := range pathSegments {
+		if isArrayIndexSegment(segment) {
+			continue
+		}
+		if fi >= len(fieldSegments) {
+			// Every field segment already matched; what remains is a nested
+			// path within the field, which still counts as a match.
+			return true
+		}
+		if segment != fieldSegments[fi] {
+			return false
+		}
+		fi++
+	}
+	return fi == len(fieldSegments)
+}
+
+// isArrayIndexSegment reports whether a JSON Pointer path segment is a
+// non-negative integer (an array index per RFC 6901), the same shape
+// removeNestedField's array traversal produces. A schema field literally
+// named with all-digit keys is indistinguishable from an index here — the
+// same ambiguity the resolver's own dotted-path convention already accepts.
+func isArrayIndexSegment(segment string) bool {
+	if segment == "" {
+		return false
+	}
+	for _, r := range segment {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func hasValue(val any) bool {
