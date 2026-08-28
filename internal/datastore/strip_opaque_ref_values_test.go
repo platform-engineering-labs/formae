@@ -250,3 +250,18 @@ func TestAssertNoOpaqueRefValue_AcceptsStrippedOpaqueRef(t *testing.T) {
 	err := assertNoOpaqueRefValue(envelope, "")
 	require.NoError(t, err, "guard must accept a properly-stripped opaque $ref")
 }
+
+// Stripping the resolved secret value from an opaque reference envelope must
+// keep the provenance digest: the digest is the persisted record the next
+// plan compares against.
+func TestStripOpaqueRefValues_PreservesResolvedFrom(t *testing.T) {
+	digest := "v1:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	in := json.RawMessage(`{"url":{"$ref":"formae://k#/S","$visibility":"Opaque","$value":"secret","$resolvedFrom":"` + digest + `"}}`)
+	out, err := StripOpaqueRefValues(in)
+	require.NoError(t, err)
+	var m map[string]map[string]any
+	require.NoError(t, json.Unmarshal(out, &m))
+	_, hasValue := m["url"]["$value"]
+	assert.False(t, hasValue)
+	assert.Equal(t, digest, m["url"]["$resolvedFrom"])
+}

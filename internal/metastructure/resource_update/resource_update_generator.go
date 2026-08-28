@@ -2144,10 +2144,70 @@ func translateFormaeReferencesToKsuid(forma *pkgmodel.Forma, ds ResourceDataLook
 }
 
 // translatePropertiesJSON translates all resolvable objects to KSUID URIs
+
+// stripUntrustedProvenance deletes every $resolvedFrom key from a
+// user-authored properties document. Only STORED envelopes carry trusted
+// provenance; the desired side never does.
+func stripUntrustedProvenance(properties string) (string, error) {
+	var v any
+	if err := json.Unmarshal([]byte(properties), &v); err != nil {
+		return properties, nil // not JSON we manage; translation will handle it
+	}
+	cleaned, changed := withoutKeyDeep(v, "$resolvedFrom")
+	if !changed {
+		return properties, nil
+	}
+	out, err := json.Marshal(cleaned)
+	if err != nil {
+		return "", fmt.Errorf("failed to re-serialize properties after provenance strip: %w", err)
+	}
+	return string(out), nil
+}
+
+// withoutKeyDeep returns v with key removed from every object, and whether
+// any removal happened. (Rebuilds rather than mutating: this package shadows
+// the delete builtin with an actor handler of the same name.)
+func withoutKeyDeep(v any, key string) (any, bool) {
+	switch t := v.(type) {
+	case map[string]any:
+		changed := false
+		out := make(map[string]any, len(t))
+		for k, child := range t {
+			if k == key {
+				changed = true
+				continue
+			}
+			cleanedChild, childChanged := withoutKeyDeep(child, key)
+			out[k] = cleanedChild
+			changed = changed || childChanged
+		}
+		return out, changed
+	case []any:
+		changed := false
+		out := make([]any, len(t))
+		for i, child := range t {
+			cleanedChild, childChanged := withoutKeyDeep(child, key)
+			out[i] = cleanedChild
+			changed = changed || childChanged
+		}
+		return out, changed
+	default:
+		return v, false
+	}
+}
+
 func translatePropertiesJSON(properties json.RawMessage, tripletToKsuid map[pkgmodel.TripletKey]string, ds ResourceDataLookup) (json.RawMessage, map[string]string, error) {
-	result, externalLabels, resolvables := string(properties), make(map[string]string), pkgmodel.FindResolvablesFromProperties(string(properties))
+	// Trust boundary: $resolvedFrom is a formae-written provenance record,
+	// never a user-writable key. $res envelopes are rewritten wholesale below
+	// (dropping any forged sibling by construction), but a raw $ref envelope
+	// authored directly would carry one through - strip it everywhere before
+	// anything downstream can mistake it for trusted provenance.
+	stripped, err := stripUntrustedProvenance(string(properties))
+	if err != nil {
+		return nil, nil, err
+	}
+	result, externalLabels, resolvables := stripped, make(map[string]string), pkgmodel.FindResolvablesFromProperties(stripped)
 	var (
-		err              error
 		formaeURI        pkgmodel.FormaeURI
 		missingResources []*pkgmodel.Resource
 	)

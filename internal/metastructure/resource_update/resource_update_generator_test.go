@@ -1836,3 +1836,30 @@ func TestReferencesOpaqueProperty_DescendantHint(t *testing.T) {
 		})
 	}
 }
+
+// $resolvedFrom is a formae-written record, never a user-writable key: a
+// desired document arriving with one (on a raw $ref envelope, bypassing the
+// $res sugar that is rewritten wholesale) must have it stripped at ingestion,
+// or forged provenance would suppress a genuine write on the next plan.
+func TestTranslateFormaeReferences_StripsUntrustedProvenance(t *testing.T) {
+	ds, _ := GetDeps(t)
+	forged := "v1:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	forma := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{{Label: "test-stack"}},
+		Resources: []pkgmodel.Resource{{
+			Label: "consumer", Type: "Test::Consumer", Stack: "test-stack",
+			Properties: json.RawMessage(`{
+				"Password": {"$ref": "formae://2abcdefghijklmnopqrstuvwxyz#/S", "$resolvedFrom": "` + forged + `"},
+				"Nested": {"Deep": {"$ref": "formae://2abcdefghijklmnopqrstuvwxyz#/T", "$resolvedFrom": "` + forged + `"}}
+			}`),
+		}},
+	}
+
+	_, err := TranslateFormaeReferencesToKsuid(forma, ds)
+	require.NoError(t, err)
+
+	props := string(forma.Resources[0].Properties)
+	assert.NotContains(t, props, "$resolvedFrom",
+		"user-authored provenance must be stripped at ingestion")
+	assert.Contains(t, props, "$ref", "the reference itself is preserved")
+}

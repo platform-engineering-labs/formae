@@ -1681,3 +1681,19 @@ func TestExtractSourceOpaqueResolvableURIsFromJSON(t *testing.T) {
 	assert.Equal(t, []pkgmodel.FormaeURI{schemaOpaqueURI}, got,
 		"a schema-declared Opaque field classifies opaque even when persisted as a plain value")
 }
+
+// An envelope's resolution provenance survives the full parse -> resolve ->
+// rebuild round trip: the resolver rebuilds envelopes from typed fields, so a
+// field it does not carry would be silently dropped.
+func TestResolvePropertyReferences_PreservesResolvedFrom(t *testing.T) {
+	digest := "v1:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	props := json.RawMessage(`{"Password":{"$ref":"formae://2abcdefghijklmnopqrstuvwxyz#/S","$resolvedFrom":"` + digest + `"}}`)
+
+	resolved, err := ResolvePropertyReferences("formae://2abcdefghijklmnopqrstuvwxyz#/S", props, "live-value")
+	require.NoError(t, err)
+
+	out := gjson.GetBytes(resolved, "Password")
+	assert.Equal(t, "live-value", out.Get("$value").String())
+	assert.Equal(t, digest, out.Get("$resolvedFrom").String(),
+		"resolving a reference must not drop its provenance")
+}

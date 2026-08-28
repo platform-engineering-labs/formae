@@ -357,11 +357,12 @@ func ExtractSourceOpaqueResolvableURIsFromJSON(data json.RawMessage, loadResourc
 
 // propertyParser parses JSON properties to identify references and values
 type propertyParser struct {
-	HasRef    bool
-	HasValue  bool
-	Reference string // The $ref value
-	Value     any
-	JSONPath  string // gjson dotted path from $json, applied post-resolution
+	HasRef       bool
+	HasValue     bool
+	Reference    string // The $ref value
+	Value        any
+	JSONPath     string // gjson dotted path from $json, applied post-resolution
+	ResolvedFrom string // resolution-provenance digest riding on the envelope
 }
 
 // propertyType defines the type of property being parsed
@@ -381,6 +382,7 @@ func (pp *propertyParser) Parse(result gjson.Result) propertyType {
 	if pp.HasRef {
 		pp.Reference = result.Get("$ref").String()
 		pp.JSONPath = result.Get("$json").String()
+		pp.ResolvedFrom = result.Get("$resolvedFrom").String()
 		if pp.HasValue {
 			pp.Value = result.Get("$value").Value()
 		}
@@ -405,17 +407,19 @@ func (pp *propertyParser) CreateRef(currentPath string, result gjson.Result) pkg
 	var rawValue pkgmodel.Value
 	if pp.HasValue {
 		rawValue = pkgmodel.Value{
-			Strategy:   result.Get("$strategy").String(),
-			Visibility: result.Get("$visibility").String(),
-			Value:      pp.Value,
-			JSONPath:   pp.JSONPath,
+			Strategy:     result.Get("$strategy").String(),
+			Visibility:   result.Get("$visibility").String(),
+			Value:        pp.Value,
+			JSONPath:     pp.JSONPath,
+			ResolvedFrom: pp.ResolvedFrom,
 		}
 	} else {
 		// Even without a value, we might have strategy and visibility
 		rawValue = pkgmodel.Value{
-			Strategy:   result.Get("$strategy").String(),
-			Visibility: result.Get("$visibility").String(),
-			JSONPath:   pp.JSONPath,
+			Strategy:     result.Get("$strategy").String(),
+			Visibility:   result.Get("$visibility").String(),
+			JSONPath:     pp.JSONPath,
+			ResolvedFrom: pp.ResolvedFrom,
 		}
 	}
 
@@ -754,6 +758,9 @@ func (pr *propertyResolver) resolveReference(properties json.RawMessage, ref pkg
 	if ref.ResolvedValue.JSONPath != "" {
 		refObject["$json"] = ref.ResolvedValue.JSONPath
 	}
+	if ref.ResolvedValue.ResolvedFrom != "" {
+		refObject["$resolvedFrom"] = ref.ResolvedValue.ResolvedFrom
+	}
 
 	marshalledObj, err := pr.marshalWithLogging(refObject, "reference resolution", ref.TargetPath)
 	if err != nil {
@@ -824,8 +831,11 @@ func (pr *propertyResolver) setRefValue(uri pkgmodel.FormaeURI, value string) er
 			newValue.Visibility = ref.ResolvedValue.Visibility
 		}
 
-		// Preserve JSONPath on the stored value so re-apply is idempotent.
+		// Preserve JSONPath on the stored value so re-apply is idempotent, and
+		// the provenance digest for the same reason: resolution must never
+		// erase the record the next plan compares against.
 		newValue.JSONPath = ref.ResolvedValue.JSONPath
+		newValue.ResolvedFrom = ref.ResolvedValue.ResolvedFrom
 
 		ref.ResolvedValue = newValue
 	}

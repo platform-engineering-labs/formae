@@ -28,6 +28,11 @@ type Value struct {
 	Value      any    `json:"$value,omitempty"`      // The actual value or hashed value, if applicable
 	Hashed     bool   `json:"$hashed,omitempty"`     // True when Value holds the SHA-256 digest, not plaintext
 	JSONPath   string `json:"$json,omitempty"`       // gjson dotted path applied post-resolution (secret .json())
+	// ResolvedFrom is the resolution-provenance record: a versioned digest of
+	// the SOURCE value this reference last resolved from (pre-$json), written
+	// only on formae-originated writes. Digest-valued by construction, never
+	// plaintext.
+	ResolvedFrom string `json:"$resolvedFrom,omitempty"`
 }
 
 func (v *Value) IsOpaque() bool {
@@ -117,10 +122,12 @@ func (v *Value) Hash() *Value {
 	}
 
 	return &Value{
-		Strategy:   v.Strategy,
-		Visibility: v.Visibility,
-		Value:      v.computeHash(),
-		Hashed:     true,
+		Strategy:     v.Strategy,
+		Visibility:   v.Visibility,
+		Value:        v.computeHash(),
+		Hashed:       true,
+		JSONPath:     v.JSONPath,
+		ResolvedFrom: v.ResolvedFrom,
 	}
 }
 
