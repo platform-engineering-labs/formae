@@ -111,7 +111,7 @@ func TestGenerateResourceUpdates_ConsumerFollowsChangedProducerField(t *testing.
 	}
 
 	updates, err := GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile,
-		FormaCommandSourceUser, existingTargets, ds, nil, nil)
+		FormaCommandSourceUser, existingTargets, ds, nil, nil, false)
 	require.NoError(t, err)
 
 	planned := map[string]*ResourceUpdate{}
@@ -201,7 +201,7 @@ func TestGenerateResourceUpdates_ConsumerIgnoresResubmittedSetOnceProducerField(
 	}
 
 	updates, err := GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile,
-		FormaCommandSourceUser, existingTargets, ds, nil, nil)
+		FormaCommandSourceUser, existingTargets, ds, nil, nil, false)
 	require.NoError(t, err)
 
 	for i := range updates {
@@ -337,7 +337,7 @@ func TestGenerateResourceUpdates_LiteralMovesThroughTwoHopChain(t *testing.T) {
 	}
 
 	updates, err := GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile,
-		FormaCommandSourceUser, existingTargets, ds, nil, nil)
+		FormaCommandSourceUser, existingTargets, ds, nil, nil, false)
 	require.NoError(t, err)
 
 	planned := map[string]*ResourceUpdate{}

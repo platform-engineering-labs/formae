@@ -294,8 +294,7 @@ func TestGenerateResourceUpdatesForReconcile(t *testing.T) {
 				existingTargets,
 				ds,
 				nil,
-				nil,
-			)
+				nil, false)
 
 			if tt.expectedError != "" {
 				assert.Error(t, err)
@@ -349,6 +348,7 @@ func TestGenerateResourceUpdatesForReconcile_NewResourceUpdateForCreate(t *testi
 		targetMap,
 		ds,
 		nil,
+		false,
 	)
 
 	assert.NoError(t, err)
@@ -493,6 +493,7 @@ func TestGenerateResourceUpdatesForReconcile_VPCSubnetReplaceScenario(t *testing
 		targetMap,
 		ds,
 		nil,
+		false,
 	)
 
 	assert.NoError(t, err)
@@ -704,6 +705,7 @@ func TestGenerateResourceUpdatesForReconcile_VPCSubnetReplace_Adding_New_Subnet(
 		targetMap,
 		ds,
 		nil,
+		false,
 	)
 
 	assert.NoError(t, err)
@@ -811,7 +813,7 @@ func TestGenerateResourceUpdatesForReconcile_MissingResolvable(t *testing.T) {
 		},
 	}
 
-	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil)
+	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil, false)
 	assert.NoError(t, err)
 	assert.Len(t, updates, 1)
 }
@@ -907,7 +909,7 @@ func TestResourceUpdatesForReconcile_GeneratesUpdateOperationsForUnmanagedResour
 		},
 	}
 
-	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil)
+	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil, false)
 	assert.NoError(t, err)
 	assert.Len(t, updates, 1)
 	assert.Equal(t, OperationUpdate, updates[0].Operation)
@@ -961,7 +963,7 @@ func TestGenerateResourceUpdatesForReconcile_Create(t *testing.T) {
 		},
 	}
 
-	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil)
+	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil, false)
 	assert.NoError(t, err)
 	assert.Len(t, updates, 1)
 	assert.Equal(t, OperationCreate, updates[0].Operation)
@@ -1018,7 +1020,7 @@ func TestGenerateResourceUpdatesForReconcile_StackExists_NoChanges(t *testing.T)
 		},
 	}
 
-	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil)
+	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil, false)
 	assert.NoError(t, err)
 	assert.Len(t, updates, 0) // No changes needed
 }
@@ -1107,7 +1109,7 @@ func TestGenerateResourceUpdatesForReconcile_ImplicitDelete(t *testing.T) {
 		},
 	}
 
-	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil)
+	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil, false)
 	assert.NoError(t, err)
 	assert.Len(t, updates, 1)
 	assert.Equal(t, OperationDelete, updates[0].Operation)
@@ -1195,7 +1197,7 @@ func TestGenerateResourceUpdatesForReconcile_Update(t *testing.T) {
 		},
 	}
 
-	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil)
+	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil, false)
 	assert.NoError(t, err)
 	assert.Len(t, updates, 1)
 	assert.Equal(t, OperationUpdate, updates[0].Operation)
@@ -1282,7 +1284,7 @@ func TestGenerateResourceUpdatesForReconcile_ReplaceCreateOnlyProperty(t *testin
 		},
 	}
 
-	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil)
+	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil, false)
 	assert.NoError(t, err)
 	assert.Len(t, updates, 2)
 
@@ -1386,7 +1388,7 @@ func TestGenerateResourceUpdatesForReconcile_ForwardReferenceToNewResource(t *te
 		{Label: "aws-target", Config: json.RawMessage(`{"Region": "us-east-1"}`), Namespace: "aws"},
 	}
 
-	updates, err := GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser, existingTargets, ds, nil, nil)
+	updates, err := GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser, existingTargets, ds, nil, nil, false)
 
 	assert.NoError(t, err, "forward reference to new resource should not cause an error")
 	assert.NotEmpty(t, updates, "should produce resource updates")
@@ -1482,7 +1484,7 @@ func TestGenerateResourceUpdatesForReconcile_AddNewResourceWithForwardReference(
 		{Label: "aws-target", Config: json.RawMessage(`{"Region": "us-east-1"}`), Namespace: "aws"},
 	}
 
-	updates, err := GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser, existingTargets, ds, nil, nil)
+	updates, err := GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser, existingTargets, ds, nil, nil, false)
 
 	assert.NoError(t, err, "adding new resource with forward reference should not cause an error")
 	assert.NotEmpty(t, updates, "should produce resource updates")
@@ -1560,6 +1562,7 @@ func TestTargetReplace_Reconcile_AllPortable(t *testing.T) {
 		desiredTargetMap,
 		ds,
 		replacedTargets,
+		false,
 	)
 
 	assert.NoError(t, err)
@@ -1641,6 +1644,7 @@ func TestTargetReplace_Reconcile_NonPortableInForma_Rejected(t *testing.T) {
 		desiredTargetMap,
 		ds,
 		replacedTargets,
+		false,
 	)
 
 	require.Error(t, err)
@@ -1730,6 +1734,7 @@ func TestTargetReplace_Reconcile_NonPortableNotInForma_Succeeds(t *testing.T) {
 		desiredTargetMap,
 		ds,
 		replacedTargets,
+		false,
 	)
 
 	assert.NoError(t, err)
@@ -1790,6 +1795,7 @@ func TestTargetReplace_Reconcile_TargetOnlyForma_RecreatesAll(t *testing.T) {
 		desiredTargetMap,
 		ds,
 		replacedTargets,
+		false,
 	)
 
 	assert.NoError(t, err)
@@ -1862,6 +1868,7 @@ func TestGenerateResourceUpdatesForReconcile_RenameViaAlias(t *testing.T) {
 		targetMap,
 		ds,
 		nil,
+		false,
 	)
 	require.NoError(t, err)
 	require.Len(t, updates, 1, "rename under reconcile must emit one update, not delete+create")
@@ -1925,6 +1932,7 @@ func TestGenerateResourceUpdatesForReconcile_RenameWithPropertyChange(t *testing
 		targetMap,
 		ds,
 		nil,
+		false,
 	)
 	require.NoError(t, err)
 	require.Len(t, updates, 1)
@@ -1990,6 +1998,7 @@ func TestGenerateResourceUpdatesForReconcile_BringingUnderManagementAndRename(t 
 		targetMap,
 		ds,
 		nil,
+		false,
 	)
 	require.NoError(t, err)
 	require.Len(t, updates, 1, "bring-under-management + rename must emit one update, not Create+leave-orphan")

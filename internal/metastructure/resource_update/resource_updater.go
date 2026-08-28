@@ -623,6 +623,12 @@ func resolve(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Ato
 }
 
 func resourceResolved(from gen.PID, state gen.Atom, data ResourceUpdateData, message messages.ValueResolved, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
+	if message.SourceRootDigest != "" {
+		if data.resourceUpdate.ResolvedRootDigests == nil {
+			data.resourceUpdate.ResolvedRootDigests = make(map[string]string)
+		}
+		data.resourceUpdate.ResolvedRootDigests[string(message.ResourceURI)] = message.SourceRootDigest
+	}
 	err := data.resourceUpdate.ResolveValue(message.ResourceURI, message.Value, data.applyMode)
 	if err != nil {
 		proc.Log().Error("failed to resolve value for resource update resourceURI=%v: %v", message.ResourceURI, err)
@@ -1049,13 +1055,14 @@ func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData,
 		_, err = proc.Call(
 			formaCommandPersisterProcess(proc),
 			messages.UpdateResourceProgress{
-				CommandID:          data.commandID,
-				ResourceURI:        data.resourceUpdate.DesiredState.URI(),
-				Operation:          data.resourceUpdate.Operation,
-				ResourceStartTs:    data.resourceUpdate.StartTs,
-				ResourceModifiedTs: data.resourceUpdate.ModifiedTs,
-				ResourceState:      data.resourceUpdate.State,
-				Progress:           message,
+				CommandID:           data.commandID,
+				ResourceURI:         data.resourceUpdate.DesiredState.URI(),
+				Operation:           data.resourceUpdate.Operation,
+				ResourceStartTs:     data.resourceUpdate.StartTs,
+				ResourceModifiedTs:  data.resourceUpdate.ModifiedTs,
+				ResourceState:       data.resourceUpdate.State,
+				Progress:            message,
+				ResolvedRootDigests: data.resourceUpdate.ResolvedRootDigests,
 			},
 		)
 		if err != nil {
@@ -1075,13 +1082,14 @@ func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData,
 	_, err = proc.Call(
 		formaCommandPersisterProcess(proc),
 		messages.UpdateResourceProgress{
-			CommandID:          data.commandID,
-			ResourceURI:        data.resourceUpdate.DesiredState.URI(),
-			Operation:          data.resourceUpdate.Operation,
-			ResourceStartTs:    data.resourceUpdate.StartTs,
-			ResourceModifiedTs: data.resourceUpdate.ModifiedTs,
-			ResourceState:      data.resourceUpdate.State,
-			Progress:           message,
+			CommandID:           data.commandID,
+			ResourceURI:         data.resourceUpdate.DesiredState.URI(),
+			Operation:           data.resourceUpdate.Operation,
+			ResourceStartTs:     data.resourceUpdate.StartTs,
+			ResourceModifiedTs:  data.resourceUpdate.ModifiedTs,
+			ResourceState:       data.resourceUpdate.State,
+			Progress:            message,
+			ResolvedRootDigests: data.resourceUpdate.ResolvedRootDigests,
 		},
 	)
 	if err != nil {

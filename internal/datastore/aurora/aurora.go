@@ -4084,13 +4084,13 @@ func (d *DatastoreAuroraDataAPI) BulkStoreResourceUpdates(commandID string, upda
 				resource, resource_target, existing_resource, existing_target,
 				progress_result, most_recent_progress,
 				remaining_resolvables, reference_labels, previous_properties,
-				failure_reason
+				failure_reason, provenance_records, resolved_root_digests
 			) VALUES (:command_id, :ksuid, :operation, :state, :start_ts::timestamp, :modified_ts::timestamp,
 				:retries, :remaining, :version, :stack_label, :group_id, :source,
 				:resource, :resource_target, :existing_resource, :existing_target,
 				:progress_result, :most_recent_progress,
 				:remaining_resolvables, :reference_labels, :previous_properties,
-				:failure_reason)
+				:failure_reason, :provenance_records, :resolved_root_digests)
 			ON CONFLICT (command_id, ksuid, operation) DO UPDATE SET
 				state = EXCLUDED.state,
 				modified_ts = EXCLUDED.modified_ts,
@@ -4099,7 +4099,9 @@ func (d *DatastoreAuroraDataAPI) BulkStoreResourceUpdates(commandID string, upda
 				previous_properties = EXCLUDED.previous_properties,
 				progress_result = EXCLUDED.progress_result,
 				most_recent_progress = EXCLUDED.most_recent_progress,
-				failure_reason = EXCLUDED.failure_reason
+				failure_reason = EXCLUDED.failure_reason,
+				provenance_records = EXCLUDED.provenance_records,
+				resolved_root_digests = EXCLUDED.resolved_root_digests
 		`
 
 		params := []types.SqlParameter{
@@ -4125,6 +4127,8 @@ func (d *DatastoreAuroraDataAPI) BulkStoreResourceUpdates(commandID string, upda
 			{Name: aws.String("reference_labels"), Value: &types.FieldMemberStringValue{Value: string(referenceLabelsJSON)}},
 			{Name: aws.String("previous_properties"), Value: &types.FieldMemberStringValue{Value: string(previousPropertiesJSON)}},
 			{Name: aws.String("failure_reason"), Value: &types.FieldMemberStringValue{Value: ru.FailureReason}},
+			{Name: aws.String("provenance_records"), Value: &types.FieldMemberStringValue{Value: marshalOrEmpty(ru.ProvenanceRecords)}},
+			{Name: aws.String("resolved_root_digests"), Value: &types.FieldMemberStringValue{Value: marshalOrEmpty(ru.ResolvedRootDigests)}},
 		}
 
 		_, err = d.executeStatementInTransaction(ctx, txID, query, params)
@@ -4141,6 +4145,26 @@ func (d *DatastoreAuroraDataAPI) BulkStoreResourceUpdates(commandID string, upda
 	return nil
 }
 
+// marshalOrEmpty JSON-encodes v, or returns "" for an empty value (the SQL
+// treats "" as NULL via NULLIF / stores NULL-equivalent).
+func marshalOrEmpty(v any) string {
+	switch t := v.(type) {
+	case []resource_update.OccurrenceRecord:
+		if len(t) == 0 {
+			return ""
+		}
+	case map[string]string:
+		if len(t) == 0 {
+			return ""
+		}
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
 func (d *DatastoreAuroraDataAPI) LoadResourceUpdates(commandID string) ([]resource_update.ResourceUpdate, error) {
 	ctx := context.Background()
 
@@ -4150,7 +4174,7 @@ func (d *DatastoreAuroraDataAPI) LoadResourceUpdates(commandID string) ([]resour
 		resource, resource_target, existing_resource, existing_target,
 		progress_result, most_recent_progress,
 		remaining_resolvables, reference_labels, previous_properties,
-		failure_reason
+		failure_reason, provenance_records, resolved_root_digests
 	FROM resource_updates
 	WHERE command_id = :command_id
 	ORDER BY ksuid ASC
@@ -4193,6 +4217,13 @@ func (d *DatastoreAuroraDataAPI) LoadResourceUpdates(commandID string) ([]resour
 		var failureReason string
 		if len(record) > 20 {
 			failureReason, _ = getStringField(record[20])
+		}
+		var provenanceRecordsJSON, resolvedRootDigestsJSON string
+		if len(record) > 21 {
+			provenanceRecordsJSON, _ = getStringField(record[21])
+		}
+		if len(record) > 22 {
+			resolvedRootDigestsJSON, _ = getStringField(record[22])
 		}
 
 		var desiredState pkgmodel.Resource
@@ -4242,6 +4273,12 @@ func (d *DatastoreAuroraDataAPI) LoadResourceUpdates(commandID string) ([]resour
 			PreviousProperties:       previousProperties,
 			FailureReason:            failureReason,
 		})
+		if provenanceRecordsJSON != "" {
+			_ = json.Unmarshal([]byte(provenanceRecordsJSON), &updates[len(updates)-1].ProvenanceRecords)
+		}
+		if resolvedRootDigestsJSON != "" {
+			_ = json.Unmarshal([]byte(resolvedRootDigestsJSON), &updates[len(updates)-1].ResolvedRootDigests)
+		}
 	}
 
 	return updates, nil
@@ -4277,7 +4314,7 @@ func (d *DatastoreAuroraDataAPI) UpdateResourceUpdateState(commandID string, ksu
 	return nil
 }
 
-func (d *DatastoreAuroraDataAPI) UpdateResourceUpdateProgress(commandID string, ksuid string, operation metaTypes.OperationType, state resource_update.ResourceUpdateState, startTs time.Time, modifiedTs time.Time, progress plugin.TrackedProgress) error {
+func (d *DatastoreAuroraDataAPI) UpdateResourceUpdateProgress(commandID string, ksuid string, operation metaTypes.OperationType, state resource_update.ResourceUpdateState, startTs time.Time, modifiedTs time.Time, progress plugin.TrackedProgress, resolvedRootDigests map[string]string) error {
 	ctx := context.Background()
 
 	// First, load existing progress results to append to
@@ -4316,7 +4353,8 @@ func (d *DatastoreAuroraDataAPI) UpdateResourceUpdateProgress(commandID string, 
 
 	updateQuery := `
 	UPDATE resource_updates
-	SET state = :state, start_ts = :start_ts::timestamp, modified_ts = :modified_ts::timestamp, progress_result = :progress_result, most_recent_progress = :most_recent_progress
+	SET state = :state, start_ts = :start_ts::timestamp, modified_ts = :modified_ts::timestamp, progress_result = :progress_result, most_recent_progress = :most_recent_progress,
+		resolved_root_digests = COALESCE(NULLIF(:resolved_root_digests, ''), resolved_root_digests)
 	WHERE command_id = :command_id AND ksuid = :ksuid AND operation = :operation
 	`
 	updateParams := []types.SqlParameter{
@@ -4325,6 +4363,7 @@ func (d *DatastoreAuroraDataAPI) UpdateResourceUpdateProgress(commandID string, 
 		{Name: aws.String("modified_ts"), Value: &types.FieldMemberStringValue{Value: modifiedTs.UTC().Format(time.RFC3339Nano)}},
 		{Name: aws.String("progress_result"), Value: &types.FieldMemberStringValue{Value: string(progressJSON)}},
 		{Name: aws.String("most_recent_progress"), Value: &types.FieldMemberStringValue{Value: string(mostRecentJSON)}},
+		{Name: aws.String("resolved_root_digests"), Value: &types.FieldMemberStringValue{Value: marshalOrEmpty(resolvedRootDigests)}},
 		{Name: aws.String("command_id"), Value: &types.FieldMemberStringValue{Value: commandID}},
 		{Name: aws.String("ksuid"), Value: &types.FieldMemberStringValue{Value: ksuid}},
 		{Name: aws.String("operation"), Value: &types.FieldMemberStringValue{Value: string(operation)}},

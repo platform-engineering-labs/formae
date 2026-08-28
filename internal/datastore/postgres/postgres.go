@@ -266,7 +266,7 @@ SELECT
 	ru.resource, ru.resource_target, ru.existing_resource, ru.existing_target,
 	ru.progress_result, ru.most_recent_progress,
 	ru.remaining_resolvables, ru.reference_labels, ru.previous_properties,
-	ru.is_cascade, ru.cascade_source, ru.failure_reason
+	ru.is_cascade, ru.cascade_source, ru.failure_reason, ru.provenance_records, ru.resolved_root_digests
 FROM forma_commands fc
 LEFT JOIN resource_updates ru ON fc.command_id = ru.command_id`
 
@@ -301,6 +301,7 @@ func scanJoinedRowPostgres(rows pgx.Rows) (*forma_command.FormaCommand, *resourc
 	var ruIsCascade *bool
 	var ruCascadeSource *string
 	var ruFailureReason *string
+	var ruProvenanceRecords, ruResolvedRootDigests []byte
 
 	err := rows.Scan(
 		// FormaCommand columns
@@ -314,6 +315,7 @@ func scanJoinedRowPostgres(rows pgx.Rows) (*forma_command.FormaCommand, *resourc
 		&progressResultJSON, &mostRecentProgressJSON,
 		&remainingResolvablesJSON, &referenceLabelsJSON, &previousPropertiesJSON,
 		&ruIsCascade, &ruCascadeSource, &ruFailureReason,
+		&ruProvenanceRecords, &ruResolvedRootDigests,
 	)
 	if err != nil {
 		return nil, nil, err
@@ -461,6 +463,16 @@ func scanJoinedRowPostgres(rows pgx.Rows) (*forma_command.FormaCommand, *resourc
 	}
 	if ruFailureReason != nil {
 		ru.FailureReason = *ruFailureReason
+	}
+	if len(ruProvenanceRecords) > 0 {
+		if err := json.Unmarshal(ruProvenanceRecords, &ru.ProvenanceRecords); err != nil {
+			return nil, nil, fmt.Errorf("failed to unmarshal provenance records: %w", err)
+		}
+	}
+	if len(ruResolvedRootDigests) > 0 {
+		if err := json.Unmarshal(ruResolvedRootDigests, &ru.ResolvedRootDigests); err != nil {
+			return nil, nil, fmt.Errorf("failed to unmarshal resolved root digests: %w", err)
+		}
 	}
 
 	return &cmd, &ru, nil
@@ -714,7 +726,7 @@ func (d DatastorePostgres) QueryFormaCommands(query *datastore.StatusQuery) ([]*
 			ru.resource, ru.resource_target, ru.existing_resource, ru.existing_target,
 			ru.progress_result, ru.most_recent_progress,
 			ru.remaining_resolvables, ru.reference_labels, ru.previous_properties,
-	ru.is_cascade, ru.cascade_source, ru.failure_reason
+	ru.is_cascade, ru.cascade_source, ru.failure_reason, ru.provenance_records, ru.resolved_root_digests
 		FROM forma_commands fc
 		LEFT JOIN resource_updates ru ON fc.command_id = ru.command_id
 		WHERE fc.command_id IN (%s)
@@ -4573,6 +4585,26 @@ func (d DatastorePostgres) CountResourcesInTarget(targetLabel string) (int, erro
 
 // BulkStoreResourceUpdates stores multiple ResourceUpdates in a single transaction
 // This is the key performance optimization: insert all updates in one transaction
+// marshalOrNil JSON-encodes v, or returns nil for an empty value so the
+// column stays NULL.
+func marshalOrNil(v any) any {
+	switch t := v.(type) {
+	case []resource_update.OccurrenceRecord:
+		if len(t) == 0 {
+			return nil
+		}
+	case map[string]string:
+		if len(t) == 0 {
+			return nil
+		}
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	return string(b)
+}
+
 func (d DatastorePostgres) BulkStoreResourceUpdates(commandID string, updates []resource_update.ResourceUpdate) error {
 	ctx, span := tracer.Start(context.Background(), "BulkStoreResourceUpdates")
 	defer span.End()
@@ -4648,8 +4680,9 @@ func (d DatastorePostgres) BulkStoreResourceUpdates(commandID string, updates []
 				resource, resource_target, existing_resource, existing_target,
 				progress_result, most_recent_progress,
 				remaining_resolvables, reference_labels, previous_properties,
-				is_cascade, cascade_source, failure_reason
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
+				is_cascade, cascade_source, failure_reason,
+				provenance_records, resolved_root_digests
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
 			ON CONFLICT (command_id, ksuid, operation) DO UPDATE SET
 				state = EXCLUDED.state,
 				start_ts = EXCLUDED.start_ts,
@@ -4671,7 +4704,9 @@ func (d DatastorePostgres) BulkStoreResourceUpdates(commandID string, updates []
 				previous_properties = EXCLUDED.previous_properties,
 				is_cascade = EXCLUDED.is_cascade,
 				cascade_source = EXCLUDED.cascade_source,
-				failure_reason = EXCLUDED.failure_reason
+				failure_reason = EXCLUDED.failure_reason,
+				provenance_records = EXCLUDED.provenance_records,
+				resolved_root_digests = EXCLUDED.resolved_root_digests
 		`,
 			commandID,
 			ru.DesiredState.Ksuid,
@@ -4697,6 +4732,8 @@ func (d DatastorePostgres) BulkStoreResourceUpdates(commandID string, updates []
 			ru.IsCascade,
 			ru.CascadeSource,
 			ru.FailureReason,
+			marshalOrNil(ru.ProvenanceRecords),
+			marshalOrNil(ru.ResolvedRootDigests),
 		)
 		if err != nil {
 			return fmt.Errorf("failed to insert resource update: %w", err)
@@ -4722,7 +4759,8 @@ func (d DatastorePostgres) LoadResourceUpdates(commandID string) ([]resource_upd
 			resource, resource_target, existing_resource, existing_target,
 			progress_result, most_recent_progress,
 			remaining_resolvables, reference_labels, previous_properties,
-			is_cascade, cascade_source, failure_reason
+			is_cascade, cascade_source, failure_reason,
+			provenance_records, resolved_root_digests
 		FROM resource_updates
 		WHERE command_id = $1
 		ORDER BY ksuid ASC
@@ -4746,6 +4784,7 @@ func (d DatastorePostgres) LoadResourceUpdates(commandID string) ([]resource_upd
 		var ruIsCascade *bool
 		var ruCascadeSource *string
 		var ruFailureReason *string
+		var ruProvenanceRecordsL, ruResolvedRootDigestsL []byte
 
 		err := rows.Scan(
 			&ksuid,
@@ -4771,6 +4810,8 @@ func (d DatastorePostgres) LoadResourceUpdates(commandID string) ([]resource_upd
 			&ruIsCascade,
 			&ruCascadeSource,
 			&ruFailureReason,
+			&ruProvenanceRecordsL,
+			&ruResolvedRootDigestsL,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan resource update: %w", err)
@@ -4841,6 +4882,16 @@ func (d DatastorePostgres) LoadResourceUpdates(commandID string) ([]resource_upd
 		if ruFailureReason != nil {
 			ru.FailureReason = *ruFailureReason
 		}
+		if len(ruProvenanceRecordsL) > 0 {
+			if err := json.Unmarshal(ruProvenanceRecordsL, &ru.ProvenanceRecords); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal provenance records: %w", err)
+			}
+		}
+		if len(ruResolvedRootDigestsL) > 0 {
+			if err := json.Unmarshal(ruResolvedRootDigestsL, &ru.ResolvedRootDigests); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal resolved root digests: %w", err)
+			}
+		}
 
 		updates = append(updates, ru)
 	}
@@ -4875,7 +4926,7 @@ func (d DatastorePostgres) UpdateResourceUpdateState(commandID string, ksuid str
 }
 
 // UpdateResourceUpdateProgress updates a ResourceUpdate with progress information
-func (d DatastorePostgres) UpdateResourceUpdateProgress(commandID string, ksuid string, operation types.OperationType, state resource_update.ResourceUpdateState, startTs time.Time, modifiedTs time.Time, progress plugin.TrackedProgress) error {
+func (d DatastorePostgres) UpdateResourceUpdateProgress(commandID string, ksuid string, operation types.OperationType, state resource_update.ResourceUpdateState, startTs time.Time, modifiedTs time.Time, progress plugin.TrackedProgress, resolvedRootDigests map[string]string) error {
 	ctx, span := tracer.Start(context.Background(), "UpdateResourceUpdateProgress")
 	defer span.End()
 
@@ -4909,11 +4960,12 @@ func (d DatastorePostgres) UpdateResourceUpdateProgress(commandID string, ksuid 
 
 	updateQuery := `
 		UPDATE resource_updates
-		SET state = $1, start_ts = $2, modified_ts = $3, progress_result = $4, most_recent_progress = $5
-		WHERE command_id = $6 AND ksuid = $7 AND operation = $8
+		SET state = $1, start_ts = $2, modified_ts = $3, progress_result = $4, most_recent_progress = $5,
+			resolved_root_digests = COALESCE($6, resolved_root_digests)
+		WHERE command_id = $7 AND ksuid = $8 AND operation = $9
 	`
 
-	result, err := d.pool.Exec(ctx, updateQuery, string(state), startTs.UTC(), modifiedTs.UTC(), progressJSON, mostRecentJSON, commandID, ksuid, string(operation))
+	result, err := d.pool.Exec(ctx, updateQuery, string(state), startTs.UTC(), modifiedTs.UTC(), progressJSON, mostRecentJSON, marshalOrNil(resolvedRootDigests), commandID, ksuid, string(operation))
 	if err != nil {
 		return fmt.Errorf("failed to update resource update progress: %w", err)
 	}

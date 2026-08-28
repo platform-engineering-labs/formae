@@ -97,8 +97,7 @@ func TestGenerateResourceUpdates_ReferenceToDeletedResourceIsRejected(t *testing
 		resource_update.FormaCommandSourceUser,
 		[]*pkgmodel.Target{target},
 		ds,
-		nil, nil,
-	)
+		nil, nil, false)
 
 	require.Error(t, err)
 	var notFound apimodel.FormaReferencedResourcesNotFoundError

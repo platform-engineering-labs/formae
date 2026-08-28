@@ -254,7 +254,7 @@ func Test_mergeRefsPreservingUserRefs_preservesResolvableValues(t *testing.T) {
         "Type": "A"
     }`, distributionKsuid, hostedZoneKsuid)
 
-	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{}, false)
+	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{}, false, nil)
 	require.NoError(t, err)
 
 	var mergedMap map[string]any
@@ -407,7 +407,7 @@ func Test_mergeRefsPreservingUserRefs_preservesResolvableValuesWithVisibilityWit
         "Type": "A"
     }`)
 
-	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{}, false)
+	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{}, false, nil)
 	require.NoError(t, err)
 
 	var mergedMap map[string]any
@@ -458,7 +458,7 @@ func Test_mergeRefsPreservingUserRefs_preservesResolvableValuesWithVisibilityAnd
         "Type": "A"
     }`)
 
-	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{}, false)
+	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{}, false, nil)
 	require.NoError(t, err)
 
 	var mergedMap map[string]any
@@ -510,7 +510,7 @@ func Test_mergeRefsPreservingUserRefs_OpaqueEnvelope_ReplacesHashWithLiveReadVal
 
 	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{
 		Hints: map[string]pkgmodel.FieldHint{"SecretString": {Opaque: true}},
-	}, false)
+	}, false, nil)
 	require.NoError(t, err)
 
 	var mergedMap map[string]any
@@ -545,7 +545,7 @@ func Test_mergeRefsPreservingUserRefs_ResEnvelope_EmptyPluginEchoPreservesHash(t
         "consumes": {"$res":true,"$label":"the-secret","$type":"FakeAWS::Resource","$stack":"s","$property":"secret"}
     }`)
 
-	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{}, false)
+	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{}, false, nil)
 	require.NoError(t, err)
 
 	var mergedMap map[string]any
@@ -580,7 +580,7 @@ func Test_mergeRefsPreservingUserRefs_RemovesArrayElements(t *testing.T) {
         "Type": "A"
     }`)
 
-	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{}, false)
+	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{}, false, nil)
 	require.NoError(t, err)
 
 	var mergedMap map[string]any
@@ -950,7 +950,7 @@ func Test_mergeRefsPreservingUserRefs_ECSEnvLiteralDoesNotInheritSiblingRef(t *t
 		},
 	}
 
-	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, schema, false)
+	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, schema, false, nil)
 	require.NoError(t, err)
 	byName := envByName(t, merged)
 
@@ -987,7 +987,7 @@ func Test_mergeRefsPreservingUserRefs_Phase2DoesNotGraftSiblingRefOntoLiteral(t 
 	}`)
 
 	// No hint on Environment → default/Set path.
-	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{}, false)
+	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{}, false, nil)
 	require.NoError(t, err)
 
 	var props map[string]any
@@ -1028,7 +1028,7 @@ func Test_mergeRefsPreservingUserRefs_OrderedArrayPairsByIndex(t *testing.T) {
 		},
 	}
 
-	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, schema, false)
+	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, schema, false, nil)
 	require.NoError(t, err)
 
 	var props map[string]any

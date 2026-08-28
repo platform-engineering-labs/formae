@@ -103,7 +103,7 @@ func requireSingleUpdate(t *testing.T, existing, new pkgmodel.Resource) Resource
 	resolvableProps := resolver.ResolvableProperties{}
 
 	updates, err := NewResourceUpdateForExisting(resolvableProps, nil, existing, new, target, target,
-		pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser)
+		pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser, false)
 	require.NoError(t, err)
 
 	if len(updates) == 0 {

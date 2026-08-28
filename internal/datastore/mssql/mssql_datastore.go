@@ -226,7 +226,7 @@ SELECT
 	ru.resource, ru.resource_target, ru.existing_resource, ru.existing_target,
 	ru.progress_result, ru.most_recent_progress,
 	ru.remaining_resolvables, ru.reference_labels, ru.previous_properties,
-	ru.is_cascade, ru.cascade_source, ru.failure_reason
+	ru.is_cascade, ru.cascade_source, ru.failure_reason, ru.provenance_records, ru.resolved_root_digests
 FROM forma_commands fc
 LEFT JOIN resource_updates ru ON fc.command_id = ru.command_id`
 
@@ -257,6 +257,7 @@ func scanJoinedRow(rows *sql.Rows) (*forma_command.FormaCommand, *resource_updat
 	var ruIsCascade *bool
 	var ruCascadeSource *string
 	var ruFailureReason *string
+	var ruProvenanceRecords, ruResolvedRootDigests []byte
 
 	err := rows.Scan(
 		&commandID, &fcTimestamp, &fcCommand, &fcState, &fcClientID,
@@ -268,6 +269,7 @@ func scanJoinedRow(rows *sql.Rows) (*forma_command.FormaCommand, *resource_updat
 		&progressResultJSON, &mostRecentProgressJSON,
 		&remainingResolvablesJSON, &referenceLabelsJSON, &previousPropertiesJSON,
 		&ruIsCascade, &ruCascadeSource, &ruFailureReason,
+		&ruProvenanceRecords, &ruResolvedRootDigests,
 	)
 	if err != nil {
 		return nil, nil, err
@@ -407,6 +409,16 @@ func scanJoinedRow(rows *sql.Rows) (*forma_command.FormaCommand, *resource_updat
 	}
 	if ruFailureReason != nil {
 		ru.FailureReason = *ruFailureReason
+	}
+	if len(ruProvenanceRecords) > 0 {
+		if err := json.Unmarshal(ruProvenanceRecords, &ru.ProvenanceRecords); err != nil {
+			return nil, nil, fmt.Errorf("failed to unmarshal provenance records: %w", err)
+		}
+	}
+	if len(ruResolvedRootDigests) > 0 {
+		if err := json.Unmarshal(ruResolvedRootDigests, &ru.ResolvedRootDigests); err != nil {
+			return nil, nil, fmt.Errorf("failed to unmarshal resolved root digests: %w", err)
+		}
 	}
 
 	return &cmd, &ru, nil
@@ -808,14 +820,15 @@ func (d *DatastoreMSSQL) BulkStoreResourceUpdates(commandID string, updates []re
 		return fmt.Errorf("failed to clear existing resource updates: %w", err)
 	}
 
-	const colsPerRow = 24
+	const colsPerRow = 26
 	insertPrefix := `INSERT INTO resource_updates (
 		command_id, ksuid, operation, state, start_ts, modified_ts,
 		retries, remaining, version, stack_label, group_id, source,
 		resource, resource_target, existing_resource, existing_target,
 		progress_result, most_recent_progress,
 		remaining_resolvables, reference_labels, previous_properties,
-		is_cascade, cascade_source, failure_reason
+		is_cascade, cascade_source, failure_reason,
+		provenance_records, resolved_root_digests
 	) VALUES `
 
 	// Dedupe by (ksuid, operation) keeping the last — last-wins, matching the
@@ -911,6 +924,8 @@ func (d *DatastoreMSSQL) BulkStoreResourceUpdates(commandID string, updates []re
 			ru.IsCascade,
 			ru.CascadeSource,
 			ru.FailureReason,
+			marshalOrNilString(ru.ProvenanceRecords),
+			marshalOrNilString(ru.ResolvedRootDigests),
 		}
 		stmt := insertPrefix + "(" + placeholders(1, colsPerRow) + ")"
 		if _, err = tx.ExecContext(ctx, stmt, args...); err != nil {

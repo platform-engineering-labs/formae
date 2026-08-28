@@ -106,7 +106,7 @@ func TestGenerateResourceUpdates_TwoExtractionsOfOneProperty_DoNotCollide(t *tes
 	}
 
 	updates, err := GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile,
-		FormaCommandSourceUser, existingTargets, ds, nil, nil)
+		FormaCommandSourceUser, existingTargets, ds, nil, nil, false)
 	require.NoError(t, err)
 
 	planned := map[string]*ResourceUpdate{}
@@ -205,7 +205,7 @@ func TestGenerateResourceUpdates_RequiredOnUpdateConsumer_BehavesIdentically(t *
 		}
 
 		updates, err := GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile,
-			FormaCommandSourceUser, existingTargets, ds, nil, nil)
+			FormaCommandSourceUser, existingTargets, ds, nil, nil, false)
 		require.NoError(t, err)
 
 		planned := map[string]*ResourceUpdate{}
@@ -259,7 +259,7 @@ func TestGenerateResourceUpdates_RequiredOnUpdateConsumer_BehavesIdentically(t *
 		}
 
 		updates, err := GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile,
-			FormaCommandSourceUser, existingTargets, ds, nil, nil)
+			FormaCommandSourceUser, existingTargets, ds, nil, nil, false)
 		require.NoError(t, err)
 
 		for i := range updates {

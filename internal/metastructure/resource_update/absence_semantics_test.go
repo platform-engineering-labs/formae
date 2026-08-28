@@ -99,7 +99,7 @@ func TestGenerateResourceUpdates_ReferenceToRemovedPropertyFails(t *testing.T) {
 	}
 
 	_, err = GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile,
-		FormaCommandSourceUser, existingTargets, ds, nil, nil)
+		FormaCommandSourceUser, existingTargets, ds, nil, nil, false)
 	require.Error(t, err)
 
 	var refErr ReferenceToRemovedPropertyError
@@ -173,7 +173,7 @@ func TestGenerateResourceUpdates_PatchModeOmission_LeavesReferenceUndisturbed(t 
 	}
 
 	_, err = GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModePatch,
-		FormaCommandSourceUser, existingTargets, ds, nil, nil)
+		FormaCommandSourceUser, existingTargets, ds, nil, nil, false)
 	require.NoError(t, err)
 }
 
@@ -245,7 +245,7 @@ func TestGenerateResourceUpdates_ReconcileOmissionWithoutRemoval_KeepsPersistedR
 	}
 
 	updates, err := GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile,
-		FormaCommandSourceUser, existingTargets, ds, nil, nil)
+		FormaCommandSourceUser, existingTargets, ds, nil, nil, false)
 	require.NoError(t, err)
 
 	for i := range updates {
@@ -325,7 +325,7 @@ func TestGenerateResourceUpdates_ReadOnlyOutputResolvesFromPersisted(t *testing.
 	}
 
 	updates, err := GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile,
-		FormaCommandSourceUser, existingTargets, ds, nil, nil)
+		FormaCommandSourceUser, existingTargets, ds, nil, nil, false)
 	require.NoError(t, err)
 
 	for i := range updates {
@@ -385,7 +385,7 @@ func TestGenerateResourceUpdates_ForwardReferenceDefers(t *testing.T) {
 	}
 
 	updates, err := GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile,
-		FormaCommandSourceUser, existingTargets, ds, nil, nil)
+		FormaCommandSourceUser, existingTargets, ds, nil, nil, false)
 	require.NoError(t, err)
 
 	planned := map[string]*ResourceUpdate{}
@@ -476,7 +476,7 @@ func TestGenerateResourceUpdates_RemovedPropertyWithDeletedConsumer_NoError(t *t
 	}
 
 	_, err = GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile,
-		FormaCommandSourceUser, existingTargets, ds, nil, nil)
+		FormaCommandSourceUser, existingTargets, ds, nil, nil, false)
 	require.NoError(t, err)
 }
 
@@ -553,6 +553,6 @@ func TestGenerateResourceUpdates_MemberRemovalDoesNotDangleCollectionReference(t
 	}
 
 	_, err = GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile,
-		FormaCommandSourceUser, existingTargets, ds, nil, nil)
+		FormaCommandSourceUser, existingTargets, ds, nil, nil, false)
 	require.NoError(t, err)
 }

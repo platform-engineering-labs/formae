@@ -429,7 +429,7 @@ func TestGenerateResourceUpdatesWithTranslation(t *testing.T) {
 		},
 	}
 
-	updates, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil, nil)
+	updates, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil, nil, false)
 	require.NoError(t, err)
 	require.Len(t, updates, 2)
 
@@ -597,7 +597,7 @@ func TestGenerateResourceUpdates_PopulatesReferenceLabels(t *testing.T) {
 		},
 	}
 
-	updates, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil, nil)
+	updates, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil, nil, false)
 	require.NoError(t, err)
 	require.Len(t, updates, 2)
 
@@ -649,7 +649,7 @@ func TestGenerateResourceUpdates_ReferenceLabelsEdge(t *testing.T) {
 			},
 		}
 
-		updates, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil, nil)
+		updates, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil, nil, false)
 		require.NoError(t, err)
 		require.Len(t, updates, 1)
 
@@ -686,7 +686,7 @@ func TestGenerateResourceUpdates_ReferenceLabelsEdge(t *testing.T) {
 			},
 		}
 
-		_, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil, nil)
+		_, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil, nil, false)
 		require.Error(t, err)
 
 		var notFoundErr apimodel.FormaReferencedResourcesNotFoundError
@@ -723,7 +723,7 @@ func TestGenerateResourceUpdates_ReferenceLabelsEdge(t *testing.T) {
 			},
 		}
 
-		_, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil, nil)
+		_, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil, nil, false)
 		require.Error(t, err)
 
 		var notFoundErr apimodel.FormaReferencedResourcesNotFoundError
@@ -765,7 +765,7 @@ func TestGenerateResourceUpdates_ReferenceLabelsEdge(t *testing.T) {
 			},
 		}
 
-		_, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil, nil)
+		_, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil, nil, false)
 		require.Error(t, err)
 
 		var notFoundErr apimodel.FormaReferencedResourcesNotFoundError
@@ -811,7 +811,7 @@ func TestGenerateResourceUpdates_TargetValidation(t *testing.T) {
 			},
 		}
 
-		updates, err := GenerateResourceUpdates(&forma, command, mode, FormaCommandSourceUser, existingTargets, ds, nil, nil)
+		updates, err := GenerateResourceUpdates(&forma, command, mode, FormaCommandSourceUser, existingTargets, ds, nil, nil, false)
 		assert.NoError(t, err)
 		assert.Len(t, updates, 1)
 		assert.Equal(t, "test-target", updates[0].ResourceTarget.Label)
@@ -837,7 +837,7 @@ func TestGenerateResourceUpdates_TargetValidation(t *testing.T) {
 			},
 		}
 
-		updates, err := GenerateResourceUpdates(&forma, command, mode, FormaCommandSourceUser, existingTargets, ds, nil, nil)
+		updates, err := GenerateResourceUpdates(&forma, command, mode, FormaCommandSourceUser, existingTargets, ds, nil, nil, false)
 		assert.Error(t, err)
 		assert.Nil(t, updates)
 	})
@@ -862,7 +862,7 @@ func TestGenerateResourceUpdates_TargetValidation(t *testing.T) {
 			},
 		}
 
-		updates, err := GenerateResourceUpdates(&forma, command, mode, FormaCommandSourceUser, existingTargets, ds, nil, nil)
+		updates, err := GenerateResourceUpdates(&forma, command, mode, FormaCommandSourceUser, existingTargets, ds, nil, nil, false)
 		assert.Error(t, err)
 		assert.Nil(t, updates)
 	})
@@ -882,7 +882,7 @@ func TestGenerateResourceUpdates_TargetValidation(t *testing.T) {
 
 		existingTargets := []*pkgmodel.Target{} // No existing targets
 
-		updates, err := GenerateResourceUpdates(&forma, command, mode, FormaCommandSourceUser, existingTargets, ds, nil, nil)
+		updates, err := GenerateResourceUpdates(&forma, command, mode, FormaCommandSourceUser, existingTargets, ds, nil, nil, false)
 		assert.NoError(t, err)
 		assert.Len(t, updates, 1)
 		assert.Equal(t, "new-target", updates[0].ResourceTarget.Label)
@@ -1245,7 +1245,7 @@ func TestGenerateResourceUpdatesForApply_SameLabelDifferentTypes_ReplaceNotGener
 		"aws-target": {Label: "aws-target", Namespace: "AWS"},
 	}
 
-	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil)
+	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil, false)
 	require.NoError(t, err)
 
 	assert.Len(t, updates, 2, "Should have delete for old type and create for new type")
@@ -1835,4 +1835,55 @@ func TestReferencesOpaqueProperty_DescendantHint(t *testing.T) {
 			assert.Equal(t, tc.want, referencesOpaqueProperty(tc.opaque, tc.property))
 		})
 	}
+}
+
+// $resolvedFrom is a formae-written record, never a user-writable key: a
+// desired document arriving with one (on a raw $ref envelope, bypassing the
+// $res sugar that is rewritten wholesale) must have it stripped at ingestion,
+// or forged provenance would suppress a genuine write on the next plan.
+func TestTranslateFormaeReferences_StripsUntrustedProvenance(t *testing.T) {
+	ds, _ := GetDeps(t)
+	forged := "v1:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	forma := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{{Label: "test-stack"}},
+		Resources: []pkgmodel.Resource{{
+			Label: "consumer", Type: "Test::Consumer", Stack: "test-stack",
+			Properties: json.RawMessage(`{
+				"Password": {"$ref": "formae://2abcdefghijklmnopqrstuvwxyz#/S", "$resolvedFrom": "` + forged + `"},
+				"Nested": {"Deep": {"$ref": "formae://2abcdefghijklmnopqrstuvwxyz#/T", "$resolvedFrom": "` + forged + `"}}
+			}`),
+		}},
+	}
+
+	_, err := TranslateFormaeReferencesToKsuid(forma, ds)
+	require.NoError(t, err)
+
+	props := string(forma.Resources[0].Properties)
+	assert.NotContains(t, props, "$resolvedFrom",
+		"user-authored provenance must be stripped at ingestion")
+	assert.Contains(t, props, "$ref", "the reference itself is preserved")
+}
+
+// The strip is scoped to reference envelopes: an ordinary map property that
+// happens to contain a literal "$resolvedFrom" key is user data, not
+// provenance, and must round-trip untouched.
+func TestTranslateFormaeReferences_KeepsLiteralResolvedFromInPlainMaps(t *testing.T) {
+	ds, _ := GetDeps(t)
+	forma := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{{Label: "test-stack"}},
+		Resources: []pkgmodel.Resource{{
+			Label: "config", Type: "Test::Config", Stack: "test-stack",
+			Properties: json.RawMessage(`{
+				"Data": {"$resolvedFrom": "a-user-value", "other": "kept"}
+			}`),
+		}},
+	}
+
+	_, err := TranslateFormaeReferencesToKsuid(forma, ds)
+	require.NoError(t, err)
+
+	var props map[string]map[string]any
+	require.NoError(t, json.Unmarshal(forma.Resources[0].Properties, &props))
+	assert.Equal(t, "a-user-value", props["Data"]["$resolvedFrom"],
+		"a literal key in a plain map is user data and must survive")
 }

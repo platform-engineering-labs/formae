@@ -33,6 +33,7 @@ func GenerateResourceUpdates(
 	ds ResourceDataLookup,
 	replacedTargets map[string]bool,
 	deletedTargets map[string]bool,
+	force bool,
 ) ([]ResourceUpdate, error) {
 
 	var referenceLabels map[string]string
@@ -118,7 +119,7 @@ func GenerateResourceUpdates(
 	case pkgmodel.CommandDestroy:
 		resourceUpdates, err = generateResourceUpdatesForDestroy(forma, source, existingTargetMap, ds, deletedTargets)
 	case pkgmodel.CommandApply:
-		resourceUpdates, err = generateResourceUpdatesForApply(forma, mode, source, existingTargetMap, desiredTargetMap, ds, replacedTargets)
+		resourceUpdates, err = generateResourceUpdatesForApply(forma, mode, source, existingTargetMap, desiredTargetMap, ds, replacedTargets, force)
 	case pkgmodel.CommandSync:
 		resourceUpdates, err = generateResourceUpdatesForSync(forma, source, existingTargetMap, ds)
 	default:
@@ -571,6 +572,7 @@ func generateResourceUpdatesForApply(
 	desiredTargetMap map[string]*pkgmodel.Target,
 	ds ResourceDataLookup,
 	replacedTargets map[string]bool,
+	force bool,
 ) ([]ResourceUpdate, error) {
 
 	for _, target := range forma.Targets {
@@ -620,9 +622,9 @@ func generateResourceUpdatesForApply(
 
 	switch mode {
 	case pkgmodel.FormaApplyModeReconcile:
-		return generateResourceUpdatesForReconcile(forma, mode, source, existingTargetMap, desiredTargetMap, ds, replacedTargets)
+		return generateResourceUpdatesForReconcile(forma, mode, source, existingTargetMap, desiredTargetMap, ds, replacedTargets, force)
 	case pkgmodel.FormaApplyModePatch:
-		return generateResourceUpdatesForPatch(forma, mode, source, existingTargetMap, desiredTargetMap, ds, replacedTargets)
+		return generateResourceUpdatesForPatch(forma, mode, source, existingTargetMap, desiredTargetMap, ds, replacedTargets, force)
 	default:
 		return nil, fmt.Errorf("forma apply mode %s not supported", mode)
 	}
@@ -746,6 +748,7 @@ func generateResourceUpdatesForReconcile(
 	desiredTargetMap map[string]*pkgmodel.Target,
 	ds ResourceDataLookup,
 	replacedTargets map[string]bool,
+	force bool,
 ) ([]ResourceUpdate, error) {
 
 	var resourceCreates []ResourceUpdate
@@ -838,6 +841,7 @@ func generateResourceUpdatesForReconcile(
 						*desiredTargetMap[newResource.Target],
 						mode,
 						source,
+						force,
 					)
 					if err != nil {
 						return nil, fmt.Errorf("failed to generate resource update for existing unmanaged resource: %w", err)
@@ -892,6 +896,7 @@ func generateResourceUpdatesForReconcile(
 						*desiredTargetMap[newResource.Target],
 						mode,
 						source,
+						force,
 					)
 
 					if err != nil {
@@ -971,6 +976,7 @@ func generateResourceUpdatesForReconcile(
 						*desiredTargetMap[newResource.Target],
 						mode,
 						source,
+						force,
 					)
 					if err != nil {
 						return nil, fmt.Errorf("failed to generate resource update for unmanaged resource: %w", err)
@@ -1234,6 +1240,7 @@ func generateResourceUpdatesForPatch(
 	desiredTargetMap map[string]*pkgmodel.Target,
 	ds ResourceDataLookup,
 	replacedTargets map[string]bool,
+	force bool,
 ) ([]ResourceUpdate, error) {
 
 	var resourceCreates []ResourceUpdate
@@ -1332,6 +1339,7 @@ func generateResourceUpdatesForPatch(
 					*desiredTargetMap[newResource.Target],
 					mode,
 					source,
+					force,
 				)
 
 				if err != nil {
@@ -2144,10 +2152,77 @@ func translateFormaeReferencesToKsuid(forma *pkgmodel.Forma, ds ResourceDataLook
 }
 
 // translatePropertiesJSON translates all resolvable objects to KSUID URIs
+
+// stripUntrustedProvenance deletes the $resolvedFrom key from every
+// REFERENCE ENVELOPE in a user-authored properties document. Only STORED
+// envelopes carry trusted provenance; the desired side never does. The strip
+// is scoped to envelopes ($ref/$res shaped maps) because that is the only
+// place provenance is ever read from: the same key inside an ordinary map is
+// user data and must round-trip.
+func stripUntrustedProvenance(properties string) (string, error) {
+	var v any
+	if err := json.Unmarshal([]byte(properties), &v); err != nil {
+		return properties, nil // not JSON we manage; translation will handle it
+	}
+	cleaned, changed := withoutEnvelopeProvenance(v)
+	if !changed {
+		return properties, nil
+	}
+	out, err := json.Marshal(cleaned)
+	if err != nil {
+		return "", fmt.Errorf("failed to re-serialize properties after provenance strip: %w", err)
+	}
+	return string(out), nil
+}
+
+// withoutEnvelopeProvenance returns v with $resolvedFrom removed from every
+// reference envelope, and whether any removal happened. (Rebuilds rather than
+// mutating: this package shadows the delete builtin with an actor handler of
+// the same name.)
+func withoutEnvelopeProvenance(v any) (any, bool) {
+	switch t := v.(type) {
+	case map[string]any:
+		_, hasRef := t["$ref"]
+		_, hasRes := t["$res"]
+		isEnvelope := hasRef || hasRes
+		changed := false
+		out := make(map[string]any, len(t))
+		for k, child := range t {
+			if isEnvelope && k == "$resolvedFrom" {
+				changed = true
+				continue
+			}
+			cleanedChild, childChanged := withoutEnvelopeProvenance(child)
+			out[k] = cleanedChild
+			changed = changed || childChanged
+		}
+		return out, changed
+	case []any:
+		changed := false
+		out := make([]any, len(t))
+		for i, child := range t {
+			cleanedChild, childChanged := withoutEnvelopeProvenance(child)
+			out[i] = cleanedChild
+			changed = changed || childChanged
+		}
+		return out, changed
+	default:
+		return v, false
+	}
+}
+
 func translatePropertiesJSON(properties json.RawMessage, tripletToKsuid map[pkgmodel.TripletKey]string, ds ResourceDataLookup) (json.RawMessage, map[string]string, error) {
-	result, externalLabels, resolvables := string(properties), make(map[string]string), pkgmodel.FindResolvablesFromProperties(string(properties))
+	// Trust boundary: $resolvedFrom is a formae-written provenance record,
+	// never a user-writable key. $res envelopes are rewritten wholesale below
+	// (dropping any forged sibling by construction), but a raw $ref envelope
+	// authored directly would carry one through - strip it everywhere before
+	// anything downstream can mistake it for trusted provenance.
+	stripped, err := stripUntrustedProvenance(string(properties))
+	if err != nil {
+		return nil, nil, err
+	}
+	result, externalLabels, resolvables := stripped, make(map[string]string), pkgmodel.FindResolvablesFromProperties(stripped)
 	var (
-		err              error
 		formaeURI        pkgmodel.FormaeURI
 		missingResources []*pkgmodel.Resource
 	)

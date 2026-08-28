@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/platform-engineering-labs/formae/internal/metastructure/provenance"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/tidwall/gjson"
 )
@@ -50,18 +51,77 @@ type SourceAnswer struct {
 	Kind   AnswerKind
 	Value  string // Resolved and Stable only
 	Opaque bool   // the source property is opaque; consumers of the seam decide what that means
+	// SourceRootDigest is the canonical-domain digest of the source property's
+	// whole (pre-extraction) value: the effective desired value when the
+	// command declares the source, the stored at-rest digest otherwise. Empty
+	// means unknown. Populated for opaque sources only.
+	SourceRootDigest string
+	// sourceRaw holds the UNWRAPPED effective-desired raw JSON of a declared
+	// opaque source, for in-memory $json leaf comparison. Never serialized and
+	// never placed in the public string map.
+	sourceRaw string
+}
+
+// SourceRaw returns the unwrapped effective-desired raw JSON of a declared
+// opaque source, or "" when the source is undeclared or non-opaque.
+func (a SourceAnswer) SourceRaw() string {
+	return a.sourceRaw
 }
 
 // ResolvableProperties is a map of KSUIDs to property names to answers.
 // This can include resource.Properties and resource.ReadOnlyProperties
 type ResolvableProperties struct {
 	props map[string]map[string]SourceAnswer // ksuid -> property -> answer
+	// suppressed holds consumer-side destination paths whose occurrence was
+	// classified provably stable: reference flattening substitutes the stored
+	// value on the desired side for these paths so no op is minted. The set
+	// is decided by the update generator's provenance classification; absence
+	// always means "do not suppress".
+	suppressed map[string]bool
+	// converging holds consumer-side destination paths whose occurrence the
+	// classification requires to plan (moved, repointed, forced, or unknown
+	// movement on a mutable destination). An unresolved reference flattens to
+	// an empty string, which the top-level empty-value filter treats as PKL
+	// rendering noise; these paths are exempted from that drop so the
+	// converging op survives. Absence means "no exemption".
+	converging map[string]bool
 }
 
 func NewResolvableProperties() ResolvableProperties {
 	return ResolvableProperties{
-		props: make(map[string]map[string]SourceAnswer),
+		props:      make(map[string]map[string]SourceAnswer),
+		suppressed: make(map[string]bool),
+		converging: make(map[string]bool),
 	}
+}
+
+// SuppressStableAt marks a consumer destination path as provably stable.
+func (p *ResolvableProperties) SuppressStableAt(destinationPath string) {
+	if p.suppressed == nil {
+		p.suppressed = make(map[string]bool)
+	}
+	p.suppressed[destinationPath] = true
+}
+
+// StableSuppressedAt reports whether the destination path was classified
+// provably stable.
+func (p *ResolvableProperties) StableSuppressedAt(destinationPath string) bool {
+	return p.suppressed[destinationPath]
+}
+
+// MarkConvergeAt marks a consumer destination path as requiring a converging
+// update.
+func (p *ResolvableProperties) MarkConvergeAt(destinationPath string) {
+	if p.converging == nil {
+		p.converging = make(map[string]bool)
+	}
+	p.converging[destinationPath] = true
+}
+
+// ConvergeMarkedAt reports whether the destination path was classified as
+// requiring a converging update.
+func (p *ResolvableProperties) ConvergeMarkedAt(destinationPath string) bool {
+	return p.converging[destinationPath]
 }
 
 func (p *ResolvableProperties) Add(ksuid, property, value string) {
@@ -130,9 +190,11 @@ func LoadResolvablePropertiesFromStacks(resource pkgmodel.Resource, allResources
 			// new resources whose read-only properties are assigned at creation
 			// time, and for a secret, whose value is only ever read live. The
 			// value will be resolved at execution time via RemainingResolvables.
-			slog.Debug("Skipping unresolvable property (will resolve at execution time)",
+			// The answer is STORED anyway: Get still refuses to hand out a
+			// value, but classification metadata (opacity, source digest)
+			// must reach downstream consumers of the seam.
+			slog.Debug("Deferring unresolvable property (will resolve at execution time)",
 				"property", uri.PropertyPath(), "ksuid", uri.KSUID())
-			continue
 		}
 		res.AddAnswer(uri.KSUID(), uri.PropertyPath(), answer)
 	}
@@ -148,6 +210,79 @@ func LoadResolvablePropertiesFromStacks(resource pkgmodel.Resource, allResources
 // to detect a cycle (linear membership check; chains here are short) and, on
 // a cycle, as the error's Chain.
 func classifySourceProperty(ksuid, propertyPath string, resourcesByKsuid map[string]*pkgmodel.Resource, effective map[string]json.RawMessage, visiting []string) (SourceAnswer, error) {
+	answer, err := classifySourcePropertyValue(ksuid, propertyPath, resourcesByKsuid, effective, visiting)
+	if err != nil {
+		return answer, err
+	}
+	decorateOpacity(&answer, ksuid, propertyPath, resourcesByKsuid, effective)
+	return answer, nil
+}
+
+// decorateOpacity attaches the opacity flag and the source root digest to an
+// already-classified answer, never altering its Kind or Value: opacity
+// metadata is additive so every pre-existing resolution pin holds.
+func decorateOpacity(answer *SourceAnswer, ksuid, propertyPath string, resourcesByKsuid map[string]*pkgmodel.Resource, effective map[string]json.RawMessage) {
+	if answer.Opaque {
+		return // a chain hop already propagated richer metadata
+	}
+	target := resourcesByKsuid[ksuid]
+	if target == nil {
+		return
+	}
+	opaque := isSourcePropertyOpaque(target, propertyPath)
+
+	if effDoc, declared := effective[ksuid]; declared {
+		effVal := gjson.GetBytes(effDoc, propertyPath)
+		if effVal.Exists() && !isReferenceEnvelope(effVal) {
+			if !opaque {
+				opaque = containsHashedValue(effVal) || containsOpaqueVisibility(effVal)
+			}
+			if opaque {
+				answer.Opaque = true
+				unwrapped := provenance.UnwrapEffectiveValue(effVal)
+				switch {
+				case effVal.Get("$hashed").Bool():
+					// A re-applied extract round-trip: the declared value IS
+					// the at-rest digest.
+					answer.SourceRootDigest = provenance.FromStored(unwrapped.String())
+				case unwrapped.Type == gjson.String:
+					answer.SourceRootDigest = provenance.DigestOfString(unwrapped.String())
+					answer.sourceRaw = unwrapped.Raw
+				default:
+					answer.SourceRootDigest = provenance.DigestOfJSON(unwrapped.Raw)
+					answer.sourceRaw = unwrapped.Raw
+				}
+				return
+			}
+		}
+	}
+
+	if !opaque {
+		return
+	}
+	answer.Opaque = true
+	// Undeclared (or declared as a chain that did not decorate): the stored
+	// at-rest digest is the only comparable record.
+	answer.SourceRootDigest = storedRootDigest(target, propertyPath)
+}
+
+// storedRootDigest adapts the persisted at-rest digest of an opaque property
+// into the canonical domain, or "" when none is stored (including the
+// documented legacy gap: an empty value is never hashed at rest).
+func storedRootDigest(target *pkgmodel.Resource, propertyPath string) string {
+	for _, props := range [][]byte{target.Properties, target.ReadOnlyProperties} {
+		if props == nil {
+			continue
+		}
+		v := gjson.GetBytes(props, propertyPath)
+		if v.Exists() && v.Get("$hashed").Bool() {
+			return provenance.FromStored(v.Get("$value").String())
+		}
+	}
+	return ""
+}
+
+func classifySourcePropertyValue(ksuid, propertyPath string, resourcesByKsuid map[string]*pkgmodel.Resource, effective map[string]json.RawMessage, visiting []string) (SourceAnswer, error) {
 	key := ksuid + "#/" + propertyPath
 	for _, v := range visiting {
 		if v == key {
@@ -177,7 +312,31 @@ func classifySourceProperty(ksuid, propertyPath string, resourcesByKsuid map[str
 						return SourceAnswer{}, err
 					}
 					if sub.Kind == AnswerDeferred {
-						return SourceAnswer{Kind: AnswerDeferred}, nil
+						// Propagate the chain hop's opacity metadata: this
+						// occurrence's movement follows the chain root. A hop
+						// carrying its own $json extraction derives its value
+						// from the root; extract in memory when possible so
+						// the digest matches the hop's actual property value.
+						hop := SourceAnswer{Kind: AnswerDeferred, Opaque: sub.Opaque,
+							SourceRootDigest: sub.SourceRootDigest, sourceRaw: sub.sourceRaw}
+						if sub.Opaque {
+							if jsonPath := effVal.Get("$json").String(); jsonPath != "" {
+								if sub.sourceRaw != "" {
+									if extracted, jerr := ExtractJSONPath(sub.sourceRaw, jsonPath); jerr == nil {
+										hop.SourceRootDigest = provenance.DigestOfString(extracted)
+										hop.sourceRaw = extracted
+									} else {
+										hop.SourceRootDigest = ""
+										hop.sourceRaw = ""
+									}
+								} else {
+									// Root value not in memory: the extracted
+									// hop value is underivable.
+									hop.SourceRootDigest = ""
+								}
+							}
+						}
+						return hop, nil
 					}
 					if sub.Kind == AnswerResolved && !sub.Opaque {
 						value := sub.Value

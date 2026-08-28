@@ -132,7 +132,7 @@ func TestGenerateResourceUpdates_ImportShapedWriteOnlySource_ConsumerIsNotReplac
 	}
 	existingTargets := []*pkgmodel.Target{{Label: "test-target", Namespace: "test", Config: json.RawMessage(`{}`)}}
 
-	updates, err := GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser, existingTargets, ds, nil, nil)
+	updates, err := GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser, existingTargets, ds, nil, nil, false)
 	require.NoError(t, err)
 
 	for _, u := range updates {

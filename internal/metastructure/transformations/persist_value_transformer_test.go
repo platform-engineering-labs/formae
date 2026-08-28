@@ -977,3 +977,26 @@ func mustJSON(t *testing.T, v any) string {
 	require.NoError(t, err)
 	return string(b)
 }
+
+// The at-rest hashing path rewrites envelopes key by key; a provenance digest
+// riding on the envelope must survive both the first hashing and the
+// idempotent re-run.
+func TestPersistValueTransformer_PreservesResolvedFrom(t *testing.T) {
+	digest := "v1:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	r := &pkgmodel.Resource{
+		Type: "Test::Secret",
+		Schema: pkgmodel.Schema{
+			Fields: []string{"SecretString"},
+			Hints:  map[string]pkgmodel.FieldHint{"SecretString": {Opaque: true}},
+		},
+		Properties: []byte(`{"SecretString":{"$value":"plain","$visibility":"Opaque","$resolvedFrom":"` + digest + `"}}`),
+	}
+	out, _, err := NewPersistValueTransformer().ApplyToResource(r)
+	require.NoError(t, err)
+	assert.True(t, gjson.GetBytes(out.Properties, "SecretString.$hashed").Bool())
+	assert.Equal(t, digest, gjson.GetBytes(out.Properties, "SecretString.$resolvedFrom").String())
+
+	again, _, err := NewPersistValueTransformer().ApplyToResource(out)
+	require.NoError(t, err)
+	assert.Equal(t, digest, gjson.GetBytes(again.Properties, "SecretString.$resolvedFrom").String())
+}
