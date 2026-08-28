@@ -4016,3 +4016,33 @@ func TestGeneratePatch_ArrayMembershipChange_StaysMutable(t *testing.T) {
 	assert.Empty(t, createOnlyPatch, "a membership change must not trigger a replacement")
 	assert.NotEmpty(t, patchDoc)
 }
+
+func TestGeneratePatch_ArrayMemberAdded_StaysMutable(t *testing.T) {
+	// Adding a member (carrying its own createOnly value) is a membership
+	// edit: no existing member's immutable field changed.
+	document := []byte(`{"Name":"x","Entries":[{"Id":"A","Token":"t1"}]}`)
+	desired := []byte(`{"Name":"x","Entries":[{"Id":"A","Token":"t1"},{"Id":"B","Token":"t2"}]}`)
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Entries"},
+		Hints:  map[string]pkgmodel.FieldHint{"Entries.Token": {WriteOnly: true, CreateOnly: true}},
+	}
+	props := resolver.NewResolvableProperties()
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, desired, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Empty(t, createOnlyPatch, "adding a member must not trigger a resource replacement")
+	assert.NotEmpty(t, patchDoc)
+}
+
+func TestGeneratePatch_ArrayMemberRemoved_StaysMutable(t *testing.T) {
+	document := []byte(`{"Name":"x","Entries":[{"Id":"A","Token":"t1"},{"Id":"B","Token":"t2"}]}`)
+	desired := []byte(`{"Name":"x","Entries":[{"Id":"A","Token":"t1"}]}`)
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Entries"},
+		Hints:  map[string]pkgmodel.FieldHint{"Entries.Token": {WriteOnly: true, CreateOnly: true}},
+	}
+	props := resolver.NewResolvableProperties()
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, desired, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Empty(t, createOnlyPatch, "removing a member must not trigger a resource replacement")
+	assert.NotEmpty(t, patchDoc)
+}

@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
-	"sort"
 	"strings"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/canonicalize"
@@ -944,16 +943,16 @@ func isCreateOnlyPath(path string, createOnlyFields []string) bool {
 
 // arrayCreateOnlyChangedFields returns the set of top-level fields whose
 // member-level ops must escalate to createOnly: fields with a createOnly
-// descendant hint reached through an array whose values changed between the
-// stored document and the desired patch. Two signals, either escalates:
-// the hinted subfield's value multiset differs, or — with the multiset
-// unchanged — the two sides become EQUAL once the hinted leaves are stripped
-// while differing with them present, meaning the only change is which member
-// holds which createOnly value (values exchanged between members: an
-// immutable change per member, not a membership edit). Object-nested
-// createOnly paths are excluded — their changes surface at the subfield's own
-// op path and classify there, so escalating sibling ops under the same
-// container would over-trigger replacements.
+// descendant hint reached through an array where an immutable value changed
+// on a RETAINED member. Set-based array comparison has no member identity, so
+// retention is inferred structurally (see
+// createOnlyChangeWithinRetainedMembers). A membership edit — a member added,
+// removed, or replaced — stays mutable: a leaf-value comparison alone cannot
+// make that distinction, since a new member carries new leaf values without
+// changing any existing member. Object-nested createOnly paths are excluded —
+// their changes surface at the subfield's own op path and classify there, so
+// escalating sibling ops under the same container would over-trigger
+// replacements.
 func arrayCreateOnlyChangedFields(document, patch []byte, createOnlyFields []string) map[string]bool {
 	changed := map[string]bool{}
 	if len(createOnlyFields) == 0 {
@@ -972,33 +971,31 @@ func arrayCreateOnlyChangedFields(document, patch []byte, createOnlyFields []str
 		if len(segments) < 2 {
 			continue
 		}
-		docValues, docViaArray := collectNestedFieldValues(docMap, segments)
-		patchValues, patchViaArray := collectNestedFieldValues(patchMap, segments)
+		_, docViaArray := collectNestedFieldValues(docMap, segments)
+		_, patchViaArray := collectNestedFieldValues(patchMap, segments)
 		if !docViaArray && !patchViaArray {
 			continue
 		}
 		arrayFieldsByRoot[segments[0]] = append(arrayFieldsByRoot[segments[0]], field)
-		if multisetKey(docValues) != multisetKey(patchValues) {
-			changed[segments[0]] = true
-		}
 	}
 	for root, fields := range arrayFieldsByRoot {
-		if changed[root] {
-			continue
-		}
-		if createOnlyValuesExchanged(document, patch, root, fields) {
+		if createOnlyChangeWithinRetainedMembers(document, patch, root, fields) {
 			changed[root] = true
 		}
 	}
 	return changed
 }
 
-// createOnlyValuesExchanged reports whether the subtrees under root differ
-// with the createOnly leaves present but compare equal (order-insensitively)
-// once every such leaf is stripped from both sides: the re-association
-// signature. A genuine membership or sibling change leaves the stripped sides
-// different and stays mutable.
-func createOnlyValuesExchanged(document, patch []byte, root string, createOnlyArrayFields []string) bool {
+// createOnlyChangeWithinRetainedMembers reports whether the subtrees under
+// root differ with the createOnly leaves present but compare equal
+// (order-insensitively) once every such leaf is stripped from both sides: the
+// signature of an immutable value changing, or being re-associated, within a
+// membership that is otherwise unchanged. A membership or sibling change
+// leaves the stripped sides different too and stays mutable. The rule is
+// deliberately conservative in the non-destructive direction: a combined edit
+// (membership change plus an immutable change on a retained member) stays
+// mutable rather than forcing a replacement the membership half never needed.
+func createOnlyChangeWithinRetainedMembers(document, patch []byte, root string, createOnlyArrayFields []string) bool {
 	docField := gjson.GetBytes(document, root)
 	patchField := gjson.GetBytes(patch, root)
 	if !docField.Exists() || !patchField.Exists() {
@@ -1022,9 +1019,10 @@ func createOnlyValuesExchanged(document, patch []byte, root string, createOnlyAr
 	return err == nil && residualSame
 }
 
-// collectNestedFieldValues returns every value the dot-path resolves to in
-// obj, traversing arrays like removeNestedField (the remaining path is
-// applied to every map element), and whether the traversal crossed an array.
+// collectNestedFieldValues resolves the dot-path in obj, traversing arrays
+// like removeNestedField (the remaining path is applied to every map
+// element), and reports whether the traversal crossed an array — the signal
+// arrayCreateOnlyChangedFields keys on.
 func collectNestedFieldValues(obj map[string]any, path []string) ([]any, bool) {
 	if len(path) == 0 {
 		return nil, false
@@ -1050,21 +1048,6 @@ func collectNestedFieldValues(obj map[string]any, path []string) ([]any, bool) {
 		return out, true
 	}
 	return nil, false
-}
-
-// multisetKey renders values as an order-insensitive comparison key: the
-// sorted JSON forms joined with a separator that cannot appear in JSON.
-func multisetKey(values []any) string {
-	keys := make([]string, 0, len(values))
-	for _, v := range values {
-		b, err := json.Marshal(v)
-		if err != nil {
-			continue
-		}
-		keys = append(keys, string(b))
-	}
-	sort.Strings(keys)
-	return strings.Join(keys, "\x00")
 }
 
 // pathMatchesField reports whether a JSON Pointer path (without its leading
