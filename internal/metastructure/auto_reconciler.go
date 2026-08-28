@@ -347,6 +347,7 @@ func prepareReconcile(ds datastore.Datastore, stackLabel string, clientID string
 		existingTargets,
 		ds,
 		nil, nil,
+		false,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate resource updates: %w", err)

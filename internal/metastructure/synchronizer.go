@@ -249,6 +249,7 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 			existingTargets,
 			data.datastore,
 			nil, nil,
+			false,
 		)
 		if err != nil {
 			proc.Log().Error("failed to generate resource updates for stack %s: %v", stackLabel, err)

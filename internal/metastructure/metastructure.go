@@ -1981,7 +1981,7 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 		}
 	}
 
-	resourceUpdates, err := resource_update.GenerateResourceUpdates(forma, command, formaCommandConfig.Mode, source, existingTargets, ds, replacedTargets, deletedTargets)
+	resourceUpdates, err := resource_update.GenerateResourceUpdates(forma, command, formaCommandConfig.Mode, source, existingTargets, ds, replacedTargets, deletedTargets, formaCommandConfig.Force)
 	if err != nil {
 		if requiredFieldsErr, ok := err.(apimodel.RequiredFieldMissingOnCreateError); ok {
 			return nil, requiredFieldsErr

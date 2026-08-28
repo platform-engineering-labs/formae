@@ -26,6 +26,7 @@ func NewResourceUpdateForExisting(
 	newTarget pkgmodel.Target,
 	mode pkgmodel.FormaApplyMode,
 	source FormaCommandSource,
+	force bool,
 ) ([]ResourceUpdate, error) {
 
 	if reflect.DeepEqual(existingResource, newResource) {
@@ -67,6 +68,13 @@ func NewResourceUpdateForExisting(
 	var patchDocument json.RawMessage
 	var createOnlyPatch json.RawMessage
 	var onlyForceResent bool
+
+	// Provenance classification runs BEFORE any opaque suppression or patch
+	// generation: it decides per reference occurrence whether the source
+	// provably moved, marks stable occurrences for suppression at the
+	// flattening seam, and produces the immutable records regeneration reads
+	// back after recovery.
+	provenanceRecords := buildProvenanceRecords(filteredProps, existingResource.Properties, resolvableProperties, newResource.Schema, force)
 
 	if hasChanges {
 		// Drop opaque values that are unchanged from what is stored so a sibling
@@ -164,6 +172,7 @@ func NewResourceUpdateForExisting(
 		StackLabel:           newResource.Stack,
 		RemainingResolvables: newRemainingResolvables,
 		PreviousProperties:   existingResource.Properties,
+		ProvenanceRecords:    provenanceRecords,
 	}
 
 	return []ResourceUpdate{updateResource}, nil

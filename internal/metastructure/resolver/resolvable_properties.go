@@ -72,12 +72,33 @@ func (a SourceAnswer) SourceRaw() string {
 // This can include resource.Properties and resource.ReadOnlyProperties
 type ResolvableProperties struct {
 	props map[string]map[string]SourceAnswer // ksuid -> property -> answer
+	// suppressed holds consumer-side destination paths whose occurrence was
+	// classified provably stable: reference flattening substitutes the stored
+	// value on the desired side for these paths so no op is minted. The set
+	// is decided by the update generator's provenance classification; absence
+	// always means "do not suppress".
+	suppressed map[string]bool
 }
 
 func NewResolvableProperties() ResolvableProperties {
 	return ResolvableProperties{
-		props: make(map[string]map[string]SourceAnswer),
+		props:      make(map[string]map[string]SourceAnswer),
+		suppressed: make(map[string]bool),
 	}
+}
+
+// SuppressStableAt marks a consumer destination path as provably stable.
+func (p *ResolvableProperties) SuppressStableAt(destinationPath string) {
+	if p.suppressed == nil {
+		p.suppressed = make(map[string]bool)
+	}
+	p.suppressed[destinationPath] = true
+}
+
+// StableSuppressedAt reports whether the destination path was classified
+// provably stable.
+func (p *ResolvableProperties) StableSuppressedAt(destinationPath string) bool {
+	return p.suppressed[destinationPath]
 }
 
 func (p *ResolvableProperties) Add(ksuid, property, value string) {

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/canonicalize"
@@ -1661,6 +1662,102 @@ func normalizeToFlattenedKeys(m map[string]any) {
 	}
 }
 
+
+// substituteStableOccurrences copies the document-side value over the
+// desired-side value for every destination path marked provably stable,
+// walking dotted paths (numeric segments index arrays).
+func substituteStableOccurrences(document, desired map[string]any, resolvableProperties resolver.ResolvableProperties) {
+	var walk func(prefix string, node any)
+	walk = func(prefix string, node any) {
+		switch t := node.(type) {
+		case map[string]any:
+			if _, hasRef := t["$ref"]; hasRef || t["$res"] == true {
+				if resolvableProperties.StableSuppressedAt(prefix) {
+					if docVal, ok := valueAtPath(document, prefix); ok {
+						setAtPath(desired, prefix, docVal)
+					}
+				}
+				return
+			}
+			for k, v := range t {
+				child := k
+				if prefix != "" {
+					child = prefix + "." + k
+				}
+				walk(child, v)
+			}
+		case []any:
+			for i, v := range t {
+				walk(prefix+"."+strconv.Itoa(i), v)
+			}
+		}
+	}
+	for k, v := range desired {
+		walk(k, v)
+	}
+}
+
+// valueAtPath resolves a dotted path in a decoded document; numeric segments
+// index arrays.
+func valueAtPath(root map[string]any, path string) (any, bool) {
+	var cur any = root
+	for _, seg := range strings.Split(path, ".") {
+		switch t := cur.(type) {
+		case map[string]any:
+			v, ok := t[seg]
+			if !ok {
+				return nil, false
+			}
+			cur = v
+		case []any:
+			i, err := strconv.Atoi(seg)
+			if err != nil || i < 0 || i >= len(t) {
+				return nil, false
+			}
+			cur = t[i]
+		default:
+			return nil, false
+		}
+	}
+	return cur, true
+}
+
+// setAtPath writes a value at a dotted path in a decoded document; numeric
+// segments index arrays. Missing intermediate containers abort the write
+// (the caller substitutes only where the desired side already holds an
+// envelope).
+func setAtPath(root map[string]any, path string, value any) {
+	segs := strings.Split(path, ".")
+	var cur any = root
+	for i, seg := range segs {
+		last := i == len(segs)-1
+		switch t := cur.(type) {
+		case map[string]any:
+			if last {
+				t[seg] = value
+				return
+			}
+			next, ok := t[seg]
+			if !ok {
+				return
+			}
+			cur = next
+		case []any:
+			idx, err := strconv.Atoi(seg)
+			if err != nil || idx < 0 || idx >= len(t) {
+				return
+			}
+			if last {
+				t[idx] = value
+				return
+			}
+			cur = t[idx]
+		default:
+			return
+		}
+	}
+}
+
 func flattenAndResolveRefs(document []byte, patch []byte, storedEnvelopes []byte, desiredEnvelopes []byte, resolvableProperties resolver.ResolvableProperties) ([]byte, []byte, error) {
 	var current, mod map[string]any
 	if err := json.Unmarshal(document, &current); err != nil {
@@ -1681,6 +1778,14 @@ func flattenAndResolveRefs(document []byte, patch []byte, storedEnvelopes []byte
 			return nil, nil, err
 		}
 	}
+	// Provenance suppression: an occurrence classified provably stable
+	// substitutes the DOCUMENT side's value onto the desired side before
+	// resolution and flattening, so the diff sees no change and the churn op
+	// is never minted. The classification is decided upstream (the update
+	// generator) and travels on the resolvable properties; absence of a mark
+	// always means "do not suppress".
+	substituteStableOccurrences(current, mod, resolvableProperties)
+
 	if err := resolveRefs(current, mod, stored, desired, resolvableProperties); err != nil {
 		return nil, nil, err
 	}

@@ -272,7 +272,7 @@ func (m *mockSummaryDatastore) LoadResourceUpdates(_ string) ([]resource_update.
 func (m *mockSummaryDatastore) UpdateResourceUpdateState(_ string, _ string, _ types.OperationType, _ resource_update.ResourceUpdateState, _ time.Time) error {
 	panic("not implemented")
 }
-func (m *mockSummaryDatastore) UpdateResourceUpdateProgress(_ string, _ string, _ types.OperationType, _ resource_update.ResourceUpdateState, _ time.Time, _ time.Time, _ plugin.TrackedProgress) error {
+func (m *mockSummaryDatastore) UpdateResourceUpdateProgress(_ string, _ string, _ types.OperationType, _ resource_update.ResourceUpdateState, _ time.Time, _ time.Time, _ plugin.TrackedProgress, _ map[string]string) error {
 	panic("not implemented")
 }
 func (m *mockSummaryDatastore) BatchUpdateResourceUpdateState(_ string, _ []datastore.ResourceUpdateRef, _ resource_update.ResourceUpdateState, _ time.Time) error {

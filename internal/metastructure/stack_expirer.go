@@ -239,6 +239,7 @@ func prepareDestroyExpiredStack(ds datastore.Datastore, stackInfo datastore.Expi
 		existingTargets,
 		ds,
 		nil, nil,
+		false,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate resource updates: %w", err)

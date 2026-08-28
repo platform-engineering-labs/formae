@@ -57,8 +57,7 @@ func TestGenerateResourceUpdatesForSync_DuplicateLabelsEmitOneUpdatePerResource(
 		FormaCommandSourceSynchronize,
 		[]*pkgmodel.Target{target},
 		ds,
-		nil, nil,
-	)
+		nil, nil, false)
 	require.NoError(t, err)
 
 	seen := make(map[string]bool, len(updates))

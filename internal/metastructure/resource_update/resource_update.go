@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/patch"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/provenance"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/types"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
@@ -225,12 +226,23 @@ func (ru *ResourceUpdate) regeneratePatchDocument(mode pkgmodel.FormaApplyMode) 
 	// provider-mandated field missing. Only planning (whether to create this
 	// ResourceUpdate at all) may treat a force-resent-only patch as empty; see
 	// resource_update_factory.go.
+	// Provably-stable occurrences stay suppressed through every regeneration:
+	// the classification was decided at planning and persisted immutably on
+	// this row, so recovery reproduces the same suppression without
+	// recomputing anything from inputs that no longer exist.
+	regenProperties := resolver.NewResolvableProperties()
+	for _, rec := range ru.ProvenanceRecords {
+		if rec.Class == OccurrenceStable {
+			regenProperties.SuppressStableAt(rec.DestinationPath)
+		}
+	}
+
 	patchDoc, createOnlyPatch, _, err := patch.GeneratePatch(
 		existingPluginProps,
 		newPluginProps,
 		existingForPatch,
 		desiredForPatch,
-		resolver.NewResolvableProperties(),
+		regenProperties,
 		ru.DesiredState.Schema,
 		mode,
 	)
@@ -484,19 +496,26 @@ func (ru *ResourceUpdate) requiredOperations() []resource.Operation {
 }
 
 func (ru *ResourceUpdate) updateResourceProperties(incomingProperties string, writeOrigin bool) error {
-	return ru.updateProperties(incomingProperties, &ru.DesiredState.Properties, &ru.DesiredState.ReadOnlyProperties, writeOrigin)
+	// Only the write-origin DesiredState merge stamps provenance: the carrier
+	// holds what THIS update resolved and wrote.
+	var digests map[string]string
+	if writeOrigin {
+		digests = ru.ResolvedRootDigests
+	}
+	return ru.updateProperties(incomingProperties, &ru.DesiredState.Properties, &ru.DesiredState.ReadOnlyProperties, writeOrigin, digests)
 }
 
 func (ru *ResourceUpdate) updateExistingResourceProperties(incomingProperties string) error {
 	// Always read-origin: this absorbs the pre-update out-of-band Read into
-	// PriorState, never the echo of formae's own write.
-	return ru.updateProperties(incomingProperties, &ru.PriorState.Properties, &ru.PriorState.ReadOnlyProperties, false)
+	// PriorState, never the echo of formae's own write — and never stamps
+	// provenance.
+	return ru.updateProperties(incomingProperties, &ru.PriorState.Properties, &ru.PriorState.ReadOnlyProperties, false, nil)
 }
 
 // updateProperties splits the properties from the plugin read result into regular and read-only,
 // based on the resource schema fields, and merges $ref structures from the existing target properties.
 // This preserves $ref structures needed for destroy dependency tracking and PKL extraction.
-func (ru *ResourceUpdate) updateProperties(incomingProperties string, targetProperties, targetReadOnlyProperties *json.RawMessage, writeOrigin bool) error {
+func (ru *ResourceUpdate) updateProperties(incomingProperties string, targetProperties, targetReadOnlyProperties *json.RawMessage, writeOrigin bool, provenanceDigests map[string]string) error {
 	if incomingProperties == "" {
 		slog.Debug("No properties to split for resource", "uri", ru.URI())
 		incomingProperties = "{}"
@@ -532,7 +551,7 @@ func (ru *ResourceUpdate) updateProperties(incomingProperties string, targetProp
 	}
 
 	// Merge refs from user-provided properties to preserve $ref structures
-	mergedProps, mergeErr := mergeRefsPreservingUserRefs(*targetProperties, propertiesJson, ru.DesiredState.Schema, writeOrigin)
+	mergedProps, mergeErr := mergeRefsPreservingUserRefs(*targetProperties, propertiesJson, ru.DesiredState.Schema, writeOrigin, provenanceDigests)
 	if mergeErr != nil {
 		slog.Error("Failed to merge refs into properties", "error", mergeErr)
 		return mergeErr
@@ -562,7 +581,7 @@ func (ru *ResourceUpdate) updateProperties(incomingProperties string, targetProp
 // - Default/Set: elements are matched by value (JSON equality after flattening $refs)
 // - Array: elements are matched by index position
 // - EntitySet: elements are matched by a key field (e.g., Tags by "Key")
-func mergeRefsPreservingUserRefs(userProperties, pluginProperties json.RawMessage, schema pkgmodel.Schema, writeOrigin bool) (json.RawMessage, error) {
+func mergeRefsPreservingUserRefs(userProperties, pluginProperties json.RawMessage, schema pkgmodel.Schema, writeOrigin bool, provenanceDigests map[string]string) (json.RawMessage, error) {
 	if userProperties == nil {
 		userProperties = []byte("{}")
 	}
@@ -582,6 +601,7 @@ func mergeRefsPreservingUserRefs(userProperties, pluginProperties json.RawMessag
 		result:      &result,
 		schema:      schema,
 		writeOrigin: writeOrigin,
+		provenance:  provenanceDigests,
 	}
 
 	merger.mergeValue("", userParsed, pluginParsed)
@@ -617,6 +637,10 @@ type propertyMerger struct {
 	// discovery, or the pre-update out-of-band read). It gates whether
 	// $ref/$res envelopes get an $applied provenance baseline stamped.
 	writeOrigin bool
+	// provenance maps a source URI to the canonical root digest this update
+	// resolved from; set only for the write-origin DesiredState merge, which
+	// stamps $resolvedFrom from it.
+	provenance map[string]string
 }
 
 // mergeValue recursively merges a value at the given path
@@ -741,7 +765,64 @@ func (m *propertyMerger) mergeRefObject(path string, userVal, pluginVal gjson.Re
 		}
 	}
 
+	updatedRef = m.applyResolutionProvenance(updatedRef, userVal, userValue, pluginVal)
+
 	*m.result, _ = sjson.SetRaw(*m.result, cleanPath, updatedRef)
+}
+
+// applyResolutionProvenance stamps or invalidates $resolvedFrom on a merged
+// reference envelope. Stamping happens only on the write-origin merge, from
+// the digest the resolution carried (root domain). Invalidation is
+// domain-correct: a non-write merge that ADOPTED a differing plugin value is
+// compared in the WRITTEN domain (digest the adopted unwrapped value against
+// the envelope's stored written digest), so an enriching read of an UNCHANGED
+// secret (plaintext echo vs stored hash) never invalidates, and empty/absent
+// reads adopt nothing and never invalidate.
+func (m *propertyMerger) applyResolutionProvenance(updatedRef string, userVal, userValue, pluginVal gjson.Result) string {
+	if m.writeOrigin {
+		if uri := referenceURIOf(userVal); uri != "" {
+			if digest, ok := m.provenance[uri]; ok && provenance.Valid(digest) {
+				updatedRef, _ = sjson.Set(updatedRef, "$resolvedFrom", digest)
+			}
+		}
+		return updatedRef
+	}
+	if !userVal.Get("$resolvedFrom").Exists() {
+		return updatedRef
+	}
+	if m.keptUserValue(userValue, pluginVal) {
+		return updatedRef // nothing adopted; the witness stands
+	}
+	adopted := provenance.UnwrapEffectiveValue(pluginVal)
+	if !adopted.Exists() || adopted.Type == gjson.Null {
+		return updatedRef
+	}
+	var adoptedDigest string
+	if adopted.Type == gjson.String {
+		adoptedDigest = provenance.DigestOfString(adopted.String())
+	} else {
+		adoptedDigest = provenance.DigestOfJSON(adopted.Raw)
+	}
+	storedWritten := ""
+	if userValue.Exists() {
+		if userVal.Get("$hashed").Bool() {
+			storedWritten = provenance.FromStored(userValue.String())
+		} else if userValue.Type == gjson.String {
+			storedWritten = provenance.DigestOfString(userValue.String())
+		} else {
+			storedWritten = provenance.DigestOfJSON(userValue.Raw)
+		}
+	}
+	if storedWritten == "" || adoptedDigest != storedWritten {
+		updatedRef, _ = sjson.Delete(updatedRef, "$resolvedFrom")
+	}
+	return updatedRef
+}
+
+// referenceURIOf returns the envelope's source URI in the carrier's key form
+// (the $ref string), or "" for a shape without one.
+func referenceURIOf(envelope gjson.Result) string {
+	return envelope.Get("$ref").String()
 }
 
 // mergeResObject handles merging of $res objects (structured resolvable references
@@ -807,6 +888,8 @@ func (m *propertyMerger) mergeResObject(path string, userVal, pluginVal gjson.Re
 			updatedRes, _ = sjson.Delete(updatedRes, "$applied")
 		}
 	}
+
+	updatedRes = m.applyResolutionProvenance(updatedRes, userVal, userValue, effectivePluginVal)
 
 	*m.result, _ = sjson.SetRaw(*m.result, cleanPath, updatedRes)
 }

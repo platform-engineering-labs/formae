@@ -33,6 +33,7 @@ func GenerateResourceUpdates(
 	ds ResourceDataLookup,
 	replacedTargets map[string]bool,
 	deletedTargets map[string]bool,
+	force bool,
 ) ([]ResourceUpdate, error) {
 
 	var referenceLabels map[string]string
@@ -118,7 +119,7 @@ func GenerateResourceUpdates(
 	case pkgmodel.CommandDestroy:
 		resourceUpdates, err = generateResourceUpdatesForDestroy(forma, source, existingTargetMap, ds, deletedTargets)
 	case pkgmodel.CommandApply:
-		resourceUpdates, err = generateResourceUpdatesForApply(forma, mode, source, existingTargetMap, desiredTargetMap, ds, replacedTargets)
+		resourceUpdates, err = generateResourceUpdatesForApply(forma, mode, source, existingTargetMap, desiredTargetMap, ds, replacedTargets, force)
 	case pkgmodel.CommandSync:
 		resourceUpdates, err = generateResourceUpdatesForSync(forma, source, existingTargetMap, ds)
 	default:
@@ -571,6 +572,7 @@ func generateResourceUpdatesForApply(
 	desiredTargetMap map[string]*pkgmodel.Target,
 	ds ResourceDataLookup,
 	replacedTargets map[string]bool,
+	force bool,
 ) ([]ResourceUpdate, error) {
 
 	for _, target := range forma.Targets {
@@ -620,9 +622,9 @@ func generateResourceUpdatesForApply(
 
 	switch mode {
 	case pkgmodel.FormaApplyModeReconcile:
-		return generateResourceUpdatesForReconcile(forma, mode, source, existingTargetMap, desiredTargetMap, ds, replacedTargets)
+		return generateResourceUpdatesForReconcile(forma, mode, source, existingTargetMap, desiredTargetMap, ds, replacedTargets, force)
 	case pkgmodel.FormaApplyModePatch:
-		return generateResourceUpdatesForPatch(forma, mode, source, existingTargetMap, desiredTargetMap, ds, replacedTargets)
+		return generateResourceUpdatesForPatch(forma, mode, source, existingTargetMap, desiredTargetMap, ds, replacedTargets, force)
 	default:
 		return nil, fmt.Errorf("forma apply mode %s not supported", mode)
 	}
@@ -746,6 +748,7 @@ func generateResourceUpdatesForReconcile(
 	desiredTargetMap map[string]*pkgmodel.Target,
 	ds ResourceDataLookup,
 	replacedTargets map[string]bool,
+	force bool,
 ) ([]ResourceUpdate, error) {
 
 	var resourceCreates []ResourceUpdate
@@ -838,6 +841,7 @@ func generateResourceUpdatesForReconcile(
 						*desiredTargetMap[newResource.Target],
 						mode,
 						source,
+						force,
 					)
 					if err != nil {
 						return nil, fmt.Errorf("failed to generate resource update for existing unmanaged resource: %w", err)
@@ -892,6 +896,7 @@ func generateResourceUpdatesForReconcile(
 						*desiredTargetMap[newResource.Target],
 						mode,
 						source,
+						force,
 					)
 
 					if err != nil {
@@ -971,6 +976,7 @@ func generateResourceUpdatesForReconcile(
 						*desiredTargetMap[newResource.Target],
 						mode,
 						source,
+						force,
 					)
 					if err != nil {
 						return nil, fmt.Errorf("failed to generate resource update for unmanaged resource: %w", err)
@@ -1234,6 +1240,7 @@ func generateResourceUpdatesForPatch(
 	desiredTargetMap map[string]*pkgmodel.Target,
 	ds ResourceDataLookup,
 	replacedTargets map[string]bool,
+	force bool,
 ) ([]ResourceUpdate, error) {
 
 	var resourceCreates []ResourceUpdate
@@ -1332,6 +1339,7 @@ func generateResourceUpdatesForPatch(
 					*desiredTargetMap[newResource.Target],
 					mode,
 					source,
+					force,
 				)
 
 				if err != nil {
