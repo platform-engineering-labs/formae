@@ -20,9 +20,12 @@ import (
 // A requiredOnUpdate field is force-resent by stripping it from the document
 // side before the diff, so its own value always reappears as an "add" op. When
 // the document and the desired state agree on every field, that reappearance
-// is the only op the diff would otherwise produce — and it must not itself
-// decide that an update is sent.
-func TestGeneratePatch_UnchangedRequiredOnUpdateField_ProducesNilPatch(t *testing.T) {
+// is the only op the diff would otherwise produce. generatePatch reports this
+// via onlyForceResent rather than nilling patchDoc out: the decision of
+// whether to plan an update at all belongs to the caller (planning drops it;
+// execution-time regeneration must not), so the op itself is never stripped
+// from what this function returns.
+func TestGeneratePatch_UnchangedRequiredOnUpdateField_ReportsOnlyForceResent(t *testing.T) {
 	schema := pkgmodel.Schema{
 		Fields: []string{"Name", "Token"},
 		Hints: map[string]pkgmodel.FieldHint{
@@ -33,12 +36,19 @@ func TestGeneratePatch_UnchangedRequiredOnUpdateField_ProducesNilPatch(t *testin
 	document := []byte(`{"Name": "n1", "Token": "t1"}`)
 	desired := []byte(`{"Name": "n1", "Token": "t1"}`)
 
-	patchDoc, createOnlyPatch, err := generatePatch(document, desired, nil, nil,
+	patchDoc, createOnlyPatch, onlyForceResent, err := generatePatch(document, desired, nil, nil,
 		resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModePatch)
 	require.NoError(t, err)
 
 	assert.Empty(t, createOnlyPatch)
-	assert.Empty(t, patchDoc, "a requiredOnUpdate field's own force-resent add must not conjure a patch when nothing changed")
+	assert.True(t, onlyForceResent, "nothing real changed, so the decision must report force-resent-only")
+
+	var ops []jsonpatch.JsonPatchOperation
+	require.NoError(t, json.Unmarshal(patchDoc, &ops))
+	require.Len(t, ops, 1, "the force-resent Token op is still content this function returns")
+	assert.Equal(t, "/Token", ops[0].Path)
+	assert.Equal(t, "add", ops[0].Operation)
+	assert.Equal(t, "t1", ops[0].Value)
 }
 
 // When a real change is present elsewhere in the same resource, the
@@ -55,10 +65,11 @@ func TestGeneratePatch_ChangedFieldAlongsideRequiredOnUpdateField_KeepsForceRese
 	document := []byte(`{"Name": "n1", "Token": "t1"}`)
 	desired := []byte(`{"Name": "n2", "Token": "t1"}`)
 
-	patchDoc, createOnlyPatch, err := generatePatch(document, desired, nil, nil,
+	patchDoc, createOnlyPatch, onlyForceResent, err := generatePatch(document, desired, nil, nil,
 		resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModePatch)
 	require.NoError(t, err)
 	assert.Empty(t, createOnlyPatch)
+	assert.False(t, onlyForceResent, "a real change is present, so the decision must not report force-resent-only")
 
 	var ops []jsonpatch.JsonPatchOperation
 	require.NoError(t, json.Unmarshal(patchDoc, &ops))
@@ -95,10 +106,11 @@ func TestGeneratePatch_ChangedRequiredOnUpdateFieldItself_PlansUpdate(t *testing
 	document := []byte(`{"Name": "n1", "Token": "t1"}`)
 	desired := []byte(`{"Name": "n1", "Token": "t2"}`)
 
-	patchDoc, createOnlyPatch, err := generatePatch(document, desired, nil, nil,
+	patchDoc, createOnlyPatch, onlyForceResent, err := generatePatch(document, desired, nil, nil,
 		resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModePatch)
 	require.NoError(t, err)
 	assert.Empty(t, createOnlyPatch)
+	assert.False(t, onlyForceResent, "the Token change itself is real, so the decision must not report force-resent-only")
 
 	var ops []jsonpatch.JsonPatchOperation
 	require.NoError(t, json.Unmarshal(patchDoc, &ops))
@@ -108,4 +120,64 @@ func TestGeneratePatch_ChangedRequiredOnUpdateFieldItself_PlansUpdate(t *testing
 	assert.Equal(t, "/Token", tokenOp.Path)
 	assert.Equal(t, "add", tokenOp.Operation, "requiredOnUpdate fields are force-resent as an add")
 	assert.Equal(t, "t2", tokenOp.Value, "the op must carry the new value, not the stored one")
+}
+
+// A requiredOnUpdate hint on a field nested inside an array ("Items.Token")
+// is force-resent the same way a top-level field is: stripping happens inside
+// every array element, so the resulting "add" op lands at an array-indexed
+// path ("/Items/0/Token"). That path must still be recognized as force-resent
+// when nothing about it actually changed.
+func TestGeneratePatch_UnchangedArrayNestedRequiredOnUpdateField_ReportsOnlyForceResent(t *testing.T) {
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Items"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"Items":       {UpdateMethod: pkgmodel.FieldUpdateMethodArray},
+			"Items.Token": {RequiredOnUpdate: true},
+		},
+	}
+
+	document := []byte(`{"Name": "n1", "Items": [{"Token": "same"}]}`)
+	desired := []byte(`{"Name": "n1", "Items": [{"Token": "same"}]}`)
+
+	patchDoc, createOnlyPatch, onlyForceResent, err := generatePatch(document, desired, nil, nil,
+		resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModePatch)
+	require.NoError(t, err)
+
+	assert.Empty(t, createOnlyPatch)
+	assert.True(t, onlyForceResent, "the array-nested Token op is unchanged, so the decision must report force-resent-only")
+
+	var ops []jsonpatch.JsonPatchOperation
+	require.NoError(t, json.Unmarshal(patchDoc, &ops))
+	require.Len(t, ops, 1, "the force-resent Items.0.Token op is still content this function returns")
+	assert.Equal(t, "/Items/0/Token", ops[0].Path)
+	assert.Equal(t, "add", ops[0].Operation)
+	assert.Equal(t, "same", ops[0].Value)
+}
+
+// The changed direction for an array-nested requiredOnUpdate field: a genuine
+// change still plans an update like any other change.
+func TestGeneratePatch_ChangedArrayNestedRequiredOnUpdateField_PlansUpdate(t *testing.T) {
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Items"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"Items":       {UpdateMethod: pkgmodel.FieldUpdateMethodArray},
+			"Items.Token": {RequiredOnUpdate: true},
+		},
+	}
+
+	document := []byte(`{"Name": "n1", "Items": [{"Token": "old"}]}`)
+	desired := []byte(`{"Name": "n1", "Items": [{"Token": "new"}]}`)
+
+	patchDoc, createOnlyPatch, onlyForceResent, err := generatePatch(document, desired, nil, nil,
+		resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModePatch)
+	require.NoError(t, err)
+
+	assert.Empty(t, createOnlyPatch)
+	assert.False(t, onlyForceResent, "the Items.0.Token change itself is real, so the decision must not report force-resent-only")
+
+	var ops []jsonpatch.JsonPatchOperation
+	require.NoError(t, json.Unmarshal(patchDoc, &ops))
+	require.Len(t, ops, 1, "expected exactly one op for the genuine array-nested Token change")
+	assert.Equal(t, "/Items/0/Token", ops[0].Path)
+	assert.Equal(t, "new", ops[0].Value)
 }
