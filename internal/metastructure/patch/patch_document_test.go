@@ -3912,3 +3912,43 @@ func TestGeneratePatch_AtomicObjectWithNumericRef_EmitsNumber(t *testing.T) {
 	assert.Contains(t, string(patchDoc), "443")
 	assert.NotContains(t, string(patchDoc), `"443"`, "a numeric reference must not be written back as text")
 }
+
+func TestHasStoredBaseline_ProjectsThroughArrays(t *testing.T) {
+	doc := []byte(`{"Name":"x","Entries":[{"Token":"old"},{"Other":1}],"Nested":{"Deep":[{"Key":"v"}]}}`)
+	assert.True(t, hasStoredBaseline(doc, "Entries.Token"))
+	assert.True(t, hasStoredBaseline(doc, "Nested.Deep.Key"))
+	assert.True(t, hasStoredBaseline(doc, "Name"))
+	assert.False(t, hasStoredBaseline(doc, "Entries.Missing"))
+	assert.False(t, hasStoredBaseline(doc, "Absent"))
+	assert.False(t, hasStoredBaseline(doc, "Absent.Token"))
+}
+
+func TestGeneratePatch_ArrayNestedWriteOnlyCreateOnly_ChangeSurvivesTheStrip(t *testing.T) {
+	document := []byte(`{"Name": "x", "Entries": [{"Token": "old"}]}`)
+	desired := []byte(`{"Name": "x", "Entries": [{"Token": "new"}]}`)
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Entries"},
+		Hints:  map[string]pkgmodel.FieldHint{"Entries.Token": {WriteOnly: true, CreateOnly: true}},
+	}
+	props := resolver.NewResolvableProperties()
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, desired, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	combined := string(patchDoc) + string(createOnlyPatch)
+	assert.Contains(t, combined, "new",
+		"a genuine change to an array-nested writeOnly+createOnly field with a stored baseline must survive into the diff, not be silently stripped")
+}
+
+func TestGeneratePatch_ArrayNestedWriteOnlyCreateOnly_NoBaselineStillStripped(t *testing.T) {
+	// Import-shaped: the stored document has no Token anywhere; the declared
+	// value must be stripped so an add op cannot trigger a false replacement.
+	document := []byte(`{"Name": "x", "Entries": [{"Weight": 1}]}`)
+	desired := []byte(`{"Name": "x", "Entries": [{"Weight": 1, "Token": "t"}]}`)
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Entries"},
+		Hints:  map[string]pkgmodel.FieldHint{"Entries.Token": {WriteOnly: true, CreateOnly: true}},
+	}
+	props := resolver.NewResolvableProperties()
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, desired, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.NotContains(t, string(patchDoc)+string(createOnlyPatch), "Token")
+}
