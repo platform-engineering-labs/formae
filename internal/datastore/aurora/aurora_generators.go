@@ -109,8 +109,16 @@ func (d *DatastoreAuroraDataAPI) UpdateGenerator(gen pkgmodel.Generator, command
 }
 
 // findGeneratorForUpdate returns the id and current generation fields of the
-// latest generator row matching label and stackID. Shared by UpdateGenerator's
+// live generator row matching label and stackID. Shared by UpdateGenerator's
 // current-label lookup and its alias fallback.
+//
+// Windows to the latest version *per id* first, filters out tombstones, and
+// only then matches label — the same ordering GetGenerator and
+// DeleteGenerator use, for the same reason: a label can be shared across a
+// dead row (superseded by a rename) and a live one (a rename-back, or a
+// fresh generator created under a freed label), and matching label before
+// windowing can resolve the wrong id entirely, or a live id's stale,
+// pre-rename generation.
 //
 // The generation fields are read here so UpdateGenerator can copy them
 // forward onto the new version row it writes: a spec edit or an alias rename
@@ -119,14 +127,19 @@ func (d *DatastoreAuroraDataAPI) UpdateGenerator(gen pkgmodel.Generator, command
 // rotating a live credential.
 func (d *DatastoreAuroraDataAPI) findGeneratorForUpdate(ctx context.Context, label, stackID string) (id, generationID, generationSpec string, err error) {
 	selectQuery := `
-		SELECT id, generation_id, generation_spec FROM generators
-		WHERE label = :label AND stack_id = :stack_id
-		ORDER BY version COLLATE "C" DESC
-		LIMIT 1
+		WITH latest_generators AS (
+			SELECT id, label, generation_id, generation_spec, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			FROM generators
+			WHERE stack_id = :stack_id
+		)
+		SELECT id, generation_id, generation_spec
+		FROM latest_generators
+		WHERE rn = 1 AND operation != 'delete' AND label = :label
 	`
 	selectParams := []types.SqlParameter{
-		{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: label}},
 		{Name: aws.String("stack_id"), Value: &types.FieldMemberStringValue{Value: stackID}},
+		{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: label}},
 	}
 
 	result, err := d.executeStatement(ctx, selectQuery, selectParams)
@@ -454,7 +467,8 @@ func (d *DatastoreAuroraDataAPI) GetGeneratorIdentityByID(generatorID string) (d
 // AdvanceGeneration records that a new generation was drawn for this
 // generator, under this spec. Writes a new version row that carries forward
 // the existing label/type/stack/generator_data unchanged — only the
-// generation columns change.
+// generation columns change. Errors if drawnUnder is empty, or if the
+// generator's latest row is a tombstone: a deleted id is not resurrected.
 //
 // No production caller in this slice: the executable generator node that
 // draws generations arrives in a later slice. It ships here because the
@@ -463,7 +477,11 @@ func (d *DatastoreAuroraDataAPI) GetGeneratorIdentityByID(generatorID string) (d
 func (d *DatastoreAuroraDataAPI) AdvanceGeneration(generatorID, generationID string, drawnUnder json.RawMessage) error {
 	ctx := context.Background()
 
-	selectQuery := `SELECT label, generator_type, stack_id, generator_data FROM generators WHERE id = :id ORDER BY version COLLATE "C" DESC LIMIT 1`
+	if len(drawnUnder) == 0 {
+		return fmt.Errorf("advance generation: drawnUnder spec must not be empty")
+	}
+
+	selectQuery := `SELECT label, generator_type, stack_id, generator_data, operation FROM generators WHERE id = :id ORDER BY version COLLATE "C" DESC LIMIT 1`
 	selectParams := []types.SqlParameter{
 		{Name: aws.String("id"), Value: &types.FieldMemberStringValue{Value: generatorID}},
 	}
@@ -490,6 +508,13 @@ func (d *DatastoreAuroraDataAPI) AdvanceGeneration(generatorID, generationID str
 	generatorData, err := getStringField(result.Records[0][3])
 	if err != nil {
 		return fmt.Errorf("failed to get generator data: %w", err)
+	}
+	operation, err := getStringField(result.Records[0][4])
+	if err != nil {
+		return fmt.Errorf("failed to get operation: %w", err)
+	}
+	if operation == "delete" {
+		return fmt.Errorf("generator %q not found", generatorID)
 	}
 
 	version := mksuid.New().String()

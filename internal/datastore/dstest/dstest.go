@@ -254,6 +254,11 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunGenerationSurvivesARename(t, newDS)
 	RunGetGeneratorIdentityByIDFindsTheLiveRow(t, newDS)
 	RunGetGeneratorIdentityAbsentReturnsZeroValue(t, newDS)
+	RunGeneratorIdentityOldLabelIsGoneAfterRename(t, newDS)
+	RunGeneratorIdentityGoneAfterDelete(t, newDS)
+	RunGenerationSurvivesRenameBackToOriginalLabel(t, newDS)
+	RunAdvanceGenerationTwiceSecondWins(t, newDS)
+	RunAdvanceGenerationDoesNotAffectOtherGenerator(t, newDS)
 
 	RunFindResourcesDependingOn(t, newDS)
 	RunFindResourcesDependingOnMultipleRefs(t, newDS)

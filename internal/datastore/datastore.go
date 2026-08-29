@@ -232,6 +232,11 @@ type ResourceSnapshot struct {
 // GeneratorIdentity is controller state for one generator: its stable KSUID
 // and the generation it currently holds. Deliberately kept off
 // pkgmodel.Generator so it can never participate in desired-config equality.
+//
+// GenerationSpec's bytes are NOT canonical: Postgres and Aurora store it as
+// JSONB, which normalizes key order and whitespace on write, so what comes
+// back can differ byte-for-byte from what AdvanceGeneration was given.
+// Parse it; never byte-compare or hash it against the spec that was drawn.
 type GeneratorIdentity struct {
 	ID             string          // the generator's stable KSUID
 	GenerationID   string          // "" until a generation has been drawn
@@ -527,7 +532,9 @@ type Datastore interface {
 	GetGeneratorIdentityByID(generatorID string) (GeneratorIdentity, error)
 	// AdvanceGeneration records that a new generation was drawn for this
 	// generator, under this spec. Writes a new version row, preserving the
-	// KSUID.
+	// KSUID. Errors if drawnUnder is empty (a generation always has a spec
+	// it was drawn under) or if the generator has been deleted — a
+	// tombstoned id is not resurrected.
 	//
 	// No production caller in this slice: the executable generator node that
 	// draws generations arrives in a later slice. It ships here because the
