@@ -240,3 +240,42 @@ func RunGeneratorKSUIDStableAcrossRename(t *testing.T, newDS func(t *testing.T) 
 		require.NotNil(t, current)
 	})
 }
+
+// RunDeleteGeneratorAfterRenameDeletesOnlyTheCurrentRow verifies
+// DeleteGenerator's windowing: after label A is renamed to B (same row, same
+// id) and a fresh generator is created under the now-free label A, deleting
+// A must remove only the fresh row. Filtering by label before windowing to
+// the latest version per id would instead find the renamed row's own stale
+// A-labelled version — still the only row under that label in a
+// label-first filter — and soft-delete the live, renamed generator B.
+func RunDeleteGeneratorAfterRenameDeletesOnlyTheCurrentRow(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("DeleteGenerator_AfterRenameDeletesOnlyTheCurrentRow", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		stack := createGeneratorStack(t, ds, "generator-delete-after-rename")
+
+		_, err := ds.CreateGenerator(testPasswordGenerator("A", stack, 16), "cmd-create-a")
+		require.NoError(t, err)
+
+		renamed := testPasswordGenerator("B", stack, 16)
+		renamed.Alias = "A"
+		_, err = ds.UpdateGenerator(renamed, "cmd-rename")
+		require.NoError(t, err)
+
+		_, err = ds.CreateGenerator(testPasswordGenerator("A", stack, 20), "cmd-create-a-again")
+		require.NoError(t, err)
+
+		_, err = ds.DeleteGenerator("A", stack.Label)
+		require.NoError(t, err)
+
+		stillB, err := ds.GetGenerator("B", stack.Label)
+		require.NoError(t, err)
+		assert.NotNil(t, stillB, "the renamed generator must survive deleting the label it no longer has")
+
+		goneA, err := ds.GetGenerator("A", stack.Label)
+		require.NoError(t, err)
+		assert.Nil(t, goneA, "the fresh generator created under the reused label must be deleted")
+	})
+}
