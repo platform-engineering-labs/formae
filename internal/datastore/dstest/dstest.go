@@ -246,6 +246,8 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunDeleteGeneratorThenGetReturnsNil(t, newDS)
 	RunLoadGeneratorsByStackReturnsOnlyThatStacksGenerators(t, newDS)
 	RunGeneratorKSUIDStableAcrossUpdate(t, newDS)
+	RunGeneratorKSUIDStableAcrossRename(t, newDS)
+	RunDeleteGeneratorAfterRenameDeletesOnlyTheCurrentRow(t, newDS)
 
 	RunFindResourcesDependingOn(t, newDS)
 	RunFindResourcesDependingOnMultipleRefs(t, newDS)

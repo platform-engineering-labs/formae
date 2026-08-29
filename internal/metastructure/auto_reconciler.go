@@ -369,6 +369,7 @@ func prepareReconcile(ds datastore.Datastore, stackLabel string, clientID string
 		nil, // No target updates
 		nil, // No stack updates
 		nil, // No policy updates
+		nil, // No generator updates
 		clientID,
 		subject,
 		subjectName,

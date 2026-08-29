@@ -49,16 +49,20 @@ func (d *DatastoreMSSQL) CreateGenerator(gen pkgmodel.Generator, commandID strin
 // existing row is found by label and stack ID — a generator has no
 // standalone form, so unlike UpdatePolicy there is no NULL-stack branch —
 // and the new version row carries forward the same id.
+//
+// A miss on the current label falls back to a lookup by gen.GetAlias(), the
+// generator's previous label: this is the rename path. Without it, a renamed
+// generator would find no row to update, and the caller would have to fall
+// back to Create, minting a fresh id and losing the identity a later
+// rotation schedule keys off.
 func (d *DatastoreMSSQL) UpdateGenerator(gen pkgmodel.Generator, commandID string) (string, error) {
 	ctx, span := mssqlTracer.Start(context.Background(), "UpdateGenerator")
 	defer span.End()
 
-	query := `
-		SELECT TOP (1) id FROM generators
-		WHERE label = @p1 AND stack_id = @p2
-		ORDER BY version COLLATE Latin1_General_BIN2 DESC`
-	var id string
-	err := d.conn.QueryRowContext(ctx, query, gen.GetLabel(), gen.GetStackID()).Scan(&id)
+	id, err := d.findGeneratorID(ctx, gen.GetLabel(), gen.GetStackID())
+	if err != nil && gen.GetAlias() != "" {
+		id, err = d.findGeneratorID(ctx, gen.GetAlias(), gen.GetStackID())
+	}
 	if err != nil {
 		return "", fmt.Errorf("failed to find existing generator: %w", err)
 	}
@@ -81,11 +85,31 @@ func (d *DatastoreMSSQL) UpdateGenerator(gen pkgmodel.Generator, commandID strin
 	return version, nil
 }
 
+// findGeneratorID returns the id of the latest generator row matching label
+// and stackID. Shared by UpdateGenerator's current-label lookup and its
+// alias fallback.
+func (d *DatastoreMSSQL) findGeneratorID(ctx context.Context, label, stackID string) (string, error) {
+	query := `
+		SELECT TOP (1) id FROM generators
+		WHERE label = @p1 AND stack_id = @p2
+		ORDER BY version COLLATE Latin1_General_BIN2 DESC`
+	var id string
+	err := d.conn.QueryRowContext(ctx, query, label, stackID).Scan(&id)
+	return id, err
+}
+
 // DeleteGenerator soft-deletes the generator with the given label on the
 // given stack. The stack is resolved from its label the same way
 // GetGenerator does; a stack that doesn't exist has nothing to delete. A
 // label with no live match is a no-op success that returns an empty version,
 // mirroring DeletePolicy.
+//
+// The candidate row is the latest version *per id* across the whole stack,
+// filtered by label only after that windowing — not the latest version
+// among rows already filtered to this label. A rename (UpdateGenerator's
+// alias fallback) leaves the old label's row in place with an older version
+// number; filtering by label first would still find and re-delete that
+// stale row instead of correctly reporting no live match.
 func (d *DatastoreMSSQL) DeleteGenerator(label, stackLabel string) (string, error) {
 	ctx, span := mssqlTracer.Start(context.Background(), "DeleteGenerator")
 	defer span.End()
@@ -100,14 +124,14 @@ func (d *DatastoreMSSQL) DeleteGenerator(label, stackLabel string) (string, erro
 
 	query := `
 		WITH latest_generators AS (
-			SELECT id, generator_type, operation,
+			SELECT id, label, generator_type, operation,
 			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE Latin1_General_BIN2 DESC) as rn
 			FROM generators
-			WHERE stack_id = @p1 AND label = @p2
+			WHERE stack_id = @p1
 		)
 		SELECT id, generator_type
 		FROM latest_generators
-		WHERE rn = 1 AND operation != 'delete'`
+		WHERE rn = 1 AND operation != 'delete' AND label = @p2`
 	var id, generatorType string
 	err = d.conn.QueryRowContext(ctx, query, stack.ID, label).Scan(&id, &generatorType)
 	if err != nil {
@@ -135,6 +159,11 @@ func (d *DatastoreMSSQL) DeleteGenerator(label, stackLabel string) (string, erro
 // current KSUID first, since generators.stack_id stores the stack's id, not
 // its label — mirroring how a policy's inline lookups are scoped by stack
 // ID. Returns nil, nil if no live stack or no live generator matches.
+//
+// As with DeleteGenerator, the label filter is applied after windowing to
+// the latest version per id, not before: a renamed generator's previous
+// label must not resolve just because its now-superseded row is still the
+// newest one under that label.
 func (d *DatastoreMSSQL) GetGenerator(label, stackLabel string) (pkgmodel.Generator, error) {
 	ctx, span := mssqlTracer.Start(context.Background(), "GetGenerator")
 	defer span.End()
@@ -149,14 +178,14 @@ func (d *DatastoreMSSQL) GetGenerator(label, stackLabel string) (pkgmodel.Genera
 
 	query := `
 		WITH latest_generators AS (
-			SELECT generator_data, operation,
+			SELECT label, generator_data, operation,
 			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE Latin1_General_BIN2 DESC) as rn
 			FROM generators
-			WHERE stack_id = @p1 AND label = @p2
+			WHERE stack_id = @p1
 		)
 		SELECT generator_data
 		FROM latest_generators
-		WHERE rn = 1 AND operation != 'delete'`
+		WHERE rn = 1 AND operation != 'delete' AND label = @p2`
 	var dataStr string
 	err = d.conn.QueryRowContext(ctx, query, stack.ID, label).Scan(&dataStr)
 	if err != nil {

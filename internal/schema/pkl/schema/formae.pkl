@@ -172,6 +172,12 @@ open class AutoReconcilePolicy extends Policy {
 abstract class Generator {
     label: String
     stack: StackResolvable
+    /// Previous label of this generator. Identity is the datastore row's
+    /// KSUID, not the label, so an apply that does not find a live generator
+    /// at the current label falls back to looking up this previous label
+    /// (same stack) and renames the matched row in place. Mirrors
+    /// Resource.alias.
+    alias: String?
 
     local self = this
 
@@ -237,6 +243,7 @@ open class PasswordGenerator extends Generator {
         Type = "password"
         Label = self.label
         Stack = self.stack
+        Alias = self.alias
         Length = length
         Uppercase = uppercase
         Lowercase = lowercase

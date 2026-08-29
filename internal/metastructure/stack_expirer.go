@@ -261,6 +261,7 @@ func prepareDestroyExpiredStack(ds datastore.Datastore, stackInfo datastore.Expi
 		nil,                          // No target updates on destroy
 		[]stack_update.StackUpdate{}, // No stack updates on destroy
 		nil,                          // No policy updates on destroy
+		nil,                          // No generator updates on destroy
 		clientID,
 		"",
 		"",

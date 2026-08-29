@@ -31,6 +31,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/discovery"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_persister"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/generator_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/patch"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/policy_update"
@@ -608,6 +609,81 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 			slog.Error("Failed to update forma command with policy states", "error", err)
 			return nil, fmt.Errorf("failed to update forma command with policy states: %w", err)
 		}
+	}
+
+	if len(fa.GeneratorUpdates) > 0 {
+		// A generator has no standalone form, so every update is stack-scoped —
+		// unlike the policy StackIDMap above there is no "empty = standalone"
+		// case to skip. Build it the same way: prefer a stack this same command
+		// just created or updated, else resolve the label from the datastore.
+		stackIDMap := make(map[string]string)
+		for _, su := range fa.StackUpdates {
+			if su.Stack.ID != "" {
+				stackIDMap[su.Stack.Label] = su.Stack.ID
+			}
+		}
+
+		for _, gu := range fa.GeneratorUpdates {
+			if _, ok := stackIDMap[gu.StackLabel]; ok {
+				continue
+			}
+			stack, err := m.Datastore.GetStackByLabel(gu.StackLabel)
+			if err != nil {
+				return nil, fmt.Errorf("failed to look up stack %q for generator update: %w", gu.StackLabel, err)
+			}
+			if stack != nil {
+				stackIDMap[gu.StackLabel] = stack.ID
+				continue
+			}
+			// STOPGAP: the stack was deleted by a concurrent command between
+			// conflict check and generator persist. See the identical race
+			// noted on the policy StackIDMap above.
+			slog.Warn("Stack deleted during apply setup, failing stored command",
+				"commandID", fa.ID, "stackLabel", gu.StackLabel)
+			refs := make([]forma_persister.ResourceUpdateRef, len(fa.ResourceUpdates))
+			for i, ru := range fa.ResourceUpdates {
+				refs[i] = forma_persister.ResourceUpdateRef{
+					URI:       ru.DesiredState.URI(),
+					Operation: ru.Operation,
+				}
+			}
+			_, markErr := m.callActor(
+				gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
+				forma_persister.MarkResourcesAsFailed{
+					CommandID:          fa.ID,
+					Resources:          refs,
+					ResourceModifiedTs: time.Now(),
+				},
+			)
+			if markErr != nil {
+				slog.Error("Failed to mark resources as failed after stack deletion",
+					"commandID", fa.ID, "stackLabel", gu.StackLabel, "error", markErr)
+			}
+			return nil, apimodel.StackDeletedDuringApplyError{StackLabel: gu.StackLabel}
+		}
+
+		_, err = m.callActor(
+			gen.ProcessID{Name: actornames.ResourcePersister, Node: m.Node.Name()},
+			generator_update.PersistGeneratorUpdates{
+				GeneratorUpdates: fa.GeneratorUpdates,
+				CommandID:        fa.ID,
+				StackIDMap:       stackIDMap,
+			},
+		)
+		if err != nil {
+			slog.Error("Failed to persist generator updates", "error", err)
+			return nil, fmt.Errorf("failed to persist generator updates: %w", err)
+		}
+		m.Node.Log().Debug("Successfully persisted generator updates count=%d", len(fa.GeneratorUpdates))
+
+		// Unlike PolicyUpdates and StackUpdates, GeneratorUpdates is not
+		// round-tripped through the forma_commands table: that table's
+		// resource/target/stack/policy update snapshots live in dedicated
+		// columns (see StoreFormaCommand), and adding a generator_updates
+		// column is command-status observability, not part of connecting
+		// Forma.Generators to the datastore. The generator writes themselves
+		// (CreateGenerator/UpdateGenerator/DeleteGenerator, just above) are
+		// fully durable regardless.
 	}
 
 	if len(fa.ResourceUpdates) > 0 || len(fa.TargetUpdates) > 0 {
@@ -1976,14 +2052,20 @@ func (m *Metastructure) checkIfPatchCanBeApplied(command *forma_command.FormaCom
 	return nil
 }
 
-// checkForEmptyStackCreation validates that no new stacks are being created without resources.
-// Empty stacks are automatically cleaned up when the last resource is removed, so creating
-// them manually is not allowed.
+// checkForEmptyStackCreation validates that no new stacks are being created without resources
+// or generators. Empty stacks are automatically cleaned up when the last resource is removed,
+// so creating them manually is not allowed — but a generator is content too: a stack whose
+// only declared member is a generator is exactly the case the generator lifecycle is meant to
+// support (see the GeneratorOnlyStackKeepsExistingResources regression test), so it must not
+// be rejected as empty.
 func checkForEmptyStackCreation(command *forma_command.FormaCommand) error {
-	// Build a set of stacks that have resources in this command
+	// Build a set of stacks that have resources or generators in this command
 	stacksWithResources := make(map[string]bool)
 	for _, ru := range command.ResourceUpdates {
 		stacksWithResources[ru.StackLabel] = true
+	}
+	for _, gu := range command.GeneratorUpdates {
+		stacksWithResources[gu.StackLabel] = true
 	}
 
 	// Check if any stack update is creating a new stack without resources
@@ -2163,6 +2245,11 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 		return nil, err
 	}
 
+	generatorUpdates, err := generator_update.NewGeneratorUpdateGenerator(ds).GenerateGeneratorUpdates(forma, command, formaCommandConfig.Mode)
+	if err != nil {
+		return nil, err
+	}
+
 	return forma_command.NewFormaCommand(
 		forma,
 		formaCommandConfig,
@@ -2171,6 +2258,7 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 		targetUpdates,
 		stackUpdates,
 		policyUpdates,
+		generatorUpdates,
 		clientID,
 		subject,
 		subjectName,

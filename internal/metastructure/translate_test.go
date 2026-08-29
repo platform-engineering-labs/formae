@@ -32,7 +32,7 @@ func TestTranslateToAPICommand_IncludesMode(t *testing.T) {
 func TestTranslateToAPICommand_Source(t *testing.T) {
 	fa := forma_command.NewFormaCommand(
 		&pkgmodel.Forma{}, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModePatch},
-		pkgmodel.CommandSync, nil, nil, nil, nil, "", "", "",
+		pkgmodel.CommandSync, nil, nil, nil, nil, nil, "", "", "",
 		forma_command.SourceSynchronizer,
 	)
 	api := translateToAPICommand(fa)
@@ -44,7 +44,7 @@ func TestTranslateToAPICommand_Source(t *testing.T) {
 func TestTranslateToAPICommand_Subject(t *testing.T) {
 	fa := forma_command.NewFormaCommand(
 		&pkgmodel.Forma{}, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModePatch},
-		pkgmodel.CommandApply, nil, nil, nil, nil, "client-abc",
+		pkgmodel.CommandApply, nil, nil, nil, nil, nil, "client-abc",
 		"11111111-1111-4111-8111-111111111111", "dpanders",
 		forma_command.SourceUser,
 	)
