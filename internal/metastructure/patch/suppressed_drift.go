@@ -47,9 +47,11 @@ type SuppressedFieldDiff struct {
 // Comparison is schema-aware so representation churn is not movement:
 // EntitySet content compares keyed by IndexField, collections without an
 // index compare as unordered multisets, Array-hinted fields compare ordered,
-// and array-nested dotted leaves (the ContainerDefinitions.Cpu shape, which
-// the strip removes from both sides unconditionally) compare as a multiset
-// of leaf values.
+// and dotted leaves compare as a multiset of leaf values collected with the
+// strip's own regime rules: a leaf reached through an array is suppressed
+// unconditionally (the ContainerDefinitions.Cpu shape, stripped from both
+// sides regardless of declaration), while a pure-object leaf is suppressed
+// only when desired omits it.
 func SuppressedFieldDiffs(oldProps, newProps, desired json.RawMessage, schema pkgmodel.Schema) ([]SuppressedFieldDiff, error) {
 	oldMap, err := unmarshalPropsObject(oldProps)
 	if err != nil {
@@ -74,14 +76,18 @@ func SuppressedFieldDiffs(oldProps, newProps, desired json.RawMessage, schema pk
 
 		var from, to json.RawMessage
 		var moved bool
+		// opacityProbe holds exactly the decoded content a note would carry,
+		// so envelope opacity markers anywhere within it force sanitization.
+		var opacityProbe []any
 
 		if len(parts) > 1 {
-			if fieldExistsInMap(desiredMap, parts) {
-				continue
-			}
-			from, to, moved = compareLeafMultisets(oldMap, newMap, parts)
+			oldLeaves := collectSuppressedLeaves(oldMap, desiredMap, parts)
+			newLeaves := collectSuppressedLeaves(newMap, desiredMap, parts)
+			from, to, moved = compareLeafMultisets(oldLeaves, newLeaves)
+			opacityProbe = append(append(opacityProbe, oldLeaves...), newLeaves...)
 		} else if !fieldExistsInMap(desiredMap, parts) {
 			from, to, moved = compareWholeField(oldMap, newMap, path, hint)
+			opacityProbe = []any{oldMap[path], newMap[path]}
 		} else if hint.UpdateMethod == pkgmodel.FieldUpdateMethodEntitySet && hint.IndexField != "" {
 			declaredKeys := entitySetKeys(desiredMap[path], hint.IndexField)
 			if len(declaredKeys) == 0 {
@@ -90,6 +96,7 @@ func SuppressedFieldDiffs(oldProps, newProps, desired json.RawMessage, schema pk
 				continue
 			}
 			from, to, moved = compareEntitySetSubsets(oldMap[path], newMap[path], hint.IndexField, declaredKeys)
+			opacityProbe = []any{oldMap[path], newMap[path]}
 		} else {
 			continue
 		}
@@ -98,7 +105,14 @@ func SuppressedFieldDiffs(oldProps, newProps, desired json.RawMessage, schema pk
 			continue
 		}
 
-		if pathOpaque(schema, path) || valueHasOpaqueMarker(oldMap[path]) || valueHasOpaqueMarker(newMap[path]) {
+		opaque := pathOpaque(schema, path)
+		for _, v := range opacityProbe {
+			if valueHasOpaqueMarker(v) {
+				opaque = true
+				break
+			}
+		}
+		if opaque {
 			diffs = append(diffs, SuppressedFieldDiff{Path: path, Opaque: true})
 			continue
 		}
@@ -265,14 +279,10 @@ func sortedByKey(arr []any, indexField string) []any {
 	return out
 }
 
-// compareLeafMultisets handles dotted provider-default paths. The strip
-// removes these leaves from both sides in every reachable array element, and
-// set-based array comparison has no stable element pairing, so the honest
-// comparison is the multiset of leaf values on each side.
-func compareLeafMultisets(oldMap, newMap map[string]any, parts []string) (json.RawMessage, json.RawMessage, bool) {
-	var oldLeaves, newLeaves []any
-	collectLeaves(oldMap, parts, &oldLeaves)
-	collectLeaves(newMap, parts, &newLeaves)
+// compareLeafMultisets compares two suppressed-leaf collections. Set-based
+// array comparison has no stable element pairing, so the honest comparison
+// is the multiset of leaf values on each side.
+func compareLeafMultisets(oldLeaves, newLeaves []any) (json.RawMessage, json.RawMessage, bool) {
 	if multisetEqual(oldLeaves, newLeaves) {
 		return nil, nil, false
 	}
@@ -288,25 +298,38 @@ func renderLeafList(leaves []any) json.RawMessage {
 	return json.RawMessage(canonicalJSON(sorted))
 }
 
-// collectLeaves walks a dotted path, descending through arrays without
-// consuming a path segment, and appends every leaf value found.
-func collectLeaves(node any, parts []string, out *[]any) {
-	switch v := node.(type) {
-	case []any:
-		for _, elem := range v {
-			collectLeaves(elem, parts, out)
+// collectSuppressedLeaves walks a dotted path with the strip's own regime
+// rules (see stripProviderDefaultPath): descending through an array switches
+// to the unconditional regime, where every reachable leaf is suppressed
+// content regardless of what desired declares; a walk that stays in objects
+// keeps the conditional regime, where the leaf is suppressed only when
+// desired omits the full path.
+func collectSuppressedLeaves(root any, desired map[string]any, parts []string) []any {
+	var out []any
+	declared := fieldExistsInMap(desired, parts)
+	var walk func(node any, rest []string, inArray bool)
+	walk = func(node any, rest []string, inArray bool) {
+		switch v := node.(type) {
+		case []any:
+			for _, elem := range v {
+				walk(elem, rest, true)
+			}
+		case map[string]any:
+			val, ok := v[rest[0]]
+			if !ok {
+				return
+			}
+			if len(rest) == 1 {
+				if inArray || !declared {
+					out = append(out, val)
+				}
+				return
+			}
+			walk(val, rest[1:], inArray)
 		}
-	case map[string]any:
-		val, ok := v[parts[0]]
-		if !ok {
-			return
-		}
-		if len(parts) == 1 {
-			*out = append(*out, val)
-			return
-		}
-		collectLeaves(val, parts[1:], out)
 	}
+	walk(root, parts, false)
+	return out
 }
 
 func multisetEqual(a, b []any) bool {

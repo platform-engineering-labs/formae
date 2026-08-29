@@ -316,3 +316,62 @@ func TestSuppressedFieldDiffs_MultipleFields_SortedByPath(t *testing.T) {
 	assert.Equal(t, "A", diffs[0].Path)
 	assert.Equal(t, "B", diffs[1].Path)
 }
+
+func TestSuppressedFieldDiffs_DottedLeafWithOpaqueEnvelope_PathOnlyNoValues(t *testing.T) {
+	// An opaque envelope nested inside array elements must sanitize the
+	// diff even though the schema hint carries no Opaque flag: the envelope
+	// marker is the authority.
+	schema := pkgmodel.Schema{
+		Fields: []string{"Family", "ContainerDefinitions"},
+		Hints:  map[string]pkgmodel.FieldHint{"ContainerDefinitions.Token": {HasProviderDefault: true}},
+	}
+	desired := `{"Family": "f", "ContainerDefinitions": [{"Name": "app"}]}`
+
+	diffs := suppressedDiffsForTest(t,
+		`{"Family": "f", "ContainerDefinitions": [{"Name": "app", "Token": {"$value": "hash-one", "$visibility": "Opaque"}}]}`,
+		`{"Family": "f", "ContainerDefinitions": [{"Name": "app", "Token": {"$value": "hash-two", "$visibility": "Opaque"}}]}`,
+		desired, schema)
+
+	require.Len(t, diffs, 1)
+	assert.True(t, diffs[0].Opaque)
+	assert.Nil(t, diffs[0].From, "envelope-opaque leaf values must never appear in a note")
+	assert.Nil(t, diffs[0].To)
+}
+
+func TestSuppressedFieldDiffs_ArrayNestedLeaf_DeclaredElsewhere_StillCompared(t *testing.T) {
+	// The strip removes an array-nested provider-default leaf from every
+	// element on both sides regardless of desired declaring it somewhere,
+	// so the classifier must not skip the path just because one desired
+	// element declares the leaf: another element's suppressed movement is
+	// still invisible to the plan and must be noted.
+	schema := pkgmodel.Schema{
+		Fields: []string{"Family", "ContainerDefinitions"},
+		Hints:  map[string]pkgmodel.FieldHint{"ContainerDefinitions.Cpu": {HasProviderDefault: true}},
+	}
+	desired := `{"Family": "f", "ContainerDefinitions": [{"Name": "app", "Cpu": 512}, {"Name": "sidecar"}]}`
+
+	diffs := suppressedDiffsForTest(t,
+		`{"Family": "f", "ContainerDefinitions": [{"Name": "app", "Cpu": 512}, {"Name": "sidecar", "Cpu": 0}]}`,
+		`{"Family": "f", "ContainerDefinitions": [{"Name": "app", "Cpu": 512}, {"Name": "sidecar", "Cpu": 256}]}`,
+		desired, schema)
+
+	require.Len(t, diffs, 1)
+	assert.Equal(t, "ContainerDefinitions.Cpu", diffs[0].Path)
+}
+
+func TestSuppressedFieldDiffs_PureObjectDottedPath_DeclaredInDesired_NotReported(t *testing.T) {
+	// A dotted path that never traverses an array keeps the conditional
+	// strip semantics: declared in desired means plan territory, no note.
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Config"},
+		Hints:  map[string]pkgmodel.FieldHint{"Config.Encryption": {HasProviderDefault: true}},
+	}
+
+	diffs := suppressedDiffsForTest(t,
+		`{"Name": "r", "Config": {"Encryption": "aes"}}`,
+		`{"Name": "r", "Config": {"Encryption": "kms"}}`,
+		`{"Name": "r", "Config": {"Encryption": "kms"}}`,
+		schema)
+
+	assert.Empty(t, diffs)
+}
