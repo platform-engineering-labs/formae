@@ -204,3 +204,302 @@ func countApplyCommands(commands []*forma_command.FormaCommand) int {
 	}
 	return n
 }
+
+// A patch-mode submission never classifies drift: the suppressed-drift
+// machinery is reconcile-only.
+func TestApplyForma_SuppressedDriftNotes_PatchModeEmitsNone(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		schema := pkgmodel.Schema{
+			Fields: []string{"foo", "rotation"},
+			Hints:  map[string]pkgmodel.FieldHint{"rotation": {HasProviderDefault: true}},
+		}
+		overrides := &plugin.ResourcePluginOverrides{
+			Create: func(request *resource.CreateRequest) (*resource.CreateResult, error) {
+				return &resource.CreateResult{
+					ProgressResult: &resource.ProgressResult{
+						Operation:          resource.OperationCreate,
+						OperationStatus:    resource.OperationStatusSuccess,
+						NativeID:           request.Label,
+						ResourceProperties: json.RawMessage(`{"foo":"bar","rotation":"off"}`),
+					},
+				}, nil
+			},
+			Read: func(request *resource.ReadRequest) (*resource.ReadResult, error) {
+				return &resource.ReadResult{ResourceType: request.ResourceType, Properties: `{"foo":"bar","rotation":"on"}`}, nil
+			},
+			Update: func(request *resource.UpdateRequest) (*resource.UpdateResult, error) {
+				return &resource.UpdateResult{
+					ProgressResult: &resource.ProgressResult{
+						Operation:          resource.OperationUpdate,
+						OperationStatus:    resource.OperationStatusSuccess,
+						NativeID:           request.NativeID,
+						ResourceProperties: json.RawMessage(`{"foo":"patched","rotation":"on"}`),
+					},
+				}, nil
+			},
+		}
+		m, def, err := test_helpers.NewTestMetastructure(t, overrides)
+		defer def()
+		require.NoError(t, err)
+
+		target := pkgmodel.Target{Label: "test-target1", Namespace: "test-namespace1", Config: json.RawMessage(`{}`)}
+		forma := func(foo string) *pkgmodel.Forma {
+			return &pkgmodel.Forma{
+				Stacks: []pkgmodel.Stack{{Label: "patch-stack"}},
+				Resources: []pkgmodel.Resource{{
+					Label: "resource-one", Type: "FakeAWS::Resource", Stack: "patch-stack",
+					Target: "test-target1", Schema: schema,
+					Properties: json.RawMessage(`{"foo":"` + foo + `"}`),
+				}},
+				Targets: []pkgmodel.Target{target},
+			}
+		}
+
+		_, err = m.ApplyForma(forma("bar"),
+			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: false},
+			"test-client-id", "", "")
+		require.NoError(t, err)
+		var commands []*forma_command.FormaCommand
+		require.Eventually(t, func() bool {
+			commands, err = m.Datastore.LoadFormaCommands()
+			assert.NoError(t, err)
+			return countApplyCommands(commands) == 1 && allCommandsSuccessful(commands)
+		}, 10*time.Second, 100*time.Millisecond)
+
+		require.NoError(t, m.ForceSync())
+		require.Eventually(t, func() bool {
+			drift, derr := m.ListDrift("patch-stack")
+			assert.NoError(t, derr)
+			return drift != nil && len(drift.ModifiedResources) == 1
+		}, 10*time.Second, 100*time.Millisecond)
+
+		resp, err := m.ApplyForma(forma("patched"),
+			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModePatch, Simulate: true},
+			"test-client-id", "", "")
+		require.NoError(t, err)
+		assert.Empty(t, resp.Simulation.SuppressedDrift, "patch mode must not classify suppressed drift")
+	})
+}
+
+// A forced reconcile proceeds past unabsorbed drift as it always has, and its
+// command now records notes for the suppressed movement on absorbed
+// modifications.
+func TestApplyForma_SuppressedDriftNotes_ForcedReconcileCarriesNotes(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		schema := pkgmodel.Schema{
+			Fields: []string{"foo", "rotation"},
+			Hints:  map[string]pkgmodel.FieldHint{"rotation": {HasProviderDefault: true}},
+		}
+		overrides := &plugin.ResourcePluginOverrides{
+			Create: func(request *resource.CreateRequest) (*resource.CreateResult, error) {
+				// Echo the requested foo; the cloud sets rotation at create.
+				var req map[string]any
+				_ = json.Unmarshal(request.Properties, &req)
+				echoed, _ := json.Marshal(map[string]any{"foo": req["foo"], "rotation": "off"})
+				return &resource.CreateResult{
+					ProgressResult: &resource.ProgressResult{
+						Operation:          resource.OperationCreate,
+						OperationStatus:    resource.OperationStatusSuccess,
+						NativeID:           request.Label,
+						ResourceProperties: json.RawMessage(echoed),
+					},
+				}, nil
+			},
+			Read: func(request *resource.ReadRequest) (*resource.ReadResult, error) {
+				// Both the declared field and the suppressed field moved OOB.
+				return &resource.ReadResult{ResourceType: request.ResourceType, Properties: `{"foo":"oob","rotation":"on"}`}, nil
+			},
+			Update: func(request *resource.UpdateRequest) (*resource.UpdateResult, error) {
+				return &resource.UpdateResult{
+					ProgressResult: &resource.ProgressResult{
+						Operation:          resource.OperationUpdate,
+						OperationStatus:    resource.OperationStatusSuccess,
+						NativeID:           request.NativeID,
+						ResourceProperties: json.RawMessage(`{"foo":"bar","rotation":"on"}`),
+					},
+				}, nil
+			},
+		}
+		m, def, err := test_helpers.NewTestMetastructure(t, overrides)
+		defer def()
+		require.NoError(t, err)
+
+		target := pkgmodel.Target{Label: "test-target1", Namespace: "test-namespace1", Config: json.RawMessage(`{}`)}
+		declared := &pkgmodel.Forma{
+			Stacks: []pkgmodel.Stack{{Label: "force-stack"}},
+			Resources: []pkgmodel.Resource{
+				{
+					Label: "drifting", Type: "FakeAWS::Resource", Stack: "force-stack",
+					Target: "test-target1", Schema: schema,
+					Properties: json.RawMessage(`{"foo":"bar"}`),
+				},
+				{
+					// Declared at the value the cloud reports, so no update is
+					// ever generated for it: its modification is the suppressed
+					// rotation flip alone, which absorbs.
+					Label: "quiet", Type: "FakeAWS::Resource", Stack: "force-stack",
+					Target: "test-target1", Schema: schema,
+					Properties: json.RawMessage(`{"foo":"oob"}`),
+				},
+			},
+			Targets: []pkgmodel.Target{target},
+		}
+
+		_, err = m.ApplyForma(declared,
+			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: false},
+			"test-client-id", "", "")
+		require.NoError(t, err)
+		var commands []*forma_command.FormaCommand
+		require.Eventually(t, func() bool {
+			commands, err = m.Datastore.LoadFormaCommands()
+			assert.NoError(t, err)
+			return countApplyCommands(commands) == 1 && allCommandsSuccessful(commands)
+		}, 10*time.Second, 100*time.Millisecond)
+
+		require.NoError(t, m.ForceSync())
+		require.Eventually(t, func() bool {
+			drift, derr := m.ListDrift("force-stack")
+			assert.NoError(t, derr)
+			return drift != nil && len(drift.ModifiedResources) >= 1
+		}, 10*time.Second, 100*time.Millisecond)
+
+		// Non-forced: the declared-field drift on "drifting" rejects.
+		_, err = m.ApplyForma(declared,
+			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: false},
+			"test-client-id", "", "")
+		require.Error(t, err, "unabsorbed drift must still reject a non-forced reconcile")
+
+		// Forced: proceeds, and the command carries suppressed-drift notes
+		// for the absorbed modifications' suppressed movement.
+		resp, err := m.ApplyForma(declared,
+			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: false, Force: true},
+			"test-client-id", "", "")
+		require.NoError(t, err)
+		var paths []string
+		for _, n := range resp.Simulation.SuppressedDrift {
+			paths = append(paths, n.Label+"."+n.Path)
+		}
+		assert.Contains(t, paths, "quiet.rotation", "the absorbed resource's suppressed movement is noted on the forced apply")
+	})
+}
+
+// Documents a pre-existing property of the drift-window anchor: the most
+// recent reconcile command with a persisted resource row anchors the window
+// regardless of the command's final state, so a partially failed reconcile
+// still takes prior drift out of the window. The suppressed-drift note
+// persisted with that failed command is then the surviving record of the
+// movement.
+func TestApplyForma_SuppressedDriftNotes_FailedReconcileStillAnchorsWindow(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		schema := pkgmodel.Schema{
+			Fields: []string{"foo", "rotation"},
+			Hints:  map[string]pkgmodel.FieldHint{"rotation": {HasProviderDefault: true}},
+		}
+		overrides := &plugin.ResourcePluginOverrides{
+			Create: func(request *resource.CreateRequest) (*resource.CreateResult, error) {
+				if request.Label == "failing" {
+					return &resource.CreateResult{
+						ProgressResult: &resource.ProgressResult{
+							Operation:       resource.OperationCreate,
+							OperationStatus: resource.OperationStatusFailure,
+							NativeID:        request.Label,
+						},
+					}, nil
+				}
+				var req map[string]any
+				_ = json.Unmarshal(request.Properties, &req)
+				echoed, _ := json.Marshal(map[string]any{"foo": req["foo"], "rotation": "off"})
+				return &resource.CreateResult{
+					ProgressResult: &resource.ProgressResult{
+						Operation:          resource.OperationCreate,
+						OperationStatus:    resource.OperationStatusSuccess,
+						NativeID:           request.Label,
+						ResourceProperties: json.RawMessage(echoed),
+					},
+				}, nil
+			},
+			Read: func(request *resource.ReadRequest) (*resource.ReadResult, error) {
+				return &resource.ReadResult{ResourceType: request.ResourceType, Properties: `{"foo":"bar","rotation":"on"}`}, nil
+			},
+		}
+		m, def, err := test_helpers.NewTestMetastructure(t, overrides)
+		defer def()
+		require.NoError(t, err)
+
+		target := pkgmodel.Target{Label: "test-target1", Namespace: "test-namespace1", Config: json.RawMessage(`{}`)}
+		res := func(label string) pkgmodel.Resource {
+			return pkgmodel.Resource{
+				Label: label, Type: "FakeAWS::Resource", Stack: "anchor-stack",
+				Target: "test-target1", Schema: schema,
+				Properties: json.RawMessage(`{"foo":"bar"}`),
+			}
+		}
+
+		initial := &pkgmodel.Forma{
+			Stacks:    []pkgmodel.Stack{{Label: "anchor-stack"}},
+			Resources: []pkgmodel.Resource{res("steady")},
+			Targets:   []pkgmodel.Target{target},
+		}
+		_, err = m.ApplyForma(initial,
+			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: false},
+			"test-client-id", "", "")
+		require.NoError(t, err)
+		var commands []*forma_command.FormaCommand
+		require.Eventually(t, func() bool {
+			commands, err = m.Datastore.LoadFormaCommands()
+			assert.NoError(t, err)
+			return countApplyCommands(commands) == 1 && allCommandsSuccessful(commands)
+		}, 10*time.Second, 100*time.Millisecond)
+
+		require.NoError(t, m.ForceSync())
+		require.Eventually(t, func() bool {
+			drift, derr := m.ListDrift("anchor-stack")
+			assert.NoError(t, derr)
+			return drift != nil && len(drift.ModifiedResources) == 1
+		}, 10*time.Second, 100*time.Millisecond)
+
+		// A reconcile adding one succeeding and one failing resource: the
+		// command fails, but the succeeding create persists a resource row,
+		// which anchors the window.
+		expanded := &pkgmodel.Forma{
+			Stacks:    []pkgmodel.Stack{{Label: "anchor-stack"}},
+			Resources: []pkgmodel.Resource{res("steady"), res("added"), res("failing")},
+			Targets:   []pkgmodel.Target{target},
+		}
+		resp, err := m.ApplyForma(expanded,
+			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: false},
+			"test-client-id", "", "")
+		require.NoError(t, err)
+		require.Len(t, resp.Simulation.SuppressedDrift, 1, "the failing reconcile still records the note")
+
+		require.Eventually(t, func() bool {
+			commands, err = m.Datastore.LoadFormaCommands()
+			assert.NoError(t, err)
+			for _, cmd := range commands {
+				if cmd.Command == pkgmodel.CommandApply && cmd.State == forma_command.CommandStateFailed {
+					return true
+				}
+			}
+			return false
+		}, 15*time.Second, 100*time.Millisecond, "the expanded reconcile should fail")
+
+		// Pre-existing behavior, pinned: the failed reconcile anchors the
+		// window and the prior drift record leaves it.
+		require.Eventually(t, func() bool {
+			drift, derr := m.ListDrift("anchor-stack")
+			assert.NoError(t, derr)
+			return drift != nil && len(drift.ModifiedResources) == 0
+		}, 10*time.Second, 100*time.Millisecond, "a failed reconcile with a persisted resource row advances the window (pre-existing behavior)")
+
+		// The durable record of the movement is the note on the failed
+		// command.
+		var noted *forma_command.FormaCommand
+		for _, cmd := range commands {
+			if len(cmd.SuppressedDriftNotes) > 0 {
+				noted = cmd
+			}
+		}
+		require.NotNil(t, noted)
+		assert.Equal(t, "rotation", noted.SuppressedDriftNotes[0].Path)
+	})
+}
