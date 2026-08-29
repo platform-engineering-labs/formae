@@ -220,7 +220,7 @@ const formaCommandWithResourceUpdatesQueryBase = `
 SELECT
 	fc.command_id, fc.timestamp, fc.command, fc.state, fc.client_id,
 	fc.description_text, fc.description_confirm, fc.config_mode, fc.config_force, fc.config_simulate,
-	fc.target_updates, fc.stack_updates, fc.policy_updates, fc.modified_ts, fc.source, fc.subject, fc.subject_name,
+	fc.target_updates, fc.stack_updates, fc.policy_updates, fc.modified_ts, fc.source, fc.subject, fc.subject_name, fc.suppressed_drift_notes,
 	ru.ksuid, ru.operation, ru.state, ru.start_ts, ru.modified_ts,
 	ru.retries, ru.remaining, ru.version, ru.stack_label, ru.group_id, ru.source,
 	ru.resource, ru.resource_target, ru.existing_resource, ru.existing_target,
@@ -246,6 +246,7 @@ func scanJoinedRow(rows *sql.Rows) (*forma_command.FormaCommand, *resource_updat
 	var fcModifiedTs *time.Time
 	var fcSource *string
 	var fcSubject, fcSubjectName *string
+	var fcSuppressedDriftNotesJSON []byte
 
 	var ruKsuid, ruOperation, ruState *string
 	var ruStartTs, ruModifiedTs *time.Time
@@ -263,6 +264,7 @@ func scanJoinedRow(rows *sql.Rows) (*forma_command.FormaCommand, *resource_updat
 		&commandID, &fcTimestamp, &fcCommand, &fcState, &fcClientID,
 		&descriptionText, &descriptionConfirm, &configMode, &configForce, &configSimulate,
 		&targetUpdatesJSON, &stackUpdatesJSON, &policyUpdatesJSON, &fcModifiedTs, &fcSource, &fcSubject, &fcSubjectName,
+		&fcSuppressedDriftNotesJSON,
 		&ruKsuid, &ruOperation, &ruState, &ruStartTs, &ruModifiedTs,
 		&ruRetries, &ruRemaining, &ruVersion, &ruStackLabel, &ruGroupID, &ruSource,
 		&resourceJSON, &resourceTargetJSON, &existingResourceJSON, &existingTargetJSON,
@@ -317,6 +319,12 @@ func scanJoinedRow(rows *sql.Rows) (*forma_command.FormaCommand, *resource_updat
 	if len(policyUpdatesJSON) > 0 {
 		if err := json.Unmarshal(policyUpdatesJSON, &cmd.PolicyUpdates); err != nil {
 			return nil, nil, fmt.Errorf("failed to unmarshal policy updates: %w", err)
+		}
+	}
+
+	if len(fcSuppressedDriftNotesJSON) > 0 {
+		if err := json.Unmarshal(fcSuppressedDriftNotesJSON, &cmd.SuppressedDriftNotes); err != nil {
+			return nil, nil, fmt.Errorf("failed to unmarshal suppressed drift notes: %w", err)
 		}
 	}
 
@@ -491,12 +499,21 @@ func (d *DatastoreMSSQL) StoreFormaCommand(fa *forma_command.FormaCommand, comma
 		return fmt.Errorf("failed to marshal policy updates: %w", err)
 	}
 
+	var suppressedDriftNotesJSON any
+	if len(fa.SuppressedDriftNotes) > 0 {
+		notesJSON, merr := json.Marshal(fa.SuppressedDriftNotes)
+		if merr != nil {
+			return fmt.Errorf("failed to marshal suppressed drift notes: %w", merr)
+		}
+		suppressedDriftNotesJSON = string(notesJSON)
+	}
+
 	args := []any{
 		commandID, fa.StartTs.UTC(), string(fa.Command), string(fa.State), formae.Version,
 		fa.ClientID, d.agentID, fa.Description.Text, fa.Description.Confirm,
 		string(fa.Config.Mode), fa.Config.Force, fa.Config.Simulate,
 		string(targetUpdatesJSON), string(stackUpdatesJSON), string(policyUpdatesJSON), fa.ModifiedTs.UTC(),
-		string(fa.Source), fa.Subject, fa.SubjectName,
+		string(fa.Source), fa.Subject, fa.SubjectName, suppressedDriftNotesJSON,
 	}
 
 	tx, err := d.conn.BeginTx(ctx, nil)
@@ -517,7 +534,7 @@ func (d *DatastoreMSSQL) StoreFormaCommand(fa *forma_command.FormaCommand, comma
 		description_confirm = @p9, config_mode = @p10, config_force = @p11,
 		config_simulate = @p12, target_updates = @p13, stack_updates = @p14,
 		policy_updates = @p15, modified_ts = @p16, source = @p17,
-		subject = @p18, subject_name = @p19
+		subject = @p18, subject_name = @p19, suppressed_drift_notes = @p20
 	WHERE command_id = @p1`, datastore.CommandsTable)
 
 	res, err := tx.ExecContext(ctx, updateQuery, args...)
@@ -534,8 +551,9 @@ func (d *DatastoreMSSQL) StoreFormaCommand(fa *forma_command.FormaCommand, comma
 		INSERT INTO %[1]s
 			(command_id, timestamp, command, state, agent_version, client_id, agent_id,
 			 description_text, description_confirm, config_mode, config_force, config_simulate,
-			 target_updates, stack_updates, policy_updates, modified_ts, source, subject, subject_name)
-		VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16, @p17, @p18, @p19)`,
+			 target_updates, stack_updates, policy_updates, modified_ts, source, subject, subject_name,
+			 suppressed_drift_notes)
+		VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16, @p17, @p18, @p19, @p20)`,
 			datastore.CommandsTable)
 		if _, err := tx.ExecContext(ctx, insertQuery, args...); err != nil {
 			slog.Error("failed to store FormaCommand (insert)", "error", err)

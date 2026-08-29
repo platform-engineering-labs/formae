@@ -341,13 +341,49 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 		return nil, err
 	}
 
+	// One drift-window snapshot per reconcile submission, taken before the
+	// no-changes return and regardless of force: the same loaded
+	// modifications feed the rejection gate below and the suppressed-drift
+	// notes, so the response, any rejection, and the persisted command agree.
+	var modificationsByStack map[string][]datastore.ResourceModification
+	var suppressedNotes []forma_command.SuppressedDriftNote
+	if config.Mode == pkgmodel.FormaApplyModeReconcile {
+		modificationsByStack = make(map[string][]datastore.ResourceModification)
+		// The union covers both consumers: the rejection gate iterates the
+		// stacks with generated updates (fa.GetStackLabels(), its historical
+		// scope), while notes also cover declared stacks that produced no
+		// updates at all, which is exactly where purely suppressed drift
+		// lives.
+		seenStacks := map[string]bool{}
+		for _, stackLabel := range append(stackLabelsFromForma(forma), fa.GetStackLabels()...) {
+			if seenStacks[stackLabel] {
+				continue
+			}
+			seenStacks[stackLabel] = true
+			modifications, loadErr := m.Datastore.GetResourceModificationsSinceLastReconcile(stackLabel)
+			if loadErr != nil {
+				slog.Error("Failed to load modifications since last reconcile", "stack", stackLabel, "error", loadErr)
+				return nil, fmt.Errorf("failed to load modifications for stack %s: %w", stackLabel, loadErr)
+			}
+			if len(modifications) > 0 {
+				modificationsByStack[stackLabel] = modifications
+			}
+		}
+		suppressedNotes = computeSuppressedDriftNotes(modificationsByStack, forma, fa)
+	}
+
 	if !fa.HasChanges() {
+		// Nothing executes and no command is persisted, so the drift window
+		// does not advance: suppressed movement is NOT absorbed by a no-op
+		// apply. The notes say so (disposition remaining) and keep appearing
+		// until a reconcile with changes runs.
 		return &apimodel.SubmitCommandResponse{
 			CommandID:   fa.ID,
 			Description: apimodel.Description(fa.Description),
 			Simulation: apimodel.Simulation{
 				ChangesRequired: false,
 				Command:         apimodel.Command{},
+				SuppressedDrift: translateSuppressedDriftNotes(stampSuppressedDriftDisposition(suppressedNotes, forma_command.SuppressedDriftRemaining)),
 			},
 		}, nil
 	}
@@ -370,25 +406,25 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 
 	if config.Mode == pkgmodel.FormaApplyModeReconcile && !config.Force {
 		var modifiedStacks = make(map[string]apimodel.ModifiedStack)
+		// Rejection keeps its historical scope: only the stacks with
+		// generated updates are checked, from the same snapshot the notes
+		// were computed from.
 		for _, stackLabel := range fa.GetStackLabels() {
-			modifications, loadErr := m.Datastore.GetResourceModificationsSinceLastReconcile(stackLabel)
-			if loadErr != nil {
-				slog.Error("Failed to load most recent non-reconcile forma commands by stack", "stack", stackLabel, "error", loadErr)
-				return nil, fmt.Errorf("failed to load most recent forma commands for stack %s: %w", stackLabel, loadErr)
+			modifications := modificationsByStack[stackLabel]
+			if len(modifications) == 0 {
+				continue
 			}
-			if len(modifications) > 0 {
-				// Filter out modifications that have been absorbed into the forma.
-				// A modification is absorbed when the forma contains the resource
-				// and no resource update was generated for it (properties match current state).
-				unabsorbed := filterUnabsorbedModifications(modifications, forma, fa)
-				if len(unabsorbed) > 0 {
-					modifiedResources := make([]apimodel.ResourceModification, 0, len(unabsorbed))
-					for _, modification := range unabsorbed {
-						modifiedResources = append(modifiedResources, toAPIResourceModification(modification))
-					}
-					modifiedStacks[stackLabel] = apimodel.ModifiedStack{
-						ModifiedResources: modifiedResources,
-					}
+			// Filter out modifications that have been absorbed into the forma.
+			// A modification is absorbed when the forma contains the resource
+			// and no resource update was generated for it (properties match current state).
+			unabsorbed := filterUnabsorbedModifications(modifications, forma, fa)
+			if len(unabsorbed) > 0 {
+				modifiedResources := make([]apimodel.ResourceModification, 0, len(unabsorbed))
+				for _, modification := range unabsorbed {
+					modifiedResources = append(modifiedResources, toAPIResourceModification(modification))
+				}
+				modifiedStacks[stackLabel] = apimodel.ModifiedStack{
+					ModifiedResources: modifiedResources,
 				}
 			}
 		}
@@ -396,6 +432,12 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 			return nil, apimodel.FormaReconcileRejectedError{ModifiedStacks: modifiedStacks}
 		}
 	}
+
+	// This command executes (or simulates executing) and its completion
+	// advances the drift window past the suppressed movement without having
+	// addressed it; the notes ride the command as the durable record of that
+	// absorption.
+	fa.SuppressedDriftNotes = stampSuppressedDriftDisposition(suppressedNotes, forma_command.SuppressedDriftAbsorbed)
 
 	if config.Mode == pkgmodel.FormaApplyModePatch {
 		err = m.checkIfPatchCanBeApplied(fa)
@@ -445,6 +487,7 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 				ChangesRequired: fa.HasChanges(),
 				Command:         translateToAPICommand(fa),
 				Warnings:        warnings,
+				SuppressedDrift: translateSuppressedDriftNotes(fa.SuppressedDriftNotes),
 			},
 		}, nil
 	}
@@ -595,21 +638,23 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 		Simulation: apimodel.Simulation{
 			ChangesRequired: fa.HasChanges(),
 			Command:         translateToAPICommand(fa),
+			SuppressedDrift: translateSuppressedDriftNotes(fa.SuppressedDriftNotes),
 		},
 	}, nil
 }
 
 func translateToAPICommand(fa *forma_command.FormaCommand) apimodel.Command {
 	apiCommand := apimodel.Command{
-		CommandID:   fa.ID,
-		Command:     string(fa.Command),
-		Mode:        string(fa.Config.Mode),
-		Source:      string(fa.Source),
-		Subject:     fa.Subject,
-		SubjectName: fa.SubjectName,
-		State:       string(fa.State),
-		StartTs:     fa.StartTs,
-		EndTs:       fa.ModifiedTs,
+		CommandID:       fa.ID,
+		Command:         string(fa.Command),
+		Mode:            string(fa.Config.Mode),
+		Source:          string(fa.Source),
+		Subject:         fa.Subject,
+		SubjectName:     fa.SubjectName,
+		State:           string(fa.State),
+		StartTs:         fa.StartTs,
+		EndTs:           fa.ModifiedTs,
+		SuppressedDrift: translateSuppressedDriftNotes(fa.SuppressedDriftNotes),
 	}
 	for _, ru := range fa.ResourceUpdates {
 		var dur time.Duration = 0
@@ -1775,6 +1820,29 @@ func findCascadeTargetDeletes(
 // document describing the drift between the properties at the last reconcile
 // and the current (cloud) properties. A failed patch computation degrades to
 // label-only display — it never fails the caller.
+// translateSuppressedDriftNotes maps a command's suppressed-drift notes into
+// the API projection. Note values were sanitized at construction (opaque
+// paths carry no values), so this is a plain field mapping.
+func translateSuppressedDriftNotes(notes []forma_command.SuppressedDriftNote) []apimodel.SuppressedDriftNote {
+	if len(notes) == 0 {
+		return nil
+	}
+	out := make([]apimodel.SuppressedDriftNote, len(notes))
+	for i, n := range notes {
+		out[i] = apimodel.SuppressedDriftNote{
+			Stack:       n.Stack,
+			Type:        n.Type,
+			Label:       n.Label,
+			Path:        n.Path,
+			From:        n.From,
+			To:          n.To,
+			Opaque:      n.Opaque,
+			Disposition: string(n.Disposition),
+		}
+	}
+	return out
+}
+
 func toAPIResourceModification(modification datastore.ResourceModification) apimodel.ResourceModification {
 	patchDoc := json.RawMessage(nil)
 	if modification.Operation == "update" && len(modification.OldProperties) > 0 && len(modification.Properties) > 0 {
