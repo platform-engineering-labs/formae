@@ -370,7 +370,28 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 				modificationsByStack[stackLabel] = modifications
 			}
 		}
-		suppressedNotes = computeSuppressedDriftNotes(modificationsByStack, forma, fa)
+		// The write witness per modified resource: the state formae's own
+		// last write observed, which sync never refreshes. Notes are gated
+		// on it; a fetch failure degrades to no note for that resource,
+		// never to a failed submission.
+		witnessByKsuid := map[string]json.RawMessage{}
+		for _, modifications := range modificationsByStack {
+			for _, mod := range modifications {
+				if mod.Operation != "update" || mod.Ksuid == "" {
+					continue
+				}
+				if _, done := witnessByKsuid[mod.Ksuid]; done {
+					continue
+				}
+				witness, werr := m.Datastore.GetPropertiesAtLastWrite(mod.Ksuid)
+				if werr != nil {
+					slog.Warn("Failed to load write witness for suppressed-drift classification", "ksuid", mod.Ksuid, "error", werr)
+					continue
+				}
+				witnessByKsuid[mod.Ksuid] = witness
+			}
+		}
+		suppressedNotes = computeSuppressedDriftNotes(modificationsByStack, witnessByKsuid, forma, fa)
 	}
 
 	if !fa.HasChanges() {

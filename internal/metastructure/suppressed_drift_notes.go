@@ -5,6 +5,7 @@
 package metastructure
 
 import (
+	"encoding/json"
 	"log/slog"
 	"sort"
 
@@ -19,15 +20,19 @@ import (
 // are exactly the modifications filterUnabsorbedModifications absorbs (the
 // unabsorbed ones are rejection territory, displayed in full there), and for
 // each candidate the note carries the provider-default fields whose
-// suppressed content moved between the last reconcile and now. A candidate
-// that cannot be classified (a non-update operation, a missing property
-// blob, no matching forma declaration, or a diff error) produces no note:
+// suppressed content moved between the last reconcile and now, gated on the
+// write witness: only content present in the resource's last write echo
+// (witnessByKsuid, from GetPropertiesAtLastWrite) can be reported as moved;
+// values that only ever arrived through sync are the infrastructure's
+// business and stay in the drift list. A candidate that cannot be
+// classified (a non-update operation, a missing property blob, no matching
+// forma declaration, no write witness, or a diff error) produces no note:
 // every fallback is today's behavior, silence.
 //
 // The caller stamps the disposition: absorbed when a reconcile executes and
 // takes the drift out of the window, remaining when nothing executes and the
 // drift stays.
-func computeSuppressedDriftNotes(modificationsByStack map[string][]datastore.ResourceModification, forma *pkgmodel.Forma, fa *forma_command.FormaCommand) []forma_command.SuppressedDriftNote {
+func computeSuppressedDriftNotes(modificationsByStack map[string][]datastore.ResourceModification, witnessByKsuid map[string]json.RawMessage, forma *pkgmodel.Forma, fa *forma_command.FormaCommand) []forma_command.SuppressedDriftNote {
 	type modKey struct {
 		stack, typeName, label, operation string
 	}
@@ -57,7 +62,11 @@ func computeSuppressedDriftNotes(modificationsByStack map[string][]datastore.Res
 			if decl == nil {
 				continue
 			}
-			diffs, err := patch.SuppressedFieldDiffs(mod.OldProperties, mod.Properties, decl.Properties, decl.Schema)
+			witness := witnessByKsuid[mod.Ksuid]
+			if witness == nil {
+				continue
+			}
+			diffs, err := patch.SuppressedFieldDiffs(mod.OldProperties, mod.Properties, decl.Properties, witness, decl.Schema)
 			if err != nil {
 				slog.Warn("Failed to classify suppressed drift for resource; skipping note",
 					"stack", mod.Stack, "type", mod.Type, "label", mod.Label, "error", err)

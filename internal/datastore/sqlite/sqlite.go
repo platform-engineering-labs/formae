@@ -688,6 +688,7 @@ WHERE
 			Type:      r.resourceType,
 			Label:     r.label,
 			Operation: r.operation,
+			Ksuid:     r.ksuid,
 		}
 		if r.operation == "update" {
 			curProps, propErr := d.fetchCurrentProperties(r.ksuid)
@@ -705,6 +706,47 @@ WHERE
 	}
 
 	return modifications, nil
+}
+
+// GetPropertiesAtLastWrite returns the Properties JSON of the latest resource
+// version persisted under an apply command whose resource update actually
+// wrote (a create or replace, or an update carrying a non-empty patch):
+// formae's own write echo. Sync and discovery persist under the sync
+// command type, and metadata-only applies (imports without property
+// changes, label-only renames) synthesize their result from observed state
+// with an empty patch; neither advances the witness.
+func (d DatastoreSQLite) GetPropertiesAtLastWrite(ksuid string) (json.RawMessage, error) {
+	_, span := sqliteTracer.Start(context.Background(), "GetPropertiesAtLastWrite")
+	defer span.End()
+
+	query := `
+SELECT json_extract(r.data, '$.Properties')
+FROM resources r
+JOIN forma_commands fc ON fc.command_id = r.command_id
+WHERE r.ksuid = ?
+AND fc.command = 'apply'
+AND r.operation != 'delete' AND r.operation != 'reaped'
+AND EXISTS (
+	SELECT 1 FROM resource_updates ru
+	WHERE ru.command_id = r.command_id AND ru.ksuid = r.ksuid
+	AND (ru.operation != 'update'
+		OR (json_extract(ru.resource, '$.PatchDocument') IS NOT NULL
+			AND json_extract(ru.resource, '$.PatchDocument') != '[]'))
+)
+ORDER BY r.version DESC
+LIMIT 1
+`
+	var props sql.NullString
+	if err := d.conn.QueryRow(query, ksuid).Scan(&props); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if !props.Valid || props.String == "" {
+		return nil, nil
+	}
+	return json.RawMessage(props.String), nil
 }
 
 // fetchCurrentProperties returns the Properties JSON from the latest resource version for the given ksuid.

@@ -23,6 +23,16 @@ import (
 // has no value for the path. For an opaque path both are nil: the diff
 // records the path and the fact of movement only, never values or digests,
 // because callers persist and display these records.
+//
+// A diff requires a WITNESSED value: the suppressed content was present (a
+// real scalar; a non-empty collection or leaf set) in the witness document,
+// the resource's state as recorded by formae's own last write (the
+// create/update echo), which sync never refreshes. Values that only ever
+// arrived through sync (late-populated defaults, runtime registrations,
+// co-actor content) are never witnessed and never reported: their movement
+// is the infrastructure's business and stays in the drift list. A witnessed
+// value changing or disappearing out of band is reported. A nil witness
+// document (formae never wrote the resource) witnesses nothing.
 type SuppressedFieldDiff struct {
 	Path   string
 	From   json.RawMessage
@@ -52,7 +62,7 @@ type SuppressedFieldDiff struct {
 // unconditionally (the ContainerDefinitions.Cpu shape, stripped from both
 // sides regardless of declaration), while a pure-object leaf is suppressed
 // only when desired omits it.
-func SuppressedFieldDiffs(oldProps, newProps, desired json.RawMessage, schema pkgmodel.Schema) ([]SuppressedFieldDiff, error) {
+func SuppressedFieldDiffs(oldProps, newProps, desired, witness json.RawMessage, schema pkgmodel.Schema) ([]SuppressedFieldDiff, error) {
 	oldMap, err := unmarshalPropsObject(oldProps)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal old properties: %w", err)
@@ -64,6 +74,10 @@ func SuppressedFieldDiffs(oldProps, newProps, desired json.RawMessage, schema pk
 	desiredMap, err := unmarshalPropsObject(desired)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal desired properties: %w", err)
+	}
+	witnessMap, err := unmarshalPropsObject(witness)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal witness properties: %w", err)
 	}
 
 	paths := append([]string(nil), schema.HasProviderDefault()...)
@@ -81,13 +95,20 @@ func SuppressedFieldDiffs(oldProps, newProps, desired json.RawMessage, schema pk
 		var opacityProbe []any
 
 		if len(parts) > 1 {
+			if !anyWitnessedLeaf(collectSuppressedLeaves(witnessMap, desiredMap, parts)) {
+				continue
+			}
 			oldLeaves := collectSuppressedLeaves(oldMap, desiredMap, parts)
 			newLeaves := collectSuppressedLeaves(newMap, desiredMap, parts)
 			from, to, moved = compareLeafMultisets(oldLeaves, newLeaves)
 			opacityProbe = append(append(opacityProbe, oldLeaves...), newLeaves...)
 		} else if !fieldExistsInMap(desiredMap, parts) {
+			wVal, wHas := witnessMap[path]
+			if !witnessedValue(wVal, wHas) {
+				continue
+			}
 			from, to, moved = compareWholeField(oldMap, newMap, path, hint)
-			opacityProbe = []any{oldMap[path], newMap[path]}
+			opacityProbe = []any{oldMap[path], newMap[path], wVal}
 		} else if hint.UpdateMethod == pkgmodel.FieldUpdateMethodEntitySet && hint.IndexField != "" {
 			declaredKeys := entitySetKeys(desiredMap[path], hint.IndexField)
 			if len(declaredKeys) == 0 {
@@ -95,8 +116,12 @@ func SuppressedFieldDiffs(oldProps, newProps, desired json.RawMessage, schema pk
 				// the drain; nothing is suppressed.
 				continue
 			}
+			witnessArr, _ := witnessMap[path].([]any)
+			if len(suppressedEntitySetElements(witnessArr, hint.IndexField, declaredKeys)) == 0 {
+				continue
+			}
 			from, to, moved = compareEntitySetSubsets(oldMap[path], newMap[path], hint.IndexField, declaredKeys)
-			opacityProbe = []any{oldMap[path], newMap[path]}
+			opacityProbe = []any{oldMap[path], newMap[path], witnessMap[path]}
 		} else {
 			continue
 		}
@@ -395,6 +420,37 @@ func valueHasOpaqueMarker(v any) bool {
 			if valueHasOpaqueMarker(child) {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// witnessedValue reports whether the witness document holds content a note
+// can claim moved: a present scalar (false and zero are values), a
+// non-empty object, or a non-empty collection. Absent fields, nulls, and
+// empty collections witness nothing; whatever appears on them later is
+// first-time population.
+func witnessedValue(v any, has bool) bool {
+	if !has {
+		return false
+	}
+	switch t := v.(type) {
+	case nil:
+		return false
+	case []any:
+		return len(t) > 0
+	case map[string]any:
+		return len(t) > 0
+	}
+	return true
+}
+
+// anyWitnessedLeaf reports whether at least one collected leaf is a real
+// value (not null, not an empty collection).
+func anyWitnessedLeaf(leaves []any) bool {
+	for _, v := range leaves {
+		if witnessedValue(v, true) {
+			return true
 		}
 	}
 	return false

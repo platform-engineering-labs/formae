@@ -707,7 +707,7 @@ WHERE EXISTS (
 	// Phase 2: for update ops, fetch the current and at-last-reconcile properties.
 	var out []datastore.ResourceModification
 	for _, r := range raw {
-		mod := datastore.ResourceModification{Stack: stack, Type: r.resourceType, Label: r.label, Operation: r.operation}
+		mod := datastore.ResourceModification{Stack: stack, Type: r.resourceType, Label: r.label, Operation: r.operation, Ksuid: r.ksuid}
 		if r.operation == "update" {
 			curProps, propErr := d.fetchCurrentProperties(ctx, r.ksuid)
 			if propErr != nil {
@@ -728,6 +728,46 @@ WHERE EXISTS (
 
 // fetchCurrentProperties returns the Properties JSON from the latest resource
 // version for the given ksuid.
+// GetPropertiesAtLastWrite returns the Properties JSON of the latest resource
+// version persisted under an apply command whose resource update actually
+// wrote (a create or replace, or an update carrying a non-empty patch):
+// formae's own write echo. Sync and discovery persist under the sync
+// command type, and metadata-only applies (imports without property
+// changes, label-only renames) synthesize their result from observed state
+// with an empty patch; neither advances the witness.
+func (d *DatastoreMSSQL) GetPropertiesAtLastWrite(ksuid string) (json.RawMessage, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "GetPropertiesAtLastWrite")
+	defer span.End()
+
+	query := fmt.Sprintf(`
+SELECT TOP (1) JSON_QUERY(r.data, '$.Properties')
+FROM resources r
+JOIN forma_commands fc ON fc.command_id = r.command_id
+WHERE r.ksuid = @p1
+AND fc.command = 'apply'
+AND r.operation != 'delete' AND r.operation != 'reaped'
+AND EXISTS (
+	SELECT 1 FROM resource_updates ru
+	WHERE ru.command_id = r.command_id AND ru.ksuid = r.ksuid
+	AND (ru.operation != 'update'
+		OR (JSON_QUERY(ru.resource, '$.PatchDocument') IS NOT NULL
+			AND JSON_QUERY(ru.resource, '$.PatchDocument') != '[]'))
+)
+ORDER BY r.version %s DESC`, binColl)
+
+	var props sql.NullString
+	if err := d.conn.QueryRowContext(ctx, query, ksuid).Scan(&props); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if !props.Valid || props.String == "" {
+		return nil, nil
+	}
+	return json.RawMessage(props.String), nil
+}
+
 func (d *DatastoreMSSQL) fetchCurrentProperties(ctx context.Context, ksuid string) (json.RawMessage, error) {
 	query := fmt.Sprintf(`
 SELECT TOP (1) JSON_QUERY(data, '$.Properties')

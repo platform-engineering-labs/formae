@@ -120,6 +120,7 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunStoreAndLoadFormaCommandEmptySubject(t, newDS)
 	RunFormaCommandSubjectNullRoundTrip(t, newDS)
 	RunFormaCommandSuppressedDriftNotesRoundTrip(t, newDS)
+	RunGetPropertiesAtLastWrite(t, newDS)
 	RunStoreFormaCommandSyncSkipsResourceUpdates(t, newDS)
 	RunCommandSourceRoundTrip(t, newDS)
 	RunGetMostRecentFormaCommandByClientID(t, newDS)

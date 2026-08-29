@@ -29,7 +29,7 @@ func kmsSchemaForNotes() pkgmodel.Schema {
 func TestComputeSuppressedDriftNotes_AbsorbedSuppressedMovement_Noted(t *testing.T) {
 	mods := map[string][]datastore.ResourceModification{
 		"prod": {{
-			Stack: "prod", Type: "AWS::KMS::Key", Label: "signing-key", Operation: "update",
+			Stack: "prod", Type: "AWS::KMS::Key", Label: "signing-key", Operation: "update", Ksuid: "k1",
 			OldProperties: json.RawMessage(`{"Name": "k", "EnableKeyRotation": false}`),
 			Properties:    json.RawMessage(`{"Name": "k", "EnableKeyRotation": true}`),
 		}},
@@ -41,7 +41,7 @@ func TestComputeSuppressedDriftNotes_AbsorbedSuppressedMovement_Noted(t *testing
 	}}}
 	fa := &forma_command.FormaCommand{}
 
-	notes := computeSuppressedDriftNotes(mods, forma, fa)
+	notes := computeSuppressedDriftNotes(mods, witnesses(mods), forma, fa)
 
 	require.Len(t, notes, 1)
 	assert.Equal(t, "prod", notes[0].Stack)
@@ -57,7 +57,7 @@ func TestComputeSuppressedDriftNotes_UnabsorbedModification_NoNote(t *testing.T)
 	// rejection territory (displayed in full there), never a note.
 	mods := map[string][]datastore.ResourceModification{
 		"prod": {{
-			Stack: "prod", Type: "AWS::KMS::Key", Label: "orphan", Operation: "update",
+			Stack: "prod", Type: "AWS::KMS::Key", Label: "orphan", Operation: "update", Ksuid: "k2",
 			OldProperties: json.RawMessage(`{"EnableKeyRotation": false}`),
 			Properties:    json.RawMessage(`{"EnableKeyRotation": true}`),
 		}},
@@ -66,7 +66,7 @@ func TestComputeSuppressedDriftNotes_UnabsorbedModification_NoNote(t *testing.T)
 		Stack: "prod", Type: "AWS::KMS::Key", Label: "signing-key", Schema: kmsSchemaForNotes(),
 	}}}
 
-	notes := computeSuppressedDriftNotes(mods, forma, &forma_command.FormaCommand{})
+	notes := computeSuppressedDriftNotes(mods, witnesses(mods), forma, &forma_command.FormaCommand{})
 	assert.Empty(t, notes)
 }
 
@@ -76,7 +76,7 @@ func TestComputeSuppressedDriftNotes_ModificationWithPendingUpdate_NoNote(t *tes
 	// produce a note for it.
 	mods := map[string][]datastore.ResourceModification{
 		"prod": {{
-			Stack: "prod", Type: "AWS::KMS::Key", Label: "signing-key", Operation: "update",
+			Stack: "prod", Type: "AWS::KMS::Key", Label: "signing-key", Operation: "update", Ksuid: "k1",
 			OldProperties: json.RawMessage(`{"Name": "k", "EnableKeyRotation": false}`),
 			Properties:    json.RawMessage(`{"Name": "k2", "EnableKeyRotation": true}`),
 		}},
@@ -92,7 +92,7 @@ func TestComputeSuppressedDriftNotes_ModificationWithPendingUpdate_NoNote(t *tes
 		DesiredState: pkgmodel.Resource{Type: "AWS::KMS::Key", Label: "signing-key"},
 	}}}
 
-	notes := computeSuppressedDriftNotes(mods, forma, fa)
+	notes := computeSuppressedDriftNotes(mods, witnesses(mods), forma, fa)
 	assert.Empty(t, notes)
 }
 
@@ -111,14 +111,14 @@ func TestComputeSuppressedDriftNotes_NonUpdateOperations_NeverNoted(t *testing.T
 		Schema:     kmsSchemaForNotes(),
 	}}}
 
-	notes := computeSuppressedDriftNotes(mods, forma, &forma_command.FormaCommand{})
+	notes := computeSuppressedDriftNotes(mods, witnesses(mods), forma, &forma_command.FormaCommand{})
 	assert.Empty(t, notes)
 }
 
 func TestComputeSuppressedDriftNotes_MissingPropertyBlobs_NoNote(t *testing.T) {
 	mods := map[string][]datastore.ResourceModification{
 		"prod": {{
-			Stack: "prod", Type: "AWS::KMS::Key", Label: "signing-key", Operation: "update",
+			Stack: "prod", Type: "AWS::KMS::Key", Label: "signing-key", Operation: "update", Ksuid: "k1",
 		}},
 	}
 	forma := &pkgmodel.Forma{Resources: []pkgmodel.Resource{{
@@ -127,7 +127,7 @@ func TestComputeSuppressedDriftNotes_MissingPropertyBlobs_NoNote(t *testing.T) {
 		Schema:     kmsSchemaForNotes(),
 	}}}
 
-	notes := computeSuppressedDriftNotes(mods, forma, &forma_command.FormaCommand{})
+	notes := computeSuppressedDriftNotes(mods, witnesses(mods), forma, &forma_command.FormaCommand{})
 	assert.Empty(t, notes)
 }
 
@@ -138,7 +138,7 @@ func TestComputeSuppressedDriftNotes_AliasRename_ResolvesDeclaration(t *testing.
 	// declaration.
 	mods := map[string][]datastore.ResourceModification{
 		"prod": {{
-			Stack: "prod", Type: "AWS::KMS::Key", Label: "old-key", Operation: "update",
+			Stack: "prod", Type: "AWS::KMS::Key", Label: "old-key", Operation: "update", Ksuid: "k3",
 			OldProperties: json.RawMessage(`{"Name": "k", "EnableKeyRotation": false}`),
 			Properties:    json.RawMessage(`{"Name": "k", "EnableKeyRotation": true}`),
 		}},
@@ -149,7 +149,7 @@ func TestComputeSuppressedDriftNotes_AliasRename_ResolvesDeclaration(t *testing.
 		Schema:     kmsSchemaForNotes(),
 	}}}
 
-	notes := computeSuppressedDriftNotes(mods, forma, &forma_command.FormaCommand{})
+	notes := computeSuppressedDriftNotes(mods, witnesses(mods), forma, &forma_command.FormaCommand{})
 	require.Len(t, notes, 1)
 	assert.Equal(t, "old-key", notes[0].Label, "the note names the modification's identity")
 	assert.Equal(t, "EnableKeyRotation", notes[0].Path)
@@ -161,7 +161,7 @@ func TestComputeSuppressedDriftNotes_DriftAbsorbedByDeclaration_NoNote(t *testin
 	// Nothing is suppressed.
 	mods := map[string][]datastore.ResourceModification{
 		"prod": {{
-			Stack: "prod", Type: "AWS::KMS::Key", Label: "signing-key", Operation: "update",
+			Stack: "prod", Type: "AWS::KMS::Key", Label: "signing-key", Operation: "update", Ksuid: "k1",
 			OldProperties: json.RawMessage(`{"Name": "k", "EnableKeyRotation": false}`),
 			Properties:    json.RawMessage(`{"Name": "k", "EnableKeyRotation": true}`),
 		}},
@@ -172,7 +172,7 @@ func TestComputeSuppressedDriftNotes_DriftAbsorbedByDeclaration_NoNote(t *testin
 		Schema:     kmsSchemaForNotes(),
 	}}}
 
-	notes := computeSuppressedDriftNotes(mods, forma, &forma_command.FormaCommand{})
+	notes := computeSuppressedDriftNotes(mods, witnesses(mods), forma, &forma_command.FormaCommand{})
 	assert.Empty(t, notes)
 }
 
@@ -182,7 +182,7 @@ func TestComputeSuppressedDriftNotes_ConvergenceOnlyUpdate_CoexistingSuppressedM
 	// noted.
 	mods := map[string][]datastore.ResourceModification{
 		"prod": {{
-			Stack: "prod", Type: "AWS::KMS::Key", Label: "signing-key", Operation: "update",
+			Stack: "prod", Type: "AWS::KMS::Key", Label: "signing-key", Operation: "update", Ksuid: "k1",
 			OldProperties: json.RawMessage(`{"Name": "k", "EnableKeyRotation": false}`),
 			Properties:    json.RawMessage(`{"Name": "k", "EnableKeyRotation": true}`),
 		}},
@@ -208,7 +208,7 @@ func TestComputeSuppressedDriftNotes_ConvergenceOnlyUpdate_CoexistingSuppressedM
 		}},
 	}}}
 
-	notes := computeSuppressedDriftNotes(mods, forma, fa)
+	notes := computeSuppressedDriftNotes(mods, witnesses(mods), forma, fa)
 	require.Len(t, notes, 1)
 	assert.Equal(t, "EnableKeyRotation", notes[0].Path)
 }
@@ -220,7 +220,7 @@ func TestComputeSuppressedDriftNotes_OpaquePath_NoValues(t *testing.T) {
 	}
 	mods := map[string][]datastore.ResourceModification{
 		"prod": {{
-			Stack: "prod", Type: "X::Y::Z", Label: "r", Operation: "update",
+			Stack: "prod", Type: "X::Y::Z", Label: "r", Operation: "update", Ksuid: "k4",
 			OldProperties: json.RawMessage(`{"Name": "n", "MasterSecret": "h1"}`),
 			Properties:    json.RawMessage(`{"Name": "n", "MasterSecret": "h2"}`),
 		}},
@@ -231,7 +231,7 @@ func TestComputeSuppressedDriftNotes_OpaquePath_NoValues(t *testing.T) {
 		Schema:     schema,
 	}}}
 
-	notes := computeSuppressedDriftNotes(mods, forma, &forma_command.FormaCommand{})
+	notes := computeSuppressedDriftNotes(mods, witnesses(mods), forma, &forma_command.FormaCommand{})
 	require.Len(t, notes, 1)
 	assert.True(t, notes[0].Opaque)
 	assert.Nil(t, notes[0].From)
@@ -240,4 +240,18 @@ func TestComputeSuppressedDriftNotes_OpaquePath_NoValues(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, string(raw), "h1")
 	assert.NotContains(t, string(raw), "h2")
+}
+
+// witnesses builds the write-witness map the fixtures imply: formae's last
+// write observed the same state the drift window starts from.
+func witnesses(modsByStack map[string][]datastore.ResourceModification) map[string]json.RawMessage {
+	out := map[string]json.RawMessage{}
+	for _, mods := range modsByStack {
+		for _, mod := range mods {
+			if mod.Ksuid != "" && len(mod.OldProperties) > 0 {
+				out[mod.Ksuid] = mod.OldProperties
+			}
+		}
+	}
+	return out
 }

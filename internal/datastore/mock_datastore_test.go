@@ -40,6 +40,10 @@ func (m *mockDatastore) GetFormaCommandByCommandID(_ string) (*forma_command.For
 func (m *mockDatastore) GetMostRecentFormaCommandByClientID(_ string) (*forma_command.FormaCommand, error) {
 	return nil, nil
 }
+func (m *mockDatastore) GetPropertiesAtLastWrite(_ string) (json.RawMessage, error) {
+	return nil, nil
+}
+
 func (m *mockDatastore) GetResourceModificationsSinceLastReconcile(_ string) ([]ResourceModification, error) {
 	return nil, nil
 }

@@ -93,6 +93,7 @@ type ResourceModification struct {
 	Type          string
 	Label         string
 	Operation     string
+	Ksuid         string
 	Properties    json.RawMessage // current (cloud) properties — update ops only
 	OldProperties json.RawMessage // properties at last reconcile — update ops only
 }
@@ -259,6 +260,13 @@ type Datastore interface {
 	GetMostRecentFormaCommandByClientID(clientID string) (*forma_command.FormaCommand, error)
 	// GetResourceModificationsSinceLastReconcile returns resources modified since the last reconcile
 	GetResourceModificationsSinceLastReconcile(stack string) ([]ResourceModification, error)
+
+	// GetPropertiesAtLastWrite returns the resource's Properties as recorded
+	// by the most recent version persisted under an apply command: the state
+	// formae's own last write observed (the create/update echo). Sync and
+	// discovery never advance it. Returns nil when formae never wrote the
+	// resource.
+	GetPropertiesAtLastWrite(ksuid string) (json.RawMessage, error)
 	// QueryFormaCommands searches commands based on filter criteria
 	QueryFormaCommands(query *StatusQuery) ([]*forma_command.FormaCommand, error)
 
