@@ -695,6 +695,13 @@ func (pr *propertyResolver) resolveEmbedRef(properties json.RawMessage, ref pkgm
 			return true
 		})
 		envMap["$value"] = valueStr
+		// Same reasoning as resolveReference: restate the marker from the
+		// resolution rather than inheriting whatever the copy carried.
+		if ref.ResolvedValue.Hashed {
+			envMap["$hashed"] = true
+		} else {
+			delete(envMap, "$hashed")
+		}
 		envJSON, err := json.Marshal(envMap)
 		if err != nil {
 			return properties, fmt.Errorf("embed: marshal updated envelope: %w", err)
@@ -748,6 +755,18 @@ func (pr *propertyResolver) resolveReference(properties json.RawMessage, ref pkg
 	valueToSet := pr.extractResolvedValue(ref)
 	if valueToSet != nil {
 		refObject["$value"] = valueToSet
+		// The envelope above was copied wholesale from the target, so any
+		// $hashed marker on it describes the value it used to hold, not the
+		// one just written over it. Restate the marker from the resolution
+		// instead of inheriting it. Leaving a stale true makes the terminal
+		// hashing pass skip the envelope and persist plaintext labelled as a
+		// digest; clearing a true that is still accurate would let a digest
+		// past the plugin-boundary guard and reach the provider as a secret.
+		if ref.ResolvedValue.Hashed {
+			refObject["$hashed"] = true
+		} else {
+			delete(refObject, "$hashed")
+		}
 	}
 	if ref.ResolvedValue.Strategy != "" {
 		refObject["$strategy"] = ref.ResolvedValue.Strategy
@@ -779,6 +798,12 @@ func (pr *propertyResolver) resolveReference(properties json.RawMessage, ref pkg
 func (pr *propertyResolver) setRefValue(uri pkgmodel.FormaeURI, value string) error {
 	var actualValue string
 	var inheritedVisibility, inheritedStrategy string
+	// Whether the value being resolved FROM is itself a stored digest rather
+	// than recoverable plaintext. It has to travel with the resolved value:
+	// the plugin-boundary guard refuses a write on the $hashed marker alone,
+	// so dropping it here would let a digest reach a provider as though it
+	// were the secret.
+	var inheritedHashed bool
 
 	if parsed := gjson.Parse(value); parsed.IsObject() {
 		if parsed.Get("$value").Exists() {
@@ -789,6 +814,7 @@ func (pr *propertyResolver) setRefValue(uri pkgmodel.FormaeURI, value string) er
 
 		inheritedVisibility = parsed.Get("$visibility").String()
 		inheritedStrategy = parsed.Get("$strategy").String()
+		inheritedHashed = parsed.Get("$hashed").Bool()
 	} else {
 		actualValue = value
 	}
@@ -836,6 +862,7 @@ func (pr *propertyResolver) setRefValue(uri pkgmodel.FormaeURI, value string) er
 		// erase the record the next plan compares against.
 		newValue.JSONPath = ref.ResolvedValue.JSONPath
 		newValue.ResolvedFrom = ref.ResolvedValue.ResolvedFrom
+		newValue.Hashed = inheritedHashed
 
 		ref.ResolvedValue = newValue
 	}
