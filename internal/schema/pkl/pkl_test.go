@@ -341,6 +341,39 @@ func TestPkl_GeneratorReference_RendersGenEnvelope(t *testing.T) {
 	assert.Equal(t, "Opaque", gjson.Get(jsonString, "Resources.0.Properties.value.$visibility").String())
 }
 
+// TestPkl_GeneratorOutput_EnvelopeFieldsAreImmutable verifies that the $gen
+// envelope's fields cannot be amended — a plan cannot rewrite $visibility
+// away from Opaque (or forge $gen, $label, $stack, $output) once a
+// GeneratorOutput is constructed.
+func TestPkl_GeneratorOutput_EnvelopeFieldsAreImmutable(t *testing.T) {
+	p := PKL{}
+	_, err := p.Evaluate("./testdata/forma/generator_output_envelope_immutable_test.pkl", model.CommandEval, model.FormaApplyModePatch, nil)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "Cannot assign to fixed property")
+}
+
+// TestPkl_GeneratorReference_NoStackFailsEval verifies that a stackless
+// PasswordGenerator kept as a bare local — never collected into `forma`, so
+// render() never runs — still fails eval when referenced only via
+// `pw.gen.value`. The gen access path must force the same validation
+// render() forces.
+func TestPkl_GeneratorReference_NoStackFailsEval(t *testing.T) {
+	p := PKL{}
+	_, err := p.Evaluate("./testdata/forma/generator_reference_no_stack_test.pkl", model.CommandEval, model.FormaApplyModePatch, nil)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "stack is required")
+}
+
+// TestPkl_GeneratorReference_AllClassFlagsFalseFailsEval verifies that a
+// PasswordGenerator with every character-class flag false, kept as a bare
+// local and referenced only via `pw.gen.value`, still fails eval.
+func TestPkl_GeneratorReference_AllClassFlagsFalseFailsEval(t *testing.T) {
+	p := PKL{}
+	_, err := p.Evaluate("./testdata/forma/generator_reference_all_flags_false_test.pkl", model.CommandEval, model.FormaApplyModePatch, nil)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "at least one of uppercase, lowercase, digits, symbols must be true")
+}
+
 // TestPkl_GeneratorExcludeCharacters_MatchesGoAlphabets verifies that the
 // character-class alphabets declared in formae.pkl still match the Go value
 // drawer's alphabets (pkg/model.UppercaseChars etc). A spec excluding exactly

@@ -213,7 +213,11 @@ open class PasswordGenerator extends Generator {
 
     local self = this
 
-    hidden gen: PasswordOutputs = new PasswordOutputs {
+    // The type constraint forces validated() && self.hasStack() the same way
+    // render()'s return type does, so a generator referenced only via
+    // `pw.gen.value` (never collected into `forma`, so render() never runs)
+    // still gets the same eval-time validation.
+    hidden gen: PasswordOutputs(validated() && self.hasStack()) = new PasswordOutputs {
         genLabel = self.label
         genStack = self.stack
     }
@@ -276,11 +280,11 @@ open class GeneratorOutput {
     hidden genStack: StackResolvable?
     hidden output: String
 
-    $gen: Boolean = true
-    $label: String? = genLabel
-    $stack: String? = genStack?.label
-    $output: String = output
-    $visibility: String = "Opaque"
+    fixed $gen: Boolean = true
+    fixed $label: String? = genLabel
+    fixed $stack: String? = genStack?.label
+    fixed $output: String = output
+    fixed $visibility: String = "Opaque"
 
     // Rendered when this GeneratorOutput is interpolated inside a string via
     // \(…), mirroring Resolvable.toString(): the full envelope, base64-encoded
