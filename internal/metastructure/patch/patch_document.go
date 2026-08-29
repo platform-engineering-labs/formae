@@ -113,14 +113,14 @@ func generatePatch(document []byte, patch []byte, storedEnvelopes []byte, desire
 
 	requiredOnUpdateFields := schema.RequiredOnUpdate()
 	// Fields hinted preserveEmptyValues carry meaningful empty collections:
-	// every empty-value normalization below skips their subtrees, on both
-	// sides, in op values, and in the keep-set for the top-level drop.
+	// every empty-collection normalization below skips their subtrees, on
+	// both sides and in op values. The top-level empty-STRING drop is
+	// deliberately not exempted: the hint speaks about collections, which
+	// pass that filter anyway, and a preserved field rendered "" by an unset
+	// nullable declaration is still rendering noise.
 	preserveRoots := PreserveEmptyRootFields(schema)
 	keepFields := topLevelConvergeFields(schema.Fields, properties)
 	for field := range referenceEnvelopeFields(desiredEnvelopes, schema) {
-		keepFields[field] = true
-	}
-	for field := range preserveRoots {
 		keepFields[field] = true
 	}
 	patchOps, err := createPatchDocument(flattenedDocument, flattenedPatch, schema.Fields, requiredOnUpdateFields, schema.HasProviderDefault(), entitySetProviderDefaultsFromHints(schema.Hints), collectionSemanticsFromFieldHints(schema.Hints), defaultIgnoredFields, strategy, keepFields, preserveRoots)
