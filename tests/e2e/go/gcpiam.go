@@ -60,12 +60,19 @@ type gcpBinding struct {
 }
 
 // RevokeGCPPrincipal removes every binding member equal to principal from the
-// project's IAM policy.
+// project's IAM policy, and fails the run if it removed nothing.
 //
-// A failure here does fail the run, deliberately: bindings this run granted and
-// could not take back are exactly the thing worth being told about, and a
-// cleanup that reported nothing would leave them to accumulate unnoticed. It
-// records rather than aborts, so one failed step does not skip the rest.
+// The empty case is a failure rather than a no-op because of when this is
+// called: only once connect has reported the provider it provisioned, by which
+// point the binding it granted must exist. Treating "found nothing" as success
+// would make a principal string that does not match what Google stores
+// indistinguishable from a clean revocation — leaving privileged bindings
+// standing under a green run, which is the exact failure this cleanup exists
+// to prevent.
+//
+// A failure does fail the run, deliberately: bindings this run granted and
+// could not take back are worth being told about. It records rather than
+// aborts, so one failed step does not skip the rest.
 func RevokeGCPPrincipal(t *testing.T, project, principal string) {
 	t.Helper()
 
@@ -89,7 +96,10 @@ func RevokeGCPPrincipal(t *testing.T, project, principal string) {
 
 		filtered, removed := withoutMember(policy.Bindings, principal)
 		if !removed {
-			return // nothing bound; a run that failed before provisioning
+			t.Errorf("cleanup: %s held no bindings on %s to revoke; connect granted them, so either "+
+				"something else removed them or this principal does not name what Google stored",
+				principal, project)
+			return
 		}
 		policy.Bindings = filtered
 		policy.Version = gcpPolicyVersion
