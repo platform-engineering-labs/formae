@@ -115,7 +115,7 @@ func generatePatch(document []byte, patch []byte, storedEnvelopes []byte, desire
 	// Fields hinted preserveEmptyValues carry meaningful empty collections:
 	// every empty-value normalization below skips their subtrees, on both
 	// sides, in op values, and in the keep-set for the top-level drop.
-	preserveRoots := preserveEmptyRootFields(schema)
+	preserveRoots := PreserveEmptyRootFields(schema)
 	keepFields := topLevelConvergeFields(schema.Fields, properties)
 	for field := range referenceEnvelopeFields(desiredEnvelopes, schema) {
 		keepFields[field] = true

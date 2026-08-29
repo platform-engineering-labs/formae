@@ -100,9 +100,9 @@ func TestPreserveEmptyRootFields(t *testing.T) {
 			"Bare":       {PreserveEmptyValues: true},
 		},
 	}
-	assert.Equal(t, map[string]bool{"Spec": true, "Bare": true}, preserveEmptyRootFields(schema),
+	assert.Equal(t, map[string]bool{"Spec": true, "Bare": true}, PreserveEmptyRootFields(schema),
 		"only preserveEmptyValues hints on non-dotted keys enter the root set")
-	assert.Empty(t, preserveEmptyRootFields(pkgmodel.Schema{}))
+	assert.Empty(t, PreserveEmptyRootFields(pkgmodel.Schema{}))
 }
 
 func fidelitySchema() pkgmodel.Schema {
