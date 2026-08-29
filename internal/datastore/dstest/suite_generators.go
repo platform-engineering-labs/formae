@@ -16,23 +16,30 @@ import (
 )
 
 // createGeneratorStack creates a stack for the generator suite tests and
-// returns its label. A generator is always inline to a stack — unlike a
-// policy it has no standalone form — so every test needs one.
-func createGeneratorStack(t *testing.T, ds datastore.Datastore, label string) string {
+// returns it with its generated ID populated. A generator is always inline
+// to a stack — unlike a policy it has no standalone form — so every test
+// needs one, and generators.stack_id stores the stack's KSUID, so tests need
+// the ID as well as the label.
+func createGeneratorStack(t *testing.T, ds datastore.Datastore, label string) *pkgmodel.Stack {
 	t.Helper()
 	stack := &pkgmodel.Stack{Label: label, Description: "generator lookup"}
 	_, err := ds.CreateStack(stack, "cmd-stack")
 	require.NoError(t, err)
-	return stack.Label
+	require.NotEmpty(t, stack.ID)
+	return stack
 }
 
 // testPasswordGenerator returns a password generator on the given stack, with
-// Length as the one field the suite varies to observe an update.
-func testPasswordGenerator(label, stack string, length int) *pkgmodel.PasswordGenerator {
+// Length as the one field the suite varies to observe an update. StackID is
+// set directly from the resolved stack, the way the policy suite sets
+// StackID on a TTLPolicy — the label-to-ID resolution a real apply performs
+// is out of scope here.
+func testPasswordGenerator(label string, stack *pkgmodel.Stack, length int) *pkgmodel.PasswordGenerator {
 	return &pkgmodel.PasswordGenerator{
 		Type:                    "password",
 		Label:                   label,
-		Stack:                   stack,
+		Stack:                   stack.Label,
+		StackID:                 stack.ID,
 		Length:                  length,
 		Uppercase:               true,
 		Lowercase:               true,
@@ -56,12 +63,12 @@ func RunCreateGeneratorThenGet(t *testing.T, newDS func(t *testing.T) TestDatast
 		require.NoError(t, err)
 		require.NotEmpty(t, version)
 
-		got, err := ds.GetGenerator("db-password", stack)
+		got, err := ds.GetGenerator("db-password", stack.Label)
 		require.NoError(t, err)
 		require.NotNil(t, got)
 		assert.Equal(t, "db-password", got.GetLabel())
 		assert.Equal(t, "password", got.GetType())
-		assert.Equal(t, stack, got.GetStack())
+		assert.Equal(t, stack.Label, got.GetStack())
 		pw, ok := got.(*pkgmodel.PasswordGenerator)
 		require.True(t, ok, "GetGenerator must return the concrete password generator type")
 		assert.Equal(t, 24, pw.Length)
@@ -78,7 +85,7 @@ func RunGetGeneratorAbsentReturnsNil(t *testing.T, newDS func(t *testing.T) Test
 
 		stack := createGeneratorStack(t, ds, "generator-empty")
 
-		got, err := ds.GetGenerator("never-created", stack)
+		got, err := ds.GetGenerator("never-created", stack.Label)
 		require.NoError(t, err)
 		assert.Nil(t, got)
 	})
@@ -102,7 +109,7 @@ func RunUpdateGeneratorBumpsVersionAndReadBackReflectsIt(t *testing.T, newDS fun
 
 		assert.NotEqual(t, createVersion, updateVersion, "an update must mint a new version")
 
-		got, err := ds.GetGenerator("api-key", stack)
+		got, err := ds.GetGenerator("api-key", stack.Label)
 		require.NoError(t, err)
 		require.NotNil(t, got)
 		pw, ok := got.(*pkgmodel.PasswordGenerator)
@@ -123,11 +130,11 @@ func RunDeleteGeneratorThenGetReturnsNil(t *testing.T, newDS func(t *testing.T) 
 		_, err := ds.CreateGenerator(testPasswordGenerator("temp-secret", stack, 20), "cmd-create")
 		require.NoError(t, err)
 
-		version, err := ds.DeleteGenerator("temp-secret", stack)
+		version, err := ds.DeleteGenerator("temp-secret", stack.Label)
 		require.NoError(t, err)
 		require.NotEmpty(t, version)
 
-		got, err := ds.GetGenerator("temp-secret", stack)
+		got, err := ds.GetGenerator("temp-secret", stack.Label)
 		require.NoError(t, err)
 		assert.Nil(t, got)
 	})
@@ -151,13 +158,13 @@ func RunLoadGeneratorsByStackReturnsOnlyThatStacksGenerators(t *testing.T, newDS
 		_, err = ds.CreateGenerator(testPasswordGenerator("other-a", other, 12), "cmd-create")
 		require.NoError(t, err)
 
-		generators, err := ds.LoadGeneratorsByStack(owner)
+		generators, err := ds.LoadGeneratorsByStack(owner.Label)
 		require.NoError(t, err)
 
 		labels := make([]string, 0, len(generators))
 		for _, g := range generators {
 			labels = append(labels, g.GetLabel())
-			assert.Equal(t, owner, g.GetStack())
+			assert.Equal(t, owner.Label, g.GetStack())
 		}
 		assert.ElementsMatch(t, []string{"owner-a", "owner-b"}, labels)
 	})
@@ -181,14 +188,14 @@ func RunGeneratorKSUIDStableAcrossUpdate(t *testing.T, newDS func(t *testing.T) 
 		_, err := ds.CreateGenerator(testPasswordGenerator("stable-id", stack, 16), "cmd-create")
 		require.NoError(t, err)
 
-		idBeforeUpdate, err := td.GeneratorIDForTest("stable-id", stack)
+		idBeforeUpdate, err := td.GeneratorIDForTest("stable-id", stack.Label)
 		require.NoError(t, err)
 		require.NotEmpty(t, idBeforeUpdate)
 
 		_, err = ds.UpdateGenerator(testPasswordGenerator("stable-id", stack, 40), "cmd-update")
 		require.NoError(t, err)
 
-		idAfterUpdate, err := td.GeneratorIDForTest("stable-id", stack)
+		idAfterUpdate, err := td.GeneratorIDForTest("stable-id", stack.Label)
 		require.NoError(t, err)
 		assert.Equal(t, idBeforeUpdate, idAfterUpdate, "the generator's KSUID identity must survive an update")
 	})

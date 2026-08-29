@@ -2792,9 +2792,10 @@ func (d DatastoreSQLite) DeletePoliciesForStack(stackID string, commandID string
 	return nil
 }
 
-// CreateGenerator persists a new generator. Unlike CreatePolicy, the stack is
-// never NULL: a generator is always inline to exactly one stack, read off
-// gen.GetStack() rather than threaded as a separate argument.
+// CreateGenerator persists a new generator. stack_id stores the stack's
+// resolved KSUID — like policy_id on an inline policy, not the label — read
+// off gen.GetStackID(). Unlike CreatePolicy the column is never NULL: a
+// generator is always inline to exactly one stack.
 func (d DatastoreSQLite) CreateGenerator(gen pkgmodel.Generator, commandID string) (string, error) {
 	_, span := sqliteTracer.Start(context.Background(), "CreateGenerator")
 	defer span.End()
@@ -2809,7 +2810,7 @@ func (d DatastoreSQLite) CreateGenerator(gen pkgmodel.Generator, commandID strin
 
 	query := `INSERT INTO generators (id, version, command_id, operation, label, generator_type, stack_id, generator_data)
 	          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-	_, err = d.conn.Exec(query, id, version, commandID, "create", gen.GetLabel(), gen.GetType(), gen.GetStack(), string(data))
+	_, err = d.conn.Exec(query, id, version, commandID, "create", gen.GetLabel(), gen.GetType(), gen.GetStackID(), string(data))
 	if err != nil {
 		slog.Error("Failed to create generator", "error", err, "label", gen.GetLabel())
 		return "", err
@@ -2819,9 +2820,9 @@ func (d DatastoreSQLite) CreateGenerator(gen pkgmodel.Generator, commandID strin
 }
 
 // UpdateGenerator persists a new version of an existing generator. The
-// existing row is found by label and stack — a generator has no standalone
-// form, so unlike UpdatePolicy there is no NULL-stack branch — and the new
-// version row carries forward the same id.
+// existing row is found by label and stack ID — a generator has no
+// standalone form, so unlike UpdatePolicy there is no NULL-stack branch —
+// and the new version row carries forward the same id.
 func (d DatastoreSQLite) UpdateGenerator(gen pkgmodel.Generator, commandID string) (string, error) {
 	_, span := sqliteTracer.Start(context.Background(), "UpdateGenerator")
 	defer span.End()
@@ -2829,7 +2830,7 @@ func (d DatastoreSQLite) UpdateGenerator(gen pkgmodel.Generator, commandID strin
 	var id string
 	err := d.conn.QueryRow(
 		`SELECT id FROM generators WHERE label = ? AND stack_id = ? ORDER BY version DESC LIMIT 1`,
-		gen.GetLabel(), gen.GetStack(),
+		gen.GetLabel(), gen.GetStackID(),
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("failed to find existing generator: %w", err)
@@ -2843,7 +2844,7 @@ func (d DatastoreSQLite) UpdateGenerator(gen pkgmodel.Generator, commandID strin
 
 	insertQuery := `INSERT INTO generators (id, version, command_id, operation, label, generator_type, stack_id, generator_data)
 	                VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-	_, err = d.conn.Exec(insertQuery, id, version, commandID, "update", gen.GetLabel(), gen.GetType(), gen.GetStack(), string(data))
+	_, err = d.conn.Exec(insertQuery, id, version, commandID, "update", gen.GetLabel(), gen.GetType(), gen.GetStackID(), string(data))
 	if err != nil {
 		slog.Error("Failed to update generator", "error", err, "label", gen.GetLabel())
 		return "", err
@@ -2853,11 +2854,21 @@ func (d DatastoreSQLite) UpdateGenerator(gen pkgmodel.Generator, commandID strin
 }
 
 // DeleteGenerator soft-deletes the generator with the given label on the
-// given stack. A label with no live match is a no-op success that returns an
-// empty version, mirroring DeletePolicy.
+// given stack. The stack is resolved from its label the same way
+// GetGenerator does; a stack that doesn't exist has nothing to delete. A
+// label with no live match is a no-op success that returns an empty version,
+// mirroring DeletePolicy.
 func (d DatastoreSQLite) DeleteGenerator(label, stackLabel string) (string, error) {
 	_, span := sqliteTracer.Start(context.Background(), "DeleteGenerator")
 	defer span.End()
+
+	stack, err := d.GetStackByLabel(stackLabel)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve stack %q: %w", stackLabel, err)
+	}
+	if stack == nil {
+		return "", nil
+	}
 
 	query := `
 		WITH latest_generators AS (
@@ -2871,7 +2882,7 @@ func (d DatastoreSQLite) DeleteGenerator(label, stackLabel string) (string, erro
 		WHERE rn = 1 AND operation != 'delete'
 	`
 	var id, generatorType string
-	err := d.conn.QueryRow(query, stackLabel, label).Scan(&id, &generatorType)
+	err = d.conn.QueryRow(query, stack.ID, label).Scan(&id, &generatorType)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return "", nil
@@ -2881,7 +2892,7 @@ func (d DatastoreSQLite) DeleteGenerator(label, stackLabel string) (string, erro
 
 	version := mksuid.New().String()
 	insertQuery := `INSERT INTO generators (id, version, command_id, operation, label, generator_type, stack_id, generator_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-	_, err = d.conn.Exec(insertQuery, id, version, "", "delete", label, generatorType, stackLabel, "{}")
+	_, err = d.conn.Exec(insertQuery, id, version, "", "delete", label, generatorType, stack.ID, "{}")
 	if err != nil {
 		return "", fmt.Errorf("failed to delete generator: %w", err)
 	}
@@ -2892,11 +2903,21 @@ func (d DatastoreSQLite) DeleteGenerator(label, stackLabel string) (string, erro
 }
 
 // GetGenerator retrieves the current (latest, non-deleted) generator with the
-// given label on the given stack. Returns nil, nil if no live generator
-// matches.
+// given label on the given stack. The stack label is resolved to its
+// current KSUID first, since generators.stack_id stores the stack's id, not
+// its label — mirroring how a policy's inline lookups are scoped by stack
+// ID. Returns nil, nil if no live stack or no live generator matches.
 func (d DatastoreSQLite) GetGenerator(label, stackLabel string) (pkgmodel.Generator, error) {
 	_, span := sqliteTracer.Start(context.Background(), "GetGenerator")
 	defer span.End()
+
+	stack, err := d.GetStackByLabel(stackLabel)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve stack %q: %w", stackLabel, err)
+	}
+	if stack == nil {
+		return nil, nil
+	}
 
 	query := `
 		WITH latest_generators AS (
@@ -2910,7 +2931,7 @@ func (d DatastoreSQLite) GetGenerator(label, stackLabel string) (pkgmodel.Genera
 		WHERE rn = 1 AND operation != 'delete'
 	`
 	var dataStr string
-	err := d.conn.QueryRow(query, stackLabel, label).Scan(&dataStr)
+	err = d.conn.QueryRow(query, stack.ID, label).Scan(&dataStr)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
@@ -2922,9 +2943,19 @@ func (d DatastoreSQLite) GetGenerator(label, stackLabel string) (pkgmodel.Genera
 }
 
 // LoadGeneratorsByStack returns all non-deleted generators owned by a stack.
+// The stack label is resolved to its current KSUID first, for the same
+// reason GetGenerator does. A stack that doesn't exist owns no generators.
 func (d DatastoreSQLite) LoadGeneratorsByStack(stackLabel string) ([]pkgmodel.Generator, error) {
 	_, span := sqliteTracer.Start(context.Background(), "LoadGeneratorsByStack")
 	defer span.End()
+
+	stack, err := d.GetStackByLabel(stackLabel)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve stack %q: %w", stackLabel, err)
+	}
+	if stack == nil {
+		return nil, nil
+	}
 
 	query := `
 		WITH latest_generators AS (
@@ -2937,7 +2968,7 @@ func (d DatastoreSQLite) LoadGeneratorsByStack(stackLabel string) ([]pkgmodel.Ge
 		FROM latest_generators
 		WHERE rn = 1 AND operation != 'delete'
 	`
-	rows, err := d.conn.Query(query, stackLabel)
+	rows, err := d.conn.Query(query, stack.ID)
 	if err != nil {
 		return nil, err
 	}

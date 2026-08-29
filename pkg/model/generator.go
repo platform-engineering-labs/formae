@@ -18,6 +18,8 @@ type Generator interface {
 	GetType() string
 	GetStack() string
 	SetStack(stack string)
+	GetStackID() string
+	SetStackID(id string)
 }
 
 // PasswordGenerator produces a random password value. Fields mirror the
@@ -26,6 +28,7 @@ type PasswordGenerator struct {
 	Type                    string `json:"Type"` // "password"
 	Label                   string `json:"Label"`
 	Stack                   string `json:"Stack,omitempty"`
+	StackID                 string `json:"-"` // Set during processing, not from PKL
 	EverySeconds            *int64 `json:"EverySeconds,omitempty"`
 	Length                  int    `json:"Length"`
 	Uppercase               bool   `json:"Uppercase"`
@@ -40,6 +43,8 @@ func (g *PasswordGenerator) GetLabel() string      { return g.Label }
 func (g *PasswordGenerator) GetType() string       { return "password" }
 func (g *PasswordGenerator) GetStack() string      { return g.Stack }
 func (g *PasswordGenerator) SetStack(stack string) { g.Stack = stack }
+func (g *PasswordGenerator) GetStackID() string    { return g.StackID }
+func (g *PasswordGenerator) SetStackID(id string)  { g.StackID = id }
 
 // ParseGenerator parses a single generator from JSON, dispatching on the
 // discriminated Type field the same way ParsePolicy does.
