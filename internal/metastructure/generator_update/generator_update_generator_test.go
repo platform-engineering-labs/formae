@@ -240,3 +240,77 @@ func TestGeneratorsEqual_DiffersOnExcludeCharacters(t *testing.T) {
 	b := &pkgmodel.PasswordGenerator{Label: "a", Length: 24, ExcludeCharacters: ""}
 	assert.False(t, generatorsEqual(a, b))
 }
+
+// TestGenerateGeneratorUpdates_DeadAliasIsRejected covers a stale alias: the
+// declared generator's Alias matches no existing generator in its stack.
+// Without rejection this falls through to Create, minting a fresh identity
+// while claiming to be a rename — the exact delete-plus-create this slice
+// exists to prevent, reached through an ordinary two-step refactor (rename
+// once, forget to update the alias on the next rename) with no error.
+func TestGenerateGeneratorUpdates_DeadAliasIsRejected(t *testing.T) {
+	stored := &pkgmodel.PasswordGenerator{Label: "db-pass", Stack: "my-stack", StackID: "stack-1", Length: 24}
+	gg := NewGeneratorUpdateGenerator(&stubDatastore{
+		generatorsByStack: map[string][]pkgmodel.Generator{"my-stack": {stored}},
+	})
+
+	declared := passwordSpec("db-secret", "my-stack", 24)
+	declared["Alias"] = "db-password" // stale: no stored generator has this label
+
+	forma := &pkgmodel.Forma{
+		Stacks:     []pkgmodel.Stack{{Label: "my-stack"}},
+		Generators: []json.RawMessage{rawGenerator(t, declared)},
+	}
+
+	_, err := gg.GenerateGeneratorUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "db-secret")
+	assert.Contains(t, err.Error(), "db-password")
+}
+
+// TestGenerateGeneratorUpdates_AliasEqualToLabelIsRejected covers a declared
+// Alias identical to its own Label, which can never describe a rename.
+func TestGenerateGeneratorUpdates_AliasEqualToLabelIsRejected(t *testing.T) {
+	gg := NewGeneratorUpdateGenerator(&stubDatastore{})
+
+	declared := passwordSpec("db-password", "my-stack", 24)
+	declared["Alias"] = "db-password"
+
+	forma := &pkgmodel.Forma{
+		Stacks:     []pkgmodel.Stack{{Label: "my-stack"}},
+		Generators: []json.RawMessage{rawGenerator(t, declared)},
+	}
+
+	_, err := gg.GenerateGeneratorUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "db-password")
+}
+
+// TestGenerateGeneratorUpdates_DuplicateClaimIsRejected covers two declared
+// generators matching the same stored row — one by its current label, the
+// other by alias. Without rejection only one produces an update and the
+// other's declaration silently vanishes (its stored row's matchedLabels
+// entry also suppresses the reconcile delete that would otherwise surface
+// the divergence), so the forma declares two generators while the store
+// ends with one.
+func TestGenerateGeneratorUpdates_DuplicateClaimIsRejected(t *testing.T) {
+	stored := &pkgmodel.PasswordGenerator{Label: "x", Stack: "my-stack", StackID: "stack-1", Length: 24}
+	gg := NewGeneratorUpdateGenerator(&stubDatastore{
+		generatorsByStack: map[string][]pkgmodel.Generator{"my-stack": {stored}},
+	})
+
+	aliased := passwordSpec("y", "my-stack", 24)
+	aliased["Alias"] = "x"
+
+	forma := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{{Label: "my-stack"}},
+		Generators: []json.RawMessage{
+			rawGenerator(t, passwordSpec("x", "my-stack", 24)),
+			rawGenerator(t, aliased),
+		},
+	}
+
+	_, err := gg.GenerateGeneratorUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "`x`")
+	assert.Contains(t, err.Error(), "`y`")
+}

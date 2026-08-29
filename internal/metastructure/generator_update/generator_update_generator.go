@@ -7,6 +7,7 @@ package generator_update
 import (
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
@@ -66,6 +67,16 @@ func (gg *GeneratorUpdateGenerator) GenerateGeneratorUpdates(forma *pkgmodel.For
 		byStack[stackLabel] = append(byStack[stackLabel], gen)
 	}
 
+	// Only Apply commands carry user-authored aliases — the diff never runs
+	// for Destroy (returned above) and never runs for Sync/Discovery, which
+	// build FormaCommand directly and never populate Forma.Generators. Still
+	// gated explicitly, mirroring resource_update's identical reasoning.
+	if command == pkgmodel.CommandApply {
+		if err := gg.validateGeneratorAliasUsage(byStack, stackOrder); err != nil {
+			return nil, err
+		}
+	}
+
 	exact := mode == pkgmodel.FormaApplyModeReconcile
 	now := util.TimeNow()
 
@@ -99,6 +110,97 @@ func (gg *GeneratorUpdateGenerator) GenerateGeneratorUpdates(forma *pkgmodel.For
 	}
 
 	return updates, nil
+}
+
+// validateGeneratorAliasUsage rejects two forma-authoring errors before any
+// generator update is generated, mirroring resource_update's
+// validateAliasUsage (the generator version is simpler: a single stack
+// scope, no type dimension, and no unmanaged-stack fallback):
+//
+//  1. Dead alias: a declared generator's Alias matches no existing generator
+//     in its stack (or Alias equals its own Label, which can never be a
+//     rename). Without rejection it falls through to Create, minting a
+//     fresh identity while claiming to be a rename — the stale alias is
+//     almost always left over from an earlier refactor.
+//  2. Duplicate claim: two declared generators in the same stack match the
+//     same existing row — one via its current label, the other via alias.
+//     Without rejection the diff only ever produces one update for that
+//     row; the other declaration silently vanishes, and matchedLabels
+//     suppresses the reconcile delete that would otherwise have surfaced
+//     the divergence.
+func (gg *GeneratorUpdateGenerator) validateGeneratorAliasUsage(byStack map[string][]pkgmodel.Generator, stackOrder []string) error {
+	for _, stackLabel := range stackOrder {
+		declared := byStack[stackLabel]
+
+		for _, gen := range declared {
+			if gen.GetAlias() != "" && gen.GetAlias() == gen.GetLabel() {
+				return fmt.Errorf(
+					"generator `%s` declares `alias` equal to its `label` — alias must reference a different prior label",
+					gen.GetLabel(),
+				)
+			}
+		}
+
+		existing, err := gg.existingGenerators(stackLabel)
+		if err != nil {
+			return err
+		}
+
+		existingByLabel := make(map[string]pkgmodel.Generator, len(existing))
+		for _, e := range existing {
+			existingByLabel[e.GetLabel()] = e
+		}
+
+		// Per existing row (keyed by its stored label), collect every
+		// declared generator that claims it — via its current label or via
+		// Alias. A row with two or more claimants is the duplicate-claim
+		// error; a declared Alias that matches nothing at all is the dead
+		// alias error.
+		type claim struct {
+			formaLabel string
+			viaAlias   bool
+		}
+		claims := make(map[string][]claim, len(existing))
+
+		for _, gen := range declared {
+			label := gen.GetLabel()
+			if match, ok := existingByLabel[label]; ok {
+				claims[match.GetLabel()] = append(claims[match.GetLabel()], claim{label, false})
+				continue
+			}
+			if gen.GetAlias() == "" {
+				continue
+			}
+			match, ok := existingByLabel[gen.GetAlias()]
+			if !ok {
+				return fmt.Errorf(
+					"generator `%s` declares alias `%s` but no existing generator in stack %q matches that label — drop the alias if this is a fresh generator",
+					label, gen.GetAlias(), stackLabel,
+				)
+			}
+			claims[match.GetLabel()] = append(claims[match.GetLabel()], claim{label, true})
+		}
+
+		for existingLabel, cs := range claims {
+			if len(cs) < 2 {
+				continue
+			}
+			parts := make([]string, 0, len(cs))
+			for _, c := range cs {
+				via := "label"
+				if c.viaAlias {
+					via = "alias"
+				}
+				parts = append(parts, fmt.Sprintf("`%s` (via %s)", c.formaLabel, via))
+			}
+			return fmt.Errorf(
+				"generators %s both claim the existing generator `%s` in stack %q — remove the duplicate declaration",
+				strings.Join(parts, " and "), existingLabel, stackLabel,
+			)
+		}
+	}
+
+	return nil
 }
 
 // generateStackGeneratorUpdates diffs one stack's declared generators against
