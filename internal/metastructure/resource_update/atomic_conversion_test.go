@@ -51,3 +51,22 @@ func extractField(t *testing.T, props json.RawMessage, field string) string {
 	require.NoError(t, json.Unmarshal(props, &m))
 	return string(m[field])
 }
+
+// The persist merge keeps empty collections under a preserveEmptyValues root
+// even when the plugin echoes nothing; elsewhere the leaf-only walk drops
+// them as before.
+func TestMerge_PreserveEmptyRootSurvivesEmptyPluginEcho(t *testing.T) {
+	schema := pkgmodel.Schema{
+		Fields: []string{"ApiVersion", "Spec", "Other"},
+		Hints:  map[string]pkgmodel.FieldHint{"Spec": {UpdateMethod: pkgmodel.FieldUpdateMethodAtomic, PreserveEmptyValues: true}},
+	}
+	user := json.RawMessage(`{"ApiVersion":"v1","Spec":{"selfSigned":{"crl":[]}},"Other":{"e":{}}}`)
+
+	merged, err := mergeRefsPreservingUserRefs(user, json.RawMessage(`{}`), schema, true, nil)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"selfSigned":{"crl":[]}}`, extractField(t, merged, "Spec"),
+		"the hinted subtree persists verbatim, nested empty list included")
+	var m map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(merged, &m))
+	assert.NotContains(t, m, "Other", "unhinted empty-leaved objects keep today's drop")
+}
