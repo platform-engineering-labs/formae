@@ -248,6 +248,12 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunGeneratorKSUIDStableAcrossUpdate(t, newDS)
 	RunGeneratorKSUIDStableAcrossRename(t, newDS)
 	RunDeleteGeneratorAfterRenameDeletesOnlyTheCurrentRow(t, newDS)
+	RunGeneratorHasNoGenerationUntilOneIsDrawn(t, newDS)
+	RunAdvanceGenerationRecordsIdentityAndDrawingSpec(t, newDS)
+	RunGenerationSurvivesASpecUpdate(t, newDS)
+	RunGenerationSurvivesARename(t, newDS)
+	RunGetGeneratorIdentityByIDFindsTheLiveRow(t, newDS)
+	RunGetGeneratorIdentityAbsentReturnsZeroValue(t, newDS)
 
 	RunFindResourcesDependingOn(t, newDS)
 	RunFindResourcesDependingOnMultipleRefs(t, newDS)

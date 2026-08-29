@@ -229,6 +229,15 @@ type ResourceSnapshot struct {
 	Schema     pkgmodel.Schema
 }
 
+// GeneratorIdentity is controller state for one generator: its stable KSUID
+// and the generation it currently holds. Deliberately kept off
+// pkgmodel.Generator so it can never participate in desired-config equality.
+type GeneratorIdentity struct {
+	ID             string          // the generator's stable KSUID
+	GenerationID   string          // "" until a generation has been drawn
+	GenerationSpec json.RawMessage // the spec that generation was drawn under; nil when GenerationID is ""
+}
+
 // Datastore defines the persistence interface for formae.
 // It handles storage and retrieval of FormaCommands (requested changes),
 // Resources (actual cloud state), Stacks, and Targets.
@@ -507,6 +516,24 @@ type Datastore interface {
 	// LoadGeneratorsByStack returns all non-deleted generators owned by a
 	// stack.
 	LoadGeneratorsByStack(stackLabel string) ([]pkgmodel.Generator, error)
+	// GetGeneratorIdentity returns the identity of the live generator with
+	// this label on this stack. A zero GeneratorIdentity and a nil error
+	// mean no such generator, matching GetGenerator's absent-is-not-an-error
+	// convention.
+	GetGeneratorIdentity(label, stackLabel string) (GeneratorIdentity, error)
+	// GetGeneratorIdentityByID returns the identity of the live generator
+	// with this KSUID, whichever stack owns it. Zero value plus nil error
+	// when absent.
+	GetGeneratorIdentityByID(generatorID string) (GeneratorIdentity, error)
+	// AdvanceGeneration records that a new generation was drawn for this
+	// generator, under this spec. Writes a new version row, preserving the
+	// KSUID.
+	//
+	// No production caller in this slice: the executable generator node that
+	// draws generations arrives in a later slice. It ships here because the
+	// generation columns are inert without a writer, and a test-only
+	// backdoor would misrepresent a mechanism we are shipping for real use.
+	AdvanceGeneration(generatorID, generationID string, drawnUnder json.RawMessage) error
 
 	// Close releases database connections
 	Close()
