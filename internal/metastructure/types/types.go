@@ -95,3 +95,12 @@ const (
 	PolicyUpdateStateSuccess    PolicyUpdateState = "Success"
 	PolicyUpdateStateFailed     PolicyUpdateState = "Failed"
 )
+
+// GeneratorUpdateState represents the state of a generator update
+type GeneratorUpdateState string
+
+const (
+	GeneratorUpdateStateNotStarted GeneratorUpdateState = "NotStarted"
+	GeneratorUpdateStateSuccess    GeneratorUpdateState = "Success"
+	GeneratorUpdateStateFailed     GeneratorUpdateState = "Failed"
+)

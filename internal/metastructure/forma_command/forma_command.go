@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/generator_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/policy_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/stack_update"
@@ -72,21 +73,22 @@ type SuppressedDriftNote struct {
 }
 
 type FormaCommand struct {
-	ID              string                           `json:"ID"`
-	Description     pkgmodel.Description             `json:"Description"`
-	State           CommandState                     `json:"State"`
-	StartTs         time.Time                        `json:"StartTs"`
-	ModifiedTs      time.Time                        `json:"ModifiedTs"`
-	ResourceUpdates []resource_update.ResourceUpdate `json:"ResourceUpdates,omitempty"`
-	TargetUpdates   []target_update.TargetUpdate     `json:"TargetUpdates,omitempty"`
-	StackUpdates    []stack_update.StackUpdate       `json:"StackUpdates,omitempty"`
-	PolicyUpdates   []policy_update.PolicyUpdate     `json:"PolicyUpdates,omitempty"`
-	Config          config.FormaCommandConfig        `json:"Config"`
-	Command         pkgmodel.Command                 `json:"Command"`
-	ClientID        string                           `json:"ClientId,omitempty"`
-	Subject         string                           `json:"Subject,omitempty"`
-	SubjectName     string                           `json:"SubjectName,omitempty"`
-	Source          Source                           `json:"Source,omitempty"`
+	ID               string                             `json:"ID"`
+	Description      pkgmodel.Description               `json:"Description"`
+	State            CommandState                       `json:"State"`
+	StartTs          time.Time                          `json:"StartTs"`
+	ModifiedTs       time.Time                          `json:"ModifiedTs"`
+	ResourceUpdates  []resource_update.ResourceUpdate   `json:"ResourceUpdates,omitempty"`
+	TargetUpdates    []target_update.TargetUpdate       `json:"TargetUpdates,omitempty"`
+	StackUpdates     []stack_update.StackUpdate         `json:"StackUpdates,omitempty"`
+	PolicyUpdates    []policy_update.PolicyUpdate       `json:"PolicyUpdates,omitempty"`
+	GeneratorUpdates []generator_update.GeneratorUpdate `json:"GeneratorUpdates,omitempty"`
+	Config           config.FormaCommandConfig          `json:"Config"`
+	Command          pkgmodel.Command                   `json:"Command"`
+	ClientID         string                             `json:"ClientId,omitempty"`
+	Subject          string                             `json:"Subject,omitempty"`
+	SubjectName      string                             `json:"SubjectName,omitempty"`
+	Source           Source                             `json:"Source,omitempty"`
 	// SuppressedDriftNotes is the durable record of out-of-band movement on
 	// provider-default fields this command's plan could not see: computed
 	// once at submission from the changes-since-last-reconcile window, and
@@ -112,33 +114,37 @@ func NewFormaCommand(
 	targetUpdates []target_update.TargetUpdate,
 	stackUpdates []stack_update.StackUpdate,
 	policyUpdates []policy_update.PolicyUpdate,
+	generatorUpdates []generator_update.GeneratorUpdate,
 	clientID string,
 	subject string,
 	subjectName string,
 	source Source,
 ) *FormaCommand {
 	return &FormaCommand{
-		ID:              util.NewID(),
-		StartTs:         util.TimeNow(),
-		ModifiedTs:      util.TimeNow(),
-		ResourceUpdates: resourceUpdates,
-		TargetUpdates:   targetUpdates,
-		StackUpdates:    stackUpdates,
-		PolicyUpdates:   policyUpdates,
-		Config:          *formaCommandConfig,
-		Command:         command,
-		Description:     forma.Description,
-		State:           CommandStateNotStarted,
-		ClientID:        clientID,
-		Subject:         subject,
-		SubjectName:     subjectName,
-		Source:          source,
+		ID:               util.NewID(),
+		StartTs:          util.TimeNow(),
+		ModifiedTs:       util.TimeNow(),
+		ResourceUpdates:  resourceUpdates,
+		TargetUpdates:    targetUpdates,
+		StackUpdates:     stackUpdates,
+		PolicyUpdates:    policyUpdates,
+		GeneratorUpdates: generatorUpdates,
+		Config:           *formaCommandConfig,
+		Command:          command,
+		Description:      forma.Description,
+		State:            CommandStateNotStarted,
+		ClientID:         clientID,
+		Subject:          subject,
+		SubjectName:      subjectName,
+		Source:           source,
 	}
 }
 
-// HasChanges returns true if the command has any resource, target, stack, or policy updates
+// HasChanges returns true if the command has any resource, target, stack,
+// policy, or generator updates
 func (fc *FormaCommand) HasChanges() bool {
-	return len(fc.ResourceUpdates) > 0 || len(fc.TargetUpdates) > 0 || len(fc.StackUpdates) > 0 || len(fc.PolicyUpdates) > 0
+	return len(fc.ResourceUpdates) > 0 || len(fc.TargetUpdates) > 0 || len(fc.StackUpdates) > 0 ||
+		len(fc.PolicyUpdates) > 0 || len(fc.GeneratorUpdates) > 0
 }
 
 // IsInFinalState returns true if the command is in a final state (Success, Failed, or Canceled)

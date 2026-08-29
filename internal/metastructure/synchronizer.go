@@ -319,6 +319,7 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 		nil, // No target updates on sync
 		nil, // No stack updates on sync
 		nil, // No policy updates on sync
+		nil, // No generator updates on sync
 		"synchronizer",
 		"",
 		"",
