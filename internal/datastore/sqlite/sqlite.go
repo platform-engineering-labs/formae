@@ -2792,6 +2792,178 @@ func (d DatastoreSQLite) DeletePoliciesForStack(stackID string, commandID string
 	return nil
 }
 
+// CreateGenerator persists a new generator. Unlike CreatePolicy, the stack is
+// never NULL: a generator is always inline to exactly one stack, read off
+// gen.GetStack() rather than threaded as a separate argument.
+func (d DatastoreSQLite) CreateGenerator(gen pkgmodel.Generator, commandID string) (string, error) {
+	_, span := sqliteTracer.Start(context.Background(), "CreateGenerator")
+	defer span.End()
+
+	id := mksuid.New().String()
+	version := mksuid.New().String()
+
+	data, err := datastore.GeneratorData(gen)
+	if err != nil {
+		return "", err
+	}
+
+	query := `INSERT INTO generators (id, version, command_id, operation, label, generator_type, stack_id, generator_data)
+	          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+	_, err = d.conn.Exec(query, id, version, commandID, "create", gen.GetLabel(), gen.GetType(), gen.GetStack(), string(data))
+	if err != nil {
+		slog.Error("Failed to create generator", "error", err, "label", gen.GetLabel())
+		return "", err
+	}
+
+	return version, nil
+}
+
+// UpdateGenerator persists a new version of an existing generator. The
+// existing row is found by label and stack — a generator has no standalone
+// form, so unlike UpdatePolicy there is no NULL-stack branch — and the new
+// version row carries forward the same id.
+func (d DatastoreSQLite) UpdateGenerator(gen pkgmodel.Generator, commandID string) (string, error) {
+	_, span := sqliteTracer.Start(context.Background(), "UpdateGenerator")
+	defer span.End()
+
+	var id string
+	err := d.conn.QueryRow(
+		`SELECT id FROM generators WHERE label = ? AND stack_id = ? ORDER BY version DESC LIMIT 1`,
+		gen.GetLabel(), gen.GetStack(),
+	).Scan(&id)
+	if err != nil {
+		return "", fmt.Errorf("failed to find existing generator: %w", err)
+	}
+
+	version := mksuid.New().String()
+	data, err := datastore.GeneratorData(gen)
+	if err != nil {
+		return "", err
+	}
+
+	insertQuery := `INSERT INTO generators (id, version, command_id, operation, label, generator_type, stack_id, generator_data)
+	                VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+	_, err = d.conn.Exec(insertQuery, id, version, commandID, "update", gen.GetLabel(), gen.GetType(), gen.GetStack(), string(data))
+	if err != nil {
+		slog.Error("Failed to update generator", "error", err, "label", gen.GetLabel())
+		return "", err
+	}
+
+	return version, nil
+}
+
+// DeleteGenerator soft-deletes the generator with the given label on the
+// given stack. A label with no live match is a no-op success that returns an
+// empty version, mirroring DeletePolicy.
+func (d DatastoreSQLite) DeleteGenerator(label, stackLabel string) (string, error) {
+	_, span := sqliteTracer.Start(context.Background(), "DeleteGenerator")
+	defer span.End()
+
+	query := `
+		WITH latest_generators AS (
+			SELECT id, generator_type, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version DESC) as rn
+			FROM generators
+			WHERE stack_id = ? AND label = ?
+		)
+		SELECT id, generator_type
+		FROM latest_generators
+		WHERE rn = 1 AND operation != 'delete'
+	`
+	var id, generatorType string
+	err := d.conn.QueryRow(query, stackLabel, label).Scan(&id, &generatorType)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return "", fmt.Errorf("failed to get generator for deletion: %w", err)
+	}
+
+	version := mksuid.New().String()
+	insertQuery := `INSERT INTO generators (id, version, command_id, operation, label, generator_type, stack_id, generator_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+	_, err = d.conn.Exec(insertQuery, id, version, "", "delete", label, generatorType, stackLabel, "{}")
+	if err != nil {
+		return "", fmt.Errorf("failed to delete generator: %w", err)
+	}
+
+	slog.Debug("Deleted generator", "label", label, "id", id, "stackLabel", stackLabel)
+
+	return version, nil
+}
+
+// GetGenerator retrieves the current (latest, non-deleted) generator with the
+// given label on the given stack. Returns nil, nil if no live generator
+// matches.
+func (d DatastoreSQLite) GetGenerator(label, stackLabel string) (pkgmodel.Generator, error) {
+	_, span := sqliteTracer.Start(context.Background(), "GetGenerator")
+	defer span.End()
+
+	query := `
+		WITH latest_generators AS (
+			SELECT generator_data, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version DESC) as rn
+			FROM generators
+			WHERE stack_id = ? AND label = ?
+		)
+		SELECT generator_data
+		FROM latest_generators
+		WHERE rn = 1 AND operation != 'delete'
+	`
+	var dataStr string
+	err := d.conn.QueryRow(query, stackLabel, label).Scan(&dataStr)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to get generator: %w", err)
+	}
+
+	return datastore.GeneratorFromData([]byte(dataStr))
+}
+
+// LoadGeneratorsByStack returns all non-deleted generators owned by a stack.
+func (d DatastoreSQLite) LoadGeneratorsByStack(stackLabel string) ([]pkgmodel.Generator, error) {
+	_, span := sqliteTracer.Start(context.Background(), "LoadGeneratorsByStack")
+	defer span.End()
+
+	query := `
+		WITH latest_generators AS (
+			SELECT id, generator_data, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version DESC) as rn
+			FROM generators
+			WHERE stack_id = ?
+		)
+		SELECT generator_data
+		FROM latest_generators
+		WHERE rn = 1 AND operation != 'delete'
+	`
+	rows, err := d.conn.Query(query, stackLabel)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var generators []pkgmodel.Generator
+	for rows.Next() {
+		var dataStr string
+		if err := rows.Scan(&dataStr); err != nil {
+			return nil, err
+		}
+		gen, err := datastore.GeneratorFromData([]byte(dataStr))
+		if err != nil {
+			slog.Warn("Failed to deserialize generator, skipping", "error", err, "stackLabel", stackLabel)
+			continue
+		}
+		generators = append(generators, gen)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return generators, nil
+}
+
 // deserializePolicy creates a Policy from stored data
 func deserializePolicy(label, policyType, policyDataStr, stackID string) (pkgmodel.Policy, error) {
 	switch policyType {

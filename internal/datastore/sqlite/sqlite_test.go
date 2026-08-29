@@ -142,6 +142,18 @@ func TestDatastore(t *testing.T) {
 				)
 				return err
 			},
+			GeneratorIDForTest: func(label, stackLabel string) (string, error) {
+				conn := d.Conn()
+				var id string
+				err := conn.QueryRow(
+					`SELECT id FROM generators WHERE label = ? AND stack_id = ? ORDER BY version DESC LIMIT 1`,
+					label, stackLabel,
+				).Scan(&id)
+				if err == sql.ErrNoRows {
+					return "", nil
+				}
+				return id, err
+			},
 		}
 	})
 }

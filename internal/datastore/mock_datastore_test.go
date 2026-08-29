@@ -177,7 +177,20 @@ func (m *mockDatastore) GetResourcesAtLastReconcile(_ string) ([]ResourceSnapsho
 	return nil, nil
 }
 func (m *mockDatastore) StackHasActiveCommands(_ string) (bool, error) { return false, nil }
-func (m *mockDatastore) Close()                                        {}
+func (m *mockDatastore) CreateGenerator(_ pkgmodel.Generator, _ string) (string, error) {
+	return "", nil
+}
+func (m *mockDatastore) UpdateGenerator(_ pkgmodel.Generator, _ string) (string, error) {
+	return "", nil
+}
+func (m *mockDatastore) DeleteGenerator(_, _ string) (string, error) { return "", nil }
+func (m *mockDatastore) GetGenerator(_, _ string) (pkgmodel.Generator, error) {
+	return nil, nil
+}
+func (m *mockDatastore) LoadGeneratorsByStack(_ string) ([]pkgmodel.Generator, error) {
+	return nil, nil
+}
+func (m *mockDatastore) Close() {}
 func (m *mockDatastore) BulkStoreResourceUpdates(_ string, _ []resource_update.ResourceUpdate) error {
 	return nil
 }
