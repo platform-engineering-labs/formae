@@ -63,8 +63,12 @@ func isKeepableReferenceEnvelope(value gjson.Result) bool {
 // referenceEnvelopeFields returns the schema fields whose desired pre-flatten
 // value is a keepable reference envelope. Absent, malformed, or non-object
 // input contributes nothing: the failure direction is always "field dropped
-// as today", never "non-envelope kept".
-func referenceEnvelopeFields(desiredEnvelopes []byte, schemaFields []string) map[string]bool {
+// as today", never "non-envelope kept". CreateOnly destinations are excluded
+// outright: a kept placeholder there could only ever surface as a
+// replacement, and a replacement must never be planned from a value that has
+// not resolved - an import-shaped source whose property is never written
+// would otherwise destroy its consumer.
+func referenceEnvelopeFields(desiredEnvelopes []byte, schema pkgmodel.Schema) map[string]bool {
 	fields := map[string]bool{}
 	if len(desiredEnvelopes) == 0 {
 		return fields
@@ -73,7 +77,10 @@ func referenceEnvelopeFields(desiredEnvelopes []byte, schemaFields []string) map
 	if !parsed.IsObject() {
 		return fields
 	}
-	for _, field := range schemaFields {
+	for _, field := range schema.Fields {
+		if schema.Hints[field].CreateOnly {
+			continue
+		}
 		if isKeepableReferenceEnvelope(parsed.Get(field)) {
 			fields[field] = true
 		}

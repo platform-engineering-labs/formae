@@ -117,7 +117,7 @@ func generatePatch(document []byte, patch []byte, storedEnvelopes []byte, desire
 	// sides, in op values, and in the keep-set for the top-level drop.
 	preserveRoots := preserveEmptyRootFields(schema)
 	keepFields := topLevelConvergeFields(schema.Fields, properties)
-	for field := range referenceEnvelopeFields(desiredEnvelopes, schema.Fields) {
+	for field := range referenceEnvelopeFields(desiredEnvelopes, schema) {
 		keepFields[field] = true
 	}
 	for field := range preserveRoots {

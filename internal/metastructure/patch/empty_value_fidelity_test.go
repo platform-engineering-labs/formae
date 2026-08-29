@@ -79,11 +79,15 @@ func TestReferenceEnvelopeFields(t *testing.T) {
 		"Plain": "",
 		"Extra": {"$ref": "formae://2ABcDeFgHiJkLmNoPqRsTuVwXyZ#/T"}
 	}`)
-	fields := referenceEnvelopeFields(desired, []string{"Token", "Bad", "Plain"})
+	fields := referenceEnvelopeFields(desired, pkgmodel.Schema{Fields: []string{"Token", "Bad", "Plain"}})
 	assert.Equal(t, map[string]bool{"Token": true}, fields,
 		"only well-formed envelopes on schema fields enter the keep-set")
-	assert.Empty(t, referenceEnvelopeFields(nil, []string{"Token"}))
-	assert.Empty(t, referenceEnvelopeFields([]byte(`not json`), []string{"Token"}))
+	assert.Empty(t, referenceEnvelopeFields(nil, pkgmodel.Schema{Fields: []string{"Token"}}))
+	assert.Empty(t, referenceEnvelopeFields([]byte(`not json`), pkgmodel.Schema{Fields: []string{"Token"}}))
+	assert.Empty(t, referenceEnvelopeFields(desired, pkgmodel.Schema{
+		Fields: []string{"Token"},
+		Hints:  map[string]pkgmodel.FieldHint{"Token": {CreateOnly: true}},
+	}), "createOnly destinations never enter the keep-set")
 }
 
 func TestPreserveEmptyRootFields(t *testing.T) {
@@ -226,9 +230,10 @@ func TestGeneratePatch_ReferenceAddSurvivesPatchMode(t *testing.T) {
 	assert.JSONEq(t, `[{"op":"add","path":"/Token","value":""}]`, string(patchDoc))
 }
 
-// A placeholder add on a createOnly-hinted destination routes to the
-// createOnly split like any createOnly change.
-func TestGeneratePatch_ReferenceAddOnCreateOnlyRoutesToCreateOnlyPatch(t *testing.T) {
+// A reference on a createOnly destination never mints a placeholder op: a
+// kept placeholder there could only surface as a replacement, and a
+// replacement is never planned from a value that has not resolved.
+func TestGeneratePatch_ReferenceOnCreateOnlyDestination_NoPlaceholder(t *testing.T) {
 	schema := pkgmodel.Schema{
 		Identifier: "Name",
 		Fields:     []string{"Name", "Token"},
@@ -239,6 +244,6 @@ func TestGeneratePatch_ReferenceAddOnCreateOnlyRoutesToCreateOnlyPatch(t *testin
 
 	patchDoc, createOnly, _, err := GeneratePatch(document, desired, document, desired, resolver.ResolvableProperties{}, schema, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
-	assert.JSONEq(t, `[]`, string(patchDoc), "the createOnly change is not a mutable op")
-	assert.Contains(t, string(createOnly), "/Token")
+	assert.Empty(t, createOnly, "no replacement may be planned from an unresolved placeholder")
+	assert.NotContains(t, string(patchDoc), "/Token")
 }
