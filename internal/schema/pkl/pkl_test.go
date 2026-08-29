@@ -323,6 +323,51 @@ func TestPkl_Generator_AllClassFlagsFalseFailsEval(t *testing.T) {
 	assert.ErrorContains(t, err, "at least one of uppercase, lowercase, digits, symbols must be true")
 }
 
+// TestPkl_GeneratorReference_RendersGenEnvelope verifies that a resource
+// property bound to a generator's named output (`pw.gen.value`) evaluates and
+// renders a $gen envelope carrying the generator's label, its stack, and the
+// named output.
+func TestPkl_GeneratorReference_RendersGenEnvelope(t *testing.T) {
+	p := PKL{}
+	forma, err := p.Evaluate("./testdata/forma/generator_reference_test.pkl", model.CommandEval, model.FormaApplyModePatch, nil)
+	require.NoError(t, err)
+
+	jsonString := forma.ToJSON()
+
+	assert.True(t, gjson.Get(jsonString, "Resources.0.Properties.value.$gen").Bool())
+	assert.Equal(t, "db-password", gjson.Get(jsonString, "Resources.0.Properties.value.$label").String())
+	assert.Equal(t, "durable", gjson.Get(jsonString, "Resources.0.Properties.value.$stack").String())
+	assert.Equal(t, "value", gjson.Get(jsonString, "Resources.0.Properties.value.$output").String())
+	assert.Equal(t, "Opaque", gjson.Get(jsonString, "Resources.0.Properties.value.$visibility").String())
+}
+
+// TestPkl_GeneratorExcludeCharacters_MatchesGoAlphabets verifies that the
+// character-class alphabets declared in formae.pkl still match the Go value
+// drawer's alphabets (pkg/model.UppercaseChars etc). A spec excluding exactly
+// one enabled class's full alphabet must fail eval; if the two ever drift,
+// this fails.
+func TestPkl_GeneratorExcludeCharacters_MatchesGoAlphabets(t *testing.T) {
+	cases := []struct {
+		name     string
+		alphabet string
+	}{
+		{"uppercase", model.UppercaseChars},
+		{"lowercase", model.LowercaseChars},
+		{"digits", model.DigitChars},
+		{"symbols", model.SymbolChars},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := PKL{}
+			props := map[string]string{"excludeCharacters": c.alphabet}
+			_, err := p.Evaluate("./testdata/forma/generator_exclude_matches_go_alphabet_test.pkl", model.CommandApply, model.FormaApplyModeReconcile, props)
+			require.Error(t, err)
+			assert.ErrorContains(t, err, "removes every")
+		})
+	}
+}
+
 // TestPkl_Generator_ExcludeCharactersEmptiesClassFailsEval verifies that
 // excludeCharacters removing every character of an enabled class fails at
 // PKL eval, not at runtime.

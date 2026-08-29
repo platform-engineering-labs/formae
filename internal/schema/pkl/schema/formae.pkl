@@ -179,6 +179,12 @@ abstract class Generator {
     /// Resource.alias.
     alias: String?
 
+    /// The named outputs this generator produces. A destination binds to one
+    /// of them, e.g. `pw.gen.value`. Outputs are typed properties, so an
+    /// output this generator does not produce is an eval-time type error
+    /// rather than something the agent must reject later.
+    abstract hidden gen: Any
+
     local self = this
 
     // Every StackResolvable property defaults (Resolvable's fields are all
@@ -206,6 +212,11 @@ open class PasswordGenerator extends Generator {
     requireEachIncludedType: Boolean = true
 
     local self = this
+
+    hidden gen: PasswordOutputs = new PasswordOutputs {
+        genLabel = self.label
+        genStack = self.stack
+    }
 
     // Canonical alphabets, before excludeCharacters is applied. Eval-time
     // validation below checks emptiness against these; the scheduler that
@@ -251,6 +262,52 @@ open class PasswordGenerator extends Generator {
         Symbols = symbols
         ExcludeCharacters = excludeCharacters
         RequireEachIncludedType = requireEachIncludedType
+    }
+}
+
+/// A reference to one named output of a generator, e.g. `pw.gen.value`.
+/// Renders the $gen envelope the agent resolves at apply time.
+///
+/// Visibility is fixed Opaque: a generated value is a secret by construction,
+/// and an authorable visibility knob would let a plan render one in
+/// cleartext.
+open class GeneratorOutput {
+    hidden genLabel: String?
+    hidden genStack: StackResolvable?
+    hidden output: String
+
+    $gen: Boolean = true
+    $label: String? = genLabel
+    $stack: String? = genStack?.label
+    $output: String = output
+    $visibility: String = "Opaque"
+
+    // Rendered when this GeneratorOutput is interpolated inside a string via
+    // \(…), mirroring Resolvable.toString(): the full envelope, base64-encoded
+    // and framed by RS (U+001E) … US (U+001F), so the agent can locate and
+    // parse it back out of arbitrary string content.
+    function toString(): String =
+        let (env = new Dynamic {
+                ["$gen"] = true
+                ["$label"] = genLabel
+                ["$stack"] = genStack?.label
+                ["$output"] = output
+                ["$visibility"] = "Opaque"
+            })
+        "\u{1e}" + new JsonRenderer { indent = "" }.renderValue(env).base64 + "\u{1f}"
+}
+
+/// The named outputs a PasswordGenerator produces.
+open class PasswordOutputs {
+    hidden genLabel: String?
+    hidden genStack: StackResolvable?
+
+    local self = this
+
+    hidden value: GeneratorOutput = new GeneratorOutput {
+        genLabel = self.genLabel
+        genStack = self.genStack
+        output = "value"
     }
 }
 
