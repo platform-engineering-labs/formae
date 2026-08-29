@@ -247,3 +247,48 @@ func TestGeneratePatch_ReferenceOnCreateOnlyDestination_NoPlaceholder(t *testing
 	assert.Empty(t, createOnly, "no replacement may be planned from an unresolved placeholder")
 	assert.NotContains(t, string(patchDoc), "/Token")
 }
+
+// The accepted churn contract: an actual-side empty-shaped extra inside a
+// preserved field makes the whole value differ, producing exactly one
+// replace carrying the desired value verbatim.
+func TestGeneratePatch_PreserveEmpty_ActualExtraEmptyChurnsAsWholeReplace(t *testing.T) {
+	document := json.RawMessage(`{"Name":"x","Spec":{"selfSigned":{},"defaulted":{}}}`)
+	desired := json.RawMessage(`{"Name":"x","Spec":{"selfSigned":{}}}`)
+
+	patchDoc, _, _, err := GeneratePatch(document, desired, document, desired, resolver.ResolvableProperties{}, fidelitySchema(), pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.JSONEq(t, `[{"op":"replace","path":"/Spec","value":{"selfSigned":{}}}]`, string(patchDoc))
+}
+
+// The no-change guarantee for existing plugins: Atomic WITHOUT
+// preserveEmptyValues keeps exactly today's behavior - nested empties are
+// stripped on both sides and equalize the diff.
+func TestGeneratePatch_AtomicWithoutPreserve_KeepsStripBehavior(t *testing.T) {
+	schema := pkgmodel.Schema{
+		Identifier: "Name",
+		Fields:     []string{"Name", "Doc"},
+		Hints:      map[string]pkgmodel.FieldHint{"Doc": {UpdateMethod: pkgmodel.FieldUpdateMethodAtomic}},
+	}
+	document := json.RawMessage(`{"Name":"x","Doc":{"stmt":{"cond":{}}}}`)
+	desired := json.RawMessage(`{"Name":"x","Doc":{"stmt":{}}}`)
+
+	patchDoc, _, _, err := GeneratePatch(document, desired, document, desired, resolver.ResolvableProperties{}, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Empty(t, patchDoc,
+		"symmetric stripping still equalizes empty-shaped differences for atomic-only fields")
+}
+
+// A dotted (nested subresource) hint key grants no fidelity anywhere.
+func TestGeneratePatch_DottedPreserveHint_NoFidelity(t *testing.T) {
+	schema := pkgmodel.Schema{
+		Identifier: "Name",
+		Fields:     []string{"Name", "Config"},
+		Hints:      map[string]pkgmodel.FieldHint{"Config.records": {PreserveEmptyValues: true}},
+	}
+	document := json.RawMessage(`{"Name":"x","Config":{"records":{"a":{}}}}`)
+	desired := json.RawMessage(`{"Name":"x","Config":{"records":{}}}`)
+
+	patchDoc, _, _, err := GeneratePatch(document, desired, document, desired, resolver.ResolvableProperties{}, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Empty(t, patchDoc, "nested hints are out of fidelity scope; today's stripping applies")
+}
