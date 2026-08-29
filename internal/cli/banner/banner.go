@@ -12,6 +12,8 @@ import (
 	"os"
 
 	"github.com/charmbracelet/lipgloss"
+	"golang.org/x/term"
+
 	"github.com/platform-engineering-labs/formae"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/logo"
@@ -91,7 +93,15 @@ func PrintBanner() {
 	if wm := th.Palette.LogoWordmark; wm.Light != "" || wm.Dark != "" {
 		opts = append(opts, logo.WithWordmarkColor(wm))
 	}
-	art, rows := logo.Render(cap, logo.SizeFull, formae.Version, opts...)
+
+	size := logo.SizeFull
+	if width, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && width > 0 {
+		if width < 45 {
+			size = logo.SizeCompact
+		}
+	}
+
+	art, rows := logo.Render(cap, size, formae.Version, opts...)
 
 	// Blank line above the art so the logo doesn't render flush against the
 	// prior shell line. A plain newline is safe before both the braille/text art
