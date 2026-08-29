@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
+	"github.com/aws/smithy-go"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
@@ -186,12 +188,15 @@ type awsExchange struct {
 // ordinary state of a role `formae connect` made seconds earlier, so reporting
 // the first refusal would fail the run over a trust policy that is correct.
 //
-// The window is well inside the agent's 60s plugin call deadline, so this
-// gives up before the operator does and reports STS's own last refusal. A
-// genuinely wrong trust policy still fails, at the end of the window rather
-// than at the start of it.
+// The window is a child deadline, not a wall-clock check between attempts. A
+// check between attempts bounds when the last request may *start*, not when it
+// may finish, so a slow attempt begun just inside the window can run past the
+// agent's 60s plugin call deadline and turn a recorded exchangeError into an
+// operation timeout — which reads as the harness breaking rather than as the
+// exchange refusing. The margin below leaves the operator's deadline room to
+// be the one that never fires.
 const (
-	assumeRolePropagationWindow   = 40 * time.Second
+	assumeRolePropagationWindow   = 30 * time.Second
 	assumeRolePropagationInterval = 2 * time.Second
 )
 
@@ -202,7 +207,11 @@ func (e awsExchange) Spend(ctx context.Context, token string) (identity, expirat
 	}
 	client := sts.NewFromConfig(cfg)
 
-	deadline := time.Now().Add(assumeRolePropagationWindow)
+	// Bounding the requests themselves, so nothing this loop starts can outlive
+	// the window.
+	ctx, cancel := context.WithTimeout(ctx, assumeRolePropagationWindow)
+	defer cancel()
+
 	for {
 		out, err := client.AssumeRoleWithWebIdentity(ctx, &sts.AssumeRoleWithWebIdentityInput{
 			RoleArn:          aws.String(e.roleARN),
@@ -218,15 +227,31 @@ func (e awsExchange) Spend(ctx context.Context, token string) (identity, expirat
 			}
 			return identity, expiration, nil
 		}
-		if time.Now().After(deadline) {
+		// Only the refusal propagation produces is worth waiting out. A
+		// malformed ARN, a rejected token or an expired credential is settled
+		// on the first answer, and spending the whole window on it buries the
+		// reason under a delay that looks like a hang.
+		if !awaitingPropagation(err) {
 			return "", "", fmt.Errorf("assume role with web identity: %w", err)
 		}
 		select {
 		case <-ctx.Done():
-			return "", "", fmt.Errorf("assume role with web identity: %w", ctx.Err())
+			return "", "", fmt.Errorf("assume role with web identity: %w", err)
 		case <-time.After(assumeRolePropagationInterval):
 		}
 	}
+}
+
+// awaitingPropagation reports whether err is the refusal STS gives for a role
+// whose trust policy has not propagated yet.
+//
+// AccessDenied is also what a genuinely wrong trust policy produces, and the
+// two are not distinguishable from the outside — which is the whole reason the
+// window exists rather than a poll for readiness. Everything else is a settled
+// answer and is returned as it stands.
+func awaitingPropagation(err error) bool {
+	var api smithy.APIError
+	return errors.As(err, &api) && api.ErrorCode() == "AccessDenied"
 }
 
 // probeLabelOf reads the probeLabel property out of a properties document.
