@@ -771,6 +771,7 @@ func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Ta
 		nil, // No target updates on discovery
 		nil, // No stack updates on discovery
 		nil, // No policy updates on discovery
+		nil, // No generator updates on discovery
 		"discovery",
 		"",
 		"",

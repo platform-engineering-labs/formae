@@ -20,6 +20,14 @@ type Generator interface {
 	SetStack(stack string)
 	GetStackID() string
 	SetStackID(id string)
+	// GetAlias returns the generator's previous label, if any. Identity is
+	// the datastore row's KSUID, not the label, so a generator that is
+	// renamed (its label changed) needs some way to say "this is still the
+	// same generator" — Alias is that: an apply that finds no live generator
+	// at the current label falls back to a lookup by Alias, in the same
+	// stack, and renames the matched row in place instead of deleting the
+	// old one and creating a new one. Mirrors formae.Resource.Alias.
+	GetAlias() string
 }
 
 // PasswordGenerator produces a random password value. Fields mirror the
@@ -30,6 +38,7 @@ type PasswordGenerator struct {
 	Label                   string `json:"Label"`
 	Stack                   string `json:"Stack,omitempty"`
 	StackID                 string `json:"-"` // Set during processing, not from PKL
+	Alias                   string `json:"Alias,omitempty"`
 	Length                  int    `json:"Length"`
 	Uppercase               bool   `json:"Uppercase"`
 	Lowercase               bool   `json:"Lowercase"`
@@ -45,6 +54,7 @@ func (g *PasswordGenerator) GetStack() string      { return g.Stack }
 func (g *PasswordGenerator) SetStack(stack string) { g.Stack = stack }
 func (g *PasswordGenerator) GetStackID() string    { return g.StackID }
 func (g *PasswordGenerator) SetStackID(id string)  { g.StackID = id }
+func (g *PasswordGenerator) GetAlias() string      { return g.Alias }
 
 // MarshalJSON injects the "Type": "password" discriminator that
 // ParseGenerator dispatches on, so callers never set Type by hand and there

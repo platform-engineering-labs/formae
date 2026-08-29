@@ -20,6 +20,7 @@ import (
 
 	"github.com/platform-engineering-labs/formae/internal/datastore"
 	dssqlite "github.com/platform-engineering-labs/formae/internal/datastore/sqlite"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/generator_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/policy_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
@@ -2199,6 +2200,136 @@ func TestResourcePersister_DetachNotifiesAutoReconcilerWhenNoPolicyRemains(t *te
 		Message(messages.PolicyRemoved{StackLabel: stack.Label}).
 		Once().
 		Assert()
+}
+
+// createGeneratorStack creates a stack for the generator persister tests and
+// returns it with its generated ID populated.
+func createGeneratorStack(t *testing.T, ds datastore.Datastore, label string) *pkgmodel.Stack {
+	t.Helper()
+	stack := &pkgmodel.Stack{Label: label, Description: "generator persistence"}
+	_, err := ds.CreateStack(stack, "cmd-stack")
+	require.NoError(t, err)
+	require.NotEmpty(t, stack.ID)
+	return stack
+}
+
+// TestResourcePersister_CreateGenerator covers a bare create: the stack label
+// is resolved to its KSUID from StackIDMap and set on the generator with
+// SetStackID before the datastore write, exactly as the policy path does.
+func TestResourcePersister_CreateGenerator(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+
+	stack := createGeneratorStack(t, ds, "generator-create-stack")
+
+	result := persister.Call(sender, generator_update.PersistGeneratorUpdates{
+		CommandID: "cmd-create",
+		GeneratorUpdates: []generator_update.GeneratorUpdate{
+			{
+				Operation: generator_update.GeneratorOperationCreate,
+				Generator: &pkgmodel.PasswordGenerator{
+					Label: "db-password", Stack: stack.Label,
+					Length: 24, Uppercase: true, Lowercase: true, Digits: true, RequireEachIncludedType: true,
+				},
+				StackLabel: stack.Label,
+			},
+		},
+		StackIDMap: map[string]string{stack.Label: stack.ID},
+	})
+	require.NoError(t, result.Error)
+
+	got, err := ds.GetGenerator("db-password", stack.Label)
+	require.NoError(t, err)
+	require.NotNil(t, got, "the generator must be retrievable under the resolved stack KSUID")
+	assert.Equal(t, "db-password", got.GetLabel())
+}
+
+// TestResourcePersister_CreateGeneratorFailsWithoutStackID pins that a
+// generator update whose stack label is absent from StackIDMap fails rather
+// than being written with an empty stack_id — a generator has no standalone
+// form, so there is no fallback scope to write it to.
+func TestResourcePersister_CreateGeneratorFailsWithoutStackID(t *testing.T) {
+	persister, sender, _, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+
+	result := persister.Call(sender, generator_update.PersistGeneratorUpdates{
+		CommandID: "cmd-create",
+		GeneratorUpdates: []generator_update.GeneratorUpdate{
+			{
+				Operation:  generator_update.GeneratorOperationCreate,
+				Generator:  &pkgmodel.PasswordGenerator{Label: "db-password", Stack: "unmapped-stack", Length: 24},
+				StackLabel: "unmapped-stack",
+			},
+		},
+		StackIDMap: map[string]string{},
+	})
+	require.Error(t, result.Error)
+}
+
+// TestResourcePersister_UpdateGenerator covers an in-place spec change: the
+// existing row's KSUID identity is preserved (checked via GetGenerator
+// reading back the updated spec, since the datastore's version bump is the
+// observable proxy for "the row was updated, not recreated" at this layer).
+func TestResourcePersister_UpdateGenerator(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+
+	stack := createGeneratorStack(t, ds, "generator-update-stack")
+	_, err = ds.CreateGenerator(&pkgmodel.PasswordGenerator{
+		Label: "db-password", Stack: stack.Label, StackID: stack.ID, Length: 24,
+	}, "cmd-seed")
+	require.NoError(t, err)
+
+	result := persister.Call(sender, generator_update.PersistGeneratorUpdates{
+		CommandID: "cmd-update",
+		GeneratorUpdates: []generator_update.GeneratorUpdate{
+			{
+				Operation:  generator_update.GeneratorOperationUpdate,
+				Generator:  &pkgmodel.PasswordGenerator{Label: "db-password", Stack: stack.Label, Length: 32},
+				StackLabel: stack.Label,
+			},
+		},
+		StackIDMap: map[string]string{stack.Label: stack.ID},
+	})
+	require.NoError(t, result.Error)
+
+	got, err := ds.GetGenerator("db-password", stack.Label)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	pw, ok := got.(*pkgmodel.PasswordGenerator)
+	require.True(t, ok)
+	assert.Equal(t, 32, pw.Length, "the read-back generator must reflect the update")
+}
+
+// TestResourcePersister_DeleteGenerator covers a delete: DeleteGenerator is
+// scoped by label and stack label directly, with no StackIDMap resolution
+// needed (unlike Create/Update, which write gen.SetStackID onto the
+// generator itself).
+func TestResourcePersister_DeleteGenerator(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+
+	stack := createGeneratorStack(t, ds, "generator-delete-stack")
+	_, err = ds.CreateGenerator(&pkgmodel.PasswordGenerator{
+		Label: "temp-secret", Stack: stack.Label, StackID: stack.ID, Length: 20,
+	}, "cmd-seed")
+	require.NoError(t, err)
+
+	result := persister.Call(sender, generator_update.PersistGeneratorUpdates{
+		CommandID: "cmd-delete",
+		GeneratorUpdates: []generator_update.GeneratorUpdate{
+			{
+				Operation:  generator_update.GeneratorOperationDelete,
+				Generator:  &pkgmodel.PasswordGenerator{Label: "temp-secret", Stack: stack.Label},
+				StackLabel: stack.Label,
+			},
+		},
+	})
+	require.NoError(t, result.Error)
+
+	got, err := ds.GetGenerator("temp-secret", stack.Label)
+	require.NoError(t, err)
+	assert.Nil(t, got, "the deleted generator must no longer be live")
 }
 
 // persistCreateForTest stores a resource through the persister the way a

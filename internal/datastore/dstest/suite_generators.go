@@ -199,3 +199,44 @@ func RunGeneratorKSUIDStableAcrossUpdate(t *testing.T, newDS func(t *testing.T) 
 		assert.Equal(t, idBeforeUpdate, idAfterUpdate, "the generator's KSUID identity must survive an update")
 	})
 }
+
+// RunGeneratorKSUIDStableAcrossRename verifies that a generator's KSUID
+// identity survives a rename: UpdateGenerator is called with a new label and
+// Alias set to the previous one, and the row found by falling back to the
+// alias lookup is updated in place — same id, new label — rather than a miss
+// that would force the caller to fall back to Create and mint a fresh id.
+func RunGeneratorKSUIDStableAcrossRename(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("Generator_KSUIDStableAcrossRename", func(t *testing.T) {
+		td := newDS(t)
+		if td.GeneratorIDForTest == nil {
+			t.Skip("backend does not provide GeneratorIDForTest")
+		}
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		stack := createGeneratorStack(t, ds, "generator-ksuid-rename")
+		_, err := ds.CreateGenerator(testPasswordGenerator("old-label", stack, 16), "cmd-create")
+		require.NoError(t, err)
+
+		idBeforeRename, err := td.GeneratorIDForTest("old-label", stack.Label)
+		require.NoError(t, err)
+		require.NotEmpty(t, idBeforeRename)
+
+		renamed := testPasswordGenerator("new-label", stack, 16)
+		renamed.Alias = "old-label"
+		_, err = ds.UpdateGenerator(renamed, "cmd-rename")
+		require.NoError(t, err)
+
+		idAfterRename, err := td.GeneratorIDForTest("new-label", stack.Label)
+		require.NoError(t, err)
+		assert.Equal(t, idBeforeRename, idAfterRename, "the generator's KSUID identity must survive a rename")
+
+		oldLabelGone, err := ds.GetGenerator("old-label", stack.Label)
+		require.NoError(t, err)
+		assert.Nil(t, oldLabelGone, "the previous label must no longer resolve after rename")
+
+		current, err := ds.GetGenerator("new-label", stack.Label)
+		require.NoError(t, err)
+		require.NotNil(t, current)
+	})
+}

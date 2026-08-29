@@ -291,6 +291,20 @@ func TestPkl_Generator_Evaluate(t *testing.T) {
 	assert.True(t, gjson.Get(jsonString, "Generators.0.RequireEachIncludedType").Bool())
 }
 
+// TestPkl_Generator_Alias_Evaluate verifies that a PasswordGenerator's alias
+// field — the previous label, used to preserve identity across a rename —
+// flows through eval into the rendered Generators listing.
+func TestPkl_Generator_Alias_Evaluate(t *testing.T) {
+	p := PKL{}
+	forma, err := p.Evaluate("./testdata/forma/generator_alias_test.pkl", model.CommandApply, model.FormaApplyModeReconcile, nil)
+	require.NoError(t, err)
+
+	jsonString := forma.ToJSON()
+
+	assert.Equal(t, "new-password", gjson.Get(jsonString, "Generators.0.Label").String())
+	assert.Equal(t, "old-password", gjson.Get(jsonString, "Generators.0.Alias").String())
+}
+
 // TestPkl_Generator_NoStackFailsEval verifies that a Generator with no stack
 // set fails at PKL eval — stack is required, not defaulted.
 func TestPkl_Generator_NoStackFailsEval(t *testing.T) {
