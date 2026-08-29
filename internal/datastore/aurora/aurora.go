@@ -753,12 +753,10 @@ func (d *DatastoreAuroraDataAPI) StoreFormaCommand(fa *forma_command.FormaComman
 	query := fmt.Sprintf(`
 	INSERT INTO %s (command_id, timestamp, command, state, agent_version, client_id, agent_id,
 		description_text, description_confirm, config_mode, config_force, config_simulate,
-		target_updates, stack_updates, policy_updates, modified_ts, source, subject, subject_name,
-		suppressed_drift_notes)
+		target_updates, stack_updates, policy_updates, modified_ts, source, subject, subject_name)
 	VALUES (:command_id, :timestamp::timestamp, :command, :state, :agent_version, :client_id, :agent_id,
 		:description_text, :description_confirm, :config_mode, :config_force, :config_simulate,
-		:target_updates, :stack_updates, :policy_updates, :modified_ts::timestamp, :source, :subject, :subject_name,
-		:suppressed_drift_notes)
+		:target_updates, :stack_updates, :policy_updates, :modified_ts::timestamp, :source, :subject, :subject_name)
 	ON CONFLICT (command_id) DO UPDATE
 	SET timestamp = EXCLUDED.timestamp,
 	command = EXCLUDED.command,
@@ -777,8 +775,7 @@ func (d *DatastoreAuroraDataAPI) StoreFormaCommand(fa *forma_command.FormaComman
 	modified_ts = EXCLUDED.modified_ts,
 	source = EXCLUDED.source,
 	subject = EXCLUDED.subject,
-	subject_name = EXCLUDED.subject_name,
-	suppressed_drift_notes = EXCLUDED.suppressed_drift_notes
+	subject_name = EXCLUDED.subject_name
 	`, datastore.CommandsTable)
 
 	params := []types.SqlParameter{
@@ -801,15 +798,6 @@ func (d *DatastoreAuroraDataAPI) StoreFormaCommand(fa *forma_command.FormaComman
 		{Name: aws.String("source"), Value: &types.FieldMemberStringValue{Value: string(fa.Source)}},
 		{Name: aws.String("subject"), Value: &types.FieldMemberStringValue{Value: fa.Subject}},
 		{Name: aws.String("subject_name"), Value: &types.FieldMemberStringValue{Value: fa.SubjectName}},
-	}
-	if len(fa.SuppressedDriftNotes) > 0 {
-		notesJSON, merr := json.Marshal(fa.SuppressedDriftNotes)
-		if merr != nil {
-			return fmt.Errorf("failed to marshal suppressed drift notes: %w", merr)
-		}
-		params = append(params, types.SqlParameter{Name: aws.String("suppressed_drift_notes"), Value: &types.FieldMemberStringValue{Value: string(notesJSON)}})
-	} else {
-		params = append(params, types.SqlParameter{Name: aws.String("suppressed_drift_notes"), Value: &types.FieldMemberIsNull{Value: true}})
 	}
 
 	_, err = d.executeStatement(ctx, query, params)
@@ -835,8 +823,7 @@ func (d *DatastoreAuroraDataAPI) LoadFormaCommands() ([]*forma_command.FormaComm
 	query := `
 	SELECT command_id, timestamp, command, state, client_id,
 		description_text, description_confirm, config_mode, config_force, config_simulate,
-		target_updates, stack_updates, policy_updates, modified_ts, source, subject, subject_name,
-		suppressed_drift_notes
+		target_updates, stack_updates, policy_updates, modified_ts, source, subject, subject_name
 	FROM forma_commands
 	ORDER BY timestamp DESC
 	`
@@ -872,8 +859,7 @@ func (d *DatastoreAuroraDataAPI) LoadIncompleteFormaCommands() ([]*forma_command
 	query := `
 	SELECT command_id, timestamp, command, state, client_id,
 		description_text, description_confirm, config_mode, config_force, config_simulate,
-		target_updates, stack_updates, policy_updates, modified_ts, source, subject, subject_name,
-		suppressed_drift_notes
+		target_updates, stack_updates, policy_updates, modified_ts, source, subject, subject_name
 	FROM forma_commands
 	WHERE command != :sync_command AND state IN (:state_not_started, :state_in_progress)
 	ORDER BY timestamp DESC
@@ -932,10 +918,6 @@ func (d *DatastoreAuroraDataAPI) parseFormaCommandRecord(record []types.Field) (
 	source, _ := getStringField(record[14])
 	subject, _ := getStringField(record[15])
 	subjectName, _ := getStringField(record[16])
-	suppressedDriftNotesJSON := ""
-	if len(record) > 17 {
-		suppressedDriftNotesJSON, _ = getStringField(record[17])
-	}
 
 	var targetUpdates []target_update.TargetUpdate
 	if targetUpdatesJSON != "" {
@@ -950,11 +932,6 @@ func (d *DatastoreAuroraDataAPI) parseFormaCommandRecord(record []types.Field) (
 	var policyUpdates []policy_update.PolicyUpdate
 	if policyUpdatesJSON != "" {
 		_ = json.Unmarshal([]byte(policyUpdatesJSON), &policyUpdates)
-	}
-
-	var suppressedDriftNotes []forma_command.SuppressedDriftNote
-	if suppressedDriftNotesJSON != "" {
-		_ = json.Unmarshal([]byte(suppressedDriftNotesJSON), &suppressedDriftNotes)
 	}
 
 	return &forma_command.FormaCommand{
@@ -979,8 +956,6 @@ func (d *DatastoreAuroraDataAPI) parseFormaCommandRecord(record []types.Field) (
 		Source:        forma_command.Source(source),
 		Subject:       subject,
 		SubjectName:   subjectName,
-
-		SuppressedDriftNotes: suppressedDriftNotes,
 	}, nil
 }
 
@@ -1009,8 +984,7 @@ func (d *DatastoreAuroraDataAPI) GetFormaCommandByCommandID(commandID string) (*
 	query := `
 	SELECT command_id, timestamp, command, state, client_id,
 		description_text, description_confirm, config_mode, config_force, config_simulate,
-		target_updates, stack_updates, policy_updates, modified_ts, source, subject, subject_name,
-		suppressed_drift_notes
+		target_updates, stack_updates, policy_updates, modified_ts, source, subject, subject_name
 	FROM forma_commands
 	WHERE command_id = :command_id
 	`
@@ -1048,8 +1022,7 @@ func (d *DatastoreAuroraDataAPI) GetMostRecentFormaCommandByClientID(clientID st
 	query := `
 	SELECT command_id, timestamp, command, state, client_id,
 		description_text, description_confirm, config_mode, config_force, config_simulate,
-		target_updates, stack_updates, policy_updates, modified_ts, source, subject, subject_name,
-		suppressed_drift_notes
+		target_updates, stack_updates, policy_updates, modified_ts, source, subject, subject_name
 	FROM forma_commands
 	WHERE client_id = :client_id AND source = 'user'
 	ORDER BY timestamp DESC
@@ -1162,32 +1135,30 @@ func (d *DatastoreAuroraDataAPI) GetResourceModificationsSinceLastReconcile(stac
 
 // fetchCurrentProperties returns the Properties JSON from the latest resource
 // version for the given ksuid.
-// GetPropertiesAtLastWrite returns the Properties JSON of the latest resource
-// version persisted under an apply command whose resource update actually
-// wrote (a create or replace, or an update carrying a non-empty patch):
-// formae's own write echo. Sync and discovery persist under the sync
-// command type, and metadata-only applies (imports without property
-// changes, label-only renames) synthesize their result from observed state
-// with an empty patch; neither advances the witness.
+// GetPropertiesAtLastWrite returns the resource's per-field write witness,
+// composed from its genuine-write history (see datastore.ComposeWriteWitness):
+// the newest create/replace echo is the base and each later apply-owned
+// update overlays only the fields its patch wrote. Sync and discovery
+// versions, metadata-only applies (empty patch), and fields an update's echo
+// merely carried along never enter the witness. History is bounded to the
+// most recent writes; a resource whose create falls outside the bound has no
+// witness, which classifies its movement as tolerated.
 func (d *DatastoreAuroraDataAPI) GetPropertiesAtLastWrite(ksuid string) (json.RawMessage, error) {
 	ctx := context.Background()
 
 	query := `
-	SELECT r.data->>'Properties'
+	SELECT r.data->>'Properties', ru.operation, ru.resource::jsonb ->> 'PatchDocument'
 	FROM resources r
 	JOIN forma_commands fc ON fc.command_id = r.command_id
+	JOIN resource_updates ru ON ru.command_id = r.command_id AND ru.ksuid = r.ksuid
 	WHERE r.ksuid = :ksuid
 	AND fc.command = 'apply'
 	AND r.operation != 'delete' AND r.operation != 'reaped'
-	AND EXISTS (
-		SELECT 1 FROM resource_updates ru
-		WHERE ru.command_id = r.command_id AND ru.ksuid = r.ksuid
-		AND (ru.operation != 'update'
-			OR ((ru.resource::jsonb ->> 'PatchDocument') IS NOT NULL
-				AND (ru.resource::jsonb ->> 'PatchDocument') != '[]'))
-	)
+	AND (ru.operation != 'update'
+		OR ((ru.resource::jsonb ->> 'PatchDocument') IS NOT NULL
+			AND (ru.resource::jsonb ->> 'PatchDocument') != '[]'))
 	ORDER BY r.version COLLATE "C" DESC
-	LIMIT 1
+	LIMIT 25
 	`
 	params := []types.SqlParameter{
 		{Name: aws.String("ksuid"), Value: &types.FieldMemberStringValue{Value: ksuid}},
@@ -1197,14 +1168,25 @@ func (d *DatastoreAuroraDataAPI) GetPropertiesAtLastWrite(ksuid string) (json.Ra
 	if err != nil {
 		return nil, err
 	}
-	if len(output.Records) == 0 || len(output.Records[0]) == 0 {
-		return nil, nil
+
+	var history []datastore.WriteVersion
+	for _, record := range output.Records {
+		if len(record) < 3 {
+			continue
+		}
+		props, _ := getStringField(record[0])
+		op, _ := getStringField(record[1])
+		patch, _ := getStringField(record[2])
+		v := datastore.WriteVersion{Operation: op}
+		if props != "" {
+			v.Properties = json.RawMessage(props)
+		}
+		if patch != "" {
+			v.Patch = json.RawMessage(patch)
+		}
+		history = append(history, v)
 	}
-	props, err := getStringField(output.Records[0][0])
-	if err != nil || props == "" {
-		return nil, err
-	}
-	return json.RawMessage(props), nil
+	return datastore.ComposeWriteWitness(history), nil
 }
 
 func (d *DatastoreAuroraDataAPI) fetchCurrentProperties(ctx context.Context, ksuid string) (json.RawMessage, error) {
@@ -1287,8 +1269,7 @@ func (d *DatastoreAuroraDataAPI) QueryFormaCommands(statusQuery *datastore.Statu
 	queryStr := `
 	SELECT command_id, timestamp, command, state, client_id,
 		description_text, description_confirm, config_mode, config_force, config_simulate,
-		target_updates, stack_updates, policy_updates, modified_ts, source, subject, subject_name,
-		suppressed_drift_notes
+		target_updates, stack_updates, policy_updates, modified_ts, source, subject, subject_name
 	FROM forma_commands
 	WHERE 1=1
 	`

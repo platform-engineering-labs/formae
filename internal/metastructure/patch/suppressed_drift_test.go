@@ -552,3 +552,94 @@ func TestSuppressedFieldDiffs_NilWitness_NothingReported(t *testing.T) {
 
 	assert.Empty(t, diffs)
 }
+
+func assertWitnessedForTest(t *testing.T, desired, witness string, schema pkgmodel.Schema) string {
+	t.Helper()
+	out, err := AssertWitnessedSuppressed(json.RawMessage(desired), json.RawMessage(witness), schema)
+	require.NoError(t, err)
+	return string(out)
+}
+
+func TestAssertWitnessedSuppressed_OmittedScalar_AssertsWitnessValue(t *testing.T) {
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Rotation"},
+		Hints:  map[string]pkgmodel.FieldHint{"Rotation": {HasProviderDefault: true}},
+	}
+	out := assertWitnessedForTest(t,
+		`{"Name": "k"}`,
+		`{"Name": "k", "Rotation": "off"}`,
+		schema)
+	assert.JSONEq(t, `{"Name": "k", "Rotation": "off"}`, out)
+}
+
+func TestAssertWitnessedSuppressed_DeclaredField_Untouched(t *testing.T) {
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Rotation"},
+		Hints:  map[string]pkgmodel.FieldHint{"Rotation": {HasProviderDefault: true}},
+	}
+	out := assertWitnessedForTest(t,
+		`{"Name": "k", "Rotation": "weekly"}`,
+		`{"Name": "k", "Rotation": "off"}`,
+		schema)
+	assert.JSONEq(t, `{"Name": "k", "Rotation": "weekly"}`, out, "a declared value is intent; the witness never overrides it")
+}
+
+func TestAssertWitnessedSuppressed_UnwitnessedField_NotInjected(t *testing.T) {
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Targets"},
+		Hints:  map[string]pkgmodel.FieldHint{"Targets": {HasProviderDefault: true}},
+	}
+	out := assertWitnessedForTest(t,
+		`{"Name": "tg"}`,
+		`{"Name": "tg", "Targets": []}`,
+		schema)
+	assert.JSONEq(t, `{"Name": "tg"}`, out, "an empty witness asserts nothing")
+}
+
+func TestAssertWitnessedSuppressed_OpaqueAndCreateOnlyAndDotted_Skipped(t *testing.T) {
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Secret", "BucketName", "Containers"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"Secret":         {HasProviderDefault: true, Opaque: true},
+			"BucketName":     {HasProviderDefault: true, CreateOnly: true},
+			"Containers.Cpu": {HasProviderDefault: true},
+		},
+	}
+	out := assertWitnessedForTest(t,
+		`{"Name": "r", "Containers": [{"Name": "app"}]}`,
+		`{"Name": "r", "Secret": "hash", "BucketName": "gen-123", "Containers": [{"Name": "app", "Cpu": 256}]}`,
+		schema)
+	assert.JSONEq(t, `{"Name": "r", "Containers": [{"Name": "app"}]}`, out,
+		"opaque values cannot be asserted from hashes, createOnly assertion would plan replacements, dotted paths have no stable injection")
+}
+
+func TestAssertWitnessedSuppressed_EntitySetPartial_MergesWitnessSystemEntries(t *testing.T) {
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Tags"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"Tags": {HasProviderDefault: true, UpdateMethod: pkgmodel.FieldUpdateMethodEntitySet, IndexField: "Key"},
+		},
+	}
+	out := assertWitnessedForTest(t,
+		`{"Name": "r", "Tags": [{"Key": "mine", "Value": "v"}]}`,
+		`{"Name": "r", "Tags": [{"Key": "mine", "Value": "old"}, {"Key": "sys", "Value": "s0"}]}`,
+		schema)
+	assert.JSONEq(t, `{"Name": "r", "Tags": [{"Key": "mine", "Value": "v"}, {"Key": "sys", "Value": "s0"}]}`, out,
+		"declared entries keep their declared values; witnessed undeclared entries are asserted alongside")
+}
+
+func TestAssertWitnessedSuppressed_EntitySetExplicitEmpty_NotInjected(t *testing.T) {
+	// An explicit empty declaration is a drain; asserting witness entries
+	// would undo the user's clear.
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Tags"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"Tags": {HasProviderDefault: true, UpdateMethod: pkgmodel.FieldUpdateMethodEntitySet, IndexField: "Key"},
+		},
+	}
+	out := assertWitnessedForTest(t,
+		`{"Name": "r", "Tags": []}`,
+		`{"Name": "r", "Tags": [{"Key": "sys", "Value": "s0"}]}`,
+		schema)
+	assert.JSONEq(t, `{"Name": "r", "Tags": []}`, out)
+}

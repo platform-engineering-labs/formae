@@ -142,3 +142,92 @@ func RunGetPropertiesAtLastWrite(t *testing.T, newDS func(t *testing.T) TestData
 		assert.Nil(t, witness, "a metadata-only apply must not forge a write witness from observed state")
 	})
 }
+
+// RunGetWriteWitness_UpdateEchoDoesNotLaunderUnwrittenFields verifies the
+// per-field witnessing rule: an update witnesses only the fields its patch
+// wrote. Runtime-populated content that merely rides along in the update's
+// echo must not become witnessed, or steady-state churn on it would start
+// rejecting reconciles and force would revert live runtime state.
+func RunGetWriteWitness_UpdateEchoDoesNotLaunderUnwrittenFields(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("GetWriteWitness_PerFieldFromPatches", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		ksuid := util.NewID()
+
+		createCmd := &forma_command.FormaCommand{
+			ID:         util.NewID(),
+			Command:    pkgmodel.CommandApply,
+			Config:     config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
+			State:      forma_command.CommandStateSuccess,
+			StartTs:    util.TimeNow().Add(-30 * time.Minute),
+			ModifiedTs: util.TimeNow().Add(-30 * time.Minute),
+			ResourceUpdates: []resource_update.ResourceUpdate{{
+				Operation: types.OperationCreate,
+				State:     resource_update.ResourceUpdateStateSuccess,
+				DesiredState: pkgmodel.Resource{
+					Ksuid: ksuid, Label: "tg",
+					Properties: json.RawMessage(`{"healthCheckPath":"/","rotation":"off"}`),
+				},
+			}},
+		}
+		require.NoError(t, ds.StoreFormaCommand(createCmd, createCmd.ID))
+		created := &pkgmodel.Resource{
+			Ksuid: ksuid, NativeID: "tg-1", Stack: "s", Type: "T", Label: "tg", Target: "t",
+			Properties: json.RawMessage(`{"healthCheckPath":"/","rotation":"off","targets":[]}`),
+			Managed:    true,
+		}
+		_, err := ds.StoreResource(created, createCmd.ID)
+		require.NoError(t, err)
+
+		// Runtime registration arrives via sync.
+		syncCmd := &forma_command.FormaCommand{
+			ID: util.NewID(), Command: pkgmodel.CommandSync,
+			State:   forma_command.CommandStateSuccess,
+			StartTs: util.TimeNow().Add(-20 * time.Minute), ModifiedTs: util.TimeNow().Add(-20 * time.Minute),
+		}
+		require.NoError(t, ds.StoreFormaCommand(syncCmd, syncCmd.ID))
+		synced := *created
+		synced.Properties = json.RawMessage(`{"healthCheckPath":"/","rotation":"off","targets":[{"Id":"10.0.0.5"}]}`)
+		_, err = ds.StoreResource(&synced, syncCmd.ID)
+		require.NoError(t, err)
+
+		// A genuine update writes ONLY healthCheckPath; its echo carries the
+		// runtime targets along.
+		updateCmd := &forma_command.FormaCommand{
+			ID:         util.NewID(),
+			Command:    pkgmodel.CommandApply,
+			Config:     config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
+			State:      forma_command.CommandStateSuccess,
+			StartTs:    util.TimeNow().Add(-10 * time.Minute),
+			ModifiedTs: util.TimeNow().Add(-10 * time.Minute),
+			ResourceUpdates: []resource_update.ResourceUpdate{{
+				Operation: types.OperationUpdate,
+				State:     resource_update.ResourceUpdateStateSuccess,
+				DesiredState: pkgmodel.Resource{
+					Ksuid: ksuid, Label: "tg",
+					Properties:    json.RawMessage(`{"healthCheckPath":"/live"}`),
+					PatchDocument: json.RawMessage(`[{"op":"replace","path":"/healthCheckPath","value":"/live"}]`),
+				},
+			}},
+		}
+		require.NoError(t, ds.StoreFormaCommand(updateCmd, updateCmd.ID))
+		updated := synced
+		updated.Properties = json.RawMessage(`{"healthCheckPath":"/live","rotation":"off","targets":[{"Id":"10.0.0.5"}]}`)
+		_, err = ds.StoreResource(&updated, updateCmd.ID)
+		require.NoError(t, err)
+
+		witness, err := ds.GetPropertiesAtLastWrite(ksuid)
+		require.NoError(t, err)
+		require.NotNil(t, witness)
+
+		var w map[string]any
+		require.NoError(t, json.Unmarshal(witness, &w))
+		assert.Equal(t, "/live", w["healthCheckPath"], "the update wrote this field: its echo value is the witness")
+		assert.Equal(t, "off", w["rotation"], "untouched create-echo fields keep the create witness")
+		targets, hasTargets := w["targets"].([]any)
+		assert.True(t, !hasTargets || len(targets) == 0,
+			"runtime content the update did not write must not be laundered into the witness by its echo")
+	})
+}

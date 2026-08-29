@@ -220,7 +220,7 @@ const formaCommandWithResourceUpdatesQueryBase = `
 SELECT
 	fc.command_id, fc.timestamp, fc.command, fc.state, fc.client_id,
 	fc.description_text, fc.description_confirm, fc.config_mode, fc.config_force, fc.config_simulate,
-	fc.target_updates, fc.stack_updates, fc.policy_updates, fc.modified_ts, fc.source, fc.subject, fc.subject_name, fc.suppressed_drift_notes,
+	fc.target_updates, fc.stack_updates, fc.policy_updates, fc.modified_ts, fc.source, fc.subject, fc.subject_name,
 	ru.ksuid, ru.operation, ru.state, ru.start_ts, ru.modified_ts,
 	ru.retries, ru.remaining, ru.version, ru.stack_label, ru.group_id, ru.source,
 	ru.resource, ru.resource_target, ru.existing_resource, ru.existing_target,
@@ -246,7 +246,6 @@ func scanJoinedRow(rows *sql.Rows) (*forma_command.FormaCommand, *resource_updat
 	var fcModifiedTs *time.Time
 	var fcSource *string
 	var fcSubject, fcSubjectName *string
-	var fcSuppressedDriftNotesJSON []byte
 
 	var ruKsuid, ruOperation, ruState *string
 	var ruStartTs, ruModifiedTs *time.Time
@@ -264,7 +263,6 @@ func scanJoinedRow(rows *sql.Rows) (*forma_command.FormaCommand, *resource_updat
 		&commandID, &fcTimestamp, &fcCommand, &fcState, &fcClientID,
 		&descriptionText, &descriptionConfirm, &configMode, &configForce, &configSimulate,
 		&targetUpdatesJSON, &stackUpdatesJSON, &policyUpdatesJSON, &fcModifiedTs, &fcSource, &fcSubject, &fcSubjectName,
-		&fcSuppressedDriftNotesJSON,
 		&ruKsuid, &ruOperation, &ruState, &ruStartTs, &ruModifiedTs,
 		&ruRetries, &ruRemaining, &ruVersion, &ruStackLabel, &ruGroupID, &ruSource,
 		&resourceJSON, &resourceTargetJSON, &existingResourceJSON, &existingTargetJSON,
@@ -319,12 +317,6 @@ func scanJoinedRow(rows *sql.Rows) (*forma_command.FormaCommand, *resource_updat
 	if len(policyUpdatesJSON) > 0 {
 		if err := json.Unmarshal(policyUpdatesJSON, &cmd.PolicyUpdates); err != nil {
 			return nil, nil, fmt.Errorf("failed to unmarshal policy updates: %w", err)
-		}
-	}
-
-	if len(fcSuppressedDriftNotesJSON) > 0 {
-		if err := json.Unmarshal(fcSuppressedDriftNotesJSON, &cmd.SuppressedDriftNotes); err != nil {
-			return nil, nil, fmt.Errorf("failed to unmarshal suppressed drift notes: %w", err)
 		}
 	}
 
@@ -499,21 +491,12 @@ func (d *DatastoreMSSQL) StoreFormaCommand(fa *forma_command.FormaCommand, comma
 		return fmt.Errorf("failed to marshal policy updates: %w", err)
 	}
 
-	var suppressedDriftNotesJSON any
-	if len(fa.SuppressedDriftNotes) > 0 {
-		notesJSON, merr := json.Marshal(fa.SuppressedDriftNotes)
-		if merr != nil {
-			return fmt.Errorf("failed to marshal suppressed drift notes: %w", merr)
-		}
-		suppressedDriftNotesJSON = string(notesJSON)
-	}
-
 	args := []any{
 		commandID, fa.StartTs.UTC(), string(fa.Command), string(fa.State), formae.Version,
 		fa.ClientID, d.agentID, fa.Description.Text, fa.Description.Confirm,
 		string(fa.Config.Mode), fa.Config.Force, fa.Config.Simulate,
 		string(targetUpdatesJSON), string(stackUpdatesJSON), string(policyUpdatesJSON), fa.ModifiedTs.UTC(),
-		string(fa.Source), fa.Subject, fa.SubjectName, suppressedDriftNotesJSON,
+		string(fa.Source), fa.Subject, fa.SubjectName,
 	}
 
 	tx, err := d.conn.BeginTx(ctx, nil)
@@ -534,7 +517,7 @@ func (d *DatastoreMSSQL) StoreFormaCommand(fa *forma_command.FormaCommand, comma
 		description_confirm = @p9, config_mode = @p10, config_force = @p11,
 		config_simulate = @p12, target_updates = @p13, stack_updates = @p14,
 		policy_updates = @p15, modified_ts = @p16, source = @p17,
-		subject = @p18, subject_name = @p19, suppressed_drift_notes = @p20
+		subject = @p18, subject_name = @p19
 	WHERE command_id = @p1`, datastore.CommandsTable)
 
 	res, err := tx.ExecContext(ctx, updateQuery, args...)
@@ -551,9 +534,8 @@ func (d *DatastoreMSSQL) StoreFormaCommand(fa *forma_command.FormaCommand, comma
 		INSERT INTO %[1]s
 			(command_id, timestamp, command, state, agent_version, client_id, agent_id,
 			 description_text, description_confirm, config_mode, config_force, config_simulate,
-			 target_updates, stack_updates, policy_updates, modified_ts, source, subject, subject_name,
-			 suppressed_drift_notes)
-		VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16, @p17, @p18, @p19, @p20)`,
+			 target_updates, stack_updates, policy_updates, modified_ts, source, subject, subject_name)
+		VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16, @p17, @p18, @p19)`,
 			datastore.CommandsTable)
 		if _, err := tx.ExecContext(ctx, insertQuery, args...); err != nil {
 			slog.Error("failed to store FormaCommand (insert)", "error", err)
@@ -728,44 +710,56 @@ WHERE EXISTS (
 
 // fetchCurrentProperties returns the Properties JSON from the latest resource
 // version for the given ksuid.
-// GetPropertiesAtLastWrite returns the Properties JSON of the latest resource
-// version persisted under an apply command whose resource update actually
-// wrote (a create or replace, or an update carrying a non-empty patch):
-// formae's own write echo. Sync and discovery persist under the sync
-// command type, and metadata-only applies (imports without property
-// changes, label-only renames) synthesize their result from observed state
-// with an empty patch; neither advances the witness.
+// GetPropertiesAtLastWrite returns the resource's per-field write witness,
+// composed from its genuine-write history (see datastore.ComposeWriteWitness):
+// the newest create/replace echo is the base and each later apply-owned
+// update overlays only the fields its patch wrote. Sync and discovery
+// versions, metadata-only applies (empty patch), and fields an update's echo
+// merely carried along never enter the witness. History is bounded to the
+// most recent writes; a resource whose create falls outside the bound has no
+// witness, which classifies its movement as tolerated.
 func (d *DatastoreMSSQL) GetPropertiesAtLastWrite(ksuid string) (json.RawMessage, error) {
 	ctx, span := mssqlTracer.Start(context.Background(), "GetPropertiesAtLastWrite")
 	defer span.End()
 
 	query := fmt.Sprintf(`
-SELECT TOP (1) JSON_QUERY(r.data, '$.Properties')
+SELECT TOP (25) JSON_QUERY(r.data, '$.Properties'), ru.operation, JSON_QUERY(ru.resource, '$.PatchDocument')
 FROM resources r
 JOIN forma_commands fc ON fc.command_id = r.command_id
+JOIN resource_updates ru ON ru.command_id = r.command_id AND ru.ksuid = r.ksuid
 WHERE r.ksuid = @p1
 AND fc.command = 'apply'
 AND r.operation != 'delete' AND r.operation != 'reaped'
-AND EXISTS (
-	SELECT 1 FROM resource_updates ru
-	WHERE ru.command_id = r.command_id AND ru.ksuid = r.ksuid
-	AND (ru.operation != 'update'
-		OR (JSON_QUERY(ru.resource, '$.PatchDocument') IS NOT NULL
-			AND JSON_QUERY(ru.resource, '$.PatchDocument') != '[]'))
-)
+AND (ru.operation != 'update'
+	OR (JSON_QUERY(ru.resource, '$.PatchDocument') IS NOT NULL
+		AND JSON_QUERY(ru.resource, '$.PatchDocument') != '[]'))
 ORDER BY r.version %s DESC`, binColl)
 
-	var props sql.NullString
-	if err := d.conn.QueryRowContext(ctx, query, ksuid).Scan(&props); err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
+	rows, err := d.conn.QueryContext(ctx, query, ksuid)
+	if err != nil {
 		return nil, err
 	}
-	if !props.Valid || props.String == "" {
-		return nil, nil
+	defer rows.Close() //nolint:errcheck
+
+	var history []datastore.WriteVersion
+	for rows.Next() {
+		var props, op, patch sql.NullString
+		if err := rows.Scan(&props, &op, &patch); err != nil {
+			return nil, err
+		}
+		v := datastore.WriteVersion{Operation: op.String}
+		if props.Valid {
+			v.Properties = json.RawMessage(props.String)
+		}
+		if patch.Valid {
+			v.Patch = json.RawMessage(patch.String)
+		}
+		history = append(history, v)
 	}
-	return json.RawMessage(props.String), nil
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return datastore.ComposeWriteWitness(history), nil
 }
 
 func (d *DatastoreMSSQL) fetchCurrentProperties(ctx context.Context, ksuid string) (json.RawMessage, error) {

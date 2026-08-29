@@ -455,3 +455,81 @@ func anyWitnessedLeaf(leaves []any) bool {
 	}
 	return false
 }
+
+// AssertWitnessedSuppressed returns the desired properties with formae's
+// witnessed values asserted onto the provider-default fields the user
+// omitted, so a forced reconcile diffs against them and reverts out-of-band
+// movement the same way it overwrites drift on declared fields. Assertion
+// follows the strip predicates exactly:
+//
+//   - an omitted (absent or null) top-level hasProviderDefault field takes
+//     the witness value when the witness holds one;
+//   - a partially declared EntitySet field keeps the declared entries and
+//     gains the witness's undeclared (suppressed) entries;
+//   - a declared field is intent and is never overridden; an explicit empty
+//     EntitySet declaration is a drain and is never refilled;
+//   - opaque fields are skipped (the stored witness holds hashes, which must
+//     never be asserted as values), createOnly fields are skipped (a witness
+//     assertion must never plan a replacement), and dotted array-nested
+//     paths are skipped (set-based elements have no stable injection
+//     target).
+func AssertWitnessedSuppressed(desired, witness json.RawMessage, schema pkgmodel.Schema) (json.RawMessage, error) {
+	if len(witness) == 0 {
+		return desired, nil
+	}
+	desiredMap, err := unmarshalPropsObject(desired)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal desired properties: %w", err)
+	}
+	witnessMap, err := unmarshalPropsObject(witness)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal witness properties: %w", err)
+	}
+
+	createOnly := map[string]bool{}
+	for _, f := range schema.CreateOnly() {
+		createOnly[f] = true
+	}
+
+	changed := false
+	for _, path := range schema.HasProviderDefault() {
+		if strings.Contains(path, ".") || createOnly[path] || pathOpaque(schema, path) {
+			continue
+		}
+		wVal, wHas := witnessMap[path]
+		if !witnessedValue(wVal, wHas) || valueHasOpaqueMarker(wVal) {
+			continue
+		}
+		hint := schema.Hints[path]
+		parts := []string{path}
+		if !fieldExistsInMap(desiredMap, parts) {
+			desiredMap[path] = wVal
+			changed = true
+			continue
+		}
+		if hint.UpdateMethod == pkgmodel.FieldUpdateMethodEntitySet && hint.IndexField != "" {
+			declaredKeys := entitySetKeys(desiredMap[path], hint.IndexField)
+			if len(declaredKeys) == 0 {
+				// Explicit empty declaration: a drain, never refilled.
+				continue
+			}
+			wArr, _ := wVal.([]any)
+			suppressed := suppressedEntitySetElements(wArr, hint.IndexField, declaredKeys)
+			if len(suppressed) == 0 {
+				continue
+			}
+			declared, _ := desiredMap[path].([]any)
+			desiredMap[path] = append(append([]any{}, declared...), sortedByKey(suppressed, hint.IndexField)...)
+			changed = true
+		}
+	}
+
+	if !changed {
+		return desired, nil
+	}
+	out, err := json.Marshal(desiredMap)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(out), nil
+}
