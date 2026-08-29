@@ -27,24 +27,14 @@ const (
 	oidcEchoIssuer   = "https://e2e-oidc-issuer-942849037363.s3.us-west-2.amazonaws.com"
 	oidcEchoKeyID    = "e2e-oidc-key-1"
 
-	// The subject the control plane produces, in the grammar it really uses:
-	// the `fai:` namespace, a tenant, and the installation being connected.
-	// Connect takes it verbatim into the trust it provisions and the GCP path
-	// parses it back apart, so a fixture subject of a made-up shape would
-	// exercise a string production never emits.
+	// The tenant half of the subject. The installation half is per-run, which
+	// is what makes the trust connect provisions per-run too.
 	oidcEchoTenantID = "2eOidcConnectE2eTenant00001"
-	oidcEchoSubject  = "fai:" + oidcEchoTenantID + "/" + connectInstallationID
 
 	// The e2e account, pinned rather than derived: connect is told which
 	// account to connect and never infers one from ambient credentials, and
 	// the test asserts on the role ARN that produces.
 	oidcEchoAccount = "942849037363"
-
-	// The role connect provisions and the echo plugin then assumes. The name
-	// carries the suite's own prefix so the pre-cleanup purge reclaims it if
-	// a run dies before its teardown; a survivor is converged rather than
-	// refused, since it carries the ownership tags connect wrote.
-	oidcConnectRoleName = "formae-e2e-oidc-connect-role"
 
 	// The AWS shared-config profile connect provisions with, written by the
 	// e2e workflow's credentials step.
@@ -62,6 +52,26 @@ const (
 	oidcPluginDirEnv         = "E2E_OIDC_PLUGIN_DIR"
 	oidcPluginDirNoBrokerEnv = "E2E_OIDC_PLUGIN_DIR_NO_BROKER"
 )
+
+// oidcEchoSubject is the subject the control plane produces, in the grammar it
+// really uses: the `fai:` namespace, a tenant, and the installation being
+// connected. Connect takes it verbatim into the trust it provisions and the
+// GCP path parses it back apart, so a subject of a made-up shape would
+// exercise a string production never emits.
+//
+// The installation half is this run's, so the trust provisioned against it is
+// this run's: an exchange that succeeds could not have been riding on what an
+// earlier run established.
+func oidcEchoSubject() string { return "fai:" + oidcEchoTenantID + "/" + ConnectInstallationID() }
+
+// oidcConnectRoleName is the role connect provisions and the echo plugin then
+// assumes.
+//
+// Per-run for the same reason as the subject, and because cleanup deletes this
+// role outright: a shared name would let one run's teardown remove trust
+// another run was still using. The suite's own prefix keeps it inside the
+// pre-cleanup purge, so a run that dies before its teardown is reclaimed.
+func oidcConnectRoleName() string { return "formae-e2e-oidc-connect-" + ConnectRunSuffix() }
 
 // stagedOidcPluginDir returns the staged plugin tree named by the given
 // environment variable. `make test-e2e` builds both fixture binaries and
@@ -189,8 +199,8 @@ func connectProvisionsTrust(t *testing.T, bin string) string {
 	t.Helper()
 
 	stub := StartConnectStub(t, connectSetup{
-		CloudSubject:  oidcEchoSubject,
-		CloudRoleName: oidcConnectRoleName,
+		CloudSubject:  oidcEchoSubject(),
+		CloudRoleName: oidcConnectRoleName(),
 		Issuer:        oidcEchoIssuer,
 	})
 	configPath := WriteHostedConnectConfig(t, t.TempDir(),
@@ -198,7 +208,7 @@ func connectProvisionsTrust(t *testing.T, bin string) string {
 
 	// Registered before the run, not after it: a run that provisions the role
 	// and then fails to register still leaves the role standing.
-	t.Cleanup(func() { DeleteIAMRole(t, oidcConnectRoleName) })
+	t.Cleanup(func() { DeleteIAMRole(t, oidcConnectRoleName()) })
 
 	doc := RunConnect(t, bin, ConnectEnv(stub.URL, oidcEchoIssuer),
 		"aws",
@@ -217,8 +227,8 @@ func connectProvisionsTrust(t *testing.T, bin string) string {
 	if doc.Account != oidcEchoAccount {
 		t.Errorf("connect account: got %q, want %q", doc.Account, oidcEchoAccount)
 	}
-	if !strings.HasSuffix(doc.RoleArn, ":role/"+oidcConnectRoleName) {
-		t.Fatalf("connect roleArn %q does not name role %q", doc.RoleArn, oidcConnectRoleName)
+	if !strings.HasSuffix(doc.RoleArn, ":role/"+oidcConnectRoleName()) {
+		t.Fatalf("connect roleArn %q does not name role %q", doc.RoleArn, oidcConnectRoleName())
 	}
 
 	// What the control plane was told, rather than what the CLI printed: the
@@ -228,9 +238,14 @@ func connectProvisionsTrust(t *testing.T, bin string) string {
 	if len(registrations) != 1 {
 		t.Fatalf("stub control plane received %d registrations, want 1: %+v", len(registrations), registrations)
 	}
-	if got := registrations[0]; got.Cloud != "aws" || got.Account != oidcEchoAccount || got.RoleArn != doc.RoleArn {
-		t.Errorf("registration: got %+v, want cloud aws, account %s, roleArn %s",
-			got, oidcEchoAccount, doc.RoleArn)
+	got := registrations[0]
+	coordinate, present := got.Coordinate()
+	if got.Cloud != "aws" || got.Account != oidcEchoAccount || !present || coordinate != doc.RoleArn {
+		t.Errorf("registration: got cloud %q account %q roleArn %q (present %v), want cloud aws, account %s, roleArn %s",
+			got.Cloud, got.Account, coordinate, present, oidcEchoAccount, doc.RoleArn)
+	}
+	if got.ForeignCoordinatePresent() {
+		t.Errorf("registration carried a GCP coordinate on an AWS connection")
 	}
 
 	return doc.RoleArn
@@ -251,7 +266,7 @@ func TestOidcCredential_TokenExchangesForRealCredentials(t *testing.T) {
 	agent := StartAgent(t, bin,
 		WithPluginDir(stagedOidcPluginDir(t, oidcPluginDirEnv)),
 		WithEnv(
-			"E2E_OIDC_SUBJECT="+oidcEchoSubject,
+			"E2E_OIDC_SUBJECT="+oidcEchoSubject(),
 			"E2E_OIDC_AUDIENCE="+oidcEchoAudience,
 			"E2E_OIDC_ASSUME_ROLE_ARN="+roleArn,
 		),
@@ -273,7 +288,7 @@ func TestOidcCredential_TokenExchangesForRealCredentials(t *testing.T) {
 		{header, "alg", "RS256"},
 		{header, "kid", oidcEchoKeyID},
 		{claims, "iss", oidcEchoIssuer},
-		{claims, "sub", oidcEchoSubject},
+		{claims, "sub", oidcEchoSubject()},
 		{claims, "aud", oidcEchoAudience},
 	} {
 		if got := jwtString(t, check.doc, check.key); got != check.expected {
@@ -284,8 +299,8 @@ func TestOidcCredential_TokenExchangesForRealCredentials(t *testing.T) {
 	if got := echoOutput(t, echo, "exchangeError"); got != "" {
 		t.Fatalf("exchangeError: got %q, want empty", got)
 	}
-	if got := echoOutput(t, echo, "exchangeIdentity"); !strings.Contains(got, oidcConnectRoleName) {
-		t.Errorf("exchangeIdentity %q does not name role %q", got, oidcConnectRoleName)
+	if got := echoOutput(t, echo, "exchangeIdentity"); !strings.Contains(got, oidcConnectRoleName()) {
+		t.Errorf("exchangeIdentity %q does not name role %q", got, oidcConnectRoleName())
 	}
 	requireCredentialsOutlive(t, echoOutput(t, echo, "exchangeExpiration"))
 }

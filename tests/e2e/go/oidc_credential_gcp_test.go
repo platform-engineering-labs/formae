@@ -41,20 +41,21 @@ func gcpE2EProject(t *testing.T) string {
 // connectProvisionsGcpTrust drives `formae connect gcp` against a stub control
 // plane and returns the workload identity provider it provisioned.
 //
-// Nothing is torn down afterwards, deliberately. Everything connect creates
-// here converges rather than accumulates: the pool and the provider are fixed
-// per project and are patched in place, and the IAM bindings are set for one
-// principal that does not change between runs. provx's own Delete leaves the
-// pool and provider standing for the same reason — they are shared — so a
-// teardown here would remove two bindings the next run puts straight back.
+// The pool and the provider are left standing: both are fixed per project and
+// shared between installations, and provx's own Delete leaves them for that
+// reason. The IAM bindings are not left standing. The subject is this run's,
+// so they would accumulate one privileged principal per run, each holding
+// roles/editor and roles/resourcemanager.projectIamAdmin on a project whose
+// issuer signs with a standing key — a growing grant with no expiry and no
+// owner.
 func connectProvisionsGcpTrust(t *testing.T, bin, project string) string {
 	t.Helper()
 
 	stub := StartConnectStub(t, connectSetup{
-		CloudSubject: oidcEchoSubject,
+		CloudSubject: oidcEchoSubject(),
 		// GCP carries no role, but the setup read requires all three
 		// coordinates: the control plane serves one document for every cloud.
-		CloudRoleName: oidcConnectRoleName,
+		CloudRoleName: oidcConnectRoleName(),
 		Issuer:        oidcEchoIssuer,
 	})
 	configPath := WriteHostedConnectConfig(t, t.TempDir(),
@@ -83,20 +84,29 @@ func connectProvisionsGcpTrust(t *testing.T, bin, project string) string {
 		t.Fatalf("connect workloadIdentityProvider %q is not a provider resource name", doc.WorkloadIdentityProvider)
 	}
 
+	// Registered only once the provider name is known, since the principal is
+	// derived from it. A run that fails between here and the end still revokes
+	// what it granted.
+	t.Cleanup(func() {
+		RevokeGCPPrincipal(t, project, GCPPrincipalFor(t, doc.WorkloadIdentityProvider, oidcEchoSubject()))
+	})
+
 	registrations := stub.Registrations()
 	if len(registrations) != 1 {
 		t.Fatalf("stub control plane received %d registrations, want 1: %+v", len(registrations), registrations)
 	}
 	got := registrations[0]
-	if got.Cloud != "gcp" || got.Account != project || got.WorkloadIdentityProvider != doc.WorkloadIdentityProvider {
-		t.Errorf("registration: got %+v, want cloud gcp, account %s, workloadIdentityProvider %s",
-			got, project, doc.WorkloadIdentityProvider)
+	coordinate, present := got.Coordinate()
+	if got.Cloud != "gcp" || got.Account != project || !present || coordinate != doc.WorkloadIdentityProvider {
+		t.Errorf("registration: got cloud %q account %q workloadIdentityProvider %q (present %v), want cloud gcp, account %s, provider %s",
+			got.Cloud, got.Account, coordinate, present, project, doc.WorkloadIdentityProvider)
 	}
-	// The AWS coordinate is not merely empty on the wire, it is absent: the
-	// control plane's schema is a discriminated union that rejects a field
-	// belonging to another variant.
-	if got.RoleArn != "" {
-		t.Errorf("registration carried a roleArn %q on a GCP connection", got.RoleArn)
+	// Absent, not merely empty: the control plane's schema is a discriminated
+	// union that rejects a field belonging to another variant, so a roleArn
+	// sent as "" would be refused just as one carrying a value would. The
+	// decoder keeps the two apart rather than collapsing both to "".
+	if got.ForeignCoordinatePresent() {
+		t.Errorf("registration carried a roleArn field on a GCP connection")
 	}
 
 	return doc.WorkloadIdentityProvider
@@ -122,7 +132,7 @@ func TestOidcCredential_GcpTokenExchangesForRealCredentials(t *testing.T) {
 	agent := StartAgent(t, bin,
 		WithPluginDir(stagedOidcPluginDir(t, oidcPluginDirEnv)),
 		WithEnv(
-			"E2E_OIDC_SUBJECT="+oidcEchoSubject,
+			"E2E_OIDC_SUBJECT="+oidcEchoSubject(),
 			// On GCP the audience is the provider's own resource name, and
 			// Google pins the provider's allowed audiences to that same
 			// string, so the token and the exchange cannot disagree.
@@ -147,7 +157,7 @@ func TestOidcCredential_GcpTokenExchangesForRealCredentials(t *testing.T) {
 		{header, "alg", "RS256"},
 		{header, "kid", oidcEchoKeyID},
 		{claims, "iss", oidcEchoIssuer},
-		{claims, "sub", oidcEchoSubject},
+		{claims, "sub", oidcEchoSubject()},
 		{claims, "aud", provider},
 	} {
 		if got := jwtString(t, check.doc, check.key); got != check.expected {

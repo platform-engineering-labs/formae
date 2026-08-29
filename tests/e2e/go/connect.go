@@ -9,8 +9,11 @@ package e2e_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -43,10 +46,40 @@ import (
 // the auth plugin is refused rather than served.
 const oidcAuthStubBearer = "Bearer e2e-oidc-connect-token"
 
-// connectInstallationID is the installation a connect run addresses. The
-// profile loader requires 27 base62 characters. Nothing resolves it: the stub
-// answers for whichever installation the run names.
-const connectInstallationID = "2eOidcConnectE2eInstall0001"
+// testRunIDEnv carries a value unique to one workflow run and attempt. The
+// e2e workflow sets it; a developer run has none.
+const testRunIDEnv = "FORMAE_TEST_RUN_ID"
+
+// runFingerprint is this run's identity, computed once per test process.
+//
+// Everything connect provisions is named from it, which is what makes a green
+// run mean something. With a fixed identity, the second run onwards exchanges
+// against trust the first one left behind: a connect that had silently stopped
+// provisioning would keep passing, and so would one that failed to repair
+// state some other actor had broken. Naming the identity per run makes the
+// exchange attributable to the invocation under test.
+//
+// It falls back to the clock rather than failing, so the suite still runs on a
+// developer machine — where two runs sharing an identity is the same hazard,
+// one account down.
+var runFingerprint = sync.OnceValue(func() string {
+	seed := os.Getenv(testRunIDEnv)
+	if seed == "" {
+		seed = fmt.Sprintf("local-%d", time.Now().UnixNano())
+	}
+	sum := sha256.Sum256([]byte(seed))
+	return hex.EncodeToString(sum[:])
+})
+
+// ConnectInstallationID is the installation a connect run addresses. The
+// profile loader requires 27 base62 characters, and hex satisfies that.
+// Nothing resolves it: the stub answers for whichever installation the run
+// names, and it is per-run so the subject built from it is too.
+func ConnectInstallationID() string { return runFingerprint()[:27] }
+
+// ConnectRunSuffix is the short discriminator that per-run cloud resource
+// names carry.
+func ConnectRunSuffix() string { return runFingerprint()[:12] }
 
 // oidcAuthPluginDirEnv names the plugin tree holding the stub auth plugin,
 // staged by `make test-e2e`.
@@ -61,14 +94,43 @@ type connectSetup struct {
 	Issuer        string `json:"issuer"`
 }
 
-// stubRegistration is one registration the stub control plane received. The
-// coordinate fields mirror the CLI's own registration body, so a test can
-// assert on what actually crossed the wire.
+// stubRegistration is one registration the stub control plane received.
+//
+// The coordinate fields are pointers because the control plane's real schema
+// is a discriminated union that admits exactly one shape per cloud and rejects
+// a field belonging to another. Absent and present-but-empty are therefore
+// different answers, and a plain string cannot tell them apart — which would
+// let a test claim the wrong coordinate never crossed the wire when in fact it
+// crossed as "".
 type stubRegistration struct {
-	Cloud                    string `json:"cloud"`
-	Account                  string `json:"account"`
-	RoleArn                  string `json:"roleArn"`
-	WorkloadIdentityProvider string `json:"workloadIdentityProvider"`
+	Cloud                    string  `json:"cloud"`
+	Account                  string  `json:"account"`
+	RoleArn                  *string `json:"roleArn"`
+	WorkloadIdentityProvider *string `json:"workloadIdentityProvider"`
+}
+
+// Coordinate returns the trust coordinate this registration carries, and
+// whether the field was present at all.
+func (r stubRegistration) Coordinate() (string, bool) {
+	if r.Cloud == "gcp" {
+		if r.WorkloadIdentityProvider == nil {
+			return "", false
+		}
+		return *r.WorkloadIdentityProvider, true
+	}
+	if r.RoleArn == nil {
+		return "", false
+	}
+	return *r.RoleArn, true
+}
+
+// ForeignCoordinatePresent reports whether the registration carried the field
+// belonging to a different cloud, which the real schema would reject.
+func (r stubRegistration) ForeignCoordinatePresent() bool {
+	if r.Cloud == "gcp" {
+		return r.RoleArn != nil
+	}
+	return r.WorkloadIdentityProvider != nil
 }
 
 // connectStub is a running stub control plane.
@@ -99,7 +161,7 @@ func StartConnectStub(t *testing.T, setup connectSetup) *connectStub {
 
 	mux.HandleFunc("GET /api/v1/installations/{installation}/cloud-connection-setup",
 		func(w http.ResponseWriter, r *http.Request) {
-			if !stubAuthorized(t, w, r) {
+			if !stubAuthorized(t, w, r) || !stubAddressedCorrectly(t, w, r) {
 				return
 			}
 			writeStubJSON(t, w, http.StatusOK, setup)
@@ -107,12 +169,12 @@ func StartConnectStub(t *testing.T, setup connectSetup) *connectStub {
 
 	mux.HandleFunc("POST /api/v1/installations/{installation}/cloud-connections",
 		func(w http.ResponseWriter, r *http.Request) {
-			if !stubAuthorized(t, w, r) {
+			if !stubAuthorized(t, w, r) || !stubAddressedCorrectly(t, w, r) {
 				return
 			}
 			var registration stubRegistration
-			if err := json.NewDecoder(r.Body).Decode(&registration); err != nil {
-				t.Errorf("stub control plane: registration body is not JSON: %v", err)
+			if err := decodeStrict(r.Body, &registration); err != nil {
+				t.Errorf("stub control plane: registration body: %v", err)
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
@@ -143,6 +205,38 @@ func stubAuthorized(t *testing.T, w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 	return true
+}
+
+// stubAddressedCorrectly holds the run to the installation it configured. The
+// route variable is the only place the profile's installation id reaches the
+// control plane, so serving any id would let a run that addressed the wrong
+// installation pass.
+func stubAddressedCorrectly(t *testing.T, w http.ResponseWriter, r *http.Request) bool {
+	t.Helper()
+
+	if got := r.PathValue("installation"); got != ConnectInstallationID() {
+		t.Errorf("stub control plane: request addressed installation %q, want %q", got, ConnectInstallationID())
+		writeStubJSON(t, w, http.StatusNotFound, map[string]any{
+			"error": map[string]any{"code": "not_found"},
+		})
+		return false
+	}
+	return true
+}
+
+// decodeStrict reads exactly one JSON document into v and refuses anything
+// the real control plane would: an unknown field, or trailing content after
+// the object.
+func decodeStrict(r io.Reader, v any) error {
+	dec := json.NewDecoder(r)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		return fmt.Errorf("not a JSON object of the expected shape: %w", err)
+	}
+	if err := dec.Decode(new(json.RawMessage)); err != io.EOF {
+		return fmt.Errorf("carries content after the JSON object")
+	}
+	return nil
 }
 
 func writeStubJSON(t *testing.T, w http.ResponseWriter, status int, body any) {
@@ -193,7 +287,7 @@ func WriteHostedConnectConfig(t *testing.T, dir, authPluginDir, issuer string) s
 	t.Helper()
 
 	path := filepath.Join(dir, "connect-config.pkl")
-	content := fmt.Sprintf(hostedConnectConfig, authPluginDir, connectInstallationID, issuer)
+	content := fmt.Sprintf(hostedConnectConfig, authPluginDir, ConnectInstallationID(), issuer)
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("failed to write the connect config: %v", err)
 	}
