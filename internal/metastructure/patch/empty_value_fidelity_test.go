@@ -7,12 +7,16 @@
 package patch
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
+
+	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 )
 
 func TestFirstPointerSegment(t *testing.T) {
@@ -95,4 +99,146 @@ func TestPreserveEmptyRootFields(t *testing.T) {
 	assert.Equal(t, map[string]bool{"Spec": true, "Bare": true}, preserveEmptyRootFields(schema),
 		"only preserveEmptyValues hints on non-dotted keys enter the root set")
 	assert.Empty(t, preserveEmptyRootFields(pkgmodel.Schema{}))
+}
+
+func fidelitySchema() pkgmodel.Schema {
+	return pkgmodel.Schema{
+		Identifier: "Name",
+		Fields:     []string{"Name", "Spec", "Other"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"Spec": {UpdateMethod: pkgmodel.FieldUpdateMethodAtomic, PreserveEmptyValues: true},
+		},
+	}
+}
+
+// The headline shape: a hinted field's empty-object member survives to the
+// single whole-value replace op. Requires both the diff-input exemption and
+// the op-value exemption; red until both land.
+func TestGeneratePatch_PreserveEmpty_ReplaceCarriesVerbatimValue(t *testing.T) {
+	document := json.RawMessage(`{"Name":"x","Spec":{"acme":{"server":"https://old"}}}`)
+	desired := json.RawMessage(`{"Name":"x","Spec":{"selfSigned":{}}}`)
+
+	patchDoc, _, _, err := GeneratePatch(document, desired, document, desired, resolver.ResolvableProperties{}, fidelitySchema(), pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+
+	var ops []struct {
+		Op    string          `json:"op"`
+		Path  string          `json:"path"`
+		Value json.RawMessage `json:"value"`
+	}
+	require.NoError(t, json.Unmarshal(patchDoc, &ops))
+	require.Len(t, ops, 1)
+	assert.Equal(t, "replace", ops[0].Op)
+	assert.Equal(t, "/Spec", ops[0].Path)
+	assert.JSONEq(t, `{"selfSigned":{}}`, string(ops[0].Value),
+		"the empty-object member is the declaration and must survive")
+}
+
+// Symmetry: identical values incl. empties on both sides plan nothing.
+func TestGeneratePatch_PreserveEmpty_IdenticalSidesPlanNothing(t *testing.T) {
+	doc := json.RawMessage(`{"Name":"x","Spec":{"selfSigned":{}}}`)
+
+	patchDoc, _, _, err := GeneratePatch(doc, doc, doc, doc, resolver.ResolvableProperties{}, fidelitySchema(), pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Empty(t, patchDoc)
+}
+
+// The default is pinned, not just the exemption: a field without the hint
+// keeps today's stripping even when another field carries it.
+func TestGeneratePatch_NonHintedFieldStillStripped(t *testing.T) {
+	document := json.RawMessage(`{"Name":"x","Other":{"acme":{"server":"https://old"}}}`)
+	desired := json.RawMessage(`{"Name":"x","Other":{"selfSigned":{}}}`)
+
+	patchDoc, _, _, err := GeneratePatch(document, desired, document, desired, resolver.ResolvableProperties{}, fidelitySchema(), pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.NotContains(t, string(patchDoc), "selfSigned",
+		"unhinted fields keep the rendering-noise strip")
+}
+
+func refSchema() pkgmodel.Schema {
+	return pkgmodel.Schema{
+		Identifier: "Name",
+		Fields:     []string{"Name", "Token", "Other"},
+		Hints:      map[string]pkgmodel.FieldHint{"Name": {CreateOnly: true}},
+	}
+}
+
+// A first-declared unresolvable reference survives as a placeholder add op;
+// a plain empty string is still dropped as rendering noise.
+func TestGeneratePatch_ReferenceEnvelopeAddSurvives(t *testing.T) {
+	document := json.RawMessage(`{"Name":"x"}`)
+	desired := json.RawMessage(`{"Name":"x","Token":{"$ref":"formae://2ABcDeFgHiJkLmNoPqRsTuVwXyZ#/S"}}`)
+
+	patchDoc, _, _, err := GeneratePatch(document, desired, document, desired, resolver.ResolvableProperties{}, refSchema(), pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.JSONEq(t, `[{"op":"add","path":"/Token","value":""}]`, string(patchDoc))
+
+	plain := json.RawMessage(`{"Name":"x","Token":""}`)
+	patchDoc, _, _, err = GeneratePatch(document, plain, document, plain, resolver.ResolvableProperties{}, refSchema(), pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Empty(t, patchDoc, "a plain empty string is still rendering noise")
+}
+
+// A malformed envelope contributes nothing to the keep-set: current behavior
+// (silent drop) is preserved rather than minting a placeholder.
+func TestGeneratePatch_MalformedEnvelopeNotKept(t *testing.T) {
+	document := json.RawMessage(`{"Name":"x"}`)
+	desired := json.RawMessage(`{"Name":"x","Token":{"$res":true}}`)
+
+	patchDoc, _, _, err := GeneratePatch(document, desired, document, desired, resolver.ResolvableProperties{}, refSchema(), pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.NotContains(t, string(patchDoc), `"value":""`,
+		"the keep-set must never mint an empty-string placeholder for a malformed envelope")
+	assert.JSONEq(t, `[{"op":"add","path":"/Token","value":{"$res":true}}]`, string(patchDoc),
+		"a malformed envelope keeps its pre-existing plain-map diff behavior, unchanged by the keep-set")
+}
+
+// Keeping a field only permits diffing: equal values still produce no op.
+func TestGeneratePatch_KeptFieldEqualValuesNoOp(t *testing.T) {
+	document := json.RawMessage(`{"Name":"x","Token":"v"}`)
+	desired := json.RawMessage(`{"Name":"x","Token":{"$ref":"formae://2ABcDeFgHiJkLmNoPqRsTuVwXyZ#/S","$value":"v"}}`)
+
+	patchDoc, _, _, err := GeneratePatch(document, desired, document, desired, resolver.ResolvableProperties{}, refSchema(), pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.Empty(t, patchDoc)
+}
+
+// GREEN-FIRST GUARD: a preserveEmptyValues root omitted from desired while
+// the document holds a bare empty stays invisible (the absence-scoped
+// provider-echo tolerance). Fails exactly if an implementation wrongly
+// exempts preserved roots from that tolerance.
+func TestGeneratePatch_PreservedRootAbsentDesired_NoRemove(t *testing.T) {
+	document := json.RawMessage(`{"Name":"x","Spec":{}}`)
+	desired := json.RawMessage(`{"Name":"x"}`)
+
+	patchDoc, _, _, err := GeneratePatch(document, desired, document, desired, resolver.ResolvableProperties{}, fidelitySchema(), pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.NotContains(t, string(patchDoc), "remove")
+}
+
+// The reference placeholder add survives under Patch mode too.
+func TestGeneratePatch_ReferenceAddSurvivesPatchMode(t *testing.T) {
+	document := json.RawMessage(`{"Name":"x"}`)
+	desired := json.RawMessage(`{"Name":"x","Token":{"$ref":"formae://2ABcDeFgHiJkLmNoPqRsTuVwXyZ#/S"}}`)
+
+	patchDoc, _, _, err := GeneratePatch(document, desired, document, desired, resolver.ResolvableProperties{}, refSchema(), pkgmodel.FormaApplyModePatch)
+	require.NoError(t, err)
+	assert.JSONEq(t, `[{"op":"add","path":"/Token","value":""}]`, string(patchDoc))
+}
+
+// A placeholder add on a createOnly-hinted destination routes to the
+// createOnly split like any createOnly change.
+func TestGeneratePatch_ReferenceAddOnCreateOnlyRoutesToCreateOnlyPatch(t *testing.T) {
+	schema := pkgmodel.Schema{
+		Identifier: "Name",
+		Fields:     []string{"Name", "Token"},
+		Hints:      map[string]pkgmodel.FieldHint{"Token": {CreateOnly: true}},
+	}
+	document := json.RawMessage(`{"Name":"x"}`)
+	desired := json.RawMessage(`{"Name":"x","Token":{"$ref":"formae://2ABcDeFgHiJkLmNoPqRsTuVwXyZ#/S"}}`)
+
+	patchDoc, createOnly, _, err := GeneratePatch(document, desired, document, desired, resolver.ResolvableProperties{}, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.JSONEq(t, `[]`, string(patchDoc), "the createOnly change is not a mutable op")
+	assert.Contains(t, string(createOnly), "/Token")
 }

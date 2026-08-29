@@ -112,7 +112,18 @@ func generatePatch(document []byte, patch []byte, storedEnvelopes []byte, desire
 	}
 
 	requiredOnUpdateFields := schema.RequiredOnUpdate()
-	patchOps, err := createPatchDocument(flattenedDocument, flattenedPatch, schema.Fields, requiredOnUpdateFields, schema.HasProviderDefault(), entitySetProviderDefaultsFromHints(schema.Hints), collectionSemanticsFromFieldHints(schema.Hints), defaultIgnoredFields, strategy, topLevelConvergeFields(schema.Fields, properties))
+	// Fields hinted preserveEmptyValues carry meaningful empty collections:
+	// every empty-value normalization below skips their subtrees, on both
+	// sides, in op values, and in the keep-set for the top-level drop.
+	preserveRoots := preserveEmptyRootFields(schema)
+	keepFields := topLevelConvergeFields(schema.Fields, properties)
+	for field := range referenceEnvelopeFields(desiredEnvelopes, schema.Fields) {
+		keepFields[field] = true
+	}
+	for field := range preserveRoots {
+		keepFields[field] = true
+	}
+	patchOps, err := createPatchDocument(flattenedDocument, flattenedPatch, schema.Fields, requiredOnUpdateFields, schema.HasProviderDefault(), entitySetProviderDefaultsFromHints(schema.Hints), collectionSemanticsFromFieldHints(schema.Hints), defaultIgnoredFields, strategy, keepFields, preserveRoots)
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("failed to create patch document: %w", err)
 	}
@@ -122,14 +133,14 @@ func generatePatch(document []byte, patch []byte, storedEnvelopes []byte, desire
 	// []/{}. An "add" of an empty collection to a field absent in the actual
 	// state is always PKL rendering noise — a user clearing a field would
 	// produce a "replace" (field exists in actual), not an "add".
-	patchOps = filterSpuriousEmptyAdds(patchOps)
+	patchOps = filterSpuriousEmptyAdds(patchOps, preserveRoots)
 
 	// Strip empty collections from inside all patch operation values. This
 	// cleans up phantom []/{}  values inside nested objects (e.g., empty
 	// ResponseParameters inside an IntegrationResponse). Without this,
 	// EntitySet array elements may not match their actual counterparts and
 	// produce "array items are not unique" errors.
-	patchOps = stripEmptyCollectionsFromOps(patchOps)
+	patchOps = stripEmptyCollectionsFromOps(patchOps, preserveRoots)
 
 	// Drop serialization-only ops on Format-hinted fields before the createOnly
 	// split, so a cosmetic diff on a (possibly createOnly) hinted field neither
@@ -194,7 +205,7 @@ func generatePatch(document []byte, patch []byte, storedEnvelopes []byte, desire
 	return json.RawMessage(patchJson), createOnlyJson, onlyForceResent, nil
 }
 
-func createPatchDocument(document []byte, patch []byte, schemaFields []string, requiredOnUpdateFields []string, hasProviderDefaultFields []string, entitySetProviderDefaults map[string]string, collections jsonpatch.Collections, ignoredFields []jsonpatch.Path, strategy jsonpatch.PatchStrategy, convergeFields map[string]bool) ([]jsonpatch.JsonPatchOperation, error) {
+func createPatchDocument(document []byte, patch []byte, schemaFields []string, requiredOnUpdateFields []string, hasProviderDefaultFields []string, entitySetProviderDefaults map[string]string, collections jsonpatch.Collections, ignoredFields []jsonpatch.Path, strategy jsonpatch.PatchStrategy, convergeFields map[string]bool, preserveRoots map[string]bool) ([]jsonpatch.JsonPatchOperation, error) {
 	patchWithSchemaFieldsOnly, err := removeNonSchemaFields(patch, schemaFields, convergeFields)
 	if err != nil {
 		return nil, err
@@ -245,7 +256,7 @@ func createPatchDocument(document []byte, patch []byte, schemaFields []string, r
 	// nullable Listing/Mapping fields as []/{}. Without stripping, EntitySet
 	// element matching fails because elements have different shapes (one has
 	// phantom empty fields, the other doesn't), causing duplicate entries.
-	cleanedDesired, err := StripNestedEmptyCollections(patchWithSchemaFieldsOnly)
+	cleanedDesired, err := StripNestedEmptyCollectionsExcept(patchWithSchemaFieldsOnly, preserveRoots)
 	if err != nil {
 		return nil, err
 	}
@@ -259,7 +270,7 @@ func createPatchDocument(document []byte, patch []byte, schemaFields []string, r
 		return nil, err
 	}
 
-	cleanedDocument, err := StripNestedEmptyCollections(documentMinusTopEmpties)
+	cleanedDocument, err := StripNestedEmptyCollectionsExcept(documentMinusTopEmpties, preserveRoots)
 	if err != nil {
 		return nil, err
 	}
@@ -735,12 +746,23 @@ func removeNonSchemaFields(patch []byte, schemaFields []string, convergeFields m
 // resource updater (before sending Properties to plugins for Create/Update)
 // to clean PKL rendering artifacts (null → []/{}  from nullable Listing/Mapping fields).
 func StripNestedEmptyCollections(data []byte) ([]byte, error) {
+	return StripNestedEmptyCollectionsExcept(data, nil)
+}
+
+// StripNestedEmptyCollectionsExcept is StripNestedEmptyCollections with an
+// exemption set: subtrees rooted at a top-level key in preserveRoots are left
+// byte-for-byte intact — their empty collections are values, not rendering
+// noise (the preserveEmptyValues field hint).
+func StripNestedEmptyCollectionsExcept(data []byte, preserveRoots map[string]bool) ([]byte, error) {
 	var doc map[string]any
 	if err := json.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("StripNestedEmptyCollections: invalid JSON: %w", err)
 	}
 
 	for k, v := range doc {
+		if preserveRoots[k] {
+			continue
+		}
 		doc[k] = stripEmptyCollectionsFromValue(v)
 	}
 
@@ -752,9 +774,13 @@ func StripNestedEmptyCollections(data []byte) ([]byte, error) {
 // as []/{}. An "add" means the field is absent in the actual state, so adding
 // an empty collection is never user intent — it's PKL rendering noise. A user
 // clearing an existing field produces a "replace" (field exists), not "add".
-func filterSpuriousEmptyAdds(patchOps []jsonpatch.JsonPatchOperation) []jsonpatch.JsonPatchOperation {
+func filterSpuriousEmptyAdds(patchOps []jsonpatch.JsonPatchOperation, preserveRoots map[string]bool) []jsonpatch.JsonPatchOperation {
 	filtered := make([]jsonpatch.JsonPatchOperation, 0, len(patchOps))
 	for _, op := range patchOps {
+		if opUnderPreservedRoot(op.Path, preserveRoots) {
+			filtered = append(filtered, op)
+			continue
+		}
 		if op.Operation == "add" && isEmptyCollection(op.Value) {
 			continue
 		}
@@ -809,11 +835,25 @@ func dropCanonicallyEqualHintedOps(ops []jsonpatch.JsonPatchOperation, document,
 // stripEmptyCollectionsFromOps recursively removes empty arrays and maps from
 // inside all patch operation values. This ensures that EntitySet element
 // matching works correctly when elements contain phantom []/{}  values.
-func stripEmptyCollectionsFromOps(patchOps []jsonpatch.JsonPatchOperation) []jsonpatch.JsonPatchOperation {
+func stripEmptyCollectionsFromOps(patchOps []jsonpatch.JsonPatchOperation, preserveRoots map[string]bool) []jsonpatch.JsonPatchOperation {
 	for i := range patchOps {
+		if opUnderPreservedRoot(patchOps[i].Path, preserveRoots) {
+			continue
+		}
 		patchOps[i].Value = stripEmptyCollectionsFromValue(patchOps[i].Value)
 	}
 	return patchOps
+}
+
+// opUnderPreservedRoot reports whether an op's JSON Pointer path is at or
+// under a preserveEmptyValues root, matched by first segment (never by
+// string prefix).
+func opUnderPreservedRoot(path string, preserveRoots map[string]bool) bool {
+	if len(preserveRoots) == 0 {
+		return false
+	}
+	seg, ok := firstPointerSegment(path)
+	return ok && preserveRoots[seg]
 }
 
 func stripEmptyCollectionsFromValue(val any) any {
