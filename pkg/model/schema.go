@@ -55,8 +55,8 @@ type FieldHint struct {
 	// normalization: empty collections inside it are values, preserved on both
 	// diff sides, in op values, and in plugin-bound payloads. Orthogonal to
 	// UpdateMethod; typically paired with Atomic on opaque document fields.
-	PreserveEmptyValues bool `json:"PreserveEmptyValues" pkl:"PreserveEmptyValues"`
-	Format       string            `json:"Format" pkl:"Format"` // "" = opaque String; "json" = serialized JSON document
+	PreserveEmptyValues bool   `json:"PreserveEmptyValues" pkl:"PreserveEmptyValues"`
+	Format              string `json:"Format" pkl:"Format"` // "" = opaque String; "json" = serialized JSON document
 }
 
 // UnmarshalJSON normalizes the deprecated AttachesTo alias into EdgeKind so
