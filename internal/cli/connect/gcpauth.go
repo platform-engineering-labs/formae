@@ -5,6 +5,7 @@
 package connect
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -225,14 +226,35 @@ var runGcloudLogin = func(ctx context.Context, out io.Writer) error {
 	// what it is running.
 	_, _ = fmt.Fprintf(out, "running %s\n", gcloudLoginCommand)
 
+	// gcloud's output is captured as well as forwarded, because a sign-in that
+	// cannot finish has already printed the only thing that would let the
+	// operator finish it by hand.
+	//
+	// Where a browser can be opened, gcloud opens one and completes over a
+	// loopback redirect without ever reading stdin. Where it cannot - a
+	// container, an SSH session, a headless box - it falls back to printing a
+	// URL and waiting for a verification code typed back, and this process's
+	// stdin is not a terminal when an agent invoked it. The sign-in then fails
+	// having printed exactly what the operator needs, and forwarding that to a
+	// stream nobody reads is the same as discarding it: a machine caller reads
+	// this command's stdout, so the URL has to travel in the document.
+	var transcript bytes.Buffer
 	cmd := exec.CommandContext(ctx, path, "auth", "application-default", "login")
-	cmd.Stdout = out
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = io.MultiWriter(out, &transcript)
+	cmd.Stderr = io.MultiWriter(os.Stderr, &transcript)
 	cmd.Stdin = os.Stdin
 	if err := cmd.Run(); err != nil {
+		details := map[string]any{"command": gcloudLoginCommand}
+		// Omitted when empty rather than sent as "": a present key invites the
+		// reader to look for meaning that is not there.
+		if said := strings.TrimSpace(transcript.String()); said != "" {
+			details["output"] = said
+		}
 		return printer.Fail(printer.CodeCredentialsRequired,
-			"the Google Cloud sign-in did not complete",
-			map[string]any{"command": gcloudLoginCommand})
+			"the Google Cloud sign-in did not complete; what gcloud reported is in the details. "+
+				"A machine with no browser cannot finish this sign-in unattended - run it in a "+
+				"terminal, then try again",
+			details)
 	}
 	return nil
 }
