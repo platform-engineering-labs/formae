@@ -1697,3 +1697,43 @@ func TestResolvePropertyReferences_PreservesResolvedFrom(t *testing.T) {
 	assert.Equal(t, digest, out.Get("$resolvedFrom").String(),
 		"resolving a reference must not drop its provenance")
 }
+
+// Resolution restates the hashed marker from the value it resolved, rather than
+// inheriting whatever the target envelope happened to carry. Both directions
+// matter and they pull opposite ways: a stale true makes the terminal hashing
+// pass skip an envelope and persist plaintext labelled as a digest, while
+// clearing a true that is still accurate lets a digest past the plugin-boundary
+// guard and reach a provider as though it were the secret.
+func TestResolvePropertyReferences_HashedMarkerFollowsTheResolvedValue(t *testing.T) {
+	const uri = pkgmodel.FormaeURI("formae://2abcDEFghiJKLmnoPQRstuVWxyz#/SecretString")
+
+	// An envelope that was hashed at rest, now being re-resolved.
+	target := json.RawMessage(`{
+		"DbPassword": {
+			"$ref": "` + string(uri) + `",
+			"$value": "0000000000000000000000000000000000000000000000000000000000000000",
+			"$hashed": true,
+			"$visibility": "Opaque"
+		}
+	}`)
+
+	t.Run("live plaintext clears a stale marker", func(t *testing.T) {
+		out, err := ResolvePropertyReferences(uri, target, "live-plaintext")
+		require.NoError(t, err)
+		assert.Equal(t, "live-plaintext", gjson.GetBytes(out, "DbPassword.$value").String())
+		assert.False(t, gjson.GetBytes(out, "DbPassword.$hashed").Bool(),
+			"a live plaintext resolution must not stay marked hashed, or terminal hashing skips it")
+		assert.NoError(t, guardNoHashedValues(out),
+			"plaintext must be writable to a provider")
+	})
+
+	t.Run("a resolved digest keeps its marker so the write guard still fires", func(t *testing.T) {
+		digest := `{"$value":"1111111111111111111111111111111111111111111111111111111111111111","$hashed":true,"$visibility":"Opaque"}`
+		out, err := ResolvePropertyReferences(uri, target, digest)
+		require.NoError(t, err)
+		assert.True(t, gjson.GetBytes(out, "DbPassword.$hashed").Bool(),
+			"resolving from a stored digest must stay marked hashed")
+		assert.ErrorIs(t, guardNoHashedValues(out), ErrHashedValueNotWritable,
+			"a digest must never reach a provider as if it were the secret")
+	})
+}
