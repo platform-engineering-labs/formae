@@ -259,6 +259,7 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunGenerationSurvivesRenameBackToOriginalLabel(t, newDS)
 	RunAdvanceGenerationTwiceSecondWins(t, newDS)
 	RunAdvanceGenerationDoesNotAffectOtherGenerator(t, newDS)
+	RunAdvanceGenerationOnDeletedGeneratorFailsWithoutResurrecting(t, newDS)
 
 	RunFindResourcesDependingOn(t, newDS)
 	RunFindResourcesDependingOnMultipleRefs(t, newDS)

@@ -627,3 +627,44 @@ func RunAdvanceGenerationDoesNotAffectOtherGenerator(t *testing.T, newDS func(t 
 		assert.Nil(t, afterB.GenerationSpec)
 	})
 }
+
+// RunAdvanceGenerationOnDeletedGeneratorFailsWithoutResurrecting verifies
+// AdvanceGeneration's tombstone guard: called against a deleted generator's
+// id, it must return an error AND must not write a new row. A half-fix that
+// errors but still inserts a version row would resurrect the generator with
+// an unparseable generator_data ('{}' copied from the tombstone), leaving
+// GetGenerator permanently failing with "unknown generator type:" — so this
+// checks both read paths stay at the zero value / nil, not just the error.
+func RunAdvanceGenerationOnDeletedGeneratorFailsWithoutResurrecting(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("AdvanceGenerationOnDeletedGeneratorFailsWithoutResurrecting", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		stack := createGeneratorStack(t, ds, "durable")
+		gen := testPasswordGenerator("db-password", stack, 32)
+		_, err := ds.CreateGenerator(gen, "cmd-1")
+		require.NoError(t, err)
+
+		id, err := ds.GetGeneratorIdentity("db-password", stack.Label)
+		require.NoError(t, err)
+
+		spec, err := json.Marshal(gen)
+		require.NoError(t, err)
+		require.NoError(t, ds.AdvanceGeneration(id.ID, "generation-1", spec))
+
+		_, err = ds.DeleteGenerator("db-password", stack.Label)
+		require.NoError(t, err)
+
+		err = ds.AdvanceGeneration(id.ID, "generation-2", spec)
+		assert.Error(t, err, "advancing a deleted generator must fail")
+
+		byID, err := ds.GetGeneratorIdentityByID(id.ID)
+		require.NoError(t, err)
+		assert.Equal(t, datastore.GeneratorIdentity{}, byID, "the deleted generator must not be resurrected by id")
+
+		got, err := ds.GetGenerator("db-password", stack.Label)
+		require.NoError(t, err, "a resurrected row with an unparseable spec would fail here instead of returning nil")
+		assert.Nil(t, got, "the deleted generator must not be resurrected by label")
+	})
+}
