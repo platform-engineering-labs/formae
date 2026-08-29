@@ -5,6 +5,7 @@
 package forma_command
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
@@ -41,6 +42,35 @@ const (
 	SourceStackExpirer   Source = "stack-expirer"
 )
 
+// SuppressedDriftDisposition says what a command's submission did about a
+// suppressed-drift note's movement: nothing yet (the drift stays in the
+// changes-since-last-reconcile window) or absorbed (this command's completion
+// advances the window past it without having addressed it).
+type SuppressedDriftDisposition string
+
+const (
+	SuppressedDriftRemaining SuppressedDriftDisposition = "remaining"
+	SuppressedDriftAbsorbed  SuppressedDriftDisposition = "absorbed"
+)
+
+// SuppressedDriftNote records out-of-band movement on a provider-default
+// field the command's plan cannot see: the field is annotated
+// hasProviderDefault and the forma does not declare it (or, for a partially
+// declared EntitySet field, the moved elements carry undeclared keys), so
+// the strip passes hide the change from the diff and no operation is
+// planned for it. From and To carry the suppressed content on each side and
+// are absent for an opaque path, which records path and movement only.
+type SuppressedDriftNote struct {
+	Stack       string                     `json:"Stack"`
+	Type        string                     `json:"Type"`
+	Label       string                     `json:"Label"`
+	Path        string                     `json:"Path"`
+	From        json.RawMessage            `json:"From,omitempty"`
+	To          json.RawMessage            `json:"To,omitempty"`
+	Opaque      bool                       `json:"Opaque,omitempty"`
+	Disposition SuppressedDriftDisposition `json:"Disposition"`
+}
+
 type FormaCommand struct {
 	ID              string                           `json:"ID"`
 	Description     pkgmodel.Description             `json:"Description"`
@@ -57,6 +87,12 @@ type FormaCommand struct {
 	Subject         string                           `json:"Subject,omitempty"`
 	SubjectName     string                           `json:"SubjectName,omitempty"`
 	Source          Source                           `json:"Source,omitempty"`
+	// SuppressedDriftNotes is the durable record of out-of-band movement on
+	// provider-default fields this command's plan could not see: computed
+	// once at submission from the changes-since-last-reconcile window, and
+	// persisted with the command because its completion advances that window
+	// past the movement without having addressed it.
+	SuppressedDriftNotes []SuppressedDriftNote `json:"SuppressedDriftNotes,omitempty"`
 }
 
 type FormaCommandResult struct {

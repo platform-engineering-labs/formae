@@ -26,6 +26,10 @@ type Simulation struct {
 	ChangesRequired bool     `json:"ChangesRequired"`
 	Command         Command  `json:"Command"`
 	Warnings        []string `json:"Warnings,omitempty"`
+	// SuppressedDrift is present on every reconcile-mode response, including
+	// a no-changes one (where Command is empty), so callers see suppressed
+	// out-of-band movement regardless of whether anything was planned.
+	SuppressedDrift []SuppressedDriftNote `json:"SuppressedDrift,omitempty"`
 }
 
 type ListCommandStatusResponse struct {
@@ -65,6 +69,29 @@ type Command struct {
 	TargetUpdates   []TargetUpdate   `json:"TargetUpdates,omitempty"`
 	StackUpdates    []StackUpdate    `json:"StackUpdates,omitempty"`
 	PolicyUpdates   []PolicyUpdate   `json:"PolicyUpdates,omitempty"`
+	// SuppressedDrift records out-of-band movement on provider-default
+	// fields this command's plan could not see; completing the command
+	// absorbs it (see SuppressedDriftNote).
+	SuppressedDrift []SuppressedDriftNote `json:"SuppressedDrift,omitempty"`
+}
+
+// SuppressedDriftNote is out-of-band movement on a provider-default field a
+// reconcile's plan cannot see: the field is annotated hasProviderDefault and
+// the forma does not declare it, so the diff suppresses it. From and To
+// carry the moved content; both are absent for an opaque path, which records
+// path and movement only. Disposition says what the submission did about it:
+// "remaining" (nothing executed; the drift stays in the
+// changes-since-last-reconcile window) or "absorbed" (the command's
+// completion advances the window past it without addressing it).
+type SuppressedDriftNote struct {
+	Stack       string          `json:"Stack"`
+	Type        string          `json:"Type"`
+	Label       string          `json:"Label"`
+	Path        string          `json:"Path"`
+	From        json.RawMessage `json:"From,omitempty"`
+	To          json.RawMessage `json:"To,omitempty"`
+	Opaque      bool            `json:"Opaque,omitempty"`
+	Disposition string          `json:"Disposition"`
 }
 
 // wrapper for machine-readable output

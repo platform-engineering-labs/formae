@@ -1550,3 +1550,62 @@ func RunResourceUpdateProvenanceRoundTrip(t *testing.T, newDS func(t *testing.T)
 		}
 	})
 }
+
+// RunFormaCommandSuppressedDriftNotesRoundTrip verifies that a command's
+// suppressed-drift notes survive store and reload with values, opacity, and
+// disposition intact, and that a command without notes reads back empty.
+func RunFormaCommandSuppressedDriftNotesRoundTrip(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("StoreAndLoad_FormaCommand_SuppressedDriftNotes", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		cmd := &forma_command.FormaCommand{
+			ID:      util.NewID(),
+			Command: pkgmodel.CommandApply,
+			State:   forma_command.CommandStatePending,
+			Config:  config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
+			SuppressedDriftNotes: []forma_command.SuppressedDriftNote{
+				{
+					Stack: "prod", Type: "AWS::KMS::Key", Label: "signing-key",
+					Path:        "EnableKeyRotation",
+					From:        json.RawMessage(`false`),
+					To:          json.RawMessage(`true`),
+					Disposition: forma_command.SuppressedDriftAbsorbed,
+				},
+				{
+					Stack: "prod", Type: "X::Y::Z", Label: "r",
+					Path:        "MasterSecret",
+					Opaque:      true,
+					Disposition: forma_command.SuppressedDriftAbsorbed,
+				},
+			},
+		}
+
+		err := ds.StoreFormaCommand(cmd, cmd.ID)
+		assert.NoError(t, err)
+
+		loaded, err := ds.GetFormaCommandByCommandID(cmd.ID)
+		assert.NoError(t, err)
+		if assert.Len(t, loaded.SuppressedDriftNotes, 2) {
+			assert.Equal(t, "EnableKeyRotation", loaded.SuppressedDriftNotes[0].Path)
+			assert.JSONEq(t, `false`, string(loaded.SuppressedDriftNotes[0].From))
+			assert.JSONEq(t, `true`, string(loaded.SuppressedDriftNotes[0].To))
+			assert.Equal(t, forma_command.SuppressedDriftAbsorbed, loaded.SuppressedDriftNotes[0].Disposition)
+			assert.True(t, loaded.SuppressedDriftNotes[1].Opaque)
+			assert.Nil(t, loaded.SuppressedDriftNotes[1].From)
+			assert.Nil(t, loaded.SuppressedDriftNotes[1].To)
+		}
+
+		bare := &forma_command.FormaCommand{
+			ID:      util.NewID(),
+			Command: pkgmodel.CommandApply,
+			State:   forma_command.CommandStatePending,
+		}
+		err = ds.StoreFormaCommand(bare, bare.ID)
+		assert.NoError(t, err)
+		loaded, err = ds.GetFormaCommandByCommandID(bare.ID)
+		assert.NoError(t, err)
+		assert.Empty(t, loaded.SuppressedDriftNotes)
+	})
+}

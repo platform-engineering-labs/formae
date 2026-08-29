@@ -52,3 +52,30 @@ func TestTranslateToAPICommand_Subject(t *testing.T) {
 	assert.Equal(t, "11111111-1111-4111-8111-111111111111", api.Subject)
 	assert.Equal(t, "dpanders", api.SubjectName)
 }
+
+// translateToAPICommand carries the command's suppressed-drift notes into the
+// API projection so status consumers read them from a typed field.
+func TestTranslateToAPICommand_SuppressedDriftNotes(t *testing.T) {
+	fa := &forma_command.FormaCommand{
+		ID:      "cmd-test-2",
+		Command: pkgmodel.CommandApply,
+		Config:  config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
+		SuppressedDriftNotes: []forma_command.SuppressedDriftNote{{
+			Stack: "prod", Type: "AWS::KMS::Key", Label: "signing-key",
+			Path: "EnableKeyRotation",
+			From: []byte(`false`), To: []byte(`true`),
+			Disposition: forma_command.SuppressedDriftAbsorbed,
+		}},
+	}
+
+	api := translateToAPICommand(fa)
+
+	if assert.Len(t, api.SuppressedDrift, 1) {
+		note := api.SuppressedDrift[0]
+		assert.Equal(t, "prod", note.Stack)
+		assert.Equal(t, "EnableKeyRotation", note.Path)
+		assert.JSONEq(t, `false`, string(note.From))
+		assert.JSONEq(t, `true`, string(note.To))
+		assert.Equal(t, "absorbed", note.Disposition)
+	}
+}
