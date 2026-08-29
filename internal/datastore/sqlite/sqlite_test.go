@@ -10,6 +10,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -141,6 +142,24 @@ func TestDatastore(t *testing.T) {
 					`UPDATE forma_commands SET subject = NULL, subject_name = NULL WHERE command_id = ?`, commandID,
 				)
 				return err
+			},
+			GeneratorIDForTest: func(label, stackLabel string) (string, error) {
+				conn := d.Conn()
+				var id string
+				// generators.stack_id stores the stack's KSUID, not its label, so
+				// the stack is resolved by label first (its own current row), the
+				// same way the datastore's own Get/DeleteGenerator do.
+				err := conn.QueryRow(
+					`SELECT g.id FROM generators g
+					 JOIN (SELECT id FROM stacks WHERE label = ? ORDER BY version DESC LIMIT 1) s ON g.stack_id = s.id
+					 WHERE g.label = ?
+					 ORDER BY g.version DESC LIMIT 1`,
+					stackLabel, label,
+				).Scan(&id)
+				if errors.Is(err, sql.ErrNoRows) {
+					return "", nil
+				}
+				return id, err
 			},
 		}
 	})

@@ -486,6 +486,28 @@ type Datastore interface {
 	// that are not in a terminal state (Success, Failed, Canceled)
 	StackHasActiveCommands(stackLabel string) (bool, error)
 
+	// Generator operations - a generator produces a value (e.g. a random
+	// password) that a secret will later reference. Unlike a policy, a
+	// generator has no standalone form: it is always owned by exactly one
+	// stack, so there is no stack_generators junction table and no
+	// attach/detach.
+
+	// CreateGenerator persists a new generator (returns version string)
+	CreateGenerator(gen pkgmodel.Generator, commandID string) (string, error)
+	// UpdateGenerator persists a new version of an existing generator, found
+	// by label and stack (returns version string)
+	UpdateGenerator(gen pkgmodel.Generator, commandID string) (string, error)
+	// DeleteGenerator soft-deletes the generator with the given label on the
+	// given stack (returns version string). A label with no live match is a
+	// no-op success that returns an empty version.
+	DeleteGenerator(label, stackLabel string) (string, error)
+	// GetGenerator retrieves the current generator with the given label on
+	// the given stack. Returns nil, nil if no live generator is found.
+	GetGenerator(label, stackLabel string) (pkgmodel.Generator, error)
+	// LoadGeneratorsByStack returns all non-deleted generators owned by a
+	// stack.
+	LoadGeneratorsByStack(stackLabel string) ([]pkgmodel.Generator, error)
+
 	// Close releases database connections
 	Close()
 

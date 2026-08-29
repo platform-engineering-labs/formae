@@ -275,6 +275,21 @@ func (m *mockExtractDatastore) GetResourcesAtLastReconcile(_ string) ([]datastor
 func (m *mockExtractDatastore) StackHasActiveCommands(_ string) (bool, error) {
 	panic("not implemented")
 }
+func (m *mockExtractDatastore) CreateGenerator(_ pkgmodel.Generator, _ string) (string, error) {
+	panic("not implemented")
+}
+func (m *mockExtractDatastore) UpdateGenerator(_ pkgmodel.Generator, _ string) (string, error) {
+	panic("not implemented")
+}
+func (m *mockExtractDatastore) DeleteGenerator(_, _ string) (string, error) {
+	panic("not implemented")
+}
+func (m *mockExtractDatastore) GetGenerator(_, _ string) (pkgmodel.Generator, error) {
+	panic("not implemented")
+}
+func (m *mockExtractDatastore) LoadGeneratorsByStack(_ string) ([]pkgmodel.Generator, error) {
+	panic("not implemented")
+}
 func (m *mockExtractDatastore) Close() {}
 func (m *mockExtractDatastore) BulkStoreResourceUpdates(_ string, _ []resource_update.ResourceUpdate) error {
 	panic("not implemented")

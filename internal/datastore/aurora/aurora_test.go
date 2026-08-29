@@ -76,6 +76,9 @@ func TestDatastore(t *testing.T) {
 			NullFormaCommandSubjectForTest: func(commandID string) error {
 				return d.NullFormaCommandSubjectForTesting(commandID)
 			},
+			GeneratorIDForTest: func(label, stackLabel string) (string, error) {
+				return d.GeneratorIDForTesting(label, stackLabel)
+			},
 		}
 	})
 }

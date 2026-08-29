@@ -269,6 +269,56 @@ func TestPkl_SecretShapeMisuse_BareMapSecretValueFailsEval(t *testing.T) {
 	assert.ErrorContains(t, err, "SecretMapAccessor")
 }
 
+// TestPkl_Generator_Evaluate verifies that a forma declaring a
+// PasswordGenerator evaluates and renders a Generators listing carrying the
+// fields PasswordGenerator.render() produces.
+func TestPkl_Generator_Evaluate(t *testing.T) {
+	p := PKL{}
+	forma, err := p.Evaluate("./testdata/forma/generator_test.pkl", model.CommandApply, model.FormaApplyModeReconcile, nil)
+	require.NoError(t, err)
+
+	jsonString := forma.ToJSON()
+
+	assert.Equal(t, "password", gjson.Get(jsonString, "Generators.0.Type").String())
+	assert.Equal(t, "db-password", gjson.Get(jsonString, "Generators.0.Label").String())
+	assert.Equal(t, "generator-test-stack", gjson.Get(jsonString, "Generators.0.Stack").String())
+	assert.Equal(t, int64(24), gjson.Get(jsonString, "Generators.0.Length").Int())
+	assert.True(t, gjson.Get(jsonString, "Generators.0.Uppercase").Bool())
+	assert.True(t, gjson.Get(jsonString, "Generators.0.Lowercase").Bool())
+	assert.True(t, gjson.Get(jsonString, "Generators.0.Digits").Bool())
+	assert.False(t, gjson.Get(jsonString, "Generators.0.Symbols").Bool())
+	assert.Equal(t, "oO0", gjson.Get(jsonString, "Generators.0.ExcludeCharacters").String())
+	assert.True(t, gjson.Get(jsonString, "Generators.0.RequireEachIncludedType").Bool())
+}
+
+// TestPkl_Generator_NoStackFailsEval verifies that a Generator with no stack
+// set fails at PKL eval — stack is required, not defaulted.
+func TestPkl_Generator_NoStackFailsEval(t *testing.T) {
+	p := PKL{}
+	_, err := p.Evaluate("./testdata/forma/generator_no_stack_test.pkl", model.CommandApply, model.FormaApplyModeReconcile, nil)
+	require.Error(t, err)
+}
+
+// TestPkl_Generator_AllClassFlagsFalseFailsEval verifies that a
+// PasswordGenerator with every character-class flag false fails at PKL eval,
+// not at runtime — the spec has no alphabet to draw from.
+func TestPkl_Generator_AllClassFlagsFalseFailsEval(t *testing.T) {
+	p := PKL{}
+	_, err := p.Evaluate("./testdata/forma/generator_all_flags_false_test.pkl", model.CommandApply, model.FormaApplyModeReconcile, nil)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "at least one of uppercase, lowercase, digits, symbols must be true")
+}
+
+// TestPkl_Generator_ExcludeCharactersEmptiesClassFailsEval verifies that
+// excludeCharacters removing every character of an enabled class fails at
+// PKL eval, not at runtime.
+func TestPkl_Generator_ExcludeCharactersEmptiesClassFailsEval(t *testing.T) {
+	p := PKL{}
+	_, err := p.Evaluate("./testdata/forma/generator_exclude_empties_class_test.pkl", model.CommandApply, model.FormaApplyModeReconcile, nil)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "excludeCharacters removes every digit")
+}
+
 func TestTranslateResourcePluginConfig(t *testing.T) {
 	p := PKL{}
 	config, err := p.FormaeConfig("./testdata/config/test_resource_plugin_config.pkl")

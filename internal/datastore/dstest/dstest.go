@@ -97,6 +97,15 @@ type TestDatastore struct {
 	// Backends that don't provide it leave it nil and the relevant tests
 	// t.Skip().
 	NullFormaCommandSubjectForTest func(commandID string) error
+	// GeneratorIDForTest returns the internal KSUID identity (the id column,
+	// stable across CreateGenerator/UpdateGenerator) of the current
+	// (max-version) generator row with the given label on the given stack, or
+	// "" if none exists. Generator has no public API that exposes this id —
+	// the Datastore interface returns only version strings — so the suite
+	// needs a direct accessor to prove the id survives an update unchanged.
+	// Backends that don't provide it leave it nil and the relevant tests
+	// t.Skip().
+	GeneratorIDForTest func(label, stackLabel string) (string, error)
 }
 
 // RunAll runs the full datastore test suite against the provided factory.
@@ -230,6 +239,13 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunDeleteInlinePolicyUnknownLabel(t, newDS)
 	RunDeleteInlinePolicyClearsExpiry(t, newDS)
 	RunDeleteInlinePolicyThenRecreate(t, newDS)
+
+	RunCreateGeneratorThenGet(t, newDS)
+	RunGetGeneratorAbsentReturnsNil(t, newDS)
+	RunUpdateGeneratorBumpsVersionAndReadBackReflectsIt(t, newDS)
+	RunDeleteGeneratorThenGetReturnsNil(t, newDS)
+	RunLoadGeneratorsByStackReturnsOnlyThatStacksGenerators(t, newDS)
+	RunGeneratorKSUIDStableAcrossUpdate(t, newDS)
 
 	RunFindResourcesDependingOn(t, newDS)
 	RunFindResourcesDependingOnMultipleRefs(t, newDS)

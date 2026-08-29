@@ -167,6 +167,86 @@ open class AutoReconcilePolicy extends Policy {
     }
 }
 
+/// A source of generated values. Belongs to a stack; referenced by the
+/// resources whose properties take the generated value.
+abstract class Generator {
+    label: String
+    stack: StackResolvable
+
+    local self = this
+
+    // Every StackResolvable property defaults (Resolvable's fields are all
+    // optional), so an unset `stack` silently default-constructs to an
+    // all-null instance instead of failing to evaluate. This is the actual
+    // enforcement that a generator names its stack; subclasses must fold it
+    // into their render() the same way PasswordGenerator folds in its own
+    // eval-time validation.
+    function hasStack(): Boolean =
+        self.stack.label != null || throw("Generator \"\(self.label)\": stack is required")
+
+    abstract function type(): String
+    abstract function render(): Dynamic
+}
+
+open class PasswordGenerator extends Generator {
+    length: Int(this >= 16) = 32
+    uppercase: Boolean = true
+    lowercase: Boolean = true
+    digits: Boolean = true
+    symbols: Boolean = false
+    /// Characters the destination cannot accept, removed from the alphabet.
+    excludeCharacters: String = ""
+    /// Guarantee at least one character from every enabled class.
+    requireEachIncludedType: Boolean = true
+
+    local self = this
+
+    // Canonical alphabets, before excludeCharacters is applied. Eval-time
+    // validation below checks emptiness against these; the scheduler that
+    // actually draws characters must draw from the same sets, or a spec this
+    // accepts could still starve during unattended rejection sampling.
+    local uppercaseChars: String = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    local lowercaseChars: String = "abcdefghijklmnopqrstuvwxyz"
+    local digitChars: String = "0123456789"
+    local symbolChars: String = "!@#$%^&*()-_=+[]{}<>?/|~"
+
+    local function remaining(alphabet: String): String =
+        alphabet.chars.filter((c) -> !self.excludeCharacters.contains(c)).join("")
+
+    // Eval-time validation: a spec the scheduler could never satisfy (every
+    // class flag false, or excludeCharacters emptying an enabled class) fails
+    // here, not during unattended rejection sampling later. Referenced from
+    // render()'s return type so it is always forced, even though PKL would
+    // otherwise never evaluate an unread local.
+    local function validated(): Boolean =
+        if (!(self.uppercase || self.lowercase || self.digits || self.symbols))
+            throw("PasswordGenerator \"\(self.label)\": at least one of uppercase, lowercase, digits, symbols must be true")
+        else if (self.uppercase && remaining(uppercaseChars).isEmpty)
+            throw("PasswordGenerator \"\(self.label)\": excludeCharacters removes every uppercase character")
+        else if (self.lowercase && remaining(lowercaseChars).isEmpty)
+            throw("PasswordGenerator \"\(self.label)\": excludeCharacters removes every lowercase character")
+        else if (self.digits && remaining(digitChars).isEmpty)
+            throw("PasswordGenerator \"\(self.label)\": excludeCharacters removes every digit")
+        else if (self.symbols && remaining(symbolChars).isEmpty)
+            throw("PasswordGenerator \"\(self.label)\": excludeCharacters removes every symbol character")
+        else
+            true
+
+    function type(): String = "password"
+    function render(): Dynamic(validated() && self.hasStack()) = new {
+        Type = "password"
+        Label = self.label
+        Stack = self.stack
+        Length = length
+        Uppercase = uppercase
+        Lowercase = lowercase
+        Digits = digits
+        Symbols = symbols
+        ExcludeCharacters = excludeCharacters
+        RequireEachIncludedType = requireEachIncludedType
+    }
+}
+
 /// DEPRECATED: Use aws#Tag instead.
 /// This class will be removed in a future version.
 /// AWS resources should use `aws.Tag` from `@aws/aws.pkl`.
@@ -660,6 +740,7 @@ class FormaRender {
     Stacks: Listing<Stack>
     Targets: Listing<Target>
     Policies: Listing<Dynamic>?
+    Generators: Listing<Dynamic>?
     Resources: Listing<Resource>(validate(this))
     hidden Resolvables: Listing<Resolvable>
 
