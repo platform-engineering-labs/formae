@@ -51,6 +51,11 @@ type FieldHint struct {
 
 	IndexField   string            `json:"IndexField" pkl:"IndexField"`
 	UpdateMethod FieldUpdateMethod `json:"UpdateMethod" pkl:"UpdateMethod"`
+	// PreserveEmptyValues opts a top-level field's subtree out of empty-value
+	// normalization: empty collections inside it are values, preserved on both
+	// diff sides, in op values, and in plugin-bound payloads. Orthogonal to
+	// UpdateMethod; typically paired with Atomic on opaque document fields.
+	PreserveEmptyValues bool `json:"PreserveEmptyValues" pkl:"PreserveEmptyValues"`
 	Format       string            `json:"Format" pkl:"Format"` // "" = opaque String; "json" = serialized JSON document
 }
 

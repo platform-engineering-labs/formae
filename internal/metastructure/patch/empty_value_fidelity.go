@@ -80,3 +80,18 @@ func referenceEnvelopeFields(desiredEnvelopes []byte, schemaFields []string) map
 	}
 	return fields
 }
+
+// preserveEmptyRootFields returns the literal top-level rendered property
+// names whose FieldHint sets PreserveEmptyValues, derived from schema.Hints
+// keys directly. Dotted hint keys (nested subresource hints) are skipped:
+// fidelity is top-level-scoped, and a nested hint keeps whatever other
+// meaning it carries with no fidelity behavior anywhere.
+func preserveEmptyRootFields(schema pkgmodel.Schema) map[string]bool {
+	fields := map[string]bool{}
+	for name, hint := range schema.Hints {
+		if hint.PreserveEmptyValues && !strings.Contains(name, ".") {
+			fields[name] = true
+		}
+	}
+	return fields
+}

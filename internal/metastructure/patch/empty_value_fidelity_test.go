@@ -11,6 +11,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/tidwall/gjson"
+
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
 func TestFirstPointerSegment(t *testing.T) {
@@ -78,4 +80,19 @@ func TestReferenceEnvelopeFields(t *testing.T) {
 		"only well-formed envelopes on schema fields enter the keep-set")
 	assert.Empty(t, referenceEnvelopeFields(nil, []string{"Token"}))
 	assert.Empty(t, referenceEnvelopeFields([]byte(`not json`), []string{"Token"}))
+}
+
+func TestPreserveEmptyRootFields(t *testing.T) {
+	schema := pkgmodel.Schema{
+		Fields: []string{"Spec", "Other", "Nested"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"Spec":       {UpdateMethod: pkgmodel.FieldUpdateMethodAtomic, PreserveEmptyValues: true},
+			"Other":      {UpdateMethod: pkgmodel.FieldUpdateMethodAtomic},
+			"Nested.sub": {PreserveEmptyValues: true},
+			"Bare":       {PreserveEmptyValues: true},
+		},
+	}
+	assert.Equal(t, map[string]bool{"Spec": true, "Bare": true}, preserveEmptyRootFields(schema),
+		"only preserveEmptyValues hints on non-dotted keys enter the root set")
+	assert.Empty(t, preserveEmptyRootFields(pkgmodel.Schema{}))
 }
