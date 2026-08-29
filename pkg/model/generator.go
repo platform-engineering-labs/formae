@@ -23,13 +23,13 @@ type Generator interface {
 }
 
 // PasswordGenerator produces a random password value. Fields mirror the
-// PKL PasswordGenerator.render() output.
+// PKL PasswordGenerator.render() output. Type is not a field: it is a
+// constant discriminator, injected by MarshalJSON, so there is exactly one
+// place that says what type this generator is.
 type PasswordGenerator struct {
-	Type                    string `json:"Type"` // "password"
 	Label                   string `json:"Label"`
 	Stack                   string `json:"Stack,omitempty"`
 	StackID                 string `json:"-"` // Set during processing, not from PKL
-	EverySeconds            *int64 `json:"EverySeconds,omitempty"`
 	Length                  int    `json:"Length"`
 	Uppercase               bool   `json:"Uppercase"`
 	Lowercase               bool   `json:"Lowercase"`
@@ -45,6 +45,20 @@ func (g *PasswordGenerator) GetStack() string      { return g.Stack }
 func (g *PasswordGenerator) SetStack(stack string) { g.Stack = stack }
 func (g *PasswordGenerator) GetStackID() string    { return g.StackID }
 func (g *PasswordGenerator) SetStackID(id string)  { g.StackID = id }
+
+// MarshalJSON injects the "Type": "password" discriminator that
+// ParseGenerator dispatches on, so callers never set Type by hand and there
+// is no way for the marshalled Type to disagree with GetType().
+func (g *PasswordGenerator) MarshalJSON() ([]byte, error) {
+	type alias PasswordGenerator
+	return json.Marshal(struct {
+		Type string `json:"Type"`
+		alias
+	}{
+		Type:  g.GetType(),
+		alias: alias(*g),
+	})
+}
 
 // ParseGenerator parses a single generator from JSON, dispatching on the
 // discriminated Type field the same way ParsePolicy does.

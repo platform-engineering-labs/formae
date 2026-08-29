@@ -153,8 +153,14 @@ func (d *DatastoreAuroraDataAPI) DeleteGenerator(label, stackLabel string) (stri
 	}
 
 	record := result.Records[0]
-	id, _ := getStringField(record[0])
-	generatorType, _ := getStringField(record[1])
+	id, err := getStringField(record[0])
+	if err != nil {
+		return "", fmt.Errorf("failed to get generator id: %w", err)
+	}
+	generatorType, err := getStringField(record[1])
+	if err != nil {
+		return "", fmt.Errorf("failed to get generator type: %w", err)
+	}
 
 	version := mksuid.New().String()
 	insertQuery := `INSERT INTO generators (id, version, command_id, operation, label, generator_type, stack_id, generator_data)

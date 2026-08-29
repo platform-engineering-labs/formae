@@ -74,47 +74,6 @@ func (f *Forma) SplitByStack() []Forma {
 		}
 	}
 
-	// Generators are raw JSON (like Policies), so their Stack has to be read
-	// out rather than accessed as a Go field. Unlike Policies, a generator
-	// names its own stack directly (mirroring Resource.Stack), so — unlike
-	// Policies, which this function drops entirely today — each generator is
-	// routed to the stack it names.
-	for _, raw := range f.Generators {
-		var header struct {
-			Stack string `json:"Stack"`
-		}
-		if err := json.Unmarshal(raw, &header); err != nil {
-			continue // malformed generator; nothing sane to route it to
-		}
-
-		if existing, ok := stacks[header.Stack]; ok {
-			existing.Generators = append(existing.Generators, raw)
-			continue
-		}
-
-		var stack *Stack
-		for _, s := range f.Stacks {
-			if s.Label == header.Stack {
-				stack = &s
-			}
-		}
-
-		if stack != nil {
-			stacks[header.Stack] = &Forma{
-				Properties: f.Properties,
-				Stacks:     []Stack{*stack},
-				Generators: []json.RawMessage{raw},
-			}
-		} else {
-			// Not present in forma.Stacks - create a minimal stack
-			stacks[header.Stack] = &Forma{
-				Properties: f.Properties,
-				Stacks:     []Stack{{Label: header.Stack}},
-				Generators: []json.RawMessage{raw},
-			}
-		}
-	}
-
 	for _, value := range stacks {
 		result = append(result, *value)
 	}

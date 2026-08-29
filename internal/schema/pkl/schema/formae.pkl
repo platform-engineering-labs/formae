@@ -171,20 +171,21 @@ open class AutoReconcilePolicy extends Policy {
 /// resources whose properties take the generated value.
 abstract class Generator {
     label: String
-    stack: StackResolvable?
-    /// When absent the generator produces a value on first apply and never
-    /// again on its own.
-    hidden rotation: RotationSpec?
+    stack: StackResolvable
+
+    local self = this
+
+    // Every StackResolvable property defaults (Resolvable's fields are all
+    // optional), so an unset `stack` silently default-constructs to an
+    // all-null instance instead of failing to evaluate. This is the actual
+    // enforcement that a generator names its stack; subclasses must fold it
+    // into their render() the same way PasswordGenerator folds in its own
+    // eval-time validation.
+    function hasStack(): Boolean =
+        self.stack.label != null || throw("Generator \"\(self.label)\": stack is required")
 
     abstract function type(): String
     abstract function render(): Dynamic
-}
-
-/// How often the agent produces a new value for a generator.
-open class RotationSpec {
-    /// Required: there is no default cadence, so attaching rotation always
-    /// states the interval.
-    every: Duration
 }
 
 open class PasswordGenerator extends Generator {
@@ -232,11 +233,10 @@ open class PasswordGenerator extends Generator {
             true
 
     function type(): String = "password"
-    function render(): Dynamic(validated()) = new {
+    function render(): Dynamic(validated() && self.hasStack()) = new {
         Type = "password"
         Label = self.label
         Stack = self.stack
-        EverySeconds = self.rotation?.every?.toUnit("s")?.value?.toInt()
         Length = length
         Uppercase = uppercase
         Lowercase = lowercase

@@ -4,19 +4,14 @@
  * SPDX-License-Identifier: FSL-1.1-ALv2
  */
 
+// Shape-misuse test: a Generator with no stack set has nowhere to persist.
+// stack is required (non-null), so PKL eval fails when it is left unset.
+
 amends "@formae/forma.pkl"
 import "@formae/formae.pkl"
 
 forma {
-  local testStack = new formae.Stack {
-    label = "generator-test-stack"
-  }
-  testStack
-
   new formae.PasswordGenerator {
-    label = "db-password"
-    stack = testStack.res
-    length = 24
-    excludeCharacters = "oO0"
+    label = "stackless"
   }
 }

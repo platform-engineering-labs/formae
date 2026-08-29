@@ -255,6 +255,17 @@ function parsePolicies(policiesData: List<Map<String, Any>>): String =
     ))
     policiesString.join("\n")
 
+// Escapes a value about to be interpolated into an emitted PKL string
+// literal. Mirrors gen.pkl's escapeString (not importable here: that
+// function is local to gen.pkl).
+local function escapeGeneratorString(str: String): String =
+    str
+        .replaceAll("\\", "\\\\")
+        .replaceAll("\"", "\\\"")
+        .replaceAll("\n", "\\n")
+        .replaceAll("\r", "\\r")
+        .replaceAll("\t", "\\t")
+
 /// Parses standalone generators and generates PKL output. Mirrors
 /// parsePolicies: generators are always declared standalone (never nested
 /// inside a stack block), but unlike policies they carry their own `stack`
@@ -271,13 +282,6 @@ function parseGenerators(generatorsData: List<Map<String, Any>>, stackLabelMap: 
         else
             ""
         )
-        let (everySeconds = generatorData.getOrNull("EverySeconds") as Number?)
-        let (rotationLine = if (everySeconds != null)
-            "\n        rotation { every = \(everySeconds).s }"
-        else
-            ""
-        )
-
         if (generatorType == "password")
             let (length = generatorData["Length"] as Number)
             let (uppercase = generatorData["Uppercase"] as Boolean)
@@ -289,13 +293,13 @@ function parseGenerators(generatorsData: List<Map<String, Any>>, stackLabelMap: 
             """
 
       local \(camelCaseLabel) = new formae.PasswordGenerator {
-        label = "\(label)"\(stackLine)\(rotationLine)
+        label = "\(label)"\(stackLine)
         length = \(length)
         uppercase = \(uppercase)
         lowercase = \(lowercase)
         digits = \(digits)
         symbols = \(symbols)
-        excludeCharacters = "\(excludeCharacters)"
+        excludeCharacters = "\(escapeGeneratorString(excludeCharacters))"
         requireEachIncludedType = \(requireEachIncludedType)
       }
       \(camelCaseLabel)
@@ -453,7 +457,6 @@ function generateFormaFile(parsed: json.Value): String =
             "Type", generator.Type,
             "Label", generator.Label,
             "Stack", generator.getPropertyOrNull("Stack"),
-            "EverySeconds", generator.getPropertyOrNull("EverySeconds"),
             "Length", generator.getPropertyOrNull("Length"),
             "Uppercase", generator.getPropertyOrNull("Uppercase"),
             "Lowercase", generator.getPropertyOrNull("Lowercase"),

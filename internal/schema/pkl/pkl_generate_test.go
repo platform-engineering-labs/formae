@@ -121,7 +121,8 @@ func TestGenerateSourceCode_HashedSecretCount_ZeroForNonHashed(t *testing.T) {
 // a standalone generator (as it would when re-serialized from stored state,
 // the same way standalone policies already are) round-trips through
 // GenerateSourceCode into a .pkl file that declares an equivalent
-// formae.PasswordGenerator referencing its stack.
+// formae.PasswordGenerator referencing its stack, and that the emitted file
+// itself evaluates.
 func TestGenerateSourceCode_Generator_RoundTrips(t *testing.T) {
 	deps, pluginDir := fakeawsDeps(t)
 
@@ -140,7 +141,6 @@ func TestGenerateSourceCode_Generator_RoundTrips(t *testing.T) {
 				"Type": "password",
 				"Label": "db-password",
 				"Stack": "default",
-				"EverySeconds": 2592000,
 				"Length": 24,
 				"Uppercase": true,
 				"Lowercase": true,
@@ -172,7 +172,9 @@ func TestGenerateSourceCode_Generator_RoundTrips(t *testing.T) {
 	assert.Contains(t, generated, "new formae.PasswordGenerator {")
 	assert.Contains(t, generated, `label = "db-password"`)
 	assert.Contains(t, generated, "stack = default.res")
-	assert.Contains(t, generated, "rotation { every = 2592000.s }")
 	assert.Contains(t, generated, "length = 24")
 	assert.Contains(t, generated, `excludeCharacters = "oO0"`)
+
+	_, err = PKL{}.Evaluate(targetPath, model.CommandApply, model.FormaApplyModeReconcile, nil)
+	require.NoError(t, err, "emitted PKL must itself evaluate")
 }

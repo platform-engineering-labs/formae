@@ -1116,6 +1116,74 @@ func TestGenerateResourceUpdatesForReconcile_ImplicitDelete(t *testing.T) {
 	assert.Equal(t, "my-s3-bucket-delete", updates[0].DesiredState.Label)
 }
 
+// TestGenerateResourceUpdatesForReconcile_GeneratorOnlyStackKeepsExistingResources
+// verifies that reconciling a forma which declares only a generator on a
+// stack that already holds a managed resource does not delete that
+// resource. A generator carries no resources of its own, so the split
+// Forma for its stack must never stand in for an empty desired resource
+// set.
+func TestGenerateResourceUpdatesForReconcile_GeneratorOnlyStackKeepsExistingResources(t *testing.T) {
+	ds, _ := GetDeps(t)
+
+	resource := pkgmodel.Resource{
+		Label:  "my-s3-bucket",
+		Type:   "AWS::S3::Bucket",
+		Stack:  "infrastructure",
+		Target: "test-target",
+		Schema: pkgmodel.Schema{
+			Identifier: "BucketName",
+			Hints: map[string]pkgmodel.FieldHint{
+				"BucketName": {
+					CreateOnly: true,
+				},
+			},
+			Fields: []string{"BucketName"},
+		},
+		Properties: json.RawMessage(`{"BucketName": "my-unique-bucket-name"}`),
+		Managed:    true,
+	}
+
+	// First persist the stack with its resource.
+	existingStack := &pkgmodel.Forma{
+		Stacks:    []pkgmodel.Stack{{Label: "infrastructure"}},
+		Resources: []pkgmodel.Resource{resource},
+	}
+	_, err := ds.StoreStack(existingStack, "test-command-1")
+	assert.NoError(t, err)
+
+	generator := json.RawMessage(`{
+		"Type": "password",
+		"Label": "db-password",
+		"Stack": "infrastructure",
+		"Length": 24,
+		"Uppercase": true,
+		"Lowercase": true,
+		"Digits": true,
+		"Symbols": false,
+		"RequireEachIncludedType": true
+	}`)
+
+	// Apply a forma that declares only the generator on the same stack -
+	// the resource is not repeated in the desired state.
+	mode := pkgmodel.FormaApplyModeReconcile
+	forma := &pkgmodel.Forma{
+		Stacks:     []pkgmodel.Stack{{Label: "infrastructure"}},
+		Generators: []json.RawMessage{generator},
+	}
+
+	targetMap := map[string]*pkgmodel.Target{
+		"test-target": {
+			Label:     "test-target",
+			Config:    json.RawMessage(`{"Region": "us-west-2"}`),
+			Namespace: "aws",
+		},
+	}
+
+	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil, false)
+	assert.NoError(t, err)
+	assert.Empty(t, updates)
+}
+
 func TestGenerateResourceUpdatesForReconcile_Update(t *testing.T) {
 	ds, _ := GetDeps(t)
 

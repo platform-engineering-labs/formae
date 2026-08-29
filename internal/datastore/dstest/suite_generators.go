@@ -36,7 +36,6 @@ func createGeneratorStack(t *testing.T, ds datastore.Datastore, label string) *p
 // is out of scope here.
 func testPasswordGenerator(label string, stack *pkgmodel.Stack, length int) *pkgmodel.PasswordGenerator {
 	return &pkgmodel.PasswordGenerator{
-		Type:                    "password",
 		Label:                   label,
 		Stack:                   stack.Label,
 		StackID:                 stack.ID,

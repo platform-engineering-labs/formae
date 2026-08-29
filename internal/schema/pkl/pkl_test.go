@@ -269,10 +269,9 @@ func TestPkl_SecretShapeMisuse_BareMapSecretValueFailsEval(t *testing.T) {
 	assert.ErrorContains(t, err, "SecretMapAccessor")
 }
 
-// TestPkl_Generator_Evaluate verifies that a forma declaring PasswordGenerator
-// instances evaluates and renders a Generators listing carrying the fields
-// PasswordGenerator.render() produces, including EverySeconds when a
-// rotation cadence is attached and its absence when it is not.
+// TestPkl_Generator_Evaluate verifies that a forma declaring a
+// PasswordGenerator evaluates and renders a Generators listing carrying the
+// fields PasswordGenerator.render() produces.
 func TestPkl_Generator_Evaluate(t *testing.T) {
 	p := PKL{}
 	forma, err := p.Evaluate("./testdata/forma/generator_test.pkl", model.CommandApply, model.FormaApplyModeReconcile, nil)
@@ -290,12 +289,14 @@ func TestPkl_Generator_Evaluate(t *testing.T) {
 	assert.False(t, gjson.Get(jsonString, "Generators.0.Symbols").Bool())
 	assert.Equal(t, "oO0", gjson.Get(jsonString, "Generators.0.ExcludeCharacters").String())
 	assert.True(t, gjson.Get(jsonString, "Generators.0.RequireEachIncludedType").Bool())
-	assert.False(t, gjson.Get(jsonString, "Generators.0.EverySeconds").Exists(),
-		"EverySeconds must be absent when no rotation is attached")
+}
 
-	assert.Equal(t, "rotating-password", gjson.Get(jsonString, "Generators.1.Label").String())
-	assert.Equal(t, int64(2592000), gjson.Get(jsonString, "Generators.1.EverySeconds").Int(),
-		"a 30-day rotation must render as 2592000 seconds")
+// TestPkl_Generator_NoStackFailsEval verifies that a Generator with no stack
+// set fails at PKL eval — stack is required, not defaulted.
+func TestPkl_Generator_NoStackFailsEval(t *testing.T) {
+	p := PKL{}
+	_, err := p.Evaluate("./testdata/forma/generator_no_stack_test.pkl", model.CommandApply, model.FormaApplyModeReconcile, nil)
+	require.Error(t, err)
 }
 
 // TestPkl_Generator_AllClassFlagsFalseFailsEval verifies that a

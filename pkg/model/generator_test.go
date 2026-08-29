@@ -42,7 +42,6 @@ func TestParseGenerator_Password(t *testing.T) {
 	assert.False(t, password.Symbols)
 	assert.Equal(t, "oO0", password.ExcludeCharacters)
 	assert.True(t, password.RequireEachIncludedType)
-	assert.Nil(t, password.EverySeconds)
 }
 
 // TestParseGenerator_Password_RoundTrip checks that marshaling a parsed
@@ -55,7 +54,6 @@ func TestParseGenerator_Password_RoundTrip(t *testing.T) {
 		"Type": "password",
 		"Label": "api-key-seed",
 		"Stack": "secrets-stack",
-		"EverySeconds": 2592000,
 		"Length": 40,
 		"Uppercase": true,
 		"Lowercase": true,
@@ -75,10 +73,22 @@ func TestParseGenerator_Password_RoundTrip(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, generator, roundTripped)
+}
 
-	password := roundTripped.(*PasswordGenerator)
-	require.NotNil(t, password.EverySeconds)
-	assert.Equal(t, int64(2592000), *password.EverySeconds)
+// TestParseGenerator_Password_MarshalInjectsType verifies that Type is not a
+// second source of truth: a PasswordGenerator built without ever setting a
+// Type field still marshals "Type": "password", matching GetType().
+func TestParseGenerator_Password_MarshalInjectsType(t *testing.T) {
+	password := &PasswordGenerator{Label: "unset-type", Length: 16}
+
+	marshaled, err := json.Marshal(password)
+	require.NoError(t, err)
+
+	var decoded struct {
+		Type string `json:"Type"`
+	}
+	require.NoError(t, json.Unmarshal(marshaled, &decoded))
+	assert.Equal(t, password.GetType(), decoded.Type)
 }
 
 func TestParseGenerator_UnknownType(t *testing.T) {

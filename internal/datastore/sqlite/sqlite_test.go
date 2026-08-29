@@ -10,6 +10,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -155,7 +156,7 @@ func TestDatastore(t *testing.T) {
 					 ORDER BY g.version DESC LIMIT 1`,
 					stackLabel, label,
 				).Scan(&id)
-				if err == sql.ErrNoRows {
+				if errors.Is(err, sql.ErrNoRows) {
 					return "", nil
 				}
 				return id, err
