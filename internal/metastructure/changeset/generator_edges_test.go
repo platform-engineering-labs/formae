@@ -205,14 +205,11 @@ func TestCycleIsStillDetectedWithGeneratorNodesPresent(t *testing.T) {
 	require.Error(t, err, "mutually referencing in-command targets form a cycle and must be rejected, not hang")
 }
 
-// stubGeneratorSpecs answers GetGenerator from a (label, stack) keyed map.
-// Its generators carry no ID, exactly as a datastore load does.
-type stubGeneratorSpecs struct {
-	byKey map[pkgmodel.GeneratorKey]pkgmodel.Generator
-}
-
-func (s *stubGeneratorSpecs) GetGenerator(label, stackLabel string) (pkgmodel.Generator, error) {
-	return s.byKey[pkgmodel.GeneratorKey{Label: label, Stack: stackLabel}], nil
+// stubGeneratorLookup answers the draw synthesis's generator lookup from a
+// KSUID keyed map. Its generators carry no ID, exactly as a datastore load
+// does.
+func stubGeneratorLookup(byKsuid map[string]pkgmodel.Generator) func(string) (pkgmodel.Generator, error) {
+	return func(ksuid string) (pkgmodel.Generator, error) { return byKsuid[ksuid], nil }
 }
 
 // A resource newly bound to a generator whose own spec is untouched must
@@ -239,12 +236,11 @@ func TestSecondConsumerOnAnUnchangedGeneratorIsWiredToADraw(t *testing.T) {
 	draws, err := generator_update.SynthesizeDrawGeneratorUpdates(
 		resourceUpdates,
 		nil, // the generator's spec is unchanged: no GeneratorUpdate exists
-		map[pkgmodel.GeneratorKey]string{{Label: "db-password", Stack: "default"}: generatorKsuid},
-		&stubGeneratorSpecs{byKey: map[pkgmodel.GeneratorKey]pkgmodel.Generator{
-			{Label: "db-password", Stack: "default"}: &pkgmodel.PasswordGenerator{
+		stubGeneratorLookup(map[string]pkgmodel.Generator{
+			generatorKsuid: &pkgmodel.PasswordGenerator{
 				Label: "db-password", Stack: "default", Length: 24,
 			},
-		}},
+		}),
 	)
 	require.NoError(t, err)
 	require.Len(t, draws, 1)

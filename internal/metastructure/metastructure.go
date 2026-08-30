@@ -1652,11 +1652,20 @@ func (m *Metastructure) ReRunIncompleteCommands() error {
 			slog.Error("Failed to build changeset for incomplete forma command, skipping", "commandID", fa.ID, "error", synthErr)
 			continue
 		}
-		// No generator draws yet. A draw is meaningless outside the changeset
-		// it produced a value for, so it is not stored with the command and
-		// cannot be replayed; the surviving destinations have to be re-read to
-		// derive it, which this recovery path does not do.
-		cs, err := changeset.NewChangeset(pendingUpdates, append(pendingTargetUpdates, synth...), nil, fa.ID, pkgmodel.CommandApply, fa.Config.Mode)
+		// A draw is meaningless outside the changeset it produced a value for:
+		// the value was never persisted, so an interrupted command cannot
+		// replay it and has to draw again for whatever it still owes. That is
+		// the same synthesis the planning path runs, over the surviving
+		// destinations, so the rule that suppresses a stable binding applies
+		// here unchanged and a credential the interrupted command never meant
+		// to touch is not rotated by the resume.
+		draws, drawErr := generator_update.SynthesizeDrawGeneratorUpdates(
+			pendingUpdates, nil, generatorLookupByStack(pendingUpdates, m.Datastore))
+		if drawErr != nil {
+			slog.Error("Failed to build changeset for incomplete forma command, skipping", "commandID", fa.ID, "error", drawErr)
+			continue
+		}
+		cs, err := changeset.NewChangeset(pendingUpdates, append(pendingTargetUpdates, synth...), draws, fa.ID, pkgmodel.CommandApply, fa.Config.Mode)
 		if err != nil {
 			slog.Error("Failed to build changeset for incomplete forma command, skipping", "commandID", fa.ID, "error", err)
 			continue
@@ -1684,6 +1693,102 @@ func (m *Metastructure) ReRunIncompleteCommands() error {
 	}
 
 	return nil
+}
+
+// generatorLookupByTranslation is the planning path's route from a $gen
+// envelope's KSUID to the generator holding its spec. Translation has just
+// resolved every $gen this command saw into genKeyToKsuid, so the label and
+// stack a datastore load needs are already in hand.
+func generatorLookupByTranslation(
+	genKeyToKsuid map[pkgmodel.GeneratorKey]string,
+	ds datastore.Datastore,
+) func(string) (pkgmodel.Generator, error) {
+	if ds == nil {
+		return nil
+	}
+	keyByKsuid := make(map[string]pkgmodel.GeneratorKey, len(genKeyToKsuid))
+	for key, ksuid := range genKeyToKsuid {
+		keyByKsuid[ksuid] = key
+	}
+	return func(ksuid string) (pkgmodel.Generator, error) {
+		key, ok := keyByKsuid[ksuid]
+		if !ok {
+			return nil, nil
+		}
+		stored, err := ds.GetGenerator(key.Label, key.Stack)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load generator %q in stack %q: %w", key.Label, key.Stack, err)
+		}
+		if stored == nil {
+			return nil, nil
+		}
+		// The stack the row was found under is authoritative for the draw op,
+		// whatever the serialized spec happens to carry.
+		stored.SetStack(key.Stack)
+		return stored, nil
+	}
+}
+
+// generatorLookupByStack is the resume path's route to the same thing. The
+// translation map lived in the planning call's stack frame and is long gone,
+// and a $gen envelope that survived to the datastore carries only a KSUID —
+// pkgmodel.GeneratorIdentity has no label and no stack, so an identity lookup
+// by ID cannot reach a spec either. What the surviving updates do still say
+// is which stacks they sit on, and a stack's generators are enumerable: each
+// one's label plus its stack yields its KSUID, which is the pairing the
+// envelopes are matched against.
+//
+// A generator on some other stack than any surviving destination's resolves
+// to nothing here, and the synthesis logs it and draws nothing for it; the
+// destination is then refused at the provider boundary, naming the property.
+// Reaching it would take a by-KSUID spec load, which is a new datastore
+// method and four backend implementations for a case one read per resumed
+// stack already covers.
+func generatorLookupByStack(
+	pendingUpdates []resource_update.ResourceUpdate,
+	ds datastore.Datastore,
+) func(string) (pkgmodel.Generator, error) {
+	if ds == nil {
+		return nil
+	}
+	// Built on the first lookup rather than up front, so a resumed command
+	// with no $gen destinations at all does no datastore work: the synthesis
+	// returns before it ever calls this.
+	var byKsuid map[string]pkgmodel.Generator
+	return func(ksuid string) (pkgmodel.Generator, error) {
+		if byKsuid == nil {
+			built := make(map[string]pkgmodel.Generator)
+			seen := make(map[string]bool)
+			for i := range pendingUpdates {
+				stack := pendingUpdates[i].DesiredState.Stack
+				if stack == "" || seen[stack] {
+					continue
+				}
+				seen[stack] = true
+
+				generators, err := ds.LoadGeneratorsByStack(stack)
+				if err != nil {
+					return nil, fmt.Errorf("failed to load the generators of stack %q: %w", stack, err)
+				}
+				for _, generator := range generators {
+					identity, err := ds.GetGeneratorIdentity(generator.GetLabel(), stack)
+					if err != nil {
+						return nil, fmt.Errorf("failed to resolve the identity of generator %q in stack %q: %w",
+							generator.GetLabel(), stack, err)
+					}
+					if identity.ID == "" {
+						continue
+					}
+					// The stack the row was found under is authoritative for
+					// the draw op, whatever the serialized spec carries.
+					generator.SetStack(stack)
+					built[identity.ID] = generator
+				}
+			}
+			byKsuid = built
+		}
+		return byKsuid[ksuid], nil
+	}
 }
 
 func (m *Metastructure) checkForConflictingCommands(commandStackLabels []string) error {
@@ -2342,7 +2447,7 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 	var drawGeneratorUpdates []generator_update.GeneratorUpdate
 	if command != pkgmodel.CommandDestroy {
 		drawGeneratorUpdates, err = generator_update.SynthesizeDrawGeneratorUpdates(
-			resourceUpdates, generatorUpdates, genKeyToKsuid, ds)
+			resourceUpdates, generatorUpdates, generatorLookupByTranslation(genKeyToKsuid, ds))
 		if err != nil {
 			return nil, err
 		}

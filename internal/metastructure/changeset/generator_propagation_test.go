@@ -414,10 +414,9 @@ func TestStartUpdates_DispatchesADrawToAGeneratorUpdater(t *testing.T) {
 // would fail invisibly and leave the command reporting success.
 func TestEverySynthesizedDrawHasADestinationWaitingOnIt(t *testing.T) {
 	generatorKsuid := util.NewID()
-	generatorKey := pkgmodel.GeneratorKey{Label: "db-password", Stack: "default"}
-	specs := &stubGeneratorSpecs{byKey: map[pkgmodel.GeneratorKey]pkgmodel.Generator{
-		generatorKey: &pkgmodel.PasswordGenerator{Label: "db-password", Stack: "default", Length: 24},
-	}}
+	lookup := stubGeneratorLookup(map[string]pkgmodel.Generator{
+		generatorKsuid: &pkgmodel.PasswordGenerator{Label: "db-password", Stack: "default", Length: 24},
+	})
 
 	stable := genBoundSecret("stable-secret", generatorKsuid)
 	stable.Operation = resource_update.OperationUpdate
@@ -450,11 +449,7 @@ func TestEverySynthesizedDrawHasADestinationWaitingOnIt(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			draws, err := generator_update.SynthesizeDrawGeneratorUpdates(
-				tc.updates, nil,
-				map[pkgmodel.GeneratorKey]string{generatorKey: generatorKsuid},
-				specs,
-			)
+			draws, err := generator_update.SynthesizeDrawGeneratorUpdates(tc.updates, nil, lookup)
 			require.NoError(t, err)
 			require.Len(t, draws, 1, "a destination that still needs a value produces a draw")
 
@@ -472,10 +467,7 @@ func TestEverySynthesizedDrawHasADestinationWaitingOnIt(t *testing.T) {
 	// The other half of the rule: nothing to deliver to means no draw at all,
 	// so there is no node whose failure could go unreported.
 	draws, err := generator_update.SynthesizeDrawGeneratorUpdates(
-		[]resource_update.ResourceUpdate{stable, teardown}, nil,
-		map[pkgmodel.GeneratorKey]string{generatorKey: generatorKsuid},
-		specs,
-	)
+		[]resource_update.ResourceUpdate{stable, teardown}, nil, lookup)
 	require.NoError(t, err)
 	assert.Empty(t, draws, "a generator no destination needs a value from draws nothing")
 }

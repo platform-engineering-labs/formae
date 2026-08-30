@@ -18,16 +18,13 @@ import (
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
-// stubSpecLookup answers GetGenerator from a (label, stack) keyed map. The
-// generators it hands back carry no ID, exactly as a datastore load does:
+// stubLookup answers the synthesis's generator lookup from a KSUID keyed map.
+// The generators it hands back carry no ID, exactly as a datastore load does:
 // PasswordGenerator.ID is json:"-", so the KSUID never round-trips through
-// generator_data.
-type stubSpecLookup struct {
-	byKey map[pkgmodel.GeneratorKey]pkgmodel.Generator
-}
-
-func (s *stubSpecLookup) GetGenerator(label, stackLabel string) (pkgmodel.Generator, error) {
-	return s.byKey[pkgmodel.GeneratorKey{Label: label, Stack: stackLabel}], nil
+// generator_data. They do carry their stack, which the lookup's contract
+// requires and which both real call sites stamp from the row they read.
+func stubLookup(byKsuid map[string]pkgmodel.Generator) func(string) (pkgmodel.Generator, error) {
+	return func(ksuid string) (pkgmodel.Generator, error) { return byKsuid[ksuid], nil }
 }
 
 func genEnvelopeProperties(path, generatorKsuid string) json.RawMessage {
@@ -41,10 +38,9 @@ func TestSynthesizeDrawGeneratorUpdates_SecondConsumerOnUnchangedGeneratorDraws(
 	// GeneratorUpdate at all. The new consumer still needs a value.
 	const ksuid = "2abcDEFghiJKLmnoPQRstuVWxyz"
 
-	stored := &pkgmodel.PasswordGenerator{Label: "db-password", Stack: "default", Length: 24}
-	ds := &stubSpecLookup{byKey: map[pkgmodel.GeneratorKey]pkgmodel.Generator{
-		{Label: "db-password", Stack: "default"}: stored,
-	}}
+	lookup := stubLookup(map[string]pkgmodel.Generator{
+		ksuid: &pkgmodel.PasswordGenerator{Label: "db-password", Stack: "default", Length: 24},
+	})
 
 	resourceUpdates := []resource_update.ResourceUpdate{
 		// The pre-existing consumer: unchanged, provably stable.
@@ -69,8 +65,7 @@ func TestSynthesizeDrawGeneratorUpdates_SecondConsumerOnUnchangedGeneratorDraws(
 	draws, err := SynthesizeDrawGeneratorUpdates(
 		resourceUpdates,
 		nil, // the generator's row did not change: no GeneratorUpdate exists
-		map[pkgmodel.GeneratorKey]string{{Label: "db-password", Stack: "default"}: ksuid},
-		ds,
+		lookup,
 	)
 	require.NoError(t, err)
 	require.Len(t, draws, 1)
@@ -110,10 +105,9 @@ func TestSynthesizeDrawGeneratorUpdates_StaleProvenanceOnUnchangedGeneratorRedra
 	require.NotEqual(t, resource_update.OccurrenceStable, rec.Class,
 		"a destination stamped with a generation the generator no longer holds must not classify stable")
 
-	stored := &pkgmodel.PasswordGenerator{Label: "db-password", Stack: "default", Length: 24}
-	ds := &stubSpecLookup{byKey: map[pkgmodel.GeneratorKey]pkgmodel.Generator{
-		{Label: "db-password", Stack: "default"}: stored,
-	}}
+	lookup := stubLookup(map[string]pkgmodel.Generator{
+		ksuid: &pkgmodel.PasswordGenerator{Label: "db-password", Stack: "default", Length: 24},
+	})
 
 	draws, err := SynthesizeDrawGeneratorUpdates(
 		[]resource_update.ResourceUpdate{{
@@ -122,8 +116,7 @@ func TestSynthesizeDrawGeneratorUpdates_StaleProvenanceOnUnchangedGeneratorRedra
 			ProvenanceRecords: []resource_update.OccurrenceRecord{rec},
 		}},
 		nil,
-		map[pkgmodel.GeneratorKey]string{{Label: "db-password", Stack: "default"}: ksuid},
-		ds,
+		lookup,
 	)
 	require.NoError(t, err)
 	require.Len(t, draws, 1)
@@ -133,10 +126,9 @@ func TestSynthesizeDrawGeneratorUpdates_StaleProvenanceOnUnchangedGeneratorRedra
 func TestSynthesizeDrawGeneratorUpdates_AllStableDestinationsDrawNothing(t *testing.T) {
 	const ksuid = "2abcDEFghiJKLmnoPQRstuVWxyz"
 
-	stored := &pkgmodel.PasswordGenerator{Label: "db-password", Stack: "default", Length: 24}
-	ds := &stubSpecLookup{byKey: map[pkgmodel.GeneratorKey]pkgmodel.Generator{
-		{Label: "db-password", Stack: "default"}: stored,
-	}}
+	lookup := stubLookup(map[string]pkgmodel.Generator{
+		ksuid: &pkgmodel.PasswordGenerator{Label: "db-password", Stack: "default", Length: 24},
+	})
 
 	draws, err := SynthesizeDrawGeneratorUpdates(
 		[]resource_update.ResourceUpdate{{
@@ -151,8 +143,7 @@ func TestSynthesizeDrawGeneratorUpdates_AllStableDestinationsDrawNothing(t *test
 			}},
 		}},
 		nil,
-		map[pkgmodel.GeneratorKey]string{{Label: "db-password", Stack: "default"}: ksuid},
-		ds,
+		lookup,
 	)
 	require.NoError(t, err)
 	assert.Empty(t, draws)
@@ -165,9 +156,9 @@ func TestSynthesizeDrawGeneratorUpdates_PrefersThisCommandsDeclaredSpec(t *testi
 	const ksuid = "2abcDEFghiJKLmnoPQRstuVWxyz"
 
 	declared := &pkgmodel.PasswordGenerator{Label: "db-password", Stack: "default", Length: 40, ID: ksuid}
-	ds := &stubSpecLookup{byKey: map[pkgmodel.GeneratorKey]pkgmodel.Generator{
-		{Label: "db-password", Stack: "default"}: &pkgmodel.PasswordGenerator{Label: "db-password", Stack: "default", Length: 24},
-	}}
+	lookup := stubLookup(map[string]pkgmodel.Generator{
+		ksuid: &pkgmodel.PasswordGenerator{Label: "db-password", Stack: "default", Length: 24},
+	})
 
 	draws, err := SynthesizeDrawGeneratorUpdates(
 		[]resource_update.ResourceUpdate{{
@@ -179,8 +170,7 @@ func TestSynthesizeDrawGeneratorUpdates_PrefersThisCommandsDeclaredSpec(t *testi
 			Operation:  GeneratorOperationUpdate,
 			StackLabel: "default",
 		}},
-		map[pkgmodel.GeneratorKey]string{{Label: "db-password", Stack: "default"}: ksuid},
-		ds,
+		lookup,
 	)
 	require.NoError(t, err)
 	require.Len(t, draws, 1)
@@ -204,8 +194,7 @@ func TestSynthesizeDrawGeneratorUpdates_UnresolvableGeneratorDrawsNothing(t *tes
 			Operation:    resource_update.OperationCreate,
 		}},
 		nil,
-		nil,
-		&stubSpecLookup{},
+		stubLookup(nil),
 	)
 	require.NoError(t, err)
 	assert.Empty(t, draws)

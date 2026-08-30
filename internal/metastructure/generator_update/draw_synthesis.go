@@ -13,16 +13,6 @@ import (
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
-// GeneratorSpecLookup is the minimal datastore surface the draw synthesis
-// needs: the live spec of a generator this command references but does not
-// itself declare. Declared locally, like GeneratorDatastore, because
-// internal/datastore imports this package.
-type GeneratorSpecLookup interface {
-	// GetGenerator returns the live generator with this label on this stack,
-	// or nil when there is none.
-	GetGenerator(label, stackLabel string) (pkgmodel.Generator, error)
-}
-
 // NewDrawGeneratorUpdate creates a synthetic GeneratorUpdate whose only
 // purpose is to draw one generator's value into memory for the destinations
 // bound to it. It is the generator analogue of
@@ -68,12 +58,18 @@ func NewDrawGeneratorUpdate(generator pkgmodel.Generator, stackLabel string) Gen
 //
 // A generator's spec comes from this command's own generatorUpdates when it
 // declares one (the desired spec, which is what the row will hold and what
-// the value must be drawn under), and from the datastore otherwise.
-// genKeyToKsuid is the (label, stack) -> KSUID map translation resolved for
-// every $gen this command saw, which is the only route from an envelope's
-// KSUID back to the label and stack a datastore load needs.
+// the value must be drawn under), and from lookup otherwise.
 //
-// A KSUID this command can map to no generator at all draws nothing and is
+// lookup resolves a generator KSUID to the live generator holding that
+// KSUID's spec, returning a nil generator when there is none. It is a closure
+// rather than a datastore method because its two callers reach a generator by
+// different routes and neither route is the other's: planning has the
+// (label, stack) -> KSUID map translation just built, and resume has only the
+// stacks its surviving destinations sit on. The generator it returns must
+// carry its stack (GetStack), which is what the draw op is filed under; the
+// KSUID is stamped here, since a loaded generator never carries one.
+//
+// A KSUID lookup resolves to no generator at all draws nothing and is
 // logged. It is not an error: the destination bound to it still dispatches,
 // and the provider boundary refuses it with a message naming the property,
 // which is more use to an operator than rejecting the whole command with a
@@ -82,8 +78,7 @@ func NewDrawGeneratorUpdate(generator pkgmodel.Generator, stackLabel string) Gen
 func SynthesizeDrawGeneratorUpdates(
 	resourceUpdates []resource_update.ResourceUpdate,
 	generatorUpdates []GeneratorUpdate,
-	genKeyToKsuid map[pkgmodel.GeneratorKey]string,
-	ds GeneratorSpecLookup,
+	lookup func(ksuid string) (pkgmodel.Generator, error),
 ) ([]GeneratorUpdate, error) {
 	needed := resource_update.GeneratorsNeedingDraw(resourceUpdates)
 	if len(needed) == 0 {
@@ -106,11 +101,6 @@ func SynthesizeDrawGeneratorUpdates(
 		declared[gu.Generator.GetID()] = gu
 	}
 
-	keyByKsuid := make(map[string]pkgmodel.GeneratorKey, len(genKeyToKsuid))
-	for key, ksuid := range genKeyToKsuid {
-		keyByKsuid[ksuid] = key
-	}
-
 	draws := make([]GeneratorUpdate, 0, len(needed))
 	for _, ksuid := range needed {
 		if gu, ok := declared[ksuid]; ok {
@@ -118,27 +108,26 @@ func SynthesizeDrawGeneratorUpdates(
 			continue
 		}
 
-		key, ok := keyByKsuid[ksuid]
-		if !ok || ds == nil {
+		if lookup == nil {
 			slog.Warn("No generator to draw from for a bound destination; the destination will be refused at the provider boundary",
 				"generator", ksuid)
 			continue
 		}
 
-		stored, err := ds.GetGenerator(key.Label, key.Stack)
+		stored, err := lookup(ksuid)
 		if err != nil {
-			return nil, fmt.Errorf("failed to load generator %q in stack %q: %w", key.Label, key.Stack, err)
+			return nil, fmt.Errorf("failed to resolve generator %s: %w", ksuid, err)
 		}
 		if stored == nil {
-			slog.Warn("Generator named by a bound destination no longer exists; the destination will be refused at the provider boundary",
-				"generator", key.Label, "stack", key.Stack)
+			slog.Warn("Generator named by a bound destination cannot be resolved; the destination will be refused at the provider boundary",
+				"generator", ksuid)
 			continue
 		}
 
 		// A loaded generator carries no ID; stamp the KSUID the $gen
 		// envelopes were translated to, which is the same one its row holds.
 		stored.SetID(ksuid)
-		draws = append(draws, NewDrawGeneratorUpdate(stored, key.Stack))
+		draws = append(draws, NewDrawGeneratorUpdate(stored, stored.GetStack()))
 	}
 
 	return draws, nil
