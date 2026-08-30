@@ -19,12 +19,14 @@ type mockDatastore struct {
 	mu               sync.RWMutex
 	resourcesByStack map[string][]*pkgmodel.Resource
 	triplet          map[pkgmodel.TripletKey]string
+	generators       map[pkgmodel.GeneratorKey]pkgmodel.GeneratorIdentity
 }
 
 func newMockDatastore() *mockDatastore {
 	return &mockDatastore{
 		resourcesByStack: make(map[string][]*pkgmodel.Resource),
 		triplet:          make(map[pkgmodel.TripletKey]string),
+		generators:       make(map[pkgmodel.GeneratorKey]pkgmodel.GeneratorIdentity),
 	}
 }
 
@@ -96,6 +98,31 @@ func (m *mockDatastore) FindResourcesDependingOnMany(ksuids []string) (map[strin
 	// For testing purposes, return empty map - no dependents.
 	// Tests that need this behavior should set up the expected results explicitly.
 	return make(map[string][]*pkgmodel.Resource), nil
+}
+
+// GetGeneratorIdentity returns the identity seeded by StoreGeneratorIdentity
+// for (label, stackLabel), or a zero GeneratorIdentity and a nil error when
+// none was seeded — mirroring the real datastore's "absent" contract.
+func (m *mockDatastore) GetGeneratorIdentity(label, stackLabel string) (pkgmodel.GeneratorIdentity, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	key := pkgmodel.GeneratorKey{Label: label, Stack: stackLabel}
+	if identity, ok := m.generators[key]; ok {
+		return identity, nil
+	}
+	return pkgmodel.GeneratorIdentity{}, nil
+}
+
+// StoreGeneratorIdentity is a helper for tests to seed a generator that
+// already has a live identity in the datastore (as opposed to one declared
+// only in the forma being translated, which resolves via the in-command
+// tier instead).
+func (m *mockDatastore) StoreGeneratorIdentity(label, stackLabel, ksuid string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.generators[pkgmodel.GeneratorKey{Label: label, Stack: stackLabel}] = pkgmodel.GeneratorIdentity{ID: ksuid}
 }
 
 // StoreStack is a helper for tests to populate the mock datastore

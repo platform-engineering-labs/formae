@@ -237,11 +237,14 @@ type ResourceSnapshot struct {
 // JSONB, which normalizes key order and whitespace on write, so what comes
 // back can differ byte-for-byte from what AdvanceGeneration was given.
 // Parse it; never byte-compare or hash it against the spec that was drawn.
-type GeneratorIdentity struct {
-	ID             string          // the generator's stable KSUID
-	GenerationID   string          // "" until a generation has been drawn
-	GenerationSpec json.RawMessage // the spec that generation was drawn under; nil when GenerationID is ""
-}
+//
+// Aliased to pkgmodel.GeneratorIdentity (not a local struct) so that
+// resource_update.ResourceDataLookup — which must not import
+// internal/datastore, since internal/datastore imports resource_update for
+// ResourceUpdate — can still declare a GetGeneratorIdentity method returning
+// this exact type, and any Datastore implementation satisfies both
+// interfaces with the same method.
+type GeneratorIdentity = pkgmodel.GeneratorIdentity
 
 // Datastore defines the persistence interface for formae.
 // It handles storage and retrieval of FormaCommands (requested changes),

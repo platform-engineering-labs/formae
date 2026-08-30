@@ -88,6 +88,14 @@ func (r *renderer) render(err error) (string, error) {
 		}
 	}
 
+	if errResp, ok := err.(*apimodel.ErrorResponse[apimodel.FormaReferencedGeneratorsNotFoundError]); ok {
+		var e error
+		msg, e = r.renderReferencedGeneratorsNotFound(&errResp.Data)
+		if e != nil {
+			return "", e
+		}
+	}
+
 	if errResp, ok := err.(*apimodel.ErrorResponse[apimodel.FormaPatchRejectedError]); ok {
 		var e error
 		msg, e = r.renderPatchRejected(&errResp.Data)
@@ -244,6 +252,19 @@ func (r *renderer) renderReferencedResourcesNotFound(data *apimodel.FormaReferen
 		_, _ = fmt.Fprintf(&b, "  %s\n", resource.Label)
 		_, _ = fmt.Fprintf(&b, "    %s%s\n", r.subtle("of type "), resource.Type)
 		_, _ = fmt.Fprintf(&b, "    %s%s\n", r.subtle("from stack "), resource.Stack)
+	}
+	return b.String(), nil
+}
+
+// renderReferencedGeneratorsNotFound formats FormaReferencedGeneratorsNotFoundError
+// as an indented list (replaces gtree).
+func (r *renderer) renderReferencedGeneratorsNotFound(data *apimodel.FormaReferencedGeneratorsNotFoundError) (string, error) {
+	var b strings.Builder
+	_, _ = fmt.Fprintln(&b, r.error("forma command rejected because the following referenced generators were not found:"))
+	for _, generator := range data.Missing {
+		_, _ = fmt.Fprintf(&b, "  %s\n", generator.Label)
+		_, _ = fmt.Fprintf(&b, "    %s%s\n", r.subtle("from stack "), generator.Stack)
+		_, _ = fmt.Fprintf(&b, "    %s%s\n", r.subtle("output "), generator.Output)
 	}
 	return b.String(), nil
 }

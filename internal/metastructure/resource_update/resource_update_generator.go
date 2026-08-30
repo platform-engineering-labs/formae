@@ -2117,9 +2117,14 @@ func translateFormaeReferencesToKsuid(forma *pkgmodel.Forma, ds ResourceDataLook
 		tupleToKsuid[tripletKey] = resource.Ksuid
 	}
 
+	genKeyToKsuid, err := assignGeneratorKSUIDs(forma.Generators, ds)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve generator identities: %w", err)
+	}
+
 	for i, resource := range forma.Resources {
 		if resource.Properties != nil {
-			translatedProperties, externalLabels, err := translatePropertiesJSON(resource.Properties, tupleToKsuid, ds)
+			translatedProperties, externalLabels, err := translatePropertiesJSON(resource.Properties, tupleToKsuid, genKeyToKsuid, ds)
 			if err != nil {
 				return nil, fmt.Errorf("failed to translate properties for resource %s: %w", resource.Label, err)
 			}
@@ -2128,7 +2133,7 @@ func translateFormaeReferencesToKsuid(forma *pkgmodel.Forma, ds ResourceDataLook
 		}
 
 		if resource.ReadOnlyProperties != nil {
-			translatedReadOnlyProperties, externalLabels, err := translatePropertiesJSON(resource.ReadOnlyProperties, tupleToKsuid, ds)
+			translatedReadOnlyProperties, externalLabels, err := translatePropertiesJSON(resource.ReadOnlyProperties, tupleToKsuid, genKeyToKsuid, ds)
 			if err != nil {
 				return nil, fmt.Errorf("failed to translate read-only properties for resource %s: %w", resource.Label, err)
 			}
@@ -2139,7 +2144,7 @@ func translateFormaeReferencesToKsuid(forma *pkgmodel.Forma, ds ResourceDataLook
 
 	for i, target := range forma.Targets {
 		if target.Config != nil {
-			translatedConfig, externalLabels, err := translatePropertiesJSON(target.Config, tupleToKsuid, ds)
+			translatedConfig, externalLabels, err := translatePropertiesJSON(target.Config, tupleToKsuid, genKeyToKsuid, ds)
 			if err != nil {
 				return nil, fmt.Errorf("failed to translate target config for %s: %w", target.Label, err)
 			}
@@ -2149,6 +2154,67 @@ func translateFormaeReferencesToKsuid(forma *pkgmodel.Forma, ds ResourceDataLook
 	}
 
 	return ksuidToLabel, nil
+}
+
+// assignGeneratorKSUIDs resolves every generator forma.Generators declares to
+// a KSUID, mirroring assignKSUIDs' resource pattern: the datastore's live
+// identity when this same generator already has one (an update-in-place, so
+// the KSUID must not change), or a freshly minted KSUID when it does not (a
+// first apply that declares a generator and a secret bound to it together —
+// the generator has no row yet, and a datastore-only lookup would hard-error
+// on the most common authoring shape).
+//
+// KNOWN GAP: the KSUID minted here for a brand-new generator is not
+// currently threaded into the generator's own create path
+// (generator_update_generator.go / datastore CreateGenerator, which mints
+// its own KSUID independently). A $gen reference translated in the same
+// command that creates its generator will therefore embed a KSUID the
+// persisted generator row will not actually carry. Closing that gap needs
+// pkgmodel.Generator to carry an assignable identity and CreateGenerator to
+// honor a pre-set one (mirroring how StoreResource honors resource.Ksuid) —
+// out of this function's scope; flagged here so it is not mistaken for
+// already handled.
+func assignGeneratorKSUIDs(rawGenerators []json.RawMessage, ds ResourceDataLookup) (map[pkgmodel.GeneratorKey]string, error) {
+	generators, err := pkgmodel.ParseGenerators(rawGenerators)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse generators: %w", err)
+	}
+
+	keyToKsuid := make(map[pkgmodel.GeneratorKey]string, len(generators))
+	for _, gen := range generators {
+		key := pkgmodel.GeneratorKey{Label: gen.GetLabel(), Stack: gen.GetStack()}
+		if _, done := keyToKsuid[key]; done {
+			continue
+		}
+
+		identity, err := ds.GetGeneratorIdentity(gen.GetLabel(), gen.GetStack())
+		if err != nil {
+			return nil, fmt.Errorf("failed to look up generator %q in stack %q: %w", gen.GetLabel(), gen.GetStack(), err)
+		}
+
+		// A declared generator that carries Alias is asking to take over an
+		// existing row at the old label (see PasswordGenerator.GetAlias) — a
+		// miss on the current label falls back to the alias before minting,
+		// mirroring assignKSUIDs' identical resource-rename handling. Without
+		// this, a $gen reference to the generator's new label in the same
+		// command that renames it would mint an orphan KSUID no stored row
+		// will ever carry.
+		if identity.ID == "" && gen.GetAlias() != "" {
+			identity, err = ds.GetGeneratorIdentity(gen.GetAlias(), gen.GetStack())
+			if err != nil {
+				return nil, fmt.Errorf("failed to look up generator %q by alias %q in stack %q: %w", gen.GetLabel(), gen.GetAlias(), gen.GetStack(), err)
+			}
+		}
+
+		if identity.ID != "" {
+			keyToKsuid[key] = identity.ID
+			continue
+		}
+
+		keyToKsuid[key] = util.NewID()
+	}
+
+	return keyToKsuid, nil
 }
 
 // translatePropertiesJSON translates all resolvable objects to KSUID URIs
@@ -2184,7 +2250,8 @@ func withoutEnvelopeProvenance(v any) (any, bool) {
 	case map[string]any:
 		_, hasRef := t["$ref"]
 		_, hasRes := t["$res"]
-		isEnvelope := hasRef || hasRes
+		_, hasGen := t["$gen"]
+		isEnvelope := hasRef || hasRes || hasGen
 		changed := false
 		out := make(map[string]any, len(t))
 		for k, child := range t {
@@ -2211,7 +2278,7 @@ func withoutEnvelopeProvenance(v any) (any, bool) {
 	}
 }
 
-func translatePropertiesJSON(properties json.RawMessage, tripletToKsuid map[pkgmodel.TripletKey]string, ds ResourceDataLookup) (json.RawMessage, map[string]string, error) {
+func translatePropertiesJSON(properties json.RawMessage, tripletToKsuid map[pkgmodel.TripletKey]string, genKeyToKsuid map[pkgmodel.GeneratorKey]string, ds ResourceDataLookup) (json.RawMessage, map[string]string, error) {
 	// Trust boundary: $resolvedFrom is a formae-written provenance record,
 	// never a user-writable key. $res envelopes are rewritten wholesale below
 	// (dropping any forged sibling by construction), but a raw $ref envelope
@@ -2279,10 +2346,64 @@ func translatePropertiesJSON(properties json.RawMessage, tripletToKsuid map[pkgm
 		}
 	}
 
-	// Second pass: translate $res envelopes framed inside $embed.$template strings.
-	// FindResolvablesFromProperties does not scan string contents, so embedded spans
-	// are invisible to the flat-list pass above. We walk the tree explicitly here.
-	result, err = translateEmbedSpans(result, tripletToKsuid, ds, externalLabels)
+	// $gen pass: resolve every generator reference to a generator KSUID,
+	// mirroring the $res pass above. Resolution order is in-command first
+	// (genKeyToKsuid, built from this command's own forma.Generators — a
+	// generator this command declares is resolvable even though it is not
+	// yet persisted), then the datastore. Neither finding it is a dangling
+	// reference and a hard error: PKL cannot reject a $gen naming a
+	// generator that is never declared (a bare `local` still renders a
+	// well-formed envelope), so this is the only check standing between
+	// such a forma and an apply.
+	var missingGenerators []pkgmodel.MissingGenerator
+	for _, genObject := range pkgmodel.FindGenObjectsFromProperties(json.RawMessage(result)) {
+		if genObject.Label == "" || genObject.Stack == "" || !pkgmodel.KnownGeneratorOutputs[genObject.Output] {
+			missingGenerators = append(missingGenerators, pkgmodel.MissingGenerator{
+				Label:  genObject.Label,
+				Stack:  genObject.Stack,
+				Output: genObject.Output,
+			})
+			continue
+		}
+
+		generatorKsuid, ok := genKeyToKsuid[pkgmodel.GeneratorKey{Label: genObject.Label, Stack: genObject.Stack}]
+		if !ok {
+			identity, identityErr := ds.GetGeneratorIdentity(genObject.Label, genObject.Stack)
+			if identityErr != nil || identity.ID == "" {
+				missingGenerators = append(missingGenerators, pkgmodel.MissingGenerator{
+					Label:  genObject.Label,
+					Stack:  genObject.Stack,
+					Output: genObject.Output,
+				})
+				continue
+			}
+			generatorKsuid = identity.ID
+		}
+
+		genEnvelope := map[string]any{
+			"$gen":        true,
+			"$generator":  generatorKsuid,
+			"$output":     genObject.Output,
+			"$visibility": "Opaque",
+		}
+		result, err = sjson.Set(result, genObject.Path, genEnvelope)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to replace generator reference at path %s: %w", genObject.Path, err)
+		}
+	}
+
+	if len(missingGenerators) > 0 {
+		return nil, nil, apimodel.FormaReferencedGeneratorsNotFoundError{
+			Missing: missingGenerators,
+		}
+	}
+
+	// Third pass: translate $res and $gen envelopes framed inside
+	// $embed.$template strings. FindResolvablesFromProperties/
+	// FindGenObjectsFromProperties do not scan string contents, so embedded
+	// spans are invisible to the flat-list passes above. We walk the tree
+	// explicitly here.
+	result, err = translateEmbedSpans(result, tripletToKsuid, genKeyToKsuid, ds, externalLabels)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -2292,18 +2413,18 @@ func translatePropertiesJSON(properties json.RawMessage, tripletToKsuid map[pkgm
 
 // translateEmbedSpans walks the JSON tree for objects with $embed==true and
 // rewrites any framed RS<base64>US $res envelopes in $template to $ref+KSUID form.
-func translateEmbedSpans(jsonStr string, tripletToKsuid map[pkgmodel.TripletKey]string, ds ResourceDataLookup, externalLabels map[string]string) (string, error) {
-	return translateEmbedSpansAtPath("", gjson.Parse(jsonStr), jsonStr, tripletToKsuid, ds, externalLabels)
+func translateEmbedSpans(jsonStr string, tripletToKsuid map[pkgmodel.TripletKey]string, genKeyToKsuid map[pkgmodel.GeneratorKey]string, ds ResourceDataLookup, externalLabels map[string]string) (string, error) {
+	return translateEmbedSpansAtPath("", gjson.Parse(jsonStr), jsonStr, tripletToKsuid, genKeyToKsuid, ds, externalLabels)
 }
 
-func translateEmbedSpansAtPath(basePath string, value gjson.Result, jsonStr string, tripletToKsuid map[pkgmodel.TripletKey]string, ds ResourceDataLookup, externalLabels map[string]string) (string, error) {
+func translateEmbedSpansAtPath(basePath string, value gjson.Result, jsonStr string, tripletToKsuid map[pkgmodel.TripletKey]string, genKeyToKsuid map[pkgmodel.GeneratorKey]string, ds ResourceDataLookup, externalLabels map[string]string) (string, error) {
 	var err error
 	if value.IsObject() {
 		if value.Get("$embed").Bool() {
 			tmplResult := value.Get("$template")
 			if tmplResult.Exists() && tmplResult.Type == gjson.String {
 				tmpl := tmplResult.String()
-				tmpl, err = translateEmbedSpansInTemplate(tmpl, tripletToKsuid, ds, externalLabels)
+				tmpl, err = translateEmbedSpansInTemplate(tmpl, tripletToKsuid, genKeyToKsuid, ds, externalLabels)
 				if err != nil {
 					return jsonStr, err
 				}
@@ -2329,7 +2450,7 @@ func translateEmbedSpansAtPath(basePath string, value gjson.Result, jsonStr stri
 			} else {
 				childPath = basePath + "." + key.String()
 			}
-			jsonStr, walkErr = translateEmbedSpansAtPath(childPath, val, jsonStr, tripletToKsuid, ds, externalLabels)
+			jsonStr, walkErr = translateEmbedSpansAtPath(childPath, val, jsonStr, tripletToKsuid, genKeyToKsuid, ds, externalLabels)
 			return walkErr == nil
 		})
 		if walkErr != nil {
@@ -2344,7 +2465,7 @@ func translateEmbedSpansAtPath(basePath string, value gjson.Result, jsonStr stri
 			} else {
 				childPath = basePath + "." + key.String()
 			}
-			jsonStr, walkErr = translateEmbedSpansAtPath(childPath, val, jsonStr, tripletToKsuid, ds, externalLabels)
+			jsonStr, walkErr = translateEmbedSpansAtPath(childPath, val, jsonStr, tripletToKsuid, genKeyToKsuid, ds, externalLabels)
 			return walkErr == nil
 		})
 		if walkErr != nil {
@@ -2374,7 +2495,7 @@ func uniqueKsuidByLabelAndType(tripletToKsuid map[pkgmodel.TripletKey]string, la
 
 // translateEmbedSpansInTemplate rewrites every framed $res envelope in a $template
 // string to its $ref+KSUID equivalent using the same lookup logic as the flat pass.
-func translateEmbedSpansInTemplate(tmpl string, tripletToKsuid map[pkgmodel.TripletKey]string, ds ResourceDataLookup, externalLabels map[string]string) (string, error) {
+func translateEmbedSpansInTemplate(tmpl string, tripletToKsuid map[pkgmodel.TripletKey]string, genKeyToKsuid map[pkgmodel.GeneratorKey]string, ds ResourceDataLookup, externalLabels map[string]string) (string, error) {
 	spans, err := pkgmodel.ScanEmbedSpans(tmpl)
 	if err != nil || len(spans) == 0 {
 		return tmpl, err
@@ -2384,8 +2505,47 @@ func translateEmbedSpansInTemplate(tmpl string, tripletToKsuid map[pkgmodel.Trip
 	for i := len(spans) - 1; i >= 0; i-- {
 		span := spans[i]
 		parsed := gjson.Parse(span.EnvelopeJSON)
+
+		if pkgmodel.IsGenObject(parsed) {
+			genObject := pkgmodel.GenObject{
+				Label:  parsed.Get("$label").String(),
+				Stack:  parsed.Get("$stack").String(),
+				Output: parsed.Get("$output").String(),
+			}
+			if genObject.Label == "" || genObject.Stack == "" || !pkgmodel.KnownGeneratorOutputs[genObject.Output] {
+				return tmpl, apimodel.FormaReferencedGeneratorsNotFoundError{
+					Missing: []pkgmodel.MissingGenerator{{Label: genObject.Label, Stack: genObject.Stack, Output: genObject.Output}},
+				}
+			}
+
+			generatorKsuid, ok := genKeyToKsuid[pkgmodel.GeneratorKey{Label: genObject.Label, Stack: genObject.Stack}]
+			if !ok {
+				identity, identityErr := ds.GetGeneratorIdentity(genObject.Label, genObject.Stack)
+				if identityErr != nil || identity.ID == "" {
+					return tmpl, apimodel.FormaReferencedGeneratorsNotFoundError{
+						Missing: []pkgmodel.MissingGenerator{{Label: genObject.Label, Stack: genObject.Stack, Output: genObject.Output}},
+					}
+				}
+				generatorKsuid = identity.ID
+			}
+
+			genJSON, marshalErr := json.Marshal(map[string]any{
+				"$gen":        true,
+				"$generator":  generatorKsuid,
+				"$output":     genObject.Output,
+				"$visibility": "Opaque",
+			})
+			if marshalErr != nil {
+				return tmpl, fmt.Errorf("embed span: failed to marshal $gen envelope: %w", marshalErr)
+			}
+
+			framed := pkgmodel.FrameEnvelope(string(genJSON))
+			tmpl = tmpl[:span.Start] + framed + tmpl[span.End:]
+			continue
+		}
+
 		if !pkgmodel.IsResolvableObject(parsed) {
-			// Not a $res envelope — leave span unchanged.
+			// Not a $res or $gen envelope — leave span unchanged.
 			continue
 		}
 		resolvable := pkgmodel.ResolvableObject{
