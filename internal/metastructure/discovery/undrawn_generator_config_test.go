@@ -45,6 +45,8 @@ func TestScanTargetForResourceType_UndrawnGeneratorConfigIsNeverSentToAPlugin(t 
 		_, isList := message.(plugin.ListResources)
 		assert.False(t, isList, "no list request may carry a credential formae does not have")
 	}
+	assert.Empty(t, proc.spawnRequests,
+		"a scan that cannot authenticate must not spawn a PluginOperator that is then never sent ListResources and never reaped")
 	if assert.Error(t, err, "a target formae cannot authenticate must not be scanned") {
 		assert.Contains(t, err.Error(), "has not been drawn",
 			"the skip must say why the resource type was not scanned")

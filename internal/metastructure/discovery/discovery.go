@@ -546,31 +546,7 @@ func scanTargetForResourceType(target pkgmodel.Target, op ListOperation, data Di
 	uri := discoveryURI(op.ResourceType)
 	operation := resource.OperationList
 	operationID := uuid.New().String()
-
-	// Spawn PluginOperator via PluginCoordinator
-	spawnResult, err := proc.Call(
-		gen.ProcessID{Name: actornames.PluginCoordinator, Node: proc.Node().Name()},
-		messages.SpawnPluginOperator{
-			Namespace:   target.Namespace,
-			ResourceURI: string(uri),
-			Operation:   string(operation),
-			OperationID: operationID,
-			RequestedBy: proc.PID(),
-		})
-	if err != nil {
-		delete(data.outstandingListOperations, mapKey)
-		return fmt.Errorf("failed to spawn PluginOperator for %s: %w", uri, err)
-	}
 	listParameters := util.StringToMap[plugin.ListParam](op.ListParams)
-	spawnRes, ok := spawnResult.(messages.SpawnPluginOperatorResult)
-	if !ok {
-		delete(data.outstandingListOperations, mapKey)
-		return fmt.Errorf("unexpected result type from PluginCoordinator: %T", spawnResult)
-	}
-	if spawnRes.Error != "" {
-		delete(data.outstandingListOperations, mapKey)
-		return fmt.Errorf("failed to spawn PluginOperator: %s", spawnRes.Error)
-	}
 
 	// Strip resolvable metadata ($ref/$value wrappers) from target config before
 	// sending to plugin — plugins expect plain JSON values, not resolvable objects.
@@ -586,9 +562,35 @@ func scanTargetForResourceType(target pkgmodel.Target, op ListOperation, data Di
 	// settled on. Skip this resource type for the cycle rather than scanning
 	// with a credential formae does not have: a scan that cannot authenticate
 	// returns nothing and would be indistinguishable from an empty account.
+	// This must run before the spawn below — a PluginOperator started for a
+	// scan that never sends ListResources is never reaped.
 	if err := resolver.GuardNoUnresolvedGenerators(pluginConfig); err != nil {
 		delete(data.outstandingListOperations, mapKey)
 		return fmt.Errorf("cannot scan %s in target %s: its configuration is bound to a generator whose value has not been drawn: %w", op.ResourceType, target.Label, err)
+	}
+
+	// Spawn PluginOperator via PluginCoordinator
+	spawnResult, err := proc.Call(
+		gen.ProcessID{Name: actornames.PluginCoordinator, Node: proc.Node().Name()},
+		messages.SpawnPluginOperator{
+			Namespace:   target.Namespace,
+			ResourceURI: string(uri),
+			Operation:   string(operation),
+			OperationID: operationID,
+			RequestedBy: proc.PID(),
+		})
+	if err != nil {
+		delete(data.outstandingListOperations, mapKey)
+		return fmt.Errorf("failed to spawn PluginOperator for %s: %w", uri, err)
+	}
+	spawnRes, ok := spawnResult.(messages.SpawnPluginOperatorResult)
+	if !ok {
+		delete(data.outstandingListOperations, mapKey)
+		return fmt.Errorf("unexpected result type from PluginCoordinator: %T", spawnResult)
+	}
+	if spawnRes.Error != "" {
+		delete(data.outstandingListOperations, mapKey)
+		return fmt.Errorf("failed to spawn PluginOperator: %s", spawnRes.Error)
 	}
 
 	err = proc.Send(spawnRes.PID, plugin.ListResources{
