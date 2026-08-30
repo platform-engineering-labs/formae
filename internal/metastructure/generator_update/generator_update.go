@@ -6,6 +6,7 @@ package generator_update
 
 import (
 	"encoding/json"
+	"net/url"
 	"time"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/types"
@@ -136,9 +137,10 @@ func (gu *GeneratorUpdate) UnmarshalJSON(data []byte) error {
 // changeset/generator_update_node_uri_test.go for the compile-time
 // assertion and the cross-format collision test.
 
-// NodeURI renders generator://<stack>/<label>/<operation>. This scheme
-// distinguishes it, by construction, from the other two Update kinds that
-// share the same ExecutionDAG.Nodes keyspace:
+// NodeURI renders generator://<stack>/<label>/<operation>, with StackLabel
+// and the generator's label each percent-encoded (url.PathEscape) before
+// joining. This scheme distinguishes it, by construction, from the other two
+// Update kinds that share the same ExecutionDAG.Nodes keyspace:
 //   - a resource operation URI (changeset.createOperationURI) is the bare
 //     "<ksuid>/<propertyPath>/<operation>" with no scheme at all: a KSUID,
 //     a property path, and an OperationType are each drawn from character
@@ -147,12 +149,36 @@ func (gu *GeneratorUpdate) UnmarshalJSON(data []byte) error {
 //   - a target operation URI (target_update.TargetUpdate.NodeURI) is
 //     "target://<label>/<operation>" — a different literal scheme, so it
 //     can never equal a "generator://" URI either.
+//
+// StackLabel and a generator's label are both free-form user-authored
+// strings that may themselves contain "/" — nothing in this codebase
+// validates against it. Joining two such fields with "/" as a plain
+// delimiter would let two distinct (stack, label) pairs collapse onto the
+// same string: StackLabel="s", label="a/b" and StackLabel="s/a", label="b"
+// both naively join to "s/a/b". url.PathEscape rules this out: it escapes
+// every literal "/" (and "%") within a segment to a %XX triplet, so the
+// only unescaped "/" characters ExecutionDAG ever sees in a generator URI
+// are the delimiters this function inserts itself, and PathEscape/
+// PathUnescape are exact inverses, so two different raw segments can never
+// produce the same escaped output.
+//
+// This is deliberately per-segment escaping rather than keying on the
+// generator's own KSUID (which is how ResourceUpdate avoids the same class
+// of collision, and would make it structurally impossible rather than
+// merely escaped): GetID() is not reliably populated on every path a
+// GeneratorUpdate is constructed on today. GenerateGeneratorUpdates's create
+// and update branches call Generator.SetID from genKeyToKsuid before
+// building the update, but its reconcile-driven delete branch builds the
+// update directly from a generator LoadGeneratorsByStack returned — and
+// PasswordGenerator.ID is `json:"-"`, so nothing in the persisted
+// generator_data JSON round-trips it back on load. Every reconcile-driven
+// GeneratorOperationDelete update therefore carries GetID() == "" today.
 func (gu *GeneratorUpdate) NodeURI() pkgmodel.FormaeURI {
 	label := ""
 	if gu.Generator != nil {
 		label = gu.Generator.GetLabel()
 	}
-	return pkgmodel.FormaeURI("generator://" + gu.StackLabel + "/" + label + "/" + string(gu.Operation))
+	return pkgmodel.FormaeURI("generator://" + url.PathEscape(gu.StackLabel) + "/" + url.PathEscape(label) + "/" + string(gu.Operation))
 }
 
 // Resolvables returns nil: a generator draws a value locally, it never

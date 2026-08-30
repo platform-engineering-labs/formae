@@ -53,6 +53,20 @@ func TestGeneratorUpdateNodeURIVariesByOperationAndIdentity(t *testing.T) {
 	}
 }
 
+// A StackLabel and a generator label are both free-form strings that may
+// themselves contain "/" (nothing validates against it). Naively joining
+// "<stack>/<label>/<operation>" with "/" would let two distinct (stack,
+// label) pairs collapse onto the same NodeURI — StackLabel="s", label="a/b"
+// and StackLabel="s/a", label="b" both naively join to the same
+// "s/a/b/create". NodeURI must percent-encode each segment so these two
+// genuinely different generators never collide in ExecutionDAG.Nodes.
+func TestGeneratorUpdateNodeURIDoesNotCollideAcrossStackAndLabelBoundary(t *testing.T) {
+	slashInLabel := newTestGeneratorUpdate("s", "a/b", GeneratorOperationCreate, GeneratorUpdateStateNotStarted)
+	slashInStack := newTestGeneratorUpdate("s/a", "b", GeneratorOperationCreate, GeneratorUpdateStateNotStarted)
+
+	assert.NotEqual(t, slashInLabel.NodeURI(), slashInStack.NodeURI())
+}
+
 // resourceOperationURI replicates changeset.createOperationURI's (unexported)
 // format exactly: "<ksuid>/<propertyPath>/<operation>", with no scheme. It
 // exists here only to construct a resource-shaped URI for the collision test
@@ -154,6 +168,16 @@ func TestGeneratorUpdateIsRateLimitedFalse(t *testing.T) {
 	gu := newTestGeneratorUpdate("prod", "db-password", GeneratorOperationCreate, GeneratorUpdateStateNotStarted)
 
 	assert.False(t, gu.IsRateLimited())
+}
+
+// Namespace's value never gates concurrency while IsRateLimited is false
+// (see the doc comment on Namespace), but the contract is still a non-empty,
+// stable pseudo-namespace distinct from any provider's — pin it so a stub
+// returning "" cannot pass silently.
+func TestGeneratorUpdateNamespace(t *testing.T) {
+	gu := newTestGeneratorUpdate("prod", "db-password", GeneratorOperationCreate, GeneratorUpdateStateNotStarted)
+
+	assert.Equal(t, "generator", gu.Namespace())
 }
 
 // The state predicates must partition GeneratorUpdateState exactly: every
