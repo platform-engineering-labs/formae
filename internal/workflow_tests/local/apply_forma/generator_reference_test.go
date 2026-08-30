@@ -8,6 +8,7 @@ package workflow_tests_local
 
 import (
 	"encoding/json"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -17,7 +18,7 @@ import (
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/provenance"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/testutil"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	"github.com/platform-engineering-labs/formae/internal/workflow_tests/test_helpers"
@@ -60,12 +61,90 @@ func genBoundSecret(stack, label, generatorLabel, output string) pkgmodel.Resour
 	}
 }
 
-// Re-applying an identical forma whose secret is bound to a generator plans
-// nothing. The binding must survive a second translation as the SAME
-// generator identity: the envelope's $generator is the generator's own live
-// KSUID, and it does not move between applies, so the occurrence's source
-// identity is unchanged and no second command is created.
-func TestApplyForma_GeneratorBoundSecret_IdenticalReapplyPlansNothing(t *testing.T) {
+// countingCreates records, per resource type, how many times a plugin Create
+// was actually reached. Returning nil falls through to FakeAWS's own handling,
+// so the count is the only behaviour it adds.
+func countingCreates(counts map[string]*atomic.Int32) *plugin.ResourcePluginOverrides {
+	return &plugin.ResourcePluginOverrides{
+		Create: func(req *resource.CreateRequest) (*resource.CreateResult, error) {
+			if c, ok := counts[req.ResourceType]; ok {
+				c.Add(1)
+			}
+			return nil, nil
+		},
+	}
+}
+
+// findResourceUpdate returns the update for a label, or nil.
+func findResourceUpdate(updates []resource_update.ResourceUpdate, label string) *resource_update.ResourceUpdate {
+	for i := range updates {
+		if updates[i].DesiredState.Label == label {
+			return &updates[i]
+		}
+	}
+	return nil
+}
+
+// A property bound to a generator holds a reference to a value, never the
+// value itself. Until that value has been drawn there is nothing to write, so
+// the apply fails at the plugin boundary and the provider is never called:
+// formae refuses to put the reference into the cloud object in the value's
+// place. This is a property of the write path, not of the current state of
+// generator support — a draw that fails must leave the destination unwritten
+// for the same reason.
+func TestApplyForma_GeneratorBoundSecret_UndrawnValueIsNeverWritten(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		var secretCreates atomic.Int32
+		overrides := countingCreates(map[string]*atomic.Int32{
+			"FakeAWS::SecretsManager::Secret": &secretCreates,
+		})
+
+		cfg := test_helpers.NewTestMetastructureConfig()
+		cfg.Agent.Synchronization.Enabled = false
+		m, def, err := test_helpers.NewTestMetastructureWithConfig(t, overrides, cfg)
+		defer def()
+		require.NoError(t, err)
+
+		stack := "test-stack-" + util.NewID()
+		forma := &pkgmodel.Forma{
+			Stacks:     []pkgmodel.Stack{{Label: stack}},
+			Targets:    []pkgmodel.Target{{Label: "test-target", Namespace: "test-namespace"}},
+			Generators: []json.RawMessage{passwordGeneratorFor(t, "db-password", stack)},
+			Resources:  []pkgmodel.Resource{genBoundSecret(stack, "db", "db-password", "value")},
+		}
+
+		_, err = m.ApplyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
+		require.NoError(t, err, "the forma is well-formed, so it is admitted and fails at execution")
+		waitForApplyComplete(t, m)
+
+		cmds, err := m.Datastore.LoadFormaCommands()
+		require.NoError(t, err)
+		cmd := findCommandByType(cmds, pkgmodel.CommandApply)
+		require.NotNil(t, cmd)
+		assert.Equal(t, forma_command.CommandStateFailed, cmd.State,
+			"an undrawn generator binding must not be reported as applied")
+
+		secretUpdate := findResourceUpdate(cmd.ResourceUpdates, "db")
+		require.NotNil(t, secretUpdate, "the bound secret must be planned and then refused")
+		assert.Equal(t, resource_update.ResourceUpdateStateFailed, secretUpdate.State)
+		assert.Contains(t, secretUpdate.FailureReason, "bound to a generator whose value has not been drawn",
+			"the refusal must say what is wrong with the resource, not just that a request could not be built")
+
+		assert.Zero(t, secretCreates.Load(),
+			"the provider must never be called with a value formae does not have")
+
+		resources, err := m.Datastore.LoadResourcesByStack(stack)
+		require.NoError(t, err)
+		assert.Empty(t, resources, "a refused write must leave no resource behind")
+	})
+}
+
+// A generator declared by one command and referenced by a later one resolves
+// to the KSUID the generator's own row already carries: the binding names one
+// identity, not a freshly minted one per command. This pins identity
+// stability only; nothing here says anything about whether a moved generation
+// is suppressed, which needs a drawn value to be observable at all.
+func TestApplyForma_GeneratorBoundSecret_BindingNamesTheGeneratorsOwnIdentity(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		cfg := test_helpers.NewTestMetastructureConfig()
 		cfg.Agent.Synchronization.Enabled = false
@@ -83,49 +162,41 @@ func TestApplyForma_GeneratorBoundSecret_IdenticalReapplyPlansNothing(t *testing
 			}
 		}
 
+		// The first command establishes the generator's row. Its resource
+		// write is refused (no value has been drawn), which is beside the
+		// point here: the generator is persisted either way.
 		_, err = m.ApplyForma(buildForma(), &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
 		require.NoError(t, err)
 		waitForApplyComplete(t, m)
-
-		cmds, err := m.Datastore.LoadFormaCommands()
-		require.NoError(t, err)
-		createCmd := findCommandByType(cmds, pkgmodel.CommandApply)
-		require.NotNil(t, createCmd)
-		require.Equal(t, forma_command.CommandStateSuccess, createCmd.State,
-			"precondition: the create apply must succeed")
 
 		identity, err := m.Datastore.GetGeneratorIdentity("db-password", stack)
 		require.NoError(t, err)
 		require.NotEmpty(t, identity.ID, "precondition: the declared generator must have a row")
 
-		storedGenerator := func() string {
-			resources, loadErr := m.Datastore.LoadResourcesByStack(stack)
-			require.NoError(t, loadErr)
-			for i := range resources {
-				if resources[i].Label == "db" {
-					return gjson.GetBytes(resources[i].Properties, "SecretString.$generator").String()
-				}
+		resp, err := m.ApplyForma(buildForma(), &config.FormaCommandConfig{
+			Mode:     pkgmodel.FormaApplyModeReconcile,
+			Simulate: true,
+		}, "test-client-id", "", "")
+		require.NoError(t, err)
+
+		var secretUpdate *apimodel.ResourceUpdate
+		for i, ru := range resp.Simulation.Command.ResourceUpdates {
+			if ru.ResourceLabel == "db" {
+				secretUpdate = &resp.Simulation.Command.ResourceUpdates[i]
 			}
-			return ""
 		}
-		require.Equal(t, identity.ID, storedGenerator(),
-			"the stored envelope must name the generator's own KSUID")
-
-		resp, err := m.ApplyForma(buildForma(), &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
-		require.NoError(t, err)
-		assert.False(t, resp.Simulation.ChangesRequired,
-			"an identical re-apply of a generator-bound secret must plan nothing")
-
-		cmds, err = m.Datastore.LoadFormaCommands()
-		require.NoError(t, err)
-		assert.Len(t, cmds, 1, "no second command may be created")
+		require.NotNil(t, secretUpdate, "the bound secret must be in the plan")
+		assert.Equal(t, identity.ID,
+			gjson.GetBytes(secretUpdate.Properties, "SecretString.$generator").String(),
+			"the binding must name the generator's own KSUID, not one minted for this command")
 
 		identityAfter, err := m.Datastore.GetGeneratorIdentity("db-password", stack)
 		require.NoError(t, err)
 		assert.Equal(t, identity.ID, identityAfter.ID,
-			"the generator's KSUID must be stable across applies")
-		assert.Equal(t, identity.ID, storedGenerator(),
-			"the re-apply must not repoint the binding at a freshly minted KSUID")
+			"a second command must not move the generator's identity")
+		generators, err := m.Datastore.LoadGeneratorsByStack(stack)
+		require.NoError(t, err)
+		assert.Len(t, generators, 1, "one declared generator is one live generator")
 	})
 }
 
@@ -211,28 +282,19 @@ func TestApplyForma_GeneratorReference_DanglingIsRejected(t *testing.T) {
 	})
 }
 
-// A $ref consumer reading a secret that is itself generator-fed still
-// resolves through the generator-bound source: the consumer is created, its
-// plugin is called, and the stored envelope carries a well-formed
-// current-domain resolution provenance digest rather than being dropped
-// because the source's own value came from a generator.
-func TestApplyForma_ConsumerDownstreamOfGeneratorFedSecret_StillPropagates(t *testing.T) {
+// A $ref consumer reading a generator-fed secret is planned as a chain: the
+// consumer's reference resolves to the secret's property, and the secret's own
+// property is the generator binding. Nothing in that chain is writable until
+// the value has been drawn, so the whole command is refused at the plugin
+// boundary — the consumer is not written from a source that was itself never
+// written, and neither provider is called.
+func TestApplyForma_ConsumerDownstreamOfGeneratorFedSecret_IsRejectedBeforeAnyWrite(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
-		var consumerUpdateCalls atomic.Int32
-		var consumerUpdateProps atomic.Value
-		base := secretConsumerOverrides(&consumerUpdateCalls, &consumerUpdateProps)
-		var consumerCreateCalls atomic.Int32
-		var consumerCreateProps atomic.Value
-		overrides := &plugin.ResourcePluginOverrides{
-			Create: func(req *resource.CreateRequest) (*resource.CreateResult, error) {
-				if req.ResourceType == "FakeAWS::S3::Bucket" {
-					consumerCreateCalls.Add(1)
-					consumerCreateProps.Store(append(json.RawMessage(nil), req.Properties...))
-				}
-				return base.Create(req)
-			},
-			Update: base.Update,
-		}
+		var secretCreates, consumerCreates atomic.Int32
+		overrides := countingCreates(map[string]*atomic.Int32{
+			"FakeAWS::SecretsManager::Secret": &secretCreates,
+			"FakeAWS::S3::Bucket":             &consumerCreates,
+		})
 
 		cfg := test_helpers.NewTestMetastructureConfig()
 		cfg.Agent.Synchronization.Enabled = false
@@ -251,60 +313,45 @@ func TestApplyForma_ConsumerDownstreamOfGeneratorFedSecret_StillPropagates(t *te
 			},
 		}
 
+		// The plan carries the whole chain: the secret's generator binding and
+		// the consumer's reference to that secret's property.
+		sim, err := m.ApplyForma(forma, &config.FormaCommandConfig{
+			Mode:     pkgmodel.FormaApplyModeReconcile,
+			Simulate: true,
+		}, "test-client-id", "", "")
+		require.NoError(t, err)
+		planned := map[string]apimodel.ResourceUpdate{}
+		for _, ru := range sim.Simulation.Command.ResourceUpdates {
+			planned[ru.ResourceLabel] = ru
+		}
+		secretPlan, ok := planned["my-secret"]
+		require.True(t, ok, "the generator-fed secret must be planned, got %v", planned)
+		consumerPlan, ok := planned["my-bucket"]
+		require.True(t, ok, "the downstream consumer must be planned, got %v", planned)
+		assert.True(t, gjson.GetBytes(secretPlan.Properties, "SecretString.$gen").Bool(),
+			"the source's property must be the generator binding, got %s", secretPlan.Properties)
+		consumerRef := gjson.GetBytes(consumerPlan.Properties, "DbPassword.$ref").String()
+		assert.True(t, strings.Contains(consumerRef, secretPlan.ResourceID) &&
+			strings.HasSuffix(consumerRef, "#/SecretString"),
+			"the consumer must reference the generator-fed secret's property, got %q", consumerRef)
+
 		_, err = m.ApplyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
 		require.NoError(t, err)
 		waitForApplyComplete(t, m)
 
 		cmds, err := m.Datastore.LoadFormaCommands()
 		require.NoError(t, err)
-		createCmd := findCommandByType(cmds, pkgmodel.CommandApply)
-		require.NotNil(t, createCmd)
-		require.Equal(t, forma_command.CommandStateSuccess, createCmd.State,
-			"a consumer downstream of a generator-fed secret must apply cleanly")
+		cmd := findCommandByType(cmds, pkgmodel.CommandApply)
+		require.NotNil(t, cmd)
+		assert.Equal(t, forma_command.CommandStateFailed, cmd.State,
+			"a chain rooted in an undrawn generator must not be reported as applied")
 
-		plannedLabels := map[string]bool{}
-		updates, err := m.Datastore.LoadResourceUpdates(createCmd.ID)
-		require.NoError(t, err)
-		for _, ru := range updates {
-			plannedLabels[ru.DesiredState.Label] = true
-		}
-		assert.True(t, plannedLabels["my-secret"], "the generator-fed secret must be planned, got %v", plannedLabels)
-		assert.True(t, plannedLabels["my-bucket"], "the downstream consumer must be planned, got %v", plannedLabels)
+		assert.Zero(t, secretCreates.Load(), "the source secret must never be written")
+		assert.Zero(t, consumerCreates.Load(),
+			"the consumer must never be written from a source that was itself refused")
 
 		resources, err := m.Datastore.LoadResourcesByStack(stack)
 		require.NoError(t, err)
-		var consumerRow, secretRow *pkgmodel.Resource
-		for i := range resources {
-			switch resources[i].Label {
-			case "my-bucket":
-				consumerRow = resources[i]
-			case "my-secret":
-				secretRow = resources[i]
-			}
-		}
-		require.NotNil(t, secretRow, "the generator-fed secret must be persisted")
-		require.NotNil(t, consumerRow, "the downstream consumer must be persisted")
-
-		// The secret's own binding survives at rest as a generator reference,
-		// not as a flattened value.
-		assert.True(t, gjson.GetBytes(secretRow.Properties, "SecretString.$gen").Bool(),
-			"the source secret must keep its generator binding at rest, got %s", secretRow.Properties)
-
-		// The consumer's binding survives as a resource reference at the
-		// source secret's property, carrying resolution provenance.
-		consumerRef := gjson.GetBytes(consumerRow.Properties, "DbPassword")
-		assert.True(t, consumerRef.Get("$ref").Exists(),
-			"the consumer must keep its reference envelope at rest, got %s", consumerRow.Properties)
-		resolvedFrom := consumerRef.Get("$resolvedFrom").String()
-		assert.True(t, provenance.Valid(resolvedFrom),
-			"the consumer's occurrence must carry a current-domain provenance digest, got %q", resolvedFrom)
-
-		require.Greater(t, consumerCreateCalls.Load(), int32(0),
-			"the consumer plugin must be invoked, so the chain actually reached the provider")
-		delivered, _ := consumerCreateProps.Load().(json.RawMessage)
-		assert.Equal(t, "my-bucket", gjson.GetBytes(delivered, "BucketName").String(),
-			"the consumer's plain fields must reach the plugin alongside the referenced one")
-		assert.True(t, gjson.GetBytes(delivered, "DbPassword").Exists(),
-			"the referenced field must not be dropped from the plugin payload, got %s", delivered)
+		assert.Empty(t, resources, "a refused chain must leave nothing behind")
 	})
 }
