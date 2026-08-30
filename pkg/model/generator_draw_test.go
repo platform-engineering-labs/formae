@@ -141,6 +141,27 @@ func TestDraw_ModuloBiasedByteIsDiscardedAndRedrawn(t *testing.T) {
 // With Uppercase and Lowercase enabled, requireEachIncludedType, and Length
 // 2, a candidate drawn entirely from one class must be discarded in full and
 // a fresh candidate drawn, never patched.
+// The threshold at limit is exactly what makes drawRune unbiased: byte 250
+// must be rejected (it is the first byte in the digits alphabet's biased
+// tail, limit=250) and byte 249 must be accepted and mapped via 249%10=9 to
+// '9'. This pins the boundary itself, not just that some rejection happens —
+// a test that only proves rejection happens is satisfied by a lower, still
+// biased threshold (e.g. limit := 256 - n) or an off-by-one comparison
+// (b > limit instead of b >= limit).
+func TestDraw_RejectionBoundaryIsExactlyLimit(t *testing.T) {
+	spec := pw(func(g *pkgmodel.PasswordGenerator) {
+		g.Uppercase, g.Lowercase, g.Digits, g.Symbols = false, false, true, false
+		g.RequireEachIncludedType = false
+		g.Length = 1
+	})
+	src, calls := sequenceSource([]byte{250, 249})
+
+	value, err := pkgmodel.Draw(spec, src)
+	require.NoError(t, err)
+	assert.Equal(t, "9", value)
+	assert.Equal(t, 2, *calls, "expected byte 250 to be rejected and byte 249 to be drawn")
+}
+
 func TestDraw_RequireEachIncludedType_DiscardsWholeCandidateOnMissingClass(t *testing.T) {
 	spec := pw(func(g *pkgmodel.PasswordGenerator) {
 		g.Uppercase, g.Lowercase, g.Digits, g.Symbols = true, true, false, false
@@ -203,6 +224,56 @@ func TestDraw_ExcludeCharactersEmptyingTheOnlyEnabledClassReturnsError(t *testin
 
 // requireEachIncludedType demanding more classes than there are positions
 // can never be satisfied by any candidate, no matter how many are drawn.
+func TestDraw_ZeroLengthReturnsError(t *testing.T) {
+	spec := pw(func(g *pkgmodel.PasswordGenerator) { g.Length = 0 })
+	value, err := drawWithTimeout(t, spec, realSource)
+	require.Error(t, err)
+	assert.Empty(t, value)
+}
+
+// Uppercase and lowercase are both enabled, but excludeCharacters empties
+// only lowercase. The alphabet is not empty (26 uppercase characters remain)
+// so an alphabet-emptiness check alone would miss this; the per-class check
+// must catch it and name the class that excludeCharacters wiped out.
+func TestDraw_ExcludeCharactersEmptyingOneOfSeveralEnabledClassesNamesIt(t *testing.T) {
+	spec := pw(func(g *pkgmodel.PasswordGenerator) {
+		g.Uppercase, g.Lowercase, g.Digits, g.Symbols = true, true, false, false
+		g.ExcludeCharacters = pkgmodel.LowercaseChars
+		g.RequireEachIncludedType = true
+	})
+	value, err := drawWithTimeout(t, spec, realSource)
+	require.Error(t, err)
+	assert.Empty(t, value)
+	assert.Contains(t, err.Error(), "lowercase")
+}
+
+// Uppercase only, with excludeCharacters removing every uppercase letter but
+// one, leaves an alphabet of exactly one character. A one-character alphabet
+// is a constant, not a random value, and must be rejected even though PKL
+// only rejects a class emptied entirely.
+func TestDraw_EffectiveAlphabetOfOneCharacterReturnsError(t *testing.T) {
+	spec := pw(func(g *pkgmodel.PasswordGenerator) {
+		g.Uppercase, g.Lowercase, g.Digits, g.Symbols = true, false, false, false
+		g.ExcludeCharacters = pkgmodel.UppercaseChars[1:] // leaves only 'A'
+		g.RequireEachIncludedType = false
+	})
+	value, err := drawWithTimeout(t, spec, realSource)
+	require.Error(t, err)
+	assert.Empty(t, value)
+}
+
+// A ByteSource that returns (0, nil) — a short read with no error, the shape
+// an io.Reader adapter can produce — must not be treated as a successful
+// draw; that would silently spend zero entropy on the returned character.
+func TestDraw_ShortReadFromByteSourceReturnsError(t *testing.T) {
+	spec := pw(func(*pkgmodel.PasswordGenerator) {})
+	short := func(b []byte) (int, error) { return 0, nil }
+
+	value, err := pkgmodel.Draw(spec, short)
+	require.Error(t, err)
+	assert.Empty(t, value)
+}
+
 func TestDraw_MoreRequiredClassesThanLengthReturnsErrorRatherThanHanging(t *testing.T) {
 	spec := pw(func(g *pkgmodel.PasswordGenerator) {
 		g.Uppercase, g.Lowercase, g.Digits, g.Symbols = true, true, false, false

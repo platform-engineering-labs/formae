@@ -6,7 +6,7 @@ package model
 
 import (
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -35,28 +35,67 @@ func Draw(spec Generator, src ByteSource) (string, error) {
 	}
 }
 
+// passwordClasses pairs each character class a PasswordGenerator can enable
+// with its canonical alphabet, mirroring the class-by-class walk
+// PasswordGenerator's own validated() does in formae.pkl.
+var passwordClasses = []struct {
+	name    string
+	enabled func(*PasswordGenerator) bool
+	chars   string
+}{
+	{"uppercase", func(p *PasswordGenerator) bool { return p.Uppercase }, UppercaseChars},
+	{"lowercase", func(p *PasswordGenerator) bool { return p.Lowercase }, LowercaseChars},
+	{"digits", func(p *PasswordGenerator) bool { return p.Digits }, DigitChars},
+	{"symbols", func(p *PasswordGenerator) bool { return p.Symbols }, SymbolChars},
+}
+
 func drawPassword(p *PasswordGenerator, src ByteSource) (string, error) {
-	if p.Length < 0 {
-		return "", fmt.Errorf("draw: %q has a negative length", p.Label)
+	if p.Length <= 0 {
+		return "", fmt.Errorf("draw: %q has a non-positive length", p.Label)
 	}
 
-	alphabetSet := p.alphabet()
-	if len(alphabetSet) == 0 {
-		return "", fmt.Errorf("draw: %q has no drawable characters", p.Label)
+	// Walk each enabled class individually, the same way PKL's validated()
+	// does, so a class that excludeCharacters empties entirely is caught and
+	// named here rather than surfacing 100,000 attempts later as a generic
+	// "did not satisfy requireEachIncludedType" with no indication of which
+	// class was impossible to draw.
+	anyEnabled := false
+	for _, class := range passwordClasses {
+		if !class.enabled(p) {
+			continue
+		}
+		anyEnabled = true
+		if remaining(class.chars, p.ExcludeCharacters) == "" {
+			return "", fmt.Errorf("draw: %q excludeCharacters removes every %s character", p.Label, class.name)
+		}
+	}
+	if !anyEnabled {
+		return "", fmt.Errorf("draw: %q has no character class enabled", p.Label)
 	}
 
 	// alphabet() returns a map, and Go randomizes map iteration order.
 	// Sorting makes the byte-to-character mapping deterministic, so a given
 	// ByteSource always produces the same value.
+	alphabetSet := p.alphabet()
 	chars := make([]rune, 0, len(alphabetSet))
 	for c := range alphabetSet {
 		chars = append(chars, c)
 	}
-	sort.Slice(chars, func(i, j int) bool { return chars[i] < chars[j] })
+	slices.Sort(chars)
+
+	if len(chars) < 2 {
+		// A one-character alphabet is a constant, not a random value: every
+		// draw would produce the same string regardless of the entropy spent
+		// drawing it. PKL rejects a class emptied entirely (checked above)
+		// but not this narrower case, so it is checked here.
+		return "", fmt.Errorf("draw: %q has an effective alphabet of only %d character(s)", p.Label, len(chars))
+	}
 
 	// required is the set of classes the returned value must contain. Empty
-	// unless requireEachIncludedType is set, in which case satisfiesAll below
-	// is trivially true and the loop below runs exactly once.
+	// unless requireEachIncludedType is set; when it is not set, satisfiesAll
+	// below is trivially true on the first attempt and the loop runs exactly
+	// once. When it is set, satisfiesAll is what forces a candidate missing a
+	// class to be discarded and a fresh one drawn.
 	required := p.guaranteedClasses()
 	if len(required) > p.Length {
 		// Pigeonhole: len(required) distinct classes cannot fit in fewer
@@ -83,6 +122,18 @@ func drawPassword(p *PasswordGenerator, src ByteSource) (string, error) {
 		// it — that would bias both the position and the class frequencies.
 	}
 	return "", fmt.Errorf("draw: %q did not satisfy requireEachIncludedType within %d attempts", p.Label, maxDrawAttempts)
+}
+
+// remaining returns chars with every character in exclude removed. Mirrors
+// PasswordGenerator.remaining() in formae.pkl.
+func remaining(chars, exclude string) string {
+	var b strings.Builder
+	for _, c := range chars {
+		if !strings.ContainsRune(exclude, c) {
+			b.WriteRune(c)
+		}
+	}
+	return b.String()
 }
 
 // classOf reports which canonical alphabet c belongs to, or "" if none (not
@@ -121,8 +172,12 @@ func drawRune(chars []rune, src ByteSource) (rune, error) {
 	limit := 256 - (256 % n) // chars is never larger than the four alphabets combined, well under 256.
 	buf := make([]byte, 1)
 	for {
-		if _, err := src(buf); err != nil {
+		read, err := src(buf)
+		if err != nil {
 			return 0, fmt.Errorf("draw: reading random bytes: %w", err)
+		}
+		if read != len(buf) {
+			return 0, fmt.Errorf("draw: reading random bytes: got %d bytes, want %d", read, len(buf))
 		}
 		b := int(buf[0])
 		if b >= limit {
