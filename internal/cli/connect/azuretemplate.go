@@ -74,9 +74,22 @@ func runAzureTemplate(cc *cobra.Command) error {
 	// Guidance goes to stderr, never stdout: stdout is the template itself,
 	// so `formae connect azure template > trust.json` must carry nothing
 	// else.
-	_, err = fmt.Fprintf(cc.ErrOrStderr(), "deploy this yourself, then register what it creates - installationId and "+
-		"formaeTenantId are already filled in as defaults, so no --parameters are needed:\n\n"+
-		"  az deployment sub create --location eastus --template-file trust.json\n\n"+
+	//
+	// The portal route is listed first because it is the only one that asks
+	// nothing of this machine: whoever deploys it needs authority over the
+	// subscription, but not a CLI, not local credentials, and not even to be
+	// the same person running this command. installationId and
+	// formaeTenantId are filled in as defaults precisely because the portal
+	// pre-populates its parameter form from them - the operator deploying it
+	// there never has to be told either value.
+	_, err = fmt.Fprintf(cc.ErrOrStderr(), "deploy this yourself - installationId and formaeTenantId are already "+
+		"filled in as defaults, so nothing more needs typing:\n\n"+
+		"  - Azure Portal: search \"Deploy a custom template\", choose \"Build your own template in the editor\", "+
+		"paste this file, deploy\n"+
+		"  - az deployment sub create --location <region> --template-file trust.json\n"+
+		"  - or your own pipeline (GitHub Actions with OIDC, Azure DevOps, Terraform), which keeps the credential "+
+		"off any machine entirely\n\n"+
+		"then register what it creates:\n\n"+
 		"  formae connect azure --subscription <id> --tenant-id <t> --client-id <c>\n\n"+
 		"<t> and <c> come from the deployment's outputs (tenantId and clientId).\n")
 	return err

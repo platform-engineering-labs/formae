@@ -8,6 +8,7 @@ package connect
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -103,11 +104,16 @@ func TestAzureTemplateCommandEmitsTheTemplateWithDefaults(t *testing.T) {
 	assert.Equal(t, "acme", tenantParam["defaultValue"],
 		"formaeTenantId must default to the resolved session's formae tenant")
 
-	assert.Contains(t, stderr, "az deployment sub create", "the deploy command must be printed")
+	assert.Contains(t, stderr, "Azure Portal", "the portal route must be offered - the only one needing no CLI")
+	portalIdx := strings.Index(stderr, "Azure Portal")
+	cliIdx := strings.Index(stderr, "az deployment sub create")
+	require.NotEqual(t, -1, cliIdx, "the CLI deploy command must be printed for someone who has az")
+	assert.Less(t, portalIdx, cliIdx, "the portal route must be listed before the CLI one")
+	assert.Contains(t, stderr, "pipeline", "a pipeline route must be mentioned for a credential kept off any machine")
 	assert.Contains(t, stderr, "formae connect azure --subscription",
 		"the register follow-up command must be printed")
 	assert.Contains(t, stderr, "outputs", "the guidance must say the ids come from the deployment's outputs")
-	assert.NotContains(t, stdout, "az deployment sub create",
+	assert.NotContains(t, stdout, "Azure Portal",
 		"guidance must never land on stdout, which a caller redirects straight to a file")
 }
 
