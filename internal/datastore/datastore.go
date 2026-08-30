@@ -548,10 +548,10 @@ type Datastore interface {
 	// backend must agree on what counts as one), or if the generator has
 	// been deleted — a tombstoned id is not resurrected.
 	//
-	// No production caller in this slice: the executable generator node that
-	// draws generations arrives in a later slice. It ships here because the
-	// generation columns are inert without a writer, and a test-only
-	// backdoor would misrepresent a mechanism we are shipping for real use.
+	// Called by the GeneratorUpdater, which records the generation before it
+	// reports the drawn value: a value handed to a destination under a
+	// generation nobody stored is exactly the state the next apply cannot
+	// reason about.
 	AdvanceGeneration(generatorID, generationID string, drawnUnder json.RawMessage) error
 
 	// Close releases database connections

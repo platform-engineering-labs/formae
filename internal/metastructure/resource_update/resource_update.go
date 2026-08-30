@@ -139,17 +139,15 @@ func (ru *ResourceUpdate) ListResolvables() []pkgmodel.FormaeURI {
 // PatchDocument in sync. PatchDocument is a derived view of (PriorState,
 // DesiredState, Schema) — whenever the executor mutates the state the
 // patch is derived from, the patch must be re-derived so the eventual
-// plugin call sees a diff that matches reality. ResolveValue is the only
-// apply-time mutator of DesiredState.Properties, so it owns the regen.
+// plugin call sees a diff that matches reality. ResolveValue and its $gen
+// sibling ResolveGeneratorValue are the only apply-time mutators of
+// DesiredState.Properties, and both route the regen through
+// reDerivePatchAfterSubstitution.
 //
 // mode is the command's configured apply mode (reconcile vs patch), the
 // same mode planning used to derive the original patch — regeneration must
 // use identical semantics or a reconcile-planned removal can silently
 // vanish when a resolvable resolves at execution time.
-//
-// Only Updates need a fresh patch — Create/Delete/Replace carry full
-// desired/prior state to the provider rather than a diff. Patch regen is
-// also a no-op when no Schema is available (sync/discovery paths).
 func (ru *ResourceUpdate) ResolveValue(formaeUri pkgmodel.FormaeURI, value string, mode pkgmodel.FormaApplyMode) error {
 	properties, err := resolver.ResolvePropertyReferences(formaeUri, ru.DesiredState.Properties, value)
 	if err != nil {
@@ -158,20 +156,80 @@ func (ru *ResourceUpdate) ResolveValue(formaeUri pkgmodel.FormaeURI, value strin
 	}
 	ru.DesiredState.Properties = properties
 
-	if ru.Operation == OperationUpdate && len(ru.DesiredState.Schema.Fields) > 0 {
-		patchDoc, createOnlyPatch, derr := ru.regeneratePatchDocument(mode)
-		if derr != nil {
-			return fmt.Errorf("failed to re-derive patch document after resolving %s: %w", formaeUri, derr)
+	return ru.reDerivePatchAfterSubstitution(mode, string(formaeUri))
+}
+
+// ResolveGeneratorValue delivers a generator's freshly drawn value to every
+// destination in this update that still needs it, and keeps the derived
+// PatchDocument in sync. It is the $gen sibling of ResolveValue, and together
+// with it they are the only apply-time mutators of DesiredState.Properties,
+// so between them they own the patch regeneration.
+//
+// The value is written INSIDE each $gen envelope, as its $value, never in
+// place of the envelope: see resolver.SetGenValues for why that distinction
+// is what keeps the credential hashed at rest.
+//
+// A destination whose occurrence classified stable is skipped. The changeset
+// already declines to wire such a destination to the draw, but the two
+// decisions are not the same one: a single resource may hold both a stable
+// and an unstable destination for the same generator, and one edge covers the
+// whole resource. Re-reading the classification here is what stops the fresh
+// draw landing on the stable destination too and rotating a credential
+// nothing asked to rotate.
+//
+// mode is the command's configured apply mode, threaded through for exactly
+// the reason ResolveValue documents: regeneration must use the semantics
+// planning used or a reconcile-planned removal silently vanishes.
+func (ru *ResourceUpdate) ResolveGeneratorValue(generatorKsuid string, value string, mode pkgmodel.FormaApplyMode) error {
+	var paths []string
+	for _, occurrence := range pkgmodel.FindGenObjectsFromProperties(ru.DesiredState.Properties) {
+		if occurrence.Generator != generatorKsuid {
+			continue
 		}
-		if len(createOnlyPatch) > 0 {
-			fields, ferr := createOnlyPatchFields(createOnlyPatch)
-			if ferr != nil {
-				return fmt.Errorf("failed to inspect createOnly patch after resolving %s: %w", formaeUri, ferr)
-			}
-			return LateCreateOnlyChangeError{ResourceLabel: ru.DesiredState.Label, Fields: fields}
+		if IsGenDestinationStable(ru.ProvenanceRecords, occurrence.Path) {
+			continue
 		}
-		ru.DesiredState.PatchDocument = patchDoc
+		paths = append(paths, occurrence.Path)
 	}
+	if len(paths) == 0 {
+		return nil
+	}
+
+	properties, err := resolver.SetGenValues(ru.DesiredState.Properties, paths, value)
+	if err != nil {
+		// The error names paths only; the drawn value is never in it.
+		slog.Error("Failed to deliver a generated value", "error", err)
+		return fmt.Errorf("failed to deliver a generated value: %w", err)
+	}
+	ru.DesiredState.Properties = properties
+
+	return ru.reDerivePatchAfterSubstitution(mode, "generator "+generatorKsuid)
+}
+
+// reDerivePatchAfterSubstitution re-derives PatchDocument after an apply-time
+// mutation of DesiredState.Properties. subject names what was substituted and
+// appears in error messages only — it must never carry a resolved value.
+//
+// Only Updates need a fresh patch — Create/Delete/Replace carry full
+// desired/prior state to the provider rather than a diff. Patch regen is also
+// a no-op when no Schema is available (sync/discovery paths).
+func (ru *ResourceUpdate) reDerivePatchAfterSubstitution(mode pkgmodel.FormaApplyMode, subject string) error {
+	if ru.Operation != OperationUpdate || len(ru.DesiredState.Schema.Fields) == 0 {
+		return nil
+	}
+
+	patchDoc, createOnlyPatch, derr := ru.regeneratePatchDocument(mode)
+	if derr != nil {
+		return fmt.Errorf("failed to re-derive patch document after resolving %s: %w", subject, derr)
+	}
+	if len(createOnlyPatch) > 0 {
+		fields, ferr := createOnlyPatchFields(createOnlyPatch)
+		if ferr != nil {
+			return fmt.Errorf("failed to inspect createOnly patch after resolving %s: %w", subject, ferr)
+		}
+		return LateCreateOnlyChangeError{ResourceLabel: ru.DesiredState.Label, Fields: fields}
+	}
+	ru.DesiredState.PatchDocument = patchDoc
 
 	return nil
 }

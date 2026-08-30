@@ -855,6 +855,60 @@ func (p *ExecutionDAG) propagateResolvedTargetConfig(targetLabel string, pluginC
 	}
 }
 
+// propagateDrawnGeneratorValue delivers a generator's freshly drawn value to
+// every resource-update node holding a destination bound to it. It is the
+// generator analogue of propagateResolvedTargetConfig, and it is safe for the
+// same reason: the ordering edges buildGeneratorResourceEdges added guarantee
+// no destination has dispatched yet, and startResourceUpdate takes a value
+// copy of the update at dispatch, so writing into the live node here is seen
+// by the dispatch that follows and by nothing that already happened.
+//
+// Delivery goes through ResourceUpdate.ResolveGeneratorValue rather than a
+// raw write for two reasons. The value must land inside the $gen envelope, so
+// the $visibility:"Opaque" marker that makes it hash at rest survives; and
+// mutating DesiredState.Properties invalidates the derived PatchDocument,
+// which must be re-derived under mode — the changeset's own apply mode, the
+// one planning used — or a reconcile-planned removal silently vanishes.
+//
+// mode is a parameter rather than DAG state because the ExecutionDAG does not
+// carry the command's configuration; the Changeset does, and the executor
+// passes changeset.Mode.
+//
+// A destination being torn down is skipped, matching the rule that decides
+// whether to draw at all (resource_update.GeneratorsNeedingDraw): a delete's
+// DesiredState is the stored resource, so it carries the stored envelope and
+// writes nothing, and delivering there would put a live credential into a row
+// on its way out.
+//
+// An error means some destination did not receive its value. The caller must
+// fail the draw closed rather than let a destination dispatch its undrawn
+// envelope.
+func (p *ExecutionDAG) propagateDrawnGeneratorValue(generatorKsuid string, value string, mode pkgmodel.FormaApplyMode) error {
+	if value == "" {
+		// A success carrying no value cannot be delivered: writing an empty
+		// string into a destination would hand a provider a blank credential
+		// that nothing downstream would flag.
+		return fmt.Errorf("generator %s reported a successful draw with no value", generatorKsuid)
+	}
+
+	for _, node := range p.Nodes {
+		ru, ok := node.Update.(*resource_update.ResourceUpdate)
+		if !ok {
+			continue
+		}
+		if ru.Operation == resource_update.OperationDelete || ru.Operation == resource_update.OperationReaped {
+			continue
+		}
+		if err := ru.ResolveGeneratorValue(generatorKsuid, value, mode); err != nil {
+			// The error names paths and identities only, never the value.
+			return fmt.Errorf("failed to deliver the value drawn for generator %s to %s: %w",
+				generatorKsuid, ru.URI(), err)
+		}
+	}
+
+	return nil
+}
+
 // clearTargetIncarnationOnResources drops the target-incarnation expectation
 // from every resource-update node bound to targetLabel. It runs after a reaped
 // target recovers: the recover target update mints a fresh incarnation and
