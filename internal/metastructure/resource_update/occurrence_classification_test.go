@@ -22,7 +22,7 @@ import (
 
 func occIdentity(t *testing.T, envelope string) OccurrenceIdentity {
 	t.Helper()
-	id, ok := NormalizeOccurrenceIdentity(gjson.Parse(envelope), nil)
+	id, ok := NormalizeOccurrenceIdentity(gjson.Parse(envelope), nil, nil)
 	require.True(t, ok, "fixture envelope must normalize")
 	return id
 }
@@ -34,12 +34,12 @@ func TestNormalizeOccurrenceIdentity(t *testing.T) {
 	resEnv := `{"$res":true,"$label":"s","$type":"Test::Secret","$stack":"default","$property":"SecretString"}`
 	translate := map[string]string{"default\x00s\x00Test::Secret": "2abcdefghijklmnopqrstuvwxyz"}
 
-	refID, ok := NormalizeOccurrenceIdentity(gjson.Parse(refEnv), nil)
+	refID, ok := NormalizeOccurrenceIdentity(gjson.Parse(refEnv), nil, nil)
 	require.True(t, ok)
 	resID, ok := NormalizeOccurrenceIdentity(gjson.Parse(resEnv), func(stack, label, typ string) (string, bool) {
 		k, found := translate[stack+"\x00"+label+"\x00"+typ]
 		return k, found
-	})
+	}, nil)
 	require.True(t, ok)
 	assert.Equal(t, refID, resID, "a $res to $ref lifecycle rewrite is the same identity, not a repoint")
 
@@ -53,8 +53,85 @@ func TestNormalizeOccurrenceIdentity(t *testing.T) {
 	assert.NotEqual(t, refID, withJSON, "the extraction selector is part of identity")
 
 	// A $res that cannot translate fails closed.
-	_, ok = NormalizeOccurrenceIdentity(gjson.Parse(resEnv), func(string, string, string) (string, bool) { return "", false })
+	_, ok = NormalizeOccurrenceIdentity(gjson.Parse(resEnv), func(string, string, string) (string, bool) { return "", false }, nil)
 	assert.False(t, ok)
+}
+
+// A $gen and a $ref that happen to carry the same KSUID and path are
+// different occurrences, and must not compare equal.
+func TestNormalizeOccurrenceIdentity_GenAndRefWithSameKsuidDiffer(t *testing.T) {
+	const ksuid = "2abcdefghijklmnopqrstuvwxyz"
+	refID, ok := NormalizeOccurrenceIdentity(gjson.Parse(`{"$ref":"formae://`+ksuid+`#/value"}`), nil, nil)
+	require.True(t, ok)
+	genID, ok := NormalizeOccurrenceIdentity(
+		gjson.Parse(`{"$gen":true,"$generator":"`+ksuid+`","$output":"value","$visibility":"Opaque"}`), nil, nil)
+	require.True(t, ok)
+
+	require.Equal(t, refID.Ksuid, genID.Ksuid, "fixture must share a KSUID")
+	require.Equal(t, refID.PropertyPath, genID.PropertyPath, "fixture must share a path")
+	assert.NotEqual(t, refID, genID, "same KSUID and path from different tables are still different occurrences")
+}
+
+// A translated $gen normalizes to the generator's KSUID and its output name.
+func TestNormalizeOccurrenceIdentity_TranslatedGen(t *testing.T) {
+	env := gjson.Parse(`{"$gen":true,"$generator":"2abcdefghijklmnopqrstuvwxyz","$output":"value","$visibility":"Opaque"}`)
+	id, ok := NormalizeOccurrenceIdentity(env, nil, nil)
+	require.True(t, ok)
+	assert.Equal(t, OccurrenceIdentity{
+		Kind:         OccurrenceKindGenerator,
+		Ksuid:        "2abcdefghijklmnopqrstuvwxyz",
+		PropertyPath: "value",
+	}, id)
+}
+
+// An authored $gen normalizes through the lookup, so a $gen envelope and its
+// translated form compare equal — a lifecycle rewrite is not a repoint.
+func TestNormalizeOccurrenceIdentity_AuthoredGenMatchesTranslated(t *testing.T) {
+	authored := `{"$gen":true,"$label":"db-password","$stack":"default","$output":"value","$visibility":"Opaque"}`
+	translated := `{"$gen":true,"$generator":"2abcdefghijklmnopqrstuvwxyz","$output":"value","$visibility":"Opaque"}`
+	lookup := func(stack, label string) (string, bool) {
+		if stack == "default" && label == "db-password" {
+			return "2abcdefghijklmnopqrstuvwxyz", true
+		}
+		return "", false
+	}
+
+	authoredID, ok := NormalizeOccurrenceIdentity(gjson.Parse(authored), nil, lookup)
+	require.True(t, ok)
+	translatedID, ok := NormalizeOccurrenceIdentity(gjson.Parse(translated), nil, nil)
+	require.True(t, ok)
+	assert.Equal(t, translatedID, authoredID, "a $gen lifecycle rewrite is the same identity, not a repoint")
+}
+
+// A $gen that cannot be normalized fails closed.
+func TestNormalizeOccurrenceIdentity_UnresolvableGenFailsClosed(t *testing.T) {
+	authored := gjson.Parse(`{"$gen":true,"$label":"db-password","$stack":"default","$output":"value"}`)
+
+	_, ok := NormalizeOccurrenceIdentity(authored, nil, nil)
+	assert.False(t, ok, "no generator lookup provided")
+
+	_, ok = NormalizeOccurrenceIdentity(authored, nil, func(string, string) (string, bool) { return "", false })
+	assert.False(t, ok, "generator lookup misses")
+}
+
+// Every already-persisted OccurrenceRecord has no Kind key: it must
+// deserialize as a resource occurrence, not silently read back as a
+// generator reference.
+func TestOccurrenceIdentity_ZeroValueIsResourceKind(t *testing.T) {
+	var id OccurrenceIdentity
+	require.NoError(t, json.Unmarshal([]byte(`{"Ksuid":"2abcdefghijklmnopqrstuvwxyz","PropertyPath":"SecretString","JSONPath":""}`), &id))
+	assert.Equal(t, OccurrenceKindResource, id.Kind, "a Kind-less legacy record must read back as a resource occurrence")
+
+	var rec OccurrenceRecord
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"DestinationPath": "Password",
+		"DesiredIdentity": {"Ksuid":"2abcdefghijklmnopqrstuvwxyz","PropertyPath":"SecretString","JSONPath":""},
+		"StoredIdentity": {"Ksuid":"2abcdefghijklmnopqrstuvwxyz","PropertyPath":"SecretString","JSONPath":""},
+		"HasStoredWritten": true,
+		"Class": 1
+	}`), &rec))
+	assert.Equal(t, OccurrenceKindResource, rec.DesiredIdentity.Kind)
+	assert.Equal(t, OccurrenceKindResource, rec.StoredIdentity.Kind)
 }
 
 func TestClassifyOccurrence(t *testing.T) {

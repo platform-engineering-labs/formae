@@ -23,15 +23,16 @@ type referenceOccurrence struct {
 }
 
 // collectReferenceEnvelopes walks a properties document and returns every
-// reference envelope ($ref or $res shaped) with its dotted destination path,
-// in the resolver's walk convention (array elements addressed by index).
+// reference envelope ($ref, $res, or $gen shaped) with its dotted
+// destination path, in the resolver's walk convention (array elements
+// addressed by index).
 func collectReferenceEnvelopes(properties json.RawMessage) []referenceOccurrence {
 	var out []referenceOccurrence
 	var walk func(prefix string, node gjson.Result)
 	walk = func(prefix string, node gjson.Result) {
 		switch {
 		case node.IsObject():
-			if node.Get("$ref").Exists() || node.Get("$res").Bool() {
+			if node.Get("$ref").Exists() || node.Get("$res").Bool() || node.Get("$gen").Bool() {
 				out = append(out, referenceOccurrence{Path: prefix, Envelope: node})
 				return
 			}
@@ -106,9 +107,9 @@ func buildProvenanceRecords(
 
 	var records []OccurrenceRecord
 	for _, occ := range occurrences {
-		desiredID, desiredOK := NormalizeOccurrenceIdentity(occ.Envelope, nil)
+		desiredID, desiredOK := NormalizeOccurrenceIdentity(occ.Envelope, nil, nil)
 		storedEnvelope := storedParsed.Get(occ.Path)
-		storedID, storedOK := NormalizeOccurrenceIdentity(storedEnvelope, nil)
+		storedID, storedOK := NormalizeOccurrenceIdentity(storedEnvelope, nil, nil)
 
 		rec := OccurrenceRecord{
 			DestinationPath:  occ.Path,
