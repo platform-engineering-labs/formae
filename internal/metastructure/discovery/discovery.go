@@ -579,6 +579,18 @@ func scanTargetForResourceType(target pkgmodel.Target, op ListOperation, data Di
 		pluginConfig = cleanConfig
 	}
 
+	// A generator reference in the target's config names a credential that was
+	// never drawn; the envelope is never that credential. Sending it would hand
+	// the plugin a JSON object where a token belongs. Conversion leaves such an
+	// envelope untouched, so this checks the document either branch above
+	// settled on. Skip this resource type for the cycle rather than scanning
+	// with a credential formae does not have: a scan that cannot authenticate
+	// returns nothing and would be indistinguishable from an empty account.
+	if err := resolver.GuardNoUnresolvedGenerators(pluginConfig); err != nil {
+		delete(data.outstandingListOperations, mapKey)
+		return fmt.Errorf("cannot scan %s in target %s: its configuration is bound to a generator whose value has not been drawn: %w", op.ResourceType, target.Label, err)
+	}
+
 	err = proc.Send(spawnRes.PID, plugin.ListResources{
 		Namespace:      target.Namespace,
 		TargetLabel:    target.Label,
