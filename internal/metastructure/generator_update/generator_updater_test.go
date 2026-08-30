@@ -35,8 +35,9 @@ func (stubGeneratorUpdaterLog) Panic(string, ...any)   {}
 type stubGeneratorUpdaterProcess struct {
 	gen.Process
 
-	mu    sync.Mutex
-	sends []any
+	mu      sync.Mutex
+	sends   []any
+	sendErr error
 }
 
 func (p *stubGeneratorUpdaterProcess) Log() gen.Log { return stubGeneratorUpdaterLog{} }
@@ -44,6 +45,9 @@ func (p *stubGeneratorUpdaterProcess) PID() gen.PID { return gen.PID{Node: "test
 func (p *stubGeneratorUpdaterProcess) Send(_ any, msg any) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.sendErr != nil {
+		return p.sendErr
+	}
 	p.sends = append(p.sends, msg)
 	return nil
 }
@@ -125,7 +129,6 @@ func drawingData(t *testing.T, op GeneratorOperation, advancer *recordingAdvance
 			State:      GeneratorUpdateStateNotStarted,
 			StackLabel: "app",
 		},
-		commandID:   "cmd-1",
 		requestedBy: gen.PID{Node: "test-node", ID: 99},
 		entropy:     countingSource(),
 		datastore:   advancer,
@@ -285,6 +288,85 @@ func TestGeneratorUpdaterActorName_DistinguishesStacks(t *testing.T) {
 	assert.NotEqual(t,
 		actornames.GeneratorUpdater(a.NodeURI(), "cmd-1"),
 		actornames.GeneratorUpdater(b.NodeURI(), "cmd-1"))
+}
+
+// TestGeneratorUpdater_UndeliverableDrawTriggerIsNotASpecFailure asserts that
+// failing to hand the draw to ourselves is reported as its own reason. The
+// generator's spec is not at fault, so the operator must not be sent to check
+// its length and character classes.
+func TestGeneratorUpdater_UndeliverableDrawTriggerIsNotASpecFailure(t *testing.T) {
+	data := drawingData(t, GeneratorOperationCreate, &recordingAdvancer{})
+	proc := &stubGeneratorUpdaterProcess{sendErr: datastoreError("mailbox full")}
+
+	state, out, _, err := handleStartGeneratorUpdate(gen.PID{}, StateNotStarted, data,
+		StartGeneratorUpdate{GeneratorUpdate: data.generatorUpdate}, proc)
+	require.NoError(t, err)
+
+	assert.Equal(t, StateFinishedWithError, state)
+	assert.Equal(t, failureReasonDrawNotStarted, out.errorMessage)
+	assert.NotEqual(t, failureReasonDrawFailed, out.errorMessage)
+	assert.Empty(t, out.drawnValue)
+}
+
+// TestGeneratorUpdater_EachDrawGetsAFreshGeneration asserts two successive
+// draws record two different generation identities. The generation ID is the
+// rotation's identity, and a later apply compares a digest of it against what
+// each destination was stamped with, so a repeated value would make a fresh
+// draw indistinguishable from the previous one.
+func TestGeneratorUpdater_EachDrawGetsAFreshGeneration(t *testing.T) {
+	advancer := &recordingAdvancer{}
+	proc := &stubGeneratorUpdaterProcess{}
+
+	for range 2 {
+		state, _, _, err := handleDrawValue(gen.PID{}, StateDrawing, drawingData(t, GeneratorOperationCreate, advancer), DrawValue{}, proc)
+		require.NoError(t, err)
+		require.Equal(t, StateFinishedSuccessfully, state)
+	}
+
+	require.Len(t, advancer.calls, 2)
+	assert.NotEqual(t, advancer.calls[0].generationID, advancer.calls[1].generationID,
+		"every draw must record a fresh generation identity")
+}
+
+// TestGeneratorUpdater_FaultyEntropyFailsWithoutAValue asserts a byte source
+// that cannot deliver — either by erroring or by returning fewer bytes than
+// asked for without an error — fails the draw with the fixed reason, attaches
+// no value, and never advances the generation.
+func TestGeneratorUpdater_FaultyEntropyFailsWithoutAValue(t *testing.T) {
+	tests := []struct {
+		name   string
+		source pkgmodel.ByteSource
+	}{
+		{
+			name: "source returns an error",
+			source: func([]byte) (int, error) {
+				return 0, datastoreError("entropy pool exhausted at /dev/urandom")
+			},
+		},
+		{
+			name:   "source short-reads without an error",
+			source: func([]byte) (int, error) { return 0, nil },
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			advancer := &recordingAdvancer{}
+			data := drawingData(t, GeneratorOperationCreate, advancer)
+			data.entropy = tt.source
+
+			proc := &stubGeneratorUpdaterProcess{}
+			state, out, _, err := handleDrawValue(gen.PID{}, StateDrawing, data, DrawValue{}, proc)
+			require.NoError(t, err)
+
+			assert.Equal(t, StateFinishedWithError, state)
+			assert.Equal(t, failureReasonDrawFailed, out.errorMessage)
+			assert.NotContains(t, out.errorMessage, "urandom",
+				"the operator-facing message must not carry raw error text")
+			assert.Empty(t, out.drawnValue)
+			assert.Empty(t, advancer.calls, "a failed draw must not advance the generation")
+		})
+	}
 }
 
 // datastoreError builds an error carrying text that must not reach an operator.

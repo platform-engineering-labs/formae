@@ -37,6 +37,12 @@ const (
 	failureReasonSpecNotRecordable = "cannot draw a value for this generator: formae could not record the specification the value would be drawn under."
 
 	failureReasonGenerationNotRecorded = "cannot draw a value for this generator: the value was drawn but its generation could not be recorded, so the value was discarded. Retry the apply."
+
+	// Distinct from failureReasonDrawFailed on purpose: the generator's spec
+	// is fine here, the actor could not hand the draw to itself. Telling the
+	// operator to check the length and character classes would send them
+	// looking for a fault that is not there.
+	failureReasonDrawNotStarted = "cannot draw a value for this generator: formae could not start the draw. Retry the apply."
 )
 
 // generationAdvancer is the minimal datastore surface this actor needs: it
@@ -61,9 +67,14 @@ type GeneratorUpdater struct {
 }
 
 // StartGeneratorUpdate is sent to the GeneratorUpdater to begin a draw.
+//
+// It carries no CommandID, unlike StartTargetUpdate: a TargetUpdater needs one
+// to address the per-command ResolveCache actor and to stamp the persist
+// message it sends the ResourcePersister, and this actor sends neither. The
+// command is already in the actor's registered name (see
+// actornames.GeneratorUpdater), which is the caller's to build.
 type StartGeneratorUpdate struct {
 	GeneratorUpdate GeneratorUpdate
-	CommandID       string
 }
 
 // DrawValue is sent by the actor to itself to leave StateNotStarted before
@@ -91,7 +102,6 @@ type Shutdown struct{}
 // and is never persisted.
 type GeneratorUpdaterData struct {
 	generatorUpdate GeneratorUpdate
-	commandID       string
 	requestedBy     gen.PID
 	// entropy is the source Draw reads random bytes from: crypto/rand.Read in
 	// production, a deterministic source in tests so a specific drawn value is
@@ -158,11 +168,10 @@ func (g *GeneratorUpdater) Init(args ...any) (statemachine.StateMachineSpec[Gene
 // itself, so the FSM reports the state it is actually in while drawing.
 func handleStartGeneratorUpdate(from gen.PID, state gen.Atom, data GeneratorUpdaterData, message StartGeneratorUpdate, proc gen.Process) (gen.Atom, GeneratorUpdaterData, []statemachine.Action, error) {
 	data.generatorUpdate = message.GeneratorUpdate
-	data.commandID = message.CommandID
 
 	if err := proc.Send(proc.PID(), DrawValue{}); err != nil {
 		proc.Log().Error("GeneratorUpdater: failed to send draw message node=%s: %v", data.generatorUpdate.NodeURI(), err)
-		data.errorMessage = failureReasonDrawFailed
+		data.errorMessage = failureReasonDrawNotStarted
 		return StateFinishedWithError, data, nil, nil
 	}
 
