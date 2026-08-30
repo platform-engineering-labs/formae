@@ -423,6 +423,19 @@ func start(from gen.PID, state gen.Atom, data ResourceUpdateData, message StartR
 		if err == nil {
 			data.resourceUpdate.ResourceTarget.Config = pluginConfig
 		}
+		// The provider boundary for the target's config. It rides along on every
+		// plugin operation this update performs — reads and deletes included, both
+		// of which need the target's real credentials — so the guard runs on
+		// whatever config was settled on above, converted or not. A generator
+		// reference here is a credential that was never drawn; handing the
+		// envelope to the plugin puts a JSON object where a token belongs.
+		if err := resolver.GuardNoUnresolvedGenerators(data.resourceUpdate.ResourceTarget.Config); err != nil {
+			proc.Log().Error("target config is not writable to a plugin target=%s: %v",
+				data.resourceUpdate.ResourceTarget.Label, err)
+			data.resourceUpdate.FailureReason = failureReasonUndrawnGeneratorValueInTargetConfig
+			data.resourceUpdate.MarkAsFailed()
+			return StateFinishedWithError, data, nil, nil
+		}
 	}
 
 	// Get LabelConfig from PluginCoordinator (handles both external and local plugins)
@@ -719,7 +732,12 @@ const (
 
 	failureReasonUnrecoverableOpaqueValueOnCreate = "cannot create this resource: the desired value of one of its secret properties is a stored hash, which formae cannot send to the provider as the live value. Re-supply the value in your forma."
 	failureReasonUndrawnGeneratorValueOnCreate    = "cannot create this resource: one of its properties is bound to a generator whose value has not been drawn, so formae has nothing to send to the provider. Declare the value directly instead of binding it to a generator."
-	failureReasonPluginRequestPreparationOnCreate = "cannot create this resource: formae could not build the provider request for it."
+
+	// Worded for the target rather than the operation: the target's config
+	// rides along on every plugin call this update makes, so the same text is
+	// right whether the update was creating, updating, reading or deleting.
+	failureReasonUndrawnGeneratorValueInTargetConfig = "cannot reach the provider for this resource: its target's configuration is bound to a generator whose value has not been drawn, so formae has nothing to authenticate with. Declare the value directly instead of binding it to a generator."
+	failureReasonPluginRequestPreparationOnCreate    = "cannot create this resource: formae could not build the provider request for it."
 	// Dispatching covers both a coordinator that never returned an operator and
 	// a call that did not complete after the create was handed to the plugin, so
 	// the text asserts neither that a plugin was reached nor that the create
