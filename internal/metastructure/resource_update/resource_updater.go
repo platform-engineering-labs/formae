@@ -74,8 +74,10 @@ func convertResourceForPluginWith(res pkgmodel.Resource, convert func(json.RawMe
 	}
 
 	// Strip nested empty collections from PKL null rendering artifacts.
-	// Top-level empty collections are preserved (may be intentional clears).
-	cleanedProps, err := patch.StripNestedEmptyCollections(convertedProps)
+	// Top-level empty collections are preserved (may be intentional clears),
+	// and preserveEmptyValues-hinted fields keep their subtrees verbatim in
+	// every plugin-bound context: their empties are values, not artifacts.
+	cleanedProps, err := patch.StripNestedEmptyCollectionsExcept(convertedProps, patch.PreserveEmptyRootFields(res.Schema))
 	if err != nil {
 		return res, err
 	}

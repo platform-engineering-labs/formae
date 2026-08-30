@@ -117,6 +117,13 @@ func (s *FakeAWS) SupportedResources() []plugin.ResourceDescriptor {
 			Type:         secretsManagerSecretType,
 			Discoverable: false,
 		},
+		// Custom::Resource models an opaque-bodied resource whose Spec is a
+		// user-owned document: hinted Atomic (whole-value diff) and
+		// preserveEmptyValues (empty collections inside it are values).
+		{
+			Type:         "FakeAWS::Custom::Resource",
+			Discoverable: false,
+		},
 	}
 }
 
@@ -170,6 +177,14 @@ func (s *FakeAWS) SchemaForResourceType(resourceType string) (model.Schema, erro
 			Fields:     []string{"Name", "Description", "SecretString", "Tags"},
 			Hints: map[string]model.FieldHint{
 				"SecretString": {Opaque: true},
+			},
+		}, nil
+	case "FakeAWS::Custom::Resource":
+		return model.Schema{
+			Identifier: "FormaeId",
+			Fields:     []string{"ApiVersion", "Kind", "FormaeId", "Spec"},
+			Hints: map[string]model.FieldHint{
+				"Spec": {UpdateMethod: model.FieldUpdateMethodAtomic, PreserveEmptyValues: true},
 			},
 		}, nil
 	default:

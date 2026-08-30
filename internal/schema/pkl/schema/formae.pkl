@@ -350,7 +350,10 @@ open class FieldHint extends Annotation {
     hidden edgeKind: EdgeKind = "default"        // NEW
     hidden indexField: String?
     hidden updateMethod: FieldUpdateMethod?
-    hidden format: String = ""                   // NEW: serialized-content format (e.g. "json"); PLA-196
+    /// Opts this field's subtree out of empty-value normalization: empty
+    /// collections inside it are treated as values and preserved end to end.
+    hidden preserveEmptyValues: Boolean = false
+    hidden format: String = ""                   // serialized-content format (e.g. "json")
 
     hidden outputField: String?
     hidden outputTransformation: ((Any) -> Any)?
@@ -367,6 +370,7 @@ open class FieldHint extends Annotation {
     fixed AttachesTo: Boolean = attachesTo
     fixed EdgeKind: String = edgeKind
     fixed UpdateMethod: String = updateMethod ?? ""
+    fixed PreserveEmptyValues: Boolean = preserveEmptyValues
     fixed IndexField: String = indexField ?? ""
     fixed Format: String = format                // NEW
 }
