@@ -80,7 +80,10 @@ func GenerationSatisfies(drawn, desired Generator) bool {
 	switch d := drawn.(type) {
 	case *PasswordGenerator:
 		w, ok := desired.(*PasswordGenerator)
-		if !ok {
+		// A typed nil on either side is a generator that could not be
+		// resolved, not a spec. The interface guard above cannot see it, so
+		// check the concrete pointers before dereferencing either.
+		if !ok || d == nil || w == nil {
 			return false
 		}
 		// Length is exact, so any change invalidates the drawn value.

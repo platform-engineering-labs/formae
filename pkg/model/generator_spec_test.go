@@ -70,3 +70,11 @@ func TestGenerationSatisfies_DroppingARequirementIsSatisfied(t *testing.T) {
 func TestGenerationSatisfies_DifferentGeneratorTypesAreNotSatisfied(t *testing.T) {
 	assert.False(t, pkgmodel.GenerationSatisfies(pw(func(*pkgmodel.PasswordGenerator) {}), nil))
 }
+
+// A typed nil generator is not a satisfied generation. The rotation decision
+// must fail safe rather than panic when a lookup yields no generator.
+func TestGenerationSatisfies_TypedNilIsNotSatisfied(t *testing.T) {
+	var missing *pkgmodel.PasswordGenerator
+	assert.False(t, pkgmodel.GenerationSatisfies(missing, pw(func(*pkgmodel.PasswordGenerator) {})))
+	assert.False(t, pkgmodel.GenerationSatisfies(pw(func(*pkgmodel.PasswordGenerator) {}), missing))
+}
