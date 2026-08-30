@@ -361,8 +361,9 @@ func (d *DatastoreMSSQL) GetGeneratorIdentityByID(generatorID string) (datastore
 // AdvanceGeneration records that a new generation was drawn for this
 // generator, under this spec. Writes a new version row that carries forward
 // the existing label/type/stack/generator_data unchanged — only the
-// generation columns change. Errors if drawnUnder is empty, or if the
-// generator's latest row is a tombstone: a deleted id is not resurrected.
+// generation columns change. Errors if generationID is empty, if drawnUnder
+// is not valid JSON, or if the generator's latest row is a tombstone: a
+// deleted id is not resurrected.
 //
 // No production caller in this slice: the executable generator node that
 // draws generations arrives in a later slice. It ships here because the
@@ -372,8 +373,11 @@ func (d *DatastoreMSSQL) AdvanceGeneration(generatorID, generationID string, dra
 	ctx, span := mssqlTracer.Start(context.Background(), "AdvanceGeneration")
 	defer span.End()
 
-	if len(drawnUnder) == 0 {
-		return fmt.Errorf("advance generation: drawnUnder spec must not be empty")
+	if generationID == "" {
+		return fmt.Errorf("advance generation: generationID must not be empty")
+	}
+	if !json.Valid(drawnUnder) {
+		return fmt.Errorf("advance generation: drawnUnder spec must be valid JSON")
 	}
 
 	var label, generatorType, stackID, generatorData, operation string

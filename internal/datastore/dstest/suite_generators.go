@@ -692,3 +692,37 @@ func RunAdvanceGenerationOnDeletedGeneratorFailsWithoutResurrecting(t *testing.T
 		assert.Nil(t, got, "the deleted generator must not be resurrected by label")
 	})
 }
+
+// RunAdvanceGenerationRejectsMalformedSpecAndEmptyGenerationID verifies that
+// AdvanceGeneration validates both of its inputs before writing anything: a
+// drawnUnder spec that is not valid JSON is rejected the same way an empty
+// one is, and an empty generationID is rejected too, rather than being
+// written and read back indistinguishably from "no generation drawn".
+func RunAdvanceGenerationRejectsMalformedSpecAndEmptyGenerationID(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("AdvanceGenerationRejectsMalformedSpecAndEmptyGenerationID", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		stack := createGeneratorStack(t, ds, "durable")
+		gen := testPasswordGenerator("db-password", stack, 32)
+		_, err := ds.CreateGenerator(gen, "cmd-1")
+		require.NoError(t, err)
+
+		id, err := ds.GetGeneratorIdentity("db-password", stack.Label)
+		require.NoError(t, err)
+
+		validSpec, err := json.Marshal(gen)
+		require.NoError(t, err)
+
+		err = ds.AdvanceGeneration(id.ID, "generation-1", json.RawMessage(`{not valid json`))
+		assert.Error(t, err, "a malformed drawnUnder spec must be rejected")
+
+		err = ds.AdvanceGeneration(id.ID, "", validSpec)
+		assert.Error(t, err, "an empty generationID must be rejected")
+
+		after, err := ds.GetGeneratorIdentity("db-password", stack.Label)
+		require.NoError(t, err)
+		assert.Empty(t, after.GenerationID, "neither rejected call may have written a generation")
+	})
+}

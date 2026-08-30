@@ -535,9 +535,10 @@ type Datastore interface {
 	GetGeneratorIdentityByID(generatorID string) (GeneratorIdentity, error)
 	// AdvanceGeneration records that a new generation was drawn for this
 	// generator, under this spec. Writes a new version row, preserving the
-	// KSUID. Errors if drawnUnder is empty (a generation always has a spec
-	// it was drawn under) or if the generator has been deleted — a
-	// tombstoned id is not resurrected.
+	// KSUID. Errors if generationID is empty, if drawnUnder is not valid
+	// JSON (a generation always has a spec it was drawn under, and every
+	// backend must agree on what counts as one), or if the generator has
+	// been deleted — a tombstoned id is not resurrected.
 	//
 	// No production caller in this slice: the executable generator node that
 	// draws generations arrives in a later slice. It ships here because the

@@ -261,6 +261,7 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunAdvanceGenerationTwiceSecondWins(t, newDS)
 	RunAdvanceGenerationDoesNotAffectOtherGenerator(t, newDS)
 	RunAdvanceGenerationOnDeletedGeneratorFailsWithoutResurrecting(t, newDS)
+	RunAdvanceGenerationRejectsMalformedSpecAndEmptyGenerationID(t, newDS)
 
 	RunFindResourcesDependingOn(t, newDS)
 	RunFindResourcesDependingOnMultipleRefs(t, newDS)
