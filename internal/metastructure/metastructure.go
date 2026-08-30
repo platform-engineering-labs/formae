@@ -865,6 +865,51 @@ func translateToAPICommand(fa *forma_command.FormaCommand) apimodel.Command {
 		})
 	}
 
+	for _, gu := range fa.GeneratorUpdates {
+		var dur time.Duration = 0
+		if !gu.StartTs.IsZero() {
+			dur = gu.ModifiedTs.Sub(gu.StartTs)
+		}
+
+		// Generator may be nil defensively (mirroring the pu.Policy nil
+		// check above); in practice the generator diff always sets it, on
+		// every operation. On a Delete it is the existing (about-to-be-
+		// removed) generator; on a Create/Update it is the desired one.
+		var generatorLabel, generatorType string
+		if gu.Generator != nil {
+			generatorLabel = gu.Generator.GetLabel()
+			generatorType = gu.Generator.GetType()
+		}
+
+		// Marshal generator configs for diff display. A concrete Generator's
+		// own KSUID field is tagged json:"-", so this can never leak
+		// generator identity, and nothing here ever touches
+		// pkgmodel.GeneratorIdentity (the drawing spec) or a drawn value —
+		// neither exists on Generator, and no generated value exists at
+		// plan/simulate time to marshal in the first place.
+		var generatorConfig, oldGeneratorConfig json.RawMessage
+		if gu.Generator != nil {
+			generatorConfig, _ = json.Marshal(gu.Generator)
+		}
+		if gu.ExistingGenerator != nil {
+			oldGeneratorConfig, _ = json.Marshal(gu.ExistingGenerator)
+		}
+
+		apiCommand.GeneratorUpdates = append(apiCommand.GeneratorUpdates, apimodel.GeneratorUpdate{
+			GeneratorLabel:     generatorLabel,
+			GeneratorType:      generatorType,
+			StackName:          gu.StackLabel,
+			Operation:          string(gu.Operation),
+			State:              string(gu.State),
+			Duration:           dur.Milliseconds(),
+			ErrorMessage:       gu.ErrorMessage,
+			GeneratorConfig:    generatorConfig,
+			OldGeneratorConfig: oldGeneratorConfig,
+			StartTs:            gu.StartTs,
+			ModifiedTs:         gu.ModifiedTs,
+		})
+	}
+
 	return apiCommand
 }
 

@@ -56,19 +56,20 @@ const (
 )
 
 type Command struct {
-	CommandID       string           `json:"CommandId"`
-	Command         string           `json:"Command"`
-	Mode            string           `json:"Mode,omitempty"` // "reconcile" | "patch"
-	Source          string           `json:"Source,omitempty"`
-	Subject         string           `json:",omitempty"`
-	SubjectName     string           `json:",omitempty"`
-	State           string           `json:"State"`
-	StartTs         time.Time        `json:"StartTs,omitempty"`
-	EndTs           time.Time        `json:"EndTs,omitempty"`
-	ResourceUpdates []ResourceUpdate `json:"ResourceUpdates,omitempty"`
-	TargetUpdates   []TargetUpdate   `json:"TargetUpdates,omitempty"`
-	StackUpdates    []StackUpdate    `json:"StackUpdates,omitempty"`
-	PolicyUpdates   []PolicyUpdate   `json:"PolicyUpdates,omitempty"`
+	CommandID        string            `json:"CommandId"`
+	Command          string            `json:"Command"`
+	Mode             string            `json:"Mode,omitempty"` // "reconcile" | "patch"
+	Source           string            `json:"Source,omitempty"`
+	Subject          string            `json:",omitempty"`
+	SubjectName      string            `json:",omitempty"`
+	State            string            `json:"State"`
+	StartTs          time.Time         `json:"StartTs,omitempty"`
+	EndTs            time.Time         `json:"EndTs,omitempty"`
+	ResourceUpdates  []ResourceUpdate  `json:"ResourceUpdates,omitempty"`
+	TargetUpdates    []TargetUpdate    `json:"TargetUpdates,omitempty"`
+	StackUpdates     []StackUpdate     `json:"StackUpdates,omitempty"`
+	PolicyUpdates    []PolicyUpdate    `json:"PolicyUpdates,omitempty"`
+	GeneratorUpdates []GeneratorUpdate `json:"GeneratorUpdates,omitempty"`
 	// SuppressedDrift records out-of-band movement on provider-default
 	// fields this command's plan could not see; completing the command
 	// absorbs it (see SuppressedDriftNote).
@@ -214,6 +215,27 @@ type PolicyUpdate struct {
 	ReferencingStacks []string        `json:"ReferencingStacks,omitempty"` // For skip operations - stacks still referencing this policy
 	StartTs           time.Time       `json:"StartTs,omitempty"`
 	ModifiedTs        time.Time       `json:"ModifiedTs,omitempty"`
+}
+
+// GeneratorUpdate is the API projection of a generator change: a create, an
+// update (spec change and/or rename), or a delete. GeneratorConfig and
+// OldGeneratorConfig carry the generator's declared spec only — the fields a
+// forma author writes. A generator's own identity (its KSUID) and drawn
+// generation are controller state that never reaches this projection: no
+// concrete Generator marshals its ID, and the value a generation drew does
+// not exist at plan/simulate time to project in the first place.
+type GeneratorUpdate struct {
+	GeneratorLabel     string          `json:"GeneratorLabel"`
+	GeneratorType      string          `json:"GeneratorType"` // "password", etc.
+	StackName          string          `json:"StackName,omitempty"`
+	Operation          string          `json:"Operation"`
+	State              string          `json:"State"`
+	Duration           int64           `json:"Duration,omitempty"` // milliseconds
+	ErrorMessage       string          `json:"ErrorMessage,omitempty"`
+	GeneratorConfig    json.RawMessage `json:"GeneratorConfig,omitempty"`    // Current generator configuration
+	OldGeneratorConfig json.RawMessage `json:"OldGeneratorConfig,omitempty"` // Previous generator configuration (for updates)
+	StartTs            time.Time       `json:"StartTs,omitempty"`
+	ModifiedTs         time.Time       `json:"ModifiedTs,omitempty"`
 }
 
 // PolicyInventoryItem represents a standalone policy in the inventory

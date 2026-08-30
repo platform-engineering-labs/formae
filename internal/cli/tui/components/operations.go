@@ -53,13 +53,13 @@ func OperationColor(p theme.Palette, op string) lipgloss.AdaptiveColor {
 // question. Returns "" when there is nothing to do. th supplies the active
 // theme's colors for the rendered summary.
 func PromptForOperations(th *theme.Theme, cmd *apimodel.Command) string {
-	targetCreates, targetUpdates, stackCreates, stackUpdates, policyCreates, policyUpdates, resourceCreates, resourceUpdates, resourceDeletes, resourceReplaces := analyzeCommands(cmd)
+	targetCreates, targetUpdates, stackCreates, stackUpdates, policyCreates, policyUpdates, generatorCreates, generatorUpdates, resourceCreates, resourceUpdates, resourceDeletes, resourceReplaces := analyzeCommands(cmd)
 
-	if targetCreates == 0 && targetUpdates == 0 && stackCreates == 0 && stackUpdates == 0 && policyCreates == 0 && policyUpdates == 0 && resourceCreates == 0 && resourceUpdates == 0 && resourceDeletes == 0 && resourceReplaces == 0 {
+	if targetCreates == 0 && targetUpdates == 0 && stackCreates == 0 && stackUpdates == 0 && policyCreates == 0 && policyUpdates == 0 && generatorCreates == 0 && generatorUpdates == 0 && resourceCreates == 0 && resourceUpdates == 0 && resourceDeletes == 0 && resourceReplaces == 0 {
 		return ""
 	}
 
-	summary := operationSummary(th, targetCreates, targetUpdates, stackCreates, stackUpdates, policyCreates, policyUpdates, resourceCreates, resourceUpdates, resourceDeletes, resourceReplaces)
+	summary := operationSummary(th, targetCreates, targetUpdates, stackCreates, stackUpdates, policyCreates, policyUpdates, generatorCreates, generatorUpdates, resourceCreates, resourceUpdates, resourceDeletes, resourceReplaces)
 	if summary == "" {
 		return ""
 	}
@@ -69,7 +69,7 @@ func PromptForOperations(th *theme.Theme, cmd *apimodel.Command) string {
 
 // analyzeCommands counts each operation type in cmd, grouping grouped
 // (delete+create) pairs as replaces.
-func analyzeCommands(cmd *apimodel.Command) (targetCreates, targetUpdates, stackCreates, stackUpdates, policyCreates, policyUpdates, resourceCreates, resourceUpdates, resourceDeletes, resourceReplaces int) {
+func analyzeCommands(cmd *apimodel.Command) (targetCreates, targetUpdates, stackCreates, stackUpdates, policyCreates, policyUpdates, generatorCreates, generatorUpdates, resourceCreates, resourceUpdates, resourceDeletes, resourceReplaces int) {
 	// Group operations by GroupId
 	groupedOperations := make(map[string][]apimodel.ResourceUpdate)
 	ungroupedOperations := make([]apimodel.ResourceUpdate, 0)
@@ -161,14 +161,24 @@ func analyzeCommands(cmd *apimodel.Command) (targetCreates, targetUpdates, stack
 		}
 	}
 
+	// Count generator updates
+	for _, gu := range cmd.GeneratorUpdates {
+		switch gu.Operation {
+		case "create":
+			generatorCreates++
+		case "update":
+			generatorUpdates++
+		}
+	}
+
 	return
 }
 
 // operationSummary builds the colored "This operation will …" sentence.
 // Colors use theme roles: Error for destructive ops (delete/replace), Done for
 // creates, and TextPrimary for updates (no gold; routine updates aren't tinted).
-func operationSummary(th *theme.Theme, targetCreates, targetUpdates, stackCreates, stackUpdates, policyCreates, policyUpdates, resourceCreates, resourceUpdates, resourceDeletes, resourceReplaces int) string {
-	if targetCreates == 0 && targetUpdates == 0 && stackCreates == 0 && stackUpdates == 0 && policyCreates == 0 && policyUpdates == 0 && resourceCreates == 0 && resourceUpdates == 0 && resourceDeletes == 0 && resourceReplaces == 0 {
+func operationSummary(th *theme.Theme, targetCreates, targetUpdates, stackCreates, stackUpdates, policyCreates, policyUpdates, generatorCreates, generatorUpdates, resourceCreates, resourceUpdates, resourceDeletes, resourceReplaces int) string {
+	if targetCreates == 0 && targetUpdates == 0 && stackCreates == 0 && stackUpdates == 0 && policyCreates == 0 && policyUpdates == 0 && generatorCreates == 0 && generatorUpdates == 0 && resourceCreates == 0 && resourceUpdates == 0 && resourceDeletes == 0 && resourceReplaces == 0 {
 		return ""
 	}
 
@@ -193,6 +203,9 @@ func operationSummary(th *theme.Theme, targetCreates, targetUpdates, stackCreate
 	if policyCreates > 0 {
 		parts = append(parts, doneSt.Render(fmt.Sprintf("create %d policy(ies)", policyCreates)))
 	}
+	if generatorCreates > 0 {
+		parts = append(parts, doneSt.Render(fmt.Sprintf("create %d generator(s)", generatorCreates)))
+	}
 	if targetCreates > 0 {
 		parts = append(parts, doneSt.Render(fmt.Sprintf("create %d target(s)", targetCreates)))
 	}
@@ -206,6 +219,9 @@ func operationSummary(th *theme.Theme, targetCreates, targetUpdates, stackCreate
 	}
 	if policyUpdates > 0 {
 		parts = append(parts, updateSt.Render(fmt.Sprintf("update %d policy(ies)", policyUpdates)))
+	}
+	if generatorUpdates > 0 {
+		parts = append(parts, updateSt.Render(fmt.Sprintf("update %d generator(s)", generatorUpdates)))
 	}
 	if targetUpdates > 0 {
 		parts = append(parts, updateSt.Render(fmt.Sprintf("update %d target(s)", targetUpdates)))

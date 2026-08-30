@@ -8,6 +8,10 @@ definitions:
         type: string
       EndTs:
         type: string
+      GeneratorUpdates:
+        items:
+          $ref: '#/definitions/model.GeneratorUpdate'
+        type: array
       Mode:
         description: '"reconcile" | "patch"'
         type: string
@@ -29,6 +33,14 @@ definitions:
         type: string
       State:
         type: string
+      SuppressedDrift:
+        description: |-
+          SuppressedDrift records out-of-band movement on provider-default
+          fields this command's plan could not see; completing the command
+          absorbs it (see SuppressedDriftNote).
+        items:
+          $ref: '#/definitions/model.SuppressedDriftNote'
+        type: array
       TargetUpdates:
         items:
           $ref: '#/definitions/model.TargetUpdate'
@@ -195,6 +207,13 @@ definitions:
     properties:
       Description:
         $ref: '#/definitions/github_com_platform-engineering-labs_formae_pkg_model.Description'
+      Generators:
+        description: Generators, keyed to a stack by their own Stack field
+        items:
+          items:
+            type: integer
+          type: array
+        type: array
       Policies:
         description: Standalone policies
         items:
@@ -218,6 +237,39 @@ definitions:
         items:
           $ref: '#/definitions/model.Target'
         type: array
+    type: object
+  model.GeneratorUpdate:
+    properties:
+      Duration:
+        description: milliseconds
+        type: integer
+      ErrorMessage:
+        type: string
+      GeneratorConfig:
+        description: Current generator configuration
+        items:
+          type: integer
+        type: array
+      GeneratorLabel:
+        type: string
+      GeneratorType:
+        description: '"password", etc.'
+        type: string
+      ModifiedTs:
+        type: string
+      OldGeneratorConfig:
+        description: Previous generator configuration (for updates)
+        items:
+          type: integer
+        type: array
+      Operation:
+        type: string
+      StackName:
+        type: string
+      StartTs:
+        type: string
+      State:
+        type: string
     type: object
   model.LabelConfig:
     properties:
@@ -556,6 +608,14 @@ definitions:
         type: boolean
       Command:
         $ref: '#/definitions/github_com_platform-engineering-labs_formae_pkg_api_model.Command'
+      SuppressedDrift:
+        description: |-
+          SuppressedDrift is present on every reconcile-mode response, including
+          a no-changes one (where Command is empty), so callers see suppressed
+          out-of-band movement regardless of whether anything was planned.
+        items:
+          $ref: '#/definitions/model.SuppressedDriftNote'
+        type: array
       Warnings:
         items:
           type: string
@@ -662,6 +722,29 @@ definitions:
         $ref: '#/definitions/github_com_platform-engineering-labs_formae_pkg_api_model.Description'
       Simulation:
         $ref: '#/definitions/model.Simulation'
+    type: object
+  model.SuppressedDriftNote:
+    properties:
+      Disposition:
+        type: string
+      From:
+        items:
+          type: integer
+        type: array
+      Label:
+        type: string
+      Opaque:
+        type: boolean
+      Path:
+        type: string
+      Stack:
+        type: string
+      To:
+        items:
+          type: integer
+        type: array
+      Type:
+        type: string
     type: object
   model.Target:
     properties:

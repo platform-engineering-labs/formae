@@ -97,6 +97,7 @@ const (
 	kindTarget rowKind = iota
 	kindStack
 	kindPolicy
+	kindGenerator
 	kindResource
 )
 
@@ -127,12 +128,14 @@ func buildSimGroups(cmd *apimodel.Command) []simGroup {
 	targetRows := buildTargetRows(cmd.TargetUpdates)
 	stackRows := buildStackRows(cmd.StackUpdates)
 	policyRows := buildPolicyRows(cmd.PolicyUpdates)
+	generatorRows := buildGeneratorRows(cmd.GeneratorUpdates)
 	resourceRows := buildResourceRows(cmd.ResourceUpdates)
 
 	// Sort each group destructive-first.
 	sortByOpKind(targetRows)
 	sortByOpKind(stackRows)
 	sortByOpKind(policyRows)
+	sortByOpKind(generatorRows)
 	sortByOpKind(resourceRows)
 
 	// Build groups in fixed order, omitting empty ones.
@@ -145,6 +148,9 @@ func buildSimGroups(cmd *apimodel.Command) []simGroup {
 	}
 	if len(policyRows) > 0 {
 		groups = append(groups, simGroup{kind: kindPolicy, title: "Policies", rows: policyRows})
+	}
+	if len(generatorRows) > 0 {
+		groups = append(groups, simGroup{kind: kindGenerator, title: "Generators", rows: generatorRows})
 	}
 	if len(resourceRows) > 0 {
 		groups = append(groups, simGroup{kind: kindResource, title: "Resources", rows: resourceRows})
@@ -312,6 +318,27 @@ func policyOpAndDetail(pu *apimodel.PolicyUpdate) (opKind, string) {
 	default:
 		return genericOpKind(pu.Operation), ""
 	}
+}
+
+// buildGeneratorRows converts GeneratorUpdates into simRows.
+// Operation vocabulary: a generator has no attach/detach and no standalone
+// form, so its lifecycle is Create/Update/Delete only (see
+// generator_update.GeneratorOperation), handled by genericOpKind like a
+// stack update.
+func buildGeneratorRows(updates []apimodel.GeneratorUpdate) []simRow {
+	rows := make([]simRow, 0, len(updates))
+	for i := range updates {
+		gu := &updates[i]
+		row := simRow{
+			key:   fmt.Sprintf("generator/%s/%s", gu.StackName, gu.GeneratorLabel),
+			op:    genericOpKind(gu.Operation),
+			label: gu.GeneratorLabel,
+			typ:   gu.GeneratorType,
+			stack: gu.StackName,
+		}
+		rows = append(rows, row)
+	}
+	return rows
 }
 
 // buildResourceRows converts ResourceUpdates into simRows, pairing delete+create

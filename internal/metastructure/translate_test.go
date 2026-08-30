@@ -13,6 +13,7 @@ import (
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/generator_update"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
@@ -77,5 +78,70 @@ func TestTranslateToAPICommand_SuppressedDriftNotes(t *testing.T) {
 		assert.JSONEq(t, `false`, string(note.From))
 		assert.JSONEq(t, `true`, string(note.To))
 		assert.Equal(t, "absorbed", note.Disposition)
+	}
+}
+
+// A command carrying only generator operations must project them, so a
+// generator-only change is never an empty plan.
+func TestTranslateToAPICommand_ProjectsGeneratorUpdates(t *testing.T) {
+	fa := &forma_command.FormaCommand{
+		ID:      "cmd-test-gen-1",
+		Command: pkgmodel.CommandApply,
+		Config:  config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
+		GeneratorUpdates: []generator_update.GeneratorUpdate{{
+			Generator: &pkgmodel.PasswordGenerator{
+				Label: "db-password", Stack: "prod",
+				Length: 24, Uppercase: true, Lowercase: true, Digits: true, RequireEachIncludedType: true,
+			},
+			Operation:  generator_update.GeneratorOperationCreate,
+			State:      generator_update.GeneratorUpdateStateNotStarted,
+			StackLabel: "prod",
+		}},
+	}
+
+	api := translateToAPICommand(fa)
+
+	if assert.Len(t, api.GeneratorUpdates, 1) {
+		gu := api.GeneratorUpdates[0]
+		assert.Equal(t, "db-password", gu.GeneratorLabel)
+		assert.Equal(t, "password", gu.GeneratorType)
+		assert.Equal(t, "prod", gu.StackName)
+		assert.Equal(t, "create", gu.Operation)
+		assert.Equal(t, "NotStarted", gu.State)
+		assert.NotEmpty(t, gu.GeneratorConfig)
+	}
+}
+
+// The projection is metadata only: a generator's spec may be shown, a
+// generated value never exists here to show.
+func TestTranslateToAPICommand_GeneratorProjectionCarriesNoMaterial(t *testing.T) {
+	fa := &forma_command.FormaCommand{
+		ID:      "cmd-test-gen-2",
+		Command: pkgmodel.CommandApply,
+		Config:  config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
+		GeneratorUpdates: []generator_update.GeneratorUpdate{{
+			Generator: &pkgmodel.PasswordGenerator{
+				Label: "db-password", Stack: "prod", ID: "should-never-appear-in-projection",
+				Length: 24, Uppercase: true, Lowercase: true, Digits: true, RequireEachIncludedType: true,
+			},
+			Operation:  generator_update.GeneratorOperationCreate,
+			State:      generator_update.GeneratorUpdateStateNotStarted,
+			StackLabel: "prod",
+		}},
+	}
+
+	api := translateToAPICommand(fa)
+	if assert.Len(t, api.GeneratorUpdates, 1) {
+		raw := string(api.GeneratorUpdates[0].GeneratorConfig)
+
+		// The generator's own KSUID identity is controller state assigned
+		// during translation, never declared configuration.
+		assert.NotContains(t, raw, "should-never-appear-in-projection")
+		// The drawing spec (pkgmodel.GeneratorIdentity) is agent-internal
+		// controller state, never part of what a Generator marshals.
+		assert.NotContains(t, raw, "GenerationID")
+		assert.NotContains(t, raw, "GenerationSpec")
+		// A generated value does not exist at projection time at all.
+		assert.NotContains(t, raw, "\"Value\"")
 	}
 }

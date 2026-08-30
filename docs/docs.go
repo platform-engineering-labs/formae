@@ -810,6 +810,12 @@ const docTemplate = `{
                 "EndTs": {
                     "type": "string"
                 },
+                "GeneratorUpdates": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.GeneratorUpdate"
+                    }
+                },
                 "Mode": {
                     "description": "\"reconcile\" | \"patch\"",
                     "type": "string"
@@ -840,6 +846,13 @@ const docTemplate = `{
                 },
                 "State": {
                     "type": "string"
+                },
+                "SuppressedDrift": {
+                    "description": "SuppressedDrift records out-of-band movement on provider-default\nfields this command's plan could not see; completing the command\nabsorbs it (see SuppressedDriftNote).",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.SuppressedDriftNote"
+                    }
                 },
                 "TargetUpdates": {
                     "type": "array",
@@ -1060,6 +1073,16 @@ const docTemplate = `{
                 "Description": {
                     "$ref": "#/definitions/github_com_platform-engineering-labs_formae_pkg_model.Description"
                 },
+                "Generators": {
+                    "description": "Generators, keyed to a stack by their own Stack field",
+                    "type": "array",
+                    "items": {
+                        "type": "array",
+                        "items": {
+                            "type": "integer"
+                        }
+                    }
+                },
                 "Policies": {
                     "description": "Standalone policies",
                     "type": "array",
@@ -1093,6 +1116,54 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/model.Target"
                     }
+                }
+            }
+        },
+        "model.GeneratorUpdate": {
+            "type": "object",
+            "properties": {
+                "Duration": {
+                    "description": "milliseconds",
+                    "type": "integer"
+                },
+                "ErrorMessage": {
+                    "type": "string"
+                },
+                "GeneratorConfig": {
+                    "description": "Current generator configuration",
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "GeneratorLabel": {
+                    "type": "string"
+                },
+                "GeneratorType": {
+                    "description": "\"password\", etc.",
+                    "type": "string"
+                },
+                "ModifiedTs": {
+                    "type": "string"
+                },
+                "OldGeneratorConfig": {
+                    "description": "Previous generator configuration (for updates)",
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "Operation": {
+                    "type": "string"
+                },
+                "StackName": {
+                    "type": "string"
+                },
+                "StartTs": {
+                    "type": "string"
+                },
+                "State": {
+                    "type": "string"
                 }
             }
         },
@@ -1571,6 +1642,13 @@ const docTemplate = `{
                 "Command": {
                     "$ref": "#/definitions/github_com_platform-engineering-labs_formae_pkg_api_model.Command"
                 },
+                "SuppressedDrift": {
+                    "description": "SuppressedDrift is present on every reconcile-mode response, including\na no-changes one (where Command is empty), so callers see suppressed\nout-of-band movement regardless of whether anything was planned.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.SuppressedDriftNote"
+                    }
+                },
                 "Warnings": {
                     "type": "array",
                     "items": {
@@ -1719,6 +1797,41 @@ const docTemplate = `{
                 },
                 "Simulation": {
                     "$ref": "#/definitions/model.Simulation"
+                }
+            }
+        },
+        "model.SuppressedDriftNote": {
+            "type": "object",
+            "properties": {
+                "Disposition": {
+                    "type": "string"
+                },
+                "From": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "Label": {
+                    "type": "string"
+                },
+                "Opaque": {
+                    "type": "boolean"
+                },
+                "Path": {
+                    "type": "string"
+                },
+                "Stack": {
+                    "type": "string"
+                },
+                "To": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "Type": {
+                    "type": "string"
                 }
             }
         },
