@@ -42,7 +42,7 @@ func TestConnectTemplateShape(t *testing.T) {
 			break
 		}
 	}
-	require.NotNil(t, nested, "the template must nest nest a deployment for the identity resources")
+	require.NotNil(t, nested, "the template must nest a deployment for the identity resources")
 
 	props, ok := nested["properties"].(map[string]any)
 	require.True(t, ok, "the nested deployment must carry a properties object")

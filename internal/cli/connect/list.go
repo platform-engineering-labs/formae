@@ -80,7 +80,13 @@ func readConnections(cc *cobra.Command, opts options) (connectionsView, error) {
 
 	connections := make([]connectionView, 0, len(snapshot.Connections))
 	for _, c := range snapshot.Connections {
-		connections = append(connections, connectionView{Cloud: c.Cloud, Account: c.Account, RoleArn: c.RoleArn})
+		connections = append(connections, connectionView{
+			Cloud:         c.Cloud,
+			Account:       c.Account,
+			RoleArn:       c.RoleArn,
+			AzureTenantID: c.AzureTenantID,
+			AzureClientID: c.AzureClientID,
+		})
 	}
 
 	return connectionsView{

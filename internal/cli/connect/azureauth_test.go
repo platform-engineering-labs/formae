@@ -66,14 +66,34 @@ func TestUnreachableSubscriptionIsNotACredentialFailure(t *testing.T) {
 	}
 }
 
-// The structural guarantee: this file may never import os/exec, so a later
-// change cannot reintroduce spawning a sign-in without turning this test
-// red, regardless of how the change is wired up.
+// azureCredentialFailure is only ever meant to be called for a non-usable
+// state; calling it for azureCredentialsUsable is a programmer error, and
+// the function must say so rather than silently returning no error, which
+// would read as success to a caller that only checks err != nil.
+func TestAzureCredentialFailureNeverSilentlySucceeds(t *testing.T) {
+	err := azureCredentialFailure(azureCredentialsUsable, "")
+	require.Error(t, err)
+}
+
+// The structural guarantee: none of the azure connect files may import
+// os/exec, so a later change cannot reintroduce spawning a *login* without
+// turning this test red, regardless of which of the three files it lands
+// in or how it is wired up.
+//
+// This does not mean azure connect makes zero process executions in an
+// absolute sense: azidentity's AzureCLICredential shells out to
+// `az account get-access-token` internally as one of DefaultAzureCredential's
+// chained sources, and that is out of this package's control. What formae
+// itself guarantees is narrower and is the thing that matters here: it never
+// spawns a *sign-in* the way connect gcp does.
 func TestAzureNeverSpawnsALogin(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	require.True(t, ok)
-	src, err := os.ReadFile(filepath.Join(filepath.Dir(thisFile), "azureauth.go"))
-	require.NoError(t, err)
-	assert.NotContains(t, string(src), `"os/exec"`,
-		"azureauth.go must never import os/exec: Azure reports the login command, it never spawns one")
+	dir := filepath.Dir(thisFile)
+	for _, name := range []string{"azureauth.go", "azure.go", "azureprovision.go"} {
+		src, err := os.ReadFile(filepath.Join(dir, name))
+		require.NoError(t, err)
+		assert.NotContains(t, string(src), `"os/exec"`,
+			"%s must never import os/exec: Azure reports the login command, it never spawns one", name)
+	}
 }

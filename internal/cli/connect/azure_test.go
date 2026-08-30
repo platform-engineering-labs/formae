@@ -7,8 +7,10 @@
 package connect
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"testing"
 
 	provxazure "github.com/platform-engineering-labs/oox/provx/azure"
@@ -58,6 +60,15 @@ func TestAzureModeSelection(t *testing.T) {
 			assert.Equal(t, tc.wantMode, mode)
 		})
 	}
+}
+
+// A malformed --tenant-id hint given alone (no --client-id) must be
+// refused before it reaches provisioning: it is forwarded verbatim into
+// provx's New(), and provx's own contract is that an empty value means
+// derive, not that any string is acceptable.
+func TestAzureTenantHintMustBeAUUIDEvenAlone(t *testing.T) {
+	_, err := decideAzureMode(azureOptions{Subscription: testSubscription, TenantID: "not-a-uuid"})
+	require.Error(t, err)
 }
 
 // One coordinate without the other fails outright: a bare client id cannot
@@ -179,9 +190,11 @@ func azureRegisterOnlyArgs() []string {
 // The local path: credentials are usable, provx receives the server-produced
 // installation coordinates and the subscription/location/resource-group
 // verbatim, and the tenant registered comes from the provisioner's returned
-// Result - the verified value - never from command input, even when no
-// hint was given at all.
-func TestDerivedTenantIsVerifiedAgainstTheToken(t *testing.T) {
+// Result, never from command input, even when no hint was given at all. The
+// verification itself happens inside provx/azure, against the subscription's
+// actual Entra tenant read from ARM; the CLI performs none of its own and
+// only asserts that it registers what came back, not what was asked for.
+func TestTheRegisteredTenantComesFromTheProvisionerResult(t *testing.T) {
 	stubAzureCredentialState(t, azureCredentialsUsable)
 	stub := &stubAzureProvisioner{result: &provxazure.Result{
 		TenantID: testAzureTenant, ClientID: testAzureClient, IdentityID: "id-1", ResourceGroup: "formae-ai", Location: "eastus",
@@ -271,10 +284,28 @@ func TestAzureRegisterOnlyNeedsNoCredentials(t *testing.T) {
 	assert.Zero(t, calls, "register-only must never check credentials")
 }
 
+// stdinNeverRead fails the test the moment anything reads from stdin: a
+// caller that built one fixed command line cannot answer a prompt, so
+// nothing on a machine-mode/--no-input run may block waiting on it.
+type stdinNeverRead struct{ t *testing.T }
+
+func (s stdinNeverRead) Read([]byte) (int, error) {
+	s.t.Helper()
+	s.t.Fatal("a machine-mode/--no-input azure run read from stdin")
+	return 0, io.EOF
+}
+
 // A machine-output or --no-input run never prompts, for every credential
 // state: a caller that built one fixed command line did not consent to an
-// interactive confirmation.
+// interactive confirmation. isInteractive is pinned true here on purpose:
+// without it, azureInteractiveRun's TTY check alone would already return
+// false under `go test`, and the --no-input/machine-consumer gate this test
+// exists to protect would never actually be exercised - proven by mutation,
+// replacing azureInteractiveRun's body with `return isInteractive()` left
+// this test green before this fix.
 func TestAzureMachineModeNeverPrompts(t *testing.T) {
+	interactiveTTY(t)
+
 	states := []azureCredentialState{
 		azureCredentialsUsable, azureCredentialsNeedsAuthentication, azureCredentialsLacksPermission, azureSubscriptionUnreachable,
 	}
@@ -290,7 +321,13 @@ func TestAzureMachineModeNeverPrompts(t *testing.T) {
 			}}, nil)
 			seedAzureRun(t)
 
-			_, _ = runConnect(t, args...)
+			c := ConnectCmd()
+			var out bytes.Buffer
+			c.SetOut(&out)
+			c.SetErr(&out)
+			c.SetIn(stdinNeverRead{t})
+			c.SetArgs(args)
+			_ = c.Execute()
 
 			assert.Empty(t, confirms.prompts, "state %v args %v prompted despite machine mode/--no-input", state, args)
 		}
@@ -303,21 +340,32 @@ func TestAzureMachineModeNeverPrompts(t *testing.T) {
 // resource group, the identity, and its client id, and say so plainly.
 func TestProvisionThenRegistrationFailureNamesTheSurvivingTrust(t *testing.T) {
 	stubAzureCredentialState(t, azureCredentialsUsable)
+	const identityID = "/subscriptions/x/resourceGroups/formae-ai/providers/Microsoft.ManagedIdentity/userAssignedIdentities/formae-ai-inst"
 	installAzureProvisioner(t, &stubAzureProvisioner{result: &provxazure.Result{
-		TenantID: testAzureTenant, ClientID: testAzureClient, IdentityID: "/subscriptions/x/resourceGroups/formae-ai/providers/Microsoft.ManagedIdentity/userAssignedIdentities/formae-ai-inst",
+		TenantID: testAzureTenant, ClientID: testAzureClient, IdentityID: identityID,
 	}}, nil)
 	cp := seedAzureRun(t)
 	cp.registerStatus = 500
 	cp.registerBody = `{"error":"boom"}`
 
-	_, err := runConnect(t, azureLocalArgs()...)
+	out, err := runConnect(t, azureLocalArgs()...)
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "does not know about")
-	assert.Contains(t, err.Error(), "no rollback")
-	assert.Contains(t, err.Error(), "near-owner")
-	assert.Contains(t, err.Error(), "formae-ai")
-	assert.Contains(t, err.Error(), testAzureClient)
+	got := decodeOut(t, out)
+	assert.Equal(t, "orphaned_trust", got["code"],
+		"the machine document must name what survives, not a generic internal failure: %s", out)
+	assert.Contains(t, got["message"], "does not know about")
+	assert.Contains(t, got["message"], "no rollback")
+	assert.Contains(t, got["message"], "near-owner")
+
+	details, ok := got["details"].(map[string]any)
+	require.True(t, ok, "the failure must carry structured details: %s", out)
+	assert.Equal(t, defaultAzureResourceGroup, details["resourceGroup"],
+		"the resource group must be checkable distinctly from the identity id")
+	assert.Equal(t, identityID, details["identity"])
+	assert.Equal(t, testAzureClient, details["clientId"])
+	assert.NotEqual(t, details["resourceGroup"], details["identity"],
+		"resource group and identity must be distinguishable, not both just \"contains formae-ai\"")
 }
 
 // A sovereign cloud is refused explicitly, before any control-plane or

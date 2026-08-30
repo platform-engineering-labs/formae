@@ -7,6 +7,7 @@ package connect
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armsubscriptions"
@@ -94,7 +95,13 @@ func azureCredentialFailure(state azureCredentialState, tenantHint string) error
 		return printer.Fail(printer.CodeProjectUnreachable,
 			"the subscription could not be read with these credentials; check the subscription id, and that this principal can see it", nil)
 	default:
-		return nil
+		// azureCredentialsUsable, or any value this build does not know: the
+		// caller is only meant to reach this function for a non-usable state,
+		// so silently returning nil here would hide that mistake behind a
+		// success. Every branch of an error-returning function returns an
+		// error, including the one that should never be taken.
+		return printer.Fail(printer.CodeInternal,
+			fmt.Sprintf("azureCredentialFailure was called for credential state %d, which is not a failure", state), nil)
 	}
 }
 

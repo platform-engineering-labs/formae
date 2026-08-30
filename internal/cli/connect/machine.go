@@ -143,6 +143,10 @@ type connectionView struct {
 	// WorkloadIdentityProvider is present for GCP and omitted elsewhere, for
 	// the same reason roleArn is.
 	WorkloadIdentityProvider string `json:"workloadIdentityProvider,omitempty" yaml:"workloadIdentityProvider,omitempty"`
+	// AzureTenantID and AzureClientID are present for Azure and omitted
+	// elsewhere, for the same reason.
+	AzureTenantID string `json:"azureTenantId,omitempty" yaml:"azureTenantId,omitempty"`
+	AzureClientID string `json:"azureClientId,omitempty" yaml:"azureClientId,omitempty"`
 }
 
 // connectionsView is the list emit. Connections is always a slice, never

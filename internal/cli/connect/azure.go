@@ -79,6 +79,15 @@ func decideAzureMode(opts azureOptions) (azureMode, error) {
 	}
 
 	if opts.ClientID == "" {
+		// --tenant-id alone is a provisioning-mode authentication hint, not a
+		// coordinate; it still has to be a UUID, because it travels verbatim
+		// into provx's New(), whose own contract is that an empty value means
+		// derive - not that any string is acceptable.
+		if opts.TenantID != "" {
+			if err := validateAzureUUID(opts.TenantID, "--tenant-id"); err != nil {
+				return 0, err
+			}
+		}
 		return azureModeLocal, nil
 	}
 
@@ -128,6 +137,14 @@ const azureSovereignCloudEnvVar = "AZURE_ENVIRONMENT"
 // refuseAzureSovereignCloud refuses explicitly rather than failing somewhere
 // further in: the issuer, authority and ARM endpoints connect pins are
 // public-cloud specific, and a subscription id does not identify its cloud.
+//
+// This is a heuristic, not an exhaustive detection: it trusts the operator's
+// own environment to say which cloud it targets, the same convention az CLI
+// and Terraform's azurerm provider rely on, rather than trying to infer the
+// cloud from credentials or network reachability. An operator who has set
+// AZURE_ENVIRONMENT correctly for their own tools gets the same answer here;
+// one who has not configured it at all is assumed public, which is correct
+// for the overwhelming majority of subscriptions.
 func refuseAzureSovereignCloud() error {
 	env := strings.TrimSpace(os.Getenv(azureSovereignCloudEnvVar))
 	if env == "" || strings.EqualFold(env, "AzureCloud") || strings.EqualFold(env, "AzurePublicCloud") {
@@ -151,11 +168,6 @@ const unverifiedAzureCoordinateWarning = "the coordinates were validated for sha
 	"this managed identity exists, that it trusts the formae issuer, or that it grants this installation access. " +
 	"The first use is where a wrong one shows up"
 
-// runConnectAzureFn is the seam structure tests observe the dispatch through.
-var runConnectAzureFn func(cc *cobra.Command, opts azureOptions) error
-
-func init() { runConnectAzureFn = runConnectAzure }
-
 func azureCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:           "azure",
@@ -168,7 +180,7 @@ func azureCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return runConnectAzureFn(cc, opts)
+			return runConnectAzure(cc, opts)
 		},
 	}
 	c.Flags().String("subscription", "", "Azure subscription id to connect (always explicit, never inferred from ambient credentials)")
@@ -342,11 +354,22 @@ func runAzureLocal(cc *cobra.Command, opts azureOptions, consumer printer.Consum
 		// Provisioning succeeded and registration did not, so the subscription
 		// now grants access to an installation the control plane does not know
 		// about. There is no rollback, and what survives holds near-owner: said
-		// plainly rather than left to be discovered. Re-running converges.
-		return fmt.Errorf("the subscription now grants access to an installation the control plane does not know "+
-			"about (resource group %s, managed identity %s, client id %s); there is no rollback, and this identity "+
-			"holds near-owner access until it is registered — re-run this command to finish: %w",
-			opts.ResourceGroup, result.IdentityID, result.ClientID, err)
+		// plainly rather than left to be discovered, and as a dedicated
+		// printer.Fail rather than a wrap - wrapping put whatever
+		// registerConnection returned in front of errors.As, so a machine
+		// consumer either saw that inner failure's own code (burying this
+		// message entirely) or, when the inner error carried no *Failure at
+		// all, a generic "internal" that named none of the surviving
+		// coordinates. Re-running converges.
+		return printer.Fail(printer.CodeOrphanedTrust,
+			fmt.Sprintf("the subscription now grants access to an installation the control plane does not know "+
+				"about; there is no rollback, and this identity holds near-owner access until it is registered. "+
+				"Re-run this command to finish: %v", err),
+			map[string]any{
+				"resourceGroup": opts.ResourceGroup,
+				"identity":      result.IdentityID,
+				"clientId":      result.ClientID,
+			})
 	}
 
 	return emitAzureRegistered(cc, consumer, schema, status, opts.Subscription, result.TenantID, result.ClientID, warnings, s.InstallationID)

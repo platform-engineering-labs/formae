@@ -57,7 +57,7 @@ func ConnectCmd() *cobra.Command {
 // formValues is what the interactive form fills. Cloud is asked first: it is
 // the discriminator every later question depends on.
 type formValues struct {
-	Cloud      string // "aws" or "gcp"
+	Cloud      string // "aws" or "gcp"; the interactive form does not offer azure yet, a known gap, not an oversight
 	Account    string // AWS
 	Project    string // GCP
 	How        string // "quick-create" | "profile" | "role-arn"

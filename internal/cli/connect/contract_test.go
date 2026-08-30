@@ -795,7 +795,9 @@ func TestContractListEmitsTheConnectionsDocument(t *testing.T) {
 	cp := newControlPlane(t)
 	cp.connectionsBody = `{"results":[` +
 		`{"cloud":"aws","account":"` + testAccount + `","roleArn":"` + contractRoleArn + `"},` +
-		`{"cloud":"gcp","account":"some-gcp-project"}]}`
+		`{"cloud":"gcp","account":"some-gcp-project"},` +
+		`{"cloud":"azure","account":"` + testSubscription + `","azureTenantId":"` + testAzureTenant +
+		`","azureClientId":"` + testAzureClient + `"}]}`
 	seedProfile(t, cp, hostedProfile(contractInstallation))
 	stubCredentials(t, bearerAnswer("t1"))
 
@@ -810,7 +812,7 @@ func TestContractListEmitsTheConnectionsDocument(t *testing.T) {
 
 	rows, ok := got["connections"].([]any)
 	require.True(t, ok, "connections is not an array: %s", out)
-	require.Len(t, rows, 2)
+	require.Len(t, rows, 3)
 
 	aws, ok := rows[0].(map[string]any)
 	require.True(t, ok, "row 0 is not an object: %s", out)
@@ -824,6 +826,17 @@ func TestContractListEmitsTheConnectionsDocument(t *testing.T) {
 	assert.Equal(t, "some-gcp-project", gcp["account"])
 	_, present := gcp["roleArn"]
 	assert.False(t, present, "a GCP row must not carry a roleArn key, empty or otherwise")
+
+	azure, ok := rows[2].(map[string]any)
+	require.True(t, ok, "row 2 is not an object: %s", out)
+	assert.Equal(t, "azure", azure["cloud"])
+	assert.Equal(t, testSubscription, azure["account"])
+	assert.Equal(t, testAzureTenant, azure["azureTenantId"])
+	assert.Equal(t, testAzureClient, azure["azureClientId"])
+	for _, key := range []string{"roleArn", "workloadIdentityProvider"} {
+		_, present := azure[key]
+		assert.False(t, present, "an azure row must not carry a %s key, empty or otherwise", key)
+	}
 }
 
 // registerAgainstConflict runs a registration the control plane refuses with
