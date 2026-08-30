@@ -75,6 +75,34 @@ func RunCreateGeneratorThenGet(t *testing.T, newDS func(t *testing.T) TestDatast
 	})
 }
 
+// RunCreateGeneratorHonorsPreAssignedID verifies that CreateGenerator uses a
+// pre-assigned ID (set via Generator.SetID, the way
+// generator_update.GenerateGeneratorUpdates assigns the KSUID
+// resource_update's translation phase already resolved for a $gen reference
+// to this generator) rather than minting an unrelated one — mirroring
+// StoreResource's identical handling of a pre-assigned Resource.Ksuid. This
+// is what makes a same-command generator-and-consumer apply end up with one
+// shared KSUID instead of two independently minted ones.
+func RunCreateGeneratorHonorsPreAssignedID(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("CreateGenerator_HonorsPreAssignedID", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		stack := createGeneratorStack(t, ds, "generator-preassigned-id")
+		gen := testPasswordGenerator("db-password", stack, 24)
+		gen.SetID("2preassignedksuid00000000000")
+
+		_, err := ds.CreateGenerator(gen, "cmd-create")
+		require.NoError(t, err)
+
+		identity, err := ds.GetGeneratorIdentity("db-password", stack.Label)
+		require.NoError(t, err)
+		assert.Equal(t, "2preassignedksuid00000000000", identity.ID,
+			"the persisted row's KSUID must equal the pre-assigned one, not an independently minted one")
+	})
+}
+
 // RunGetGeneratorAbsentReturnsNil verifies that looking up a generator that
 // was never created returns nil, nil rather than an error.
 func RunGetGeneratorAbsentReturnsNil(t *testing.T, newDS func(t *testing.T) TestDatastore) {

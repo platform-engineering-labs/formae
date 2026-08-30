@@ -26,7 +26,15 @@ func (d DatastorePostgres) CreateGenerator(gen pkgmodel.Generator, commandID str
 	ctx, span := tracer.Start(context.Background(), "CreateGenerator")
 	defer span.End()
 
-	id := mksuid.New().String()
+	// Honor a KSUID translation already assigned (see pkgmodel.Generator.GetID
+	// and generator_update.GenerateGeneratorUpdates), so a $gen reference
+	// resolved in the same command that creates this generator names the
+	// exact row this call persists, rather than an independently minted one
+	// — mirrors storeResource's identical id-already-assigned handling.
+	id := gen.GetID()
+	if id == "" {
+		id = mksuid.New().String()
+	}
 	version := mksuid.New().String()
 
 	data, err := datastore.GeneratorData(gen)

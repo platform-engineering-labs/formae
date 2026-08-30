@@ -50,7 +50,13 @@ func GenerateResourceUpdates(
 		command != pkgmodel.CommandDestroy
 
 	if doTranslateFormaeReferencesToKsuid {
-		referenceLabels, err = translateFormaeReferencesToKsuid(forma, ds)
+		// The generator KSUID map this also resolves is discarded here: this
+		// entry point never calls GenerateGeneratorUpdates, so there is
+		// nothing downstream to thread it into. Only the production path
+		// through metastructure.FormaCommandFromForma (which calls
+		// TranslateFormaeReferencesToKsuid directly, not through this
+		// function) needs it.
+		referenceLabels, _, err = translateFormaeReferencesToKsuid(forma, ds)
 		if err != nil {
 			return nil, fmt.Errorf("failed to translate references to KSUID: %w", err)
 		}
@@ -2098,12 +2104,12 @@ func assignKSUIDs(resources []pkgmodel.Resource, ds ResourceDataLookup) ([]pkgmo
 // TranslateFormaeReferencesToKsuid translates resolvables values to KSUID refs in both
 // resource properties and target configs. Must be called before GenerateTargetUpdates
 // so that target config resolvables are translated to $ref URIs for extraction.
-func TranslateFormaeReferencesToKsuid(forma *pkgmodel.Forma, ds ResourceDataLookup) (map[string]string, error) {
+func TranslateFormaeReferencesToKsuid(forma *pkgmodel.Forma, ds ResourceDataLookup) (map[string]string, map[pkgmodel.GeneratorKey]string, error) {
 	return translateFormaeReferencesToKsuid(forma, ds)
 }
 
 // translateFormaeReferencesToKsuid translates resolvables values to KSUID refs
-func translateFormaeReferencesToKsuid(forma *pkgmodel.Forma, ds ResourceDataLookup) (map[string]string, error) {
+func translateFormaeReferencesToKsuid(forma *pkgmodel.Forma, ds ResourceDataLookup) (map[string]string, map[pkgmodel.GeneratorKey]string, error) {
 	resources, ksuidToLabel := assignKSUIDs(forma.Resources, ds)
 	forma.Resources = resources
 
@@ -2119,14 +2125,14 @@ func translateFormaeReferencesToKsuid(forma *pkgmodel.Forma, ds ResourceDataLook
 
 	genKeyToKsuid, err := assignGeneratorKSUIDs(forma.Generators, ds)
 	if err != nil {
-		return nil, fmt.Errorf("failed to resolve generator identities: %w", err)
+		return nil, nil, fmt.Errorf("failed to resolve generator identities: %w", err)
 	}
 
 	for i, resource := range forma.Resources {
 		if resource.Properties != nil {
 			translatedProperties, externalLabels, err := translatePropertiesJSON(resource.Properties, tupleToKsuid, genKeyToKsuid, ds)
 			if err != nil {
-				return nil, fmt.Errorf("failed to translate properties for resource %s: %w", resource.Label, err)
+				return nil, nil, fmt.Errorf("failed to translate properties for resource %s: %w", resource.Label, err)
 			}
 			forma.Resources[i].Properties = translatedProperties
 			maps.Copy(ksuidToLabel, externalLabels)
@@ -2135,7 +2141,7 @@ func translateFormaeReferencesToKsuid(forma *pkgmodel.Forma, ds ResourceDataLook
 		if resource.ReadOnlyProperties != nil {
 			translatedReadOnlyProperties, externalLabels, err := translatePropertiesJSON(resource.ReadOnlyProperties, tupleToKsuid, genKeyToKsuid, ds)
 			if err != nil {
-				return nil, fmt.Errorf("failed to translate read-only properties for resource %s: %w", resource.Label, err)
+				return nil, nil, fmt.Errorf("failed to translate read-only properties for resource %s: %w", resource.Label, err)
 			}
 			forma.Resources[i].ReadOnlyProperties = translatedReadOnlyProperties
 			maps.Copy(ksuidToLabel, externalLabels)
@@ -2146,14 +2152,14 @@ func translateFormaeReferencesToKsuid(forma *pkgmodel.Forma, ds ResourceDataLook
 		if target.Config != nil {
 			translatedConfig, externalLabels, err := translatePropertiesJSON(target.Config, tupleToKsuid, genKeyToKsuid, ds)
 			if err != nil {
-				return nil, fmt.Errorf("failed to translate target config for %s: %w", target.Label, err)
+				return nil, nil, fmt.Errorf("failed to translate target config for %s: %w", target.Label, err)
 			}
 			forma.Targets[i].Config = translatedConfig
 			maps.Copy(ksuidToLabel, externalLabels)
 		}
 	}
 
-	return ksuidToLabel, nil
+	return ksuidToLabel, genKeyToKsuid, nil
 }
 
 // assignGeneratorKSUIDs resolves every generator forma.Generators declares to
@@ -2164,16 +2170,19 @@ func translateFormaeReferencesToKsuid(forma *pkgmodel.Forma, ds ResourceDataLook
 // the generator has no row yet, and a datastore-only lookup would hard-error
 // on the most common authoring shape).
 //
-// KNOWN GAP: the KSUID minted here for a brand-new generator is not
-// currently threaded into the generator's own create path
-// (generator_update_generator.go / datastore CreateGenerator, which mints
-// its own KSUID independently). A $gen reference translated in the same
-// command that creates its generator will therefore embed a KSUID the
-// persisted generator row will not actually carry. Closing that gap needs
-// pkgmodel.Generator to carry an assignable identity and CreateGenerator to
-// honor a pre-set one (mirroring how StoreResource honors resource.Ksuid) —
-// out of this function's scope; flagged here so it is not mistaken for
-// already handled.
+// Unlike assignKSUIDs, which writes straight onto pkgmodel.Resource.Ksuid,
+// this function cannot assign onto the generator objects that reach
+// persistence directly: forma.Generators is raw JSON at this layer, and the
+// typed pkgmodel.Generator values GenerateGeneratorUpdates eventually
+// persists are parsed independently, in a different package, later in the
+// same command. The returned map is therefore the assignment: the caller
+// (translateFormaeReferencesToKsuid, via TranslateFormaeReferencesToKsuid)
+// must hand it to generator_update.GenerateGeneratorUpdates, which calls
+// Generator.SetID on its own freshly-parsed declared generators — see that
+// function's doc comment. Without that second step this function's minted
+// KSUID reaches only the resource's translated $gen envelope, and
+// CreateGenerator would still mint an unrelated one for the generator's own
+// row.
 func assignGeneratorKSUIDs(rawGenerators []json.RawMessage, ds ResourceDataLookup) (map[pkgmodel.GeneratorKey]string, error) {
 	generators, err := pkgmodel.ParseGenerators(rawGenerators)
 	if err != nil {
@@ -2279,6 +2288,15 @@ func withoutEnvelopeProvenance(v any) (any, bool) {
 }
 
 func translatePropertiesJSON(properties json.RawMessage, tripletToKsuid map[pkgmodel.TripletKey]string, genKeyToKsuid map[pkgmodel.GeneratorKey]string, ds ResourceDataLookup) (json.RawMessage, map[string]string, error) {
+	// genKeyToKsuid doubles as a memoization cache for datastore-tier $gen
+	// lookups below (and in the embed-span pass this function calls into),
+	// so it must be a real map even when a caller passes nil for "no
+	// in-command generators" — production callers (translateFormaeReferencesToKsuid)
+	// always pass a non-nil map already; this guard is for direct callers.
+	if genKeyToKsuid == nil {
+		genKeyToKsuid = make(map[pkgmodel.GeneratorKey]string)
+	}
+
 	// Trust boundary: $resolvedFrom is a formae-written provenance record,
 	// never a user-writable key. $res envelopes are rewritten wholesale below
 	// (dropping any forged sibling by construction), but a raw $ref envelope
@@ -2357,6 +2375,15 @@ func translatePropertiesJSON(properties json.RawMessage, tripletToKsuid map[pkgm
 	// such a forma and an apply.
 	var missingGenerators []pkgmodel.MissingGenerator
 	for _, genObject := range pkgmodel.FindGenObjectsFromProperties(json.RawMessage(result)) {
+		// Idempotency: a $gen node keeps the same $gen:true key across
+		// translation (unlike $res->$ref, which changes key), so a second
+		// translation pass over already-translated output must recognize an
+		// already-resolved node ($generator present) and leave it alone
+		// rather than treating its missing $label/$stack as dangling.
+		if gjson.Get(result, genObject.Path).Get("$generator").Exists() {
+			continue
+		}
+
 		if genObject.Label == "" || genObject.Stack == "" || !pkgmodel.KnownGeneratorOutputs[genObject.Output] {
 			missingGenerators = append(missingGenerators, pkgmodel.MissingGenerator{
 				Label:  genObject.Label,
@@ -2366,10 +2393,14 @@ func translatePropertiesJSON(properties json.RawMessage, tripletToKsuid map[pkgm
 			continue
 		}
 
-		generatorKsuid, ok := genKeyToKsuid[pkgmodel.GeneratorKey{Label: genObject.Label, Stack: genObject.Stack}]
+		genKey := pkgmodel.GeneratorKey{Label: genObject.Label, Stack: genObject.Stack}
+		generatorKsuid, ok := genKeyToKsuid[genKey]
 		if !ok {
 			identity, identityErr := ds.GetGeneratorIdentity(genObject.Label, genObject.Stack)
-			if identityErr != nil || identity.ID == "" {
+			if identityErr != nil {
+				return nil, nil, fmt.Errorf("failed to look up generator %q in stack %q: %w", genObject.Label, genObject.Stack, identityErr)
+			}
+			if identity.ID == "" {
 				missingGenerators = append(missingGenerators, pkgmodel.MissingGenerator{
 					Label:  genObject.Label,
 					Stack:  genObject.Stack,
@@ -2378,6 +2409,12 @@ func translatePropertiesJSON(properties json.RawMessage, tripletToKsuid map[pkgm
 				continue
 			}
 			generatorKsuid = identity.ID
+			// Memoize: genKeyToKsuid is shared across every property document
+			// this command translates (all resources, read-only properties,
+			// target configs), so caching a datastore-tier hit here spares a
+			// repeat GetGeneratorIdentity call for every other occurrence of
+			// the same generator in the same command.
+			genKeyToKsuid[genKey] = generatorKsuid
 		}
 
 		genEnvelope := map[string]any{
@@ -2507,6 +2544,13 @@ func translateEmbedSpansInTemplate(tmpl string, tripletToKsuid map[pkgmodel.Trip
 		parsed := gjson.Parse(span.EnvelopeJSON)
 
 		if pkgmodel.IsGenObject(parsed) {
+			// Idempotency: skip a span already carrying $generator (already
+			// translated) rather than misreading its missing $label/$stack as
+			// a dangling reference — mirrors the flat-pass guard above.
+			if parsed.Get("$generator").Exists() {
+				continue
+			}
+
 			genObject := pkgmodel.GenObject{
 				Label:  parsed.Get("$label").String(),
 				Stack:  parsed.Get("$stack").String(),
@@ -2518,15 +2562,23 @@ func translateEmbedSpansInTemplate(tmpl string, tripletToKsuid map[pkgmodel.Trip
 				}
 			}
 
-			generatorKsuid, ok := genKeyToKsuid[pkgmodel.GeneratorKey{Label: genObject.Label, Stack: genObject.Stack}]
+			genKey := pkgmodel.GeneratorKey{Label: genObject.Label, Stack: genObject.Stack}
+			generatorKsuid, ok := genKeyToKsuid[genKey]
 			if !ok {
 				identity, identityErr := ds.GetGeneratorIdentity(genObject.Label, genObject.Stack)
-				if identityErr != nil || identity.ID == "" {
+				if identityErr != nil {
+					return tmpl, fmt.Errorf("failed to look up generator %q in stack %q: %w", genObject.Label, genObject.Stack, identityErr)
+				}
+				if identity.ID == "" {
 					return tmpl, apimodel.FormaReferencedGeneratorsNotFoundError{
 						Missing: []pkgmodel.MissingGenerator{{Label: genObject.Label, Stack: genObject.Stack, Output: genObject.Output}},
 					}
 				}
 				generatorKsuid = identity.ID
+				// Memoize, same reasoning as the flat pass: spares a repeat
+				// GetGeneratorIdentity call for the same generator referenced
+				// again elsewhere in this command.
+				genKeyToKsuid[genKey] = generatorKsuid
 			}
 
 			genJSON, marshalErr := json.Marshal(map[string]any{

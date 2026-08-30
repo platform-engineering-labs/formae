@@ -95,6 +95,16 @@ func GenGeneratorKSUID(value gjson.Result) string {
 // generator type can produce. PasswordGenerator is the only arm today, and
 // its only output is "value" (see PasswordOutputs in the PKL schema); a
 // $gen naming any other output is rejected at translation.
+//
+// This is a flat union across every arm because there is only one arm. A
+// second generator type introduces an output name that is valid for IT but
+// not for others (e.g. a second arm's own "value"-shaped or differently
+// named output could collide or diverge in meaning), so checking $output
+// against this union alone stops being sufficient: the resolution site would
+// need to also resolve the referenced generator's TYPE (via genKeyToKsuid's
+// declared generator, or the datastore identity) and validate $output
+// against THAT type's own output set, not the global union. Widening this
+// map to add a key is not enough on its own at that point.
 var KnownGeneratorOutputs = map[string]bool{
 	"value": true,
 }
@@ -113,24 +123,4 @@ type MissingGenerator struct {
 	Label  string
 	Stack  string
 	Output string
-}
-
-// GeneratorIdentity is controller state for one generator: its stable KSUID
-// and the generation it currently holds. Deliberately kept off Generator so
-// it can never participate in desired-config equality.
-//
-// GenerationSpec's bytes are NOT canonical: Postgres and Aurora store it as
-// JSONB, which normalizes key order and whitespace on write, so what comes
-// back can differ byte-for-byte from what AdvanceGeneration was given. Parse
-// it; never byte-compare or hash it against the spec that was drawn.
-//
-// Defined here (rather than internal/datastore) so the resource_update
-// package — which must not import internal/datastore, to avoid a cycle
-// (internal/datastore imports resource_update for ResourceUpdate) — can
-// still express a generator lookup that returns it. internal/datastore
-// aliases its GeneratorIdentity to this type.
-type GeneratorIdentity struct {
-	ID             string          // the generator's stable KSUID
-	GenerationID   string          // "" until a generation has been drawn
-	GenerationSpec json.RawMessage // the spec that generation was drawn under; nil when GenerationID is ""
 }

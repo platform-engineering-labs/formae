@@ -20,6 +20,7 @@ type mockDatastore struct {
 	resourcesByStack map[string][]*pkgmodel.Resource
 	triplet          map[pkgmodel.TripletKey]string
 	generators       map[pkgmodel.GeneratorKey]pkgmodel.GeneratorIdentity
+	generatorLookups map[pkgmodel.GeneratorKey]int // counts GetGeneratorIdentity calls per key, for memoization tests
 }
 
 func newMockDatastore() *mockDatastore {
@@ -27,6 +28,7 @@ func newMockDatastore() *mockDatastore {
 		resourcesByStack: make(map[string][]*pkgmodel.Resource),
 		triplet:          make(map[pkgmodel.TripletKey]string),
 		generators:       make(map[pkgmodel.GeneratorKey]pkgmodel.GeneratorIdentity),
+		generatorLookups: make(map[pkgmodel.GeneratorKey]int),
 	}
 }
 
@@ -104,14 +106,26 @@ func (m *mockDatastore) FindResourcesDependingOnMany(ksuids []string) (map[strin
 // for (label, stackLabel), or a zero GeneratorIdentity and a nil error when
 // none was seeded — mirroring the real datastore's "absent" contract.
 func (m *mockDatastore) GetGeneratorIdentity(label, stackLabel string) (pkgmodel.GeneratorIdentity, error) {
+	m.mu.Lock()
+	key := pkgmodel.GeneratorKey{Label: label, Stack: stackLabel}
+	m.generatorLookups[key]++
+	m.mu.Unlock()
+
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-
-	key := pkgmodel.GeneratorKey{Label: label, Stack: stackLabel}
 	if identity, ok := m.generators[key]; ok {
 		return identity, nil
 	}
 	return pkgmodel.GeneratorIdentity{}, nil
+}
+
+// GeneratorIdentityLookupCount returns how many times GetGeneratorIdentity
+// was called for (label, stackLabel) — a test helper for pinning
+// memoization of the datastore tier.
+func (m *mockDatastore) GeneratorIdentityLookupCount(label, stackLabel string) int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.generatorLookups[pkgmodel.GeneratorKey{Label: label, Stack: stackLabel}]
 }
 
 // StoreGeneratorIdentity is a helper for tests to seed a generator that

@@ -154,6 +154,40 @@ func TestTranslatePropertiesJSON_RewritesEmbeddedSpan_Idempotent(t *testing.T) {
 	assert.Equal(t, string(result1), string(result2), "translatePropertiesJSON should be idempotent for embed spans")
 }
 
+// A translated $gen span (already carrying $generator, no $label/$stack) must
+// survive a second translation pass unchanged. Unlike $res->$ref, a $gen node
+// keeps the same $gen:true key across translation, so without an explicit
+// already-translated check a second pass would misread the missing
+// $label/$stack as a dangling reference and hard-reject the whole document.
+func TestTranslatePropertiesJSON_RewritesEmbeddedGenSpan_Idempotent(t *testing.T) {
+	ds, _ := GetDeps(t)
+	ds.StoreGeneratorIdentity("db-password", "default", "testgenembedidem1")
+
+	genEnvJSON, _ := json.Marshal(map[string]any{
+		"$gen":    true,
+		"$label":  "db-password",
+		"$stack":  "default",
+		"$output": "value",
+	})
+	tmpl := "cf.kvs('" + pkgmodel.FrameEnvelope(string(genEnvJSON)) + "')"
+
+	properties, err := json.Marshal(map[string]any{
+		"functionCode": map[string]any{
+			"$embed":    true,
+			"$template": tmpl,
+		},
+	})
+	require.NoError(t, err)
+
+	result1, _, err := translatePropertiesJSON(json.RawMessage(properties), nil, nil, ds)
+	require.NoError(t, err)
+
+	result2, _, err := translatePropertiesJSON(result1, nil, nil, ds)
+	require.NoError(t, err)
+
+	assert.Equal(t, string(result1), string(result2), "translatePropertiesJSON should be idempotent for $gen embed spans")
+}
+
 // TestTranslatePropertiesJSON_EmbeddedSpan_BareStack verifies that an embed span
 // whose $stack was omitted resolves via (label, type). A bare resource (no
 // explicit stack) renders its embed envelope before forma.pkl's single-stack

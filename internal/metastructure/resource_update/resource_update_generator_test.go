@@ -75,7 +75,7 @@ func TestTranslateFormaeReferencesToKsuid(t *testing.T) {
 			},
 		}
 
-		_, err := translateFormaeReferencesToKsuid(forma, ds)
+		_, _, err := translateFormaeReferencesToKsuid(forma, ds)
 		require.NoError(t, err)
 
 		var subnetProps map[string]any
@@ -123,7 +123,7 @@ func TestTranslateFormaeReferencesToKsuid(t *testing.T) {
 			},
 		}
 
-		_, err := translateFormaeReferencesToKsuid(forma, ds)
+		_, _, err := translateFormaeReferencesToKsuid(forma, ds)
 		require.NoError(t, err)
 
 		assert.NotEmpty(t, forma.Resources[0].Ksuid, "VPC should have KSUID")
@@ -166,7 +166,7 @@ func TestTranslateFormaeReferencesToKsuid(t *testing.T) {
 
 		originalProperties := string(forma.Resources[0].Properties)
 
-		_, err := translateFormaeReferencesToKsuid(forma, ds)
+		_, _, err := translateFormaeReferencesToKsuid(forma, ds)
 		require.NoError(t, err)
 
 		var originalProps, translatedProps map[string]any
@@ -193,7 +193,7 @@ func TestTranslateFormaeReferencesToKsuid(t *testing.T) {
 			},
 		}
 
-		_, err := translateFormaeReferencesToKsuid(forma, ds)
+		_, _, err := translateFormaeReferencesToKsuid(forma, ds)
 		require.NoError(t, err)
 		assert.Equal(t, existingKsuid, forma.Resources[0].Ksuid)
 	})
@@ -243,7 +243,7 @@ func TestTranslateFormaeReferencesToKsuid(t *testing.T) {
 			},
 		}
 
-		_, err := translateFormaeReferencesToKsuid(forma, ds)
+		_, _, err := translateFormaeReferencesToKsuid(forma, ds)
 		require.NoError(t, err)
 
 		// Verify all 3 different references were translated
@@ -302,7 +302,7 @@ func TestTranslateFormaeReferencesToKsuid(t *testing.T) {
 			},
 		}
 
-		_, err := translateFormaeReferencesToKsuid(forma, ds)
+		_, _, err := translateFormaeReferencesToKsuid(forma, ds)
 		require.NoError(t, err)
 
 		var resourceProps map[string]any
@@ -352,7 +352,7 @@ func TestTranslateFormaeReferencesToKsuid(t *testing.T) {
 			},
 		}
 
-		_, err = translateFormaeReferencesToKsuid(forma, ds)
+		_, _, err = translateFormaeReferencesToKsuid(forma, ds)
 		require.NoError(t, err)
 
 		var subnetProps map[string]any
@@ -391,7 +391,7 @@ func TestTranslateFormaeReferencesToKsuid(t *testing.T) {
 			},
 		}
 
-		_, err := translateFormaeReferencesToKsuid(forma, ds)
+		_, _, err := translateFormaeReferencesToKsuid(forma, ds)
 		require.NoError(t, err)
 
 		var resourceProps map[string]any
@@ -511,7 +511,7 @@ func TestTranslateFormaeReferencesToKsuid_ReturnsCompleteMapping(t *testing.T) {
 			},
 		}
 
-		mapping, err := translateFormaeReferencesToKsuid(forma, ds)
+		mapping, _, err := translateFormaeReferencesToKsuid(forma, ds)
 		require.NoError(t, err)
 
 		assert.Equal(t, "vpc", mapping[forma.Resources[0].Ksuid])
@@ -551,7 +551,7 @@ func TestTranslateFormaeReferencesToKsuid_ReturnsCompleteMapping(t *testing.T) {
 			},
 		}
 
-		mapping, err := translateFormaeReferencesToKsuid(forma, ds)
+		mapping, _, err := translateFormaeReferencesToKsuid(forma, ds)
 		require.NoError(t, err)
 
 		assert.Equal(t, "subnet", mapping[forma.Resources[0].Ksuid])
@@ -1379,7 +1379,7 @@ func TestTranslateFormaeReferencesToKsuid_TargetConfig(t *testing.T) {
 		},
 	}
 
-	_, err := translateFormaeReferencesToKsuid(forma, ds)
+	_, _, err := translateFormaeReferencesToKsuid(forma, ds)
 	require.NoError(t, err)
 
 	var config map[string]any
@@ -1875,7 +1875,7 @@ func TestTranslateFormaeReferences_StripsUntrustedProvenance(t *testing.T) {
 		}},
 	}
 
-	_, err := TranslateFormaeReferencesToKsuid(forma, ds)
+	_, _, err := TranslateFormaeReferencesToKsuid(forma, ds)
 	require.NoError(t, err)
 
 	props := string(forma.Resources[0].Properties)
@@ -1899,7 +1899,7 @@ func TestTranslateFormaeReferences_KeepsLiteralResolvedFromInPlainMaps(t *testin
 		}},
 	}
 
-	_, err := TranslateFormaeReferencesToKsuid(forma, ds)
+	_, _, err := TranslateFormaeReferencesToKsuid(forma, ds)
 	require.NoError(t, err)
 
 	var props map[string]map[string]any
@@ -1926,7 +1926,7 @@ func TestTranslate_GenReference_ResolvesInCommandGenerator(t *testing.T) {
 		}},
 	}
 
-	_, err := TranslateFormaeReferencesToKsuid(forma, ds)
+	_, _, err := TranslateFormaeReferencesToKsuid(forma, ds)
 	require.NoError(t, err)
 
 	translated := gjson.ParseBytes(forma.Resources[0].Properties).Get("MasterPassword")
@@ -1936,6 +1936,36 @@ func TestTranslate_GenReference_ResolvesInCommandGenerator(t *testing.T) {
 	assert.Equal(t, "Opaque", translated.Get("$visibility").String())
 	assert.False(t, translated.Get("$label").Exists(), "authored $label must not survive translation")
 	assert.False(t, translated.Get("$stack").Exists(), "authored $stack must not survive translation")
+}
+
+// A flat $gen node already carrying $generator (already translated) must
+// survive a second translation pass unchanged, not be misread as dangling
+// because it no longer carries $label/$stack.
+func TestTranslate_GenReference_TranslationIsIdempotent(t *testing.T) {
+	ds, _ := GetDeps(t)
+	forma := &pkgmodel.Forma{
+		Stacks:     []pkgmodel.Stack{{Label: "test-stack"}},
+		Generators: []json.RawMessage{rawPasswordGenerator(t, "db-password", "test-stack")},
+		Resources: []pkgmodel.Resource{{
+			Label: "db", Type: "Test::Database", Stack: "test-stack",
+			Properties: json.RawMessage(`{
+				"MasterPassword": {"$gen": true, "$label": "db-password", "$stack": "test-stack", "$output": "value", "$visibility": "Opaque"}
+			}`),
+		}},
+	}
+
+	_, _, err := TranslateFormaeReferencesToKsuid(forma, ds)
+	require.NoError(t, err)
+	firstPass := string(forma.Resources[0].Properties)
+
+	// A second translation pass over the already-translated forma (as would
+	// happen if translation ran twice, or over a resource whose properties
+	// were already resolved) must be a no-op.
+	_, _, err = TranslateFormaeReferencesToKsuid(forma, ds)
+	require.NoError(t, err)
+
+	assert.Equal(t, firstPass, string(forma.Resources[0].Properties),
+		"a second translation pass over an already-translated $gen must be idempotent")
 }
 
 // A generator not declared in this command's forma, but already persisted,
@@ -1955,11 +1985,49 @@ func TestTranslate_GenReference_ResolvesViaDatastore(t *testing.T) {
 		}},
 	}
 
-	_, err := TranslateFormaeReferencesToKsuid(forma, ds)
+	_, _, err := TranslateFormaeReferencesToKsuid(forma, ds)
 	require.NoError(t, err)
 
 	translated := gjson.ParseBytes(forma.Resources[0].Properties).Get("MasterPassword")
 	assert.Equal(t, "2existinggeneratorksuid", translated.Get("$generator").String())
+}
+
+// A datastore-tier generator referenced by more than one occurrence in the
+// same command — here, two different resources — is looked up in the
+// datastore only once. Without memoization, a stack of many resources
+// sharing one pre-existing generator would issue one GetGeneratorIdentity
+// call per occurrence instead of one per generator per command.
+func TestTranslate_GenReference_DatastoreLookupIsMemoizedAcrossOccurrences(t *testing.T) {
+	ds, _ := GetDeps(t)
+	ds.StoreGeneratorIdentity("db-password", "test-stack", "2existinggeneratorksuid")
+
+	forma := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{{Label: "test-stack"}},
+		Resources: []pkgmodel.Resource{
+			{
+				Label: "db-one", Type: "Test::Database", Stack: "test-stack",
+				Properties: json.RawMessage(`{
+					"MasterPassword": {"$gen": true, "$label": "db-password", "$stack": "test-stack", "$output": "value"}
+				}`),
+			},
+			{
+				Label: "db-two", Type: "Test::Database", Stack: "test-stack",
+				Properties: json.RawMessage(`{
+					"MasterPassword": {"$gen": true, "$label": "db-password", "$stack": "test-stack", "$output": "value"}
+				}`),
+			},
+		},
+	}
+
+	_, _, err := TranslateFormaeReferencesToKsuid(forma, ds)
+	require.NoError(t, err)
+
+	for _, r := range forma.Resources {
+		translated := gjson.ParseBytes(r.Properties).Get("MasterPassword")
+		assert.Equal(t, "2existinggeneratorksuid", translated.Get("$generator").String())
+	}
+	assert.Equal(t, 1, ds.GeneratorIdentityLookupCount("db-password", "test-stack"),
+		"a generator shared across occurrences in one command must be looked up once, not once per occurrence")
 }
 
 // An in-command generator that already has a live identity keeps that exact
@@ -1980,7 +2048,7 @@ func TestTranslate_GenReference_InCommandGeneratorKeepsExistingIdentity(t *testi
 		}},
 	}
 
-	_, err := TranslateFormaeReferencesToKsuid(forma, ds)
+	_, _, err := TranslateFormaeReferencesToKsuid(forma, ds)
 	require.NoError(t, err)
 
 	translated := gjson.ParseBytes(forma.Resources[0].Properties).Get("MasterPassword")
@@ -2019,7 +2087,7 @@ func TestTranslate_GenReference_InCommandRenamedGeneratorKeepsExistingIdentity(t
 		}},
 	}
 
-	_, err = TranslateFormaeReferencesToKsuid(forma, ds)
+	_, _, err = TranslateFormaeReferencesToKsuid(forma, ds)
 	require.NoError(t, err)
 
 	translated := gjson.ParseBytes(forma.Resources[0].Properties).Get("MasterPassword")
@@ -2077,7 +2145,7 @@ func TestTranslate_GenReference_UnknownOutputIsRejected(t *testing.T) {
 		}},
 	}
 
-	_, err := TranslateFormaeReferencesToKsuid(forma, ds)
+	_, _, err := TranslateFormaeReferencesToKsuid(forma, ds)
 	require.Error(t, err)
 
 	var notFoundErr apimodel.FormaReferencedGeneratorsNotFoundError
@@ -2100,7 +2168,7 @@ func TestTranslate_GenReference_IncompleteReferenceIsRejected(t *testing.T) {
 		}},
 	}
 
-	_, err := TranslateFormaeReferencesToKsuid(forma, ds)
+	_, _, err := TranslateFormaeReferencesToKsuid(forma, ds)
 	require.Error(t, err)
 
 	var notFoundErr apimodel.FormaReferencedGeneratorsNotFoundError

@@ -25,7 +25,15 @@ import (
 func (d *DatastoreAuroraDataAPI) CreateGenerator(gen pkgmodel.Generator, commandID string) (string, error) {
 	ctx := context.Background()
 
-	id := mksuid.New().String()
+	// Honor a KSUID translation already assigned (see pkgmodel.Generator.GetID
+	// and generator_update.GenerateGeneratorUpdates), so a $gen reference
+	// resolved in the same command that creates this generator names the
+	// exact row this call persists, rather than an independently minted one
+	// — mirrors storeResource's identical id-already-assigned handling.
+	id := gen.GetID()
+	if id == "" {
+		id = mksuid.New().String()
+	}
 	version := mksuid.New().String()
 
 	data, err := datastore.GeneratorData(gen)

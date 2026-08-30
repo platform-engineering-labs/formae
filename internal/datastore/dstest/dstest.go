@@ -241,6 +241,7 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunDeleteInlinePolicyThenRecreate(t, newDS)
 
 	RunCreateGeneratorThenGet(t, newDS)
+	RunCreateGeneratorHonorsPreAssignedID(t, newDS)
 	RunGetGeneratorAbsentReturnsNil(t, newDS)
 	RunUpdateGeneratorBumpsVersionAndReadBackReflectsIt(t, newDS)
 	RunDeleteGeneratorThenGetReturnsNil(t, newDS)

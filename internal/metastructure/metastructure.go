@@ -2117,8 +2117,16 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 	doTranslate := source != resource_update.FormaCommandSourceSynchronize &&
 		source != resource_update.FormaCommandSourceDiscovery &&
 		command != pkgmodel.CommandDestroy
+	// genKeyToKsuid carries the KSUIDs translation resolved for this
+	// command's own declared generators through to GenerateGeneratorUpdates
+	// below, so a generator created by this same command gets the exact
+	// KSUID any $gen reference to it was translated to, instead of
+	// CreateGenerator minting an independent one. Left nil on a path that
+	// skips translation (Sync/Discovery/Destroy never declare generators).
+	var genKeyToKsuid map[pkgmodel.GeneratorKey]string
 	if doTranslate {
-		if _, err := resource_update.TranslateFormaeReferencesToKsuid(forma, ds); err != nil {
+		var err error
+		if _, genKeyToKsuid, err = resource_update.TranslateFormaeReferencesToKsuid(forma, ds); err != nil {
 			return nil, fmt.Errorf("failed to translate references to KSUID: %w", err)
 		}
 	}
@@ -2245,7 +2253,7 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 		return nil, err
 	}
 
-	generatorUpdates, err := generator_update.NewGeneratorUpdateGenerator(ds).GenerateGeneratorUpdates(forma, command, formaCommandConfig.Mode)
+	generatorUpdates, err := generator_update.NewGeneratorUpdateGenerator(ds).GenerateGeneratorUpdates(forma, command, formaCommandConfig.Mode, genKeyToKsuid)
 	if err != nil {
 		return nil, err
 	}
