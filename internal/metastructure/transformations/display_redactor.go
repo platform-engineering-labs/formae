@@ -128,6 +128,12 @@ func displayWalk(opaqueFields map[string]bool) *OpaqueWalk {
 
 // claimOpaqueEnvelope claims a map that is an inline opaque or hashed
 // envelope. Cascade markers are not envelopes and are never claimed.
+//
+// $gen is claimed unconditionally, not gated on $visibility/$hashed: the
+// schema fixes $visibility to "Opaque" on every $gen, so there is no
+// non-opaque $gen shape to let through. Gating it on those markers alone
+// would render a $gen missing them (an absent or malformed row) with its
+// $value in plaintext instead of withheld.
 func claimOpaqueEnvelope(v any) (any, bool) {
 	m, ok := v.(map[string]any)
 	if !ok {
@@ -136,7 +142,7 @@ func claimOpaqueEnvelope(v any) (any, bool) {
 	if m["$cascade-resolvable"] == true {
 		return nil, false
 	}
-	if m["$visibility"] == pkgmodel.VisibilityOpaque || m["$hashed"] == true {
+	if m["$gen"] == true || m["$visibility"] == pkgmodel.VisibilityOpaque || m["$hashed"] == true {
 		return displayRedactValue(m), true
 	}
 	return nil, false

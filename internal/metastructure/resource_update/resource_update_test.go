@@ -1168,3 +1168,52 @@ func Test_mergeRefsPreservingUserRefs_GenEnvelope_EmptyPluginEchoPreservesHash(t
 	assert.Equal(t, true, password["$hashed"],
 		"$hashed must be retained (no hash-of-hash)")
 }
+
+// A plugin echo of explicit JSON null at the $gen's own path (as opposed to
+// the key being absent, which the sibling test above covers) must be treated
+// the same as "nothing usable was returned": the stored hash is retained,
+// not clobbered.
+func Test_mergeRefsPreservingUserRefs_GenEnvelope_NullPluginEchoPreservesHash(t *testing.T) {
+	storedHash := pkgmodel.ComputeValueHash("v1")
+	userProps := []byte(`{
+        "Password": {"$gen":true,"$generator":"2ABcDeFgHiJkLmNoPqRsTuVwXyZ","$output":"value","$hashed":true,"$value":"` + storedHash + `","$visibility":"Opaque"}
+    }`)
+	pluginProps := []byte(`{"Password": null}`)
+
+	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{}, false, nil)
+	require.NoError(t, err)
+
+	var mergedMap map[string]any
+	require.NoError(t, json.Unmarshal(merged, &mergedMap))
+
+	password, ok := mergedMap["Password"].(map[string]any)
+	require.True(t, ok, "Password must remain a $gen envelope")
+	assert.Equal(t, storedHash, password["$value"],
+		"stored hash must be retained when the plugin echoes explicit null")
+	assert.Equal(t, true, password["$hashed"],
+		"$hashed must be retained (no hash-of-hash)")
+}
+
+// A plugin echo of an empty string at the $gen's own path must likewise be
+// treated as "nothing usable was returned": the stored hash is retained, not
+// clobbered by an empty value.
+func Test_mergeRefsPreservingUserRefs_GenEnvelope_EmptyStringPluginEchoPreservesHash(t *testing.T) {
+	storedHash := pkgmodel.ComputeValueHash("v1")
+	userProps := []byte(`{
+        "Password": {"$gen":true,"$generator":"2ABcDeFgHiJkLmNoPqRsTuVwXyZ","$output":"value","$hashed":true,"$value":"` + storedHash + `","$visibility":"Opaque"}
+    }`)
+	pluginProps := []byte(`{"Password": ""}`)
+
+	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{}, false, nil)
+	require.NoError(t, err)
+
+	var mergedMap map[string]any
+	require.NoError(t, json.Unmarshal(merged, &mergedMap))
+
+	password, ok := mergedMap["Password"].(map[string]any)
+	require.True(t, ok, "Password must remain a $gen envelope")
+	assert.Equal(t, storedHash, password["$value"],
+		"stored hash must be retained when the plugin echoes an empty string")
+	assert.Equal(t, true, password["$hashed"],
+		"$hashed must be retained (no hash-of-hash)")
+}

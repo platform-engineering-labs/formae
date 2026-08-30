@@ -55,6 +55,16 @@ func TestPropertyLines_SimplifiesSpecialValues(t *testing.T) {
 	// opaque values are masked.
 	assert.Equal(t, []string{" Secret: " + propOpaqueMask},
 		PropertyLines([]byte(`{"Secret":{"$visibility":"Opaque","$value":"hunter2"}}`), 1))
+
+	// an opaque $res reference is masked but still names its target: the
+	// resolved value is withheld, but which resource property it points at
+	// is safe metadata and must not be dropped along with the value.
+	assert.Equal(t, []string{" VpcId: " + propOpaqueMask + "  → lifeline-vpc.VpcId"},
+		PropertyLines([]byte(`{"VpcId":{"$res":true,"$value":"vpc-0b5","$label":"lifeline-vpc","$property":"VpcId","$visibility":"Opaque"}}`), 1))
+
+	// an opaque $ref reference is masked but still names its target.
+	assert.Equal(t, []string{" VpcId: " + propOpaqueMask + "  → abc"},
+		PropertyLines([]byte(`{"VpcId":{"$ref":"formae://abc","$value":"vpc-0b5","$visibility":"Opaque"}}`), 1))
 }
 
 // A $gen envelope renders as a masked reference, not a raw JSON blob: the

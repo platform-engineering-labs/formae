@@ -190,6 +190,21 @@ func TestSimplifyValue(t *testing.T) {
 	got2 := simplifyValue(map[string]any{"$ref": "formae://abc", "$value": "us-east-1"})
 	assert.Equal(t, refVal{value: "us-east-1", target: "abc"}, got2)
 
+	// An opaque $res reference is masked but still names its target: the
+	// resolved value is withheld, but which resource property it points at
+	// is safe metadata and must not be dropped along with the value.
+	gotOpaqueRes := simplifyValue(map[string]any{
+		"$res": true, "$label": "lifeline-vpc", "$property": "VpcId", "$value": "vpc-0b5",
+		"$visibility": "Opaque",
+	})
+	assert.Equal(t, refVal{value: opaqueVal{}, target: "lifeline-vpc.VpcId"}, gotOpaqueRes)
+
+	// An opaque $ref reference is masked but still names its target.
+	gotOpaqueRef := simplifyValue(map[string]any{
+		"$ref": "formae://abc", "$value": "us-east-1", "$visibility": "Opaque",
+	})
+	assert.Equal(t, refVal{value: opaqueVal{}, target: "abc"}, gotOpaqueRef)
+
 	// A $gen envelope is a masked reference, not a raw JSON blob: the value is
 	// withheld like any opaque wrapper, but the generator it names still
 	// shows.

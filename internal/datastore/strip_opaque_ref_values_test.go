@@ -208,7 +208,7 @@ func TestAssertNoOpaqueRefValue_RejectsNullRefWithValue(t *testing.T) {
 		"$value":      "super-secret",
 	}
 
-	err := assertNoOpaqueRefValue(envelope, "")
+	err := assertNoOpaqueEnvelopeValue(envelope, "")
 	require.Error(t, err, "guard must reject a null-$ref opaque envelope that still carries $value")
 	assert.NotContains(t, err.Error(), "super-secret", "error must not leak the secret value")
 }
@@ -233,7 +233,7 @@ func TestAssertNoOpaqueRefValue_RejectsOpaqueRefWithValue(t *testing.T) {
 		"$value":      "super-secret",
 	}
 
-	err := assertNoOpaqueRefValue(envelope, "")
+	err := assertNoOpaqueEnvelopeValue(envelope, "")
 	require.Error(t, err, "guard must reject an opaque $ref that still carries $value")
 	assert.NotContains(t, err.Error(), "super-secret", "error must not leak the secret value")
 }
@@ -247,7 +247,7 @@ func TestAssertNoOpaqueRefValue_AcceptsStrippedOpaqueRef(t *testing.T) {
 		// no $value — correctly stripped
 	}
 
-	err := assertNoOpaqueRefValue(envelope, "")
+	err := assertNoOpaqueEnvelopeValue(envelope, "")
 	require.NoError(t, err, "guard must accept a properly-stripped opaque $ref")
 }
 
@@ -299,9 +299,54 @@ func TestStripOpaqueRefValues_GenEnvelopeValueTripsTheAssertion(t *testing.T) {
 		"$value":      "gen-cleartext-sentinel-9f3a",
 	}
 
-	err := assertNoOpaqueRefValue(envelope, "")
+	err := assertNoOpaqueEnvelopeValue(envelope, "")
 	require.Error(t, err, "guard must reject an opaque $gen envelope that still carries $value")
 	assert.NotContains(t, err.Error(), "gen-cleartext-sentinel-9f3a", "error must not leak the secret value")
+}
+
+// A $gen carrying $value but NO $visibility must still be stripped: $gen has
+// no non-opaque shape (the schema fixes $visibility to "Opaque" on every
+// $gen this process produces), so the strip must not gate on a $visibility
+// reading that could be absent or malformed on a hand-constructed or
+// corrupted row. This is defence in depth — not reachable through normal
+// translation — for the at-rest secret boundary.
+func TestStripOpaqueRefValues_GenEnvelopeWithoutVisibility_IsStillStripped(t *testing.T) {
+	input := json.RawMessage(`{
+		"password": {
+			"$gen": true,
+			"$generator": "2ABcDeFgHiJkLmNoPqRsTuVwXyZ",
+			"$output": "value",
+			"$value": "gen-cleartext-sentinel-no-visibility"
+		}
+	}`)
+
+	out, err := StripOpaqueRefValues(input)
+	require.NoError(t, err)
+
+	var result map[string]any
+	require.NoError(t, json.Unmarshal(out, &result))
+
+	pw, ok := result["password"].(map[string]any)
+	require.True(t, ok, "password should be a map")
+	assert.Equal(t, true, pw["$gen"], "$gen must be preserved")
+	_, hasValue := pw["$value"]
+	assert.False(t, hasValue, "$value must be stripped from a $gen envelope even without $visibility")
+	assert.NotContains(t, string(out), "gen-cleartext-sentinel-no-visibility")
+}
+
+// The fail-closed assertion must trip for a $gen without $visibility too:
+// the assertion's own gate must match the strip's, or a malformed row that
+// slipped past the strip would slip past the guard as well.
+func TestAssertNoOpaqueEnvelopeValue_RejectsGenWithoutVisibility(t *testing.T) {
+	envelope := map[string]any{
+		"$gen":       true,
+		"$generator": "2ABcDeFgHiJkLmNoPqRsTuVwXyZ",
+		"$value":     "gen-cleartext-sentinel-no-visibility",
+	}
+
+	err := assertNoOpaqueEnvelopeValue(envelope, "")
+	require.Error(t, err, "guard must reject a $gen envelope that still carries $value, even without $visibility")
+	assert.NotContains(t, err.Error(), "gen-cleartext-sentinel-no-visibility")
 }
 
 // Stripping the resolved secret value from an opaque reference envelope must

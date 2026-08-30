@@ -4209,26 +4209,6 @@ func TestSubstituteStableOccurrences_GenEnvelope_UnmarkedPathUntouched(t *testin
 	assert.Equal(t, genEnvelope, desired["Password"], "an unmarked path must not be substituted")
 }
 
-// storedAppliedEnvelope's marker check must recognize $gen as an envelope
-// shape, not only $ref/$res, so a stored $gen row is not treated as "not an
-// envelope at all" by the guard that gates provenance comparison.
-func TestStoredAppliedEnvelope_RecognizesGenMarker(t *testing.T) {
-	storedNode := map[string]any{
-		"$gen":       true,
-		"$generator": "2ABcDeFgHiJkLmNoPqRsTuVwXyZ",
-		"$output":    "value",
-		// Deliberately non-opaque so this probes the marker-recognition branch
-		// in isolation from the (always-true-for-real-$gen) opacity exclusion.
-		"$applied": "written-value",
-		"$value":   "written-value",
-	}
-
-	got := storedAppliedEnvelope(storedNode)
-
-	require.NotNil(t, got, "a $gen-marked stored node must be recognized as an envelope")
-	assert.Equal(t, "written-value", got["$applied"])
-}
-
 // storedAppliedEnvelope must still return nil for a plain map that carries
 // none of $ref, $res, or $gen — the widened check must not start recognizing
 // arbitrary maps as envelopes.

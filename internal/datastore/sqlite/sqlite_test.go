@@ -595,6 +595,43 @@ func TestBulkStoreResourceUpdates_StripsOpaqueRefValueFromExistingTarget(t *test
 	assert.NotContains(t, raw, "super-secret", "stored existing_target must not contain the resolved secret")
 }
 
+// TestCreateTarget_StripsOpaqueGenValueWithoutVisibility proves the
+// fail-closed strip at the storage boundary: a $gen envelope missing
+// $visibility entirely (a shape normal translation never produces — the
+// schema fixes $visibility to "Opaque" on every $gen) must still be stripped
+// before it reaches the database. Before the fix, gating the strip predicate
+// on a $visibility reading let this exact shape land in the SQLite file in
+// cleartext.
+func TestCreateTarget_StripsOpaqueGenValueWithoutVisibility(t *testing.T) {
+	cfg := &pkgmodel.DatastoreConfig{
+		DatastoreType: pkgmodel.SqliteDatastore,
+		Sqlite:        pkgmodel.SqliteConfig{FilePath: ":memory:"},
+	}
+	ds, err := dssqlite.NewDatastoreSQLite(context.Background(), cfg, "test")
+	require.NoError(t, err)
+	d, _ := ds.(dssqlite.DatastoreSQLite)
+	defer d.CleanUp() //nolint:errcheck
+
+	const sentinel = "gen-cleartext-sentinel-no-visibility-storage"
+	opaqueConfig := json.RawMessage(`{"auth":{"$gen":true,"$generator":"2ABcDeFgHiJkLmNoPqRsTuVwXyZ","$output":"value","$value":"` + sentinel + `"}}`)
+	_, err = ds.CreateTarget(&pkgmodel.Target{
+		Label:     "gen-no-visibility-create",
+		Namespace: "AWS",
+		Config:    opaqueConfig,
+	})
+	require.NoError(t, err)
+
+	var raw string
+	err = d.Conn().QueryRow(
+		`SELECT config FROM targets WHERE label = 'gen-no-visibility-create' ORDER BY version DESC LIMIT 1`,
+	).Scan(&raw)
+	require.NoError(t, err)
+
+	assert.Contains(t, raw, `$gen`, "stored config must preserve $gen")
+	assert.NotContains(t, raw, `$value`, "stored config must not contain $value")
+	assert.NotContains(t, raw, sentinel, "the generated secret must never reach at-rest storage, even without $visibility")
+}
+
 // TestBulkStoreResourceUpdates_StripsOpaqueGenValueFromExistingTarget proves
 // what actually reaches storage, not what the strip function's return value
 // claims: a resolved generator value seeded onto a target config must not
