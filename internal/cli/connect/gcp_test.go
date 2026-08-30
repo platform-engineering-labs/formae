@@ -393,9 +393,10 @@ func TestSplitSubjectRefusesWhatItDoesNotRecognise(t *testing.T) {
 	}
 }
 
-// TestRegisteredDocumentBytes pins both clouds' documents. Making roleArn
-// omitempty for GCP's sake must not drop it from an AWS document, which is a
-// v2 contract a consumer already reads.
+// TestRegisteredDocumentBytes pins all three clouds' documents. Making
+// roleArn omitempty for GCP's sake must not drop it from an AWS document,
+// which is a v2 contract a consumer already reads; the same applies to
+// azureTenantId/azureClientId, added for Azure without moving the version.
 func TestRegisteredDocumentBytes(t *testing.T) {
 	awsDoc, err := json.Marshal(registeredDocument(statusRegisteredUnverified, testAccount, contractRoleArn, nil))
 	require.NoError(t, err)
@@ -418,6 +419,20 @@ func TestRegisteredDocumentBytes(t *testing.T) {
 		"account": "`+testProject+`",
 		"workloadIdentityProvider": "`+testProviderName+`"
 	}`, string(gcpDoc))
+
+	const testTenantID = "11111111-1111-1111-1111-111111111111"
+	const testClientID = "22222222-2222-2222-2222-222222222222"
+	azureDoc, err := json.Marshal(azureRegisteredDocument(statusRegisteredUnverified, testSubscription, testTenantID, testClientID, nil))
+	require.NoError(t, err)
+	assert.JSONEq(t, `{
+		"schemaVersion": 2,
+		"phase": "registered",
+		"status": "registered_unverified",
+		"cloud": "azure",
+		"account": "`+testSubscription+`",
+		"azureTenantId": "`+testTenantID+`",
+		"azureClientId": "`+testClientID+`"
+	}`, string(azureDoc))
 }
 
 // TestRegisteredHumanNamesEachCloudInItsOwnWords pins both renderings.

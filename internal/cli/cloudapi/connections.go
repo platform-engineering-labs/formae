@@ -57,6 +57,10 @@ type CloudConnectionRegistration struct {
 	// WorkloadIdentityProvider is the GCP coordinate: the full resource name
 	// of the workload identity pool provider that trusts this installation.
 	WorkloadIdentityProvider string `json:"workloadIdentityProvider,omitempty"`
+	// AzureTenantID and AzureClientID are the Azure coordinate: the
+	// subscription's Entra tenant and the managed identity's client id.
+	AzureTenantID string `json:"azureTenantId,omitempty"`
+	AzureClientID string `json:"azureClientId,omitempty"`
 }
 
 // CloudConnection is one registered connection as the control plane lists it.
@@ -65,6 +69,8 @@ type CloudConnection struct {
 	Account                  string `json:"account"`
 	RoleArn                  string `json:"roleArn"`
 	WorkloadIdentityProvider string `json:"workloadIdentityProvider"`
+	AzureTenantID            string `json:"azureTenantId"`
+	AzureClientID            string `json:"azureClientId"`
 }
 
 // RegisterOutcome reports what a registration did.

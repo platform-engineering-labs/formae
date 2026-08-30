@@ -45,7 +45,7 @@ func runLocal(cc *cobra.Command, opts options, consumer printer.Consumer, schema
 	}
 
 	warnings := s.Warnings
-	elsewhere := connectedElsewhere(s.Setup.AccountsConnectedHint, opts.Account, s.InstallationID)
+	elsewhere := connectedElsewhere(s.Setup.AccountsConnectedHint, "aws", opts.Account, s.InstallationID)
 	if len(elsewhere) > 0 {
 		warnings = append(warnings, multiInstallationWarning(opts.Account, elsewhere))
 	}
