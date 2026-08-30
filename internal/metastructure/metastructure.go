@@ -2308,10 +2308,19 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 	// produces no GeneratorUpdate, yet a resource newly bound to it still
 	// needs a value drawn. genKeyToKsuid is what maps a translated $gen
 	// envelope's KSUID back to the generator it names.
-	drawGeneratorUpdates, err := generator_update.SynthesizeDrawGeneratorUpdates(
-		resourceUpdates, generatorUpdates, genKeyToKsuid, ds)
-	if err != nil {
-		return nil, err
+	//
+	// A destroy never draws: it writes no property, and its generators go
+	// with the stack. DestroyForma passes no draws to its changeset either,
+	// so computing them here would only cost a datastore read per referenced
+	// generator and leave a populated field on a command that must never use
+	// it.
+	var drawGeneratorUpdates []generator_update.GeneratorUpdate
+	if command != pkgmodel.CommandDestroy {
+		drawGeneratorUpdates, err = generator_update.SynthesizeDrawGeneratorUpdates(
+			resourceUpdates, generatorUpdates, genKeyToKsuid, ds)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	fc := forma_command.NewFormaCommand(

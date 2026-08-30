@@ -56,6 +56,26 @@ func IsGenDestinationStable(records []OccurrenceRecord, destinationPath string) 
 // the one those destinations already carry, so drawing would rotate a live
 // credential because something unrelated in the same forma changed.
 //
+// An update that is tearing its destination down is skipped whatever its
+// occurrence says. A destroy sets DesiredState to the stored resource, so a
+// delete carries the stored $gen envelope and no ProvenanceRecords at all;
+// counting it would draw a value nothing writes, advance the generation, and
+// rotate the credential out from under every consumer that survives. Replace
+// is unaffected: the changeset splits it into a delete and a create, and the
+// create half still draws.
+//
+// Only DesiredState.Properties is scanned, unlike the resolver's
+// answerGeneratorOutputs, which also scans ReadOnlyProperties. The divergence
+// is deliberate and the two are answering different questions. The resolver
+// answers every occurrence that might be CLASSIFIED, wherever it sits; this
+// decides what must be DRAWN, and a draw is owed only to a property formae
+// writes. Read-only properties are never dispatched to a provider — only
+// DesiredState.Properties goes through convertResourceForPlugin, and
+// ReadOnlyProperties is carried alongside for persistence and comparison —
+// so a $gen there names a destination nothing writes. Drawing for it would
+// advance the generation and rotate the credential for every consumer that
+// does get written, which is the same harm the delete skip above avoids.
+//
 // An untranslated $gen envelope carries no generator KSUID and is skipped.
 // Translation rejects a $gen that resolves to no generator before planning,
 // so an untranslated one here belongs to a path that never translated and
@@ -64,6 +84,9 @@ func GeneratorsNeedingDraw(updates []ResourceUpdate) []string {
 	var ksuids []string
 	seen := make(map[string]bool)
 	for i := range updates {
+		if updates[i].Operation == OperationDelete || updates[i].Operation == OperationReaped {
+			continue
+		}
 		records := updates[i].ProvenanceRecords
 		for _, gen := range pkgmodel.FindGenObjectsFromProperties(updates[i].DesiredState.Properties) {
 			if gen.Generator == "" || seen[gen.Generator] {

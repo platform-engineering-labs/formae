@@ -127,6 +127,37 @@ func TestGeneratorsNeedingDraw(t *testing.T) {
 		assert.Empty(t, GeneratorsNeedingDraw(updates))
 	})
 
+	t.Run("a destination being torn down is never drawn for", func(t *testing.T) {
+		// A destroy sets DesiredState to the stored resource, so a delete
+		// carries the stored $gen envelope and no provenance records. Drawing
+		// for it would advance the generation and rotate the credential out
+		// from under every consumer that survives.
+		for _, op := range []OperationType{OperationDelete, OperationReaped} {
+			updates := []ResourceUpdate{{
+				DesiredState: pkgmodel.Resource{Properties: genProperties("password", "gen1")},
+				PriorState:   pkgmodel.Resource{Properties: genProperties("password", "gen1")},
+				Operation:    op,
+			}}
+
+			assert.Empty(t, GeneratorsNeedingDraw(updates), "operation %s", op)
+		}
+	})
+
+	t.Run("a surviving consumer still draws when a sibling is deleted", func(t *testing.T) {
+		updates := []ResourceUpdate{
+			{
+				DesiredState: pkgmodel.Resource{Properties: genProperties("password", "gen1")},
+				Operation:    OperationDelete,
+			},
+			{
+				DesiredState: pkgmodel.Resource{Properties: genProperties("password", "gen1")},
+				Operation:    OperationCreate,
+			},
+		}
+
+		assert.Equal(t, []string{"gen1"}, GeneratorsNeedingDraw(updates))
+	})
+
 	t.Run("distinct generators are reported once each in first-seen order", func(t *testing.T) {
 		updates := []ResourceUpdate{
 			{
