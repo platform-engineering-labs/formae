@@ -355,3 +355,77 @@ func TestApplyForma_ConsumerDownstreamOfGeneratorFedSecret_IsRejectedBeforeAnyWr
 		assert.Empty(t, resources, "a refused chain must leave nothing behind")
 	})
 }
+
+// A target's configuration reaches every plugin call made against that
+// target, so a credential bound to a generator is refused there for the same
+// reason a bound resource property is: the envelope names a value to be
+// drawn and is never that value. The resource itself is plain here, so the
+// only unresolved binding in the command is on the target.
+func TestApplyForma_TargetConfigBoundToGenerator_UndrawnValueIsNeverWritten(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		var anchorCreates atomic.Int32
+		overrides := countingCreates(map[string]*atomic.Int32{
+			"FakeAWS::Versioned::Parent": &anchorCreates,
+		})
+
+		cfg := test_helpers.NewTestMetastructureConfig()
+		cfg.Agent.Synchronization.Enabled = false
+		m, def, err := test_helpers.NewTestMetastructureWithConfig(t, overrides, cfg)
+		defer def()
+		require.NoError(t, err)
+
+		stack := "test-stack-" + util.NewID()
+		forma := &pkgmodel.Forma{
+			Stacks:     []pkgmodel.Stack{{Label: stack}},
+			Generators: []json.RawMessage{passwordGeneratorFor(t, "api-token", stack)},
+			Targets: []pkgmodel.Target{{
+				Label:     "test-target",
+				Namespace: "test-namespace",
+				Config: json.RawMessage(`{
+					"Region": "us-east-1",
+					"Token": {
+						"$gen":        true,
+						"$label":      "api-token",
+						"$stack":      "` + stack + `",
+						"$output":     "value",
+						"$visibility": "Opaque"
+					}
+				}`),
+			}},
+			Resources: []pkgmodel.Resource{{
+				Label:      "anchor",
+				Type:       "FakeAWS::Versioned::Parent",
+				Stack:      stack,
+				Target:     "test-target",
+				Properties: json.RawMessage(`{"Name": "anchor", "Value": "v1"}`),
+			}},
+		}
+
+		_, err = m.ApplyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
+		require.NoError(t, err, "the forma is well-formed, so it is admitted and fails at execution")
+		waitForApplyComplete(t, m)
+
+		// The plugin count is the assertion that matters: a build that hands
+		// the envelope over reports the command successful, so command state
+		// alone would not see it.
+		assert.Zero(t, anchorCreates.Load(),
+			"no plugin call may be made through a target formae cannot authenticate")
+
+		cmds, err := m.Datastore.LoadFormaCommands()
+		require.NoError(t, err)
+		cmd := findCommandByType(cmds, pkgmodel.CommandApply)
+		require.NotNil(t, cmd)
+		assert.Equal(t, forma_command.CommandStateFailed, cmd.State,
+			"an undrawn target credential must not be reported as applied")
+
+		anchorUpdate := findResourceUpdate(cmd.ResourceUpdates, "anchor")
+		require.NotNil(t, anchorUpdate)
+		assert.Equal(t, resource_update.ResourceUpdateStateFailed, anchorUpdate.State)
+		assert.Contains(t, anchorUpdate.FailureReason, "target's configuration is bound to a generator",
+			"the refusal must name the target's configuration, not the resource's own properties")
+
+		resources, err := m.Datastore.LoadResourcesByStack(stack)
+		require.NoError(t, err)
+		assert.Empty(t, resources, "a refused write must leave no resource behind")
+	})
+}
