@@ -36,5 +36,5 @@ func buildChangesetWithResolves(
 	if err != nil {
 		return changeset.Changeset{}, err
 	}
-	return changeset.NewChangeset(resourceUpdates, append(targetUpdates, synth...), commandID, command, pkgmodel.FormaApplyModeReconcile)
+	return changeset.NewChangeset(resourceUpdates, append(targetUpdates, synth...), nil, commandID, command, pkgmodel.FormaApplyModeReconcile)
 }

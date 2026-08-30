@@ -344,7 +344,9 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 		finalizeFailedCommand(syncCommand, proc)
 		return StateIdle, data, rescheduleAction(data), nil
 	}
-	cs, err := changeset.NewChangeset(allResourceUpdates, synth, syncCommand.ID, pkgmodel.CommandSync, syncCommand.Config.Mode)
+	// No generator draws: a sync command only reads the inventory, so no
+	// destination in it is waiting for a generated value.
+	cs, err := changeset.NewChangeset(allResourceUpdates, synth, nil, syncCommand.ID, pkgmodel.CommandSync, syncCommand.Config.Mode)
 	if err != nil {
 		proc.Log().Error("Synchronizer: failed to build changeset, skipping sync cycle commandID=%s: %v", syncCommand.ID, err)
 		finalizeFailedCommand(syncCommand, proc)

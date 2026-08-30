@@ -646,7 +646,13 @@ func startUpdates(updates []Update, commandID string, mode pkgmodel.FormaApplyMo
 				return err
 			}
 		default:
-			proc.Log().Error("Unknown update type in startUpdates uri=%v", update.NodeURI())
+			// GetExecutableUpdates has already marked this update in progress,
+			// so dropping it here would leave a node nothing ever finishes and
+			// every dependent blocked behind it — the changeset would never
+			// reach a terminal state. Fail the changeset instead: an update
+			// kind the executor cannot start is a wiring error, and a
+			// diagnosable failure beats a hang.
+			return fmt.Errorf("changeset contains an update this executor cannot start: %s", update.NodeURI())
 		}
 	}
 

@@ -203,13 +203,15 @@ func handleDrawValue(from gen.PID, state gen.Atom, data GeneratorUpdaterData, me
 
 	spec := data.generatorUpdate.Generator
 
-	// The KSUID comes off the declared generator, where GenerateGeneratorUpdates
-	// stamped it from the translation phase's genKeyToKsuid map — the same
-	// value CreateGenerator/UpdateGenerator persisted, and the same value any
-	// $gen reference in this command was translated to. A generator LOADED
-	// from the datastore carries no ID (PasswordGenerator.ID is `json:"-"`),
-	// but the only updates built from a loaded generator are the reconcile
-	// deletes returned above.
+	// The KSUID comes off the generator on the update, and is the same value
+	// CreateGenerator/UpdateGenerator persisted and the same value any $gen
+	// reference in this command was translated to. For a generator this
+	// command declares, GenerateGeneratorUpdates stamped it from the
+	// translation phase's genKeyToKsuid map; for one it only references,
+	// SynthesizeDrawGeneratorUpdates stamps it after loading the generator —
+	// a LOADED generator carries no ID of its own, since
+	// PasswordGenerator.ID is `json:"-"` and the KSUID lives only in the
+	// generators table.
 	generatorID := ""
 	if spec != nil {
 		generatorID = spec.GetID()

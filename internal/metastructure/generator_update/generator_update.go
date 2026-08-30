@@ -15,8 +15,9 @@ import (
 
 // GeneratorOperation and GeneratorUpdateState reuse the generic operation and
 // state vocabularies from types, the same way stack_update does — a
-// generator's lifecycle is Create/Update/Delete only, with no attach/detach
-// and no standalone form, so there is nothing generator-specific to add.
+// generator's row lifecycle is Create/Update/Delete only, with no
+// attach/detach and no standalone form, so there is nothing
+// generator-specific to add.
 type (
 	GeneratorOperation   = types.OperationType
 	GeneratorUpdateState = types.GeneratorUpdateState
@@ -26,6 +27,11 @@ const (
 	GeneratorOperationCreate GeneratorOperation = types.OperationCreate
 	GeneratorOperationUpdate GeneratorOperation = types.OperationUpdate
 	GeneratorOperationDelete GeneratorOperation = types.OperationDelete
+	// GeneratorOperationDraw is the synthetic op that draws a value. It is
+	// the only generator operation the ExecutionDAG schedules: the three
+	// above write the generator's row and are persisted before the changeset
+	// starts.
+	GeneratorOperationDraw GeneratorOperation = types.OperationDraw
 
 	GeneratorUpdateStateNotStarted = types.GeneratorUpdateStateNotStarted
 	GeneratorUpdateStateInProgress = types.GeneratorUpdateStateInProgress

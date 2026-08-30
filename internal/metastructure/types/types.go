@@ -41,6 +41,14 @@ const (
 	// in-memory for an otherwise-unchanged target. It is never persisted and does
 	// not trigger discovery or cloud-side mutations.
 	OperationResolve OperationType = "resolve"
+
+	// OperationDraw is a synthetic op that draws a generator's value in
+	// memory for the destinations bound to it. Like OperationResolve it is
+	// never persisted and never reaches a provider: it exists only to
+	// produce a value the destinations in the same changeset consume. The
+	// generator's own row is created, updated or deleted by the ordinary
+	// Create/Update/Delete ops, which a draw never stands in for.
+	OperationDraw OperationType = "draw"
 )
 
 // ResourceUpdateState represents the current state of a resource update operation

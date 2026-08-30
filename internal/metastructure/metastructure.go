@@ -422,7 +422,7 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 		if synthErr != nil {
 			return nil, synthErr
 		}
-		cs, err = changeset.NewChangeset(fa.ResourceUpdates, append(fa.TargetUpdates, synth...), fa.ID, fa.Command, config.Mode)
+		cs, err = changeset.NewChangeset(fa.ResourceUpdates, append(fa.TargetUpdates, synth...), fa.DrawGeneratorUpdates, fa.ID, fa.Command, config.Mode)
 		if err != nil {
 			return nil, err
 		}
@@ -1026,7 +1026,8 @@ func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.Forma
 		if synthErr != nil {
 			return nil, synthErr
 		}
-		cs, err := changeset.NewChangeset(fa.ResourceUpdates, append(fa.TargetUpdates, synth...), fa.ID, pkgmodel.CommandDestroy, config.Mode)
+		// No generator draws: a destroy writes no property.
+		cs, err := changeset.NewChangeset(fa.ResourceUpdates, append(fa.TargetUpdates, synth...), nil, fa.ID, pkgmodel.CommandDestroy, config.Mode)
 		if err != nil {
 			return nil, err
 		}
@@ -1626,7 +1627,11 @@ func (m *Metastructure) ReRunIncompleteCommands() error {
 			slog.Error("Failed to build changeset for incomplete forma command, skipping", "commandID", fa.ID, "error", synthErr)
 			continue
 		}
-		cs, err := changeset.NewChangeset(pendingUpdates, append(pendingTargetUpdates, synth...), fa.ID, pkgmodel.CommandApply, fa.Config.Mode)
+		// No generator draws yet. A draw is meaningless outside the changeset
+		// it produced a value for, so it is not stored with the command and
+		// cannot be replayed; the surviving destinations have to be re-read to
+		// derive it, which this recovery path does not do.
+		cs, err := changeset.NewChangeset(pendingUpdates, append(pendingTargetUpdates, synth...), nil, fa.ID, pkgmodel.CommandApply, fa.Config.Mode)
 		if err != nil {
 			slog.Error("Failed to build changeset for incomplete forma command, skipping", "commandID", fa.ID, "error", err)
 			continue
@@ -2298,7 +2303,18 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 		return nil, err
 	}
 
-	return forma_command.NewFormaCommand(
+	// The draws are derived from the DESTINATIONS that still need a value,
+	// not from the generator diff above: a generator whose spec is unchanged
+	// produces no GeneratorUpdate, yet a resource newly bound to it still
+	// needs a value drawn. genKeyToKsuid is what maps a translated $gen
+	// envelope's KSUID back to the generator it names.
+	drawGeneratorUpdates, err := generator_update.SynthesizeDrawGeneratorUpdates(
+		resourceUpdates, generatorUpdates, genKeyToKsuid, ds)
+	if err != nil {
+		return nil, err
+	}
+
+	fc := forma_command.NewFormaCommand(
 		forma,
 		formaCommandConfig,
 		command,
@@ -2311,7 +2327,10 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 		subject,
 		subjectName,
 		forma_command.SourceUser,
-	), nil
+	)
+	fc.DrawGeneratorUpdates = drawGeneratorUpdates
+
+	return fc, nil
 }
 
 // RegisteredPlugins returns plugins currently registered with the
