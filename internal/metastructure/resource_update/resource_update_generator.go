@@ -819,6 +819,11 @@ func generateResourceUpdatesForReconcile(
 		return nil, fmt.Errorf("failed to compute effective desired state: %w", err)
 	}
 
+	generatorGenerationLookup, err := generatorGenerations(forma, ds)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve generator generations: %w", err)
+	}
+
 	for _, stack := range forma.SplitByStack() {
 		existingResources, err := ds.LoadResourcesByStack(stack.SingleStackLabel())
 		if err != nil {
@@ -833,7 +838,7 @@ func generateResourceUpdatesForReconcile(
 					continue
 				}
 				if existingUnmanaged, ok := findUnmanagedResource(newResource, allResourcesByStack); ok {
-					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, resolvableLookup, effectiveDesired)
+					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, resolvableLookup, effectiveDesired, generatorGenerationLookup)
 					if err != nil {
 						return nil, fmt.Errorf("failed to load resolvable properties: %w", err)
 					}
@@ -888,7 +893,7 @@ func generateResourceUpdatesForReconcile(
 
 					found = true
 
-					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, resolvableLookup, effectiveDesired)
+					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, resolvableLookup, effectiveDesired, generatorGenerationLookup)
 
 					if err != nil {
 						return nil, fmt.Errorf("failed to load resolvable properties: %w", err)
@@ -968,7 +973,7 @@ func generateResourceUpdatesForReconcile(
 				}
 				// Check if this resource exists as an unmanaged resource
 				if existingUnmanaged, ok := findUnmanagedResource(newResource, allResourcesByStack); ok {
-					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, resolvableLookup, effectiveDesired)
+					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, resolvableLookup, effectiveDesired, generatorGenerationLookup)
 					if err != nil {
 						return nil, fmt.Errorf("failed to load resolvable properties: %w", err)
 					}
@@ -1296,6 +1301,11 @@ func generateResourceUpdatesForPatch(
 		return nil, fmt.Errorf("failed to compute effective desired state: %w", err)
 	}
 
+	generatorGenerationLookup, err := generatorGenerations(forma, ds)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve generator generations: %w", err)
+	}
+
 	for _, stack := range forma.SplitByStack() {
 		stackResources, err := ds.LoadResourcesByStack(stack.SingleStackLabel())
 		if err != nil {
@@ -1331,7 +1341,7 @@ func generateResourceUpdatesForPatch(
 
 			if matched != nil {
 				// Use NewResourceUpdateForExisting to handle all the logic
-				readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, resolvableLookup, effectiveDesired)
+				readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, resolvableLookup, effectiveDesired, generatorGenerationLookup)
 				if err != nil {
 					return nil, fmt.Errorf("failed to load resolvable properties: %w", err)
 				}
@@ -2160,6 +2170,62 @@ func translateFormaeReferencesToKsuid(forma *pkgmodel.Forma, ds ResourceDataLook
 	}
 
 	return ksuidToLabel, genKeyToKsuid, nil
+}
+
+// generatorGenerations builds the resolver's view of the generators this
+// command's resources are bound to: for a generator KSUID, the generation
+// that generator currently holds and the spec this command declares for it.
+//
+// The desired spec is nil for a generator this command only REFERENCES —
+// one declared by an earlier apply. Nothing this command does can have
+// edited its spec, so the generation it holds still satisfies it and the
+// resolver skips the satisfaction check. That nil is an untyped nil
+// interface, never a typed nil pointer, which would read as a resolved
+// generator with no fields.
+//
+// The KSUIDs come from assignGeneratorKSUIDs, the same resolution the $gen
+// envelopes were translated with, so a declared generator that already has a
+// row is keyed by the KSUID its envelopes carry. A generator with no row yet
+// gets a freshly minted KSUID that matches no envelope; the lookup then
+// answers a zero identity for the envelope's KSUID, which is the same "no
+// generation yet" answer the row's absence means on its own.
+func generatorGenerations(forma *pkgmodel.Forma, ds ResourceDataLookup) (resolver.GeneratorGenerationLookup, error) {
+	declaredByKsuid := make(map[string]pkgmodel.Generator)
+	if len(forma.Generators) > 0 {
+		declared, err := pkgmodel.ParseGenerators(forma.Generators)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse generators: %w", err)
+		}
+		keyToKsuid, err := assignGeneratorKSUIDs(forma.Generators, ds)
+		if err != nil {
+			return nil, err
+		}
+		for _, gen := range declared {
+			if ksuid := keyToKsuid[pkgmodel.GeneratorKey{Label: gen.GetLabel(), Stack: gen.GetStack()}]; ksuid != "" {
+				declaredByKsuid[ksuid] = gen
+			}
+		}
+	}
+
+	identities := make(map[string]pkgmodel.GeneratorIdentity)
+	return func(ksuid string) (pkgmodel.GeneratorIdentity, pkgmodel.Generator) {
+		identity, memoized := identities[ksuid]
+		if !memoized {
+			var err error
+			identity, err = ds.GetGeneratorIdentityByID(ksuid)
+			if err != nil {
+				// A generator whose identity cannot be read has unknown
+				// movement, which plans the occurrence and converges it. That
+				// is the safe direction: failing the whole apply on a lookup
+				// this command can recover from on its own is not.
+				slog.Warn("Failed to look up generator identity; treating its generation as moved",
+					"generator", ksuid, "error", err)
+				identity = pkgmodel.GeneratorIdentity{}
+			}
+			identities[ksuid] = identity
+		}
+		return identity, declaredByKsuid[ksuid]
+	}, nil
 }
 
 // assignGeneratorKSUIDs resolves every generator forma.Generators declares to

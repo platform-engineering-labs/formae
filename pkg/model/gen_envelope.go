@@ -16,10 +16,15 @@ import (
 // walk convention (array elements addressed by index), mirroring
 // ResolvableObject.Path for $res.
 type GenObject struct {
-	Path   string
-	Label  string
-	Stack  string
-	Output string
+	Path  string
+	Label string
+	Stack string
+	// Generator is the resolved generator KSUID a TRANSLATED envelope
+	// carries, and "" for an authored one. It is read off the node during
+	// the walk rather than looked back up by Path, because Path is
+	// dot-joined and a map key containing a dot cannot be addressed by it.
+	Generator string
+	Output    string
 }
 
 // FindGenObjectsFromProperties traverses a properties document and finds
@@ -39,10 +44,11 @@ func findGenObjectsRecursive(basePath string, value gjson.Result, genObjects *[]
 	if value.IsObject() {
 		if IsGenObject(value) {
 			*genObjects = append(*genObjects, GenObject{
-				Path:   basePath,
-				Label:  value.Get("$label").String(),
-				Stack:  value.Get("$stack").String(),
-				Output: value.Get("$output").String(),
+				Path:      basePath,
+				Label:     value.Get("$label").String(),
+				Stack:     value.Get("$stack").String(),
+				Generator: value.Get("$generator").String(),
+				Output:    value.Get("$output").String(),
 			})
 			return
 		}

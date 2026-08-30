@@ -7,6 +7,7 @@
 package resource_update
 
 import (
+	"encoding/json"
 	"sync"
 	"testing"
 
@@ -119,6 +120,20 @@ func (m *mockDatastore) GetGeneratorIdentity(label, stackLabel string) (pkgmodel
 	return pkgmodel.GeneratorIdentity{}, nil
 }
 
+// GetGeneratorIdentityByID returns the identity seeded for this KSUID, or a
+// zero GeneratorIdentity and a nil error when none was seeded — mirroring
+// the real datastore's "absent" contract.
+func (m *mockDatastore) GetGeneratorIdentityByID(generatorID string) (pkgmodel.GeneratorIdentity, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, identity := range m.generators {
+		if identity.ID == generatorID && identity.ID != "" {
+			return identity, nil
+		}
+	}
+	return pkgmodel.GeneratorIdentity{}, nil
+}
+
 // GeneratorIdentityLookupCount returns how many times GetGeneratorIdentity
 // was called for (label, stackLabel) — a test helper for pinning
 // memoization of the datastore tier.
@@ -137,6 +152,23 @@ func (m *mockDatastore) StoreGeneratorIdentity(label, stackLabel, ksuid string) 
 	defer m.mu.Unlock()
 
 	m.generators[pkgmodel.GeneratorKey{Label: label, Stack: stackLabel}] = pkgmodel.GeneratorIdentity{ID: ksuid}
+}
+
+// StoreGeneratorGeneration is a helper for tests to seed a generator that
+// already holds a drawn generation, with the spec it was drawn under.
+func (m *mockDatastore) StoreGeneratorGeneration(label, stackLabel, ksuid, generationID string, drawnUnder pkgmodel.Generator) error {
+	spec, err := json.Marshal(drawnUnder)
+	if err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.generators[pkgmodel.GeneratorKey{Label: label, Stack: stackLabel}] = pkgmodel.GeneratorIdentity{
+		ID: ksuid, GenerationID: generationID, GenerationSpec: spec,
+	}
+	return nil
 }
 
 // StoreStack is a helper for tests to populate the mock datastore

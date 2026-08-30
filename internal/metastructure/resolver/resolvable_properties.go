@@ -166,8 +166,15 @@ func (p *ResolvableProperties) Answer(ksuid, property string) (SourceAnswer, boo
 // many hops deep. An opaque marker anywhere on a hop stops the recursion
 // there and keeps the persisted-row fallthrough unchanged. A reference cycle
 // is rejected as a ReferenceCycleError naming the chain.
-func LoadResolvablePropertiesFromStacks(resource pkgmodel.Resource, allResources map[string][]*pkgmodel.Resource, effective map[string]json.RawMessage) (ResolvableProperties, error) {
+//
+// A $gen occurrence is answered separately and never enters this
+// classification: it names a generator, which has no resource row and no
+// property to read, so the source-property path has nothing to look up. See
+// answerGeneratorOutputs.
+func LoadResolvablePropertiesFromStacks(resource pkgmodel.Resource, allResources map[string][]*pkgmodel.Resource, effective map[string]json.RawMessage, generators GeneratorGenerationLookup) (ResolvableProperties, error) {
 	res := NewResolvableProperties()
+
+	answerGeneratorOutputs(&res, resource, generators)
 
 	resourcesByKsuid := make(map[string]*pkgmodel.Resource)
 	for _, resources := range allResources {
@@ -200,6 +207,103 @@ func LoadResolvablePropertiesFromStacks(resource pkgmodel.Resource, allResources
 	}
 
 	return res, nil
+}
+
+// GeneratorGenerationLookup answers what this command knows about one
+// generator: the generation identity the generator currently holds, and the
+// spec this command declares for it.
+//
+// A zero identity means no such generator, and a nil desired spec means this
+// command does not declare the generator — it only references one that
+// already exists, so nothing this command does can invalidate the generation
+// it holds. Return an untyped nil for that case; a typed nil pointer in the
+// interface is a generator that could not be resolved, not a spec.
+type GeneratorGenerationLookup func(generatorKSUID string) (pkgmodel.GeneratorIdentity, pkgmodel.Generator)
+
+// answerGeneratorOutputs answers every $gen occurrence on resource directly,
+// bypassing source-property classification entirely: a generator has no
+// resource row, so there is no property to read and nothing the recursive
+// reference walk could follow.
+//
+// The answer it produces is what makes an ordinary re-apply of a
+// generator-bound secret plan nothing. The value itself is never available at
+// plan time (it is drawn at execution and hashed at rest), so the answer is
+// deferred and opaque; what goes into the source root digest slot is the
+// identity of the GENERATION the generator currently holds. That is the same
+// slot a resource's value digest occupies, so the occurrence classifier's
+// root-versus-root rule decides stability unchanged: a generation that has
+// not moved matches the provenance written alongside the last drawn value,
+// and the occurrence is suppressed.
+//
+// Only the translated envelope shape is answered. An untranslated $gen names
+// no generator KSUID, so there is no identity to key an answer on; the
+// occurrence normalizer fails closed on it, which plans.
+func answerGeneratorOutputs(res *ResolvableProperties, resource pkgmodel.Resource, generators GeneratorGenerationLookup) {
+	for _, properties := range []json.RawMessage{resource.Properties, resource.ReadOnlyProperties} {
+		if properties == nil {
+			continue
+		}
+		for _, gen := range pkgmodel.FindGenObjectsFromProperties(properties) {
+			if gen.Generator == "" {
+				continue
+			}
+			res.AddAnswer(gen.Generator, gen.Output, SourceAnswer{
+				Kind:             AnswerDeferred,
+				Opaque:           true,
+				SourceRootDigest: generationRootDigest(gen.Generator, generators),
+			})
+		}
+	}
+}
+
+// generationRootDigest returns the digest identifying the generation the
+// generator currently holds, or "" when that cannot be decided.
+//
+// "" is the answer for every state in which the value on the destination
+// must be (re)drawn: no lookup, no generator, no generation yet, a drawing
+// spec that cannot be read back, and a generation the desired spec no longer
+// accepts. It is not a valid digest, so both digest-comparing rules fail and
+// the occurrence reaches the unknown-movement rule, which plans the update
+// against a mutable destination and installs current provenance.
+//
+// KNOWN CONFLATION, accepted deliberately. "" says two different things: the
+// movement is genuinely UNKNOWN (no generation yet, generator gone, spec
+// unreadable), and the value definitely MUST be redrawn (the desired spec no
+// longer accepts the held generation). The unknown-movement rule is ruled so
+// that a createOnly destination never replaces on unknown, so against such a
+// destination a spec edit that demands a redraw is suppressed instead. That
+// is the safe direction, and it is only reachable for a configuration that a
+// later slice rejects outright at the admission preflight: a generator-bound
+// secret on a createOnly destination is not an admissible forma. Telling the
+// two apart is a design change belonging to that slice, not a widening here.
+func generationRootDigest(ksuid string, generators GeneratorGenerationLookup) string {
+	if generators == nil {
+		return ""
+	}
+	identity, desired := generators(ksuid)
+	if identity.GenerationID == "" {
+		// Nothing drawn yet: the apply must materialize a value.
+		return ""
+	}
+	if desired != nil {
+		// The generator's spec is declared by this command and may have been
+		// edited. A generation the edited spec can no longer accept must be
+		// redrawn, so report it as moved even though its identity has not
+		// changed: the value on the destination is no longer one this spec
+		// could have produced.
+		drawn, err := pkgmodel.ParseGenerator(identity.GenerationSpec)
+		if err != nil {
+			// The spec the generation was drawn under is unreadable, so the
+			// generation cannot be PROVEN still acceptable. Redrawing is the
+			// safe direction of that doubt, and it repairs the record; failing
+			// the whole apply on unreadable controller state would not.
+			return ""
+		}
+		if !pkgmodel.GenerationSatisfies(drawn, desired) {
+			return ""
+		}
+	}
+	return provenance.DigestOfString(identity.GenerationID)
 }
 
 // classifySourceProperty answers whether propertyPath on the resource named
@@ -453,13 +557,16 @@ func containsOpaqueVisibility(value gjson.Result) bool {
 	return found
 }
 
-// isReferenceEnvelope reports whether value is a reference rather than a value:
-// the persisted ($ref) or source ($res) spelling of one.
+// isReferenceEnvelope reports whether value is a reference rather than a
+// value: the persisted ($ref) or source ($res) spelling of a resource
+// reference, or the ($gen) spelling of a generator binding. A generator
+// binding is a reference in exactly the sense that matters here — the
+// envelope's own text is never the value, whatever it carries alongside.
 func isReferenceEnvelope(value gjson.Result) bool {
 	if !value.IsObject() {
 		return false
 	}
-	return value.Get("$ref").Exists() || value.Get("$res").Exists()
+	return value.Get("$ref").Exists() || value.Get("$res").Exists() || value.Get("$gen").Bool()
 }
 
 // ExtractPropertyValue extracts the actual value from a gjson.Result.

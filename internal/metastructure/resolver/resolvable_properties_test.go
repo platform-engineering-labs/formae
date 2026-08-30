@@ -51,7 +51,7 @@ func TestLoadResolvableProperties_SkipsHashedValue(t *testing.T) {
 			`"$visibility":"Opaque","$strategy":"Update","$hashed":true}}`),
 	}
 
-	props, err := LoadResolvablePropertiesFromStacks(consumerOf("SecretString"), stacksWith(source), nil)
+	props, err := LoadResolvablePropertiesFromStacks(consumerOf("SecretString"), stacksWith(source), nil, nil)
 	require.NoError(t, err)
 
 	_, found := props.Get(sourceKsuid, "SecretString")
@@ -72,7 +72,7 @@ func TestLoadResolvableProperties_SkipsHashedReadOnlyValue(t *testing.T) {
 			`"$visibility":"Opaque","$hashed":true}}`),
 	}
 
-	props, err := LoadResolvablePropertiesFromStacks(consumerOf("GeneratedToken"), stacksWith(source), nil)
+	props, err := LoadResolvablePropertiesFromStacks(consumerOf("GeneratedToken"), stacksWith(source), nil, nil)
 	require.NoError(t, err)
 
 	_, found := props.Get(sourceKsuid, "GeneratedToken")
@@ -91,7 +91,7 @@ func TestLoadResolvableProperties_UsesOpaqueValueThatIsNotHashed(t *testing.T) {
 		Properties: json.RawMessage(`{"SecretString":{"$value":"live-value","$visibility":"Opaque"}}`),
 	}
 
-	props, err := LoadResolvablePropertiesFromStacks(consumerOf("SecretString"), stacksWith(source), nil)
+	props, err := LoadResolvablePropertiesFromStacks(consumerOf("SecretString"), stacksWith(source), nil, nil)
 	require.NoError(t, err)
 
 	value, found := props.Get(sourceKsuid, "SecretString")
@@ -113,7 +113,7 @@ func TestLoadResolvableProperties_SkipsStructureHoldingAHashedValue(t *testing.T
 			`"$visibility":"Opaque","$hashed":true}}}`),
 	}
 
-	props, err := LoadResolvablePropertiesFromStacks(consumerOf("Connection"), stacksWith(source), nil)
+	props, err := LoadResolvablePropertiesFromStacks(consumerOf("Connection"), stacksWith(source), nil, nil)
 	require.NoError(t, err)
 
 	_, found := props.Get(sourceKsuid, "Connection")
@@ -133,7 +133,7 @@ func TestLoadResolvableProperties_SkipsValuelessReferenceEnvelope(t *testing.T) 
 		Properties: json.RawMessage(`{"Token":{"$ref":"formae://someotherksuid#/Value","$visibility":"Opaque"}}`),
 	}
 
-	props, err := LoadResolvablePropertiesFromStacks(consumerOf("Token"), stacksWith(source), nil)
+	props, err := LoadResolvablePropertiesFromStacks(consumerOf("Token"), stacksWith(source), nil, nil)
 	require.NoError(t, err)
 
 	_, found := props.Get(sourceKsuid, "Token")
@@ -152,7 +152,7 @@ func TestLoadResolvableProperties_UsesResolvedReferenceEnvelope(t *testing.T) {
 		Properties: json.RawMessage(`{"VpcId":{"$ref":"formae://someotherksuid#/VpcId","$value":"vpc-123"}}`),
 	}
 
-	props, err := LoadResolvablePropertiesFromStacks(consumerOf("VpcId"), stacksWith(source), nil)
+	props, err := LoadResolvablePropertiesFromStacks(consumerOf("VpcId"), stacksWith(source), nil, nil)
 	require.NoError(t, err)
 
 	value, found := props.Get(sourceKsuid, "VpcId")
@@ -171,7 +171,7 @@ func TestLoadResolvableProperties_UsesPlainValue(t *testing.T) {
 		ReadOnlyProperties: json.RawMessage(`{"VpcId":"vpc-123"}`),
 	}
 
-	props, err := LoadResolvablePropertiesFromStacks(consumerOf("VpcId"), stacksWith(source), nil)
+	props, err := LoadResolvablePropertiesFromStacks(consumerOf("VpcId"), stacksWith(source), nil, nil)
 	require.NoError(t, err)
 
 	value, found := props.Get(sourceKsuid, "VpcId")
@@ -214,7 +214,7 @@ func TestLoadResolvableProperties_EffectiveDesiredLiteralWins(t *testing.T) {
 		"k-parent": json.RawMessage(`{"Name": "p", "Value": "world"}`),
 	}
 
-	props, err := LoadResolvablePropertiesFromStacks(consumer, all, effective)
+	props, err := LoadResolvablePropertiesFromStacks(consumer, all, effective, nil)
 	require.NoError(t, err)
 
 	v, ok := props.Get("k-parent", "Value")
@@ -258,7 +258,7 @@ func TestLoadResolvableProperties_EnvelopeAndHashedKeepTodaysBehavior(t *testing
 		}`),
 	}
 
-	props, err := LoadResolvablePropertiesFromStacks(consumer, all, effective)
+	props, err := LoadResolvablePropertiesFromStacks(consumer, all, effective, nil)
 	require.NoError(t, err)
 
 	v, ok := props.Get("k-parent", "Chained")
@@ -290,7 +290,7 @@ func TestLoadResolvableProperties_EffectiveDesiredSkipsSourceOpaqueOnlyInReadOnl
 		"k-parent": json.RawMessage(`{"Name": "p", "Token": "resubmitted-token"}`),
 	}
 
-	props, err := LoadResolvablePropertiesFromStacks(consumer, all, effective)
+	props, err := LoadResolvablePropertiesFromStacks(consumer, all, effective, nil)
 	require.NoError(t, err)
 
 	v, ok := props.Get("k-parent", "Token")
@@ -320,7 +320,7 @@ func TestLoadResolvableProperties_EffectiveDesiredSkipsInlineOpaqueNotYetPersist
 		"k-parent": json.RawMessage(`{"Name": "p", "Secret": {"$value": "brand-new-plaintext", "$visibility": "Opaque"}}`),
 	}
 
-	props, err := LoadResolvablePropertiesFromStacks(consumer, all, effective)
+	props, err := LoadResolvablePropertiesFromStacks(consumer, all, effective, nil)
 	require.NoError(t, err)
 
 	_, ok := props.Get("k-parent", "Secret")
@@ -354,7 +354,7 @@ func TestLoadResolvableProperties_ChainRootLiteralWins(t *testing.T) {
 		"k-middle": json.RawMessage(`{"Name": "m", "Value": {"$ref": "formae://k-root#/Value"}}`),
 	}
 
-	props, err := LoadResolvablePropertiesFromStacks(consumer, all, effective)
+	props, err := LoadResolvablePropertiesFromStacks(consumer, all, effective, nil)
 	require.NoError(t, err)
 
 	v, ok := props.Get("k-middle", "Value")
@@ -391,7 +391,7 @@ func TestLoadResolvableProperties_ChainUnmovedKeepsCachedValue(t *testing.T) {
 		"k-middle": json.RawMessage(`{"Name": "m", "Value": {"$ref": "formae://k-root#/Value"}}`),
 	}
 
-	props, err := LoadResolvablePropertiesFromStacks(consumer, all, effective)
+	props, err := LoadResolvablePropertiesFromStacks(consumer, all, effective, nil)
 	require.NoError(t, err)
 
 	v, ok := props.Get("k-middle", "Value")
@@ -429,7 +429,7 @@ func TestLoadResolvableProperties_ChainOpaqueHopKeepsTodaysBehavior(t *testing.T
 		"k-middle": json.RawMessage(`{"Name": "m", "Cred": {"$ref": "formae://k-root#/Secret", "$visibility": "Opaque"}}`),
 	}
 
-	props, err := LoadResolvablePropertiesFromStacks(consumer, all, effective)
+	props, err := LoadResolvablePropertiesFromStacks(consumer, all, effective, nil)
 	require.NoError(t, err)
 
 	v, ok := props.Get("k-middle", "Cred")
@@ -464,7 +464,7 @@ func TestLoadResolvableProperties_ChainJSONHopExtractsLeaf(t *testing.T) {
 		"k-middle": json.RawMessage(`{"Name": "m", "Host": {"$ref": "formae://k-root#/Doc", "$json": "db.host"}}`),
 	}
 
-	props, err := LoadResolvablePropertiesFromStacks(consumer, all, effective)
+	props, err := LoadResolvablePropertiesFromStacks(consumer, all, effective, nil)
 	require.NoError(t, err)
 
 	v, ok := props.Get("k-middle", "Host")
@@ -507,7 +507,7 @@ func TestLoadResolvableProperties_DiamondResolves(t *testing.T) {
 		"k-right": json.RawMessage(`{"Name": "rr", "Value": {"$ref": "formae://k-root#/Value"}}`),
 	}
 
-	props, err := LoadResolvablePropertiesFromStacks(consumer, all, effective)
+	props, err := LoadResolvablePropertiesFromStacks(consumer, all, effective, nil)
 	require.NoError(t, err)
 
 	leftVal, ok := props.Get("k-left", "Value")
@@ -546,7 +546,7 @@ func TestLoadResolvableProperties_ReferenceCycleFails(t *testing.T) {
 		"k-b": json.RawMessage(`{"Value": {"$ref": "formae://k-a#/Value"}}`),
 	}
 
-	_, err := LoadResolvablePropertiesFromStacks(consumer, all, effective)
+	_, err := LoadResolvablePropertiesFromStacks(consumer, all, effective, nil)
 	require.Error(t, err)
 
 	var cycleErr ReferenceCycleError
@@ -578,7 +578,7 @@ func TestLoadResolvableProperties_ContainerReference_RefusesDescendantOpaqueHint
 		sourceKsuid: json.RawMessage(`{"Name":"s","Config":{"User":"u","Password":"hunter2"}}`),
 	}
 
-	props, err := LoadResolvablePropertiesFromStacks(consumerOf("Config"), stacksWith(source), effective)
+	props, err := LoadResolvablePropertiesFromStacks(consumerOf("Config"), stacksWith(source), effective, nil)
 	require.NoError(t, err)
 
 	value, found := props.Get(sourceKsuid, "Config")
@@ -622,7 +622,7 @@ func TestLoadResolvableProperties_ChainHopJSONExtraction_RefusesDescendantOpaque
 		middleKsuid: json.RawMessage(`{"Ref":{"$ref":"formae://` + sourceKsuid + `#/Config","$json":"Password"}}`),
 	}
 
-	props, err := LoadResolvablePropertiesFromStacks(consumer, all, effective)
+	props, err := LoadResolvablePropertiesFromStacks(consumer, all, effective, nil)
 	require.NoError(t, err)
 
 	value, found := props.Get(middleKsuid, "Ref")
@@ -650,7 +650,7 @@ func TestLoadResolvableProperties_SiblingOfOpaqueDescendant_StillResolves(t *tes
 		sourceKsuid: json.RawMessage(`{"Name":"new","Config":{"User":"u","Password":"hunter2"}}`),
 	}
 
-	props, err := LoadResolvablePropertiesFromStacks(consumerOf("Name"), stacksWith(source), effective)
+	props, err := LoadResolvablePropertiesFromStacks(consumerOf("Name"), stacksWith(source), effective, nil)
 	require.NoError(t, err)
 
 	value, found := props.Get(sourceKsuid, "Name")
@@ -678,7 +678,7 @@ func TestLoadResolvableProperties_ReferenceBelowNestedOpaqueHint_Refused(t *test
 		sourceKsuid: json.RawMessage(`{"Name":"s","Config":{"User":"u","Password":{"value":"hunter2"}}}`),
 	}
 
-	props, err := LoadResolvablePropertiesFromStacks(consumerOf("Config.Password.value"), stacksWith(source), effective)
+	props, err := LoadResolvablePropertiesFromStacks(consumerOf("Config.Password.value"), stacksWith(source), effective, nil)
 	require.NoError(t, err)
 
 	value, found := props.Get(sourceKsuid, "Config.Password.value")
@@ -705,7 +705,7 @@ func TestLoadResolvableProperties_ReferenceBelowNonOpaqueSibling_StillResolves(t
 		sourceKsuid: json.RawMessage(`{"Name":"s","Config":{"Meta":{"region":"new"},"Password":{"value":"hunter2"}}}`),
 	}
 
-	props, err := LoadResolvablePropertiesFromStacks(consumerOf("Config.Meta.region"), stacksWith(source), effective)
+	props, err := LoadResolvablePropertiesFromStacks(consumerOf("Config.Meta.region"), stacksWith(source), effective, nil)
 	require.NoError(t, err)
 
 	value, found := props.Get(sourceKsuid, "Config.Meta.region")
@@ -732,7 +732,7 @@ func TestLoadResolvableProperties_OpaqueAnswersCarryDigests(t *testing.T) {
 		effective := map[string]json.RawMessage{
 			sourceKsuid: json.RawMessage(`{"Name":"s","SecretString":"hunter2"}`),
 		}
-		props, err := LoadResolvablePropertiesFromStacks(consumerOf("SecretString"), stacksWith(source), effective)
+		props, err := LoadResolvablePropertiesFromStacks(consumerOf("SecretString"), stacksWith(source), effective, nil)
 		require.NoError(t, err)
 
 		_, found := props.Get(sourceKsuid, "SecretString")
@@ -754,7 +754,7 @@ func TestLoadResolvableProperties_OpaqueAnswersCarryDigests(t *testing.T) {
 		effective := map[string]json.RawMessage{
 			sourceKsuid: json.RawMessage(`{"SecretString":{"$value":"hunter2","$visibility":"Opaque","$strategy":"Update"}}`),
 		}
-		props, err := LoadResolvablePropertiesFromStacks(consumerOf("SecretString"), stacksWith(source), effective)
+		props, err := LoadResolvablePropertiesFromStacks(consumerOf("SecretString"), stacksWith(source), effective, nil)
 		require.NoError(t, err)
 
 		a, ok := props.Answer(sourceKsuid, "SecretString")
@@ -772,7 +772,7 @@ func TestLoadResolvableProperties_OpaqueAnswersCarryDigests(t *testing.T) {
 		effective := map[string]json.RawMessage{
 			sourceKsuid: json.RawMessage(`{"SecretString":{"$value":"` + hex64 + `","$visibility":"Opaque","$hashed":true}}`),
 		}
-		props, err := LoadResolvablePropertiesFromStacks(consumerOf("SecretString"), stacksWith(source), effective)
+		props, err := LoadResolvablePropertiesFromStacks(consumerOf("SecretString"), stacksWith(source), effective, nil)
 		require.NoError(t, err)
 
 		a, ok := props.Answer(sourceKsuid, "SecretString")
@@ -786,7 +786,7 @@ func TestLoadResolvableProperties_OpaqueAnswersCarryDigests(t *testing.T) {
 			Ksuid: sourceKsuid, Label: "s", Type: "Test::Secret", Stack: "default",
 			Properties: json.RawMessage(`{"SecretString":{"$value":"` + hex64 + `","$visibility":"Opaque","$strategy":"Update","$hashed":true}}`),
 		}
-		props, err := LoadResolvablePropertiesFromStacks(consumerOf("SecretString"), stacksWith(source), nil)
+		props, err := LoadResolvablePropertiesFromStacks(consumerOf("SecretString"), stacksWith(source), nil, nil)
 		require.NoError(t, err)
 
 		a, ok := props.Answer(sourceKsuid, "SecretString")
@@ -805,7 +805,7 @@ func TestLoadResolvableProperties_OpaqueAnswersCarryDigests(t *testing.T) {
 			},
 			Properties: json.RawMessage(`{"Name":"s"}`),
 		}
-		props, err := LoadResolvablePropertiesFromStacks(consumerOf("SecretString"), stacksWith(source), nil)
+		props, err := LoadResolvablePropertiesFromStacks(consumerOf("SecretString"), stacksWith(source), nil, nil)
 		require.NoError(t, err)
 
 		a, ok := props.Answer(sourceKsuid, "SecretString")
@@ -836,7 +836,7 @@ func TestLoadResolvableProperties_OpaqueAnswersCarryDigests(t *testing.T) {
 			sourceKsuid: json.RawMessage(`{"SecretString":"hunter2"}`),
 			middleKsuid: json.RawMessage(`{"Ref":{"$ref":"formae://` + sourceKsuid + `#/SecretString"}}`),
 		}
-		props, err := LoadResolvablePropertiesFromStacks(consumer, all, effective)
+		props, err := LoadResolvablePropertiesFromStacks(consumer, all, effective, nil)
 		require.NoError(t, err)
 
 		a, ok := props.Answer(middleKsuid, "Ref")
@@ -846,4 +846,234 @@ func TestLoadResolvableProperties_OpaqueAnswersCarryDigests(t *testing.T) {
 		_, found := props.Get(middleKsuid, "Ref")
 		assert.False(t, found)
 	})
+}
+
+const generatorKsuid = "2genabcdefghijklmnopqrstuvw"
+
+// translatedGen is the shape a $gen envelope has after command translation
+// has resolved the generator label to its KSUID.
+const translatedGen = `{"$gen":true,"$generator":"` + generatorKsuid + `","$output":"value","$visibility":"Opaque"}`
+
+// genConsumer builds a resource whose Password property is bound to the
+// generator's "value" output.
+func genConsumer() pkgmodel.Resource {
+	return pkgmodel.Resource{
+		Label:      "consumer",
+		Type:       "Test::Consumer",
+		Stack:      "default",
+		Properties: json.RawMessage(`{"Password":` + translatedGen + `}`),
+	}
+}
+
+// generationOf builds a generator identity holding generationID, drawn under
+// drawn.
+func generationOf(t *testing.T, generationID string, drawn pkgmodel.Generator) pkgmodel.GeneratorIdentity {
+	t.Helper()
+	identity := pkgmodel.GeneratorIdentity{ID: generatorKsuid, GenerationID: generationID}
+	if drawn != nil {
+		spec, err := json.Marshal(drawn)
+		require.NoError(t, err)
+		identity.GenerationSpec = spec
+	}
+	return identity
+}
+
+// answering returns a lookup that answers for every generator KSUID.
+func answering(identity pkgmodel.GeneratorIdentity, desired pkgmodel.Generator) GeneratorGenerationLookup {
+	return func(string) (pkgmodel.GeneratorIdentity, pkgmodel.Generator) { return identity, desired }
+}
+
+// password builds a password generator spec, applying mutate to the baseline.
+func password(mutate func(*pkgmodel.PasswordGenerator)) *pkgmodel.PasswordGenerator {
+	g := &pkgmodel.PasswordGenerator{
+		Label: "db-password", Stack: "default",
+		Length: 32, Uppercase: true, Lowercase: true, Digits: true,
+		RequireEachIncludedType: true,
+	}
+	mutate(g)
+	return g
+}
+
+// A $gen names a generator, which has no resource row, so answering it must
+// not go looking for one.
+func TestLoadResolvableProperties_GenSourceDoesNotRequireAResourceRow(t *testing.T) {
+	spec := password(func(*pkgmodel.PasswordGenerator) {})
+	props, err := LoadResolvablePropertiesFromStacks(genConsumer(), nil, nil,
+		answering(generationOf(t, "gen-1", spec), spec))
+	require.NoError(t, err)
+
+	_, ok := props.Answer(generatorKsuid, "value")
+	assert.True(t, ok, "the generator's output must be answered without a resource row")
+}
+
+// A generated value is opaque by construction, so the occurrence classifier
+// governs it rather than being short-circuited at R1.
+func TestLoadResolvableProperties_GenAnswerIsOpaque(t *testing.T) {
+	spec := password(func(*pkgmodel.PasswordGenerator) {})
+	props, err := LoadResolvablePropertiesFromStacks(genConsumer(), nil, nil,
+		answering(generationOf(t, "gen-1", spec), spec))
+	require.NoError(t, err)
+
+	a, ok := props.Answer(generatorKsuid, "value")
+	require.True(t, ok)
+	assert.True(t, a.Opaque)
+	assert.Equal(t, AnswerDeferred, a.Kind, "a generated value is drawn at execution, never at plan time")
+	_, found := props.Get(generatorKsuid, "value")
+	assert.False(t, found, "a deferred answer never hands out a value")
+}
+
+// The generation the generator currently holds is what a $gen occurrence's
+// movement is decided against, so it sits in the source root digest slot.
+func TestLoadResolvableProperties_GenDigestIsTheGenerationIdentity(t *testing.T) {
+	spec := password(func(*pkgmodel.PasswordGenerator) {})
+	props, err := LoadResolvablePropertiesFromStacks(genConsumer(), nil, nil,
+		answering(generationOf(t, "gen-1", spec), spec))
+	require.NoError(t, err)
+
+	a, _ := props.Answer(generatorKsuid, "value")
+	assert.Equal(t, provenance.DigestOfString("gen-1"), a.SourceRootDigest)
+	assert.True(t, provenance.Valid(a.SourceRootDigest))
+}
+
+// A generator holding no generation yet has no comparable identity, so its
+// movement is unknown and the first apply materializes a value.
+func TestLoadResolvableProperties_GenWithNoGenerationHasNoDigest(t *testing.T) {
+	spec := password(func(*pkgmodel.PasswordGenerator) {})
+	props, err := LoadResolvablePropertiesFromStacks(genConsumer(), nil, nil,
+		answering(pkgmodel.GeneratorIdentity{ID: generatorKsuid}, spec))
+	require.NoError(t, err)
+
+	a, ok := props.Answer(generatorKsuid, "value")
+	require.True(t, ok)
+	assert.True(t, a.Opaque)
+	assert.Empty(t, a.SourceRootDigest)
+}
+
+// A generator with no row at all answers the same way as one holding no
+// generation: nothing comparable, so the occurrence is planned.
+func TestLoadResolvableProperties_UnknownGeneratorHasNoDigest(t *testing.T) {
+	props, err := LoadResolvablePropertiesFromStacks(genConsumer(), nil, nil,
+		answering(pkgmodel.GeneratorIdentity{}, nil))
+	require.NoError(t, err)
+
+	a, ok := props.Answer(generatorKsuid, "value")
+	require.True(t, ok)
+	assert.Empty(t, a.SourceRootDigest)
+}
+
+// A spec edit the held generation can no longer satisfy reports the
+// generation as moved, even though its identity has not changed.
+func TestLoadResolvableProperties_GenWithUnsatisfiedSpecHasNoDigest(t *testing.T) {
+	drawn := password(func(*pkgmodel.PasswordGenerator) {})
+	desired := password(func(g *pkgmodel.PasswordGenerator) { g.Length = 64 })
+	props, err := LoadResolvablePropertiesFromStacks(genConsumer(), nil, nil,
+		answering(generationOf(t, "gen-1", drawn), desired))
+	require.NoError(t, err)
+
+	a, _ := props.Answer(generatorKsuid, "value")
+	assert.Empty(t, a.SourceRootDigest)
+}
+
+// A spec edit the held generation still satisfies leaves the generation
+// where it is, so the digest still identifies it.
+func TestLoadResolvableProperties_GenWithSatisfiedSpecEditKeepsItsDigest(t *testing.T) {
+	drawn := password(func(g *pkgmodel.PasswordGenerator) { g.Symbols = false; g.RequireEachIncludedType = false })
+	desired := password(func(g *pkgmodel.PasswordGenerator) { g.Symbols = true; g.RequireEachIncludedType = false })
+	props, err := LoadResolvablePropertiesFromStacks(genConsumer(), nil, nil,
+		answering(generationOf(t, "gen-1", drawn), desired))
+	require.NoError(t, err)
+
+	a, _ := props.Answer(generatorKsuid, "value")
+	assert.Equal(t, provenance.DigestOfString("gen-1"), a.SourceRootDigest)
+}
+
+// A stored drawing spec that cannot be parsed cannot be proven to still be
+// satisfied, so the generation is reported as moved rather than failing the
+// plan outright.
+func TestLoadResolvableProperties_GenWithUnreadableDrawnSpecHasNoDigest(t *testing.T) {
+	identity := pkgmodel.GeneratorIdentity{
+		ID:             generatorKsuid,
+		GenerationID:   "gen-1",
+		GenerationSpec: json.RawMessage(`{"Type":"quantum-flux"}`),
+	}
+	props, err := LoadResolvablePropertiesFromStacks(genConsumer(), nil, nil,
+		answering(identity, password(func(*pkgmodel.PasswordGenerator) {})))
+	require.NoError(t, err)
+
+	a, _ := props.Answer(generatorKsuid, "value")
+	assert.Empty(t, a.SourceRootDigest)
+}
+
+// A command that does not redeclare the generator cannot have edited its
+// spec, so the held generation stands without a satisfaction check.
+func TestLoadResolvableProperties_GenNotRedeclaredKeepsItsDigest(t *testing.T) {
+	props, err := LoadResolvablePropertiesFromStacks(genConsumer(), nil, nil,
+		answering(generationOf(t, "gen-1", password(func(*pkgmodel.PasswordGenerator) {})), nil))
+	require.NoError(t, err)
+
+	a, _ := props.Answer(generatorKsuid, "value")
+	assert.Equal(t, provenance.DigestOfString("gen-1"), a.SourceRootDigest)
+}
+
+// Without a lookup there is nothing to decide movement against, so the
+// occurrence is answered as unknown rather than left unanswered.
+func TestLoadResolvableProperties_GenWithoutALookupHasNoDigest(t *testing.T) {
+	props, err := LoadResolvablePropertiesFromStacks(genConsumer(), nil, nil, nil)
+	require.NoError(t, err)
+
+	a, ok := props.Answer(generatorKsuid, "value")
+	require.True(t, ok)
+	assert.True(t, a.Opaque)
+	assert.Empty(t, a.SourceRootDigest)
+}
+
+// An untranslated $gen names no generator KSUID, so there is no identity to
+// key an answer on and the occurrence falls to fail-closed normalization.
+func TestLoadResolvableProperties_UntranslatedGenIsNotAnswered(t *testing.T) {
+	consumer := pkgmodel.Resource{
+		Label: "consumer", Type: "Test::Consumer", Stack: "default",
+		Properties: json.RawMessage(`{"Password":{"$gen":true,"$label":"db-password","$stack":"default","$output":"value"}}`),
+	}
+	props, err := LoadResolvablePropertiesFromStacks(consumer, nil, nil,
+		answering(generationOf(t, "gen-1", password(func(*pkgmodel.PasswordGenerator) {})), nil))
+	require.NoError(t, err)
+
+	_, ok := props.Answer(generatorKsuid, "value")
+	assert.False(t, ok)
+}
+
+// A stored $gen envelope carrying no drawn value yet is a binding, not a
+// value, so a reference to the property it sits at must not resolve to the
+// envelope's own text.
+func TestLoadResolvableProperties_SkipsValuelessGenEnvelope(t *testing.T) {
+	source := &pkgmodel.Resource{
+		Ksuid: sourceKsuid, Label: "the-secret", Type: "Test::Secret", Stack: "default",
+		Properties: json.RawMessage(`{"SecretString":` + translatedGen + `}`),
+	}
+
+	props, err := LoadResolvablePropertiesFromStacks(consumerOf("SecretString"), stacksWith(source), nil, nil)
+	require.NoError(t, err)
+
+	_, found := props.Get(sourceKsuid, "SecretString")
+	assert.False(t, found, "a generator binding is not a value a reference may resolve to")
+}
+
+// A $gen sitting under a map key that contains a dot is answered like any
+// other. The walk's dotted path cannot address such a key, so the envelope's
+// generator must be read off the node itself.
+func TestLoadResolvableProperties_GenUnderADottedMapKeyIsAnswered(t *testing.T) {
+	consumer := pkgmodel.Resource{
+		Label: "consumer", Type: "Test::Consumer", Stack: "default",
+		Properties: json.RawMessage(`{"Tags":{"app.pw":` + translatedGen + `}}`),
+	}
+	spec := password(func(*pkgmodel.PasswordGenerator) {})
+
+	props, err := LoadResolvablePropertiesFromStacks(consumer, nil, nil,
+		answering(generationOf(t, "gen-1", spec), spec))
+	require.NoError(t, err)
+
+	a, ok := props.Answer(generatorKsuid, "value")
+	require.True(t, ok, "a dotted map key must not hide the binding")
+	assert.True(t, a.Opaque)
+	assert.Equal(t, provenance.DigestOfString("gen-1"), a.SourceRootDigest)
 }
