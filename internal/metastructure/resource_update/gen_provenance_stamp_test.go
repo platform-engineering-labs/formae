@@ -40,13 +40,28 @@ func TestResolveGeneratorValue_StampsTheDigestThePlannerComputes(t *testing.T) {
 		"the delivered destination must carry a current-domain digest, got %q", stamped)
 
 	// The planner's side, from the resolver's own answer for the same $gen
-	// occurrence against a generator holding this generation.
+	// occurrence against a generator holding this generation. The lookup
+	// answers a DECLARED generator with the spec its generation was drawn
+	// under, which is the shape a real second apply presents: the planner
+	// then checks the held generation against the declared spec before
+	// digesting it.
+	declared := &pkgmodel.PasswordGenerator{
+		Label: "db-password", Stack: "s", ID: stampGeneratorKsuid,
+		Length: 24, Uppercase: true, Lowercase: true, Digits: true,
+	}
+	drawnUnder, err := json.Marshal(declared)
+	require.NoError(t, err)
+
 	planned, err := resolver.LoadResolvablePropertiesFromStacks(
 		genBoundCreate(stampGeneratorKsuid).DesiredState,
 		map[string][]*pkgmodel.Resource{},
 		map[string]json.RawMessage{},
 		func(ksuid string) (pkgmodel.GeneratorIdentity, pkgmodel.Generator) {
-			return pkgmodel.GeneratorIdentity{ID: ksuid, GenerationID: stampGenerationID}, nil
+			return pkgmodel.GeneratorIdentity{
+				ID:             ksuid,
+				GenerationID:   stampGenerationID,
+				GenerationSpec: drawnUnder,
+			}, declared
 		},
 	)
 	require.NoError(t, err)
@@ -85,17 +100,6 @@ func TestResolveGeneratorValue_ReadOriginMergeStampsNothing(t *testing.T) {
 
 	assert.False(t, gjson.GetBytes(ru.DesiredState.Properties, "SecretString.$resolvedFrom").Exists(),
 		"only the echo of formae's own write may attest where a value came from")
-}
-
-// A draw that names no generation leaves the destination unstamped rather
-// than stamping a digest of nothing, which would be a well-formed digest
-// attesting a generation that does not exist.
-func TestResolveGeneratorValue_UnnamedGenerationStampsNothing(t *testing.T) {
-	ru := genBoundCreate(stampGeneratorKsuid)
-
-	require.NoError(t, ru.ResolveGeneratorValue(stampGeneratorKsuid, "drawn-credential", "", pkgmodel.FormaApplyModeReconcile))
-
-	assert.Empty(t, ru.ResolvedRootDigests)
 }
 
 // The key a generator occurrence is stamped under is the key the merge reads

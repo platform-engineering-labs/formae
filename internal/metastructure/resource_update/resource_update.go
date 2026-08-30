@@ -230,10 +230,12 @@ func (ru *ResourceUpdate) ResolveGeneratorValue(generatorKsuid string, value str
 // identity itself never goes in. The map is written before the plugin call,
 // so the write-origin merge of the echo finds it and stamps $resolvedFrom
 // into the envelope that lands at rest.
+//
+// generationID is the delivery boundary's to guarantee non-empty
+// (ExecutionDAG.propagateDrawnGeneratorValue refuses a draw naming none).
+// Re-checking it here would stamp nothing and carry on, which is the silent
+// outcome that guard exists to make loud.
 func (ru *ResourceUpdate) stampDrawnGeneration(generatorKsuid string, outputs []string, generationID string) {
-	if generationID == "" {
-		return
-	}
 	digest := provenance.DigestOfString(generationID)
 	for _, output := range outputs {
 		key := generatorSourceKey(generatorKsuid, output)
