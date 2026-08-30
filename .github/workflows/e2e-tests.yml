@@ -176,15 +176,20 @@ jobs:
             system_plugins: auth-basic
           - test: TestPluginConfig
             system_plugins: sftp
-          # Installs no cloud plugin: the oidc-credential fixtures (a stub
-          # broker, a resource plugin that exchanges the token it is handed,
-          # and a stub hosted auth plugin) are built from this repo and staged
-          # by `make test-e2e` itself. It does need AWS credentials, and the
-          # `e2e-test` shared-config profile written above: `formae connect`
-          # provisions the role with it, the broker reads its signing key from
-          # Secrets Manager, and the plugin calls sts:AssumeRoleWithWebIdentity
-          # against the standing issuer.
+          # The oidc-credential fixtures (a stub broker, a probe plugin that
+          # reports the token it is handed, and a stub hosted auth plugin) are
+          # built from this repo and staged by `make test-e2e` itself. The real
+          # aws and gcp plugins come from the dev channel, because the
+          # `OidcAuth` target config they are driven through ships in
+          # aws 0.1.17 / gcp 0.1.13, whose only builds so far are pre-releases.
+          #
+          # It needs AWS credentials and the `e2e-test` shared-config profile
+          # written above — `formae connect` provisions the role with it, and
+          # the broker reads its signing key from Secrets Manager — plus the
+          # GCP credentials configured below.
           - test: TestOidcCredential
+            system_plugins: aws gcp
+            plugin_channel: dev
 
     steps:
       - uses: actions/checkout@v4
@@ -321,7 +326,8 @@ jobs:
           # Install only the plugins this test needs. The agent refreshes
           # orbital's repository cache at startup, so the install candidate
           # solver has fresh metadata to work with.
-          dist/e2e/bin/formae plugin install ${{ matrix.system_plugins }} --channel stable
+          dist/e2e/bin/formae plugin install ${{ matrix.system_plugins }} \
+            --channel ${{ matrix.plugin_channel || 'stable' }}
 
           # Stop the bootstrap agent so the test harness can spawn its own.
           kill -TERM "$AGENT_PID" || true

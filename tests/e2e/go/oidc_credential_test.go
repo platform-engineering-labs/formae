@@ -303,6 +303,47 @@ func TestOidcCredential_TokenExchangesForRealCredentials(t *testing.T) {
 		t.Errorf("exchangeIdentity %q does not name role %q", got, oidcConnectRoleName())
 	}
 	requireCredentialsOutlive(t, echoOutput(t, echo, "exchangeExpiration"))
+
+	// The probe above proved the token is accepted; this proves the credential
+	// it buys is usable for the thing federation exists to allow. The real AWS
+	// plugin, under a target whose only credential is an OidcAuth role,
+	// creates and destroys a resource in the account.
+	//
+	// It runs after the probe rather than beside it because the probe is also
+	// this test's readiness gate: it retries while IAM propagates the
+	// just-created role, and the plugin does not. Applying both at once would
+	// race the propagation the probe exists to absorb.
+	requireRealPluginManagesAResource(t, bin, agent, oidcRealAWSFormaFor(t, roleArn), oidcRealAWSResourceLabel)
+}
+
+// requireRealPluginManagesAResource applies a forma whose only credential is a
+// federated one, checks the resource reached the cloud, then destroys it and
+// checks it is gone.
+//
+// Both halves matter. A create alone would prove the plugin can obtain
+// credentials once; destroying with the same trust proves they keep working
+// across operations, and leaves the account as it was found.
+func requireRealPluginManagesAResource(t *testing.T, bin string, agent *Agent, formaPath, resourceLabel string) {
+	t.Helper()
+
+	cli := NewFormaeCLI(bin, agent.ConfigPath(), agent.Port())
+	stackQuery := "stack:" + oidcRealStackLabel
+
+	// Registered before the apply: a create that half-succeeds still leaves
+	// something in the account, and the federated credential is the only way
+	// this suite can take it back.
+	t.Cleanup(func() {
+		RequireCommandSuccess(t, cli.WaitForCommand(t, cli.Destroy(t, formaPath), 5*time.Minute))
+	})
+
+	cmdID := cli.Apply(t, "reconcile", formaPath)
+	RequireCommandSuccess(t, cli.WaitForCommand(t, cmdID, 5*time.Minute))
+
+	created := RequireResource(t, cli.Inventory(t, "--query", stackQuery), resourceLabel)
+	if created.NativeID == "" {
+		t.Fatalf("resource %s was reported created without a native id, so nothing reached the cloud", resourceLabel)
+	}
+	t.Logf("federated credentials created %s (%s)", resourceLabel, created.NativeID)
 }
 
 // TestOidcCredential_NoBrokerFailsClosed proves a plugin whose namespace has

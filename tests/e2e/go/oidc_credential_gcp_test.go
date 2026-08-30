@@ -172,4 +172,12 @@ func TestOidcCredential_GcpTokenExchangesForRealCredentials(t *testing.T) {
 		t.Errorf("exchangeIdentity %q does not name the project the credentials read", got)
 	}
 	requireCredentialsOutlive(t, echoOutput(t, echo, "exchangeExpiration"))
+
+	// As on AWS: the probe proved the token is accepted and the credential it
+	// buys can read the project, and this proves the real plugin can manage
+	// the project with it. It runs afterwards because the probe is also the
+	// readiness gate, absorbing the delay while the bindings connect just
+	// wrote propagate.
+	requireRealPluginManagesAResource(t, bin, agent,
+		oidcRealGCPFormaFor(t, project, provider), oidcRealGCPResourceLabel)
 }
