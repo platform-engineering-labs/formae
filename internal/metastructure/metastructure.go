@@ -2447,6 +2447,12 @@ func extractKSUIDs(jsonStr string, ksuidSet map[string]struct{}) {
 
 // replaceKSUIDs recursively walks the JSON structure and replaces all $ref objects
 // (containing formae URIs) with $res objects (containing resolved resource metadata).
+//
+// This handles $ref only. A $gen envelope's bare $generator KSUID is not
+// reverse-translated here, and extractKSUIDs above does not even collect it
+// (it only looks at strings that parse as formae:// URIs): no resource row
+// can persist a $gen today, so there is nothing for this function to see.
+// The reverse arm for $gen is owed by whichever slice lands value drawing.
 func replaceKSUIDs(jsonStr string, ksuidToTriplet map[string]pkgmodel.TripletKey) string {
 	var replace func(value any) any
 	replace = func(value any) any {
