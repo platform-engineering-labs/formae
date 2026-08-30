@@ -462,3 +462,31 @@ func TestPluginCoordinator_OidcBroker_OperatorEnvOmitsBothWhenUnpaired(t *testin
 	assert.False(t, hasNode)
 	assert.False(t, hasName)
 }
+
+// A plugin's own discovery filters carry safety rules the plugin author put
+// there (EKS Automode resources, GKE Autopilot resources). User config adds to
+// them; it does not get to silently drop them.
+func TestPluginCoordinator_UserDiscoveryFiltersAddToThePluginsOwn(t *testing.T) {
+	pluginFilter := model.MatchFilter{
+		ResourceTypes: []string{"AWS::EC2::Instance"},
+		Conditions:    []model.FilterCondition{{PropertyPath: "$.Tags.eks", PropertyValue: "owned"}},
+	}
+	userFilter := model.MatchFilter{
+		Conditions: []model.FilterCondition{{PropertyPath: "$.Tags.app", PropertyValue: "formae-agent"}},
+	}
+
+	c := &PluginCoordinator{
+		resourcePluginConfigs: map[string]model.ResourcePluginUserConfig{
+			"aws": {Type: "aws", Enabled: true, DiscoveryFilters: []model.MatchFilter{userFilter}},
+		},
+	}
+
+	merged, ok := c.mergePluginConfig("aws", "AWS", RegisteredPlugin{
+		MatchFilters: []model.MatchFilter{pluginFilter},
+	})
+
+	require.True(t, ok)
+	require.Len(t, merged.MatchFilters, 2)
+	assert.Equal(t, pluginFilter, merged.MatchFilters[0])
+	assert.Equal(t, userFilter, merged.MatchFilters[1])
+}

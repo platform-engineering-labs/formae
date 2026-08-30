@@ -217,8 +217,14 @@ class FilterCondition {
     propertyValue: String?
 }
 
+/// A rule that excludes matching resources from discovery.
 class MatchFilter {
+    /// Resource types this filter applies to. Leave it out to apply the
+    /// filter to every type the plugin discovers.
     resourceTypes: Listing<String>
+
+    /// Every condition must match for a resource to be excluded. A filter
+    /// naming no conditions excludes nothing.
     conditions: Listing<FilterCondition>
 }
 
@@ -227,6 +233,9 @@ open class BaseResourcePluginConfig {
     enabled: Boolean = true
     rateLimit: RateLimitConfig?
     labelConfig: LabelConfig?
+
+    /// Extra discovery filters for this plugin. These are added to the
+    /// filters the plugin declares for itself, never a replacement for them.
     discoveryFilters: Listing<MatchFilter>?
     resourceTypesToDiscover: Listing<String>?
     retry: RetryConfig?

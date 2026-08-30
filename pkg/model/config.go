@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/url"
 	"regexp"
+	"slices"
 	"time"
 )
 
@@ -53,10 +54,35 @@ func (c LabelConfig) QueryForResourceType(resourceType string) string {
 }
 
 // MatchFilter is a declarative, serializable filter definition for discovery.
-// Resources matching ALL conditions in a filter are excluded from discovery.
+// A resource is excluded when it is of a type the filter applies to and every
+// one of the filter's conditions matches. A filter naming no conditions
+// excludes nothing.
 type MatchFilter struct {
-	ResourceTypes []string          // Resource types this filter applies to
+	ResourceTypes []string          // Resource types this filter applies to; empty means every type
 	Conditions    []FilterCondition // All conditions must match (AND logic) to exclude
+}
+
+// AppliesTo reports whether this filter is scoped to the given resource type.
+//
+// An empty ResourceTypes list applies to every type. That is what a filter
+// naming only conditions reads as, and writing one is the ordinary way to say
+// "exclude anything tagged like this, whatever it is".
+func (f MatchFilter) AppliesTo(resourceType string) bool {
+	if len(f.ResourceTypes) == 0 {
+		return true
+	}
+	return slices.Contains(f.ResourceTypes, resourceType)
+}
+
+// FiltersForType returns the filters that apply to the given resource type.
+func FiltersForType(filters []MatchFilter, resourceType string) []MatchFilter {
+	var result []MatchFilter
+	for i := range filters {
+		if filters[i].AppliesTo(resourceType) {
+			result = append(result, filters[i])
+		}
+	}
+	return result
 }
 
 // FilterCondition defines a single condition for filtering resources.
