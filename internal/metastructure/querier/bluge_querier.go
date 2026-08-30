@@ -57,6 +57,10 @@ func (b *BlugeQuerier) BuildStatusQuery(queryString string, caller Caller, n int
 }
 
 func (b *BlugeQuerier) statusQuery(queryString string, caller Caller, n int) (*datastore.StatusQuery, error) {
+	if strings.Contains(queryString, "::") {
+		queryString = strings.ReplaceAll(queryString, "::", "\\:\\:")
+	}
+
 	q, err := querystr.ParseQueryString(queryString, querystr.QueryStringOptions{})
 	if err != nil {
 		return nil, apimodel.InvalidQueryError{Reason: err.Error()}
@@ -381,6 +385,10 @@ func (b *BlugeQuerier) QueryResourcesForDestroy(queryString string) ([]*pkgmodel
 }
 
 func (b *BlugeQuerier) destroyResourcesQuery(queryString string) (*datastore.DestroyResourcesQuery, error) {
+	if strings.Contains(queryString, "::") {
+		queryString = strings.ReplaceAll(queryString, "::", "\\:\\:")
+	}
+
 	q, err := querystr.ParseQueryString(queryString, querystr.QueryStringOptions{})
 	if err != nil {
 		return nil, apimodel.InvalidQueryError{Reason: err.Error()}

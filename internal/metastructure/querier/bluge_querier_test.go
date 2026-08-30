@@ -454,6 +454,38 @@ func TestBlugeQuerier_resourceQuery_TrailingWildcard(t *testing.T) {
 // `::` in resource type values needs the QueryResources escape to survive
 // Bluge's tokenizer, then come back out alongside the wildcard. Verify the
 // full path end-to-end.
+func TestBlugeQuerier_StatusQuery_TypeWithWildcardSurvivesColonEscape(t *testing.T) {
+	querier := &BlugeQuerier{}
+
+	queryString := "command:AWS::ApiGateway*"
+	expectedStatusQuery := &datastore.StatusQuery{
+		Command: &datastore.QueryItem[string]{
+			Item:       "AWS::ApiGateway*",
+			Constraint: datastore.Optional,
+		},
+	}
+
+	sq, err := querier.statusQuery(queryString, Caller{ClientID: "test-client-id"}, 0)
+	assert.NoError(t, err)
+	assert.Equal(t, expectedStatusQuery, sq)
+}
+
+func TestBlugeQuerier_DestroyResourcesQuery_TypeWithWildcardSurvivesColonEscape(t *testing.T) {
+	querier := &BlugeQuerier{}
+
+	queryString := "type:AWS::ApiGateway*"
+	expectedDestroyQuery := &datastore.DestroyResourcesQuery{
+		Type: &datastore.QueryItem[string]{
+			Item:       "AWS::ApiGateway*",
+			Constraint: datastore.Optional,
+		},
+	}
+
+	dq, err := querier.destroyResourcesQuery(queryString)
+	assert.NoError(t, err)
+	assert.Equal(t, expectedDestroyQuery, dq)
+}
+
 func TestBlugeQuerier_QueryResources_TypeWithWildcardSurvivesColonEscape(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		ds := newTestDatastoreSQLite()
