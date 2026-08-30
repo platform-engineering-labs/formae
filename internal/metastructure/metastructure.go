@@ -671,6 +671,31 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 		// Forma.Generators to the datastore. The generator writes themselves
 		// (CreateGenerator/UpdateGenerator/DeleteGenerator, just above) are
 		// fully durable regardless.
+
+		// A command whose only work is generator work has now done all of it,
+		// and nothing downstream will ever move it off NotStarted: the
+		// changeset executor below starts only for resource or target
+		// updates, and a generator update has no state message of its own to
+		// recompute the command state the way UpdateStackStates and
+		// UpdatePolicyStates do for theirs. Left alone the command sits
+		// incomplete forever, which is worse than failing: it never
+		// self-heals, and dropping an unreferenced generator from a forma is
+		// an ordinary edit. Finalize it here instead, which recomputes the
+		// command state over its (empty) resource updates and reads Success.
+		//
+		// A failure to finalize is logged rather than returned: the generator
+		// writes are already durable, so reporting the apply as failed would
+		// misdescribe it, and the recovery sweep finalizes the command on the
+		// agent's next start.
+		if len(fa.ResourceUpdates) == 0 && len(fa.TargetUpdates) == 0 {
+			if _, ferr := m.callActor(
+				gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
+				forma_persister.FinalizeIncompleteCommand{CommandID: fa.ID},
+			); ferr != nil {
+				slog.Error("Failed to finalize a generator-only command",
+					"commandID", fa.ID, "error", ferr)
+			}
+		}
 	}
 
 	if len(fa.ResourceUpdates) > 0 || len(fa.TargetUpdates) > 0 {

@@ -301,10 +301,18 @@ type MarkTargetsAsFailed struct {
 	TargetModifiedTs time.Time
 }
 
-// FinalizeIncompleteCommand is sent during crash recovery when all resource
-// updates in a command have already reached a terminal state but the command
-// itself was never marked complete (the agent crashed between the last
-// resource completion and the command state transition).
+// FinalizeIncompleteCommand is sent when every resource update in a command
+// has reached a terminal state but the command itself was never marked
+// complete. Two callers:
+//
+//   - crash recovery, where the agent went down between the last resource
+//     completion and the command state transition;
+//   - a submitted command with no changeset work at all, whose updates were
+//     applied synchronously during submission (generator work) and which
+//     therefore has nothing left to report its completion.
+//
+// A command with no resource updates satisfies the terminality guard
+// trivially, which is what makes the second caller work.
 type FinalizeIncompleteCommand struct {
 	CommandID string
 }
@@ -1098,8 +1106,10 @@ func (f *FormaCommandPersister) markResourceUpdateAsComplete(msg *messages.MarkR
 
 // finalizeIncompleteCommand handles crash recovery for commands where all
 // resource updates reached a terminal state but the command itself never
-// transitioned. It computes the final command state and persists it through
-// the normal finalization path (hashing, cache eviction, etc.).
+// transitioned, whether because the agent crashed or because the command
+// carried no changeset work to report it. It computes the final command state
+// and persists it through the normal finalization path (hashing, cache
+// eviction, etc.).
 func (f *FormaCommandPersister) finalizeIncompleteCommand(msg *FinalizeIncompleteCommand) (bool, error) {
 	cached, err := f.getOrLoadCommand(msg.CommandID)
 	if err != nil {
