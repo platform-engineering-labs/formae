@@ -1660,7 +1660,7 @@ func (m *Metastructure) ReRunIncompleteCommands() error {
 		// here unchanged and a credential the interrupted command never meant
 		// to touch is not rotated by the resume.
 		draws, drawErr := generator_update.SynthesizeDrawGeneratorUpdates(
-			pendingUpdates, nil, generatorLookupByStack(pendingUpdates, m.Datastore))
+			pendingUpdates, nil, generatorLookupForResume(pendingUpdates, m.Datastore))
 		if drawErr != nil {
 			slog.Error("Failed to build changeset for incomplete forma command, skipping", "commandID", fa.ID, "error", drawErr)
 			continue
@@ -1729,66 +1729,123 @@ func generatorLookupByTranslation(
 	}
 }
 
-// generatorLookupByStack is the resume path's route to the same thing. The
+// generatorLookupForResume is the resume path's route to the same thing. The
 // translation map lived in the planning call's stack frame and is long gone,
-// and a $gen envelope that survived to the datastore carries only a KSUID —
-// pkgmodel.GeneratorIdentity has no label and no stack, so an identity lookup
-// by ID cannot reach a spec either. What the surviving updates do still say
-// is which stacks they sit on, and a stack's generators are enumerable: each
-// one's label plus its stack yields its KSUID, which is the pairing the
-// envelopes are matched against.
+// and a $gen envelope that survived to the datastore carries only a KSUID.
 //
-// A generator on some other stack than any surviving destination's resolves
-// to nothing here, and the synthesis logs it and draws nothing for it; the
-// destination is then refused at the provider boundary, naming the property.
-// Reaching it would take a by-KSUID spec load, which is a new datastore
-// method and four backend implementations for a case one read per resumed
-// stack already covers.
-func generatorLookupByStack(
+// The KSUID is enough. GeneratorIdentity has no Label or Stack field, but its
+// GenerationSpec IS the serialized generator the current generation was drawn
+// under, and that carries both. So GetGeneratorIdentityByID gives the spec,
+// parsing it gives (label, stack), and GetGenerator on that pair gives the
+// generator as it stands NOW — which is what a draw must run under, not the
+// spec the last generation happened to use. Two existing interface methods,
+// no new datastore surface, one lookup per KSUID.
+//
+// GenerationSpec is nil until something has been drawn, so a generator that
+// has never drawn cannot be reached that way. For that case only, the stacks
+// the surviving destinations sit on are enumerated and each generator's label
+// resolved to its KSUID. The index is built once, on the first miss, so the
+// ordinary case pays nothing for it.
+func generatorLookupForResume(
 	pendingUpdates []resource_update.ResourceUpdate,
 	ds datastore.Datastore,
 ) func(string) (pkgmodel.Generator, error) {
 	if ds == nil {
 		return nil
 	}
-	// Built on the first lookup rather than up front, so a resumed command
-	// with no $gen destinations at all does no datastore work: the synthesis
-	// returns before it ever calls this.
-	var byKsuid map[string]pkgmodel.Generator
+	var neverDrawnByKsuid map[string]pkgmodel.Generator
 	return func(ksuid string) (pkgmodel.Generator, error) {
-		if byKsuid == nil {
-			built := make(map[string]pkgmodel.Generator)
-			seen := make(map[string]bool)
-			for i := range pendingUpdates {
-				stack := pendingUpdates[i].DesiredState.Stack
-				if stack == "" || seen[stack] {
-					continue
-				}
-				seen[stack] = true
-
-				generators, err := ds.LoadGeneratorsByStack(stack)
-				if err != nil {
-					return nil, fmt.Errorf("failed to load the generators of stack %q: %w", stack, err)
-				}
-				for _, generator := range generators {
-					identity, err := ds.GetGeneratorIdentity(generator.GetLabel(), stack)
-					if err != nil {
-						return nil, fmt.Errorf("failed to resolve the identity of generator %q in stack %q: %w",
-							generator.GetLabel(), stack, err)
-					}
-					if identity.ID == "" {
-						continue
-					}
-					// The stack the row was found under is authoritative for
-					// the draw op, whatever the serialized spec carries.
-					generator.SetStack(stack)
-					built[identity.ID] = generator
-				}
-			}
-			byKsuid = built
+		generator, err := generatorByKsuid(ksuid, ds)
+		if err != nil || generator != nil {
+			return generator, err
 		}
-		return byKsuid[ksuid], nil
+		if neverDrawnByKsuid == nil {
+			neverDrawnByKsuid, err = generatorsOnStacksOf(pendingUpdates, ds)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return neverDrawnByKsuid[ksuid], nil
 	}
+}
+
+// generatorByKsuid resolves a generator KSUID to the generator that holds it,
+// through the generation spec its identity carries. A nil generator and a nil
+// error mean the KSUID reaches no generator this way — either none exists, or
+// none has drawn yet and there is therefore no spec to read a label and stack
+// out of.
+func generatorByKsuid(ksuid string, ds datastore.Datastore) (pkgmodel.Generator, error) {
+	identity, err := ds.GetGeneratorIdentityByID(ksuid)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve the identity of generator %s: %w", ksuid, err)
+	}
+	if len(identity.GenerationSpec) == 0 {
+		return nil, nil
+	}
+	drawnUnder, err := pkgmodel.ParseGenerator(identity.GenerationSpec)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse the generation spec of generator %s: %w", ksuid, err)
+	}
+	label, stack := drawnUnder.GetLabel(), drawnUnder.GetStack()
+	if label == "" || stack == "" {
+		return nil, nil
+	}
+	// The CURRENT generator, not the spec the last generation was drawn
+	// under: an edited spec must be what the next value is drawn from.
+	stored, err := ds.GetGenerator(label, stack)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load generator %q in stack %q: %w", label, stack, err)
+	}
+	if stored == nil {
+		return nil, nil
+	}
+	stored.SetStack(stack)
+	return stored, nil
+}
+
+// generatorsOnStacksOf indexes, by KSUID, every generator owned by a stack
+// that at least one of these updates sits on. It is the fallback for a
+// generator that has never drawn, whose identity therefore carries no spec to
+// read a label and stack out of.
+//
+// A never-drawn generator on some other stack than any surviving
+// destination's is not found. The synthesis logs that and draws nothing for
+// it, and the destination is refused at the provider boundary naming the
+// property. Reaching it would take loading the generator itself by KSUID,
+// which is a new Datastore method and four backend implementations, for a
+// case that needs a cross-stack binding AND a generator that has never once
+// drawn.
+func generatorsOnStacksOf(
+	pendingUpdates []resource_update.ResourceUpdate,
+	ds datastore.Datastore,
+) (map[string]pkgmodel.Generator, error) {
+	byKsuid := make(map[string]pkgmodel.Generator)
+	seen := make(map[string]bool)
+	for i := range pendingUpdates {
+		stack := pendingUpdates[i].DesiredState.Stack
+		if stack == "" || seen[stack] {
+			continue
+		}
+		seen[stack] = true
+
+		generators, err := ds.LoadGeneratorsByStack(stack)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load the generators of stack %q: %w", stack, err)
+		}
+		for _, generator := range generators {
+			identity, err := ds.GetGeneratorIdentity(generator.GetLabel(), stack)
+			if err != nil {
+				return nil, fmt.Errorf("failed to resolve the identity of generator %q in stack %q: %w",
+					generator.GetLabel(), stack, err)
+			}
+			if identity.ID == "" {
+				continue
+			}
+			generator.SetStack(stack)
+			byKsuid[identity.ID] = generator
+		}
+	}
+	return byKsuid, nil
 }
 
 func (m *Metastructure) checkForConflictingCommands(commandStackLabels []string) error {
