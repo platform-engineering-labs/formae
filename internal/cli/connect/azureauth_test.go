@@ -156,6 +156,8 @@ func TestNeedsAuthenticationWithAzOnPathReportsLoginCommand(t *testing.T) {
 	require.ErrorAs(t, err, &f)
 	assert.Equal(t, printer.CodeCredentialsRequired, f.Code)
 	assert.Equal(t, "az login", f.Details["command"])
+	assert.Contains(t, f.Message, "connect azure template",
+		"an operator who will not sign in needs to be told about the credential-less path")
 }
 
 // az missing from PATH: reporting `az login` would send the operator to run
@@ -169,6 +171,8 @@ func TestNeedsAuthenticationWithoutAzReportsAzMissing(t *testing.T) {
 	require.ErrorAs(t, err, &f)
 	assert.Equal(t, printer.CodeAzMissing, f.Code)
 	assert.Contains(t, f.Message, "https://learn.microsoft.com/cli/azure/install-azure-cli")
+	assert.Contains(t, f.Message, "connect azure template",
+		"an operator who will not install az needs to be told about the credential-less path")
 	_, hasCommand := f.Details["command"]
 	assert.False(t, hasCommand, "az_missing must not report a login command az cannot run")
 }
