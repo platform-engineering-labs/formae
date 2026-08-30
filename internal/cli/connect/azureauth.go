@@ -112,13 +112,13 @@ func azureCredentialFailure(state azureCredentialState, tenantHint string) error
 			return printer.Fail(printer.CodeAzMissing,
 				"no usable Azure credentials, and the az CLI needed to sign in to Azure is not installed; install it "+
 					"from https://learn.microsoft.com/cli/azure/install-azure-cli and re-run this command, or run "+
-					"`formae connect azure template` instead if you would rather not hand this machine a "+
-					"provisioning credential", nil)
+					"`formae connect azure template` instead, which deploys through the portal or your own pipeline "+
+					"and needs no CLI or credential on this machine at all", nil)
 		}
 		return printer.Fail(printer.CodeCredentialsRequired,
 			"no usable Azure credentials for this subscription; run the sign-in and re-run this command, or run "+
-				"`formae connect azure template` instead if you would rather not hand this machine a provisioning "+
-				"credential",
+				"`formae connect azure template` instead, which deploys through the portal or your own pipeline and "+
+				"needs no CLI or credential on this machine at all",
 			map[string]any{"command": azLoginCommand(tenantHint)})
 	case azureCredentialsLacksPermission:
 		return printer.Fail(printer.CodeNotAuthorized,
