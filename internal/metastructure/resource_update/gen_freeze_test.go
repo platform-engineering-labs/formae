@@ -13,6 +13,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/provenance"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
@@ -176,4 +177,34 @@ func TestUpdate_GeneratorBindingWithoutStableRecord_IsStillRefused(t *testing.T)
 	assert.Nil(t, proc.operation, "the plugin must never be called with an undrawn binding")
 	assert.Contains(t, strings.Join(proc.log.all(), "\n"), "failed to convert resource properties for plugin")
 	assert.Equal(t, failureReasonUndrawnGeneratorValueOnUpdate, data.resourceUpdate.MostRecentFailureMessage())
+}
+
+// A stable binding that a draw was delivered into carries the drawn value in
+// its envelope, and the freeze must leave it alone. Stability decides whether
+// the generator draws, not who a draw reaches, so a stable destination does
+// receive a draw that is happening — and substituting the sentinel over it
+// would send the provider a preserved marker instead of the credential,
+// leaving that destination on the old generation while its siblings moved.
+func TestFreezeStableGeneratorBindings_LeavesADeliveredValueAlone(t *testing.T) {
+	delivered := `{"$gen":true,"$generator":"` + boundGeneratorKsuid +
+		`","$output":"value","$visibility":"Opaque","$value":"the-freshly-drawn-password"}`
+
+	out, err := FreezeStableGeneratorBindings(
+		genBoundProperties("one", delivered), stableGenRecord())
+	require.NoError(t, err)
+
+	assert.JSONEq(t, delivered, gjson.GetBytes(out, "Password").Raw,
+		"a delivered value must survive the freeze untouched")
+}
+
+// The same binding with no value delivered into it is still frozen: nothing
+// drew for it, so its envelope is bare, and the guard that refuses to hand a
+// provider a reference in a secret's place would otherwise take the whole
+// document with it.
+func TestFreezeStableGeneratorBindings_FreezesABareEnvelope(t *testing.T) {
+	out, err := FreezeStableGeneratorBindings(
+		genBoundProperties("one", boundGenLeaf), stableGenRecord())
+	require.NoError(t, err)
+
+	assert.JSONEq(t, `{"$opaque":"preserved"}`, gjson.GetBytes(out, "Password").Raw)
 }

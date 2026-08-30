@@ -12,13 +12,19 @@ import (
 // destinationPath was classified OccurrenceStable when this update was
 // planned.
 //
-// This is the ONE reading of ProvenanceRecords for $gen destinations.
-// Whether a generator draws at all, which destinations an executing draw
-// writes to, and which destinations a resumed command still owes a value are
-// three phrasings of the same question, and two independent readings of the
-// same records would eventually disagree without anything observing it: a
-// destination that got an edge but is frozen at delivery discards the value
-// drawn for it, and one frozen but edge-less never gets a value at all.
+// This is the ONE reading of ProvenanceRecords for $gen destinations, and it
+// answers ONE question: does anything still need a value from this generator?
+// Whether a generator draws at all, and which destinations a resumed command
+// still owes a value, are two phrasings of that question; two independent
+// readings of the same records would eventually disagree without anything
+// observing it.
+//
+// It does NOT decide who a draw reaches. Once a generator draws, every live
+// non-delete destination of it in the changeset receives the value and is
+// stamped with the new generation — see
+// ResourceUpdate.ResolveGeneratorValue. Using stability to narrow delivery is
+// what leaves two consumers of one credential holding different values, with
+// each apply repairing one and breaking the other.
 //
 // An absent record is NOT stable, and neither is a record whose desired
 // identity resolves against the resources table rather than the generators

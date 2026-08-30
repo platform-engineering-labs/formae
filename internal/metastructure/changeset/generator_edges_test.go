@@ -92,11 +92,17 @@ func TestGeneratorDrawGetsANodeAndTheConsumerDependsOnIt(t *testing.T) {
 	assert.Equal(t, consumer.URI, drawNode.Dependents[0].URI)
 }
 
-// A destination whose occurrence classified stable already holds the value
-// the generator's current generation produced. It must not be wired to the
-// draw: an edge would deliver a freshly drawn value over a credential that
-// nothing asked to rotate.
-func TestStableDestinationIsNotWiredToTheDraw(t *testing.T) {
+// Once a draw is in the graph, every live destination of that generator waits
+// for it, including one whose occurrence classified stable. Stability decides
+// whether the generator draws at all, not who the draw reaches: a stable
+// destination that dispatched before the draw would keep the old generation
+// while its sibling took the new one, and the two consumers of one credential
+// would hold different values.
+//
+// A destination being torn down is the exception. Its DesiredState is the
+// stored resource, it writes nothing, and an edge would only pull a fresh
+// credential into a row on its way out.
+func TestEveryLiveDestinationIsWiredToTheDraw(t *testing.T) {
 	generatorKsuid := util.NewID()
 
 	stable := genBoundSecret("stable-secret", generatorKsuid)
@@ -110,24 +116,30 @@ func TestStableDestinationIsNotWiredToTheDraw(t *testing.T) {
 	}}
 
 	fresh := genBoundSecret("fresh-secret", generatorKsuid)
+
+	torndown := genBoundSecret("torndown-secret", generatorKsuid)
+	torndown.Operation = resource_update.OperationDelete
+
 	draw := drawOp("db-password", generatorKsuid)
 
 	cs, err := NewChangeset(
-		[]resource_update.ResourceUpdate{stable, fresh},
+		[]resource_update.ResourceUpdate{stable, fresh, torndown},
 		nil,
 		[]generator_update.GeneratorUpdate{draw},
 		"cmd-stable", pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile,
 	)
 	require.NoError(t, err)
 
-	assert.False(t, dependsOn(resourceNode(t, cs, stable), draw.NodeURI()),
-		"a stable destination must not be wired to the draw")
+	assert.True(t, dependsOn(resourceNode(t, cs, stable), draw.NodeURI()),
+		"a stable destination must still wait for the draw it is going to receive")
 	assert.True(t, dependsOn(resourceNode(t, cs, fresh), draw.NodeURI()),
 		"a destination that still needs a value must be wired to the draw")
+	assert.False(t, dependsOn(resourceNode(t, cs, torndown), draw.NodeURI()),
+		"a destination being torn down receives nothing and waits for nothing")
 
 	drawNode := cs.DAG.Nodes[draw.NodeURI()]
 	require.NotNil(t, drawNode)
-	assert.Len(t, drawNode.Dependents, 1, "only the destination that needs a value depends on the draw")
+	assert.Len(t, drawNode.Dependents, 2, "every live destination depends on the draw")
 }
 
 // Two generators are two independent producers: each consumer waits only for
@@ -217,6 +229,11 @@ func stubGeneratorLookup(byKsuid map[string]pkgmodel.Generator) func(string) (pk
 // the generator diff would put it in the graph; the destination is what puts
 // it there, and without the edge the new consumer would dispatch its $gen
 // envelope undrawn.
+//
+// The consumer that was already applied is wired too. It is what makes the
+// draw reach both of them, so the two end up holding the same credential
+// rather than the new one taking the new generation and the old one keeping
+// the previous.
 func TestSecondConsumerOnAnUnchangedGeneratorIsWiredToADraw(t *testing.T) {
 	generatorKsuid := util.NewID()
 
@@ -253,8 +270,8 @@ func TestSecondConsumerOnAnUnchangedGeneratorIsWiredToADraw(t *testing.T) {
 	require.NotNil(t, drawNode, "an unchanged generator with a new consumer must still get a node")
 	assert.True(t, dependsOn(resourceNode(t, cs, newConsumer), draws[0].NodeURI()),
 		"the newly bound consumer must wait for the draw")
-	assert.False(t, dependsOn(resourceNode(t, cs, appliedConsumer), draws[0].NodeURI()),
-		"the already-applied consumer must keep the value it holds")
+	assert.True(t, dependsOn(resourceNode(t, cs, appliedConsumer), draws[0].NodeURI()),
+		"the already-applied consumer must move to the same generation as the new one")
 }
 
 // A draw carrying no generator identity cannot be matched to the

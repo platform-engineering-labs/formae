@@ -55,13 +55,12 @@ func TestResolveGeneratorValue_LeavesAnotherGeneratorsDestinationAlone(t *testin
 		"only destinations naming the generator that drew may receive the value")
 }
 
-// A destination whose occurrence classified stable already holds the value
-// this generator's current generation produced. Delivering a fresh draw over
-// it would rotate a credential nothing asked to rotate, so it is skipped —
-// the same reading the changeset uses to decide whether to wire the edge at
-// all, applied again here because one resource may hold both a stable and an
-// unstable destination for the same generator.
-func TestResolveGeneratorValue_LeavesAStableDestinationAlone(t *testing.T) {
+// A draw that is happening reaches every destination naming its generator,
+// including one whose occurrence classified stable. Stability decides whether
+// the generator draws at all; narrowing delivery by it is what leaves two
+// consumers of one credential holding different values, each apply repairing
+// one and breaking the other.
+func TestResolveGeneratorValue_ReachesEveryDestinationIncludingAStableOne(t *testing.T) {
 	ru := ResourceUpdate{
 		Operation: OperationUpdate,
 		DesiredState: pkgmodel.Resource{
@@ -82,8 +81,8 @@ func TestResolveGeneratorValue_LeavesAStableDestinationAlone(t *testing.T) {
 
 	require.NoError(t, ru.ResolveGeneratorValue("gen-a", "drawn-credential", "generation-1", pkgmodel.FormaApplyModeReconcile))
 
-	assert.False(t, gjson.GetBytes(ru.DesiredState.Properties, "Stable.$value").Exists(),
-		"a stable destination keeps the credential it already holds")
+	assert.Equal(t, "drawn-credential", gjson.GetBytes(ru.DesiredState.Properties, "Stable.$value").String(),
+		"a stable destination receives the draw its siblings receive")
 	assert.Equal(t, "drawn-credential", gjson.GetBytes(ru.DesiredState.Properties, "Fresh.$value").String(),
 		"a destination that still needs a value receives the draw")
 }

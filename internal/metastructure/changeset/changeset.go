@@ -314,14 +314,19 @@ func (p *ExecutionDAG) buildTargetResourceEdges(targetUpdates []target_update.Ta
 // from a generator to that generator's draw node, so the op cannot dispatch
 // before the value exists.
 //
-// A destination is wired only when its $gen occurrence did NOT classify
-// OccurrenceStable at planning. A stable occurrence already holds the value the
-// generator's current generation produced; wiring it would deliver a freshly
-// drawn value over a credential nothing asked to rotate. That reading of the
-// provenance records lives in exactly one place —
-// resource_update.IsGenDestinationStable — because the same question decides
-// whether a draw happens, which destinations it writes to, and which
-// destinations a resumed command still owes a value.
+// EVERY live destination is wired, whatever its $gen occurrence classified at
+// planning. Stability decides whether the generator draws at all
+// (resource_update.GeneratorsNeedingDraw); once a draw is in the graph, every
+// destination of it must receive the value, so every destination must also
+// wait for it. Wiring only the unstable ones would let a stable destination
+// dispatch before the draw and keep the old generation while its sibling took
+// the new one, which is how two consumers of one credential end up holding
+// different values.
+//
+// A destination being torn down is skipped, matching the rule that decides
+// whether to draw at all and the one that delivers: a delete's DesiredState is
+// the stored resource, so it carries the stored envelope, writes nothing, and
+// must not pull a fresh credential into a row on its way out.
 //
 // A draw node is a sink: it has no dependencies of its own, so no edge added
 // here can close a cycle. The full-graph re-check still runs over these edges,
@@ -354,11 +359,11 @@ func (p *ExecutionDAG) buildGeneratorResourceEdges(generatorUpdates []generator_
 			if !ok {
 				continue
 			}
+			if ru.Operation == resource_update.OperationDelete || ru.Operation == resource_update.OperationReaped {
+				continue
+			}
 			for _, gen := range pkgmodel.FindGenObjectsFromProperties(ru.DesiredState.Properties) {
 				if gen.Generator != generatorKsuid {
-					continue
-				}
-				if resource_update.IsGenDestinationStable(ru.ProvenanceRecords, gen.Path) {
 					continue
 				}
 				node.LinkWith(generatorNode)
@@ -879,6 +884,16 @@ func (p *ExecutionDAG) propagateResolvedTargetConfig(targetLabel string, pluginC
 // DesiredState is the stored resource, so it carries the stored envelope and
 // writes nothing, and delivering there would put a live credential into a row
 // on its way out.
+//
+// Every other destination receives it, whatever its occurrence classified.
+// The invariant is: once a generator draws, every live destination of it IN
+// THIS CHANGESET holds the same value and is stamped with the same
+// generation. The boundary is the changeset itself. A destination that is not
+// a node here — planned by another command, or suppressed by this one because
+// nothing about it moved — cannot be reached, and cannot be caught up later
+// either, because formae stores only a hash of a generated value and never
+// the value. Such a destination keeps an older generation and diverges from
+// its siblings; closing that needs co-planning, not a wider delivery.
 //
 // generatorKsuid is the caller's to guarantee non-empty. It is matched against
 // each occurrence's own $generator, and an AUTHORED (not yet translated)

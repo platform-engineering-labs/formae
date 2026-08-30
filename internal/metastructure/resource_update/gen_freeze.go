@@ -34,9 +34,17 @@ import (
 // the secret it was meant to leave alone.
 //
 // Stability is read through IsGenDestinationStable, the one reading of
-// ProvenanceRecords for $gen destinations, so what is frozen here is exactly
-// what got no edge in the changeset and no value at delivery. An absent or
-// non-generator record is not stable and is left to the guard.
+// ProvenanceRecords for $gen destinations. An absent or non-generator record
+// is not stable and is left to the guard.
+//
+// An envelope that already carries a $value is left alone whatever its
+// classification says. A $value is only ever there because a draw was
+// delivered into it moments ago, and a draw reaches every destination of its
+// generator in the changeset, stable ones included: stability decides whether
+// the generator draws, not who a draw reaches. Freezing a delivered value
+// would throw away the credential the draw was made for and send the provider
+// a preserved-sentinel instead, leaving that destination on the old
+// generation while its siblings moved to the new one.
 //
 // A path that does not address a $gen envelope is skipped rather than written
 // over: destinations are addressed by a dot-joined path, so a map key
@@ -56,7 +64,11 @@ func FreezeStableGeneratorBindings(desired json.RawMessage, records []Occurrence
 		if !IsGenDestinationStable(records, occurrence.Path) {
 			continue
 		}
-		if !pkgmodel.IsGenObject(gjson.Get(out, occurrence.Path)) {
+		node := gjson.Get(out, occurrence.Path)
+		if !pkgmodel.IsGenObject(node) {
+			continue
+		}
+		if node.Get("$value").Exists() {
 			continue
 		}
 		updated, err := sjson.SetRaw(out, occurrence.Path, opaquePreservedSentinel)

@@ -169,13 +169,21 @@ func (ru *ResourceUpdate) ResolveValue(formaeUri pkgmodel.FormaeURI, value strin
 // place of the envelope: see resolver.SetGenValues for why that distinction
 // is what keeps the credential hashed at rest.
 //
-// A destination whose occurrence classified stable is skipped. The changeset
-// already declines to wire such a destination to the draw, but the two
-// decisions are not the same one: a single resource may hold both a stable
-// and an unstable destination for the same generator, and one edge covers the
-// whole resource. Re-reading the classification here is what stops the fresh
-// draw landing on the stable destination too and rotating a credential
-// nothing asked to rotate.
+// EVERY destination of this generator receives the value, including one whose
+// occurrence classified stable. Stability decides WHETHER the generator draws
+// (resource_update.GeneratorsNeedingDraw), never WHO a draw that is already
+// happening reaches. Delivering to only the unstable destinations is what
+// leaves two consumers of one credential holding different values: the new
+// consumer gets the new generation, the applied one keeps the old, and each
+// subsequent apply repairs one and breaks the other without ever settling.
+//
+// The invariant, and its boundary: every destination of this generator IN
+// THIS CHANGESET receives this draw and is stamped with its generation. A
+// destination outside the changeset cannot be reached at all, and cannot be
+// caught up afterwards either — formae keeps only a hash of a generated
+// value, never the value — so a generator whose destinations are split across
+// commands still diverges. That is a co-planning question, not something this
+// seam can close.
 //
 // generationID is the generation the value was drawn under, and every
 // destination that receives the value is stamped with its digest: the same
@@ -192,9 +200,6 @@ func (ru *ResourceUpdate) ResolveGeneratorValue(generatorKsuid string, value str
 	var outputs []string
 	for _, occurrence := range pkgmodel.FindGenObjectsFromProperties(ru.DesiredState.Properties) {
 		if occurrence.Generator != generatorKsuid {
-			continue
-		}
-		if IsGenDestinationStable(ru.ProvenanceRecords, occurrence.Path) {
 			continue
 		}
 		paths = append(paths, occurrence.Path)
@@ -330,7 +335,11 @@ func (ru *ResourceUpdate) regeneratePatchDocument(mode pkgmodel.FormaApplyMode) 
 	// Provably-stable occurrences stay suppressed through every regeneration:
 	// the classification was decided at planning and persisted immutably on
 	// this row, so recovery reproduces the same suppression without
-	// recomputing anything from inputs that no longer exist.
+	// recomputing anything from inputs that no longer exist. A destination a
+	// draw was just delivered into is unaffected: the substitution that
+	// suppression performs stops at a $ref/$res/$gen marker, and the
+	// plugin-format conversion has already replaced a delivered envelope with
+	// its bare value, so the write still reaches the patch.
 	regenProperties := resolver.NewResolvableProperties()
 	for _, rec := range ru.ProvenanceRecords {
 		if rec.Class == OccurrenceStable {
