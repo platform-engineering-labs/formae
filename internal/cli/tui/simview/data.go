@@ -112,6 +112,7 @@ type simRow struct {
 	res               *apimodel.ResourceUpdate // for resource rows: card data (replace: CREATE half)
 	delRes            *apimodel.ResourceUpdate // for replace rows: the DELETE half of the GroupID pair
 	policy            *apimodel.PolicyUpdate
+	generator         *apimodel.GeneratorUpdate
 }
 
 // simGroup is a named group of rows sharing the same rowKind.
@@ -330,11 +331,12 @@ func buildGeneratorRows(updates []apimodel.GeneratorUpdate) []simRow {
 	for i := range updates {
 		gu := &updates[i]
 		row := simRow{
-			key:   fmt.Sprintf("generator/%s/%s", gu.StackName, gu.GeneratorLabel),
-			op:    genericOpKind(gu.Operation),
-			label: gu.GeneratorLabel,
-			typ:   gu.GeneratorType,
-			stack: gu.StackName,
+			key:       fmt.Sprintf("generator/%s/%s", gu.StackLabel, gu.GeneratorLabel),
+			op:        genericOpKind(gu.Operation),
+			label:     gu.GeneratorLabel,
+			typ:       gu.GeneratorType,
+			stack:     gu.StackLabel,
+			generator: gu,
 		}
 		rows = append(rows, row)
 	}

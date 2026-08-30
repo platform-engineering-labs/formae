@@ -898,7 +898,7 @@ func translateToAPICommand(fa *forma_command.FormaCommand) apimodel.Command {
 		apiCommand.GeneratorUpdates = append(apiCommand.GeneratorUpdates, apimodel.GeneratorUpdate{
 			GeneratorLabel:     generatorLabel,
 			GeneratorType:      generatorType,
-			StackName:          gu.StackLabel,
+			StackLabel:         gu.StackLabel,
 			Operation:          string(gu.Operation),
 			State:              string(gu.State),
 			Duration:           dur.Milliseconds(),

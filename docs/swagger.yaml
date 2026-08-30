@@ -264,7 +264,7 @@ definitions:
         type: array
       Operation:
         type: string
-      StackName:
+      StackLabel:
         type: string
       StartTs:
         type: string

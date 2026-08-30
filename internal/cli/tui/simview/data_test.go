@@ -116,7 +116,7 @@ func TestGroupingOrder(t *testing.T) {
 			{PolicyLabel: "ttl-policy", PolicyType: "ttl", StackLabel: "default", Operation: "create"},
 		},
 		GeneratorUpdates: []apimodel.GeneratorUpdate{
-			{GeneratorLabel: "db-password", GeneratorType: "password", StackName: "default", Operation: "create"},
+			{GeneratorLabel: "db-password", GeneratorType: "password", StackLabel: "default", Operation: "create"},
 		},
 	}
 
@@ -407,7 +407,7 @@ func TestPolicySkipNoReferencingStacks(t *testing.T) {
 func TestGeneratorRowMapping(t *testing.T) {
 	cmd := &apimodel.Command{
 		GeneratorUpdates: []apimodel.GeneratorUpdate{
-			{GeneratorLabel: "db-password", GeneratorType: "password", StackName: "prod", Operation: "create"},
+			{GeneratorLabel: "db-password", GeneratorType: "password", StackLabel: "prod", Operation: "create"},
 		},
 	}
 
@@ -426,8 +426,8 @@ func TestGeneratorRowMapping(t *testing.T) {
 func TestGeneratorRowMapsUpdateAndDelete(t *testing.T) {
 	cmd := &apimodel.Command{
 		GeneratorUpdates: []apimodel.GeneratorUpdate{
-			{GeneratorLabel: "renamed", GeneratorType: "password", StackName: "prod", Operation: "update"},
-			{GeneratorLabel: "gone", GeneratorType: "password", StackName: "prod", Operation: "delete"},
+			{GeneratorLabel: "renamed", GeneratorType: "password", StackLabel: "prod", Operation: "update"},
+			{GeneratorLabel: "gone", GeneratorType: "password", StackLabel: "prod", Operation: "delete"},
 		},
 	}
 

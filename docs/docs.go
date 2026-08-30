@@ -1156,7 +1156,7 @@ const docTemplate = `{
                 "Operation": {
                     "type": "string"
                 },
-                "StackName": {
+                "StackLabel": {
                     "type": "string"
                 },
                 "StartTs": {

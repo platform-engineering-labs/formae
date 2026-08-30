@@ -105,7 +105,7 @@ func TestTranslateToAPICommand_ProjectsGeneratorUpdates(t *testing.T) {
 		gu := api.GeneratorUpdates[0]
 		assert.Equal(t, "db-password", gu.GeneratorLabel)
 		assert.Equal(t, "password", gu.GeneratorType)
-		assert.Equal(t, "prod", gu.StackName)
+		assert.Equal(t, "prod", gu.StackLabel)
 		assert.Equal(t, "create", gu.Operation)
 		assert.Equal(t, "NotStarted", gu.State)
 		assert.NotEmpty(t, gu.GeneratorConfig)

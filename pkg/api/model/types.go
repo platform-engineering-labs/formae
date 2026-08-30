@@ -227,7 +227,7 @@ type PolicyUpdate struct {
 type GeneratorUpdate struct {
 	GeneratorLabel     string          `json:"GeneratorLabel"`
 	GeneratorType      string          `json:"GeneratorType"` // "password", etc.
-	StackName          string          `json:"StackName,omitempty"`
+	StackLabel         string          `json:"StackLabel,omitempty"`
 	Operation          string          `json:"Operation"`
 	State              string          `json:"State"`
 	Duration           int64           `json:"Duration,omitempty"` // milliseconds
