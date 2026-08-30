@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os/exec"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armsubscriptions"
@@ -77,14 +78,41 @@ func classifyAzureCredentialError(err error) azureCredentialState {
 	return azureSubscriptionUnreachable
 }
 
+// lookPathAz is exec.LookPath narrowed to the one call azureCredentialFailure
+// makes. A var so tests substitute it: azidentity.NewDefaultAzureCredential
+// tries env vars and managed identity before it ever reaches for az, so
+// nothing about needs-authentication implies az is installed, and there is
+// no seam narrower than "resolve this one binary on PATH" to drive both
+// branches without depending on what is actually installed on the test
+// machine.
+//
+// This resolves a path; it does not execute one. Unlike GCP's sign-in, which
+// formae runs on the operator's behalf, formae never spawns `az` - it only
+// reports the command - so this check must never grow into one that shells
+// out.
+var lookPathAz = func(file string) (string, error) { return exec.LookPath(file) }
+
 // azureCredentialFailure maps a non-usable classification onto the declared
 // codes. Only needs-authentication carries a login command: a
 // lacks-permission or unreachable-subscription failure would send the
 // operator through a sign-in that returns the same principal and fixes
 // nothing.
+//
+// needs-authentication itself splits in two. azidentity.NewDefaultAzureCredential
+// tries environment variables and managed identity before it ever reaches for
+// the az CLI, so failing here does not mean az ran and refused - it can just
+// as easily mean az is not installed at all, which is the likely state for
+// a brand-new machine. Reporting `az login` in that case sends the operator
+// to run a command that does not exist; checking PATH first tells them to
+// install it instead.
 func azureCredentialFailure(state azureCredentialState, tenantHint string) error {
 	switch state {
 	case azureCredentialsNeedsAuthentication:
+		if _, err := lookPathAz("az"); err != nil {
+			return printer.Fail(printer.CodeAzMissing,
+				"no usable Azure credentials, and the az CLI needed to sign in to Azure is not installed; install it "+
+					"from https://learn.microsoft.com/cli/azure/install-azure-cli and re-run this command", nil)
+		}
 		return printer.Fail(printer.CodeCredentialsRequired,
 			"no usable Azure credentials for this subscription; run the sign-in and re-run this command",
 			map[string]any{"command": azLoginCommand(tenantHint)})

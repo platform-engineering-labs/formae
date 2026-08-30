@@ -9,6 +9,7 @@ package connect
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -33,6 +34,8 @@ func stubAzureCredentialState(t *testing.T, state azureCredentialState) {
 // run: a caller relaying this verbatim (the MCP tool's own contract) hands
 // it straight to a shell, and a placeholder like "<id>" is not runnable.
 func TestNoCredentialsReportsTheLoginCommand(t *testing.T) {
+	stubLookPathAz(t, true)
+
 	err := azureCredentialFailure(azureCredentialsNeedsAuthentication, "")
 
 	require.Error(t, err)
@@ -45,6 +48,8 @@ func TestNoCredentialsReportsTheLoginCommand(t *testing.T) {
 // A tenant hint the operator already gave travels into the reported command
 // verbatim, so pasting it back in works the first time.
 func TestAzureTenantHintNamesTheLoginCommand(t *testing.T) {
+	stubLookPathAz(t, true)
+
 	err := azureCredentialFailure(azureCredentialsNeedsAuthentication, "11111111-1111-1111-1111-111111111111")
 
 	var f *printer.Failure
@@ -92,10 +97,16 @@ func TestAzureCredentialFailureNeverSilentlySucceeds(t *testing.T) {
 	require.Error(t, err)
 }
 
-// The structural guarantee: none of the azure connect files may import
-// os/exec, so a later change cannot reintroduce spawning a *login* without
+// The structural guarantee: none of the azure connect files may spawn a
+// process, so a later change cannot reintroduce running a *login* without
 // turning this test red, regardless of which of the three files it lands
 // in or how it is wired up.
+//
+// os/exec itself is allowed - azureCredentialFailure resolves `az` on PATH
+// with exec.LookPath to tell "not installed" apart from "installed but not
+// signed in", and that resolves a path without executing anything. What is
+// banned is anything that actually starts a process: exec.Command and the
+// methods that run it.
 //
 // This does not mean azure connect makes zero process executions in an
 // absolute sense: azidentity's AzureCLICredential shells out to
@@ -107,10 +118,57 @@ func TestAzureNeverSpawnsALogin(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	require.True(t, ok)
 	dir := filepath.Dir(thisFile)
+	spawnIndicators := []string{"exec.Command(", ".Run()", ".Start()", ".Output()", ".CombinedOutput()"}
 	for _, name := range []string{"azureauth.go", "azure.go", "azureprovision.go"} {
 		src, err := os.ReadFile(filepath.Join(dir, name))
 		require.NoError(t, err)
-		assert.NotContains(t, string(src), `"os/exec"`,
-			"%s must never import os/exec: Azure reports the login command, it never spawns one", name)
+		for _, indicator := range spawnIndicators {
+			assert.NotContains(t, string(src), indicator,
+				"%s must never spawn a process: Azure reports the login command, it never spawns one", name)
+		}
 	}
+}
+
+// az_missing and credentials_required are the two faces of
+// needs-authentication: whether az is on PATH decides which one a run gets,
+// and lookPathAz is the seam that lets a test choose without depending on
+// what happens to be installed on the machine running it.
+func stubLookPathAz(t *testing.T, found bool) {
+	t.Helper()
+	restore := lookPathAz
+	lookPathAz = func(file string) (string, error) {
+		if found {
+			return "/usr/bin/" + file, nil
+		}
+		return "", exec.ErrNotFound
+	}
+	t.Cleanup(func() { lookPathAz = restore })
+}
+
+// az on PATH: needs-authentication is a sign-in problem, reported the same
+// way it always was.
+func TestNeedsAuthenticationWithAzOnPathReportsLoginCommand(t *testing.T) {
+	stubLookPathAz(t, true)
+
+	err := azureCredentialFailure(azureCredentialsNeedsAuthentication, "")
+
+	var f *printer.Failure
+	require.ErrorAs(t, err, &f)
+	assert.Equal(t, printer.CodeCredentialsRequired, f.Code)
+	assert.Equal(t, "az login", f.Details["command"])
+}
+
+// az missing from PATH: reporting `az login` would send the operator to run
+// a command that does not exist, so this must name the install step instead.
+func TestNeedsAuthenticationWithoutAzReportsAzMissing(t *testing.T) {
+	stubLookPathAz(t, false)
+
+	err := azureCredentialFailure(azureCredentialsNeedsAuthentication, "")
+
+	var f *printer.Failure
+	require.ErrorAs(t, err, &f)
+	assert.Equal(t, printer.CodeAzMissing, f.Code)
+	assert.Contains(t, f.Message, "https://learn.microsoft.com/cli/azure/install-azure-cli")
+	_, hasCommand := f.Details["command"]
+	assert.False(t, hasCommand, "az_missing must not report a login command az cannot run")
 }

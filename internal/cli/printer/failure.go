@@ -88,6 +88,13 @@ const (
 	// credentials and it is not on PATH. Its own code because the remedy is a
 	// specific install step and a consumer names it.
 	CodeGcloudMissing Code = "gcloud_missing"
+	// CodeAzMissing: no usable Azure credentials were found, and the az CLI -
+	// one of DefaultAzureCredential's chained sources, and the one the
+	// reported login command needs - is not on PATH. Its own code, distinct
+	// from credentials_required, because the remedy is an install step, not a
+	// sign-in: running the reported `az login` against a missing binary would
+	// just fail with "command not found".
+	CodeAzMissing Code = "az_missing"
 	// CodeCredentialsRequired: no usable cloud credentials, in a run that may
 	// not prompt (--no-input, or machine output). Details carry the exact
 	// command to run (GCP: gcloud auth application-default login; Azure: az
@@ -138,6 +145,7 @@ var registeredCodes = map[Code]bool{
 	CodeInstallationNotReady: true,
 
 	CodeGcloudMissing:       true,
+	CodeAzMissing:           true,
 	CodeCredentialsRequired: true,
 	CodeProjectUnreachable:  true,
 	CodeApiDisabled:         true,
