@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/platform-engineering-labs/formae/internal/datastore"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/generator_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
@@ -23,6 +24,9 @@ var _ Update = (*resource_update.ResourceUpdate)(nil)
 
 // Compile-time verification that TargetUpdate satisfies the Update interface
 var _ Update = (*target_update.TargetUpdate)(nil)
+
+// Compile-time verification that GeneratorUpdate satisfies the Update interface
+var _ Update = (*generator_update.GeneratorUpdate)(nil)
 
 // asResourceUpdate is a test helper that type-asserts an Update to *resource_update.ResourceUpdate
 func asResourceUpdate(t *testing.T, u Update) *resource_update.ResourceUpdate {

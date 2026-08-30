@@ -96,11 +96,28 @@ const (
 	PolicyUpdateStateFailed     PolicyUpdateState = "Failed"
 )
 
-// GeneratorUpdateState represents the state of a generator update
+// GeneratorUpdateState represents the state of a generator update.
+//
+// InProgress is required to make a generator update schedulable as an
+// ExecutionDAG node: without a state distinct from NotStarted/Success/Failed,
+// MarkInProgress and IsRunning cannot be told apart, and GetExecutableUpdates,
+// findRunningUpdate, and handleUpdateFinished all misbehave.
+//
+// Canceled is deliberately NOT included, unlike TargetUpdateState (whose
+// terminal set is Success | Failed | Canceled per isTargetInFinalState). A
+// target update reaches Canceled because the changeset executor's cancel
+// paths (changeset_executor.go's cancel/forceCancel) range over
+// data.changeset.DAG.Nodes and type-switch on *target_update.TargetUpdate
+// (and *resource_update.ResourceUpdate). Nothing in this codebase adds a
+// *generator_update.GeneratorUpdate to that DAG yet, and neither cancel
+// switch has a case for it, so a generator node cannot reach Canceled today.
+// Add it if and when a later change wires GeneratorUpdate into DAG
+// construction and the executor's cancel switch.
 type GeneratorUpdateState string
 
 const (
 	GeneratorUpdateStateNotStarted GeneratorUpdateState = "NotStarted"
+	GeneratorUpdateStateInProgress GeneratorUpdateState = "InProgress"
 	GeneratorUpdateStateSuccess    GeneratorUpdateState = "Success"
 	GeneratorUpdateStateFailed     GeneratorUpdateState = "Failed"
 )

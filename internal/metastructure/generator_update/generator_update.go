@@ -27,6 +27,7 @@ const (
 	GeneratorOperationDelete GeneratorOperation = types.OperationDelete
 
 	GeneratorUpdateStateNotStarted = types.GeneratorUpdateStateNotStarted
+	GeneratorUpdateStateInProgress = types.GeneratorUpdateStateInProgress
 	GeneratorUpdateStateSuccess    = types.GeneratorUpdateStateSuccess
 	GeneratorUpdateStateFailed     = types.GeneratorUpdateStateFailed
 )
@@ -126,6 +127,58 @@ func (gu *GeneratorUpdate) UnmarshalJSON(data []byte) error {
 
 	return nil
 }
+
+// changeset.Update interface implementation for ExecutionDAG integration.
+// The interface type itself is not referenced here (importing the changeset
+// package from generator_update would be an import cycle: changeset imports
+// forma_persister, which imports forma_command, which imports
+// generator_update) — see changeset/changeset_test.go and
+// changeset/generator_update_node_uri_test.go for the compile-time
+// assertion and the cross-format collision test.
+
+// NodeURI renders generator://<stack>/<label>/<operation>. This scheme
+// distinguishes it, by construction, from the other two Update kinds that
+// share the same ExecutionDAG.Nodes keyspace:
+//   - a resource operation URI (changeset.createOperationURI) is the bare
+//     "<ksuid>/<propertyPath>/<operation>" with no scheme at all: a KSUID,
+//     a property path, and an OperationType are each drawn from character
+//     sets that never contain "://", so a resource URI can never begin with
+//     "generator://".
+//   - a target operation URI (target_update.TargetUpdate.NodeURI) is
+//     "target://<label>/<operation>" — a different literal scheme, so it
+//     can never equal a "generator://" URI either.
+func (gu *GeneratorUpdate) NodeURI() pkgmodel.FormaeURI {
+	label := ""
+	if gu.Generator != nil {
+		label = gu.Generator.GetLabel()
+	}
+	return pkgmodel.FormaeURI("generator://" + gu.StackLabel + "/" + label + "/" + string(gu.Operation))
+}
+
+// Resolvables returns nil: a generator draws a value locally, it never
+// resolves a $ref against a resource or target property.
+func (gu *GeneratorUpdate) Resolvables() []pkgmodel.FormaeURI { return nil }
+
+// Namespace returns a fixed pseudo-namespace. A generator draw calls no
+// provider plugin, so it has no provider namespace to report. Because
+// IsRateLimited is false, this value never gates concurrency in
+// ExecutionDAG.GetExecutableUpdates — it only keeps generator nodes in
+// their own bucket, distinct from any provider's.
+func (gu *GeneratorUpdate) Namespace() string { return "generator" }
+
+// IsRateLimited returns false: drawing a password is local CPU work with no
+// provider call, so it needs no rate-limit token. A future generator arm
+// that calls out to a provider (e.g. fetching a secret from a vault) would
+// need to revisit this.
+func (gu *GeneratorUpdate) IsRateLimited() bool { return false }
+
+func (gu *GeneratorUpdate) IsReady() bool   { return gu.State == GeneratorUpdateStateNotStarted }
+func (gu *GeneratorUpdate) IsRunning() bool { return gu.State == GeneratorUpdateStateInProgress }
+func (gu *GeneratorUpdate) IsSuccess() bool { return gu.State == GeneratorUpdateStateSuccess }
+func (gu *GeneratorUpdate) IsFailed() bool  { return gu.State == GeneratorUpdateStateFailed }
+
+func (gu *GeneratorUpdate) MarkInProgress() { gu.State = GeneratorUpdateStateInProgress }
+func (gu *GeneratorUpdate) MarkFailed()     { gu.State = GeneratorUpdateStateFailed }
 
 // PersistGeneratorUpdates is a message to persist generator updates.
 type PersistGeneratorUpdates struct {
