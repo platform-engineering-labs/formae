@@ -77,6 +77,10 @@ func ResolvePropertyReferences(ksuidUri pkgmodel.FormaeURI, properties json.RawM
 // properties — where a stored hash must never be written as if it were the live secret value.
 // Delete (identity only) and Update's prior/existing-state context use ConvertExistingStateForRead
 // (unguarded), because those are never written as literal field values.
+//
+// This conversion is NOT the provider boundary: it also produces the "after" side of the local
+// diff that plans a patch. GuardNoUnresolvedGenerators therefore lives at the dispatch site
+// instead of here — see its doc comment.
 func ConvertToPluginFormat(properties json.RawMessage) (json.RawMessage, error) {
 	if err := guardNoHashedValues(properties); err != nil {
 		return nil, err
@@ -150,6 +154,66 @@ func scanHashed(v any, path string) error {
 	case []any:
 		for i, child := range val {
 			if err := scanHashed(child, fmt.Sprintf("%s/%d", path, i)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// ErrUnresolvedGeneratorReferenceNotWritable reports a property that still
+// holds a generator reference at the moment its value would be handed to a
+// provider. Match it with errors.Is to report the condition without echoing
+// the wrapped message, which names the offending property path.
+var ErrUnresolvedGeneratorReferenceNotWritable = errors.New("unresolved generator reference")
+
+// GuardNoUnresolvedGenerators rejects properties still carrying a $gen
+// envelope. A generator reference NAMES a value to be drawn; the envelope is
+// never that value. Writing it hands the provider a literal JSON object where
+// a secret belongs, and because such a destination is opaque nothing surfaces
+// the mistake at the write. It surfaces later, as something else failing to
+// authenticate with a password that is a JSON document.
+//
+// This is a permanent invariant of the write path, not a stand-in for a
+// generator that cannot draw yet. A successful draw substitutes the drawn
+// value for the envelope, so this guard never sees one; a draw that FAILS
+// must leave the destination unwritten rather than write the envelope in the
+// value's place, which is this same rejection. There is no state of the
+// system in which sending the envelope is the right thing to do.
+//
+// It is exported and applied at the DISPATCH site rather than folded into
+// ConvertToPluginFormat, which its $hashed sibling guards, for two reasons.
+// Conversion leaves a $gen envelope structurally intact (it flattens a
+// $hashed one, which is why that marker has to be caught on the way in), so
+// there is nothing this has to run before. And ConvertToPluginFormat also
+// builds the "after" side of the local diff that PLANS a patch, where a
+// not-yet-drawn envelope is the ordinary desired shape — guarding there would
+// refuse to plan the very update that draws the value.
+func GuardNoUnresolvedGenerators(properties json.RawMessage) error {
+	if len(properties) == 0 {
+		return nil
+	}
+	var props map[string]any
+	if err := json.Unmarshal(properties, &props); err != nil {
+		return nil // malformed here is handled elsewhere; guard only checks structure it can read
+	}
+	return scanUnresolvedGenerators(props, "")
+}
+
+func scanUnresolvedGenerators(v any, path string) error {
+	switch val := v.(type) {
+	case map[string]any:
+		if g, ok := val["$gen"].(bool); ok && g {
+			return fmt.Errorf("%w: cannot write field %q: it is bound to a generator whose value has not been drawn, and formae will not send the reference itself to the provider", ErrUnresolvedGeneratorReferenceNotWritable, path)
+		}
+		for k, child := range val {
+			if err := scanUnresolvedGenerators(child, path+"/"+k); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for i, child := range val {
+			if err := scanUnresolvedGenerators(child, fmt.Sprintf("%s/%d", path, i)); err != nil {
 				return err
 			}
 		}

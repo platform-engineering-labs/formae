@@ -41,7 +41,17 @@ var jsonpathParser = jsonpath.NewParser(jsonpath.WithRegistry(registry.New()))
 // of nullable Listing/Mapping fields) to prevent cloud API rejections for fields like K8S probes
 // that require handler types when non-empty.
 func convertResourceForPlugin(res pkgmodel.Resource) (pkgmodel.Resource, error) {
-	return convertResourceForPluginWith(res, resolver.ConvertToPluginFormat)
+	converted, err := convertResourceForPluginWith(res, resolver.ConvertToPluginFormat)
+	if err != nil {
+		return res, err
+	}
+	// The provider boundary: this is the last point at which the properties
+	// are still formae's, and the only place that knows they are about to be
+	// written rather than diffed.
+	if err := resolver.GuardNoUnresolvedGenerators(converted.Properties); err != nil {
+		return res, err
+	}
+	return converted, nil
 }
 
 // convertResourceForPluginRead is the Read-context counterpart of
@@ -705,8 +715,10 @@ func create(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 const (
 	failureReasonUnrecoverableOpaqueValueOnUpdate = "cannot update this resource: formae holds only a stored hash of one of its secret properties, so it cannot send that value to the provider. Re-supply the value in your forma, or leave the provider's current value in place."
 	failureReasonPluginRequestPreparationOnUpdate = "cannot update this resource: formae could not build the provider request from its recorded state."
+	failureReasonUndrawnGeneratorValueOnUpdate    = "cannot update this resource: one of its properties is bound to a generator whose value has not been drawn, so formae has nothing to send to the provider. Declare the value directly instead of binding it to a generator."
 
 	failureReasonUnrecoverableOpaqueValueOnCreate = "cannot create this resource: the desired value of one of its secret properties is a stored hash, which formae cannot send to the provider as the live value. Re-supply the value in your forma."
+	failureReasonUndrawnGeneratorValueOnCreate    = "cannot create this resource: one of its properties is bound to a generator whose value has not been drawn, so formae has nothing to send to the provider. Declare the value directly instead of binding it to a generator."
 	failureReasonPluginRequestPreparationOnCreate = "cannot create this resource: formae could not build the provider request for it."
 	// Dispatching covers both a coordinator that never returned an operator and
 	// a call that did not complete after the create was handed to the plugin, so
@@ -721,11 +733,20 @@ func isUnrecoverableOpaqueValue(err error) bool {
 	return errors.Is(err, resolver.ErrHashedValueNotWritable)
 }
 
+// isUndrawnGeneratorValue reports whether preparing a plugin request failed
+// because a property still holds a generator reference rather than a value.
+func isUndrawnGeneratorValue(err error) bool {
+	return errors.Is(err, resolver.ErrUnresolvedGeneratorReferenceNotWritable)
+}
+
 // updateRequestFailureReason maps a plugin-request preparation error to the
 // fixed reason recorded on the resource update.
 func updateRequestFailureReason(err error) string {
 	if isUnrecoverableOpaqueValue(err) {
 		return failureReasonUnrecoverableOpaqueValueOnUpdate
+	}
+	if isUndrawnGeneratorValue(err) {
+		return failureReasonUndrawnGeneratorValueOnUpdate
 	}
 	return failureReasonPluginRequestPreparationOnUpdate
 }
@@ -736,6 +757,9 @@ func updateRequestFailureReason(err error) string {
 func createRequestFailureReason(err error) string {
 	if isUnrecoverableOpaqueValue(err) {
 		return failureReasonUnrecoverableOpaqueValueOnCreate
+	}
+	if isUndrawnGeneratorValue(err) {
+		return failureReasonUndrawnGeneratorValueOnCreate
 	}
 	return failureReasonPluginRequestPreparationOnCreate
 }

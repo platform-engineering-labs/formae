@@ -1737,3 +1737,50 @@ func TestResolvePropertyReferences_HashedMarkerFollowsTheResolvedValue(t *testin
 			"a digest must never reach a provider as if it were the secret")
 	})
 }
+
+// A generator reference names a value to be drawn; the envelope is never that
+// value, so it must not be written to a provider. The rejection is typed and
+// names the offending path. Conversion leaves the envelope structurally
+// intact, so the guard sees the same shape whichever side of the conversion
+// it is applied on.
+func TestGuardNoUnresolvedGenerators_RejectsAnUnresolvedGeneratorReference(t *testing.T) {
+	props := json.RawMessage(`{
+		"Name": "db",
+		"SecretString": {
+			"$gen": true,
+			"$generator": "2abcDEFghiJKLmnoPQRstuVWxyz",
+			"$output": "value",
+			"$visibility": "Opaque"
+		}
+	}`)
+
+	err := GuardNoUnresolvedGenerators(props)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrUnresolvedGeneratorReferenceNotWritable,
+		"a generator reference must never be written to a provider in place of its value")
+	assert.Contains(t, err.Error(), "/SecretString",
+		"the rejection must name the property that is still unresolved")
+
+	converted, err := ConvertToPluginFormat(props)
+	require.NoError(t, err,
+		"planning converts the same document to diff it, and must not be refused")
+	assert.ErrorIs(t, GuardNoUnresolvedGenerators(converted), ErrUnresolvedGeneratorReferenceNotWritable,
+		"conversion leaves the envelope intact, so the guard still catches it after")
+}
+
+// The guard is scoped to generator references and must not fire on the
+// surrounding document: a plain property whose name or value merely resembles
+// the envelope's keys is still writable.
+func TestGuardNoUnresolvedGenerators_AcceptsPropertiesWithoutAGeneratorReference(t *testing.T) {
+	props := json.RawMessage(`{
+		"Name": "db",
+		"Description": "$gen",
+		"Tags": [{"Key": "gen", "Value": "true"}],
+		"SecretString": {"$value": "plaintext", "$visibility": "Opaque"}
+	}`)
+
+	out, err := ConvertToPluginFormat(props)
+	require.NoError(t, err)
+	assert.NoError(t, GuardNoUnresolvedGenerators(out))
+	assert.Equal(t, "plaintext", gjson.GetBytes(out, "SecretString").String())
+}
