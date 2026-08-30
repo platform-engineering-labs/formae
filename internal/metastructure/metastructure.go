@@ -2400,7 +2400,7 @@ func replaceKSUIDs(jsonStr string, ksuidToTriplet map[string]pkgmodel.TripletKey
 				if ksuid := formaeUri.KSUID(); ksuid != "" {
 					if triplet, ok := ksuidToTriplet[ksuid]; ok {
 						dollarValue, _ := v["$value"].(string)
-						return map[string]any{
+						rewritten := map[string]any{
 							"$res":      true,
 							"$label":    triplet.Label,
 							"$type":     triplet.Type,
@@ -2408,6 +2408,18 @@ func replaceKSUIDs(jsonStr string, ksuidToTriplet map[string]pkgmodel.TripletKey
 							"$property": formaeUri.PropertyPath(),
 							"$value":    dollarValue,
 						}
+						// The selector is part of what the reference means: it
+						// names the sub-key of the referenced property. Dropping
+						// it would extract a reference to the whole document, so
+						// re-applying the extracted forma would write that
+						// document where one of its members belongs. Provenance
+						// keys are deliberately not carried over: they record
+						// formae's own writes and are stripped from any incoming
+						// forma.
+						if selector, ok := v["$json"].(string); ok && selector != "" {
+							rewritten["$json"] = selector
+						}
+						return rewritten
 					}
 				}
 			}
