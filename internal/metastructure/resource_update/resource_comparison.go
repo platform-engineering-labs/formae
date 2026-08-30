@@ -14,6 +14,7 @@ import (
 	"github.com/tidwall/sjson"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/canonicalize"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/patch"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/transformations"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -59,7 +60,12 @@ func CompareFilteredResourceForUpdate(existing, new *pkgmodel.Resource, schema p
 	existingForCompare := canonicalizeHintedFields(existing.Properties, schema)
 	newForCompare := canonicalizeHintedFields(hashedForComparison.Properties, schema)
 
-	equal, err := util.JsonEqualIgnoreArrayOrder(existingForCompare, newForCompare)
+	// Fields hinted preserveEmptyValues carry meaningful empties, so the
+	// gate's empty-tolerant equality (absent == empty, there for provider
+	// echoes and legacy rendering noise) must not hide an empty-only
+	// difference inside them - repairing a member the old normalization
+	// stripped IS a change.
+	equal, err := util.JsonEqualIgnoreArrayOrderStrictRoots(existingForCompare, newForCompare, patch.PreserveEmptyRootFields(schema))
 	if err != nil {
 		return false, fmt.Errorf("failed to compare properties: %w", err)
 	}

@@ -292,3 +292,17 @@ func TestGeneratePatch_DottedPreserveHint_NoFidelity(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, patchDoc, "nested hints are out of fidelity scope; today's stripping applies")
 }
+
+// The whole-resource change gate must see an empty-only difference inside a
+// preserveEmptyValues root: stored {} vs desired {selfSigned:{}} IS a change
+// there, while the same shape on an unhinted field keeps today's tolerance.
+// (The document-side tolerance exists for provider echoes; inside a preserved
+// root, empties are values.)
+func TestGeneratePatch_PreservedRoot_EmptyOnlyDifferenceMintsReplace(t *testing.T) {
+	document := json.RawMessage(`{"Name":"x","Spec":{}}`)
+	desired := json.RawMessage(`{"Name":"x","Spec":{"selfSigned":{}}}`)
+
+	patchDoc, _, _, err := GeneratePatch(document, desired, document, desired, resolver.ResolvableProperties{}, fidelitySchema(), pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	assert.JSONEq(t, `[{"op":"replace","path":"/Spec","value":{"selfSigned":{}}}]`, string(patchDoc))
+}
