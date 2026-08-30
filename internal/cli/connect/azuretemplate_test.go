@@ -7,6 +7,7 @@
 package connect
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 
@@ -55,4 +56,19 @@ func TestConnectTemplateShape(t *testing.T) {
 	require.True(t, ok, "the template must declare top-level outputs")
 	assert.Contains(t, outputs, "clientId", "the template must output the managed identity's client id")
 	assert.Contains(t, outputs, "tenantId", "the template must output the subscription's tenant id")
+}
+
+// `connect azure template` is how a customer who will not hand the CLI
+// provisioning credentials gets the template out of it: the credential-less
+// path has nothing to fetch a URL from, so the binary that already shipped
+// the template is the only source for it.
+func TestAzureTemplateCommandPrintsTheEmbeddedTemplate(t *testing.T) {
+	c := ConnectCmd()
+	var out bytes.Buffer
+	c.SetOut(&out)
+	c.SetErr(&out)
+	c.SetArgs([]string{"azure", "template"})
+
+	require.NoError(t, c.Execute())
+	assert.Equal(t, azureTemplateJSON, out.Bytes())
 }

@@ -48,6 +48,7 @@ func ConnectCmd() *cobra.Command {
 	command.PersistentFlags().String("profile", "", "Named profile to use (see `formae profile list`)")
 	command.AddCommand(awsCmd())
 	command.AddCommand(gcpCmd())
+	command.AddCommand(azureCmd())
 	command.AddCommand(listCmd())
 	command.SetUsageTemplate(clicmd.SimpleCmdUsageTemplate)
 	return command
