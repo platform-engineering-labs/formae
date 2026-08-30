@@ -224,11 +224,19 @@ func TestDraw_ExcludeCharactersEmptyingTheOnlyEnabledClassReturnsError(t *testin
 
 // requireEachIncludedType demanding more classes than there are positions
 // can never be satisfied by any candidate, no matter how many are drawn.
+// RequireEachIncludedType is turned off so the pigeonhole check
+// (len(required) > p.Length) cannot also fire on a zero length and mask
+// whether the length guard itself is doing the job; the message assertion
+// pins it to that guard specifically, not any error at all.
 func TestDraw_ZeroLengthReturnsError(t *testing.T) {
-	spec := pw(func(g *pkgmodel.PasswordGenerator) { g.Length = 0 })
+	spec := pw(func(g *pkgmodel.PasswordGenerator) {
+		g.RequireEachIncludedType = false
+		g.Length = 0
+	})
 	value, err := drawWithTimeout(t, spec, realSource)
 	require.Error(t, err)
 	assert.Empty(t, value)
+	assert.Contains(t, err.Error(), "non-positive length")
 }
 
 // Uppercase and lowercase are both enabled, but excludeCharacters empties
@@ -265,13 +273,21 @@ func TestDraw_EffectiveAlphabetOfOneCharacterReturnsError(t *testing.T) {
 // A ByteSource that returns (0, nil) — a short read with no error, the shape
 // an io.Reader adapter can produce — must not be treated as a successful
 // draw; that would silently spend zero entropy on the returned character.
+// RequireEachIncludedType is turned off: with it on (pw()'s default), a
+// candidate built entirely from repeated zero-value bytes still fails the
+// class-presence check and the outer loop just retries until maxDrawAttempts
+// is exhausted, surfacing a generic "did not satisfy requireEachIncludedType"
+// error that has nothing to do with the short read. With it off, the very
+// first short read must itself be the thing that errors, which the message
+// assertion pins down.
 func TestDraw_ShortReadFromByteSourceReturnsError(t *testing.T) {
-	spec := pw(func(*pkgmodel.PasswordGenerator) {})
+	spec := pw(func(g *pkgmodel.PasswordGenerator) { g.RequireEachIncludedType = false })
 	short := func(b []byte) (int, error) { return 0, nil }
 
 	value, err := pkgmodel.Draw(spec, short)
 	require.Error(t, err)
 	assert.Empty(t, value)
+	assert.Contains(t, err.Error(), "got 0 bytes, want 1")
 }
 
 func TestDraw_MoreRequiredClassesThanLengthReturnsErrorRatherThanHanging(t *testing.T) {
