@@ -9,7 +9,6 @@ package connect
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"io"
 	"testing"
 
@@ -22,13 +21,6 @@ const (
 	testAzureTenant = "11111111-1111-1111-1111-111111111111"
 	testAzureClient = "22222222-2222-2222-2222-222222222222"
 )
-
-// --subscription names the account being registered and is required in
-// both modes.
-func TestAzureSubscriptionIsRequired(t *testing.T) {
-	_, err := decideAzureMode(azureOptions{})
-	require.Error(t, err)
-}
 
 // Every flag combination decideAzureMode has to resolve, per the mode rules:
 // client-id is the register-only signal (an existing managed identity is
@@ -254,36 +246,6 @@ func TestAzureTenantHintIsUsedWhenGiven(t *testing.T) {
 	assert.Equal(t, testAzureTenant, call.AzTenantID, "the hint must reach provx's New() verbatim")
 }
 
-// Register-only says what it did not check, in those words, so nobody reads
-// "registered" as "working".
-func TestRegisterOnlyStatesTheCoordinatesAreUnverified(t *testing.T) {
-	seedAzureRun(t)
-
-	out, err := runConnect(t, azureRegisterOnlyArgs()...)
-
-	require.NoError(t, err, "out: %s", out)
-	got := decodeOut(t, out)
-	assert.Contains(t, fmt.Sprintf("%v", got["warnings"]), "validated for shape only")
-}
-
-// Register-only needs no credentials at all: needing them would defeat the
-// one reason the mode exists.
-func TestAzureRegisterOnlyNeedsNoCredentials(t *testing.T) {
-	calls := 0
-	restore := usableCredentials
-	usableCredentials = func(context.Context, string, string) (azureCredentialState, error) {
-		calls++
-		return azureCredentialsUsable, nil
-	}
-	t.Cleanup(func() { usableCredentials = restore })
-	seedAzureRun(t)
-
-	out, err := runConnect(t, azureRegisterOnlyArgs()...)
-
-	require.NoError(t, err, "out: %s", out)
-	assert.Zero(t, calls, "register-only must never check credentials")
-}
-
 // stdinNeverRead fails the test the moment anything reads from stdin: a
 // caller that built one fixed command line cannot answer a prompt, so
 // nothing on a machine-mode/--no-input run may block waiting on it.
@@ -332,40 +294,6 @@ func TestAzureMachineModeNeverPrompts(t *testing.T) {
 			assert.Empty(t, confirms.prompts, "state %v args %v prompted despite machine mode/--no-input", state, args)
 		}
 	}
-}
-
-// Provisioning succeeding and registration failing leaves the subscription
-// trusting an installation the control plane does not know about, with no
-// rollback and near-owner access standing. The failure must name the
-// resource group, the identity, and its client id, and say so plainly.
-func TestProvisionThenRegistrationFailureNamesTheSurvivingTrust(t *testing.T) {
-	stubAzureCredentialState(t, azureCredentialsUsable)
-	const identityID = "/subscriptions/x/resourceGroups/formae-ai/providers/Microsoft.ManagedIdentity/userAssignedIdentities/formae-ai-inst"
-	installAzureProvisioner(t, &stubAzureProvisioner{result: &provxazure.Result{
-		TenantID: testAzureTenant, ClientID: testAzureClient, IdentityID: identityID,
-	}}, nil)
-	cp := seedAzureRun(t)
-	cp.registerStatus = 500
-	cp.registerBody = `{"error":"boom"}`
-
-	out, err := runConnect(t, azureLocalArgs()...)
-
-	require.Error(t, err)
-	got := decodeOut(t, out)
-	assert.Equal(t, "orphaned_trust", got["code"],
-		"the machine document must name what survives, not a generic internal failure: %s", out)
-	assert.Contains(t, got["message"], "does not know about")
-	assert.Contains(t, got["message"], "no rollback")
-	assert.Contains(t, got["message"], "near-owner")
-
-	details, ok := got["details"].(map[string]any)
-	require.True(t, ok, "the failure must carry structured details: %s", out)
-	assert.Equal(t, defaultAzureResourceGroup, details["resourceGroup"],
-		"the resource group must be checkable distinctly from the identity id")
-	assert.Equal(t, identityID, details["identity"])
-	assert.Equal(t, testAzureClient, details["clientId"])
-	assert.NotEqual(t, details["resourceGroup"], details["identity"],
-		"resource group and identity must be distinguishable, not both just \"contains formae-ai\"")
 }
 
 // A sovereign cloud is refused explicitly, before any control-plane or

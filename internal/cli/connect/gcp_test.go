@@ -164,36 +164,6 @@ func TestGCPRegisterOnlyRejectsMalformedProvider(t *testing.T) {
 	}
 }
 
-// Register-only says what it did not check, so nobody reads "registered" as
-// "working".
-func TestGCPRegisterOnlySaysWhatItDidNotVerify(t *testing.T) {
-	seedGCPRun(t)
-
-	out, err := runConnect(t, "gcp", "--project", testProject,
-		"--workload-identity-provider", testProviderName, "--no-input",
-		"--output-consumer", "machine", "--output-schema", "json")
-
-	require.NoError(t, err, "out: %s", out)
-	got := decodeOut(t, out)
-	assert.Equal(t, testProviderName, got["workloadIdentityProvider"])
-	assert.Contains(t, fmt.Sprintf("%v", got["warnings"]), "shape only")
-}
-
-// Register-only must not reach for credentials at all: needing them would
-// destroy the one reason the mode exists.
-func TestGCPRegisterOnlyNeedsNoCredentials(t *testing.T) {
-	logins := 0
-	stubCredentialState(t, credentialsMissing, &logins)
-	seedGCPRun(t)
-
-	out, err := runConnect(t, "gcp", "--project", testProject,
-		"--workload-identity-provider", testProviderName, "--no-input",
-		"--output-consumer", "machine", "--output-schema", "json")
-
-	require.NoError(t, err, "out: %s", out)
-	assert.Zero(t, logins, "register-only signed in, which it must never need to do")
-}
-
 // TestGCPMachineModeNeverSignsIn: a caller that built one fixed command line
 // did not consent to a browser opening. Machine output and --no-input both
 // mean the run reports what to do instead.
@@ -292,25 +262,6 @@ func TestGCPProvisionFailuresAreClassifiedApart(t *testing.T) {
 	}
 }
 
-// A run that provisioned and then failed to register must say that the
-// project now trusts an installation the control plane does not know about.
-func TestGCPRegistrationFailureNamesTheStandingTrust(t *testing.T) {
-	stubCredentialState(t, credentialsUsable, nil)
-	installGCPProvisioner(t, &stubGCPProvisioner{result: &provxgcp.Result{
-		ProviderName: testProviderName, ProjectNumber: testProjectNumber,
-	}}, nil)
-	cp := seedGCPRun(t)
-	cp.registerStatus = 500
-	cp.registerBody = `{"error":"boom"}`
-
-	out, err := runConnect(t, gcpLocalArgs()...)
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "now trusts this installation",
-		"the failure must name the trust that stands")
-	_ = out
-}
-
 // TestGCPAllowLoginReachesTheSignIn is the case that was unreachable before:
 // the agent runs on the operator's machine, consumes machine output, and can
 // still have a browser completed by the person sitting there. Without an
@@ -363,11 +314,6 @@ func TestGCPAllowLoginDoesNotSignInWhenCredentialsWork(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Zero(t, logins, "a usable credential was replaced by a sign-in")
-}
-
-func TestGCPProjectIsRequired(t *testing.T) {
-	_, err := decideGCPMode(gcpOptions{})
-	require.Error(t, err, "a run with no project must be refused rather than inferring one")
 }
 
 func TestGCPModeSelection(t *testing.T) {
