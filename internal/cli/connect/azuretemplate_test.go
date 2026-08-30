@@ -8,6 +8,7 @@ package connect
 
 import (
 	"encoding/json"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -104,17 +105,73 @@ func TestAzureTemplateCommandEmitsTheTemplateWithDefaults(t *testing.T) {
 	assert.Equal(t, "acme", tenantParam["defaultValue"],
 		"formaeTenantId must default to the resolved session's formae tenant")
 
-	assert.Contains(t, stderr, "Azure Portal", "the portal route must be offered - the only one needing no CLI")
+	wantDeepLink := azurePortalDeepLink(azureTemplateConsoleURL(cp.srv.URL, contractInstallation, "acme"))
+	assert.Contains(t, stderr, wantDeepLink, "the portal deep link must be printed, built from the resolved session")
+	assert.Contains(t, stderr, "Azure Portal", "the portal editor route must still be offered as a fallback")
+	deepLinkIdx := strings.Index(stderr, wantDeepLink)
 	portalIdx := strings.Index(stderr, "Azure Portal")
 	cliIdx := strings.Index(stderr, "az deployment sub create")
+	require.NotEqual(t, -1, deepLinkIdx, "the deep link must be printed")
 	require.NotEqual(t, -1, cliIdx, "the CLI deploy command must be printed for someone who has az")
-	assert.Less(t, portalIdx, cliIdx, "the portal route must be listed before the CLI one")
+	assert.Less(t, deepLinkIdx, portalIdx, "the deep link must be listed before the portal-editor fallback")
+	assert.Less(t, portalIdx, cliIdx, "the portal editor route must be listed before the CLI one")
 	assert.Contains(t, stderr, "pipeline", "a pipeline route must be mentioned for a credential kept off any machine")
 	assert.Contains(t, stderr, "formae connect azure --subscription",
 		"the register follow-up command must be printed")
 	assert.Contains(t, stderr, "outputs", "the guidance must say the ids come from the deployment's outputs")
 	assert.NotContains(t, stdout, "Azure Portal",
 		"guidance must never land on stdout, which a caller redirects straight to a file")
+	assert.NotContains(t, stdout, "portal.azure.com",
+		"the deep link must never land on stdout, which a caller redirects straight to a file")
+}
+
+// The portal deep link is exactly Azure's base plus the console's template
+// URL, url-encoded as a single value: the portal reads everything after
+// "/uri/" as one opaque string, so a caller assembling this any other way
+// (e.g. appending an unescaped query string) produces a link the portal
+// cannot parse. The expected value here is a literal, computed by hand, not
+// by calling the same url.QueryEscape the production code calls - a test
+// that re-derives its expectation with the code under test proves nothing.
+func TestAzurePortalDeepLinkIsThePortalBasePlusTheEncodedConsoleURL(t *testing.T) {
+	got := azurePortalDeepLink(azureTemplateConsoleURL("https://console.formae.ai", contractInstallation, "acme"))
+
+	want := "https://portal.azure.com/#create/Microsoft.Template/uri/" +
+		"https%3A%2F%2Fconsole.formae.ai%2Fazure%2Ftrust.json" +
+		"%3Finstallation%3D" + contractInstallation + "%26tenant%3Dacme"
+
+	assert.Equal(t, want, got)
+}
+
+// The console URL the deep link points at must carry both coordinates as
+// query parameters, named exactly as the console endpoint expects them.
+func TestAzureTemplateConsoleURLCarriesBothCoordinates(t *testing.T) {
+	got := azureTemplateConsoleURL("https://console.formae.ai", contractInstallation, "acme")
+
+	u, err := url.Parse(got)
+	require.NoError(t, err, "the console URL itself must parse as a URL")
+	assert.Equal(t, "console.formae.ai", u.Host)
+	assert.Equal(t, "/azure/trust.json", u.Path)
+	assert.Equal(t, contractInstallation, u.Query().Get("installation"))
+	assert.Equal(t, "acme", u.Query().Get("tenant"))
+}
+
+// An installation or tenant carrying characters that need encoding (a slash,
+// an ampersand, a space) must survive the round trip through both the console
+// URL's query string and the portal link's own encoding layer on top of it.
+func TestAzurePortalDeepLinkRoundTripsCharactersThatNeedEncoding(t *testing.T) {
+	installation := "inst/with & special=chars"
+	tenant := "tenant name+plus"
+
+	deepLink := azurePortalDeepLink(azureTemplateConsoleURL("https://console.formae.ai", installation, tenant))
+
+	encoded := strings.TrimPrefix(deepLink, azurePortalDeepLinkBase)
+	templateURL, err := url.QueryUnescape(encoded)
+	require.NoError(t, err, "the portal-link payload must be valid percent-encoding")
+
+	u, err := url.Parse(templateURL)
+	require.NoError(t, err, "the decoded console URL must parse as a URL")
+	assert.Equal(t, installation, u.Query().Get("installation"))
+	assert.Equal(t, tenant, u.Query().Get("tenant"))
 }
 
 // A bare machine with no profile at all gets the same hosted-profile failure
