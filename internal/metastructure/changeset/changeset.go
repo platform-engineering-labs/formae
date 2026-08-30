@@ -880,10 +880,22 @@ func (p *ExecutionDAG) propagateResolvedTargetConfig(targetLabel string, pluginC
 // writes nothing, and delivering there would put a live credential into a row
 // on its way out.
 //
+// generatorKsuid is the caller's to guarantee non-empty. It is matched against
+// each occurrence's own $generator, and an AUTHORED (not yet translated)
+// envelope carries none — so an empty ksuid here would match every
+// untranslated envelope in the changeset and deliver the credential into all
+// of them. buildGeneratorResourceEdges already refuses to build a changeset
+// whose draw carries no identity, but that safety property lives in another
+// file and this is the path that writes credentials, so it is restated here
+// where it applies.
+//
 // An error means some destination did not receive its value. The caller must
 // fail the draw closed rather than let a destination dispatch its undrawn
 // envelope.
 func (p *ExecutionDAG) propagateDrawnGeneratorValue(generatorKsuid string, value string, mode pkgmodel.FormaApplyMode) error {
+	if generatorKsuid == "" {
+		return fmt.Errorf("cannot deliver a drawn value: the draw names no generator")
+	}
 	if value == "" {
 		// A success carrying no value cannot be delivered: writing an empty
 		// string into a destination would hand a provider a blank credential

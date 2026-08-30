@@ -644,18 +644,6 @@ func handleUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, even
 					Label:     u.Target.Label,
 					Operation: u.Operation,
 				})
-			case *generator_update.GeneratorUpdate:
-				// A draw has no row and no entry in the command record, so
-				// there is nothing to persist and the log line is the whole
-				// record. No edge points AT a draw today — every generator
-				// edge runs destination -> draw (buildGeneratorResourceEdges),
-				// which makes a draw a source and puts it out of reach of the
-				// cascade — so this arm does not fire. It exists because the
-				// alternative is the default: silently dropped, with the
-				// nothing-was-recorded outcome indistinguishable from success
-				// the day a draw does gain an upstream.
-				proc.Log().Warning("Generator draw marked as failed due to cascade node=%s originalFailure=%v",
-					u.NodeURI(), event.nodeURI)
 			}
 		}
 		if len(failedResources) > 0 {

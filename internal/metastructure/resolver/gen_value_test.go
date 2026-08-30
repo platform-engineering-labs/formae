@@ -13,6 +13,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
+
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
 // A drawn value lands INSIDE the $gen envelope, as its $value. The envelope
@@ -25,7 +27,7 @@ func TestSetGenValues_WritesTheValueInsideTheEnvelope(t *testing.T) {
 		"SecretString": {"$gen": true, "$generator": "gen-ksuid", "$output": "value", "$visibility": "Opaque"}
 	}`)
 
-	updated, err := SetGenValues(properties, []string{"SecretString"}, "drawn-credential")
+	updated, err := SetGenValues(properties, "gen-ksuid", []string{"SecretString"}, "drawn-credential")
 	require.NoError(t, err)
 
 	envelope := gjson.GetBytes(updated, "SecretString")
@@ -47,7 +49,7 @@ func TestSetGenValues_WritesOnlyTheNamedPaths(t *testing.T) {
 		"Nested": {"Second": {"$gen": true, "$generator": "b", "$output": "value", "$visibility": "Opaque"}}
 	}`)
 
-	updated, err := SetGenValues(properties, []string{"Nested.Second"}, "drawn")
+	updated, err := SetGenValues(properties, "b", []string{"Nested.Second"}, "drawn")
 	require.NoError(t, err)
 
 	assert.Equal(t, "drawn", gjson.GetBytes(updated, "Nested.Second.$value").String())
@@ -61,10 +63,10 @@ func TestSetGenValues_WritesOnlyTheNamedPaths(t *testing.T) {
 func TestSetGenValues_RefusesAPathThatIsNotAGeneratorEnvelope(t *testing.T) {
 	properties := json.RawMessage(`{"Name": "db", "Ref": {"$ref": "formae://k#/Token"}}`)
 
-	_, err := SetGenValues(properties, []string{"Name"}, "drawn")
+	_, err := SetGenValues(properties, "gen-a", []string{"Name"}, "drawn")
 	require.Error(t, err)
 
-	_, err = SetGenValues(properties, []string{"Ref"}, "drawn")
+	_, err = SetGenValues(properties, "gen-a", []string{"Ref"}, "drawn")
 	require.Error(t, err, "a $ref envelope is not a generator envelope")
 }
 
@@ -73,7 +75,7 @@ func TestSetGenValues_RefusesAPathThatIsNotAGeneratorEnvelope(t *testing.T) {
 func TestSetGenValues_RefusesAnAbsentPath(t *testing.T) {
 	properties := json.RawMessage(`{"Name": "db"}`)
 
-	_, err := SetGenValues(properties, []string{"SecretString"}, "drawn")
+	_, err := SetGenValues(properties, "gen-a", []string{"SecretString"}, "drawn")
 	require.Error(t, err)
 }
 
@@ -81,7 +83,7 @@ func TestSetGenValues_RefusesAnAbsentPath(t *testing.T) {
 func TestSetGenValues_ErrorNeverCarriesTheValue(t *testing.T) {
 	properties := json.RawMessage(`{"Name": "db"}`)
 
-	_, err := SetGenValues(properties, []string{"SecretString"}, "drawn-credential")
+	_, err := SetGenValues(properties, "gen-ksuid", []string{"SecretString"}, "drawn-credential")
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "drawn-credential")
 	assert.Contains(t, err.Error(), "SecretString")
@@ -93,8 +95,45 @@ func TestSetGenValues_WritesIntoAnArrayElement(t *testing.T) {
 		"Entries": [{"$gen": true, "$generator": "a", "$output": "value", "$visibility": "Opaque"}]
 	}`)
 
-	updated, err := SetGenValues(properties, []string{"Entries.0"}, "drawn")
+	updated, err := SetGenValues(properties, "a", []string{"Entries.0"}, "drawn")
 	require.NoError(t, err)
 	assert.Equal(t, "drawn", gjson.GetBytes(updated, "Entries.0.$value").String())
 	assert.Equal(t, "Opaque", gjson.GetBytes(updated, "Entries.0.$visibility").String())
+}
+
+// A path that resolves onto an envelope naming a DIFFERENT generator is
+// refused, not written. Paths are dot-joined by the caller's walk, and a map
+// key containing a dot produces a path that resolves somewhere else: without
+// this check the value drawn for one generator would land in another
+// generator's destination.
+func TestSetGenValues_RefusesAnEnvelopeNamingAnotherGenerator(t *testing.T) {
+	properties := json.RawMessage(`{
+		"SecretString": {"$gen": true, "$generator": "gen-b", "$output": "value", "$visibility": "Opaque"}
+	}`)
+
+	_, err := SetGenValues(properties, "gen-a", []string{"SecretString"}, "drawn-credential")
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "drawn-credential")
+	assert.False(t, gjson.GetBytes(properties, "SecretString.$value").Exists(),
+		"a refused delivery writes nothing")
+}
+
+// A $gen nested under a map key that itself contains a dot cannot be
+// addressed by the dot-joined path the caller's walk produces. Delivery
+// refuses rather than writing the credential wherever that path happens to
+// land. This is the same addressing convention $res/$ref use, so the
+// limitation is shared, not generator-specific.
+func TestSetGenValues_RefusesAPathThroughADottedKey(t *testing.T) {
+	properties := json.RawMessage(`{
+		"labels": {"app.kubernetes.io/secret": {"$gen": true, "$generator": "gen-a", "$output": "value", "$visibility": "Opaque"}}
+	}`)
+
+	occurrences := pkgmodel.FindGenObjectsFromProperties(properties)
+	require.Len(t, occurrences, 1)
+	require.Equal(t, "labels.app.kubernetes.io/secret", occurrences[0].Path,
+		"precondition: the walk dot-joins the key, producing an unresolvable path")
+
+	_, err := SetGenValues(properties, "gen-a", []string{occurrences[0].Path}, "drawn-credential")
+	require.Error(t, err, "an unaddressable destination must refuse delivery, not write elsewhere")
+	assert.NotContains(t, err.Error(), "drawn-credential")
 }

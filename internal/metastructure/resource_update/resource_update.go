@@ -195,7 +195,7 @@ func (ru *ResourceUpdate) ResolveGeneratorValue(generatorKsuid string, value str
 		return nil
 	}
 
-	properties, err := resolver.SetGenValues(ru.DesiredState.Properties, paths, value)
+	properties, err := resolver.SetGenValues(ru.DesiredState.Properties, generatorKsuid, paths, value)
 	if err != nil {
 		// The error names paths only; the drawn value is never in it.
 		slog.Error("Failed to deliver a generated value", "error", err)

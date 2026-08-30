@@ -19,6 +19,16 @@ import (
 // setRefValue/resolveReference: those resolve a $ref, this delivers a drawn
 // value, and neither ever replaces the envelope it writes into.
 //
+// generatorKsuid is the generator the value was drawn for, and every envelope
+// written must name it. The caller selects paths by walking the same document
+// and matching that ksuid, so this looks redundant — it is not. The walk
+// addresses nodes by a dot-joined path, and a map key that itself contains a
+// dot produces a path that resolves somewhere else entirely (or nowhere).
+// Where it resolves onto a different generator's envelope, matching on the
+// $gen marker alone would deliver one generator's credential into another
+// generator's destination. Re-checking the identity at the write is what
+// makes that a refusal instead.
+//
 // Writing INSIDE the envelope is the whole point, not an implementation
 // detail. A translated $gen always carries $visibility:"Opaque", and that
 // marker is the only reason the persist path hashes the value at rest.
@@ -34,7 +44,7 @@ import (
 // have diverged, and writing a credential over an arbitrary node would put
 // plaintext somewhere nothing marked opaque. Errors name the path only —
 // never the value.
-func SetGenValues(properties json.RawMessage, paths []string, value string) (json.RawMessage, error) {
+func SetGenValues(properties json.RawMessage, generatorKsuid string, paths []string, value string) (json.RawMessage, error) {
 	result := string(properties)
 
 	for _, path := range paths {
@@ -44,6 +54,9 @@ func SetGenValues(properties json.RawMessage, paths []string, value string) (jso
 		}
 		if !pkgmodel.IsGenObject(node) {
 			return nil, fmt.Errorf("cannot deliver a generated value: the property at %q is not a generator reference", path)
+		}
+		if got := pkgmodel.GenGeneratorKSUID(node); got != generatorKsuid {
+			return nil, fmt.Errorf("cannot deliver a generated value: the generator reference at %q names %q, not %q", path, got, generatorKsuid)
 		}
 
 		envelope := make(map[string]any)

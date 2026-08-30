@@ -162,30 +162,81 @@ func TestGeneratorDrawFailed_CascadesToItsDestinationAndPersistsTheFailure(t *te
 // If the drawn value cannot be delivered, the draw is treated as a failure so
 // the cascade runs: a destination that never received its value must not go
 // on to dispatch its undrawn envelope.
+//
+// Delivery is driven to refuse through a door that production can open: a
+// destination whose $gen sits under a map key containing a dot. The walk that
+// selects destinations addresses them by a dot-joined path, so such a
+// destination is not addressable and SetGenValues refuses rather than writing
+// the credential wherever that path happens to land.
 func TestGeneratorDrawFinished_UndeliverableValueFailsClosed(t *testing.T) {
-	cs, draw, secret := changesetWithOneDraw(t, "cmd-draw-undeliverable", pkgmodel.FormaApplyModeReconcile)
-	actor, proc := testExecutorProcess(t)
-	_ = actor
+	generatorKsuid := util.NewID()
 
-	// Break the destination's envelope after planning, so delivery cannot
-	// find a generator reference to write into.
-	opURI := createOperationURI(secret.URI(), secret.Operation)
+	unaddressable := genBoundSecret("dotted-key-secret", generatorKsuid)
+	unaddressable.DesiredState.Properties = json.RawMessage(`{"labels":{"app.kubernetes.io/secret":{"$gen":true,"$generator":"` +
+		generatorKsuid + `","$output":"value","$visibility":"Opaque"}}}`)
+	draw := drawOp("db-password", generatorKsuid)
+
+	cs, err := NewChangeset(
+		[]resource_update.ResourceUpdate{unaddressable}, nil,
+		[]generator_update.GeneratorUpdate{draw},
+		"cmd-draw-undeliverable", pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile,
+	)
+	require.NoError(t, err)
+
+	opURI := createOperationURI(unaddressable.URI(), unaddressable.Operation)
 	node := cs.DAG.Nodes[opURI]
 	require.NotNil(t, node)
+	require.True(t, dependsOn(node, draw.NodeURI()),
+		"precondition: the destination is wired to the draw, so a refusal is what stops it")
 	ru := node.Update.(*resource_update.ResourceUpdate)
+
+	drawNode := cs.DAG.Nodes[draw.NodeURI()]
+	require.NotNil(t, drawNode)
+	drawNode.Update.MarkInProgress()
+
+	actor, proc := testExecutorProcess(t)
+	_ = actor
 
 	data := ChangesetData{changeset: cs}
 	_, updated, _, _ := generatorUpdateFinished(gen.PID{}, StateProcessing, data,
 		generator_update.GeneratorUpdateFinished{
 			NodeURI:    draw.NodeURI(),
 			State:      generator_update.GeneratorUpdateStateSuccess,
-			DrawnValue: "", // a success carrying no value is undeliverable
+			DrawnValue: "drawn-credential",
 		}, proc)
 
 	assert.True(t, ru.IsFailed(), "an undeliverable draw must fail its destinations closed")
 	assert.Nil(t, updated.changeset.DAG.Nodes[opURI])
-	assert.False(t, gjson.GetBytes(ru.DesiredState.Properties, "password.$value").Exists(),
+	assert.NotContains(t, string(ru.DesiredState.Properties), "drawn-credential",
 		"nothing is written when delivery is refused")
+}
+
+// A draw naming no generator delivers nothing. An authored, not yet
+// translated envelope carries no $generator either, so an empty ksuid would
+// otherwise match every one of them and deliver the credential into all of
+// them. The changeset builder already refuses to build such a draw; this is
+// the same refusal restated where the write happens.
+func TestPropagateDrawnGeneratorValue_WithoutAGeneratorIdentityDeliversNothing(t *testing.T) {
+	generatorKsuid := util.NewID()
+
+	authored := genBoundSecret("authored-secret", generatorKsuid)
+	authored.DesiredState.Properties = json.RawMessage(
+		`{"password":{"$gen":true,"$label":"db-password","$stack":"default","$output":"value","$visibility":"Opaque"}}`)
+
+	cs, err := NewChangeset(
+		[]resource_update.ResourceUpdate{authored}, nil,
+		[]generator_update.GeneratorUpdate{drawOp("db-password", generatorKsuid)},
+		"cmd-no-identity", pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile,
+	)
+	require.NoError(t, err)
+
+	err = cs.DAG.propagateDrawnGeneratorValue("", "drawn-credential", pkgmodel.FormaApplyModeReconcile)
+	require.Error(t, err, "a draw naming no generator must refuse delivery outright")
+	assert.NotContains(t, err.Error(), "drawn-credential")
+
+	ru := cs.DAG.Nodes[createOperationURI(authored.URI(), resource_update.OperationCreate)].Update.(*resource_update.ResourceUpdate)
+	assert.NotContains(t, string(ru.DesiredState.Properties), "drawn-credential",
+		"an untranslated envelope must never receive a credential")
 }
 
 // A destination being torn down never receives a drawn value: a delete
