@@ -75,9 +75,10 @@ func TestGeneratorDrawFinished_DeliversTheValueInsideTheEnvelope(t *testing.T) {
 	data := ChangesetData{changeset: cs}
 	_, updated, _, _ := generatorUpdateFinished(gen.PID{}, StateProcessing, data,
 		generator_update.GeneratorUpdateFinished{
-			NodeURI:    draw.NodeURI(),
-			State:      generator_update.GeneratorUpdateStateSuccess,
-			DrawnValue: "drawn-credential",
+			NodeURI:      draw.NodeURI(),
+			State:        generator_update.GeneratorUpdateStateSuccess,
+			DrawnValue:   "drawn-credential",
+			GenerationID: "generation-1",
 		}, proc)
 
 	node := updated.changeset.DAG.Nodes[opURI]
@@ -106,9 +107,10 @@ func TestGeneratorDrawFinished_MarksTheDrawSucceededAndReleasesItsDestination(t 
 	data := ChangesetData{changeset: cs}
 	_, updated, _, _ := generatorUpdateFinished(gen.PID{}, StateProcessing, data,
 		generator_update.GeneratorUpdateFinished{
-			NodeURI:    draw.NodeURI(),
-			State:      generator_update.GeneratorUpdateStateSuccess,
-			DrawnValue: "drawn-credential",
+			NodeURI:      draw.NodeURI(),
+			State:        generator_update.GeneratorUpdateStateSuccess,
+			DrawnValue:   "drawn-credential",
+			GenerationID: "generation-1",
 		}, proc)
 
 	assert.True(t, drawUpdate.IsSuccess(), "a completed draw must be recorded as a success")
@@ -200,9 +202,10 @@ func TestGeneratorDrawFinished_UndeliverableValueFailsClosed(t *testing.T) {
 	data := ChangesetData{changeset: cs}
 	_, updated, _, _ := generatorUpdateFinished(gen.PID{}, StateProcessing, data,
 		generator_update.GeneratorUpdateFinished{
-			NodeURI:    draw.NodeURI(),
-			State:      generator_update.GeneratorUpdateStateSuccess,
-			DrawnValue: "drawn-credential",
+			NodeURI:      draw.NodeURI(),
+			State:        generator_update.GeneratorUpdateStateSuccess,
+			DrawnValue:   "drawn-credential",
+			GenerationID: "generation-1",
 		}, proc)
 
 	assert.True(t, ru.IsFailed(), "an undeliverable draw must fail its destinations closed")
@@ -230,13 +233,36 @@ func TestPropagateDrawnGeneratorValue_WithoutAGeneratorIdentityDeliversNothing(t
 	)
 	require.NoError(t, err)
 
-	err = cs.DAG.propagateDrawnGeneratorValue("", "drawn-credential", pkgmodel.FormaApplyModeReconcile)
+	err = cs.DAG.propagateDrawnGeneratorValue("", "drawn-credential", "generation-1", pkgmodel.FormaApplyModeReconcile)
 	require.Error(t, err, "a draw naming no generator must refuse delivery outright")
 	assert.NotContains(t, err.Error(), "drawn-credential")
 
 	ru := cs.DAG.Nodes[createOperationURI(authored.URI(), resource_update.OperationCreate)].Update.(*resource_update.ResourceUpdate)
 	assert.NotContains(t, string(ru.DesiredState.Properties), "drawn-credential",
 		"an untranslated envelope must never receive a credential")
+}
+
+// A draw naming no generation delivers nothing. The destination would be
+// written with a credential and no provenance, so every later apply would
+// read its movement as unknown, plan it, and rotate the credential again.
+func TestPropagateDrawnGeneratorValue_WithoutAGenerationDeliversNothing(t *testing.T) {
+	generatorKsuid := util.NewID()
+	destination := genBoundSecret("db-secret", generatorKsuid)
+
+	cs, err := NewChangeset(
+		[]resource_update.ResourceUpdate{destination}, nil,
+		[]generator_update.GeneratorUpdate{drawOp("db-password", generatorKsuid)},
+		"cmd-no-generation", pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile,
+	)
+	require.NoError(t, err)
+
+	err = cs.DAG.propagateDrawnGeneratorValue(generatorKsuid, "drawn-credential", "", pkgmodel.FormaApplyModeReconcile)
+	require.Error(t, err, "a draw naming no generation must refuse delivery outright")
+	assert.NotContains(t, err.Error(), "drawn-credential")
+
+	ru := cs.DAG.Nodes[createOperationURI(destination.URI(), resource_update.OperationCreate)].Update.(*resource_update.ResourceUpdate)
+	assert.NotContains(t, string(ru.DesiredState.Properties), "drawn-credential",
+		"nothing is written when the generation cannot be attested")
 }
 
 // A destination being torn down never receives a drawn value: a delete
@@ -258,7 +284,7 @@ func TestPropagateDrawnGeneratorValue_SkipsATeardownDestination(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	require.NoError(t, cs.DAG.propagateDrawnGeneratorValue(generatorKsuid, "drawn-credential", pkgmodel.FormaApplyModeReconcile))
+	require.NoError(t, cs.DAG.propagateDrawnGeneratorValue(generatorKsuid, "drawn-credential", "generation-1", pkgmodel.FormaApplyModeReconcile))
 
 	dying := cs.DAG.Nodes[createOperationURI(teardown.URI(), resource_update.OperationDelete)].Update.(*resource_update.ResourceUpdate)
 	assert.False(t, gjson.GetBytes(dying.DesiredState.Properties, "password.$value").Exists(),
@@ -283,7 +309,7 @@ func TestPropagateDrawnGeneratorValue_LeavesAnotherGeneratorsDestinationAlone(t 
 	)
 	require.NoError(t, err)
 
-	require.NoError(t, cs.DAG.propagateDrawnGeneratorValue(firstKsuid, "first-credential", pkgmodel.FormaApplyModeReconcile))
+	require.NoError(t, cs.DAG.propagateDrawnGeneratorValue(firstKsuid, "first-credential", "generation-1", pkgmodel.FormaApplyModeReconcile))
 
 	firstRU := cs.DAG.Nodes[createOperationURI(first.URI(), resource_update.OperationCreate)].Update.(*resource_update.ResourceUpdate)
 	secondRU := cs.DAG.Nodes[createOperationURI(second.URI(), resource_update.OperationCreate)].Update.(*resource_update.ResourceUpdate)
@@ -333,7 +359,7 @@ func TestPropagateDrawnGeneratorValue_RegeneratesUnderTheChangesetsMode(t *testi
 			"cmd-mode-"+string(mode), pkgmodel.CommandApply, mode,
 		)
 		require.NoError(t, err)
-		require.NoError(t, cs.DAG.propagateDrawnGeneratorValue(generatorKsuid, "drawn", cs.Mode))
+		require.NoError(t, cs.DAG.propagateDrawnGeneratorValue(generatorKsuid, "drawn", "generation-1", cs.Mode))
 		return cs.DAG.Nodes[createOperationURI(ru.URI(), resource_update.OperationUpdate)].Update.(*resource_update.ResourceUpdate)
 	}
 

@@ -141,9 +141,13 @@ func TestApplyForma_GeneratorBoundSecret_UndrawnValueIsNeverWritten(t *testing.T
 
 // A generator declared by one command and referenced by a later one resolves
 // to the KSUID the generator's own row already carries: the binding names one
-// identity, not a freshly minted one per command. This pins identity
-// stability only; nothing here says anything about whether a moved generation
-// is suppressed, which needs a drawn value to be observable at all.
+// identity, not a freshly minted one per command.
+//
+// The second command's translation is observed through what it plans. A
+// binding translated to a freshly minted KSUID would name a different source
+// than the stored envelope does, which is a repoint and always plans; that
+// the identical second command plans nothing for the bound secret is
+// therefore the identity holding across commands.
 func TestApplyForma_GeneratorBoundSecret_BindingNamesTheGeneratorsOwnIdentity(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		cfg := test_helpers.NewTestMetastructureConfig()
@@ -162,9 +166,8 @@ func TestApplyForma_GeneratorBoundSecret_BindingNamesTheGeneratorsOwnIdentity(t 
 			}
 		}
 
-		// The first command establishes the generator's row. Its resource
-		// write is refused (no value has been drawn), which is beside the
-		// point here: the generator is persisted either way.
+		// The first command establishes the generator's row and writes the
+		// bound secret with the value drawn for it.
 		_, err = m.ApplyForma(buildForma(), &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
 		require.NoError(t, err)
 		waitForApplyComplete(t, m)
@@ -173,22 +176,29 @@ func TestApplyForma_GeneratorBoundSecret_BindingNamesTheGeneratorsOwnIdentity(t 
 		require.NoError(t, err)
 		require.NotEmpty(t, identity.ID, "precondition: the declared generator must have a row")
 
+		resources, err := m.Datastore.LoadResourcesByStack(stack)
+		require.NoError(t, err)
+		var secretRow *pkgmodel.Resource
+		for i := range resources {
+			if resources[i].Label == "db" {
+				secretRow = resources[i]
+			}
+		}
+		require.NotNil(t, secretRow, "precondition: the bound secret must be written")
+		assert.Equal(t, identity.ID,
+			gjson.GetBytes(secretRow.Properties, "SecretString.$generator").String(),
+			"the binding must name the generator's own KSUID, not one minted for this command")
+
 		resp, err := m.ApplyForma(buildForma(), &config.FormaCommandConfig{
 			Mode:     pkgmodel.FormaApplyModeReconcile,
 			Simulate: true,
 		}, "test-client-id", "", "")
 		require.NoError(t, err)
 
-		var secretUpdate *apimodel.ResourceUpdate
-		for i, ru := range resp.Simulation.Command.ResourceUpdates {
-			if ru.ResourceLabel == "db" {
-				secretUpdate = &resp.Simulation.Command.ResourceUpdates[i]
-			}
+		for _, ru := range resp.Simulation.Command.ResourceUpdates {
+			assert.NotEqual(t, "db", ru.ResourceLabel,
+				"a second command that named a fresh KSUID would repoint the binding and plan it")
 		}
-		require.NotNil(t, secretUpdate, "the bound secret must be in the plan")
-		assert.Equal(t, identity.ID,
-			gjson.GetBytes(secretUpdate.Properties, "SecretString.$generator").String(),
-			"the binding must name the generator's own KSUID, not one minted for this command")
 
 		identityAfter, err := m.Datastore.GetGeneratorIdentity("db-password", stack)
 		require.NoError(t, err)

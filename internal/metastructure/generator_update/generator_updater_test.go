@@ -140,6 +140,7 @@ func drawingData(t *testing.T, op GeneratorOperation, advancer *recordingAdvance
 func TestGeneratorUpdater_SuccessCarriesDrawnValue(t *testing.T) {
 	data := drawingData(t, GeneratorOperationCreate, &recordingAdvancer{})
 	data.drawnValue = "s3cret-value"
+	data.generationID = "2mnoPQRstuVWxyzabcDEFghiJKL"
 
 	proc := &stubGeneratorUpdaterProcess{}
 	_, _, err := onGeneratorUpdaterStateChange(StateDrawing, StateFinishedSuccessfully, data, proc)
@@ -150,6 +151,8 @@ func TestGeneratorUpdater_SuccessCarriesDrawnValue(t *testing.T) {
 	assert.Equal(t, GeneratorUpdateStateSuccess, finished[0].State)
 	assert.Equal(t, "s3cret-value", finished[0].DrawnValue,
 		"the drawn value must reach the requester through the finished signal")
+	assert.Equal(t, "2mnoPQRstuVWxyzabcDEFghiJKL", finished[0].GenerationID,
+		"the generation the value was drawn under travels with it, so destinations can be stamped with it")
 	assert.Empty(t, finished[0].ErrorMessage)
 	assert.Equal(t, 1, proc.sentShutdowns(), "the actor must terminate itself once it has reported")
 }
@@ -159,6 +162,7 @@ func TestGeneratorUpdater_SuccessCarriesDrawnValue(t *testing.T) {
 func TestGeneratorUpdater_FailureOmitsDrawnValue(t *testing.T) {
 	data := drawingData(t, GeneratorOperationCreate, &recordingAdvancer{})
 	data.drawnValue = "s3cret-value"
+	data.generationID = "2mnoPQRstuVWxyzabcDEFghiJKL"
 	data.errorMessage = failureReasonDrawFailed
 
 	proc := &stubGeneratorUpdaterProcess{}
@@ -170,6 +174,8 @@ func TestGeneratorUpdater_FailureOmitsDrawnValue(t *testing.T) {
 	assert.Equal(t, GeneratorUpdateStateFailed, finished[0].State)
 	assert.Empty(t, finished[0].DrawnValue,
 		"a failed draw must never propagate a value")
+	assert.Empty(t, finished[0].GenerationID,
+		"a failed draw attests no generation")
 	assert.Equal(t, failureReasonDrawFailed, finished[0].ErrorMessage)
 }
 
@@ -194,6 +200,8 @@ func TestGeneratorUpdater_DrawRecordsGenerationUnderTheSpec(t *testing.T) {
 	call := advancer.calls[0]
 	assert.Equal(t, testPasswordGenerator().ID, call.generatorID)
 	assert.Len(t, call.generationID, 27, "the generation identity must be a fresh KSUID")
+	assert.Equal(t, call.generationID, out.generationID,
+		"the generation reported with the value is the one recorded for it, never one re-read afterwards")
 
 	var spec pkgmodel.PasswordGenerator
 	require.NoError(t, json.Unmarshal(call.drawnUnder, &spec),

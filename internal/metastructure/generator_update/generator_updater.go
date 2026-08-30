@@ -88,10 +88,18 @@ type DrawValue struct{}
 // TargetUpdateFinished.ResolvedConfig. DrawnValue is populated on success and
 // only on success; ErrorMessage is populated on failure and only on failure,
 // always from the fixed set of reasons above.
+//
+// GenerationID travels with the value because the two belong together: every
+// destination the value reaches is stamped with the generation it was drawn
+// under, and that stamp is what lets the next apply prove the value did not
+// move. Re-reading the generator's identity at the destination instead would
+// read whatever generation the row holds by then, which a concurrent draw
+// may already have advanced past this value.
 type GeneratorUpdateFinished struct {
 	NodeURI      pkgmodel.FormaeURI
 	State        GeneratorUpdateState
 	DrawnValue   string
+	GenerationID string
 	ErrorMessage string
 }
 
@@ -115,6 +123,9 @@ type GeneratorUpdaterData struct {
 	// GeneratorUpdate: the update is marshalled into the command record, this
 	// struct is not.
 	drawnValue string
+	// generationID is the identity of the generation drawnValue was drawn
+	// under, held alongside it for the same lifetime and reported with it.
+	generationID string
 	// errorMessage is one of the fixed operator-facing reasons above, set
 	// only on the failure path.
 	errorMessage string
@@ -251,6 +262,7 @@ func handleDrawValue(from gen.PID, state gen.Atom, data GeneratorUpdaterData, me
 	}
 
 	data.drawnValue = value
+	data.generationID = generationID
 	return StateFinishedSuccessfully, data, nil, nil
 }
 
@@ -271,6 +283,7 @@ func onGeneratorUpdaterStateChange(oldState gen.Atom, newState gen.Atom, data Ge
 	if newState == StateFinishedSuccessfully {
 		finished.State = GeneratorUpdateStateSuccess
 		finished.DrawnValue = data.drawnValue
+		finished.GenerationID = data.generationID
 	} else {
 		finished.ErrorMessage = data.errorMessage
 	}

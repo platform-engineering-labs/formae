@@ -177,11 +177,19 @@ func (ru *ResourceUpdate) ResolveValue(formaeUri pkgmodel.FormaeURI, value strin
 // draw landing on the stable destination too and rotating a credential
 // nothing asked to rotate.
 //
+// generationID is the generation the value was drawn under, and every
+// destination that receives the value is stamped with its digest: the same
+// digest the planner computes for that generation, so the next apply can
+// prove the destination did not move and suppress its op. Without the stamp
+// the occurrence classifies as unknown movement on every subsequent apply,
+// which plans, redraws, and silently rotates the credential.
+//
 // mode is the command's configured apply mode, threaded through for exactly
 // the reason ResolveValue documents: regeneration must use the semantics
 // planning used or a reconcile-planned removal silently vanishes.
-func (ru *ResourceUpdate) ResolveGeneratorValue(generatorKsuid string, value string, mode pkgmodel.FormaApplyMode) error {
+func (ru *ResourceUpdate) ResolveGeneratorValue(generatorKsuid string, value string, generationID string, mode pkgmodel.FormaApplyMode) error {
 	var paths []string
+	var outputs []string
 	for _, occurrence := range pkgmodel.FindGenObjectsFromProperties(ru.DesiredState.Properties) {
 		if occurrence.Generator != generatorKsuid {
 			continue
@@ -190,6 +198,7 @@ func (ru *ResourceUpdate) ResolveGeneratorValue(generatorKsuid string, value str
 			continue
 		}
 		paths = append(paths, occurrence.Path)
+		outputs = append(outputs, occurrence.Output)
 	}
 	if len(paths) == 0 {
 		return nil
@@ -202,8 +211,40 @@ func (ru *ResourceUpdate) ResolveGeneratorValue(generatorKsuid string, value str
 		return fmt.Errorf("failed to deliver a generated value: %w", err)
 	}
 	ru.DesiredState.Properties = properties
+	ru.stampDrawnGeneration(generatorKsuid, outputs, generationID)
 
 	return ru.reDerivePatchAfterSubstitution(mode, "generator "+generatorKsuid)
+}
+
+// stampDrawnGeneration records, for every generator output this update just
+// received a value for, the digest of the generation it was drawn under.
+//
+// The digest is provenance.DigestOfString over the generation's identity, and
+// it must stay byte-identical to what the planner computes for the same
+// generation (resolver's generationRootDigest): the occurrence classifier
+// compares the two directly, and a digest that differs by so much as a
+// wrapper would never match, so every re-apply would re-plan and redraw with
+// nothing anywhere reporting a fault.
+//
+// The carrier holds digests only and is persisted verbatim, so the generation
+// identity itself never goes in. The map is written before the plugin call,
+// so the write-origin merge of the echo finds it and stamps $resolvedFrom
+// into the envelope that lands at rest.
+func (ru *ResourceUpdate) stampDrawnGeneration(generatorKsuid string, outputs []string, generationID string) {
+	if generationID == "" {
+		return
+	}
+	digest := provenance.DigestOfString(generationID)
+	for _, output := range outputs {
+		key := generatorSourceKey(generatorKsuid, output)
+		if key == "" {
+			continue
+		}
+		if ru.ResolvedRootDigests == nil {
+			ru.ResolvedRootDigests = make(map[string]string)
+		}
+		ru.ResolvedRootDigests[key] = digest
+	}
 }
 
 // reDerivePatchAfterSubstitution re-derives PatchDocument after an apply-time
@@ -956,10 +997,42 @@ func (m *propertyMerger) applyResolutionProvenance(updatedRef string, userVal, u
 	return updatedRef
 }
 
-// referenceURIOf returns the envelope's source URI in the carrier's key form
-// (the $ref string), or "" for a shape without one.
+// referenceURIOf returns the envelope's source URI in the carrier's key form,
+// or "" for a shape without one.
+//
+// Two shapes have one: a translated $ref, whose key IS its $ref string, and a
+// translated $gen, whose key is built from the generator it names and the
+// output it draws (generatorSourceKey). Everything else (an untranslated
+// $res, an untranslated $gen) names no source this update resolved against
+// and is never stamped.
 func referenceURIOf(envelope gjson.Result) string {
-	return envelope.Get("$ref").String()
+	if ref := envelope.Get("$ref"); ref.Exists() {
+		return ref.String()
+	}
+	if envelope.Get("$gen").Bool() {
+		return generatorSourceKey(pkgmodel.GenGeneratorKSUID(envelope), envelope.Get("$output").String())
+	}
+	return ""
+}
+
+// generatorSourceKey renders the ResolvedRootDigests key for one generator
+// output: "generator://<generator ksuid>#/<output>".
+//
+// A generator KSUID and a resource KSUID come from the same minter but name
+// rows in different tables, so keying a generator on the "formae://" scheme
+// resource references use could let a $gen and a $ref collide on one entry.
+// The distinct scheme rules that out by construction, exactly as
+// GeneratorUpdate.NodeURI does for the ExecutionDAG keyspace. Neither
+// segment needs escaping: a KSUID is base62, and $output is checked against
+// pkgmodel.KnownGeneratorOutputs at translation.
+//
+// Either half missing means the envelope names no generator output, and ""
+// is never a key: the caller stamps nothing.
+func generatorSourceKey(generatorKsuid, output string) string {
+	if generatorKsuid == "" || output == "" {
+		return ""
+	}
+	return "generator://" + generatorKsuid + "#/" + output
 }
 
 // mergeResObject handles merging of $res and $gen objects (structured resolvable

@@ -513,7 +513,7 @@ func generatorUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, m
 				if gu.Generator != nil {
 					generatorKsuid = gu.Generator.GetID()
 				}
-				if err := data.changeset.DAG.propagateDrawnGeneratorValue(generatorKsuid, message.DrawnValue, data.changeset.Mode); err != nil {
+				if err := data.changeset.DAG.propagateDrawnGeneratorValue(generatorKsuid, message.DrawnValue, message.GenerationID, data.changeset.Mode); err != nil {
 					proc.Log().Error("Failed to deliver a drawn generator value, failing its destinations node=%s: %v",
 						message.NodeURI, err)
 					return handleUpdateFinished(from, state, data, updateFinishedEvent{

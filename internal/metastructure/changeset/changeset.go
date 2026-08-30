@@ -889,10 +889,16 @@ func (p *ExecutionDAG) propagateResolvedTargetConfig(targetLabel string, pluginC
 // file and this is the path that writes credentials, so it is restated here
 // where it applies.
 //
+// generationID is the generation the value was drawn under. It is what every
+// destination receiving the value is stamped with, so an unnamed generation
+// is refused for the same reason an unnamed generator is: the value would be
+// delivered with no provenance, every later apply would read the destination
+// as unknown movement, and the credential would silently rotate on each one.
+//
 // An error means some destination did not receive its value. The caller must
 // fail the draw closed rather than let a destination dispatch its undrawn
 // envelope.
-func (p *ExecutionDAG) propagateDrawnGeneratorValue(generatorKsuid string, value string, mode pkgmodel.FormaApplyMode) error {
+func (p *ExecutionDAG) propagateDrawnGeneratorValue(generatorKsuid string, value string, generationID string, mode pkgmodel.FormaApplyMode) error {
 	if generatorKsuid == "" {
 		return fmt.Errorf("cannot deliver a drawn value: the draw names no generator")
 	}
@@ -901,6 +907,9 @@ func (p *ExecutionDAG) propagateDrawnGeneratorValue(generatorKsuid string, value
 		// string into a destination would hand a provider a blank credential
 		// that nothing downstream would flag.
 		return fmt.Errorf("generator %s reported a successful draw with no value", generatorKsuid)
+	}
+	if generationID == "" {
+		return fmt.Errorf("generator %s reported a successful draw naming no generation", generatorKsuid)
 	}
 
 	for _, node := range p.Nodes {
@@ -911,7 +920,7 @@ func (p *ExecutionDAG) propagateDrawnGeneratorValue(generatorKsuid string, value
 		if ru.Operation == resource_update.OperationDelete || ru.Operation == resource_update.OperationReaped {
 			continue
 		}
-		if err := ru.ResolveGeneratorValue(generatorKsuid, value, mode); err != nil {
+		if err := ru.ResolveGeneratorValue(generatorKsuid, value, generationID, mode); err != nil {
 			// The error names paths and identities only, never the value.
 			return fmt.Errorf("failed to deliver the value drawn for generator %s to %s: %w",
 				generatorKsuid, ru.URI(), err)

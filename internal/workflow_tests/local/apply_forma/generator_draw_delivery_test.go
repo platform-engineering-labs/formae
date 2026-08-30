@@ -19,6 +19,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/provenance"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/testutil"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
@@ -144,4 +145,88 @@ func assertDrawnValueIsNotStored(t *testing.T, m *metastructure.Metastructure, c
 	require.NoError(t, err)
 	assert.False(t, strings.Contains(string(encodedGenerator), drawnValue),
 		"the generator row must never hold the value drawn from it")
+}
+
+// An identical re-apply of a generator-bound secret must not redraw. The
+// destination carries the generation the value it holds was drawn from, so
+// the occurrence classifies stable, nothing is planned, and the credential
+// in the cloud object is left alone.
+//
+// Planning nothing is asserted twice over: the simulation reports no change
+// AND no second command reaches the datastore. Only the first would still
+// pass against a build that plans a harmless no-op update, which would still
+// redraw.
+func TestApplyForma_GeneratorBoundSecret_IdenticalReapplyDoesNotRedraw(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		captured := newCapturedCreates("SecretString", "Name")
+
+		cfg := test_helpers.NewTestMetastructureConfig()
+		cfg.Agent.Synchronization.Enabled = false
+		m, def, err := test_helpers.NewTestMetastructureWithConfig(t, captured.overrides(), cfg)
+		defer def()
+		require.NoError(t, err)
+
+		stack := "test-stack-" + util.NewID()
+		buildForma := func() *pkgmodel.Forma {
+			return &pkgmodel.Forma{
+				Stacks:     []pkgmodel.Stack{{Label: stack}},
+				Targets:    []pkgmodel.Target{{Label: "test-target", Namespace: "test-namespace"}},
+				Generators: []json.RawMessage{passwordGeneratorFor(t, "db-password", stack)},
+				Resources:  []pkgmodel.Resource{genBoundSecret(stack, "db", "db-password", "value")},
+			}
+		}
+
+		_, err = m.ApplyForma(buildForma(), &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
+		require.NoError(t, err)
+		waitForApplyComplete(t, m)
+
+		cmds, err := m.Datastore.LoadFormaCommands()
+		require.NoError(t, err)
+		firstCmd := findCommandByType(cmds, pkgmodel.CommandApply)
+		require.NotNil(t, firstCmd)
+		require.Equal(t, forma_command.CommandStateSuccess, firstCmd.State,
+			"precondition: the first apply must draw and write")
+
+		drawn, ok := captured.valueFor("db")
+		require.True(t, ok, "precondition: the provider must have been called with the drawn value")
+
+		firstGeneration, err := m.Datastore.GetGeneratorIdentity("db-password", stack)
+		require.NoError(t, err)
+		require.NotEmpty(t, firstGeneration.GenerationID, "precondition: the draw must be recorded")
+
+		// The stored destination carries resolution provenance: a well-formed
+		// digest, never the value.
+		resources, err := m.Datastore.LoadResourcesByStack(stack)
+		require.NoError(t, err)
+		var secretRow *pkgmodel.Resource
+		for i := range resources {
+			if resources[i].Label == "db" {
+				secretRow = resources[i]
+			}
+		}
+		require.NotNil(t, secretRow)
+		resolvedFrom := gjson.GetBytes(secretRow.Properties, "SecretString.$resolvedFrom").String()
+		assert.True(t, provenance.Valid(resolvedFrom),
+			"the drawn destination must carry a current-domain provenance digest, got %q", resolvedFrom)
+		assert.Equal(t, provenance.DigestOfString(firstGeneration.GenerationID), resolvedFrom,
+			"the destination must be stamped with the generation its value was drawn from")
+
+		resp, err := m.ApplyForma(buildForma(), &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
+		require.NoError(t, err)
+		assert.False(t, resp.Simulation.ChangesRequired,
+			"an identical re-apply of a generator-bound secret must plan nothing")
+
+		cmds, err = m.Datastore.LoadFormaCommands()
+		require.NoError(t, err)
+		assert.Len(t, cmds, 1, "no second command may be created")
+
+		secondGeneration, err := m.Datastore.GetGeneratorIdentity("db-password", stack)
+		require.NoError(t, err)
+		assert.Equal(t, firstGeneration.GenerationID, secondGeneration.GenerationID,
+			"the re-apply must not advance the generation")
+
+		later, ok := captured.valueFor("db")
+		require.True(t, ok)
+		assert.Equal(t, drawn, later, "the credential in the cloud object must be untouched")
+	})
 }
