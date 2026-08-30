@@ -163,7 +163,14 @@ func ClassifyOccurrence(rec *OccurrenceRecord, opaque, destCreateOnly, force boo
 	case !opaque:
 		rec.Class = OccurrenceDeferredUpdate
 	// R2: force is the sanctioned re-assert path and bypasses suppression.
-	case force:
+	// It does NOT apply to a generator binding: formae holds no copy of a
+	// drawn value, so there is nothing to re-assert, and the only thing a
+	// forced apply could write is a NEW credential. Rotation is a movement
+	// of the generation (R3/R4/R5), never a property of how the apply was
+	// submitted. Forcing also buys nothing here — if the secret drifted in
+	// the cloud, formae cannot restore what it had, so it would cost a
+	// rotation and repair nothing.
+	case force && rec.DesiredIdentity.Kind != OccurrenceKindGenerator:
 		rec.Class = OccurrenceDeferredUpdate
 	// R3: a repoint or selector change always plans, digests notwithstanding.
 	case rec.DesiredIdentity != rec.StoredIdentity:
