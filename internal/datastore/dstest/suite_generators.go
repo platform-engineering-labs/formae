@@ -540,14 +540,10 @@ func RunGeneratorIdentityGoneAfterDelete(t *testing.T, newDS func(t *testing.T) 
 	})
 }
 
-// RunGenerationSurvivesRenameBackToOriginalLabel is the regression pin for
-// the bug where renaming a generator back to a label it previously held
-// dropped its generation: the update lookup matched the ORIGINAL create
-// row (still sitting under that label at an older version, generation_id
-// empty) instead of the live row, because the live row's *current* label
-// was something else. Windowing to the latest version per id before
-// matching label is what makes the live row win regardless of which past
-// label the match happens to land on.
+// RunGenerationSurvivesRenameBackToOriginalLabel verifies that renaming a
+// generator back to a label it previously held keeps the generation it
+// currently holds, resolving by the live row's latest version rather than
+// an older row that happens to share the label.
 func RunGenerationSurvivesRenameBackToOriginalLabel(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	t.Run("GenerationSurvivesRenameBackToOriginalLabel", func(t *testing.T) {
 		td := newDS(t)

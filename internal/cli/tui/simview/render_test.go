@@ -190,14 +190,11 @@ func TestRenderRowLabelAndDeleteAreThemeDriven(t *testing.T) {
 	assert.Contains(t, richDelete, wantRichDeleteOp, "delete op token should be regular weight")
 }
 
-// TestRenderRowShowsGeneratorTypeAndStack pins the render-path regression:
-// kindGenerator must be cased in groupLayout, renderGroupColHeader, and
-// renderRow the same way kindPolicy is. buildGeneratorRows always populates
-// typ and stack, but before this fix all three switches fell through to the
-// "targets, stacks" default, which allocates zero width to the Type and
-// Stack columns -- the data was computed and then silently dropped at
-// render time. A user with two same-labelled generators on different
-// stacks could not tell them apart in the plan.
+// TestRenderRowShowsGeneratorTypeAndStack asserts that kindGenerator is cased
+// in groupLayout, renderGroupColHeader, and renderRow the same way kindPolicy
+// is: the Type and Stack columns get non-zero width, their headers render,
+// and a generator row shows its type and stack, so two same-labelled
+// generators on different stacks can be told apart in the plan.
 func TestRenderRowShowsGeneratorTypeAndStack(t *testing.T) {
 	cmd := &apimodel.Command{
 		GeneratorUpdates: []apimodel.GeneratorUpdate{
