@@ -4,7 +4,10 @@
 
 package model
 
-import "strings"
+import (
+	"reflect"
+	"strings"
+)
 
 // Canonical character-class alphabets. These are a contract with the
 // eval-time validation in internal/schema/pkl/schema/formae.pkl: a spec that
@@ -71,7 +74,11 @@ func (p *PasswordGenerator) enabledClasses() map[string]bool {
 // particular value drawn would in fact have passed. Regenerating is the safe
 // direction of that error.
 func GenerationSatisfies(drawn, desired Generator) bool {
-	if drawn == nil || desired == nil {
+	// A typed nil on either side is a generator that could not be resolved,
+	// not a spec. The check must come before the GetType comparison below,
+	// not inside the arm: GetType is a method call on the nil pointer, and an
+	// arm whose GetType reads a field would dereference it.
+	if drawn == nil || desired == nil || isTypedNil(drawn) || isTypedNil(desired) {
 		return false
 	}
 	if drawn.GetType() != desired.GetType() {
@@ -80,10 +87,7 @@ func GenerationSatisfies(drawn, desired Generator) bool {
 	switch d := drawn.(type) {
 	case *PasswordGenerator:
 		w, ok := desired.(*PasswordGenerator)
-		// A typed nil on either side is a generator that could not be
-		// resolved, not a spec. The interface guard above cannot see it, so
-		// check the concrete pointers before dereferencing either.
-		if !ok || d == nil || w == nil {
+		if !ok {
 			return false
 		}
 		// Length is exact, so any change invalidates the drawn value.
@@ -109,4 +113,13 @@ func GenerationSatisfies(drawn, desired Generator) bool {
 		// An unknown arm is never provably satisfied.
 		return false
 	}
+}
+
+// isTypedNil reports whether g is a non-nil interface holding a nil pointer.
+// Reflection rather than a type switch on purpose: this stays correct for
+// every arm, including ones added after it was written, which a switch would
+// silently stop covering.
+func isTypedNil(g Generator) bool {
+	v := reflect.ValueOf(g)
+	return v.Kind() == reflect.Ptr && v.IsNil()
 }

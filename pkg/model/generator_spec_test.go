@@ -77,4 +77,5 @@ func TestGenerationSatisfies_TypedNilIsNotSatisfied(t *testing.T) {
 	var missing *pkgmodel.PasswordGenerator
 	assert.False(t, pkgmodel.GenerationSatisfies(missing, pw(func(*pkgmodel.PasswordGenerator) {})))
 	assert.False(t, pkgmodel.GenerationSatisfies(pw(func(*pkgmodel.PasswordGenerator) {}), missing))
+	assert.False(t, pkgmodel.GenerationSatisfies(missing, missing))
 }
