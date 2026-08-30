@@ -716,17 +716,6 @@ func getMatchFiltersFromCache(data *DiscoveryData, namespace string) []pkgmodel.
 	return pluginInfo.MatchFilters
 }
 
-// findMatchFiltersForType finds all MatchFilters that apply to the given resource type
-func findMatchFiltersForType(filters []pkgmodel.MatchFilter, resourceType string) []pkgmodel.MatchFilter {
-	var result []pkgmodel.MatchFilter
-	for i := range filters {
-		if slices.Contains(filters[i].ResourceTypes, resourceType) {
-			result = append(result, filters[i])
-		}
-	}
-	return result
-}
-
 func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Target, resources []plugin.ListedResource, data DiscoveryData, proc gen.Process) (string, error) {
 	// Get schema from cache instead of calling plugin directly
 	schema, err := getSchemaFromCache(&data, namespace, op.ResourceType)
@@ -771,7 +760,7 @@ func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Ta
 	// Attach MatchFilters from cache to resource updates for declarative filtering
 	matchFilters := getMatchFiltersFromCache(&data, namespace)
 	for i := range resourceUpdates {
-		filters := findMatchFiltersForType(matchFilters, resourceUpdates[i].DesiredState.Type)
+		filters := pkgmodel.FiltersForType(matchFilters, resourceUpdates[i].DesiredState.Type)
 		if len(filters) > 0 {
 			resourceUpdates[i].MatchFilters = filters
 		}

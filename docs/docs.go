@@ -847,13 +847,6 @@ const docTemplate = `{
                 "State": {
                     "type": "string"
                 },
-                "SuppressedDrift": {
-                    "description": "SuppressedDrift records out-of-band movement on provider-default\nfields this command's plan could not see; completing the command\nabsorbs it (see SuppressedDriftNote).",
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/model.SuppressedDriftNote"
-                    }
-                },
                 "TargetUpdates": {
                     "type": "array",
                     "items": {
@@ -990,6 +983,10 @@ const docTemplate = `{
                 },
                 "Opaque": {
                     "description": "NEW: this property is the resource's secret value",
+                    "type": "boolean"
+                },
+                "PreserveEmptyValues": {
+                    "description": "PreserveEmptyValues opts a top-level field's subtree out of empty-value\nnormalization: empty collections inside it are values, preserved on both\ndiff sides, in op values, and in plugin-bound payloads. Orthogonal to\nUpdateMethod; typically paired with Atomic on opaque document fields.",
                     "type": "boolean"
                 },
                 "Required": {
@@ -1205,7 +1202,7 @@ const docTemplate = `{
                     }
                 },
                 "resourceTypes": {
-                    "description": "Resource types this filter applies to",
+                    "description": "Resource types this filter applies to; empty means every type",
                     "type": "array",
                     "items": {
                         "type": "string"
@@ -1642,13 +1639,6 @@ const docTemplate = `{
                 "Command": {
                     "$ref": "#/definitions/github_com_platform-engineering-labs_formae_pkg_api_model.Command"
                 },
-                "SuppressedDrift": {
-                    "description": "SuppressedDrift is present on every reconcile-mode response, including\na no-changes one (where Command is empty), so callers see suppressed\nout-of-band movement regardless of whether anything was planned.",
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/model.SuppressedDriftNote"
-                    }
-                },
                 "Warnings": {
                     "type": "array",
                     "items": {
@@ -1797,41 +1787,6 @@ const docTemplate = `{
                 },
                 "Simulation": {
                     "$ref": "#/definitions/model.Simulation"
-                }
-            }
-        },
-        "model.SuppressedDriftNote": {
-            "type": "object",
-            "properties": {
-                "Disposition": {
-                    "type": "string"
-                },
-                "From": {
-                    "type": "array",
-                    "items": {
-                        "type": "integer"
-                    }
-                },
-                "Label": {
-                    "type": "string"
-                },
-                "Opaque": {
-                    "type": "boolean"
-                },
-                "Path": {
-                    "type": "string"
-                },
-                "Stack": {
-                    "type": "string"
-                },
-                "To": {
-                    "type": "array",
-                    "items": {
-                        "type": "integer"
-                    }
-                },
-                "Type": {
-                    "type": "string"
                 }
             }
         },

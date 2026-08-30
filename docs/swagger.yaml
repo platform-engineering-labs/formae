@@ -33,14 +33,6 @@ definitions:
         type: string
       State:
         type: string
-      SuppressedDrift:
-        description: |-
-          SuppressedDrift records out-of-band movement on provider-default
-          fields this command's plan could not see; completing the command
-          absorbs it (see SuppressedDriftNote).
-        items:
-          $ref: '#/definitions/model.SuppressedDriftNote'
-        type: array
       TargetUpdates:
         items:
           $ref: '#/definitions/model.TargetUpdate'
@@ -142,6 +134,13 @@ definitions:
         type: string
       Opaque:
         description: 'NEW: this property is the resource''s secret value'
+        type: boolean
+      PreserveEmptyValues:
+        description: |-
+          PreserveEmptyValues opts a top-level field's subtree out of empty-value
+          normalization: empty collections inside it are values, preserved on both
+          diff sides, in op values, and in plugin-bound payloads. Orthogonal to
+          UpdateMethod; typically paired with Atomic on opaque document fields.
         type: boolean
       Required:
         type: boolean
@@ -305,7 +304,7 @@ definitions:
           $ref: '#/definitions/model.FilterCondition'
         type: array
       resourceTypes:
-        description: Resource types this filter applies to
+        description: Resource types this filter applies to; empty means every type
         items:
           type: string
         type: array
@@ -608,14 +607,6 @@ definitions:
         type: boolean
       Command:
         $ref: '#/definitions/github_com_platform-engineering-labs_formae_pkg_api_model.Command'
-      SuppressedDrift:
-        description: |-
-          SuppressedDrift is present on every reconcile-mode response, including
-          a no-changes one (where Command is empty), so callers see suppressed
-          out-of-band movement regardless of whether anything was planned.
-        items:
-          $ref: '#/definitions/model.SuppressedDriftNote'
-        type: array
       Warnings:
         items:
           type: string
@@ -722,29 +713,6 @@ definitions:
         $ref: '#/definitions/github_com_platform-engineering-labs_formae_pkg_api_model.Description'
       Simulation:
         $ref: '#/definitions/model.Simulation'
-    type: object
-  model.SuppressedDriftNote:
-    properties:
-      Disposition:
-        type: string
-      From:
-        items:
-          type: integer
-        type: array
-      Label:
-        type: string
-      Opaque:
-        type: boolean
-      Path:
-        type: string
-      Stack:
-        type: string
-      To:
-        items:
-          type: integer
-        type: array
-      Type:
-        type: string
     type: object
   model.Target:
     properties:

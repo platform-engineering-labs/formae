@@ -228,9 +228,6 @@ func runApplyInteractive(a *app.App, opts *ApplyOptions) error {
 		fmt.Printf("%s\n\n%s\n\n",
 			lipgloss.NewStyle().Foreground(th.Palette.Done).Render("No changes needed:"),
 			lipgloss.NewStyle().Foreground(th.Palette.TextSubtle).Render("The specified forma resources are up to date."))
-		if block := simview.RenderSuppressedDrift(th, res.Simulation.SuppressedDrift, legacyWidth(os.Stdout)); block != "" {
-			fmt.Print(block + "\n")
-		}
 		return nil
 	}
 
@@ -300,9 +297,6 @@ func runApplyLegacy(a *app.App, opts *ApplyOptions) error {
 		fmt.Printf("%s\n\n%s\n\n",
 			lipgloss.NewStyle().Foreground(a.Theme().Palette.Done).Render("No changes needed:"),
 			lipgloss.NewStyle().Foreground(a.Theme().Palette.TextSubtle).Render("The specified forma resources are up to date."))
-		if block := simview.RenderSuppressedDrift(a.Theme(), res.Simulation.SuppressedDrift, legacyWidth(os.Stdout)); block != "" {
-			fmt.Print(block + "\n")
-		}
 		return nil
 	}
 

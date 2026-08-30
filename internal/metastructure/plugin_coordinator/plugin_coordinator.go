@@ -7,6 +7,7 @@ package plugin_coordinator
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -125,7 +126,10 @@ func (c *PluginCoordinator) mergePluginConfig(name, namespace string, announced 
 			merged.LabelConfig = *userCfg.LabelConfig
 		}
 		if userCfg.DiscoveryFilters != nil {
-			merged.MatchFilters = userCfg.DiscoveryFilters
+			// Additive. The plugin's own filters encode rules its author put
+			// there for a reason, so user config adds to them rather than
+			// replacing them.
+			merged.MatchFilters = slices.Concat(announced.MatchFilters, userCfg.DiscoveryFilters)
 		}
 		if len(userCfg.ResourceTypesToDiscover) > 0 {
 			merged.ResourceTypesToDiscover = userCfg.ResourceTypesToDiscover
@@ -522,7 +526,7 @@ func (c *PluginCoordinator) getPluginInfo(req messages.GetPluginInfo) messages.P
 			resp.LabelConfig = *userCfg.LabelConfig
 		}
 		if userCfg.DiscoveryFilters != nil {
-			resp.MatchFilters = userCfg.DiscoveryFilters
+			resp.MatchFilters = slices.Concat(resp.MatchFilters, userCfg.DiscoveryFilters)
 		}
 		if len(userCfg.ResourceTypesToDiscover) > 0 {
 			resp.ResourceTypesToDiscover = userCfg.ResourceTypesToDiscover

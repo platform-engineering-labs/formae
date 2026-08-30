@@ -770,6 +770,15 @@ func (m *propertyMerger) mergeObject(path string, userVal, pluginVal gjson.Resul
 		return
 	}
 
+	// An empty user object writes no leaves, so the recursion below would
+	// drop it from the merged document entirely. Under a preserveEmptyValues
+	// root the empty object IS the value and must persist.
+	if len(userVal.Map()) == 0 && m.underPreservedRoot(path) {
+		cleanPath := m.cleanPath(path)
+		*m.result, _ = sjson.SetRaw(*m.result, cleanPath, "{}")
+		return
+	}
+
 	// Not a $ref or $embed object - recursively merge each field
 	userVal.ForEach(func(key, val gjson.Result) bool {
 		childPath := m.buildChildPath(path, key.String())
@@ -777,6 +786,16 @@ func (m *propertyMerger) mergeObject(path string, userVal, pluginVal gjson.Resul
 		m.mergeValue(childPath, val, pluginChildVal)
 		return true
 	})
+}
+
+// underPreservedRoot reports whether a merge path's top-level field carries
+// the preserveEmptyValues hint.
+func (m *propertyMerger) underPreservedRoot(path string) bool {
+	if path == "" {
+		return false
+	}
+	root, _, _ := strings.Cut(path, ".")
+	return patch.PreserveEmptyRootFields(m.schema)[root]
 }
 
 // mergeRefObject handles merging of $ref objects (resolvable references)
@@ -1001,6 +1020,14 @@ func (m *propertyMerger) preferNonNullValue(userValue, pluginValue gjson.Result)
 func (m *propertyMerger) mergeArray(path string, userVal, pluginVal gjson.Result) {
 	userArray := userVal.Array()
 	pluginArray := pluginVal.Array()
+
+	// An empty user array writes no elements; under a preserveEmptyValues
+	// root it is the value and must persist (mirror of the empty-object case).
+	if len(userArray) == 0 && m.underPreservedRoot(path) {
+		cleanPath := m.cleanPath(path)
+		*m.result, _ = sjson.SetRaw(*m.result, cleanPath, "[]")
+		return
+	}
 
 	// Resolve this array's own hint by its index-less full path (e.g.
 	// "ContainerDefinitions.0.Environment" -> "ContainerDefinitions.Environment"),

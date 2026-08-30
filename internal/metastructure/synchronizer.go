@@ -6,7 +6,6 @@ package metastructure
 
 import (
 	"fmt"
-	"slices"
 	"time"
 
 	"ergo.services/actor/statemachine"
@@ -292,7 +291,7 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 	for i := range allResourceUpdates {
 		namespace := allResourceUpdates[i].DesiredState.Namespace()
 		if cache, ok := pluginInfoByNamespace[namespace]; ok && cache.available {
-			filters := findMatchFiltersForType(cache.matchFilters, allResourceUpdates[i].DesiredState.Type)
+			filters := pkgmodel.FiltersForType(cache.matchFilters, allResourceUpdates[i].DesiredState.Type)
 			if len(filters) > 0 {
 				allResourceUpdates[i].MatchFilters = filters
 			}
@@ -394,18 +393,6 @@ func unregisterInProgressResource(from gen.PID, state gen.Atom, data Synchronize
 	delete(data.excludedResources, message.ResourceURI)
 	proc.Log().Debug("Resource unregistered from in-progress, can be synced resourceURI=%s", message.ResourceURI)
 	return state, data, nil, nil
-}
-
-// findMatchFiltersForType returns the subset of filters whose ResourceTypes list
-// includes the given resourceType. Mirrors the same helper in the discovery package.
-func findMatchFiltersForType(filters []pkgmodel.MatchFilter, resourceType string) []pkgmodel.MatchFilter {
-	var result []pkgmodel.MatchFilter
-	for i := range filters {
-		if slices.Contains(filters[i].ResourceTypes, resourceType) {
-			result = append(result, filters[i])
-		}
-	}
-	return result
 }
 
 // finalizeFailedCommand marks all resource updates in the command as failed and then

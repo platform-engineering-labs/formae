@@ -56,3 +56,32 @@ func TestNetworkConfig_PluginConfigJSON_NilTailscaleMarshalsNull(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "null", string(got))
 }
+
+func TestMatchFilterAppliesToEveryTypeWhenNoTypesAreListed(t *testing.T) {
+	filter := MatchFilter{
+		Conditions: []FilterCondition{{PropertyPath: "$.tags.app", PropertyValue: "formae-agent"}},
+	}
+
+	assert.True(t, filter.AppliesTo("AZURE::Compute::VirtualMachine"))
+	assert.True(t, filter.AppliesTo("AWS::EC2::Instance"))
+}
+
+func TestMatchFilterAppliesOnlyToListedTypes(t *testing.T) {
+	filter := MatchFilter{
+		ResourceTypes: []string{"AWS::EC2::Instance"},
+		Conditions:    []FilterCondition{{PropertyPath: "$.SkipMe", PropertyValue: "yes"}},
+	}
+
+	assert.True(t, filter.AppliesTo("AWS::EC2::Instance"))
+	assert.False(t, filter.AppliesTo("AWS::S3::Bucket"))
+}
+
+func TestFiltersForTypeKeepsUntypedAndMatchingFilters(t *testing.T) {
+	untyped := MatchFilter{Conditions: []FilterCondition{{PropertyPath: "$.tags.app"}}}
+	matching := MatchFilter{ResourceTypes: []string{"AWS::EC2::Instance"}}
+	other := MatchFilter{ResourceTypes: []string{"AWS::S3::Bucket"}}
+
+	got := FiltersForType([]MatchFilter{untyped, matching, other}, "AWS::EC2::Instance")
+
+	assert.Equal(t, []MatchFilter{untyped, matching}, got)
+}

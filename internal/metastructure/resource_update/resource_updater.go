@@ -84,8 +84,10 @@ func convertResourceForPluginWith(res pkgmodel.Resource, convert func(json.RawMe
 	}
 
 	// Strip nested empty collections from PKL null rendering artifacts.
-	// Top-level empty collections are preserved (may be intentional clears).
-	cleanedProps, err := patch.StripNestedEmptyCollections(convertedProps)
+	// Top-level empty collections are preserved (may be intentional clears),
+	// and preserveEmptyValues-hinted fields keep their subtrees verbatim in
+	// every plugin-bound context: their empties are values, not artifacts.
+	cleanedProps, err := patch.StripNestedEmptyCollectionsExcept(convertedProps, patch.PreserveEmptyRootFields(res.Schema))
 	if err != nil {
 		return res, err
 	}
@@ -1291,6 +1293,13 @@ func resourceFailedToResolve(from gen.PID, state gen.Atom, data ResourceUpdateDa
 // Returns true if all conditions match (AND logic), indicating the resource should be excluded.
 func ShouldFilterByMatchFilter(filter *pkgmodel.MatchFilter, properties json.RawMessage) bool {
 	if filter == nil {
+		return false
+	}
+
+	// A filter naming no conditions excludes nothing. Reading it as a vacuous
+	// AND would make it exclude everything it is scoped to, so the emptiest
+	// filter anyone can write would be the most destructive one.
+	if len(filter.Conditions) == 0 {
 		return false
 	}
 

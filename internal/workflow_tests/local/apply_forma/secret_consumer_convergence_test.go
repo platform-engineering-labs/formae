@@ -8,6 +8,7 @@ package workflow_tests_local
 
 import (
 	"encoding/json"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -371,5 +372,89 @@ func TestApplyForma_SecretConsumer_RepointPlansAndDelivers(t *testing.T) {
 		props, _ := consumerUpdateProps.Load().(json.RawMessage)
 		require.Equal(t, secretB, gjson.GetBytes(props, "DbPassword").String(),
 			"the consumer must receive the new source's value")
+	})
+}
+
+// An existing resource gains a NEW reference field to a hashed secret in the
+// same apply as an ordinary field change: the update plans, dispatch waits
+// for resolution, and the plugin receives BOTH the resolved secret and the
+// ordinary change, with no placeholder left anywhere.
+func TestApplyForma_NewSecretReferenceOnExistingResource_PlansAndDelivers(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		const secretV1 = "first-declared-secret"
+
+		var consumerUpdateCalls atomic.Int32
+		var consumerUpdateProps atomic.Value
+		overrides := secretConsumerOverrides(&consumerUpdateCalls, &consumerUpdateProps)
+
+		cfg := test_helpers.NewTestMetastructureConfig()
+		cfg.Agent.Synchronization.Enabled = false
+		m, def, err := test_helpers.NewTestMetastructureWithConfig(t, overrides, cfg)
+		defer def()
+		require.NoError(t, err)
+
+		stack := "test-stack-" + util.NewID()
+		targets := []pkgmodel.Target{{Label: "test-target", Namespace: "test-namespace"}}
+
+		bareConsumer := pkgmodel.Resource{
+			Label: "my-bucket", Type: "FakeAWS::S3::Bucket", Stack: stack, Target: "test-target",
+			Schema:     secretConsumerSchema(),
+			Properties: json.RawMessage(`{"BucketName":"my-bucket","AccessControl":"Private"}`),
+		}
+		_, err = m.ApplyForma(&pkgmodel.Forma{
+			Stacks:    []pkgmodel.Stack{{Label: stack}},
+			Resources: []pkgmodel.Resource{secretResource(stack, "my-secret", secretV1), bareConsumer},
+			Targets:   targets,
+		}, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
+		require.NoError(t, err)
+		waitForApplyComplete(t, m)
+
+		// The mixed change: the consumer gains DbPassword (a reference that
+		// cannot resolve at plan time) AND changes AccessControl.
+		withRef := secretConsumer(stack, "my-secret")
+		withRefProps := string(withRef.Properties)
+		withRef.Properties = json.RawMessage(strings.Replace(withRefProps, `"AccessControl": "Private"`, `"AccessControl": "PublicRead"`, 1))
+		resp, err := m.ApplyForma(&pkgmodel.Forma{
+			Stacks:    []pkgmodel.Stack{{Label: stack}},
+			Resources: []pkgmodel.Resource{secretResource(stack, "my-secret", secretV1), withRef},
+			Targets:   targets,
+		}, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
+		require.NoError(t, err)
+		require.True(t, resp.Simulation.ChangesRequired, "the new reference must plan")
+		waitForApplyComplete(t, m)
+
+		require.Greater(t, consumerUpdateCalls.Load(), int32(0), "the consumer plugin must be invoked")
+		props, _ := consumerUpdateProps.Load().(json.RawMessage)
+		assert.Equal(t, secretV1, gjson.GetBytes(props, "DbPassword").String(),
+			"the plugin receives the resolved secret, never a placeholder")
+		assert.Equal(t, "PublicRead", gjson.GetBytes(props, "AccessControl").String(),
+			"the ordinary change rides the same update")
+
+		// Steady state: the written occurrence is stamped; re-apply plans nothing.
+		resp, err = m.ApplyForma(&pkgmodel.Forma{
+			Stacks:    []pkgmodel.Stack{{Label: stack}},
+			Resources: []pkgmodel.Resource{secretResource(stack, "my-secret", secretV1), withRef},
+			Targets:   targets,
+		}, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
+		require.NoError(t, err)
+		assert.False(t, resp.Simulation.ChangesRequired, "re-apply after the first declaration plans nothing")
+
+		// The persisted executed patch keeps the placeholder, never the
+		// plaintext: the live value exists only in memory and the in-flight
+		// plugin request (the delivery assertions above), and at rest the
+		// occurrence op stays a resolution placeholder.
+		cmds, err := m.Datastore.LoadFormaCommands()
+		require.NoError(t, err)
+		for _, c := range cmds {
+			updates, err := m.Datastore.LoadResourceUpdates(c.ID)
+			require.NoError(t, err)
+			for _, ru := range updates {
+				if ru.DesiredState.Label != "my-bucket" {
+					continue
+				}
+				assert.NotContains(t, string(ru.DesiredState.PatchDocument), secretV1,
+					"the persisted executed patch must never carry the plaintext")
+			}
+		}
 	})
 }

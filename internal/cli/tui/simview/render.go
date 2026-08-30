@@ -50,31 +50,6 @@ func (m Model) renderBody() (string, int) {
 	// lookup per row.
 	navIdx := 0
 
-	// Suppressed-drift banner: out-of-band changes on provider-defaulted
-	// fields the forma does not declare. The plan cannot address them; the
-	// user sees them before deciding.
-	if len(m.cmd.SuppressedDrift) > 0 {
-		innerW := m.width - 8
-		if innerW < 20 {
-			innerW = 20
-		}
-		var panelLines []string
-		for _, line := range suppressedDriftLines(m.cmd.SuppressedDrift) {
-			panelLines = append(panelLines, strings.Split(wrapText(line, innerW), "\n")...)
-		}
-		panelW := m.width - 4
-		if panelW < 24 {
-			panelW = 24
-		}
-		panel := components.Panel(m.th, m.th.Palette.Warning, "Out-of-band changes not addressed by this apply", panelLines, panelW)
-		body.WriteString("\n")
-		lineCount++
-		for _, pl := range strings.Split(panel, "\n") {
-			body.WriteString("  " + pl + "\n")
-			lineCount++
-		}
-	}
-
 	// Destroy cascade warning banner: shown at the top of the viewport when
 	// KindDestroy and any resource row has cascade=true.
 	if m.opts.Kind == KindDestroy {
