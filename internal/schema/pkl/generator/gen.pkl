@@ -641,6 +641,9 @@ class FakeResolvable extends formae.Resolvable {
   FakeType: String?
   RealValue: Any?
   FakeProperty: String?
+  /// The sub-key selector, set when the reference addresses one member of the
+  /// referenced document rather than the whole of it.
+  FakeJSON: String?
 }
 
 /// Carrier for a pre-processed $embed field.
@@ -679,6 +682,21 @@ function applyPropertyWithMapping(valueAsMap: Map, prop: reflect.Property, rever
 /// Simple paths like "arn" render as "arn".
 /// Collection paths like "endpoints.lgtm\:3000" render as "endpoints.at("lgtm:3000")".
 /// Nested paths like "endpoints.0.uri" render as "endpoints.at(0).at("uri")".
+/// The accessor path for a reference that carries a sub-key selector. Only a
+/// secret-value resolvable can produce a selector, and both secret backends
+/// reach one through an accessor named `secretValue` declared in formae's own
+/// schema: a scalar backend's `secretValue` IS the value, and a map backend's
+/// is an accessor whose remaining path segments render as `at(...)` calls just
+/// as they do for any other collection path. So the base segment becomes
+/// `secretValue` and the rest is left for renderResolvableProperty.
+local function secretValuePath(property: String?): String? =
+    if (property == null)
+        null
+    else
+        let (segments = splitGjsonPath(property))
+        let (rest = segments.drop(1))
+        "secretValue" + rest.fold("", (acc, seg) -> acc + "." + seg)
+
 function renderResolvableProperty(property: String): String =
     if (!property.contains("."))
         // Simple scalar property — render as-is
@@ -803,6 +821,7 @@ local function applyDynamicOrMapping(type: reflect.Class, value: Dynamic|Mapping
         let (refType = valueAsMap.getOrNull("$type"))
         let (typeName = valueAsMap.getOrNull("$type"))
         let (property = valueAsMap.getOrNull("$property"))
+        let (selector = valueAsMap.getOrNull("$json") as String?)
         // Both carriers are handled as text — the type keys the resolvable
         // lookup, the property is split on dots and matched. Reject any other
         // shape here: further down they reach a lookup that takes a String and
@@ -835,7 +854,8 @@ local function applyDynamicOrMapping(type: reflect.Class, value: Dynamic|Mapping
                 RealValue = valueAsMap.getOrNull("$value")
                 type = refType
                 FakeType = typeName
-                FakeProperty = mappedProperty
+                FakeProperty = if (selector != null) secretValuePath(property) else mappedProperty
+                FakeJSON = selector
             })
 
             r
@@ -1230,7 +1250,9 @@ local function formatValueWithTypes(value: Any, indent: String): String =
               comment + "\n" +
               (if (stack != null) indent + "  stack = \"\(stack)\" //resolvable\n" else "") +
               (if (label != null) indent + "  label = \"\(label)\"\n" else "") +
-              indent + "}." + renderResolvableProperty(property)
+              indent + "}." + renderResolvableProperty(property) +
+              (let (selector = value.getOrNull("FakeJSON"))
+                if (selector is String) ".json(\"\(escapeString(selector))\")" else "")
         else if (typeName == "FakeValue")
           // Special handling for FakeValue - render using fluent API
           let (fakeValue = value.getOrNull("FakeValue"))
