@@ -9,11 +9,17 @@ import (
 	"fmt"
 )
 
-// StripOpaqueRefValues removes $value from every opaque $ref envelope (an object
-// carrying both "$ref" and "$visibility":"Opaque") in raw, returning a copy. The
-// reference pointer is preserved; the resolved/authored secret value is never
-// persisted. It then validates that no opaque $ref envelope still carries $value
-// and errors if one does (a shape it could not normalize). Input is not mutated.
+// StripOpaqueRefValues removes $value from every opaque reference envelope (an
+// object carrying "$visibility":"Opaque" together with either "$ref" or
+// "$gen") in raw, returning a copy. The reference pointer is preserved; the
+// resolved/authored secret value is never persisted. It then validates that no
+// opaque envelope still carries $value and errors if one does (a shape it
+// could not normalize). Input is not mutated.
+//
+// $gen is included alongside $ref because it is always opaque by construction
+// (the schema fixes $visibility to "Opaque" on every $gen), so a generator's
+// resolved value is exactly as sensitive as an opaque $ref's and must never
+// reach storage in cleartext.
 func StripOpaqueRefValues(raw json.RawMessage) (json.RawMessage, error) {
 	if len(raw) == 0 {
 		return raw, nil
@@ -33,7 +39,8 @@ func stripOpaqueRefValues(v any) any {
 	switch t := v.(type) {
 	case map[string]any:
 		_, hasRef := t["$ref"]
-		opaqueRef := hasRef && t["$visibility"] == "Opaque"
+		_, hasGen := t["$gen"]
+		opaqueRef := (hasRef || hasGen) && t["$visibility"] == "Opaque"
 		out := make(map[string]any, len(t))
 		for k, val := range t {
 			if opaqueRef && k == "$value" {
@@ -56,9 +63,11 @@ func stripOpaqueRefValues(v any) any {
 func assertNoOpaqueRefValue(v any, path string) error {
 	switch t := v.(type) {
 	case map[string]any:
-		if _, hasRef := t["$ref"]; hasRef && t["$visibility"] == "Opaque" {
+		_, hasRef := t["$ref"]
+		_, hasGen := t["$gen"]
+		if (hasRef || hasGen) && t["$visibility"] == "Opaque" {
 			if _, has := t["$value"]; has {
-				return fmt.Errorf("opaque $ref at %q still carries $value after normalization", path)
+				return fmt.Errorf("opaque reference at %q still carries $value after normalization", path)
 			}
 		}
 		for k, val := range t {

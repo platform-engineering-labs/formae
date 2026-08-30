@@ -96,15 +96,20 @@ func isLowerHexDigest(s string) bool {
 // UnwrapEffectiveValue is the single type-preserving unwrap through which
 // every provenance digest or raw-value computation routes. A value envelope
 // ({"$value": ..} carrying $visibility/$strategy/$hashed metadata) yields its
-// $value; reference envelopes ($ref/$res) and every other node yield
+// $value; reference envelopes ($ref/$res/$gen) and every other node yield
 // themselves. Persistence hashes only an envelope's $value and execution
 // unwraps before resolving, so digesting a raw envelope would digest
 // metadata and never compare equal to either.
+//
+// $gen is a reference envelope in this same sense: it points at a generator
+// rather than at a resolved value, so it must yield itself like $ref/$res —
+// unwrapping it to a bare $value would digest the resolved secret alone and
+// lose which generator it came from.
 func UnwrapEffectiveValue(node gjson.Result) gjson.Result {
 	if !node.IsObject() {
 		return node
 	}
-	if node.Get("$ref").Exists() || node.Get("$res").Exists() {
+	if node.Get("$ref").Exists() || node.Get("$res").Exists() || node.Get("$gen").Exists() {
 		return node
 	}
 	value := node.Get("$value")

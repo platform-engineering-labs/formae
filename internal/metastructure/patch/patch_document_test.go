@@ -4172,3 +4172,92 @@ func TestGeneratePatch_ArrayMemberRemoved_StaysMutable(t *testing.T) {
 	assert.Empty(t, createOnlyPatch, "removing a member must not trigger a resource replacement")
 	assert.NotEmpty(t, patchDoc)
 }
+
+// substituteStableOccurrences must recognize a $gen occurrence exactly like a
+// $ref/$res occurrence: when the destination path is marked provably stable,
+// the document-side value is substituted onto the desired side so no diff op
+// is later minted for it.
+func TestSubstituteStableOccurrences_GenEnvelope_SubstitutesDocumentValue(t *testing.T) {
+	document := map[string]any{"Password": "current-value-on-cloud"}
+	desired := map[string]any{"Password": map[string]any{
+		"$gen": true, "$generator": "2ABcDeFgHiJkLmNoPqRsTuVwXyZ",
+		"$output": "value", "$visibility": "Opaque",
+	}}
+	props := resolver.NewResolvableProperties()
+	props.SuppressStableAt("Password")
+
+	substituteStableOccurrences(document, desired, props)
+
+	assert.Equal(t, "current-value-on-cloud", desired["Password"],
+		"a stable-suppressed $gen occurrence must be substituted with the document value")
+}
+
+// Without a stable-suppression mark, a $gen occurrence is left as-is: the
+// substitution only fires for a destination path the classification
+// explicitly marked.
+func TestSubstituteStableOccurrences_GenEnvelope_UnmarkedPathUntouched(t *testing.T) {
+	document := map[string]any{"Password": "current-value-on-cloud"}
+	genEnvelope := map[string]any{
+		"$gen": true, "$generator": "2ABcDeFgHiJkLmNoPqRsTuVwXyZ",
+		"$output": "value", "$visibility": "Opaque",
+	}
+	desired := map[string]any{"Password": genEnvelope}
+	props := resolver.NewResolvableProperties()
+
+	substituteStableOccurrences(document, desired, props)
+
+	assert.Equal(t, genEnvelope, desired["Password"], "an unmarked path must not be substituted")
+}
+
+// storedAppliedEnvelope's marker check must recognize $gen as an envelope
+// shape, not only $ref/$res, so a stored $gen row is not treated as "not an
+// envelope at all" by the guard that gates provenance comparison.
+func TestStoredAppliedEnvelope_RecognizesGenMarker(t *testing.T) {
+	storedNode := map[string]any{
+		"$gen":       true,
+		"$generator": "2ABcDeFgHiJkLmNoPqRsTuVwXyZ",
+		"$output":    "value",
+		// Deliberately non-opaque so this probes the marker-recognition branch
+		// in isolation from the (always-true-for-real-$gen) opacity exclusion.
+		"$applied": "written-value",
+		"$value":   "written-value",
+	}
+
+	got := storedAppliedEnvelope(storedNode)
+
+	require.NotNil(t, got, "a $gen-marked stored node must be recognized as an envelope")
+	assert.Equal(t, "written-value", got["$applied"])
+}
+
+// storedAppliedEnvelope must still return nil for a plain map that carries
+// none of $ref, $res, or $gen — the widened check must not start recognizing
+// arbitrary maps as envelopes.
+func TestStoredAppliedEnvelope_NoMarkerReturnsNil(t *testing.T) {
+	storedNode := map[string]any{
+		"$applied": "written-value",
+		"$value":   "written-value",
+	}
+
+	assert.Nil(t, storedAppliedEnvelope(storedNode))
+}
+
+// The stable-suppression classification computed upstream must actually reach
+// the generated patch for a $gen occurrence: a destination marked provably
+// stable must not mint an operation, exactly as it would not for $ref/$res.
+func TestGeneratePatch_StableSuppressedGenOccurrence_ProducesNoOp(t *testing.T) {
+	ksuid := util.NewID()
+	document := []byte(`{"Password": "current-value-on-cloud"}`)
+	patch := fmt.Appendf(nil, `{"Password": {"$gen": true, "$generator": %q, "$output": "value", "$visibility": "Opaque"}}`, ksuid)
+	schema := pkgmodel.Schema{Fields: []string{"Password"}}
+	props := resolver.NewResolvableProperties()
+	props.SuppressStableAt("Password")
+
+	patchDoc, _, _, err := generatePatch(document, patch, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+
+	var ops []jsonpatch.JsonPatchOperation
+	if len(patchDoc) > 0 {
+		require.NoError(t, json.Unmarshal(patchDoc, &ops))
+	}
+	assert.Empty(t, ops, "a stable-suppressed $gen occurrence must not mint an operation")
+}

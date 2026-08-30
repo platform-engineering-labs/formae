@@ -189,6 +189,15 @@ func TestSimplifyValue(t *testing.T) {
 	// $ref-only resolvable strips the formae:// scheme for its target.
 	got2 := simplifyValue(map[string]any{"$ref": "formae://abc", "$value": "us-east-1"})
 	assert.Equal(t, refVal{value: "us-east-1", target: "abc"}, got2)
+
+	// A $gen envelope is a masked reference, not a raw JSON blob: the value is
+	// withheld like any opaque wrapper, but the generator it names still
+	// shows.
+	got3 := simplifyValue(map[string]any{
+		"$gen": true, "$generator": "2ABcDeFgHiJkLmNoPqRsTuVwXyZ", "$output": "value",
+		"$visibility": "Opaque", "$value": "hunter2",
+	})
+	assert.Equal(t, refVal{value: opaqueVal{}, target: "2ABcDeFgHiJkLmNoPqRsTuVwXyZ"}, got3)
 }
 
 func TestFormatScalar(t *testing.T) {

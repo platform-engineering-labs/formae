@@ -595,6 +595,64 @@ func TestBulkStoreResourceUpdates_StripsOpaqueRefValueFromExistingTarget(t *test
 	assert.NotContains(t, raw, "super-secret", "stored existing_target must not contain the resolved secret")
 }
 
+// TestBulkStoreResourceUpdates_StripsOpaqueGenValueFromExistingTarget proves
+// what actually reaches storage, not what the strip function's return value
+// claims: a resolved generator value seeded onto a target config must not
+// survive to the persisted row. If any write path bypassed the shared strip
+// predicate, this reads the sentinel straight back out of the database.
+func TestBulkStoreResourceUpdates_StripsOpaqueGenValueFromExistingTarget(t *testing.T) {
+	cfg := &pkgmodel.DatastoreConfig{
+		DatastoreType: pkgmodel.SqliteDatastore,
+		Sqlite:        pkgmodel.SqliteConfig{FilePath: ":memory:"},
+	}
+	ds, err := dssqlite.NewDatastoreSQLite(context.Background(), cfg, "test")
+	require.NoError(t, err)
+	d, _ := ds.(dssqlite.DatastoreSQLite)
+	defer d.CleanUp() //nolint:errcheck
+
+	const sentinel = "gen-cleartext-sentinel-storage-9f3a"
+	opaqueConfig := json.RawMessage(`{"auth":{"$gen":true,"$generator":"2ABcDeFgHiJkLmNoPqRsTuVwXyZ","$output":"value","$visibility":"Opaque","$value":"` + sentinel + `"}}`)
+
+	commandID := util.NewID()
+	ksuid := util.NewID()
+
+	ru := resource_update.ResourceUpdate{
+		DesiredState: pkgmodel.Resource{
+			Ksuid:  ksuid,
+			Stack:  "default",
+			Type:   "AWS::S3::Bucket",
+			Label:  "my-bucket",
+			Target: "tgt",
+		},
+		ResourceTarget: pkgmodel.Target{
+			Label:     "tgt",
+			Namespace: "AWS",
+			Config:    json.RawMessage(`{}`),
+		},
+		ExistingTarget: pkgmodel.Target{
+			Label:     "tgt",
+			Namespace: "AWS",
+			Config:    opaqueConfig,
+		},
+		Operation: resource_update.OperationCreate,
+		State:     resource_update.ResourceUpdateStateNotStarted,
+	}
+
+	require.NoError(t, ds.BulkStoreResourceUpdates(commandID, []resource_update.ResourceUpdate{ru}))
+
+	// Read the raw stored bytes directly from the DB — bypassing any unmarshalling.
+	var raw string
+	err = d.Conn().QueryRow(
+		`SELECT existing_target FROM resource_updates WHERE command_id = ?`, commandID,
+	).Scan(&raw)
+	require.NoError(t, err)
+
+	assert.Contains(t, raw, `$gen`, "stored existing_target must preserve $gen")
+	assert.Contains(t, raw, `$generator`, "stored existing_target must preserve $generator")
+	assert.NotContains(t, raw, `$value`, "stored existing_target must not contain $value")
+	assert.NotContains(t, raw, sentinel, "the generated secret must never reach at-rest storage")
+}
+
 // setStackValidFrom rewrites the valid_from of a stack's versions in ascending
 // version order. SQLite's CURRENT_TIMESTAMP default writes "YYYY-MM-DD HH:MM:SS"
 // in UTC, so the backdated values are written in that same shape — the expiry

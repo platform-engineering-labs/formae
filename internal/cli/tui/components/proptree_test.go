@@ -57,6 +57,20 @@ func TestPropertyLines_SimplifiesSpecialValues(t *testing.T) {
 		PropertyLines([]byte(`{"Secret":{"$visibility":"Opaque","$value":"hunter2"}}`), 1))
 }
 
+// A $gen envelope renders as a masked reference, not a raw JSON blob: the
+// value is withheld like any opaque envelope, but which generator produced it
+// still shows, matching how a resolvable reference to another resource names
+// its target.
+func TestPropertyLines_GenEnvelopeRendersAsMaskedReference(t *testing.T) {
+	// Translated shape: no $label, only $generator.
+	assert.Equal(t, []string{" Password: " + propOpaqueMask + "  → 2ABcDeFgHiJkLmNoPqRsTuVwXyZ"},
+		PropertyLines([]byte(`{"Password":{"$gen":true,"$generator":"2ABcDeFgHiJkLmNoPqRsTuVwXyZ","$output":"value","$visibility":"Opaque","$value":"hunter2"}}`), 1))
+
+	// Authored shape: $label and $output name the generator and its output.
+	assert.Equal(t, []string{" Password: " + propOpaqueMask + "  → the-generator.value"},
+		PropertyLines([]byte(`{"Password":{"$gen":true,"$label":"the-generator","$stack":"s","$output":"value","$visibility":"Opaque"}}`), 1))
+}
+
 func TestPropertyLines_EmptyIsNil(t *testing.T) {
 	assert.Nil(t, PropertyLines(nil, 1))
 	assert.Nil(t, PropertyLines([]byte(``), 1))

@@ -251,6 +251,59 @@ func TestAssertNoOpaqueRefValue_AcceptsStrippedOpaqueRef(t *testing.T) {
 	require.NoError(t, err, "guard must accept a properly-stripped opaque $ref")
 }
 
+// A generated value resolved onto a destination must never reach at-rest
+// storage. A $gen envelope is opaque by construction exactly like an opaque
+// $ref, so its resolved $value must be stripped identically: preserved
+// reference metadata ($gen, $generator, $output), $value gone from the
+// serialized bytes entirely.
+func TestStripOpaqueRefValues_GenEnvelopeValueIsStripped(t *testing.T) {
+	input := json.RawMessage(`{
+		"password": {
+			"$gen": true,
+			"$generator": "2ABcDeFgHiJkLmNoPqRsTuVwXyZ",
+			"$output": "value",
+			"$visibility": "Opaque",
+			"$value": "gen-cleartext-sentinel-9f3a"
+		}
+	}`)
+
+	out, err := StripOpaqueRefValues(input)
+	require.NoError(t, err)
+
+	var result map[string]any
+	require.NoError(t, json.Unmarshal(out, &result))
+
+	pw, ok := result["password"].(map[string]any)
+	require.True(t, ok, "password should be a map")
+
+	assert.Equal(t, true, pw["$gen"], "$gen must be preserved")
+	assert.Equal(t, "2ABcDeFgHiJkLmNoPqRsTuVwXyZ", pw["$generator"], "$generator must be preserved")
+	assert.Equal(t, "Opaque", pw["$visibility"], "$visibility must be preserved")
+	_, hasValue := pw["$value"]
+	assert.False(t, hasValue, "$value must be stripped from an opaque $gen envelope")
+
+	assert.NotContains(t, string(out), "gen-cleartext-sentinel-9f3a",
+		"the generated secret must not appear anywhere in the serialized output")
+}
+
+// The fail-closed assertion must recognise an opaque $gen envelope exactly
+// like an opaque $ref: a $gen that still carries $value after normalization
+// is a shape the strip could not normalize and must be rejected, not
+// silently persisted.
+func TestStripOpaqueRefValues_GenEnvelopeValueTripsTheAssertion(t *testing.T) {
+	envelope := map[string]any{
+		"$gen":        true,
+		"$generator":  "2ABcDeFgHiJkLmNoPqRsTuVwXyZ",
+		"$output":     "value",
+		"$visibility": "Opaque",
+		"$value":      "gen-cleartext-sentinel-9f3a",
+	}
+
+	err := assertNoOpaqueRefValue(envelope, "")
+	require.Error(t, err, "guard must reject an opaque $gen envelope that still carries $value")
+	assert.NotContains(t, err.Error(), "gen-cleartext-sentinel-9f3a", "error must not leak the secret value")
+}
+
 // Stripping the resolved secret value from an opaque reference envelope must
 // keep the provenance digest: the digest is the persisted record the next
 // plan compares against.

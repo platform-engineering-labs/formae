@@ -111,6 +111,12 @@ func TestUnwrapEffectiveValue(t *testing.T) {
 
 	scalar := gjson.Parse(`"just-a-string"`)
 	assert.Equal(t, "just-a-string", UnwrapEffectiveValue(scalar).String())
+
+	// A $gen envelope is a reference to a generator, structurally the same
+	// role as $ref/$res: it yields itself so the digest reflects which
+	// generator the value came from, not the resolved value alone.
+	gen := gjson.Parse(`{"$gen":true,"$generator":"2ABcDeFgHiJkLmNoPqRsTuVwXyZ","$output":"value","$visibility":"Opaque","$value":"cached"}`)
+	assert.Equal(t, gen.Raw, UnwrapEffectiveValue(gen).Raw, "$gen envelopes are not value envelopes")
 }
 
 // The pass-4 cross-site pin: a declared opaque envelope's planning-side

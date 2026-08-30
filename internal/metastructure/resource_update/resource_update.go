@@ -716,6 +716,30 @@ func (m *propertyMerger) mergeObject(path string, userVal, pluginVal gjson.Resul
 		return
 	}
 
+	// Check if this is a $gen object — a generator reference, in its authored
+	// or translated shape ({"$gen":true,"$generator":..,"$output":..,
+	// "$visibility":"Opaque"[,"$value":..]}). Like $res it is a structured
+	// resolvable reference, so it is handled the same way: preserve the
+	// envelope, refresh $value from the plugin echo, and drop a stale
+	// $hashed marker so the persist transformer re-hashes the field. $gen is
+	// always opaque, so the $applied provenance baseline mergeResObject would
+	// otherwise stamp is always skipped for it, exactly as it already is for
+	// an opaque $res.
+	//
+	// Without this branch it would fall through to the generic recursive
+	// merge below, which walks the envelope's own metadata keys against the
+	// plugin's echo: a bare-scalar echo happens to be absorbed by the
+	// opaque-scalar branch further down, but a structured echo (a plugin
+	// that round-trips the resolvable, mirroring $res) leaves a stale
+	// $hashed marker sitting next to the freshly adopted plaintext value —
+	// the persist transformer's idempotency guard then skips re-hashing it,
+	// persisting the generated secret in cleartext while claiming it is
+	// hashed.
+	if userVal.Get("$gen").Bool() {
+		m.mergeResObject(path, userVal, pluginVal)
+		return
+	}
+
 	// Check if this is a $embed object — preserve the user's envelope wholesale.
 	// The plugin value is always the assembled result of the template; we never
 	// let the plugin overwrite the user's $embed declaration.
@@ -861,14 +885,14 @@ func referenceURIOf(envelope gjson.Result) string {
 	return envelope.Get("$ref").String()
 }
 
-// mergeResObject handles merging of $res objects (structured resolvable references
-// in their pre-resolution shape). It mirrors mergeRefObject: it preserves the user's
-// $res envelope wholesale and only refreshes $value from the plugin read.
+// mergeResObject handles merging of $res and $gen objects (structured resolvable
+// references in their pre-resolution shape). It mirrors mergeRefObject: it preserves
+// the user's envelope wholesale and only refreshes $value from the plugin read.
 //
 // The plugin may echo the resolvable back either as a bare scalar (the resolved
-// live value) or as a $res/$value object; selectRefValue handles both (it already
-// unwraps $ref/$value objects, and a $res echo likewise carries the live value at
-// $value — normalized below).
+// live value) or as a $res/$ref/$gen/$value object; selectRefValue handles both (it
+// already unwraps $ref/$value objects, and a $res or $gen echo likewise carries the
+// live value at $value — normalized below).
 //
 // Opacity is INHERITED: a $res that resolves another resource's Opaque property is
 // itself opaque even though the consumer's own schema does not mark this field. When
@@ -882,10 +906,11 @@ func (m *propertyMerger) mergeResObject(path string, userVal, pluginVal gjson.Re
 
 	userValue := userVal.Get("$value")
 
-	// A plugin that round-trips the resolvable echoes it back as a $res/$value
-	// object; unwrap to its $value so we compare live-value-to-live-value.
+	// A plugin that round-trips the resolvable echoes it back as a $res/$ref/
+	// $gen/$value object; unwrap to its $value so we compare
+	// live-value-to-live-value.
 	effectivePluginVal := pluginVal
-	if pluginVal.IsObject() && (pluginVal.Get("$res").Exists() || pluginVal.Get("$ref").Exists()) {
+	if pluginVal.IsObject() && (pluginVal.Get("$res").Exists() || pluginVal.Get("$ref").Exists() || pluginVal.Get("$gen").Exists()) {
 		effectivePluginVal = pluginVal.Get("$value")
 	}
 
