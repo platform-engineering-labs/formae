@@ -121,6 +121,10 @@ func (m *mockExtractDatastore) GetFormaCommandByCommandID(_ string) (*forma_comm
 func (m *mockExtractDatastore) GetMostRecentFormaCommandByClientID(_ string) (*forma_command.FormaCommand, error) {
 	panic("not implemented")
 }
+func (m *mockExtractDatastore) GetPropertiesAtLastWrite(_ string) (json.RawMessage, error) {
+	return nil, nil
+}
+
 func (m *mockExtractDatastore) GetResourceModificationsSinceLastReconcile(_ string) ([]datastore.ResourceModification, error) {
 	panic("not implemented")
 }

@@ -14,9 +14,21 @@ import (
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
+// suppressedDiffsForTest uses the old properties as the write witness: the
+// common fixture shape where formae's last write observed the same state the
+// drift window starts from.
 func suppressedDiffsForTest(t *testing.T, oldProps, newProps, desired string, schema pkgmodel.Schema) []SuppressedFieldDiff {
 	t.Helper()
-	diffs, err := SuppressedFieldDiffs(json.RawMessage(oldProps), json.RawMessage(newProps), json.RawMessage(desired), schema)
+	return suppressedDiffsWithWitness(t, oldProps, newProps, desired, oldProps, schema)
+}
+
+func suppressedDiffsWithWitness(t *testing.T, oldProps, newProps, desired, witness string, schema pkgmodel.Schema) []SuppressedFieldDiff {
+	t.Helper()
+	var w json.RawMessage
+	if witness != "" {
+		w = json.RawMessage(witness)
+	}
+	diffs, err := SuppressedFieldDiffs(json.RawMessage(oldProps), json.RawMessage(newProps), json.RawMessage(desired), w, schema)
 	require.NoError(t, err)
 	return diffs
 }
@@ -88,7 +100,11 @@ func TestSuppressedFieldDiffs_NullDesired_TreatedAsOmitted(t *testing.T) {
 	assert.Equal(t, "EnableKeyRotation", diffs[0].Path)
 }
 
-func TestSuppressedFieldDiffs_EntitySetOmitted_OOBAddReported(t *testing.T) {
+func TestSuppressedFieldDiffs_EntitySetOmitted_EmptyBaseline_NotReported(t *testing.T) {
+	// An omitted collection that was empty at the baseline has no witnessed
+	// content: entries appearing on it (a co-actor registering, a first
+	// out-of-band add) are initialization from the note's point of view and
+	// stay in the drift list only.
 	schema := pkgmodel.Schema{
 		Fields: []string{"Name", "Tags"},
 		Hints: map[string]pkgmodel.FieldHint{
@@ -102,10 +118,27 @@ func TestSuppressedFieldDiffs_EntitySetOmitted_OOBAddReported(t *testing.T) {
 		`{"Name": "r"}`,
 		schema)
 
+	assert.Empty(t, diffs)
+}
+
+func TestSuppressedFieldDiffs_EntitySetOmitted_WitnessedEntryChanged_Reported(t *testing.T) {
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Tags"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"Tags": {HasProviderDefault: true, UpdateMethod: pkgmodel.FieldUpdateMethodEntitySet, IndexField: "Key"},
+		},
+	}
+
+	diffs := suppressedDiffsForTest(t,
+		`{"Name": "r", "Tags": [{"Key": "sys", "Value": "v1"}]}`,
+		`{"Name": "r", "Tags": [{"Key": "sys", "Value": "v2"}]}`,
+		`{"Name": "r"}`,
+		schema)
+
 	require.Len(t, diffs, 1)
 	assert.Equal(t, "Tags", diffs[0].Path)
-	assert.JSONEq(t, `[]`, string(diffs[0].From))
-	assert.JSONEq(t, `[{"Key": "oob", "Value": "x"}]`, string(diffs[0].To))
+	assert.JSONEq(t, `[{"Key": "sys", "Value": "v1"}]`, string(diffs[0].From))
+	assert.JSONEq(t, `[{"Key": "sys", "Value": "v2"}]`, string(diffs[0].To))
 }
 
 func TestSuppressedFieldDiffs_EntitySetPartialDeclaration_OnlySuppressedElementsCompared(t *testing.T) {
@@ -277,9 +310,10 @@ func TestSuppressedFieldDiffs_DottedArrayNestedLeaf_MultisetComparison(t *testin
 	assert.Equal(t, "ContainerDefinitions.Cpu", diffs[0].Path)
 }
 
-func TestSuppressedFieldDiffs_FieldAppearsOrDisappears_ReportsMovement(t *testing.T) {
-	// A suppressed field present on only one side is movement between
-	// absence and a value.
+func TestSuppressedFieldDiffs_FieldAppears_NotReported(t *testing.T) {
+	// A suppressed field absent at the baseline that now holds a value is
+	// the cloud (or a co-actor) populating it for the first time:
+	// initialization, not movement. It stays in the drift list only.
 	schema := pkgmodel.Schema{
 		Fields: []string{"Name", "KmsKeyId"},
 		Hints:  map[string]pkgmodel.FieldHint{"KmsKeyId": {HasProviderDefault: true}},
@@ -291,10 +325,27 @@ func TestSuppressedFieldDiffs_FieldAppearsOrDisappears_ReportsMovement(t *testin
 		`{"Name": "r"}`,
 		schema)
 
+	assert.Empty(t, diffs, "first-time population is not movement of a witnessed value")
+}
+
+func TestSuppressedFieldDiffs_WitnessedFieldDisappears_Reported(t *testing.T) {
+	// A witnessed value that vanished out of band is movement worth seeing
+	// (a deleted encryption config is a regression, not initialization).
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "KmsKeyId"},
+		Hints:  map[string]pkgmodel.FieldHint{"KmsKeyId": {HasProviderDefault: true}},
+	}
+
+	diffs := suppressedDiffsForTest(t,
+		`{"Name": "r", "KmsKeyId": "key-123"}`,
+		`{"Name": "r"}`,
+		`{"Name": "r"}`,
+		schema)
+
 	require.Len(t, diffs, 1)
 	assert.Equal(t, "KmsKeyId", diffs[0].Path)
-	assert.Nil(t, diffs[0].From)
-	assert.JSONEq(t, `"key-123"`, string(diffs[0].To))
+	assert.JSONEq(t, `"key-123"`, string(diffs[0].From))
+	assert.Nil(t, diffs[0].To)
 }
 
 func TestSuppressedFieldDiffs_MultipleFields_SortedByPath(t *testing.T) {
@@ -374,4 +425,221 @@ func TestSuppressedFieldDiffs_PureObjectDottedPath_DeclaredInDesired_NotReported
 		schema)
 
 	assert.Empty(t, diffs)
+}
+
+func TestSuppressedFieldDiffs_SetEmptyBaseline_AppearanceNotReported(t *testing.T) {
+	// Same witnessed rule for unkeyed collections: members appearing on an
+	// empty baseline (runtime registration) are not movement.
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Targets"},
+		Hints:  map[string]pkgmodel.FieldHint{"Targets": {HasProviderDefault: true}},
+	}
+
+	diffs := suppressedDiffsForTest(t,
+		`{"Name": "tg", "Targets": []}`,
+		`{"Name": "tg", "Targets": [{"Id": "10.0.0.5", "Port": 80}]}`,
+		`{"Name": "tg"}`,
+		schema)
+
+	assert.Empty(t, diffs)
+}
+
+func TestSuppressedFieldDiffs_EntitySetPartial_SystemEntryAppears_NotReported(t *testing.T) {
+	// Partial declaration with no suppressed entries at the baseline: a
+	// system entry appearing beside the declared keys is initialization.
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Tags"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"Tags": {HasProviderDefault: true, UpdateMethod: pkgmodel.FieldUpdateMethodEntitySet, IndexField: "Key"},
+		},
+	}
+	desired := `{"Name": "r", "Tags": [{"Key": "mine", "Value": "v"}]}`
+
+	diffs := suppressedDiffsForTest(t,
+		`{"Name": "r", "Tags": [{"Key": "mine", "Value": "v"}]}`,
+		`{"Name": "r", "Tags": [{"Key": "mine", "Value": "v"}, {"Key": "aws:sys", "Value": "s"}]}`,
+		desired, schema)
+
+	assert.Empty(t, diffs)
+}
+
+func TestSuppressedFieldDiffs_DottedLeaves_EmptyBaseline_NotReported(t *testing.T) {
+	schema := pkgmodel.Schema{
+		Fields: []string{"Family", "ContainerDefinitions"},
+		Hints:  map[string]pkgmodel.FieldHint{"ContainerDefinitions.Cpu": {HasProviderDefault: true}},
+	}
+	desired := `{"Family": "f", "ContainerDefinitions": [{"Name": "app"}]}`
+
+	diffs := suppressedDiffsForTest(t,
+		`{"Family": "f", "ContainerDefinitions": [{"Name": "app"}]}`,
+		`{"Family": "f", "ContainerDefinitions": [{"Name": "app", "Cpu": 256}]}`,
+		desired, schema)
+
+	assert.Empty(t, diffs, "leaves appearing where none were witnessed are initialization")
+}
+
+func TestSuppressedFieldDiffs_DottedLeaves_NullBaseline_NotReported(t *testing.T) {
+	// A leaf that existed only as null (or an empty collection) at the
+	// baseline witnessed nothing; a value arriving there is initialization.
+	schema := pkgmodel.Schema{
+		Fields: []string{"Family", "ContainerDefinitions"},
+		Hints:  map[string]pkgmodel.FieldHint{"ContainerDefinitions.Cpu": {HasProviderDefault: true}},
+	}
+	desired := `{"Family": "f", "ContainerDefinitions": [{"Name": "app"}]}`
+
+	diffs := suppressedDiffsForTest(t,
+		`{"Family": "f", "ContainerDefinitions": [{"Name": "app", "Cpu": null}]}`,
+		`{"Family": "f", "ContainerDefinitions": [{"Name": "app", "Cpu": 256}]}`,
+		desired, schema)
+
+	assert.Empty(t, diffs)
+}
+
+func TestSuppressedFieldDiffs_RuntimeChurn_NeverInWriteEcho_NotReported(t *testing.T) {
+	// The write echo never contained the field: everything that happened to
+	// it since arrived through sync (a co-actor registering and re-registering
+	// members). Steady-state churn between two sync-absorbed states is the
+	// infrastructure's business, not movement of anything formae witnessed.
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Targets"},
+		Hints:  map[string]pkgmodel.FieldHint{"Targets": {HasProviderDefault: true}},
+	}
+
+	diffs := suppressedDiffsWithWitness(t,
+		`{"Name": "tg", "Targets": [{"Id": "10.0.0.5", "Port": 80}]}`,
+		`{"Name": "tg", "Targets": [{"Id": "10.0.0.9", "Port": 80}]}`,
+		`{"Name": "tg"}`,
+		`{"Name": "tg", "Targets": []}`,
+		schema)
+
+	assert.Empty(t, diffs, "a field absent or empty in the write echo is never note-worthy, even between two populated states")
+}
+
+func TestSuppressedFieldDiffs_WitnessedInWriteEcho_LaterMovement_Reported(t *testing.T) {
+	// The write echo held a value; the window's movement is between two
+	// later states. The witness gates, the window provides from/to.
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Rotation"},
+		Hints:  map[string]pkgmodel.FieldHint{"Rotation": {HasProviderDefault: true}},
+	}
+
+	diffs := suppressedDiffsWithWitness(t,
+		`{"Name": "k", "Rotation": "on"}`,
+		`{"Name": "k", "Rotation": "weekly"}`,
+		`{"Name": "k"}`,
+		`{"Name": "k", "Rotation": "off"}`,
+		schema)
+
+	require.Len(t, diffs, 1)
+	assert.JSONEq(t, `"on"`, string(diffs[0].From))
+	assert.JSONEq(t, `"weekly"`, string(diffs[0].To))
+}
+
+func TestSuppressedFieldDiffs_NilWitness_NothingReported(t *testing.T) {
+	// No write-origin version exists (formae never wrote the resource, e.g.
+	// freshly imported): nothing is witnessed, nothing is reported.
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "EnableKeyRotation"},
+		Hints:  map[string]pkgmodel.FieldHint{"EnableKeyRotation": {HasProviderDefault: true}},
+	}
+
+	diffs := suppressedDiffsWithWitness(t,
+		`{"Name": "k", "EnableKeyRotation": false}`,
+		`{"Name": "k", "EnableKeyRotation": true}`,
+		`{"Name": "k"}`,
+		"",
+		schema)
+
+	assert.Empty(t, diffs)
+}
+
+func assertWitnessedForTest(t *testing.T, desired, witness string, schema pkgmodel.Schema) string {
+	t.Helper()
+	out, err := AssertWitnessedSuppressed(json.RawMessage(desired), json.RawMessage(witness), schema)
+	require.NoError(t, err)
+	return string(out)
+}
+
+func TestAssertWitnessedSuppressed_OmittedScalar_AssertsWitnessValue(t *testing.T) {
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Rotation"},
+		Hints:  map[string]pkgmodel.FieldHint{"Rotation": {HasProviderDefault: true}},
+	}
+	out := assertWitnessedForTest(t,
+		`{"Name": "k"}`,
+		`{"Name": "k", "Rotation": "off"}`,
+		schema)
+	assert.JSONEq(t, `{"Name": "k", "Rotation": "off"}`, out)
+}
+
+func TestAssertWitnessedSuppressed_DeclaredField_Untouched(t *testing.T) {
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Rotation"},
+		Hints:  map[string]pkgmodel.FieldHint{"Rotation": {HasProviderDefault: true}},
+	}
+	out := assertWitnessedForTest(t,
+		`{"Name": "k", "Rotation": "weekly"}`,
+		`{"Name": "k", "Rotation": "off"}`,
+		schema)
+	assert.JSONEq(t, `{"Name": "k", "Rotation": "weekly"}`, out, "a declared value is intent; the witness never overrides it")
+}
+
+func TestAssertWitnessedSuppressed_UnwitnessedField_NotInjected(t *testing.T) {
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Targets"},
+		Hints:  map[string]pkgmodel.FieldHint{"Targets": {HasProviderDefault: true}},
+	}
+	out := assertWitnessedForTest(t,
+		`{"Name": "tg"}`,
+		`{"Name": "tg", "Targets": []}`,
+		schema)
+	assert.JSONEq(t, `{"Name": "tg"}`, out, "an empty witness asserts nothing")
+}
+
+func TestAssertWitnessedSuppressed_OpaqueAndCreateOnlyAndDotted_Skipped(t *testing.T) {
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Secret", "BucketName", "Containers"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"Secret":         {HasProviderDefault: true, Opaque: true},
+			"BucketName":     {HasProviderDefault: true, CreateOnly: true},
+			"Containers.Cpu": {HasProviderDefault: true},
+		},
+	}
+	out := assertWitnessedForTest(t,
+		`{"Name": "r", "Containers": [{"Name": "app"}]}`,
+		`{"Name": "r", "Secret": "hash", "BucketName": "gen-123", "Containers": [{"Name": "app", "Cpu": 256}]}`,
+		schema)
+	assert.JSONEq(t, `{"Name": "r", "Containers": [{"Name": "app"}]}`, out,
+		"opaque values cannot be asserted from hashes, createOnly assertion would plan replacements, dotted paths have no stable injection")
+}
+
+func TestAssertWitnessedSuppressed_EntitySetPartial_MergesWitnessSystemEntries(t *testing.T) {
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Tags"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"Tags": {HasProviderDefault: true, UpdateMethod: pkgmodel.FieldUpdateMethodEntitySet, IndexField: "Key"},
+		},
+	}
+	out := assertWitnessedForTest(t,
+		`{"Name": "r", "Tags": [{"Key": "mine", "Value": "v"}]}`,
+		`{"Name": "r", "Tags": [{"Key": "mine", "Value": "old"}, {"Key": "sys", "Value": "s0"}]}`,
+		schema)
+	assert.JSONEq(t, `{"Name": "r", "Tags": [{"Key": "mine", "Value": "v"}, {"Key": "sys", "Value": "s0"}]}`, out,
+		"declared entries keep their declared values; witnessed undeclared entries are asserted alongside")
+}
+
+func TestAssertWitnessedSuppressed_EntitySetExplicitEmpty_NotInjected(t *testing.T) {
+	// An explicit empty declaration is a drain; asserting witness entries
+	// would undo the user's clear.
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Tags"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"Tags": {HasProviderDefault: true, UpdateMethod: pkgmodel.FieldUpdateMethodEntitySet, IndexField: "Key"},
+		},
+	}
+	out := assertWitnessedForTest(t,
+		`{"Name": "r", "Tags": []}`,
+		`{"Name": "r", "Tags": [{"Key": "sys", "Value": "s0"}]}`,
+		schema)
+	assert.JSONEq(t, `{"Name": "r", "Tags": []}`, out)
 }
