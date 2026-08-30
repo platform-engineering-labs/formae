@@ -1,0 +1,161 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "eastus"
+    },
+    "resourceGroupName": {
+      "type": "string",
+      "defaultValue": "formae-ai"
+    },
+    "identityName": {
+      "type": "string",
+      "defaultValue": "[concat('formae-ai-', parameters('installationId'))]"
+    },
+    "issuer": {
+      "type": "string",
+      "defaultValue": "https://oidc.cloud.formae.ai"
+    },
+    "installationId": {
+      "type": "string",
+      "metadata": {
+        "description": "The formae installation this trust is for."
+      }
+    },
+    "formaeTenantId": {
+      "type": "string",
+      "metadata": {
+        "description": "The formae tenant the installation belongs to."
+      }
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Resources/resourceGroups",
+      "apiVersion": "2021-04-01",
+      "name": "[parameters('resourceGroupName')]",
+      "location": "[parameters('location')]"
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2021-04-01",
+      "name": "formae-identity",
+      "resourceGroup": "[parameters('resourceGroupName')]",
+      "dependsOn": [
+        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', parameters('resourceGroupName'))]"
+      ],
+      "properties": {
+        "mode": "Incremental",
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "resources": [
+            {
+              "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+              "apiVersion": "2023-01-31",
+              "name": "[parameters('identityName')]",
+              "location": "[parameters('location')]",
+              "tags": {
+                "formae:owned": "true"
+              }
+            },
+            {
+              "type": "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials",
+              "apiVersion": "2023-01-31",
+              "name": "[concat(parameters('identityName'), '/formae-ai')]",
+              "dependsOn": [
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('identityName'))]"
+              ],
+              "properties": {
+                "issuer": "[parameters('issuer')]",
+                "subject": "[parameters('subject')]",
+                "audiences": [
+                  "api://AzureADTokenExchange"
+                ]
+              }
+            }
+          ],
+          "outputs": {
+            "principalId": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('identityName')), '2023-01-31').principalId]"
+            },
+            "clientId": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('identityName')), '2023-01-31').clientId]"
+            }
+          },
+          "parameters": {
+            "identityName": {
+              "type": "string"
+            },
+            "location": {
+              "type": "string"
+            },
+            "issuer": {
+              "type": "string"
+            },
+            "subject": {
+              "type": "string"
+            }
+          }
+        },
+        "parameters": {
+          "identityName": {
+            "value": "[parameters('identityName')]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "issuer": {
+            "value": "[parameters('issuer')]"
+          },
+          "subject": {
+            "value": "[concat('fai:', parameters('formaeTenantId'), '/', parameters('installationId'))]"
+          }
+        },
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(subscription().id, parameters('identityName'), 'contributor')]",
+      "dependsOn": [
+        "formae-identity"
+      ],
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b24988ac-6180-42a0-ab88-20f7382dd24c')]",
+        "principalId": "[reference('formae-identity').outputs.principalId.value]",
+        "principalType": "ServicePrincipal"
+      }
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(subscription().id, parameters('identityName'), 'userAccessAdministrator')]",
+      "dependsOn": [
+        "formae-identity"
+      ],
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '18d7d88d-d35e-4fb5-a5c3-7773c20a72d9')]",
+        "principalId": "[reference('formae-identity').outputs.principalId.value]",
+        "principalType": "ServicePrincipal"
+      }
+    }
+  ],
+  "outputs": {
+    "clientId": {
+      "type": "string",
+      "value": "[reference('formae-identity').outputs.clientId.value]"
+    },
+    "tenantId": {
+      "type": "string",
+      "value": "[subscription().tenantId]"
+    }
+  }
+}
