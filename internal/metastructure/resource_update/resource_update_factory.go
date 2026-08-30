@@ -142,6 +142,16 @@ func NewResourceUpdateForExisting(
 	// Extract resolvables for the new resource
 	newRemainingResolvables := resolver.ExtractResolvableURIs(newResource)
 
+	// Runs after the patch is derived, so what the provider is asked to do is
+	// unaffected: a stable occurrence is already suppressed from the diff.
+	// This is only about what the row keeps, which is written from the desired
+	// document below.
+	filteredProps, generatorDigests, err := CarryStableGeneratorBindingForward(
+		filteredProps, existingResource.Properties, provenanceRecords)
+	if err != nil {
+		return nil, fmt.Errorf("failed to carry stable generator bindings forward for resource %s: %w", existingResource.Label, err)
+	}
+
 	updateResource := ResourceUpdate{
 		PriorState:     existingResource,
 		ExistingTarget: existingTarget,
@@ -173,6 +183,7 @@ func NewResourceUpdateForExisting(
 		RemainingResolvables: newRemainingResolvables,
 		PreviousProperties:   existingResource.Properties,
 		ProvenanceRecords:    provenanceRecords,
+		ResolvedRootDigests:  generatorDigests,
 	}
 
 	return []ResourceUpdate{updateResource}, nil

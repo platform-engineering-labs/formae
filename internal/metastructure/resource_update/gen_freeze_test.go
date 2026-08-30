@@ -208,3 +208,19 @@ func TestFreezeStableGeneratorBindings_FreezesABareEnvelope(t *testing.T) {
 
 	assert.JSONEq(t, `{"$opaque":"preserved"}`, gjson.GetBytes(out, "Password").Raw)
 }
+
+// A carried-forward digest is not a credential. It sits on the envelope so
+// the row keeps the value it already holds, and the provider must still be
+// sent the sentinel: the guard at the boundary refuses a digest where a
+// secret belongs, and would take the whole document with it.
+func TestFreezeStableGeneratorBindings_FreezesACarriedDigest(t *testing.T) {
+	carried := `{"$gen":true,"$generator":"` + boundGeneratorKsuid +
+		`","$output":"value","$visibility":"Opaque","$hashed":true,"$value":"` +
+		pkgmodel.ComputeValueHash("the-drawn-password") + `"}`
+
+	out, err := FreezeStableGeneratorBindings(
+		genBoundProperties("one", carried), stableGenRecord())
+	require.NoError(t, err)
+
+	assert.JSONEq(t, `{"$opaque":"preserved"}`, gjson.GetBytes(out, "Password").Raw)
+}

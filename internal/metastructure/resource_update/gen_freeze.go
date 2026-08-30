@@ -37,14 +37,19 @@ import (
 // ProvenanceRecords for $gen destinations. An absent or non-generator record
 // is not stable and is left to the guard.
 //
-// An envelope that already carries a $value is left alone whatever its
-// classification says. A $value is only ever there because a draw was
-// delivered into it moments ago, and a draw reaches every destination of its
-// generator in the changeset, stable ones included: stability decides whether
-// the generator draws, not who a draw reaches. Freezing a delivered value
-// would throw away the credential the draw was made for and send the provider
-// a preserved-sentinel instead, leaving that destination on the old
-// generation while its siblings moved to the new one.
+// An envelope carrying a LIVE value — a $value with no $hashed marker — is
+// left alone whatever its classification says. Such a value is only ever
+// there because a draw was delivered into it moments ago, and a draw reaches
+// every destination of its generator in the changeset, stable ones included:
+// stability decides whether the generator draws, not who a draw reaches.
+// Freezing a delivered value would throw away the credential the draw was
+// made for and send the provider a preserved sentinel instead, leaving that
+// destination on the old generation while its siblings moved to the new one.
+//
+// A $value marked $hashed is the opposite case and is still frozen. It is the
+// digest CarryStableGeneratorBindingForward put back so the row keeps what it
+// already held; it is not a credential, and the guard at the provider
+// boundary refuses a digest sent where a secret belongs.
 //
 // A path that does not address a $gen envelope is skipped rather than written
 // over: destinations are addressed by a dot-joined path, so a map key
@@ -68,7 +73,7 @@ func FreezeStableGeneratorBindings(desired json.RawMessage, records []Occurrence
 		if !pkgmodel.IsGenObject(node) {
 			continue
 		}
-		if node.Get("$value").Exists() {
+		if node.Get("$value").Exists() && !node.Get("$hashed").Bool() {
 			continue
 		}
 		updated, err := sjson.SetRaw(out, occurrence.Path, opaquePreservedSentinel)

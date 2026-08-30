@@ -1075,6 +1075,18 @@ func (m *propertyMerger) mergeResObject(path string, userVal, pluginVal gjson.Re
 		effectivePluginVal = pluginVal.Get("$value")
 	}
 
+	// A preserved-value sentinel is not a value. It is what the freeze put in
+	// this field's place on the copy sent to the provider, meaning "leave this
+	// alone"; a plugin that echoes its request back returns it verbatim.
+	// Treated as an ordinary echo it is a non-empty object, so it beats the
+	// stored value in preferNonNullValue and lands in $value — and the persist
+	// transformer then hashes the sentinel itself, replacing the digest of the
+	// credential with the digest of a marker. Discard it here so the two
+	// decisions below see it for what it is: nothing adopted.
+	if isOpaquePreservedSentinel(effectivePluginVal) {
+		effectivePluginVal = gjson.Result{}
+	}
+
 	valueToSet := m.preferNonNullValue(userValue, effectivePluginVal)
 	// Determine "did we keep the stored value?" against the SAME unwrapped value
 	// used for valueToSet. keptUserValue only unwraps $ref, so passing the raw

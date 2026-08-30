@@ -38,6 +38,14 @@ import (
 // is what unwraps the envelope to the scalar a plugin receives, and it is the
 // only thing that should.
 //
+// A stale $hashed marker is dropped as the value is written. An envelope can
+// arrive here carrying the stored digest of the value the destination already
+// holds, marked $hashed; the value being written is live plaintext, and the
+// persist transformer skips re-hashing anything already marked hashed, so
+// leaving the marker would persist a live credential in cleartext while
+// claiming it is hashed. This mirrors what mergeResObject does when it adopts
+// a fresh value over a stored digest.
+//
 // A path that is absent, or that holds something other than a generator
 // envelope, is an error rather than an overwrite: paths come from a walk of
 // this same document, so either condition means the caller and the document
@@ -65,6 +73,7 @@ func SetGenValues(properties json.RawMessage, generatorKsuid string, paths []str
 			return true
 		})
 		envelope["$value"] = value
+		delete(envelope, "$hashed")
 
 		encoded, err := json.Marshal(envelope)
 		if err != nil {

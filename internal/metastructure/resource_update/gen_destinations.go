@@ -5,6 +5,12 @@
 package resource_update
 
 import (
+	"encoding/json"
+	"fmt"
+
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
+
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
@@ -106,4 +112,100 @@ func GeneratorsNeedingDraw(updates []ResourceUpdate) []string {
 		}
 	}
 	return ksuids
+}
+
+// CarryStableGeneratorBindingForward restores, on the desired document of an
+// update, what a $gen destination whose occurrence classified stable already
+// holds: the stored digest of its value, its $hashed marker, and — through
+// the returned digest seeds — the provenance of the generation it was drawn
+// from. It returns the rewritten desired document and the seeds to put on
+// ResourceUpdate.ResolvedRootDigests.
+//
+// A stable destination draws nothing, so its desired envelope is bare: the
+// forma declares a reference, never a value. That is fine for the write (the
+// freeze substitutes a preserved-value sentinel on the copy the provider
+// sees) but not for what lands at rest. The row is written from the desired
+// document, so a bare envelope persists a destination with no value and no
+// provenance, and the next apply reads that as a destination that moved:
+// it plans, draws, and rotates a credential nothing asked to rotate. Carrying
+// the two forward is what makes an unrelated edit on a generator-bound
+// resource a no-op for the binding beside it.
+//
+// This is the $gen counterpart of what already happens for a literal opaque
+// field, whose desired document carries the stored digest by construction
+// because the author declared a value there.
+//
+// Stability is read through IsGenDestinationStable, and the gate is absolute:
+// re-stamping an occurrence that is NOT stable would assert that a
+// destination still holds a generation it may not hold, and would suppress
+// the very rotation that classification exists to require. An occurrence with
+// no stored value, or one stored unhashed, is left alone — there is nothing
+// to carry and nothing to prove.
+//
+// Inputs are not mutated; a rewritten copy of desired is returned.
+func CarryStableGeneratorBindingForward(
+	desired, stored json.RawMessage,
+	records []OccurrenceRecord,
+) (json.RawMessage, map[string]string, error) {
+	if len(desired) == 0 || len(stored) == 0 || len(records) == 0 {
+		return desired, nil, nil
+	}
+
+	out := string(desired)
+	var seeds map[string]string
+	for _, occurrence := range pkgmodel.FindGenObjectsFromProperties(desired) {
+		if !IsGenDestinationStable(records, occurrence.Path) {
+			continue
+		}
+		// A destination is addressed by a dot-joined path, so a map key
+		// containing a dot resolves elsewhere. Write only where the path
+		// still addresses this envelope, exactly as the freeze does.
+		if !pkgmodel.IsGenObject(gjson.Get(out, occurrence.Path)) {
+			continue
+		}
+		storedEnvelope := gjson.GetBytes(stored, occurrence.Path)
+		storedValue := storedEnvelope.Get("$value")
+		if !storedValue.Exists() || !storedEnvelope.Get("$hashed").Bool() {
+			continue
+		}
+
+		updated, err := sjson.Set(out, occurrence.Path+".$value", storedValue.Value())
+		if err != nil {
+			// The path can contain user-authored map keys, so it stays out of
+			// the error: this text reaches an operator-visible failure reason.
+			return nil, nil, fmt.Errorf("failed to carry a stable generator binding forward: %w", err)
+		}
+		// The digest is carried as a digest: without the marker the persist
+		// transformer would hash it again and store a hash of a hash.
+		updated, err = sjson.Set(updated, occurrence.Path+".$hashed", true)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to carry a stable generator binding forward: %w", err)
+		}
+		out = updated
+
+		key := generatorSourceKey(occurrence.Generator, occurrence.Output)
+		provenanceDigest := writtenProvenanceAt(records, occurrence.Path)
+		if key == "" || provenanceDigest == "" {
+			continue
+		}
+		if seeds == nil {
+			seeds = make(map[string]string)
+		}
+		seeds[key] = provenanceDigest
+	}
+
+	return json.RawMessage(out), seeds, nil
+}
+
+// writtenProvenanceAt returns the generation digest the destination at this
+// path was last written under, as the classifier recorded it. That value is
+// exactly the $resolvedFrom the stored envelope carries, which is what the
+// write-origin merge has to put back.
+func writtenProvenanceAt(records []OccurrenceRecord, destinationPath string) string {
+	for i := range records {
+		if records[i].DestinationPath == destinationPath {
+			return records[i].WrittenProvenance
+		}
+	}
+	return ""
 }

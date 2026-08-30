@@ -153,20 +153,28 @@ func (d *deliveredValues) patchesFor(label string) []string {
 	return append([]string(nil), d.patches[label]...)
 }
 
-// storedResolvedFrom returns the provenance digest a stored destination
-// carries for its generator-bound property, which is what the next apply
-// classifies against.
-func storedResolvedFrom(t *testing.T, m *metastructure.Metastructure, stack, label string) string {
+// storedBinding returns the generator-bound envelope a destination carries at
+// rest. It is what the next apply classifies against: the digest of the value
+// the destination holds, the marker saying that value is a digest, and the
+// generation it was drawn from.
+func storedBinding(t *testing.T, m *metastructure.Metastructure, stack, label string) gjson.Result {
 	t.Helper()
 	resources, err := m.Datastore.LoadResourcesByStack(stack)
 	require.NoError(t, err)
 	for i := range resources {
 		if resources[i].Label == label {
-			return gjson.GetBytes(resources[i].Properties, "SecretString.$resolvedFrom").String()
+			return gjson.GetBytes(resources[i].Properties, "SecretString")
 		}
 	}
 	t.Fatalf("no stored resource %q in stack %q", label, stack)
-	return ""
+	return gjson.Result{}
+}
+
+// storedResolvedFrom returns the provenance digest a stored destination
+// carries for its generator-bound property.
+func storedResolvedFrom(t *testing.T, m *metastructure.Metastructure, stack, label string) string {
+	t.Helper()
+	return storedBinding(t, m, stack, label).Get("$resolvedFrom").String()
 }
 
 // Shape 2. A draw that happens must reach every destination of its generator
@@ -386,6 +394,14 @@ func TestApplyForma_GeneratorBoundSecret_UnrelatedFieldEditDoesNotRedraw(t *test
 		require.NoError(t, err)
 		require.NotEmpty(t, firstGeneration.GenerationID)
 
+		appliedBinding := storedBinding(t, m, stack, "alpha")
+		require.True(t, appliedBinding.Get("$hashed").Bool(), "precondition: the drawn value is stored as a digest")
+		appliedValue := appliedBinding.Get("$value").String()
+		require.NotEmpty(t, appliedValue)
+		appliedResolvedFrom := appliedBinding.Get("$resolvedFrom").String()
+		require.Equal(t, provenance.DigestOfString(firstGeneration.GenerationID), appliedResolvedFrom,
+			"precondition: the destination is stamped with the generation it was drawn from")
+
 		_, err = m.ApplyForma(formaWithDescription("after"), &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
 		require.NoError(t, err)
 		waitForApplyComplete(t, m)
@@ -407,5 +423,35 @@ func TestApplyForma_GeneratorBoundSecret_UnrelatedFieldEditDoesNotRedraw(t *test
 		require.Len(t, updates, 1, "the unrelated edit must reach the provider")
 		assert.NotContains(t, updates[0], "$gen",
 			"a stable binding is frozen to the preserved sentinel, never dispatched as a bare envelope")
+
+		// What the row keeps is what the next apply classifies against. A
+		// binding nothing wrote must come out of the edit exactly as it went
+		// in: the same digest, still marked a digest, still stamped with its
+		// generation.
+		edited := storedBinding(t, m, stack, "alpha")
+		assert.Equal(t, appliedValue, edited.Get("$value").String(),
+			"the stored digest of the credential must survive an edit that did not touch it")
+		assert.True(t, edited.Get("$hashed").Bool(),
+			"the stored value must still be marked a digest, or it is hashed again as if it were a secret")
+		assert.Equal(t, appliedResolvedFrom, edited.Get("$resolvedFrom").String(),
+			"the destination must keep the generation it was drawn from")
+
+		// The proof that the row is intact: a third identical apply has
+		// nothing to do, and the generator does not advance.
+		resp, err := m.ApplyForma(formaWithDescription("after"), &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
+		require.NoError(t, err)
+		assert.False(t, resp.Simulation.ChangesRequired,
+			"an unrelated edit must not leave the binding looking moved on the next apply")
+
+		cmds, err = m.Datastore.LoadFormaCommands()
+		require.NoError(t, err)
+		assert.Len(t, cmds, 2, "no third command may be created")
+
+		thirdGeneration, err := m.Datastore.GetGeneratorIdentity("db-password", stack)
+		require.NoError(t, err)
+		assert.Equal(t, firstGeneration.GenerationID, thirdGeneration.GenerationID,
+			"an unrelated edit must not rotate the credential on the apply after it")
+		assert.Len(t, delivered.updatedWith("alpha"), 1,
+			"no third write may reach the provider")
 	})
 }
