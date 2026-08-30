@@ -872,6 +872,24 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 	}
 	desiredForPlugin.Properties = frozenProperties
 
+	// A generator binding the planner classified stable draws no value, so its
+	// destination still holds the bare envelope here. Swap it for the same
+	// present-but-unusable sentinel, so the guard that refuses to send a
+	// reference in a secret's place stops blocking every other property on the
+	// resource. Only this copy changes; DesiredState.Properties stays the
+	// durable record of the binding.
+	frozenProperties, err = FreezeStableGeneratorBindings(
+		desiredForPlugin.Properties,
+		data.resourceUpdate.ProvenanceRecords,
+	)
+	if err != nil {
+		proc.Log().Error("failed to prepare desired resource properties for plugin: %v", err)
+		data.resourceUpdate.FailureReason = updateRequestFailureReason(err)
+		data.resourceUpdate.MarkAsFailed()
+		return StateFinishedWithError, data, nil, nil
+	}
+	desiredForPlugin.Properties = frozenProperties
+
 	// Convert properties to plugin format (extracts $value from opaque structures).
 	// DesiredState is the NEW value being written to the cloud as DesiredProperties,
 	// so this stays guarded: a stored hash must never be sent to a plugin in place
