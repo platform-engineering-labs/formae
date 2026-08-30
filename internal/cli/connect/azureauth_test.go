@@ -29,8 +29,9 @@ func stubAzureCredentialState(t *testing.T, state azureCredentialState) {
 }
 
 // Azure reports the login command; it never spawns one. Without a tenant
-// hint the placeholder in the command stays literal: formae has no
-// credential yet from which to derive one.
+// hint, the reported command must still be one the operator can actually
+// run: a caller relaying this verbatim (the MCP tool's own contract) hands
+// it straight to a shell, and a placeholder like "<id>" is not runnable.
 func TestNoCredentialsReportsTheLoginCommand(t *testing.T) {
 	err := azureCredentialFailure(azureCredentialsNeedsAuthentication, "")
 
@@ -38,7 +39,7 @@ func TestNoCredentialsReportsTheLoginCommand(t *testing.T) {
 	var f *printer.Failure
 	require.ErrorAs(t, err, &f)
 	assert.Equal(t, printer.CodeCredentialsRequired, f.Code)
-	assert.Equal(t, "az login --tenant <id>", f.Details["command"])
+	assert.Equal(t, "az login", f.Details["command"])
 }
 
 // A tenant hint the operator already gave travels into the reported command
@@ -49,6 +50,22 @@ func TestAzureTenantHintNamesTheLoginCommand(t *testing.T) {
 	var f *printer.Failure
 	require.ErrorAs(t, err, &f)
 	assert.Equal(t, "az login --tenant 11111111-1111-1111-1111-111111111111", f.Details["command"])
+}
+
+// azLoginCommand's two branches, tested directly: a known tenant names it,
+// and an unknown one omits the flag entirely rather than filling it with a
+// placeholder. Both must be commands an operator can actually paste into a
+// shell - never a string containing "<...>", which reads as a helpful hint
+// but is a broken command.
+func TestAzLoginCommand(t *testing.T) {
+	withTenant := azLoginCommand("11111111-1111-1111-1111-111111111111")
+	assert.Equal(t, "az login --tenant 11111111-1111-1111-1111-111111111111", withTenant)
+	assert.NotContains(t, withTenant, "<")
+
+	withoutTenant := azLoginCommand("")
+	assert.Equal(t, "az login", withoutTenant)
+	assert.NotContains(t, withoutTenant, "<", "a command containing a placeholder is not runnable")
+	assert.NotContains(t, withoutTenant, ">")
 }
 
 // A permission or reachability failure is not a credential failure:

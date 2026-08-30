@@ -107,12 +107,17 @@ func azureCredentialFailure(state azureCredentialState, tenantHint string) error
 
 // azLoginCommand is the exact remedy a needs-authentication failure names,
 // mirroring classifySSO's shape on the AWS path: report the command, never
-// run it. When no tenant hint was given the placeholder stays literal -
-// formae has no credential yet from which to derive a real one.
+// run it. A caller relaying this (the MCP tool's own contract is to show it
+// to the user verbatim) hands it straight to a shell, so it must always be
+// runnable as given. With no tenant hint, the flag is omitted rather than
+// filled with a placeholder like "<id>": that reads as a helpful stand-in
+// but is a broken command the moment anyone actually runs it, and formae has
+// no credential yet from which to derive a real value to put there. Plain
+// "az login" is the correct fallback - it is exactly what an operator would
+// run by hand in the same situation.
 func azLoginCommand(tenantHint string) string {
-	id := tenantHint
-	if id == "" {
-		id = "<id>"
+	if tenantHint == "" {
+		return "az login"
 	}
-	return "az login --tenant " + id
+	return "az login --tenant " + tenantHint
 }
