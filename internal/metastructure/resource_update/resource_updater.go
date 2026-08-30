@@ -1254,6 +1254,13 @@ func ShouldFilterByMatchFilter(filter *pkgmodel.MatchFilter, properties json.Raw
 		return false
 	}
 
+	// A filter naming no conditions excludes nothing. Reading it as a vacuous
+	// AND would make it exclude everything it is scoped to, so the emptiest
+	// filter anyone can write would be the most destructive one.
+	if len(filter.Conditions) == 0 {
+		return false
+	}
+
 	// All conditions must match (AND logic) to exclude
 	for _, cond := range filter.Conditions {
 		if !evaluateCondition(cond, properties) {

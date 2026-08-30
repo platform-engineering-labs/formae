@@ -580,13 +580,6 @@ func (rp *ResourcePersister) processResourceUpdate(commandID string, rc resource
 				}
 
 				for i := range rc.MatchFilters {
-					// A filter with no conditions never evicts here — skip it so that
-					// an unconfigured filter does not accidentally remove every row.
-					// This deliberately overrides the matcher's vacuous-true result
-					// for an empty condition set.
-					if len(rc.MatchFilters[i].Conditions) == 0 {
-						continue
-					}
 					if resource_update.ShouldFilterByMatchFilter(&rc.MatchFilters[i], completeProperties) {
 						slog.Info("Evicting unmanaged inventory row that matches a discovery filter",
 							"namespace", rc.ResourceTarget.Namespace,
