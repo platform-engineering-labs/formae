@@ -15,6 +15,7 @@ import (
 	"github.com/tidwall/sjson"
 
 	"github.com/platform-engineering-labs/formae/internal/constants"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/pathkey"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/transformations"
@@ -2533,6 +2534,19 @@ func translatePropertiesJSON(properties json.RawMessage, tripletToKsuid map[pkgm
 	return json.RawMessage(result), externalLabels, nil
 }
 
+// appendPathSegment appends one literal JSON map key or array index to a
+// gjson/sjson path, escaping it as it is appended. The walkers below build their
+// paths out of data-derived keys, and a key carrying path syntax would otherwise
+// address a nested tree — reading nothing, and writing the key's exploded
+// duplicate beside the key itself.
+func appendPathSegment(basePath, key string) string {
+	escaped := pathkey.Escape(key)
+	if basePath == "" {
+		return escaped
+	}
+	return basePath + "." + escaped
+}
+
 // translateEmbedSpans walks the JSON tree for objects with $embed==true and
 // rewrites any framed RS<base64>US $res envelopes in $template to $ref+KSUID form.
 func translateEmbedSpans(jsonStr string, tripletToKsuid map[pkgmodel.TripletKey]string, genKeyToKsuid map[pkgmodel.GeneratorKey]string, ds ResourceDataLookup, externalLabels map[string]string) (string, error) {
@@ -2566,12 +2580,7 @@ func translateEmbedSpansAtPath(basePath string, value gjson.Result, jsonStr stri
 		// Recurse into child fields
 		var walkErr error
 		value.ForEach(func(key, val gjson.Result) bool {
-			var childPath string
-			if basePath == "" {
-				childPath = key.String()
-			} else {
-				childPath = basePath + "." + key.String()
-			}
+			childPath := appendPathSegment(basePath, key.String())
 			jsonStr, walkErr = translateEmbedSpansAtPath(childPath, val, jsonStr, tripletToKsuid, genKeyToKsuid, ds, externalLabels)
 			return walkErr == nil
 		})
@@ -2581,12 +2590,7 @@ func translateEmbedSpansAtPath(basePath string, value gjson.Result, jsonStr stri
 	} else if value.IsArray() {
 		var walkErr error
 		value.ForEach(func(key, val gjson.Result) bool {
-			var childPath string
-			if basePath == "" {
-				childPath = key.String()
-			} else {
-				childPath = basePath + "." + key.String()
-			}
+			childPath := appendPathSegment(basePath, key.String())
 			jsonStr, walkErr = translateEmbedSpansAtPath(childPath, val, jsonStr, tripletToKsuid, genKeyToKsuid, ds, externalLabels)
 			return walkErr == nil
 		})
@@ -2869,10 +2873,7 @@ func collectOpaqueResolvablePaths(basePath string, value gjson.Result, opaqueByT
 		return
 	}
 	value.ForEach(func(key, val gjson.Result) bool {
-		childPath := key.String()
-		if basePath != "" {
-			childPath = basePath + "." + childPath
-		}
+		childPath := appendPathSegment(basePath, key.String())
 		collectOpaqueResolvablePaths(childPath, val, opaqueByTriplet, paths)
 		return true
 	})
