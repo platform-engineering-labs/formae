@@ -412,11 +412,26 @@ func RunCRUDTests(t *testing.T) {
 	rc := NewResultCollector()
 	t.Cleanup(func() { rc.PrintSummary() })
 
+	// The omit-and-observe sweep rides along on the CRUD run when an artifact
+	// path is configured; otherwise it is nil and inert.
+	sweep := newSweepFromEnv()
+	t.Cleanup(func() {
+		path := os.Getenv(envProviderDefaultObservations)
+		if sweep == nil || path == "" {
+			return
+		}
+		if err := sweep.writeTo(path); err != nil {
+			t.Errorf("writing provider-default observations to %s: %v", path, err)
+			return
+		}
+		t.Logf("Wrote %d provider-default observations to %s", len(sweep.observations()), path)
+	})
+
 	t.Logf("Discovered %d test case(s)", len(testCases))
 
 	for _, tc := range testCases {
 		t.Run(tc.Name, func(t *testing.T) {
-			runCRUDTest(t, tc, rc)
+			runCRUDTest(t, tc, rc, sweep)
 		})
 	}
 }
@@ -1445,7 +1460,7 @@ func describePlannedChanges(cmd *model.Command) string {
 //   - Non-comparison errors (eval, apply, poll, etc.) use rc.CRUDFatalf/CRUDErrorf directly.
 //   - Property comparison errors use rc.compareCRUDProperties, which wraps compareProperties
 //     with a collectingReporter to capture individual property mismatches for the result matrix.
-func runCRUDTest(t *testing.T, tc TestCase, rc *ResultCollector) {
+func runCRUDTest(t *testing.T, tc TestCase, rc *ResultCollector, sweep *providerDefaultSweep) {
 	if isParallelEnabled() {
 		t.Parallel()
 	}
@@ -1625,6 +1640,12 @@ func runCRUDTest(t *testing.T, tc TestCase, rc *ResultCollector) {
 	}
 
 	// === Step 7: Force synchronization to read actual state from cloud ===
+	// A configured settle window gives a provider that populates fields
+	// asynchronously time to do so before the post-sync read is taken.
+	if window := getSettleWindow(); window > 0 {
+		t.Logf("Waiting %s for provider state to settle before sync...", window)
+		time.Sleep(window)
+	}
 	t.Log("Step 7: Forcing synchronization...")
 	if err := harness.Sync(); err != nil {
 		rc.CRUDFatalf(t, idx, PhaseSync, "Sync command failed: %v", err)
@@ -1647,6 +1668,12 @@ func runCRUDTest(t *testing.T, tc TestCase, rc *ResultCollector) {
 	}
 
 	resourceAfterSync := inventoryAfterSync.Resources[0]
+
+	// Record the omit-and-observe result now that both reads exist: the create
+	// echo from step 5 and the post-sync read here. The fixture's own declared
+	// properties say which of the annotated fields were omitted.
+	sweep.record(tc.Name, actualResourceType, schemaHints(expectedResource),
+		expectedProperties, propertiesOf(actualResource), propertiesOf(resourceAfterSync))
 
 	// Compare properties using helper - verifies idempotency
 	syncFailed := !rc.compareCRUDProperties(t, idx, PhaseSync, expectedProperties, resourceAfterSync, "after sync", providerDefaults)
