@@ -6,13 +6,17 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
+	"github.com/demula/mksuid/v2"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/platform-engineering-labs/formae/internal/datastore"
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
 // dataMigrationLockID is the advisory-lock key data migrations serialize on.
@@ -128,6 +132,50 @@ func (l *postgresDataMigrationLease) HasCompletion(ctx context.Context, migratio
 func (l *postgresDataMigrationLease) WriteCompletion(ctx context.Context, migrationKey string) error {
 	label, incarnation := datastore.CompletionRowKey()
 	return l.UpsertMarker(ctx, migrationKey, label, incarnation, datastore.DataMigrationCompleted)
+}
+
+// TombstoneResources appends a delete tombstone per resource, skipping any row
+// whose current version is already one. Same statements as MarkerStore's, run
+// against the pgx handle this lease holds.
+func (l *postgresDataMigrationLease) TombstoneResources(ctx context.Context, resources []*pkgmodel.Resource, commandID string) error {
+	for _, resource := range resources {
+		var operation string
+		err := l.conn.QueryRow(ctx,
+			fmt.Sprintf(datastore.TombstoneLatestOperationSQL, "$1"), string(resource.URI())).Scan(&operation)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			// No row at all: nothing has been stored, so nothing to forget.
+		case err != nil:
+			return fmt.Errorf("failed to read the current version of %s: %w", resource.Ksuid, err)
+		case operation == datastore.TombstoneOperation:
+			// Tombstoning twice is a harmless no-op, which is what lets a
+			// migration that crashed part-way simply run again.
+			continue
+		}
+
+		placeholders := make([]any, 13)
+		for i := range placeholders {
+			placeholders[i] = fmt.Sprintf("$%d", i+1)
+		}
+		if _, err := l.conn.Exec(ctx, fmt.Sprintf(datastore.TombstoneInsertSQL, placeholders...),
+			string(resource.URI()),
+			mksuid.New().String(),
+			commandID,
+			datastore.TombstoneOperation,
+			resource.NativeID,
+			resource.Stack,
+			resource.Type,
+			resource.Label,
+			resource.Target,
+			"{}",
+			datastore.BoolToInt(resource.Managed),
+			resource.Ksuid,
+			"",
+		); err != nil {
+			return fmt.Errorf("failed to tombstone resource %s: %w", resource.Ksuid, err)
+		}
+	}
+	return nil
 }
 
 // Release drops the advisory lock on the session that took it and returns the

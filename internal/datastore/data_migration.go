@@ -9,6 +9,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+
+	"github.com/demula/mksuid/v2"
+
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
 // A one-time data migration repairs rows that an older build wrote wrongly. It
@@ -82,6 +86,11 @@ type DataMigrationLease interface {
 	// WriteCompletion records that every current target incarnation has a
 	// marker, so later boots can skip the scan entirely.
 	WriteCompletion(ctx context.Context, migrationKey string) error
+	// TombstoneResources appends a delete tombstone for each resource, exactly
+	// as DeleteResource does, but through the lease so the writes are part of
+	// the migration. It is DB-only: no plugin is ever called, so it can only
+	// ever make formae forget a row, never destroy anything in a cloud.
+	TombstoneResources(ctx context.Context, resources []*pkgmodel.Resource, commandID string) error
 	// Release ends the lease, committing its writes where they were staged.
 	Release() error
 }
@@ -195,4 +204,81 @@ func (m MarkerStore) HasCompletion(ctx context.Context, migrationKey string) (bo
 
 func (m MarkerStore) WriteCompletion(ctx context.Context, migrationKey string) error {
 	return m.UpsertMarker(ctx, migrationKey, completionRowLabel, completionRowIncarnation, DataMigrationCompleted)
+}
+
+// TombstoneSQL is the statement set a delete tombstone is written with, shared
+// so every backend's lease appends the same row DeleteResource would.
+//
+// The two statements are what storeResource reduces to for a delete of a
+// fully-loaded resource: its KSUID-lookup fallback cannot fire (the caller
+// passes rows it just read), the reaped and incarnation guards exempt deletes,
+// and the equality comparison always lands on a fresh version. What is left is
+// "skip if the current row is already a tombstone, otherwise append one".
+const (
+	TombstoneLatestOperationSQL = `SELECT operation FROM resources WHERE uri = %s ORDER BY version DESC LIMIT 1`
+	TombstoneInsertSQL          = `INSERT INTO resources (uri, version, command_id, operation, native_id, stack, type, label, target, data, managed, ksuid, target_incarnation_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)`
+)
+
+// TombstoneOperation is the operation a delete tombstone carries.
+const TombstoneOperation = "delete"
+
+// TombstoneResources appends a delete tombstone per resource through the
+// MarkerStore's handle, skipping any row whose current version is already one.
+func (m MarkerStore) TombstoneResources(ctx context.Context, resources []*pkgmodel.Resource, commandID string) error {
+	for _, resource := range resources {
+		tombstoned, err := m.currentlyTombstoned(ctx, resource)
+		if err != nil {
+			return err
+		}
+		if tombstoned {
+			// Tombstoning twice is a harmless no-op, which is what lets a
+			// migration that crashed part-way simply run again.
+			continue
+		}
+		if err := m.appendTombstone(ctx, resource, commandID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m MarkerStore) currentlyTombstoned(ctx context.Context, resource *pkgmodel.Resource) (bool, error) {
+	var operation string
+	err := m.Exec.QueryRowContext(ctx,
+		fmt.Sprintf(TombstoneLatestOperationSQL, m.ph(1)), string(resource.URI())).Scan(&operation)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("failed to read the current version of %s: %w", resource.Ksuid, err)
+	}
+	return operation == TombstoneOperation, nil
+}
+
+func (m MarkerStore) appendTombstone(ctx context.Context, resource *pkgmodel.Resource, commandID string) error {
+	placeholders := make([]any, 13)
+	for i := range placeholders {
+		placeholders[i] = m.ph(i + 1)
+	}
+	query := fmt.Sprintf(TombstoneInsertSQL, placeholders...)
+
+	if _, err := m.Exec.ExecContext(ctx, query,
+		string(resource.URI()),
+		mksuid.New().String(),
+		commandID,
+		TombstoneOperation,
+		resource.NativeID,
+		resource.Stack,
+		resource.Type,
+		resource.Label,
+		resource.Target,
+		// A tombstone carries no properties, exactly as DeleteResource writes it.
+		"{}",
+		BoolToInt(resource.Managed),
+		resource.Ksuid,
+		"",
+	); err != nil {
+		return fmt.Errorf("failed to tombstone resource %s: %w", resource.Ksuid, err)
+	}
+	return nil
 }
