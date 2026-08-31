@@ -23,39 +23,39 @@ const (
 
 // alphabet returns the characters a spec can actually draw, i.e. the union of
 // its enabled classes with excludeCharacters removed.
-func (p *PasswordGenerator) alphabet() map[rune]bool {
+func (g *PasswordGenerator) alphabet() map[rune]bool {
 	out := map[rune]bool{}
 	add := func(enabled bool, chars string) {
 		if !enabled {
 			return
 		}
 		for _, c := range chars {
-			if !strings.ContainsRune(p.ExcludeCharacters, c) {
+			if !strings.ContainsRune(g.ExcludeCharacters, c) {
 				out[c] = true
 			}
 		}
 	}
-	add(p.Uppercase, UppercaseChars)
-	add(p.Lowercase, LowercaseChars)
-	add(p.Digits, DigitChars)
-	add(p.Symbols, SymbolChars)
+	add(g.Uppercase, UppercaseChars)
+	add(g.Lowercase, LowercaseChars)
+	add(g.Digits, DigitChars)
+	add(g.Symbols, SymbolChars)
 	return out
 }
 
 // guaranteedClasses returns the classes a value drawn under this spec is known
 // to contain. Without requireEachIncludedType a draw guarantees nothing.
-func (p *PasswordGenerator) guaranteedClasses() map[string]bool {
-	if !p.RequireEachIncludedType {
+func (g *PasswordGenerator) guaranteedClasses() map[string]bool {
+	if !g.RequireEachIncludedType {
 		return map[string]bool{}
 	}
-	return p.enabledClasses()
+	return g.enabledClasses()
 }
 
-func (p *PasswordGenerator) enabledClasses() map[string]bool {
+func (g *PasswordGenerator) enabledClasses() map[string]bool {
 	out := map[string]bool{}
 	for name, enabled := range map[string]bool{
-		"uppercase": p.Uppercase, "lowercase": p.Lowercase,
-		"digits": p.Digits, "symbols": p.Symbols,
+		"uppercase": g.Uppercase, "lowercase": g.Lowercase,
+		"digits": g.Digits, "symbols": g.Symbols,
 	} {
 		if enabled {
 			out[name] = true
@@ -121,5 +121,5 @@ func GenerationSatisfies(drawn, desired Generator) bool {
 // silently stop covering.
 func isTypedNil(g Generator) bool {
 	v := reflect.ValueOf(g)
-	return v.Kind() == reflect.Ptr && v.IsNil()
+	return v.Kind() == reflect.Pointer && v.IsNil()
 }

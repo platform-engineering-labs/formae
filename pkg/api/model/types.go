@@ -136,6 +136,10 @@ const (
 	OperationDelete  = "delete"
 	OperationRead    = "read"
 	OperationReplace = "replace" // delete + create
+	// OperationDraw appears on a GeneratorUpdate only: it is a generator
+	// drawing a value, which rotates the secret every resource bound to that
+	// generator holds. No ResourceUpdate ever carries it.
+	OperationDraw = "draw"
 )
 
 const (
@@ -190,13 +194,29 @@ type PolicyUpdate struct {
 	ModifiedTs        time.Time       `json:"ModifiedTs,omitempty"`
 }
 
-// GeneratorUpdate is the API projection of a generator change: a create, an
-// update (spec change and/or rename), or a delete. GeneratorConfig and
-// OldGeneratorConfig carry the generator's declared spec only — the fields a
-// forma author writes. A generator's own identity (its KSUID) and drawn
-// generation are controller state that never reaches this projection: no
-// concrete Generator marshals its ID, and the value a generation drew does
-// not exist at plan/simulate time to project in the first place.
+// GeneratorUpdate is the API projection of one piece of generator work: a
+// create, an update (spec change and/or rename), a delete, or a draw.
+//
+// The first three change the generator's own row. A draw changes no row: it
+// produces a new value and every destination bound to the generator takes it,
+// which is a credential rotation and is why it is a plan entry of its own. A
+// generator whose spec is changing and that also draws is two entries, one per
+// operation, because the two are separate work with separate outcomes.
+//
+// GeneratorConfig and OldGeneratorConfig carry the generator's declared spec
+// only — the fields a forma author writes — and only on the operations that
+// change it; a draw carries neither. A generator's own identity (its KSUID)
+// and drawn generation are controller state that never reaches this
+// projection: no concrete Generator marshals its ID, and the value a
+// generation drew does not exist at plan/simulate time to project in the
+// first place.
+//
+// State, Duration and ErrorMessage report the operation's outcome on the three
+// that change the generator's row. On a draw they carry the plan's values and
+// do not follow the draw as it runs: a draw writes no generator row, so no
+// store holds its outcome for a status read to project. A draw that fails
+// explains itself on the ResourceUpdates it fails, which carry its reason as
+// their ErrorMessage.
 type GeneratorUpdate struct {
 	GeneratorLabel     string          `json:"GeneratorLabel"`
 	GeneratorType      string          `json:"GeneratorType"` // "password", etc.

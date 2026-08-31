@@ -53,13 +53,12 @@ func OperationColor(p theme.Palette, op string) lipgloss.AdaptiveColor {
 // question. Returns "" when there is nothing to do. th supplies the active
 // theme's colors for the rendered summary.
 func PromptForOperations(th *theme.Theme, cmd *apimodel.Command) string {
-	targetCreates, targetUpdates, stackCreates, stackUpdates, policyCreates, policyUpdates, generatorCreates, generatorUpdates, resourceCreates, resourceUpdates, resourceDeletes, resourceReplaces := analyzeCommands(cmd)
-
-	if targetCreates == 0 && targetUpdates == 0 && stackCreates == 0 && stackUpdates == 0 && policyCreates == 0 && policyUpdates == 0 && generatorCreates == 0 && generatorUpdates == 0 && resourceCreates == 0 && resourceUpdates == 0 && resourceDeletes == 0 && resourceReplaces == 0 {
+	tally := analyzeCommands(cmd)
+	if tally.empty() {
 		return ""
 	}
 
-	summary := operationSummary(th, targetCreates, targetUpdates, stackCreates, stackUpdates, policyCreates, policyUpdates, generatorCreates, generatorUpdates, resourceCreates, resourceUpdates, resourceDeletes, resourceReplaces)
+	summary := operationSummary(th, tally)
 	if summary == "" {
 		return ""
 	}
@@ -67,9 +66,35 @@ func PromptForOperations(th *theme.Theme, cmd *apimodel.Command) string {
 	return summary + "\n\nDo you want to continue?"
 }
 
+// opTally counts the operations a command performs, by entity and kind. It is
+// a struct rather than a return list because the counts are all ints and the
+// summary reads a dozen of them: a positional list is a transposition waiting
+// to happen.
+type opTally struct {
+	targetCreates    int
+	targetUpdates    int
+	stackCreates     int
+	stackUpdates     int
+	policyCreates    int
+	policyUpdates    int
+	generatorCreates int
+	generatorUpdates int
+	generatorDraws   int
+	resourceCreates  int
+	resourceUpdates  int
+	resourceDeletes  int
+	resourceReplaces int
+}
+
+// empty reports whether the command performs no operation at all.
+func (t opTally) empty() bool {
+	return t == opTally{}
+}
+
 // analyzeCommands counts each operation type in cmd, grouping grouped
 // (delete+create) pairs as replaces.
-func analyzeCommands(cmd *apimodel.Command) (targetCreates, targetUpdates, stackCreates, stackUpdates, policyCreates, policyUpdates, generatorCreates, generatorUpdates, resourceCreates, resourceUpdates, resourceDeletes, resourceReplaces int) {
+func analyzeCommands(cmd *apimodel.Command) opTally {
+	var tally opTally
 	// Group operations by GroupId
 	groupedOperations := make(map[string][]apimodel.ResourceUpdate)
 	ungroupedOperations := make([]apimodel.ResourceUpdate, 0)
@@ -108,13 +133,13 @@ func analyzeCommands(cmd *apimodel.Command) (targetCreates, targetUpdates, stack
 		}
 
 		if hasDelete && hasCreate {
-			resourceReplaces++
+			tally.resourceReplaces++
 		} else if hasDelete {
-			resourceDeletes++
+			tally.resourceDeletes++
 		} else if hasCreate {
-			resourceCreates++
+			tally.resourceCreates++
 		} else if hasUpdate {
-			resourceUpdates++
+			tally.resourceUpdates++
 		}
 	}
 
@@ -122,22 +147,22 @@ func analyzeCommands(cmd *apimodel.Command) (targetCreates, targetUpdates, stack
 	for _, rc := range ungroupedOperations {
 		switch rc.Operation {
 		case apimodel.OperationCreate:
-			resourceCreates++
+			tally.resourceCreates++
 		case apimodel.OperationUpdate:
-			resourceUpdates++
+			tally.resourceUpdates++
 		case apimodel.OperationDelete:
-			resourceDeletes++
+			tally.resourceDeletes++
 		case apimodel.OperationReplace:
-			resourceReplaces++
+			tally.resourceReplaces++
 		}
 	}
 
 	for _, tu := range cmd.TargetUpdates {
 		switch tu.Operation {
 		case "create":
-			targetCreates++
+			tally.targetCreates++
 		case "update":
-			targetUpdates++
+			tally.targetUpdates++
 		}
 	}
 
@@ -145,9 +170,9 @@ func analyzeCommands(cmd *apimodel.Command) (targetCreates, targetUpdates, stack
 	for _, su := range cmd.StackUpdates {
 		switch su.Operation {
 		case "create":
-			stackCreates++
+			tally.stackCreates++
 		case "update":
-			stackUpdates++
+			tally.stackUpdates++
 		}
 	}
 
@@ -155,79 +180,93 @@ func analyzeCommands(cmd *apimodel.Command) (targetCreates, targetUpdates, stack
 	for _, pu := range cmd.PolicyUpdates {
 		switch pu.Operation {
 		case "create":
-			policyCreates++
+			tally.policyCreates++
 		case "update":
-			policyUpdates++
+			tally.policyUpdates++
 		}
 	}
 
-	// Count generator updates
+	// Count generator updates. A draw counts separately from the three that
+	// change the generator's own row: it rotates the secret every resource
+	// bound to the generator holds, so an operator confirming the apply has to
+	// be told about it even when no row changes.
 	for _, gu := range cmd.GeneratorUpdates {
 		switch gu.Operation {
-		case "create":
-			generatorCreates++
-		case "update":
-			generatorUpdates++
+		case apimodel.OperationCreate:
+			tally.generatorCreates++
+		case apimodel.OperationUpdate:
+			tally.generatorUpdates++
+		case apimodel.OperationDraw:
+			tally.generatorDraws++
 		}
 	}
 
-	return
+	return tally
 }
 
 // operationSummary builds the colored "This operation will …" sentence.
-// Colors use theme roles: Error for destructive ops (delete/replace), Done for
-// creates, and TextPrimary for updates (no gold; routine updates aren't tinted).
-func operationSummary(th *theme.Theme, targetCreates, targetUpdates, stackCreates, stackUpdates, policyCreates, policyUpdates, generatorCreates, generatorUpdates, resourceCreates, resourceUpdates, resourceDeletes, resourceReplaces int) string {
-	if targetCreates == 0 && targetUpdates == 0 && stackCreates == 0 && stackUpdates == 0 && policyCreates == 0 && policyUpdates == 0 && generatorCreates == 0 && generatorUpdates == 0 && resourceCreates == 0 && resourceUpdates == 0 && resourceDeletes == 0 && resourceReplaces == 0 {
+// Colors use theme roles: Error for destructive ops (delete/replace), gold for
+// a credential rotation, Done for creates, and TextPrimary for updates
+// (routine updates aren't tinted).
+func operationSummary(th *theme.Theme, t opTally) string {
+	if t.empty() {
 		return ""
 	}
 
 	errSt := lipgloss.NewStyle().Foreground(th.Palette.Error)
+	rotateSt := lipgloss.NewStyle().Foreground(th.Palette.Warning)
 	doneSt := lipgloss.NewStyle().Foreground(th.Palette.Done)
 	updateSt := lipgloss.NewStyle().Foreground(th.Palette.TextPrimary)
 
 	var parts []string
 
 	// Destructive resource ops first
-	if resourceDeletes > 0 {
-		parts = append(parts, errSt.Render(fmt.Sprintf("delete %d resource(s)", resourceDeletes)))
+	if t.resourceDeletes > 0 {
+		parts = append(parts, errSt.Render(fmt.Sprintf("delete %d resource(s)", t.resourceDeletes)))
 	}
-	if resourceReplaces > 0 {
-		parts = append(parts, errSt.Render(fmt.Sprintf("replace %d resource(s)", resourceReplaces)))
+	if t.resourceReplaces > 0 {
+		parts = append(parts, errSt.Render(fmt.Sprintf("replace %d resource(s)", t.resourceReplaces)))
+	}
+
+	// A rotation destroys nothing but invalidates a live secret everywhere it
+	// is bound, so it leads the non-destructive ops and says what it costs.
+	if t.generatorDraws > 0 {
+		parts = append(parts, rotateSt.Render(fmt.Sprintf(
+			"rotate %d generator(s) (every bound resource takes a new secret)", t.generatorDraws)))
 	}
 
 	// Creates (stacks, policies, targets, resources)
-	if stackCreates > 0 {
-		parts = append(parts, doneSt.Render(fmt.Sprintf("create %d stack(s)", stackCreates)))
+	if t.stackCreates > 0 {
+		parts = append(parts, doneSt.Render(fmt.Sprintf("create %d stack(s)", t.stackCreates)))
 	}
-	if policyCreates > 0 {
-		parts = append(parts, doneSt.Render(fmt.Sprintf("create %d policy(ies)", policyCreates)))
+	if t.policyCreates > 0 {
+		parts = append(parts, doneSt.Render(fmt.Sprintf("create %d policy(ies)", t.policyCreates)))
 	}
-	if generatorCreates > 0 {
-		parts = append(parts, doneSt.Render(fmt.Sprintf("create %d generator(s)", generatorCreates)))
+	if t.generatorCreates > 0 {
+		parts = append(parts, doneSt.Render(fmt.Sprintf("create %d generator(s)", t.generatorCreates)))
 	}
-	if targetCreates > 0 {
-		parts = append(parts, doneSt.Render(fmt.Sprintf("create %d target(s)", targetCreates)))
+	if t.targetCreates > 0 {
+		parts = append(parts, doneSt.Render(fmt.Sprintf("create %d target(s)", t.targetCreates)))
 	}
-	if resourceCreates > 0 {
-		parts = append(parts, doneSt.Render(fmt.Sprintf("create %d resource(s)", resourceCreates)))
+	if t.resourceCreates > 0 {
+		parts = append(parts, doneSt.Render(fmt.Sprintf("create %d resource(s)", t.resourceCreates)))
 	}
 
 	// Updates (stacks, policies, targets, resources)
-	if stackUpdates > 0 {
-		parts = append(parts, updateSt.Render(fmt.Sprintf("update %d stack(s)", stackUpdates)))
+	if t.stackUpdates > 0 {
+		parts = append(parts, updateSt.Render(fmt.Sprintf("update %d stack(s)", t.stackUpdates)))
 	}
-	if policyUpdates > 0 {
-		parts = append(parts, updateSt.Render(fmt.Sprintf("update %d policy(ies)", policyUpdates)))
+	if t.policyUpdates > 0 {
+		parts = append(parts, updateSt.Render(fmt.Sprintf("update %d policy(ies)", t.policyUpdates)))
 	}
-	if generatorUpdates > 0 {
-		parts = append(parts, updateSt.Render(fmt.Sprintf("update %d generator(s)", generatorUpdates)))
+	if t.generatorUpdates > 0 {
+		parts = append(parts, updateSt.Render(fmt.Sprintf("update %d generator(s)", t.generatorUpdates)))
 	}
-	if targetUpdates > 0 {
-		parts = append(parts, updateSt.Render(fmt.Sprintf("update %d target(s)", targetUpdates)))
+	if t.targetUpdates > 0 {
+		parts = append(parts, updateSt.Render(fmt.Sprintf("update %d target(s)", t.targetUpdates)))
 	}
-	if resourceUpdates > 0 {
-		parts = append(parts, updateSt.Render(fmt.Sprintf("update %d resource(s)", resourceUpdates)))
+	if t.resourceUpdates > 0 {
+		parts = append(parts, updateSt.Render(fmt.Sprintf("update %d resource(s)", t.resourceUpdates)))
 	}
 
 	var joinedParts string

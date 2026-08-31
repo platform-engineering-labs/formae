@@ -53,12 +53,23 @@ type FormaCommand struct {
 	StackUpdates     []stack_update.StackUpdate         `json:"StackUpdates,omitempty"`
 	PolicyUpdates    []policy_update.PolicyUpdate       `json:"PolicyUpdates,omitempty"`
 	GeneratorUpdates []generator_update.GeneratorUpdate `json:"GeneratorUpdates,omitempty"`
-	Config           config.FormaCommandConfig          `json:"Config"`
-	Command          pkgmodel.Command                   `json:"Command"`
-	ClientID         string                             `json:"ClientId,omitempty"`
-	Subject          string                             `json:"Subject,omitempty"`
-	SubjectName      string                             `json:"SubjectName,omitempty"`
-	Source           Source                             `json:"Source,omitempty"`
+	// DrawGeneratorUpdates are the synthetic draws the changeset schedules,
+	// one per generator whose value some destination in this command still
+	// needs. They are not part of the generator diff above: a draw writes no
+	// generator row, and a generator whose spec never changed still gets one
+	// when a resource is newly bound to it.
+	//
+	// Deliberately not serialized. A draw produces a value in memory for the
+	// destinations in the same changeset and is meaningless outside it, so a
+	// command recovered from storage re-derives its draws from the surviving
+	// destinations rather than replaying a stale set.
+	DrawGeneratorUpdates []generator_update.GeneratorUpdate `json:"-"`
+	Config               config.FormaCommandConfig          `json:"Config"`
+	Command              pkgmodel.Command                   `json:"Command"`
+	ClientID             string                             `json:"ClientId,omitempty"`
+	Subject              string                             `json:"Subject,omitempty"`
+	SubjectName          string                             `json:"SubjectName,omitempty"`
+	Source               Source                             `json:"Source,omitempty"`
 }
 
 type FormaCommandResult struct {

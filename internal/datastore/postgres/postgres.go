@@ -1597,6 +1597,61 @@ func (d DatastorePostgres) FindResourcesDependingOn(ksuid string) ([]*pkgmodel.R
 	return resources, rows.Err()
 }
 
+// FindResourcesReferencingGenerator finds the live resources that bind a property
+// to the given generator through a $gen envelope. A translated envelope's
+// $generator KSUID is an outbound reference KSUID, so it lands in the same
+// GIN-indexed refs column the $ref lookup uses and the array-overlap query
+// narrows the scan cheaply. That column records only that a KSUID is
+// referenced, not how, so the overlap is a prefilter and pkgmodel.BindsGenerator
+// decides which candidates are really destinations.
+func (d DatastorePostgres) FindResourcesReferencingGenerator(generatorKsuid string) ([]*pkgmodel.Resource, error) {
+	ctx, span := tracer.Start(context.Background(), "FindResourcesReferencingGenerator")
+	defer span.End()
+
+	query := `
+	SELECT data, ksuid
+	FROM resources r1
+	WHERE refs && $1
+	AND NOT EXISTS (
+		SELECT 1
+		FROM resources r2
+		WHERE r1.uri = r2.uri
+		AND r2.version COLLATE "C" > r1.version COLLATE "C"
+	)
+	AND operation != $2 AND operation != 'reaped'
+	`
+
+	rows, err := d.pool.Query(ctx, query, []string{generatorKsuid}, resource_update.OperationDelete)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var resources []*pkgmodel.Resource
+	for rows.Next() {
+		var jsonData, ksuidResult string
+		if err := rows.Scan(&jsonData, &ksuidResult); err != nil {
+			return nil, err
+		}
+
+		// The SQL above is only a prefilter: it is deliberately broader than
+		// the truth so no destination is missed. pkgmodel.BindsGenerator is
+		// authoritative, and drops any candidate it matched for another reason.
+		if !pkgmodel.BindsGenerator([]byte(jsonData), generatorKsuid) {
+			continue
+		}
+
+		var resource pkgmodel.Resource
+		if err := json.Unmarshal([]byte(jsonData), &resource); err != nil {
+			return nil, err
+		}
+		resource.Ksuid = ksuidResult
+		resources = append(resources, &resource)
+	}
+
+	return resources, rows.Err()
+}
+
 func (d DatastorePostgres) FindResourcesDependingOnMany(ksuids []string) (map[string][]*pkgmodel.Resource, error) {
 	ctx, span := tracer.Start(context.Background(), "FindResourcesDependingOnMany")
 	defer span.End()

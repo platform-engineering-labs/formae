@@ -363,6 +363,13 @@ func (c *Client) parseSubmitCommandErrorResponse(body io.ReadCloser) (*apimodel.
 		}
 		return nil, &errResp
 
+	case apimodel.GeneratorDestinationsUnreachable:
+		var errResp apimodel.ErrorResponse[apimodel.FormaGeneratorDestinationsUnreachableError]
+		if err := json.Unmarshal(bodyBytes, &errResp); err != nil {
+			return nil, fmt.Errorf("failed to parse GeneratorDestinationsUnreachable error: %w", err)
+		}
+		return nil, &errResp
+
 	case apimodel.TargetAlreadyExists:
 		var errResp apimodel.ErrorResponse[apimodel.TargetAlreadyExistsError]
 		if err := json.Unmarshal(bodyBytes, &errResp); err != nil {

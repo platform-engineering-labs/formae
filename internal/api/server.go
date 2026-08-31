@@ -818,6 +818,11 @@ func mapError(c echo.Context, err error) error {
 		return apiError(c, http.StatusBadRequest, apimodel.ReferencedGeneratorsNotFound, generatorNotFoundError)
 	}
 
+	var unreachableDestinationsError apimodel.FormaGeneratorDestinationsUnreachableError
+	if errors.As(err, &unreachableDestinationsError) {
+		return apiError(c, http.StatusUnprocessableEntity, apimodel.GeneratorDestinationsUnreachable, unreachableDestinationsError)
+	}
+
 	var targetExistsError apimodel.TargetAlreadyExistsError
 	if errors.As(err, &targetExistsError) {
 		return apiError(c, http.StatusConflict, apimodel.TargetAlreadyExists, targetExistsError)

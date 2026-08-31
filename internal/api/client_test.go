@@ -73,6 +73,35 @@ func TestParseSubmitCommandErrorResponse_ReferencedGeneratorsNotFound(t *testing
 	assert.Equal(t, "value", got.Data.Missing[0].Output)
 }
 
+// TestParseSubmitCommandErrorResponse_GeneratorDestinationsUnreachable asserts
+// the client decodes a GeneratorDestinationsUnreachable body into its typed
+// error, so the CLI can name the destinations rather than printing "unknown
+// error type".
+func TestParseSubmitCommandErrorResponse_GeneratorDestinationsUnreachable(t *testing.T) {
+	body, err := json.Marshal(apimodel.ErrorResponse[apimodel.FormaGeneratorDestinationsUnreachableError]{
+		ErrorType: apimodel.GeneratorDestinationsUnreachable,
+		Data: apimodel.FormaGeneratorDestinationsUnreachableError{
+			Unreachable: []apimodel.UnreachableGeneratorDestination{
+				{GeneratorLabel: "db-password", GeneratorStack: "app", Stack: "web", Label: "api-secret", Type: "AWS::SecretsManager::Secret"},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	c := &Client{}
+	_, perr := c.parseSubmitCommandErrorResponse(io.NopCloser(bytes.NewReader(body)))
+	require.Error(t, perr)
+
+	var got *apimodel.ErrorResponse[apimodel.FormaGeneratorDestinationsUnreachableError]
+	require.ErrorAs(t, perr, &got, "must decode into a typed FormaGeneratorDestinationsUnreachableError")
+	require.Len(t, got.Data.Unreachable, 1)
+	assert.Equal(t, "db-password", got.Data.Unreachable[0].GeneratorLabel)
+	assert.Equal(t, "app", got.Data.Unreachable[0].GeneratorStack)
+	assert.Equal(t, "api-secret", got.Data.Unreachable[0].Label)
+	assert.Equal(t, "web", got.Data.Unreachable[0].Stack)
+	assert.Equal(t, "AWS::SecretsManager::Secret", got.Data.Unreachable[0].Type)
+}
+
 // TestGetFormaCommandsStatusNotFoundReturnsConcreteEmptyResult verifies a 404
 // from the commands/status endpoint resolves to a well-formed empty result
 // (non-nil, zero Commands), not a bare nil that forces every caller to

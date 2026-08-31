@@ -14,29 +14,30 @@ import (
 type APIError string
 
 const (
-	ConflictingCommands          APIError = "ConflictingCommands"
-	PatchRejected                APIError = "PatchRejected"
-	ReconcileRejected            APIError = "ReconcileRejected"
-	CyclesDetected               APIError = "CyclesDetected"
-	EmptyStackRejected           APIError = "EmptyStackRejected"
-	TargetAlreadyExists          APIError = "TargetAlreadyExists"
-	TargetReaped                 APIError = "TargetReaped"
-	ReferencedResourcesNotFound  APIError = "ReferencedResourcesNotFound"
-	ReferencedGeneratorsNotFound APIError = "ReferencedGeneratorsNotFound"
-	RequiredFieldMissingOnCreate APIError = "RequiredFieldMissingOnCreate"
-	StackReferenceNotFound       APIError = "StackReferenceNotFound"
-	TargetReferenceNotFound      APIError = "TargetReferenceNotFound"
-	InvalidQuery                 APIError = "InvalidQueryError"
-	StackDeletedDuringApply      APIError = "StackDeletedDuringApply"
-	ReconcilePolicyRequired      APIError = "ReconcilePolicyRequired"
-	NonPortableResources         APIError = "NonPortableResources"
-	PluginNotFound               APIError = "PluginNotFound"
-	PluginVersionNotFound        APIError = "PluginVersionNotFound"
-	PluginDependencyConflict     APIError = "PluginDependencyConflict"
-	PluginRepositoryUnreachable  APIError = "PluginRepositoryUnreachable"
-	PluginSignatureInvalid       APIError = "PluginSignatureInvalid"
-	TargetHasDependents          APIError = "TargetHasDependents"
-	ResourceHasDependents        APIError = "ResourceHasDependents"
+	ConflictingCommands              APIError = "ConflictingCommands"
+	PatchRejected                    APIError = "PatchRejected"
+	ReconcileRejected                APIError = "ReconcileRejected"
+	CyclesDetected                   APIError = "CyclesDetected"
+	EmptyStackRejected               APIError = "EmptyStackRejected"
+	TargetAlreadyExists              APIError = "TargetAlreadyExists"
+	TargetReaped                     APIError = "TargetReaped"
+	ReferencedResourcesNotFound      APIError = "ReferencedResourcesNotFound"
+	ReferencedGeneratorsNotFound     APIError = "ReferencedGeneratorsNotFound"
+	RequiredFieldMissingOnCreate     APIError = "RequiredFieldMissingOnCreate"
+	StackReferenceNotFound           APIError = "StackReferenceNotFound"
+	TargetReferenceNotFound          APIError = "TargetReferenceNotFound"
+	InvalidQuery                     APIError = "InvalidQueryError"
+	StackDeletedDuringApply          APIError = "StackDeletedDuringApply"
+	ReconcilePolicyRequired          APIError = "ReconcilePolicyRequired"
+	NonPortableResources             APIError = "NonPortableResources"
+	PluginNotFound                   APIError = "PluginNotFound"
+	PluginVersionNotFound            APIError = "PluginVersionNotFound"
+	PluginDependencyConflict         APIError = "PluginDependencyConflict"
+	PluginRepositoryUnreachable      APIError = "PluginRepositoryUnreachable"
+	PluginSignatureInvalid           APIError = "PluginSignatureInvalid"
+	TargetHasDependents              APIError = "TargetHasDependents"
+	ResourceHasDependents            APIError = "ResourceHasDependents"
+	GeneratorDestinationsUnreachable APIError = "GeneratorDestinationsUnreachable"
 )
 
 type ErrorResponse[T any] struct {
@@ -121,6 +122,33 @@ type FormaReferencedGeneratorsNotFoundError struct {
 
 func (e FormaReferencedGeneratorsNotFoundError) Error() string {
 	return "forma rejected because one or more generator references were not found"
+}
+
+// UnreachableGeneratorDestination names one live resource bound to a
+// generator that has to draw, which the command being admitted does not
+// reach. GeneratorLabel and GeneratorStack identify the generator as the
+// forma names it; Stack, Label and Type are enough to find the destination.
+type UnreachableGeneratorDestination struct {
+	GeneratorLabel string `json:"GeneratorLabel"`
+	GeneratorStack string `json:"GeneratorStack"`
+	Stack          string `json:"Stack"`
+	Label          string `json:"Label"`
+	Type           string `json:"Type"`
+}
+
+// FormaGeneratorDestinationsUnreachableError refuses an apply that would draw
+// a generator's value for only some of the resources bound to it.
+//
+// formae keeps a hash of a drawn value, never the value, so a destination
+// outside the command when the draw happened can never be caught up
+// afterwards: the only way to give it a value is to draw again, which puts
+// its siblings behind. Refusing is the only outcome that converges.
+type FormaGeneratorDestinationsUnreachableError struct {
+	Unreachable []UnreachableGeneratorDestination `json:"Unreachable"`
+}
+
+func (e FormaGeneratorDestinationsUnreachableError) Error() string {
+	return "forma rejected because a generator must draw a new value and the command does not reach every resource bound to it"
 }
 
 type TargetAlreadyExistsError struct {

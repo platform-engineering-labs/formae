@@ -94,6 +94,23 @@ func TestRender_ReferencedGeneratorsNotFound_Golden(t *testing.T) {
 	tuitest.RequireGolden(t, []byte(out))
 }
 
+// ── 3c. FormaGeneratorDestinationsUnreachableError ────────────────────────────
+
+func TestRender_GeneratorDestinationsUnreachable_Golden(t *testing.T) {
+	err := &apimodel.ErrorResponse[apimodel.FormaGeneratorDestinationsUnreachableError]{
+		ErrorType: apimodel.GeneratorDestinationsUnreachable,
+		Data: apimodel.FormaGeneratorDestinationsUnreachableError{
+			Unreachable: []apimodel.UnreachableGeneratorDestination{
+				{GeneratorLabel: "db-password", GeneratorStack: "app", Stack: "web", Label: "api-secret", Type: "AWS::SecretsManager::Secret"},
+				{GeneratorLabel: "db-password", GeneratorStack: "app", Stack: "jobs", Label: "worker-secret", Type: "AWS::SecretsManager::Secret"},
+			},
+		},
+	}
+	out, rerr := Render(err)
+	require.NoError(t, rerr)
+	tuitest.RequireGolden(t, []byte(out))
+}
+
 // ── 4. FormaPatchRejectedError ────────────────────────────────────────────────
 
 func TestRender_PatchRejected_Golden(t *testing.T) {

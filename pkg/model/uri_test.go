@@ -167,3 +167,67 @@ func TestCollectReferencedKSUIDs(t *testing.T) {
 		assert.Equal(t, []string{}, got)
 	})
 }
+
+func TestCollectReferencedKSUIDs_GenEnvelopes(t *testing.T) {
+	t.Run("translated $gen envelope contributes its generator KSUID", func(t *testing.T) {
+		data := []byte(`{
+			"MasterUserPassword": {
+				"$gen": true,
+				"$generator": "2genKSUID000000000000000000",
+				"$output": "value",
+				"$visibility": "Opaque",
+				"$value": "sha256:abc",
+				"$hashed": true,
+				"$resolvedFrom": "sha256:abc"
+			}
+		}`)
+		got := CollectReferencedKSUIDs(data)
+		assert.Equal(t, []string{"2genKSUID000000000000000000"}, got)
+	})
+
+	t.Run("a document carrying both a $ref and a $gen yields both KSUIDs", func(t *testing.T) {
+		data := []byte(`{
+			"VpcId": {"$ref": "formae://2refKSUID000000000000000000#/VpcId", "$value": "vpc-1"},
+			"Password": {"$gen": true, "$generator": "2genKSUID000000000000000000", "$output": "value", "$value": "sha256:abc"}
+		}`)
+		got := CollectReferencedKSUIDs(data)
+		assert.Equal(t, []string{"2genKSUID000000000000000000", "2refKSUID000000000000000000"}, got)
+	})
+
+	t.Run("$gen nested inside an array element is collected", func(t *testing.T) {
+		data := []byte(`{
+			"Users": [
+				{"Name": "alice", "Password": {"$gen": true, "$generator": "2genAAA00000000000000000000", "$output": "value"}},
+				{"Name": "bob", "Password": {"$gen": true, "$generator": "2genBBB00000000000000000000", "$output": "value"}}
+			]
+		}`)
+		got := CollectReferencedKSUIDs(data)
+		assert.Equal(t, []string{"2genAAA00000000000000000000", "2genBBB00000000000000000000"}, got)
+	})
+
+	t.Run("untranslated $gen envelope contributes nothing", func(t *testing.T) {
+		data := []byte(`{
+			"Password": {"$gen": true, "$label": "db-password", "$stack": "default", "$output": "value", "$visibility": "Opaque"}
+		}`)
+		got := CollectReferencedKSUIDs(data)
+		assert.Equal(t, []string{}, got)
+	})
+
+	t.Run("the same generator bound to two properties is deduped", func(t *testing.T) {
+		data := []byte(`{
+			"A": {"$gen": true, "$generator": "2sameGen0000000000000000000", "$output": "value"},
+			"B": {"$gen": true, "$generator": "2sameGen0000000000000000000", "$output": "value"}
+		}`)
+		got := CollectReferencedKSUIDs(data)
+		assert.Equal(t, []string{"2sameGen0000000000000000000"}, got)
+	})
+
+	t.Run("multiple generator KSUIDs are returned sorted", func(t *testing.T) {
+		data := []byte(`{
+			"A": {"$gen": true, "$generator": "zzzGen", "$output": "value"},
+			"B": {"$gen": true, "$generator": "aaaGen", "$output": "value"}
+		}`)
+		got := CollectReferencedKSUIDs(data)
+		assert.Equal(t, []string{"aaaGen", "zzzGen"}, got)
+	})
+}

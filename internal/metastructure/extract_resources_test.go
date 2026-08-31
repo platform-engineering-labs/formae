@@ -173,6 +173,9 @@ func (m *mockExtractDatastore) LoadLatestResourceByKsuid(_ string) (*pkgmodel.Re
 func (m *mockExtractDatastore) FindResourcesDependingOn(_ string) ([]*pkgmodel.Resource, error) {
 	panic("not implemented")
 }
+func (m *mockExtractDatastore) FindResourcesReferencingGenerator(_ string) ([]*pkgmodel.Resource, error) {
+	panic("not implemented")
+}
 func (m *mockExtractDatastore) FindResourcesDependingOnMany(_ []string) (map[string][]*pkgmodel.Resource, error) {
 	panic("not implemented")
 }

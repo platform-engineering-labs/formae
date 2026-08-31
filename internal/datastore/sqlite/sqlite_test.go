@@ -599,9 +599,9 @@ func TestBulkStoreResourceUpdates_StripsOpaqueRefValueFromExistingTarget(t *test
 // fail-closed strip at the storage boundary: a $gen envelope missing
 // $visibility entirely (a shape normal translation never produces — the
 // schema fixes $visibility to "Opaque" on every $gen) must still be stripped
-// before it reaches the database. Before the fix, gating the strip predicate
-// on a $visibility reading let this exact shape land in the SQLite file in
-// cleartext.
+// before it reaches the database. The strip predicate therefore keys off the
+// $gen envelope itself; a predicate gated on reading $visibility would let
+// this shape land in the SQLite file in cleartext.
 func TestCreateTarget_StripsOpaqueGenValueWithoutVisibility(t *testing.T) {
 	cfg := &pkgmodel.DatastoreConfig{
 		DatastoreType: pkgmodel.SqliteDatastore,

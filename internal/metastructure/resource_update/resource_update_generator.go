@@ -64,37 +64,7 @@ func GenerateResourceUpdates(
 
 	var resourceUpdates []ResourceUpdate
 
-	// existingTargetMap contains targets as they currently exist in the DB.
-	// Used for delete operations and as the "prior state" of a resource's target.
-	var existingTargetMap = make(map[string]*pkgmodel.Target)
-	for _, target := range existingTargets {
-		existingTargetMap[target.Label] = target
-	}
-
-	// desiredTargetMap starts as a copy of existingTargetMap with configs converted
-	// to plugin format (stripping $ref/$value metadata from target resolvables).
-	// Then overridden with forma targets for new targets only. For existing targets,
-	// the DB config is preferred because it contains resolved values; but we must
-	// convert it because Ergo Framework cannot serialize json.RawMessage with nested
-	// $ref/$value objects (ETF encoding silently drops the message).
-	var desiredTargetMap = make(map[string]*pkgmodel.Target)
-	for _, target := range existingTargets {
-		t := *target
-		if converted, err := resolver.ConvertToPluginFormat(t.Config); err == nil {
-			t.Config = converted
-		}
-		tCopy := t
-		desiredTargetMap[target.Label] = &tCopy
-	}
-	for _, target := range forma.Targets {
-		t := target
-		if _, exists := existingTargetMap[target.Label]; !exists {
-			desiredTargetMap[target.Label] = &t
-			slog.Debug("Target does not exist in existing targets - adding it", "target", target.Label)
-			existingTargetMap[target.Label] = &t
-		}
-		// Existing targets: keep the DB config (already converted above)
-	}
+	existingTargetMap, desiredTargetMap := buildTargetMaps(forma, existingTargets)
 
 	// Validate stack references for commands that modify resources, sync commands are triggered from the agent
 	// and are guaranteed to reference existing stacks only
@@ -143,6 +113,51 @@ func GenerateResourceUpdates(
 	}
 
 	return resourceUpdates, nil
+}
+
+// buildTargetMaps derives the prior and desired views of this command's
+// targets. It is shared by the ordinary planning pass and by the co-planning
+// pass that follows a generator draw, so both hand NewResourceUpdateForExisting
+// the same target on either side.
+//
+// existingTargetMap contains targets as they currently exist in the DB. It is
+// used for delete operations and as the "prior state" of a resource's target.
+//
+// desiredTargetMap starts as a copy of existingTargetMap with configs converted
+// to plugin format (stripping $ref/$value metadata from target resolvables).
+// Then overridden with forma targets for new targets only. For existing targets,
+// the DB config is preferred because it contains resolved values; but we must
+// convert it because Ergo Framework cannot serialize json.RawMessage with nested
+// $ref/$value objects (ETF encoding silently drops the message).
+func buildTargetMaps(
+	forma *pkgmodel.Forma,
+	existingTargets []*pkgmodel.Target,
+) (map[string]*pkgmodel.Target, map[string]*pkgmodel.Target) {
+	existingTargetMap := make(map[string]*pkgmodel.Target)
+	for _, target := range existingTargets {
+		existingTargetMap[target.Label] = target
+	}
+
+	desiredTargetMap := make(map[string]*pkgmodel.Target)
+	for _, target := range existingTargets {
+		t := *target
+		if converted, err := resolver.ConvertToPluginFormat(t.Config); err == nil {
+			t.Config = converted
+		}
+		tCopy := t
+		desiredTargetMap[target.Label] = &tCopy
+	}
+	for _, target := range forma.Targets {
+		t := target
+		if _, exists := existingTargetMap[target.Label]; !exists {
+			desiredTargetMap[target.Label] = &t
+			slog.Debug("Target does not exist in existing targets - adding it", "target", target.Label)
+			existingTargetMap[target.Label] = &t
+		}
+		// Existing targets: keep the DB config (already converted above)
+	}
+
+	return existingTargetMap, desiredTargetMap
 }
 
 // matchExistingForDesired finds the existing managed resource that corresponds
@@ -853,6 +868,7 @@ func generateResourceUpdatesForReconcile(
 						mode,
 						source,
 						force,
+						false,
 					)
 					if err != nil {
 						return nil, fmt.Errorf("failed to generate resource update for existing unmanaged resource: %w", err)
@@ -908,6 +924,7 @@ func generateResourceUpdatesForReconcile(
 						mode,
 						source,
 						force,
+						false,
 					)
 
 					if err != nil {
@@ -988,6 +1005,7 @@ func generateResourceUpdatesForReconcile(
 						mode,
 						source,
 						force,
+						false,
 					)
 					if err != nil {
 						return nil, fmt.Errorf("failed to generate resource update for unmanaged resource: %w", err)
@@ -1356,6 +1374,7 @@ func generateResourceUpdatesForPatch(
 					mode,
 					source,
 					force,
+					false,
 				)
 
 				if err != nil {

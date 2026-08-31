@@ -140,6 +140,7 @@ func TestClassifyOccurrence(t *testing.T) {
 	writtenLeaf := provenance.DigestOfString("leaf-value")
 	id := occIdentity(t, `{"$ref":"formae://2abcdefghijklmnopqrstuvwxyz#/S"}`)
 	otherID := occIdentity(t, `{"$ref":"formae://2zzzzzzzzzzzzzzzzzzzzzzzzzz#/S"}`)
+	genID := occIdentity(t, `{"$gen":true,"$generator":"2abcdefghijklmnopqrstuvwxyz","$output":"value"}`)
 
 	base := func() *OccurrenceRecord {
 		return &OccurrenceRecord{
@@ -178,6 +179,35 @@ func TestClassifyOccurrence(t *testing.T) {
 		rec := base()
 		ClassifyOccurrence(rec, true, false, true, noLeaf)
 		assert.Equal(t, OccurrenceDeferredUpdate, rec.Class)
+	})
+
+	t.Run("force does not unsuppress a generator binding", func(t *testing.T) {
+		// Force means re-assert the value we hold. formae holds no copy of a
+		// drawn value, so on a generator binding the only thing a forced
+		// apply could write is a NEW credential. A provably-unmoved
+		// generation stays suppressed; the same record pointed at a resource
+		// property does not.
+		gen := base()
+		gen.DesiredIdentity = genID
+		gen.StoredIdentity = genID
+		ClassifyOccurrence(gen, true, false, true, noLeaf)
+		assert.Equal(t, OccurrenceStable, gen.Class,
+			"a forced apply must not rotate a credential whose generation has not moved")
+
+		ref := base()
+		ClassifyOccurrence(ref, true, false, true, noLeaf)
+		assert.Equal(t, OccurrenceDeferredUpdate, ref.Class,
+			"force still re-asserts a resource reference in the same position")
+	})
+
+	t.Run("a generator binding still defers when its generation moved", func(t *testing.T) {
+		rec := base()
+		rec.DesiredIdentity = genID
+		rec.StoredIdentity = genID
+		rec.SourceRootDigest = rootB
+		ClassifyOccurrence(rec, true, false, true, noLeaf)
+		assert.Equal(t, OccurrenceDeferredUpdate, rec.Class,
+			"rotation is a movement of the generation, which force neither creates nor hides")
 	})
 
 	t.Run("repoint defers despite equal digests", func(t *testing.T) {

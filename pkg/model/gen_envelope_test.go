@@ -147,3 +147,72 @@ func TestKnownGeneratorOutputs(t *testing.T) {
 		assert.False(t, KnownGeneratorOutputs["nosuchoutput"])
 	})
 }
+
+func TestBindsGenerator(t *testing.T) {
+	const generator = "2abc123def456ghi7jk8lmno9p0"
+
+	// A stored resource document: the whole marshalled resource, with the
+	// properties document nested under Properties.
+	resourceDocument := func(properties string) []byte {
+		return []byte(`{"Label":"database","Type":"AWS::RDS::DBInstance","Stack":"app","Properties":` + properties + `}`)
+	}
+
+	t.Run("binds through a translated $gen envelope", func(t *testing.T) {
+		doc := resourceDocument(`{"MasterUserPassword":{"$gen":true,"$generator":"` + generator + `","$output":"value"}}`)
+		assert.True(t, BindsGenerator(doc, generator))
+	})
+
+	t.Run("binds through a $gen envelope nested in an array", func(t *testing.T) {
+		doc := resourceDocument(`{"Environment":[{"Name":"PW","Value":{"$gen":true,"$generator":"` + generator + `","$output":"value"}}]}`)
+		assert.True(t, BindsGenerator(doc, generator))
+	})
+
+	t.Run("does not bind a different generator", func(t *testing.T) {
+		doc := resourceDocument(`{"MasterUserPassword":{"$gen":true,"$generator":"otherksuid","$output":"value"}}`)
+		assert.False(t, BindsGenerator(doc, generator))
+	})
+
+	t.Run("a $generator key outside a $gen envelope binds nothing", func(t *testing.T) {
+		doc := resourceDocument(`{"Config":{"$generator":"` + generator + `"}}`)
+		assert.False(t, BindsGenerator(doc, generator))
+	})
+
+	t.Run("$gen false is not an envelope", func(t *testing.T) {
+		doc := resourceDocument(`{"MasterUserPassword":{"$gen":false,"$generator":"` + generator + `","$output":"value"}}`)
+		assert.False(t, BindsGenerator(doc, generator))
+	})
+
+	t.Run("the generator KSUID is matched case-sensitively", func(t *testing.T) {
+		doc := resourceDocument(`{"MasterUserPassword":{"$gen":true,"$generator":"` + generator + `","$output":"value"}}`)
+		assert.False(t, BindsGenerator(doc, "2ABC123DEF456GHI7JK8LMNO9P0"))
+	})
+
+	t.Run("a $ref to a resource binds no generator", func(t *testing.T) {
+		doc := resourceDocument(`{"RoleArn":{"$ref":"formae://` + generator + `#/Arn","$value":"arn"}}`)
+		assert.False(t, BindsGenerator(doc, generator))
+	})
+
+	t.Run("an authored envelope names its generator by label, so it binds no KSUID", func(t *testing.T) {
+		doc := resourceDocument(`{"MasterUserPassword":{"$gen":true,"$label":"db-password","$stack":"app","$output":"value"}}`)
+		assert.False(t, BindsGenerator(doc, ""))
+		assert.False(t, BindsGenerator(doc, generator))
+	})
+
+	t.Run("a $gen outside the properties document is not a binding", func(t *testing.T) {
+		envelope := `{"$gen":true,"$generator":"` + generator + `","$output":"value"}`
+		readOnly := []byte(`{"Label":"database","Type":"AWS::RDS::DBInstance","Stack":"app",` +
+			`"Properties":{"Engine":"postgres"},"ReadOnlyProperties":{"Endpoint":` + envelope + `}}`)
+		assert.False(t, BindsGenerator(readOnly, generator),
+			"only the properties document decides which resources a draw rotates")
+
+		patched := []byte(`{"Label":"database","Type":"AWS::RDS::DBInstance","Stack":"app",` +
+			`"Properties":{"Engine":"postgres"},"PatchDocument":[{"op":"replace","path":"/Pw","value":` + envelope + `}]}`)
+		assert.False(t, BindsGenerator(patched, generator),
+			"only the properties document decides which resources a draw rotates")
+	})
+
+	t.Run("an empty document binds nothing", func(t *testing.T) {
+		assert.False(t, BindsGenerator(nil, generator))
+		assert.False(t, BindsGenerator([]byte{}, generator))
+	})
+}

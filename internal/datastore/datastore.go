@@ -344,11 +344,30 @@ type Datastore interface {
 	// ksuid's latest version is a delete or reaped tombstone, so callers receive
 	// not-found semantics for deleted resources regardless of their prior history.
 	LoadLatestResourceByKsuid(ksuid string) (*pkgmodel.Resource, error)
-	// FindResourcesDependingOn returns all resources that reference the given resource via $ref
+	// FindResourcesDependingOn returns all resources that reference the given
+	// resource via $ref. It takes a resource KSUID and only a resource KSUID:
+	// backends read $ref dependencies from different places (postgres and aurora
+	// from the refs column, sqlite and mssql by scanning the document), and the
+	// refs column records generator KSUIDs too, so the families agree on a
+	// resource KSUID and would disagree on a generator one. Generators are
+	// FindResourcesReferencingGenerator's question, not this one.
 	FindResourcesDependingOn(ksuid string) ([]*pkgmodel.Resource, error)
 	// FindResourcesDependingOnMany returns all resources that reference any of the given resources via $ref.
 	// Returns a map from referenced KSUID to the resources that depend on it.
+	// It carries FindResourcesDependingOn's resource-KSUID-only contract.
 	FindResourcesDependingOnMany(ksuids []string) (map[string][]*pkgmodel.Resource, error)
+	// FindResourcesReferencingGenerator returns all live resources that bind a
+	// property to the given generator through a translated $gen envelope.
+	// Superseded versions and deleted or reaped resources are excluded, so each
+	// returned resource appears once at its current version. An unknown
+	// generator KSUID yields an empty result, not an error, and a resource KSUID
+	// reached through $ref names no generator and yields nothing.
+	//
+	// Every backend returns the same set by construction. Each one's SQL is an
+	// index prefilter only, deliberately broader than the truth so that a
+	// destination is never missed, and pkgmodel.BindsGenerator is the
+	// authoritative test every candidate row must pass before it is returned.
+	FindResourcesReferencingGenerator(generatorKsuid string) ([]*pkgmodel.Resource, error)
 	// FindTargetsDependingOnMany returns all targets whose config references any of the given resources via $ref.
 	// Returns a map from source KSUID to the list of dependent targets.
 	FindTargetsDependingOnMany(ksuids []string) (map[string][]*pkgmodel.Target, error)
@@ -548,10 +567,10 @@ type Datastore interface {
 	// backend must agree on what counts as one), or if the generator has
 	// been deleted — a tombstoned id is not resurrected.
 	//
-	// No production caller in this slice: the executable generator node that
-	// draws generations arrives in a later slice. It ships here because the
-	// generation columns are inert without a writer, and a test-only
-	// backdoor would misrepresent a mechanism we are shipping for real use.
+	// Called by the GeneratorUpdater, which records the generation before it
+	// reports the drawn value: a value handed to a destination under a
+	// generation nobody stored is exactly the state the next apply cannot
+	// reason about.
 	AdvanceGeneration(generatorID, generationID string, drawnUnder json.RawMessage) error
 
 	// Close releases database connections

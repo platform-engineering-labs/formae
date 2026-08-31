@@ -9,6 +9,7 @@ package workflow_tests_local
 import (
 	"encoding/json"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -18,6 +19,7 @@ import (
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/provenance"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/testutil"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
@@ -85,23 +87,20 @@ func findResourceUpdate(updates []resource_update.ResourceUpdate, label string) 
 	return nil
 }
 
-// A property bound to a generator holds a reference to a value, never the
-// value itself. Until that value has been drawn there is nothing to write, so
-// the apply fails at the plugin boundary and the provider is never called:
-// formae refuses to put the reference into the cloud object in the value's
-// place. This is a property of the write path, not of the current state of
-// generator support — a draw that fails must leave the destination unwritten
-// for the same reason.
-func TestApplyForma_GeneratorBoundSecret_UndrawnValueIsNeverWritten(t *testing.T) {
+// A property bound to a generator holds a reference to a value, and the apply
+// that writes it is what turns the reference into one. The generator draws
+// before its destination dispatches, the provider is handed the drawn
+// credential itself, and what lands at rest is a digest of that credential
+// under the generation it came from — never the credential and never the
+// envelope naming it.
+func TestApplyForma_GeneratorBoundSecret_DrawnValueIsWrittenAndStoredHashed(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
-		var secretCreates atomic.Int32
-		overrides := countingCreates(map[string]*atomic.Int32{
-			"FakeAWS::SecretsManager::Secret": &secretCreates,
-		})
+		logCapture := test_helpers.SetupTestLogger()
+		captured := newCapturedCreates("SecretString", "Name")
 
 		cfg := test_helpers.NewTestMetastructureConfig()
 		cfg.Agent.Synchronization.Enabled = false
-		m, def, err := test_helpers.NewTestMetastructureWithConfig(t, overrides, cfg)
+		m, def, err := test_helpers.NewTestMetastructureWithConfig(t, captured.overrides(), cfg)
 		defer def()
 		require.NoError(t, err)
 
@@ -114,36 +113,69 @@ func TestApplyForma_GeneratorBoundSecret_UndrawnValueIsNeverWritten(t *testing.T
 		}
 
 		_, err = m.ApplyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
-		require.NoError(t, err, "the forma is well-formed, so it is admitted and fails at execution")
+		require.NoError(t, err)
 		waitForApplyComplete(t, m)
 
 		cmds, err := m.Datastore.LoadFormaCommands()
 		require.NoError(t, err)
 		cmd := findCommandByType(cmds, pkgmodel.CommandApply)
 		require.NotNil(t, cmd)
-		assert.Equal(t, forma_command.CommandStateFailed, cmd.State,
-			"an undrawn generator binding must not be reported as applied")
+		assert.Equal(t, forma_command.CommandStateSuccess, cmd.State,
+			"a generator that draws lets its destination be written")
 
 		secretUpdate := findResourceUpdate(cmd.ResourceUpdates, "db")
-		require.NotNil(t, secretUpdate, "the bound secret must be planned and then refused")
-		assert.Equal(t, resource_update.ResourceUpdateStateFailed, secretUpdate.State)
-		assert.Contains(t, secretUpdate.FailureReason, "bound to a generator whose value has not been drawn",
-			"the refusal must say what is wrong with the resource, not just that a request could not be built")
+		require.NotNil(t, secretUpdate, "the bound secret must be planned and written")
+		assert.Equal(t, resource_update.ResourceUpdateStateSuccess, secretUpdate.State)
+		assert.Empty(t, secretUpdate.FailureReason)
 
-		assert.Zero(t, secretCreates.Load(),
-			"the provider must never be called with a value formae does not have")
+		// Delivery: the provider is handed the credential, at the length the
+		// spec declares, rather than the envelope that names it.
+		drawn, ok := captured.valueFor("db")
+		require.True(t, ok, "the provider must have been called for the bound secret")
+		assert.Len(t, drawn, 24, "the provider receives the drawn value, at its declared length")
+		assert.NotContains(t, drawn, "$gen",
+			"the provider must receive the drawn value, never the envelope naming it")
+
+		// At rest: a digest of the credential, marked a digest, stamped with
+		// the generation it was drawn from.
+		identity, err := m.Datastore.GetGeneratorIdentity("db-password", stack)
+		require.NoError(t, err)
+		require.NotEmpty(t, identity.GenerationID, "a delivered draw must leave its generation recorded")
 
 		resources, err := m.Datastore.LoadResourcesByStack(stack)
 		require.NoError(t, err)
-		assert.Empty(t, resources, "a refused write must leave no resource behind")
+		require.Len(t, resources, 1, "the destination must be written")
+		for i := range resources {
+			assert.NotContains(t, string(resources[i].Properties), drawn,
+				"resources.properties leaked the drawn value for %s", resources[i].Label)
+		}
+		binding := storedBinding(t, m, stack, "db")
+		assert.True(t, binding.Get("$hashed").Bool(),
+			"the drawn value must be stored as a digest")
+		assert.Equal(t, pkgmodel.ComputeValueHash(drawn), binding.Get("$value").String(),
+			"the stored digest must be the digest of the value the provider received")
+		resolvedFrom := binding.Get("$resolvedFrom").String()
+		assert.True(t, provenance.Valid(resolvedFrom),
+			"the drawn destination must carry a current-domain provenance digest, got %q", resolvedFrom)
+		assert.Equal(t, provenance.DigestOfString(identity.GenerationID), resolvedFrom,
+			"the destination must be stamped with the generation its value was drawn from")
+
+		// The value exists in the cloud object and in nothing formae stored.
+		assertDrawnValueIsNotStored(t, m, cmd.ID, drawn, "db-password", stack)
+		assertProvenanceCarriersAreWellFormed(t, m, cmd.ID)
+		assertNoPlaintextInLogs(t, logCapture, drawn)
 	})
 }
 
 // A generator declared by one command and referenced by a later one resolves
 // to the KSUID the generator's own row already carries: the binding names one
-// identity, not a freshly minted one per command. This pins identity
-// stability only; nothing here says anything about whether a moved generation
-// is suppressed, which needs a drawn value to be observable at all.
+// identity, not a freshly minted one per command.
+//
+// The second command's translation is observed through what it plans. A
+// binding translated to a freshly minted KSUID would name a different source
+// than the stored envelope does, which is a repoint and always plans; that
+// the identical second command plans nothing for the bound secret is
+// therefore the identity holding across commands.
 func TestApplyForma_GeneratorBoundSecret_BindingNamesTheGeneratorsOwnIdentity(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		cfg := test_helpers.NewTestMetastructureConfig()
@@ -162,9 +194,8 @@ func TestApplyForma_GeneratorBoundSecret_BindingNamesTheGeneratorsOwnIdentity(t 
 			}
 		}
 
-		// The first command establishes the generator's row. Its resource
-		// write is refused (no value has been drawn), which is beside the
-		// point here: the generator is persisted either way.
+		// The first command establishes the generator's row and writes the
+		// bound secret with the value drawn for it.
 		_, err = m.ApplyForma(buildForma(), &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
 		require.NoError(t, err)
 		waitForApplyComplete(t, m)
@@ -173,22 +204,29 @@ func TestApplyForma_GeneratorBoundSecret_BindingNamesTheGeneratorsOwnIdentity(t 
 		require.NoError(t, err)
 		require.NotEmpty(t, identity.ID, "precondition: the declared generator must have a row")
 
+		resources, err := m.Datastore.LoadResourcesByStack(stack)
+		require.NoError(t, err)
+		var secretRow *pkgmodel.Resource
+		for i := range resources {
+			if resources[i].Label == "db" {
+				secretRow = resources[i]
+			}
+		}
+		require.NotNil(t, secretRow, "precondition: the bound secret must be written")
+		assert.Equal(t, identity.ID,
+			gjson.GetBytes(secretRow.Properties, "SecretString.$generator").String(),
+			"the binding must name the generator's own KSUID, not one minted for this command")
+
 		resp, err := m.ApplyForma(buildForma(), &config.FormaCommandConfig{
 			Mode:     pkgmodel.FormaApplyModeReconcile,
 			Simulate: true,
 		}, "test-client-id", "", "")
 		require.NoError(t, err)
 
-		var secretUpdate *apimodel.ResourceUpdate
-		for i, ru := range resp.Simulation.Command.ResourceUpdates {
-			if ru.ResourceLabel == "db" {
-				secretUpdate = &resp.Simulation.Command.ResourceUpdates[i]
-			}
+		for _, ru := range resp.Simulation.Command.ResourceUpdates {
+			assert.NotEqual(t, "db", ru.ResourceLabel,
+				"a second command that named a fresh KSUID would repoint the binding and plan it")
 		}
-		require.NotNil(t, secretUpdate, "the bound secret must be in the plan")
-		assert.Equal(t, identity.ID,
-			gjson.GetBytes(secretUpdate.Properties, "SecretString.$generator").String(),
-			"the binding must name the generator's own KSUID, not one minted for this command")
 
 		identityAfter, err := m.Datastore.GetGeneratorIdentity("db-password", stack)
 		require.NoError(t, err)
@@ -282,40 +320,96 @@ func TestApplyForma_GeneratorReference_DanglingIsRejected(t *testing.T) {
 	})
 }
 
+// capturedChainCreates records what each of the two resource types in a
+// generator-fed reference chain was created with: the secret's own bound
+// property and the consumer's referencing one. The consumer answers its own
+// create so it carries a NativeID of its own; the secret falls through to
+// FakeAWS, whose SecretsManager handling reads the value back bare.
+type capturedChainCreates struct {
+	mu       sync.Mutex
+	secret   string
+	consumer string
+	seen     map[string]int
+}
+
+func newCapturedChainCreates() *capturedChainCreates {
+	return &capturedChainCreates{seen: map[string]int{}}
+}
+
+func (c *capturedChainCreates) overrides() *plugin.ResourcePluginOverrides {
+	return &plugin.ResourcePluginOverrides{
+		Create: func(req *resource.CreateRequest) (*resource.CreateResult, error) {
+			props := gjson.ParseBytes(req.Properties)
+			c.mu.Lock()
+			c.seen[req.ResourceType]++
+			if req.ResourceType == "FakeAWS::S3::Bucket" {
+				c.consumer = props.Get("DbPassword").String()
+			} else {
+				c.secret = props.Get("SecretString").String()
+			}
+			c.mu.Unlock()
+			if req.ResourceType != "FakeAWS::S3::Bucket" {
+				return nil, nil
+			}
+			return &resource.CreateResult{ProgressResult: &resource.ProgressResult{
+				Operation:       resource.OperationCreate,
+				OperationStatus: resource.OperationStatusSuccess,
+				NativeID:        "bucket-native-1",
+			}}, nil
+		},
+	}
+}
+
+func (c *capturedChainCreates) values() (string, string, map[string]int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	seen := map[string]int{}
+	for k, v := range c.seen {
+		seen[k] = v
+	}
+	return c.secret, c.consumer, seen
+}
+
 // A $ref consumer reading a generator-fed secret is planned as a chain: the
 // consumer's reference resolves to the secret's property, and the secret's own
-// property is the generator binding. Nothing in that chain is writable until
-// the value has been drawn, so the whole command is refused at the plugin
-// boundary — the consumer is not written from a source that was itself never
-// written, and neither provider is called.
-func TestApplyForma_ConsumerDownstreamOfGeneratorFedSecret_IsRejectedBeforeAnyWrite(t *testing.T) {
+// property is the generator binding. The draw at the root of that chain is
+// what makes the whole of it writable — the secret is written with the drawn
+// credential and the consumer is written with the same one, resolved from the
+// source that has just received it.
+//
+// The chain is a second place the credential could escape, so every sink is
+// swept for it: the two rows, the command's resource updates, the simulate
+// response, and the captured log output.
+func TestApplyForma_ConsumerDownstreamOfGeneratorFedSecret_ReceivesTheDrawnValue(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
-		var secretCreates, consumerCreates atomic.Int32
-		overrides := countingCreates(map[string]*atomic.Int32{
-			"FakeAWS::SecretsManager::Secret": &secretCreates,
-			"FakeAWS::S3::Bucket":             &consumerCreates,
-		})
+		logCapture := test_helpers.SetupTestLogger()
+		captured := newCapturedChainCreates()
 
 		cfg := test_helpers.NewTestMetastructureConfig()
 		cfg.Agent.Synchronization.Enabled = false
-		m, def, err := test_helpers.NewTestMetastructureWithConfig(t, overrides, cfg)
+		m, def, err := test_helpers.NewTestMetastructureWithConfig(t, captured.overrides(), cfg)
 		defer def()
 		require.NoError(t, err)
 
 		stack := "test-stack-" + util.NewID()
-		forma := &pkgmodel.Forma{
-			Stacks:     []pkgmodel.Stack{{Label: stack}},
-			Targets:    []pkgmodel.Target{{Label: "test-target", Namespace: "test-namespace"}},
-			Generators: []json.RawMessage{passwordGeneratorFor(t, "db-password", stack)},
-			Resources: []pkgmodel.Resource{
-				genBoundSecret(stack, "my-secret", "db-password", "value"),
-				secretConsumer(stack, "my-secret"),
-			},
+		// A forma is translated in place, so each submission gets its own:
+		// re-submitting the document a previous command rewrote would name
+		// identities that command minted rather than the ones this one does.
+		buildForma := func() *pkgmodel.Forma {
+			return &pkgmodel.Forma{
+				Stacks:     []pkgmodel.Stack{{Label: stack}},
+				Targets:    []pkgmodel.Target{{Label: "test-target", Namespace: "test-namespace"}},
+				Generators: []json.RawMessage{passwordGeneratorFor(t, "db-password", stack)},
+				Resources: []pkgmodel.Resource{
+					genBoundSecret(stack, "my-secret", "db-password", "value"),
+					secretConsumer(stack, "my-secret"),
+				},
+			}
 		}
 
 		// The plan carries the whole chain: the secret's generator binding and
 		// the consumer's reference to that secret's property.
-		sim, err := m.ApplyForma(forma, &config.FormaCommandConfig{
+		sim, err := m.ApplyForma(buildForma(), &config.FormaCommandConfig{
 			Mode:     pkgmodel.FormaApplyModeReconcile,
 			Simulate: true,
 		}, "test-client-id", "", "")
@@ -335,7 +429,7 @@ func TestApplyForma_ConsumerDownstreamOfGeneratorFedSecret_IsRejectedBeforeAnyWr
 			strings.HasSuffix(consumerRef, "#/SecretString"),
 			"the consumer must reference the generator-fed secret's property, got %q", consumerRef)
 
-		_, err = m.ApplyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
+		_, err = m.ApplyForma(buildForma(), &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
 		require.NoError(t, err)
 		waitForApplyComplete(t, m)
 
@@ -343,16 +437,67 @@ func TestApplyForma_ConsumerDownstreamOfGeneratorFedSecret_IsRejectedBeforeAnyWr
 		require.NoError(t, err)
 		cmd := findCommandByType(cmds, pkgmodel.CommandApply)
 		require.NotNil(t, cmd)
-		assert.Equal(t, forma_command.CommandStateFailed, cmd.State,
-			"a chain rooted in an undrawn generator must not be reported as applied")
+		assert.Equal(t, forma_command.CommandStateSuccess, cmd.State,
+			"a chain rooted in a generator that draws must apply")
+		for _, label := range []string{"my-secret", "my-bucket"} {
+			ru := findResourceUpdate(cmd.ResourceUpdates, label)
+			require.NotNil(t, ru, "%s must be in the command", label)
+			assert.Equal(t, resource_update.ResourceUpdateStateSuccess, ru.State, "%s must be written", label)
+		}
 
-		assert.Zero(t, secretCreates.Load(), "the source secret must never be written")
-		assert.Zero(t, consumerCreates.Load(),
-			"the consumer must never be written from a source that was itself refused")
+		secretValue, consumerValue, seen := captured.values()
+		assert.Equal(t, map[string]int{
+			"FakeAWS::SecretsManager::Secret": 1,
+			"FakeAWS::S3::Bucket":             1,
+		}, seen, "both ends of the chain must be created exactly once")
+		require.Len(t, secretValue, 24, "the source must be written with the drawn value")
+		assert.Equal(t, secretValue, consumerValue,
+			"the consumer must receive the value its source was just given")
+		assert.NotContains(t, consumerValue, "$ref",
+			"the consumer must receive a value, never the reference naming it")
+
+		// Both rows hold digests and provenance, never the credential.
+		identity, err := m.Datastore.GetGeneratorIdentity("db-password", stack)
+		require.NoError(t, err)
+		require.NotEmpty(t, identity.GenerationID)
 
 		resources, err := m.Datastore.LoadResourcesByStack(stack)
 		require.NoError(t, err)
-		assert.Empty(t, resources, "a refused chain must leave nothing behind")
+		require.Len(t, resources, 2, "both ends of the chain must be written")
+		var consumerRow *pkgmodel.Resource
+		for i := range resources {
+			assert.NotContains(t, string(resources[i].Properties), secretValue,
+				"resources.properties leaked the drawn value for %s", resources[i].Label)
+			if resources[i].Label == "my-bucket" {
+				consumerRow = resources[i]
+			}
+		}
+		require.NotNil(t, consumerRow)
+
+		sourceBinding := storedBinding(t, m, stack, "my-secret")
+		assert.True(t, sourceBinding.Get("$hashed").Bool(), "the source must store a digest")
+		assert.Equal(t, pkgmodel.ComputeValueHash(secretValue), sourceBinding.Get("$value").String(),
+			"the source's stored digest must be the digest of the drawn value")
+		assert.Equal(t, provenance.DigestOfString(identity.GenerationID),
+			sourceBinding.Get("$resolvedFrom").String(),
+			"the source must be stamped with the generation its value was drawn from")
+
+		consumerResolvedFrom := gjson.GetBytes(consumerRow.Properties, "DbPassword.$resolvedFrom").String()
+		assert.True(t, provenance.Valid(consumerResolvedFrom),
+			"the consumer must carry a current-domain provenance digest, got %q", consumerResolvedFrom)
+
+		// The simulate response is presentation data: neither the credential
+		// nor its at-rest digest may appear in it.
+		simJSON, err := json.Marshal(sim)
+		require.NoError(t, err)
+		assert.NotContains(t, string(simJSON), secretValue,
+			"the simulate response must never carry the drawn value")
+		assert.NotContains(t, string(simJSON), pkgmodel.ComputeValueHash(secretValue),
+			"digests live at rest, never in a response")
+
+		assertDrawnValueIsNotStored(t, m, cmd.ID, secretValue, "db-password", stack)
+		assertProvenanceCarriersAreWellFormed(t, m, cmd.ID)
+		assertNoPlaintextInLogs(t, logCapture, secretValue)
 	})
 }
 

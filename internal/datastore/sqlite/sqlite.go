@@ -3177,10 +3177,10 @@ func (d DatastoreSQLite) GetGeneratorIdentityByID(generatorID string) (datastore
 // is not valid JSON, or if the generator's latest row is a tombstone: a
 // deleted id is not resurrected.
 //
-// No production caller in this slice: the executable generator node that
-// draws generations arrives in a later slice. It ships here because the
-// generation columns are inert without a writer, and a test-only backdoor
-// would misrepresent a mechanism we are shipping for real use.
+// The caller is the generator update actor
+// (generator_update.GeneratorUpdater): it calls this once it has drawn a
+// value, so the generation the value came from is durable before any
+// destination is stamped with it.
 func (d DatastoreSQLite) AdvanceGeneration(generatorID, generationID string, drawnUnder json.RawMessage) error {
 	_, span := sqliteTracer.Start(context.Background(), "AdvanceGeneration")
 	defer span.End()
@@ -4931,6 +4931,69 @@ func (d DatastoreSQLite) FindResourcesDependingOn(ksuid string) ([]*pkgmodel.Res
 	}
 
 	return resources, nil
+}
+
+// FindResourcesReferencingGenerator finds the live resources that bind a property
+// to the given generator through a $gen envelope. SQLite has no refs column, so
+// like the $ref lookup this is a full table scan over the data column. The LIKE
+// is a prefilter kept deliberately loose (it is blind to case, and to whether
+// the key sits inside an envelope), and pkgmodel.BindsGenerator decides which
+// candidates are really destinations.
+func (d DatastoreSQLite) FindResourcesReferencingGenerator(generatorKsuid string) ([]*pkgmodel.Resource, error) {
+	slog.Debug("SQLite START", "method", "FindResourcesReferencingGenerator", "generator", generatorKsuid)
+	start := time.Now()
+	defer func() {
+		slog.Debug("SQLite END", "method", "FindResourcesReferencingGenerator", "generator", generatorKsuid, "duration", time.Since(start))
+	}()
+	_, span := sqliteTracer.Start(context.Background(), "FindResourcesReferencingGenerator")
+	defer span.End()
+
+	// A translated $gen envelope stores the generator KSUID under $generator
+	// (JSON without spaces after colons).
+	pattern := fmt.Sprintf("%%\"$generator\":\"%s\"%%", generatorKsuid)
+
+	query := `
+	SELECT data, ksuid
+	FROM resources r1
+	WHERE data LIKE ?
+	AND NOT EXISTS (
+		SELECT 1
+		FROM resources r2
+		WHERE r1.uri = r2.uri
+		AND r2.version > r1.version
+	)
+	AND operation != ? AND operation != 'reaped'
+	`
+
+	rows, err := d.conn.Query(query, pattern, resource_update.OperationDelete)
+	if err != nil {
+		return nil, err
+	}
+	defer closeRows(rows)
+
+	var resources []*pkgmodel.Resource
+	for rows.Next() {
+		var jsonData, ksuidResult string
+		if err := rows.Scan(&jsonData, &ksuidResult); err != nil {
+			return nil, err
+		}
+
+		// The SQL above is only a prefilter: it is deliberately broader than
+		// the truth so no destination is missed. pkgmodel.BindsGenerator is
+		// authoritative, and drops any candidate it matched for another reason.
+		if !pkgmodel.BindsGenerator([]byte(jsonData), generatorKsuid) {
+			continue
+		}
+
+		var resource pkgmodel.Resource
+		if err := json.Unmarshal([]byte(jsonData), &resource); err != nil {
+			return nil, err
+		}
+		resource.Ksuid = ksuidResult
+		resources = append(resources, &resource)
+	}
+
+	return resources, rows.Err()
 }
 
 func (d DatastoreSQLite) FindResourcesDependingOnMany(ksuids []string) (map[string][]*pkgmodel.Resource, error) {

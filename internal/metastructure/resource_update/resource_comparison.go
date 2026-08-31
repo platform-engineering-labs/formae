@@ -394,9 +394,15 @@ func shouldPreserveSetOnce(newProp, existingProp gjson.Result) bool {
 	return existingProp.Value() != nil
 }
 
-// getPreservedValueString extracts the display value from a gjson.Result for logging
+// getPreservedValueString extracts the display value from a gjson.Result for
+// logging. An opaque envelope's value is withheld: what a SetOnce property or
+// tag preserves is as much a secret as what set it, and the line is still
+// useful without it because the property and the resource are named alongside.
 func getPreservedValueString(val gjson.Result) string {
 	if val.IsObject() {
+		if val.Get("$visibility").String() == pkgmodel.VisibilityOpaque {
+			return pkgmodel.RedactedForLog
+		}
 		return val.Get("$value").String()
 	}
 	return val.String()

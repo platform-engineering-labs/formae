@@ -33,9 +33,9 @@ func rawPasswordGenerator(t *testing.T, gen *pkgmodel.PasswordGenerator) json.Ra
 
 // TestMetastructure_ApplyFormaPersistsGeneratorThenReapplyIsANoop is the
 // generator lifecycle's end-to-end case: applying a forma that declares a
-// generator actually persists it, and re-applying the identical forma
-// persists nothing new — connecting Forma.Generators to the datastore is
-// exactly what this slice adds; nothing read it before.
+// generator persists it, because the apply path reads Forma.Generators
+// through to the datastore, and re-applying the identical forma persists
+// nothing new.
 func TestMetastructure_ApplyFormaPersistsGeneratorThenReapplyIsANoop(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		m, def, err := test_helpers.NewTestMetastructure(t, nil)
@@ -93,9 +93,9 @@ func TestMetastructure_ApplyFormaPersistsGeneratorThenReapplyIsANoop(t *testing.
 }
 
 // TestMetastructure_ApplyFormaSimulate_GeneratorOnlyChangeReportsANonEmptyPlan
-// pins the defect this task fixes: a forma whose only change is a generator
-// must report ChangesRequired together with a plan that actually shows the
-// change, never ChangesRequired with an empty Command. The stack is
+// requires that a forma whose only change is a generator reports
+// ChangesRequired together with a plan that actually shows the change, never
+// ChangesRequired with an empty Command. The stack is
 // established first with no generator, so the second (simulated) apply's
 // only change is the generator, and asserts against the in-memory simulate
 // response only — a reloaded command has no GeneratorUpdates column yet.
@@ -169,14 +169,14 @@ func TestMetastructure_ApplyFormaSimulate_GeneratorOnlyChangeReportsANonEmptyPla
 	})
 }
 
-// TestMetastructure_SameCommandGeneratorAndConsumer_ShareOneKSUID pins the
-// KSUID-threading fix: a generator declared in the SAME command as a
-// resource's $gen reference to it must translate to the exact KSUID that
-// generator's own GeneratorUpdate carries — not two independently minted
-// KSUIDs. Calls FormaCommandFromForma directly (build only, no execution),
-// which isolates the wiring bug from plugin execution and from
-// generation-drawing (a later slice: no value is drawn here, only the
-// generator's identity and the $gen envelope's reference to it).
+// TestMetastructure_SameCommandGeneratorAndConsumer_ShareOneKSUID covers
+// KSUID threading: a generator declared in the SAME command as a resource's
+// $gen reference to it must translate to the exact KSUID that generator's own
+// GeneratorUpdate carries, not two independently minted KSUIDs. Calls
+// FormaCommandFromForma directly (build only, no execution), which keeps the
+// assertion on identity threading alone, with no plugin execution and no
+// drawing: no value is drawn here, only the generator's identity and the $gen
+// envelope's reference to it.
 func TestMetastructure_SameCommandGeneratorAndConsumer_ShareOneKSUID(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		m, def, err := test_helpers.NewTestMetastructure(t, nil)
@@ -225,5 +225,169 @@ func TestMetastructure_SameCommandGeneratorAndConsumer_ShareOneKSUID(t *testing.
 		embedded := gjson.GetBytes(fc.ResourceUpdates[0].DesiredState.Properties, "SecretString.$generator").String()
 		assert.Equal(t, generatorKsuid, embedded,
 			"the resource's $generator must equal the generator update's own KSUID, not an independently minted one")
+	})
+}
+
+// generatorOnlyFixture stands up a metastructure with a stack that already
+// exists and holds one resource that never changes, so a later apply's only
+// work is the generator work. Without the anchor the stack itself would be
+// created or emptied by the same command, and a stack update carries its own
+// command-state recompute, which is exactly what a generator-only command
+// does not have.
+type generatorOnlyFixture struct {
+	m           *metastructure.Metastructure
+	stack       string
+	anchorValue string
+}
+
+func newGeneratorOnlyFixture(t *testing.T) (*generatorOnlyFixture, func()) {
+	t.Helper()
+	cfg := test_helpers.NewTestMetastructureConfig()
+	cfg.Agent.Synchronization.Enabled = false
+	m, def, err := test_helpers.NewTestMetastructureWithConfig(t, nil, cfg)
+	require.NoError(t, err)
+
+	f := &generatorOnlyFixture{
+		m:           m,
+		stack:       "generator-only-stack",
+		anchorValue: "anchor-v1",
+	}
+	return f, def
+}
+
+// forma builds a forma holding the unchanged anchor plus whatever generators
+// are given.
+func (f *generatorOnlyFixture) forma(generators ...json.RawMessage) *pkgmodel.Forma {
+	return &pkgmodel.Forma{
+		Stacks:     []pkgmodel.Stack{{Label: f.stack}},
+		Targets:    []pkgmodel.Target{{Label: "test-target", Namespace: "test-namespace"}},
+		Resources:  []pkgmodel.Resource{secretResource(f.stack, "anchor", f.anchorValue)},
+		Generators: generators,
+	}
+}
+
+func (f *generatorOnlyFixture) apply(t *testing.T, forma *pkgmodel.Forma) {
+	t.Helper()
+	_, err := f.m.ApplyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
+	require.NoError(t, err)
+	waitForApplyComplete(t, f.m)
+}
+
+// requireLatestCommandSucceeded asserts the command count and that the newest
+// command reached Success. Success, not merely terminal: a command that hangs
+// and a command that fails are both bugs, and only one of them is what this
+// pins.
+func requireLatestCommandSucceeded(t *testing.T, m *metastructure.Metastructure, want int) {
+	t.Helper()
+	cmds, err := m.Datastore.LoadFormaCommands()
+	require.NoError(t, err)
+	require.Len(t, cmds, want)
+	latest := cmds[0]
+	for _, c := range cmds {
+		if c.StartTs.After(latest.StartTs) {
+			latest = c
+		}
+	}
+	assert.Equal(t, forma_command.CommandStateSuccess, latest.State,
+		"a command whose only work is generator work must reach a terminal state")
+}
+
+func generatorOfLength(t *testing.T, stack string, length int) json.RawMessage {
+	t.Helper()
+	return rawPasswordGenerator(t, &pkgmodel.PasswordGenerator{
+		Label: "db-password", Stack: stack,
+		Length: length, Uppercase: true, Lowercase: true, Digits: true, RequireEachIncludedType: true,
+	})
+}
+
+// Adding a generator to a stack that already exists is a command whose only
+// work is generator work. It must reach a terminal state: the generator write
+// is durable before the command is even schedulable, so a command left
+// NotStarted would never self-heal and would sit incomplete forever.
+func TestApplyForma_GeneratorOnlyCreate_ReachesATerminalState(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		f, def := newGeneratorOnlyFixture(t)
+		defer def()
+
+		f.apply(t, f.forma())
+		f.apply(t, f.forma(generatorOfLength(t, f.stack, 24)))
+
+		requireLatestCommandSucceeded(t, f.m, 2)
+
+		stored, err := f.m.Datastore.GetGenerator("db-password", f.stack)
+		require.NoError(t, err)
+		require.NotNil(t, stored, "the generator-only command must still have written the generator")
+	})
+}
+
+// Editing a generator's spec on a stack that already exists is likewise
+// generator-only work.
+func TestApplyForma_GeneratorOnlyUpdate_ReachesATerminalState(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		f, def := newGeneratorOnlyFixture(t)
+		defer def()
+
+		f.apply(t, f.forma(generatorOfLength(t, f.stack, 24)))
+		f.apply(t, f.forma(generatorOfLength(t, f.stack, 32)))
+
+		requireLatestCommandSucceeded(t, f.m, 2)
+
+		stored, err := f.m.Datastore.GetGenerator("db-password", f.stack)
+		require.NoError(t, err)
+		pw, ok := stored.(*pkgmodel.PasswordGenerator)
+		require.True(t, ok)
+		assert.Equal(t, 32, pw.Length, "the generator-only command must still have applied the edit")
+	})
+}
+
+// Removing a generator nobody references is an ordinary edit, and the
+// resulting command's only work is the delete.
+func TestApplyForma_GeneratorOnlyDelete_ReachesATerminalState(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		f, def := newGeneratorOnlyFixture(t)
+		defer def()
+
+		f.apply(t, f.forma(generatorOfLength(t, f.stack, 24)))
+		f.apply(t, f.forma())
+
+		requireLatestCommandSucceeded(t, f.m, 2)
+
+		stored, err := f.m.Datastore.GetGenerator("db-password", f.stack)
+		require.NoError(t, err)
+		assert.Nil(t, stored, "the generator-only command must still have removed the generator")
+	})
+}
+
+// A command carrying generator work AND resource work keeps going through the
+// changeset executor, which owns its terminal state. Finalizing generator work
+// early must not pre-empt that.
+func TestApplyForma_GeneratorPlusResourceWork_StillRunsTheChangeset(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		f, def := newGeneratorOnlyFixture(t)
+		defer def()
+
+		f.apply(t, f.forma())
+
+		f.anchorValue = "anchor-v2"
+		f.apply(t, f.forma(generatorOfLength(t, f.stack, 24)))
+
+		requireLatestCommandSucceeded(t, f.m, 2)
+
+		cmds, err := f.m.Datastore.LoadFormaCommands()
+		require.NoError(t, err)
+		mixed := cmds[0]
+		for _, c := range cmds {
+			if c.StartTs.After(mixed.StartTs) {
+				mixed = c
+			}
+		}
+		anchorUpdate := findResourceUpdate(mixed.ResourceUpdates, "anchor")
+		require.NotNil(t, anchorUpdate, "the mixed command must carry the anchor's update")
+		assert.Equal(t, resource_update.ResourceUpdateStateSuccess, anchorUpdate.State,
+			"the resource half of a mixed command must still be executed")
+
+		stored, err := f.m.Datastore.GetGenerator("db-password", f.stack)
+		require.NoError(t, err)
+		require.NotNil(t, stored, "the generator half of a mixed command must still be written")
 	})
 }

@@ -162,6 +162,9 @@ func (m *mockSummaryDatastore) LatestLabelForResource(_ string) (string, error) 
 func (m *mockSummaryDatastore) FindResourcesDependingOn(_ string) ([]*pkgmodel.Resource, error) {
 	panic("not implemented")
 }
+func (m *mockSummaryDatastore) FindResourcesReferencingGenerator(_ string) ([]*pkgmodel.Resource, error) {
+	panic("not implemented")
+}
 func (m *mockSummaryDatastore) FindResourcesDependingOnMany(_ []string) (map[string][]*pkgmodel.Resource, error) {
 	panic("not implemented")
 }

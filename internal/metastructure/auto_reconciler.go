@@ -384,7 +384,10 @@ func prepareReconcile(ds datastore.Datastore, stackLabel string, clientID string
 	if err != nil {
 		return nil, fmt.Errorf("failed to create changeset: %w", err)
 	}
-	cs, err := changeset.NewChangeset(resourceUpdates, synth, reconcileCommand.ID, pkgmodel.CommandApply, reconcileCommand.Config.Mode)
+	// No generator draws: an auto-reconcile re-asserts persisted desired
+	// state, whose $gen destinations already carry the value that was
+	// drawn for them. Rotating a credential is a user-initiated apply.
+	cs, err := changeset.NewChangeset(resourceUpdates, synth, nil, reconcileCommand.ID, pkgmodel.CommandApply, reconcileCommand.Config.Mode)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create changeset: %w", err)
 	}
