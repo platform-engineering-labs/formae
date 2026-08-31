@@ -38,7 +38,17 @@ func NewGeneratorUpdateGenerator(ds GeneratorDatastore) *GeneratorUpdateGenerato
 }
 
 // GenerateGeneratorUpdates determines what generator changes are needed.
-func (gg *GeneratorUpdateGenerator) GenerateGeneratorUpdates(forma *pkgmodel.Forma, command pkgmodel.Command, mode pkgmodel.FormaApplyMode) ([]GeneratorUpdate, error) {
+// genKeyToKsuid is the (label, stack) -> KSUID map resource_update's
+// translation phase already resolved for every declared generator (see
+// resource_update.assignGeneratorKSUIDs) — assigning it onto each declared
+// generator here is what makes that earlier resolution actually stick: it is
+// the same pkgmodel.Generator value a Create/Update operation later persists,
+// so the KSUID a $gen reference was translated to and the KSUID the
+// generator's own row gets are the same value, not two independently minted
+// ones. A generator with no entry in the map (shouldn't happen for anything
+// translation saw, but defensive regardless) keeps GetID()=="", and
+// CreateGenerator mints its own KSUID exactly as it always has.
+func (gg *GeneratorUpdateGenerator) GenerateGeneratorUpdates(forma *pkgmodel.Forma, command pkgmodel.Command, mode pkgmodel.FormaApplyMode, genKeyToKsuid map[pkgmodel.GeneratorKey]string) ([]GeneratorUpdate, error) {
 	// A generator has no standalone form: it is always owned by exactly one
 	// stack, and it is deleted implicitly when that stack is destroyed —
 	// mirroring how an inline policy is handled on Destroy, and unlike a
@@ -51,6 +61,12 @@ func (gg *GeneratorUpdateGenerator) GenerateGeneratorUpdates(forma *pkgmodel.For
 	declared, err := pkgmodel.ParseGenerators(forma.Generators)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse generators: %w", err)
+	}
+
+	for _, gen := range declared {
+		if ksuid, ok := genKeyToKsuid[pkgmodel.GeneratorKey{Label: gen.GetLabel(), Stack: gen.GetStack()}]; ok {
+			gen.SetID(ksuid)
+		}
 	}
 
 	// Group declared generators by the stack they belong to (their own Stack

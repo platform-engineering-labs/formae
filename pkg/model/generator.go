@@ -20,6 +20,14 @@ type Generator interface {
 	SetStack(stack string)
 	GetStackID() string
 	SetStackID(id string)
+	// GetID/SetID carry the generator's own KSUID, assigned during command
+	// translation (mirroring resource_update.assignKSUIDs' handling of
+	// pkgmodel.Resource.Ksuid) so a resource property that references a
+	// generator declared in the SAME command embeds the exact KSUID the
+	// generator's own persisted row will carry, rather than one CreateGenerator
+	// invents independently. "" until translation assigns one.
+	GetID() string
+	SetID(id string)
 	// GetAlias returns the generator's previous label, if any. Identity is
 	// the datastore row's KSUID, not the label, so a generator that is
 	// renamed (its label changed) needs some way to say "this is still the
@@ -38,6 +46,7 @@ type PasswordGenerator struct {
 	Label                   string `json:"Label"`
 	Stack                   string `json:"Stack,omitempty"`
 	StackID                 string `json:"-"` // Set during processing, not from PKL
+	ID                      string `json:"-"` // Set during processing (translation), not from PKL
 	Alias                   string `json:"Alias,omitempty"`
 	Length                  int    `json:"Length"`
 	Uppercase               bool   `json:"Uppercase"`
@@ -54,6 +63,8 @@ func (g *PasswordGenerator) GetStack() string      { return g.Stack }
 func (g *PasswordGenerator) SetStack(stack string) { g.Stack = stack }
 func (g *PasswordGenerator) GetStackID() string    { return g.StackID }
 func (g *PasswordGenerator) SetStackID(id string)  { g.StackID = id }
+func (g *PasswordGenerator) GetID() string         { return g.ID }
+func (g *PasswordGenerator) SetID(id string)       { g.ID = id }
 func (g *PasswordGenerator) GetAlias() string      { return g.Alias }
 
 // MarshalJSON injects the "Type": "password" discriminator that

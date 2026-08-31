@@ -29,11 +29,28 @@ const (
 	OccurrenceConvergeUnknown
 )
 
+// OccurrenceKind distinguishes which table an occurrence's KSUID resolves
+// against. Generator KSUIDs and resource KSUIDs come from the same minter
+// but live in different tables, so a $gen and a $ref could in principle
+// normalize to equal Ksuid/PropertyPath/JSONPath; Kind keeps them apart.
+type OccurrenceKind int
+
+const (
+	// OccurrenceKindResource is the zero value: an unmarked identity is a
+	// resource reference, which is what every already-persisted
+	// OccurrenceRecord (minted before Kind existed) deserializes to.
+	OccurrenceKindResource OccurrenceKind = iota
+	// OccurrenceKindGenerator marks an identity resolved from a $gen
+	// envelope: Ksuid is a generator KSUID, not a resource KSUID.
+	OccurrenceKindGenerator
+)
+
 // OccurrenceIdentity is the normalized identity of a reference occurrence's
 // source: which resource, which property, and which extraction of it. The
 // extraction selector is part of identity: pointing the same reference at a
 // different key of the same document is a repoint.
 type OccurrenceIdentity struct {
+	Kind         OccurrenceKind
 	Ksuid        string
 	PropertyPath string
 	JSONPath     string
@@ -45,14 +62,22 @@ type OccurrenceIdentity struct {
 // fails closed.
 type TripletLookup func(stack, label, typ string) (string, bool)
 
-// NormalizeOccurrenceIdentity maps a reference envelope of either shape - a
-// translated {"$ref": "formae://<ksuid>#/<path>"} or a structured
-// {"$res":true,"$label":..,"$type":..,"$stack":..,"$property":..} - to one
-// identity, so a $res envelope and its translated $ref form compare equal (a
-// lifecycle rewrite is not a repoint). A shape that cannot normalize returns
-// ok=false and MUST be treated as an identity mismatch by callers: failing
-// closed defers, never suppresses.
-func NormalizeOccurrenceIdentity(envelope gjson.Result, lookup TripletLookup) (OccurrenceIdentity, bool) {
+// GeneratorLookup resolves a (stack, label) pair to a generator KSUID, the
+// same translation the generator reference rewrite performs. Returning
+// false means the pair cannot be resolved; identity normalization then
+// fails closed.
+type GeneratorLookup func(stack, label string) (string, bool)
+
+// NormalizeOccurrenceIdentity maps a reference envelope of any shape - a
+// translated {"$ref": "formae://<ksuid>#/<path>"}, a structured
+// {"$res":true,"$label":..,"$type":..,"$stack":..,"$property":..}, or a
+// $gen envelope in either its authored ({"$gen":true,"$label":..,
+// "$stack":..,"$output":..}) or translated ({"$gen":true,"$generator":..,
+// "$output":..}) shape - to one identity, so an envelope and its lifecycle
+// rewrite compare equal (a rewrite is not a repoint). A shape that cannot
+// normalize returns ok=false and MUST be treated as an identity mismatch by
+// callers: failing closed defers, never suppresses.
+func NormalizeOccurrenceIdentity(envelope gjson.Result, tripletLookup TripletLookup, generatorLookup GeneratorLookup) (OccurrenceIdentity, bool) {
 	if !envelope.IsObject() {
 		return OccurrenceIdentity{}, false
 	}
@@ -62,17 +87,30 @@ func NormalizeOccurrenceIdentity(envelope gjson.Result, lookup TripletLookup) (O
 		if uri.KSUID() == "" {
 			return OccurrenceIdentity{}, false
 		}
-		return OccurrenceIdentity{Ksuid: uri.KSUID(), PropertyPath: uri.PropertyPath(), JSONPath: jsonPath}, true
+		return OccurrenceIdentity{Kind: OccurrenceKindResource, Ksuid: uri.KSUID(), PropertyPath: uri.PropertyPath(), JSONPath: jsonPath}, true
 	}
 	if envelope.Get("$res").Bool() {
-		if lookup == nil {
+		if tripletLookup == nil {
 			return OccurrenceIdentity{}, false
 		}
-		ksuid, ok := lookup(envelope.Get("$stack").String(), envelope.Get("$label").String(), envelope.Get("$type").String())
+		ksuid, ok := tripletLookup(envelope.Get("$stack").String(), envelope.Get("$label").String(), envelope.Get("$type").String())
 		if !ok || ksuid == "" {
 			return OccurrenceIdentity{}, false
 		}
-		return OccurrenceIdentity{Ksuid: ksuid, PropertyPath: envelope.Get("$property").String(), JSONPath: jsonPath}, true
+		return OccurrenceIdentity{Kind: OccurrenceKindResource, Ksuid: ksuid, PropertyPath: envelope.Get("$property").String(), JSONPath: jsonPath}, true
+	}
+	if envelope.Get("$gen").Bool() {
+		if ksuid := pkgmodel.GenGeneratorKSUID(envelope); ksuid != "" {
+			return OccurrenceIdentity{Kind: OccurrenceKindGenerator, Ksuid: ksuid, PropertyPath: envelope.Get("$output").String(), JSONPath: jsonPath}, true
+		}
+		if generatorLookup == nil {
+			return OccurrenceIdentity{}, false
+		}
+		ksuid, ok := generatorLookup(envelope.Get("$stack").String(), envelope.Get("$label").String())
+		if !ok || ksuid == "" {
+			return OccurrenceIdentity{}, false
+		}
+		return OccurrenceIdentity{Kind: OccurrenceKindGenerator, Ksuid: ksuid, PropertyPath: envelope.Get("$output").String(), JSONPath: jsonPath}, true
 	}
 	return OccurrenceIdentity{}, false
 }

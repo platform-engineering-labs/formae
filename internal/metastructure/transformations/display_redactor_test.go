@@ -59,6 +59,44 @@ func TestRedactPropertiesForDisplay_EnvelopeKeepsMetadataDropsDigests(t *testing
 	assert.Equal(t, pkgmodel.RedactedForLog, env.Get("$value").String())
 }
 
+// A translated $gen envelope carrying a resolved value projects with its
+// generator reference metadata intact but its resolved value withheld: a plan
+// must be able to say which generator moved without leaking what it drew.
+func TestRedactPropertiesForDisplay_GenEnvelopeKeepsGeneratorMetadata(t *testing.T) {
+	digest := pkgmodel.ComputeValueHash("hunter2")
+	props := json.RawMessage(`{"Password":{
+		"$gen":true,"$generator":"2ABcDeFgHiJkLmNoPqRsTuVwXyZ","$output":"value",
+		"$value":"` + digest + `","$hashed":true,"$visibility":"Opaque"}}`)
+
+	out := RedactPropertiesForDisplay(props, nil)
+
+	assert.NotContains(t, string(out), digest)
+	env := gjson.GetBytes(out, "Password")
+	assert.True(t, env.Get("$gen").Bool(), "$gen marker survives")
+	assert.Equal(t, "2ABcDeFgHiJkLmNoPqRsTuVwXyZ", env.Get("$generator").String(), "which generator moved must survive")
+	assert.Equal(t, "value", env.Get("$output").String(), "which output must survive")
+	assert.Equal(t, pkgmodel.VisibilityOpaque, env.Get("$visibility").String())
+	assert.Equal(t, pkgmodel.RedactedForLog, env.Get("$value").String())
+}
+
+// A $gen missing $visibility and $hashed entirely (a shape normal
+// translation never produces — the schema fixes $visibility to "Opaque" on
+// every $gen) must still be claimed as an opaque envelope, not fall through
+// to plaintext. claimOpaqueEnvelope must not gate $gen on those markers.
+func TestRedactPropertiesForDisplay_GenEnvelopeWithoutVisibility_StillRedacted(t *testing.T) {
+	props := json.RawMessage(`{"Password":{
+		"$gen":true,"$generator":"2ABcDeFgHiJkLmNoPqRsTuVwXyZ","$output":"value",
+		"$value":"plaintext-generated-secret"}}`)
+
+	out := RedactPropertiesForDisplay(props, nil)
+
+	assert.NotContains(t, string(out), "plaintext-generated-secret")
+	env := gjson.GetBytes(out, "Password")
+	assert.True(t, env.Get("$gen").Bool(), "$gen marker survives")
+	assert.Equal(t, "2ABcDeFgHiJkLmNoPqRsTuVwXyZ", env.Get("$generator").String())
+	assert.Equal(t, pkgmodel.RedactedForLog, env.Get("$value").String())
+}
+
 // Non-opaque values are untouched, byte-for-byte semantics preserved.
 func TestRedactPropertiesForDisplay_NonOpaqueUntouched(t *testing.T) {
 	props := json.RawMessage(`{"Name":"web","Count":3,"Tags":[{"Key":"env","Value":"prod"}]}`)

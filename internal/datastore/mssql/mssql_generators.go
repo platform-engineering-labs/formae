@@ -7,6 +7,7 @@ package mssql
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -25,7 +26,15 @@ func (d *DatastoreMSSQL) CreateGenerator(gen pkgmodel.Generator, commandID strin
 	ctx, span := mssqlTracer.Start(context.Background(), "CreateGenerator")
 	defer span.End()
 
-	id := mksuid.New().String()
+	// Honor a KSUID translation already assigned (see pkgmodel.Generator.GetID
+	// and generator_update.GenerateGeneratorUpdates), so a $gen reference
+	// resolved in the same command that creates this generator names the
+	// exact row this call persists, rather than an independently minted one
+	// — mirrors storeResource's identical id-already-assigned handling.
+	id := gen.GetID()
+	if id == "" {
+		id = mksuid.New().String()
+	}
 	version := mksuid.New().String()
 
 	data, err := datastore.GeneratorData(gen)
@@ -33,10 +42,10 @@ func (d *DatastoreMSSQL) CreateGenerator(gen pkgmodel.Generator, commandID strin
 		return "", err
 	}
 
-	query := `INSERT INTO generators (id, version, command_id, operation, label, generator_type, stack_id, generator_data)
-	          VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8)`
+	query := `INSERT INTO generators (id, version, command_id, operation, label, generator_type, stack_id, generator_data, generation_id, generation_spec)
+	          VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10)`
 	_, err = d.conn.ExecContext(ctx, query, id, version, commandID, "create",
-		gen.GetLabel(), gen.GetType(), gen.GetStackID(), string(data))
+		gen.GetLabel(), gen.GetType(), gen.GetStackID(), string(data), "", "")
 	if err != nil {
 		slog.Error("Failed to create generator", "error", err, "label", gen.GetLabel())
 		return "", err
@@ -59,9 +68,9 @@ func (d *DatastoreMSSQL) UpdateGenerator(gen pkgmodel.Generator, commandID strin
 	ctx, span := mssqlTracer.Start(context.Background(), "UpdateGenerator")
 	defer span.End()
 
-	id, err := d.findGeneratorID(ctx, gen.GetLabel(), gen.GetStackID())
+	id, generationID, generationSpec, err := d.findGeneratorForUpdate(ctx, gen.GetLabel(), gen.GetStackID())
 	if err != nil && gen.GetAlias() != "" {
-		id, err = d.findGeneratorID(ctx, gen.GetAlias(), gen.GetStackID())
+		id, generationID, generationSpec, err = d.findGeneratorForUpdate(ctx, gen.GetAlias(), gen.GetStackID())
 	}
 	if err != nil {
 		return "", fmt.Errorf("failed to find existing generator: %w", err)
@@ -73,10 +82,10 @@ func (d *DatastoreMSSQL) UpdateGenerator(gen pkgmodel.Generator, commandID strin
 		return "", err
 	}
 
-	insertQuery := `INSERT INTO generators (id, version, command_id, operation, label, generator_type, stack_id, generator_data)
-	                VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8)`
+	insertQuery := `INSERT INTO generators (id, version, command_id, operation, label, generator_type, stack_id, generator_data, generation_id, generation_spec)
+	                VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10)`
 	_, err = d.conn.ExecContext(ctx, insertQuery, id, version, commandID, "update",
-		gen.GetLabel(), gen.GetType(), gen.GetStackID(), string(data))
+		gen.GetLabel(), gen.GetType(), gen.GetStackID(), string(data), generationID, generationSpec)
 	if err != nil {
 		slog.Error("Failed to update generator", "error", err, "label", gen.GetLabel())
 		return "", err
@@ -85,17 +94,36 @@ func (d *DatastoreMSSQL) UpdateGenerator(gen pkgmodel.Generator, commandID strin
 	return version, nil
 }
 
-// findGeneratorID returns the id of the latest generator row matching label
-// and stackID. Shared by UpdateGenerator's current-label lookup and its
-// alias fallback.
-func (d *DatastoreMSSQL) findGeneratorID(ctx context.Context, label, stackID string) (string, error) {
+// findGeneratorForUpdate returns the id and current generation fields of the
+// live generator row matching label and stackID. Shared by UpdateGenerator's
+// current-label lookup and its alias fallback.
+//
+// Windows to the latest version *per id* first, filters out tombstones, and
+// only then matches label — the same ordering GetGenerator and
+// DeleteGenerator use, for the same reason: a label can be shared across a
+// dead row (superseded by a rename) and a live one (a rename-back, or a
+// fresh generator created under a freed label), and matching label before
+// windowing can resolve the wrong id entirely, or a live id's stale,
+// pre-rename generation.
+//
+// The generation fields are read here so UpdateGenerator can copy them
+// forward onto the new version row it writes: a spec edit or an alias rename
+// must not drop the generation a generator currently holds — dropping it
+// would make the next apply see no generation and regenerate, silently
+// rotating a live credential.
+func (d *DatastoreMSSQL) findGeneratorForUpdate(ctx context.Context, label, stackID string) (id, generationID, generationSpec string, err error) {
 	query := `
-		SELECT TOP (1) id FROM generators
-		WHERE label = @p1 AND stack_id = @p2
-		ORDER BY version COLLATE Latin1_General_BIN2 DESC`
-	var id string
-	err := d.conn.QueryRowContext(ctx, query, label, stackID).Scan(&id)
-	return id, err
+		WITH latest_generators AS (
+			SELECT id, label, generation_id, generation_spec, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE Latin1_General_BIN2 DESC) as rn
+			FROM generators
+			WHERE stack_id = @p1
+		)
+		SELECT id, generation_id, generation_spec
+		FROM latest_generators
+		WHERE rn = 1 AND operation != 'delete' AND label = @p2`
+	err = d.conn.QueryRowContext(ctx, query, stackID, label).Scan(&id, &generationID, &generationSpec)
+	return id, generationID, generationSpec, err
 }
 
 // DeleteGenerator soft-deletes the generator with the given label on the
@@ -142,9 +170,9 @@ func (d *DatastoreMSSQL) DeleteGenerator(label, stackLabel string) (string, erro
 	}
 
 	version := mksuid.New().String()
-	insertQuery := `INSERT INTO generators (id, version, command_id, operation, label, generator_type, stack_id, generator_data)
-	                VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8)`
-	_, err = d.conn.ExecContext(ctx, insertQuery, id, version, "", "delete", label, generatorType, stack.ID, "{}")
+	insertQuery := `INSERT INTO generators (id, version, command_id, operation, label, generator_type, stack_id, generator_data, generation_id, generation_spec)
+	                VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10)`
+	_, err = d.conn.ExecContext(ctx, insertQuery, id, version, "", "delete", label, generatorType, stack.ID, "{}", "", "")
 	if err != nil {
 		return "", fmt.Errorf("failed to delete generator: %w", err)
 	}
@@ -248,4 +276,129 @@ func (d *DatastoreMSSQL) LoadGeneratorsByStack(stackLabel string) ([]pkgmodel.Ge
 	}
 
 	return generators, nil
+}
+
+// generatorIdentityFromRow builds a GeneratorIdentity from the raw columns a
+// generator row query returns. generation_spec is stored as empty text on a
+// row that has never had a generation drawn; GenerationSpec must read back as
+// nil, not as an empty-but-non-nil json.RawMessage, so the zero-value case is
+// handled explicitly rather than by just wrapping whatever was stored.
+func generatorIdentityFromRow(id, generationID, generationSpec string) datastore.GeneratorIdentity {
+	if generationID == "" {
+		return datastore.GeneratorIdentity{ID: id}
+	}
+	return datastore.GeneratorIdentity{ID: id, GenerationID: generationID, GenerationSpec: json.RawMessage(generationSpec)}
+}
+
+// GetGeneratorIdentity returns the identity of the live generator with the
+// given label on the given stack. Uses the same windowing and label-after-rn
+// ordering as GetGenerator, for the same reason: a renamed generator's
+// previous label must not resolve just because its now-superseded row is
+// still the newest one under that label.
+func (d *DatastoreMSSQL) GetGeneratorIdentity(label, stackLabel string) (datastore.GeneratorIdentity, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "GetGeneratorIdentity")
+	defer span.End()
+
+	stack, err := d.GetStackByLabel(stackLabel)
+	if err != nil {
+		return datastore.GeneratorIdentity{}, fmt.Errorf("failed to resolve stack %q: %w", stackLabel, err)
+	}
+	if stack == nil {
+		return datastore.GeneratorIdentity{}, nil
+	}
+
+	query := `
+		WITH latest_generators AS (
+			SELECT id, label, generation_id, generation_spec, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE Latin1_General_BIN2 DESC) as rn
+			FROM generators
+			WHERE stack_id = @p1
+		)
+		SELECT id, generation_id, generation_spec
+		FROM latest_generators
+		WHERE rn = 1 AND operation != 'delete' AND label = @p2`
+	var id, generationID, generationSpec string
+	err = d.conn.QueryRowContext(ctx, query, stack.ID, label).Scan(&id, &generationID, &generationSpec)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return datastore.GeneratorIdentity{}, nil
+		}
+		return datastore.GeneratorIdentity{}, fmt.Errorf("failed to get generator identity: %w", err)
+	}
+
+	return generatorIdentityFromRow(id, generationID, generationSpec), nil
+}
+
+// GetGeneratorIdentityByID returns the identity of the live generator with
+// the given KSUID, whichever stack owns it. Windows on id directly rather
+// than resolving a stack first: the id alone determines the row family.
+func (d *DatastoreMSSQL) GetGeneratorIdentityByID(generatorID string) (datastore.GeneratorIdentity, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "GetGeneratorIdentityByID")
+	defer span.End()
+
+	query := `
+		WITH latest_generators AS (
+			SELECT id, generation_id, generation_spec, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE Latin1_General_BIN2 DESC) as rn
+			FROM generators
+			WHERE id = @p1
+		)
+		SELECT id, generation_id, generation_spec
+		FROM latest_generators
+		WHERE rn = 1 AND operation != 'delete'`
+	var id, generationID, generationSpec string
+	err := d.conn.QueryRowContext(ctx, query, generatorID).Scan(&id, &generationID, &generationSpec)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return datastore.GeneratorIdentity{}, nil
+		}
+		return datastore.GeneratorIdentity{}, fmt.Errorf("failed to get generator identity by id: %w", err)
+	}
+
+	return generatorIdentityFromRow(id, generationID, generationSpec), nil
+}
+
+// AdvanceGeneration records that a new generation was drawn for this
+// generator, under this spec. Writes a new version row that carries forward
+// the existing label/type/stack/generator_data unchanged — only the
+// generation columns change. Errors if generationID is empty, if drawnUnder
+// is not valid JSON, or if the generator's latest row is a tombstone: a
+// deleted id is not resurrected.
+//
+// No production caller in this slice: the executable generator node that
+// draws generations arrives in a later slice. It ships here because the
+// generation columns are inert without a writer, and a test-only backdoor
+// would misrepresent a mechanism we are shipping for real use.
+func (d *DatastoreMSSQL) AdvanceGeneration(generatorID, generationID string, drawnUnder json.RawMessage) error {
+	ctx, span := mssqlTracer.Start(context.Background(), "AdvanceGeneration")
+	defer span.End()
+
+	if generationID == "" {
+		return fmt.Errorf("advance generation: generationID must not be empty")
+	}
+	if !json.Valid(drawnUnder) {
+		return fmt.Errorf("advance generation: drawnUnder spec must be valid JSON")
+	}
+
+	var label, generatorType, stackID, generatorData, operation string
+	err := d.conn.QueryRowContext(ctx,
+		`SELECT TOP (1) label, generator_type, stack_id, generator_data, operation FROM generators WHERE id = @p1 ORDER BY version COLLATE Latin1_General_BIN2 DESC`,
+		generatorID,
+	).Scan(&label, &generatorType, &stackID, &generatorData, &operation)
+	if err != nil {
+		return fmt.Errorf("failed to find generator %q: %w", generatorID, err)
+	}
+	if operation == "delete" {
+		return fmt.Errorf("generator %q not found", generatorID)
+	}
+
+	version := mksuid.New().String()
+	insertQuery := `INSERT INTO generators (id, version, command_id, operation, label, generator_type, stack_id, generator_data, generation_id, generation_spec)
+	                VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10)`
+	_, err = d.conn.ExecContext(ctx, insertQuery, generatorID, version, "", "update", label, generatorType, stackID, generatorData, generationID, string(drawnUnder))
+	if err != nil {
+		return fmt.Errorf("failed to advance generation: %w", err)
+	}
+
+	return nil
 }

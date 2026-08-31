@@ -179,6 +179,12 @@ abstract class Generator {
     /// Resource.alias.
     alias: String?
 
+    /// The named outputs this generator produces. A destination binds to one
+    /// of them, e.g. `pw.gen.value`. Outputs are typed properties, so an
+    /// output this generator does not produce is an eval-time type error
+    /// rather than something the agent must reject later.
+    abstract hidden gen: GeneratorOutputs
+
     local self = this
 
     // Every StackResolvable property defaults (Resolvable's fields are all
@@ -206,6 +212,15 @@ open class PasswordGenerator extends Generator {
     requireEachIncludedType: Boolean = true
 
     local self = this
+
+    // The type constraint forces validated() && self.hasStack() the same way
+    // render()'s return type does, so a generator referenced only via
+    // `pw.gen.value` (never collected into `forma`, so render() never runs)
+    // still gets the same eval-time validation.
+    hidden gen: PasswordOutputs(validated() && self.hasStack()) = new PasswordOutputs {
+        genLabel = self.label
+        genStack = self.stack
+    }
 
     // Canonical alphabets, before excludeCharacters is applied. Eval-time
     // validation below checks emptiness against these; the scheduler that
@@ -251,6 +266,68 @@ open class PasswordGenerator extends Generator {
         Symbols = symbols
         ExcludeCharacters = excludeCharacters
         RequireEachIncludedType = requireEachIncludedType
+    }
+}
+
+/// A reference to one named output of a generator, e.g. `pw.gen.value`.
+/// Renders the $gen envelope the agent resolves at apply time.
+///
+/// Visibility is supplied by the generator's outputs class through `vis` and
+/// defaults to Opaque, because a generated value is usually a secret by
+/// construction. `$visibility` itself is fixed, so an author cannot set it:
+/// an authorable visibility knob would let a plan render a secret in
+/// cleartext.
+open class GeneratorOutput {
+    hidden genLabel: String?
+    hidden genStack: StackResolvable?
+    hidden output: String
+    /// Visibility the agent applies to the resolved value. An outputs class
+    /// chooses it; an author cannot, because a value rendered in cleartext
+    /// into a plan is a value nothing downstream can redact.
+    ///
+    /// The agent normalizes a generator reference to Opaque as it translates
+    /// it, so every generated value is hashed at rest today. An arm whose
+    /// output is not a secret sets this and takes that translation with it.
+    hidden vis: "Clear"|"Opaque" = "Opaque"
+
+    fixed $gen: Boolean = true
+    fixed $label: String? = genLabel
+    fixed $stack: String? = genStack?.label
+    fixed $output: String = output
+    fixed $visibility: String = vis
+
+    // Rendered when this GeneratorOutput is interpolated inside a string via
+    // \(…), mirroring Resolvable.toString(): the full envelope, base64-encoded
+    // and framed by RS (U+001E) … US (U+001F), so the agent can locate and
+    // parse it back out of arbitrary string content.
+    function toString(): String =
+        let (env = new Dynamic {
+                ["$gen"] = true
+                ["$label"] = genLabel
+                ["$stack"] = genStack?.label
+                ["$output"] = output
+                ["$visibility"] = vis
+            })
+        "\u{1e}" + new JsonRenderer { indent = "" }.renderValue(env).base64 + "\u{1f}"
+}
+
+/// Base type for the named outputs a generator produces. Each generator kind
+/// declares its own subclass, whose typed properties are the output names a
+/// destination can bind to.
+abstract class GeneratorOutputs {
+}
+
+/// The named outputs a PasswordGenerator produces.
+open class PasswordOutputs extends GeneratorOutputs {
+    hidden genLabel: String?
+    hidden genStack: StackResolvable?
+
+    local self = this
+
+    hidden value: GeneratorOutput = new GeneratorOutput {
+        genLabel = self.genLabel
+        genStack = self.genStack
+        output = "value"
     }
 }
 

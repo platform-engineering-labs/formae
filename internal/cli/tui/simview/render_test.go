@@ -11,10 +11,12 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/tuitest"
+	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 )
 
 // runeIndex returns the rune-offset of substr in s, or -1 if not found.
@@ -186,6 +188,36 @@ func TestRenderRowLabelAndDeleteAreThemeDriven(t *testing.T) {
 	wantRichDeleteOp := lipgloss.NewStyle().Foreground(opColor(rp, opDelete)).
 		Render(components.Pad(opGlyph(rich.th.Glyphs, opDelete)+" "+opDelete.word(), opW))
 	assert.Contains(t, richDelete, wantRichDeleteOp, "delete op token should be regular weight")
+}
+
+// TestRenderRowShowsGeneratorTypeAndStack asserts that kindGenerator is cased
+// in groupLayout, renderGroupColHeader, and renderRow the same way kindPolicy
+// is: the Type and Stack columns get non-zero width, their headers render,
+// and a generator row shows its type and stack, so two same-labelled
+// generators on different stacks can be told apart in the plan.
+func TestRenderRowShowsGeneratorTypeAndStack(t *testing.T) {
+	cmd := &apimodel.Command{
+		GeneratorUpdates: []apimodel.GeneratorUpdate{
+			{GeneratorLabel: "db-password", GeneratorType: "password", StackLabel: "prod", Operation: "create"},
+		},
+	}
+	groups := buildSimGroups(cmd)
+	require.Len(t, groups, 1)
+	require.Len(t, groups[0].rows, 1)
+	row := groups[0].rows[0]
+
+	opW, labelW, typeW, stackW := groupLayout(kindGenerator, 100)
+	assert.Greater(t, typeW, 0, "the generator group must allocate a non-zero Type column width")
+	assert.Greater(t, stackW, 0, "the generator group must allocate a non-zero Stack column width")
+
+	m := makeModel(100, 32)
+	hdr := plain(m.renderGroupColHeader(kindGenerator, opW, labelW, typeW, stackW))
+	assert.Contains(t, hdr, "Type", "the generator column header must show a Type column")
+	assert.Contains(t, hdr, "Stack", "the generator column header must show a Stack column")
+
+	rendered := plain(m.renderRow(row, kindGenerator, opW, labelW, typeW, stackW, false))
+	assert.Contains(t, rendered, "password", "the rendered generator row must show its Type")
+	assert.Contains(t, rendered, "prod", "the rendered generator row must show its Stack")
 }
 
 // TestRenderGroupColHeaderThemeHighlight pins the theme-driven header

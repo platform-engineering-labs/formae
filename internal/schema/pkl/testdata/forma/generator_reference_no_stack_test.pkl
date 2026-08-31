@@ -1,0 +1,37 @@
+/*
+ * © 2026 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+// Shape-misuse test: a stackless PasswordGenerator kept as a bare local
+// (never collected into `forma`, so render() never runs) and referenced only
+// via `pw.gen.value` must still fail eval — the gen access path forces the
+// same validation render() forces.
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+import "@formae/debug/debug.pkl"
+import "@fakeaws/fakeaws.pkl"
+
+local pw = new formae.PasswordGenerator {
+  label = "stackless"
+}
+
+forma {
+  new formae.Stack {
+    label = "durable"
+  }
+
+  new formae.Target {
+    label = "default-aws-target"
+    config = new fakeaws.Config {
+      region = "us-west-2"
+    }
+  }
+
+  new debug.Consumer {
+    label = "consumer"
+    value = pw.gen.value
+  }
+}

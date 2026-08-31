@@ -281,6 +281,15 @@ func (m *mockSummaryDatastore) GetGenerator(_, _ string) (pkgmodel.Generator, er
 func (m *mockSummaryDatastore) LoadGeneratorsByStack(_ string) ([]pkgmodel.Generator, error) {
 	panic("not implemented")
 }
+func (m *mockSummaryDatastore) GetGeneratorIdentity(_, _ string) (datastore.GeneratorIdentity, error) {
+	panic("not implemented")
+}
+func (m *mockSummaryDatastore) GetGeneratorIdentityByID(_ string) (datastore.GeneratorIdentity, error) {
+	panic("not implemented")
+}
+func (m *mockSummaryDatastore) AdvanceGeneration(_, _ string, _ json.RawMessage) error {
+	panic("not implemented")
+}
 func (m *mockSummaryDatastore) Close() {}
 func (m *mockSummaryDatastore) BulkStoreResourceUpdates(_ string, _ []resource_update.ResourceUpdate) error {
 	panic("not implemented")

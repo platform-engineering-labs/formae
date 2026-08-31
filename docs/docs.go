@@ -810,6 +810,12 @@ const docTemplate = `{
                 "EndTs": {
                     "type": "string"
                 },
+                "GeneratorUpdates": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.GeneratorUpdate"
+                    }
+                },
                 "Mode": {
                     "description": "\"reconcile\" | \"patch\"",
                     "type": "string"
@@ -979,6 +985,10 @@ const docTemplate = `{
                     "description": "NEW: this property is the resource's secret value",
                     "type": "boolean"
                 },
+                "PreserveEmptyValues": {
+                    "description": "PreserveEmptyValues opts a top-level field's subtree out of empty-value\nnormalization: empty collections inside it are values, preserved on both\ndiff sides, in op values, and in plugin-bound payloads. Orthogonal to\nUpdateMethod; typically paired with Atomic on opaque document fields.",
+                    "type": "boolean"
+                },
                 "Required": {
                     "type": "boolean"
                 },
@@ -1060,6 +1070,16 @@ const docTemplate = `{
                 "Description": {
                     "$ref": "#/definitions/github_com_platform-engineering-labs_formae_pkg_model.Description"
                 },
+                "Generators": {
+                    "description": "Generators, keyed to a stack by their own Stack field",
+                    "type": "array",
+                    "items": {
+                        "type": "array",
+                        "items": {
+                            "type": "integer"
+                        }
+                    }
+                },
                 "Policies": {
                     "description": "Standalone policies",
                     "type": "array",
@@ -1093,6 +1113,54 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/model.Target"
                     }
+                }
+            }
+        },
+        "model.GeneratorUpdate": {
+            "type": "object",
+            "properties": {
+                "Duration": {
+                    "description": "milliseconds",
+                    "type": "integer"
+                },
+                "ErrorMessage": {
+                    "type": "string"
+                },
+                "GeneratorConfig": {
+                    "description": "Current generator configuration",
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "GeneratorLabel": {
+                    "type": "string"
+                },
+                "GeneratorType": {
+                    "description": "\"password\", etc.",
+                    "type": "string"
+                },
+                "ModifiedTs": {
+                    "type": "string"
+                },
+                "OldGeneratorConfig": {
+                    "description": "Previous generator configuration (for updates)",
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "Operation": {
+                    "type": "string"
+                },
+                "StackLabel": {
+                    "type": "string"
+                },
+                "StartTs": {
+                    "type": "string"
+                },
+                "State": {
+                    "type": "string"
                 }
             }
         },
@@ -1134,7 +1202,7 @@ const docTemplate = `{
                     }
                 },
                 "resourceTypes": {
-                    "description": "Resource types this filter applies to",
+                    "description": "Resource types this filter applies to; empty means every type",
                     "type": "array",
                     "items": {
                         "type": "string"

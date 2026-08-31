@@ -1188,7 +1188,11 @@ func appliedMatches(fresh string, applied any) bool {
 // storedAppliedEnvelope returns the stored node as a provenance-carrying
 // envelope: a reference envelope that records what the last write applied and
 // still holds the value the provider echoed for it. Opaque envelopes are
-// excluded, matching the rest of the provenance rules.
+// excluded, matching the rest of the provenance rules — which in practice
+// also excludes every $gen, since $gen is always opaque by construction. The
+// marker check still recognizes $gen alongside $ref/$res so the envelope
+// vocabulary here matches every other seam, rather than silently reading a
+// stored $gen row as "not an envelope at all".
 //
 // This is the counterpart lookup for a desired side that is no longer
 // structured. The executor resolves references before calling a provider and
@@ -1200,7 +1204,7 @@ func storedAppliedEnvelope(storedNode any) map[string]any {
 	if !ok {
 		return nil
 	}
-	if storedMap["$ref"] == nil && storedMap["$res"] == nil {
+	if storedMap["$ref"] == nil && storedMap["$res"] == nil && storedMap["$gen"] == nil {
 		return nil
 	}
 	if storedMap["$visibility"] == pkgmodel.VisibilityOpaque {
@@ -1740,13 +1744,18 @@ func normalizeToFlattenedKeys(m map[string]any) {
 
 // substituteStableOccurrences copies the document-side value over the
 // desired-side value for every destination path marked provably stable,
-// walking dotted paths (numeric segments index arrays).
+// walking dotted paths (numeric segments index arrays). It recognizes a
+// $ref, $res, or $gen occurrence identically: the suppression classification
+// is decided upstream by occurrence identity, not by which marker the
+// envelope happens to carry, so this walk must stop and substitute at any of
+// the three or a $gen occurrence would keep diffing after being classified
+// stable.
 func substituteStableOccurrences(document, desired map[string]any, resolvableProperties resolver.ResolvableProperties) {
 	var walk func(prefix string, node any)
 	walk = func(prefix string, node any) {
 		switch t := node.(type) {
 		case map[string]any:
-			if _, hasRef := t["$ref"]; hasRef || t["$res"] == true {
+			if _, hasRef := t["$ref"]; hasRef || t["$res"] == true || t["$gen"] == true {
 				if resolvableProperties.StableSuppressedAt(prefix) {
 					if docVal, ok := valueAtPath(document, prefix); ok {
 						setAtPath(desired, prefix, docVal)

@@ -19,4 +19,16 @@ type ResourceDataLookup interface {
 	LatestLabelForResource(label string) (string, error)
 	FindResourcesDependingOn(ksuid string) ([]*pkgmodel.Resource, error)
 	FindResourcesDependingOnMany(ksuids []string) (map[string][]*pkgmodel.Resource, error)
+	// GetGeneratorIdentity returns the identity of the live generator with
+	// this label on this stack. A zero GeneratorIdentity and a nil error
+	// mean no such generator exists — mirrors datastore.Datastore's method
+	// of the same name (its GeneratorIdentity is an alias of
+	// pkgmodel.GeneratorIdentity for exactly this reason).
+	GetGeneratorIdentity(label, stackLabel string) (pkgmodel.GeneratorIdentity, error)
+	// GetGeneratorIdentityByID returns the identity of the live generator
+	// with this KSUID. A zero GeneratorIdentity and a nil error mean no such
+	// generator exists. This is the only way to reach a generator a
+	// translated $gen envelope names: the envelope carries the KSUID, and
+	// the generator it names need not be declared by this command.
+	GetGeneratorIdentityByID(generatorID string) (pkgmodel.GeneratorIdentity, error)
 }

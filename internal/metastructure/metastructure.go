@@ -883,6 +883,51 @@ func translateToAPICommand(fa *forma_command.FormaCommand) apimodel.Command {
 		})
 	}
 
+	for _, gu := range fa.GeneratorUpdates {
+		var dur time.Duration = 0
+		if !gu.StartTs.IsZero() {
+			dur = gu.ModifiedTs.Sub(gu.StartTs)
+		}
+
+		// Generator may be nil defensively (mirroring the pu.Policy nil
+		// check above); in practice the generator diff always sets it, on
+		// every operation. On a Delete it is the existing (about-to-be-
+		// removed) generator; on a Create/Update it is the desired one.
+		var generatorLabel, generatorType string
+		if gu.Generator != nil {
+			generatorLabel = gu.Generator.GetLabel()
+			generatorType = gu.Generator.GetType()
+		}
+
+		// Marshal generator configs for diff display. A concrete Generator's
+		// own KSUID field is tagged json:"-", so this can never leak
+		// generator identity, and nothing here ever touches
+		// pkgmodel.GeneratorIdentity (the drawing spec) or a drawn value —
+		// neither exists on Generator, and no generated value exists at
+		// plan/simulate time to marshal in the first place.
+		var generatorConfig, oldGeneratorConfig json.RawMessage
+		if gu.Generator != nil {
+			generatorConfig, _ = json.Marshal(gu.Generator)
+		}
+		if gu.ExistingGenerator != nil {
+			oldGeneratorConfig, _ = json.Marshal(gu.ExistingGenerator)
+		}
+
+		apiCommand.GeneratorUpdates = append(apiCommand.GeneratorUpdates, apimodel.GeneratorUpdate{
+			GeneratorLabel:     generatorLabel,
+			GeneratorType:      generatorType,
+			StackLabel:         gu.StackLabel,
+			Operation:          string(gu.Operation),
+			State:              string(gu.State),
+			Duration:           dur.Milliseconds(),
+			ErrorMessage:       gu.ErrorMessage,
+			GeneratorConfig:    generatorConfig,
+			OldGeneratorConfig: oldGeneratorConfig,
+			StartTs:            gu.StartTs,
+			ModifiedTs:         gu.ModifiedTs,
+		})
+	}
+
 	return apiCommand
 }
 
@@ -2112,8 +2157,16 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 	doTranslate := source != resource_update.FormaCommandSourceSynchronize &&
 		source != resource_update.FormaCommandSourceDiscovery &&
 		command != pkgmodel.CommandDestroy
+	// genKeyToKsuid carries the KSUIDs translation resolved for this
+	// command's own declared generators through to GenerateGeneratorUpdates
+	// below, so a generator created by this same command gets the exact
+	// KSUID any $gen reference to it was translated to, instead of
+	// CreateGenerator minting an independent one. Left nil on a path that
+	// skips translation (Sync/Discovery/Destroy never declare generators).
+	var genKeyToKsuid map[pkgmodel.GeneratorKey]string
 	if doTranslate {
-		if _, err := resource_update.TranslateFormaeReferencesToKsuid(forma, ds); err != nil {
+		var err error
+		if _, genKeyToKsuid, err = resource_update.TranslateFormaeReferencesToKsuid(forma, ds); err != nil {
 			return nil, fmt.Errorf("failed to translate references to KSUID: %w", err)
 		}
 	}
@@ -2240,7 +2293,7 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 		return nil, err
 	}
 
-	generatorUpdates, err := generator_update.NewGeneratorUpdateGenerator(ds).GenerateGeneratorUpdates(forma, command, formaCommandConfig.Mode)
+	generatorUpdates, err := generator_update.NewGeneratorUpdateGenerator(ds).GenerateGeneratorUpdates(forma, command, formaCommandConfig.Mode, genKeyToKsuid)
 	if err != nil {
 		return nil, err
 	}
@@ -2389,6 +2442,12 @@ func extractKSUIDs(jsonStr string, ksuidSet map[string]struct{}) {
 
 // replaceKSUIDs recursively walks the JSON structure and replaces all $ref objects
 // (containing formae URIs) with $res objects (containing resolved resource metadata).
+//
+// This handles $ref only. A $gen envelope's bare $generator KSUID is not
+// reverse-translated here, and extractKSUIDs above does not even collect it
+// (it only looks at strings that parse as formae:// URIs): no resource row
+// can persist a $gen today, so there is nothing for this function to see.
+// The reverse arm for $gen is owed by whichever slice lands value drawing.
 func replaceKSUIDs(jsonStr string, ksuidToTriplet map[string]pkgmodel.TripletKey) string {
 	var replace func(value any) any
 	replace = func(value any) any {

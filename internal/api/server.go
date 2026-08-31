@@ -813,6 +813,11 @@ func mapError(c echo.Context, err error) error {
 		return apiError(c, http.StatusBadRequest, apimodel.ReferencedResourcesNotFound, resourceNotFoundError)
 	}
 
+	var generatorNotFoundError apimodel.FormaReferencedGeneratorsNotFoundError
+	if errors.As(err, &generatorNotFoundError) {
+		return apiError(c, http.StatusBadRequest, apimodel.ReferencedGeneratorsNotFound, generatorNotFoundError)
+	}
+
 	var targetExistsError apimodel.TargetAlreadyExistsError
 	if errors.As(err, &targetExistsError) {
 		return apiError(c, http.StatusConflict, apimodel.TargetAlreadyExists, targetExistsError)

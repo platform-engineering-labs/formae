@@ -7,6 +7,7 @@
 package dstest
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/platform-engineering-labs/formae/internal/datastore"
@@ -71,6 +72,34 @@ func RunCreateGeneratorThenGet(t *testing.T, newDS func(t *testing.T) TestDatast
 		pw, ok := got.(*pkgmodel.PasswordGenerator)
 		require.True(t, ok, "GetGenerator must return the concrete password generator type")
 		assert.Equal(t, 24, pw.Length)
+	})
+}
+
+// RunCreateGeneratorHonorsPreAssignedID verifies that CreateGenerator uses a
+// pre-assigned ID (set via Generator.SetID, the way
+// generator_update.GenerateGeneratorUpdates assigns the KSUID
+// resource_update's translation phase already resolved for a $gen reference
+// to this generator) rather than minting an unrelated one — mirroring
+// StoreResource's identical handling of a pre-assigned Resource.Ksuid. This
+// is what makes a same-command generator-and-consumer apply end up with one
+// shared KSUID instead of two independently minted ones.
+func RunCreateGeneratorHonorsPreAssignedID(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("CreateGenerator_HonorsPreAssignedID", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		stack := createGeneratorStack(t, ds, "generator-preassigned-id")
+		gen := testPasswordGenerator("db-password", stack, 24)
+		gen.SetID("2preassignedksuid00000000000")
+
+		_, err := ds.CreateGenerator(gen, "cmd-create")
+		require.NoError(t, err)
+
+		identity, err := ds.GetGeneratorIdentity("db-password", stack.Label)
+		require.NoError(t, err)
+		assert.Equal(t, "2preassignedksuid00000000000", identity.ID,
+			"the persisted row's KSUID must equal the pre-assigned one, not an independently minted one")
 	})
 }
 
@@ -277,5 +306,423 @@ func RunDeleteGeneratorAfterRenameDeletesOnlyTheCurrentRow(t *testing.T, newDS f
 		goneA, err := ds.GetGenerator("A", stack.Label)
 		require.NoError(t, err)
 		assert.Nil(t, goneA, "the fresh generator created under the reused label must be deleted")
+	})
+}
+
+// RunGeneratorHasNoGenerationUntilOneIsDrawn: a newly created generator holds
+// no generation, so a destination bound to it has nothing to resolve against.
+func RunGeneratorHasNoGenerationUntilOneIsDrawn(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("GeneratorHasNoGenerationUntilOneIsDrawn", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		stack := createGeneratorStack(t, ds, "durable")
+		_, err := ds.CreateGenerator(testPasswordGenerator("db-password", stack, 32), "cmd-1")
+		require.NoError(t, err)
+
+		id, err := ds.GetGeneratorIdentity("db-password", stack.Label)
+		require.NoError(t, err)
+		assert.NotEmpty(t, id.ID)
+		assert.Empty(t, id.GenerationID)
+		assert.Nil(t, id.GenerationSpec)
+	})
+}
+
+// RunAdvanceGenerationRecordsIdentityAndDrawingSpec verifies that
+// AdvanceGeneration records both the generation id and the spec it was drawn
+// under, while preserving the generator's own KSUID identity.
+func RunAdvanceGenerationRecordsIdentityAndDrawingSpec(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("AdvanceGenerationRecordsIdentityAndDrawingSpec", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		stack := createGeneratorStack(t, ds, "durable")
+		gen := testPasswordGenerator("db-password", stack, 32)
+		_, err := ds.CreateGenerator(gen, "cmd-1")
+		require.NoError(t, err)
+
+		before, err := ds.GetGeneratorIdentity("db-password", stack.Label)
+		require.NoError(t, err)
+
+		spec, err := json.Marshal(gen)
+		require.NoError(t, err)
+		require.NoError(t, ds.AdvanceGeneration(before.ID, "generation-1", spec))
+
+		after, err := ds.GetGeneratorIdentity("db-password", stack.Label)
+		require.NoError(t, err)
+		assert.Equal(t, before.ID, after.ID, "advancing a generation must preserve the generator KSUID")
+		assert.Equal(t, "generation-1", after.GenerationID)
+		assert.JSONEq(t, string(spec), string(after.GenerationSpec))
+	})
+}
+
+// RunGenerationSurvivesASpecUpdate: editing the spec writes a new version row
+// but must not disturb the generation the generator currently holds.
+func RunGenerationSurvivesASpecUpdate(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("GenerationSurvivesASpecUpdate", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		stack := createGeneratorStack(t, ds, "durable")
+		gen := testPasswordGenerator("db-password", stack, 32)
+		_, err := ds.CreateGenerator(gen, "cmd-1")
+		require.NoError(t, err)
+
+		before, err := ds.GetGeneratorIdentity("db-password", stack.Label)
+		require.NoError(t, err)
+
+		spec, err := json.Marshal(gen)
+		require.NoError(t, err)
+		require.NoError(t, ds.AdvanceGeneration(before.ID, "generation-1", spec))
+
+		_, err = ds.UpdateGenerator(testPasswordGenerator("db-password", stack, 40), "cmd-2")
+		require.NoError(t, err)
+
+		after, err := ds.GetGeneratorIdentity("db-password", stack.Label)
+		require.NoError(t, err)
+		assert.Equal(t, before.ID, after.ID, "a spec edit must preserve the generator KSUID")
+		assert.Equal(t, "generation-1", after.GenerationID, "a spec edit must not drop the generation the generator currently holds")
+		assert.JSONEq(t, string(spec), string(after.GenerationSpec))
+
+		got, err := ds.GetGenerator("db-password", stack.Label)
+		require.NoError(t, err)
+		pw, ok := got.(*pkgmodel.PasswordGenerator)
+		require.True(t, ok)
+		assert.Equal(t, 40, pw.Length, "the spec edit itself must still take effect")
+	})
+}
+
+// RunGenerationSurvivesARename: an alias rename writes a new version row; the
+// generation must not move, because a moved generation rotates a live credential.
+func RunGenerationSurvivesARename(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("GenerationSurvivesARename", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		stack := createGeneratorStack(t, ds, "durable")
+		gen := testPasswordGenerator("old-label", stack, 32)
+		_, err := ds.CreateGenerator(gen, "cmd-1")
+		require.NoError(t, err)
+
+		before, err := ds.GetGeneratorIdentity("old-label", stack.Label)
+		require.NoError(t, err)
+
+		spec, err := json.Marshal(gen)
+		require.NoError(t, err)
+		require.NoError(t, ds.AdvanceGeneration(before.ID, "generation-1", spec))
+
+		renamed := testPasswordGenerator("new-label", stack, 32)
+		renamed.Alias = "old-label"
+		_, err = ds.UpdateGenerator(renamed, "cmd-2")
+		require.NoError(t, err)
+
+		after, err := ds.GetGeneratorIdentity("new-label", stack.Label)
+		require.NoError(t, err)
+		assert.Equal(t, before.ID, after.ID, "a rename must preserve the generator KSUID")
+		assert.Equal(t, "generation-1", after.GenerationID, "a rename must not move the generation the generator currently holds")
+		assert.JSONEq(t, string(spec), string(after.GenerationSpec))
+	})
+}
+
+// RunGetGeneratorIdentityByIDFindsTheLiveRow verifies that
+// GetGeneratorIdentityByID resolves the current (latest, non-deleted) row for
+// a generator id directly, without a stack lookup, and reflects a generation
+// copied forward by a later update rather than the row the id was minted on.
+func RunGetGeneratorIdentityByIDFindsTheLiveRow(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("GetGeneratorIdentityByIDFindsTheLiveRow", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		stack := createGeneratorStack(t, ds, "durable")
+		gen := testPasswordGenerator("db-password", stack, 32)
+		_, err := ds.CreateGenerator(gen, "cmd-1")
+		require.NoError(t, err)
+
+		before, err := ds.GetGeneratorIdentity("db-password", stack.Label)
+		require.NoError(t, err)
+
+		spec, err := json.Marshal(gen)
+		require.NoError(t, err)
+		require.NoError(t, ds.AdvanceGeneration(before.ID, "generation-1", spec))
+
+		// Write a further version row so the row GetGeneratorIdentityByID
+		// must resolve is not the one the id was originally minted on.
+		_, err = ds.UpdateGenerator(testPasswordGenerator("db-password", stack, 40), "cmd-2")
+		require.NoError(t, err)
+
+		byID, err := ds.GetGeneratorIdentityByID(before.ID)
+		require.NoError(t, err)
+		assert.Equal(t, before.ID, byID.ID)
+		assert.Equal(t, "generation-1", byID.GenerationID, "the generation copied forward by the update must still be visible by id")
+		assert.JSONEq(t, string(spec), string(byID.GenerationSpec))
+	})
+}
+
+// RunGetGeneratorIdentityAbsentReturnsZeroValue verifies that looking up an
+// identity that was never created returns a zero GeneratorIdentity and a nil
+// error, matching GetGenerator's absent-is-not-an-error convention, for both
+// the label-scoped and the id-scoped lookup.
+func RunGetGeneratorIdentityAbsentReturnsZeroValue(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("GetGeneratorIdentityAbsentReturnsZeroValue", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		stack := createGeneratorStack(t, ds, "generator-identity-empty")
+
+		byLabel, err := ds.GetGeneratorIdentity("never-created", stack.Label)
+		require.NoError(t, err)
+		assert.Equal(t, datastore.GeneratorIdentity{}, byLabel)
+
+		byID, err := ds.GetGeneratorIdentityByID("nonexistent-id")
+		require.NoError(t, err)
+		assert.Equal(t, datastore.GeneratorIdentity{}, byID)
+	})
+}
+
+// RunGeneratorIdentityOldLabelIsGoneAfterRename verifies that after a
+// rename, the identity lookup on the OLD label returns the zero value: the
+// live row now carries the new label, and windowing-before-label-match must
+// not let the superseded row under the old label answer for it.
+func RunGeneratorIdentityOldLabelIsGoneAfterRename(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("GeneratorIdentityOldLabelIsGoneAfterRename", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		stack := createGeneratorStack(t, ds, "durable")
+		_, err := ds.CreateGenerator(testPasswordGenerator("old-label", stack, 32), "cmd-1")
+		require.NoError(t, err)
+
+		renamed := testPasswordGenerator("new-label", stack, 32)
+		renamed.Alias = "old-label"
+		_, err = ds.UpdateGenerator(renamed, "cmd-2")
+		require.NoError(t, err)
+
+		gone, err := ds.GetGeneratorIdentity("old-label", stack.Label)
+		require.NoError(t, err)
+		assert.Equal(t, datastore.GeneratorIdentity{}, gone, "the previous label must no longer resolve an identity after rename")
+	})
+}
+
+// RunGeneratorIdentityGoneAfterDelete verifies that after a delete, both the
+// label-scoped and the id-scoped identity lookups return the zero value: the
+// tombstone row must not answer for either.
+func RunGeneratorIdentityGoneAfterDelete(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("GeneratorIdentityGoneAfterDelete", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		stack := createGeneratorStack(t, ds, "durable")
+		_, err := ds.CreateGenerator(testPasswordGenerator("db-password", stack, 32), "cmd-1")
+		require.NoError(t, err)
+
+		before, err := ds.GetGeneratorIdentity("db-password", stack.Label)
+		require.NoError(t, err)
+		require.NotEmpty(t, before.ID)
+
+		_, err = ds.DeleteGenerator("db-password", stack.Label)
+		require.NoError(t, err)
+
+		byLabel, err := ds.GetGeneratorIdentity("db-password", stack.Label)
+		require.NoError(t, err)
+		assert.Equal(t, datastore.GeneratorIdentity{}, byLabel, "a deleted generator must not resolve an identity by label")
+
+		byID, err := ds.GetGeneratorIdentityByID(before.ID)
+		require.NoError(t, err)
+		assert.Equal(t, datastore.GeneratorIdentity{}, byID, "a deleted generator must not resolve an identity by id")
+	})
+}
+
+// RunGenerationSurvivesRenameBackToOriginalLabel verifies that renaming a
+// generator back to a label it previously held keeps the generation it
+// currently holds, resolving by the live row's latest version rather than
+// an older row that happens to share the label.
+func RunGenerationSurvivesRenameBackToOriginalLabel(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("GenerationSurvivesRenameBackToOriginalLabel", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		stack := createGeneratorStack(t, ds, "durable")
+		gen := testPasswordGenerator("A", stack, 32)
+		_, err := ds.CreateGenerator(gen, "cmd-1")
+		require.NoError(t, err)
+
+		toB := testPasswordGenerator("B", stack, 32)
+		toB.Alias = "A"
+		_, err = ds.UpdateGenerator(toB, "cmd-2")
+		require.NoError(t, err)
+
+		before, err := ds.GetGeneratorIdentity("B", stack.Label)
+		require.NoError(t, err)
+
+		spec, err := json.Marshal(gen)
+		require.NoError(t, err)
+		require.NoError(t, ds.AdvanceGeneration(before.ID, "generation-1", spec))
+
+		backToA := testPasswordGenerator("A", stack, 32)
+		backToA.Alias = "B"
+		_, err = ds.UpdateGenerator(backToA, "cmd-3")
+		require.NoError(t, err)
+
+		after, err := ds.GetGeneratorIdentity("A", stack.Label)
+		require.NoError(t, err)
+		assert.Equal(t, before.ID, after.ID, "renaming back to the original label must preserve the generator KSUID")
+		assert.Equal(t, "generation-1", after.GenerationID, "renaming back to a previously held label must not drop the generation")
+		assert.JSONEq(t, string(spec), string(after.GenerationSpec))
+	})
+}
+
+// RunAdvanceGenerationTwiceSecondWins verifies that a second call to
+// AdvanceGeneration replaces the first: the identity reflects the latest
+// draw, not the first one.
+func RunAdvanceGenerationTwiceSecondWins(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("AdvanceGenerationTwiceSecondWins", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		stack := createGeneratorStack(t, ds, "durable")
+		gen := testPasswordGenerator("db-password", stack, 32)
+		_, err := ds.CreateGenerator(gen, "cmd-1")
+		require.NoError(t, err)
+
+		id, err := ds.GetGeneratorIdentity("db-password", stack.Label)
+		require.NoError(t, err)
+
+		specOne, err := json.Marshal(gen)
+		require.NoError(t, err)
+		require.NoError(t, ds.AdvanceGeneration(id.ID, "generation-1", specOne))
+
+		gen.Length = 40
+		specTwo, err := json.Marshal(gen)
+		require.NoError(t, err)
+		require.NoError(t, ds.AdvanceGeneration(id.ID, "generation-2", specTwo))
+
+		after, err := ds.GetGeneratorIdentity("db-password", stack.Label)
+		require.NoError(t, err)
+		assert.Equal(t, id.ID, after.ID)
+		assert.Equal(t, "generation-2", after.GenerationID, "the second draw must win over the first")
+		assert.JSONEq(t, string(specTwo), string(after.GenerationSpec))
+	})
+}
+
+// RunAdvanceGenerationDoesNotAffectOtherGenerator verifies that advancing
+// one generator's generation on a stack leaves a second, unrelated
+// generator on the same stack untouched.
+func RunAdvanceGenerationDoesNotAffectOtherGenerator(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("AdvanceGenerationDoesNotAffectOtherGenerator", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		stack := createGeneratorStack(t, ds, "durable")
+		genA := testPasswordGenerator("db-password", stack, 32)
+		_, err := ds.CreateGenerator(genA, "cmd-1")
+		require.NoError(t, err)
+		genB := testPasswordGenerator("api-key", stack, 16)
+		_, err = ds.CreateGenerator(genB, "cmd-2")
+		require.NoError(t, err)
+
+		idA, err := ds.GetGeneratorIdentity("db-password", stack.Label)
+		require.NoError(t, err)
+		idB, err := ds.GetGeneratorIdentity("api-key", stack.Label)
+		require.NoError(t, err)
+
+		spec, err := json.Marshal(genA)
+		require.NoError(t, err)
+		require.NoError(t, ds.AdvanceGeneration(idA.ID, "generation-1", spec))
+
+		afterA, err := ds.GetGeneratorIdentity("db-password", stack.Label)
+		require.NoError(t, err)
+		assert.Equal(t, "generation-1", afterA.GenerationID)
+
+		afterB, err := ds.GetGeneratorIdentity("api-key", stack.Label)
+		require.NoError(t, err)
+		assert.Equal(t, idB.ID, afterB.ID, "the untouched generator's id must be unaffected")
+		assert.Empty(t, afterB.GenerationID, "advancing one generator must not draw a generation for another")
+		assert.Nil(t, afterB.GenerationSpec)
+	})
+}
+
+// RunAdvanceGenerationOnDeletedGeneratorFailsWithoutResurrecting verifies
+// AdvanceGeneration's tombstone guard: called against a deleted generator's
+// id, it must return an error AND must not write a new row. A half-fix that
+// errors but still inserts a version row would resurrect the generator with
+// an unparseable generator_data ('{}' copied from the tombstone), leaving
+// GetGenerator permanently failing with "unknown generator type:" — so this
+// checks both read paths stay at the zero value / nil, not just the error.
+func RunAdvanceGenerationOnDeletedGeneratorFailsWithoutResurrecting(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("AdvanceGenerationOnDeletedGeneratorFailsWithoutResurrecting", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		stack := createGeneratorStack(t, ds, "durable")
+		gen := testPasswordGenerator("db-password", stack, 32)
+		_, err := ds.CreateGenerator(gen, "cmd-1")
+		require.NoError(t, err)
+
+		id, err := ds.GetGeneratorIdentity("db-password", stack.Label)
+		require.NoError(t, err)
+
+		spec, err := json.Marshal(gen)
+		require.NoError(t, err)
+		require.NoError(t, ds.AdvanceGeneration(id.ID, "generation-1", spec))
+
+		_, err = ds.DeleteGenerator("db-password", stack.Label)
+		require.NoError(t, err)
+
+		err = ds.AdvanceGeneration(id.ID, "generation-2", spec)
+		assert.Error(t, err, "advancing a deleted generator must fail")
+
+		byID, err := ds.GetGeneratorIdentityByID(id.ID)
+		require.NoError(t, err)
+		assert.Equal(t, datastore.GeneratorIdentity{}, byID, "the deleted generator must not be resurrected by id")
+
+		got, err := ds.GetGenerator("db-password", stack.Label)
+		require.NoError(t, err, "a resurrected row with an unparseable spec would fail here instead of returning nil")
+		assert.Nil(t, got, "the deleted generator must not be resurrected by label")
+	})
+}
+
+// RunAdvanceGenerationRejectsMalformedSpecAndEmptyGenerationID verifies that
+// AdvanceGeneration validates both of its inputs before writing anything: a
+// drawnUnder spec that is not valid JSON is rejected the same way an empty
+// one is, and an empty generationID is rejected too, rather than being
+// written and read back indistinguishably from "no generation drawn".
+func RunAdvanceGenerationRejectsMalformedSpecAndEmptyGenerationID(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("AdvanceGenerationRejectsMalformedSpecAndEmptyGenerationID", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		stack := createGeneratorStack(t, ds, "durable")
+		gen := testPasswordGenerator("db-password", stack, 32)
+		_, err := ds.CreateGenerator(gen, "cmd-1")
+		require.NoError(t, err)
+
+		id, err := ds.GetGeneratorIdentity("db-password", stack.Label)
+		require.NoError(t, err)
+
+		validSpec, err := json.Marshal(gen)
+		require.NoError(t, err)
+
+		err = ds.AdvanceGeneration(id.ID, "generation-1", json.RawMessage(`{not valid json`))
+		assert.Error(t, err, "a malformed drawnUnder spec must be rejected")
+
+		err = ds.AdvanceGeneration(id.ID, "", validSpec)
+		assert.Error(t, err, "an empty generationID must be rejected")
+
+		after, err := ds.GetGeneratorIdentity("db-password", stack.Label)
+		require.NoError(t, err)
+		assert.Empty(t, after.GenerationID, "neither rejected call may have written a generation")
 	})
 }

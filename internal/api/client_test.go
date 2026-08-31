@@ -45,6 +45,34 @@ func TestParseSubmitCommandErrorResponse_ResourceHasDependents(t *testing.T) {
 	assert.Equal(t, "parent-vpc", got.Data.Dependents[0].CascadeSource)
 }
 
+// TestParseSubmitCommandErrorResponse_ReferencedGeneratorsNotFound asserts the
+// client decodes a 400 ReferencedGeneratorsNotFound body into a typed
+// FormaReferencedGeneratorsNotFoundError (so the CLI renders it) rather than
+// falling through to "unknown error type", mirroring the
+// ReferencedResourcesNotFound case this error is modelled on.
+func TestParseSubmitCommandErrorResponse_ReferencedGeneratorsNotFound(t *testing.T) {
+	body, err := json.Marshal(apimodel.ErrorResponse[apimodel.FormaReferencedGeneratorsNotFoundError]{
+		ErrorType: apimodel.ReferencedGeneratorsNotFound,
+		Data: apimodel.FormaReferencedGeneratorsNotFoundError{
+			Missing: []pkgmodel.MissingGenerator{
+				{Label: "phantom-generator", Stack: "consumer-stack", Output: "value"},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	c := &Client{}
+	_, perr := c.parseSubmitCommandErrorResponse(io.NopCloser(bytes.NewReader(body)))
+	require.Error(t, perr)
+
+	var got *apimodel.ErrorResponse[apimodel.FormaReferencedGeneratorsNotFoundError]
+	require.ErrorAs(t, perr, &got, "must decode into a typed FormaReferencedGeneratorsNotFoundError")
+	require.Len(t, got.Data.Missing, 1)
+	assert.Equal(t, "phantom-generator", got.Data.Missing[0].Label)
+	assert.Equal(t, "consumer-stack", got.Data.Missing[0].Stack)
+	assert.Equal(t, "value", got.Data.Missing[0].Output)
+}
+
 // TestGetFormaCommandsStatusNotFoundReturnsConcreteEmptyResult verifies a 404
 // from the commands/status endpoint resolves to a well-formed empty result
 // (non-nil, zero Commands), not a bare nil that forces every caller to

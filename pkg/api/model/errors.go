@@ -22,6 +22,7 @@ const (
 	TargetAlreadyExists          APIError = "TargetAlreadyExists"
 	TargetReaped                 APIError = "TargetReaped"
 	ReferencedResourcesNotFound  APIError = "ReferencedResourcesNotFound"
+	ReferencedGeneratorsNotFound APIError = "ReferencedGeneratorsNotFound"
 	RequiredFieldMissingOnCreate APIError = "RequiredFieldMissingOnCreate"
 	StackReferenceNotFound       APIError = "StackReferenceNotFound"
 	TargetReferenceNotFound      APIError = "TargetReferenceNotFound"
@@ -106,6 +107,20 @@ type FormaReferencedResourcesNotFoundError struct {
 
 func (e FormaReferencedResourcesNotFoundError) Error() string {
 	return "forma rejected because one or more resolvables were not found"
+}
+
+// FormaReferencedGeneratorsNotFoundError names every $gen that resolved to
+// no live generator, or that named an output its generator does not
+// produce. A dangling generator reference is a hard error, never silently
+// absorbed — PKL cannot reject a $gen naming a generator the forma never
+// declares (a bare `local` generator still renders a well-formed envelope),
+// so this is the only check standing between such a forma and an apply.
+type FormaReferencedGeneratorsNotFoundError struct {
+	Missing []pkgmodel.MissingGenerator `json:"Missing"`
+}
+
+func (e FormaReferencedGeneratorsNotFoundError) Error() string {
+	return "forma rejected because one or more generator references were not found"
 }
 
 type TargetAlreadyExistsError struct {

@@ -24,7 +24,9 @@ import (
 //   - arrays render as "- item" lines; AWS {Key,Value} tags collapse to
 //     "- <Key>: <Value>"
 //   - Forma special-value wrappers are simplified: {$value} unwraps, {$ref}
-//     renders "<value>  → <label.property>", opaque values are masked.
+//     renders "<value>  → <label.property>", {$gen} renders "<value>  →
+//     <generator>" (or "<value>  → <label.output>" for its authored shape),
+//     opaque values are masked but a reference's target still shows.
 //
 // indent is the number of leading spaces for the top level.
 func PropertyLines(raw json.RawMessage, indent int) []string {
@@ -109,14 +111,21 @@ func propSimplify(v any) any {
 	_, hasStrat := m["$strategy"]
 	_, hasVis := m["$visibility"]
 	res, _ := m["$res"].(bool)
-	if !hasVal && !hasRef && !hasStrat && !hasVis && !res {
+	gen, _ := m["$gen"].(bool)
+	if !hasVal && !hasRef && !hasStrat && !hasVis && !res && !gen {
 		return v
 	}
 	if vis, _ := m["$visibility"].(string); vis == pkgmodel.VisibilityOpaque {
+		// A reference is masked, not blanked: the resolved value is withheld
+		// like any opaque scalar, but which target it names (a resource
+		// property, or which generator) is safe metadata and still shows.
+		if hasRef || res || gen {
+			return propRef{value: propOpaque{}, target: propResolvableTarget(m)}
+		}
 		return propOpaque{}
 	}
 	inner := propSimplify(m["$value"])
-	if hasRef || res {
+	if hasRef || res || gen {
 		return propRef{value: inner, target: propResolvableTarget(m)}
 	}
 	return inner
@@ -127,10 +136,16 @@ func propResolvableTarget(m map[string]any) string {
 		if prop, _ := m["$property"].(string); prop != "" {
 			return label + "." + prop
 		}
+		if output, _ := m["$output"].(string); output != "" {
+			return label + "." + output
+		}
 		return label
 	}
 	if ref, _ := m["$ref"].(string); ref != "" {
 		return strings.TrimPrefix(ref, "formae://")
+	}
+	if generator, _ := m["$generator"].(string); generator != "" {
+		return generator
 	}
 	return ""
 }

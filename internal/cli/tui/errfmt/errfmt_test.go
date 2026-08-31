@@ -77,6 +77,23 @@ func TestRender_ReferencedResourcesNotFound_Golden(t *testing.T) {
 	tuitest.RequireGolden(t, []byte(out))
 }
 
+// ── 3b. FormaReferencedGeneratorsNotFoundError ─────────────────────────────────
+
+func TestRender_ReferencedGeneratorsNotFound_Golden(t *testing.T) {
+	err := &apimodel.ErrorResponse[apimodel.FormaReferencedGeneratorsNotFoundError]{
+		ErrorType: apimodel.ReferencedGeneratorsNotFound,
+		Data: apimodel.FormaReferencedGeneratorsNotFoundError{
+			Missing: []pkgmodel.MissingGenerator{
+				{Label: "db-password", Stack: "default", Output: "value"},
+				{Label: "api-key", Stack: "secrets", Output: "value"},
+			},
+		},
+	}
+	out, rerr := Render(err)
+	require.NoError(t, rerr)
+	tuitest.RequireGolden(t, []byte(out))
+}
+
 // ── 4. FormaPatchRejectedError ────────────────────────────────────────────────
 
 func TestRender_PatchRejected_Golden(t *testing.T) {

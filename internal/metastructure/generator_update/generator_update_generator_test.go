@@ -55,13 +55,54 @@ func TestGenerateGeneratorUpdates_NewGeneratorProducesCreate(t *testing.T) {
 		Generators: []json.RawMessage{rawGenerator(t, passwordSpec("db-password", "my-stack", 24))},
 	}
 
-	updates, err := gg.GenerateGeneratorUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile)
+	updates, err := gg.GenerateGeneratorUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile, nil)
 	require.NoError(t, err)
 	require.Len(t, updates, 1)
 
 	assert.Equal(t, GeneratorOperationCreate, updates[0].Operation)
 	assert.Equal(t, "db-password", updates[0].Generator.GetLabel())
 	assert.Equal(t, "my-stack", updates[0].StackLabel)
+}
+
+// The KSUID resource_update's translation phase resolved for a declared
+// generator (genKeyToKsuid) ends up as GetID() on the very Generator value
+// this function returns — this is what makes that earlier resolution stick
+// all the way to CreateGenerator, rather than a $gen reference and its
+// generator's own row getting two independently minted KSUIDs.
+func TestGenerateGeneratorUpdates_AppliesTranslatedKSUID(t *testing.T) {
+	gg := NewGeneratorUpdateGenerator(&stubDatastore{})
+
+	forma := &pkgmodel.Forma{
+		Stacks:     []pkgmodel.Stack{{Label: "my-stack"}},
+		Generators: []json.RawMessage{rawGenerator(t, passwordSpec("db-password", "my-stack", 24))},
+	}
+	genKeyToKsuid := map[pkgmodel.GeneratorKey]string{
+		{Label: "db-password", Stack: "my-stack"}: "2translatedksuid0000000000000",
+	}
+
+	updates, err := gg.GenerateGeneratorUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile, genKeyToKsuid)
+	require.NoError(t, err)
+	require.Len(t, updates, 1)
+
+	assert.Equal(t, "2translatedksuid0000000000000", updates[0].Generator.GetID())
+}
+
+// A declared generator with no entry in genKeyToKsuid (translation saw no
+// $gen reference to it, or genKeyToKsuid is nil) keeps GetID()=="" — the
+// zero value CreateGenerator's own mint-if-empty guard already handles.
+func TestGenerateGeneratorUpdates_NoTranslatedKSUID_LeavesIDEmpty(t *testing.T) {
+	gg := NewGeneratorUpdateGenerator(&stubDatastore{})
+
+	forma := &pkgmodel.Forma{
+		Stacks:     []pkgmodel.Stack{{Label: "my-stack"}},
+		Generators: []json.RawMessage{rawGenerator(t, passwordSpec("db-password", "my-stack", 24))},
+	}
+
+	updates, err := gg.GenerateGeneratorUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile, nil)
+	require.NoError(t, err)
+	require.Len(t, updates, 1)
+
+	assert.Equal(t, "", updates[0].Generator.GetID())
 }
 
 func TestGenerateGeneratorUpdates_UnchangedGeneratorProducesNoOperation(t *testing.T) {
@@ -78,7 +119,7 @@ func TestGenerateGeneratorUpdates_UnchangedGeneratorProducesNoOperation(t *testi
 		Generators: []json.RawMessage{rawGenerator(t, passwordSpec("db-password", "my-stack", 24))},
 	}
 
-	updates, err := gg.GenerateGeneratorUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile)
+	updates, err := gg.GenerateGeneratorUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile, nil)
 	require.NoError(t, err)
 	assert.Empty(t, updates, "re-applying an unchanged generator should produce no operation")
 }
@@ -97,7 +138,7 @@ func TestGenerateGeneratorUpdates_ChangedLengthProducesUpdate(t *testing.T) {
 		Generators: []json.RawMessage{rawGenerator(t, passwordSpec("db-password", "my-stack", 32))},
 	}
 
-	updates, err := gg.GenerateGeneratorUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile)
+	updates, err := gg.GenerateGeneratorUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile, nil)
 	require.NoError(t, err)
 	require.Len(t, updates, 1)
 
@@ -125,7 +166,7 @@ func TestGenerateGeneratorUpdates_ChangedSymbolsProducesUpdate(t *testing.T) {
 		Generators: []json.RawMessage{rawGenerator(t, declared)},
 	}
 
-	updates, err := gg.GenerateGeneratorUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile)
+	updates, err := gg.GenerateGeneratorUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile, nil)
 	require.NoError(t, err)
 	require.Len(t, updates, 1)
 	assert.Equal(t, GeneratorOperationUpdate, updates[0].Operation)
@@ -141,7 +182,7 @@ func TestGenerateGeneratorUpdates_Reconcile_RemovedGeneratorProducesDelete(t *te
 		Stacks: []pkgmodel.Stack{{Label: "my-stack"}},
 	}
 
-	updates, err := gg.GenerateGeneratorUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile)
+	updates, err := gg.GenerateGeneratorUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile, nil)
 	require.NoError(t, err)
 	require.Len(t, updates, 1)
 
@@ -160,7 +201,7 @@ func TestGenerateGeneratorUpdates_Patch_RemovedGeneratorProducesNoDelete(t *test
 		Stacks: []pkgmodel.Stack{{Label: "my-stack"}},
 	}
 
-	updates, err := gg.GenerateGeneratorUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModePatch)
+	updates, err := gg.GenerateGeneratorUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModePatch, nil)
 	require.NoError(t, err)
 	assert.Empty(t, updates, "patch mode must not delete a generator absent from the declaration")
 }
@@ -173,7 +214,7 @@ func TestGenerateGeneratorUpdates_Destroy_ProducesNoUpdates(t *testing.T) {
 
 	forma := &pkgmodel.Forma{Stacks: []pkgmodel.Stack{{Label: "my-stack"}}}
 
-	updates, err := gg.GenerateGeneratorUpdates(forma, pkgmodel.CommandDestroy, pkgmodel.FormaApplyModeReconcile)
+	updates, err := gg.GenerateGeneratorUpdates(forma, pkgmodel.CommandDestroy, pkgmodel.FormaApplyModeReconcile, nil)
 	require.NoError(t, err)
 	assert.Empty(t, updates, "a generator has no standalone form; it dies with its stack, implicitly")
 }
@@ -202,7 +243,7 @@ func TestGenerateGeneratorUpdates_Rename(t *testing.T) {
 		Generators: []json.RawMessage{rawGenerator(t, declared)},
 	}
 
-	updates, err := gg.GenerateGeneratorUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile)
+	updates, err := gg.GenerateGeneratorUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile, nil)
 	require.NoError(t, err)
 	require.Len(t, updates, 1, "a rename must produce a single update, not a delete plus a create")
 
@@ -222,7 +263,7 @@ func TestGenerateGeneratorUpdates_MultipleGeneratorsPerStackAreIndependentByLabe
 		},
 	}
 
-	updates, err := gg.GenerateGeneratorUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile)
+	updates, err := gg.GenerateGeneratorUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile, nil)
 	require.NoError(t, err)
 	require.Len(t, updates, 2, "two same-typed generators in one stack are distinct by label")
 	assert.Equal(t, GeneratorOperationCreate, updates[0].Operation)
@@ -261,7 +302,7 @@ func TestGenerateGeneratorUpdates_DeadAliasIsRejected(t *testing.T) {
 		Generators: []json.RawMessage{rawGenerator(t, declared)},
 	}
 
-	_, err := gg.GenerateGeneratorUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile)
+	_, err := gg.GenerateGeneratorUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "db-secret")
 	assert.Contains(t, err.Error(), "db-password")
@@ -280,7 +321,7 @@ func TestGenerateGeneratorUpdates_AliasEqualToLabelIsRejected(t *testing.T) {
 		Generators: []json.RawMessage{rawGenerator(t, declared)},
 	}
 
-	_, err := gg.GenerateGeneratorUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile)
+	_, err := gg.GenerateGeneratorUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "db-password")
 }
@@ -309,7 +350,7 @@ func TestGenerateGeneratorUpdates_DuplicateClaimIsRejected(t *testing.T) {
 		},
 	}
 
-	_, err := gg.GenerateGeneratorUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile)
+	_, err := gg.GenerateGeneratorUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "`x`")
 	assert.Contains(t, err.Error(), "`y`")

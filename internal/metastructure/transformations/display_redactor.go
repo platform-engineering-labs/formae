@@ -128,6 +128,12 @@ func displayWalk(opaqueFields map[string]bool) *OpaqueWalk {
 
 // claimOpaqueEnvelope claims a map that is an inline opaque or hashed
 // envelope. Cascade markers are not envelopes and are never claimed.
+//
+// $gen is claimed unconditionally, not gated on $visibility/$hashed: the
+// schema fixes $visibility to "Opaque" on every $gen, so there is no
+// non-opaque $gen shape to let through. Gating it on those markers alone
+// would render a $gen missing them (an absent or malformed row) with its
+// $value in plaintext instead of withheld.
 func claimOpaqueEnvelope(v any) (any, bool) {
 	m, ok := v.(map[string]any)
 	if !ok {
@@ -136,7 +142,7 @@ func claimOpaqueEnvelope(v any) (any, bool) {
 	if m["$cascade-resolvable"] == true {
 		return nil, false
 	}
-	if m["$visibility"] == pkgmodel.VisibilityOpaque || m["$hashed"] == true {
+	if m["$gen"] == true || m["$visibility"] == pkgmodel.VisibilityOpaque || m["$hashed"] == true {
 		return displayRedactValue(m), true
 	}
 	return nil, false
@@ -146,10 +152,16 @@ func claimOpaqueEnvelope(v any) (any, bool) {
 // reference identity rather than value material; only they survive display
 // redaction. Everything else — $value, $applied, $resolvedFrom, and any key
 // of a map-shaped secret — is value material and is withheld.
+//
+// $gen, $generator, and $output name a generator reference the same way $ref/
+// $label/$property name a resource reference: which generator produced the
+// value, and which of its outputs. A $gen is always opaque, but a plan must
+// still be able to say which generator moved.
 var displayEnvelopeMetadataKeys = map[string]bool{
 	"$ref": true, "$res": true, "$label": true, "$type": true, "$stack": true,
 	"$property": true, "$json": true, "$strategy": true, "$hashed": true,
 	"$visibility": true, "$embed": true,
+	"$gen": true, "$generator": true, "$output": true,
 }
 
 func displayRedactValue(v any) any {
@@ -171,7 +183,7 @@ func displayRedactValue(v any) any {
 }
 
 func isEnvelopeShapedForDisplay(m map[string]any) bool {
-	for _, k := range []string{"$ref", "$res", "$value", "$visibility", "$hashed"} {
+	for _, k := range []string{"$ref", "$res", "$gen", "$value", "$visibility", "$hashed"} {
 		if _, ok := m[k]; ok {
 			return true
 		}

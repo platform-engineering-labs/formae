@@ -115,18 +115,23 @@ func TestGroupingOrder(t *testing.T) {
 		PolicyUpdates: []apimodel.PolicyUpdate{
 			{PolicyLabel: "ttl-policy", PolicyType: "ttl", StackLabel: "default", Operation: "create"},
 		},
+		GeneratorUpdates: []apimodel.GeneratorUpdate{
+			{GeneratorLabel: "db-password", GeneratorType: "password", StackLabel: "default", Operation: "create"},
+		},
 	}
 
 	groups := buildSimGroups(cmd)
-	require.Len(t, groups, 4)
+	require.Len(t, groups, 5)
 	assert.Equal(t, kindTarget, groups[0].kind)
 	assert.Equal(t, "Targets", groups[0].title)
 	assert.Equal(t, kindStack, groups[1].kind)
 	assert.Equal(t, "Stacks", groups[1].title)
 	assert.Equal(t, kindPolicy, groups[2].kind)
 	assert.Equal(t, "Policies", groups[2].title)
-	assert.Equal(t, kindResource, groups[3].kind)
-	assert.Equal(t, "Resources", groups[3].title)
+	assert.Equal(t, kindGenerator, groups[3].kind)
+	assert.Equal(t, "Generators", groups[3].title)
+	assert.Equal(t, kindResource, groups[4].kind)
+	assert.Equal(t, "Resources", groups[4].title)
 }
 
 // TestGroupingEmptyGroupsOmitted verifies that groups with no rows are not
@@ -390,6 +395,50 @@ func TestPolicySkipNoReferencingStacks(t *testing.T) {
 	row := groups[0].rows[0]
 	assert.Equal(t, opKeep, row.op)
 	assert.Empty(t, row.detail)
+}
+
+// ---------------------------------------------------------------------------
+// Generator rows
+// ---------------------------------------------------------------------------
+
+// TestGeneratorRowMapping verifies a GeneratorUpdate becomes a simRow
+// carrying its label, type, stack, and destructive-mapped operation -- so a
+// generator-only plan is never rendered as an empty group.
+func TestGeneratorRowMapping(t *testing.T) {
+	cmd := &apimodel.Command{
+		GeneratorUpdates: []apimodel.GeneratorUpdate{
+			{GeneratorLabel: "db-password", GeneratorType: "password", StackLabel: "prod", Operation: "create"},
+		},
+	}
+
+	groups := buildSimGroups(cmd)
+	require.Len(t, groups, 1)
+	require.Len(t, groups[0].rows, 1)
+	row := groups[0].rows[0]
+	assert.Equal(t, opCreate, row.op)
+	assert.Equal(t, "db-password", row.label)
+	assert.Equal(t, "password", row.typ)
+	assert.Equal(t, "prod", row.stack)
+}
+
+// TestGeneratorRowMapsUpdateAndDelete verifies the remaining two generator
+// operations map to their expected opKinds.
+func TestGeneratorRowMapsUpdateAndDelete(t *testing.T) {
+	cmd := &apimodel.Command{
+		GeneratorUpdates: []apimodel.GeneratorUpdate{
+			{GeneratorLabel: "renamed", GeneratorType: "password", StackLabel: "prod", Operation: "update"},
+			{GeneratorLabel: "gone", GeneratorType: "password", StackLabel: "prod", Operation: "delete"},
+		},
+	}
+
+	groups := buildSimGroups(cmd)
+	require.Len(t, groups, 1)
+	// Destructive-first: delete sorts before update.
+	require.Len(t, groups[0].rows, 2)
+	assert.Equal(t, opDelete, groups[0].rows[0].op)
+	assert.Equal(t, "gone", groups[0].rows[0].label)
+	assert.Equal(t, opUpdate, groups[0].rows[1].op)
+	assert.Equal(t, "renamed", groups[0].rows[1].label)
 }
 
 // ---------------------------------------------------------------------------

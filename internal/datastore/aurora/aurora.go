@@ -6209,10 +6209,23 @@ func (d *DatastoreAuroraDataAPI) Close() {
 }
 
 // This can be only used in tests or in setups where we have access to admin (non-production)
+//
+// Aurora is the only backend that needs this: sqlite gets a fresh in-memory
+// database per test and postgres/mssql each drop their randomly-named
+// per-test database wholesale, so neither enumerates tables. Aurora's tests
+// share one fixed database (FORMAE_TEST_AURORA_DATABASE), so this has to name
+// every table with test-observable state, or a table left off silently
+// accumulates rows across runs and later tests can read another run's data.
+// db_version (goose's migration-tracking table) is deliberately excluded —
+// clearing it would make goose re-run migrations against tables that already
+// exist.
 func (d *DatastoreAuroraDataAPI) CleanUp() error {
 	ctx := context.Background()
 
-	tables := []string{"stacks", "resource_updates", "resources", "targets", "forma_commands"}
+	tables := []string{
+		"stacks", "resource_updates", "resources", "targets", "forma_commands",
+		"policies", "stack_policies", "generators", "target_reap_audit", "agent_boots",
+	}
 
 	for _, table := range tables {
 		query := fmt.Sprintf("DELETE FROM %s", table)

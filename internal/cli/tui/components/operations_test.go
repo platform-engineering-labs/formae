@@ -78,6 +78,24 @@ func TestPromptForOperations_OnlyReads(t *testing.T) {
 	assert.Equal(t, "", out)
 }
 
+// TestPromptForOperations_GeneratorCreateAndUpdate verifies a generator-only
+// command is never an empty prompt: creates and updates are counted and
+// worded like every other operation kind.
+func TestPromptForOperations_GeneratorCreateAndUpdate(t *testing.T) {
+	cmd := &apimodel.Command{
+		GeneratorUpdates: []apimodel.GeneratorUpdate{
+			{GeneratorLabel: "db-password", Operation: "create"},
+			{GeneratorLabel: "renamed", Operation: "update"},
+		},
+	}
+	out := PromptForOperations(theme.New("rich"), cmd)
+	plain := stripANSI(out)
+
+	assert.Contains(t, plain, "create 1 generator(s)")
+	assert.Contains(t, plain, "update 1 generator(s)")
+	assert.Contains(t, plain, "Do you want to continue?")
+}
+
 // TestPromptForOperations_UsesPassedTheme guards against a regression to the
 // old hardcoded theme.New("formae") bypass: it proves the rendered ANSI
 // colors come from the *passed* theme, not a fixed default, by rendering the

@@ -488,6 +488,68 @@ func TestRenderCard_PolicySimpleCard(t *testing.T) {
 	assert.Contains(t, p, "staging-reconcile", "title should contain the policy label")
 }
 
+// TestRenderCard_GeneratorCreateShowsDeclaredSpec verifies a generator
+// create card lists its declared spec fields (via buildGeneratorChangeLines,
+// the same key-level diff format as a policy card), rather than falling
+// back to the generic "No property changes." empty note.
+func TestRenderCard_GeneratorCreateShowsDeclaredSpec(t *testing.T) {
+	th := makeCardTheme()
+	generator := &apimodel.GeneratorUpdate{
+		GeneratorLabel:  "db-password",
+		GeneratorType:   "password",
+		StackLabel:      "prod",
+		Operation:       "create",
+		GeneratorConfig: []byte(`{"Type":"password","Label":"db-password","Stack":"prod","Length":24}`),
+	}
+
+	row := simRow{
+		key:       "generator/prod/db-password",
+		op:        opCreate,
+		label:     "db-password",
+		typ:       "password",
+		stack:     "prod",
+		generator: generator,
+	}
+
+	lines := renderCard(th, row, 100)
+	card := plain(strings.Join(lines, "\n"))
+
+	assert.Contains(t, card, "Length", "the declared spec's fields must appear in the card")
+	assert.Contains(t, card, "24", "the declared spec's values must appear in the card")
+	assert.NotContains(t, card, "No property changes.", "a create with a declared spec must not fall back to the empty note")
+}
+
+// TestRenderCard_GeneratorUpdateShowsSetLine verifies a generator update
+// (e.g. a length change) renders a "set" line the same way a policy config
+// change does.
+func TestRenderCard_GeneratorUpdateShowsSetLine(t *testing.T) {
+	th := makeCardTheme()
+	generator := &apimodel.GeneratorUpdate{
+		GeneratorLabel:     "db-password",
+		GeneratorType:      "password",
+		StackLabel:         "prod",
+		Operation:          "update",
+		GeneratorConfig:    []byte(`{"Length":32}`),
+		OldGeneratorConfig: []byte(`{"Length":24}`),
+	}
+
+	row := simRow{
+		key:       "generator/prod/db-password",
+		op:        opUpdate,
+		label:     "db-password",
+		typ:       "password",
+		stack:     "prod",
+		generator: generator,
+	}
+
+	lines := renderCard(th, row, 100)
+	card := plain(strings.Join(lines, "\n"))
+
+	assert.Contains(t, card, "Length", "the changed field's key must appear")
+	assert.Contains(t, card, "24", "the old value must appear")
+	assert.Contains(t, card, "32", "the new value must appear")
+}
+
 // TestRenderCard_NilRes verifies no panic when res is nil (e.g. target row).
 func TestRenderCard_NilRes(t *testing.T) {
 	th := makeCardTheme()

@@ -1,0 +1,37 @@
+/*
+ * © 2026 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+// Cross-check test: excludeCharacters is driven by a property so the Go side
+// can pass each canonical character-class alphabet in turn. All four classes
+// are enabled, so excluding exactly one class's alphabet must fail eval with
+// that class's specific error, regardless of the other three classes.
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+properties {
+  excludeCharacters = new formae.Prop {
+    flag = "excludeCharacters"
+    default = ""
+  }
+}
+
+forma {
+  local testStack = new formae.Stack {
+    label = "generator-test-stack"
+  }
+  testStack
+
+  new formae.PasswordGenerator {
+    label = "cross-check"
+    stack = testStack.res
+    uppercase = true
+    lowercase = true
+    digits = true
+    symbols = true
+    excludeCharacters = properties.excludeCharacters.value
+  }
+}

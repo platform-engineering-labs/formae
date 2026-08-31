@@ -14,11 +14,31 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
+
+// rawPasswordGenerator builds the raw JSON shape ParseGenerators expects for
+// a password generator, the same shape PKL's PasswordGenerator.render()
+// produces.
+func rawPasswordGenerator(t *testing.T, label, stack string) json.RawMessage {
+	t.Helper()
+	data, err := json.Marshal(map[string]any{
+		"Type":                    "password",
+		"Label":                   label,
+		"Stack":                   stack,
+		"Length":                  32,
+		"Uppercase":               true,
+		"Lowercase":               true,
+		"Digits":                  true,
+		"RequireEachIncludedType": true,
+	})
+	require.NoError(t, err)
+	return data
+}
 
 func TestTranslateFormaeReferencesToKsuid(t *testing.T) {
 	ds, _ := GetDeps(t)
@@ -55,7 +75,7 @@ func TestTranslateFormaeReferencesToKsuid(t *testing.T) {
 			},
 		}
 
-		_, err := translateFormaeReferencesToKsuid(forma, ds)
+		_, _, err := translateFormaeReferencesToKsuid(forma, ds)
 		require.NoError(t, err)
 
 		var subnetProps map[string]any
@@ -103,7 +123,7 @@ func TestTranslateFormaeReferencesToKsuid(t *testing.T) {
 			},
 		}
 
-		_, err := translateFormaeReferencesToKsuid(forma, ds)
+		_, _, err := translateFormaeReferencesToKsuid(forma, ds)
 		require.NoError(t, err)
 
 		assert.NotEmpty(t, forma.Resources[0].Ksuid, "VPC should have KSUID")
@@ -146,7 +166,7 @@ func TestTranslateFormaeReferencesToKsuid(t *testing.T) {
 
 		originalProperties := string(forma.Resources[0].Properties)
 
-		_, err := translateFormaeReferencesToKsuid(forma, ds)
+		_, _, err := translateFormaeReferencesToKsuid(forma, ds)
 		require.NoError(t, err)
 
 		var originalProps, translatedProps map[string]any
@@ -173,7 +193,7 @@ func TestTranslateFormaeReferencesToKsuid(t *testing.T) {
 			},
 		}
 
-		_, err := translateFormaeReferencesToKsuid(forma, ds)
+		_, _, err := translateFormaeReferencesToKsuid(forma, ds)
 		require.NoError(t, err)
 		assert.Equal(t, existingKsuid, forma.Resources[0].Ksuid)
 	})
@@ -223,7 +243,7 @@ func TestTranslateFormaeReferencesToKsuid(t *testing.T) {
 			},
 		}
 
-		_, err := translateFormaeReferencesToKsuid(forma, ds)
+		_, _, err := translateFormaeReferencesToKsuid(forma, ds)
 		require.NoError(t, err)
 
 		// Verify all 3 different references were translated
@@ -282,7 +302,7 @@ func TestTranslateFormaeReferencesToKsuid(t *testing.T) {
 			},
 		}
 
-		_, err := translateFormaeReferencesToKsuid(forma, ds)
+		_, _, err := translateFormaeReferencesToKsuid(forma, ds)
 		require.NoError(t, err)
 
 		var resourceProps map[string]any
@@ -332,7 +352,7 @@ func TestTranslateFormaeReferencesToKsuid(t *testing.T) {
 			},
 		}
 
-		_, err = translateFormaeReferencesToKsuid(forma, ds)
+		_, _, err = translateFormaeReferencesToKsuid(forma, ds)
 		require.NoError(t, err)
 
 		var subnetProps map[string]any
@@ -371,7 +391,7 @@ func TestTranslateFormaeReferencesToKsuid(t *testing.T) {
 			},
 		}
 
-		_, err := translateFormaeReferencesToKsuid(forma, ds)
+		_, _, err := translateFormaeReferencesToKsuid(forma, ds)
 		require.NoError(t, err)
 
 		var resourceProps map[string]any
@@ -491,7 +511,7 @@ func TestTranslateFormaeReferencesToKsuid_ReturnsCompleteMapping(t *testing.T) {
 			},
 		}
 
-		mapping, err := translateFormaeReferencesToKsuid(forma, ds)
+		mapping, _, err := translateFormaeReferencesToKsuid(forma, ds)
 		require.NoError(t, err)
 
 		assert.Equal(t, "vpc", mapping[forma.Resources[0].Ksuid])
@@ -531,7 +551,7 @@ func TestTranslateFormaeReferencesToKsuid_ReturnsCompleteMapping(t *testing.T) {
 			},
 		}
 
-		mapping, err := translateFormaeReferencesToKsuid(forma, ds)
+		mapping, _, err := translateFormaeReferencesToKsuid(forma, ds)
 		require.NoError(t, err)
 
 		assert.Equal(t, "subnet", mapping[forma.Resources[0].Ksuid])
@@ -1359,7 +1379,7 @@ func TestTranslateFormaeReferencesToKsuid_TargetConfig(t *testing.T) {
 		},
 	}
 
-	_, err := translateFormaeReferencesToKsuid(forma, ds)
+	_, _, err := translateFormaeReferencesToKsuid(forma, ds)
 	require.NoError(t, err)
 
 	var config map[string]any
@@ -1855,7 +1875,7 @@ func TestTranslateFormaeReferences_StripsUntrustedProvenance(t *testing.T) {
 		}},
 	}
 
-	_, err := TranslateFormaeReferencesToKsuid(forma, ds)
+	_, _, err := TranslateFormaeReferencesToKsuid(forma, ds)
 	require.NoError(t, err)
 
 	props := string(forma.Resources[0].Properties)
@@ -1879,11 +1899,292 @@ func TestTranslateFormaeReferences_KeepsLiteralResolvedFromInPlainMaps(t *testin
 		}},
 	}
 
-	_, err := TranslateFormaeReferencesToKsuid(forma, ds)
+	_, _, err := TranslateFormaeReferencesToKsuid(forma, ds)
 	require.NoError(t, err)
 
 	var props map[string]map[string]any
 	require.NoError(t, json.Unmarshal(forma.Resources[0].Properties, &props))
 	assert.Equal(t, "a-user-value", props["Data"]["$resolvedFrom"],
 		"a literal key in a plain map is user data and must survive")
+}
+
+// ── $gen resolution ──────────────────────────────────────────────────────────
+
+// A generator declared in the SAME command as its consumer is resolvable
+// even though it has no row in the datastore yet — the most common
+// authoring shape, and the one a datastore-only lookup would break.
+func TestTranslate_GenReference_ResolvesInCommandGenerator(t *testing.T) {
+	ds, _ := GetDeps(t)
+	forma := &pkgmodel.Forma{
+		Stacks:     []pkgmodel.Stack{{Label: "test-stack"}},
+		Generators: []json.RawMessage{rawPasswordGenerator(t, "db-password", "test-stack")},
+		Resources: []pkgmodel.Resource{{
+			Label: "db", Type: "Test::Database", Stack: "test-stack",
+			Properties: json.RawMessage(`{
+				"MasterPassword": {"$gen": true, "$label": "db-password", "$stack": "test-stack", "$output": "value", "$visibility": "Opaque"}
+			}`),
+		}},
+	}
+
+	_, _, err := TranslateFormaeReferencesToKsuid(forma, ds)
+	require.NoError(t, err)
+
+	translated := gjson.ParseBytes(forma.Resources[0].Properties).Get("MasterPassword")
+	assert.True(t, translated.Get("$gen").Bool())
+	assert.NotEmpty(t, translated.Get("$generator").String())
+	assert.Equal(t, "value", translated.Get("$output").String())
+	assert.Equal(t, "Opaque", translated.Get("$visibility").String())
+	assert.False(t, translated.Get("$label").Exists(), "authored $label must not survive translation")
+	assert.False(t, translated.Get("$stack").Exists(), "authored $stack must not survive translation")
+}
+
+// A flat $gen node already carrying $generator (already translated) must
+// survive a second translation pass unchanged, not be misread as dangling
+// because it no longer carries $label/$stack.
+func TestTranslate_GenReference_TranslationIsIdempotent(t *testing.T) {
+	ds, _ := GetDeps(t)
+	forma := &pkgmodel.Forma{
+		Stacks:     []pkgmodel.Stack{{Label: "test-stack"}},
+		Generators: []json.RawMessage{rawPasswordGenerator(t, "db-password", "test-stack")},
+		Resources: []pkgmodel.Resource{{
+			Label: "db", Type: "Test::Database", Stack: "test-stack",
+			Properties: json.RawMessage(`{
+				"MasterPassword": {"$gen": true, "$label": "db-password", "$stack": "test-stack", "$output": "value", "$visibility": "Opaque"}
+			}`),
+		}},
+	}
+
+	_, _, err := TranslateFormaeReferencesToKsuid(forma, ds)
+	require.NoError(t, err)
+	firstPass := string(forma.Resources[0].Properties)
+
+	// A second translation pass over the already-translated forma (as would
+	// happen if translation ran twice, or over a resource whose properties
+	// were already resolved) must be a no-op.
+	_, _, err = TranslateFormaeReferencesToKsuid(forma, ds)
+	require.NoError(t, err)
+
+	assert.Equal(t, firstPass, string(forma.Resources[0].Properties),
+		"a second translation pass over an already-translated $gen must be idempotent")
+}
+
+// A generator not declared in this command's forma, but already persisted,
+// resolves via the datastore — the tier-2 fallback, mirroring how a $res
+// resolves a resource declared in an earlier apply.
+func TestTranslate_GenReference_ResolvesViaDatastore(t *testing.T) {
+	ds, _ := GetDeps(t)
+	ds.StoreGeneratorIdentity("db-password", "test-stack", "2existinggeneratorksuid")
+
+	forma := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{{Label: "test-stack"}},
+		Resources: []pkgmodel.Resource{{
+			Label: "db", Type: "Test::Database", Stack: "test-stack",
+			Properties: json.RawMessage(`{
+				"MasterPassword": {"$gen": true, "$label": "db-password", "$stack": "test-stack", "$output": "value"}
+			}`),
+		}},
+	}
+
+	_, _, err := TranslateFormaeReferencesToKsuid(forma, ds)
+	require.NoError(t, err)
+
+	translated := gjson.ParseBytes(forma.Resources[0].Properties).Get("MasterPassword")
+	assert.Equal(t, "2existinggeneratorksuid", translated.Get("$generator").String())
+}
+
+// A datastore-tier generator referenced by more than one occurrence in the
+// same command — here, two different resources — is looked up in the
+// datastore only once. Without memoization, a stack of many resources
+// sharing one pre-existing generator would issue one GetGeneratorIdentity
+// call per occurrence instead of one per generator per command.
+func TestTranslate_GenReference_DatastoreLookupIsMemoizedAcrossOccurrences(t *testing.T) {
+	ds, _ := GetDeps(t)
+	ds.StoreGeneratorIdentity("db-password", "test-stack", "2existinggeneratorksuid")
+
+	forma := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{{Label: "test-stack"}},
+		Resources: []pkgmodel.Resource{
+			{
+				Label: "db-one", Type: "Test::Database", Stack: "test-stack",
+				Properties: json.RawMessage(`{
+					"MasterPassword": {"$gen": true, "$label": "db-password", "$stack": "test-stack", "$output": "value"}
+				}`),
+			},
+			{
+				Label: "db-two", Type: "Test::Database", Stack: "test-stack",
+				Properties: json.RawMessage(`{
+					"MasterPassword": {"$gen": true, "$label": "db-password", "$stack": "test-stack", "$output": "value"}
+				}`),
+			},
+		},
+	}
+
+	_, _, err := TranslateFormaeReferencesToKsuid(forma, ds)
+	require.NoError(t, err)
+
+	for _, r := range forma.Resources {
+		translated := gjson.ParseBytes(r.Properties).Get("MasterPassword")
+		assert.Equal(t, "2existinggeneratorksuid", translated.Get("$generator").String())
+	}
+	assert.Equal(t, 1, ds.GeneratorIdentityLookupCount("db-password", "test-stack"),
+		"a generator shared across occurrences in one command must be looked up once, not once per occurrence")
+}
+
+// An in-command generator that already has a live identity keeps that exact
+// identity rather than minting a new one — an update to an existing
+// generator must not change the KSUID a $gen reference resolves to.
+func TestTranslate_GenReference_InCommandGeneratorKeepsExistingIdentity(t *testing.T) {
+	ds, _ := GetDeps(t)
+	ds.StoreGeneratorIdentity("db-password", "test-stack", "2existinggeneratorksuid")
+
+	forma := &pkgmodel.Forma{
+		Stacks:     []pkgmodel.Stack{{Label: "test-stack"}},
+		Generators: []json.RawMessage{rawPasswordGenerator(t, "db-password", "test-stack")},
+		Resources: []pkgmodel.Resource{{
+			Label: "db", Type: "Test::Database", Stack: "test-stack",
+			Properties: json.RawMessage(`{
+				"MasterPassword": {"$gen": true, "$label": "db-password", "$stack": "test-stack", "$output": "value"}
+			}`),
+		}},
+	}
+
+	_, _, err := TranslateFormaeReferencesToKsuid(forma, ds)
+	require.NoError(t, err)
+
+	translated := gjson.ParseBytes(forma.Resources[0].Properties).Get("MasterPassword")
+	assert.Equal(t, "2existinggeneratorksuid", translated.Get("$generator").String())
+}
+
+// A generator declared with Alias (a rename in progress) resolves a same-
+// command $gen reference to its NEW label by finding the existing row via
+// the old label, keeping the existing KSUID rather than minting an orphan
+// one — mirrors assignKSUIDs' identical resource-rename handling.
+func TestTranslate_GenReference_InCommandRenamedGeneratorKeepsExistingIdentity(t *testing.T) {
+	ds, _ := GetDeps(t)
+	ds.StoreGeneratorIdentity("old-password-label", "test-stack", "2existinggeneratorksuid")
+
+	renamed, err := json.Marshal(map[string]any{
+		"Type":                    "password",
+		"Label":                   "new-password-label",
+		"Stack":                   "test-stack",
+		"Alias":                   "old-password-label",
+		"Length":                  32,
+		"Uppercase":               true,
+		"Lowercase":               true,
+		"Digits":                  true,
+		"RequireEachIncludedType": true,
+	})
+	require.NoError(t, err)
+
+	forma := &pkgmodel.Forma{
+		Stacks:     []pkgmodel.Stack{{Label: "test-stack"}},
+		Generators: []json.RawMessage{renamed},
+		Resources: []pkgmodel.Resource{{
+			Label: "db", Type: "Test::Database", Stack: "test-stack",
+			Properties: json.RawMessage(`{
+				"MasterPassword": {"$gen": true, "$label": "new-password-label", "$stack": "test-stack", "$output": "value"}
+			}`),
+		}},
+	}
+
+	_, _, err = TranslateFormaeReferencesToKsuid(forma, ds)
+	require.NoError(t, err)
+
+	translated := gjson.ParseBytes(forma.Resources[0].Properties).Get("MasterPassword")
+	assert.Equal(t, "2existinggeneratorksuid", translated.Get("$generator").String(),
+		"a renamed generator's KSUID must not change")
+}
+
+// A resource bound to a generator that the forma never declares, and that no
+// stack holds, is rejected before anything is planned. PKL renders this
+// envelope happily (a bare `local` generator still produces a well-formed
+// $gen via pw.gen.value without ever being collected into Generators), so
+// the check here is the only one.
+func TestTranslate_GenReferenceToUndeclaredGenerator_IsRejected(t *testing.T) {
+	ds, _ := GetDeps(t)
+	command := pkgmodel.CommandApply
+	mode := pkgmodel.FormaApplyModeReconcile
+	forma := &pkgmodel.Forma{
+		Stacks:  []pkgmodel.Stack{{Label: "test-stack"}},
+		Targets: []pkgmodel.Target{{Label: "aws-target", Config: json.RawMessage(`{}`), Namespace: "aws"}},
+		Resources: []pkgmodel.Resource{{
+			Label: "db", Type: "Test::Database", Stack: "test-stack", Target: "aws-target",
+			Properties: json.RawMessage(`{
+				"MasterPassword": {"$gen": true, "$label": "phantom-generator", "$stack": "test-stack", "$output": "value"}
+			}`),
+		}},
+	}
+
+	updates, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil, nil, false)
+	require.Error(t, err)
+	assert.Nil(t, updates, "a dangling generator reference must not produce a partial plan")
+
+	var notFoundErr apimodel.FormaReferencedGeneratorsNotFoundError
+	require.ErrorAs(t, err, &notFoundErr)
+	require.Len(t, notFoundErr.Missing, 1)
+	assert.Equal(t, "phantom-generator", notFoundErr.Missing[0].Label)
+	assert.Equal(t, "test-stack", notFoundErr.Missing[0].Stack)
+	assert.Equal(t, "value", notFoundErr.Missing[0].Output)
+}
+
+// A $gen naming an output its generator does not produce is rejected. PKL
+// owns the authorable case — PasswordOutputs only ever defines a `value`
+// field, so pw.gen.<anything else> is a PKL-time error and this shape can
+// never be rendered by real PKL. This is the model-level backstop for a
+// directly-constructed (non-PKL) forma document carrying an invalid output.
+func TestTranslate_GenReference_UnknownOutputIsRejected(t *testing.T) {
+	ds, _ := GetDeps(t)
+	forma := &pkgmodel.Forma{
+		Stacks:     []pkgmodel.Stack{{Label: "test-stack"}},
+		Generators: []json.RawMessage{rawPasswordGenerator(t, "db-password", "test-stack")},
+		Resources: []pkgmodel.Resource{{
+			Label: "db", Type: "Test::Database", Stack: "test-stack",
+			Properties: json.RawMessage(`{
+				"MasterPassword": {"$gen": true, "$label": "db-password", "$stack": "test-stack", "$output": "nosuchoutput"}
+			}`),
+		}},
+	}
+
+	_, _, err := TranslateFormaeReferencesToKsuid(forma, ds)
+	require.Error(t, err)
+
+	var notFoundErr apimodel.FormaReferencedGeneratorsNotFoundError
+	require.ErrorAs(t, err, &notFoundErr)
+	require.Len(t, notFoundErr.Missing, 1)
+	assert.Equal(t, "nosuchoutput", notFoundErr.Missing[0].Output)
+}
+
+// A $gen naming no stack is an incomplete reference and is rejected the same
+// way as an incomplete $res triplet, without ever reaching the datastore.
+func TestTranslate_GenReference_IncompleteReferenceIsRejected(t *testing.T) {
+	ds, _ := GetDeps(t)
+	forma := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{{Label: "test-stack"}},
+		Resources: []pkgmodel.Resource{{
+			Label: "db", Type: "Test::Database", Stack: "test-stack",
+			Properties: json.RawMessage(`{
+				"MasterPassword": {"$gen": true, "$label": "db-password", "$output": "value"}
+			}`),
+		}},
+	}
+
+	_, _, err := TranslateFormaeReferencesToKsuid(forma, ds)
+	require.Error(t, err)
+
+	var notFoundErr apimodel.FormaReferencedGeneratorsNotFoundError
+	require.ErrorAs(t, err, &notFoundErr)
+	require.Len(t, notFoundErr.Missing, 1)
+	assert.Equal(t, "db-password", notFoundErr.Missing[0].Label)
+}
+
+// The provenance strip recognizes a $gen envelope as an envelope shape,
+// exactly as it does $ref/$res, so a directly-authored $gen carrying a
+// forged $resolvedFrom has it removed before any resolution is attempted.
+func TestStripUntrustedProvenance_StripsForgedResolvedFrom_FromGenEnvelope(t *testing.T) {
+	props := `{"Password": {"$gen": true, "$label": "db-password", "$stack": "default", "$output": "value", "$resolvedFrom": "forged"}}`
+
+	stripped, err := stripUntrustedProvenance(props)
+	require.NoError(t, err)
+	assert.NotContains(t, stripped, "$resolvedFrom")
+	assert.Contains(t, stripped, `"$gen":true`)
 }

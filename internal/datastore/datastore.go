@@ -230,6 +230,23 @@ type ResourceSnapshot struct {
 	Schema     pkgmodel.Schema
 }
 
+// GeneratorIdentity is controller state for one generator: its stable KSUID
+// and the generation it currently holds. Deliberately kept off
+// pkgmodel.Generator so it can never participate in desired-config equality.
+//
+// GenerationSpec's bytes are NOT canonical: Postgres and Aurora store it as
+// JSONB, which normalizes key order and whitespace on write, so what comes
+// back can differ byte-for-byte from what AdvanceGeneration was given.
+// Parse it; never byte-compare or hash it against the spec that was drawn.
+//
+// Aliased to pkgmodel.GeneratorIdentity (not a local struct) so that
+// resource_update.ResourceDataLookup — which must not import
+// internal/datastore, since internal/datastore imports resource_update for
+// ResourceUpdate — can still declare a GetGeneratorIdentity method returning
+// this exact type, and any Datastore implementation satisfies both
+// interfaces with the same method.
+type GeneratorIdentity = pkgmodel.GeneratorIdentity
+
 // Datastore defines the persistence interface for formae.
 // It handles storage and retrieval of FormaCommands (requested changes),
 // Resources (actual cloud state), Stacks, and Targets.
@@ -515,6 +532,27 @@ type Datastore interface {
 	// LoadGeneratorsByStack returns all non-deleted generators owned by a
 	// stack.
 	LoadGeneratorsByStack(stackLabel string) ([]pkgmodel.Generator, error)
+	// GetGeneratorIdentity returns the identity of the live generator with
+	// this label on this stack. A zero GeneratorIdentity and a nil error
+	// mean no such generator, matching GetGenerator's absent-is-not-an-error
+	// convention.
+	GetGeneratorIdentity(label, stackLabel string) (GeneratorIdentity, error)
+	// GetGeneratorIdentityByID returns the identity of the live generator
+	// with this KSUID, whichever stack owns it. Zero value plus nil error
+	// when absent.
+	GetGeneratorIdentityByID(generatorID string) (GeneratorIdentity, error)
+	// AdvanceGeneration records that a new generation was drawn for this
+	// generator, under this spec. Writes a new version row, preserving the
+	// KSUID. Errors if generationID is empty, if drawnUnder is not valid
+	// JSON (a generation always has a spec it was drawn under, and every
+	// backend must agree on what counts as one), or if the generator has
+	// been deleted — a tombstoned id is not resurrected.
+	//
+	// No production caller in this slice: the executable generator node that
+	// draws generations arrives in a later slice. It ships here because the
+	// generation columns are inert without a writer, and a test-only
+	// backdoor would misrepresent a mechanism we are shipping for real use.
+	AdvanceGeneration(generatorID, generationID string, drawnUnder json.RawMessage) error
 
 	// Close releases database connections
 	Close()
