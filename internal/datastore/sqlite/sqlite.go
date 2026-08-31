@@ -61,6 +61,10 @@ type DatastoreSQLite struct {
 	conn    *sql.DB // Write connection (single connection for SQLite write safety)
 	agentID string
 	ctx     context.Context
+	// dsn is kept so a data migration lease can open its OWN connection on the
+	// same file. It must never take one from conn: that pool holds a single
+	// connection, so pinning it would starve every ordinary read.
+	dsn string
 }
 
 type TestDatastoreSQLite interface {
@@ -104,7 +108,7 @@ func NewDatastoreSQLite(ctx context.Context, cfg *pkgmodel.DatastoreConfig, agen
 	// to avoid "database is locked" errors during concurrent operations.
 	conn.SetMaxOpenConns(1)
 
-	d := DatastoreSQLite{conn: conn, agentID: agentID, ctx: ctx}
+	d := DatastoreSQLite{conn: conn, agentID: agentID, ctx: ctx, dsn: cfg.Sqlite.FilePath}
 
 	if err = datastore.RunMigrations(conn, "sqlite3"); err != nil {
 		return nil, err
