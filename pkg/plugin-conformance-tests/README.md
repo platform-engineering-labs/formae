@@ -128,10 +128,61 @@ exercised.
 | `FORMAE_BINARY` | Absolute path to a specific `formae` binary. Skips the channel-aware resolver. |
 | `FORMAE_VERSION` | Pin a specific formae version. The resolver searches stable then dev channels for an exact match. |
 | `FORMAE_TEST_RUN_ID` | Set by the harness for each run; available to Pkl fixtures for unique resource naming. |
+| `FORMAE_TEST_PROVIDER_DEFAULT_OBSERVATIONS` | Path to write the omit-and-observe sweep artifact to. Unset means no sweep. See below. |
+| `FORMAE_TEST_SETTLE_SECONDS` | Seconds to wait before the post-create sync, so asynchronously populated fields have settled before the second read. Default 0; capped at 300. |
 
 A timeout knob for the OOB-delete inventory-removal step is also exposed for
 slow backends; see the comment block above `RunCRUDTests` in
 [`runner.go`](./runner.go) for the current name and default.
+
+## The provider-default sweep
+
+Set `FORMAE_TEST_PROVIDER_DEFAULT_OBSERVATIONS` to a file path and the CRUD run
+also records what the provider does with every field the schema annotates
+`hasProviderDefault`:
+
+```bash
+FORMAE_TEST_PROVIDER_DEFAULT_OBSERVATIONS=/tmp/observations.json go test -v ./...
+```
+
+The suite is already running the experiment. A fixture declares a subset of the
+schema, so every annotated field it leaves out is created omitted, and the
+resource is read back twice: once from the create echo and once after a forced
+sync. The sweep captures those two reads per annotated field instead of
+discarding them.
+
+Each row records the two observations separately, and distinguishes absence
+from an explicit null and from an explicit empty collection, because the three
+carry different patch meanings:
+
+```json
+{
+  "testCase": "s3-bucket",
+  "resourceType": "AWS::S3::Bucket",
+  "path": "encryption",
+  "declared": false,
+  "createEcho": "value",
+  "afterSync": "value",
+  "moved": false
+}
+```
+
+`declared: false` marks the omitted-field experiment. `moved: true` means the
+value differs between the two reads — formae wrote nothing in between, so a
+writer other than formae did.
+
+What a row does and does not settle:
+
+- A field the provider **populates** when omitted has an empirically justified
+  annotation.
+- A field that **moves** between the two reads names a co-actor.
+- A field that **never appears** settles nothing on its own. The co-actor that
+  would populate it is absent from an isolated fixture by construction, so an
+  unexercised annotation needs a documentation pass, not a removal.
+
+The two reads are seconds apart, which catches asynchronous population but not
+a value a provider moves on a maintenance-window cadence. Widen the gap with
+`FORMAE_TEST_SETTLE_SECONDS`.
 
 ## Diagnostics on failure
 
