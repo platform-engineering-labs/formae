@@ -183,7 +183,7 @@ abstract class Generator {
     /// of them, e.g. `pw.gen.value`. Outputs are typed properties, so an
     /// output this generator does not produce is an eval-time type error
     /// rather than something the agent must reject later.
-    abstract hidden gen: Any
+    abstract hidden gen: GeneratorOutputs
 
     local self = this
 
@@ -272,19 +272,29 @@ open class PasswordGenerator extends Generator {
 /// A reference to one named output of a generator, e.g. `pw.gen.value`.
 /// Renders the $gen envelope the agent resolves at apply time.
 ///
-/// Visibility is fixed Opaque: a generated value is a secret by construction,
-/// and an authorable visibility knob would let a plan render one in
+/// Visibility is supplied by the generator's outputs class through `vis` and
+/// defaults to Opaque, because a generated value is usually a secret by
+/// construction. `$visibility` itself is fixed, so an author cannot set it:
+/// an authorable visibility knob would let a plan render a secret in
 /// cleartext.
 open class GeneratorOutput {
     hidden genLabel: String?
     hidden genStack: StackResolvable?
     hidden output: String
+    /// Visibility the agent applies to the resolved value. An outputs class
+    /// chooses it; an author cannot, because a value rendered in cleartext
+    /// into a plan is a value nothing downstream can redact.
+    ///
+    /// The agent normalizes a generator reference to Opaque as it translates
+    /// it, so every generated value is hashed at rest today. An arm whose
+    /// output is not a secret sets this and takes that translation with it.
+    hidden vis: "Clear"|"Opaque" = "Opaque"
 
     fixed $gen: Boolean = true
     fixed $label: String? = genLabel
     fixed $stack: String? = genStack?.label
     fixed $output: String = output
-    fixed $visibility: String = "Opaque"
+    fixed $visibility: String = vis
 
     // Rendered when this GeneratorOutput is interpolated inside a string via
     // \(…), mirroring Resolvable.toString(): the full envelope, base64-encoded
@@ -296,13 +306,19 @@ open class GeneratorOutput {
                 ["$label"] = genLabel
                 ["$stack"] = genStack?.label
                 ["$output"] = output
-                ["$visibility"] = "Opaque"
+                ["$visibility"] = vis
             })
         "\u{1e}" + new JsonRenderer { indent = "" }.renderValue(env).base64 + "\u{1f}"
 }
 
+/// Base type for the named outputs a generator produces. Each generator kind
+/// declares its own subclass, whose typed properties are the output names a
+/// destination can bind to.
+abstract class GeneratorOutputs {
+}
+
 /// The named outputs a PasswordGenerator produces.
-open class PasswordOutputs {
+open class PasswordOutputs extends GeneratorOutputs {
     hidden genLabel: String?
     hidden genStack: StackResolvable?
 
