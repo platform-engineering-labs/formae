@@ -74,9 +74,29 @@ func BuildConnStr(host string, port int, user, password, database string) string
 	return u.String()
 }
 
+// resolvePassword returns the password for a new connection: whatever the
+// configured provider answers, or the static config value when no provider is
+// set. The pool holds a single credential for the lifetime of the process, so
+// without a provider a password rotated in the database fails every connection
+// the pool opens from then on.
+func resolvePassword(ctx context.Context, cfg *pkgmodel.PostgresConfig) (string, error) {
+	if cfg.PasswordProvider == nil {
+		return cfg.Password, nil
+	}
+	password, err := cfg.PasswordProvider(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve postgres password: %w", err)
+	}
+	return password, nil
+}
+
 // This can be only used in tests or in setups where we have access to admin (non-production)
 func ensureDatabaseExists(ctx context.Context, cfg *pkgmodel.DatastoreConfig) error {
-	connStr := BuildConnStr(cfg.Postgres.Host, cfg.Postgres.Port, cfg.Postgres.User, cfg.Postgres.Password, "postgres")
+	password, err := resolvePassword(ctx, &cfg.Postgres)
+	if err != nil {
+		return err
+	}
+	connStr := BuildConnStr(cfg.Postgres.Host, cfg.Postgres.Port, cfg.Postgres.User, password, "postgres")
 
 	conn, err := pgx.Connect(ctx, connStr)
 	if err != nil {
@@ -117,7 +137,12 @@ func NewDatastorePostgresEnsureDatabase(ctx context.Context, cfg *pkgmodel.Datas
 }
 
 func NewDatastorePostgres(ctx context.Context, cfg *pkgmodel.DatastoreConfig, agentID string) (datastore.Datastore, error) {
-	connStr := BuildConnStr(cfg.Postgres.Host, cfg.Postgres.Port, cfg.Postgres.User, cfg.Postgres.Password, cfg.Postgres.Database)
+	password, err := resolvePassword(ctx, &cfg.Postgres)
+	if err != nil {
+		return nil, err
+	}
+
+	connStr := BuildConnStr(cfg.Postgres.Host, cfg.Postgres.Port, cfg.Postgres.User, password, cfg.Postgres.Database)
 
 	// Append connection parameters if provided
 	if cfg.Postgres.ConnectionParams != "" {
@@ -158,6 +183,21 @@ func NewDatastorePostgres(ctx context.Context, cfg *pkgmodel.DatastoreConfig, ag
 		// Connection details are still disabled for security
 		otelpgx.WithDisableConnectionDetailsInAttributes(),
 	)
+
+	// With a provider configured, every connection the pool opens asks for the
+	// current credential instead of reusing the one captured at startup. pgx
+	// hands BeforeConnect a copy of the connection config per new connection, so
+	// mutating it here leaves connections already open untouched.
+	if cfg.Postgres.PasswordProvider != nil {
+		poolCfg.BeforeConnect = func(ctx context.Context, connCfg *pgx.ConnConfig) error {
+			password, err := resolvePassword(ctx, &cfg.Postgres)
+			if err != nil {
+				return err
+			}
+			connCfg.Password = password
+			return nil
+		}
+	}
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
@@ -5181,7 +5221,12 @@ func (d DatastorePostgres) Pool() *pgxpool.Pool { return d.pool }
 
 // This can be only used in tests or in setups where we have access to admin (non-production)
 func (d DatastorePostgres) CleanUp() error {
-	connStr := BuildConnStr(d.cfg.Postgres.Host, d.cfg.Postgres.Port, d.cfg.Postgres.User, d.cfg.Postgres.Password, d.cfg.Postgres.Database)
+	password, err := resolvePassword(d.ctx, &d.cfg.Postgres)
+	if err != nil {
+		return err
+	}
+
+	connStr := BuildConnStr(d.cfg.Postgres.Host, d.cfg.Postgres.Port, d.cfg.Postgres.User, password, d.cfg.Postgres.Database)
 
 	conn, err := pgx.Connect(d.ctx, connStr)
 	if err != nil {

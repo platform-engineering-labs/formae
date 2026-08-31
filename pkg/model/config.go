@@ -5,6 +5,7 @@
 package model
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -137,11 +138,20 @@ type SqliteConfig struct {
 	FilePath string
 }
 
+// PasswordProvider resolves a datastore password. It is consulted once per new
+// database connection, so a deployment whose credential is rotated out from
+// under a long-running process can hand back the current value without the
+// process being restarted. Returning an error fails that connection attempt.
+type PasswordProvider func(context.Context) (string, error)
+
 type PostgresConfig struct {
-	Host             string
-	Port             int
-	User             string
-	Password         string
+	Host     string
+	Port     int
+	User     string
+	Password string
+	// PasswordProvider, when set, supersedes Password: it is called for every
+	// new connection the pool opens. Nil means Password is used as-is.
+	PasswordProvider PasswordProvider
 	Database         string
 	Schema           string
 	ConnectionParams string
