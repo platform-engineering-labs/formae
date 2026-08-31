@@ -264,13 +264,16 @@ func buildPropertyChangeLines(_ *theme.Theme, r simRow, doneSt, errSt, subtleSt 
 }
 
 // cardEmptyNote returns a one-line summary for cards that have no property
-// detail to show (a delete has nothing to diff; a keep is a no-op).
+// detail to show (a delete has nothing to diff; a keep is a no-op; a draw
+// carries no declared config).
 func cardEmptyNote(r simRow) string {
 	switch r.op {
 	case opDelete:
 		return "This resource will be removed."
 	case opDetach:
 		return "This policy will be detached."
+	case opDraw:
+		return "A new value is drawn: every resource bound to this generator takes it."
 	case opKeep:
 		return "No changes."
 	default:

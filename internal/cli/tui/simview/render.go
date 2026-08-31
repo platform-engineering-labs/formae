@@ -24,7 +24,7 @@ func (m Model) renderSummaryCounts() string {
 	// stay in the row's base text color.
 	wordSt := lipgloss.NewStyle().Foreground(p.TextPrimary)
 
-	ordered := []opKind{opCreate, opUpdate, opDelete, opReplace, opDetach, opKeep}
+	ordered := []opKind{opCreate, opUpdate, opDelete, opReplace, opDraw, opDetach, opKeep}
 	var parts []string
 	for _, op := range ordered {
 		n := counts[op]

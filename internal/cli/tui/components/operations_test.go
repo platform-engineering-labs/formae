@@ -133,3 +133,20 @@ func TestOperationGlyphAndColor(t *testing.T) {
 	assert.Equal(t, "", OperationGlyph(th.Glyphs, apimodel.OperationRead))
 	assert.Equal(t, th.Palette.TextPrimary, OperationColor(th.Palette, apimodel.OperationRead))
 }
+
+// TestPromptForOperations_GeneratorDraw verifies a draw is counted and worded
+// in the confirmation sentence, so an operator is told a credential rotates
+// before they answer.
+func TestPromptForOperations_GeneratorDraw(t *testing.T) {
+	cmd := &apimodel.Command{
+		GeneratorUpdates: []apimodel.GeneratorUpdate{
+			{GeneratorLabel: "db-password", Operation: "draw"},
+		},
+	}
+	out := PromptForOperations(theme.New("rich"), cmd)
+	plain := stripANSI(out)
+
+	assert.Contains(t, plain, "rotate 1 generator(s)")
+	assert.Contains(t, plain, "every bound resource takes a new secret")
+	assert.Contains(t, plain, "Do you want to continue?")
+}

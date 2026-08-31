@@ -27,10 +27,20 @@ type opKind int
 const (
 	opDelete  opKind = iota // "-"
 	opReplace               // "↻"
-	opUpdate                // "~"
-	opDetach                // "⊘"
-	opCreate                // "+"
-	opKeep                  // "="
+	// opDraw is a generator drawing a value. It sorts here, above a plain
+	// update, because it rotates a credential: every resource bound to the
+	// generator takes a new secret, including resources this plan otherwise
+	// leaves alone. It borrows opReplace's glyph and color rather than
+	// claiming a themeable role of its own — a generator row is never a
+	// replace (a generator's declared lifecycle is create/update/delete), so
+	// within the Generators group the rotation glyph is unambiguous, and a
+	// new required theme key would silently invalidate every user theme file
+	// that does not yet set it.
+	opDraw
+	opUpdate // "~"
+	opDetach // "⊘"
+	opCreate // "+"
+	opKeep   // "="
 )
 
 // opGlyph returns the themed glyph for an operation.
@@ -38,7 +48,7 @@ func opGlyph(g theme.Glyphs, o opKind) string {
 	switch o {
 	case opDelete:
 		return g.OpDelete
-	case opReplace:
+	case opReplace, opDraw:
 		return g.OpReplace
 	case opUpdate:
 		return g.OpUpdate
@@ -57,7 +67,7 @@ func opColor(p theme.Palette, o opKind) lipgloss.AdaptiveColor {
 	switch o {
 	case opDelete:
 		return p.OpDelete
-	case opReplace:
+	case opReplace, opDraw:
 		return p.OpReplace
 	case opUpdate:
 		return p.OpUpdate
@@ -78,6 +88,8 @@ func (o opKind) word() string {
 		return "delete"
 	case opReplace:
 		return "replace"
+	case opDraw:
+		return "draw"
 	case opUpdate:
 		return "update"
 	case opDetach:
@@ -323,15 +335,20 @@ func policyOpAndDetail(pu *apimodel.PolicyUpdate) (opKind, string) {
 
 // buildGeneratorRows converts GeneratorUpdates into simRows.
 // Operation vocabulary: a generator has no attach/detach and no standalone
-// form, so its lifecycle is Create/Update/Delete only (see
-// generator_update.GeneratorOperation), handled by genericOpKind like a
-// stack update.
+// form, so its row lifecycle is Create/Update/Delete, plus the Draw that
+// rotates its value (see generator_update.GeneratorOperation), all handled by
+// genericOpKind like a stack update.
+//
+// The key carries the operation as well as the identity, unlike the other row
+// builders: the projection emits a separate entry for a generator's declared
+// change and for its draw, so stack and label alone name two rows, and the
+// expand/collapse map is keyed on this string.
 func buildGeneratorRows(updates []apimodel.GeneratorUpdate) []simRow {
 	rows := make([]simRow, 0, len(updates))
 	for i := range updates {
 		gu := &updates[i]
 		row := simRow{
-			key:       fmt.Sprintf("generator/%s/%s", gu.StackLabel, gu.GeneratorLabel),
+			key:       fmt.Sprintf("generator/%s/%s/%s", gu.StackLabel, gu.GeneratorLabel, gu.Operation),
 			op:        genericOpKind(gu.Operation),
 			label:     gu.GeneratorLabel,
 			typ:       gu.GeneratorType,
@@ -440,13 +457,16 @@ func buildResourceRows(updates []apimodel.ResourceUpdate) []simRow {
 
 // genericOpKind converts a plain operation string to an opKind.
 // Mirrors coloredOperation (renderer.go:581-594) — only the four resource
-// operation strings are expected; anything else falls through to opCreate.
+// operation strings and the generator-only draw are expected; anything else
+// falls through to opCreate.
 func genericOpKind(op string) opKind {
 	switch op {
 	case apimodel.OperationDelete:
 		return opDelete
 	case apimodel.OperationReplace:
 		return opReplace
+	case apimodel.OperationDraw:
+		return opDraw
 	case apimodel.OperationUpdate:
 		return opUpdate
 	case apimodel.OperationCreate:
