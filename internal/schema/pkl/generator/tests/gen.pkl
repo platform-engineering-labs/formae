@@ -369,6 +369,23 @@ local class EmbedThenMapResource extends formae.Resource {
     target: formae.Embedded|Mapping<String, Any>
 }
 
+/// A generator-binding-or-map field, in both member orders.
+@formae.ResourceHint
+local class MapThenGenResource extends formae.Resource {
+    type = "FakePlugin::Union::MapThenGen"
+
+    @formae.FieldHint
+    target: Mapping<String, Any>|formae.GeneratorOutput
+}
+
+@formae.ResourceHint
+local class GenThenMapResource extends formae.Resource {
+    type = "FakePlugin::Union::GenThenMap"
+
+    @formae.FieldHint
+    target: formae.GeneratorOutput|Mapping<String, Any>
+}
+
 /// Envelope-class fields with no sibling to fall through to, so what the
 /// conversion itself makes of a value is observable.
 @formae.ResourceHint
@@ -393,6 +410,14 @@ local class EmbedFieldResource extends formae.Resource {
 
     @formae.FieldHint
     target: formae.Embedded
+}
+
+@formae.ResourceHint
+local class GenFieldResource extends formae.Resource {
+    type = "FakePlugin::Field::Gen"
+
+    @formae.FieldHint
+    target: formae.GeneratorOutput
 }
 
 /// The three handlers whose contract is to pass a map through as data. An
@@ -859,6 +884,38 @@ local function recordedValue(omitted: String?): Mapping =
         "$strategy", "Update"
     ))
     (if (omitted == null) env else env.remove(omitted)).toMapping()
+
+/// The envelope a property carries when it is bound to one of a generator's
+/// outputs, in the authored shape extraction emits, optionally omitting one of
+/// its keys.
+local function binding(omitted: String?): Mapping =
+    let (env = Map(
+        "$gen", true,
+        "$label", "db-password-gen",
+        "$stack", "shared-secrets",
+        "$output", "value",
+        "$visibility", "Opaque"
+    ))
+    (if (omitted == null) env else env.remove(omitted)).toMapping()
+
+/// The same binding with the keys a recorded value is written from beside its
+/// own marker, which is the shape a binding the agent has resolved is stored in.
+local function resolvedBinding(): Mapping =
+    binding(null).toMap()
+        .put("$value", "sha256:digest")
+        .put("$strategy", "Update")
+        .toMapping()
+
+/// A binding as it arrives inside a split embedded template: the pre-processing
+/// puts the framed envelope in among the literal segments, deserialized from
+/// JSON and so a Dynamic rather than a Map.
+local function embeddedBindingPart(): Dynamic = new Dynamic {
+    ["$gen"] = true
+    ["$label"] = "db-password-gen"
+    ["$stack"] = "shared-secrets"
+    ["$output"] = "value"
+    ["$visibility"] = "Opaque"
+}
 
 /// The envelope the agent's extract pre-processing produces for a template
 /// carrying references: alternating literal segments and reference envelopes.
@@ -1700,6 +1757,78 @@ facts {
     ["An embedded template carrying no parts at all reports a failure"] {
         let (message = renderFailure(EmbedFieldResource, embedded(null)))
         message != null && message.contains("$templateParts")
+    }
+
+    // --- A generator binding ---
+
+    ["A generator binding selects the generator-output member however the union orders its members"] {
+        selectedMember(MapThenGenResource, binding(null)) == "FakeGeneratorOutput" &&
+        selectedMember(GenThenMapResource, binding(null)) == "FakeGeneratorOutput"
+    }
+
+    ["A binding carrying the keys of a recorded value is still read as a binding"] {
+        // A resolved binding is stored with the digest of the drawn value, and
+        // with the visibility and strategy it was recorded under, which is the
+        // shape of a recorded value. Its own marker decides, so it is never
+        // read as the value written beside it.
+        selectedMember(GenFieldResource, resolvedBinding()) == "FakeGeneratorOutput" &&
+        selectedMember(MapThenGenResource, resolvedBinding()) == "FakeGeneratorOutput"
+    }
+
+    ["A $gen key holding false or text is not a binding"] {
+        selectedMember(MapThenGenResource, binding(null).toMap().put("$gen", false).toMapping()) == "Mapping" &&
+        selectedMember(MapThenGenResource, binding(null).toMap().put("$gen", "yes").toMapping()) == "Mapping"
+    }
+
+    ["A generator-output-typed field given plain data reports a failure"] {
+        let (message = renderFailure(GenFieldResource, new Mapping { ["recipient"] = "#alerts" }))
+        message != null && message.contains("$gen")
+    }
+
+    ["A binding naming no generator or no output reports a failure"] {
+        // Both parts are required, because the rendered reference is an
+        // expression built from them and there is nothing to emit without one.
+        let (noLabel = renderFailure(GenFieldResource, binding("$label")))
+        let (noOutput = renderFailure(GenFieldResource, binding("$output")))
+        noLabel != null && noLabel.contains("$label") &&
+        noOutput != null && noOutput.contains("$output")
+    }
+
+    ["A binding renders as the output accessor of the local declared for its generator"] {
+        // pklGenerator names the local it declares for a generator from that
+        // generator's label in camel case, so the rendered reference has to
+        // agree with the same derivation or it names a local that was never
+        // declared.
+        let (rendered = gen.genMapToPklStringWithTypes(
+            "GenFieldResource",
+            gen.genPklToMap(new Dynamic { target = renderedTarget(GenFieldResource, binding(null)) }),
+            "test"))
+        rendered.contains("target = dbPasswordGen.gen.value")
+    }
+
+    ["A rendered binding emits nothing of the envelope the accessor derives"] {
+        // The envelope's members are fixed on formae.GeneratorOutput, so
+        // emitting any of them yields a file that cannot be assigned to.
+        let (rendered = gen.genMapToPklStringWithTypes(
+            "GenFieldResource",
+            gen.genPklToMap(new Dynamic { target = renderedTarget(GenFieldResource, resolvedBinding()) }),
+            "test"))
+        !rendered.contains("$gen") &&
+        !rendered.contains("$visibility") &&
+        !rendered.contains("shared-secrets") &&
+        !rendered.contains("sha256:digest")
+    }
+
+    ["A binding framed inside an embedded template renders as an interpolation of its accessor"] {
+        // Interpolating the accessor reproduces the framed envelope, because
+        // that is what formae.GeneratorOutput renders when read as text.
+        let (fakeEmbedMap = new Dynamic {
+            ["__type__"] = "FakeEmbed"
+            ["FakeParts"] = List("PGPASSWORD=", embeddedBindingPart(), " psql")
+        })
+        let (rendered = gen.genMapToPklStringWithTypes(
+            "TestResource", Map("code", fakeEmbedMap), "test"))
+        rendered.contains("formae.embed(\"PGPASSWORD=\\(dbPasswordGen.gen.value) psql\")")
     }
 
     // --- Map conversion ---
