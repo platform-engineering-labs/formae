@@ -1782,12 +1782,29 @@ func looksLikeResolvable(r gjson.Result) bool {
 // jsonPointerFromDotPath converts the resolver's dot-separated TargetPath
 // (e.g. "Refs.0.Target") into a JSON Pointer (e.g. "/Refs/0/Target") that
 // JSON-Patch consumers expect.
+//
+// The two notations escape different things, so this is a translation and not a
+// character swap: the path escapes each literal map key against gjson's and
+// sjson's grammars, while a pointer segment escapes "~" as "~0" and "/" as "~1"
+// (RFC 6901, in that order). Each segment is therefore unescaped out of the path
+// and re-escaped into the pointer.
 func jsonPointerFromDotPath(p string) string {
 	if p == "" {
 		return ""
 	}
-	return "/" + strings.ReplaceAll(p, ".", "/")
+	segments := pathkey.Split(p)
+	escaped := make([]string, len(segments))
+	for i, segment := range segments {
+		escaped[i] = jsonPointerEscaper.Replace(segment)
+	}
+	return "/" + strings.Join(escaped, "/")
 }
+
+// jsonPointerEscaper applies RFC 6901 reference-token escaping. "~" must be
+// replaced before "/" so the "~1" it produces is not itself re-escaped;
+// strings.Replacer scans once and never rewrites its own output, which gives
+// that ordering for free.
+var jsonPointerEscaper = strings.NewReplacer("~", "~0", "/", "~1")
 
 // newCascadeUpdate constructs an Update on dep for the cascade-update
 // path. DesiredState carries dep's stored properties, including any
@@ -1813,12 +1830,14 @@ func newCascadeUpdate(dep pkgmodel.Resource, target pkgmodel.Target, source Form
 // stripArrayIndicesForHintLookup mirrors changeset.stripArrayIndices: dotted
 // path with numeric segments removed, suitable for Schema.Hints key lookup.
 // Duplicated rather than imported because changeset depends on
-// resource_update.
+// resource_update. The path escapes each literal map key as it is built, so it
+// is split on unescaped dots only and the segments are unescaped back to the
+// field names a schema declares its hints under.
 func stripArrayIndicesForHintLookup(path string) string {
 	if path == "" {
 		return path
 	}
-	parts := strings.Split(path, ".")
+	parts := pathkey.Split(path)
 	out := make([]string, 0, len(parts))
 	for _, part := range parts {
 		if isAllDigits(part) && len(parts) > 1 {
