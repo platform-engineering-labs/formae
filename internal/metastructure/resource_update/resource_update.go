@@ -306,6 +306,18 @@ func (ru *ResourceUpdate) regeneratePatchDocument(mode pkgmodel.FormaApplyMode) 
 		return nil, nil, fmt.Errorf("failed to suppress unchanged opaque values: %w", err)
 	}
 
+	// A $gen destination that classified stable is unchanged by proof rather
+	// than by comparison, and only the proof survives a Read that enriches
+	// prior state with the live secret. Drop it from both sides here, or the
+	// digest it carries reaches the guarded conversion below and fails an
+	// update whose only real change is the property beside it. See
+	// SuppressCarriedStableGeneratorBindings.
+	existingForPatch, desiredForPatch, err = SuppressCarriedStableGeneratorBindings(
+		existingForPatch, desiredForPatch, ru.ProvenanceRecords)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	// Read-safe/comparison conversion: existingPluginProps is only used as the
 	// "before" side of this local diff, never transmitted to a plugin. A
 	// genuinely-rotated opaque field's existing side is a stored hash that can
