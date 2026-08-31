@@ -65,8 +65,13 @@ type registeredView struct {
 	Account       string `json:"account" yaml:"account"`
 	RoleArn       string `json:"roleArn,omitempty" yaml:"roleArn,omitempty"`
 	// WorkloadIdentityProvider is the GCP coordinate.
-	WorkloadIdentityProvider string   `json:"workloadIdentityProvider,omitempty" yaml:"workloadIdentityProvider,omitempty"`
-	Warnings                 []string `json:"warnings,omitempty" yaml:"warnings,omitempty"`
+	WorkloadIdentityProvider string `json:"workloadIdentityProvider,omitempty" yaml:"workloadIdentityProvider,omitempty"`
+	// AzureTenantID and AzureClientID are the Azure coordinate: the
+	// subscription's Entra tenant and the managed identity's client id
+	// (its "appId", distinct from its service principal object id).
+	AzureTenantID string   `json:"azureTenantId,omitempty" yaml:"azureTenantId,omitempty"`
+	AzureClientID string   `json:"azureClientId,omitempty" yaml:"azureClientId,omitempty"`
+	Warnings      []string `json:"warnings,omitempty" yaml:"warnings,omitempty"`
 }
 
 // linksDocument builds the quick-create emit from the plan. The
@@ -100,6 +105,21 @@ func gcpRegisteredDocument(status, project, provider string, warnings []string) 
 	}
 }
 
+// azureRegisteredDocument builds the registration report for an Azure
+// subscription.
+func azureRegisteredDocument(status, subscription, tenantID, clientID string, warnings []string) registeredView {
+	return registeredView{
+		SchemaVersion: connectSchemaVersion,
+		Phase:         "registered",
+		Status:        status,
+		Cloud:         "azure",
+		Account:       subscription,
+		AzureTenantID: tenantID,
+		AzureClientID: clientID,
+		Warnings:      warnings,
+	}
+}
+
 // registeredDocument builds the registration report.
 func registeredDocument(status, account, roleArn string, warnings []string) registeredView {
 	return registeredView{
@@ -123,6 +143,10 @@ type connectionView struct {
 	// WorkloadIdentityProvider is present for GCP and omitted elsewhere, for
 	// the same reason roleArn is.
 	WorkloadIdentityProvider string `json:"workloadIdentityProvider,omitempty" yaml:"workloadIdentityProvider,omitempty"`
+	// AzureTenantID and AzureClientID are present for Azure and omitted
+	// elsewhere, for the same reason.
+	AzureTenantID string `json:"azureTenantId,omitempty" yaml:"azureTenantId,omitempty"`
+	AzureClientID string `json:"azureClientId,omitempty" yaml:"azureClientId,omitempty"`
 }
 
 // connectionsView is the list emit. Connections is always a slice, never

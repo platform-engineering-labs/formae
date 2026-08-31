@@ -187,7 +187,7 @@ func runGCPRegisterOnly(cc *cobra.Command, opts gcpOptions, consumer printer.Con
 	}
 
 	warnings := append([]string{}, s.Warnings...)
-	elsewhere := connectedElsewhere(s.Setup.AccountsConnectedHint, opts.Project, s.InstallationID)
+	elsewhere := connectedElsewhere(s.Setup.AccountsConnectedHint, "gcp", opts.Project, s.InstallationID)
 	if len(elsewhere) > 0 {
 		warnings = append(warnings, multiInstallationWarning(opts.Project, elsewhere))
 	}
@@ -239,7 +239,7 @@ func runGCPLocal(cc *cobra.Command, opts gcpOptions, consumer printer.Consumer, 
 	}
 
 	warnings := append([]string{}, s.Warnings...)
-	elsewhere := connectedElsewhere(s.Setup.AccountsConnectedHint, opts.Project, s.InstallationID)
+	elsewhere := connectedElsewhere(s.Setup.AccountsConnectedHint, "gcp", opts.Project, s.InstallationID)
 	if len(elsewhere) > 0 {
 		warnings = append(warnings, multiInstallationWarning(opts.Project, elsewhere))
 		// Two installations on one project share one trust domain, because

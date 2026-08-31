@@ -22,6 +22,8 @@ import (
 // The machine documents are the output: declared fields only, no free prose,
 // no credential, and failure codes that always come from the registered set.
 
+const testSubscription = "8f2c1a3e-4b5d-6c7e-8f9a-0b1c2d3e4f5a"
+
 func decodeDoc(t *testing.T, out string) map[string]any {
 	t.Helper()
 	var got map[string]any

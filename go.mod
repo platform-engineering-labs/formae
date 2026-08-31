@@ -62,7 +62,7 @@ require (
 	github.com/platform-engineering-labs/formae/pkg/plugin v0.0.0-00010101000000-000000000000
 	github.com/platform-engineering-labs/formae/tests/testcontrol v0.0.0-00010101000000-000000000000
 	github.com/platform-engineering-labs/jsonpatch v0.0.0-20260620044942-701436c7758c
-	github.com/platform-engineering-labs/oox/provx v0.0.0-20260825164708-d2e52420e91b // re-pin to a real tag at release time
+	github.com/platform-engineering-labs/oox/provx v0.0.0-20260831005205-99489fc5e7ca // re-pin to a real tag at release time
 	github.com/platform-engineering-labs/orbital v0.2.5
 	github.com/posthog/posthog-go v1.6.3
 	github.com/pressly/goose/v3 v3.26.0
@@ -112,15 +112,22 @@ require (
 )
 
 require (
+	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.14.0
+	github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armsubscriptions v1.3.0
+)
+
+require (
 	cloud.google.com/go/auth v0.23.0 // indirect
 	cloud.google.com/go/auth/oauth2adapt v0.2.8 // indirect
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
 	ergo.services/meta v0.0.0-20240904054930-a97f6add8a78 // indirect
 	filippo.io/edwards25519 v1.1.0 // indirect
-	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.21.1 // indirect
-	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.13.1 // indirect
+	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.0 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/internal v1.12.0 // indirect
-	github.com/AzureAD/microsoft-authentication-library-for-go v1.6.0 // indirect
+	github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/authorization/armauthorization/v2 v2.2.0 // indirect
+	github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/msi/armmsi v1.3.0 // indirect
+	github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armresources v1.2.0 // indirect
+	github.com/AzureAD/microsoft-authentication-library-for-go v1.7.2 // indirect
 	github.com/DataDog/zstd v1.5.7 // indirect
 	github.com/KyleBanks/depth v1.2.1 // indirect
 	github.com/RoaringBitmap/roaring v0.9.1 // indirect

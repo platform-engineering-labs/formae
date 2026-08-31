@@ -137,6 +137,7 @@ type cpContext struct {
 	Client         cloudapi.Client
 	Bearer         string
 	InstallationID string
+	ConsoleOrigin  string
 
 	// Validated and Creds are not optional: openSession's registration path
 	// force-refreshes the credential a second time before registering
@@ -172,7 +173,10 @@ func openControlPlane(ctx context.Context, opts options) (*cpContext, error) {
 
 	// The control-plane origin comes from the login platform pair: that is
 	// where the bearer goes; FORMAE_CONNECT_* governs only the AWS-side
-	// issuer/template pin.
+	// issuer/template pin. It is also the console host: the same origin that
+	// answers the cloud-connection API answers a cloud's public,
+	// unauthenticated template endpoints, so a caller building a link into
+	// that console reads it from here rather than naming a second host.
 	origin, _, err := cloudapi.ResolvePlatform("", "")
 	if err != nil {
 		return nil, err
@@ -183,6 +187,7 @@ func openControlPlane(ctx context.Context, opts options) (*cpContext, error) {
 		Client:         client,
 		Bearer:         bearer,
 		InstallationID: conn.Installation,
+		ConsoleOrigin:  origin,
 		Validated:      validated,
 		Creds:          creds,
 	}, nil
@@ -196,6 +201,7 @@ type session struct {
 	Setup          cloudapi.CloudConnectionSetup
 	Platform       connectPlatform
 	Warnings       []string
+	ConsoleOrigin  string
 
 	client    cloudapi.Client
 	validated login.ValidatedHosted
@@ -233,6 +239,7 @@ func openSession(ctx context.Context, opts options) (*session, error) {
 		Setup:          setup,
 		Platform:       p,
 		Warnings:       setup.Warnings,
+		ConsoleOrigin:  cp.ConsoleOrigin,
 		client:         cp.Client,
 		validated:      cp.Validated,
 		creds:          cp.Creds,
@@ -357,19 +364,25 @@ func (s *session) registerConnection(ctx context.Context, registration cloudapi.
 //
 // The AWS spellings are unchanged, deliberately: they are a declared part of
 // the machine protocol, and a consumer reading registeredRoleArn today must
-// keep reading it. GCP gets its own keys rather than a shared generic one, so
-// nothing has to guess which coordinate a value is.
+// keep reading it. GCP and Azure each get their own keys rather than a
+// shared generic one, so nothing has to guess which coordinate a value is.
 func conflictMessage(cloud string) string {
-	if cloud == "gcp" {
+	switch cloud {
+	case "gcp":
 		return "a different workload identity provider is already registered for this project on this installation"
+	case "azure":
+		return "a different managed identity is already registered for this subscription on this installation"
 	}
 	return "a different role is already registered for this account on this installation"
 }
 
 func conflictDetails(cloud, registered, stated string) map[string]any {
 	registeredKey, statedKey := "registeredRoleArn", "statedRoleArn"
-	if cloud == "gcp" {
+	switch cloud {
+	case "gcp":
 		registeredKey, statedKey = "registeredWorkloadIdentityProvider", "statedWorkloadIdentityProvider"
+	case "azure":
+		registeredKey, statedKey = "registeredAzureClientId", "statedAzureClientId"
 	}
 	details := map[string]any{statedKey: stated}
 	if registered != "" {
@@ -380,17 +393,25 @@ func conflictDetails(cloud, registered, stated string) map[string]any {
 
 // coordinateOf and statedCoordinateOf name the one trust coordinate a cloud
 // carries, so the duplicate comparison does not have to grow a switch at every
-// call site.
+// call site. Azure's coordinate is the managed identity's client id: like a
+// role ARN or a workload identity provider, it alone identifies what was
+// granted trust; the tenant is context, not identity.
 func coordinateOf(c cloudapi.CloudConnection) string {
-	if c.Cloud == "gcp" {
+	switch c.Cloud {
+	case "gcp":
 		return c.WorkloadIdentityProvider
+	case "azure":
+		return c.AzureClientID
 	}
 	return c.RoleArn
 }
 
 func statedCoordinateOf(r cloudapi.CloudConnectionRegistration) string {
-	if r.Cloud == "gcp" {
+	switch r.Cloud {
+	case "gcp":
 		return r.WorkloadIdentityProvider
+	case "azure":
+		return r.AzureClientID
 	}
 	return r.RoleArn
 }

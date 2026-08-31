@@ -171,16 +171,16 @@ func accountInHint(hint []cloudapi.ConnectedAccount, account string) bool {
 	return false
 }
 
-// connectedElsewhere returns the hint entries naming the stated AWS account on
-// an installation other than the one being connected. Non-empty means: warn
-// loudly and confirm interactively; in --no-input the warning rides the
-// machine document and the run proceeds. Only cloud "aws" entries compare: an
-// account string from another cloud that happens to look like a 12-digit AWS
-// id is not this account.
-func connectedElsewhere(hint []cloudapi.ConnectedAccount, account, installationID string) []cloudapi.ConnectedAccount {
+// connectedElsewhere returns the hint entries naming the stated account, on
+// the given cloud, on an installation other than the one being connected.
+// Non-empty means: warn loudly and confirm interactively; in --no-input the
+// warning rides the machine document and the run proceeds. Only entries of
+// the stated cloud compare: an account string from another cloud that
+// happens to look like this one's is not this account.
+func connectedElsewhere(hint []cloudapi.ConnectedAccount, cloud, account, installationID string) []cloudapi.ConnectedAccount {
 	var elsewhere []cloudapi.ConnectedAccount
 	for _, entry := range hint {
-		if entry.Cloud == "aws" && entry.Account == account && entry.InstallationID != installationID {
+		if entry.Cloud == cloud && entry.Account == account && entry.InstallationID != installationID {
 			elsewhere = append(elsewhere, entry)
 		}
 	}
