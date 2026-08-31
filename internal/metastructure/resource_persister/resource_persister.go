@@ -218,9 +218,13 @@ func (rp *ResourcePersister) storeResourceUpdate(commandID string, resourceOpera
 	if err != nil {
 		slog.Error("Failed to persist resource updates",
 			"error", err,
-			"resource", resourceUpdate.DesiredState,
+			"resourceLabel", resourceUpdate.DesiredState.Label,
+			"stackLabel", resourceUpdate.DesiredState.Stack,
+			"resourceType", resourceUpdate.DesiredState.Type,
+			"resourceProperties", pkgmodel.RedactOpaqueJSONForLog(resourceUpdate.DesiredState.Properties),
 			"operation", pluginOperation)
-		return "", fmt.Errorf("failed to store stacks for resource update %v: %w", resourceUpdate.DesiredState, err)
+		return "", fmt.Errorf("failed to store stacks for resource update %s in stack %s: %w",
+			resourceUpdate.DesiredState.Label, resourceUpdate.DesiredState.Stack, err)
 	}
 	hash := forma.ResourceUpdates[0].Version
 

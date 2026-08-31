@@ -1102,7 +1102,8 @@ func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData,
 		// and exit the state machine.
 		if state == StateSynchronizing && data.resourceUpdate.Operation != OperationRead && operation == resource.OperationRead && hash != "" && !data.resourceUpdate.IsDelete() {
 			proc.Log().Debug("Resource update rejected as a change to the resource was detected previousProperties=%s currentProperties=%s",
-				string(data.resourceUpdate.PreviousProperties), string(data.resourceUpdate.DesiredState.Properties))
+				pkgmodel.RedactOpaqueJSONForLog(data.resourceUpdate.PreviousProperties),
+				pkgmodel.RedactOpaqueJSONForLog(data.resourceUpdate.DesiredState.Properties))
 			data.resourceUpdate.Reject()
 
 			return StateRejected, data, nil, nil
