@@ -58,7 +58,7 @@ func TestTranslatePropertiesJSON_ResUnderDottedKey(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	result, _, err := translatePropertiesJSON(properties, map[pkgmodel.TripletKey]string{}, ds)
+	result, _, err := translatePropertiesJSON(properties, map[pkgmodel.TripletKey]string{}, map[pkgmodel.GeneratorKey]string{}, ds)
 	require.NoError(t, err)
 
 	annotations := gjson.GetBytes(result, "metadata.annotations")
@@ -78,7 +78,7 @@ func TestTranslatePropertiesJSON_ResUnderDottedKeyInsideArray(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	result, _, err := translatePropertiesJSON(properties, map[pkgmodel.TripletKey]string{}, ds)
+	result, _, err := translatePropertiesJSON(properties, map[pkgmodel.TripletKey]string{}, map[pkgmodel.GeneratorKey]string{}, ds)
 	require.NoError(t, err)
 
 	element := gjson.GetBytes(result, "items.0")
@@ -94,7 +94,7 @@ func TestTranslatePropertiesJSON_ResUnderDottedTopLevelKey(t *testing.T) {
 	properties, err := json.Marshal(map[string]any{dottedGeneratorKey: resEnvelope(triplet)})
 	require.NoError(t, err)
 
-	result, _, err := translatePropertiesJSON(properties, map[pkgmodel.TripletKey]string{}, ds)
+	result, _, err := translatePropertiesJSON(properties, map[pkgmodel.TripletKey]string{}, map[pkgmodel.GeneratorKey]string{}, ds)
 	require.NoError(t, err)
 
 	parsed := gjson.ParseBytes(result)
@@ -121,7 +121,7 @@ func TestTranslateEmbedSpans_UnderDottedKey(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	result, _, err := translatePropertiesJSON(properties, map[pkgmodel.TripletKey]string{triplet: "testdotted123"}, ds)
+	result, _, err := translatePropertiesJSON(properties, map[pkgmodel.TripletKey]string{triplet: "testdotted123"}, map[pkgmodel.GeneratorKey]string{}, ds)
 	require.NoError(t, err)
 
 	annotations := gjson.GetBytes(result, "metadata.annotations")
@@ -158,7 +158,7 @@ func TestTranslateEmbedSpans_UnderDottedKeyInsideArray(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	result, _, err := translatePropertiesJSON(properties, map[pkgmodel.TripletKey]string{triplet: "testdotted123"}, ds)
+	result, _, err := translatePropertiesJSON(properties, map[pkgmodel.TripletKey]string{triplet: "testdotted123"}, map[pkgmodel.GeneratorKey]string{}, ds)
 	require.NoError(t, err)
 
 	element := gjson.GetBytes(result, "items.0")
