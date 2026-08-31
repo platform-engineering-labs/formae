@@ -1,0 +1,595 @@
+/*
+ * LGTM Observability Stack for Load Testing
+ *
+ * Deploys Grafana, Mimir, Tempo, Loki, and an OTel Collector on ECS Fargate
+ * with S3 backends. All components run in a single ECS task sharing localhost.
+ *
+ * Prerequisites:
+ *   - formae agent with AWS plugin running
+ *   - GRAFANA_AUTH=admin:admin set as env var on the agent
+ *
+ * Apply:
+ *   formae apply --mode reconcile tests/loadtest/infrastructure/lgtm/main.pkl
+ *
+ * After apply, the Grafana URL is the ALB endpoint on port 80.
+ * OTel ingestion is on the same ALB at /v1/traces, /v1/metrics, /v1/logs.
+ */
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+import "@aws/aws.pkl"
+
+import "@aws/ec2/vpc.pkl"
+import "@aws/ec2/subnet.pkl"
+import "@aws/ec2/internetgateway.pkl"
+import "@aws/ec2/vpcgatewayattachment.pkl"
+import "@aws/ec2/routetable.pkl"
+import "@aws/ec2/route.pkl"
+import "@aws/ec2/subnetroutetableassociation.pkl" as srtAssoc
+import "@aws/ec2/securitygroup.pkl" as sg
+import "@aws/ec2/securitygroupingress.pkl" as sgIngress
+import "@aws/ec2/securitygroupegress.pkl" as sgEgress
+
+import "@aws/s3/bucket.pkl"
+import "@aws/efs/filesystem.pkl" as efsFs
+import "@aws/efs/mounttarget.pkl" as efsMt
+
+import "@aws/iam/role.pkl"
+import "@aws/iam/rolepolicy.pkl"
+import "@aws/logs/loggroup.pkl"
+
+import "@aws/ecs/ecscluster.pkl" as cluster
+import "@aws/ecs/taskdefinition.pkl" as td
+import "@aws/ecs/service.pkl" as ecsSvc
+
+import "@aws/elasticloadbalancingv2/loadbalancer.pkl" as alb
+import "@aws/elasticloadbalancingv2/targetgroup.pkl" as tg
+import "@aws/elasticloadbalancingv2/listener.pkl" as listener
+
+local awsRegion = "us-west-2"
+local prefix = "formae-lgtm"
+
+description {
+    text = """
+    LGTM Observability Stack for Load Testing
+
+    Deploys Grafana + Mimir + Tempo + Loki + OTel Collector on ECS Fargate.
+    S3 for durable storage, EFS for WAL, ALB for access.
+
+    Cost: ~$130/month (Fargate + S3 + EFS + ALB)
+    """
+    confirm = true
+}
+
+forma {
+  // Stack and Target
+  new formae.Stack {
+    label = "lgtm"
+    description = "LGTM observability stack for load testing"
+  }
+
+  new formae.Target {
+    label = "lgtm-aws"
+    config = new aws.Config {
+      region = awsRegion
+    }
+  }
+
+  // ─── Networking ───
+
+  local lgtmVpc = new vpc.VPC {
+    label = "lgtm-vpc"
+    cidrBlock = "10.100.0.0/16"
+    enableDnsHostnames = true
+    enableDnsSupport = true
+    tags { new { key = "Name"; value = "\(prefix)-vpc" } }
+  }
+  lgtmVpc
+
+  local igw = new internetgateway.InternetGateway {
+    label = "lgtm-igw"
+    tags { new { key = "Name"; value = "\(prefix)-igw" } }
+  }
+  igw
+
+  local igwAttach = new vpcgatewayattachment.VPCGatewayAttachment {
+    label = "lgtm-igw-attach"
+    vpcId = lgtmVpc.res.id
+    internetGatewayId = igw.res.id
+  }
+  igwAttach
+
+  local rt = new routetable.RouteTable {
+    label = "lgtm-rt"
+    vpcId = lgtmVpc.res.id
+    tags { new { key = "Name"; value = "\(prefix)-rt" } }
+  }
+  rt
+
+  new route.Route {
+    label = "lgtm-route-inet"
+    routeTableId = rt.res.id
+    destinationCidrBlock = "0.0.0.0/0"
+    gatewayId = igwAttach.res.internetGatewayId
+  }
+
+  local subnetA = new subnet.Subnet {
+    label = "lgtm-subnet-a"
+    vpcId = lgtmVpc.res.id
+    cidrBlock = "10.100.1.0/24"
+    availabilityZone = "\(awsRegion)a"
+    mapPublicIpOnLaunch = true
+    tags { new { key = "Name"; value = "\(prefix)-subnet-a" } }
+  }
+  subnetA
+
+  local subnetB = new subnet.Subnet {
+    label = "lgtm-subnet-b"
+    vpcId = lgtmVpc.res.id
+    cidrBlock = "10.100.2.0/24"
+    availabilityZone = "\(awsRegion)b"
+    mapPublicIpOnLaunch = true
+    tags { new { key = "Name"; value = "\(prefix)-subnet-b" } }
+  }
+  subnetB
+
+  new srtAssoc.SubnetRouteTableAssociation {
+    label = "lgtm-srt-a"
+    subnetId = subnetA.res.id
+    routeTableId = rt.res.id
+  }
+
+  new srtAssoc.SubnetRouteTableAssociation {
+    label = "lgtm-srt-b"
+    subnetId = subnetB.res.id
+    routeTableId = rt.res.id
+  }
+
+  // ─── Security Group ───
+
+  local lgtmSg = new sg.SecurityGroup {
+    label = "lgtm-sg"
+    groupDescription = "LGTM stack - Grafana + OTel ingestion"
+    vpcId = lgtmVpc.res.id
+    tags { new { key = "Name"; value = "\(prefix)-sg" } }
+  }
+  lgtmSg
+
+  new sgIngress.SecurityGroupIngress {
+    label = "lgtm-sg-http"
+    groupId = lgtmSg.res.id
+    ipProtocol = "tcp"
+    fromPort = 80
+    toPort = 80
+    cidrIp = "0.0.0.0/0"
+  }
+
+  new sgIngress.SecurityGroupIngress {
+    label = "lgtm-sg-grafana"
+    groupId = lgtmSg.res.id
+    ipProtocol = "tcp"
+    fromPort = 3000
+    toPort = 3000
+    cidrIp = "10.100.0.0/16"
+  }
+
+  new sgIngress.SecurityGroupIngress {
+    label = "lgtm-sg-otel"
+    groupId = lgtmSg.res.id
+    ipProtocol = "tcp"
+    fromPort = 4318
+    toPort = 4318
+    cidrIp = "0.0.0.0/0"
+  }
+
+  new sgEgress.SecurityGroupEgress {
+    label = "lgtm-sg-egress"
+    groupId = lgtmSg.res.id
+    ipProtocol = "-1"
+    cidrIp = "0.0.0.0/0"
+  }
+
+  // ─── Storage: S3 Buckets ───
+
+  new bucket.Bucket {
+    label = "mimir-bucket"
+    bucketName = "\(prefix)-mimir-blocks"
+    tags { new { key = "Name"; value = "\(prefix)-mimir-blocks" } }
+  }
+
+  new bucket.Bucket {
+    label = "loki-bucket"
+    bucketName = "\(prefix)-loki-data"
+    tags { new { key = "Name"; value = "\(prefix)-loki-data" } }
+  }
+
+  new bucket.Bucket {
+    label = "tempo-bucket"
+    bucketName = "\(prefix)-tempo-traces"
+    tags { new { key = "Name"; value = "\(prefix)-tempo-traces" } }
+  }
+
+  // ─── Storage: EFS for WAL ───
+
+  local efs = new efsFs.FileSystem {
+    label = "lgtm-efs"
+    performanceMode = "generalPurpose"
+    encrypted = true
+    fileSystemTags {
+      new { key = "Name"; value = "\(prefix)-wal" }
+    }
+  }
+  efs
+
+  new efsMt.MountTarget {
+    label = "lgtm-efs-mt-a"
+    fileSystemId = efs.res.fileSystemId
+    subnetId = subnetA.res.id
+    securityGroups { lgtmSg.res.id }
+  }
+
+  new efsMt.MountTarget {
+    label = "lgtm-efs-mt-b"
+    fileSystemId = efs.res.fileSystemId
+    subnetId = subnetB.res.id
+    securityGroups { lgtmSg.res.id }
+  }
+
+  // ─── IAM ───
+
+  local execRole = new role.Role {
+    label = "lgtm-exec-role"
+    roleName = "\(prefix)-exec-role"
+    assumeRolePolicyDocument = new Dynamic {
+      Version = "2012-10-17"
+      Statement = new Listing {
+        new Dynamic {
+          Effect = "Allow"
+          Principal = new Dynamic { Service = "ecs-tasks.amazonaws.com" }
+          Action = "sts:AssumeRole"
+        }
+      }
+    }
+    managedPolicyArns {
+      "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+    }
+  }
+  execRole
+
+  local taskRole = new role.Role {
+    label = "lgtm-task-role"
+    roleName = "\(prefix)-task-role"
+    assumeRolePolicyDocument = new Dynamic {
+      Version = "2012-10-17"
+      Statement = new Listing {
+        new Dynamic {
+          Effect = "Allow"
+          Principal = new Dynamic { Service = "ecs-tasks.amazonaws.com" }
+          Action = "sts:AssumeRole"
+        }
+      }
+    }
+  }
+  taskRole
+
+  new rolepolicy.RolePolicy {
+    label = "lgtm-task-policy"
+    roleName = taskRole.res.roleName
+    policyName = "\(prefix)-s3-efs"
+    policyDocument = new Dynamic {
+      Version = "2012-10-17"
+      Statement = new Listing {
+        new Dynamic {
+          Effect = "Allow"
+          Action = new Listing {
+            "s3:GetObject"; "s3:PutObject"; "s3:DeleteObject"; "s3:ListBucket"
+          }
+          Resource = new Listing {
+            "arn:aws:s3:::\(prefix)-mimir-blocks"
+            "arn:aws:s3:::\(prefix)-mimir-blocks/*"
+            "arn:aws:s3:::\(prefix)-loki-data"
+            "arn:aws:s3:::\(prefix)-loki-data/*"
+            "arn:aws:s3:::\(prefix)-tempo-traces"
+            "arn:aws:s3:::\(prefix)-tempo-traces/*"
+          }
+        }
+        new Dynamic {
+          Effect = "Allow"
+          Action = new Listing {
+            "elasticfilesystem:ClientMount"
+            "elasticfilesystem:ClientWrite"
+          }
+          Resource = "*"
+        }
+      }
+    }
+  }
+
+  // ─── Logging ───
+
+  local logGroup = new loggroup.LogGroup {
+    label = "lgtm-logs"
+    logGroupName = "/ecs/\(prefix)"
+    retentionInDays = 30
+  }
+  logGroup
+
+  // ─── ECS ───
+
+  local ecsCluster = new cluster.Cluster {
+    label = "lgtm-cluster"
+    clusterName = prefix
+  }
+  ecsCluster
+
+  local taskDef = new td.TaskDefinition {
+    label = "lgtm-task"
+    family = prefix
+    networkMode = "awsvpc"
+    requiresCompatibilities { "FARGATE" }
+    cpu = "2048"
+    memory = "8192"
+    executionRoleArn = execRole.res.arn
+    taskRoleArn = taskRole.res.arn
+
+    volumes {
+      new td.Volume {
+        name = "wal"
+        eFSVolumeConfiguration = new td.EFSVolumeConfiguration {
+          filesystemId = efs.res.fileSystemId
+          transitEncryption = "ENABLED"
+        }
+      }
+    }
+
+    containerDefinitions {
+      // Grafana
+      new td.ContainerDefinition {
+        name = "grafana"
+        image = "grafana/grafana:latest"
+        essential = true
+        portMappings {
+          new td.PortMapping { containerPort = 3000; protocol = "tcp" }
+        }
+        environment {
+          new td.KeyValuePair { name = "GF_AUTH_ANONYMOUS_ENABLED"; value = "true" }
+          new td.KeyValuePair { name = "GF_AUTH_ANONYMOUS_ORG_ROLE"; value = "Admin" }
+          new td.KeyValuePair { name = "GF_AUTH_DISABLE_LOGIN_FORM"; value = "true" }
+        }
+        logConfiguration = new td.LogConfiguration {
+          logDriver = "awslogs"
+          options = new Mapping {
+            ["awslogs-group"] = "/ecs/\(prefix)"
+            ["awslogs-region"] = awsRegion
+            ["awslogs-stream-prefix"] = "grafana"
+          }
+        }
+      }
+
+      // Mimir
+      new td.ContainerDefinition {
+        name = "mimir"
+        essential = false
+        image = "grafana/mimir:latest"
+        command {
+          "-target=all"
+          "-server.http-listen-port=9009"
+          "-blocks-storage.backend=s3"
+          "-blocks-storage.s3.bucket-name=\(prefix)-mimir-blocks"
+          "-blocks-storage.s3.region=\(awsRegion)"
+          "-blocks-storage.tsdb.dir=/data/mimir/tsdb"
+          "-compactor.data-dir=/data/mimir/compactor"
+        }
+        portMappings {
+          new td.PortMapping { containerPort = 9009; protocol = "tcp" }
+        }
+        mountPoints {
+          new td.MountPoint { sourceVolume = "wal"; containerPath = "/data/mimir"; readOnly = false }
+        }
+        logConfiguration = new td.LogConfiguration {
+          logDriver = "awslogs"
+          options = new Mapping {
+            ["awslogs-group"] = "/ecs/\(prefix)"
+            ["awslogs-region"] = awsRegion
+            ["awslogs-stream-prefix"] = "mimir"
+          }
+        }
+      }
+
+      // Loki
+      new td.ContainerDefinition {
+        name = "loki"
+        essential = false
+        image = "grafana/loki:latest"
+        command {
+          "-target=all"
+          "-config.expand-env=true"
+        }
+        environment {
+          new td.KeyValuePair { name = "LOKI_S3_BUCKETNAME"; value = "\(prefix)-loki-data" }
+          new td.KeyValuePair { name = "LOKI_S3_REGION"; value = awsRegion }
+        }
+        portMappings {
+          new td.PortMapping { containerPort = 3100; protocol = "tcp" }
+        }
+        mountPoints {
+          new td.MountPoint { sourceVolume = "wal"; containerPath = "/data/loki"; readOnly = false }
+        }
+        logConfiguration = new td.LogConfiguration {
+          logDriver = "awslogs"
+          options = new Mapping {
+            ["awslogs-group"] = "/ecs/\(prefix)"
+            ["awslogs-region"] = awsRegion
+            ["awslogs-stream-prefix"] = "loki"
+          }
+        }
+      }
+
+      // Tempo
+      // Tempo
+      new td.ContainerDefinition {
+        name = "tempo"
+        essential = false
+        image = "grafana/tempo:latest"
+        command {
+          "-target=all"
+          "-storage.trace.backend=s3"
+          "-storage.trace.s3.bucket=\(prefix)-tempo-traces"
+          "-storage.trace.s3.region=\(awsRegion)"
+          "-storage.trace.wal.path=/data/tempo/wal"
+          "-storage.trace.local.path=/data/tempo/blocks"
+          "-distributor.receivers.otlp.protocols.http.endpoint=0.0.0.0:4318"
+          "-distributor.receivers.otlp.protocols.grpc.endpoint=0.0.0.0:4317"
+          "-server.http-listen-port=3200"
+        }
+        portMappings {
+          new td.PortMapping { containerPort = 3200; protocol = "tcp" }
+          new td.PortMapping { containerPort = 4317; protocol = "tcp" }
+          new td.PortMapping { containerPort = 4318; protocol = "tcp" }
+        }
+        mountPoints {
+          new td.MountPoint { sourceVolume = "wal"; containerPath = "/data/tempo"; readOnly = false }
+        }
+        logConfiguration = new td.LogConfiguration {
+          logDriver = "awslogs"
+          options = new Mapping {
+            ["awslogs-group"] = "/ecs/\(prefix)"
+            ["awslogs-region"] = awsRegion
+            ["awslogs-stream-prefix"] = "tempo"
+          }
+        }
+      }
+
+      // OTel Collector — reads config from OTEL_CONFIG env var
+      // Non-essential so a config error doesn't kill the whole task
+      new td.ContainerDefinition {
+        name = "otel-collector"
+        essential = false
+        image = "otel/opentelemetry-collector-contrib:latest"
+        command {
+          "--config=env:OTEL_CONFIG"
+        }
+        environment {
+          new td.KeyValuePair {
+            name = "OTEL_CONFIG"
+            value = new Listing {
+              "receivers:"
+              "  otlp:"
+              "    protocols:"
+              "      http:"
+              "        endpoint: 0.0.0.0:4318"
+              "      grpc:"
+              "        endpoint: 0.0.0.0:4317"
+              "exporters:"
+              "  otlphttp/mimir:"
+              "    endpoint: http://localhost:9009/otlp"
+              "    tls:"
+              "      insecure: true"
+              "  otlphttp/loki:"
+              "    endpoint: http://localhost:3100/otlp"
+              "    tls:"
+              "      insecure: true"
+              "  otlp/tempo:"
+              "    endpoint: localhost:4317"
+              "    tls:"
+              "      insecure: true"
+              "service:"
+              "  pipelines:"
+              "    metrics:"
+              "      receivers: [otlp]"
+              "      exporters: [otlphttp/mimir]"
+              "    logs:"
+              "      receivers: [otlp]"
+              "      exporters: [otlphttp/loki]"
+              "    traces:"
+              "      receivers: [otlp]"
+              "      exporters: [otlp/tempo]"
+            }.join("\n")
+          }
+        }
+        logConfiguration = new td.LogConfiguration {
+          logDriver = "awslogs"
+          options = new Mapping {
+            ["awslogs-group"] = "/ecs/\(prefix)"
+            ["awslogs-region"] = awsRegion
+            ["awslogs-stream-prefix"] = "otel"
+          }
+        }
+      }
+    }
+  }
+  taskDef
+
+  // ─── ALB ───
+
+  local lb = new alb.LoadBalancer {
+    label = "lgtm-alb"
+    name = prefix
+    scheme = "internet-facing"
+    type = "application"
+    subnets {
+      subnetA.res.id
+      subnetB.res.id
+    }
+    securityGroups {
+      lgtmSg.res.id
+    }
+    tags { new { key = "Name"; value = "\(prefix)-alb" } }
+  }
+  lb
+
+  local grafanaTg = new tg.TargetGroup {
+    label = "lgtm-grafana-tg"
+    name = "\(prefix)-grafana"
+    port = 3000
+    protocol = "HTTP"
+    targetType = "ip"
+    vpcId = lgtmVpc.res.id
+    healthCheckPath = "/api/health"
+    healthCheckIntervalSeconds = 30
+    tags { new { key = "Name"; value = "\(prefix)-grafana-tg" } }
+  }
+  grafanaTg
+
+  new listener.Listener {
+    label = "lgtm-listener"
+    loadBalancerArn = lb.res.loadBalancerArn
+    port = 80
+    protocol = "HTTP"
+    defaultActions {
+      new listener.Action {
+        type = "forward"
+        targetGroupArn = grafanaTg.res.targetGroupArn
+      }
+    }
+  }
+
+  // ─── ECS Service ───
+
+  new ecsSvc.Service {
+    label = "lgtm-service"
+    serviceName = prefix
+    cluster = ecsCluster.res.arn
+    taskDefinition = taskDef.res.taskDefinitionArn
+    desiredCount = 1
+    launchType = "FARGATE"
+    networkConfiguration = new ecsSvc.NetworkConfiguration {
+      awsvpcConfiguration = new ecsSvc.AwsVpcConfiguration {
+        subnets {
+          subnetA.res.id
+          subnetB.res.id
+        }
+        securityGroups {
+          lgtmSg.res.id
+        }
+        assignPublicIp = "ENABLED"
+      }
+    }
+    loadBalancers {
+      new ecsSvc.LoadBalancer {
+        targetGroupArn = grafanaTg.res.targetGroupArn
+        containerName = "grafana"
+        containerPort = 3000
+      }
+    }
+  }
+}
