@@ -274,7 +274,7 @@ type stalledGenerationDatastore struct {
 	once    sync.Once
 }
 
-func (d *stalledGenerationDatastore) AdvanceGeneration(_, _ string, _ json.RawMessage) error {
+func (d *stalledGenerationDatastore) AdvanceGeneration(_, _, _ string, _ json.RawMessage) error {
 	d.once.Do(func() { close(d.reached) })
 	// The node is force-stopped while this call is outstanding, after its
 	// datastore has been closed, so nothing this returns can reach a row. The

@@ -54,8 +54,10 @@ open class Resource {
 }
 
 /// Base for first-class secret resources. A provider's secret (aws.Secret, the
-/// Azure Key Vault Secret, ...) extends this and names its value property. The
-/// rotation field is intentionally absent in this stage (deferred to Stage 2).
+/// Azure Key Vault Secret, ...) extends this and names its value property. A
+/// secret carries no cadence of its own: rotation is declared on the Generator
+/// the secret's value is bound to, so one cadence governs every destination
+/// that shares the credential.
 abstract class Secret extends Resource {
     hidden valueProperty: String
 }
@@ -167,6 +169,22 @@ open class AutoReconcilePolicy extends Policy {
     }
 }
 
+/// The cadence on which a generator draws a fresh value.
+///
+/// `every` has no default. Attaching rotation to a generator is a statement
+/// about how often its credential turns over, so there is no cadence to
+/// inherit and none to guess at: a rotation spec that names no interval is an
+/// eval-time error, not a generator that rotates on some house default.
+open class RotationSpec {
+    every: Duration
+
+    local self = this
+    // Output
+    function render(): Dynamic = new {
+        EverySeconds = self.every.toUnit("s").value.toInt()
+    }
+}
+
 /// A source of generated values. Belongs to a stack; referenced by the
 /// resources whose properties take the generated value.
 abstract class Generator {
@@ -178,6 +196,11 @@ abstract class Generator {
     /// (same stack) and renames the matched row in place. Mirrors
     /// Resource.alias.
     alias: String?
+
+    /// Rotate this generator's value on a fixed cadence. Absent means the
+    /// value is drawn only when an apply needs one: nothing rotates a
+    /// credential on its own unless this says how often to.
+    rotation: RotationSpec?
 
     /// The named outputs this generator produces. A destination binds to one
     /// of them, e.g. `pw.gen.value`. Outputs are typed properties, so an
@@ -259,6 +282,7 @@ open class PasswordGenerator extends Generator {
         Label = self.label
         Stack = self.stack
         Alias = self.alias
+        Rotation = self.rotation?.render()
         Length = length
         Uppercase = uppercase
         Lowercase = lowercase

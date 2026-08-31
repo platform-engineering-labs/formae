@@ -80,6 +80,7 @@ func (p *stubGeneratorUpdaterProcess) sentShutdowns() int {
 type advanceCall struct {
 	generatorID  string
 	generationID string
+	commandID    string
 	drawnUnder   json.RawMessage
 }
 
@@ -89,8 +90,8 @@ type recordingAdvancer struct {
 	err   error
 }
 
-func (r *recordingAdvancer) AdvanceGeneration(generatorID, generationID string, drawnUnder json.RawMessage) error {
-	r.calls = append(r.calls, advanceCall{generatorID, generationID, drawnUnder})
+func (r *recordingAdvancer) AdvanceGeneration(generatorID, generationID, commandID string, drawnUnder json.RawMessage) error {
+	r.calls = append(r.calls, advanceCall{generatorID, generationID, commandID, drawnUnder})
 	return r.err
 }
 

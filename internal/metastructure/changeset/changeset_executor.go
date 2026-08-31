@@ -818,6 +818,7 @@ func startGeneratorUpdate(gu *generator_update.GeneratorUpdate, commandID string
 	err = proc.Send(gen.ProcessID{Name: name, Node: proc.Node().Name()},
 		generator_update.StartGeneratorUpdate{
 			GeneratorUpdate: *gu,
+			CommandID:       commandID,
 		})
 	if err != nil {
 		proc.Log().Error("Failed to send start message to generator updater: %v", err)

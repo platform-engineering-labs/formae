@@ -247,6 +247,28 @@ type ResourceSnapshot struct {
 // interfaces with the same method.
 type GeneratorIdentity = pkgmodel.GeneratorIdentity
 
+// GeneratorRotationInfo is one rotating generator's cadence and the instant
+// its last rotation committed.
+//
+// LastRotationAt is DERIVED at query time and stored nowhere: it is the start
+// of the most recent command that both advanced this generator's generation
+// and succeeded. Keeping it off the generator is the same choice policies
+// make with LastReconcileAt — a stored last-rotated-at would participate in
+// desired-config equality, show up as metadata drift, and be rendered into
+// formae people copy between environments.
+//
+// Zero means no rotation has ever committed for this generator, which makes it
+// due immediately. A draw whose command failed leaves the zero value in place:
+// the generation row exists, but the command that would have propagated it
+// does not read Success, so it advances no cadence.
+type GeneratorRotationInfo struct {
+	GeneratorID     string
+	Label           string
+	StackLabel      string
+	IntervalSeconds int
+	LastRotationAt  time.Time
+}
+
 // Datastore defines the persistence interface for formae.
 // It handles storage and retrieval of FormaCommands (requested changes),
 // Resources (actual cloud state), Stacks, and Targets.
@@ -560,6 +582,16 @@ type Datastore interface {
 	// with this KSUID, whichever stack owns it. Zero value plus nil error
 	// when absent.
 	GetGeneratorIdentityByID(generatorID string) (GeneratorIdentity, error)
+	// GetGeneratorsWithRotation returns every live generator that declares a
+	// rotation cadence, with the instant its last rotation committed. Modeled
+	// on GetStacksWithAutoReconcilePolicy: the cadence and the last run come
+	// back together, and the caller decides what is due.
+	//
+	// A generator whose stack has been deleted, or whose own latest row is a
+	// delete, is absent. So is one whose latest row no longer declares a
+	// cadence, which is what makes removing rotation take effect on the next
+	// sweep rather than at the next restart.
+	GetGeneratorsWithRotation() ([]GeneratorRotationInfo, error)
 	// AdvanceGeneration records that a new generation was drawn for this
 	// generator, under this spec. Writes a new version row, preserving the
 	// KSUID. Errors if generationID is empty, if drawnUnder is not valid
@@ -571,7 +603,13 @@ type Datastore interface {
 	// reports the drawn value: a value handed to a destination under a
 	// generation nobody stored is exactly the state the next apply cannot
 	// reason about.
-	AdvanceGeneration(generatorID, generationID string, drawnUnder json.RawMessage) error
+	//
+	// commandID is the command the draw belongs to. It is what makes the
+	// rotation cadence derivable: a generation row alone says a value was
+	// drawn, and the command it was drawn by says whether that value ever
+	// reached its destinations. GetGeneratorsWithRotation joins the two, so
+	// a draw whose command failed advances no cadence.
+	AdvanceGeneration(generatorID, generationID, commandID string, drawnUnder json.RawMessage) error
 
 	// Close releases database connections
 	Close()

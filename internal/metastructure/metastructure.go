@@ -340,7 +340,7 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 		assertMods := make(map[string][]datastore.ResourceModification)
 		assertWitnesses := make(map[string]json.RawMessage)
 		for _, stackLabel := range stackLabelsFromForma(forma) {
-			if err := m.loadModificationsAndWitnesses(stackLabel, assertMods, assertWitnesses); err != nil {
+			if err := loadModificationsAndWitnesses(m.Datastore, stackLabel, assertMods, assertWitnesses); err != nil {
 				return nil, err
 			}
 		}
@@ -380,7 +380,7 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 				continue
 			}
 			seenStacks[stackLabel] = true
-			if err := m.loadModificationsAndWitnesses(stackLabel, modificationsByStack, witnessByKsuid); err != nil {
+			if err := loadModificationsAndWitnesses(m.Datastore, stackLabel, modificationsByStack, witnessByKsuid); err != nil {
 				return nil, err
 			}
 		}
@@ -738,8 +738,8 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 // Window load failures fail the submission; a witness fetch failure degrades
 // to no witness for that resource, which classifies its movement as
 // tolerated, the pre-existing behavior.
-func (m *Metastructure) loadModificationsAndWitnesses(stackLabel string, modificationsByStack map[string][]datastore.ResourceModification, witnessByKsuid map[string]json.RawMessage) error {
-	modifications, err := m.Datastore.GetResourceModificationsSinceLastReconcile(stackLabel)
+func loadModificationsAndWitnesses(ds datastore.Datastore, stackLabel string, modificationsByStack map[string][]datastore.ResourceModification, witnessByKsuid map[string]json.RawMessage) error {
+	modifications, err := ds.GetResourceModificationsSinceLastReconcile(stackLabel)
 	if err != nil {
 		slog.Error("Failed to load modifications since last reconcile", "stack", stackLabel, "error", err)
 		return fmt.Errorf("failed to load modifications for stack %s: %w", stackLabel, err)
@@ -755,7 +755,7 @@ func (m *Metastructure) loadModificationsAndWitnesses(stackLabel string, modific
 		if _, done := witnessByKsuid[mod.Ksuid]; done {
 			continue
 		}
-		witness, werr := m.Datastore.GetPropertiesAtLastWrite(mod.Ksuid)
+		witness, werr := ds.GetPropertiesAtLastWrite(mod.Ksuid)
 		if werr != nil {
 			slog.Warn("Failed to load write witness for drift classification", "ksuid", mod.Ksuid, "error", werr)
 			continue

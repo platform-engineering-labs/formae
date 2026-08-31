@@ -472,6 +472,90 @@ func (d *DatastoreAuroraDataAPI) GetGeneratorIdentityByID(generatorID string) (d
 	return generatorIdentityFromRow(id, generationID, generationSpec), nil
 }
 
+// GetGeneratorsWithRotation returns every live generator with the instant its
+// last rotation committed. The cadence itself is read from the stored spec by
+// datastore.RotationInfoFromRows, so this query never parses JSON.
+//
+// last_committed_draw is the derivation the rotation scheduler runs on: a
+// generation row records that a value was drawn and the command that drew it,
+// and joining that command's state is what says whether the value ever reached
+// its destinations. A command that is not Success advances nothing, so a
+// failed authority-side update leaves the cadence measured from the previous
+// success.
+func (d *DatastoreAuroraDataAPI) GetGeneratorsWithRotation() ([]datastore.GeneratorRotationInfo, error) {
+	ctx := context.Background()
+
+	query := `
+		WITH latest_generators AS (
+			SELECT id, label, stack_id, generator_data, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			FROM generators
+		),
+		latest_stacks AS (
+			SELECT id, label, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			FROM stacks
+		),
+		last_committed_draw AS (
+			SELECT g.id as generator_id, MAX(fc.timestamp) as last_rotation_at
+			FROM generators g
+			JOIN forma_commands fc ON fc.command_id = g.command_id
+			WHERE g.generation_id != '' AND fc.state = 'Success'
+			GROUP BY g.id
+		)
+		SELECT g.id, g.label, s.label, g.generator_data::text, d.last_rotation_at
+		FROM latest_generators g
+		JOIN latest_stacks s ON s.id = g.stack_id
+		LEFT JOIN last_committed_draw d ON d.generator_id = g.id
+		WHERE g.rn = 1 AND g.operation != 'delete'
+		AND s.rn = 1 AND s.operation != 'delete'
+	`
+
+	result, err := d.executeStatement(ctx, query, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get generators with rotation: %w", err)
+	}
+
+	var rotationRows []datastore.GeneratorRotationRow
+	for _, record := range result.Records {
+		if len(record) < 5 {
+			continue
+		}
+		generatorID, err := getStringField(record[0])
+		if err != nil {
+			return nil, fmt.Errorf("failed to get generator id: %w", err)
+		}
+		label, err := getStringField(record[1])
+		if err != nil {
+			return nil, fmt.Errorf("failed to get generator label: %w", err)
+		}
+		stackLabel, err := getStringField(record[2])
+		if err != nil {
+			return nil, fmt.Errorf("failed to get stack label: %w", err)
+		}
+		generatorData, err := getStringField(record[3])
+		if err != nil {
+			return nil, fmt.Errorf("failed to get generator data: %w", err)
+		}
+		// A generator that has never had a committed draw yields NULL here,
+		// which getTimestampField reads as the zero instant: no rotation on
+		// record, so it is due immediately.
+		lastRotationAt, err := getTimestampField(record[4])
+		if err != nil {
+			return nil, fmt.Errorf("failed to get the instant of the last committed draw: %w", err)
+		}
+		rotationRows = append(rotationRows, datastore.GeneratorRotationRow{
+			GeneratorID:    generatorID,
+			Label:          label,
+			StackLabel:     stackLabel,
+			GeneratorData:  []byte(generatorData),
+			LastRotationAt: lastRotationAt.UTC(),
+		})
+	}
+
+	return datastore.RotationInfoFromRows(rotationRows)
+}
+
 // AdvanceGeneration records that a new generation was drawn for this
 // generator, under this spec. Writes a new version row that carries forward
 // the existing label/type/stack/generator_data unchanged — only the
@@ -483,7 +567,7 @@ func (d *DatastoreAuroraDataAPI) GetGeneratorIdentityByID(generatorID string) (d
 // (generator_update.GeneratorUpdater): it calls this once it has drawn a
 // value, so the generation the value came from is durable before any
 // destination is stamped with it.
-func (d *DatastoreAuroraDataAPI) AdvanceGeneration(generatorID, generationID string, drawnUnder json.RawMessage) error {
+func (d *DatastoreAuroraDataAPI) AdvanceGeneration(generatorID, generationID, commandID string, drawnUnder json.RawMessage) error {
 	ctx := context.Background()
 
 	if generationID == "" {
@@ -535,7 +619,7 @@ func (d *DatastoreAuroraDataAPI) AdvanceGeneration(generatorID, generationID str
 	insertParams := []types.SqlParameter{
 		{Name: aws.String("id"), Value: &types.FieldMemberStringValue{Value: generatorID}},
 		{Name: aws.String("version"), Value: &types.FieldMemberStringValue{Value: version}},
-		{Name: aws.String("command_id"), Value: &types.FieldMemberStringValue{Value: ""}},
+		{Name: aws.String("command_id"), Value: &types.FieldMemberStringValue{Value: commandID}},
 		{Name: aws.String("operation"), Value: &types.FieldMemberStringValue{Value: "update"}},
 		{Name: aws.String("label"), Value: &types.FieldMemberStringValue{Value: label}},
 		{Name: aws.String("generator_type"), Value: &types.FieldMemberStringValue{Value: generatorType}},

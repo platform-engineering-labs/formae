@@ -177,6 +177,10 @@ func (m *mockDatastore) DeleteInlinePolicy(_, _, _ string) (string, error) {
 }
 func (m *mockDatastore) DeletePoliciesForStack(_, _ string) error      { return nil }
 func (m *mockDatastore) GetExpiredStacks() ([]ExpiredStackInfo, error) { return nil, nil }
+func (m *mockDatastore) GetGeneratorsWithRotation() ([]GeneratorRotationInfo, error) {
+	return nil, nil
+}
+
 func (m *mockDatastore) GetStacksWithAutoReconcilePolicy() ([]StackReconcileInfo, error) {
 	return nil, nil
 }
@@ -200,7 +204,7 @@ func (m *mockDatastore) GetGeneratorIdentity(_, _ string) (GeneratorIdentity, er
 func (m *mockDatastore) GetGeneratorIdentityByID(_ string) (GeneratorIdentity, error) {
 	return GeneratorIdentity{}, nil
 }
-func (m *mockDatastore) AdvanceGeneration(_, _ string, _ json.RawMessage) error { return nil }
+func (m *mockDatastore) AdvanceGeneration(_, _, _ string, _ json.RawMessage) error { return nil }
 func (m *mockDatastore) LoadGeneratorsByStack(_ string) ([]pkgmodel.Generator, error) {
 	return nil, nil
 }

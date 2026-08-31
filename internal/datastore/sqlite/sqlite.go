@@ -3181,7 +3181,7 @@ func (d DatastoreSQLite) GetGeneratorIdentityByID(generatorID string) (datastore
 // (generator_update.GeneratorUpdater): it calls this once it has drawn a
 // value, so the generation the value came from is durable before any
 // destination is stamped with it.
-func (d DatastoreSQLite) AdvanceGeneration(generatorID, generationID string, drawnUnder json.RawMessage) error {
+func (d DatastoreSQLite) AdvanceGeneration(generatorID, generationID, commandID string, drawnUnder json.RawMessage) error {
 	_, span := sqliteTracer.Start(context.Background(), "AdvanceGeneration")
 	defer span.End()
 
@@ -3207,7 +3207,7 @@ func (d DatastoreSQLite) AdvanceGeneration(generatorID, generationID string, dra
 	version := mksuid.New().String()
 	insertQuery := `INSERT INTO generators (id, version, command_id, operation, label, generator_type, stack_id, generator_data, generation_id, generation_spec)
 	                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	_, err = d.conn.Exec(insertQuery, generatorID, version, "", "update", label, generatorType, stackID, generatorData, generationID, string(drawnUnder))
+	_, err = d.conn.Exec(insertQuery, generatorID, version, commandID, "update", label, generatorType, stackID, generatorData, generationID, string(drawnUnder))
 	if err != nil {
 		return fmt.Errorf("failed to advance generation: %w", err)
 	}
@@ -3457,6 +3457,79 @@ func (d DatastoreSQLite) GetStacksWithAutoReconcilePolicy() ([]datastore.StackRe
 	}
 
 	return result, nil
+}
+
+// GetGeneratorsWithRotation returns every live generator with the instant its
+// last rotation committed. The cadence itself is read from the stored spec by
+// datastore.RotationInfoFromRows, so this query never parses JSON.
+//
+// last_committed_draw is the derivation the rotation scheduler runs on: a
+// generation row records that a value was drawn and the command that drew it,
+// and joining that command's state is what says whether the value ever reached
+// its destinations. A command that is not Success advances nothing, so a
+// failed authority-side update leaves the cadence measured from the previous
+// success. The command's start is the instant used, matching how the
+// auto-reconcile schedule reads fc.timestamp.
+func (d DatastoreSQLite) GetGeneratorsWithRotation() ([]datastore.GeneratorRotationInfo, error) {
+	_, span := sqliteTracer.Start(context.Background(), "GetGeneratorsWithRotation")
+	defer span.End()
+
+	query := `
+		WITH latest_generators AS (
+			SELECT id, label, stack_id, generator_data, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version DESC) as rn
+			FROM generators
+		),
+		latest_stacks AS (
+			SELECT id, label, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version DESC) as rn
+			FROM stacks
+		),
+		last_committed_draw AS (
+			SELECT g.id as generator_id, MAX(fc.timestamp) as last_rotation_at
+			FROM generators g
+			JOIN forma_commands fc ON fc.command_id = g.command_id
+			WHERE g.generation_id != '' AND fc.state = 'Success'
+			GROUP BY g.id
+		)
+		SELECT g.id, g.label, s.label, g.generator_data,
+		       COALESCE(d.last_rotation_at, '') as last_rotation_at
+		FROM latest_generators g
+		JOIN latest_stacks s ON s.id = g.stack_id
+		LEFT JOIN last_committed_draw d ON d.generator_id = g.id
+		WHERE g.rn = 1 AND g.operation != 'delete'
+		AND s.rn = 1 AND s.operation != 'delete'
+	`
+
+	rows, err := d.conn.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var rotationRows []datastore.GeneratorRotationRow
+	for rows.Next() {
+		var row datastore.GeneratorRotationRow
+		var lastRotationStr string
+		if err := rows.Scan(&row.GeneratorID, &row.Label, &row.StackLabel, &row.GeneratorData, &lastRotationStr); err != nil {
+			return nil, err
+		}
+		if lastRotationStr != "" {
+			row.LastRotationAt = parseSQLiteTimestamp(lastRotationStr)
+			if row.LastRotationAt.IsZero() {
+				// An unreadable instant must not read as "never rotated":
+				// that would rotate the credential on every sweep.
+				return nil, fmt.Errorf("generator %s: cannot read the instant of its last committed draw", row.GeneratorID)
+			}
+			row.LastRotationAt = row.LastRotationAt.UTC()
+		}
+		rotationRows = append(rotationRows, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return datastore.RotationInfoFromRows(rotationRows)
 }
 
 func (d DatastoreSQLite) GetResourcesAtLastReconcile(stackLabel string) ([]datastore.ResourceSnapshot, error) {

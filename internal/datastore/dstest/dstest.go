@@ -264,6 +264,17 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunAdvanceGenerationOnDeletedGeneratorFailsWithoutResurrecting(t, newDS)
 	RunAdvanceGenerationRejectsMalformedSpecAndEmptyGenerationID(t, newDS)
 
+	RunGetGeneratorsWithRotation_Empty(t, newDS)
+	RunGetGeneratorsWithRotation_CadenceAndStackLabel(t, newDS)
+	RunGetGeneratorsWithRotation_WithoutCadenceExcluded(t, newDS)
+	RunGetGeneratorsWithRotation_LastRotationFromCommittedDraw(t, newDS)
+	RunGetGeneratorsWithRotation_FailedCommandAdvancesNothing(t, newDS)
+	RunGetGeneratorsWithRotation_LatestCommittedDrawWins(t, newDS)
+	RunGetGeneratorsWithRotation_PerGeneratorLastRotation(t, newDS)
+	RunGetGeneratorsWithRotation_DeletedGeneratorExcluded(t, newDS)
+	RunGetGeneratorsWithRotation_RemovedCadenceExcluded(t, newDS)
+	RunGetGeneratorsWithRotation_ChangedCadenceReadFromLatest(t, newDS)
+
 	RunFindResourcesDependingOn(t, newDS)
 	RunFindResourcesDependingOnMultipleRefs(t, newDS)
 	RunFindResourcesDependingOnNoRefs(t, newDS)

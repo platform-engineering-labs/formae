@@ -38,6 +38,7 @@ const (
 	FormaCommandSourceSynchronize         = types.FormaCommandSourceSynchronize
 	FormaCommandSourceDiscovery           = types.FormaCommandSourceDiscovery
 	FormaCommandSourcePolicyAutoReconcile = types.FormaCommandSourcePolicyAutoReconcile
+	FormaCommandSourceGeneratorRotation   = types.FormaCommandSourceGeneratorRotation
 
 	OperationCreate  = types.OperationCreate
 	OperationUpdate  = types.OperationUpdate

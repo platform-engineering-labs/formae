@@ -59,7 +59,7 @@ func TestGeneratorLookupForResume_ResolvesADrawnGeneratorOnAnotherStack(t *testi
 	ds := lookupTestDatastore(t)
 	ksuid := createGeneratorOn(t, ds, "secrets", "db-password", 24)
 
-	require.NoError(t, ds.AdvanceGeneration(ksuid, "generation-1",
+	require.NoError(t, ds.AdvanceGeneration(ksuid, "generation-1", "cmd-draw",
 		json.RawMessage(`{"Type":"password","Label":"db-password","Stack":"secrets","Length":24}`)))
 
 	lookup := generatorLookup(ds)
@@ -79,7 +79,7 @@ func TestGeneratorLookupForResume_ReturnsTheCurrentSpecNotTheGenerationsSpec(t *
 	ds := lookupTestDatastore(t)
 	ksuid := createGeneratorOn(t, ds, "secrets", "db-password", 24)
 
-	require.NoError(t, ds.AdvanceGeneration(ksuid, "generation-1",
+	require.NoError(t, ds.AdvanceGeneration(ksuid, "generation-1", "cmd-draw",
 		json.RawMessage(`{"Type":"password","Label":"db-password","Stack":"secrets","Length":24}`)))
 	secrets, err := ds.GetStackByLabel("secrets")
 	require.NoError(t, err)

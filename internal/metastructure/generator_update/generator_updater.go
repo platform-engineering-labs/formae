@@ -55,7 +55,7 @@ const (
 // rather than taking datastore.Datastore because internal/datastore imports
 // this package (through forma_command), so importing it back would cycle.
 type generationAdvancer interface {
-	AdvanceGeneration(generatorID, generationID string, drawnUnder json.RawMessage) error
+	AdvanceGeneration(generatorID, generationID, commandID string, drawnUnder json.RawMessage) error
 }
 
 // GeneratorUpdater is an FSM actor that draws one generator's value, records
@@ -73,13 +73,15 @@ type GeneratorUpdater struct {
 
 // StartGeneratorUpdate is sent to the GeneratorUpdater to begin a draw.
 //
-// It carries no CommandID, unlike StartTargetUpdate: a TargetUpdater needs one
-// to address the per-command ResolveCache actor and to stamp the persist
-// message it sends the ResourcePersister, and this actor sends neither. The
-// command is already in the actor's registered name (see
-// actornames.GeneratorUpdater), which is the caller's to build.
+// CommandID is recorded against the generation this draw advances to, and is
+// what makes the rotation cadence derivable: a generation row says a value was
+// drawn, and the command it was drawn by says whether that value ever reached
+// its destinations. It is carried on the message rather than parsed back out
+// of the actor's registered name, which encodes it for uniqueness, not for
+// reading.
 type StartGeneratorUpdate struct {
 	GeneratorUpdate GeneratorUpdate
+	CommandID       string
 }
 
 // DrawValue is sent by the actor to itself to leave StateNotStarted before
@@ -115,7 +117,10 @@ type Shutdown struct{}
 // and is never persisted.
 type GeneratorUpdaterData struct {
 	generatorUpdate GeneratorUpdate
-	requestedBy     gen.PID
+	// commandID is the command this draw belongs to, recorded against the
+	// generation so a failed command's draw advances no cadence.
+	commandID   string
+	requestedBy gen.PID
 	// entropy is the source Draw reads random bytes from: crypto/rand.Read in
 	// production, a deterministic source in tests so a specific drawn value is
 	// reproducible without relying on chance.
@@ -184,6 +189,7 @@ func (g *GeneratorUpdater) Init(args ...any) (statemachine.StateMachineSpec[Gene
 // itself, so the FSM reports the state it is actually in while drawing.
 func handleStartGeneratorUpdate(from gen.PID, state gen.Atom, data GeneratorUpdaterData, message StartGeneratorUpdate, proc gen.Process) (gen.Atom, GeneratorUpdaterData, []statemachine.Action, error) {
 	data.generatorUpdate = message.GeneratorUpdate
+	data.commandID = message.CommandID
 
 	if err := proc.Send(proc.PID(), DrawValue{}); err != nil {
 		proc.Log().Error("GeneratorUpdater: failed to send draw message node=%s: %v", data.generatorUpdate.NodeURI(), err)
@@ -260,7 +266,7 @@ func handleDrawValue(from gen.PID, state gen.Atom, data GeneratorUpdaterData, me
 		return StateFinishedWithError, data, nil, nil
 	}
 
-	if err := data.datastore.AdvanceGeneration(generatorID, generationID, drawnUnder); err != nil {
+	if err := data.datastore.AdvanceGeneration(generatorID, generationID, data.commandID, drawnUnder); err != nil {
 		proc.Log().Error("GeneratorUpdater: failed to record the generation node=%s generation=%s", nodeURI, generationID)
 		data.errorMessage = failureReasonGenerationNotRecorded
 		return StateFinishedWithError, data, nil, nil
