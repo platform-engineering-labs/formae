@@ -2433,6 +2433,74 @@ func (d *DatastoreAuroraDataAPI) FindResourcesDependingOn(ksuid string) ([]*pkgm
 	return resources, nil
 }
 
+// FindResourcesReferencingGenerator finds the live resources that bind a property
+// to the given generator through a $gen envelope. A translated envelope's
+// $generator KSUID is an outbound reference KSUID, so it lands in the same
+// GIN-indexed refs column the $ref lookup uses and the array-overlap query
+// narrows the scan cheaply. That column records only that a KSUID is
+// referenced, not how, so the overlap is a prefilter and pkgmodel.BindsGenerator
+// decides which candidates are really destinations.
+func (d *DatastoreAuroraDataAPI) FindResourcesReferencingGenerator(generatorKsuid string) ([]*pkgmodel.Resource, error) {
+	ctx := context.Background()
+
+	// A single generator KSUID needs no comma, so the comma-delimited encoding
+	// refsToSQL expects is just the KSUID itself.
+	query := `
+	SELECT data, ksuid
+	FROM resources r1
+	WHERE refs && ` + refsToSQL(":refs") + `
+	AND NOT EXISTS (
+		SELECT 1
+		FROM resources r2
+		WHERE r1.uri = r2.uri
+		AND r2.version COLLATE "C" > r1.version COLLATE "C"
+	)
+	AND operation != :operation AND operation != 'reaped'
+	`
+	params := []types.SqlParameter{
+		{Name: aws.String("refs"), Value: &types.FieldMemberStringValue{Value: generatorKsuid}},
+		{Name: aws.String("operation"), Value: &types.FieldMemberStringValue{Value: string(resource_update.OperationDelete)}},
+	}
+
+	output, err := d.executeStatement(ctx, query, params)
+	if err != nil {
+		return nil, err
+	}
+
+	var resources []*pkgmodel.Resource
+	for _, record := range output.Records {
+		if len(record) < 2 {
+			return nil, fmt.Errorf("unexpected record length: %d", len(record))
+		}
+
+		jsonData, err := getStringField(record[0])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse data: %w", err)
+		}
+
+		ksuidResult, err := getStringField(record[1])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse ksuid: %w", err)
+		}
+
+		// The SQL above is only a prefilter: it is deliberately broader than
+		// the truth so no destination is missed. pkgmodel.BindsGenerator is
+		// authoritative, and drops any candidate it matched for another reason.
+		if !pkgmodel.BindsGenerator([]byte(jsonData), generatorKsuid) {
+			continue
+		}
+
+		var resource pkgmodel.Resource
+		if err := json.Unmarshal([]byte(jsonData), &resource); err != nil {
+			return nil, err
+		}
+		resource.Ksuid = ksuidResult
+		resources = append(resources, &resource)
+	}
+
+	return resources, nil
+}
+
 func (d *DatastoreAuroraDataAPI) FindResourcesDependingOnMany(ksuids []string) (map[string][]*pkgmodel.Resource, error) {
 	ctx := context.Background()
 

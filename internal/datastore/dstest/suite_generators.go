@@ -654,11 +654,12 @@ func RunAdvanceGenerationDoesNotAffectOtherGenerator(t *testing.T, newDS func(t 
 
 // RunAdvanceGenerationOnDeletedGeneratorFailsWithoutResurrecting verifies
 // AdvanceGeneration's tombstone guard: called against a deleted generator's
-// id, it must return an error AND must not write a new row. A half-fix that
-// errors but still inserts a version row would resurrect the generator with
-// an unparseable generator_data ('{}' copied from the tombstone), leaving
-// GetGenerator permanently failing with "unknown generator type:" — so this
-// checks both read paths stay at the zero value / nil, not just the error.
+// id, it must return an error AND must not write a new row. An implementation
+// that errors but still inserts a version row would resurrect the generator
+// with an unparseable generator_data ('{}' copied from the tombstone),
+// leaving GetGenerator permanently failing with "unknown generator type:" —
+// so this checks both read paths stay at the zero value / nil, not just the
+// error.
 func RunAdvanceGenerationOnDeletedGeneratorFailsWithoutResurrecting(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	t.Run("AdvanceGenerationOnDeletedGeneratorFailsWithoutResurrecting", func(t *testing.T) {
 		td := newDS(t)

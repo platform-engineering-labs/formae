@@ -479,10 +479,10 @@ func (d *DatastoreAuroraDataAPI) GetGeneratorIdentityByID(generatorID string) (d
 // is not valid JSON, or if the generator's latest row is a tombstone: a
 // deleted id is not resurrected.
 //
-// No production caller in this slice: the executable generator node that
-// draws generations arrives in a later slice. It ships here because the
-// generation columns are inert without a writer, and a test-only backdoor
-// would misrepresent a mechanism we are shipping for real use.
+// The caller is the generator update actor
+// (generator_update.GeneratorUpdater): it calls this once it has drawn a
+// value, so the generation the value came from is durable before any
+// destination is stamped with it.
 func (d *DatastoreAuroraDataAPI) AdvanceGeneration(generatorID, generationID string, drawnUnder json.RawMessage) error {
 	ctx := context.Background()
 

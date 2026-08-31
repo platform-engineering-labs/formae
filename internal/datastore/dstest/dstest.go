@@ -274,6 +274,19 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunFindResourcesDependingOnMany_DeepChain(t, newDS)
 	RunFindResourcesDependingOnMany_BroadFanOut(t, newDS)
 
+	RunFindResourcesReferencingGenerator(t, newDS)
+	RunFindResourcesReferencingGeneratorOtherGeneratorExcluded(t, newDS)
+	RunFindResourcesReferencingGeneratorUnboundResourceExcluded(t, newDS)
+	RunFindResourcesReferencingGeneratorAcrossStacks(t, newDS)
+	RunFindResourcesReferencingGeneratorDeletedExcluded(t, newDS)
+	RunFindResourcesReferencingGeneratorLatestVersionOnly(t, newDS)
+	RunFindResourcesReferencingGeneratorUnknownGenerator(t, newDS)
+	RunFindResourcesReferencingGeneratorNestedInArray(t, newDS)
+	RunFindResourcesReferencingGeneratorBareGeneratorKeyExcluded(t, newDS)
+	RunFindResourcesReferencingGeneratorGenFalseExcluded(t, newDS)
+	RunFindResourcesReferencingGeneratorCaseSensitive(t, newDS)
+	RunFindResourcesReferencingGeneratorResourceRefExcluded(t, newDS)
+
 	RunStackTransition(t, newDS)
 
 	RunGetResourcesAtLastReconcile_Empty(t, newDS)

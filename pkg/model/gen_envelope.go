@@ -97,6 +97,53 @@ func GenGeneratorKSUID(value gjson.Result) string {
 	return value.Get("$generator").String()
 }
 
+// resourcePropertiesField is the member of a stored resource document that
+// holds its properties (Resource.Properties' JSON name). It is the only part
+// of the document a $gen binding can live in.
+const resourcePropertiesField = "Properties"
+
+// BindsGenerator reports whether the given resource document binds any
+// property to the generator with this KSUID through a translated $gen
+// envelope. It is the authoritative answer to "is this row a destination of
+// that generator": the datastores use their indexes only to narrow the
+// candidate set and confirm every candidate here, so all backends agree
+// regardless of how their SQL happens to match.
+//
+// It takes the whole stored resource document, because that is what a
+// resources row holds, and scans only that document's properties member. That
+// is the same reach as the draw rule (which reads DesiredState.Properties), so
+// the reverse index and the rule that decides what a draw rotates agree by
+// construction: a $gen appearing anywhere else in the row — read-only
+// properties, a patch document — names no destination and must not be able to
+// refuse an apply. Each backend's SQL stays deliberately broader than this, so
+// a candidate it matched for another reason is dropped here rather than
+// missed.
+//
+// The walk is shared with FindGenObjectsFromProperties rather than duplicated,
+// which is why an authored (untranslated) envelope, whose generator is named
+// by label and stack, matches nothing here.
+//
+// An empty generator KSUID binds nothing, so authored envelopes cannot match
+// it by accident.
+func BindsGenerator(document []byte, generatorKsuid string) bool {
+	if len(document) == 0 || generatorKsuid == "" {
+		return false
+	}
+
+	properties := gjson.GetBytes(document, resourcePropertiesField)
+	if !properties.Exists() {
+		return false
+	}
+
+	for _, gen := range FindGenObjectsFromProperties([]byte(properties.Raw)) {
+		if gen.Generator == generatorKsuid {
+			return true
+		}
+	}
+
+	return false
+}
+
 // KnownGeneratorOutputs enumerates every output name a currently supported
 // generator type can produce. PasswordGenerator is the only arm today, and
 // its only output is "value" (see PasswordOutputs in the PKL schema); a

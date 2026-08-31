@@ -88,6 +88,9 @@ func (m *mockDatastore) LoadLatestResourceByKsuid(_ string) (*pkgmodel.Resource,
 func (m *mockDatastore) FindResourcesDependingOn(_ string) ([]*pkgmodel.Resource, error) {
 	return nil, nil
 }
+func (m *mockDatastore) FindResourcesReferencingGenerator(_ string) ([]*pkgmodel.Resource, error) {
+	return nil, nil
+}
 func (m *mockDatastore) FindResourcesDependingOnMany(_ []string) (map[string][]*pkgmodel.Resource, error) {
 	return nil, nil
 }

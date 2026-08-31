@@ -272,3 +272,54 @@ func TestBackfillResourceRefs_ParityPostgres(t *testing.T) {
 			"idempotency: refs for %s must be unchanged after second run", tc.label)
 	}
 }
+
+// TestBackfillResourceRefs_MakesAGeneratorBindingFindablePostgres proves the
+// backfill closes the loop for the generator reverse index: a row written
+// before generator KSUIDs were collected into refs carries an empty refs
+// column and is invisible to FindResourcesReferencingGenerator, and one
+// unconditional boot sweep makes it findable. No schema migration is involved;
+// the generator KSUID lands in the existing refs column.
+func TestBackfillResourceRefs_MakesAGeneratorBindingFindablePostgres(t *testing.T) {
+	d, cleanup := newPostgresTestDatastore(t)
+	defer cleanup()
+	storeTestTargetPG(t, d)
+
+	connStr := postgres.BuildConnStr("localhost", 5432, "postgres", "admin", d.Pool().Config().ConnConfig.Database)
+	conn, err := pgx.Connect(context.Background(), connStr)
+	require.NoError(t, err)
+	defer conn.Close(context.Background()) //nolint:errcheck
+
+	generatorKsuid := mksuid.New().String()
+	destinationKsuid := util.NewID()
+	storeResource(t, d, &pkgmodel.Resource{
+		Ksuid:    destinationKsuid,
+		NativeID: "gen-bound-native",
+		Stack:    "app",
+		Label:    "database",
+		Type:     "AWS::RDS::DBInstance",
+		Target:   "test-target",
+		Properties: json.RawMessage(fmt.Sprintf(
+			`{"MasterUserPassword":{"$gen":true,"$generator":"%s","$output":"value","$visibility":"Opaque","$value":"sha256:digest","$hashed":true,"$resolvedFrom":"sha256:digest"}}`,
+			generatorKsuid,
+		)),
+	})
+
+	// Put the row back into the state a write made before generator KSUIDs
+	// were collected would have left it in.
+	resetAllRefs(t, conn)
+	require.Empty(t, queryRefsRaw(t, conn, destinationKsuid))
+
+	beforeBackfill, err := d.FindResourcesReferencingGenerator(generatorKsuid)
+	require.NoError(t, err)
+	require.Empty(t, beforeBackfill, "a row with an empty refs column is not yet findable")
+
+	require.NoError(t, BackfillResourceRefs(d))
+
+	assert.Equal(t, []string{generatorKsuid}, queryRefsRaw(t, conn, destinationKsuid),
+		"the sweep must recompute the generator KSUID into the existing refs column")
+
+	afterBackfill, err := d.FindResourcesReferencingGenerator(generatorKsuid)
+	require.NoError(t, err)
+	require.Len(t, afterBackfill, 1, "the swept row must be findable by its generator")
+	assert.Equal(t, destinationKsuid, afterBackfill[0].Ksuid)
+}
