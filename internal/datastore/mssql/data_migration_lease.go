@@ -54,11 +54,11 @@ func (d *DatastoreMSSQL) AcquireDataMigrationLease(ctx context.Context) (datasto
 		 SELECT @result;`,
 		dataMigrationLockName, dataMigrationLockTimeoutMs).Scan(&result)
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("failed to acquire the data migration lease: %w", err)
 	}
 	if result < 0 {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("%w: sp_getapplock returned %d", datastore.ErrDataMigrationLeaseUnavailable, result)
 	}
 

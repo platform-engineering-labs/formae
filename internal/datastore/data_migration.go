@@ -9,6 +9,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/demula/mksuid/v2"
 
@@ -132,6 +133,16 @@ const (
 	MarkerCountSQL  = `SELECT COUNT(*) FROM data_migrations WHERE migration_key = %s AND target_label = %s AND target_incarnation_id = %s`
 )
 
+// PlaceholderList renders count bind placeholders as a comma-separated list,
+// numbered from one.
+func PlaceholderList(placeholder func(n int) string, count int) string {
+	parts := make([]string, count)
+	for i := range parts {
+		parts[i] = placeholder(i + 1)
+	}
+	return strings.Join(parts, ", ")
+}
+
 // CompletionRowKey returns the reserved label/incarnation pair the global
 // completion row occupies. A real target label is never empty, so the pair
 // cannot collide with one.
@@ -156,7 +167,7 @@ func (m MarkerStore) LoadMarkers(ctx context.Context, migrationKey string) (map[
 	if err != nil {
 		return nil, fmt.Errorf("failed to load data migration markers: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	markers := map[DataMigrationMarker]DataMigrationOutcome{}
 	for rows.Next() {
@@ -216,7 +227,11 @@ func (m MarkerStore) WriteCompletion(ctx context.Context, migrationKey string) e
 // "skip if the current row is already a tombstone, otherwise append one".
 const (
 	TombstoneLatestOperationSQL = `SELECT operation FROM resources WHERE uri = %s ORDER BY version DESC LIMIT 1`
-	TombstoneInsertSQL          = `INSERT INTO resources (uri, version, command_id, operation, native_id, stack, type, label, target, data, managed, ksuid, target_incarnation_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)`
+	// TombstoneInsertSQL takes the whole comma-separated placeholder list as its
+	// single argument, since the dialects spell placeholders differently.
+	TombstoneInsertSQL = `INSERT INTO resources (uri, version, command_id, operation, native_id, stack, type, label, target, data, managed, ksuid, target_incarnation_id) VALUES (%s)`
+	// TombstoneColumns is how many placeholders that list holds.
+	TombstoneColumns = 13
 )
 
 // TombstoneOperation is the operation a delete tombstone carries.
@@ -256,11 +271,7 @@ func (m MarkerStore) currentlyTombstoned(ctx context.Context, resource *pkgmodel
 }
 
 func (m MarkerStore) appendTombstone(ctx context.Context, resource *pkgmodel.Resource, commandID string) error {
-	placeholders := make([]any, 13)
-	for i := range placeholders {
-		placeholders[i] = m.ph(i + 1)
-	}
-	query := fmt.Sprintf(TombstoneInsertSQL, placeholders...)
+	query := fmt.Sprintf(TombstoneInsertSQL, PlaceholderList(m.ph, TombstoneColumns))
 
 	if _, err := m.Exec.ExecContext(ctx, query,
 		string(resource.URI()),

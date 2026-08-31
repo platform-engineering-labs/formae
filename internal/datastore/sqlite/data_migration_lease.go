@@ -95,19 +95,19 @@ func (d DatastoreSQLite) AcquireDataMigrationLease(ctx context.Context) (datasto
 	// WAL is a property of the file, already set by the datastore's own
 	// connection; the busy timeout is per-connection and has to be set here.
 	if _, err := db.ExecContext(ctx, "PRAGMA busy_timeout="+leaseBusyTimeout); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("failed to set the lease connection's busy timeout: %w", err)
 	}
 
 	conn, err := db.Conn(ctx)
 	if err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("failed to pin the data migration lease connection: %w", err)
 	}
 
 	if err := beginImmediate(ctx, conn); err != nil {
-		conn.Close()
-		db.Close()
+		_ = conn.Close()
+		_ = db.Close()
 		return nil, err
 	}
 

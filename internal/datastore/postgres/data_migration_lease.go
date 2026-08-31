@@ -74,6 +74,9 @@ func (d DatastorePostgres) AcquireDataMigrationLease(ctx context.Context) (datas
 	return nil, datastore.ErrDataMigrationLeaseUnavailable
 }
 
+// pgPlaceholder renders Postgres's positional bind syntax.
+func pgPlaceholder(n int) string { return fmt.Sprintf("$%d", n) }
+
 func (l *postgresDataMigrationLease) LoadMarkers(ctx context.Context, migrationKey string) (map[datastore.DataMigrationMarker]datastore.DataMigrationOutcome, error) {
 	rows, err := l.conn.Query(ctx, fmt.Sprintf(datastore.MarkerSelectSQL, "$1"), migrationKey)
 	if err != nil {
@@ -153,11 +156,8 @@ func (l *postgresDataMigrationLease) TombstoneResources(ctx context.Context, res
 			continue
 		}
 
-		placeholders := make([]any, 13)
-		for i := range placeholders {
-			placeholders[i] = fmt.Sprintf("$%d", i+1)
-		}
-		if _, err := l.conn.Exec(ctx, fmt.Sprintf(datastore.TombstoneInsertSQL, placeholders...),
+		if _, err := l.conn.Exec(ctx, fmt.Sprintf(datastore.TombstoneInsertSQL,
+			datastore.PlaceholderList(pgPlaceholder, datastore.TombstoneColumns)),
 			string(resource.URI()),
 			mksuid.New().String(),
 			commandID,
