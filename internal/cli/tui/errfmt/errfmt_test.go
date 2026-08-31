@@ -111,6 +111,23 @@ func TestRender_GeneratorDestinationsUnreachable_Golden(t *testing.T) {
 	tuitest.RequireGolden(t, []byte(out))
 }
 
+// ── 3d. FormaGeneratorBoundToSetOnceFieldError ────────────────────────────────
+
+func TestRender_GeneratorBoundToSetOnceField_Golden(t *testing.T) {
+	err := &apimodel.ErrorResponse[apimodel.FormaGeneratorBoundToSetOnceFieldError]{
+		ErrorType: apimodel.GeneratorBoundToSetOnceField,
+		Data: apimodel.FormaGeneratorBoundToSetOnceFieldError{
+			Fields: []apimodel.SetOnceGeneratorField{
+				{GeneratorLabel: "db-password", GeneratorStack: "app", Stack: "web", Label: "api", Type: "AWS::S3::Bucket", Field: "DbPassword"},
+				{GeneratorLabel: "db-password", GeneratorStack: "app", Stack: "jobs", Label: "worker", Type: "AWS::ECS::TaskDefinition", Field: "ContainerDefinitions.0.Environment.1.Value"},
+			},
+		},
+	}
+	out, rerr := Render(err)
+	require.NoError(t, rerr)
+	tuitest.RequireGolden(t, []byte(out))
+}
+
 // ── 4. FormaPatchRejectedError ────────────────────────────────────────────────
 
 func TestRender_PatchRejected_Golden(t *testing.T) {

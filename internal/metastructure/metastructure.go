@@ -2584,6 +2584,15 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 			drawGeneratorUpdates, liveDestinations, resourceUpdates); err != nil {
 			return nil, err
 		}
+
+		// A draw that CAN reach every destination can still be a draw nothing
+		// downstream will accept. This runs after the reach refusal so the
+		// graph it walks is the settled one: every live destination of a
+		// drawing generator is either planned or already refused above.
+		if err := refuseSetOnceGeneratorFields(
+			drawGeneratorUpdates, liveDestinations, resourceUpdates, ds); err != nil {
+			return nil, err
+		}
 	}
 
 	fc := forma_command.NewFormaCommand(

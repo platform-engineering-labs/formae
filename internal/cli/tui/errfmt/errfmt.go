@@ -104,6 +104,14 @@ func (r *renderer) render(err error) (string, error) {
 		}
 	}
 
+	if errResp, ok := err.(*apimodel.ErrorResponse[apimodel.FormaGeneratorBoundToSetOnceFieldError]); ok {
+		var e error
+		msg, e = r.renderGeneratorBoundToSetOnceField(&errResp.Data)
+		if e != nil {
+			return "", e
+		}
+	}
+
 	if errResp, ok := err.(*apimodel.ErrorResponse[apimodel.FormaPatchRejectedError]); ok {
 		var e error
 		msg, e = r.renderPatchRejected(&errResp.Data)
@@ -292,6 +300,26 @@ func (r *renderer) renderGeneratorDestinationsUnreachable(data *apimodel.FormaGe
 	}
 	b.WriteString("\n")
 	b.WriteString(r.warning("A generated value is never recoverable once the command that drew it ends, so apply every stack that binds the generator in one command.\n"))
+	return b.String(), nil
+}
+
+// renderGeneratorBoundToSetOnceField formats
+// FormaGeneratorBoundToSetOnceFieldError as an indented list of the fields
+// that will not accept the value the generator is about to draw, naming each
+// field so the operator knows what to edit.
+func (r *renderer) renderGeneratorBoundToSetOnceField(data *apimodel.FormaGeneratorBoundToSetOnceFieldError) (string, error) {
+	var b strings.Builder
+	_, _ = fmt.Fprintln(&b, r.error("forma rejected because a generator must draw a new value and a field it reaches will not accept one:"))
+	for _, field := range data.Fields {
+		_, _ = fmt.Fprintf(&b, "  %s%s\n", r.subtle("field "), field.Field)
+		_, _ = fmt.Fprintf(&b, "    %s%s\n", r.subtle("on "), field.Label)
+		_, _ = fmt.Fprintf(&b, "    %s%s\n", r.subtle("of type "), field.Type)
+		_, _ = fmt.Fprintf(&b, "    %s%s\n", r.subtle("from stack "), field.Stack)
+		_, _ = fmt.Fprintf(&b, "    %s%s%s%s\n", r.subtle("reached from generator "), field.GeneratorLabel,
+			r.subtle(" in stack "), field.GeneratorStack)
+	}
+	b.WriteString("\n")
+	b.WriteString(r.warning("A setOnce field keeps the value it was created with, so a drawn credential would move at the generator and stay put here. Drop setOnce from these fields, or stop routing the generator through them.\n"))
 	return b.String(), nil
 }
 

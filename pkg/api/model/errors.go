@@ -38,6 +38,7 @@ const (
 	TargetHasDependents              APIError = "TargetHasDependents"
 	ResourceHasDependents            APIError = "ResourceHasDependents"
 	GeneratorDestinationsUnreachable APIError = "GeneratorDestinationsUnreachable"
+	GeneratorBoundToSetOnceField     APIError = "GeneratorBoundToSetOnceField"
 )
 
 type ErrorResponse[T any] struct {
@@ -149,6 +150,36 @@ type FormaGeneratorDestinationsUnreachableError struct {
 
 func (e FormaGeneratorDestinationsUnreachableError) Error() string {
 	return "forma rejected because a generator must draw a new value and the command does not reach every resource bound to it"
+}
+
+// SetOnceGeneratorField names one field in a drawing generator's reachable
+// graph whose value strategy is SetOnce. GeneratorLabel and GeneratorStack
+// identify the generator; Stack, Label and Type locate the resource; Field is
+// the property path on it, which is the thing the operator has to edit.
+type SetOnceGeneratorField struct {
+	GeneratorLabel string `json:"GeneratorLabel"`
+	GeneratorStack string `json:"GeneratorStack"`
+	Stack          string `json:"Stack"`
+	Label          string `json:"Label"`
+	Type           string `json:"Type"`
+	Field          string `json:"Field"`
+}
+
+// FormaGeneratorBoundToSetOnceFieldError refuses an apply that would draw a
+// generator's value into a field whose strategy is SetOnce.
+//
+// A generator exists to move a credential. A SetOnce field is one whose value
+// is written once and never updated afterwards. The two together are
+// contradictory by construction: the credential moves at the generator and
+// stays put at the field, and no later apply can level them, because formae
+// keeps a digest of a drawn value rather than the value. Nothing fails while
+// that happens, which is what makes it worth refusing rather than reporting.
+type FormaGeneratorBoundToSetOnceFieldError struct {
+	Fields []SetOnceGeneratorField `json:"Fields"`
+}
+
+func (e FormaGeneratorBoundToSetOnceFieldError) Error() string {
+	return "forma rejected because a generator must draw a new value and a field it reaches will not accept one"
 }
 
 type TargetAlreadyExistsError struct {

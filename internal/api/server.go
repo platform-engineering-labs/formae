@@ -823,6 +823,11 @@ func mapError(c echo.Context, err error) error {
 		return apiError(c, http.StatusUnprocessableEntity, apimodel.GeneratorDestinationsUnreachable, unreachableDestinationsError)
 	}
 
+	var setOnceGeneratorFieldError apimodel.FormaGeneratorBoundToSetOnceFieldError
+	if errors.As(err, &setOnceGeneratorFieldError) {
+		return apiError(c, http.StatusUnprocessableEntity, apimodel.GeneratorBoundToSetOnceField, setOnceGeneratorFieldError)
+	}
+
 	var targetExistsError apimodel.TargetAlreadyExistsError
 	if errors.As(err, &targetExistsError) {
 		return apiError(c, http.StatusConflict, apimodel.TargetAlreadyExists, targetExistsError)
