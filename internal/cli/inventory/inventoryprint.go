@@ -54,6 +54,13 @@ func renderInventoryStacks(th *theme.Theme, stacks []*pkgmodel.Stack, now time.T
 	return inventoryview.RenderStacks(th, stacks, now, maxResults, width)
 }
 
+// renderInventoryGenerators renders the generators table for non-TTY human
+// output. now is injected so callers can pass time.Now() (or a fixed time in
+// tests): the derived LastRotated column is rendered relative to it.
+func renderInventoryGenerators(th *theme.Theme, generators []apimodel.GeneratorInventoryItem, now time.Time, maxResults, width int) string {
+	return inventoryview.RenderGenerators(th, generators, now, maxResults, width)
+}
+
 // renderInventoryPolicies renders the policies table for non-TTY human output.
 func renderInventoryPolicies(th *theme.Theme, policies []apimodel.PolicyInventoryItem, maxResults, width int) string {
 	return inventoryview.RenderPolicies(th, policies, maxResults, width)

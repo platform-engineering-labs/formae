@@ -59,6 +59,10 @@ func renderDetailedList(th *theme.Theme, cmds []apimodel.Command, width int, now
 		sb.WriteString(renderCommandHeader(th, c, width, now))
 		// Resource groups
 		sb.WriteString(statuswatch.RenderDetailTable(th, c, width, now))
+		// Generator work. The status watch TUI's group engine does not carry a
+		// generator kind, so this section is rendered here rather than inherited
+		// from RenderDetailTable.
+		sb.WriteString(renderGeneratorSection(th, c, width))
 	}
 	return sb.String()
 }

@@ -361,17 +361,17 @@ func TestModel_TabCycleWrap(t *testing.T) {
 	var mm tea.Model = m
 	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
 
-	// Jump to tab 4 (Policies, index 3).
-	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
-	assert.Equal(t, TabPolicies, mm.(Model).active, "pressing 4 must activate Policies tab")
+	// Jump to tab 5 (Generators, the last tab).
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'5'}})
+	assert.Equal(t, TabGenerators, mm.(Model).active, "pressing 5 must activate Generators tab")
 
 	// Press tab to cycle forward → should wrap to Resources (index 0).
 	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyTab})
 	assert.Equal(t, TabResources, mm.(Model).active, "tab from last tab must wrap to Resources")
 
-	// Press shift+tab from Resources → should wrap to Policies.
+	// Press shift+tab from Resources → should wrap to the last tab.
 	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
-	assert.Equal(t, TabPolicies, mm.(Model).active, "shift+tab from first tab must wrap to Policies")
+	assert.Equal(t, TabGenerators, mm.(Model).active, "shift+tab from first tab must wrap to Generators")
 }
 
 // ---------------------------------------------------------------------------
@@ -436,7 +436,7 @@ func TestGolden_InventoryTargetsTab(t *testing.T) {
 	tuitest.RequireGolden(t, []byte(mm.(Model).View()))
 }
 
-// TestGolden_InventoryTabCycleWrap: from Policies (press "4" then "tab") → Resources active.
+// TestGolden_InventoryTabCycleWrap: from the last tab (press "5" then "tab") → Resources active.
 func TestGolden_InventoryTabCycleWrap(t *testing.T) {
 	fc := buildFixtureClientFull()
 	opts := Options{
@@ -449,8 +449,8 @@ func TestGolden_InventoryTabCycleWrap(t *testing.T) {
 	// Load resources.
 	rows := resourceRowsFromForma(fc.forma)
 	mm, _ = mm.Update(tabLoadedMsg{tab: TabResources, rows: rows})
-	// Jump to Policies tab.
-	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
+	// Jump to the last tab.
+	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'5'}})
 	// Tab-cycle back to Resources.
 	mm, _ = mm.Update(tea.KeyMsg{Type: tea.KeyTab})
 	// Resources should be active and still loaded.

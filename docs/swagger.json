@@ -364,6 +364,41 @@
                 }
             }
         },
+        "/generators": {
+            "get": {
+                "description": "Retrieves all live generators with their cadence, the instant of their last committed rotation, and the resources bound to them",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "generators"
+                ],
+                "summary": "List generators",
+                "responses": {
+                    "200": {
+                        "description": "OK: List of generators.",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/model.GeneratorInventoryItem"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found: No generators found.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/health": {
             "get": {
                 "description": "A simple health check endpoint to verify that the API server is running.",
@@ -1107,6 +1142,52 @@
                     "items": {
                         "$ref": "#/definitions/model.Target"
                     }
+                }
+            }
+        },
+        "model.GeneratorDestination": {
+            "type": "object",
+            "properties": {
+                "ResourceLabel": {
+                    "type": "string"
+                },
+                "StackLabel": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.GeneratorInventoryItem": {
+            "type": "object",
+            "properties": {
+                "Config": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "Destinations": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.GeneratorDestination"
+                    }
+                },
+                "EverySeconds": {
+                    "type": "integer"
+                },
+                "GenerationID": {
+                    "type": "string"
+                },
+                "Label": {
+                    "type": "string"
+                },
+                "LastRotatedAt": {
+                    "type": "string"
+                },
+                "Stack": {
+                    "type": "string"
+                },
+                "Type": {
+                    "type": "string"
                 }
             }
         },

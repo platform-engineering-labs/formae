@@ -48,6 +48,20 @@ func OperationColor(p theme.Palette, op string) lipgloss.AdaptiveColor {
 	return p.TextPrimary
 }
 
+// noRotationStatement is the positive statement a plan makes when a generator
+// is in scope and none of them will draw.
+//
+// Rotation is unattended credential mutation, so "will this apply turn a live
+// secret over" is the question an operator answers the confirmation prompt
+// with. A prompt that is silent both when nothing rotates and when something
+// does answers it for neither, which is the defect the rotate clause fixed for
+// the affirmative case; this is the same fix for the negative one.
+//
+// It is stated only when the plan actually carries generator work. An apply
+// that touches no generator has nothing to reassure anyone about, and a
+// sentence about rotation on every S3 bucket apply is noise.
+const noRotationStatement = "No generator will rotate."
+
 // PromptForOperations returns a human-readable prompt summarising the
 // operations that will be performed by cmd, followed by a confirmation
 // question. Returns "" when there is nothing to do. th supplies the active
@@ -61,6 +75,11 @@ func PromptForOperations(th *theme.Theme, cmd *apimodel.Command) string {
 	summary := operationSummary(th, tally)
 	if summary == "" {
 		return ""
+	}
+
+	if tally.generatorsInScope() && tally.generatorDraws == 0 {
+		dimSt := lipgloss.NewStyle().Foreground(th.Palette.TextSubtle)
+		summary += " " + dimSt.Render(noRotationStatement)
 	}
 
 	return summary + "\n\nDo you want to continue?"
@@ -89,6 +108,17 @@ type opTally struct {
 // empty reports whether the command performs no operation at all.
 func (t opTally) empty() bool {
 	return t == opTally{}
+}
+
+// generatorsInScope reports whether the plan carries any generator work. It is
+// what gates noRotationStatement: a plan with no generator in it makes no claim
+// about rotation either way.
+//
+// A delete is not counted. Removing a generator is not a plan that leaves a
+// live credential in place, so "nothing will rotate" is not the reassurance
+// anyone is looking for there.
+func (t opTally) generatorsInScope() bool {
+	return t.generatorCreates > 0 || t.generatorUpdates > 0 || t.generatorDraws > 0
 }
 
 // analyzeCommands counts each operation type in cmd, grouping grouped

@@ -157,6 +157,20 @@ func RenderStacks(th *theme.Theme, stacks []*pkgmodel.Stack, now time.Time, maxR
 	return renderTable(th, spec.columns, rows, spec.styleCell, spec.entity, maxResults, width)
 }
 
+// RenderGenerators renders a list of generators as a table string for non-TTY
+// output. now is injected for deterministic output (the derived LastRotated is
+// rendered relative to it).
+func RenderGenerators(th *theme.Theme, generators []apimodel.GeneratorInventoryItem, now time.Time, maxResults, width int) string {
+	specs := newSpecs(nil)
+	spec := specs[TabGenerators]
+
+	rows := make([]row, 0, len(generators))
+	for _, g := range generators {
+		rows = append(rows, generatorRow(g, now))
+	}
+	return renderTable(th, spec.columns, rows, spec.styleCell, spec.entity, maxResults, width)
+}
+
 // RenderPolicies renders a list of policies as a table string for non-TTY output.
 func RenderPolicies(th *theme.Theme, policies []apimodel.PolicyInventoryItem, maxResults, width int) string {
 	specs := newSpecs(nil)
