@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
-//go:build unit
+//go:build unit || integration
 
 package workflow_tests_local
 
