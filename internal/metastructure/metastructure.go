@@ -1102,6 +1102,28 @@ func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.Forma
 		}
 	}
 
+	// The generators owned by the stacks this destroy empties. They must be
+	// removed BEFORE the changeset runs: DeleteGenerator resolves the stack
+	// label to a stack id, and cleanupEmptyStacks tombstones the stack as soon
+	// as its last resource is gone, after which the delete would find no stack
+	// and silently do nothing. No StackIDMap is needed — a delete is addressed
+	// by label and stack, the same way the policy deletes above are.
+	if len(fa.GeneratorUpdates) > 0 {
+		_, err = m.callActor(
+			gen.ProcessID{Name: actornames.ResourcePersister, Node: m.Node.Name()},
+			generator_update.PersistGeneratorUpdates{
+				GeneratorUpdates: fa.GeneratorUpdates,
+				CommandID:        fa.ID,
+				StackIDMap:       nil,
+			},
+		)
+		if err != nil {
+			slog.Error("Failed to persist generator updates", "error", err)
+			return nil, fmt.Errorf("failed to persist generator updates: %w", err)
+		}
+		m.Node.Log().Debug("Successfully persisted generator updates count=%d", len(fa.GeneratorUpdates))
+	}
+
 	if len(fa.ResourceUpdates) > 0 || len(fa.TargetUpdates) > 0 {
 		synth, synthErr := target_update.SynthesizeResolveTargetUpdates(
 			resource_update.ReferencedTargetLabels(fa.ResourceUpdates),
@@ -2628,6 +2650,19 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 		return nil, err
 	}
 
+	// A destroy plans no generator work of its own — the generator diff has
+	// nothing to diff against, since a destroy's forma is a list of rows to
+	// remove — so the generators its stacks own are derived from the resource
+	// deletes instead. Doing it here, beside the reconcile-driven deletes the
+	// diff produced, is what lets one check below judge both arms.
+	if command == pkgmodel.CommandDestroy {
+		destroyGeneratorDeletes, err := generatorDeletesForDestroy(resourceUpdates, ds)
+		if err != nil {
+			return nil, err
+		}
+		generatorUpdates = append(generatorUpdates, destroyGeneratorDeletes...)
+	}
+
 	// The draws are derived from the DESTINATIONS that still need a value,
 	// not from the generator diff above: a generator whose spec is unchanged
 	// produces no GeneratorUpdate, yet a resource newly bound to it still
@@ -2687,6 +2722,33 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 			drawGeneratorUpdates, liveDestinations, resourceUpdates, ds); err != nil {
 			return nil, err
 		}
+	}
+
+	// Default to abort on a generator delete with dependents: a resource left
+	// bound to a deleted generator can never be given a value again, because
+	// formae keeps a hash of a drawn value and never the value. Unless the
+	// command carries on-dependents=cascade, reject it and name the
+	// dependents, mirroring the target and resource cascade-abort defaults
+	// above.
+	//
+	// A destroy's SIMULATION is let through carrying the cascade, exactly as
+	// those two are, so the CLI can render what would go and elevate to
+	// cascade on the operator's confirmation. An apply's is not: --on-dependents
+	// is a destroy flag, so there is no confirmation that could make the same
+	// plan applicable, and rendering a plan that can never be applied is worse
+	// than a refusal naming what is in the way.
+	generatorCascade, generatorDependents, err := planGeneratorDeleteCascade(
+		generatorUpdates, resourceUpdates, existingTargets, source, ds)
+	if err != nil {
+		return nil, err
+	}
+	if len(generatorDependents) > 0 {
+		elevated := formaCommandConfig.OnDependents == "cascade"
+		surfacing := formaCommandConfig.Simulate && command == pkgmodel.CommandDestroy
+		if !elevated && !surfacing {
+			return nil, apimodel.FormaGeneratorHasDependentsError{Dependents: generatorDependents}
+		}
+		resourceUpdates = append(resourceUpdates, generatorCascade...)
 	}
 
 	fc := forma_command.NewFormaCommand(

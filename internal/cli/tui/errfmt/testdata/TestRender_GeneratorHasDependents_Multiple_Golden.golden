@@ -1,0 +1,10 @@
+[38;2;248;113;113mthis delete would leave the following resources bound to a deleted generator:[0m
+[38;2;248;113;113m[0m                                                                             
+[38;2;248;113;113m[0m                                                                               - api-secret (AWS::SecretsManager::Secret, stack web; bound to generator db-password in stack platform)
+  - worker-secret (AWS::SecretsManager::Secret, stack jobs; bound to generator db-password in stack platform)
+
+[38;2;181;181;91mA generated value is never recoverable once the generator is gone, so a resource left[0m
+[38;2;181;181;91mbound to one can never be given a value again.[0m                                       
+[38;2;181;181;91m[0m                                                                                     
+[38;2;181;181;91m[0m                                                                                     To proceed and tear the bound resource(s) down as well, re-run with
+--on-dependents=cascade. To keep them, stop them binding this generator first.

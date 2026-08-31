@@ -412,6 +412,13 @@ func (c *Client) parseSubmitCommandErrorResponse(body io.ReadCloser) (*apimodel.
 		}
 		return nil, &errResp
 
+	case apimodel.GeneratorHasDependents:
+		var errResp apimodel.ErrorResponse[apimodel.FormaGeneratorHasDependentsError]
+		if err := json.Unmarshal(bodyBytes, &errResp); err != nil {
+			return nil, fmt.Errorf("failed to parse GeneratorHasDependents error: %w", err)
+		}
+		return nil, &errResp
+
 	case apimodel.RequiredFieldMissingOnCreate:
 		var errResp apimodel.ErrorResponse[apimodel.RequiredFieldMissingOnCreateError]
 		if err := json.Unmarshal(bodyBytes, &errResp); err != nil {

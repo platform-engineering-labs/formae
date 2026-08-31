@@ -49,11 +49,13 @@ func NewGeneratorUpdateGenerator(ds GeneratorDatastore) *GeneratorUpdateGenerato
 // translation saw, but defensive regardless) keeps GetID()=="", and
 // CreateGenerator mints its own KSUID exactly as it always has.
 func (gg *GeneratorUpdateGenerator) GenerateGeneratorUpdates(forma *pkgmodel.Forma, command pkgmodel.Command, mode pkgmodel.FormaApplyMode, genKeyToKsuid map[pkgmodel.GeneratorKey]string) ([]GeneratorUpdate, error) {
-	// A generator has no standalone form: it is always owned by exactly one
-	// stack, and it is deleted implicitly when that stack is destroyed —
-	// mirroring how an inline policy is handled on Destroy, and unlike a
-	// standalone policy, there is nothing left for a destroy command to do
-	// here.
+	// A destroy's forma is a list of rows to remove, not a desired state, so
+	// there is nothing here to diff it against: a generator it takes with it
+	// is one owned by a stack it empties, which is a property of the resource
+	// deletes rather than of Forma.Generators.
+	// metastructure.generatorDeletesForDestroy plans those, and the check
+	// beside it judges them and the reconcile-driven deletes below on the same
+	// terms.
 	if command == pkgmodel.CommandDestroy {
 		return nil, nil
 	}
