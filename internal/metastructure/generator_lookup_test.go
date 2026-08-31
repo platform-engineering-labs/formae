@@ -62,7 +62,7 @@ func TestGeneratorLookupForResume_ResolvesADrawnGeneratorOnAnotherStack(t *testi
 	require.NoError(t, ds.AdvanceGeneration(ksuid, "generation-1",
 		json.RawMessage(`{"Type":"password","Label":"db-password","Stack":"secrets","Length":24}`)))
 
-	lookup := generatorLookupForResume(ds)
+	lookup := generatorLookup(ds)
 	require.NotNil(t, lookup)
 
 	generator, err := lookup(ksuid)
@@ -90,7 +90,7 @@ func TestGeneratorLookupForResume_ReturnsTheCurrentSpecNotTheGenerationsSpec(t *
 	}, "cmd-edit")
 	require.NoError(t, err)
 
-	lookup := generatorLookupForResume(ds)
+	lookup := generatorLookup(ds)
 	generator, err := lookup(ksuid)
 	require.NoError(t, err)
 	require.NotNil(t, generator)
@@ -111,7 +111,7 @@ func TestGeneratorLookupForResume_FindsANeverDrawnGeneratorOnItsOwnStack(t *test
 	require.NoError(t, err)
 	require.Empty(t, identity.GenerationID, "precondition: nothing has been drawn")
 
-	lookup := generatorLookupForResume(ds)
+	lookup := generatorLookup(ds)
 	generator, err := lookup(ksuid)
 	require.NoError(t, err)
 	require.NotNil(t, generator, "a never-drawn generator must still be found")
@@ -129,7 +129,7 @@ func TestGeneratorLookupForResume_FindsANeverDrawnGeneratorOnAnotherStack(t *tes
 	_, err := ds.CreateStack(&pkgmodel.Stack{Label: "app"}, "cmd-stack")
 	require.NoError(t, err)
 
-	lookup := generatorLookupForResume(ds)
+	lookup := generatorLookup(ds)
 	generator, err := lookup(ksuid)
 	require.NoError(t, err)
 	require.NotNil(t, generator, "a never-drawn generator on another stack must be found by KSUID")
@@ -144,7 +144,7 @@ func TestGeneratorLookupForResume_UnknownKsuidResolvesToNothing(t *testing.T) {
 	ds := lookupTestDatastore(t)
 	createGeneratorOn(t, ds, "secrets", "db-password", 24)
 
-	lookup := generatorLookupForResume(ds)
+	lookup := generatorLookup(ds)
 	generator, err := lookup("2ZqXo0nEXAMPLEksuidNOTREAL0")
 	require.NoError(t, err)
 	assert.Nil(t, generator)

@@ -376,7 +376,7 @@ func TestReplaceKSUIDs_NestedRefInArrays(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := replaceKSUIDs(tt.inputJSON, tt.ksuidToTriplet)
+			result := replaceKSUIDs(tt.inputJSON, tt.ksuidToTriplet, nil)
 
 			for _, want := range tt.wantContains {
 				assert.Contains(t, result, want, "result should contain %s", want)
@@ -518,7 +518,7 @@ func TestReplaceKSUIDs_RewritesEmbeddedSpan(t *testing.T) {
 
 	out := replaceKSUIDs(string(in), map[string]pkgmodel.TripletKey{
 		ksuid: {Stack: "default", Label: "kvs", Type: "AWS::CloudFront::KeyValueStore"},
-	})
+	}, nil)
 
 	tmplOut := gjson.Get(out, "functionCode.$template").String()
 	spans, err := pkgmodel.ScanEmbedSpans(tmplOut)
@@ -545,8 +545,8 @@ func TestReplaceKSUIDs_RewritesEmbeddedSpan_Idempotent(t *testing.T) {
 		ksuid: {Stack: "default", Label: "kvs", Type: "AWS::CloudFront::KeyValueStore"},
 	}
 
-	out1 := replaceKSUIDs(string(in), ksuidToTriplet)
-	out2 := replaceKSUIDs(out1, ksuidToTriplet)
+	out1 := replaceKSUIDs(string(in), ksuidToTriplet, nil)
+	out2 := replaceKSUIDs(out1, ksuidToTriplet, nil)
 	assert.Equal(t, out1, out2, "replaceKSUIDs should be idempotent")
 }
 
@@ -571,7 +571,7 @@ func TestReplaceKSUIDs_RewritesMultipleEmbeddedSpans(t *testing.T) {
 	out := replaceKSUIDs(string(in), map[string]pkgmodel.TripletKey{
 		ksuid1: {Stack: "default", Label: "bucket", Type: "AWS::S3::Bucket"},
 		ksuid2: {Stack: "default", Label: "queue", Type: "AWS::SQS::Queue"},
-	})
+	}, nil)
 
 	tmplOut := gjson.Get(out, "code.$template").String()
 	spans, err := pkgmodel.ScanEmbedSpans(tmplOut)
