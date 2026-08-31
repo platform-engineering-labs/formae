@@ -14,6 +14,7 @@ import (
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 
+	"github.com/platform-engineering-labs/formae/internal/metastructure/pathkey"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/transformations"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
@@ -546,12 +547,17 @@ func newPropertyResolverFromResource(resource pkgmodel.Resource) *propertyResolv
 	return resolver
 }
 
-// Helper function for building paths
+// buildPath appends one literal JSON map key or array index to a property path.
+// The key is escaped as it is appended, so the path names the key itself rather
+// than a nested tree: the resulting path is the ref's TargetPath, and serves as
+// its identity, its gjson read path, its sjson write path and the subject of
+// isTargetPath, all of which have to agree on which key is meant.
 func buildPath(currentPath, key string) string {
+	escaped := pathkey.Escape(key)
 	if currentPath == "" {
-		return key
+		return escaped
 	}
-	return currentPath + "." + key
+	return currentPath + "." + escaped
 }
 
 func (pr *propertyResolver) marshalWithLogging(value any, context string, path string) ([]byte, error) {
