@@ -23,7 +23,8 @@ func (m *Metastructure) ExtractResources(query string) (*pkgmodel.Forma, error) 
 		return nil, err
 	}
 
-	if err := m.reverseTranslateKSUIDsToTriplets(resources); err != nil {
+	generators, err := m.reverseTranslateKSUIDsToTriplets(resources)
+	if err != nil {
 		slog.Error("Failed to reverse translate KSUIDs to triplets", "error", err)
 		return nil, err
 	}
@@ -45,6 +46,21 @@ func (m *Metastructure) ExtractResources(query string) (*pkgmodel.Forma, error) 
 				uniqueStacks[resource.Stack] = struct{}{}
 				stackLabels = append(stackLabels, resource.Stack)
 			}
+		}
+	}
+
+	// A generator belongs to one stack and is meant to be bound from others,
+	// so the stack owning one the extracted resources reference need not hold
+	// any resource the query matched. Its stack is emitted alongside theirs,
+	// or the generator declaration names a stack the file does not declare.
+	for _, generator := range generators {
+		stack := generator.GetStack()
+		if stack == "" {
+			continue
+		}
+		if _, exists := uniqueStacks[stack]; !exists {
+			uniqueStacks[stack] = struct{}{}
+			stackLabels = append(stackLabels, stack)
 		}
 	}
 
@@ -128,6 +144,20 @@ func (m *Metastructure) ExtractResources(query string) (*pkgmodel.Forma, error) 
 				continue
 			}
 			forma.Policies = append(forma.Policies, policyJSON)
+		}
+	}
+
+	// A forma that references a generator has to declare it, or the file it is
+	// written to cannot be applied on its own.
+	if len(generators) > 0 {
+		forma.Generators = make([]json.RawMessage, 0, len(generators))
+		for _, generator := range generators {
+			generatorJSON, err := json.Marshal(generator)
+			if err != nil {
+				slog.Error("Failed to marshal generator", "label", generator.GetLabel(), "error", err)
+				continue
+			}
+			forma.Generators = append(forma.Generators, generatorJSON)
 		}
 	}
 

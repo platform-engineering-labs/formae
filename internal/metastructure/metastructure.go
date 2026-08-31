@@ -1385,7 +1385,16 @@ func (m *Metastructure) ExtractPolicies() ([]apimodel.PolicyInventoryItem, error
 	return items, nil
 }
 
-func (m *Metastructure) reverseTranslateKSUIDsToTriplets(resources []*pkgmodel.Resource) error {
+// reverseTranslateKSUIDsToTriplets rewrites the internal identifiers a stored
+// property document names things by back into the names an author writes them
+// with: a $ref's resource KSUID into the resource's triplet, and a $gen's
+// generator KSUID into the generator's label and stack.
+//
+// The generators the $gen envelopes named are returned, because a forma that
+// references a generator has to declare it and only this pass knows which
+// ones were referenced. A caller with nowhere to put a declaration ignores
+// them; the envelopes are authored either way.
+func (m *Metastructure) reverseTranslateKSUIDsToTriplets(resources []*pkgmodel.Resource) ([]pkgmodel.Generator, error) {
 	ksuidSet := make(map[string]struct{})
 	for _, resource := range resources {
 		if resource.Properties != nil {
@@ -1395,33 +1404,117 @@ func (m *Metastructure) reverseTranslateKSUIDsToTriplets(resources []*pkgmodel.R
 			extractKSUIDs(string(resource.ReadOnlyProperties), ksuidSet)
 		}
 	}
+	generatorKsuidSet := genEnvelopeGeneratorKSUIDs(resources)
 
-	if len(ksuidSet) == 0 {
-		return nil
+	if len(ksuidSet) == 0 && len(generatorKsuidSet) == 0 {
+		return nil, nil
 	}
 
-	ksuids := make([]string, 0, len(ksuidSet))
-	for ksuid := range ksuidSet {
-		ksuids = append(ksuids, ksuid)
+	ksuidToTriplet := make(map[string]pkgmodel.TripletKey)
+	if len(ksuidSet) > 0 {
+		ksuids := make([]string, 0, len(ksuidSet))
+		for ksuid := range ksuidSet {
+			ksuids = append(ksuids, ksuid)
+		}
+
+		var err error
+		ksuidToTriplet, err = m.Datastore.BatchGetTripletsByKSUIDs(ksuids)
+		if err != nil {
+			return nil, fmt.Errorf("failed to batch lookup triplets: %w", err)
+		}
 	}
 
-	ksuidToTriplet, err := m.Datastore.BatchGetTripletsByKSUIDs(ksuids)
+	generators, generatorKeyByKsuid, err := m.resolveReferencedGenerators(generatorKsuidSet)
 	if err != nil {
-		return fmt.Errorf("failed to batch lookup triplets: %w", err)
+		return nil, err
 	}
 
 	for i, resource := range resources {
 		if resource.Properties != nil {
-			translated := replaceKSUIDs(string(resource.Properties), ksuidToTriplet)
+			translated := replaceKSUIDs(string(resource.Properties), ksuidToTriplet, generatorKeyByKsuid)
 			resources[i].Properties = json.RawMessage(translated)
 		}
 		if resource.ReadOnlyProperties != nil {
-			translated := replaceKSUIDs(string(resource.ReadOnlyProperties), ksuidToTriplet)
+			translated := replaceKSUIDs(string(resource.ReadOnlyProperties), ksuidToTriplet, generatorKeyByKsuid)
 			resources[i].ReadOnlyProperties = json.RawMessage(translated)
 		}
 	}
 
-	return nil
+	return generators, nil
+}
+
+// genEnvelopeGeneratorKSUIDs collects the generator KSUID of every translated
+// $gen envelope in the resources' property documents.
+//
+// Only the structured envelopes are collected. A $gen framed inside an
+// interpolated string is not one of them: an opaque value assembled into a
+// larger string can no longer be redacted, so validateNoOpaqueEmbed refuses
+// such a forma at plan time and no resource row can hold one.
+func genEnvelopeGeneratorKSUIDs(resources []*pkgmodel.Resource) map[string]struct{} {
+	ksuids := make(map[string]struct{})
+	collect := func(document json.RawMessage) {
+		if len(document) == 0 {
+			return
+		}
+		for _, genObject := range pkgmodel.FindGenObjectsFromProperties(document) {
+			// An authored envelope names its generator by label and stack and
+			// carries no KSUID, so it contributes nothing to resolve.
+			if genObject.Generator != "" {
+				ksuids[genObject.Generator] = struct{}{}
+			}
+		}
+	}
+	for _, resource := range resources {
+		collect(resource.Properties)
+		collect(resource.ReadOnlyProperties)
+	}
+	return ksuids
+}
+
+// resolveReferencedGenerators resolves each generator KSUID to the live
+// generator holding it. It returns the generators themselves, so an extracted
+// forma can declare them, and the label/stack pair each KSUID stands for, so
+// the envelopes naming it can be written back in their authored shape.
+//
+// The generators are ordered by stack and then label, so the same extract
+// emits the same declarations every time.
+//
+// A KSUID that reaches no live generator is left out of both: there is no
+// label to name it by, and nothing to declare.
+func (m *Metastructure) resolveReferencedGenerators(
+	ksuids map[string]struct{},
+) ([]pkgmodel.Generator, map[string]pkgmodel.GeneratorKey, error) {
+	if len(ksuids) == 0 {
+		return nil, nil, nil
+	}
+
+	lookup := generatorLookup(m.Datastore)
+	keyByKsuid := make(map[string]pkgmodel.GeneratorKey, len(ksuids))
+	generators := make([]pkgmodel.Generator, 0, len(ksuids))
+	for ksuid := range ksuids {
+		generator, err := lookup(ksuid)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to resolve generator %s: %w", ksuid, err)
+		}
+		if generator == nil {
+			slog.Warn("A generator-bound property names a generator that no longer exists",
+				"generator", ksuid)
+			continue
+		}
+		keyByKsuid[ksuid] = pkgmodel.GeneratorKey{
+			Label: generator.GetLabel(),
+			Stack: generator.GetStack(),
+		}
+		generators = append(generators, generator)
+	}
+
+	slices.SortFunc(generators, func(a, b pkgmodel.Generator) int {
+		return cmp.Or(
+			cmp.Compare(a.GetStack(), b.GetStack()),
+			cmp.Compare(a.GetLabel(), b.GetLabel()),
+		)
+	})
+	return generators, keyByKsuid, nil
 }
 
 func (m *Metastructure) ListDrift(stack string) (*apimodel.ModifiedStack, error) {
@@ -1704,7 +1797,7 @@ func (m *Metastructure) ReRunIncompleteCommands() error {
 		// here unchanged and a credential the interrupted command never meant
 		// to touch is not rotated by the resume.
 		draws, drawErr := generator_update.SynthesizeDrawGeneratorUpdates(
-			pendingUpdates, nil, generatorLookupForResume(m.Datastore))
+			pendingUpdates, nil, generatorLookup(m.Datastore))
 		if drawErr != nil {
 			slog.Error("Failed to build changeset for incomplete forma command, skipping", "commandID", fa.ID, "error", drawErr)
 			continue
@@ -1773,9 +1866,10 @@ func generatorLookupByTranslation(
 	}
 }
 
-// generatorLookupForResume is the resume path's route to the same thing. The
-// translation map lived in the planning call's stack frame and is long gone,
-// and a $gen envelope that survived to the datastore carries only a KSUID.
+// generatorLookup is the route to the same thing for every caller that holds
+// only a KSUID: resuming a command, whose translation map lived in the
+// planning call's stack frame and is long gone, and extracting a stored
+// document, whose $gen envelopes have never carried anything else.
 //
 // The KSUID is enough. GeneratorIdentity has no Label or Stack field, but its
 // GenerationSpec IS the serialized generator the current generation was drawn
@@ -1794,7 +1888,7 @@ func generatorLookupByTranslation(
 // narrowing it leaves the destination refused at the provider boundary. The
 // index is built once, on the first miss, so the ordinary case pays nothing
 // for it.
-func generatorLookupForResume(ds datastore.Datastore) func(string) (pkgmodel.Generator, error) {
+func generatorLookup(ds datastore.Datastore) func(string) (pkgmodel.Generator, error) {
 	if ds == nil {
 		return nil
 	}
@@ -1856,7 +1950,7 @@ func generatorByKsuid(ksuid string, ds datastore.Datastore) (pkgmodel.Generator,
 // The whole inventory is walked because the KSUID is all there is to go on: a
 // generator's stack is not derivable from its destinations', and the
 // cross-stack binding is the case this exists to serve. It costs one stack
-// listing plus a load and an identity read per generator, once per resume
+// listing plus a load and an identity read per generator, once per lookup
 // that has such a generator, which is a rare path over a small table.
 //
 // The stack the row was found under is stamped on each generator, since that
@@ -2932,19 +3026,27 @@ func extractKSUIDs(jsonStr string, ksuidSet map[string]struct{}) {
 	})
 }
 
-// replaceKSUIDs recursively walks the JSON structure and replaces all $ref objects
-// (containing formae URIs) with $res objects (containing resolved resource metadata).
-//
-// This handles $ref only. A $gen envelope's bare $generator KSUID is not
-// reverse-translated here, and extractKSUIDs above does not even collect it
-// (it only looks at strings that parse as formae:// URIs). Resource rows do
-// persist $gen envelopes, so extraction carries the raw $generator KSUID
-// through into what it emits instead of an authorable generator declaration.
-func replaceKSUIDs(jsonStr string, ksuidToTriplet map[string]pkgmodel.TripletKey) string {
+// replaceKSUIDs recursively walks the JSON structure and replaces the internal
+// identifiers a stored document names things by with the names an author
+// writes: a $ref object (containing a formae URI) becomes a $res object
+// (containing resolved resource metadata), and a $gen envelope's generator
+// KSUID becomes the generator's label and stack.
+func replaceKSUIDs(
+	jsonStr string,
+	ksuidToTriplet map[string]pkgmodel.TripletKey,
+	generatorKeyByKsuid map[string]pkgmodel.GeneratorKey,
+) string {
 	var replace func(value any) any
 	replace = func(value any) any {
 		switch v := value.(type) {
 		case map[string]any:
+			// A $gen envelope is recognized before anything else: at rest it
+			// also carries $value, $visibility and $strategy, which is the
+			// shape of a recorded opaque value, and it must never be read as
+			// one.
+			if isGen, ok := v["$gen"].(bool); ok && isGen {
+				return authorGenEnvelope(v, generatorKeyByKsuid)
+			}
 			// Check if this is a $ref object that needs conversion
 			if ref, ok := v["$ref"].(string); ok {
 				formaeUri := pkgmodel.FormaeURI(ref)
@@ -3021,6 +3123,48 @@ func replaceKSUIDs(jsonStr string, ksuidToTriplet map[string]pkgmodel.TripletKey
 		return jsonStr
 	}
 	return string(result)
+}
+
+// authoredGenEnvelopeMembers are the members of a $gen envelope beyond the
+// $gen marker itself that a forma author writes. They are the fixed members
+// the PKL class formae.GeneratorOutput declares, and therefore the whole of
+// what an extracted envelope may carry. Everything else a stored envelope
+// holds — the $generator KSUID, the digest in $value, the $hashed marker, the
+// $resolvedFrom provenance and the $strategy — is agent-internal.
+var authoredGenEnvelopeMembers = []string{"$label", "$stack", "$output", "$visibility"}
+
+// authorGenEnvelope rewrites one $gen envelope into the shape an author wrote
+// it in: the generator named by label and stack, and none of the internal
+// parts translation and resolution added.
+//
+// An envelope that already names its generator by label and stack (one that
+// was never translated) passes through with those names intact, so the
+// rewrite is idempotent.
+//
+// A $generator KSUID that resolves to no live generator is kept. The envelope
+// is unauthorable either way, and the KSUID is then the only thing left that
+// says which generator it named. The internal members are dropped regardless:
+// none of them is authorable, and the digest must not reach a file the
+// operator commits.
+func authorGenEnvelope(envelope map[string]any, generatorKeyByKsuid map[string]pkgmodel.GeneratorKey) map[string]any {
+	authored := map[string]any{"$gen": true}
+	for _, member := range authoredGenEnvelopeMembers {
+		if value, ok := envelope[member]; ok {
+			authored[member] = value
+		}
+	}
+
+	ksuid, _ := envelope["$generator"].(string)
+	if ksuid == "" {
+		return authored
+	}
+	if key, ok := generatorKeyByKsuid[ksuid]; ok {
+		authored["$label"] = key.Label
+		authored["$stack"] = key.Stack
+		return authored
+	}
+	authored["$generator"] = ksuid
+	return authored
 }
 
 // rewriteEmbedSpans scans a $embed.$template string for framed RS<base64>US spans,
