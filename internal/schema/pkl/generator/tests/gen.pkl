@@ -324,6 +324,26 @@ local class MapThenAliasedUnionResource extends formae.Resource {
     target: Mapping<String, Any>|RefOrText
 }
 
+/// A member naming several envelope families at once: `formae.ValueSource`, the
+/// alias a field names in place of spelling those families out. Beside a literal
+/// and beside a map member, so that a sibling able to hold the map an envelope
+/// arrives as does not take it in the alias's place.
+@formae.ResourceHint
+local class TextOrValueSourceResource extends formae.Resource {
+    type = "FakePlugin::Union::TextOrValueSource"
+
+    @formae.FieldHint
+    target: (String|formae.ValueSource)?
+}
+
+@formae.ResourceHint
+local class MapThenValueSourceResource extends formae.Resource {
+    type = "FakePlugin::Union::MapThenValueSource"
+
+    @formae.FieldHint
+    target: (Mapping<String, Any>|formae.ValueSource)?
+}
+
 /// The shape a schema gives a field holding either a literal or a secret the
 /// agent recorded — the union a reference to another resource's secret arrives
 /// at.
@@ -1634,6 +1654,23 @@ facts {
         selectedMember(MapThenNestedRefResource, reference(null)) == "FakeResolvable" &&
         selectedMember(NestedRefThenMapResource, reference(null)) == "FakeResolvable" &&
         selectedMember(MapThenAliasedUnionResource, reference(null)) == "FakeResolvable"
+    }
+
+    ["A member naming several envelope families is a member of each of them"] {
+        // formae.ValueSource names four families at once, so the member holding
+        // it is the member of whichever of them an envelope belongs to.
+        selectedMember(TextOrValueSourceResource, reference(null)) == "FakeResolvable" &&
+        selectedMember(TextOrValueSourceResource, recordedValue(null)) == "FakeValue" &&
+        selectedMember(TextOrValueSourceResource, binding(null)) == "FakeGeneratorOutput"
+    }
+
+    ["A member naming several envelope families is preferred over a map member"] {
+        // A map member holds the very map an envelope arrives as, so an envelope
+        // reaches the member naming the alias only because that member is
+        // preferred over the map beside it.
+        selectedMember(MapThenValueSourceResource, reference(null)) == "FakeResolvable" &&
+        selectedMember(MapThenValueSourceResource, recordedValue(null)) == "FakeValue" &&
+        selectedMember(MapThenValueSourceResource, binding(null)) == "FakeGeneratorOutput"
     }
 
     ["A reference missing an optional part still selects the reference member over a map member"] {
