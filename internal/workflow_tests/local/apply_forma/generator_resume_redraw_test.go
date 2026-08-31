@@ -9,6 +9,7 @@ package workflow_tests_local
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 
+	"github.com/platform-engineering-labs/formae/internal/datastore"
 	dssqlite "github.com/platform-engineering-labs/formae/internal/datastore/sqlite"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
@@ -259,5 +261,125 @@ func TestApplyForma_GeneratorBoundSecret_ResumedCommandRedrawsForWhatItStillOwes
 		// Neither generation may survive anywhere durable.
 		assertNoPlaintextInResourceUpdates(t, m, cmd.ID, firstDraw)
 		assertNoPlaintextInResourceUpdates(t, m, cmd.ID, secondDraw)
+	})
+}
+
+// stalledGenerationDatastore holds a draw open at the exact point the
+// generation would become durable. A command interrupted there has its
+// generator's row created and no generation recorded at all, which is the
+// state a generator that has never once drawn is left in.
+type stalledGenerationDatastore struct {
+	datastore.Datastore
+	reached chan struct{}
+	once    sync.Once
+}
+
+func (d *stalledGenerationDatastore) AdvanceGeneration(_, _ string, _ json.RawMessage) error {
+	d.once.Do(func() { close(d.reached) })
+	// The node is force-stopped while this call is outstanding, after its
+	// datastore has been closed, so nothing this returns can reach a row. The
+	// wait is bounded only so the goroutine cannot outlive the test.
+	<-time.After(5 * time.Second)
+	return fmt.Errorf("the draw was interrupted before its generation was recorded")
+}
+
+// A generator belongs to one stack and is meant to be referenced from others.
+// When a command that binds a destination in one stack to a generator in
+// another is interrupted before the generator has ever drawn, the resume must
+// still reach that generator: the destination it still owes gets a freshly
+// drawn value and the command completes, rather than dispatching the envelope
+// naming the generator and being refused at the provider boundary.
+func TestApplyForma_GeneratorBoundSecret_ResumedCommandRedrawsForACrossStackGenerator(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		recorded := newRecordedCreates()
+		recording := &plugin.ResourcePluginOverrides{
+			Create: func(req *resource.CreateRequest) (*resource.CreateResult, error) {
+				recorded.record(req.Properties)
+				return nil, nil
+			},
+		}
+
+		cfg := test_helpers.NewTestMetastructureConfig()
+		cfg.Agent.Synchronization.Enabled = false
+		cfg.Agent.Datastore.DatastoreType = pkgmodel.SqliteDatastore
+		// "no-reset" keeps the file alive across the node restart.
+		cfg.Agent.Datastore.Sqlite = pkgmodel.SqliteConfig{FilePath: t.TempDir() + "/no-reset-cross-stack-resume.db"}
+
+		db, err := dssqlite.NewDatastoreSQLite(context.Background(), &cfg.Agent.Datastore, "test")
+		require.NoError(t, err)
+		stalled := &stalledGenerationDatastore{Datastore: db, reached: make(chan struct{})}
+
+		m, stop, err := test_helpers.NewTestMetastructureWithEverything(t, recording, stalled, cfg)
+		require.NoError(t, err)
+
+		id := util.NewID()
+		generatorStack := "gen-stack-" + id
+		destinationStack := "other-stack-" + id
+		forma := &pkgmodel.Forma{
+			Stacks:  []pkgmodel.Stack{{Label: generatorStack}, {Label: destinationStack}},
+			Targets: []pkgmodel.Target{{Label: "test-target", Namespace: "test-namespace"}},
+			Generators: []json.RawMessage{
+				passwordGeneratorFor(t, "db-password", generatorStack),
+			},
+			Resources: []pkgmodel.Resource{
+				crossStackGenBoundSecret(destinationStack, "beta", generatorStack, "db-password", "beta"),
+			},
+		}
+
+		_, err = m.ApplyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
+		require.NoError(t, err)
+
+		select {
+		case <-stalled.reached:
+		case <-time.After(15 * time.Second):
+			t.Fatal("the interrupted command should have reached the point of recording its generation")
+		}
+		require.Empty(t, recorded.valuesFor("beta"),
+			"the destination must not have been dispatched before the value it waits on exists")
+
+		// Crash the node with the draw still outstanding.
+		stop()
+
+		db, err = dssqlite.NewDatastoreSQLite(context.Background(), &cfg.Agent.Datastore, "test")
+		require.NoError(t, err)
+
+		generator, err := db.GetGeneratorIdentity("db-password", generatorStack)
+		require.NoError(t, err)
+		require.NotEmpty(t, generator.ID, "the interrupted command must have persisted the generator's row")
+		require.Empty(t, generator.GenerationID,
+			"the interrupted command must have left the generator having never drawn")
+
+		incomplete, err := db.LoadIncompleteFormaCommands()
+		require.NoError(t, err)
+		require.Len(t, incomplete, 1, "the command must still be incomplete after the crash")
+		beta := findResourceUpdate(incomplete[0].ResourceUpdates, "beta")
+		require.NotNil(t, beta)
+		require.Equal(t, resource_update.ResourceUpdateStateNotStarted, beta.State,
+			"the destination in the other stack must still be owed a value")
+
+		m, def, err := test_helpers.NewTestMetastructureWithEverything(t, recording, db, cfg)
+		defer def()
+		require.NoError(t, err)
+
+		waitForApplyComplete(t, m)
+
+		cmds, err := db.LoadFormaCommands()
+		require.NoError(t, err)
+		require.Len(t, cmds, 1)
+		require.Equal(t, forma_command.CommandStateSuccess, cmds[0].State,
+			"the resumed command must be able to write the destination it still owed")
+
+		betaValues := recorded.valuesFor("beta")
+		require.Len(t, betaValues, 1, "the resumed command must dispatch the destination it still owed")
+		drawn := betaValues[0]
+		assert.Len(t, drawn, 24, "the resumed command must draw a value at the generator's declared length")
+		assert.NotContains(t, drawn, "$gen",
+			"the provider must receive the drawn value, never the envelope naming it")
+
+		redrawn, err := db.GetGeneratorIdentity("db-password", generatorStack)
+		require.NoError(t, err)
+		assert.NotEmpty(t, redrawn.GenerationID, "the redraw must record its own generation")
+
+		assertNoPlaintextInResourceUpdates(t, m, cmds[0].ID, drawn)
 	})
 }

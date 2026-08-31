@@ -16,7 +16,6 @@ import (
 
 	"github.com/platform-engineering-labs/formae/internal/datastore"
 	dssqlite "github.com/platform-engineering-labs/formae/internal/datastore/sqlite"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
@@ -51,20 +50,11 @@ func createGeneratorOn(t *testing.T, ds datastore.Datastore, stackLabel, generat
 	return identity.ID
 }
 
-// destinationOn is a pending resource update that sits on stackLabel, which
-// is all the resume path knows about where to look for generators.
-func destinationOn(stackLabel string) resource_update.ResourceUpdate {
-	return resource_update.ResourceUpdate{
-		DesiredState: pkgmodel.Resource{Label: "consumer", Stack: stackLabel},
-		Operation:    resource_update.OperationCreate,
-	}
-}
-
 // A generator that has drawn is reachable from its KSUID alone, whatever
 // stack it lives on. GeneratorIdentity carries no label and no stack, but its
 // GenerationSpec is the serialized generator, which carries both — so a
-// destination on one stack bound to a generator on another still resolves,
-// and the resume path never has to guess which stacks to enumerate.
+// destination on one stack bound to a generator on another still resolves
+// without enumerating anything.
 func TestGeneratorLookupForResume_ResolvesADrawnGeneratorOnAnotherStack(t *testing.T) {
 	ds := lookupTestDatastore(t)
 	ksuid := createGeneratorOn(t, ds, "secrets", "db-password", 24)
@@ -72,7 +62,7 @@ func TestGeneratorLookupForResume_ResolvesADrawnGeneratorOnAnotherStack(t *testi
 	require.NoError(t, ds.AdvanceGeneration(ksuid, "generation-1",
 		json.RawMessage(`{"Type":"password","Label":"db-password","Stack":"secrets","Length":24}`)))
 
-	lookup := generatorLookupForResume([]resource_update.ResourceUpdate{destinationOn("app")}, ds)
+	lookup := generatorLookupForResume(ds)
 	require.NotNil(t, lookup)
 
 	generator, err := lookup(ksuid)
@@ -100,7 +90,7 @@ func TestGeneratorLookupForResume_ReturnsTheCurrentSpecNotTheGenerationsSpec(t *
 	}, "cmd-edit")
 	require.NoError(t, err)
 
-	lookup := generatorLookupForResume([]resource_update.ResourceUpdate{destinationOn("app")}, ds)
+	lookup := generatorLookupForResume(ds)
 	generator, err := lookup(ksuid)
 	require.NoError(t, err)
 	require.NotNil(t, generator)
@@ -111,10 +101,9 @@ func TestGeneratorLookupForResume_ReturnsTheCurrentSpecNotTheGenerationsSpec(t *
 }
 
 // A generator that has never drawn carries no generation spec, so the KSUID
-// route cannot reach it. It is still found when it lives on a stack one of
-// the surviving destinations sits on, which is the case a resume actually
-// hits: an interrupted first apply.
-func TestGeneratorLookupForResume_FallsBackToTheDestinationsStacksForANeverDrawnGenerator(t *testing.T) {
+// route cannot reach it. The fallback finds it by walking the inventory,
+// which is the case a resume actually hits: an interrupted first apply.
+func TestGeneratorLookupForResume_FindsANeverDrawnGeneratorOnItsOwnStack(t *testing.T) {
 	ds := lookupTestDatastore(t)
 	ksuid := createGeneratorOn(t, ds, "app", "db-password", 24)
 
@@ -122,26 +111,41 @@ func TestGeneratorLookupForResume_FallsBackToTheDestinationsStacksForANeverDrawn
 	require.NoError(t, err)
 	require.Empty(t, identity.GenerationID, "precondition: nothing has been drawn")
 
-	lookup := generatorLookupForResume([]resource_update.ResourceUpdate{destinationOn("app")}, ds)
+	lookup := generatorLookupForResume(ds)
 	generator, err := lookup(ksuid)
 	require.NoError(t, err)
-	require.NotNil(t, generator, "a never-drawn generator on the destination's own stack must still be found")
+	require.NotNil(t, generator, "a never-drawn generator must still be found")
 	assert.Equal(t, "db-password", generator.GetLabel())
 	assert.Equal(t, "app", generator.GetStack())
 }
 
-// The one shape neither route reaches: a generator that has never drawn AND
-// lives on a stack no surviving destination sits on. Nothing is returned and
-// nothing errors — the synthesis logs it and the destination is refused at
-// the provider boundary, naming the property.
-func TestGeneratorLookupForResume_NeverDrawnOnAnotherStackResolvesToNothing(t *testing.T) {
+// A generator belongs to one stack and is meant to be referenced from others,
+// so a never-drawn generator is reached whatever stack it sits on relative to
+// the destination that names it, and it comes back carrying the stack the
+// draw op is filed under.
+func TestGeneratorLookupForResume_FindsANeverDrawnGeneratorOnAnotherStack(t *testing.T) {
 	ds := lookupTestDatastore(t)
 	ksuid := createGeneratorOn(t, ds, "secrets", "db-password", 24)
 	_, err := ds.CreateStack(&pkgmodel.Stack{Label: "app"}, "cmd-stack")
 	require.NoError(t, err)
 
-	lookup := generatorLookupForResume([]resource_update.ResourceUpdate{destinationOn("app")}, ds)
+	lookup := generatorLookupForResume(ds)
 	generator, err := lookup(ksuid)
+	require.NoError(t, err)
+	require.NotNil(t, generator, "a never-drawn generator on another stack must be found by KSUID")
+	assert.Equal(t, "db-password", generator.GetLabel())
+	assert.Equal(t, "secrets", generator.GetStack())
+}
+
+// A KSUID no generator holds resolves to nothing and does not error: the
+// synthesis logs it and the destination is refused at the provider boundary,
+// naming the property.
+func TestGeneratorLookupForResume_UnknownKsuidResolvesToNothing(t *testing.T) {
+	ds := lookupTestDatastore(t)
+	createGeneratorOn(t, ds, "secrets", "db-password", 24)
+
+	lookup := generatorLookupForResume(ds)
+	generator, err := lookup("2ZqXo0nEXAMPLEksuidNOTREAL0")
 	require.NoError(t, err)
 	assert.Nil(t, generator)
 }

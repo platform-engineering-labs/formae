@@ -65,7 +65,7 @@ func NewDrawGeneratorUpdate(generator pkgmodel.Generator, stackLabel string) Gen
 // rather than a datastore method because its two callers reach a generator by
 // different routes and neither route is the other's: planning has the
 // (label, stack) -> KSUID map translation just built, and resume has only the
-// stacks its surviving destinations sit on. The generator it returns must
+// KSUID an already-persisted envelope carries. The generator it returns must
 // carry its stack (GetStack), which is what the draw op is filed under; the
 // KSUID is stamped here, since a loaded generator never carries one.
 //
