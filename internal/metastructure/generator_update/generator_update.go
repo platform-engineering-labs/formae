@@ -39,8 +39,9 @@ const (
 	GeneratorUpdateStateFailed     = types.GeneratorUpdateStateFailed
 )
 
-// GeneratorUpdate represents a single generator change: a create, an update
-// (spec change and/or rename), or a delete.
+// GeneratorUpdate represents a single piece of generator work: a create, an
+// update (spec change and/or rename), a delete, or the draw that produces a
+// new value.
 type GeneratorUpdate struct {
 	Generator         pkgmodel.Generator   `json:"-"`
 	ExistingGenerator pkgmodel.Generator   `json:"-"`

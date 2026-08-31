@@ -246,10 +246,19 @@ type MarkResourcesAsRejected struct {
 	ResourceModifiedTs time.Time
 }
 
+// MarkResourcesAsFailed is sent by the changeset executor when resource
+// updates are cascade-failed by a dependency's failure.
+//
+// FailureReason is the operator-facing explanation from the node that failed,
+// stamped on every resource in the batch. These resources never ran, so they
+// have no plugin progress of their own to explain them, and without it the
+// apply reports them failed with nothing said about why. It is empty when the
+// failing node offered no reason.
 type MarkResourcesAsFailed struct {
 	CommandID          string
 	Resources          []ResourceUpdateRef
 	ResourceModifiedTs time.Time
+	FailureReason      string
 }
 
 type MarkResourcesAsCanceled struct {
@@ -699,11 +708,11 @@ func (f *FormaCommandPersister) updatePolicyStates(msg *messages.UpdatePolicySta
 }
 
 func (f *FormaCommandPersister) markResourcesAsRejected(msg *MarkResourcesAsRejected) (bool, error) {
-	return f.bulkUpdateResourceState(msg.CommandID, msg.Resources, types.ResourceUpdateStateRejected, msg.ResourceModifiedTs)
+	return f.bulkUpdateResourceState(msg.CommandID, msg.Resources, types.ResourceUpdateStateRejected, msg.ResourceModifiedTs, "")
 }
 
 func (f *FormaCommandPersister) markResourcesAsFailed(msg *MarkResourcesAsFailed) (bool, error) {
-	return f.bulkUpdateResourceState(msg.CommandID, msg.Resources, types.ResourceUpdateStateFailed, msg.ResourceModifiedTs)
+	return f.bulkUpdateResourceState(msg.CommandID, msg.Resources, types.ResourceUpdateStateFailed, msg.ResourceModifiedTs, msg.FailureReason)
 }
 
 func (f *FormaCommandPersister) markTargetsAsFailed(msg *MarkTargetsAsFailed) (bool, error) {
@@ -749,7 +758,7 @@ func (f *FormaCommandPersister) markTargetsAsFailed(msg *MarkTargetsAsFailed) (b
 }
 
 func (f *FormaCommandPersister) markResourcesAsCanceled(msg *MarkResourcesAsCanceled) (bool, error) {
-	return f.bulkUpdateResourceState(msg.CommandID, msg.Resources, types.ResourceUpdateStateCanceled, util.TimeNow())
+	return f.bulkUpdateResourceState(msg.CommandID, msg.Resources, types.ResourceUpdateStateCanceled, util.TimeNow(), "")
 }
 
 func (f *FormaCommandPersister) markCommandResourcesAsCanceled(msg *MarkCommandResourcesAsCanceled) (bool, error) {
@@ -770,7 +779,7 @@ func (f *FormaCommandPersister) markCommandResourcesAsCanceled(msg *MarkCommandR
 	if len(refs) == 0 {
 		return true, nil
 	}
-	return f.bulkUpdateResourceState(msg.CommandID, refs, types.ResourceUpdateStateCanceled, util.TimeNow())
+	return f.bulkUpdateResourceState(msg.CommandID, refs, types.ResourceUpdateStateCanceled, util.TimeNow(), "")
 }
 
 // plannedForceCancel describes one in-memory resource-update mutation to apply ONLY
@@ -1135,11 +1144,21 @@ func (f *FormaCommandPersister) finalizeIncompleteCommand(msg *FinalizeIncomplet
 	return true, nil
 }
 
+// bulkUpdateResourceState terminalizes a batch of resource updates in one
+// persister turn.
+//
+// failureReason explains a failure that the resource update itself could not
+// record, because it never ran: a cascade from another node. It is stamped on
+// every row in the batch and is empty for the transitions that have no such
+// explanation. It reaches the database with the rest of the command at
+// finalization (BatchUpdateResourceUpdateState below writes state only), which
+// is where every terminalized command lands.
 func (f *FormaCommandPersister) bulkUpdateResourceState(
 	commandID string,
 	resources []ResourceUpdateRef,
 	state types.ResourceUpdateState,
 	modifiedTs time.Time,
+	failureReason string,
 ) (bool, error) {
 	cached, err := f.getOrLoadCommand(commandID)
 	if err != nil {
@@ -1181,6 +1200,9 @@ func (f *FormaCommandPersister) bulkUpdateResourceState(
 
 			res.State = state
 			res.ModifiedTs = modifiedTs
+			if failureReason != "" {
+				res.FailureReason = failureReason
+			}
 		}
 	}
 

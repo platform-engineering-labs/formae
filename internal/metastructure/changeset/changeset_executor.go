@@ -393,6 +393,11 @@ func resumeWhileCanceling(from gen.PID, state gen.Atom, data ChangesetData, mess
 type updateFinishedEvent struct {
 	nodeURI   pkgmodel.FormaeURI // URI to look up in the DAG
 	isSuccess bool
+	// failureReason is the operator-facing explanation the finished update
+	// reported, carried so the cascade can stamp it on the resource updates it
+	// fails. Those never run, so they have no plugin progress of their own to
+	// explain them. Empty on success and on failures that carry no reason.
+	failureReason string
 }
 
 func resourceUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, message resource_update.ResourceUpdateFinished, proc gen.Process) (gen.Atom, ChangesetData, []statemachine.Action, error) {
@@ -504,6 +509,10 @@ func targetUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, mess
 // here instead would make handleUpdateFinished treat it as already-completed
 // and skip the cascade. The error is structural and names identities only;
 // message.DrawnValue is never logged.
+//
+// On failure the draw's reason travels with the event, so the destinations the
+// cascade fails carry it. They never ran and have no plugin progress of their
+// own, so without it the apply reports them failed and says nothing about why.
 func generatorUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, message generator_update.GeneratorUpdateFinished, proc gen.Process) (gen.Atom, ChangesetData, []statemachine.Action, error) {
 	if message.State == generator_update.GeneratorUpdateStateSuccess {
 		node, exists := data.changeset.DAG.Nodes[message.NodeURI]
@@ -526,8 +535,9 @@ func generatorUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, m
 	}
 
 	return handleUpdateFinished(from, state, data, updateFinishedEvent{
-		nodeURI:   message.NodeURI,
-		isSuccess: message.State == generator_update.GeneratorUpdateStateSuccess,
+		nodeURI:       message.NodeURI,
+		isSuccess:     message.State == generator_update.GeneratorUpdateStateSuccess,
+		failureReason: message.ErrorMessage,
 	}, proc)
 }
 
@@ -658,6 +668,7 @@ func handleUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, even
 				CommandID:          data.changeset.CommandID,
 				Resources:          failedResources,
 				ResourceModifiedTs: now,
+				FailureReason:      event.failureReason,
 			})
 			if err != nil {
 				proc.Log().Error("Failed to mark resources as failed in persister commandID=%s: %v", data.changeset.CommandID, err)

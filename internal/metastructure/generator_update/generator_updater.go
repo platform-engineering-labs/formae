@@ -26,9 +26,14 @@ const (
 // Operator-facing failure reasons. Like resource_update's
 // updateRequestFailureReason/createRequestFailureReason, a draw failure is
 // mapped to one of these fixed strings rather than surfacing the underlying
-// error: this text is projected to the API as GeneratorUpdate.ErrorMessage,
-// and the errors behind it name spec internals, database hosts and, in the
+// error: the errors behind it name spec internals, database hosts and, in the
 // worst case, could be made to echo input.
+//
+// The text reaches an operator on GeneratorUpdateFinished.ErrorMessage, which
+// the changeset executor stamps onto every resource update the failed draw
+// cascades to. Those are projected to the API as ResourceUpdate.ErrorMessage,
+// which is where an apply explains itself. The draw's own projected
+// GeneratorUpdate is frozen at planning time and never carries it.
 const (
 	failureReasonDrawFailed = "cannot draw a value for this generator: its specification admits no value. Check its length and its character-class settings."
 
