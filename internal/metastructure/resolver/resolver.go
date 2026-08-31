@@ -324,6 +324,72 @@ func ExtractOpaqueResolvableURIsFromJSON(data json.RawMessage) []pkgmodel.Formae
 // Properties first then ReadOnlyProperties, mirroring Resource property
 // precedence: an opaque value (e.g. a plugin-generated token) may be
 // persisted in either collection.
+// LookupSourceProperty reads the value that a reference's source-property
+// fragment names, preferring the literal key.
+//
+// The fragment is a pre-flattened string (uri.PropertyPath()), so it cannot say
+// which of its dots separate nesting and which belong to a key. "data.tls.crt"
+// may mean the literal key "tls.crt" under "data" — a Kubernetes secret entry,
+// reached as secretValue.at("tls.crt") — or three levels of nesting. Read as a
+// plain path it misses the first shape entirely, and when a document carries
+// both (the residue the historical dot-expansion left behind) it silently
+// returns the nested value where the literal was meant.
+//
+// So the readings are tried longest-literal-tail first, ending at the plain
+// path interpretation: the fragment names what the author saw when they wrote
+// the reference, and the most specific literal key that exists is the best
+// candidate for that. The residual ambiguity is the inverse case, a fragment
+// naming a genuinely nested path in a document that also carries a same-shaped
+// literal key: it now resolves in one documented direction instead of varying
+// silently. Telling the two apart for certain needs structured path segments
+// rather than a flattened string.
+//
+// Every gjson read keyed by a source-property fragment goes through here.
+func LookupSourceProperty(doc []byte, fragment string) gjson.Result {
+	if fragment == "" || len(doc) == 0 {
+		return gjson.Result{}
+	}
+	for _, path := range literalFirstPaths(fragment) {
+		if found := gjson.GetBytes(doc, path); found.Exists() {
+			return found
+		}
+	}
+	return gjson.Result{}
+}
+
+// LookupSourcePropertyIn is LookupSourceProperty against an already-parsed
+// document.
+func LookupSourcePropertyIn(doc gjson.Result, fragment string) gjson.Result {
+	if fragment == "" {
+		return gjson.Result{}
+	}
+	for _, path := range literalFirstPaths(fragment) {
+		if found := doc.Get(path); found.Exists() {
+			return found
+		}
+	}
+	return gjson.Result{}
+}
+
+// literalFirstPaths renders a flattened fragment as the gjson paths that could
+// have produced it, ordered from the longest literal tail to none at all. Each
+// candidate reads some leading run of dots as nesting and the whole remainder as
+// one literal key; the last therefore reads every dot as nesting, which is the
+// interpretation these fragments have always had.
+func literalFirstPaths(fragment string) []string {
+	segments := strings.Split(fragment, ".")
+	paths := make([]string, 0, len(segments))
+	for i := range segments {
+		parts := make([]string, 0, i+1)
+		for _, nesting := range segments[:i] {
+			parts = append(parts, pathkey.Escape(nesting))
+		}
+		parts = append(parts, pathkey.Escape(strings.Join(segments[i:], ".")))
+		paths = append(paths, strings.Join(parts, "."))
+	}
+	return paths
+}
+
 func isSourcePropertyOpaque(source *pkgmodel.Resource, propertyName string) bool {
 	if source == nil || propertyName == "" {
 		return false
@@ -343,18 +409,17 @@ func isSourcePropertyOpaque(source *pkgmodel.Resource, propertyName string) bool
 		}
 	}
 	for _, p := range candidates {
+		declared := LookupSourceProperty(source.Properties, p)
+		readOnly := LookupSourceProperty(source.ReadOnlyProperties, p)
 		// A value stored hashed at rest is a SHA-256 digest; refused wherever it
 		// sits, including nested inside the structure a path names as a whole.
-		if containsHashedValue(gjson.GetBytes(source.Properties, p)) {
+		if containsHashedValue(declared) || containsHashedValue(readOnly) {
 			return true
 		}
-		if containsHashedValue(gjson.GetBytes(source.ReadOnlyProperties, p)) {
+		if declared.Get("$visibility").String() == pkgmodel.VisibilityOpaque {
 			return true
 		}
-		if gjson.GetBytes(source.Properties, p).Get("$visibility").String() == pkgmodel.VisibilityOpaque {
-			return true
-		}
-		if gjson.GetBytes(source.ReadOnlyProperties, p).Get("$visibility").String() == pkgmodel.VisibilityOpaque {
+		if readOnly.Get("$visibility").String() == pkgmodel.VisibilityOpaque {
 			return true
 		}
 	}
@@ -646,7 +711,7 @@ func (pr *propertyResolver) extractResolvedValue(ref pkgmodel.Ref) any {
 			return extracted.Value()
 		}
 
-		specificProperty := resolvedData.Get(ref.SourcePropertyName)
+		specificProperty := LookupSourcePropertyIn(resolvedData, ref.SourcePropertyName)
 		if specificProperty.Exists() {
 			if specificProperty.IsObject() || specificProperty.IsArray() {
 				return json.RawMessage(specificProperty.Raw)

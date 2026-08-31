@@ -1713,7 +1713,7 @@ func synthesizeCascadeUpdatePatch(
 				}
 			}
 			if !sourceFieldIsProviderAssigned {
-				extracted := gjson.GetBytes(parent.Properties, ref.SourcePropertyName)
+				extracted := resolver.LookupSourceProperty(parent.Properties, ref.SourcePropertyName)
 				if extracted.Exists() && !looksLikeResolvable(extracted) {
 					ops = append(ops, op{Op: "replace", Path: path, Value: extracted.Value()})
 					continue
@@ -1766,7 +1766,7 @@ func cascadeSourceIsOpaque(dep pkgmodel.Resource, ref resolver.ResolvableRef, pa
 	if referencesOpaqueProperty(transformations.OpaqueFields(parent.Schema, parent.Type), property) {
 		return true
 	}
-	return gjson.GetBytes(parent.Properties, ref.SourcePropertyName).Get("$visibility").String() == pkgmodel.VisibilityOpaque
+	return resolver.LookupSourceProperty(parent.Properties, ref.SourcePropertyName).Get("$visibility").String() == pkgmodel.VisibilityOpaque
 }
 
 // looksLikeResolvable reports whether a gjson Result is itself a $ref/$value
