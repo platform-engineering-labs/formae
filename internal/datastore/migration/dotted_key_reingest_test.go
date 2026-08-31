@@ -469,3 +469,24 @@ func (s *countingScanner) QueryResources(query *datastore.ResourceQuery) ([]*pkg
 	s.calls++
 	return s.inner.QueryResources(query)
 }
+
+// An in-memory datastore is a supported configuration, and the migration runs
+// on every boot, so it has to work there. A second handle opened on ":memory:"
+// is a different, empty database — not another connection to this one — so a
+// lease taken that way would query a table that does not exist.
+func TestReingest_WorksOnAnInMemoryDatastore(t *testing.T) {
+	cfg := &pkgmodel.DatastoreConfig{
+		DatastoreType: pkgmodel.SqliteDatastore,
+		Sqlite:        pkgmodel.SqliteConfig{FilePath: ":memory:"},
+	}
+	ds, err := dssqlite.NewDatastoreSQLite(context.Background(), cfg, "test")
+	require.NoError(t, err)
+	t.Cleanup(ds.Close)
+
+	storeTarget(t, ds, "prod")
+	storeUnmanaged(t, ds, "corrupted", "prod", corruptedProps)
+
+	require.NoError(t, ReingestCorruptedUnmanagedRows(ds),
+		"the migration must not fail the boot on an in-memory datastore")
+	assert.Empty(t, unmanagedOn(t, ds, "prod"), "and it must still do its work")
+}

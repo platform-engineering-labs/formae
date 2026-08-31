@@ -45,11 +45,43 @@ type sqliteDataMigrationLease struct {
 	conn *sql.Conn
 }
 
+// privateInMemoryDataMigrationLease is the lease for a database no other process
+// can reach.
+//
+// A private in-memory database lives inside this process, so there is no second
+// agent to exclude and nothing for a lease to serialize against. It also cannot
+// be opened a second time: another handle on ":memory:" is a different, empty
+// database rather than another connection to this one. So the marker statements
+// run on the datastore's own pool, and the migration's writes commit as they go
+// instead of landing together at Release — which costs nothing here, since a
+// crash takes the whole database with it either way.
+type privateInMemoryDataMigrationLease struct {
+	datastore.MarkerStore
+}
+
+func (l *privateInMemoryDataMigrationLease) Release() error { return nil }
+
+// isPrivateInMemory reports whether a DSN names an in-memory database that no
+// other connection can join. A shared-cache in-memory DSN is excluded: a second
+// handle on it does reach the same database.
+func isPrivateInMemory(dsn string) bool {
+	if !strings.HasPrefix(dsn, ":memory:") && !strings.HasPrefix(dsn, "file::memory:") {
+		return false
+	}
+	return !strings.Contains(dsn, "cache=shared")
+}
+
 // AcquireDataMigrationLease opens the lease's own connection and takes SQLite's
 // write lock with BEGIN IMMEDIATE, retrying while another process holds it.
 func (d DatastoreSQLite) AcquireDataMigrationLease(ctx context.Context) (datastore.DataMigrationLease, error) {
 	if d.dsn == "" {
 		return nil, fmt.Errorf("cannot acquire data migration lease: datastore has no file path")
+	}
+
+	if isPrivateInMemory(d.dsn) {
+		return &privateInMemoryDataMigrationLease{
+			MarkerStore: datastore.NewMarkerStore(d.conn, func(int) string { return "?" }),
+		}, nil
 	}
 
 	db, err := sql.Open(sqliteOtelDriverName, d.dsn)
