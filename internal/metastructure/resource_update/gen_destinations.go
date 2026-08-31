@@ -18,12 +18,20 @@ import (
 // destinationPath was classified OccurrenceStable when this update was
 // planned.
 //
-// This is the ONE reading of ProvenanceRecords for $gen destinations, and it
-// answers ONE question: does anything still need a value from this generator?
-// Whether a generator draws at all, and which destinations a resumed command
-// still owes a value, are two phrasings of that question; two independent
-// readings of the same records would eventually disagree without anything
-// observing it.
+// This is the ONE reading of $gen destination stability, and it answers ONE
+// question: does anything still need a value from this generator? Whether a
+// generator draws at all, and which destinations a resumed command still owes
+// a value, are two phrasings of that question; two independent readings of
+// the same records would eventually disagree without anything observing it.
+//
+// Other code reads the same records for different questions:
+// writtenProvenanceAt for the digest a destination was last written under,
+// and ResourceUpdate.regeneratePatchDocument for every occurrence of any kind
+// that stays suppressed through a regeneration. That last one tests Class
+// alone, without the generator-kind check below, and still cannot disagree
+// with this reading at a $gen destination: a $gen envelope normalizes to
+// OccurrenceKindGenerator, and an occurrence whose desired envelope does not
+// normalize is classified OccurrenceDeferredUpdate outright.
 //
 // It does NOT decide who a draw reaches. Once a generator draws, every live
 // non-delete destination of it in the changeset receives the value and is
@@ -113,6 +121,60 @@ func GeneratorsNeedingDraw(updates []ResourceUpdate) []string {
 	}
 	return ksuids
 }
+
+// ResourceKsuidsInCommand returns the KSUIDs of the resources this command
+// holds a planned operation for.
+//
+// It answers ONE question — can this command reach this resource — and it is
+// asked in two places: subtracted from the live destinations the datastore
+// indexes for a drawing generator, what is left is what no delivery could get
+// to; and a resource already in the set is never co-planned, because the
+// changeset keeps one node per operation URI and a second update for one
+// resource would be dropped on the floor with nothing terminalizing it.
+//
+// Reach is a property of the graph, not of the document. Delivery runs over
+// the changeset's nodes, so ANY planned update reaches its resource, whatever
+// its desired document now says about the generator. A destination the same
+// command unbinds is written by that command like any other node; narrowing
+// the set to the updates that still bind the generator would refuse an apply
+// that both unbinds one destination and draws for another, which is perfectly
+// deliverable.
+//
+// Both ends of an update are counted, so a destination the command is tearing
+// down is reached rather than named unreachable. It is owed no value — a
+// delete writes no property — but the command does reach it, and omitting it
+// would make removing a consumer of a generator whose spec also moved
+// impossible.
+func ResourceKsuidsInCommand(updates []ResourceUpdate) map[string]bool {
+	inCommand := make(map[string]bool, len(updates))
+	for i := range updates {
+		if ksuid := updates[i].DesiredState.Ksuid; ksuid != "" {
+			inCommand[ksuid] = true
+		}
+		if ksuid := updates[i].PriorState.Ksuid; ksuid != "" {
+			inCommand[ksuid] = true
+		}
+	}
+	return inCommand
+}
+
+// CoPlannedForDraw marks a resource that this command must plan because a
+// generator it binds to draws here, not because anything about the resource
+// itself moved.
+//
+// A drawn value reaches only the destinations that are nodes in the changeset,
+// and formae keeps a hash of the value rather than the value, so a destination
+// left out of the command cannot be brought level on any later apply. Adding a
+// second destination to a generator therefore has to carry the destinations
+// already applied beside it into the same command: they take the new
+// generation together or they diverge for good.
+//
+// It is a distinct type rather than one more bool so it cannot be transposed
+// with the `force` argument beside it. The two are unrelated: force is the
+// operator re-asserting declared state, and it deliberately does not touch a
+// generator binding (ClassifyOccurrence R2), while this is the planner
+// discharging an obligation a draw created.
+type CoPlannedForDraw bool
 
 // CarryStableGeneratorBindingForward restores, on the desired document of an
 // update, what a $gen destination whose occurrence classified stable already
@@ -208,4 +270,81 @@ func writtenProvenanceAt(records []OccurrenceRecord, destinationPath string) str
 		}
 	}
 	return ""
+}
+
+// SuppressCarriedStableGeneratorBindings drops, from both sides of a patch
+// regeneration, every $gen destination that classified stable and whose
+// desired envelope holds a carried digest rather than a value.
+//
+// It is the $gen counterpart of what SuppressUnchangedOpaqueValues does for a
+// literal opaque field, and it exists because that function cannot decide this
+// case. It calls a leaf unchanged by comparing the digest of the desired value
+// against the digest STORED on the prior side, and a provider whose Read
+// returns the secret (a secret store's GetSecretValue) has by then replaced
+// that stored digest with the live plaintext. Digest against plaintext never
+// matches, so the field survives into the "after" side of the diff carrying
+// the digest CarryStableGeneratorBindingForward put there, and the guarded
+// conversion rightly refuses to hand a provider a digest where a secret
+// belongs — taking the unrelated edit beside it down with it.
+//
+// Stability is the answer that comparison was reaching for, and a better one:
+// it was decided at planning from the destination's provenance and persisted
+// immutably on this row, so it holds whatever a Read has since merged into
+// prior state. A stable destination provably still holds the generation it was
+// drawn from, so it contributes nothing to the diff and belongs on neither
+// side of it. Dropping it from BOTH is what leaves no op behind — dropping it
+// from the desired side alone would read as a removal under reconcile
+// semantics.
+//
+// Only a $hashed envelope is dropped. A destination a draw was delivered into
+// moments ago carries a LIVE value and no marker, and stability never narrows
+// delivery: that value has to reach the patch or the destination stays on the
+// old generation while its siblings move. A bare envelope carries nothing to
+// refuse and is left for the stable-occurrence substitution in patch
+// generation, which already neutralises it.
+//
+// This drops from the diff inputs only. The update's own desired document is
+// untouched, so the freeze at the provider boundary still substitutes its
+// preserved sentinel, and the row still persists the digest and the generation
+// it was drawn from.
+//
+// Inputs are not mutated; rewritten copies are returned.
+func SuppressCarriedStableGeneratorBindings(
+	existing, desired json.RawMessage,
+	records []OccurrenceRecord,
+) (json.RawMessage, json.RawMessage, error) {
+	if len(existing) == 0 || len(desired) == 0 || len(records) == 0 {
+		return existing, desired, nil
+	}
+
+	strippedExisting := string(existing)
+	strippedDesired := string(desired)
+	for _, occurrence := range pkgmodel.FindGenObjectsFromProperties(desired) {
+		if !IsGenDestinationStable(records, occurrence.Path) {
+			continue
+		}
+		// A destination is addressed by a dot-joined path, so a map key
+		// containing a dot resolves elsewhere. Act only where the path still
+		// addresses this envelope, exactly as the freeze does.
+		node := gjson.Get(strippedDesired, occurrence.Path)
+		if !pkgmodel.IsGenObject(node) || !node.Get("$hashed").Bool() {
+			continue
+		}
+
+		var err error
+		strippedDesired, err = sjson.Delete(strippedDesired, occurrence.Path)
+		if err != nil {
+			// The path can contain user-authored map keys, so it stays out of
+			// the error: this text reaches an operator-visible failure reason.
+			return nil, nil, fmt.Errorf("failed to drop a stable generator binding from the desired diff input: %w", err)
+		}
+		if gjson.Get(strippedExisting, occurrence.Path).Exists() {
+			strippedExisting, err = sjson.Delete(strippedExisting, occurrence.Path)
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to drop a stable generator binding from the existing diff input: %w", err)
+			}
+		}
+	}
+
+	return json.RawMessage(strippedExisting), json.RawMessage(strippedDesired), nil
 }

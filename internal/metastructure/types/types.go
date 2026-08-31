@@ -115,12 +115,11 @@ const (
 // terminal set is Success | Failed | Canceled per isTargetInFinalState). A
 // target update reaches Canceled because the changeset executor's cancel
 // paths (changeset_executor.go's cancel/forceCancel) range over
-// data.changeset.DAG.Nodes and type-switch on *target_update.TargetUpdate
-// (and *resource_update.ResourceUpdate). Nothing in this codebase adds a
-// *generator_update.GeneratorUpdate to that DAG yet, and neither cancel
-// switch has a case for it, so a generator node cannot reach Canceled today.
-// Add it if and when a later change wires GeneratorUpdate into DAG
-// construction and the executor's cancel switch.
+// data.changeset.DAG.Nodes and act only on *resource_update.ResourceUpdate
+// and *target_update.TargetUpdate. Changeset construction does put a
+// *generator_update.GeneratorUpdate in that DAG, but neither cancel path has
+// a case for it, so a generator node never reaches Canceled. Add the state if
+// and when a cancel path terminalizes generator nodes.
 type GeneratorUpdateState string
 
 const (

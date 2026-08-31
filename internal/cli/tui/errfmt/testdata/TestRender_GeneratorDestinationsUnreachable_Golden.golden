@@ -1,0 +1,12 @@
+[38;2;248;113;113mforma rejected because a generator must draw a new value and the command does not reach every resource bound to it:[0m
+  api-secret
+    [38;2;153;153;153mof type [0mAWS::SecretsManager::Secret
+    [38;2;153;153;153mfrom stack [0mweb
+    [38;2;153;153;153mbound to generator [0mdb-password[38;2;153;153;153m in stack [0mapp
+  worker-secret
+    [38;2;153;153;153mof type [0mAWS::SecretsManager::Secret
+    [38;2;153;153;153mfrom stack [0mjobs
+    [38;2;153;153;153mbound to generator [0mdb-password[38;2;153;153;153m in stack [0mapp
+
+[38;2;181;181;91mA generated value is never recoverable once the command that drew it ends, so apply every stack that binds the generator in one command.[0m
+[38;2;181;181;91m[0m                                                                                                                                        

@@ -27,9 +27,16 @@ func NewResourceUpdateForExisting(
 	mode pkgmodel.FormaApplyMode,
 	source FormaCommandSource,
 	force bool,
+	coPlanned CoPlannedForDraw,
 ) ([]ResourceUpdate, error) {
 
-	if reflect.DeepEqual(existingResource, newResource) {
+	// The three suppressions below all say the same thing: nothing about this
+	// resource moved, so the command has nothing to do for it. coPlanned is
+	// the one case where that is true and the update is still owed — a
+	// generator this resource binds to draws in this command, and only a
+	// resource that is a node in the changeset receives the drawn value. See
+	// CoPlannedForDraw.
+	if reflect.DeepEqual(existingResource, newResource) && !bool(coPlanned) {
 		slog.Debug("No changes detected between existing and new resource, skipping update")
 		return nil, nil
 	}
@@ -61,7 +68,7 @@ func NewResourceUpdateForExisting(
 	if err != nil {
 		return nil, fmt.Errorf("failed to compare resources: %w", err)
 	}
-	if !hasChanges && !stackChanged && !labelChanged {
+	if !hasChanges && !stackChanged && !labelChanged && !bool(coPlanned) {
 		return []ResourceUpdate{}, nil
 	}
 
@@ -122,7 +129,7 @@ func NewResourceUpdateForExisting(
 		// one place that decision is allowed to drop the update outright —
 		// regeneratePatchDocument at execution time must never do the same, or
 		// an in-flight update would lose the force-resent field from its payload.
-		if (patchDocument == nil || onlyForceResent) && len(createOnlyPatch) == 0 && !stackChanged && !labelChanged {
+		if (patchDocument == nil || onlyForceResent) && len(createOnlyPatch) == 0 && !stackChanged && !labelChanged && !bool(coPlanned) {
 			return []ResourceUpdate{}, nil
 		}
 	} else {

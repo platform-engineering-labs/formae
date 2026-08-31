@@ -5,10 +5,12 @@
 package metastructure
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -953,6 +955,63 @@ func translateToAPICommand(fa *forma_command.FormaCommand) apimodel.Command {
 		})
 	}
 
+	// The draws are projected from their own field, in their own loop, after
+	// the declared diff above. fa.GeneratorUpdates is what changes a
+	// generator's row; fa.DrawGeneratorUpdates is what draws a value, and a
+	// draw exists for generators the diff above says nothing about at all —
+	// a generator whose spec nobody edited still draws when a destination is
+	// added to it. Projecting only the diff leaves an apply that is about to
+	// rotate a credential reading as no generator activity whatsoever.
+	//
+	// A generator with both a declared change and a draw appears twice, once
+	// per operation, rather than as one merged entry. They are separate work
+	// with separate consequences: one rewrites the generator's row before the
+	// changeset starts, the other rotates the credential every bound
+	// destination holds. Merging them would force a single Operation string
+	// that either hides the rotation or hides the spec diff.
+	//
+	// On a declared entry the State, Duration and ErrorMessage carried here
+	// track the update as it runs. On a draw they are plan-time values and
+	// stay that way: DrawGeneratorUpdates is json:"-" and the changeset takes
+	// its own copy, so nothing writes back to the slice this reads. A draw's
+	// outcome reaches an operator through the destinations it cascades to,
+	// whose FailureReason carries the reason the draw could not produce a
+	// value.
+	//
+	// A draw carries no config, neither current nor old. It changes nothing
+	// about the declared spec: NewDrawGeneratorUpdate leaves ExistingGenerator
+	// nil, and its Generator is the spec the value will be drawn under, which
+	// is either this command's desired spec (already projected above, with its
+	// diff) or the unchanged stored one. Marshaling it here would present a
+	// non-diff as one. Nothing on this path marshals a generator at all, so it
+	// cannot leak a KSUID (json:"-" on the concrete type regardless), the
+	// drawing spec (pkgmodel.GeneratorIdentity, never on Generator) or a drawn
+	// value (none exists until the changeset runs).
+	for _, dgu := range fa.DrawGeneratorUpdates {
+		var dur time.Duration = 0
+		if !dgu.StartTs.IsZero() {
+			dur = dgu.ModifiedTs.Sub(dgu.StartTs)
+		}
+
+		var generatorLabel, generatorType string
+		if dgu.Generator != nil {
+			generatorLabel = dgu.Generator.GetLabel()
+			generatorType = dgu.Generator.GetType()
+		}
+
+		apiCommand.GeneratorUpdates = append(apiCommand.GeneratorUpdates, apimodel.GeneratorUpdate{
+			GeneratorLabel: generatorLabel,
+			GeneratorType:  generatorType,
+			StackLabel:     dgu.StackLabel,
+			Operation:      string(dgu.Operation),
+			State:          string(dgu.State),
+			Duration:       dur.Milliseconds(),
+			ErrorMessage:   dgu.ErrorMessage,
+			StartTs:        dgu.StartTs,
+			ModifiedTs:     dgu.ModifiedTs,
+		})
+	}
+
 	return apiCommand
 }
 
@@ -1602,21 +1661,6 @@ func (m *Metastructure) ReRunIncompleteCommands() error {
 			if ru.State == resource_update.ResourceUpdateStateNotStarted {
 				pendingUpdates = append(pendingUpdates, *ru)
 			}
-		}
-
-		// If all resource updates already reached a terminal state, the command
-		// just needs its own state updated — no changeset execution needed.
-		// This happens when the agent crashed after all CRUD ops completed but
-		// before the command transitioned to a final state.
-		if len(pendingUpdates) == 0 {
-			_, err := m.callActor(
-				gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
-				forma_persister.FinalizeIncompleteCommand{CommandID: fa.ID},
-			)
-			if err != nil {
-				slog.Error("Failed to finalize incomplete command", "commandID", fa.ID, "error", err)
-			}
-			continue
 		}
 
 		// If all resource updates already reached a terminal state, the command
@@ -2508,6 +2552,38 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 		if err != nil {
 			return nil, err
 		}
+
+		// A draw reaches the destinations that are nodes in the changeset and
+		// no others, so every live destination of a drawing generator that
+		// this forma declares must be planned — including the ones the
+		// ordinary pass suppressed because nothing about them moved. Without
+		// this the new destination takes the new generation and the applied
+		// one keeps the old, and no later apply can level them.
+		//
+		// The order here is what keeps the feedback loop open. The drawing set
+		// is derived from the planned updates, and co-planning ADDS updates,
+		// so re-deriving it over the widened plan could make a co-planned
+		// resource's other, stable bindings look like they need a draw and
+		// rotate a credential nobody touched. drawGeneratorUpdates is computed
+		// once, above, from the ordinary pass, and is never recomputed.
+		liveDestinations, err := liveGeneratorDestinations(drawGeneratorUpdates, ds)
+		if err != nil {
+			return nil, err
+		}
+		coPlanKsuids := generatorDestinationsToCoPlan(liveDestinations, resourceUpdates, forma)
+		coPlanned, err := resource_update.CoPlanGeneratorDestinations(
+			forma, coPlanKsuids, formaCommandConfig.Mode, source, existingTargets, ds, formaCommandConfig.Force)
+		if err != nil {
+			return nil, err
+		}
+		resourceUpdates = append(resourceUpdates, coPlanned...)
+
+		// What is left unreachable after co-planning is what the forma does
+		// not declare at all, which is what the refusal exists for.
+		if err := refuseUnreachableGeneratorDestinations(
+			drawGeneratorUpdates, liveDestinations, resourceUpdates); err != nil {
+			return nil, err
+		}
 	}
 
 	fc := forma_command.NewFormaCommand(
@@ -2527,6 +2603,198 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 	fc.DrawGeneratorUpdates = drawGeneratorUpdates
 
 	return fc, nil
+}
+
+// liveGeneratorDestinations indexes, per drawing generator, the live resources
+// the datastore records as bound to it.
+//
+// The read is done once and handed to both passes that need it. Co-planning
+// and the refusal ask the same question of the same rows a moment apart —
+// which of a drawing generator's live destinations the command reaches — and
+// separating the read from the two decisions keeps each of them a decision
+// over data rather than a datastore round trip of its own.
+//
+// One draw exists per generator KSUID (SynthesizeDrawGeneratorUpdates derives
+// them from a deduplicated set), so the KSUID is a key. A generator with no
+// live destination at all is absent rather than present-and-empty: neither
+// caller has anything to say about it.
+func liveGeneratorDestinations(
+	draws []generator_update.GeneratorUpdate,
+	ds datastore.Datastore,
+) (map[string][]*pkgmodel.Resource, error) {
+	if len(draws) == 0 {
+		return nil, nil
+	}
+
+	destinations := make(map[string][]*pkgmodel.Resource, len(draws))
+	for i := range draws {
+		generator := draws[i].Generator
+		if generator == nil || generator.GetID() == "" {
+			continue
+		}
+		indexed, err := ds.FindResourcesReferencingGenerator(generator.GetID())
+		if err != nil {
+			return nil, fmt.Errorf("failed to find the resources bound to generator %q in stack %q: %w",
+				generator.GetLabel(), draws[i].StackLabel, err)
+		}
+		if len(indexed) == 0 {
+			continue
+		}
+		destinations[generator.GetID()] = indexed
+	}
+
+	return destinations, nil
+}
+
+// generatorDestinationsToCoPlan returns the KSUIDs of the resources this
+// command must plan on a draw's account: a live destination of a generator
+// that is going to draw, declared by the forma being applied, that the
+// ordinary planning pass produced no update for.
+//
+// The declaration test is by KSUID, which translation has already resolved on
+// both sides — a forma resource carries the KSUID of the row it matches, and
+// the index answers with the row. A destination the forma does not declare is
+// deliberately left out: it cannot be planned from a declaration that is not
+// there, and it is precisely what refuseUnreachableGeneratorDestinations
+// refuses the command for.
+//
+// A resource the ordinary pass already planned is never co-planned either.
+// The two passes emit whole ResourceUpdates and the changeset keeps one node
+// per operation URI, so a second update for one resource would be dropped on
+// the floor with nothing terminalizing it. That is the same reach question the
+// refusal asks, so both read it from resource_update.ResourceKsuidsInCommand.
+//
+// liveDestinations is indexed from the drawing set derived by the ORIGINAL
+// planning pass. Nothing here may recompute that set over the updates
+// co-planning adds; see the call site.
+func generatorDestinationsToCoPlan(
+	liveDestinations map[string][]*pkgmodel.Resource,
+	resourceUpdates []resource_update.ResourceUpdate,
+	forma *pkgmodel.Forma,
+) map[string]bool {
+	if len(liveDestinations) == 0 {
+		return nil
+	}
+
+	declared := make(map[string]bool, len(forma.Resources))
+	for i := range forma.Resources {
+		if ksuid := forma.Resources[i].Ksuid; ksuid != "" {
+			declared[ksuid] = true
+		}
+	}
+	if len(declared) == 0 {
+		return nil
+	}
+
+	inCommand := resource_update.ResourceKsuidsInCommand(resourceUpdates)
+
+	var coPlan map[string]bool
+	for _, indexed := range liveDestinations {
+		for _, destination := range indexed {
+			if destination == nil || inCommand[destination.Ksuid] || !declared[destination.Ksuid] {
+				continue
+			}
+			if coPlan == nil {
+				coPlan = make(map[string]bool)
+			}
+			coPlan[destination.Ksuid] = true
+		}
+	}
+
+	return coPlan
+}
+
+// refuseUnreachableGeneratorDestinations rejects a command that would draw a
+// generator's value while reaching only some of the resources bound to it.
+//
+// formae keeps a hash of a drawn value, never the value, so a destination
+// that was not in the command when the draw happened can never be brought
+// level afterwards: the only way to give it a value is to draw again, which
+// puts its siblings behind. That oscillation has no fixed point, so the
+// command is refused instead, naming the destinations it cannot reach.
+//
+// Reach is a property of the graph: a destination with a planned update is
+// reached by the command whatever its desired document now says about the
+// binding, which is why this reads resource_update.ResourceKsuidsInCommand
+// rather than the bindings. An apply that unbinds one destination while
+// drawing for another writes both of them, and refusing it would be a refusal
+// of something perfectly deliverable.
+//
+// Which STACKS the destinations sit on is irrelevant. A command carries all
+// of a forma's resource updates, so an apply spanning several stacks reaches
+// every destination in them; what is refused is an apply reaching only part
+// of a drawing generator's destination set.
+//
+// It runs AFTER co-planning, and that is what leaves it a narrow job. A
+// destination the applied forma declares is pulled into the command by
+// generatorDestinationsToCoPlan whether or not anything about it moved, so
+// what reaches this check is the destination the forma does not declare at
+// all — a consumer in another stack the operator did not apply. Running it
+// before co-planning would refuse an apply that merely adds a second
+// destination to a generator, since the applied destination beside it has
+// nothing to plan on its own account.
+//
+// The list is sorted before it goes into the error. It is read by an operator
+// who has to go and find each destination, and none of the datastore backends
+// order the rows they answer with, so two runs of the same refused apply would
+// otherwise name the same destinations in a different order.
+//
+// Two boundaries this deliberately does not cross:
+//
+//   - It is an admission check for a NEW command only. ReRunIncompleteCommands
+//     rebuilds a changeset from what a crashed command still owes, which is
+//     deliberately a SUBSET of the original destinations, so checking there
+//     would refuse every resumed command whose fan-out was partly done.
+//   - A destroy never draws, so its caller never computes draws to check.
+//
+// It DOES fire under simulation. The cascade aborts nearby skip simulation so
+// the CLI can render the cascade and the operator elevate on confirmation;
+// there is no confirmation that makes a split draw correct, and rendering a
+// plan that can never be applied is worse than a refusal naming what is
+// missing.
+func refuseUnreachableGeneratorDestinations(
+	draws []generator_update.GeneratorUpdate,
+	liveDestinations map[string][]*pkgmodel.Resource,
+	resourceUpdates []resource_update.ResourceUpdate,
+) error {
+	if len(liveDestinations) == 0 {
+		return nil
+	}
+
+	inCommand := resource_update.ResourceKsuidsInCommand(resourceUpdates)
+
+	var unreachable []apimodel.UnreachableGeneratorDestination
+	for i := range draws {
+		generator := draws[i].Generator
+		if generator == nil {
+			continue
+		}
+		for _, destination := range liveDestinations[generator.GetID()] {
+			if destination == nil || inCommand[destination.Ksuid] {
+				continue
+			}
+			unreachable = append(unreachable, apimodel.UnreachableGeneratorDestination{
+				GeneratorLabel: generator.GetLabel(),
+				GeneratorStack: draws[i].StackLabel,
+				Stack:          destination.Stack,
+				Label:          destination.Label,
+				Type:           destination.Type,
+			})
+		}
+	}
+	if len(unreachable) == 0 {
+		return nil
+	}
+	slices.SortFunc(unreachable, func(a, b apimodel.UnreachableGeneratorDestination) int {
+		return cmp.Or(
+			strings.Compare(a.GeneratorStack, b.GeneratorStack),
+			strings.Compare(a.GeneratorLabel, b.GeneratorLabel),
+			strings.Compare(a.Stack, b.Stack),
+			strings.Compare(a.Label, b.Label),
+			strings.Compare(a.Type, b.Type),
+		)
+	})
+	return apimodel.FormaGeneratorDestinationsUnreachableError{Unreachable: unreachable}
 }
 
 // RegisteredPlugins returns plugins currently registered with the
@@ -2660,9 +2928,9 @@ func extractKSUIDs(jsonStr string, ksuidSet map[string]struct{}) {
 //
 // This handles $ref only. A $gen envelope's bare $generator KSUID is not
 // reverse-translated here, and extractKSUIDs above does not even collect it
-// (it only looks at strings that parse as formae:// URIs): no resource row
-// can persist a $gen today, so there is nothing for this function to see.
-// The reverse arm for $gen is owed by whichever slice lands value drawing.
+// (it only looks at strings that parse as formae:// URIs). Resource rows do
+// persist $gen envelopes, so extraction carries the raw $generator KSUID
+// through into what it emits instead of an authorable generator declaration.
 func replaceKSUIDs(jsonStr string, ksuidToTriplet map[string]pkgmodel.TripletKey) string {
 	var replace func(value any) any
 	replace = func(value any) any {
@@ -2775,12 +3043,14 @@ func rewriteEmbedSpans(tmpl string, fn func(map[string]any) map[string]any) stri
 }
 
 // validateNoOpaqueEmbed rejects any forma whose resource properties or target
-// configs contain a $embed field whose $template carries a framed span for a
-// $res envelope with $visibility == "Opaque".
+// configs contain a $embed field whose $template carries a framed span for an
+// envelope with $visibility == "Opaque". Both a $res naming an opaque property
+// and a $gen bound to a generator carry that visibility, so the check covers
+// each of them without naming either: it reads $visibility and nothing else.
 //
-// v1 limitation: once an opaque resolvable is assembled into a string the
-// structured span needed for redaction is lost, so we hard-reject it at plan
-// time rather than silently leaking secrets.
+// v1 limitation: once an opaque value is assembled into a string the structured
+// span needed for redaction is lost, so we hard-reject it at plan time rather
+// than silently leaking secrets.
 //
 // This MUST run before translation (doTranslate) because translation replaces
 // $res envelopes with {"$ref":…} and drops $visibility.
@@ -2843,7 +3113,7 @@ func walkForOpaqueEmbed(val gjson.Result, label, path string) error {
 			for _, span := range spans {
 				visibility := gjson.Get(span.EnvelopeJSON, "$visibility")
 				if visibility.String() == pkgmodel.VisibilityOpaque {
-					return fmt.Errorf("opaque resolvables cannot be embedded in string fields (field %q on %q); v1 limitation", path, label)
+					return fmt.Errorf("opaque values cannot be embedded in string fields (field %q on %q): a secret assembled into a larger string can no longer be redacted, so bind it to its own field instead", path, label)
 				}
 			}
 		}

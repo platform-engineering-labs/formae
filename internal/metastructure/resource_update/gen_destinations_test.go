@@ -263,3 +263,84 @@ func TestCarryStableGeneratorBindingForward(t *testing.T) {
 		assert.Empty(t, seeds)
 	})
 }
+
+func TestSuppressCarriedStableGeneratorBindings(t *testing.T) {
+	const ksuid = "2abcDEFghiJKLmnoPQRstuVWxyz"
+	const digest = "9f2c1a0b"
+	const writtenProvenance = "v1:aaaabbbbcccc"
+
+	stableRecords := []OccurrenceRecord{{
+		DestinationPath: "password",
+		DesiredIdentity: OccurrenceIdentity{
+			Kind: OccurrenceKindGenerator, Ksuid: ksuid, PropertyPath: "value",
+		},
+		WrittenProvenance: writtenProvenance,
+		HasStoredWritten:  true,
+		Class:             OccurrenceStable,
+	}}
+
+	carried := json.RawMessage(`{"password":{"$gen":true,"$generator":"` + ksuid +
+		`","$output":"value","$visibility":"Opaque","$hashed":true,"$value":"` + digest + `"},"name":"new"}`)
+
+	// A Read that returns the secret leaves the live plaintext on the prior
+	// side, so the digest the desired document carries has nothing to compare
+	// equal against. Stability is the answer instead, and it has to leave both
+	// sides of the diff with nothing to say about the destination.
+	t.Run("a carried digest is dropped from both sides", func(t *testing.T) {
+		existing := json.RawMessage(`{"password":{"$gen":true,"$generator":"` + ksuid +
+			`","$output":"value","$visibility":"Opaque","$value":"live-plaintext"},"name":"old"}`)
+
+		strippedExisting, strippedDesired, err := SuppressCarriedStableGeneratorBindings(
+			existing, carried, stableRecords)
+		require.NoError(t, err)
+
+		assert.False(t, gjson.GetBytes(strippedDesired, "password").Exists(),
+			"the digest must not reach the guarded conversion")
+		assert.False(t, gjson.GetBytes(strippedExisting, "password").Exists(),
+			"leaving it on one side alone reads as a removal")
+		assert.Equal(t, "new", gjson.GetBytes(strippedDesired, "name").String(),
+			"the property beside the binding must still be diffed")
+	})
+
+	// Stability decides whether a generator draws, never who a draw reaches. A
+	// destination a draw was delivered into holds the value it must write.
+	t.Run("a delivered value is kept", func(t *testing.T) {
+		delivered := json.RawMessage(`{"password":{"$gen":true,"$generator":"` + ksuid +
+			`","$output":"value","$visibility":"Opaque","$value":"freshly-drawn"}}`)
+
+		_, strippedDesired, err := SuppressCarriedStableGeneratorBindings(
+			json.RawMessage(`{"password":{"$gen":true,"$value":"old"}}`), delivered, stableRecords)
+		require.NoError(t, err)
+
+		assert.Equal(t, "freshly-drawn", gjson.GetBytes(strippedDesired, "password.$value").String(),
+			"a delivered value must reach the patch or its destination stays on the old generation")
+	})
+
+	t.Run("an unstable destination is kept", func(t *testing.T) {
+		unstable := []OccurrenceRecord{{
+			DestinationPath: "password",
+			DesiredIdentity: OccurrenceIdentity{
+				Kind: OccurrenceKindGenerator, Ksuid: ksuid, PropertyPath: "value",
+			},
+			Class: OccurrenceDeferredUpdate,
+		}}
+
+		_, strippedDesired, err := SuppressCarriedStableGeneratorBindings(
+			json.RawMessage(`{"password":{"$gen":true,"$value":"live-plaintext"}}`), carried, unstable)
+		require.NoError(t, err)
+
+		assert.True(t, gjson.GetBytes(strippedDesired, "password").Exists(),
+			"only a proven-stable destination may be taken out of the diff")
+	})
+
+	t.Run("a bare envelope is left to patch generation", func(t *testing.T) {
+		bare := genProperties("password", ksuid)
+
+		_, strippedDesired, err := SuppressCarriedStableGeneratorBindings(
+			json.RawMessage(`{"password":{"$gen":true,"$value":"live-plaintext"}}`), bare, stableRecords)
+		require.NoError(t, err)
+
+		assert.True(t, gjson.GetBytes(strippedDesired, "password").Exists(),
+			"a bare envelope carries no digest to refuse")
+	})
+}

@@ -96,6 +96,14 @@ func (r *renderer) render(err error) (string, error) {
 		}
 	}
 
+	if errResp, ok := err.(*apimodel.ErrorResponse[apimodel.FormaGeneratorDestinationsUnreachableError]); ok {
+		var e error
+		msg, e = r.renderGeneratorDestinationsUnreachable(&errResp.Data)
+		if e != nil {
+			return "", e
+		}
+	}
+
 	if errResp, ok := err.(*apimodel.ErrorResponse[apimodel.FormaPatchRejectedError]); ok {
 		var e error
 		msg, e = r.renderPatchRejected(&errResp.Data)
@@ -266,6 +274,24 @@ func (r *renderer) renderReferencedGeneratorsNotFound(data *apimodel.FormaRefere
 		_, _ = fmt.Fprintf(&b, "    %s%s\n", r.subtle("from stack "), generator.Stack)
 		_, _ = fmt.Fprintf(&b, "    %s%s\n", r.subtle("output "), generator.Output)
 	}
+	return b.String(), nil
+}
+
+// renderGeneratorDestinationsUnreachable formats
+// FormaGeneratorDestinationsUnreachableError as an indented list of the
+// destinations the command does not reach, and says what to do about it.
+func (r *renderer) renderGeneratorDestinationsUnreachable(data *apimodel.FormaGeneratorDestinationsUnreachableError) (string, error) {
+	var b strings.Builder
+	_, _ = fmt.Fprintln(&b, r.error("forma rejected because a generator must draw a new value and the command does not reach every resource bound to it:"))
+	for _, destination := range data.Unreachable {
+		_, _ = fmt.Fprintf(&b, "  %s\n", destination.Label)
+		_, _ = fmt.Fprintf(&b, "    %s%s\n", r.subtle("of type "), destination.Type)
+		_, _ = fmt.Fprintf(&b, "    %s%s\n", r.subtle("from stack "), destination.Stack)
+		_, _ = fmt.Fprintf(&b, "    %s%s%s%s\n", r.subtle("bound to generator "), destination.GeneratorLabel,
+			r.subtle(" in stack "), destination.GeneratorStack)
+	}
+	b.WriteString("\n")
+	b.WriteString(r.warning("A generated value is never recoverable once the command that drew it ends, so apply every stack that binds the generator in one command.\n"))
 	return b.String(), nil
 }
 

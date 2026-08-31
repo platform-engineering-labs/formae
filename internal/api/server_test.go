@@ -404,6 +404,61 @@ func TestServer_ApplyFormaGeneratorNotFoundError(t *testing.T) {
 	}
 }
 
+// A refusal to draw a generator for only part of its destination set must
+// reach the operator as its own typed 422, not as an opaque 500.
+func TestServer_ApplyFormaGeneratorDestinationsUnreachableError(t *testing.T) {
+	meta := &apitest.FakeMetastructure{}
+	unreachable := apimodel.FormaGeneratorDestinationsUnreachableError{
+		Unreachable: []apimodel.UnreachableGeneratorDestination{
+			{GeneratorLabel: "db-password", GeneratorStack: "app", Stack: "web", Label: "api-secret", Type: "AWS::SecretsManager::Secret"},
+		},
+	}
+	meta.ApplyResponses = []apitest.WrappedCommandResponse{{&apimodel.SubmitCommandResponse{}, unreachable}}
+
+	server := NewServer(t.Context(), meta, nil, nil, nil, nil)
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+
+	_ = writer.WriteField("command", "apply")
+	_ = writer.WriteField("mode", "reconcile")
+	_ = writer.WriteField("simulate", "false")
+
+	part, err := writer.CreateFormFile("file", "forma.json")
+	if err != nil {
+		t.Fatalf("failed to create form file: %v", err)
+	}
+
+	jsonData, err := json.Marshal(&pkgmodel.Forma{})
+	if err != nil {
+		t.Fatalf("failed to marshal JSON: %v", err)
+	}
+	_, err = part.Write(jsonData)
+	if err != nil {
+		t.Fatalf("failed to write JSON data to form file: %v", err)
+	}
+	writer.Close()
+
+	req := httptest.NewRequest("POST", "/commands", body)
+	req.Header.Set("Client-ID", "test-client-id")
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	rec := httptest.NewRecorder()
+	c := server.echo.NewContext(req, rec)
+
+	if assert.NoError(t, server.SubmitFormaCommand(c)) {
+		assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+
+		var errorResponse apimodel.ErrorResponse[apimodel.FormaGeneratorDestinationsUnreachableError]
+		err = json.Unmarshal(rec.Body.Bytes(), &errorResponse)
+		assert.NoError(t, err)
+		assert.Equal(t, apimodel.GeneratorDestinationsUnreachable, errorResponse.ErrorType)
+		require.Len(t, errorResponse.Data.Unreachable, 1)
+		assert.Equal(t, "api-secret", errorResponse.Data.Unreachable[0].Label)
+		assert.Equal(t, "web", errorResponse.Data.Unreachable[0].Stack)
+	}
+}
+
 func TestServer_ApplyFormaStackReferenceNotFoundError(t *testing.T) {
 	meta := &apitest.FakeMetastructure{}
 	stackRefNotFound := apimodel.StackReferenceNotFoundError{
