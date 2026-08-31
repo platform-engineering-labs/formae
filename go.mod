@@ -62,7 +62,7 @@ require (
 	github.com/platform-engineering-labs/formae/pkg/plugin v0.0.0-00010101000000-000000000000
 	github.com/platform-engineering-labs/formae/tests/testcontrol v0.0.0-00010101000000-000000000000
 	github.com/platform-engineering-labs/jsonpatch v0.0.0-20260620044942-701436c7758c
-	github.com/platform-engineering-labs/oox/provx v0.0.0-20260830075044-0cce6834e852 // re-pin to a real tag at release time
+	github.com/platform-engineering-labs/oox/provx v0.0.0-20260831005205-99489fc5e7ca // re-pin to a real tag at release time
 	github.com/platform-engineering-labs/orbital v0.2.5
 	github.com/posthog/posthog-go v1.6.3
 	github.com/pressly/goose/v3 v3.26.0

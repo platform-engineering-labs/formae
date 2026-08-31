@@ -28,7 +28,7 @@ var newGCPProvisioner = func(ctx context.Context, project, subject, issuer strin
 	if err != nil {
 		return nil, err
 	}
-	return provxgcp.New(ctx, slog.Default(), project, tenantID, installationID)
+	return provxgcp.New(ctx, slog.Default(), project, tenantID, installationID, issuer)
 }
 
 // provisionGCP converges the project's federation and reports what it created.
