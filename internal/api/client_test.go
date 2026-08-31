@@ -102,6 +102,36 @@ func TestParseSubmitCommandErrorResponse_GeneratorDestinationsUnreachable(t *tes
 	assert.Equal(t, "AWS::SecretsManager::Secret", got.Data.Unreachable[0].Type)
 }
 
+// TestParseSubmitCommandErrorResponse_GeneratorBoundToSetOnceField asserts the
+// client decodes a GeneratorBoundToSetOnceField body into its typed error with
+// the field name intact, so the CLI can tell the operator what to edit rather
+// than printing "unknown error type".
+func TestParseSubmitCommandErrorResponse_GeneratorBoundToSetOnceField(t *testing.T) {
+	body, err := json.Marshal(apimodel.ErrorResponse[apimodel.FormaGeneratorBoundToSetOnceFieldError]{
+		ErrorType: apimodel.GeneratorBoundToSetOnceField,
+		Data: apimodel.FormaGeneratorBoundToSetOnceFieldError{
+			Fields: []apimodel.SetOnceGeneratorField{
+				{GeneratorLabel: "db-password", GeneratorStack: "app", Stack: "web", Label: "api", Type: "AWS::S3::Bucket", Field: "DbPassword"},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	c := &Client{}
+	_, perr := c.parseSubmitCommandErrorResponse(io.NopCloser(bytes.NewReader(body)))
+	require.Error(t, perr)
+
+	var got *apimodel.ErrorResponse[apimodel.FormaGeneratorBoundToSetOnceFieldError]
+	require.ErrorAs(t, perr, &got, "must decode into a typed FormaGeneratorBoundToSetOnceFieldError")
+	require.Len(t, got.Data.Fields, 1)
+	assert.Equal(t, "db-password", got.Data.Fields[0].GeneratorLabel)
+	assert.Equal(t, "app", got.Data.Fields[0].GeneratorStack)
+	assert.Equal(t, "api", got.Data.Fields[0].Label)
+	assert.Equal(t, "web", got.Data.Fields[0].Stack)
+	assert.Equal(t, "AWS::S3::Bucket", got.Data.Fields[0].Type)
+	assert.Equal(t, "DbPassword", got.Data.Fields[0].Field)
+}
+
 // TestGetFormaCommandsStatusNotFoundReturnsConcreteEmptyResult verifies a 404
 // from the commands/status endpoint resolves to a well-formed empty result
 // (non-nil, zero Commands), not a bare nil that forces every caller to

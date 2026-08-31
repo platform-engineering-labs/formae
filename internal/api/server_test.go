@@ -459,6 +459,62 @@ func TestServer_ApplyFormaGeneratorDestinationsUnreachableError(t *testing.T) {
 	}
 }
 
+// A refusal to draw a generator into a field that will not accept the value
+// must reach the operator as its own typed 422, with the field named, not as
+// an opaque 500.
+func TestServer_ApplyFormaGeneratorBoundToSetOnceFieldError(t *testing.T) {
+	meta := &apitest.FakeMetastructure{}
+	setOnce := apimodel.FormaGeneratorBoundToSetOnceFieldError{
+		Fields: []apimodel.SetOnceGeneratorField{
+			{GeneratorLabel: "db-password", GeneratorStack: "app", Stack: "web", Label: "api", Type: "AWS::S3::Bucket", Field: "DbPassword"},
+		},
+	}
+	meta.ApplyResponses = []apitest.WrappedCommandResponse{{&apimodel.SubmitCommandResponse{}, setOnce}}
+
+	server := NewServer(t.Context(), meta, nil, nil, nil, nil)
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+
+	_ = writer.WriteField("command", "apply")
+	_ = writer.WriteField("mode", "reconcile")
+	_ = writer.WriteField("simulate", "false")
+
+	part, err := writer.CreateFormFile("file", "forma.json")
+	if err != nil {
+		t.Fatalf("failed to create form file: %v", err)
+	}
+
+	jsonData, err := json.Marshal(&pkgmodel.Forma{})
+	if err != nil {
+		t.Fatalf("failed to marshal JSON: %v", err)
+	}
+	_, err = part.Write(jsonData)
+	if err != nil {
+		t.Fatalf("failed to write JSON data to form file: %v", err)
+	}
+	writer.Close()
+
+	req := httptest.NewRequest("POST", "/commands", body)
+	req.Header.Set("Client-ID", "test-client-id")
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	rec := httptest.NewRecorder()
+	c := server.echo.NewContext(req, rec)
+
+	if assert.NoError(t, server.SubmitFormaCommand(c)) {
+		assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+
+		var errorResponse apimodel.ErrorResponse[apimodel.FormaGeneratorBoundToSetOnceFieldError]
+		err = json.Unmarshal(rec.Body.Bytes(), &errorResponse)
+		assert.NoError(t, err)
+		assert.Equal(t, apimodel.GeneratorBoundToSetOnceField, errorResponse.ErrorType)
+		require.Len(t, errorResponse.Data.Fields, 1)
+		assert.Equal(t, "DbPassword", errorResponse.Data.Fields[0].Field)
+		assert.Equal(t, "api", errorResponse.Data.Fields[0].Label)
+	}
+}
+
 func TestServer_ApplyFormaStackReferenceNotFoundError(t *testing.T) {
 	meta := &apitest.FakeMetastructure{}
 	stackRefNotFound := apimodel.StackReferenceNotFoundError{

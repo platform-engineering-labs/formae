@@ -370,6 +370,13 @@ func (c *Client) parseSubmitCommandErrorResponse(body io.ReadCloser) (*apimodel.
 		}
 		return nil, &errResp
 
+	case apimodel.GeneratorBoundToSetOnceField:
+		var errResp apimodel.ErrorResponse[apimodel.FormaGeneratorBoundToSetOnceFieldError]
+		if err := json.Unmarshal(bodyBytes, &errResp); err != nil {
+			return nil, fmt.Errorf("failed to parse GeneratorBoundToSetOnceField error: %w", err)
+		}
+		return nil, &errResp
+
 	case apimodel.TargetAlreadyExists:
 		var errResp apimodel.ErrorResponse[apimodel.TargetAlreadyExistsError]
 		if err := json.Unmarshal(bodyBytes, &errResp); err != nil {
