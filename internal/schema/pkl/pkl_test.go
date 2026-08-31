@@ -341,6 +341,30 @@ func TestPkl_GeneratorReference_RendersGenEnvelope(t *testing.T) {
 	assert.Equal(t, "Opaque", gjson.Get(jsonString, "Resources.0.Properties.value.$visibility").String())
 }
 
+// TestPkl_GeneratorBinding_PluginResourceFieldRendersGenEnvelope verifies that
+// a plugin resource's secret-bearing property, whose declared union admits
+// formae.GeneratorOutput, can be bound to `pw.gen.value` from PKL and renders
+// the $gen envelope. The field keeps its Opaque schema hint, so the union that
+// admits a generator output still marks the property a secret.
+func TestPkl_GeneratorBinding_PluginResourceFieldRendersGenEnvelope(t *testing.T) {
+	p := PKL{}
+	forma, err := p.Evaluate("./testdata/forma/generator_binding_test.pkl", model.CommandApply, model.FormaApplyModeReconcile, nil)
+	require.NoError(t, err)
+
+	jsonString := forma.ToJSON()
+
+	assert.Equal(t, "FakeAWS::SecretsManager::Secret", gjson.Get(jsonString, "Resources.0.Type").String())
+	assert.True(t, gjson.Get(jsonString, "Resources.0.Properties.SecretString.$gen").Bool())
+	assert.Equal(t, "db-password", gjson.Get(jsonString, "Resources.0.Properties.SecretString.$label").String())
+	assert.Equal(t, "generator-binding-stack", gjson.Get(jsonString, "Resources.0.Properties.SecretString.$stack").String())
+	assert.Equal(t, "value", gjson.Get(jsonString, "Resources.0.Properties.SecretString.$output").String())
+	assert.Equal(t, "Opaque", gjson.Get(jsonString, "Resources.0.Properties.SecretString.$visibility").String())
+	assert.True(t, gjson.Get(jsonString, "Resources.0.Schema.Hints.SecretString.Opaque").Bool())
+
+	assert.Equal(t, "db-password", gjson.Get(jsonString, "Generators.0.Label").String())
+	assert.Equal(t, "generator-binding-stack", gjson.Get(jsonString, "Generators.0.Stack").String())
+}
+
 // TestPkl_GeneratorOutput_EnvelopeFieldsAreImmutable verifies that the $gen
 // envelope's fields cannot be amended — a plan cannot rewrite $visibility
 // away from Opaque (or forge $gen, $label, $stack, $output) once a
