@@ -33,9 +33,9 @@ func rawPasswordGenerator(t *testing.T, gen *pkgmodel.PasswordGenerator) json.Ra
 
 // TestMetastructure_ApplyFormaPersistsGeneratorThenReapplyIsANoop is the
 // generator lifecycle's end-to-end case: applying a forma that declares a
-// generator actually persists it, and re-applying the identical forma
-// persists nothing new — connecting Forma.Generators to the datastore is
-// exactly what this slice adds; nothing read it before.
+// generator persists it, because the apply path reads Forma.Generators
+// through to the datastore, and re-applying the identical forma persists
+// nothing new.
 func TestMetastructure_ApplyFormaPersistsGeneratorThenReapplyIsANoop(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		m, def, err := test_helpers.NewTestMetastructure(t, nil)
@@ -93,9 +93,9 @@ func TestMetastructure_ApplyFormaPersistsGeneratorThenReapplyIsANoop(t *testing.
 }
 
 // TestMetastructure_ApplyFormaSimulate_GeneratorOnlyChangeReportsANonEmptyPlan
-// pins the defect this task fixes: a forma whose only change is a generator
-// must report ChangesRequired together with a plan that actually shows the
-// change, never ChangesRequired with an empty Command. The stack is
+// requires that a forma whose only change is a generator reports
+// ChangesRequired together with a plan that actually shows the change, never
+// ChangesRequired with an empty Command. The stack is
 // established first with no generator, so the second (simulated) apply's
 // only change is the generator, and asserts against the in-memory simulate
 // response only — a reloaded command has no GeneratorUpdates column yet.
@@ -169,14 +169,14 @@ func TestMetastructure_ApplyFormaSimulate_GeneratorOnlyChangeReportsANonEmptyPla
 	})
 }
 
-// TestMetastructure_SameCommandGeneratorAndConsumer_ShareOneKSUID pins the
-// KSUID-threading fix: a generator declared in the SAME command as a
-// resource's $gen reference to it must translate to the exact KSUID that
-// generator's own GeneratorUpdate carries — not two independently minted
-// KSUIDs. Calls FormaCommandFromForma directly (build only, no execution),
-// which isolates the wiring bug from plugin execution and from
-// generation-drawing (a later slice: no value is drawn here, only the
-// generator's identity and the $gen envelope's reference to it).
+// TestMetastructure_SameCommandGeneratorAndConsumer_ShareOneKSUID covers
+// KSUID threading: a generator declared in the SAME command as a resource's
+// $gen reference to it must translate to the exact KSUID that generator's own
+// GeneratorUpdate carries, not two independently minted KSUIDs. Calls
+// FormaCommandFromForma directly (build only, no execution), which keeps the
+// assertion on identity threading alone, with no plugin execution and no
+// drawing: no value is drawn here, only the generator's identity and the $gen
+// envelope's reference to it.
 func TestMetastructure_SameCommandGeneratorAndConsumer_ShareOneKSUID(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		m, def, err := test_helpers.NewTestMetastructure(t, nil)

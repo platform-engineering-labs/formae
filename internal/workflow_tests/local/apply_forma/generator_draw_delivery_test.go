@@ -8,6 +8,8 @@ package workflow_tests_local
 
 import (
 	"encoding/json"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -16,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 
+	"github.com/platform-engineering-labs/formae/internal/logging"
 	"github.com/platform-engineering-labs/formae/internal/metastructure"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
@@ -145,6 +148,79 @@ func assertDrawnValueIsNotStored(t *testing.T, m *metastructure.Metastructure, c
 	require.NoError(t, err)
 	assert.False(t, strings.Contains(string(encodedGenerator), drawnValue),
 		"the generator row must never hold the value drawn from it")
+}
+
+// goByteSlice matches the way Go renders a []byte through fmt's %v/%+v verbs:
+// a bracketed run of decimal byte values, e.g. "[123 34 80 97 ...]".
+var goByteSlice = regexp.MustCompile(`\[\d+(?: \d+)*\]`)
+
+// decodeGoByteSlices returns the text spelled out by every Go-rendered byte
+// slice in s. A property document rendered this way carries all of its bytes
+// while matching no substring search for the characters they spell, so a log
+// line is only clean if its decoded text is clean too.
+func decodeGoByteSlices(s string) []string {
+	var decoded []string
+	for _, match := range goByteSlice.FindAllString(s, -1) {
+		fields := strings.Fields(strings.Trim(match, "[]"))
+		buf := make([]byte, 0, len(fields))
+		ok := true
+		for _, f := range fields {
+			n, err := strconv.Atoi(f)
+			if err != nil || n < 0 || n > 255 {
+				ok = false
+				break
+			}
+			buf = append(buf, byte(n))
+		}
+		if ok && len(buf) > 0 {
+			decoded = append(decoded, string(buf))
+		}
+	}
+	return decoded
+}
+
+// assertNoPlaintextInLogs sweeps every captured slog entry for a secret, in
+// both the renderings a raw JSON document can take: the characters themselves,
+// and the decimal byte array fmt produces for a json.RawMessage under a text
+// handler. Only the first is visible to a substring search, so a plaintext
+// carried through the second would pass an unaided assert.NotContains.
+func assertNoPlaintextInLogs(t *testing.T, capture *logging.TestLogCapture, plaintext string) {
+	t.Helper()
+	require.NotEmpty(t, plaintext)
+	entries := capture.GetEntries()
+	require.NotEmpty(t, entries, "the log capture must have seen the run it is being swept for")
+	for _, entry := range entries {
+		assert.NotContains(t, entry, plaintext, "a log entry leaked the secret")
+		for _, decoded := range decodeGoByteSlices(entry) {
+			assert.NotContains(t, decoded, plaintext,
+				"a log entry carried the secret as a byte slice")
+		}
+	}
+}
+
+// assertProvenanceCarriersAreWellFormed checks every digest a command's
+// resource updates carry: a provenance carrier holds an identity of a value,
+// so anything in one that is not a current-domain digest is either a leak or a
+// comparison that will silently never match.
+func assertProvenanceCarriersAreWellFormed(t *testing.T, m *metastructure.Metastructure, commandID string) {
+	t.Helper()
+	updates, err := m.Datastore.LoadResourceUpdates(commandID)
+	require.NoError(t, err)
+	require.NotEmpty(t, updates)
+	for _, ru := range updates {
+		for _, rec := range ru.ProvenanceRecords {
+			for _, d := range []string{rec.SourceRootDigest, rec.WrittenProvenance, rec.WrittenDigest} {
+				if d != "" {
+					assert.True(t, provenance.Valid(d),
+						"provenance record digest must be well-formed, got %q", d)
+				}
+			}
+		}
+		for uri, d := range ru.ResolvedRootDigests {
+			assert.True(t, provenance.Valid(d),
+				"resolved root digest for %s must be well-formed, got %q", uri, d)
+		}
+	}
 }
 
 // An identical re-apply of a generator-bound secret must not redraw. The

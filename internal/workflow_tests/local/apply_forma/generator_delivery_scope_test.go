@@ -48,11 +48,15 @@ import (
 // different values, and the next apply repairs the one and breaks the other,
 // forever.
 //
-// "In the changeset" is load-bearing in shape 2. A consumer that this command
-// plans no operation for — because nothing about it moved — is not a node in
-// the graph, so no delivery can reach it, and it cannot be caught up later
-// either: formae keeps only a hash of a generated value, never the value.
-// Such a consumer is left on its older generation.
+// "In the changeset" is load-bearing in shape 2, and it is the boundary of
+// this seam rather than of formae. Delivery reaches the nodes of the graph and
+// nothing else, and formae keeps only a hash of a generated value, never the
+// value, so a consumer that is not a node when a draw happens could never be
+// brought level afterwards. Two passes outside this file are what close that
+// boundary: a live destination the applied forma declares is co-planned into
+// the command so that it IS a node (generator_co_planning_test.go), and one
+// the forma does not declare cannot be, so the apply is refused rather than
+// run (generator_destination_reach_test.go).
 
 // deliveredValues is a per-label fake secret store that records every value
 // each label was written with, per operation, so a test can see which
@@ -180,13 +184,14 @@ func storedResolvedFrom(t *testing.T, m *metastructure.Metastructure, stack, lab
 // Shape 2. A draw that happens must reach every destination of its generator
 // in the changeset, including one whose own occurrence classified stable.
 //
-// The second apply adds a consumer AND edits an unrelated field on the
-// consumer that was already applied, so the applied one is planned and is a
-// node in the changeset. Its $gen occurrence is stable — nothing about the
-// binding moved — but the generator is drawing for the new consumer, and
-// delivering that draw to only the new consumer would leave the two holding
-// different credentials. Every apply after that would repair one and break
-// the other, forever.
+// The second apply adds a consumer and edits an unrelated field on the
+// consumer that was already applied. The edit is kept so that consumer reaches
+// the changeset as an ordinary planned node, which is what makes this the
+// delivery seam's own case rather than co-planning's. Its $gen occurrence is
+// stable (nothing about the binding moved), but the generator is drawing for
+// the new consumer, and delivering that draw to only the new consumer would
+// leave the two holding different credentials. Every apply after that would
+// repair one and break the other, forever.
 //
 // The convergence is asserted the only way that cannot be faked: a third,
 // identical apply must plan nothing at all.
