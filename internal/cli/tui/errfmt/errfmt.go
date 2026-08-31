@@ -180,6 +180,10 @@ func (r *renderer) render(err error) (string, error) {
 		msg = r.renderResourceHasDependents(&errResp.Data)
 	}
 
+	if errResp, ok := err.(*apimodel.ErrorResponse[apimodel.FormaGeneratorHasDependentsError]); ok {
+		msg = r.renderGeneratorHasDependents(&errResp.Data)
+	}
+
 	if errResp, ok := err.(*apimodel.ErrorResponse[apimodel.PluginNotFoundError]); ok {
 		msg = r.errorf("plugin '%s' not found\n", errResp.Data.Name)
 	}
@@ -463,6 +467,31 @@ func (r *renderer) renderResourceHasDependents(data *apimodel.FormaResourceHasDe
 		"it would be torn down too.\n\n") +
 		"To proceed and tear the dependent resource(s) down as well, re-run with\n" +
 		"--on-dependents=cascade.\n"
+	return message
+}
+
+// renderGeneratorHasDependents formats FormaGeneratorHasDependentsError: a
+// delete of a generator that a live resource still binds a property to, either
+// a destroy of the generator's stack or a reconcile that drops its
+// declaration.
+func (r *renderer) renderGeneratorHasDependents(data *apimodel.FormaGeneratorHasDependentsError) string {
+	var message string
+	if len(data.Dependents) == 1 {
+		d := data.Dependents[0]
+		message = r.errorf("deleting generator '%s' in stack '%s' would leave '%s' in stack '%s' bound to nothing.\n\n",
+			d.GeneratorLabel, d.GeneratorStack, d.ResourceLabel, d.Stack)
+	} else {
+		message = r.error("this delete would leave the following resources bound to a deleted generator:\n\n")
+		for _, d := range data.Dependents {
+			message += fmt.Sprintf("  - %s (%s, stack %s; bound to generator %s in stack %s)\n",
+				d.ResourceLabel, d.ResourceType, d.Stack, d.GeneratorLabel, d.GeneratorStack)
+		}
+		message += "\n"
+	}
+	message += r.warning("A generated value is never recoverable once the generator is gone, so a resource left\n"+
+		"bound to one can never be given a value again.\n\n") +
+		"To proceed and tear the bound resource(s) down as well, re-run with\n" +
+		"--on-dependents=cascade. To keep them, stop them binding this generator first.\n"
 	return message
 }
 

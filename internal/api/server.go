@@ -853,6 +853,14 @@ func mapError(c echo.Context, err error) error {
 		return apiError(c, http.StatusConflict, apimodel.ResourceHasDependents, resourceHasDependentsError)
 	}
 
+	// Conflict, not 422: the client's destroy entry points decode only 400 and
+	// 409, so a 422 would reach the caller as an opaque error on the very path
+	// this refusal exists for.
+	var generatorHasDependentsError apimodel.FormaGeneratorHasDependentsError
+	if errors.As(err, &generatorHasDependentsError) {
+		return apiError(c, http.StatusConflict, apimodel.GeneratorHasDependents, generatorHasDependentsError)
+	}
+
 	var requiredFieldMissingError apimodel.RequiredFieldMissingOnCreateError
 	if errors.As(err, &requiredFieldMissingError) {
 		return apiError(c, http.StatusBadRequest, apimodel.RequiredFieldMissingOnCreate, requiredFieldMissingError)

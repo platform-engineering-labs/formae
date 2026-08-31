@@ -39,6 +39,7 @@ const (
 	ResourceHasDependents            APIError = "ResourceHasDependents"
 	GeneratorDestinationsUnreachable APIError = "GeneratorDestinationsUnreachable"
 	GeneratorBoundToSetOnceField     APIError = "GeneratorBoundToSetOnceField"
+	GeneratorHasDependents           APIError = "GeneratorHasDependents"
 )
 
 type ErrorResponse[T any] struct {
@@ -352,6 +353,44 @@ func (e FormaResourceHasDependentsError) Error() string {
 		labels[i] = d.ResourceLabel
 	}
 	return fmt.Sprintf("this delete would cascade-delete %d dependent resource(s) %v; re-run with --on-dependents=cascade to proceed",
+		len(e.Dependents), labels)
+}
+
+// GeneratorDependent names a resource that binds a property to a generator
+// being deleted, along with the generator it binds. The resource is very often
+// in a different stack from the generator: that is what a generator is for.
+type GeneratorDependent struct {
+	GeneratorLabel string `json:"GeneratorLabel"`
+	GeneratorStack string `json:"GeneratorStack"`
+	ResourceLabel  string `json:"ResourceLabel"`
+	ResourceType   string `json:"ResourceType"`
+	Stack          string `json:"Stack"`
+}
+
+// FormaGeneratorHasDependentsError is returned when a command would delete a
+// generator that a live resource still binds a property to, but was not run
+// with on-dependents=cascade. A destroy of the generator's stack and a
+// reconcile that drops the generator's declaration are both deletes and both
+// refused on these terms.
+//
+// The default is to abort because the reference cannot survive the generator:
+// formae keeps a hash of a drawn value and never the value, so a resource left
+// bound to a deleted generator has no way back to a value on any later apply.
+type FormaGeneratorHasDependentsError struct {
+	Dependents []GeneratorDependent `json:"Dependents"`
+}
+
+func (e FormaGeneratorHasDependentsError) Error() string {
+	if len(e.Dependents) == 1 {
+		d := e.Dependents[0]
+		return fmt.Sprintf("deleting generator %q in stack %q would leave resource %q in stack %q bound to nothing; re-run with --on-dependents=cascade to proceed",
+			d.GeneratorLabel, d.GeneratorStack, d.ResourceLabel, d.Stack)
+	}
+	labels := make([]string, len(e.Dependents))
+	for i, d := range e.Dependents {
+		labels[i] = d.ResourceLabel
+	}
+	return fmt.Sprintf("this delete would leave %d resource(s) %v bound to a deleted generator; re-run with --on-dependents=cascade to proceed",
 		len(e.Dependents), labels)
 }
 
