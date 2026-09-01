@@ -332,27 +332,31 @@ local function envelopeMarkerOfClass(clazz: reflect.Class): String? =
   else
     null
 
-/// The same, for a union member's declared type. A nullable member is unwrapped
-/// to its member type, a type alias to its referent, and a member that is itself
-/// a union to the family of the first of its own members that has one — a
-/// parenthesised member stays a union of its own rather than being folded into
-/// the union around it. So `formae.Resolvable?`, an alias of it and
-/// `(formae.Resolvable|String)` are all recognised as reference members.
-local function envelopeMarkerOfType(type: reflect.Type): String? =
+/// Whether a union member's declared type can hold an envelope of the family
+/// `marker` names. A nullable member is unwrapped to its member type, a type
+/// alias to its referent, and a member that is itself a union carries every
+/// family its own members carry — a parenthesised member stays a union of its
+/// own rather than being folded into the union around it. So
+/// `formae.Resolvable?`, an alias of it and `(formae.Resolvable|String)` are all
+/// recognised as reference members.
+///
+/// A member naming several families at once is a member of each of them, which
+/// is what lets a field name `formae.ValueSource` in place of spelling the
+/// families out and still have each of them preferred over a sibling that would
+/// take the envelope as data.
+local function typeCarriesMarker(type: reflect.Type, marker: String): Boolean =
   if (type is reflect.NullableType)
-    envelopeMarkerOfType((type as reflect.NullableType).member)
+    typeCarriesMarker((type as reflect.NullableType).member, marker)
   else if (type is reflect.DeclaredType)
     let (reflectee = (type as reflect.DeclaredType).referent.reflectee)
-      if (reflectee is Class) envelopeMarkerOfClass(reflect.Class(reflectee))
-      else envelopeMarkerOfType(reflect.TypeAlias(reflectee).referent)
+      if (reflectee is Class) envelopeMarkerOfClass(reflect.Class(reflectee)) == marker
+      else typeCarriesMarker(reflect.TypeAlias(reflectee).referent, marker)
   else if (type is reflect.UnionType)
-    (type as reflect.UnionType).members
-      .map((member) -> envelopeMarkerOfType(member))
-      .findOrNull((marker) -> marker != null)
+    (type as reflect.UnionType).members.any((member) -> typeCarriesMarker(member, marker))
   else
-    null
+    false
 
-/// The first union member belonging to the envelope family of `value`, or
+/// The first union member able to hold the envelope family of `value`, or
 /// `null` when `value` is not an envelope or the union declares no member of
 /// its family.
 ///
@@ -365,7 +369,7 @@ local function envelopeMemberOf(members: List<reflect.Type>, value: Any): reflec
   else
     let (marker = envelopeMarkerOf(value.toMap()))
       if (marker == null) null
-      else members.findOrNull((member) -> envelopeMarkerOfType(member) == marker)
+      else members.findOrNull((member) -> typeCarriesMarker(member, marker))
 
 /// The classes whose handlers convert a value of one of them into another: a
 /// number is read out of text, text is written from a number, a boolean is

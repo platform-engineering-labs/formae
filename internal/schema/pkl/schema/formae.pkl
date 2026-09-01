@@ -748,6 +748,29 @@ open class SecretValue extends Value {
     }
 }
 
+/// Every way formae can supply a resource field's value other than as a literal:
+/// a reference to another resource's property, a value formae has recorded, a
+/// secret value, or one of a generator's named outputs. A field names this in
+/// place of spelling the four out, so a field that accepts anything formae can
+/// supply says so once and goes on saying it when a new envelope kind is added.
+///
+/// Because `SecretValue` is a member, a field naming this alias is marked opaque
+/// in its schema `FieldHint`, and the agent hashes its value at rest.
+///
+/// `String` is deliberately not a member: a field declares its own literal type
+/// beside the alias, as `(String|formae.ValueSource)?`. That is what keeps a
+/// constraint on the literal meaningful — with a bare `String` inside the alias,
+/// `(String(matches(Regex(#"…"#)))|formae.ValueSource)` would accept any string
+/// at all, since the alias's own unconstrained `String` arm would take it.
+///
+/// A field naming this alias accepts a generator binding. One that must not take
+/// a generated value spells out the members it does accept instead.
+typealias ValueSource =
+    Resolvable        // $res, another resource's property
+  | Value             // $value, a value formae has recorded
+  | SecretValue       // $value, and what marks the field opaque
+  | GeneratorOutput   // $gen, one of a generator's named outputs
+
 open class Prop {
     hidden flag: String?
     hidden default: (String|Boolean|Int|Float)?
