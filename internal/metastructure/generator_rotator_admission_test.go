@@ -8,12 +8,14 @@ package metastructure
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/demula/mksuid/v2"
 	"github.com/platform-engineering-labs/formae/internal/datastore"
 	dssqlite "github.com/platform-engineering-labs/formae/internal/datastore/sqlite"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -186,4 +188,99 @@ func TestPrepareRotation_SkipsAGeneratorWithNoDestination(t *testing.T) {
 	result, err := prepareRotation(ds, info)
 	require.NoError(t, err)
 	assert.Nil(t, result, "a generator with no destination must produce no command")
+}
+
+// storeRotationResource persists one resource on the rotation test target.
+func storeRotationResource(t *testing.T, ds datastore.Datastore, stack, label, resourceType, props string) string {
+	t.Helper()
+	ksuid := mksuid.New().String()
+	_, err := ds.StoreResource(&pkgmodel.Resource{
+		Ksuid:      ksuid,
+		NativeID:   label + "-native",
+		Stack:      stack,
+		Label:      label,
+		Type:       resourceType,
+		Target:     "rotation-target",
+		Properties: json.RawMessage(props),
+	}, "cmd-resource")
+	require.NoError(t, err)
+	return ksuid
+}
+
+// A rotated credential reaches the generator's destination, but the resources
+// that consume that destination by reference have to move with it. A database
+// role whose password is a reference to a rotating secret is the shape
+// production uses: the secret holds the new value and the engine still holds
+// the old one until the role is written, so a rotation that plans only the
+// secret leaves the credential and the database disagreeing.
+func TestPrepareRotation_PlansTheConsumersOfADestination(t *testing.T) {
+	ds := rotationTestDatastore(t)
+	_, err := ds.CreateTarget(&pkgmodel.Target{
+		Label: "rotation-target", Namespace: "AWS", Config: json.RawMessage(`{}`),
+	})
+	require.NoError(t, err)
+
+	info := createRotatingGenerator(t, ds, "secrets", "db-password", 3600)
+
+	secretKsuid := storeRotationResource(t, ds, "secrets", "db-password-secret",
+		"AWS::SecretsManager::Secret",
+		`{"SecretString":{"$gen":true,"$generator":"`+info.GeneratorID+
+			`","$output":"value","$visibility":"Opaque","$hashed":true,"$value":"sha256:digest"}}`)
+
+	storeRotationResource(t, ds, "secrets", "db-role",
+		"AWS::RDS::DatabaseRole",
+		`{"RoleName":"app","Password":{"$ref":"formae://`+secretKsuid+
+			`#/SecretValue","$visibility":"Opaque"}}`)
+
+	result, err := prepareRotation(ds, info)
+	require.NoError(t, err)
+	require.NotNil(t, result, "a generator with a destination must produce a command")
+
+	planned := map[string]bool{}
+	for _, ru := range result.command.ResourceUpdates {
+		planned[ru.DesiredState.Label] = true
+	}
+	assert.True(t, planned["db-password-secret"], "the generator's destination must be planned")
+	assert.True(t, planned["db-role"],
+		"a resource consuming the destination by reference must be planned, or the rotation leaves it holding the old credential")
+}
+
+// The control for the case above: widening the rotation to a destination's
+// consumers must not widen it to the whole stack. A resource that references
+// nothing the rotation moves is left out, so a credential rotating on a short
+// cadence does not re-plan unrelated infrastructure every cycle.
+func TestPrepareRotation_LeavesUnrelatedResourcesOutOfThePlan(t *testing.T) {
+	ds := rotationTestDatastore(t)
+	_, err := ds.CreateTarget(&pkgmodel.Target{
+		Label: "rotation-target", Namespace: "AWS", Config: json.RawMessage(`{}`),
+	})
+	require.NoError(t, err)
+
+	info := createRotatingGenerator(t, ds, "secrets", "db-password", 3600)
+
+	secretKsuid := storeRotationResource(t, ds, "secrets", "db-password-secret",
+		"AWS::SecretsManager::Secret",
+		`{"SecretString":{"$gen":true,"$generator":"`+info.GeneratorID+
+			`","$output":"value","$visibility":"Opaque","$hashed":true,"$value":"sha256:digest"}}`)
+
+	storeRotationResource(t, ds, "secrets", "db-role",
+		"AWS::RDS::DatabaseRole",
+		`{"RoleName":"app","Password":{"$ref":"formae://`+secretKsuid+
+			`#/SecretValue","$visibility":"Opaque"}}`)
+
+	// Same stack, references nothing that rotates.
+	storeRotationResource(t, ds, "secrets", "unrelated-bucket",
+		"AWS::S3::Bucket", `{"BucketName":"unrelated"}`)
+
+	result, err := prepareRotation(ds, info)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	planned := map[string]bool{}
+	for _, ru := range result.command.ResourceUpdates {
+		planned[ru.DesiredState.Label] = true
+	}
+	assert.True(t, planned["db-role"], "the consumer is still planned")
+	assert.False(t, planned["unrelated-bucket"],
+		"a resource that references nothing the rotation moves must stay out of the changeset")
 }
