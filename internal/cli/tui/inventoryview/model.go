@@ -28,8 +28,8 @@ type Model struct {
 	keys      tui.KeyMap
 	client    Client
 	opts      Options
-	specs     [4]tabSpec
-	tabs      [4]tabModel
+	specs     [tabCount]tabSpec
+	tabs      [tabCount]tabModel
 	active    Tab
 	width     int
 	height    int
@@ -63,14 +63,15 @@ type Model struct {
 	helpOpen bool
 }
 
-// New constructs a Model with the four tab specs and sane defaults.
+// New constructs a Model with the tab specs and sane defaults.
 func New(th *theme.Theme, client Client, opts Options) Model {
 	specs := newSpecs(opts.Now)
-	tabs := [4]tabModel{
-		TabResources: newTabModel(th, specs[TabResources]),
-		TabTargets:   newTabModel(th, specs[TabTargets]),
-		TabStacks:    newTabModel(th, specs[TabStacks]),
-		TabPolicies:  newTabModel(th, specs[TabPolicies]),
+	tabs := [tabCount]tabModel{
+		TabResources:  newTabModel(th, specs[TabResources]),
+		TabTargets:    newTabModel(th, specs[TabTargets]),
+		TabStacks:     newTabModel(th, specs[TabStacks]),
+		TabPolicies:   newTabModel(th, specs[TabPolicies]),
+		TabGenerators: newTabModel(th, specs[TabGenerators]),
 	}
 	// opts.Query is the initial query for the focus tab (D3). Seed both the tab's
 	// applied query and the shared query bar with it so it is threaded to the
@@ -291,12 +292,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case msg.Type == tea.KeyTab:
-		return m.switchTab(Tab((int(m.active) + 1) % 4))
+		return m.switchTab(Tab((int(m.active) + 1) % tabCount))
 
 	case msg.Type == tea.KeyShiftTab:
-		return m.switchTab(Tab((int(m.active) + 3) % 4)) // +3 mod 4 = -1 mod 4
+		return m.switchTab(Tab((int(m.active) + tabCount - 1) % tabCount))
 
-	case msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] >= '1' && msg.Runes[0] <= '4':
+	case msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] >= '1' && msg.Runes[0] < '1'+tabCount:
 		return m.switchTab(Tab(msg.Runes[0] - '1'))
 
 	case msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] == 'r':
@@ -796,13 +797,14 @@ func (m Model) viewHelp() string {
 }
 
 // renderTabBar renders the tab-selection bar as numbered tabs, e.g.
-// " 1 Resources   2 Targets   3 Stacks   4 Policies". The active tab is drawn as
-// an open-bottom box (top + side borders in the accent color); the third row is
-// an accent baseline that spans the full width with a gap under the active box,
-// so the line continues to the right edge beneath the inactive tabs. The leading
-// numbers double as the 1-4 switch hints. Returns exactly three lines.
+// " 1 Resources   2 Targets   3 Stacks   4 Policies   5 Generators". The active
+// tab is drawn as an open-bottom box (top + side borders in the accent color);
+// the third row is an accent baseline that spans the full width with a gap under
+// the active box, so the line continues to the right edge beneath the inactive
+// tabs. The leading numbers double as the switch hints. Returns exactly three
+// lines.
 func (m Model) renderTabBar() string {
-	titles := [4]string{"Resources", "Targets", "Stacks", "Policies"}
+	titles := [tabCount]string{"Resources", "Targets", "Stacks", "Policies", "Generators"}
 
 	borderSt := lipgloss.NewStyle()
 	activeSt := lipgloss.NewStyle()
@@ -880,7 +882,7 @@ func inventoryHelpGroups() []components.HelpGroup {
 				{Key: "↑↓ / j k", Desc: "navigate"},
 				{Key: "→← / h l", Desc: "sort column"},
 				{Key: "ctrl-d / ctrl-u", Desc: "scroll detail"},
-				{Key: "1-4 / tab", Desc: "switch tab"},
+				{Key: "1-5 / tab", Desc: "switch tab"},
 			},
 		},
 		{
@@ -912,7 +914,7 @@ func inventoryFooterHints() []components.KeyHint {
 		{Key: "s", Desc: "sort"},
 		{Key: "/", Desc: "search"},
 		{Key: "r", Desc: "refresh"},
-		{Key: "1-4", Desc: "tab"},
+		{Key: "1-5", Desc: "tab"},
 		{Key: "q", Desc: "quit"},
 	}
 }

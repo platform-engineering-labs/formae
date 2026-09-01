@@ -78,6 +78,11 @@ type WrappedPolicyResponse struct {
 	Error    error
 }
 
+type WrappedGeneratorResponse struct {
+	Generators []apimodel.GeneratorInventoryItem
+	Error      error
+}
+
 type WrappedSummaryResponse struct {
 	Summaries []pkgmodel.ResourceSummary
 	Error     error
@@ -102,6 +107,7 @@ type FakeMetastructure struct {
 	CheckTTLResponses        []WrappedCheckTTLResponse
 	StackResponses           []WrappedStackResponse
 	PolicyResponses          []WrappedPolicyResponse
+	GeneratorResponses       []WrappedGeneratorResponse
 	RecordedCancelQueries    []string
 	RecordedExtractQueries   []string
 	RecordedSummaryQueries   []string
@@ -261,6 +267,17 @@ func (m *FakeMetastructure) ExtractStacks() ([]*pkgmodel.Stack, error) {
 		m.StackResponses = m.StackResponses[1:]
 	}
 	return next.Stacks, next.Error
+}
+
+func (m *FakeMetastructure) ExtractGenerators() ([]apimodel.GeneratorInventoryItem, error) {
+	if len(m.GeneratorResponses) == 0 {
+		return []apimodel.GeneratorInventoryItem{}, nil
+	}
+	next := m.GeneratorResponses[0]
+	if len(m.GeneratorResponses) > 1 {
+		m.GeneratorResponses = m.GeneratorResponses[1:]
+	}
+	return next.Generators, next.Error
 }
 
 func (m *FakeMetastructure) ExtractPolicies() ([]apimodel.PolicyInventoryItem, error) {

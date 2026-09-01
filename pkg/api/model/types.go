@@ -231,6 +231,43 @@ type GeneratorUpdate struct {
 	ModifiedTs         time.Time       `json:"ModifiedTs,omitempty"`
 }
 
+// GeneratorInventoryItem represents one live generator in the inventory.
+//
+// Config carries the generator's declared spec only, exactly as
+// PolicyInventoryItem.Config does. A drawn value is never part of it: no
+// concrete Generator marshals one, and a drawn value is not stored in a
+// readable form anywhere. GenerationID is the generation's own identity — a
+// KSUID minted per draw — which says which generation the generator currently
+// holds and nothing about its value. It is empty until a value has been drawn.
+//
+// EverySeconds is 0 when the generator declares no rotation cadence.
+// LastRotatedAt is DERIVED from command history and stored nowhere; it is the
+// start of the most recent command that both advanced this generator's
+// generation and succeeded (see datastore.GeneratorRotationInfo). It is zero
+// when no such command exists, which reads as "never rotated". Only a
+// generator that declares a cadence carries either field: the derivation is
+// the one the rotation scheduler runs, and a generator nothing rotates on its
+// own has no cadence history to report.
+type GeneratorInventoryItem struct {
+	Label         string                 `json:"Label"`
+	Type          string                 `json:"Type"`
+	Stack         string                 `json:"Stack"`
+	Config        json.RawMessage        `json:"Config"`
+	EverySeconds  int                    `json:"EverySeconds,omitempty"`
+	LastRotatedAt time.Time              `json:"LastRotatedAt,omitempty"`
+	GenerationID  string                 `json:"GenerationID,omitempty"`
+	Destinations  []GeneratorDestination `json:"Destinations,omitempty"`
+}
+
+// GeneratorDestination names one resource that binds a property to a
+// generator. Its label and stack, and nothing else: a destination's properties
+// hold the generator's value under an opaque envelope, so no part of them
+// belongs in a projection built to be rendered.
+type GeneratorDestination struct {
+	ResourceLabel string `json:"ResourceLabel"`
+	StackLabel    string `json:"StackLabel"`
+}
+
 // PolicyInventoryItem represents a standalone policy in the inventory
 type PolicyInventoryItem struct {
 	Label          string          `json:"Label"`

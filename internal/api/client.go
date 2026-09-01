@@ -735,6 +735,30 @@ func (c *Client) ListStacks() ([]*pkgmodel.Stack, error) {
 	}
 }
 
+// ListGenerators fetches the generator inventory. A 404 is an empty inventory,
+// not a failure, matching ListPolicies.
+func (c *Client) ListGenerators() ([]apimodel.GeneratorInventoryItem, error) {
+	resp, err := c.resty.R().
+		Get(c.endpoint + "/api/v1/generators")
+	if err != nil {
+		return nil, fmt.Errorf("failed to list generators: %w", err)
+	}
+	//nolint:errcheck
+	defer resp.Body.Close()
+	switch resp.StatusCode() {
+	case http.StatusOK:
+		var generators []apimodel.GeneratorInventoryItem
+		if err := json.NewDecoder(resp.Body).Decode(&generators); err != nil {
+			return nil, fmt.Errorf("failed to decode response: %w", err)
+		}
+		return generators, nil
+	case http.StatusNotFound:
+		return nil, nil
+	default:
+		return nil, fmt.Errorf("unexpected response code from the formae agent: %d - %s", resp.StatusCode(), resp.String())
+	}
+}
+
 func (c *Client) ListPolicies() ([]apimodel.PolicyInventoryItem, error) {
 	resp, err := c.resty.R().
 		Get(c.endpoint + "/api/v1/policies")

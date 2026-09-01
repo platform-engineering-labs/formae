@@ -237,6 +237,36 @@ definitions:
           $ref: '#/definitions/model.Target'
         type: array
     type: object
+  model.GeneratorDestination:
+    properties:
+      ResourceLabel:
+        type: string
+      StackLabel:
+        type: string
+    type: object
+  model.GeneratorInventoryItem:
+    properties:
+      Config:
+        items:
+          type: integer
+        type: array
+      Destinations:
+        items:
+          $ref: '#/definitions/model.GeneratorDestination'
+        type: array
+      EverySeconds:
+        type: integer
+      GenerationID:
+        type: string
+      Label:
+        type: string
+      LastRotatedAt:
+        type: string
+      Stack:
+        type: string
+      Type:
+        type: string
+    type: object
   model.GeneratorUpdate:
     properties:
       Duration:
@@ -1066,6 +1096,30 @@ paths:
       summary: Get the status of multiple Forma commands
       tags:
       - commands
+  /generators:
+    get:
+      description: Retrieves all live generators with their cadence, the instant of
+        their last committed rotation, and the resources bound to them
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 'OK: List of generators.'
+          schema:
+            items:
+              $ref: '#/definitions/model.GeneratorInventoryItem'
+            type: array
+        "404":
+          description: 'Not Found: No generators found.'
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error.
+          schema:
+            type: string
+      summary: List generators
+      tags:
+      - generators
   /health:
     get:
       description: A simple health check endpoint to verify that the API server is

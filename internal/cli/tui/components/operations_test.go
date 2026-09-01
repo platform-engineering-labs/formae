@@ -150,3 +150,45 @@ func TestPromptForOperations_GeneratorDraw(t *testing.T) {
 	assert.Contains(t, plain, "every bound resource takes a new secret")
 	assert.Contains(t, plain, "Do you want to continue?")
 }
+
+// TestPromptForOperations_NothingWillRotate verifies the positive statement: a
+// command that changes a generator's row but draws no value says so, rather
+// than leaving an operator to infer it from the absence of a rotate clause.
+func TestPromptForOperations_NothingWillRotate(t *testing.T) {
+	cmd := &apimodel.Command{
+		GeneratorUpdates: []apimodel.GeneratorUpdate{
+			{GeneratorLabel: "db-password", Operation: "update"},
+		},
+	}
+	plain := stripANSI(PromptForOperations(theme.New("rich"), cmd))
+
+	assert.Contains(t, plain, "update 1 generator(s)")
+	assert.Contains(t, plain, noRotationStatement)
+	assert.NotContains(t, plain, "rotate 1 generator(s)")
+}
+
+// TestPromptForOperations_ARotationSuppressesTheNegative verifies the two
+// statements are mutually exclusive: a plan that does rotate never also claims
+// nothing will.
+func TestPromptForOperations_ARotationSuppressesTheNegative(t *testing.T) {
+	cmd := &apimodel.Command{
+		GeneratorUpdates: []apimodel.GeneratorUpdate{
+			{GeneratorLabel: "db-password", Operation: "update"},
+			{GeneratorLabel: "db-password", Operation: "draw"},
+		},
+	}
+	plain := stripANSI(PromptForOperations(theme.New("rich"), cmd))
+
+	assert.Contains(t, plain, "rotate 1 generator(s)")
+	assert.NotContains(t, plain, noRotationStatement)
+}
+
+// TestPromptForOperations_NoGeneratorsMakesNoRotationClaim verifies an ordinary
+// resource-only apply says nothing about rotation at all: the statement belongs
+// to plans where a generator is demonstrably in scope, not to every apply.
+func TestPromptForOperations_NoGeneratorsMakesNoRotationClaim(t *testing.T) {
+	plain := stripANSI(PromptForOperations(theme.New("rich"), buildMixedCommand()))
+
+	assert.NotContains(t, plain, noRotationStatement)
+	assert.NotContains(t, plain, "rotate")
+}

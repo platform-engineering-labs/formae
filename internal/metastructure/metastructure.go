@@ -67,6 +67,7 @@ type MetastructureAPI interface {
 	ExtractTargets(query string) ([]*pkgmodel.Target, error)
 	ExtractStacks() ([]*pkgmodel.Stack, error)
 	ExtractPolicies() ([]apimodel.PolicyInventoryItem, error)
+	ExtractGenerators() ([]apimodel.GeneratorInventoryItem, error)
 	ForceSync() error
 	ForceDiscovery() error
 	ForceAutoReconcile(stackLabel string, subject string, subjectName string) (*apimodel.ForceReconcileResponse, error)
