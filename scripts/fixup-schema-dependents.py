@@ -22,6 +22,7 @@ credentials able to read and write the hub bucket.
 """
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -66,14 +67,20 @@ def main() -> None:
     ]
 
     refreshed = 0
-    for key in keys:
-        with tempfile.NamedTemporaryFile("r+", suffix=".json") as tmp:
-            aws("s3", "cp", f"s3://{BUCKET}/{key}", tmp.name, "--only-show-errors")
-            try:
-                doc = json.load(tmp)
-            except ValueError:
-                print(f"skipping {key}: not package metadata")
-                continue
+    with tempfile.TemporaryDirectory() as workdir:
+        path = os.path.join(workdir, "metadata.json")
+        for key in keys:
+            # Open by path only after the download completes: the aws CLI
+            # downloads into a sidecar file and renames it over the
+            # destination, so a handle held across the call keeps reading the
+            # replaced inode.
+            aws("s3", "cp", f"s3://{BUCKET}/{key}", path, "--only-show-errors")
+            with open(path) as f:
+                try:
+                    doc = json.load(f)
+                except ValueError:
+                    print(f"skipping {key}: not package metadata")
+                    continue
             stale = [
                 dep
                 for dep in doc.get("dependencies", {}).values()
@@ -84,11 +91,9 @@ def main() -> None:
                 continue
             for dep in stale:
                 dep["checksums"] = {"sha256": sha256}
-            tmp.seek(0)
-            tmp.truncate()
-            json.dump(doc, tmp, indent=2)
-            tmp.flush()
-            aws("s3", "cp", tmp.name, f"s3://{BUCKET}/{key}", "--only-show-errors")
+            with open(path, "w") as f:
+                json.dump(doc, f, indent=2)
+            aws("s3", "cp", path, f"s3://{BUCKET}/{key}", "--only-show-errors")
             print(f"refreshed {key}")
             refreshed += 1
 
