@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os/exec"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armsubscriptions"
 
@@ -48,19 +49,61 @@ const (
 // "build a credential and make one ARM call" that would let a test drive
 // every classification without a real Azure environment, the same reason
 // GCP's findCredentials is a var.
+// tokenOutcome records whether a token was obtained at all, which is a
+// different question from whether the subscription could then be read. They
+// were once inferred from a single ARM call, and that conflated them: a
+// machine with no credential source produced the same failure as a
+// subscription that does not exist, so the operator was told to check their
+// subscription id when what they actually needed was to sign in.
+type tokenOutcome int
+
+const (
+	tokenFailed tokenOutcome = iota
+	tokenObtained
+)
+
+// azureScope is the ARM scope a token is requested for. It is the audience
+// every management-plane call uses, so a token that cannot be minted for it
+// cannot do anything this command needs.
+const azureScope = "https://management.azure.com/.default"
+
 var usableCredentials = func(ctx context.Context, subscriptionID, tenantHint string) (azureCredentialState, error) {
 	cred, err := azidentity.NewDefaultAzureCredential(&azidentity.DefaultAzureCredentialOptions{TenantID: tenantHint})
 	if err != nil {
 		return azureCredentialsNeedsAuthentication, nil //nolint:nilerr // the classification is the answer, not a failure
 	}
+
+	// Ask for a token first, and on its own. When no source in the chain can
+	// even attempt one - no environment variables, no managed identity, no az,
+	// no PowerShell - azidentity reports a credentialUnavailableError, which it
+	// does not export. So this cannot be recognised by type further down; it
+	// has to be observed here, where the attempt is made.
+	if _, err := cred.GetToken(ctx, policy.TokenRequestOptions{Scopes: []string{azureScope}}); err != nil {
+		return classifyCredentialOutcome(tokenFailed, err), nil //nolint:nilerr // as above
+	}
+
 	client, err := armsubscriptions.NewClient(cred, nil)
 	if err != nil {
 		return azureCredentialsNeedsAuthentication, nil //nolint:nilerr // as above
 	}
 	if _, err := client.Get(ctx, subscriptionID, nil); err != nil {
-		return classifyAzureCredentialError(err), nil
+		return classifyCredentialOutcome(tokenObtained, err), nil
 	}
 	return azureCredentialsUsable, nil
+}
+
+// classifyCredentialOutcome turns "did a token arrive, and what failed next"
+// into one of the four states.
+//
+// A token that never arrived is always a sign-in problem, whatever the error
+// says: the alternatives - a permission this principal lacks, a subscription
+// it cannot see - are statements about a principal, and there is no principal
+// until a token exists.
+func classifyCredentialOutcome(outcome tokenOutcome, err error) azureCredentialState {
+	if outcome == tokenFailed {
+		return azureCredentialsNeedsAuthentication
+	}
+	return classifyAzureCredentialError(err)
 }
 
 // classifyAzureCredentialError turns a failed subscription read into one of
