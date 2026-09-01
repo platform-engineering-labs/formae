@@ -17,10 +17,11 @@ the same publish.
 Usage: fixup-schema-dependents.py <schema-version>
 
 Expects the freshly packaged metadata at .out/formae@<version>/formae@<version>
-(the new checksum is read from it, exactly as pkl computed it) and AWS
-credentials able to read and write the hub bucket.
+(the declared checksum is the hash of that file) and AWS credentials able to
+read and write the hub bucket.
 """
 
+import hashlib
 import json
 import os
 import re
@@ -47,9 +48,13 @@ def main() -> None:
     version = sys.argv[1]
     coordinate = f"package://{BUCKET}/plugins/pkl/schema/pkl/formae/formae@{version}"
 
-    with open(f".out/formae@{version}/formae@{version}") as f:
-        sha256 = json.load(f)["packageZipChecksums"]["sha256"]
-    print(f"formae@{version} zip sha256: {sha256}")
+    # A pkl dependency checksum covers the dependency's metadata document,
+    # not its zip: the metadata carries the zip's checksum inside it
+    # (packageZipChecksums), forming a hash chain. So the value dependents
+    # must declare is the hash of the metadata file itself.
+    with open(f".out/formae@{version}/formae@{version}", "rb") as f:
+        sha256 = hashlib.sha256(f.read()).hexdigest()
+    print(f"formae@{version} metadata sha256: {sha256}")
 
     listing = aws(
         "s3api", "list-objects-v2",
