@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 
+	"github.com/platform-engineering-labs/formae/internal/datastore"
 	dssqlite "github.com/platform-engineering-labs/formae/internal/datastore/sqlite"
 	"github.com/platform-engineering-labs/formae/internal/metastructure"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
@@ -327,30 +328,60 @@ func newRotationAgent(t *testing.T, overrides *plugin.ResourcePluginOverrides, c
 // opaque reference to the generated secret's value.
 const consumerLabel = "my-bucket"
 
-// waitUntilRotationDue blocks until the generator's cadence has certainly
-// elapsed, so that a sweep which produces no rotation says something about the
-// sweep rather than about the clock. It waits two full intervals past the
-// derived anchor, which strictly covers the jitter (a tenth of the interval).
-//
-// Without this a "rotation was refused" assertion passes on a generator that
-// was simply not due yet, which is the same result for the wrong reason.
-func waitUntilRotationDue(t *testing.T, m *metastructure.Metastructure, stack, label string) {
+// rotationInfoFor returns the scheduler's view of one generator's cadence.
+func rotationInfoFor(t *testing.T, m *metastructure.Metastructure, stack, label string) datastore.GeneratorRotationInfo {
 	t.Helper()
 	infos, err := m.Datastore.GetGeneratorsWithRotation()
 	require.NoError(t, err)
 	for _, info := range infos {
-		if info.Label != label || info.StackLabel != stack {
-			continue
+		if info.Label == label && info.StackLabel == stack {
+			return info
 		}
-		require.False(t, info.LastRotationAt.IsZero(),
-			"precondition: the generator must have a committed draw to measure from")
-		interval := time.Duration(info.IntervalSeconds) * time.Second
-		if wait := time.Until(info.LastRotationAt.Add(2 * interval)); wait > 0 {
-			time.Sleep(wait)
-		}
-		return
 	}
 	t.Fatalf("no rotation info for generator %q on stack %q", label, stack)
+	return datastore.GeneratorRotationInfo{}
+}
+
+// makeRotationDue puts the generator's cadence behind it, so that a sweep
+// which produces no rotation says something about the sweep rather than about
+// the clock. Without it a "rotation was refused" assertion passes on a
+// generator that was simply not due yet, which is the same result for the
+// wrong reason.
+//
+// The cadence is derived rather than stored: the last-rotation instant is the
+// start of the successful command that drew the generator's current
+// generation. So the generator becomes due when that command is old, and the
+// intervention is to move that one instant back. No clock is faked and no
+// interval is shortened below what the schema admits. Two intervals back
+// covers the cadence and the jitter on top of it, which is a tenth of the
+// interval.
+//
+// A backdated command is the ordinary state of a datastore whose apply ran a
+// while ago, which is every datastore that has been up longer than one
+// cadence. Nothing else in rotation reads a command's start instant.
+func makeRotationDue(t *testing.T, m *metastructure.Metastructure, stack, label string) {
+	t.Helper()
+
+	info := rotationInfoFor(t, m, stack, label)
+	require.False(t, info.LastRotationAt.IsZero(),
+		"precondition: the generator must have a committed draw to measure from")
+	interval := time.Duration(info.IntervalSeconds) * time.Second
+	anchor := time.Now().UTC().Add(-2 * interval)
+
+	sqlite, ok := m.Datastore.(dssqlite.DatastoreSQLite)
+	require.True(t, ok, "the agent under test must run on SQLite for its command history to be aged")
+	result, err := sqlite.Conn().Exec(
+		`UPDATE forma_commands SET timestamp = ? WHERE command_id IN (
+			SELECT command_id FROM generators WHERE id = ? AND generation_id != ''
+		)`, anchor, info.GeneratorID)
+	require.NoError(t, err)
+	affected, err := result.RowsAffected()
+	require.NoError(t, err)
+	require.Positive(t, affected, "the draw's own command is what carries the cadence anchor")
+
+	aged := rotationInfoFor(t, m, stack, label)
+	require.GreaterOrEqual(t, time.Since(aged.LastRotationAt), 2*interval,
+		"the derived anchor must read as two intervals old")
 }
 
 // A rotation is an ordinary update, so it confronts drift rather than writing
@@ -379,7 +410,7 @@ func TestGeneratorRotation_RefusesADriftedStack(t *testing.T) {
 				// A patch records a modification since the last reconcile,
 				// which is the drift a soft reconcile confronts.
 				driftStack(t, m, stack, drifted)
-				waitUntilRotationDue(t, m, stack, "db-password")
+				makeRotationDue(t, m, stack, "db-password")
 
 				for i := 0; i < 10; i++ {
 					sweepRotations(t, m)
@@ -520,15 +551,7 @@ func failingUpdatesFor(delivered *deliveredValues, labels ...string) *plugin.Res
 // measured from, as the scheduler derives it.
 func rotationAnchorFor(t *testing.T, m *metastructure.Metastructure, stack, label string) time.Time {
 	t.Helper()
-	infos, err := m.Datastore.GetGeneratorsWithRotation()
-	require.NoError(t, err)
-	for _, info := range infos {
-		if info.Label == label && info.StackLabel == stack {
-			return info.LastRotationAt
-		}
-	}
-	t.Fatalf("no rotation info for generator %q on stack %q", label, stack)
-	return time.Time{}
+	return rotationInfoFor(t, m, stack, label).LastRotationAt
 }
 
 // The cadence advances on one milestone and one only: every authority-side
@@ -561,13 +584,12 @@ func TestGeneratorRotation_AFailedAuthorityUpdateDoesNotAdvanceTheCadence(t *tes
 		waitForApplyComplete(t, m)
 		require.Len(t, delivered.createdWith("alpha"), 1, "precondition: the destination was drawn for")
 
+		makeRotationDue(t, m, stack, "db-password")
 		anchorBefore := rotationAnchorFor(t, m, stack, "db-password")
-		require.False(t, anchorBefore.IsZero(), "precondition: the first apply committed a draw")
 		generationBefore, err := m.Datastore.GetGeneratorIdentity("db-password", stack)
 		require.NoError(t, err)
 		digestBefore := storedBinding(t, m, stack, "alpha").Get("$value").String()
 
-		waitUntilRotationDue(t, m, stack, "db-password")
 		rotation := sweepUntilRotated(t, m)
 		require.Equal(t, forma_command.CommandStateFailed, rotation.State,
 			"precondition: the authority-side update must have failed")
@@ -617,10 +639,9 @@ func TestGeneratorRotation_OneFailedDestinationOfSeveralDoesNotAdvanceTheCadence
 		require.Len(t, delivered.createdWith("alpha"), 1, "precondition: both destinations were drawn for")
 		require.Len(t, delivered.createdWith("beta"), 1)
 
+		makeRotationDue(t, m, stack, "db-password")
 		anchorBefore := rotationAnchorFor(t, m, stack, "db-password")
-		require.False(t, anchorBefore.IsZero())
 
-		waitUntilRotationDue(t, m, stack, "db-password")
 		rotation := sweepUntilRotated(t, m)
 		require.Equal(t, forma_command.CommandStateFailed, rotation.State,
 			"precondition: one destination's write must have failed")

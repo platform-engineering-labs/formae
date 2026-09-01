@@ -9,10 +9,9 @@
 // cadence lives on the generator rather than on the secret, so one interval
 // governs every destination that shares the credential.
 //
-// `every` is one second because the scheduler's sweep is driven directly in
-// the test: the interval only has to be short enough that the generator comes
-// due, and `RotationSpec.every` is an unconstrained Duration rendered to whole
-// seconds, so a second is the shortest cadence the schema admits.
+// `every` is one minute, the shortest cadence the schema admits. The test does
+// not wait for it: it backdates the anchor the cadence is measured from and
+// drives the scheduler's sweep directly.
 
 amends "@formae/forma.pkl"
 import "@formae/formae.pkl"
@@ -38,7 +37,7 @@ forma {
     stack = appStack.res
     length = 24
     rotation = new formae.RotationSpec {
-      every = 1.s
+      every = 1.min
     }
   }
   pw
