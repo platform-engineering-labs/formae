@@ -115,9 +115,13 @@ gen-pkl: version-semver
 pkg-pkl:
 	pkl project package ./internal/schema/pkl/schema --skip-publish-check
 
-## publish-pkl: Publish core formae schema to S3
+## publish-pkl: Publish core formae schema to S3. Overwriting a canonical
+## version invalidates the checksum every dependent plugin schema's metadata
+## declares for it, so the publish refreshes those declarations in the same
+## step (see scripts/fixup-schema-dependents.py).
 publish-pkl:
 	aws s3 sync .out/formae@${VERSION} s3://hub.platform.engineering/plugins/pkl/schema/pkl/formae/
+	python3 scripts/fixup-schema-dependents.py ${VERSION}
 
 run:
 	go run cmd/formae/main.go
