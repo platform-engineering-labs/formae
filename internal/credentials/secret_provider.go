@@ -257,7 +257,7 @@ func (p *SecretProvider) fetch(ctx context.Context) (string, error) {
 // datastore down with it. It refuses for a permanent failure, and refuses once
 // the value is older than maxStale.
 func (p *SecretProvider) staleFallback(err error) (string, bool) {
-	if !transient(err) {
+	if !Transient(err) {
 		return "", false
 	}
 	p.mu.Lock()
@@ -271,7 +271,7 @@ func (p *SecretProvider) staleFallback(err error) (string, bool) {
 	return p.cached, true
 }
 
-// transient reports whether a failure is worth riding out on a cached value.
+// Transient reports whether a failure is worth riding out on a cached value.
 //
 // One predicate, shared with the startup retry, because two of these would
 // eventually disagree — the provider withholding a stale value while startup
@@ -281,7 +281,7 @@ func (p *SecretProvider) staleFallback(err error) (string, bool) {
 // secret, a malformed request, a denial, or a key the caller cannot use.
 // Anything else is treated as transient, which is the more available default
 // and is safe because staleness is bounded by maxStale regardless.
-func transient(err error) bool {
+func Transient(err error) bool {
 	if err == nil {
 		return false
 	}

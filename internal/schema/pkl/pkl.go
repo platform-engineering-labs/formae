@@ -197,6 +197,7 @@ func translateConfig(config *pklmodel.Config) (*pkgmodel.Config, error) {
 					Port:             int(config.Agent.Datastore.Postgres.Port),
 					User:             config.Agent.Datastore.Postgres.User,
 					Password:         config.Agent.Datastore.Postgres.Password,
+					PasswordSecretArn: config.Agent.Datastore.Postgres.PasswordSecretArn,
 					Database:         config.Agent.Datastore.Postgres.Database,
 					Schema:           config.Agent.Datastore.Postgres.Schema,
 					ConnectionParams: config.Agent.Datastore.Postgres.ConnectionParams,

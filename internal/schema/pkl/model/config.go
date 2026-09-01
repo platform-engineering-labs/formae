@@ -70,13 +70,14 @@ type SqliteConfig struct {
 }
 
 type PostgresConfig struct {
-	Host             string `pkl:"host"`
-	Port             int32  `pkl:"port"`
-	User             string `pkl:"user"`
-	Password         string `pkl:"password"`
-	Database         string `pkl:"database"`
-	Schema           string `pkl:"schema"`
-	ConnectionParams string `pkl:"connectionParams"`
+	Host              string `pkl:"host"`
+	Port              int32  `pkl:"port"`
+	User              string `pkl:"user"`
+	Password          string `pkl:"password"`
+	PasswordSecretArn string `pkl:"passwordSecretArn"`
+	Database          string `pkl:"database"`
+	Schema            string `pkl:"schema"`
+	ConnectionParams  string `pkl:"connectionParams"`
 }
 
 type AuroraDataAPIConfig struct {

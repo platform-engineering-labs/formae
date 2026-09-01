@@ -18,8 +18,10 @@ import (
 	"github.com/exaring/otelpgx"
 	json "github.com/goccy/go-json"
 	pgx "github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/platform-engineering-labs/formae/internal/credentials"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 
@@ -136,7 +138,128 @@ func NewDatastorePostgresEnsureDatabase(ctx context.Context, cfg *pkgmodel.Datas
 	return NewDatastorePostgres(ctx, cfg, agentID)
 }
 
+// startupReadinessAttempts bounds how long construction waits out a control
+// plane that is briefly unavailable. Failing immediately would mean a rolling
+// deployment where no replacement task can become healthy, while the orchestrator
+// churns tasks and adds load to the service that is already struggling.
+const (
+	startupReadinessAttempts = 4
+	startupReadinessBackoff  = 500 * time.Millisecond
+)
+
+// configurePasswordProvider installs a credential provider when the config names
+// a secret to resolve the password from.
+//
+// It runs before the password is first resolved so the migration connection uses
+// the same authority the pool will, and so an unreadable secret fails startup
+// rather than surfacing later on some connection.
+//
+// With no ARN configured this does nothing at all — in particular it builds no
+// AWS client, which is what keeps an existing deployment's startup free of an
+// AWS credential lookup it never asked for.
+func configurePasswordProvider(ctx context.Context, cfg *pkgmodel.DatastoreConfig) error {
+	if cfg.Postgres.PasswordSecretArn == "" || cfg.Postgres.PasswordProvider != nil {
+		return nil
+	}
+
+	if cfg.Postgres.PasswordProviderFactory != nil {
+		provider, err := cfg.Postgres.PasswordProviderFactory(ctx, cfg.Postgres.PasswordSecretArn)
+		if err != nil {
+			return fmt.Errorf("failed to build the datastore password provider: %w", err)
+		}
+		cfg.Postgres.PasswordProvider = provider
+		return warmProvider(ctx, provider)
+	}
+
+	provider, err := credentials.NewSecretProvider(ctx, cfg.Postgres.PasswordSecretArn)
+	if err != nil {
+		return fmt.Errorf("failed to build the datastore password provider: %w", err)
+	}
+	cfg.Postgres.PasswordProvider = provider.Provide
+	return warmProvider(ctx, cfg.Postgres.PasswordProvider)
+}
+
+// warmProvider fetches the credential once, deliberately, before anything needs
+// it.
+//
+// It is what makes an unreadable secret a startup failure rather than a failure
+// on the first connection, and it is where a transient control-plane failure is
+// waited out: a blip during a rolling deployment should not stop a task
+// becoming healthy. A permanent failure — a missing secret, a denial — is not
+// waited out, because it will not fix itself.
+func warmProvider(ctx context.Context, provide pkgmodel.PasswordProvider) error {
+	var err error
+	for attempt := range startupReadinessAttempts {
+		if _, err = provide(ctx); err == nil {
+			return nil
+		}
+		if !credentials.Transient(err) {
+			return fmt.Errorf("failed to read the datastore credential: %w", err)
+		}
+		if attempt < startupReadinessAttempts-1 {
+			select {
+			case <-time.After(startupReadinessBackoff << attempt):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+	return fmt.Errorf("failed to read the datastore credential: %w", err)
+}
+
+// verifyPoolReadiness proves the resolved credential actually authenticates.
+//
+// This is deliberate rather than incidental. Pool construction establishes no
+// connection — pgx pools are lazy — and while migrations do connect first, they
+// do so through a connection string carrying one already-resolved password,
+// not through the pool's per-connection resolution. Only a pool acquisition
+// exercises the path every later connection takes.
+//
+// Transient failures are retried, because a control-plane blip during a rolling
+// deployment should not stop a task becoming healthy. A credential the database
+// rejects is not transient and fails immediately.
+func verifyPoolReadiness(ctx context.Context, pool *pgxpool.Pool) error {
+	var err error
+	for attempt := range startupReadinessAttempts {
+		if err = pool.Ping(ctx); err == nil {
+			return nil
+		}
+		if rejectedCredential(err) {
+			return fmt.Errorf("the datastore rejected the resolved credential: %w", err)
+		}
+		if attempt < startupReadinessAttempts-1 {
+			select {
+			case <-time.After(startupReadinessBackoff << attempt):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+	return fmt.Errorf("the datastore did not become ready: %w", err)
+}
+
+// rejectedCredential reports a refusal by the database rather than a failure to
+// reach it.
+//
+// The distinction decides whether waiting helps. A rejected password will be
+// rejected just as firmly four attempts later, and retrying it only delays a
+// clear error behind a misleading one about readiness. The AWS-side predicate
+// is no use here: it classifies control-plane failures and, correctly for that
+// job, treats anything it does not recognise as worth retrying.
+func rejectedCredential(err error) bool {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return false
+	}
+	// 28P01 invalid_password, 28000 invalid_authorization_specification.
+	return pgErr.Code == "28P01" || pgErr.Code == "28000"
+}
+
 func NewDatastorePostgres(ctx context.Context, cfg *pkgmodel.DatastoreConfig, agentID string) (datastore.Datastore, error) {
+	if err := configurePasswordProvider(ctx, cfg); err != nil {
+		return nil, err
+	}
+
 	password, err := resolvePassword(ctx, &cfg.Postgres)
 	if err != nil {
 		return nil, err
@@ -209,6 +332,18 @@ func NewDatastorePostgres(ctx context.Context, cfg *pkgmodel.DatastoreConfig, ag
 	if err := otelpgx.RecordStats(pool); err != nil {
 		slog.Error("failed to start recording pool stats", "error", err)
 		// Non-fatal - continue without pool metrics
+	}
+
+	// Gated on the ARN rather than on a provider being present. A caller that
+	// injects a provider directly is not on this path and must keep the pool
+	// behaviour it had: the readiness Ping leaves an established connection in
+	// the pool, which is observable to anything counting per-connection
+	// resolutions.
+	if cfg.Postgres.PasswordSecretArn != "" {
+		if err := verifyPoolReadiness(ctx, pool); err != nil {
+			pool.Close()
+			return nil, err
+		}
 	}
 
 	d := DatastorePostgres{pool: pool, agentID: agentID, cfg: cfg, ctx: ctx}
