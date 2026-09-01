@@ -282,6 +282,12 @@ function parseGenerators(generatorsData: List<Map<String, Any>>, stackLabelMap: 
         else
             ""
         )
+        let (rotationEverySeconds = generatorData.getOrNull("RotationEverySeconds") as Number?)
+        let (rotationLine = if (rotationEverySeconds != null)
+            "\n        rotation = new formae.RotationSpec {\n          every = \(rotationEverySeconds.toInt()).s\n        }"
+        else
+            ""
+        )
         if (generatorType == "password")
             let (length = generatorData["Length"] as Number)
             let (uppercase = generatorData["Uppercase"] as Boolean)
@@ -293,7 +299,7 @@ function parseGenerators(generatorsData: List<Map<String, Any>>, stackLabelMap: 
             """
 
       local \(camelCaseLabel) = new formae.PasswordGenerator {
-        label = "\(label)"\(stackLine)
+        label = "\(label)"\(stackLine)\(rotationLine)
         length = \(length)
         uppercase = \(uppercase)
         lowercase = \(lowercase)
@@ -457,6 +463,8 @@ function generateFormaFile(parsed: json.Value): String =
             "Type", generator.Type,
             "Label", generator.Label,
             "Stack", generator.getPropertyOrNull("Stack"),
+            "RotationEverySeconds", generator.getPropertyOrNull("Rotation")
+                ?.getPropertyOrNull("EverySeconds"),
             "Length", generator.getPropertyOrNull("Length"),
             "Uppercase", generator.getPropertyOrNull("Uppercase"),
             "Lowercase", generator.getPropertyOrNull("Lowercase"),

@@ -257,7 +257,12 @@ func start(from gen.PID, state gen.Atom, data ChangesetData, message Start, proc
 	// resource before the ResourceUpdater's own sync-Read runs. Without this,
 	// the sync-Read would see no diff (sync already equalised DB and cloud)
 	// and the update would proceed when it should have been rejected.
-	if changesetHasUserUpdates(data.changeset) {
+	//
+	// The gate is "does this changeset write" rather than "is this the user's
+	// changeset": the race is between a provider write and its persist, and it
+	// does not care who asked for the write. Gating it on user updates left an
+	// agent-initiated changeset registering nothing at all.
+	if changesetWritesResources(data.changeset) {
 		data.syncExcludedResourceURIs = registerAllResourcesWithSynchronizer(data.changeset.DAG, proc)
 	}
 
@@ -1061,6 +1066,37 @@ func targetUpdateRecoveredReaped(tu *target_update.TargetUpdate) bool {
 
 // changesetHasUserUpdates checks if the changeset contains any updates from user operations.
 // Returns true if at least one update has Source == FormaCommandSourceUser.
+// changesetWritesResources reports whether the changeset will write any
+// resource through a provider.
+//
+// Sync and discovery only read, and excluding a resource from sync on behalf
+// of a sync changeset would be circular. Every other source writes, so every
+// other source needs its resources held out of a concurrent sync cycle for the
+// duration.
+//
+// The case that made this necessary is a generator rotation. A rotation runs
+// in reconcile mode, so it re-baselines the drift window each time it
+// succeeds. A sync landing between a rotation's provider write and its own
+// persist records the just-written value as out-of-band drift, in patch mode,
+// which does not re-baseline. From then on the drift window is permanently
+// non-empty, so refuseRotationOnDrift refuses every later rotation, and since
+// the rotation is itself the reconcile that would have cleared the window
+// nothing recovers it. The credential silently stops rotating.
+func changesetWritesResources(changeset Changeset) bool {
+	for _, node := range changeset.DAG.Nodes {
+		ru, ok := node.Update.(*resource_update.ResourceUpdate)
+		if !ok {
+			continue
+		}
+		if ru.Source == resource_update.FormaCommandSourceSynchronize ||
+			ru.Source == resource_update.FormaCommandSourceDiscovery {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 func changesetHasUserUpdates(changeset Changeset) bool {
 	for _, node := range changeset.DAG.Nodes {
 		if ru, ok := node.Update.(*resource_update.ResourceUpdate); ok {
