@@ -62,7 +62,9 @@ func stringSecret(v string) *secretsmanager.GetSecretValueOutput {
 
 func alwaysReturns(v string) *fakeSecrets {
 	f := &fakeSecrets{}
-	f.setHandler(func(context.Context, int64) (*secretsmanager.GetSecretValueOutput, error) { return stringSecret(v), nil })
+	f.setHandler(func(context.Context, int64) (*secretsmanager.GetSecretValueOutput, error) {
+		return stringSecret(v), nil
+	})
 	return f
 }
 
