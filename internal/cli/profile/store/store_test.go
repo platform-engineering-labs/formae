@@ -731,6 +731,17 @@ func TestResolveExisting_ResolvesWhatResolveWouldWithoutWriting(t *testing.T) {
 			},
 		},
 		{
+			// initialize's step 5b: it leaves the bare file alone and adopts the
+			// existing default, so a reader must resolve the default too or it
+			// would render from a config no command uses.
+			name: "a legacy bare file colliding with an existing default",
+			setup: func(t *testing.T, dir string) string {
+				writeFile(t, dir, "formae.conf.pkl", "// legacy")
+				writeProfile(t, dir, "default")
+				return filepath.Join(dir, "profiles", "default.pkl")
+			},
+		},
+		{
 			name: "an orphaned default with no pointer",
 			setup: func(t *testing.T, dir string) string {
 				writeProfile(t, dir, "default")

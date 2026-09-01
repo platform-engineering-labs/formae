@@ -152,17 +152,6 @@ func (s *Store) Resolve() (string, error) {
 	return s.ProfilePath(name), nil
 }
 
-// ResolveExisting is Resolve for a caller that must not create anything: it
-// answers only from what is already on disk, and reports ErrNotInitialized
-// when there is nothing.
-//
-// Resolve initializes an empty store, which is right for a command about to
-// use a config and wrong for one merely reading a preference out of it. The
-// difference is load-bearing on a machine nobody has signed in on: the store
-// Resolve creates names a local agent, and that is a decision the user has not
-// been asked about. Anything that only wants to look should not be the thing
-// that makes it.
-
 // List returns all profile names in sorted order. An absent profiles/ dir
 // yields an empty slice (a clean store is not an error for introspection).
 //
@@ -525,9 +514,14 @@ func (s *Store) ResolveExisting() (string, error) {
 				return s.ProfilePath(name), nil
 			}
 		} else {
-			// A bare legacy file is itself a readable config. Resolve moves it
-			// into profiles/ and points at it; a reader can just read it where
-			// it lies.
+			// A bare legacy file is itself a readable config, and Resolve moves
+			// it into profiles/ and points at it - unless a default is already
+			// there. That collision is initialize's step 5b: it leaves the bare
+			// file where it lies and adopts the default instead, so returning
+			// the bare file here would resolve a config no command will use.
+			if path := s.ProfilePath("default"); fileExists(path) {
+				return path, nil
+			}
 			return cfg, nil
 		}
 	}
