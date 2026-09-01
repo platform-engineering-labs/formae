@@ -149,12 +149,22 @@ type PostgresConfig struct {
 	Port     int
 	User     string
 	Password string
+	// PasswordSecretArn names a Secrets Manager secret holding the password.
+	// When set, the datastore resolves the credential from it on every new
+	// connection instead of using Password, so a rotation is picked up without
+	// restarting the process. Empty means Password is used as-is.
+	PasswordSecretArn string
 	// PasswordProvider, when set, supersedes Password: it is called for every
 	// new connection the pool opens. Nil means Password is used as-is.
 	PasswordProvider PasswordProvider
-	Database         string
-	Schema           string
-	ConnectionParams string
+	// PasswordProviderFactory builds the provider for PasswordSecretArn.
+	// Production leaves it nil and gets the Secrets Manager provider; tests set
+	// it to inject a controllable authority at the datastore boundary, which is
+	// the only place the wiring can actually be observed.
+	PasswordProviderFactory func(ctx context.Context, secretARN string) (PasswordProvider, error)
+	Database                string
+	Schema                  string
+	ConnectionParams        string
 }
 
 type AuroraDataAPIConfig struct {

@@ -56,6 +56,15 @@ class PostgresConfig {
 
     password: String = "admin"
 
+    /// Resolve the password from this Secrets Manager secret on every new
+    /// connection instead of using `password`, so a credential rotated out
+    /// from under a running agent is picked up without restarting it.
+    ///
+    /// The region is taken from the ARN, so there is no second setting that
+    /// could disagree with it. Empty means `password` is used as-is and no
+    /// AWS client is built.
+    passwordSecretArn: String = ""
+
     database: String = ""
 
     schema: String = ""
