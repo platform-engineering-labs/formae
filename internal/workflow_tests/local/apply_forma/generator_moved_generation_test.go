@@ -102,7 +102,7 @@ func TestApplyForma_MovedGeneration_PlansOnlyItsOwnDestinations(t *testing.T) {
 		// and the other generator is not touched at all.
 		movedGenerationID := util.NewID()
 		require.NoError(t, m.Datastore.AdvanceGeneration(
-			movedBefore.ID, movedGenerationID, movedBefore.GenerationSpec))
+			movedBefore.ID, movedGenerationID, "cmd-out-of-band", movedBefore.GenerationSpec))
 		steadyUnmoved, err := m.Datastore.GetGeneratorIdentity("steady-password", stack)
 		require.NoError(t, err)
 		require.Equal(t, steadyBefore.GenerationID, steadyUnmoved.GenerationID,

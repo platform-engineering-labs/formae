@@ -358,6 +358,73 @@ func (d *DatastoreMSSQL) GetGeneratorIdentityByID(generatorID string) (datastore
 	return generatorIdentityFromRow(id, generationID, generationSpec), nil
 }
 
+// GetGeneratorsWithRotation returns every live generator with the instant its
+// last rotation committed. The cadence itself is read from the stored spec by
+// datastore.RotationInfoFromRows, so this query never parses JSON.
+//
+// last_committed_draw is the derivation the rotation scheduler runs on: a
+// generation row records that a value was drawn and the command that drew it,
+// and joining that command's state is what says whether the value ever reached
+// its destinations. A command that is not Success advances nothing, so a
+// failed authority-side update leaves the cadence measured from the previous
+// success.
+func (d *DatastoreMSSQL) GetGeneratorsWithRotation() ([]datastore.GeneratorRotationInfo, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "GetGeneratorsWithRotation")
+	defer span.End()
+
+	query := `
+		WITH latest_generators AS (
+			SELECT id, label, stack_id, generator_data, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE Latin1_General_BIN2 DESC) as rn
+			FROM generators
+		),
+		latest_stacks AS (
+			SELECT id, label, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE Latin1_General_BIN2 DESC) as rn
+			FROM stacks
+		),
+		last_committed_draw AS (
+			SELECT g.id as generator_id, MAX(fc.timestamp) as last_rotation_at
+			FROM generators g
+			JOIN forma_commands fc ON fc.command_id = g.command_id
+			WHERE g.generation_id != '' AND fc.state = 'Success'
+			GROUP BY g.id
+		)
+		SELECT g.id, g.label, s.label, g.generator_data, d.last_rotation_at
+		FROM latest_generators g
+		JOIN latest_stacks s ON s.id = g.stack_id
+		LEFT JOIN last_committed_draw d ON d.generator_id = g.id
+		WHERE g.rn = 1 AND g.operation != 'delete'
+		AND s.rn = 1 AND s.operation != 'delete'`
+
+	rows, err := d.conn.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var rotationRows []datastore.GeneratorRotationRow
+	for rows.Next() {
+		var row datastore.GeneratorRotationRow
+		var generatorData string
+		var lastRotationAt sql.NullTime
+		if err := rows.Scan(&row.GeneratorID, &row.Label, &row.StackLabel, &generatorData, &lastRotationAt); err != nil {
+			return nil, err
+		}
+		row.GeneratorData = []byte(generatorData)
+		if lastRotationAt.Valid {
+			row.LastRotationAt = lastRotationAt.Time.UTC()
+		}
+		rotationRows = append(rotationRows, row)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return datastore.RotationInfoFromRows(rotationRows)
+}
+
 // AdvanceGeneration records that a new generation was drawn for this
 // generator, under this spec. Writes a new version row that carries forward
 // the existing label/type/stack/generator_data unchanged — only the
@@ -369,7 +436,7 @@ func (d *DatastoreMSSQL) GetGeneratorIdentityByID(generatorID string) (datastore
 // (generator_update.GeneratorUpdater): it calls this once it has drawn a
 // value, so the generation the value came from is durable before any
 // destination is stamped with it.
-func (d *DatastoreMSSQL) AdvanceGeneration(generatorID, generationID string, drawnUnder json.RawMessage) error {
+func (d *DatastoreMSSQL) AdvanceGeneration(generatorID, generationID, commandID string, drawnUnder json.RawMessage) error {
 	ctx, span := mssqlTracer.Start(context.Background(), "AdvanceGeneration")
 	defer span.End()
 
@@ -395,7 +462,7 @@ func (d *DatastoreMSSQL) AdvanceGeneration(generatorID, generationID string, dra
 	version := mksuid.New().String()
 	insertQuery := `INSERT INTO generators (id, version, command_id, operation, label, generator_type, stack_id, generator_data, generation_id, generation_spec)
 	                VALUES (@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10)`
-	_, err = d.conn.ExecContext(ctx, insertQuery, generatorID, version, "", "update", label, generatorType, stackID, generatorData, generationID, string(drawnUnder))
+	_, err = d.conn.ExecContext(ctx, insertQuery, generatorID, version, commandID, "update", label, generatorType, stackID, generatorData, generationID, string(drawnUnder))
 	if err != nil {
 		return fmt.Errorf("failed to advance generation: %w", err)
 	}

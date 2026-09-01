@@ -16,6 +16,7 @@ const (
 	ChangesetSupervisor   = gen.Atom("ChangesetSupervisor")
 	Discovery             = gen.Atom("Discovery")
 	FormaCommandPersister = gen.Atom("FormaCommandPersister")
+	GeneratorRotator      = gen.Atom("GeneratorRotator")
 	MetastructureBridge   = gen.Atom("MetastructureBridge")
 	PluginCoordinator     = gen.Atom("PluginCoordinator")
 	RateLimiter           = gen.Atom("RateLimiter")

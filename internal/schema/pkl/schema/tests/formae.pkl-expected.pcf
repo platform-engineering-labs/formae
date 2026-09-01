@@ -749,4 +749,52 @@ examples {
   ["TTL policy with neither ttl nor expiresAt is rejected"] {
     "TTLPolicy: set either ttl or expiresAt"
   }
+  ["Generator with rotation render()"] {
+    new {
+      Type = "password"
+      Label = "rotating-password"
+      Stack {
+        $label = "test-stack"
+        $property = null
+        $stack = null
+        $type = "Formae::Stack"
+        $res = true
+        $visibility = "Clear"
+      }
+      Alias = null
+      Rotation {
+        EverySeconds = 86400
+      }
+      Length = 32
+      Uppercase = true
+      Lowercase = true
+      Digits = true
+      Symbols = false
+      ExcludeCharacters = ""
+      RequireEachIncludedType = true
+    }
+  }
+  ["Generator without rotation render()"] {
+    new {
+      Type = "password"
+      Label = "steady-password"
+      Stack {
+        $label = "test-stack"
+        $property = null
+        $stack = null
+        $type = "Formae::Stack"
+        $res = true
+        $visibility = "Clear"
+      }
+      Alias = null
+      Rotation = null
+      Length = 32
+      Uppercase = true
+      Lowercase = true
+      Digits = true
+      Symbols = false
+      ExcludeCharacters = ""
+      RequireEachIncludedType = true
+    }
+  }
 }

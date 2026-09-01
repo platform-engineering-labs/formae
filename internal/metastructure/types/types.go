@@ -12,6 +12,13 @@ const (
 	FormaCommandSourceSynchronize         FormaCommandSource = "synchronize"
 	FormaCommandSourceDiscovery           FormaCommandSource = "discovery"
 	FormaCommandSourcePolicyAutoReconcile FormaCommandSource = "policy:auto-reconcile"
+	// FormaCommandSourceGeneratorRotation marks the resource updates a
+	// scheduled generator rotation plans. It is deliberately not
+	// FormaCommandSourceUser: the reconcile baseline is read from user-source
+	// rows, and a rotation plans only one generator's destinations, so
+	// counting it would shrink the baseline to those and leave the rest of
+	// the stack unenforced.
+	FormaCommandSourceGeneratorRotation FormaCommandSource = "generator-rotation"
 )
 
 // OperationType is the high-level operation being performed on a resource or target.

@@ -273,6 +273,10 @@ func (m *mockExtractDatastore) DeletePoliciesForStack(_ string, _ string) error 
 func (m *mockExtractDatastore) GetExpiredStacks() ([]datastore.ExpiredStackInfo, error) {
 	panic("not implemented")
 }
+func (m *mockExtractDatastore) GetGeneratorsWithRotation() ([]datastore.GeneratorRotationInfo, error) {
+	return nil, nil
+}
+
 func (m *mockExtractDatastore) GetStacksWithAutoReconcilePolicy() ([]datastore.StackReconcileInfo, error) {
 	panic("not implemented")
 }
@@ -303,7 +307,7 @@ func (m *mockExtractDatastore) GetGeneratorIdentity(_, _ string) (datastore.Gene
 func (m *mockExtractDatastore) GetGeneratorIdentityByID(_ string) (datastore.GeneratorIdentity, error) {
 	panic("not implemented")
 }
-func (m *mockExtractDatastore) AdvanceGeneration(_, _ string, _ json.RawMessage) error {
+func (m *mockExtractDatastore) AdvanceGeneration(_, _, _ string, _ json.RawMessage) error {
 	panic("not implemented")
 }
 func (m *mockExtractDatastore) Close() {}

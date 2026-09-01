@@ -28,6 +28,10 @@ type Generator interface {
 	// invents independently. "" until translation assigns one.
 	GetID() string
 	SetID(id string)
+	// GetRotation returns the cadence on which this generator draws a fresh
+	// value, or nil when it declares none. A generator with no cadence draws
+	// only when an apply needs a value; nothing rotates it on its own.
+	GetRotation() *RotationSpec
 	// GetAlias returns the generator's previous label, if any. Identity is
 	// the datastore row's KSUID, not the label, so a generator that is
 	// renamed (its label changed) needs some way to say "this is still the
@@ -38,23 +42,39 @@ type Generator interface {
 	GetAlias() string
 }
 
+// RotationSpec is the cadence on which a generator draws a fresh value.
+// Mirrors the PKL RotationSpec.render() output.
+//
+// EverySeconds has no zero-value meaning: PKL requires `every`, so a spec that
+// reaches here always names an interval. A non-positive interval is a spec
+// nothing authored through the schema can produce, and the rotation scheduler
+// treats it as no cadence at all rather than as "rotate continuously".
+type RotationSpec struct {
+	EverySeconds int `json:"EverySeconds"`
+}
+
 // PasswordGenerator produces a random password value. Fields mirror the
 // PKL PasswordGenerator.render() output. Type is not a field: it is a
 // constant discriminator, injected by MarshalJSON, so there is exactly one
 // place that says what type this generator is.
 type PasswordGenerator struct {
-	Label                   string `json:"Label"`
-	Stack                   string `json:"Stack,omitempty"`
-	StackID                 string `json:"-"` // Set during processing, not from PKL
-	ID                      string `json:"-"` // Set during processing (translation), not from PKL
-	Alias                   string `json:"Alias,omitempty"`
-	Length                  int    `json:"Length"`
-	Uppercase               bool   `json:"Uppercase"`
-	Lowercase               bool   `json:"Lowercase"`
-	Digits                  bool   `json:"Digits"`
-	Symbols                 bool   `json:"Symbols"`
-	ExcludeCharacters       string `json:"ExcludeCharacters,omitempty"`
-	RequireEachIncludedType bool   `json:"RequireEachIncludedType"`
+	Label   string `json:"Label"`
+	Stack   string `json:"Stack,omitempty"`
+	StackID string `json:"-"` // Set during processing, not from PKL
+	ID      string `json:"-"` // Set during processing (translation), not from PKL
+	Alias   string `json:"Alias,omitempty"`
+	// Rotation is omitted when absent rather than marshalled as null: the
+	// marshalled spec is what a drawn generation is recorded under, so a key
+	// that appears only as null is one more way two identical specs can
+	// differ.
+	Rotation                *RotationSpec `json:"Rotation,omitempty"`
+	Length                  int           `json:"Length"`
+	Uppercase               bool          `json:"Uppercase"`
+	Lowercase               bool          `json:"Lowercase"`
+	Digits                  bool          `json:"Digits"`
+	Symbols                 bool          `json:"Symbols"`
+	ExcludeCharacters       string        `json:"ExcludeCharacters,omitempty"`
+	RequireEachIncludedType bool          `json:"RequireEachIncludedType"`
 }
 
 func (g *PasswordGenerator) GetLabel() string      { return g.Label }
@@ -66,6 +86,8 @@ func (g *PasswordGenerator) SetStackID(id string)  { g.StackID = id }
 func (g *PasswordGenerator) GetID() string         { return g.ID }
 func (g *PasswordGenerator) SetID(id string)       { g.ID = id }
 func (g *PasswordGenerator) GetAlias() string      { return g.Alias }
+
+func (g *PasswordGenerator) GetRotation() *RotationSpec { return g.Rotation }
 
 // MarshalJSON injects the "Type": "password" discriminator that
 // ParseGenerator dispatches on, so callers never set Type by hand and there

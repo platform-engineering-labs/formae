@@ -35,11 +35,12 @@ const (
 type Source string
 
 const (
-	SourceUser           Source = "user"
-	SourceSynchronizer   Source = "synchronizer"
-	SourceDiscovery      Source = "discovery"
-	SourceAutoReconciler Source = "auto-reconciler"
-	SourceStackExpirer   Source = "stack-expirer"
+	SourceUser             Source = "user"
+	SourceSynchronizer     Source = "synchronizer"
+	SourceDiscovery        Source = "discovery"
+	SourceAutoReconciler   Source = "auto-reconciler"
+	SourceStackExpirer     Source = "stack-expirer"
+	SourceGeneratorRotator Source = "generator-rotator"
 )
 
 type FormaCommand struct {

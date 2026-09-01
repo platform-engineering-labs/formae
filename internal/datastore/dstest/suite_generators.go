@@ -348,7 +348,7 @@ func RunAdvanceGenerationRecordsIdentityAndDrawingSpec(t *testing.T, newDS func(
 
 		spec, err := json.Marshal(gen)
 		require.NoError(t, err)
-		require.NoError(t, ds.AdvanceGeneration(before.ID, "generation-1", spec))
+		require.NoError(t, ds.AdvanceGeneration(before.ID, "generation-1", "cmd-draw", spec))
 
 		after, err := ds.GetGeneratorIdentity("db-password", stack.Label)
 		require.NoError(t, err)
@@ -376,7 +376,7 @@ func RunGenerationSurvivesASpecUpdate(t *testing.T, newDS func(t *testing.T) Tes
 
 		spec, err := json.Marshal(gen)
 		require.NoError(t, err)
-		require.NoError(t, ds.AdvanceGeneration(before.ID, "generation-1", spec))
+		require.NoError(t, ds.AdvanceGeneration(before.ID, "generation-1", "cmd-draw", spec))
 
 		_, err = ds.UpdateGenerator(testPasswordGenerator("db-password", stack, 40), "cmd-2")
 		require.NoError(t, err)
@@ -413,7 +413,7 @@ func RunGenerationSurvivesARename(t *testing.T, newDS func(t *testing.T) TestDat
 
 		spec, err := json.Marshal(gen)
 		require.NoError(t, err)
-		require.NoError(t, ds.AdvanceGeneration(before.ID, "generation-1", spec))
+		require.NoError(t, ds.AdvanceGeneration(before.ID, "generation-1", "cmd-draw", spec))
 
 		renamed := testPasswordGenerator("new-label", stack, 32)
 		renamed.Alias = "old-label"
@@ -448,7 +448,7 @@ func RunGetGeneratorIdentityByIDFindsTheLiveRow(t *testing.T, newDS func(t *test
 
 		spec, err := json.Marshal(gen)
 		require.NoError(t, err)
-		require.NoError(t, ds.AdvanceGeneration(before.ID, "generation-1", spec))
+		require.NoError(t, ds.AdvanceGeneration(before.ID, "generation-1", "cmd-draw", spec))
 
 		// Write a further version row so the row GetGeneratorIdentityByID
 		// must resolve is not the one the id was originally minted on.
@@ -565,7 +565,7 @@ func RunGenerationSurvivesRenameBackToOriginalLabel(t *testing.T, newDS func(t *
 
 		spec, err := json.Marshal(gen)
 		require.NoError(t, err)
-		require.NoError(t, ds.AdvanceGeneration(before.ID, "generation-1", spec))
+		require.NoError(t, ds.AdvanceGeneration(before.ID, "generation-1", "cmd-draw", spec))
 
 		backToA := testPasswordGenerator("A", stack, 32)
 		backToA.Alias = "B"
@@ -599,12 +599,12 @@ func RunAdvanceGenerationTwiceSecondWins(t *testing.T, newDS func(t *testing.T) 
 
 		specOne, err := json.Marshal(gen)
 		require.NoError(t, err)
-		require.NoError(t, ds.AdvanceGeneration(id.ID, "generation-1", specOne))
+		require.NoError(t, ds.AdvanceGeneration(id.ID, "generation-1", "cmd-draw", specOne))
 
 		gen.Length = 40
 		specTwo, err := json.Marshal(gen)
 		require.NoError(t, err)
-		require.NoError(t, ds.AdvanceGeneration(id.ID, "generation-2", specTwo))
+		require.NoError(t, ds.AdvanceGeneration(id.ID, "generation-2", "cmd-draw", specTwo))
 
 		after, err := ds.GetGeneratorIdentity("db-password", stack.Label)
 		require.NoError(t, err)
@@ -638,7 +638,7 @@ func RunAdvanceGenerationDoesNotAffectOtherGenerator(t *testing.T, newDS func(t 
 
 		spec, err := json.Marshal(genA)
 		require.NoError(t, err)
-		require.NoError(t, ds.AdvanceGeneration(idA.ID, "generation-1", spec))
+		require.NoError(t, ds.AdvanceGeneration(idA.ID, "generation-1", "cmd-draw", spec))
 
 		afterA, err := ds.GetGeneratorIdentity("db-password", stack.Label)
 		require.NoError(t, err)
@@ -676,12 +676,12 @@ func RunAdvanceGenerationOnDeletedGeneratorFailsWithoutResurrecting(t *testing.T
 
 		spec, err := json.Marshal(gen)
 		require.NoError(t, err)
-		require.NoError(t, ds.AdvanceGeneration(id.ID, "generation-1", spec))
+		require.NoError(t, ds.AdvanceGeneration(id.ID, "generation-1", "cmd-draw", spec))
 
 		_, err = ds.DeleteGenerator("db-password", stack.Label)
 		require.NoError(t, err)
 
-		err = ds.AdvanceGeneration(id.ID, "generation-2", spec)
+		err = ds.AdvanceGeneration(id.ID, "generation-2", "cmd-draw", spec)
 		assert.Error(t, err, "advancing a deleted generator must fail")
 
 		byID, err := ds.GetGeneratorIdentityByID(id.ID)
@@ -716,10 +716,10 @@ func RunAdvanceGenerationRejectsMalformedSpecAndEmptyGenerationID(t *testing.T, 
 		validSpec, err := json.Marshal(gen)
 		require.NoError(t, err)
 
-		err = ds.AdvanceGeneration(id.ID, "generation-1", json.RawMessage(`{not valid json`))
+		err = ds.AdvanceGeneration(id.ID, "generation-1", "cmd-draw", json.RawMessage(`{not valid json`))
 		assert.Error(t, err, "a malformed drawnUnder spec must be rejected")
 
-		err = ds.AdvanceGeneration(id.ID, "", validSpec)
+		err = ds.AdvanceGeneration(id.ID, "", "cmd-draw", validSpec)
 		assert.Error(t, err, "an empty generationID must be rejected")
 
 		after, err := ds.GetGeneratorIdentity("db-password", stack.Label)

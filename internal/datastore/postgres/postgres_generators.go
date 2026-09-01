@@ -372,7 +372,7 @@ func (d DatastorePostgres) GetGeneratorIdentityByID(generatorID string) (datasto
 // (generator_update.GeneratorUpdater): it calls this once it has drawn a
 // value, so the generation the value came from is durable before any
 // destination is stamped with it.
-func (d DatastorePostgres) AdvanceGeneration(generatorID, generationID string, drawnUnder json.RawMessage) error {
+func (d DatastorePostgres) AdvanceGeneration(generatorID, generationID, commandID string, drawnUnder json.RawMessage) error {
 	ctx, span := tracer.Start(context.Background(), "AdvanceGeneration")
 	defer span.End()
 
@@ -398,7 +398,7 @@ func (d DatastorePostgres) AdvanceGeneration(generatorID, generationID string, d
 	version := mksuid.New().String()
 	insertQuery := `INSERT INTO generators (id, version, command_id, operation, label, generator_type, stack_id, generator_data, generation_id, generation_spec)
 	                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
-	_, err = d.pool.Exec(ctx, insertQuery, generatorID, version, "", "update", label, generatorType, stackID, generatorData, generationID, string(drawnUnder))
+	_, err = d.pool.Exec(ctx, insertQuery, generatorID, version, commandID, "update", label, generatorType, stackID, generatorData, generationID, string(drawnUnder))
 	if err != nil {
 		return fmt.Errorf("failed to advance generation: %w", err)
 	}

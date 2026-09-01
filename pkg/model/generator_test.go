@@ -111,3 +111,58 @@ func TestParseGenerators_Multiple(t *testing.T) {
 	assert.Equal(t, "one", generators[0].GetLabel())
 	assert.Equal(t, "two", generators[1].GetLabel())
 }
+
+// A generator's rotation cadence round-trips through the JSON the PKL schema
+// renders: the nested Rotation object carries the interval in seconds, and a
+// generator that declares no cadence carries no rotation at all.
+func TestParseGenerator_Rotation(t *testing.T) {
+	raw := json.RawMessage(`{
+		"Type": "password",
+		"Label": "db-password",
+		"Stack": "default",
+		"Rotation": {"EverySeconds": 86400},
+		"Length": 24,
+		"Uppercase": true,
+		"Lowercase": true,
+		"Digits": true,
+		"Symbols": false,
+		"RequireEachIncludedType": true
+	}`)
+
+	generator, err := ParseGenerator(raw)
+	require.NoError(t, err)
+
+	rotation := generator.GetRotation()
+	require.NotNil(t, rotation, "a declared cadence must reach the model")
+	assert.Equal(t, 86400, rotation.EverySeconds)
+
+	roundTripped, err := json.Marshal(generator)
+	require.NoError(t, err)
+	reparsed, err := ParseGenerator(roundTripped)
+	require.NoError(t, err)
+	require.NotNil(t, reparsed.GetRotation())
+	assert.Equal(t, 86400, reparsed.GetRotation().EverySeconds)
+}
+
+func TestParseGenerator_NoRotation(t *testing.T) {
+	raw := json.RawMessage(`{
+		"Type": "password",
+		"Label": "db-password",
+		"Stack": "default",
+		"Rotation": null,
+		"Length": 24,
+		"RequireEachIncludedType": true
+	}`)
+
+	generator, err := ParseGenerator(raw)
+	require.NoError(t, err)
+	assert.Nil(t, generator.GetRotation(),
+		"a generator that declares no cadence must hold none")
+
+	// The absent cadence must also stay out of the marshalled spec: the spec
+	// is what a drawn generation is recorded under, and a key that only
+	// appears as null is one more thing two specs can differ by.
+	roundTripped, err := json.Marshal(generator)
+	require.NoError(t, err)
+	assert.NotContains(t, string(roundTripped), "Rotation")
+}

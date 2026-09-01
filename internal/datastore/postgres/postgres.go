@@ -3238,6 +3238,73 @@ func (d DatastorePostgres) GetStacksWithAutoReconcilePolicy() ([]datastore.Stack
 	return result, nil
 }
 
+// GetGeneratorsWithRotation returns every live generator with the instant its
+// last rotation committed. The cadence itself is read from the stored spec by
+// datastore.RotationInfoFromRows, so this query never parses JSON.
+//
+// last_committed_draw is the derivation the rotation scheduler runs on: a
+// generation row records that a value was drawn and the command that drew it,
+// and joining that command's state is what says whether the value ever reached
+// its destinations. A command that is not Success advances nothing, so a
+// failed authority-side update leaves the cadence measured from the previous
+// success.
+func (d DatastorePostgres) GetGeneratorsWithRotation() ([]datastore.GeneratorRotationInfo, error) {
+	ctx, span := tracer.Start(context.Background(), "GetGeneratorsWithRotation")
+	defer span.End()
+
+	query := `
+		WITH latest_generators AS (
+			SELECT id, label, stack_id, generator_data, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			FROM generators
+		),
+		latest_stacks AS (
+			SELECT id, label, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			FROM stacks
+		),
+		last_committed_draw AS (
+			SELECT g.id as generator_id, MAX(fc.timestamp) as last_rotation_at
+			FROM generators g
+			JOIN forma_commands fc ON fc.command_id = g.command_id
+			WHERE g.generation_id != '' AND fc.state = 'Success'
+			GROUP BY g.id
+		)
+		SELECT g.id, g.label, s.label, g.generator_data::text, d.last_rotation_at
+		FROM latest_generators g
+		JOIN latest_stacks s ON s.id = g.stack_id
+		LEFT JOIN last_committed_draw d ON d.generator_id = g.id
+		WHERE g.rn = 1 AND g.operation != 'delete'
+		AND s.rn = 1 AND s.operation != 'delete'
+	`
+
+	rows, err := d.pool.Query(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var rotationRows []datastore.GeneratorRotationRow
+	for rows.Next() {
+		var row datastore.GeneratorRotationRow
+		var generatorData string
+		var lastRotationAt *time.Time
+		if err := rows.Scan(&row.GeneratorID, &row.Label, &row.StackLabel, &generatorData, &lastRotationAt); err != nil {
+			return nil, err
+		}
+		row.GeneratorData = []byte(generatorData)
+		if lastRotationAt != nil {
+			row.LastRotationAt = lastRotationAt.UTC()
+		}
+		rotationRows = append(rotationRows, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return datastore.RotationInfoFromRows(rotationRows)
+}
+
 func (d DatastorePostgres) GetResourcesAtLastReconcile(stackLabel string) ([]datastore.ResourceSnapshot, error) {
 	ctx, span := tracer.Start(context.Background(), "GetResourcesAtLastReconcile")
 	defer span.End()

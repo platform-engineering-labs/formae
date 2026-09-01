@@ -407,6 +407,25 @@ local neitherVariantTTL = new formae.TTLPolicy {
     label = "neither-ttl"
 }
 
+local rotatingGenerator = new formae.PasswordGenerator {
+    label = "rotating-password"
+    stack = stackResolvable
+    rotation = new formae.RotationSpec {
+        every = 24.h
+    }
+}
+
+local nonRotatingGenerator = new formae.PasswordGenerator {
+    label = "steady-password"
+    stack = stackResolvable
+}
+
+local cadencelessRotation = new formae.PasswordGenerator {
+    label = "cadenceless-password"
+    stack = stackResolvable
+    rotation = new formae.RotationSpec {}
+}
+
 // Schema classes that sit under an intermediate base rather than extending
 // formae.SubResource / formae.Resource directly. The subclasses inherit the
 // base's annotated fields, redeclare one of them (narrowing String? to String),
@@ -700,9 +719,30 @@ examples {
     ["TTL policy with neither ttl nor expiresAt is rejected"] {
         module.catch(() -> neitherVariantTTL.render())
     }
+
+    ["Generator with rotation render()"] {
+        rotatingGenerator.render()
+    }
+
+    ["Generator without rotation render()"] {
+        nonRotatingGenerator.render()
+    }
 }
 
 facts {
+    ["Rotation renders its cadence in seconds"] {
+        rotatingGenerator.render().Rotation.EverySeconds == 86400
+    }
+
+    ["A generator without rotation renders no cadence"] {
+        rotatingGenerator.render().toMap().containsKey("Rotation") &&
+        nonRotatingGenerator.render().Rotation == null
+    }
+
+    ["A rotation spec without a cadence is rejected"] {
+        module.catch(() -> cadencelessRotation.render().Rotation.EverySeconds) != null
+    }
+
     ["Relative TTL policy renders TTLSeconds and no ExpiresAt"] {
         relativeTTL.render().toMap().containsKey("TTLSeconds") &&
         !relativeTTL.render().toMap().containsKey("ExpiresAt") &&
