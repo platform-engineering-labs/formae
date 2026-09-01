@@ -4,7 +4,7 @@
 
 //go:build unit
 
-package metastructure
+package drift
 
 import (
 	"encoding/json"
@@ -52,7 +52,7 @@ func TestWitnessedMovedModifications_WitnessedMovement_IsDrift(t *testing.T) {
 		Schema:     kmsSchemaForDrift(),
 	}}}
 
-	moved := witnessedMovedModifications(mods["prod"], driftWitnesses(mods), forma, &forma_command.FormaCommand{})
+	moved := WitnessedMovedModifications(mods["prod"], driftWitnesses(mods), forma, &forma_command.FormaCommand{})
 	require.Len(t, moved, 1)
 	assert.Equal(t, "signing-key", moved[0].Label)
 }
@@ -71,7 +71,7 @@ func TestWitnessedMovedModifications_NoWitness_Tolerated(t *testing.T) {
 		Schema:     kmsSchemaForDrift(),
 	}}}
 
-	moved := witnessedMovedModifications(mods["prod"], map[string]json.RawMessage{}, forma, &forma_command.FormaCommand{})
+	moved := WitnessedMovedModifications(mods["prod"], map[string]json.RawMessage{}, forma, &forma_command.FormaCommand{})
 	assert.Empty(t, moved, "no write witness means the movement is the infrastructure's business")
 }
 
@@ -89,7 +89,7 @@ func TestWitnessedMovedModifications_AlreadyUnabsorbed_NotDoubled(t *testing.T) 
 		Stack: "prod", Type: "AWS::KMS::Key", Label: "signing-key", Schema: kmsSchemaForDrift(),
 	}}}
 
-	moved := witnessedMovedModifications(mods["prod"], driftWitnesses(mods), forma, &forma_command.FormaCommand{})
+	moved := WitnessedMovedModifications(mods["prod"], driftWitnesses(mods), forma, &forma_command.FormaCommand{})
 	assert.Empty(t, moved)
 }
 
@@ -112,7 +112,7 @@ func TestWitnessedMovedModifications_PendingUpdate_LeftToLegacyFilter(t *testing
 		DesiredState: pkgmodel.Resource{Type: "AWS::KMS::Key", Label: "signing-key"},
 	}}}
 
-	moved := witnessedMovedModifications(mods["prod"], driftWitnesses(mods), forma, fa)
+	moved := WitnessedMovedModifications(mods["prod"], driftWitnesses(mods), forma, fa)
 	assert.Empty(t, moved, "a resource with a pending update is already unabsorbed; the legacy filter owns it")
 }
 
@@ -137,7 +137,7 @@ func TestAssertWitnessesIntoForma_AssertsOnlyMatchedResources_AndCopies(t *testi
 		}},
 	}
 
-	asserted := assertWitnessesIntoForma(original, mods, driftWitnesses(mods))
+	asserted := AssertWitnessesIntoForma(original, mods, driftWitnesses(mods))
 
 	require.NotSame(t, original, asserted)
 	assert.JSONEq(t, `{"Name": "k", "EnableKeyRotation": false}`, string(asserted.Resources[0].Properties),

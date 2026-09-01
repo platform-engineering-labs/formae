@@ -18,6 +18,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/changeset"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/drift"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_persister"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/generator_update"
@@ -643,7 +644,7 @@ func refuseRotationOnDrift(ds datastore.Datastore, forma *pkgmodel.Forma, fc *fo
 	}
 
 	stackLabels := map[string]bool{}
-	for _, label := range append(stackLabelsFromForma(forma), fc.GetStackLabels()...) {
+	for _, label := range append(drift.StackLabelsFromForma(forma), fc.GetStackLabels()...) {
 		if label == "" || autoReconciled[label] {
 			continue
 		}
@@ -656,21 +657,21 @@ func refuseRotationOnDrift(ds datastore.Datastore, forma *pkgmodel.Forma, fc *fo
 	modificationsByStack := make(map[string][]datastore.ResourceModification)
 	witnessByKsuid := make(map[string]json.RawMessage)
 	for label := range stackLabels {
-		if err := loadModificationsAndWitnesses(ds, label, modificationsByStack, witnessByKsuid); err != nil {
+		if err := drift.LoadModificationsAndWitnesses(ds, label, modificationsByStack, witnessByKsuid); err != nil {
 			return err
 		}
 	}
 
 	modifiedStacks := map[string]apimodel.ModifiedStack{}
 	for label, modifications := range modificationsByStack {
-		unabsorbed := filterUnabsorbedModifications(modifications, forma, fc)
-		unabsorbed = append(unabsorbed, witnessedMovedModifications(modifications, witnessByKsuid, forma, fc)...)
+		unabsorbed := drift.FilterUnabsorbedModifications(modifications, forma, fc)
+		unabsorbed = append(unabsorbed, drift.WitnessedMovedModifications(modifications, witnessByKsuid, forma, fc)...)
 		if len(unabsorbed) == 0 {
 			continue
 		}
 		modifiedResources := make([]apimodel.ResourceModification, 0, len(unabsorbed))
 		for _, modification := range unabsorbed {
-			modifiedResources = append(modifiedResources, toAPIResourceModification(modification))
+			modifiedResources = append(modifiedResources, drift.ToAPIResourceModification(modification))
 		}
 		modifiedStacks[label] = apimodel.ModifiedStack{ModifiedResources: modifiedResources}
 	}

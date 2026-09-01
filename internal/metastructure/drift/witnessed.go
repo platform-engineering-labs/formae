@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
-package metastructure
+package drift
 
 import (
 	"encoding/json"
@@ -14,22 +14,22 @@ import (
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
-// witnessedMovedModifications returns the modifications whose out-of-band
+// WitnessedMovedModifications returns the modifications whose out-of-band
 // movement sits on provider-default content formae's own last write
 // witnessed. Such movement is drift, exactly like drift on a declared
 // field: the caller adds these to the unabsorbed set so a soft reconcile
 // rejects showing them, and a forced reconcile reverts them via the witness
-// assertion. Candidates are the modifications filterUnabsorbedModifications
+// assertion. Candidates are the modifications FilterUnabsorbedModifications
 // absorbs (the unabsorbed ones already reject); a candidate that cannot be
 // classified (a non-update operation, a missing property blob, no matching
 // forma declaration, no write witness, or a diff error) is left absorbed,
 // which is the pre-existing tolerant behavior.
-func witnessedMovedModifications(modifications []datastore.ResourceModification, witnessByKsuid map[string]json.RawMessage, forma *pkgmodel.Forma, fa *forma_command.FormaCommand) []datastore.ResourceModification {
+func WitnessedMovedModifications(modifications []datastore.ResourceModification, witnessByKsuid map[string]json.RawMessage, forma *pkgmodel.Forma, fa *forma_command.FormaCommand) []datastore.ResourceModification {
 	type modKey struct {
 		stack, typeName, label, operation string
 	}
 	unabsorbed := map[modKey]bool{}
-	for _, mod := range filterUnabsorbedModifications(modifications, forma, fa) {
+	for _, mod := range FilterUnabsorbedModifications(modifications, forma, fa) {
 		unabsorbed[modKey{mod.Stack, mod.Type, mod.Label, mod.Operation}] = true
 	}
 
@@ -62,7 +62,7 @@ func witnessedMovedModifications(modifications []datastore.ResourceModification,
 	return moved
 }
 
-// assertWitnessesIntoForma returns a copy of the forma in which every
+// AssertWitnessesIntoForma returns a copy of the forma in which every
 // resource matching a modification with a write witness has formae's
 // witnessed values asserted onto its omitted provider-default fields (see
 // patch.AssertWitnessedSuppressed). A forced reconcile plans against the
@@ -70,7 +70,7 @@ func witnessedMovedModifications(modifications []datastore.ResourceModification,
 // same way declared drift is overwritten. Resources without a witnessed
 // modification are untouched; assertion failures degrade to the unasserted
 // declaration.
-func assertWitnessesIntoForma(forma *pkgmodel.Forma, modificationsByStack map[string][]datastore.ResourceModification, witnessByKsuid map[string]json.RawMessage) *pkgmodel.Forma {
+func AssertWitnessesIntoForma(forma *pkgmodel.Forma, modificationsByStack map[string][]datastore.ResourceModification, witnessByKsuid map[string]json.RawMessage) *pkgmodel.Forma {
 	witnessForResource := map[*pkgmodel.Resource]json.RawMessage{}
 	for _, modifications := range modificationsByStack {
 		for _, mod := range modifications {
@@ -111,7 +111,7 @@ func assertWitnessesIntoForma(forma *pkgmodel.Forma, modificationsByStack map[st
 // findDeclarationForModification resolves a modification to its forma
 // declaration by current label or by the declaration's alias (a rename
 // records the modification under the old label), mirroring the matching
-// filterUnabsorbedModifications uses for absorption.
+// FilterUnabsorbedModifications uses for absorption.
 func findDeclarationForModification(forma *pkgmodel.Forma, mod datastore.ResourceModification) *pkgmodel.Resource {
 	for i := range forma.Resources {
 		r := &forma.Resources[i]
