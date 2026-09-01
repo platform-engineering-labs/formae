@@ -130,6 +130,15 @@ func ensureDatabaseExists(ctx context.Context, cfg *pkgmodel.DatastoreConfig) er
 
 // This can be only used in tests or in setups where we have access to admin (non-production)
 func NewDatastorePostgresEnsureDatabase(ctx context.Context, cfg *pkgmodel.DatastoreConfig, agentID string) (datastore.Datastore, error) {
+	// Before ensuring the database, not after: ensureDatabaseExists opens its
+	// own connection through resolvePassword, so without this it would
+	// authenticate with the static password while the secret holds the current
+	// one. Configuring is idempotent, so the constructor below finding it
+	// already set is expected rather than a second attempt.
+	if err := configurePasswordProvider(ctx, cfg); err != nil {
+		return nil, err
+	}
+
 	err := ensureDatabaseExists(ctx, cfg)
 	if err != nil {
 		return nil, err

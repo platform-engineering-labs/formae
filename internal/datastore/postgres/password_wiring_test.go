@@ -154,6 +154,27 @@ func TestNewDatastorePostgres_CredentialThatBreaksAfterMigrationsFailsReadiness(
 		"the failure should be attributed to the credential, not to a generic startup error")
 }
 
+// The ensure-database constructor opens its own connection before delegating,
+// so it needs the provider configured first. Without that it authenticates with
+// the static password while the secret holds the current one, and the helper
+// starts failing the moment the static value goes stale — which is precisely
+// the situation the secret exists to survive.
+//
+// The static password here is deliberately wrong, so this passes only if the
+// secret is what gets used.
+func TestNewDatastorePostgresEnsureDatabase_UsesTheSecretNotTheStaticPassword(t *testing.T) {
+	role, database, password := rotatableRole(t)
+
+	cfg := wiringConfig(role, database, "stale_and_wrong", fakeSecretARN,
+		func(context.Context, string) (pkgmodel.PasswordProvider, error) {
+			return func(context.Context) (string, error) { return password, nil }, nil
+		})
+
+	_, err := postgres.NewDatastorePostgresEnsureDatabase(context.Background(), cfg, "agent-1")
+	require.NoError(t, err,
+		"the ensure step must authenticate with the resolved secret, not the static password")
+}
+
 // A control-plane blip during a rolling deployment must not stop a task
 // becoming healthy.
 func TestNewDatastorePostgres_TransientSecretErrorIsRetriedAtStartup(t *testing.T) {
