@@ -248,6 +248,76 @@ func generateAndEvaluate(t *testing.T, forma *model.Forma) (string, *model.Forma
 // evaluating that source back yields the same $gen envelope naming the same
 // generator and output. A resource holding an ordinary recorded value sits in
 // the same forma, so a binding invented for it would show.
+// TestGenerateSourceCode_GeneratorRotation_RoundTrips covers a generator that
+// declares a cadence. The cadence is the whole reason a generator rotates, so
+// an extract that drops it produces a forma which re-applies to a generator
+// that never rotates again, silently.
+func TestGenerateSourceCode_GeneratorRotation_RoundTrips(t *testing.T) {
+	deps, pluginDir := fakeawsDeps(t)
+
+	forma := &model.Forma{
+		Stacks:  []model.Stack{{Label: "default"}},
+		Targets: []model.Target{fakeawsTarget()},
+		Resources: []model.Resource{{
+			Label:      "plain-secret",
+			Type:       "FakeAWS::SecretsManager::Secret",
+			Stack:      "default",
+			Target:     "aws",
+			Properties: []byte(`{"SecretString":{"$value":"plaintext","$visibility":"Opaque","$strategy":"Update"}}`),
+		}},
+		Generators: []json.RawMessage{
+			[]byte(`{
+				"Type": "password",
+				"Label": "db-password",
+				"Stack": "default",
+				"Rotation": {"EverySeconds": 3600},
+				"Length": 24,
+				"Uppercase": true,
+				"Lowercase": true,
+				"Digits": true,
+				"Symbols": false,
+				"ExcludeCharacters": "",
+				"RequireEachIncludedType": true
+			}`),
+		},
+	}
+
+	dir := t.TempDir()
+	targetPath := filepath.Join(dir, "out.pkl")
+
+	options := &schema.SerializeOptions{
+		Schema:         "pkl",
+		SchemaLocation: schema.SchemaLocationLocal,
+		LocalPluginDir: pluginDir,
+		Dependencies:   deps,
+	}
+
+	_, err := PKL{}.GenerateSourceCode(forma, targetPath, nil, options)
+	require.NoError(t, err)
+
+	written, err := os.ReadFile(targetPath)
+	require.NoError(t, err)
+	generated := string(written)
+
+	assert.Contains(t, generated, "rotation = new formae.RotationSpec {",
+		"the emitted generator must carry its cadence, or a re-apply of an extract stops rotating it")
+	assert.Contains(t, generated, "every = 3600.s")
+
+	// The emitted cadence has to survive evaluation, not merely appear: the
+	// schema floors `every` at one minute, so a unit the floor rejects would
+	// render fine and then fail to eval.
+	evaluated, err := PKL{}.Evaluate(targetPath, model.CommandApply, model.FormaApplyModeReconcile, nil)
+	require.NoError(t, err, "emitted PKL must itself evaluate")
+
+	require.Len(t, evaluated.Generators, 1)
+	var round struct {
+		Rotation *struct{ EverySeconds int } `json:"Rotation"`
+	}
+	require.NoError(t, json.Unmarshal(evaluated.Generators[0], &round))
+	require.NotNil(t, round.Rotation, "cadence must survive the round trip")
+	assert.Equal(t, 3600, round.Rotation.EverySeconds)
+}
+
 func TestGenerateSourceCode_GeneratorBinding_RoundTripsThroughPkl(t *testing.T) {
 	forma := &model.Forma{
 		Stacks:  []model.Stack{{Label: "secrets"}},
