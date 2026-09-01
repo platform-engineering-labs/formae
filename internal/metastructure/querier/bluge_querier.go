@@ -72,7 +72,7 @@ func (b *BlugeQuerier) statusQuery(queryString string, caller Caller, n int) (*d
 
 func (b *BlugeQuerier) translateToStatusQuery(blugeQuery bluge.Query, caller Caller) (*datastore.StatusQuery, error) {
 	statusQuery := &datastore.StatusQuery{}
-	err := b.processStatusQueryNode(blugeQuery, statusQuery, caller, datastore.Required)
+	err := b.processStatusQueryNode(blugeQuery, statusQuery, caller, datastore.Optional)
 	if err != nil {
 		return nil, err
 	}
@@ -278,7 +278,7 @@ func (b *BlugeQuerier) resourceQuery(queryString string) (*datastore.ResourceQue
 
 func (b *BlugeQuerier) translateToResourceQuery(blugeQuery bluge.Query) (*datastore.ResourceQuery, error) {
 	resourceQuery := &datastore.ResourceQuery{}
-	err := b.processResourceQueryNode(blugeQuery, resourceQuery, datastore.Required)
+	err := b.processResourceQueryNode(blugeQuery, resourceQuery, datastore.Optional)
 	if err != nil {
 		return nil, err
 	}
@@ -396,7 +396,7 @@ func (b *BlugeQuerier) destroyResourcesQuery(queryString string) (*datastore.Des
 
 func (b *BlugeQuerier) translateToDestroyResourcesQuery(blugeQuery bluge.Query) (*datastore.DestroyResourcesQuery, error) {
 	destroyQuery := &datastore.DestroyResourcesQuery{}
-	err := b.processDestroyResourcesQueryNode(blugeQuery, destroyQuery, datastore.Required)
+	err := b.processDestroyResourcesQueryNode(blugeQuery, destroyQuery, datastore.Optional)
 	if err != nil {
 		return nil, err
 	}

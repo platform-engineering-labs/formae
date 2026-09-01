@@ -742,3 +742,38 @@ func TestBlugeQuerier_QueryResourcesForDestroy_AcceptsComplexQueryWithoutManaged
 		assert.NoError(t, err)
 	})
 }
+
+func TestBlugeQuerier_resourceQuery_RepeatedFieldRequiredMultiValue(t *testing.T) {
+	querier := &BlugeQuerier{}
+
+	queryString := "+stack:alpha +stack:beta"
+	expected := &datastore.ResourceQuery{
+		Stack: &datastore.QueryItem[string]{
+			Item:       "alpha",
+			ExtraItems: []string{"beta"},
+			Constraint: datastore.Required,
+		},
+	}
+
+	got, err := querier.resourceQuery(queryString)
+	assert.NoError(t, err)
+	assert.Equal(t, expected, got)
+}
+
+func TestBlugeQuerier_statusQuery_RepeatedFieldRequiredMultiValue(t *testing.T) {
+	querier := &BlugeQuerier{}
+
+	queryString := "+id:cmd-123 +id:cmd-456"
+	expected := &datastore.StatusQuery{
+		CommandID: &datastore.QueryItem[string]{
+			Item:       "cmd-123",
+			ExtraItems: []string{"cmd-456"},
+			Constraint: datastore.Required,
+		},
+		N: 0,
+	}
+
+	got, err := querier.statusQuery(queryString, Caller{ClientID: "test"}, 0)
+	assert.NoError(t, err)
+	assert.Equal(t, expected, got)
+}

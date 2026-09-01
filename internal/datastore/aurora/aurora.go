@@ -85,7 +85,7 @@ func appendAuroraStringClause(
 	}
 
 	glue := " OR "
-	if isExcluded {
+	if isExcluded || qi.Constraint == datastore.Required {
 		glue = " AND "
 	}
 	if len(clauses) == 1 {
@@ -127,7 +127,7 @@ func appendAuroraExistsClause(
 	}
 
 	glue := " OR "
-	if isExcluded {
+	if isExcluded || qi.Constraint == datastore.Required {
 		glue = " AND "
 	}
 	if len(clauses) == 1 {

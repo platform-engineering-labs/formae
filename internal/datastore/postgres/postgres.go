@@ -670,7 +670,7 @@ func extendPostgresQueryString[T any](queryStr string, queryItem *datastore.Quer
 	}
 
 	glue := " OR "
-	if isExcluded {
+	if isExcluded || queryItem.Constraint == datastore.Required {
 		glue = " AND "
 	}
 	return queryStr + " AND (" + strings.Join(clauses, glue) + ")"
