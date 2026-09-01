@@ -336,7 +336,7 @@ func decorateOpacity(answer *SourceAnswer, ksuid, propertyPath string, resources
 	opaque := isSourcePropertyOpaque(target, propertyPath)
 
 	if effDoc, declared := effective[ksuid]; declared {
-		effVal := gjson.GetBytes(effDoc, propertyPath)
+		effVal := LookupSourceProperty(effDoc, propertyPath)
 		if effVal.Exists() && !isReferenceEnvelope(effVal) {
 			if !opaque {
 				opaque = containsHashedValue(effVal) || containsOpaqueVisibility(effVal)
@@ -378,7 +378,7 @@ func storedRootDigest(target *pkgmodel.Resource, propertyPath string) string {
 		if props == nil {
 			continue
 		}
-		v := gjson.GetBytes(props, propertyPath)
+		v := LookupSourceProperty(props, propertyPath)
 		if v.Exists() && v.Get("$hashed").Bool() {
 			return provenance.FromStored(v.Get("$value").String())
 		}
@@ -401,7 +401,7 @@ func classifySourcePropertyValue(ksuid, propertyPath string, resourcesByKsuid ma
 	}
 
 	if effDoc, declared := effective[ksuid]; declared {
-		effVal := gjson.GetBytes(effDoc, propertyPath)
+		effVal := LookupSourceProperty(effDoc, propertyPath)
 		if effVal.Exists() {
 			refused := containsHashedValue(effVal) || containsOpaqueVisibility(effVal) ||
 				isSourcePropertyOpaque(targetResource, propertyPath)
@@ -499,7 +499,7 @@ func resolvableValueFrom(properties json.RawMessage, propertyPath string) (strin
 	if properties == nil {
 		return "", false
 	}
-	extracted := gjson.GetBytes(properties, propertyPath)
+	extracted := LookupSourceProperty(properties, propertyPath)
 	if !extracted.Exists() {
 		return "", false
 	}

@@ -15,6 +15,7 @@ import (
 	"github.com/tidwall/sjson"
 
 	"github.com/platform-engineering-labs/formae/internal/constants"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/pathkey"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/transformations"
@@ -1712,7 +1713,7 @@ func synthesizeCascadeUpdatePatch(
 				}
 			}
 			if !sourceFieldIsProviderAssigned {
-				extracted := gjson.GetBytes(parent.Properties, ref.SourcePropertyName)
+				extracted := resolver.LookupSourceProperty(parent.Properties, ref.SourcePropertyName)
 				if extracted.Exists() && !looksLikeResolvable(extracted) {
 					ops = append(ops, op{Op: "replace", Path: path, Value: extracted.Value()})
 					continue
@@ -1765,7 +1766,7 @@ func cascadeSourceIsOpaque(dep pkgmodel.Resource, ref resolver.ResolvableRef, pa
 	if referencesOpaqueProperty(transformations.OpaqueFields(parent.Schema, parent.Type), property) {
 		return true
 	}
-	return gjson.GetBytes(parent.Properties, ref.SourcePropertyName).Get("$visibility").String() == pkgmodel.VisibilityOpaque
+	return resolver.LookupSourceProperty(parent.Properties, ref.SourcePropertyName).Get("$visibility").String() == pkgmodel.VisibilityOpaque
 }
 
 // looksLikeResolvable reports whether a gjson Result is itself a $ref/$value
@@ -1781,12 +1782,29 @@ func looksLikeResolvable(r gjson.Result) bool {
 // jsonPointerFromDotPath converts the resolver's dot-separated TargetPath
 // (e.g. "Refs.0.Target") into a JSON Pointer (e.g. "/Refs/0/Target") that
 // JSON-Patch consumers expect.
+//
+// The two notations escape different things, so this is a translation and not a
+// character swap: the path escapes each literal map key against gjson's and
+// sjson's grammars, while a pointer segment escapes "~" as "~0" and "/" as "~1"
+// (RFC 6901, in that order). Each segment is therefore unescaped out of the path
+// and re-escaped into the pointer.
 func jsonPointerFromDotPath(p string) string {
 	if p == "" {
 		return ""
 	}
-	return "/" + strings.ReplaceAll(p, ".", "/")
+	segments := pathkey.Split(p)
+	escaped := make([]string, len(segments))
+	for i, segment := range segments {
+		escaped[i] = jsonPointerEscaper.Replace(segment)
+	}
+	return "/" + strings.Join(escaped, "/")
 }
+
+// jsonPointerEscaper applies RFC 6901 reference-token escaping. "~" must be
+// replaced before "/" so the "~1" it produces is not itself re-escaped;
+// strings.Replacer scans once and never rewrites its own output, which gives
+// that ordering for free.
+var jsonPointerEscaper = strings.NewReplacer("~", "~0", "/", "~1")
 
 // newCascadeUpdate constructs an Update on dep for the cascade-update
 // path. DesiredState carries dep's stored properties, including any
@@ -1812,12 +1830,14 @@ func newCascadeUpdate(dep pkgmodel.Resource, target pkgmodel.Target, source Form
 // stripArrayIndicesForHintLookup mirrors changeset.stripArrayIndices: dotted
 // path with numeric segments removed, suitable for Schema.Hints key lookup.
 // Duplicated rather than imported because changeset depends on
-// resource_update.
+// resource_update. The path escapes each literal map key as it is built, so it
+// is split on unescaped dots only and the segments are unescaped back to the
+// field names a schema declares its hints under.
 func stripArrayIndicesForHintLookup(path string) string {
 	if path == "" {
 		return path
 	}
-	parts := strings.Split(path, ".")
+	parts := pathkey.Split(path)
 	out := make([]string, 0, len(parts))
 	for _, part := range parts {
 		if isAllDigits(part) && len(parts) > 1 {
@@ -2533,6 +2553,19 @@ func translatePropertiesJSON(properties json.RawMessage, tripletToKsuid map[pkgm
 	return json.RawMessage(result), externalLabels, nil
 }
 
+// appendPathSegment appends one literal JSON map key or array index to a
+// gjson/sjson path, escaping it as it is appended. The walkers below build their
+// paths out of data-derived keys, and a key carrying path syntax would otherwise
+// address a nested tree — reading nothing, and writing the key's exploded
+// duplicate beside the key itself.
+func appendPathSegment(basePath, key string) string {
+	escaped := pathkey.Escape(key)
+	if basePath == "" {
+		return escaped
+	}
+	return basePath + "." + escaped
+}
+
 // translateEmbedSpans walks the JSON tree for objects with $embed==true and
 // rewrites any framed RS<base64>US $res envelopes in $template to $ref+KSUID form.
 func translateEmbedSpans(jsonStr string, tripletToKsuid map[pkgmodel.TripletKey]string, genKeyToKsuid map[pkgmodel.GeneratorKey]string, ds ResourceDataLookup, externalLabels map[string]string) (string, error) {
@@ -2566,12 +2599,7 @@ func translateEmbedSpansAtPath(basePath string, value gjson.Result, jsonStr stri
 		// Recurse into child fields
 		var walkErr error
 		value.ForEach(func(key, val gjson.Result) bool {
-			var childPath string
-			if basePath == "" {
-				childPath = key.String()
-			} else {
-				childPath = basePath + "." + key.String()
-			}
+			childPath := appendPathSegment(basePath, key.String())
 			jsonStr, walkErr = translateEmbedSpansAtPath(childPath, val, jsonStr, tripletToKsuid, genKeyToKsuid, ds, externalLabels)
 			return walkErr == nil
 		})
@@ -2581,12 +2609,7 @@ func translateEmbedSpansAtPath(basePath string, value gjson.Result, jsonStr stri
 	} else if value.IsArray() {
 		var walkErr error
 		value.ForEach(func(key, val gjson.Result) bool {
-			var childPath string
-			if basePath == "" {
-				childPath = key.String()
-			} else {
-				childPath = basePath + "." + key.String()
-			}
+			childPath := appendPathSegment(basePath, key.String())
 			jsonStr, walkErr = translateEmbedSpansAtPath(childPath, val, jsonStr, tripletToKsuid, genKeyToKsuid, ds, externalLabels)
 			return walkErr == nil
 		})
@@ -2869,10 +2892,7 @@ func collectOpaqueResolvablePaths(basePath string, value gjson.Result, opaqueByT
 		return
 	}
 	value.ForEach(func(key, val gjson.Result) bool {
-		childPath := key.String()
-		if basePath != "" {
-			childPath = basePath + "." + childPath
-		}
+		childPath := appendPathSegment(basePath, key.String())
 		collectOpaqueResolvablePaths(childPath, val, opaqueByTriplet, paths)
 		return true
 	})

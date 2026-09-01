@@ -248,6 +248,18 @@ func (m *Metastructure) Start() error {
 		return err
 	}
 
+	// One-time repair of unmanaged rows an older build stored with dot-exploded
+	// duplicates of their literal map keys. It forgets those rows so the next
+	// discovery cycle re-ingests them cleanly, which is only safe here: after
+	// this point the actors are running and writing, and the replay of
+	// incomplete commands below could restore what was forgotten. It records
+	// what it did per target, so a repaired target is never repaired twice, and
+	// it defers any target whose replay would resurrect the old rows.
+	if err := migration.ReingestCorruptedUnmanagedRows(m.Datastore); err != nil {
+		slog.Error("Failed to re-ingest dotted-key-corrupted unmanaged resources", "error", err)
+		return err
+	}
+
 	node, err := ergo.StartNode(gen.Atom(m.nodeName), m.options)
 	if err != nil {
 		slog.Error("Failed to start node", "error", err)
