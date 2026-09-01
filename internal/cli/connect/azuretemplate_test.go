@@ -188,3 +188,61 @@ func TestAzureTemplateCommandRequiresASession(t *testing.T) {
 	require.ErrorAs(t, err, &f)
 	assert.Equal(t, printer.CodeHostedRequired, f.Code)
 }
+
+// Machine output exists because the deep link is the credential-less path's
+// whole value and, without this, the only place it appeared was human-readable
+// stderr. A harness driving the connect flow cannot scrape that, so the link
+// reaches a consumer the same way AWS's quick-create URL does: a field on a
+// machine-readable document.
+func TestAzureTemplateViewCarriesTheDeepLinkAndCoordinates(t *testing.T) {
+	const (
+		consoleOrigin  = "https://console.formae.ai"
+		installationID = "3IjUFLA75bBkM4DmUp2c6TgHeu9"
+		formaeTenantID = "default"
+	)
+	tmpl, err := azureTemplateWithDefaults(installationID, formaeTenantID)
+	require.NoError(t, err)
+
+	v, err := newAzureTemplateView(consoleOrigin, installationID, formaeTenantID, tmpl)
+	require.NoError(t, err)
+
+	assert.Equal(t, connectSchemaVersion, v.SchemaVersion)
+	assert.Equal(t, "template", v.Phase, "a consumer branches on phase before reading any field")
+	assert.Equal(t, "azure", v.Cloud)
+	assert.Equal(t, installationID, v.Installation)
+	assert.Equal(t, formaeTenantID, v.FormaeTenantID)
+
+	// The link must be the portal's create-from-uri form wrapping the console
+	// URL, because that is what makes it one click: the portal fetches the
+	// template itself and pre-populates the parameter form from its defaults.
+	assert.Contains(t, v.DeepLink, "portal.azure.com")
+	assert.Contains(t, v.DeepLink, url.QueryEscape(consoleOrigin+"/azure/trust.json"))
+	assert.Contains(t, v.TemplateURL, consoleOrigin)
+	assert.Contains(t, v.TemplateURL, installationID)
+
+	// The command's contract is "give me the template". Machine mode replaces
+	// stdout with this document, so omitting it would make machine callers
+	// strictly less capable than human ones at the command's own purpose.
+	require.NotNil(t, v.Template, "machine output must still carry the template")
+	schema, _ := v.Template["$schema"].(string)
+	assert.Contains(t, schema, "subscriptionDeploymentTemplate.json")
+}
+
+// The document has to survive both schemas the output flags accept. A
+// json.RawMessage template would have marshalled as a base64 byte string under
+// yaml, so the template is held as a decoded map instead.
+func TestAzureTemplateViewMarshalsUnderBothSchemas(t *testing.T) {
+	tmpl, err := azureTemplateWithDefaults("i", "t")
+	require.NoError(t, err)
+	v, err := newAzureTemplateView("https://console.formae.ai", "i", "t", tmpl)
+	require.NoError(t, err)
+
+	for _, schema := range []string{"json", "yaml"} {
+		var buf strings.Builder
+		require.NoError(t, emitAzureTemplate(&buf, schema, v), "schema %s", schema)
+		out := buf.String()
+		assert.Contains(t, out, "deepLink", "schema %s dropped the deep link key", schema)
+		assert.Contains(t, out, "subscriptionDeploymentTemplate.json",
+			"schema %s did not render the template as structured data", schema)
+	}
+}
