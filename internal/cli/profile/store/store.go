@@ -162,13 +162,6 @@ func (s *Store) Resolve() (string, error) {
 // Resolve creates names a local agent, and that is a decision the user has not
 // been asked about. Anything that only wants to look should not be the thing
 // that makes it.
-func (s *Store) ResolveExisting() (string, error) {
-	name, err := s.Active()
-	if err != nil {
-		return "", err
-	}
-	return s.ProfilePath(name), nil
-}
 
 // List returns all profile names in sorted order. An absent profiles/ dir
 // yields an empty slice (a clean store is not an error for introspection).
@@ -493,4 +486,59 @@ func (s *Store) validSymlinkTarget() (string, bool) {
 		return "", false
 	}
 	return name, true
+}
+
+// ResolveExisting is Resolve for a caller that must not create anything: it
+// resolves every store Resolve can resolve, and does none of the writing.
+//
+// Resolve initializes, which is right for a command about to use a config and
+// wrong for one merely reading a preference out of it. The difference is
+// load-bearing on a machine nobody has signed in on: the store Resolve creates
+// there names a local agent, and that is a decision the user has not been asked
+// about. Anything that only wants to look should not be the thing that makes it.
+//
+// The cases below mirror initialize's, in its order, minus its side effects. A
+// version that only read the active pointer would have made a configured user's
+// theme depend on some other command having migrated their legacy config first
+// - and the read-only caller is exactly the one that cannot cause that
+// migration.
+func (s *Store) ResolveExisting() (string, error) {
+	// A pointer that exists is decisive: Resolve refuses to rewrite a malformed
+	// one and reports a dangling one rather than looking further, so neither may
+	// fall through to the recovery cases.
+	if name, err := s.Active(); err == nil {
+		path := s.ProfilePath(name)
+		if _, statErr := os.Stat(path); statErr != nil {
+			return "", fmt.Errorf("%w: active profile %q not found", ErrNotInitialized, name)
+		}
+		return path, nil
+	} else if !errors.Is(err, ErrNotInitialized) {
+		return "", err
+	}
+
+	cfg := s.ConfigPath()
+	if info, lerr := os.Lstat(cfg); lerr == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			// A legacy symlink already points at a profile, so reading it needs
+			// no migration at all.
+			if name, ok := s.validSymlinkTarget(); ok {
+				return s.ProfilePath(name), nil
+			}
+		} else {
+			// A bare legacy file is itself a readable config. Resolve moves it
+			// into profiles/ and points at it; a reader can just read it where
+			// it lies.
+			return cfg, nil
+		}
+	}
+
+	if path := s.ProfilePath("default"); fileExists(path) {
+		return path, nil // an orphaned default, which Resolve adopts.
+	}
+	return "", ErrNotInitialized
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
