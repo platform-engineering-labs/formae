@@ -8,11 +8,14 @@ package connect
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -175,4 +178,38 @@ func TestNeedsAuthenticationWithoutAzReportsAzMissing(t *testing.T) {
 		"an operator who will not install az needs to be told about the credential-less path")
 	_, hasCommand := f.Details["command"]
 	assert.False(t, hasCommand, "az_missing must not report a login command az cannot run")
+}
+
+// classifyCredentialOutcome is the seam the real usableCredentials routes
+// through, so these cases exercise the classification the stubbed
+// usableCredentials tests cannot reach.
+func TestNoCredentialAtAllNeedsAuthentication(t *testing.T) {
+	// What DefaultAzureCredential reports when no source in its chain can
+	// even attempt a token: the error is a credentialUnavailableError, which
+	// azidentity does not export, so it cannot be matched by type.
+	unavailable := errors.New("DefaultAzureCredential: failed to acquire a token.\n" +
+		"Attempted credentials:\n\tEnvironmentCredential: missing environment variable AZURE_TENANT_ID\n" +
+		"\tAzureCLICredential: Azure CLI not found on path")
+
+	got := classifyCredentialOutcome(tokenFailed, unavailable)
+
+	assert.Equal(t, azureCredentialsNeedsAuthentication, got,
+		"a machine with no credential source must be told to sign in, not that its subscription is unreadable")
+}
+
+func TestTokenObtainedButSubscriptionForbiddenLacksPermission(t *testing.T) {
+	denied := &azcore.ResponseError{StatusCode: 403, ErrorCode: "AuthorizationFailed"}
+
+	got := classifyCredentialOutcome(tokenObtained, denied)
+
+	assert.Equal(t, azureCredentialsLacksPermission, got)
+}
+
+func TestTokenObtainedButSubscriptionMissingIsUnreachable(t *testing.T) {
+	missing := &azcore.ResponseError{StatusCode: 404, ErrorCode: "SubscriptionNotFound"}
+
+	got := classifyCredentialOutcome(tokenObtained, missing)
+
+	assert.Equal(t, azureSubscriptionUnreachable, got,
+		"a token that works but a subscription that does not resolve is not a credential problem")
 }
