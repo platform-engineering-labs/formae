@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	clicmd "github.com/platform-engineering-labs/formae/internal/cli/cmd"
+	"github.com/platform-engineering-labs/formae/internal/cli/printer"
 )
 
 // azurePortalDeepLinkBase is Azure's template-deployment deep link. Unlike
@@ -73,58 +74,9 @@ func azureTemplateCmd() *cobra.Command {
 			return runAzureTemplate(cc)
 		},
 	}
+	clicmd.AddOutputFlags(c)
 	c.SetUsageTemplate(clicmd.SimpleCmdUsageTemplate)
 	return c
-}
-
-func runAzureTemplate(cc *cobra.Command) error {
-	opts, err := readSelection(cc)
-	if err != nil {
-		return err
-	}
-	s, err := openSession(cc.Context(), opts)
-	if err != nil {
-		return err
-	}
-	formaeTenantID, installationID, err := splitSubject(s.Setup.CloudSubject)
-	if err != nil {
-		return err
-	}
-
-	doc, err := azureTemplateWithDefaults(installationID, formaeTenantID)
-	if err != nil {
-		return err
-	}
-	if _, err := cc.OutOrStdout().Write(doc); err != nil {
-		return err
-	}
-
-	deepLink := azurePortalDeepLink(azureTemplateConsoleURL(s.ConsoleOrigin, installationID, formaeTenantID))
-
-	// Guidance goes to stderr, never stdout: stdout is the template itself,
-	// so `formae connect azure template > trust.json` must carry nothing
-	// else.
-	//
-	// The deep link is listed first because it is the only route that asks
-	// nothing of this machine at all: it opens the portal with the template
-	// already fetched and its defaults already filled in, no paste, no CLI,
-	// no local credentials. The portal editor is the fallback for whoever
-	// cannot open the link; az and a pipeline are unchanged below it.
-	// installationId and formaeTenantId are filled in as defaults precisely
-	// because the portal pre-populates its parameter form from them - the
-	// operator deploying it there never has to be told either value.
-	_, err = fmt.Fprintf(cc.ErrOrStderr(), "deploy this yourself - installationId and formaeTenantId are already "+
-		"filled in as defaults, so nothing more needs typing:\n\n"+
-		"  - one click, nothing to paste: %s\n"+
-		"  - Azure Portal: search \"Deploy a custom template\", choose \"Build your own template in the editor\", "+
-		"paste this file, deploy\n"+
-		"  - az deployment sub create --location <region> --template-file trust.json\n"+
-		"  - or your own pipeline (GitHub Actions with OIDC, Azure DevOps, Terraform), which keeps the credential "+
-		"off any machine entirely\n\n"+
-		"then register what it creates:\n\n"+
-		"  formae connect azure --subscription <id> --tenant-id <t> --client-id <c>\n\n"+
-		"<t> and <c> come from the deployment's outputs (tenantId and clientId).\n", deepLink)
-	return err
 }
 
 // azureTemplateWithDefaults returns the embedded template with
@@ -165,4 +117,88 @@ func setParameterDefault(params map[string]any, name, value string) error {
 	}
 	p["defaultValue"] = value
 	return nil
+}
+
+// azureTemplateFallbackMessage stands in when a failure carries no declared
+// code. Like every other connect path, the producer's own message does not
+// travel: it can quote configuration source, and a Pkl failure quotes the
+// line it failed on, which can hold an inline password.
+const azureTemplateFallbackMessage = "formae could not produce the trust template; " +
+	"run it without --output-consumer machine to see why"
+
+func runAzureTemplate(cc *cobra.Command) error {
+	consumer, schema, err := resolveOutputOrHuman(cc)
+	if err != nil {
+		return err
+	}
+	// Every failure below has to reach a machine consumer as a failure
+	// document, not a bare non-zero exit: a caller that cannot read a code
+	// cannot tell "sign in first" from "this build is broken", and the whole
+	// value of this path is that it works on a machine holding no credentials.
+	if err := writeAzureTemplate(cc, consumer, schema); err != nil {
+		return report(cc.OutOrStdout(), consumer, schema, err, azureTemplateFallbackMessage)
+	}
+	return nil
+}
+
+func writeAzureTemplate(cc *cobra.Command, consumer printer.Consumer, schema string) error {
+	opts, err := readSelection(cc)
+	if err != nil {
+		return err
+	}
+	s, err := openSession(cc.Context(), opts)
+	if err != nil {
+		return err
+	}
+	formaeTenantID, installationID, err := splitSubject(s.Setup.CloudSubject)
+	if err != nil {
+		return err
+	}
+
+	doc, err := azureTemplateWithDefaults(installationID, formaeTenantID)
+	if err != nil {
+		return err
+	}
+
+	// A machine consumer gets one document on stdout instead of the template
+	// plus prose on two streams: the deep link is the point of this path, and
+	// stderr is not somewhere a harness can be asked to read it from.
+	if consumer == printer.ConsumerMachine {
+		v, err := newAzureTemplateView(s.ConsoleOrigin, installationID, formaeTenantID, doc)
+		if err != nil {
+			return err
+		}
+		return emitAzureTemplate(cc.OutOrStdout(), schema, v)
+	}
+
+	if _, err := cc.OutOrStdout().Write(doc); err != nil {
+		return err
+	}
+
+	deepLink := azurePortalDeepLink(azureTemplateConsoleURL(s.ConsoleOrigin, installationID, formaeTenantID))
+
+	// Guidance goes to stderr, never stdout: stdout is the template itself,
+	// so `formae connect azure template > trust.json` must carry nothing
+	// else.
+	//
+	// The deep link is listed first because it is the only route that asks
+	// nothing of this machine at all: it opens the portal with the template
+	// already fetched and its defaults already filled in, no paste, no CLI,
+	// no local credentials. The portal editor is the fallback for whoever
+	// cannot open the link; az and a pipeline are unchanged below it.
+	// installationId and formaeTenantId are filled in as defaults precisely
+	// because the portal pre-populates its parameter form from them - the
+	// operator deploying it there never has to be told either value.
+	_, err = fmt.Fprintf(cc.ErrOrStderr(), "deploy this yourself - installationId and formaeTenantId are already "+
+		"filled in as defaults, so nothing more needs typing:\n\n"+
+		"  - one click, nothing to paste: %s\n"+
+		"  - Azure Portal: search \"Deploy a custom template\", choose \"Build your own template in the editor\", "+
+		"paste this file, deploy\n"+
+		"  - az deployment sub create --location <region> --template-file trust.json\n"+
+		"  - or your own pipeline (GitHub Actions with OIDC, Azure DevOps, Terraform), which keeps the credential "+
+		"off any machine entirely\n\n"+
+		"then register what it creates:\n\n"+
+		"  formae connect azure --subscription <id> --tenant-id <t> --client-id <c>\n\n"+
+		"<t> and <c> come from the deployment's outputs (tenantId and clientId).\n", deepLink)
+	return err
 }
