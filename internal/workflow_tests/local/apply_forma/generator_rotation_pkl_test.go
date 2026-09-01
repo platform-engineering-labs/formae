@@ -22,8 +22,9 @@ import (
 )
 
 // authoredRotatingGeneratorForma is the forma this test applies: a
-// PasswordGenerator declaring `rotation { every = 1.s }` and a plugin resource
-// whose secret-bearing property is bound to that generator's `value` output.
+// PasswordGenerator declaring `rotation { every = 1.min }` and a plugin
+// resource whose secret-bearing property is bound to that generator's `value`
+// output.
 const authoredRotatingGeneratorForma = "internal/schema/pkl/testdata/forma/generator_rotation_test.pkl"
 
 // The stack, generator and destination the authored forma declares.
@@ -32,6 +33,7 @@ const (
 	rotatingFormaGenerator   = "db-password"
 	rotatingFormaDestination = "db"
 	rotatingFormaLength      = 24
+	rotatingFormaEverySecs   = 60
 )
 
 // A cadence authored in PKL rotates the credential it governs. The forma is
@@ -65,7 +67,8 @@ func TestApplyForma_PklAuthoredRotatingGenerator_RotatesOnItsDeclaredCadence(t *
 		require.Len(t, forma.Generators, 1)
 		require.True(t, gjson.GetBytes(forma.Resources[0].Properties, "SecretString.$gen").Bool(),
 			"precondition: eval must render the binding as a $gen envelope")
-		require.Equal(t, int64(1), gjson.GetBytes(forma.Generators[0], "Rotation.EverySeconds").Int(),
+		require.Equal(t, int64(rotatingFormaEverySecs),
+			gjson.GetBytes(forma.Generators[0], "Rotation.EverySeconds").Int(),
 			"precondition: the authored cadence must reach the model as an interval in seconds")
 
 		delivered := newDeliveredValues()
@@ -93,9 +96,10 @@ func TestApplyForma_PklAuthoredRotatingGenerator_RotatesOnItsDeclaredCadence(t *
 		require.NoError(t, err)
 		require.NotEmpty(t, identityBefore.GenerationID)
 
-		// Waiting first is what makes the sweep below say something about the
-		// scheduler rather than about the clock.
-		waitUntilRotationDue(t, m, rotatingFormaStack, rotatingFormaGenerator)
+		// Putting the cadence behind the generator first is what makes the
+		// sweep below say something about the scheduler rather than about the
+		// clock.
+		makeRotationDue(t, m, rotatingFormaStack, rotatingFormaGenerator)
 		rotation := sweepUntilRotated(t, m)
 		require.Equal(t, forma_command.CommandStateSuccess, rotation.State,
 			"the rotation of a PKL-authored cadence must succeed")

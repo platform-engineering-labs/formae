@@ -492,6 +492,22 @@ local cadencelessRotation = new formae.PasswordGenerator {
     rotation = new formae.RotationSpec {}
 }
 
+local subMinuteRotation = new formae.PasswordGenerator {
+    label = "sub-minute-password"
+    stack = stackResolvable
+    rotation = new formae.RotationSpec {
+        every = 500.ms
+    }
+}
+
+local minimumRotation = new formae.PasswordGenerator {
+    label = "minimum-password"
+    stack = stackResolvable
+    rotation = new formae.RotationSpec {
+        every = 1.min
+    }
+}
+
 // Schema classes that sit under an intermediate base rather than extending
 // formae.SubResource / formae.Resource directly. The subclasses inherit the
 // base's annotated fields, redeclare one of them (narrowing String? to String),
@@ -807,6 +823,15 @@ facts {
 
     ["A rotation spec without a cadence is rejected"] {
         module.catch(() -> cadencelessRotation.render().Rotation.EverySeconds) != null
+    }
+
+    ["A cadence below the scheduler's floor is rejected, naming the field"] {
+        module.catch(() -> subMinuteRotation.render().Rotation.EverySeconds)
+            .contains("RotationSpec.every")
+    }
+
+    ["The floor itself is a cadence"] {
+        minimumRotation.render().Rotation.EverySeconds == 60
     }
 
     ["Relative TTL policy renders TTLSeconds and no ExpiresAt"] {
