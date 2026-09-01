@@ -152,6 +152,24 @@ func (s *Store) Resolve() (string, error) {
 	return s.ProfilePath(name), nil
 }
 
+// ResolveExisting is Resolve for a caller that must not create anything: it
+// answers only from what is already on disk, and reports ErrNotInitialized
+// when there is nothing.
+//
+// Resolve initializes an empty store, which is right for a command about to
+// use a config and wrong for one merely reading a preference out of it. The
+// difference is load-bearing on a machine nobody has signed in on: the store
+// Resolve creates names a local agent, and that is a decision the user has not
+// been asked about. Anything that only wants to look should not be the thing
+// that makes it.
+func (s *Store) ResolveExisting() (string, error) {
+	name, err := s.Active()
+	if err != nil {
+		return "", err
+	}
+	return s.ProfilePath(name), nil
+}
+
 // List returns all profile names in sorted order. An absent profiles/ dir
 // yields an empty slice (a clean store is not an error for introspection).
 //
