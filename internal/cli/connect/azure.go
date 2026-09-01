@@ -91,12 +91,14 @@ func decideAzureMode(opts azureOptions) (azureMode, error) {
 		return azureModeLocal, nil
 	}
 
-	if opts.TenantID == "" {
-		return 0, clicmd.FlagErrorf("--client-id names an existing managed identity; pass --tenant-id too, " +
-			"so both coordinates the control plane needs are registered")
-	}
-	if err := validateAzureUUID(opts.TenantID, "--tenant-id"); err != nil {
-		return 0, err
+	// --tenant-id is optional here: ARM names the subscription's tenant in the
+	// challenge it returns to an unauthenticated request, so the register-only
+	// path derives it rather than asking the operator to copy a second guid.
+	// A supplied value still wins, and still has to be well formed.
+	if opts.TenantID != "" {
+		if err := validateAzureUUID(opts.TenantID, "--tenant-id"); err != nil {
+			return 0, err
+		}
 	}
 	if err := validateAzureUUID(opts.ClientID, "--client-id"); err != nil {
 		return 0, err
@@ -267,6 +269,19 @@ func runAzureRegisterOnly(cc *cobra.Command, opts azureOptions, consumer printer
 	s, err := openSession(cc.Context(), options{ConfigFlag: opts.ConfigFlag, ProfileFlag: opts.ProfileFlag})
 	if err != nil {
 		return err
+	}
+
+	// Derived only when the operator did not supply one. The probe needs no
+	// credential, but it does need the network, so a failure names the flag
+	// rather than stranding a path whose point is to need nothing local.
+	if opts.TenantID == "" {
+		tenant, derr := discoverAzureTenant(cc.Context(), opts.Subscription)
+		if derr != nil {
+			return printer.Fail(printer.CodeCredentialsRequired,
+				"could not work out which Entra tenant owns subscription "+opts.Subscription+
+					"; pass --tenant-id with the tenantId from the deployment outputs", nil)
+		}
+		opts.TenantID = tenant
 	}
 
 	warnings := append([]string{}, s.Warnings...)
