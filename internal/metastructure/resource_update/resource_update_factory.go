@@ -26,9 +26,17 @@ func NewResourceUpdateForExisting(
 	newTarget pkgmodel.Target,
 	mode pkgmodel.FormaApplyMode,
 	source FormaCommandSource,
+	force bool,
+	coPlanned CoPlannedForDraw,
 ) ([]ResourceUpdate, error) {
 
-	if reflect.DeepEqual(existingResource, newResource) {
+	// The three suppressions below all say the same thing: nothing about this
+	// resource moved, so the command has nothing to do for it. coPlanned is
+	// the one case where that is true and the update is still owed — a
+	// generator this resource binds to draws in this command, and only a
+	// resource that is a node in the changeset receives the drawn value. See
+	// CoPlannedForDraw.
+	if reflect.DeepEqual(existingResource, newResource) && !bool(coPlanned) {
 		slog.Debug("No changes detected between existing and new resource, skipping update")
 		return nil, nil
 	}
@@ -60,12 +68,20 @@ func NewResourceUpdateForExisting(
 	if err != nil {
 		return nil, fmt.Errorf("failed to compare resources: %w", err)
 	}
-	if !hasChanges && !stackChanged && !labelChanged {
+	if !hasChanges && !stackChanged && !labelChanged && !bool(coPlanned) {
 		return []ResourceUpdate{}, nil
 	}
 
 	var patchDocument json.RawMessage
 	var createOnlyPatch json.RawMessage
+	var onlyForceResent bool
+
+	// Provenance classification runs BEFORE any opaque suppression or patch
+	// generation: it decides per reference occurrence whether the source
+	// provably moved, marks stable occurrences for suppression at the
+	// flattening seam, and produces the immutable records regeneration reads
+	// back after recovery.
+	provenanceRecords := buildProvenanceRecords(filteredProps, existingResource.Properties, resolvableProperties, newResource.Schema, force)
 
 	if hasChanges {
 		// Drop opaque values that are unchanged from what is stored so a sibling
@@ -94,7 +110,7 @@ func NewResourceUpdateForExisting(
 			return nil, fmt.Errorf("failed to convert new properties to plugin format: %w", err)
 		}
 
-		patchDocument, createOnlyPatch, err = patch.GeneratePatch(
+		patchDocument, createOnlyPatch, onlyForceResent, err = patch.GeneratePatch(
 			existingPluginProps,
 			newPluginProps,
 			existingForPatch,
@@ -107,7 +123,13 @@ func NewResourceUpdateForExisting(
 			return nil, fmt.Errorf("failed to create patch document for resource %s: %w", existingResource.Label, err)
 		}
 
-		if patchDocument == nil && len(createOnlyPatch) == 0 && !stackChanged && !labelChanged {
+		// A patch that is empty, or whose only ops are requiredOnUpdate fields
+		// force-resent to guarantee the provider sees them (no op reflecting an
+		// actual change), carries nothing for the plugin to do. Planning is the
+		// one place that decision is allowed to drop the update outright —
+		// regeneratePatchDocument at execution time must never do the same, or
+		// an in-flight update would lose the force-resent field from its payload.
+		if (patchDocument == nil || onlyForceResent) && len(createOnlyPatch) == 0 && !stackChanged && !labelChanged && !bool(coPlanned) {
 			return []ResourceUpdate{}, nil
 		}
 	} else {
@@ -126,6 +148,16 @@ func NewResourceUpdateForExisting(
 
 	// Extract resolvables for the new resource
 	newRemainingResolvables := resolver.ExtractResolvableURIs(newResource)
+
+	// Runs after the patch is derived, so what the provider is asked to do is
+	// unaffected: a stable occurrence is already suppressed from the diff.
+	// This is only about what the row keeps, which is written from the desired
+	// document below.
+	filteredProps, generatorDigests, err := CarryStableGeneratorBindingForward(
+		filteredProps, existingResource.Properties, provenanceRecords)
+	if err != nil {
+		return nil, fmt.Errorf("failed to carry stable generator bindings forward for resource %s: %w", existingResource.Label, err)
+	}
 
 	updateResource := ResourceUpdate{
 		PriorState:     existingResource,
@@ -157,6 +189,8 @@ func NewResourceUpdateForExisting(
 		StackLabel:           newResource.Stack,
 		RemainingResolvables: newRemainingResolvables,
 		PreviousProperties:   existingResource.Properties,
+		ProvenanceRecords:    provenanceRecords,
+		ResolvedRootDigests:  generatorDigests,
 	}
 
 	return []ResourceUpdate{updateResource}, nil

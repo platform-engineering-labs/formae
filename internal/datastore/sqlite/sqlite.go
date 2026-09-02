@@ -61,6 +61,10 @@ type DatastoreSQLite struct {
 	conn    *sql.DB // Write connection (single connection for SQLite write safety)
 	agentID string
 	ctx     context.Context
+	// dsn is kept so a data migration lease can open its OWN connection on the
+	// same file. It must never take one from conn: that pool holds a single
+	// connection, so pinning it would starve every ordinary read.
+	dsn string
 }
 
 type TestDatastoreSQLite interface {
@@ -104,7 +108,7 @@ func NewDatastoreSQLite(ctx context.Context, cfg *pkgmodel.DatastoreConfig, agen
 	// to avoid "database is locked" errors during concurrent operations.
 	conn.SetMaxOpenConns(1)
 
-	d := DatastoreSQLite{conn: conn, agentID: agentID, ctx: ctx}
+	d := DatastoreSQLite{conn: conn, agentID: agentID, ctx: ctx, dsn: cfg.Sqlite.FilePath}
 
 	if err = datastore.RunMigrations(conn, "sqlite3"); err != nil {
 		return nil, err
@@ -216,7 +220,7 @@ SELECT
 	ru.resource, ru.resource_target, ru.existing_resource, ru.existing_target,
 	ru.progress_result, ru.most_recent_progress,
 	ru.remaining_resolvables, ru.reference_labels, ru.previous_properties,
-	ru.is_cascade, ru.cascade_source
+	ru.is_cascade, ru.cascade_source, ru.failure_reason, ru.provenance_records, ru.resolved_root_digests
 FROM forma_commands fc
 LEFT JOIN resource_updates ru ON fc.command_id = ru.command_id`
 
@@ -250,6 +254,8 @@ func scanJoinedRow(rows *sql.Rows) (*forma_command.FormaCommand, *resource_updat
 	var remainingResolvablesJSON, referenceLabelsJSON, previousPropertiesJSON []byte
 	var ruIsCascade sql.NullInt64
 	var ruCascadeSource sql.NullString
+	var ruFailureReason sql.NullString
+	var ruProvenanceRecords, ruResolvedRootDigests []byte
 
 	err := rows.Scan(
 		// FormaCommand columns
@@ -262,7 +268,8 @@ func scanJoinedRow(rows *sql.Rows) (*forma_command.FormaCommand, *resource_updat
 		&resourceJSON, &resourceTargetJSON, &existingResourceJSON, &existingTargetJSON,
 		&progressResultJSON, &mostRecentProgressJSON,
 		&remainingResolvablesJSON, &referenceLabelsJSON, &previousPropertiesJSON,
-		&ruIsCascade, &ruCascadeSource,
+		&ruIsCascade, &ruCascadeSource, &ruFailureReason,
+		&ruProvenanceRecords, &ruResolvedRootDigests,
 	)
 	if err != nil {
 		return nil, nil, err
@@ -421,6 +428,19 @@ func scanJoinedRow(rows *sql.Rows) (*forma_command.FormaCommand, *resource_updat
 	if ruCascadeSource.Valid {
 		ru.CascadeSource = ruCascadeSource.String
 	}
+	if ruFailureReason.Valid {
+		ru.FailureReason = ruFailureReason.String
+	}
+	if len(ruProvenanceRecords) > 0 {
+		if err := json.Unmarshal(ruProvenanceRecords, &ru.ProvenanceRecords); err != nil {
+			return nil, nil, fmt.Errorf("failed to unmarshal provenance records: %w", err)
+		}
+	}
+	if len(ruResolvedRootDigests) > 0 {
+		if err := json.Unmarshal(ruResolvedRootDigests, &ru.ResolvedRootDigests); err != nil {
+			return nil, nil, fmt.Errorf("failed to unmarshal resolved root digests: %w", err)
+		}
+	}
 
 	return &cmd, &ru, nil
 }
@@ -548,7 +568,7 @@ func (d DatastoreSQLite) GetMostRecentFormaCommandByClientID(clientID string) (*
 			ru.resource, ru.resource_target, ru.existing_resource, ru.existing_target,
 			ru.progress_result, ru.most_recent_progress,
 			ru.remaining_resolvables, ru.reference_labels, ru.previous_properties,
-	ru.is_cascade, ru.cascade_source
+	ru.is_cascade, ru.cascade_source, ru.failure_reason, ru.provenance_records, ru.resolved_root_digests
 		FROM forma_commands fc
 		LEFT JOIN resource_updates ru ON fc.command_id = ru.command_id
 		WHERE fc.command_id = (
@@ -653,6 +673,7 @@ WHERE
 			Type:      r.resourceType,
 			Label:     r.label,
 			Operation: r.operation,
+			Ksuid:     r.ksuid,
 		}
 		if r.operation == "update" {
 			curProps, propErr := d.fetchCurrentProperties(r.ksuid)
@@ -670,6 +691,59 @@ WHERE
 	}
 
 	return modifications, nil
+}
+
+// GetPropertiesAtLastWrite returns the resource's per-field write witness,
+// composed from its genuine-write history (see datastore.ComposeWriteWitness):
+// the newest create/replace echo is the base and each later apply-owned
+// update overlays only the fields its patch wrote. Sync and discovery
+// versions, metadata-only applies (empty patch), and fields an update's echo
+// merely carried along never enter the witness. History is bounded to the
+// most recent writes; a resource whose create falls outside the bound has no
+// witness, which classifies its movement as tolerated.
+func (d DatastoreSQLite) GetPropertiesAtLastWrite(ksuid string) (json.RawMessage, error) {
+	_, span := sqliteTracer.Start(context.Background(), "GetPropertiesAtLastWrite")
+	defer span.End()
+
+	query := `
+SELECT json_extract(r.data, '$.Properties'), ru.operation, json_extract(ru.resource, '$.PatchDocument')
+FROM resources r
+JOIN forma_commands fc ON fc.command_id = r.command_id
+JOIN resource_updates ru ON ru.command_id = r.command_id AND ru.ksuid = r.ksuid
+WHERE r.ksuid = ?
+AND fc.command = 'apply'
+AND r.operation != 'delete' AND r.operation != 'reaped'
+AND (ru.operation != 'update'
+	OR (json_extract(ru.resource, '$.PatchDocument') IS NOT NULL
+		AND json_extract(ru.resource, '$.PatchDocument') != '[]'))
+ORDER BY r.version DESC
+LIMIT 25
+`
+	rows, err := d.conn.Query(query, ksuid)
+	if err != nil {
+		return nil, err
+	}
+	defer closeRows(rows)
+
+	var history []datastore.WriteVersion
+	for rows.Next() {
+		var props, op, patch sql.NullString
+		if err := rows.Scan(&props, &op, &patch); err != nil {
+			return nil, err
+		}
+		v := datastore.WriteVersion{Operation: op.String}
+		if props.Valid {
+			v.Properties = json.RawMessage(props.String)
+		}
+		if patch.Valid {
+			v.Patch = json.RawMessage(patch.String)
+		}
+		history = append(history, v)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return datastore.ComposeWriteWitness(history), nil
 }
 
 // fetchCurrentProperties returns the Properties JSON from the latest resource version for the given ksuid.
@@ -924,7 +998,7 @@ func (d DatastoreSQLite) QueryFormaCommands(query *datastore.StatusQuery) ([]*fo
 			ru.resource, ru.resource_target, ru.existing_resource, ru.existing_target,
 			ru.progress_result, ru.most_recent_progress,
 			ru.remaining_resolvables, ru.reference_labels, ru.previous_properties,
-	ru.is_cascade, ru.cascade_source
+	ru.is_cascade, ru.cascade_source, ru.failure_reason, ru.provenance_records, ru.resolved_root_digests
 		FROM forma_commands fc
 		LEFT JOIN resource_updates ru ON fc.command_id = ru.command_id
 		WHERE fc.command_id IN (%s)
@@ -2757,6 +2831,394 @@ func (d DatastoreSQLite) DeletePoliciesForStack(stackID string, commandID string
 	return nil
 }
 
+// CreateGenerator persists a new generator. stack_id stores the stack's
+// resolved KSUID — like policy_id on an inline policy, not the label — read
+// off gen.GetStackID(). Unlike CreatePolicy the column is never NULL: a
+// generator is always inline to exactly one stack.
+func (d DatastoreSQLite) CreateGenerator(gen pkgmodel.Generator, commandID string) (string, error) {
+	_, span := sqliteTracer.Start(context.Background(), "CreateGenerator")
+	defer span.End()
+
+	// Honor a KSUID translation already assigned (see pkgmodel.Generator.GetID
+	// and generator_update.GenerateGeneratorUpdates), so a $gen reference
+	// resolved in the same command that creates this generator names the
+	// exact row this call persists, rather than an independently minted one
+	// — mirrors storeResource's identical id-already-assigned handling.
+	id := gen.GetID()
+	if id == "" {
+		id = mksuid.New().String()
+	}
+	version := mksuid.New().String()
+
+	data, err := datastore.GeneratorData(gen)
+	if err != nil {
+		return "", err
+	}
+
+	query := `INSERT INTO generators (id, version, command_id, operation, label, generator_type, stack_id, generator_data, generation_id, generation_spec)
+	          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	_, err = d.conn.Exec(query, id, version, commandID, "create", gen.GetLabel(), gen.GetType(), gen.GetStackID(), string(data), "", "")
+	if err != nil {
+		slog.Error("Failed to create generator", "error", err, "label", gen.GetLabel())
+		return "", err
+	}
+
+	return version, nil
+}
+
+// UpdateGenerator persists a new version of an existing generator. The
+// existing row is found by label and stack ID — a generator has no
+// standalone form, so unlike UpdatePolicy there is no NULL-stack branch —
+// and the new version row carries forward the same id.
+//
+// A miss on the current label falls back to a lookup by gen.GetAlias(), the
+// generator's previous label: this is the rename path. Without it, a renamed
+// generator would find no row to update, and the caller would have to fall
+// back to Create, minting a fresh id and losing the identity a later
+// rotation schedule keys off.
+func (d DatastoreSQLite) UpdateGenerator(gen pkgmodel.Generator, commandID string) (string, error) {
+	_, span := sqliteTracer.Start(context.Background(), "UpdateGenerator")
+	defer span.End()
+
+	id, generationID, generationSpec, err := d.findGeneratorForUpdate(gen.GetLabel(), gen.GetStackID())
+	if err != nil && gen.GetAlias() != "" {
+		id, generationID, generationSpec, err = d.findGeneratorForUpdate(gen.GetAlias(), gen.GetStackID())
+	}
+	if err != nil {
+		return "", fmt.Errorf("failed to find existing generator: %w", err)
+	}
+
+	version := mksuid.New().String()
+	data, err := datastore.GeneratorData(gen)
+	if err != nil {
+		return "", err
+	}
+
+	insertQuery := `INSERT INTO generators (id, version, command_id, operation, label, generator_type, stack_id, generator_data, generation_id, generation_spec)
+	                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	_, err = d.conn.Exec(insertQuery, id, version, commandID, "update", gen.GetLabel(), gen.GetType(), gen.GetStackID(), string(data), generationID, generationSpec)
+	if err != nil {
+		slog.Error("Failed to update generator", "error", err, "label", gen.GetLabel())
+		return "", err
+	}
+
+	return version, nil
+}
+
+// findGeneratorForUpdate returns the id and current generation fields of the
+// live generator row matching label and stackID. Shared by UpdateGenerator's
+// current-label lookup and its alias fallback.
+//
+// Windows to the latest version *per id* first, filters out tombstones, and
+// only then matches label — the same ordering GetGenerator and
+// DeleteGenerator use, for the same reason: a label can be shared across a
+// dead row (superseded by a rename) and a live one (a rename-back, or a
+// fresh generator created under a freed label), and matching label before
+// windowing can resolve the wrong id entirely, or a live id's stale,
+// pre-rename generation.
+//
+// The generation fields are read here so UpdateGenerator can copy them
+// forward onto the new version row it writes: a spec edit or an alias rename
+// must not drop the generation a generator currently holds — dropping it
+// would make the next apply see no generation and regenerate, silently
+// rotating a live credential.
+func (d DatastoreSQLite) findGeneratorForUpdate(label, stackID string) (id, generationID, generationSpec string, err error) {
+	query := `
+		WITH latest_generators AS (
+			SELECT id, label, generation_id, generation_spec, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version DESC) as rn
+			FROM generators
+			WHERE stack_id = ?
+		)
+		SELECT id, generation_id, generation_spec
+		FROM latest_generators
+		WHERE rn = 1 AND operation != 'delete' AND label = ?
+	`
+	err = d.conn.QueryRow(query, stackID, label).Scan(&id, &generationID, &generationSpec)
+	return id, generationID, generationSpec, err
+}
+
+// DeleteGenerator soft-deletes the generator with the given label on the
+// given stack. The stack is resolved from its label the same way
+// GetGenerator does; a stack that doesn't exist has nothing to delete. A
+// label with no live match is a no-op success that returns an empty version,
+// mirroring DeletePolicy.
+//
+// The candidate row is the latest version *per id* across the whole stack,
+// filtered by label only after that windowing — not the latest version
+// among rows already filtered to this label. A rename (UpdateGenerator's
+// alias fallback) leaves the old label's row in place with an older version
+// number; filtering by label first would still find and re-delete that
+// stale row instead of correctly reporting no live match.
+func (d DatastoreSQLite) DeleteGenerator(label, stackLabel string) (string, error) {
+	_, span := sqliteTracer.Start(context.Background(), "DeleteGenerator")
+	defer span.End()
+
+	stack, err := d.GetStackByLabel(stackLabel)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve stack %q: %w", stackLabel, err)
+	}
+	if stack == nil {
+		return "", nil
+	}
+
+	query := `
+		WITH latest_generators AS (
+			SELECT id, label, generator_type, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version DESC) as rn
+			FROM generators
+			WHERE stack_id = ?
+		)
+		SELECT id, generator_type
+		FROM latest_generators
+		WHERE rn = 1 AND operation != 'delete' AND label = ?
+	`
+	var id, generatorType string
+	err = d.conn.QueryRow(query, stack.ID, label).Scan(&id, &generatorType)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return "", fmt.Errorf("failed to get generator for deletion: %w", err)
+	}
+
+	version := mksuid.New().String()
+	insertQuery := `INSERT INTO generators (id, version, command_id, operation, label, generator_type, stack_id, generator_data, generation_id, generation_spec) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	_, err = d.conn.Exec(insertQuery, id, version, "", "delete", label, generatorType, stack.ID, "{}", "", "")
+	if err != nil {
+		return "", fmt.Errorf("failed to delete generator: %w", err)
+	}
+
+	slog.Debug("Deleted generator", "label", label, "id", id, "stackLabel", stackLabel)
+
+	return version, nil
+}
+
+// GetGenerator retrieves the current (latest, non-deleted) generator with the
+// given label on the given stack. The stack label is resolved to its
+// current KSUID first, since generators.stack_id stores the stack's id, not
+// its label — mirroring how a policy's inline lookups are scoped by stack
+// ID. Returns nil, nil if no live stack or no live generator matches.
+//
+// As with DeleteGenerator, the label filter is applied after windowing to
+// the latest version per id, not before: a renamed generator's previous
+// label must not resolve just because its now-superseded row is still the
+// newest one under that label.
+func (d DatastoreSQLite) GetGenerator(label, stackLabel string) (pkgmodel.Generator, error) {
+	_, span := sqliteTracer.Start(context.Background(), "GetGenerator")
+	defer span.End()
+
+	stack, err := d.GetStackByLabel(stackLabel)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve stack %q: %w", stackLabel, err)
+	}
+	if stack == nil {
+		return nil, nil
+	}
+
+	query := `
+		WITH latest_generators AS (
+			SELECT label, generator_data, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version DESC) as rn
+			FROM generators
+			WHERE stack_id = ?
+		)
+		SELECT generator_data
+		FROM latest_generators
+		WHERE rn = 1 AND operation != 'delete' AND label = ?
+	`
+	var dataStr string
+	err = d.conn.QueryRow(query, stack.ID, label).Scan(&dataStr)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to get generator: %w", err)
+	}
+
+	return datastore.GeneratorFromData([]byte(dataStr))
+}
+
+// LoadGeneratorsByStack returns all non-deleted generators owned by a stack.
+// The stack label is resolved to its current KSUID first, for the same
+// reason GetGenerator does. A stack that doesn't exist owns no generators.
+func (d DatastoreSQLite) LoadGeneratorsByStack(stackLabel string) ([]pkgmodel.Generator, error) {
+	_, span := sqliteTracer.Start(context.Background(), "LoadGeneratorsByStack")
+	defer span.End()
+
+	stack, err := d.GetStackByLabel(stackLabel)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve stack %q: %w", stackLabel, err)
+	}
+	if stack == nil {
+		return nil, nil
+	}
+
+	query := `
+		WITH latest_generators AS (
+			SELECT id, generator_data, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version DESC) as rn
+			FROM generators
+			WHERE stack_id = ?
+		)
+		SELECT generator_data
+		FROM latest_generators
+		WHERE rn = 1 AND operation != 'delete'
+	`
+	rows, err := d.conn.Query(query, stack.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var generators []pkgmodel.Generator
+	for rows.Next() {
+		var dataStr string
+		if err := rows.Scan(&dataStr); err != nil {
+			return nil, err
+		}
+		gen, err := datastore.GeneratorFromData([]byte(dataStr))
+		if err != nil {
+			slog.Warn("Failed to deserialize generator, skipping", "error", err, "stackLabel", stackLabel)
+			continue
+		}
+		generators = append(generators, gen)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return generators, nil
+}
+
+// generatorIdentityFromRow builds a GeneratorIdentity from the raw columns a
+// generator row query returns. generation_spec is stored as empty text on a
+// row that has never had a generation drawn; GenerationSpec must read back as
+// nil, not as an empty-but-non-nil json.RawMessage, so the zero-value case is
+// handled explicitly rather than by just wrapping whatever was stored.
+func generatorIdentityFromRow(id, generationID, generationSpec string) datastore.GeneratorIdentity {
+	if generationID == "" {
+		return datastore.GeneratorIdentity{ID: id}
+	}
+	return datastore.GeneratorIdentity{ID: id, GenerationID: generationID, GenerationSpec: json.RawMessage(generationSpec)}
+}
+
+// GetGeneratorIdentity returns the identity of the live generator with the
+// given label on the given stack. Uses the same windowing and label-after-rn
+// ordering as GetGenerator, for the same reason: a renamed generator's
+// previous label must not resolve just because its now-superseded row is
+// still the newest one under that label.
+func (d DatastoreSQLite) GetGeneratorIdentity(label, stackLabel string) (datastore.GeneratorIdentity, error) {
+	_, span := sqliteTracer.Start(context.Background(), "GetGeneratorIdentity")
+	defer span.End()
+
+	stack, err := d.GetStackByLabel(stackLabel)
+	if err != nil {
+		return datastore.GeneratorIdentity{}, fmt.Errorf("failed to resolve stack %q: %w", stackLabel, err)
+	}
+	if stack == nil {
+		return datastore.GeneratorIdentity{}, nil
+	}
+
+	query := `
+		WITH latest_generators AS (
+			SELECT id, label, generation_id, generation_spec, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version DESC) as rn
+			FROM generators
+			WHERE stack_id = ?
+		)
+		SELECT id, generation_id, generation_spec
+		FROM latest_generators
+		WHERE rn = 1 AND operation != 'delete' AND label = ?
+	`
+	var id, generationID, generationSpec string
+	err = d.conn.QueryRow(query, stack.ID, label).Scan(&id, &generationID, &generationSpec)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return datastore.GeneratorIdentity{}, nil
+		}
+		return datastore.GeneratorIdentity{}, fmt.Errorf("failed to get generator identity: %w", err)
+	}
+
+	return generatorIdentityFromRow(id, generationID, generationSpec), nil
+}
+
+// GetGeneratorIdentityByID returns the identity of the live generator with
+// the given KSUID, whichever stack owns it. Windows on id directly rather
+// than resolving a stack first: the id alone determines the row family.
+func (d DatastoreSQLite) GetGeneratorIdentityByID(generatorID string) (datastore.GeneratorIdentity, error) {
+	_, span := sqliteTracer.Start(context.Background(), "GetGeneratorIdentityByID")
+	defer span.End()
+
+	query := `
+		WITH latest_generators AS (
+			SELECT id, generation_id, generation_spec, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version DESC) as rn
+			FROM generators
+			WHERE id = ?
+		)
+		SELECT id, generation_id, generation_spec
+		FROM latest_generators
+		WHERE rn = 1 AND operation != 'delete'
+	`
+	var id, generationID, generationSpec string
+	err := d.conn.QueryRow(query, generatorID).Scan(&id, &generationID, &generationSpec)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return datastore.GeneratorIdentity{}, nil
+		}
+		return datastore.GeneratorIdentity{}, fmt.Errorf("failed to get generator identity by id: %w", err)
+	}
+
+	return generatorIdentityFromRow(id, generationID, generationSpec), nil
+}
+
+// AdvanceGeneration records that a new generation was drawn for this
+// generator, under this spec. Writes a new version row that carries forward
+// the existing label/type/stack/generator_data unchanged — only the
+// generation columns change. Errors if generationID is empty, if drawnUnder
+// is not valid JSON, or if the generator's latest row is a tombstone: a
+// deleted id is not resurrected.
+//
+// The caller is the generator update actor
+// (generator_update.GeneratorUpdater): it calls this once it has drawn a
+// value, so the generation the value came from is durable before any
+// destination is stamped with it.
+func (d DatastoreSQLite) AdvanceGeneration(generatorID, generationID, commandID string, drawnUnder json.RawMessage) error {
+	_, span := sqliteTracer.Start(context.Background(), "AdvanceGeneration")
+	defer span.End()
+
+	if generationID == "" {
+		return fmt.Errorf("advance generation: generationID must not be empty")
+	}
+	if !json.Valid(drawnUnder) {
+		return fmt.Errorf("advance generation: drawnUnder spec must be valid JSON")
+	}
+
+	var label, generatorType, stackID, generatorData, operation string
+	err := d.conn.QueryRow(
+		`SELECT label, generator_type, stack_id, generator_data, operation FROM generators WHERE id = ? ORDER BY version DESC LIMIT 1`,
+		generatorID,
+	).Scan(&label, &generatorType, &stackID, &generatorData, &operation)
+	if err != nil {
+		return fmt.Errorf("failed to find generator %q: %w", generatorID, err)
+	}
+	if operation == "delete" {
+		return fmt.Errorf("generator %q not found", generatorID)
+	}
+
+	version := mksuid.New().String()
+	insertQuery := `INSERT INTO generators (id, version, command_id, operation, label, generator_type, stack_id, generator_data, generation_id, generation_spec)
+	                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	_, err = d.conn.Exec(insertQuery, generatorID, version, commandID, "update", label, generatorType, stackID, generatorData, generationID, string(drawnUnder))
+	if err != nil {
+		return fmt.Errorf("failed to advance generation: %w", err)
+	}
+
+	return nil
+}
+
 // deserializePolicy creates a Policy from stored data
 func deserializePolicy(label, policyType, policyDataStr, stackID string) (pkgmodel.Policy, error) {
 	switch policyType {
@@ -2999,6 +3461,79 @@ func (d DatastoreSQLite) GetStacksWithAutoReconcilePolicy() ([]datastore.StackRe
 	}
 
 	return result, nil
+}
+
+// GetGeneratorsWithRotation returns every live generator with the instant its
+// last rotation committed. The cadence itself is read from the stored spec by
+// datastore.RotationInfoFromRows, so this query never parses JSON.
+//
+// last_committed_draw is the derivation the rotation scheduler runs on: a
+// generation row records that a value was drawn and the command that drew it,
+// and joining that command's state is what says whether the value ever reached
+// its destinations. A command that is not Success advances nothing, so a
+// failed authority-side update leaves the cadence measured from the previous
+// success. The command's start is the instant used, matching how the
+// auto-reconcile schedule reads fc.timestamp.
+func (d DatastoreSQLite) GetGeneratorsWithRotation() ([]datastore.GeneratorRotationInfo, error) {
+	_, span := sqliteTracer.Start(context.Background(), "GetGeneratorsWithRotation")
+	defer span.End()
+
+	query := `
+		WITH latest_generators AS (
+			SELECT id, label, stack_id, generator_data, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version DESC) as rn
+			FROM generators
+		),
+		latest_stacks AS (
+			SELECT id, label, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version DESC) as rn
+			FROM stacks
+		),
+		last_committed_draw AS (
+			SELECT g.id as generator_id, MAX(fc.timestamp) as last_rotation_at
+			FROM generators g
+			JOIN forma_commands fc ON fc.command_id = g.command_id
+			WHERE g.generation_id != '' AND fc.state = 'Success'
+			GROUP BY g.id
+		)
+		SELECT g.id, g.label, s.label, g.generator_data,
+		       COALESCE(d.last_rotation_at, '') as last_rotation_at
+		FROM latest_generators g
+		JOIN latest_stacks s ON s.id = g.stack_id
+		LEFT JOIN last_committed_draw d ON d.generator_id = g.id
+		WHERE g.rn = 1 AND g.operation != 'delete'
+		AND s.rn = 1 AND s.operation != 'delete'
+	`
+
+	rows, err := d.conn.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var rotationRows []datastore.GeneratorRotationRow
+	for rows.Next() {
+		var row datastore.GeneratorRotationRow
+		var lastRotationStr string
+		if err := rows.Scan(&row.GeneratorID, &row.Label, &row.StackLabel, &row.GeneratorData, &lastRotationStr); err != nil {
+			return nil, err
+		}
+		if lastRotationStr != "" {
+			row.LastRotationAt = parseSQLiteTimestamp(lastRotationStr)
+			if row.LastRotationAt.IsZero() {
+				// An unreadable instant must not read as "never rotated":
+				// that would rotate the credential on every sweep.
+				return nil, fmt.Errorf("generator %s: cannot read the instant of its last committed draw", row.GeneratorID)
+			}
+			row.LastRotationAt = row.LastRotationAt.UTC()
+		}
+		rotationRows = append(rotationRows, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return datastore.RotationInfoFromRows(rotationRows)
 }
 
 func (d DatastoreSQLite) GetResourcesAtLastReconcile(stackLabel string) ([]datastore.ResourceSnapshot, error) {
@@ -4475,6 +5010,69 @@ func (d DatastoreSQLite) FindResourcesDependingOn(ksuid string) ([]*pkgmodel.Res
 	return resources, nil
 }
 
+// FindResourcesReferencingGenerator finds the live resources that bind a property
+// to the given generator through a $gen envelope. SQLite has no refs column, so
+// like the $ref lookup this is a full table scan over the data column. The LIKE
+// is a prefilter kept deliberately loose (it is blind to case, and to whether
+// the key sits inside an envelope), and pkgmodel.BindsGenerator decides which
+// candidates are really destinations.
+func (d DatastoreSQLite) FindResourcesReferencingGenerator(generatorKsuid string) ([]*pkgmodel.Resource, error) {
+	slog.Debug("SQLite START", "method", "FindResourcesReferencingGenerator", "generator", generatorKsuid)
+	start := time.Now()
+	defer func() {
+		slog.Debug("SQLite END", "method", "FindResourcesReferencingGenerator", "generator", generatorKsuid, "duration", time.Since(start))
+	}()
+	_, span := sqliteTracer.Start(context.Background(), "FindResourcesReferencingGenerator")
+	defer span.End()
+
+	// A translated $gen envelope stores the generator KSUID under $generator
+	// (JSON without spaces after colons).
+	pattern := fmt.Sprintf("%%\"$generator\":\"%s\"%%", generatorKsuid)
+
+	query := `
+	SELECT data, ksuid
+	FROM resources r1
+	WHERE data LIKE ?
+	AND NOT EXISTS (
+		SELECT 1
+		FROM resources r2
+		WHERE r1.uri = r2.uri
+		AND r2.version > r1.version
+	)
+	AND operation != ? AND operation != 'reaped'
+	`
+
+	rows, err := d.conn.Query(query, pattern, resource_update.OperationDelete)
+	if err != nil {
+		return nil, err
+	}
+	defer closeRows(rows)
+
+	var resources []*pkgmodel.Resource
+	for rows.Next() {
+		var jsonData, ksuidResult string
+		if err := rows.Scan(&jsonData, &ksuidResult); err != nil {
+			return nil, err
+		}
+
+		// The SQL above is only a prefilter: it is deliberately broader than
+		// the truth so no destination is missed. pkgmodel.BindsGenerator is
+		// authoritative, and drops any candidate it matched for another reason.
+		if !pkgmodel.BindsGenerator([]byte(jsonData), generatorKsuid) {
+			continue
+		}
+
+		var resource pkgmodel.Resource
+		if err := json.Unmarshal([]byte(jsonData), &resource); err != nil {
+			return nil, err
+		}
+		resource.Ksuid = ksuidResult
+		resources = append(resources, &resource)
+	}
+
+	return resources, rows.Err()
+}
+
 func (d DatastoreSQLite) FindResourcesDependingOnMany(ksuids []string) (map[string][]*pkgmodel.Resource, error) {
 	slog.Debug("SQLite START", "method", "FindResourcesDependingOnMany", "ksuids", len(ksuids))
 	start := time.Now()
@@ -4777,6 +5375,26 @@ func (d DatastoreSQLite) BatchGetTripletsByKSUIDs(ksuids []string) (map[string]p
 
 // BulkStoreResourceUpdates stores multiple ResourceUpdates in a single transaction
 // This is the key performance optimization: insert all updates in one transaction
+// marshalOrNil JSON-encodes v, or returns nil for an empty value so the
+// column stays NULL.
+func marshalOrNil(v any) any {
+	switch t := v.(type) {
+	case []resource_update.OccurrenceRecord:
+		if len(t) == 0 {
+			return nil
+		}
+	case map[string]string:
+		if len(t) == 0 {
+			return nil
+		}
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	return string(b)
+}
+
 func (d DatastoreSQLite) BulkStoreResourceUpdates(commandID string, updates []resource_update.ResourceUpdate) error {
 	slog.Debug("SQLite START", "method", "BulkStoreResourceUpdates", "commandID", commandID, "count", len(updates))
 	start := time.Now()
@@ -4809,8 +5427,9 @@ func (d DatastoreSQLite) BulkStoreResourceUpdates(commandID string, updates []re
 			resource, resource_target, existing_resource, existing_target,
 			progress_result, most_recent_progress,
 			remaining_resolvables, reference_labels, previous_properties,
-			is_cascade, cascade_source
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			is_cascade, cascade_source, failure_reason,
+			provenance_records, resolved_root_digests
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return fmt.Errorf("failed to prepare statement: %w", err)
@@ -4901,6 +5520,9 @@ func (d DatastoreSQLite) BulkStoreResourceUpdates(commandID string, updates []re
 			ru.PreviousProperties,
 			ru.IsCascade,
 			ru.CascadeSource,
+			ru.FailureReason,
+			marshalOrNil(ru.ProvenanceRecords),
+			marshalOrNil(ru.ResolvedRootDigests),
 		)
 		if err != nil {
 			return fmt.Errorf("failed to insert resource update: %w", err)
@@ -4930,7 +5552,8 @@ func (d DatastoreSQLite) LoadResourceUpdates(commandID string) ([]resource_updat
 			retries, remaining, version, stack_label, group_id, source,
 			resource, resource_target, existing_resource, existing_target,
 			progress_result, most_recent_progress,
-			remaining_resolvables, reference_labels, previous_properties
+			remaining_resolvables, reference_labels, previous_properties,
+			provenance_records, resolved_root_digests
 		FROM resource_updates
 		WHERE command_id = ?
 	`
@@ -4950,6 +5573,7 @@ func (d DatastoreSQLite) LoadResourceUpdates(commandID string) ([]resource_updat
 		var resourceJSON, resourceTargetJSON, existingResourceJSON, existingTargetJSON []byte
 		var progressResultJSON, mostRecentProgressJSON []byte
 		var remainingResolvablesJSON, referenceLabelsJSON, previousPropertiesJSON []byte
+		var provenanceRecordsJSON, resolvedRootDigestsJSON []byte
 
 		err := rows.Scan(
 			&ksuid,
@@ -4972,6 +5596,8 @@ func (d DatastoreSQLite) LoadResourceUpdates(commandID string) ([]resource_updat
 			&remainingResolvablesJSON,
 			&referenceLabelsJSON,
 			&previousPropertiesJSON,
+			&provenanceRecordsJSON,
+			&resolvedRootDigestsJSON,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan resource update: %w", err)
@@ -4979,6 +5605,16 @@ func (d DatastoreSQLite) LoadResourceUpdates(commandID string) ([]resource_updat
 
 		ru.Operation = types.OperationType(operation)
 		ru.State = resource_update.ResourceUpdateState(state)
+		if len(provenanceRecordsJSON) > 0 {
+			if err := json.Unmarshal(provenanceRecordsJSON, &ru.ProvenanceRecords); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal provenance records: %w", err)
+			}
+		}
+		if len(resolvedRootDigestsJSON) > 0 {
+			if err := json.Unmarshal(resolvedRootDigestsJSON, &ru.ResolvedRootDigests); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal resolved root digests: %w", err)
+			}
+		}
 
 		// Parse timestamps (TIMESTAMP columns)
 		if startTsStr.Valid && startTsStr.String != "" {
@@ -5079,7 +5715,7 @@ func (d DatastoreSQLite) UpdateResourceUpdateState(commandID string, ksuid strin
 }
 
 // UpdateResourceUpdateProgress updates a ResourceUpdate with progress information
-func (d DatastoreSQLite) UpdateResourceUpdateProgress(commandID string, ksuid string, operation types.OperationType, state resource_update.ResourceUpdateState, startTs time.Time, modifiedTs time.Time, progress plugin.TrackedProgress) error {
+func (d DatastoreSQLite) UpdateResourceUpdateProgress(commandID string, ksuid string, operation types.OperationType, state resource_update.ResourceUpdateState, startTs time.Time, modifiedTs time.Time, progress plugin.TrackedProgress, resolvedRootDigests map[string]string) error {
 	slog.Debug("SQLite START", "method", "UpdateResourceUpdateProgress", "commandID", commandID, "ksuid", ksuid, "state", state)
 	start := time.Now()
 	defer func() {
@@ -5118,12 +5754,13 @@ func (d DatastoreSQLite) UpdateResourceUpdateProgress(commandID string, ksuid st
 
 	updateQuery := `
 		UPDATE resource_updates
-		SET state = ?, start_ts = ?, modified_ts = ?, progress_result = ?, most_recent_progress = ?
+		SET state = ?, start_ts = ?, modified_ts = ?, progress_result = ?, most_recent_progress = ?,
+			resolved_root_digests = COALESCE(?, resolved_root_digests)
 		WHERE command_id = ? AND ksuid = ? AND operation = ?
 	`
 
 	// Normalize timestamps to UTC for consistent TEXT-based sorting in SQLite
-	result, err := d.conn.Exec(updateQuery, string(state), startTs.UTC(), modifiedTs.UTC(), progressJSON, mostRecentJSON, commandID, ksuid, string(operation))
+	result, err := d.conn.Exec(updateQuery, string(state), startTs.UTC(), modifiedTs.UTC(), progressJSON, mostRecentJSON, marshalOrNil(resolvedRootDigests), commandID, ksuid, string(operation))
 	if err != nil {
 		return fmt.Errorf("failed to update resource update progress: %w", err)
 	}

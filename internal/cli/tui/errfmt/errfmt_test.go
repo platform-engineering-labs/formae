@@ -77,6 +77,88 @@ func TestRender_ReferencedResourcesNotFound_Golden(t *testing.T) {
 	tuitest.RequireGolden(t, []byte(out))
 }
 
+// ── 3b. FormaReferencedGeneratorsNotFoundError ─────────────────────────────────
+
+func TestRender_ReferencedGeneratorsNotFound_Golden(t *testing.T) {
+	err := &apimodel.ErrorResponse[apimodel.FormaReferencedGeneratorsNotFoundError]{
+		ErrorType: apimodel.ReferencedGeneratorsNotFound,
+		Data: apimodel.FormaReferencedGeneratorsNotFoundError{
+			Missing: []pkgmodel.MissingGenerator{
+				{Label: "db-password", Stack: "default", Output: "value"},
+				{Label: "api-key", Stack: "secrets", Output: "value"},
+			},
+		},
+	}
+	out, rerr := Render(err)
+	require.NoError(t, rerr)
+	tuitest.RequireGolden(t, []byte(out))
+}
+
+// ── 3c. FormaGeneratorDestinationsUnreachableError ────────────────────────────
+
+func TestRender_GeneratorDestinationsUnreachable_Golden(t *testing.T) {
+	err := &apimodel.ErrorResponse[apimodel.FormaGeneratorDestinationsUnreachableError]{
+		ErrorType: apimodel.GeneratorDestinationsUnreachable,
+		Data: apimodel.FormaGeneratorDestinationsUnreachableError{
+			Unreachable: []apimodel.UnreachableGeneratorDestination{
+				{GeneratorLabel: "db-password", GeneratorStack: "app", Stack: "web", Label: "api-secret", Type: "AWS::SecretsManager::Secret"},
+				{GeneratorLabel: "db-password", GeneratorStack: "app", Stack: "jobs", Label: "worker-secret", Type: "AWS::SecretsManager::Secret"},
+			},
+		},
+	}
+	out, rerr := Render(err)
+	require.NoError(t, rerr)
+	tuitest.RequireGolden(t, []byte(out))
+}
+
+// ── 3d. FormaGeneratorBoundToSetOnceFieldError ────────────────────────────────
+
+func TestRender_GeneratorBoundToSetOnceField_Golden(t *testing.T) {
+	err := &apimodel.ErrorResponse[apimodel.FormaGeneratorBoundToSetOnceFieldError]{
+		ErrorType: apimodel.GeneratorBoundToSetOnceField,
+		Data: apimodel.FormaGeneratorBoundToSetOnceFieldError{
+			Fields: []apimodel.SetOnceGeneratorField{
+				{GeneratorLabel: "db-password", GeneratorStack: "app", Stack: "web", Label: "api", Type: "AWS::S3::Bucket", Field: "DbPassword"},
+				{GeneratorLabel: "db-password", GeneratorStack: "app", Stack: "jobs", Label: "worker", Type: "AWS::ECS::TaskDefinition", Field: "ContainerDefinitions.0.Environment.1.Value"},
+			},
+		},
+	}
+	out, rerr := Render(err)
+	require.NoError(t, rerr)
+	tuitest.RequireGolden(t, []byte(out))
+}
+
+// ── 3e. FormaGeneratorHasDependentsError ────────────────────────────────
+
+func TestRender_GeneratorHasDependents_Single_Golden(t *testing.T) {
+	err := &apimodel.ErrorResponse[apimodel.FormaGeneratorHasDependentsError]{
+		ErrorType: apimodel.GeneratorHasDependents,
+		Data: apimodel.FormaGeneratorHasDependentsError{
+			Dependents: []apimodel.GeneratorDependent{
+				{GeneratorLabel: "db-password", GeneratorStack: "platform", ResourceLabel: "api-secret", ResourceType: "AWS::SecretsManager::Secret", Stack: "web"},
+			},
+		},
+	}
+	out, rerr := Render(err)
+	require.NoError(t, rerr)
+	tuitest.RequireGolden(t, []byte(out))
+}
+
+func TestRender_GeneratorHasDependents_Multiple_Golden(t *testing.T) {
+	err := &apimodel.ErrorResponse[apimodel.FormaGeneratorHasDependentsError]{
+		ErrorType: apimodel.GeneratorHasDependents,
+		Data: apimodel.FormaGeneratorHasDependentsError{
+			Dependents: []apimodel.GeneratorDependent{
+				{GeneratorLabel: "db-password", GeneratorStack: "platform", ResourceLabel: "api-secret", ResourceType: "AWS::SecretsManager::Secret", Stack: "web"},
+				{GeneratorLabel: "db-password", GeneratorStack: "platform", ResourceLabel: "worker-secret", ResourceType: "AWS::SecretsManager::Secret", Stack: "jobs"},
+			},
+		},
+	}
+	out, rerr := Render(err)
+	require.NoError(t, rerr)
+	tuitest.RequireGolden(t, []byte(out))
+}
+
 // ── 4. FormaPatchRejectedError ────────────────────────────────────────────────
 
 func TestRender_PatchRejected_Golden(t *testing.T) {

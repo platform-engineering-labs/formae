@@ -36,7 +36,7 @@ func runRegisterOnly(cc *cobra.Command, opts options, consumer printer.Consumer,
 	if w := warnOnNameMismatch(parsed.RoleName, s.Setup.CloudRoleName); w != "" {
 		warnings = append(warnings, w)
 	}
-	elsewhere := connectedElsewhere(s.Setup.AccountsConnectedHint, opts.Account, s.InstallationID)
+	elsewhere := connectedElsewhere(s.Setup.AccountsConnectedHint, "aws", opts.Account, s.InstallationID)
 	if len(elsewhere) > 0 {
 		// In --no-input the warning rides the machine document and the run
 		// proceeds; interactively it is confirmed below.
@@ -80,14 +80,26 @@ func printRegisteredHuman(w io.Writer, tty bool, th *theme.Theme, v registeredVi
 	// role beneath it, which reads as a value that failed rather than one that
 	// never existed.
 	noun, label, coordinate := "account", "role", v.RoleArn
-	if v.Cloud == "gcp" {
+	switch v.Cloud {
+	case "gcp":
 		noun, label, coordinate = "project", "workload identity provider", v.WorkloadIdentityProvider
+	case "azure":
+		noun = "subscription"
 	}
 	if _, err := fmt.Fprintln(w, ack(components.AckDone,
 		fmt.Sprintf("%s %s %s %s on installation %s", verb, v.Cloud, noun, v.Account, installationID))); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(w, "  %s: %s\n", label, coordinate); err != nil {
+	if v.Cloud == "azure" {
+		// Azure carries two coordinates, not one: neither alone identifies
+		// the trust, so both are printed rather than picking one to show.
+		if _, err := fmt.Fprintf(w, "  tenant id: %s\n", v.AzureTenantID); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(w, "  client id: %s\n", v.AzureClientID); err != nil {
+			return err
+		}
+	} else if _, err := fmt.Fprintf(w, "  %s: %s\n", label, coordinate); err != nil {
 		return err
 	}
 	for _, warning := range v.Warnings {

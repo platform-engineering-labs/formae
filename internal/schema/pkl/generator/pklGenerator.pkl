@@ -255,6 +255,70 @@ function parsePolicies(policiesData: List<Map<String, Any>>): String =
     ))
     policiesString.join("\n")
 
+// Escapes a value about to be interpolated into an emitted PKL string
+// literal. Mirrors gen.pkl's escapeString (not importable here: that
+// function is local to gen.pkl).
+local function escapeGeneratorString(str: String): String =
+    str
+        .replaceAll("\\", "\\\\")
+        .replaceAll("\"", "\\\"")
+        .replaceAll("\n", "\\n")
+        .replaceAll("\r", "\\r")
+        .replaceAll("\t", "\\t")
+
+/// Parses standalone generators and generates PKL output. Mirrors
+/// parsePolicies: generators are always declared standalone (never nested
+/// inside a stack block), but unlike policies they carry their own `stack`
+/// reference, resolved here the same way parseResources resolves
+/// target/stack references on resources.
+function parseGenerators(generatorsData: List<Map<String, Any>>, stackLabelMap: Map<String, String>): String =
+    let (generatorsString = generatorsData.map((generatorData) ->
+        let (generatorType = generatorData["Type"] as String)
+        let (label = generatorData["Label"] as String)
+        let (camelCaseLabel = toCamelCase(label))
+        let (stackLabel = generatorData.getOrNull("Stack") as String?)
+        let (stackLine = if (stackLabel != null)
+            "\n        stack = \(stackLabelMap.getOrNull(stackLabel) ?? toCamelCase(stackLabel)).res"
+        else
+            ""
+        )
+        let (rotationEverySeconds = generatorData.getOrNull("RotationEverySeconds") as Number?)
+        let (rotationLine = if (rotationEverySeconds != null)
+            "\n        rotation = new formae.RotationSpec {\n          every = \(rotationEverySeconds.toInt()).s\n        }"
+        else
+            ""
+        )
+        if (generatorType == "password")
+            let (length = generatorData["Length"] as Number)
+            let (uppercase = generatorData["Uppercase"] as Boolean)
+            let (lowercase = generatorData["Lowercase"] as Boolean)
+            let (digits = generatorData["Digits"] as Boolean)
+            let (symbols = generatorData["Symbols"] as Boolean)
+            let (excludeCharacters = generatorData.getOrNull("ExcludeCharacters") as String? ?? "")
+            let (requireEachIncludedType = generatorData.getOrNull("RequireEachIncludedType") as Boolean? ?? true)
+            """
+
+      local \(camelCaseLabel) = new formae.PasswordGenerator {
+        label = "\(label)"\(stackLine)\(rotationLine)
+        length = \(length)
+        uppercase = \(uppercase)
+        lowercase = \(lowercase)
+        digits = \(digits)
+        symbols = \(symbols)
+        excludeCharacters = "\(escapeGeneratorString(excludeCharacters))"
+        requireEachIncludedType = \(requireEachIncludedType)
+      }
+      \(camelCaseLabel)
+      """
+        else
+            // Unknown generator type - skip with comment
+            """
+
+      // Skipped unknown generator type: \(generatorType) (label: \(label))
+      """
+    ))
+    generatorsString.join("\n")
+
 function parseTargets(targetsData: List<Map<String, Any>>): String =
     let (targetsString = targetsData.map((targetData) ->
         let (label = targetData["label"])
@@ -393,6 +457,27 @@ function generateFormaFile(parsed: json.Value): String =
         List()
     )
 
+    // Extract standalone generators from the parsed JSON
+    let (generatorsFromJson = if (parsed.getPropertyOrNull("Generators") != null)
+        parsed.Generators.toList().map((generator) -> Map(
+            "Type", generator.Type,
+            "Label", generator.Label,
+            "Stack", generator.getPropertyOrNull("Stack"),
+            "RotationEverySeconds", generator.getPropertyOrNull("Rotation")
+                ?.getPropertyOrNull("EverySeconds"),
+            "Length", generator.getPropertyOrNull("Length"),
+            "Uppercase", generator.getPropertyOrNull("Uppercase"),
+            "Lowercase", generator.getPropertyOrNull("Lowercase"),
+            "Digits", generator.getPropertyOrNull("Digits"),
+            "Symbols", generator.getPropertyOrNull("Symbols"),
+            "ExcludeCharacters", generator.getPropertyOrNull("ExcludeCharacters"),
+            "RequireEachIncludedType", generator.getPropertyOrNull("RequireEachIncludedType")
+            )
+        )
+    else
+        List()
+    )
+
     // Create mapping from original labels to camelCase labels for targets
     let (targetLabelMap = targetsFromJson.fold(Map(), (acc: Map<String, String>, targetData) ->
         let (originalLabel = targetData["label"])
@@ -431,6 +516,15 @@ function generateFormaFile(parsed: json.Value): String =
         ""
     )
 
+    // Generate generators section (only if there are generators). Placed
+    // after stacks (it emits `stack = <camelCase>.res` references) and
+    // before resources.
+    let (generatorsSection = if (generatorsFromJson.length > 0)
+        parseGenerators(generatorsFromJson, stackLabelMap) + "\n"
+    else
+        ""
+    )
+
     """
     \(headerImports())
 
@@ -439,7 +533,7 @@ function generateFormaFile(parsed: json.Value): String =
 
     forma {\(policiesSection)
         \(parseStacks(stacksFromJson, policyLabelMap))
-
+        \(generatorsSection)
         \(parseTargets(targetsFromJson))
 
         \(parseResources(resources, targetLabelMap, stackLabelMap))

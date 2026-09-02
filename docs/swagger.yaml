@@ -8,6 +8,10 @@ definitions:
         type: string
       EndTs:
         type: string
+      GeneratorUpdates:
+        items:
+          $ref: '#/definitions/model.GeneratorUpdate'
+        type: array
       Mode:
         description: '"reconcile" | "patch"'
         type: string
@@ -131,6 +135,13 @@ definitions:
       Opaque:
         description: 'NEW: this property is the resource''s secret value'
         type: boolean
+      PreserveEmptyValues:
+        description: |-
+          PreserveEmptyValues opts a top-level field's subtree out of empty-value
+          normalization: empty collections inside it are values, preserved on both
+          diff sides, in op values, and in plugin-bound payloads. Orthogonal to
+          UpdateMethod; typically paired with Atomic on opaque document fields.
+        type: boolean
       Required:
         type: boolean
       RequiredOnCreate:
@@ -195,6 +206,13 @@ definitions:
     properties:
       Description:
         $ref: '#/definitions/github_com_platform-engineering-labs_formae_pkg_model.Description'
+      Generators:
+        description: Generators, keyed to a stack by their own Stack field
+        items:
+          items:
+            type: integer
+          type: array
+        type: array
       Policies:
         description: Standalone policies
         items:
@@ -218,6 +236,69 @@ definitions:
         items:
           $ref: '#/definitions/model.Target'
         type: array
+    type: object
+  model.GeneratorDestination:
+    properties:
+      ResourceLabel:
+        type: string
+      StackLabel:
+        type: string
+    type: object
+  model.GeneratorInventoryItem:
+    properties:
+      Config:
+        items:
+          type: integer
+        type: array
+      Destinations:
+        items:
+          $ref: '#/definitions/model.GeneratorDestination'
+        type: array
+      EverySeconds:
+        type: integer
+      GenerationID:
+        type: string
+      Label:
+        type: string
+      LastRotatedAt:
+        type: string
+      Stack:
+        type: string
+      Type:
+        type: string
+    type: object
+  model.GeneratorUpdate:
+    properties:
+      Duration:
+        description: milliseconds
+        type: integer
+      ErrorMessage:
+        type: string
+      GeneratorConfig:
+        description: Current generator configuration
+        items:
+          type: integer
+        type: array
+      GeneratorLabel:
+        type: string
+      GeneratorType:
+        description: '"password", etc.'
+        type: string
+      ModifiedTs:
+        type: string
+      OldGeneratorConfig:
+        description: Previous generator configuration (for updates)
+        items:
+          type: integer
+        type: array
+      Operation:
+        type: string
+      StackLabel:
+        type: string
+      StartTs:
+        type: string
+      State:
+        type: string
     type: object
   model.LabelConfig:
     properties:
@@ -253,7 +334,7 @@ definitions:
           $ref: '#/definitions/model.FilterCondition'
         type: array
       resourceTypes:
-        description: Resource types this filter applies to
+        description: Resource types this filter applies to; empty means every type
         items:
           type: string
         type: array
@@ -1015,6 +1096,30 @@ paths:
       summary: Get the status of multiple Forma commands
       tags:
       - commands
+  /generators:
+    get:
+      description: Retrieves all live generators with their cadence, the instant of
+        their last committed rotation, and the resources bound to them
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 'OK: List of generators.'
+          schema:
+            items:
+              $ref: '#/definitions/model.GeneratorInventoryItem'
+            type: array
+        "404":
+          description: 'Not Found: No generators found.'
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error.
+          schema:
+            type: string
+      summary: List generators
+      tags:
+      - generators
   /health:
     get:
       description: A simple health check endpoint to verify that the API server is

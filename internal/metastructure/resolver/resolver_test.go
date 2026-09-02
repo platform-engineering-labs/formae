@@ -1119,7 +1119,7 @@ func TestLoadResolvablePropertiesFromStacks(t *testing.T) {
 			Resources: []pkgmodel.Resource{vpc, subnet},
 		}
 
-		resolvables, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma), nil)
+		resolvables, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma), nil, nil)
 
 		require.NoError(t, err)
 		value, found := resolvables.Get(vpcKsuid, "VpcId")
@@ -1164,7 +1164,7 @@ func TestLoadResolvablePropertiesFromStacks(t *testing.T) {
 			Resources: []pkgmodel.Resource{compartment, vcn, subnet},
 		}
 
-		resolvables, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma), nil)
+		resolvables, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma), nil, nil)
 
 		require.NoError(t, err)
 		value, found := resolvables.Get(vcnKsuid, "CompartmentId")
@@ -1196,7 +1196,7 @@ func TestLoadResolvablePropertiesFromStacks(t *testing.T) {
 			Resources: []pkgmodel.Resource{vpc, subnet},
 		}
 
-		resolvables, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma), nil)
+		resolvables, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma), nil, nil)
 
 		require.NoError(t, err)
 		value, found := resolvables.Get(vpcKsuid, "CidrBlock")
@@ -1222,7 +1222,7 @@ func TestLoadResolvablePropertiesFromStacks(t *testing.T) {
 			Resources: []pkgmodel.Resource{subnet},
 		}
 
-		_, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma), nil)
+		_, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma), nil, nil)
 
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "not found")
@@ -1252,7 +1252,7 @@ func TestLoadResolvablePropertiesFromStacks(t *testing.T) {
 			Resources: []pkgmodel.Resource{vpc, subnet},
 		}
 
-		props, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma), nil)
+		props, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma), nil, nil)
 
 		assert.NoError(t, err)
 		// Property not resolved — will be resolved at execution time
@@ -1680,4 +1680,107 @@ func TestExtractSourceOpaqueResolvableURIsFromJSON(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []pkgmodel.FormaeURI{schemaOpaqueURI}, got,
 		"a schema-declared Opaque field classifies opaque even when persisted as a plain value")
+}
+
+// An envelope's resolution provenance survives the full parse -> resolve ->
+// rebuild round trip: the resolver rebuilds envelopes from typed fields, so a
+// field it does not carry would be silently dropped.
+func TestResolvePropertyReferences_PreservesResolvedFrom(t *testing.T) {
+	digest := "v1:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	props := json.RawMessage(`{"Password":{"$ref":"formae://2abcdefghijklmnopqrstuvwxyz#/S","$resolvedFrom":"` + digest + `"}}`)
+
+	resolved, err := ResolvePropertyReferences("formae://2abcdefghijklmnopqrstuvwxyz#/S", props, "live-value")
+	require.NoError(t, err)
+
+	out := gjson.GetBytes(resolved, "Password")
+	assert.Equal(t, "live-value", out.Get("$value").String())
+	assert.Equal(t, digest, out.Get("$resolvedFrom").String(),
+		"resolving a reference must not drop its provenance")
+}
+
+// Resolution restates the hashed marker from the value it resolved, rather than
+// inheriting whatever the target envelope happened to carry. Both directions
+// matter and they pull opposite ways: a stale true makes the terminal hashing
+// pass skip an envelope and persist plaintext labelled as a digest, while
+// clearing a true that is still accurate lets a digest past the plugin-boundary
+// guard and reach a provider as though it were the secret.
+func TestResolvePropertyReferences_HashedMarkerFollowsTheResolvedValue(t *testing.T) {
+	const uri = pkgmodel.FormaeURI("formae://2abcDEFghiJKLmnoPQRstuVWxyz#/SecretString")
+
+	// An envelope that was hashed at rest, now being re-resolved.
+	target := json.RawMessage(`{
+		"DbPassword": {
+			"$ref": "` + string(uri) + `",
+			"$value": "0000000000000000000000000000000000000000000000000000000000000000",
+			"$hashed": true,
+			"$visibility": "Opaque"
+		}
+	}`)
+
+	t.Run("live plaintext clears a stale marker", func(t *testing.T) {
+		out, err := ResolvePropertyReferences(uri, target, "live-plaintext")
+		require.NoError(t, err)
+		assert.Equal(t, "live-plaintext", gjson.GetBytes(out, "DbPassword.$value").String())
+		assert.False(t, gjson.GetBytes(out, "DbPassword.$hashed").Bool(),
+			"a live plaintext resolution must not stay marked hashed, or terminal hashing skips it")
+		assert.NoError(t, guardNoHashedValues(out),
+			"plaintext must be writable to a provider")
+	})
+
+	t.Run("a resolved digest keeps its marker so the write guard still fires", func(t *testing.T) {
+		digest := `{"$value":"1111111111111111111111111111111111111111111111111111111111111111","$hashed":true,"$visibility":"Opaque"}`
+		out, err := ResolvePropertyReferences(uri, target, digest)
+		require.NoError(t, err)
+		assert.True(t, gjson.GetBytes(out, "DbPassword.$hashed").Bool(),
+			"resolving from a stored digest must stay marked hashed")
+		assert.ErrorIs(t, guardNoHashedValues(out), ErrHashedValueNotWritable,
+			"a digest must never reach a provider as if it were the secret")
+	})
+}
+
+// A generator reference names a value to be drawn; the envelope is never that
+// value, so it must not be written to a provider. The rejection is typed and
+// names the offending path. Conversion leaves the envelope structurally
+// intact, so the guard sees the same shape whichever side of the conversion
+// it is applied on.
+func TestGuardNoUnresolvedGenerators_RejectsAnUnresolvedGeneratorReference(t *testing.T) {
+	props := json.RawMessage(`{
+		"Name": "db",
+		"SecretString": {
+			"$gen": true,
+			"$generator": "2abcDEFghiJKLmnoPQRstuVWxyz",
+			"$output": "value",
+			"$visibility": "Opaque"
+		}
+	}`)
+
+	err := GuardNoUnresolvedGenerators(props)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrUnresolvedGeneratorReferenceNotWritable,
+		"a generator reference must never be written to a provider in place of its value")
+	assert.Contains(t, err.Error(), "/SecretString",
+		"the rejection must name the property that is still unresolved")
+
+	converted, err := ConvertToPluginFormat(props)
+	require.NoError(t, err,
+		"planning converts the same document to diff it, and must not be refused")
+	assert.ErrorIs(t, GuardNoUnresolvedGenerators(converted), ErrUnresolvedGeneratorReferenceNotWritable,
+		"conversion leaves the envelope intact, so the guard still catches it after")
+}
+
+// The guard is scoped to generator references and must not fire on the
+// surrounding document: a plain property whose name or value merely resembles
+// the envelope's keys is still writable.
+func TestGuardNoUnresolvedGenerators_AcceptsPropertiesWithoutAGeneratorReference(t *testing.T) {
+	props := json.RawMessage(`{
+		"Name": "db",
+		"Description": "$gen",
+		"Tags": [{"Key": "gen", "Value": "true"}],
+		"SecretString": {"$value": "plaintext", "$visibility": "Opaque"}
+	}`)
+
+	out, err := ConvertToPluginFormat(props)
+	require.NoError(t, err)
+	assert.NoError(t, GuardNoUnresolvedGenerators(out))
+	assert.Equal(t, "plaintext", gjson.GetBytes(out, "SecretString").String())
 }

@@ -370,6 +370,41 @@ const docTemplate = `{
                 }
             }
         },
+        "/generators": {
+            "get": {
+                "description": "Retrieves all live generators with their cadence, the instant of their last committed rotation, and the resources bound to them",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "generators"
+                ],
+                "summary": "List generators",
+                "responses": {
+                    "200": {
+                        "description": "OK: List of generators.",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/model.GeneratorInventoryItem"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found: No generators found.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/health": {
             "get": {
                 "description": "A simple health check endpoint to verify that the API server is running.",
@@ -810,6 +845,12 @@ const docTemplate = `{
                 "EndTs": {
                     "type": "string"
                 },
+                "GeneratorUpdates": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.GeneratorUpdate"
+                    }
+                },
                 "Mode": {
                     "description": "\"reconcile\" | \"patch\"",
                     "type": "string"
@@ -979,6 +1020,10 @@ const docTemplate = `{
                     "description": "NEW: this property is the resource's secret value",
                     "type": "boolean"
                 },
+                "PreserveEmptyValues": {
+                    "description": "PreserveEmptyValues opts a top-level field's subtree out of empty-value\nnormalization: empty collections inside it are values, preserved on both\ndiff sides, in op values, and in plugin-bound payloads. Orthogonal to\nUpdateMethod; typically paired with Atomic on opaque document fields.",
+                    "type": "boolean"
+                },
                 "Required": {
                     "type": "boolean"
                 },
@@ -1060,6 +1105,16 @@ const docTemplate = `{
                 "Description": {
                     "$ref": "#/definitions/github_com_platform-engineering-labs_formae_pkg_model.Description"
                 },
+                "Generators": {
+                    "description": "Generators, keyed to a stack by their own Stack field",
+                    "type": "array",
+                    "items": {
+                        "type": "array",
+                        "items": {
+                            "type": "integer"
+                        }
+                    }
+                },
                 "Policies": {
                     "description": "Standalone policies",
                     "type": "array",
@@ -1093,6 +1148,100 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/model.Target"
                     }
+                }
+            }
+        },
+        "model.GeneratorDestination": {
+            "type": "object",
+            "properties": {
+                "ResourceLabel": {
+                    "type": "string"
+                },
+                "StackLabel": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.GeneratorInventoryItem": {
+            "type": "object",
+            "properties": {
+                "Config": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "Destinations": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.GeneratorDestination"
+                    }
+                },
+                "EverySeconds": {
+                    "type": "integer"
+                },
+                "GenerationID": {
+                    "type": "string"
+                },
+                "Label": {
+                    "type": "string"
+                },
+                "LastRotatedAt": {
+                    "type": "string"
+                },
+                "Stack": {
+                    "type": "string"
+                },
+                "Type": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.GeneratorUpdate": {
+            "type": "object",
+            "properties": {
+                "Duration": {
+                    "description": "milliseconds",
+                    "type": "integer"
+                },
+                "ErrorMessage": {
+                    "type": "string"
+                },
+                "GeneratorConfig": {
+                    "description": "Current generator configuration",
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "GeneratorLabel": {
+                    "type": "string"
+                },
+                "GeneratorType": {
+                    "description": "\"password\", etc.",
+                    "type": "string"
+                },
+                "ModifiedTs": {
+                    "type": "string"
+                },
+                "OldGeneratorConfig": {
+                    "description": "Previous generator configuration (for updates)",
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "Operation": {
+                    "type": "string"
+                },
+                "StackLabel": {
+                    "type": "string"
+                },
+                "StartTs": {
+                    "type": "string"
+                },
+                "State": {
+                    "type": "string"
                 }
             }
         },
@@ -1134,7 +1283,7 @@ const docTemplate = `{
                     }
                 },
                 "resourceTypes": {
-                    "description": "Resource types this filter applies to",
+                    "description": "Resource types this filter applies to; empty means every type",
                     "type": "array",
                     "items": {
                         "type": "string"

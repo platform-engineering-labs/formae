@@ -8,10 +8,24 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 
+	"github.com/platform-engineering-labs/formae/internal/metastructure/provenance"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/tidwall/gjson"
 )
+
+// ReferenceCycleError reports that plan-time resolution followed a chain of
+// references back onto itself. The cycle is rejected when the lookup runs,
+// before any changeset exists, because the execution DAG's cycle detection
+// cannot see references that resolve within the lookup itself.
+type ReferenceCycleError struct {
+	Chain []string // "<ksuid>#/<propertyPath>" hops in traversal order, first repeated hop last
+}
+
+func (e ReferenceCycleError) Error() string {
+	return fmt.Sprintf("reference cycle detected at plan time: %s", strings.Join(e.Chain, " -> "))
+}
 
 // AnswerKind classifies why a SourceAnswer's value may be trusted, or that it
 // carries none yet.
@@ -37,18 +51,77 @@ type SourceAnswer struct {
 	Kind   AnswerKind
 	Value  string // Resolved and Stable only
 	Opaque bool   // the source property is opaque; consumers of the seam decide what that means
+	// SourceRootDigest is the canonical-domain digest of the source property's
+	// whole (pre-extraction) value: the effective desired value when the
+	// command declares the source, the stored at-rest digest otherwise. Empty
+	// means unknown. Populated for opaque sources only.
+	SourceRootDigest string
+	// sourceRaw holds the UNWRAPPED effective-desired raw JSON of a declared
+	// opaque source, for in-memory $json leaf comparison. Never serialized and
+	// never placed in the public string map.
+	sourceRaw string
+}
+
+// SourceRaw returns the unwrapped effective-desired raw JSON of a declared
+// opaque source, or "" when the source is undeclared or non-opaque.
+func (a SourceAnswer) SourceRaw() string {
+	return a.sourceRaw
 }
 
 // ResolvableProperties is a map of KSUIDs to property names to answers.
 // This can include resource.Properties and resource.ReadOnlyProperties
 type ResolvableProperties struct {
 	props map[string]map[string]SourceAnswer // ksuid -> property -> answer
+	// suppressed holds consumer-side destination paths whose occurrence was
+	// classified provably stable: reference flattening substitutes the stored
+	// value on the desired side for these paths so no op is minted. The set
+	// is decided by the update generator's provenance classification; absence
+	// always means "do not suppress".
+	suppressed map[string]bool
+	// converging holds consumer-side destination paths whose occurrence the
+	// classification requires to plan (moved, repointed, forced, or unknown
+	// movement on a mutable destination). An unresolved reference flattens to
+	// an empty string, which the top-level empty-value filter treats as PKL
+	// rendering noise; these paths are exempted from that drop so the
+	// converging op survives. Absence means "no exemption".
+	converging map[string]bool
 }
 
 func NewResolvableProperties() ResolvableProperties {
 	return ResolvableProperties{
-		props: make(map[string]map[string]SourceAnswer),
+		props:      make(map[string]map[string]SourceAnswer),
+		suppressed: make(map[string]bool),
+		converging: make(map[string]bool),
 	}
+}
+
+// SuppressStableAt marks a consumer destination path as provably stable.
+func (p *ResolvableProperties) SuppressStableAt(destinationPath string) {
+	if p.suppressed == nil {
+		p.suppressed = make(map[string]bool)
+	}
+	p.suppressed[destinationPath] = true
+}
+
+// StableSuppressedAt reports whether the destination path was classified
+// provably stable.
+func (p *ResolvableProperties) StableSuppressedAt(destinationPath string) bool {
+	return p.suppressed[destinationPath]
+}
+
+// MarkConvergeAt marks a consumer destination path as requiring a converging
+// update.
+func (p *ResolvableProperties) MarkConvergeAt(destinationPath string) {
+	if p.converging == nil {
+		p.converging = make(map[string]bool)
+	}
+	p.converging[destinationPath] = true
+}
+
+// ConvergeMarkedAt reports whether the destination path was classified as
+// requiring a converging update.
+func (p *ResolvableProperties) ConvergeMarkedAt(destinationPath string) bool {
+	return p.converging[destinationPath]
 }
 
 func (p *ResolvableProperties) Add(ksuid, property, value string) {
@@ -82,8 +155,26 @@ func (p *ResolvableProperties) Answer(ksuid, property string) (SourceAnswer, boo
 	return SourceAnswer{}, false
 }
 
-func LoadResolvablePropertiesFromStacks(resource pkgmodel.Resource, allResources map[string][]*pkgmodel.Resource, effective map[string]json.RawMessage) (ResolvableProperties, error) {
+// LoadResolvablePropertiesFromStacks answers, for each resolvable URI on
+// resource, whether a value is available at plan time and what it is.
+//
+// Classification is recursive over the desired reference graph: a declared
+// source's effective desired value that is itself a non-opaque reference
+// envelope is resolved by following that reference in turn (applying any
+// nested $json extraction in memory), so a chain of references converges to
+// the value its root will hold after this command in a single pass, however
+// many hops deep. An opaque marker anywhere on a hop stops the recursion
+// there and keeps the persisted-row fallthrough unchanged. A reference cycle
+// is rejected as a ReferenceCycleError naming the chain.
+//
+// A $gen occurrence is answered separately and never enters this
+// classification: it names a generator, which has no resource row and no
+// property to read, so the source-property path has nothing to look up. See
+// answerGeneratorOutputs.
+func LoadResolvablePropertiesFromStacks(resource pkgmodel.Resource, allResources map[string][]*pkgmodel.Resource, effective map[string]json.RawMessage, generators GeneratorGenerationLookup) (ResolvableProperties, error) {
 	res := NewResolvableProperties()
+
+	answerGeneratorOutputs(&res, resource, generators)
 
 	resourcesByKsuid := make(map[string]*pkgmodel.Resource)
 	for _, resources := range allResources {
@@ -97,50 +188,294 @@ func LoadResolvablePropertiesFromStacks(resource pkgmodel.Resource, allResources
 	uris := ExtractResolvableURIs(resource)
 
 	for _, uri := range uris {
-		ksuid := uri.KSUID()
-		propertyPath := uri.PropertyPath()
-
-		targetResource, exists := resourcesByKsuid[ksuid]
-		if !exists {
-			return res, fmt.Errorf("resource with KSUID %s not found", ksuid)
+		answer, err := classifySourceProperty(uri.KSUID(), uri.PropertyPath(), resourcesByKsuid, effective, nil)
+		if err != nil {
+			return res, err
 		}
-
-		if effDoc, declared := effective[ksuid]; declared {
-			effVal := gjson.GetBytes(effDoc, propertyPath)
-			if effVal.Exists() && !isReferenceEnvelope(effVal) && !containsHashedValue(effVal) &&
-				!containsOpaqueVisibility(effVal) && !isSourcePropertyOpaque(targetResource, propertyPath) {
-				res.AddAnswer(ksuid, propertyPath, SourceAnswer{Kind: AnswerResolved, Value: ExtractPropertyValue(effVal)})
-				continue
-			}
-			// Reference envelopes, hashed shapes, and opaque sources — persisted,
-			// schema-declared, or only ever inline-marked in the desired document
-			// itself — fall through to the persisted-row path unchanged: envelopes
-			// keep the cached value, opaque and hashed sources keep today's
-			// deferral.
+		if answer.Kind == AnswerDeferred {
+			// Property not available yet — this happens for forward references to
+			// new resources whose read-only properties are assigned at creation
+			// time, and for a secret, whose value is only ever read live. The
+			// value will be resolved at execution time via RemainingResolvables.
+			// The answer is STORED anyway: Get still refuses to hand out a
+			// value, but classification metadata (opacity, source digest)
+			// must reach downstream consumers of the seam.
+			slog.Debug("Deferring unresolvable property (will resolve at execution time)",
+				"property", uri.PropertyPath(), "ksuid", uri.KSUID())
 		}
-
-		if value, ok := resolvableValueFrom(targetResource.ReadOnlyProperties, propertyPath); ok {
-			res.Add(ksuid, propertyPath, value)
-			continue
-		}
-
-		if value, ok := resolvableValueFrom(targetResource.Properties, propertyPath); ok {
-			res.Add(ksuid, propertyPath, value)
-			continue
-		}
-
-		// Property not available yet — this happens for forward references to
-		// new resources whose read-only properties are assigned at creation time,
-		// and for a secret, whose value is only ever read live. The value will be
-		// resolved at execution time via RemainingResolvables.
-		slog.Debug("Skipping unresolvable property (will resolve at execution time)",
-			"property", propertyPath,
-			"resource", targetResource.Label,
-			"ksuid", ksuid)
-		continue
+		res.AddAnswer(uri.KSUID(), uri.PropertyPath(), answer)
 	}
 
 	return res, nil
+}
+
+// GeneratorGenerationLookup answers what this command knows about one
+// generator: the generation identity the generator currently holds, and the
+// spec this command declares for it.
+//
+// A zero identity means no such generator, and a nil desired spec means this
+// command does not declare the generator — it only references one that
+// already exists, so nothing this command does can invalidate the generation
+// it holds. Return an untyped nil for that case; a typed nil pointer in the
+// interface is a generator that could not be resolved, not a spec.
+type GeneratorGenerationLookup func(generatorKSUID string) (pkgmodel.GeneratorIdentity, pkgmodel.Generator)
+
+// answerGeneratorOutputs answers every $gen occurrence on resource directly,
+// bypassing source-property classification entirely: a generator has no
+// resource row, so there is no property to read and nothing the recursive
+// reference walk could follow.
+//
+// The answer it produces is what makes an ordinary re-apply of a
+// generator-bound secret plan nothing. The value itself is never available at
+// plan time (it is drawn at execution and hashed at rest), so the answer is
+// deferred and opaque; what goes into the source root digest slot is the
+// identity of the GENERATION the generator currently holds. That is the same
+// slot a resource's value digest occupies, so the occurrence classifier's
+// root-versus-root rule decides stability unchanged: a generation that has
+// not moved matches the provenance written alongside the last drawn value,
+// and the occurrence is suppressed.
+//
+// Only the translated envelope shape is answered. An untranslated $gen names
+// no generator KSUID, so there is no identity to key an answer on; the
+// occurrence normalizer fails closed on it, which plans.
+func answerGeneratorOutputs(res *ResolvableProperties, resource pkgmodel.Resource, generators GeneratorGenerationLookup) {
+	for _, properties := range []json.RawMessage{resource.Properties, resource.ReadOnlyProperties} {
+		if properties == nil {
+			continue
+		}
+		for _, gen := range pkgmodel.FindGenObjectsFromProperties(properties) {
+			if gen.Generator == "" {
+				continue
+			}
+			res.AddAnswer(gen.Generator, gen.Output, SourceAnswer{
+				Kind:             AnswerDeferred,
+				Opaque:           true,
+				SourceRootDigest: generationRootDigest(gen.Generator, generators),
+			})
+		}
+	}
+}
+
+// generationRootDigest returns the digest identifying the generation the
+// generator currently holds, or "" when that cannot be decided.
+//
+// "" is the answer for every state in which the value on the destination
+// must be (re)drawn: no lookup, no generator, no generation yet, a drawing
+// spec that cannot be read back, and a generation the desired spec no longer
+// accepts. It is not a valid digest, so both digest-comparing rules fail and
+// the occurrence reaches the unknown-movement rule, which plans the update
+// against a mutable destination and installs current provenance.
+//
+// KNOWN CONFLATION, accepted deliberately. "" says two different things: the
+// movement is genuinely UNKNOWN (no generation yet, generator gone, spec
+// unreadable), and the value definitely MUST be redrawn (the desired spec no
+// longer accepts the held generation). The unknown-movement rule is ruled so
+// that a createOnly destination never replaces on unknown, so against such a
+// destination a spec edit that demands a redraw is suppressed instead. That
+// is the safe direction, and it is only reachable for a configuration that a
+// later slice rejects outright at the admission preflight: a generator-bound
+// secret on a createOnly destination is not an admissible forma. Telling the
+// two apart is a design change belonging to that slice, not a widening here.
+func generationRootDigest(ksuid string, generators GeneratorGenerationLookup) string {
+	if generators == nil {
+		return ""
+	}
+	identity, desired := generators(ksuid)
+	if identity.GenerationID == "" {
+		// Nothing drawn yet: the apply must materialize a value.
+		return ""
+	}
+	if desired != nil {
+		// The generator's spec is declared by this command and may have been
+		// edited. A generation the edited spec can no longer accept must be
+		// redrawn, so report it as moved even though its identity has not
+		// changed: the value on the destination is no longer one this spec
+		// could have produced.
+		drawn, err := pkgmodel.ParseGenerator(identity.GenerationSpec)
+		if err != nil {
+			// The spec the generation was drawn under is unreadable, so the
+			// generation cannot be PROVEN still acceptable. Redrawing is the
+			// safe direction of that doubt, and it repairs the record; failing
+			// the whole apply on unreadable controller state would not.
+			return ""
+		}
+		if !pkgmodel.GenerationSatisfies(drawn, desired) {
+			return ""
+		}
+	}
+	return provenance.DigestOfString(identity.GenerationID)
+}
+
+// classifySourceProperty answers whether propertyPath on the resource named
+// by ksuid has a value available at plan time, following a chain of
+// references recursively when the value is itself a non-opaque reference.
+//
+// visiting is the ordered chain of hops currently being classified, used both
+// to detect a cycle (linear membership check; chains here are short) and, on
+// a cycle, as the error's Chain.
+func classifySourceProperty(ksuid, propertyPath string, resourcesByKsuid map[string]*pkgmodel.Resource, effective map[string]json.RawMessage, visiting []string) (SourceAnswer, error) {
+	answer, err := classifySourcePropertyValue(ksuid, propertyPath, resourcesByKsuid, effective, visiting)
+	if err != nil {
+		return answer, err
+	}
+	decorateOpacity(&answer, ksuid, propertyPath, resourcesByKsuid, effective)
+	return answer, nil
+}
+
+// decorateOpacity attaches the opacity flag and the source root digest to an
+// already-classified answer, never altering its Kind or Value: opacity
+// metadata is additive so every pre-existing resolution pin holds.
+func decorateOpacity(answer *SourceAnswer, ksuid, propertyPath string, resourcesByKsuid map[string]*pkgmodel.Resource, effective map[string]json.RawMessage) {
+	if answer.Opaque {
+		return // a chain hop already propagated richer metadata
+	}
+	target := resourcesByKsuid[ksuid]
+	if target == nil {
+		return
+	}
+	opaque := isSourcePropertyOpaque(target, propertyPath)
+
+	if effDoc, declared := effective[ksuid]; declared {
+		effVal := LookupSourceProperty(effDoc, propertyPath)
+		if effVal.Exists() && !isReferenceEnvelope(effVal) {
+			if !opaque {
+				opaque = containsHashedValue(effVal) || containsOpaqueVisibility(effVal)
+			}
+			if opaque {
+				answer.Opaque = true
+				unwrapped := provenance.UnwrapEffectiveValue(effVal)
+				switch {
+				case effVal.Get("$hashed").Bool():
+					// A re-applied extract round-trip: the declared value IS
+					// the at-rest digest.
+					answer.SourceRootDigest = provenance.FromStored(unwrapped.String())
+				case unwrapped.Type == gjson.String:
+					answer.SourceRootDigest = provenance.DigestOfString(unwrapped.String())
+					answer.sourceRaw = unwrapped.Raw
+				default:
+					answer.SourceRootDigest = provenance.DigestOfJSON(unwrapped.Raw)
+					answer.sourceRaw = unwrapped.Raw
+				}
+				return
+			}
+		}
+	}
+
+	if !opaque {
+		return
+	}
+	answer.Opaque = true
+	// Undeclared (or declared as a chain that did not decorate): the stored
+	// at-rest digest is the only comparable record.
+	answer.SourceRootDigest = storedRootDigest(target, propertyPath)
+}
+
+// storedRootDigest adapts the persisted at-rest digest of an opaque property
+// into the canonical domain, or "" when none is stored (including the
+// documented legacy gap: an empty value is never hashed at rest).
+func storedRootDigest(target *pkgmodel.Resource, propertyPath string) string {
+	for _, props := range [][]byte{target.Properties, target.ReadOnlyProperties} {
+		if props == nil {
+			continue
+		}
+		v := LookupSourceProperty(props, propertyPath)
+		if v.Exists() && v.Get("$hashed").Bool() {
+			return provenance.FromStored(v.Get("$value").String())
+		}
+	}
+	return ""
+}
+
+func classifySourcePropertyValue(ksuid, propertyPath string, resourcesByKsuid map[string]*pkgmodel.Resource, effective map[string]json.RawMessage, visiting []string) (SourceAnswer, error) {
+	key := ksuid + "#/" + propertyPath
+	for _, v := range visiting {
+		if v == key {
+			return SourceAnswer{}, ReferenceCycleError{Chain: append(append([]string{}, visiting...), key)}
+		}
+	}
+	visiting = append(visiting, key)
+
+	targetResource, exists := resourcesByKsuid[ksuid]
+	if !exists {
+		return SourceAnswer{}, fmt.Errorf("resource with KSUID %s not found", ksuid)
+	}
+
+	if effDoc, declared := effective[ksuid]; declared {
+		effVal := LookupSourceProperty(effDoc, propertyPath)
+		if effVal.Exists() {
+			refused := containsHashedValue(effVal) || containsOpaqueVisibility(effVal) ||
+				isSourcePropertyOpaque(targetResource, propertyPath)
+			if !refused && !isReferenceEnvelope(effVal) {
+				return SourceAnswer{Kind: AnswerResolved, Value: ExtractPropertyValue(effVal)}, nil
+			}
+			if !refused && isReferenceEnvelope(effVal) {
+				nested := pkgmodel.FormaeURI(effVal.Get("$ref").String())
+				if nested != "" && nested.KSUID() != "" {
+					sub, err := classifySourceProperty(nested.KSUID(), nested.PropertyPath(), resourcesByKsuid, effective, visiting)
+					if err != nil {
+						return SourceAnswer{}, err
+					}
+					if sub.Kind == AnswerDeferred {
+						// Propagate the chain hop's opacity metadata: this
+						// occurrence's movement follows the chain root. A hop
+						// carrying its own $json extraction derives its value
+						// from the root; extract in memory when possible so
+						// the digest matches the hop's actual property value.
+						hop := SourceAnswer{Kind: AnswerDeferred, Opaque: sub.Opaque,
+							SourceRootDigest: sub.SourceRootDigest, sourceRaw: sub.sourceRaw}
+						if sub.Opaque {
+							if jsonPath := effVal.Get("$json").String(); jsonPath != "" {
+								if sub.sourceRaw != "" {
+									if extracted, jerr := ExtractJSONPath(sub.sourceRaw, jsonPath); jerr == nil {
+										hop.SourceRootDigest = provenance.DigestOfString(extracted)
+										hop.sourceRaw = extracted
+									} else {
+										hop.SourceRootDigest = ""
+										hop.sourceRaw = ""
+									}
+								} else {
+									// Root value not in memory: the extracted
+									// hop value is underivable.
+									hop.SourceRootDigest = ""
+								}
+							}
+						}
+						return hop, nil
+					}
+					if sub.Kind == AnswerResolved && !sub.Opaque {
+						value := sub.Value
+						derivable := true
+						if jsonPath := effVal.Get("$json").String(); jsonPath != "" {
+							extracted, jerr := ExtractJSONPath(value, jsonPath)
+							if jerr != nil {
+								derivable = false // underivable extraction: fall through, execution resolves live
+							} else {
+								value = extracted
+							}
+						}
+						if derivable {
+							return SourceAnswer{Kind: AnswerResolved, Value: value}, nil
+						}
+					}
+					// AnswerStable (transitive source unmoved): the cached value on
+					// this hop's persisted envelope is the last applied resolution
+					// and remains valid. Fall through to the persisted path, which
+					// answers exactly that (or defers for a value-less envelope),
+					// preserving prior behavior. Resolved-but-opaque and an
+					// underivable extraction fall through the same way.
+				}
+			}
+			// refused shapes fall through to the persisted path unchanged
+		}
+	}
+
+	if value, ok := resolvableValueFrom(targetResource.ReadOnlyProperties, propertyPath); ok {
+		return SourceAnswer{Kind: AnswerStable, Value: value}, nil
+	}
+	if value, ok := resolvableValueFrom(targetResource.Properties, propertyPath); ok {
+		return SourceAnswer{Kind: AnswerStable, Value: value}, nil
+	}
+	return SourceAnswer{Kind: AnswerDeferred}, nil
 }
 
 // resolvableValueFrom reads propertyPath out of one persisted property
@@ -164,7 +499,7 @@ func resolvableValueFrom(properties json.RawMessage, propertyPath string) (strin
 	if properties == nil {
 		return "", false
 	}
-	extracted := gjson.GetBytes(properties, propertyPath)
+	extracted := LookupSourceProperty(properties, propertyPath)
 	if !extracted.Exists() {
 		return "", false
 	}
@@ -222,13 +557,16 @@ func containsOpaqueVisibility(value gjson.Result) bool {
 	return found
 }
 
-// isReferenceEnvelope reports whether value is a reference rather than a value:
-// the persisted ($ref) or source ($res) spelling of one.
+// isReferenceEnvelope reports whether value is a reference rather than a
+// value: the persisted ($ref) or source ($res) spelling of a resource
+// reference, or the ($gen) spelling of a generator binding. A generator
+// binding is a reference in exactly the sense that matters here — the
+// envelope's own text is never the value, whatever it carries alongside.
 func isReferenceEnvelope(value gjson.Result) bool {
 	if !value.IsObject() {
 		return false
 	}
-	return value.Get("$ref").Exists() || value.Get("$res").Exists()
+	return value.Get("$ref").Exists() || value.Get("$res").Exists() || value.Get("$gen").Bool()
 }
 
 // ExtractPropertyValue extracts the actual value from a gjson.Result.

@@ -1137,7 +1137,7 @@ func RunUpdateResourceUpdateProgressPersistsStartTs(t *testing.T, newDS func(t *
 		}
 
 		err = ds.UpdateResourceUpdateProgress(cmd.ID, resourceKsuid, resource_update.OperationCreate,
-			resource_update.ResourceUpdateStateInProgress, startTs, modifiedTs, progress)
+			resource_update.ResourceUpdateStateInProgress, startTs, modifiedTs, progress, nil)
 		assert.NoError(t, err)
 
 		loaded, err := ds.GetFormaCommandByCommandID(cmd.ID)
@@ -1412,5 +1412,141 @@ func RunCommandSourceRoundTrip(t *testing.T, newDS func(t *testing.T) TestDatast
 		assert.NoError(t, err)
 		assert.Equal(t, forma_command.SourceAutoReconciler, loaded.Source,
 			"Source must survive a store/load round-trip")
+	})
+}
+
+// RunResourceUpdateFailureReasonRoundTrip verifies that a failure reason
+// recorded on a resource update with no plugin progress survives both the
+// command store/load round trip and a bulk resource-update store, so the
+// persisted command's error message surfaces it instead of coming back blank.
+func RunResourceUpdateFailureReasonRoundTrip(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("ResourceUpdateFailureReasonRoundTrip", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		reason := "resource update failed before any plugin operation ran"
+		cmd := &forma_command.FormaCommand{
+			ID:          util.NewID(),
+			Description: pkgmodel.Description{},
+			ResourceUpdates: []resource_update.ResourceUpdate{
+				{
+					ResourceTarget: pkgmodel.Target{Label: "target1", Namespace: "default", Config: json.RawMessage("{}")},
+					DesiredState:   pkgmodel.Resource{Ksuid: util.NewID(), Properties: json.RawMessage("{}")},
+					Operation:      types.OperationUpdate,
+					State:          resource_update.ResourceUpdateStateFailed,
+					FailureReason:  reason,
+				},
+			},
+			Command: pkgmodel.CommandApply,
+			State:   forma_command.CommandStateFailed,
+		}
+		err := ds.StoreFormaCommand(cmd, cmd.ID)
+		assert.NoError(t, err)
+
+		commands, err := ds.LoadFormaCommands()
+		assert.NoError(t, err)
+		if !assert.Len(t, commands, 1) {
+			return
+		}
+		loaded := commands[0].ResourceUpdates[0]
+		assert.Equal(t, reason, loaded.FailureReason, "the failure reason must survive the command round trip")
+		assert.Equal(t, reason, loaded.MostRecentFailureMessage())
+
+		// The bulk path is the one completion handling actually writes through.
+		bulkReason := "a different reason recorded at completion"
+		loaded.FailureReason = bulkReason
+		err = ds.BulkStoreResourceUpdates(cmd.ID, []resource_update.ResourceUpdate{loaded})
+		assert.NoError(t, err)
+
+		commands, err = ds.LoadFormaCommands()
+		assert.NoError(t, err)
+		if !assert.Len(t, commands, 1) {
+			return
+		}
+		assert.Equal(t, bulkReason, commands[0].ResourceUpdates[0].FailureReason,
+			"the failure reason must survive the bulk resource-update store")
+	})
+}
+
+// RunResourceUpdateProvenanceRoundTrip verifies both provenance columns
+// survive persistence: the immutable planning-time records through the bulk
+// store, and the resolution digest map through BOTH the bulk store and the
+// progress write (the path that must make digests durable exactly when
+// progress is).
+func RunResourceUpdateProvenanceRoundTrip(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("ResourceUpdateProvenanceRoundTrip", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+
+		digest := "v1:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+		records := []resource_update.OccurrenceRecord{{
+			DestinationPath:   "Password",
+			DesiredIdentity:   resource_update.OccurrenceIdentity{Ksuid: "2abcdefghijklmnopqrstuvwxyz", PropertyPath: "S"},
+			StoredIdentity:    resource_update.OccurrenceIdentity{Ksuid: "2abcdefghijklmnopqrstuvwxyz", PropertyPath: "S"},
+			HasStoredWritten:  true,
+			SourceRootDigest:  digest,
+			WrittenProvenance: digest,
+			Class:             resource_update.OccurrenceStable,
+		}}
+
+		cmd := &forma_command.FormaCommand{
+			ID:          util.NewID(),
+			Description: pkgmodel.Description{},
+			ResourceUpdates: []resource_update.ResourceUpdate{{
+				ResourceTarget:    pkgmodel.Target{Label: "target1", Namespace: "default", Config: json.RawMessage("{}")},
+				DesiredState:      pkgmodel.Resource{Ksuid: util.NewID(), Properties: json.RawMessage("{}")},
+				Operation:         types.OperationUpdate,
+				State:             resource_update.ResourceUpdateStateInProgress,
+				ProvenanceRecords: records,
+			}},
+			Command: pkgmodel.CommandApply,
+			State:   forma_command.CommandStateInProgress,
+		}
+		err := ds.StoreFormaCommand(cmd, cmd.ID)
+		assert.NoError(t, err)
+
+		commands, err := ds.LoadFormaCommands()
+		assert.NoError(t, err)
+		if !assert.Len(t, commands, 1) {
+			return
+		}
+		loaded := commands[0].ResourceUpdates[0]
+		assert.Equal(t, records, loaded.ProvenanceRecords, "planning-time records survive the joined load")
+
+		fromLoad, err := ds.LoadResourceUpdates(cmd.ID)
+		assert.NoError(t, err)
+		if assert.Len(t, fromLoad, 1) {
+			assert.Equal(t, records, fromLoad[0].ProvenanceRecords, "planning-time records survive the standalone load")
+		}
+
+		// The resolution digest map becomes durable through the progress write.
+		digests := map[string]string{"formae://2abcdefghijklmnopqrstuvwxyz#/S": digest}
+		err = ds.UpdateResourceUpdateProgress(cmd.ID, cmd.ResourceUpdates[0].DesiredState.Ksuid,
+			types.OperationUpdate, resource_update.ResourceUpdateStateInProgress,
+			util.TimeNow(), util.TimeNow(), plugin.TrackedProgress{}, digests)
+		assert.NoError(t, err)
+
+		commands, err = ds.LoadFormaCommands()
+		assert.NoError(t, err)
+		if assert.Len(t, commands, 1) {
+			assert.Equal(t, digests, commands[0].ResourceUpdates[0].ResolvedRootDigests,
+				"resolution digests ride the progress write")
+			assert.Equal(t, records, commands[0].ResourceUpdates[0].ProvenanceRecords,
+				"the progress write leaves the immutable records untouched")
+		}
+
+		// A progress write WITHOUT digests preserves the stored map.
+		err = ds.UpdateResourceUpdateProgress(cmd.ID, cmd.ResourceUpdates[0].DesiredState.Ksuid,
+			types.OperationUpdate, resource_update.ResourceUpdateStateInProgress,
+			util.TimeNow(), util.TimeNow(), plugin.TrackedProgress{}, nil)
+		assert.NoError(t, err)
+		commands, err = ds.LoadFormaCommands()
+		assert.NoError(t, err)
+		if assert.Len(t, commands, 1) {
+			assert.Equal(t, digests, commands[0].ResourceUpdates[0].ResolvedRootDigests,
+				"a digestless progress write must not erase the stored map")
+		}
 	})
 }

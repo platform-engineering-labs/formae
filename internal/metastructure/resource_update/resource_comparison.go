@@ -14,6 +14,8 @@ import (
 	"github.com/tidwall/sjson"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/canonicalize"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/patch"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/pathkey"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/transformations"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -59,7 +61,12 @@ func CompareFilteredResourceForUpdate(existing, new *pkgmodel.Resource, schema p
 	existingForCompare := canonicalizeHintedFields(existing.Properties, schema)
 	newForCompare := canonicalizeHintedFields(hashedForComparison.Properties, schema)
 
-	equal, err := util.JsonEqualIgnoreArrayOrder(existingForCompare, newForCompare)
+	// Fields hinted preserveEmptyValues carry meaningful empties, so the
+	// gate's empty-tolerant equality (absent == empty, there for provider
+	// echoes and legacy rendering noise) must not hide an empty-only
+	// difference inside them - repairing a member the old normalization
+	// stripped IS a change.
+	equal, err := util.JsonEqualIgnoreArrayOrderStrictRoots(existingForCompare, newForCompare, patch.PreserveEmptyRootFields(schema))
 	if err != nil {
 		return false, fmt.Errorf("failed to compare properties: %w", err)
 	}
@@ -181,7 +188,7 @@ func SuppressUnchangedOpaqueValues(existing, desired json.RawMessage, schema pkg
 		}
 	}
 	desiredResult.ForEach(func(key, val gjson.Result) bool {
-		walk(key.String(), val)
+		walk(buildPath("", key.String()), val)
 		return true
 	})
 
@@ -190,8 +197,12 @@ func SuppressUnchangedOpaqueValues(existing, desired json.RawMessage, schema pkg
 	// explicitly. Use the schema-declared UNION known-opaque table so a field is
 	// recognized even when the plugin's schema drops FieldHint.Opaque.
 	for field := range transformations.OpaqueFields(schema, resourceType) {
-		if desiredResult.Get(field).Exists() {
-			addOpaquePath(field)
+		// Schema field names are literal JSON keys, so they are escaped the same
+		// way the walk escapes the keys it meets — a dotted field name would
+		// otherwise be looked up, and recorded, as a nested path.
+		escapedField := buildPath("", field)
+		if desiredResult.Get(escapedField).Exists() {
+			addOpaquePath(escapedField)
 		}
 	}
 
@@ -277,7 +288,7 @@ func filterSetOnceProps(existing, new json.RawMessage, label string) (json.RawMe
 
 	// Start processing from the root
 	newResult.ForEach(func(key, val gjson.Result) bool {
-		processValue(key.String(), val)
+		processValue(buildPath("", key.String()), val)
 		return true
 	})
 
@@ -388,18 +399,28 @@ func shouldPreserveSetOnce(newProp, existingProp gjson.Result) bool {
 	return existingProp.Value() != nil
 }
 
-// getPreservedValueString extracts the display value from a gjson.Result for logging
+// getPreservedValueString extracts the display value from a gjson.Result for
+// logging. An opaque envelope's value is withheld: what a SetOnce property or
+// tag preserves is as much a secret as what set it, and the line is still
+// useful without it because the property and the resource are named alongside.
 func getPreservedValueString(val gjson.Result) string {
 	if val.IsObject() {
+		if val.Get("$visibility").String() == pkgmodel.VisibilityOpaque {
+			return pkgmodel.RedactedForLog
+		}
 		return val.Get("$value").String()
 	}
 	return val.String()
 }
 
-// buildPath constructs a property path, handling empty root paths
+// buildPath constructs a property path, handling empty root paths. The key is a
+// literal JSON map key or array index, so it is escaped as it is appended: a
+// data-derived key carrying path syntax would otherwise address a nested tree
+// rather than itself, and a write at that path would explode the key into one.
 func buildPath(base, key string) string {
+	escaped := pathkey.Escape(key)
 	if base == "" {
-		return key
+		return escaped
 	}
-	return base + "." + key
+	return base + "." + escaped
 }

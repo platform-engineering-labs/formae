@@ -24,6 +24,7 @@ type envInfo struct {
 	Tmux    bool // inside tmux or screen
 	SSH     bool // inside an SSH session
 	Unicode bool // terminal supports Unicode (braille)
+	Herdr   bool // inside a herdr multiplexer pane
 
 	// Env hints — insufficient alone to enable graphics
 	KittyWindowID bool   // KITTY_WINDOW_ID is set
@@ -33,17 +34,42 @@ type envInfo struct {
 }
 
 // probeResult holds the results of the raw-mode escape-sequence query.
-// Both fields are false when the probe was skipped (tmux/ssh) or timed out.
+// Both fields are false when the probe was skipped or timed out.
 type probeResult struct {
 	Kitty  bool
 	ITerm2 bool
+}
+
+// probeAllowed reports whether the escape-sequence probe may be sent and its
+// answer believed.
+//
+// tmux and screen intercept the escape stream, and over a plain SSH link a
+// reply that arrives after the timeout leaks its bytes into the shell, so both
+// normally suppress the probe.
+//
+// A herdr pane is the exception to the SSH rule. herdr's server outlives the
+// client that started it, so SSH_CLIENT/SSH_CONNECTION/SSH_TTY inside a pane
+// describe how that server was launched rather than this pane's terminal: a
+// session started once over SSH leaves them set in every pane it spawns
+// afterwards, including panes attached locally. herdr also answers the graphics
+// query itself on behalf of the attached client, so the reply is immediate and
+// cannot arrive late enough to leak. Its answer is better evidence than the
+// inherited variables.
+//
+// A tmux inside a herdr pane still suppresses the probe: the innermost
+// multiplexer owns the escape stream.
+func probeAllowed(env envInfo) bool {
+	if env.Tmux {
+		return false
+	}
+	return !env.SSH || env.Herdr
 }
 
 // decide is a pure function: given env signals and probe results it returns
 // the appropriate Capability.  The layered, fail-safe order is:
 //
 //  1. Hard disqualifiers → CapText
-//  2. Probe results (trusted only when NOT inside tmux/screen/ssh)
+//  2. Probe results (trusted only when probeAllowed says the probe is sound)
 //     probe.Kitty → CapKitty; probe.ITerm2 → CapITerm2
 //  3. Env hints are NOT sufficient to enable graphics; they only confirm
 //     braille is a safe choice
@@ -54,8 +80,8 @@ func decide(env envInfo, probe probeResult) Capability {
 		return CapText
 	}
 
-	// Layer 2: probe results — only trust them outside tmux/screen/ssh
-	if !env.Tmux && !env.SSH {
+	// Layer 2: probe results — only trust them where the probe is meaningful
+	if probeAllowed(env) {
 		if probe.Kitty {
 			return CapKitty
 		}
@@ -105,7 +131,7 @@ func parseKittyProbe(resp []byte) bool {
 
 // probe is the seam for raw-mode escape-sequence queries. It is a var so
 // tests can replace it without performing real terminal I/O.
-// Under tmux/ssh the seam returns an empty probeResult immediately.
+// Where probeAllowed is false the seam returns an empty probeResult immediately.
 //
 // Fail-safe invariant: any error, timeout, or uncertainty leaves all fields
 // false — decide() then lands on braille/text.  The probe only ever *adds*
@@ -113,9 +139,9 @@ func parseKittyProbe(resp []byte) bool {
 //
 //nolint:gochecknoglobals
 var probe = func(env envInfo) probeResult {
-	// Skip the escape-sequence probe entirely when inside tmux/screen/ssh —
+	// Skip the escape-sequence probe entirely where it cannot be trusted —
 	// a garbled escape in the banner is worse than no logo graphics.
-	if env.Tmux || env.SSH {
+	if !probeAllowed(env) {
 		return probeResult{}
 	}
 
@@ -272,6 +298,10 @@ func gatherEnv() envInfo {
 	profile := termenv.ColorProfile()
 	unicode := profile != termenv.Ascii
 
+	// herdr sets HERDR_ENV=1 in every pane it spawns; this is the marker herdr
+	// documents for detecting that a process runs inside one of its panes.
+	herdr := os.Getenv("HERDR_ENV") == "1"
+
 	kittyWindowID := os.Getenv("KITTY_WINDOW_ID") != ""
 	wezterm := os.Getenv("WEZTERM_EXECUTABLE") != "" ||
 		os.Getenv("WEZTERM_PANE") != ""
@@ -283,6 +313,7 @@ func gatherEnv() envInfo {
 		Tmux:          tmux,
 		SSH:           ssh,
 		Unicode:       unicode,
+		Herdr:         herdr,
 		KittyWindowID: kittyWindowID,
 		WezTerm:       wezterm,
 		TermProgram:   termProgram,

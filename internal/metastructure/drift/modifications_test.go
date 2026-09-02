@@ -4,7 +4,7 @@
 
 //go:build unit
 
-package metastructure
+package drift
 
 import (
 	"testing"
@@ -32,7 +32,7 @@ func TestFilterUnabsorbedModifications_RenameAbsorbsOldLabelModification(t *test
 	}
 	fa := &forma_command.FormaCommand{}
 
-	got := filterUnabsorbedModifications(mods, forma, fa)
+	got := FilterUnabsorbedModifications(mods, forma, fa)
 	assert.Empty(t, got, "modification under old label must be absorbed by alias")
 }
 
@@ -49,7 +49,7 @@ func TestFilterUnabsorbedModifications_ForeignModificationStillUnabsorbed(t *tes
 	}
 	fa := &forma_command.FormaCommand{}
 
-	got := filterUnabsorbedModifications(mods, forma, fa)
+	got := FilterUnabsorbedModifications(mods, forma, fa)
 	assert.Len(t, got, 1, "unrelated modification must remain unabsorbed")
 }
 
@@ -75,7 +75,7 @@ func TestFilterUnabsorbedModifications_ModificationWithPendingUpdateIsUnabsorbed
 		},
 	}
 
-	got := filterUnabsorbedModifications(mods, forma, fa)
+	got := FilterUnabsorbedModifications(mods, forma, fa)
 	assert.Len(t, got, 1, "a modification with a pending update is not absorbed")
 }
 
@@ -92,6 +92,6 @@ func TestFilterUnabsorbedModifications_AliasMatchRequiresTypeMatch(t *testing.T)
 	}
 	fa := &forma_command.FormaCommand{}
 
-	got := filterUnabsorbedModifications(mods, forma, fa)
+	got := FilterUnabsorbedModifications(mods, forma, fa)
 	assert.Len(t, got, 1, "alias match must require matching Type")
 }

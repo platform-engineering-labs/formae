@@ -770,8 +770,11 @@ func TestResourceUpdater_SuccessfullyCreatesAResource(t *testing.T) {
 		assert.Equal(t, "test-resource", newResource.Label)
 		assert.Equal(t, "FakeAWS::S3::Bucket", newResource.Type)
 		// The write-origin merge records the just-applied resolution as $applied
-		// alongside $value, so later diffs can compare against the written domain.
-		assert.JSONEq(t, fmt.Sprintf(`{"VpcId":{"$ref":"formae://%s#/VpcId", "$value":"vpc-12345678", "$applied":"vpc-12345678"},"baz":"qux","a":[3,4,2]}`, vpcKsuid), string(newResource.Properties))
+		// alongside $value (so later diffs can compare against the written
+		// domain) and stamps $resolvedFrom with the canonical digest of the
+		// source value the resolution came from (the convergence witness the
+		// next plan compares).
+		assert.JSONEq(t, fmt.Sprintf(`{"VpcId":{"$ref":"formae://%s#/VpcId", "$value":"vpc-12345678", "$applied":"vpc-12345678", "$resolvedFrom":"v1:2a0b9a0c839df94183b2f5f2e9ccb871de6f12f4342cbbfedf78c786ca16af68"},"baz":"qux","a":[3,4,2]}`, vpcKsuid), string(newResource.Properties))
 		assert.True(t, newResource.Managed)
 
 		// assert that the forma command in the database is updated with the success state

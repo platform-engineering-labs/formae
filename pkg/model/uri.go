@@ -188,6 +188,36 @@ func FindResolvablesFromProperties(jsonStr string) []ResolvableObject {
 	return resolvables
 }
 
+// escapePathKey renders a literal JSON map key as a single gjson/sjson path
+// segment. Resource properties are arbitrary JSON, so a map key may contain the
+// dots, wildcards and modifiers the two engines read as path syntax: a
+// Kubernetes annotation key used raw as a path addresses a nested object tree,
+// so a read misses it and a write explodes the key into that tree.
+//
+// The rule is the union of the two engines' grammars: gjson.Escape covers
+// gjson's, and a colon is escaped on top of it because sjson reads a colon at
+// the start of a path segment as its force marker. formae core applies the same
+// rule and cannot be imported here — this is a separately versioned module — so
+// it carries its own implementation; a test pins the rule so the two cannot
+// drift.
+func escapePathKey(key string) string {
+	escaped := gjson.Escape(key)
+	if strings.IndexByte(escaped, ':') < 0 {
+		return escaped
+	}
+	return strings.ReplaceAll(escaped, ":", `\:`)
+}
+
+// appendPathSegment appends one literal map key or array index to a property
+// path, escaping it as it is appended.
+func appendPathSegment(basePath, key string) string {
+	escaped := escapePathKey(key)
+	if basePath == "" {
+		return escaped
+	}
+	return basePath + "." + escaped
+}
+
 // findResolvablesRecursive recursively searches for resolvable objects
 func findResolvablesRecursive(basePath string, value gjson.Result, resolvables *[]ResolvableObject) {
 	if value.IsObject() {
@@ -207,25 +237,13 @@ func findResolvablesRecursive(basePath string, value gjson.Result, resolvables *
 
 		// Recurse into object properties
 		value.ForEach(func(key, val gjson.Result) bool {
-			var newPath string
-			if basePath == "" {
-				newPath = key.String()
-			} else {
-				newPath = fmt.Sprintf("%s.%s", basePath, key.String())
-			}
-			findResolvablesRecursive(newPath, val, resolvables)
+			findResolvablesRecursive(appendPathSegment(basePath, key.String()), val, resolvables)
 			return true
 		})
 	} else if value.IsArray() {
 		// Recurse into array elements
 		value.ForEach(func(key, val gjson.Result) bool {
-			var newPath string
-			if basePath == "" {
-				newPath = key.String()
-			} else {
-				newPath = fmt.Sprintf("%s.%s", basePath, key.String())
-			}
-			findResolvablesRecursive(newPath, val, resolvables)
+			findResolvablesRecursive(appendPathSegment(basePath, key.String()), val, resolvables)
 			return true
 		})
 	}
@@ -280,9 +298,11 @@ func AsResolvedReference(value gjson.Result) (ResolvedReference, bool) {
 }
 
 // CollectReferencedKSUIDs parses data as JSON, recurses through all objects
-// and arrays, and collects the KSUID authority from every object whose "$ref"
-// field holds a formae:// URI. Returns a deduplicated, sorted slice. Returns
-// a non-nil empty slice when data is empty, invalid, or contains no refs.
+// and arrays, and collects every outbound reference KSUID it carries: the
+// KSUID authority of any object whose "$ref" field holds a formae:// URI, and
+// the "$generator" KSUID of any translated $gen envelope. Returns a
+// deduplicated, sorted slice. Returns a non-nil empty slice when data is
+// empty, invalid, or carries no outbound references.
 func CollectReferencedKSUIDs(data []byte) []string {
 	if len(data) == 0 {
 		return []string{}
@@ -305,9 +325,11 @@ func CollectReferencedKSUIDs(data []byte) []string {
 }
 
 // collectKSUIDsRecursive descends into all objects and arrays, collecting
-// KSUIDs from any object whose "$ref" field is a formae:// URI string.
-// Unlike findResolvablesRecursive, it does NOT return early at a "$ref"
-// object — it continues descending into all children to catch nested refs.
+// KSUIDs from any object whose "$ref" field is a formae:// URI string, and the
+// generator KSUID of any translated $gen envelope. Unlike
+// findResolvablesRecursive and findGenObjectsRecursive, it does NOT return
+// early at a recognized envelope — it continues descending into all children
+// to catch nested references.
 func collectKSUIDsRecursive(value gjson.Result, seen map[string]struct{}) {
 	if value.IsObject() {
 		refField := value.Get("$ref")
@@ -315,6 +337,12 @@ func collectKSUIDsRecursive(value gjson.Result, seen map[string]struct{}) {
 			if ksuid := FormaeURI(refField.String()).KSUID(); ksuid != "" {
 				seen[ksuid] = struct{}{}
 			}
+		}
+
+		// An authored $gen envelope names its generator by label and stack, so
+		// GenGeneratorKSUID is empty for it and it contributes nothing.
+		if generator := GenGeneratorKSUID(value); generator != "" {
+			seen[generator] = struct{}{}
 		}
 
 		// Always recurse into all children (including $value of a resolved ref).

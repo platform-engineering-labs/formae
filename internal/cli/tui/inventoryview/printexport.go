@@ -52,10 +52,8 @@ func renderTable(th *theme.Theme, cols []components.Column, rows []row, styleCel
 	copy(effCols, cols)
 
 	cells := make([][]string, len(vis))
-	styledCells := make([][]styledCell, len(vis))
 	for i, r := range vis {
 		rowCells := make([]string, len(r.cells))
-		styledRow := make([]styledCell, len(r.cells))
 		for col, cell := range r.cells {
 			colWidth := 0
 			if col < len(effCols) {
@@ -66,10 +64,8 @@ func renderTable(th *theme.Theme, cols []components.Column, rows []row, styleCel
 				plain = components.Truncate(cell, colWidth)
 			}
 			rowCells[col] = plain
-			styledRow[col] = styledCell{col: col, plain: plain, styled: styledInventoryCell(th, styleCell, col, plain)}
 		}
 		cells[i] = rowCells
-		styledCells[i] = styledRow
 	}
 
 	tbl = tbl.SetRows(cells)
@@ -81,7 +77,7 @@ func renderTable(th *theme.Theme, cols []components.Column, rows []row, styleCel
 		tableLines = tableLines[:len(tableLines)-1]
 	}
 
-	tableLines = applyCellStyles(tableLines, styledCells, tbl, effCols)
+	tableLines = applyCellStyles(tableLines, th, styleCell, tbl, effCols)
 
 	shown := len(vis)
 	var sb strings.Builder
@@ -157,6 +153,20 @@ func RenderStacks(th *theme.Theme, stacks []*pkgmodel.Stack, now time.Time, maxR
 	rows := make([]row, 0, len(stacks))
 	for _, s := range stacks {
 		rows = append(rows, stackRow(s, now))
+	}
+	return renderTable(th, spec.columns, rows, spec.styleCell, spec.entity, maxResults, width)
+}
+
+// RenderGenerators renders a list of generators as a table string for non-TTY
+// output. now is injected for deterministic output (the derived LastRotated is
+// rendered relative to it).
+func RenderGenerators(th *theme.Theme, generators []apimodel.GeneratorInventoryItem, now time.Time, maxResults, width int) string {
+	specs := newSpecs(nil)
+	spec := specs[TabGenerators]
+
+	rows := make([]row, 0, len(generators))
+	for _, g := range generators {
+		rows = append(rows, generatorRow(g, now))
 	}
 	return renderTable(th, spec.columns, rows, spec.styleCell, spec.entity, maxResults, width)
 }

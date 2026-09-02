@@ -546,6 +546,28 @@ func scanTargetForResourceType(target pkgmodel.Target, op ListOperation, data Di
 	uri := discoveryURI(op.ResourceType)
 	operation := resource.OperationList
 	operationID := uuid.New().String()
+	listParameters := util.StringToMap[plugin.ListParam](op.ListParams)
+
+	// Strip resolvable metadata ($ref/$value wrappers) from target config before
+	// sending to plugin — plugins expect plain JSON values, not resolvable objects.
+	pluginConfig := target.Config
+	if cleanConfig, err := resolver.ConvertToPluginFormat(target.Config); err == nil {
+		pluginConfig = cleanConfig
+	}
+
+	// A generator reference in the target's config names a credential that was
+	// never drawn; the envelope is never that credential. Sending it would hand
+	// the plugin a JSON object where a token belongs. Conversion leaves such an
+	// envelope untouched, so this checks the document either branch above
+	// settled on. Skip this resource type for the cycle rather than scanning
+	// with a credential formae does not have: a scan that cannot authenticate
+	// returns nothing and would be indistinguishable from an empty account.
+	// This must run before the spawn below — a PluginOperator started for a
+	// scan that never sends ListResources is never reaped.
+	if err := resolver.GuardNoUnresolvedGenerators(pluginConfig); err != nil {
+		delete(data.outstandingListOperations, mapKey)
+		return fmt.Errorf("cannot scan %s in target %s: its configuration is bound to a generator whose value has not been drawn: %w", op.ResourceType, target.Label, err)
+	}
 
 	// Spawn PluginOperator via PluginCoordinator
 	spawnResult, err := proc.Call(
@@ -561,7 +583,6 @@ func scanTargetForResourceType(target pkgmodel.Target, op ListOperation, data Di
 		delete(data.outstandingListOperations, mapKey)
 		return fmt.Errorf("failed to spawn PluginOperator for %s: %w", uri, err)
 	}
-	listParameters := util.StringToMap[plugin.ListParam](op.ListParams)
 	spawnRes, ok := spawnResult.(messages.SpawnPluginOperatorResult)
 	if !ok {
 		delete(data.outstandingListOperations, mapKey)
@@ -570,13 +591,6 @@ func scanTargetForResourceType(target pkgmodel.Target, op ListOperation, data Di
 	if spawnRes.Error != "" {
 		delete(data.outstandingListOperations, mapKey)
 		return fmt.Errorf("failed to spawn PluginOperator: %s", spawnRes.Error)
-	}
-
-	// Strip resolvable metadata ($ref/$value wrappers) from target config before
-	// sending to plugin — plugins expect plain JSON values, not resolvable objects.
-	pluginConfig := target.Config
-	if cleanConfig, err := resolver.ConvertToPluginFormat(target.Config); err == nil {
-		pluginConfig = cleanConfig
 	}
 
 	err = proc.Send(spawnRes.PID, plugin.ListResources{
@@ -702,17 +716,6 @@ func getMatchFiltersFromCache(data *DiscoveryData, namespace string) []pkgmodel.
 	return pluginInfo.MatchFilters
 }
 
-// findMatchFiltersForType finds all MatchFilters that apply to the given resource type
-func findMatchFiltersForType(filters []pkgmodel.MatchFilter, resourceType string) []pkgmodel.MatchFilter {
-	var result []pkgmodel.MatchFilter
-	for i := range filters {
-		if slices.Contains(filters[i].ResourceTypes, resourceType) {
-			result = append(result, filters[i])
-		}
-	}
-	return result
-}
-
 func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Target, resources []plugin.ListedResource, data DiscoveryData, proc gen.Process) (string, error) {
 	// Get schema from cache instead of calling plugin directly
 	schema, err := getSchemaFromCache(&data, namespace, op.ResourceType)
@@ -748,7 +751,7 @@ func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Ta
 		return "", fmt.Errorf("failed to load targets: %w", err)
 	}
 
-	resourceUpdates, err := resource_update.GenerateResourceUpdates(&forma, pkgmodel.CommandSync, formaCommandConfig.Mode, resource_update.FormaCommandSourceDiscovery, existingTargets, data.ds, nil, nil)
+	resourceUpdates, err := resource_update.GenerateResourceUpdates(&forma, pkgmodel.CommandSync, formaCommandConfig.Mode, resource_update.FormaCommandSourceDiscovery, existingTargets, data.ds, nil, nil, false)
 	if err != nil {
 		proc.Log().Error("failed to generate resource updates: %v", err)
 		return "", fmt.Errorf("failed to generate resource updates: %w", err)
@@ -757,7 +760,7 @@ func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Ta
 	// Attach MatchFilters from cache to resource updates for declarative filtering
 	matchFilters := getMatchFiltersFromCache(&data, namespace)
 	for i := range resourceUpdates {
-		filters := findMatchFiltersForType(matchFilters, resourceUpdates[i].DesiredState.Type)
+		filters := pkgmodel.FiltersForType(matchFilters, resourceUpdates[i].DesiredState.Type)
 		if len(filters) > 0 {
 			resourceUpdates[i].MatchFilters = filters
 		}
@@ -771,6 +774,7 @@ func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Ta
 		nil, // No target updates on discovery
 		nil, // No stack updates on discovery
 		nil, // No policy updates on discovery
+		nil, // No generator updates on discovery
 		"discovery",
 		"",
 		"",
@@ -797,7 +801,9 @@ func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Ta
 		finalizeFailedSyncCommand(syncCommand, proc)
 		return "", fmt.Errorf("failed to build changeset: %w", err)
 	}
-	cs, err := changeset.NewChangeset(syncCommand.ResourceUpdates, synth, syncCommand.ID, pkgmodel.CommandSync, syncCommand.Config.Mode)
+	// No generator draws: a sync command only reads the inventory, so no
+	// destination in it is waiting for a generated value.
+	cs, err := changeset.NewChangeset(syncCommand.ResourceUpdates, synth, nil, syncCommand.ID, pkgmodel.CommandSync, syncCommand.Config.Mode)
 	if err != nil {
 		slog.Error("failed to build changeset for discovery sync command", "commandID", syncCommand.ID, "error", err)
 		finalizeFailedSyncCommand(syncCommand, proc)

@@ -10,6 +10,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -141,6 +142,24 @@ func TestDatastore(t *testing.T) {
 					`UPDATE forma_commands SET subject = NULL, subject_name = NULL WHERE command_id = ?`, commandID,
 				)
 				return err
+			},
+			GeneratorIDForTest: func(label, stackLabel string) (string, error) {
+				conn := d.Conn()
+				var id string
+				// generators.stack_id stores the stack's KSUID, not its label, so
+				// the stack is resolved by label first (its own current row), the
+				// same way the datastore's own Get/DeleteGenerator do.
+				err := conn.QueryRow(
+					`SELECT g.id FROM generators g
+					 JOIN (SELECT id FROM stacks WHERE label = ? ORDER BY version DESC LIMIT 1) s ON g.stack_id = s.id
+					 WHERE g.label = ?
+					 ORDER BY g.version DESC LIMIT 1`,
+					stackLabel, label,
+				).Scan(&id)
+				if errors.Is(err, sql.ErrNoRows) {
+					return "", nil
+				}
+				return id, err
 			},
 		}
 	})
@@ -574,6 +593,101 @@ func TestBulkStoreResourceUpdates_StripsOpaqueRefValueFromExistingTarget(t *test
 	assert.Contains(t, raw, `$visibility`, "stored existing_target must preserve $visibility")
 	assert.NotContains(t, raw, `$value`, "stored existing_target must not contain $value")
 	assert.NotContains(t, raw, "super-secret", "stored existing_target must not contain the resolved secret")
+}
+
+// TestCreateTarget_StripsOpaqueGenValueWithoutVisibility proves the
+// fail-closed strip at the storage boundary: a $gen envelope missing
+// $visibility entirely (a shape normal translation never produces — the
+// schema fixes $visibility to "Opaque" on every $gen) must still be stripped
+// before it reaches the database. The strip predicate therefore keys off the
+// $gen envelope itself; a predicate gated on reading $visibility would let
+// this shape land in the SQLite file in cleartext.
+func TestCreateTarget_StripsOpaqueGenValueWithoutVisibility(t *testing.T) {
+	cfg := &pkgmodel.DatastoreConfig{
+		DatastoreType: pkgmodel.SqliteDatastore,
+		Sqlite:        pkgmodel.SqliteConfig{FilePath: ":memory:"},
+	}
+	ds, err := dssqlite.NewDatastoreSQLite(context.Background(), cfg, "test")
+	require.NoError(t, err)
+	d, _ := ds.(dssqlite.DatastoreSQLite)
+	defer d.CleanUp() //nolint:errcheck
+
+	const sentinel = "gen-cleartext-sentinel-no-visibility-storage"
+	opaqueConfig := json.RawMessage(`{"auth":{"$gen":true,"$generator":"2ABcDeFgHiJkLmNoPqRsTuVwXyZ","$output":"value","$value":"` + sentinel + `"}}`)
+	_, err = ds.CreateTarget(&pkgmodel.Target{
+		Label:     "gen-no-visibility-create",
+		Namespace: "AWS",
+		Config:    opaqueConfig,
+	})
+	require.NoError(t, err)
+
+	var raw string
+	err = d.Conn().QueryRow(
+		`SELECT config FROM targets WHERE label = 'gen-no-visibility-create' ORDER BY version DESC LIMIT 1`,
+	).Scan(&raw)
+	require.NoError(t, err)
+
+	assert.Contains(t, raw, `$gen`, "stored config must preserve $gen")
+	assert.NotContains(t, raw, `$value`, "stored config must not contain $value")
+	assert.NotContains(t, raw, sentinel, "the generated secret must never reach at-rest storage, even without $visibility")
+}
+
+// TestBulkStoreResourceUpdates_StripsOpaqueGenValueFromExistingTarget proves
+// what actually reaches storage, not what the strip function's return value
+// claims: a resolved generator value seeded onto a target config must not
+// survive to the persisted row. If any write path bypassed the shared strip
+// predicate, this reads the sentinel straight back out of the database.
+func TestBulkStoreResourceUpdates_StripsOpaqueGenValueFromExistingTarget(t *testing.T) {
+	cfg := &pkgmodel.DatastoreConfig{
+		DatastoreType: pkgmodel.SqliteDatastore,
+		Sqlite:        pkgmodel.SqliteConfig{FilePath: ":memory:"},
+	}
+	ds, err := dssqlite.NewDatastoreSQLite(context.Background(), cfg, "test")
+	require.NoError(t, err)
+	d, _ := ds.(dssqlite.DatastoreSQLite)
+	defer d.CleanUp() //nolint:errcheck
+
+	const sentinel = "gen-cleartext-sentinel-storage-9f3a"
+	opaqueConfig := json.RawMessage(`{"auth":{"$gen":true,"$generator":"2ABcDeFgHiJkLmNoPqRsTuVwXyZ","$output":"value","$visibility":"Opaque","$value":"` + sentinel + `"}}`)
+
+	commandID := util.NewID()
+	ksuid := util.NewID()
+
+	ru := resource_update.ResourceUpdate{
+		DesiredState: pkgmodel.Resource{
+			Ksuid:  ksuid,
+			Stack:  "default",
+			Type:   "AWS::S3::Bucket",
+			Label:  "my-bucket",
+			Target: "tgt",
+		},
+		ResourceTarget: pkgmodel.Target{
+			Label:     "tgt",
+			Namespace: "AWS",
+			Config:    json.RawMessage(`{}`),
+		},
+		ExistingTarget: pkgmodel.Target{
+			Label:     "tgt",
+			Namespace: "AWS",
+			Config:    opaqueConfig,
+		},
+		Operation: resource_update.OperationCreate,
+		State:     resource_update.ResourceUpdateStateNotStarted,
+	}
+
+	require.NoError(t, ds.BulkStoreResourceUpdates(commandID, []resource_update.ResourceUpdate{ru}))
+
+	// Read the raw stored bytes directly from the DB — bypassing any unmarshalling.
+	var raw string
+	err = d.Conn().QueryRow(
+		`SELECT existing_target FROM resource_updates WHERE command_id = ?`, commandID,
+	).Scan(&raw)
+	require.NoError(t, err)
+
+	assert.Contains(t, raw, `$gen`, "stored existing_target must preserve $gen")
+	assert.Contains(t, raw, `$generator`, "stored existing_target must preserve $generator")
+	assert.NotContains(t, raw, `$value`, "stored existing_target must not contain $value")
+	assert.NotContains(t, raw, sentinel, "the generated secret must never reach at-rest storage")
 }
 
 // setStackValidFrom rewrites the valid_from of a stack's versions in ascending

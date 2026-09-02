@@ -254,7 +254,7 @@ func Test_mergeRefsPreservingUserRefs_preservesResolvableValues(t *testing.T) {
         "Type": "A"
     }`, distributionKsuid, hostedZoneKsuid)
 
-	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{}, false)
+	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{}, false, nil)
 	require.NoError(t, err)
 
 	var mergedMap map[string]any
@@ -407,7 +407,7 @@ func Test_mergeRefsPreservingUserRefs_preservesResolvableValuesWithVisibilityWit
         "Type": "A"
     }`)
 
-	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{}, false)
+	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{}, false, nil)
 	require.NoError(t, err)
 
 	var mergedMap map[string]any
@@ -458,7 +458,7 @@ func Test_mergeRefsPreservingUserRefs_preservesResolvableValuesWithVisibilityAnd
         "Type": "A"
     }`)
 
-	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{}, false)
+	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{}, false, nil)
 	require.NoError(t, err)
 
 	var mergedMap map[string]any
@@ -510,7 +510,7 @@ func Test_mergeRefsPreservingUserRefs_OpaqueEnvelope_ReplacesHashWithLiveReadVal
 
 	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{
 		Hints: map[string]pkgmodel.FieldHint{"SecretString": {Opaque: true}},
-	}, false)
+	}, false, nil)
 	require.NoError(t, err)
 
 	var mergedMap map[string]any
@@ -545,7 +545,7 @@ func Test_mergeRefsPreservingUserRefs_ResEnvelope_EmptyPluginEchoPreservesHash(t
         "consumes": {"$res":true,"$label":"the-secret","$type":"FakeAWS::Resource","$stack":"s","$property":"secret"}
     }`)
 
-	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{}, false)
+	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{}, false, nil)
 	require.NoError(t, err)
 
 	var mergedMap map[string]any
@@ -580,7 +580,7 @@ func Test_mergeRefsPreservingUserRefs_RemovesArrayElements(t *testing.T) {
         "Type": "A"
     }`)
 
-	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{}, false)
+	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{}, false, nil)
 	require.NoError(t, err)
 
 	var mergedMap map[string]any
@@ -950,7 +950,7 @@ func Test_mergeRefsPreservingUserRefs_ECSEnvLiteralDoesNotInheritSiblingRef(t *t
 		},
 	}
 
-	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, schema, false)
+	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, schema, false, nil)
 	require.NoError(t, err)
 	byName := envByName(t, merged)
 
@@ -987,7 +987,7 @@ func Test_mergeRefsPreservingUserRefs_Phase2DoesNotGraftSiblingRefOntoLiteral(t 
 	}`)
 
 	// No hint on Environment → default/Set path.
-	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{}, false)
+	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{}, false, nil)
 	require.NoError(t, err)
 
 	var props map[string]any
@@ -1028,7 +1028,7 @@ func Test_mergeRefsPreservingUserRefs_OrderedArrayPairsByIndex(t *testing.T) {
 		},
 	}
 
-	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, schema, false)
+	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, schema, false, nil)
 	require.NoError(t, err)
 
 	var props map[string]any
@@ -1102,4 +1102,118 @@ func TestRecordProgress_MergeArrays_PluginReturnsReorderedElements(t *testing.T)
 	require.NoError(t, err)
 	assert.Equal(t, ResourceUpdateStateSuccess, resourceUpdate.State)
 	assert.JSONEq(t, expectedProps, string(resourceUpdate.DesiredState.Properties))
+}
+
+// A $gen envelope echoed back by a plugin as a structured object (a provider
+// that round-trips resolvables, mirroring how a $res echo is handled) must
+// have its stale $hashed marker dropped once a fresh plaintext value is
+// adopted. Without a dedicated dispatch, mergeObject falls through to the
+// generic recursive field merge: mergePrimitive only rewrites a leaf when the
+// plugin's root document lacks that exact path, so "$value" (which the
+// plugin's echo does carry) is correctly absorbed by coincidence, but
+// "$hashed" (which the echo does NOT carry) is copied back from the user's
+// stored copy verbatim — leaving $hashed:true sitting next to a plaintext
+// $value. The persist transformer's idempotency guard then skips re-hashing
+// it, persisting the generated secret in cleartext while claiming it is
+// hashed.
+func Test_mergeRefsPreservingUserRefs_GenEnvelope_DropsStaleHashedOnFreshEcho(t *testing.T) {
+	oldHash := pkgmodel.ComputeValueHash("old-generated-value")
+	userProps := []byte(`{
+        "Password": {"$gen":true,"$generator":"2ABcDeFgHiJkLmNoPqRsTuVwXyZ","$output":"value","$visibility":"Opaque","$hashed":true,"$value":"` + oldHash + `"}
+    }`)
+	// The plugin echoes the envelope back with a fresh plaintext $value and no
+	// $hashed marker of its own — it has no notion of our at-rest hashing.
+	pluginProps := []byte(`{
+        "Password": {"$gen":true,"$generator":"2ABcDeFgHiJkLmNoPqRsTuVwXyZ","$output":"value","$visibility":"Opaque","$value":"fresh-plaintext-generated-value"}
+    }`)
+
+	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{}, false, nil)
+	require.NoError(t, err)
+
+	var mergedMap map[string]any
+	require.NoError(t, json.Unmarshal(merged, &mergedMap))
+
+	password, ok := mergedMap["Password"].(map[string]any)
+	require.True(t, ok, "Password must remain a $gen envelope")
+	assert.Equal(t, true, password["$gen"])
+	assert.Equal(t, "2ABcDeFgHiJkLmNoPqRsTuVwXyZ", password["$generator"], "$generator must be preserved")
+	assert.Equal(t, "fresh-plaintext-generated-value", password["$value"],
+		"the plugin's freshly echoed value must be absorbed onto the envelope")
+	_, hasHashed := password["$hashed"]
+	assert.False(t, hasHashed,
+		"a stale $hashed marker must not survive a fresh plaintext echo — the persist transformer must re-hash it")
+}
+
+// A $gen envelope whose stored copy already carries a hashed value and whose
+// plugin echo comes back empty (no ResourceProperties, or a Read-shaped merge
+// that never touched this field) must retain the stored hash: no
+// hash-of-hash, and the envelope is not corrupted into a bare scalar.
+func Test_mergeRefsPreservingUserRefs_GenEnvelope_EmptyPluginEchoPreservesHash(t *testing.T) {
+	storedHash := pkgmodel.ComputeValueHash("v1")
+	userProps := []byte(`{
+        "Password": {"$gen":true,"$generator":"2ABcDeFgHiJkLmNoPqRsTuVwXyZ","$output":"value","$hashed":true,"$value":"` + storedHash + `","$visibility":"Opaque"}
+    }`)
+	pluginProps := []byte(`{}`)
+
+	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{}, false, nil)
+	require.NoError(t, err)
+
+	var mergedMap map[string]any
+	require.NoError(t, json.Unmarshal(merged, &mergedMap))
+
+	password, ok := mergedMap["Password"].(map[string]any)
+	require.True(t, ok, "Password must remain a $gen envelope")
+	assert.Equal(t, storedHash, password["$value"],
+		"stored hash must be retained when the plugin echo carries nothing")
+	assert.Equal(t, true, password["$hashed"],
+		"$hashed must be retained (no hash-of-hash)")
+}
+
+// A plugin echo of explicit JSON null at the $gen's own path (as opposed to
+// the key being absent, which the sibling test above covers) must be treated
+// the same as "nothing usable was returned": the stored hash is retained,
+// not clobbered.
+func Test_mergeRefsPreservingUserRefs_GenEnvelope_NullPluginEchoPreservesHash(t *testing.T) {
+	storedHash := pkgmodel.ComputeValueHash("v1")
+	userProps := []byte(`{
+        "Password": {"$gen":true,"$generator":"2ABcDeFgHiJkLmNoPqRsTuVwXyZ","$output":"value","$hashed":true,"$value":"` + storedHash + `","$visibility":"Opaque"}
+    }`)
+	pluginProps := []byte(`{"Password": null}`)
+
+	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{}, false, nil)
+	require.NoError(t, err)
+
+	var mergedMap map[string]any
+	require.NoError(t, json.Unmarshal(merged, &mergedMap))
+
+	password, ok := mergedMap["Password"].(map[string]any)
+	require.True(t, ok, "Password must remain a $gen envelope")
+	assert.Equal(t, storedHash, password["$value"],
+		"stored hash must be retained when the plugin echoes explicit null")
+	assert.Equal(t, true, password["$hashed"],
+		"$hashed must be retained (no hash-of-hash)")
+}
+
+// A plugin echo of an empty string at the $gen's own path must likewise be
+// treated as "nothing usable was returned": the stored hash is retained, not
+// clobbered by an empty value.
+func Test_mergeRefsPreservingUserRefs_GenEnvelope_EmptyStringPluginEchoPreservesHash(t *testing.T) {
+	storedHash := pkgmodel.ComputeValueHash("v1")
+	userProps := []byte(`{
+        "Password": {"$gen":true,"$generator":"2ABcDeFgHiJkLmNoPqRsTuVwXyZ","$output":"value","$hashed":true,"$value":"` + storedHash + `","$visibility":"Opaque"}
+    }`)
+	pluginProps := []byte(`{"Password": ""}`)
+
+	merged, err := mergeRefsPreservingUserRefs(userProps, pluginProps, pkgmodel.Schema{}, false, nil)
+	require.NoError(t, err)
+
+	var mergedMap map[string]any
+	require.NoError(t, json.Unmarshal(merged, &mergedMap))
+
+	password, ok := mergedMap["Password"].(map[string]any)
+	require.True(t, ok, "Password must remain a $gen envelope")
+	assert.Equal(t, storedHash, password["$value"],
+		"stored hash must be retained when the plugin echoes an empty string")
+	assert.Equal(t, true, password["$hashed"],
+		"$hashed must be retained (no hash-of-hash)")
 }

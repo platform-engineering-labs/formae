@@ -18,8 +18,10 @@ import (
 	"github.com/exaring/otelpgx"
 	json "github.com/goccy/go-json"
 	pgx "github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/platform-engineering-labs/formae/internal/credentials"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 
@@ -74,9 +76,29 @@ func BuildConnStr(host string, port int, user, password, database string) string
 	return u.String()
 }
 
+// resolvePassword returns the password for a new connection: whatever the
+// configured provider answers, or the static config value when no provider is
+// set. The pool holds a single credential for the lifetime of the process, so
+// without a provider a password rotated in the database fails every connection
+// the pool opens from then on.
+func resolvePassword(ctx context.Context, cfg *pkgmodel.PostgresConfig) (string, error) {
+	if cfg.PasswordProvider == nil {
+		return cfg.Password, nil
+	}
+	password, err := cfg.PasswordProvider(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve postgres password: %w", err)
+	}
+	return password, nil
+}
+
 // This can be only used in tests or in setups where we have access to admin (non-production)
 func ensureDatabaseExists(ctx context.Context, cfg *pkgmodel.DatastoreConfig) error {
-	connStr := BuildConnStr(cfg.Postgres.Host, cfg.Postgres.Port, cfg.Postgres.User, cfg.Postgres.Password, "postgres")
+	password, err := resolvePassword(ctx, &cfg.Postgres)
+	if err != nil {
+		return err
+	}
+	connStr := BuildConnStr(cfg.Postgres.Host, cfg.Postgres.Port, cfg.Postgres.User, password, "postgres")
 
 	conn, err := pgx.Connect(ctx, connStr)
 	if err != nil {
@@ -108,6 +130,15 @@ func ensureDatabaseExists(ctx context.Context, cfg *pkgmodel.DatastoreConfig) er
 
 // This can be only used in tests or in setups where we have access to admin (non-production)
 func NewDatastorePostgresEnsureDatabase(ctx context.Context, cfg *pkgmodel.DatastoreConfig, agentID string) (datastore.Datastore, error) {
+	// Before ensuring the database, not after: ensureDatabaseExists opens its
+	// own connection through resolvePassword, so without this it would
+	// authenticate with the static password while the secret holds the current
+	// one. Configuring is idempotent, so the constructor below finding it
+	// already set is expected rather than a second attempt.
+	if err := configurePasswordProvider(ctx, cfg); err != nil {
+		return nil, err
+	}
+
 	err := ensureDatabaseExists(ctx, cfg)
 	if err != nil {
 		return nil, err
@@ -116,8 +147,134 @@ func NewDatastorePostgresEnsureDatabase(ctx context.Context, cfg *pkgmodel.Datas
 	return NewDatastorePostgres(ctx, cfg, agentID)
 }
 
+// startupReadinessAttempts bounds how long construction waits out a control
+// plane that is briefly unavailable. Failing immediately would mean a rolling
+// deployment where no replacement task can become healthy, while the orchestrator
+// churns tasks and adds load to the service that is already struggling.
+const (
+	startupReadinessAttempts = 4
+	startupReadinessBackoff  = 500 * time.Millisecond
+)
+
+// configurePasswordProvider installs a credential provider when the config names
+// a secret to resolve the password from.
+//
+// It runs before the password is first resolved so the migration connection uses
+// the same authority the pool will, and so an unreadable secret fails startup
+// rather than surfacing later on some connection.
+//
+// With no ARN configured this does nothing at all — in particular it builds no
+// AWS client, which is what keeps an existing deployment's startup free of an
+// AWS credential lookup it never asked for.
+func configurePasswordProvider(ctx context.Context, cfg *pkgmodel.DatastoreConfig) error {
+	if cfg.Postgres.PasswordSecretArn == "" || cfg.Postgres.PasswordProvider != nil {
+		return nil
+	}
+
+	if cfg.Postgres.PasswordProviderFactory != nil {
+		provider, err := cfg.Postgres.PasswordProviderFactory(ctx, cfg.Postgres.PasswordSecretArn)
+		if err != nil {
+			return fmt.Errorf("failed to build the datastore password provider: %w", err)
+		}
+		cfg.Postgres.PasswordProvider = provider
+		return warmProvider(ctx, provider)
+	}
+
+	provider, err := credentials.NewSecretProvider(ctx, cfg.Postgres.PasswordSecretArn)
+	if err != nil {
+		return fmt.Errorf("failed to build the datastore password provider: %w", err)
+	}
+	cfg.Postgres.PasswordProvider = provider.Provide
+	return warmProvider(ctx, cfg.Postgres.PasswordProvider)
+}
+
+// warmProvider fetches the credential once, deliberately, before anything needs
+// it.
+//
+// It is what makes an unreadable secret a startup failure rather than a failure
+// on the first connection, and it is where a transient control-plane failure is
+// waited out: a blip during a rolling deployment should not stop a task
+// becoming healthy. A permanent failure — a missing secret, a denial — is not
+// waited out, because it will not fix itself.
+func warmProvider(ctx context.Context, provide pkgmodel.PasswordProvider) error {
+	var err error
+	for attempt := range startupReadinessAttempts {
+		if _, err = provide(ctx); err == nil {
+			return nil
+		}
+		if !credentials.Transient(err) {
+			return fmt.Errorf("failed to read the datastore credential: %w", err)
+		}
+		if attempt < startupReadinessAttempts-1 {
+			select {
+			case <-time.After(startupReadinessBackoff << attempt):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+	return fmt.Errorf("failed to read the datastore credential: %w", err)
+}
+
+// verifyPoolReadiness proves the resolved credential actually authenticates.
+//
+// This is deliberate rather than incidental. Pool construction establishes no
+// connection — pgx pools are lazy — and while migrations do connect first, they
+// do so through a connection string carrying one already-resolved password,
+// not through the pool's per-connection resolution. Only a pool acquisition
+// exercises the path every later connection takes.
+//
+// Transient failures are retried, because a control-plane blip during a rolling
+// deployment should not stop a task becoming healthy. A credential the database
+// rejects is not transient and fails immediately.
+func verifyPoolReadiness(ctx context.Context, pool *pgxpool.Pool) error {
+	var err error
+	for attempt := range startupReadinessAttempts {
+		if err = pool.Ping(ctx); err == nil {
+			return nil
+		}
+		if rejectedCredential(err) {
+			return fmt.Errorf("the datastore rejected the resolved credential: %w", err)
+		}
+		if attempt < startupReadinessAttempts-1 {
+			select {
+			case <-time.After(startupReadinessBackoff << attempt):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+	return fmt.Errorf("the datastore did not become ready: %w", err)
+}
+
+// rejectedCredential reports a refusal by the database rather than a failure to
+// reach it.
+//
+// The distinction decides whether waiting helps. A rejected password will be
+// rejected just as firmly four attempts later, and retrying it only delays a
+// clear error behind a misleading one about readiness. The AWS-side predicate
+// is no use here: it classifies control-plane failures and, correctly for that
+// job, treats anything it does not recognise as worth retrying.
+func rejectedCredential(err error) bool {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return false
+	}
+	// 28P01 invalid_password, 28000 invalid_authorization_specification.
+	return pgErr.Code == "28P01" || pgErr.Code == "28000"
+}
+
 func NewDatastorePostgres(ctx context.Context, cfg *pkgmodel.DatastoreConfig, agentID string) (datastore.Datastore, error) {
-	connStr := BuildConnStr(cfg.Postgres.Host, cfg.Postgres.Port, cfg.Postgres.User, cfg.Postgres.Password, cfg.Postgres.Database)
+	if err := configurePasswordProvider(ctx, cfg); err != nil {
+		return nil, err
+	}
+
+	password, err := resolvePassword(ctx, &cfg.Postgres)
+	if err != nil {
+		return nil, err
+	}
+
+	connStr := BuildConnStr(cfg.Postgres.Host, cfg.Postgres.Port, cfg.Postgres.User, password, cfg.Postgres.Database)
 
 	// Append connection parameters if provided
 	if cfg.Postgres.ConnectionParams != "" {
@@ -159,6 +316,21 @@ func NewDatastorePostgres(ctx context.Context, cfg *pkgmodel.DatastoreConfig, ag
 		otelpgx.WithDisableConnectionDetailsInAttributes(),
 	)
 
+	// With a provider configured, every connection the pool opens asks for the
+	// current credential instead of reusing the one captured at startup. pgx
+	// hands BeforeConnect a copy of the connection config per new connection, so
+	// mutating it here leaves connections already open untouched.
+	if cfg.Postgres.PasswordProvider != nil {
+		poolCfg.BeforeConnect = func(ctx context.Context, connCfg *pgx.ConnConfig) error {
+			password, err := resolvePassword(ctx, &cfg.Postgres)
+			if err != nil {
+				return err
+			}
+			connCfg.Password = password
+			return nil
+		}
+	}
+
 	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
 		slog.Error("failed to connect to PostgreSQL database", "error", err)
@@ -169,6 +341,18 @@ func NewDatastorePostgres(ctx context.Context, cfg *pkgmodel.DatastoreConfig, ag
 	if err := otelpgx.RecordStats(pool); err != nil {
 		slog.Error("failed to start recording pool stats", "error", err)
 		// Non-fatal - continue without pool metrics
+	}
+
+	// Gated on the ARN rather than on a provider being present. A caller that
+	// injects a provider directly is not on this path and must keep the pool
+	// behaviour it had: the readiness Ping leaves an established connection in
+	// the pool, which is observable to anything counting per-connection
+	// resolutions.
+	if cfg.Postgres.PasswordSecretArn != "" {
+		if err := verifyPoolReadiness(ctx, pool); err != nil {
+			pool.Close()
+			return nil, err
+		}
 	}
 
 	d := DatastorePostgres{pool: pool, agentID: agentID, cfg: cfg, ctx: ctx}
@@ -266,7 +450,7 @@ SELECT
 	ru.resource, ru.resource_target, ru.existing_resource, ru.existing_target,
 	ru.progress_result, ru.most_recent_progress,
 	ru.remaining_resolvables, ru.reference_labels, ru.previous_properties,
-	ru.is_cascade, ru.cascade_source
+	ru.is_cascade, ru.cascade_source, ru.failure_reason, ru.provenance_records, ru.resolved_root_digests
 FROM forma_commands fc
 LEFT JOIN resource_updates ru ON fc.command_id = ru.command_id`
 
@@ -300,6 +484,8 @@ func scanJoinedRowPostgres(rows pgx.Rows) (*forma_command.FormaCommand, *resourc
 	var remainingResolvablesJSON, referenceLabelsJSON, previousPropertiesJSON []byte
 	var ruIsCascade *bool
 	var ruCascadeSource *string
+	var ruFailureReason *string
+	var ruProvenanceRecords, ruResolvedRootDigests []byte
 
 	err := rows.Scan(
 		// FormaCommand columns
@@ -312,7 +498,8 @@ func scanJoinedRowPostgres(rows pgx.Rows) (*forma_command.FormaCommand, *resourc
 		&resourceJSON, &resourceTargetJSON, &existingResourceJSON, &existingTargetJSON,
 		&progressResultJSON, &mostRecentProgressJSON,
 		&remainingResolvablesJSON, &referenceLabelsJSON, &previousPropertiesJSON,
-		&ruIsCascade, &ruCascadeSource,
+		&ruIsCascade, &ruCascadeSource, &ruFailureReason,
+		&ruProvenanceRecords, &ruResolvedRootDigests,
 	)
 	if err != nil {
 		return nil, nil, err
@@ -457,6 +644,19 @@ func scanJoinedRowPostgres(rows pgx.Rows) (*forma_command.FormaCommand, *resourc
 	}
 	if ruCascadeSource != nil {
 		ru.CascadeSource = *ruCascadeSource
+	}
+	if ruFailureReason != nil {
+		ru.FailureReason = *ruFailureReason
+	}
+	if len(ruProvenanceRecords) > 0 {
+		if err := json.Unmarshal(ruProvenanceRecords, &ru.ProvenanceRecords); err != nil {
+			return nil, nil, fmt.Errorf("failed to unmarshal provenance records: %w", err)
+		}
+	}
+	if len(ruResolvedRootDigests) > 0 {
+		if err := json.Unmarshal(ruResolvedRootDigests, &ru.ResolvedRootDigests); err != nil {
+			return nil, nil, fmt.Errorf("failed to unmarshal resolved root digests: %w", err)
+		}
 	}
 
 	return &cmd, &ru, nil
@@ -710,7 +910,7 @@ func (d DatastorePostgres) QueryFormaCommands(query *datastore.StatusQuery) ([]*
 			ru.resource, ru.resource_target, ru.existing_resource, ru.existing_target,
 			ru.progress_result, ru.most_recent_progress,
 			ru.remaining_resolvables, ru.reference_labels, ru.previous_properties,
-	ru.is_cascade, ru.cascade_source
+	ru.is_cascade, ru.cascade_source, ru.failure_reason, ru.provenance_records, ru.resolved_root_digests
 		FROM forma_commands fc
 		LEFT JOIN resource_updates ru ON fc.command_id = ru.command_id
 		WHERE fc.command_id IN (%s)
@@ -889,6 +1089,7 @@ func (d DatastorePostgres) GetResourceModificationsSinceLastReconcile(stack stri
 			Type:      r.resourceType,
 			Label:     r.label,
 			Operation: r.operation,
+			Ksuid:     r.ksuid,
 		}
 		if r.operation == "update" {
 			curProps, propErr := d.fetchCurrentPropertiesPG(ctx, r.ksuid)
@@ -909,6 +1110,62 @@ func (d DatastorePostgres) GetResourceModificationsSinceLastReconcile(stack stri
 }
 
 // fetchCurrentPropertiesPG returns the Properties JSON from the latest resource version for the given ksuid.
+// GetPropertiesAtLastWrite returns the resource's per-field write witness,
+// composed from its genuine-write history (see datastore.ComposeWriteWitness):
+// the newest create/replace echo is the base and each later apply-owned
+// update overlays only the fields its patch wrote. Sync and discovery
+// versions, metadata-only applies (empty patch), and fields an update's echo
+// merely carried along never enter the witness. History is bounded to the
+// most recent writes; a resource whose create falls outside the bound has no
+// witness, which classifies its movement as tolerated.
+func (d DatastorePostgres) GetPropertiesAtLastWrite(ksuid string) (json.RawMessage, error) {
+	ctx, span := tracer.Start(context.Background(), "GetPropertiesAtLastWrite")
+	defer span.End()
+
+	query := `
+SELECT r.data->>'Properties', ru.operation, ru.resource::jsonb ->> 'PatchDocument'
+FROM resources r
+JOIN forma_commands fc ON fc.command_id = r.command_id
+JOIN resource_updates ru ON ru.command_id = r.command_id AND ru.ksuid = r.ksuid
+WHERE r.ksuid = $1
+AND fc.command = 'apply'
+AND r.operation != 'delete' AND r.operation != 'reaped'
+AND (ru.operation != 'update'
+	OR ((ru.resource::jsonb ->> 'PatchDocument') IS NOT NULL
+		AND (ru.resource::jsonb ->> 'PatchDocument') != '[]'))
+ORDER BY r.version COLLATE "C" DESC
+LIMIT 25
+`
+	rows, err := d.pool.Query(ctx, query, ksuid)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var history []datastore.WriteVersion
+	for rows.Next() {
+		var props, op, patch *string
+		if err := rows.Scan(&props, &op, &patch); err != nil {
+			return nil, err
+		}
+		v := datastore.WriteVersion{}
+		if op != nil {
+			v.Operation = *op
+		}
+		if props != nil {
+			v.Properties = json.RawMessage(*props)
+		}
+		if patch != nil {
+			v.Patch = json.RawMessage(*patch)
+		}
+		history = append(history, v)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return datastore.ComposeWriteWitness(history), nil
+}
+
 func (d DatastorePostgres) fetchCurrentPropertiesPG(ctx context.Context, ksuid string) (json.RawMessage, error) {
 	query := `
 SELECT data->>'Properties'
@@ -1511,6 +1768,61 @@ func (d DatastorePostgres) FindResourcesDependingOn(ksuid string) ([]*pkgmodel.R
 		var scannedRefs []string
 		if err := rows.Scan(&jsonData, &ksuidResult, &scannedRefs); err != nil {
 			return nil, err
+		}
+
+		var resource pkgmodel.Resource
+		if err := json.Unmarshal([]byte(jsonData), &resource); err != nil {
+			return nil, err
+		}
+		resource.Ksuid = ksuidResult
+		resources = append(resources, &resource)
+	}
+
+	return resources, rows.Err()
+}
+
+// FindResourcesReferencingGenerator finds the live resources that bind a property
+// to the given generator through a $gen envelope. A translated envelope's
+// $generator KSUID is an outbound reference KSUID, so it lands in the same
+// GIN-indexed refs column the $ref lookup uses and the array-overlap query
+// narrows the scan cheaply. That column records only that a KSUID is
+// referenced, not how, so the overlap is a prefilter and pkgmodel.BindsGenerator
+// decides which candidates are really destinations.
+func (d DatastorePostgres) FindResourcesReferencingGenerator(generatorKsuid string) ([]*pkgmodel.Resource, error) {
+	ctx, span := tracer.Start(context.Background(), "FindResourcesReferencingGenerator")
+	defer span.End()
+
+	query := `
+	SELECT data, ksuid
+	FROM resources r1
+	WHERE refs && $1
+	AND NOT EXISTS (
+		SELECT 1
+		FROM resources r2
+		WHERE r1.uri = r2.uri
+		AND r2.version COLLATE "C" > r1.version COLLATE "C"
+	)
+	AND operation != $2 AND operation != 'reaped'
+	`
+
+	rows, err := d.pool.Query(ctx, query, []string{generatorKsuid}, resource_update.OperationDelete)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var resources []*pkgmodel.Resource
+	for rows.Next() {
+		var jsonData, ksuidResult string
+		if err := rows.Scan(&jsonData, &ksuidResult); err != nil {
+			return nil, err
+		}
+
+		// The SQL above is only a prefilter: it is deliberately broader than
+		// the truth so no destination is missed. pkgmodel.BindsGenerator is
+		// authoritative, and drops any candidate it matched for another reason.
+		if !pkgmodel.BindsGenerator([]byte(jsonData), generatorKsuid) {
+			continue
 		}
 
 		var resource pkgmodel.Resource
@@ -3070,6 +3382,73 @@ func (d DatastorePostgres) GetStacksWithAutoReconcilePolicy() ([]datastore.Stack
 	return result, nil
 }
 
+// GetGeneratorsWithRotation returns every live generator with the instant its
+// last rotation committed. The cadence itself is read from the stored spec by
+// datastore.RotationInfoFromRows, so this query never parses JSON.
+//
+// last_committed_draw is the derivation the rotation scheduler runs on: a
+// generation row records that a value was drawn and the command that drew it,
+// and joining that command's state is what says whether the value ever reached
+// its destinations. A command that is not Success advances nothing, so a
+// failed authority-side update leaves the cadence measured from the previous
+// success.
+func (d DatastorePostgres) GetGeneratorsWithRotation() ([]datastore.GeneratorRotationInfo, error) {
+	ctx, span := tracer.Start(context.Background(), "GetGeneratorsWithRotation")
+	defer span.End()
+
+	query := `
+		WITH latest_generators AS (
+			SELECT id, label, stack_id, generator_data, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			FROM generators
+		),
+		latest_stacks AS (
+			SELECT id, label, operation,
+			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE "C" DESC) as rn
+			FROM stacks
+		),
+		last_committed_draw AS (
+			SELECT g.id as generator_id, MAX(fc.timestamp) as last_rotation_at
+			FROM generators g
+			JOIN forma_commands fc ON fc.command_id = g.command_id
+			WHERE g.generation_id != '' AND fc.state = 'Success'
+			GROUP BY g.id
+		)
+		SELECT g.id, g.label, s.label, g.generator_data::text, d.last_rotation_at
+		FROM latest_generators g
+		JOIN latest_stacks s ON s.id = g.stack_id
+		LEFT JOIN last_committed_draw d ON d.generator_id = g.id
+		WHERE g.rn = 1 AND g.operation != 'delete'
+		AND s.rn = 1 AND s.operation != 'delete'
+	`
+
+	rows, err := d.pool.Query(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var rotationRows []datastore.GeneratorRotationRow
+	for rows.Next() {
+		var row datastore.GeneratorRotationRow
+		var generatorData string
+		var lastRotationAt *time.Time
+		if err := rows.Scan(&row.GeneratorID, &row.Label, &row.StackLabel, &generatorData, &lastRotationAt); err != nil {
+			return nil, err
+		}
+		row.GeneratorData = []byte(generatorData)
+		if lastRotationAt != nil {
+			row.LastRotationAt = lastRotationAt.UTC()
+		}
+		rotationRows = append(rotationRows, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return datastore.RotationInfoFromRows(rotationRows)
+}
+
 func (d DatastorePostgres) GetResourcesAtLastReconcile(stackLabel string) ([]datastore.ResourceSnapshot, error) {
 	ctx, span := tracer.Start(context.Background(), "GetResourcesAtLastReconcile")
 	defer span.End()
@@ -4569,6 +4948,26 @@ func (d DatastorePostgres) CountResourcesInTarget(targetLabel string) (int, erro
 
 // BulkStoreResourceUpdates stores multiple ResourceUpdates in a single transaction
 // This is the key performance optimization: insert all updates in one transaction
+// marshalOrNil JSON-encodes v, or returns nil for an empty value so the
+// column stays NULL.
+func marshalOrNil(v any) any {
+	switch t := v.(type) {
+	case []resource_update.OccurrenceRecord:
+		if len(t) == 0 {
+			return nil
+		}
+	case map[string]string:
+		if len(t) == 0 {
+			return nil
+		}
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	return string(b)
+}
+
 func (d DatastorePostgres) BulkStoreResourceUpdates(commandID string, updates []resource_update.ResourceUpdate) error {
 	ctx, span := tracer.Start(context.Background(), "BulkStoreResourceUpdates")
 	defer span.End()
@@ -4644,8 +5043,9 @@ func (d DatastorePostgres) BulkStoreResourceUpdates(commandID string, updates []
 				resource, resource_target, existing_resource, existing_target,
 				progress_result, most_recent_progress,
 				remaining_resolvables, reference_labels, previous_properties,
-				is_cascade, cascade_source
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
+				is_cascade, cascade_source, failure_reason,
+				provenance_records, resolved_root_digests
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
 			ON CONFLICT (command_id, ksuid, operation) DO UPDATE SET
 				state = EXCLUDED.state,
 				start_ts = EXCLUDED.start_ts,
@@ -4666,7 +5066,10 @@ func (d DatastorePostgres) BulkStoreResourceUpdates(commandID string, updates []
 				reference_labels = EXCLUDED.reference_labels,
 				previous_properties = EXCLUDED.previous_properties,
 				is_cascade = EXCLUDED.is_cascade,
-				cascade_source = EXCLUDED.cascade_source
+				cascade_source = EXCLUDED.cascade_source,
+				failure_reason = EXCLUDED.failure_reason,
+				provenance_records = EXCLUDED.provenance_records,
+				resolved_root_digests = EXCLUDED.resolved_root_digests
 		`,
 			commandID,
 			ru.DesiredState.Ksuid,
@@ -4691,6 +5094,9 @@ func (d DatastorePostgres) BulkStoreResourceUpdates(commandID string, updates []
 			ru.PreviousProperties,
 			ru.IsCascade,
 			ru.CascadeSource,
+			ru.FailureReason,
+			marshalOrNil(ru.ProvenanceRecords),
+			marshalOrNil(ru.ResolvedRootDigests),
 		)
 		if err != nil {
 			return fmt.Errorf("failed to insert resource update: %w", err)
@@ -4716,7 +5122,8 @@ func (d DatastorePostgres) LoadResourceUpdates(commandID string) ([]resource_upd
 			resource, resource_target, existing_resource, existing_target,
 			progress_result, most_recent_progress,
 			remaining_resolvables, reference_labels, previous_properties,
-			is_cascade, cascade_source
+			is_cascade, cascade_source, failure_reason,
+			provenance_records, resolved_root_digests
 		FROM resource_updates
 		WHERE command_id = $1
 		ORDER BY ksuid ASC
@@ -4739,6 +5146,8 @@ func (d DatastorePostgres) LoadResourceUpdates(commandID string) ([]resource_upd
 		var remainingResolvablesJSON, referenceLabelsJSON, previousPropertiesJSON []byte
 		var ruIsCascade *bool
 		var ruCascadeSource *string
+		var ruFailureReason *string
+		var ruProvenanceRecordsL, ruResolvedRootDigestsL []byte
 
 		err := rows.Scan(
 			&ksuid,
@@ -4763,6 +5172,9 @@ func (d DatastorePostgres) LoadResourceUpdates(commandID string) ([]resource_upd
 			&previousPropertiesJSON,
 			&ruIsCascade,
 			&ruCascadeSource,
+			&ruFailureReason,
+			&ruProvenanceRecordsL,
+			&ruResolvedRootDigestsL,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan resource update: %w", err)
@@ -4830,6 +5242,19 @@ func (d DatastorePostgres) LoadResourceUpdates(commandID string) ([]resource_upd
 		if ruCascadeSource != nil {
 			ru.CascadeSource = *ruCascadeSource
 		}
+		if ruFailureReason != nil {
+			ru.FailureReason = *ruFailureReason
+		}
+		if len(ruProvenanceRecordsL) > 0 {
+			if err := json.Unmarshal(ruProvenanceRecordsL, &ru.ProvenanceRecords); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal provenance records: %w", err)
+			}
+		}
+		if len(ruResolvedRootDigestsL) > 0 {
+			if err := json.Unmarshal(ruResolvedRootDigestsL, &ru.ResolvedRootDigests); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal resolved root digests: %w", err)
+			}
+		}
 
 		updates = append(updates, ru)
 	}
@@ -4864,7 +5289,7 @@ func (d DatastorePostgres) UpdateResourceUpdateState(commandID string, ksuid str
 }
 
 // UpdateResourceUpdateProgress updates a ResourceUpdate with progress information
-func (d DatastorePostgres) UpdateResourceUpdateProgress(commandID string, ksuid string, operation types.OperationType, state resource_update.ResourceUpdateState, startTs time.Time, modifiedTs time.Time, progress plugin.TrackedProgress) error {
+func (d DatastorePostgres) UpdateResourceUpdateProgress(commandID string, ksuid string, operation types.OperationType, state resource_update.ResourceUpdateState, startTs time.Time, modifiedTs time.Time, progress plugin.TrackedProgress, resolvedRootDigests map[string]string) error {
 	ctx, span := tracer.Start(context.Background(), "UpdateResourceUpdateProgress")
 	defer span.End()
 
@@ -4898,11 +5323,12 @@ func (d DatastorePostgres) UpdateResourceUpdateProgress(commandID string, ksuid 
 
 	updateQuery := `
 		UPDATE resource_updates
-		SET state = $1, start_ts = $2, modified_ts = $3, progress_result = $4, most_recent_progress = $5
-		WHERE command_id = $6 AND ksuid = $7 AND operation = $8
+		SET state = $1, start_ts = $2, modified_ts = $3, progress_result = $4, most_recent_progress = $5,
+			resolved_root_digests = COALESCE($6, resolved_root_digests)
+		WHERE command_id = $7 AND ksuid = $8 AND operation = $9
 	`
 
-	result, err := d.pool.Exec(ctx, updateQuery, string(state), startTs.UTC(), modifiedTs.UTC(), progressJSON, mostRecentJSON, commandID, ksuid, string(operation))
+	result, err := d.pool.Exec(ctx, updateQuery, string(state), startTs.UTC(), modifiedTs.UTC(), progressJSON, mostRecentJSON, marshalOrNil(resolvedRootDigests), commandID, ksuid, string(operation))
 	if err != nil {
 		return fmt.Errorf("failed to update resource update progress: %w", err)
 	}
@@ -5006,7 +5432,12 @@ func (d DatastorePostgres) Pool() *pgxpool.Pool { return d.pool }
 
 // This can be only used in tests or in setups where we have access to admin (non-production)
 func (d DatastorePostgres) CleanUp() error {
-	connStr := BuildConnStr(d.cfg.Postgres.Host, d.cfg.Postgres.Port, d.cfg.Postgres.User, d.cfg.Postgres.Password, d.cfg.Postgres.Database)
+	password, err := resolvePassword(d.ctx, &d.cfg.Postgres)
+	if err != nil {
+		return err
+	}
+
+	connStr := BuildConnStr(d.cfg.Postgres.Host, d.cfg.Postgres.Port, d.cfg.Postgres.User, password, d.cfg.Postgres.Database)
 
 	conn, err := pgx.Connect(d.ctx, connStr)
 	if err != nil {

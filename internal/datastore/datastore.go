@@ -53,7 +53,6 @@ type StatusQuery struct {
 	Command     *QueryItem[string]
 	Status      *QueryItem[string]
 	Stack       *QueryItem[string]
-	Managed     *QueryItem[bool]
 	Subject     *QueryItem[string]
 	SubjectName *QueryItem[string]
 	// Source restricts results to a FormaCommand source (forma_command.Source,
@@ -94,6 +93,7 @@ type ResourceModification struct {
 	Type          string
 	Label         string
 	Operation     string
+	Ksuid         string
 	Properties    json.RawMessage // current (cloud) properties — update ops only
 	OldProperties json.RawMessage // properties at last reconcile — update ops only
 }
@@ -230,6 +230,45 @@ type ResourceSnapshot struct {
 	Schema     pkgmodel.Schema
 }
 
+// GeneratorIdentity is controller state for one generator: its stable KSUID
+// and the generation it currently holds. Deliberately kept off
+// pkgmodel.Generator so it can never participate in desired-config equality.
+//
+// GenerationSpec's bytes are NOT canonical: Postgres and Aurora store it as
+// JSONB, which normalizes key order and whitespace on write, so what comes
+// back can differ byte-for-byte from what AdvanceGeneration was given.
+// Parse it; never byte-compare or hash it against the spec that was drawn.
+//
+// Aliased to pkgmodel.GeneratorIdentity (not a local struct) so that
+// resource_update.ResourceDataLookup — which must not import
+// internal/datastore, since internal/datastore imports resource_update for
+// ResourceUpdate — can still declare a GetGeneratorIdentity method returning
+// this exact type, and any Datastore implementation satisfies both
+// interfaces with the same method.
+type GeneratorIdentity = pkgmodel.GeneratorIdentity
+
+// GeneratorRotationInfo is one rotating generator's cadence and the instant
+// its last rotation committed.
+//
+// LastRotationAt is DERIVED at query time and stored nowhere: it is the start
+// of the most recent command that both advanced this generator's generation
+// and succeeded. Keeping it off the generator is the same choice policies
+// make with LastReconcileAt — a stored last-rotated-at would participate in
+// desired-config equality, show up as metadata drift, and be rendered into
+// formae people copy between environments.
+//
+// Zero means no rotation has ever committed for this generator, which makes it
+// due immediately. A draw whose command failed leaves the zero value in place:
+// the generation row exists, but the command that would have propagated it
+// does not read Success, so it advances no cadence.
+type GeneratorRotationInfo struct {
+	GeneratorID     string
+	Label           string
+	StackLabel      string
+	IntervalSeconds int
+	LastRotationAt  time.Time
+}
+
 // Datastore defines the persistence interface for formae.
 // It handles storage and retrieval of FormaCommands (requested changes),
 // Resources (actual cloud state), Stacks, and Targets.
@@ -260,6 +299,13 @@ type Datastore interface {
 	GetMostRecentFormaCommandByClientID(clientID string) (*forma_command.FormaCommand, error)
 	// GetResourceModificationsSinceLastReconcile returns resources modified since the last reconcile
 	GetResourceModificationsSinceLastReconcile(stack string) ([]ResourceModification, error)
+
+	// GetPropertiesAtLastWrite returns the resource's Properties as recorded
+	// by the most recent version persisted under an apply command: the state
+	// formae's own last write observed (the create/update echo). Sync and
+	// discovery never advance it. Returns nil when formae never wrote the
+	// resource.
+	GetPropertiesAtLastWrite(ksuid string) (json.RawMessage, error)
 	// QueryFormaCommands searches commands based on filter criteria
 	QueryFormaCommands(query *StatusQuery) ([]*forma_command.FormaCommand, error)
 
@@ -320,11 +366,30 @@ type Datastore interface {
 	// ksuid's latest version is a delete or reaped tombstone, so callers receive
 	// not-found semantics for deleted resources regardless of their prior history.
 	LoadLatestResourceByKsuid(ksuid string) (*pkgmodel.Resource, error)
-	// FindResourcesDependingOn returns all resources that reference the given resource via $ref
+	// FindResourcesDependingOn returns all resources that reference the given
+	// resource via $ref. It takes a resource KSUID and only a resource KSUID:
+	// backends read $ref dependencies from different places (postgres and aurora
+	// from the refs column, sqlite and mssql by scanning the document), and the
+	// refs column records generator KSUIDs too, so the families agree on a
+	// resource KSUID and would disagree on a generator one. Generators are
+	// FindResourcesReferencingGenerator's question, not this one.
 	FindResourcesDependingOn(ksuid string) ([]*pkgmodel.Resource, error)
 	// FindResourcesDependingOnMany returns all resources that reference any of the given resources via $ref.
 	// Returns a map from referenced KSUID to the resources that depend on it.
+	// It carries FindResourcesDependingOn's resource-KSUID-only contract.
 	FindResourcesDependingOnMany(ksuids []string) (map[string][]*pkgmodel.Resource, error)
+	// FindResourcesReferencingGenerator returns all live resources that bind a
+	// property to the given generator through a translated $gen envelope.
+	// Superseded versions and deleted or reaped resources are excluded, so each
+	// returned resource appears once at its current version. An unknown
+	// generator KSUID yields an empty result, not an error, and a resource KSUID
+	// reached through $ref names no generator and yields nothing.
+	//
+	// Every backend returns the same set by construction. Each one's SQL is an
+	// index prefilter only, deliberately broader than the truth so that a
+	// destination is never missed, and pkgmodel.BindsGenerator is the
+	// authoritative test every candidate row must pass before it is returned.
+	FindResourcesReferencingGenerator(generatorKsuid string) ([]*pkgmodel.Resource, error)
 	// FindTargetsDependingOnMany returns all targets whose config references any of the given resources via $ref.
 	// Returns a map from source KSUID to the list of dependent targets.
 	FindTargetsDependingOnMany(ksuids []string) (map[string][]*pkgmodel.Target, error)
@@ -487,6 +552,65 @@ type Datastore interface {
 	// that are not in a terminal state (Success, Failed, Canceled)
 	StackHasActiveCommands(stackLabel string) (bool, error)
 
+	// Generator operations - a generator produces a value (e.g. a random
+	// password) that a secret will later reference. Unlike a policy, a
+	// generator has no standalone form: it is always owned by exactly one
+	// stack, so there is no stack_generators junction table and no
+	// attach/detach.
+
+	// CreateGenerator persists a new generator (returns version string)
+	CreateGenerator(gen pkgmodel.Generator, commandID string) (string, error)
+	// UpdateGenerator persists a new version of an existing generator, found
+	// by label and stack (returns version string)
+	UpdateGenerator(gen pkgmodel.Generator, commandID string) (string, error)
+	// DeleteGenerator soft-deletes the generator with the given label on the
+	// given stack (returns version string). A label with no live match is a
+	// no-op success that returns an empty version.
+	DeleteGenerator(label, stackLabel string) (string, error)
+	// GetGenerator retrieves the current generator with the given label on
+	// the given stack. Returns nil, nil if no live generator is found.
+	GetGenerator(label, stackLabel string) (pkgmodel.Generator, error)
+	// LoadGeneratorsByStack returns all non-deleted generators owned by a
+	// stack.
+	LoadGeneratorsByStack(stackLabel string) ([]pkgmodel.Generator, error)
+	// GetGeneratorIdentity returns the identity of the live generator with
+	// this label on this stack. A zero GeneratorIdentity and a nil error
+	// mean no such generator, matching GetGenerator's absent-is-not-an-error
+	// convention.
+	GetGeneratorIdentity(label, stackLabel string) (GeneratorIdentity, error)
+	// GetGeneratorIdentityByID returns the identity of the live generator
+	// with this KSUID, whichever stack owns it. Zero value plus nil error
+	// when absent.
+	GetGeneratorIdentityByID(generatorID string) (GeneratorIdentity, error)
+	// GetGeneratorsWithRotation returns every live generator that declares a
+	// rotation cadence, with the instant its last rotation committed. Modeled
+	// on GetStacksWithAutoReconcilePolicy: the cadence and the last run come
+	// back together, and the caller decides what is due.
+	//
+	// A generator whose stack has been deleted, or whose own latest row is a
+	// delete, is absent. So is one whose latest row no longer declares a
+	// cadence, which is what makes removing rotation take effect on the next
+	// sweep rather than at the next restart.
+	GetGeneratorsWithRotation() ([]GeneratorRotationInfo, error)
+	// AdvanceGeneration records that a new generation was drawn for this
+	// generator, under this spec. Writes a new version row, preserving the
+	// KSUID. Errors if generationID is empty, if drawnUnder is not valid
+	// JSON (a generation always has a spec it was drawn under, and every
+	// backend must agree on what counts as one), or if the generator has
+	// been deleted — a tombstoned id is not resurrected.
+	//
+	// Called by the GeneratorUpdater, which records the generation before it
+	// reports the drawn value: a value handed to a destination under a
+	// generation nobody stored is exactly the state the next apply cannot
+	// reason about.
+	//
+	// commandID is the command the draw belongs to. It is what makes the
+	// rotation cadence derivable: a generation row alone says a value was
+	// drawn, and the command it was drawn by says whether that value ever
+	// reached its destinations. GetGeneratorsWithRotation joins the two, so
+	// a draw whose command failed advances no cadence.
+	AdvanceGeneration(generatorID, generationID, commandID string, drawnUnder json.RawMessage) error
+
 	// Close releases database connections
 	Close()
 
@@ -507,7 +631,9 @@ type Datastore interface {
 	// UpdateResourceUpdateProgress updates a ResourceUpdate with progress information.
 	// startTs is persisted so an in-progress status read (which loads straight from
 	// the datastore, before finalization) reports the real start time.
-	UpdateResourceUpdateProgress(commandID string, ksuid string, operation types.OperationType, state resource_update.ResourceUpdateState, startTs time.Time, modifiedTs time.Time, progress plugin.TrackedProgress) error
+	// resolvedRootDigests rides the progress write so provenance digests are
+	// durable exactly when progress is; nil leaves the stored map unchanged.
+	UpdateResourceUpdateProgress(commandID string, ksuid string, operation types.OperationType, state resource_update.ResourceUpdateState, startTs time.Time, modifiedTs time.Time, progress plugin.TrackedProgress, resolvedRootDigests map[string]string) error
 
 	// BatchUpdateResourceUpdateState updates multiple ResourceUpdates to the same state
 	// Used for bulk operations like marking dependent resources as failed

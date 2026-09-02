@@ -97,6 +97,15 @@ type TestDatastore struct {
 	// Backends that don't provide it leave it nil and the relevant tests
 	// t.Skip().
 	NullFormaCommandSubjectForTest func(commandID string) error
+	// GeneratorIDForTest returns the internal KSUID identity (the id column,
+	// stable across CreateGenerator/UpdateGenerator) of the current
+	// (max-version) generator row with the given label on the given stack, or
+	// "" if none exists. Generator has no public API that exposes this id —
+	// the Datastore interface returns only version strings — so the suite
+	// needs a direct accessor to prove the id survives an update unchanged.
+	// Backends that don't provide it leave it nil and the relevant tests
+	// t.Skip().
+	GeneratorIDForTest func(label, stackLabel string) (string, error)
 }
 
 // RunAll runs the full datastore test suite against the provided factory.
@@ -110,6 +119,8 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunStoreAndLoadFormaCommandOptionalFields(t, newDS)
 	RunStoreAndLoadFormaCommandEmptySubject(t, newDS)
 	RunFormaCommandSubjectNullRoundTrip(t, newDS)
+	RunGetPropertiesAtLastWrite(t, newDS)
+	RunGetWriteWitness_UpdateEchoDoesNotLaunderUnwrittenFields(t, newDS)
 	RunStoreFormaCommandSyncSkipsResourceUpdates(t, newDS)
 	RunCommandSourceRoundTrip(t, newDS)
 	RunGetMostRecentFormaCommandByClientID(t, newDS)
@@ -125,6 +136,8 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunMonotonicTerminalityTest(t, newDS)
 	RunMonotonicTerminalityRaceTest(t, newDS)
 	RunForceCancelResourceUpdatesTest(t, newDS)
+	RunResourceUpdateFailureReasonRoundTrip(t, newDS)
+	RunResourceUpdateProvenanceRoundTrip(t, newDS)
 
 	RunRecordAgentBoot(t, newDS)
 	RunAgentBootsAreAppendOnly(t, newDS)
@@ -228,6 +241,40 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunDeleteInlinePolicyClearsExpiry(t, newDS)
 	RunDeleteInlinePolicyThenRecreate(t, newDS)
 
+	RunCreateGeneratorThenGet(t, newDS)
+	RunCreateGeneratorHonorsPreAssignedID(t, newDS)
+	RunGetGeneratorAbsentReturnsNil(t, newDS)
+	RunUpdateGeneratorBumpsVersionAndReadBackReflectsIt(t, newDS)
+	RunDeleteGeneratorThenGetReturnsNil(t, newDS)
+	RunLoadGeneratorsByStackReturnsOnlyThatStacksGenerators(t, newDS)
+	RunGeneratorKSUIDStableAcrossUpdate(t, newDS)
+	RunGeneratorKSUIDStableAcrossRename(t, newDS)
+	RunDeleteGeneratorAfterRenameDeletesOnlyTheCurrentRow(t, newDS)
+	RunGeneratorHasNoGenerationUntilOneIsDrawn(t, newDS)
+	RunAdvanceGenerationRecordsIdentityAndDrawingSpec(t, newDS)
+	RunGenerationSurvivesASpecUpdate(t, newDS)
+	RunGenerationSurvivesARename(t, newDS)
+	RunGetGeneratorIdentityByIDFindsTheLiveRow(t, newDS)
+	RunGetGeneratorIdentityAbsentReturnsZeroValue(t, newDS)
+	RunGeneratorIdentityOldLabelIsGoneAfterRename(t, newDS)
+	RunGeneratorIdentityGoneAfterDelete(t, newDS)
+	RunGenerationSurvivesRenameBackToOriginalLabel(t, newDS)
+	RunAdvanceGenerationTwiceSecondWins(t, newDS)
+	RunAdvanceGenerationDoesNotAffectOtherGenerator(t, newDS)
+	RunAdvanceGenerationOnDeletedGeneratorFailsWithoutResurrecting(t, newDS)
+	RunAdvanceGenerationRejectsMalformedSpecAndEmptyGenerationID(t, newDS)
+
+	RunGetGeneratorsWithRotation_Empty(t, newDS)
+	RunGetGeneratorsWithRotation_CadenceAndStackLabel(t, newDS)
+	RunGetGeneratorsWithRotation_WithoutCadenceExcluded(t, newDS)
+	RunGetGeneratorsWithRotation_LastRotationFromCommittedDraw(t, newDS)
+	RunGetGeneratorsWithRotation_FailedCommandAdvancesNothing(t, newDS)
+	RunGetGeneratorsWithRotation_LatestCommittedDrawWins(t, newDS)
+	RunGetGeneratorsWithRotation_PerGeneratorLastRotation(t, newDS)
+	RunGetGeneratorsWithRotation_DeletedGeneratorExcluded(t, newDS)
+	RunGetGeneratorsWithRotation_RemovedCadenceExcluded(t, newDS)
+	RunGetGeneratorsWithRotation_ChangedCadenceReadFromLatest(t, newDS)
+
 	RunFindResourcesDependingOn(t, newDS)
 	RunFindResourcesDependingOnMultipleRefs(t, newDS)
 	RunFindResourcesDependingOnNoRefs(t, newDS)
@@ -237,6 +284,19 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunFindResourcesDependingOnMany_FrontierMemberOverlap(t, newDS)
 	RunFindResourcesDependingOnMany_DeepChain(t, newDS)
 	RunFindResourcesDependingOnMany_BroadFanOut(t, newDS)
+
+	RunFindResourcesReferencingGenerator(t, newDS)
+	RunFindResourcesReferencingGeneratorOtherGeneratorExcluded(t, newDS)
+	RunFindResourcesReferencingGeneratorUnboundResourceExcluded(t, newDS)
+	RunFindResourcesReferencingGeneratorAcrossStacks(t, newDS)
+	RunFindResourcesReferencingGeneratorDeletedExcluded(t, newDS)
+	RunFindResourcesReferencingGeneratorLatestVersionOnly(t, newDS)
+	RunFindResourcesReferencingGeneratorUnknownGenerator(t, newDS)
+	RunFindResourcesReferencingGeneratorNestedInArray(t, newDS)
+	RunFindResourcesReferencingGeneratorBareGeneratorKeyExcluded(t, newDS)
+	RunFindResourcesReferencingGeneratorGenFalseExcluded(t, newDS)
+	RunFindResourcesReferencingGeneratorCaseSensitive(t, newDS)
+	RunFindResourcesReferencingGeneratorResourceRefExcluded(t, newDS)
 
 	RunStackTransition(t, newDS)
 

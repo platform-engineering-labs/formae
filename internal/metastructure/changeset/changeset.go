@@ -13,6 +13,7 @@ import (
 
 	"log/slog"
 
+	"github.com/platform-engineering-labs/formae/internal/metastructure/generator_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
@@ -69,14 +70,21 @@ type DAGNode struct {
 	Dependencies []*DAGNode
 }
 
-// NewChangeset builds the execution DAG from the given resource and target
-// updates. It is a pure graph-builder: any synthetic Resolve target ops the
-// command needs (for unchanged targets carrying opaque $ref config) are generated
-// in the Update-construction phase by target_update.SynthesizeResolveTargetUpdates
-// and passed in via targetUpdates, so this constructor needs no datastore.
+// NewChangeset builds the execution DAG from the given resource, target and
+// generator updates. It is a pure graph-builder: the synthetic ops the command
+// needs are generated in the Update-construction phase and passed in — Resolve
+// target ops (for unchanged targets carrying opaque $ref config) by
+// target_update.SynthesizeResolveTargetUpdates, and generator draws by
+// generator_update.SynthesizeDrawGeneratorUpdates — so this constructor needs
+// no datastore.
+//
+// generatorUpdates carries draw ops only. A generator's own row is created,
+// updated or deleted before the changeset starts, so those operations never
+// appear here.
 func NewChangeset(
 	resourceUpdates []resource_update.ResourceUpdate,
 	targetUpdates []target_update.TargetUpdate,
+	generatorUpdates []generator_update.GeneratorUpdate,
 	commandID string,
 	command pkgmodel.Command,
 	mode pkgmodel.FormaApplyMode,
@@ -136,12 +144,33 @@ func NewChangeset(
 	// Build implicit edges between target and resource nodes
 	changeset.DAG.buildTargetResourceEdges(targetUpdates)
 
-	// Re-run cycle detection over the FULL graph. DAG.Init runs its cycle check
-	// before any target node or target-resolvable edge exists, so a cycle formed
-	// purely by target-resolvable edges — two in-command targets whose configs
-	// reference each other's secrets, or a target referencing a secret hosted on
-	// itself — would otherwise slip through and hang the executor. This second
-	// pass turns any such cycle into a clean build-time error.
+	// Copy the generator draws into a local slice for the same reason the
+	// target ops are copied: DAG nodes must not point into a caller's
+	// backing array.
+	allGeneratorOps := make([]generator_update.GeneratorUpdate, len(generatorUpdates))
+	copy(allGeneratorOps, generatorUpdates)
+
+	for i := range allGeneratorOps {
+		gu := &allGeneratorOps[i]
+		changeset.DAG.Nodes[gu.NodeURI()] = &DAGNode{
+			URI:          gu.NodeURI(),
+			Update:       gu,
+			Dependents:   []*DAGNode{},
+			Dependencies: []*DAGNode{},
+		}
+	}
+
+	if err := changeset.DAG.buildGeneratorResourceEdges(allGeneratorOps); err != nil {
+		return Changeset{}, err
+	}
+
+	// Re-run cycle detection over the FULL graph, generator edges included.
+	// DAG.Init runs its cycle check before any target node, target-resolvable
+	// edge or generator node exists, so a cycle formed purely by
+	// target-resolvable edges — two in-command targets whose configs reference
+	// each other's secrets, or a target referencing a secret hosted on itself —
+	// would otherwise slip through and hang the executor. This second pass
+	// turns any such cycle into a clean build-time error.
 	if changeset.DAG.HasCycles() {
 		return Changeset{}, fmt.Errorf("changeset has a dependency cycle involving target-resolvable references")
 	}
@@ -279,6 +308,71 @@ func (p *ExecutionDAG) buildTargetResourceEdges(targetUpdates []target_update.Ta
 			}
 		}
 	}
+}
+
+// buildGeneratorResourceEdges wires every resource op that still needs a value
+// from a generator to that generator's draw node, so the op cannot dispatch
+// before the value exists.
+//
+// EVERY live destination is wired, whatever its $gen occurrence classified at
+// planning. Stability decides whether the generator draws at all
+// (resource_update.GeneratorsNeedingDraw); once a draw is in the graph, every
+// destination of it must receive the value, so every destination must also
+// wait for it. Wiring only the unstable ones would let a stable destination
+// dispatch before the draw and keep the old generation while its sibling took
+// the new one, which is how two consumers of one credential end up holding
+// different values.
+//
+// A destination being torn down is skipped, matching the rule that decides
+// whether to draw at all and the one that delivers: a delete's DesiredState is
+// the stored resource, so it carries the stored envelope, writes nothing, and
+// must not pull a fresh credential into a row on its way out.
+//
+// A draw node is a sink: it has no dependencies of its own, so no edge added
+// here can close a cycle. The full-graph re-check still runs over these edges,
+// which is what keeps that property honest if a draw ever gains an upstream.
+func (p *ExecutionDAG) buildGeneratorResourceEdges(generatorUpdates []generator_update.GeneratorUpdate) error {
+	for i := range generatorUpdates {
+		gu := &generatorUpdates[i]
+		generatorNode := p.Nodes[gu.NodeURI()]
+		if generatorNode == nil {
+			continue
+		}
+
+		// The generator's KSUID is what a translated $gen envelope names it
+		// by. Without one the draw cannot be matched to any destination, so
+		// every destination bound to it would dispatch its envelope undrawn
+		// and be rejected at the provider boundary — on this apply and on
+		// every one after. Refuse to build such a changeset.
+		var generatorKsuid string
+		if gu.Generator != nil {
+			generatorKsuid = gu.Generator.GetID()
+		}
+		if generatorKsuid == "" {
+			return fmt.Errorf(
+				"generator update %s carries no generator identity, so the destinations bound to it cannot be found",
+				gu.NodeURI())
+		}
+
+		for _, node := range p.Nodes {
+			ru, ok := node.Update.(*resource_update.ResourceUpdate)
+			if !ok {
+				continue
+			}
+			if ru.Operation == resource_update.OperationDelete || ru.Operation == resource_update.OperationReaped {
+				continue
+			}
+			for _, gen := range pkgmodel.FindGenObjectsFromProperties(ru.DesiredState.Properties) {
+				if gen.Generator != generatorKsuid {
+					continue
+				}
+				node.LinkWith(generatorNode)
+				break
+			}
+		}
+	}
+
+	return nil
 }
 
 // buildDeleteDependencies creates dependencies for delete operations.
@@ -764,6 +858,91 @@ func (p *ExecutionDAG) propagateResolvedTargetConfig(targetLabel string, pluginC
 			}
 		}
 	}
+}
+
+// propagateDrawnGeneratorValue delivers a generator's freshly drawn value to
+// every resource-update node holding a destination bound to it. It is the
+// generator analogue of propagateResolvedTargetConfig, and it is safe for the
+// same reason: the ordering edges buildGeneratorResourceEdges added guarantee
+// no destination has dispatched yet, and startResourceUpdate takes a value
+// copy of the update at dispatch, so writing into the live node here is seen
+// by the dispatch that follows and by nothing that already happened.
+//
+// Delivery goes through ResourceUpdate.ResolveGeneratorValue rather than a
+// raw write for two reasons. The value must land inside the $gen envelope, so
+// the $visibility:"Opaque" marker that makes it hash at rest survives; and
+// mutating DesiredState.Properties invalidates the derived PatchDocument,
+// which must be re-derived under mode — the changeset's own apply mode, the
+// one planning used — or a reconcile-planned removal silently vanishes.
+//
+// mode is a parameter rather than DAG state because the ExecutionDAG does not
+// carry the command's configuration; the Changeset does, and the executor
+// passes changeset.Mode.
+//
+// A destination being torn down is skipped, matching the rule that decides
+// whether to draw at all (resource_update.GeneratorsNeedingDraw): a delete's
+// DesiredState is the stored resource, so it carries the stored envelope and
+// writes nothing, and delivering there would put a live credential into a row
+// on its way out.
+//
+// Every other destination receives it, whatever its occurrence classified.
+// The invariant is: once a generator draws, every live destination of it IN
+// THIS CHANGESET holds the same value and is stamped with the same
+// generation. The boundary is the changeset itself. A destination that is not
+// a node here — planned by another command, or suppressed by this one because
+// nothing about it moved — cannot be reached, and cannot be caught up later
+// either, because formae stores only a hash of a generated value and never
+// the value. Such a destination keeps an older generation and diverges from
+// its siblings; closing that needs co-planning, not a wider delivery.
+//
+// generatorKsuid is the caller's to guarantee non-empty. It is matched against
+// each occurrence's own $generator, and an AUTHORED (not yet translated)
+// envelope carries none — so an empty ksuid here would match every
+// untranslated envelope in the changeset and deliver the credential into all
+// of them. buildGeneratorResourceEdges already refuses to build a changeset
+// whose draw carries no identity, but that safety property lives in another
+// file and this is the path that writes credentials, so it is restated here
+// where it applies.
+//
+// generationID is the generation the value was drawn under. It is what every
+// destination receiving the value is stamped with, so an unnamed generation
+// is refused for the same reason an unnamed generator is: the value would be
+// delivered with no provenance, every later apply would read the destination
+// as unknown movement, and the credential would silently rotate on each one.
+//
+// An error means some destination did not receive its value. The caller must
+// fail the draw closed rather than let a destination dispatch its undrawn
+// envelope.
+func (p *ExecutionDAG) propagateDrawnGeneratorValue(generatorKsuid string, value string, generationID string, mode pkgmodel.FormaApplyMode) error {
+	if generatorKsuid == "" {
+		return fmt.Errorf("cannot deliver a drawn value: the draw names no generator")
+	}
+	if value == "" {
+		// A success carrying no value cannot be delivered: writing an empty
+		// string into a destination would hand a provider a blank credential
+		// that nothing downstream would flag.
+		return fmt.Errorf("generator %s reported a successful draw with no value", generatorKsuid)
+	}
+	if generationID == "" {
+		return fmt.Errorf("generator %s reported a successful draw naming no generation", generatorKsuid)
+	}
+
+	for _, node := range p.Nodes {
+		ru, ok := node.Update.(*resource_update.ResourceUpdate)
+		if !ok {
+			continue
+		}
+		if ru.Operation == resource_update.OperationDelete || ru.Operation == resource_update.OperationReaped {
+			continue
+		}
+		if err := ru.ResolveGeneratorValue(generatorKsuid, value, generationID, mode); err != nil {
+			// The error names paths and identities only, never the value.
+			return fmt.Errorf("failed to deliver the value drawn for generator %s to %s: %w",
+				generatorKsuid, ru.URI(), err)
+		}
+	}
+
+	return nil
 }
 
 // clearTargetIncarnationOnResources drops the target-incarnation expectation

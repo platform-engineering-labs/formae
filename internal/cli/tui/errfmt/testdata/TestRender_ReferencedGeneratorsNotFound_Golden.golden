@@ -1,0 +1,7 @@
+[38;2;248;113;113mforma command rejected because the following referenced generators were not found:[0m
+  db-password
+    [38;2;153;153;153mfrom stack [0mdefault
+    [38;2;153;153;153moutput [0mvalue
+  api-key
+    [38;2;153;153;153mfrom stack [0msecrets
+    [38;2;153;153;153moutput [0mvalue

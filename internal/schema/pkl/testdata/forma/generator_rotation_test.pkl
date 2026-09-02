@@ -1,0 +1,50 @@
+/*
+ * © 2026 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+// A generator that declares a rotation cadence, and a plugin resource whose
+// secret-bearing property is bound to that generator's `value` output. The
+// cadence lives on the generator rather than on the secret, so one interval
+// governs every destination that shares the credential.
+//
+// `every` is one minute, the shortest cadence the schema admits. The test does
+// not wait for it: it backdates the anchor the cadence is measured from and
+// drives the scheduler's sweep directly.
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+import "@fakeaws/fakeaws.pkl"
+import "@fakeaws/secretsmanager/secret.pkl"
+
+forma {
+  local appStack = new formae.Stack {
+    label = "generator-rotation-stack"
+    description = "Stack for a rotating generator and its destination"
+  }
+  appStack
+
+  new formae.Target {
+    label = "default-aws-target"
+    config = new fakeaws.Config {
+      region = "us-west-2"
+    }
+  }
+
+  local pw = new formae.PasswordGenerator {
+    label = "db-password"
+    stack = appStack.res
+    length = 24
+    rotation = new formae.RotationSpec {
+      every = 1.min
+    }
+  }
+  pw
+
+  new secret.Secret {
+    label = "db"
+    name = "db"
+    secretString = pw.gen.value
+  }
+}

@@ -333,6 +333,72 @@ local testSecretAliasResource = new TestSecretAliasResource {
     secretAliased = "shh-alias"
 }
 
+// Test a field that names formae.ValueSource in place of spelling the envelope
+// members out: the field is still marked Opaque, it takes each member of the
+// alias, and it rejects a value belonging to none of them. A second field pairs
+// the alias with a constrained String literal, so that the constraint is shown
+// to survive the alias beside it.
+@formae.ResourceHint {
+    type = "Test::ValueSource"
+    identifier = "Ref"
+}
+local class TestValueSourceResource extends formae.Resource {
+    @formae.FieldHint
+    supplied: (String|formae.ValueSource)?
+
+    @formae.FieldHint
+    constrained: (String(matches(Regex(#"ok-.*"#)))|formae.ValueSource)?
+
+    @formae.FieldHint
+    plain: String
+}
+
+local testValueSourceResource = new TestValueSourceResource {
+    label = "test-value-source"
+    supplied = "literal"
+    plain = "value"
+}
+
+// One instance per member of the alias, so a member the alias fails to admit is
+// an eval-time type error on that instance rather than a silent pass.
+local valueSourceLiteral = (testValueSourceResource) { supplied = "literal" }
+
+local valueSourceValue = (testValueSourceResource) {
+    supplied = new formae.Value { value = "recorded" }
+}
+
+local valueSourceSecret = (testValueSourceResource) {
+    supplied = new formae.SecretValue { value = "shh" }
+}
+
+local valueSourceResolvable = (testValueSourceResource) {
+    supplied = new formae.Resolvable {
+        label = "bucket"
+        stack = "storage"
+        type = "namespace::resource::s3bucket"
+        property = "BucketName"
+    }
+}
+
+local valueSourceGenerated = (testValueSourceResource) {
+    supplied = new formae.GeneratorOutput {
+        genLabel = "db-password-gen"
+        output = "value"
+    }
+}
+
+// A member of no envelope family the alias names, so the alias is shown to be a
+// closed set rather than anything at all.
+local valueSourceForeign = (testValueSourceResource) {
+    supplied = formae.embed("a-template")
+}
+
+local constrainedMatching = (testValueSourceResource) { constrained = "ok-literal" }
+local constrainedViolating = (testValueSourceResource) { constrained = "BAD" }
+local constrainedEnvelope = (testValueSourceResource) {
+    constrained = new formae.SecretValue { value = "shh" }
+}
+
 // Test config class with ConfigFieldHint annotations
 local class TestConfig {
     hidden fixed type: String = "TestProvider"
@@ -405,6 +471,41 @@ local bothVariantsTTL = new formae.TTLPolicy {
 
 local neitherVariantTTL = new formae.TTLPolicy {
     label = "neither-ttl"
+}
+
+local rotatingGenerator = new formae.PasswordGenerator {
+    label = "rotating-password"
+    stack = stackResolvable
+    rotation = new formae.RotationSpec {
+        every = 24.h
+    }
+}
+
+local nonRotatingGenerator = new formae.PasswordGenerator {
+    label = "steady-password"
+    stack = stackResolvable
+}
+
+local cadencelessRotation = new formae.PasswordGenerator {
+    label = "cadenceless-password"
+    stack = stackResolvable
+    rotation = new formae.RotationSpec {}
+}
+
+local subMinuteRotation = new formae.PasswordGenerator {
+    label = "sub-minute-password"
+    stack = stackResolvable
+    rotation = new formae.RotationSpec {
+        every = 500.ms
+    }
+}
+
+local minimumRotation = new formae.PasswordGenerator {
+    label = "minimum-password"
+    stack = stackResolvable
+    rotation = new formae.RotationSpec {
+        every = 1.min
+    }
 }
 
 // Schema classes that sit under an intermediate base rather than extending
@@ -700,9 +801,39 @@ examples {
     ["TTL policy with neither ttl nor expiresAt is rejected"] {
         module.catch(() -> neitherVariantTTL.render())
     }
+
+    ["Generator with rotation render()"] {
+        rotatingGenerator.render()
+    }
+
+    ["Generator without rotation render()"] {
+        nonRotatingGenerator.render()
+    }
 }
 
 facts {
+    ["Rotation renders its cadence in seconds"] {
+        rotatingGenerator.render().Rotation.EverySeconds == 86400
+    }
+
+    ["A generator without rotation renders no cadence"] {
+        rotatingGenerator.render().toMap().containsKey("Rotation") &&
+        nonRotatingGenerator.render().Rotation == null
+    }
+
+    ["A rotation spec without a cadence is rejected"] {
+        module.catch(() -> cadencelessRotation.render().Rotation.EverySeconds) != null
+    }
+
+    ["A cadence below the scheduler's floor is rejected, naming the field"] {
+        module.catch(() -> subMinuteRotation.render().Rotation.EverySeconds)
+            .contains("RotationSpec.every")
+    }
+
+    ["The floor itself is a cadence"] {
+        minimumRotation.render().Rotation.EverySeconds == 60
+    }
+
     ["Relative TTL policy renders TTLSeconds and no ExpiresAt"] {
         relativeTTL.render().toMap().containsKey("TTLSeconds") &&
         !relativeTTL.render().toMap().containsKey("ExpiresAt") &&
@@ -911,6 +1042,53 @@ facts {
     ["Opaque hint set for typealias-typed SecretValue field"] {
         let (hints = testSecretAliasResource.hints())
         hints["secretAliased"].Opaque == true
+    }
+
+    ["Opaque hint set for a field naming ValueSource"] {
+        let (hints = testValueSourceResource.hints())
+        hints["supplied"].Opaque == true &&
+        hints["constrained"].Opaque == true &&
+        hints["plain"].Opaque == false
+    }
+
+    ["A field naming ValueSource takes a literal String"] {
+        valueSourceLiteral.supplied == "literal"
+    }
+
+    ["A field naming ValueSource takes a recorded Value"] {
+        (valueSourceValue.supplied as formae.Value).$value == "recorded"
+    }
+
+    ["A field naming ValueSource takes a SecretValue"] {
+        (valueSourceSecret.supplied as formae.SecretValue).$value == "shh"
+    }
+
+    ["A field naming ValueSource takes a Resolvable"] {
+        (valueSourceResolvable.supplied as formae.Resolvable).$property == "BucketName"
+    }
+
+    ["A field naming ValueSource takes a GeneratorOutput"] {
+        (valueSourceGenerated.supplied as formae.GeneratorOutput).$output == "value"
+    }
+
+    ["A field naming ValueSource rejects an envelope of no member's family"] {
+        module.catch(() -> valueSourceForeign.supplied)
+            .contains("String|formae.ValueSource")
+    }
+
+    ["A constrained literal beside ValueSource takes a matching String"] {
+        constrainedMatching.constrained == "ok-literal"
+    }
+
+    // The constraint is what breaks were String a member of the alias: the
+    // alias's own unconstrained String arm would take this value.
+    ["A constrained literal beside ValueSource rejects a violating String"] {
+        module.catch(() -> constrainedViolating.constrained)
+            .contains("matches(Regex(#\"ok-.*\"#))")
+    }
+
+    ["A constrained literal beside ValueSource still takes an envelope"] {
+        (constrainedEnvelope.constrained as formae.SecretValue).$value == "shh"
     }
 
     ["FieldHint exposes AttachesTo"] {

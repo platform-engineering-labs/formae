@@ -18,6 +18,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/discovery"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/generator_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/policy_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
@@ -87,6 +88,12 @@ func (rp *ResourcePersister) HandleCall(from gen.PID, ref gen.Ref, request any) 
 		return versions, nil
 	case policy_update.PersistPolicyUpdates:
 		versions, err := rp.persistPolicyUpdates(req.PolicyUpdates, req.CommandID, req.StackIDMap)
+		if err != nil {
+			return nil, err
+		}
+		return versions, nil
+	case generator_update.PersistGeneratorUpdates:
+		versions, err := rp.persistGeneratorUpdates(req.GeneratorUpdates, req.CommandID, req.StackIDMap)
 		if err != nil {
 			return nil, err
 		}
@@ -211,9 +218,13 @@ func (rp *ResourcePersister) storeResourceUpdate(commandID string, resourceOpera
 	if err != nil {
 		slog.Error("Failed to persist resource updates",
 			"error", err,
-			"resource", resourceUpdate.DesiredState,
+			"resourceLabel", resourceUpdate.DesiredState.Label,
+			"stackLabel", resourceUpdate.DesiredState.Stack,
+			"resourceType", resourceUpdate.DesiredState.Type,
+			"resourceProperties", pkgmodel.RedactOpaqueJSONForLog(resourceUpdate.DesiredState.Properties),
 			"operation", pluginOperation)
-		return "", fmt.Errorf("failed to store stacks for resource update %v: %w", resourceUpdate.DesiredState, err)
+		return "", fmt.Errorf("failed to store stacks for resource update %s in stack %s: %w",
+			resourceUpdate.DesiredState.Label, resourceUpdate.DesiredState.Stack, err)
 	}
 	hash := forma.ResourceUpdates[0].Version
 
@@ -573,13 +584,6 @@ func (rp *ResourcePersister) processResourceUpdate(commandID string, rc resource
 				}
 
 				for i := range rc.MatchFilters {
-					// A filter with no conditions never evicts here — skip it so that
-					// an unconfigured filter does not accidentally remove every row.
-					// This deliberately overrides the matcher's vacuous-true result
-					// for an empty condition set.
-					if len(rc.MatchFilters[i].Conditions) == 0 {
-						continue
-					}
 					if resource_update.ShouldFilterByMatchFilter(&rc.MatchFilters[i], completeProperties) {
 						slog.Info("Evicting unmanaged inventory row that matches a discovery filter",
 							"namespace", rc.ResourceTarget.Namespace,
@@ -1147,6 +1151,84 @@ func (rp *ResourcePersister) persistPolicyUpdate(update *policy_update.PolicyUpd
 		rp.notifyAutoReconcilerOfPolicyRemoval(update.StackLabel, update.Policy.GetStackID())
 	}
 
+	return nil
+}
+
+func (rp *ResourcePersister) persistGeneratorUpdates(updates []generator_update.GeneratorUpdate, commandID string, stackIDMap map[string]string) ([]string, error) {
+	versions := make([]string, 0, len(updates))
+	for i := range updates {
+		label := ""
+		if updates[i].Generator != nil {
+			label = updates[i].Generator.GetLabel()
+		}
+		if err := rp.persistGeneratorUpdate(&updates[i], commandID, stackIDMap); err != nil {
+			return nil, fmt.Errorf("failed to persist generator update for %s: %w", label, err)
+		}
+		versions = append(versions, updates[i].Version)
+	}
+
+	return versions, nil
+}
+
+// persistGeneratorUpdate writes a single generator change to the datastore.
+// A generator has no standalone form and no attach/detach, so — unlike a
+// policy — every operation is stack-scoped: the stack label is resolved to
+// its KSUID from stackIDMap and set on the generator with SetStackID before
+// the write, exactly as the policy path does for an inline policy.
+func (rp *ResourcePersister) persistGeneratorUpdate(update *generator_update.GeneratorUpdate, commandID string, stackIDMap map[string]string) error {
+	if update.Operation == generator_update.GeneratorOperationDelete {
+		label := ""
+		if update.Generator != nil {
+			label = update.Generator.GetLabel()
+		}
+		version, err := rp.datastore.DeleteGenerator(label, update.StackLabel)
+		if err != nil {
+			update.State = generator_update.GeneratorUpdateStateFailed
+			update.ErrorMessage = err.Error()
+			update.ModifiedTs = util.TimeNow()
+			slog.Error("Failed to delete generator",
+				"label", label, "stackLabel", update.StackLabel, "error", err)
+			return err
+		}
+		update.Version = version
+		update.State = generator_update.GeneratorUpdateStateSuccess
+		update.ModifiedTs = util.TimeNow()
+		return nil
+	}
+
+	if update.Generator == nil {
+		return fmt.Errorf("generator is nil for operation %s", update.Operation)
+	}
+
+	stackID, ok := stackIDMap[update.StackLabel]
+	if !ok {
+		return fmt.Errorf("stack ID not found for stack label %s", update.StackLabel)
+	}
+	update.Generator.SetStackID(stackID)
+
+	var version string
+	var err error
+	switch update.Operation {
+	case generator_update.GeneratorOperationCreate:
+		version, err = rp.datastore.CreateGenerator(update.Generator, commandID)
+	case generator_update.GeneratorOperationUpdate:
+		version, err = rp.datastore.UpdateGenerator(update.Generator, commandID)
+	default:
+		err = fmt.Errorf("unknown generator operation: %s", update.Operation)
+	}
+
+	if err != nil {
+		update.State = generator_update.GeneratorUpdateStateFailed
+		update.ErrorMessage = err.Error()
+		update.ModifiedTs = util.TimeNow()
+		slog.Error("Failed to persist generator",
+			"label", update.Generator.GetLabel(), "operation", update.Operation, "error", err)
+		return err
+	}
+
+	update.Version = version
+	update.State = generator_update.GeneratorUpdateStateSuccess
+	update.ModifiedTs = util.TimeNow()
 	return nil
 }
 

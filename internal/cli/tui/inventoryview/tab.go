@@ -40,7 +40,6 @@ type tabModel struct {
 	width         int
 	height        int
 	effectiveCols []components.Column // post-shrink column widths from setSize
-	styledCells   [][]styledCell      // per-row per-col plain→styled replacements from sync
 }
 
 // newTabModel creates a tabModel with sane defaults: state tabNotLoaded, empty
@@ -124,30 +123,14 @@ func rowMatchesFilter(r row, needle string) bool {
 	return false
 }
 
-// styledCell records a plain-to-styled replacement for post-render processing.
-// bubbles/table uses runewidth.Truncate (not ANSI-aware) on every cell value,
-// so pre-styled strings passed to SetRows are always mangled. Instead, sync
-// pushes PLAIN truncated text into the table and records the intended styled
-// replacements. loadedView applies them after tbl.View() produces ANSI output.
-//
-// col is the original column index (0-based in the full column set, before
-// responsive dropping). applyCellStyles uses it to bound the replacement to
-// the correct column's byte slice in the rendered line.
-type styledCell struct {
-	col    int    // original column index in the full column set
-	plain  string // the plain text we pushed into the table
-	styled string // the styled replacement (styled != plain means replace)
-}
-
 // sync pushes the visible() cells into the table and sets the sort indicator.
 // It never calls table.SortBy — the engine owns row ordering (R1).
 // sync does not touch state or err — pipeline only.
 //
-// For each cell: plain text is first truncated to the column's effective width
-// (post-shrink, as computed by setSize), then a styleCell application is
-// RECORDED for post-render replacement in loadedView. The table always receives
-// plain truncated text so that bubbles/table's runewidth-based internal
-// truncation does not corrupt ANSI escape sequences.
+// Cells are truncated to the column's effective width (post-shrink, as computed
+// by setSize) and pushed as PLAIN text: bubbles/table uses runewidth.Truncate
+// (not ANSI-aware) on every value, so styled strings would be mangled. Styling
+// happens post-render in loadedView/applyCellStyles.
 func (t tabModel) sync(maxRows int) tabModel {
 	vis, _ := t.visible(maxRows)
 
@@ -159,12 +142,9 @@ func (t tabModel) sync(maxRows int) tabModel {
 	}
 
 	cells := make([][]string, len(vis))
-	styledCells := make([][]styledCell, len(vis))
 	for i, r := range vis {
 		row := make([]string, len(r.cells))
-		styledRow := make([]styledCell, len(r.cells))
 		for col, cell := range r.cells {
-			// Step 1: truncate plain text to the column's final width.
 			colWidth := 0
 			if col < len(effCols) {
 				colWidth = effCols[col].Width
@@ -174,22 +154,16 @@ func (t tabModel) sync(maxRows int) tabModel {
 				plain = components.Truncate(cell, colWidth)
 			}
 			row[col] = plain
-
-			// Step 2: record the intended styled replacement (accent label +
-			// per-tab styleCell). See styledInventoryCell.
-			styledRow[col] = styledCell{col: col, plain: plain, styled: styledInventoryCell(t.th, t.spec.styleCell, col, plain)}
 		}
 		cells[i] = row
-		styledCells[i] = styledRow
 	}
 
 	// SetSortState MUST precede SetRows: SetRows runs applySort using the table's
 	// current sortCol, so setting rows first would re-sort by the PREVIOUS column
-	// while styledCells (from visible()) are ordered by the new one — a one-frame
-	// mismatch that renders per-cell styles (e.g. "⚠ unmanaged") against the wrong
-	// rows until the next event re-syncs. Setting the sort state first makes
-	// SetRows sort by the new column, keeping both orders aligned.
+	// while the engine's cells (from visible()) are ordered by the new one — a
+	// one-frame mismatch that renders the rows in the wrong order until the next
+	// event re-syncs. Setting the sort state first makes SetRows sort by the new
+	// column, keeping both orders aligned.
 	t.table = t.table.SetSortState(t.sortCol, t.sortDir).SetRows(cells)
-	t.styledCells = styledCells
 	return t
 }

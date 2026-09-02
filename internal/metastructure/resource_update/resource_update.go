@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/patch"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/pathkey"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/provenance"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/types"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
@@ -37,6 +39,7 @@ const (
 	FormaCommandSourceSynchronize         = types.FormaCommandSourceSynchronize
 	FormaCommandSourceDiscovery           = types.FormaCommandSourceDiscovery
 	FormaCommandSourcePolicyAutoReconcile = types.FormaCommandSourcePolicyAutoReconcile
+	FormaCommandSourceGeneratorRotation   = types.FormaCommandSourceGeneratorRotation
 
 	OperationCreate  = types.OperationCreate
 	OperationUpdate  = types.OperationUpdate
@@ -106,6 +109,19 @@ type ResourceUpdate struct {
 	// otherwise surface an empty ErrorMessage. MostRecentFailureMessage falls
 	// back to this when no progress-based failure message is available.
 	FailureReason string `json:"FailureReason,omitempty"`
+	// ProvenanceRecords is the per-occurrence provenance state computed at
+	// planning: identities, digests, and classes only, never values. It is
+	// written once with the row and IMMUTABLE thereafter; execution-time
+	// regeneration reads it back so suppression decisions survive recovery.
+	ProvenanceRecords []OccurrenceRecord `json:"ProvenanceRecords,omitempty"`
+	// ResolvedRootDigests maps a source URI to the canonical-domain digest of
+	// the pre-extraction value its reference resolved to at execution time.
+	// Populated as resolutions arrive and made durable through the progress
+	// write, so the write-origin merge can stamp $resolvedFrom even when
+	// recovery resumes persisted progress without re-resolving. A missing
+	// entry degrades to stamping nothing (provenance stays unknown), never to
+	// attesting a recomputed value.
+	ResolvedRootDigests map[string]string `json:"ResolvedRootDigests,omitempty"`
 }
 
 func (ru *ResourceUpdate) URI() pkgmodel.FormaeURI {
@@ -125,17 +141,15 @@ func (ru *ResourceUpdate) ListResolvables() []pkgmodel.FormaeURI {
 // PatchDocument in sync. PatchDocument is a derived view of (PriorState,
 // DesiredState, Schema) — whenever the executor mutates the state the
 // patch is derived from, the patch must be re-derived so the eventual
-// plugin call sees a diff that matches reality. ResolveValue is the only
-// apply-time mutator of DesiredState.Properties, so it owns the regen.
+// plugin call sees a diff that matches reality. ResolveValue and its $gen
+// sibling ResolveGeneratorValue are the only apply-time mutators of
+// DesiredState.Properties, and both route the regen through
+// reDerivePatchAfterSubstitution.
 //
 // mode is the command's configured apply mode (reconcile vs patch), the
 // same mode planning used to derive the original patch — regeneration must
 // use identical semantics or a reconcile-planned removal can silently
 // vanish when a resolvable resolves at execution time.
-//
-// Only Updates need a fresh patch — Create/Delete/Replace carry full
-// desired/prior state to the provider rather than a diff. Patch regen is
-// also a no-op when no Schema is available (sync/discovery paths).
 func (ru *ResourceUpdate) ResolveValue(formaeUri pkgmodel.FormaeURI, value string, mode pkgmodel.FormaApplyMode) error {
 	properties, err := resolver.ResolvePropertyReferences(formaeUri, ru.DesiredState.Properties, value)
 	if err != nil {
@@ -144,20 +158,128 @@ func (ru *ResourceUpdate) ResolveValue(formaeUri pkgmodel.FormaeURI, value strin
 	}
 	ru.DesiredState.Properties = properties
 
-	if ru.Operation == OperationUpdate && len(ru.DesiredState.Schema.Fields) > 0 {
-		patchDoc, createOnlyPatch, derr := ru.regeneratePatchDocument(mode)
-		if derr != nil {
-			return fmt.Errorf("failed to re-derive patch document after resolving %s: %w", formaeUri, derr)
+	return ru.reDerivePatchAfterSubstitution(mode, string(formaeUri))
+}
+
+// ResolveGeneratorValue delivers a generator's freshly drawn value to every
+// destination in this update that still needs it, and keeps the derived
+// PatchDocument in sync. It is the $gen sibling of ResolveValue, and together
+// with it they are the only apply-time mutators of DesiredState.Properties,
+// so between them they own the patch regeneration.
+//
+// The value is written INSIDE each $gen envelope, as its $value, never in
+// place of the envelope: see resolver.SetGenValues for why that distinction
+// is what keeps the credential hashed at rest.
+//
+// EVERY destination of this generator receives the value, including one whose
+// occurrence classified stable. Stability decides WHETHER the generator draws
+// (resource_update.GeneratorsNeedingDraw), never WHO a draw that is already
+// happening reaches. Delivering to only the unstable destinations is what
+// leaves two consumers of one credential holding different values: the new
+// consumer gets the new generation, the applied one keeps the old, and each
+// subsequent apply repairs one and breaks the other without ever settling.
+//
+// The invariant, and its boundary: every destination of this generator IN
+// THIS CHANGESET receives this draw and is stamped with its generation. A
+// destination outside the changeset cannot be reached at all, and cannot be
+// caught up afterwards either — formae keeps only a hash of a generated
+// value, never the value — so a generator whose destinations are split across
+// commands still diverges. That is a co-planning question, not something this
+// seam can close.
+//
+// generationID is the generation the value was drawn under, and every
+// destination that receives the value is stamped with its digest: the same
+// digest the planner computes for that generation, so the next apply can
+// prove the destination did not move and suppress its op. Without the stamp
+// the occurrence classifies as unknown movement on every subsequent apply,
+// which plans, redraws, and silently rotates the credential.
+//
+// mode is the command's configured apply mode, threaded through for exactly
+// the reason ResolveValue documents: regeneration must use the semantics
+// planning used or a reconcile-planned removal silently vanishes.
+func (ru *ResourceUpdate) ResolveGeneratorValue(generatorKsuid string, value string, generationID string, mode pkgmodel.FormaApplyMode) error {
+	var paths []string
+	var outputs []string
+	for _, occurrence := range pkgmodel.FindGenObjectsFromProperties(ru.DesiredState.Properties) {
+		if occurrence.Generator != generatorKsuid {
+			continue
 		}
-		if len(createOnlyPatch) > 0 {
-			fields, ferr := createOnlyPatchFields(createOnlyPatch)
-			if ferr != nil {
-				return fmt.Errorf("failed to inspect createOnly patch after resolving %s: %w", formaeUri, ferr)
-			}
-			return LateCreateOnlyChangeError{ResourceLabel: ru.DesiredState.Label, Fields: fields}
-		}
-		ru.DesiredState.PatchDocument = patchDoc
+		paths = append(paths, occurrence.Path)
+		outputs = append(outputs, occurrence.Output)
 	}
+	if len(paths) == 0 {
+		return nil
+	}
+
+	properties, err := resolver.SetGenValues(ru.DesiredState.Properties, generatorKsuid, paths, value)
+	if err != nil {
+		// The error names paths only; the drawn value is never in it.
+		slog.Error("Failed to deliver a generated value", "error", err)
+		return fmt.Errorf("failed to deliver a generated value: %w", err)
+	}
+	ru.DesiredState.Properties = properties
+	ru.stampDrawnGeneration(generatorKsuid, outputs, generationID)
+
+	return ru.reDerivePatchAfterSubstitution(mode, "generator "+generatorKsuid)
+}
+
+// stampDrawnGeneration records, for every generator output this update just
+// received a value for, the digest of the generation it was drawn under.
+//
+// The digest is provenance.DigestOfString over the generation's identity, and
+// it must stay byte-identical to what the planner computes for the same
+// generation (resolver's generationRootDigest): the occurrence classifier
+// compares the two directly, and a digest that differs by so much as a
+// wrapper would never match, so every re-apply would re-plan and redraw with
+// nothing anywhere reporting a fault.
+//
+// The carrier holds digests only and is persisted verbatim, so the generation
+// identity itself never goes in. The map is written before the plugin call,
+// so the write-origin merge of the echo finds it and stamps $resolvedFrom
+// into the envelope that lands at rest.
+//
+// generationID is the delivery boundary's to guarantee non-empty
+// (ExecutionDAG.propagateDrawnGeneratorValue refuses a draw naming none).
+// Re-checking it here would stamp nothing and carry on, which is the silent
+// outcome that guard exists to make loud.
+func (ru *ResourceUpdate) stampDrawnGeneration(generatorKsuid string, outputs []string, generationID string) {
+	digest := provenance.DigestOfString(generationID)
+	for _, output := range outputs {
+		key := generatorSourceKey(generatorKsuid, output)
+		if key == "" {
+			continue
+		}
+		if ru.ResolvedRootDigests == nil {
+			ru.ResolvedRootDigests = make(map[string]string)
+		}
+		ru.ResolvedRootDigests[key] = digest
+	}
+}
+
+// reDerivePatchAfterSubstitution re-derives PatchDocument after an apply-time
+// mutation of DesiredState.Properties. subject names what was substituted and
+// appears in error messages only — it must never carry a resolved value.
+//
+// Only Updates need a fresh patch — Create/Delete/Replace carry full
+// desired/prior state to the provider rather than a diff. Patch regen is also
+// a no-op when no Schema is available (sync/discovery paths).
+func (ru *ResourceUpdate) reDerivePatchAfterSubstitution(mode pkgmodel.FormaApplyMode, subject string) error {
+	if ru.Operation != OperationUpdate || len(ru.DesiredState.Schema.Fields) == 0 {
+		return nil
+	}
+
+	patchDoc, createOnlyPatch, derr := ru.regeneratePatchDocument(mode)
+	if derr != nil {
+		return fmt.Errorf("failed to re-derive patch document after resolving %s: %w", subject, derr)
+	}
+	if len(createOnlyPatch) > 0 {
+		fields, ferr := createOnlyPatchFields(createOnlyPatch)
+		if ferr != nil {
+			return fmt.Errorf("failed to inspect createOnly patch after resolving %s: %w", subject, ferr)
+		}
+		return LateCreateOnlyChangeError{ResourceLabel: ru.DesiredState.Label, Fields: fields}
+	}
+	ru.DesiredState.PatchDocument = patchDoc
 
 	return nil
 }
@@ -186,6 +308,18 @@ func (ru *ResourceUpdate) regeneratePatchDocument(mode pkgmodel.FormaApplyMode) 
 		return nil, nil, fmt.Errorf("failed to suppress unchanged opaque values: %w", err)
 	}
 
+	// A $gen destination that classified stable is unchanged by proof rather
+	// than by comparison, and only the proof survives a Read that enriches
+	// prior state with the live secret. Drop it from both sides here, or the
+	// digest it carries reaches the guarded conversion below and fails an
+	// update whose only real change is the property beside it. See
+	// SuppressCarriedStableGeneratorBindings.
+	existingForPatch, desiredForPatch, err = SuppressCarriedStableGeneratorBindings(
+		existingForPatch, desiredForPatch, ru.ProvenanceRecords)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	// Read-safe/comparison conversion: existingPluginProps is only used as the
 	// "before" side of this local diff, never transmitted to a plugin. A
 	// genuinely-rotated opaque field's existing side is a stored hash that can
@@ -205,12 +339,34 @@ func (ru *ResourceUpdate) regeneratePatchDocument(mode pkgmodel.FormaApplyMode) 
 		return nil, nil, fmt.Errorf("failed to convert desired properties to plugin format: %w", err)
 	}
 
-	patchDoc, createOnlyPatch, err := patch.GeneratePatch(
+	// The onlyForceResent decision is deliberately ignored here: this call
+	// regenerates the payload for an update that is already happening, so a
+	// requiredOnUpdate field's force-resent op must ride along in patchDoc as
+	// returned — dropping it would send the plugin an Update with the
+	// provider-mandated field missing. Only planning (whether to create this
+	// ResourceUpdate at all) may treat a force-resent-only patch as empty; see
+	// resource_update_factory.go.
+	// Provably-stable occurrences stay suppressed through every regeneration:
+	// the classification was decided at planning and persisted immutably on
+	// this row, so recovery reproduces the same suppression without
+	// recomputing anything from inputs that no longer exist. A destination a
+	// draw was just delivered into is unaffected: the substitution that
+	// suppression performs stops at a $ref/$res/$gen marker, and the
+	// plugin-format conversion has already replaced a delivered envelope with
+	// its bare value, so the write still reaches the patch.
+	regenProperties := resolver.NewResolvableProperties()
+	for _, rec := range ru.ProvenanceRecords {
+		if rec.Class == OccurrenceStable {
+			regenProperties.SuppressStableAt(rec.DestinationPath)
+		}
+	}
+
+	patchDoc, createOnlyPatch, _, err := patch.GeneratePatch(
 		existingPluginProps,
 		newPluginProps,
 		existingForPatch,
 		desiredForPatch,
-		resolver.NewResolvableProperties(),
+		regenProperties,
 		ru.DesiredState.Schema,
 		mode,
 	)
@@ -219,6 +375,42 @@ func (ru *ResourceUpdate) regeneratePatchDocument(mode pkgmodel.FormaApplyMode) 
 	}
 
 	return patchDoc, createOnlyPatch, nil
+}
+
+// ConvergenceOnly reports whether every op in this update's patch document
+// targets a reference occurrence the provenance classification requires to
+// converge: same source identity as what was last written, a written value on
+// record, and movement that is real or unknown. Such an update propagates a
+// source change the stored state has already absorbed; it does not assert a
+// desired state that differs from the current one, so drift-absorption checks
+// may treat the resource as unmodified by the user. A repoint (identity
+// change), a first declaration, or any op outside the classified occurrences
+// keeps the update a real change.
+func (ru *ResourceUpdate) ConvergenceOnly() bool {
+	if ru.Operation != OperationUpdate || len(ru.ProvenanceRecords) == 0 {
+		return false
+	}
+	converging := map[string]bool{}
+	for _, rec := range ru.ProvenanceRecords {
+		if rec.Class != OccurrenceStable && rec.HasStoredWritten && rec.DesiredIdentity == rec.StoredIdentity {
+			converging["/"+strings.ReplaceAll(rec.DestinationPath, ".", "/")] = true
+		}
+	}
+	if len(converging) == 0 {
+		return false
+	}
+	var ops []struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(ru.DesiredState.PatchDocument, &ops); err != nil || len(ops) == 0 {
+		return false
+	}
+	for _, op := range ops {
+		if !converging[op.Path] {
+			return false
+		}
+	}
+	return true
 }
 
 // createOnlyPatchFields extracts the distinct top-level field names touched
@@ -464,19 +656,26 @@ func (ru *ResourceUpdate) requiredOperations() []resource.Operation {
 }
 
 func (ru *ResourceUpdate) updateResourceProperties(incomingProperties string, writeOrigin bool) error {
-	return ru.updateProperties(incomingProperties, &ru.DesiredState.Properties, &ru.DesiredState.ReadOnlyProperties, writeOrigin)
+	// Only the write-origin DesiredState merge stamps provenance: the carrier
+	// holds what THIS update resolved and wrote.
+	var digests map[string]string
+	if writeOrigin {
+		digests = ru.ResolvedRootDigests
+	}
+	return ru.updateProperties(incomingProperties, &ru.DesiredState.Properties, &ru.DesiredState.ReadOnlyProperties, writeOrigin, digests)
 }
 
 func (ru *ResourceUpdate) updateExistingResourceProperties(incomingProperties string) error {
 	// Always read-origin: this absorbs the pre-update out-of-band Read into
-	// PriorState, never the echo of formae's own write.
-	return ru.updateProperties(incomingProperties, &ru.PriorState.Properties, &ru.PriorState.ReadOnlyProperties, false)
+	// PriorState, never the echo of formae's own write — and never stamps
+	// provenance.
+	return ru.updateProperties(incomingProperties, &ru.PriorState.Properties, &ru.PriorState.ReadOnlyProperties, false, nil)
 }
 
 // updateProperties splits the properties from the plugin read result into regular and read-only,
 // based on the resource schema fields, and merges $ref structures from the existing target properties.
 // This preserves $ref structures needed for destroy dependency tracking and PKL extraction.
-func (ru *ResourceUpdate) updateProperties(incomingProperties string, targetProperties, targetReadOnlyProperties *json.RawMessage, writeOrigin bool) error {
+func (ru *ResourceUpdate) updateProperties(incomingProperties string, targetProperties, targetReadOnlyProperties *json.RawMessage, writeOrigin bool, provenanceDigests map[string]string) error {
 	if incomingProperties == "" {
 		slog.Debug("No properties to split for resource", "uri", ru.URI())
 		incomingProperties = "{}"
@@ -512,7 +711,7 @@ func (ru *ResourceUpdate) updateProperties(incomingProperties string, targetProp
 	}
 
 	// Merge refs from user-provided properties to preserve $ref structures
-	mergedProps, mergeErr := mergeRefsPreservingUserRefs(*targetProperties, propertiesJson, ru.DesiredState.Schema, writeOrigin)
+	mergedProps, mergeErr := mergeRefsPreservingUserRefs(*targetProperties, propertiesJson, ru.DesiredState.Schema, writeOrigin, provenanceDigests)
 	if mergeErr != nil {
 		slog.Error("Failed to merge refs into properties", "error", mergeErr)
 		return mergeErr
@@ -542,7 +741,7 @@ func (ru *ResourceUpdate) updateProperties(incomingProperties string, targetProp
 // - Default/Set: elements are matched by value (JSON equality after flattening $refs)
 // - Array: elements are matched by index position
 // - EntitySet: elements are matched by a key field (e.g., Tags by "Key")
-func mergeRefsPreservingUserRefs(userProperties, pluginProperties json.RawMessage, schema pkgmodel.Schema, writeOrigin bool) (json.RawMessage, error) {
+func mergeRefsPreservingUserRefs(userProperties, pluginProperties json.RawMessage, schema pkgmodel.Schema, writeOrigin bool, provenanceDigests map[string]string) (json.RawMessage, error) {
 	if userProperties == nil {
 		userProperties = []byte("{}")
 	}
@@ -562,6 +761,7 @@ func mergeRefsPreservingUserRefs(userProperties, pluginProperties json.RawMessag
 		result:      &result,
 		schema:      schema,
 		writeOrigin: writeOrigin,
+		provenance:  provenanceDigests,
 	}
 
 	merger.mergeValue("", userParsed, pluginParsed)
@@ -597,6 +797,10 @@ type propertyMerger struct {
 	// discovery, or the pre-update out-of-band read). It gates whether
 	// $ref/$res envelopes get an $applied provenance baseline stamped.
 	writeOrigin bool
+	// provenance maps a source URI to the canonical root digest this update
+	// resolved from; set only for the write-origin DesiredState merge, which
+	// stamps $resolvedFrom from it.
+	provenance map[string]string
 }
 
 // mergeValue recursively merges a value at the given path
@@ -636,6 +840,30 @@ func (m *propertyMerger) mergeObject(path string, userVal, pluginVal gjson.Resul
 		return
 	}
 
+	// Check if this is a $gen object — a generator reference, in its authored
+	// or translated shape ({"$gen":true,"$generator":..,"$output":..,
+	// "$visibility":"Opaque"[,"$value":..]}). Like $res it is a structured
+	// resolvable reference, so it is handled the same way: preserve the
+	// envelope, refresh $value from the plugin echo, and drop a stale
+	// $hashed marker so the persist transformer re-hashes the field. $gen is
+	// always opaque, so the $applied provenance baseline mergeResObject would
+	// otherwise stamp is always skipped for it, exactly as it already is for
+	// an opaque $res.
+	//
+	// Without this branch it would fall through to the generic recursive
+	// merge below, which walks the envelope's own metadata keys against the
+	// plugin's echo: a bare-scalar echo happens to be absorbed by the
+	// opaque-scalar branch further down, but a structured echo (a plugin
+	// that round-trips the resolvable, mirroring $res) leaves a stale
+	// $hashed marker sitting next to the freshly adopted plaintext value —
+	// the persist transformer's idempotency guard then skips re-hashing it,
+	// persisting the generated secret in cleartext while claiming it is
+	// hashed.
+	if userVal.Get("$gen").Bool() {
+		m.mergeResObject(path, userVal, pluginVal)
+		return
+	}
+
 	// Check if this is a $embed object — preserve the user's envelope wholesale.
 	// The plugin value is always the assembled result of the template; we never
 	// let the plugin overwrite the user's $embed declaration.
@@ -666,13 +894,32 @@ func (m *propertyMerger) mergeObject(path string, userVal, pluginVal gjson.Resul
 		return
 	}
 
+	// An empty user object writes no leaves, so the recursion below would
+	// drop it from the merged document entirely. Under a preserveEmptyValues
+	// root the empty object IS the value and must persist.
+	if len(userVal.Map()) == 0 && m.underPreservedRoot(path) {
+		cleanPath := m.cleanPath(path)
+		*m.result, _ = sjson.SetRaw(*m.result, cleanPath, "{}")
+		return
+	}
+
 	// Not a $ref or $embed object - recursively merge each field
 	userVal.ForEach(func(key, val gjson.Result) bool {
 		childPath := m.buildChildPath(path, key.String())
-		pluginChildVal := pluginVal.Get(escapePathKey(key.String()))
+		pluginChildVal := pluginVal.Get(pathkey.Escape(key.String()))
 		m.mergeValue(childPath, val, pluginChildVal)
 		return true
 	})
+}
+
+// underPreservedRoot reports whether a merge path's top-level field carries
+// the preserveEmptyValues hint.
+func (m *propertyMerger) underPreservedRoot(path string) bool {
+	if path == "" {
+		return false
+	}
+	root, _, _ := strings.Cut(path, ".")
+	return patch.PreserveEmptyRootFields(m.schema)[root]
 }
 
 // mergeRefObject handles merging of $ref objects (resolvable references)
@@ -721,17 +968,106 @@ func (m *propertyMerger) mergeRefObject(path string, userVal, pluginVal gjson.Re
 		}
 	}
 
+	updatedRef = m.applyResolutionProvenance(updatedRef, userVal, userValue, pluginVal)
+
 	*m.result, _ = sjson.SetRaw(*m.result, cleanPath, updatedRef)
 }
 
-// mergeResObject handles merging of $res objects (structured resolvable references
-// in their pre-resolution shape). It mirrors mergeRefObject: it preserves the user's
-// $res envelope wholesale and only refreshes $value from the plugin read.
+// applyResolutionProvenance stamps or invalidates $resolvedFrom on a merged
+// reference envelope. Stamping happens only on the write-origin merge, from
+// the digest the resolution carried (root domain). Invalidation is
+// domain-correct: a non-write merge that ADOPTED a differing plugin value is
+// compared in the WRITTEN domain (digest the adopted unwrapped value against
+// the envelope's stored written digest), so an enriching read of an UNCHANGED
+// secret (plaintext echo vs stored hash) never invalidates, and empty/absent
+// reads adopt nothing and never invalidate.
+func (m *propertyMerger) applyResolutionProvenance(updatedRef string, userVal, userValue, pluginVal gjson.Result) string {
+	if m.writeOrigin {
+		if uri := referenceURIOf(userVal); uri != "" {
+			if digest, ok := m.provenance[uri]; ok && provenance.Valid(digest) {
+				updatedRef, _ = sjson.Set(updatedRef, "$resolvedFrom", digest)
+			}
+		}
+		return updatedRef
+	}
+	if !userVal.Get("$resolvedFrom").Exists() {
+		return updatedRef
+	}
+	if m.keptUserValue(userValue, pluginVal) {
+		return updatedRef // nothing adopted; the witness stands
+	}
+	adopted := provenance.UnwrapEffectiveValue(pluginVal)
+	if !adopted.Exists() || adopted.Type == gjson.Null {
+		return updatedRef
+	}
+	var adoptedDigest string
+	if adopted.Type == gjson.String {
+		adoptedDigest = provenance.DigestOfString(adopted.String())
+	} else {
+		adoptedDigest = provenance.DigestOfJSON(adopted.Raw)
+	}
+	storedWritten := ""
+	if userValue.Exists() {
+		if userVal.Get("$hashed").Bool() {
+			storedWritten = provenance.FromStored(userValue.String())
+		} else if userValue.Type == gjson.String {
+			storedWritten = provenance.DigestOfString(userValue.String())
+		} else {
+			storedWritten = provenance.DigestOfJSON(userValue.Raw)
+		}
+	}
+	if storedWritten == "" || adoptedDigest != storedWritten {
+		updatedRef, _ = sjson.Delete(updatedRef, "$resolvedFrom")
+	}
+	return updatedRef
+}
+
+// referenceURIOf returns the envelope's source URI in the carrier's key form,
+// or "" for a shape without one.
+//
+// Two shapes have one: a translated $ref, whose key IS its $ref string, and a
+// translated $gen, whose key is built from the generator it names and the
+// output it draws (generatorSourceKey). Everything else (an untranslated
+// $res, an untranslated $gen) names no source this update resolved against
+// and is never stamped.
+func referenceURIOf(envelope gjson.Result) string {
+	if ref := envelope.Get("$ref"); ref.Exists() {
+		return ref.String()
+	}
+	if envelope.Get("$gen").Bool() {
+		return generatorSourceKey(pkgmodel.GenGeneratorKSUID(envelope), envelope.Get("$output").String())
+	}
+	return ""
+}
+
+// generatorSourceKey renders the ResolvedRootDigests key for one generator
+// output: "generator://<generator ksuid>#/<output>".
+//
+// A generator KSUID and a resource KSUID come from the same minter but name
+// rows in different tables, so keying a generator on the "formae://" scheme
+// resource references use could let a $gen and a $ref collide on one entry.
+// The distinct scheme rules that out by construction, exactly as
+// GeneratorUpdate.NodeURI does for the ExecutionDAG keyspace. Neither
+// segment needs escaping: a KSUID is base62, and $output is checked against
+// pkgmodel.KnownGeneratorOutputs at translation.
+//
+// Either half missing means the envelope names no generator output, and ""
+// is never a key: the caller stamps nothing.
+func generatorSourceKey(generatorKsuid, output string) string {
+	if generatorKsuid == "" || output == "" {
+		return ""
+	}
+	return "generator://" + generatorKsuid + "#/" + output
+}
+
+// mergeResObject handles merging of $res and $gen objects (structured resolvable
+// references in their pre-resolution shape). It mirrors mergeRefObject: it preserves
+// the user's envelope wholesale and only refreshes $value from the plugin read.
 //
 // The plugin may echo the resolvable back either as a bare scalar (the resolved
-// live value) or as a $res/$value object; selectRefValue handles both (it already
-// unwraps $ref/$value objects, and a $res echo likewise carries the live value at
-// $value — normalized below).
+// live value) or as a $res/$ref/$gen/$value object; selectRefValue handles both (it
+// already unwraps $ref/$value objects, and a $res or $gen echo likewise carries the
+// live value at $value — normalized below).
 //
 // Opacity is INHERITED: a $res that resolves another resource's Opaque property is
 // itself opaque even though the consumer's own schema does not mark this field. When
@@ -745,11 +1081,24 @@ func (m *propertyMerger) mergeResObject(path string, userVal, pluginVal gjson.Re
 
 	userValue := userVal.Get("$value")
 
-	// A plugin that round-trips the resolvable echoes it back as a $res/$value
-	// object; unwrap to its $value so we compare live-value-to-live-value.
+	// A plugin that round-trips the resolvable echoes it back as a $res/$ref/
+	// $gen/$value object; unwrap to its $value so we compare
+	// live-value-to-live-value.
 	effectivePluginVal := pluginVal
-	if pluginVal.IsObject() && (pluginVal.Get("$res").Exists() || pluginVal.Get("$ref").Exists()) {
+	if pluginVal.IsObject() && (pluginVal.Get("$res").Exists() || pluginVal.Get("$ref").Exists() || pluginVal.Get("$gen").Exists()) {
 		effectivePluginVal = pluginVal.Get("$value")
+	}
+
+	// A preserved-value sentinel is not a value. It is what the freeze put in
+	// this field's place on the copy sent to the provider, meaning "leave this
+	// alone"; a plugin that echoes its request back returns it verbatim.
+	// Treated as an ordinary echo it is a non-empty object, so it beats the
+	// stored value in preferNonNullValue and lands in $value — and the persist
+	// transformer then hashes the sentinel itself, replacing the digest of the
+	// credential with the digest of a marker. Discard it here so the two
+	// decisions below see it for what it is: nothing adopted.
+	if isOpaquePreservedSentinel(effectivePluginVal) {
+		effectivePluginVal = gjson.Result{}
 	}
 
 	valueToSet := m.preferNonNullValue(userValue, effectivePluginVal)
@@ -787,6 +1136,8 @@ func (m *propertyMerger) mergeResObject(path string, userVal, pluginVal gjson.Re
 			updatedRes, _ = sjson.Delete(updatedRes, "$applied")
 		}
 	}
+
+	updatedRes = m.applyResolutionProvenance(updatedRes, userVal, userValue, effectivePluginVal)
 
 	*m.result, _ = sjson.SetRaw(*m.result, cleanPath, updatedRes)
 }
@@ -837,6 +1188,14 @@ func (m *propertyMerger) preferNonNullValue(userValue, pluginValue gjson.Result)
 func (m *propertyMerger) mergeArray(path string, userVal, pluginVal gjson.Result) {
 	userArray := userVal.Array()
 	pluginArray := pluginVal.Array()
+
+	// An empty user array writes no elements; under a preserveEmptyValues
+	// root it is the value and must persist (mirror of the empty-object case).
+	if len(userArray) == 0 && m.underPreservedRoot(path) {
+		cleanPath := m.cleanPath(path)
+		*m.result, _ = sjson.SetRaw(*m.result, cleanPath, "[]")
+		return
+	}
 
 	// Resolve this array's own hint by its index-less full path (e.g.
 	// "ContainerDefinitions.0.Environment" -> "ContainerDefinitions.Environment"),
@@ -1054,7 +1413,7 @@ func (m *propertyMerger) concreteFieldsMatchPlugin(userElem, pluginElem gjson.Re
 		if m.isUnresolvedRef(userVal) {
 			return true // ignore unresolved-$ref fields
 		}
-		pluginVal := pluginElem.Get(escapePathKey(key.String()))
+		pluginVal := pluginElem.Get(pathkey.Escape(key.String()))
 		if !pluginVal.Exists() || !m.valuesMatch(userVal, pluginVal) {
 			allMatch = false
 			return false
@@ -1087,7 +1446,7 @@ func (m *propertyMerger) userElementMatchesPlugin(userElem, pluginElem gjson.Res
 	allFieldsMatch := true
 	userElem.ForEach(func(key, userVal gjson.Result) bool {
 		keyStr := key.String()
-		pluginVal := pluginElem.Get(escapePathKey(keyStr))
+		pluginVal := pluginElem.Get(pathkey.Escape(keyStr))
 
 		// If plugin doesn't have this field, it's not a match
 		if !pluginVal.Exists() {
@@ -1163,18 +1522,11 @@ func (m *propertyMerger) mergePrimitive(path string, userVal gjson.Result) {
 // label/annotation keys like "app.kubernetes.io/name" would otherwise be
 // interpreted as nested paths and exploded into object trees on write.
 func (m *propertyMerger) buildChildPath(parentPath, fieldName string) string {
-	escaped := escapePathKey(fieldName)
+	escaped := pathkey.Escape(fieldName)
 	if parentPath == "" {
 		return escaped
 	}
 	return parentPath + "." + escaped
-}
-
-// escapePathKey escapes a literal JSON key for use in a gjson/sjson path.
-var pathKeyEscaper = strings.NewReplacer(`\`, `\\`, `.`, `\.`, `*`, `\*`, `?`, `\?`, `:`, `\:`)
-
-func escapePathKey(key string) string {
-	return pathKeyEscaper.Replace(key)
 }
 
 // cleanPath removes leading dot from a path if present

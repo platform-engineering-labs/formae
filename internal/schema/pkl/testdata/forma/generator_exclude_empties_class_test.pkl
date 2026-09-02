@@ -1,0 +1,30 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+// Shape-misuse test: excludeCharacters removes every digit while digits is
+// the only enabled class, leaving nothing for the enabled class to draw
+// from. PKL eval fails at the same eval-time check as the all-flags-false
+// case, for the same unattended-scheduler reason.
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+forma {
+  local testStack = new formae.Stack {
+    label = "generator-test-stack"
+  }
+  testStack
+
+  new formae.PasswordGenerator {
+    label = "starved-digits"
+    stack = testStack.res
+    uppercase = false
+    lowercase = false
+    digits = true
+    symbols = false
+    excludeCharacters = "0123456789"
+  }
+}

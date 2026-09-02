@@ -215,11 +215,25 @@ func TestConnectedElsewhere(t *testing.T) {
 		{Cloud: "aws", Account: "999999999999", InstallationID: other},
 	}
 
-	got := connectedElsewhere(hint, testAccount, self)
+	got := connectedElsewhere(hint, "aws", testAccount, self)
 
 	require.Len(t, got, 1)
 	assert.Equal(t, other, got[0].InstallationID)
 	assert.Equal(t, "staging", got[0].InstallationName)
 
-	assert.Empty(t, connectedElsewhere(nil, testAccount, self))
+	assert.Empty(t, connectedElsewhere(nil, "aws", testAccount, self))
+}
+
+// A hint entry naming the same account under a different cloud is not this
+// account: connectedElsewhere compares within one cloud, not across all of
+// them, so a GCP project id that happens to collide with an AWS account
+// number is never mistaken for it.
+func TestConnectedElsewhereComparesWithinOneCloudOnly(t *testing.T) {
+	self, other := "3HzFPXfPDGhwLJJVtaHbmFs6vLa", "2ZaBcDeFgHiJkLmNoPqRsTuVwXy"
+	hint := []cloudapi.ConnectedAccount{
+		{Cloud: "gcp", Account: testAccount, InstallationID: other},
+	}
+
+	assert.Empty(t, connectedElsewhere(hint, "aws", testAccount, self))
+	assert.Len(t, connectedElsewhere(hint, "gcp", testAccount, self), 1)
 }

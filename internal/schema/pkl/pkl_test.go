@@ -269,6 +269,172 @@ func TestPkl_SecretShapeMisuse_BareMapSecretValueFailsEval(t *testing.T) {
 	assert.ErrorContains(t, err, "SecretMapAccessor")
 }
 
+// TestPkl_Generator_Evaluate verifies that a forma declaring a
+// PasswordGenerator evaluates and renders a Generators listing carrying the
+// fields PasswordGenerator.render() produces.
+func TestPkl_Generator_Evaluate(t *testing.T) {
+	p := PKL{}
+	forma, err := p.Evaluate("./testdata/forma/generator_test.pkl", model.CommandApply, model.FormaApplyModeReconcile, nil)
+	require.NoError(t, err)
+
+	jsonString := forma.ToJSON()
+
+	assert.Equal(t, "password", gjson.Get(jsonString, "Generators.0.Type").String())
+	assert.Equal(t, "db-password", gjson.Get(jsonString, "Generators.0.Label").String())
+	assert.Equal(t, "generator-test-stack", gjson.Get(jsonString, "Generators.0.Stack").String())
+	assert.Equal(t, int64(24), gjson.Get(jsonString, "Generators.0.Length").Int())
+	assert.True(t, gjson.Get(jsonString, "Generators.0.Uppercase").Bool())
+	assert.True(t, gjson.Get(jsonString, "Generators.0.Lowercase").Bool())
+	assert.True(t, gjson.Get(jsonString, "Generators.0.Digits").Bool())
+	assert.False(t, gjson.Get(jsonString, "Generators.0.Symbols").Bool())
+	assert.Equal(t, "oO0", gjson.Get(jsonString, "Generators.0.ExcludeCharacters").String())
+	assert.True(t, gjson.Get(jsonString, "Generators.0.RequireEachIncludedType").Bool())
+}
+
+// TestPkl_Generator_Alias_Evaluate verifies that a PasswordGenerator's alias
+// field — the previous label, used to preserve identity across a rename —
+// flows through eval into the rendered Generators listing.
+func TestPkl_Generator_Alias_Evaluate(t *testing.T) {
+	p := PKL{}
+	forma, err := p.Evaluate("./testdata/forma/generator_alias_test.pkl", model.CommandApply, model.FormaApplyModeReconcile, nil)
+	require.NoError(t, err)
+
+	jsonString := forma.ToJSON()
+
+	assert.Equal(t, "new-password", gjson.Get(jsonString, "Generators.0.Label").String())
+	assert.Equal(t, "old-password", gjson.Get(jsonString, "Generators.0.Alias").String())
+}
+
+// TestPkl_Generator_NoStackFailsEval verifies that a Generator with no stack
+// set fails at PKL eval — stack is required, not defaulted.
+func TestPkl_Generator_NoStackFailsEval(t *testing.T) {
+	p := PKL{}
+	_, err := p.Evaluate("./testdata/forma/generator_no_stack_test.pkl", model.CommandApply, model.FormaApplyModeReconcile, nil)
+	require.Error(t, err)
+}
+
+// TestPkl_Generator_AllClassFlagsFalseFailsEval verifies that a
+// PasswordGenerator with every character-class flag false fails at PKL eval,
+// not at runtime — the spec has no alphabet to draw from.
+func TestPkl_Generator_AllClassFlagsFalseFailsEval(t *testing.T) {
+	p := PKL{}
+	_, err := p.Evaluate("./testdata/forma/generator_all_flags_false_test.pkl", model.CommandApply, model.FormaApplyModeReconcile, nil)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "at least one of uppercase, lowercase, digits, symbols must be true")
+}
+
+// TestPkl_GeneratorReference_RendersGenEnvelope verifies that a resource
+// property bound to a generator's named output (`pw.gen.value`) evaluates and
+// renders a $gen envelope carrying the generator's label, its stack, and the
+// named output.
+func TestPkl_GeneratorReference_RendersGenEnvelope(t *testing.T) {
+	p := PKL{}
+	forma, err := p.Evaluate("./testdata/forma/generator_reference_test.pkl", model.CommandEval, model.FormaApplyModePatch, nil)
+	require.NoError(t, err)
+
+	jsonString := forma.ToJSON()
+
+	assert.True(t, gjson.Get(jsonString, "Resources.0.Properties.value.$gen").Bool())
+	assert.Equal(t, "db-password", gjson.Get(jsonString, "Resources.0.Properties.value.$label").String())
+	assert.Equal(t, "durable", gjson.Get(jsonString, "Resources.0.Properties.value.$stack").String())
+	assert.Equal(t, "value", gjson.Get(jsonString, "Resources.0.Properties.value.$output").String())
+	assert.Equal(t, "Opaque", gjson.Get(jsonString, "Resources.0.Properties.value.$visibility").String())
+}
+
+// TestPkl_GeneratorBinding_PluginResourceFieldRendersGenEnvelope verifies that
+// a plugin resource's secret-bearing property, whose declared union admits
+// formae.GeneratorOutput, can be bound to `pw.gen.value` from PKL and renders
+// the $gen envelope. The field keeps its Opaque schema hint, so the union that
+// admits a generator output still marks the property a secret.
+func TestPkl_GeneratorBinding_PluginResourceFieldRendersGenEnvelope(t *testing.T) {
+	p := PKL{}
+	forma, err := p.Evaluate("./testdata/forma/generator_binding_test.pkl", model.CommandApply, model.FormaApplyModeReconcile, nil)
+	require.NoError(t, err)
+
+	jsonString := forma.ToJSON()
+
+	assert.Equal(t, "FakeAWS::SecretsManager::Secret", gjson.Get(jsonString, "Resources.0.Type").String())
+	assert.True(t, gjson.Get(jsonString, "Resources.0.Properties.SecretString.$gen").Bool())
+	assert.Equal(t, "db-password", gjson.Get(jsonString, "Resources.0.Properties.SecretString.$label").String())
+	assert.Equal(t, "generator-binding-stack", gjson.Get(jsonString, "Resources.0.Properties.SecretString.$stack").String())
+	assert.Equal(t, "value", gjson.Get(jsonString, "Resources.0.Properties.SecretString.$output").String())
+	assert.Equal(t, "Opaque", gjson.Get(jsonString, "Resources.0.Properties.SecretString.$visibility").String())
+	assert.True(t, gjson.Get(jsonString, "Resources.0.Schema.Hints.SecretString.Opaque").Bool())
+
+	assert.Equal(t, "db-password", gjson.Get(jsonString, "Generators.0.Label").String())
+	assert.Equal(t, "generator-binding-stack", gjson.Get(jsonString, "Generators.0.Stack").String())
+}
+
+// TestPkl_GeneratorOutput_EnvelopeFieldsAreImmutable verifies that the $gen
+// envelope's fields cannot be amended — a plan cannot rewrite $visibility
+// away from Opaque (or forge $gen, $label, $stack, $output) once a
+// GeneratorOutput is constructed.
+func TestPkl_GeneratorOutput_EnvelopeFieldsAreImmutable(t *testing.T) {
+	p := PKL{}
+	_, err := p.Evaluate("./testdata/forma/generator_output_envelope_immutable_test.pkl", model.CommandEval, model.FormaApplyModePatch, nil)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "Cannot assign to fixed property")
+}
+
+// TestPkl_GeneratorReference_NoStackFailsEval verifies that a stackless
+// PasswordGenerator kept as a bare local — never collected into `forma`, so
+// render() never runs — still fails eval when referenced only via
+// `pw.gen.value`. The gen access path must force the same validation
+// render() forces.
+func TestPkl_GeneratorReference_NoStackFailsEval(t *testing.T) {
+	p := PKL{}
+	_, err := p.Evaluate("./testdata/forma/generator_reference_no_stack_test.pkl", model.CommandEval, model.FormaApplyModePatch, nil)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "stack is required")
+}
+
+// TestPkl_GeneratorReference_AllClassFlagsFalseFailsEval verifies that a
+// PasswordGenerator with every character-class flag false, kept as a bare
+// local and referenced only via `pw.gen.value`, still fails eval.
+func TestPkl_GeneratorReference_AllClassFlagsFalseFailsEval(t *testing.T) {
+	p := PKL{}
+	_, err := p.Evaluate("./testdata/forma/generator_reference_all_flags_false_test.pkl", model.CommandEval, model.FormaApplyModePatch, nil)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "at least one of uppercase, lowercase, digits, symbols must be true")
+}
+
+// TestPkl_GeneratorExcludeCharacters_MatchesGoAlphabets verifies that the
+// character-class alphabets declared in formae.pkl still match the Go value
+// drawer's alphabets (pkg/model.UppercaseChars etc). A spec excluding exactly
+// one enabled class's full alphabet must fail eval; if the two ever drift,
+// this fails.
+func TestPkl_GeneratorExcludeCharacters_MatchesGoAlphabets(t *testing.T) {
+	cases := []struct {
+		name     string
+		alphabet string
+	}{
+		{"uppercase", model.UppercaseChars},
+		{"lowercase", model.LowercaseChars},
+		{"digits", model.DigitChars},
+		{"symbols", model.SymbolChars},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := PKL{}
+			props := map[string]string{"excludeCharacters": c.alphabet}
+			_, err := p.Evaluate("./testdata/forma/generator_exclude_matches_go_alphabet_test.pkl", model.CommandApply, model.FormaApplyModeReconcile, props)
+			require.Error(t, err)
+			assert.ErrorContains(t, err, "removes every")
+		})
+	}
+}
+
+// TestPkl_Generator_ExcludeCharactersEmptiesClassFailsEval verifies that
+// excludeCharacters removing every character of an enabled class fails at
+// PKL eval, not at runtime.
+func TestPkl_Generator_ExcludeCharactersEmptiesClassFailsEval(t *testing.T) {
+	p := PKL{}
+	_, err := p.Evaluate("./testdata/forma/generator_exclude_empties_class_test.pkl", model.CommandApply, model.FormaApplyModeReconcile, nil)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "excludeCharacters removes every digit")
+}
+
 func TestTranslateResourcePluginConfig(t *testing.T) {
 	p := PKL{}
 	config, err := p.FormaeConfig("./testdata/config/test_resource_plugin_config.pkl")

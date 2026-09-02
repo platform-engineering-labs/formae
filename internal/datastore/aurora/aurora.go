@@ -1114,7 +1114,7 @@ func (d *DatastoreAuroraDataAPI) GetResourceModificationsSinceLastReconcile(stac
 		label, _ := getStringField(record[1])
 		operation, _ := getStringField(record[2])
 		ksuid, _ := getStringField(record[3])
-		mod := datastore.ResourceModification{Stack: stack, Type: resourceType, Label: label, Operation: operation}
+		mod := datastore.ResourceModification{Stack: stack, Type: resourceType, Label: label, Operation: operation, Ksuid: ksuid}
 		if operation == "update" {
 			curProps, propErr := d.fetchCurrentProperties(ctx, ksuid)
 			if propErr != nil {
@@ -1135,6 +1135,60 @@ func (d *DatastoreAuroraDataAPI) GetResourceModificationsSinceLastReconcile(stac
 
 // fetchCurrentProperties returns the Properties JSON from the latest resource
 // version for the given ksuid.
+// GetPropertiesAtLastWrite returns the resource's per-field write witness,
+// composed from its genuine-write history (see datastore.ComposeWriteWitness):
+// the newest create/replace echo is the base and each later apply-owned
+// update overlays only the fields its patch wrote. Sync and discovery
+// versions, metadata-only applies (empty patch), and fields an update's echo
+// merely carried along never enter the witness. History is bounded to the
+// most recent writes; a resource whose create falls outside the bound has no
+// witness, which classifies its movement as tolerated.
+func (d *DatastoreAuroraDataAPI) GetPropertiesAtLastWrite(ksuid string) (json.RawMessage, error) {
+	ctx := context.Background()
+
+	query := `
+	SELECT r.data->>'Properties', ru.operation, ru.resource::jsonb ->> 'PatchDocument'
+	FROM resources r
+	JOIN forma_commands fc ON fc.command_id = r.command_id
+	JOIN resource_updates ru ON ru.command_id = r.command_id AND ru.ksuid = r.ksuid
+	WHERE r.ksuid = :ksuid
+	AND fc.command = 'apply'
+	AND r.operation != 'delete' AND r.operation != 'reaped'
+	AND (ru.operation != 'update'
+		OR ((ru.resource::jsonb ->> 'PatchDocument') IS NOT NULL
+			AND (ru.resource::jsonb ->> 'PatchDocument') != '[]'))
+	ORDER BY r.version COLLATE "C" DESC
+	LIMIT 25
+	`
+	params := []types.SqlParameter{
+		{Name: aws.String("ksuid"), Value: &types.FieldMemberStringValue{Value: ksuid}},
+	}
+
+	output, err := d.executeStatement(ctx, query, params)
+	if err != nil {
+		return nil, err
+	}
+
+	var history []datastore.WriteVersion
+	for _, record := range output.Records {
+		if len(record) < 3 {
+			continue
+		}
+		props, _ := getStringField(record[0])
+		op, _ := getStringField(record[1])
+		patch, _ := getStringField(record[2])
+		v := datastore.WriteVersion{Operation: op}
+		if props != "" {
+			v.Properties = json.RawMessage(props)
+		}
+		if patch != "" {
+			v.Patch = json.RawMessage(patch)
+		}
+		history = append(history, v)
+	}
+	return datastore.ComposeWriteWitness(history), nil
+}
+
 func (d *DatastoreAuroraDataAPI) fetchCurrentProperties(ctx context.Context, ksuid string) (json.RawMessage, error) {
 	query := `
 	SELECT data->>'Properties'
@@ -2366,6 +2420,74 @@ func (d *DatastoreAuroraDataAPI) FindResourcesDependingOn(ksuid string) ([]*pkgm
 		ksuidResult, err := getStringField(record[1])
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse ksuid: %w", err)
+		}
+
+		var resource pkgmodel.Resource
+		if err := json.Unmarshal([]byte(jsonData), &resource); err != nil {
+			return nil, err
+		}
+		resource.Ksuid = ksuidResult
+		resources = append(resources, &resource)
+	}
+
+	return resources, nil
+}
+
+// FindResourcesReferencingGenerator finds the live resources that bind a property
+// to the given generator through a $gen envelope. A translated envelope's
+// $generator KSUID is an outbound reference KSUID, so it lands in the same
+// GIN-indexed refs column the $ref lookup uses and the array-overlap query
+// narrows the scan cheaply. That column records only that a KSUID is
+// referenced, not how, so the overlap is a prefilter and pkgmodel.BindsGenerator
+// decides which candidates are really destinations.
+func (d *DatastoreAuroraDataAPI) FindResourcesReferencingGenerator(generatorKsuid string) ([]*pkgmodel.Resource, error) {
+	ctx := context.Background()
+
+	// A single generator KSUID needs no comma, so the comma-delimited encoding
+	// refsToSQL expects is just the KSUID itself.
+	query := `
+	SELECT data, ksuid
+	FROM resources r1
+	WHERE refs && ` + refsToSQL(":refs") + `
+	AND NOT EXISTS (
+		SELECT 1
+		FROM resources r2
+		WHERE r1.uri = r2.uri
+		AND r2.version COLLATE "C" > r1.version COLLATE "C"
+	)
+	AND operation != :operation AND operation != 'reaped'
+	`
+	params := []types.SqlParameter{
+		{Name: aws.String("refs"), Value: &types.FieldMemberStringValue{Value: generatorKsuid}},
+		{Name: aws.String("operation"), Value: &types.FieldMemberStringValue{Value: string(resource_update.OperationDelete)}},
+	}
+
+	output, err := d.executeStatement(ctx, query, params)
+	if err != nil {
+		return nil, err
+	}
+
+	var resources []*pkgmodel.Resource
+	for _, record := range output.Records {
+		if len(record) < 2 {
+			return nil, fmt.Errorf("unexpected record length: %d", len(record))
+		}
+
+		jsonData, err := getStringField(record[0])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse data: %w", err)
+		}
+
+		ksuidResult, err := getStringField(record[1])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse ksuid: %w", err)
+		}
+
+		// The SQL above is only a prefilter: it is deliberately broader than
+		// the truth so no destination is missed. pkgmodel.BindsGenerator is
+		// authoritative, and drops any candidate it matched for another reason.
+		if !pkgmodel.BindsGenerator([]byte(jsonData), generatorKsuid) {
+			continue
 		}
 
 		var resource pkgmodel.Resource
@@ -4083,12 +4205,14 @@ func (d *DatastoreAuroraDataAPI) BulkStoreResourceUpdates(commandID string, upda
 				retries, remaining, version, stack_label, group_id, source,
 				resource, resource_target, existing_resource, existing_target,
 				progress_result, most_recent_progress,
-				remaining_resolvables, reference_labels, previous_properties
+				remaining_resolvables, reference_labels, previous_properties,
+				failure_reason, provenance_records, resolved_root_digests
 			) VALUES (:command_id, :ksuid, :operation, :state, :start_ts::timestamp, :modified_ts::timestamp,
 				:retries, :remaining, :version, :stack_label, :group_id, :source,
 				:resource, :resource_target, :existing_resource, :existing_target,
 				:progress_result, :most_recent_progress,
-				:remaining_resolvables, :reference_labels, :previous_properties)
+				:remaining_resolvables, :reference_labels, :previous_properties,
+				:failure_reason, :provenance_records, :resolved_root_digests)
 			ON CONFLICT (command_id, ksuid, operation) DO UPDATE SET
 				state = EXCLUDED.state,
 				modified_ts = EXCLUDED.modified_ts,
@@ -4096,7 +4220,10 @@ func (d *DatastoreAuroraDataAPI) BulkStoreResourceUpdates(commandID string, upda
 				existing_resource = EXCLUDED.existing_resource,
 				previous_properties = EXCLUDED.previous_properties,
 				progress_result = EXCLUDED.progress_result,
-				most_recent_progress = EXCLUDED.most_recent_progress
+				most_recent_progress = EXCLUDED.most_recent_progress,
+				failure_reason = EXCLUDED.failure_reason,
+				provenance_records = EXCLUDED.provenance_records,
+				resolved_root_digests = EXCLUDED.resolved_root_digests
 		`
 
 		params := []types.SqlParameter{
@@ -4121,6 +4248,9 @@ func (d *DatastoreAuroraDataAPI) BulkStoreResourceUpdates(commandID string, upda
 			{Name: aws.String("remaining_resolvables"), Value: &types.FieldMemberStringValue{Value: string(remainingResolvablesJSON)}},
 			{Name: aws.String("reference_labels"), Value: &types.FieldMemberStringValue{Value: string(referenceLabelsJSON)}},
 			{Name: aws.String("previous_properties"), Value: &types.FieldMemberStringValue{Value: string(previousPropertiesJSON)}},
+			{Name: aws.String("failure_reason"), Value: &types.FieldMemberStringValue{Value: ru.FailureReason}},
+			{Name: aws.String("provenance_records"), Value: &types.FieldMemberStringValue{Value: marshalOrEmpty(ru.ProvenanceRecords)}},
+			{Name: aws.String("resolved_root_digests"), Value: &types.FieldMemberStringValue{Value: marshalOrEmpty(ru.ResolvedRootDigests)}},
 		}
 
 		_, err = d.executeStatementInTransaction(ctx, txID, query, params)
@@ -4137,6 +4267,26 @@ func (d *DatastoreAuroraDataAPI) BulkStoreResourceUpdates(commandID string, upda
 	return nil
 }
 
+// marshalOrEmpty JSON-encodes v, or returns "" for an empty value (the SQL
+// treats "" as NULL via NULLIF / stores NULL-equivalent).
+func marshalOrEmpty(v any) string {
+	switch t := v.(type) {
+	case []resource_update.OccurrenceRecord:
+		if len(t) == 0 {
+			return ""
+		}
+	case map[string]string:
+		if len(t) == 0 {
+			return ""
+		}
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
 func (d *DatastoreAuroraDataAPI) LoadResourceUpdates(commandID string) ([]resource_update.ResourceUpdate, error) {
 	ctx := context.Background()
 
@@ -4145,7 +4295,8 @@ func (d *DatastoreAuroraDataAPI) LoadResourceUpdates(commandID string) ([]resour
 		retries, remaining, version, stack_label, group_id, source,
 		resource, resource_target, existing_resource, existing_target,
 		progress_result, most_recent_progress,
-		remaining_resolvables, reference_labels, previous_properties
+		remaining_resolvables, reference_labels, previous_properties,
+		failure_reason, provenance_records, resolved_root_digests
 	FROM resource_updates
 	WHERE command_id = :command_id
 	ORDER BY ksuid ASC
@@ -4185,6 +4336,17 @@ func (d *DatastoreAuroraDataAPI) LoadResourceUpdates(commandID string) ([]resour
 		remainingResolvablesJSON, _ := getStringField(record[17])
 		referenceLabelsJSON, _ := getStringField(record[18])
 		previousPropertiesJSON, _ := getStringField(record[19])
+		var failureReason string
+		if len(record) > 20 {
+			failureReason, _ = getStringField(record[20])
+		}
+		var provenanceRecordsJSON, resolvedRootDigestsJSON string
+		if len(record) > 21 {
+			provenanceRecordsJSON, _ = getStringField(record[21])
+		}
+		if len(record) > 22 {
+			resolvedRootDigestsJSON, _ = getStringField(record[22])
+		}
 
 		var desiredState pkgmodel.Resource
 		var resourceTarget pkgmodel.Target
@@ -4231,7 +4393,14 @@ func (d *DatastoreAuroraDataAPI) LoadResourceUpdates(commandID string) ([]resour
 			RemainingResolvables:     remainingResolvables,
 			ReferenceLabels:          referenceLabels,
 			PreviousProperties:       previousProperties,
+			FailureReason:            failureReason,
 		})
+		if provenanceRecordsJSON != "" {
+			_ = json.Unmarshal([]byte(provenanceRecordsJSON), &updates[len(updates)-1].ProvenanceRecords)
+		}
+		if resolvedRootDigestsJSON != "" {
+			_ = json.Unmarshal([]byte(resolvedRootDigestsJSON), &updates[len(updates)-1].ResolvedRootDigests)
+		}
 	}
 
 	return updates, nil
@@ -4267,7 +4436,7 @@ func (d *DatastoreAuroraDataAPI) UpdateResourceUpdateState(commandID string, ksu
 	return nil
 }
 
-func (d *DatastoreAuroraDataAPI) UpdateResourceUpdateProgress(commandID string, ksuid string, operation metaTypes.OperationType, state resource_update.ResourceUpdateState, startTs time.Time, modifiedTs time.Time, progress plugin.TrackedProgress) error {
+func (d *DatastoreAuroraDataAPI) UpdateResourceUpdateProgress(commandID string, ksuid string, operation metaTypes.OperationType, state resource_update.ResourceUpdateState, startTs time.Time, modifiedTs time.Time, progress plugin.TrackedProgress, resolvedRootDigests map[string]string) error {
 	ctx := context.Background()
 
 	// First, load existing progress results to append to
@@ -4306,7 +4475,8 @@ func (d *DatastoreAuroraDataAPI) UpdateResourceUpdateProgress(commandID string, 
 
 	updateQuery := `
 	UPDATE resource_updates
-	SET state = :state, start_ts = :start_ts::timestamp, modified_ts = :modified_ts::timestamp, progress_result = :progress_result, most_recent_progress = :most_recent_progress
+	SET state = :state, start_ts = :start_ts::timestamp, modified_ts = :modified_ts::timestamp, progress_result = :progress_result, most_recent_progress = :most_recent_progress,
+		resolved_root_digests = COALESCE(NULLIF(:resolved_root_digests, ''), resolved_root_digests)
 	WHERE command_id = :command_id AND ksuid = :ksuid AND operation = :operation
 	`
 	updateParams := []types.SqlParameter{
@@ -4315,6 +4485,7 @@ func (d *DatastoreAuroraDataAPI) UpdateResourceUpdateProgress(commandID string, 
 		{Name: aws.String("modified_ts"), Value: &types.FieldMemberStringValue{Value: modifiedTs.UTC().Format(time.RFC3339Nano)}},
 		{Name: aws.String("progress_result"), Value: &types.FieldMemberStringValue{Value: string(progressJSON)}},
 		{Name: aws.String("most_recent_progress"), Value: &types.FieldMemberStringValue{Value: string(mostRecentJSON)}},
+		{Name: aws.String("resolved_root_digests"), Value: &types.FieldMemberStringValue{Value: marshalOrEmpty(resolvedRootDigests)}},
 		{Name: aws.String("command_id"), Value: &types.FieldMemberStringValue{Value: commandID}},
 		{Name: aws.String("ksuid"), Value: &types.FieldMemberStringValue{Value: ksuid}},
 		{Name: aws.String("operation"), Value: &types.FieldMemberStringValue{Value: string(operation)}},
@@ -6106,10 +6277,23 @@ func (d *DatastoreAuroraDataAPI) Close() {
 }
 
 // This can be only used in tests or in setups where we have access to admin (non-production)
+//
+// Aurora is the only backend that needs this: sqlite gets a fresh in-memory
+// database per test and postgres/mssql each drop their randomly-named
+// per-test database wholesale, so neither enumerates tables. Aurora's tests
+// share one fixed database (FORMAE_TEST_AURORA_DATABASE), so this has to name
+// every table with test-observable state, or a table left off silently
+// accumulates rows across runs and later tests can read another run's data.
+// db_version (goose's migration-tracking table) is deliberately excluded —
+// clearing it would make goose re-run migrations against tables that already
+// exist.
 func (d *DatastoreAuroraDataAPI) CleanUp() error {
 	ctx := context.Background()
 
-	tables := []string{"stacks", "resource_updates", "resources", "targets", "forma_commands"}
+	tables := []string{
+		"stacks", "resource_updates", "resources", "targets", "forma_commands",
+		"policies", "stack_policies", "generators", "target_reap_audit", "agent_boots",
+	}
 
 	for _, table := range tables {
 		query := fmt.Sprintf("DELETE FROM %s", table)
