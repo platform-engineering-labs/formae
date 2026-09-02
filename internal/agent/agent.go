@@ -183,6 +183,15 @@ func (a *Agent) Start() error {
 			ms.AuthPluginHandle = authHandle
 		}
 
+		// An abnormal stop of the orchestrator application means every actor
+		// is gone while this process and its HTTP surface keep running and
+		// look healthy. Exit instead: the process supervisor (ECS, systemd)
+		// restarts the agent, and startup re-runs incomplete commands.
+		ms.OnApplicationStopped = func(reason error) {
+			slog.Error("Metastructure stopped; shutting down so the process supervisor restarts the agent", "reason", reason)
+			a.cancel()
+		}
+
 		imwg.Add(ms)
 
 		if err := ms.Start(); err != nil {

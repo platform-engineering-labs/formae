@@ -95,6 +95,13 @@ type Metastructure struct {
 	// the process) and the API server (which uses it for request validation).
 	AuthPluginHandle *auth.AuthPluginHandle
 
+	// OnApplicationStopped is invoked when the orchestrator application stops
+	// for any reason other than a deliberate shutdown. At that point every
+	// actor is gone while the process and its HTTP surface keep running, so
+	// the owner must treat the process as failed and exit; the restart is what
+	// re-runs incomplete commands. Set by the agent before Start().
+	OnApplicationStopped func(reason error)
+
 	// commandMu serializes Apply/Destroy/ForceAutoReconcile to prevent TOCTOU
 	// races between the conflict check and command storage. This will be
 	// removed once the Metastructure itself becomes an actor.
@@ -130,7 +137,7 @@ func NewMetastructureWithDataStoreAndContext(ctx context.Context, cfg *pkgmodel.
 
 	metastructure.nodeName = fmt.Sprintf("%s@%s", cfg.Agent.Server.Nodename, cfg.Agent.Server.Hostname)
 	apps := []gen.ApplicationBehavior{
-		CreateApplication(),
+		CreateApplication(metastructure.applicationStopped),
 	}
 
 	if cfg.Agent.Server.ObserverPort != 0 {
@@ -207,6 +214,15 @@ func NewMetastructureWithDataStoreAndContext(ctx context.Context, cfg *pkgmodel.
 	metastructure.options.Log.Loggers = append(metastructure.options.Log.Loggers, gen.Logger{Name: "ergo", Logger: logger})
 
 	return metastructure, nil
+}
+
+// applicationStopped relays an abnormal orchestrator-application stop to the
+// owner. It reads OnApplicationStopped at stop time, so the owner may set the
+// field any time between construction and Start().
+func (m *Metastructure) applicationStopped(reason error) {
+	if m.OnApplicationStopped != nil {
+		m.OnApplicationStopped(reason)
+	}
 }
 
 func (m *Metastructure) Start() error {
