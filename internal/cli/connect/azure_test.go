@@ -27,8 +27,9 @@ const (
 // the one coordinate that can never be a mere hint); tenant-id alone is
 // accepted as a provisioning-mode authentication hint, forwarded verbatim
 // into provx's New(), which is exactly what "New() accepts an empty
-// azTenantID" is for; client-id without tenant-id cannot name a complete
-// external identity and fails.
+// azTenantID" is for. client-id selects register-only whether or not a tenant
+// is supplied: an absent tenant is derived from the subscription when the run
+// executes, so it is no longer a flag-validation concern.
 func TestAzureModeSelection(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -38,7 +39,10 @@ func TestAzureModeSelection(t *testing.T) {
 	}{
 		{"subscription alone provisions", azureOptions{Subscription: testSubscription}, azureModeLocal, false},
 		{"tenant hint alone still provisions", azureOptions{Subscription: testSubscription, TenantID: testAzureTenant}, azureModeLocal, false},
-		{"client id alone fails", azureOptions{Subscription: testSubscription, ClientID: testAzureClient}, 0, true},
+		// --client-id alone is now a register-only run: the tenant is derived
+		// from the subscription at execute time, so the flag pair is no longer
+		// the only way to name a complete external identity.
+		{"client id alone registers, tenant derived later", azureOptions{Subscription: testSubscription, ClientID: testAzureClient}, azureModeRegisterOnly, false},
 		{"both coordinates register", azureOptions{Subscription: testSubscription, TenantID: testAzureTenant, ClientID: testAzureClient}, azureModeRegisterOnly, false},
 	}
 	for _, tc := range tests {
@@ -65,9 +69,14 @@ func TestAzureTenantHintMustBeAUUIDEvenAlone(t *testing.T) {
 
 // One coordinate without the other fails outright: a bare client id cannot
 // name a complete external identity.
-func TestAzureRegisterOnlyRequiresBothCoordinates(t *testing.T) {
-	_, err := decideAzureMode(azureOptions{Subscription: testSubscription, ClientID: testAzureClient})
-	require.Error(t, err)
+func TestAzureRegisterOnlyAcceptsAClientIDAlone(t *testing.T) {
+	// The tenant is derived from the subscription when the run executes, so a
+	// client id on its own is a complete register-only invocation. Requiring
+	// both flags made the operator copy a second guid that ARM will name for
+	// free.
+	mode, err := decideAzureMode(azureOptions{Subscription: testSubscription, ClientID: testAzureClient})
+	require.NoError(t, err)
+	assert.Equal(t, azureModeRegisterOnly, mode)
 }
 
 // A tenant or client id that is not a UUID is refused before any
