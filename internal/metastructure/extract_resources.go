@@ -280,11 +280,13 @@ func (m *Metastructure) ExtractStacks() ([]*pkgmodel.Stack, error) {
 // res arrives as a shallow copy already (FormaFromResources built it by
 // dereferencing the datastore's *Resource), which means its Properties field
 // is still a slice header pointing at the very same backing array the stored
-// resource uses. sjson's Set/Delete calls can grow or shrink a []byte in
-// place when there is spare capacity, so operating on that shared array
-// could corrupt state a concurrent reader — or the datastore's own cache —
-// still holds. Cloning the byte slice here, before any filtering touches it,
-// guarantees the backing array is exclusively res's own.
+// resource uses. append(json.RawMessage(nil), res.Properties...) below always
+// allocates a fresh backing array — append onto a nil slice can never reuse
+// the source's capacity — so res.Properties is exclusively this clone's own
+// before any filtering call touches it. That makes safety here structural,
+// not a bet on how sjson's Set/Delete happen to manage capacity internally:
+// whatever they do, it lands on a backing array the stored resource never
+// had a slice header pointing at.
 func filterCoOwnedResource(res pkgmodel.Resource) pkgmodel.Resource {
 	res.Properties = append(json.RawMessage(nil), res.Properties...)
 
@@ -512,7 +514,16 @@ func singleMemberIdentity(el gjson.Result, hint pkgmodel.FieldHint) (string, boo
 // escapeGjsonPathKey escapes the gjson/sjson path metacharacters a map key
 // might contain, so a key like "a.b" addresses itself as one literal key
 // rather than being read as nested path syntax.
-const gjsonPathSpecialChars = `\.*?#@`
+//
+// The set is: '\' and '.', which sjson's path parser always treats specially
+// (escape-mode trigger and path-segment separator, handled before any
+// per-character check runs — see parsePath in sjson.go), plus every
+// character sjson's own isSimpleChar predicate rejects — '|', '#', '@', '*',
+// '?' (github.com/tidwall/sjson@v1.2.5/sjson.go:45-51). Deriving the set from
+// that predicate, rather than hand-picking characters that "look" special,
+// is what catches '|': a key containing it would otherwise fail DeleteBytes
+// and fall back to emitting the field unfiltered.
+const gjsonPathSpecialChars = `\.|#@*?`
 
 func escapeGjsonPathKey(key string) string {
 	if !strings.ContainsAny(key, gjsonPathSpecialChars) {

@@ -1047,3 +1047,178 @@ func TestExtractResources_CoOwnedRecordless_SetListingSystemPatternsDropMatches(
 	assert.Equal(t, []any{"team"}, members.Value(),
 		"the member matching the SystemPatterns glob must be dropped, in its natural unquoted form")
 }
+
+// TestExtractResources_CoOwnedRecordless_PipeInKeyStillDrops verifies that a
+// Mapping key containing '|' — a gjson/sjson path metacharacter — is still
+// correctly dropped when it matches a SystemPatterns glob. '|' has no
+// special meaning to path.Match, so the glob match itself was never at risk;
+// what was at risk is the sjson.DeleteBytes call that actually removes the
+// matched key from the object, which requires the key to be escaped for
+// sjson's own path syntax (see escapeGjsonPathKey) — an unescaped '|' fails
+// that delete and would fall back to emitting the field unfiltered.
+func TestExtractResources_CoOwnedRecordless_PipeInKeyStillDrops(t *testing.T) {
+	schema := mappingCoOwnedSchema("labels", []string{"aws:*"})
+
+	ds := &mockExtractDatastore{
+		resources: []*pkgmodel.Resource{
+			{
+				Label:      "res-1",
+				Type:       "AWS::EC2::VPC",
+				Stack:      "default",
+				Properties: json.RawMessage(`{"labels":{"aws:special|thing":"x","team":"y"}}`),
+				Schema:     schema,
+				// No OwnedMembers: this forma has never claimed this field.
+			},
+		},
+		stacks:   map[string]*pkgmodel.Stack{},
+		targets:  map[string]*pkgmodel.Target{},
+		policies: map[string]pkgmodel.Policy{},
+	}
+
+	m := &Metastructure{Datastore: ds}
+	forma, err := m.ExtractResources("")
+	require.NoError(t, err)
+	require.Len(t, forma.Resources, 1)
+
+	labels := gjson.GetBytes(forma.Resources[0].Properties, "labels")
+	require.True(t, labels.Exists())
+	assert.Equal(t, map[string]any{"team": "y"}, labels.Value(),
+		"a key containing '|' that matches a SystemPatterns glob must actually be dropped, not silently retained via a failed delete")
+}
+
+// TestExtractResources_CoOwnedRecorded_MappingFilteredToZeroRendersEmptyObject
+// verifies that filtering a Mapping down to no surviving members renders the
+// field as "{}" — the same empty-collection convention extract already uses,
+// not a new rendering.
+func TestExtractResources_CoOwnedRecorded_MappingFilteredToZeroRendersEmptyObject(t *testing.T) {
+	schema := mappingCoOwnedSchema("labels", nil)
+
+	ds := &mockExtractDatastore{
+		resources: []*pkgmodel.Resource{
+			{
+				Label:      "res-1",
+				Type:       "AWS::EC2::VPC",
+				Stack:      "default",
+				Properties: json.RawMessage(`{"labels":{"mine":"a","theirs":"b"}}`),
+				Schema:     schema,
+				OwnedMembers: pkgmodel.OwnedMembers{
+					// An interpretable record that claims nothing.
+					"labels": {Rule: pkgmodel.IdentityRule(schema.Hints["labels"]), Members: []string{}},
+				},
+			},
+		},
+		stacks:   map[string]*pkgmodel.Stack{},
+		targets:  map[string]*pkgmodel.Target{},
+		policies: map[string]pkgmodel.Policy{},
+	}
+
+	m := &Metastructure{Datastore: ds}
+	forma, err := m.ExtractResources("")
+	require.NoError(t, err)
+	require.Len(t, forma.Resources, 1)
+
+	labels := gjson.GetBytes(forma.Resources[0].Properties, "labels")
+	require.True(t, labels.Exists())
+	assert.Equal(t, "{}", labels.Raw, "a Mapping filtered to zero members must render as {}")
+}
+
+// TestExtractResources_CoOwnedRecordless_PatternsMatchingAllRendersEmptyObject
+// verifies the record-less, pattern-based path renders the same empty-object
+// convention when every live member matches a SystemPatterns glob.
+func TestExtractResources_CoOwnedRecordless_PatternsMatchingAllRendersEmptyObject(t *testing.T) {
+	schema := mappingCoOwnedSchema("tags", []string{"*"})
+
+	ds := &mockExtractDatastore{
+		resources: []*pkgmodel.Resource{
+			{
+				Label:      "res-1",
+				Type:       "AWS::EC2::VPC",
+				Stack:      "default",
+				Properties: json.RawMessage(`{"tags":{"aws:cloudformation:stack":"my-stack","team":"platform"}}`),
+				Schema:     schema,
+			},
+		},
+		stacks:   map[string]*pkgmodel.Stack{},
+		targets:  map[string]*pkgmodel.Target{},
+		policies: map[string]pkgmodel.Policy{},
+	}
+
+	m := &Metastructure{Datastore: ds}
+	forma, err := m.ExtractResources("")
+	require.NoError(t, err)
+	require.Len(t, forma.Resources, 1)
+
+	tags := gjson.GetBytes(forma.Resources[0].Properties, "tags")
+	require.True(t, tags.Exists())
+	assert.Equal(t, "{}", tags.Raw, "a Mapping with every member matching SystemPatterns must render as {}")
+}
+
+// TestExtractResources_CoOwnedRecorded_SetListingFilteredToZeroRendersEmptyArray
+// verifies that filtering a Set listing down to no surviving elements
+// renders the field as "[]" — the same empty-collection convention extract
+// already uses for a Listing, not a new rendering.
+func TestExtractResources_CoOwnedRecorded_SetListingFilteredToZeroRendersEmptyArray(t *testing.T) {
+	hint := setListingCoOwnedHint(nil)
+	schema := pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{"members": hint}}
+
+	ds := &mockExtractDatastore{
+		resources: []*pkgmodel.Resource{
+			{
+				Label:      "res-1",
+				Type:       "AWS::EC2::VPC",
+				Stack:      "default",
+				Properties: json.RawMessage(`{"members":["mine","theirs"]}`),
+				Schema:     schema,
+				OwnedMembers: pkgmodel.OwnedMembers{
+					// An interpretable record that claims nothing.
+					"members": {Rule: pkgmodel.IdentityRule(hint), Members: []string{}},
+				},
+			},
+		},
+		stacks:   map[string]*pkgmodel.Stack{},
+		targets:  map[string]*pkgmodel.Target{},
+		policies: map[string]pkgmodel.Policy{},
+	}
+
+	m := &Metastructure{Datastore: ds}
+	forma, err := m.ExtractResources("")
+	require.NoError(t, err)
+	require.Len(t, forma.Resources, 1)
+
+	members := gjson.GetBytes(forma.Resources[0].Properties, "members")
+	require.True(t, members.Exists())
+	assert.Equal(t, "[]", members.Raw, "a Set listing filtered to zero elements must render as []")
+}
+
+// TestExtractResources_CoOwnedRecordless_PatternsMatchingAllRendersEmptyArray
+// verifies the record-less, pattern-based path renders the same empty-array
+// convention for a listing when every live member matches a SystemPatterns
+// glob.
+func TestExtractResources_CoOwnedRecordless_PatternsMatchingAllRendersEmptyArray(t *testing.T) {
+	hint := setListingCoOwnedHint([]string{"*"})
+	schema := pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{"members": hint}}
+
+	ds := &mockExtractDatastore{
+		resources: []*pkgmodel.Resource{
+			{
+				Label:      "res-1",
+				Type:       "AWS::EC2::VPC",
+				Stack:      "default",
+				Properties: json.RawMessage(`{"members":["aws:default","aws:other"]}`),
+				Schema:     schema,
+			},
+		},
+		stacks:   map[string]*pkgmodel.Stack{},
+		targets:  map[string]*pkgmodel.Target{},
+		policies: map[string]pkgmodel.Policy{},
+	}
+
+	m := &Metastructure{Datastore: ds}
+	forma, err := m.ExtractResources("")
+	require.NoError(t, err)
+	require.Len(t, forma.Resources, 1)
+
+	members := gjson.GetBytes(forma.Resources[0].Properties, "members")
+	require.True(t, members.Exists())
+	assert.Equal(t, "[]", members.Raw, "a Set listing with every member matching SystemPatterns must render as []")
+}
