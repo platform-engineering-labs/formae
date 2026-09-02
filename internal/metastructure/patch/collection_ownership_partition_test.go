@@ -16,9 +16,9 @@ import (
 // with a priorOwned parameter and driven off a full pkgmodel.Schema (so a
 // hint's CoOwned/UpdateMethod/IndexField/HasProviderDefault all take effect).
 // Like planFor, it drives createPatchDocument directly, not GeneratePatch —
-// but it additionally computes the CoOwned partition the same way generatePatch
-// does, immediately before the createPatchDocument call, over the same
-// (actual, desired) byte pair.
+// but it additionally computes the CoOwned partition and the co-owned
+// path exemptions the same way generatePatch does, immediately before the
+// createPatchDocument call, over the same (actual, desired) byte pair.
 func planForCoOwned(t *testing.T, actual, desired string, schema pkgmodel.Schema, priorOwned pkgmodel.OwnedMembers, strategy jsonpatch.PatchStrategy) []string {
 	t.Helper()
 
@@ -36,6 +36,7 @@ func planForCoOwned(t *testing.T, actual, desired string, schema pkgmodel.Schema
 		strategy,
 		nil, // converge fields
 		nil, // preserve roots
+		coOwnedFieldPaths(schema.Hints),
 	)
 	require.NoError(t, err)
 	out := make([]string, 0, len(ops))
@@ -180,25 +181,18 @@ func TestCoOwnedEntitySetKeepsDeclaredUpdatesUnfiltered(t *testing.T) {
 }
 
 // A co-owned Mapping nested under another field — the shape the Kubernetes
-// metadata.labels case uses — should drain the same way a top-level one does:
-// the explicit-empty drain should land at the nested path, removing only the
-// member this forma previously declared and leaving a co-actor's key
-// untouched.
+// metadata.labels case uses — drains the same way a top-level one does: the
+// explicit-empty drain lands at the nested path, removing only the member
+// this forma previously declared and leaving a co-actor's key untouched.
 //
-// Currently blocked: jsonpatch itself resolves the nested co-owned path
-// correctly (verified directly against jsonpatch.CreatePatch, independent of
-// this package), but createPatchDocument's own empty-collection normalization
-// (StripNestedEmptyCollectionsExcept) strips a NESTED empty collection from
-// its parent before the diff ever runs — {"metadata":{"labels":{}}} becomes
-// {"metadata":{}} — because that pass's preserve-exemption
-// (PreserveEmptyRootFields) only covers top-level, non-dotted hint names. The
-// explicit-empty signal a nested co-owned Mapping needs is erased before
-// coOwnedCollections' whole-field-tolerance-vs-member-drain distinction ever
-// gets to see it, so the field reads as omitted and is tolerated whole
-// instead of being drained.
+// This depends on the empty-collection normalization inside createPatchDocument
+// exempting the co-owned path's OWN empty value from stripping at whatever
+// depth it lives at (stripNestedEmptyCollectionsExceptPaths / coOwnedFieldPaths):
+// without that exemption, {"metadata":{"labels":{}}} loses its "labels" key
+// before the diff ever runs, the field reads as omitted rather than
+// explicitly cleared, and the whole-field-tolerance branch swallows it
+// instead of draining the formerly-owned member.
 func TestCoOwnedNestedMappingExplicitEmptyDrainsPriorOwnedOnly(t *testing.T) {
-	t.Skip("blocked: nested empty-collection normalization erases a nested co-owned Mapping's explicit-empty state before the diff runs; see comment above")
-
 	schema := pkgmodel.Schema{
 		Fields: []string{"metadata"},
 		Hints: map[string]pkgmodel.FieldHint{

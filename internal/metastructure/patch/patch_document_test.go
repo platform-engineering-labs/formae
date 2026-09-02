@@ -158,7 +158,7 @@ func TestCreatePatchDocument_PrimitiveArray(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			patches, err := createPatchDocument(tc.jsonA, tc.jsonB, []string{"label", "tags"}, nil, nil, nil, jsonpatch.Collections{}, nil, jsonpatch.PatchStrategyEnsureExists, nil, nil)
+			patches, err := createPatchDocument(tc.jsonA, tc.jsonB, []string{"label", "tags"}, nil, nil, nil, jsonpatch.Collections{}, nil, jsonpatch.PatchStrategyEnsureExists, nil, nil, nil)
 			if err != nil {
 				t.Fatalf("Error comparing JSONs: %v", err)
 			}
@@ -230,7 +230,7 @@ func TestCreatePatchDocument_ObjectArrayWithKeyValues(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			patches, err := createPatchDocument(tc.jsonA, tc.jsonB, []string{"label", "tags"}, nil, nil, nil, jsonpatch.Collections{EntitySets: jsonpatch.EntitySets{jsonpatch.Path("$.tags"): jsonpatch.Key("key")}}, nil, jsonpatch.PatchStrategyEnsureExists, nil, nil)
+			patches, err := createPatchDocument(tc.jsonA, tc.jsonB, []string{"label", "tags"}, nil, nil, nil, jsonpatch.Collections{EntitySets: jsonpatch.EntitySets{jsonpatch.Path("$.tags"): jsonpatch.Key("key")}}, nil, jsonpatch.PatchStrategyEnsureExists, nil, nil, nil)
 			if err != nil {
 				t.Fatalf("Error comparing JSONs: %v", err)
 			}
@@ -304,7 +304,7 @@ func TestCreatePatchDocument_ObjectArrayWithValues(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			patches, err := createPatchDocument(tc.jsonA, tc.jsonB, []string{"label", "tags"}, nil, nil, nil, jsonpatch.Collections{}, nil, jsonpatch.PatchStrategyEnsureExists, nil, nil)
+			patches, err := createPatchDocument(tc.jsonA, tc.jsonB, []string{"label", "tags"}, nil, nil, nil, jsonpatch.Collections{}, nil, jsonpatch.PatchStrategyEnsureExists, nil, nil, nil)
 			if err != nil {
 				t.Fatalf("Error comparing JSONs: %v", err)
 			}
