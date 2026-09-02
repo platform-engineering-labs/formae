@@ -7,6 +7,7 @@ package patch
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"reflect"
 	"strconv"
 	"strings"
@@ -88,6 +89,34 @@ func coOwnedCollections(document, patch []byte, hints map[string]pkgmodel.FieldH
 	coOwned := jsonpatch.CoOwned{}
 	for field, hint := range hints {
 		if hint.CoOwned == nil {
+			continue
+		}
+		// CoOwned on an Array/Atomic/Opaque field, or with no UpdateMethod at
+		// all besides an implicit Mapping, is a combination PKL validation
+		// rejects at authoring time. A schema that reaches here as JSON
+		// (plugin protocol, a stored row) bypasses that eval, so this is the
+		// Go-side backstop: IdentityRule returning "" means no drainable
+		// scheme exists for the hint's shape, and Opaque's "members" are
+		// secret values, not names (see claimedMembers). Either way the field
+		// degrades to un-annotated behavior rather than registering a path
+		// jsonpatch would otherwise treat as co-owned.
+		if pkgmodel.IdentityRule(hint) == "" || hint.Opaque {
+			continue
+		}
+		// A field name containing '/' or '~' cannot round-trip jsonpatch's
+		// path translation: this function registers the raw field name
+		// ("$."+field), but toJsonPath derives its lookup key from the RFC
+		// 6901 pointer jsonpatch builds while diffing, which escapes '/' to
+		// "~1" and '~' to "~0" — the two strings can never be equal, so the
+		// registered entry can never match and is permanently inert (verified
+		// directly against jsonpatch.CreatePatch for both a Set and a Mapping
+		// shape: the drainable set is never consulted either way). PKL
+		// property names cannot contain either character, so this guards only
+		// an exotic outputField rename reaching this function via JSON — but
+		// leaving a dead entry registered is still worth skipping and logging
+		// rather than carrying silently.
+		if strings.ContainsAny(field, "/~") {
+			slog.Warn("co-owned field name cannot round-trip jsonpatch's path translation, ignoring annotation", "field", field)
 			continue
 		}
 

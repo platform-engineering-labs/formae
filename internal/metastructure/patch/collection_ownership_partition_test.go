@@ -5,8 +5,11 @@
 package patch
 
 import (
+	"bytes"
+	"log/slog"
 	"testing"
 
+	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/jsonpatch"
 	"github.com/stretchr/testify/require"
@@ -209,4 +212,99 @@ func TestCoOwnedNestedMappingExplicitEmptyDrainsPriorOwnedOnly(t *testing.T) {
 		schema, priorOwned, jsonpatch.PatchStrategyExactMatch)
 
 	require.Equal(t, []string{"remove /metadata/labels/mine"}, ops)
+}
+
+// generatePatchForSchema runs the exported GeneratePatch with no stored/desired
+// envelopes, no prior ownership, and reconcile mode — the shared shape the
+// three coherence tests below need.
+func generatePatchForSchema(t *testing.T, document, patch string, schema pkgmodel.Schema) []byte {
+	t.Helper()
+	patchDoc, _, _, err := GeneratePatch([]byte(document), []byte(patch), nil, nil, resolver.NewResolvableProperties(), schema, nil, pkgmodel.FormaApplyModeReconcile)
+	require.NoError(t, err)
+	return patchDoc
+}
+
+// CoOwned has no defined identity scheme for an Atomic field (IdentityRule
+// returns "" for it), a combination PKL validation rejects at authoring time.
+// A schema that reaches GeneratePatch as JSON and carries it anyway must
+// still produce exactly what an un-annotated Atomic field produces: a
+// whole-value replace, with no tolerance of any kind.
+func TestCoOwnedAtomicHintBehavesLikeNoAnnotation(t *testing.T) {
+	document := `{"Cfg":{"Note":"a","Extra":"x"}}`
+	desired := `{"Cfg":{"Note":"b"}}`
+
+	unannotated := pkgmodel.Schema{
+		Fields: []string{"Cfg"},
+		Hints:  map[string]pkgmodel.FieldHint{"Cfg": {UpdateMethod: pkgmodel.FieldUpdateMethodAtomic}},
+	}
+	annotated := pkgmodel.Schema{
+		Fields: []string{"Cfg"},
+		Hints:  map[string]pkgmodel.FieldHint{"Cfg": {UpdateMethod: pkgmodel.FieldUpdateMethodAtomic, CoOwned: &pkgmodel.CoOwnership{}}},
+	}
+
+	withoutOp := generatePatchForSchema(t, document, desired, unannotated)
+	withOp := generatePatchForSchema(t, document, desired, annotated)
+
+	require.JSONEq(t, string(withoutOp), string(withOp))
+	require.Contains(t, string(withOp), `"op":"replace"`)
+	require.Contains(t, string(withOp), `"path":"/Cfg"`)
+}
+
+// Same coherence property for an Array field: CoOwned has no defined identity
+// scheme for it either (positional comparison has no member identity at
+// all), so a CoOwned+Array hint must diff exactly like a plain Array hint —
+// element-by-element replace, no drain, no tolerance.
+func TestCoOwnedArrayHintBehavesLikeNoAnnotation(t *testing.T) {
+	document := `{"Items":["a","b"]}`
+	desired := `{"Items":["b","a"]}`
+
+	unannotated := pkgmodel.Schema{
+		Fields: []string{"Items"},
+		Hints:  map[string]pkgmodel.FieldHint{"Items": {UpdateMethod: pkgmodel.FieldUpdateMethodArray}},
+	}
+	annotated := pkgmodel.Schema{
+		Fields: []string{"Items"},
+		Hints:  map[string]pkgmodel.FieldHint{"Items": {UpdateMethod: pkgmodel.FieldUpdateMethodArray, CoOwned: &pkgmodel.CoOwnership{}}},
+	}
+
+	withoutOp := generatePatchForSchema(t, document, desired, unannotated)
+	withOp := generatePatchForSchema(t, document, desired, annotated)
+
+	require.JSONEq(t, string(withoutOp), string(withOp))
+	require.Contains(t, string(withOp), `"path":"/Items/0"`)
+	require.Contains(t, string(withOp), `"path":"/Items/1"`)
+}
+
+// A co-owned field named with a '/' cannot round-trip jsonpatch's path
+// translation, so its annotation is unusable — it degrades to un-annotated
+// Set behavior (every missing member removed unconditionally under
+// reconcile, none tolerated) and logs a warning naming the field, rather
+// than silently registering a CoOwned entry that could never activate.
+func TestCoOwnedSlashInFieldNameDegradesToNoAnnotationAndLogs(t *testing.T) {
+	document := `{"members/extra":["a","x"]}`
+	desired := `{"members/extra":["a"]}`
+
+	unannotated := pkgmodel.Schema{
+		Fields: []string{"members/extra"},
+		Hints:  map[string]pkgmodel.FieldHint{"members/extra": {UpdateMethod: pkgmodel.FieldUpdateMethodSet}},
+	}
+	annotated := pkgmodel.Schema{
+		Fields: []string{"members/extra"},
+		Hints:  map[string]pkgmodel.FieldHint{"members/extra": {UpdateMethod: pkgmodel.FieldUpdateMethodSet, CoOwned: &pkgmodel.CoOwnership{}}},
+	}
+
+	withoutOp := generatePatchForSchema(t, document, desired, unannotated)
+
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(previous)
+
+	withOp := generatePatchForSchema(t, document, desired, annotated)
+
+	require.JSONEq(t, string(withoutOp), string(withOp))
+	require.Contains(t, string(withOp), `"op":"remove"`,
+		"un-annotated Set semantics remove every missing member unconditionally; a working annotation would have tolerated the never-owned \"x\"")
+	require.Contains(t, logs.String(), "members/extra",
+		"the skip must be logged with the offending field name")
 }
