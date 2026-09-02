@@ -245,6 +245,48 @@ func TestPrepareRotation_PlansTheConsumersOfADestination(t *testing.T) {
 		"a resource consuming the destination by reference must be planned, or the rotation leaves it holding the old credential")
 }
 
+// The consumer walk is transitive: a consumer may itself be referenced, and
+// every resource downstream of the rotated value has to move in the same
+// changeset. The production shape has a second hop — a database whose owner
+// references the role whose password references the rotating secret — so a
+// walk that stopped at the first hop would leave the database behind.
+func TestPrepareRotation_PlansTheTransitiveConsumersOfADestination(t *testing.T) {
+	ds := rotationTestDatastore(t)
+	_, err := ds.CreateTarget(&pkgmodel.Target{
+		Label: "rotation-target", Namespace: "AWS", Config: json.RawMessage(`{}`),
+	})
+	require.NoError(t, err)
+
+	info := createRotatingGenerator(t, ds, "secrets", "db-password", 3600)
+
+	secretKsuid := storeRotationResource(t, ds, "secrets", "db-password-secret",
+		"AWS::SecretsManager::Secret",
+		`{"SecretString":{"$gen":true,"$generator":"`+info.GeneratorID+
+			`","$output":"value","$visibility":"Opaque","$hashed":true,"$value":"sha256:digest"}}`)
+
+	roleKsuid := storeRotationResource(t, ds, "secrets", "db-role",
+		"AWS::RDS::DatabaseRole",
+		`{"RoleName":"app","Password":{"$ref":"formae://`+secretKsuid+
+			`#/SecretValue","$visibility":"Opaque"}}`)
+
+	storeRotationResource(t, ds, "secrets", "db",
+		"AWS::RDS::Database",
+		`{"DatabaseName":"app","Owner":{"$ref":"formae://`+roleKsuid+`#/RoleName"}}`)
+
+	result, err := prepareRotation(ds, info)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	planned := map[string]bool{}
+	for _, ru := range result.command.ResourceUpdates {
+		planned[ru.DesiredState.Label] = true
+	}
+	assert.True(t, planned["db-password-secret"], "the generator's destination must be planned")
+	assert.True(t, planned["db-role"], "the destination's consumer must be planned")
+	assert.True(t, planned["db"],
+		"a resource consuming the consumer must be planned too — the walk is transitive, not one hop")
+}
+
 // The control for the case above: widening the rotation to a destination's
 // consumers must not widen it to the whole stack. A resource that references
 // nothing the rotation moves is left out, so a credential rotating on a short
