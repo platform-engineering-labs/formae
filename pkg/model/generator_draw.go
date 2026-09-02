@@ -21,17 +21,24 @@ type ByteSource func([]byte) (int, error)
 // unsatisfiable spec returns an error instead of hanging an unattended agent.
 const maxDrawAttempts = 100_000
 
-// Draw produces one value satisfying the generator's spec, drawing entropy
-// from src. It never logs the discarded candidates or the returned value.
-func Draw(spec Generator, src ByteSource) (string, error) {
+// Draw produces the generator's named outputs, drawing entropy from src. The
+// returned map's keys are exactly GeneratorOutputNames(spec). It never logs
+// discarded candidates or any returned value.
+func Draw(spec Generator, src ByteSource) (map[string]string, error) {
 	if spec == nil || isTypedNil(spec) {
-		return "", fmt.Errorf("draw: generator is nil")
+		return nil, fmt.Errorf("draw: generator is nil")
 	}
 	switch g := spec.(type) {
 	case *PasswordGenerator:
-		return drawPassword(g, src)
+		value, err := drawPassword(g, src)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]string{"value": value}, nil
+	case *KeyPairGenerator:
+		return drawKeyPair(g, src)
 	default:
-		return "", fmt.Errorf("draw: unsupported generator type %q", spec.GetType())
+		return nil, fmt.Errorf("draw: unsupported generator type %q", spec.GetType())
 	}
 }
 

@@ -36,7 +36,7 @@ func genBoundCreate(generatorKsuid string) ResourceUpdate {
 func TestResolveGeneratorValue_WritesInsideTheEnvelope(t *testing.T) {
 	ru := genBoundCreate("gen-a")
 
-	require.NoError(t, ru.ResolveGeneratorValue("gen-a", "drawn-credential", "generation-1", pkgmodel.FormaApplyModeReconcile))
+	require.NoError(t, ru.ResolveGeneratorValue("gen-a", map[string]string{"value": "drawn-credential"}, "generation-1", pkgmodel.FormaApplyModeReconcile))
 
 	envelope := gjson.GetBytes(ru.DesiredState.Properties, "SecretString")
 	require.True(t, envelope.IsObject(), "the envelope must not be replaced by a bare scalar")
@@ -49,7 +49,7 @@ func TestResolveGeneratorValue_WritesInsideTheEnvelope(t *testing.T) {
 func TestResolveGeneratorValue_LeavesAnotherGeneratorsDestinationAlone(t *testing.T) {
 	ru := genBoundCreate("gen-a")
 
-	require.NoError(t, ru.ResolveGeneratorValue("gen-b", "drawn-credential", "generation-1", pkgmodel.FormaApplyModeReconcile))
+	require.NoError(t, ru.ResolveGeneratorValue("gen-b", map[string]string{"value": "drawn-credential"}, "generation-1", pkgmodel.FormaApplyModeReconcile))
 
 	assert.False(t, gjson.GetBytes(ru.DesiredState.Properties, "SecretString.$value").Exists(),
 		"only destinations naming the generator that drew may receive the value")
@@ -79,7 +79,7 @@ func TestResolveGeneratorValue_ReachesEveryDestinationIncludingAStableOne(t *tes
 		}},
 	}
 
-	require.NoError(t, ru.ResolveGeneratorValue("gen-a", "drawn-credential", "generation-1", pkgmodel.FormaApplyModeReconcile))
+	require.NoError(t, ru.ResolveGeneratorValue("gen-a", map[string]string{"value": "drawn-credential"}, "generation-1", pkgmodel.FormaApplyModeReconcile))
 
 	assert.Equal(t, "drawn-credential", gjson.GetBytes(ru.DesiredState.Properties, "Stable.$value").String(),
 		"a stable destination receives the draw its siblings receive")
@@ -115,13 +115,13 @@ func TestResolveGeneratorValue_RegeneratesUnderCommandMode(t *testing.T) {
 	}
 
 	reconcile := newUpdate()
-	require.NoError(t, reconcile.ResolveGeneratorValue("gen-a", "drawn", "generation-1", pkgmodel.FormaApplyModeReconcile))
+	require.NoError(t, reconcile.ResolveGeneratorValue("gen-a", map[string]string{"value": "drawn"}, "generation-1", pkgmodel.FormaApplyModeReconcile))
 	assert.Contains(t, string(reconcile.DesiredState.PatchDocument), "remove",
 		"reconcile regeneration must keep the remove op for the dropped Tags member")
 	assert.Contains(t, string(reconcile.DesiredState.PatchDocument), "Tags")
 
 	patchMode := newUpdate()
-	require.NoError(t, patchMode.ResolveGeneratorValue("gen-a", "drawn", "generation-1", pkgmodel.FormaApplyModePatch))
+	require.NoError(t, patchMode.ResolveGeneratorValue("gen-a", map[string]string{"value": "drawn"}, "generation-1", pkgmodel.FormaApplyModePatch))
 	assert.NotContains(t, string(patchMode.DesiredState.PatchDocument), "remove",
 		"patch-mode regeneration must leave the undeclared Tags member unchanged")
 }
@@ -138,7 +138,7 @@ func TestResolveGeneratorValue_WithNoDestinationChangesNothing(t *testing.T) {
 		},
 	}
 
-	require.NoError(t, ru.ResolveGeneratorValue("gen-a", "drawn", "generation-1", pkgmodel.FormaApplyModeReconcile))
+	require.NoError(t, ru.ResolveGeneratorValue("gen-a", map[string]string{"value": "drawn"}, "generation-1", pkgmodel.FormaApplyModeReconcile))
 
 	assert.JSONEq(t, `{"Name": "plain"}`, string(ru.DesiredState.Properties))
 	assert.JSONEq(t, `[{"op":"replace","path":"/Name","value":"plain"}]`, string(ru.DesiredState.PatchDocument),

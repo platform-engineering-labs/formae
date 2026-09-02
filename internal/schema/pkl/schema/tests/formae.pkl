@@ -486,6 +486,23 @@ local nonRotatingGenerator = new formae.PasswordGenerator {
     stack = stackResolvable
 }
 
+local keyPairGen = new formae.KeyPairGenerator {
+    label = "id-key"
+    stack = stackResolvable
+}
+
+local wideKeyPairGen = new formae.KeyPairGenerator {
+    label = "wide-id-key"
+    stack = stackResolvable
+    bits = 4096
+}
+
+local oddKeyPairGen = new formae.KeyPairGenerator {
+    label = "odd-id-key"
+    stack = stackResolvable
+    bits = 1024
+}
+
 local cadencelessRotation = new formae.PasswordGenerator {
     label = "cadenceless-password"
     stack = stackResolvable
@@ -828,6 +845,29 @@ facts {
     ["A cadence below the scheduler's floor is rejected, naming the field"] {
         module.catch(() -> subMinuteRotation.render().Rotation.EverySeconds)
             .contains("RotationSpec.every")
+    }
+
+    ["KeyPairGenerator renders its type, default bits, and no rotation"] {
+        keyPairGen.render().Type == "keypair" &&
+        keyPairGen.render().Bits == 2048 &&
+        keyPairGen.render().Rotation == null
+    }
+
+    ["KeyPairGenerator accepts each supported size"] {
+        wideKeyPairGen.render().Bits == 4096
+    }
+
+    ["A key size outside the supported set is rejected, naming the field"] {
+        module.catch(() -> oddKeyPairGen.render().Bits)
+            .contains("KeyPairGenerator.bits")
+    }
+
+    ["KeyPairGenerator's outputs render distinct $output names"] {
+        keyPairGen.gen.privateKey.$output == "privateKey" &&
+        keyPairGen.gen.publicKey.$output == "publicKey" &&
+        keyPairGen.gen.privateKey.$visibility == "Opaque" &&
+        keyPairGen.gen.publicKey.$visibility == "Opaque" &&
+        keyPairGen.gen.privateKey.$label == "id-key"
     }
 
     ["The floor itself is a cadence"] {

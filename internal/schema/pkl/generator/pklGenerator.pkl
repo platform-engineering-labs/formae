@@ -310,6 +310,16 @@ function parseGenerators(generatorsData: List<Map<String, Any>>, stackLabelMap: 
       }
       \(camelCaseLabel)
       """
+        else if (generatorType == "keypair")
+            let (bits = generatorData["Bits"] as Number)
+            """
+
+      local \(camelCaseLabel) = new formae.KeyPairGenerator {
+        label = "\(label)"\(stackLine)\(rotationLine)
+        bits = \(bits.toInt())
+      }
+      \(camelCaseLabel)
+      """
         else
             // Unknown generator type - skip with comment
             """
@@ -471,7 +481,8 @@ function generateFormaFile(parsed: json.Value): String =
             "Digits", generator.getPropertyOrNull("Digits"),
             "Symbols", generator.getPropertyOrNull("Symbols"),
             "ExcludeCharacters", generator.getPropertyOrNull("ExcludeCharacters"),
-            "RequireEachIncludedType", generator.getPropertyOrNull("RequireEachIncludedType")
+            "RequireEachIncludedType", generator.getPropertyOrNull("RequireEachIncludedType"),
+            "Bits", generator.getPropertyOrNull("Bits")
             )
         )
     else

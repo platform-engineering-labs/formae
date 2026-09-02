@@ -140,7 +140,7 @@ func drawingData(t *testing.T, op GeneratorOperation, advancer *recordingAdvance
 // carries the drawn value on success, and that the actor then shuts itself down.
 func TestGeneratorUpdater_SuccessCarriesDrawnValue(t *testing.T) {
 	data := drawingData(t, GeneratorOperationCreate, &recordingAdvancer{})
-	data.drawnValue = "s3cret-value"
+	data.drawnValues = map[string]string{"value": "s3cret-value"}
 	data.generationID = "2mnoPQRstuVWxyzabcDEFghiJKL"
 
 	proc := &stubGeneratorUpdaterProcess{}
@@ -150,7 +150,7 @@ func TestGeneratorUpdater_SuccessCarriesDrawnValue(t *testing.T) {
 	finished := proc.sentFinishedMessages()
 	require.Len(t, finished, 1, "exactly one GeneratorUpdateFinished must be sent on success")
 	assert.Equal(t, GeneratorUpdateStateSuccess, finished[0].State)
-	assert.Equal(t, "s3cret-value", finished[0].DrawnValue,
+	assert.Equal(t, "s3cret-value", finished[0].DrawnValues["value"],
 		"the drawn value must reach the requester through the finished signal")
 	assert.Equal(t, "2mnoPQRstuVWxyzabcDEFghiJKL", finished[0].GenerationID,
 		"the generation the value was drawn under travels with it, so destinations can be stamped with it")
@@ -162,7 +162,7 @@ func TestGeneratorUpdater_SuccessCarriesDrawnValue(t *testing.T) {
 // value at all, even if one is somehow present in the actor's data.
 func TestGeneratorUpdater_FailureOmitsDrawnValue(t *testing.T) {
 	data := drawingData(t, GeneratorOperationCreate, &recordingAdvancer{})
-	data.drawnValue = "s3cret-value"
+	data.drawnValues = map[string]string{"value": "s3cret-value"}
 	data.generationID = "2mnoPQRstuVWxyzabcDEFghiJKL"
 	data.errorMessage = failureReasonDrawFailed
 
@@ -173,7 +173,7 @@ func TestGeneratorUpdater_FailureOmitsDrawnValue(t *testing.T) {
 	finished := proc.sentFinishedMessages()
 	require.Len(t, finished, 1, "exactly one GeneratorUpdateFinished must be sent on failure")
 	assert.Equal(t, GeneratorUpdateStateFailed, finished[0].State)
-	assert.Empty(t, finished[0].DrawnValue,
+	assert.Empty(t, finished[0].DrawnValues,
 		"a failed draw must never propagate a value")
 	assert.Empty(t, finished[0].GenerationID,
 		"a failed draw attests no generation")
@@ -194,8 +194,8 @@ func TestGeneratorUpdater_DrawRecordsGenerationUnderTheSpec(t *testing.T) {
 
 	expected, err := pkgmodel.Draw(testPasswordGenerator(), countingSource())
 	require.NoError(t, err)
-	assert.Equal(t, expected, out.drawnValue, "the draw must consume the injected entropy source")
-	assert.Len(t, out.drawnValue, 24)
+	assert.Equal(t, expected["value"], out.drawnValues["value"], "the draw must consume the injected entropy source")
+	assert.Len(t, out.drawnValues["value"], 24)
 
 	require.Len(t, advancer.calls, 1, "a successful draw records exactly one generation")
 	call := advancer.calls[0]
@@ -208,7 +208,7 @@ func TestGeneratorUpdater_DrawRecordsGenerationUnderTheSpec(t *testing.T) {
 	require.NoError(t, json.Unmarshal(call.drawnUnder, &spec),
 		"drawnUnder must be the marshalled generator spec")
 	assert.Equal(t, 24, spec.Length)
-	assert.NotContains(t, string(call.drawnUnder), out.drawnValue,
+	assert.NotContains(t, string(call.drawnUnder), out.drawnValues["value"],
 		"the drawn value must never be written to the datastore")
 }
 
@@ -224,7 +224,7 @@ func TestGeneratorUpdater_RecordingFailureDiscardsTheValue(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, StateFinishedWithError, state)
-	assert.Empty(t, out.drawnValue, "a value that could not be recorded must not be kept")
+	assert.Empty(t, out.drawnValues, "a value that could not be recorded must not be kept")
 	assert.Equal(t, failureReasonGenerationNotRecorded, out.errorMessage)
 	assert.NotContains(t, out.errorMessage, "db-host",
 		"the operator-facing message must not carry raw error text")
@@ -265,7 +265,7 @@ func TestGeneratorUpdater_DeleteDrawsNothing(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, StateFinishedSuccessfully, state)
-	assert.Empty(t, out.drawnValue)
+	assert.Empty(t, out.drawnValues)
 	assert.Empty(t, advancer.calls)
 }
 
@@ -283,7 +283,7 @@ func TestGeneratorUpdater_UnknownIdentityFailsBeforeDrawing(t *testing.T) {
 
 	assert.Equal(t, StateFinishedWithError, state)
 	assert.Equal(t, failureReasonUnknownIdentity, out.errorMessage)
-	assert.Empty(t, out.drawnValue)
+	assert.Empty(t, out.drawnValues)
 	assert.Empty(t, advancer.calls)
 }
 
@@ -314,7 +314,7 @@ func TestGeneratorUpdater_UndeliverableDrawTriggerIsNotASpecFailure(t *testing.T
 	assert.Equal(t, StateFinishedWithError, state)
 	assert.Equal(t, failureReasonDrawNotStarted, out.errorMessage)
 	assert.NotEqual(t, failureReasonDrawFailed, out.errorMessage)
-	assert.Empty(t, out.drawnValue)
+	assert.Empty(t, out.drawnValues)
 }
 
 // TestGeneratorUpdater_EachDrawGetsAFreshGeneration asserts two successive
@@ -372,7 +372,7 @@ func TestGeneratorUpdater_FaultyEntropyFailsWithoutAValue(t *testing.T) {
 			assert.Equal(t, failureReasonDrawFailed, out.errorMessage)
 			assert.NotContains(t, out.errorMessage, "urandom",
 				"the operator-facing message must not carry raw error text")
-			assert.Empty(t, out.drawnValue)
+			assert.Empty(t, out.drawnValues)
 			assert.Empty(t, advancer.calls, "a failed draw must not advance the generation")
 		})
 	}

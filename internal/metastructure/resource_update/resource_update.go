@@ -197,7 +197,27 @@ func (ru *ResourceUpdate) ResolveValue(formaeUri pkgmodel.FormaeURI, value strin
 // mode is the command's configured apply mode, threaded through for exactly
 // the reason ResolveValue documents: regeneration must use the semantics
 // planning used or a reconcile-planned removal silently vanishes.
-func (ru *ResourceUpdate) ResolveGeneratorValue(generatorKsuid string, value string, generationID string, mode pkgmodel.FormaApplyMode) error {
+//
+// Delivery is split into a prepare and a commit so the caller can validate
+// EVERY destination before mutating ANY: a refusal at one destination (a
+// wrong output name, a diverged document) must not leave sibling
+// destinations already rewritten in memory. DAG ordering happens to keep a
+// half-delivered node undispatchable today, but credential delivery does not
+// lean on that.
+
+// PreparedGenDelivery is one destination's computed delivery: the rewritten
+// properties and the outputs each occurrence consumed, held until every
+// destination of the draw has prepared successfully.
+type PreparedGenDelivery struct {
+	properties json.RawMessage
+	outputs    []string
+}
+
+// PrepareGeneratorValues computes this update's rewritten properties for a
+// draw without mutating anything. It returns nil when the update holds no
+// occurrence of the generator. Errors name paths and output names only,
+// never a value.
+func (ru *ResourceUpdate) PrepareGeneratorValues(generatorKsuid string, values map[string]string) (*PreparedGenDelivery, error) {
 	var paths []string
 	var outputs []string
 	for _, occurrence := range pkgmodel.FindGenObjectsFromProperties(ru.DesiredState.Properties) {
@@ -208,19 +228,38 @@ func (ru *ResourceUpdate) ResolveGeneratorValue(generatorKsuid string, value str
 		outputs = append(outputs, occurrence.Output)
 	}
 	if len(paths) == 0 {
+		return nil, nil
+	}
+
+	properties, err := resolver.SetGenValues(ru.DesiredState.Properties, generatorKsuid, paths, values)
+	if err != nil {
+		// The error names paths only; the drawn values are never in it.
+		slog.Error("Failed to deliver a generated value", "error", err)
+		return nil, fmt.Errorf("failed to deliver a generated value: %w", err)
+	}
+	return &PreparedGenDelivery{properties: properties, outputs: outputs}, nil
+}
+
+// CommitGeneratorValues installs a prepared delivery: properties, generation
+// stamps, and the re-derived patch.
+func (ru *ResourceUpdate) CommitGeneratorValues(prepared *PreparedGenDelivery, generatorKsuid string, generationID string, mode pkgmodel.FormaApplyMode) error {
+	ru.DesiredState.Properties = prepared.properties
+	ru.stampDrawnGeneration(generatorKsuid, prepared.outputs, generationID)
+	return ru.reDerivePatchAfterSubstitution(mode, "generator "+generatorKsuid)
+}
+
+// ResolveGeneratorValue prepares and commits in one step, for a caller
+// delivering to a single update. Cross-update delivery goes through the
+// split pair so a refusal at one destination mutates none.
+func (ru *ResourceUpdate) ResolveGeneratorValue(generatorKsuid string, values map[string]string, generationID string, mode pkgmodel.FormaApplyMode) error {
+	prepared, err := ru.PrepareGeneratorValues(generatorKsuid, values)
+	if err != nil {
+		return err
+	}
+	if prepared == nil {
 		return nil
 	}
-
-	properties, err := resolver.SetGenValues(ru.DesiredState.Properties, generatorKsuid, paths, value)
-	if err != nil {
-		// The error names paths only; the drawn value is never in it.
-		slog.Error("Failed to deliver a generated value", "error", err)
-		return fmt.Errorf("failed to deliver a generated value: %w", err)
-	}
-	ru.DesiredState.Properties = properties
-	ru.stampDrawnGeneration(generatorKsuid, outputs, generationID)
-
-	return ru.reDerivePatchAfterSubstitution(mode, "generator "+generatorKsuid)
+	return ru.CommitGeneratorValues(prepared, generatorKsuid, generationID, mode)
 }
 
 // stampDrawnGeneration records, for every generator output this update just

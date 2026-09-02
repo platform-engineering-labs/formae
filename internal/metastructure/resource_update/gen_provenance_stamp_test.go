@@ -33,7 +33,7 @@ const (
 // fire, and every re-apply then redraws with nothing reporting a fault.
 func TestResolveGeneratorValue_StampsTheDigestThePlannerComputes(t *testing.T) {
 	ru := genBoundCreate(stampGeneratorKsuid)
-	require.NoError(t, ru.ResolveGeneratorValue(stampGeneratorKsuid, "drawn-credential", stampGenerationID, pkgmodel.FormaApplyModeReconcile))
+	require.NoError(t, ru.ResolveGeneratorValue(stampGeneratorKsuid, map[string]string{"value": "drawn-credential"}, stampGenerationID, pkgmodel.FormaApplyModeReconcile))
 
 	stamped := ru.ResolvedRootDigests[generatorSourceKey(stampGeneratorKsuid, "value")]
 	require.True(t, provenance.Valid(stamped),
@@ -79,7 +79,7 @@ func TestResolveGeneratorValue_StampReachesTheStoredEnvelope(t *testing.T) {
 	ru := genBoundCreate(stampGeneratorKsuid)
 	ru.DesiredState.Schema = pkgmodel.Schema{Identifier: "Name", Fields: []string{"Name", "SecretString"}}
 
-	require.NoError(t, ru.ResolveGeneratorValue(stampGeneratorKsuid, "drawn-credential", stampGenerationID, pkgmodel.FormaApplyModeReconcile))
+	require.NoError(t, ru.ResolveGeneratorValue(stampGeneratorKsuid, map[string]string{"value": "drawn-credential"}, stampGenerationID, pkgmodel.FormaApplyModeReconcile))
 	require.NoError(t, ru.updateResourceProperties(`{"Name":"db","SecretString":"drawn-credential"}`, true))
 
 	envelope := gjson.GetBytes(ru.DesiredState.Properties, "SecretString")
@@ -95,7 +95,7 @@ func TestResolveGeneratorValue_ReadOriginMergeStampsNothing(t *testing.T) {
 	ru := genBoundCreate(stampGeneratorKsuid)
 	ru.DesiredState.Schema = pkgmodel.Schema{Identifier: "Name", Fields: []string{"Name", "SecretString"}}
 
-	require.NoError(t, ru.ResolveGeneratorValue(stampGeneratorKsuid, "drawn-credential", stampGenerationID, pkgmodel.FormaApplyModeReconcile))
+	require.NoError(t, ru.ResolveGeneratorValue(stampGeneratorKsuid, map[string]string{"value": "drawn-credential"}, stampGenerationID, pkgmodel.FormaApplyModeReconcile))
 	require.NoError(t, ru.updateResourceProperties(`{"Name":"db","SecretString":"drawn-credential"}`, false))
 
 	assert.False(t, gjson.GetBytes(ru.DesiredState.Properties, "SecretString.$resolvedFrom").Exists(),

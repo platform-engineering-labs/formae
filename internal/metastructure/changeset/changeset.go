@@ -913,20 +913,37 @@ func (p *ExecutionDAG) propagateResolvedTargetConfig(targetLabel string, pluginC
 // An error means some destination did not receive its value. The caller must
 // fail the draw closed rather than let a destination dispatch its undrawn
 // envelope.
-func (p *ExecutionDAG) propagateDrawnGeneratorValue(generatorKsuid string, value string, generationID string, mode pkgmodel.FormaApplyMode) error {
+func (p *ExecutionDAG) propagateDrawnGeneratorValue(generatorKsuid string, values map[string]string, generationID string, mode pkgmodel.FormaApplyMode) error {
 	if generatorKsuid == "" {
 		return fmt.Errorf("cannot deliver a drawn value: the draw names no generator")
 	}
-	if value == "" {
-		// A success carrying no value cannot be delivered: writing an empty
-		// string into a destination would hand a provider a blank credential
-		// that nothing downstream would flag.
+	if len(values) == 0 {
+		// A success carrying no values cannot be delivered.
 		return fmt.Errorf("generator %s reported a successful draw with no value", generatorKsuid)
+	}
+	for output, value := range values {
+		if value == "" {
+			// An empty output would write a blank credential into its
+			// destination and nothing downstream would flag it.
+			return fmt.Errorf("generator %s reported a successful draw with an empty %q output", generatorKsuid, output)
+		}
 	}
 	if generationID == "" {
 		return fmt.Errorf("generator %s reported a successful draw naming no generation", generatorKsuid)
 	}
 
+	// Two phases: validate and compute every destination's rewritten update,
+	// then commit only once all of them prepared. A refusal at the Nth
+	// destination must not leave the first N-1 rewritten in memory: DAG
+	// ordering happens to keep such nodes undispatchable, but credential
+	// delivery does not lean on that. Patch re-derivation during commit can
+	// still fail; the caller then fails the draw and every destination is
+	// cascade-failed, so a partially committed node is never dispatched.
+	type pendingDelivery struct {
+		ru       *resource_update.ResourceUpdate
+		prepared *resource_update.PreparedGenDelivery
+	}
+	var deliveries []pendingDelivery
 	for _, node := range p.Nodes {
 		ru, ok := node.Update.(*resource_update.ResourceUpdate)
 		if !ok {
@@ -935,10 +952,22 @@ func (p *ExecutionDAG) propagateDrawnGeneratorValue(generatorKsuid string, value
 		if ru.Operation == resource_update.OperationDelete || ru.Operation == resource_update.OperationReaped {
 			continue
 		}
-		if err := ru.ResolveGeneratorValue(generatorKsuid, value, generationID, mode); err != nil {
-			// The error names paths and identities only, never the value.
+		prepared, err := ru.PrepareGeneratorValues(generatorKsuid, values)
+		if err != nil {
+			// The error names paths and identities only, never a value.
 			return fmt.Errorf("failed to deliver the value drawn for generator %s to %s: %w",
 				generatorKsuid, ru.URI(), err)
+		}
+		if prepared == nil {
+			continue
+		}
+		deliveries = append(deliveries, pendingDelivery{ru: ru, prepared: prepared})
+	}
+
+	for _, d := range deliveries {
+		if err := d.ru.CommitGeneratorValues(d.prepared, generatorKsuid, generationID, mode); err != nil {
+			return fmt.Errorf("failed to deliver the value drawn for generator %s to %s: %w",
+				generatorKsuid, d.ru.URI(), err)
 		}
 	}
 

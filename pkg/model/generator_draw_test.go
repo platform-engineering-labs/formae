@@ -64,18 +64,18 @@ func classOf(c rune) string {
 
 func TestDraw_CorrectLength(t *testing.T) {
 	spec := pw(func(*pkgmodel.PasswordGenerator) {})
-	value, err := pkgmodel.Draw(spec, realSource)
+	values, err := pkgmodel.Draw(spec, realSource)
 	require.NoError(t, err)
-	assert.Len(t, value, spec.Length)
+	assert.Len(t, values["value"], spec.Length)
 }
 
 func TestDraw_EveryCharacterIsDrawable(t *testing.T) {
 	spec := pw(func(*pkgmodel.PasswordGenerator) {})
-	value, err := pkgmodel.Draw(spec, realSource)
+	values, err := pkgmodel.Draw(spec, realSource)
 	require.NoError(t, err)
 
 	allowed := expectedAlphabet(spec)
-	for _, c := range value {
+	for _, c := range values["value"] {
 		assert.True(t, allowed[c], "character %q is not drawable under the spec", c)
 	}
 }
@@ -86,11 +86,11 @@ func TestDraw_RequireEachIncludedType_EveryEnabledClassIsPresent(t *testing.T) {
 		g.RequireEachIncludedType = true
 		g.Length = 32
 	})
-	value, err := pkgmodel.Draw(spec, realSource)
+	values, err := pkgmodel.Draw(spec, realSource)
 	require.NoError(t, err)
 
 	present := map[string]bool{}
-	for _, c := range value {
+	for _, c := range values["value"] {
 		present[classOf(c)] = true
 	}
 	assert.True(t, present["uppercase"])
@@ -132,9 +132,9 @@ func TestDraw_ModuloBiasedByteIsDiscardedAndRedrawn(t *testing.T) {
 	// second byte (0) is the one actually used for position 0.
 	src, calls := sequenceSource([]byte{255, 0, 1, 2, 3})
 
-	value, err := pkgmodel.Draw(spec, src)
+	values, err := pkgmodel.Draw(spec, src)
 	require.NoError(t, err)
-	assert.Equal(t, "0123", value)
+	assert.Equal(t, "0123", values["value"])
 	assert.Equal(t, 5, *calls, "expected the biased byte to be discarded and a 5th byte drawn")
 }
 
@@ -156,9 +156,9 @@ func TestDraw_RejectionBoundaryIsExactlyLimit(t *testing.T) {
 	})
 	src, calls := sequenceSource([]byte{250, 249})
 
-	value, err := pkgmodel.Draw(spec, src)
+	values, err := pkgmodel.Draw(spec, src)
 	require.NoError(t, err)
-	assert.Equal(t, "9", value)
+	assert.Equal(t, "9", values["value"])
 	assert.Equal(t, 2, *calls, "expected byte 250 to be rejected and byte 249 to be drawn")
 }
 
@@ -177,29 +177,29 @@ func TestDraw_RequireEachIncludedType_DiscardsWholeCandidateOnMissingClass(t *te
 	// Second candidate: byte 0, byte 26 -> "Aa", both classes -> accepted.
 	src, calls := sequenceSource([]byte{0, 1, 0, 26})
 
-	value, err := pkgmodel.Draw(spec, src)
+	values, err := pkgmodel.Draw(spec, src)
 	require.NoError(t, err)
-	assert.Equal(t, "Aa", value)
+	assert.Equal(t, "Aa", values["value"])
 	assert.Equal(t, 4, *calls, "expected the first, incomplete candidate to be discarded in full")
 }
 
-func drawWithTimeout(t *testing.T, spec pkgmodel.Generator, src pkgmodel.ByteSource) (string, error) {
+func drawWithTimeout(t *testing.T, spec pkgmodel.Generator, src pkgmodel.ByteSource) (map[string]string, error) {
 	t.Helper()
 	type result struct {
-		value string
-		err   error
+		values map[string]string
+		err    error
 	}
 	done := make(chan result, 1)
 	go func() {
-		value, err := pkgmodel.Draw(spec, src)
-		done <- result{value, err}
+		values, err := pkgmodel.Draw(spec, src)
+		done <- result{values, err}
 	}()
 	select {
 	case r := <-done:
-		return r.value, r.err
+		return r.values, r.err
 	case <-time.After(2 * time.Second):
 		t.Fatal("Draw did not return within timeout; it may be looping on an unsatisfiable spec")
-		return "", nil
+		return nil, nil
 	}
 }
 
@@ -207,9 +207,9 @@ func TestDraw_NoClassEnabledReturnsErrorRatherThanHanging(t *testing.T) {
 	spec := pw(func(g *pkgmodel.PasswordGenerator) {
 		g.Uppercase, g.Lowercase, g.Digits, g.Symbols = false, false, false, false
 	})
-	value, err := drawWithTimeout(t, spec, realSource)
+	values, err := drawWithTimeout(t, spec, realSource)
 	require.Error(t, err)
-	assert.Empty(t, value)
+	assert.Empty(t, values["value"])
 }
 
 func TestDraw_ExcludeCharactersEmptyingTheOnlyEnabledClassReturnsError(t *testing.T) {
@@ -217,9 +217,9 @@ func TestDraw_ExcludeCharactersEmptyingTheOnlyEnabledClassReturnsError(t *testin
 		g.Uppercase, g.Lowercase, g.Digits, g.Symbols = true, false, false, false
 		g.ExcludeCharacters = pkgmodel.UppercaseChars
 	})
-	value, err := drawWithTimeout(t, spec, realSource)
+	values, err := drawWithTimeout(t, spec, realSource)
 	require.Error(t, err)
-	assert.Empty(t, value)
+	assert.Empty(t, values["value"])
 }
 
 // requireEachIncludedType demanding more classes than there are positions
@@ -233,9 +233,9 @@ func TestDraw_ZeroLengthReturnsError(t *testing.T) {
 		g.RequireEachIncludedType = false
 		g.Length = 0
 	})
-	value, err := drawWithTimeout(t, spec, realSource)
+	values, err := drawWithTimeout(t, spec, realSource)
 	require.Error(t, err)
-	assert.Empty(t, value)
+	assert.Empty(t, values["value"])
 	assert.Contains(t, err.Error(), "non-positive length")
 }
 
@@ -249,9 +249,9 @@ func TestDraw_ExcludeCharactersEmptyingOneOfSeveralEnabledClassesNamesIt(t *test
 		g.ExcludeCharacters = pkgmodel.LowercaseChars
 		g.RequireEachIncludedType = true
 	})
-	value, err := drawWithTimeout(t, spec, realSource)
+	values, err := drawWithTimeout(t, spec, realSource)
 	require.Error(t, err)
-	assert.Empty(t, value)
+	assert.Empty(t, values["value"])
 	assert.Contains(t, err.Error(), "lowercase")
 }
 
@@ -265,9 +265,9 @@ func TestDraw_EffectiveAlphabetOfOneCharacterReturnsError(t *testing.T) {
 		g.ExcludeCharacters = pkgmodel.UppercaseChars[1:] // leaves only 'A'
 		g.RequireEachIncludedType = false
 	})
-	value, err := drawWithTimeout(t, spec, realSource)
+	values, err := drawWithTimeout(t, spec, realSource)
 	require.Error(t, err)
-	assert.Empty(t, value)
+	assert.Empty(t, values["value"])
 }
 
 // A ByteSource that returns (0, nil) — a short read with no error, the shape
@@ -284,9 +284,9 @@ func TestDraw_ShortReadFromByteSourceReturnsError(t *testing.T) {
 	spec := pw(func(g *pkgmodel.PasswordGenerator) { g.RequireEachIncludedType = false })
 	short := func(b []byte) (int, error) { return 0, nil }
 
-	value, err := pkgmodel.Draw(spec, short)
+	values, err := pkgmodel.Draw(spec, short)
 	require.Error(t, err)
-	assert.Empty(t, value)
+	assert.Empty(t, values["value"])
 	assert.Contains(t, err.Error(), "got 0 bytes, want 1")
 }
 
@@ -296,17 +296,17 @@ func TestDraw_MoreRequiredClassesThanLengthReturnsErrorRatherThanHanging(t *test
 		g.RequireEachIncludedType = true
 		g.Length = 1
 	})
-	value, err := drawWithTimeout(t, spec, realSource)
+	values, err := drawWithTimeout(t, spec, realSource)
 	require.Error(t, err)
-	assert.Empty(t, value)
+	assert.Empty(t, values["value"])
 }
 
 func TestDraw_TypedNilGeneratorReturnsError(t *testing.T) {
 	var nilGen *pkgmodel.PasswordGenerator
 	var spec pkgmodel.Generator = nilGen
-	value, err := pkgmodel.Draw(spec, realSource)
+	values, err := pkgmodel.Draw(spec, realSource)
 	require.Error(t, err)
-	assert.Empty(t, value)
+	assert.Empty(t, values["value"])
 }
 
 func TestDraw_ByteSourceErrorPropagates(t *testing.T) {
@@ -314,9 +314,9 @@ func TestDraw_ByteSourceErrorPropagates(t *testing.T) {
 	boom := fmt.Errorf("byte source unavailable")
 	failing := func([]byte) (int, error) { return 0, boom }
 
-	value, err := pkgmodel.Draw(spec, failing)
+	values, err := pkgmodel.Draw(spec, failing)
 	require.Error(t, err)
-	assert.Empty(t, value)
+	assert.Empty(t, values["value"])
 	assert.ErrorIs(t, err, boom)
 }
 
@@ -346,9 +346,9 @@ func TestDraw_NeverErrorsForAnySpecPKLAccepts(t *testing.T) {
 				g.Length = 16 // PKL's minimum accepted length
 				g.ExcludeCharacters = ""
 			})
-			value, err := pkgmodel.Draw(spec, realSource)
+			values, err := pkgmodel.Draw(spec, realSource)
 			require.NoErrorf(t, err, "combo %+v requireEachIncludedType=%v", combo, require_)
-			assert.Len(t, value, 16)
+			assert.Len(t, values["value"], 16)
 		}
 	}
 }

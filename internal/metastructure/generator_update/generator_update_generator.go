@@ -351,6 +351,12 @@ func generatorsEqual(a, b pkgmodel.Generator) bool {
 			pa.Symbols == pb.Symbols &&
 			pa.ExcludeCharacters == pb.ExcludeCharacters &&
 			pa.RequireEachIncludedType == pb.RequireEachIncludedType
+	case *pkgmodel.KeyPairGenerator:
+		pb, ok := b.(*pkgmodel.KeyPairGenerator)
+		if !ok {
+			return false
+		}
+		return pa.Bits == pb.Bits
 	default:
 		// For unknown types, assume not equal to be safe.
 		return false

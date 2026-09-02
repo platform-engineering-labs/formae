@@ -27,7 +27,7 @@ func TestSetGenValues_WritesTheValueInsideTheEnvelope(t *testing.T) {
 		"SecretString": {"$gen": true, "$generator": "gen-ksuid", "$output": "value", "$visibility": "Opaque"}
 	}`)
 
-	updated, err := SetGenValues(properties, "gen-ksuid", []string{"SecretString"}, "drawn-credential")
+	updated, err := SetGenValues(properties, "gen-ksuid", []string{"SecretString"}, map[string]string{"value": "drawn-credential"})
 	require.NoError(t, err)
 
 	envelope := gjson.GetBytes(updated, "SecretString")
@@ -49,7 +49,7 @@ func TestSetGenValues_WritesOnlyTheNamedPaths(t *testing.T) {
 		"Nested": {"Second": {"$gen": true, "$generator": "b", "$output": "value", "$visibility": "Opaque"}}
 	}`)
 
-	updated, err := SetGenValues(properties, "b", []string{"Nested.Second"}, "drawn")
+	updated, err := SetGenValues(properties, "b", []string{"Nested.Second"}, map[string]string{"value": "drawn"})
 	require.NoError(t, err)
 
 	assert.Equal(t, "drawn", gjson.GetBytes(updated, "Nested.Second.$value").String())
@@ -63,10 +63,10 @@ func TestSetGenValues_WritesOnlyTheNamedPaths(t *testing.T) {
 func TestSetGenValues_RefusesAPathThatIsNotAGeneratorEnvelope(t *testing.T) {
 	properties := json.RawMessage(`{"Name": "db", "Ref": {"$ref": "formae://k#/Token"}}`)
 
-	_, err := SetGenValues(properties, "gen-a", []string{"Name"}, "drawn")
+	_, err := SetGenValues(properties, "gen-a", []string{"Name"}, map[string]string{"value": "drawn"})
 	require.Error(t, err)
 
-	_, err = SetGenValues(properties, "gen-a", []string{"Ref"}, "drawn")
+	_, err = SetGenValues(properties, "gen-a", []string{"Ref"}, map[string]string{"value": "drawn"})
 	require.Error(t, err, "a $ref envelope is not a generator envelope")
 }
 
@@ -75,7 +75,7 @@ func TestSetGenValues_RefusesAPathThatIsNotAGeneratorEnvelope(t *testing.T) {
 func TestSetGenValues_RefusesAnAbsentPath(t *testing.T) {
 	properties := json.RawMessage(`{"Name": "db"}`)
 
-	_, err := SetGenValues(properties, "gen-a", []string{"SecretString"}, "drawn")
+	_, err := SetGenValues(properties, "gen-a", []string{"SecretString"}, map[string]string{"value": "drawn"})
 	require.Error(t, err)
 }
 
@@ -83,7 +83,7 @@ func TestSetGenValues_RefusesAnAbsentPath(t *testing.T) {
 func TestSetGenValues_ErrorNeverCarriesTheValue(t *testing.T) {
 	properties := json.RawMessage(`{"Name": "db"}`)
 
-	_, err := SetGenValues(properties, "gen-ksuid", []string{"SecretString"}, "drawn-credential")
+	_, err := SetGenValues(properties, "gen-ksuid", []string{"SecretString"}, map[string]string{"value": "drawn-credential"})
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "drawn-credential")
 	assert.Contains(t, err.Error(), "SecretString")
@@ -95,7 +95,7 @@ func TestSetGenValues_WritesIntoAnArrayElement(t *testing.T) {
 		"Entries": [{"$gen": true, "$generator": "a", "$output": "value", "$visibility": "Opaque"}]
 	}`)
 
-	updated, err := SetGenValues(properties, "a", []string{"Entries.0"}, "drawn")
+	updated, err := SetGenValues(properties, "a", []string{"Entries.0"}, map[string]string{"value": "drawn"})
 	require.NoError(t, err)
 	assert.Equal(t, "drawn", gjson.GetBytes(updated, "Entries.0.$value").String())
 	assert.Equal(t, "Opaque", gjson.GetBytes(updated, "Entries.0.$visibility").String())
@@ -111,7 +111,7 @@ func TestSetGenValues_RefusesAnEnvelopeNamingAnotherGenerator(t *testing.T) {
 		"SecretString": {"$gen": true, "$generator": "gen-b", "$output": "value", "$visibility": "Opaque"}
 	}`)
 
-	_, err := SetGenValues(properties, "gen-a", []string{"SecretString"}, "drawn-credential")
+	_, err := SetGenValues(properties, "gen-a", []string{"SecretString"}, map[string]string{"value": "drawn-credential"})
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "drawn-credential")
 	assert.False(t, gjson.GetBytes(properties, "SecretString.$value").Exists(),
@@ -133,7 +133,7 @@ func TestSetGenValues_RefusesAPathThroughADottedKey(t *testing.T) {
 	require.Equal(t, "labels.app.kubernetes.io/secret", occurrences[0].Path,
 		"precondition: the walk dot-joins the key, producing an unresolvable path")
 
-	_, err := SetGenValues(properties, "gen-a", []string{occurrences[0].Path}, "drawn-credential")
+	_, err := SetGenValues(properties, "gen-a", []string{occurrences[0].Path}, map[string]string{"value": "drawn-credential"})
 	require.Error(t, err, "an unaddressable destination must refuse delivery, not write elsewhere")
 	assert.NotContains(t, err.Error(), "drawn-credential")
 }
