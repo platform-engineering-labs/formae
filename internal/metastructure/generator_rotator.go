@@ -9,11 +9,13 @@ import (
 	"fmt"
 	"hash/fnv"
 	"log/slog"
+	"sort"
 	"time"
 
 	"ergo.services/ergo/act"
 	"ergo.services/ergo/gen"
 
+	"github.com/platform-engineering-labs/formae/internal/constants"
 	"github.com/platform-engineering-labs/formae/internal/datastore"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/changeset"
@@ -438,6 +440,63 @@ type rotationResult struct {
 	changeset changeset.Changeset
 }
 
+// findRotationConsumers walks outward from a generator's destinations to the
+// resources that consume them by reference, transitively.
+//
+// A rotation moves the value a destination holds. Anything reading that value
+// through a reference goes on holding the previous one until it is written
+// again, and delivery reaches nodes in the changeset and nothing else, so a
+// consumer absent from the changeset is a consumer that never follows. The
+// database role whose password references a rotating secret is the shape
+// production uses: after a rotation the secret carries the new credential and
+// the engine still accepts only the old one until the role is written.
+//
+// Destinations are found by their binding to the generator; a consumer is one
+// hop further out and holds a reference to the destination rather than to the
+// generator, which is why the destination query cannot see it. The walk is
+// transitive because a consumer may itself be referenced.
+//
+// Unmanaged rows are skipped and not walked through: they carry no declarations
+// to re-resolve, exactly as the delete cascade treats them. Results are sorted
+// so a rotation plans the same nodes in the same order every time.
+func findRotationConsumers(ds datastore.Datastore, destinations []*pkgmodel.Resource) ([]*pkgmodel.Resource, error) {
+	seen := make(map[string]bool, len(destinations))
+	level := make([]string, 0, len(destinations))
+	for _, destination := range destinations {
+		if destination.Ksuid == "" {
+			continue
+		}
+		seen[destination.Ksuid] = true
+		level = append(level, destination.Ksuid)
+	}
+
+	var consumers []*pkgmodel.Resource
+	for len(level) > 0 {
+		dependents, err := ds.FindResourcesDependingOnMany(level)
+		if err != nil {
+			return nil, fmt.Errorf("failed to find the consumers of a rotation destination: %w", err)
+		}
+		var next []string
+		for _, group := range dependents {
+			for _, dependent := range group {
+				if dependent == nil || dependent.Ksuid == "" || seen[dependent.Ksuid] {
+					continue
+				}
+				seen[dependent.Ksuid] = true
+				if dependent.Stack == constants.UnmanagedStack {
+					continue
+				}
+				consumers = append(consumers, dependent)
+				next = append(next, dependent.Ksuid)
+			}
+		}
+		level = next
+	}
+
+	sort.Slice(consumers, func(i, j int) bool { return consumers[i].Ksuid < consumers[j].Ksuid })
+	return consumers, nil
+}
+
 // prepareRotation builds the apply that moves one generator's generation
 // forward. It returns nil (with no error) when there is nothing to rotate.
 //
@@ -474,7 +533,13 @@ func prepareRotation(ds datastore.Datastore, info datastore.GeneratorRotationInf
 		return nil, nil
 	}
 
-	forma := pkgmodel.FormaFromResources(destinations)
+	consumers, err := findRotationConsumers(ds, destinations)
+	if err != nil {
+		return nil, err
+	}
+	planned := append(append([]*pkgmodel.Resource{}, destinations...), consumers...)
+
+	forma := pkgmodel.FormaFromResources(planned)
 
 	existingTargets, err := ds.LoadAllTargets()
 	if err != nil {
@@ -492,10 +557,10 @@ func prepareRotation(ds datastore.Datastore, info datastore.GeneratorRotationInf
 		}
 	}
 
-	coPlanKsuids := make(map[string]bool, len(destinations))
-	for _, destination := range destinations {
-		if destination.Ksuid != "" {
-			coPlanKsuids[destination.Ksuid] = true
+	coPlanKsuids := make(map[string]bool, len(planned))
+	for _, resource := range planned {
+		if resource.Ksuid != "" {
+			coPlanKsuids[resource.Ksuid] = true
 		}
 	}
 
