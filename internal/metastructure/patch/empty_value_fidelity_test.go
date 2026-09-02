@@ -122,7 +122,7 @@ func TestGeneratePatch_PreserveEmpty_ReplaceCarriesVerbatimValue(t *testing.T) {
 	document := json.RawMessage(`{"Name":"x","Spec":{"acme":{"server":"https://old"}}}`)
 	desired := json.RawMessage(`{"Name":"x","Spec":{"selfSigned":{}}}`)
 
-	patchDoc, _, _, err := GeneratePatch(document, desired, document, desired, resolver.ResolvableProperties{}, fidelitySchema(), pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := GeneratePatch(document, desired, document, desired, resolver.ResolvableProperties{}, fidelitySchema(), nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 
 	var ops []struct {
@@ -142,7 +142,7 @@ func TestGeneratePatch_PreserveEmpty_ReplaceCarriesVerbatimValue(t *testing.T) {
 func TestGeneratePatch_PreserveEmpty_IdenticalSidesPlanNothing(t *testing.T) {
 	doc := json.RawMessage(`{"Name":"x","Spec":{"selfSigned":{}}}`)
 
-	patchDoc, _, _, err := GeneratePatch(doc, doc, doc, doc, resolver.ResolvableProperties{}, fidelitySchema(), pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := GeneratePatch(doc, doc, doc, doc, resolver.ResolvableProperties{}, fidelitySchema(), nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Empty(t, patchDoc)
 }
@@ -153,7 +153,7 @@ func TestGeneratePatch_NonHintedFieldStillStripped(t *testing.T) {
 	document := json.RawMessage(`{"Name":"x","Other":{"acme":{"server":"https://old"}}}`)
 	desired := json.RawMessage(`{"Name":"x","Other":{"selfSigned":{}}}`)
 
-	patchDoc, _, _, err := GeneratePatch(document, desired, document, desired, resolver.ResolvableProperties{}, fidelitySchema(), pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := GeneratePatch(document, desired, document, desired, resolver.ResolvableProperties{}, fidelitySchema(), nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.NotContains(t, string(patchDoc), "selfSigned",
 		"unhinted fields keep the rendering-noise strip")
@@ -173,12 +173,12 @@ func TestGeneratePatch_ReferenceEnvelopeAddSurvives(t *testing.T) {
 	document := json.RawMessage(`{"Name":"x"}`)
 	desired := json.RawMessage(`{"Name":"x","Token":{"$ref":"formae://2ABcDeFgHiJkLmNoPqRsTuVwXyZ#/S"}}`)
 
-	patchDoc, _, _, err := GeneratePatch(document, desired, document, desired, resolver.ResolvableProperties{}, refSchema(), pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := GeneratePatch(document, desired, document, desired, resolver.ResolvableProperties{}, refSchema(), nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.JSONEq(t, `[{"op":"add","path":"/Token","value":""}]`, string(patchDoc))
 
 	plain := json.RawMessage(`{"Name":"x","Token":""}`)
-	patchDoc, _, _, err = GeneratePatch(document, plain, document, plain, resolver.ResolvableProperties{}, refSchema(), pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err = GeneratePatch(document, plain, document, plain, resolver.ResolvableProperties{}, refSchema(), nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Empty(t, patchDoc, "a plain empty string is still rendering noise")
 }
@@ -189,7 +189,7 @@ func TestGeneratePatch_MalformedEnvelopeNotKept(t *testing.T) {
 	document := json.RawMessage(`{"Name":"x"}`)
 	desired := json.RawMessage(`{"Name":"x","Token":{"$res":true}}`)
 
-	patchDoc, _, _, err := GeneratePatch(document, desired, document, desired, resolver.ResolvableProperties{}, refSchema(), pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := GeneratePatch(document, desired, document, desired, resolver.ResolvableProperties{}, refSchema(), nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.NotContains(t, string(patchDoc), `"value":""`,
 		"the keep-set must never mint an empty-string placeholder for a malformed envelope")
@@ -202,7 +202,7 @@ func TestGeneratePatch_KeptFieldEqualValuesNoOp(t *testing.T) {
 	document := json.RawMessage(`{"Name":"x","Token":"v"}`)
 	desired := json.RawMessage(`{"Name":"x","Token":{"$ref":"formae://2ABcDeFgHiJkLmNoPqRsTuVwXyZ#/S","$value":"v"}}`)
 
-	patchDoc, _, _, err := GeneratePatch(document, desired, document, desired, resolver.ResolvableProperties{}, refSchema(), pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := GeneratePatch(document, desired, document, desired, resolver.ResolvableProperties{}, refSchema(), nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Empty(t, patchDoc)
 }
@@ -215,7 +215,7 @@ func TestGeneratePatch_PreservedRootAbsentDesired_NoRemove(t *testing.T) {
 	document := json.RawMessage(`{"Name":"x","Spec":{}}`)
 	desired := json.RawMessage(`{"Name":"x"}`)
 
-	patchDoc, _, _, err := GeneratePatch(document, desired, document, desired, resolver.ResolvableProperties{}, fidelitySchema(), pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := GeneratePatch(document, desired, document, desired, resolver.ResolvableProperties{}, fidelitySchema(), nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.NotContains(t, string(patchDoc), "remove")
 }
@@ -225,7 +225,7 @@ func TestGeneratePatch_ReferenceAddSurvivesPatchMode(t *testing.T) {
 	document := json.RawMessage(`{"Name":"x"}`)
 	desired := json.RawMessage(`{"Name":"x","Token":{"$ref":"formae://2ABcDeFgHiJkLmNoPqRsTuVwXyZ#/S"}}`)
 
-	patchDoc, _, _, err := GeneratePatch(document, desired, document, desired, resolver.ResolvableProperties{}, refSchema(), pkgmodel.FormaApplyModePatch)
+	patchDoc, _, _, err := GeneratePatch(document, desired, document, desired, resolver.ResolvableProperties{}, refSchema(), nil, pkgmodel.FormaApplyModePatch)
 	require.NoError(t, err)
 	assert.JSONEq(t, `[{"op":"add","path":"/Token","value":""}]`, string(patchDoc))
 }
@@ -242,7 +242,7 @@ func TestGeneratePatch_ReferenceOnCreateOnlyDestination_NoPlaceholder(t *testing
 	document := json.RawMessage(`{"Name":"x"}`)
 	desired := json.RawMessage(`{"Name":"x","Token":{"$ref":"formae://2ABcDeFgHiJkLmNoPqRsTuVwXyZ#/S"}}`)
 
-	patchDoc, createOnly, _, err := GeneratePatch(document, desired, document, desired, resolver.ResolvableProperties{}, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, createOnly, _, err := GeneratePatch(document, desired, document, desired, resolver.ResolvableProperties{}, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Empty(t, createOnly, "no replacement may be planned from an unresolved placeholder")
 	assert.NotContains(t, string(patchDoc), "/Token")
@@ -255,7 +255,7 @@ func TestGeneratePatch_PreserveEmpty_ActualExtraEmptyChurnsAsWholeReplace(t *tes
 	document := json.RawMessage(`{"Name":"x","Spec":{"selfSigned":{},"defaulted":{}}}`)
 	desired := json.RawMessage(`{"Name":"x","Spec":{"selfSigned":{}}}`)
 
-	patchDoc, _, _, err := GeneratePatch(document, desired, document, desired, resolver.ResolvableProperties{}, fidelitySchema(), pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := GeneratePatch(document, desired, document, desired, resolver.ResolvableProperties{}, fidelitySchema(), nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.JSONEq(t, `[{"op":"replace","path":"/Spec","value":{"selfSigned":{}}}]`, string(patchDoc))
 }
@@ -272,7 +272,7 @@ func TestGeneratePatch_AtomicWithoutPreserve_KeepsStripBehavior(t *testing.T) {
 	document := json.RawMessage(`{"Name":"x","Doc":{"stmt":{"cond":{}}}}`)
 	desired := json.RawMessage(`{"Name":"x","Doc":{"stmt":{}}}`)
 
-	patchDoc, _, _, err := GeneratePatch(document, desired, document, desired, resolver.ResolvableProperties{}, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := GeneratePatch(document, desired, document, desired, resolver.ResolvableProperties{}, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Empty(t, patchDoc,
 		"symmetric stripping still equalizes empty-shaped differences for atomic-only fields")
@@ -288,7 +288,7 @@ func TestGeneratePatch_DottedPreserveHint_NoFidelity(t *testing.T) {
 	document := json.RawMessage(`{"Name":"x","Config":{"records":{"a":{}}}}`)
 	desired := json.RawMessage(`{"Name":"x","Config":{"records":{}}}`)
 
-	patchDoc, _, _, err := GeneratePatch(document, desired, document, desired, resolver.ResolvableProperties{}, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := GeneratePatch(document, desired, document, desired, resolver.ResolvableProperties{}, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Empty(t, patchDoc, "nested hints are out of fidelity scope; today's stripping applies")
 }
@@ -302,7 +302,7 @@ func TestGeneratePatch_PreservedRoot_EmptyOnlyDifferenceMintsReplace(t *testing.
 	document := json.RawMessage(`{"Name":"x","Spec":{}}`)
 	desired := json.RawMessage(`{"Name":"x","Spec":{"selfSigned":{}}}`)
 
-	patchDoc, _, _, err := GeneratePatch(document, desired, document, desired, resolver.ResolvableProperties{}, fidelitySchema(), pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := GeneratePatch(document, desired, document, desired, resolver.ResolvableProperties{}, fidelitySchema(), nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.JSONEq(t, `[{"op":"replace","path":"/Spec","value":{"selfSigned":{}}}]`, string(patchDoc))
 }

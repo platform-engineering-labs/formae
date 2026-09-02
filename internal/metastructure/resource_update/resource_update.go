@@ -368,6 +368,7 @@ func (ru *ResourceUpdate) regeneratePatchDocument(mode pkgmodel.FormaApplyMode) 
 		desiredForPatch,
 		regenProperties,
 		ru.DesiredState.Schema,
+		ru.PriorState.OwnedMembers,
 		mode,
 	)
 	if err != nil {

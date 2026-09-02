@@ -40,8 +40,8 @@ var defaultIgnoredFields = []jsonpatch.Path{}
 //     provider still requires the force-resent field in that payload.
 //
 // The two slices are disjoint. Either can be nil.
-func GeneratePatch(document []byte, patch []byte, storedEnvelopes []byte, desiredEnvelopes []byte, properties resolver.ResolvableProperties, schema pkgmodel.Schema, mode pkgmodel.FormaApplyMode) (json.RawMessage, json.RawMessage, bool, error) {
-	return generatePatch(document, patch, storedEnvelopes, desiredEnvelopes, properties, schema, mode)
+func GeneratePatch(document []byte, patch []byte, storedEnvelopes []byte, desiredEnvelopes []byte, properties resolver.ResolvableProperties, schema pkgmodel.Schema, priorOwned pkgmodel.OwnedMembers, mode pkgmodel.FormaApplyMode) (json.RawMessage, json.RawMessage, bool, error) {
+	return generatePatch(document, patch, storedEnvelopes, desiredEnvelopes, properties, schema, priorOwned, mode)
 }
 
 func collectionSemanticsFromFieldHints(hints map[string]pkgmodel.FieldHint) jsonpatch.Collections {
@@ -60,10 +60,54 @@ func collectionSemanticsFromFieldHints(hints map[string]pkgmodel.FieldHint) json
 			collections.Arrays = append(collections.Arrays, path)
 		case pkgmodel.FieldUpdateMethodAtomic:
 			collections.Atomics = append(collections.Atomics, path)
+		case pkgmodel.FieldUpdateMethodSet:
+			// Set semantics are jsonpatch's default branch for an unkeyed
+			// collection (compareArray's "default: // default to set" case) —
+			// this case exists only so the hint is visibly handled here, not
+			// silently absorbed by the switch having no matching case.
 		}
 	}
 
 	return collections
+}
+
+// coOwnedCollections computes, per co-owned field, the set of member
+// identities this forma may remove (jsonpatch.Drainable): exactly the
+// members it declared on a prior apply but no longer declares now
+// (OwnershipPartition.FormerlyOwned). A member that is live but was never
+// declared by this forma (NeverOwned — another writer's, or the platform's)
+// is left out of the Drainable set, so jsonpatch tolerates it regardless of
+// the annotation.
+//
+// document/patch must be the exact byte pair createPatchDocument receives:
+// flattened and ref-resolved, with unbaselined writeOnly+createOnly fields
+// already stripped, but BEFORE any provider-default or empty-collection
+// normalization. Identities are computed over resolved $values and must
+// never see content a later pass would strip away.
+func coOwnedCollections(document, patch []byte, hints map[string]pkgmodel.FieldHint, priorOwned pkgmodel.OwnedMembers) jsonpatch.CoOwned {
+	coOwned := jsonpatch.CoOwned{}
+	for field, hint := range hints {
+		if hint.CoOwned == nil {
+			continue
+		}
+
+		declared := pkgmodel.MemberIdentities(gjson.GetBytes(patch, field), hint)
+		live := pkgmodel.MemberIdentities(gjson.GetBytes(document, field), hint)
+
+		var prior []string
+		if record, ok := priorOwned[field]; ok && record.Rule == pkgmodel.IdentityRule(hint) {
+			prior = record.Members
+		}
+
+		partition := pkgmodel.PartitionOwnership(declared, prior, live)
+		drainable := jsonpatch.Drainable{}
+		for member := range partition.FormerlyOwned {
+			drainable[member] = struct{}{}
+		}
+
+		coOwned[jsonpatch.Path(fmt.Sprintf("$.%s", field))] = drainable
+	}
+	return coOwned
 }
 
 // topLevelConvergeFields collects the schema fields whose destination path was
@@ -80,9 +124,17 @@ func topLevelConvergeFields(schemaFields []string, properties resolver.Resolvabl
 	return fields
 }
 
+// entitySetProviderDefaultsFromHints excludes hints with CoOwned != nil: the
+// provider-default pass pre-strips document elements the desired side omits,
+// which is exactly the pre-diff element filter a co-owned path must not get —
+// its removal indices need to address the unfiltered document (see
+// coOwnedCollections and the DOCUMENT STAGE comment above).
 func entitySetProviderDefaultsFromHints(hints map[string]pkgmodel.FieldHint) map[string]string {
 	result := map[string]string{}
 	for field, hint := range hints {
+		if hint.CoOwned != nil {
+			continue
+		}
 		if hint.HasProviderDefault && hint.UpdateMethod == pkgmodel.FieldUpdateMethodEntitySet && hint.IndexField != "" {
 			result[field] = hint.IndexField
 		}
@@ -90,7 +142,7 @@ func entitySetProviderDefaultsFromHints(hints map[string]pkgmodel.FieldHint) map
 	return result
 }
 
-func generatePatch(document []byte, patch []byte, storedEnvelopes []byte, desiredEnvelopes []byte, properties resolver.ResolvableProperties, schema pkgmodel.Schema, mode pkgmodel.FormaApplyMode) (json.RawMessage, json.RawMessage, bool, error) {
+func generatePatch(document []byte, patch []byte, storedEnvelopes []byte, desiredEnvelopes []byte, properties resolver.ResolvableProperties, schema pkgmodel.Schema, priorOwned pkgmodel.OwnedMembers, mode pkgmodel.FormaApplyMode) (json.RawMessage, json.RawMessage, bool, error) {
 	flattenedDocument, flattenedPatch, err := flattenAndResolveRefs(document, patch, storedEnvelopes, desiredEnvelopes, properties)
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("failed to flatten and resolve refs: %w", err)
@@ -123,7 +175,15 @@ func generatePatch(document []byte, patch []byte, storedEnvelopes []byte, desire
 	for field := range referenceEnvelopeFields(desiredEnvelopes, schema) {
 		keepFields[field] = true
 	}
-	patchOps, err := createPatchDocument(flattenedDocument, flattenedPatch, schema.Fields, requiredOnUpdateFields, schema.HasProviderDefault(), entitySetProviderDefaultsFromHints(schema.Hints), collectionSemanticsFromFieldHints(schema.Hints), defaultIgnoredFields, strategy, keepFields, preserveRoots)
+
+	// Computed on the exact byte pair createPatchDocument receives next — AFTER
+	// flattenAndResolveRefs and StripFieldsWithoutBaseline above, BEFORE any
+	// provider-default or empty-collection pass below — so identities see
+	// resolved $values and never see content a later pass strips away.
+	collections := collectionSemanticsFromFieldHints(schema.Hints)
+	collections.CoOwned = coOwnedCollections(flattenedDocument, flattenedPatch, schema.Hints, priorOwned)
+
+	patchOps, err := createPatchDocument(flattenedDocument, flattenedPatch, schema.Fields, requiredOnUpdateFields, schema.HasProviderDefault(), entitySetProviderDefaultsFromHints(schema.Hints), collections, defaultIgnoredFields, strategy, keepFields, preserveRoots)
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("failed to create patch document: %w", err)
 	}

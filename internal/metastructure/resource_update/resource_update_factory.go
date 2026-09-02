@@ -117,6 +117,7 @@ func NewResourceUpdateForExisting(
 			desiredForPatch,
 			resolvableProperties,
 			newResource.Schema,
+			existingResource.OwnedMembers,
 			mode,
 		)
 		if err != nil {

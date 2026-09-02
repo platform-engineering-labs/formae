@@ -323,3 +323,5 @@ require (
 replace ergo.services/ergo => github.com/JeroenSoeters/ergo v1.999.320-pel.6
 
 replace github.com/apple/pkl-go => github.com/JeroenSoeters/pkl-go v0.12.1-pel.1
+
+replace github.com/platform-engineering-labs/jsonpatch => /home/jeroen/dev/pel/jsonpatch/.worktrees/co-owned
