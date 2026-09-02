@@ -858,3 +858,154 @@ func TestExtractResources_CoOwnedFiltering_ClonesBeforeMutating(t *testing.T) {
 	assert.Equal(t, originalOwned, stored.OwnedMembers,
 		"filtering must not clear OwnedMembers on the stored resource")
 }
+
+// entitySetCoOwnedHint returns a FieldHint for a CoOwned EntitySet field —
+// an array of objects identified by indexField (e.g. AWS-style
+// [{"Key":...,"Value":...}] tag lists) — with the given SystemPatterns.
+func entitySetCoOwnedHint(indexField string, systemPatterns []string) pkgmodel.FieldHint {
+	return pkgmodel.FieldHint{
+		UpdateMethod: pkgmodel.FieldUpdateMethodEntitySet,
+		IndexField:   indexField,
+		CoOwned:      &pkgmodel.CoOwnership{SystemPatterns: systemPatterns},
+	}
+}
+
+// TestExtractResources_CoOwnedRecorded_EntitySetEmitsOnlyOwnedElement verifies
+// that a CoOwned EntitySet field (identity = the IndexField value, not the
+// whole element — see pkgmodel.MemberIdentities) with an interpretable
+// ownership record emits exactly the recorded element, and that the surviving
+// element's position is unaffected by how the drop is implemented (deletion
+// by descending array index — see filterArrayMembers).
+func TestExtractResources_CoOwnedRecorded_EntitySetEmitsOnlyOwnedElement(t *testing.T) {
+	hint := entitySetCoOwnedHint("Key", nil)
+	schema := pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{"tagSet": hint}}
+
+	// The record stores whatever MemberIdentities itself computes for the
+	// owned element (the json-marshaled IndexField value, e.g. `"mine"` with
+	// its quotes) — derived here rather than hand-typed, since that encoding
+	// is this mechanism's implementation detail, not something a test should
+	// have to reproduce by hand.
+	mineIdentities := pkgmodel.MemberIdentities(gjson.Parse(`[{"Key":"mine","Value":"a"}]`), hint)
+	require.Len(t, mineIdentities, 1)
+
+	ds := &mockExtractDatastore{
+		resources: []*pkgmodel.Resource{
+			{
+				Label:      "res-1",
+				Type:       "AWS::EC2::VPC",
+				Stack:      "default",
+				Properties: json.RawMessage(`{"tagSet":[{"Key":"mine","Value":"a"},{"Key":"theirs","Value":"b"}]}`),
+				Schema:     schema,
+				OwnedMembers: pkgmodel.OwnedMembers{
+					"tagSet": {Rule: pkgmodel.IdentityRule(hint), Members: mineIdentities},
+				},
+			},
+		},
+		stacks:   map[string]*pkgmodel.Stack{},
+		targets:  map[string]*pkgmodel.Target{},
+		policies: map[string]pkgmodel.Policy{},
+	}
+
+	m := &Metastructure{Datastore: ds}
+	forma, err := m.ExtractResources("")
+	require.NoError(t, err)
+	require.Len(t, forma.Resources, 1)
+
+	tagSet := gjson.GetBytes(forma.Resources[0].Properties, "tagSet")
+	require.True(t, tagSet.Exists())
+	elems := tagSet.Array()
+	require.Len(t, elems, 1, "only the recorded element must survive")
+	assert.Equal(t, map[string]any{"Key": "mine", "Value": "a"}, elems[0].Value(),
+		"the surviving element must be exactly the recorded one, values intact")
+}
+
+// TestExtractResources_CoOwnedRecordless_EntitySetSystemPatternsDropMatches
+// verifies that, with no interpretable record, a CoOwned EntitySet field
+// falls back to SystemPatterns matched against each element's IndexField
+// identity — the json-marshaled IndexField value, quotes included, since
+// that is the same "identity" pkgmodel.MemberIdentities already produces for
+// this hint shape and what an interpretable record's Members would hold. A
+// pattern therefore has to account for that encoding (a leading `"` for a
+// string IndexField); this is the same identity language throughout the
+// mechanism, not a different one for SystemPatterns.
+func TestExtractResources_CoOwnedRecordless_EntitySetSystemPatternsDropMatches(t *testing.T) {
+	hint := entitySetCoOwnedHint("Key", []string{`"aws:*`})
+	schema := pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{"tagSet": hint}}
+
+	ds := &mockExtractDatastore{
+		resources: []*pkgmodel.Resource{
+			{
+				Label:      "res-1",
+				Type:       "AWS::EC2::VPC",
+				Stack:      "default",
+				Properties: json.RawMessage(`{"tagSet":[{"Key":"aws:cloudformation:stack","Value":"my-stack"},{"Key":"team","Value":"platform"}]}`),
+				Schema:     schema,
+				// No OwnedMembers: this forma has never claimed this field.
+			},
+		},
+		stacks:   map[string]*pkgmodel.Stack{},
+		targets:  map[string]*pkgmodel.Target{},
+		policies: map[string]pkgmodel.Policy{},
+	}
+
+	m := &Metastructure{Datastore: ds}
+	forma, err := m.ExtractResources("")
+	require.NoError(t, err)
+	require.Len(t, forma.Resources, 1)
+
+	tagSet := gjson.GetBytes(forma.Resources[0].Properties, "tagSet")
+	require.True(t, tagSet.Exists())
+	elems := tagSet.Array()
+	require.Len(t, elems, 1, "the element matching the SystemPatterns glob must be dropped")
+	assert.Equal(t, map[string]any{"Key": "team", "Value": "platform"}, elems[0].Value())
+}
+
+// setListingCoOwnedHint returns a FieldHint for a CoOwned plain Set
+// listing — an array whose whole element value (not a sub-field) is its
+// identity — with the given SystemPatterns.
+func setListingCoOwnedHint(systemPatterns []string) pkgmodel.FieldHint {
+	return pkgmodel.FieldHint{
+		UpdateMethod: pkgmodel.FieldUpdateMethodSet,
+		CoOwned:      &pkgmodel.CoOwnership{SystemPatterns: systemPatterns},
+	}
+}
+
+// TestExtractResources_CoOwnedRecorded_SetListingEmitsOnlyOwnedElement
+// verifies that a CoOwned plain Set listing (identity = each element's own
+// canonical JSON — no IndexField, unlike EntitySet) with an interpretable
+// ownership record emits exactly the recorded whole-value element.
+func TestExtractResources_CoOwnedRecorded_SetListingEmitsOnlyOwnedElement(t *testing.T) {
+	hint := setListingCoOwnedHint(nil)
+	schema := pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{"members": hint}}
+
+	mineIdentities := pkgmodel.MemberIdentities(gjson.Parse(`["mine"]`), hint)
+	require.Len(t, mineIdentities, 1)
+
+	ds := &mockExtractDatastore{
+		resources: []*pkgmodel.Resource{
+			{
+				Label:      "res-1",
+				Type:       "AWS::EC2::VPC",
+				Stack:      "default",
+				Properties: json.RawMessage(`{"members":["mine","theirs"]}`),
+				Schema:     schema,
+				OwnedMembers: pkgmodel.OwnedMembers{
+					"members": {Rule: pkgmodel.IdentityRule(hint), Members: mineIdentities},
+				},
+			},
+		},
+		stacks:   map[string]*pkgmodel.Stack{},
+		targets:  map[string]*pkgmodel.Target{},
+		policies: map[string]pkgmodel.Policy{},
+	}
+
+	m := &Metastructure{Datastore: ds}
+	forma, err := m.ExtractResources("")
+	require.NoError(t, err)
+	require.Len(t, forma.Resources, 1)
+
+	members := gjson.GetBytes(forma.Resources[0].Properties, "members")
+	require.True(t, members.Exists())
+	assert.Equal(t, []any{"mine"}, members.Value(),
+		"only the recorded whole-value element must survive")
+}
