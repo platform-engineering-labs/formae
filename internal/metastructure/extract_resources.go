@@ -390,6 +390,18 @@ func coOwnedKeepFunc(fieldPath string, hint pkgmodel.FieldHint, owned pkgmodel.O
 	}
 
 	return func(identity string) bool {
+		// Member identities are pkgmodel.MemberIdentities' canonical form: a
+		// Mapping key verbatim, but an EntitySet/Set element's json-marshaled
+		// value — quoted for a string. A SystemPatterns author writes a plain
+		// glob ("aws:*") without knowing which shape they're matching against,
+		// so a JSON-string identity is unquoted before matching: it and only
+		// it can carry a leading/trailing '"' as an artifact of marshaling
+		// rather than as data. Any other JSON shape (object, array, number,
+		// bool, or a Mapping key) matches in its literal form, unchanged. This
+		// is purely a glob-matching convenience — record.Members comparison
+		// above stays on the marshaled encoding on both sides, so it never
+		// needs unquoting to agree with itself.
+		target := unquoteJSONStringIdentity(identity)
 		for _, pattern := range patterns {
 			// path.Match's glob semantics: "*" matches any sequence of
 			// non-separator ('/') characters, "?" matches any single
@@ -398,12 +410,29 @@ func coOwnedKeepFunc(fieldPath string, hint pkgmodel.FieldHint, owned pkgmodel.O
 			// ever exercised as a plain substring-style wildcard — "aws:*"
 			// matches "aws:cloudformation:stack" but "/" in an identity would
 			// not cross a "*" the way it might look like it should.
-			if matched, _ := path.Match(pattern, identity); matched {
+			if matched, _ := path.Match(pattern, target); matched {
 				return false
 			}
 		}
 		return true
 	}, true
+}
+
+// unquoteJSONStringIdentity undoes JSON string quoting on identity if, and
+// only if, identity is itself a JSON string literal (starts and ends with an
+// unescaped '"'). Any other shape — including a Mapping key, which was never
+// JSON-marshaled to begin with — is returned unchanged. Malformed input
+// (identity looks quoted but isn't valid JSON) is also returned unchanged
+// rather than erroring: this only ever feeds a best-effort glob match.
+func unquoteJSONStringIdentity(identity string) string {
+	if len(identity) < 2 || identity[0] != '"' || identity[len(identity)-1] != '"' {
+		return identity
+	}
+	var s string
+	if err := json.Unmarshal([]byte(identity), &s); err != nil {
+		return identity
+	}
+	return s
 }
 
 // filterObjectMembers drops every key of the object at fieldPath in doc for

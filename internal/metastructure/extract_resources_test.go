@@ -922,14 +922,16 @@ func TestExtractResources_CoOwnedRecorded_EntitySetEmitsOnlyOwnedElement(t *test
 // TestExtractResources_CoOwnedRecordless_EntitySetSystemPatternsDropMatches
 // verifies that, with no interpretable record, a CoOwned EntitySet field
 // falls back to SystemPatterns matched against each element's IndexField
-// identity — the json-marshaled IndexField value, quotes included, since
-// that is the same "identity" pkgmodel.MemberIdentities already produces for
-// this hint shape and what an interpretable record's Members would hold. A
-// pattern therefore has to account for that encoding (a leading `"` for a
-// string IndexField); this is the same identity language throughout the
-// mechanism, not a different one for SystemPatterns.
+// identity, written in its natural unquoted form ("aws:*") — the same form a
+// pattern author would write against a Mapping field. A string IndexField
+// value's json-marshaled identity carries quotes internally (see
+// pkgmodel.MemberIdentities), but SystemPatterns matching unquotes a
+// JSON-string identity before applying the glob (see
+// unquoteJSONStringIdentity), so the pattern contract is uniform across
+// Mapping keys, EntitySet index values, and scalar Set members — no author
+// needs to know about the marshaled encoding.
 func TestExtractResources_CoOwnedRecordless_EntitySetSystemPatternsDropMatches(t *testing.T) {
-	hint := entitySetCoOwnedHint("Key", []string{`"aws:*`})
+	hint := entitySetCoOwnedHint("Key", []string{"aws:*"})
 	schema := pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{"tagSet": hint}}
 
 	ds := &mockExtractDatastore{
@@ -1008,4 +1010,40 @@ func TestExtractResources_CoOwnedRecorded_SetListingEmitsOnlyOwnedElement(t *tes
 	require.True(t, members.Exists())
 	assert.Equal(t, []any{"mine"}, members.Value(),
 		"only the recorded whole-value element must survive")
+}
+
+// TestExtractResources_CoOwnedRecordless_SetListingSystemPatternsDropMatches
+// verifies that a plain Set listing's SystemPatterns match uses the same
+// natural, unquoted glob form as Mapping and EntitySet: a scalar Set
+// member's identity is its own json-marshaled value (quoted for a string —
+// see pkgmodel.MemberIdentities), but the pattern is still written "aws:*".
+func TestExtractResources_CoOwnedRecordless_SetListingSystemPatternsDropMatches(t *testing.T) {
+	hint := setListingCoOwnedHint([]string{"aws:*"})
+	schema := pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{"members": hint}}
+
+	ds := &mockExtractDatastore{
+		resources: []*pkgmodel.Resource{
+			{
+				Label:      "res-1",
+				Type:       "AWS::EC2::VPC",
+				Stack:      "default",
+				Properties: json.RawMessage(`{"members":["aws:default","team"]}`),
+				Schema:     schema,
+				// No OwnedMembers: this forma has never claimed this field.
+			},
+		},
+		stacks:   map[string]*pkgmodel.Stack{},
+		targets:  map[string]*pkgmodel.Target{},
+		policies: map[string]pkgmodel.Policy{},
+	}
+
+	m := &Metastructure{Datastore: ds}
+	forma, err := m.ExtractResources("")
+	require.NoError(t, err)
+	require.Len(t, forma.Resources, 1)
+
+	members := gjson.GetBytes(forma.Resources[0].Properties, "members")
+	require.True(t, members.Exists())
+	assert.Equal(t, []any{"team"}, members.Value(),
+		"the member matching the SystemPatterns glob must be dropped, in its natural unquoted form")
 }
