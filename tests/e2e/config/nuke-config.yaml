@@ -154,12 +154,16 @@ presets:
     # resource types are protected by default (allowlist semantics).
     #
     # The same allowlist is what keeps the standing oidc-credential fixtures
-    # alive: the static issuer bucket, its IAM OIDC provider, the role the
-    # e2e assumes, and the Secrets Manager secret holding the signing key are
-    # all named e2e-oidc-*, contain no "formae-e2e", and are therefore never
-    # removed. They are provisioned once, out of band, from the forma in
-    # tests/e2e/config/oidc-standing/. Do not turn this preset into a
-    # denylist without re-homing them first.
+    # alive: the static issuer bucket, its IAM OIDC provider, and the Secrets
+    # Manager secret holding the signing key are all named e2e-oidc-*, contain
+    # no "formae-e2e", and are therefore never removed. They are provisioned
+    # once, out of band, from the forma in tests/e2e/config/oidc-standing/. Do
+    # not turn this preset into a denylist without re-homing them first.
+    #
+    # The role that suite's token is exchanged for is NOT standing: `formae
+    # connect` provisions it per run as formae-e2e-oidc-connect-role, which is
+    # inside the allowlist and inside the leftover-role purge above, so a run
+    # that dies before its teardown is reclaimed rather than accumulating.
     filters:
       __global__:
         - property: Name

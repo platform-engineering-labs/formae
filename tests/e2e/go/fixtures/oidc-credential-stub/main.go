@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -38,9 +39,12 @@ const (
 	// it from the token header to pick the public key it verifies with.
 	keyID = "e2e-oidc-key-1"
 
-	// subject is the `sub` claim. The assumed role's trust policy conditions
-	// on this value.
-	subject = "e2e-oidc-subject"
+	// subjectEnv names the environment variable carrying the `sub` claim.
+	// The subject is produced by the control plane, travels through `formae
+	// connect` into the trust it provisions, and has to be the same string
+	// here or nothing the broker mints is accepted. The test owns both ends,
+	// so it supplies it rather than this file pinning a copy.
+	subjectEnv = "E2E_OIDC_SUBJECT"
 
 	// signingKeySecretID names the Secrets Manager secret whose SecretString
 	// is the PEM-encoded RSA private key matching keyID in the JWKS.
@@ -56,6 +60,7 @@ const (
 
 type stub struct {
 	signingKey *rsa.PrivateKey
+	subject    string
 }
 
 // Configure fetches the signing key before the broker starts serving. The
@@ -64,6 +69,14 @@ type stub struct {
 // opaque STS rejection later.
 func (s *stub) Configure(_ json.RawMessage) error {
 	ctx := context.Background()
+
+	// Read before the key: a broker with no subject can sign perfectly well
+	// and still mint a token nothing will accept, which surfaces as an opaque
+	// rejection at the far end rather than as the missing configuration it is.
+	s.subject = os.Getenv(subjectEnv)
+	if s.subject == "" {
+		return fmt.Errorf("%s is not set, so the broker has no subject to mint for", subjectEnv)
+	}
 
 	cfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(awsRegion))
 	if err != nil {
@@ -126,7 +139,7 @@ func (s *stub) IdentityToken(_ context.Context, req *credential.OidcIdentityToke
 
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
 		"iss": issuer,
-		"sub": subject,
+		"sub": s.subject,
 		"aud": req.Audience,
 		"iat": jwt.NewNumericDate(now),
 		"exp": jwt.NewNumericDate(expiresAt),

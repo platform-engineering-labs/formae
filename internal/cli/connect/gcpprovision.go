@@ -20,9 +20,9 @@ type gcpProvisioner interface {
 }
 
 // newGCPProvisioner is the seam tests substitute. Production constructs provx
-// with the server-produced subject verbatim: connect has no naming knowledge
-// of its own, and inventing a subject here would produce trust the issuer
-// never mints for.
+// with the server-produced subject and the pinned issuer verbatim: connect has
+// no naming knowledge of its own, and inventing either here would produce
+// trust the issuer never mints for.
 var newGCPProvisioner = func(ctx context.Context, project, subject, issuer string) (gcpProvisioner, error) {
 	tenantID, installationID, err := splitSubject(subject)
 	if err != nil {

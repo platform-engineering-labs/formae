@@ -176,13 +176,20 @@ jobs:
             system_plugins: auth-basic
           - test: TestPluginConfig
             system_plugins: sftp
-          # Installs no cloud plugin: the oidc-credential fixtures (a stub
-          # broker and a resource plugin that exchanges the token it is
-          # handed) are built from this repo and staged by `make test-e2e`
-          # itself. It does need AWS credentials — the broker reads its
-          # signing key from Secrets Manager and the plugin calls
-          # sts:AssumeRoleWithWebIdentity against the standing issuer.
+          # The oidc-credential fixtures (a stub broker, a probe plugin that
+          # reports the token it is handed, and a stub hosted auth plugin) are
+          # built from this repo and staged by `make test-e2e` itself. The real
+          # aws and gcp plugins come from the dev channel, because the
+          # `OidcAuth` target config they are driven through ships in
+          # aws 0.1.17 / gcp 0.1.13, whose only builds so far are pre-releases.
+          #
+          # It needs AWS credentials and the `e2e-test` shared-config profile
+          # written above — `formae connect` provisions the role with it, and
+          # the broker reads its signing key from Secrets Manager — plus the
+          # GCP credentials configured below.
           - test: TestOidcCredential
+            system_plugins: aws gcp
+            plugin_channel: dev
 
     steps:
       - uses: actions/checkout@v4
@@ -219,10 +226,19 @@ jobs:
           output-credentials: true
 
       - name: Add profile credentials to ~/.aws/credentials
+        # The session token is not optional: these are temporary credentials
+        # from an assumed role, and the key pair alone is refused with
+        # InvalidClientTokenId. It went unnoticed while nothing read the
+        # profile as a profile — the action also exports the three values as
+        # job env vars, the SDK's default chain prefers those over shared
+        # config, and the access test below passes no --profile. `formae
+        # connect --profile-aws` forces the shared profile, so it is the first
+        # thing here that authenticates through this file.
         run: |
           mkdir -p ~/.aws
           aws configure set aws_access_key_id ${{ steps.creds.outputs.aws-access-key-id }} --profile e2e-test
           aws configure set aws_secret_access_key ${{ steps.creds.outputs.aws-secret-access-key }} --profile e2e-test
+          aws configure set aws_session_token ${{ steps.creds.outputs.aws-session-token }} --profile e2e-test
           aws configure set region us-west-2 --profile e2e-test
 
       - name: Test AWS Access
@@ -237,6 +253,18 @@ jobs:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # Only the oidc-credential entry federates into GCP, and only it pays
+      # for the sign-in. Gated on the secret as well as the test, so a fork
+      # without credentials reports the GCP half as skipped rather than red.
+      - name: Configure GCP Credentials
+        if: ${{ matrix.test == 'TestOidcCredential' && env.GCP_WORKLOAD_IDENTITY_PROVIDER != '' }}
+        env:
+          GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
       - name: Install system plugins via orbital
         if: ${{ matrix.system_plugins }}
@@ -298,7 +326,8 @@ jobs:
           # Install only the plugins this test needs. The agent refreshes
           # orbital's repository cache at startup, so the install candidate
           # solver has fresh metadata to work with.
-          dist/e2e/bin/formae plugin install ${{ matrix.system_plugins }} --channel stable
+          dist/e2e/bin/formae plugin install ${{ matrix.system_plugins }} \
+            --channel ${{ matrix.plugin_channel || 'stable' }}
 
           # Stop the bootstrap agent so the test harness can spawn its own.
           kill -TERM "$AGENT_PID" || true
@@ -327,6 +356,13 @@ jobs:
         env:
           AWS_PROFILE: e2e-test
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          # The project the oidc-credential suite federates into. Its own
+          # project, not the one the GCP plugin's suites use: provx fixes the
+          # workload identity pool and provider ids per project and refuses to
+          # converge a provider trusting a different issuer, so a project
+          # already carrying the production-issuer connection cannot carry the
+          # e2e's as well. Absent, the GCP half skips.
+          E2E_GCP_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
           # Unique per run+attempt so fixtures can name globally-scoped cloud
           # resources (e.g. CloudFront KeyValueStore/Function, which aws-nuke
           # does not clean) without colliding across reruns or concurrent jobs.
