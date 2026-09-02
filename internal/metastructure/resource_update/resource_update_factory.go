@@ -15,6 +15,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
+	"github.com/tidwall/gjson"
 )
 
 func NewResourceUpdateForExisting(
@@ -30,13 +31,38 @@ func NewResourceUpdateForExisting(
 	coPlanned CoPlannedForDraw,
 ) ([]ResourceUpdate, error) {
 
+	// filteredProps must exist before the identical-resources check below, so
+	// that check can compute the ownership claim from the effective desired
+	// properties rather than from newResource.Properties directly (they
+	// legitimately differ under setOnce).
+	var err error
+	filteredProps := effectiveDesired
+	if filteredProps == nil {
+		filteredProps, err = filterSetOnceProps(existingResource.Properties, newResource.Properties, newResource.Label)
+		if err != nil {
+			return nil, fmt.Errorf("failed to compute effective desired properties: %w", err)
+		}
+	}
+
+	// claimedMembers/ownershipDelta run BEFORE either early-return below: a
+	// co-owned collection's live membership can shift under this forma even
+	// when nothing else about the resource moved (another writer added or
+	// removed a member this forma also declares), and that is exactly the
+	// legacy-bootstrap case (no record yet, existing==desired byte-for-byte)
+	// the identical-resources return would otherwise swallow.
+	claim := claimedMembers(filteredProps, existingResource.Properties, newResource.Schema)
+	ownershipDelta := !pkgmodel.OwnedMembersEqual(
+		pkgmodel.NormalizeOwnedMembers(claim, newResource.Schema.Hints),
+		pkgmodel.NormalizeOwnedMembers(existingResource.OwnedMembers, newResource.Schema.Hints))
+
 	// The three suppressions below all say the same thing: nothing about this
 	// resource moved, so the command has nothing to do for it. coPlanned is
-	// the one case where that is true and the update is still owed — a
+	// one case where that is true and the update is still owed — a
 	// generator this resource binds to draws in this command, and only a
-	// resource that is a node in the changeset receives the drawn value. See
-	// CoPlannedForDraw.
-	if reflect.DeepEqual(existingResource, newResource) && !bool(coPlanned) {
+	// resource that is a node in the changeset receives the drawn value (see
+	// CoPlannedForDraw). ownershipDelta is the other: the record itself needs
+	// writing even though nothing else changed.
+	if reflect.DeepEqual(existingResource, newResource) && !bool(coPlanned) && !ownershipDelta {
 		slog.Debug("No changes detected between existing and new resource, skipping update")
 		return nil, nil
 	}
@@ -56,21 +82,19 @@ func NewResourceUpdateForExisting(
 	// the properties might be identical
 	stackChanged := existingResource.Stack != newResource.Stack
 
-	var err error
-	filteredProps := effectiveDesired
-	if filteredProps == nil {
-		filteredProps, err = filterSetOnceProps(existingResource.Properties, newResource.Properties, newResource.Label)
-		if err != nil {
-			return nil, fmt.Errorf("failed to compute effective desired properties: %w", err)
-		}
-	}
 	hasChanges, err := CompareFilteredResourceForUpdate(&existingResource, &newResource, newResource.Schema, filteredProps)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compare resources: %w", err)
 	}
-	if !hasChanges && !stackChanged && !labelChanged && !bool(coPlanned) {
+	if !hasChanges && !stackChanged && !labelChanged && !bool(coPlanned) && !ownershipDelta {
 		return []ResourceUpdate{}, nil
 	}
+
+	// A record-only update: no property, stack, label, or draw change — the
+	// sole reason this update exists is that the ownership record itself
+	// needs writing. Built through the same construction path as any other
+	// update below, then overridden just before it is returned.
+	recordOnly := ownershipDelta && !hasChanges && !stackChanged && !labelChanged && !bool(coPlanned)
 
 	var patchDocument json.RawMessage
 	var createOnlyPatch json.RawMessage
@@ -174,6 +198,12 @@ func NewResourceUpdateForExisting(
 			NativeID:           existingResource.NativeID,
 			ReadOnlyProperties: existingResource.ReadOnlyProperties,
 			Managed:            newResource.Managed,
+			// Carried forward on every update; a real update's echo recompute
+			// (updateResourceUpdateFromProgress) replaces this once the
+			// provider's write lands, so this is a placeholder for anything
+			// that reads DesiredState before then. A record-only update
+			// overrides it below with the freshly computed claim.
+			OwnedMembers: existingResource.OwnedMembers,
 			// Preserve the existing row's KSUID across the update. The caller
 			// has already paired `existingResource` (current managed row) with
 			// `newResource` (desired declaration); the existing KSUID is the
@@ -194,7 +224,65 @@ func NewResourceUpdateForExisting(
 		ResolvedRootDigests:  generatorDigests,
 	}
 
+	if recordOnly {
+		updateResource.DesiredState.PatchDocument = json.RawMessage(`[]`)
+		updateResource.DesiredState.Properties = existingResource.Properties
+		updateResource.DesiredState.OwnedMembers = claim
+		updateResource.RecordOnly = true
+		updateResource.RemainingResolvables = nil
+	}
+
 	return []ResourceUpdate{updateResource}, nil
+}
+
+// claimedMembers computes, per CoOwned-hinted field, the ownership record
+// this forma may claim right now: declared member identities (from declared)
+// intersected with what the provider actually shows (from live). A member
+// this forma declares but the provider does not show — or the reverse — is
+// not claimable yet, so only the intersection earns a record entry. Identity
+// extraction is envelope-flattened (see MemberIdentities): an unresolved
+// $ref/$res/$gen reference contributes nothing to either side. A field whose
+// intersection is empty gets no entry at all.
+func claimedMembers(declared, live json.RawMessage, schema pkgmodel.Schema) pkgmodel.OwnedMembers {
+	var claim pkgmodel.OwnedMembers
+	for path, hint := range schema.Hints {
+		if hint.CoOwned == nil {
+			continue
+		}
+
+		declaredMembers := pkgmodel.MemberIdentities(gjson.GetBytes(declared, path), hint)
+		liveMembers := pkgmodel.MemberIdentities(gjson.GetBytes(live, path), hint)
+		claimed := intersectIdentities(declaredMembers, liveMembers)
+		if len(claimed) == 0 {
+			continue
+		}
+
+		if claim == nil {
+			claim = pkgmodel.OwnedMembers{}
+		}
+		claim[path] = pkgmodel.OwnedPathRecord{Rule: pkgmodel.IdentityRule(hint), Members: claimed}
+	}
+	return claim
+}
+
+// intersectIdentities returns the members of a that also appear in b. Both
+// inputs are the sorted, deduplicated output of MemberIdentities, so the
+// result is sorted and deduplicated too.
+func intersectIdentities(a, b []string) []string {
+	if len(a) == 0 || len(b) == 0 {
+		return nil
+	}
+	inB := make(map[string]struct{}, len(b))
+	for _, m := range b {
+		inB[m] = struct{}{}
+	}
+	var out []string
+	for _, m := range a {
+		if _, ok := inB[m]; ok {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 func NewResourceUpdateForReplace(

@@ -324,6 +324,119 @@ func TestResourcePersister_Update(t *testing.T) {
 	assert.Equal(t, []interface{}{float64(7), float64(8)}, props["a"])
 }
 
+// TestResourcePersister_RecordOnlyUpdateChangesOwnershipRecordOnly is the
+// persistence-invariant check for a record-only update: DesiredState carries
+// the exact same Properties and ReadOnlyProperties already stored, differing
+// only in OwnedMembers. This exercises processResourceUpdate's OperationUpdate
+// path directly (the seam TestResourcePersister_Update exercises) — there is
+// no unit seam inside package resource_update itself, since the executor
+// answers PersistResourceUpdate synthetically there rather than driving this
+// function.
+func TestResourcePersister_RecordOnlyUpdateChangesOwnershipRecordOnly(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	assert.NoError(t, err)
+
+	resourceKsuid := util.NewID()
+	schema := pkgmodel.Schema{
+		Fields: []string{"Tags"},
+		Hints:  map[string]pkgmodel.FieldHint{"Tags": {UpdateMethod: pkgmodel.FieldUpdateMethodSet, CoOwned: &pkgmodel.CoOwnership{}}},
+	}
+	props := json.RawMessage(`{"Tags":["a","b"]}`)
+	readOnlyProps := json.RawMessage(`{"Arn":"arn:aws:ec2:sg/test"}`)
+
+	initialResource := resource_update.ResourceUpdate{
+		DesiredState: pkgmodel.Resource{
+			Label:              "test-resource",
+			Type:               "FakeAWS::EC2::SecurityGroup",
+			Properties:         props,
+			ReadOnlyProperties: readOnlyProps,
+			Stack:              "test-stack",
+			Ksuid:              resourceKsuid,
+			Schema:             schema,
+		},
+		ResourceTarget: pkgmodel.Target{Label: "test-target", Namespace: "test-namespace"},
+		State:          resource_update.ResourceUpdateStateSuccess,
+		StackLabel:     "test-stack",
+		ProgressResult: []plugin.TrackedProgress{
+			{
+				ProgressResult: resource.ProgressResult{
+					Operation:          resource.OperationCreate,
+					OperationStatus:    resource.OperationStatusSuccess,
+					RequestID:          "test-request-id",
+					NativeID:           "test-native-id",
+					ResourceProperties: props,
+				},
+				ResourceType: "FakeAWS::EC2::SecurityGroup",
+				StartTs:      util.TimeNow(),
+				ModifiedTs:   util.TimeNow(),
+				Attempts:     1,
+			},
+		},
+		GroupID: "test-group-id",
+	}
+
+	createResult := persister.Call(sender, resource_update.PersistResourceUpdate{
+		CommandID:         "test-command-id",
+		ResourceOperation: resource_update.OperationCreate,
+		PluginOperation:   resource.OperationCreate,
+		ResourceUpdate:    initialResource,
+	})
+	require.NoError(t, createResult.Error)
+
+	newRecord := pkgmodel.OwnedMembers{"Tags": {Rule: "Set", Members: []string{`"a"`}}}
+	recordOnlyResource := resource_update.ResourceUpdate{
+		DesiredState: pkgmodel.Resource{
+			Label:              "test-resource",
+			Type:               "FakeAWS::EC2::SecurityGroup",
+			Properties:         props,
+			ReadOnlyProperties: readOnlyProps,
+			Stack:              "test-stack",
+			Ksuid:              resourceKsuid,
+			Schema:             schema,
+			OwnedMembers:       newRecord,
+		},
+		ResourceTarget: pkgmodel.Target{Label: "test-target", Namespace: "test-namespace"},
+		State:          resource_update.ResourceUpdateStateSuccess,
+		StackLabel:     "test-stack",
+		RecordOnly:     true,
+		ProgressResult: []plugin.TrackedProgress{
+			{
+				ProgressResult: resource.ProgressResult{
+					Operation:          resource.OperationUpdate,
+					OperationStatus:    resource.OperationStatusSuccess,
+					RequestID:          "test-request-id-2",
+					NativeID:           "test-native-id",
+					ResourceProperties: props,
+				},
+				ResourceType: "FakeAWS::EC2::SecurityGroup",
+				StartTs:      util.TimeNow(),
+				ModifiedTs:   util.TimeNow(),
+				Attempts:     1,
+			},
+		},
+		GroupID: "test-group-id",
+	}
+
+	updateResult := persister.Call(sender, resource_update.PersistResourceUpdate{
+		CommandID:         "test-command-id-2",
+		ResourceOperation: resource_update.OperationUpdate,
+		PluginOperation:   resource.OperationUpdate,
+		ResourceUpdate:    recordOnlyResource,
+	})
+	require.NoError(t, updateResult.Error)
+
+	loaded, err := ds.LoadResource(pkgmodel.NewFormaeURI(resourceKsuid, ""))
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+
+	assert.JSONEq(t, string(props), string(loaded.Properties),
+		"Properties must be unchanged by a record-only update")
+	assert.JSONEq(t, string(readOnlyProps), string(loaded.ReadOnlyProperties),
+		"ReadOnlyProperties must be unchanged by a record-only update")
+	assert.True(t, pkgmodel.OwnedMembersEqual(newRecord, loaded.OwnedMembers),
+		"OwnedMembers must reflect the newly committed record")
+}
+
 func TestResourcePersister_Delete(t *testing.T) {
 	persister, sender, ds, err := newResourcePersisterForTest(t)
 	assert.NoError(t, err)
@@ -1535,14 +1648,14 @@ func syncReadUpdate(ksuid string, props, readOnlyProps json.RawMessage, matchFil
 func seedUnmanagedRow(t *testing.T, ds datastore.Datastore, ksuid string, props json.RawMessage, managed bool) {
 	t.Helper()
 	_, err := ds.StoreResource(&pkgmodel.Resource{
-		Label:    "discovered-resource",
-		Type:     "FakeAWS::EC2::Instance",
-		NativeID: "i-abc123",
+		Label:      "discovered-resource",
+		Type:       "FakeAWS::EC2::Instance",
+		NativeID:   "i-abc123",
 		Properties: props,
-		Stack:    "$unmanaged",
-		Target:   "test-target",
-		Ksuid:    ksuid,
-		Managed:  managed,
+		Stack:      "$unmanaged",
+		Target:     "test-target",
+		Ksuid:      ksuid,
+		Managed:    managed,
 	}, "seed-cmd")
 	require.NoError(t, err)
 }

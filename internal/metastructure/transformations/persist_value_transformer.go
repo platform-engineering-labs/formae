@@ -65,14 +65,15 @@ func (pv *PersistValueTransformer) ApplyToResource(resource *pkgmodel.Resource) 
 	}
 
 	transformedResource := &pkgmodel.Resource{
-		Label:    resource.Label,
-		Type:     resource.Type,
-		Stack:    resource.Stack,
-		Target:   resource.Target,
-		Schema:   resource.Schema,
-		NativeID: resource.NativeID,
-		Managed:  resource.Managed,
-		Ksuid:    resource.Ksuid,
+		Label:        resource.Label,
+		Type:         resource.Type,
+		Stack:        resource.Stack,
+		Target:       resource.Target,
+		Schema:       resource.Schema,
+		NativeID:     resource.NativeID,
+		Managed:      resource.Managed,
+		Ksuid:        resource.Ksuid,
+		OwnedMembers: resource.OwnedMembers,
 	}
 
 	var diagnostics []Diagnostic

@@ -808,11 +808,22 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 		data.resourceUpdate.PriorState.Stack == data.resourceUpdate.DesiredState.Stack &&
 		data.resourceUpdate.PriorState.Target == data.resourceUpdate.DesiredState.Target
 
-	if (isBringingUnderManagement || isLabelOnlyChange) && hasEmptyPatch {
-		if isLabelOnlyChange {
+	// A record-only update carries no property, stack, label, or target
+	// delta — planning built it solely to commit a shifted ownership record
+	// (see NewResourceUpdateForExisting). Its patch is always empty by
+	// construction, so hasEmptyPatch is included here only for symmetry with
+	// the other two predicates, never as a distinguishing condition.
+	isRecordOnly := data.resourceUpdate.RecordOnly
+
+	if (isBringingUnderManagement || isLabelOnlyChange || isRecordOnly) && hasEmptyPatch {
+		switch {
+		case isLabelOnlyChange:
 			proc.Log().Debug("Renaming resource without property changes resourceURI=%v oldLabel=%s newLabel=%s",
 				data.resourceUpdate.DesiredState.URI(), data.resourceUpdate.PriorState.Label, data.resourceUpdate.DesiredState.Label)
-		} else {
+		case isRecordOnly:
+			proc.Log().Debug("Committing ownership record without property changes resourceURI=%v",
+				data.resourceUpdate.DesiredState.URI())
+		default:
 			proc.Log().Debug("Bringing resource under management without property changes resourceURI=%v oldStack=%s newStack=%s",
 				data.resourceUpdate.DesiredState.URI(), data.resourceUpdate.PriorState.Stack, data.resourceUpdate.DesiredState.Stack)
 		}
@@ -829,8 +840,11 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 		}
 
 		statusMessage := "Brought under management without property changes"
-		if isLabelOnlyChange {
+		switch {
+		case isLabelOnlyChange:
 			statusMessage = "Renamed without property changes"
+		case isRecordOnly:
+			statusMessage = "Committed ownership record without property changes"
 		}
 
 		// Create synthetic ProgressResult with existing resource data

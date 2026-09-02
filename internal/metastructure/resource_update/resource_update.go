@@ -122,6 +122,10 @@ type ResourceUpdate struct {
 	// entry degrades to stamping nothing (provenance stays unknown), never to
 	// attesting a recomputed value.
 	ResolvedRootDigests map[string]string `json:"ResolvedRootDigests,omitempty"`
+	// RecordOnly marks an update that changes only the ownership record: no
+	// provider call; execution synthesizes successful Update progress the way
+	// a label-only update does.
+	RecordOnly bool `json:"RecordOnly,omitempty"`
 }
 
 func (ru *ResourceUpdate) URI() pkgmodel.FormaeURI {
@@ -537,10 +541,22 @@ func (ru *ResourceUpdate) updateResourceUpdateFromProgress(progress *resource.Pr
 		// The echo of our own write is a Create or Update progress; every
 		// other Read-shaped merge (sync, discovery) is read-origin.
 		writeOrigin := progress.Operation == resource.OperationCreate || progress.Operation == resource.OperationUpdate
+		// Captured before updateResourceProperties overwrites DesiredState.Properties
+		// below, so the recompute sees what THIS forma declared going into the
+		// write, not the provider's echo of it.
+		declaredDoc := ru.DesiredState.Properties
 		err := ru.updateResourceProperties(string(progress.ResourceProperties), writeOrigin)
 		if err != nil {
 			slog.Error("Failed to update resource properties", "error", err)
 			return err
+		}
+		// Only a write-origin merge commits the ownership record: it is this
+		// forma's own Create/Update landing, so the provider's echo reflects
+		// what is now live under whatever this forma just declared. A
+		// read-shaped merge (sync, discovery) observes state nobody here
+		// caused and must not move the record.
+		if writeOrigin {
+			ru.DesiredState.OwnedMembers = claimedMembers(declaredDoc, progress.ResourceProperties, ru.DesiredState.Schema)
 		}
 	}
 
