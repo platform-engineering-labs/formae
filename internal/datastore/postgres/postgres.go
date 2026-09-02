@@ -1166,6 +1166,36 @@ LIMIT 25
 	return datastore.ComposeWriteWitness(history), nil
 }
 
+// GetOwnedMembers returns the resource's stored ownership record from the
+// latest resource row (see datastore.Datastore.GetOwnedMembers).
+func (d DatastorePostgres) GetOwnedMembers(ksuid string) (pkgmodel.OwnedMembers, error) {
+	ctx, span := tracer.Start(context.Background(), "GetOwnedMembers")
+	defer span.End()
+
+	query := `
+SELECT data->>'OwnedMembers'
+FROM resources
+WHERE ksuid = $1
+ORDER BY version COLLATE "C" DESC
+LIMIT 1
+`
+	var raw *string
+	if err := d.pool.QueryRow(ctx, query, ksuid).Scan(&raw); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if raw == nil || *raw == "" || *raw == "null" {
+		return nil, nil
+	}
+	var owned pkgmodel.OwnedMembers
+	if err := json.Unmarshal([]byte(*raw), &owned); err != nil {
+		return nil, err
+	}
+	return owned, nil
+}
+
 func (d DatastorePostgres) fetchCurrentPropertiesPG(ctx context.Context, ksuid string) (json.RawMessage, error) {
 	query := `
 SELECT data->>'Properties'

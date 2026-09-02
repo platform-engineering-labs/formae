@@ -306,6 +306,14 @@ type Datastore interface {
 	// discovery never advance it. Returns nil when formae never wrote the
 	// resource.
 	GetPropertiesAtLastWrite(ksuid string) (json.RawMessage, error)
+	// GetOwnedMembers returns the resource's stored ownership record — the
+	// member identities this forma last declared per co-owned collection
+	// field — read from the LATEST resource row (unlike
+	// GetPropertiesAtLastWrite, which composes a write-only witness across
+	// history; this is a plain current-state read, mirroring how
+	// fetchCurrentProperties reads Properties). A resource with no record, or
+	// a JSON null OwnedMembers field, returns (nil, nil).
+	GetOwnedMembers(ksuid string) (pkgmodel.OwnedMembers, error)
 	// QueryFormaCommands searches commands based on filter criteria
 	QueryFormaCommands(query *StatusQuery) ([]*forma_command.FormaCommand, error)
 

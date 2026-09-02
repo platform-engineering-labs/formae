@@ -52,7 +52,7 @@ func TestWitnessedMovedModifications_WitnessedMovement_IsDrift(t *testing.T) {
 		Schema:     kmsSchemaForDrift(),
 	}}}
 
-	moved := WitnessedMovedModifications(mods["prod"], driftWitnesses(mods), forma, &forma_command.FormaCommand{})
+	moved := WitnessedMovedModifications(mods["prod"], driftWitnesses(mods), nil, forma, &forma_command.FormaCommand{})
 	require.Len(t, moved, 1)
 	assert.Equal(t, "signing-key", moved[0].Label)
 }
@@ -71,7 +71,7 @@ func TestWitnessedMovedModifications_NoWitness_Tolerated(t *testing.T) {
 		Schema:     kmsSchemaForDrift(),
 	}}}
 
-	moved := WitnessedMovedModifications(mods["prod"], map[string]json.RawMessage{}, forma, &forma_command.FormaCommand{})
+	moved := WitnessedMovedModifications(mods["prod"], map[string]json.RawMessage{}, nil, forma, &forma_command.FormaCommand{})
 	assert.Empty(t, moved, "no write witness means the movement is the infrastructure's business")
 }
 
@@ -89,7 +89,7 @@ func TestWitnessedMovedModifications_AlreadyUnabsorbed_NotDoubled(t *testing.T) 
 		Stack: "prod", Type: "AWS::KMS::Key", Label: "signing-key", Schema: kmsSchemaForDrift(),
 	}}}
 
-	moved := WitnessedMovedModifications(mods["prod"], driftWitnesses(mods), forma, &forma_command.FormaCommand{})
+	moved := WitnessedMovedModifications(mods["prod"], driftWitnesses(mods), nil, forma, &forma_command.FormaCommand{})
 	assert.Empty(t, moved)
 }
 
@@ -112,8 +112,39 @@ func TestWitnessedMovedModifications_PendingUpdate_LeftToLegacyFilter(t *testing
 		DesiredState: pkgmodel.Resource{Type: "AWS::KMS::Key", Label: "signing-key"},
 	}}}
 
-	moved := WitnessedMovedModifications(mods["prod"], driftWitnesses(mods), forma, fa)
+	moved := WitnessedMovedModifications(mods["prod"], driftWitnesses(mods), nil, forma, fa)
 	assert.Empty(t, moved, "a resource with a pending update is already unabsorbed; the legacy filter owns it")
+}
+
+func coOwnedLabelsSchemaForDrift() pkgmodel.Schema {
+	return pkgmodel.Schema{
+		Fields: []string{"Name", "labels"},
+		Hints:  map[string]pkgmodel.FieldHint{"labels": {CoOwned: &pkgmodel.CoOwnership{}}},
+	}
+}
+
+func TestWitnessedMovedModifications_CoOwnedNeverOwnedMovement_IsDriftWithoutWitness(t *testing.T) {
+	// The co-owned regime classifies by ownership partition, not by write
+	// witness: a resource with no witness at all still owes a note for a
+	// never-owned member's movement.
+	mods := map[string][]datastore.ResourceModification{
+		"prod": {{
+			Stack: "prod", Type: "AWS::Example::Thing", Label: "shared", Operation: "update", Ksuid: "k1",
+			OldProperties: json.RawMessage(`{"Name": "n", "labels": {"mine": "1", "theirs": "a"}}`),
+			Properties:    json.RawMessage(`{"Name": "n", "labels": {"mine": "1", "theirs": "b"}}`),
+		}},
+	}
+	forma := &pkgmodel.Forma{Resources: []pkgmodel.Resource{{
+		Stack: "prod", Type: "AWS::Example::Thing", Label: "shared",
+		Properties: json.RawMessage(`{"Name": "n", "labels": {"mine": "1"}}`),
+		Schema:     coOwnedLabelsSchemaForDrift(),
+	}}}
+	records := map[string]pkgmodel.OwnedMembers{
+		"k1": {"labels": {Rule: "Mapping", Members: []string{"mine"}}},
+	}
+
+	moved := WitnessedMovedModifications(mods["prod"], map[string]json.RawMessage{}, records, forma, &forma_command.FormaCommand{})
+	require.Len(t, moved, 1)
 }
 
 func TestAssertWitnessesIntoForma_AssertsOnlyMatchedResources_AndCopies(t *testing.T) {

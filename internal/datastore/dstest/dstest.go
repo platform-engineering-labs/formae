@@ -121,6 +121,7 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunFormaCommandSubjectNullRoundTrip(t, newDS)
 	RunGetPropertiesAtLastWrite(t, newDS)
 	RunGetWriteWitness_UpdateEchoDoesNotLaunderUnwrittenFields(t, newDS)
+	RunGetOwnedMembers(t, newDS)
 	RunStoreFormaCommandSyncSkipsResourceUpdates(t, newDS)
 	RunCommandSourceRoundTrip(t, newDS)
 	RunGetMostRecentFormaCommandByClientID(t, newDS)

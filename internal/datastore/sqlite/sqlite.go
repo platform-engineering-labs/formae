@@ -746,6 +746,36 @@ LIMIT 25
 	return datastore.ComposeWriteWitness(history), nil
 }
 
+// GetOwnedMembers returns the resource's stored ownership record from the
+// latest resource row (see datastore.Datastore.GetOwnedMembers).
+func (d DatastoreSQLite) GetOwnedMembers(ksuid string) (pkgmodel.OwnedMembers, error) {
+	_, span := sqliteTracer.Start(context.Background(), "GetOwnedMembers")
+	defer span.End()
+
+	query := `
+SELECT json_extract(data, '$.OwnedMembers')
+FROM resources
+WHERE ksuid = ?
+ORDER BY version DESC
+LIMIT 1
+`
+	var raw sql.NullString
+	if err := d.conn.QueryRow(query, ksuid).Scan(&raw); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if !raw.Valid || raw.String == "" || raw.String == "null" {
+		return nil, nil
+	}
+	var owned pkgmodel.OwnedMembers
+	if err := json.Unmarshal([]byte(raw.String), &owned); err != nil {
+		return nil, err
+	}
+	return owned, nil
+}
+
 // fetchCurrentProperties returns the Properties JSON from the latest resource version for the given ksuid.
 func (d DatastoreSQLite) fetchCurrentProperties(ksuid string) (json.RawMessage, error) {
 	query := `

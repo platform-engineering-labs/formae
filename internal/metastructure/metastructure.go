@@ -368,8 +368,13 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 	if config.Mode == pkgmodel.FormaApplyModeReconcile && config.Force {
 		assertMods := make(map[string][]datastore.ResourceModification)
 		assertWitnesses := make(map[string]json.RawMessage)
+		// AssertWitnessesIntoForma only ever consults assertWitnesses; the
+		// ownership record has no role in witness assertion, so this map is
+		// discarded — LoadModificationsAndWitnesses still requires it to keep
+		// one shared loader for both records.
+		assertRecords := make(map[string]pkgmodel.OwnedMembers)
 		for _, stackLabel := range drift.StackLabelsFromForma(forma) {
-			if err := drift.LoadModificationsAndWitnesses(m.Datastore, stackLabel, assertMods, assertWitnesses); err != nil {
+			if err := drift.LoadModificationsAndWitnesses(m.Datastore, stackLabel, assertMods, assertWitnesses, assertRecords); err != nil {
 				return nil, err
 			}
 		}
@@ -403,20 +408,21 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 	if config.Mode == pkgmodel.FormaApplyModeReconcile && !config.Force {
 		modificationsByStack := make(map[string][]datastore.ResourceModification)
 		witnessByKsuid := make(map[string]json.RawMessage)
+		recordByKsuid := make(map[string]pkgmodel.OwnedMembers)
 		seenStacks := map[string]bool{}
 		for _, stackLabel := range append(drift.StackLabelsFromForma(forma), fa.GetStackLabels()...) {
 			if seenStacks[stackLabel] {
 				continue
 			}
 			seenStacks[stackLabel] = true
-			if err := drift.LoadModificationsAndWitnesses(m.Datastore, stackLabel, modificationsByStack, witnessByKsuid); err != nil {
+			if err := drift.LoadModificationsAndWitnesses(m.Datastore, stackLabel, modificationsByStack, witnessByKsuid, recordByKsuid); err != nil {
 				return nil, err
 			}
 		}
 		var modifiedStacks = make(map[string]apimodel.ModifiedStack)
 		for stackLabel, modifications := range modificationsByStack {
 			unabsorbed := drift.FilterUnabsorbedModifications(modifications, forma, fa)
-			unabsorbed = append(unabsorbed, drift.WitnessedMovedModifications(modifications, witnessByKsuid, forma, fa)...)
+			unabsorbed = append(unabsorbed, drift.WitnessedMovedModifications(modifications, witnessByKsuid, recordByKsuid, forma, fa)...)
 			if len(unabsorbed) > 0 {
 				modifiedResources := make([]apimodel.ResourceModification, 0, len(unabsorbed))
 				for _, modification := range unabsorbed {

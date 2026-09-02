@@ -16,15 +16,19 @@ import (
 
 // WitnessedMovedModifications returns the modifications whose out-of-band
 // movement sits on provider-default content formae's own last write
-// witnessed. Such movement is drift, exactly like drift on a declared
-// field: the caller adds these to the unabsorbed set so a soft reconcile
-// rejects showing them, and a forced reconcile reverts them via the witness
-// assertion. Candidates are the modifications FilterUnabsorbedModifications
-// absorbs (the unabsorbed ones already reject); a candidate that cannot be
-// classified (a non-update operation, a missing property blob, no matching
-// forma declaration, no write witness, or a diff error) is left absorbed,
-// which is the pre-existing tolerant behavior.
-func WitnessedMovedModifications(modifications []datastore.ResourceModification, witnessByKsuid map[string]json.RawMessage, forma *pkgmodel.Forma, fa *forma_command.FormaCommand) []datastore.ResourceModification {
+// witnessed, OR on a co-owned collection's never-owned members. Such
+// movement is drift, exactly like drift on a declared field: the caller adds
+// these to the unabsorbed set so a soft reconcile rejects showing them, and a
+// forced reconcile reverts them via the witness assertion. Candidates are
+// the modifications FilterUnabsorbedModifications absorbs (the unabsorbed
+// ones already reject); a candidate that cannot be classified (a non-update
+// operation, a missing property blob, no matching forma declaration, no
+// write witness, or a diff error) is left absorbed, which is the
+// pre-existing tolerant behavior. records, keyed by resource KSUID exactly
+// parallel to witnessByKsuid, carries each resource's stored ownership
+// record; a missing entry passes nil (witness semantics for a non-co-owned
+// path; everything-undeclared for a co-owned path).
+func WitnessedMovedModifications(modifications []datastore.ResourceModification, witnessByKsuid map[string]json.RawMessage, records map[string]pkgmodel.OwnedMembers, forma *pkgmodel.Forma, fa *forma_command.FormaCommand) []datastore.ResourceModification {
 	type modKey struct {
 		stack, typeName, label, operation string
 	}
@@ -45,11 +49,15 @@ func WitnessedMovedModifications(modifications []datastore.ResourceModification,
 		if decl == nil {
 			continue
 		}
+		// No early witness-nil exit here: a co-owned path's movement is
+		// classified by ownership partition, not by the write witness, so a
+		// resource formae never wrote (no witness) can still owe a note for
+		// its never-owned members. SuppressedFieldDiffs itself keeps every
+		// non-co-owned path gated on the witness, so this costs nothing for
+		// the witness-only case — a nil witness there still yields no diffs.
 		witness := witnessByKsuid[mod.Ksuid]
-		if witness == nil {
-			continue
-		}
-		diffs, err := patch.SuppressedFieldDiffs(mod.OldProperties, mod.Properties, decl.Properties, witness, decl.Schema)
+		priorOwned := records[mod.Ksuid]
+		diffs, err := patch.SuppressedFieldDiffs(mod.OldProperties, mod.Properties, decl.Properties, witness, priorOwned, decl.Schema)
 		if err != nil {
 			slog.Warn("Failed to classify witnessed drift for resource; treating as absorbed",
 				"stack", mod.Stack, "type", mod.Type, "label", mod.Label, "error", err)

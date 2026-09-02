@@ -721,8 +721,9 @@ func refuseRotationOnDrift(ds datastore.Datastore, forma *pkgmodel.Forma, fc *fo
 	// the one a user's reconcile confronts.
 	modificationsByStack := make(map[string][]datastore.ResourceModification)
 	witnessByKsuid := make(map[string]json.RawMessage)
+	recordByKsuid := make(map[string]pkgmodel.OwnedMembers)
 	for label := range stackLabels {
-		if err := drift.LoadModificationsAndWitnesses(ds, label, modificationsByStack, witnessByKsuid); err != nil {
+		if err := drift.LoadModificationsAndWitnesses(ds, label, modificationsByStack, witnessByKsuid, recordByKsuid); err != nil {
 			return err
 		}
 	}
@@ -730,7 +731,7 @@ func refuseRotationOnDrift(ds datastore.Datastore, forma *pkgmodel.Forma, fc *fo
 	modifiedStacks := map[string]apimodel.ModifiedStack{}
 	for label, modifications := range modificationsByStack {
 		unabsorbed := drift.FilterUnabsorbedModifications(modifications, forma, fc)
-		unabsorbed = append(unabsorbed, drift.WitnessedMovedModifications(modifications, witnessByKsuid, forma, fc)...)
+		unabsorbed = append(unabsorbed, drift.WitnessedMovedModifications(modifications, witnessByKsuid, recordByKsuid, forma, fc)...)
 		if len(unabsorbed) == 0 {
 			continue
 		}

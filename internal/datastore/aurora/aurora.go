@@ -1189,6 +1189,40 @@ func (d *DatastoreAuroraDataAPI) GetPropertiesAtLastWrite(ksuid string) (json.Ra
 	return datastore.ComposeWriteWitness(history), nil
 }
 
+// GetOwnedMembers returns the resource's stored ownership record from the
+// latest resource row (see datastore.Datastore.GetOwnedMembers).
+func (d *DatastoreAuroraDataAPI) GetOwnedMembers(ksuid string) (pkgmodel.OwnedMembers, error) {
+	ctx := context.Background()
+
+	query := `
+	SELECT data->>'OwnedMembers'
+	FROM resources
+	WHERE ksuid = :ksuid
+	ORDER BY version COLLATE "C" DESC
+	LIMIT 1
+	`
+	params := []types.SqlParameter{
+		{Name: aws.String("ksuid"), Value: &types.FieldMemberStringValue{Value: ksuid}},
+	}
+
+	output, err := d.executeStatement(ctx, query, params)
+	if err != nil {
+		return nil, err
+	}
+	if len(output.Records) == 0 || len(output.Records[0]) == 0 {
+		return nil, nil
+	}
+	raw, err := getStringField(output.Records[0][0])
+	if err != nil || raw == "" || raw == "null" {
+		return nil, err
+	}
+	var owned pkgmodel.OwnedMembers
+	if err := json.Unmarshal([]byte(raw), &owned); err != nil {
+		return nil, err
+	}
+	return owned, nil
+}
+
 func (d *DatastoreAuroraDataAPI) fetchCurrentProperties(ctx context.Context, ksuid string) (json.RawMessage, error) {
 	query := `
 	SELECT data->>'Properties'

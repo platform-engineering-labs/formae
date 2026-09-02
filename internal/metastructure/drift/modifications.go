@@ -31,11 +31,13 @@ import (
 
 // loadModificationsAndWitnesses loads one stack's drift window into the
 // submission snapshot, plus the write witness for each modified resource
-// (GetPropertiesAtLastWrite: the state formae's own last write observed).
-// Window load failures fail the submission; a witness fetch failure degrades
-// to no witness for that resource, which classifies its movement as
-// tolerated, the pre-existing behavior.
-func LoadModificationsAndWitnesses(ds datastore.Datastore, stackLabel string, modificationsByStack map[string][]datastore.ResourceModification, witnessByKsuid map[string]json.RawMessage) error {
+// (GetPropertiesAtLastWrite: the state formae's own last write observed) and
+// its stored ownership record (GetOwnedMembers: the co-owned regime's prior
+// declaration, read from the latest resource row). Window load failures fail
+// the submission; a witness or record fetch failure degrades to no witness /
+// no record for that resource, which classifies its movement as tolerated
+// (witness) or everything-undeclared (record), the pre-existing behavior.
+func LoadModificationsAndWitnesses(ds datastore.Datastore, stackLabel string, modificationsByStack map[string][]datastore.ResourceModification, witnessByKsuid map[string]json.RawMessage, recordByKsuid map[string]pkgmodel.OwnedMembers) error {
 	modifications, err := ds.GetResourceModificationsSinceLastReconcile(stackLabel)
 	if err != nil {
 		slog.Error("Failed to load modifications since last reconcile", "stack", stackLabel, "error", err)
@@ -49,15 +51,22 @@ func LoadModificationsAndWitnesses(ds datastore.Datastore, stackLabel string, mo
 		if mod.Operation != "update" || mod.Ksuid == "" {
 			continue
 		}
-		if _, done := witnessByKsuid[mod.Ksuid]; done {
-			continue
+		if _, done := witnessByKsuid[mod.Ksuid]; !done {
+			witness, werr := ds.GetPropertiesAtLastWrite(mod.Ksuid)
+			if werr != nil {
+				slog.Warn("Failed to load write witness for drift classification", "ksuid", mod.Ksuid, "error", werr)
+			} else {
+				witnessByKsuid[mod.Ksuid] = witness
+			}
 		}
-		witness, werr := ds.GetPropertiesAtLastWrite(mod.Ksuid)
-		if werr != nil {
-			slog.Warn("Failed to load write witness for drift classification", "ksuid", mod.Ksuid, "error", werr)
-			continue
+		if _, done := recordByKsuid[mod.Ksuid]; !done {
+			record, rerr := ds.GetOwnedMembers(mod.Ksuid)
+			if rerr != nil {
+				slog.Warn("Failed to load ownership record for drift classification", "ksuid", mod.Ksuid, "error", rerr)
+				continue
+			}
+			recordByKsuid[mod.Ksuid] = record
 		}
-		witnessByKsuid[mod.Ksuid] = witness
 	}
 	return nil
 }
