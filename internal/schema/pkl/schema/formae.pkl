@@ -494,10 +494,16 @@ open class FieldHint extends Annotation {
     // Eval-time validation: a field whose whole value is replaced or diffed
     // atomically (Array, Atomic) has no per-member merge to reconcile
     // co-ownership against, so declaring it coOwned is a schema-author
-    // mistake caught here rather than at drift/plan time.
+    // mistake caught here rather than at drift/plan time. Likewise, an
+    // opaque field's member identities are the secret values themselves, not
+    // names — recording them in an ownership record would persist the
+    // secret unhashed, bypassing the opaque-hashing transformer entirely, so
+    // coOwned+opaque is rejected the same way until a hashing design exists.
     local function validated(): Boolean =
         if (self.coOwned != null && !(self.updateMethod == null || self.updateMethod == "Set" || self.updateMethod == "EntitySet"))
             throw("FieldHint: coOwned requires updateMethod \"Set\" or \"EntitySet\" (or unset), got \"\(self.updateMethod)\"")
+        else if (self.coOwned != null && self.opaque)
+            throw("FieldHint: coOwned cannot be combined with opaque — an opaque field's member identities are its secret values, not names")
         else
             true
 

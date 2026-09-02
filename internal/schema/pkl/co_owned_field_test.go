@@ -48,3 +48,14 @@ func TestPkl_FieldHint_CoOwned_ArrayUpdateMethodFailsEval(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "coOwned requires updateMethod")
 }
+
+// TestPkl_FieldHint_CoOwned_OpaqueFailsEval verifies that pairing coOwned
+// with opaque fails at PKL eval: an opaque field's member identities are its
+// secret values, not names, so recording them in an ownership record would
+// persist the secret unhashed.
+func TestPkl_FieldHint_CoOwned_OpaqueFailsEval(t *testing.T) {
+	p := PKL{}
+	_, err := p.Evaluate("./testdata/forma/co_owned_field_opaque_test.pkl", model.CommandEval, model.FormaApplyModeReconcile, nil)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "coOwned cannot be combined with opaque")
+}

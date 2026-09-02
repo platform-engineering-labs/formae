@@ -93,7 +93,9 @@ func NewResourceUpdateForExisting(
 	// A record-only update: no property, stack, label, or draw change — the
 	// sole reason this update exists is that the ownership record itself
 	// needs writing. Built through the same construction path as any other
-	// update below, then overridden just before it is returned.
+	// update below, then overridden just before it is returned. Also set
+	// further down when hasChanges is true but the patch it produced
+	// suppresses to nothing — see the comment there.
 	recordOnly := ownershipDelta && !hasChanges && !stackChanged && !labelChanged && !bool(coPlanned)
 
 	var patchDocument json.RawMessage
@@ -155,7 +157,16 @@ func NewResourceUpdateForExisting(
 		// regeneratePatchDocument at execution time must never do the same, or
 		// an in-flight update would lose the force-resent field from its payload.
 		if (patchDocument == nil || onlyForceResent) && len(createOnlyPatch) == 0 && !stackChanged && !labelChanged && !bool(coPlanned) {
-			return []ResourceUpdate{}, nil
+			if !ownershipDelta {
+				return []ResourceUpdate{}, nil
+			}
+			// The patch suppressed to nothing (or purely force-resent), so the
+			// plugin has nothing to do — but a co-owned collection's membership
+			// still shifted under this forma. Route to a record-only update
+			// instead of dropping it: the override block below (recordOnly)
+			// turns this into the same empty-patch, claim-only update the two
+			// simpler suppressions above produce.
+			recordOnly = true
 		}
 	} else {
 		patchDocument = json.RawMessage(`[]`)
@@ -247,6 +258,16 @@ func claimedMembers(declared, live json.RawMessage, schema pkgmodel.Schema) pkgm
 	var claim pkgmodel.OwnedMembers
 	for path, hint := range schema.Hints {
 		if hint.CoOwned == nil {
+			continue
+		}
+		// Identities are names; an opaque field's "members" are its secret
+		// values. Recording them here would persist a secret unhashed,
+		// bypassing the opaque-hashing transformer entirely. The PKL schema
+		// validation rejects this combination at authoring time (see
+		// formae.pkl's FieldHint.validated()), but this is the defensive
+		// backstop for a schema that reaches here some other way — no claim
+		// is recorded for such a field until a hashing design exists.
+		if hint.Opaque {
 			continue
 		}
 
