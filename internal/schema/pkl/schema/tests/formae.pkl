@@ -504,7 +504,7 @@ local minimumRotation = new formae.PasswordGenerator {
     label = "minimum-password"
     stack = stackResolvable
     rotation = new formae.RotationSpec {
-        every = 1.min
+        every = 15.min
     }
 }
 
@@ -831,7 +831,7 @@ facts {
     }
 
     ["The floor itself is a cadence"] {
-        minimumRotation.render().Rotation.EverySeconds == 60
+        minimumRotation.render().Rotation.EverySeconds == 900
     }
 
     ["Relative TTL policy renders TTLSeconds and no ExpiresAt"] {

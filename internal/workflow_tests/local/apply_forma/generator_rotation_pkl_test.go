@@ -22,7 +22,7 @@ import (
 )
 
 // authoredRotatingGeneratorForma is the forma this test applies: a
-// PasswordGenerator declaring `rotation { every = 1.min }` and a plugin
+// PasswordGenerator declaring `rotation { every = 15.min }` and a plugin
 // resource whose secret-bearing property is bound to that generator's `value`
 // output.
 const authoredRotatingGeneratorForma = "internal/schema/pkl/testdata/forma/generator_rotation_test.pkl"
@@ -33,7 +33,7 @@ const (
 	rotatingFormaGenerator   = "db-password"
 	rotatingFormaDestination = "db"
 	rotatingFormaLength      = 24
-	rotatingFormaEverySecs   = 60
+	rotatingFormaEverySecs   = 900
 )
 
 // A cadence authored in PKL rotates the credential it governs. The forma is

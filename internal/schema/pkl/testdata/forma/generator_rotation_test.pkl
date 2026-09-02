@@ -37,7 +37,7 @@ forma {
     stack = appStack.res
     length = 24
     rotation = new formae.RotationSpec {
-      every = 1.min
+      every = 15.min
     }
   }
   pw
