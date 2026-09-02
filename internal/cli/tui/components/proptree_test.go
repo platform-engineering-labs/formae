@@ -55,6 +55,30 @@ func TestPropertyLines_SimplifiesSpecialValues(t *testing.T) {
 	// opaque values are masked.
 	assert.Equal(t, []string{" Secret: " + propOpaqueMask},
 		PropertyLines([]byte(`{"Secret":{"$visibility":"Opaque","$value":"hunter2"}}`), 1))
+
+	// an opaque $res reference is masked but still names its target: the
+	// resolved value is withheld, but which resource property it points at
+	// is safe metadata and must not be dropped along with the value.
+	assert.Equal(t, []string{" VpcId: " + propOpaqueMask + "  → lifeline-vpc.VpcId"},
+		PropertyLines([]byte(`{"VpcId":{"$res":true,"$value":"vpc-0b5","$label":"lifeline-vpc","$property":"VpcId","$visibility":"Opaque"}}`), 1))
+
+	// an opaque $ref reference is masked but still names its target.
+	assert.Equal(t, []string{" VpcId: " + propOpaqueMask + "  → abc"},
+		PropertyLines([]byte(`{"VpcId":{"$ref":"formae://abc","$value":"vpc-0b5","$visibility":"Opaque"}}`), 1))
+}
+
+// A $gen envelope renders as a masked reference, not a raw JSON blob: the
+// value is withheld like any opaque envelope, but which generator produced it
+// still shows, matching how a resolvable reference to another resource names
+// its target.
+func TestPropertyLines_GenEnvelopeRendersAsMaskedReference(t *testing.T) {
+	// Translated shape: no $label, only $generator.
+	assert.Equal(t, []string{" Password: " + propOpaqueMask + "  → 2ABcDeFgHiJkLmNoPqRsTuVwXyZ"},
+		PropertyLines([]byte(`{"Password":{"$gen":true,"$generator":"2ABcDeFgHiJkLmNoPqRsTuVwXyZ","$output":"value","$visibility":"Opaque","$value":"hunter2"}}`), 1))
+
+	// Authored shape: $label and $output name the generator and its output.
+	assert.Equal(t, []string{" Password: " + propOpaqueMask + "  → the-generator.value"},
+		PropertyLines([]byte(`{"Password":{"$gen":true,"$label":"the-generator","$stack":"s","$output":"value","$visibility":"Opaque"}}`), 1))
 }
 
 func TestPropertyLines_EmptyIsNil(t *testing.T) {

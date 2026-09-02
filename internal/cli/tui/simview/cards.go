@@ -175,6 +175,12 @@ func collectChangeLines(th *theme.Theme, r simRow, doneSt, errSt, subtleSt lipgl
 		lines = append(lines, policyLines...)
 	}
 
+	// Generator changes (if it's a generator row with config data)
+	if r.generator != nil && r.res == nil && r.policy == nil {
+		generatorLines := buildGeneratorChangeLines(th, r, doneSt, errSt, subtleSt)
+		lines = append(lines, generatorLines...)
+	}
+
 	return lines
 }
 
@@ -258,13 +264,16 @@ func buildPropertyChangeLines(_ *theme.Theme, r simRow, doneSt, errSt, subtleSt 
 }
 
 // cardEmptyNote returns a one-line summary for cards that have no property
-// detail to show (a delete has nothing to diff; a keep is a no-op).
+// detail to show (a delete has nothing to diff; a keep is a no-op; a draw
+// carries no declared config).
 func cardEmptyNote(r simRow) string {
 	switch r.op {
 	case opDelete:
 		return "This resource will be removed."
 	case opDetach:
 		return "This policy will be detached."
+	case opDraw:
+		return "A new value is drawn: every resource bound to this generator takes it."
 	case opKeep:
 		return "No changes."
 	default:
@@ -272,24 +281,21 @@ func cardEmptyNote(r simRow) string {
 	}
 }
 
-// buildPolicyChangeLines renders a minimal policy config diff for policy rows.
-// If PolicyConfig/OldPolicyConfig are present, show key-level differences.
-// Otherwise, render nothing — the card already shows Operation/Type/Stack.
-func buildPolicyChangeLines(_ *theme.Theme, r simRow, doneSt, errSt, subtleSt lipgloss.Style) []string {
-	if r.policy == nil {
-		return nil
-	}
-	pu := r.policy
-	if len(pu.PolicyConfig) == 0 && len(pu.OldPolicyConfig) == 0 {
+// jsonKeyDiffLines renders a minimal key-level diff between two JSON objects
+// as "set"/"add"/"remove" lines, sorted by key for deterministic output.
+// Shared by buildPolicyChangeLines and buildGeneratorChangeLines, which
+// differ only in which raw JSON pair (config, old config) they hand it.
+func jsonKeyDiffLines(currRaw, oldRaw json.RawMessage, doneSt, errSt, subtleSt lipgloss.Style) []string {
+	if len(currRaw) == 0 && len(oldRaw) == 0 {
 		return nil
 	}
 
 	var curr, old map[string]json.RawMessage
-	if len(pu.PolicyConfig) > 0 {
-		_ = json.Unmarshal(pu.PolicyConfig, &curr)
+	if len(currRaw) > 0 {
+		_ = json.Unmarshal(currRaw, &curr)
 	}
-	if len(pu.OldPolicyConfig) > 0 {
-		_ = json.Unmarshal(pu.OldPolicyConfig, &old)
+	if len(oldRaw) > 0 {
+		_ = json.Unmarshal(oldRaw, &old)
 	}
 	if curr == nil && old == nil {
 		return nil
@@ -330,4 +336,33 @@ func buildPolicyChangeLines(_ *theme.Theme, r simRow, doneSt, errSt, subtleSt li
 		}
 	}
 	return lines
+}
+
+// buildPolicyChangeLines renders a minimal policy config diff for policy rows.
+// If PolicyConfig/OldPolicyConfig are present, show key-level differences.
+// Otherwise, render nothing — the card already shows Operation/Type/Stack.
+func buildPolicyChangeLines(_ *theme.Theme, r simRow, doneSt, errSt, subtleSt lipgloss.Style) []string {
+	if r.policy == nil {
+		return nil
+	}
+	return jsonKeyDiffLines(r.policy.PolicyConfig, r.policy.OldPolicyConfig, doneSt, errSt, subtleSt)
+}
+
+// buildGeneratorChangeLines renders a minimal generator config diff for
+// generator rows, the same key-level format as buildPolicyChangeLines. On a
+// Create every declared field renders as "add" (there is no old config); on
+// Update, a "set" line per changed field. On Delete, GeneratorConfig still
+// carries the doomed generator's spec with no OldGeneratorConfig to diff
+// against, so its fields render as "add" too — the row's own opDelete
+// operation glyph and cardEmptyNote's delete wording are what tell the user
+// this is a removal; this mirrors buildPolicyChangeLines's identical
+// behavior for a policy delete (pu.Policy holds the existing policy there
+// as well). GeneratorConfig/OldGeneratorConfig carry declared configuration
+// only (see apimodel.GeneratorUpdate) — nothing here can render a
+// generator's identity or a drawn value.
+func buildGeneratorChangeLines(_ *theme.Theme, r simRow, doneSt, errSt, subtleSt lipgloss.Style) []string {
+	if r.generator == nil {
+		return nil
+	}
+	return jsonKeyDiffLines(r.generator.GeneratorConfig, r.generator.OldGeneratorConfig, doneSt, errSt, subtleSt)
 }

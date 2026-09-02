@@ -76,6 +76,10 @@ func (sup *Supervisor) Init(args ...any) (act.SupervisorSpec, error) {
 			Name:    "AutoReconciler",
 			Factory: NewAutoReconciler,
 		},
+		{
+			Name:    "GeneratorRotator",
+			Factory: NewGeneratorRotator,
+		},
 	}
 
 	spec.Restart.Strategy = act.SupervisorStrategyTransient

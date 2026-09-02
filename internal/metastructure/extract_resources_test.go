@@ -121,6 +121,10 @@ func (m *mockExtractDatastore) GetFormaCommandByCommandID(_ string) (*forma_comm
 func (m *mockExtractDatastore) GetMostRecentFormaCommandByClientID(_ string) (*forma_command.FormaCommand, error) {
 	panic("not implemented")
 }
+func (m *mockExtractDatastore) GetPropertiesAtLastWrite(_ string) (json.RawMessage, error) {
+	return nil, nil
+}
+
 func (m *mockExtractDatastore) GetResourceModificationsSinceLastReconcile(_ string) ([]datastore.ResourceModification, error) {
 	panic("not implemented")
 }
@@ -167,6 +171,9 @@ func (m *mockExtractDatastore) LoadLatestResourceByKsuid(_ string) (*pkgmodel.Re
 	panic("not implemented")
 }
 func (m *mockExtractDatastore) FindResourcesDependingOn(_ string) ([]*pkgmodel.Resource, error) {
+	panic("not implemented")
+}
+func (m *mockExtractDatastore) FindResourcesReferencingGenerator(_ string) ([]*pkgmodel.Resource, error) {
 	panic("not implemented")
 }
 func (m *mockExtractDatastore) FindResourcesDependingOnMany(_ []string) (map[string][]*pkgmodel.Resource, error) {
@@ -266,6 +273,10 @@ func (m *mockExtractDatastore) DeletePoliciesForStack(_ string, _ string) error 
 func (m *mockExtractDatastore) GetExpiredStacks() ([]datastore.ExpiredStackInfo, error) {
 	panic("not implemented")
 }
+func (m *mockExtractDatastore) GetGeneratorsWithRotation() ([]datastore.GeneratorRotationInfo, error) {
+	return nil, nil
+}
+
 func (m *mockExtractDatastore) GetStacksWithAutoReconcilePolicy() ([]datastore.StackReconcileInfo, error) {
 	panic("not implemented")
 }
@@ -273,6 +284,30 @@ func (m *mockExtractDatastore) GetResourcesAtLastReconcile(_ string) ([]datastor
 	panic("not implemented")
 }
 func (m *mockExtractDatastore) StackHasActiveCommands(_ string) (bool, error) {
+	panic("not implemented")
+}
+func (m *mockExtractDatastore) CreateGenerator(_ pkgmodel.Generator, _ string) (string, error) {
+	panic("not implemented")
+}
+func (m *mockExtractDatastore) UpdateGenerator(_ pkgmodel.Generator, _ string) (string, error) {
+	panic("not implemented")
+}
+func (m *mockExtractDatastore) DeleteGenerator(_, _ string) (string, error) {
+	panic("not implemented")
+}
+func (m *mockExtractDatastore) GetGenerator(_, _ string) (pkgmodel.Generator, error) {
+	panic("not implemented")
+}
+func (m *mockExtractDatastore) LoadGeneratorsByStack(_ string) ([]pkgmodel.Generator, error) {
+	panic("not implemented")
+}
+func (m *mockExtractDatastore) GetGeneratorIdentity(_, _ string) (datastore.GeneratorIdentity, error) {
+	panic("not implemented")
+}
+func (m *mockExtractDatastore) GetGeneratorIdentityByID(_ string) (datastore.GeneratorIdentity, error) {
+	panic("not implemented")
+}
+func (m *mockExtractDatastore) AdvanceGeneration(_, _, _ string, _ json.RawMessage) error {
 	panic("not implemented")
 }
 func (m *mockExtractDatastore) Close() {}
@@ -285,7 +320,7 @@ func (m *mockExtractDatastore) LoadResourceUpdates(_ string) ([]resource_update.
 func (m *mockExtractDatastore) UpdateResourceUpdateState(_ string, _ string, _ types.OperationType, _ resource_update.ResourceUpdateState, _ time.Time) error {
 	panic("not implemented")
 }
-func (m *mockExtractDatastore) UpdateResourceUpdateProgress(_ string, _ string, _ types.OperationType, _ resource_update.ResourceUpdateState, _ time.Time, _ time.Time, _ plugin.TrackedProgress) error {
+func (m *mockExtractDatastore) UpdateResourceUpdateProgress(_ string, _ string, _ types.OperationType, _ resource_update.ResourceUpdateState, _ time.Time, _ time.Time, _ plugin.TrackedProgress, _ map[string]string) error {
 	panic("not implemented")
 }
 func (m *mockExtractDatastore) BatchUpdateResourceUpdateState(_ string, _ []datastore.ResourceUpdateRef, _ resource_update.ResourceUpdateState, _ time.Time) error {

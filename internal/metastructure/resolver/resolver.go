@@ -14,6 +14,7 @@ import (
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 
+	"github.com/platform-engineering-labs/formae/internal/metastructure/pathkey"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/transformations"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
@@ -77,6 +78,10 @@ func ResolvePropertyReferences(ksuidUri pkgmodel.FormaeURI, properties json.RawM
 // properties — where a stored hash must never be written as if it were the live secret value.
 // Delete (identity only) and Update's prior/existing-state context use ConvertExistingStateForRead
 // (unguarded), because those are never written as literal field values.
+//
+// This conversion is NOT the provider boundary: it also produces the "after" side of the local
+// diff that plans a patch. GuardNoUnresolvedGenerators therefore lives at the dispatch site
+// instead of here — see its doc comment.
 func ConvertToPluginFormat(properties json.RawMessage) (json.RawMessage, error) {
 	if err := guardNoHashedValues(properties); err != nil {
 		return nil, err
@@ -150,6 +155,66 @@ func scanHashed(v any, path string) error {
 	case []any:
 		for i, child := range val {
 			if err := scanHashed(child, fmt.Sprintf("%s/%d", path, i)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// ErrUnresolvedGeneratorReferenceNotWritable reports a property that still
+// holds a generator reference at the moment its value would be handed to a
+// provider. Match it with errors.Is to report the condition without echoing
+// the wrapped message, which names the offending property path.
+var ErrUnresolvedGeneratorReferenceNotWritable = errors.New("unresolved generator reference")
+
+// GuardNoUnresolvedGenerators rejects properties still carrying a $gen
+// envelope. A generator reference NAMES a value to be drawn; the envelope is
+// never that value. Writing it hands the provider a literal JSON object where
+// a secret belongs, and because such a destination is opaque nothing surfaces
+// the mistake at the write. It surfaces later, as something else failing to
+// authenticate with a password that is a JSON document.
+//
+// This is a permanent invariant of the write path, not a stand-in for a
+// generator that cannot draw yet. A successful draw substitutes the drawn
+// value for the envelope, so this guard never sees one; a draw that FAILS
+// must leave the destination unwritten rather than write the envelope in the
+// value's place, which is this same rejection. There is no state of the
+// system in which sending the envelope is the right thing to do.
+//
+// It is exported and applied at the DISPATCH site rather than folded into
+// ConvertToPluginFormat, which its $hashed sibling guards, for two reasons.
+// Conversion leaves a $gen envelope structurally intact (it flattens a
+// $hashed one, which is why that marker has to be caught on the way in), so
+// there is nothing this has to run before. And ConvertToPluginFormat also
+// builds the "after" side of the local diff that PLANS a patch, where a
+// not-yet-drawn envelope is the ordinary desired shape — guarding there would
+// refuse to plan the very update that draws the value.
+func GuardNoUnresolvedGenerators(properties json.RawMessage) error {
+	if len(properties) == 0 {
+		return nil
+	}
+	var props map[string]any
+	if err := json.Unmarshal(properties, &props); err != nil {
+		return nil // malformed here is handled elsewhere; guard only checks structure it can read
+	}
+	return scanUnresolvedGenerators(props, "")
+}
+
+func scanUnresolvedGenerators(v any, path string) error {
+	switch val := v.(type) {
+	case map[string]any:
+		if g, ok := val["$gen"].(bool); ok && g {
+			return fmt.Errorf("%w: cannot write field %q: it is bound to a generator whose value has not been drawn, and formae will not send the reference itself to the provider", ErrUnresolvedGeneratorReferenceNotWritable, path)
+		}
+		for k, child := range val {
+			if err := scanUnresolvedGenerators(child, path+"/"+k); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for i, child := range val {
+			if err := scanUnresolvedGenerators(child, fmt.Sprintf("%s/%d", path, i)); err != nil {
 				return err
 			}
 		}
@@ -259,32 +324,102 @@ func ExtractOpaqueResolvableURIsFromJSON(data json.RawMessage) []pkgmodel.Formae
 // Properties first then ReadOnlyProperties, mirroring Resource property
 // precedence: an opaque value (e.g. a plugin-generated token) may be
 // persisted in either collection.
+// LookupSourceProperty reads the value that a reference's source-property
+// fragment names, preferring the literal key.
+//
+// The fragment is a pre-flattened string (uri.PropertyPath()), so it cannot say
+// which of its dots separate nesting and which belong to a key. "data.tls.crt"
+// may mean the literal key "tls.crt" under "data" — a Kubernetes secret entry,
+// reached as secretValue.at("tls.crt") — or three levels of nesting. Read as a
+// plain path it misses the first shape entirely, and when a document carries
+// both (the residue the historical dot-expansion left behind) it silently
+// returns the nested value where the literal was meant.
+//
+// So the readings are tried longest-literal-tail first, ending at the plain
+// path interpretation: the fragment names what the author saw when they wrote
+// the reference, and the most specific literal key that exists is the best
+// candidate for that. The residual ambiguity is the inverse case, a fragment
+// naming a genuinely nested path in a document that also carries a same-shaped
+// literal key: it now resolves in one documented direction instead of varying
+// silently. Telling the two apart for certain needs structured path segments
+// rather than a flattened string.
+//
+// Every gjson read keyed by a source-property fragment goes through here.
+func LookupSourceProperty(doc []byte, fragment string) gjson.Result {
+	if fragment == "" || len(doc) == 0 {
+		return gjson.Result{}
+	}
+	for _, path := range literalFirstPaths(fragment) {
+		if found := gjson.GetBytes(doc, path); found.Exists() {
+			return found
+		}
+	}
+	return gjson.Result{}
+}
+
+// LookupSourcePropertyIn is LookupSourceProperty against an already-parsed
+// document.
+func LookupSourcePropertyIn(doc gjson.Result, fragment string) gjson.Result {
+	if fragment == "" {
+		return gjson.Result{}
+	}
+	for _, path := range literalFirstPaths(fragment) {
+		if found := doc.Get(path); found.Exists() {
+			return found
+		}
+	}
+	return gjson.Result{}
+}
+
+// literalFirstPaths renders a flattened fragment as the gjson paths that could
+// have produced it, ordered from the longest literal tail to none at all. Each
+// candidate reads some leading run of dots as nesting and the whole remainder as
+// one literal key; the last therefore reads every dot as nesting, which is the
+// interpretation these fragments have always had.
+func literalFirstPaths(fragment string) []string {
+	segments := strings.Split(fragment, ".")
+	paths := make([]string, 0, len(segments))
+	for i := range segments {
+		parts := make([]string, 0, i+1)
+		for _, nesting := range segments[:i] {
+			parts = append(parts, pathkey.Escape(nesting))
+		}
+		parts = append(parts, pathkey.Escape(strings.Join(segments[i:], ".")))
+		paths = append(paths, strings.Join(parts, "."))
+	}
+	return paths
+}
+
 func isSourcePropertyOpaque(source *pkgmodel.Resource, propertyName string) bool {
 	if source == nil || propertyName == "" {
 		return false
 	}
-	// Check the property path itself and its top-level field. A ref into a
+	// Check the property path itself and every ancestor prefix. A ref into a
 	// MAP-shaped opaque secret (e.g. "decodedData.password", produced by
 	// secret.res.secretValue.at("password")) is opaque by virtue of its opaque
 	// parent field: the field is stored as a single hashed envelope with no
 	// per-key sub-structure, so the leaf path has no $visibility of its own.
+	// The parent may itself be nested (a hint on "Config.Password" with a ref
+	// into "Config.Password.value"), so every ancestor is a candidate, not
+	// only the top-level root.
 	candidates := []string{propertyName}
-	if root, _, found := strings.Cut(propertyName, "."); found {
-		candidates = append(candidates, root)
+	for i := len(propertyName) - 1; i > 0; i-- {
+		if propertyName[i] == '.' {
+			candidates = append(candidates, propertyName[:i])
+		}
 	}
 	for _, p := range candidates {
+		declared := LookupSourceProperty(source.Properties, p)
+		readOnly := LookupSourceProperty(source.ReadOnlyProperties, p)
 		// A value stored hashed at rest is a SHA-256 digest; refused wherever it
 		// sits, including nested inside the structure a path names as a whole.
-		if containsHashedValue(gjson.GetBytes(source.Properties, p)) {
+		if containsHashedValue(declared) || containsHashedValue(readOnly) {
 			return true
 		}
-		if containsHashedValue(gjson.GetBytes(source.ReadOnlyProperties, p)) {
+		if declared.Get("$visibility").String() == pkgmodel.VisibilityOpaque {
 			return true
 		}
-		if gjson.GetBytes(source.Properties, p).Get("$visibility").String() == pkgmodel.VisibilityOpaque {
-			return true
-		}
-		if gjson.GetBytes(source.ReadOnlyProperties, p).Get("$visibility").String() == pkgmodel.VisibilityOpaque {
+		if readOnly.Get("$visibility").String() == pkgmodel.VisibilityOpaque {
 			return true
 		}
 	}
@@ -294,6 +429,17 @@ func isSourcePropertyOpaque(source *pkgmodel.Resource, propertyName string) bool
 	opaqueFields := transformations.OpaqueFields(source.Schema, source.Type)
 	for _, p := range candidates {
 		if opaqueFields[p] {
+			return true
+		}
+	}
+	// A hint on a field nested under the referenced path makes the whole
+	// referenced subtree opaque: a container holding a credential is itself a
+	// credential for materialization purposes, whether the reference names the
+	// leaf, the container, or any ancestor. The value-level walks above already
+	// refuse persisted descendants ($hashed / $visibility inside the subtree);
+	// this covers the schema-declared case before anything is persisted.
+	for key := range opaqueFields {
+		if strings.HasPrefix(key, propertyName+".") {
 			return true
 		}
 	}
@@ -341,11 +487,12 @@ func ExtractSourceOpaqueResolvableURIsFromJSON(data json.RawMessage, loadResourc
 
 // propertyParser parses JSON properties to identify references and values
 type propertyParser struct {
-	HasRef    bool
-	HasValue  bool
-	Reference string // The $ref value
-	Value     any
-	JSONPath  string // gjson dotted path from $json, applied post-resolution
+	HasRef       bool
+	HasValue     bool
+	Reference    string // The $ref value
+	Value        any
+	JSONPath     string // gjson dotted path from $json, applied post-resolution
+	ResolvedFrom string // resolution-provenance digest riding on the envelope
 }
 
 // propertyType defines the type of property being parsed
@@ -365,6 +512,7 @@ func (pp *propertyParser) Parse(result gjson.Result) propertyType {
 	if pp.HasRef {
 		pp.Reference = result.Get("$ref").String()
 		pp.JSONPath = result.Get("$json").String()
+		pp.ResolvedFrom = result.Get("$resolvedFrom").String()
 		if pp.HasValue {
 			pp.Value = result.Get("$value").Value()
 		}
@@ -389,17 +537,19 @@ func (pp *propertyParser) CreateRef(currentPath string, result gjson.Result) pkg
 	var rawValue pkgmodel.Value
 	if pp.HasValue {
 		rawValue = pkgmodel.Value{
-			Strategy:   result.Get("$strategy").String(),
-			Visibility: result.Get("$visibility").String(),
-			Value:      pp.Value,
-			JSONPath:   pp.JSONPath,
+			Strategy:     result.Get("$strategy").String(),
+			Visibility:   result.Get("$visibility").String(),
+			Value:        pp.Value,
+			JSONPath:     pp.JSONPath,
+			ResolvedFrom: pp.ResolvedFrom,
 		}
 	} else {
 		// Even without a value, we might have strategy and visibility
 		rawValue = pkgmodel.Value{
-			Strategy:   result.Get("$strategy").String(),
-			Visibility: result.Get("$visibility").String(),
-			JSONPath:   pp.JSONPath,
+			Strategy:     result.Get("$strategy").String(),
+			Visibility:   result.Get("$visibility").String(),
+			JSONPath:     pp.JSONPath,
+			ResolvedFrom: pp.ResolvedFrom,
 		}
 	}
 
@@ -462,12 +612,17 @@ func newPropertyResolverFromResource(resource pkgmodel.Resource) *propertyResolv
 	return resolver
 }
 
-// Helper function for building paths
+// buildPath appends one literal JSON map key or array index to a property path.
+// The key is escaped as it is appended, so the path names the key itself rather
+// than a nested tree: the resulting path is the ref's TargetPath, and serves as
+// its identity, its gjson read path, its sjson write path and the subject of
+// isTargetPath, all of which have to agree on which key is meant.
 func buildPath(currentPath, key string) string {
+	escaped := pathkey.Escape(key)
 	if currentPath == "" {
-		return key
+		return escaped
 	}
-	return currentPath + "." + key
+	return currentPath + "." + escaped
 }
 
 func (pr *propertyResolver) marshalWithLogging(value any, context string, path string) ([]byte, error) {
@@ -556,7 +711,7 @@ func (pr *propertyResolver) extractResolvedValue(ref pkgmodel.Ref) any {
 			return extracted.Value()
 		}
 
-		specificProperty := resolvedData.Get(ref.SourcePropertyName)
+		specificProperty := LookupSourcePropertyIn(resolvedData, ref.SourcePropertyName)
 		if specificProperty.Exists() {
 			if specificProperty.IsObject() || specificProperty.IsArray() {
 				return json.RawMessage(specificProperty.Raw)
@@ -675,6 +830,13 @@ func (pr *propertyResolver) resolveEmbedRef(properties json.RawMessage, ref pkgm
 			return true
 		})
 		envMap["$value"] = valueStr
+		// Same reasoning as resolveReference: restate the marker from the
+		// resolution rather than inheriting whatever the copy carried.
+		if ref.ResolvedValue.Hashed {
+			envMap["$hashed"] = true
+		} else {
+			delete(envMap, "$hashed")
+		}
 		envJSON, err := json.Marshal(envMap)
 		if err != nil {
 			return properties, fmt.Errorf("embed: marshal updated envelope: %w", err)
@@ -728,6 +890,18 @@ func (pr *propertyResolver) resolveReference(properties json.RawMessage, ref pkg
 	valueToSet := pr.extractResolvedValue(ref)
 	if valueToSet != nil {
 		refObject["$value"] = valueToSet
+		// The envelope above was copied wholesale from the target, so any
+		// $hashed marker on it describes the value it used to hold, not the
+		// one just written over it. Restate the marker from the resolution
+		// instead of inheriting it. Leaving a stale true makes the terminal
+		// hashing pass skip the envelope and persist plaintext labelled as a
+		// digest; clearing a true that is still accurate would let a digest
+		// past the plugin-boundary guard and reach the provider as a secret.
+		if ref.ResolvedValue.Hashed {
+			refObject["$hashed"] = true
+		} else {
+			delete(refObject, "$hashed")
+		}
 	}
 	if ref.ResolvedValue.Strategy != "" {
 		refObject["$strategy"] = ref.ResolvedValue.Strategy
@@ -737,6 +911,9 @@ func (pr *propertyResolver) resolveReference(properties json.RawMessage, ref pkg
 	}
 	if ref.ResolvedValue.JSONPath != "" {
 		refObject["$json"] = ref.ResolvedValue.JSONPath
+	}
+	if ref.ResolvedValue.ResolvedFrom != "" {
+		refObject["$resolvedFrom"] = ref.ResolvedValue.ResolvedFrom
 	}
 
 	marshalledObj, err := pr.marshalWithLogging(refObject, "reference resolution", ref.TargetPath)
@@ -756,6 +933,12 @@ func (pr *propertyResolver) resolveReference(properties json.RawMessage, ref pkg
 func (pr *propertyResolver) setRefValue(uri pkgmodel.FormaeURI, value string) error {
 	var actualValue string
 	var inheritedVisibility, inheritedStrategy string
+	// Whether the value being resolved FROM is itself a stored digest rather
+	// than recoverable plaintext. It has to travel with the resolved value:
+	// the plugin-boundary guard refuses a write on the $hashed marker alone,
+	// so dropping it here would let a digest reach a provider as though it
+	// were the secret.
+	var inheritedHashed bool
 
 	if parsed := gjson.Parse(value); parsed.IsObject() {
 		if parsed.Get("$value").Exists() {
@@ -766,6 +949,7 @@ func (pr *propertyResolver) setRefValue(uri pkgmodel.FormaeURI, value string) er
 
 		inheritedVisibility = parsed.Get("$visibility").String()
 		inheritedStrategy = parsed.Get("$strategy").String()
+		inheritedHashed = parsed.Get("$hashed").Bool()
 	} else {
 		actualValue = value
 	}
@@ -808,8 +992,12 @@ func (pr *propertyResolver) setRefValue(uri pkgmodel.FormaeURI, value string) er
 			newValue.Visibility = ref.ResolvedValue.Visibility
 		}
 
-		// Preserve JSONPath on the stored value so re-apply is idempotent.
+		// Preserve JSONPath on the stored value so re-apply is idempotent, and
+		// the provenance digest for the same reason: resolution must never
+		// erase the record the next plan compares against.
 		newValue.JSONPath = ref.ResolvedValue.JSONPath
+		newValue.ResolvedFrom = ref.ResolvedValue.ResolvedFrom
+		newValue.Hashed = inheritedHashed
 
 		ref.ResolvedValue = newValue
 	}

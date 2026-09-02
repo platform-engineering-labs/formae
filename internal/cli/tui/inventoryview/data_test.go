@@ -26,10 +26,11 @@ import (
 // and query strings are all package-visible so later test files can set them.
 type fakeClient struct {
 	// per-entity results
-	forma    *pkgmodel.Forma
-	targets  []*pkgmodel.Target
-	stacks   []*pkgmodel.Stack
-	policies []apimodel.PolicyInventoryItem
+	forma      *pkgmodel.Forma
+	targets    []*pkgmodel.Target
+	stacks     []*pkgmodel.Stack
+	policies   []apimodel.PolicyInventoryItem
+	generators []apimodel.GeneratorInventoryItem
 
 	// summaries and detail-by-ksuid for the lazy-detail path. When summaries is
 	// nil, ListResourceSummaries derives them from forma (for backward compat).
@@ -37,16 +38,18 @@ type fakeClient struct {
 	detailsByKsuid map[string]*pkgmodel.Resource
 
 	// per-entity errors
-	formaErr    error
-	targetsErr  error
-	stacksErr   error
-	policiesErr error
+	formaErr      error
+	targetsErr    error
+	stacksErr     error
+	policiesErr   error
+	generatorsErr error
 
 	// per-entity nags
-	formaNags    []string
-	targetsNags  []string
-	stacksNags   []string
-	policiesNags []string
+	formaNags      []string
+	targetsNags    []string
+	stacksNags     []string
+	policiesNags   []string
+	generatorsNags []string
 
 	// recorders
 	resourcesQuery             string
@@ -55,6 +58,7 @@ type fakeClient struct {
 	targetsFromTUI             bool
 	stacksFromTUI              bool
 	policiesFromTUI            bool
+	generatorsFromTUI          bool
 	resourceDetailByKsuidCalls int
 }
 
@@ -92,6 +96,11 @@ func (f *fakeClient) ExtractStacks(fromTUI bool) ([]*pkgmodel.Stack, []string, e
 func (f *fakeClient) ExtractPolicies(fromTUI bool) ([]apimodel.PolicyInventoryItem, []string, error) {
 	f.policiesFromTUI = fromTUI
 	return f.policies, f.policiesNags, f.policiesErr
+}
+
+func (f *fakeClient) ExtractGenerators(fromTUI bool) ([]apimodel.GeneratorInventoryItem, []string, error) {
+	f.generatorsFromTUI = fromTUI
+	return f.generators, f.generatorsNags, f.generatorsErr
 }
 
 // ListResourceSummaries returns the pre-seeded summaries. When summaries is nil
@@ -189,6 +198,30 @@ func TestSimplifyValue(t *testing.T) {
 	// $ref-only resolvable strips the formae:// scheme for its target.
 	got2 := simplifyValue(map[string]any{"$ref": "formae://abc", "$value": "us-east-1"})
 	assert.Equal(t, refVal{value: "us-east-1", target: "abc"}, got2)
+
+	// An opaque $res reference is masked but still names its target: the
+	// resolved value is withheld, but which resource property it points at
+	// is safe metadata and must not be dropped along with the value.
+	gotOpaqueRes := simplifyValue(map[string]any{
+		"$res": true, "$label": "lifeline-vpc", "$property": "VpcId", "$value": "vpc-0b5",
+		"$visibility": "Opaque",
+	})
+	assert.Equal(t, refVal{value: opaqueVal{}, target: "lifeline-vpc.VpcId"}, gotOpaqueRes)
+
+	// An opaque $ref reference is masked but still names its target.
+	gotOpaqueRef := simplifyValue(map[string]any{
+		"$ref": "formae://abc", "$value": "us-east-1", "$visibility": "Opaque",
+	})
+	assert.Equal(t, refVal{value: opaqueVal{}, target: "abc"}, gotOpaqueRef)
+
+	// A $gen envelope is a masked reference, not a raw JSON blob: the value is
+	// withheld like any opaque wrapper, but the generator it names still
+	// shows.
+	got3 := simplifyValue(map[string]any{
+		"$gen": true, "$generator": "2ABcDeFgHiJkLmNoPqRsTuVwXyZ", "$output": "value",
+		"$visibility": "Opaque", "$value": "hunter2",
+	})
+	assert.Equal(t, refVal{value: opaqueVal{}, target: "2ABcDeFgHiJkLmNoPqRsTuVwXyZ"}, got3)
 }
 
 func TestFormatScalar(t *testing.T) {

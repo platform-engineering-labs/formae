@@ -1,0 +1,42 @@
+/*
+ * © 2026 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+// A plugin resource's secret-bearing property bound to a generator output.
+// The union that field declares admits formae.GeneratorOutput, so
+// `pw.gen.value` renders the $gen envelope the agent resolves at apply time.
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+import "@fakeaws/fakeaws.pkl"
+import "@fakeaws/secretsmanager/secret.pkl"
+
+forma {
+  local appStack = new formae.Stack {
+    label = "generator-binding-stack"
+    description = "Stack for a generator-bound plugin resource"
+  }
+  appStack
+
+  new formae.Target {
+    label = "default-aws-target"
+    config = new fakeaws.Config {
+      region = "us-west-2"
+    }
+  }
+
+  local pw = new formae.PasswordGenerator {
+    label = "db-password"
+    stack = appStack.res
+    length = 24
+  }
+  pw
+
+  new secret.Secret {
+    label = "db"
+    name = "db"
+    secretString = pw.gen.value
+  }
+}

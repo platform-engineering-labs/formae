@@ -60,6 +60,20 @@ func TestStructure_AwsFlagsLiveOnTheSubcommandOnly(t *testing.T) {
 	assert.NotNil(t, parent.PersistentFlags().Lookup("profile"))
 }
 
+// The azure flags belong to `connect azure` alone, the same rule the aws
+// flags follow. There is no --allow-login: azure never spawns a sign-in, so
+// the flag has nothing to opt into.
+func TestStructure_AzureFlagsLiveOnTheSubcommandOnly(t *testing.T) {
+	parent := ConnectCmd()
+	azure := findSub(t, parent, "azure")
+
+	for _, flag := range []string{"subscription", "location", "resource-group", "tenant-id", "client-id", "no-input"} {
+		assert.NotNil(t, azure.Flags().Lookup(flag), "flag %q missing on connect azure", flag)
+		assert.Nil(t, parent.Flags().Lookup(flag), "flag %q must not exist on the parent", flag)
+	}
+	assert.Nil(t, azure.Flags().Lookup("allow-login"), "azure never spawns a sign-in, so it has no --allow-login")
+}
+
 // `connect list` is a member-readable listing, not a provisioning flow: it
 // owns the shared output flags, takes no positional arguments, and carries
 // none of the AWS-only flags that only `connect aws` needs.
@@ -150,6 +164,8 @@ func TestStructure_ArgvErrorsAreNotEnvelopes(t *testing.T) {
 		machine("aws", "unexpected-arg"),
 		{"aws", "--output-consumer", "sideways"},
 		machine("aws", "--no-such-flag"),
+		machine("azure", "unexpected-arg"),
+		machine("azure", "--no-such-flag"),
 	} {
 		out, err := runConnect(t, args...)
 		if err == nil {

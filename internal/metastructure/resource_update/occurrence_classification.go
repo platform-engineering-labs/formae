@@ -1,0 +1,197 @@
+// © 2026 Platform Engineering Labs Inc.
+//
+// SPDX-License-Identifier: FSL-1.1-ALv2
+
+package resource_update
+
+import (
+	"github.com/tidwall/gjson"
+
+	"github.com/platform-engineering-labs/formae/internal/metastructure/provenance"
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
+)
+
+// OccurrenceClass classifies one reference occurrence for planning: whether
+// it is provably stable (suppressed), needs a definite deferred update, or
+// converges once because its movement is unknown.
+type OccurrenceClass int
+
+const (
+	// OccurrenceDeferredUpdate is deliberately the ZERO value: a missing or
+	// forgotten classification must never suppress a write.
+	OccurrenceDeferredUpdate OccurrenceClass = iota
+	// OccurrenceStable: the source provably did not move since this
+	// occurrence last resolved; no op is planned for it.
+	OccurrenceStable
+	// OccurrenceConvergeUnknown: movement cannot be decided (absent or
+	// legacy provenance, unknown source digest); one converging update
+	// installs current provenance.
+	OccurrenceConvergeUnknown
+)
+
+// OccurrenceKind distinguishes which table an occurrence's KSUID resolves
+// against. Generator KSUIDs and resource KSUIDs come from the same minter
+// but live in different tables, so a $gen and a $ref could in principle
+// normalize to equal Ksuid/PropertyPath/JSONPath; Kind keeps them apart.
+type OccurrenceKind int
+
+const (
+	// OccurrenceKindResource is the zero value: an unmarked identity is a
+	// resource reference, which is what every already-persisted
+	// OccurrenceRecord (minted before Kind existed) deserializes to.
+	OccurrenceKindResource OccurrenceKind = iota
+	// OccurrenceKindGenerator marks an identity resolved from a $gen
+	// envelope: Ksuid is a generator KSUID, not a resource KSUID.
+	OccurrenceKindGenerator
+)
+
+// OccurrenceIdentity is the normalized identity of a reference occurrence's
+// source: which resource, which property, and which extraction of it. The
+// extraction selector is part of identity: pointing the same reference at a
+// different key of the same document is a repoint.
+type OccurrenceIdentity struct {
+	Kind         OccurrenceKind
+	Ksuid        string
+	PropertyPath string
+	JSONPath     string
+}
+
+// TripletLookup resolves a ($stack, $label, $type) triplet to a KSUID, the
+// same translation the generator's reference rewrite performs. Returning
+// false means the triplet cannot be resolved; identity normalization then
+// fails closed.
+type TripletLookup func(stack, label, typ string) (string, bool)
+
+// GeneratorLookup resolves a (stack, label) pair to a generator KSUID, the
+// same translation the generator reference rewrite performs. Returning
+// false means the pair cannot be resolved; identity normalization then
+// fails closed.
+type GeneratorLookup func(stack, label string) (string, bool)
+
+// NormalizeOccurrenceIdentity maps a reference envelope of any shape - a
+// translated {"$ref": "formae://<ksuid>#/<path>"}, a structured
+// {"$res":true,"$label":..,"$type":..,"$stack":..,"$property":..}, or a
+// $gen envelope in either its authored ({"$gen":true,"$label":..,
+// "$stack":..,"$output":..}) or translated ({"$gen":true,"$generator":..,
+// "$output":..}) shape - to one identity, so an envelope and its lifecycle
+// rewrite compare equal (a rewrite is not a repoint). A shape that cannot
+// normalize returns ok=false and MUST be treated as an identity mismatch by
+// callers: failing closed defers, never suppresses.
+func NormalizeOccurrenceIdentity(envelope gjson.Result, tripletLookup TripletLookup, generatorLookup GeneratorLookup) (OccurrenceIdentity, bool) {
+	if !envelope.IsObject() {
+		return OccurrenceIdentity{}, false
+	}
+	jsonPath := envelope.Get("$json").String()
+	if ref := envelope.Get("$ref"); ref.Exists() {
+		uri := pkgmodel.FormaeURI(ref.String())
+		if uri.KSUID() == "" {
+			return OccurrenceIdentity{}, false
+		}
+		return OccurrenceIdentity{Kind: OccurrenceKindResource, Ksuid: uri.KSUID(), PropertyPath: uri.PropertyPath(), JSONPath: jsonPath}, true
+	}
+	if envelope.Get("$res").Bool() {
+		if tripletLookup == nil {
+			return OccurrenceIdentity{}, false
+		}
+		ksuid, ok := tripletLookup(envelope.Get("$stack").String(), envelope.Get("$label").String(), envelope.Get("$type").String())
+		if !ok || ksuid == "" {
+			return OccurrenceIdentity{}, false
+		}
+		return OccurrenceIdentity{Kind: OccurrenceKindResource, Ksuid: ksuid, PropertyPath: envelope.Get("$property").String(), JSONPath: jsonPath}, true
+	}
+	if envelope.Get("$gen").Bool() {
+		if ksuid := pkgmodel.GenGeneratorKSUID(envelope); ksuid != "" {
+			return OccurrenceIdentity{Kind: OccurrenceKindGenerator, Ksuid: ksuid, PropertyPath: envelope.Get("$output").String(), JSONPath: jsonPath}, true
+		}
+		if generatorLookup == nil {
+			return OccurrenceIdentity{}, false
+		}
+		ksuid, ok := generatorLookup(envelope.Get("$stack").String(), envelope.Get("$label").String())
+		if !ok || ksuid == "" {
+			return OccurrenceIdentity{}, false
+		}
+		return OccurrenceIdentity{Kind: OccurrenceKindGenerator, Ksuid: ksuid, PropertyPath: envelope.Get("$output").String(), JSONPath: jsonPath}, true
+	}
+	return OccurrenceIdentity{}, false
+}
+
+// OccurrenceRecord is the per-occurrence provenance state: computed at
+// planning, persisted immutably with the resource update, and read back by
+// execution-time regeneration. It carries only digests, identities, and
+// paths - never a value.
+type OccurrenceRecord struct {
+	// DestinationPath is the consumer-side dotted path of the occurrence
+	// (unique per document; the resolver's walk convention).
+	DestinationPath string `json:"DestinationPath"`
+	// DesiredIdentity and StoredIdentity are the normalized source
+	// identities of the desired and stored envelopes. A difference is a
+	// repoint (or a selector change) and always plans.
+	DesiredIdentity OccurrenceIdentity `json:"DesiredIdentity"`
+	StoredIdentity  OccurrenceIdentity `json:"StoredIdentity"`
+	// HasStoredWritten reports whether the stored envelope carries a written
+	// $value at all: absent means FIRST DECLARATION, which normal diff
+	// semantics decide (never the unknown fallback).
+	HasStoredWritten bool `json:"HasStoredWritten"`
+	// SourceRootDigest is the source's whole-value digest in the canonical
+	// domain ("" = unknown). Root domain.
+	SourceRootDigest string `json:"SourceRootDigest,omitempty"`
+	// WrittenProvenance is the stored envelope's $resolvedFrom. Root domain.
+	WrittenProvenance string `json:"WrittenProvenance,omitempty"`
+	// WrittenDigest is the digest of the value actually written to this
+	// occurrence (post-extraction for $json). Written domain.
+	WrittenDigest string `json:"WrittenDigest,omitempty"`
+	// Class is the planning-time classification.
+	Class OccurrenceClass `json:"Class"`
+}
+
+// ClassifyOccurrence sets rec.Class by the ordered movement rules. leafDigest
+// lazily computes the written-domain digest of the occurrence's freshly
+// extracted $json leaf from the declared source value; it returns ok=false
+// when no extraction is possible (bare reference, undeclared source, or
+// extraction failure).
+//
+// Digest domains per rule: R4 compares root vs root; R5 compares written vs
+// written. Crossing domains is a bug.
+func ClassifyOccurrence(rec *OccurrenceRecord, opaque, destCreateOnly, force bool, leafDigest func() (string, bool)) {
+	switch {
+	// R0: nothing was ever written to this occurrence - a first declaration.
+	// Normal diff semantics decide (including formae's normal createOnly
+	// replacement); the unknown fallback below must never see it.
+	case !rec.HasStoredWritten:
+		rec.Class = OccurrenceDeferredUpdate
+	// R1: this classifier governs opaque occurrences only.
+	case !opaque:
+		rec.Class = OccurrenceDeferredUpdate
+	// R2: force is the sanctioned re-assert path and bypasses suppression.
+	// It does NOT apply to a generator binding: formae holds no copy of a
+	// drawn value, so there is nothing to re-assert, and the only thing a
+	// forced apply could write is a NEW credential. Rotation is a movement
+	// of the generation (R3/R4/R5), never a property of how the apply was
+	// submitted. Forcing also buys nothing here — if the secret drifted in
+	// the cloud, formae cannot restore what it had, so it would cost a
+	// rotation and repair nothing.
+	case force && rec.DesiredIdentity.Kind != OccurrenceKindGenerator:
+		rec.Class = OccurrenceDeferredUpdate
+	// R3: a repoint or selector change always plans, digests notwithstanding.
+	case rec.DesiredIdentity != rec.StoredIdentity:
+		rec.Class = OccurrenceDeferredUpdate
+	// R4 [root vs root]: provably unmoved.
+	case provenance.Valid(rec.WrittenProvenance) && provenance.Valid(rec.SourceRootDigest) &&
+		rec.WrittenProvenance == rec.SourceRootDigest:
+		rec.Class = OccurrenceStable
+	// R5 [written vs written]: the root moved; a $json occurrence whose
+	// freshly extracted leaf equals what was last written is still stable.
+	case provenance.Valid(rec.WrittenProvenance) && provenance.Valid(rec.SourceRootDigest):
+		if leaf, ok := leafDigest(); ok && provenance.Valid(rec.WrittenDigest) && leaf == rec.WrittenDigest {
+			rec.Class = OccurrenceStable
+		} else {
+			rec.Class = OccurrenceDeferredUpdate
+		}
+	// R6: movement unknown. A mutable destination converges once; a
+	// createOnly destination never replaces on unknown (ruled).
+	case destCreateOnly:
+		rec.Class = OccurrenceStable
+	default:
+		rec.Class = OccurrenceConvergeUnknown
+	}
+}

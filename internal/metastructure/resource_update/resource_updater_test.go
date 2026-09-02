@@ -334,8 +334,12 @@ func TestHandleProgressUpdate_FilteredDiscoveryEmitsTargetHealth(t *testing.T) {
 			Properties: json.RawMessage(`{"Name":"my-bucket"}`),
 		},
 		ResourceTarget: pkgmodel.Target{Label: targetLabel},
-		// A filter with no conditions always matches — the resource will be filtered.
-		MatchFilters: []pkgmodel.MatchFilter{{}},
+		// A filter this resource matches, so the discovery filter path is taken.
+		MatchFilters: []pkgmodel.MatchFilter{{
+			Conditions: []pkgmodel.FilterCondition{
+				{PropertyPath: "$.Name", PropertyValue: "my-bucket"},
+			},
+		}},
 	}
 
 	data := ResourceUpdateData{
@@ -457,4 +461,27 @@ func TestTimeoutHandlers_DoNotLogResolvedConfig(t *testing.T) {
 		}
 		assert.NotEmpty(t, clog2.all(), "a log message must have been emitted")
 	})
+}
+
+func TestShouldFilterByMatchFilterWithNoConditionsMatchesNothing(t *testing.T) {
+	filter := pkgmodel.MatchFilter{ResourceTypes: []string{"AWS::EC2::Instance"}}
+
+	got := ShouldFilterByMatchFilter(&filter, json.RawMessage(`{"Name":"anything"}`))
+
+	assert.False(t, got, "a filter naming no conditions must not exclude every resource")
+}
+
+func TestShouldFilterByMatchFilterRequiresEveryConditionToMatch(t *testing.T) {
+	filter := pkgmodel.MatchFilter{
+		Conditions: []pkgmodel.FilterCondition{
+			{PropertyPath: "$.tags.app", PropertyValue: "formae-agent"},
+			{PropertyPath: "$.tags.tier", PropertyValue: "control"},
+		},
+	}
+
+	both := json.RawMessage(`{"tags":{"app":"formae-agent","tier":"control"}}`)
+	one := json.RawMessage(`{"tags":{"app":"formae-agent","tier":"data"}}`)
+
+	assert.True(t, ShouldFilterByMatchFilter(&filter, both))
+	assert.False(t, ShouldFilterByMatchFilter(&filter, one))
 }

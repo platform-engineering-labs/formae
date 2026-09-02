@@ -13,6 +13,7 @@ import (
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
@@ -23,6 +24,16 @@ import (
 // It is a pure dispatch helper — callers own caching, retry, and result
 // interpretation.
 func ReadResourceViaPlugin(proc gen.Process, res pkgmodel.Resource, targetConfig json.RawMessage) (*plugin.TrackedProgress, error) {
+	// The provider boundary for this dispatch. A generator reference in the
+	// target's config names a credential that was never drawn, and the envelope
+	// is never that credential: handing it over puts a JSON object where a
+	// token belongs. Refuse before the spawn rather than reading with
+	// credentials formae does not have. Only the config is checked — the
+	// resource's own properties are context for a Read, never values written.
+	if err := resolver.GuardNoUnresolvedGenerators(targetConfig); err != nil {
+		return nil, fmt.Errorf("cannot read %s: its target's configuration is bound to a generator whose value has not been drawn: %w", res.URI(), err)
+	}
+
 	operationID := uuid.New().String()
 	spawnResult, err := proc.Call(
 		gen.ProcessID{Name: actornames.PluginCoordinator, Node: proc.Node().Name()},

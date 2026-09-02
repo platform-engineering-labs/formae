@@ -15,8 +15,48 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 
+	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
+
+// A $gen envelope framed inside an $embed.$template string (an interpolated
+// PKL string such as cf.kvs('\(pw.gen.value)')) is rewritten to its
+// $generator+KSUID form, exactly as a framed $res is rewritten to $ref.
+func TestTranslatePropertiesJSON_RewritesEmbeddedGenSpan(t *testing.T) {
+	ds, _ := GetDeps(t)
+	ds.StoreGeneratorIdentity("db-password", "default", "testgenembed123")
+
+	genEnvJSON, _ := json.Marshal(map[string]any{
+		"$gen":    true,
+		"$label":  "db-password",
+		"$stack":  "default",
+		"$output": "value",
+	})
+	tmpl := "cf.kvs('" + pkgmodel.FrameEnvelope(string(genEnvJSON)) + "')"
+
+	properties, err := json.Marshal(map[string]any{
+		"functionCode": map[string]any{
+			"$embed":    true,
+			"$template": tmpl,
+		},
+	})
+	require.NoError(t, err)
+
+	result, _, err := translatePropertiesJSON(json.RawMessage(properties), nil, nil, ds)
+	require.NoError(t, err)
+
+	tmplOut := gjson.Get(string(result), "functionCode.$template").String()
+	spans, scanErr := pkgmodel.ScanEmbedSpans(tmplOut)
+	require.NoError(t, scanErr)
+	require.Len(t, spans, 1, "expected exactly one span in translated $template")
+
+	assert.True(t, strings.Contains(spans[0].EnvelopeJSON, `"$generator"`),
+		"span should contain $generator, got: %s", spans[0].EnvelopeJSON)
+	assert.True(t, strings.Contains(spans[0].EnvelopeJSON, "testgenembed123"),
+		"span should contain the generator KSUID, got: %s", spans[0].EnvelopeJSON)
+	assert.False(t, strings.Contains(spans[0].EnvelopeJSON, `"$label"`),
+		"span should not contain authored $label after translation, got: %s", spans[0].EnvelopeJSON)
+}
 
 func TestTranslatePropertiesJSON_RewritesEmbeddedSpan(t *testing.T) {
 	ds, _ := GetDeps(t)
@@ -54,7 +94,7 @@ func TestTranslatePropertiesJSON_RewritesEmbeddedSpan(t *testing.T) {
 	// tripletToKsuid map includes our triplet
 	tripletToKsuid := map[pkgmodel.TripletKey]string{triplet: ksuid}
 
-	result, _, err := translatePropertiesJSON(json.RawMessage(properties), tripletToKsuid, ds)
+	result, _, err := translatePropertiesJSON(json.RawMessage(properties), tripletToKsuid, nil, ds)
 	require.NoError(t, err)
 
 	// The $template in the result should have a $ref span (not a $res span)
@@ -104,14 +144,48 @@ func TestTranslatePropertiesJSON_RewritesEmbeddedSpan_Idempotent(t *testing.T) {
 
 	tripletToKsuid := map[pkgmodel.TripletKey]string{triplet: ksuid}
 
-	result1, _, err := translatePropertiesJSON(json.RawMessage(properties), tripletToKsuid, ds)
+	result1, _, err := translatePropertiesJSON(json.RawMessage(properties), tripletToKsuid, nil, ds)
 	require.NoError(t, err)
 
 	// Applying a second time (now $ref spans, not $res spans) should be idempotent
-	result2, _, err := translatePropertiesJSON(result1, tripletToKsuid, ds)
+	result2, _, err := translatePropertiesJSON(result1, tripletToKsuid, nil, ds)
 	require.NoError(t, err)
 
 	assert.Equal(t, string(result1), string(result2), "translatePropertiesJSON should be idempotent for embed spans")
+}
+
+// A translated $gen span (already carrying $generator, no $label/$stack) must
+// survive a second translation pass unchanged. Unlike $res->$ref, a $gen node
+// keeps the same $gen:true key across translation, so without an explicit
+// already-translated check a second pass would misread the missing
+// $label/$stack as a dangling reference and hard-reject the whole document.
+func TestTranslatePropertiesJSON_RewritesEmbeddedGenSpan_Idempotent(t *testing.T) {
+	ds, _ := GetDeps(t)
+	ds.StoreGeneratorIdentity("db-password", "default", "testgenembedidem1")
+
+	genEnvJSON, _ := json.Marshal(map[string]any{
+		"$gen":    true,
+		"$label":  "db-password",
+		"$stack":  "default",
+		"$output": "value",
+	})
+	tmpl := "cf.kvs('" + pkgmodel.FrameEnvelope(string(genEnvJSON)) + "')"
+
+	properties, err := json.Marshal(map[string]any{
+		"functionCode": map[string]any{
+			"$embed":    true,
+			"$template": tmpl,
+		},
+	})
+	require.NoError(t, err)
+
+	result1, _, err := translatePropertiesJSON(json.RawMessage(properties), nil, nil, ds)
+	require.NoError(t, err)
+
+	result2, _, err := translatePropertiesJSON(result1, nil, nil, ds)
+	require.NoError(t, err)
+
+	assert.Equal(t, string(result1), string(result2), "translatePropertiesJSON should be idempotent for $gen embed spans")
 }
 
 // TestTranslatePropertiesJSON_EmbeddedSpan_BareStack verifies that an embed span
@@ -154,7 +228,7 @@ func TestTranslatePropertiesJSON_EmbeddedSpan_BareStack(t *testing.T) {
 
 	tripletToKsuid := map[pkgmodel.TripletKey]string{triplet: ksuid}
 
-	result, _, err := translatePropertiesJSON(json.RawMessage(properties), tripletToKsuid, ds)
+	result, _, err := translatePropertiesJSON(json.RawMessage(properties), tripletToKsuid, nil, ds)
 	require.NoError(t, err, "bare-stack embed span should resolve via (label, type)")
 
 	tmplOut := gjson.Get(string(result), "functionCode.$template").String()
@@ -192,7 +266,38 @@ func TestTranslatePropertiesJSON_EmbeddedSpan_BareStackAmbiguous(t *testing.T) {
 
 	tripletToKsuid := map[pkgmodel.TripletKey]string{a: "ksuidA", b: "ksuidB"}
 
-	_, _, err = translatePropertiesJSON(json.RawMessage(properties), tripletToKsuid, ds)
+	_, _, err = translatePropertiesJSON(json.RawMessage(properties), tripletToKsuid, nil, ds)
 	require.Error(t, err, "ambiguous bare-stack embed should error")
 	assert.Contains(t, err.Error(), "incomplete triplet")
+}
+
+// A $gen framed inside an $embed.$template string naming no live generator
+// is rejected the same way a flat $gen reference is — fails closed rather
+// than leaving the authored envelope in place.
+func TestTranslatePropertiesJSON_EmbeddedGenSpan_DanglingReferenceIsRejected(t *testing.T) {
+	ds, _ := GetDeps(t)
+
+	genEnvJSON, _ := json.Marshal(map[string]any{
+		"$gen":    true,
+		"$label":  "phantom-generator",
+		"$stack":  "default",
+		"$output": "value",
+	})
+	tmpl := "cf.kvs('" + pkgmodel.FrameEnvelope(string(genEnvJSON)) + "')"
+
+	properties, err := json.Marshal(map[string]any{
+		"functionCode": map[string]any{
+			"$embed":    true,
+			"$template": tmpl,
+		},
+	})
+	require.NoError(t, err)
+
+	_, _, err = translatePropertiesJSON(json.RawMessage(properties), nil, nil, ds)
+	require.Error(t, err)
+
+	var notFoundErr apimodel.FormaReferencedGeneratorsNotFoundError
+	require.ErrorAs(t, err, &notFoundErr)
+	require.Len(t, notFoundErr.Missing, 1)
+	assert.Equal(t, "phantom-generator", notFoundErr.Missing[0].Label)
 }

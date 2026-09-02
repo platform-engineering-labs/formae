@@ -5,6 +5,8 @@
 package connect
 
 import (
+	"encoding/json"
+	"fmt"
 	"io"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/printer"
@@ -65,8 +67,13 @@ type registeredView struct {
 	Account       string `json:"account" yaml:"account"`
 	RoleArn       string `json:"roleArn,omitempty" yaml:"roleArn,omitempty"`
 	// WorkloadIdentityProvider is the GCP coordinate.
-	WorkloadIdentityProvider string   `json:"workloadIdentityProvider,omitempty" yaml:"workloadIdentityProvider,omitempty"`
-	Warnings                 []string `json:"warnings,omitempty" yaml:"warnings,omitempty"`
+	WorkloadIdentityProvider string `json:"workloadIdentityProvider,omitempty" yaml:"workloadIdentityProvider,omitempty"`
+	// AzureTenantID and AzureClientID are the Azure coordinate: the
+	// subscription's Entra tenant and the managed identity's client id
+	// (its "appId", distinct from its service principal object id).
+	AzureTenantID string   `json:"azureTenantId,omitempty" yaml:"azureTenantId,omitempty"`
+	AzureClientID string   `json:"azureClientId,omitempty" yaml:"azureClientId,omitempty"`
+	Warnings      []string `json:"warnings,omitempty" yaml:"warnings,omitempty"`
 }
 
 // linksDocument builds the quick-create emit from the plan. The
@@ -100,6 +107,21 @@ func gcpRegisteredDocument(status, project, provider string, warnings []string) 
 	}
 }
 
+// azureRegisteredDocument builds the registration report for an Azure
+// subscription.
+func azureRegisteredDocument(status, subscription, tenantID, clientID string, warnings []string) registeredView {
+	return registeredView{
+		SchemaVersion: connectSchemaVersion,
+		Phase:         "registered",
+		Status:        status,
+		Cloud:         "azure",
+		Account:       subscription,
+		AzureTenantID: tenantID,
+		AzureClientID: clientID,
+		Warnings:      warnings,
+	}
+}
+
 // registeredDocument builds the registration report.
 func registeredDocument(status, account, roleArn string, warnings []string) registeredView {
 	return registeredView{
@@ -123,6 +145,10 @@ type connectionView struct {
 	// WorkloadIdentityProvider is present for GCP and omitted elsewhere, for
 	// the same reason roleArn is.
 	WorkloadIdentityProvider string `json:"workloadIdentityProvider,omitempty" yaml:"workloadIdentityProvider,omitempty"`
+	// AzureTenantID and AzureClientID are present for Azure and omitted
+	// elsewhere, for the same reason.
+	AzureTenantID string `json:"azureTenantId,omitempty" yaml:"azureTenantId,omitempty"`
+	AzureClientID string `json:"azureClientId,omitempty" yaml:"azureClientId,omitempty"`
 }
 
 // connectionsView is the list emit. Connections is always a slice, never
@@ -174,4 +200,52 @@ type profilesView struct {
 
 func emitProfiles(w io.Writer, schema string, v profilesView) error {
 	return printer.NewMachineReadablePrinter[profilesView](w, schema).Print(&v)
+}
+
+// azureTemplateView is the credential-less path's emit: the deep link a
+// consumer shows the user, the coordinates baked into it, and the template
+// itself.
+//
+// It mirrors linksView's job for AWS. The link is the field that matters: it
+// is the only route that asks nothing of the machine running this, and before
+// this document existed it appeared solely in human-readable stderr, where a
+// harness driving the flow could not reach it without scraping.
+//
+// Template is a decoded map rather than raw JSON bytes so it renders as
+// structured data under both output schemas; as json.RawMessage it would have
+// marshalled to a base64 string under yaml.
+type azureTemplateView struct {
+	SchemaVersion  int            `json:"schemaVersion" yaml:"schemaVersion"`
+	Phase          string         `json:"phase" yaml:"phase"` // "template"
+	Cloud          string         `json:"cloud" yaml:"cloud"`
+	Installation   string         `json:"installation" yaml:"installation"`
+	FormaeTenantID string         `json:"formaeTenantId" yaml:"formaeTenantId"`
+	DeepLink       string         `json:"deepLink" yaml:"deepLink"`
+	TemplateURL    string         `json:"templateUrl" yaml:"templateUrl"`
+	Template       map[string]any `json:"template" yaml:"template"`
+}
+
+// newAzureTemplateView assembles the emit from the same inputs the human
+// rendering uses, so the two cannot describe different deployments.
+func newAzureTemplateView(consoleOrigin, installationID, formaeTenantID string,
+	template []byte) (azureTemplateView, error) {
+	var decoded map[string]any
+	if err := json.Unmarshal(template, &decoded); err != nil {
+		return azureTemplateView{}, fmt.Errorf("decoding the ARM template for machine output: %w", err)
+	}
+	templateURL := azureTemplateConsoleURL(consoleOrigin, installationID, formaeTenantID)
+	return azureTemplateView{
+		SchemaVersion:  connectSchemaVersion,
+		Phase:          "template",
+		Cloud:          "azure",
+		Installation:   installationID,
+		FormaeTenantID: formaeTenantID,
+		DeepLink:       azurePortalDeepLink(templateURL),
+		TemplateURL:    templateURL,
+		Template:       decoded,
+	}, nil
+}
+
+func emitAzureTemplate(w io.Writer, schema string, v azureTemplateView) error {
+	return printer.NewMachineReadablePrinter[azureTemplateView](w, schema).Print(&v)
 }

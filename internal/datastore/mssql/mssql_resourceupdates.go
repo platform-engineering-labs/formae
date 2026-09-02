@@ -283,6 +283,26 @@ func (d *DatastoreMSSQL) BatchGetTripletsByKSUIDs(ksuids []string) (map[string]p
 
 // LoadResourceUpdates reads the resource_updates rows for a command.
 // Column order mirrors BulkStoreResourceUpdates.
+// marshalOrNilString JSON-encodes v as a string, or returns nil for an empty
+// value so the column stays NULL.
+func marshalOrNilString(v any) any {
+	switch t := v.(type) {
+	case []resource_update.OccurrenceRecord:
+		if len(t) == 0 {
+			return nil
+		}
+	case map[string]string:
+		if len(t) == 0 {
+			return nil
+		}
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	return string(b)
+}
+
 func (d *DatastoreMSSQL) LoadResourceUpdates(commandID string) ([]resource_update.ResourceUpdate, error) {
 	ctx, span := mssqlTracer.Start(context.Background(), "LoadResourceUpdates")
 	defer span.End()
@@ -293,7 +313,8 @@ func (d *DatastoreMSSQL) LoadResourceUpdates(commandID string) ([]resource_updat
 			resource, resource_target, existing_resource, existing_target,
 			progress_result, most_recent_progress,
 			remaining_resolvables, reference_labels, previous_properties,
-			is_cascade, cascade_source
+			is_cascade, cascade_source, failure_reason,
+			provenance_records, resolved_root_digests
 		FROM resource_updates
 		WHERE command_id = @p1
 		ORDER BY ksuid ASC`
@@ -316,6 +337,8 @@ func (d *DatastoreMSSQL) LoadResourceUpdates(commandID string) ([]resource_updat
 		var remainingResolvablesJSON, referenceLabelsJSON, previousPropertiesJSON []byte
 		var ruIsCascade *bool
 		var ruCascadeSource *string
+		var ruFailureReason *string
+		var ruProvenanceRecords, ruResolvedRootDigests []byte
 
 		err := rows.Scan(
 			&ksuid, &operation, &state, &startTs, &modifiedTs,
@@ -323,7 +346,8 @@ func (d *DatastoreMSSQL) LoadResourceUpdates(commandID string) ([]resource_updat
 			&resourceJSON, &resourceTargetJSON, &existingResourceJSON, &existingTargetJSON,
 			&progressResultJSON, &mostRecentProgressJSON,
 			&remainingResolvablesJSON, &referenceLabelsJSON, &previousPropertiesJSON,
-			&ruIsCascade, &ruCascadeSource,
+			&ruIsCascade, &ruCascadeSource, &ruFailureReason,
+			&ruProvenanceRecords, &ruResolvedRootDigests,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan resource update: %w", err)
@@ -406,6 +430,19 @@ func (d *DatastoreMSSQL) LoadResourceUpdates(commandID string) ([]resource_updat
 		if ruCascadeSource != nil {
 			ru.CascadeSource = *ruCascadeSource
 		}
+		if ruFailureReason != nil {
+			ru.FailureReason = *ruFailureReason
+		}
+		if len(ruProvenanceRecords) > 0 {
+			if err := json.Unmarshal(ruProvenanceRecords, &ru.ProvenanceRecords); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal provenance records: %w", err)
+			}
+		}
+		if len(ruResolvedRootDigests) > 0 {
+			if err := json.Unmarshal(ruResolvedRootDigests, &ru.ResolvedRootDigests); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal resolved root digests: %w", err)
+			}
+		}
 
 		updates = append(updates, ru)
 	}
@@ -440,7 +477,7 @@ func (d *DatastoreMSSQL) UpdateResourceUpdateState(commandID string, ksuid strin
 
 // UpdateResourceUpdateProgress appends an entry to progress_result, updates
 // most_recent_progress, and bumps state.
-func (d *DatastoreMSSQL) UpdateResourceUpdateProgress(commandID string, ksuid string, operation types.OperationType, state resource_update.ResourceUpdateState, startTs time.Time, modifiedTs time.Time, progress plugin.TrackedProgress) error {
+func (d *DatastoreMSSQL) UpdateResourceUpdateProgress(commandID string, ksuid string, operation types.OperationType, state resource_update.ResourceUpdateState, startTs time.Time, modifiedTs time.Time, progress plugin.TrackedProgress, resolvedRootDigests map[string]string) error {
 	ctx, span := mssqlTracer.Start(context.Background(), "UpdateResourceUpdateProgress")
 	defer span.End()
 
@@ -469,11 +506,13 @@ func (d *DatastoreMSSQL) UpdateResourceUpdateProgress(commandID string, ksuid st
 
 	updateQuery := `
 		UPDATE resource_updates
-		SET state = @p1, start_ts = @p2, modified_ts = @p3, progress_result = @p4, most_recent_progress = @p5
-		WHERE command_id = @p6 AND ksuid = @p7 AND operation = @p8`
+		SET state = @p1, start_ts = @p2, modified_ts = @p3, progress_result = @p4, most_recent_progress = @p5,
+			resolved_root_digests = COALESCE(@p6, resolved_root_digests)
+		WHERE command_id = @p7 AND ksuid = @p8 AND operation = @p9`
 
 	result, err := d.conn.ExecContext(ctx, updateQuery,
 		string(state), startTs.UTC(), modifiedTs.UTC(), string(progressJSON), string(mostRecentJSON),
+		marshalOrNilString(resolvedRootDigests),
 		commandID, ksuid, string(operation))
 	if err != nil {
 		return fmt.Errorf("failed to update resource update progress: %w", err)

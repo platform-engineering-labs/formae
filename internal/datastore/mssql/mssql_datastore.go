@@ -226,7 +226,7 @@ SELECT
 	ru.resource, ru.resource_target, ru.existing_resource, ru.existing_target,
 	ru.progress_result, ru.most_recent_progress,
 	ru.remaining_resolvables, ru.reference_labels, ru.previous_properties,
-	ru.is_cascade, ru.cascade_source
+	ru.is_cascade, ru.cascade_source, ru.failure_reason, ru.provenance_records, ru.resolved_root_digests
 FROM forma_commands fc
 LEFT JOIN resource_updates ru ON fc.command_id = ru.command_id`
 
@@ -256,6 +256,8 @@ func scanJoinedRow(rows *sql.Rows) (*forma_command.FormaCommand, *resource_updat
 	var remainingResolvablesJSON, referenceLabelsJSON, previousPropertiesJSON []byte
 	var ruIsCascade *bool
 	var ruCascadeSource *string
+	var ruFailureReason *string
+	var ruProvenanceRecords, ruResolvedRootDigests []byte
 
 	err := rows.Scan(
 		&commandID, &fcTimestamp, &fcCommand, &fcState, &fcClientID,
@@ -266,7 +268,8 @@ func scanJoinedRow(rows *sql.Rows) (*forma_command.FormaCommand, *resource_updat
 		&resourceJSON, &resourceTargetJSON, &existingResourceJSON, &existingTargetJSON,
 		&progressResultJSON, &mostRecentProgressJSON,
 		&remainingResolvablesJSON, &referenceLabelsJSON, &previousPropertiesJSON,
-		&ruIsCascade, &ruCascadeSource,
+		&ruIsCascade, &ruCascadeSource, &ruFailureReason,
+		&ruProvenanceRecords, &ruResolvedRootDigests,
 	)
 	if err != nil {
 		return nil, nil, err
@@ -403,6 +406,19 @@ func scanJoinedRow(rows *sql.Rows) (*forma_command.FormaCommand, *resource_updat
 	}
 	if ruCascadeSource != nil {
 		ru.CascadeSource = *ruCascadeSource
+	}
+	if ruFailureReason != nil {
+		ru.FailureReason = *ruFailureReason
+	}
+	if len(ruProvenanceRecords) > 0 {
+		if err := json.Unmarshal(ruProvenanceRecords, &ru.ProvenanceRecords); err != nil {
+			return nil, nil, fmt.Errorf("failed to unmarshal provenance records: %w", err)
+		}
+	}
+	if len(ruResolvedRootDigests) > 0 {
+		if err := json.Unmarshal(ruResolvedRootDigests, &ru.ResolvedRootDigests); err != nil {
+			return nil, nil, fmt.Errorf("failed to unmarshal resolved root digests: %w", err)
+		}
 	}
 
 	return &cmd, &ru, nil
@@ -673,7 +689,7 @@ WHERE EXISTS (
 	// Phase 2: for update ops, fetch the current and at-last-reconcile properties.
 	var out []datastore.ResourceModification
 	for _, r := range raw {
-		mod := datastore.ResourceModification{Stack: stack, Type: r.resourceType, Label: r.label, Operation: r.operation}
+		mod := datastore.ResourceModification{Stack: stack, Type: r.resourceType, Label: r.label, Operation: r.operation, Ksuid: r.ksuid}
 		if r.operation == "update" {
 			curProps, propErr := d.fetchCurrentProperties(ctx, r.ksuid)
 			if propErr != nil {
@@ -694,6 +710,58 @@ WHERE EXISTS (
 
 // fetchCurrentProperties returns the Properties JSON from the latest resource
 // version for the given ksuid.
+// GetPropertiesAtLastWrite returns the resource's per-field write witness,
+// composed from its genuine-write history (see datastore.ComposeWriteWitness):
+// the newest create/replace echo is the base and each later apply-owned
+// update overlays only the fields its patch wrote. Sync and discovery
+// versions, metadata-only applies (empty patch), and fields an update's echo
+// merely carried along never enter the witness. History is bounded to the
+// most recent writes; a resource whose create falls outside the bound has no
+// witness, which classifies its movement as tolerated.
+func (d *DatastoreMSSQL) GetPropertiesAtLastWrite(ksuid string) (json.RawMessage, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "GetPropertiesAtLastWrite")
+	defer span.End()
+
+	query := fmt.Sprintf(`
+SELECT TOP (25) JSON_QUERY(r.data, '$.Properties'), ru.operation, JSON_QUERY(ru.resource, '$.PatchDocument')
+FROM resources r
+JOIN forma_commands fc ON fc.command_id = r.command_id
+JOIN resource_updates ru ON ru.command_id = r.command_id AND ru.ksuid = r.ksuid
+WHERE r.ksuid = @p1
+AND fc.command = 'apply'
+AND r.operation != 'delete' AND r.operation != 'reaped'
+AND (ru.operation != 'update'
+	OR (JSON_QUERY(ru.resource, '$.PatchDocument') IS NOT NULL
+		AND JSON_QUERY(ru.resource, '$.PatchDocument') != '[]'))
+ORDER BY r.version %s DESC`, binColl)
+
+	rows, err := d.conn.QueryContext(ctx, query, ksuid)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+
+	var history []datastore.WriteVersion
+	for rows.Next() {
+		var props, op, patch sql.NullString
+		if err := rows.Scan(&props, &op, &patch); err != nil {
+			return nil, err
+		}
+		v := datastore.WriteVersion{Operation: op.String}
+		if props.Valid {
+			v.Properties = json.RawMessage(props.String)
+		}
+		if patch.Valid {
+			v.Patch = json.RawMessage(patch.String)
+		}
+		history = append(history, v)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return datastore.ComposeWriteWitness(history), nil
+}
+
 func (d *DatastoreMSSQL) fetchCurrentProperties(ctx context.Context, ksuid string) (json.RawMessage, error) {
 	query := fmt.Sprintf(`
 SELECT TOP (1) JSON_QUERY(data, '$.Properties')
@@ -804,14 +872,15 @@ func (d *DatastoreMSSQL) BulkStoreResourceUpdates(commandID string, updates []re
 		return fmt.Errorf("failed to clear existing resource updates: %w", err)
 	}
 
-	const colsPerRow = 23
+	const colsPerRow = 26
 	insertPrefix := `INSERT INTO resource_updates (
 		command_id, ksuid, operation, state, start_ts, modified_ts,
 		retries, remaining, version, stack_label, group_id, source,
 		resource, resource_target, existing_resource, existing_target,
 		progress_result, most_recent_progress,
 		remaining_resolvables, reference_labels, previous_properties,
-		is_cascade, cascade_source
+		is_cascade, cascade_source, failure_reason,
+		provenance_records, resolved_root_digests
 	) VALUES `
 
 	// Dedupe by (ksuid, operation) keeping the last — last-wins, matching the
@@ -906,6 +975,9 @@ func (d *DatastoreMSSQL) BulkStoreResourceUpdates(commandID string, updates []re
 			previousProperties,
 			ru.IsCascade,
 			ru.CascadeSource,
+			ru.FailureReason,
+			marshalOrNilString(ru.ProvenanceRecords),
+			marshalOrNilString(ru.ResolvedRootDigests),
 		}
 		stmt := insertPrefix + "(" + placeholders(1, colsPerRow) + ")"
 		if _, err = tx.ExecContext(ctx, stmt, args...); err != nil {

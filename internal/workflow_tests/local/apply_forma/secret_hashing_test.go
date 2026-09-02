@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
-//go:build unit
+//go:build unit || integration
 
 package workflow_tests_local
 
@@ -53,6 +53,13 @@ func waitForApplyComplete(t *testing.T, m *metastructure.Metastructure) {
 // assertNoPlaintextInResourceUpdates loads every ResourceUpdate for commandID and asserts
 // none of the resource_updates sinks (resource/DesiredState, existing_resource/PriorState,
 // previous_properties, progress_result, most_recent_progress) contain the plaintext secret.
+//
+// DesiredState.PatchDocument is swept alongside DesiredState.Properties. It is
+// a derived view of the same document rather than a copy of it: a diff of
+// prior against desired, re-derived whenever an apply-time substitution
+// rewrites the desired side. A value kept out of the properties can therefore
+// still be carried into the patch by that derivation, and the patch travels to
+// the provider and into the same row.
 func assertNoPlaintextInResourceUpdates(t *testing.T, m *metastructure.Metastructure, commandID, plaintext string) {
 	t.Helper()
 	updates, err := m.Datastore.LoadResourceUpdates(commandID)
@@ -68,6 +75,8 @@ func assertNoPlaintextInResourceUpdates(t *testing.T, m *metastructure.Metastruc
 			"resource_updates.existing_resource (PriorState.Properties) leaked plaintext")
 		assert.NotContains(t, string(ru.PriorState.ReadOnlyProperties), plaintext,
 			"resource_updates.existing_resource (PriorState.ReadOnlyProperties) leaked plaintext")
+		assert.NotContains(t, string(ru.DesiredState.PatchDocument), plaintext,
+			"resource_updates.resource (DesiredState.PatchDocument) leaked plaintext")
 		assert.NotContains(t, string(ru.PreviousProperties), plaintext,
 			"resource_updates.previous_properties leaked plaintext")
 		assert.NotContains(t, string(ru.MostRecentProgressResult.ResourceProperties), plaintext,

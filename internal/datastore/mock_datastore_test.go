@@ -40,6 +40,10 @@ func (m *mockDatastore) GetFormaCommandByCommandID(_ string) (*forma_command.For
 func (m *mockDatastore) GetMostRecentFormaCommandByClientID(_ string) (*forma_command.FormaCommand, error) {
 	return nil, nil
 }
+func (m *mockDatastore) GetPropertiesAtLastWrite(_ string) (json.RawMessage, error) {
+	return nil, nil
+}
+
 func (m *mockDatastore) GetResourceModificationsSinceLastReconcile(_ string) ([]ResourceModification, error) {
 	return nil, nil
 }
@@ -82,6 +86,9 @@ func (m *mockDatastore) LoadLatestResourceByKsuid(_ string) (*pkgmodel.Resource,
 	return nil, nil
 }
 func (m *mockDatastore) FindResourcesDependingOn(_ string) ([]*pkgmodel.Resource, error) {
+	return nil, nil
+}
+func (m *mockDatastore) FindResourcesReferencingGenerator(_ string) ([]*pkgmodel.Resource, error) {
 	return nil, nil
 }
 func (m *mockDatastore) FindResourcesDependingOnMany(_ []string) (map[string][]*pkgmodel.Resource, error) {
@@ -170,6 +177,10 @@ func (m *mockDatastore) DeleteInlinePolicy(_, _, _ string) (string, error) {
 }
 func (m *mockDatastore) DeletePoliciesForStack(_, _ string) error      { return nil }
 func (m *mockDatastore) GetExpiredStacks() ([]ExpiredStackInfo, error) { return nil, nil }
+func (m *mockDatastore) GetGeneratorsWithRotation() ([]GeneratorRotationInfo, error) {
+	return nil, nil
+}
+
 func (m *mockDatastore) GetStacksWithAutoReconcilePolicy() ([]StackReconcileInfo, error) {
 	return nil, nil
 }
@@ -177,7 +188,27 @@ func (m *mockDatastore) GetResourcesAtLastReconcile(_ string) ([]ResourceSnapsho
 	return nil, nil
 }
 func (m *mockDatastore) StackHasActiveCommands(_ string) (bool, error) { return false, nil }
-func (m *mockDatastore) Close()                                        {}
+func (m *mockDatastore) CreateGenerator(_ pkgmodel.Generator, _ string) (string, error) {
+	return "", nil
+}
+func (m *mockDatastore) UpdateGenerator(_ pkgmodel.Generator, _ string) (string, error) {
+	return "", nil
+}
+func (m *mockDatastore) DeleteGenerator(_, _ string) (string, error) { return "", nil }
+func (m *mockDatastore) GetGenerator(_, _ string) (pkgmodel.Generator, error) {
+	return nil, nil
+}
+func (m *mockDatastore) GetGeneratorIdentity(_, _ string) (GeneratorIdentity, error) {
+	return GeneratorIdentity{}, nil
+}
+func (m *mockDatastore) GetGeneratorIdentityByID(_ string) (GeneratorIdentity, error) {
+	return GeneratorIdentity{}, nil
+}
+func (m *mockDatastore) AdvanceGeneration(_, _, _ string, _ json.RawMessage) error { return nil }
+func (m *mockDatastore) LoadGeneratorsByStack(_ string) ([]pkgmodel.Generator, error) {
+	return nil, nil
+}
+func (m *mockDatastore) Close() {}
 func (m *mockDatastore) BulkStoreResourceUpdates(_ string, _ []resource_update.ResourceUpdate) error {
 	return nil
 }
@@ -187,7 +218,7 @@ func (m *mockDatastore) LoadResourceUpdates(_ string) ([]resource_update.Resourc
 func (m *mockDatastore) UpdateResourceUpdateState(_ string, _ string, _ types.OperationType, _ resource_update.ResourceUpdateState, _ time.Time) error {
 	return nil
 }
-func (m *mockDatastore) UpdateResourceUpdateProgress(_ string, _ string, _ types.OperationType, _ resource_update.ResourceUpdateState, _ time.Time, _ time.Time, _ plugin.TrackedProgress) error {
+func (m *mockDatastore) UpdateResourceUpdateProgress(_ string, _ string, _ types.OperationType, _ resource_update.ResourceUpdateState, _ time.Time, _ time.Time, _ plugin.TrackedProgress, _ map[string]string) error {
 	return nil
 }
 func (m *mockDatastore) BatchUpdateResourceUpdateState(_ string, _ []ResourceUpdateRef, _ resource_update.ResourceUpdateState, _ time.Time) error {

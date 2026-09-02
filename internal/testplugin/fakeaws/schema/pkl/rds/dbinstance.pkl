@@ -50,7 +50,7 @@ open class DBInstance extends formae.Resource {
     masterUsername: String?
 
     @fakeaws.FieldHint
-    masterUserPassword: (String|formae.Resolvable)?
+    masterUserPassword: (String|formae.ValueSource)?
 
     @fakeaws.FieldHint
     storageEncrypted: Boolean?

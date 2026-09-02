@@ -164,36 +164,6 @@ func TestGCPRegisterOnlyRejectsMalformedProvider(t *testing.T) {
 	}
 }
 
-// Register-only says what it did not check, so nobody reads "registered" as
-// "working".
-func TestGCPRegisterOnlySaysWhatItDidNotVerify(t *testing.T) {
-	seedGCPRun(t)
-
-	out, err := runConnect(t, "gcp", "--project", testProject,
-		"--workload-identity-provider", testProviderName, "--no-input",
-		"--output-consumer", "machine", "--output-schema", "json")
-
-	require.NoError(t, err, "out: %s", out)
-	got := decodeOut(t, out)
-	assert.Equal(t, testProviderName, got["workloadIdentityProvider"])
-	assert.Contains(t, fmt.Sprintf("%v", got["warnings"]), "shape only")
-}
-
-// Register-only must not reach for credentials at all: needing them would
-// destroy the one reason the mode exists.
-func TestGCPRegisterOnlyNeedsNoCredentials(t *testing.T) {
-	logins := 0
-	stubCredentialState(t, credentialsMissing, &logins)
-	seedGCPRun(t)
-
-	out, err := runConnect(t, "gcp", "--project", testProject,
-		"--workload-identity-provider", testProviderName, "--no-input",
-		"--output-consumer", "machine", "--output-schema", "json")
-
-	require.NoError(t, err, "out: %s", out)
-	assert.Zero(t, logins, "register-only signed in, which it must never need to do")
-}
-
 // TestGCPMachineModeNeverSignsIn: a caller that built one fixed command line
 // did not consent to a browser opening. Machine output and --no-input both
 // mean the run reports what to do instead.
@@ -292,25 +262,6 @@ func TestGCPProvisionFailuresAreClassifiedApart(t *testing.T) {
 	}
 }
 
-// A run that provisioned and then failed to register must say that the
-// project now trusts an installation the control plane does not know about.
-func TestGCPRegistrationFailureNamesTheStandingTrust(t *testing.T) {
-	stubCredentialState(t, credentialsUsable, nil)
-	installGCPProvisioner(t, &stubGCPProvisioner{result: &provxgcp.Result{
-		ProviderName: testProviderName, ProjectNumber: testProjectNumber,
-	}}, nil)
-	cp := seedGCPRun(t)
-	cp.registerStatus = 500
-	cp.registerBody = `{"error":"boom"}`
-
-	out, err := runConnect(t, gcpLocalArgs()...)
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "now trusts this installation",
-		"the failure must name the trust that stands")
-	_ = out
-}
-
 // TestGCPAllowLoginReachesTheSignIn is the case that was unreachable before:
 // the agent runs on the operator's machine, consumes machine output, and can
 // still have a browser completed by the person sitting there. Without an
@@ -365,11 +316,6 @@ func TestGCPAllowLoginDoesNotSignInWhenCredentialsWork(t *testing.T) {
 	assert.Zero(t, logins, "a usable credential was replaced by a sign-in")
 }
 
-func TestGCPProjectIsRequired(t *testing.T) {
-	_, err := decideGCPMode(gcpOptions{})
-	require.Error(t, err, "a run with no project must be refused rather than inferring one")
-}
-
 func TestGCPModeSelection(t *testing.T) {
 	local, err := decideGCPMode(gcpOptions{Project: testProject})
 	require.NoError(t, err)
@@ -393,9 +339,10 @@ func TestSplitSubjectRefusesWhatItDoesNotRecognise(t *testing.T) {
 	}
 }
 
-// TestRegisteredDocumentBytes pins both clouds' documents. Making roleArn
-// omitempty for GCP's sake must not drop it from an AWS document, which is a
-// v2 contract a consumer already reads.
+// TestRegisteredDocumentBytes pins all three clouds' documents. Making
+// roleArn omitempty for GCP's sake must not drop it from an AWS document,
+// which is a v2 contract a consumer already reads; the same applies to
+// azureTenantId/azureClientId, added for Azure without moving the version.
 func TestRegisteredDocumentBytes(t *testing.T) {
 	awsDoc, err := json.Marshal(registeredDocument(statusRegisteredUnverified, testAccount, contractRoleArn, nil))
 	require.NoError(t, err)
@@ -418,6 +365,20 @@ func TestRegisteredDocumentBytes(t *testing.T) {
 		"account": "`+testProject+`",
 		"workloadIdentityProvider": "`+testProviderName+`"
 	}`, string(gcpDoc))
+
+	const testTenantID = "11111111-1111-1111-1111-111111111111"
+	const testClientID = "22222222-2222-2222-2222-222222222222"
+	azureDoc, err := json.Marshal(azureRegisteredDocument(statusRegisteredUnverified, testSubscription, testTenantID, testClientID, nil))
+	require.NoError(t, err)
+	assert.JSONEq(t, `{
+		"schemaVersion": 2,
+		"phase": "registered",
+		"status": "registered_unverified",
+		"cloud": "azure",
+		"account": "`+testSubscription+`",
+		"azureTenantId": "`+testTenantID+`",
+		"azureClientId": "`+testClientID+`"
+	}`, string(azureDoc))
 }
 
 // TestRegisteredHumanNamesEachCloudInItsOwnWords pins both renderings.

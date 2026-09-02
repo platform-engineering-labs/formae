@@ -6,7 +6,6 @@ package metastructure
 
 import (
 	"fmt"
-	"slices"
 	"time"
 
 	"ergo.services/actor/statemachine"
@@ -74,10 +73,13 @@ type SynchronizerData struct {
 	timeStarted time.Time
 	commandID   string
 
-	// excludedResources tracks resources that are currently being updated by
-	// non-sync operations (e.g., user apply/destroy commands). These resources
-	// should be excluded from synchronization to prevent race conditions.
-	excludedResources map[string]struct{}
+	// excludedResources counts, per resource, how many in-flight changesets are
+	// writing it. Anything present is held out of synchronization; a resource
+	// drops out only when the last writer releases it. It is a count rather
+	// than a set because a set cannot express two writers: the first to finish
+	// would release a claim it did not solely hold, and the other changeset
+	// would keep writing with the synchronizer free to read mid-write.
+	excludedResources map[string]int
 }
 
 // Messages processed by Synchronizer
@@ -121,7 +123,7 @@ func (s *Synchronizer) Init(args ...any) (statemachine.StateMachineSpec[Synchron
 	data := SynchronizerData{
 		datastore:         ds.(datastore.Datastore),
 		cfg:               synchronizerCfg,
-		excludedResources: make(map[string]struct{}),
+		excludedResources: make(map[string]int),
 	}
 
 	spec := statemachine.NewStateMachineSpec(StateIdle,
@@ -249,6 +251,7 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 			existingTargets,
 			data.datastore,
 			nil, nil,
+			false,
 		)
 		if err != nil {
 			proc.Log().Error("failed to generate resource updates for stack %s: %v", stackLabel, err)
@@ -291,7 +294,7 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 	for i := range allResourceUpdates {
 		namespace := allResourceUpdates[i].DesiredState.Namespace()
 		if cache, ok := pluginInfoByNamespace[namespace]; ok && cache.available {
-			filters := findMatchFiltersForType(cache.matchFilters, allResourceUpdates[i].DesiredState.Type)
+			filters := pkgmodel.FiltersForType(cache.matchFilters, allResourceUpdates[i].DesiredState.Type)
 			if len(filters) > 0 {
 				allResourceUpdates[i].MatchFilters = filters
 			}
@@ -318,6 +321,7 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 		nil, // No target updates on sync
 		nil, // No stack updates on sync
 		nil, // No policy updates on sync
+		nil, // No generator updates on sync
 		"synchronizer",
 		"",
 		"",
@@ -343,7 +347,9 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 		finalizeFailedCommand(syncCommand, proc)
 		return StateIdle, data, rescheduleAction(data), nil
 	}
-	cs, err := changeset.NewChangeset(allResourceUpdates, synth, syncCommand.ID, pkgmodel.CommandSync, syncCommand.Config.Mode)
+	// No generator draws: a sync command only reads the inventory, so no
+	// destination in it is waiting for a generated value.
+	cs, err := changeset.NewChangeset(allResourceUpdates, synth, nil, syncCommand.ID, pkgmodel.CommandSync, syncCommand.Config.Mode)
 	if err != nil {
 		proc.Log().Error("Synchronizer: failed to build changeset, skipping sync cycle commandID=%s: %v", syncCommand.ID, err)
 		finalizeFailedCommand(syncCommand, proc)
@@ -382,28 +388,37 @@ func changesetCompleted(from gen.PID, state gen.Atom, data SynchronizerData, mes
 	return StateIdle, data, rescheduleAction(data), nil
 }
 
+// excludeFromSync claims uri on behalf of one in-flight changeset.
+func excludeFromSync(excluded map[string]int, uri string) {
+	excluded[uri]++
+}
+
+// releaseFromSync drops one changeset's claim on uri, lifting the exclusion
+// only once the last writer has released it. A release with no matching claim
+// is inert rather than an error: it must not leave a negative count that a
+// later claim would have to climb out of before the resource is protected.
+func releaseFromSync(excluded map[string]int, uri string) {
+	remaining, claimed := excluded[uri]
+	if !claimed {
+		return
+	}
+	if remaining <= 1 {
+		delete(excluded, uri)
+		return
+	}
+	excluded[uri] = remaining - 1
+}
+
 func registerInProgressResource(from gen.PID, state gen.Atom, data SynchronizerData, message messages.RegisterInProgressResource, proc gen.Process) (gen.Atom, SynchronizerData, []statemachine.Action, error) {
-	data.excludedResources[message.ResourceURI] = struct{}{}
+	excludeFromSync(data.excludedResources, message.ResourceURI)
 	proc.Log().Debug("Resource registered as in-progress, excluded from sync resourceURI=%s", message.ResourceURI)
 	return state, data, nil, nil
 }
 
 func unregisterInProgressResource(from gen.PID, state gen.Atom, data SynchronizerData, message messages.UnregisterInProgressResource, proc gen.Process) (gen.Atom, SynchronizerData, []statemachine.Action, error) {
-	delete(data.excludedResources, message.ResourceURI)
+	releaseFromSync(data.excludedResources, message.ResourceURI)
 	proc.Log().Debug("Resource unregistered from in-progress, can be synced resourceURI=%s", message.ResourceURI)
 	return state, data, nil, nil
-}
-
-// findMatchFiltersForType returns the subset of filters whose ResourceTypes list
-// includes the given resourceType. Mirrors the same helper in the discovery package.
-func findMatchFiltersForType(filters []pkgmodel.MatchFilter, resourceType string) []pkgmodel.MatchFilter {
-	var result []pkgmodel.MatchFilter
-	for i := range filters {
-		if slices.Contains(filters[i].ResourceTypes, resourceType) {
-			result = append(result, filters[i])
-		}
-	}
-	return result
 }
 
 // finalizeFailedCommand marks all resource updates in the command as failed and then

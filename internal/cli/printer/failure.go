@@ -88,20 +88,36 @@ const (
 	// credentials and it is not on PATH. Its own code because the remedy is a
 	// specific install step and a consumer names it.
 	CodeGcloudMissing Code = "gcloud_missing"
-	// CodeCredentialsRequired: no usable Google credentials, in a run that may
+	// CodeAzMissing: no usable Azure credentials were found, and the az CLI -
+	// one of DefaultAzureCredential's chained sources, and the one the
+	// reported login command needs - is not on PATH. Its own code, distinct
+	// from credentials_required, because the remedy is an install step, not a
+	// sign-in: running the reported `az login` against a missing binary would
+	// just fail with "command not found".
+	CodeAzMissing Code = "az_missing"
+	// CodeCredentialsRequired: no usable cloud credentials, in a run that may
 	// not prompt (--no-input, or machine output). Details carry the exact
-	// command to run.
+	// command to run (GCP: gcloud auth application-default login; Azure: az
+	// login).
 	CodeCredentialsRequired Code = "credentials_required"
-	// CodeProjectUnreachable: the stated project could not be read with these
-	// credentials — it does not exist, or this principal cannot see it.
-	// Deliberately distinct from a credential problem: signing in again
-	// returns the same principal and would overwrite deliberately configured
-	// credentials.
+	// CodeProjectUnreachable: the stated project or subscription could not be
+	// read with these credentials — it does not exist, or this principal
+	// cannot see it. Deliberately distinct from a credential problem: signing
+	// in again returns the same principal and would overwrite deliberately
+	// configured credentials.
 	CodeProjectUnreachable Code = "project_unreachable"
-	// CodeApiDisabled: a Google API the connection needs is not enabled on the
-	// project. Details name it, because the remedy is one command and formae
-	// does not enable APIs on someone's project uninvited.
+	// CodeApiDisabled: a cloud API or resource provider the connection needs
+	// is not enabled/registered on the project or subscription. Details name
+	// it, because the remedy is one command and formae does not enable it
+	// uninvited.
 	CodeApiDisabled Code = "api_disabled"
+	// CodeOrphanedTrust: provisioning succeeded and registration did not, so
+	// the cloud side now grants access to an installation the control plane
+	// does not know about. Its own code, not a wrapped generic failure: a
+	// machine consumer needs the surviving coordinates (details name what was
+	// created) to finish the job itself, not an internal-error code it cannot
+	// act on. There is no rollback; re-running converges.
+	CodeOrphanedTrust Code = "orphaned_trust"
 )
 
 // registeredCodes is what may reach the wire. A code absent from here is a
@@ -129,9 +145,11 @@ var registeredCodes = map[Code]bool{
 	CodeInstallationNotReady: true,
 
 	CodeGcloudMissing:       true,
+	CodeAzMissing:           true,
 	CodeCredentialsRequired: true,
 	CodeProjectUnreachable:  true,
 	CodeApiDisabled:         true,
+	CodeOrphanedTrust:       true,
 }
 
 // Failure is an error a command declares, carrying a code a machine consumer

@@ -7,6 +7,7 @@
 package logo
 
 import (
+	"os"
 	"sync"
 	"testing"
 )
@@ -90,6 +91,31 @@ func TestDecide(t *testing.T) {
 			name:  "probe.ITerm2 but SSH → CapBraille (probe ignored)",
 			env:   envInfo{IsTTY: true, SSH: true, Unicode: true},
 			probe: probeResult{ITerm2: true},
+			want:  CapBraille,
+		},
+		// ── herdr panes: inherited SSH_* must not suppress the probe ─────────
+		{
+			name:  "probe.Kitty, SSH inherited inside a herdr pane → CapKitty",
+			env:   envInfo{IsTTY: true, SSH: true, Herdr: true, Unicode: true},
+			probe: probeResult{Kitty: true},
+			want:  CapKitty,
+		},
+		{
+			name:  "probe.ITerm2, SSH inherited inside a herdr pane → CapITerm2",
+			env:   envInfo{IsTTY: true, SSH: true, Herdr: true, Unicode: true},
+			probe: probeResult{ITerm2: true},
+			want:  CapITerm2,
+		},
+		{
+			name:  "probe.Kitty, tmux inside a herdr pane → CapBraille (tmux wins)",
+			env:   envInfo{IsTTY: true, Tmux: true, Herdr: true, Unicode: true},
+			probe: probeResult{Kitty: true},
+			want:  CapBraille,
+		},
+		{
+			name:  "herdr pane with no probe result → CapBraille",
+			env:   envInfo{IsTTY: true, Herdr: true, Unicode: true},
+			probe: probeResult{},
 			want:  CapBraille,
 		},
 		// ── Env hints insufficient for graphics (no probe) ────────────────────
@@ -207,5 +233,85 @@ func TestDetect_Stable(t *testing.T) {
 
 	if first != second {
 		t.Errorf("Detect() not stable: first=%v second=%v", first, second)
+	}
+}
+
+// TestProbeAllowed covers the gate shared by probe() and decide().
+//
+// tmux always owns the escape stream, so it always suppresses the probe. SSH
+// suppresses it too, except inside a herdr pane: herdr's server outlives the
+// client that started it, so SSH_* there describes the server's launch rather
+// than the pane's terminal, and herdr answers the query itself.
+func TestProbeAllowed(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		env  envInfo
+		want bool
+	}{
+		{name: "plain terminal", env: envInfo{}, want: true},
+		{name: "tmux", env: envInfo{Tmux: true}, want: false},
+		{name: "ssh", env: envInfo{SSH: true}, want: false},
+		{name: "herdr alone", env: envInfo{Herdr: true}, want: true},
+		{name: "herdr with inherited ssh", env: envInfo{SSH: true, Herdr: true}, want: true},
+		{name: "tmux inside herdr", env: envInfo{Tmux: true, Herdr: true}, want: false},
+		{name: "tmux and ssh inside herdr", env: envInfo{Tmux: true, SSH: true, Herdr: true}, want: false},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := probeAllowed(tt.env); got != tt.want {
+				t.Errorf("probeAllowed(%+v) = %v; want %v", tt.env, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestProbeSeam_SkippedWhenNotAllowed asserts the real probe seam returns an
+// empty result without touching the terminal whenever probeAllowed is false.
+func TestProbeSeam_SkippedWhenNotAllowed(t *testing.T) {
+	t.Parallel()
+
+	for _, env := range []envInfo{
+		{Tmux: true},
+		{SSH: true},
+		{Tmux: true, Herdr: true},
+	} {
+		if got := probe(env); got != (probeResult{}) {
+			t.Errorf("probe(%+v) = %+v; want empty probeResult", env, got)
+		}
+	}
+}
+
+// TestGatherEnv_Herdr checks that HERDR_ENV, the marker herdr documents for
+// detecting one of its panes, is the signal gatherEnv reads.
+func TestGatherEnv_Herdr(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		set   bool
+		want  bool
+	}{
+		{name: "unset", set: false, want: false},
+		{name: "empty", value: "", set: true, want: false},
+		{name: "one", value: "1", set: true, want: true},
+		{name: "zero", value: "0", set: true, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.set {
+				t.Setenv("HERDR_ENV", tt.value)
+			} else {
+				t.Setenv("HERDR_ENV", "1")
+				os.Unsetenv("HERDR_ENV")
+			}
+			if got := gatherEnv().Herdr; got != tt.want {
+				t.Errorf("gatherEnv().Herdr = %v; want %v", got, tt.want)
+			}
+		})
 	}
 }

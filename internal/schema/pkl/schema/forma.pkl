@@ -14,7 +14,7 @@ properties: Any?
 /// fill: entry point used by the self-injecting output below; constructs a
 /// typed instance of the user's properties class from external `prop:` values.
 function fill(clazz: Class): Typed = formae.fillProps(clazz)
-hidden forma: Listing<formae.Resource|formae.Resolvable|formae.Stack|formae.Target|formae.Policy>
+hidden forma: Listing<formae.Resource|formae.Resolvable|formae.Stack|formae.Target|formae.Policy|formae.Generator>
 
 /// defaultStack: returns the first defined Stack
 hidden defaultStack: formae.StackResolvable =
@@ -56,6 +56,7 @@ output {
                 Stacks = forma.toList().filterIsInstance(formae.Stack).toListing()
                 Targets = forma.toList().filterIsInstance(formae.Target).toListing()
                 Policies = forma.toList().filterIsInstance(formae.Policy).map((p) -> p.render()).toListing()
+                Generators = forma.toList().filterIsInstance(formae.Generator).map((g) -> g.render()).toListing()
                 Resolvables = forma.toList().filterIsInstance(formae.Resolvable).toListing()
                 Resources = new Listing {
                     for (res in forma.toList().filterIsInstance(formae.Resource).toListing()) {

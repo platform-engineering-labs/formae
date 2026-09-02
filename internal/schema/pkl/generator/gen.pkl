@@ -287,10 +287,10 @@ local function readDeeply(value: Any): Boolean =
 
 /// The envelope marker a map carries, or `null` when the map is plain data.
 ///
-/// A map is a reference only when `$res` is exactly the boolean `true`, and an
-/// embedded template only when `$embed` is exactly the boolean `true`. A map of
-/// the author's own that merely has a key of that name holding something else
-/// is data and converts as data.
+/// A map is a reference only when `$res` is exactly the boolean `true`, a
+/// generator binding only when `$gen` is, and an embedded template only when
+/// `$embed` is. A map of the author's own that merely has a key of that name
+/// holding something else is data and converts as data.
 ///
 /// The marker alone decides this. The remaining parts of a reference — the
 /// label, stack, property and recorded value — are optional: `formae.Resolvable`
@@ -301,10 +301,14 @@ local function readDeeply(value: Any): Boolean =
 /// than quietly treating the envelope as data.
 ///
 /// A recorded value has no marker of its own, so all three of the keys it is
-/// written from have to be present before a map is one.
+/// written from have to be present before a map is one. A generator binding is
+/// tested before it, because a binding the agent has resolved carries the keys
+/// of a recorded value alongside its own marker and must never be read as one.
 local function envelopeMarkerOf(valueAsMap: Map): String? =
   if (valueAsMap.getOrNull("$res") == true)
     "$res"
+  else if (valueAsMap.getOrNull("$gen") == true)
+    "$gen"
   else if (valueAsMap.containsKey("$value") && valueAsMap.containsKey("$visibility") && valueAsMap.containsKey("$strategy"))
     "$value"
   else if (valueAsMap.getOrNull("$embed") == true)
@@ -319,6 +323,8 @@ local function envelopeMarkerOf(valueAsMap: Map): String? =
 local function envelopeMarkerOfClass(clazz: reflect.Class): String? =
   if (clazz.isSubclassOf(reflect.Class(formae.Resolvable)))
     "$res"
+  else if (clazz.isSubclassOf(reflect.Class(formae.GeneratorOutput)))
+    "$gen"
   else if (clazz.isSubclassOf(reflect.Class(formae.Value)))
     "$value"
   else if (clazz.isSubclassOf(reflect.Class(formae.Embedded)))
@@ -326,27 +332,31 @@ local function envelopeMarkerOfClass(clazz: reflect.Class): String? =
   else
     null
 
-/// The same, for a union member's declared type. A nullable member is unwrapped
-/// to its member type, a type alias to its referent, and a member that is itself
-/// a union to the family of the first of its own members that has one — a
-/// parenthesised member stays a union of its own rather than being folded into
-/// the union around it. So `formae.Resolvable?`, an alias of it and
-/// `(formae.Resolvable|String)` are all recognised as reference members.
-local function envelopeMarkerOfType(type: reflect.Type): String? =
+/// Whether a union member's declared type can hold an envelope of the family
+/// `marker` names. A nullable member is unwrapped to its member type, a type
+/// alias to its referent, and a member that is itself a union carries every
+/// family its own members carry — a parenthesised member stays a union of its
+/// own rather than being folded into the union around it. So
+/// `formae.Resolvable?`, an alias of it and `(formae.Resolvable|String)` are all
+/// recognised as reference members.
+///
+/// A member naming several families at once is a member of each of them, which
+/// is what lets a field name `formae.ValueSource` in place of spelling the
+/// families out and still have each of them preferred over a sibling that would
+/// take the envelope as data.
+local function typeCarriesMarker(type: reflect.Type, marker: String): Boolean =
   if (type is reflect.NullableType)
-    envelopeMarkerOfType((type as reflect.NullableType).member)
+    typeCarriesMarker((type as reflect.NullableType).member, marker)
   else if (type is reflect.DeclaredType)
     let (reflectee = (type as reflect.DeclaredType).referent.reflectee)
-      if (reflectee is Class) envelopeMarkerOfClass(reflect.Class(reflectee))
-      else envelopeMarkerOfType(reflect.TypeAlias(reflectee).referent)
+      if (reflectee is Class) envelopeMarkerOfClass(reflect.Class(reflectee)) == marker
+      else typeCarriesMarker(reflect.TypeAlias(reflectee).referent, marker)
   else if (type is reflect.UnionType)
-    (type as reflect.UnionType).members
-      .map((member) -> envelopeMarkerOfType(member))
-      .findOrNull((marker) -> marker != null)
+    (type as reflect.UnionType).members.any((member) -> typeCarriesMarker(member, marker))
   else
-    null
+    false
 
-/// The first union member belonging to the envelope family of `value`, or
+/// The first union member able to hold the envelope family of `value`, or
 /// `null` when `value` is not an envelope or the union declares no member of
 /// its family.
 ///
@@ -359,7 +369,7 @@ local function envelopeMemberOf(members: List<reflect.Type>, value: Any): reflec
   else
     let (marker = envelopeMarkerOf(value.toMap()))
       if (marker == null) null
-      else members.findOrNull((member) -> envelopeMarkerOfType(member) == marker)
+      else members.findOrNull((member) -> typeCarriesMarker(member, marker))
 
 /// The classes whose handlers convert a value of one of them into another: a
 /// number is read out of text, text is written from a number, a boolean is
@@ -641,6 +651,9 @@ class FakeResolvable extends formae.Resolvable {
   FakeType: String?
   RealValue: Any?
   FakeProperty: String?
+  /// The sub-key selector, set when the reference addresses one member of the
+  /// referenced document rather than the whole of it.
+  FakeJSON: String?
 }
 
 /// Carrier for a pre-processed $embed field.
@@ -648,6 +661,22 @@ class FakeResolvable extends formae.Resolvable {
 /// and Map (decoded $res envelope — same shape FakeResolvable already handles).
 class FakeEmbed {
   FakeParts: List
+}
+
+/// Carrier for a decoded $gen envelope.
+///
+/// Only the generator's label and the output name are carried, because those
+/// are the whole of the reference the renderer emits: a binding renders as the
+/// generator's local followed by its output accessor, and that local is named
+/// from the label alone. The generator's own stack is not part of the
+/// reference — the declaration the local is bound to carries it.
+///
+/// The carrier does not extend `formae.GeneratorOutput`, following `FakeEmbed`:
+/// the envelope's members there are `fixed` and derived from a `StackResolvable`
+/// the carrier has no way to build from a stack label.
+class FakeGeneratorOutput {
+  FakeGeneratorLabel: String
+  FakeOutput: String
 }
 
 function applyPropertyWithMapping(valueAsMap: Map, prop: reflect.Property, reverseMapping: Mapping<String, String>) =
@@ -679,6 +708,21 @@ function applyPropertyWithMapping(valueAsMap: Map, prop: reflect.Property, rever
 /// Simple paths like "arn" render as "arn".
 /// Collection paths like "endpoints.lgtm\:3000" render as "endpoints.at("lgtm:3000")".
 /// Nested paths like "endpoints.0.uri" render as "endpoints.at(0).at("uri")".
+/// The accessor path for a reference that carries a sub-key selector. Only a
+/// secret-value resolvable can produce a selector, and both secret backends
+/// reach one through an accessor named `secretValue` declared in formae's own
+/// schema: a scalar backend's `secretValue` IS the value, and a map backend's
+/// is an accessor whose remaining path segments render as `at(...)` calls just
+/// as they do for any other collection path. So the base segment becomes
+/// `secretValue` and the rest is left for renderResolvableProperty.
+local function secretValuePath(property: String?): String? =
+    if (property == null)
+        null
+    else
+        let (segments = splitGjsonPath(property))
+        let (rest = segments.drop(1))
+        "secretValue" + rest.fold("", (acc, seg) -> acc + "." + seg)
+
 function renderResolvableProperty(property: String): String =
     if (!property.contains("."))
         // Simple scalar property — render as-is
@@ -803,6 +847,7 @@ local function applyDynamicOrMapping(type: reflect.Class, value: Dynamic|Mapping
         let (refType = valueAsMap.getOrNull("$type"))
         let (typeName = valueAsMap.getOrNull("$type"))
         let (property = valueAsMap.getOrNull("$property"))
+        let (selector = valueAsMap.getOrNull("$json") as String?)
         // Both carriers are handled as text — the type keys the resolvable
         // lookup, the property is split on dots and matched. Reject any other
         // shape here: further down they reach a lookup that takes a String and
@@ -835,10 +880,30 @@ local function applyDynamicOrMapping(type: reflect.Class, value: Dynamic|Mapping
                 RealValue = valueAsMap.getOrNull("$value")
                 type = refType
                 FakeType = typeName
-                FakeProperty = mappedProperty
+                FakeProperty = if (selector != null) secretValuePath(property) else mappedProperty
+                FakeJSON = selector
             })
 
             r
+    else if (marker == "$gen")
+        // A binding renders as an expression naming the generator's local, so
+        // both the label the local is named from and the output accessor must
+        // be present and be text. An envelope missing either — one whose
+        // generator no longer exists, so extraction had no label to write and
+        // left the internal identifier in place — is reported rather than
+        // rendered: there is no expression to emit, and a file naming a local
+        // that was never declared is worse than a diagnostic saying so.
+        let (l = valueAsMap.getOrNull("$label"))
+        let (o = valueAsMap.getOrNull("$output"))
+        if (!(l is String))
+            Fail("A generator reference's $label must be a String, but got \(typeNameOf(l))")
+        else if (!(o is String))
+            Fail("A generator reference's $output must be a String, but got \(typeNameOf(o))")
+        else
+            new FakeGeneratorOutput {
+                FakeGeneratorLabel = l
+                FakeOutput = o
+            }
     else if (marker == "$value")
         let (fakeValue = valueAsMap.getOrNull("$value"))
         let (visibility = valueAsMap.getOrNull("$visibility"))
@@ -1028,6 +1093,13 @@ local function parseValueEnhanced(value: Any): Any =
     // or a Dynamic/$res map — formatValueWithTypes handles the rendering).
     if (typeName == "FakeEmbed")
       Map("__type__", "FakeEmbed", "FakeParts", (value as FakeEmbed).FakeParts)
+    // FakeGeneratorOutput: the carrier is declared in this module rather than a
+    // schema package, so there is no import to look up for it.
+    else if (typeName == "FakeGeneratorOutput")
+      let (g = value as FakeGeneratorOutput)
+        Map("__type__", "FakeGeneratorOutput",
+            "FakeGeneratorLabel", g.FakeGeneratorLabel,
+            "FakeOutput", g.FakeOutput)
     else
     let (importInfo = getImportInfoForType(value.getClass(), typeName, value))
     let (defaultMap =
@@ -1140,9 +1212,11 @@ local function escapeString(str: String): String =
     .replaceAll("\r", "\\r")     // Escape carriage returns
     .replaceAll("\t", "\\t")     // Escape tabs
 
-// toCamelCase mirrors pklGenerator.toCamelCase (cannot import it — pklGenerator
-// imports this module). Used to reference the generated stack local by name.
-local function embedToCamelCase(input: String): String =
+// localNameOf mirrors pklGenerator.toCamelCase (cannot import it — pklGenerator
+// imports this module). Both modules must agree: pklGenerator names the locals
+// it declares for stacks and generators with that function, and this one emits
+// the references to them.
+local function localNameOf(input: String): String =
   if (input == "$unmanaged")
     "myStack"
   else
@@ -1153,6 +1227,34 @@ local function embedToCamelCase(input: String): String =
       parts.first + parts.drop(1).map((part) ->
         if (part.isEmpty) "" else part.substring(0, 1).toUpperCase() + part.substring(1, part.length)
       ).join("")
+
+/// Renders one envelope part of a pre-processed embedded template as the
+/// expression to interpolate for it.
+///
+/// The split the agent's extract pre-processing performs is envelope-agnostic,
+/// so a part is whichever envelope the template framed at that offset.
+local function renderEmbedEnvelopePart(envelope: Map<String, Any>, indent: String): String =
+  if (envelope.getOrNull("$gen") == true)
+    renderEmbedGenPart(envelope)
+  else
+    renderEmbedRefPart(envelope, indent)
+
+/// Renders a generator binding framed inside an embedded template. Interpolating
+/// the output accessor re-frames the very envelope the template carried, because
+/// that is what `formae.GeneratorOutput.toString()` renders.
+///
+/// A binding missing either part names no local, and there is no expression to
+/// emit for it. Throwing is what the render phase does with an unrenderable
+/// reference — the same choice `requireResolvableInfo` makes — because a part
+/// silently dropped from a template leaves a file that applies the wrong thing.
+local function renderEmbedGenPart(envelope: Map<String, Any>): String =
+  let (l = envelope.getOrNull("$label") as String?)
+  let (o = envelope.getOrNull("$output") as String?)
+  if (l == null || o == null)
+    throw("Cannot render a generator reference embedded in a string: the reference "
+      + "carries no generator label, or names no output of it.")
+  else
+    "\\(\(localNameOf(l)).gen.\(o))"
 
 local function renderEmbedRefPart(resMap: Map<String, Any>, indent: String): String =
   let (s = resMap.getOrNull("$stack") as String?)
@@ -1188,7 +1290,7 @@ local function renderEmbedRefPart(resMap: Map<String, Any>, indent: String): Str
     // `stack = ".."` to a StackResolvable, mismatching Resolvable.stack: String?)
     // leaves it alone; this is the same value the //resolvable marker yields on
     // the whole-value path.
-    "\\((\(resInfo.importName).\(resInfo.clazz.simpleName)) { stack = \(embedToCamelCase(s ?? "")).res.label; label = \"\(l)\" }.\(renderResolvableProperty(mappedProperty)))"
+    "\\((\(resInfo.importName).\(resInfo.clazz.simpleName)) { stack = \(localNameOf(s ?? "")).res.label; label = \"\(l)\" }.\(renderResolvableProperty(mappedProperty)))"
 
 local function formatValueWithTypes(value: Any, indent: String): String =
   if (value is Dynamic)
@@ -1230,7 +1332,9 @@ local function formatValueWithTypes(value: Any, indent: String): String =
               comment + "\n" +
               (if (stack != null) indent + "  stack = \"\(stack)\" //resolvable\n" else "") +
               (if (label != null) indent + "  label = \"\(label)\"\n" else "") +
-              indent + "}." + renderResolvableProperty(property)
+              indent + "}." + renderResolvableProperty(property) +
+              (let (selector = value.getOrNull("FakeJSON"))
+                if (selector is String) ".json(\"\(escapeString(selector))\")" else "")
         else if (typeName == "FakeValue")
           // Special handling for FakeValue - render using fluent API
           let (fakeValue = value.getOrNull("FakeValue"))
@@ -1247,6 +1351,16 @@ local function formatValueWithTypes(value: Any, indent: String): String =
           // the stored digest cannot be re-applied as plaintext.
           let (withComment = if (hashed) withStrategy + " // hashed secret value — cannot be applied as-is; re-supply the plaintext to set it" else withStrategy)
             withComment
+        else if (typeName == "FakeGeneratorOutput")
+          // A generator binding renders as the output accessor of the local
+          // pklGenerator declares for that generator — `<local>.gen.<output>`.
+          // The local is named from the generator's label, so nothing of the
+          // envelope beyond the label and the output name is emitted: the rest
+          // (the visibility above all) is derived by the class the accessor
+          // yields, and is not the author's to write.
+          let (label = value.getOrNull("FakeGeneratorLabel") as String)
+          let (output = value.getOrNull("FakeOutput") as String)
+            "\(localNameOf(label)).gen.\(output)"
         else if (typeName == "FakeEmbed")
           // Render as formae.embed("""...\(<resolvable-ref>)...""").
           // FakeParts is a List alternating String literals and $res maps.
@@ -1258,10 +1372,10 @@ local function formatValueWithTypes(value: Any, indent: String): String =
               // Literal template segment — escape for a single-line PKL string.
               acc + escapeString(part)
             else if (part is Map)
-              acc + renderEmbedRefPart(part as Map<String, Any>, indent)
+              acc + renderEmbedEnvelopePart(part as Map<String, Any>, indent)
             else if (part is Dynamic)
-              // JSON-deserialized $res envelope objects arrive as Dynamic, not Map.
-              acc + renderEmbedRefPart(part.toMap(), indent)
+              // JSON-deserialized envelope objects arrive as Dynamic, not Map.
+              acc + renderEmbedEnvelopePart(part.toMap(), indent)
             else
               acc
           ))

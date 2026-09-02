@@ -7,6 +7,7 @@ package changeset
 import (
 	"strings"
 
+	"github.com/platform-engineering-labs/formae/internal/metastructure/pathkey"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
@@ -18,12 +19,17 @@ import (
 // Hints keyed by the indexless field path ("LoadBalancers.TargetGroupArn"),
 // so lookups must strip indices before consulting the map.
 // Note: numeric segments at the root (e.g., "42") are preserved.
+//
+// The path escapes each literal map key as it is built, so it is split on
+// unescaped dots only and the segments are unescaped back to the field names a
+// schema declares its hints under. Reading it as a plain dot-separated list
+// would split one key into several and strip indices from the wrong places.
 func stripArrayIndices(path string) string {
 	if path == "" {
 		return path
 	}
 
-	parts := strings.Split(path, ".")
+	parts := pathkey.Split(path)
 	var filtered []string
 	for _, part := range parts {
 		// Only skip numeric parts if they are not the only part (root level).

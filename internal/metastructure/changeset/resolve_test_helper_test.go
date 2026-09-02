@@ -36,5 +36,5 @@ func buildChangesetForTest(
 	if err != nil {
 		return Changeset{}, err
 	}
-	return NewChangeset(resourceUpdates, append(targetUpdates, synth...), commandID, command, pkgmodel.FormaApplyModeReconcile)
+	return NewChangeset(resourceUpdates, append(targetUpdates, synth...), nil, commandID, command, pkgmodel.FormaApplyModeReconcile)
 }

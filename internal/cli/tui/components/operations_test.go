@@ -78,6 +78,24 @@ func TestPromptForOperations_OnlyReads(t *testing.T) {
 	assert.Equal(t, "", out)
 }
 
+// TestPromptForOperations_GeneratorCreateAndUpdate verifies a generator-only
+// command is never an empty prompt: creates and updates are counted and
+// worded like every other operation kind.
+func TestPromptForOperations_GeneratorCreateAndUpdate(t *testing.T) {
+	cmd := &apimodel.Command{
+		GeneratorUpdates: []apimodel.GeneratorUpdate{
+			{GeneratorLabel: "db-password", Operation: "create"},
+			{GeneratorLabel: "renamed", Operation: "update"},
+		},
+	}
+	out := PromptForOperations(theme.New("rich"), cmd)
+	plain := stripANSI(out)
+
+	assert.Contains(t, plain, "create 1 generator(s)")
+	assert.Contains(t, plain, "update 1 generator(s)")
+	assert.Contains(t, plain, "Do you want to continue?")
+}
+
 // TestPromptForOperations_UsesPassedTheme guards against a regression to the
 // old hardcoded theme.New("formae") bypass: it proves the rendered ANSI
 // colors come from the *passed* theme, not a fixed default, by rendering the
@@ -114,4 +132,63 @@ func TestOperationGlyphAndColor(t *testing.T) {
 	// Unknown/uncolored operations fall back to primary text, no glyph.
 	assert.Equal(t, "", OperationGlyph(th.Glyphs, apimodel.OperationRead))
 	assert.Equal(t, th.Palette.TextPrimary, OperationColor(th.Palette, apimodel.OperationRead))
+}
+
+// TestPromptForOperations_GeneratorDraw verifies a draw is counted and worded
+// in the confirmation sentence, so an operator is told a credential rotates
+// before they answer.
+func TestPromptForOperations_GeneratorDraw(t *testing.T) {
+	cmd := &apimodel.Command{
+		GeneratorUpdates: []apimodel.GeneratorUpdate{
+			{GeneratorLabel: "db-password", Operation: "draw"},
+		},
+	}
+	out := PromptForOperations(theme.New("rich"), cmd)
+	plain := stripANSI(out)
+
+	assert.Contains(t, plain, "rotate 1 generator(s)")
+	assert.Contains(t, plain, "every bound resource takes a new secret")
+	assert.Contains(t, plain, "Do you want to continue?")
+}
+
+// TestPromptForOperations_NothingWillRotate verifies the positive statement: a
+// command that changes a generator's row but draws no value says so, rather
+// than leaving an operator to infer it from the absence of a rotate clause.
+func TestPromptForOperations_NothingWillRotate(t *testing.T) {
+	cmd := &apimodel.Command{
+		GeneratorUpdates: []apimodel.GeneratorUpdate{
+			{GeneratorLabel: "db-password", Operation: "update"},
+		},
+	}
+	plain := stripANSI(PromptForOperations(theme.New("rich"), cmd))
+
+	assert.Contains(t, plain, "update 1 generator(s)")
+	assert.Contains(t, plain, noRotationStatement)
+	assert.NotContains(t, plain, "rotate 1 generator(s)")
+}
+
+// TestPromptForOperations_ARotationSuppressesTheNegative verifies the two
+// statements are mutually exclusive: a plan that does rotate never also claims
+// nothing will.
+func TestPromptForOperations_ARotationSuppressesTheNegative(t *testing.T) {
+	cmd := &apimodel.Command{
+		GeneratorUpdates: []apimodel.GeneratorUpdate{
+			{GeneratorLabel: "db-password", Operation: "update"},
+			{GeneratorLabel: "db-password", Operation: "draw"},
+		},
+	}
+	plain := stripANSI(PromptForOperations(theme.New("rich"), cmd))
+
+	assert.Contains(t, plain, "rotate 1 generator(s)")
+	assert.NotContains(t, plain, noRotationStatement)
+}
+
+// TestPromptForOperations_NoGeneratorsMakesNoRotationClaim verifies an ordinary
+// resource-only apply says nothing about rotation at all: the statement belongs
+// to plans where a generator is demonstrably in scope, not to every apply.
+func TestPromptForOperations_NoGeneratorsMakesNoRotationClaim(t *testing.T) {
+	plain := stripANSI(PromptForOperations(theme.New("rich"), buildMixedCommand()))
+
+	assert.NotContains(t, plain, noRotationStatement)
+	assert.NotContains(t, plain, "rotate")
 }

@@ -150,6 +150,7 @@ func TestGenerateResourceUpdatesForPatch_VPCSubnetReplaceScenario_WithoutCreatin
 		targetMap,
 		ds,
 		nil,
+		false,
 	)
 
 	assert.NoError(t, err)
@@ -287,7 +288,7 @@ func TestGenerateResourceUpdatesForApply_PatchMode(t *testing.T) {
 		},
 	}
 
-	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil)
+	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil, false)
 	assert.NoError(t, err)
 	assert.Len(t, updates, 1)
 	assert.Equal(t, OperationCreate, updates[0].Operation)
@@ -401,7 +402,7 @@ func TestResourceUpdatesForPatch_GeneratesUpdateOperationsForUnmanagedResources(
 		},
 	}
 
-	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil)
+	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil, false)
 	assert.NoError(t, err)
 	assert.Len(t, updates, 1)
 	assert.Equal(t, OperationUpdate, updates[0].Operation)
@@ -457,6 +458,7 @@ func TestTargetReplace_Patch_AllPortable(t *testing.T) {
 		desiredTargetMap,
 		ds,
 		replacedTargets,
+		false,
 	)
 
 	assert.NoError(t, err)
@@ -554,6 +556,7 @@ func TestTargetReplace_Patch_NonPortable_Rejected(t *testing.T) {
 		desiredTargetMap,
 		ds,
 		replacedTargets,
+		false,
 	)
 
 	require.Error(t, err)

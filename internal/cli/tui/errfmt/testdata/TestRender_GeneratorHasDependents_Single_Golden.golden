@@ -1,0 +1,7 @@
+[38;2;248;113;113mdeleting generator 'db-password' in stack 'platform' would leave 'api-secret' in stack 'web' bound to nothing.[0m
+[38;2;248;113;113m[0m                                                                                                              
+[38;2;248;113;113m[0m                                                                                                              [38;2;181;181;91mA generated value is never recoverable once the generator is gone, so a resource left[0m
+[38;2;181;181;91mbound to one can never be given a value again.[0m                                       
+[38;2;181;181;91m[0m                                                                                     
+[38;2;181;181;91m[0m                                                                                     To proceed and tear the bound resource(s) down as well, re-run with
+--on-dependents=cascade. To keep them, stop them binding this generator first.

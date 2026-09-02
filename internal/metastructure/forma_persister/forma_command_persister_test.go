@@ -1460,3 +1460,79 @@ func newFormaCommandPersisterWithDatastore(t *testing.T, ds datastore.Datastore)
 
 	return operator, sender, nil
 }
+
+// A completion that carries a failure reason (a failure recorded before any
+// plugin operation ran, so no progress entry holds a message) must land on the
+// persisted resource update, where the command's error surfaces read it.
+func TestFormaCommandPersister_MarkCompleteRecordsFailureReason(t *testing.T) {
+	formaCommand := newFormaCommandWithCreateResourceUpdate()
+	formaPersister, sender, err := newFormaCommandPersisterForTest(t)
+	assert.NoError(t, err)
+
+	storeResult := formaPersister.Call(sender, StoreNewFormaCommand{Command: *formaCommand})
+	assert.NoError(t, storeResult.Error)
+	assert.True(t, storeResult.Response.(bool))
+
+	resourceURI := formaCommand.ResourceUpdates[0].DesiredState.URI()
+	reason := "resource update failed before any plugin operation ran"
+
+	markComplete := messages.MarkResourceUpdateAsComplete{
+		CommandID:          formaCommand.ID,
+		ResourceURI:        resourceURI,
+		Operation:          resource_update.OperationCreate,
+		FinalState:         resource_update.ResourceUpdateStateFailed,
+		ResourceStartTs:    util.TimeNow(),
+		ResourceModifiedTs: util.TimeNow(),
+		FailureReason:      reason,
+	}
+	markRes := formaPersister.Call(sender, markComplete)
+	assert.NoError(t, markRes.Error)
+	assert.True(t, markRes.Response.(bool))
+
+	loadResult := formaPersister.Call(sender, LoadFormaCommand{CommandID: formaCommand.ID})
+	assert.NoError(t, loadResult.Error)
+	loaded, ok := loadResult.Response.(*forma_command.FormaCommand)
+	assert.True(t, ok)
+
+	assert.Equal(t, reason, loaded.ResourceUpdates[0].FailureReason)
+	assert.Equal(t, reason, loaded.ResourceUpdates[0].MostRecentFailureMessage())
+}
+
+// A retry that succeeds after a failed attempt must clear the failure reason
+// persisted by that earlier attempt: the completion's (empty) reason is
+// authoritative, so a succeeded update never reports an obsolete error. The
+// stored row carries the stale reason (as it does when a command is reloaded
+// mid-retry after a crash) while its state is still non-terminal.
+func TestFormaCommandPersister_SuccessfulRetryClearsPersistedFailureReason(t *testing.T) {
+	formaCommand := newFormaCommandWithCreateResourceUpdate()
+	formaCommand.ResourceUpdates[0].FailureReason = "resource update failed before any plugin operation ran"
+	formaPersister, sender, err := newFormaCommandPersisterForTest(t)
+	assert.NoError(t, err)
+
+	storeResult := formaPersister.Call(sender, StoreNewFormaCommand{Command: *formaCommand})
+	assert.NoError(t, storeResult.Error)
+	assert.True(t, storeResult.Response.(bool))
+
+	resourceURI := formaCommand.ResourceUpdates[0].DesiredState.URI()
+
+	succeeded := messages.MarkResourceUpdateAsComplete{
+		CommandID:          formaCommand.ID,
+		ResourceURI:        resourceURI,
+		Operation:          resource_update.OperationCreate,
+		FinalState:         resource_update.ResourceUpdateStateSuccess,
+		ResourceStartTs:    util.TimeNow(),
+		ResourceModifiedTs: util.TimeNow(),
+	}
+	res := formaPersister.Call(sender, succeeded)
+	assert.NoError(t, res.Error)
+	assert.True(t, res.Response.(bool))
+
+	loadResult := formaPersister.Call(sender, LoadFormaCommand{CommandID: formaCommand.ID})
+	assert.NoError(t, loadResult.Error)
+	loaded, ok := loadResult.Response.(*forma_command.FormaCommand)
+	assert.True(t, ok)
+
+	assert.Empty(t, loaded.ResourceUpdates[0].FailureReason)
+	assert.Empty(t, loaded.ResourceUpdates[0].MostRecentFailureMessage(),
+		"a succeeded update must not report a reason from an earlier failed attempt")
+}

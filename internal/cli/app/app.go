@@ -1215,6 +1215,36 @@ func (a *App) ExtractStacks(fromTUI bool) ([]*pkgmodel.Stack, []string, error) {
 	return stacks, nags, nil
 }
 
+// ExtractGenerators fetches the generator inventory from the agent. Mirrors
+// ExtractPolicies: a nil list becomes an empty one so callers never have to
+// distinguish "no generators" from "no answer".
+func (a *App) ExtractGenerators(fromTUI bool) ([]apimodel.GeneratorInventoryItem, []string, error) {
+	compatible, _, nags, err := a.runBeforeCommand(!fromTUI)
+	if !compatible {
+		return nil, nil, err
+	}
+
+	var generators []apimodel.GeneratorInventoryItem
+	err = a.withAuthRetry(func(authHeader http.Header, net *http.Client) error {
+		client := a.apiClient(authHeader, net)
+		g, err := client.ListGenerators()
+		if err != nil {
+			return err
+		}
+		generators = g
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if generators == nil {
+		generators = []apimodel.GeneratorInventoryItem{}
+	}
+
+	return generators, nags, nil
+}
+
 func (a *App) ExtractPolicies(fromTUI bool) ([]apimodel.PolicyInventoryItem, []string, error) {
 	compatible, _, nags, err := a.runBeforeCommand(!fromTUI)
 	if !compatible {

@@ -226,10 +226,12 @@ func InventoryCmd() *cobra.Command {
 	targets := targetsCmd()
 	stacks := stacksCmd()
 	policies := policiesCmd()
+	generators := generatorsCmd()
 	command.AddCommand(resources)
 	command.AddCommand(targets)
 	command.AddCommand(stacks)
 	command.AddCommand(policies)
+	command.AddCommand(generators)
 
 	return command
 }
@@ -405,6 +407,88 @@ func policiesCmd() *cobra.Command {
 	cmd.AddConfigFlags(command)
 
 	return command
+}
+
+func generatorsCmd() *cobra.Command {
+	command := &cobra.Command{
+		Use:   "generators",
+		Short: "Query inventory of generators",
+		PreRun: func(cmd *cobra.Command, args []string) {
+			logging.SetupClientLogging(fmt.Sprintf("%s/log/client.log", config.Config.DataDirectory()))
+		},
+		RunE: func(command *cobra.Command, args []string) error {
+			opts := &InventoryOptions{}
+			consumer, _ := command.Flags().GetString("output-consumer")
+			opts.OutputConsumer = printer.Consumer(consumer)
+			opts.MaxResults, _ = command.Flags().GetInt("max-results")
+			opts.MaxResultsSet = command.Flags().Changed("max-results")
+			opts.OutputSchema, _ = command.Flags().GetString("output-schema")
+
+			configFile, _ := command.Flags().GetString("config")
+			app, err := cmd.AppFromContext(command.Context(), configFile, "", command)
+			if err != nil {
+				return err
+			}
+
+			return runGenerators(app, opts)
+		},
+		Annotations: map[string]string{
+			"examples": "formae inventory generators" +
+				" | formae inventory generators --max-results 50",
+		},
+		SilenceErrors: true,
+	}
+
+	command.Flags().String("output-consumer", string(printer.ConsumerHuman), "Consumer of the command output (human | machine)")
+	command.Flags().String("output-schema", "json", "The schema to use for the machine output (json | yaml)")
+	command.Flags().Int("max-results", 200, "Maximum generators shown (0 = unlimited); applies to both the interactive view and piped output. Piped output defaults to 10.")
+	cmd.AddConfigFlags(command)
+
+	return command
+}
+
+func runGenerators(app *app.App, opts *InventoryOptions) error {
+	if err := validateInventoryOptions(opts); err != nil {
+		return err
+	}
+
+	if opts.OutputConsumer == printer.ConsumerMachine {
+		return runGeneratorsForMachines(app, opts)
+	}
+	return runGeneratorsForHumans(app, opts)
+}
+
+func runGeneratorsForMachines(app *app.App, opts *InventoryOptions) error {
+	generators, _, err := app.ExtractGenerators(false)
+	if err != nil {
+		return err
+	}
+
+	p := printer.NewMachineReadablePrinter[[]apimodel.GeneratorInventoryItem](os.Stdout, opts.OutputSchema)
+	return p.Print(&generators)
+}
+
+func runGeneratorsForHumans(app *app.App, opts *InventoryOptions) error {
+	// Human + TTY → interactive TUI (owns the whole screen; banner suppressed).
+	if isTerminal(os.Stdout) {
+		return launchInventoryTUI(app, inventoryview.TabGenerators, opts)
+	}
+
+	// Human + non-TTY → lipgloss print-and-exit path.
+	app.PrintBanner()
+
+	generators, _, err := app.ExtractGenerators(false)
+	if err != nil {
+		return err
+	}
+
+	maxResults := opts.MaxResults
+	if !opts.MaxResultsSet {
+		maxResults = 10
+	}
+	th := app.Theme()
+	_, _ = fmt.Println(renderInventoryGenerators(th, generators, time.Now(), maxResults, inventoryTermWidth(os.Stdout)))
+	return nil
 }
 
 func runPolicies(app *app.App, opts *InventoryOptions) error {

@@ -112,7 +112,10 @@ func RethemeUsage(c *cobra.Command, th *theme.Theme) {
 func ResolveConfiguredTheme(c *cobra.Command) *theme.Theme {
 	profileFlag, _ := c.Flags().GetString("profile")
 	configFlag, _ := c.Flags().GetString("config")
-	path, err := ResolveConfigPath(configFlag, profileFlag)
+	// Rendering help must not write to the store: a machine that has not signed
+	// in yet would get a localhost default profile it never asked for, and the
+	// theme is only a preference to read.
+	path, err := ResolveExistingConfigPath(configFlag, profileFlag)
 	if err != nil {
 		return theme.New("formae")
 	}
@@ -141,34 +144,6 @@ func AddConfigFlags(c *cobra.Command) {
 // file path. Exactly one of config/profile may be non-empty (cobra enforces the
 // mutual exclusion). With neither, it resolves the active profile (running
 // migration/bootstrap).
-func ResolveConfigPath(configFlag, profileFlag string) (string, error) {
-	if profileFlag != "" {
-		if err := store.ValidateName(profileFlag); err != nil {
-			return "", err // path-traversal / malformed name guard.
-		}
-		dir, err := store.ResolveConfigDir()
-		if err != nil {
-			return "", err
-		}
-		s := store.New(dir)
-		path := s.ProfilePath(profileFlag)
-		if _, err := os.Stat(path); err != nil {
-			if os.IsNotExist(err) {
-				return "", fmt.Errorf("%w: %s", store.ErrNotFound, profileFlag)
-			}
-			return "", err
-		}
-		return path, nil
-	}
-	if configFlag != "" {
-		return configFlag, nil
-	}
-	dir, err := store.ResolveConfigDir()
-	if err != nil {
-		return "", err
-	}
-	return store.New(dir).Resolve()
-}
 
 func AppFromContext(ctx context.Context, configFilePath, endpoint string, cmd *cobra.Command) (*app.App, error) {
 	if ctx.Value("app") != nil {
@@ -373,4 +348,50 @@ func ResolveOutput(c *cobra.Command) (printer.Consumer, string, error) {
 		return "", "", FlagErrorf("output-schema must be either 'json' or 'yaml' for machine consumer")
 	}
 	return consumer, schema, nil
+}
+
+// ResolveConfigPath turns the --config / --profile flags into a concrete config
+// file path, initializing an empty store if there is nothing yet. Use it from a
+// command that is about to work with the config it names.
+func ResolveConfigPath(configFlag, profileFlag string) (string, error) {
+	return resolveConfigPath(configFlag, profileFlag, true)
+}
+
+// ResolveExistingConfigPath is ResolveConfigPath for a caller that must leave
+// the store exactly as it found it, at the cost of failing where the other
+// would have created something to succeed with.
+func ResolveExistingConfigPath(configFlag, profileFlag string) (string, error) {
+	return resolveConfigPath(configFlag, profileFlag, false)
+}
+
+func resolveConfigPath(configFlag, profileFlag string, mayInitialize bool) (string, error) {
+	if profileFlag != "" {
+		if err := store.ValidateName(profileFlag); err != nil {
+			return "", err // path-traversal / malformed name guard.
+		}
+		dir, err := store.ResolveConfigDir()
+		if err != nil {
+			return "", err
+		}
+		s := store.New(dir)
+		path := s.ProfilePath(profileFlag)
+		if _, err := os.Stat(path); err != nil {
+			if os.IsNotExist(err) {
+				return "", fmt.Errorf("%w: %s", store.ErrNotFound, profileFlag)
+			}
+			return "", err
+		}
+		return path, nil
+	}
+	if configFlag != "" {
+		return configFlag, nil
+	}
+	dir, err := store.ResolveConfigDir()
+	if err != nil {
+		return "", err
+	}
+	if mayInitialize {
+		return store.New(dir).Resolve()
+	}
+	return store.New(dir).ResolveExisting()
 }
