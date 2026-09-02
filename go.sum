@@ -477,8 +477,8 @@ github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c h1:+mdjkGKdHQG3305AYmd
 github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c/go.mod h1:7rwL4CYBLnjLxUqIJNnCWiEdr3bn6IUYi15bNlnbCCU=
 github.com/pkg/sftp v1.13.6 h1:JFZT4XbOU7l77xGSpOdW+pwIMqP044IyjXX6FGyEKFo=
 github.com/pkg/sftp v1.13.6/go.mod h1:tz1ryNURKu77RL+GuCzmoJYxQczL3wLNNpPWagdg4Qk=
-github.com/platform-engineering-labs/jsonpatch v0.0.0-20260902033950-0cadda46e953 h1:mMOu7yEpHZ0hV9eF4a2blDFldoYdrStOkwdrgUOxgVc=
-github.com/platform-engineering-labs/jsonpatch v0.0.0-20260902033950-0cadda46e953/go.mod h1:pKZWs1WAxW55mYtE0kAtpvrIMPzaQhZoBWSKqUMndvY=
+github.com/platform-engineering-labs/jsonpatch v0.0.0-20260902143404-f2d316239b75 h1:UTmx1TFbnzx621g1gPrh/lL7XCJdUmC9KZx3083mXIo=
+github.com/platform-engineering-labs/jsonpatch v0.0.0-20260902143404-f2d316239b75/go.mod h1:pKZWs1WAxW55mYtE0kAtpvrIMPzaQhZoBWSKqUMndvY=
 github.com/platform-engineering-labs/oox/gcpname v0.0.0-20260825170105-3bd97cb18d15 h1:GXw4nPEfPsfSZNOla+IFrIb0gfkVUzjFW7lCXWcqRwQ=
 github.com/platform-engineering-labs/oox/gcpname v0.0.0-20260825170105-3bd97cb18d15/go.mod h1:wytVDQEOgo/0PLmMj0nOnisBzzqwemanNy9gpueH9Ik=
 github.com/platform-engineering-labs/oox/provx v0.0.0-20260831005205-99489fc5e7ca h1:ryZD/AytTmkmulsezbuBEH5BbOPpbbPU1cnHUF0OOUY=
