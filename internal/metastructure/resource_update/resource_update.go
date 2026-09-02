@@ -5,6 +5,7 @@
 package resource_update
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -555,7 +556,22 @@ func (ru *ResourceUpdate) updateResourceUpdateFromProgress(progress *resource.Pr
 		// what is now live under whatever this forma just declared. A
 		// read-shaped merge (sync, discovery) observes state nobody here
 		// caused and must not move the record.
-		if writeOrigin {
+		//
+		// A further guard: this recompute is only trustworthy when declaredDoc
+		// is a genuinely fresh declaration. RecordOnly's DesiredState.OwnedMembers
+		// is already the correct planning-time claim (there is no property
+		// write behind it to recompute from), and the same is true whenever
+		// declaredDoc is byte-identical to PreviousProperties — the factory's
+		// no-property-change paths (a label-only rename, bringing a resource
+		// under management without property changes, and RecordOnly itself)
+		// all set DesiredState.Properties to the existing row's stored value,
+		// so declaredDoc there is really "what is live", not "what this forma
+		// just declared". Recomputing from it would claim every live member,
+		// including a co-actor's, as this forma's own. Skipping leaves
+		// whatever the factory already stamped onto DesiredState.OwnedMembers
+		// (the planning-time claim) in place.
+		noFreshDeclaration := ru.RecordOnly || bytes.Equal(declaredDoc, ru.PreviousProperties)
+		if writeOrigin && !noFreshDeclaration {
 			ru.DesiredState.OwnedMembers = claimedMembers(declaredDoc, progress.ResourceProperties, ru.DesiredState.Schema)
 		}
 	}

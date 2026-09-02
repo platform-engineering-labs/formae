@@ -209,12 +209,20 @@ func NewResourceUpdateForExisting(
 			NativeID:           existingResource.NativeID,
 			ReadOnlyProperties: existingResource.ReadOnlyProperties,
 			Managed:            newResource.Managed,
-			// Carried forward on every update; a real update's echo recompute
-			// (updateResourceUpdateFromProgress) replaces this once the
-			// provider's write lands, so this is a placeholder for anything
-			// that reads DesiredState before then. A record-only update
-			// overrides it below with the freshly computed claim.
-			OwnedMembers: existingResource.OwnedMembers,
+			// The planning-time claim, not a blind carry of the existing
+			// record: whenever ownershipDelta is false the two are the same
+			// value anyway (that is what "no delta" means), and whenever it
+			// is true — most commonly a real update, but also a rename or a
+			// bring-under-management that happens to coincide with a live
+			// ownership shift — claim is the fresher, correct one. A real
+			// update's echo recompute (updateResourceUpdateFromProgress)
+			// replaces this once the provider's write lands, so for that case
+			// this is only a placeholder for anything that reads DesiredState
+			// before then. For a no-property-change update (record-only,
+			// label-only rename, bringing under management) the recompute is
+			// skipped — see updateResourceUpdateFromProgress — so this value
+			// is what survives.
+			OwnedMembers: claim,
 			// Preserve the existing row's KSUID across the update. The caller
 			// has already paired `existingResource` (current managed row) with
 			// `newResource` (desired declaration); the existing KSUID is the

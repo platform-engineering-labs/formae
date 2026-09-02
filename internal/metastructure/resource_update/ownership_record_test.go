@@ -432,21 +432,40 @@ func (p *recordOnlyGuardProcess) reachedPluginSpawn() bool {
 // itself (no test in this package drives update() through that branch), so
 // this test drives update() directly — the narrowest seam that exists for
 // exercising the executor's provider-skip predicates at all.
+//
+// Stored Tags carries "x", a co-actor's member this forma never declared and
+// never claimed (the planning-time claim, preset on DesiredState.OwnedMembers,
+// names only "a"). The synthesized success progress echoes the stored
+// properties verbatim (completeProperties merges PriorState.Properties/
+// ReadOnlyProperties), which is exactly the shape that used to make the echo
+// recompute treat "declared" and "live" as the same document and claim every
+// live member — "x" included. The post-update record must still equal the
+// planning-time claim, not the live set.
 func TestUpdate_RecordOnly_SkipsPluginCallAndSynthesizesSuccess(t *testing.T) {
+	schema := coOwnedSetSchema()
+	storedProps := json.RawMessage(`{"Tags":["a","x"]}`)
+	planningClaim := pkgmodel.OwnedMembers{"Tags": {Rule: "Set", Members: []string{`"a"`}}}
+
 	ru := &ResourceUpdate{
 		Operation:  OperationUpdate,
 		RecordOnly: true,
 		PriorState: pkgmodel.Resource{
 			Label: "sg", Type: "FakeAWS::EC2::SecurityGroup", Stack: "default", Target: "test-target",
-			Properties:         json.RawMessage(`{"Tags":["a","b"]}`),
+			Schema:             schema,
+			Properties:         storedProps,
 			ReadOnlyProperties: json.RawMessage(`{"GroupId":"sg-1"}`),
 		},
+		PreviousProperties: storedProps,
 		DesiredState: pkgmodel.Resource{
 			Ksuid: "ksuid-sg",
 			Label: "sg", Type: "FakeAWS::EC2::SecurityGroup", Stack: "default", Target: "test-target",
-			Properties:    json.RawMessage(`{"Tags":["a","b"]}`),
+			Schema:        schema,
+			Properties:    storedProps,
 			PatchDocument: json.RawMessage(`[]`),
-			OwnedMembers:  pkgmodel.OwnedMembers{"Tags": {Rule: "Set", Members: []string{`"a"`}}},
+			// The planning-time claim (this forma declares only "a"; "x" is
+			// live but a co-actor's), exactly as NewResourceUpdateForExisting
+			// would have stamped it.
+			OwnedMembers: planningClaim,
 		},
 	}
 	data := ResourceUpdateData{resourceUpdate: ru, commandID: "cmd-1"}
@@ -458,4 +477,52 @@ func TestUpdate_RecordOnly_SkipsPluginCallAndSynthesizesSuccess(t *testing.T) {
 	assert.False(t, proc.reachedPluginSpawn(), "a RecordOnly update must never spawn a plugin operator")
 	assert.Equal(t, StateFinishedSuccessfully, state)
 	assert.Equal(t, ResourceUpdateStateSuccess, data.resourceUpdate.State)
+	assert.True(t, pkgmodel.OwnedMembersEqual(planningClaim, data.resourceUpdate.DesiredState.OwnedMembers),
+		"the committed record must equal the planning-time claim, not the live set; got %#v",
+		data.resourceUpdate.DesiredState.OwnedMembers)
+}
+
+// The same over-claim risk exists for a label-only rename: it too synthesizes
+// a successful Update progress from the stored properties with no plugin
+// call, and it too must not let that synthetic echo repopulate OwnedMembers
+// from the full live set. RecordOnly is false here (this update is really a
+// rename), so the fix cannot rely on ru.RecordOnly alone — it must hold
+// because declaredDoc equals PreviousProperties (nothing about the
+// properties changed), the general condition the executor's synthetic path
+// guarantees whenever it fires.
+func TestUpdate_LabelOnlyRename_DoesNotOverClaimCoActorMember(t *testing.T) {
+	schema := coOwnedSetSchema()
+	storedProps := json.RawMessage(`{"Tags":["a","x"]}`)
+	planningClaim := pkgmodel.OwnedMembers{"Tags": {Rule: "Set", Members: []string{`"a"`}}}
+
+	ru := &ResourceUpdate{
+		Operation: OperationUpdate,
+		PriorState: pkgmodel.Resource{
+			Label: "sg-old", Type: "FakeAWS::EC2::SecurityGroup", Stack: "default", Target: "test-target",
+			Schema:     schema,
+			Properties: storedProps,
+		},
+		PreviousProperties: storedProps,
+		DesiredState: pkgmodel.Resource{
+			Ksuid: "ksuid-sg",
+			// Label differs from PriorState.Label; Stack/Target match — the
+			// isLabelOnlyChange shape.
+			Label: "sg-new", Type: "FakeAWS::EC2::SecurityGroup", Stack: "default", Target: "test-target",
+			Schema:        schema,
+			Properties:    storedProps,
+			PatchDocument: json.RawMessage(`[]`),
+			OwnedMembers:  planningClaim,
+		},
+	}
+	data := ResourceUpdateData{resourceUpdate: ru, commandID: "cmd-1"}
+	proc := &recordOnlyGuardProcess{stubUpdaterProcess: &stubUpdaterProcess{}, log: &capturingLog{}}
+
+	state, _, _, err := update(StateUpdating, data, proc)
+	require.NoError(t, err)
+
+	assert.False(t, proc.reachedPluginSpawn(), "a label-only rename must never spawn a plugin operator")
+	assert.Equal(t, StateFinishedSuccessfully, state)
+	assert.True(t, pkgmodel.OwnedMembersEqual(planningClaim, data.resourceUpdate.DesiredState.OwnedMembers),
+		"a label-only rename must not over-claim a co-actor's live member; got %#v",
+		data.resourceUpdate.DesiredState.OwnedMembers)
 }
