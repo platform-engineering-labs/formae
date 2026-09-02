@@ -61,7 +61,7 @@ require (
 	github.com/platform-engineering-labs/formae/pkg/model v0.1.6
 	github.com/platform-engineering-labs/formae/pkg/plugin v0.0.0-00010101000000-000000000000
 	github.com/platform-engineering-labs/formae/tests/testcontrol v0.0.0-00010101000000-000000000000
-	github.com/platform-engineering-labs/jsonpatch v0.0.0-20260620044942-701436c7758c
+	github.com/platform-engineering-labs/jsonpatch v0.0.0-20260902033950-0cadda46e953
 	github.com/platform-engineering-labs/oox/provx v0.0.0-20260831005205-99489fc5e7ca // re-pin to a real tag at release time
 	github.com/platform-engineering-labs/orbital v0.2.5
 	github.com/posthog/posthog-go v1.6.3
@@ -323,5 +323,3 @@ require (
 replace ergo.services/ergo => github.com/JeroenSoeters/ergo v1.999.320-pel.6
 
 replace github.com/apple/pkl-go => github.com/JeroenSoeters/pkl-go v0.12.1-pel.1
-
-replace github.com/platform-engineering-labs/jsonpatch => /home/jeroen/dev/pel/jsonpatch/.worktrees/co-owned
