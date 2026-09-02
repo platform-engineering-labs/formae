@@ -176,18 +176,21 @@ open class AutoReconcilePolicy extends Policy {
 /// inherit and none to guess at: a rotation spec that names no interval is an
 /// eval-time error, not a generator that rotates on some house default.
 open class RotationSpec {
-    /// One minute is the floor because it is what the scheduler can honour,
-    /// not because a faster cadence would be unwise. The rotator wakes on a
-    /// fixed sweep and rotates whatever is due, so an interval shorter than
-    /// that sweep cannot be met whatever it says. Sub-second intervals are
-    /// worse than merely unmet: the cadence is rendered in whole seconds, so
-    /// they truncate to zero, and a zero interval reads downstream as no
-    /// cadence declared at all, which is to say the credential is never
-    /// rotated by the very spec asking for it. A credential that has to turn
-    /// over faster than a minute wants short-lived credentials issued per
-    /// use, not a scheduler revisiting a long-lived one.
-    every: Duration(this >= 1.min
-        || throw("RotationSpec.every: \(this) is shorter than the one minute minimum rotation interval"))
+    /// Fifteen minutes is the floor because it is the fastest sustained
+    /// cadence the common secret store survives, with the scheduler's own
+    /// limits well inside it. AWS Secrets Manager retains every version from
+    /// the last 24 hours against a fixed quota of 100 versions per secret
+    /// and advises against sustained writes more often than once every 10
+    /// minutes, so a one-minute cadence exhausts the quota in under two
+    /// hours and every rotation after that fails. Separately, the rotator
+    /// wakes on a fixed sweep, so an interval shorter than that sweep could
+    /// not be met whatever it said, and sub-second intervals would truncate
+    /// to zero in the rendered whole-second cadence, reading downstream as
+    /// no cadence at all. A credential that has to turn over faster than
+    /// this wants short-lived credentials issued per use, not a scheduler
+    /// revisiting a long-lived one.
+    every: Duration(this >= 15.min
+        || throw("RotationSpec.every: \(this) is shorter than the fifteen minute minimum rotation interval"))
 
     local self = this
     // Output
