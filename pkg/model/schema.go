@@ -57,6 +57,19 @@ type FieldHint struct {
 	// UpdateMethod; typically paired with Atomic on opaque document fields.
 	PreserveEmptyValues bool   `json:"PreserveEmptyValues" pkl:"PreserveEmptyValues"`
 	Format              string `json:"Format" pkl:"Format"` // "" = opaque String; "json" = serialized JSON document
+	// CoOwned marks a collection field whose live content legitimately has
+	// writers other than this forma. nil = not co-owned.
+	CoOwned *CoOwnership `json:"CoOwned,omitempty" pkl:"CoOwned"`
+}
+
+// CoOwnership declares that a field's live collection is shared with writers
+// other than the owning forma (e.g. a security group's rule set, or a
+// mapping populated in part by the platform itself).
+type CoOwnership struct {
+	// SystemPatterns are glob patterns over member identities naming entries
+	// injected by the platform itself. Consulted only by extract on resources
+	// with no ownership record; never by plan or drift.
+	SystemPatterns []string `json:"SystemPatterns,omitempty" pkl:"SystemPatterns"`
 }
 
 // UnmarshalJSON normalizes the deprecated AttachesTo alias into EdgeKind so
