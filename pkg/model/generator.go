@@ -103,6 +103,58 @@ func (g *PasswordGenerator) MarshalJSON() ([]byte, error) {
 	})
 }
 
+// KeyPairGenerator produces an RSA key pair: a PKCS#8 PEM private half and a
+// PKIX PEM public half, the encodings the installation identity issuer's
+// decoders accept. Fields mirror the PKL KeyPairGenerator.render() output;
+// Type is a constant discriminator injected by MarshalJSON, as for
+// PasswordGenerator.
+type KeyPairGenerator struct {
+	Label    string        `json:"Label"`
+	Stack    string        `json:"Stack,omitempty"`
+	StackID  string        `json:"-"` // Set during processing, not from PKL
+	ID       string        `json:"-"` // Set during processing (translation), not from PKL
+	Alias    string        `json:"Alias,omitempty"`
+	Rotation *RotationSpec `json:"Rotation,omitempty"`
+	Bits     int           `json:"Bits"`
+}
+
+func (g *KeyPairGenerator) GetLabel() string           { return g.Label }
+func (g *KeyPairGenerator) GetType() string            { return "keypair" }
+func (g *KeyPairGenerator) GetStack() string           { return g.Stack }
+func (g *KeyPairGenerator) SetStack(stack string)      { g.Stack = stack }
+func (g *KeyPairGenerator) GetStackID() string         { return g.StackID }
+func (g *KeyPairGenerator) SetStackID(id string)       { g.StackID = id }
+func (g *KeyPairGenerator) GetID() string              { return g.ID }
+func (g *KeyPairGenerator) SetID(id string)            { g.ID = id }
+func (g *KeyPairGenerator) GetAlias() string           { return g.Alias }
+func (g *KeyPairGenerator) GetRotation() *RotationSpec { return g.Rotation }
+
+// MarshalJSON injects the "Type": "keypair" discriminator, mirroring
+// PasswordGenerator's.
+func (g *KeyPairGenerator) MarshalJSON() ([]byte, error) {
+	type alias KeyPairGenerator
+	return json.Marshal(struct {
+		Type string `json:"Type"`
+		alias
+	}{
+		Type:  g.GetType(),
+		alias: alias(*g),
+	})
+}
+
+// GeneratorOutputNames returns the named outputs a generator's draw produces,
+// in the order the PKL outputs class declares them. Every arm's Draw returns
+// exactly these keys, and a $gen envelope's $output must be one of the bound
+// generator's names.
+func GeneratorOutputNames(g Generator) []string {
+	switch g.(type) {
+	case *KeyPairGenerator:
+		return []string{"privateKey", "publicKey"}
+	default:
+		return []string{"value"}
+	}
+}
+
 // ParseGenerator parses a single generator from JSON, dispatching on the
 // discriminated Type field the same way ParsePolicy does.
 func ParseGenerator(raw json.RawMessage) (Generator, error) {
@@ -118,6 +170,12 @@ func ParseGenerator(raw json.RawMessage) (Generator, error) {
 		var g PasswordGenerator
 		if err := json.Unmarshal(raw, &g); err != nil {
 			return nil, fmt.Errorf("failed to parse password generator: %w", err)
+		}
+		return &g, nil
+	case "keypair":
+		var g KeyPairGenerator
+		if err := json.Unmarshal(raw, &g); err != nil {
+			return nil, fmt.Errorf("failed to parse keypair generator: %w", err)
 		}
 		return &g, nil
 	default:

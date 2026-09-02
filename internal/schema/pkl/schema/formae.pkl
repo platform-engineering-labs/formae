@@ -307,6 +307,36 @@ open class PasswordGenerator extends Generator {
     }
 }
 
+/// Generates an RSA key pair: a PKCS#8 PEM private half (`gen.privateKey`)
+/// and a PKIX PEM public half (`gen.publicKey`). One draw produces both, so
+/// two destinations bound to the two outputs always hold halves of the same
+/// pair; that is what makes this a single generator with two named outputs
+/// rather than two generators.
+open class KeyPairGenerator extends Generator {
+    /// RSA modulus size. The set matches what the consuming verifiers accept
+    /// and keeps generation time bounded; a size outside it is refused at
+    /// evaluation rather than surfacing as a draw failure later.
+    bits: Int(this == 2048 || this == 3072 || this == 4096
+        || throw("KeyPairGenerator.bits: \(this) is not a supported RSA key size (2048, 3072 or 4096)")) = 2048
+
+    local self = this
+
+    hidden gen: KeyPairOutputs(self.hasStack()) = new KeyPairOutputs {
+        genLabel = self.label
+        genStack = self.stack
+    }
+
+    function type(): String = "keypair"
+    function render(): Dynamic(self.hasStack()) = new {
+        Type = "keypair"
+        Label = self.label
+        Stack = self.stack
+        Alias = self.alias
+        Rotation = self.rotation?.render()
+        Bits = bits
+    }
+}
+
 /// A reference to one named output of a generator, e.g. `pw.gen.value`.
 /// Renders the $gen envelope the agent resolves at apply time.
 ///
@@ -366,6 +396,28 @@ open class PasswordOutputs extends GeneratorOutputs {
         genLabel = self.genLabel
         genStack = self.genStack
         output = "value"
+    }
+}
+
+/// The named outputs a KeyPairGenerator produces. Both halves are Opaque:
+/// a public key stored opaquely is inert, and per-output visibility is a
+/// decision deliberately not taken yet.
+open class KeyPairOutputs extends GeneratorOutputs {
+    hidden genLabel: String?
+    hidden genStack: StackResolvable?
+
+    local self = this
+
+    hidden privateKey: GeneratorOutput = new GeneratorOutput {
+        genLabel = self.genLabel
+        genStack = self.genStack
+        output = "privateKey"
+    }
+
+    hidden publicKey: GeneratorOutput = new GeneratorOutput {
+        genLabel = self.genLabel
+        genStack = self.genStack
+        output = "publicKey"
     }
 }
 

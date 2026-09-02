@@ -63,7 +63,7 @@ type generationAdvancer interface {
 //
 // The drawn value exists in exactly two places, both of them in memory and
 // both of them for the lifetime of a single draw: GeneratorUpdaterData's
-// drawnValue field, and the GeneratorUpdateFinished message this actor sends
+// drawnValues field, and the GeneratorUpdateFinished message this actor sends
 // its requester before terminating. It is never written to the datastore,
 // never placed on the GeneratorUpdate (which IS persisted, and is projected
 // to the API), and never logged.
@@ -92,7 +92,7 @@ type DrawValue struct{}
 
 // GeneratorUpdateFinished is sent back to the requester when the draw
 // completes. It is the ONLY carrier of the drawn value — the analogue of
-// TargetUpdateFinished.ResolvedConfig. DrawnValue is populated on success and
+// TargetUpdateFinished.ResolvedConfig. DrawnValues is populated on success and
 // only on success; ErrorMessage is populated on failure and only on failure,
 // always from the fixed set of reasons above.
 //
@@ -105,7 +105,7 @@ type DrawValue struct{}
 type GeneratorUpdateFinished struct {
 	NodeURI      pkgmodel.FormaeURI
 	State        GeneratorUpdateState
-	DrawnValue   string
+	DrawnValues  map[string]string
 	GenerationID string
 	ErrorMessage string
 }
@@ -128,12 +128,12 @@ type GeneratorUpdaterData struct {
 	// datastore records the generation advance. Nothing else about a
 	// generator is written from here.
 	datastore generationAdvancer
-	// drawnValue holds the live credential between the draw and the finished
+	// drawnValues holds the live credential between the draw and the finished
 	// signal. It is deliberately unexported and deliberately absent from
 	// GeneratorUpdate: the update is marshalled into the command record, this
 	// struct is not.
-	drawnValue string
-	// generationID is the identity of the generation drawnValue was drawn
+	drawnValues map[string]string
+	// generationID is the identity of the generation drawnValues was drawn
 	// under, held alongside it for the same lifetime and reported with it.
 	generationID string
 	// errorMessage is one of the fixed operator-facing reasons above, set
@@ -258,7 +258,7 @@ func handleDrawValue(from gen.PID, state gen.Atom, data GeneratorUpdaterData, me
 	// is not a digest of anything itself.
 	generationID := util.NewID()
 
-	value, err := pkgmodel.Draw(spec, data.entropy)
+	values, err := pkgmodel.Draw(spec, data.entropy)
 	if err != nil {
 		// The error names spec internals; only the fixed reason is reported.
 		proc.Log().Error("GeneratorUpdater: failed to draw a value node=%s", nodeURI)
@@ -272,7 +272,7 @@ func handleDrawValue(from gen.PID, state gen.Atom, data GeneratorUpdaterData, me
 		return StateFinishedWithError, data, nil, nil
 	}
 
-	data.drawnValue = value
+	data.drawnValues = values
 	data.generationID = generationID
 	return StateFinishedSuccessfully, data, nil, nil
 }
@@ -293,7 +293,7 @@ func onGeneratorUpdaterStateChange(oldState gen.Atom, newState gen.Atom, data Ge
 	}
 	if newState == StateFinishedSuccessfully {
 		finished.State = GeneratorUpdateStateSuccess
-		finished.DrawnValue = data.drawnValue
+		finished.DrawnValues = data.drawnValues
 		finished.GenerationID = data.generationID
 	} else {
 		finished.ErrorMessage = data.errorMessage

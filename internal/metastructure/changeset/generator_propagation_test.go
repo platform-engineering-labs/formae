@@ -77,7 +77,7 @@ func TestGeneratorDrawFinished_DeliversTheValueInsideTheEnvelope(t *testing.T) {
 		generator_update.GeneratorUpdateFinished{
 			NodeURI:      draw.NodeURI(),
 			State:        generator_update.GeneratorUpdateStateSuccess,
-			DrawnValue:   "drawn-credential",
+			DrawnValues:  map[string]string{"value": "drawn-credential"},
 			GenerationID: "generation-1",
 		}, proc)
 
@@ -109,7 +109,7 @@ func TestGeneratorDrawFinished_MarksTheDrawSucceededAndReleasesItsDestination(t 
 		generator_update.GeneratorUpdateFinished{
 			NodeURI:      draw.NodeURI(),
 			State:        generator_update.GeneratorUpdateStateSuccess,
-			DrawnValue:   "drawn-credential",
+			DrawnValues:  map[string]string{"value": "drawn-credential"},
 			GenerationID: "generation-1",
 		}, proc)
 
@@ -197,14 +197,13 @@ func TestGeneratorDrawFinished_UndeliverableValueFailsClosed(t *testing.T) {
 	drawNode.Update.MarkInProgress()
 
 	actor, proc := testExecutorProcess(t)
-	_ = actor
 
 	data := ChangesetData{changeset: cs}
 	_, updated, _, _ := generatorUpdateFinished(gen.PID{}, StateProcessing, data,
 		generator_update.GeneratorUpdateFinished{
 			NodeURI:      draw.NodeURI(),
 			State:        generator_update.GeneratorUpdateStateSuccess,
-			DrawnValue:   "drawn-credential",
+			DrawnValues:  map[string]string{"value": "drawn-credential"},
 			GenerationID: "generation-1",
 		}, proc)
 
@@ -212,6 +211,25 @@ func TestGeneratorDrawFinished_UndeliverableValueFailsClosed(t *testing.T) {
 	assert.Nil(t, updated.changeset.DAG.Nodes[opURI])
 	assert.NotContains(t, string(ru.DesiredState.Properties), "drawn-credential",
 		"nothing is written when delivery is refused")
+
+	// The refusal must reach the operator, not only the log: the cascaded
+	// destinations are persisted with the structural delivery error as their
+	// failure reason, naming the destination — and never the value.
+	var reasons []string
+	for _, event := range actor.Events() {
+		callEvent, ok := event.(unit.CallEvent)
+		if !ok {
+			continue
+		}
+		if failed, ok := callEvent.Request.(forma_persister.MarkResourcesAsFailed); ok {
+			reasons = append(reasons, failed.FailureReason)
+		}
+	}
+	require.NotEmpty(t, reasons, "the cascaded failure must be persisted")
+	assert.Contains(t, reasons[0], "failed to deliver",
+		"the persisted reason must carry the delivery refusal, not be empty")
+	assert.NotContains(t, reasons[0], "drawn-credential",
+		"the persisted reason must never carry the value")
 }
 
 // A draw naming no generator delivers nothing. An authored, not yet
@@ -233,7 +251,7 @@ func TestPropagateDrawnGeneratorValue_WithoutAGeneratorIdentityDeliversNothing(t
 	)
 	require.NoError(t, err)
 
-	err = cs.DAG.propagateDrawnGeneratorValue("", "drawn-credential", "generation-1", pkgmodel.FormaApplyModeReconcile)
+	err = cs.DAG.propagateDrawnGeneratorValue("", map[string]string{"value": "drawn-credential"}, "generation-1", pkgmodel.FormaApplyModeReconcile)
 	require.Error(t, err, "a draw naming no generator must refuse delivery outright")
 	assert.NotContains(t, err.Error(), "drawn-credential")
 
@@ -256,7 +274,7 @@ func TestPropagateDrawnGeneratorValue_WithoutAGenerationDeliversNothing(t *testi
 	)
 	require.NoError(t, err)
 
-	err = cs.DAG.propagateDrawnGeneratorValue(generatorKsuid, "drawn-credential", "", pkgmodel.FormaApplyModeReconcile)
+	err = cs.DAG.propagateDrawnGeneratorValue(generatorKsuid, map[string]string{"value": "drawn-credential"}, "", pkgmodel.FormaApplyModeReconcile)
 	require.Error(t, err, "a draw naming no generation must refuse delivery outright")
 	assert.NotContains(t, err.Error(), "drawn-credential")
 
@@ -284,7 +302,7 @@ func TestPropagateDrawnGeneratorValue_SkipsATeardownDestination(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	require.NoError(t, cs.DAG.propagateDrawnGeneratorValue(generatorKsuid, "drawn-credential", "generation-1", pkgmodel.FormaApplyModeReconcile))
+	require.NoError(t, cs.DAG.propagateDrawnGeneratorValue(generatorKsuid, map[string]string{"value": "drawn-credential"}, "generation-1", pkgmodel.FormaApplyModeReconcile))
 
 	dying := cs.DAG.Nodes[createOperationURI(teardown.URI(), resource_update.OperationDelete)].Update.(*resource_update.ResourceUpdate)
 	assert.False(t, gjson.GetBytes(dying.DesiredState.Properties, "password.$value").Exists(),
@@ -309,7 +327,7 @@ func TestPropagateDrawnGeneratorValue_LeavesAnotherGeneratorsDestinationAlone(t 
 	)
 	require.NoError(t, err)
 
-	require.NoError(t, cs.DAG.propagateDrawnGeneratorValue(firstKsuid, "first-credential", "generation-1", pkgmodel.FormaApplyModeReconcile))
+	require.NoError(t, cs.DAG.propagateDrawnGeneratorValue(firstKsuid, map[string]string{"value": "first-credential"}, "generation-1", pkgmodel.FormaApplyModeReconcile))
 
 	firstRU := cs.DAG.Nodes[createOperationURI(first.URI(), resource_update.OperationCreate)].Update.(*resource_update.ResourceUpdate)
 	secondRU := cs.DAG.Nodes[createOperationURI(second.URI(), resource_update.OperationCreate)].Update.(*resource_update.ResourceUpdate)
@@ -359,7 +377,7 @@ func TestPropagateDrawnGeneratorValue_RegeneratesUnderTheChangesetsMode(t *testi
 			"cmd-mode-"+string(mode), pkgmodel.CommandApply, mode,
 		)
 		require.NoError(t, err)
-		require.NoError(t, cs.DAG.propagateDrawnGeneratorValue(generatorKsuid, "drawn", "generation-1", cs.Mode))
+		require.NoError(t, cs.DAG.propagateDrawnGeneratorValue(generatorKsuid, map[string]string{"value": "drawn"}, "generation-1", cs.Mode))
 		return cs.DAG.Nodes[createOperationURI(ru.URI(), resource_update.OperationUpdate)].Update.(*resource_update.ResourceUpdate)
 	}
 
@@ -470,4 +488,70 @@ func TestEverySynthesizedDrawHasADestinationWaitingOnIt(t *testing.T) {
 		[]resource_update.ResourceUpdate{stable, teardown}, nil, lookup)
 	require.NoError(t, err)
 	assert.Empty(t, draws, "a generator no destination needs a value from draws nothing")
+}
+
+// A multi-output draw delivers each destination the output its envelope
+// names. One string fanned to both halves of a key pair would apply cleanly
+// with the wrong material in one of them, which is the failure output-aware
+// delivery exists to prevent.
+func TestPropagateDrawnGeneratorValue_SelectsOutputsPerDestination(t *testing.T) {
+	generatorKsuid := util.NewID()
+
+	private := genBoundSecret("private-half", generatorKsuid)
+	private.DesiredState.Properties = json.RawMessage(`{"password":{"$gen":true,"$generator":"` +
+		generatorKsuid + `","$output":"privateKey","$visibility":"Opaque"}}`)
+	public := genBoundSecret("public-half", generatorKsuid)
+	public.DesiredState.Properties = json.RawMessage(`{"password":{"$gen":true,"$generator":"` +
+		generatorKsuid + `","$output":"publicKey","$visibility":"Opaque"}}`)
+
+	cs, err := NewChangeset(
+		[]resource_update.ResourceUpdate{private, public}, nil,
+		[]generator_update.GeneratorUpdate{drawOp("id-key", generatorKsuid)},
+		"cmd-two-outputs", pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile,
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, cs.DAG.propagateDrawnGeneratorValue(generatorKsuid,
+		map[string]string{"privateKey": "PRIVATE-PEM", "publicKey": "PUBLIC-PEM"},
+		"generation-1", pkgmodel.FormaApplyModeReconcile))
+
+	privateRU := cs.DAG.Nodes[createOperationURI(private.URI(), resource_update.OperationCreate)].Update.(*resource_update.ResourceUpdate)
+	publicRU := cs.DAG.Nodes[createOperationURI(public.URI(), resource_update.OperationCreate)].Update.(*resource_update.ResourceUpdate)
+	assert.Equal(t, "PRIVATE-PEM", gjson.GetBytes(privateRU.DesiredState.Properties, "password.$value").String())
+	assert.Equal(t, "PUBLIC-PEM", gjson.GetBytes(publicRU.DesiredState.Properties, "password.$value").String())
+}
+
+// A refusal at any destination leaves every destination untouched, whatever
+// order the walk visited them in. DAG ordering happens to keep half-delivered
+// nodes undispatchable, but credential delivery must not lean on that:
+// delivery is prepared for every destination before any is mutated.
+func TestPropagateDrawnGeneratorValue_RefusalMutatesNoDestination(t *testing.T) {
+	generatorKsuid := util.NewID()
+
+	deliverable := genBoundSecret("deliverable", generatorKsuid)
+	refusing := genBoundSecret("refusing", generatorKsuid)
+	refusing.DesiredState.Properties = json.RawMessage(`{"password":{"$gen":true,"$generator":"` +
+		generatorKsuid + `","$output":"privateKey","$visibility":"Opaque"}}`)
+
+	cs, err := NewChangeset(
+		[]resource_update.ResourceUpdate{deliverable, refusing}, nil,
+		[]generator_update.GeneratorUpdate{drawOp("db-password", generatorKsuid)},
+		"cmd-refusal-atomic", pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile,
+	)
+	require.NoError(t, err)
+
+	before := string(cs.DAG.Nodes[createOperationURI(deliverable.URI(), resource_update.OperationCreate)].
+		Update.(*resource_update.ResourceUpdate).DesiredState.Properties)
+
+	err = cs.DAG.propagateDrawnGeneratorValue(generatorKsuid,
+		map[string]string{"value": "drawn-credential"}, "generation-1", pkgmodel.FormaApplyModeReconcile)
+	require.Error(t, err, "a destination naming an output the draw lacks must refuse the delivery")
+	assert.Contains(t, err.Error(), "privateKey", "the refusal must name the output")
+	assert.NotContains(t, err.Error(), "drawn-credential")
+
+	after := string(cs.DAG.Nodes[createOperationURI(deliverable.URI(), resource_update.OperationCreate)].
+		Update.(*resource_update.ResourceUpdate).DesiredState.Properties)
+	assert.Equal(t, before, after,
+		"the deliverable destination must be untouched when a sibling refuses")
+	assert.NotContains(t, after, "drawn-credential")
 }

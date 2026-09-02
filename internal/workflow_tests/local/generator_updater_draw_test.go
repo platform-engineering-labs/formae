@@ -104,9 +104,9 @@ func TestGeneratorUpdater_DrawsAValueAndRecordsItsGeneration(t *testing.T) {
 			func(msg generator_update.GeneratorUpdateFinished) bool {
 				assert.Equal(t, generator_update.GeneratorUpdateStateSuccess, msg.State,
 					"a well-formed generator must draw: %s", msg.ErrorMessage)
-				assert.Len(t, msg.DrawnValue, declaredLen,
+				assert.Len(t, msg.DrawnValues["value"], declaredLen,
 					"the drawn value must have the declared length")
-				drawnValue = msg.DrawnValue
+				drawnValue = msg.DrawnValues["value"]
 				return true
 			},
 		)
@@ -175,7 +175,7 @@ func TestGeneratorUpdater_SameLabelInTwoStacksBothDraw(t *testing.T) {
 			testutil.ExpectMessageWithPredicate(t, received, 10*time.Second,
 				func(msg generator_update.GeneratorUpdateFinished) bool {
 					assert.Equal(t, generator_update.GeneratorUpdateStateSuccess, msg.State, msg.ErrorMessage)
-					lengths[len(msg.DrawnValue)] = true
+					lengths[len(msg.DrawnValues["value"])] = true
 					return true
 				},
 			)
@@ -222,7 +222,7 @@ func TestGeneratorUpdater_WithoutAnIdentityRefusesToDraw(t *testing.T) {
 		testutil.ExpectMessageWithPredicate(t, received, 10*time.Second,
 			func(msg generator_update.GeneratorUpdateFinished) bool {
 				assert.Equal(t, generator_update.GeneratorUpdateStateFailed, msg.State)
-				assert.Empty(t, msg.DrawnValue, "a refused draw carries no value")
+				assert.Empty(t, msg.DrawnValues, "a refused draw carries no value")
 				assert.NotEmpty(t, msg.ErrorMessage)
 				return true
 			},
@@ -257,7 +257,7 @@ func TestGeneratorUpdater_RecordedGenerationSpecHoldsNoDrawnValue(t *testing.T) 
 		testutil.ExpectMessageWithPredicate(t, received, 10*time.Second,
 			func(msg generator_update.GeneratorUpdateFinished) bool {
 				require.Equal(t, generator_update.GeneratorUpdateStateSuccess, msg.State, msg.ErrorMessage)
-				drawnValue = msg.DrawnValue
+				drawnValue = msg.DrawnValues["value"]
 				return true
 			},
 		)

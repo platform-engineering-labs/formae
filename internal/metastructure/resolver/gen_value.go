@@ -52,7 +52,15 @@ import (
 // have diverged, and writing a credential over an arbitrary node would put
 // plaintext somewhere nothing marked opaque. Errors name the path only —
 // never the value.
-func SetGenValues(properties json.RawMessage, generatorKsuid string, paths []string, value string) (json.RawMessage, error) {
+// Each occurrence receives the output its envelope names ($output; absent
+// means "value", the single-output arms' only name). An occurrence naming an
+// output the draw did not produce is a hard error naming the path and the
+// output: translation validates $output against the union across generator
+// kinds, so a destination bound to the wrong KIND's output is only catchable
+// here, where the draw's actual outputs are in hand. Skipping it would leave
+// an undrawn envelope to dispatch; substituting another output would hand a
+// provider the wrong credential with nothing anywhere erroring.
+func SetGenValues(properties json.RawMessage, generatorKsuid string, paths []string, values map[string]string) (json.RawMessage, error) {
 	result := string(properties)
 
 	for _, path := range paths {
@@ -65,6 +73,15 @@ func SetGenValues(properties json.RawMessage, generatorKsuid string, paths []str
 		}
 		if got := pkgmodel.GenGeneratorKSUID(node); got != generatorKsuid {
 			return nil, fmt.Errorf("cannot deliver a generated value: the generator reference at %q names %q, not %q", path, got, generatorKsuid)
+		}
+
+		output := node.Get("$output").String()
+		if output == "" {
+			output = "value"
+		}
+		value, ok := values[output]
+		if !ok {
+			return nil, fmt.Errorf("cannot deliver a generated value: the generator reference at %q names output %q, which this generator's draw does not produce", path, output)
 		}
 
 		envelope := make(map[string]any)

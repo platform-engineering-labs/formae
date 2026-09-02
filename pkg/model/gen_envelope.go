@@ -144,22 +144,19 @@ func BindsGenerator(document []byte, generatorKsuid string) bool {
 	return false
 }
 
-// KnownGeneratorOutputs enumerates every output name a currently supported
-// generator type can produce. PasswordGenerator is the only arm today, and
-// its only output is "value" (see PasswordOutputs in the PKL schema); a
-// $gen naming any other output is rejected at translation.
-//
-// This is a flat union across every arm because there is only one arm. A
-// second generator type introduces an output name that is valid for IT but
-// not for others (e.g. a second arm's own "value"-shaped or differently
-// named output could collide or diverge in meaning), so checking $output
-// against this union alone stops being sufficient: the resolution site would
-// need to also resolve the referenced generator's TYPE (via genKeyToKsuid's
-// declared generator, or the datastore identity) and validate $output
-// against THAT type's own output set, not the global union. Widening this
-// map to add a key is not enough on its own at that point.
+// KnownGeneratorOutputs is the union of every output name any supported
+// generator kind can produce (GeneratorOutputNames per kind). Translation
+// checks $output against this union: it runs before the referenced generator
+// is resolved, so the union is the strongest check available there, and it
+// still rejects a typo'd name outright. The per-kind check happens at
+// delivery, where the draw's named outputs are in hand: a $gen whose $output
+// the bound generator's kind does not produce fails that resource update
+// with the path and output named, so a wrong-kind binding can never receive
+// a value silently.
 var KnownGeneratorOutputs = map[string]bool{
-	"value": true,
+	"value":      true,
+	"privateKey": true,
+	"publicKey":  true,
 }
 
 // GeneratorKey identifies a generator by the pair an authored $gen envelope

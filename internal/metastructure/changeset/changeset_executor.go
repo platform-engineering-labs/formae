@@ -527,12 +527,18 @@ func generatorUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, m
 				if gu.Generator != nil {
 					generatorKsuid = gu.Generator.GetID()
 				}
-				if err := data.changeset.DAG.propagateDrawnGeneratorValue(generatorKsuid, message.DrawnValue, message.GenerationID, data.changeset.Mode); err != nil {
+				if err := data.changeset.DAG.propagateDrawnGeneratorValue(generatorKsuid, message.DrawnValues, message.GenerationID, data.changeset.Mode); err != nil {
 					proc.Log().Error("Failed to deliver a drawn generator value, failing its destinations node=%s: %v",
 						message.NodeURI, err)
+					// The delivery error is structural — it names the
+					// generator, the destination and the output, never a
+					// value — and it travels as the failure reason so the
+					// refusal is visible on the command's failed resources,
+					// not only in this log line.
 					return handleUpdateFinished(from, state, data, updateFinishedEvent{
-						nodeURI:   message.NodeURI,
-						isSuccess: false,
+						nodeURI:       message.NodeURI,
+						isSuccess:     false,
+						failureReason: err.Error(),
 					}, proc)
 				}
 			}

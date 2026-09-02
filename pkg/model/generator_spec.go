@@ -109,6 +109,15 @@ func GenerationSatisfies(drawn, desired Generator) bool {
 			}
 		}
 		return true
+	case *KeyPairGenerator:
+		w, ok := desired.(*KeyPairGenerator)
+		if !ok {
+			return false
+		}
+		// Bits is the whole spec: a key of the drawn size satisfies exactly
+		// a spec asking for that size. There is no widening relation between
+		// sizes — a 2048-bit key does not satisfy a spec asking for 3072.
+		return d.Bits == w.Bits
 	default:
 		// An unknown arm is never provably satisfied.
 		return false
