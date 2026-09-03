@@ -804,16 +804,33 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 	// delta — planning built it solely to commit a shifted ownership record
 	// (see NewResourceUpdateForExisting). Its patch is always empty by
 	// construction, so hasEmptyPatch is included here only for symmetry with
-	// the other two predicates, never as a distinguishing condition.
+	// the other predicates, never as a distinguishing condition.
 	isRecordOnly := data.resourceUpdate.RecordOnly
 
-	if (isBringingUnderManagement || isLabelOnlyChange || isRecordOnly) && hasEmptyPatch {
+	// A rotation plans every transitive consumer of its destination so the
+	// drawn value can be delivered, and a consumer whose reference names a
+	// property the draw does not change resolves to the value it already
+	// holds: its patch is empty and there is nothing for the cloud to do. An
+	// empty patch is not a harmless payload — a provider may reject an update
+	// that changes nothing (CloudControl refuses an empty patchDocument) — so
+	// complete it here. Scoped to rotation-sourced updates: rotation is the
+	// only planner that co-plans consumers, and a forced user apply with an
+	// empty patch deliberately re-asserts state and must still dispatch.
+	isNoOpUpdate := data.resourceUpdate.Source == FormaCommandSourceGeneratorRotation &&
+		data.resourceUpdate.PriorState.Label == data.resourceUpdate.DesiredState.Label &&
+		data.resourceUpdate.PriorState.Stack == data.resourceUpdate.DesiredState.Stack &&
+		data.resourceUpdate.PriorState.Target == data.resourceUpdate.DesiredState.Target
+
+	if (isBringingUnderManagement || isLabelOnlyChange || isRecordOnly || isNoOpUpdate) && hasEmptyPatch {
 		switch {
 		case isLabelOnlyChange:
 			proc.Log().Debug("Renaming resource without property changes resourceURI=%v oldLabel=%s newLabel=%s",
 				data.resourceUpdate.DesiredState.URI(), data.resourceUpdate.PriorState.Label, data.resourceUpdate.DesiredState.Label)
 		case isRecordOnly:
 			proc.Log().Debug("Committing ownership record without property changes resourceURI=%v",
+				data.resourceUpdate.DesiredState.URI())
+		case isNoOpUpdate:
+			proc.Log().Debug("Completing update without property changes, skipping the provider call resourceURI=%v",
 				data.resourceUpdate.DesiredState.URI())
 		default:
 			proc.Log().Debug("Bringing resource under management without property changes resourceURI=%v oldStack=%s newStack=%s",
@@ -837,6 +854,8 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 			statusMessage = "Renamed without property changes"
 		case isRecordOnly:
 			statusMessage = "Committed ownership record without property changes"
+		case isNoOpUpdate:
+			statusMessage = "No property changes"
 		}
 
 		// Create synthetic ProgressResult with existing resource data
