@@ -123,6 +123,7 @@ examples {
         AttachesTo = false
         EdgeKind = "default"
         UpdateMethod = ""
+        CoOwned = null
         PreserveEmptyValues = false
         IndexField = ""
         Format = ""
@@ -138,6 +139,7 @@ examples {
         AttachesTo = false
         EdgeKind = "default"
         UpdateMethod = ""
+        CoOwned = null
         PreserveEmptyValues = false
         IndexField = ""
         Format = ""
@@ -153,6 +155,7 @@ examples {
         AttachesTo = false
         EdgeKind = "default"
         UpdateMethod = ""
+        CoOwned = null
         PreserveEmptyValues = false
         IndexField = ""
         Format = ""
@@ -179,6 +182,7 @@ examples {
           AttachesTo = false
           EdgeKind = "default"
           UpdateMethod = ""
+          CoOwned = null
           PreserveEmptyValues = false
           IndexField = ""
           Format = ""
@@ -194,6 +198,7 @@ examples {
           AttachesTo = false
           EdgeKind = "default"
           UpdateMethod = ""
+          CoOwned = null
           PreserveEmptyValues = false
           IndexField = ""
           Format = ""
@@ -209,6 +214,7 @@ examples {
           AttachesTo = false
           EdgeKind = "default"
           UpdateMethod = ""
+          CoOwned = null
           PreserveEmptyValues = false
           IndexField = ""
           Format = ""
@@ -266,6 +272,7 @@ examples {
             AttachesTo = false
             EdgeKind = "default"
             UpdateMethod = ""
+            CoOwned = null
             PreserveEmptyValues = false
             IndexField = ""
             Format = ""
@@ -281,6 +288,7 @@ examples {
             AttachesTo = false
             EdgeKind = "default"
             UpdateMethod = ""
+            CoOwned = null
             PreserveEmptyValues = false
             IndexField = ""
             Format = ""
@@ -296,6 +304,7 @@ examples {
             AttachesTo = false
             EdgeKind = "default"
             UpdateMethod = ""
+            CoOwned = null
             PreserveEmptyValues = false
             IndexField = ""
             Format = ""
@@ -361,6 +370,7 @@ examples {
             AttachesTo = false
             EdgeKind = "default"
             UpdateMethod = ""
+            CoOwned = null
             PreserveEmptyValues = false
             IndexField = ""
             Format = ""
@@ -376,6 +386,7 @@ examples {
             AttachesTo = false
             EdgeKind = "default"
             UpdateMethod = ""
+            CoOwned = null
             PreserveEmptyValues = false
             IndexField = ""
             Format = ""
@@ -391,6 +402,7 @@ examples {
             AttachesTo = false
             EdgeKind = "default"
             UpdateMethod = ""
+            CoOwned = null
             PreserveEmptyValues = false
             IndexField = ""
             Format = ""
@@ -440,6 +452,7 @@ examples {
             AttachesTo = false
             EdgeKind = "default"
             UpdateMethod = ""
+            CoOwned = null
             PreserveEmptyValues = false
             IndexField = ""
             Format = ""
@@ -455,6 +468,7 @@ examples {
             AttachesTo = false
             EdgeKind = "default"
             UpdateMethod = ""
+            CoOwned = null
             PreserveEmptyValues = false
             IndexField = ""
             Format = ""
@@ -470,6 +484,7 @@ examples {
             AttachesTo = false
             EdgeKind = "default"
             UpdateMethod = ""
+            CoOwned = null
             PreserveEmptyValues = false
             IndexField = ""
             Format = ""
@@ -485,6 +500,7 @@ examples {
             AttachesTo = false
             EdgeKind = "default"
             UpdateMethod = ""
+            CoOwned = null
             PreserveEmptyValues = false
             IndexField = ""
             Format = ""
@@ -500,6 +516,7 @@ examples {
             AttachesTo = false
             EdgeKind = "default"
             UpdateMethod = ""
+            CoOwned = null
             PreserveEmptyValues = false
             IndexField = ""
             Format = ""
@@ -515,6 +532,7 @@ examples {
             AttachesTo = false
             EdgeKind = "default"
             UpdateMethod = ""
+            CoOwned = null
             PreserveEmptyValues = false
             IndexField = ""
             Format = ""
@@ -530,6 +548,7 @@ examples {
             AttachesTo = false
             EdgeKind = "default"
             UpdateMethod = ""
+            CoOwned = null
             PreserveEmptyValues = false
             IndexField = ""
             Format = ""
@@ -574,6 +593,7 @@ examples {
         AttachesTo = false
         EdgeKind = "default"
         UpdateMethod = ""
+        CoOwned = null
         PreserveEmptyValues = false
         IndexField = ""
         Format = ""
@@ -589,6 +609,7 @@ examples {
         AttachesTo = false
         EdgeKind = "default"
         UpdateMethod = ""
+        CoOwned = null
         PreserveEmptyValues = false
         IndexField = ""
         Format = ""
@@ -604,6 +625,7 @@ examples {
         AttachesTo = false
         EdgeKind = "default"
         UpdateMethod = ""
+        CoOwned = null
         PreserveEmptyValues = false
         IndexField = ""
         Format = ""
@@ -623,6 +645,7 @@ examples {
         AttachesTo = false
         EdgeKind = "default"
         UpdateMethod = ""
+        CoOwned = null
         PreserveEmptyValues = false
         IndexField = ""
         Format = ""
@@ -638,6 +661,7 @@ examples {
         AttachesTo = false
         EdgeKind = "default"
         UpdateMethod = ""
+        CoOwned = null
         PreserveEmptyValues = false
         IndexField = ""
         Format = ""
@@ -657,6 +681,7 @@ examples {
         AttachesTo = false
         EdgeKind = "default"
         UpdateMethod = ""
+        CoOwned = null
         PreserveEmptyValues = false
         IndexField = ""
         Format = ""
@@ -672,6 +697,7 @@ examples {
         AttachesTo = false
         EdgeKind = "default"
         UpdateMethod = ""
+        CoOwned = null
         PreserveEmptyValues = false
         IndexField = ""
         Format = ""
@@ -698,6 +724,7 @@ examples {
           AttachesTo = false
           EdgeKind = "default"
           UpdateMethod = ""
+          CoOwned = null
           PreserveEmptyValues = false
           IndexField = ""
           Format = ""
@@ -713,6 +740,7 @@ examples {
           AttachesTo = false
           EdgeKind = "default"
           UpdateMethod = ""
+          CoOwned = null
           PreserveEmptyValues = false
           IndexField = ""
           Format = ""
@@ -728,6 +756,7 @@ examples {
           AttachesTo = false
           EdgeKind = "default"
           UpdateMethod = ""
+          CoOwned = null
           PreserveEmptyValues = false
           IndexField = ""
           Format = ""

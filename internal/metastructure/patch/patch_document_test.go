@@ -158,7 +158,7 @@ func TestCreatePatchDocument_PrimitiveArray(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			patches, err := createPatchDocument(tc.jsonA, tc.jsonB, []string{"label", "tags"}, nil, nil, nil, jsonpatch.Collections{}, nil, jsonpatch.PatchStrategyEnsureExists, nil, nil)
+			patches, err := createPatchDocument(tc.jsonA, tc.jsonB, []string{"label", "tags"}, nil, nil, nil, jsonpatch.Collections{}, nil, jsonpatch.PatchStrategyEnsureExists, nil, nil, nil)
 			if err != nil {
 				t.Fatalf("Error comparing JSONs: %v", err)
 			}
@@ -230,7 +230,7 @@ func TestCreatePatchDocument_ObjectArrayWithKeyValues(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			patches, err := createPatchDocument(tc.jsonA, tc.jsonB, []string{"label", "tags"}, nil, nil, nil, jsonpatch.Collections{EntitySets: jsonpatch.EntitySets{jsonpatch.Path("$.tags"): jsonpatch.Key("key")}}, nil, jsonpatch.PatchStrategyEnsureExists, nil, nil)
+			patches, err := createPatchDocument(tc.jsonA, tc.jsonB, []string{"label", "tags"}, nil, nil, nil, jsonpatch.Collections{EntitySets: jsonpatch.EntitySets{jsonpatch.Path("$.tags"): jsonpatch.Key("key")}}, nil, jsonpatch.PatchStrategyEnsureExists, nil, nil, nil)
 			if err != nil {
 				t.Fatalf("Error comparing JSONs: %v", err)
 			}
@@ -304,7 +304,7 @@ func TestCreatePatchDocument_ObjectArrayWithValues(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			patches, err := createPatchDocument(tc.jsonA, tc.jsonB, []string{"label", "tags"}, nil, nil, nil, jsonpatch.Collections{}, nil, jsonpatch.PatchStrategyEnsureExists, nil, nil)
+			patches, err := createPatchDocument(tc.jsonA, tc.jsonB, []string{"label", "tags"}, nil, nil, nil, jsonpatch.Collections{}, nil, jsonpatch.PatchStrategyEnsureExists, nil, nil, nil)
 			if err != nil {
 				t.Fatalf("Error comparing JSONs: %v", err)
 			}
@@ -359,7 +359,7 @@ func TestGeneratePatch(t *testing.T) {
 	resProps := resolver.NewResolvableProperties()
 	resProps.Add(resourceKsuid, "id", "def")
 
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, resProps, schema, pkgmodel.FormaApplyModePatch)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, resProps, schema, nil, pkgmodel.FormaApplyModePatch)
 
 	assert.NoError(t, err)
 	// val2 is createOnly and changed → a non-empty createOnlyPatch is returned
@@ -431,7 +431,7 @@ func TestGeneratePatch_NestedCreateOnlyTriggersReplacement(t *testing.T) {
 		},
 	}
 
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModePatch)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, resolver.NewResolvableProperties(), schema, nil, pkgmodel.FormaApplyModePatch)
 	require.NoError(t, err)
 	require.NotEmpty(t, createOnlyPatch, "nested createOnly change must produce a non-empty createOnlyPatch")
 
@@ -482,7 +482,7 @@ func TestGeneratePatch_ShouldResolveRefs(t *testing.T) {
 	props.Add(resourceKsuid, "other-id", "def")
 	props.Add(resourceKsuid, "notha-id", "ghi")
 
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, schema, pkgmodel.FormaApplyModePatch)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, schema, nil, pkgmodel.FormaApplyModePatch)
 	assert.NoError(t, err)
 	assert.Empty(t, createOnlyPatch)
 
@@ -519,7 +519,7 @@ func TestGeneratePatch_ListResolvableMatchingLiveValue_NoPatch(t *testing.T) {
 	props := resolver.NewResolvableProperties()
 	props.Add(resourceKsuid, "ValidationRecords.0.Values", `["_7a296.acm-validations.aws"]`)
 
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Empty(t, createOnlyPatch)
 	assert.Nil(t, patchDoc, "an unchanged list-valued resolvable must reconcile to a no-op")
@@ -543,7 +543,7 @@ func TestGeneratePatch_MultiValueListResolvableMatchingLiveValue_NoPatch(t *test
 	props := resolver.NewResolvableProperties()
 	props.Add(resourceKsuid, "Values", `["10.0.0.1","10.0.0.2"]`)
 
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Empty(t, createOnlyPatch)
 	assert.Nil(t, patchDoc)
@@ -567,7 +567,7 @@ func TestGeneratePatch_ListResolvableGenuineChange_EmitsReplace(t *testing.T) {
 	props := resolver.NewResolvableProperties()
 	props.Add(resourceKsuid, "ValidationRecords.0.Values", `["new.acm-validations.aws"]`)
 
-	patchDoc, _, _, err := generatePatch(document, patch, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := generatePatch(document, patch, nil, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	require.NotNil(t, patchDoc, "a genuine list change must still emit a patch")
 
@@ -598,7 +598,7 @@ func TestGeneratePatch_ObjectResolvableMatchingLiveValue_NoPatch(t *testing.T) {
 	props := resolver.NewResolvableProperties()
 	props.Add(resourceKsuid, "Endpoints", `{"host":"db.internal","port":5432,"tls":true,"aliases":["a","b"],"fallback":null}`)
 
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Empty(t, createOnlyPatch)
 	assert.Nil(t, patchDoc)
@@ -624,7 +624,7 @@ func TestGeneratePatch_JsonStringScalarResolvable_StaysString_NoPatch(t *testing
 	props := resolver.NewResolvableProperties()
 	props.Add(resourceKsuid, "PolicyDocument", `{"Version":"2012-10-17"}`)
 
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Empty(t, createOnlyPatch)
 	assert.Nil(t, patchDoc, "a JSON-string scalar must not be reparsed into a native structure")
@@ -650,7 +650,7 @@ func TestGeneratePatch_ArrayElementObjectResolvableMatchingLiveValue_NoPatch(t *
 	props := resolver.NewResolvableProperties()
 	props.Add(resourceKsuid, "Endpoints.0", `{"host":"db.internal","port":5432}`)
 
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Empty(t, createOnlyPatch)
 	assert.Nil(t, patchDoc, "an unchanged array of object-valued resolvables must reconcile to a no-op")
@@ -676,7 +676,7 @@ func TestGeneratePatch_StringNullResolvableAgainstArray_StaysString(t *testing.T
 	props := resolver.NewResolvableProperties()
 	props.Add(resourceKsuid, "Polymorphic", "null")
 
-	patchDoc, _, _, err := generatePatch(document, patch, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := generatePatch(document, patch, nil, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	require.NotNil(t, patchDoc)
 	assert.Contains(t, string(patchDoc), `"value":"null"`, "the literal string \"null\" must not be rewritten to JSON null")
@@ -833,7 +833,7 @@ func TestGeneratePatch_MixedNestedAndFlattenedStructures(t *testing.T) {
 	}
 	props := resolver.NewResolvableProperties()
 
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, schema, pkgmodel.FormaApplyModePatch)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, schema, nil, pkgmodel.FormaApplyModePatch)
 
 	assert.NoError(t, err)
 	assert.Empty(t, createOnlyPatch)
@@ -919,7 +919,7 @@ func TestGeneratePatch_RequiredOnUpdateFieldsGenerateAddOperation(t *testing.T) 
 	}
 	props := resolver.NewResolvableProperties()
 
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, schema, pkgmodel.FormaApplyModePatch)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, schema, nil, pkgmodel.FormaApplyModePatch)
 	require.NoError(t, err)
 	assert.Empty(t, createOnlyPatch)
 
@@ -987,7 +987,7 @@ func TestGeneratePatch_WriteOnlyCreateOnlyFieldsNoPhantomReplacement(t *testing.
 	}
 	props := resolver.NewResolvableProperties()
 
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, schema, pkgmodel.FormaApplyModePatch)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, schema, nil, pkgmodel.FormaApplyModePatch)
 	require.NoError(t, err)
 	assert.Empty(t, createOnlyPatch, "writeOnly+createOnly field should NOT trigger replacement")
 	assert.Nil(t, patchDoc, "No patch should be generated when only writeOnly+createOnly fields differ")
@@ -1027,7 +1027,7 @@ func TestGeneratePatch_WriteOnlyFieldUnchanged_NoAddOperation(t *testing.T) {
 	}
 	props := resolver.NewResolvableProperties()
 
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, schema, pkgmodel.FormaApplyModePatch)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, schema, nil, pkgmodel.FormaApplyModePatch)
 	require.NoError(t, err)
 	assert.Empty(t, createOnlyPatch)
 	assert.Nil(t, patchDoc, "writeOnly-only field unchanged should not force an add op")
@@ -1069,7 +1069,7 @@ func TestGeneratePatch_AddTagsWhileRetainingExisting(t *testing.T) {
 	}
 	props := resolver.NewResolvableProperties()
 
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Empty(t, createOnlyPatch)
 
@@ -1134,7 +1134,7 @@ func TestGeneratePatch_HasProviderDefaultFieldsNotRemoved(t *testing.T) {
 	}
 	props := resolver.NewResolvableProperties()
 
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Empty(t, createOnlyPatch)
 
@@ -1177,7 +1177,7 @@ func TestGeneratePatch_HasProviderDefaultFieldsOverridden(t *testing.T) {
 	}
 	props := resolver.NewResolvableProperties()
 
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Empty(t, createOnlyPatch)
 
@@ -1370,7 +1370,7 @@ func TestGeneratePatch_ReconcileRemovesOOBTagsWhenDesiredIsEmptyArray(t *testing
 	}
 	props := resolver.NewResolvableProperties()
 
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Empty(t, createOnlyPatch)
 
@@ -1396,7 +1396,7 @@ func TestGeneratePatch_ReconcileRemovesOOBTagsWhenDesiredIsNull(t *testing.T) {
 	}
 	props := resolver.NewResolvableProperties()
 
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Empty(t, createOnlyPatch)
 	require.NotNil(t, patchDoc, "expected a patch to handle the OOB tag, got nil")
@@ -1436,7 +1436,7 @@ func TestGeneratePatch_AbsentDesiredVsEmptyActualArray_NoPatch(t *testing.T) {
 	}
 	props := resolver.NewResolvableProperties()
 
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Nil(t, createOnlyPatch)
 	assert.Nil(t, patchDoc, "expected no patch ops when desired is absent and actual is empty array")
@@ -1539,7 +1539,7 @@ func TestGeneratePatch_OuterWithOnlyNestedEmpties_NoSpuriousSuppression(t *testi
 	}
 	props := resolver.NewResolvableProperties()
 
-	patchDoc, _, _, err := generatePatch(document, patch, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := generatePatch(document, patch, nil, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Nil(t, patchDoc, "expected nil patch; pinning current jsonpatch behavior for {Outer:{}}-vs-{} so any future change surfaces here, not as silent drift")
 }
@@ -1565,7 +1565,7 @@ func TestGeneratePatch_AbsentDesiredVsEmptyActualArray_PatchMode_NoPatch(t *test
 	}
 	props := resolver.NewResolvableProperties()
 
-	patchDoc, _, _, err := generatePatch(document, patch, nil, nil, props, schema, pkgmodel.FormaApplyModePatch)
+	patchDoc, _, _, err := generatePatch(document, patch, nil, nil, props, schema, nil, pkgmodel.FormaApplyModePatch)
 	require.NoError(t, err)
 	assert.Nil(t, patchDoc, "expected no patch ops in Patch mode either")
 }
@@ -1598,7 +1598,7 @@ func TestGeneratePatch_AbsentDesiredVsEmptyActual_EntitySetField_NotAWSSpecific_
 	}
 	props := resolver.NewResolvableProperties()
 
-	patchDoc, _, _, err := generatePatch(document, patch, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := generatePatch(document, patch, nil, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Nil(t, patchDoc)
 }
@@ -1745,7 +1745,7 @@ func TestGeneratePatch_ProviderDefaultInsideArray_NoPatch(t *testing.T) {
 	}
 	props := resolver.NewResolvableProperties()
 
-	patchDoc, _, _, err := generatePatch(document, patch, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := generatePatch(document, patch, nil, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Empty(t, patchDoc, "Expected no patch when only difference is provider default Cpu inside array")
 }
@@ -1782,7 +1782,7 @@ func TestGeneratePatch_AtomicField_SingleReplace(t *testing.T) {
 		},
 	}
 
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModePatch)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, resolver.NewResolvableProperties(), schema, nil, pkgmodel.FormaApplyModePatch)
 	require.NoError(t, err)
 	assert.Empty(t, createOnlyPatch)
 
@@ -1808,7 +1808,7 @@ func TestGeneratePatch_AtomicField_NoDiffNoPatch(t *testing.T) {
 		},
 	}
 
-	patchDoc, createOnlyPatch, _, err := generatePatch(doc, doc, nil, nil, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModePatch)
+	patchDoc, createOnlyPatch, _, err := generatePatch(doc, doc, nil, nil, resolver.NewResolvableProperties(), schema, nil, pkgmodel.FormaApplyModePatch)
 	require.NoError(t, err)
 	assert.Empty(t, createOnlyPatch)
 	assert.Empty(t, patchDoc, "Expected no patch when atomic field is identical")
@@ -1838,7 +1838,7 @@ func TestGeneratePatch_EmptyArrayOnCreateOnlyField_NoPatch(t *testing.T) {
 	}
 	props := resolver.NewResolvableProperties()
 
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, schema, pkgmodel.FormaApplyModePatch)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, schema, nil, pkgmodel.FormaApplyModePatch)
 	require.NoError(t, err)
 	assert.Empty(t, createOnlyPatch, "Empty arrays on createOnly fields should not trigger replacement")
 	assert.Empty(t, patchDoc, "Expected no patch when only difference is empty arrays on createOnly fields")
@@ -1863,7 +1863,7 @@ func TestGeneratePatch_NonEmptyArrayOnCreateOnlyField_TriggersReplacement(t *tes
 	}
 	props := resolver.NewResolvableProperties()
 
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, schema, pkgmodel.FormaApplyModePatch)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, schema, nil, pkgmodel.FormaApplyModePatch)
 	require.NoError(t, err)
 	assert.NotEmpty(t, createOnlyPatch, "Non-empty change to createOnly field should trigger replacement")
 	assert.NotEmpty(t, patchDoc)
@@ -1889,7 +1889,7 @@ func TestGeneratePatch_EmptyArrayOnNonCreateOnlyField_NoPatch(t *testing.T) {
 	}
 	props := resolver.NewResolvableProperties()
 
-	patchDoc, _, _, err := generatePatch(document, patch, nil, nil, props, schema, pkgmodel.FormaApplyModePatch)
+	patchDoc, _, _, err := generatePatch(document, patch, nil, nil, props, schema, nil, pkgmodel.FormaApplyModePatch)
 	require.NoError(t, err)
 	assert.Empty(t, patchDoc, "Expected no patch when only difference is empty arrays on non-createOnly fields")
 }
@@ -1913,7 +1913,7 @@ func TestGeneratePatch_ReplaceNonEmptyArrayPreserved(t *testing.T) {
 	}
 	props := resolver.NewResolvableProperties()
 
-	patchDoc, _, _, err := generatePatch(document, patch, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := generatePatch(document, patch, nil, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.NotEmpty(t, patchDoc, "Expected patch when user clears a collection via replace")
 }
@@ -2086,7 +2086,7 @@ func TestGeneratePatch_EntitySetProviderDefaults_PatchMode(t *testing.T) {
 	}
 	props := resolver.NewResolvableProperties()
 
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, schema, pkgmodel.FormaApplyModePatch)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, schema, nil, pkgmodel.FormaApplyModePatch)
 	require.NoError(t, err)
 	assert.Empty(t, createOnlyPatch)
 	assert.Empty(t, patchDoc, "Expected no patch when user-specified attribute matches actual")
@@ -2123,7 +2123,7 @@ func TestGeneratePatch_EntitySetProviderDefaults_WithUserChange(t *testing.T) {
 	}
 	props := resolver.NewResolvableProperties()
 
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, schema, pkgmodel.FormaApplyModePatch)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, schema, nil, pkgmodel.FormaApplyModePatch)
 	require.NoError(t, err)
 	assert.Empty(t, createOnlyPatch)
 	require.NotEmpty(t, patchDoc)
@@ -2173,7 +2173,7 @@ func TestGeneratePatch_ProviderDefaultInsideArray_SingleElement_NoReplace(t *tes
 	}
 
 	patchDoc, createOnlyPatch, _, err := generatePatch(
-		document, patch, nil, nil, resolver.NewResolvableProperties(), schema,
+		document, patch, nil, nil, resolver.NewResolvableProperties(), schema, nil,
 		pkgmodel.FormaApplyModeReconcile,
 	)
 	require.NoError(t, err)
@@ -2213,7 +2213,7 @@ func TestGeneratePatch_ProviderDefaultInsideArray_MixedElements_NoReplace(t *tes
 	}
 
 	patchDoc, createOnlyPatch, _, err := generatePatch(
-		document, patch, nil, nil, resolver.NewResolvableProperties(), schema,
+		document, patch, nil, nil, resolver.NewResolvableProperties(), schema, nil,
 		pkgmodel.FormaApplyModeReconcile,
 	)
 	require.NoError(t, err)
@@ -2270,7 +2270,7 @@ func TestGeneratePatch_ProviderDefaultInsideNestedArray_PortMappingHostPort_Mixe
 	}
 
 	patchDoc, createOnlyPatch, _, err := generatePatch(
-		document, patch, nil, nil, resolver.NewResolvableProperties(), schema,
+		document, patch, nil, nil, resolver.NewResolvableProperties(), schema, nil,
 		pkgmodel.FormaApplyModeReconcile,
 	)
 	require.NoError(t, err)
@@ -2326,7 +2326,7 @@ func TestGeneratePatch_ProviderDefaultInsideNestedArray_PortMappingHostPort(t *t
 	}
 
 	patchDoc, createOnlyPatch, _, err := generatePatch(
-		document, patch, nil, nil, resolver.NewResolvableProperties(), schema,
+		document, patch, nil, nil, resolver.NewResolvableProperties(), schema, nil,
 		pkgmodel.FormaApplyModeReconcile,
 	)
 	require.NoError(t, err)
@@ -2369,7 +2369,7 @@ func TestGeneratePatch_UserChangedFieldInsideArray_StillReplaces(t *testing.T) {
 	}
 
 	_, createOnlyPatch, _, err := generatePatch(
-		document, patch, nil, nil, resolver.NewResolvableProperties(), schema,
+		document, patch, nil, nil, resolver.NewResolvableProperties(), schema, nil,
 		pkgmodel.FormaApplyModeReconcile,
 	)
 	require.NoError(t, err)
@@ -2399,7 +2399,7 @@ func TestGeneratePatch_TopLevelProviderDefaultOverride_StillDiffs(t *testing.T) 
 	}
 
 	patchDoc, _, _, err := generatePatch(
-		document, patch, nil, nil, resolver.NewResolvableProperties(), schema,
+		document, patch, nil, nil, resolver.NewResolvableProperties(), schema, nil,
 		pkgmodel.FormaApplyModeReconcile,
 	)
 	require.NoError(t, err)
@@ -2437,7 +2437,7 @@ func TestGeneratePatch_EntitySetProviderDefaults_ReconcileMode(t *testing.T) {
 	}
 	props := resolver.NewResolvableProperties()
 
-	patchDoc, _, _, err := generatePatch(document, patch, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := generatePatch(document, patch, nil, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Empty(t, patchDoc, "Expected no patch when only provider-default elements differ in reconcile mode")
 }
@@ -2496,7 +2496,7 @@ func TestGeneratePatch_NestedListOrderingInsideArrayElement_NoReplace(t *testing
 	}
 
 	patchDoc, createOnlyPatch, _, err := generatePatch(
-		document, patch, nil, nil, resolver.NewResolvableProperties(), schema,
+		document, patch, nil, nil, resolver.NewResolvableProperties(), schema, nil,
 		pkgmodel.FormaApplyModeReconcile,
 	)
 	require.NoError(t, err)
@@ -2546,7 +2546,7 @@ func TestGeneratePatch_NestedPortMappingsOrderInsideArrayElement_NoReplace(t *te
 	}
 
 	patchDoc, createOnlyPatch, _, err := generatePatch(
-		document, patch, nil, nil, resolver.NewResolvableProperties(), schema,
+		document, patch, nil, nil, resolver.NewResolvableProperties(), schema, nil,
 		pkgmodel.FormaApplyModeReconcile,
 	)
 	require.NoError(t, err)
@@ -2587,7 +2587,7 @@ func TestGeneratePatch_NestedListContentChange_StillReplaces(t *testing.T) {
 	}
 
 	_, createOnlyPatch, _, err := generatePatch(
-		document, patch, nil, nil, resolver.NewResolvableProperties(), schema,
+		document, patch, nil, nil, resolver.NewResolvableProperties(), schema, nil,
 		pkgmodel.FormaApplyModeReconcile,
 	)
 	require.NoError(t, err)
@@ -2621,7 +2621,7 @@ func TestGeneratePatch_HasProviderDefault_PlainListing_OmittedDesired(t *testing
 	}
 	props := resolver.NewResolvableProperties()
 
-	patchDoc, _, _, err := generatePatch(document, patch, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := generatePatch(document, patch, nil, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Empty(t, patchDoc, "user omitted hasProviderDefault Listing — strip pass must suppress remove ops for runtime-registered entries")
 }
@@ -2640,7 +2640,7 @@ func TestGeneratePatch_HasProviderDefault_NullDesired_Defensive(t *testing.T) {
 	}
 	props := resolver.NewResolvableProperties()
 
-	patchDoc, _, _, err := generatePatch(document, patch, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := generatePatch(document, patch, nil, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Empty(t, patchDoc)
 }
@@ -2674,7 +2674,7 @@ func TestGeneratePatch_HasProviderDefault_PlainListing_PR269Rendering(t *testing
 	}
 	props := resolver.NewResolvableProperties()
 
-	patchDoc, _, _, err := generatePatch(document, patch, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := generatePatch(document, patch, nil, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 
 	// Document the bug shape: explicit empty Listing in patch + runtime entry
@@ -2718,7 +2718,7 @@ func TestGeneratePatch_EntitySetProviderDefault_OOBDrift_UserOmits_PostRevert(t 
 	}
 	props := resolver.NewResolvableProperties()
 
-	patchDoc, _, _, err := generatePatch(document, patch, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := generatePatch(document, patch, nil, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Empty(t, patchDoc, "characterization: with hasProviderDefault on an EntitySet, OOB-added entries are NOT removed when user omits — see test docstring for the open question")
 }
@@ -2755,7 +2755,7 @@ func TestGeneratePatch_EntitySetProviderDefault_OOBDrift_UserDeclaresOne(t *test
 	}
 	props := resolver.NewResolvableProperties()
 
-	patchDoc, _, _, err := generatePatch(document, patch, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := generatePatch(document, patch, nil, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Empty(t, patchDoc, "characterization: with hasProviderDefault on an EntitySet, OOB-added entries are tolerated even when user declares others")
 }
@@ -2792,7 +2792,7 @@ func TestGeneratePatch_EntitySetProviderDefault_ExplicitEmpty_DrainsLiveEntries(
 	}
 	props := resolver.NewResolvableProperties()
 
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Empty(t, createOnlyPatch)
 
@@ -2831,7 +2831,7 @@ func TestGeneratePatch_EntitySetProviderDefault_ExplicitEmpty_PatchMode_NoOps(t 
 	}
 	props := resolver.NewResolvableProperties()
 
-	patchDoc, _, _, err := generatePatch(document, patch, nil, nil, props, schema, pkgmodel.FormaApplyModePatch)
+	patchDoc, _, _, err := generatePatch(document, patch, nil, nil, props, schema, nil, pkgmodel.FormaApplyModePatch)
 	require.NoError(t, err)
 	assert.Empty(t, patchDoc, "Patch mode must not drain: EnsureExists emits no removes")
 }
@@ -2864,7 +2864,7 @@ func TestGeneratePatch_AtomicNestedArrayProducesReplace(t *testing.T) {
 		},
 	}
 
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, resolver.NewResolvableProperties(), schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Empty(t, createOnlyPatch)
 
@@ -2897,7 +2897,7 @@ func TestGeneratePatch_BundledUpdate_DropsSerializationOnlyHintedOp(t *testing.T
 	document := []byte(`{"folderUid":"a","configJson":"{\"x\":1,\"y\":2}"}`)
 	patch := []byte(`{"folderUid":"b","configJson":"{\n  \"y\": 2,\n  \"x\": 1\n}"}`)
 
-	mutable, _, _, err := GeneratePatch(document, patch, nil, nil, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModeReconcile)
+	mutable, _, _, err := GeneratePatch(document, patch, nil, nil, resolver.NewResolvableProperties(), schema, nil, pkgmodel.FormaApplyModeReconcile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2915,7 +2915,7 @@ func TestGeneratePatch_GenuineHintedChange_KeepsOp(t *testing.T) {
 	document := []byte(`{"configJson":"{\"x\":1}"}`)
 	patch := []byte(`{"configJson":"{\"x\":2}"}`)
 
-	mutable, _, _, err := GeneratePatch(document, patch, nil, nil, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModeReconcile)
+	mutable, _, _, err := GeneratePatch(document, patch, nil, nil, resolver.NewResolvableProperties(), schema, nil, pkgmodel.FormaApplyModeReconcile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2929,7 +2929,7 @@ func TestGeneratePatch_FallbackKeepsOpOnInvalidJSON(t *testing.T) {
 	document := []byte(`{"configJson":"{\"x\":1}"}`)
 	patch := []byte(`{"configJson":"not json"}`)
 
-	mutable, _, _, err := GeneratePatch(document, patch, nil, nil, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModeReconcile)
+	mutable, _, _, err := GeneratePatch(document, patch, nil, nil, resolver.NewResolvableProperties(), schema, nil, pkgmodel.FormaApplyModeReconcile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2942,7 +2942,7 @@ func TestGeneratePatch_CreateOnlyHinted_SerializationOnly_NoReplacement(t *testi
 	schema := pkgmodel.Schema{Fields: []string{"configJson"}, Hints: map[string]pkgmodel.FieldHint{"configJson": {Format: "json", CreateOnly: true}}}
 	document := []byte(`{"configJson":"{\"x\":1,\"y\":2}"}`)
 	patch := []byte(`{"configJson":"{\"y\":2,\"x\":1}"}`)
-	mutable, createOnly, _, err := GeneratePatch(document, patch, nil, nil, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModeReconcile)
+	mutable, createOnly, _, err := GeneratePatch(document, patch, nil, nil, resolver.NewResolvableProperties(), schema, nil, pkgmodel.FormaApplyModeReconcile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2959,7 +2959,7 @@ func TestGeneratePatch_ArrayPathNeverDropped(t *testing.T) {
 	schema := pkgmodel.Schema{Fields: []string{"tags"}, Hints: map[string]pkgmodel.FieldHint{"tags": {Format: "json"}}}
 	document := []byte(`{"tags":["a","b"]}`)
 	patch := []byte(`{"tags":["a","c"]}`)
-	mutable, _, _, err := GeneratePatch(document, patch, nil, nil, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModeReconcile)
+	mutable, _, _, err := GeneratePatch(document, patch, nil, nil, resolver.NewResolvableProperties(), schema, nil, pkgmodel.FormaApplyModeReconcile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2982,7 +2982,7 @@ func TestGeneratePatch_RefResolutionMatchesApplied_NoPatch(t *testing.T) {
 	props := resolver.NewResolvableProperties()
 	props.Add(ksuid, "Arn", arn)
 
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, stored, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, stored, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Empty(t, createOnlyPatch)
 	assert.Nil(t, patchDoc, "an unchanged reference must reconcile to a no-op regardless of echo form")
@@ -3003,7 +3003,7 @@ func TestGeneratePatch_CreateOnlyRefMatchesApplied_NoReplacement(t *testing.T) {
 	props := resolver.NewResolvableProperties()
 	props.Add(ksuid, "Arn", arn)
 
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, stored, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, stored, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Empty(t, createOnlyPatch, "unchanged createOnly reference must not trigger replacement")
 	var ops []jsonpatch.JsonPatchOperation
@@ -3025,7 +3025,7 @@ func TestGeneratePatch_RefResolutionDiffersFromApplied_PlansUpdate(t *testing.T)
 	props := resolver.NewResolvableProperties()
 	props.Add(ksuid, "Arn", newArn)
 
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, stored, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, stored, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Empty(t, createOnlyPatch)
 	var ops []jsonpatch.JsonPatchOperation
@@ -3047,7 +3047,7 @@ func TestGeneratePatch_AppliedWithoutStoredEcho_FallsBackToFresh(t *testing.T) {
 	props := resolver.NewResolvableProperties()
 	props.Add(ksuid, "Arn", arn)
 
-	patchDoc, _, _, err := generatePatch(document, patch, stored, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := generatePatch(document, patch, stored, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	var ops []jsonpatch.JsonPatchOperation
 	require.NoError(t, json.Unmarshal(patchDoc, &ops))
@@ -3134,7 +3134,7 @@ func TestGeneratePatch_LegacyRowWithoutApplied_KeepsFreshVsEcho(t *testing.T) {
 	props := resolver.NewResolvableProperties()
 	props.Add(ksuid, "Arn", arn)
 
-	patchDoc, _, _, err := generatePatch(document, patch, stored, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := generatePatch(document, patch, stored, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	var ops []jsonpatch.JsonPatchOperation
 	require.NoError(t, json.Unmarshal(patchDoc, &ops))
@@ -3152,7 +3152,7 @@ func TestGeneratePatch_OpaqueRefIgnoresApplied(t *testing.T) {
 	props := resolver.NewResolvableProperties()
 	props.Add(ksuid, "Value", "sent")
 
-	patchDoc, _, _, err := generatePatch(document, patch, stored, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := generatePatch(document, patch, stored, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	var ops []jsonpatch.JsonPatchOperation
 	require.NoError(t, json.Unmarshal(patchDoc, &ops))
@@ -3172,7 +3172,7 @@ func TestGeneratePatch_NumericRefMatchesApplied_NoPatch(t *testing.T) {
 	props := resolver.NewResolvableProperties()
 	props.Add(ksuid, "Port", "443")
 
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, stored, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, stored, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Empty(t, createOnlyPatch)
 	assert.Nil(t, patchDoc, "numeric ref matching $applied must reconcile to no-op")
@@ -3190,7 +3190,7 @@ func TestGeneratePatch_NumericRefDiffersFromApplied_PlansUpdate(t *testing.T) {
 	props := resolver.NewResolvableProperties()
 	props.Add(ksuid, "Port", "8443")
 
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, stored, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, stored, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Empty(t, createOnlyPatch)
 	var ops []jsonpatch.JsonPatchOperation
@@ -3219,7 +3219,7 @@ func TestGeneratePatch_ArrayRefCounterpartMatchedByURI_NotIndex(t *testing.T) {
 	props.Add(ksuid, "ArnA", arnA)
 	props.Add(ksuid, "ArnB", arnB)
 
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, stored, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, stored, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Empty(t, createOnlyPatch)
 	assert.Nil(t, patchDoc, "reordered echoes of unchanged references must reconcile to a no-op")
@@ -3243,7 +3243,7 @@ func TestGeneratePatch_ArrayRefDuplicateURIs_FailsClosed(t *testing.T) {
 	props := resolver.NewResolvableProperties()
 	props.Add(ksuid, "ArnA", arn)
 
-	patchDoc, _, _, err := generatePatch(document, patch, stored, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := generatePatch(document, patch, stored, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	var ops []jsonpatch.JsonPatchOperation
 	require.NoError(t, json.Unmarshal(patchDoc, &ops))
@@ -3264,7 +3264,7 @@ func TestGeneratePatch_ResolvedRefMatchingApplied_NoPatch(t *testing.T) {
 	patch := fmt.Appendf(nil, `{"TargetKeyId": %q}`, arn)
 	schema := pkgmodel.Schema{Fields: []string{"TargetKeyId"}}
 
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, stored, desired, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, stored, desired, resolver.NewResolvableProperties(), schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Empty(t, createOnlyPatch)
 	assert.Nil(t, patchDoc, "a resolved reference matching the applied baseline must not be rewritten")
@@ -3281,7 +3281,7 @@ func TestGeneratePatch_ResolvedRefDifferingFromApplied_PlansUpdate(t *testing.T)
 	patch := fmt.Appendf(nil, `{"TargetKeyId": %q}`, newArn)
 	schema := pkgmodel.Schema{Fields: []string{"TargetKeyId"}}
 
-	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, resolver.NewResolvableProperties(), schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	var ops []jsonpatch.JsonPatchOperation
 	require.NoError(t, json.Unmarshal(patchDoc, &ops))
@@ -3302,7 +3302,7 @@ func TestGeneratePatch_LiteralReplacingRefMatchingApplied_PlansUpdate(t *testing
 	patch := fmt.Appendf(nil, `{"TargetKeyId": %q}`, arn)
 	schema := pkgmodel.Schema{Fields: []string{"TargetKeyId"}}
 
-	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, resolver.NewResolvableProperties(), schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	var ops []jsonpatch.JsonPatchOperation
 	require.NoError(t, json.Unmarshal(patchDoc, &ops))
@@ -3322,7 +3322,7 @@ func TestGeneratePatch_ResolvedRefWithDifferentURI_PlansUpdate(t *testing.T) {
 	patch := fmt.Appendf(nil, `{"TargetKeyId": %q}`, arn)
 	schema := pkgmodel.Schema{Fields: []string{"TargetKeyId"}}
 
-	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, resolver.NewResolvableProperties(), schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	var ops []jsonpatch.JsonPatchOperation
 	require.NoError(t, json.Unmarshal(patchDoc, &ops))
@@ -3338,7 +3338,7 @@ func TestGeneratePatch_ResolvedOpaqueRefIgnoresApplied(t *testing.T) {
 	patch := []byte(`{"Secret": "sent"}`)
 	schema := pkgmodel.Schema{Fields: []string{"Secret"}}
 
-	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, resolver.NewResolvableProperties(), schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	var ops []jsonpatch.JsonPatchOperation
 	require.NoError(t, json.Unmarshal(patchDoc, &ops))
@@ -3356,7 +3356,7 @@ func TestGeneratePatch_ResolvedStructuredRefMatchingApplied_NoPatch(t *testing.T
 	patch := []byte(`{"Hosts": ["a", "b"]}`)
 	schema := pkgmodel.Schema{Fields: []string{"Hosts"}}
 
-	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, resolver.NewResolvableProperties(), schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Nil(t, patchDoc, "a structured resolution matching its baseline must not be rewritten")
 }
@@ -3379,7 +3379,7 @@ func TestGeneratePatch_ResolvedArrayRefsMatchingApplied_NoPatch(t *testing.T) {
 	patch := fmt.Appendf(nil, `{"Topics": [%q, %q]}`, arnA, arnB)
 	schema := pkgmodel.Schema{Fields: []string{"Topics"}}
 
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, stored, desired, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, stored, desired, resolver.NewResolvableProperties(), schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Empty(t, createOnlyPatch)
 	assert.Nil(t, patchDoc, "resolved array references matching their baselines must not be rewritten")
@@ -3404,7 +3404,7 @@ func TestGeneratePatch_ResolvedArrayRefPartiallyRepointed_PlansOnlyTheChange(t *
 	patch := fmt.Appendf(nil, `{"Topics": [%q, %q]}`, arnA, arnC)
 	schema := pkgmodel.Schema{Fields: []string{"Topics"}}
 
-	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, resolver.NewResolvableProperties(), schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	require.NotNil(t, patchDoc)
 	assert.Contains(t, string(patchDoc), arnC, "the repointed element must be written")
@@ -3428,7 +3428,7 @@ func TestGeneratePatch_ResolvedArrayRefsAmbiguousStored_FailsClosed(t *testing.T
 	patch := fmt.Appendf(nil, `{"Topics": [%q, %q]}`, arn, arn)
 	schema := pkgmodel.Schema{Fields: []string{"Topics"}}
 
-	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, resolver.NewResolvableProperties(), schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	var ops []jsonpatch.JsonPatchOperation
 	require.NoError(t, json.Unmarshal(patchDoc, &ops))
@@ -3452,7 +3452,7 @@ func TestGeneratePatch_ResolvedRefWithStaleValue_PlansFreshResolution(t *testing
 	props := resolver.NewResolvableProperties()
 	props.Add(ksuid, "Arn", freshArn)
 
-	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	var ops []jsonpatch.JsonPatchOperation
 	require.NoError(t, json.Unmarshal(patchDoc, &ops))
@@ -3476,7 +3476,7 @@ func TestGeneratePatch_CreateOnlyResolvedRefWithStaleValue_PlansReplacement(t *t
 	props := resolver.NewResolvableProperties()
 	props.Add(ksuid, "Arn", freshArn)
 
-	_, createOnlyPatch, _, err := generatePatch(document, patch, stored, desired, props, schema, pkgmodel.FormaApplyModeReconcile)
+	_, createOnlyPatch, _, err := generatePatch(document, patch, stored, desired, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	require.NotEmpty(t, createOnlyPatch, "a moved reference on an immutable field must still force a replacement")
 	assert.Contains(t, string(createOnlyPatch), freshArn)
@@ -3495,7 +3495,7 @@ func TestGeneratePatch_ResolvedRefFreshlyMatchingApplied_NoPatch(t *testing.T) {
 	props := resolver.NewResolvableProperties()
 	props.Add(ksuid, "Arn", arn)
 
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, stored, desired, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, stored, desired, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Empty(t, createOnlyPatch)
 	assert.Nil(t, patchDoc, "an unchanged reference stays suppressed under fresh resolution")
@@ -3523,7 +3523,7 @@ func TestGeneratePatch_ResolvedArrayRefWithStaleValue_PlansFreshResolution(t *te
 	props.Add(ksuid, "ArnA", arnA)
 	props.Add(ksuid, "ArnB", arnBMoved)
 
-	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	require.NotNil(t, patchDoc, "a moved array reference must be planned")
 	assert.Contains(t, string(patchDoc), arnBMoved, "the moved element carries its current resolution")
@@ -3546,7 +3546,7 @@ func TestGeneratePatch_ResolvedRefWithUnreadableJSONPath_Fails(t *testing.T) {
 	// The source resolves, but no longer carries the path the reference reads.
 	props.Add(ksuid, "Config", `{"host":"10.0.0.2"}`)
 
-	_, _, _, err := generatePatch(document, patch, stored, desired, props, schema, pkgmodel.FormaApplyModeReconcile)
+	_, _, _, err := generatePatch(document, patch, stored, desired, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.Error(t, err, "a reference that cannot be read through its path must not be treated as unchanged")
 	assert.Contains(t, err.Error(), "address")
 }
@@ -3567,7 +3567,7 @@ func TestGeneratePatch_CreateOnlyResolvedRefWithUnreadableJSONPath_Fails(t *test
 	props := resolver.NewResolvableProperties()
 	props.Add(ksuid, "Config", `{"name":"fn-v2"}`)
 
-	_, _, _, err := generatePatch(document, patch, stored, desired, props, schema, pkgmodel.FormaApplyModeReconcile)
+	_, _, _, err := generatePatch(document, patch, stored, desired, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.Error(t, err, "an unreadable reference on an immutable field must not silently suppress the replacement")
 }
 
@@ -3583,7 +3583,7 @@ func TestGeneratePatch_ResolvedArrayRefWithUnreadableJSONPath_Fails(t *testing.T
 	props := resolver.NewResolvableProperties()
 	props.Add(ksuid, "Config", `{"host":"10.0.0.2"}`)
 
-	_, _, _, err := generatePatch(document, patch, stored, desired, props, schema, pkgmodel.FormaApplyModeReconcile)
+	_, _, _, err := generatePatch(document, patch, stored, desired, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.Error(t, err, "an unreadable array reference must not be treated as unchanged")
 }
 
@@ -3599,7 +3599,7 @@ func TestGeneratePatch_ResolvedRefWithUnresolvableSource_UsesRecordedValue(t *te
 	patch := fmt.Appendf(nil, `{"Endpoint": %q}`, applied)
 	schema := pkgmodel.Schema{Fields: []string{"Endpoint"}}
 
-	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, resolver.NewResolvableProperties(), schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Nil(t, patchDoc, "an unavailable source leaves the recorded resolution standing")
 }
@@ -3618,7 +3618,7 @@ func TestGeneratePatch_ResolvedArrayRefChangingShape_PlansFreshResolution(t *tes
 	props := resolver.NewResolvableProperties()
 	props.Add(ksuid, "Cfg", "h2")
 
-	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	require.NotNil(t, patchDoc, "a reference resolving to a new shape must be planned")
 	assert.Contains(t, string(patchDoc), "h2", "the plan must carry the current resolution")
@@ -3638,7 +3638,7 @@ func TestGeneratePatch_CreateOnlyResolvedArrayRefChangingShape_PlansReplacement(
 	props := resolver.NewResolvableProperties()
 	props.Add(ksuid, "Cfg", "h2")
 
-	_, createOnlyPatch, _, err := generatePatch(document, patch, stored, desired, props, schema, pkgmodel.FormaApplyModeReconcile)
+	_, createOnlyPatch, _, err := generatePatch(document, patch, stored, desired, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	require.NotEmpty(t, createOnlyPatch, "a shape-changing reference on an immutable field must still force a replacement")
 }
@@ -3655,7 +3655,7 @@ func TestGeneratePatch_ResolvedArrayRefObjectMatchingApplied_NoPatch(t *testing.
 	props := resolver.NewResolvableProperties()
 	props.Add(ksuid, "Cfg", `{"host":"h1"}`)
 
-	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Nil(t, patchDoc, "an unchanged object-valued reference must not be rewritten")
 }
@@ -3678,7 +3678,7 @@ func TestGeneratePatch_AtomicObjectWithUnchangedRef_EmitsWriteForm(t *testing.T)
 	props := resolver.NewResolvableProperties()
 	props.Add(ksuid, "Arn", arn)
 
-	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	require.NotNil(t, patchDoc, "the sibling change must be planned")
 	assert.Contains(t, string(patchDoc), arn,
@@ -3712,7 +3712,7 @@ func TestGeneratePatch_OrderedArrayReorderedRefs_EmitWriteForm(t *testing.T) {
 	props.Add(ksuid, "ArnA", arnA)
 	props.Add(ksuid, "ArnB", arnB)
 
-	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	require.NotNil(t, patchDoc, "reordering an ordered list is a change")
 	assert.Contains(t, string(patchDoc), arnA)
@@ -3735,7 +3735,7 @@ func TestGeneratePatch_AtomicObjectWithResolvedRef_EmitsWriteForm(t *testing.T) 
 		Hints:  map[string]pkgmodel.FieldHint{"Cfg": {UpdateMethod: pkgmodel.FieldUpdateMethodAtomic}},
 	}
 
-	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, resolver.NewResolvableProperties(), schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	require.NotNil(t, patchDoc, "the sibling change must be planned")
 	assert.Contains(t, string(patchDoc), arn)
@@ -3758,7 +3758,7 @@ func TestGeneratePatch_AtomicObjectFullyUnchanged_NoPatch(t *testing.T) {
 	props := resolver.NewResolvableProperties()
 	props.Add(ksuid, "Arn", arn)
 
-	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Nil(t, patchDoc, "an unchanged atomic object must still reconcile to a no-op")
 }
@@ -3778,7 +3778,7 @@ func TestGeneratePatch_UnchangedRefWithDriftedLiveValue_PlansRepair(t *testing.T
 	props := resolver.NewResolvableProperties()
 	props.Add(ksuid, "Arn", arn)
 
-	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	var ops []jsonpatch.JsonPatchOperation
 	require.NoError(t, json.Unmarshal(patchDoc, &ops))
@@ -3802,7 +3802,7 @@ func TestGeneratePatch_CreateOnlyUnchangedRefWithDriftedLiveValue_PlansReplaceme
 	props := resolver.NewResolvableProperties()
 	props.Add(ksuid, "Arn", arn)
 
-	_, createOnlyPatch, _, err := generatePatch(document, patch, stored, desired, props, schema, pkgmodel.FormaApplyModeReconcile)
+	_, createOnlyPatch, _, err := generatePatch(document, patch, stored, desired, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	require.NotEmpty(t, createOnlyPatch, "drift on an immutable reference-fed field must still force a replacement")
 }
@@ -3818,7 +3818,7 @@ func TestGeneratePatch_ResolvedRefWithDriftedLiveValue_PlansRepair(t *testing.T)
 	patch := fmt.Appendf(nil, `{"TargetKeyId": %q}`, arn)
 	schema := pkgmodel.Schema{Fields: []string{"TargetKeyId"}}
 
-	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, resolver.NewResolvableProperties(), schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	var ops []jsonpatch.JsonPatchOperation
 	require.NoError(t, json.Unmarshal(patchDoc, &ops))
@@ -3847,7 +3847,7 @@ func TestGeneratePatch_ArrayRefWithDriftedLiveElement_PlansRepair(t *testing.T) 
 	props.Add(ksuid, "ArnA", arnA)
 	props.Add(ksuid, "ArnB", arnB)
 
-	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	require.NotNil(t, patchDoc, "a drifted array element must be repaired")
 	assert.Contains(t, string(patchDoc), arnB, "the repair carries the written form")
@@ -3868,7 +3868,7 @@ func TestGeneratePatch_AtomicObjectWithUnresolvableRef_EmitsWriteForm(t *testing
 		Hints:  map[string]pkgmodel.FieldHint{"Cfg": {UpdateMethod: pkgmodel.FieldUpdateMethodAtomic}},
 	}
 
-	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, resolver.NewResolvableProperties(), schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	require.NotNil(t, patchDoc, "the sibling change must be planned")
 	assert.Contains(t, string(patchDoc), arn, "the emitted object must carry the last written form")
@@ -3895,7 +3895,7 @@ func TestGeneratePatch_OrderedArrayUnresolvableRefsReordered_EmitWriteForm(t *te
 		Hints:  map[string]pkgmodel.FieldHint{"Topics": {UpdateMethod: pkgmodel.FieldUpdateMethodArray}},
 	}
 
-	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, resolver.NewResolvableProperties(), schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	require.NotNil(t, patchDoc, "reordering an ordered list is a change")
 	assert.NotContains(t, string(patchDoc), "name-a", "the provider's read form must not be sent back as a write")
@@ -3915,7 +3915,7 @@ func TestGeneratePatch_UnresolvableRefUnchanged_NoPatch(t *testing.T) {
 	patch := desired
 	schema := pkgmodel.Schema{Fields: []string{"TargetKeyId"}}
 
-	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, resolver.NewResolvableProperties(), schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Nil(t, patchDoc, "an unchanged reference must still reconcile to a no-op")
 }
@@ -3940,7 +3940,7 @@ func TestGeneratePatch_NumericArrayRefsUnchanged_NoPatch(t *testing.T) {
 	props.Add(ksuid, "PortA", "443")
 	props.Add(ksuid, "PortB", "8080")
 
-	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Nil(t, patchDoc, "unchanged numeric references must not be rewritten")
 }
@@ -3967,7 +3967,7 @@ func TestGeneratePatch_NumericOrderedArrayRefsReordered_EmitNumbers(t *testing.T
 	props.Add(ksuid, "PortA", "443")
 	props.Add(ksuid, "PortB", "8080")
 
-	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	require.NotNil(t, patchDoc, "reordering an ordered list is a change")
 	assert.NotContains(t, string(patchDoc), `"443"`, "a numeric reference must not be written back as text")
@@ -3985,7 +3985,7 @@ func TestGeneratePatch_BooleanRefUnchanged_NoPatch(t *testing.T) {
 	props := resolver.NewResolvableProperties()
 	props.Add(ksuid, "Flag", "true")
 
-	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Nil(t, patchDoc, "an unchanged boolean reference must not be rewritten")
 }
@@ -4005,7 +4005,7 @@ func TestGeneratePatch_AtomicObjectWithNumericRef_EmitsNumber(t *testing.T) {
 	props := resolver.NewResolvableProperties()
 	props.Add(ksuid, "PortA", "443")
 
-	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := generatePatch(document, patch, stored, desired, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	require.NotNil(t, patchDoc, "the sibling change must be planned")
 	assert.Contains(t, string(patchDoc), "443")
@@ -4030,7 +4030,7 @@ func TestGeneratePatch_ArrayNestedWriteOnlyCreateOnly_ChangeSurvivesTheStrip(t *
 		Hints:  map[string]pkgmodel.FieldHint{"Entries.Token": {WriteOnly: true, CreateOnly: true}},
 	}
 	props := resolver.NewResolvableProperties()
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, desired, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, desired, nil, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	combined := string(patchDoc) + string(createOnlyPatch)
 	assert.Contains(t, combined, "new",
@@ -4047,7 +4047,7 @@ func TestGeneratePatch_ArrayNestedWriteOnlyCreateOnly_NoBaselineStillStripped(t 
 		Hints:  map[string]pkgmodel.FieldHint{"Entries.Token": {WriteOnly: true, CreateOnly: true}},
 	}
 	props := resolver.NewResolvableProperties()
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, desired, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, desired, nil, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.NotContains(t, string(patchDoc)+string(createOnlyPatch), "Token")
 }
@@ -4063,7 +4063,7 @@ func TestGeneratePatch_UnkeyedArrayCreateOnlyChange_DeliveredAsMemberSwap(t *tes
 		Hints:  map[string]pkgmodel.FieldHint{"Entries.Token": {WriteOnly: true, CreateOnly: true}},
 	}
 	props := resolver.NewResolvableProperties()
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, desired, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, desired, nil, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Empty(t, createOnlyPatch,
 		"an unkeyed member change must not trigger a resource replacement")
@@ -4088,7 +4088,7 @@ func TestGeneratePatch_EntitySetCreateOnlyChange_TriggersReplacement(t *testing.
 		},
 	}
 	props := resolver.NewResolvableProperties()
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, desired, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, desired, nil, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Contains(t, string(createOnlyPatch), "/Entries/0/Token",
 		"a changed createOnly subfield on a paired member must classify as a createOnly diff")
@@ -4104,7 +4104,7 @@ func TestGeneratePatch_ArrayMemberSiblingChange_StaysMutable(t *testing.T) {
 		Hints:  map[string]pkgmodel.FieldHint{"Entries.Token": {WriteOnly: true, CreateOnly: true}},
 	}
 	props := resolver.NewResolvableProperties()
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, desired, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, desired, nil, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Empty(t, createOnlyPatch, "a sibling-only member change must not trigger a replacement")
 	assert.NotEmpty(t, patchDoc)
@@ -4120,7 +4120,7 @@ func TestGeneratePatch_UnkeyedArrayCreateOnlyValuesExchanged_DeliveredAsMemberSw
 		Hints:  map[string]pkgmodel.FieldHint{"Entries.Token": {WriteOnly: true, CreateOnly: true}},
 	}
 	props := resolver.NewResolvableProperties()
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, desired, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, desired, nil, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Empty(t, createOnlyPatch)
 	assert.NotEmpty(t, patchDoc)
@@ -4137,7 +4137,7 @@ func TestGeneratePatch_ArrayMembershipChange_StaysMutable(t *testing.T) {
 		Hints:  map[string]pkgmodel.FieldHint{"Entries.Token": {WriteOnly: true, CreateOnly: true}},
 	}
 	props := resolver.NewResolvableProperties()
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, desired, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, desired, nil, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Empty(t, createOnlyPatch, "a membership change must not trigger a replacement")
 	assert.NotEmpty(t, patchDoc)
@@ -4153,7 +4153,7 @@ func TestGeneratePatch_ArrayMemberAdded_StaysMutable(t *testing.T) {
 		Hints:  map[string]pkgmodel.FieldHint{"Entries.Token": {WriteOnly: true, CreateOnly: true}},
 	}
 	props := resolver.NewResolvableProperties()
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, desired, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, desired, nil, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Empty(t, createOnlyPatch, "adding a member must not trigger a resource replacement")
 	assert.NotEmpty(t, patchDoc)
@@ -4167,7 +4167,7 @@ func TestGeneratePatch_ArrayMemberRemoved_StaysMutable(t *testing.T) {
 		Hints:  map[string]pkgmodel.FieldHint{"Entries.Token": {WriteOnly: true, CreateOnly: true}},
 	}
 	props := resolver.NewResolvableProperties()
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, desired, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, desired, nil, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Empty(t, createOnlyPatch, "removing a member must not trigger a resource replacement")
 	assert.NotEmpty(t, patchDoc)
@@ -4232,7 +4232,7 @@ func TestGeneratePatch_StableSuppressedGenOccurrence_ProducesNoOp(t *testing.T) 
 	props := resolver.NewResolvableProperties()
 	props.SuppressStableAt("Password")
 
-	patchDoc, _, _, err := generatePatch(document, patch, nil, nil, props, schema, pkgmodel.FormaApplyModeReconcile)
+	patchDoc, _, _, err := generatePatch(document, patch, nil, nil, props, schema, nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 
 	var ops []jsonpatch.JsonPatchOperation

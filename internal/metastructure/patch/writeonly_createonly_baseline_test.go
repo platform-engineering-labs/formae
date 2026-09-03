@@ -40,7 +40,7 @@ func TestGeneratePatch_WriteOnlyCreateOnlyChanged_StoredBaseline_PlansReplacemen
 	}`)
 	props := resolver.NewResolvableProperties()
 
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, writeOnlyCreateOnlySchema(), pkgmodel.FormaApplyModeReconcile)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, writeOnlyCreateOnlySchema(), nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	if len(patchDoc) > 0 {
 		assert.JSONEq(t, "[]", string(patchDoc), "a createOnly change belongs in the createOnly patch, not the update patch")
@@ -63,7 +63,7 @@ func TestGeneratePatch_WriteOnlyCreateOnlyUnchanged_StoredBaseline_NoOp(t *testi
 	}`)
 	props := resolver.NewResolvableProperties()
 
-	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, writeOnlyCreateOnlySchema(), pkgmodel.FormaApplyModeReconcile)
+	patchDoc, createOnlyPatch, _, err := generatePatch(document, patch, nil, nil, props, writeOnlyCreateOnlySchema(), nil, pkgmodel.FormaApplyModeReconcile)
 	require.NoError(t, err)
 	assert.Empty(t, createOnlyPatch, "an unchanged writeOnly+createOnly field must not plan a replacement")
 	assert.Nil(t, patchDoc, "an unchanged writeOnly+createOnly field must not plan any op")

@@ -102,3 +102,19 @@ func PreserveEmptyRootFields(schema pkgmodel.Schema) map[string]bool {
 	}
 	return fields
 }
+
+// coOwnedFieldPaths returns the field-hint keys — dotted or not — of every
+// hint whose CoOwned annotation is set. Unlike PreserveEmptyRootFields, a
+// dotted (nested) key is kept rather than skipped: an explicit-empty
+// co-owned collection must reach the diff at whatever depth it lives at, not
+// only at the top level, or the field silently reads as omitted instead of
+// explicitly cleared (see stripNestedEmptyCollectionsExceptPaths).
+func coOwnedFieldPaths(hints map[string]pkgmodel.FieldHint) map[string]bool {
+	paths := map[string]bool{}
+	for name, hint := range hints {
+		if hint.CoOwned != nil {
+			paths[name] = true
+		}
+	}
+	return paths
+}

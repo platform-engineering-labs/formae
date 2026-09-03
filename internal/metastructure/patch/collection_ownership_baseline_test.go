@@ -48,6 +48,7 @@ func planFor(t *testing.T, actual, desired string, schemaFields, providerDefault
 		strategy,
 		nil, // converge fields
 		nil, // preserve roots
+		nil, // preserve paths
 	)
 	require.NoError(t, err)
 	out := make([]string, 0, len(ops))

@@ -43,6 +43,9 @@ func (m *mockDatastore) GetMostRecentFormaCommandByClientID(_ string) (*forma_co
 func (m *mockDatastore) GetPropertiesAtLastWrite(_ string) (json.RawMessage, error) {
 	return nil, nil
 }
+func (m *mockDatastore) GetOwnedMembers(_ string) (pkgmodel.OwnedMembers, error) {
+	return nil, nil
+}
 
 func (m *mockDatastore) GetResourceModificationsSinceLastReconcile(_ string) ([]ResourceModification, error) {
 	return nil, nil

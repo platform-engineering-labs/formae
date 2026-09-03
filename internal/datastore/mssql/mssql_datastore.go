@@ -762,6 +762,35 @@ ORDER BY r.version %s DESC`, binColl)
 	return datastore.ComposeWriteWitness(history), nil
 }
 
+// GetOwnedMembers returns the resource's stored ownership record from the
+// latest resource row (see datastore.Datastore.GetOwnedMembers).
+func (d *DatastoreMSSQL) GetOwnedMembers(ksuid string) (pkgmodel.OwnedMembers, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "GetOwnedMembers")
+	defer span.End()
+
+	query := fmt.Sprintf(`
+SELECT TOP (1) JSON_QUERY(data, '$.OwnedMembers')
+FROM resources
+WHERE ksuid = @p1
+ORDER BY version %s DESC`, binColl)
+
+	var raw sql.NullString
+	if err := d.conn.QueryRowContext(ctx, query, ksuid).Scan(&raw); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if !raw.Valid || raw.String == "" || raw.String == "null" {
+		return nil, nil
+	}
+	var owned pkgmodel.OwnedMembers
+	if err := json.Unmarshal([]byte(raw.String), &owned); err != nil {
+		return nil, err
+	}
+	return owned, nil
+}
+
 func (d *DatastoreMSSQL) fetchCurrentProperties(ctx context.Context, ksuid string) (json.RawMessage, error) {
 	query := fmt.Sprintf(`
 SELECT TOP (1) JSON_QUERY(data, '$.Properties')

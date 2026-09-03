@@ -1,0 +1,48 @@
+/*
+ * © 2026 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+// Shape-misuse test: coOwned paired with updateMethod "Array" has no
+// per-member merge to reconcile co-ownership against, so PKL eval must
+// reject it rather than let a schema author declare an unenforceable hint.
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+import "@formae/debug/debug.pkl"
+import "@fakeaws/fakeaws.pkl"
+import "pkl:reflect"
+
+@formae.ResourceHint {
+  type = "Formae::Test::CoOwnedArrayResource"
+  identifier = "Id"
+}
+local open class CoOwnedArrayResource extends formae.Resource {
+  @formae.FieldHint {
+    updateMethod = "Array"
+    coOwned = new formae.CoOwnership {
+      systemPatterns { "aws:*" }
+    }
+  }
+  members: Listing<String>?
+}
+
+forma {
+  new formae.Stack {
+    label = "co-owned-array-test"
+    description = "Stack for co-owned/Array shape-misuse test"
+  }
+
+  new formae.Target {
+    label = "default-aws-target"
+    config = new fakeaws.Config {
+      region = "us-west-2"
+    }
+  }
+
+  new debug.Consumer {
+    label = "co-owned-array-debug"
+    value = formae.fq.schema(reflect.Class(CoOwnedArrayResource)).toDynamic()
+  }
+}

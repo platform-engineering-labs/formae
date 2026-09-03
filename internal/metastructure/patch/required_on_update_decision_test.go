@@ -37,7 +37,7 @@ func TestGeneratePatch_UnchangedRequiredOnUpdateField_ReportsOnlyForceResent(t *
 	desired := []byte(`{"Name": "n1", "Token": "t1"}`)
 
 	patchDoc, createOnlyPatch, onlyForceResent, err := generatePatch(document, desired, nil, nil,
-		resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModePatch)
+		resolver.NewResolvableProperties(), schema, nil, pkgmodel.FormaApplyModePatch)
 	require.NoError(t, err)
 
 	assert.Empty(t, createOnlyPatch)
@@ -66,7 +66,7 @@ func TestGeneratePatch_ChangedFieldAlongsideRequiredOnUpdateField_KeepsForceRese
 	desired := []byte(`{"Name": "n2", "Token": "t1"}`)
 
 	patchDoc, createOnlyPatch, onlyForceResent, err := generatePatch(document, desired, nil, nil,
-		resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModePatch)
+		resolver.NewResolvableProperties(), schema, nil, pkgmodel.FormaApplyModePatch)
 	require.NoError(t, err)
 	assert.Empty(t, createOnlyPatch)
 	assert.False(t, onlyForceResent, "a real change is present, so the decision must not report force-resent-only")
@@ -107,7 +107,7 @@ func TestGeneratePatch_ChangedRequiredOnUpdateFieldItself_PlansUpdate(t *testing
 	desired := []byte(`{"Name": "n1", "Token": "t2"}`)
 
 	patchDoc, createOnlyPatch, onlyForceResent, err := generatePatch(document, desired, nil, nil,
-		resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModePatch)
+		resolver.NewResolvableProperties(), schema, nil, pkgmodel.FormaApplyModePatch)
 	require.NoError(t, err)
 	assert.Empty(t, createOnlyPatch)
 	assert.False(t, onlyForceResent, "the Token change itself is real, so the decision must not report force-resent-only")
@@ -140,7 +140,7 @@ func TestGeneratePatch_UnchangedArrayNestedRequiredOnUpdateField_ReportsOnlyForc
 	desired := []byte(`{"Name": "n1", "Items": [{"Token": "same"}]}`)
 
 	patchDoc, createOnlyPatch, onlyForceResent, err := generatePatch(document, desired, nil, nil,
-		resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModePatch)
+		resolver.NewResolvableProperties(), schema, nil, pkgmodel.FormaApplyModePatch)
 	require.NoError(t, err)
 
 	assert.Empty(t, createOnlyPatch)
@@ -169,7 +169,7 @@ func TestGeneratePatch_ChangedArrayNestedRequiredOnUpdateField_PlansUpdate(t *te
 	desired := []byte(`{"Name": "n1", "Items": [{"Token": "new"}]}`)
 
 	patchDoc, createOnlyPatch, onlyForceResent, err := generatePatch(document, desired, nil, nil,
-		resolver.NewResolvableProperties(), schema, pkgmodel.FormaApplyModePatch)
+		resolver.NewResolvableProperties(), schema, nil, pkgmodel.FormaApplyModePatch)
 	require.NoError(t, err)
 
 	assert.Empty(t, createOnlyPatch)

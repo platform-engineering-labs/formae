@@ -5,6 +5,7 @@
 package resource_update
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -122,6 +123,10 @@ type ResourceUpdate struct {
 	// entry degrades to stamping nothing (provenance stays unknown), never to
 	// attesting a recomputed value.
 	ResolvedRootDigests map[string]string `json:"ResolvedRootDigests,omitempty"`
+	// RecordOnly marks an update that changes only the ownership record: no
+	// provider call; execution synthesizes successful Update progress the way
+	// a label-only update does.
+	RecordOnly bool `json:"RecordOnly,omitempty"`
 }
 
 func (ru *ResourceUpdate) URI() pkgmodel.FormaeURI {
@@ -407,6 +412,7 @@ func (ru *ResourceUpdate) regeneratePatchDocument(mode pkgmodel.FormaApplyMode) 
 		desiredForPatch,
 		regenProperties,
 		ru.DesiredState.Schema,
+		ru.PriorState.OwnedMembers,
 		mode,
 	)
 	if err != nil {
@@ -575,10 +581,41 @@ func (ru *ResourceUpdate) updateResourceUpdateFromProgress(progress *resource.Pr
 		// The echo of our own write is a Create or Update progress; every
 		// other Read-shaped merge (sync, discovery) is read-origin.
 		writeOrigin := progress.Operation == resource.OperationCreate || progress.Operation == resource.OperationUpdate
+		// Captured before updateResourceProperties overwrites DesiredState.Properties
+		// below, so the recompute sees what THIS forma declared going into the
+		// write, not the provider's echo of it.
+		declaredDoc := ru.DesiredState.Properties
 		err := ru.updateResourceProperties(string(progress.ResourceProperties), writeOrigin)
 		if err != nil {
 			slog.Error("Failed to update resource properties", "error", err)
 			return err
+		}
+		// Only a write-origin merge commits the ownership record: it is this
+		// forma's own Create/Update landing, so the provider's echo reflects
+		// what is now live under whatever this forma just declared. A
+		// read-shaped merge (sync, discovery) observes state nobody here
+		// caused and must not move the record.
+		//
+		// A further guard: this recompute is only trustworthy when declaredDoc
+		// is a genuinely fresh declaration. RecordOnly's DesiredState.OwnedMembers
+		// is already the correct planning-time claim (there is no property
+		// write behind it to recompute from), and the same is true whenever
+		// declaredDoc is byte-identical to PreviousProperties — the factory's
+		// no-property-change paths (a label-only rename, bringing a resource
+		// under management without property changes, and RecordOnly itself)
+		// all set DesiredState.Properties to the existing row's stored value,
+		// so declaredDoc there is really "what is live", not "what this forma
+		// just declared". Recomputing from it would claim every live member,
+		// including a co-actor's, as this forma's own. Skipping leaves
+		// whatever the factory already stamped onto DesiredState.OwnedMembers
+		// (the planning-time claim) in place.
+		noFreshDeclaration := ru.RecordOnly || bytes.Equal(declaredDoc, ru.PreviousProperties)
+		if writeOrigin && !noFreshDeclaration {
+			// PriorState's record is the claim being recomputed FROM: a path
+			// the declaration no longer covers (unset) or cannot identify yet
+			// (an unresolved member) carries its prior entry instead of being
+			// recomputed to nothing — see claimedMembers.
+			ru.DesiredState.OwnedMembers = claimedMembers(declaredDoc, progress.ResourceProperties, ru.PriorState.OwnedMembers, ru.DesiredState.Schema)
 		}
 	}
 

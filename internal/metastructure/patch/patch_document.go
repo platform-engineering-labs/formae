@@ -7,6 +7,7 @@ package patch
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"reflect"
 	"strconv"
 	"strings"
@@ -40,8 +41,8 @@ var defaultIgnoredFields = []jsonpatch.Path{}
 //     provider still requires the force-resent field in that payload.
 //
 // The two slices are disjoint. Either can be nil.
-func GeneratePatch(document []byte, patch []byte, storedEnvelopes []byte, desiredEnvelopes []byte, properties resolver.ResolvableProperties, schema pkgmodel.Schema, mode pkgmodel.FormaApplyMode) (json.RawMessage, json.RawMessage, bool, error) {
-	return generatePatch(document, patch, storedEnvelopes, desiredEnvelopes, properties, schema, mode)
+func GeneratePatch(document []byte, patch []byte, storedEnvelopes []byte, desiredEnvelopes []byte, properties resolver.ResolvableProperties, schema pkgmodel.Schema, priorOwned pkgmodel.OwnedMembers, mode pkgmodel.FormaApplyMode) (json.RawMessage, json.RawMessage, bool, error) {
+	return generatePatch(document, patch, storedEnvelopes, desiredEnvelopes, properties, schema, priorOwned, mode)
 }
 
 func collectionSemanticsFromFieldHints(hints map[string]pkgmodel.FieldHint) jsonpatch.Collections {
@@ -60,10 +61,82 @@ func collectionSemanticsFromFieldHints(hints map[string]pkgmodel.FieldHint) json
 			collections.Arrays = append(collections.Arrays, path)
 		case pkgmodel.FieldUpdateMethodAtomic:
 			collections.Atomics = append(collections.Atomics, path)
+		case pkgmodel.FieldUpdateMethodSet:
+			// Set semantics are jsonpatch's default branch for an unkeyed
+			// collection (compareArray's "default: // default to set" case) —
+			// this case exists only so the hint is visibly handled here, not
+			// silently absorbed by the switch having no matching case.
 		}
 	}
 
 	return collections
+}
+
+// coOwnedCollections computes, per co-owned field, the set of member
+// identities this forma may remove (jsonpatch.Drainable): exactly the
+// members it declared on a prior apply but no longer declares now
+// (OwnershipPartition.FormerlyOwned). A member that is live but was never
+// declared by this forma (NeverOwned — another writer's, or the platform's)
+// is left out of the Drainable set, so jsonpatch tolerates it regardless of
+// the annotation.
+//
+// document/patch must be the exact byte pair createPatchDocument receives:
+// flattened and ref-resolved, with unbaselined writeOnly+createOnly fields
+// already stripped, but BEFORE any provider-default or empty-collection
+// normalization. Identities are computed over resolved $values and must
+// never see content a later pass would strip away.
+func coOwnedCollections(document, patch []byte, hints map[string]pkgmodel.FieldHint, priorOwned pkgmodel.OwnedMembers) jsonpatch.CoOwned {
+	coOwned := jsonpatch.CoOwned{}
+	for field, hint := range hints {
+		if hint.CoOwned == nil {
+			continue
+		}
+		// CoOwned on an Array/Atomic/Opaque field, or with no UpdateMethod at
+		// all besides an implicit Mapping, is a combination PKL validation
+		// rejects at authoring time. A schema that reaches here as JSON
+		// (plugin protocol, a stored row) bypasses that eval, so this is the
+		// Go-side backstop: IdentityRule returning "" means no drainable
+		// scheme exists for the hint's shape, and Opaque's "members" are
+		// secret values, not names (see claimedMembers). Either way the field
+		// degrades to un-annotated behavior rather than registering a path
+		// jsonpatch would otherwise treat as co-owned.
+		if pkgmodel.IdentityRule(hint) == "" || hint.Opaque {
+			continue
+		}
+		// A field name containing '/' or '~' cannot round-trip jsonpatch's
+		// path translation: this function registers the raw field name
+		// ("$."+field), but toJsonPath derives its lookup key from the RFC
+		// 6901 pointer jsonpatch builds while diffing, which escapes '/' to
+		// "~1" and '~' to "~0" — the two strings can never be equal, so the
+		// registered entry can never match and is permanently inert (verified
+		// directly against jsonpatch.CreatePatch for both a Set and a Mapping
+		// shape: the drainable set is never consulted either way). PKL
+		// property names cannot contain either character, so this guards only
+		// an exotic outputField rename reaching this function via JSON — but
+		// leaving a dead entry registered is still worth skipping and logging
+		// rather than carrying silently.
+		if strings.ContainsAny(field, "/~") {
+			slog.Warn("co-owned field name cannot round-trip jsonpatch's path translation, ignoring annotation", "field", field)
+			continue
+		}
+
+		declared := pkgmodel.MemberIdentities(gjson.GetBytes(patch, field), hint)
+		live := pkgmodel.MemberIdentities(gjson.GetBytes(document, field), hint)
+
+		var prior []string
+		if record, ok := priorOwned[field]; ok && record.Rule == pkgmodel.IdentityRule(hint) {
+			prior = record.Members
+		}
+
+		partition := pkgmodel.PartitionOwnership(declared, prior, live)
+		drainable := jsonpatch.Drainable{}
+		for member := range partition.FormerlyOwned {
+			drainable[member] = struct{}{}
+		}
+
+		coOwned[jsonpatch.Path(fmt.Sprintf("$.%s", field))] = drainable
+	}
+	return coOwned
 }
 
 // topLevelConvergeFields collects the schema fields whose destination path was
@@ -80,9 +153,17 @@ func topLevelConvergeFields(schemaFields []string, properties resolver.Resolvabl
 	return fields
 }
 
+// entitySetProviderDefaultsFromHints excludes hints with CoOwned != nil: the
+// provider-default pass pre-strips document elements the desired side omits,
+// which is exactly the pre-diff element filter a co-owned path must not get —
+// its removal indices need to address the unfiltered document (see
+// coOwnedCollections and the DOCUMENT STAGE comment above).
 func entitySetProviderDefaultsFromHints(hints map[string]pkgmodel.FieldHint) map[string]string {
 	result := map[string]string{}
 	for field, hint := range hints {
+		if hint.CoOwned != nil {
+			continue
+		}
 		if hint.HasProviderDefault && hint.UpdateMethod == pkgmodel.FieldUpdateMethodEntitySet && hint.IndexField != "" {
 			result[field] = hint.IndexField
 		}
@@ -90,7 +171,7 @@ func entitySetProviderDefaultsFromHints(hints map[string]pkgmodel.FieldHint) map
 	return result
 }
 
-func generatePatch(document []byte, patch []byte, storedEnvelopes []byte, desiredEnvelopes []byte, properties resolver.ResolvableProperties, schema pkgmodel.Schema, mode pkgmodel.FormaApplyMode) (json.RawMessage, json.RawMessage, bool, error) {
+func generatePatch(document []byte, patch []byte, storedEnvelopes []byte, desiredEnvelopes []byte, properties resolver.ResolvableProperties, schema pkgmodel.Schema, priorOwned pkgmodel.OwnedMembers, mode pkgmodel.FormaApplyMode) (json.RawMessage, json.RawMessage, bool, error) {
 	flattenedDocument, flattenedPatch, err := flattenAndResolveRefs(document, patch, storedEnvelopes, desiredEnvelopes, properties)
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("failed to flatten and resolve refs: %w", err)
@@ -123,7 +204,20 @@ func generatePatch(document []byte, patch []byte, storedEnvelopes []byte, desire
 	for field := range referenceEnvelopeFields(desiredEnvelopes, schema) {
 		keepFields[field] = true
 	}
-	patchOps, err := createPatchDocument(flattenedDocument, flattenedPatch, schema.Fields, requiredOnUpdateFields, schema.HasProviderDefault(), entitySetProviderDefaultsFromHints(schema.Hints), collectionSemanticsFromFieldHints(schema.Hints), defaultIgnoredFields, strategy, keepFields, preserveRoots)
+
+	// Computed on the exact byte pair createPatchDocument receives next — AFTER
+	// flattenAndResolveRefs and StripFieldsWithoutBaseline above, BEFORE any
+	// provider-default or empty-collection pass below — so identities see
+	// resolved $values and never see content a later pass strips away.
+	collections := collectionSemanticsFromFieldHints(schema.Hints)
+	collections.CoOwned = coOwnedCollections(flattenedDocument, flattenedPatch, schema.Hints, priorOwned)
+
+	// Co-owned hints (dotted or not) are passed as exact-path exemptions so an
+	// explicit-empty co-owned collection survives normalization at whatever
+	// depth it lives at — the same treatment preserveRoots already gives an
+	// unnested preserveEmptyValues field, narrowed to the path itself rather
+	// than its whole subtree.
+	patchOps, err := createPatchDocument(flattenedDocument, flattenedPatch, schema.Fields, requiredOnUpdateFields, schema.HasProviderDefault(), entitySetProviderDefaultsFromHints(schema.Hints), collections, defaultIgnoredFields, strategy, keepFields, preserveRoots, coOwnedFieldPaths(schema.Hints))
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("failed to create patch document: %w", err)
 	}
@@ -205,7 +299,7 @@ func generatePatch(document []byte, patch []byte, storedEnvelopes []byte, desire
 	return json.RawMessage(patchJson), createOnlyJson, onlyForceResent, nil
 }
 
-func createPatchDocument(document []byte, patch []byte, schemaFields []string, requiredOnUpdateFields []string, hasProviderDefaultFields []string, entitySetProviderDefaults map[string]string, collections jsonpatch.Collections, ignoredFields []jsonpatch.Path, strategy jsonpatch.PatchStrategy, convergeFields map[string]bool, preserveRoots map[string]bool) ([]jsonpatch.JsonPatchOperation, error) {
+func createPatchDocument(document []byte, patch []byte, schemaFields []string, requiredOnUpdateFields []string, hasProviderDefaultFields []string, entitySetProviderDefaults map[string]string, collections jsonpatch.Collections, ignoredFields []jsonpatch.Path, strategy jsonpatch.PatchStrategy, convergeFields map[string]bool, preserveRoots map[string]bool, preservePaths map[string]bool) ([]jsonpatch.JsonPatchOperation, error) {
 	patchWithSchemaFieldsOnly, err := removeNonSchemaFields(patch, schemaFields, convergeFields)
 	if err != nil {
 		return nil, err
@@ -256,7 +350,7 @@ func createPatchDocument(document []byte, patch []byte, schemaFields []string, r
 	// nullable Listing/Mapping fields as []/{}. Without stripping, EntitySet
 	// element matching fails because elements have different shapes (one has
 	// phantom empty fields, the other doesn't), causing duplicate entries.
-	cleanedDesired, err := StripNestedEmptyCollectionsExcept(patchWithSchemaFieldsOnly, preserveRoots)
+	cleanedDesired, err := stripNestedEmptyCollectionsExceptPaths(patchWithSchemaFieldsOnly, preserveRoots, preservePaths)
 	if err != nil {
 		return nil, err
 	}
@@ -270,7 +364,7 @@ func createPatchDocument(document []byte, patch []byte, schemaFields []string, r
 		return nil, err
 	}
 
-	cleanedDocument, err := StripNestedEmptyCollectionsExcept(documentMinusTopEmpties, preserveRoots)
+	cleanedDocument, err := stripNestedEmptyCollectionsExceptPaths(documentMinusTopEmpties, preserveRoots, preservePaths)
 	if err != nil {
 		return nil, err
 	}
@@ -768,8 +862,23 @@ func StripNestedEmptyCollections(data []byte) ([]byte, error) {
 // StripNestedEmptyCollectionsExcept is StripNestedEmptyCollections with an
 // exemption set: subtrees rooted at a top-level key in preserveRoots are left
 // byte-for-byte intact — their empty collections are values, not rendering
-// noise (the preserveEmptyValues field hint).
+// noise (the preserveEmptyValues field hint). Every caller outside this
+// package goes through here, so its behavior stays exactly what it always
+// was; a caller inside this package needing path-level exemptions
+// (createPatchDocument, for a co-owned collection) uses
+// stripNestedEmptyCollectionsExceptPaths directly instead.
 func StripNestedEmptyCollectionsExcept(data []byte, preserveRoots map[string]bool) ([]byte, error) {
+	return stripNestedEmptyCollectionsExceptPaths(data, preserveRoots, nil)
+}
+
+// stripNestedEmptyCollectionsExceptPaths extends StripNestedEmptyCollectionsExcept
+// with a second, narrower exemption: preservePaths names exact dotted paths
+// (the same convention as a FieldHint key, e.g. "metadata.labels") whose OWN
+// empty-collection value is preserved, without protecting the rest of the
+// subtree it sits in the way preserveRoots does. A sibling key, or a
+// collection nested inside the exempted one, is still stripped normally. A
+// nil preservePaths makes this byte-identical to StripNestedEmptyCollectionsExcept.
+func stripNestedEmptyCollectionsExceptPaths(data []byte, preserveRoots, preservePaths map[string]bool) ([]byte, error) {
 	var doc map[string]any
 	if err := json.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("StripNestedEmptyCollections: invalid JSON: %w", err)
@@ -779,7 +888,7 @@ func StripNestedEmptyCollectionsExcept(data []byte, preserveRoots map[string]boo
 		if preserveRoots[k] {
 			continue
 		}
-		doc[k] = stripEmptyCollectionsFromValue(v)
+		doc[k] = stripEmptyCollectionsFromValueAt(v, k, preservePaths)
 	}
 
 	return json.Marshal(doc)
@@ -894,6 +1003,55 @@ func stripEmptyCollectionsFromValue(val any) any {
 		cleaned := make([]any, 0, len(v))
 		for _, elem := range v {
 			cleaned = append(cleaned, stripEmptyCollectionsFromValue(elem))
+		}
+		return cleaned
+	default:
+		return val
+	}
+}
+
+// stripEmptyCollectionsFromValueAt is stripEmptyCollectionsFromValue extended
+// with val's own dotted path, so an empty-collection child can be checked
+// against preservePaths before being dropped — the exact-path counterpart to
+// stripNestedEmptyCollectionsExceptPaths's top-level preserveRoots check. An
+// array element does not extend the path: a FieldHint path is index-
+// transparent (matchesFieldThroughArrays applies the same convention when
+// matching a dotted field against an indexed op path), so a co-owned
+// collection living inside a list of SubResources is still found by name.
+// A nil preservePaths makes this byte-identical to stripEmptyCollectionsFromValue.
+func stripEmptyCollectionsFromValueAt(val any, path string, preservePaths map[string]bool) any {
+	switch v := val.(type) {
+	case map[string]any:
+		cleaned := make(map[string]any, len(v))
+		for k, elem := range v {
+			childPath := k
+			if path != "" {
+				childPath = path + "." + k
+			}
+			if isEmptyCollection(elem) {
+				if preservePaths[childPath] {
+					cleaned[k] = elem
+				}
+				continue
+			}
+			stripped := stripEmptyCollectionsFromValueAt(elem, childPath, preservePaths)
+			// Re-check after recursive stripping — a map whose children were
+			// all empty collections is itself now empty and should be
+			// removed (e.g. DestinationConfig: {OnSuccess: {}, OnFailure: {}}),
+			// unless childPath is itself exempted.
+			if isEmptyCollection(stripped) {
+				if preservePaths[childPath] {
+					cleaned[k] = stripped
+				}
+				continue
+			}
+			cleaned[k] = stripped
+		}
+		return cleaned
+	case []any:
+		cleaned := make([]any, 0, len(v))
+		for _, elem := range v {
+			cleaned = append(cleaned, stripEmptyCollectionsFromValueAt(elem, path, preservePaths))
 		}
 		return cleaned
 	default:

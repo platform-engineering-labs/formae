@@ -16,7 +16,7 @@ import (
 
 // suppressedDiffsForTest uses the old properties as the write witness: the
 // common fixture shape where formae's last write observed the same state the
-// drift window starts from.
+// drift window starts from. No prior ownership record.
 func suppressedDiffsForTest(t *testing.T, oldProps, newProps, desired string, schema pkgmodel.Schema) []SuppressedFieldDiff {
 	t.Helper()
 	return suppressedDiffsWithWitness(t, oldProps, newProps, desired, oldProps, schema)
@@ -24,11 +24,23 @@ func suppressedDiffsForTest(t *testing.T, oldProps, newProps, desired string, sc
 
 func suppressedDiffsWithWitness(t *testing.T, oldProps, newProps, desired, witness string, schema pkgmodel.Schema) []SuppressedFieldDiff {
 	t.Helper()
+	return suppressedDiffsWithWitnessAndRecord(t, oldProps, newProps, desired, witness, nil, schema)
+}
+
+// suppressedDiffsForCoOwned drives the CoOwned regime, which never consults
+// the witness: an empty witness stands in for "irrelevant here".
+func suppressedDiffsForCoOwned(t *testing.T, oldProps, newProps, desired string, priorOwned pkgmodel.OwnedMembers, schema pkgmodel.Schema) []SuppressedFieldDiff {
+	t.Helper()
+	return suppressedDiffsWithWitnessAndRecord(t, oldProps, newProps, desired, "", priorOwned, schema)
+}
+
+func suppressedDiffsWithWitnessAndRecord(t *testing.T, oldProps, newProps, desired, witness string, priorOwned pkgmodel.OwnedMembers, schema pkgmodel.Schema) []SuppressedFieldDiff {
+	t.Helper()
 	var w json.RawMessage
 	if witness != "" {
 		w = json.RawMessage(witness)
 	}
-	diffs, err := SuppressedFieldDiffs(json.RawMessage(oldProps), json.RawMessage(newProps), json.RawMessage(desired), w, schema)
+	diffs, err := SuppressedFieldDiffs(json.RawMessage(oldProps), json.RawMessage(newProps), json.RawMessage(desired), w, priorOwned, schema)
 	require.NoError(t, err)
 	return diffs
 }
@@ -642,4 +654,106 @@ func TestAssertWitnessedSuppressed_EntitySetExplicitEmpty_NotInjected(t *testing
 		`{"Name": "r", "Tags": [{"Key": "sys", "Value": "s0"}]}`,
 		schema)
 	assert.JSONEq(t, `{"Name": "r", "Tags": []}`, out)
+}
+
+// coOwnedMappingSchema is a co-owned Mapping field (CoOwned + no
+// UpdateMethod, per pkgmodel.IdentityRule) with no HasProviderDefault hint —
+// the co-owned regime must not depend on it.
+func coOwnedMappingSchema() pkgmodel.Schema {
+	return pkgmodel.Schema{
+		Fields: []string{"labels"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"labels": {CoOwned: &pkgmodel.CoOwnership{}},
+		},
+	}
+}
+
+func TestSuppressedFieldDiffs_CoOwnedMapping_NeverOwnedMemberChanges_Reported(t *testing.T) {
+	// "theirs" is live but neither declared by this forma now nor on the
+	// prior apply (the record only ever claimed "mine"): it is NeverOwned,
+	// so its value change is suppressed movement.
+	priorOwned := pkgmodel.OwnedMembers{"labels": {Rule: "Mapping", Members: []string{"mine"}}}
+
+	diffs := suppressedDiffsForCoOwned(t,
+		`{"labels": {"mine": "1", "theirs": "a"}}`,
+		`{"labels": {"mine": "1", "theirs": "b"}}`,
+		`{"labels": {"mine": "1"}}`,
+		priorOwned, coOwnedMappingSchema())
+
+	require.Len(t, diffs, 1)
+	assert.Equal(t, "labels", diffs[0].Path)
+	assert.False(t, diffs[0].Opaque)
+	assert.True(t, diffs[0].CoOwned, "a co-owned regime note carries the regime marker")
+	assert.JSONEq(t, `{"theirs": "a"}`, string(diffs[0].From))
+	assert.JSONEq(t, `{"theirs": "b"}`, string(diffs[0].To))
+}
+
+func TestSuppressedFieldDiffs_WitnessRegimeNote_NotMarkedCoOwned(t *testing.T) {
+	// A hasProviderDefault note confronts at the reconcile gate; only the
+	// co-owned regime's notes are tolerated display material.
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Setting"},
+		Hints:  map[string]pkgmodel.FieldHint{"Setting": {HasProviderDefault: true}},
+	}
+
+	diffs, err := SuppressedFieldDiffs(
+		json.RawMessage(`{"Name": "n", "Setting": "a"}`),
+		json.RawMessage(`{"Name": "n", "Setting": "b"}`),
+		json.RawMessage(`{"Name": "n"}`),
+		json.RawMessage(`{"Name": "n", "Setting": "a"}`),
+		nil, schema)
+	require.NoError(t, err)
+	require.Len(t, diffs, 1)
+	assert.False(t, diffs[0].CoOwned)
+}
+
+func TestSuppressedFieldDiffs_CoOwnedMapping_DeclaredMemberDisappears_NoNoteForThatMember(t *testing.T) {
+	// "mine" is still declared by this forma, so it is never NeverOwned no
+	// matter how it moves: its disappearance is real drift for the plan to
+	// surface, not a suppressed note. "theirs" is unchanged, so nothing at
+	// all is reported.
+	priorOwned := pkgmodel.OwnedMembers{"labels": {Rule: "Mapping", Members: []string{"mine"}}}
+
+	diffs := suppressedDiffsForCoOwned(t,
+		`{"labels": {"mine": "1", "theirs": "a"}}`,
+		`{"labels": {"theirs": "a"}}`,
+		`{"labels": {"mine": "1"}}`,
+		priorOwned, coOwnedMappingSchema())
+
+	assert.Empty(t, diffs, "a declared member's own movement is plan territory, not a suppressed note")
+}
+
+func TestSuppressedFieldDiffs_CoOwnedMapping_RuleMismatchedRecord_TreatsUndeclaredAsNeverOwned(t *testing.T) {
+	// The stored record's Rule ("Set") does not match this field's current
+	// IdentityRule ("Mapping" — CoOwned with no UpdateMethod): it is stale
+	// and discarded, so "mine" — no longer declared, and no longer protected
+	// as formerly-owned — is NeverOwned like any other undeclared member, and
+	// its movement is reported instead of silently tolerated.
+	priorOwned := pkgmodel.OwnedMembers{"labels": {Rule: "Set", Members: []string{"mine"}}}
+
+	diffs := suppressedDiffsForCoOwned(t,
+		`{"labels": {"mine": "1"}}`,
+		`{"labels": {"mine": "2"}}`,
+		`{"labels": {}}`,
+		priorOwned, coOwnedMappingSchema())
+
+	require.Len(t, diffs, 1)
+	assert.Equal(t, "labels", diffs[0].Path)
+	assert.JSONEq(t, `{"mine": "1"}`, string(diffs[0].From))
+	assert.JSONEq(t, `{"mine": "2"}`, string(diffs[0].To))
+}
+
+func TestSuppressedFieldDiffs_CoOwnedPathWithoutHasProviderDefault_EntersCandidateSet(t *testing.T) {
+	// coOwnedMappingSchema's "labels" hint carries no HasProviderDefault, so
+	// schema.HasProviderDefault() alone would never enumerate it. Path
+	// enumeration is the union with every CoOwned-hinted path, so this must
+	// still be classified.
+	diffs := suppressedDiffsForCoOwned(t,
+		`{"labels": {"theirs": "a"}}`,
+		`{"labels": {"theirs": "b"}}`,
+		`{}`,
+		nil, coOwnedMappingSchema())
+
+	require.Len(t, diffs, 1, "a CoOwned path without hasProviderDefault must enter the candidate set")
+	assert.Equal(t, "labels", diffs[0].Path)
 }

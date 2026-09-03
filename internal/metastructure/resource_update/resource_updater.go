@@ -808,11 +808,22 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 		data.resourceUpdate.PriorState.Stack == data.resourceUpdate.DesiredState.Stack &&
 		data.resourceUpdate.PriorState.Target == data.resourceUpdate.DesiredState.Target
 
-	if (isBringingUnderManagement || isLabelOnlyChange) && hasEmptyPatch {
-		if isLabelOnlyChange {
+	// A record-only update carries no property, stack, label, or target
+	// delta — planning built it solely to commit a shifted ownership record
+	// (see NewResourceUpdateForExisting). Its patch is always empty by
+	// construction, so hasEmptyPatch is included here only for symmetry with
+	// the other two predicates, never as a distinguishing condition.
+	isRecordOnly := data.resourceUpdate.RecordOnly
+
+	if (isBringingUnderManagement || isLabelOnlyChange || isRecordOnly) && hasEmptyPatch {
+		switch {
+		case isLabelOnlyChange:
 			proc.Log().Debug("Renaming resource without property changes resourceURI=%v oldLabel=%s newLabel=%s",
 				data.resourceUpdate.DesiredState.URI(), data.resourceUpdate.PriorState.Label, data.resourceUpdate.DesiredState.Label)
-		} else {
+		case isRecordOnly:
+			proc.Log().Debug("Committing ownership record without property changes resourceURI=%v",
+				data.resourceUpdate.DesiredState.URI())
+		default:
 			proc.Log().Debug("Bringing resource under management without property changes resourceURI=%v oldStack=%s newStack=%s",
 				data.resourceUpdate.DesiredState.URI(), data.resourceUpdate.PriorState.Stack, data.resourceUpdate.DesiredState.Stack)
 		}
@@ -829,8 +840,11 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 		}
 
 		statusMessage := "Brought under management without property changes"
-		if isLabelOnlyChange {
+		switch {
+		case isLabelOnlyChange:
 			statusMessage = "Renamed without property changes"
+		case isRecordOnly:
+			statusMessage = "Committed ownership record without property changes"
 		}
 
 		// Create synthetic ProgressResult with existing resource data
@@ -857,6 +871,25 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 	// resource. Only this copy changes; DesiredState.Properties stays the
 	// durable record of the stored hash.
 	desiredForPlugin := data.resourceUpdate.DesiredState
+	// Complete each co-owned collection to its intended post-write value
+	// (declared plus never-owned live members), so DesiredProperties and
+	// PatchDocument tell the plugin the same thing. Only this copy changes;
+	// DesiredState.Properties stays the declared-only durable record the
+	// write-echo recompute claims from.
+	projectedProperties, err := patch.ProjectDesiredForWrite(
+		desiredForPlugin.Properties,
+		data.resourceUpdate.PriorState.Properties,
+		data.resourceUpdate.PriorState.OwnedMembers,
+		desiredForPlugin.Schema,
+	)
+	if err != nil {
+		proc.Log().Error("failed to project co-owned desired properties for plugin: %v", err)
+		data.resourceUpdate.FailureReason = updateRequestFailureReason(err)
+		data.resourceUpdate.MarkAsFailed()
+		return StateFinishedWithError, data, nil, nil
+	}
+	desiredForPlugin.Properties = projectedProperties
+
 	frozenProperties, err := FreezeUnrecoverableOpaqueValues(
 		data.resourceUpdate.PriorState.Properties,
 		desiredForPlugin.Properties,

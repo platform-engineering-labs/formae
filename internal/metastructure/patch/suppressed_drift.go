@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
+	"github.com/tidwall/gjson"
 )
 
 // SuppressedFieldDiff describes out-of-band movement on provider-default
@@ -38,21 +39,59 @@ type SuppressedFieldDiff struct {
 	From   json.RawMessage
 	To     json.RawMessage
 	Opaque bool
+
+	// CoOwned marks a note produced by the co-owned regime: movement on a
+	// co-owned collection's never-owned members. Such movement is tolerated
+	// by design — a co-actor's members are legitimately not this forma's —
+	// so the note exists to be shown to whoever asks, never to confront:
+	// the reconcile gate must not reject an apply on its account.
+	CoOwned bool
 }
 
 // SuppressedFieldDiffs compares two stored property documents restricted to
-// the content the provider-default strip passes would hide from a diff
-// against the given desired properties. It reports one entry per suppressed
-// field whose content moved, sorted by path.
+// content a diff against the given desired properties would never see, for
+// two independent reasons, and reports one entry per such field whose
+// content moved, sorted by path.
 //
-// The suppressed content per hasProviderDefault field is exactly what the
-// strip passes suppress: the whole field when desired omits it (absent or
-// null, the fieldExistsInMap semantics of removeProviderDefaultFieldsBoth),
-// and, for an EntitySet field with one or more declared keys, the elements
-// whose key is not among the declared keys (what
-// removeProviderDefaultEntitySetElements filters). An explicit empty
+// The first reason is a hasProviderDefault field: the content is exactly
+// what the strip passes suppress — the whole field when desired omits it
+// (absent or null, the fieldExistsInMap semantics of
+// removeProviderDefaultFieldsBoth), and, for an EntitySet field with one or
+// more declared keys, the elements whose key is not among the declared keys
+// (what removeProviderDefaultEntitySetElements filters). An explicit empty
 // EntitySet declaration suppresses nothing: that is a user-initiated clear
-// the diff plans.
+// the diff plans. This content requires a WITNESSED value (see below) to be
+// reported.
+//
+// The second reason is a CoOwned field's never-owned members (see
+// pkgmodel.PartitionOwnership): a co-owned collection's live content
+// legitimately has writers other than this forma, and the diff plans only
+// the members this forma declares or once declared — a co-actor's member is
+// invisible to it by design, not by a provider-default strip. Movement here
+// is classified by ownership, not by witness: a declared or formerly-owned
+// member's movement is real drift the plan itself surfaces, so it produces
+// no note here regardless of the witness; a never-owned member's value
+// change, appearance, or disappearance produces one, whether or not formae
+// ever wrote the resource. An opaque CoOwned field is excluded from this
+// regime entirely (its members are secret values, not identities meant for
+// partitioning — see claimedMembers) and falls back to the hasProviderDefault
+// treatment above.
+//
+// Path enumeration is the sorted, deduplicated union of
+// schema.HasProviderDefault() and every CoOwned-hinted path: a CoOwned path
+// need not carry hasProviderDefault to be considered.
+//
+// A diff requires a WITNESSED value: the suppressed content was present (a
+// real scalar; a non-empty collection or leaf set) in the witness document,
+// the resource's state as recorded by formae's own last write (the
+// create/update echo), which sync never refreshes. Values that only ever
+// arrived through sync (late-populated defaults, runtime registrations,
+// co-actor content) are never witnessed and never reported: their movement
+// is the infrastructure's business and stays in the drift list. A witnessed
+// value changing or disappearing out of band is reported. A nil witness
+// document (formae never wrote the resource) witnesses nothing. This gate
+// applies ONLY to the hasProviderDefault regime; the CoOwned regime above
+// never consults the witness.
 //
 // Comparison is schema-aware so representation churn is not movement:
 // EntitySet content compares keyed by IndexField, collections without an
@@ -62,7 +101,7 @@ type SuppressedFieldDiff struct {
 // unconditionally (the ContainerDefinitions.Cpu shape, stripped from both
 // sides regardless of declaration), while a pure-object leaf is suppressed
 // only when desired omits it.
-func SuppressedFieldDiffs(oldProps, newProps, desired, witness json.RawMessage, schema pkgmodel.Schema) ([]SuppressedFieldDiff, error) {
+func SuppressedFieldDiffs(oldProps, newProps, desired, witness json.RawMessage, priorOwned pkgmodel.OwnedMembers, schema pkgmodel.Schema) ([]SuppressedFieldDiff, error) {
 	oldMap, err := unmarshalPropsObject(oldProps)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal old properties: %w", err)
@@ -80,13 +119,20 @@ func SuppressedFieldDiffs(oldProps, newProps, desired, witness json.RawMessage, 
 		return nil, fmt.Errorf("failed to unmarshal witness properties: %w", err)
 	}
 
-	paths := append([]string(nil), schema.HasProviderDefault()...)
-	sort.Strings(paths)
+	paths := suppressedDiffCandidatePaths(schema)
 
 	var diffs []SuppressedFieldDiff
 	for _, path := range paths {
-		parts := strings.Split(path, ".")
 		hint := schema.Hints[path]
+
+		if hint.CoOwned != nil && !hint.Opaque {
+			if diff, ok := coOwnedSuppressedDiff(oldProps, newProps, desired, path, hint, priorOwned, schema); ok {
+				diffs = append(diffs, diff)
+			}
+			continue
+		}
+
+		parts := strings.Split(path, ".")
 
 		var from, to json.RawMessage
 		var moved bool
@@ -145,6 +191,158 @@ func SuppressedFieldDiffs(oldProps, newProps, desired, witness json.RawMessage, 
 	}
 
 	return diffs, nil
+}
+
+// suppressedDiffCandidatePaths is the sorted, deduplicated union of
+// schema.HasProviderDefault() and every CoOwned-hinted path — the full set
+// of paths SuppressedFieldDiffs classifies, whichever regime applies to
+// each.
+func suppressedDiffCandidatePaths(schema pkgmodel.Schema) []string {
+	set := make(map[string]struct{}, len(schema.Hints))
+	for _, path := range schema.HasProviderDefault() {
+		set[path] = struct{}{}
+	}
+	for path, hint := range schema.Hints {
+		if hint.CoOwned != nil {
+			set[path] = struct{}{}
+		}
+	}
+	paths := make([]string, 0, len(set))
+	for path := range set {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+// coOwnedSuppressedDiff classifies movement on a CoOwned field by ownership
+// rather than by witness: it partitions the field's member identities into
+// Declared/FormerlyOwned/NeverOwned (pkgmodel.PartitionOwnership) using
+// desired's identities as Declared, the stored record's identities as Prior
+// (discarded — see IdentityRule — when the record's Rule does not match this
+// hint, so a stale record degrades to "nothing is prior" rather than a
+// best-effort comparison), and the union of both sides' identities as Live.
+// Only NeverOwned members are compared between oldProps and newProps; a
+// Declared or FormerlyOwned member's movement is real drift the plan itself
+// surfaces and produces no note here, regardless of how it moved.
+func coOwnedSuppressedDiff(oldProps, newProps, desired json.RawMessage, path string, hint pkgmodel.FieldHint, priorOwned pkgmodel.OwnedMembers, schema pkgmodel.Schema) (SuppressedFieldDiff, bool) {
+	oldVal := gjson.GetBytes(oldProps, path)
+	newVal := gjson.GetBytes(newProps, path)
+	desiredVal := gjson.GetBytes(desired, path)
+
+	declared := pkgmodel.MemberIdentities(desiredVal, hint)
+	live := unionStrings(pkgmodel.MemberIdentities(oldVal, hint), pkgmodel.MemberIdentities(newVal, hint))
+
+	var prior []string
+	if record, ok := priorOwned[path]; ok && record.Rule == pkgmodel.IdentityRule(hint) {
+		prior = record.Members
+	}
+
+	partition := pkgmodel.PartitionOwnership(declared, prior, live)
+	if len(partition.NeverOwned) == 0 {
+		return SuppressedFieldDiff{}, false
+	}
+
+	oldRestricted := restrictToNeverOwned(oldVal, hint, partition.NeverOwned)
+	newRestricted := restrictToNeverOwned(newVal, hint, partition.NeverOwned)
+	if canonicalJSON(oldRestricted) == canonicalJSON(newRestricted) {
+		return SuppressedFieldDiff{}, false
+	}
+
+	if pathOpaque(schema, path) || valueHasOpaqueMarker(oldRestricted) || valueHasOpaqueMarker(newRestricted) {
+		return SuppressedFieldDiff{Path: path, Opaque: true, CoOwned: true}, true
+	}
+	return SuppressedFieldDiff{
+		Path:    path,
+		From:    renderRestrictedMembers(oldRestricted),
+		To:      renderRestrictedMembers(newRestricted),
+		CoOwned: true,
+	}, true
+}
+
+// restrictToNeverOwned returns value's content narrowed to the members whose
+// identity is in keep: for an object (Mapping), the entries whose key is
+// kept; for an array (Set/EntitySet), the elements whose identity (computed
+// exactly as pkgmodel.MemberIdentities computes it — see
+// singleElementIdentity) is kept, sorted for a stable, order-independent
+// comparison and rendering. Returns nil when nothing is kept, so two sides
+// with no never-owned content compare equal regardless of shape.
+func restrictToNeverOwned(value gjson.Result, hint pkgmodel.FieldHint, keep map[string]struct{}) any {
+	switch {
+	case value.IsObject():
+		out := map[string]any{}
+		value.ForEach(func(key, val gjson.Result) bool {
+			if _, ok := keep[key.String()]; ok {
+				out[key.String()] = val.Value()
+			}
+			return true
+		})
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	case value.IsArray():
+		var out []any
+		value.ForEach(func(_, el gjson.Result) bool {
+			if id, ok := singleElementIdentity(el, hint); ok {
+				if _, keepIt := keep[id]; keepIt {
+					out = append(out, el.Value())
+				}
+			}
+			return true
+		})
+		if len(out) == 0 {
+			return nil
+		}
+		return sortedByKey(out, hint.IndexField)
+	default:
+		return nil
+	}
+}
+
+// singleElementIdentity computes one array element's member identity by
+// reusing pkgmodel.MemberIdentities itself — wrapping the element's raw JSON
+// as a singleton array and asking for the identity set of that array — so a
+// Set element's canonicalized-and-envelope-flattened identity, or an
+// EntitySet element's IndexField-derived identity, is computed by the exact
+// same logic that produced the identity sets fed to PartitionOwnership.
+// Returns false when the element contributes no identity (e.g. an
+// EntitySet element missing its IndexField, or an unresolvable reference
+// envelope), matching MemberIdentities' own "contributes nothing" cases.
+func singleElementIdentity(el gjson.Result, hint pkgmodel.FieldHint) (string, bool) {
+	wrapped := gjson.Parse("[" + el.Raw + "]")
+	ids := pkgmodel.MemberIdentities(wrapped, hint)
+	if len(ids) != 1 {
+		return "", false
+	}
+	return ids[0], true
+}
+
+// renderRestrictedMembers is compareWholeField's absence convention applied
+// to restricted member content: nil (no value on this side) renders as no
+// JSON at all, never a literal null.
+func renderRestrictedMembers(v any) json.RawMessage {
+	if v == nil {
+		return nil
+	}
+	return json.RawMessage(canonicalJSON(v))
+}
+
+// unionStrings returns the sorted, deduplicated union of a and b.
+func unionStrings(a, b []string) []string {
+	set := make(map[string]struct{}, len(a)+len(b))
+	for _, s := range a {
+		set[s] = struct{}{}
+	}
+	for _, s := range b {
+		set[s] = struct{}{}
+	}
+	out := make([]string, 0, len(set))
+	for s := range set {
+		out = append(out, s)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func unmarshalPropsObject(raw json.RawMessage) (map[string]any, error) {

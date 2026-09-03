@@ -6,9 +6,14 @@ package metastructure
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
+	"path"
 	"strings"
 	"time"
+
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 
 	"github.com/platform-engineering-labs/formae/internal/datastore"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/querier"
@@ -65,6 +70,18 @@ func (m *Metastructure) ExtractResources(query string) (*pkgmodel.Forma, error) 
 	}
 
 	forma := pkgmodel.FormaFromResources(resources)
+
+	// Extract copies live resource state into a forma declaration verbatim.
+	// A co-owned collection field's live content legitimately holds entries
+	// other writers put there (the platform, another forma), so emitting it
+	// unfiltered would hand the caller a declaration that claims members it
+	// never wrote — the next apply would then try to "own" them. Narrow each
+	// such field down to the portion this forma may actually claim, and strip
+	// the ownership bookkeeping itself: it is agent-internal and must never
+	// appear in an emitted declaration.
+	for i := range forma.Resources {
+		forma.Resources[i] = filterCoOwnedResource(forma.Resources[i])
+	}
 
 	if len(targetNames) > 0 {
 		targets, err := m.Datastore.LoadTargetsByLabels(targetNames)
@@ -254,4 +271,271 @@ func (m *Metastructure) ExtractStacks() ([]*pkgmodel.Stack, error) {
 
 	slog.Debug("ExtractStacks returning", "count", len(stacks))
 	return stacks, nil
+}
+
+// filterCoOwnedResource returns a copy of res with every CoOwned-hinted
+// collection field narrowed to the members this forma may claim, and its
+// ownership record cleared.
+//
+// res arrives as a shallow copy already (FormaFromResources built it by
+// dereferencing the datastore's *Resource), which means its Properties field
+// is still a slice header pointing at the very same backing array the stored
+// resource uses. append(json.RawMessage(nil), res.Properties...) below always
+// allocates a fresh backing array — append onto a nil slice can never reuse
+// the source's capacity — so res.Properties is exclusively this clone's own
+// before any filtering call touches it. That makes safety here structural,
+// not a bet on how sjson's Set/Delete happen to manage capacity internally:
+// whatever they do, it lands on a backing array the stored resource never
+// had a slice header pointing at.
+func filterCoOwnedResource(res pkgmodel.Resource) pkgmodel.Resource {
+	res.Properties = append(json.RawMessage(nil), res.Properties...)
+
+	filtered, err := filterCoOwnedProperties(res.Properties, res.Schema, res.OwnedMembers)
+	if err != nil {
+		// Filtering failed for this resource (malformed hint path, etc.): emit
+		// its properties unfiltered rather than dropping the resource from the
+		// extract entirely. OwnedMembers is still cleared below regardless, so
+		// the bookkeeping never leaks even on this fallback path.
+		slog.Warn("Failed to filter co-owned collection for extract; emitting unfiltered",
+			"resource", res.Label, "error", err)
+	} else {
+		res.Properties = filtered
+	}
+
+	// OwnedMembers is agent bookkeeping — the set of member identities a prior
+	// apply claimed. It must never reach an emitted declaration: a forma file
+	// only ever declares state, not the agent's internal record of what it
+	// last wrote.
+	res.OwnedMembers = nil
+
+	return res
+}
+
+// filterCoOwnedProperties narrows every CoOwned-hinted collection in
+// properties down to the members this forma may emit:
+//
+//   - An interpretable ownership record (one whose Rule still matches the
+//     field's current hint — see pkgmodel.IdentityRule) is authoritative:
+//     keep exactly the members named in record.Members.
+//   - With no interpretable record (never claimed, or the record is stale),
+//     fall back to CoOwned.SystemPatterns: drop any member whose identity
+//     matches at least one pattern, keep the rest. No patterns at all means
+//     nothing is known to be platform-injected, so nothing is dropped — the
+//     field is emitted exactly as extract emits it today.
+//
+// A field paired with Opaque is skipped entirely: its "members" would be
+// secret values rather than names, the PKL schema already refuses to author
+// that combination (see co_owned_field_opaque_test.pkl), and claimedMembers
+// never records a claim for one either — so such a hint is never treated as
+// co-owned here.
+func filterCoOwnedProperties(properties json.RawMessage, schema pkgmodel.Schema, owned pkgmodel.OwnedMembers) (json.RawMessage, error) {
+	if len(properties) == 0 {
+		return properties, nil
+	}
+
+	out := properties
+	for fieldPath, hint := range schema.Hints {
+		if hint.CoOwned == nil || hint.Opaque {
+			continue
+		}
+
+		val := gjson.GetBytes(out, fieldPath)
+		if !val.Exists() {
+			continue
+		}
+
+		keep, active := coOwnedKeepFunc(fieldPath, hint, owned)
+		if !active {
+			continue
+		}
+
+		var err error
+		switch {
+		case val.IsObject():
+			out, err = filterObjectMembers(out, fieldPath, val, keep)
+		case val.IsArray():
+			out, err = filterArrayMembers(out, fieldPath, val, hint, keep)
+		default:
+			// A CoOwned field is a collection by definition; a scalar here
+			// means the live value does not match its own schema. Nothing
+			// sensible to filter — leave it exactly as extract found it.
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return out, nil
+}
+
+// coOwnedKeepFunc returns the membership test for one CoOwned-hinted field,
+// and whether any filtering is actually called for. active is false only
+// when there is neither an interpretable record nor any SystemPatterns to
+// apply — the "emit everything" case, left as a no-op rather than a
+// keep-everything predicate so callers can skip the field untouched.
+func coOwnedKeepFunc(fieldPath string, hint pkgmodel.FieldHint, owned pkgmodel.OwnedMembers) (keep func(identity string) bool, active bool) {
+	if record, ok := owned[fieldPath]; ok && record.Rule == pkgmodel.IdentityRule(hint) {
+		members := make(map[string]struct{}, len(record.Members))
+		for _, m := range record.Members {
+			members[m] = struct{}{}
+		}
+		return func(identity string) bool {
+			_, ok := members[identity]
+			return ok
+		}, true
+	}
+
+	patterns := hint.CoOwned.SystemPatterns
+	if len(patterns) == 0 {
+		return nil, false
+	}
+
+	return func(identity string) bool {
+		// Member identities are pkgmodel.MemberIdentities' canonical form: a
+		// Mapping key verbatim, but an EntitySet/Set element's json-marshaled
+		// value — quoted for a string. A SystemPatterns author writes a plain
+		// glob ("aws:*") without knowing which shape they're matching against,
+		// so a JSON-string identity is unquoted before matching: it and only
+		// it can carry a leading/trailing '"' as an artifact of marshaling
+		// rather than as data. Any other JSON shape (object, array, number,
+		// bool, or a Mapping key) matches in its literal form, unchanged. This
+		// is purely a glob-matching convenience — record.Members comparison
+		// above stays on the marshaled encoding on both sides, so it never
+		// needs unquoting to agree with itself.
+		target := unquoteJSONStringIdentity(identity)
+		for _, pattern := range patterns {
+			// path.Match's glob semantics: "*" matches any sequence of
+			// non-separator ('/') characters, "?" matches any single
+			// non-separator character. Member identities are provider names
+			// (e.g. "aws:cloudformation:stack"), not paths, so this is only
+			// ever exercised as a plain substring-style wildcard — "aws:*"
+			// matches "aws:cloudformation:stack" but "/" in an identity would
+			// not cross a "*" the way it might look like it should.
+			if matched, _ := path.Match(pattern, target); matched {
+				return false
+			}
+		}
+		return true
+	}, true
+}
+
+// unquoteJSONStringIdentity undoes JSON string quoting on identity if, and
+// only if, identity is itself a JSON string literal (starts and ends with an
+// unescaped '"'). Any other shape — including a Mapping key, which was never
+// JSON-marshaled to begin with — is returned unchanged. Malformed input
+// (identity looks quoted but isn't valid JSON) is also returned unchanged
+// rather than erroring: this only ever feeds a best-effort glob match.
+func unquoteJSONStringIdentity(identity string) string {
+	if len(identity) < 2 || identity[0] != '"' || identity[len(identity)-1] != '"' {
+		return identity
+	}
+	var s string
+	if err := json.Unmarshal([]byte(identity), &s); err != nil {
+		return identity
+	}
+	return s
+}
+
+// filterObjectMembers drops every key of the object at fieldPath in doc for
+// which keep reports false, leaving the surviving keys' values byte-for-byte
+// untouched. An object left with no keys serializes as "{}" — the same empty
+// Mapping extract already emits for a field with no live content.
+func filterObjectMembers(doc json.RawMessage, fieldPath string, val gjson.Result, keep func(string) bool) (json.RawMessage, error) {
+	var toDelete []string
+	val.ForEach(func(key, _ gjson.Result) bool {
+		if !keep(key.String()) {
+			toDelete = append(toDelete, key.String())
+		}
+		return true
+	})
+
+	out := doc
+	for _, key := range toDelete {
+		updated, err := sjson.DeleteBytes(out, fieldPath+"."+escapeGjsonPathKey(key))
+		if err != nil {
+			return nil, fmt.Errorf("failed to drop unowned member %q at %q: %w", key, fieldPath, err)
+		}
+		out = updated
+	}
+	return out, nil
+}
+
+// filterArrayMembers drops every element of the array at fieldPath in doc
+// whose identity (per hint's UpdateMethod — EntitySet's IndexField, or the
+// element's own canonical JSON otherwise) keep reports false for. An element
+// whose identity cannot be determined (an unresolved reference envelope) is
+// left in place: there is nothing to test it against. An array left with no
+// elements serializes as "[]" — the same empty Listing extract already emits
+// for a field with no live content.
+func filterArrayMembers(doc json.RawMessage, fieldPath string, val gjson.Result, hint pkgmodel.FieldHint, keep func(string) bool) (json.RawMessage, error) {
+	elems := val.Array()
+	var toDelete []int
+	for i, el := range elems {
+		identity, ok := singleMemberIdentity(el, hint)
+		if !ok {
+			continue
+		}
+		if !keep(identity) {
+			toDelete = append(toDelete, i)
+		}
+	}
+
+	out := doc
+	// Delete from the highest index down so earlier deletions never shift the
+	// index of an element still queued for removal.
+	for i := len(toDelete) - 1; i >= 0; i-- {
+		idx := toDelete[i]
+		updated, err := sjson.DeleteBytes(out, fmt.Sprintf("%s.%d", fieldPath, idx))
+		if err != nil {
+			return nil, fmt.Errorf("failed to drop unowned array member at %q[%d]: %w", fieldPath, idx, err)
+		}
+		out = updated
+	}
+	return out, nil
+}
+
+// singleMemberIdentity computes one array element's identity by reusing
+// pkgmodel.MemberIdentities against a synthetic one-element array holding
+// just that element — the same envelope-flattening and per-rule logic
+// MemberIdentities already applies to a whole collection, without
+// duplicating it here. Returns false if the element contributes no identity
+// at all (an envelope missing $value), matching MemberIdentities' own
+// "contributes nothing" handling of such elements.
+func singleMemberIdentity(el gjson.Result, hint pkgmodel.FieldHint) (string, bool) {
+	wrapped := gjson.Parse("[" + el.Raw + "]")
+	ids := pkgmodel.MemberIdentities(wrapped, hint)
+	if len(ids) != 1 {
+		return "", false
+	}
+	return ids[0], true
+}
+
+// escapeGjsonPathKey escapes the gjson/sjson path metacharacters a map key
+// might contain, so a key like "a.b" addresses itself as one literal key
+// rather than being read as nested path syntax.
+//
+// The set is: '\' and '.', which sjson's path parser always treats specially
+// (escape-mode trigger and path-segment separator, handled before any
+// per-character check runs — see parsePath in sjson.go), plus every
+// character sjson's own isSimpleChar predicate rejects — '|', '#', '@', '*',
+// '?' (github.com/tidwall/sjson@v1.2.5/sjson.go:45-51). Deriving the set from
+// that predicate, rather than hand-picking characters that "look" special,
+// is what catches '|': a key containing it would otherwise fail DeleteBytes
+// and fall back to emitting the field unfiltered.
+const gjsonPathSpecialChars = `\.|#@*?`
+
+func escapeGjsonPathKey(key string) string {
+	if !strings.ContainsAny(key, gjsonPathSpecialChars) {
+		return key
+	}
+	var escaped strings.Builder
+	escaped.Grow(len(key) + 4)
+	for _, r := range key {
+		if strings.ContainsRune(gjsonPathSpecialChars, r) {
+			escaped.WriteByte('\\')
+		}
+		escaped.WriteRune(r)
+	}
+	return escaped.String()
 }
