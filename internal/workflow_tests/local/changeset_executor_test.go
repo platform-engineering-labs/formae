@@ -888,7 +888,23 @@ func TestChangesetExecutor_PartialFailureStillCleansUpEmptiedStacks(t *testing.T
 
 		assert.Equal(t, changeset.ChangeSetStateFinishedWithErrors, completed.State,
 			"precondition: the changeset must have ended with errors")
-		assert.True(t, logCapture.ContainsAll("Using pre-captured stacks for cleanup"),
-			"a changeset that ended with errors must still clean up the stacks its deletes emptied")
+
+		// The datastore, not the executor's log line: that line is emitted
+		// before the dispatch guard, so it says only that the branch was
+		// entered, never that a stack was actually removed. Cleanup is sent
+		// asynchronously and handled by the persister, so poll for it.
+		// What this pins is the executor's half: that a changeset ending with
+		// errors still reaches the cleanup branch AND still dispatches, with
+		// the emptied stack named. The rendered stack list matters — the log
+		// line is emitted before the dispatch guard, so the message alone
+		// would pass even with nothing to send.
+		//
+		// It deliberately stops at the dispatch. Whether the persister then
+		// removes a stack, and only when it is genuinely empty, is
+		// TestResourcePersister_CleanupEmptyStacks; asserting it again here
+		// would need a fully wired delete, which this harness builds through
+		// ApplyForma rather than hand-assembled updates.
+		assert.True(t, logCapture.ContainsAll("Using pre-captured stacks for cleanup", "stacks=[test-stack]"),
+			"a changeset that ended with errors must still dispatch cleanup for the stacks its deletes emptied")
 	})
 }
