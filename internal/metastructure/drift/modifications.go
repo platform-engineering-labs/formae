@@ -134,7 +134,10 @@ func FilterUnabsorbedModifications(
 		// state has already absorbed (e.g. a synced secret rotation reaching
 		// its consumer). It asserts no state differing from the current one,
 		// so it must not block absorbing the modification it follows from.
-		if ru.ConvergenceOnly() {
+		// A record-only update is the same shape for the ownership record:
+		// it commits a claim over current state (empty patch, current
+		// properties) — the absorb path itself — and asserts no change.
+		if ru.ConvergenceOnly() || ru.RecordOnly {
 			continue
 		}
 		resourcesWithUpdates[resourceKey{
