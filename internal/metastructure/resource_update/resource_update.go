@@ -572,7 +572,11 @@ func (ru *ResourceUpdate) updateResourceUpdateFromProgress(progress *resource.Pr
 		// (the planning-time claim) in place.
 		noFreshDeclaration := ru.RecordOnly || bytes.Equal(declaredDoc, ru.PreviousProperties)
 		if writeOrigin && !noFreshDeclaration {
-			ru.DesiredState.OwnedMembers = claimedMembers(declaredDoc, progress.ResourceProperties, ru.DesiredState.Schema)
+			// PriorState's record is the claim being recomputed FROM: a path
+			// the declaration no longer covers (unset) or cannot identify yet
+			// (an unresolved member) carries its prior entry instead of being
+			// recomputed to nothing — see claimedMembers.
+			ru.DesiredState.OwnedMembers = claimedMembers(declaredDoc, progress.ResourceProperties, ru.PriorState.OwnedMembers, ru.DesiredState.Schema)
 		}
 	}
 

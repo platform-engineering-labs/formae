@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"slices"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/patch"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
@@ -50,7 +51,7 @@ func NewResourceUpdateForExisting(
 	// removed a member this forma also declares), and that is exactly the
 	// legacy-bootstrap case (no record yet, existing==desired byte-for-byte)
 	// the identical-resources return would otherwise swallow.
-	claim := claimedMembers(filteredProps, existingResource.Properties, newResource.Schema)
+	claim := claimedMembers(filteredProps, existingResource.Properties, existingResource.OwnedMembers, newResource.Schema)
 	ownershipDelta := !pkgmodel.OwnedMembersEqual(
 		pkgmodel.NormalizeOwnedMembers(claim, newResource.Schema.Hints),
 		pkgmodel.NormalizeOwnedMembers(existingResource.OwnedMembers, newResource.Schema.Hints))
@@ -260,9 +261,30 @@ func NewResourceUpdateForExisting(
 // this forma declares but the provider does not show — or the reverse — is
 // not claimable yet, so only the intersection earns a record entry. Identity
 // extraction is envelope-flattened (see MemberIdentities): an unresolved
-// $ref/$res/$gen reference contributes nothing to either side. A field whose
-// intersection is empty gets no entry at all.
-func claimedMembers(declared, live json.RawMessage, schema pkgmodel.Schema) pkgmodel.OwnedMembers {
+// $ref/$res/$gen reference contributes nothing to either side.
+//
+// The recompute never drops a claim it cannot see, only ones it can:
+//
+//   - A path absent (or null) in declared is unset. Unset never drains (the
+//     drain trigger is explicit empty), so it must not unclaim either: the
+//     prior entry is carried verbatim, and a later explicit-empty
+//     declaration still finds the claims it is supposed to drain.
+//   - A declared collection holding a member with no plan-time identity (an
+//     unresolved reference) understates the declaration, so the prior
+//     entry's still-live members are unioned in rather than dropped (a
+//     member gone from live is released — the record only ever names
+//     provider-visible members). The cost: a live member removed from the
+//     declaration in the same edit stays claimed until the next genuine
+//     write recomputes at the echo, where references are resolved.
+//   - A fully identifiable declaration recomputes downward: a shrink or an
+//     explicit empty releases claims (after its drain), which is what lets
+//     a co-actor's later re-add of the same member be tolerated.
+//
+// Carrying consults the prior entry only when its Rule matches the field's
+// current hint (a mismatched record is uninterpretable), except the unset
+// case, which copies bytes without interpreting them. A field with no entry
+// and nothing claimable gets no entry at all.
+func claimedMembers(declared, live json.RawMessage, prior pkgmodel.OwnedMembers, schema pkgmodel.Schema) pkgmodel.OwnedMembers {
 	var claim pkgmodel.OwnedMembers
 	for path, hint := range schema.Hints {
 		if hint.CoOwned == nil {
@@ -279,9 +301,26 @@ func claimedMembers(declared, live json.RawMessage, schema pkgmodel.Schema) pkgm
 			continue
 		}
 
-		declaredMembers := pkgmodel.MemberIdentities(gjson.GetBytes(declared, path), hint)
+		priorEntry, hasPrior := prior[path]
+
+		declaredVal := gjson.GetBytes(declared, path)
+		if !declaredVal.Exists() || declaredVal.Type == gjson.Null {
+			if hasPrior {
+				if claim == nil {
+					claim = pkgmodel.OwnedMembers{}
+				}
+				claim[path] = priorEntry
+			}
+			continue
+		}
+
+		declaredMembers := pkgmodel.MemberIdentities(declaredVal, hint)
 		liveMembers := pkgmodel.MemberIdentities(gjson.GetBytes(live, path), hint)
 		claimed := intersectIdentities(declaredMembers, liveMembers)
+		if hasPrior && priorEntry.Rule == pkgmodel.IdentityRule(hint) &&
+			pkgmodel.MemberIdentitiesIncomplete(declaredVal, hint) {
+			claimed = unionIdentities(claimed, intersectIdentities(priorEntry.Members, liveMembers))
+		}
 		if len(claimed) == 0 {
 			continue
 		}
@@ -292,6 +331,23 @@ func claimedMembers(declared, live json.RawMessage, schema pkgmodel.Schema) pkgm
 		claim[path] = pkgmodel.OwnedPathRecord{Rule: pkgmodel.IdentityRule(hint), Members: claimed}
 	}
 	return claim
+}
+
+// unionIdentities returns the sorted, deduplicated union of a and b.
+func unionIdentities(a, b []string) []string {
+	seen := make(map[string]struct{}, len(a)+len(b))
+	for _, s := range a {
+		seen[s] = struct{}{}
+	}
+	for _, s := range b {
+		seen[s] = struct{}{}
+	}
+	out := make([]string, 0, len(seen))
+	for s := range seen {
+		out = append(out, s)
+	}
+	slices.Sort(out)
+	return out
 }
 
 // intersectIdentities returns the members of a that also appear in b. Both

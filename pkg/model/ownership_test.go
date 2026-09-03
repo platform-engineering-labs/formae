@@ -202,3 +202,50 @@ func TestResource_OwnedMembers_AbsentUnmarshalsToNil(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(`{"Label":"sg-1"}`), &decoded))
 	assert.Nil(t, decoded.OwnedMembers)
 }
+
+func TestMemberIdentitiesIncomplete(t *testing.T) {
+	setHint := FieldHint{UpdateMethod: FieldUpdateMethodSet}
+	esHint := FieldHint{UpdateMethod: FieldUpdateMethodEntitySet, IndexField: "Key"}
+	mapHint := FieldHint{}
+
+	cases := []struct {
+		name string
+		json string
+		hint FieldHint
+		want bool
+	}{
+		{"literal set members", `["a","b"]`, setHint, false},
+		{"resolved envelope member", `[{"$ref":"formae://resource/x#/Id","$value":"sg-1"}]`, setHint, false},
+		{"unresolved ref member", `[{"$ref":"formae://resource/x#/Id"}]`, setHint, true},
+		{"unresolved resolvable member", `[{"$res":true,"$type":"String"}]`, setHint, true},
+		{"entityset member with key", `[{"Key":"a","Value":"1"}]`, esHint, false},
+		{"entityset member missing key", `[{"Value":"1"}]`, esHint, true},
+		{"mapping keys always identify", `{"mine":{"$res":true,"$type":"String"}}`, mapHint, false},
+		{"whole-field unresolved envelope", `{"$res":true,"$type":"Mapping"}`, mapHint, true},
+		{"whole-field resolved envelope", `{"$res":true,"$type":"Mapping","$value":{"mine":"1"}}`, mapHint, false},
+		{"whole-field resolved set envelope", `{"$ref":"formae://resource/x#/Ids","$value":["a"]}`, setHint, false},
+		{"whole-field resolved envelope with unresolved member", `{"$ref":"formae://resource/x#/Ids","$value":[{"$ref":"formae://resource/y#/Id"}]}`, setHint, true},
+		{"empty collection", `[]`, setHint, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := MemberIdentitiesIncomplete(gjson.Parse(tc.json), tc.hint)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestMemberIdentities_WholeFieldEnvelopeFlattens(t *testing.T) {
+	setHint := FieldHint{UpdateMethod: FieldUpdateMethodSet}
+
+	got := MemberIdentities(gjson.Parse(`{"$ref":"formae://resource/x#/Ids","$value":["a","b"]}`), setHint)
+	assert.Equal(t, []string{`"a"`, `"b"`}, got,
+		"a resolved whole-field envelope exposes its members through $value")
+
+	got = MemberIdentities(gjson.Parse(`{"$ref":"formae://resource/x#/Ids"}`), setHint)
+	assert.Empty(t, got, "an unresolved whole-field envelope contributes nothing")
+
+	got = MemberIdentities(gjson.Parse(`{"$res":true,"$type":"Mapping","$value":{"mine":"1"}}`), FieldHint{})
+	assert.Equal(t, []string{"mine"}, got,
+		"a resolved whole-field Mapping envelope's identities are its $value's keys")
+}
