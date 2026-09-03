@@ -154,8 +154,14 @@ func (s *ChangesetExecutor) Init(args ...any) (statemachine.StateMachineSpec[Cha
 }
 
 func onStateChange(oldState gen.Atom, newState gen.Atom, data ChangesetData, proc gen.Process) (gen.Atom, ChangesetData, error) {
-	// Cleanup empty stacks after successful completion
-	if newState == StateFinishedSuccessfully {
+	// Cleanup empty stacks once execution is over, whether or not every update
+	// in it succeeded. Eligibility is about what the deletes actually did, not
+	// about the changeset's aggregate verdict: one delete can succeed and take
+	// the last resource out of a stack while an unrelated update fails, and
+	// that stack is just as empty either way. Gating this on success alone
+	// left the record behind. Safe to run on both, because the persister
+	// re-checks emptiness and the labels were captured at start.
+	if newState == StateFinishedSuccessfully || newState == StateFinishedWithError {
 		// Use the stacks captured at start, since the DAG is empty by now
 		proc.Log().Debug("Using pre-captured stacks for cleanup stacks=%v commandID=%s", data.stacksWithDeletes, data.changeset.CommandID)
 		if len(data.stacksWithDeletes) > 0 {

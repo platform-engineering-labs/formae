@@ -804,3 +804,91 @@ func newTestUpdateResourceUpdate(label, nativeID, resourceType string) resource_
 		StackLabel:           "test-stack",
 	}
 }
+
+// A changeset that finished with errors must still clean up the stacks its
+// successful deletes emptied.
+//
+// Cleanup eligibility is about what the deletes actually did, not about the
+// changeset's aggregate verdict: one delete can succeed and take the last
+// resource out of a stack while an unrelated update fails in the same command,
+// and that stack is just as empty either way. Gating the cleanup on
+// FinishedSuccessfully alone leaves the emptied stack's record behind.
+func TestChangesetExecutor_PartialFailureStillCleansUpEmptiedStacks(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		logCapture := test_helpers.SetupTestLogger()
+
+		overrides := &plugin.ResourcePluginOverrides{
+			Create: func(request *resource.CreateRequest) (*resource.CreateResult, error) {
+				return &resource.CreateResult{
+					ProgressResult: &resource.ProgressResult{
+						Operation:       resource.OperationCreate,
+						OperationStatus: resource.OperationStatusFailure,
+						RequestID:       "test-request-id",
+						StatusMessage:   "deliberate failure, so the changeset ends with errors",
+					},
+				}, nil
+			},
+			Delete: func(request *resource.DeleteRequest) (*resource.DeleteResult, error) {
+				return &resource.DeleteResult{
+					ProgressResult: &resource.ProgressResult{
+						Operation:       resource.OperationDelete,
+						OperationStatus: resource.OperationStatusSuccess,
+						RequestID:       "test-request-id",
+					},
+				}, nil
+			},
+		}
+
+		m, def, err := test_helpers.NewTestMetastructure(t, overrides)
+		defer def()
+		assert.NoError(t, err)
+
+		messages := make(chan any, 10)
+		_, err = testutil.StartTestHelperActor(m.Node, messages)
+		assert.NoError(t, err)
+
+		commandID := "test-command-partial-failure-cleanup"
+
+		// Independent of each other: the delete is not what fails, and nothing
+		// cascades. The changeset simply ends with one of each.
+		doomed := newTestResourceUpdate("test-doomed", nil, "FakeAWS::EC2::VPC")
+		gone := newTestResourceUpdate("test-gone", nil, "FakeAWS::S3::Bucket")
+		gone.Operation = resource_update.OperationDelete
+
+		testutil.Call(m.Node, "FormaCommandPersister", forma_persister.StoreNewFormaCommand{
+			Command: forma_command.FormaCommand{
+				ID:              commandID,
+				State:           forma_command.CommandStateNotStarted,
+				ResourceUpdates: []resource_update.ResourceUpdate{doomed, gone},
+			},
+		})
+
+		cs, err := buildChangesetWithResolves(
+			[]resource_update.ResourceUpdate{doomed, gone}, nil, commandID, pkgmodel.CommandApply, m.Datastore)
+		assert.NoError(t, err)
+
+		_, err = testutil.Call(m.Node, "ChangesetSupervisor", changeset.EnsureChangesetExecutor{
+			CommandID: commandID,
+		})
+		assert.NoError(t, err)
+
+		testutil.Send(m.Node, actornames.ChangesetExecutor(commandID), changeset.Start{
+			Changeset:        cs,
+			NotifyOnComplete: true,
+		})
+
+		var completed changeset.ChangesetCompleted
+		testutil.ExpectMessageWithPredicate(t, messages, 15*time.Second, func(msg changeset.ChangesetCompleted) bool {
+			if msg.CommandID != commandID {
+				return false
+			}
+			completed = msg
+			return true
+		})
+
+		assert.Equal(t, changeset.ChangeSetStateFinishedWithErrors, completed.State,
+			"precondition: the changeset must have ended with errors")
+		assert.True(t, logCapture.ContainsAll("Using pre-captured stacks for cleanup"),
+			"a changeset that ended with errors must still clean up the stacks its deletes emptied")
+	})
+}
