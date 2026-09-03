@@ -871,6 +871,25 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 	// resource. Only this copy changes; DesiredState.Properties stays the
 	// durable record of the stored hash.
 	desiredForPlugin := data.resourceUpdate.DesiredState
+	// Complete each co-owned collection to its intended post-write value
+	// (declared plus never-owned live members), so DesiredProperties and
+	// PatchDocument tell the plugin the same thing. Only this copy changes;
+	// DesiredState.Properties stays the declared-only durable record the
+	// write-echo recompute claims from.
+	projectedProperties, err := patch.ProjectDesiredForWrite(
+		desiredForPlugin.Properties,
+		data.resourceUpdate.PriorState.Properties,
+		data.resourceUpdate.PriorState.OwnedMembers,
+		desiredForPlugin.Schema,
+	)
+	if err != nil {
+		proc.Log().Error("failed to project co-owned desired properties for plugin: %v", err)
+		data.resourceUpdate.FailureReason = updateRequestFailureReason(err)
+		data.resourceUpdate.MarkAsFailed()
+		return StateFinishedWithError, data, nil, nil
+	}
+	desiredForPlugin.Properties = projectedProperties
+
 	frozenProperties, err := FreezeUnrecoverableOpaqueValues(
 		data.resourceUpdate.PriorState.Properties,
 		desiredForPlugin.Properties,
