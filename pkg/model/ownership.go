@@ -52,9 +52,16 @@ func IdentityRule(hint FieldHint) string {
 //   - array otherwise => the canonical JSON of each element.
 //
 // Reference envelopes ($ref/$res/$gen objects) are flattened to their $value
-// first, recursively; an element whose envelope lacks $value contributes
-// nothing to the result. The result is sorted and deduplicated.
+// first, recursively — a whole-field envelope as much as a per-element one;
+// an envelope lacking $value contributes nothing to the result. The result
+// is sorted and deduplicated.
 func MemberIdentities(value gjson.Result, hint FieldHint) []string {
+	if inner, ok := wholeFieldEnvelopeValue(value); ok {
+		if !inner.Exists() || inner.Type == gjson.Null {
+			return []string{}
+		}
+		return MemberIdentities(inner, hint)
+	}
 	switch {
 	case value.IsObject():
 		var out []string
@@ -81,11 +88,18 @@ func MemberIdentities(value gjson.Result, hint FieldHint) []string {
 // are just not knowable yet — so a record recompute based on them must not
 // drop existing claims.
 func MemberIdentitiesIncomplete(value gjson.Result, hint FieldHint) bool {
+	if inner, ok := wholeFieldEnvelopeValue(value); ok {
+		// A resolved whole-field envelope exposes its members through
+		// $value; only an unresolved one hides them.
+		if !inner.Exists() || inner.Type == gjson.Null {
+			return true
+		}
+		return MemberIdentitiesIncomplete(inner, hint)
+	}
 	switch {
 	case value.IsObject():
-		// A whole-field envelope hides every member; a plain object's
-		// identities are its keys, which are always present.
-		return IsResolvedReference(value) || IsResolvableObject(value) || IsGenObject(value)
+		// A plain object's identities are its keys, which are always present.
+		return false
 	case value.IsArray():
 		incomplete := false
 		value.ForEach(func(_, el gjson.Result) bool {
@@ -111,6 +125,19 @@ func MemberIdentitiesIncomplete(value gjson.Result, hint FieldHint) bool {
 	default:
 		return false
 	}
+}
+
+// wholeFieldEnvelopeValue reports whether value is a reference envelope at
+// the whole-field position ($ref/$res/$gen object) and, if so, returns its
+// $value (which may not exist, or be null, for an unresolved envelope).
+func wholeFieldEnvelopeValue(value gjson.Result) (gjson.Result, bool) {
+	if !value.IsObject() {
+		return gjson.Result{}, false
+	}
+	if IsResolvedReference(value) || IsResolvableObject(value) || IsGenObject(value) {
+		return value.Get("$value"), true
+	}
+	return gjson.Result{}, false
 }
 
 // entitySetIdentities extracts the json-marshaled IndexField value of every
