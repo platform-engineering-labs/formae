@@ -529,22 +529,23 @@ func TestUpdate_LabelOnlyRename_DoesNotOverClaimCoActorMember(t *testing.T) {
 
 // A declared member whose reference is still unresolved at plan time
 // contributes no identity, so the plan-time recompute understates the
-// declaration. The existing claim must be carried, not erased: with the
-// carry there is no ownership delta and no update at all, where an erasing
-// recompute would have produced a record-only update wiping the claim.
-func TestNewResourceUpdateForExisting_OwnershipRecord_DeferredRefCarriesExistingClaim_NoUpdate(t *testing.T) {
+// declaration. Prior claims must be carried for members still live —
+// "sg-1" keeps its claim — while a claimed member gone from live is
+// released ("gone": the record only ever names provider-visible members,
+// so a co-actor re-adding it later is never-owned and tolerated) and a
+// co-actor's live member is never claimed ("other").
+func TestClaimedMembers_DeferredRefCarriesPriorClaimsStillLive(t *testing.T) {
 	schema := coOwnedSetSchema()
-	props := json.RawMessage(`{"Tags":[{"$res":true,"$type":"String"}]}`)
-	record := pkgmodel.OwnedMembers{"Tags": {Rule: "Set", Members: []string{`"sg-1"`}}}
+	prior := pkgmodel.OwnedMembers{"Tags": {Rule: "Set", Members: []string{`"gone"`, `"sg-1"`}}}
 
-	existing := newResourceForOwnershipTest(schema, "sg", "default", props, record)
-	newRes := newResourceForOwnershipTest(schema, "sg", "default", props, nil)
-	newRes.Ksuid = ""
+	claim := claimedMembers(
+		json.RawMessage(`{"Tags":[{"$res":true,"$type":"String"}]}`),
+		json.RawMessage(`{"Tags":["sg-1","other"]}`),
+		prior, schema)
 
-	updates, err := NewResourceUpdateForExisting(resolver.ResolvableProperties{}, nil, existing, newRes,
-		ownershipTestTarget(), ownershipTestTarget(), pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser, false, false)
-	require.NoError(t, err)
-	assert.Empty(t, updates, "a deferred-ref declaration must carry the claim, not plan a record-only wipe")
+	want := pkgmodel.OwnedMembers{"Tags": {Rule: "Set", Members: []string{`"sg-1"`}}}
+	assert.True(t, pkgmodel.OwnedMembersEqual(want, claim),
+		"expected only the still-live prior claim carried, got %#v", claim)
 }
 
 // Removing a co-owned declaration entirely (field unset) never drains — the

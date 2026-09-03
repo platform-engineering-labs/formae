@@ -271,10 +271,11 @@ func NewResourceUpdateForExisting(
 //     declaration still finds the claims it is supposed to drain.
 //   - A declared collection holding a member with no plan-time identity (an
 //     unresolved reference) understates the declaration, so the prior
-//     entry's members are unioned in rather than dropped. The cost: a
-//     member removed from the declaration in the same edit stays claimed
-//     until the next genuine write recomputes at the echo, where references
-//     are resolved.
+//     entry's still-live members are unioned in rather than dropped (a
+//     member gone from live is released — the record only ever names
+//     provider-visible members). The cost: a live member removed from the
+//     declaration in the same edit stays claimed until the next genuine
+//     write recomputes at the echo, where references are resolved.
 //   - A fully identifiable declaration recomputes downward: a shrink or an
 //     explicit empty releases claims (after its drain), which is what lets
 //     a co-actor's later re-add of the same member be tolerated.
@@ -318,7 +319,7 @@ func claimedMembers(declared, live json.RawMessage, prior pkgmodel.OwnedMembers,
 		claimed := intersectIdentities(declaredMembers, liveMembers)
 		if hasPrior && priorEntry.Rule == pkgmodel.IdentityRule(hint) &&
 			pkgmodel.MemberIdentitiesIncomplete(declaredVal, hint) {
-			claimed = unionIdentities(claimed, priorEntry.Members)
+			claimed = unionIdentities(claimed, intersectIdentities(priorEntry.Members, liveMembers))
 		}
 		if len(claimed) == 0 {
 			continue
