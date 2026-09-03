@@ -732,6 +732,7 @@ func refuseRotationOnDrift(ds datastore.Datastore, forma *pkgmodel.Forma, fc *fo
 	for label, modifications := range modificationsByStack {
 		unabsorbed := drift.FilterUnabsorbedModifications(modifications, forma, fc)
 		unabsorbed = append(unabsorbed, drift.WitnessedMovedModifications(modifications, witnessByKsuid, recordByKsuid, forma, fc)...)
+		unabsorbed = drift.RetainConfrontable(unabsorbed, recordByKsuid, forma)
 		if len(unabsorbed) == 0 {
 			continue
 		}

@@ -423,6 +423,7 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 		for stackLabel, modifications := range modificationsByStack {
 			unabsorbed := drift.FilterUnabsorbedModifications(modifications, forma, fa)
 			unabsorbed = append(unabsorbed, drift.WitnessedMovedModifications(modifications, witnessByKsuid, recordByKsuid, forma, fa)...)
+			unabsorbed = drift.RetainConfrontable(unabsorbed, recordByKsuid, forma)
 			if len(unabsorbed) > 0 {
 				modifiedResources := make([]apimodel.ResourceModification, 0, len(unabsorbed))
 				for _, modification := range unabsorbed {
