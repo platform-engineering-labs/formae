@@ -281,9 +281,21 @@ func TestChangesetExecutor_CascadeFailure(t *testing.T) {
 		})
 
 		// Wait for completion (even with failures, the changeset completes)
+		var completed changeset.ChangesetCompleted
 		testutil.ExpectMessageWithPredicate(t, messages, 10*time.Second, func(msg changeset.ChangesetCompleted) bool {
-			return msg.CommandID == commandID
+			if msg.CommandID != commandID {
+				return false
+			}
+			completed = msg
+			return true
 		})
+
+		// The state the requester is told is the only thing it has to decide
+		// whether to retry. Anything that backs off on failure — the generator
+		// rotator most of all — reads a cascade reported as success as a reason
+		// to clear its backoff and try again on the very next sweep, forever.
+		assert.Equal(t, changeset.ChangeSetStateFinishedWithErrors, completed.State,
+			"a changeset that completed with failed nodes must report FinishedWithErrors")
 
 		// Verify cascading failure occurred
 		commandRes, err := testutil.Call(m.Node, "FormaCommandPersister", forma_persister.LoadFormaCommand{

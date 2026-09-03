@@ -111,6 +111,11 @@ type ChangesetData struct {
 	discoveryPaused          bool     // Tracks if this changeset paused Discovery
 	stacksWithDeletes        []string // Stacks that had delete operations, captured at start
 	syncExcludedResourceURIs []string // Resource URIs registered with Synchronizer, captured at start
+	// Whether any update in this changeset finished failed. It cannot be
+	// recovered from the DAG at completion: UpdateDAG removes failed nodes
+	// exactly as it removes successful ones, so the DAG is empty either way
+	// and an empty DAG says nothing about the outcome.
+	sawFailure bool
 }
 
 type RegisterEvents struct{}
@@ -629,6 +634,7 @@ func handleUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, even
 		}
 	} else {
 		node.Update.MarkFailed()
+		data.sawFailure = true
 	}
 
 	// Update DAG and get any cascading failures
@@ -699,6 +705,16 @@ func handleUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, even
 	}
 
 	if data.changeset.IsComplete() {
+		// The requester is told nothing else about the outcome, and some of
+		// them retry on it. The generator rotator clears its backoff on a
+		// success and derives its cadence from the command's own state, so a
+		// changeset that failed but reported success leaves it with no
+		// backoff and no advanced cadence — it rotates again on the next
+		// sweep, and every sweep after that.
+		if data.sawFailure {
+			proc.Log().Debug("Changeset execution finished with failures for command commandID=%s", data.changeset.CommandID)
+			return StateFinishedWithError, data, nil, nil
+		}
 		proc.Log().Debug("Changeset execution finished for command commandID=%s", data.changeset.CommandID)
 		return StateFinishedSuccessfully, data, nil, nil
 	}
