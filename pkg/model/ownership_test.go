@@ -202,3 +202,32 @@ func TestResource_OwnedMembers_AbsentUnmarshalsToNil(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(`{"Label":"sg-1"}`), &decoded))
 	assert.Nil(t, decoded.OwnedMembers)
 }
+
+func TestMemberIdentitiesIncomplete(t *testing.T) {
+	setHint := FieldHint{UpdateMethod: FieldUpdateMethodSet}
+	esHint := FieldHint{UpdateMethod: FieldUpdateMethodEntitySet, IndexField: "Key"}
+	mapHint := FieldHint{}
+
+	cases := []struct {
+		name string
+		json string
+		hint FieldHint
+		want bool
+	}{
+		{"literal set members", `["a","b"]`, setHint, false},
+		{"resolved envelope member", `[{"$ref":"formae://resource/x#/Id","$value":"sg-1"}]`, setHint, false},
+		{"unresolved ref member", `[{"$ref":"formae://resource/x#/Id"}]`, setHint, true},
+		{"unresolved resolvable member", `[{"$res":true,"$type":"String"}]`, setHint, true},
+		{"entityset member with key", `[{"Key":"a","Value":"1"}]`, esHint, false},
+		{"entityset member missing key", `[{"Value":"1"}]`, esHint, true},
+		{"mapping keys always identify", `{"mine":{"$res":true,"$type":"String"}}`, mapHint, false},
+		{"whole-field unresolved envelope", `{"$res":true,"$type":"Mapping"}`, mapHint, true},
+		{"empty collection", `[]`, setHint, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := MemberIdentitiesIncomplete(gjson.Parse(tc.json), tc.hint)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}

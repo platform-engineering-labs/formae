@@ -526,3 +526,169 @@ func TestUpdate_LabelOnlyRename_DoesNotOverClaimCoActorMember(t *testing.T) {
 		"a label-only rename must not over-claim a co-actor's live member; got %#v",
 		data.resourceUpdate.DesiredState.OwnedMembers)
 }
+
+// A declared member whose reference is still unresolved at plan time
+// contributes no identity, so the plan-time recompute understates the
+// declaration. The existing claim must be carried, not erased: with the
+// carry there is no ownership delta and no update at all, where an erasing
+// recompute would have produced a record-only update wiping the claim.
+func TestNewResourceUpdateForExisting_OwnershipRecord_DeferredRefCarriesExistingClaim_NoUpdate(t *testing.T) {
+	schema := coOwnedSetSchema()
+	props := json.RawMessage(`{"Tags":[{"$res":true,"$type":"String"}]}`)
+	record := pkgmodel.OwnedMembers{"Tags": {Rule: "Set", Members: []string{`"sg-1"`}}}
+
+	existing := newResourceForOwnershipTest(schema, "sg", "default", props, record)
+	newRes := newResourceForOwnershipTest(schema, "sg", "default", props, nil)
+	newRes.Ksuid = ""
+
+	updates, err := NewResourceUpdateForExisting(resolver.ResolvableProperties{}, nil, existing, newRes,
+		ownershipTestTarget(), ownershipTestTarget(), pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser, false, false)
+	require.NoError(t, err)
+	assert.Empty(t, updates, "a deferred-ref declaration must carry the claim, not plan a record-only wipe")
+}
+
+// Removing a co-owned declaration entirely (field unset) never drains — the
+// drain trigger is explicit empty — so it must not unclaim either. The
+// prior entry is carried verbatim: no ownership delta, no update, and a
+// later explicit-empty declaration still finds the claims it drains.
+func TestNewResourceUpdateForExisting_OwnershipRecord_UnsetDeclarationKeepsClaim_NoUpdate(t *testing.T) {
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Tags"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"Tags": {UpdateMethod: pkgmodel.FieldUpdateMethodSet, CoOwned: &pkgmodel.CoOwnership{}},
+		},
+	}
+	record := pkgmodel.OwnedMembers{"Tags": {Rule: "Set", Members: []string{`"u1"`}}}
+
+	existing := newResourceForOwnershipTest(schema, "sg", "default", json.RawMessage(`{"Name":"p","Tags":["u1"]}`), record)
+	newRes := newResourceForOwnershipTest(schema, "sg", "default", json.RawMessage(`{"Name":"p"}`), nil)
+	newRes.Ksuid = ""
+
+	updates, err := NewResourceUpdateForExisting(resolver.ResolvableProperties{}, nil, existing, newRes,
+		ownershipTestTarget(), ownershipTestTarget(), pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser, false, false)
+	require.NoError(t, err)
+	assert.Empty(t, updates, "an unset declaration must carry the claim, not plan a record-only wipe")
+}
+
+// An explicitly empty declaration recomputes downward: with nothing left
+// live to drain, the remaining claims are released via a record-only
+// update, so a co-actor's later re-add of the same member is never-owned
+// and tolerated (the one-bounce convergence of the dual-writable pair).
+func TestNewResourceUpdateForExisting_OwnershipRecord_ExplicitEmptyReleasesClaims(t *testing.T) {
+	schema := coOwnedSetSchema()
+	record := pkgmodel.OwnedMembers{"Tags": {Rule: "Set", Members: []string{`"a"`}}}
+
+	existing := newResourceForOwnershipTest(schema, "sg", "default", json.RawMessage(`{"Tags":[]}`), record)
+	newRes := newResourceForOwnershipTest(schema, "sg", "default", json.RawMessage(`{"Tags":[]}`), nil)
+	newRes.Ksuid = ""
+
+	updates, err := NewResourceUpdateForExisting(resolver.ResolvableProperties{}, nil, existing, newRes,
+		ownershipTestTarget(), ownershipTestTarget(), pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser, false, false)
+	require.NoError(t, err)
+	require.Len(t, updates, 1, "releasing stale claims still needs a record-only update")
+	assert.True(t, updates[0].RecordOnly)
+	assert.Empty(t, updates[0].DesiredState.OwnedMembers,
+		"an explicit empty declaration with nothing live releases the claims")
+}
+
+// A carried prior entry whose Rule no longer matches the field's hint is
+// uninterpretable for the union: a deferred-ref declaration must then fall
+// back to the plain recompute instead of merging members computed under a
+// different identity scheme.
+func TestNewResourceUpdateForExisting_OwnershipRecord_RuleMismatchedPriorNotUnioned(t *testing.T) {
+	schema := coOwnedSetSchema()
+	props := json.RawMessage(`{"Tags":[{"$res":true,"$type":"String"}]}`)
+	record := pkgmodel.OwnedMembers{"Tags": {Rule: "EntitySet/Key", Members: []string{`"sg-1"`}}}
+
+	existing := newResourceForOwnershipTest(schema, "sg", "default", props, record)
+	newRes := newResourceForOwnershipTest(schema, "sg", "default", props, nil)
+	newRes.Ksuid = ""
+
+	updates, err := NewResourceUpdateForExisting(resolver.ResolvableProperties{}, nil, existing, newRes,
+		ownershipTestTarget(), ownershipTestTarget(), pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser, false, false)
+	require.NoError(t, err)
+	require.Len(t, updates, 1, "the stale record differs from the empty recompute, so it is rewritten")
+	assert.True(t, updates[0].RecordOnly)
+	assert.Empty(t, updates[0].DesiredState.OwnedMembers,
+		"members recorded under a different identity rule must not be carried into the union")
+}
+
+// Echo recompute, unset face: a genuine write whose declaration no longer
+// covers the co-owned field must carry the prior claim through the echo
+// merge instead of recomputing the path to nothing.
+func TestRecordProgress_OwnershipRecord_UnsetFieldCarriesPriorClaim(t *testing.T) {
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Tags"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"Tags": {UpdateMethod: pkgmodel.FieldUpdateMethodSet, CoOwned: &pkgmodel.CoOwnership{}},
+		},
+	}
+	record := pkgmodel.OwnedMembers{"Tags": {Rule: "Set", Members: []string{`"u1"`}}}
+	ru := &ResourceUpdate{
+		Operation: OperationUpdate,
+		DesiredState: pkgmodel.Resource{
+			Properties: json.RawMessage(`{"Name":"new"}`),
+			Schema:     schema,
+		},
+		PriorState: pkgmodel.Resource{
+			Properties:   json.RawMessage(`{"Name":"old","Tags":["u1"]}`),
+			Schema:       schema,
+			OwnedMembers: record,
+		},
+		PreviousProperties: json.RawMessage(`{"Name":"old","Tags":["u1"]}`),
+	}
+
+	progress := &plugin.TrackedProgress{
+		ProgressResult: resource.ProgressResult{
+			Operation:          resource.OperationUpdate,
+			OperationStatus:    resource.OperationStatusSuccess,
+			ResourceProperties: json.RawMessage(`{"Name":"new","Tags":["u1"]}`),
+		},
+		Attempts:    1,
+		MaxAttempts: 1,
+	}
+
+	err := ru.RecordProgress(progress)
+	require.NoError(t, err)
+
+	assert.True(t, pkgmodel.OwnedMembersEqual(record, ru.DesiredState.OwnedMembers),
+		"an unset co-owned field must carry its prior claim through the echo, got %#v", ru.DesiredState.OwnedMembers)
+}
+
+// Echo recompute, shrink face: a declaration that still covers the field
+// but dropped a member recomputes downward — the dropped member's claim is
+// released once the write lands, so a co-actor re-adding it afterwards is
+// never-owned and tolerated.
+func TestRecordProgress_OwnershipRecord_ShrinkReleasesDroppedMemberClaim(t *testing.T) {
+	record := pkgmodel.OwnedMembers{"Tags": {Rule: "Set", Members: []string{`"a"`, `"b"`}}}
+	ru := &ResourceUpdate{
+		Operation: OperationUpdate,
+		DesiredState: pkgmodel.Resource{
+			Properties: json.RawMessage(`{"Tags":["a"]}`),
+			Schema:     coOwnedSetSchema(),
+		},
+		PriorState: pkgmodel.Resource{
+			Properties:   json.RawMessage(`{"Tags":["a","b"]}`),
+			Schema:       coOwnedSetSchema(),
+			OwnedMembers: record,
+		},
+		PreviousProperties: json.RawMessage(`{"Tags":["a","b"]}`),
+	}
+
+	progress := &plugin.TrackedProgress{
+		ProgressResult: resource.ProgressResult{
+			Operation:          resource.OperationUpdate,
+			OperationStatus:    resource.OperationStatusSuccess,
+			ResourceProperties: json.RawMessage(`{"Tags":["a"]}`),
+		},
+		Attempts:    1,
+		MaxAttempts: 1,
+	}
+
+	err := ru.RecordProgress(progress)
+	require.NoError(t, err)
+
+	want := pkgmodel.OwnedMembers{"Tags": {Rule: "Set", Members: []string{`"a"`}}}
+	assert.True(t, pkgmodel.OwnedMembersEqual(want, ru.DesiredState.OwnedMembers),
+		"a shrink must release the dropped member's claim at the echo, got %#v", ru.DesiredState.OwnedMembers)
+}

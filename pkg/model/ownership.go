@@ -73,6 +73,46 @@ func MemberIdentities(value gjson.Result, hint FieldHint) []string {
 	}
 }
 
+// MemberIdentitiesIncomplete reports whether the collection holds content
+// that contributes no identity to MemberIdentities: an element (or the whole
+// field value) carrying an unresolved reference envelope, or an EntitySet
+// element without its IndexField. Identities computed from such a value
+// understate the declaration — the members are declared, their identities
+// are just not knowable yet — so a record recompute based on them must not
+// drop existing claims.
+func MemberIdentitiesIncomplete(value gjson.Result, hint FieldHint) bool {
+	switch {
+	case value.IsObject():
+		// A whole-field envelope hides every member; a plain object's
+		// identities are its keys, which are always present.
+		return IsResolvedReference(value) || IsResolvableObject(value) || IsGenObject(value)
+	case value.IsArray():
+		incomplete := false
+		value.ForEach(func(_, el gjson.Result) bool {
+			flat, ok := flattenEnvelope(el)
+			if !ok {
+				incomplete = true
+				return false
+			}
+			if hint.UpdateMethod == FieldUpdateMethodEntitySet {
+				fields, isMap := flat.(map[string]any)
+				if !isMap {
+					incomplete = true
+					return false
+				}
+				if _, present := fields[hint.IndexField]; !present {
+					incomplete = true
+					return false
+				}
+			}
+			return true
+		})
+		return incomplete
+	default:
+		return false
+	}
+}
+
 // entitySetIdentities extracts the json-marshaled IndexField value of every
 // element, after flattening each element's own reference envelope (if any).
 func entitySetIdentities(value gjson.Result, indexField string) []string {
