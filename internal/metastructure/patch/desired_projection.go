@@ -46,6 +46,12 @@ func ProjectDesiredForWrite(desired, live json.RawMessage, priorOwned pkgmodel.O
 		if hint.CoOwned == nil || hint.Opaque {
 			continue
 		}
+		// The patch layer ignores a CoOwned hint on an ineligible collection
+		// shape (no identity rule, e.g. Array); the projection must ignore
+		// exactly the same hints or the two representations diverge again.
+		if pkgmodel.IdentityRule(hint) == "" {
+			continue
+		}
 
 		desiredVal := gjson.GetBytes(out, path)
 		if !desiredVal.Exists() || desiredVal.Type == gjson.Null {

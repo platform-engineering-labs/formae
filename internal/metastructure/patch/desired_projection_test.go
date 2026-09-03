@@ -133,3 +133,21 @@ func TestProjectDesiredForWrite_NoNeverOwnedContentPassesThrough(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, string(in), string(out))
 }
+
+// A CoOwned hint on an ineligible collection shape (no identity rule, e.g.
+// Array) is ignored by the patch layer; the projection must ignore exactly
+// the same hints, or the two representations diverge again.
+func TestProjectDesiredForWrite_IneligibleCoOwnedHintIgnored(t *testing.T) {
+	schema := pkgmodel.Schema{
+		Fields: []string{"Ordered"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"Ordered": {UpdateMethod: pkgmodel.FieldUpdateMethodArray, CoOwned: &pkgmodel.CoOwnership{}},
+		},
+	}
+
+	in := json.RawMessage(`{"Ordered":["a"]}`)
+	out, err := ProjectDesiredForWrite(in,
+		json.RawMessage(`{"Ordered":["a","b"]}`), nil, schema)
+	require.NoError(t, err)
+	assert.Equal(t, string(in), string(out))
+}
