@@ -39,6 +39,13 @@ type SuppressedFieldDiff struct {
 	From   json.RawMessage
 	To     json.RawMessage
 	Opaque bool
+
+	// CoOwned marks a note produced by the co-owned regime: movement on a
+	// co-owned collection's never-owned members. Such movement is tolerated
+	// by design — a co-actor's members are legitimately not this forma's —
+	// so the note exists to be shown to whoever asks, never to confront:
+	// the reconcile gate must not reject an apply on its account.
+	CoOwned bool
 }
 
 // SuppressedFieldDiffs compares two stored property documents restricted to
@@ -243,12 +250,13 @@ func coOwnedSuppressedDiff(oldProps, newProps, desired json.RawMessage, path str
 	}
 
 	if pathOpaque(schema, path) || valueHasOpaqueMarker(oldRestricted) || valueHasOpaqueMarker(newRestricted) {
-		return SuppressedFieldDiff{Path: path, Opaque: true}, true
+		return SuppressedFieldDiff{Path: path, Opaque: true, CoOwned: true}, true
 	}
 	return SuppressedFieldDiff{
-		Path: path,
-		From: renderRestrictedMembers(oldRestricted),
-		To:   renderRestrictedMembers(newRestricted),
+		Path:    path,
+		From:    renderRestrictedMembers(oldRestricted),
+		To:      renderRestrictedMembers(newRestricted),
+		CoOwned: true,
 	}, true
 }
 

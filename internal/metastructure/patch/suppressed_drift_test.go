@@ -683,8 +683,28 @@ func TestSuppressedFieldDiffs_CoOwnedMapping_NeverOwnedMemberChanges_Reported(t 
 	require.Len(t, diffs, 1)
 	assert.Equal(t, "labels", diffs[0].Path)
 	assert.False(t, diffs[0].Opaque)
+	assert.True(t, diffs[0].CoOwned, "a co-owned regime note carries the regime marker")
 	assert.JSONEq(t, `{"theirs": "a"}`, string(diffs[0].From))
 	assert.JSONEq(t, `{"theirs": "b"}`, string(diffs[0].To))
+}
+
+func TestSuppressedFieldDiffs_WitnessRegimeNote_NotMarkedCoOwned(t *testing.T) {
+	// A hasProviderDefault note confronts at the reconcile gate; only the
+	// co-owned regime's notes are tolerated display material.
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Setting"},
+		Hints:  map[string]pkgmodel.FieldHint{"Setting": {HasProviderDefault: true}},
+	}
+
+	diffs, err := SuppressedFieldDiffs(
+		json.RawMessage(`{"Name": "n", "Setting": "a"}`),
+		json.RawMessage(`{"Name": "n", "Setting": "b"}`),
+		json.RawMessage(`{"Name": "n"}`),
+		json.RawMessage(`{"Name": "n", "Setting": "a"}`),
+		nil, schema)
+	require.NoError(t, err)
+	require.Len(t, diffs, 1)
+	assert.False(t, diffs[0].CoOwned)
 }
 
 func TestSuppressedFieldDiffs_CoOwnedMapping_DeclaredMemberDisappears_NoNoteForThatMember(t *testing.T) {

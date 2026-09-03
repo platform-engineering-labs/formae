@@ -123,10 +123,10 @@ func coOwnedLabelsSchemaForDrift() pkgmodel.Schema {
 	}
 }
 
-func TestWitnessedMovedModifications_CoOwnedNeverOwnedMovement_IsDriftWithoutWitness(t *testing.T) {
-	// The co-owned regime classifies by ownership partition, not by write
-	// witness: a resource with no witness at all still owes a note for a
-	// never-owned member's movement.
+func TestWitnessedMovedModifications_CoOwnedNeverOwnedMovement_Tolerated(t *testing.T) {
+	// Movement on a co-owned collection's never-owned members is a
+	// co-actor's business: it never makes a modification reject, so a
+	// reconcile-mode apply of the unchanged forma passes the gate.
 	mods := map[string][]datastore.ResourceModification{
 		"prod": {{
 			Stack: "prod", Type: "AWS::Example::Thing", Label: "shared", Operation: "update", Ksuid: "k1",
@@ -144,6 +144,40 @@ func TestWitnessedMovedModifications_CoOwnedNeverOwnedMovement_IsDriftWithoutWit
 	}
 
 	moved := WitnessedMovedModifications(mods["prod"], map[string]json.RawMessage{}, records, forma, &forma_command.FormaCommand{})
+	assert.Empty(t, moved, "a co-actor's member movement is tolerated, never confronted")
+
+	moved = WitnessedMovedModifications(mods["prod"], driftWitnesses(mods), records, forma, &forma_command.FormaCommand{})
+	assert.Empty(t, moved, "the write witness does not change the co-owned regime's answer")
+}
+
+func TestWitnessedMovedModifications_WitnessedMovementBesideCoOwned_StillRejects(t *testing.T) {
+	// A resource can move in both regimes at once; the witnessed
+	// provider-default movement keeps rejecting even though the co-owned
+	// movement beside it is tolerated.
+	mods := map[string][]datastore.ResourceModification{
+		"prod": {{
+			Stack: "prod", Type: "AWS::Example::Thing", Label: "shared", Operation: "update", Ksuid: "k1",
+			OldProperties: json.RawMessage(`{"Name": "n", "Setting": "a", "labels": {"mine": "1", "theirs": "a"}}`),
+			Properties:    json.RawMessage(`{"Name": "n", "Setting": "b", "labels": {"mine": "1", "theirs": "b"}}`),
+		}},
+	}
+	schema := pkgmodel.Schema{
+		Fields: []string{"Name", "Setting", "labels"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"Setting": {HasProviderDefault: true},
+			"labels":  {CoOwned: &pkgmodel.CoOwnership{}},
+		},
+	}
+	forma := &pkgmodel.Forma{Resources: []pkgmodel.Resource{{
+		Stack: "prod", Type: "AWS::Example::Thing", Label: "shared",
+		Properties: json.RawMessage(`{"Name": "n", "labels": {"mine": "1"}}`),
+		Schema:     schema,
+	}}}
+	records := map[string]pkgmodel.OwnedMembers{
+		"k1": {"labels": {Rule: "Mapping", Members: []string{"mine"}}},
+	}
+
+	moved := WitnessedMovedModifications(mods["prod"], driftWitnesses(mods), records, forma, &forma_command.FormaCommand{})
 	require.Len(t, moved, 1)
 }
 
