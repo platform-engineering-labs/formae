@@ -11,8 +11,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-
-	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
 // Plugin type values a manifest's Type field may hold.
@@ -57,17 +55,6 @@ type Manifest struct {
 
 	// Category is a UI filter tag, e.g. "cloud", "auth", "config" (optional)
 	Category string `json:"category,omitempty"`
-
-	// DefaultReapRaw is the plugin-level default reaping behaviour, kept as raw
-	// JSON so it can be peeked and decoded via DefaultReap(). Absent → nil.
-	DefaultReapRaw json.RawMessage `json:"defaultReap,omitempty"`
-}
-
-// DefaultReap decodes the plugin's default reaping behaviour from the manifest.
-// It returns (nil, nil) when the manifest declares no default, letting callers
-// fall through to the global reaping default.
-func (m *Manifest) DefaultReap() (pkgmodel.ReapingBehaviour, error) {
-	return pkgmodel.ParseReaping(m.DefaultReapRaw)
 }
 
 // IsAuthPlugin returns true if this manifest describes an auth plugin.
