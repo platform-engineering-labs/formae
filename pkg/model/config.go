@@ -211,7 +211,6 @@ type LoggingConfig struct {
 type DiscoveryConfig struct {
 	Enabled                 bool
 	Interval                time.Duration
-	LabelTagKeys            []string
 	ResourceTypesToDiscover []string
 }
 

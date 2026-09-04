@@ -140,7 +140,6 @@ type User struct {
 type DiscoveryConfig struct {
 	Enabled                 bool          `pkl:"enabled"`
 	Interval                *pkl.Duration `pkl:"interval"`
-	LabelTagKeys            []string      `pkl:"labelTagKeys"`
 	ResourceTypesToDiscover []string      `pkl:"resourceTypesToDiscover"`
 }
 

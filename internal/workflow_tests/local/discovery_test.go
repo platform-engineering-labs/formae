@@ -505,7 +505,7 @@ func TestDiscovery_OverlapProtection(t *testing.T) {
 	})
 }
 
-func TestDiscovery_NoTagKeysAreFound_LabelIsSetToNativeId(t *testing.T) {
+func TestDiscovery_NoLabelQueryMatch_LabelIsSetToNativeId(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		overrides := &plugin.ResourcePluginOverrides{
 			List: func(req *resource.ListRequest) (*resource.ListResult, error) {
@@ -550,7 +550,6 @@ func TestDiscovery_NoTagKeysAreFound_LabelIsSetToNativeId(t *testing.T) {
 		}
 
 		cfg := test_helpers.NewTestMetastructureConfig()
-		cfg.Agent.Discovery.LabelTagKeys = []string{"Name"}
 
 		m, def, err := test_helpers.NewTestMetastructureWithConfig(t, overrides, cfg)
 		defer def()
