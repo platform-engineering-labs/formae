@@ -297,9 +297,21 @@ func TestChangesetExecutor_CascadeFailure(t *testing.T) {
 		})
 
 		// Wait for completion (even with failures, the changeset completes)
+		var completed changeset.ChangesetCompleted
 		testutil.ExpectMessageWithPredicate(t, messages, 10*time.Second, func(msg changeset.ChangesetCompleted) bool {
-			return msg.CommandID == commandID
+			if msg.CommandID != commandID {
+				return false
+			}
+			completed = msg
+			return true
 		})
+
+		// The state the requester is told is the only thing it has to decide
+		// whether to retry. Anything that backs off on failure — the generator
+		// rotator most of all — reads a cascade reported as success as a reason
+		// to clear its backoff and try again on the very next sweep, forever.
+		assert.Equal(t, changeset.ChangeSetStateFinishedWithErrors, completed.State,
+			"a changeset that completed with failed nodes must report FinishedWithErrors")
 
 		// Verify cascading failure occurred
 		commandRes, err := testutil.Call(m.Node, "FormaCommandPersister", forma_persister.LoadFormaCommand{
@@ -831,4 +843,108 @@ func newTestUpdateResourceUpdate(label, nativeID, resourceType string) resource_
 		RemainingResolvables: []pkgmodel.FormaeURI{},
 		StackLabel:           "test-stack",
 	}
+}
+
+// A changeset that finished with errors must still clean up the stacks its
+// successful deletes emptied.
+//
+// Cleanup eligibility is about what the deletes actually did, not about the
+// changeset's aggregate verdict: one delete can succeed and take the last
+// resource out of a stack while an unrelated update fails in the same command,
+// and that stack is just as empty either way. Gating the cleanup on
+// FinishedSuccessfully alone leaves the emptied stack's record behind.
+func TestChangesetExecutor_PartialFailureStillCleansUpEmptiedStacks(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		logCapture := test_helpers.SetupTestLogger()
+
+		overrides := &plugin.ResourcePluginOverrides{
+			Create: func(request *resource.CreateRequest) (*resource.CreateResult, error) {
+				return &resource.CreateResult{
+					ProgressResult: &resource.ProgressResult{
+						Operation:       resource.OperationCreate,
+						OperationStatus: resource.OperationStatusFailure,
+						RequestID:       "test-request-id",
+						StatusMessage:   "deliberate failure, so the changeset ends with errors",
+					},
+				}, nil
+			},
+			Delete: func(request *resource.DeleteRequest) (*resource.DeleteResult, error) {
+				return &resource.DeleteResult{
+					ProgressResult: &resource.ProgressResult{
+						Operation:       resource.OperationDelete,
+						OperationStatus: resource.OperationStatusSuccess,
+						RequestID:       "test-request-id",
+					},
+				}, nil
+			},
+		}
+
+		m, def, err := test_helpers.NewTestMetastructure(t, overrides)
+		defer def()
+		assert.NoError(t, err)
+
+		messages := make(chan any, 10)
+		_, err = testutil.StartTestHelperActor(m.Node, messages)
+		assert.NoError(t, err)
+
+		commandID := "test-command-partial-failure-cleanup"
+
+		// Independent of each other: the delete is not what fails, and nothing
+		// cascades. The changeset simply ends with one of each.
+		doomed := newTestResourceUpdate("test-doomed", nil, "FakeAWS::EC2::VPC")
+		gone := newTestResourceUpdate("test-gone", nil, "FakeAWS::S3::Bucket")
+		gone.Operation = resource_update.OperationDelete
+
+		testutil.Call(m.Node, "FormaCommandPersister", forma_persister.StoreNewFormaCommand{
+			Command: forma_command.FormaCommand{
+				ID:              commandID,
+				State:           forma_command.CommandStateNotStarted,
+				ResourceUpdates: []resource_update.ResourceUpdate{doomed, gone},
+			},
+		})
+
+		cs, err := buildChangesetWithResolves(
+			[]resource_update.ResourceUpdate{doomed, gone}, nil, commandID, pkgmodel.CommandApply, m.Datastore)
+		assert.NoError(t, err)
+
+		_, err = testutil.Call(m.Node, "ChangesetSupervisor", changeset.EnsureChangesetExecutor{
+			CommandID: commandID,
+		})
+		assert.NoError(t, err)
+
+		testutil.Send(m.Node, actornames.ChangesetExecutor(commandID), changeset.Start{
+			Changeset:        cs,
+			NotifyOnComplete: true,
+		})
+
+		var completed changeset.ChangesetCompleted
+		testutil.ExpectMessageWithPredicate(t, messages, 15*time.Second, func(msg changeset.ChangesetCompleted) bool {
+			if msg.CommandID != commandID {
+				return false
+			}
+			completed = msg
+			return true
+		})
+
+		assert.Equal(t, changeset.ChangeSetStateFinishedWithErrors, completed.State,
+			"precondition: the changeset must have ended with errors")
+
+		// The datastore, not the executor's log line: that line is emitted
+		// before the dispatch guard, so it says only that the branch was
+		// entered, never that a stack was actually removed. Cleanup is sent
+		// asynchronously and handled by the persister, so poll for it.
+		// What this pins is the executor's half: that a changeset ending with
+		// errors still reaches the cleanup branch AND still dispatches, with
+		// the emptied stack named. The rendered stack list matters — the log
+		// line is emitted before the dispatch guard, so the message alone
+		// would pass even with nothing to send.
+		//
+		// It deliberately stops at the dispatch. Whether the persister then
+		// removes a stack, and only when it is genuinely empty, is
+		// TestResourcePersister_CleanupEmptyStacks; asserting it again here
+		// would need a fully wired delete, which this harness builds through
+		// ApplyForma rather than hand-assembled updates.
+		assert.True(t, logCapture.ContainsAll("Using pre-captured stacks for cleanup", "stacks=[test-stack]"),
+			"a changeset that ended with errors must still dispatch cleanup for the stacks its deletes emptied")
+	})
 }

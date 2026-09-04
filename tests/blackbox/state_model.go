@@ -829,7 +829,15 @@ func mergePatchProperties(currentJSON, patchJSON string, hints map[string]pkgmod
 		cur, _ := merged[k].([]any)
 		switch hints[k].UpdateMethod {
 		case pkgmodel.FieldUpdateMethodArray:
-			merged[k] = arr
+			// EnsureExists never removes array elements: a desired array no
+			// shorter than the current one converges element-wise onto the
+			// desired value, while a shorter one leaves the current elements
+			// in place and appends only the elements not already present.
+			if len(arr) >= len(cur) {
+				merged[k] = arr
+			} else {
+				merged[k] = unionByValue(cur, arr)
+			}
 		case pkgmodel.FieldUpdateMethodEntitySet:
 			merged[k] = upsertByEntityKey(cur, arr, hints[k].IndexField)
 		default:

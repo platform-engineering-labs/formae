@@ -111,6 +111,11 @@ type ChangesetData struct {
 	discoveryPaused          bool     // Tracks if this changeset paused Discovery
 	stacksWithDeletes        []string // Stacks that had delete operations, captured at start
 	syncExcludedResourceURIs []string // Resource URIs registered with Synchronizer, captured at start
+	// Whether any update in this changeset finished failed. It cannot be
+	// recovered from the DAG at completion: UpdateDAG removes failed nodes
+	// exactly as it removes successful ones, so the DAG is empty either way
+	// and an empty DAG says nothing about the outcome.
+	sawFailure bool
 }
 
 type RegisterEvents struct{}
@@ -149,8 +154,14 @@ func (s *ChangesetExecutor) Init(args ...any) (statemachine.StateMachineSpec[Cha
 }
 
 func onStateChange(oldState gen.Atom, newState gen.Atom, data ChangesetData, proc gen.Process) (gen.Atom, ChangesetData, error) {
-	// Cleanup empty stacks after successful completion
-	if newState == StateFinishedSuccessfully {
+	// Cleanup empty stacks once execution is over, whether or not every update
+	// in it succeeded. Eligibility is about what the deletes actually did, not
+	// about the changeset's aggregate verdict: one delete can succeed and take
+	// the last resource out of a stack while an unrelated update fails, and
+	// that stack is just as empty either way. Gating this on success alone
+	// left the record behind. Safe to run on both, because the persister
+	// re-checks emptiness and the labels were captured at start.
+	if newState == StateFinishedSuccessfully || newState == StateFinishedWithError {
 		// Use the stacks captured at start, since the DAG is empty by now
 		proc.Log().Debug("Using pre-captured stacks for cleanup stacks=%v commandID=%s", data.stacksWithDeletes, data.changeset.CommandID)
 		if len(data.stacksWithDeletes) > 0 {
@@ -629,6 +640,7 @@ func handleUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, even
 		}
 	} else {
 		node.Update.MarkFailed()
+		data.sawFailure = true
 	}
 
 	// Update DAG and get any cascading failures
@@ -699,6 +711,16 @@ func handleUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, even
 	}
 
 	if data.changeset.IsComplete() {
+		// The requester is told nothing else about the outcome, and some of
+		// them retry on it. The generator rotator clears its backoff on a
+		// success and derives its cadence from the command's own state, so a
+		// changeset that failed but reported success leaves it with no
+		// backoff and no advanced cadence — it rotates again on the next
+		// sweep, and every sweep after that.
+		if data.sawFailure {
+			proc.Log().Debug("Changeset execution finished with failures for command commandID=%s", data.changeset.CommandID)
+			return StateFinishedWithError, data, nil, nil
+		}
 		proc.Log().Debug("Changeset execution finished for command commandID=%s", data.changeset.CommandID)
 		return StateFinishedSuccessfully, data, nil, nil
 	}

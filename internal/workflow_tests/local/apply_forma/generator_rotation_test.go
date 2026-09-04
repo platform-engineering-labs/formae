@@ -654,3 +654,77 @@ func TestGeneratorRotation_OneFailedDestinationOfSeveralDoesNotAdvanceTheCadence
 			"a rotation that reached only some of its destinations must not advance the cadence")
 	})
 }
+
+// nameConsumer is a resource holding a reference to a property of the secret
+// that a rotation never changes (its Name). Such a consumer is reached by the
+// rotation's consumer closure, but a draw gives it nothing to write.
+func nameConsumer(stack, secretLabel string) pkgmodel.Resource {
+	return pkgmodel.Resource{
+		Label:  "name-consumer",
+		Type:   "FakeAWS::S3::Bucket",
+		Stack:  stack,
+		Target: "test-target",
+		Schema: pkgmodel.Schema{
+			Identifier: "Name",
+			Fields:     []string{"Name", "SecretName"},
+		},
+		Properties: json.RawMessage(`{
+			"Name": "name-consumer",
+			"SecretName": {
+				"$res":      true,
+				"$label":    "` + secretLabel + `",
+				"$type":     "FakeAWS::SecretsManager::Secret",
+				"$stack":    "` + stack + `",
+				"$property": "Name"
+			}
+		}`),
+	}
+}
+
+// A rotation plans every transitive consumer of its destination, and a
+// consumer whose only reference is to a property the draw does not change has
+// nothing to write: its update must complete without a provider call. Some
+// providers reject an update that carries an empty patch document outright,
+// so sending one is not a harmless no-op.
+func TestGeneratorRotation_ConsumerOfAnUnchangedPropertyGetsNoProviderCall(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		delivered := newDeliveredValues()
+
+		cfg := test_helpers.NewTestMetastructureConfig()
+		cfg.Agent.Synchronization.Enabled = false
+		m, def, err := test_helpers.NewTestMetastructureWithConfig(t, delivered.overrides(), cfg)
+		defer def()
+		require.NoError(t, err)
+
+		stack := "test-stack-" + util.NewID()
+		forma := &pkgmodel.Forma{
+			Stacks:     []pkgmodel.Stack{{Label: stack}},
+			Targets:    []pkgmodel.Target{{Label: "test-target", Namespace: "test-namespace"}},
+			Generators: []json.RawMessage{rotatingGenerator(t, "db-password", stack, 1)},
+			Resources: []pkgmodel.Resource{
+				genBoundSecret(stack, "alpha", "db-password", "value"),
+				nameConsumer(stack, "alpha"),
+			},
+		}
+
+		_, err = m.ApplyForma(forma,
+			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
+		require.NoError(t, err)
+		waitForApplyComplete(t, m)
+
+		require.Len(t, delivered.createdWith("alpha"), 1,
+			"precondition: the destination was created with a drawn value")
+		require.Len(t, delivered.createdWith("name-consumer"), 1,
+			"precondition: the consumer was created")
+
+		rotation := sweepUntilRotated(t, m)
+		waitForApplyComplete(t, m)
+
+		assert.Equal(t, forma_command.CommandStateSuccess, rotation.State,
+			"a rotation with a value-less consumer must still commit")
+		assert.Len(t, delivered.updatedWith("alpha"), 1,
+			"the destination must receive the freshly drawn value")
+		assert.Empty(t, delivered.updatedWith("name-consumer"),
+			"a consumer with nothing to change must not receive a provider update")
+	})
+}
