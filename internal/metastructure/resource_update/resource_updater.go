@@ -747,6 +747,28 @@ const (
 	failureReasonPluginDispatchOnCreate = "cannot create this resource: formae could not complete the request to the provider plugin, so the resource may or may not have been created — check the provider before retrying."
 )
 
+// persistFailureReason is the operator-facing reason for a persist that failed
+// AFTER the provider finished an operation successfully: the cloud side is
+// done, but formae could not store the outcome, so the operator must be told
+// what survived. Worded per the operation that completed. Parameterized only
+// by the provider-assigned native id — never the underlying error, which
+// stays in the agent log.
+func persistFailureReason(op resource.Operation, nativeID string) string {
+	switch op {
+	case resource.OperationCreate:
+		if nativeID == "" {
+			return "cannot record this resource: the provider created it, but formae could not store its record, so it is not under formae's management. Check the provider before retrying: a re-apply may conflict with the existing object."
+		}
+		return fmt.Sprintf("cannot record this resource: the provider created it, but formae could not store its record, so it is not under formae's management. The object exists in the cloud with native id %q; check the provider before retrying, since a re-apply may conflict with it.", nativeID)
+	case resource.OperationUpdate:
+		return "cannot record this resource: the provider applied the update, but formae could not store the result, so formae's record of the resource is stale. A later synchronization will re-read it from the provider."
+	case resource.OperationDelete:
+		return "cannot record this resource: the provider deleted it, but formae could not remove its record, so formae still lists it. A later synchronization or a destroy retry will reconcile the record."
+	default:
+		return "cannot record this resource: formae read it from the provider but could not store the observation. The next synchronization will retry."
+	}
+}
+
 // isUnrecoverableOpaqueValue reports whether preparing a plugin request failed
 // because formae holds only a stored hash of an opaque value.
 func isUnrecoverableOpaqueValue(err error) bool {
@@ -1063,6 +1085,12 @@ func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData,
 	err := data.resourceUpdate.RecordProgress(&message)
 	if err != nil {
 		proc.Log().Error("failed to record progress for resource update: %v", err)
+		// A successful plugin operation whose progress cannot be recorded
+		// strands the cloud object the same way a failed persist does:
+		// done at the provider, unrecorded here.
+		if message.FinishedSuccessfully() {
+			data.resourceUpdate.FailureReason = persistFailureReason(currentOperation(state), message.NativeID)
+		}
 		data.resourceUpdate.MarkAsFailed()
 		return StateFinishedWithError, data, nil, nil
 	}
@@ -1126,6 +1154,7 @@ func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData,
 
 		if err != nil {
 			proc.Log().Error("failed to persist resource update: %v", err)
+			data.resourceUpdate.FailureReason = persistFailureReason(operation, data.resourceUpdate.DesiredState.NativeID)
 			data.resourceUpdate.MarkAsFailed()
 			return StateFinishedWithError, data, nil, nil
 		}
