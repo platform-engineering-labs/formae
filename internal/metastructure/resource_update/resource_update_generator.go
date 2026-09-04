@@ -1638,14 +1638,32 @@ func findDependencyUpdates(allDeleteUpdates []ResourceUpdate, replacedKsuids map
 // points at a resource in deletedKsuids via a CreateOnly field on dep's
 // schema. A single CreateOnly ref to a deletion target forces cascade-replace
 // for the whole dependent (mixed-refs case).
+//
+// A reference counts as CreateOnly when its destination path sits at or below
+// a CreateOnly-hinted field — the same at-or-below matching the patch
+// pipeline uses to classify createOnly ops — so a hint on a wrapper object
+// covers a reference on one of its members, matching how such an update
+// would be judged at execution time.
 func anyRefIsCreateOnly(dep pkgmodel.Resource, deletedKsuids map[string]bool) bool {
+	createOnlyFields := dep.Schema.CreateOnly()
 	for _, ref := range resolver.ExtractResolvableRefs(dep) {
 		ksuid := strings.TrimPrefix(string(ref.URI), "formae://")
 		if !deletedKsuids[ksuid] {
 			continue
 		}
-		hint := dep.Schema.Hints[stripArrayIndicesForHintLookup(ref.TargetPath)]
-		if hint.CreateOnly {
+		if pathIsAtOrBelowAnyField(stripArrayIndicesForHintLookup(ref.TargetPath), createOnlyFields) {
+			return true
+		}
+	}
+	return false
+}
+
+// pathIsAtOrBelowAnyField reports whether a dotted, index-stripped destination
+// path targets one of the dotted schema field paths or a nested path within
+// one.
+func pathIsAtOrBelowAnyField(path string, fields []string) bool {
+	for _, field := range fields {
+		if path == field || strings.HasPrefix(path, field+".") {
 			return true
 		}
 	}

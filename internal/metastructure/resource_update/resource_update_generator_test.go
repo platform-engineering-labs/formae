@@ -1155,6 +1155,9 @@ func TestFindDependencyUpdates_CreateOnlyBranch(t *testing.T) {
 		`{"ImmutableRef":{"$ref":"formae://%s#/Name","$value":"parent-v1"},"MutableRef":{"$ref":"formae://%s#/Other","$value":"x"}}`,
 		parentKsuid, otherKsuid,
 	)
+	nestedWrapperRefJSON := fmt.Sprintf(
+		`{"LinkedNetwork":{"Uri":{"$ref":"formae://%s#/SelfLink","$value":"https://net-1"}}}`, parentKsuid,
+	)
 
 	cases := []struct {
 		name              string
@@ -1193,6 +1196,18 @@ func TestFindDependencyUpdates_CreateOnlyBranch(t *testing.T) {
 			name: "array-indexed path uses stripped hint key",
 			dependent: makeDependent(parentRefArrayJSON, map[string]pkgmodel.FieldHint{
 				"Refs.Target": {CreateOnly: true},
+			}),
+			wantCascadeDelete: true,
+		},
+		{
+			// A CreateOnly hint on a wrapper field covers references nested
+			// inside it — the same at-or-below matching the patch pipeline
+			// uses to classify createOnly ops, so a schema annotating the
+			// provider's immutability unit (the wrapper object) cascades the
+			// same way one annotating the leaf member does.
+			name: "wrapper-level createOnly covers a nested ref",
+			dependent: makeDependent(nestedWrapperRefJSON, map[string]pkgmodel.FieldHint{
+				"LinkedNetwork": {CreateOnly: true},
 			}),
 			wantCascadeDelete: true,
 		},
