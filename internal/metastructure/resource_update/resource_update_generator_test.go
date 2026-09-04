@@ -1158,6 +1158,9 @@ func TestFindDependencyUpdates_CreateOnlyBranch(t *testing.T) {
 	nestedWrapperRefJSON := fmt.Sprintf(
 		`{"LinkedNetwork":{"Uri":{"$ref":"formae://%s#/SelfLink","$value":"https://net-1"}}}`, parentKsuid,
 	)
+	literalDottedKeyRefJSON := fmt.Sprintf(
+		`{"Foo.Bar":{"$ref":"formae://%s#/Name","$value":"parent-v1"}}`, parentKsuid,
+	)
 
 	cases := []struct {
 		name              string
@@ -1210,6 +1213,16 @@ func TestFindDependencyUpdates_CreateOnlyBranch(t *testing.T) {
 				"LinkedNetwork": {CreateOnly: true},
 			}),
 			wantCascadeDelete: true,
+		},
+		{
+			// A literal dotted key is one segment, not nesting: a ref under
+			// the top-level key "Foo.Bar" does not sit below a field named
+			// "Foo", so a CreateOnly hint there must not force a replacement.
+			name: "literal dotted key is not below a dot-prefix field",
+			dependent: makeDependent(literalDottedKeyRefJSON, map[string]pkgmodel.FieldHint{
+				"Foo": {CreateOnly: true},
+			}),
+			wantCascadeDelete: false,
 		},
 	}
 

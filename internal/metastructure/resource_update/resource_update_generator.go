@@ -1651,19 +1651,39 @@ func anyRefIsCreateOnly(dep pkgmodel.Resource, deletedKsuids map[string]bool) bo
 		if !deletedKsuids[ksuid] {
 			continue
 		}
-		if pathIsAtOrBelowAnyField(stripArrayIndicesForHintLookup(ref.TargetPath), createOnlyFields) {
+		if pathIsAtOrBelowAnyField(ref.TargetPath, createOnlyFields) {
 			return true
 		}
 	}
 	return false
 }
 
-// pathIsAtOrBelowAnyField reports whether a dotted, index-stripped destination
-// path targets one of the dotted schema field paths or a nested path within
-// one.
+// pathIsAtOrBelowAnyField reports whether a destination path (pathkey-escaped,
+// possibly with array-index segments) targets one of the dotted schema field
+// paths or a nested path within one. Comparison is by segments so a literal
+// dotted key stays one segment and never matches a field that merely spells
+// its dot-prefix.
 func pathIsAtOrBelowAnyField(path string, fields []string) bool {
+	var pathSegments []string
+	for _, segment := range pathkey.Split(path) {
+		if isAllDigits(segment) {
+			continue
+		}
+		pathSegments = append(pathSegments, segment)
+	}
 	for _, field := range fields {
-		if path == field || strings.HasPrefix(path, field+".") {
+		fieldSegments := strings.Split(field, ".")
+		if len(pathSegments) < len(fieldSegments) {
+			continue
+		}
+		matched := true
+		for i, fs := range fieldSegments {
+			if pathSegments[i] != fs {
+				matched = false
+				break
+			}
+		}
+		if matched {
 			return true
 		}
 	}
