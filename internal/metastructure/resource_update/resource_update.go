@@ -317,11 +317,22 @@ func (ru *ResourceUpdate) reDerivePatchAfterSubstitution(mode pkgmodel.FormaAppl
 		return fmt.Errorf("failed to re-derive patch document after resolving %s: %w", subject, derr)
 	}
 	if len(createOnlyPatch) > 0 {
-		fields, ferr := createOnlyPatchFields(createOnlyPatch)
+		// References deliver one at a time, and each delivery re-derives the
+		// patch. A path whose own reference has not delivered yet diffs as the
+		// unresolved-envelope placeholder, not as a value, so it cannot be
+		// judged on this re-derivation — its turn comes when its value
+		// arrives. Only ops on fully-resolved paths count against the guard.
+		judgeable, ferr := opsOutsidePendingReferences(createOnlyPatch, ru.DesiredState.Properties)
 		if ferr != nil {
 			return fmt.Errorf("failed to inspect createOnly patch after resolving %s: %w", subject, ferr)
 		}
-		return LateCreateOnlyChangeError{ResourceLabel: ru.DesiredState.Label, Fields: fields}
+		if len(judgeable) > 0 {
+			fields, ferr := createOnlyPatchFields(judgeable)
+			if ferr != nil {
+				return fmt.Errorf("failed to inspect createOnly patch after resolving %s: %w", subject, ferr)
+			}
+			return LateCreateOnlyChangeError{ResourceLabel: ru.DesiredState.Label, Fields: fields}
+		}
 	}
 	ru.DesiredState.PatchDocument = patchDoc
 
@@ -458,10 +469,90 @@ func (ru *ResourceUpdate) ConvergenceOnly() bool {
 	return true
 }
 
-// createOnlyPatchFields extracts the distinct top-level field names touched
-// by a createOnly patch document, in first-seen order, so
-// LateCreateOnlyChangeError can name what changed without exposing the raw
-// JSON-patch op shape to callers.
+// opsOutsidePendingReferences returns the subset of createOnly patch ops that
+// can be judged now: ops whose path does not touch a reference that has not
+// delivered its value yet. An op at, under, or above a pending destination is
+// diffing the unresolved-envelope placeholder rather than a value, so it is
+// excluded; it gets judged on the re-derivation its own delivery triggers.
+func opsOutsidePendingReferences(createOnlyPatch json.RawMessage, desiredProperties json.RawMessage) (json.RawMessage, error) {
+	var ops []map[string]any
+	if err := json.Unmarshal(createOnlyPatch, &ops); err != nil {
+		return nil, fmt.Errorf("failed to parse createOnly patch ops: %w", err)
+	}
+	pending, err := unresolvedReferencePaths(desiredProperties)
+	if err != nil {
+		return nil, err
+	}
+	if len(pending) == 0 {
+		return createOnlyPatch, nil
+	}
+
+	var judgeable []map[string]any
+	for _, op := range ops {
+		path, _ := op["path"].(string)
+		dotted := strings.ReplaceAll(strings.TrimPrefix(path, "/"), "/", ".")
+		touchesPending := false
+		for _, p := range pending {
+			if dotted == p || strings.HasPrefix(dotted, p+".") || strings.HasPrefix(p, dotted+".") {
+				touchesPending = true
+				break
+			}
+		}
+		if !touchesPending {
+			judgeable = append(judgeable, op)
+		}
+	}
+	if len(judgeable) == 0 {
+		return nil, nil
+	}
+	out, err := json.Marshal(judgeable)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize judgeable createOnly patch ops: %w", err)
+	}
+	return out, nil
+}
+
+// unresolvedReferencePaths lists the dotted destination paths of reference
+// envelopes that still hold a $ref without a $value — the exact set the
+// flatten step renders as placeholders. Numeric segments index arrays.
+func unresolvedReferencePaths(properties json.RawMessage) ([]string, error) {
+	var doc map[string]any
+	if err := json.Unmarshal(properties, &doc); err != nil {
+		return nil, fmt.Errorf("failed to parse desired properties: %w", err)
+	}
+	var paths []string
+	var walk func(prefix string, node any)
+	walk = func(prefix string, node any) {
+		switch n := node.(type) {
+		case map[string]any:
+			if _, hasRef := n["$ref"]; hasRef {
+				if _, hasVal := n["$value"]; !hasVal {
+					paths = append(paths, prefix)
+				}
+				return
+			}
+			for k, v := range n {
+				key := k
+				if prefix != "" {
+					key = prefix + "." + k
+				}
+				walk(key, v)
+			}
+		case []any:
+			for i, elem := range n {
+				walk(fmt.Sprintf("%s.%d", prefix, i), elem)
+			}
+		}
+	}
+	walk("", doc)
+	return paths, nil
+}
+
+// createOnlyPatchFields extracts the distinct field paths touched by a
+// createOnly patch document, in first-seen order and at full depth
+// ("LinkedNetwork.Uri", not "LinkedNetwork"), so LateCreateOnlyChangeError
+// names the member that actually changed without exposing the raw JSON-patch
+// op shape to callers.
 func createOnlyPatchFields(createOnlyPatch json.RawMessage) ([]string, error) {
 	var ops []struct {
 		Path string `json:"path"`
@@ -473,7 +564,7 @@ func createOnlyPatchFields(createOnlyPatch json.RawMessage) ([]string, error) {
 	seen := make(map[string]struct{}, len(ops))
 	var fields []string
 	for _, op := range ops {
-		field, _, _ := strings.Cut(strings.TrimPrefix(op.Path, "/"), "/")
+		field := strings.ReplaceAll(strings.TrimPrefix(op.Path, "/"), "/", ".")
 		if field == "" {
 			continue
 		}
