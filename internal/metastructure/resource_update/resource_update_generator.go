@@ -1664,9 +1664,12 @@ func anyRefIsCreateOnly(dep pkgmodel.Resource, deletedKsuids map[string]bool) bo
 // dotted key stays one segment and never matches a field that merely spells
 // its dot-prefix.
 func pathIsAtOrBelowAnyField(path string, fields []string) bool {
+	segments := pathkey.Split(path)
 	var pathSegments []string
-	for _, segment := range pathkey.Split(path) {
-		if isAllDigits(segment) {
+	for _, segment := range segments {
+		// A lone all-digits segment is a top-level field name, not an array
+		// index — an index can only appear under a field.
+		if isAllDigits(segment) && len(segments) > 1 {
 			continue
 		}
 		pathSegments = append(pathSegments, segment)

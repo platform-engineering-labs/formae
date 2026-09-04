@@ -1161,6 +1161,9 @@ func TestFindDependencyUpdates_CreateOnlyBranch(t *testing.T) {
 	literalDottedKeyRefJSON := fmt.Sprintf(
 		`{"Foo.Bar":{"$ref":"formae://%s#/Name","$value":"parent-v1"}}`, parentKsuid,
 	)
+	digitFieldRefJSON := fmt.Sprintf(
+		`{"42":{"$ref":"formae://%s#/Name","$value":"parent-v1"}}`, parentKsuid,
+	)
 
 	cases := []struct {
 		name              string
@@ -1223,6 +1226,16 @@ func TestFindDependencyUpdates_CreateOnlyBranch(t *testing.T) {
 				"Foo": {CreateOnly: true},
 			}),
 			wantCascadeDelete: false,
+		},
+		{
+			// A single all-digits segment is a top-level field name, not an
+			// array index — an index can only appear under a field. Its hint
+			// must still be found.
+			name: "digit-named top-level field keeps its hint",
+			dependent: makeDependent(digitFieldRefJSON, map[string]pkgmodel.FieldHint{
+				"42": {CreateOnly: true},
+			}),
+			wantCascadeDelete: true,
 		},
 	}
 
