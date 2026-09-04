@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"ergo.services/actor/statemachine"
@@ -1380,8 +1381,8 @@ func evaluateCondition(cond pkgmodel.FilterCondition, properties json.RawMessage
 		return false
 	}
 
-	nodes := path.Select(data)
-	if len(nodes) == 0 {
+	nodes, ok := selectNodes(path, cond.PropertyPath, data)
+	if !ok || len(nodes) == 0 {
 		// No value found
 		return false
 	}
@@ -1398,6 +1399,32 @@ func evaluateCondition(cond pkgmodel.FilterCondition, properties json.RawMessage
 		}
 	}
 	return false
+}
+
+// selectNodes runs a parsed JSONPath against the document, reporting whether
+// the evaluation completed.
+//
+// Parsing cleanly is not enough: a function extension applied to a member the
+// document does not carry reaches the extension with nothing to read, and the
+// evaluator dereferences it. This runs against every discovered resource, so
+// letting that escape would take discovery down over one badly written filter
+// expression. A failed evaluation is reported as a miss, the same answer an
+// unparseable expression already gets. Failing towards "matches nothing" is the
+// safe direction, because a match evicts the resource's inventory row; it is
+// also why the failure is logged rather than swallowed, since a filter that
+// quietly stopped working would leave substrate exposed with no signal.
+func selectNodes(path *jsonpath.Path, expression string, data any) (nodes []any, ok bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Warn("Discovery filter expression could not be evaluated",
+				"expression", expression,
+				"panic", r,
+			)
+			nodes, ok = nil, false
+		}
+	}()
+
+	return path.Select(data), true
 }
 
 // matchValue compares a JSONPath result against an expected string value.
