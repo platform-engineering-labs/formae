@@ -783,19 +783,21 @@ func generateResourceUpdatesForReconcile(
 		return nil, fmt.Errorf("failed to load existing stacks: %w", err)
 	}
 
-	// Pre-flight portability check for target replace
+	// Pre-flight portability check for target replace. Every managed resource
+	// on a replaced target is deleted and recreated — including resources in
+	// stacks the forma does not reconcile, which are recreated to preserve
+	// those stacks. The only exception is a resource in a reconciled stack
+	// that the forma no longer declares: that one is implicitly deleted, and
+	// deletion needs no portability.
 	if len(replacedTargets) > 0 {
-		// In reconcile mode, check resources that are in the forma.
-		// Resources not in the forma will just be deleted (reconcile semantics), not recreated.
+		formaStacks := make(map[string]bool)
 		formaResourceKeys := make(map[string]bool)
 		for _, r := range forma.Resources {
+			formaStacks[r.Stack] = true
 			if replacedTargets[r.Target] {
 				formaResourceKeys[fmt.Sprintf("%s/%s/%s", r.Stack, r.Type, r.Label)] = true
 			}
 		}
-
-		// If no resources in forma (target-only), all DB resources will be recreated, so check all
-		checkAllResources := len(formaResourceKeys) == 0
 
 		var nonPortable []string
 		var nonPortableTarget string
@@ -807,13 +809,15 @@ func generateResourceUpdatesForReconcile(
 				if !resource.Managed || !replacedTargets[resource.Target] {
 					continue
 				}
-				if !resource.Schema.Portable {
-					key := fmt.Sprintf("%s/%s/%s", resource.Stack, resource.Type, resource.Label)
-					if checkAllResources || formaResourceKeys[key] {
-						nonPortable = append(nonPortable, fmt.Sprintf("%s/%s/%s", resource.Stack, resource.Type, resource.Label))
-						if nonPortableTarget == "" {
-							nonPortableTarget = resource.Target
-						}
+				if resource.Schema.Portable {
+					continue
+				}
+				key := fmt.Sprintf("%s/%s/%s", resource.Stack, resource.Type, resource.Label)
+				implicitlyDeleted := formaStacks[resource.Stack] && !formaResourceKeys[key]
+				if !implicitlyDeleted {
+					nonPortable = append(nonPortable, key)
+					if nonPortableTarget == "" {
+						nonPortableTarget = resource.Target
 					}
 				}
 			}
