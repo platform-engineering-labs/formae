@@ -162,3 +162,34 @@ func TestResolveValue_ChangedNestedCreateOnlyRef_RefusedWithFullPath(t *testing.
 	require.True(t, errors.As(err, &late), "the failure must be the typed late-createOnly error")
 	assert.Contains(t, late.Fields, "LinkedNetwork.Uri")
 }
+
+// A pending reference nested under a property key containing a JSON Pointer
+// special character ('/' — RFC 6901-escaped as ~1 in op paths) is still
+// recognized as pending: sibling deliveries must not judge it just because
+// its op path spells the key differently than the document does.
+func TestResolveValue_PendingRefUnderSlashedKeyStaysUnjudged(t *testing.T) {
+	schema := pkgmodel.Schema{
+		Identifier: "Name",
+		Fields:     []string{"Name", "Description", "Hub", "Config"},
+		Hints: map[string]pkgmodel.FieldHint{
+			"Hub":    {CreateOnly: true},
+			"Config": {CreateOnly: true},
+		},
+	}
+	ru := ResourceUpdate{
+		Operation: OperationUpdate,
+		PriorState: pkgmodel.Resource{
+			Label: "consumer", Type: "Test::Config::Entry", Schema: schema,
+			Properties: json.RawMessage(`{"Name": "c1", "Description": "old", "Hub": "hub-1", "Config": {"example.com/role": "value-1"}}`),
+		},
+		DesiredState: pkgmodel.Resource{
+			Label: "consumer", Type: "Test::Config::Entry", Schema: schema,
+			Properties: json.RawMessage(`{"Name": "c1", "Description": "new", "Hub": {"$ref": "formae://k-hub#/Name"}, "Config": {"example.com/role": {"$ref": "formae://k-src#/Role"}}}`),
+		},
+		RemainingResolvables: []pkgmodel.FormaeURI{"formae://k-hub#/Name", "formae://k-src#/Role"},
+	}
+
+	err := ru.ResolveValue("formae://k-hub#/Name", "hub-1", pkgmodel.FormaApplyModePatch)
+
+	require.NoError(t, err, "a pending reference under an escaped key is still pending")
+}

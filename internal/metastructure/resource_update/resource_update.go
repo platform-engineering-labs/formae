@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
@@ -490,10 +491,10 @@ func opsOutsidePendingReferences(createOnlyPatch json.RawMessage, desiredPropert
 	var judgeable []map[string]any
 	for _, op := range ops {
 		path, _ := op["path"].(string)
-		dotted := strings.ReplaceAll(strings.TrimPrefix(path, "/"), "/", ".")
+		segments := jsonPointerSegments(path)
 		touchesPending := false
 		for _, p := range pending {
-			if dotted == p || strings.HasPrefix(dotted, p+".") || strings.HasPrefix(p, dotted+".") {
+			if segmentsOverlap(segments, p) {
 				touchesPending = true
 				break
 			}
@@ -512,40 +513,60 @@ func opsOutsidePendingReferences(createOnlyPatch json.RawMessage, desiredPropert
 	return out, nil
 }
 
-// unresolvedReferencePaths lists the dotted destination paths of reference
-// envelopes that still hold a $ref without a $value — the exact set the
-// flatten step renders as placeholders. Numeric segments index arrays.
-func unresolvedReferencePaths(properties json.RawMessage) ([]string, error) {
+// unresolvedReferencePaths lists the destination paths, as raw key segments,
+// of reference envelopes that still hold a $ref without a $value — the exact
+// set the flatten step renders as placeholders. Numeric segments index arrays.
+func unresolvedReferencePaths(properties json.RawMessage) ([][]string, error) {
 	var doc map[string]any
 	if err := json.Unmarshal(properties, &doc); err != nil {
 		return nil, fmt.Errorf("failed to parse desired properties: %w", err)
 	}
-	var paths []string
-	var walk func(prefix string, node any)
-	walk = func(prefix string, node any) {
+	var paths [][]string
+	var walk func(prefix []string, node any)
+	walk = func(prefix []string, node any) {
 		switch n := node.(type) {
 		case map[string]any:
 			if _, hasRef := n["$ref"]; hasRef {
 				if _, hasVal := n["$value"]; !hasVal {
-					paths = append(paths, prefix)
+					paths = append(paths, append([]string{}, prefix...))
 				}
 				return
 			}
 			for k, v := range n {
-				key := k
-				if prefix != "" {
-					key = prefix + "." + k
-				}
-				walk(key, v)
+				walk(append(prefix, k), v)
 			}
 		case []any:
 			for i, elem := range n {
-				walk(fmt.Sprintf("%s.%d", prefix, i), elem)
+				walk(append(prefix, strconv.Itoa(i)), elem)
 			}
 		}
 	}
-	walk("", doc)
+	walk(nil, doc)
 	return paths, nil
+}
+
+// jsonPointerSegments splits an RFC 6901 JSON Pointer into raw key segments,
+// unescaping ~1 to '/' and ~0 to '~' so segments compare against document
+// keys as written.
+func jsonPointerSegments(path string) []string {
+	segments := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	for i, s := range segments {
+		s = strings.ReplaceAll(s, "~1", "/")
+		segments[i] = strings.ReplaceAll(s, "~0", "~")
+	}
+	return segments
+}
+
+// segmentsOverlap reports whether one segment path is equal to or a prefix of
+// the other — an op at, under, or above a pending destination.
+func segmentsOverlap(a, b []string) bool {
+	n := min(len(a), len(b))
+	for i := 0; i < n; i++ {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // createOnlyPatchFields extracts the distinct field paths touched by a
@@ -564,7 +585,7 @@ func createOnlyPatchFields(createOnlyPatch json.RawMessage) ([]string, error) {
 	seen := make(map[string]struct{}, len(ops))
 	var fields []string
 	for _, op := range ops {
-		field := strings.ReplaceAll(strings.TrimPrefix(op.Path, "/"), "/", ".")
+		field := strings.Join(jsonPointerSegments(op.Path), ".")
 		if field == "" {
 			continue
 		}
