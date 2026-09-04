@@ -82,24 +82,20 @@ func ackLine(w io.Writer, tty bool, th *theme.Theme, m components.AckMarker, tex
 	_, _ = fmt.Fprintln(w, components.AckLinePlain(m, text))
 }
 
-// runInitConfirmDecision asks the user whether to initialize the managed root
-// when none is detected. Returns (true, nil) to proceed, (false, nil) to
-// abort, or a non-nil error on D8 violation.
-//
-// D8 policy: non-TTY without --yes → error.
-func runInitConfirmDecision(w io.Writer, th *theme.Theme, s updateSeams, path string, yes bool) (bool, error) {
-	if yes {
-		return true, nil
-	}
-	if !s.isInteractiveFn() {
-		return false, fmt.Errorf("interactive input requires a TTY — pass --yes to proceed non-interactively")
-	}
-	title := fmt.Sprintf("No managed installation root at %s. Initialize?", path)
-	ok, err := s.runConfirmFn(th, title, "")
-	if err != nil {
-		return false, err
-	}
-	return ok, nil
+// errNoRoot is the message shown when the resolved tree path carries no
+// orbital tree. `update` must never create one: the path is derived from the
+// running binary's location, so a formae reached through a copy or symlink in
+// a foreign prefix (a Homebrew bin, /usr/local/bin, a build tree) resolves to
+// that prefix. Initializing there is destructive — orbital's force-init wipes
+// the root — so the only safe answer is to refuse and let the installer own
+// root creation.
+func errNoRoot(path string) error {
+	return fmt.Errorf(
+		"no formae installation root at %s\n\n"+
+			"formae update installs into the tree next to the running binary and never creates one.\n"+
+			"Reinstall with the official installer, run the formae in your install root (e.g. /opt/pel/bin/formae),\n"+
+			"or set %s to an existing install root.",
+		path, opsmgr.FormaePelRootEnv)
 }
 
 // runUpdateFlow is the testable core of the interactive update flow.
@@ -187,25 +183,9 @@ func UpdateCmd() *cobra.Command {
 
 			th := themeFor(a)
 
-			// Init root if needed — D8 gated confirm.
+			// Never initialize a root here — see errNoRoot.
 			if !orb.Ready() {
-				seams := updateSeams{
-					isInteractiveFn: isInteractive,
-					runConfirmFn:    runConfirm,
-					// stopAgentFn and installFn are not used in the init path.
-				}
-				proceed, err := runInitConfirmDecision(os.Stdout, th, seams, orb.Path(), yes)
-				if err != nil {
-					return err
-				}
-				if !proceed {
-					return nil
-				}
-
-				_, err = orb.Initialize()
-				if err != nil {
-					return err
-				}
+				return errNoRoot(orb.Path())
 			}
 
 			err = orb.Refresh()
